@@ -6,6 +6,7 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "sim/drag.h"
 #include "world/world.h"
 
 namespace giga {
@@ -224,6 +225,19 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                     j->wants_jump = false;
                 }
             }
+
+            // ТРЕНИЕ ВОЗДУХА — универсальный квадратичный закон ([sim/drag.h]),
+            // безусловно для всего, что дошло сюда: у ходока на 6 м/с это
+            // 0.1 м/с^2 (неощутимо), у падающего в шахте тора тела это кап на
+            // ~55 м/с вместо вечного разгона. После гравитации, а не до —
+            // тогда неподвижная точка пары «+g*h, затем трение» есть точно
+            // v_t = sqrt(g/q), и тест может пинить равенство, а не полосу.
+            // Mass — через тот же фолбэк-паттерн, что AABB строкой выше:
+            // компонента нет — действует её собственный дефолт (70 кг).
+            air_drag_step(vel.v,
+                          drag_q(half, reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg
+                                                           : Mass{}.kg),
+                          h);
 
             // Whether the entity was moving "downward" (against up) this step,
             // captured before collisions zero the velocity.

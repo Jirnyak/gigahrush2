@@ -35,6 +35,33 @@ Collision queries go through `aabb_overlaps_solid(world, pos, half)` — voxeliz
 the box's span and test each global voxel against the macro grid's sub-voxel
 masks. Exposed for gameplay queries too (line-of-fire, placement checks).
 
+## Трение воздуха — один закон для всего с Velocity
+
+**F = −k·|v|²·v̂**, где **k = kAirDragCoef · A(AABB)**, A — средняя площадь
+грани бокса (изотропная прокси сечения). Одна формула из Mass + AABB, ноль
+таблиц; одна ручка — `kAirDragCoef` ([src/sim/drag.h](src/sim/drag.h)).
+
+Следствие — **терминальная скорость** `v_t = sqrt(g/q)`, `q = k/m`: вечное
+падение в шахте тора превращается в падение с капом. Тело 70 кг в дефолтном
+AABB капится на **~55.5 м/с** (полоса приёмки 50–60); пуля (AABB 0.1,
+Mass-фолбэк 70) имеет q ≈ 1e-4/м и теряет ~1 % на 100 м — долетает; плотный
+обломок бетона падает быстрее тела. Всё из одной формулы, без веток по типу.
+
+Интеграторов два, закон один: `physics_step` применяет его ко всем телам
+(после гравитации, до свипа), `projectile_step`
+([src/game/combat.cpp](src/game/combat.cpp)) — к снарядам, которые несут
+`SelfIntegrating`. Шаг — замкнутая форма `v ← v/(1+q·|v|·h)`, точное решение
+`dv/dt = −q·|v|·v`: устойчива на любом h (скорость только убывает, знака не
+меняет), и неподвижная точка пары «+g·h, затем трение» — в точности
+`sqrt(g/q)` при любом шаге; тест пинит это равенство
+(`test_air_drag_terminal_velocity`, `test_projectile_air_drag`). Mass, как
+всегда, один универсальный контекст: гружёное тело падает быстрее — через
+закон, не через ветку.
+
+Пока не построено (одобрено, отложено владельцем 2026-08-17): **сгорание** —
+урон от нагрева выше пороговой скорости через Mass/Impact-шов (E = m·v²/2),
+вторая константа-ручка рядом с `kAirDragCoef`.
+
 ## Scale
 
 `kCellSize = 2.0` ([voxels.md](voxels.md)), so gravity, jump impulse, and move

@@ -26,6 +26,7 @@
 #include "game/status.h"   // StatusSet, status_melee/aim mults
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
+#include "sim/drag.h"    // air_drag_step/drag_q — тот же закон трения, что у тел
 #include "world/macro_grid.h"
 #include "world/material_props.h" // material_hardness — окно угла рикошета
 #include "world/los.h"   // los_clear — a wall stops a fragment
@@ -1470,6 +1471,20 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             const float mag =
                 kProjGravity * (static_cast<float>(p.gravityPct) * 0.01f) * dt;
             v.v = v.v + projG * (mag / projGLen);
+        }
+        // ТРЕНИЕ ВОЗДУХА — тот же закон, что physics_step применяет ко всем
+        // телам ([sim/drag.h]); снаряды несут SelfIntegrating, так что этот
+        // вызов — их единственный шанс его получить. На пуле (AABB 0.1,
+        // Mass-фолбэк) q ~ 1e-4/м — на дистанции выстрела потеря ~1%, пином
+        // выше это не двигает; но снаряд, разогнанный сверх терминала чужим
+        // взрывом, закон осадит так же, как осадил бы тело.
+        {
+            const Mass* pm = reg.try_get<Mass>(e);
+            const AABB* bb = reg.try_get<AABB>(e);
+            air_drag_step(v.v,
+                          drag_q(bb ? bb->half : AABB{}.half,
+                                 pm ? pm->kg : Mass{}.kg),
+                          dt);
         }
         // A GRENADE SKIPS ACROSS THE VOXELS INSTEAD OF ENDING ON THEM. Everything
         // above this line is shared — one integrator, one gravity vector — and

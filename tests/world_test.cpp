@@ -15,6 +15,7 @@
 #include "ecs/registry.h"
 #include "sim/camera.h"
 #include "sim/diffusion.h"
+#include "sim/drag.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
 #include "world/destruct.h"
@@ -220,6 +221,47 @@ static void test_physics_lands_on_floor() {
     CHECK(reg.get<GravityAffected>(e).grounded);
     // Did not fall through.
     CHECK(!aabb_overlaps_solid(w, out.pos, vec3{0.2f, 0.2f, 0.4f}));
+}
+
+// Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
+// терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
+// владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
+// свободного падения дают 196 м/с, и полоса рушится.
+static void test_air_drag_terminal_velocity() {
+    // Замкнутая форма шага: v' = v/(1 + q*|v|*h), точное решение dv/dt=-q|v|v.
+    {
+        vec3 v{100.0f, 0.0f, 0.0f};
+        air_drag_step(v, 0.01f, 0.5f);
+        CHECK_NEAR(v.x, 100.0f / (1.0f + 0.01f * 100.0f * 0.5f), 1e-3f);
+        CHECK(v.y == 0.0f && v.z == 0.0f); // трение не выдумывает направлений
+    }
+
+    LevelStack stack;
+    LayerId g = stack.push_layer(); // весь слой — воздух: шахта, wrap без дна
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{64.0f, 64.0f, 64.0f};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e);  // дефолтное тело 0.8 x 0.8 x 1.8
+    reg.emplace<Mass>(e);  // дефолтные 70 кг
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+
+    for (int i = 0; i < 20 * kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    const float v20 = length(reg.get<Velocity>(e).v);
+    CHECK(v20 > 50.0f);
+    CHECK(v20 < 60.0f);
+
+    // Ещё 20 с: кап, а не замедленный разгон.
+    for (int i = 0; i < 20 * kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    const float v40 = length(reg.get<Velocity>(e).v);
+    CHECK(std::fabs(v40 - v20) < 0.2f);
+    // Неподвижная точка пары «гравитация, затем трение» — АНАЛИТИЧЕСКИЙ
+    // терминал sqrt(g/q), точно при любом шаге (см. [sim/drag.h] почему).
+    const float q = drag_q(AABB{}.half, Mass{}.kg);
+    CHECK_NEAR(v40, std::sqrt(9.81f / q), 0.1f);
 }
 
 // The manifest's smooth step: one 0.25 m sub-voxel atom is walkable without a
@@ -830,6 +872,7 @@ int main() {
     test_level_stack();
     test_aabb_overlap();
     test_physics_lands_on_floor();
+    test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();
     test_camera_component_is_movable();

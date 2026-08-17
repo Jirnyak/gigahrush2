@@ -50,6 +50,7 @@
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
 #include "world/los.h"     // los_clear — a wall stops a fragment
 
+#include "sim/drag.h"    // drag_q — предсказание замкнутой формы в тесте трения
 #include "sim/physics.h"
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -2853,6 +2854,48 @@ static void test_ranged_table() {
 }
 
 
+// Трение воздуха на снаряде: projectile_step применяет ТОТ ЖЕ закон, что
+// physics_step ([sim/drag.h]), и пин двусторонний — пуля обязана терять скорость
+// (проводка жива), но почти её не терять (полоса приёмки: ~1% на ~100 м полёта).
+// Третий чек прибивает потерю к замкнутой форме v'=v/(1+q|v|h), чтобы «почти не
+// терять» не мог однажды тихо стать «не терять вовсе» или «терять вдвое».
+static void test_projectile_air_drag() {
+    LevelStack stack;
+    LayerId layer = stack.push_layer(); // весь слой — воздух: трасса без стен
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+
+    // 50000 мм/с * 0.001 * kCellSize = 100 м/с; gravityPct 0 — дуга выключена,
+    // чтобы измерять одно трение, а не тригонометрию баллистики.
+    const float v0 = 100.0f;
+    spawn_projectile_dir(reg, layer, vec3{40.0f, 40.0f, 40.0f},
+                         vec3{1.0f, 0.0f, 0.0f}, 10, 50000, entt::null, 0);
+    Entity p = entt::null;
+    for (auto e : reg.view<const Projectile>()) p = e;
+    CHECK(reg.valid(p));
+    CHECK(std::fabs(length(reg.get<Velocity>(p).v) - v0) <= 1e-3f);
+
+    for (int i = 0; i < kSimHz; ++i)
+        projectile_step(reg, pool, bus, stack, layer, kSimDt,
+                        static_cast<std::uint64_t>(i));
+    CHECK(reg.valid(p)); // TTL 4 с, стен нет — секунду полёта он обязан пережить
+    const float v1 = length(reg.get<Velocity>(p).v);
+    CHECK(v1 < v0 - 0.1f);   // трение подключено: скорость УПАЛА
+    CHECK(v1 > 0.97f * v0);  // и почти ничего не съело — пуля долетает
+
+    // Та же замкнутая форма, прокрученная в тесте на тех же дефолтах, что
+    // ставит спавнер (AABB 0.1, Mass-фолбэк) — расхождение значит, что один из
+    // двух интеграторов сменил формулу или константу в одиночку.
+    float vp = v0;
+    const float q = drag_q(vec3{0.10f, 0.10f, 0.10f}, Mass{}.kg);
+    for (int i = 0; i < kSimHz; ++i)
+        vp /= 1.0f + q * vp * kSimDt;
+    CHECK(std::fabs(v1 - vp) <= 0.05f);
+}
+
 // Firing, end to end, through the real systems — because the two bugs this increment
 // prevents are RUNTIME bugs and arithmetic in a comment is not proof they are gone.
 //
@@ -5357,6 +5400,7 @@ int main() {
     test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();
+    test_projectile_air_drag();
     test_player_shoots();
     test_lob_isotropy();
     test_grenade();

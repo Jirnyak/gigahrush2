@@ -484,7 +484,7 @@ if(GIGA_BUILD_TESTS)
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23385/23385 checks passed"
+        PASS_REGULAR_EXPRESSION "23391/23391 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1007,7 +1007,7 @@ if(GIGA_BUILD_TESTS)
     # окклюзия. Сьюта форка ПРОРЕЖЕНА: его 295k пер-сэмпловых NaN-ассертов
     # схлопнуты в аккумуляторы (один CHECK на цикл) — ратчет счётчика чеков
     # не должен обесцениваться буфером на 48k сэмплов. Mutation RUN: см. коммит.
-        PASS_REGULAR_EXPRESSION "game_test: 240561 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 240567 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
