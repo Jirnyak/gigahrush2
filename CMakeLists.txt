@@ -1025,7 +1025,9 @@ if(GIGA_BUILD_TESTS)
     # test_barter_terms (спред) + бартер-шов в test_full_loop.
     # 242761 -> 242966 (+205) on 2026-08-17: карманы толпы (seed_pocket) —
     # тест рынка в suite_barter (вес-кап налички, безоружность, детерминизм).
-        PASS_REGULAR_EXPRESSION "game_test: 242966 checks, 0 failures")
+    # 242966 -> 243026 (+60) on 2026-08-17: кости — первая игра-строка меню
+    # разговора (suite_dice: ставка/жадный пакет/физрасчёт/сдача/детерминизм).
+        PASS_REGULAR_EXPRESSION "game_test: 243026 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

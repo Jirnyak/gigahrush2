@@ -76,4 +76,70 @@ ConvUiRequest conversation_ui_draw(ConvUiState& st, const char* header,
     return req;
 }
 
+DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header) {
+    DiceUiRequest req;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float winW = 440.0f;
+    const float winH = 240.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
+                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.6f),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
+    ImGui::Begin("##dice", nullptr,
+                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoTitleBar);
+
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
+                       "КОСТИ | СТАВКА %d РУБ | ЦЕЛЬ ДО %d",
+                       g.stake, game::kDiceTarget);
+    ImGui::Separator();
+
+    // Два борта: счёт красится как в референсе — перебор тревожный, 21 золото.
+    auto scoreCol = [](std::int32_t sc) {
+        if (sc > game::kDiceTarget) return ImVec4(0.95f, 0.45f, 0.30f, 1.0f);
+        if (sc == game::kDiceTarget) return ImVec4(0.95f, 0.78f, 0.25f, 1.0f);
+        return ImVec4(0.35f, 0.95f, 0.40f, 1.0f);
+    };
+    ImGui::TextColored(scoreCol(g.playerScore), "ТЫ: %d", g.playerScore);
+    if (g.playerRolls > 0)
+        ImGui::TextDisabled("  %u бр. | последний: %u+%u=%u", g.playerRolls,
+                            g.lastA, g.lastB,
+                            static_cast<unsigned>(g.lastA + g.lastB));
+    ImGui::TextColored(scoreCol(g.npcScore), "%s: %d",
+                       header ? header : "ОН", g.npcScore);
+    if (g.npcRolls > 0)
+        ImGui::TextDisabled("  %u бр. | последний: %u+%u=%u", g.npcRolls,
+                            g.npcLastA, g.npcLastB,
+                            static_cast<unsigned>(g.npcLastA + g.npcLastB));
+    ImGui::Separator();
+
+    if (g.phase == game::DicePhase::Finished) {
+        switch (g.winner) {
+            case game::DiceWinner::Player:
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
+                                   "ТВОЯ ВЗЯЛА: +%d руб", g.paid);
+                break;
+            case game::DiceWinner::Npc:
+                ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.30f, 1.0f),
+                                   "ПРОДУЛ: -%d руб", g.paid);
+                break;
+            default:
+                ImGui::TextUnformatted("НИЧЬЯ. Деньги остаются в карманах.");
+                break;
+        }
+        ImGui::TextDisabled("Enter/Esc — от стола");
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            req.close = true;
+    } else {
+        ImGui::TextDisabled("Enter БРОСИТЬ | T СТОП | Esc СДАТЬСЯ (ставка уйдёт)");
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) req.roll = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_T, false)) req.hold = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.surrender = true;
+    }
+    ImGui::End();
+    return req;
+}
+
 } // namespace giga

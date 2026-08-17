@@ -54,6 +54,12 @@ inline constexpr std::size_t kItemCount = 443;
 // silently go stale against an insertion above it.
 extern const ItemId kItemRuble;
 
+// The dice — the conversation table's first game row gates on this item being
+// at the table ([conversation.md] conv_party_holds). Same generator law as the
+// ruble: named because a runtime string lookup does not exist, refused by the
+// generator if the row disappears.
+extern const ItemId kItemDiceBone;
+
 enum class ItemCategory : std::uint8_t {
     Misc = 0,   // 268
     Weapon,     //  88

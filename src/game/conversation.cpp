@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "game/contract.h"   // ContractBook — the quest option reads givers
+#include "game/dice.h"       // dice_stake_for — the game row prices itself
 #include "game/embody.h"     // NpcRef — the player's bag is a pool row too
 
 namespace giga::game {
@@ -84,6 +85,42 @@ ConvAction trade_activate(ConvContext&) {
     return a;
 }
 
+// --- dice — the first GAME row, exactly the shape the table promised ---------
+// Visible when the dice are AT THE TABLE — either party's pocket counts, one
+// set is enough ([conversation.md]). The row prices itself on activation and
+// refuses in words rather than greying out: a broke partner has no stake, a
+// broke player cannot cover one, and both answers teach the economy.
+bool dice_visible(const ConvContext& ctx) {
+    return conv_party_holds(ctx, kItemDiceBone);
+}
+
+const char* dice_label(const ConvContext&) { return "КОСТИ"; }
+
+ConvAction dice_activate(ConvContext& ctx) {
+    ConvAction a;
+    if (!ctx.pool || !ctx.reg) return a;
+    const std::int32_t stake = dice_stake_for(*ctx.pool, ctx.npc);
+    if (stake <= 0) {
+        a.kind = ConvActionKind::Line;
+        a.line = "Ставить ему нечего — карман пуст.";
+        return a;
+    }
+    NpcId playerId = kInvalidNpc;
+    if (const auto* nr = ctx.reg->try_get<NpcRef>(ctx.player))
+        if (ctx.pool->valid(nr->id)) playerId = nr->id;
+    if (playerId == kInvalidNpc) return a;
+    std::int64_t myRub = 0;
+    for (const ItemSlot& s : ctx.pool->inventory(playerId).slots)
+        if (s.item == kItemRuble && s.count > 0) myRub += s.count;
+    if (myRub < stake) {
+        a.kind = ConvActionKind::Line;
+        a.line = "Тебе нечем крыть его ставку.";
+        return a;
+    }
+    a.kind = ConvActionKind::Dice;
+    return a;
+}
+
 // --- leave ------------------------------------------------------------------
 const char* leave_label(const ConvContext&) { return "УЙТИ"; }
 
@@ -100,12 +137,16 @@ constexpr ConvOptionDef kConvOptions[] = {
     {"talk", 0, talk_label, nullptr, talk_activate},
     {"quest", 10, quest_label, nullptr, quest_activate},
     {"trade", 20, trade_label, nullptr, trade_activate},
+    // The games band starts at 100, per the reference's spacing: dice first,
+    // durak/domino/checkers land as siblings without renumbering anything.
+    {"dice", 100, dice_label, dice_visible, dice_activate},
     {"leave", 9000, leave_label, nullptr, leave_activate},
 };
 // Authored in order, checked at compile time — conv_options copies, never sorts.
 static_assert(kConvOptions[0].order <= kConvOptions[1].order &&
                   kConvOptions[1].order <= kConvOptions[2].order &&
-                  kConvOptions[2].order <= kConvOptions[3].order,
+                  kConvOptions[2].order <= kConvOptions[3].order &&
+                  kConvOptions[3].order <= kConvOptions[4].order,
               "keep kConvOptions sorted by order; the projection relies on it");
 
 bool option_visible(const ConvOptionDef& def, const ConvContext& ctx) {
