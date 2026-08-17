@@ -1,7 +1,10 @@
+#include <vector>
+
 #include "core/rng.h"
 #include "game/population.h"
 
 #include "game/floor_gen.h" // floor_ground_z — the module's ground storey
+#include "game/item_table.h" // pockets: depth-gated draws + kItemRuble cash
 #include "game/role.h"      // role_for — behavioural archetype from the weight row
 
 namespace giga::game {
@@ -45,6 +48,89 @@ std::uint16_t sample_faction(const std::uint8_t mix[kFactionCount],
     return static_cast<std::uint16_t>(kFactionCount - 1);
 }
 
+// ---------------------------------------------------------------------------
+// Pockets — what a citizen is carrying when you talk to them
+// ---------------------------------------------------------------------------
+// [conversation.md] made every living body a trade partner, and a partner with
+// an empty bag and zero cash is scenery with a menu: the deal's liquidity law
+// ("платят тем, что лежит в кармане") needs the pocket to EXIST. Until the
+// production loop stocks real shops (increment D), the crowd's own pockets ARE
+// the floor's market.
+//
+// What a pocket holds is the same depth-gated catalog everything else rolls
+// from (item_weight_on_floor — so the E-band prices the streets exactly as it
+// prices the crates), minus everything wearable: `ai_equip_step` re-decides
+// from the bag, so seeding a knife would quietly arm 950k civilians. Cash is
+// band-scaled but WEIGHT-capped: a ruble weighs a gram, and a courier with a
+// 60 kg wad would arrive over-encumbered by their own props — 5,000 is the
+// ceiling (5 kg, heavy but honest). Children carry a quarter.
+//
+// Deterministic per record id + floor seed, like every other column here: two
+// identically-seeded pools stay digest-identical ([suite_macrosim.inl]).
+
+// The per-floor candidate list, built ONCE per seeding call: 443 rows filtered
+// per record would be O(kItemCount x population) at world start for no reason.
+struct PocketCatalog {
+    std::vector<ItemId> ids;
+    std::vector<std::uint32_t> cum;
+    std::uint32_t total = 0;
+};
+
+PocketCatalog build_pocket_catalog(int floor) {
+    PocketCatalog cat;
+    // The RoomStash share of the band cap: a pocket is a personal stash, not a
+    // safe. Same 30% slice container.h authors for the kind.
+    const std::int32_t cap = kLootValueCap[economy_band(floor)] * 30 / 100;
+    for (ItemId id = 1; id <= kItemCount; ++id) {
+        const ItemDef& d = item_def(id);
+        if (d.value > cap) continue;
+        if (static_cast<EquipSlot>(d.equipSlot) != EquipSlot::None) continue;
+        if (static_cast<ItemCategory>(d.category) == ItemCategory::Weapon)
+            continue;
+        const std::uint32_t w = item_weight_on_floor(id, floor, 0);
+        if (w == 0) continue;
+        cat.total += w;
+        cat.ids.push_back(id);
+        cat.cum.push_back(cat.total);
+    }
+    return cat;
+}
+
+void seed_pocket(NpcPool& pool, NpcId id, const PocketCatalog& cat, int floor,
+                 std::uint32_t r) {
+    Inventory& inv = pool.inventory(id);
+    const std::uint32_t pr = hash_u32(r ^ 0xB0CCA700u);
+
+    // 0..3 possessions: some people simply carry nothing, and that is a state
+    // the barter screen must meet honestly rather than a bug to paper over.
+    const int nItems = static_cast<int>(pr % 4u);
+    for (int k = 0; k < nItems && cat.total != 0; ++k) {
+        const std::uint32_t h =
+            hash_u32(pr ^ (static_cast<std::uint32_t>(k + 1) * 0x9E3779B9u));
+        const std::uint32_t pick = h % cat.total;
+        std::size_t lo = 0, hi = cat.cum.size() - 1;
+        while (lo < hi) {
+            const std::size_t mid = (lo + hi) / 2;
+            if (cat.cum[mid] <= pick) lo = mid + 1; else hi = mid;
+        }
+        const ItemId it = cat.ids[lo];
+        std::uint16_t n = 1;
+        if (item_def(it).stackMax > 1)
+            n = static_cast<std::uint16_t>(1u + ((h >> 8) % 3u));
+        (void)inventory_give(inv, it, n);
+    }
+
+    // Pocket cash: an eighth of the band cap plus walking-around money, capped
+    // by what a person can physically lug ([inventory.h] — the coin is 1 g).
+    std::int32_t cashCap = kLootValueCap[economy_band(floor)] / 8 + 15;
+    if (cashCap > 5000) cashCap = 5000;
+    std::uint32_t cash =
+        hash_u32(pr ^ 0xCA5Bu) % static_cast<std::uint32_t>(cashCap + 1);
+    if (pool.age(id) < 14) cash /= 4;
+    if (cash != 0)
+        (void)inventory_give(inv, kItemRuble, static_cast<std::uint16_t>(cash));
+}
+
 } // namespace
 
 std::uint16_t height_for_age(std::uint8_t age, std::uint32_t jitter) {
@@ -75,6 +161,9 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
     NpcId first = kInvalidNpc;
     NpcId last = kInvalidNpc;
     std::uint32_t placed = 0;
+
+    // Possessions catalog for THIS floor's band, built once per call.
+    const PocketCatalog pocketCat = build_pocket_catalog(floor);
 
     // Age window from the spec (guard against an inverted/empty window).
     int ageLo = spec.minAge < 1 ? 1 : spec.minAge;
@@ -127,6 +216,7 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         pool.role(id) = static_cast<std::uint8_t>(role_for(id, spec.kind));
         pool.max_hp(id) = 100;
         pool.hp(id) = 100;
+        seed_pocket(pool, id, pocketCat, floor, r);
         ++placed;
     }
 

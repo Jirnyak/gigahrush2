@@ -588,6 +588,9 @@ static void test_loottable_all() {
         const NpcId id = 0;
         Entity e = embody(reg, pool, id, 0);
         CHECK(e != entt::null);
+        // The seeder fills POCKETS now ([population.cpp] seed_pocket) — empty
+        // the bag first, or "bare + exactly two rifles" meets somebody's lunch.
+        pool.inventory(id).clear();
         const float bare = reg.get<Mass>(e).kg;
         CHECK(bare > 10.0f); // stature alone, m = 22*h^2
 

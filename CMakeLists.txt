@@ -1023,7 +1023,9 @@ if(GIGA_BUILD_TESTS)
     # тесты (test_vendor, suite_vendorammo) выпилены вместе с системой;
     # взамен suite_barter (законы сделки) + suite_conversation (меню NPC) +
     # test_barter_terms (спред) + бартер-шов в test_full_loop.
-        PASS_REGULAR_EXPRESSION "game_test: 242761 checks, 0 failures")
+    # 242761 -> 242966 (+205) on 2026-08-17: карманы толпы (seed_pocket) —
+    # тест рынка в suite_barter (вес-кап налички, безоружность, детерминизм).
+        PASS_REGULAR_EXPRESSION "game_test: 242966 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
