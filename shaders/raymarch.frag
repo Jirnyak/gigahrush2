@@ -748,9 +748,10 @@ void main() {
     );
     lit = lit * fogVol.a + fogVol.rgb;
 
-    const float kHeightFogScale = 0.04;
-    float heightDensity = exp(-clamp(kHeightFogScale * vWorldPos.z, -3.0, 3.0));
-    float effectiveDist = d * heightDensity;
+    // Бывшая «высотная» модуляция exp(-0.04*z) — шов на врапе тора; константа
+    // = её значение на жилых высотах (z≈40 м). [volumetric_fog.glsl]
+    const float kFogDistScale = 0.20;
+    float effectiveDist = d * kFogDistScale;
 
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 

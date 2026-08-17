@@ -307,11 +307,11 @@ void main() {
         lit += emitCol * animEmissive;
     }
 
-    // Atmospheric height-based fog (increases at lower vertical/Z levels)
-    const float kHeightFogScale = 0.04;
-    float heightPos = min(vWorldPos.y, vWorldPos.z);
-    float heightDensity = exp(-clamp(kHeightFogScale * heightPos, -3.0, 3.0));
-    float effectiveDist = d * heightDensity;
+    // Бывшая «высотная» модуляция exp(-0.04*min(y,z)) — ДВОЙНОЙ грех: шов на
+    // врапе тора плюс рудимент Y-up в выборе оси. Константа = значение прежней
+    // формулы на жилых высотах (z≈40 м). [volumetric_fog.glsl]
+    const float kFogDistScale = 0.20;
+    float effectiveDist = d * kFogDistScale;
     float fog = clamp((effectiveDist - pc.fog.x) / max(pc.fog.y - pc.fog.x, 1e-3), 0.0, 1.0);
 
     // Enforce fog = 1.0 at max toroidal distance pc.fog.y to protect wrap seam

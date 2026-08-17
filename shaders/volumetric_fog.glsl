@@ -40,10 +40,18 @@ float ign_jitter(vec2 fragCoord) {
     return fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715))));
 }
 
-// Lognormal height fog density with spatial micro-turbulent mist
+// Плотность тумана: БАЗА ОДНОРОДНА. «Высотный туман» exp(-k*z) — анти-торовая
+// идея по построению: на замкнутой оси высоты не существует, любая функция
+// АБСОЛЮТНОЙ координаты рвётся швом на границе врапа. Так выглядел баг «белая
+// стена у z≈0, резко исчезающая при переходе»: у z=0 плотность была 1.0 (5x
+// от жилых высот), а марш луча за границу уходил в z<0 и упирался в exp(+3) —
+// 20-кратное молоко. Константа = значение прежней формулы на жилых высотах
+// (z≈40 м, exp(-1.6)≈0.20) — там, где живут игроки, вид не изменился.
+// ЗАКОН: любой будущий пространственный градиент обязан быть периодическим по
+// экстенту тора (wrap_delta), а «низ» брать из гравитационного фрейма слоя.
+const float kFogBaseDensity = 0.20;
 float sample_volumetric_fog_density(vec3 pos, float heightScale) {
-    // Z-up world: height rides z; the mist swirl noise lives in the xy plane.
-    float baseDensity = exp(-clamp(heightScale * pos.z, -3.0, 3.0));
+    float baseDensity = kFogBaseDensity;
     // Spatial noise perturbation for dynamic mist swirl
     vec2 p = pos.xy * 0.15;
     vec2 i = floor(p);
