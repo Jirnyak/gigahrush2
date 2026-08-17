@@ -35,6 +35,7 @@
 #include "imgui_impl_sdl3.h"
 
 #include "app/hud_ui.h"
+#include "app/settings_ui.h"
 #include "core/math.h"
 #include "game/mob_table.h"
 #include "core/tick.h"
@@ -2307,10 +2308,91 @@ int main(int argc, char** argv) {
         std::fwrite(text, 1, n, f);
         std::fclose(f);
     };
-    // The pause menu's rebind capture: index of the row waiting for a key, -1
-    // when idle. menuPage 0 = main items, 1 = the key-binding editor.
+    // The rebind capture (settings, Controls tab): index of the row waiting
+    // for a key, -1 when idle. menuPage 0 = main items, 1 = settings.
     int rebindCapture = -1;
     int menuPage = 0;
+
+    // ── UI-настройки приложения ([settings_ui.h]) ───────────────────────
+    // Один текстовый файл рядом с биндами, тот же паттерн save_binds: ключ
+    // значение на строку. Настройки человека, не персонажа — сейв рана их
+    // не трогает ([menu.md]).
+    constexpr const char* kUiCfgPath = "gigahrush2.ui";
+    bool fullscreenState = false;
+    auto save_ui_cfg = [&]() {
+        std::FILE* f = std::fopen(kUiCfgPath, "wb");
+        if (!f) return;
+        std::size_t hn = 0;
+        HudElement* els = hud_elements(hn);
+        for (std::size_t i = 0; i < hn; ++i)
+            std::fprintf(f, "hud %s %d\n", els[i].id, els[i].on ? 1 : 0);
+        std::fprintf(f, "crt %d\nfullscreen %d\n", renderer.crtEnabled ? 1 : 0,
+                     fullscreenState ? 1 : 0);
+        const audio::AudioConfig& ac = audioSys.mixer().config();
+        std::fprintf(f, "vol_master %.3f\nvol_sfx %.3f\nvol_ambient %.3f\n",
+                     static_cast<double>(ac.masterGain),
+                     static_cast<double>(ac.sfxGain),
+                     static_cast<double>(ac.ambientGain));
+        std::fclose(f);
+    };
+    {
+        std::FILE* f = std::fopen(kUiCfgPath, "rb");
+        if (f) {
+            char line[128];
+            auto clamp01 = [](float v) {
+                return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+            };
+            while (std::fgets(line, sizeof line, f)) {
+                char id[32];
+                int iv = 0;
+                float fv = 0.0f;
+                if (std::sscanf(line, "hud %31s %d", id, &iv) == 2) {
+                    std::size_t hn = 0;
+                    HudElement* els = hud_elements(hn);
+                    for (std::size_t i = 0; i < hn; ++i)
+                        if (std::strcmp(els[i].id, id) == 0)
+                            els[i].on = iv != 0;
+                } else if (std::sscanf(line, "crt %d", &iv) == 1) {
+                    // --no-crt — диагностический CLI-override и он сильнее
+                    // сохранённого предпочтения: флаг просят на ОДИН запуск.
+                    if (!noCrt) renderer.crtEnabled = iv != 0;
+                } else if (std::sscanf(line, "fullscreen %d", &iv) == 1) {
+                    fullscreenState = iv != 0;
+                } else if (std::sscanf(line, "vol_master %f", &fv) == 1) {
+                    audioSys.mixer().config().masterGain = clamp01(fv);
+                } else if (std::sscanf(line, "vol_sfx %f", &fv) == 1) {
+                    audioSys.mixer().config().sfxGain = clamp01(fv);
+                } else if (std::sscanf(line, "vol_ambient %f", &fv) == 1) {
+                    audioSys.mixer().config().ambientGain = clamp01(fv);
+                }
+            }
+            std::fclose(f);
+            if (fullscreenState) SDL_SetWindowFullscreen(window, true);
+        }
+    }
+    // Страница настроек — ОДНА ([settings_ui.h]), из главного меню и из
+    // паузы; заявка применяется тут же, сохранение немедленное (паттерн
+    // ребинда: настройка, которую app потом уронит, не должна пропасть).
+    auto draw_settings_page = [&]() {
+        SettingsCtx sctx;
+        sctx.binds = &binds;
+        sctx.rebindCapture = &rebindCapture;
+        sctx.crtEnabled = &renderer.crtEnabled;
+        sctx.fullscreen = &fullscreenState;
+        sctx.audio = &audioSys.mixer().config();
+        const SettingsRequest sreq = settings_ui_draw(sctx);
+        if (sreq.bindsReset) {
+            binds.clear();
+            game::keybind_register_defaults(binds);
+            save_binds();
+            input.set_move_binds(game::keybind_move_binds(binds));
+            rebindCapture = -1;
+        }
+        if (sreq.uiChanged) {
+            SDL_SetWindowFullscreen(window, fullscreenState);
+            save_ui_cfg();
+        }
+    };
     // The display name of an action's current key, for menu rows and HUD
     // prompts — so a rebind renames every hint with no further edit.
     auto bind_key = [&](const char* action) -> const char* {
@@ -6045,20 +6127,20 @@ int main(int argc, char** argv) {
                 // Титул теперь пиксельный, из клеток заставки ([intro_ui.h])
                 // — ASCII-дубль в окне меню снят.
                 ImGui::Separator();
-                if (ImGui::Button("New Game", btn)) shell.menuPage = 2;
-                if (ImGui::Button("Load Game", btn)) shell.menuPage = 1;
-                if (ImGui::Button("Settings", btn)) shell.menuPage = 3;
+                if (ImGui::Button("Новая игра", btn)) shell.menuPage = 2;
+                if (ImGui::Button("Загрузить", btn)) shell.menuPage = 1;
+                if (ImGui::Button("Настройки", btn)) shell.menuPage = 3;
                 ImGui::Spacing();
-                if (ImGui::Button("Quit", btn)) running = false;
+                if (ImGui::Button("Выход", btn)) running = false;
             } else if (shell.menuPage == 1) {
-                ImGui::TextUnformatted("Load Game");
+                ImGui::TextUnformatted("Загрузить");
                 ImGui::Separator();
                 bool any = false;
                 for (int s = 1; s <= kMaxSaveSlots; ++s) {
                     if (!slot_occupied(s)) continue;
                     any = true;
                     char label[32];
-                    std::snprintf(label, sizeof label, "Slot %d", s);
+                    std::snprintf(label, sizeof label, "Слот %d", s);
                     if (ImGui::Button(label, btn)) {
                         // The load itself runs on the sim clock next frame —
                         // and BEFORE the player has touched anything, which is
@@ -6068,16 +6150,16 @@ int main(int argc, char** argv) {
                         menu_start_playing();
                     }
                 }
-                if (!any) ImGui::TextUnformatted("(no saves yet)");
+                if (!any) ImGui::TextUnformatted("(сейвов пока нет)");
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
+                if (ImGui::Button("Назад", btn)) shell.menuPage = 0;
             } else if (shell.menuPage == 2) {
-                ImGui::TextUnformatted("New Game - pick a slot");
+                ImGui::TextUnformatted("Новая игра — выбери слот");
                 ImGui::Separator();
                 for (int s = 1; s <= kMaxSaveSlots; ++s) {
-                    char label[48];
-                    std::snprintf(label, sizeof label, "Slot %d%s", s,
-                                  slot_occupied(s) ? "  (overwrite)" : "");
+                    char label[64];
+                    std::snprintf(label, sizeof label, "Слот %d%s", s,
+                                  slot_occupied(s) ? "  (перезапись)" : "");
                     if (ImGui::Button(label, btn)) {
                         g_saveSlot = s;
                         // A new game clears its slot's directory: stale floor
@@ -6091,26 +6173,29 @@ int main(int argc, char** argv) {
                     }
                 }
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
+                if (ImGui::Button("Назад", btn)) shell.menuPage = 0;
             } else {
-                ImGui::TextUnformatted("Settings");
+                ImGui::TextUnformatted("НАСТРОЙКИ");
                 ImGui::Separator();
-                ImGui::TextUnformatted(
-                    "Key bindings: pause menu (Esc in game), persisted.");
-                ImGui::TextUnformatted(
-                    "Character creation lands here as its own page.");
+                // ТО ЖЕ окно вкладок, что в паузе ([settings_ui.h]) — один
+                // код, два входа; заглушка «settings придут» снята.
+                draw_settings_page();
                 ImGui::Spacing();
-                if (ImGui::Button("Back", btn)) shell.menuPage = 0;
+                if (ImGui::Button("Назад", btn)) {
+                    shell.menuPage = 0;
+                    rebindCapture = -1;
+                }
             }
             ImGui::End();
         }
 
         // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus
         // a console line, so the same row already works from the keyboard and
-        // the typed console, and a future option (settings, floor jump, ...) is
-        // one table entry — never a new handler. The Key Bindings page edits the
-        // KeybindTable live and persists it. Labels are ASCII — the default
-        // ImGui font ships no Cyrillic glyphs.
+        // the typed console, and a future option is one table entry — never a
+        // new handler. Page 1 is THE settings window ([settings_ui.h]) — the
+        // same tabs the main menu shows; the old in-pause bind editor became
+        // its Controls tab. Кириллица в ярлыках законна: шрифт несёт её
+        // (имена мобов, худ) — старое «ASCII only» было правдой другого шрифта.
         if (shell.screen == AppScreen::Pause) {
             ImGuiIO& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(
@@ -6119,74 +6204,33 @@ int main(int argc, char** argv) {
             ImGui::Begin("Menu", nullptr,
                          ImGuiWindowFlags_AlwaysAutoResize |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoTitleBar |
                              ImGuiWindowFlags_NoSavedSettings);
             const ImVec2 btn(220.0f, 0.0f);
             if (menuPage == 0) {
-                ImGui::TextUnformatted("Paused");
+                ImGui::TextUnformatted("ПАУЗА");
                 ImGui::Separator();
                 struct MenuItem {
                     const char* label;
                     const char* command; // a console row — the menu adds nothing
                 };
                 static constexpr MenuItem kItems[] = {
-                    {"Resume", "menu"},
-                    {"Save Game", "save"},
-                    {"Load Game", "load"},
+                    {"Продолжить", "menu"},
+                    {"Сохранить", "save"},
+                    {"Загрузить", "load"},
                 };
                 refresh_console_ctx();
                 for (const MenuItem& item : kItems)
                     if (ImGui::Button(item.label, btn)) exec_command(item.command);
-                if (ImGui::Button("Key Bindings", btn)) menuPage = 1;
+                if (ImGui::Button("Настройки", btn)) menuPage = 1;
                 ImGui::Spacing();
-                if (ImGui::Button("Quit", btn)) exec_command("quit");
+                if (ImGui::Button("Выйти", btn)) exec_command("quit");
             } else {
-                ImGui::TextUnformatted("Key Bindings");
+                ImGui::TextUnformatted("НАСТРОЙКИ");
                 ImGui::Separator();
-                ImGui::BeginChild("##bind_rows", ImVec2(420.0f, 360.0f), true);
-                if (ImGui::BeginTable("##binds", 3,
-                                      ImGuiTableFlags_RowBg |
-                                          ImGuiTableFlags_SizingStretchProp)) {
-                    ImGui::TableSetupColumn("Action");
-                    ImGui::TableSetupColumn("Key");
-                    ImGui::TableSetupColumn("##rebind",
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            80.0f);
-                    for (std::size_t i = 0; i < binds.count(); ++i) {
-                        const game::KeyBind& b = binds.at(i);
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::TextUnformatted(b.action);
-                        ImGui::TableSetColumnIndex(1);
-                        if (rebindCapture == static_cast<int>(i)) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f),
-                                               "press a key...");
-                        } else {
-                            const char* keyName = SDL_GetScancodeName(
-                                static_cast<SDL_Scancode>(b.scancode));
-                            ImGui::Text("%s", (keyName && *keyName) ? keyName : "?");
-                            if (binds.conflicts(b.action) > 0) {
-                                ImGui::SameLine();
-                                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
-                                                   "(conflict)");
-                            }
-                        }
-                        ImGui::TableSetColumnIndex(2);
-                        char rebindId[48];
-                        std::snprintf(rebindId, sizeof rebindId, "Rebind##%zu", i);
-                        if (ImGui::Button(rebindId))
-                            rebindCapture = static_cast<int>(i);
-                    }
-                    ImGui::EndTable();
-                }
-                ImGui::EndChild();
-                if (ImGui::Button("Reset Defaults", btn)) {
-                    binds.clear();
-                    game::keybind_register_defaults(binds);
-                    save_binds();
-                    input.set_move_binds(game::keybind_move_binds(binds));
-                    rebindCapture = -1;
-                }
-                if (ImGui::Button("Back", btn)) {
+                draw_settings_page();
+                ImGui::Spacing();
+                if (ImGui::Button("Назад", btn)) {
                     menuPage = 0;
                     rebindCapture = -1;
                 }
