@@ -137,9 +137,12 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                           std::uint8_t animPhase = 0, std::uint8_t flags = 0);
 
 
-// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+// Destroy every StaticPropTag prop on `layer` (terminals, shields, bulbs…).
 // Call before reseeding a recycled LayerId slot — same contract as
-// despawn_layer_mobs / refresh_floor_containers. [jirnyak.md] §18.
+// despawn_layer_mobs / refresh_floor_containers. NOT keyed on SubVoxelAnchor:
+// containers carry an anchor and their own refresh cycle, and keying on the
+// anchor wiped every crate at floor arrival (markoaudit-systems.md §1.2).
+// [jirnyak.md] §18.
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 
 // Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the

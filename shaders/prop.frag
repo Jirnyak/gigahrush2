@@ -251,7 +251,13 @@ void main() {
     vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
 
     float timeSec = pc.torus.w;
-    float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (float(GIGA_MACRO_DIM) * 0.30 * GIGA_CELL_SIZE)) / 0.66, 0.0, 1.0);
+    // torus.z IS the pulse: the CPU computes it every frame (main.cpp
+    // `push.torus = {kWorldExtent, kAoDirect, samosborPulse, time}`) and 0 is
+    // a legal value, not "unset". The old `> 0.0 ? : ` fallback re-derived the
+    // pulse from pc.fog.x against a hand-computed 76.8 where the CPU passes
+    // 64, so every prop pulsed at ~0.25 with no samosbor active — the bug
+    // cube.frag already had fixed ([problems.md] §20) and this file did not.
+    float samosborPulse = clamp(pc.torus.z, 0.0, 1.0);
 
     // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
     vec4 fogVol = march_volumetric_fog(

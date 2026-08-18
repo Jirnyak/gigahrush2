@@ -2,6 +2,8 @@
 // Wall-mounted Terminal / ElectricalShield live in ECS Interactable entities
 // tagged by Transform.layer. PropPass is render-only; sim+HUD must not read it.
 
+#include "game/container.h"  // spawn_floor_containers — the clear_layer_props seam test
+#include "game/floor_gen.h"  // generate_floor — real floor geometry for that seam
 #include "game/floors/padic/padic.h"
 #include "game/floor_spec.h"
 #include "game/prop_system.h"
@@ -780,6 +782,90 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
 }
 
 
+// markoaudit-systems.md §1.2 — THE SEAM THE SUITES NEVER RAN. main.cpp calls
+// refresh_floor_containers and then refresh_floor_props, whose first line is
+// clear_layer_props. When that clear keyed on "has a SubVoxelAnchor" it wiped
+// every crate just spawned (38 of 38 measured on floor 0), because a container
+// carries an anchor for gravity/destruction and is NOT part of the prop
+// roster. Both halves were green in isolation — spawn_floor_containers here,
+// clear_layer_props there — and the wipe lived in the ORDER, which no test
+// executed. This test runs the seam: containers, then a roster prop, then the
+// clear. The crate must survive; the roster prop must die.
+static void test_clear_layer_props_spares_containers() {
+    World w;
+    const int floorZ = -3;
+    const game::FloorKind kind = game::FloorKind::Residential;
+    // Same seed formula main.cpp refresh_floor_containers uses.
+    const std::uint32_t seed =
+        0xC0FFEEu ^ static_cast<std::uint32_t>(floorZ) * 0x9e3779b9u;
+    game::generate_floor(w, floorZ, game::floor_spec(kind), 1337u);
+
+    Registry reg;
+    const LayerId layer = 0;
+    const std::uint32_t made =
+        game::spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
+    CHECK(made > 4u);
+
+    // One roster prop through the spawn_prop route (StaticPropTag attached).
+    w.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14; anchor.cy = 6; anchor.cz = 14;
+    anchor.subX = 4; anchor.subY = 4; anchor.subZ = 4;
+    const vec3 pos{14.5f * kCellSize, 6.5f * kCellSize, 14.5f * kCellSize};
+    const auto roster = game::spawn_prop(reg, w, pos, anchor,
+                                         game::Interactable::Kind::Terminal,
+                                         game::PropFallMode::SimpleFall,
+                                         vec3{0.3f, 0.3f, 0.3f},
+                                         /*meshKind*/0u, layer);
+    CHECK(reg.valid(roster));
+
+    std::uint32_t cratesBefore = 0;
+    for (auto e : reg.view<const game::Container>()) { (void)e; ++cratesBefore; }
+    CHECK(cratesBefore == made);
+
+    const std::uint32_t cleared = game::clear_layer_props(reg, layer);
+    CHECK(cleared >= 1u);       // the roster prop went
+    CHECK(!reg.valid(roster));
+
+    std::uint32_t cratesAfter = 0;
+    for (auto e : reg.view<const game::Container>()) {
+        CHECK(reg.valid(e));
+        ++cratesAfter;
+    }
+    CHECK(cratesAfter == cratesBefore); // every crate survived the seam
+    printf("[props] clear_layer_props: roster cleared, %u crates survived\n",
+           cratesAfter);
+}
+
+
+// markoaudit-systems.md §1.3 — furniture rows carried interact=Terminal, so E
+// on a toilet toggled the door locks of every room on the floor. Pins BOTH
+// halves of the fix: the four furniture rows are interact=None (generator
+// ordinal 255, tools/gen_prop_table.py), and the spawn path strips the
+// Interactable component for a None row. Lamps stay interactable — the
+// negative control that None did not leak into the rest of the table.
+static void test_furniture_is_not_a_terminal() {
+    CHECK(game::prop_def(game::PropId::KitchenStove).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::KitchenTable).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::ToiletPan).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::BedCot).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::BareBulb).interactKind != 255);
+
+    Registry reg;
+    World world;
+    world.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14; anchor.cy = 6; anchor.cz = 14;
+    anchor.subX = 4; anchor.subY = 4; anchor.subZ = 4;
+    const vec3 pos{14.5f * kCellSize, 6.5f * kCellSize, 14.5f * kCellSize};
+    const auto e = game::spawn_prop_from_id(reg, world, pos, anchor,
+                                            game::PropId::ToiletPan, 3);
+    CHECK(reg.valid(e));
+    CHECK(!reg.all_of<game::Interactable>(e)); // scenery, not a verb
+    printf("[props] furniture spawns without Interactable (None row)\n");
+}
+
+
 // [jirnyak.md] section 18/20 -- terminals are sim-owned via seed_wall_interactables.
 // PropPass no longer exposes get_terminal_positions; interaction_step must resolve
 // ECS Interactable entities, not ghost GPU instances from env_detail.
@@ -845,6 +931,8 @@ void test_props_game_all() {
     test_prop_ragdoll_step_damps_angular();
     test_debris_roll_drives_angular_on_ground();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
+    test_clear_layer_props_spares_containers();
+    test_furniture_is_not_a_terminal();
     test_find_nearest_terminal_respects_reach();
     test_sim_owned_terminals_seed_and_interact();
     test_embody_interact_terminal_applies_at_given_pos();

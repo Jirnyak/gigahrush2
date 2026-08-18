@@ -1078,7 +1078,7 @@ if(GIGA_BUILD_TESTS)
     # 243565 -> 243576 (+11) on 2026-08-17: light_bake — светоматериалы в
     # эмиттеры: пустой мир, полоса-кластер (центроид/радиус/цвет/интенсивность),
     # раздельные пятна, кластер через шов тора ([ddalight.md]).
-        PASS_REGULAR_EXPRESSION "game_test: 243576 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 243627 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

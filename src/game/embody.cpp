@@ -59,7 +59,12 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // makes a loaded fall hurt more through the same law rather than a new one.
     reg.emplace<Mass>(e, Mass{body_mass_kg(pool.height_mm(id))});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-    reg.emplace<Jump>(e, Jump{6.5f, false});
+    // Default impulse (5.0, [ecs/components.h]) on purpose: impact.h derives
+    // kImpactFreeSpeed = 6.5 FROM a 5 m/s landing plus a step off a 2 m cell
+    // (~6.3), so the margin only exists if the jump actually is 5. The 6.5
+    // that used to sit here re-used the threshold as the impulse and zeroed
+    // the derived margin — a live player landed exactly on the bleed line.
+    reg.emplace<Jump>(e, Jump{});
 
     // Render skin: a faction-tinted box the size of the collider. Cosmetic only
     // (the body pass reads it; the sim never does), so the whole embodied crowd

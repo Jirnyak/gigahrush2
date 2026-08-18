@@ -35,8 +35,14 @@ static PropFallMode fall_mode_from_u8(std::uint8_t v) {
 
 static Interactable::Kind interact_kind_from_u8(std::uint8_t v) {
     // The ordinal IS the generated table row ([interact_table.h], CSV order).
-    // Out-of-range (255 = "None" and any stale byte) clamps to row 0's
-    // behaviourless default at the call sites that check `interact != 255`.
+    // Out-of-range (255 = the generator's "None") still has to return SOME
+    // enum value because spawn_prop emplaces Interactable unconditionally;
+    // spawn_prop_from_id then REMOVES the component for 255. An earlier
+    // version of this comment claimed call sites "check interact != 255" —
+    // no such check ever existed, which is how a None-row prop would have
+    // shipped as a lootable (the E-on-a-toilet bug, §1.3 of the audit, was
+    // the same class: furniture rows carried Terminal because None had no
+    // working path).
     return v < kInteractCount ? static_cast<Interactable::Kind>(v)
                               : Interactable::Kind::Loot;
 }
@@ -297,6 +303,10 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
         pm->scale = vec3{static_cast<float>(d.sizeXMm) * 0.001f,
                          static_cast<float>(d.sizeYMm) * 0.001f,
                          static_cast<float>(d.sizeZMm) * 0.001f};
+    // interact=None in props.csv (generator ordinal 255): the prop is scenery,
+    // not a verb. spawn_prop emplaced a clamped Interactable above; take it off.
+    if (d.interactKind == 255)
+        reg.remove<Interactable>(e);
     // Table reachMm overrides the spawn_prop default (2.5 m).
     if (reg.all_of<Interactable>(e)) {
         auto& ia = reg.get<Interactable>(e);
@@ -325,10 +335,15 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
 
     std::vector<Entity> old_;
-    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
-    // Detached ragdolls lose the anchor and are left alone — they belong to the
-    // live sim, not the floor roster.
-    auto view = reg.view<const SubVoxelAnchor, const Transform>();
+    // StaticPropTag marks the floor roster (terminals, shields, padic bulbs) —
+    // spawn_prop attaches it. The roster is NOT "whatever carries an anchor":
+    // containers hold a SubVoxelAnchor too ([container.cpp] spawn) and never
+    // the tag, and when this view keyed on the anchor it wiped every crate on
+    // every floor at arrival, refresh_floor_props being called right after
+    // refresh_floor_containers (markoaudit-systems.md §1.2 — 38 of 38 crates,
+    // including ones just restored from the save). Detached ragdolls lose the
+    // tag on detach and are left alone — they belong to the live sim.
+    auto view = reg.view<const StaticPropTag, const SubVoxelAnchor, const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer == layer)
             old_.push_back(e);

@@ -6871,6 +6871,14 @@ int main(int argc, char** argv) {
             // record, unconditionally — see the LightGrid note on why every
             // bracket must write its pair each frame.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::SimPhysics);
+            // Реальный кадровый dt для GPU-симов (провода/ткань/частицы).
+            // Раньше здесь стояло 1/60 ЗА КАДР: на 144 FPS антураж падал в
+            // 2.4 раза быстрее, при том что FallClock строкой ниже уже жил по
+            // frameDt — две метрики времени в одном блоке. Потолок — два
+            // эталонных шага 60 Гц: верле помнит прошлую позицию, и хитч,
+            // пропущенный в dt целиком, отдаётся взрывом констрейнтов. Газ
+            // остаётся на 1/60 намеренно (см. его комментарий: поле фоновое).
+            const float gpuSimDt = std::min(frameDt, 2.0f / 60.0f);
             if (wirePass.ready() && wirePass.chain_count() > 0 &&
                 activeLayer != kInvalidLayer) {
                 if (const game::AntourageBake* ab =
@@ -6884,8 +6892,19 @@ int main(int argc, char** argv) {
                     // keeps simulating unpinned for kAntourageFallSec, so it
                     // drops, lands on the floor (world_land in wire_sim.comp)
                     // and only then stops being drawn ([antourage.md]).
+                    // Сброс по смене (этаж, слой) — образец газа выше: смена
+                    // этажа с ТЕМ ЖЕ числом проводов раньше наследовала чужие
+                    // счётчики, и «истраченные» провода молча не рисовались.
                     static game::FallClock wireFall;
-                    if (wireFall.left.size() != ab->wires.size()) wireFall.clear();
+                    static int wireFallFloor = INT_MIN;
+                    static LayerId wireFallLayer = static_cast<LayerId>(~0u);
+                    if (wireFallFloor != currentFloor ||
+                        wireFallLayer != activeLayer ||
+                        wireFall.left.size() != ab->wires.size()) {
+                        wireFall.clear();
+                        wireFallFloor = currentFloor;
+                        wireFallLayer = activeLayer;
+                    }
                     for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
                         const std::uint8_t m =
                             game::wire_live_pins(wg, ab->wires[wi]);
@@ -6900,7 +6919,7 @@ int main(int argc, char** argv) {
                 }
                 if (!noWireSim)
                     wirePass.record_sim(
-                        cmd, 1.0f / 60.0f,
+                        cmd, gpuSimDt,
                         stack.layer(activeLayer).gravity().global);
             }
 
@@ -6915,8 +6934,15 @@ int main(int argc, char** argv) {
                     clothPins.clear();
                     const MacroGrid& wg = stack.layer(activeLayer).grid();
                     static game::FallClock clothFall;
-                    if (clothFall.left.size() != ab->cloths.size())
+                    static int clothFallFloor = INT_MIN;
+                    static LayerId clothFallLayer = static_cast<LayerId>(~0u);
+                    if (clothFallFloor != currentFloor ||
+                        clothFallLayer != activeLayer ||
+                        clothFall.left.size() != ab->cloths.size()) {
                         clothFall.clear();
+                        clothFallFloor = currentFloor;
+                        clothFallLayer = activeLayer;
+                    }
                     for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
                         const std::uint32_t m =
                             game::cloth_live_pins(wg, ab->cloths[si]);
@@ -6931,7 +6957,7 @@ int main(int argc, char** argv) {
                 }
                 if (!noWireSim)
                     clothPass.record_sim(
-                        cmd, 1.0f / 60.0f,
+                        cmd, gpuSimDt,
                         stack.layer(activeLayer).gravity().global);
             }
 
@@ -6951,7 +6977,7 @@ int main(int argc, char** argv) {
             // dereferences activeLayer, so it is valid here.
             if (!noParticleSim)
                 particlePass.record_sim(
-                    cmd, 1.0f / 60.0f,
+                    cmd, gpuSimDt,
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
