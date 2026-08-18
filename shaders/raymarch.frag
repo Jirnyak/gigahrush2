@@ -83,9 +83,9 @@ const float kGamma = 2.2;
 // =============================================================================
 // == voxel fetch ==============================================================
 // =============================================================================
-const int kMacroDim = 128;
-const float kCell = 2.0;
-const float kVoxel = 0.25;
+const int kMacroDim = GIGA_MACRO_DIM;         // -D из CMakeLists <- world/types.h
+const float kCell = GIGA_CELL_SIZE;
+const float kVoxel = kCell / float(GIGA_SUB_DIM);
 
 uint cell_index(ivec3 c) {
     c &= (kMacroDim - 1); // torus: power-of-two wrap is one AND per axis

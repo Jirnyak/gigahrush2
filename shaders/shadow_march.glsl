@@ -20,9 +20,9 @@ layout(set = GIGA_SHADOW_SET, binding = 1, std430) readonly buffer ShadowClassBu
     uint sClass[]; // 4 клетки на uint: 0 пусто, 1 цельно, 2 частично
 };
 
-const int   kSmMacroDim = 128; // lockstep с world/types.h kMacroDim
-const float kSmCell = 2.0;
-const float kSmVoxel = 0.25;
+const int   kSmMacroDim = GIGA_MACRO_DIM; // -D из CMakeLists <- world/types.h
+const float kSmCell = GIGA_CELL_SIZE;
+const float kSmVoxel = kSmCell / float(GIGA_SUB_DIM);
 
 uint sm_cell_index(ivec3 c) {
     c &= (kSmMacroDim - 1); // тор: врап на битовом И

@@ -657,6 +657,50 @@ endforeach()
 
 message("GIGA_TORUS_TRIPLE windows_scanned=${GIGA_TRIPLE_WINDOWS}")
 
+# ---- Rule 9: grid-size literals are banned in shaders ----------------------
+# CMakeLists.txt parses kMacroDim/kSubDim/kCellSize out of src/world/types.h
+# (and the light-grid shape out of src/render/gpu_light_grid.h) at configure
+# time and passes them to every glslc call as GIGA_* -D macros. That block is
+# the ONLY legal source of the world's shape in GLSL. Before it existed the
+# numbers were retyped per shader and drifted: prop.frag divided by a
+# hand-computed 76.8 where the C++ side passes 64, and shadow_march.glsl
+# carried a "lockstep" copy nothing enforced. The macroisation itself was
+# proven behaviour-preserving on landing day: all 25 .spv byte-identical
+# before/after.
+#
+# Banned spellings: 128 (any fraction), 127 (the wrap mask 128-1), float 256.x
+# (the world extent). Bare integer 256 stays legal — light_grid.comp's
+# sTile[256] is a workgroup tile, not the world. 0.25/2.0/64 are NOT banned:
+# they are common as colours, phases and workgroup sizes, and a rule that
+# cries wolf gets an allow-comment pasted on reflex, which is worse than no
+# rule. `#define GIGA_` is banned so an in-file define cannot shadow the -D.
+file(GLOB GIGA_SHADER_FILES
+    "${GIGA_ROOT}/shaders/*.vert" "${GIGA_ROOT}/shaders/*.frag"
+    "${GIGA_ROOT}/shaders/*.comp" "${GIGA_ROOT}/shaders/*.glsl")
+list(LENGTH GIGA_SHADER_FILES _giga_shader_count)
+if(_giga_shader_count LESS 10)
+    message(FATAL_ERROR
+        "check_source_rules rule 9: only ${_giga_shader_count} shader files "
+        "globbed — the tree has 25+. The glob went blind; fix it, do not "
+        "delete the rule.")
+endif()
+# A regex passed INTO _giga_scan is macro-substituted and therefore parsed
+# twice, so a `\\.` written here reaches the engine as a bare `.` (any char) —
+# measured on landing day: the 256 rule matched `sTile[256]` and `256u`.
+# Bracket classes `[.]` survive both parses; never use backslash escapes in
+# these arguments.
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]128([.][0-9]*)?[^A-Za-z0-9_]"
+    "grid literal 128 is banned in shaders — use GIGA_MACRO_DIM (passed via -D from CMakeLists, parsed out of src/world/types.h). Retyped copies of the grid are how prop.frag ended up dividing by 76.8 against the C++ side's 64.")
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]127[^A-Za-z0-9_.]"
+    "wrap-mask literal 127 is banned in shaders — spell it (GIGA_MACRO_DIM - 1) so the mask cannot outlive a grid resize.")
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]256[.][0-9]*[^A-Za-z0-9_]"
+    "world-extent literal 256.x is banned in shaders — derive it: float(GIGA_MACRO_DIM) * GIGA_CELL_SIZE.")
+# GIGA_-prefixed FEATURE switches (GIGA_ALBEDO_ARRAY, GIGA_SHADOW_SET,
+# GIGA_VOLUMETRIC_GRID_BINDINGS) are an existing in-shader convention and stay
+# legal; only the five grid macros owned by CMakeLists may not be shadowed.
+_giga_scan(GIGA_SHADER_FILES "#[ \t]*define[ \t]+GIGA_(MACRO_DIM|SUB_DIM|CELL_SIZE|LIGHT_GRID_DIM|LIGHT_GRID_CELL)"
+    "defining this grid macro inside a shader is banned — it would silently shadow the -D value CMakeLists parsed out of the C++ headers. The build system is the only writer of the five GIGA_ grid macros.")
+
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------
 # A `tests/suite_*.inl` reaches a compiler only if some `tests/*.cpp` names it in

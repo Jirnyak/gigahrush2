@@ -249,6 +249,55 @@ target_link_libraries(giga_game PUBLIC giga_core giga_audio)
 giga_target_flags(giga_game OFF)
 
 # ---- Shader compilation (GLSL -> SPIR-V) ----------------------------------
+# Grid constants are PARSED OUT OF THE C++ HEADERS at configure time and handed
+# to every glslc call as -D macros, so GLSL and C++ cannot disagree about the
+# world's shape. Before 2026-08-18 the numbers were retyped as literals in the
+# shaders and drifted exactly the way retyped numbers do: prop.frag divided by
+# a hand-computed 76.8 where the C++ side passes 64 (markoaudit-systems.md
+# §1.8), and shadow_march.glsl carried its own "lockstep" copy that nothing
+# enforced. Rule 9 of tools/check_source_rules.cmake bans the literals from
+# shaders/, so this block is the ONLY source. Parsing failures are FATAL on
+# purpose: a silent default here would be a fifth copy of the number.
+file(READ ${CMAKE_SOURCE_DIR}/src/world/types.h _giga_types_h)
+if(NOT _giga_types_h MATCHES "kMacroDim = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kMacroDim out of src/world/types.h — the "
+        "declaration moved. Fix the regex here; do not hardcode the value.")
+endif()
+set(_giga_macro_dim ${CMAKE_MATCH_1})
+if(NOT _giga_types_h MATCHES "kSubDim = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kSubDim out of src/world/types.h.")
+endif()
+set(_giga_sub_dim ${CMAKE_MATCH_1})
+if(NOT _giga_types_h MATCHES "kCellSize = ([0-9.]+)f")
+    message(FATAL_ERROR "cannot parse kCellSize out of src/world/types.h.")
+endif()
+set(_giga_cell_size ${CMAKE_MATCH_1})
+file(READ ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h _giga_lgrid_h)
+if(NOT _giga_lgrid_h MATCHES "kGridDimX = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kGridDimX out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_dim ${CMAKE_MATCH_1})
+if(NOT _giga_lgrid_h MATCHES "kGridDimY = ${_giga_lgrid_dim}" OR
+   NOT _giga_lgrid_h MATCHES "kGridDimZ = ${_giga_lgrid_dim}")
+    message(FATAL_ERROR "light grid is no longer cubic (gpu_light_grid.h "
+        "kGridDimX/Y/Z differ) — volumetric_fog.glsl assumes one dimension; "
+        "teach it three before changing this.")
+endif()
+if(NOT _giga_lgrid_h MATCHES "kGridCellMeters = ([0-9.]+)f")
+    message(FATAL_ERROR "cannot parse kGridCellMeters out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_cell ${CMAKE_MATCH_1})
+set(_giga_shader_defs
+    -DGIGA_MACRO_DIM=${_giga_macro_dim}
+    -DGIGA_SUB_DIM=${_giga_sub_dim}
+    -DGIGA_CELL_SIZE=${_giga_cell_size}
+    -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
+    -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell})
+# Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
+# above go stale while the build stays green.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/world/types.h
+    ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h)
 set(_giga_spv_dir ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${_giga_spv_dir})
 set(_giga_spv_files "")
@@ -262,7 +311,7 @@ set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAK
 foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O ${_giga_shader_defs}
             ${CMAKE_SOURCE_DIR}/shaders/${_sh}
             -o ${_giga_spv_dir}/${_sh}.spv
         DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${_sh} ${_giga_glsl_includes}
@@ -273,7 +322,7 @@ endforeach()
 # GPU compute volumetric light grid shader.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/light_grid.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
         -o ${_giga_spv_dir}/light_grid.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
@@ -283,7 +332,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
 # GPU 4-channel gas/atmosphere sim over the 128^3 macro grid ([gpu_gas_pass.h]).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/gas_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
         -o ${_giga_spv_dir}/gas_sim.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
@@ -293,7 +342,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
 # GPU verlet for hanging wires (antourage ghost chains).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/wire_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
         -o ${_giga_spv_dir}/wire_sim.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
@@ -303,7 +352,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/wire_sim.comp.spv)
 # GPU verlet for 2D cloth sheets (antourage curtains/tarps).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/cloth_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
         -o ${_giga_spv_dir}/cloth_sim.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
@@ -313,7 +362,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cloth_sim.comp.spv)
 # GPU sim for the unified particle pool (blood/dust/sparks/drips).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/particle_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
         -o ${_giga_spv_dir}/particle_sim.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
@@ -323,7 +372,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/particle_sim.comp.spv)
 # GPU compute prop frustum culling shader.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/cull.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/cull.comp
         -o ${_giga_spv_dir}/cull.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cull.comp
@@ -357,7 +406,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cull.comp.spv)
 # trap AGENTS.md warns about for new shaders.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/cube_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/cube.frag
         -o ${_giga_spv_dir}/cube_tex.frag.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${_giga_glsl_includes}
@@ -369,7 +418,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
 # arrays, the procedural fallback must not declare them.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/raymarch_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag
         -o ${_giga_spv_dir}/raymarch_tex.frag.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag ${_giga_glsl_includes}

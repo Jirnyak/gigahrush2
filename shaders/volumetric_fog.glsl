@@ -31,8 +31,8 @@ struct LightGridCell {
 // коробка 64×32×64 м была классом багов сама по себе — свет за её гранью
 // просто исчезал, хотя видимость 128 м. [gpu_light_grid.h — числа обязаны
 // совпадать]
-const int   kLightGridDim  = 64;
-const float kLightGridCell = 4.0;
+const int   kLightGridDim  = GIGA_LIGHT_GRID_DIM;  // -D из CMakeLists <- gpu_light_grid.h
+const float kLightGridCell = GIGA_LIGHT_GRID_CELL;
 
 #ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
 layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {

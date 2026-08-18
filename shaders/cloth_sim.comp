@@ -32,7 +32,7 @@ layout(std430, binding = 2) readonly buffer MaskBuf { uint uMasks[]; };
 // Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
 bool solid_at(vec3 w) {
     vec3 q = w * 0.5;
-    ivec3 c = ivec3(floor(q)) & 127;
+    ivec3 c = ivec3(floor(q)) & (GIGA_MACRO_DIM - 1);
     ivec3 sv = ivec3(floor(fract(q) * 8.0)) & 7;
     uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
     uint bit = uint(sv.x) | (uint(sv.y) << 3) | (uint(sv.z) << 6);

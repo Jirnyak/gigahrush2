@@ -251,7 +251,7 @@ void main() {
     vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
 
     float timeSec = pc.torus.w;
-    float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (128.0 * 0.30 * 2.0)) / 0.66, 0.0, 1.0);
+    float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (float(GIGA_MACRO_DIM) * 0.30 * GIGA_CELL_SIZE)) / 0.66, 0.0, 1.0);
 
     // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
     vec4 fogVol = march_volumetric_fog(

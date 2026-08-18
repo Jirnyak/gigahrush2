@@ -70,7 +70,7 @@ void accumulateFlux(inout vec4 delta, vec4 center, uint rawCenter, uint nIdx, fl
 
 void main() {
     ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
-    if (pos.x >= 128 || pos.y >= 128 || pos.z >= 128) return;
+    if (pos.x >= GIGA_MACRO_DIM || pos.y >= GIGA_MACRO_DIM || pos.z >= GIGA_MACRO_DIM) return;
 
     uint flatIdx = uint(pos.x) | (uint(pos.y) << 7) | (uint(pos.z) << 14);
 
