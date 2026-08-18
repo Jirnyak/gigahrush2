@@ -637,17 +637,39 @@ bool cmd_equip(ConsoleContext& ctx, int argc, const char* const* argv,
     NpcId id{};
     if (!equip_ctx(ctx, "equip", out, cap, &id)) return false;
     if (argc < 2) {
-        put(out, cap, "usage: equip <inventory slot 0..63> (see `gear`)");
+        put(out, cap, "usage: equip <item id|slot 0..63> (see `gear`)");
         return false;
     }
+    const Inventory& inv = ctx.pool->inventory(id);
+    // Номер слота ИЛИ имя предмета — тем же словарём, что give: владелец на
+    // плейтесте 2026-08-19 написал `equip flashlight` и получил «not a slot
+    // 0..63», при том что фонарик лежал в рюкзаке, а give понимает имена.
+    // Команды одной консоли обязаны говорить на одном языке.
     char* end = nullptr;
-    const long idx = std::strtol(argv[1], &end, 10);
-    if (end == argv[1] || (end && *end) || idx < 0 || idx >= kInvSlots) {
+    long idx = std::strtol(argv[1], &end, 10);
+    if (end == argv[1] || (end && *end)) {
+        idx = -1;
+        const ItemId item = item_by_string(argv[1]);
+        if (item != kInvalidItem)
+            for (int i = 0; i < kInvSlots; ++i)
+                if (inv.slots[i].item == item && inv.slots[i].count > 0) {
+                    idx = i;
+                    break;
+                }
+        if (idx < 0) {
+            if (out && cap)
+                std::snprintf(out, cap,
+                              "equip: '%s' is neither a slot 0..63 nor an item "
+                              "in the backpack",
+                              argv[1]);
+            return false;
+        }
+    }
+    if (idx < 0 || idx >= kInvSlots) {
         if (out && cap)
             std::snprintf(out, cap, "equip: '%s' is not a slot 0..63", argv[1]);
         return false;
     }
-    const Inventory& inv = ctx.pool->inventory(id);
     Equipped& eq = ctx.ecs->get_or_emplace<Equipped>(ctx.player);
     if (!equip_item(inv, eq, static_cast<std::uint8_t>(idx))) {
         if (out && cap)
