@@ -29,6 +29,7 @@ constexpr FloorSpec kCatalog[] = {
     {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65},
     {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70},
     {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80},
+    {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70},
 };
 static_assert(sizeof(kCatalog) / sizeof(kCatalog[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),

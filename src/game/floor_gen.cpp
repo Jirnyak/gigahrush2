@@ -5,7 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "game/floors/padic/padic.h" // the module every kind dispatches to today
+#include "game/floors/blame/blame.h" // the megastructure module (kind Blame)
+#include "game/floors/padic/padic.h" // the module every OTHER kind dispatches to
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
@@ -59,6 +60,12 @@ constexpr RoomMix kRoomsPadic[] = {
     {RoomBit::Corridor, 34}, {RoomBit::Storage, 30},
     {RoomBit::Common, 20},   {RoomBit::Production, 16},
 };
+// The megastructure: dead industry gone to scavenger caches — corridors and
+// stores lean heavier than padic, production lighter (the machines are husks).
+constexpr RoomMix kRoomsBlame[] = {
+    {RoomBit::Corridor, 30}, {RoomBit::Storage, 28},
+    {RoomBit::Production, 22}, {RoomBit::Common, 20},
+};
 
 struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
 
@@ -70,7 +77,7 @@ constexpr RoomMixRow room_row(const RoomMix (&a)[N]) {
 constexpr RoomMixRow kRoomMix[] = {
     room_row(kRoomsResidential), room_row(kRoomsCommercial),
     room_row(kRoomsIndustrial),  room_row(kRoomsDerelict),
-    room_row(kRoomsPadic),
+    room_row(kRoomsPadic),       room_row(kRoomsBlame),
 };
 static_assert(sizeof(kRoomMix) / sizeof(kRoomMix[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -157,8 +164,11 @@ std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
     return static_cast<std::uint16_t>(row.tab[0].bit);
 }
 
-std::uint32_t floor_doorways(int number, const FloorSpec& /*spec*/, unsigned seed,
+std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out) {
+    // Blame punches raw openings, never doorable ones — its labyrinth mouths
+    // onto the abyss have no jambs for a leaf, so it contributes zero rows.
+    if (spec.kind == FloorKind::Blame) return 0;
     return padic_doorways(number, seed, out);
 }
 
@@ -178,6 +188,7 @@ constexpr FloorGeneratorFunc kGenerators[] = {
     generate_padic_floor,   // Industrial
     generate_padic_floor,   // Derelict
     generate_padic_floor,   // Padic
+    generate_blame_floor,   // Blame — the megastructure module's own geometry
 };
 static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -185,7 +196,7 @@ static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
 
 constexpr FloorGeneratorFunc kRuleDeclarers[] = {
     padic_declare_rules, padic_declare_rules, padic_declare_rules,
-    padic_declare_rules, padic_declare_rules,
+    padic_declare_rules, padic_declare_rules, blame_declare_rules,
 };
 static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -193,7 +204,7 @@ static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
 
 constexpr FloorGeneratorFunc kRuleAppliers[] = {
     padic_apply_rules, padic_apply_rules, padic_apply_rules,
-    padic_apply_rules, padic_apply_rules,
+    padic_apply_rules, padic_apply_rules, blame_apply_rules,
 };
 static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),

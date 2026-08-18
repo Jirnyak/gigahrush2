@@ -27,6 +27,7 @@ enum class FloorKind : std::uint8_t {
     Industrial,  // sparse, working-age adults
     Derelict,    // near-empty and dangerous (high monster weight)
     Padic,       // 4D spectrum fractal geometry
+    Blame,       // megastructure void — vertical technodemo geometry
     Count,
 };
 
