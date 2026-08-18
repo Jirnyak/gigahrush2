@@ -7,6 +7,9 @@
 > 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
 > 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
 > 5. [ARCHITECTURE.md](ARCHITECTURE.md) (System architecture & pipeline specification)
+> 6. [CANON.md](CANON.md) (Канон систем S1–S11 — эталон, относительно которого судятся
+>    расхождения; записан со слов владельца 2026-08-17/19. Любой код сверяется с ним;
+>    решения по эпикам — в markoaudit/plans/)
 
 > **GRAF IRNYAK (KLAUS SCHWAB) ARCHITECTURAL MANIFESTO:**
 > - **Feature without live gameplay proof = DECLINED.**
