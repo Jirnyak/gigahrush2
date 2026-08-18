@@ -481,11 +481,11 @@ file(GLOB_RECURSE GIGA_TRIPLE_FILES
 # 2026-08-18: los.cpp / noise.cpp / spatial_audio.cpp rows deleted — their z
 # axes wrap now (owner's verdict; the "z does not wrap" comments cited AGENTS.md
 # for the opposite of what it says). The ratchet held: 11 -> 8.
-# 2026-08-19: loot.cpp row deleted — rewritten on wrap_dist2, the vector form
-# wrap.h grew for exactly this class. The ratchet held: 8 -> 7.
-set(GIGA_TRIPLE_BASELINE
-    "src/app/main.cpp|wrapped=x,z|raw=y|6"
-    "src/game/prop_system.cpp|wrapped=x,z|raw=y|1")
+# 2026-08-19: BASELINE EMPTY. All 11 original windows rewritten on the wrap.h
+# vector forms (wrap_dist2) or wrapped honestly (los/noise/audio z). The
+# ratchet's whole arc: 11 -> 8 -> 7 -> 0 in two days. Keep the list empty —
+# rule 8 above now fails ANY new incomplete triple at its exact line.
+set(GIGA_TRIPLE_BASELINE "")
 
 set(GIGA_TRIPLE_HITS "")   # "<sig>@@@<relpath>:<line>" — sig plus the exact spot
 set(GIGA_TRIPLE_SIGS "")   # "<relpath>|wrapped=..|raw=.." — one entry per finding

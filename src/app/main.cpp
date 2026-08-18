@@ -1509,10 +1509,8 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
         if (!pool.valid(id) || !pool.alive(id)) continue;
 
         const vec3& pos = reg.get<const Transform>(e).pos;
-        float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
-        float dy = playerPos.y - pos.y;
-        float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
-        float d2 = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2: все три оси (голый y = сосед в 2 м через шов невиден).
+        float d2 = wrap_dist2(playerPos, pos, kWorldExtent);
         if (d2 < bestD2) {
             bestD2 = d2;
             chosen = e;
@@ -3639,12 +3637,8 @@ int main(int argc, char** argv) {
                                 continue;
                             const vec3& cpos =
                                 reg.get<const Transform>(cEnt).pos;
-                            const float dx =
-                                wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
-                            const float dy = ppos.y - cpos.y;
-                            const float dz =
-                                wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
-                            if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+                            if (wrap_dist2(ppos, cpos, kWorldExtent) <
+                                2.2f * 2.2f) {
                                 corpseNear = true;
                                 break;
                             }
@@ -3669,13 +3663,8 @@ int main(int argc, char** argv) {
                                 const Transform& tr =
                                     reg.get<const Transform>(me);
                                 if (tr.layer != activeLayer) continue;
-                                const float dx = wrap_delta_f(
-                                    ppos.x, tr.pos.x, kWorldExtent);
-                                const float dy = ppos.y - tr.pos.y;
-                                const float dz = wrap_delta_f(
-                                    ppos.z, tr.pos.z, kWorldExtent);
                                 const float d2 =
-                                    dx * dx + dy * dy + dz * dz;
+                                    wrap_dist2(ppos, tr.pos, kWorldExtent);
                                 if (d2 < bestD2) {
                                     bestD2 = d2;
                                     bestMob = me;
@@ -3876,10 +3865,8 @@ int main(int argc, char** argv) {
                             game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
-                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
-                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
-                                if (dx*dx + dy*dy + dz*dz < 14.0f * 14.0f) {
+                                if (wrap_dist2(tr.pos, ppos, kWorldExtent) <
+                                    14.0f * 14.0f) {
                                     game::apply_slow(reg, player, 0.40f, 1200);
                                 }
                             }
@@ -3892,10 +3879,8 @@ int main(int argc, char** argv) {
 
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
-                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
-                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
-                                if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
+                                if (wrap_dist2(tr.pos, ppos, kWorldExtent) <
+                                    2.15f * 2.15f) {
                                     game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
                                     // Content layer: SporeHaze. Gate = ip4_gasmask
                                     // present in inventory (alt column shortens).
@@ -6521,10 +6506,7 @@ int main(int argc, char** argv) {
                     const game::NpcId id = reg.get<const game::NpcRef>(npcEnt).id;
                     if (!pool.valid(id) || !pool.alive(id)) continue;
                     const vec3& npos = reg.get<const Transform>(npcEnt).pos;
-                    const float dx = wrap_delta_f(ppos.x, npos.x, kWorldExtent);
-                    const float dy = ppos.y - npos.y;
-                    const float dz = wrap_delta_f(ppos.z, npos.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 6.0f * 6.0f) {
+                    if (wrap_dist2(ppos, npos, kWorldExtent) < 6.0f * 6.0f) {
                         set_prompt("possess", "POSSESS SURVIVOR");
                         break;
                     }

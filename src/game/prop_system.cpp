@@ -695,10 +695,10 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
         const auto& ia = view.get<const Interactable>(e);
         if (!ia.active || ia.kind != kind) continue;
 
-        const float dx = wrap_delta_f(ppos.x, tr.pos.x, kWorldExtent);
-        const float dy = ppos.y - tr.pos.y;
-        const float dz = wrap_delta_f(ppos.z, tr.pos.z, kWorldExtent);
-        const float d2 = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2 — все три оси. Голый y здесь ослеплял 12 вызывающих
+        // (двери/терминалы/щиты/NPC/контейнеры у y-шва) — последняя строка
+        // базлайна гейта B, обнулён этим коммитом.
+        const float d2 = wrap_dist2(ppos, tr.pos, kWorldExtent);
         if (d2 < best) {
             best = d2;
             hit.entity = e;
