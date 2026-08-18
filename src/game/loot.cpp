@@ -472,10 +472,10 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     for (auto e : reg.view<const Corpse, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
-        float dx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
-        float dy = playerPos.y - tr.pos.y;
-        float dz = wrap_delta_f(playerPos.z, tr.pos.z, kWorldExtent);
-        float distSq = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2 — все три оси завёрнуты одной формой ядра. Раньше y был
+        // голой разностью (труп в 2 м через y-шов «не виден» для обыска —
+        // базлайн гейта B, ужат этим коммитом).
+        const float distSq = wrap_dist2(playerPos, tr.pos, kWorldExtent);
         if (distSq < minDistSq) {
             minDistSq = distSq;
             targetCorpse = e;

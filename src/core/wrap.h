@@ -3,6 +3,8 @@
 #pragma once
 #include <cmath>
 
+#include "core/math.h" // vec3 — the vector forms below are why this include exists
+
 namespace giga {
 
 inline constexpr int wrapi(int v, int size) {
@@ -51,6 +53,41 @@ inline float wrap_delta_f(float a, float b, float period) {
 // this side of it against the branch-based definition.
 inline float nearest_image(float absPos, float ref, float period) {
     return ref + wrap_delta_f(ref, absPos, period);
+}
+
+// ---- Vector forms — the level the game actually works at --------------------
+//
+// The audit measured why the torus kept leaking: wrap.h offered only scalars,
+// so "toroidal distance between two entities" was three hand-written lines at
+// every call site — written 31 times in full, 8 times with an axis forgotten,
+// and every forgotten axis was a seam bug (possession, looting, interaction,
+// hearing all went blind two metres across a seam;
+// markoaudit/systems/05-torus.md §1.2, §7.2). The vector forms make the right
+// spelling SHORTER than the wrong one, which is the only fix that holds.
+// Rule 8 of tools/check_source_rules.cmake catches new hand-written triples.
+//
+// No default period: kWorldExtent lives in world/types.h and core must not
+// reach up a layer. Callers pass it explicitly.
+
+// Shortest displacement from a to b with every axis wrapped.
+inline vec3 wrap_delta3(const vec3& a, const vec3& b, float period) {
+    return vec3{wrap_delta_f(a.x, b.x, period), wrap_delta_f(a.y, b.y, period),
+                wrap_delta_f(a.z, b.z, period)};
+}
+
+// Squared toroidal distance — the form radius comparisons want (no sqrt).
+inline float wrap_dist2(const vec3& a, const vec3& b, float period) {
+    const vec3 d = wrap_delta3(a, b, period);
+    return d.x * d.x + d.y * d.y + d.z * d.z;
+}
+
+inline float wrap_dist(const vec3& a, const vec3& b, float period) {
+    return std::sqrt(wrap_dist2(a, b, period));
+}
+
+// Normalize a position back onto the torus, all three axes.
+inline vec3 wrap_pos(const vec3& p, float period) {
+    return vec3{wrapf(p.x, period), wrapf(p.y, period), wrapf(p.z, period)};
 }
 
 } // namespace giga

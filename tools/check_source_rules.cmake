@@ -481,9 +481,10 @@ file(GLOB_RECURSE GIGA_TRIPLE_FILES
 # 2026-08-18: los.cpp / noise.cpp / spatial_audio.cpp rows deleted — their z
 # axes wrap now (owner's verdict; the "z does not wrap" comments cited AGENTS.md
 # for the opposite of what it says). The ratchet held: 11 -> 8.
+# 2026-08-19: loot.cpp row deleted — rewritten on wrap_dist2, the vector form
+# wrap.h grew for exactly this class. The ratchet held: 8 -> 7.
 set(GIGA_TRIPLE_BASELINE
     "src/app/main.cpp|wrapped=x,z|raw=y|6"
-    "src/game/loot.cpp|wrapped=x,z|raw=y|1"
     "src/game/prop_system.cpp|wrapped=x,z|raw=y|1")
 
 set(GIGA_TRIPLE_HITS "")   # "<sig>@@@<relpath>:<line>" — sig plus the exact spot

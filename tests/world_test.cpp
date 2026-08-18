@@ -57,6 +57,21 @@ static void test_wrap() {
     CHECK(wrap_delta(0, 127, 128) == -1); // shortest path wraps backward
     CHECK(wrap_delta(127, 0, 128) == 1);
     CHECK(wrap_delta(0, 10, 128) == 10);
+
+    // Vector forms (audit wave 2): the level call sites actually need, added
+    // so "toroidal distance between two entities" is one call, not three
+    // hand-written lines with an axis to forget. Points 2 m apart across all
+    // three seams at once — the case every hand-rolled triple got wrong on
+    // exactly one axis.
+    const float p = 256.0f;
+    const vec3 a{255.0f, 255.0f, 255.0f};
+    const vec3 b{1.0f, 1.0f, 1.0f};
+    const vec3 d = wrap_delta3(a, b, p);
+    CHECK(d.x == 2.0f && d.y == 2.0f && d.z == 2.0f);
+    CHECK(wrap_dist2(a, b, p) == 12.0f);           // 3 * 2^2, not 3 * 254^2
+    CHECK(wrap_dist2(b, a, p) == 12.0f);           // symmetric
+    const vec3 w = wrap_pos(vec3{-1.0f, 256.0f, 300.0f}, p);
+    CHECK(w.x == 255.0f && w.y == 0.0f && w.z == 44.0f);
 }
 
 // The minimal-image rule the renderer draws by. This is a *contract test*: the

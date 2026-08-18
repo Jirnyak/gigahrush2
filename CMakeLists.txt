@@ -526,7 +526,8 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(world_test PROPERTIES
         # 23393 + 8 (test_prop_root_cap_total_not_per_shape, ветка PropPass
         # несла 23399 от базы без z-шовного блока los) = 23401 на слитой линии.
-        PASS_REGULAR_EXPRESSION "23401/23401 checks passed"
+        # 23401 + 4 (векторные тор-формы wrap_delta3/wrap_dist2/wrap_pos) = 23405.
+        PASS_REGULAR_EXPRESSION "23405/23405 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
