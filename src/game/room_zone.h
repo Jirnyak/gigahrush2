@@ -94,6 +94,8 @@
 
 namespace giga {
 class MacroGrid;
+struct SubMask;   // world/macro_grid.h — the body law is a pure mask function
+struct WalkBits;  // world/walk_bits.h — the bake's 256 KiB body open-set
 }
 
 namespace giga::game {
@@ -353,6 +355,27 @@ std::uint16_t room_bit_at(FloorKind kind, int number, int x, int y);
 // Stricter in the SAFE direction: every cell this accepts, nav also accepts.
 bool room_body_walkable(const MacroGrid& grid, int x, int y, int z);
 
+// The same law as a pure SubMask function — the form the WalkBits oracle
+// machinery needs, and the reason it is public alongside the grid form: the
+// bulk build, the O(1) patch and any "why did the field refuse this cell"
+// probe must all ask the ONE predicate, not three spellings of it.
+bool room_body_walkable_mask(const SubMask& m);
+
+// Fill `out` with the floor's BODY open-set: one `room_body_walkable_mask` per
+// cell. This is the `bodyOpen` bitset of the async-rebake plan (§2) — the
+// 256 KiB snapshot a background room-zone bake reads instead of the live grid.
+// The predicate belongs to THIS file, not to world/walk_bits.h, because world
+// must not see game: the generic bitset lives below the layer line and the
+// body law is injected from here.
+void build_body_walk_bits(const MacroGrid& grid, WalkBits& out);
+
+// O(1) re-derive of one cell's body bit from its LIVE mask — the dirty-cell
+// drain (CarveResult::dirtyCells) calls this per carved cell to keep a
+// resident body open-set current between full bakes. Separate from
+// nav::patch_walk_bit because the laws differ: a cell with one carved voxel
+// flips nav's bit and leaves this one alone.
+void patch_body_walk_bit(WalkBits& bits, std::size_t cell, const SubMask& m);
+
 // The interior offset of furniture `slot`, in [1, stride-1] on each axis. A slot is
 // a POSITION in the room's (stride-1)^2 interior, row-major — which is what lets the
 // SEEDER and the AI agree about where the stove is without either storing anything
@@ -421,6 +444,14 @@ struct RoomZones {
 // disjoint slice, so the result does not depend on scheduling. Clears `out` first,
 // so re-baking a recycled RoomZones cannot inherit the previous floor's fields.
 void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
+                     RoomZones& out);
+
+// The oracle form: bake from a prebuilt BODY open-set (build_body_walk_bits)
+// instead of the grid. Everything the bake ever asked the grid was this one
+// predicate, so the grid overload above is now one sweep + this call —
+// bit-identical (pinned by suite_walkbits.inl), and what lets phase C hand a
+// worker a snapshot copy instead of a pointer into the live world.
+void bake_room_zones(const WalkBits& bodyOpen, FloorKind kind, int number,
                      RoomZones& out);
 
 // What one body should do this tick to reach a room in `mask`.

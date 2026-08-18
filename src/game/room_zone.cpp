@@ -9,6 +9,7 @@
 #include "game/prop_system.h" // spawn_prop_from_id / SubVoxelAnchor — the furnisher
 #include "world/macro_grid.h" // MacroGrid — the bake's walkability test
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index, wrap_macro
+#include "world/walk_bits.h"  // WalkBits — the bake's 256 KiB body open-set
 #include "world/world.h"      // World — the furnisher reads its grid
 
 namespace giga::game {
@@ -57,8 +58,11 @@ inline constexpr std::uint64_t kBodyFootprint = [] {
 // Demanding layers 0..6 alone called every floor-bearing cell a wall.
 inline constexpr int kBodySubLayers = 7;
 
-inline bool blocked(const MacroGrid& g, int x, int y, int z) {
-    const SubMask& m = g.mask(x, y, z);
+// A pure function of ONE cell's SubMask — deliberately so, and the oracle
+// machinery leans on it: because the law reads nothing but the mask, the whole
+// floor's answer is a 256 KiB bitset (build_body_walk_bits) and a carved cell
+// is an O(1) re-derive (patch_body_walk_bit), never a neighbourhood rescan.
+inline bool blocked(const SubMask& m) {
     for (int start = 0; start + kBodySubLayers <= kSubDim; ++start) {
         bool clear = true;
         for (int i = 0; i < kBodySubLayers && clear; ++i)
@@ -66,6 +70,10 @@ inline bool blocked(const MacroGrid& g, int x, int y, int z) {
         if (clear) return false;
     }
     return true;
+}
+
+inline bool blocked(const MacroGrid& g, int x, int y, int z) {
+    return blocked(g.mask(x, y, z));
 }
 
 // Salt for the seat hash. Its own stream, so a body's seat is uncorrelated with its
@@ -79,6 +87,18 @@ inline constexpr std::uint32_t kSaltFurnitureYaw = 0xf00d1e00u;
 
 bool room_body_walkable(const MacroGrid& grid, int x, int y, int z) {
     return !blocked(grid, x, y, z);
+}
+
+bool room_body_walkable_mask(const SubMask& m) { return !blocked(m); }
+
+void build_body_walk_bits(const MacroGrid& grid, WalkBits& out) {
+    out.build([&grid](int x, int y, int z) {
+        return !blocked(grid.mask(x, y, z));
+    });
+}
+
+void patch_body_walk_bit(WalkBits& bits, std::size_t cell, const SubMask& m) {
+    bits.set(cell, !blocked(m));
 }
 
 // ---------------------------------------------------------------------------
@@ -262,35 +282,21 @@ void bake_near(const std::uint8_t* present, int roomsPerAxis,
     }
 }
 
-// The body-clearance answer for every macro cell, computed ONCE into a flat byte
-// per cell and then only read.
-//
-// This is not a micro-optimisation, it is the difference between a bake and a
-// hang. Inline, the predicate runs once per cell per neighbour per bit — 2M x 6 x 3
-// = 36M evaluations — and MEASURED that way it ate ~25 SECONDS of load, which the
-// `[rooms]` line did not print and which showed up only as the sim falling from
-// 4140 ticks per 4000 frames to 600. Hoisted, it runs 2M times, once. [AGENTS.md]
-// "bake at load, tick in O(n)" applies inside the bake too: the inner loop of a
-// 2-million-cell flood is not the place to ask a question whose answer never
-// changes.
-//
-// 2 MiB, transient — freed before `bake_room_zones` returns, so it never appears in
-// `resident_bytes()`.
-void bake_walkable(const MacroGrid& g, std::vector<std::uint8_t>& out) {
-    out.assign(kMacroCells, 0u);
-    std::uint8_t* base = out.data();
-    parallel_for(kMacroDim, [&g, base](int z) {
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x)
-                base[macro_index(x, y, z)] = blocked(g, x, y, z) ? 0u : 1u;
-    });
-}
-
 // One bit's flow field: a multi-source wrapped BFS seeded from EVERY walkable cell
 // of that room kind at once. Same loop as `nav::bake_fine_node` with a seed SET
 // instead of a seed cell — which is exactly why the flow byte convention is shared
 // rather than re-invented.
-void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
+//
+// Walkability arrives PRECOMPUTED, one bit per cell, and that hoist is the
+// difference between a bake and a hang. Inline, the footprint predicate would run
+// once per cell per neighbour per bit — 2M x 6 x 3 = 36M evaluations — and
+// MEASURED that way it ate ~25 SECONDS of load, which the `[rooms]` line did not
+// print and which showed up only as the sim falling from 4140 ticks per 4000
+// frames to 600. Hoisted, it runs 2M times, once ([AGENTS.md] "bake at load, tick
+// in O(n)" applies inside the bake too). The hoist used to be a transient 2 MiB
+// byte map built here; it is now the caller's 256 KiB WalkBits — same answers,
+// and the same bitset an async worker can own as a snapshot (async-rebake §2).
+void bake_flow(const WalkBits& open, FloorKind kind, int number,
                std::uint16_t bit, int stride, std::vector<std::uint8_t>& out) {
     out.assign(kMacroCells, nav::kFlowNone);
     std::vector<int> q;
@@ -305,7 +311,7 @@ void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
                 if (floor_room_mask(kind, number, x / stride, y / stride) != bit)
                     continue;
                 const std::size_t ci0 = macro_index(x, y, z);
-                if (walkable[ci0] == 0) continue;
+                if (!open.at(ci0)) continue;
                 const std::size_t ci = ci0;
                 out[ci] = nav::kFlowArrived;
                 q.push_back(static_cast<int>(ci));
@@ -325,7 +331,7 @@ void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
             const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (out[ni] != nav::kFlowNone) continue; // reached, or a seed
-            if (walkable[ni] == 0) continue;         // wall stays kFlowNone
+            if (!open.at(ni)) continue;              // wall stays kFlowNone
             // We stepped cur -> nbr in dir d, so nbr routes back in dir (d ^ 1).
             out[ni] = static_cast<std::uint8_t>(d ^ 1);
             q.push_back(static_cast<int>(ni));
@@ -336,6 +342,17 @@ void bake_flow(const std::uint8_t* walkable, FloorKind kind, int number,
 } // namespace
 
 void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
+                     RoomZones& out) {
+    // ONE clearance sweep over the grid, then the oracle bake — every question
+    // this bake ever asks the world is a bit of `bodyOpen`, so the sweep is the
+    // bake's ONLY grid read. 256 KiB, transient here; phase C keeps it resident
+    // and snapshot-copies it to the worker instead.
+    WalkBits bodyOpen;
+    build_body_walk_bits(grid, bodyOpen);
+    bake_room_zones(bodyOpen, kind, number, out);
+}
+
+void bake_room_zones(const WalkBits& bodyOpen, FloorKind kind, int number,
                      RoomZones& out) {
     // Clear FIRST. A recycled RoomZones that kept one field from the previous floor
     // would steer this floor's crowd by the last floor's kitchens — the exact class
@@ -377,20 +394,14 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
     }
     if (have == 0) return;
 
-    // ONE clearance pass for every field that follows. Transient: it goes out of
-    // scope here and never counts toward `resident_bytes()`.
-    std::vector<std::uint8_t> walkable;
-    bake_walkable(grid, walkable);
-    const std::uint8_t* walkPtr = walkable.data();
-
     // One job per bit. Each writes only its own two vectors and only READS the
-    // shared clearance map, so the bake is race-free and bit-identical regardless of
-    // scheduling — the same per-slice isolation `nav::bake_fine` relies on
+    // shared clearance bits, so the bake is race-free and bit-identical regardless
+    // of scheduling — the same per-slice isolation `nav::bake_fine` relies on
     // ([core/jobs.h] contract).
     parallel_for(static_cast<int>(kFloorRoomBits), [&](int bi) {
         const std::uint16_t bit = static_cast<std::uint16_t>(1u << bi);
         if ((have & bit) == 0) return;
-        bake_flow(walkPtr, kind, number, bit, stride, out.flow[bi]);
+        bake_flow(bodyOpen, kind, number, bit, stride, out.flow[bi]);
         bake_near(present.data() + static_cast<std::size_t>(bi) * roomCount,
                   roomsPerAxis, out.nearRoom[bi]);
     });
