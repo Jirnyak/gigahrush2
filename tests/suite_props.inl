@@ -16,15 +16,16 @@ using namespace giga::gpu;
 
 namespace {
 
-// Layout-compatible inspector to access private PropPass data for assertions
+// Layout-compatible inspector to access private PropPass data for assertions.
+// Mirrors the member PREFIX of PropPass ([prop_pass.h] keeps the order).
 struct PropPassInspector {
     VulkanDevice* dev_;
     VkPipelineLayout layout_;
     VkPipeline pipeline_;
     std::array<PropMesh, kPropShapeCount> meshes_;
     std::array<std::vector<PropInstance>, kPropShapeCount> cpuInst_;
-    std::array<std::array<VulkanBuffer, kMaxFramesInFlight>, kPropShapeCount> instBufs_;
-    uint32_t lastDrawCount_;
+    uint32_t totalInst_;
+    uint32_t overflowDropped_;
 };
 
 inline const PropPassInspector& inspect(const PropPass& pass) {
@@ -108,7 +109,38 @@ static void test_prop_instance_layout() {
     CHECK(offAnimPhase == 31);
 }
 
+// 3. The cap is the ROOT cap — TOTAL across shapes, not per shape, and the
+// overflow is counted (printed at clear_instances, [light-perf.md] owner
+// decision: PropPass stores everything, GpuCullPass decides visibility).
+static void test_prop_root_cap_total_not_per_shape() {
+    static_assert(kRootPropInstances == (1u << 17),
+                  "root cap is the owner's 2^17 ([light-perf.md])");
+
+    PropPass pass;
+    const auto& insp = inspect(pass);
+    PropInstance dummy{};
+
+    // Fill shape 0 to two short of the ROOT cap, then push 5 into shape 1:
+    // the old per-shape 4096 would have taken all 5; the root cap takes 2.
+    for (uint32_t i = 0; i < kRootPropInstances - 2u; ++i)
+        pass.add_instance(static_cast<PropShape>(0), dummy);
+    CHECK(pass.total_instance_count() == kRootPropInstances - 2u);
+
+    for (int i = 0; i < 5; ++i)
+        pass.add_instance(static_cast<PropShape>(1), dummy);
+    CHECK(insp.cpuInst_[0].size() == kRootPropInstances - 2u);
+    CHECK(insp.cpuInst_[1].size() == 2u);
+    CHECK(pass.total_instance_count() == kRootPropInstances);
+    CHECK(insp.overflowDropped_ == 3u);
+
+    pass.clear_instances(); // prints the dropped total out loud
+    CHECK(pass.total_instance_count() == 0u);
+    CHECK(insp.cpuInst_[0].empty());
+    CHECK(insp.cpuInst_[1].empty());
+}
+
 void test_props_all() {
     test_prop_shape_enum_coverage();
     test_prop_instance_layout();
+    test_prop_root_cap_total_not_per_shape();
 }

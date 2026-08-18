@@ -160,6 +160,7 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                               float fogEnd,
                               float torusPeriod,
                               VkBuffer srcInstanceBuf,
+                              VkDeviceSize srcOffsetBytes,
                               uint32_t instanceCount,
                               uint32_t indexCount,
                               uint32_t firstIndex,
@@ -168,6 +169,7 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                               const vec3& boxMin,
                               const vec3& boxMax,
                               VkBuffer outCulledInstanceBuf,
+                              VkDeviceSize dstOffsetBytes,
                               VkBuffer outIndirectBuf) noexcept {
     if (!pipeline_ || instanceCount == 0) return;
 
@@ -190,8 +192,14 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
     VkDescriptorSet set = descSets_[setHead_ % descSets_.size()];
     ++setHead_;
 
-    VkDescriptorBufferInfo b0{srcInstanceBuf, 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo b1{outCulledInstanceBuf, 0, VK_WHOLE_SIZE};
+    // Bind each shape's RANGE of the shared instance buffers via descriptor
+    // offsets — the shader indexes from 0 inside its range, so cull.comp
+    // needed no change. The culled write stays inside the range by
+    // construction: at most `instanceCount` survivors are appended.
+    const VkDeviceSize rangeBytes =
+        static_cast<VkDeviceSize>(instanceCount) * sizeof(PropInstance);
+    VkDescriptorBufferInfo b0{srcInstanceBuf, srcOffsetBytes, rangeBytes};
+    VkDescriptorBufferInfo b1{outCulledInstanceBuf, dstOffsetBytes, rangeBytes};
     VkDescriptorBufferInfo b2{outIndirectBuf, 0, VK_WHOLE_SIZE};
 
     VkWriteDescriptorSet writes[3]{};

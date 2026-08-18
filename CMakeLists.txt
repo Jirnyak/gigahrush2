@@ -517,8 +517,16 @@ if(GIGA_BUILD_TESTS)
     # non-unit `up` — the last of which is what fixes WHICH quantity the guard
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
+    # 23391 -> 23399 (+8) on 2026-08-18: кап -> каллер в PropPass. Пер-шейповый
+    # kMaxPropInstances=4096 (молчаливая резка по порядку вставки ДО GpuCullPass)
+    # умер; кап один, корневой — kRootPropInstances=2^17 ИТОГО, формы диапазонами
+    # одного буфера, переполнение печатается. Новый тест
+    # test_prop_root_cap_total_not_per_shape пинит именно ОБЩНОСТЬ капа: полный
+    # буфер в форме 0 отбирает места у формы 1, а overflowDropped_ считает отказ.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23393/23393 checks passed"
+        # 23393 + 8 (test_prop_root_cap_total_not_per_shape, ветка PropPass
+        # несла 23399 от базы без z-шовного блока los) = 23401 на слитой линии.
+        PASS_REGULAR_EXPRESSION "23401/23401 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

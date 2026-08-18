@@ -65,25 +65,39 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
         }
     }
 
-    // Reserve CPU instance memory & allocate per-shape × per-frame instance buffers
+    // ONE shared instance buffer per frame (src + culled), sized by the root
+    // cap: kRootPropInstances × 48 B = 6 MiB each. Shapes live as ranges cut
+    // by upload_instances(); range starts must be legal SSBO bind offsets, so
+    // derive the alignment (in instances) from the device limit.
+    {
+        const VkDeviceSize minAlign =
+            dev_->props.limits.minStorageBufferOffsetAlignment;
+        const VkDeviceSize stride = sizeof(PropInstance); // 48
+        VkDeviceSize alignBytes = stride;
+        while (alignBytes % (minAlign > 0 ? minAlign : 1) != 0)
+            alignBytes += stride; // lcm(stride, minAlign) by walking multiples
+        alignInstances_ = static_cast<uint32_t>(alignBytes / stride);
+    }
+
     constexpr VkDeviceSize kInstBufBytes =
-        static_cast<VkDeviceSize>(kMaxPropInstances) * sizeof(PropInstance);
+        static_cast<VkDeviceSize>(kRootPropInstances) * sizeof(PropInstance);
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        char label[64];
+        std::snprintf(label, sizeof(label), "prop-inst-f%d", f);
+        if (!instBuf_[f].create_host_visible(
+                *dev_, kInstBufBytes,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
+            return false;
+
+        std::snprintf(label, sizeof(label), "prop-cull-f%d", f);
+        if (!culledInstBuf_[f].create_host_visible(
+                *dev_, kInstBufBytes,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
+            return false;
+    }
     for (int s = 0; s < kPropShapeCount; ++s) {
-        cpuInst_[s].reserve(kMaxPropInstances);
         for (int f = 0; f < kMaxFramesInFlight; ++f) {
             char label[64];
-            std::snprintf(label, sizeof(label), "prop-inst-s%d-f%d", s, f);
-            if (!instBufs_[s][f].create_host_visible(
-                    *dev_, kInstBufBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
-                return false;
-
-            std::snprintf(label, sizeof(label), "prop-cull-s%d-f%d", s, f);
-            if (!culledInstBufs_[s][f].create_host_visible(
-                    *dev_, kInstBufBytes,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, label))
-                return false;
-
             std::snprintf(label, sizeof(label), "prop-cmd-s%d-f%d", s, f);
             if (!indirectCmdBufs_[s][f].create_host_visible(
                     *dev_, 32ull,
@@ -95,8 +109,13 @@ bool PropPass::init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
     if (!create_pipeline(pipelineLayout, renderPass, shaderDir))
         return false;
 
-    std::fprintf(stderr, "[prop] pass ready: %d shapes, %d frames in flight\n",
-                 kPropShapeCount, kMaxFramesInFlight);
+    std::fprintf(stderr,
+                 "[prop] pass ready: %d shapes as ranges of one %u-instance "
+                 "buffer (%llu MiB x %d frames, range align %u inst), "
+                 "visibility = GpuCullPass\n",
+                 kPropShapeCount, kRootPropInstances,
+                 static_cast<unsigned long long>(kInstBufBytes >> 20),
+                 kMaxFramesInFlight, alignInstances_);
     return true;
 }
 
@@ -239,11 +258,12 @@ void PropPass::destroy() {
     if (!dev_) return;
     for (int s = 0; s < kPropShapeCount; ++s) {
         meshes_[s].destroy(dev_->device);
-        for (int f = 0; f < kMaxFramesInFlight; ++f) {
-            instBufs_[s][f].destroy(*dev_);
-            culledInstBufs_[s][f].destroy(*dev_);
+        for (int f = 0; f < kMaxFramesInFlight; ++f)
             indirectCmdBufs_[s][f].destroy(*dev_);
-        }
+    }
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        instBuf_[f].destroy(*dev_);
+        culledInstBuf_[f].destroy(*dev_);
     }
     if (pipeline_) {
         vkDestroyPipeline(dev_->device, pipeline_, nullptr);
@@ -258,25 +278,78 @@ void PropPass::destroy() {
 void PropPass::add_instance(PropShape shape, const PropInstance& inst) {
     int s = static_cast<int>(shape);
     if (s < 0 || s >= kPropShapeCount) return;
-    if (static_cast<int>(cpuInst_[s].size()) < kMaxPropInstances) {
-        cpuInst_[s].push_back(inst);
+    if (totalInst_ >= kRootPropInstances) {
+        // ROOT cap full ([light-perf.md] owner decision: the only cap left,
+        // and it talks). Say so ONCE per rebuild, then keep counting; the
+        // total goes out at clear_instances().
+        if (++overflowDropped_ == 1u)
+            std::fprintf(stderr,
+                         "[prop] ROOT CAP FULL: %u instances total — "
+                         "everything past this is dropped this rebuild "
+                         "(kRootPropInstances)\n",
+                         kRootPropInstances);
         return;
     }
-    // Full. Say so ONCE per shape per rebuild, then keep counting quietly.
-    if (++droppedInst_[static_cast<std::size_t>(s)] == 1u)
-        std::fprintf(stderr,
-                     "[prop] shape %d FULL at %d instances — everything past "
-                     "this is dropped this rebuild (raise kMaxPropInstances)\n",
-                     s, kMaxPropInstances);
+    cpuInst_[s].push_back(inst);
+    ++totalInst_;
 }
 
 void PropPass::clear_instances() {
-    for (std::size_t s = 0; s < cpuInst_.size(); ++s) {
-        if (droppedInst_[s] > 1u)
-            std::fprintf(stderr, "[prop] shape %zu dropped %u instances\n", s,
-                         droppedInst_[s]);
-        droppedInst_[s] = 0u;
-        cpuInst_[s].clear();
+    // The rebuild may be torn down before a single frame ran compute_ranges();
+    // the totals must not vanish with it.
+    if (overflowDropped_ > 0u && !overflowReported_)
+        std::fprintf(stderr,
+                     "[prop] root cap overflow: dropped %u of %u submitted "
+                     "instances (cap %u)\n",
+                     overflowDropped_, totalInst_ + overflowDropped_,
+                     kRootPropInstances);
+    overflowDropped_ = 0u;
+    overflowReported_ = false;
+    totalInst_ = 0u;
+    for (auto& v : cpuInst_) v.clear();
+}
+
+// Cut per-shape ranges over the shared buffer. Range starts are aligned to
+// alignInstances_ so each start is a legal SSBO descriptor offset. Alignment
+// padding can eat into the tail only when the buffer is ~full to the last few
+// instances — if it does, the truncation is printed, never silent.
+void PropPass::compute_ranges() {
+    // First frame after an overflowing rebuild: report the final numbers ONCE
+    // (add_instance already shouted when the cap was first hit).
+    if (overflowDropped_ > 0u && !overflowReported_) {
+        std::fprintf(stderr,
+                     "[prop] root cap overflow: dropped %u of %u submitted "
+                     "instances (cap %u)\n",
+                     overflowDropped_, totalInst_ + overflowDropped_,
+                     kRootPropInstances);
+        overflowReported_ = true;
+    }
+    uint32_t base = 0;
+    for (int s = 0; s < kPropShapeCount; ++s) {
+        base = (base + alignInstances_ - 1u) / alignInstances_ * alignInstances_;
+        uint32_t n = static_cast<uint32_t>(cpuInst_[s].size());
+        if (base > kRootPropInstances) base = kRootPropInstances;
+        if (base + n > kRootPropInstances) {
+            std::fprintf(stderr,
+                         "[prop] shape %d range truncated %u -> %u by "
+                         "alignment padding at the root cap (%u)\n",
+                         s, n, kRootPropInstances - base, kRootPropInstances);
+            n = kRootPropInstances - base;
+        }
+        rangeBase_[s]  = base;
+        rangeCount_[s] = n;
+        base += n;
+    }
+}
+
+void PropPass::upload_instances(uint32_t frameIndex) {
+    compute_ranges();
+    auto* dst = static_cast<PropInstance*>(instBuf_[frameIndex].mapped);
+    if (dst == nullptr) return;
+    for (int s = 0; s < kPropShapeCount; ++s) {
+        if (rangeCount_[s] == 0) continue;
+        std::memcpy(dst + rangeBase_[s], cpuInst_[s].data(),
+                    static_cast<std::size_t>(rangeCount_[s]) * sizeof(PropInstance));
     }
 }
 
@@ -304,29 +377,36 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
     const float period   = push.torus.x;
 
     lastDrawCount_ = 0;
-    for (int s = 0; s < kPropShapeCount; ++s) {
-        const auto& src = cpuInst_[s];
-        if (src.empty()) continue;
 
-        if (useGpuCulling_) {
-            auto& buf = instBufs_[s][frameIndex];
-            uint32_t uploadCount = std::min(static_cast<uint32_t>(src.size()), static_cast<uint32_t>(kMaxPropInstances));
-            std::memcpy(buf.mapped, src.data(), uploadCount * sizeof(PropInstance));
-
-            // GPU Multi-Draw Indirect (MDI) path: instances were culled by cull.comp SSBO shader into culledInstBufs_
-            // and the indirect draw command was populated in indirectCmdBufs_.
-            VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, culledInstBufs_[s][frameIndex].buffer};
-            VkDeviceSize offs[2] = {0, 0};
+    if (useGpuCulling_) {
+        // GPU MDI path: the caller ran upload_instances() and
+        // GpuCullPass::record_cull per shape range, so culledInstBuf_ holds
+        // the surviving instances at each shape's range offset and
+        // indirectCmdBufs_ the per-shape draw. Visibility was decided there —
+        // this loop only binds ranges and fires the indirect draws.
+        for (int s = 0; s < kPropShapeCount; ++s) {
+            if (rangeCount_[s] == 0) continue;
+            VkBuffer     bufs[2] = {meshes_[s].vertexBuffer,
+                                    culledInstBuf_[frameIndex].buffer};
+            VkDeviceSize offs[2] = {0, range_offset_bytes(s)};
             vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
             vkCmdBindIndexBuffer(cmd, meshes_[s].indexBuffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexedIndirect(cmd, indirectCmdBufs_[s][frameIndex].buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
-            lastDrawCount_ += uploadCount;
-            continue;
+            lastDrawCount_ += rangeCount_[s];
         }
+        return;
+    }
 
-        // CPU frustum/fog cull fallback
-        auto& buf = instBufs_[s][frameIndex];
-        auto* dst = static_cast<PropInstance*>(buf.mapped);
+    // CPU frustum/fog cull fallback (GIGA_NO_GPU_CULL): filter into the shared
+    // instance buffer at each shape's range offset and draw direct.
+    compute_ranges();
+    auto* dstBase = static_cast<PropInstance*>(instBuf_[frameIndex].mapped);
+    if (dstBase == nullptr) return;
+    for (int s = 0; s < kPropShapeCount; ++s) {
+        const auto& src = cpuInst_[s];
+        if (rangeCount_[s] == 0) continue;
+
+        auto* dst = dstBase + rangeBase_[s];
         uint32_t count = 0;
 
         for (const auto& inst : src) {
@@ -349,13 +429,13 @@ void PropPass::record(VkCommandBuffer cmd, uint32_t frameIndex,
             if (dist > fogEnd) continue; // entirely fogged to black
 
             dst[count++] = inst;
-            if (count >= static_cast<uint32_t>(kMaxPropInstances)) break;
+            if (count >= rangeCount_[s]) break;
         }
         if (count == 0) continue;
 
-        // Bind vertex + instance buffers and draw
-        VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, buf.buffer};
-        VkDeviceSize offs[2] = {0, 0};
+        // Bind vertex + instance buffers (at the shape's range) and draw
+        VkBuffer     bufs[2] = {meshes_[s].vertexBuffer, instBuf_[frameIndex].buffer};
+        VkDeviceSize offs[2] = {0, range_offset_bytes(s)};
         vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
         vkCmdBindIndexBuffer(cmd, meshes_[s].indexBuffer, 0,
                              VK_INDEX_TYPE_UINT32);

@@ -53,12 +53,17 @@ public:
 
     // Record compute dispatch & barriers for GPU frustum culling.
     // Writes culled instances to `outCulledInstanceBuf` and indirect command to `outIndirectBuf`.
+    // `srcOffsetBytes`/`dstOffsetBytes` bind a RANGE of the shared prop
+    // instance buffer (shapes are ranges of one root-cap buffer, [prop_pass.h]
+    // kRootPropInstances); both must respect minStorageBufferOffsetAlignment —
+    // PropPass aligns its range starts for exactly this.
     void record_cull(VkCommandBuffer cmd,
                      const mat4& viewProj,
                      const vec3& camPos,
                      float fogEnd,
                      float torusPeriod,
                      VkBuffer srcInstanceBuf,
+                     VkDeviceSize srcOffsetBytes,
                      uint32_t instanceCount,
                      uint32_t indexCount,
                      uint32_t firstIndex,
@@ -67,6 +72,7 @@ public:
                      const vec3& boxMin,
                      const vec3& boxMax,
                      VkBuffer outCulledInstanceBuf,
+                     VkDeviceSize dstOffsetBytes,
                      VkBuffer outIndirectBuf) noexcept;
 
     // Returns local-space AABB for a given PropShape

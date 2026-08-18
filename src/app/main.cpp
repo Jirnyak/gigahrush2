@@ -6850,17 +6850,25 @@ int main(int argc, char** argv) {
                 const uint32_t fIdx = renderer.currentFrame;
                 const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
                 const float torusPeriod = kWorldExtent;
+                // ONE shared instance buffer, shapes as ranges
+                // ([prop_pass.h] kRootPropInstances): upload cuts the ranges,
+                // the culler gets each range by offset. GpuCullPass is the
+                // only thing deciding what is drawn — PropPass stores
+                // everything the floor submitted.
+                propPass.upload_instances(fIdx);
                 for (int s = 0; s < gpu::kPropShapeCount; ++s) {
-                    uint32_t count = propPass.instance_count(s);
+                    uint32_t count = propPass.range_count(s);
                     if (count == 0) continue;
                     vec3 bMin{-1.0f, -1.0f, -1.0f}, bMax{1.0f, 2.0f, 1.0f};
                     gpu::GpuCullPass::get_shape_aabb(static_cast<gpu::PropShape>(s), bMin, bMax);
                     cullPass.record_cull(
                         cmd, vp, camMat.eye, fogEnd, torusPeriod,
-                        propPass.instance_buffer(s, fIdx), count,
+                        propPass.instance_buffer(fIdx),
+                        propPass.range_offset_bytes(s), count,
                         propPass.mesh(s).indexCount, 0, 0, 0,
                         bMin, bMax,
-                        propPass.culled_instance_buffer(s, fIdx),
+                        propPass.culled_instance_buffer(fIdx),
+                        propPass.range_offset_bytes(s),
                         propPass.indirect_cmd_buffer(s, fIdx));
                 }
             } else if (propPass.ready()) {
