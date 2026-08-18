@@ -7,6 +7,7 @@
 #include <vector>
 #include <unordered_set>
 #include <cmath>
+#include <cstdio>
 #include "core/wrap.h"
 #include "core/rng.h"
 
@@ -18,8 +19,71 @@ namespace giga::game {
 constexpr std::uint32_t kSaltWall = 0x33333333u;
 // Salt for ceiling-light placement rolls (same inheritance as kSaltWall above).
 constexpr std::uint32_t kSaltLight = 0x44444444u;
-// Chance a candidate ceiling cell hosts a bulb, percent.
-constexpr std::uint32_t kLightChancePct = 25u;
+
+// LAMP PITCH AND HEADROOM DERIVE FROM THE FIXTURE'S OWN REACH, not from taste.
+// props.csv gives BareBulb light_radius_mm; two numbers fall straight out of it:
+//
+//   pitch    — neighbouring pools must OVERLAP, so the spacing ceiling is two
+//              radii: 24 m = 12 cells. The pitch also has to TILE THE TORUS —
+//              128 is not divisible by 12, and a pitch that leaves a short last
+//              block puts a triple-density stripe of lamps down x = 126..127 and
+//              y = 126..127, running the whole wrap. That is precisely the seam
+//              this engine exists to not have. So: the largest power-of-two
+//              divisor of kMacroDim that still fits under two radii = 8 cells
+//              (16 m), every pool overlapping its neighbour by 8 m.
+//
+//              The old rule was a flat 25% per-cell coin flip, which is not a
+//              density at all — it is a density PER CEILING CELL, so a floor
+//              with half a million ceilings (padic: 43 storeys of
+//              full-footprint sandwich) asked for 123 000 lamps while a floor
+//              that is mostly void (blame: 48 000 ceilings) asked for 12 000.
+//              123 000 overflows kStagingLights (16384) seven times over — the
+//              exact silent-truncation class already documented in
+//              gpu_light_grid.h.
+//   headroom — a ceiling lamp lights a place a body STANDS. If no surface lies
+//              within the bulb's own reach below it, the "ceiling" is not a
+//              room's ceiling. On the torus every axis wraps, so cell(x,y,z+1)
+//              at z=127 reads cell z=0: on blame that is the underside of the
+//              town's platform mass, and the whole open sky over the town came
+//              back as one flat sheet of 1538 lamps at 255 m — 17% of the
+//              floor's lamps in a single plane, hanging over the abyss. The
+//              wrap is honest geometry; a light fixture 200 m over a street is
+//              not a light fixture.
+inline int lamp_light_radius_cells() {
+    const int r = static_cast<int>(prop_def(PropId::BareBulb).lightRadiusMm /
+                                   1000u / static_cast<unsigned>(kCellSize));
+    return r > 0 ? r : 1;
+}
+
+inline int lamp_pitch_cells() {
+    const int span = 2 * lamp_light_radius_cells(); // pools still overlap
+    int pitch = 1;
+    while (pitch * 2 <= span && (kMacroDim % (pitch * 2)) == 0) pitch *= 2;
+    return pitch;
+}
+
+// NO LAMP-SPECIFIC COUNT CAP LIVES HERE, deliberately (owner, 2026-08-18). A
+// lamp is a prop; the draw budget belongs to ALL props together, and capping one
+// prop kind by hand is the road to capping every kind by hand. The two real
+// ceilings both sit in render/ and are that layer's to enforce:
+//
+//   kMaxPropInstances = 4096 per SHAPE per frame (prop_pass.h) — the mesh. It
+//     already drops the overflow, but by INSERTION ORDER and silently, so a
+//     dense floor keeps the light and loses the fixture: measured on padic,
+//     6661 CylinderZ and 6240 Box wanted, ~4700 glows with no bulb anywhere.
+//     Same class as the light-staging bug gpu_light_grid.h already documents
+//     ("резалось порядком создания (z снизу)"); the cure is the same one that
+//     worked there — drop by distance/contribution, and say so out loud.
+//
+//   kStagingLights = 16384 (gpu_light_grid.h) — the light. Not the binding
+//     constraint today: 12 552 emitters fit under it, which is exactly why the
+//     glow was present while the bulb was not.
+//
+// And the frame cost is not the lamp count either: light collection culls at
+// kFogRadius = kWorldExtent * 0.5 = 128 m on a torus whose per-axis wrap
+// distance is also 128 m, so 66% of the WHOLE WORLD passes, and nothing tests
+// occlusion — a bulb five storeys up behind ten slabs is sorted and binned
+// every frame like one in your face.
 
 constexpr float kHalfPi = 1.5707963267948966f;
 
@@ -441,11 +505,22 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
 
-    // Mirror PropPlacer::populate light branch:
-    //   solidAbove && (rngLight % 100 < lightChancePct)
-    //   origin = {wx, wy, wz + 1.55f}
-    // Anchor into the solid ceiling cell (Z+1) so spawn_prop solid() and
-    // anchor_validate_step stay honest — lamp falls when ceiling is carved.
+    const int pitch = lamp_pitch_cells();               // 8 cells = 16 m
+    const int headroom = lamp_light_radius_cells();     // 6 cells = the bulb's own reach
+    const int blocks = kMacroDim / pitch;               // exact tiling, no seam stripe
+
+    // One lamp per (pitch x pitch x ceiling-level) block. The block's winner is
+    // the candidate with the lowest hash score, so the pattern is even in
+    // DENSITY but jittered in position — a raster "first valid cell wins" would
+    // park every bulb on its block's low corner and read as a visible grid.
+    struct Slot {
+        std::uint32_t score;
+        std::int16_t x, y;
+        std::int8_t faceSz;
+    };
+    std::vector<Slot> best(static_cast<std::size_t>(blocks) * blocks * kMacroDim,
+                           Slot{0xFFFFFFFFu, 0, 0, -1});
+
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
@@ -462,17 +537,44 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                    is_solid_cell(grid.cell(x, y + 1, z));
                 if (nichX || nichY) continue;
 
-                const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
-                if ((rngLight % 100u) >= kLightChancePct) continue;
-
                 // Hang from the REAL ceiling under-face: the sandwich is
                 // partially carved from below, and the cell-plane form left
                 // bulbs floating mid-air. A holed centre column = no lamp.
                 const int faceSz =
                     grid.mask(x, y, z + 1).lowest_layer_centre();
                 if (faceSz < 0) continue;
+
+                // HEADROOM: some surface within the bulb's own reach below, or
+                // this is not a room's ceiling — it is an overhang over a void
+                // (or, at z = 127, the torus wrap onto the floor's base mass).
+                bool standable = false;
+                for (int d = 1; d <= headroom && !standable; ++d)
+                    standable = !grid.mask(wrap_macro(x), wrap_macro(y),
+                                           wrap_macro(z - d)).empty();
+                if (!standable) continue;
+
+                const std::uint32_t score =
+                    giga::spatial_hash(x, y, z, seed ^ kSaltLight);
+                Slot& slot = best[(static_cast<std::size_t>(z) * blocks +
+                                   y / pitch) * blocks + x / pitch];
+                if (score >= slot.score) continue;
+                slot = Slot{score, static_cast<std::int16_t>(x),
+                            static_cast<std::int16_t>(y),
+                            static_cast<std::int8_t>(faceSz)};
+            }
+        }
+    }
+
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int by = 0; by < blocks; ++by) {
+            for (int bx = 0; bx < blocks; ++bx) {
+                const Slot& slot =
+                    best[(static_cast<std::size_t>(z) * blocks + by) * blocks + bx];
+                if (slot.faceSz < 0) continue;
+                const int x = slot.x, y = slot.y;
+                const int cz = wrap_macro(z + 1);
                 const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
-                                    static_cast<float>(faceSz) * (kCell / 8.0f);
+                                    static_cast<float>(slot.faceSz) * (kCell / 8.0f);
 
                 // Cell CENTRE — the corner form hung bulbs on whatever wall
                 // shared the corner (the same bug the wall seeder had).
@@ -480,26 +582,46 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 const float wy = (static_cast<float>(y) + 0.5f) * kCell;
                 const float wz = faceM - 0.14f;
 
+                // ANCHOR THE SUB-LAYER WE MEASURED, not sub-layer 0. The face
+                // height above was already read from the mask; the anchor kept
+                // saying "bottom of the ceiling cell", and spawn_prop's
+                // grid.solid(cx,cy,cz, 4,4,subZ) gate then rejected every lamp
+                // whose slab does not reach the cell's floor. On padic the
+                // sandwich slab lives in sub-layers 6..7 of the ceiling cell,
+                // so sub-layer 0 is air and 123 110 of 123 156 lamps were
+                // dropped — the floor shipped with 84. Pick the exact solid bit
+                // of the centre 2x2 too: lowest_layer_centre() only promises
+                // that ONE of (3,3)(4,3)(3,4)(4,4) is set.
+                int subX = 4, subY = 4;
+                for (int sy = 3; sy <= 4; ++sy)
+                    for (int sx = 3; sx <= 4; ++sx)
+                        if (grid.solid(wrap_macro(x), wrap_macro(y), cz, sx, sy,
+                                       slot.faceSz)) {
+                            subX = sx;
+                            subY = sy;
+                            sy = 5;
+                            break;
+                        }
+
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
                 anchor.cy   = y;
-                anchor.cz   = wrap_macro(z + 1);
-                anchor.subX = 4;
-                anchor.subY = 4;
-                anchor.subZ = 0; // bottom of ceiling cell
+                anchor.cz   = cz;
+                anchor.subX = static_cast<std::uint8_t>(subX);
+                anchor.subY = static_cast<std::uint8_t>(subY);
+                anchor.subZ = static_cast<std::uint8_t>(slot.faceSz);
                 anchor.face = 2; // ceiling
 
                 // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
                 const PropId pid =
-                    (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
-                const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                    (slot.score & 1u) ? PropId::BareBulb : PropId::FloodLamp;
+                const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
                 const std::uint8_t anim =
-                    static_cast<std::uint8_t>(rngLight & 0xFFu);
+                    static_cast<std::uint8_t>(slot.score & 0xFFu);
 
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
                                              pid, layer, yaw, anim, /*flags*/0);
                 if (e != entt::null) ++count;
-
             }
         }
     }

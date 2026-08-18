@@ -49,17 +49,41 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
         const int wAir = wrap_macro(airZ);
         const int wCeil = wrap_macro(ceilZ);
 
-        if (grid.solid(wcx, wcy, wCeil, 4, 4, 0)) {
+        // ASK THE CEILING WHERE ITS UNDER-FACE IS. This branch used to test
+        // solid(...,4,4,0) — sub-layer 0 of the ceiling cell — but the storey
+        // ceiling here IS THE SANDWICH: kCeilW puts the slab in sub-layers 6..7
+        // and leaves 0..5 hollow. So the test failed on every ordinary landing
+        // and 672 of 1032 stairwells shipped unlit; only the 336 that happen to
+        // sit under a full-concrete cell got a bulb. Same defect the generic
+        // seeder carried ([prop_system.cpp] seed_ceiling_lights).
+        const int faceSz = grid.mask(wcx, wcy, wCeil).lowest_layer_centre();
+        if (faceSz >= 0) {
+            // lowest_layer_centre() only promises ONE of the centre 2x2 bits is
+            // set; spawn_prop's solid() gate wants the exact one.
+            int subX = 4, subY = 4;
+            for (int sy = 3; sy <= 4; ++sy)
+                for (int sx = 3; sx <= 4; ++sx)
+                    if (grid.solid(wcx, wcy, wCeil, sx, sy, faceSz)) {
+                        subX = sx;
+                        subY = sy;
+                        sy = 5;
+                        break;
+                    }
             anchor.cx = wcx;
             anchor.cy = wcy;
             anchor.cz = wCeil;
-            anchor.subX = 4;
-            anchor.subY = 4;
-            anchor.subZ = 0;
+            anchor.subX = static_cast<std::uint8_t>(subX);
+            anchor.subY = static_cast<std::uint8_t>(subY);
+            anchor.subZ = static_cast<std::uint8_t>(faceSz);
             anchor.face = 2;
+            // Corded bulb: 0.45 m of flex below the face it hangs from. For a
+            // full ceiling (faceSz = 0) that is the old airZ*kCellSize + 1.55,
+            // so the lamps that already worked do not move.
+            const float faceM = static_cast<float>(airZ + 1) * kCellSize +
+                                static_cast<float>(faceSz) * (kCellSize / 8.0f);
             bulbPos = vec3{static_cast<float>(cx) * kCellSize + 1.0f,
                            static_cast<float>(cy) * kCellSize + 1.0f,
-                           static_cast<float>(airZ) * kCellSize + 1.55f};
+                           faceM - 0.45f};
         } else if (grid.solid(wcx, wcy, wAir, 2, 4, 6)) {
             anchor.cx = wcx;
             anchor.cy = wcy;

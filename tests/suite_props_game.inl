@@ -37,6 +37,15 @@ static void paint_floor_band(World& world, int x0, int x1, int zFloor, int y0, i
     }
 }
 
+// A bare slab, no wall columns — the standable surface a ceiling lamp needs
+// under it. paint_floor_band above also raises walls, which would make every
+// corridor cell a lintel niche and suppress lamps for a different reason.
+static void paint_slab(World& world, int x0, int x1, int z, int y0, int y1) {
+    for (int y = y0; y < y1; ++y)
+        for (int x = x0; x < x1; ++x)
+            world.grid().fill_cell(x, y, z, kMatConcrete);
+}
+
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
 
@@ -155,6 +164,12 @@ static void test_ceiling_lights_seed_and_collect() {
     const LayerId layer = 5;
     const unsigned seed = 0xB11B11u;
 
+    // A ROOM, not a floating slab: a lamp needs a surface within its own reach
+    // below it, so the fixture must carry a floor. Painting only the ceiling
+    // used to seed lamps, which is the blame-floor defect in miniature — on the
+    // torus cell(x,y,z+1) wraps, so the open sky over the town read as a ceiling
+    // and came back as a flat sheet of 1538 bulbs at 255 m.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/7, /*y0*/2, /*y1*/80);
     paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
 
     const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
@@ -186,6 +201,67 @@ static void test_ceiling_lights_seed_and_collect() {
     // Layer-scoped clear drops the lamps.
     CHECK(game::clear_layer_props(reg, layer) == n);
     CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
+}
+
+// An overhang is not a ceiling. Same slab as above with the FLOOR removed: on a
+// torus every axis wraps, so any solid mass anywhere in the column reads as
+// "solid above" from the air below it. Blame's town shipped with 1538 bulbs in
+// one flat plane 200 m over the street for exactly this reason — 17% of the
+// floor's lamps at a single z. Delete the headroom test in seed_ceiling_lights
+// and this goes red.
+static void test_ceiling_lights_need_a_floor_under_them() {
+    Registry reg;
+    World world;
+    const LayerId layer = 7;
+
+    paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+
+    // A floor JUST out of the bulb's reach is still no floor: props.csv gives
+    // BareBulb 12 m, so a slab 8 cells (16 m) under the lamp cell stays dark.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/0, /*y0*/2, /*y1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+
+    // Inside the reach it lights up.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/4, /*y0*/2, /*y1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) > 0);
+}
+
+// A lamp hangs from the ceiling's REAL under-face, and its anchor must name the
+// sub-layer that face lives in. Padic's storey ceiling is a sandwich: the slab
+// occupies sub-layers 6..7 of the cell and 0..5 are hollow. The seeder measured
+// that face for the bulb's POSITION but anchored at sub-layer 0 regardless, so
+// spawn_prop's solid(cx,cy,cz, 4,4,subZ) gate threw away 123 110 of 123 156
+// lamps and the floor shipped with 84 — "очень темно", owner's report.
+static void test_ceiling_lights_hang_from_a_sandwich_slab() {
+    Registry reg;
+    World world;
+    const LayerId layer = 8;
+    const int zAir = 8, zCeil = 9;
+
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/7, /*y0*/2, /*y1*/80);
+    // The ceiling cell carries matter ONLY in its top two sub-layers.
+    for (int y = 2; y < 80; ++y)
+        for (int x = 2; x < 80; ++x) {
+            SubMask& m = world.grid().mask(x, y, zCeil);
+            m.words[6] = ~std::uint64_t{0};
+            m.words[7] = ~std::uint64_t{0};
+            world.grid().set_cell(x, y, zCeil, kMatConcrete);
+        }
+
+    const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, 0x5A11Bu);
+    CHECK(n > 0);
+
+    for (auto e : reg.view<const game::SubVoxelAnchor, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        const game::SubVoxelAnchor& a = reg.get<const game::SubVoxelAnchor>(e);
+        CHECK(a.cz == zCeil);
+        CHECK(a.subZ == 6); // the slab's own lowest layer, not 0
+        // The bulb hangs just under that face, not under the cell plane.
+        const float faceM = static_cast<float>(zCeil) * kCellSize + 6.0f * (kCellSize / 8.0f);
+        CHECK(std::fabs(reg.get<const Transform>(e).pos.z - (faceM - 0.14f)) < 0.01f);
+    }
+    (void)zAir;
 }
 
 static void test_ceiling_lights_do_not_collide_with_wall_devices() {
@@ -924,6 +1000,8 @@ void test_props_game_all() {
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
     test_ceiling_lights_seed_and_collect();
+    test_ceiling_lights_need_a_floor_under_them();
+    test_ceiling_lights_hang_from_a_sandwich_slab();
     test_ceiling_lights_do_not_collide_with_wall_devices();
     test_padic_props_seed_tags_layer();
     test_spawn_prop_anchor_and_detach_on_air();
