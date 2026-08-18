@@ -4369,10 +4369,19 @@ int main(int argc, char** argv) {
                                   &stack.layer(activeLayer).gravity());
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
+                // Дельта PropDetached до/после: выстрел-в-проп внутри
+                // projectile_step сносит и GpuHandoff-лампы (reg.destroy), и
+                // якорные пропы целиком — без ребилда статичной шкуры PropPass
+                // плафон разбитой лампы рисовался бы до следующего карва.
+                const std::uint32_t propDetachedBeforeShots =
+                    bus.cycle_count(game::EventType::PropDetached);
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
                     &playerStatus, player, &combatCarves, &stainDirty,
                     &particleBursts, &noiseField);
+                if (bus.cycle_count(game::EventType::PropDetached) >
+                    propDetachedBeforeShots)
+                    propPassNeedsRebuild = true;
                 // Drain combat carve proposals through the same carve_sphere
                 // path the console uses. Frozen bake: drop (v1); console keeps
                 // pending via carveRadius until bake lands.

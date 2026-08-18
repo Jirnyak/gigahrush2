@@ -1,9 +1,9 @@
 id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_g,size_x_m,size_y_m,size_z_m,light_radius_mm,light_intensity_e3,light_cone_deg,flicker
 terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45000,0.9,0.45,1.4,3000,400,0,crt
 electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25000,0.6,0.22,0.9,0,0,0,none
-bare_bulb,Лампочка Ильича,CylinderZ,RagdollRoll,LightBulb,210,0,1000,780,450,2500,300,0.12,0.12,0.22,12000,1800,0,mains
-flood_lamp,Прожектор,Box,RagdollRoll,LightBulb,150,0,1000,780,450,2500,6000,0.5,0.14,0.28,24000,3000,0,mains
-padic_stair_bulb,Лампочка падика,CylinderZ,RagdollRoll,LightBulb,210,0,1000,950,700,2500,300,0.12,0.12,0.22,12000,1800,0,mains
+bare_bulb,Лампочка Ильича,CylinderZ,GpuHandoff,LightBulb,210,20,1000,780,450,2500,300,0.12,0.12,0.22,12000,1800,0,mains
+flood_lamp,Прожектор,Box,GpuHandoff,LightBulb,150,20,1000,780,450,2500,6000,0.5,0.14,0.28,24000,3000,0,mains
+padic_stair_bulb,Лампочка падика,CylinderZ,GpuHandoff,LightBulb,210,20,1000,950,700,2500,300,0.12,0.12,0.22,12000,1800,0,mains
 kitchen_stove,Плита,Box,SimpleFall,None,0,4,420,430,400,2500,80000,0.7,0.6,0.9,0,0,0,none
 kitchen_table,Стол,Box,SimpleFall,None,0,3,520,420,300,2500,25000,1.1,0.7,0.78,0,0,0,none
 toilet_pan,Унитаз,CylinderZ,SimpleFall,None,0,3,880,890,870,2500,35000,0.4,0.4,0.75,0,0,0,none

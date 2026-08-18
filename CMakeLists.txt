@@ -1100,7 +1100,7 @@ if(GIGA_BUILD_TESTS)
     # 243672 от до-лампового дерева): бит-идентичность nav через WalkBits
     # против grid-пути (6), то же для room zones (27), патч==полный ребилд с
     # явной дивергенцией законов nav/тела на одной выбитой вокселе (12).
-        PASS_REGULAR_EXPRESSION "game_test: 235756 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 235775 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

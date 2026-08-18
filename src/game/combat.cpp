@@ -1962,6 +1962,43 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         }
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
+
+    // ВЫСТРЕЛ В ПРОП — вторая фаза, ПОСЛЕ разбора resolved, по двум причинам
+    // сразу. Во-первых, check_projectile_prop_hits делает reg.destroy(проп)
+    // внутри — в живой итерации view фазы 1 это запрещено (тот же закон, что
+    // выгнал apply_damage во вторую фазу). Во-вторых, снаряды, погибшие об
+    // стену или тело, к этому месту уже уничтожены — пуля, остановленная
+    // стеной, не разбивает заодно лампу за ней. Снимок (entity, pos, vel)
+    // перед вызовами: destroy пропа перетряхивает пулы Transform/Velocity,
+    // по которым идёт view. Граната пропы не трогает — как и тела в фазе 1:
+    // её единственная развязка с миром до фитиля — геометрия.
+    {
+        struct PropShot { Entity e; vec3 pos; vec3 vel; };
+        std::vector<PropShot> flying;
+        for (auto e : reg.view<Projectile, Transform, Velocity>()) {
+            const Transform& tr = reg.get<Transform>(e);
+            if (tr.layer != layer) continue;
+            if (static_cast<ProjType>(reg.get<Projectile>(e).proj) ==
+                ProjType::Grenade)
+                continue;
+            flying.push_back(PropShot{e, tr.pos, reg.get<Velocity>(e).v});
+        }
+        for (const PropShot& s : flying) {
+            // kProjHitRadius — тот же радиус, каким снаряд трогает тела:
+            // проп не особеннее туловища. Внутри — detach по fall_mode строки:
+            // GpuHandoff-лампа рвётся в burst и гаснет (reg.destroy уносит
+            // PropLight вместе с сущностью), терминал падает целым.
+            if (!check_projectile_prop_hits(
+                    reg, s.pos, s.vel, kProjHitRadius, bus, particles,
+                    static_cast<std::uint32_t>(tick) ^
+                        static_cast<std::uint32_t>(entt::to_integral(s.e))))
+                continue;
+            // Снаряд гибнет как при h.onWall: проп его остановил. Попадание
+            // считается — счётчик hits и так меряет «во что-то попал».
+            ++hits;
+            if (reg.valid(s.e)) reg.destroy(s.e);
+        }
+    }
     (void)bus;
     return hits;
 }

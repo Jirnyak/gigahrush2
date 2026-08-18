@@ -7,6 +7,7 @@
 #include "game/floors/padic/padic.h"
 #include "game/floor_spec.h"
 #include "game/prop_system.h"
+#include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
 #include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
 #include "world/world.h"
 #include "world/types.h"
@@ -613,8 +614,10 @@ static void test_collect_static_prop_mesh_instances_shapes() {
         const std::vector<std::uint32_t> dirty{
             static_cast<std::uint32_t>(macro_index(a.cx, a.cy, a.cz))};
         game::anchor_validate_step(reg, world, bus, dirty);
-        CHECK(reg.all_of<game::DynamicBodyTag>(target));
-        CHECK(!reg.all_of<game::StaticPropTag>(target));
+        // Лампы — GpuHandoff (data/props.csv, решение 2026-08-18): detach
+        // уносит сущность целиком в GPU-burst, а не переводит в
+        // DynamicBodyTag, как делал прежний RagdollRoll этих строк.
+        CHECK(!reg.valid(target));
 
         std::vector<game::PropMeshInstance> after;
         const std::uint32_t n2 =
@@ -942,6 +945,95 @@ static void test_furniture_is_not_a_terminal() {
 }
 
 
+// Пин данных ([markoaudit/plans/lamp-gpuhandoff.md], решение владельца
+// 2026-08-18): все три лампы — GpuHandoff (разбилась → всплеск осколков в
+// GPU-пул, свет гаснет вместе с сущностью) и neon_tube (mat_id 20,
+// data/materials.csv) — плафон из неон-стекла, осколки тонируются им же.
+// До правки лампы были RagdollRoll с mat_id 0 (air, albedo 0/0/0): падали
+// целиком и крошились бы ЧЁРНЫМ. Данные честнее фолбэка.
+static void test_lamp_rows_are_gpu_handoff_neon() {
+    const game::PropId lamps[] = {game::PropId::BareBulb,
+                                  game::PropId::FloodLamp,
+                                  game::PropId::PadicStairBulb};
+    for (const game::PropId id : lamps) {
+        const game::PropDef& d = game::prop_def(id);
+        CHECK(d.fallMode ==
+              static_cast<std::uint8_t>(game::PropFallMode::GpuHandoff));
+        CHECK(d.matId == 20u); // neon_tube
+    }
+    printf("[props] lamp rows pinned: GpuHandoff + neon_tube matId=20\n");
+}
+
+
+// Выстрел в лампу ([markoaudit/plans/lamp-gpuhandoff.md] C): снаряд в радиусе
+// kProjHitRadius от якорного пропа рвёт его по fall_mode строки. Для
+// GpuHandoff-лампы это burst осколков в общую очередь, тонированный её
+// материалом, и гибель сущности — вместе с PropLight, так что «свет погас»
+// по построению: коллектор света ходит по view<Transform, PropLight>.
+static void test_projectile_shatters_lamp_and_light_dies() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 13;
+
+    // Потолочная лампа: якорная клетка твёрдая, спавн — из строки таблицы,
+    // никакого хардкода fall/mat/цвета на месте вызова ([jirnyak.md] §21).
+    world.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14;
+    anchor.cy = 6;
+    anchor.cz = 14;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 4;
+    anchor.face = 0;
+    const vec3 pos{14.5f * 2.0f, 6.5f * 2.0f, 14.5f * 2.0f};
+    const auto lamp = game::spawn_prop_from_id(reg, world, pos, anchor,
+                                               game::PropId::BareBulb, layer);
+    CHECK(reg.valid(lamp));
+    CHECK(reg.all_of<game::StaticPropTag>(lamp));
+    // Строка светит (12000 мм / 1800 e3) — свет обязан гореть ДО выстрела,
+    // иначе «погас» ниже не проверяет ничего.
+    CHECK(reg.all_of<game::PropLight>(lamp));
+
+    game::ParticleBurstQueue bursts;
+
+    // Промах: снаряд в пяти клетках — лампа стоит, очередь пуста.
+    CHECK(!game::check_projectile_prop_hits(
+        reg, vec3{pos.x + 10.0f, pos.y, pos.z}, vec3{0.0f, 0.0f, -40.0f},
+        game::kProjHitRadius, bus, &bursts, 5u));
+    CHECK(reg.valid(lamp));
+    CHECK(bursts.count == 0u);
+
+    // Попадание: снаряд в 0.3 м, летит в лампу — тот же радиус, каким он
+    // трогает тела (kProjHitRadius, combat.h).
+    bus.clear();
+    CHECK(game::check_projectile_prop_hits(
+        reg, vec3{pos.x, pos.y, pos.z + 0.3f}, vec3{0.0f, 0.0f, -40.0f},
+        game::kProjHitRadius, bus, &bursts, 5u));
+
+    // Всплеск: осколки, тонированные материалом лампы — neon_tube, не air.
+    CHECK(bursts.count > 0u);
+    CHECK(bursts.items[0].count > 0u);
+    CHECK(bursts.items[0].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Debris));
+    CHECK(bursts.items[0].matId == 20u);
+
+    // Сущность унесена целиком (GpuHandoff: ноль CPU-обломков)...
+    CHECK(!reg.valid(lamp));
+    CHECK(bus.cycle_count(EventType::PropDetached) > 0u);
+    // ...и СВЕТ ПОГАС: во всём реестре не осталось ни одного PropLight.
+    std::uint32_t lit = 0;
+    for (auto e : reg.view<const game::PropLight>()) {
+        (void)e;
+        ++lit;
+    }
+    CHECK(lit == 0u);
+    printf("[props] projectile shatters lamp: burst mat=20, light died\n");
+}
+
+
 // [jirnyak.md] section 18/20 -- terminals are sim-owned via seed_wall_interactables.
 // PropPass no longer exposes get_terminal_positions; interaction_step must resolve
 // ECS Interactable entities, not ghost GPU instances from env_detail.
@@ -1011,6 +1103,8 @@ void test_props_game_all() {
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();
     test_furniture_is_not_a_terminal();
+    test_lamp_rows_are_gpu_handoff_neon();
+    test_projectile_shatters_lamp_and_light_dies();
     test_find_nearest_terminal_respects_reach();
     test_sim_owned_terminals_seed_and_interact();
     test_embody_interact_terminal_applies_at_given_pos();
