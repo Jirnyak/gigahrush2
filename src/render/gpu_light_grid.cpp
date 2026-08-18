@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -261,7 +262,20 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
 
     // На GPU едут БЛИЖАЙШИЕ kMaxPointLights (стейджинг уже отсортирован по
     // дистанции) — лишними остаются только самые дальние, они за туманом.
-    const uint32_t uploadCount = std::min(stagingLightCount_, kMaxPointLights);
+    //
+    // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
+    // ФПС-регрессии 2026-08-18: сколько миллисекунд кадра стоят марши к
+    // лампам). Ужимает аплоад до N ближайших; буфер и дефолт не меняются.
+    // Ручка того же класса, что GIGA_GPU_TIMER=0: инструмент обязан уметь
+    // измерить сам себя, число без A/B — мнение.
+    static const uint32_t kBudgetCap = [] {
+        const char* e = std::getenv("GIGA_LIGHT_BUDGET");
+        const long v = e ? std::atol(e) : 0;
+        return (v > 0 && v <= static_cast<long>(kMaxPointLights))
+                   ? static_cast<uint32_t>(v)
+                   : kMaxPointLights;
+    }();
+    const uint32_t uploadCount = std::min(stagingLightCount_, kBudgetCap);
     uint32_t header[4] = {uploadCount, 0, 0, 0};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
