@@ -478,13 +478,13 @@ _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
 file(GLOB_RECURSE GIGA_TRIPLE_FILES
     "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h" "${GIGA_ROOT}/src/*.inl")
 
+# 2026-08-18: los.cpp / noise.cpp / spatial_audio.cpp rows deleted — their z
+# axes wrap now (owner's verdict; the "z does not wrap" comments cited AGENTS.md
+# for the opposite of what it says). The ratchet held: 11 -> 8.
 set(GIGA_TRIPLE_BASELINE
     "src/app/main.cpp|wrapped=x,z|raw=y|6"
-    "src/audio/spatial_audio.cpp|wrapped=x,y|raw=z|1"
     "src/game/loot.cpp|wrapped=x,z|raw=y|1"
-    "src/game/noise.cpp|wrapped=x,y|raw=z|1"
-    "src/game/prop_system.cpp|wrapped=x,z|raw=y|1"
-    "src/world/los.cpp|wrapped=x,y|raw=z|1")
+    "src/game/prop_system.cpp|wrapped=x,z|raw=y|1")
 
 set(GIGA_TRIPLE_HITS "")   # "<sig>@@@<relpath>:<line>" — sig plus the exact spot
 set(GIGA_TRIPLE_SIGS "")   # "<relpath>|wrapped=..|raw=.." — one entry per finding

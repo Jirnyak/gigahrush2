@@ -155,15 +155,19 @@ static void test_noise_hearing_geometry() {
     p.severity = 3;
     p.source = NoiseSource::WeaponFire;
 
-    // x/y wrap and z does NOT. A noise 2 m from the far seam is 4 m away across the
-    // wrap, not kWorldExtent - 4 away; the same offset in z is a real 250 m.
+    // All three axes wrap ([AGENTS.md]: x/y/z wrap; W does not). A noise 2 m
+    // from the far seam is 4 m away across the wrap on ANY axis — the previous
+    // version of this test pinned z as "a storey axis, not a torus", modelling
+    // the W stack inside a field that never sees W, and the pin kept the ear
+    // deaf through the z seam (markoaudit/systems/05-torus.md §1.4).
     CHECK(noise_publish(f, 0, vec3{2.0f, 10.0f, 4.0f}, p, 0) != 0);
     const Noise n = f.slot[0];
     CHECK(n.id != 0);
     const float across = noise_distance(n, vec3{kWorldExtent - 2.0f, 10.0f, 4.0f});
     CHECK(across > 3.9f && across < 4.1f);
-    const float upStack = noise_distance(n, vec3{2.0f, 10.0f, kWorldExtent - 2.0f});
-    CHECK(upStack > 249.0f);        // z is a storey axis, not a torus
+    // Source z=4, ear z=254: raw delta 250, through the seam 6 — same rule as x.
+    const float upSeam = noise_distance(n, vec3{2.0f, 10.0f, kWorldExtent - 2.0f});
+    CHECK(upSeam > 5.9f && upSeam < 6.1f);
 
     // hearingMult scales the radius — the reference's whole model of a sharp-eared
     // kind. At 11 m a radius-10 noise is inaudible flat and audible at 1.12x.

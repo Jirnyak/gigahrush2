@@ -29,10 +29,14 @@ float compute_wall_attenuation(int numBlockerWalls) {
 
 void spatial_evaluate_geom(const vec3& listenerPos, float listenerYaw, float listenerPitch,
                            const vec3& emitterPos, float& outGainL, float& outGainR, float& outDist) {
-    // 1. Toroidal minimal-image delta in X and Y, non-wrapping in Z across 1024m x 1024m sector
+    // 1. Toroidal minimal-image delta on all three axes ([AGENTS.md]: x/y/z
+    // wrap). The raw z here made an emitter just across the z seam pan and
+    // attenuate as if it were ~250 m away — fully inaudible two metres from
+    // the listener (the old comment's "1024m sector" belonged to the old
+    // project's 2D world and was never true of this one).
     float dx = wrap_delta_f(listenerPos.x, emitterPos.x, kWorldExtent);
     float dy = wrap_delta_f(listenerPos.y, emitterPos.y, kWorldExtent);
-    float dz = emitterPos.z - listenerPos.z;
+    float dz = wrap_delta_f(listenerPos.z, emitterPos.z, kWorldExtent);
     float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
     outDist = dist;
 

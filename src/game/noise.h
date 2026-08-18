@@ -106,7 +106,7 @@ inline constexpr std::uint8_t kNoiseSeverityMax = 5;
 // One noise event. POD, exactly 32 bytes, no interior padding, trivially
 // copyable — same stance as MobDef and Event.
 struct Noise {
-    float x = 0.0f;              //  0  world metres; x/y wrap toroidally, z does not
+    float x = 0.0f;              //  0  world metres; x/y/z all wrap toroidally
     float y = 0.0f;              //  4
     float z = 0.0f;              //  8
     float radius = 0.0f;         // 12  audible where the toroidal distance is <= this

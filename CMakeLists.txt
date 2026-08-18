@@ -528,7 +528,7 @@ if(GIGA_BUILD_TESTS)
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23391/23391 checks passed"
+        PASS_REGULAR_EXPRESSION "23393/23393 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

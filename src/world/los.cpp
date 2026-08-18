@@ -26,7 +26,7 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
     // grid a question, which is what `MacroGrid::cell` already does for us.
     const vec3 d{wrap_delta_f(a.x, b.x, kWorldExtent),
                  wrap_delta_f(a.y, b.y, kWorldExtent),
-                 b.z - a.z};
+                 wrap_delta_f(a.z, b.z, kWorldExtent)};
 
     // Amanatides–Woo: step cell by cell along the segment, always advancing the axis
     // whose next boundary is nearest. Exact — it visits every cell the segment
@@ -93,13 +93,13 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
             continue;                      // the cell we set out from never blocks
         }
 
-        // Off the top or the bottom of the stack: there is nothing there to see
-        // through, so it blocks. z does not wrap ([AGENTS.md]: W and the vertical
-        // extent of the stack are not toroidal the way x/y are).
-        if (cell.z < 0 || cell.z >= kMacroDim) {
-            ++blockers;
-            continue;
-        }
+        // All three axes wrap ([AGENTS.md]: x/y/z wrap; W does not) — the walk
+        // runs in the frame anchored at `a` and MacroGrid::cell wraps every
+        // coordinate on the query, z included. An earlier version treated
+        // out-of-range z as a blocker here, citing AGENTS.md for "z does not
+        // wrap" — the file says the opposite, and the fake wall made every
+        // shot and sightline through the z seam read as blocked by nothing
+        // (markoaudit/systems/05-torus.md §1.4).
         if (grid.cell(cell.x, cell.y, cell.z) != kCellAir) ++blockers;
     }
     return blockers;

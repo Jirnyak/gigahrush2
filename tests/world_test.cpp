@@ -845,9 +845,23 @@ static void test_los() {
         CHECK(los_clear(w2, A, B));
     }
 
-    // Off the top of the stack blocks: there is nothing up there to see through, and
-    // z does not wrap the way x/y do.
-    CHECK(!los_clear(g, mid(10, 10, 2), vec3{21.0f, 21.0f, -50.0f}));
+    // THE Z SEAM wraps exactly like x/y ([AGENTS.md]: x/y/z wrap; W does not).
+    // The previous CHECK here pinned the OPPOSITE — "off the top of the stack
+    // blocks" — citing AGENTS.md for a claim the file never made, and a green
+    // ctest guaranteed the divergence survived. Same three-part proof as the
+    // x-seam block above: clear through the seam, a wall on the SHORT path
+    // blocks, a wall on the long way round changes nothing.
+    {
+        MacroGrid w;
+        const vec3 A = mid(10, 10, 1);
+        const vec3 B = mid(10, 10, kMacroDim - 2);
+        CHECK(los_clear(w, A, B));
+        w.fill_cell(10, 10, kMacroDim - 1, kMatConcrete);   // cell 127, between them
+        CHECK(!los_clear(w, A, B));
+        MacroGrid w2;
+        w2.fill_cell(10, 10, 64, kMatConcrete);
+        CHECK(los_clear(w2, A, B));
+    }
 
     // A DIAGONAL through a corner. The two cells forming the corner are solid and
     // the segment passes exactly between them; an implementation that steps one axis
