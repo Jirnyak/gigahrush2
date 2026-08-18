@@ -176,6 +176,31 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
 
+// Поколение мутаций мира активного этажа — фаза A асинк-ребейка
+// ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
+// и боевой дренаж); двери НЕ пишут — нав печётся по премисе all-open
+// ([game/door.h]) и от тоггла не стареет. Читателя пока нет: RebakeScheduler
+// (фаза C) сравнит bakedGen != worldGen; до него счётчик просто монотонный,
+// сброс на входе этажа приедет вместе с планировщиком.
+static std::uint64_t g_worldGen = 0;
+
+// Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
+// диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
+// которого было НОЛЬ вызывающих: опасность текла сквозь закрытые двери и не
+// текла сквозь свежий пролом (markoaudit-systems.md §1.8). Гейт по слою —
+// битсет построен для driver.layer; чужой слой перестроит on_floor_built.
+static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
+                                 LayerId layer,
+                                 const std::vector<std::uint32_t>& dirtyCells) {
+    if (driver.layer != layer) return;
+    for (std::uint32_t idx : dirtyCells) {
+        const int x = static_cast<int>(idx % kMacroDim);
+        const int y = static_cast<int>((idx / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(idx / (kMacroDim * kMacroDim));
+        diffusion_mark_cell(grid, driver.scratch, x, y, z);
+    }
+}
+
 // Сфера carve задевает светоматериал? Проверка ДО carve (после — ячейки уже
 // воздух): бокс сферы мал (радиус carve — метры), скан копеечный. true велит
 // вызывающему перепечь эмиттеры этажа — выломал неон, свет погас тем же
@@ -4035,6 +4060,11 @@ int main(int argc, char** argv) {
                         // point of the raymarch migration.
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
+                        ++g_worldGen; // фаза A: поколение мутаций для допекания
+                        mark_diffusion_dirty(diffusionDriver,
+                                             stack.layer(activeLayer).grid(),
+                                             activeLayer,
+                                             carveResult.dirtyCells);
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
@@ -4392,6 +4422,11 @@ int main(int argc, char** argv) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
+                            ++g_worldGen; // фаза A: поколение мутаций
+                            mark_diffusion_dirty(diffusionDriver,
+                                                 stack.layer(activeLayer).grid(),
+                                                 activeLayer,
+                                                 carveResult.dirtyCells);
                             spawn_carve_particles(particlePass, carveResult,
                                                   pr.seed);
                             std::fprintf(stderr,
@@ -6756,8 +6791,14 @@ int main(int argc, char** argv) {
                     propPassNeedsRebuild = true;
                     dressingSetChanged = true;
                 }
-                // Same field-rebake debt carve pays: doors mutate occupancy
-                // masks the nav flow fields sample.
+                // Same per-cell debt carve pays: a door leaf filling or freeing
+                // a cell must reach the diffusion walkable bitset, or danger
+                // keeps flowing through a shut door (the audit's §1.8 half that
+                // belongs to doors). worldGen is NOT bumped — nav bakes the
+                // all-open premise ([game/door.h]) and a toggle cannot stale it.
+                mark_diffusion_dirty(diffusionDriver,
+                                     stack.layer(activeLayer).grid(),
+                                     activeLayer, doors.dirtyCells);
                 doors.dirtyCells.clear();
             }
 

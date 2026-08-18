@@ -1,7 +1,9 @@
 #include "game/light_bake.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 #include "world/macro_grid.h"
@@ -25,6 +27,11 @@ inline std::uint32_t flat_index(int x, int y, int z) {
 } // namespace
 
 std::vector<BakedLight> bake_material_lights(const World& world) {
+    // Печатает собственную стоимость, как [rooms] в main.cpp: этот бейк уже
+    // перепекается на карве прямо в кадре, и он единственный из запечённых без
+    // замера — слепое место планировщика допекания (фаза A,
+    // markoaudit/plans/async-rebake.md §1 №4).
+    const auto t0 = std::chrono::steady_clock::now();
     const MacroGrid& grid = world.grid();
     std::vector<BakedLight> out;
 
@@ -100,6 +107,11 @@ std::vector<BakedLight> bake_material_lights(const World& world) {
             }
         }
     }
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0)
+                          .count();
+    std::fprintf(stderr, "[lights] baked %zu emitters in %.1f ms\n", out.size(),
+                 ms);
     return out;
 }
 

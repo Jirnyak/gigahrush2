@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <bit>     // std::countr_zero, std::popcount — the sweep's bit iteration
+#include <chrono>  // the walkable rebuild prints its own cost, like [rooms]
+#include <cstdio>
 #include <cstring> // std::memcmp, std::memset — the group zero test and the group clear
 
 #include "world/macro_grid.h" // giga::MacroGrid, SubMask
@@ -136,6 +138,10 @@ vec3 gradient_impl(const Field<float>& f, OpenFn isOpen, int x, int y, int z) {
 } // namespace
 
 void diffusion_refresh_walkable(const MacroGrid& grid, DiffusionScratch& scratch) {
+    // Prints its own cost (async-rebake phase A): this rebuild is the full-floor
+    // fallback that per-cell diffusion_mark_cell exists to avoid, and the
+    // scheduler needs its real number, not a guess.
+    const auto t0 = std::chrono::steady_clock::now();
     // assign() rather than resize() so a rebuild starts from all-solid and cannot
     // inherit stale open bits from the previous floor's geometry.
     scratch.open.assign(kOpenWords, 0ull);
@@ -147,6 +153,10 @@ void diffusion_refresh_walkable(const MacroGrid& grid, DiffusionScratch& scratch
                 if (cell_open(grid, x, y, z)) words[i >> 6] |= 1ull << (i & 63);
         }
     scratch.geomDirty = false;
+    const double ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - t0)
+                          .count();
+    std::fprintf(stderr, "[diffuse] walkable bitset rebuilt in %.1f ms\n", ms);
 }
 
 void diffusion_mark_cell(const MacroGrid& grid, DiffusionScratch& scratch, int x, int y,
