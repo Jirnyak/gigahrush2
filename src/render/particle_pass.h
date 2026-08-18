@@ -58,7 +58,7 @@ public:
 
     // Drop `count` fresh particles at the ring cursor (wraps, overwrites the
     // oldest — cosmetics may drop, the frame must not stall). CPU-writes the
-    // host-visible pool the same way WirePass::write_alive does.
+    // host-visible pool the same way VerletPass::write_wire_alive does.
     void spawn(const GpuParticle* items, std::uint32_t count);
 
     // The sim step. Record OUTSIDE the render pass (compute), before draw.

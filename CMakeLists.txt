@@ -339,25 +339,15 @@ add_custom_command(
     COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
 
-# GPU verlet for hanging wires (antourage ghost chains).
+# GPU verlet for antourage: wires AND cloth, one shader (chain = lattice, H=1).
 add_custom_command(
-    OUTPUT ${_giga_spv_dir}/wire_sim.comp.spv
+    OUTPUT ${_giga_spv_dir}/verlet_sim.comp.spv
     COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
-        ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
-        -o ${_giga_spv_dir}/wire_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
-    COMMENT "glslc wire_sim.comp -> wire_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/wire_sim.comp.spv)
-
-# GPU verlet for 2D cloth sheets (antourage curtains/tarps).
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/cloth_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
-        ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
-        -o ${_giga_spv_dir}/cloth_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
-    COMMENT "glslc cloth_sim.comp -> cloth_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/cloth_sim.comp.spv)
+        ${CMAKE_SOURCE_DIR}/shaders/verlet_sim.comp
+        -o ${_giga_spv_dir}/verlet_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/verlet_sim.comp
+    COMMENT "glslc verlet_sim.comp -> verlet_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/verlet_sim.comp.spv)
 
 # GPU sim for the unified particle pool (blood/dust/sparks/drips).
 add_custom_command(
@@ -717,7 +707,7 @@ if(GIGA_BUILD_TESTS)
     # (2975 -> 2966 on floor 0) and the rest sit against the matter they touch.
     # 223840 -> 223852 (+12) on 2026-08-05: death is a STATE, not an event —
     # FallClock keeps a severed chain/sheet simulated and drawn for 8 s so it
-    # drops and lands (wire_sim/cloth_sim now collide against the VoxelMirror,
+    # drops and lands (the antourage verlet_sim collides against the VoxelMirror,
     # the same SSBO particle_sim uses) before it stops being drawn. The test
     # pins the three states, including the one the first draft got wrong: a
     # spent clock must STAY spent, or the piece restarts its fall every frame.
@@ -1088,7 +1078,12 @@ if(GIGA_BUILD_TESTS)
     # 233695 -> 235711 (+2016) там же: лампы лестниц padic спрашивают реальную
     # нижнюю грань потолка-бутерброда (sz=6), а не подслой 0 — 336 -> 1008 штук,
     # и циклы suite_props_game по ним стали длиннее.
-        PASS_REGULAR_EXPRESSION "game_test: 235711 checks, 0 failures")
+    # 235711 -> 235756 (+45) on 2026-08-19: слияние лампового пина с
+    # suite_walkbits (async-rebake фаза B, ветка verlet-walkbits-clean несла
+    # 243672 от до-лампового дерева): бит-идентичность nav через WalkBits
+    # против grid-пути (6), то же для room zones (27), патч==полный ребилд с
+    # явной дивергенцией законов nav/тела на одной выбитой вокселе (12).
+        PASS_REGULAR_EXPRESSION "game_test: 235756 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

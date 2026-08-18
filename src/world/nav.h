@@ -26,6 +26,8 @@
 
 namespace giga {
 class MacroGrid;
+struct SubMask;   // world/macro_grid.h — patch_walk_bit reads one live mask
+struct WalkBits;  // world/walk_bits.h — the bake's 256 KiB world snapshot
 
 namespace nav {
 
@@ -51,10 +53,40 @@ struct CoarseGraph {
     std::uint8_t next[kNodes][kNodes];
 };
 
-// Full bake: 64 wrapped BFS through the grid (one per node, parallel across
-// nodes) -> edge weights; then Floyd-Warshall -> all-pairs dist + next-hop.
-// A macro cell is coarse-walkable when it is not fully solid (mask not full);
-// each node is represented by its shaft-centre air cell. Bake-time only.
+// --- The walkability oracle --------------------------------------------------
+//
+// Every read the nav bakes make of the world goes through ONE per-cell law:
+// a macro cell is coarse-walkable unless its mask is FULLY solid. So the bakes
+// take a WalkBits oracle ([world/walk_bits.h]) instead of the grid, and the
+// grid entry points below are one predicate sweep + a delegation. This is what
+// makes the bake snapshottable: an async worker holds a 256 KiB copy of the
+// bits, never a pointer into the live grid (async-rebake plan, phase B->C).
+// BIT-IDENTICAL by construction — the predicate is evaluated once per cell
+// instead of once per BFS visit, on the same grid state, so every BFS sees the
+// same answers in the same order (pinned by suite_walkbits.inl).
+
+// The nav walkability law, spelled once: SubMask -> open bit. The bulk build
+// and the O(1) patch below both call THIS, so the two cannot drift.
+bool cell_open(const SubMask& m);
+
+// Fill `out` with the nav open-set of `grid`: one `cell_open` per cell.
+void build_walk_bits(const MacroGrid& grid, WalkBits& out);
+
+// O(1) re-derive of one cell's bit from its LIVE mask — the dirty-cell drain
+// (CarveResult::dirtyCells, [world/destruct.h]) calls this per carved cell to
+// keep a resident open-set current between full bakes. `cell` is the same
+// macro_index the drain already holds.
+void patch_walk_bit(WalkBits& bits, std::size_t cell, const SubMask& m);
+
+// Full bake: 64 wrapped BFS through the open-set (one per node, parallel
+// across nodes) -> edge weights; then Floyd-Warshall -> all-pairs dist +
+// next-hop. Each node is represented by its shaft-centre air cell. Bake-time
+// only. `open` must be built (WalkBits::built()).
+void bake_coarse(const WalkBits& open, CoarseGraph& out);
+
+// Grid convenience: build the open-set, delegate. Kept as THE entry point for
+// synchronous callers so none of them changes; the async scheduler calls the
+// oracle overload on its snapshot instead.
 void bake_coarse(const MacroGrid& grid, CoarseGraph& out);
 
 // O(1) tick query: the next node to move to from `from` heading toward `to`.
@@ -114,11 +146,14 @@ struct FineNav {
     }
 };
 
-// Bake all 64 flow fields from the floor geometry: one wrapped BFS per node,
+// Bake all 64 flow fields from the open-set: one wrapped BFS per node,
 // parallel ACROSS nodes — each owns a disjoint 2M-cell slice, so the run is
 // race-free and bit-identical regardless of scheduling. Allocates ~128 MiB into
 // out.flow; then a single deterministic multi-source BFS fills the 2 MiB
 // out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
+void bake_fine(const WalkBits& open, FineNav& out);
+
+// Grid convenience, same shape as bake_coarse: one predicate sweep + delegate.
 void bake_fine(const MacroGrid& grid, FineNav& out);
 
 // --- No partial rebake. Deleted 2026-08-06, with LazyFieldRebaker -----------

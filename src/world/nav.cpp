@@ -7,15 +7,20 @@
 #include "core/jobs.h"
 #include "world/macro_grid.h"
 #include "world/types.h"
+#include "world/walk_bits.h"
 
 namespace giga::nav {
 namespace {
 
-// Coarse walkability: an agent can occupy a macro cell unless it is FULLY solid.
-// floor_gen carves shafts/lobbies/rooms as air and leaves walls/slabs/pads
-// fully solid, so this cleanly separates the traversable void from structure.
-inline bool blocked(const MacroGrid& g, int x, int y, int z) {
-    return g.mask(x, y, z).full();
+// Coarse walkability during a bake: one bit of the WalkBits oracle. The LAW
+// (an agent can occupy a macro cell unless it is FULLY solid — floor_gen
+// carves shafts/lobbies/rooms as air and leaves walls/slabs/pads fully solid,
+// so this cleanly separates the traversable void from structure) lives in
+// `cell_open` below; here the answer is already precomputed, which is both
+// what makes the bake snapshottable (the worker never touches the grid) and
+// cheaper: one bit test per BFS visit instead of a word-loop over the mask.
+inline bool blocked(const WalkBits& b, int x, int y, int z) {
+    return !b.at(macro_index(x, y, z));
 }
 
 // The macro cell that represents a lattice node for pathing: its shaft centre,
@@ -32,7 +37,7 @@ inline void node_cell(int id, int& cx, int& cy, int& cz) {
 // geodesic distance to each of its 6 lattice neighbours. Writes ONLY
 // out.edge[id][*] — the per-node isolation that makes the parallel bake
 // race-free and deterministic (core/jobs.h contract).
-void bake_node(const MacroGrid& g, int id, CoarseGraph& out) {
+void bake_node(const WalkBits& g, int id, CoarseGraph& out) {
     int sx, sy, sz;
     node_cell(id, sx, sy, sz);
     // A node whose own cell is blocked (should not happen with the carved
@@ -89,7 +94,7 @@ void bake_node(const MacroGrid& g, int id, CoarseGraph& out) {
 // kMacroCells-byte region of FineNav::flow, PRE-CLEARED to kFlowNone by the
 // caller — so kFlowNone doubles as the "unvisited" marker and walls (never
 // visited) correctly keep it. Writes only `slice`: race-free across nodes.
-void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
+void bake_fine_node(const WalkBits& g, int id, std::uint8_t* slice) {
     int sx, sy, sz;
     node_cell(id, sx, sy, sz);
     if (blocked(g, sx, sy, sz)) return; // no field (carve guarantees it is air)
@@ -130,7 +135,7 @@ void bake_fine_node(const MacroGrid& g, int id, std::uint8_t* slice) {
 // reachable from its anchor (same walkability as the flow fields). `nearest` is
 // PRE-CLEARED to kFlowNone by the caller, so walls (never claimed) stay kFlowNone
 // and it doubles as the "unvisited" marker. Single-threaded => bit-identical.
-void bake_nearest(const MacroGrid& g, std::uint8_t* nearest) {
+void bake_nearest(const WalkBits& g, std::uint8_t* nearest) {
     std::vector<int> q;
     q.reserve(1u << 16);
     const int W = kMacroDim;
@@ -166,10 +171,34 @@ void bake_nearest(const MacroGrid& g, std::uint8_t* nearest) {
 
 } // namespace
 
+// The one walkability law, in one place. `build_walk_bits` and
+// `patch_walk_bit` both route through here, so the bulk sweep and the O(1)
+// dirty-cell drain can never disagree about what a wall is.
+bool cell_open(const SubMask& m) { return !m.full(); }
+
+void build_walk_bits(const MacroGrid& grid, WalkBits& out) {
+    out.build([&grid](int x, int y, int z) {
+        return cell_open(grid.mask(x, y, z));
+    });
+}
+
+void patch_walk_bit(WalkBits& bits, std::size_t cell, const SubMask& m) {
+    bits.set(cell, cell_open(m));
+}
+
 void bake_coarse(const MacroGrid& grid, CoarseGraph& out) {
+    // One predicate sweep, then the oracle bake — the grid is read exactly
+    // once per cell and never again, which is the property phase C's snapshot
+    // depends on.
+    WalkBits open;
+    build_walk_bits(grid, open);
+    bake_coarse(open, out);
+}
+
+void bake_coarse(const WalkBits& open, CoarseGraph& out) {
     // 64 independent per-node BFS, fanned across the hardware threads. Each
     // writes a disjoint edge row -> race-free + deterministic.
-    parallel_for(kNodes, [&grid, &out](int id) { bake_node(grid, id, out); });
+    parallel_for(kNodes, [&open, &out](int id) { bake_node(open, id, out); });
 
     // Seed all-pairs from the cyclic-lattice edges, then Floyd-Warshall. 64
     // nodes -> 64^3 ~= 260k ops: instant, single-threaded (so deterministic).
@@ -203,21 +232,27 @@ void bake_coarse(const MacroGrid& grid, CoarseGraph& out) {
 }
 
 void bake_fine(const MacroGrid& grid, FineNav& out) {
+    WalkBits open;
+    build_walk_bits(grid, open);
+    bake_fine(open, out);
+}
+
+void bake_fine(const WalkBits& open, FineNav& out) {
     // Pre-clear once, sequentially: every slice starts kFlowNone, which each
     // node's BFS then uses as its "unvisited" marker.
     out.flow.assign(static_cast<std::size_t>(kNodes) * kMacroCells, kFlowNone);
     std::uint8_t* base = out.flow.data();
     // 64 independent per-node floods, fanned across the hardware threads. Each
     // writes a disjoint kMacroCells slice -> race-free + deterministic.
-    parallel_for(kNodes, [&grid, base](int id) {
-        bake_fine_node(grid, id,
+    parallel_for(kNodes, [&open, base](int id) {
+        bake_fine_node(open, id,
                        base + static_cast<std::size_t>(id) * kMacroCells);
     });
 
     // Nearest-node field: pre-clear to kFlowNone (walls/void stay so), then one
     // deterministic multi-source BFS labels every walkable cell with its anchor.
     out.nearest.assign(kMacroCells, kFlowNone);
-    bake_nearest(grid, out.nearest.data());
+    bake_nearest(open, out.nearest.data());
 }
 
 std::uint8_t route_step(const CoarseGraph& coarse, const FineNav& fine,
