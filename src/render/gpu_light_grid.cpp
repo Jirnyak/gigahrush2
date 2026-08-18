@@ -66,7 +66,13 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
         return false;
     }
 
-    std::fprintf(stderr, "[light-grid] initialized successfully (32x16x32 grid, max 256 lights)\n");
+    // Числа — из констант, не из прозы: старая строка врала «32x16x32, 256
+    // lights» ещё долго после переезда сетки на весь тор.
+    std::fprintf(stderr,
+                 "[light-grid] initialized (%ux%ux%u grid, cell %u B = %u id slots, "
+                 "upload cap %u lights)\n",
+                 kGridDimX, kGridDimY, kGridDimZ, kGridCellBytes, kGridCellSlots,
+                 kMaxPointLights);
     return true;
 }
 
@@ -80,7 +86,8 @@ bool GpuLightGrid::create_buffers() noexcept {
     lightMapped_ = lightBuf_.mapped;
     std::memset(lightMapped_, 0, static_cast<std::size_t>(kLightBufSize));
 
-    // 64³ cells (весь тор, 4 м клетка) * 128 B LightGridCell = 32 MiB device-local
+    // 64³ клеток (весь тор, 4 м клетка) × kGridCellBytes: 262144 × 256 Б =
+    // 64 МиБ device-local («гроши» — решение владельца, light-visibility-bake.md)
     constexpr VkDeviceSize kGridBufSize = kTotalGridCells * sizeof(GpuGridCell);
     std::vector<uint8_t> zeroGrid(static_cast<std::size_t>(kGridBufSize), 0);
     if (!gridSSBO_.create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
@@ -276,6 +283,23 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
                    : kMaxPointLights;
     }();
     const uint32_t uploadCount = std::min(stagingLightCount_, kBudgetCap);
+
+    // Переливы клеток светосетки: light_grid.comp атомарно копит в слове 1
+    // заголовка число клеток, где достижимых ламп оказалось больше
+    // kGridCellSlots (хвост вытеснен по вкладу top-K). Буфер host-visible и
+    // persistent-mapped — читаем значение ПРОШЛОГО завершённого кадра до
+    // перезаписи заголовка (свежее ещё пишется GPU; для счётчика диагностики
+    // лаг в кадр честен) и печатаем раз в кадр при ненулевом: перелив теперь
+    // виден, как overflowDropped_, — молча не режем (закон S11).
+    std::memcpy(&cellOverflow_, static_cast<const char*>(lightMapped_) + sizeof(uint32_t),
+                sizeof(cellOverflow_));
+    if (cellOverflow_ != 0) {
+        std::fprintf(stderr,
+                     "[light-grid] cell overflow: %u cells saw > %u reachable "
+                     "lights (kept top-%u by contribution)\n",
+                     cellOverflow_, kGridCellSlots, kGridCellSlots);
+    }
+
     uint32_t header[4] = {uploadCount, 0, 0, 0};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
@@ -299,8 +323,8 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // binned at all, so the fog goes dark exactly where it should glow. Sending the
     // period makes the shader's period unfalsifiable by construction — the same
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
-    push.params = vec4{timeSec, 31.0f, static_cast<float>(uploadCount),
-                       kWorldExtent};
+    push.params = vec4{timeSec, static_cast<float>(kGridCellSlots),
+                       static_cast<float>(uploadCount), kWorldExtent};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);

@@ -698,9 +698,9 @@ _giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]256[.][0-9]*[^A-Za-z0-9_]"
     "world-extent literal 256.x is banned in shaders — derive it: float(GIGA_MACRO_DIM) * GIGA_CELL_SIZE.")
 # GIGA_-prefixed FEATURE switches (GIGA_ALBEDO_ARRAY, GIGA_SHADOW_SET,
 # GIGA_VOLUMETRIC_GRID_BINDINGS) are an existing in-shader convention and stay
-# legal; only the five grid macros owned by CMakeLists may not be shadowed.
-_giga_scan(GIGA_SHADER_FILES "#[ \t]*define[ \t]+GIGA_(MACRO_DIM|SUB_DIM|CELL_SIZE|LIGHT_GRID_DIM|LIGHT_GRID_CELL)"
-    "defining this grid macro inside a shader is banned — it would silently shadow the -D value CMakeLists parsed out of the C++ headers. The build system is the only writer of the five GIGA_ grid macros.")
+# legal; only the six grid macros owned by CMakeLists may not be shadowed.
+_giga_scan(GIGA_SHADER_FILES "#[ \t]*define[ \t]+GIGA_(MACRO_DIM|SUB_DIM|CELL_SIZE|LIGHT_GRID_DIM|LIGHT_GRID_CELL|LIGHT_CELL_BYTES)"
+    "defining this grid macro inside a shader is banned — it would silently shadow the -D value CMakeLists parsed out of the C++ headers. The build system is the only writer of the six GIGA_ grid macros.")
 
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------

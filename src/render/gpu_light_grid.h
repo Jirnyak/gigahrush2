@@ -45,20 +45,31 @@ struct alignas(16) GpuPointLight {
 static_assert(sizeof(GpuPointLight) == 48, "GpuPointLight std430 layout must be 48 bytes");
 
 // Matches LightGridCell in shaders/light_grid.comp and shaders/volumetric_fog.glsl (std430).
-// Клетка = ровно 32 слова = 128 байт (степень двойки): счётчик + 31 индекс.
-// Перелив вытесняется по вкладу в клетку (top-K, light_grid.comp), но МОЛЧА.
+// КОРНЕВАЯ константа раскладки клетки — БАЙТЫ, степень двойки (решение
+// владельца, markoaudit/plans/light-visibility-bake.md §ответы: «клетка 256 Б,
+// 64 МиБ сетки — гроши»; было 128 Б / 31 id, и плотные залы блейма теряли
+// хвост списка). Всё остальное ВЫВОДИТСЯ: слоты = байты/слово − счётчик;
+// в GLSL число едет как -DGIGA_LIGHT_CELL_BYTES (CMakeLists парсит kGridCellBytes
+// отсюда, правило 9 гейта запрещает литерал в шейдере). Перелив вытесняется по
+// вкладу в клетку (top-K по d²/r², light_grid.comp) и СЧИТАЕТСЯ: шейдер
+// атомарно копит переливы в заголовке светобуфера, update_and_dispatch читает
+// их и печатает раз в кадр при ненулевом — молча не режем (закон S11).
+static constexpr uint32_t kGridCellBytes = 256;
+static constexpr uint32_t kGridCellSlots =
+    kGridCellBytes / sizeof(uint32_t) - 1; // 63: счётчик + 63 индекса
 struct alignas(16) GpuGridCell {
     uint32_t count = 0;
-    uint32_t lightIndices[31]{};
+    uint32_t lightIndices[kGridCellSlots]{};
 };
-static_assert(sizeof(GpuGridCell) == 128, "GpuGridCell std430 layout must be 128 bytes");
+static_assert(sizeof(GpuGridCell) == kGridCellBytes,
+              "GpuGridCell std430 layout must equal kGridCellBytes");
 
 // Matches GridPush in shaders/light_grid.comp
 struct alignas(16) GridPush {
     vec4 camPos;  // xyz = camera world position, w = max range (48.0m)
     vec4 gridMin; // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
     vec4 gridExt; // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
-    vec4 params;  // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
+    vec4 params;  // x = uTime, y = maxLightsPerCell (kGridCellSlots), z = activeLightCount, w = wrap period
 };
 static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
 #if defined(_MSC_VER)
@@ -102,6 +113,9 @@ public:
 
     uint32_t active_light_count() const noexcept { return stagingLightCount_; }
     uint32_t overflow_dropped() const noexcept { return overflowDropped_; }
+    // Клетки, перелившиеся В ПРОШЛОМ снятом кадре (атомарный счёт в
+    // light_grid.comp, читается из заголовка светобуфера кадром позже).
+    uint32_t cell_overflow() const noexcept { return cellOverflow_; }
 
 private:
     bool create_buffers() noexcept;
@@ -129,6 +143,7 @@ private:
     std::vector<std::pair<float, uint16_t>> sortKeys_; // distSq, index
     uint32_t stagingLightCount_ = 0;
     uint32_t overflowDropped_ = 0;
+    uint32_t cellOverflow_ = 0;
 };
 #if defined(_MSC_VER)
 #pragma warning(pop)

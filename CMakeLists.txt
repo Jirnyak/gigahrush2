@@ -287,12 +287,20 @@ if(NOT _giga_lgrid_h MATCHES "kGridCellMeters = ([0-9.]+)f")
     message(FATAL_ERROR "cannot parse kGridCellMeters out of src/render/gpu_light_grid.h.")
 endif()
 set(_giga_lgrid_cell ${CMAKE_MATCH_1})
+# Байты клетки светосетки — КОРНЕВАЯ константа раскладки LightGridCell
+# (решение владельца: 256 Б = счётчик + 63 id, light-visibility-bake.md).
+# Шейдеры выводят число слотов сами: GIGA_LIGHT_CELL_BYTES / 4 - 1.
+if(NOT _giga_lgrid_h MATCHES "kGridCellBytes = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kGridCellBytes out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_cell_bytes ${CMAKE_MATCH_1})
 set(_giga_shader_defs
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
     -DGIGA_CELL_SIZE=${_giga_cell_size}
     -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
-    -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell})
+    -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
+    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes})
 # Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
 # above go stale while the build stays green.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

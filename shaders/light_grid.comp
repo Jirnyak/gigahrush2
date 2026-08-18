@@ -11,14 +11,22 @@ struct PointLight {
                          // конус применяют потребители (surface_light / fog march).
 };
 
+// Ёмкость клетки ВЫВОДИТСЯ из байтов клетки: -DGIGA_LIGHT_CELL_BYTES из
+// CMakeLists <- gpu_light_grid.h kGridCellBytes (правило 9 гейта — литералам
+// сетки в шейдерах нельзя). Слоты = байты/слово − счётчик.
+const uint kCellSlots = uint(GIGA_LIGHT_CELL_BYTES) / 4u - 1u;
+
 struct LightGridCell {
-    uint count;            // number of intersecting lights (max 31)
-    uint lightIndices[31]; // indices into uPointLights array
+    uint count;                    // number of intersecting lights (max kCellSlots)
+    uint lightIndices[kCellSlots]; // indices into uPointLights array
 };
 
-layout(set = 0, binding = 0, std430) readonly buffer PointLightBuffer {
+// НЕ readonly: слово uCellOverflow — атомарный счётчик клеток, переливших
+// kCellSlots за кадр; CPU (update_and_dispatch) читает его кадром позже и
+// печатает — перелив больше не молчит (закон S11).
+layout(set = 0, binding = 0, std430) buffer PointLightBuffer {
     uint uPointLightCount;
-    uint uReserved0;
+    uint uCellOverflow;
     uint uReserved1;
     uint uReserved2;
     PointLight uPointLights[];
@@ -32,7 +40,7 @@ layout(push_constant) uniform GridPush {
     vec4 camPos;    // xyz = camera world position, w = max range (48.0m)
     vec4 gridMin;   // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
     vec4 gridExt;   // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
-    vec4 params;    // x = uTime, y = maxLightsPerCell (15), z = activeLightCount,
+    vec4 params;    // x = uTime, y = maxLightsPerCell (kCellSlots), z = activeLightCount,
                     // w = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
 } pc;
 
@@ -84,11 +92,14 @@ void main() {
 
     uint activeCount = min(uPointLightCount, uint(pc.params.z));
     uint foundCount = 0u;
-    uint indices[31];
-    float scores[31];
+    // Все достижимые кандидаты клетки, включая вытесненных: > kCellSlots в
+    // конце = перелив, о котором обязаны сказать вслух.
+    uint candidateCount = 0u;
+    uint indices[kCellSlots];
+    float scores[kCellSlots];
     // Худший слот кэшируется и пересчитывается ТОЛЬКО после замены — скан
-    // всех 31 на каждого кандидата давал 26 мс кадра в плотном поле ламп
-    // (блейм, ~200 кандидатов на клетку; замер 2026-08-17).
+    // всех слотов на каждого кандидата давал 26 мс кадра в плотном поле ламп
+    // (блейм, ~200 кандидатов на клетку; замер 2026-08-17 ещё на 31 слоте).
     uint worst = 0u;
     float worstScore = -1.0;
 
@@ -113,9 +124,10 @@ void main() {
                 dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
 
             if (dSq > radius * radius) continue;
+            candidateCount++;
             float score = dSq / (radius * radius); // 0 = внутри клетки, 1 = едва касается
 
-            if (foundCount < 31u) {
+            if (foundCount < kCellSlots) {
                 indices[foundCount] = base + j;
                 scores[foundCount] = score;
                 if (score > worstScore) { worstScore = score; worst = foundCount; }
@@ -127,7 +139,7 @@ void main() {
                 indices[worst] = base + j;
                 scores[worst] = score;
                 worstScore = -1.0;
-                for (uint k = 0u; k < 31u; ++k) {
+                for (uint k = 0u; k < kCellSlots; ++k) {
                     if (scores[k] > worstScore) { worstScore = scores[k]; worst = k; }
                 }
             }
@@ -152,9 +164,15 @@ void main() {
 
     LightGridCell cell;
     cell.count = foundCount;
-    for (uint k = 0u; k < 31u; ++k) {
+    for (uint k = 0u; k < kCellSlots; ++k) {
         cell.lightIndices[k] = (k < foundCount) ? indices[k] : 0u;
     }
 
     uGridCells[flatCellIndex] = cell;
+
+    // Перелив — вслух: клетка видела больше достижимых ламп, чем слотов, и
+    // хвост вытеснен по вкладу. Одно слово на клетку, читает CPU кадром позже.
+    if (candidateCount > kCellSlots) {
+        atomicAdd(uCellOverflow, 1u);
+    }
 }

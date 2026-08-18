@@ -20,9 +20,14 @@ struct PointLight {
                          // источники живут вместе по построению.
 };
 
+// Ёмкость клетки выводится из байтов клетки: -DGIGA_LIGHT_CELL_BYTES из
+// CMakeLists <- gpu_light_grid.h kGridCellBytes (правило 9 — литералам сетки
+// в шейдерах нельзя). Слоты = байты/слово − счётчик.
+const uint kLightCellSlots = uint(GIGA_LIGHT_CELL_BYTES) / 4u - 1u;
+
 struct LightGridCell {
-    uint count;            // number of intersecting lights (max 31)
-    uint lightIndices[31]; // indices into uPointLights array
+    uint count;                         // intersecting lights (max kLightCellSlots)
+    uint lightIndices[kLightCellSlots]; // indices into uPointLights array
 };
 
 // Сетка света = ВЕСЬ тор: 64³ клеток по 4 м = 256 м = kWorldExtent, привязана к
@@ -37,7 +42,7 @@ const float kLightGridCell = GIGA_LIGHT_GRID_CELL;
 #ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
 layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
     uint uPointLightCount;
-    uint uReserved0;
+    uint uCellOverflow; // атомарный счёт переливших клеток пишет light_grid.comp
     uint uReserved1;
     uint uReserved2;
     PointLight uPointLights[];
@@ -132,10 +137,10 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
 
     uint budget = camDist < 0.25 * fogStart ? 8u : (camDist < fogStart ? 4u : 2u);
 
-    // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит все
-    // 128 Б клетки, здесь читаются только count и первые индексы бюджета.
+    // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
+    // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
     uint cellIdx = light_cell_index(P);
-    uint cellCount = min(uGridCells[cellIdx].count, 31u);
+    uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
     for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
         PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
 
