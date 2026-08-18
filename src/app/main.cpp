@@ -184,6 +184,10 @@ static std::vector<game::BakedLight> g_bakedFloorLights;
 // сброс на входе этажа приедет вместе с планировщиком.
 static std::uint64_t g_worldGen = 0;
 
+// Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
+static const float* g_wallRing = nullptr;
+static unsigned g_wallSeen = 0;
+
 // Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
 // диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
 // которого было НОЛЬ вызывающих: опасность текла сквозь закрытые двери и не
@@ -2706,6 +2710,17 @@ int main(int argc, char** argv) {
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
+        // Wall-clock гистограмма кадра для [gpu-shot]-свода: GPU-таймер не
+        // видит CPU-кость (сим, толпа, сбор света, презент). Пишем последние
+        // 256 кадров кольцом; свод печатает медиану/пик на выходе --shot.
+        {
+            static float wallRing[256];
+            static unsigned wallHead = 0;
+            wallRing[wallHead & 255u] = frameDt * 1000.0f;
+            ++wallHead;
+            g_wallRing = wallRing;
+            g_wallSeen = wallHead;
+        }
 
         // A console teleport is executed HERE, at the top of a frame, never in
         // the ImGui callback that requested it: mid-draw the frame's layer and
@@ -7254,6 +7269,42 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
+                    // Полный пер-пассовый расклад GPU-кадра в stderr — HUD
+                    // печатает только 5 пассов из 9 и недоступен харнессу.
+                    // Медиана 31 кадра + пик, как в HUD ([gpu_timer.h]); это
+                    // ЕДИНСТВЕННЫЙ машинно-снимаемый замер кадра — wall-clock
+                    // FPS прибит FIFO-презентом и лжёт ниже всинка.
+                    if (renderer.timer.supported()) {
+                        static const char* kPassName[] = {
+                            "lightgrid", "voxelflush", "cull", "sim",
+                            "world",     "bodies",     "props", "drawphys",
+                            "hud"};
+                        for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p)
+                            std::fprintf(
+                                stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f\n",
+                                kPassName[p],
+                                renderer.timer.pass_ms(
+                                    static_cast<gpu::GpuPass>(p)),
+                                renderer.timer.pass_ms_max(
+                                    static_cast<gpu::GpuPass>(p)));
+                        std::fprintf(stderr,
+                                     "[gpu-shot] frame      %8.3f ms  peak %8.3f"
+                                     "  drop %u\n",
+                                     renderer.timer.frame_ms(),
+                                     renderer.timer.frame_ms_max(),
+                                     renderer.timer.dropped());
+                    }
+                    if (g_wallRing && g_wallSeen >= 64) {
+                        float tmp[256];
+                        const unsigned n = g_wallSeen < 256u ? g_wallSeen : 256u;
+                        for (unsigned i = 0; i < n; ++i) tmp[i] = g_wallRing[i];
+                        std::sort(tmp, tmp + n);
+                        std::fprintf(stderr,
+                                     "[cpu-shot] wall frame median %.3f ms  p90 "
+                                     "%.3f  peak %.3f (over %u frames)\n",
+                                     tmp[n / 2], tmp[(n * 9) / 10], tmp[n - 1],
+                                     n);
+                    }
                     if (shotAction == "mag" && reg.valid(player)) {
                         const game::PlayerRanged* pr =
                             reg.try_get<game::PlayerRanged>(player);
