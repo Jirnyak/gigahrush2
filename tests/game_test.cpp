@@ -138,6 +138,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
 #include "suite_walkbits.inl"
+#include "suite_shotsub.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -5326,6 +5327,7 @@ int main() {
     test_lob_isotropy();
     test_grenade();
     test_ricochet();
+    test_shot_carves_updown();
     test_needs_all();
     test_noise_all();
     test_packs_all();
