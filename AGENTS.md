@@ -10,6 +10,8 @@
 > 6. [CANON.md](CANON.md) (Канон систем S1–S11 — эталон, относительно которого судятся
 >    расхождения; записан со слов владельца 2026-08-17/19. Любой код сверяется с ним;
 >    решения по эпикам — в markoaudit/plans/)
+> 7. [CONTINUE.md](CONTINUE.md) (Промт-эстафета большой чистки: метод, состояние,
+>    очередь, посадочные приёмы — вход для продолжающих сессий)
 
 > **GRAF IRNYAK (KLAUS SCHWAB) ARCHITECTURAL MANIFESTO:**
 > - **Feature without live gameplay proof = DECLINED.**
