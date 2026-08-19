@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,12 @@ void RebakeScheduler::join_worker() {
     running_ = false;
 }
 
+void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
+                                      std::uint32_t slots) {
+    lampsLive_.assign(lamps, lamps + n);
+    lightSlots_ = slots;
+}
+
 void RebakeScheduler::discard_pending() {
     // ОСВОБОДИТЬ, не clear() — разница в 128 MiB, тот же довод, что был у
     // AsyncBake::start(): clear() хранит capacity мёртвыми байтами ровно в
@@ -42,9 +49,12 @@ void RebakeScheduler::discard_pending() {
     std::vector<std::uint8_t>().swap(pendingFine_.flow);
     std::vector<std::uint8_t>().swap(pendingFine_.nearest);
     pendingRooms_ = RoomZones{};
+    pendingLight_ = LightVisBake{};
+    lightDone_.store(false, std::memory_order_relaxed);
     roomsDone_.store(false, std::memory_order_relaxed);
     coarseDone_.store(false, std::memory_order_relaxed);
     exited_.store(false, std::memory_order_relaxed);
+    lightSwapped_ = false;
     roomsSwapped_ = false;
     coarseSwapped_ = false;
 }
@@ -67,12 +77,13 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     floorNumber_ = floorNumber;
     rooms_ = &rooms;
 
-    // Оба живых битсета — с текущей геометрии, на всех ядрах (build сам
+    // Все три живых битсета — с текущей геометрии, на всех ядрах (build сам
     // parallel_for). Двери к этому моменту все открыты (door_build зовётся до
     // begin_floor_nav и оставляет Open), так что премиса all-open впекается в
     // битсеты по построению — и patch_carved_cells её дальше хранит.
     nav::build_walk_bits(grid, navBits_);
     build_body_walk_bits(grid, bodyBits_);
+    build_light_pass_bits(grid, lightBits_);
 
     // Rooms — синхронно, текущая семантика: поля комнат целы до первого тика,
     // который мог бы их читать, и второй истории владения не существует.
@@ -80,6 +91,31 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         const auto t0 = std::chrono::steady_clock::now();
         bake_room_zones(bodyBits_, kind, floorNumber, rooms);
         roomsMs_ = ms_between(t0, std::chrono::steady_clock::now());
+    }
+
+    // Свет — СИНХРОННО на всех ядрах (решение владельца: хитч Fresh 0.1–0.3 с
+    // принят; альтернатива «войти со всеми грязными клетками» стоила бы
+    // десятки мс КАЖДОГО кадра первые секунды — вывод в плане §4). Цена
+    // печатается вслух — правило «бейк без замера прячет свою регрессию».
+    {
+        bake_light_visibility(lightBits_, lampsLive_.data(), lampsLive_.size(),
+                              lightSlots_, lightVis_, /*threads=*/0, nullptr);
+        lightGen_ = worldGen;
+        lightSwapPending_ = true;
+        std::fprintf(stderr,
+                     "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
+                     "(max %u/cell, overflow %u), R_max %.1f m, %.0f ms sync\n",
+                     floorNumber, lightVis_.lampCount, lightVis_.litCells,
+                     lightVis_.maxPerCell, lightVis_.overflowCells,
+                     lightVis_.rMaxM, lightVis_.bakeMs);
+        // Пин видимости (образец GIGA_VERLET_PIN): хэш содержимого клеток
+        // после Fresh-бейка; два прогона одного сида обязаны совпасть.
+        static const bool kPin = std::getenv("GIGA_LIGHT_VIS_PIN") != nullptr;
+        if (kPin)
+            std::fprintf(stderr, "[lightvis-pin] floor %d fnv=%016llx\n",
+                         floorNumber,
+                         static_cast<unsigned long long>(
+                             light_vis_fnv(lightVis_)));
     }
 
     // Живой nav-граф освободить сразу: до свапа ready() == false и толпа
@@ -120,11 +156,14 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
 
-    // Снапшот обоих битсетов по значению: 2×256 KiB, ~50 мкс. Дальше живые
-    // битсеты могут патчиться карвами сколько угодно — воркер их не видит,
-    // а расхождение честно останется как bakedGen < worldGen после свапа.
+    // Снапшот всех трёх битсетов по значению: 3×256 KiB, ~75 мкс, плюс копия
+    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ). Дальше живые битсеты могут
+    // патчиться карвами сколько угодно — воркер их не видит, а расхождение
+    // честно останется как bakedGen < worldGen после свапа.
     snapNav_.words = navBits_.words;
     snapBody_.words = bodyBits_.words;
+    snapLight_.words = lightBits_.words;
+    lampsSnap_ = lampsLive_;
     snapGen_ = worldGen;
     lastStartTick_ = simTick;
 
@@ -135,12 +174,29 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     const int number = floorNumber_;
     worker_ = std::thread([this, threads, kind, number]() {
         using clock = std::chrono::steady_clock;
-        // Порядок — приоритеты плана §3: rooms (~0.1 s) первым, чтобы самая
-        // дешёвая секция свапнулась раньше всех; fine последним.
+        // Порядок — решение владельца (light-visibility-bake.md §финал):
+        // СВЕТ ПЕРВЫМ, перед путями и всем остальным — он заметнее всего, а
+        // его свап ужимает раздутые карвами списки клеток и возвращает кадры
+        // сразу; затем приоритеты плана §3: rooms -> coarse -> fine.
+        const auto tL = clock::now();
+        bake_light_visibility(snapLight_, lampsSnap_.data(),
+                              lampsSnap_.size(), lightSlots_, pendingLight_,
+                              threads, &cancel_);
+        if (!cancel_.load(std::memory_order_relaxed)) {
+            std::fprintf(stderr,
+                         "[lightvis] floor %d gen %llu rebaked: %u lamps -> "
+                         "%u lit cells (overflow %u) in %.0f ms @ %d threads\n",
+                         number, static_cast<unsigned long long>(snapGen_),
+                         pendingLight_.lampCount, pendingLight_.litCells,
+                         pendingLight_.overflowCells, pendingLight_.bakeMs,
+                         threads);
+            lightDone_.store(true, std::memory_order_release);
+        }
         const auto t0 = clock::now();
         bake_room_zones(snapBody_, kind, number, pendingRooms_, threads,
                         &cancel_);
         const auto t1 = clock::now();
+        (void)tL;
         if (!cancel_.load(std::memory_order_relaxed)) {
             roomsMs_ = ms_between(t0, t1);
             roomsDone_.store(true, std::memory_order_release);
@@ -210,7 +266,15 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 mode_ = Mode::Idle;
                 return true; // вызывающий делает finish_floor_nav
             }
-        } else { // Mode::Rebake — посекционно: rooms -> coarse -> fine
+        } else { // Mode::Rebake — посекционно: light -> rooms -> coarse -> fine
+            if (!lightSwapped_ &&
+                lightDone_.load(std::memory_order_acquire)) {
+                lightVis_ = std::move(pendingLight_);
+                pendingLight_ = LightVisBake{};
+                lightGen_ = snapGen_;
+                lightSwapPending_ = true; // вызывающий перезальёт GPU-грид
+                lightSwapped_ = true;
+            }
             if (!roomsSwapped_ &&
                 roomsDone_.load(std::memory_order_acquire)) {
                 *rooms_ = std::move(pendingRooms_);
@@ -272,6 +336,7 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                          std::size_t n) {
     if (!navBits_.built() || !bodyBits_.built()) return;
     const std::vector<SubMask>& masks = grid.masks();
+    const std::vector<CellType>& types = grid.types();
     for (std::size_t i = 0; i < n; ++i) {
         const std::size_t idx = cells[i];
         // Премиса all-open ([game/door.h]): клетка двери в битсетах ВСЕГДА
@@ -281,6 +346,8 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
         const SubMask& m = masks[idx];
         nav::patch_walk_bit(navBits_, idx, m);
         patch_body_walk_bit(bodyBits_, idx, m);
+        if (lightBits_.built())
+            patch_light_pass_bit(lightBits_, idx, m, types[idx]);
     }
 }
 

@@ -29,9 +29,11 @@
 //  * Rebake (фон): живой граф НЕ трогается — потребители ходят по stale до
 //    свапа («секунды устаревания — норма», CANON S9). Воркер печёт на
 //    rebake_threads() потоках (hw/2 — решение владельца) в порядке приоритетов
-//    rooms (~0.1 s) -> coarse (~1.9 s) -> fine (~1.8 s), и step() свапает
-//    каждую секцию ПО МЕРЕ ГОТОВНОСТИ, не дожидаясь хвоста. На Rebake-свапе
-//    finish_floor_nav НЕ зовётся — пересев толпы нужен только на входе этажа.
+//    СВЕТ ПЕРВЫМ (решение владельца, light-visibility-bake.md §финал: свет
+//    заметнее всего, а его ужатие возвращает кадры сразу) -> rooms (~0.1 s)
+//    -> coarse (~1.9 s) -> fine (~1.8 s), и step() свапает каждую секцию ПО
+//    МЕРЕ ГОТОВНОСТИ, не дожидаясь хвоста. На Rebake-свапе finish_floor_nav
+//    НЕ зовётся — пересев толпы нужен только на входе этажа.
 //
 // Отмена: cancel() ставит атомарный флаг, который бейки опрашивают в узловых
 // BFS (~30 мс гранулярность, [world/nav.h]) — join при смене этажа/загрузке
@@ -50,6 +52,7 @@
 
 #include "game/door.h"       // DoorSet — премиса all-open в патче битсетов
 #include "game/floor_spec.h" // FloorKind
+#include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
 #include "game/room_zone.h"  // RoomZones, bake_room_zones, patch_body_walk_bit
 #include "world/nav.h"       // CoarseGraph, FineNav, bake_*, patch_walk_bit
 #include "world/walk_bits.h" // WalkBits — живые битсеты и их снапшоты
@@ -102,14 +105,24 @@ public:
     RebakeScheduler(const RebakeScheduler&) = delete;
     RebakeScheduler& operator=(const RebakeScheduler&) = delete;
 
+    // Статик-таблица света этажа для секции LightVisibility (строка №10
+    // реестра): позиции/радиусы со СТАБИЛЬНЫМИ id = индексам слотов
+    // uPointLights[0..staticCount). Зовётся вызывающим ДО start_fresh (лампы
+    // сеются при постройке этажа) и на рождении ламп после карва (append в
+    // хвост — уже запечённые id не двигаются). slots — ёмкость клетки
+    // светосетки, приходит от рендера (kGridCellSlots).
+    void set_light_table(const LightVisLamp* lamps, std::size_t n,
+                         std::uint32_t slots);
+
     // Вход на этаж. Отменяет и джойнит любой бейк в полёте (мгновенно —
-    // cancel-гранулярность узловая), строит ОБА живых битсета с текущей
+    // cancel-гранулярность узловая), строит ВСЕ ТРИ живых битсета с текущей
     // геометрии (двери к этому моменту все открыты — door_build зовётся ДО,
-    // и премиса all-open впекается в битсеты по построению), печёт rooms
-    // синхронно, освобождает живой nav-граф и запускает Fresh-воркер на всех
-    // ядрах. `rooms` — живой объект вызывающего: сюда же лягут и Rebake-свапы.
-    // `worldGen` — текущее поколение мутаций (на входе этажа вызывающий его
-    // обнуляет — новая летопись).
+    // и премиса all-open впекается в битсеты по построению), печёт rooms и
+    // СВЕТ синхронно (хитч 0.1–0.3 с принят владельцем — план light-visibility
+    // §решения; цена печатается строкой [lightvis]), освобождает живой
+    // nav-граф и запускает Fresh-воркер на всех ядрах. `rooms` — живой объект
+    // вызывающего: сюда же лягут и Rebake-свапы. `worldGen` — текущее
+    // поколение мутаций (на входе этажа вызывающий его обнуляет).
     void start_fresh(const MacroGrid& grid, FloorKind kind, int floorNumber,
                      RoomZones& rooms, std::uint64_t worldGen);
 
@@ -148,6 +161,21 @@ public:
     bool ready() const { return !fine_.flow.empty(); }
     const nav::CoarseGraph& coarse() const { return coarse_; }
     const nav::FineNav& fine() const { return fine_; }
+
+    // --- секция света (LightVisibility) -------------------------------------
+    // Живой запечённый грид видимости и поколение мира, которое он отражает.
+    // Свап поднимает lightGen_; клетки с dirtyGen > lightGen остаются грязными
+    // сами (приём bakedGen != worldGen — гонок «мутация во время бейка» нет по
+    // построению).
+    const LightVisBake& light_vis() const { return lightVis_; }
+    std::uint64_t light_gen() const { return lightGen_; }
+    // true один раз после каждого свапа секции света (Fresh или Rebake) —
+    // сигнал вызывающему перезалить bakedGrid на GPU.
+    bool take_light_swap() {
+        const bool f = lightSwapPending_;
+        lightSwapPending_ = false;
+        return f;
+    }
     // Поколение мира, которое отражает живой граф. bakedGen != worldGen —
     // запечённое устарело, планировщик сам доведёт (SLA-тест ассертит это).
     std::uint64_t baked_gen() const { return bakedGen_; }
@@ -167,9 +195,13 @@ public:
                pendingFine_.flow.capacity() + pendingFine_.nearest.capacity() +
                sizeof(nav::CoarseGraph) * 2 +
                (navBits_.words.capacity() + bodyBits_.words.capacity() +
-                snapNav_.words.capacity() + snapBody_.words.capacity()) *
+                lightBits_.words.capacity() + snapNav_.words.capacity() +
+                snapBody_.words.capacity() + snapLight_.words.capacity()) *
                    sizeof(std::uint64_t) +
-               pendingRooms_.resident_bytes();
+               pendingRooms_.resident_bytes() + lightVis_.resident_bytes() +
+               pendingLight_.resident_bytes() +
+               (lampsLive_.capacity() + lampsSnap_.capacity()) *
+                   sizeof(LightVisLamp);
     }
 
 private:
@@ -184,6 +216,12 @@ private:
     nav::FineNav fine_{};
     WalkBits navBits_;  // живые открыто-сеты, патчатся дренажом карвов
     WalkBits bodyBits_;
+    WalkBits lightBits_; // третий предикат: «свет проходит» (light_vis_bake.h)
+    LightVisBake lightVis_; // живой запечённый грид видимости
+    std::vector<LightVisLamp> lampsLive_; // статик-таблица (индекс = слот id)
+    std::uint32_t lightSlots_ = 0;
+    std::uint64_t lightGen_ = 0;
+    bool lightSwapPending_ = false;
     RoomZones* rooms_ = nullptr; // живые поля комнат вызывающего
     FloorKind kind_ = FloorKind::Residential;
     int floorNumber_ = 0;
@@ -192,17 +230,22 @@ private:
     nav::CoarseGraph pendingCoarse_{};
     nav::FineNav pendingFine_{};
     RoomZones pendingRooms_{};
-    WalkBits snapNav_;  // снапшот по значению (2×256 KiB, ~50 мкс) — ВСЁ,
+    LightVisBake pendingLight_{};
+    WalkBits snapNav_;  // снапшот по значению (3×256 KiB, ~75 мкс) — ВСЁ,
     WalkBits snapBody_; // что воркер знает о мире
+    WalkBits snapLight_;
+    std::vector<LightVisLamp> lampsSnap_;
 
     std::thread worker_;
     std::atomic<bool> cancel_{false};
     // release-store воркера / acquire-load step() — посекционная передача.
+    std::atomic<bool> lightDone_{false};
     std::atomic<bool> roomsDone_{false};
     std::atomic<bool> coarseDone_{false};
     std::atomic<bool> exited_{false};
     bool running_ = false;
     Mode mode_ = Mode::Idle;
+    bool lightSwapped_ = false;
     bool roomsSwapped_ = false;
     bool coarseSwapped_ = false;
 
