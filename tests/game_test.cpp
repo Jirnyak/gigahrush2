@@ -138,6 +138,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
 #include "suite_walkbits.inl"
+#include "suite_rebake.inl"
 #include "suite_shotsub.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
@@ -5388,6 +5389,7 @@ int main() {
     test_particles_all();
     test_gravity_regimes_all();
     test_walkbits_all();
+    test_rebake_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();

@@ -1,0 +1,163 @@
+// rebake — SLA-гейт фонового допекания (план async-rebake §7, фаза D).
+//
+// Включается в game_test.cpp: CHECK-макрос и using-декларации оттуда. Всё,
+// кроме входной точки test_rebake_all(), живёт в namespace rebake_test.
+//
+// Что пинится, и почему только это:
+//
+//   1. SLA: после карва, пробившего стену, свап фонового ребейка происходит
+//      не позже kRebakeCeilTicks (8192 тиков = 65.5 с — «порядка минуты»
+//      владельца). Часы — СИМ-ТИКИ, спроецированные из wall-clock (8 мс = 1
+//      тик): headless-тест и есть тот случай, ради которого SLA выражен в
+//      тиках, а бейк-воркер живёт в реальном времени — проекция честно
+//      связывает обе шкалы.
+//   2. После свапа поле ЗНАЕТ пролом: nearest/flow покрывают срезанную клетку.
+//   3. До свапа stale-чтения живы: старое поле зовёт клетку солидной (не
+//      мусор и не падение), обычные маршруты отвечают по контракту.
+//
+// Бит-идентичность оракула (бейк по битсетам == бейк по гриду) уже запинена
+// suite_walkbits.inl — здесь НЕ дублируется (план §7, прямое указание).
+//
+// threads=2 фиксированно: бит-идентичность от бюджета не зависит (контракт
+// [core/jobs.h]), а фиксация держит машину теста незадушенной и делает
+// длительность прогона воспроизводимой. Это самый долгий сьют game_test —
+// ровно потому, что он меряет НАСТОЯЩИЙ фоновый бейк на настоящем этаже;
+// мок здесь мерил бы только самого себя.
+#include <chrono>
+#include <thread>
+
+#include "game/floor_gen.h"   // generate_floor — настоящий этаж, не игрушка
+#include "game/floor_spec.h"  // FloorKind, floor_spec
+#include "game/rebake.h"      // RebakeScheduler — предмет теста
+#include "world/macro_grid.h" // clear_cell — «карв» пробивает стену
+#include "world/nav.h"        // route_step, kFlowNone
+#include "world/types.h"      // kMacroDim, kMacroCells, wrap_macro
+#include "world/world.h"
+
+namespace rebake_test {
+
+// Проекция wall-clock -> сим-тики: 1 тик = 8 мс ([core/tick.h] — 125 Гц).
+// Тест гоняет планировщик так, как его гоняет кадровый цикл: часы идут, пока
+// воркер печёт в реальном времени.
+struct TickClock {
+    std::chrono::steady_clock::time_point t0 =
+        std::chrono::steady_clock::now();
+    std::uint64_t now() const {
+        return static_cast<std::uint64_t>(
+                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count()) /
+               8u;
+    }
+};
+
+void sla_holds_on_a_real_floor() {
+    // Residential: комнатный микс даёт настоящие room-поля, так что
+    // посекционный свап rooms проверяется на непустых данных.
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+
+    RoomZones rooms;
+    RebakeScheduler s;
+    s.set_rebake_threads(2);
+
+    TickClock clock;
+    std::uint64_t gen = 0;
+
+    // --- Fresh: текущая семантика входа на этаж --------------------------
+    s.start_fresh(w.grid(), FloorKind::Residential, 0, rooms, gen);
+    CHECK(s.baking());
+    CHECK(!s.ready());    // живой граф освобождён — толпа стояла бы, не блуждала
+    CHECK(rooms.ready()); // rooms синхронны: целы до первого тика-читателя
+
+    bool freshSwap = false;
+    // Страховочный потолок 16384 тиков (~131 с wall) — чтобы сломанный свап
+    // давал КРАСНЫЙ CHECK, а не вечный цикл.
+    while (!freshSwap && clock.now() < 16384u) {
+        freshSwap = s.step(clock.now(), gen);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(freshSwap); // ровно кадр Fresh-свапа — сигнал finish_floor_nav
+    CHECK(s.ready());
+
+    // --- Выбрать стену: полностью солидная клетка с nav-открытым соседом,
+    // которого старое поле уже знает (иначе пролом вёл бы в закрытую пустоту
+    // и «поле знает пролом» было бы недоказуемо).
+    const auto& masks = w.grid().masks();
+    int target = -1;
+    int nbx = 0, nby = 0, nbz = 0;
+    for (std::size_t i = 0; i < kMacroCells && target < 0; ++i) {
+        if (!masks[i].full()) continue;
+        const int x = static_cast<int>(i % kMacroDim);
+        const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
+        for (int d = 0; d < 6 && target < 0; ++d) {
+            const int nx = wrap_macro(x + nav::kNavDir[d][0]);
+            const int ny = wrap_macro(y + nav::kNavDir[d][1]);
+            const int nz = wrap_macro(z + nav::kNavDir[d][2]);
+            if (s.fine().nearest_node(nx, ny, nz) != nav::kFlowNone) {
+                target = static_cast<int>(i);
+                nbx = nx;
+                nby = ny;
+                nbz = nz;
+            }
+        }
+    }
+    CHECK(target >= 0);
+    const int tx = target % kMacroDim;
+    const int ty = (target / kMacroDim) % kMacroDim;
+    const int tz = target / (kMacroDim * kMacroDim);
+
+    // Запечённое поле зовёт стену стеной — исходная истина.
+    CHECK(s.fine().nearest_node(tx, ty, tz) == nav::kFlowNone);
+
+    // --- Карв пробивает стену: клетка в воздух + O(1)-патч битсетов +
+    // поколение мутаций — ровно то, что делает дренаж dirtyCells в main.
+    w.grid().clear_cell(tx, ty, tz);
+    const std::uint32_t dirty[] = {static_cast<std::uint32_t>(target)};
+    const DoorSet noDoors; // пустой индекс — премисе all-open нечего хранить
+    s.patch_carved_cells(w.grid(), noDoors, dirty, 1);
+    ++gen;
+    const std::uint64_t carveTick = clock.now();
+
+    // --- До свапа: stale-чтения живы (план §7в). Поле СТАРОЕ и честно
+    // старое: пролом для него солиден, маршруты по прежней геометрии отвечают
+    // по контракту, ничего не падает.
+    s.step(clock.now(), gen);
+    CHECK(s.baked_gen() == 0);
+    CHECK(s.fine().nearest_node(tx, ty, tz) == nav::kFlowNone);
+    const std::uint8_t staleStep = nav::route_step(
+        s.coarse(), s.fine(), ivec3{nbx, nby, nbz}, ivec3{tx, ty, tz});
+    CHECK(staleStep == nav::kFlowNone); // цель в (старой) стене — «нет пути»
+
+    // --- Крутить планировщик тиками до свапа; потолок — SLA (план §7а).
+    std::uint64_t swapTick = 0;
+    for (;;) {
+        const std::uint64_t t = clock.now();
+        s.step(t, gen);
+        if (s.baked_gen() == gen) {
+            swapTick = t;
+            break;
+        }
+        // Страховка от вечного цикла: даём 2x потолка, ассерт ниже краснеет.
+        if (t - carveTick > 2u * RebakeScheduler::kRebakeCeilTicks) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(s.baked_gen() == gen); // свап случился
+    CHECK(swapTick - carveTick <= RebakeScheduler::kRebakeCeilTicks);
+
+    // --- После свапа: поле ведёт в проём (план §7б).
+    const std::uint8_t node = s.fine().nearest_node(tx, ty, tz);
+    CHECK(node != nav::kFlowNone); // пролом присвоен якорю
+    CHECK(s.fine().at(node, tx, ty, tz) != nav::kFlowNone); // и покрыт полем
+    const std::uint8_t freshStep = nav::route_step(
+        s.coarse(), s.fine(), ivec3{nbx, nby, nbz}, ivec3{tx, ty, tz});
+    CHECK(freshStep != nav::kFlowNone); // маршрут в проём существует
+    // Посекционный свап rooms отработал: поля комнат живы (двойной буфер не
+    // оставил вызывающему пустышку).
+    CHECK(rooms.ready());
+}
+
+} // namespace rebake_test
+
+void test_rebake_all() { rebake_test::sla_holds_on_a_real_floor(); }
