@@ -3,7 +3,7 @@
 // A floor's geometry is a pure function of (number, kind, seed) ([game/floor_gen.h]) and
 // there is no runtime voxel mutation in the tree ([game/save.h] relies on the same
 // fact), so its baked nav is a pure function of those three numbers too. Measured on a
-// 20-thread machine ([world/nav_async.h]) the bake is coarse ~1.9 s + fine ~1.8 s, all
+// 20-thread machine ([game/rebake.h]) the bake is coarse ~1.9 s + fine ~1.8 s, all
 // of it recomputing something a previous session already computed. A floor should need
 // baking ONCE EVER, not once per entry.
 //
@@ -54,7 +54,7 @@
 // re-baking it costs an order of magnitude more than reading it back. TWO SEPARATE
 // MEASUREMENTS, kept separate on purpose — conflating them is how a doc comment starts
 // lying. (1) The bake: coarse ~1.9 s + fine ~1.8 s on a 20-thread machine, the figure
-// [world/nav_async.h] and [app/main.cpp] both carry; nothing here re-timed it, and
+// [game/rebake.h] and [app/main.cpp] both carry; nothing here re-timed it, and
 // main.cpp's `[nav] bake coarse %.0f ms | fine %.0f ms` line is where a live number comes
 // from. (2) The medium, timed on this host 2026-07-29 over one 136,327,988 B file:
 // 277 ms to write it FlushFileBuffers'd (493 MB/s) and 91 ms to read it back page-cache-
@@ -243,9 +243,9 @@ std::size_t nav_cache_bytes(std::uint32_t sections);
 // decides that is a mistake, not this function.
 //
 // `fine->flow` MUST be exactly kNavFineWire bytes and `fine->nearest` exactly
-// kNavNearestWire when `fine` is non-null. An AsyncBake that has not finished holds an
-// EMPTY flow vector by design ([world/nav_async.h] `ready()` is `!flow.empty()`), so
-// handing this a mid-bake AsyncBake would otherwise write a truncated blob that the
+// kNavNearestWire when `fine` is non-null. A RebakeScheduler that has not finished holds an
+// EMPTY flow vector by design ([game/rebake.h] `ready()` is `!flow.empty()`), so
+// handing this a mid-bake scheduler would otherwise write a truncated blob that the
 // reader rejects one session later. It is refused here instead: `out` is left empty and
 // the caller can tell by out.empty().
 void nav_cache_write(const NavCacheKey& key, const nav::CoarseGraph* coarse,

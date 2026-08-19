@@ -195,10 +195,19 @@ void bake_coarse(const MacroGrid& grid, CoarseGraph& out) {
     bake_coarse(open, out);
 }
 
-void bake_coarse(const WalkBits& open, CoarseGraph& out) {
-    // 64 independent per-node BFS, fanned across the hardware threads. Each
-    // writes a disjoint edge row -> race-free + deterministic.
-    parallel_for(kNodes, [&open, &out](int id) { bake_node(open, id, out); });
+void bake_coarse(const WalkBits& open, CoarseGraph& out, int threads,
+                 const std::atomic<bool>* cancel) {
+    // 64 independent per-node BFS, fanned across `threads` workers. Each
+    // writes a disjoint edge row -> race-free + deterministic at any budget.
+    // Cancellation is polled per NODE: one node's BFS is the ~30 ms unit of
+    // work the header advertises, and checking inside the flood would buy
+    // nothing but a hot-loop load.
+    parallel_for(kNodes, [&open, &out, cancel](int id) {
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) return;
+        bake_node(open, id, out);
+    }, threads);
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed))
+        return; // output is garbage by contract; the caller discards it
 
     // Seed all-pairs from the cyclic-lattice edges, then Floyd-Warshall. 64
     // nodes -> 64^3 ~= 260k ops: instant, single-threaded (so deterministic).
@@ -237,17 +246,22 @@ void bake_fine(const MacroGrid& grid, FineNav& out) {
     bake_fine(open, out);
 }
 
-void bake_fine(const WalkBits& open, FineNav& out) {
+void bake_fine(const WalkBits& open, FineNav& out, int threads,
+               const std::atomic<bool>* cancel) {
     // Pre-clear once, sequentially: every slice starts kFlowNone, which each
     // node's BFS then uses as its "unvisited" marker.
     out.flow.assign(static_cast<std::size_t>(kNodes) * kMacroCells, kFlowNone);
     std::uint8_t* base = out.flow.data();
-    // 64 independent per-node floods, fanned across the hardware threads. Each
+    // 64 independent per-node floods, fanned across `threads` workers. Each
     // writes a disjoint kMacroCells slice -> race-free + deterministic.
-    parallel_for(kNodes, [&open, base](int id) {
+    // Cancel polled per node, same granularity argument as bake_coarse.
+    parallel_for(kNodes, [&open, base, cancel](int id) {
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) return;
         bake_fine_node(open, id,
                        base + static_cast<std::size_t>(id) * kMacroCells);
-    });
+    }, threads);
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed))
+        return; // garbage by contract
 
     // Nearest-node field: pre-clear to kFlowNone (walls/void stay so), then one
     // deterministic multi-source BFS labels every walkable cell with its anchor.

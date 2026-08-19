@@ -155,9 +155,9 @@ public:
     //
     // `ensure_loaded` used to bake `bake_coarse` + `bake_fine` unconditionally on
     // every floor entry — the measured ~1.9 s + ~1.8 s and ~130 MiB that
-    // [world/nav_async.h] calls "the worst thing the player feels" — and the app
+    // [game/rebake.h] calls "the worst thing the player feels" — and the app
     // read the result NEVER: `nav_at` has no caller outside the tests, while the
-    // crowd steers off `main.cpp`'s own `nav::AsyncBake`. So every ride paid a
+    // crowd steers off `main.cpp`'s own `game::RebakeScheduler`. So every ride paid a
     // multi-second BLOCKING bake whose product was freed unread, on top of the
     // async bake that actually feeds the game. [problems.md] §26.
     //

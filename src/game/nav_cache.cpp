@@ -307,9 +307,9 @@ void write_prologue(const NavCacheKey& key, std::uint32_t sections,
     out.insert(out.end(), body.begin(), body.end());
 }
 
-// A fully baked FineNav is the only one this format can describe. An AsyncBake between
-// start() and the poll() that completes it holds an EMPTY flow vector on purpose
-// ([world/nav_async.h]: ready() is !flow.empty()), so this is the shape a caller that
+// A fully baked FineNav is the only one this format can describe. A RebakeScheduler between
+// start_fresh() and the step() that completes it holds an EMPTY flow vector on purpose
+// ([game/rebake.h]: ready() is !flow.empty()), so this is the shape a caller that
 // forgot to check ready() would hand over.
 bool fine_is_complete(const nav::FineNav& fine) {
     return fine.flow.size() == kNavFineWire && fine.nearest.size() == kNavNearestWire;

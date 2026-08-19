@@ -451,8 +451,14 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
 // predicate, so the grid overload above is now one sweep + this call —
 // bit-identical (pinned by suite_walkbits.inl), and what lets phase C hand a
 // worker a snapshot copy instead of a pointer into the live world.
+//
+// `threads`/`cancel` carry the same contract as nav::bake_coarse
+// ([world/nav.h]): threads goes straight to parallel_for (0 = all cores,
+// hw/2 for the background rebake), cancel is polled once per room-bit job
+// and a cancelled bake's output is garbage the caller must discard.
 void bake_room_zones(const WalkBits& bodyOpen, FloorKind kind, int number,
-                     RoomZones& out);
+                     RoomZones& out, int threads = 0,
+                     const std::atomic<bool>* cancel = nullptr);
 
 // What one body should do this tick to reach a room in `mask`.
 //

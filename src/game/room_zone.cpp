@@ -353,7 +353,8 @@ void bake_room_zones(const MacroGrid& grid, FloorKind kind, int number,
 }
 
 void bake_room_zones(const WalkBits& bodyOpen, FloorKind kind, int number,
-                     RoomZones& out) {
+                     RoomZones& out, int threads,
+                     const std::atomic<bool>* cancel) {
     // Clear FIRST. A recycled RoomZones that kept one field from the previous floor
     // would steer this floor's crowd by the last floor's kitchens — the exact class
     // of stale-bake bug [world/nav.h] documents for its own fields.
@@ -396,15 +397,22 @@ void bake_room_zones(const WalkBits& bodyOpen, FloorKind kind, int number,
 
     // One job per bit. Each writes only its own two vectors and only READS the
     // shared clearance bits, so the bake is race-free and bit-identical regardless
-    // of scheduling — the same per-slice isolation `nav::bake_fine` relies on
-    // ([core/jobs.h] contract).
+    // of scheduling AND thread budget — the same per-slice isolation
+    // `nav::bake_fine` relies on ([core/jobs.h] contract). Cancel is polled per
+    // bit job — one bit's flood is this bake's unit of work, the same
+    // granularity argument as nav's per-node poll.
     parallel_for(static_cast<int>(kFloorRoomBits), [&](int bi) {
+        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) return;
         const std::uint16_t bit = static_cast<std::uint16_t>(1u << bi);
         if ((have & bit) == 0) return;
         bake_flow(bodyOpen, kind, number, bit, stride, out.flow[bi]);
         bake_near(present.data() + static_cast<std::size_t>(bi) * roomCount,
                   roomsPerAxis, out.nearRoom[bi]);
-    });
+    }, threads);
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) {
+        out.baked = 0; // garbage by contract — but never a lie about readiness
+        return;
+    }
     out.baked = have;
 }
 

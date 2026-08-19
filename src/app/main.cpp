@@ -124,7 +124,7 @@
 #include "world/stain.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
-#include "world/nav_async.h"
+#include "game/rebake.h"
 
 using namespace giga;
 
@@ -175,12 +175,12 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
 
-// Поколение мутаций мира активного этажа — фаза A асинк-ребейка
+// Поколение мутаций мира активного этажа — асинк-ребейк
 // ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
 // и боевой дренаж); двери НЕ пишут — нав печётся по премисе all-open
-// ([game/door.h]) и от тоггла не стареет. Читателя пока нет: RebakeScheduler
-// (фаза C) сравнит bakedGen != worldGen; до него счётчик просто монотонный,
-// сброс на входе этажа приедет вместе с планировщиком.
+// ([game/door.h]) и от тоггла не стареет. Читатель — RebakeScheduler
+// ([game/rebake.h]): bakedGen != worldGen ⇔ запечённое устарело, планировщик
+// сам доводит фоновым циклом. Сброс на входе этажа — в begin_floor_nav.
 static std::uint64_t g_worldGen = 0;
 
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
@@ -1398,7 +1398,8 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
     }
 }
 
-// Kick off this floor's navigation bake on a worker thread.
+// Kick off this floor's navigation bake on a worker thread — the Fresh mode of
+// the RebakeScheduler ([game/rebake.h]).
 //
 // This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
 // froze the frame for ~3.7 s. The bake is not naive — it is already fanned across
@@ -1409,35 +1410,36 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // Now the player moves, looks, fights and loots immediately; the floor's crowd
 // stands still until the bake lands, because wander_step no-ops on an empty flow
 // field. That degradation is automatic rather than special-cased.
-void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
-                     game::RoomZones& rooms) {
-    bake.start(world.grid());
-    // The ROOM zones are baked here too, and synchronously, because they are three
-    // multi-source BFS against the async bake's 128 — measured below in the same
-    // line the nav timings print. Synchronous also means there is no second
-    // ownership story to get wrong: the fields are complete before the first tick
-    // that could read them, so `ai_step` never sees a half-built field.
+//
+// The worker owns a 256 KiB WalkBits SNAPSHOT, never a pointer into the live
+// grid — so there is no ordering contract with door toggles or carves any more,
+// and floor changes cancel-join in tens of ms ([game/rebake.h]).
+void begin_floor_nav(const World& world, int floorNumber,
+                     game::RebakeScheduler& bake, game::RoomZones& rooms) {
+    // Новый этаж = новая летопись мутаций: Fresh-снапшот отражает поколение 0.
+    g_worldGen = 0;
     const game::FloorKind kind = kind_for_floor(floorNumber);
+    // The ROOM zones are baked synchronously inside start_fresh, because they
+    // are three multi-source BFS against the async bake's 128 — measured below
+    // in the same line the nav timings print. Synchronous also means the
+    // fields are complete before the first tick that could read them, so
+    // `ai_step` never sees a half-built field.
+    bake.start_fresh(world.grid(), kind, floorNumber, rooms, g_worldGen);
     // TIMED, and the timing is not decoration. An untimed synchronous bake once cost
     // ~25 s of load without a single line saying so, and the only symptom anyone saw
     // was the sim running 4140 ticks per 4000 frames one day and 600 the next
     // ([room_zone.cpp] bake_walkable). A bake that does not print its own cost hides
     // exactly the regression it is most likely to cause.
-    const auto roomT0 = std::chrono::steady_clock::now();
-    game::bake_room_zones(world.grid(), kind, floorNumber, rooms);
-    const double roomMs =
-        std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - roomT0).count();
     std::fprintf(stderr,
                  "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident) "
                  "in %.0f ms\n",
                  floorNumber, static_cast<int>(kind),
-                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(), roomMs);
+                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(),
+                 bake.last_rooms_ms());
     // Nav memory AT THE START of the bake, which is the number no document carried
-    // and the only moment it can be wrong. The old `start()` cleared the live flow
-    // field without freeing it, so this read 130 MiB of dead bytes here while the
-    // worker allocated the next 130 beside them — a 260 MiB peak, half of it
-    // unreadable (`ready()` is false throughout). It now reads ~0.
+    // and the only moment it can be wrong. The scheduler frees the live flow field
+    // in start_fresh (the AsyncBake 260-MiB-peak lesson), so this reads ~1 MiB —
+    // the four resident/snapshot bitsets.
     // The matching post-swap figure is on the `[nav]` line from finish_floor_nav.
     std::fprintf(stderr, "[nav] bake begins: nav holds %.1f MiB\n",
                  static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0));
@@ -1446,7 +1448,7 @@ void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
 // walk. Separate from begin_floor_nav because it can only run after the swap.
 std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
-                               const nav::AsyncBake& bake) {
+                               const game::RebakeScheduler& bake) {
     std::uint32_t n = game::wander_init(reg, layer, seed);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
@@ -1800,8 +1802,10 @@ int main(int argc, char** argv) {
     // for the flow fields, which is affordable precisely because streaming keeps
     // a single floor resident (performance.md).
     // Baked asynchronously; owns both the live graph the tick reads and the
-    // pending one a worker fills (world/nav_async.h).
-    nav::AsyncBake nav;
+    // pending one a worker fills — plus the two live walkability bitsets and
+    // the background-rebake planner that keeps the bake current as the floor
+    // is carved (game/rebake.h).
+    game::RebakeScheduler nav;
     // Room zones for the SAME one live floor ([room_zone.h]): which macro cells are
     // a kitchen / a bathroom / a flat, and the dense field a body descends to reach
     // one. ~6 MiB on a Residential floor, 0 on a floor whose room mix rolls none of
@@ -2789,9 +2793,13 @@ int main(int argc, char** argv) {
         relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
         bus.clear();
 
-        // Hand over a finished nav bake. Cheap every frame; true only on the frame
-        // the swap happens, which is when the floor's crowd can start walking.
-        if (nav.poll()) {
+        // Планировщик допекания ([game/rebake.h]): раз в кадр, в топе кадра до
+        // сим-подшагов — летопись мутаций (часы — сим-тики), свап готовых
+        // секций фонового Rebake (rooms -> coarse -> fine, живые структуры
+        // пишутся только здесь, на главном потоке) и старт новых циклов по
+        // дебаунсу/дедлайну. true ровно на кадре Fresh-свапа — момент, когда
+        // толпе нового этажа пора ходить; Rebake-свапы пересева не требуют.
+        if (nav.step(simTick, g_worldGen)) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
@@ -4058,11 +4066,18 @@ int main(int argc, char** argv) {
                         // point of the raymarch migration.
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
-                        ++g_worldGen; // фаза A: поколение мутаций для допекания
+                        ++g_worldGen; // поколение мутаций — планировщик доведёт
                         mark_diffusion_dirty(diffusionDriver,
                                              stack.layer(activeLayer).grid(),
                                              activeLayer,
                                              carveResult.dirtyCells);
+                        // Долг живых битсетов проходимости перед карвом —
+                        // O(1) на клетку, следующий Rebake-снапшот увидит
+                        // пролом ([game/rebake.h]).
+                        nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                               doors,
+                                               carveResult.dirtyCells.data(),
+                                               carveResult.dirtyCells.size());
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
@@ -4429,11 +4444,16 @@ int main(int argc, char** argv) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
-                            ++g_worldGen; // фаза A: поколение мутаций
+                            ++g_worldGen; // поколение мутаций
                             mark_diffusion_dirty(diffusionDriver,
                                                  stack.layer(activeLayer).grid(),
                                                  activeLayer,
                                                  carveResult.dirtyCells);
+                            // Тот же долг битсетов, что у консольного карва.
+                            nav.patch_carved_cells(
+                                stack.layer(activeLayer).grid(), doors,
+                                carveResult.dirtyCells.data(),
+                                carveResult.dirtyCells.size());
                             spawn_carve_particles(particlePass, carveResult,
                                                   pr.seed);
                             std::fprintf(stderr,

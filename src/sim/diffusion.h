@@ -114,7 +114,7 @@
 //     load-bearing: the sweep is non-creating and reports `liveCells`, so a caller
 //     sweeps only while the floor actually holds danger (see diffusion_step and
 //     DiffusionDriver below); and the eventual home for this is off the sim thread — the
-//     async pattern [world/nav_async.h] already uses for the bake, or the GPU.
+//     async pattern [game/rebake.h] already uses for the bake, or the GPU.
 //
 // WHERE IT RUNS. On a coarse cadence, not every sim tick: kDiffusionSweepTicks below.
 // The sim tick is 125 Hz and one step is exactly 8 ms ([core/tick.h] — 125, not the
