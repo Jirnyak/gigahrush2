@@ -20,7 +20,7 @@
 // THE BAKE. Read this before changing anything here.
 // ---------------------------------------------------------------------------
 // Navigation is baked per floor: a 64-node coarse graph plus 64 dense 128^3 flow
-// fields, ~128 MiB, measured ~3.7 s across 20 threads ([nav_async.h]). A cell
+// fields, ~128 MiB, measured ~3.7 s across 20 threads ([game/rebake.h]). A cell
 // whose solidity changes invalidates that bake, and a door changes solidity every
 // time it moves.
 //
@@ -49,12 +49,14 @@
 // detour around a shut door; they get through it instead. Nothing re-bakes, nothing
 // searches, and the tick stays O(live agents).
 //
-// One hard ordering rule follows: `nav::AsyncBake` hands a raw pointer to the live
-// `MacroGrid` to a worker thread and its contract is "do not mutate the World until
-// ready()". Doors are the first system that ever wanted to. Set `DoorSet::frozen`
-// while a bake is in flight and every mutator here becomes a no-op — that is a data
-// race avoided, and it also keeps the all-open premise above true for the geometry
-// the worker is reading.
+// No ordering rule with the bake remains. There used to be one — the async
+// bake worker held a raw pointer into the live `MacroGrid`, so `DoorSet::frozen`
+// no-opped every mutator here for the bake's ~3.7 s (deferred console carves,
+// DROPPED combat carves, a refused F9). The RebakeScheduler's worker owns a
+// 256 KiB walkability SNAPSHOT instead ([game/rebake.h]), taken at floor entry
+// while door_build has every door Open — the all-open premise is baked into the
+// snapshot by construction, and doors move freely mid-bake. (Door toggles never
+// patch the live bitsets either, for the same premise; see patch_carved_cells.)
 #pragma once
 
 #include <cstdint>
@@ -156,9 +158,6 @@ struct DoorSet {
     std::vector<std::uint32_t> index;  // doorId + 1 per cell; 0 = no door
     std::uint32_t shut = 0;            // doors currently in DoorState::Shut
     std::uint32_t broken = 0;          // doors destroyed on this visit
-    // Set while a nav bake is in flight. Every mutator below refuses — see the
-    // ordering rule in the header comment.
-    bool frozen = false;
 
     // Macro cells whose masks this system changed since the app last drained
     // the list (shut, open, force-open, break). The same handoff contract as
@@ -205,8 +204,7 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
                          const FloorSpec& spec, unsigned seed);
 
 // Shut or open one door. Returns false when nothing changed: the door is Broken,
-// it is already in that state, the set is frozen, or (shutting) a body is standing
-// in the doorway.
+// it is already in that state, or (shutting) a body is standing in the doorway.
 //
 // That last refusal is not politeness. `physics_step` resolves a swept AABB by
 // backing out of an overlap; a body that is ALREADY inside solid has nowhere to

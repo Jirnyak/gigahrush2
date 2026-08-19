@@ -40,10 +40,13 @@
 // CarveResult::dirtyCells. The CALLER owes, per the existing contracts:
 //   * diffusion_mark_cell per dirty cell (O(1) patches);
 //   * cubePass.invalidate() once, if anything was removed;
-//   * nothing for nav — flow fields stay stale until the next full bake, the
-//     same accepted debt door.cpp already carries.
-// And like every grid mutator, DO NOT carve while a nav bake is in flight
-// (doors.frozen is the app's existing gate).
+//   * RebakeScheduler::patch_carved_cells — the O(1) walk-bit patches that
+//     keep the next background snapshot honest ([game/rebake.h]); the flow
+//     fields themselves stay stale only until that scheduler's next
+//     rebake-and-swap.
+// Carving WHILE a bake is in flight is LEGAL: the worker reads a 256 KiB
+// bitset snapshot, never these masks — doors.frozen and its gates are dead
+// ([game/rebake.h]).
 #pragma once
 #include <cstdint>
 #include <vector>

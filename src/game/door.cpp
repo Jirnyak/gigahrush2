@@ -88,7 +88,6 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
     doors.doors.clear();
     doors.shut = 0;
     doors.broken = 0;
-    doors.frozen = false;
     // Dense index, assign() rather than resize() so a recycled DoorSet is zeroed
     // and cannot inherit the previous floor's door ids — the same reason
     // generate_floor clears to air first.
@@ -176,7 +175,6 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
 
 bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
               std::uint32_t id, bool shut) {
-    if (doors.frozen) return false;                       // nav bake reading the grid
     if (id >= doors.doors.size()) return false;
     Door& d = doors.doors[id];
     if (d.state == static_cast<std::uint8_t>(DoorState::Broken)) return false;
@@ -219,7 +217,7 @@ bool inventory_has_keycard(const Inventory& inv, std::uint8_t requiredTier) {
 std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg,
                                LayerId layer, const vec3& pos,
                                const Inventory* playerInv) {
-    if (doors.frozen || doors.doors.empty()) return kNoDoor;
+    if (doors.doors.empty()) return kNoDoor;
     int cx, cy, cz;
     agent_cell(pos, cx, cy, cz);
 
@@ -324,7 +322,7 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
     DoorTick out;
     // The whole pass costs nothing on the tick where nothing is shut, which is
     // almost every tick. A Broken door is air and cannot be pressed either.
-    if (doors.frozen || doors.shut == 0 || dt <= 0.0f) return out;
+    if (doors.shut == 0 || dt <= 0.0f) return out;
 
     MacroGrid& g = world.grid();
     const std::uint32_t now = static_cast<std::uint32_t>(tick);

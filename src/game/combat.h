@@ -758,9 +758,11 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
 // Combat → geometry destruction seam ([world/destruct.h]).
 //
 // Combat NEVER mutates the grid. It proposes spheres (position, radius, power,
-// seed); the app drains them on the sim clock behind the same doors.frozen gate
+// seed); the app drains them on the sim clock through the same dispose path
 // the console `carve` row already uses. That is the whole design: one dispose
-// path, many proposers (console, bullet impact, melee wall swing).
+// path, many proposers (console, bullet impact, melee wall swing). Nothing is
+// dropped for a nav bake: the bake worker owns a snapshot, never the grid
+// ([game/rebake.h]) — the droppedBake counter died with doors.frozen.
 //
 // Bounded POD ring, no heap — a shotgun pellet fan can enqueue several impacts
 // in one step without allocating on the hot path.
@@ -781,20 +783,18 @@ struct CarveProposalQueue {
     CarveProposal items[kMaxCarveProposals] = {};
     std::uint8_t count = 0;
     // A refused proposal used to vanish silently — a shot that visibly hit a wall
-    // and carved nothing, with no way to tell "queue full" from "degenerate radius"
-    // from "bake in flight". Counted per reason so the drain site can PRINT what
+    // and carved nothing, with no way to tell "queue full" from "degenerate
+    // radius". Counted per reason so the drain site can PRINT what
     // was dropped instead of letting the miss read as a physics bug. Reset by
     // clear() together with the queue itself.
     std::uint16_t droppedFull = 0;
     std::uint16_t droppedDegenerate = 0;
-    std::uint16_t droppedBake = 0;
     std::uint16_t clampedRadius = 0;
 
     void clear() {
         count = 0;
         droppedFull = 0;
         droppedDegenerate = 0;
-        droppedBake = 0;
         clampedRadius = 0;
     }
 

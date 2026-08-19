@@ -1996,15 +1996,15 @@ int main(int argc, char** argv) {
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
             refresh_floor_props(reg, stack.layer(l0), 0, l0,
                                streamer.floor_seed_of(registry, 0), bus);
-            // Doors BEFORE the bake, and frozen for its duration: door_build leaves
-            // every door open so the bake sees all-open geometry (an upper bound on
-            // connectivity), and AsyncBake holds a raw pointer to the live MacroGrid
-            // that must not be mutated until ready(). [door.h]
+            // Doors BEFORE the bake: door_build leaves every door open, so the
+            // walkability bitsets built at the top of begin_floor_nav carry the
+            // all-open geometry (an upper bound on connectivity) the bake must
+            // assume. No freeze: the worker owns a snapshot, never the grid,
+            // so doors may move mid-bake. [door.h, game/rebake.h]
             if (currentSpec)
                 doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
                                               *currentSpec,
                                               streamer.floor_seed_of(registry, 0));
-            doors.frozen = true;
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -2193,7 +2193,7 @@ int main(int argc, char** argv) {
     // same debt CarveResult::dirtyCells carries, drained into the mirror below.
     std::vector<std::uint32_t> stainDirty;
     // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
-    // below behind the same doors.frozen gate as the console carve row.
+    // below on the sim clock, through the same path as the console carve row.
     game::CarveProposalQueue combatCarves;
     // Combat/impact → particle seam ([game/particles.h]): blood and sparks are
     // proposed as bursts during the sim step and drained into the GPU pool.
@@ -2642,12 +2642,12 @@ int main(int argc, char** argv) {
                                    runState.corpses.size());
         // (The floor's own file is restored INSIDE ensure_loaded now — before the
         //  dressing bake and the props, not after them. [problems.md] §42)
-        // Doors before the bake, frozen for its duration. [door.h]
+        // Doors before the bake: all-open geometry into the bitsets. No
+        // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
         if (currentSpec)
             doorsBuilt = game::door_build(
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
-        doors.frozen = true;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
@@ -2804,10 +2804,6 @@ int main(int argc, char** argv) {
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, 0xA11FEu, nav);
-            // The bake has released the grid, so doors may move again. Until this
-            // point every mutator refused, which is why a door cannot be worked
-            // during the ~3.7 s bake rather than corrupting it. [door.h]
-            doors.frozen = false;
         }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
@@ -3115,7 +3111,7 @@ int main(int argc, char** argv) {
                 if (shotPath &&
                     (shotAction == "wall" || shotAction == "rpgcmbt") &&
                     reg.valid(player) &&
-                    shotFramesSeen >= 30 && !doors.frozen) {
+                    shotFramesSeen >= 30 && nav.ready()) {
                     const Transform& ptr = reg.get<Transform>(player);
                     const MacroGrid& g = stack.layer(activeLayer).grid();
                     const float cx = ptr.pos.x;
@@ -3715,7 +3711,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     } else if (shotAction == "wall" && reg.valid(player) &&
-                               shotFramesSeen >= 30 && !doors.frozen) {
+                               shotFramesSeen >= 30 && nav.ready()) {
                         // Face+walk owned by early block (post-input.apply,
                         // pre-controller_step). Here: hold melee + log only.
                         attackHeld = true;
@@ -3768,15 +3764,15 @@ int main(int argc, char** argv) {
                             std::fprintf(
                                 stderr,
                                 "[wall] melee toward solid d=%.2f "
-                                "floor=%d frozen=%d fly=%d\n",
+                                "floor=%d baking=%d fly=%d\n",
                                 bestD2 < 1.0e12f ? std::sqrt(bestD2)
                                                  : -1.0f,
                                 currentFloor,
-                                doors.frozen ? 1 : 0, fly ? 1 : 0);
+                                nav.baking() ? 1 : 0, fly ? 1 : 0);
                         }
                     } else if (!shotActionConsumed && shotAction == "carve" &&
 
-                               shotFramesSeen >= 30 && !doors.frozen) {
+                               shotFramesSeen >= 30 && nav.ready()) {
                         // One demolition charge ahead of the camera, once the
                         // nav bake has landed — the same request path the
                         // console `carve` row sets, so the screenshot
@@ -3811,11 +3807,12 @@ int main(int argc, char** argv) {
                                (shotAction == "save" || shotAction == "load") &&
                                shotRideDone >= shotRide &&
                                shotFramesSeen >= 30) {
-                        // Wait for async nav bake so loadWanted is not stuck
                         if (shotAction == "save") {
                             saveWanted = true;
                             shotActionConsumed = true;
-                        } else if (!nav.baking()) {
+                        } else {
+                            // F9 отменяет бейк сам ([game/rebake.h]) — ждать
+                            // нечего, loadWanted не застревает.
                             loadWanted = true;
                             shotActionConsumed = true;
                         }
@@ -4026,15 +4023,13 @@ int main(int argc, char** argv) {
                     }
                 }
                 // Universal destruction ([world/destruct.h]): the console/tools
-                // PROPOSED a sphere; the sim disposes here, on its own clock,
-                // and never while a nav bake owns the grid — the same freeze
-                // doors honour, and the request stays queued (not dropped)
-                // until the bake lands. Collision is live off the mutated
-                // masks; every baked overlay's debt is exactly
-                // carveResult.dirtyCells, and nav stays stale until the next
-                // full bake — the accepted door.cpp debt, no new rule.
-                if (consoleCtx.carveRadius > 0.0f && !doors.frozen &&
-                    reg.valid(player)) {
+                // PROPOSED a sphere; the sim disposes here, on its own clock.
+                // No bake gate: the worker reads a snapshot, never the grid
+                // ([game/rebake.h]), so a carve is legal mid-bake. Collision is
+                // live off the mutated masks; every baked overlay's debt is
+                // exactly carveResult.dirtyCells, and nav stays stale only
+                // until the scheduler's next background swap.
+                if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
                     const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
@@ -4346,7 +4341,8 @@ int main(int argc, char** argv) {
                                           reg.try_get<game::Equipped>(player)) !=
                                       game::kInvalidItem;
                 // Combat carves: clear, fill during melee/projectiles, dispose
-                // same step if !doors.frozen (v1 drops proposals during bake).
+                // same step. Nothing is dropped for a bake any more — the
+                // worker holds a snapshot, not the grid ([game/rebake.h]).
                 combatCarves.clear();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && shell.playing(),
@@ -4398,12 +4394,7 @@ int main(int argc, char** argv) {
                     propDetachedBeforeShots)
                     propPassNeedsRebuild = true;
                 // Drain combat carve proposals through the same carve_sphere
-                // path the console uses. Frozen bake: drop (v1); console keeps
-                // pending via carveRadius until bake lands.
-                if (doors.frozen && combatCarves.count > 0) {
-                    combatCarves.droppedBake += combatCarves.count;
-                    combatCarves.count = 0;
-                }
+                // path the console uses.
                 // Gated like every other debug channel (GIGA_*_DBG): the counters
                 // are always kept, the line only prints when asked for.
                 static const bool carveDbg =
@@ -4411,18 +4402,16 @@ int main(int argc, char** argv) {
                 if (carveDbg &&
                     (combatCarves.count > 0 || combatCarves.droppedFull > 0 ||
                      combatCarves.droppedDegenerate > 0 ||
-                     combatCarves.droppedBake > 0 ||
                      combatCarves.clampedRadius > 0)) {
                     std::fprintf(stderr,
                                  "[carve] proposals=%u dropped_full=%u "
-                                 "dropped_degen=%u dropped_bake=%u clamped=%u\n",
+                                 "dropped_degen=%u clamped=%u\n",
                                  static_cast<unsigned>(combatCarves.count),
                                  static_cast<unsigned>(combatCarves.droppedFull),
                                  static_cast<unsigned>(combatCarves.droppedDegenerate),
-                                 static_cast<unsigned>(combatCarves.droppedBake),
                                  static_cast<unsigned>(combatCarves.clampedRadius));
                 }
-                if (!doors.frozen && combatCarves.count > 0) {
+                if (combatCarves.count > 0) {
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];
                         CarveOp op;
@@ -4705,12 +4694,12 @@ int main(int argc, char** argv) {
                 // this was the only call site that still did a partial field copy and
                 // admitted it would not restore position. [save.h]
                 if (loadWanted) {
-                    // Travel regenerates Worlds; AsyncBake holds a raw MacroGrid* for
-                    // ~seconds. Multi-hop while baking frees the slot the worker still
-                    // reads — refuse and retry next frame. [save.h, nav_async.h]
-                    if (nav.baking()) {
-                        // leave loadWanted set; quiet until the bake ends
-                    } else {
+                    // Загрузка = «по сути новая игра» (решение владельца): бейк
+                    // в полёте ОТМЕНЯЕТСЯ (узловая гранулярность, join внутри
+                    // begin_floor_nav мгновенный) — воркер владеет только
+                    // снапшотом битсетов, миру он не опасен. [game/rebake.h]
+                    nav.cancel();
+                    {
                         loadWanted = false;
                         char runPath[128];
                         run_save_path(runPath, sizeof runPath);
@@ -4877,7 +4866,6 @@ int main(int argc, char** argv) {
                                     *currentSpec,
                                     streamer.floor_seed_of(registry,
                                                            currentFloor));
-                            doors.frozen = true;
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -5425,9 +5413,8 @@ int main(int argc, char** argv) {
                 // is a save the player only finds out about by losing a run.
                 if (saveLine[0] && simTick - saveLineAt < 6u * kSimHz)
                     ImGui::TextUnformatted(saveLine);
-                ImGui::Text("doors %u built | %u shut | %u broken | %u pressing%s",
-                            doorsBuilt, doors.shut, doors.broken, doorTick.pressing,
-                            doors.frozen ? "  (frozen: nav baking)" : "");
+                ImGui::Text("doors %u built | %u shut | %u broken | %u pressing",
+                            doorsBuilt, doors.shut, doors.broken, doorTick.pressing);
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
@@ -7225,16 +7212,15 @@ int main(int argc, char** argv) {
                             reg, nl, currentFloor, runState.corpses.data(),
                             runState.corpses.size());
                         // Arrival floor file BEFORE doors, then doors before
-                        // the bake, frozen for its duration — the same law as
-                        // the keyboard ride path. This is the SECOND travel
-                        // site; a fix that touches only one path leaves --shot
-                        // proving nothing. [save.h, door.h]
+                        // the bake (all-open geometry into the bitsets) — the
+                        // same law as the keyboard ride path. This is the
+                        // SECOND travel site; a fix that touches only one path
+                        // leaves --shot proving nothing. [save.h, door.h]
                         if (currentSpec)
                             doorsBuilt = game::door_build(
                                 stack.layer(nl), doors, currentFloor,
                                 *currentSpec,
                                 streamer.floor_seed_of(registry, currentFloor));
-                        doors.frozen = true;
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

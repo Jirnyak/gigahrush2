@@ -242,12 +242,11 @@ static void test_shut_door_blocks_a_body() {
     CHECK(!door_set(w, doors, reg, layer, pick, true));
     CHECK(doors.shut == 0);
 
-    // Frozen (a nav bake is reading the grid on a worker) refuses every mutator.
+    // doors.frozen умер вместе с гейтами бейка ([game/rebake.h]): воркер
+    // читает снапшот битсетов, дверям не с кем гоняться — мутаторы работают
+    // и во время бейка. (Тело отводим из проёма, иначе шат ниже честно
+    // откажет по занятости.)
     reg.get<Transform>(body).pos = vec3{startX, leaf.y, leaf.z};
-    doors.frozen = true;
-    CHECK(!door_set(w, doors, reg, layer, pick, true));
-    CHECK(door_toggle_near(w, doors, reg, layer, leaf) == kNoDoor);
-    doors.frozen = false;
 
     // Toggle by proximity: standing in the doorway is in reach; a room away is not.
     const std::uint32_t hit =

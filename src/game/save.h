@@ -691,17 +691,13 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 //   * PLACEMENT — `place_body_at_cell` puts the body in the saved cell, or in the
 //     nearest cell it actually fits in, or refuses. See the soft-lock note there.
 //
-// **THE ORDERING CONSTRAINT, because it is not optional.** `nav::AsyncBake` hands a raw
-// pointer to the live `MacroGrid` to a worker for a measured ~1.9 s + ~1.8 s and its
-// contract is "do not mutate or regenerate that World until ready()" ([nav_async.h]).
-// Travel regenerates floors, so the caller MUST NOT start a travelling load while a
-// bake is in flight — check `nav.baking()` and retry next frame. This is not
-// theoretical: `FloorStreamer::init(stack, keepRadius=0)` reserves exactly
-// `2*0 + 2 = 2` recyclable layers, so hop 1 generates into the free slot (safe, the
-// bake is reading the floor being left) and then frees the departed slot — which is
-// the slot hop 2 allocates and regenerates, the very grid the worker is still reading.
-// A single hop is safe; two are not. `AsyncBake::start()` joins, so re-arming the floor
-// AFTER arrival is always safe; it is the hops in between that have no guard.
+// **THE ORDERING CONSTRAINT IS DEAD.** The async bake worker used to hold a raw
+// pointer into the live `MacroGrid`, so a travelling load during a bake could free
+// the very grid the worker was reading, and this file demanded "check `nav.baking()`
+// and retry next frame". The RebakeScheduler's worker owns a snapshot of two 256 KiB
+// walkability bitsets and nothing else ([game/rebake.h]): a load or a multi-hop
+// travel during a bake simply CANCELS it (node-granular, tens of ms — inside
+// `start_fresh`) and proceeds. «По сути новая игра» — решение владельца.
 //
 // Then the arrival sequence, in this order and for these reasons:
 //   1. `refresh_floor_containers` — the destination floor has no crates until the app
@@ -710,10 +706,9 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 //      record lists.
 //   3. `refresh_floor_mobs` — a streamed-in floor has no monsters either.
 //   4. `door_build` — AFTER generation, BEFORE the bake, because it leaves every door
-//      Open so the grid the worker reads is the all-open geometry the bake must assume
-//      ([door.h]). Note `door_build` clears `DoorSet::frozen` itself, so the freeze has
-//      to be re-applied after it, never before.
-//   5. `doors.frozen = true`, then `begin_floor_nav`.
+//      Open so the walkability bitsets built at the top of `begin_floor_nav` carry the
+//      all-open geometry the bake must assume ([door.h]).
+//   5. `begin_floor_nav` — snapshots those bitsets; no freeze to arm or disarm.
 //   6. placement — last, and independent of all of the above: it reads solidity and
 //      writes one `Transform`. Doing it before `door_build` would still be correct
 //      today (door frames are recolours, not solidity changes) but would silently stop
