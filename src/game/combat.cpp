@@ -29,7 +29,8 @@
 #include "sim/drag.h"    // air_drag_step/drag_q — тот же закон трения, что у тел
 #include "world/macro_grid.h"
 #include "world/material_props.h" // material_hardness — окно угла рикошета
-#include "world/los.h"   // los_clear — a wall stops a fragment
+#include "world/destruct.h" // sub_material_at — материал попавшего субвокселя
+#include "world/los.h"   // los_clear — a wall stops a fragment; sub_march — пуля до материи
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
@@ -1615,102 +1616,105 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             }
         }
 
-        // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
-        // shot clipping the corner of a wall should stop, and the sub-voxel mask
-        // would let it slip through a half-carved cell that reads as solid.
-        // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
-        // body damage is still skipped via onWall (no onVictim/other).
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        const bool outOfZ = cz < 0 || cz >= kMacroDim;
-        if (outOfZ || grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+        // ГЕОМЕТРИЯ — субвоксельный вопрос ([CANON.md] S2: этаж состоит из
+        // субвокселей): попадание есть первый ТВЁРДЫЙ СУБВОКСЕЛЬ на отрезке
+        // шага (sub_march — единственный субвоксельный марш, [world/los.h]),
+        // не макро-клетка. Макро-тест объявлял «стеной» всю клетку с материей
+        // в паре верхних подслоёв (падик-сэндвич: плиты в sz=6..7) — пуля
+        // снизу гибла у нижней грани, в 1.5 м от плиты, и скол-карв катал
+        // пустоту: стрельба вверх и в стены не разрушала ничего, лампа на
+        // потолке не разбивалась (плейтест 2026-08-19, tests/suite_shotsub.inl).
+        // Заодно умерла обратная ловушка (аудит §1.1): пуля больше не вязнет
+        // в макро-твёрдой, но прокарвленной насквозь клетке — нет материи на
+        // отрезке, нет попадания. Направление здесь не упоминается нигде:
+        // марш изотропен по построению.
+        const vec3 to = prevPos + v.v * dt; // непрерывные координаты, обернёт финал
+        SubRayHit sub;
+        if (sub_march(grid, prevPos, to, sub)) {
+            // Материал — честный, у ПОПАВШЕГО субвокселя (sub_material_at
+            // читает страницу смешанной клетки), не у клетки целиком.
+            const CellType mat =
+                sub_material_at(stack.layer(layer), sub.cx, sub.cy, sub.cz,
+                                sub.sx, sub.sy, sub.sz);
+            const float spd = length(v.v);
+            const bool bullet =
+                static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg >= 4;
             // РИКОШЕТ по касательной от твёрдой поверхности (формула форка
             // 16004b86, нормаль — НАША). У форка нормаль бралась из argmax
             // скорости — у такой «нормали» cos падения ≥ 1/√3 ≈ 0.577, что
             // выше обоих порогов (0.55/0.40): его рикошет был мёртвым кодом.
-            // Честная нормаль — грань, через которую шаг ВОШЁЛ в терминальную
-            // клетку: по каждой оси со сменой индекса клетки берётся время
-            // пересечения её границы, грань входа — ПОЗДНЕЙШЕЕ из них (та же
-            // плоскостная арифметика, что в grenade_advance, только с конца).
-            const CellType mat =
-                outOfZ ? kMatConcrete : grid.cell(cx, cy, wrap_macro(cz));
-            const float spd = length(v.v);
-            const bool bullet =
-                static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg >= 4;
-            if (bullet && spd > 1.0f) {
+            // Честная нормаль — грань, через которую луч ВОШЁЛ в терминальный
+            // субвоксель; марш отдаёт её сам (axis/sign), плоскостная
+            // арифметика с конца схлопнулась в DDA. axis < 0 — старт уже в
+            // материи, грани входа нет: отражать не от чего, пуля гаснет.
+            if (bullet && spd > 1.0f && sub.axis >= 0) {
                 const vec3 dir = v.v * (1.0f / spd);
-                float bestT = -1.0f;
-                int bestA = -1;
-                float bestD = 0.0f;
-                const vec3 to = prevPos + v.v * dt; // непрерывные координаты
-                for (int a = 0; a < 3; ++a) {
-                    const float f = axis(prevPos, a);
-                    const float d = axis(to, a) - f;
-                    if (d > -1e-9f && d < 1e-9f) continue;
-                    const int cf = static_cast<int>(std::floor(f / kCellSize));
-                    const int ct =
-                        static_cast<int>(std::floor(axis(to, a) / kCellSize));
-                    if (cf == ct) continue;
-                    // Граница терминальной клетки по этой оси, со стороны входа.
-                    const float plane =
-                        static_cast<float>(d > 0.0f ? ct : ct + 1) * kCellSize;
-                    const float t = (plane - f) / d;
-                    if (t > bestT) { bestT = t; bestA = a; bestD = d; }
-                }
-                if (bestA >= 0) {
-                    vec3 n{0.0f, 0.0f, 0.0f};
-                    axis(n, bestA) = bestD > 0.0f ? -1.0f : 1.0f;
-                    const float cosInc = -dot(dir, n); // ~0 — касание вскользь
-                    // Сталь звонче бетона: шире окно угла, выше упругость,
-                    // меньше съеденного урона. Мягкое (hardness < 180 и не из
-                    // списков) не отражает вовсе — пуля вязнет, как раньше.
-                    const bool isSteel =
-                        mat == kMatTread || mat == kMatElectricGrate ||
-                        mat == kMatPipeMetal || mat == kMatDoor ||
-                        mat == kMatShopShutter;
-                    const bool isConcrete = mat == kMatConcrete ||
-                                            mat == kMatFactoryWall ||
-                                            mat == kMatSlabTan || outOfZ;
-                    const bool isHard = material_hardness(mat) >= 180 ||
-                                        isSteel || isConcrete;
-                    const float maxCos = isSteel ? 0.55f : 0.40f;
-                    if (isHard && cosInc > 0.01f && cosInc < maxCos) {
-                        const float eRest = isSteel ? 0.55f : 0.40f;
-                        const float fFric = isSteel ? 0.85f : 0.70f;
-                        const vec3 vn = n * dot(v.v, n);
-                        const vec3 vt = v.v - vn;
-                        v.v = vt * fFric - vn * eRest;
-                        // Точка контакта + отжим от грани, чтобы следующий шаг
-                        // спрашивал воздух, а не ту же клетку.
-                        vec3 hitP =
-                            prevPos + (to - prevPos) * (bestT < 0.0f ? 0.0f : bestT);
-                        axis(hitP, bestA) += axis(n, bestA) * 0.02f;
-                        tr.pos.x = wrapf(hitP.x, kWorldExtent);
-                        tr.pos.y = wrapf(hitP.y, kWorldExtent);
-                        tr.pos.z = hitP.z;
-                        p.dmg = static_cast<std::int16_t>(
-                            (p.dmg * (isSteel ? 65 : 50) + 50) / 100);
-                        const std::uint32_t rseed =
-                            static_cast<std::uint32_t>(tick) ^
-                            static_cast<std::uint32_t>(entt::to_integral(e));
-                        // Скол мельче прямого попадания, искры — от материала,
-                        // который высекли, не от выдуманного.
-                        if (carves)
-                            carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
-                                         kBulletCarveRadius * 0.6f,
-                                         carve_power_from_dmg(p.dmg), rseed);
-                        if (particles)
-                            particles->push(tr.pos, n * 0.5f - dir * 0.5f,
-                                            ParticleKind::Spark,
-                                            isSteel ? 12 : 6, mat, rseed);
-                        continue; // пуля жива и летит дальше
-                    }
+                vec3 n{0.0f, 0.0f, 0.0f};
+                axis(n, sub.axis) = sub.sign;
+                const float cosInc = -dot(dir, n); // ~0 — касание вскользь
+                // Сталь звонче бетона: шире окно угла, выше упругость,
+                // меньше съеденного урона. Мягкое (hardness < 180 и не из
+                // списков) не отражает вовсе — пуля вязнет, как раньше.
+                const bool isSteel =
+                    mat == kMatTread || mat == kMatElectricGrate ||
+                    mat == kMatPipeMetal || mat == kMatDoor ||
+                    mat == kMatShopShutter;
+                const bool isConcrete = mat == kMatConcrete ||
+                                        mat == kMatFactoryWall ||
+                                        mat == kMatSlabTan;
+                const bool isHard = material_hardness(mat) >= 180 ||
+                                    isSteel || isConcrete;
+                const float maxCos = isSteel ? 0.55f : 0.40f;
+                if (isHard && cosInc > 0.01f && cosInc < maxCos) {
+                    const float eRest = isSteel ? 0.55f : 0.40f;
+                    const float fFric = isSteel ? 0.85f : 0.70f;
+                    const vec3 vn = n * dot(v.v, n);
+                    const vec3 vt = v.v - vn;
+                    v.v = vt * fFric - vn * eRest;
+                    // Точка контакта + отжим от грани, чтобы следующий шаг
+                    // спрашивал воздух, а не тот же субвоксель.
+                    vec3 hitP = prevPos + (to - prevPos) * sub.t;
+                    axis(hitP, sub.axis) += axis(n, sub.axis) * 0.02f;
+                    tr.pos.x = wrapf(hitP.x, kWorldExtent);
+                    tr.pos.y = wrapf(hitP.y, kWorldExtent);
+                    tr.pos.z = wrapf(hitP.z, kWorldExtent);
+                    p.dmg = static_cast<std::int16_t>(
+                        (p.dmg * (isSteel ? 65 : 50) + 50) / 100);
+                    const std::uint32_t rseed =
+                        static_cast<std::uint32_t>(tick) ^
+                        static_cast<std::uint32_t>(entt::to_integral(e));
+                    // Скол мельче прямого попадания, искры — от материала,
+                    // который высекли, не от выдуманного. Карв у грани входа:
+                    // материя терминального субвокселя — в четверти метра за ней.
+                    if (carves)
+                        carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
+                                     kBulletCarveRadius * 0.6f,
+                                     carve_power_from_dmg(p.dmg), rseed);
+                    if (particles)
+                        particles->push(tr.pos, n * 0.5f - dir * 0.5f,
+                                        ParticleKind::Spark,
+                                        isSteel ? 12 : 6, mat, rseed);
+                    continue; // пуля жива и летит дальше
                 }
             }
+            // Пуля гибнет о материю — В ТОЧКЕ КОНТАКТА, не в конце шага: и
+            // трассер, и труп сущности остаются у стены, а не внутри неё.
+            const vec3 stopP = prevPos + (to - prevPos) * sub.t;
+            tr.pos.x = wrapf(stopP.x, kWorldExtent);
+            tr.pos.y = wrapf(stopP.y, kWorldExtent);
+            tr.pos.z = wrapf(stopP.z, kWorldExtent);
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
-            h.impactPos = tr.pos;
+            // Скол-карв центруется В ЦЕНТРЕ попавшего субвокселя ([CANON.md]
+            // S2): kBulletCarveRadius = 0.35 от него гарантированно накрывает
+            // материю, тогда как центр у грани клетки накрывал воздух.
+            h.impactPos = vec3{
+                (static_cast<float>(sub.cx * kSubDim + sub.sx) + 0.5f) *
+                    kVoxelSize,
+                (static_cast<float>(sub.cy * kSubDim + sub.sy) + 0.5f) *
+                    kVoxelSize,
+                (static_cast<float>(sub.cz * kSubDim + sub.sz) + 0.5f) *
+                    kVoxelSize};
             h.projType = p.proj;
             h.channel = p.channel;
             resolved.push_back(h);
