@@ -548,10 +548,10 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     struct Slot {
         std::uint32_t score;
         std::int16_t x, y;
-        std::int8_t faceSz;
+        std::int8_t su, sv, layer; // запись примитива поверхностей; layer<0 = пусто
     };
     std::vector<Slot> best(static_cast<std::size_t>(blocks) * blocks * kMacroDim,
-                           Slot{0xFFFFFFFFu, 0, 0, -1});
+                           Slot{0xFFFFFFFFu, 0, 0, 0, 0, -1});
 
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
@@ -569,12 +569,14 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                    is_solid_cell(grid.cell(x, y + 1, z));
                 if (nichX || nichY) continue;
 
-                // Hang from the REAL ceiling under-face: the sandwich is
-                // partially carved from below, and the cell-plane form left
-                // bulbs floating mid-air. A holed centre column = no lamp.
-                const int faceSz =
-                    grid.mask(x, y, z + 1).lowest_layer_centre();
-                if (faceSz < 0) continue;
+                // Hang from the REAL ceiling under-face — ЗАПРОС ПОВЕРХНОСТЕЙ
+                // ([world/surface.h], S10): грань экспонирована? Ручной
+                // lowest_layer_centre + добор точного бита умерли; дырявый
+                // центр больше не отменяет лампу — представительная колонка
+                // просто съезжает к ближайшей экспонированной.
+                const SurfaceFace sfc = surface_face_at(
+                    grid, x, y, z + 1, anchor_face_pack(2, -1));
+                if (sfc.columns == 0) continue;
 
                 // HEADROOM: some surface within the bulb's own reach below, or
                 // this is not a room's ceiling — it is an overhang over a void
@@ -592,7 +594,9 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 if (score >= slot.score) continue;
                 slot = Slot{score, static_cast<std::int16_t>(x),
                             static_cast<std::int16_t>(y),
-                            static_cast<std::int8_t>(faceSz)};
+                            static_cast<std::int8_t>(sfc.su),
+                            static_cast<std::int8_t>(sfc.sv),
+                            static_cast<std::int8_t>(sfc.layer)};
             }
         }
     }
@@ -602,11 +606,11 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
             for (int bx = 0; bx < blocks; ++bx) {
                 const Slot& slot =
                     best[(static_cast<std::size_t>(z) * blocks + by) * blocks + bx];
-                if (slot.faceSz < 0) continue;
+                if (slot.layer < 0) continue;
                 const int x = slot.x, y = slot.y;
                 const int cz = wrap_macro(z + 1);
                 const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
-                                    static_cast<float>(slot.faceSz) * (kCell / 8.0f);
+                                    static_cast<float>(slot.layer) * (kCell / 8.0f);
 
                 // Cell CENTRE — the corner form hung bulbs on whatever wall
                 // shared the corner (the same bug the wall seeder had).
@@ -614,34 +618,17 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 const float wy = (static_cast<float>(y) + 0.5f) * kCell;
                 const float wz = faceM - 0.14f;
 
-                // ANCHOR THE SUB-LAYER WE MEASURED, not sub-layer 0. The face
-                // height above was already read from the mask; the anchor kept
-                // saying "bottom of the ceiling cell", and spawn_prop's
-                // grid.solid(cx,cy,cz, 4,4,subZ) gate then rejected every lamp
-                // whose slab does not reach the cell's floor. On padic the
-                // sandwich slab lives in sub-layers 6..7 of the ceiling cell,
-                // so sub-layer 0 is air and 123 110 of 123 156 lamps were
-                // dropped — the floor shipped with 84. Pick the exact solid bit
-                // of the centre 2x2 too: lowest_layer_centre() only promises
-                // that ONE of (3,3)(4,3)(3,4)(4,4) is set.
-                int subX = 4, subY = 4;
-                for (int sy = 3; sy <= 4; ++sy)
-                    for (int sx = 3; sx <= 4; ++sx)
-                        if (grid.solid(wrap_macro(x), wrap_macro(y), cz, sx, sy,
-                                       slot.faceSz)) {
-                            subX = sx;
-                            subY = sy;
-                            sy = 5;
-                            break;
-                        }
-
+                // Якорь — прямо из записи примитива: представительная
+                // экспонированная колонка (su,sv) + её слой. Прежний добор
+                // «точного солидного бита центра 2×2» умер вместе с побитовым
+                // гейтом (колонковая проба anchor_alive спрашивает то же окно).
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
                 anchor.cy   = y;
                 anchor.cz   = cz;
-                anchor.subX = static_cast<std::uint8_t>(subX);
-                anchor.subY = static_cast<std::uint8_t>(subY);
-                anchor.subZ = static_cast<std::uint8_t>(slot.faceSz);
+                anchor.subX = static_cast<std::uint8_t>(slot.su);
+                anchor.subY = static_cast<std::uint8_t>(slot.sv);
+                anchor.subZ = static_cast<std::uint8_t>(slot.layer);
                 anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
 
                 // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.

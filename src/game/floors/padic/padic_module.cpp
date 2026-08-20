@@ -10,6 +10,7 @@
 #include "ecs/components.h"
 #include "core/wrap.h"
 #include "world/anchor.h"
+#include "world/surface.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -50,52 +51,37 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
         const int wAir = wrap_macro(airZ);
         const int wCeil = wrap_macro(ceilZ);
 
-        // ASK THE CEILING WHERE ITS UNDER-FACE IS. This branch used to test
-        // solid(...,4,4,0) — sub-layer 0 of the ceiling cell — but the storey
-        // ceiling here IS THE SANDWICH: kCeilW puts the slab in sub-layers 6..7
-        // and leaves 0..5 hollow. So the test failed on every ordinary landing
-        // and 672 of 1032 stairwells shipped unlit; only the 336 that happen to
-        // sit under a full-concrete cell got a bulb. Same defect the generic
-        // seeder carried ([prop_system.cpp] seed_ceiling_lights).
-        const int faceSz = grid.mask(wcx, wcy, wCeil).lowest_layer_centre();
-        if (faceSz >= 0) {
-            // lowest_layer_centre() only promises ONE of the centre 2x2 bits is
-            // set; spawn_prop's solid() gate wants the exact one.
-            int subX = 4, subY = 4;
-            for (int sy = 3; sy <= 4; ++sy)
-                for (int sx = 3; sx <= 4; ++sx)
-                    if (grid.solid(wcx, wcy, wCeil, sx, sy, faceSz)) {
-                        subX = sx;
-                        subY = sy;
-                        sy = 5;
-                        break;
-                    }
+        // ASK THE CEILING WHERE ITS UNDER-FACE IS — теперь одним ЗАПРОСОМ
+        // ПОВЕРХНОСТЕЙ ([world/surface.h], S10): ручной lowest_layer_centre +
+        // добор точного бита и специальный тест известного скульпт-бита
+        // (2,4,6) умерли — примитив находит экспонированную колонку и в
+        // потолочной клетке, и в лепке внутри «воздушной». История дефекта,
+        // который тут лечили руками, — в шапке seed_ceiling_lights.
+        const SurfaceFace sfc =
+            surface_face_at(grid, wcx, wcy, wCeil, anchor_face_pack(2, -1));
+        const SurfaceFace sfa =
+            sfc.columns > 0
+                ? sfc
+                : surface_face_at(grid, wcx, wcy, wAir, anchor_face_pack(2, -1));
+        if (sfa.columns > 0) {
+            const bool inCeil = sfc.columns > 0;
+            const int faceCz = inCeil ? ceilZ : airZ;
             anchor.cx = wcx;
             anchor.cy = wcy;
-            anchor.cz = wCeil;
-            anchor.subX = static_cast<std::uint8_t>(subX);
-            anchor.subY = static_cast<std::uint8_t>(subY);
-            anchor.subZ = static_cast<std::uint8_t>(faceSz);
-            anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
-            // Corded bulb: 0.45 m of flex below the face it hangs from. For a
-            // full ceiling (faceSz = 0) that is the old airZ*kCellSize + 1.55,
-            // so the lamps that already worked do not move.
-            const float faceM = static_cast<float>(airZ + 1) * kCellSize +
-                                static_cast<float>(faceSz) * (kCellSize / 8.0f);
+            anchor.cz = static_cast<std::uint8_t>(inCeil ? wCeil : wAir);
+            anchor.subX = sfa.su;
+            anchor.subY = sfa.sv;
+            anchor.subZ = sfa.layer;
+            anchor.face = anchor_face_pack(2, -1); // нижняя грань опоры
+            // Corded bulb: 0.45 m of flex below the face it hangs from —
+            // грань считается от НАЙДЕННОГО слоя найденной клетки, лампы
+            // полного потолка (layer 0 в ceilZ) не сдвинулись ни на мм.
+            const float faceM =
+                static_cast<float>(faceCz) * kCellSize +
+                static_cast<float>(sfa.layer) * (kCellSize / 8.0f);
             bulbPos = vec3{static_cast<float>(cx) * kCellSize + 1.0f,
                            static_cast<float>(cy) * kCellSize + 1.0f,
                            faceM - 0.45f};
-        } else if (grid.solid(wcx, wcy, wAir, 2, 4, 6)) {
-            anchor.cx = wcx;
-            anchor.cy = wcy;
-            anchor.cz = wAir;
-            anchor.subX = 2;
-            anchor.subY = 4;
-            anchor.subZ = 6;
-            anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
-            bulbPos = vec3{static_cast<float>(cx) * kCellSize + 0.5f,
-                           static_cast<float>(cy) * kCellSize + 1.0f,
-                           static_cast<float>(airZ) * kCellSize + 1.55f};
         } else {
             return false; // no honest solid support — do not float a lamp
         }
