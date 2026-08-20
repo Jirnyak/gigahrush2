@@ -90,6 +90,39 @@
 
 Правило «свободно» **уже выразимо данными**: `BarterTerms{0, 0}` даёт цену 0.
 
+## Решения владельца 2026-08-21 + разведка B1 (факты из кода)
+
+Решения: ящик = **SimpleFall**; скоуп **A+B+C** (труп сразу); сейв — новая
+версия, ящики пересеются (OpenedContainerKey с коллизией 13% умирает без
+миграции). Свет ящика-неоткрытого (main.cpp:403 add_light) сохранить.
+
+**B1 — ящик спавнится ПРОП-СИСТЕМОЙ** (первый инкремент, факты разведаны):
+- props.csv (10 строк, gen_prop_table.py, "None"=255 для interact): добавить
+  строку `supply_crate,Ящик,Box,SimpleFall,None,...` — размер из
+  kContainerHalf×2 (1.1×1.1×0.9 м), цвет = kShutColour (найти значение в
+  container.cpp), mat_id металл, reach 2400 (kContainerReach 2.4).
+  ЗАПУСТИТЬ ГЕНЕРАТОР (CSV — источник, ctest считает строки).
+- spawn_floor_containers (container.cpp:289-365): кандидатский цикл
+  (комната→клетка→floor_standable→не-экстракт→не-вода→roomMask) ЖИВЁТ;
+  ручной emplace-блок (:344-362) умирает → spawn_prop_from_id(PropId::
+  SupplyCrate) + emplace<Container>(roll_in_room...). Якорь — surface_face_at
+  по опоре из ГРАВИФРЕЙМА: support = c + regime_down, face =
+  anchor_face_pack(ось down, −знак) — изотропно, мёртвый воздушный якорь
+  {cx,cy,cz,4,4,0,0} наконец умирает.
+- Рендер: PropMesh из CSV (PropPass) вместо Renderable+body-pass; смена
+  цвета крышки при open (найти сайт свапа kShutColour/kOpenColour) →
+  Renderable + propPassNeedsRebuild.
+- Кастомный E-перебор (container.cpp:388 loot_nearby_container по
+  дистанции) ПОКА живёт (ключуется на компонент Container) — умирает в B2
+  вместе с единым экраном.
+- Сейв: ContainerRecord несёт Container по значению (save.cpp:812-873,
+  ключ по позиции) — при B1 ломается ТОЛЬКО если позиция сменилась; бамп
+  версии по решению владельца.
+B2: интеракция через Interactable + find_nearest_interactable, единый экран.
+B3: Container{4 слота} → канонический Inventory-компонент (64) на сущности.
+C: труп → RagdollRoll-проп с Inventory (умирают Corpse::lootSlots,
+CorpseLootPending; finalize_deaths теряет ручную косметику).
+
 ## Инкременты
 
 **A. Контейнер как компонент + якорь.** Живёт рядом со старым, никто не переключён.
