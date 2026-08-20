@@ -35,9 +35,11 @@ void RebakeScheduler::join_worker() {
 }
 
 void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
-                                      std::uint32_t slots) {
+                                      std::uint32_t slots,
+                                      std::uint32_t clusterBase) {
     lampsLive_.assign(lamps, lamps + n);
     lightSlots_ = slots;
+    lightClusterBase_ = clusterBase;
 }
 
 void RebakeScheduler::discard_pending() {
@@ -102,7 +104,8 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // печатается вслух — правило «бейк без замера прячет свою регрессию».
     {
         bake_light_visibility(grid, lampsLive_.data(), lampsLive_.size(),
-                              lightSlots_, lightVis_, /*threads=*/0, nullptr);
+                              lightSlots_, lightVis_, /*threads=*/0, nullptr,
+                              lightClusterBase_);
         lightGen_ = worldGen;
         lightSwapPending_ = true;
         std::fprintf(stderr,
@@ -190,7 +193,8 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         if (snapGrid_ != nullptr)
             bake_light_visibility(*snapGrid_, lampsSnap_.data(),
                                   lampsSnap_.size(), lightSlots_,
-                                  pendingLight_, threads, &cancel_);
+                                  pendingLight_, threads, &cancel_,
+                                  lightClusterBase_);
         if (!cancel_.load(std::memory_order_relaxed)) {
             std::fprintf(stderr,
                          "[lightvis] floor %d gen %llu rebaked: %u lamps -> "
