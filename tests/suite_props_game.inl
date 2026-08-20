@@ -397,6 +397,64 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     }
 }
 
+// Инкремент 3 якорного эпика (anchor-unify.md): проба живости — КОЛОНКА
+// субвокселей у грани крепления, не один бит. Обе полярности одним тестом
+// (закон run-the-mutation): чужой бит клетки НЕ роняет вещь, смерть колонки
+// под точкой крепления — роняет.
+static void test_anchor_column_probe_both_polarities() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2;
+
+    // Полная бетонная клетка потолка; лампа висит под нижней гранью, точка
+    // крепления — центр (4,4), как её пишет seed_ceiling_lights.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 10;
+    anchor.cy = 4;
+    anchor.cz = 10;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 0;
+    anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
+
+    const auto e = game::spawn_prop(reg, world, vec3{21.0f, 9.0f, 19.8f}, anchor,
+                                    game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::RagdollRoll,
+                                    vec3{0.9f, 0.85f, 0.4f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(10, 4, 10))};
+
+    // Полярность 1: выкарван ЧУЖОЙ угол клетки — колонка крепления цела,
+    // вещь обязана висеть (прежний побитовый тест тут не менялся, но колонка
+    // переживает и смерть самого бита (4,4,0), пока над ним есть материя).
+    world.grid().mask(10, 4, 10).clear(sub_bit(0, 0, 7));
+    world.grid().mask(10, 4, 10).clear(sub_bit(4, 4, 0));
+    bus.clear();
+    game::anchor_validate_step(reg, world, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+
+    // Полярность 2: умерла ВСЯ колонка 2×2 у грани крепления (окно {4,5}²
+    // сквозь все 8 слоёв) — клетка ещё на 87% полна, но вещь держаться не на
+    // чем: обязана отвалиться. Ровно кейс владельца с проводами 2026-08-05.
+    for (int sz = 0; sz < kSubDim; ++sz)
+        for (int sy = 4; sy <= 5; ++sy)
+            for (int sx = 4; sx <= 5; ++sx)
+                world.grid().mask(10, 4, 10).clear(sub_bit(sx, sy, sz));
+    bus.clear();
+    game::anchor_validate_step(reg, world, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::DynamicBodyTag>(e));
+    CHECK(bus.cycle_count(EventType::PropDetached) > 0u);
+}
+
 static void test_anchor_validate_skips_solid_support() {
     Registry reg;
     World world;
@@ -1097,6 +1155,7 @@ void test_props_game_all() {
     test_ceiling_lights_do_not_collide_with_wall_devices();
     test_padic_props_seed_tags_layer();
     test_spawn_prop_anchor_and_detach_on_air();
+    test_anchor_column_probe_both_polarities();
     test_anchor_validate_skips_solid_support();
     test_prop_ragdoll_step_damps_angular();
     test_debris_roll_drives_angular_on_ground();

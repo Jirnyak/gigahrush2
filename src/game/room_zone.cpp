@@ -7,6 +7,7 @@
 #include "game/ai.h"          // ai_remember_cell — recovery that lands files a memory
 #include "game/needs.h"       // kNeedMax — one clamp band for every needs writer
 #include "game/prop_system.h" // spawn_prop_from_id / SubVoxelAnchor — the furnisher
+#include "world/anchor.h"     // anchor_face_pack — словарь граней якоря
 #include "world/macro_grid.h" // MacroGrid — the bake's walkability test
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index, wrap_macro
 #include "world/walk_bits.h"  // WalkBits — the bake's 256 KiB body open-set
@@ -528,7 +529,7 @@ std::uint32_t seed_room_furniture(Registry& reg, const World& world, LayerId lay
                 anchor.subX = kSubDim / 2;
                 anchor.subY = kSubDim / 2;
                 anchor.subZ = floor.subZ;
-                anchor.face = 0; // Floor
+                anchor.face = anchor_face_pack(2, 1); // верхняя грань пола
                 const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
                                (static_cast<float>(cy) + 0.5f) * kCellSize,
                                floor.height + halfH};

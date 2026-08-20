@@ -479,8 +479,8 @@ static void test_pipes_hug_and_branch() {
         // be the mounting gap, not a metre of air. Ray-marching from the
         // instance CENTRE looked right but lied both ways — a half-link reaches
         // into the neighbour's cell, where the ceiling may be higher.
-        const int ax = antourage_face_axis(it.face);
-        const int dr = antourage_face_dir(it.face);
+        const int ax = anchor_face_axis(it.face);
+        const int dr = anchor_face_dir(it.face);
         const int s = w.grid().mask(it.ax0, it.ay0, it.az0).face_layer(ax, dr, true);
         if (s < 0) { ++floating; continue; }         // nothing to clamp to at all
         const int anchorCoord = ax == 0 ? it.ax0 : ax == 1 ? it.ay0 : it.az0;
@@ -505,8 +505,8 @@ static void test_pipes_hug_and_branch() {
     auto key_of = [](std::uint8_t ax, std::uint8_t ay, std::uint8_t az,
                      std::uint8_t face) {
         int c3[3] = {ax, ay, az};
-        c3[antourage_face_axis(face)] =
-            wrap_macro(c3[antourage_face_axis(face)] + antourage_face_dir(face));
+        c3[anchor_face_axis(face)] =
+            wrap_macro(c3[anchor_face_axis(face)] + anchor_face_dir(face));
         return macro_index(c3[0], c3[1], c3[2]) * 8u + face;
     };
     std::vector<std::uint64_t> runKeys, fitKeys;

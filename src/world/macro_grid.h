@@ -65,12 +65,43 @@ struct SubMask {
     // the packing axis and stays a single word test per layer; a tangent axis
     // pays a bit loop — at bake time only, never in a tick.
     int face_layer(int axis, int dir, bool centreOnly) const {
-        const std::uint64_t zMask = centreOnly ? kCentreZ : ~std::uint64_t{0};
+        if (centreOnly)
+            return face_layer_window(axis, dir, kSubDim / 2 - 1, kSubDim / 2 - 1);
         for (int i = 0; i < kSubDim; ++i) {
             const int s = dir > 0 ? kSubDim - 1 - i : i;
-            const bool solid = axis == 2 ? (words[s] & zMask) != 0
-                                         : tangent_layer_solid(axis, s, centreOnly);
+            const bool solid = axis == 2 ? words[s] != 0
+                                         : tangent_layer_solid(axis, s, false);
             if (solid) return s;
+        }
+        return -1;
+    }
+
+    // То же, но окно 2×2 в ТОЧКЕ КРЕПЛЕНИЯ (u,v) на тангенциальных осях грани
+    // (X-грань → (y,z), Y-грань → (x,z), Z-грань → (x,y); соответствие держит
+    // anchor_face_uv в [world/anchor.h], потребители его не дублируют). Окно
+    // прижимается к краю грани; центр (kSubDim/2-1)² воспроизводит kCentreZ
+    // бит в бит — face_layer(centreOnly) делегирует сюда. Точка, а не центр
+    // (решение владельца 2026-08-20, S2): вещь, прибитая в углу 2-метровой
+    // грани, живёт и умирает по материи ПОД СОБОЙ, а не в полуметре от себя.
+    int face_layer_window(int axis, int dir, int u, int v) const {
+        const int u0 = u < 0 ? 0 : (u > kSubDim - 2 ? kSubDim - 2 : u);
+        const int v0 = v < 0 ? 0 : (v > kSubDim - 2 ? kSubDim - 2 : v);
+        if (axis == 2) {
+            const std::uint64_t m =
+                (std::uint64_t{3} << (u0 + v0 * kSubDim)) |
+                (std::uint64_t{3} << (u0 + (v0 + 1) * kSubDim));
+            for (int i = 0; i < kSubDim; ++i) {
+                const int s = dir > 0 ? kSubDim - 1 - i : i;
+                if (words[s] & m) return s;
+            }
+            return -1;
+        }
+        for (int i = 0; i < kSubDim; ++i) {
+            const int s = dir > 0 ? kSubDim - 1 - i : i;
+            for (int a = u0; a <= u0 + 1; ++a)
+                for (int b = v0; b <= v0 + 1; ++b)
+                    if (test(axis == 0 ? sub_bit(s, a, b) : sub_bit(a, s, b)))
+                        return s;
         }
         return -1;
     }

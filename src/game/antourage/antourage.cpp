@@ -16,6 +16,7 @@
 
 #include "core/rng.h"
 #include "sim/physics.h"   // aabb_overlaps_solid — the solver's own predicate
+#include "world/anchor.h"  // anchor_alive/anchor_face_* — ОДНА проба на всех
 #include "world/macro_grid.h"
 #include "world/materials.h"
 #include "world/world.h"
@@ -206,8 +207,8 @@ inline std::size_t state_of(std::size_t cellIdx, int face) {
 // bites — the same question the bracket will be drawn against.
 bool can_hug(const MacroGrid& g, const WalkCell& c, int face) {
     if (!is_air(g, c)) return false;
-    const int ax = antourage_face_axis(face);
-    const int dr = antourage_face_dir(face);
+    const int ax = anchor_face_axis(face);
+    const int dr = anchor_face_dir(face);
     const WalkCell anchor = stepped(c, ax, -dr);
     if (is_air(g, anchor)) return false;
     return g.mask(anchor.x, anchor.y, anchor.z).face_layer(ax, dr, true) >= 0;
@@ -216,8 +217,8 @@ bool can_hug(const MacroGrid& g, const WalkCell& c, int face) {
 // The world point a pipe sits at inside `c` on `face`: cell centre on the two
 // free axes, the REAL surface plus a radius on the third.
 vec3 pipe_point(const MacroGrid& g, const WalkCell& c, int face) {
-    const int ax = antourage_face_axis(face);
-    const int dr = antourage_face_dir(face);
+    const int ax = anchor_face_axis(face);
+    const int dr = anchor_face_dir(face);
     vec3 p{static_cast<float>(c.x) * kCellSize + 1.0f,
            static_cast<float>(c.y) * kCellSize + 1.0f,
            static_cast<float>(c.z) * kCellSize + 1.0f};
@@ -233,7 +234,7 @@ vec3 pipe_point(const MacroGrid& g, const WalkCell& c, int face) {
 }
 
 WalkCell face_anchor(const WalkCell& c, int face) {
-    return stepped(c, antourage_face_axis(face), -antourage_face_dir(face));
+    return stepped(c, anchor_face_axis(face), -anchor_face_dir(face));
 }
 
 void push_box(AntourageBake& out, vec3 pos, vec3 scale, std::uint8_t face,
@@ -269,9 +270,9 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
     // ceilings carry the distribution, walls carry the risers.
     const int kFaces = 5;
     const int faceOrder[kFaces] = {
-        antourage_face_pack(f.axis, -f.upSign),
-        antourage_face_pack(f.tanA, -1), antourage_face_pack(f.tanA, 1),
-        antourage_face_pack(f.tanB, -1), antourage_face_pack(f.tanB, 1),
+        anchor_face_pack(f.axis, -f.upSign),
+        anchor_face_pack(f.tanA, -1), anchor_face_pack(f.tanA, 1),
+        anchor_face_pack(f.tanB, -1), anchor_face_pack(f.tanB, 1),
     };
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y)
@@ -323,7 +324,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             const std::size_t ci = st / 6u;
             const int face = static_cast<int>(st % 6u);
             const WalkCell c = cell_of(ci);
-            const int fax = antourage_face_axis(face);
+            const int fax = anchor_face_axis(face);
             auto relax = [&](std::size_t ns, std::uint32_t cost, int axis) {
                 if (net[ns].pred == -2) return;             // not a place a pipe fits
                 const std::uint32_t nd = d + cost;
@@ -409,7 +410,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         const std::size_t ci = st / 6u;
         const int face = static_cast<int>(st % 6u);
         const WalkCell c = cell_of(ci);
-        const int fax = antourage_face_axis(face);
+        const int fax = anchor_face_axis(face);
         const vec3 a = pipe_point(g, c, face);
         const WalkCell an = face_anchor(c, face);
         const float d = 2.0f * kPipeRadius;
@@ -514,7 +515,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
         if (++sinceBracket >= kPipeBracketEvery) {
             sinceBracket = 0;
             vec3 clamp = a;
-            vec_add(clamp, fax, static_cast<float>(-antourage_face_dir(face)) *
+            vec_add(clamp, fax, static_cast<float>(-anchor_face_dir(face)) *
                                     kPipeRadius);
             push_box(out, clamp, vec3{1.5f * kPipeRadius, 1.5f * kPipeRadius,
                                       1.5f * kPipeRadius},
@@ -606,7 +607,7 @@ void bake_wires(const World& w, const GravityFrame& f, std::uint32_t fseed,
         c.restLen = (f.pull ? spanM * 1.02f : spanM) /
                     static_cast<float>(kWirePoints - 1);
         c.massKg = spanM * kWireKgPerMetre;
-        c.face = antourage_face_pack(f.axis, -f.upSign);
+        c.face = anchor_face_pack(f.axis, -f.upSign);
         c.matId = static_cast<std::uint8_t>(kMatPipeMetal); // cable sheath
         out.wires.push_back(c);
     }
@@ -676,7 +677,7 @@ void bake_cloths(const World& w, const GravityFrame& f, std::uint32_t fseed,
         s.pinMask = 0xFFu; // the top row
         // Canvas has no material row of its own yet; plaster's dusty beige is
         // the closest honest tint for the shreds. One CSV line from real.
-        s.face = antourage_face_pack(f.axis, -f.upSign);
+        s.face = anchor_face_pack(f.axis, -f.upSign);
         s.matId = static_cast<std::uint8_t>(kMatPlaster);
         out.cloths.push_back(s);
     }
@@ -764,19 +765,14 @@ void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
 
 // --- DESTRUCTION ------------------------------------------------------------
 
-// Did the matter this end was pinned TO go away? A cell is 2 m and a carve works
-// in 0.25 m sub-voxels, so "the cell is air" is far too coarse a question: it
-// only becomes true once all 512 sub-voxels are gone, and a player-sized hole
-// punched exactly where the wire hangs left it dangling from a cell that was
-// still 90% full (owner, live play 2026-08-05). So ask what the BAKE asked when
-// it chose the spot — is there still matter in the attachment column of the face
-// it hangs off ([macro_grid.h] face_layer, centre 2x2). Same question, same
-// answer, and the thing lets go exactly when the matter it hung from does.
+// Did the matter this end was pinned TO go away? The probe itself moved to the
+// engine ([world/anchor.h] anchor_alive) and became THE aliveness question for
+// everything anchored to the voxel skeleton — antourage asks it at the face
+// CENTRE (the default), which is where its ends hang; props ask at their own
+// attachment point. This wrapper only keeps the local negative-polarity name.
 static bool anchor_gone(const MacroGrid& g, int x, int y, int z,
                         std::uint8_t face) {
-    if (g.cell(x, y, z) == kCellAir) return true;
-    return g.mask(x, y, z).face_layer(antourage_face_axis(face),
-                                      antourage_face_dir(face), true) < 0;
+    return !anchor_alive(g, x, y, z, face);
 }
 
 
@@ -885,8 +881,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
             // A nudge off the wall it hugged, so it visibly lets go instead of
             // sliding straight down the surface, plus a lazy tumble.
             d.vel = normalize(fall(it.pos)) * 0.6f;
-            vec_add(d.vel, antourage_face_axis(it.face),
-                    static_cast<float>(antourage_face_dir(it.face)) * 0.45f);
+            vec_add(d.vel, anchor_face_axis(it.face),
+                    static_cast<float>(anchor_face_dir(it.face)) * 0.45f);
             d.yaw = it.yaw;
             d.spin = (static_cast<float>(h & 255u) / 255.0f - 0.5f) * 2.4f;
             d.life = kAntourageFallSec;

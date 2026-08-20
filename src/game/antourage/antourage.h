@@ -30,6 +30,7 @@
 
 #include "core/math.h"
 #include "game/particles.h" // the debris a severed piece owes the world
+#include "world/anchor.h"   // anchor_face_* — словарь, которым говорят face-байты ниже
 
 namespace giga {
 class World;
@@ -59,8 +60,8 @@ struct WireChain {
     // does the pushing; this mask is all a designer needs to set).
     std::uint8_t pinMask = 0x81;
     // WHICH FACE of the anchor cells this hangs off, as `axis * 2 + (dir < 0)`
-    // where `dir` points from the anchor cell TOWARD the chain (see
-    // `antourage_face_*` below). The aliveness probe needs it because a carve
+    // where `dir` points from the anchor cell TOWARD the chain
+    // ([world/anchor.h] anchor_face_*). The aliveness probe needs it because a carve
     // works in SUB-VOXELS while a cell is 2 m: "the cell is air" only becomes
     // true once all 512 sub-voxels are gone, so a player-sized hole punched
     // exactly where the wire is pinned left it hanging from nothing. With the
@@ -100,16 +101,9 @@ struct ClothSheet {
     std::uint8_t face = 0;  // attachment face, as on WireChain
 };
 
-// The attachment face, packed and unpacked. `axis` is 0/1/2 and `dir` is the
-// step from the ANCHOR CELL toward the hanging thing (-1 or +1), which is the
-// direction the probe scans the anchor's sub-voxels from.
-inline constexpr std::uint8_t antourage_face_pack(int axis, int dir) {
-    return static_cast<std::uint8_t>(axis * 2 + (dir < 0 ? 1 : 0));
-}
-inline constexpr int antourage_face_axis(std::uint8_t face) { return face / 2; }
-inline constexpr int antourage_face_dir(std::uint8_t face) {
-    return (face & 1u) ? -1 : 1;
-}
+// The attachment face lives in [world/anchor.h] now (anchor_face_pack/axis/dir):
+// the encoding antourage pioneered became THE engine-wide anchor vocabulary
+// (owner, 2026-08-20) — props and containers speak it too, one probe for all.
 
 // THE UNIVERSAL PRIMITIVE (owner's contract, 2026-08-03): a module emits
 // INSTANCES — shape + transform + material + anchor cells — and the core

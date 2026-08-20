@@ -1,5 +1,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "world/anchor.h"
+#include "world/surface.h"
 #include "world/macro_grid.h"
 #include "world/materials.h"
 #include "world/types.h"
@@ -274,8 +276,15 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
 
         if (!dirtySet.contains(key)) continue;
 
-        // Anchor support lost when the sub-voxel is no longer solid.
-        if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+        // Опора потеряна, когда умерла КОЛОНКА субвокселей у грани крепления
+        // ([world/anchor.h] anchor_alive, окно 2×2 в точке крепления) — тот же
+        // вопрос, что у антуража, второй пробы больше нет (S11). Прежний тест
+        // одного бита из 512 врал в обе стороны: потолок выкарвлен вокруг
+        // лампы, а её бит цел — висит на игле; и жизнь вещи была привязана к
+        // точке, которой игрок не видит (S2).
+        const AnchorUV uv =
+            anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
+        if (!anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v)) {
             const auto& tr = view.get<Transform>(entity);
             vec3 col = reg.all_of<Renderable>(entity)
                            ? reg.get<Renderable>(entity).color
@@ -283,16 +292,17 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
             std::uint32_t mk = 0;
             if (reg.all_of<PropMesh>(entity))
                 mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
-            // The detach kick is a nudge AWAY from the pull, so it is derived from
-            // the layer's gravity vector, not the literal +Z it used to be
-            // ([AGENTS.md]: never assume -Z). `world` is already in hand here, so
-            // there is no excuse for guessing which way is up.
-            const vec3 g = world.gravity().at(tr.pos);
-            const float gLen = length(g);
-            const vec3 up =
-                gLen > 1e-6f ? g * (-1.0f / gLen) : vec3{0.0f, 0.0f, 1.0f};
+            // Направление отрыва = НОРМАЛЬ ГРАНИ крепления (от опоры к вещи)
+            // — face наконец читается, как S10 и требовал; провис дальше
+            // делает гравитация (S1: геометрия — фрейм, сила — провис). Так
+            // уже жил антураж. Прежний толчок «против гравитации» пинал
+            // потолочную лампу ВВЕРХ — в только что выкарванный потолок.
+            const int fAxis = anchor_face_axis(anchor.face);
+            const float fDir = static_cast<float>(anchor_face_dir(anchor.face));
+            const vec3 n{fAxis == 0 ? fDir : 0.0f, fAxis == 1 ? fDir : 0.0f,
+                         fAxis == 2 ? fDir : 0.0f};
             detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                up, col, mk});
+                                n, col, mk});
         }
     }
 
@@ -316,7 +326,13 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     int cy = wrap_macro(anchor.cy);
     int cz = wrap_macro(anchor.cz);
 
-    if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+    // Гейт спавна и проба живости обязаны задавать ОДИН вопрос (иначе вещь
+    // спавнится и отваливается первым же карвом соседнего бита): колонка у
+    // грани крепления, как в anchor_validate_step выше. Строго шире прежнего
+    // побитового теста — всё, что спавнилось, спавнится.
+    const AnchorUV uv =
+        anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
+    if (!anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v)) {
         return entt::null;
     }
 
@@ -467,25 +483,41 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 else if (solidSouth) { wyd = -1; yawVal = 0.0f; }
                 else                 { wyd = 1;  yawVal = 0.0f; }
 
+                // ЗАПРОС ПОВЕРХНОСТЕЙ ([world/surface.h], S10): экспонирована
+                // ли грань стены и где её реальная поверхность. Стены лепленые
+                // — «заподлицо с границей клетки» вешало панель в воздухе
+                // (скрин владельца 2026-08-20: парящий щиток); позиция, якорь
+                // и проба живости выводятся из ОДНОЙ записи примитива.
+                const std::uint8_t wallFace = anchor_face_pack(
+                    wxd != 0 ? 0 : 1, wxd != 0 ? -wxd : -wyd);
+                const SurfaceFace sf =
+                    surface_face_at(grid, x + wxd, y + wyd, z, wallFace);
+                if (sf.columns == 0) continue; // грань не экспонирована
+                const float recess = static_cast<float>(
+                    anchor_face_dir(wallFace) > 0 ? kSubDim - 1 - sf.layer
+                                                  : sf.layer) * kVoxelSize;
+
                 // Flush: slide the panel centre from the cell centre to the
-                // wall face, leaving half its thickness plus a hair of gap.
+                // REAL wall surface (recess deep), half thickness + a hair.
                 const float slide = 1.0f - (0.5f * thick + 0.02f);
                 const float wx = (static_cast<float>(x) + 0.5f) * kCell +
-                                 static_cast<float>(wxd) * slide;
+                                 static_cast<float>(wxd) * (slide + recess);
                 const float wy = (static_cast<float>(y) + 0.5f) * kCell +
-                                 static_cast<float>(wyd) * slide;
+                                 static_cast<float>(wyd) * (slide + recess);
                 const float wz = (static_cast<float>(z) + 0.5f) * kCell;
 
                 // Anchor INTO the wall cell: the panel falls when its wall is
                 // carved, not when some unrelated floor is.
+                // Якорь — прямо из записи примитива: слой вдоль оси, (su,sv)
+                // по тангенсам (обратное отображение anchor_face_uv).
                 SubVoxelAnchor anchor;
-                anchor.cx   = static_cast<std::uint8_t>(wrap_macro(x + wxd));
-                anchor.cy   = static_cast<std::uint8_t>(wrap_macro(y + wyd));
-                anchor.cz   = static_cast<std::uint8_t>(z);
-                anchor.subX = static_cast<std::uint8_t>(wxd < 0 ? 7 : wxd > 0 ? 0 : 4);
-                anchor.subY = static_cast<std::uint8_t>(wyd < 0 ? 7 : wyd > 0 ? 0 : 4);
-                anchor.subZ = 4;
-                anchor.face = 1; // wall
+                anchor.cx   = static_cast<std::uint8_t>(sf.cx);
+                anchor.cy   = static_cast<std::uint8_t>(sf.cy);
+                anchor.cz   = static_cast<std::uint8_t>(sf.cz);
+                anchor.subX = static_cast<std::uint8_t>(wxd != 0 ? sf.layer : sf.su);
+                anchor.subY = static_cast<std::uint8_t>(wxd != 0 ? sf.su : sf.layer);
+                anchor.subZ = sf.sv;
+                anchor.face = wallFace;
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
@@ -610,7 +642,7 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 anchor.subX = static_cast<std::uint8_t>(subX);
                 anchor.subY = static_cast<std::uint8_t>(subY);
                 anchor.subZ = static_cast<std::uint8_t>(slot.faceSz);
-                anchor.face = 2; // ceiling
+                anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
 
                 // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
                 const PropId pid =

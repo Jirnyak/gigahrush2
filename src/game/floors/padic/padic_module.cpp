@@ -9,6 +9,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "core/wrap.h"
+#include "world/anchor.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -75,7 +76,7 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
             anchor.subX = static_cast<std::uint8_t>(subX);
             anchor.subY = static_cast<std::uint8_t>(subY);
             anchor.subZ = static_cast<std::uint8_t>(faceSz);
-            anchor.face = 2;
+            anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
             // Corded bulb: 0.45 m of flex below the face it hangs from. For a
             // full ceiling (faceSz = 0) that is the old airZ*kCellSize + 1.55,
             // so the lamps that already worked do not move.
@@ -91,7 +92,7 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
             anchor.subX = 2;
             anchor.subY = 4;
             anchor.subZ = 6;
-            anchor.face = 2;
+            anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
             bulbPos = vec3{static_cast<float>(cx) * kCellSize + 0.5f,
                            static_cast<float>(cy) * kCellSize + 1.0f,
                            static_cast<float>(airZ) * kCellSize + 1.55f};

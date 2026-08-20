@@ -603,7 +603,13 @@ void rooms_furniture_makes_the_errand_visible() {
         // ANCHORED IN MATTER: `spawn_prop` already refuses otherwise, so this is a
         // second opinion on the rule rather than a duplicate of it — it is what
         // would catch the anchor and the height being derived separately again.
-        if (!w.grid().solid(a.cx, a.cy, a.cz, a.subX, a.subY, a.subZ)) ++anchorAir;
+        // Спрашиваем словами самой пробы (колонка у грани в точке крепления,
+        // [world/anchor.h]) — точный бит перестал быть вопросом с инкрементом 3
+        // якорного эпика: гейт спавна колонковый, и мебель с воздушным битом при
+        // живой колонке легальна.
+        const AnchorUV uv = anchor_face_uv(a.face, a.subX, a.subY, a.subZ);
+        if (!anchor_alive(w.grid(), a.cx, a.cy, a.cz, a.face, uv.u, uv.v))
+            ++anchorAir;
         // AND NOT FLOATING: the piece's underside must sit ON that surface, within
         // one sub-voxel. This is the measurement [problems.md] §11 says to make —
         // the distance from the piece to the surface it names as its support.

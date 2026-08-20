@@ -535,7 +535,8 @@ if(GIGA_BUILD_TESTS)
         # 23393 + 8 (test_prop_root_cap_total_not_per_shape, ветка PropPass
         # несла 23399 от базы без z-шовного блока los) = 23401 на слитой линии.
         # 23401 + 4 (векторные тор-формы wrap_delta3/wrap_dist2/wrap_pos) = 23405.
-        PASS_REGULAR_EXPRESSION "23405/23405 checks passed"
+        # 23405 + 17 (suite_surface: примитив запроса поверхностей S10) = 23422.
+        PASS_REGULAR_EXPRESSION "23422/23422 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1136,7 +1137,7 @@ if(GIGA_BUILD_TESTS)
     # полярность оракула переехала со случайного этажа на построенную сцену
     # «стена со щелью» — детерминированный красный на мутации «партиал =
     # монолит» (3 новых чека), взамен вероятностного lostBad > 0 (-1).
-        PASS_REGULAR_EXPRESSION "game_test: 235848 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 235855 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
