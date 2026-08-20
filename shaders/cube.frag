@@ -2,17 +2,20 @@
 #extension GL_GOOGLE_include_directive : require
 // Shading for both the world pass (cube.vert) and the population pass
 // (body.vert) — see render.md. The model is built for a *windowless interior*:
-// there is no sun down here, so the light the player actually sees is the light
-// they carry.
+// there is no sun down here, so every lit surface is lit by a source that
+// actually exists in the world.
 //
-//   headlamp  a camera-attached point light with 1/(1+d^2/r^2) falloff. This is
-//             what makes depth readable: every metre of distance changes the
-//             brightness of a surface, so a corridor gets a real light cone
-//             instead of reading as a flat mosaic of rectangles.
-//   fill      a weak directional term so geometry outside the lamp cone is a
+//   direct    ЕДИНЫЙ цикл по световой сетке (`surface_light`): лампы этажа,
+//             фонарик в руке, светящиеся мобы. Расстояние меняет яркость, и
+//             коридор читается объёмом, а не плоской мозаикой прямоугольников.
+//   fill      a weak directional term so geometry outside any light cone is a
 //             dim shape rather than a black silhouette.
 //   ambient   a low hemispheric term, up-facing faces slightly brighter and
 //             cooler than down-facing ones.
+//
+// Камерного источника здесь НЕТ и быть не может ([CANON.md] S5). Аналитический
+// налобник, живший мимо сетки в `camPos.w`/`fog.z`, убит 2026-08-20 — этот
+// шейдер его и не считал, но описывал; описание было ложью.
 //
 // Lighting is done in LINEAR space and encoded to sRGB at the very end, because
 // the swapchain is deliberately VK_FORMAT_B8G8R8A8_UNORM in
@@ -47,8 +50,8 @@ layout(location = 4) flat in uint vMat;
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
-    vec4 camPos;   // xyz = camera world position, w = headlamp intensity
-    vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
+    vec4 camPos;   // xyz = camera world position, w = МЁРТВАЯ ЛЕЙНА (нуль)
+    vec4 fog;      // x = fog start, y = fog end, z = МЁРТВАЯ ЛЕЙНА, w = ambient
     vec4 torus;    // x = wrap period (kWorldExtent), read by cube.vert, not here.
                    // y = the direct-light AO share, read at `aoDirect` below.
                    // z = BITMASK of material ids that have a live photographic
@@ -101,9 +104,9 @@ layout(set = 0, binding = 2) uniform sampler2DArray uRoughness;
 //   * commensurate with the grid — the repeat boundary always lands on a cell
 //     boundary, where the geometry already has an AO crease, so the one place the
 //     tiling could show is the one place the eye is already given an edge;
-//   * 2048 texels over 4 m is 1.95 mm/texel at mip 0, far below anything the
-//     headlamp resolves at any range, so the extra 2x costs no visible sharpness
-//     and halves the repeat count along a long wall.
+//   * 2048 texels over 4 m is 1.95 mm/texel at mip 0, far below anything any
+//     light in this scene resolves at any range, so the extra 2x costs no visible
+//     sharpness and halves the repeat count along a long wall.
 // A 40-cell corridor still shows the same 4 m photograph 20 times. That is the
 // known weakness of this constant, and it is a judgement call, not a measurement.
 const float kTexRepeat = 0.5;
@@ -151,12 +154,12 @@ float vnoise(vec2 p) {
 
 // Frequencies are in CELLS (uv is normalised so 1 unit == one 2 m cell), and they
 // are high on purpose. The first pass used 8 and 31, which is one cycle per 25 cm
-// — at the range the headlamp actually lights, that reads as soft blotches rather
+// — at the range the floor's lamps actually light, that reads as soft blotches rather
 // than a material. 26 and 97 put the base grain at roughly one cycle per 7 cm and
 // the detail octave near 2 cm, which is plaster and grit.
 //
-// Two octaves only: a third would sit below a pixel at any distance the headlamp
-// still reaches, so it would buy nothing but fill rate and aliasing.
+// Two octaves only: a third would sit below a pixel at any distance a lamp still
+// reaches, so it would buy nothing but fill rate and aliasing.
 float grain(vec2 uv) {
     return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
 }
@@ -605,9 +608,9 @@ void main() {
     float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.25;
 
-    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
-    // сетки — его аналитический двойник удалён, он учитывался дважды), мобы,
-    // трассеры, конусы. [volumetric_fog.glsl]
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампы этажа, фонарик в руке,
+    // мобы, трассеры, конусы. Камерного источника в сетке нет (S5).
+    // [volumetric_fog.glsl]
     vec3 directDiffuse, directSpec;
     surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
                   d, pc.fog.x, directDiffuse, directSpec);

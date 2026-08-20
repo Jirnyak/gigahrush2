@@ -37,10 +37,17 @@ struct VulkanDevice;
 struct CubePush {
     mat4 viewProj;
     vec4 sunDir;    // xyz = direction toward the fill light, w = fill strength
-    vec4 camPos;    // xyz = camera world position (toroidal placement, fog,
-                    //       and the headlamp origin), w = headlamp intensity
+    vec4 camPos;    // xyz = camera world position (toroidal placement, fog),
+                    // w = МЁРТВАЯ ЛЕЙНА, пушится нулём
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
-                    // z = headlamp radius (m), w = ambient scale
+                    // z = МЁРТВАЯ ЛЕЙНА, пушится нулём, w = ambient scale
+                    //
+                    // Обе мёртвые лейны — бывшие интенсивность и радиус
+                    // налобника, убитого 2026-08-20 ([CANON.md] S5). Они не
+                    // удалены, потому что vec4 неделим, и не заняты, потому что
+                    // занимать нечем; следующий, кому понадобится протолкнуть
+                    // сюда параметр, вправе взять их — но обязан обновить ЭТОТ
+                    // комментарий и все шейдеры, объявляющие блок.
     vec4 torus;     // x = wrap period (kWorldExtent), y = AO strength 0..1,
                     // z = OUTPUT ONLY: bitmask of material ids with a live
                     //     photographic albedo layer, as a float (16 bits, every

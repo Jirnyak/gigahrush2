@@ -20,8 +20,8 @@ layout(location = 9) in vec3  inScale;     // per-instance local scale (before y
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 sunDir;   // xyz = fill-light direction, w = fill strength
-    vec4 camPos;   // xyz = camera world pos, w = headlamp intensity
-    vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
+    vec4 camPos;   // xyz = camera world pos, w = МЁРТВАЯ ЛЕЙНА (нуль)
+    vec4 fog;      // x = fog start, y = fog end, z = МЁРТВАЯ ЛЕЙНА, w = ambient
     vec4 torus;    // x = wrap period (kWorldExtent), y = AO direct share, z = tex mask, w = uTime
 } pc;
 

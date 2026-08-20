@@ -147,19 +147,27 @@ constexpr int kWinH = 720;
 // See that header for why it is 125 and not 120.
 
 // Lighting tunables, packed into the dead lanes of CubePush (see cube.frag).
-// The floors are windowless interiors, so the headlamp the player carries is the
-// primary light and ambient is deliberately near-black; raise kAmbient and the
-// world flattens back into an evenly-lit mosaic.
-constexpr float kLampIntensity = 2.2f;  // camPos.w
-constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
+// The floors are windowless interiors and ambient is deliberately near-black;
+// raise kAmbient and the world flattens back into an evenly-lit mosaic.
+//
+// НАЛОБНИКА БОЛЬШЕ НЕТ (владелец 2026-08-20, [CANON.md] S5 «света от камеры не
+// существует»). Он был вторым источником света мимо GpuLightGrid: интенсивность
+// ехала в `camPos.w`, радиус в `fog.z`, и три шейдера считали по ним обратный
+// квадрат. Обе лейны теперь МЁРТВЫ и пушатся нулями — намеренно, а не по
+// забывчивости: занять их нечем, а `CubePush` уже ровно 128 Б, то есть
+// гарантированный потолок пуш-констант ([cube_pass.h]).
+// Свет в руке — предмет: `flashlight` в слоте Tool идёт через `add_light`
+// с конусом и параллаксом от руки (см. ниже по файлу), и NPC получат тот же
+// путь. Разбор — [markoaudit/plans/headlamp-death.md].
 constexpr float kFillStrength = 0.02f;  // sunDir.w, dark subterranean backstop
 constexpr float kAmbient = 0.06f;       // fog.w, scales the atmospheric hemispheric term
-// How much of the DIRECT light (headlamp + fill) baked AO is allowed to occlude.
+// How much of the DIRECT light (grid + fill) baked AO is allowed to occlude.
 // Ambient is always fully occluded; this is the share of the lamp, and it is a dial
 // because occluding a direct light is not physical — it is a legibility choice. At
 // 0 AO is nearly invisible in this scene, because ambient is only ~8% of the image
 // here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
-// like caves.
+// like caves. «Доля лампы» здесь читается как доля СЕТОЧНОГО света: после смерти
+// налобника прямой свет — это лампы этажа и фонарик в руке.
 constexpr float kAoDirect = 0.65f;
 // How far the world closes in at the peak of a samosbor, as a fraction of the normal
 // fog end. The fog is the ONLY visual the hazard has right now, and it is deliberately
@@ -6763,7 +6771,7 @@ int main(int argc, char** argv) {
         // Begin command recording & compute pass before graphics render pass
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
-            float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
             // The timer bracket is OUTSIDE the ready() test on purpose, and so is
             // every other bracket this frame writes: collect() reads the whole
@@ -7039,13 +7047,16 @@ int main(int argc, char** argv) {
             gpu::CubePush push{};
             push.viewProj = mat4_mul(camMat.proj, camMat.view);
             push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
-            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
-                               kLampIntensity};
+            // w = 0: лейна мертва с гибели налобника (S5). Ноль, а не мусор —
+            // чтобы шейдер, случайно прочитавший её, не получил свет из воздуха.
+            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z, 0.0f};
             const float fogScale = samosbor_fog_scale(samosbor);
             const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+            // z = 0: бывший радиус налобника, мёртвая лейна (S5). Туман её
+            // никогда не читал — только x/y, — поэтому обнуление безопасно.
             push.fog = vec4{kWorldExtent * 0.25f * fogScale,
                             kWorldExtent * 0.50f * fogScale,
-                            kLampRadius, kAmbient};
+                            0.0f, kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.

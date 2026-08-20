@@ -1,6 +1,11 @@
 #version 450
 // cloth.frag — worn canvas: flat colour with a soft lambert off the sheet's
-// own normal, headlamp falloff, fog to black. Two-sided (abs on the lambert).
+// own normal, ambient only, fog to black. Two-sided (abs on the lambert).
+//
+// ПРЯМОГО СВЕТА НЕТ — см. тот же долг в [wire.frag]: налобник убит (владелец
+// 2026-08-20, S5), а световая сетка этому пассу недоступна — layout с одним
+// дескрипторным сетом ([verlet_pass.cpp:213-214]). `lam` ниже — не источник, а
+// модулятор по направлению fill: он ФОРМА, а не яркость.
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -19,8 +24,6 @@ void main() {
     const vec3 canvas = vec3(0.26, 0.23, 0.18);
     float lam = 0.55 + 0.45 * abs(dot(normalize(vNormal),
                                       normalize(pc.sunDir.xyz)));
-    float dist = length(vWorldPos - pc.camPos.xyz);
-    float lamp = pc.camPos.w / (1.0 + dist * dist / max(pc.fog.z * pc.fog.z, 1e-3));
-    vec3 lit = canvas * lam * (pc.fog.w + lamp);
+    vec3 lit = canvas * lam * pc.fog.w;
     outColor = vec4(mix(lit, vec3(0.0), vFog), 1.0);
 }

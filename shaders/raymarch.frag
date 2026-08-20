@@ -8,7 +8,7 @@
 //
 // SHADING PARITY IS THE CONTRACT. Everything below the "== shading ==" marker
 // is a verbatim port of shaders/cube.frag (which body_pass keeps using for the
-// crowd): same procedural families, same biome recolours, same headlamp /
+// crowd): same procedural families, same biome recolours, same light-grid /
 // fill / ambient / light-grid / volumetric model, same fog, dither, and sRGB
 // encode. The raster varyings become globals the marcher fills from the hit:
 //   vWorldPos = ray hit point (camera-relative march => nearest toroidal image
@@ -65,8 +65,8 @@ const float kTexRepeat = 0.5;
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
-    vec4 camPos;   // xyz = camera world position, w = headlamp intensity
-    vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
+    vec4 camPos;   // xyz = camera world position, w = МЁРТВАЯ ЛЕЙНА (нуль)
+    vec4 fog;      // x = fog start, y = fog end, z = МЁРТВАЯ ЛЕЙНА, w = ambient
     vec4 torus;    // x = wrap period; y = AO direct share; z = albedo tex mask;
                    // w = packed normal|roughness masks (textured) / uTime
 } pc;
@@ -696,7 +696,7 @@ void main() {
     float specPow = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.25;
 
-    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампы этажа, фонарик в руке (свет
     // сетки — его аналитический двойник удалён, он учитывался дважды), мобы,
     // трассеры, конусы. Тень каждого источника — giga_shadow выше.
     vec3 directDiffuse, directSpec;

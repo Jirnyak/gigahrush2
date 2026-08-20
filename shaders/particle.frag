@@ -1,7 +1,13 @@
 #version 450
-// particle.frag — a soft round sprite: headlamp + ambient like wire.frag,
-// emissive kinds (sparks) glow through the dark, fog fades to black. The
-// circular falloff does the anti-aliasing; no texture.
+// particle.frag — a soft round sprite: ambient only like wire.frag, emissive
+// kinds (sparks) glow through the dark, fog fades to black. The circular
+// falloff does the anti-aliasing; no texture.
+//
+// Налобник убит (владелец 2026-08-20, S5), световая сетка этому пассу
+// недоступна ([particle_pass.cpp:120-121, 155-156] — один дескрипторный сет).
+// ИСКРЫ ЭТОГО НЕ ЗАМЕТИЛИ: строка `mix` ниже при em==1 заменяет освещение
+// целиком, поэтому светящееся читается в темноте по-прежнему. Потеряли яркость
+// только НЕэмиссивные виды — пыль, дым, кровь: их видно лишь по ambient.
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -23,10 +29,7 @@ void main() {
     float alpha = vMisc.z * disc;
     if (alpha < 0.004) discard;
 
-    float dist = length(vWorldPos - pc.camPos.xyz);
-    float lamp = pc.camPos.w /
-                 (1.0 + dist * dist / max(pc.fog.z * pc.fog.z, 1e-3));
-    vec3 lit = vColor * (pc.fog.w + lamp);
+    vec3 lit = vColor * pc.fog.w;
     // Emissive rows self-light and resist fog — a spark reads in the dark.
     float em = vMisc.y;
     lit = mix(lit, vColor * (1.0 + em * 2.0), em);

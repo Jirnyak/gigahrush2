@@ -4,7 +4,7 @@ A minimal-but-real **Vulkan** backend (MoltenVK on macOS, LunarG on Windows) tha
 opens an SDL3 window and **raymarches the voxel world per pixel** — a two-level
 DDA over the GPU **voxel mirror** of the same sub-voxel masks physics collides
 against — lit by the unified DDA light system ([ddalight.md](ddalight.md): world
-lights only, no camera-carried headlamp), with raster passes (bodies, props,
+lights only, no camera-carried light of any kind), with raster passes (bodies, props,
 particles) over the honest depth it writes, and a Dear ImGui HUD. This is L3 —
 platform side, outside `giga_core`. The instanced-cube mesher this file used to
 describe was deleted 2026-08-01: there is no instance list, no remesh, and a
@@ -148,7 +148,7 @@ therefore the *scale of the building*, legible. Without them a corridor is an
 untextured tube.
 
 Frequency is not cosmetic here. The first version used one cycle per 25 cm and
-read as soft blotches rather than a material at the range the headlamp lights.
+read as soft blotches rather than a material at the range the floor's lamps light.
 Hashing is integer-lattice, deliberately **not** the `sin`-based hash, which has
 precision artefacts on some drivers that show up as a diagonal moiré.
 
@@ -215,7 +215,7 @@ pass — is built around the light the player brings:
 
 | Term | What it is | Knob |
 |------|------------|------|
-| **headlamp** | camera-attached point light, `1/(1 + d²/r²)` falloff | `camPos.w` intensity, `fog.z` radius (m) |
+| ~~headlamp~~ | **УБИТ 2026-08-20** ([CANON.md] S5) — был camera-attached point light | `camPos.w` и `fog.z` теперь МЁРТВЫЕ лейны, пушатся нулями |
 | **fill** | weak directional backstop so geometry outside the lamp is a dim shape, not a black silhouette | `sunDir.w` strength |
 | **ambient** | low hemispheric term; up-facing faces slightly brighter and cooler | `fog.w` scale |
 
@@ -224,11 +224,11 @@ The knobs ride in the otherwise-dead `w` lanes of `CubePush`, keeping the block 
 and real Windows drivers report exactly. Values live as `constexpr` in
 [main.cpp](src/app/main.cpp).
 
-Why a headlamp and not a directional sun: with one directional light there are
+Why point lights and not a directional sun: with one directional light there are
 only **six** possible `N·L` values in the entire world (six cube-face normals), so
 every +Z face everywhere renders the *identical* colour. That is the literal cause
-of a flat-mosaic image, and no amount of colour authoring fixes it. A point light
-at the camera makes brightness vary continuously across every face and between
+of a flat-mosaic image, and no amount of colour authoring fixes it. Point lights
+make brightness vary continuously across every face and between
 every cell, which also gives the frame a depth cue at every distance rather than
 only where the fog starts.
 
@@ -255,7 +255,7 @@ Depth fog is a **render-only** effect (no sim state). Fragment colour is
 the interpolated `vWorldPos`, not interpolated from a per-vertex distance:
 interpolating a nonlinear function across a 2 m face that fills the screen up
 close visibly skews the gradient, and [cube.frag](shaders/cube.frag) needs the
-vector to the camera for the headlamp regardless. Current tuning (in
+vector to the camera for specular and fog regardless. Current tuning (in
 [main.cpp](src/app/main.cpp)):
 
 | Knob | Value | Why |

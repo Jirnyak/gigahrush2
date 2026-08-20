@@ -16,8 +16,8 @@ layout(location = 4) in vec3 inColor;    // per-instance tint
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
-    vec4 camPos;   // xyz = camera world position, w = headlamp intensity
-    vec4 fog;      // x = fog start, y = fog end, z = lamp radius, w = ambient
+    vec4 camPos;   // xyz = camera world position, w = МЁРТВАЯ ЛЕЙНА (нуль)
+    vec4 fog;      // x = fog start, y = fog end, z = МЁРТВАЯ ЛЕЙНА, w = ambient
     vec4 torus;    // x = wrap period (kWorldExtent); unused here, declared so the
                    // block matches cube.vert exactly (shared pipeline layout)
 } pc;

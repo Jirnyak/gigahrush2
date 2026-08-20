@@ -22,7 +22,7 @@ namespace {
 
 
 // A dropped item is a small box on the ground. Bright warm gold: it must be
-// findable in a headlamp cone, and it must not collide with either the faction
+// findable in a lamp cone, and it must not collide with either the faction
 // palette (green-teal/blue/violet/cyan/amber) or the monster one (the red axis).
 // Gold sits between amber and white, brighter than any body.
 constexpr vec3 kPickupColor{1.00f, 0.86f, 0.42f};

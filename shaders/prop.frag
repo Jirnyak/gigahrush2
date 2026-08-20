@@ -215,7 +215,7 @@ void main() {
     float specPow     = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.5;
 
-    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампы этажа, фонарик в руке (свет
     // сетки), мобы, трассеры, конусы. [volumetric_fog.glsl]
     vec3 directDiffuse, directSpec;
     surface_light(vWorldPos, n_shading, V, specPow, specIntensity, pc.torus.x,
@@ -229,7 +229,7 @@ void main() {
     }
     // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal.
     // Масштаб — по ФАКТИЧЕСКИ пришедшему прямому свету (бывший множитель
-    // att*camPos.w знал только про налобник).
+    // att*camPos.w знал только про убитый налобник).
     if (vMat == 4u || vMat == 3u) {
         vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
         vec3 anisotropicH = cross(n_shading, T);
