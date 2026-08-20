@@ -6955,6 +6955,45 @@ int main(int argc, char** argv) {
         hud.draw_crt_overlay();
 
         // Begin command recording & compute pass before graphics render pass
+        // Дренаж дверных dirtyCells — ДО рендер-ветки (аудит 2026-08-21 №1:
+        // блок жил внутри begin_frame_cmd, и при OUT_OF_DATE свапчейна —
+        // ресайз, сворачивание — отрыв пропов и диффузионная грязь просто не
+        // происходили: физика зависела от того, взялся ли кадр. Сим никогда
+        // не зависит от рендера — закон AGENTS.md; mark_dirty зеркала — лишь
+        // запись списка, командный буфер ей не нужен).
+        // Voxel-mirror upkeep, outside the render pass: doors publish
+        // their mask edits the same way carve does ([game/door.h]
+        // dirtyCells) — drain once per frame, then record this frame's
+        // dirty-cell copies.
+        if (!doors.dirtyCells.empty()) {
+            voxelMirror.mark_dirty(doors.dirtyCells.data(),
+                                   doors.dirtyCells.size());
+            // Door mask edits free/occupy macro cells — detach props
+            // whose anchors no longer have solid support. [jirnyak.md] s18
+            // Rebuild PropPass when anything detaches so GPU drops stale skins.
+            if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
+                                           doors.dirtyCells, &particleBursts,
+                                           static_cast<std::uint32_t>(simTick)) > 0) {
+                propPassNeedsRebuild = true;
+            }
+            // A door leaf sliding away empties cells too — dressing that
+            // hung off them is just as severed as by a blast.
+            if (antourage_carve_step_here(doors.dirtyCells,
+                                          static_cast<std::uint32_t>(simTick))) {
+                propPassNeedsRebuild = true;
+                dressingSetChanged = true;
+            }
+            // Same per-cell debt carve pays: a door leaf filling or freeing
+            // a cell must reach the diffusion walkable bitset, or danger
+            // keeps flowing through a shut door (the audit's §1.8 half that
+            // belongs to doors). worldGen is NOT bumped — nav bakes the
+            // all-open premise ([game/door.h]) and a toggle cannot stale it.
+            mark_diffusion_dirty(diffusionDriver,
+                                 stack.layer(activeLayer).grid(),
+                                 activeLayer, doors.dirtyCells);
+            doors.dirtyCells.clear();
+        }
+
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
             // ВРЕМЯ ВИЗУАЛА — СИМ-ВРЕМЯ, не настенное (владелец 2026-08-20,
@@ -7017,38 +7056,6 @@ int main(int argc, char** argv) {
 
 
 
-            // Voxel-mirror upkeep, outside the render pass: doors publish
-            // their mask edits the same way carve does ([game/door.h]
-            // dirtyCells) — drain once per frame, then record this frame's
-            // dirty-cell copies.
-            if (!doors.dirtyCells.empty()) {
-                voxelMirror.mark_dirty(doors.dirtyCells.data(),
-                                       doors.dirtyCells.size());
-                // Door mask edits free/occupy macro cells — detach props
-                // whose anchors no longer have solid support. [jirnyak.md] s18
-                // Rebuild PropPass when anything detaches so GPU drops stale skins.
-                if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                               doors.dirtyCells, &particleBursts,
-                                               static_cast<std::uint32_t>(simTick)) > 0) {
-                    propPassNeedsRebuild = true;
-                }
-                // A door leaf sliding away empties cells too — dressing that
-                // hung off them is just as severed as by a blast.
-                if (antourage_carve_step_here(doors.dirtyCells,
-                                              static_cast<std::uint32_t>(simTick))) {
-                    propPassNeedsRebuild = true;
-                    dressingSetChanged = true;
-                }
-                // Same per-cell debt carve pays: a door leaf filling or freeing
-                // a cell must reach the diffusion walkable bitset, or danger
-                // keeps flowing through a shut door (the audit's §1.8 half that
-                // belongs to doors). worldGen is NOT bumped — nav bakes the
-                // all-open premise ([game/door.h]) and a toggle cannot stale it.
-                mark_diffusion_dirty(diffusionDriver,
-                                     stack.layer(activeLayer).grid(),
-                                     activeLayer, doors.dirtyCells);
-                doors.dirtyCells.clear();
-            }
 
             // Falling legs are integrated on the SIM's own collision predicate
             // and re-packed while any of them is still in the air — a handful of
