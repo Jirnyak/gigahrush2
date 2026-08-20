@@ -36,12 +36,30 @@ layout(set = 0, binding = 1, std430) writeonly buffer LightGridBuffer {
     LightGridCell uGridCells[];
 };
 
+// Запечённая видимость «лампа -> клетка» ([game/light_vis_bake]): статики,
+// которые В ПРИНЦИПЕ достижимы для клетки (строгий флуд, консервативно).
+// Список уже отсортирован по вкладу; интенсивности живут в uPointLights.
+layout(set = 0, binding = 2, std430) readonly buffer BakedGridBuffer {
+    LightGridCell uBakedCells[];
+};
+
+// Поколение мутации, запачкавшей клетку (пишет CPU-дренаж карва тем же
+// кадром). Клетка грязная <=> uDirtyGen[cell] > pc.genBaked; очистки нет —
+// свап бейка просто поднимает genBaked (план light-visibility-bake §1.2).
+layout(set = 0, binding = 3, std430) readonly buffer DirtyGenBuffer {
+    uint uDirtyGen[];
+};
+
 layout(push_constant) uniform GridPush {
     vec4 camPos;    // xyz = camera world position, w = max range (48.0m)
     vec4 gridMin;   // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
     vec4 gridExt;   // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
     vec4 params;    // x = uTime, y = maxLightsPerCell (kCellSlots), z = activeLightCount,
                     // w = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
+    uint genBaked;       // поколение мира в живом bakedGrid
+    uint genStaticCount; // граница секций таблицы: [0..S) статики, [S..N) динамики
+    uint genPad0;
+    uint genPad1;
 } pc;
 
 // Toroidal wrap. The period is PUSHED, never written here: this helper used to be
@@ -71,12 +89,55 @@ float dist_sq_point_aabb_toroidal(vec3 p, vec3 bMin, vec3 bMax, float L) {
 }
 
 // Кооперативный тайл биннинга: 256 потоков воркгруппы грузят 256 светов
-// (ТОЛЬКО posRadius — цвет биннингу не нужен) в shared один раз, и каждый
+// (posRadius + интенсивность — скип надгробий) в shared один раз, и каждый
 // тестирует их против своей клетки. Наивный вариант читал полный 48-байтовый
 // структ на каждую пару клетка×свет: 262144 клетки × 512 светов × 48 B =
 // 6.4 GB/кадр из VRAM — 26 мс кадра на плотном этаже (замер 2026-08-17).
 // Тайл режет чтения в 256 раз (одна загрузка на воркгруппу, не на поток).
 shared vec4 sTile[256];
+shared float sTileW[256];
+// Грязность воркгруппы: OR по клеткам ДО тайлового цикла, чтобы решение
+// «идти ли в цикл с barrier()» было воркгруппо-однородным (неоднородный
+// контроль вокруг barrier — UB).
+shared uint sGroupDirty;
+
+// Состояние top-K клетки — глобалы инвокации: три источника кандидатов
+// (тайловый фолбэк, запечённый список, динамики) кормят один отбор.
+uint  gFound = 0u;
+uint  gCandidates = 0u; // все достижимые, включая вытесненных, — перелив вслух
+uint  gIndices[kCellSlots];
+float gScores[kCellSlots];
+// Худший слот кэшируется и пересчитывается ТОЛЬКО после замены — скан
+// всех слотов на каждого кандидата давал 26 мс кадра в плотном поле ламп
+// (блейм, ~200 кандидатов на клетку; замер 2026-08-17 ещё на 31 слоте).
+uint  gWorst = 0u;
+float gWorstScore = -1.0;
+
+// Перелив клетки решается ВКЛАДОМ В КЛЕТКУ (top-K по d²/r²), а не порядком
+// CPU-сортировки по камере. Порядок-по-камере был живым багом: у плотного
+// кластера ламп подлёт камеры отдавал весь лимит клетки лампам У КАМЕРЫ,
+// дальние клетки теряли свои родные лампы, и комната ТЕМНЕЛА при
+// приближении к свету (репорт владельца со скринами, 2026-08-17). Вклад в
+// клетку от камеры не зависит — картинка стабильна с любого расстояния.
+void consider(uint id, float score) {
+    gCandidates++;
+    if (gFound < kCellSlots) {
+        gIndices[gFound] = id;
+        gScores[gFound] = score;
+        if (score > gWorstScore) { gWorstScore = score; gWorst = gFound; }
+        gFound++;
+        return;
+    }
+    // Полный список: вытесняем худшего, если новый вкладнее.
+    if (score < gWorstScore) {
+        gIndices[gWorst] = id;
+        gScores[gWorst] = score;
+        gWorstScore = -1.0;
+        for (uint k = 0u; k < kCellSlots; ++k) {
+            if (gScores[k] > gWorstScore) { gWorstScore = gScores[k]; gWorst = k; }
+        }
+    }
+}
 
 void main() {
     uvec3 cellIdx = gl_GlobalInvocationID;
@@ -91,88 +152,94 @@ void main() {
     vec3 cellMax = cellMin + cellSize;
 
     uint activeCount = min(uPointLightCount, uint(pc.params.z));
-    uint foundCount = 0u;
-    // Все достижимые кандидаты клетки, включая вытесненных: > kCellSlots в
-    // конце = перелив, о котором обязаны сказать вслух.
-    uint candidateCount = 0u;
-    uint indices[kCellSlots];
-    float scores[kCellSlots];
-    // Худший слот кэшируется и пересчитывается ТОЛЬКО после замены — скан
-    // всех слотов на каждого кандидата давал 26 мс кадра в плотном поле ламп
-    // (блейм, ~200 кандидатов на клетку; замер 2026-08-17 ещё на 31 слоте).
-    uint worst = 0u;
-    float worstScore = -1.0;
+    uint staticCount = min(pc.genStaticCount, activeCount);
 
-    // Перелив клетки решается ВКЛАДОМ В КЛЕТКУ (top-K по d²/r²), а не порядком
-    // CPU-сортировки по камере. Порядок-по-камере был живым багом: у плотного
-    // кластера ламп подлёт камеры отдавал весь лимит клетки лампам У КАМЕРЫ,
-    // дальние клетки теряли свои родные лампы, и комната ТЕМНЕЛА при
-    // приближении к свету (репорт владельца со скринами, 2026-08-17). Вклад в
-    // клетку от камеры не зависит — картинка стабильна с любого расстояния.
+    if (gl_LocalInvocationIndex == 0u) sGroupDirty = 0u;
+    barrier();
+    if (uDirtyGen[flatCellIndex] > pc.genBaked) atomicOr(sGroupDirty, 1u);
+    barrier();
+    bool groupDirty = sGroupDirty != 0u;
+
     const uint tid = gl_LocalInvocationIndex;
-    for (uint base = 0u; base < activeCount; base += 256u) {
-        const uint n = min(activeCount - base, 256u);
-        if (tid < n) sTile[tid] = uPointLights[base + tid].posRadius;
-        barrier();
-
-        for (uint j = 0u; j < n; ++j) {
-            vec4 pr = sTile[j];
-            float radius = pr.w;
-            // CPU add_light уже отверг radius<=0 и intensity<=0.001 — здесь
-            // только геометрия.
-            float dSq =
-                dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
-
-            if (dSq > radius * radius) continue;
-            candidateCount++;
-            float score = dSq / (radius * radius); // 0 = внутри клетки, 1 = едва касается
-
-            if (foundCount < kCellSlots) {
-                indices[foundCount] = base + j;
-                scores[foundCount] = score;
-                if (score > worstScore) { worstScore = score; worst = foundCount; }
-                foundCount++;
-                continue;
+    if (groupDirty) {
+        // Грязная воркгруппа — «все лампы радиуса» (железный инвариант
+        // владельца (б): ошибка всегда «посветить лишним»): полный
+        // дистанционный биннинг по всей статик-таблице, старый тайловый цикл.
+        // Живёт секунды — фоновый ребейк ужмёт и поднимет genBaked.
+        for (uint base = 0u; base < staticCount; base += 256u) {
+            const uint n = min(staticCount - base, 256u);
+            if (tid < n) {
+                sTile[tid] = uPointLights[base + tid].posRadius;
+                sTileW[tid] = uPointLights[base + tid].colorIntensity.w;
             }
-            // Полный список: вытесняем худшего, если новый вкладнее.
-            if (score < worstScore) {
-                indices[worst] = base + j;
-                scores[worst] = score;
-                worstScore = -1.0;
-                for (uint k = 0u; k < kCellSlots; ++k) {
-                    if (scores[k] > worstScore) { worstScore = scores[k]; worst = k; }
-                }
+            barrier();
+
+            for (uint j = 0u; j < n; ++j) {
+                // Надгробие (умершая лампа: intensity 0, слот жив до ребейка)
+                // не кандидат — иначе оно занимало бы слот и жгло марш.
+                if (sTileW[j] <= 0.001) continue;
+                vec4 pr = sTile[j];
+                float radius = pr.w;
+                float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
+                if (dSq > radius * radius) continue;
+                consider(base + j, dSq / (radius * radius));
             }
+            barrier();
         }
-        barrier();
+    } else {
+        // Чистая клетка: кандидаты — запечённый список (только В ПРИНЦИПЕ
+        // достижимые лампы; вклад пересчитывается той же формулой — в бейке
+        // лежат одни id). Тайловый цикл пропущен ЦЕЛИКОМ — это и есть выигрыш.
+        uint n = min(uBakedCells[flatCellIndex].count, kCellSlots);
+        for (uint k = 0u; k < n; ++k) {
+            uint id = uBakedCells[flatCellIndex].lightIndices[k];
+            if (id >= staticCount) continue; // таблица уехала — ждём свапа
+            if (uPointLights[id].colorIntensity.w <= 0.001) continue;
+            vec4 pr = uPointLights[id].posRadius;
+            float radius = pr.w;
+            float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
+            if (dSq > radius * radius) continue;
+            consider(id, dSq / (radius * radius));
+        }
+    }
+
+    // Динамический хвост (мобы-эмиттеры, снаряды, фонарик): единицы-десятки,
+    // тайл и бейк не нужны — прямой дистанционный тест каждым потоком.
+    for (uint i = staticCount; i < activeCount; ++i) {
+        vec4 pr = uPointLights[i].posRadius;
+        float radius = pr.w;
+        // CPU add_light уже отверг radius<=0 и intensity<=0.001 у динамиков.
+        float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.w);
+        if (dSq > radius * radius) continue;
+        consider(i, dSq / (radius * radius));
     }
 
     // Список клетки пишется ОТСОРТИРОВАННЫМ по вкладу (лучший — первым):
     // потребители тратят бюджет (теневые лучи, шаги дымки) на сильнейшие
     // источники и режут тусклый хвост стабильно, без мерцания состава.
-    for (uint a = 1u; a < foundCount; ++a) {
-        float s = scores[a];
-        uint  v = indices[a];
+    for (uint a = 1u; a < gFound; ++a) {
+        float s = gScores[a];
+        uint  v = gIndices[a];
         uint  b = a;
-        for (; b > 0u && scores[b - 1u] > s; --b) {
-            scores[b] = scores[b - 1u];
-            indices[b] = indices[b - 1u];
+        for (; b > 0u && gScores[b - 1u] > s; --b) {
+            gScores[b] = gScores[b - 1u];
+            gIndices[b] = gIndices[b - 1u];
         }
-        scores[b] = s;
-        indices[b] = v;
+        gScores[b] = s;
+        gIndices[b] = v;
     }
 
     LightGridCell cell;
-    cell.count = foundCount;
+    cell.count = gFound;
     for (uint k = 0u; k < kCellSlots; ++k) {
-        cell.lightIndices[k] = (k < foundCount) ? indices[k] : 0u;
+        cell.lightIndices[k] = (k < gFound) ? gIndices[k] : 0u;
     }
 
     uGridCells[flatCellIndex] = cell;
 
     // Перелив — вслух: клетка видела больше достижимых ламп, чем слотов, и
     // хвост вытеснен по вкладу. Одно слово на клетку, читает CPU кадром позже.
-    if (candidateCount > kCellSlots) {
+    if (gCandidates > kCellSlots) {
         atomicAdd(uCellOverflow, 1u);
     }
 }

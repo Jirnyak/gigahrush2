@@ -1,10 +1,8 @@
 // gpu_light_grid.cpp — GPU 3D Volumetric Light Grid & Fog Subsystem.
 #include "render/gpu_light_grid.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -50,8 +48,6 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
     if (!dev_) return false;
 
     stagingLights_.resize(kRootLights);
-    sortScratch_.resize(kRootLights);
-    sortKeys_.resize(kRootLights);
 
     if (!create_buffers()) {
         std::fprintf(stderr, "[light-grid] failed to allocate GPU buffers\n");
@@ -70,15 +66,18 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
     // lights» ещё долго после переезда сетки на весь тор.
     std::fprintf(stderr,
                  "[light-grid] initialized (%ux%ux%u grid, cell %u B = %u id slots, "
-                 "upload cap %u lights)\n",
+                 "root cap %u lights, baked mirror %zu MiB)\n",
                  kGridDimX, kGridDimY, kGridDimZ, kGridCellBytes, kGridCellSlots,
-                 kMaxPointLights);
+                 kRootLights,
+                 static_cast<std::size_t>(kTotalGridCells) * kGridCellBytes >> 20);
     return true;
 }
 
 bool GpuLightGrid::create_buffers() noexcept {
-    // 16 bytes header (uPointLightCount + 3 reserved uints) + 512 * 48 B PointLight
-    constexpr VkDeviceSize kLightBufSize = 16 + kMaxPointLights * sizeof(GpuPointLight);
+    // 16 bytes header (uPointLightCount + 3 reserved uints) + корневой кап
+    // таблицы: 131072 × 48 Б = 6.3 МБ host-visible (решение владельца,
+    // light-perf.md §капы; «дальние комнаты гаснут» уходит по построению).
+    constexpr VkDeviceSize kLightBufSize = 16 + kRootLights * sizeof(GpuPointLight);
     if (!lightBuf_.create_host_visible(*dev_, kLightBufSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-point-buf")) {
         return false;
@@ -96,6 +95,32 @@ bool GpuLightGrid::create_buffers() noexcept {
         return false;
     }
 
+    // Запечённая видимость: зеркало bakedGrid (device-local, чтобы кадр читал
+    // из VRAM, а не через PCIe — Windows-железо дискретно) + host-visible
+    // стейджинг той же раскладки + dirtyGen. «Бери больше во благо» (решение
+    // владельца §7: VRAM +65 МиБ принят).
+    if (!bakedGrid_.create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            "light-baked-grid")) {
+        return false;
+    }
+    if (!bakedStaging_.create_host_visible(*dev_, kGridBufSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "light-baked-staging")) {
+        return false;
+    }
+    bakedMapped_ = bakedStaging_.mapped;
+
+    constexpr VkDeviceSize kDirtySize = kTotalGridCells * sizeof(uint32_t);
+    if (!dirtyGen_.create_host_visible(*dev_, kDirtySize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-dirty-gen")) {
+        return false;
+    }
+    dirtyMapped_ = static_cast<uint32_t*>(dirtyGen_.mapped);
+    // Нули = «чисто при bakedGen ≥ 0». Поколение мутаций МОНОТОННО через всю
+    // сессию (g_worldGen не сбрасывается на этаже — иначе метки старого этажа
+    // пережили бы его), поэтому обнуление больше никогда не нужно.
+    std::memset(dirtyMapped_, 0, static_cast<std::size_t>(kDirtySize));
+
     return true;
 }
 
@@ -104,27 +129,28 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
 
     // Binding 0: PointLightBuffer (Set 0)
     // Binding 1: LightGridBuffer (Set 0)
-    VkDescriptorSetLayoutBinding bindings[2]{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 2: BakedGridBuffer — запечённая видимость (compute-only)
+    // Binding 3: DirtyGenBuffer — поколения мутаций клеток (compute-only)
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags =
+            i < 2 ? (VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+                  : VK_SHADER_STAGE_COMPUTE_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslci.bindingCount = 2;
+    dslci.bindingCount = 4;
     dslci.pBindings = bindings;
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descriptorSetLayout_));
 
     // Pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 2;
+    poolSize.descriptorCount = 4;
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -142,17 +168,18 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     VK_TRY(vkAllocateDescriptorSets(d, &alloci, &descriptorSet_));
 
     // Write descriptor sets
-    VkDescriptorBufferInfo bufi[2]{};
+    VkDescriptorBufferInfo bufi[4]{};
     bufi[0].buffer = lightBuf_.buffer;
-    bufi[0].offset = 0;
-    bufi[0].range = VK_WHOLE_SIZE;
-
     bufi[1].buffer = gridSSBO_.buffer;
-    bufi[1].offset = 0;
-    bufi[1].range = VK_WHOLE_SIZE;
+    bufi[2].buffer = bakedGrid_.buffer;
+    bufi[3].buffer = dirtyGen_.buffer;
+    for (auto& b : bufi) {
+        b.offset = 0;
+        b.range = VK_WHOLE_SIZE;
+    }
 
-    VkWriteDescriptorSet writes[2]{};
-    for (uint32_t i = 0; i < 2; ++i) {
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = descriptorSet_;
         writes[i].dstBinding = i;
@@ -160,7 +187,7 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo = &bufi[i];
     }
-    vkUpdateDescriptorSets(d, 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(d, 4, writes, 0, nullptr);
     return true;
 }
 
@@ -270,50 +297,59 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
     pt.dirCone = vec4{dir.x * inv, dir.y * inv, dir.z * inv, cosOuter};
 }
 
-void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
-    // Статики НЕ переупорядочиваются (слот-id стабильны для бейка видимости):
-    // сорт строит ключи по обеим секциям, но пишет копию в sortScratch_, и на
-    // GPU едет она. Потухшие лампы (интенсивность-надгробие) в ключи не
-    // попадают — как раньше не попадали в стейджинг.
-    uint32_t n = 0;
-    const uint32_t total = staticCount_ + dynamicCount_;
-    for (uint32_t i = 0; i < total; ++i) {
-        if (stagingLights_[i].colorIntensity.w <= 0.001f) continue;
-        const vec4& p = stagingLights_[i].posRadius;
-        const float dx = wrap_delta_f(camPos.x, p.x, kWorldExtent);
-        const float dy = wrap_delta_f(camPos.y, p.y, kWorldExtent);
-        const float dz = wrap_delta_f(camPos.z, p.z, kWorldExtent);
-        sortKeys_[n++] = { dx * dx + dy * dy + dz * dz, i };
+void GpuLightGrid::upload_baked_grid(const uint32_t* cells, std::size_t words,
+                                     uint32_t bakedGen) noexcept {
+    if (!bakedMapped_ || cells == nullptr) return;
+    constexpr std::size_t kExpect =
+        static_cast<std::size_t>(kTotalGridCells) * (kGridCellSlots + 1);
+    if (words != kExpect) {
+        // Лейаут разъехался — вслух, и старый bakedGrid продолжает жить
+        // (консервативно: устаревший список лучше рваного).
+        std::fprintf(stderr,
+                     "[light-grid] baked grid layout mismatch: %zu words, "
+                     "expected %zu — swap refused\n",
+                     words, kExpect);
+        return;
     }
-    std::sort(sortKeys_.begin(), sortKeys_.begin() + n);
-    for (uint32_t i = 0; i < n; ++i) {
-        sortScratch_[i] = stagingLights_[sortKeys_[i].second];
-    }
-    sortedCount_ = n;
+    std::memcpy(bakedMapped_, cells, words * sizeof(uint32_t));
+    bakedGen_ = bakedGen;
+    bakedUploadPending_ = true;
+}
+
+void GpuLightGrid::mark_dirty_light_cell(std::size_t cellIndex, uint32_t gen) noexcept {
+    if (!dirtyMapped_ || cellIndex >= kTotalGridCells) return;
+    dirtyMapped_[cellIndex] = gen;
 }
 
 void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
     if (!ready() || !lightMapped_) return;
 
-    // Sort active point lights by distance to camera so nearest lights take priority
-    sort_lights_by_distance(camPos);
+    // Свап бейка видимости: копия стейджинг -> device-local, вне рендер-пасса
+    // (мы и так вне его — контракт этого метода). Барьер TRANSFER->COMPUTE
+    // ставится тут же; каденция — секунды, полоса копейки.
+    if (bakedUploadPending_) {
+        bakedUploadPending_ = false;
+        VkBufferCopy region{};
+        region.size = static_cast<VkDeviceSize>(kTotalGridCells) * sizeof(GpuGridCell);
+        vkCmdCopyBuffer(cmd, bakedStaging_.buffer, bakedGrid_.buffer, 1, &region);
+        VkBufferMemoryBarrier copyBarrier{};
+        copyBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        copyBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        copyBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        copyBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copyBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copyBarrier.buffer = bakedGrid_.buffer;
+        copyBarrier.offset = 0;
+        copyBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                             1, &copyBarrier, 0, nullptr);
+    }
 
-    // На GPU едут БЛИЖАЙШИЕ kMaxPointLights (стейджинг уже отсортирован по
-    // дистанции) — лишними остаются только самые дальние, они за туманом.
-    //
-    // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
-    // ФПС-регрессии 2026-08-18: сколько миллисекунд кадра стоят марши к
-    // лампам). Ужимает аплоад до N ближайших; буфер и дефолт не меняются.
-    // Ручка того же класса, что GIGA_GPU_TIMER=0: инструмент обязан уметь
-    // измерить сам себя, число без A/B — мнение.
-    static const uint32_t kBudgetCap = [] {
-        const char* e = std::getenv("GIGA_LIGHT_BUDGET");
-        const long v = e ? std::atol(e) : 0;
-        return (v > 0 && v <= static_cast<long>(kMaxPointLights))
-                   ? static_cast<uint32_t>(v)
-                   : kMaxPointLights;
-    }();
-    const uint32_t uploadCount = std::min(sortedCount_, kBudgetCap);
+    // На GPU едет ВСЯ таблица: статики [0..staticCount) со стабильными id
+    // (кандидатов клетке даёт бейк видимости + дистанционный фолбэк грязных
+    // клеток) + динамический хвост. Камерный сорт и кап 512 мертвы (S7).
+    const uint32_t uploadCount = staticCount_ + dynamicCount_;
 
     // Переливы клеток светосетки: light_grid.comp атомарно копит в слове 1
     // заголовка число клеток, где достижимых ламп оказалось больше
@@ -334,7 +370,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     uint32_t header[4] = {uploadCount, 0, 0, 0};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
-        std::memcpy(static_cast<char*>(lightMapped_) + 16, sortScratch_.data(),
+        std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),
                     uploadCount * sizeof(GpuPointLight));
     }
 
@@ -356,6 +392,8 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
     push.params = vec4{timeSec, static_cast<float>(kGridCellSlots),
                        static_cast<float>(uploadCount), kWorldExtent};
+    push.genBaked = bakedGen_;
+    push.genStaticCount = staticCount_;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
@@ -397,7 +435,12 @@ void GpuLightGrid::destroy() noexcept {
 
     lightBuf_.destroy(*dev_);
     gridSSBO_.destroy(*dev_);
+    bakedGrid_.destroy(*dev_);
+    bakedStaging_.destroy(*dev_);
+    dirtyGen_.destroy(*dev_);
     lightMapped_ = nullptr;
+    bakedMapped_ = nullptr;
+    dirtyMapped_ = nullptr;
     dev_ = nullptr;
 }
 

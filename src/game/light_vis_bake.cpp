@@ -297,6 +297,10 @@ void bake_light_visibility(const WalkBits& passBits, const LightVisLamp* lamps,
     out.litCells = lit.load(std::memory_order_relaxed);
     out.overflowCells = overflow.load(std::memory_order_relaxed);
     out.maxPerCell = maxPer.load(std::memory_order_relaxed);
+    out.meanPerCell = out.litCells > 0
+                          ? static_cast<float>(totalHits) /
+                                static_cast<float>(out.litCells)
+                          : 0.0f;
     out.bakeMs = std::chrono::duration<float, std::milli>(
                      std::chrono::steady_clock::now() - t0)
                      .count();

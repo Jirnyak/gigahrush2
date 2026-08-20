@@ -1,7 +1,7 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 #include "core/math.h"
@@ -36,11 +36,10 @@ static constexpr uint32_t kRootLights = 131072;
 // Слот «не в статик-таблице»: проп, сорванный в RagdollRoll, или лампа,
 // рождённая после постройки таблицы, идут динамическим хвостом.
 static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
-// Аплоад-кап «ближайшие к камере» — ВРЕМЕННЫЙ до слияния bakedGrid в
-// light_grid.comp (план light-visibility-bake §5: умирает вместе с сортом —
-// камерный отбор нарушает S7; без бейка биннить 12k статиков каждый кадр
-// нельзя, поэтому до потребителя кадр живёт по-старому).
-static constexpr uint32_t kMaxPointLights = 512;
+// kMaxPointLights = 512 и sort_lights_by_distance УМЕРЛИ (план
+// light-visibility-bake §5): камерный отбор — нарушение S7 («дальние комнаты
+// гаснут»), а сбор кандидатов клетки решает запечённая видимость (bakedGrid)
+// + дистанционный фолбэк грязных клеток. На GPU едет вся таблица.
 
 // Matches PointLight in shaders/light_grid.comp and shaders/volumetric_fog.glsl (std430)
 struct alignas(16) GpuPointLight {
@@ -77,8 +76,15 @@ struct alignas(16) GridPush {
     vec4 gridMin; // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
     vec4 gridExt; // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
     vec4 params;  // x = uTime, y = maxLightsPerCell (kGridCellSlots), z = activeLightCount, w = wrap period
+    // Слияние с бейком видимости: x = bakedGen (клетка грязная ⇔
+    // dirtyGen[cell] > bakedGen), y = staticCount (граница секций таблицы),
+    // z/w = резерв. У32, не float: поколение обязано сравниваться точно.
+    uint32_t genBaked = 0;
+    uint32_t genStaticCount = 0;
+    uint32_t genPad0 = 0;
+    uint32_t genPad1 = 0;
 };
-static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
+static_assert(sizeof(GridPush) == 80, "GridPush layout must be 80 bytes");
 #if defined(_MSC_VER)
 // MSVC C4324 structure was padded due to alignment specifier is expected:
 // GpuLightGrid is alignas(16) so the GpuPointLight stagingLights_ array
@@ -110,6 +116,17 @@ public:
     void set_static_table(const GpuPointLight* base, uint32_t n) noexcept;
     void set_static_intensity(uint32_t slot, float intensity) noexcept;
     uint32_t static_count() const noexcept { return staticCount_; }
+
+    // Свап бейка видимости: залить bakedGrid (лейаут LightVisBake.cells ==
+    // GpuGridCell[kTotalGridCells] по построению — слоты приходят от нас же)
+    // и поднять bakedGen. memcpy в стейджинг здесь; vkCmdCopyBuffer — в
+    // update_and_dispatch, вне рендер-пасса, кадром заливки.
+    void upload_baked_grid(const uint32_t* cells, std::size_t words,
+                           uint32_t bakedGen) noexcept;
+    // Дренаж карва (инвариант «тем же кадром»): пометить клетку светосетки
+    // поколением мутации. Пишется в host-visible буфер ДО записи диспатча
+    // этого кадра — компьют уже видит поднятые поколения (план §3.3).
+    void mark_dirty_light_cell(std::size_t cellIndex, uint32_t gen) noexcept;
 
     // Zero-allocation light collection — ДИНАМИЧЕСКИЙ хвост [staticCount..).
     // 4-арг = омни; перегрузка с dir/cosOuter = конус (фонарик, прожектор).
@@ -145,8 +162,18 @@ private:
 
     VulkanBuffer lightBuf_{}; // HOST_VISIBLE persistent mapped storage for point lights
     VulkanBuffer gridSSBO_{}; // DEVICE_LOCAL storage for 3D grid cells
+    // Запечённая видимость (план light-visibility-bake §1.2): bakedGrid —
+    // device-local зеркало LightVisBake.cells (64 МиБ), bakedStaging_ —
+    // host-visible источник копии (каденция — секунды, полоса копейки),
+    // dirtyGen_ — host-visible u32 на клетку (поколение мутации; клетка
+    // грязная ⇔ dirtyGen > bakedGen, очистка не нужна — свап поднимает ген).
+    VulkanBuffer bakedGrid_{};    // DEVICE_LOCAL, kTotalGridCells × kGridCellBytes
+    VulkanBuffer bakedStaging_{}; // HOST_VISIBLE persistent mapped, тот же размер
+    VulkanBuffer dirtyGen_{};     // HOST_VISIBLE persistent mapped, kTotalGridCells × 4
 
     void* lightMapped_ = nullptr;
+    void* bakedMapped_ = nullptr;
+    uint32_t* dirtyMapped_ = nullptr;
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
@@ -155,23 +182,17 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline computePipeline_ = VK_NULL_HANDLE;
 
-    // Временный камерный отбор до слияния bakedGrid (умирает по плану §5
-    // вместе с kMaxPointLights: камерный отбор — нарушение S7).
-    void sort_lights_by_distance(const vec3& camPos) noexcept;
-
-    // Вектора, не массивы: kRootLights x 48 B — этому не место ни в объекте на
-    // стеке main(), ни тем более в кадре стека. Резервируются один раз в init().
-    // stagingLights_ = [статик-таблица | динамический хвост]; статики НЕ
-    // переупорядочиваются никогда (слот-id стабильны), временный сорт пишет в
-    // sortScratch_ и грузит на GPU оттуда.
+    // Вектор, не массив: kRootLights x 48 B — этому не место ни в объекте на
+    // стеке main(), ни тем более в кадре стека. Резервируется один раз в
+    // init(). stagingLights_ = [статик-таблица | динамический хвост]; статики
+    // НЕ переупорядочиваются никогда (слот-id стабильны).
     std::vector<GpuPointLight> stagingLights_;
-    std::vector<GpuPointLight> sortScratch_;
-    std::vector<std::pair<float, uint32_t>> sortKeys_; // distSq, index
     uint32_t staticCount_ = 0;
     uint32_t dynamicCount_ = 0;
-    uint32_t sortedCount_ = 0; // живых (не-надгробий) в sortScratch_ после сорта
     uint32_t overflowDropped_ = 0;
     uint32_t cellOverflow_ = 0;
+    uint32_t bakedGen_ = 0;
+    bool bakedUploadPending_ = false;
 };
 #if defined(_MSC_VER)
 #pragma warning(pop)

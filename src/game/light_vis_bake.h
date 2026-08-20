@@ -94,6 +94,10 @@ struct LightVisBake {
     std::uint32_t litCells = 0;
     std::uint32_t overflowCells = 0; // клеток с достижимыми > slots (вслух!)
     std::uint32_t maxPerCell = 0;
+    // Среднее ламп на ОСВЕЩЁННУЮ клетку — главный перф-датчик: кадр GPU
+    // пропорционален толщине списков (замер 2026-08-20: таблица 12552 ->
+    // 21 мс, таблица 8 -> 5 мс), и ужать его может только строгость бейка.
+    float meanPerCell = 0.0f;
     float bakeMs = 0.0f;
 
     bool valid() const { return !cells.empty(); }

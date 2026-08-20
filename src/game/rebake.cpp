@@ -104,10 +104,12 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         lightSwapPending_ = true;
         std::fprintf(stderr,
                      "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
-                     "(max %u/cell, overflow %u), R_max %.1f m, %.0f ms sync\n",
+                     "(mean %.1f max %u/cell, overflow %u), R_max %.1f m, "
+                     "%.0f ms sync\n",
                      floorNumber, lightVis_.lampCount, lightVis_.litCells,
-                     lightVis_.maxPerCell, lightVis_.overflowCells,
-                     lightVis_.rMaxM, lightVis_.bakeMs);
+                     lightVis_.meanPerCell, lightVis_.maxPerCell,
+                     lightVis_.overflowCells, lightVis_.rMaxM,
+                     lightVis_.bakeMs);
         // Пин видимости (образец GIGA_VERLET_PIN): хэш содержимого клеток
         // после Fresh-бейка; два прогона одного сида обязаны совпасть.
         static const bool kPin = std::getenv("GIGA_LIGHT_VIS_PIN") != nullptr;

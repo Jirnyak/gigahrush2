@@ -211,10 +211,28 @@ static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
 // светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
 // пишет collect_scene_lights (мерцание/обесточка/поломка; 0 = надгробие).
 static void rebuild_static_light_table(Registry& reg, LayerId layer) {
+    // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
+    // 2026-08-18: сколько мс кадра стоят марши к лампам). Режет статик-таблицу
+    // до первых N ламп — детерминированно и воспроизводимо; срезанные лампы не
+    // светят вовсе (слот kNoLightSlot, вслух ниже).
+    static const std::uint32_t kBudget = [] {
+        const char* e = std::getenv("GIGA_LIGHT_BUDGET");
+        const long v = e ? std::atol(e) : 0;
+        return (v > 0 && v < static_cast<long>(gpu::kRootLights))
+                   ? static_cast<std::uint32_t>(v)
+                   : gpu::kRootLights;
+    }();
     g_staticLamps.clear();
     g_staticLightBase.clear();
     g_bakedLightSlots.clear();
-    const auto push_lamp = [](const vec3& pos, float radiusM, const vec3& color) {
+    std::uint32_t budgetDropped = 0;
+    const auto push_lamp = [&budgetDropped](const vec3& pos, float radiusM,
+                                            const vec3& color) -> std::uint32_t {
+        if (g_staticLamps.size() >= kBudget) {
+            ++budgetDropped;
+            return game::kNoLightSlot;
+        }
+        const auto slot = static_cast<std::uint32_t>(g_staticLamps.size());
         g_staticLamps.push_back({pos, radiusM});
         gpu::GpuPointLight base{};
         base.posRadius = vec4{pos.x, pos.y, pos.z, radiusM};
@@ -223,6 +241,7 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
         // вместе с первым конусным пропом — биннинг конус всё равно не режет.
         base.dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
         g_staticLightBase.push_back(base);
+        return slot;
     };
     auto lampView = reg.view<const Transform, game::PropLight>();
     for (auto e : lampView) {
@@ -232,23 +251,27 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
             pl.slot = game::kNoLightSlot;
             continue;
         }
-        pl.slot = static_cast<std::uint32_t>(g_staticLamps.size());
-        push_lamp(tr.pos + vec3{0.0f, 0.0f, -pl.dropM}, pl.radiusM, pl.color);
+        pl.slot = push_lamp(tr.pos + vec3{0.0f, 0.0f, -pl.dropM}, pl.radiusM,
+                            pl.color);
     }
     for (const game::BakedLight& bl : g_bakedFloorLights) {
-        g_bakedLightSlots.push_back(
-            static_cast<std::uint32_t>(g_staticLamps.size()));
-        push_lamp(bl.pos, bl.radiusM, bl.color);
+        g_bakedLightSlots.push_back(push_lamp(bl.pos, bl.radiusM, bl.color));
     }
+    if (budgetDropped > 0)
+        std::fprintf(stderr,
+                     "[light-grid] GIGA_LIGHT_BUDGET=%u: %u static lamps cut\n",
+                     kBudget, budgetDropped);
     ++g_staticTableGen;
 }
 
 // Поколение мутаций мира активного этажа — асинк-ребейк
 // ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
 // и боевой дренаж); двери НЕ пишут — нав печётся по премисе all-open
-// ([game/door.h]) и от тоггла не стареет. Читатель — RebakeScheduler
+// ([game/door.h]) и от тоггла не стареет. Читатели — RebakeScheduler
 // ([game/rebake.h]): bakedGen != worldGen ⇔ запечённое устарело, планировщик
-// сам доводит фоновым циклом. Сброс на входе этажа — в begin_floor_nav.
+// сам доводит фоновым циклом; и dirtyGen-буфер светосетки (клетка грязная ⇔
+// dirtyGen > bakedGen). МОНОТОННО через всю сессию, на этаже НЕ сбрасывается —
+// сброс оживил бы dirtyGen-метки прошлого этажа.
 static std::uint64_t g_worldGen = 0;
 
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
@@ -434,11 +457,11 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
 
             // Заякоренный проп — статик-слот: в кадре пишется ТОЛЬКО
             // интенсивность, позиция/радиус испечены таблицей, камерного калла
-            // нет (видимость — свойство геометрии, не камеры; S7). Сорванный в
-            // RagdollRoll или рождённый после таблицы — динамический хвост со
-            // своей живой позицией (план §3.4).
-            if (pl.slot != game::kNoLightSlot &&
-                reg.all_of<game::StaticPropTag>(e)) {
+            // нет (видимость — свойство геометрии, не камеры; S7). Слот
+            // kNoLightSlot у заякоренного = срез GIGA_LIGHT_BUDGET (no-op в
+            // set_static_intensity). Сорванный в RagdollRoll — динамический
+            // хвост со своей живой позицией (план §3.4).
+            if (reg.all_of<game::StaticPropTag>(e)) {
                 grid.set_static_intensity(pl.slot, intensity);
             } else {
                 if (!light_reaches_view(pos, pl.radiusM)) {
@@ -514,19 +537,19 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     }
 
     // GIGA_LIGHT_DBG=1: строка раз в ~2 с — кто из пропов-светов жив и куда
-    // делись остальные; хвост — сколько реально уедет на GPU. Диагностика
-    // «ниже не светятся» ([ddalight.md]).
+    // делись остальные. На GPU теперь едет вся таблица (кап-512 мёртв);
+    // static/dynamic — граница секций. Диагностика «ниже не светятся»
+    // ([ddalight.md]).
     static const bool kLightDbg = std::getenv("GIGA_LIGHT_DBG") != nullptr;
     if (kLightDbg) {
         static std::uint32_t frame = 0;
         if ((frame++ % 120u) == 0u) {
-            const std::uint32_t staged = grid.active_light_count();
             std::fprintf(stderr,
                          "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u culled=%u"
-                         " | staged=%u dropped=%u upload=%u\n",
+                         " | static=%u total=%u dropped=%u\n",
                          dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgCulled,
-                         staged, grid.overflow_dropped(),
-                         staged < gpu::kMaxPointLights ? staged : gpu::kMaxPointLights);
+                         grid.static_count(), grid.active_light_count(),
+                         grid.overflow_dropped());
         }
     }
 }
@@ -1509,8 +1532,10 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // and floor changes cancel-join in tens of ms ([game/rebake.h]).
 void begin_floor_nav(const World& world, int floorNumber,
                      game::RebakeScheduler& bake, game::RoomZones& rooms) {
-    // Новый этаж = новая летопись мутаций: Fresh-снапшот отражает поколение 0.
-    g_worldGen = 0;
+    // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается:
+    // dirtyGen-буфер светосетки хранит метки поколений, и сброс к нулю оживил
+    // бы метки прошлого этажа (dirtyGen > bakedGen до N карвов). Fresh-снапшот
+    // просто отражает текущее поколение.
     const game::FloorKind kind = kind_for_floor(floorNumber);
     // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
     // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
@@ -4179,6 +4204,18 @@ int main(int argc, char** argv) {
                                                doors,
                                                carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
+                        // Дренаж светосетки ТЕМ ЖЕ КАДРОМ (железный инвариант
+                        // (б)): шар rDirty из R_max этажа вокруг каждой
+                        // карвнутой клетки — грязные клетки биннятся по всей
+                        // статик-таблице, свет хлынул в дыру немедленно;
+                        // фоновый ребейк потом ужмёт (план §3.3).
+                        game::for_each_dirty_light_cell(
+                            carveResult.dirtyCells.data(),
+                            carveResult.dirtyCells.size(),
+                            nav.light_vis().rMaxM, [&](std::size_t idx) {
+                                lightGrid.mark_dirty_light_cell(
+                                    idx, static_cast<std::uint32_t>(g_worldGen));
+                            });
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         spawn_carve_particles(particlePass, carveResult,
@@ -4556,6 +4593,15 @@ int main(int argc, char** argv) {
                                 stack.layer(activeLayer).grid(), doors,
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
+                            // И тот же дренаж светосетки тем же кадром.
+                            game::for_each_dirty_light_cell(
+                                carveResult.dirtyCells.data(),
+                                carveResult.dirtyCells.size(),
+                                nav.light_vis().rMaxM, [&](std::size_t idx) {
+                                    lightGrid.mark_dirty_light_cell(
+                                        idx,
+                                        static_cast<std::uint32_t>(g_worldGen));
+                                });
                             spawn_carve_particles(particlePass, carveResult,
                                                   pr.seed);
                             std::fprintf(stderr,
@@ -6902,6 +6948,16 @@ int main(int argc, char** argv) {
             // truthful 0.0 ms, not as a dead readout.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
             if (lightGrid.ready()) {
+                // Свап бейка видимости (Fresh на входе этажа, Rebake фоном):
+                // залить запечённые списки и поднять bakedGen — клетки,
+                // запачканные ПОСЛЕ снапшота, остаются грязными сами
+                // ([game/rebake.h] take_light_swap).
+                if (nav.take_light_swap() && nav.light_vis().valid()) {
+                    lightGrid.upload_baked_grid(
+                        nav.light_vis().cells.data(),
+                        nav.light_vis().cells.size(),
+                        static_cast<std::uint32_t>(nav.light_gen()));
+                }
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
             }
