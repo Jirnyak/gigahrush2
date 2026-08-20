@@ -270,7 +270,7 @@ void GpuLightGrid::clear_lights() noexcept {
 }
 
 void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept {
-    if (radius <= 0.0f || intensity <= 0.001f) return;
+    if (radius <= 0.0f || intensity <= kTombstoneIntensity) return;
     if (staticCount_ + dynamicCount_ >= kRootLights) {
         ++overflowDropped_; // считаем, не молчим — GIGA_LIGHT_DBG покажет
         return;
@@ -285,7 +285,7 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
 
 void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity,
                              const vec3& dir, float cosOuter) noexcept {
-    if (radius <= 0.0f || intensity <= 0.001f) return;
+    if (radius <= 0.0f || intensity <= kTombstoneIntensity) return;
     if (staticCount_ + dynamicCount_ >= kRootLights) {
         ++overflowDropped_;
         return;
@@ -370,9 +370,8 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     }
 
     // Слово 3 — переопределение бюджета теневых лучей surface_light
-    // (0 = авто-ступени 8/4/2 по дистанции, как всегда). GIGA_SHADOW_RAYS=N —
-    // вторая измерительная ручка той же серии, что GIGA_FOG_LAMPS: раскладка
-    // светонагрузки пикселя (дымка / тени / скан) добывается вычитанием.
+    // (0 = авто-ступени 4/2/1 по дистанции). GIGA_SHADOW_RAYS=N —
+    // измерительная ручка: цена теней добывается вычитанием.
     static const uint32_t kSurfaceRayOverride = [] {
         const char* e = std::getenv("GIGA_SHADOW_RAYS");
         if (!e) return 0u;
@@ -389,7 +388,6 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // World-aligned: сетка — весь тор, начало в нуле мира, камера ни при чём.
     // Врап у потребителей — битовое И индекса; «вне сетки» не существует.
     GridPush push{};
-    push.camPos = vec4{camPos.x, camPos.y, camPos.z, 0.0f};
     push.gridMin = vec4{0.0f, 0.0f, 0.0f, kGridCellMeters};
     push.gridExt = vec4{static_cast<float>(kGridDimX), static_cast<float>(kGridDimY),
                         static_cast<float>(kGridDimZ), kGridCellMeters};
@@ -402,8 +400,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // binned at all, so the fog goes dark exactly where it should glow. Sending the
     // period makes the shader's period unfalsifiable by construction — the same
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
-    push.params = vec4{timeSec, static_cast<float>(kGridCellSlots),
-                       static_cast<float>(uploadCount), kWorldExtent};
+    push.params = vec4{static_cast<float>(uploadCount), kWorldExtent, 0.0f, 0.0f};
     push.genBaked = bakedGen_;
     push.genStaticCount = staticCount_;
 

@@ -358,8 +358,8 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // радиуса касается сферы видимости (радиус тумана) вокруг КАМЕРЫ. Общих
     // констант нет — лампы разные, решает радиус каждой. Иначе лампа
     // «загорается» при приближении (репорт владельца — каллы были 32-48 м при
-    // видимости 128). Бюджет держит сортировка: на GPU едут ближайшие
-    // kMaxPointLights. [gpu_light_grid.h] [ddalight.md]
+    // видимости 128). Камерный сорт и kMaxPointLights мертвы (V-A/V-C):
+    // отбор статикам даёт бейк видимости, динамиков — единицы. [ddalight.md]
     const float kFogRadius = kWorldExtent * 0.5f; // = fog.y (push ниже по файлу)
     auto light_reaches_view = [&](const vec3& pos, float radius) {
         const float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
@@ -369,22 +369,13 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         return dx * dx + dy * dy + dz * dz <= reach * reach;
     };
 
-    // 2. Samosbor Alarm Hazard Light
-    const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
-    const float alarmPulse = alarm.pulse;
-    if (alarmPulse > 0.01f) {
-        vec3 alarmColor{0.95f, 0.20f, 0.85f}; // Purple default
-        switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
-            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
-            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
-            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
-            case game::SamosborVariant::Maronary: alarmColor = vec3{0.95f, 0.55f, 0.15f}; break;
-            case game::SamosborVariant::Istotit:  alarmColor = vec3{0.95f, 0.95f, 0.45f}; break;
-            case game::SamosborVariant::Veretar:  alarmColor = vec3{0.85f, 0.85f, 0.95f}; break;
-            default: break;
-        }
-        grid.add_light(camPos + vec3{0.0f, 0.0f, 3.0f}, 48.0f, alarmColor, alarmPulse * 3.5f);
-    }
+    // 2. Тревога самосбора БОЛЬШЕ НЕ СВЕТИТ ОТ КАМЕРЫ. Здесь жил последний
+    // камерный источник (add_light(camPos+3м, 48 м) — прямое нарушение S5
+    // «света от камеры не существует», найден аудитом 2026-08-20 в тридцати
+    // строках под самим законом) — удалён. Тревогу несут сирена (аудио) и
+    // сжатие мглы (fogScale/samosborPulse); аварийное ЦВЕТНОЕ освещение по
+    // варианту самосбора — это программа ЩИТКА (S15.4: «аварийное освещение —
+    // другая программа щитка»), а не источник из воздуха.
 
     // 3. Mob Emitters (Lampovy & Lampoglaz)
     for (auto e : reg.view<const game::MobRef, const Transform>()) {

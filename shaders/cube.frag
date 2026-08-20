@@ -623,7 +623,6 @@ void main() {
     float hemi = 0.5 + 0.5 * n.z;
     vec3 amb = pc.fog.w * mix(vec3(0.025, 0.022, 0.018), vec3(0.055, 0.048, 0.040), hemi);
 
-    const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
     vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + directSpec * aoDirect;
@@ -637,13 +636,10 @@ void main() {
     // the pulse is (1 - fogScale) / (1 - kSamosborFogSqueeze). Both constants used
     // to be wrong here: the divisor was 128.0*0.50 = 64 instead of the 128 that is
     // kWorldExtent*0.5, and the ramp was /0.70 instead of /0.66. Together they ran
-    // the effect at 0.457 where the CPU says 1.0 at full samosbor, and pinned it
-    // to zero for the whole first half of the ramp. The extent now comes from the
-    // push block (torus.x) rather than a literal; 0.66 mirrors main.cpp's
-    // kSamosborFogSqueeze = 0.34 and is the one number still duplicated here.
-    // [problems.md] section 20
-    float samosborPulse =
-        clamp((1.0 - pc.fog.y / (pc.torus.x * 0.5)) / 0.66, 0.0, 1.0);
+    // samosborPulse едет ГОТОВЫМ в torus.z (как у prop.frag/raymarch) — прежний
+    // обратный вывод из fog.y был третьей реализацией одной величины и вёз
+    // дубль kSamosborFogSqueeze литералом 0.66 (аудит 2026-08-20).
+    float samosborPulse = clamp(pc.torus.z, 0.0, 1.0);
 
     // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
     vec4 fogVol = march_volumetric_fog(

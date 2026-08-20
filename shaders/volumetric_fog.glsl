@@ -5,9 +5,9 @@
 // (точка/конус — один структ), world-aligned light grid на весь тор, прямой
 // свет поверхностям (surface_light) и объёмное рассеяние в дымке
 // (march_volumetric_fog). Закон один: КАЖДЫЙ источник освещает КАЖДУЮ
-// поверхность и каждый шаг тумана одним и тем же кодом; тень — через
-// giga_shadow(), который каждый шейдер определяет своим лучшим средством
-// (raymarch — DDA-лучом по вокселному зеркалу, растровые пассы пока стабом).
+// поверхность одним и тем же кодом; тень — через giga_shadow(), который
+// каждый шейдер определяет своим DDA по вокселному зеркалу (raymarch —
+// булев марш-близнец march(), растровые пассы — shadow_march.glsl).
 //
 // Shared SSBO structures & layout contracts matching shaders/light_grid.comp.
 
@@ -44,7 +44,7 @@ layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
     uint uPointLightCount;
     uint uCellOverflow;   // атомарный счёт переливших клеток пишет light_grid.comp
     uint uReserved1;      // бывший бюджет ламп дымки — член удалён 2026-08-20
-    uint uShadowRayOverride; // 0 = авто 8/4/2; иначе бюджет лучей surface_light
+    uint uShadowRayOverride; // 0 = авто-ступени 4/2/1; иначе бюджет лучей surface_light
     PointLight uPointLights[];
 };
 
@@ -54,8 +54,8 @@ layout(set = 1, binding = 1, std430) readonly buffer LightGridBuffer {
 #endif
 
 // Henyey-Greenstein anisotropic phase function for atmospheric scattering.
-// t*sqrt(t) вместо pow(t,1.5): pow компилируется в exp/log, а эта фаза
-// считается [шаги дымки]×[света клетки] раз на пиксель — миллиардный масштаб.
+// t*sqrt(t) вместо pow(t,1.5): pow компилируется в exp/log, а фаза считается
+// на каждом из 12 шагов дымки каждого пикселя (fill-рассеяние).
 float henyey_greenstein_phase(float cosTheta, float g) {
     float g2 = g * g;
     float t = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4);
@@ -97,6 +97,10 @@ float light_attenuation(float dist, float radius) {
 
 // Конус прожектора: 1.0 для омни (w <= -1.5); иначе гладкий спад от внутренней
 // границы к внешней. toPoint — единичный вектор ОТ света К точке.
+// Общий пол AO трёх потребителей (был триждый дубль 0.32 в raymarch/cube/prop
+// — аудит 2026-08-20): тень окклюжна не чернит поверхность глубже трети.
+const float kAoFloor = 0.32;
+
 float spot_factor(vec4 dirCone, vec3 toPoint) {
     if (dirCone.w <= -1.5) return 1.0;
     float cosA = dot(dirCone.xyz, toPoint);
@@ -112,10 +116,10 @@ uint light_cell_index(vec3 p) {
 }
 
 // Тень: 1.0 = свет виден из точки, 0.0 = перекрыт. ПРОТОТИП — определение
-// обязан дать каждый шейдер, включающий этот заголовок: raymarch.frag марширует
-// DDA-луч по вокселному зеркалу (та же геометрия, что у физики — прокарвил
-// дыру, свет хлынул в тот же кадр); растровые пассы без зеркала пока отвечают
-// 1.0 (честный шов следующего инкремента, а не тихий обход).
+// обязан дать каждый шейдер, включающий этот заголовок, своим DDA по
+// вокселному зеркалу: raymarch.frag — булев близнец march() (та же геометрия,
+// что у физики — прокарвил дыру, свет хлынул в тот же кадр), растровые пассы
+// (cube/prop) — shadow_march.glsl. Стабов нет ни у кого.
 float giga_shadow(vec3 p, vec3 dirToLight, float dist);
 
 // Прямой свет поверхности от всех источников клетки: ламберт + Блинн-Фонг,
@@ -197,15 +201,25 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
 const float kFogBaseDensity = 0.20;
 float sample_volumetric_fog_density(vec3 pos) {
     float baseDensity = kFogBaseDensity;
-    // Spatial noise perturbation for dynamic mist swirl
-    vec2 p = pos.xy * 0.15;
-    vec2 i = floor(p);
+    // Вихрь мглы. Решётка шума ПЕРИОДИЧНА по тору ПО ПОСТРОЕНИЮ — закон пятью
+    // строками выше нарушала эта самая функция (аудит 2026-08-20): абсолютная
+    // pos.xy при частоте 0.15 давала 38.4 ячейки на 256 м — дробный хвост
+    // рвался швом врапа. Вывод: число ячеек = ближайшее целое к прежней
+    // частоте (256 × 0.15 → 38), решётка заворачивается mod N, все четыре
+    // угла — тоже. Период — из тех же дефайнов, что сетка света (= экстент).
+    const float periodM = float(kLightGridDim) * kLightGridCell;
+    const float cells = floor(periodM * 0.15 + 0.5);
+    vec2 p = pos.xy * (cells / periodM);
+    vec2 i = mod(floor(p), cells);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = fract(sin(dot(i, vec2(12.9898, 78.233))) * 43758.5453);
-    float b = fract(sin(dot(i + vec2(1.0, 0.0), vec2(12.9898, 78.233))) * 43758.5453);
-    float c = fract(sin(dot(i + vec2(0.0, 1.0), vec2(12.9898, 78.233))) * 43758.5453);
-    float d = fract(sin(dot(i + vec2(1.0, 1.0), vec2(12.9898, 78.233))) * 43758.5453);
+    vec2 i10 = mod(i + vec2(1.0, 0.0), cells);
+    vec2 i01 = mod(i + vec2(0.0, 1.0), cells);
+    vec2 i11 = mod(i + vec2(1.0, 1.0), cells);
+    float a = fract(sin(dot(i,   vec2(12.9898, 78.233))) * 43758.5453);
+    float b = fract(sin(dot(i10, vec2(12.9898, 78.233))) * 43758.5453);
+    float c = fract(sin(dot(i01, vec2(12.9898, 78.233))) * 43758.5453);
+    float d = fract(sin(dot(i11, vec2(12.9898, 78.233))) * 43758.5453);
     float mistNoise = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 
     return baseDensity * (0.85 + 0.30 * mistNoise);

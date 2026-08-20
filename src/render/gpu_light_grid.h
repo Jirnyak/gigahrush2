@@ -36,6 +36,10 @@ static constexpr uint32_t kRootLights = 131072;
 // Слот «не в статик-таблице»: проп, сорванный в RagdollRoll, или лампа,
 // рождённая после постройки таблицы, идут динамическим хвостом.
 static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
+
+// Надгробие: intensity ≤ порога = слот мёртв до ребейка (компакция на свапе).
+// Обязан совпадать с kTombstone в light_grid.comp.
+static constexpr float kTombstoneIntensity = 0.001f;
 // kMaxPointLights = 512 и sort_lights_by_distance УМЕРЛИ (план
 // light-visibility-bake §5): камерный отбор — нарушение S7 («дальние комнаты
 // гаснут»), а сбор кандидатов клетки решает запечённая видимость (bakedGrid)
@@ -71,11 +75,13 @@ static_assert(sizeof(GpuGridCell) == kGridCellBytes,
               "GpuGridCell std430 layout must equal kGridCellBytes");
 
 // Matches GridPush in shaders/light_grid.comp
+// Камеры в пуше НЕТ (S7: биннинг камеронезависим); uTime/maxLights умерли —
+// компьют их не читал (аудит 2026-08-20). Раскладка обязана совпадать с
+// light_grid.comp::GridPush.
 struct alignas(16) GridPush {
-    vec4 camPos;  // xyz = camera world position, w = max range (48.0m)
-    vec4 gridMin; // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
-    vec4 gridExt; // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
-    vec4 params;  // x = uTime, y = maxLightsPerCell (kGridCellSlots), z = activeLightCount, w = wrap period
+    vec4 gridMin; // xyz = min-угол сетки в мире, w = размер клетки x/z (4.0 м)
+    vec4 gridExt; // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
+    vec4 params;  // x = activeLightCount, y = wrap period (kWorldExtent)
     // Слияние с бейком видимости: x = bakedGen (клетка грязная ⇔
     // dirtyGen[cell] > bakedGen), y = staticCount (граница секций таблицы),
     // z/w = резерв. У32, не float: поколение обязано сравниваться точно.
@@ -84,7 +90,7 @@ struct alignas(16) GridPush {
     uint32_t genPad0 = 0;
     uint32_t genPad1 = 0;
 };
-static_assert(sizeof(GridPush) == 80, "GridPush layout must be 80 bytes");
+static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
 #if defined(_MSC_VER)
 // MSVC C4324 structure was padded due to alignment specifier is expected:
 // GpuLightGrid is alignas(16) so the GpuPointLight stagingLights_ array

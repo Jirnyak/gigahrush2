@@ -269,15 +269,64 @@ float voxel_ao(vec3 hitP, vec3 n) {
     return 1.0 - clamp(occ, 0.0, 1.0);
 }
 
-// Тень поверхности: короткий DDA-луч к источнику ПО ТОЙ ЖЕ геометрии, что
-// физика и пули, — march() и есть los_clear рендера. Ноль shadow map'ов, ноль
-// дополнительных пассов; прокарвил дыру — свет хлынул в тот же кадр, потому что
-// луч читает тот самый обновлённый воксельный mirror. Смещения старта/финиша —
-// у вызывающего surface_light, единые для всех реализаций.
+// Тень поверхности: булев DDA-луч к источнику ПО ТОЙ ЖЕ геометрии, что
+// физика и пули, — та же двухуровневая DDA, что march(), но ответ один бит:
+// без материала, нормали и текстурной страницы. Аудит 2026-08-20: полный
+// march() платил за sub_mat/нормаль ради «перекрыт/нет» на КАЖДЫЙ теневой
+// луч (главный едок кадра); у растровых пассов shadow_march.glsl всегда
+// отвечал мгновенно. Семантика тени бит в бит: стоп на первом твёрдом
+// субвокселе. Прокарвил дыру — свет хлынул в тот же кадр: луч читает тот же
+// обновлённый воксельный mirror. Смещения старта/финиша — у вызывающего.
+bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
+                          vec3 cellLo, float t0, float t1) {
+    vec3 e = ro + rd * (t0 + 1e-5);
+    ivec3 s = clamp(ivec3(floor((e - cellLo) / kVoxel)), ivec3(0), ivec3(7));
+    vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kVoxel;
+    vec3 sMax = (bound - ro) * rinv;
+    vec3 sDelta = vec3(kVoxel) * abs(rinv);
+    for (int i = 0; i < 32; ++i) {
+        if (sub_solid(ci, s)) return true;
+        int axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
+                                   : (sMax.y < sMax.z ? 1 : 2);
+        if (sMax[axis] > t1) return false;
+        s[axis] += stp[axis];
+        if (s[axis] < 0 || s[axis] > 7) return false;
+        sMax[axis] += sDelta[axis];
+    }
+    return false;
+}
+
 float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
     if (dist <= 0.0) return 1.0;
-    Hit sh = march(p, dirToLight, dist);
-    return sh.ok ? 0.0 : 1.0;
+    vec3 rd = dirToLight;
+    rd.x = abs(rd.x) < 1e-6 ? (rd.x >= 0.0 ? 1e-6 : -1e-6) : rd.x;
+    rd.y = abs(rd.y) < 1e-6 ? (rd.y >= 0.0 ? 1e-6 : -1e-6) : rd.y;
+    rd.z = abs(rd.z) < 1e-6 ? (rd.z >= 0.0 ? 1e-6 : -1e-6) : rd.z;
+    vec3 rinv = 1.0 / rd;
+    ivec3 stp = ivec3(sign(rd));
+    ivec3 c = ivec3(floor(p / kCell));
+    vec3 bound = (vec3(c) + max(vec3(stp), vec3(0.0))) * kCell;
+    vec3 tMax = (bound - p) * rinv;
+    vec3 tDelta = vec3(kCell) * abs(rinv);
+    float t = 0.0;
+    for (int i = 0; i < 224; ++i) {
+        uint ci = cell_index(c);
+        uint cls = cell_class(ci);
+        if (cls == 1u) return 0.0; // полная клетка — перекрыто без бит-тестов
+        if (cls != 0u) {
+            float tExit = min(min(tMax.x, tMax.y), tMax.z);
+            if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
+                                     min(tExit, dist)))
+                return 0.0;
+        }
+        int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
+                                   : (tMax.y < tMax.z ? 1 : 2);
+        t = tMax[axis];
+        if (t > dist) return 1.0;
+        c[axis] += stp[axis];
+        tMax[axis] += tDelta[axis];
+    }
+    return 1.0;
 }
 
 // =============================================================================
@@ -708,7 +757,6 @@ void main() {
     float hemi = 0.5 + 0.5 * n.z;
     vec3 amb = pc.fog.w * mix(vec3(0.025, 0.022, 0.018), vec3(0.055, 0.048, 0.040), hemi);
 
-    const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
     vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + directSpec * aoDirect;

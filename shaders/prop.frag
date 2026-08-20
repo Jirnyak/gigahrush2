@@ -244,7 +244,6 @@ void main() {
     float hemi = 0.5 + 0.5 * n_shading.z;
     vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
 
-    const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
 
@@ -285,7 +284,7 @@ void main() {
 
     vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
 
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float ign = ign_jitter(gl_FragCoord.xy); // одна копия, volumetric_fog.glsl
     srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
 
     outColor = vec4(srgb, 1.0);
