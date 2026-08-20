@@ -7,8 +7,9 @@
 > 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
 > 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
 > 5. [ARCHITECTURE.md](ARCHITECTURE.md) (System architecture & pipeline specification)
-> 6. [CANON.md](CANON.md) (Канон систем S1–S11 — эталон, относительно которого судятся
->    расхождения; записан со слов владельца 2026-08-17/19. Любой код сверяется с ним;
+> 6. [CANON.md](CANON.md) (Канон систем S1–S15 — эталон, относительно которого судятся
+>    расхождения; записан со слов владельца 2026-08-17/19; S12 комнаты, S13 решение
+>    агента, S14 контейнер, S15 время — 2026-08-20. Любой код сверяется с ним;
 >    решения по эпикам — в markoaudit/plans/)
 > 7. [CONTINUE.md](CONTINUE.md) (Промт-эстафета большой чистки: метод, состояние,
 >    очередь, посадочные приёмы — вход для продолжающих сессий)
