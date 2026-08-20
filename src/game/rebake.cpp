@@ -50,6 +50,7 @@ void RebakeScheduler::discard_pending() {
     std::vector<std::uint8_t>().swap(pendingFine_.nearest);
     pendingRooms_ = RoomZones{};
     pendingLight_ = LightVisBake{};
+    snapGrid_.reset(); // 134 МиБ масок — транзиент цикла, не резидент
     lightDone_.store(false, std::memory_order_relaxed);
     roomsDone_.store(false, std::memory_order_relaxed);
     coarseDone_.store(false, std::memory_order_relaxed);
@@ -83,7 +84,9 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // битсеты по построению — и patch_carved_cells её дальше хранит.
     nav::build_walk_bits(grid, navBits_);
     build_body_walk_bits(grid, bodyBits_);
-    build_light_pass_bits(grid, lightBits_);
+    // Свету битсета мало — его лучи субвоксельные (S2): Fresh печёт прямо с
+    // живой сетки (мы на главном потоке), Rebake снимет копию в start_rebake.
+    liveGrid_ = &grid;
 
     // Rooms — синхронно, текущая семантика: поля комнат целы до первого тика,
     // который мог бы их читать, и второй истории владения не существует.
@@ -98,7 +101,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // десятки мс КАЖДОГО кадра первые секунды — вывод в плане §4). Цена
     // печатается вслух — правило «бейк без замера прячет свою регрессию».
     {
-        bake_light_visibility(lightBits_, lampsLive_.data(), lampsLive_.size(),
+        bake_light_visibility(grid, lampsLive_.data(), lampsLive_.size(),
                               lightSlots_, lightVis_, /*threads=*/0, nullptr);
         lightGen_ = worldGen;
         lightSwapPending_ = true;
@@ -158,13 +161,16 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
 
-    // Снапшот всех трёх битсетов по значению: 3×256 KiB, ~75 мкс, плюс копия
-    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ). Дальше живые битсеты могут
-    // патчиться карвами сколько угодно — воркер их не видит, а расхождение
-    // честно останется как bakedGen < worldGen после свапа.
+    // Снапшот по значению: два битсета (2×256 KiB, ~75 мкс), копия
+    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ) и — для субвоксельных лучей
+    // света (S2) — маски+типы целиком (~134 МиБ, ~10-15 мс; транзиентно до
+    // свапа, освобождается в step()). Дальше живой мир может меняться сколько
+    // угодно — воркер его не видит, а расхождение честно останется как
+    // bakedGen < worldGen после свапа.
     snapNav_.words = navBits_.words;
     snapBody_.words = bodyBits_.words;
-    snapLight_.words = lightBits_.words;
+    if (liveGrid_ != nullptr)
+        snapGrid_ = std::make_unique<MacroGrid>(*liveGrid_);
     lampsSnap_ = lampsLive_;
     snapGen_ = worldGen;
     lastStartTick_ = simTick;
@@ -181,9 +187,10 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         // его свап ужимает раздутые карвами списки клеток и возвращает кадры
         // сразу; затем приоритеты плана §3: rooms -> coarse -> fine.
         const auto tL = clock::now();
-        bake_light_visibility(snapLight_, lampsSnap_.data(),
-                              lampsSnap_.size(), lightSlots_, pendingLight_,
-                              threads, &cancel_);
+        if (snapGrid_ != nullptr)
+            bake_light_visibility(*snapGrid_, lampsSnap_.data(),
+                                  lampsSnap_.size(), lightSlots_,
+                                  pendingLight_, threads, &cancel_);
         if (!cancel_.load(std::memory_order_relaxed)) {
             std::fprintf(stderr,
                          "[lightvis] floor %d gen %llu rebaked: %u lamps -> "
@@ -295,6 +302,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 bakedGen_ = snapGen_;
                 lastRebakeDurTicks_ = simTick - lastStartTick_;
                 mode_ = Mode::Idle;
+                snapGrid_.reset(); // транзиент цикла отдан (134 МиБ масок)
                 // Память на свапе: транзиентный пик (старый+новый fine ~260
                 // MiB) уже позади, но capacity — то, что держит аллокатор.
                 std::fprintf(
@@ -348,9 +356,10 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
         const SubMask& m = masks[idx];
         nav::patch_walk_bit(navBits_, idx, m);
         patch_body_walk_bit(bodyBits_, idx, m);
-        if (lightBits_.built())
-            patch_light_pass_bit(lightBits_, idx, m, types[idx]);
+        // Свету поклеточный патч не нужен: его снапшот — копия масок целиком,
+        // снимаемая заново на каждом старте цикла (start_rebake).
     }
+    (void)types;
 }
 
 } // namespace giga::game

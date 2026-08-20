@@ -48,18 +48,16 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <thread>
 
 #include "game/door.h"       // DoorSet — премиса all-open в патче битсетов
 #include "game/floor_spec.h" // FloorKind
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
-#include "game/room_zone.h"  // RoomZones, bake_room_zones, patch_body_walk_bit
-#include "world/nav.h"       // CoarseGraph, FineNav, bake_*, patch_walk_bit
-#include "world/walk_bits.h" // WalkBits — живые битсеты и их снапшоты
-
-namespace giga {
-class MacroGrid;
-}
+#include "game/room_zone.h"   // RoomZones, bake_room_zones, patch_body_walk_bit
+#include "world/macro_grid.h" // MacroGrid — снапшот масок по значению (свет)
+#include "world/nav.h"        // CoarseGraph, FineNav, bake_*, patch_walk_bit
+#include "world/walk_bits.h"  // WalkBits — живые битсеты и их снапшоты
 
 namespace giga::game {
 
@@ -195,9 +193,11 @@ public:
                pendingFine_.flow.capacity() + pendingFine_.nearest.capacity() +
                sizeof(nav::CoarseGraph) * 2 +
                (navBits_.words.capacity() + bodyBits_.words.capacity() +
-                lightBits_.words.capacity() + snapNav_.words.capacity() +
-                snapBody_.words.capacity() + snapLight_.words.capacity()) *
+                snapNav_.words.capacity() + snapBody_.words.capacity()) *
                    sizeof(std::uint64_t) +
+               (snapGrid_ ? snapGrid_->masks().capacity() * sizeof(SubMask) +
+                                snapGrid_->types().capacity() * sizeof(CellType)
+                          : 0) +
                pendingRooms_.resident_bytes() + lightVis_.resident_bytes() +
                pendingLight_.resident_bytes() +
                (lampsLive_.capacity() + lampsSnap_.capacity()) *
@@ -216,7 +216,11 @@ private:
     nav::FineNav fine_{};
     WalkBits navBits_;  // живые открыто-сеты, патчатся дренажом карвов
     WalkBits bodyBits_;
-    WalkBits lightBits_; // третий предикат: «свет проходит» (light_vis_bake.h)
+    // Живая сетка этажа вызывающего — источник снапшота масок для секции
+    // света (лучи бейка субвоксельные, S2; битсета им мало). Тот же контракт
+    // жизни, что у rooms_: живёт, пока жив этаж; читается ТОЛЬКО на главном
+    // потоке в start_fresh/start_rebake.
+    const MacroGrid* liveGrid_ = nullptr;
     LightVisBake lightVis_; // живой запечённый грид видимости
     std::vector<LightVisLamp> lampsLive_; // статик-таблица (индекс = слот id)
     std::uint32_t lightSlots_ = 0;
@@ -231,9 +235,14 @@ private:
     nav::FineNav pendingFine_{};
     RoomZones pendingRooms_{};
     LightVisBake pendingLight_{};
-    WalkBits snapNav_;  // снапшот по значению (3×256 KiB, ~75 мкс) — ВСЁ,
-    WalkBits snapBody_; // что воркер знает о мире
-    WalkBits snapLight_;
+    WalkBits snapNav_;  // снапшот по значению (2×256 KiB, ~75 мкс)
+    WalkBits snapBody_;
+    // Снапшот масок+типов для света: ~134 МиБ ТРАНЗИЕНТНО на цикл Rebake
+    // (копия ~10-15 мс на старте цикла, освобождается на свапе; «бери больше
+    // во благо» — решение владельца 2026-08-20). unique_ptr, а не член по
+    // значению: MacroGrid() плотный и держал бы 134 МиБ всегда, даже пустым.
+    // Вместе с битсетами — ВСЁ, что воркер знает о мире.
+    std::unique_ptr<MacroGrid> snapGrid_;
     std::vector<LightVisLamp> lampsSnap_;
 
     std::thread worker_;
