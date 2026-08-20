@@ -418,9 +418,50 @@ void carve_expands_same_call() {
     CHECK(present); // свап поднял бы bakedGen ⇒ dirtyGen <= bakedGen, чисто
 }
 
+// Синтез кластеров (light-cluster.md шаг 1): бакетизация 8 м, членство CSR,
+// центроид по весу radiusM², радиус-охват. Клетки кластеры ещё не ссылают —
+// это шаг 2; здесь проверяется сам синтез.
+void cluster_synthesis() {
+    World w; // пустая сетка: лучи чисты, кластеры — чистая геометрия ламп
+    std::vector<LightVisLamp> lamps;
+    // Две лампы в ОДНОМ 8-м бакете (x 1..7), вторая вдвое ярче по радиусу;
+    // третья — в далёком бакете.
+    lamps.push_back({vec3{2.0f, 2.0f, 2.0f}, 6.0f, vec3{1.0f, 0.0f, 0.0f}});
+    lamps.push_back({vec3{6.0f, 2.0f, 2.0f}, 12.0f, vec3{0.0f, 1.0f, 0.0f}});
+    lamps.push_back({vec3{100.0f, 100.0f, 100.0f}, 8.0f,
+                     vec3{0.0f, 0.0f, 1.0f}});
+    LightVisBake b;
+    giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
+                                      63, b, 1, nullptr);
+    CHECK(b.clusters.size() == 2);
+    CHECK(b.clusterMembers.size() == 3);
+    // Порядок кластеров — возрастание индекса бакета: пара (2,6) раньше 100.
+    const auto& c0 = b.clusters[0];
+    const auto& c1 = b.clusters[1];
+    CHECK(c0.memberCount == 2);
+    CHECK(c1.memberCount == 1);
+    CHECK(b.clusterMembers[c0.memberStart] == 0u);
+    CHECK(b.clusterMembers[c0.memberStart + 1] == 1u);
+    CHECK(b.clusterMembers[c1.memberStart] == 2u);
+    // Центроид взвешен radiusM²: вес 36 против 144 ⇒ x = (2·36+6·144)/180 = 5.2.
+    CHECK(std::fabs(c0.pos.x - 5.2f) < 1e-3f);
+    // Радиус — охват: до дальнего члена (x=2, dist 3.2) + его радиус 6 = 9.2;
+    // против (x=6, dist 0.8) + 12 = 12.8 ⇒ 12.8.
+    CHECK(std::fabs(c0.radiusM - 12.8f) < 1e-3f);
+    // Цвет — взвешенное среднее: зелёный доминирует 144/180 = 0.8.
+    CHECK(std::fabs(c0.color.y - 0.8f) < 1e-3f);
+    CHECK(std::fabs(c0.color.x - 0.2f) < 1e-3f);
+    // Одиночка: кластер = сама лампа.
+    CHECK(std::fabs(c1.pos.x - 100.0f) < 1e-3f);
+    CHECK(std::fabs(c1.radiusM - 8.0f) < 1e-3f);
+    // Обратная полярность руками не нужна: каждое равенство выше — точное
+    // число из вывода, любое искажение весов/охвата красит их само.
+}
+
 } // namespace lightvis_test
 
 void test_lightvis_all() {
+    lightvis_test::cluster_synthesis();
     lightvis_test::solidity_law();
     lightvis_test::dirty_radius_derivation();
     lightvis_test::pin_and_oracle_on_a_real_floor();

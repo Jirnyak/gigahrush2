@@ -251,7 +251,7 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
             return game::kNoLightSlot;
         }
         const auto slot = static_cast<std::uint32_t>(g_staticLamps.size());
-        g_staticLamps.push_back({pos, radiusM});
+        g_staticLamps.push_back({pos, radiusM, color});
         gpu::GpuPointLight base{};
         base.posRadius = vec4{pos.x, pos.y, pos.z, radiusM};
         base.colorIntensity = vec4{color.x, color.y, color.z, 0.0f};

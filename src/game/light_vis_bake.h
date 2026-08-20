@@ -89,6 +89,36 @@ inline std::size_t light_vis_index(int x, int y, int z) {
 struct LightVisLamp {
     vec3 pos{0.0f, 0.0f, 0.0f};
     float radiusM = 0.0f;
+    // Цвет нужен ТОЛЬКО синтезу кластеров (light-cluster.md): кластерная
+    // запись PointLight несёт взвешенный цвет членов. Вес члена — radiusM²
+    // (флюкс-прокси: радиус выводится из силы, а живая интенсивность в base
+    // всегда 0 — её пишет кадр).
+    vec3 color{1.0f, 1.0f, 1.0f};
+};
+
+// --- Кластеры (light-cluster.md, решения владельца 2026-08-20) --------------
+//
+// Кластер = пространственный бакет ламп 8 м (= 2 клетки светосетки; вывод:
+// ошибка позиции кластера ≤ полудиагонали бакета ≈ 6.9 м — хвостовые лампы
+// по построению дальние/слабые, угловая ошибка тонет в аттенюации; финал —
+// замером). Кластер — та же запись PointLight для потребителя: позиция =
+// центроид членов по весу radiusM², радиус = охват (max дистанции до члена +
+// его радиус), цвет — взвешенное среднее. Живую интенсивность кластера кадр
+// считает суммой членов (CPU, collect_scene_lights) — мерцание толпы
+// усредняется само, обесточка района гасит кластер честно.
+inline constexpr int kClusterBucketCells = 2;              // клеток светосетки
+inline constexpr int kClusterGridDim = kLightVisDim / kClusterBucketCells; // 32
+// Честных ламп на клетку (топ по вкладу, с настоящими теневыми маршами):
+// вывод — максимум теневого бюджета пикселя (4, volumetric_fog.glsl) × запас
+// 2 на отбраковку порогом/ndotl. Хвост за ними уходит в кластеры (шаг 2).
+inline constexpr std::uint32_t kClusterHonestLamps = 8;
+
+struct LightVisCluster {
+    vec3 pos{0.0f, 0.0f, 0.0f};
+    float radiusM = 0.0f;
+    vec3 color{1.0f, 1.0f, 1.0f};
+    std::uint32_t memberStart = 0; // диапазон в LightVisBake::clusterMembers
+    std::uint32_t memberCount = 0;
 };
 
 // Выход бейка: на клетку светосетки — (1 + slots) слов u32 в лейауте
@@ -109,6 +139,12 @@ struct LightVisBake {
     // 21 мс, таблица 8 -> 5 мс), и ужать его может только строгость бейка.
     float meanPerCell = 0.0f;
     float bakeMs = 0.0f;
+    // Кластеры занятых бакетов (порядок — возрастание плоского индекса
+    // бакета: детерминизм) + CSR слотов-членов. Шаг 1 light-cluster.md:
+    // синтез есть, клетки их ещё НЕ ссылают (это шаг 2, вместе со слотами в
+    // статик-таблице — id без записи в таблице был бы чтением мусора).
+    std::vector<LightVisCluster> clusters;
+    std::vector<std::uint32_t> clusterMembers;
 
     bool valid() const { return !cells.empty(); }
     std::size_t resident_bytes() const {

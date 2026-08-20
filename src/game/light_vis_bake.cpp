@@ -317,6 +317,86 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                           ? static_cast<float>(totalHits) /
                                 static_cast<float>(out.litCells)
                           : 0.0f;
+    // --- Синтез кластеров (light-cluster.md шаг 1) ---------------------
+    // Бакетизация ВСЕХ ламп по 8-м блокам; занятый бакет = кластер. Порядок
+    // кластеров и членов — возрастание индексов: детерминизм без сортировок.
+    out.clusters.clear();
+    out.clusterMembers.clear();
+    if (lampCount > 0) {
+        constexpr std::size_t kBuckets = static_cast<std::size_t>(
+            kClusterGridDim) * kClusterGridDim * kClusterGridDim;
+        const float bucketM = kLightVisCellM * kClusterBucketCells; // 8 м
+        std::vector<std::uint32_t> bucketOf(lampCount);
+        std::vector<std::uint32_t> perBucket(kBuckets, 0);
+        for (std::size_t i = 0; i < lampCount; ++i) {
+            const vec3& p = lamps[i].pos;
+            const int bx = static_cast<int>(std::floor(p.x / bucketM)) &
+                           (kClusterGridDim - 1);
+            const int by = static_cast<int>(std::floor(p.y / bucketM)) &
+                           (kClusterGridDim - 1);
+            const int bz = static_cast<int>(std::floor(p.z / bucketM)) &
+                           (kClusterGridDim - 1);
+            bucketOf[i] = static_cast<std::uint32_t>(
+                bx + by * kClusterGridDim +
+                bz * kClusterGridDim * kClusterGridDim);
+            ++perBucket[bucketOf[i]];
+        }
+        std::vector<std::uint32_t> clusterIdx(kBuckets, 0xFFFFFFFFu);
+        out.clusterMembers.resize(lampCount);
+        std::uint32_t cursor = 0;
+        for (std::size_t b = 0; b < kBuckets; ++b) {
+            if (perBucket[b] == 0) continue;
+            clusterIdx[b] = static_cast<std::uint32_t>(out.clusters.size());
+            LightVisCluster c;
+            c.memberStart = cursor;
+            c.memberCount = perBucket[b];
+            cursor += perBucket[b];
+            out.clusters.push_back(c);
+        }
+        std::vector<std::uint32_t> fill(out.clusters.size(), 0);
+        for (std::size_t i = 0; i < lampCount; ++i) {
+            const std::uint32_t ci = clusterIdx[bucketOf[i]];
+            out.clusterMembers[out.clusters[ci].memberStart + fill[ci]++] =
+                static_cast<std::uint32_t>(i);
+        }
+        // Поля кластера: центроид/цвет по весу radiusM² (флюкс-прокси, шапка
+        // LightVisLamp), радиус — охват. Центроид считается В СИСТЕМЕ ПЕРВОГО
+        // ЧЛЕНА через тор-дельты: бакет у шва иначе дал бы центр в полумире.
+        for (LightVisCluster& c : out.clusters) {
+            const vec3 origin = lamps[out.clusterMembers[c.memberStart]].pos;
+            vec3 sumD{0.0f, 0.0f, 0.0f};
+            vec3 sumCol{0.0f, 0.0f, 0.0f};
+            float sumW = 0.0f;
+            for (std::uint32_t k = 0; k < c.memberCount; ++k) {
+                const LightVisLamp& L =
+                    lamps[out.clusterMembers[c.memberStart + k]];
+                const float w = std::max(L.radiusM * L.radiusM, 1e-4f);
+                sumD.x += w * shader_wrap_delta(origin.x, L.pos.x, kWorldExtent);
+                sumD.y += w * shader_wrap_delta(origin.y, L.pos.y, kWorldExtent);
+                sumD.z += w * shader_wrap_delta(origin.z, L.pos.z, kWorldExtent);
+                sumCol = sumCol + L.color * w;
+                sumW += w;
+            }
+            c.pos = origin + sumD * (1.0f / sumW);
+            c.color = sumCol * (1.0f / sumW);
+            float reach = 0.0f;
+            for (std::uint32_t k = 0; k < c.memberCount; ++k) {
+                const LightVisLamp& L =
+                    lamps[out.clusterMembers[c.memberStart + k]];
+                const float dx =
+                    shader_wrap_delta(c.pos.x, L.pos.x, kWorldExtent);
+                const float dy =
+                    shader_wrap_delta(c.pos.y, L.pos.y, kWorldExtent);
+                const float dz =
+                    shader_wrap_delta(c.pos.z, L.pos.z, kWorldExtent);
+                reach = std::max(reach,
+                                 std::sqrt(dx * dx + dy * dy + dz * dz) +
+                                     L.radiusM);
+            }
+            c.radiusM = reach;
+        }
+    }
+
     out.bakeMs = std::chrono::duration<float, std::milli>(
                      std::chrono::steady_clock::now() - t0)
                      .count();
