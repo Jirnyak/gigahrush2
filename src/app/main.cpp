@@ -1897,7 +1897,8 @@ int main(int argc, char** argv) {
     // compute shader — a chain is a lattice at H=1 ([render/verlet_pass.h]).
     gpu::VerletPass verletPass;
     if (!verletPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                         voxelMirror.masks_buffer())) {
+                         voxelMirror.masks_buffer(),
+                         lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr,
                      "[verlet] pass init failed (continuing without antourage "
                      "verlet)\n");
@@ -1917,7 +1918,8 @@ int main(int argc, char** argv) {
     // colliding against the voxel mirror ([render/particle_pass.h]).
     gpu::ParticlePass particlePass;
     if (!particlePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                           voxelMirror.masks_buffer())) {
+                           voxelMirror.masks_buffer(),
+                           lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr,
                      "[particle] pass init failed (continuing without particles)\n");
     }
@@ -7321,11 +7323,11 @@ int main(int argc, char** argv) {
 
             renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
             if (!skip_pass("physdraw")) {
-            verletPass.record_draw_wires(cmd, push);
-            verletPass.record_draw_cloths(cmd, push);
+            verletPass.record_draw_wires(cmd, push, lightGrid.descriptor_set());
+            verletPass.record_draw_cloths(cmd, push, lightGrid.descriptor_set());
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
-            particlePass.record_draw(cmd, push);
+            particlePass.record_draw(cmd, push, lightGrid.descriptor_set());
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 

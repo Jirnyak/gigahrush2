@@ -196,6 +196,32 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     }
 }
 
+// Свет ТОНКОГО антуража (провод/тент/частица) от списка своей клетки —
+// закрытие S5-долга 2026-08-21: те же лампы и кластеры, что у поверхностей,
+// БЕЗ теневого марша (списки уже отфильтрованы бейком видимости, тонкая
+// декорация не окупает DDA; ошибка — «посветить лишним» в 4-м клетке).
+// Форма вместо нормали там, где нормали нет: N с весом nWeight — тент даёт
+// честный двусторонний |cos| (nWeight=1), провод и частица — среднее по
+// ориентациям в альбедо-множителе вызывающего (nWeight=0).
+vec3 dressing_light(vec3 P, vec3 N, float nWeight, float wrapPeriod) {
+    uint cellIdx = light_cell_index(P);
+    uint n = min(uGridCells[cellIdx].count, kLightCellSlots);
+    vec3 sum = vec3(0.0);
+    for (uint k = 0u; k < n; ++k) {
+        PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
+        vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
+        float dSq = dot(toL, toL);
+        float radius = lt.posRadius.w;
+        if (dSq >= radius * radius) continue;
+        float d = sqrt(max(dSq, 1e-6));
+        vec3 L = toL / max(d, 1e-3);
+        float att = light_attenuation(d, radius) * spot_factor(lt.dirCone, -L);
+        float shape = mix(1.0, abs(dot(N, L)), nWeight);
+        sum += lt.colorIntensity.rgb * (lt.colorIntensity.w * att * shape);
+    }
+    return sum;
+}
+
 // Raymarching Volumetric Accumulation
 // Marches through the world-aligned light grid & uniform fog, accumulating
 // in-scattered light per source (радиус+конус+фаза — та же запись источника,

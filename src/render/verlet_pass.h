@@ -78,7 +78,8 @@ public:
     // that lost its last pin falls and LANDS instead of sinking through the
     // floor. The mirror outlives this pass, so the raw handle is safe to keep.
     bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
-              VkBuffer masksBuffer);
+              VkBuffer masksBuffer,
+              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
     bool ready() const {
         return wireDrawPipeline_ != VK_NULL_HANDLE &&
@@ -115,8 +116,12 @@ public:
     void record_sim(VkCommandBuffer cmd, float dt, vec3 gravity);
 
     // The draws. Record INSIDE the render pass, after the solid passes.
-    void record_draw_wires(VkCommandBuffer cmd, const CubePush& push);
-    void record_draw_cloths(VkCommandBuffer cmd, const CubePush& push);
+    // lightSet — сет световой сетки (set 1): S5-долг закрыт 2026-08-21,
+    // антураж освещают те же лампы и кластеры, что стены.
+    void record_draw_wires(VkCommandBuffer cmd, const CubePush& push,
+                           VkDescriptorSet lightSet);
+    void record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
+                            VkDescriptorSet lightSet);
 
     std::uint32_t chain_count() const { return wire_.count; }
     std::uint32_t sheet_count() const { return cloth_.count; }
@@ -152,6 +157,7 @@ private:
     VkPipelineLayout simLayout_ = VK_NULL_HANDLE;
     VkPipeline simPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout drawLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkPipeline wireDrawPipeline_ = VK_NULL_HANDLE;
     VkPipeline clothDrawPipeline_ = VK_NULL_HANDLE;
 };

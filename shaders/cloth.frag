@@ -1,11 +1,10 @@
 #version 450
-// cloth.frag — worn canvas: flat colour with a soft lambert off the sheet's
-// own normal, ambient only, fog to black. Two-sided (abs on the lambert).
+// cloth.frag — worn canvas: direct light from the light grid off the sheet's
+// own normal (two-sided |cos|), fog to black.
 //
-// ПРЯМОГО СВЕТА НЕТ — см. тот же долг в [wire.frag]: налобник убит (владелец
-// 2026-08-20, S5), а световая сетка этому пассу недоступна — layout с одним
-// дескрипторным сетом ([verlet_pass.cpp:213-214]). `lam` ниже — не источник, а
-// модулятор по направлению fill: он ФОРМА, а не яркость.
+// ДОЛГ S5 ЗАКРЫТ 2026-08-21 (см. wire.frag): второй дескрипторный сет, те же
+// лампы и кластеры, что у стен; тени тонкой декорации не маршатся
+// (dressing_light). `lam` от fill остался формой на бессветье.
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -15,6 +14,9 @@ layout(push_constant) uniform Push {
     vec4 torus;
 } pc;
 
+#define GIGA_VOLUMETRIC_GRID_BINDINGS
+#include "volumetric_fog.glsl"
+
 layout(location = 0) in float vFog;
 layout(location = 1) in vec3 vWorldPos;
 layout(location = 2) in vec3 vNormal;
@@ -22,8 +24,9 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     const vec3 canvas = vec3(0.26, 0.23, 0.18);
-    float lam = 0.55 + 0.45 * abs(dot(normalize(vNormal),
-                                      normalize(pc.sunDir.xyz)));
-    vec3 lit = canvas * lam * pc.fog.w;
+    vec3 N = normalize(vNormal);
+    float lam = 0.55 + 0.45 * abs(dot(N, normalize(pc.sunDir.xyz)));
+    vec3 irr = dressing_light(vWorldPos, N, 1.0, pc.torus.x);
+    vec3 lit = canvas * (lam * pc.fog.w + irr);
     outColor = vec4(mix(lit, vec3(0.0), vFog), 1.0);
 }

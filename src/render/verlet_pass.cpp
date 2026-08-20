@@ -83,8 +83,10 @@ std::uint64_t fnv1a(const void* data, std::size_t bytes, std::uint64_t h) {
 } // namespace
 
 bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
-                      const char* shaderDir, VkBuffer masksBuffer) {
+                      const char* shaderDir, VkBuffer masksBuffer,
+                      VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
+    lightGridSetLayout_ = lightGridSetLayout;
     if (!wire_.points.create_host_visible(
             *dev_, sizeof(GpuWireChain) * kMaxWireChains,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "wire-chains"))
@@ -208,10 +210,13 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
         VkPushConstantRange pr{
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
             sizeof(CubePush)};
+        // Set 1 — световая сетка (S5-долг закрыт 2026-08-21): dressing_light
+        // в wire/cloth.frag читает те же лампы и кластеры, что стены.
+        VkDescriptorSetLayout sls[2] = {setLayout_, lightGridSetLayout_};
         VkPipelineLayoutCreateInfo pl{};
         pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pl.setLayoutCount = 1;
-        pl.pSetLayouts = &setLayout_;
+        pl.setLayoutCount = lightGridSetLayout_ != VK_NULL_HANDLE ? 2u : 1u;
+        pl.pSetLayouts = sls;
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &pr;
         if (vkCreatePipelineLayout(d, &pl, nullptr, &drawLayout_) != VK_SUCCESS)
@@ -517,24 +522,32 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
                          nullptr, 0, nullptr);
 }
 
-void VerletPass::record_draw_wires(VkCommandBuffer cmd, const CubePush& push) {
+void VerletPass::record_draw_wires(VkCommandBuffer cmd, const CubePush& push,
+                                VkDescriptorSet lightSet) {
     if (wireDrawPipeline_ == VK_NULL_HANDLE || wire_.count == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wireDrawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
                             0, 1, &wire_.set, 0, nullptr);
+    if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                drawLayout_, 1, 1, &lightSet, 0, nullptr);
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);
     vkCmdDraw(cmd, wire_.count * 42u, 1, 0, 0); // 7 segs x 2 tris x 3
 }
 
-void VerletPass::record_draw_cloths(VkCommandBuffer cmd, const CubePush& push) {
+void VerletPass::record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
+                                VkDescriptorSet lightSet) {
     if (clothDrawPipeline_ == VK_NULL_HANDLE || cloth_.count == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clothDrawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
                             0, 1, &cloth_.set, 0, nullptr);
+    if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                drawLayout_, 1, 1, &lightSet, 0, nullptr);
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);

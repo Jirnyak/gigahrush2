@@ -3,11 +3,9 @@
 // kinds (sparks) glow through the dark, fog fades to black. The circular
 // falloff does the anti-aliasing; no texture.
 //
-// Налобник убит (владелец 2026-08-20, S5), световая сетка этому пассу
-// недоступна ([particle_pass.cpp:120-121, 155-156] — один дескрипторный сет).
-// ИСКРЫ ЭТОГО НЕ ЗАМЕТИЛИ: строка `mix` ниже при em==1 заменяет освещение
-// целиком, поэтому светящееся читается в темноте по-прежнему. Потеряли яркость
-// только НЕэмиссивные виды — пыль, дым, кровь: их видно лишь по ambient.
+// ДОЛГ S5 ЗАКРЫТ 2026-08-21: второй дескрипторный сет — пыль, дым и кровь
+// освещают те же лампы и кластеры, что стены (dressing_light, сфера: среднее
+// косинуса по полной сфере = 1/4). Искры по-прежнему самосветятся (mix).
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -16,6 +14,9 @@ layout(push_constant) uniform Push {
     vec4 fog;
     vec4 torus;
 } pc;
+
+#define GIGA_VOLUMETRIC_GRID_BINDINGS
+#include "volumetric_fog.glsl"
 
 layout(location = 0) in vec3 vColor;
 layout(location = 1) in vec3 vMisc; // x fog, y emissive 0..1, z alpha
@@ -29,7 +30,9 @@ void main() {
     float alpha = vMisc.z * disc;
     if (alpha < 0.004) discard;
 
-    vec3 lit = vColor * pc.fog.w;
+    const float kSphereAvg = 0.25;
+    vec3 irr = dressing_light(vWorldPos, vec3(0.0), 0.0, pc.torus.x);
+    vec3 lit = vColor * (pc.fog.w + irr * kSphereAvg);
     // Emissive rows self-light and resist fog — a spark reads in the dark.
     float em = vMisc.y;
     lit = mix(lit, vColor * (1.0 + em * 2.0), em);

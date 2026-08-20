@@ -47,8 +47,10 @@ static_assert(sizeof(SimPush) == 32,
 } // namespace
 
 bool ParticlePass::init(VulkanDevice* dev, VkRenderPass renderPass,
-                        const char* shaderDir, VkBuffer masksBuffer) {
+                        const char* shaderDir, VkBuffer masksBuffer,
+                        VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
+    lightGridSetLayout_ = lightGridSetLayout;
     if (!pool_.create_host_visible(*dev_, sizeof(GpuParticle) * kMaxParticles,
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                    "particle-pool"))
@@ -150,10 +152,13 @@ bool ParticlePass::create_pipelines(VkRenderPass renderPass,
         VkPushConstantRange pr{
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
             sizeof(CubePush)};
+        // Set 1 — световая сетка (S5-долг закрыт 2026-08-21): пыль/дым/кровь
+        // освещаются как стены (particle.frag dressing_light).
+        VkDescriptorSetLayout sls[2] = {setLayout_, lightGridSetLayout_};
         VkPipelineLayoutCreateInfo pl{};
         pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pl.setLayoutCount = 1;
-        pl.pSetLayouts = &setLayout_;
+        pl.setLayoutCount = lightGridSetLayout_ != VK_NULL_HANDLE ? 2u : 1u;
+        pl.pSetLayouts = sls;
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &pr;
         if (vkCreatePipelineLayout(d, &pl, nullptr, &drawLayout_) != VK_SUCCESS)
@@ -300,12 +305,17 @@ void ParticlePass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
                          nullptr, 0, nullptr);
 }
 
-void ParticlePass::record_draw(VkCommandBuffer cmd, const CubePush& push) {
+void ParticlePass::record_draw(VkCommandBuffer cmd, const CubePush& push,
+                               VkDescriptorSet lightSet) {
     if (drawPipeline_ == VK_NULL_HANDLE) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_, 0,
                             1, &set_, 0, nullptr);
+    if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                drawLayout_, 1, 1, &lightSet, 0, nullptr);
+    
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);

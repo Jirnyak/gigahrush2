@@ -52,7 +52,8 @@ public:
     // The mirror outlives this pass (destroyed after it in main), so the raw
     // handle is safe to keep in the descriptor set.
     bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
-              VkBuffer masksBuffer);
+              VkBuffer masksBuffer,
+              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
     bool ready() const { return drawPipeline_ != VK_NULL_HANDLE; }
 
@@ -68,7 +69,8 @@ public:
 
     // The billboard draw. Record INSIDE the render pass, after the solid
     // passes (alpha-blended, depth-tested, no depth write).
-    void record_draw(VkCommandBuffer cmd, const CubePush& push);
+    void record_draw(VkCommandBuffer cmd, const CubePush& push,
+                     VkDescriptorSet lightSet = VK_NULL_HANDLE);
 
     std::uint32_t spawned_total() const { return spawnedTotal_; }
 
@@ -97,6 +99,7 @@ private:
     VkPipelineLayout simLayout_ = VK_NULL_HANDLE;
     VkPipeline simPipeline_ = VK_NULL_HANDLE;
     VkPipelineLayout drawLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkPipeline drawPipeline_ = VK_NULL_HANDLE;
 };
 
