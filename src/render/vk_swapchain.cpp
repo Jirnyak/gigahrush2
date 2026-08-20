@@ -4,6 +4,7 @@
 #include "render/vk_device.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <vector>
 
 namespace giga::gpu {
@@ -45,6 +46,13 @@ bool VulkanSwapchain::create(const VulkanDevice& d, int fbWidth, int fbHeight) {
                                    caps.maxImageExtent.height);
     }
     if (extent.width == 0 || extent.height == 0) return false;
+
+    // Вся по-пиксельная работа света множится на эту площадь, и «в каком
+    // разрешении мы вообще рисуем» не должно быть предметом гаданий — число
+    // печатается на каждом (пере)создании свапчейна (закон: print the number
+    // every run). Renderscale в дереве пока НЕТ: рисуем ровно в это.
+    std::fprintf(stderr, "[render] swapchain %ux%u (%.1f Mpx)\n", extent.width,
+                 extent.height, extent.width * extent.height * 1e-6);
 
     std::uint32_t imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)

@@ -1,8 +1,10 @@
 // gpu_light_grid.cpp — GPU 3D Volumetric Light Grid & Fog Subsystem.
 #include "render/gpu_light_grid.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -367,7 +369,17 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
                      cellOverflow_, kGridCellSlots, kGridCellSlots);
     }
 
-    uint32_t header[4] = {uploadCount, 0, 0, 0};
+    // Слово 3 — переопределение бюджета теневых лучей surface_light
+    // (0 = авто-ступени 8/4/2 по дистанции, как всегда). GIGA_SHADOW_RAYS=N —
+    // вторая измерительная ручка той же серии, что GIGA_FOG_LAMPS: раскладка
+    // светонагрузки пикселя (дымка / тени / скан) добывается вычитанием.
+    static const uint32_t kSurfaceRayOverride = [] {
+        const char* e = std::getenv("GIGA_SHADOW_RAYS");
+        if (!e) return 0u;
+        const long v = std::atol(e);
+        return static_cast<uint32_t>(std::clamp<long>(v, 0, kGridCellSlots));
+    }();
+    uint32_t header[4] = {uploadCount, 0, 0, kSurfaceRayOverride};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
         std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),

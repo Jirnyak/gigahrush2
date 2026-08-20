@@ -42,9 +42,9 @@ const float kLightGridCell = GIGA_LIGHT_GRID_CELL;
 #ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
 layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
     uint uPointLightCount;
-    uint uCellOverflow; // атомарный счёт переливших клеток пишет light_grid.comp
-    uint uReserved1;
-    uint uReserved2;
+    uint uCellOverflow;   // атомарный счёт переливших клеток пишет light_grid.comp
+    uint uReserved1;      // бывший бюджет ламп дымки — член удалён 2026-08-20
+    uint uShadowRayOverride; // 0 = авто 8/4/2; иначе бюджет лучей surface_light
     PointLight uPointLights[];
 };
 
@@ -135,7 +135,13 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     outDiffuse = vec3(0.0);
     outSpecular = vec3(0.0);
 
-    uint budget = camDist < 0.25 * fogStart ? 8u : (camDist < fogStart ? 4u : 2u);
+    // Ступени 4/2/1 ВЫВЕДЕНЫ замером вычитания (владелец, 2026-08-20):
+    // прежние 8/4/2 в плотном зале = 25-30 fps; плоско 2 = 40-60 «терпимо»;
+    // вместе со смертью лампового члена дымки полы дали 60-80. Половина
+    // ступеней держит близкие тени (глаз там) и цель 60 fps. Ручка
+    // GIGA_SHADOW_RAYS переопределяет для A/B.
+    uint budget = camDist < 0.25 * fogStart ? 4u : (camDist < fogStart ? 2u : 1u);
+    if (uShadowRayOverride != 0u) budget = uShadowRayOverride; // GIGA_SHADOW_RAYS
 
     // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
@@ -212,7 +218,6 @@ vec4 march_volumetric_fog(
     vec2 fragCoord,
     vec3 fillDir,
     float fillStrength,
-    float wrapPeriod,
     float samosborPulse
 ) {
     // Step-count-invariant (measured 2026-08-03: 12 vs 24 steps, p99 frame
@@ -244,52 +249,16 @@ vec4 march_volumetric_fog(
         float fillPhase = henyey_greenstein_phase(fillCos, 0.25);
         vec3 fillColor = vec3(0.20, 0.22, 0.28) * (fillStrength * fillPhase * 0.15);
 
-        // 2. Light grid in-scattering — точки, конусы (луч прожектора в дымке —
-        // это ЭТОТ член). Налобника в сетке нет и не было — он был отдельной
-        // аналитической формулой в трёх шейдерах и убит 2026-08-20 (S5).
-        vec3 pointLightScat = vec3(0.0);
-        // Прямая индексация вместо копии структа — см. surface_light: копия
-        // тянула 128 Б клетки НА КАЖДЫЙ ШАГ дымки (5.7 GB/кадр на 1440p).
-        // Список отсортирован по вкладу — гало хвоста из >16 тусклых ламп
-        // неразличимо, а фаза на шаг дымки миллиардного масштаба.
-        uint stepCellIdx = light_cell_index(p);
-        uint stepCount = min(uGridCells[stepCellIdx].count, 16u);
-        for (uint k = 0u; k < stepCount; ++k) {
-            PointLight pt = uPointLights[uGridCells[stepCellIdx].lightIndices[k]];
-
-            vec3 toPt = wrap_nearest(pt.posRadius.xyz - p, wrapPeriod);
-            float dPtSq = dot(toPt, toPt);
-            float radius = pt.posRadius.w;
-            if (dPtSq >= radius * radius) continue;
-
-            float dPt = sqrt(dPtSq);
-            float ptAtt = light_attenuation(dPt, radius);
-            ptAtt *= spot_factor(pt.dirCone, -toPt / max(dPt, 1e-3));
-
-            // GOD RAYS: теневой DDA-луч из точки дымки к источнику — дыра в
-            // стене режет столб света, решётка полосует конус фонаря. Бюджет
-            // по смыслу: КОНУСНЫЕ источники (их форма и есть god ray) плюс
-            // ОДИН сильнейший свет шага (k==0, список отсортирован по вкладу);
-            // омни-хвост в плотном поле неразличим, а луч на каждый из 16
-            // стоил 23 мс кадра (замер 2026-08-17, блейм). Финиш d-0.26 — не
-            // врезаться в арматуру источника, как у surface_light.
-            // …и омни-луч только в РАЗРЕЖЕННЫХ клетках (<=4 светов): одинокий
-            // столб света у дыры читается, в плотном поле он тонет в общем
-            // гало, а стоит 7 мс (замер: 11.8 -> 18.6 на блейме).
-            if ((pt.dirCone.w > -1.5 || (k == 0u && stepCount <= 4u)) &&
-                ptAtt > 0.001) {
-                ptAtt *= giga_shadow(p, toPt / max(dPt, 1e-3), dPt - 0.26);
-            }
-
-            // No normalize(): a sample landing on the light centre
-            // would emit NaN into the additive inscatter term.
-            float ptCos = dot(-rayDir, toPt) / max(dPt, 1e-3);
-            float ptPhase = henyey_greenstein_phase(ptCos, 0.40);
-
-            pointLightScat += pt.colorIntensity.rgb * (pt.colorIntensity.w * ptAtt * ptPhase);
-        }
-
-        vec3 totalStepLight = fillColor + pointLightScat;
+        // 2. Ламповый член дымки (гало вокруг источников; god rays жили тут
+        // же) УДАЛЁН решением владельца 2026-08-20 — «минимум систем, ядро
+        // отполировать»: поверхностный свет несёт картинку целиком, а цикл
+        // «12 шагов × лампы клетки на КАЖДЫЙ пиксель» был половиной
+        // перерасхода кадра (замер вычитанием: без него худший зал 25-30 →
+        // 30-60 fps, вместе со ступенями теней 4/2/1 — 60-80). Возврат гало —
+        // отдельным слоем (например, в полразрешения) поверх этого члена, не
+        // в ядро. Дымка осталась: fill-рассеяние, шум плотности, мгла
+        // самосбора; дистанционный туман — другая формула (distance_fog).
+        vec3 totalStepLight = fillColor;
 
         // In-scattering integral evaluation
         vec3 stepInscatter = totalStepLight * density * transmittance * (1.0 - stepTransmittance);

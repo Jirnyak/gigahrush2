@@ -267,7 +267,6 @@ void main() {
         gl_FragCoord.xy,
         pc.sunDir.xyz,
         pc.sunDir.w,
-        pc.torus.x,
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;

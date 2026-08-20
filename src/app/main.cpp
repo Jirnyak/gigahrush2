@@ -206,6 +206,24 @@ static_assert(gpu::kGridCellMeters == game::kLightVisCellM,
 static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
               "сентинель «нет слота» обязан быть одним значением");
 
+// GIGA_SKIP=world,bodies,props,physdraw,lightgrid — ИЗМЕРИТЕЛЬНЫЕ тумблеры:
+// выключить пасс и прочитать дельту fps. Существуют потому, что на MoltenVK
+// по-пассовые GPU-таймстемпы внутри одного рендер-пасса схлопываются к нулю
+// (gpu_timer.h §PORTABILITY; замер владельца 2026-08-20: сумма пассов 1.8 мс
+// при frame 19.7 мс) — раскладку кадра на этом железе даёт только вычитание.
+// Не режим игры: активные скипы печатаются вслух при старте.
+static bool skip_pass(const char* name) {
+    static const std::string list = [] {
+        const char* e = std::getenv("GIGA_SKIP");
+        std::string s = e ? e : "";
+        if (!s.empty())
+            std::fprintf(stderr, "[skip] GIGA_SKIP=%s — measuring, not playing\n",
+                         s.c_str());
+        return s;
+    }();
+    return list.find(name) != std::string::npos;
+}
+
 // Перестройка статик-таблицы. Слоты пропов пишутся прямо в PropLight.slot;
 // пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
 // светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
@@ -5317,8 +5335,13 @@ int main(int argc, char** argv) {
         {
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
             ImGui::Begin("gigahrush2");
-            ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
-                        frameDt * 1000.0f);
+            // Разрешение — рядом с FPS: вся по-пиксельная работа света
+            // множится на эту площадь, и вопрос «в чём мы вообще рисуем» не
+            // должен решаться скриншотом (macOS снимает их всегда в нативных
+            // пикселях Retina, независимо от свапчейна).
+            ImGui::Text("%.1f FPS (%.2f ms) @ %dx%d (%.1f Mpx)",
+                        frameDt > 0 ? 1.0f / frameDt : 0.0f, frameDt * 1000.0f,
+                        fbw, fbh, static_cast<float>(fbw) * fbh * 1e-6f);
 #ifndef NDEBUG
             // A slow frame must never be mistaken for a code regression when it
             // is really an unoptimized tree (see the [build] line at launch).
@@ -6947,7 +6970,7 @@ int main(int argc, char** argv) {
             // therefore still write its pair — an adjacent begin/end reads as a
             // truthful 0.0 ms, not as a dead readout.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
-            if (lightGrid.ready()) {
+            if (lightGrid.ready() && !skip_pass("lightgrid")) {
                 // Свап бейка видимости (Fresh на входе этажа, Rebake фоном):
                 // залить запечённые списки и поднять bakedGen — клетки,
                 // запачканные ПОСЛЕ снапшота, остаются грязными сами
@@ -7244,27 +7267,30 @@ int main(int argc, char** argv) {
             // the GPU figure is what the hardware then spent rasterising it.
             std::uint64_t t0 = SDL_GetPerformanceCounter();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
-            raymarchPass.record(cmd, renderer.currentFrame, push,
-                                lightGrid.descriptor_set());
+            if (!skip_pass("world"))
+                raymarchPass.record(cmd, renderer.currentFrame, push,
+                                    lightGrid.descriptor_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::World);
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
+            if (!skip_pass("bodies")) bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
-            if (propPass.ready())
+            if (propPass.ready() && !skip_pass("props"))
                 propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
 
             renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
+            if (!skip_pass("physdraw")) {
             verletPass.record_draw_wires(cmd, push);
             verletPass.record_draw_cloths(cmd, push);
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
             particlePass.record_draw(cmd, push);
+            }
             renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 
 
