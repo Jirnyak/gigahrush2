@@ -354,7 +354,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
     // На клетку: сорт по вкладу (score, при равенстве — меньший id: полный
     // порядок ради детерминизма), обрезка top-slots, счёт переливов.
     out.cells.assign(kLightVisCells * stride, 0);
-    std::atomic<std::uint32_t> lit{0}, overflow{0}, maxPer{0};
+    std::atomic<std::uint32_t> lit{0}, overflow{0}, maxPer{0}, packed{0};
     // Параллель по клеткам: каждый индекс пишет только свои слова — контракт
     // непересекающихся записей [core/jobs.h] держится по построению.
     parallel_for(
@@ -363,7 +363,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
             const std::size_t per = (kLightVisCells + T - 1) / T;
             const std::size_t lo = static_cast<std::size_t>(w) * per;
             const std::size_t hi = std::min(lo + per, kLightVisCells);
-            std::uint32_t myLit = 0, myOver = 0, myMax = 0;
+            std::uint32_t myLit = 0, myOver = 0, myMax = 0, myPacked = 0;
             for (std::size_t c = lo; c < hi; ++c) {
                 const std::uint32_t b = cellStart[c];
                 const std::uint32_t n = cellCount[c];
@@ -408,9 +408,11 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                     if (w2 >= slots && n > slots) ++myOver;
                     dst[0] = w2;
                 }
+                myPacked += (out.cells.data() + c * stride)[0];
             }
             // атомики только на сводку — не на горячем пути записи клеток
             lit.fetch_add(myLit, std::memory_order_relaxed);
+            packed.fetch_add(myPacked, std::memory_order_relaxed);
             overflow.fetch_add(myOver, std::memory_order_relaxed);
             std::uint32_t prev = maxPer.load(std::memory_order_relaxed);
             while (prev < myMax &&
@@ -422,6 +424,11 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
     out.litCells = lit.load(std::memory_order_relaxed);
     out.overflowCells = overflow.load(std::memory_order_relaxed);
     out.maxPerCell = maxPer.load(std::memory_order_relaxed);
+    out.packedMeanPerCell =
+        out.litCells > 0 ? static_cast<float>(
+                               packed.load(std::memory_order_relaxed)) /
+                               static_cast<float>(out.litCells)
+                         : 0.0f;
     out.meanPerCell = out.litCells > 0
                           ? static_cast<float>(totalHits) /
                                 static_cast<float>(out.litCells)

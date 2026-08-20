@@ -458,10 +458,61 @@ void cluster_synthesis() {
     // число из вывода, любое искажение весов/охвата красит их само.
 }
 
+// Оракул кластерной ПАКОВКИ (2в): при clusterRefBase != 0 клетка несёт
+// top-kClusterHonestLamps честных + ссылки кластеров хвоста, и НИ ОДНА
+// достижимая лампа не теряется: она либо в топе, либо её кластер в списке.
+void cluster_packing_oracle() {
+    World w; // пустая сетка: достижимо всё в радиусе
+    std::vector<LightVisLamp> lamps;
+    // 10 ламп в ОДНОМ 8-м бакете — гарантированный хвост из 2 при K=8.
+    for (int i = 0; i < 10; ++i)
+        lamps.push_back({vec3{1.0f + 0.5f * i, 3.0f, 3.0f}, 20.0f,
+                         vec3{1.0f, 1.0f, 1.0f}});
+    const std::uint32_t base = 100000u;
+    LightVisBake b;
+    giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
+                                      63, b, 1, nullptr, base);
+    CHECK(b.clusters.size() == 1);
+    const std::uint32_t stride = 1 + b.slots;
+    // Клетка самого бакета: 8 честных + 1 ссылка кластера.
+    const std::uint32_t* row =
+        b.cells.data() + giga::game::light_vis_index(0, 0, 0) * stride;
+    CHECK(row[0] == 9u);
+    int lampRefs = 0, clusterRefs = 0;
+    bool tailLampLeaked = false;
+    for (std::uint32_t k = 0; k < row[0]; ++k) {
+        if (row[1 + k] >= base) {
+            ++clusterRefs;
+            CHECK(row[1 + k] == base); // кластер 0 единственного бакета
+        } else {
+            ++lampRefs;
+        }
+    }
+    CHECK(lampRefs == 8);
+    CHECK(clusterRefs == 1);
+    // «Не потерять свет»: каждая достижимая лампа либо в честном топе, либо
+    // член кластера, на который клетка ссылается. Здесь кластер один и все
+    // 10 ламп — его члены (проверено в cluster_synthesis-инварианте CSR):
+    for (std::uint32_t li = 0; li < 10; ++li) {
+        bool inTop = false;
+        for (std::uint32_t k = 0; k < row[0]; ++k)
+            if (row[1 + k] == li) inTop = true;
+        bool inCluster = false;
+        const auto& c = b.clusters[0];
+        for (std::uint32_t m = 0; m < c.memberCount; ++m)
+            if (b.clusterMembers[c.memberStart + m] == li) inCluster = true;
+        if (!inTop && !inCluster) tailLampLeaked = true;
+    }
+    CHECK(!tailLampLeaked);
+    CHECK(b.packedMeanPerCell > 0.0f);
+    CHECK(b.packedMeanPerCell <= b.meanPerCell + 1e-3f);
+}
+
 } // namespace lightvis_test
 
 void test_lightvis_all() {
     lightvis_test::cluster_synthesis();
+    lightvis_test::cluster_packing_oracle();
     lightvis_test::solidity_law();
     lightvis_test::dirty_radius_derivation();
     lightvis_test::pin_and_oracle_on_a_real_floor();
