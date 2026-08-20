@@ -172,10 +172,15 @@ float light_cell_score(const vec3& lampPos, float radiusM, int cx, int cy,
 // непрерывные чанки ([core/jobs.h]), выход склеивается в порядке ламп.
 // cancel — узловая отмена (гранулярность — лампа). `grid` — живой на Fresh
 // (синхронный бейк главного потока) или снапшот-копия воркера на Rebake.
+// clusterRefBase != 0 включает паковку шага 2 (light-cluster.md): клетка =
+// top-kClusterHonestLamps честных + ссылки кластеров хвостовых бакетов как
+// clusterRefBase + clusterIdx (верхний регион таблицы, рендер передаёт свой
+// kClusterSlotBase — game лейаут-агностичен). 0 = прежняя паковка top-slots.
 void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                            std::size_t lampCount, std::uint32_t slots,
                            LightVisBake& out, int threads = 0,
-                           const std::atomic<bool>* cancel = nullptr);
+                           const std::atomic<bool>* cancel = nullptr,
+                           std::uint32_t clusterRefBase = 0);
 
 // FNV-1a содержимого клеток — пин воспроизводимости (GIGA_LIGHT_VIS_PIN,
 // образец GIGA_VERLET_PIN).

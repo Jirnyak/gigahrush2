@@ -197,7 +197,8 @@ float light_cell_score(const vec3& lampPos, float radiusM, int cx, int cy,
 void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                            std::size_t lampCount, std::uint32_t slots,
                            LightVisBake& out, int threads,
-                           const std::atomic<bool>* cancel) {
+                           const std::atomic<bool>* cancel,
+                           std::uint32_t clusterRefBase) {
     const auto t0 = std::chrono::steady_clock::now();
     const std::size_t stride = 1 + slots;
 
@@ -268,65 +269,17 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                 csr[cursor[e.cell]++] = IdScore{e.lamp, e.score};
     }
 
-    // На клетку: сорт по вкладу (score, при равенстве — меньший id: полный
-    // порядок ради детерминизма), обрезка top-slots, счёт переливов.
-    out.cells.assign(kLightVisCells * stride, 0);
-    std::atomic<std::uint32_t> lit{0}, overflow{0}, maxPer{0};
-    // Параллель по клеткам: каждый индекс пишет только свои слова — контракт
-    // непересекающихся записей [core/jobs.h] держится по построению.
-    parallel_for(
-        T,
-        [&](int w) {
-            const std::size_t per = (kLightVisCells + T - 1) / T;
-            const std::size_t lo = static_cast<std::size_t>(w) * per;
-            const std::size_t hi = std::min(lo + per, kLightVisCells);
-            std::uint32_t myLit = 0, myOver = 0, myMax = 0;
-            for (std::size_t c = lo; c < hi; ++c) {
-                const std::uint32_t b = cellStart[c];
-                const std::uint32_t n = cellCount[c];
-                if (n == 0) continue;
-                ++myLit;
-                myMax = std::max(myMax, n);
-                IdScore* s = csr.data() + b;
-                std::sort(s, s + n, [](const IdScore& a, const IdScore& r) {
-                    return a.score != r.score ? a.score < r.score
-                                              : a.id < r.id;
-                });
-                const std::uint32_t keep =
-                    std::min(n, static_cast<std::uint32_t>(slots));
-                if (n > slots) ++myOver;
-                std::uint32_t* dst = out.cells.data() + c * stride;
-                dst[0] = keep;
-                for (std::uint32_t k = 0; k < keep; ++k)
-                    dst[1 + k] = s[k].id;
-            }
-            // атомики только на сводку — не на горячем пути записи клеток
-            lit.fetch_add(myLit, std::memory_order_relaxed);
-            overflow.fetch_add(myOver, std::memory_order_relaxed);
-            std::uint32_t prev = maxPer.load(std::memory_order_relaxed);
-            while (prev < myMax &&
-                   !maxPer.compare_exchange_weak(prev, myMax,
-                                                 std::memory_order_relaxed)) {
-            }
-        },
-        T);
-    out.litCells = lit.load(std::memory_order_relaxed);
-    out.overflowCells = overflow.load(std::memory_order_relaxed);
-    out.maxPerCell = maxPer.load(std::memory_order_relaxed);
-    out.meanPerCell = out.litCells > 0
-                          ? static_cast<float>(totalHits) /
-                                static_cast<float>(out.litCells)
-                          : 0.0f;
     // --- Синтез кластеров (light-cluster.md шаг 1) ---------------------
     // Бакетизация ВСЕХ ламп по 8-м блокам; занятый бакет = кластер. Порядок
     // кластеров и членов — возрастание индексов: детерминизм без сортировок.
     out.clusters.clear();
     out.clusterMembers.clear();
+    std::vector<std::uint32_t> bucketOf(lampCount);
+    std::vector<std::uint32_t> clusterIdx;
     if (lampCount > 0) {
         constexpr std::size_t kBuckets = static_cast<std::size_t>(
             kClusterGridDim) * kClusterGridDim * kClusterGridDim;
         const float bucketM = kLightVisCellM * kClusterBucketCells; // 8 м
-        std::vector<std::uint32_t> bucketOf(lampCount);
         std::vector<std::uint32_t> perBucket(kBuckets, 0);
         for (std::size_t i = 0; i < lampCount; ++i) {
             const vec3& p = lamps[i].pos;
@@ -341,7 +294,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                 bz * kClusterGridDim * kClusterGridDim);
             ++perBucket[bucketOf[i]];
         }
-        std::vector<std::uint32_t> clusterIdx(kBuckets, 0xFFFFFFFFu);
+        clusterIdx.assign(kBuckets, 0xFFFFFFFFu);
         out.clusterMembers.resize(lampCount);
         std::uint32_t cursor = 0;
         for (std::size_t b = 0; b < kBuckets; ++b) {
@@ -397,6 +350,82 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
         }
     }
 
+
+    // На клетку: сорт по вкладу (score, при равенстве — меньший id: полный
+    // порядок ради детерминизма), обрезка top-slots, счёт переливов.
+    out.cells.assign(kLightVisCells * stride, 0);
+    std::atomic<std::uint32_t> lit{0}, overflow{0}, maxPer{0};
+    // Параллель по клеткам: каждый индекс пишет только свои слова — контракт
+    // непересекающихся записей [core/jobs.h] держится по построению.
+    parallel_for(
+        T,
+        [&](int w) {
+            const std::size_t per = (kLightVisCells + T - 1) / T;
+            const std::size_t lo = static_cast<std::size_t>(w) * per;
+            const std::size_t hi = std::min(lo + per, kLightVisCells);
+            std::uint32_t myLit = 0, myOver = 0, myMax = 0;
+            for (std::size_t c = lo; c < hi; ++c) {
+                const std::uint32_t b = cellStart[c];
+                const std::uint32_t n = cellCount[c];
+                if (n == 0) continue;
+                ++myLit;
+                myMax = std::max(myMax, n);
+                IdScore* s = csr.data() + b;
+                std::sort(s, s + n, [](const IdScore& a, const IdScore& r) {
+                    return a.score != r.score ? a.score < r.score
+                                              : a.id < r.id;
+                });
+                std::uint32_t* dst = out.cells.data() + c * stride;
+                if (clusterRefBase == 0) { // прежняя паковка (шаг 1 и тесты)
+                    const std::uint32_t keep =
+                        std::min(n, static_cast<std::uint32_t>(slots));
+                    if (n > slots) ++myOver;
+                    dst[0] = keep;
+                    for (std::uint32_t k = 0; k < keep; ++k)
+                        dst[1 + k] = s[k].id;
+                } else {
+                    // Шаг 2: top-K честных ламп (настоящие марши) + хвост —
+                    // ссылками на кластеры бакетов. Первое появление бакета в
+                    // отсортированном хвосте = ранжирование по лучшему члену
+                    // даром. Свет не теряется по построению: каждая хвостовая
+                    // лампа — член своего кластера.
+                    const std::uint32_t keep = std::min(
+                        n, std::min(static_cast<std::uint32_t>(slots),
+                                    kClusterHonestLamps));
+                    std::uint32_t w2 = 0;
+                    for (; w2 < keep; ++w2) dst[1 + w2] = s[w2].id;
+                    for (std::uint32_t k = keep; k < n && w2 < slots; ++k) {
+                        const std::uint32_t ref =
+                            clusterRefBase + clusterIdx[bucketOf[s[k].id]];
+                        bool seen = false;
+                        for (std::uint32_t j = keep; j < w2 && !seen; ++j)
+                            seen = dst[1 + j] == ref;
+                        if (!seen) {
+                            dst[1 + w2] = ref;
+                            ++w2;
+                        }
+                    }
+                    if (w2 >= slots && n > slots) ++myOver;
+                    dst[0] = w2;
+                }
+            }
+            // атомики только на сводку — не на горячем пути записи клеток
+            lit.fetch_add(myLit, std::memory_order_relaxed);
+            overflow.fetch_add(myOver, std::memory_order_relaxed);
+            std::uint32_t prev = maxPer.load(std::memory_order_relaxed);
+            while (prev < myMax &&
+                   !maxPer.compare_exchange_weak(prev, myMax,
+                                                 std::memory_order_relaxed)) {
+            }
+        },
+        T);
+    out.litCells = lit.load(std::memory_order_relaxed);
+    out.overflowCells = overflow.load(std::memory_order_relaxed);
+    out.maxPerCell = maxPer.load(std::memory_order_relaxed);
+    out.meanPerCell = out.litCells > 0
+                          ? static_cast<float>(totalHits) /
+                                static_cast<float>(out.litCells)
+                          : 0.0f;
     out.bakeMs = std::chrono::duration<float, std::milli>(
                      std::chrono::steady_clock::now() - t0)
                      .count();
