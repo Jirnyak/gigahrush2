@@ -70,11 +70,20 @@ struct PropMesh {
 // prop.frag — плафон и свет синхронны по построению. Mains-профиль гаснет от
 // power cut; прибор со своим питанием — нет. dropM — подвес: свет у нижней
 // кромки арматуры (полвысоты меша), а не внутри неё.
+// «Не в статик-таблице света»: проп, рождённый после постройки таблицы этажа,
+// или сорванный в RagdollRoll — светит динамическим хвостом. Значение обязано
+// совпадать с gpu::kNoLightSlot (game не видит render — static_assert на шве
+// в app/main.cpp).
+inline constexpr std::uint32_t kNoLightSlot = 0xFFFFFFFFu;
+
 struct PropLight {
     vec3  color{1.0f, 1.0f, 1.0f};
     float radiusM   = 0.0f;
     float intensity = 0.0f;
     float dropM     = 0.0f;
+    // Слот в статик-таблице света этажа (= id для бейка видимости
+    // light_vis_bake); назначается при постройке таблицы в app.
+    std::uint32_t slot = kNoLightSlot;
     std::uint8_t coneDeg = 0; // полуугол, 0 = омни
     std::uint8_t flicker = 0; // FlickerProfile ordinal
 };

@@ -49,9 +49,9 @@ bool GpuLightGrid::init(VulkanDevice* dev, const char* shaderDir) {
     dev_ = dev;
     if (!dev_) return false;
 
-    stagingLights_.resize(kStagingLights);
-    sortScratch_.resize(kStagingLights);
-    sortKeys_.resize(kStagingLights);
+    stagingLights_.resize(kRootLights);
+    sortScratch_.resize(kRootLights);
+    sortKeys_.resize(kRootLights);
 
     if (!create_buffers()) {
         std::fprintf(stderr, "[light-grid] failed to allocate GPU buffers\n");
@@ -209,19 +209,45 @@ bool GpuLightGrid::create_compute_pipeline(const char* shaderDir) noexcept {
     return res == VK_SUCCESS;
 }
 
+void GpuLightGrid::set_static_table(const GpuPointLight* base, uint32_t n) noexcept {
+    if (n > kRootLights) {
+        // Корневой кап — вслух (S11): молчаливое обрезание запрещено.
+        std::fprintf(stderr,
+                     "[light-grid] STATIC TABLE OVERFLOW: %u lamps > root cap %u"
+                     " — tail dropped\n",
+                     n, kRootLights);
+        n = kRootLights;
+    }
+    if (n > 0) {
+        std::memcpy(stagingLights_.data(), base, n * sizeof(GpuPointLight));
+    }
+    staticCount_ = n;
+    dynamicCount_ = 0;
+}
+
+void GpuLightGrid::set_static_intensity(uint32_t slot, float intensity) noexcept {
+    if (slot >= staticCount_) return; // kNoLightSlot и чужой слой падают сюда
+    stagingLights_[slot].colorIntensity.w = intensity;
+}
+
 void GpuLightGrid::clear_lights() noexcept {
-    stagingLightCount_ = 0;
+    // Статики: интенсивность в ноль (надгробие по умолчанию — живые лампы
+    // перепишут её в этом же кадре), позиция/радиус/цвет стоят как испечены.
+    for (uint32_t i = 0; i < staticCount_; ++i) {
+        stagingLights_[i].colorIntensity.w = 0.0f;
+    }
+    dynamicCount_ = 0;
     overflowDropped_ = 0;
 }
 
 void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept {
     if (radius <= 0.0f || intensity <= 0.001f) return;
-    if (stagingLightCount_ >= kStagingLights) {
+    if (staticCount_ + dynamicCount_ >= kRootLights) {
         ++overflowDropped_; // считаем, не молчим — GIGA_LIGHT_DBG покажет
         return;
     }
 
-    GpuPointLight& pt = stagingLights_[stagingLightCount_++];
+    GpuPointLight& pt = stagingLights_[staticCount_ + dynamicCount_++];
     pt.posRadius = vec4{pos.x, pos.y, pos.z, radius};
     pt.colorIntensity = vec4{color.x, color.y, color.z, intensity};
     // w = -2: сентинель «омни». Нулевой w означал бы конус 90° — молчаливый баг.
@@ -231,12 +257,12 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
 void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, float intensity,
                              const vec3& dir, float cosOuter) noexcept {
     if (radius <= 0.0f || intensity <= 0.001f) return;
-    if (stagingLightCount_ >= kStagingLights) {
+    if (staticCount_ + dynamicCount_ >= kRootLights) {
         ++overflowDropped_;
         return;
     }
 
-    GpuPointLight& pt = stagingLights_[stagingLightCount_++];
+    GpuPointLight& pt = stagingLights_[staticCount_ + dynamicCount_++];
     pt.posRadius = vec4{pos.x, pos.y, pos.z, radius};
     pt.colorIntensity = vec4{color.x, color.y, color.z, intensity};
     const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
@@ -245,20 +271,25 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
 }
 
 void GpuLightGrid::sort_lights_by_distance(const vec3& camPos) noexcept {
-    if (stagingLightCount_ <= 1) return;
-    for (uint32_t i = 0; i < stagingLightCount_; ++i) {
+    // Статики НЕ переупорядочиваются (слот-id стабильны для бейка видимости):
+    // сорт строит ключи по обеим секциям, но пишет копию в sortScratch_, и на
+    // GPU едет она. Потухшие лампы (интенсивность-надгробие) в ключи не
+    // попадают — как раньше не попадали в стейджинг.
+    uint32_t n = 0;
+    const uint32_t total = staticCount_ + dynamicCount_;
+    for (uint32_t i = 0; i < total; ++i) {
+        if (stagingLights_[i].colorIntensity.w <= 0.001f) continue;
         const vec4& p = stagingLights_[i].posRadius;
         const float dx = wrap_delta_f(camPos.x, p.x, kWorldExtent);
         const float dy = wrap_delta_f(camPos.y, p.y, kWorldExtent);
         const float dz = wrap_delta_f(camPos.z, p.z, kWorldExtent);
-        sortKeys_[i] = { dx * dx + dy * dy + dz * dz, static_cast<uint16_t>(i) };
+        sortKeys_[n++] = { dx * dx + dy * dy + dz * dz, i };
     }
-    std::sort(sortKeys_.begin(), sortKeys_.begin() + stagingLightCount_);
-    for (uint32_t i = 0; i < stagingLightCount_; ++i) {
+    std::sort(sortKeys_.begin(), sortKeys_.begin() + n);
+    for (uint32_t i = 0; i < n; ++i) {
         sortScratch_[i] = stagingLights_[sortKeys_[i].second];
     }
-    std::memcpy(stagingLights_.data(), sortScratch_.data(),
-                stagingLightCount_ * sizeof(GpuPointLight));
+    sortedCount_ = n;
 }
 
 void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
@@ -282,7 +313,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
                    ? static_cast<uint32_t>(v)
                    : kMaxPointLights;
     }();
-    const uint32_t uploadCount = std::min(stagingLightCount_, kBudgetCap);
+    const uint32_t uploadCount = std::min(sortedCount_, kBudgetCap);
 
     // Переливы клеток светосетки: light_grid.comp атомарно копит в слове 1
     // заголовка число клеток, где достижимых ламп оказалось больше
@@ -303,7 +334,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     uint32_t header[4] = {uploadCount, 0, 0, 0};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
-        std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),
+        std::memcpy(static_cast<char*>(lightMapped_) + 16, sortScratch_.data(),
                     uploadCount * sizeof(GpuPointLight));
     }
 

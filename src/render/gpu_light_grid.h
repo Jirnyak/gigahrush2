@@ -24,16 +24,23 @@ static constexpr uint32_t kGridDimY = 64;
 static constexpr uint32_t kGridDimZ = 64;
 static constexpr float kGridCellMeters = 4.0f;
 static constexpr uint32_t kTotalGridCells = kGridDimX * kGridDimY * kGridDimZ; // 262144
-// «Сотен в кадре» хватает с запасом: на GPU едут БЛИЖАЙШИЕ kMaxPointLights из
-// отсортированного стейджинга. Стейджинг обязан вмещать ВСЕ источники этажа:
-// перелив здесь режет по порядку вставки (= порядку создания, z снизу вверх),
-// и это был живой баг — блейм несёт 9500 лампочек, в 2048 влезали только
-// нижние, «ближайшие 512» выбирались из произвольного подмножества, и целые
-// ярусы не светились никогда (замер GIGA_LIGHT_DBG 2026-08-17). 16384 = 9500
-// худшего этажа с запасом; вектора на куче, 1.5 MB. Перелив теперь считается
-// (overflow_dropped) и виден в GIGA_LIGHT_DBG — молча не режем.
+// КОРНЕВОЙ кап системы света (S11: один корневой кап на систему, производные
+// считаются от него; решение владельца — markoaudit/plans/light-perf.md §капы,
+// CANON S9/S11: «свет 131072 стейджинг»). Таблица = [0..staticCount) статики
+// со СТАБИЛЬНЫМИ слот-id на поколение бейка (позиция/радиус неподвижны — их
+// видимость печёт light_vis_bake; в кадре обновляется только интенсивность:
+// мерцание/обесточка/поломка) + динамический хвост (мобы-эмиттеры, снаряды,
+// фонарик из рук — единицы-десятки, переписывается каждый кадр). Перелив
+// считается (overflow_dropped) и виден в GIGA_LIGHT_DBG — молча не режем.
+static constexpr uint32_t kRootLights = 131072;
+// Слот «не в статик-таблице»: проп, сорванный в RagdollRoll, или лампа,
+// рождённая после постройки таблицы, идут динамическим хвостом.
+static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
+// Аплоад-кап «ближайшие к камере» — ВРЕМЕННЫЙ до слияния bakedGrid в
+// light_grid.comp (план light-visibility-bake §5: умирает вместе с сортом —
+// камерный отбор нарушает S7; без бейка биннить 12k статиков каждый кадр
+// нельзя, поэтому до потребителя кадр живёт по-старому).
 static constexpr uint32_t kMaxPointLights = 512;
-static constexpr uint32_t kStagingLights = 16384;
 
 // Matches PointLight in shaders/light_grid.comp and shaders/volumetric_fog.glsl (std430)
 struct alignas(16) GpuPointLight {
@@ -94,14 +101,24 @@ public:
     bool init(VulkanDevice* dev, const char* shaderDir);
     void destroy() noexcept;
 
-    // Zero-allocation light collection. 4-арг = омни; перегрузка с dir/cosOuter =
-    // конус (фонарик, прожектор). Один структ, один цикл в шейдере — «универсальные
-    // источники живут вместе» по построению.
+    // Статик-таблица этажа: [0..n) занимают лампы со стабильными слот-id (те
+    // же id, которыми оперирует бейк видимости light_vis_bake). Зовётся при
+    // (пере)постройке этажа; intensity в base игнорируется — её каждый кадр
+    // пишет set_static_intensity (0 = надгробие: умершая лампа не светит, слот
+    // жив до ребейка). clear_lights обнуляет интенсивности статиков и
+    // динамический хвост; порядок кадра: clear -> интенсивности + динамики.
+    void set_static_table(const GpuPointLight* base, uint32_t n) noexcept;
+    void set_static_intensity(uint32_t slot, float intensity) noexcept;
+    uint32_t static_count() const noexcept { return staticCount_; }
+
+    // Zero-allocation light collection — ДИНАМИЧЕСКИЙ хвост [staticCount..).
+    // 4-арг = омни; перегрузка с dir/cosOuter = конус (фонарик, прожектор).
+    // Один структ, один цикл в шейдере — «универсальные источники живут
+    // вместе» по построению.
     void add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept;
     void add_light(const vec3& pos, float radius, const vec3& color, float intensity,
                    const vec3& dir, float cosOuter) noexcept;
     void clear_lights() noexcept;
-    void sort_lights_by_distance(const vec3& camPos) noexcept;
 
     // Record compute dispatch (3D spatial grid binning) & pipeline memory barrier.
     // Must execute outside active render pass on current_cmd().
@@ -111,7 +128,9 @@ public:
     VkDescriptorSet descriptor_set() const noexcept { return descriptorSet_; }
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
 
-    uint32_t active_light_count() const noexcept { return stagingLightCount_; }
+    uint32_t active_light_count() const noexcept {
+        return staticCount_ + dynamicCount_;
+    }
     uint32_t overflow_dropped() const noexcept { return overflowDropped_; }
     // Клетки, перелившиеся В ПРОШЛОМ снятом кадре (атомарный счёт в
     // light_grid.comp, читается из заголовка светобуфера кадром позже).
@@ -136,12 +155,21 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline computePipeline_ = VK_NULL_HANDLE;
 
-    // Вектора, не массивы: 16384 x 48 B x 2 — этому не место ни в объекте на
+    // Временный камерный отбор до слияния bakedGrid (умирает по плану §5
+    // вместе с kMaxPointLights: камерный отбор — нарушение S7).
+    void sort_lights_by_distance(const vec3& camPos) noexcept;
+
+    // Вектора, не массивы: kRootLights x 48 B — этому не место ни в объекте на
     // стеке main(), ни тем более в кадре стека. Резервируются один раз в init().
+    // stagingLights_ = [статик-таблица | динамический хвост]; статики НЕ
+    // переупорядочиваются никогда (слот-id стабильны), временный сорт пишет в
+    // sortScratch_ и грузит на GPU оттуда.
     std::vector<GpuPointLight> stagingLights_;
     std::vector<GpuPointLight> sortScratch_;
-    std::vector<std::pair<float, uint16_t>> sortKeys_; // distSq, index
-    uint32_t stagingLightCount_ = 0;
+    std::vector<std::pair<float, uint32_t>> sortKeys_; // distSq, index
+    uint32_t staticCount_ = 0;
+    uint32_t dynamicCount_ = 0;
+    uint32_t sortedCount_ = 0; // живых (не-надгробий) в sortScratch_ после сорта
     uint32_t overflowDropped_ = 0;
     uint32_t cellOverflow_ = 0;
 };

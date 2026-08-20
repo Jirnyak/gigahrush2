@@ -183,6 +183,66 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
 
+// Статик-таблица света этажа (план light-visibility-bake §1.1): пропы-света +
+// кластеры светоматериалов, СТАБИЛЬНЫЕ слот-id на поколение таблицы. Одна
+// нумерация на три потребителя: слот в GpuLightGrid (uPointLights[0..S)), id
+// в бейке видимости ([game/rebake.h] set_light_table) и PropLight.slot на
+// сущности. Перестраивается при постройке этажа и при карве светоматериала;
+// g_staticTableGen — сигнал collect_scene_lights перезалить таблицу в рендер.
+static std::vector<game::LightVisLamp> g_staticLamps;
+static std::vector<gpu::GpuPointLight> g_staticLightBase;
+static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
+static std::uint32_t g_staticTableGen = 0;
+static std::uint32_t g_lightTableUploadedGen = 0;
+
+// Швы game <-> render, которые обязаны совпадать (game render не видит):
+// сетка бейка видимости = светосетка рендера; «нет слота» — одно значение.
+static_assert(gpu::kGridDimX == game::kLightVisDim &&
+                  gpu::kGridDimY == game::kLightVisDim &&
+                  gpu::kGridDimZ == game::kLightVisDim,
+              "бейк видимости и светосетка рендера обязаны жить в одной сетке");
+static_assert(gpu::kGridCellMeters == game::kLightVisCellM,
+              "клетка светосетки: рендер и бейк разошлись");
+static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
+              "сентинель «нет слота» обязан быть одним значением");
+
+// Перестройка статик-таблицы. Слоты пропов пишутся прямо в PropLight.slot;
+// пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
+// светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
+// пишет collect_scene_lights (мерцание/обесточка/поломка; 0 = надгробие).
+static void rebuild_static_light_table(Registry& reg, LayerId layer) {
+    g_staticLamps.clear();
+    g_staticLightBase.clear();
+    g_bakedLightSlots.clear();
+    const auto push_lamp = [](const vec3& pos, float radiusM, const vec3& color) {
+        g_staticLamps.push_back({pos, radiusM});
+        gpu::GpuPointLight base{};
+        base.posRadius = vec4{pos.x, pos.y, pos.z, radiusM};
+        base.colorIntensity = vec4{color.x, color.y, color.z, 0.0f};
+        // w = -2: сентинель «омни» (см. add_light). Конусные статики появятся
+        // вместе с первым конусным пропом — биннинг конус всё равно не режет.
+        base.dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
+        g_staticLightBase.push_back(base);
+    };
+    auto lampView = reg.view<const Transform, game::PropLight>();
+    for (auto e : lampView) {
+        const Transform& tr = lampView.get<const Transform>(e);
+        game::PropLight& pl = lampView.get<game::PropLight>(e);
+        if (tr.layer != layer || !reg.all_of<game::StaticPropTag>(e)) {
+            pl.slot = game::kNoLightSlot;
+            continue;
+        }
+        pl.slot = static_cast<std::uint32_t>(g_staticLamps.size());
+        push_lamp(tr.pos + vec3{0.0f, 0.0f, -pl.dropM}, pl.radiusM, pl.color);
+    }
+    for (const game::BakedLight& bl : g_bakedFloorLights) {
+        g_bakedLightSlots.push_back(
+            static_cast<std::uint32_t>(g_staticLamps.size()));
+        push_lamp(bl.pos, bl.radiusM, bl.color);
+    }
+    ++g_staticTableGen;
+}
+
 // Поколение мутаций мира активного этажа — асинк-ребейк
 // ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
 // и боевой дренаж); двери НЕ пишут — нав печётся по премисе all-open
@@ -240,6 +300,13 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  const vec3& camUp = vec3{0.0f, 0.0f, 1.0f},
                                  const game::NpcPool* pool = nullptr,
                                  Entity player = entt::null) {
+    // Перестроенная статик-таблица (вход этажа, карв светоматериала) — залить
+    // один раз; кадр дальше пишет только интенсивности и динамический хвост.
+    if (g_lightTableUploadedGen != g_staticTableGen) {
+        grid.set_static_table(g_staticLightBase.data(),
+                              static_cast<std::uint32_t>(g_staticLightBase.size()));
+        g_lightTableUploadedGen = g_staticTableGen;
+    }
     grid.clear_lights();
 
     // Свет от камеры ЗАПРЕЩЁН (решение владельца 2026-08-17): НПЦ = игрок,
@@ -358,10 +425,6 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                 ++dbgUnpowered;
                 continue;
             }
-            if (!light_reaches_view(pos, pl.radiusM)) {
-                ++dbgCulled;
-                continue;
-            }
 
             // ЕДИНАЯ функция мерцания ([game/flicker.h] == shaders/flicker.glsl):
             // та же математика красит emissive плафона в prop.frag — свет и
@@ -369,17 +432,34 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             const float intensity =
                 pl.intensity * game::flicker_factor(profile, pos, timeSec);
 
-            grid.add_light(pos, pl.radiusM, pl.color, intensity);
+            // Заякоренный проп — статик-слот: в кадре пишется ТОЛЬКО
+            // интенсивность, позиция/радиус испечены таблицей, камерного калла
+            // нет (видимость — свойство геометрии, не камеры; S7). Сорванный в
+            // RagdollRoll или рождённый после таблицы — динамический хвост со
+            // своей живой позицией (план §3.4).
+            if (pl.slot != game::kNoLightSlot &&
+                reg.all_of<game::StaticPropTag>(e)) {
+                grid.set_static_intensity(pl.slot, intensity);
+            } else {
+                if (!light_reaches_view(pos, pl.radiusM)) {
+                    ++dbgCulled;
+                    continue;
+                }
+                grid.add_light(pos, pl.radiusM, pl.color, intensity);
+            }
             ++dbgLit;
         }
     }
 
     // 8. Светоматериалы — статические эмиттеры бейка этажа ([light_bake.h]):
     // нарисованная светом вывеска, неоновая полоса, вылепленная вокселями
-    // лампа — настоящие источники, с тенями и гало.
-    for (const game::BakedLight& bl : g_bakedFloorLights) {
-        if (light_reaches_view(bl.pos, bl.radiusM))
-            grid.add_light(bl.pos, bl.radiusM, bl.color, bl.intensity);
+    // лампа — настоящие источники, с тенями и гало. Слоты назначены
+    // rebuild_static_light_table; в кадре — только интенсивность (кластер не
+    // мерцает, но слот обязан переписываться после нуля clear_lights, и это
+    // же место умрёт клеточным мерцанием от щитка, S15.4).
+    for (std::size_t i = 0; i < g_bakedFloorLights.size(); ++i) {
+        grid.set_static_intensity(g_bakedLightSlots[i],
+                                  g_bakedFloorLights[i].intensity);
     }
 
     // 9. Свет из РУК: экипированный инструмент игрока ([equip.h] Tool), чья
@@ -1155,6 +1235,11 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
         std::fprintf(stderr, "[light-bake] floor %d: %zu emitter clusters\n",
                      floorNumber, g_bakedFloorLights.size());
 
+    // Статик-таблица света — из только что расставленных пропов и кластеров;
+    // begin_floor_nav (следом за нами у всех вызывающих) отдаст её бейку
+    // видимости ДО start_fresh.
+    rebuild_static_light_table(reg, layer);
+
     return count;
 }
 
@@ -1427,6 +1512,11 @@ void begin_floor_nav(const World& world, int floorNumber,
     // Новый этаж = новая летопись мутаций: Fresh-снапшот отражает поколение 0.
     g_worldGen = 0;
     const game::FloorKind kind = kind_for_floor(floorNumber);
+    // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
+    // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
+    // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
+    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
+                         gpu::kGridCellSlots);
     // The ROOM zones are baked synchronously inside start_fresh, because they
     // are three multi-source BFS against the async bake's 128 — measured below
     // in the same line the nav timings print. Synchronous also means the
@@ -4058,9 +4148,17 @@ int main(int argc, char** argv) {
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
-                    if (removed > 0 && relight)
+                    if (removed > 0 && relight) {
                         g_bakedFloorLights =
                             game::bake_material_lights(stack.layer(activeLayer));
+                        // Кластеры пережиты заново — статик-таблица и бейк
+                        // видимости обязаны узнать (слоты пропов стабильны,
+                        // выкушенный неон умирает вместе со слотом).
+                        rebuild_static_light_table(reg, activeLayer);
+                        nav.set_light_table(g_staticLamps.data(),
+                                            g_staticLamps.size(),
+                                            gpu::kGridCellSlots);
+                    }
                     if (removed > 0) {
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
@@ -4434,9 +4532,16 @@ int main(int argc, char** argv) {
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
-                        if (removed > 0 && relight)
+                        if (removed > 0 && relight) {
                             g_bakedFloorLights = game::bake_material_lights(
                                 stack.layer(activeLayer));
+                            // Тот же долг, что у консольного карва: таблица и
+                            // бейк видимости узнают о переживших кластерах.
+                            rebuild_static_light_table(reg, activeLayer);
+                            nav.set_light_table(g_staticLamps.data(),
+                                                g_staticLamps.size(),
+                                                gpu::kGridCellSlots);
+                        }
                         if (removed > 0) {
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
