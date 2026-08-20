@@ -294,13 +294,27 @@ if(NOT _giga_lgrid_h MATCHES "kGridCellBytes = ([0-9]+)")
     message(FATAL_ERROR "cannot parse kGridCellBytes out of src/render/gpu_light_grid.h.")
 endif()
 set(_giga_lgrid_cell_bytes ${CMAKE_MATCH_1})
+# База кластерного региона таблицы (light-cluster.md): шейдер отличает кластер
+# от лампы по слоту — кластеры без теневого марша (решение владельца).
+if(NOT _giga_lgrid_h MATCHES "kClusterSlotBase = kRootLights - kClusterSlots")
+    message(FATAL_ERROR "cannot find kClusterSlotBase derivation in gpu_light_grid.h.")
+endif()
+if(NOT _giga_lgrid_h MATCHES "kRootLights = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kRootLights out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_root_lights ${CMAKE_MATCH_1})
+if(NOT _giga_lgrid_h MATCHES "kClusterSlots = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kClusterSlots out of src/render/gpu_light_grid.h.")
+endif()
+math(EXPR _giga_cluster_base "${_giga_root_lights} - ${CMAKE_MATCH_1}")
 set(_giga_shader_defs
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
     -DGIGA_CELL_SIZE=${_giga_cell_size}
     -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
     -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
-    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes})
+    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
+    -DGIGA_LIGHT_CLUSTER_BASE=${_giga_cluster_base})
 # Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
 # above go stale while the build stays green.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

@@ -38,6 +38,10 @@ struct LightGridCell {
 // совпадать]
 const int   kLightGridDim  = GIGA_LIGHT_GRID_DIM;  // -D из CMakeLists <- gpu_light_grid.h
 const float kLightGridCell = GIGA_LIGHT_GRID_CELL;
+// Слоты >= базы — КЛАСТЕРЫ (light-cluster.md): агрегаты хвостовых ламп из
+// бейка. Светят аналитически, БЕЗ теневого марша (решение владельца: они
+// дальние/слабые и запечённо-достижимы; ошибка — «посветить лишним»).
+const uint kClusterSlotBase = uint(GIGA_LIGHT_CLUSTER_BASE);
 
 #ifdef GIGA_VOLUMETRIC_GRID_BINDINGS
 layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
@@ -139,13 +143,13 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     outDiffuse = vec3(0.0);
     outSpecular = vec3(0.0);
 
-    // Ступени 4/2/1 ВЫВЕДЕНЫ замером вычитания (владелец, 2026-08-20):
-    // прежние 8/4/2 в плотном зале = 25-30 fps; плоско 2 = 40-60 «терпимо»;
-    // вместе со смертью лампового члена дымки полы дали 60-80. Половина
-    // ступеней держит близкие тени (глаз там) и цель 60 fps. Ручка
-    // GIGA_SHADOW_RAYS переопределяет для A/B.
-    uint budget = camDist < 0.25 * fogStart ? 4u : (camDist < fogStart ? 2u : 1u);
-    if (uShadowRayOverride != 0u) budget = uShadowRayOverride; // GIGA_SHADOW_RAYS
+    // БЮДЖЕТА ЛУЧЕЙ НЕТ (шаг 3 light-cluster.md, владелец: «возврат
+    // чистоты»): длина списка ограничена ПО ПОСТРОЕНИЮ кластеризацией бейка
+    // (топ-K честных + кластеры), и пиксель маршит КАЖДУЮ честную лампу.
+    // Ступени 8/4/2 и 4/2/1 умерли вместе с порогом вклада — в ядре не
+    // осталось ни одной ветки от дистанции камеры. GIGA_SHADOW_RAYS остаётся
+    // ИЗМЕРИТЕЛЬНОЙ ручкой: N != 0 капает марши для A/B.
+    uint budget = uShadowRayOverride != 0u ? uShadowRayOverride : 0xFFFFu;
 
     // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
@@ -167,9 +171,15 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
 
         float att = light_attenuation(d, radius) * spot_factor(lt.dirCone, -L);
         float power = lt.colorIntensity.w * att;
-        // Порог вклада ДО теневого луча: неощутимый свет не заслуживает DDA.
-        if (power * ndotl < 0.004) continue;
+        if (power <= 0.0) continue; // погасший/надгробие: нет света — нет луча
 
+        // Кластер — аналитически, без марша; лампа — честный DDA.
+        if (uGridCells[cellIdx].lightIndices[k] >= kClusterSlotBase) {
+            vec3 cCol = lt.colorIntensity.rgb * (power * ndotl);
+            outDiffuse += cCol;
+            continue;
+        }
+        if (budget == 0u) continue;
         budget--;
         // Старт — четверть атома от грани вдоль нормали (не родиться в своём
         // же теле), финиш — 0.2 м до источника (не врезаться в его арматуру:
