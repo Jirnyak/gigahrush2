@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "core/watch.h"       // watch_cycle / watch_*_digit — календарь S15
 #include "game/combat.h"      // PlayerRanged — магазин/перезарядка
 #include "game/embody.h"      // NpcRef — тело с флажком, не синглтон
 #include "game/equip.h"       // equipped_melee/ranged — РЕШЕНИЯ, не скан
@@ -85,6 +86,20 @@ void draw_needs(const HudContext& c) {
                        static_cast<double>(nd.food),
                        static_cast<double>(nd.water),
                        static_cast<double>(nd.sleep));
+}
+
+// Часы дома: цикл.вахта.такт, каждая цифра 0..7 ([core/watch.h], [CANON.md] S15).
+// В Гигахруще нет солнца, поэтому нет и «часов» — время читается лестницей
+// вахт, а не циферблатом. Цифры восьмеричные по построению: каждый уровень
+// ровно втрое-по-биту крупнее предыдущего, и та же тройка бит зажигает лампы
+// настенного табло — худ и табло показывают ОДНО число, просто разными телами.
+//
+// kDim, а не фосфор: время — это фон, а не тревога. Красный тут не появится
+// никогда, чем бы ни кончился цикл.
+void draw_time(const HudContext& c) {
+    ImGui::TextColored(kDim, "ВАХТА %llu.%d.%d",
+                       static_cast<unsigned long long>(watch_cycle(c.tick)),
+                       watch_watch_digit(c.tick), watch_tact_digit(c.tick));
 }
 
 void draw_psi(const HudContext& c) {
@@ -186,6 +201,10 @@ HudElement g_elements[] = {
     {"needs",     "Потребности", HudSlot::BottomLeft,  true, draw_needs},
     {"psi",       "PSI",         HudSlot::BottomLeft,  true, draw_psi},
     {"hands",     "Рука",        HudSlot::BottomRight, true, draw_hands},
+    // Время — постоянный житель верхнего левого угла: `status` под ним тихий
+    // (пока нет статусов и воздух чист, его окно не открывается вовсе), так что
+    // угол до сих пор пустовал.
+    {"time",      "Время",       HudSlot::TopLeft,     true, draw_time},
     {"status",    "Статусы",     HudSlot::TopLeft,     true, draw_status, status_live},
     {"alerts",    "Алерты",      HudSlot::Center,      true, draw_alerts, alerts_live},
 };

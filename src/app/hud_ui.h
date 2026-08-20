@@ -48,6 +48,9 @@ struct HudContext {
     const game::SamosborState* samosbor = nullptr;
     const game::NeedsTick* needsTick = nullptr;
     HudGas gas;
+    // Сим-тик — единственный вход часов дома в худ ([core/watch.h], S15).
+    // Не секунды и не кадры: календарь читается СДВИГАМИ, и делить тут нечего.
+    std::uint64_t tick = 0;
 };
 
 // Углы стекла. Center — прицел и алерты; остальное прижато к краям.

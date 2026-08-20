@@ -675,21 +675,22 @@ void rooms_recovery_closes_the_loop() {
 
     // ONE SECOND IN MEDICAL feeds the BANK, never a bar: HP is not a Needs field,
     // so the row's whole effect must land in hpBank and nothing else may move.
-    // The rate is a derivation, not a tunable: 0 -> full in one in-game hour, so a
-    // 100-max body banks 100/kGameHourSec HP per second...
+    // The rate is a derivation, not a tunable: 0 -> full за ОДИН ТАКТ ([core/watch.h],
+    // S15 — «часа» в мире без солнца нет), так что тело с максимумом 100 копит
+    // 100/kTactSeconds HP в секунду...
     Needs m{};
     m.food = 50.0f;
     room_recover(m, room_bit(RoomBit::Medical), 1.0f);
-    CHECK(std::fabs(m.hpBank - 100.0f / kGameHourSec) < 1e-4f);
+    CHECK(std::fabs(m.hpBank - 100.0f / kTactSeconds) < 1e-4f);
     CHECK(std::fabs(m.food - 50.0f) < 1e-4f);
     // ...and a LEVELLED body (max_hp is level x STR, [rpg.h]) banks proportionally
-    // more, so time-to-full is the SAME hour for everyone. An absolute rate would
+    // more, so time-to-full is the SAME такт for everyone. An absolute rate would
     // heal the strong slower for no stated reason — that asymmetry is the bug this
     // check pins out.
     Needs m2{};
     room_recover(m2, room_bit(RoomBit::Medical), 1.0f,
                  nullptr, kInvalidNpc, 0, 0, 0, 0.0, 200);
-    CHECK(std::fabs(m2.hpBank - 200.0f / kGameHourSec) < 1e-4f);
+    CHECK(std::fabs(m2.hpBank - 200.0f / kTactSeconds) < 1e-4f);
 
     // A corridor second changes nothing at all, and neither does dt <= 0.
     Needs c{};

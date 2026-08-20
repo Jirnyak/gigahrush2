@@ -5143,6 +5143,7 @@ int main(int argc, char** argv) {
             hctx.status = &playerStatus;
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
+            hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
             if (gasPass.ready() && reg.valid(player)) {
                 const vec3& gp = reg.get<Transform>(player).pos;
                 const std::uint32_t cell = gasPass.sample_cell(
@@ -6771,7 +6772,22 @@ int main(int argc, char** argv) {
         // Begin command recording & compute pass before graphics render pass
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
-float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+            // ВРЕМЯ ВИЗУАЛА — СИМ-ВРЕМЯ, не настенное (владелец 2026-08-20,
+            // [CANON.md] S15, шаг 0 плана time-watch). Здесь стоял
+            // `SDL_GetTicks()/1000`, и это был ЕДИНСТВЕННЫЙ вход настенных часов
+            // в картинку: мерцание ламп на CPU ([game/flicker.h]), мерцание
+            // плафонов и CRT на GPU (`torus.w` → [shaders/prop.frag]), дрожь
+            // тумана самосбора. Три следствия того, что было:
+            //   * мерцание НЕ замирало на паузе, хотя мир замирал;
+            //   * два прогона с одинаковым `simTick` давали разную картинку,
+            //     то есть свет было невозможно ни запинить, ни проверить;
+            //   * фаза цикла (S15) выводится сдвигами из `simTick`, а свет жил
+            //     в другом часовом поясе — программа щитка разъехалась бы с
+            //     календарём, и это было бы видно как рассинхрон освещения.
+            // Точность: float держит миллисекунду примерно до 4.6 часов
+            // непрерывной игры — ровно столько же, сколько держал прежний
+            // `SDL_GetTicks()/1000`, так что хуже не стало.
+            float currentTimeSec = static_cast<float>(simTick) * kSimDt;
 
             // The timer bracket is OUTSIDE the ready() test on purpose, and so is
             // every other bracket this frame writes: collect() reads the whole

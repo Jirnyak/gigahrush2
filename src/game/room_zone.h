@@ -84,6 +84,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/watch.h"     // kTactSeconds — такт как единица времени (S15)
 #include "game/ai.h"        // IntentId — the affordance table's key
 #include "game/role.h"      // RoleTraits — role home/work rooms join the bake mask
 #include "game/floor_gen.h" // kFloorRoomBits, floor_room_stride/mask/bit_index
@@ -219,13 +220,15 @@ inline constexpr std::uint16_t kRoomFieldMask = [] {
 // levelled body slower in time-to-full for no stated reason. The rate itself is
 // derived, not chosen: a ward restores a body 0 -> full in ONE IN-GAME HOUR.
 // ---------------------------------------------------------------------------
-// THE IN-GAME HOUR, until a real day clock exists. This build has no clock (the
-// LUNCH/`resting` gates above wait on it), but TABLE 2 already implies a time
-// scale: the kitchen serves a full meal (food 0 -> 100 at 3.5/s) in ~29 s, and a
-// square meal is fictionally ~half an hour — so one in-game hour ~= 60 sim-seconds.
-// When the day clock lands (the room-stocks epic owns it), this constant moves
-// there and this table reads it; the number is a derivation, not a tunable.
-inline constexpr float kGameHourSec = 60.0f;
+// ЧАСЫ ПРИШЛИ, и «игрового часа» больше нет. Прежний `kGameHourSec = 60` жил
+// здесь как заглушка со своим выводом (кухня кормит 0 -> 100 за ~29 с, а сытный
+// обед — это фикционально полчаса, значит час ~= 60 сим-секунд). Из ЭТОГО ЖЕ
+// числа выведен ТАКТ ([core/watch.h]): 60 с * 125 Гц = 7500 тиков, ближайшая
+// степень двойки — 8192, то есть 65.536 с. Заглушка не выброшена, а повышена
+// до общей единицы времени; таблица ниже читает её оттуда.
+//
+// В Гигахруще нет солнца, поэтому нет и «часа» ([CANON.md] S15): единицы
+// называются такт, вахта, цикл, эпоха.
 struct RoomRecovery {
     float food;        // + per second
     float water;       // + per second
@@ -255,7 +258,7 @@ inline constexpr RoomRecovery kRoomRecovery[kFloorRoomBits] = {
     /* 5 Living     */ {0.0f, 0.0f, 2.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
     /* 6 Office     */ {}, // reference: sleep, but gated on `resting` — see above
     /* 7 Medical    */ {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                        100.0f / kGameHourSec}, // 0 -> full in one in-game hour
+                        100.0f / kTactSeconds}, // 0 -> full за ОДИН ТАКТ
     /* 8 Production */ {},
     /* 9 Smoking    */ {},
     /*10 Hq         */ {},
