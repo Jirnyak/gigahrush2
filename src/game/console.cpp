@@ -597,6 +597,15 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
         radius = std::clamp(static_cast<float>(std::atof(argv[1])),
                             kVoxelSize * 0.5f, 1.0f);
     }
+    // Плотность аргументом: дефолт — сталь (7800), и стальной шар r=0.35 —
+    // это 1.4 ТОННЫ: игрок (70 кг) честно отлетает от него, а не он от
+    // игрока (фидбек владельца 2026-08-21 — это вес, не баг). Полый мяч —
+    // spawn_ball 0.35 100 (18 кг, пинается).
+    float density = kMatDensity[kMatPipeMetal];
+    if (argc >= 3) {
+        density = std::clamp(static_cast<float>(std::atof(argv[2])),
+                             10.0f, 20000.0f);
+    }
     // 2 m ahead of look yaw (Z-up), +0.8 m up so it drops into view clear of
     // the player's own AABB instead of embedding in a wall at the feet.
     vec3 offset{2.0f, 0.0f, 0.8f};
@@ -609,26 +618,16 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
     }
     const vec3 spawnPos = tr->pos + offset;
 
-    // Вывод из материала: сталь. Масса из плотности и объёма; инерция сферы.
-    const float density = kMatDensity[kMatPipeMetal];              // 7800 кг/м³
+    // Вывод из материала: масса из плотности и объёма; e/μ — общие шкалы
+    // от твёрдости ([sim/rigid.h]); сборка — общий rigid_attach_sphere.
     const float mass =
         density * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
-    const float inertia = 0.4f * mass * radius * radius;
     const float hardness =
         static_cast<float>(kMatHardness[kMatPipeMetal]);           // 180
 
-    RigidBody rb;
-    rb.radius = radius;
-    rb.invMass = 1.0f / mass;
-    rb.invInertia = 1.0f / inertia;
-    // Твёрже — упруже: шкала на бетон-якорь 256 → e≈0.35 у стали по бетону.
-    rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
-    // Твёрже — глаже: μ падает с твёрдостью, полированное скользит.
-    rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
-
     Entity ball = ctx.ecs->create();
     ctx.ecs->emplace<Transform>(ball, Transform{spawnPos, tr->layer});
-    // AABB — рендер-габарит (BodyPass рисует бокс, вписанный в сферу).
+    // AABB — рендер-габарит (BodyPass рисует сферу, вписанную в него).
     ctx.ecs->emplace<AABB>(ball, AABB{vec3{radius, radius, radius}});
     // Canonical form — same as combat.cpp projectiles. Bare vec3 is not the
     // house style and has been a footgun when aggregate paren-init drifts.
@@ -637,9 +636,9 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
     ctx.ecs->emplace<Renderable>(ball, Renderable{vec3{0.95f, 0.15f, 0.10f}});
     // BodyPass / physics free-body filter ([jirnyak.md] section 18).
     ctx.ecs->emplace<DynamicBodyTag>(ball);
-    ctx.ecs->emplace<RigidBody>(ball, rb);
-    // Свой интегратор — physics_step обязан пропустить, как снаряды.
-    ctx.ecs->emplace<SelfIntegrating>(ball);
+    rigid_attach_sphere(*ctx.ecs, ball, radius, mass,
+                        restitution_from_hardness(hardness),
+                        friction_from_hardness(hardness));
 
     if (out && cap)
         std::snprintf(out, cap,
@@ -704,18 +703,7 @@ bool cmd_spawn_box(ConsoleContext& ctx, int argc, const char* const* argv,
     const float density = kMatDensity[kMatParquet]; // 700 кг/м³, дерево
     const float dx = half.x * 2.0f, dy = half.y * 2.0f, dz = half.z * 2.0f;
     const float mass = density * dx * dy * dz;
-    const float inertia = mass * (dx * dx + dy * dy + dz * dz) / 18.0f;
     const float hardness = static_cast<float>(kMatHardness[kMatParquet]);
-
-    ContactForm formSpheres;
-    const float bound = form_from_box(half, formSpheres);
-
-    RigidBody rb;
-    rb.radius = bound; // ограничивающая сфера — брод-фаза
-    rb.invMass = 1.0f / mass;
-    rb.invInertia = 1.0f / inertia;
-    rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
-    rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
 
     Entity box = ctx.ecs->create();
     ctx.ecs->emplace<Transform>(box, Transform{spawnPos, tr->layer});
@@ -723,19 +711,21 @@ bool cmd_spawn_box(ConsoleContext& ctx, int argc, const char* const* argv,
     ctx.ecs->emplace<AABB>(box, AABB{half});
     // Бросок с подкруткой: кувырок виден с первого спавна.
     ctx.ecs->emplace<Velocity>(box, Velocity{fwd * 5.0f});
-    rb.w = vec3{fwd.y * 4.0f, -fwd.x * 4.0f, 0.0f}; // кувырок вперёд
     ctx.ecs->emplace<Renderable>(box, Renderable{vec3{0.75f, 0.55f, 0.20f}});
     ctx.ecs->emplace<DynamicBodyTag>(box);
-    ctx.ecs->emplace<RigidBody>(box, rb);
-    ctx.ecs->emplace<ContactForm>(box, formSpheres);
-    ctx.ecs->emplace<SelfIntegrating>(box);
+    rigid_attach_box(*ctx.ecs, box, half, mass,
+                     restitution_from_hardness(hardness),
+                     friction_from_hardness(hardness));
+    ctx.ecs->get<RigidBody>(box).w =
+        vec3{fwd.y * 4.0f, -fwd.x * 4.0f, 0.0f}; // кувырок вперёд
 
     if (out && cap)
         std::snprintf(out, cap,
                       "spawn_box: %.2fx%.2fx%.2f m, %.0f kg, %u spheres L%u",
                       static_cast<double>(dx), static_cast<double>(dy),
                       static_cast<double>(dz), static_cast<double>(mass),
-                      static_cast<unsigned>(formSpheres.count),
+                      static_cast<unsigned>(
+                          ctx.ecs->get<ContactForm>(box).count),
                       static_cast<unsigned>(tr->layer));
     return true;
 }
@@ -833,13 +823,6 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
 
     Entity prev = entt::null;
     for (int i = 0; i < n; ++i) {
-        RigidBody rb;
-        rb.radius = radius;
-        rb.invMass = 1.0f / mass;
-        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
-        rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
-        rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
-
         // Лёгкий сдвиг на звено: идеально вертикальная цепь с шар-шар
         // контактом складывается в устойчивую башню (вырожденная симметрия).
         const vec3 pos = anchor +
@@ -852,8 +835,9 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
         ctx.ecs->emplace<Renderable>(ball,
                                      Renderable{vec3{0.65f, 0.68f, 0.72f}});
         ctx.ecs->emplace<DynamicBodyTag>(ball);
-        ctx.ecs->emplace<RigidBody>(ball, rb);
-        ctx.ecs->emplace<SelfIntegrating>(ball);
+        rigid_attach_sphere(*ctx.ecs, ball, radius, mass,
+                            restitution_from_hardness(hardness),
+                            friction_from_hardness(hardness));
 
         // Линк — отдельная сущность: разрубание = её destroy (cut_link).
         if (i == 0) {
@@ -1143,8 +1127,8 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});
-    ok &= con.add({"spawn_ball", "spawn_ball [radius_m]",
-                   "spawn a rigid-core test ball beside player",
+    ok &= con.add({"spawn_ball", "spawn_ball [radius_m] [density]",
+                   "spawn a rigid-core test ball (default steel, 100=hollow)",
                    cmd_spawn_ball, nullptr});
     ok &= con.add({"spawn_box", "spawn_box [hx hy hz]",
                    "spawn a tumbling rigid-core box (contact spheres)",

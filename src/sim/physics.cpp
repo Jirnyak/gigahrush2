@@ -283,79 +283,14 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
             tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
 
-            // Ragdoll / tumbling + grounded roll ([jirnyak.md] section 18).
-            // BodyPass is still axis-aligned; Rotation/AngularVelocity are sim
-            // state for PropPass / future draw. On DynamicBodyTag debris that is
-            // grounded with lateral speed, drive spin from v so balls/props roll
-            // on slopes instead of skating. Skin lift keeps the AABB from
-            // settling one binary-search eps into solid (no grid sink).
-            const bool isDebris = reg.all_of<DynamicBodyTag>(e);
-            if (g && g->grounded && isDebris) {
-                constexpr float kContactSkin = 0.02f;
-                if (aabb_overlaps_solid(w, tr.pos, half)) {
-                    vec3 lifted = tr.pos;
-                    const float lift = kContactSkin * upSign;
-                    if (upComp == 0) lifted.x += lift;
-                    else if (upComp == 1) lifted.y += lift;
-                    else lifted.z += lift;
-                    if (!aabb_overlaps_solid(w, lifted, half)) {
-                        tr.pos = lifted;
-                    }
-                }
-                const float r = std::max(0.05f, std::min({half.x, half.y, half.z}));
-                const float vn = dot(vel.v, up);
-                vec3 vLat{vel.v.x - up.x * vn, vel.v.y - up.y * vn,
-                          vel.v.z - up.z * vn};
-                const float v2 = vLat.x * vLat.x + vLat.y * vLat.y + vLat.z * vLat.z;
-                constexpr float kRollV2 = 1e-4f;
-                if (v2 > kRollV2) {
-                    // n x v_lat / r  (right-hand, n = contact up)
-                    vec3 wTarget{up.y * vLat.z - up.z * vLat.y,
-                                 up.z * vLat.x - up.x * vLat.z,
-                                 up.x * vLat.y - up.y * vLat.x};
-                    wTarget.x /= r;
-                    wTarget.y /= r;
-                    wTarget.z /= r;
-                    // get_or_emplace, NOT emplace_or_replace — the same form
-                    // `Impact` uses above. With no constructor arguments,
-                    // emplace_or_replace assigns a value-initialized
-                    // AngularVelocity{} over the existing one (EnTT
-                    // registry.hpp: `curr = Type{args...}`), so `ang.w` was
-                    // ALWAYS {0,0,0} on the right-hand side and the blend below
-                    // collapsed to `ang.w = wTarget * kBlend`. Two consequences,
-                    // both silent: a rolling body span at a permanent 35% of the
-                    // correct n x v_lat / r and never converged, and any authored
-                    // tumble (prop_system.cpp gives a detached ragdoll one) was
-                    // wiped by the first grounded substep. [problems.md] §16.
-                    auto& ang = reg.get_or_emplace<AngularVelocity>(e);
-                    constexpr float kBlend = 0.35f;
-                    ang.w.x = ang.w.x * (1.0f - kBlend) + wTarget.x * kBlend;
-                    ang.w.y = ang.w.y * (1.0f - kBlend) + wTarget.y * kBlend;
-                    ang.w.z = ang.w.z * (1.0f - kBlend) + wTarget.z * kBlend;
-                    if (!reg.all_of<Rotation>(e)) reg.emplace<Rotation>(e);
-                }
-            }
-
-            if (auto* ang = reg.try_get<AngularVelocity>(e)) {
-                if (auto* rot = reg.try_get<Rotation>(e)) {
-                    rot->euler.x += ang->w.x * h;
-                    rot->euler.y += ang->w.y * h;
-                    rot->euler.z += ang->w.z * h;
-                    // Settle spin only when grounded AND not actively rolling.
-                    if (g && g->grounded) {
-                        const float vn = dot(vel.v, up);
-                        const float vLat2 =
-                            (vel.v.x - up.x * vn) * (vel.v.x - up.x * vn) +
-                            (vel.v.y - up.y * vn) * (vel.v.y - up.y * vn) +
-                            (vel.v.z - up.z * vn) * (vel.v.z - up.z * vn);
-                        if (vLat2 <= 1e-4f) {
-                            ang->w.x *= 0.85f;
-                            ang->w.y *= 0.85f;
-                            ang->w.z *= 0.85f;
-                        }
-                    }
-                }
-            }        }
+            // Косметика качения (ω=n×v/r на DynamicBodyTag) и интеграция
+            // AngularVelocity УМЕРЛИ (рагдолл-эпик, инкремент 6, 2026-08-21):
+            // сорванные пропы, трупы и стендовые тела несут RigidBody +
+            // SelfIntegrating и живут в rigid_body_step (src/sim/rigid.cpp) —
+            // качение там ВОЗНИКАЕТ из трения через точку контакта, а не
+            // подкручивается по латеральной скорости. physics_step остался
+            // тем, чем был всегда: свепт-AABB агентов (ходьба игрока и NPC).
+        }
     }
 }
 

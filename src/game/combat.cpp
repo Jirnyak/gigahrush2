@@ -27,6 +27,7 @@
 #include "game/weapon_table.h"
 #include "sim/camera.h"   // camera_forward
 #include "sim/drag.h"    // air_drag_step/drag_q — тот же закон трения, что у тел
+#include "sim/rigid.h"   // rigid_attach_box — труп = тело рагдолл-ядра
 #include "world/macro_grid.h"
 #include "world/material_props.h" // material_hardness — окно угла рикошета
 #include "world/destruct.h" // sub_material_at — материал попавшего субвокселя
@@ -544,6 +545,19 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             if (!reg.all_of<Velocity>(e)) reg.emplace<Velocity>(e);
             reg.emplace_or_replace<PropFallMode>(e, PropFallMode::RagdollRoll);
             reg.emplace_or_replace<DynamicBodyTag>(e);
+            // Инкремент 6 рагдолл-эпика: труп — тело ЯДРА (rigid_body_step),
+            // бокс из собственного AABB тела, масса честная (Mass, 70 кг
+            // дефолт — тот же фолбэк, что у драга). Мясо не скачет и цепко:
+            // e=0.05, μ=0.8 — до мат-пар, крутится глазами. SelfIntegrating
+            // выводит мёртвого из свепт-AABB пути агентов.
+            {
+                const vec3 half = reg.all_of<AABB>(e)
+                                      ? reg.get<AABB>(e).half
+                                      : vec3{0.4f, 0.4f, 0.9f};
+                const float kg =
+                    reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg : Mass{}.kg;
+                rigid_attach_box(reg, e, half, kg, 0.05f, 0.8f);
+            }
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body
                 rend->color = vec3{rend->color.x * 0.35f, rend->color.y * 0.35f, rend->color.z * 0.40f};

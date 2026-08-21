@@ -859,4 +859,37 @@ float form_from_box(vec3 half, ContactForm& out) {
     return bound;
 }
 
+void rigid_attach_sphere(Registry& reg, Entity e, float radius, float massKg,
+                         float restitution, float friction) {
+    const float m = std::max(massKg, 0.001f);
+    RigidBody rb;
+    rb.radius = radius;
+    rb.invMass = 1.0f / m;
+    rb.invInertia = 1.0f / (0.4f * m * radius * radius); // сфера: 2/5 m r²
+    rb.restitution = restitution;
+    rb.friction = friction;
+    reg.emplace_or_replace<RigidBody>(e, rb);
+    if (reg.all_of<ContactForm>(e)) reg.remove<ContactForm>(e);
+    if (!reg.all_of<SelfIntegrating>(e)) reg.emplace<SelfIntegrating>(e);
+}
+
+void rigid_attach_box(Registry& reg, Entity e, vec3 half, float massKg,
+                      float restitution, float friction) {
+    const float m = std::max(massKg, 0.001f);
+    ContactForm form;
+    const float bound = form_from_box(half, form);
+    const float dx = half.x * 2.0f, dy = half.y * 2.0f, dz = half.z * 2.0f;
+    RigidBody rb;
+    rb.radius = bound; // ограничивающая сфера — брод-фаза
+    rb.invMass = 1.0f / m;
+    // Скалярная инерция бокса — среднее диагонали тензора:
+    // I_avg = m·(dx²+dy²+dz²)/18 (диагональный тензор — инкремент 7).
+    rb.invInertia = 18.0f / (m * (dx * dx + dy * dy + dz * dz));
+    rb.restitution = restitution;
+    rb.friction = friction;
+    reg.emplace_or_replace<RigidBody>(e, rb);
+    reg.emplace_or_replace<ContactForm>(e, form);
+    if (!reg.all_of<SelfIntegrating>(e)) reg.emplace<SelfIntegrating>(e);
+}
+
 } // namespace giga

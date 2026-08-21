@@ -1,11 +1,14 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
+#include "world/material_props.h" // kMatDensity/kMatHardness — масса и e/μ
 #include "world/surface.h"
 #include "world/macro_grid.h"
 #include "world/materials.h"
 #include "world/types.h"
 #include "world/world.h"
+#include <algorithm>
 #include <vector>
 #include <unordered_set>
 #include <cmath>
@@ -179,14 +182,49 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     if (reg.all_of<SubVoxelAnchor>(prop))
         reg.remove<SubVoxelAnchor>(prop);
     mark_dynamic(reg, prop);
-    reg.emplace_or_replace<GravityAffected>(prop);
+
+    // Сорванный проп — тело РАГДОЛЛ-ЯДРА ([markoaudit/plans/ragdoll.md]
+    // инкремент 6): интегратор — rigid_body_step (гравитация его; старые
+    // GravityAffected + AngularVelocity-косметика умерли). Габарит — из
+    // авторского размера строки props.csv (PropMesh.scale), масса — из
+    // плотности материала × объём (S11).
+    vec3 half{0.2f, 0.2f, 0.2f};
+    std::uint8_t matId = 0;
+    if (const auto* pm = reg.try_get<PropMesh>(prop)) {
+        half = pm->scale * 0.5f;
+        matId = pm->matId;
+    } else if (const auto* box = reg.try_get<AABB>(prop)) {
+        half = box->half;
+    }
+    // Пол плотности 200 кг/м³: бытовой предмет — не сплошной слиток
+    // материала своей поверхности (лампа — жесть и стекло вокруг воздуха);
+    // matId=0 (generic) дал бы ноль и бесконечную обратную массу.
+    const float density =
+        std::max(200.0f, matId < kMatCount ? kMatDensity[matId] : 200.0f);
+    const float hardness = static_cast<float>(
+        matId < kMatCount ? kMatHardness[matId] : 64);
+    const float e_ = restitution_from_hardness(hardness);
+    const float mu = friction_from_hardness(hardness);
 
     if (mode == PropFallMode::RagdollRoll) {
-        // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
-        // (core components) are integrated by physics_step each substep.
+        // Roll: примерно равногабаритное тело (аспект ≤ 1.25 — мяч, ведро,
+        // лампа-плафон) честнее и дешевле сферой; вытянутое (стул) —
+        // боксом, иначе оно КАТИТСЯ, а должно кувыркаться.
+        const float hMin = std::min({half.x, half.y, half.z});
+        const float hMax = std::max({half.x, half.y, half.z});
         reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
-        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
-        reg.emplace_or_replace<Rotation>(prop);
+        if (hMax <= hMin * 1.25f) {
+            const float r = hMin;
+            const float mass =
+                density * (4.0f / 3.0f) * 3.14159265f * r * r * r;
+            rigid_attach_sphere(reg, prop, r, mass, e_, mu);
+        } else {
+            const float mass =
+                density * 8.0f * half.x * half.y * half.z;
+            rigid_attach_box(reg, prop, half, mass, e_, mu);
+        }
+        // Стартовый кувырок от импульса отрыва — прежний авторский вектор.
+        reg.get<RigidBody>(prop).w = vec3{impulse.z, impulse.x, 1.0f};
     } else {
         // SimpleFall: a small shove along the pull. Derived by negating the
         // caller's up-facing impulse instead of hardcoding -Z, for the same
@@ -195,11 +233,12 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         const vec3 down =
             iLen > 1e-6f ? impulse * (-0.5f / iLen) : vec3{0.0f, 0.0f, -0.5f};
         reg.emplace_or_replace<Velocity>(prop, Velocity{down});
+        const float mass = density * 8.0f * half.x * half.y * half.z;
+        rigid_attach_box(reg, prop, half, mass, e_, mu);
     }
 
     // BodyPass needs AABB -- without it a detached prop is invisible.
-    if (!reg.all_of<AABB>(prop))
-        reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
+    reg.emplace_or_replace<AABB>(prop, AABB{half});
 }
 
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
@@ -777,53 +816,6 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
     return hit.hit;
 }
 
-void prop_ragdoll_step(Registry& reg, float dt)
-{
-    // Angular integration is owned by physics_step (core). This step damps
-    // spin on DynamicBodyTag props and drops AngularVelocity once settled
-    // ([jirnyak.md] §18 prop_ragdoll). In-air debris damps slowly; grounded
-    // debris damps hard so tumbled junk stops spinning after landing.
-    constexpr float kAirDamp = 1.5f;   // 1/s exponential rate while airborne
-    constexpr float kGroundMul = 0.85f; // per-step multiplier when grounded
-    constexpr float kRestW2 = 1e-4f;    // |w|^2 below this -> remove component
-
-    Entity settled[64];
-    int settledCount = 0;
-
-    auto view = reg.view<DynamicBodyTag, AngularVelocity>();
-    for (auto e : view) {
-        auto& ang = view.get<AngularVelocity>(e);
-
-        const bool grounded = reg.all_of<GravityAffected>(e) &&
-                              reg.get<GravityAffected>(e).grounded;
-        if (grounded) {
-            ang.w.x *= kGroundMul;
-            ang.w.y *= kGroundMul;
-            ang.w.z *= kGroundMul;
-        } else {
-            // exp(-k*dt) damping — always reduces |w| for dt > 0.
-            const float s = std::exp(-kAirDamp * dt);
-            ang.w.x *= s;
-            ang.w.y *= s;
-            ang.w.z *= s;
-        }
-
-        const float w2 = ang.w.x * ang.w.x + ang.w.y * ang.w.y + ang.w.z * ang.w.z;
-        if (w2 < kRestW2) {
-            settled[settledCount++] = e;
-            if (settledCount == 64) {
-                for (int i = 0; i < 64; ++i) {
-                    reg.remove<AngularVelocity>(settled[i]);
-                }
-                settledCount = 0;
-            }
-        }
-    }
-
-    for (int i = 0; i < settledCount; ++i) {
-        reg.remove<AngularVelocity>(settled[i]);
-    }
-}
 
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus) {

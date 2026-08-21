@@ -30,4 +30,25 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt);
 // вызывающий кладёт его в RigidBody.radius (брод-фаза).
 float form_from_box(vec3 half, ContactForm& out);
 
+// Сборка твердотела на сущности — ОДИН код на все сайты (стенды консоли,
+// детач пропа, труп, загрузка сейва; S11: вторая сборка — дефект). Масса и
+// контактные параметры приходят от каллера: game выводит их из таблиц
+// (плотность × объём, шкалы от hardness), ядро таблиц не знает. Вешает
+// SelfIntegrating — без него physics_step двигал бы тело вторым разом.
+void rigid_attach_sphere(Registry& reg, Entity e, float radius, float massKg,
+                         float restitution, float friction);
+void rigid_attach_box(Registry& reg, Entity e, vec3 half, float massKg,
+                      float restitution, float friction);
+
+// Шкалы контактных параметров от твёрдости материала (якорь: бетон = 256).
+// Тверже — упруже; тверже — глаже (полированное скользит). Грубая ОДНОСТОРОННЯЯ
+// шкала до инкремента «материальные пары»; числа крутятся глазами владельца.
+inline float restitution_from_hardness(float h) {
+    return h < 0.0f ? 0.0f : (h > 460.8f ? 0.9f : h / 512.0f);
+}
+inline float friction_from_hardness(float h) {
+    const float mu = 1.0f - h / 1024.0f;
+    return mu < 0.2f ? 0.2f : (mu > 0.9f ? 0.9f : mu);
+}
+
 } // namespace giga

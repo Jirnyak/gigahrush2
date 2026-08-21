@@ -4121,9 +4121,8 @@ int main(int argc, char** argv) {
                 // the reports: damage = k*m*v^2/2 over Mass — fall damage and
                 // prop crashes with no per-cause constants ([game/impact.h]).
                 game::impact_damage_step(reg, pool, &particleBursts);
-                // Prop ragdoll settle (AngularVelocity damping bookkeeping).
-                // Angular integration itself is in physics_step. [jirnyak.md] §18
-                game::prop_ragdoll_step(reg, kSimDt);
+                // prop_ragdoll_step умер (рагдолл-эпик, инкремент 6):
+                // сорванные пропы — тела rigid_body_step выше.
                 // Doors resolve AFTER physics for the same reason melee does: contact
                 // is tested by ADJACENCY against where bodies actually ended up this
                 // step, not where they intended to go. Costs nothing while no door is

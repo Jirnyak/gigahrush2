@@ -389,8 +389,9 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     CHECK(!reg.all_of<game::SubVoxelAnchor>(e));
     CHECK(reg.all_of<game::DynamicBodyTag>(e));
     CHECK(reg.all_of<Velocity>(e));
-    CHECK(reg.all_of<AngularVelocity>(e));
-    CHECK(reg.all_of<Rotation>(e));
+    // Инкремент 6 рагдолл-эпика: детач — тело ЯДРА, не AngularVelocity-косметика.
+    CHECK(reg.all_of<RigidBody>(e));
+    CHECK(reg.all_of<SelfIntegrating>(e));
     {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
         CHECK(n > 0u);
@@ -540,30 +541,49 @@ static void test_anchor_validate_skips_solid_support() {
     }
 }
 
-static void test_prop_ragdoll_step_damps_angular() {
+// Инкремент 6 рагдолл-эпика: сорванный проп — тело ЯДРА (RigidBody +
+// SelfIntegrating, форма и масса выведены из строки пропа), а не косметика
+// AngularVelocity; prop_ragdoll_step умер.
+static void test_detached_prop_is_rigid_body() {
     Registry reg;
-    const auto e = reg.create();
-    reg.emplace<game::DynamicBodyTag>(e);
-    reg.emplace<AngularVelocity>(e, AngularVelocity{vec3{10.0f, -8.0f, 4.0f}});
-    reg.emplace<Rotation>(e, Rotation{});
-    reg.emplace<Velocity>(e, Velocity{});
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 1;
 
-    // High angular speed -> active ragdoll path (exp damping).
-    const float dt = 1.0f / 60.0f;
-    const vec3 before = reg.get<AngularVelocity>(e).w;
-    game::prop_ragdoll_step(reg, dt);
-    const vec3 after = reg.get<AngularVelocity>(e).w;
-    const float bl = std::sqrt(before.x * before.x + before.y * before.y +
-                               before.z * before.z);
-    const float al = std::sqrt(after.x * after.x + after.y * after.y +
-                               after.z * after.z);
-    CHECK(al < bl);
-    CHECK(al > 0.0f);
+    world.grid().fill_cell(7, 3, 7, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 7;
+    anchor.cy = 3;
+    anchor.cz = 7;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 0;
+    anchor.face = anchor_face_pack(2, -1);
 
-    // Near-rest: small omega should be zeroed and AngularVelocity removed.
-    reg.get<AngularVelocity>(e).w = vec3{0.001f, 0.0f, 0.0f};
-    game::prop_ragdoll_step(reg, dt);
-    CHECK(!reg.all_of<AngularVelocity>(e));
+    const auto e = game::spawn_prop(reg, world, vec3{15.0f, 7.0f, 13.8f},
+                                    anchor, game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::RagdollRoll,
+                                    vec3{0.9f, 0.85f, 0.4f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+
+    world.grid().clear_cell(7, 3, 7);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(7, 3, 7))};
+    bus.clear();
+    game::anchor_validate_step(reg, world, bus, dirty);
+
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::DynamicBodyTag>(e));
+    CHECK(reg.all_of<RigidBody>(e));
+    CHECK(reg.all_of<SelfIntegrating>(e)); // physics_step не двигает вторым разом
+    CHECK(!reg.all_of<AngularVelocity>(e)); // косметика мертва
+    // Масса выведена, не дефолт: invMass конечна и не единица-заглушка.
+    const auto& rb = reg.get<RigidBody>(e);
+    CHECK(rb.invMass > 0.0f);
+    // Стартовый кувырок отрыва передан ядру.
+    CHECK(dot(rb.w, rb.w) > 0.0f);
 }
 
 
@@ -848,50 +868,6 @@ static void test_corpse_and_loot_are_interactable() {
 
 
 
-// BodyPass roll drive ([jirnyak.md] section 18): grounded DynamicBodyTag debris
-// with lateral speed must receive AngularVelocity and must not sink into solid.
-// Default gravity is -Z (world/gravity.h), so the floor is an XY slab.
-static void test_debris_roll_drives_angular_on_ground() {
-    LevelStack stack;
-    LayerId g = stack.push_layer();
-    World& w = stack.layer(g);
-    for (int y = 0; y < 20; ++y)
-        for (int x = 0; x < 20; ++x)
-            w.grid().fill_cell(x, y, 4, 1);
-
-    Registry reg;
-    Entity e = reg.create();
-    Transform tr;
-    const float halfR = 0.25f;
-    // Rest just above floor slab top (z-cell 4 top = 5 * kCellSize).
-    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize,
-                  5.0f * kCellSize + halfR + 0.02f};
-    tr.layer = g;
-    reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(e, Velocity{{2.0f, 0.0f, 0.0f}});
-    reg.emplace<AABB>(e, AABB{{halfR, halfR, halfR}});
-    reg.emplace<GravityAffected>(e);
-    reg.emplace<DynamicBodyTag>(e);
-
-    for (int i = 0; i < kSimHz; ++i) {
-        if (auto* vel = reg.try_get<Velocity>(e)) vel->v.x = 2.0f;
-        physics_step(reg, stack, kSimDt);
-    }
-
-    CHECK(reg.get<GravityAffected>(e).grounded);
-    CHECK(reg.all_of<AngularVelocity>(e));
-    CHECK(reg.all_of<Rotation>(e));
-    const auto& ang = reg.get<AngularVelocity>(e);
-    // n=+Z, v_lat=+X -> n x v = +Y * |v| -> omega.y ~ +v.x / r.
-    const float target = 2.0f / halfR;
-    CHECK(std::fabs(ang.w.y) > 0.5f);
-    CHECK(std::fabs(ang.w.y - target) < target * 0.75f);
-    const auto& out = reg.get<Transform>(e);
-    CHECK(!aabb_overlaps_solid(w, out.pos, vec3{halfR, halfR, halfR}));
-    CHECK(out.pos.z >= 5.0f * kCellSize);
-    printf("[props] debris roll drives AngularVelocity on ground (wy=%.3f target=%.3f)\n",
-           ang.w.y, target);
-}
 
 
 // [jirnyak.md] section 18/19 -- GpuHandoff shatter.
@@ -1208,8 +1184,7 @@ void test_props_game_all() {
     test_world_anchored_link_severed_by_carve();
     test_anchor_column_probe_both_polarities();
     test_anchor_validate_skips_solid_support();
-    test_prop_ragdoll_step_damps_angular();
-    test_debris_roll_drives_angular_on_ground();
+    test_detached_prop_is_rigid_body();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();
     test_furniture_is_not_a_terminal();

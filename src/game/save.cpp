@@ -18,6 +18,7 @@
 #include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG); Corpse (v15)
 #include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
+#include "sim/rigid.h"        // rigid_attach_box — труп = тело рагдолл-ядра
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
 
@@ -920,10 +921,13 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         box.inv = rec.inv;
         reg.emplace<Container>(e, box);
         // C: труп — RagdollRoll-проп; поза не сейвится (решение владельца) —
-        // тело ложится заново физикой после загрузки.
+        // тело ложится заново физикой после загрузки. Инкремент 6: тело
+        // ЯДРА — та же сборка, что finalize_deaths (масса — дефолт 70 кг:
+        // Mass в сейве трупа нет, тело уже не агент).
         reg.emplace<Velocity>(e);
         reg.emplace<PropFallMode>(e, PropFallMode::RagdollRoll);
         reg.emplace<DynamicBodyTag>(e);
+        rigid_attach_box(reg, e, rec.half, Mass{}.kg, 0.05f, 0.8f);
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         reg.emplace<Interactable>(

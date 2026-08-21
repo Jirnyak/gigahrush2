@@ -1176,7 +1176,12 @@ if(GIGA_BUILD_TESTS)
     # ЕДИНУЮ якорную систему (ragdoll.md §8, решение владельца): линк-сущность
     # несёт SubVoxelAnchor, anchor_validate_step рвёт подвес по смерти опоры
     # (обе полярности + пробуждение спящей стороны).
-        PASS_REGULAR_EXPRESSION "game_test: 236582 checks, 0 failures")
+    # 236582 -> 236580 (-2) on 2026-08-21: миграция пропов на рагдолл-ядро
+    # (ragdoll.md инкремент 6) — детач-чек стал RigidBody+SelfIntegrating;
+    # умерли тесты мёртвой косметики (prop_ragdoll_step damps,
+    # debris roll ω=n×v/r в physics_step), взамен test_detached_prop_is_rigid_body
+    # (форма/масса выведены из строки пропа, кувырок отдан ядру).
+        PASS_REGULAR_EXPRESSION "game_test: 236580 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

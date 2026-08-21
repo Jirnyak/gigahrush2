@@ -212,9 +212,9 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
 bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
                       EventBus& bus, InteractionHit* outHit = nullptr);
 
-// Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
-// itself lives in physics_step; this is the game-side settle / impulse helper.
-void prop_ragdoll_step(Registry& reg, float dt);
+// prop_ragdoll_step УМЕР (инкремент 6 рагдолл-эпика, 2026-08-21): сорванный
+// проп — тело рагдолл-ядра (rigid_body_step в src/sim/rigid.cpp), гашение,
+// качение и сон живут там; отдельная косметика вращения не существует.
 
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus);
