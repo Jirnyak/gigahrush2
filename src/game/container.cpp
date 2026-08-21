@@ -9,6 +9,8 @@
 #include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
 #include "game/npc_pool.h"
 #include "game/prop_system.h"
+#include "world/anchor.h"
+#include "world/surface.h"
 #include "sim/fluid.h"     // fluid_at, kFluidMinFlow — a crate does not float
 #include "world/materials.h"
 #include "world/types.h"
@@ -344,18 +346,35 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         // storing it.
         const std::uint16_t roomMask = floor_room_mask(kind, floorNumber, rx, ry);
 
-        Entity e = reg.create();
-        Transform tr;
-        tr.pos = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
-                      (static_cast<float>(cy) + 0.5f) * kCellSize,
-                      static_cast<float>(cz) * kCellSize + kContainerHalf.z};
-        tr.layer = layer;
-        reg.emplace<Transform>(e, tr);
-        reg.emplace<AABB>(e, AABB{kContainerHalf});
-        reg.emplace<Renderable>(e, Renderable{kShutColour});
-        // Connect to physical prop system for gravity/destruction
-        reg.emplace<SubVoxelAnchor>(e, SubVoxelAnchor{cx, cy, cz, 4, 4, 0, 0});
-        reg.emplace<PropFallMode>(e, PropFallMode::SimpleFall);
+        // ЯЩИК — ПРОП (S14.1, B1, решение владельца 2026-08-21): спавн
+        // проп-системой (строка props.csv supply_crate — скин/AABB/масса из
+        // данных) с ЧЕСТНЫМ якорем из примитива поверхностей по опоре из
+        // гравифрейма. Прежний ручной emplace-блок нёс якорь В ВОЗДУШНОЙ
+        // клетке мимо гейта спавна — мёртвый с рождения (аудит якорного
+        // эпика); теперь ящик живёт и умирает по колонке своей опоры, как
+        // любой проп. Контейнер остаётся ортогональным компонентом (S14.1).
+        const int sx2 = wrap_macro(cx + dn.x);
+        const int sy2 = wrap_macro(cy + dn.y);
+        const int sz2 = wrap_macro(cz + dn.z);
+        const int upAxis = dn.z != 0 ? 2 : (dn.y != 0 ? 1 : 0);
+        const std::uint8_t face =
+            anchor_face_pack(upAxis, -(dn.x + dn.y + dn.z));
+        const SurfaceFace sf = surface_face_at(g, sx2, sy2, sz2, face);
+        if (sf.columns == 0) continue; // опора без экспонированной грани
+        SubVoxelAnchor anchor;
+        anchor.cx = static_cast<std::uint8_t>(sf.cx);
+        anchor.cy = static_cast<std::uint8_t>(sf.cy);
+        anchor.cz = static_cast<std::uint8_t>(sf.cz);
+        anchor.subX = upAxis == 0 ? sf.layer : sf.su;
+        anchor.subY = upAxis == 1 ? sf.layer : (upAxis == 0 ? sf.su : sf.sv);
+        anchor.subZ = upAxis == 2 ? sf.layer : sf.sv;
+        anchor.face = face;
+        const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                       (static_cast<float>(cy) + 0.5f) * kCellSize,
+                       static_cast<float>(cz) * kCellSize + kContainerHalf.z};
+        Entity e = spawn_prop_from_id(reg, world, pos, anchor,
+                                      PropId::SupplyCrate, layer);
+        if (e == entt::null) continue;
         reg.emplace<Container>(
             e, roll_in_room(pick_kind(kind, giga::hash_u32(h ^ 0x5bf03635u)), floorNumber,
                             giga::hash_u32(h ^ 0xc2b2ae35u), roomMask));

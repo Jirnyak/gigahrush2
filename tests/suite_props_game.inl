@@ -960,18 +960,19 @@ static void test_clear_layer_props_spares_containers() {
     for (auto e : reg.view<const game::Container>()) { (void)e; ++cratesBefore; }
     CHECK(cratesBefore == made);
 
+    // Ящик — ПРОП (S14.1 B1, решение владельца 2026-08-21): клирится со
+    // слоем, как всё со StaticPropTag, и пересеивается генерацией; контент
+    // восстанавливает сейв. Прежний контракт «ящики переживают шов» охранял
+    // до-проповый дизайн.
     const std::uint32_t cleared = game::clear_layer_props(reg, layer);
-    CHECK(cleared >= 1u);       // the roster prop went
+    CHECK(cleared >= 1u + made); // roster + все ящики
     CHECK(!reg.valid(roster));
 
     std::uint32_t cratesAfter = 0;
-    for (auto e : reg.view<const game::Container>()) {
-        CHECK(reg.valid(e));
-        ++cratesAfter;
-    }
-    CHECK(cratesAfter == cratesBefore); // every crate survived the seam
-    printf("[props] clear_layer_props: roster cleared, %u crates survived\n",
-           cratesAfter);
+    for (auto e : reg.view<const game::Container>()) { (void)e; ++cratesAfter; }
+    CHECK(cratesAfter == 0u);
+    printf("[props] clear_layer_props: roster + %u crates cleared as props\n",
+           made);
 }
 
 
