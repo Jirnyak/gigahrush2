@@ -595,6 +595,56 @@ static void test_rigid_prop_hits_agent_and_agent_kicks() {
     CHECK(reg2.get<Transform>(ball2).pos.x > ballX0 + 0.1f);
 }
 
+// Инкремент 7 ([markoaudit/plans/ragdoll.md]): МАТЕРИАЛЬНАЯ ПАРА — отскок
+// свойство пары, не тела. Один и тот же стальной шар: на бетоне (256) звенит,
+// на щебне (24) глохнет — без ветки по виду поверхности.
+static void test_rigid_material_pair_bounce() {
+    auto rebound_apex = [](std::uint8_t mat) -> float {
+        LevelStack stack;
+        LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        for (int y = 0; y < 20; ++y)
+            for (int x = 0; x < 20; ++x)
+                w.grid().fill_cell(x, y, 4, mat);
+
+        Registry reg;
+        const float floorTop = 5.0f * kCellSize;
+        const float radius = 0.35f;
+        const float mass =
+            7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f; // сталь — свойство ТЕЛА, поверхность решит пара
+        rb.friction = 0.6f;
+        Entity e = reg.create();
+        // 0.8 м свободного падения: удар ~3.96 м/с — выше порога отскока.
+        reg.emplace<Transform>(
+            e, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                              floorTop + radius + 0.8f},
+                         g});
+        reg.emplace<Velocity>(e);
+        reg.emplace<RigidBody>(e, rb);
+
+        bool contacted = false;
+        float apex = 0.0f;
+        for (int i = 0; i < 2 * kSimHz; ++i) {
+            rigid_body_step(reg, stack, kSimDt);
+            const float z = reg.get<Transform>(e).pos.z;
+            if (!contacted && z < floorTop + radius + 0.02f) contacted = true;
+            if (contacted)
+                apex = std::max(apex, z - (floorTop + radius));
+        }
+        return apex;
+    };
+
+    const float onConcrete = rebound_apex(1);  // бетон, hardness 256
+    const float onRubble = rebound_apex(15);   // щебень, hardness 24
+    CHECK(onConcrete > 0.03f);                // на бетоне реально отскочил
+    CHECK(onConcrete > onRubble + 0.05f);     // на щебне заметно глуше
+}
+
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
 // терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
 // владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
@@ -1263,6 +1313,7 @@ int main() {
     test_rigid_chain_hangs_and_cuts();
     test_rigid_ball_ball_wakes_and_stacks();
     test_rigid_prop_hits_agent_and_agent_kicks();
+    test_rigid_material_pair_bounce();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();

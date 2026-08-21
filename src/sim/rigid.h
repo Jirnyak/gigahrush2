@@ -12,6 +12,8 @@
 // спавнит и выводит параметры из таблиц, ядро таблиц не знает.
 #pragma once
 
+#include <cmath> // sqrt — комбинация материальной пары
+
 #include "core/math.h"
 #include "ecs/components.h" // ContactForm
 #include "ecs/registry.h"
@@ -41,8 +43,8 @@ void rigid_attach_box(Registry& reg, Entity e, vec3 half, float massKg,
                       float restitution, float friction);
 
 // Шкалы контактных параметров от твёрдости материала (якорь: бетон = 256).
-// Тверже — упруже; тверже — глаже (полированное скользит). Грубая ОДНОСТОРОННЯЯ
-// шкала до инкремента «материальные пары»; числа крутятся глазами владельца.
+// Тверже — упруже; тверже — глаже (полированное скользит). Числа крутятся
+// глазами владельца — метод эпика.
 inline float restitution_from_hardness(float h) {
     return h < 0.0f ? 0.0f : (h > 460.8f ? 0.9f : h / 512.0f);
 }
@@ -50,5 +52,13 @@ inline float friction_from_hardness(float h) {
     const float mu = 1.0f - h / 1024.0f;
     return mu < 0.2f ? 0.2f : (mu > 0.9f ? 0.9f : mu);
 }
+
+// МАТЕРИАЛЬНАЯ ПАРА (инкремент 7): отскок и трение — свойства ПАРЫ, не тела.
+// Тело несёт числа СВОЕГО материала (выведены при сборке), контакт сводит их
+// с материалом второй стороны — субвокселя под контактом, второго пропа,
+// плоти агента. Геометрическое среднее — стандартная аппроксимация
+// (Box2D/Bullet): мягкая сторона глушит пару, ноль одной стороны — ноль пары.
+inline float pair_restitution(float a, float b) { return std::sqrt(a * b); }
+inline float pair_friction(float a, float b) { return std::sqrt(a * b); }
 
 } // namespace giga

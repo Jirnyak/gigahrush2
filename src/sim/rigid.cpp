@@ -8,6 +8,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "sim/drag.h"
+#include "world/material_props.h" // material_hardness — мат-пара контакта
 #include "world/world.h"
 
 namespace giga {
@@ -27,10 +28,12 @@ int floor_div(float v, float s) {
 struct SphereContact {
     vec3 n{0.0f, 0.0f, 1.0f};
     float depth = -1.0f;
+    CellType mat = 0; // материал клетки контакта — вторая половина мат-пары
 };
 
 SphereContact sphere_deepest_contact(const World& world, vec3 pos, float r) {
     SphereContact best;
+    int bestCx = 0, bestCy = 0, bestCz = 0;
 
     const int x0 = floor_div(pos.x - r, kVoxelSize);
     const int x1 = floor_div(pos.x + r, kVoxelSize);
@@ -93,9 +96,14 @@ SphereContact sphere_deepest_contact(const World& world, vec3 pos, float r) {
                     if (dcl > 1e-5f) best.n = dc * (1.0f / dcl);
                 }
                 best.depth = depth;
+                bestCx = wrap_macro(cx);
+                bestCy = wrap_macro(cy);
+                bestCz = wrap_macro(cz);
             }
         }
     }
+    if (best.depth >= 0.0f)
+        best.mat = world.grid().cell(bestCx, bestCy, bestCz);
     return best;
 }
 
@@ -335,10 +343,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     Impact& imB = reg.get_or_emplace<Impact>(eb);
                     if (-vn > imB.speed) imB.speed = -vn;
                 }
-                // Пара материалов — среднее до инкремента 5 (мат-пары).
+                // Материальная пара тел (инкремент 7).
                 const float e_ =
                     (-vn > kBounceMinV)
-                        ? 0.5f * (rbA.restitution + rbB.restitution)
+                        ? pair_restitution(rbA.restitution, rbB.restitution)
                         : 0.0f;
                 const vec3 rxA = cross(rcA, n);
                 const vec3 rxB = cross(rcB, n);
@@ -362,7 +370,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                         rbA.invMass + rbA.invInertia * dot(rtA, rtA) +
                         rbB.invMass + rbB.invInertia * dot(rtB, rtB);
                     float jt = -vtLen / kt;
-                    const float mu = 0.5f * (rbA.friction + rbB.friction);
+                    const float mu = pair_friction(rbA.friction, rbB.friction);
                     const float jtMax = mu * jn;
                     jt = std::clamp(jt, -jtMax, jtMax);
                     vA.v += t * (-jt * rbA.invMass);
@@ -427,9 +435,13 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     Impact& imG = reg.get_or_emplace<Impact>(eg);
                     if (-vn > imG.speed) imG.speed = -vn;
                 }
-                const float e_ = (-vn > kBounceMinV)
-                                     ? 0.5f * rb.restitution
-                                     : 0.0f;
+                // Плоть агента: мягкая (почти не отдаёт) и цепкая. Вывод: у
+                // мяса нет упругого звона, а хват — это одежда и кожа.
+                constexpr float kFleshRestitution = 0.05f;
+                const float e_ =
+                    (-vn > kBounceMinV)
+                        ? pair_restitution(rb.restitution, kFleshRestitution)
+                        : 0.0f;
                 const vec3 rxP = cross(rcP, n);
                 const float kP = rb.invMass + rb.invInertia * dot(rxP, rxP);
                 const float jn = -(1.0f + e_) * vn / (kP + invMassG);
@@ -708,13 +720,22 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     if (-vn > im.speed) im.speed = -vn;
                 }
 
+                // МАТЕРИАЛЬНАЯ ПАРА (инкремент 7): вторая сторона — материал
+                // клетки контакта. Сталь-по-бетону звенит, сталь-по-щебню
+                // глохнет — без единой ветки по виду поверхности.
+                const float surfH =
+                    static_cast<float>(material_hardness(c.mat));
+                const float ePair = pair_restitution(
+                    rb.restitution, restitution_from_hardness(surfH));
+                const float muPair = pair_friction(
+                    rb.friction, friction_from_hardness(surfH));
+
                 // Обобщённый нормальный импульс (sequential impulses):
                 // k_n = 1/m + |r_c×n|²/I — угловая податливость контакта.
                 const vec3 rxn = cross(rc, c.n);
                 const float kn =
                     rb.invMass + rb.invInertia * dot(rxn, rxn);
-                const float e_ =
-                    (-vn > kBounceMinV) ? rb.restitution : 0.0f;
+                const float e_ = (-vn > kBounceMinV) ? ePair : 0.0f;
                 const float jn = -(1.0f + e_) * vn / kn;
                 vel.v += c.n * (jn * rb.invMass);
                 rb.w += cross(rc, c.n * jn) * rb.invInertia;
@@ -731,7 +752,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     const float kt =
                         rb.invMass + rb.invInertia * dot(rxt, rxt);
                     float jt = -vtLen / kt;
-                    const float jtMax = rb.friction * jn;
+                    const float jtMax = muPair * jn;
                     jt = std::clamp(jt, -jtMax, jtMax);
                     vel.v += t * (jt * rb.invMass);
                     rb.w += cross(rc, t * jt) * rb.invInertia;
