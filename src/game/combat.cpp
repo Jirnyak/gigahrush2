@@ -15,6 +15,7 @@
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
 #include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
+#include "sim/cell_bins.h"    // общий примитив клеточных бинов (§59.3)
 
 
 #include "game/faction_relations.h"
@@ -1435,6 +1436,39 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
     };
     std::vector<Hit> resolved;
 
+    // §59.3: свип «пуля × вся толпа» платил полный проход по MobRef и NpcRef
+    // на каждый снаряд каждый тик (~500 тел × пули × 125 Гц). Бины тел —
+    // общий примитив [sim/cell_bins.h]; политика этого потребителя —
+    // пере-сборка ЛЕНИВО раз на вызов (тела за вызов не движутся, снаряды
+    // читают один снимок), и только когда есть кому стрелять. Членство то
+    // же, что у старых двух view: мобы слоя + толпа слоя без victim
+    // (приоритет камеры разобран до свипа). thread_local — переиспользуем
+    // ёмкость, ноль аллокаций на горячем пути (правило AGENTS.md).
+    static thread_local CellBins bodyBins;
+    bool bodyBinsBuilt = false;
+    auto build_body_bins = [&]() {
+        bodyBins.clear();
+        for (auto m : reg.view<const MobRef, const Transform>()) {
+            const Transform& mt = reg.get<const Transform>(m);
+            if (mt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(mt.pos.x),
+                                      cell_coord(mt.pos.y),
+                                      cell_coord(mt.pos.z)),
+                         m);
+        }
+        for (auto b : reg.view<const NpcRef, const Transform>()) {
+            if (b == victim) continue; // проверен выше, в приоритете
+            const Transform& bt = reg.get<const Transform>(b);
+            if (bt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(bt.pos.x),
+                                      cell_coord(bt.pos.y),
+                                      cell_coord(bt.pos.z)),
+                         b);
+        }
+        bodyBins.build();
+        bodyBinsBuilt = true;
+    };
+
     for (auto e : reg.view<Projectile, Transform, Velocity>()) {
         Transform& tr = reg.get<Transform>(e);
         if (tr.layer != layer) continue;
@@ -1573,7 +1607,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         {
             Entity best = entt::null;
             float bestD2 = kProjHitRadius * kProjHitRadius;
-            auto consider = [&](Entity cand, const vec3& cp) {
+            auto consider = [&](Entity cand) {
+                const vec3& cp = reg.get<const Transform>(cand).pos;
                 const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtent);
                 const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtent);
                 const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtent);
@@ -1583,17 +1618,14 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                     best = cand;
                 }
             };
-            for (auto m : reg.view<const MobRef, const Transform>()) {
-                const Transform& mt = reg.get<const Transform>(m);
-                if (mt.layer != layer) continue;
-                consider(m, mt.pos);
-            }
-            for (auto b : reg.view<const NpcRef, const Transform>()) {
-                if (b == victim) continue;   // already tested above, at priority
-                const Transform& bt = reg.get<const Transform>(b);
-                if (bt.layer != layer) continue;
-                consider(b, bt.pos);
-            }
+            // §59.3: 27 соседних бакетов вместо двух полных view — покрытие
+            // радиуса заявлено static_assert(kProjHitRadius <= kCellSize)
+            // ниже, у вызова пропов; узкая фаза (NEAREST по точной
+            // wrap-дистанции) не менялась.
+            if (!bodyBinsBuilt) build_body_bins();
+            bodyBins.for_each_near(layer, cell_coord(tr.pos.x),
+                                   cell_coord(tr.pos.y), cell_coord(tr.pos.z),
+                                   consider);
             if (best != entt::null) {
                 resolved.push_back(Hit{e, p.dmg, p.source, false, best, p.proj,
                                        p.channel});
