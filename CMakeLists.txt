@@ -611,7 +611,7 @@ if(GIGA_BUILD_TESTS)
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 146 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 926 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -1151,7 +1151,7 @@ if(GIGA_BUILD_TESTS)
     # полярность оракула переехала со случайного этажа на построенную сцену
     # «стена со щелью» — детерминированный красный на мутации «партиал =
     # монолит» (3 новых чека), взамен вероятностного lostBad > 0 (-1).
-        PASS_REGULAR_EXPRESSION "game_test: 235838 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 236522 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

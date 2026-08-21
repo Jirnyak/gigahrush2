@@ -5949,13 +5949,12 @@ int main(int argc, char** argv) {
                 InvUiPolicy policy{};  // self-режим: см. [inventory.md]
                 policy.allowUse = false;  // послотовый Use придёт с примитивом
 
-                // Вторая сторона: живые слоты цели. Ящик хранит POD-тройки —
-                // зеркалим их во временные ItemSlot на кадр (виджет только
-                // читает); труп отдаёт свои ItemSlot как есть.
+                // Вторая сторона: живые слоты цели. Держатель канонический
+                // (B3): ящик отдаёт свои ItemSlot НАПРЯМУЮ, зеркало-копия
+                // умерла вместе с POD-тройками.
                 game::Container* boxC = nullptr;
                 game::Corpse* corpseC = nullptr;
                 game::Inventory* npcInv = nullptr;
-                game::ItemSlot boxView[game::kContainerSlots];
                 InvUiSide side{};
                 game::BarterPreview bpv{};
                 game::BarterTerms bterms{};
@@ -6017,10 +6016,6 @@ int main(int argc, char** argv) {
                     } else {
                         boxC = reg.try_get<game::Container>(lootEntity);
                         if (boxC) {
-                            for (int i = 0; i < game::kContainerSlots; ++i)
-                                boxView[i] = game::ItemSlot{
-                                    boxC->item[i], boxC->count[i],
-                                    boxC->condition[i]};
                             switch (static_cast<game::ContainerKind>(
                                 boxC->kind)) {
                                 case game::ContainerKind::Safe:
@@ -6031,8 +6026,8 @@ int main(int argc, char** argv) {
                                     side.title = "ТАЙНИК"; break;
                                 default: side.title = "ЯЩИК"; break;
                             }
-                            side.slots = boxView;
-                            side.count = game::kContainerSlots;
+                            side.slots = boxC->inv.slots;
+                            side.count = game::kInvSlots;
                         }
                     }
                 }
@@ -6043,20 +6038,17 @@ int main(int argc, char** argv) {
                 // и Take, и TakeAll ходят сюда, третьей копии закона нет.
                 auto take_box_slot = [&](int i) {
                     if (!boxC) return;
-                    if (!game::item_valid(boxC->item[i]) || boxC->count[i] == 0)
-                        return;
+                    game::ItemSlot& sl = boxC->inv.slots[i];
+                    if (!game::item_valid(sl.item) || sl.count == 0) return;
                     const std::uint16_t unplaced = game::inventory_give(
-                        pinv, boxC->item[i], boxC->count[i],
-                        boxC->condition[i]);
-                    const std::uint16_t moved = static_cast<std::uint16_t>(
-                        boxC->count[i] - unplaced);
+                        pinv, sl.item, sl.count, sl.condition);
+                    const std::uint16_t moved =
+                        static_cast<std::uint16_t>(sl.count - unplaced);
                     if (moved == 0) return;  // сумка полна — остаток в ящике
-                    const std::int32_t v =
-                        game::item_def(boxC->item[i]).value * moved;
-                    loot += v;
-                    containerTake += v;
-                    boxC->count[i] = unplaced;
-                    if (boxC->count[i] == 0) boxC->item[i] = game::kInvalidItem;
+                    loot += game::item_def(sl.item).value * moved;
+                    containerTake += game::item_def(sl.item).value * moved;
+                    sl.count = unplaced;
+                    if (sl.count == 0) sl = game::ItemSlot{};
                 };
                 auto take_corpse_slot = [&](int i) {
                     if (!corpseC) return;
@@ -6075,12 +6067,7 @@ int main(int argc, char** argv) {
                 // «здесь уже был» ([container.h]), searched — её труп-близнец.
                 auto mark_if_empty = [&]() {
                     if (boxC) {
-                        bool empty = true;
-                        for (int i = 0; i < game::kContainerSlots; ++i)
-                            if (game::item_valid(boxC->item[i]) &&
-                                boxC->count[i])
-                                empty = false;
-                        if (empty) boxC->opened = true;
+                        if (boxC->inv.empty()) boxC->opened = true;
                     }
                     if (corpseC) {
                         bool empty = true;
@@ -6129,7 +6116,7 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::Take: {
-                        if (boxC && r.slot < game::kContainerSlots)
+                        if (boxC && r.slot < game::kInvSlots)
                             take_box_slot(r.slot);
                         else if (corpseC && r.slot < game::kMaxCorpseSlots)
                             take_corpse_slot(r.slot);
@@ -6138,7 +6125,7 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::TakeAll: {
-                        for (int i = 0; i < game::kContainerSlots; ++i)
+                        for (int i = 0; i < game::kInvSlots; ++i)
                             take_box_slot(i);
                         for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
                             take_corpse_slot(static_cast<int>(i));
@@ -6151,28 +6138,11 @@ int main(int argc, char** argv) {
                         if (!game::item_valid(s.item) || s.count == 0) break;
                         bool placed = false;
                         if (boxC) {
-                            // Сначала доложить в одноимённый стек ТОГО ЖЕ
-                            // износа (закон inventory_give: смешать байты —
-                            // заразить свежий стек), потом в пустую ячейку.
-                            const std::uint16_t stackMax =
-                                game::item_def(s.item).stackMax;
-                            for (int i = 0; i < game::kContainerSlots && !placed;
-                                 ++i)
-                                if (boxC->item[i] == s.item &&
-                                    boxC->condition[i] == s.condition &&
-                                    boxC->count[i] < stackMax) {
-                                    ++boxC->count[i];
-                                    placed = true;
-                                }
-                            for (int i = 0; i < game::kContainerSlots && !placed;
-                                 ++i)
-                                if (!game::item_valid(boxC->item[i]) ||
-                                    boxC->count[i] == 0) {
-                                    boxC->item[i] = s.item;
-                                    boxC->count[i] = 1;
-                                    boxC->condition[i] = s.condition;
-                                    placed = true;
-                                }
+                            // B3: ручная двухфазка умерла — ЕДИНСТВЕННЫЙ
+                            // примитив inventory_give (он же хранит закон
+                            // «не смешивать износ»).
+                            placed = game::inventory_give(boxC->inv, s.item, 1,
+                                                          s.condition) == 0;
                         } else if (corpseC) {
                             const std::uint16_t stackMax =
                                 game::item_def(s.item).stackMax;

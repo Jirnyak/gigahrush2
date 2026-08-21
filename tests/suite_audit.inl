@@ -489,9 +489,9 @@ static void ammo_has_a_source() {
         for (std::uint32_t s = 0; s < 256 && !crateAmmo; ++s) {
             const Container c = roll_container(ContainerKind::WeaponCrate, z,
                                               s * 0x9e3779b9u + 1u);
-            for (int i = 0; i < kContainerSlots; ++i) {
-                if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
-                if (static_cast<ItemCategory>(item_def(c.item[i]).category) ==
+            for (int i = 0; i < kInvSlots; ++i) {
+                if (!item_valid(c.inv.slots[i].item) || c.inv.slots[i].count == 0) continue;
+                if (static_cast<ItemCategory>(item_def(c.inv.slots[i].item).category) ==
                     ItemCategory::Ammo)
                     crateAmmo = true;
             }
@@ -991,16 +991,16 @@ static void travel_keeps_crate_records() {
     for (auto e : reg.view<Container, const Transform>()) {
         Container& c = reg.get<Container>(e);
         if ((i % 3) == 0) {
-            for (int s = 0; s < kContainerSlots; ++s) {
-                c.item[s] = kInvalidItem;
-                c.count[s] = 0;
+            for (int s = 0; s < kInvSlots; ++s) {
+                c.inv.slots[s].item = kInvalidItem;
+                c.inv.slots[s].count = 0;
             }
             c.opened = true;
             ++openedByHand;
         } else if ((i % 5) == 0) {
-            c.item[0] = 40;   // deposit: worn bandages, the state a key could not carry
-            c.count[0] = 3;
-            c.condition[0] = 77;
+            c.inv.slots[0].item = 40;   // deposit: worn bandages, the state a key could not carry
+            c.inv.slots[0].count = 3;
+            c.inv.slots[0].condition = 77;
             ++deposits;
         }
         ++i;
@@ -1043,10 +1043,10 @@ static void travel_keeps_crate_records() {
         const Container& c = reg.get<const Container>(e);
         if (c.opened) {
             ++openNow;
-            for (int s = 0; s < kContainerSlots; ++s)
-                CHECK(c.item[s] == kInvalidItem);
+            for (int s = 0; s < kInvSlots; ++s)
+                CHECK(c.inv.slots[s].item == kInvalidItem);
         }
-        if (c.item[0] == 40 && c.count[0] == 3 && c.condition[0] == 77) ++depositNow;
+        if (c.inv.slots[0].item == 40 && c.inv.slots[0].count == 3 && c.inv.slots[0].condition == 77) ++depositNow;
     }
     CHECK(openNow >= static_cast<std::size_t>(openedByHand));
     CHECK(depositNow >= static_cast<std::size_t>(deposits));   // вклад пережил рейс

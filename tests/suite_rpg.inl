@@ -881,8 +881,8 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
     // Rows 8-9 (item b) overflowed into the cell container.
     const Container& boxC = reg.get<Container>(box);
     int foundB = 0;
-    for (std::uint8_t si = 0; si < kContainerSlots; ++si)
-        if (boxC.item[si] == b) foundB += static_cast<int>(boxC.count[si]);
+    for (std::uint8_t si = 0; si < kInvSlots; ++si)
+        if (boxC.inv.slots[si].item == b) foundB += static_cast<int>(boxC.inv.slots[si].count);
     CHECK(foundB == 2);
     // Live bag emptied so a recycled row cannot resurrect loot.
     for (const ItemSlot& s : pool.inventory(id).slots) {

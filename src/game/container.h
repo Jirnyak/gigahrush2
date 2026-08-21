@@ -32,6 +32,7 @@
 #include "core/math.h"
 #include "ecs/registry.h"
 #include "game/item_table.h"
+#include "game/inventory.h"
 #include "game/floor_gen.h"
 #include "game/noise.h"          // NoiseField, for the lid
 #include "world/level_stack.h"
@@ -70,17 +71,16 @@ inline constexpr std::uint8_t kContainerCapPct[static_cast<std::size_t>(
 // `slots` is small on purpose. The reference's deep vaults hold a handful of valuable
 // things, not a warehouse; a container that yields twenty items turns looting into
 // inventory management, and inventory is 64 slots with no weight system.
-inline constexpr int kContainerSlots = 4;
+// РОЛЛЫ кладут не больше четырёх предметов (экономика референса: глубокий
+// сейф — горсть ценного, не склад); ЁМКОСТЬ при этом каноническая — 64
+// (решение владельца, CANON S14.1: «один POD, байт-копия»).
+inline constexpr int kContainerRollSlots = 4;
 
+// B3 (S14.1, 2026-08-21): три параллельных массива item/count/condition
+// умерли — держатель предметов ОДИН на всю игру, канонический Inventory
+// ([inventory.h] 64 × ItemSlot). Ящик, рюкзак и труп говорят одним типом.
 struct Container {
-    ItemId item[kContainerSlots] = {};
-    // u16 like ItemSlot::count ([inventory.h]): the cash slot holds up to a
-    // full ruble stack, and a box must be able to hold what a bag can.
-    std::uint16_t count[kContainerSlots] = {};
-    // Износ содержимого ([inventory.h] ItemSlot::condition, тот же байт).
-    // Появился вместе с двухсторонним экраном обыска: класть потёртый ствол
-    // в ящик и доставать «как новый» — дюп-ремонт; свежероллленный лут — 255.
-    std::uint8_t condition[kContainerSlots] = {255, 255, 255, 255};
+    Inventory inv{};
     std::uint8_t kind = 0;      // ContainerKind
     bool opened = false;        // stays in the world once emptied; see the comment
 };

@@ -353,10 +353,12 @@ void visit_container_rec(Ar& ar, R& rec) {
     std::uint8_t opened = rec.c.opened ? 1 : 0;
     ar.u8(opened);
     rec.c.opened = opened != 0;
-    for (int i = 0; i < kContainerSlots; ++i) {
-        ar.u16(rec.c.item[i]);
-        ar.u16(rec.c.count[i]);
-        ar.u8(rec.c.condition[i]);
+    // B3: держатель канонический — 64 ItemSlot (бамп версии сейва по
+    // решению владельца, миграции старых 4-слотовых записей нет).
+    for (int i = 0; i < kInvSlots; ++i) {
+        ar.u16(rec.c.inv.slots[i].item);
+        ar.u16(rec.c.inv.slots[i].count);
+        ar.u8(rec.c.inv.slots[i].condition);
     }
 }
 

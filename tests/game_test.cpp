@@ -4228,9 +4228,9 @@ static void test_faction_gates_hunting() {
 static void test_containers() {
     auto worth = [](const Container& c) {
         std::int32_t v = 0;
-        for (int i = 0; i < kContainerSlots; ++i)
-            if (item_valid(c.item[i]))
-                v += item_def(c.item[i]).value * c.count[i];
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(c.inv.slots[i].item))
+                v += item_def(c.inv.slots[i].item).value * c.inv.slots[i].count;
         return v;
     };
 
@@ -4264,11 +4264,11 @@ static void test_containers() {
             for (std::uint32_t s = 0; s < 120; ++s) {
                 const Container c =
                     roll_container(static_cast<ContainerKind>(k), fz, s * 40503u);
-                for (int i = 0; i < kContainerSlots; ++i)
-                    if (item_valid(c.item[i]))
+                for (int i = 0; i < kInvSlots; ++i)
+                    if (item_valid(c.inv.slots[i].item))
                         // Per ITEM, not per container: the cap gates what may appear,
                         // and a stack of cheap things is allowed to add up past it.
-                        CHECK(item_def(c.item[i]).value <= share);
+                        CHECK(item_def(c.inv.slots[i].item).value <= share);
             }
         }
     }
@@ -4279,14 +4279,14 @@ static void test_containers() {
     bool boxCash = false;
     for (std::uint32_t s = 0; s < 200; ++s) {
         const Container c = roll_container(ContainerKind::PublicBox, -50, s * 7919u);
-        for (int i = 0; i < kContainerSlots; ++i) {
-            if (!item_valid(c.item[i])) continue;
-            if (c.item[i] == kItemRuble) {
+        for (int i = 0; i < kInvSlots; ++i) {
+            if (!item_valid(c.inv.slots[i].item)) continue;
+            if (c.inv.slots[i].item == kItemRuble) {
                 boxCash = true;
-                CHECK(c.count[i] <= 120);   // flat at every depth, by design
+                CHECK(c.inv.slots[i].count <= 120);   // flat at every depth, by design
                 continue;
             }
-            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+            const auto cat = static_cast<ItemCategory>(item_def(c.inv.slots[i].item).category);
             CHECK(cat == ItemCategory::Food || cat == ItemCategory::Drink ||
                   cat == ItemCategory::Medicine || cat == ItemCategory::Ammo);
         }
@@ -4298,9 +4298,9 @@ static void test_containers() {
     int crateWeapons = 0;
     for (std::uint32_t s = 0; s < 200; ++s) {
         const Container c = roll_container(ContainerKind::WeaponCrate, -26, s * 104729u);
-        for (int i = 0; i < kContainerSlots; ++i) {
-            if (!item_valid(c.item[i])) continue;
-            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+        for (int i = 0; i < kInvSlots; ++i) {
+            if (!item_valid(c.inv.slots[i].item)) continue;
+            const auto cat = static_cast<ItemCategory>(item_def(c.inv.slots[i].item).category);
             CHECK(cat == ItemCategory::Weapon || cat == ItemCategory::Ammo);
             if (cat == ItemCategory::Weapon) ++crateWeapons;
         }
@@ -4568,8 +4568,8 @@ static void test_full_loop() {
     for (auto e : reg.view<const Container, const Transform>()) {
         const Container& c = reg.get<const Container>(e);
         bool anyBankable = false;
-        for (int i = 0; i < kContainerSlots; ++i) {
-            const ItemId id = c.item[i];
+        for (int i = 0; i < kInvSlots; ++i) {
+            const ItemId id = c.inv.slots[i].item;
             if (!item_valid(id)) continue;
             const ItemDef& idef = item_def(id);
             const auto cat = static_cast<ItemCategory>(idef.category);

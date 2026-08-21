@@ -192,11 +192,11 @@ SaveState busy_run() {
         ContainerRecord r1;
         r1.key = OpenedContainerKey{-3, 18, 42, 1, 0};
         r1.c.kind = 1;
-        r1.c.item[0] = 40;         // bandage, half-taken, worn
-        r1.c.count[0] = 3;
-        r1.c.condition[0] = 128;
-        r1.c.item[3] = kItemRuble; // the cash slot, partially spent
-        r1.c.count[3] = 12345;     // needs the u16 — the whole point of v14
+        r1.c.inv.slots[0].item = 40;         // bandage, half-taken, worn
+        r1.c.inv.slots[0].count = 3;
+        r1.c.inv.slots[0].condition = 128;
+        r1.c.inv.slots[3].item = kItemRuble; // the cash slot, partially spent
+        r1.c.inv.slots[3].count = 12345;     // needs the u16 — the whole point of v14
         st.containers.push_back(r1);
         ContainerRecord r2;
         r2.key = OpenedContainerKey{-3, 114, 6, 1, 0};
@@ -204,8 +204,8 @@ SaveState busy_run() {
         st.containers.push_back(r2);
         ContainerRecord r3;
         r3.key = OpenedContainerKey{2, 66, 66, 1, 0};
-        r3.c.item[1] = 121;        // a deposit the player made
-        r3.c.count[1] = 2;
+        r3.c.inv.slots[1].item = 121;        // a deposit the player made
+        r3.c.inv.slots[1].count = 2;
         st.containers.push_back(r3);
         CorpseRecord cr;
         cr.floor = -3;
@@ -357,13 +357,20 @@ void same_run(const SaveState& a, const SaveState& b) {
                                : b.containers.size();
     for (std::size_t i = 0; i < nk; ++i) {
         CHECK(same_container(a.containers[i].key, b.containers[i].key));
-        // memcmp is safe HERE: Container is 22 B with no interior or tail
-        // padding (2+2 arrays, then four u8-sized fields on align-2), asserted
-        // right below so a field addition cannot silently make this read junk.
-        static_assert(sizeof(Container) ==
-                      kContainerSlots * (2 + 2 + 1) + 1 + 1);
-        CHECK(std::memcmp(&a.containers[i].c, &b.containers[i].c,
-                          sizeof(Container)) == 0);
+        // B3: у ItemSlot есть хвостовой паддинг-байт — memcmp по структуре
+        // читал бы мусор; сравнение по полям, как и велит правило про паддинг.
+        static_assert(sizeof(Container) == sizeof(Inventory) + 2);
+        CHECK(a.containers[i].c.kind == b.containers[i].c.kind);
+        CHECK(a.containers[i].c.opened == b.containers[i].c.opened);
+        bool slotsEqual = true;
+        for (int si = 0; si < kInvSlots; ++si) {
+            const ItemSlot& x = a.containers[i].c.inv.slots[si];
+            const ItemSlot& y = b.containers[i].c.inv.slots[si];
+            if (x.item != y.item || x.count != y.count ||
+                x.condition != y.condition)
+                slotsEqual = false;
+        }
+        CHECK(slotsEqual);
     }
     CHECK(a.corpses.size() == b.corpses.size());
     // Field-by-field, NOT memcmp: CorpseRecord has 2 padding bytes after its
@@ -571,9 +578,9 @@ void round_trip() {
     CHECK(dst.containers[0].key.floor == -3);
     CHECK(dst.corpses[0].floor == -3);
     // The contents rode whole: the half-taken worn stack and the u16 cash wad.
-    CHECK(dst.containers[0].c.count[0] == 3 && dst.containers[0].c.condition[0] == 128);
-    CHECK(dst.containers[0].c.item[3] == kItemRuble &&
-          dst.containers[0].c.count[3] == 12345);
+    CHECK(dst.containers[0].c.inv.slots[0].count == 3 && dst.containers[0].c.inv.slots[0].condition == 128);
+    CHECK(dst.containers[0].c.inv.slots[3].item == kItemRuble &&
+          dst.containers[0].c.inv.slots[3].count == 12345);
     CHECK(dst.corpses[0].slots[1].count == 650);
 }
 
@@ -998,16 +1005,16 @@ void floor_records_survive_a_restart() {
         before.push_back(e);
         Container& c = reg.get<Container>(e);
         if ((i % 3) == 0) {
-            for (int sl = 0; sl < kContainerSlots; ++sl) {
-                c.item[sl] = kInvalidItem;
-                c.count[sl] = 0;
+            for (int sl = 0; sl < kInvSlots; ++sl) {
+                c.inv.slots[sl].item = kInvalidItem;
+                c.inv.slots[sl].count = 0;
             }
             c.opened = true;
             ++emptiedByHand;
         } else if ((i % 5) == 0) {
-            c.item[0] = 40;            // a worn bandage stack, deposited
-            c.count[0] = 3;
-            c.condition[0] = 77;
+            c.inv.slots[0].item = 40;            // a worn bandage stack, deposited
+            c.inv.slots[0].count = 3;
+            c.inv.slots[0].condition = 77;
             ++depositedInto;
         }
         ++i;
@@ -1105,12 +1112,12 @@ void floor_records_survive_a_restart() {
         CHECK(std::memcmp(&c, &rec->c, sizeof(Container)) == 0);
         if (c.opened) {
             ++openNow;
-            for (int sl = 0; sl < kContainerSlots; ++sl)
-                CHECK(c.item[sl] == kInvalidItem);
+            for (int sl = 0; sl < kInvSlots; ++sl)
+                CHECK(c.inv.slots[sl].item == kInvalidItem);
         } else {
             ++shutNow;
         }
-        if (c.item[0] == 40 && c.count[0] == 3 && c.condition[0] == 77) ++deposits;
+        if (c.inv.slots[0].item == 40 && c.inv.slots[0].count == 3 && c.inv.slots[0].condition == 77) ++deposits;
     }
     CHECK(hits == matched);
     CHECK(openNow >= static_cast<std::size_t>(emptiedByHand));

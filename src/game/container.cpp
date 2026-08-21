@@ -129,8 +129,8 @@ void roll_cash(Container& c, ContainerKind kind, std::int32_t cap,
         cash = static_cast<std::int32_t>(hc % 121u);
     if (cash > 65535) cash = 65535;
     if (cash > 0) {
-        c.item[kContainerSlots - 1] = kItemRuble;
-        c.count[kContainerSlots - 1] = static_cast<std::uint16_t>(cash);
+        c.inv.slots[kContainerRollSlots - 1] =
+            ItemSlot{kItemRuble, static_cast<std::uint16_t>(cash), 255};
     }
 }
 
@@ -189,7 +189,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
         case ContainerKind::WeaponCrate: fill = 3; break;   // ammo + two weapons
         default:                         fill = 1 + static_cast<int>(h0 % 3u); break;
     }
-    if (fill > kContainerSlots) fill = kContainerSlots;
+    if (fill > kContainerRollSlots) fill = kContainerRollSlots;
 
     // **A weapon crate reserves its first slot for AMMO, chosen directly rather than
     // rolled.** The weighted roll cannot produce ammo at all: every one of the 17 AMMO
@@ -229,8 +229,8 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
         if (ammo != kInvalidItem) {
             const std::uint16_t st = item_def(ammo).stackMax;
             const std::uint32_t n = 8u + (giga::hash_u32(seed ^ 0xA11A0u) % 16u);
-            c.item[0] = ammo;
-            c.count[0] = static_cast<std::uint16_t>(n > st ? st : n);
+            c.inv.slots[0] =
+                ItemSlot{ammo, static_cast<std::uint16_t>(n > st ? st : n), 255};
             firstSlot = 1;
         }
     }
@@ -249,8 +249,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
         // Consumables and ammo come in useful numbers; anything else comes as one.
         std::uint32_t n = 1;
         if (stack > 1) n = 1u + ((h >> 8) % (stack < 12u ? stack : 12u));
-        c.item[i] = id;
-        c.count[i] = static_cast<std::uint16_t>(n);
+        c.inv.slots[i] = ItemSlot{id, static_cast<std::uint16_t>(n), 255};
     }
 
     roll_cash(c, kind, cap, seed);
@@ -415,20 +414,21 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (dx * dx + dy * dy + dz * dz > kContainerReach * kContainerReach) continue;
 
         bool anyMoved = false;
-        for (int i = 0; i < kContainerSlots; ++i) {
-            if (!item_valid(c.item[i]) || c.count[i] == 0) continue;
+        for (int i = 0; i < kInvSlots; ++i) {
+            ItemSlot& sl = c.inv.slots[i];
+            if (!item_valid(sl.item) || sl.count == 0) continue;
             // THE transfer primitive ([item_table.h] inventory_give): stacks
             // top up before fresh slots are spent, the remainder stays in the
-            // box, not deleted. Износ едет с предметом ([container.h]
-            // Container::condition — байт появился с двухсторонним обыском).
+            // box, not deleted. Износ едет с предметом (ItemSlot::condition —
+            // держатель теперь канонический, B3).
             const std::uint16_t unplaced =
-                inventory_give(inv, c.item[i], c.count[i], c.condition[i]);
+                inventory_give(inv, sl.item, sl.count, sl.condition);
             const std::uint16_t moved =
-                static_cast<std::uint16_t>(c.count[i] - unplaced);
+                static_cast<std::uint16_t>(sl.count - unplaced);
             if (moved == 0) break;  // full: the rest stays in the box
-            took += item_def(c.item[i]).value * moved;
-            c.count[i] = unplaced;
-            if (c.count[i] == 0) c.item[i] = kInvalidItem;
+            took += item_def(sl.item).value * moved;
+            sl.count = unplaced;
+            if (sl.count == 0) sl = ItemSlot{};
             anyMoved = true;
         }
         // The lid. Gated on `anyMoved`, so the pass that empties a crate makes one
@@ -441,8 +441,9 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         // Opened only when it is actually empty. A container left half-full by a full
         // inventory must stay lootable, or the player is punished for carrying things.
         bool empty = true;
-        for (int i = 0; i < kContainerSlots; ++i)
-            if (item_valid(c.item[i]) && c.count[i]) empty = false;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(c.inv.slots[i].item) && c.inv.slots[i].count)
+                empty = false;
         if (empty) {
             c.opened = true;
             // Darkened in place rather than destroyed: a container that vanishes tells

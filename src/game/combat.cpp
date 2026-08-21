@@ -593,7 +593,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                     ls.count = cap && count > cap ? cap : count;
                     return 0;
                 };
-                auto push_cell_containers = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                auto push_cell_containers = [&](ItemId id, std::uint16_t count,
+                                                std::uint8_t cond) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0 || !bodyTr) return count;
                     std::uint16_t left = count;
                     for (auto ce : reg.view<Container, const Transform>()) {
@@ -605,27 +606,11 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         const int cz = wrap_macro(static_cast<int>(std::floor(ct.pos.z / cs)));
                         if (cx != bx || cy != by || cz != bz) continue;
                         Container& c = reg.get<Container>(ce);
-                        // Container::count is u16 like the bag cell; the slot's
-                        // ceiling is the item's own stackMax ([inventory.h]).
-                        const std::uint16_t cap = item_def(id).stackMax;
-                        const std::uint16_t lim = cap ? cap : 1;
-                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
-                            if (c.item[si] != id || c.count[si] == 0) continue;
-                            if (c.count[si] >= lim) continue;
-                            const std::uint16_t room =
-                                static_cast<std::uint16_t>(lim - c.count[si]);
-                            const std::uint16_t take = left < room ? left : room;
-                            c.count[si] = static_cast<std::uint16_t>(c.count[si] + take);
-                            left = static_cast<std::uint16_t>(left - take);
-                        }
-                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
-                            if (c.item[si] != kInvalidItem && c.count[si] != 0) continue;
-                            c.item[si] = id;
-                            const std::uint16_t put = left < lim ? left : lim;
-                            c.count[si] = put;
-                            left = static_cast<std::uint16_t>(left - put);
-                        }
-
+                        // B3: держатель канонический — ручная двухфазная
+                        // раскладка (одна из «восьми реализаций добавить
+                        // предмет», one-container.md) умерла в пользу
+                        // ЕДИНСТВЕННОГО примитива inventory_give.
+                        left = inventory_give(c.inv, id, left, cond);
                     }
                     return left;
                 };
@@ -633,7 +618,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 for (const ItemSlot& s : spilledInv.slots) {
                     if (s.item == kInvalidItem || s.count == 0) continue;
                     std::uint16_t left = push_corpse(s.item, s.count);
-                    if (left > 0) (void)push_cell_containers(s.item, left);
+                    if (left > 0)
+                        (void)push_cell_containers(s.item, left, s.condition);
                 }
             }
 

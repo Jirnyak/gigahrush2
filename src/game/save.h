@@ -168,7 +168,10 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // interest per reload and making save-scumming interest impossible. Entry ticks
 // in the ring are session-relative history and ride as-is (cosmetic). v15 saves
 // are rejected, standing rule.
-inline constexpr std::uint32_t kSaveVersion = 16u;
+// v17 (2026-08-21): контейнер несёт канонический Inventory (64 слота, B3
+// one-container.md) — решение владельца: миграции нет, старые сейвы
+// отклоняются, ящики пересеются.
+inline constexpr std::uint32_t kSaveVersion = 17u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -324,7 +327,8 @@ static_assert(kBankWire == 289);
 // slotCount / searched) + 8 slots x 5 B = 81. `deathTick` deliberately does NOT
 // travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
 // reads), and serializing a column with no consumer is [problems.md] §35's class.
-inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 4 * 5;   // 27
+// B3 (v17): держатель канонический — 64 ItemSlot вместо 4 POD-троек.
+inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 64 * 5;  // 327
 inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 3 + 8 * 5;     // 81
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
