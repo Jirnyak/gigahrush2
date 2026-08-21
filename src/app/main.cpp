@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <SDL3/SDL_vulkan.h>
 
+#include <chrono>   // покомпонентный замер [carve] — carve-hitch.md
 #include <cmath>
 #include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
@@ -304,6 +305,36 @@ static std::uint64_t g_worldGen = 0;
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
 static const float* g_wallRing = nullptr;
 static unsigned g_wallSeen = 0;
+
+// Покомпонентный замер карв-пути ([markoaudit/plans/carve-hitch.md],
+// инкремент 1 — ТОЛЬКО замер, чинить до чисел запрещено). Компоненты копятся
+// за кадр (боевой дренаж даёт пачку карвов за подшаг), строка [carve]
+// печатается в хвосте кадра — после flush() зеркала, когда известны и
+// prop_skin, и цена стейджинга. Wall-clock, не сим-тики: это диагностика
+// хитча КАДРА, а не SLA планировщика (тот меряется тиками, [game/rebake.h]).
+struct CarveTiming {
+    bool carved = false;
+    std::size_t cells = 0;     // Σ dirtyCells за кадр
+    float sphereMs = 0.0f;     // carve_sphere
+    float lightMatMs = 0.0f;   // bake_material_lights + статик-таблица ламп
+    float mirrorMarkMs = 0.0f; // voxelMirror.mark_dirty (только метки)
+    float diffMs = 0.0f;       // mark_diffusion_dirty
+    float patchMs = 0.0f;      // nav.patch_carved_cells
+    float visMs = 0.0f;        // дренаж светосетки (mark_dirty_light_cell)
+    float partMs = 0.0f;       // spawn_carve_particles
+    float anchorMs = 0.0f;     // anchor_validate_step
+    float antrMs = 0.0f;       // antourage_carve_step_here
+    float siteMs = 0.0f;       // весь карв-сайт скобкой (site−Σ = немеряное)
+    float propSkinMs = 0.0f;   // merge_ecs_prop_meshes в хвосте кадра
+    float lgridMs = 0.0f;      // collect_scene_lights + update_and_dispatch
+    float flushMs = 0.0f;      // voxelMirror.flush (CPU-сторона стейджинга)
+};
+static CarveTiming g_carveT;
+static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<float, std::milli>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+}
 
 // Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
 // диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
@@ -4203,12 +4234,16 @@ int main(int argc, char** argv) {
                     // command stream, and the next swing is a fresh roll.
                     op.seed = static_cast<std::uint32_t>(simTick);
                     consoleCtx.carveRadius = 0.0f;
+                    const auto ctSite = std::chrono::steady_clock::now();
                     const bool relight = carve_touches_light_material(
                         stack.layer(activeLayer), op);
+                    auto ct0 = std::chrono::steady_clock::now();
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
+                    g_carveT.sphereMs += carve_ms_since(ct0);
                     if (removed > 0 && relight) {
+                        ct0 = std::chrono::steady_clock::now();
                         g_bakedFloorLights =
                             game::bake_material_lights(stack.layer(activeLayer));
                         // Кластеры пережиты заново — статик-таблица и бейк
@@ -4218,32 +4253,42 @@ int main(int argc, char** argv) {
                         nav.set_light_table(g_staticLamps.data(),
                                             g_staticLamps.size(),
                                             gpu::kGridCellSlots, gpu::kClusterSlotBase);
+                        g_carveT.lightMatMs += carve_ms_since(ct0);
                     }
                     if (removed > 0) {
+                        g_carveT.carved = true;
+                        g_carveT.cells += carveResult.dirtyCells.size();
                         // No log, no bookkeeping: geometry persistence is the
                         // floor's own file, written when the player leaves
                         // ([save.h] modular layout) or on F5.
                         // The GPU mirror pays only the dirty cells — the whole
                         // point of the raymarch migration.
+                        ct0 = std::chrono::steady_clock::now();
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
+                        g_carveT.mirrorMarkMs += carve_ms_since(ct0);
                         ++g_worldGen; // поколение мутаций — планировщик доведёт
+                        ct0 = std::chrono::steady_clock::now();
                         mark_diffusion_dirty(diffusionDriver,
                                              stack.layer(activeLayer).grid(),
                                              activeLayer,
                                              carveResult.dirtyCells);
+                        g_carveT.diffMs += carve_ms_since(ct0);
                         // Долг живых битсетов проходимости перед карвом —
                         // O(1) на клетку, следующий Rebake-снапшот увидит
                         // пролом ([game/rebake.h]).
+                        ct0 = std::chrono::steady_clock::now();
                         nav.patch_carved_cells(stack.layer(activeLayer).grid(),
                                                doors,
                                                carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
+                        g_carveT.patchMs += carve_ms_since(ct0);
                         // Дренаж светосетки ТЕМ ЖЕ КАДРОМ (железный инвариант
                         // (б)): шар rDirty из R_max этажа вокруг каждой
                         // карвнутой клетки — грязные клетки биннятся по всей
                         // статик-таблице, свет хлынул в дыру немедленно;
                         // фоновый ребейк потом ужмёт (план §3.3).
+                        ct0 = std::chrono::steady_clock::now();
                         game::for_each_dirty_light_cell(
                             carveResult.dirtyCells.data(),
                             carveResult.dirtyCells.size(),
@@ -4251,10 +4296,13 @@ int main(int argc, char** argv) {
                                 lightGrid.mark_dirty_light_cell(
                                     idx, static_cast<std::uint32_t>(g_worldGen));
                             });
+                        g_carveT.visMs += carve_ms_since(ct0);
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
+                        ct0 = std::chrono::steady_clock::now();
                         spawn_carve_particles(particlePass, carveResult,
                                               op.seed);
+                        g_carveT.partMs += carve_ms_since(ct0);
 
                         // A blast is the loudest thing after gunfire: let the
                         // crowd hear it.
@@ -4266,20 +4314,25 @@ int main(int argc, char** argv) {
                         // ([jirnyak.md] §18). dirtyCells = flat macro_index.
                         // Rebuild PropPass static skin when any prop detached —
                         // otherwise the GPU still draws the old furniture pose.
+                        ct0 = std::chrono::steady_clock::now();
                         if (game::anchor_validate_step(reg, stack.layer(activeLayer),
                                                        bus, carveResult.dirtyCells,
                                                        &particleBursts, op.seed) > 0) {
                             propPassNeedsRebuild = true;
                         }
+                        g_carveT.anchorMs += carve_ms_since(ct0);
                         // ...and the BAKED dressing answers to the same blast
                         // ([game/antourage] antourage_carve_step): severed
                         // pipes shed debris and the instance list is re-packed
                         // so the GPU stops drawing what no longer hangs.
+                        ct0 = std::chrono::steady_clock::now();
                         if (antourage_carve_step_here(carveResult.dirtyCells,
                                                       op.seed)) {
                             propPassNeedsRebuild = true;
                             dressingSetChanged = true;
                         }
+                        g_carveT.antrMs += carve_ms_since(ct0);
+                        g_carveT.siteMs += carve_ms_since(ctSite);
                     }
 
                 }
@@ -4596,12 +4649,16 @@ int main(int argc, char** argv) {
                         op.radius = pr.radius;
                         op.power = pr.power;
                         op.seed = pr.seed;
+                        const auto ctSite = std::chrono::steady_clock::now();
                         const bool relight = carve_touches_light_material(
                             stack.layer(activeLayer), op);
+                        auto ct0 = std::chrono::steady_clock::now();
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
+                        g_carveT.sphereMs += carve_ms_since(ct0);
                         if (removed > 0 && relight) {
+                            ct0 = std::chrono::steady_clock::now();
                             g_bakedFloorLights = game::bake_material_lights(
                                 stack.layer(activeLayer));
                             // Тот же долг, что у консольного карва: таблица и
@@ -4610,22 +4667,32 @@ int main(int argc, char** argv) {
                             nav.set_light_table(g_staticLamps.data(),
                                                 g_staticLamps.size(),
                                                 gpu::kGridCellSlots, gpu::kClusterSlotBase);
+                            g_carveT.lightMatMs += carve_ms_since(ct0);
                         }
                         if (removed > 0) {
+                            g_carveT.carved = true;
+                            g_carveT.cells += carveResult.dirtyCells.size();
+                            ct0 = std::chrono::steady_clock::now();
                             voxelMirror.mark_dirty(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
+                            g_carveT.mirrorMarkMs += carve_ms_since(ct0);
                             ++g_worldGen; // поколение мутаций
+                            ct0 = std::chrono::steady_clock::now();
                             mark_diffusion_dirty(diffusionDriver,
                                                  stack.layer(activeLayer).grid(),
                                                  activeLayer,
                                                  carveResult.dirtyCells);
+                            g_carveT.diffMs += carve_ms_since(ct0);
                             // Тот же долг битсетов, что у консольного карва.
+                            ct0 = std::chrono::steady_clock::now();
                             nav.patch_carved_cells(
                                 stack.layer(activeLayer).grid(), doors,
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
+                            g_carveT.patchMs += carve_ms_since(ct0);
                             // И тот же дренаж светосетки тем же кадром.
+                            ct0 = std::chrono::steady_clock::now();
                             game::for_each_dirty_light_cell(
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size(),
@@ -4634,8 +4701,11 @@ int main(int argc, char** argv) {
                                         idx,
                                         static_cast<std::uint32_t>(g_worldGen));
                                 });
+                            g_carveT.visMs += carve_ms_since(ct0);
+                            ct0 = std::chrono::steady_clock::now();
                             spawn_carve_particles(particlePass, carveResult,
                                                   pr.seed);
+                            g_carveT.partMs += carve_ms_since(ct0);
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
@@ -4646,16 +4716,21 @@ int main(int argc, char** argv) {
                             // Detach props whose anchor cells were carved.
                             // Rebuild PropPass static skin on any detach so the
                             // GPU drops the old furniture pose. [jirnyak.md] §18
+                            ct0 = std::chrono::steady_clock::now();
                             if (game::anchor_validate_step(
                                     reg, stack.layer(activeLayer), bus,
                                     carveResult.dirtyCells, &particleBursts,
                                     pr.seed) > 0) {
                                 propPassNeedsRebuild = true;
                             }
+                            g_carveT.anchorMs += carve_ms_since(ct0);
                             // Same duty for the baked dressing.
+                            ct0 = std::chrono::steady_clock::now();
                             if (antourage_carve_step_here(carveResult.dirtyCells,
                                                           pr.seed))
                                 propPassNeedsRebuild = true;
+                            g_carveT.antrMs += carve_ms_since(ct0);
+                            g_carveT.siteMs += carve_ms_since(ctSite);
                         }
                     }
                     combatCarves.clear();
@@ -6956,6 +7031,10 @@ int main(int argc, char** argv) {
                 // запачканные ПОСЛЕ снапшота, остаются грязными сами
                 // ([game/rebake.h] take_light_swap).
                 if (nav.take_light_swap() && nav.light_vis().valid()) {
+                    // Подозреваемый №2 хитча карва (carve-hitch.md): цена
+                    // самого GPU-свапа. Кадр свапа ≠ кадр карва (фон), поэтому
+                    // своя строка, не компонент [carve] total.
+                    const auto ctSw = std::chrono::steady_clock::now();
                     lightGrid.upload_baked_grid(
                         nav.light_vis().cells.data(),
                         nav.light_vis().cells.size(),
@@ -6978,9 +7057,15 @@ int main(int argc, char** argv) {
                     g_lightClusterMembers = lv.clusterMembers;
                     lightGrid.set_cluster_records(
                         recs.data(), static_cast<uint32_t>(recs.size()));
+                    std::fprintf(stderr,
+                                 "[carve] light_swap upload %.2f ms (gen %llu)\n",
+                                 carve_ms_since(ctSw),
+                                 static_cast<unsigned long long>(nav.light_gen()));
                 }
+                const auto ctLg = std::chrono::steady_clock::now();
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+                if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
@@ -6997,10 +7082,12 @@ int main(int argc, char** argv) {
                 propPassNeedsRebuild = true;
             }
             if (propPassNeedsRebuild) {
+                const auto ctPs = std::chrono::steady_clock::now();
                 merge_ecs_prop_meshes(reg, activeLayer, propPass,
                                       streamer.antourage_at_layer(registry, activeLayer),
                                       stack.layer(activeLayer), &dripEmitters,
                                       &antourageFalling);
+                g_carveT.propSkinMs += carve_ms_since(ctPs);
             }
             // Only when the dressing SET actually changed — never merely because
             // a rigid leg is mid-fall.
@@ -7193,9 +7280,47 @@ int main(int argc, char** argv) {
                 stainDirty.clear();
             }
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
+            const auto ctVf = std::chrono::steady_clock::now();
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));
+            g_carveT.flushMs = carve_ms_since(ctVf);
             renderer.timer.pass_end(cmd, gpu::GpuPass::VoxelFlush);
+
+            // Покомпонентная строка хитча карва — каждый карв, числом, а не
+            // ощущением ([markoaudit/plans/carve-hitch.md] гейты). total =
+            // карв-сайт + хвост кадра; unmeasured = site − Σ компонентов сайта
+            // (если хитч там — меряли не то). lgrid/flush идут каждый кадр —
+            // на кадре карва интересен их всплеск над фоновым уровнем.
+            if (g_carveT.carved) {
+                const float compSum = g_carveT.sphereMs + g_carveT.lightMatMs +
+                                      g_carveT.mirrorMarkMs + g_carveT.diffMs +
+                                      g_carveT.patchMs + g_carveT.visMs +
+                                      g_carveT.partMs + g_carveT.anchorMs +
+                                      g_carveT.antrMs;
+                std::fprintf(
+                    stderr,
+                    "[carve] total %.2f ms (%zu cells): light_mat %.2f, "
+                    "vis %.2f, prop_skin %.2f, mirror_mark %.2f, "
+                    "mirror_flush %.2f, lgrid %.2f, sphere %.2f, diff %.2f, "
+                    "patch %.2f, anchor %.2f, antr %.2f, part %.2f, "
+                    "unmeasured %.2f\n",
+                    static_cast<double>(g_carveT.siteMs + g_carveT.propSkinMs +
+                                        g_carveT.lgridMs + g_carveT.flushMs),
+                    g_carveT.cells, static_cast<double>(g_carveT.lightMatMs),
+                    static_cast<double>(g_carveT.visMs),
+                    static_cast<double>(g_carveT.propSkinMs),
+                    static_cast<double>(g_carveT.mirrorMarkMs),
+                    static_cast<double>(g_carveT.flushMs),
+                    static_cast<double>(g_carveT.lgridMs),
+                    static_cast<double>(g_carveT.sphereMs),
+                    static_cast<double>(g_carveT.diffMs),
+                    static_cast<double>(g_carveT.patchMs),
+                    static_cast<double>(g_carveT.anchorMs),
+                    static_cast<double>(g_carveT.antrMs),
+                    static_cast<double>(g_carveT.partMs),
+                    static_cast<double>(g_carveT.siteMs - compSum));
+            }
+            g_carveT = CarveTiming{};
 
             // Particle sim AFTER the mirror flush: its barrier orders the
             // masks transfer before compute reads, so a particle collides
