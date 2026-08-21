@@ -16,6 +16,8 @@
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
 #include "game/npc_pool.h"       // NpcPool cx/cy for hub boarding
 #include "game/prop_system.h"    // SubVoxelAnchor — якорь подвеса spawn_chain
+#include "game/prop_table.h"     // prop_id_by_string — cmd_prop, проп из таблицы
+#include "sim/camera.h"          // camera_forward — куда ставить проп
 #include "sim/rigid.h"           // form_from_box — spawn_box контактные сферы
 #include "core/wrap.h"           // wrapf — подвес цепи заворачивается тором
 #include "world/anchor.h"        // anchor_face_pack/anchor_alive — подвес
@@ -1113,6 +1115,80 @@ bool cmd_give(ConsoleContext& ctx, int argc, const char* const* argv,
     return rest < count;
 }
 
+// prop <prop id|row#> — якорный проп из data/props.csv в двух метрах перед
+// взглядом, якорь — верх первой твёрдой клетки под точкой. Универсально по
+// построению, как give: любой id таблицы, никакого белого списка — бочка-
+// заряд, ящик, лампа из пола проверяются в игре одной командой (S10:
+// «лампочки из пола — да пожалуйста»).
+bool cmd_prop(ConsoleContext& ctx, int argc, const char* const* argv,
+              char* out, std::size_t cap) {
+    if (!ctx.ecs || !ctx.stack || ctx.player == entt::null ||
+        !ctx.ecs->valid(ctx.player) || !ctx.ecs->all_of<Transform>(ctx.player)) {
+        put(out, cap, "prop: no embodied player");
+        return false;
+    }
+    if (argc < 2) {
+        put(out, cap, "usage: prop <prop id|row#> (data/props.csv)");
+        return false;
+    }
+    PropId id = prop_id_by_string(argv[1]);
+    if (!prop_valid(id)) {
+        char* end = nullptr;
+        const long v = std::strtol(argv[1], &end, 10);
+        if (end != argv[1] && end && !*end && v >= 0 &&
+            v < static_cast<long>(kPropCount))
+            id = static_cast<PropId>(v);
+    }
+    if (!prop_valid(id)) {
+        if (out && cap)
+            std::snprintf(out, cap, "prop: unknown prop '%s'", argv[1]);
+        return false;
+    }
+    const Transform& tr = ctx.ecs->get<Transform>(ctx.player);
+    const CameraTag* cam = ctx.ecs->try_get<CameraTag>(ctx.player);
+    // Горизонтальная проекция взгляда — проп ставится на пол, не в потолок.
+    vec3 fwd = cam ? camera_forward(cam->yaw, 0.0f) : vec3{1.0f, 0.0f, 0.0f};
+    const vec3 at{tr.pos.x + fwd.x * 2.0f, tr.pos.y + fwd.y * 2.0f, tr.pos.z};
+
+    const World& w = ctx.stack->layer(tr.layer);
+    const int cx = wrap_macro(static_cast<int>(std::floor(at.x / kCellSize)));
+    const int cy = wrap_macro(static_cast<int>(std::floor(at.y / kCellSize)));
+    const int cz0 = static_cast<int>(std::floor(at.z / kCellSize));
+    int ground = -1;
+    for (int dz = 0; dz < 8 && cz0 - dz >= 0; ++dz)
+        if (w.grid().cell(cx, cy, cz0 - dz) != kCellAir) {
+            ground = cz0 - dz;
+            break;
+        }
+    if (ground < 0) {
+        put(out, cap, "prop: no floor below the aim point");
+        return false;
+    }
+    SubVoxelAnchor sva{};
+    sva.cx = cx;
+    sva.cy = cy;
+    sva.cz = ground;
+    sva.subX = 4;
+    sva.subY = 4;
+    sva.subZ = 7;
+    sva.face = 0;
+    const PropDef& d = prop_def(id);
+    const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                   (static_cast<float>(cy) + 0.5f) * kCellSize,
+                   static_cast<float>(ground + 1) * kCellSize +
+                       static_cast<float>(d.sizeZMm) * 0.0005f};
+    Entity e = spawn_prop_from_id(*ctx.ecs, w, pos, sva, id, tr.layer);
+    if (e == entt::null) {
+        put(out, cap, "prop: spawn refused");
+        return false;
+    }
+    if (out && cap)
+        std::snprintf(out, cap, "prop: %s at cell (%d,%d,%d)%s",
+                      prop_id_str(id), cx, cy, ground + 1,
+                      prop_is_charge(d) ? " [CHARGE]" : "");
+    return true;
+}
+
 bool cmd_gear(ConsoleContext& ctx, int, const char* const*, char* out,
               std::size_t cap) {
     NpcId id{};
@@ -1183,6 +1259,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carry", "carry [toss_speed]",
                    "pick up the nearest body; carry again to toss it",
                    cmd_carry, nullptr});
+    ok &= con.add({"prop", "prop <id|row#>",
+                   "spawn a props.csv prop on the floor ahead (charge rows too)",
+                   cmd_prop, nullptr});
     ok &= con.add({"give", "give <item> [count]",
                    "spawn an item from data/items.csv into the pack",
                    cmd_give, nullptr});
