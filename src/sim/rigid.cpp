@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "core/math.h"
 #include "core/wrap.h"
@@ -129,6 +130,29 @@ constexpr float kSpinDamp = 3.0f; // 1/с
 constexpr int kJointIters = 8;
 constexpr float kJointBias = 0.2f;
 
+// Биннинг пар: ключ = (слой, клетка 128³) — близость решается сеткой (S9,
+// глобальных все-со-всеми не существует). Запрос соседей корректен, пока
+// ограничивающий ДИАМЕТР тела ≤ клетки (2 м): радиус > 1 м может пропустить
+// пару — таких пропов в таблице нет, а стендовые боксы обрезаны по 1.5 м
+// полугабарита осознанно (стенд, не контент).
+//
+// Работа идёт по ПРОБЕГАМ (клетка = отрезок отсортированного массива), и
+// соседи ищутся раз на КЛЕТКУ С БОДРЫМИ телами, не раз на тело: спящий мир
+// не платит за фазу пар вообще (замер 2026-08-21: наивные 27 поисков на
+// тело давали 4.5 мс/тик на 4096 бодрых и 0.37 мс на спящих).
+struct BinEntry {
+    std::uint64_t key;
+    std::uint32_t idx;
+};
+
+struct BinRun {
+    std::uint64_t key;
+    std::uint32_t lo, hi; // [lo, hi) в binEntries
+    int cx, cy, cz;       // клетка (wrap), для ключей соседей
+    LayerId layer;
+    bool awake;           // есть ли бодрое тело (снимок начала тика)
+};
+
 } // namespace
 
 void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
@@ -217,8 +241,115 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
     };
 
+    // Пара тел ([markoaudit/plans/ragdoll.md] инкремент 4): брод —
+    // ограничивающие сферы через тор, нарроу — пары контактных сфер (словарь
+    // солвера один — сфера), разрешение — тот же импульс, что о мир, но
+    // двухтеловой. Касание будит спящего (бодрый врезается в кучу — куча
+    // оживает) и считается опорой (touchedTick: стопка тел засыпает).
+    auto resolve_pair = [&](Entity ea, Entity eb) {
+        auto& rbA = view.get<RigidBody>(ea);
+        auto& rbB = view.get<RigidBody>(eb);
+        if (rbA.asleep && rbB.asleep) return;
+        auto& trA = view.get<Transform>(ea);
+        auto& trB = view.get<Transform>(eb);
+        // Образ B у A — кратчайший вектор тора: пары через шов честные.
+        const vec3 dAB = wrap_delta3(trA.pos, trB.pos, kWorldExtent);
+        const float bound = rbA.radius + rbB.radius;
+        if (dot(dAB, dAB) >= bound * bound) return;
+        auto& vA = view.get<Velocity>(ea);
+        auto& vB = view.get<Velocity>(eb);
+        const ContactForm* fA = reg.try_get<ContactForm>(ea);
+        const ContactForm* fB = reg.try_get<ContactForm>(eb);
+        const int nA = (fA && fA->count) ? fA->count : 1;
+        const int nB = (fB && fB->count) ? fB->count : 1;
+        for (int i = 0; i < nA; ++i) {
+            vec3 offA{0.0f, 0.0f, 0.0f};
+            float rA = rbA.radius;
+            if (fA && fA->count) {
+                offA = quat_rotate(rbA.q, fA->off[i]);
+                rA = fA->r[i];
+            }
+            for (int j = 0; j < nB; ++j) {
+                vec3 offB{0.0f, 0.0f, 0.0f};
+                float rB = rbB.radius;
+                if (fB && fB->count) {
+                    offB = quat_rotate(rbB.q, fB->off[j]);
+                    rB = fB->r[j];
+                }
+                const vec3 d = dAB + offB - offA;
+                const float rSum = rA + rB;
+                const float d2 = dot(d, d);
+                if (d2 >= rSum * rSum || d2 < 1e-8f) continue;
+                const float dist = std::sqrt(d2);
+                const vec3 n = d * (1.0f / dist); // A → B
+                const float depth = rSum - dist;
+
+                if (rbA.asleep) { rbA.asleep = false; rbA.sleepTicks = 0; }
+                if (rbB.asleep) { rbB.asleep = false; rbB.sleepTicks = 0; }
+                rbA.touchedTick = true;
+                rbB.touchedTick = true;
+
+                // Позиционное разведение по долям обратных масс: тяжёлый
+                // стоит, лёгкий уступает — без ветки «кто главнее».
+                const float invSum = rbA.invMass + rbB.invMass;
+                trA.pos += n * (-depth * (rbA.invMass / invSum));
+                trB.pos += n * (depth * (rbB.invMass / invSum));
+
+                // Плечи до СВОЕЙ точки поверхности.
+                const vec3 rcA = offA + n * rA;
+                const vec3 rcB = offB + n * (-rB);
+                const vec3 vpA = vA.v + cross(rbA.w, rcA);
+                const vec3 vpB = vB.v + cross(rbB.w, rcB);
+                const float vn = dot(vpB - vpA, n);
+                if (vn >= 0.0f) continue;
+                if (-vn > 4.0f) {
+                    Impact& imA = reg.get_or_emplace<Impact>(ea);
+                    if (-vn > imA.speed) imA.speed = -vn;
+                    Impact& imB = reg.get_or_emplace<Impact>(eb);
+                    if (-vn > imB.speed) imB.speed = -vn;
+                }
+                // Пара материалов — среднее до инкремента 5 (мат-пары).
+                const float e_ =
+                    (-vn > kBounceMinV)
+                        ? 0.5f * (rbA.restitution + rbB.restitution)
+                        : 0.0f;
+                const vec3 rxA = cross(rcA, n);
+                const vec3 rxB = cross(rcB, n);
+                const float kA = rbA.invMass + rbA.invInertia * dot(rxA, rxA);
+                const float kB = rbB.invMass + rbB.invInertia * dot(rxB, rxB);
+                const float jn = -(1.0f + e_) * vn / (kA + kB);
+                vA.v += n * (-jn * rbA.invMass);
+                rbA.w += cross(rcA, n * (-jn)) * rbA.invInertia;
+                vB.v += n * (jn * rbB.invMass);
+                rbB.w += cross(rcB, n * jn) * rbB.invInertia;
+
+                const vec3 vp2 = (vB.v + cross(rbB.w, rcB)) -
+                                 (vA.v + cross(rbA.w, rcA));
+                const vec3 vt = vp2 - n * dot(vp2, n);
+                const float vtLen = length(vt);
+                if (vtLen > 1e-5f) {
+                    const vec3 t = vt * (1.0f / vtLen);
+                    const vec3 rtA = cross(rcA, t);
+                    const vec3 rtB = cross(rcB, t);
+                    const float kt =
+                        rbA.invMass + rbA.invInertia * dot(rtA, rtA) +
+                        rbB.invMass + rbB.invInertia * dot(rtB, rtB);
+                    float jt = -vtLen / kt;
+                    const float mu = 0.5f * (rbA.friction + rbB.friction);
+                    const float jtMax = mu * jn;
+                    jt = std::clamp(jt, -jtMax, jtMax);
+                    vA.v += t * (-jt * rbA.invMass);
+                    rbA.w += cross(rcA, t * (-jt)) * rbA.invInertia;
+                    vB.v += t * (jt * rbB.invMass);
+                    rbB.w += cross(rcB, t * jt) * rbB.invInertia;
+                }
+            }
+        }
+    };
+
     // Пробуждение внешней записью Velocity (взрыв, толчок, пинок пишут её —
     // естественный интерфейс) + сброс тик-аккумулятора касаний.
+    std::uint32_t awakeCount = 0;
     for (auto e : view) {
         auto& rb = view.get<RigidBody>(e);
         rb.touchedTick = false;
@@ -226,6 +357,113 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             dot(view.get<Velocity>(e).v, view.get<Velocity>(e).v) >= kWakeV2) {
             rb.asleep = false;
             rb.sleepTicks = 0;
+        }
+        if (!rb.asleep) ++awakeCount;
+    }
+    // Мир спит целиком — решать нечего: ни интеграции, ни пар, ни линков
+    // (линк с обеими спящими сторонами и так пропускается). Установившийся
+    // этаж с тысячами пропов стоит один проход пробуждения.
+    if (awakeCount == 0) return;
+
+    // Корзины строятся РАЗ НА ТИК (тело проходит ≤0.23 м за подшаг — запрос
+    // соседей поглощает дрейф в клетку); живость пары внутри resolve_pair
+    // всегда по текущим позициям. Снимок awake — начало тика: разбуженный
+    // парой участвует своими парами со следующего тика.
+    static thread_local std::vector<BinEntry> binEntries;
+    static thread_local std::vector<Entity> binBodies;
+    static thread_local std::vector<BinRun> binRuns;
+    binEntries.clear();
+    binBodies.clear();
+    binRuns.clear();
+    for (auto e : view) {
+        const auto& tr = view.get<Transform>(e);
+        const int cx = wrap_macro(floor_div(tr.pos.x, kCellSize));
+        const int cy = wrap_macro(floor_div(tr.pos.y, kCellSize));
+        const int cz = wrap_macro(floor_div(tr.pos.z, kCellSize));
+        const std::uint64_t key =
+            (static_cast<std::uint64_t>(tr.layer) << 32) |
+            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+        binEntries.push_back(
+            {key, static_cast<std::uint32_t>(binBodies.size())});
+        binBodies.push_back(e);
+    }
+    std::sort(binEntries.begin(), binEntries.end(),
+              [](const BinEntry& a, const BinEntry& b) {
+                  return a.key < b.key;
+              });
+    for (std::uint32_t i = 0; i < binEntries.size();) {
+        std::uint32_t j = i;
+        bool awake = false;
+        while (j < binEntries.size() &&
+               binEntries[j].key == binEntries[i].key) {
+            if (!view.get<RigidBody>(binBodies[binEntries[j].idx]).asleep)
+                awake = true;
+            ++j;
+        }
+        const Entity first = binBodies[binEntries[i].idx];
+        const auto& tr = view.get<Transform>(first);
+        binRuns.push_back({binEntries[i].key, i, j,
+                           wrap_macro(floor_div(tr.pos.x, kCellSize)),
+                           wrap_macro(floor_div(tr.pos.y, kCellSize)),
+                           wrap_macro(floor_div(tr.pos.z, kCellSize)),
+                           tr.layer, awake});
+        i = j;
+    }
+    auto find_run = [&](std::uint64_t key) -> std::uint32_t {
+        auto it = std::lower_bound(
+            binRuns.begin(), binRuns.end(), key,
+            [](const BinRun& r, std::uint64_t k) { return r.key < k; });
+        if (it == binRuns.end() || it->key != key) return 0xFFFFFFFFu;
+        return static_cast<std::uint32_t>(it - binRuns.begin());
+    };
+
+    // Пары СОСЕДНИХ клеток — РАЗ НА ТИК, слиянием: macro_index = x + 128y +
+    // 128²z, поэтому при фиксированном смещении ключ соседа = ключ + const,
+    // и отсортированные ключи сливаются двумя указателями за O(R) на
+    // смещение. 13 передних смещений дают каждую неупорядоченную пару клеток
+    // ровно один раз; кромка тора — редкий фолбэк на точечный поиск. Наивные
+    // 27 поисков НА ТЕЛО стоили 4.5 мс/тик на 4096 бодрых (замер 2026-08-21).
+    static thread_local std::vector<std::pair<std::uint32_t, std::uint32_t>>
+        runPairs;
+    runPairs.clear();
+    constexpr int kFwd[13][3] = {
+        {1, 0, 0},  {-1, 1, 0}, {0, 1, 0},  {1, 1, 0},
+        {-1, -1, 1}, {0, -1, 1}, {1, -1, 1},
+        {-1, 0, 1}, {0, 0, 1},  {1, 0, 1},
+        {-1, 1, 1}, {0, 1, 1},  {1, 1, 1},
+    };
+    for (const auto& o : kFwd) {
+        const std::int64_t delta =
+            o[0] + o[1] * kMacroDim +
+            o[2] * static_cast<std::int64_t>(kMacroDim) * kMacroDim;
+        std::uint32_t j = 0;
+        for (std::uint32_t i = 0; i < binRuns.size(); ++i) {
+            const BinRun& X = binRuns[i];
+            const bool edge =
+                (o[0] == 1 && X.cx == kMacroDim - 1) ||
+                (o[0] == -1 && X.cx == 0) ||
+                (o[1] == 1 && X.cy == kMacroDim - 1) ||
+                (o[1] == -1 && X.cy == 0) ||
+                (o[2] == 1 && X.cz == kMacroDim - 1);
+            if (edge) {
+                const std::uint64_t key =
+                    (static_cast<std::uint64_t>(X.layer) << 32) |
+                    static_cast<std::uint32_t>(
+                        macro_index(wrap_macro(X.cx + o[0]),
+                                    wrap_macro(X.cy + o[1]),
+                                    wrap_macro(X.cz + o[2])));
+                const std::uint32_t yi = find_run(key);
+                if (yi != 0xFFFFFFFFu &&
+                    (X.awake || binRuns[yi].awake))
+                    runPairs.push_back({i, yi});
+                continue;
+            }
+            const std::uint64_t nkey =
+                X.key + static_cast<std::uint64_t>(delta);
+            while (j < binRuns.size() && binRuns[j].key < nkey) ++j;
+            if (j < binRuns.size() && binRuns[j].key == nkey &&
+                (X.awake || binRuns[j].awake))
+                runPairs.push_back({i, j});
         }
     }
 
@@ -339,6 +577,24 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
             tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
             tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+        }
+
+        // Фаза пар: готовый список пар клеток (построен раз на тик выше) +
+        // пары внутри бодрых клеток. Спящая пара внутри resolve_pair — ноль.
+        for (const BinRun& X : binRuns) {
+            if (!X.awake) continue;
+            for (std::uint32_t a = X.lo; a < X.hi; ++a)
+                for (std::uint32_t b = a + 1; b < X.hi; ++b)
+                    resolve_pair(binBodies[binEntries[a].idx],
+                                 binBodies[binEntries[b].idx]);
+        }
+        for (const auto& pr : runPairs) {
+            const BinRun& X = binRuns[pr.first];
+            const BinRun& Y = binRuns[pr.second];
+            for (std::uint32_t a = X.lo; a < X.hi; ++a)
+                for (std::uint32_t b = Y.lo; b < Y.hi; ++b)
+                    resolve_pair(binBodies[binEntries[a].idx],
+                                 binBodies[binEntries[b].idx]);
         }
 
         // Фаза линков: kJointIters проходов sequential impulses по всем

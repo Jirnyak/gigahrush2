@@ -389,8 +389,11 @@ static void test_rigid_chain_hangs_and_cuts() {
         rb.restitution = 0.35f;
         rb.friction = 0.6f;
         Entity ball = reg.create();
+        // 2 см сдвига на звено: идеально вертикальная цепь после разруба
+        // складывается в устойчивую БАШНЮ из шаров (вырожденная симметрия,
+        // с шар-шар контактом это честно) — асимметрия её валит, как в жизни.
         reg.emplace<Transform>(
-            ball, Transform{anchor - vec3{0.0f, 0.0f,
+            ball, Transform{anchor - vec3{-0.02f * static_cast<float>(i), 0.0f,
                                           restLen * static_cast<float>(i + 1)},
                             g});
         reg.emplace<Velocity>(ball);
@@ -450,6 +453,62 @@ static void test_rigid_chain_hangs_and_cuts() {
     for (int i = 1; i < kN; ++i)
         if (linkDist(i, i - 1) > restLen * 1.5f) stillConnected = false;
     CHECK(stillConnected);
+}
+
+// Инкремент 4 ([markoaudit/plans/ragdoll.md]): шар-шар через клеточный
+// биннинг. Падающий шар БУДИТ спящего касанием (куча оживает), пара
+// разрешается импульсом (не проходят друг сквозь друга): идеально соосная
+// пара встаёт стопкой 2r, и стопка засыпает (touchedTick от пары — опора).
+static void test_rigid_ball_ball_wakes_and_stacks() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    const float radius = 0.35f;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+    auto make_ball = [&](vec3 pos) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.2f;
+        rb.friction = 0.6f;
+        Entity e = reg.create();
+        reg.emplace<Transform>(e, Transform{pos, g});
+        reg.emplace<Velocity>(e);
+        reg.emplace<RigidBody>(e, rb);
+        return e;
+    };
+
+    const float cx = 10.5f * kCellSize, cy = 10.5f * kCellSize;
+    Entity bottom = make_ball(vec3{cx, cy, floorTop + radius + 0.1f});
+    for (int i = 0; i < 3 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    CHECK(reg.get<RigidBody>(bottom).asleep);
+
+    // Второй шар точно сверху, с небольшой высоты: 0.6 м зазора — падение
+    // ~44 тика, к 60-му контакт гарантирован.
+    Entity top = make_ball(vec3{cx, cy, floorTop + 3.0f * radius + 0.6f});
+    for (int i = 0; i < 60; ++i) rigid_body_step(reg, stack, kSimDt);
+    // Касание разбудило спящего.
+    CHECK(!reg.get<RigidBody>(bottom).asleep);
+
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    const float zBot = reg.get<Transform>(bottom).pos.z;
+    const float zTop = reg.get<Transform>(top).pos.z;
+    // Не прошли друг сквозь друга: либо стопка 2r, либо скатился рядом на
+    // радиус — в обоих случаях верхний НЕ внутри нижнего.
+    const vec3 d = reg.get<Transform>(top).pos - reg.get<Transform>(bottom).pos;
+    CHECK(length(d) > 1.8f * radius);
+    CHECK(zBot < floorTop + radius + 0.05f); // нижний остался на полу
+    CHECK(zTop > zBot - 0.05f);              // верхний не провалился под него
+    CHECK(reg.get<RigidBody>(bottom).asleep); // стопка/пара уснула
+    CHECK(reg.get<RigidBody>(top).asleep);
 }
 
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
@@ -1118,6 +1177,7 @@ int main() {
     test_rigid_ball_settles_and_sleeps();
     test_rigid_box_lies_flat();
     test_rigid_chain_hangs_and_cuts();
+    test_rigid_ball_ball_wakes_and_stacks();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();

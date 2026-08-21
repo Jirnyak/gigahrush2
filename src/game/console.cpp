@@ -840,8 +840,11 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
         rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
         rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
 
-        const vec3 pos =
-            anchor - vec3{0.0f, 0.0f, restLen * static_cast<float>(i + 1)};
+        // Лёгкий сдвиг на звено: идеально вертикальная цепь с шар-шар
+        // контактом складывается в устойчивую башню (вырожденная симметрия).
+        const vec3 pos = anchor +
+            fwd * (0.03f * static_cast<float>(i)) -
+            vec3{0.0f, 0.0f, restLen * static_cast<float>(i + 1)};
         Entity ball = ctx.ecs->create();
         ctx.ecs->emplace<Transform>(ball, Transform{pos, tr->layer});
         ctx.ecs->emplace<AABB>(ball, AABB{vec3{radius, radius, radius}});
