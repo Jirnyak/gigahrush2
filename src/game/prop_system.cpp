@@ -1,5 +1,6 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "game/combat.h"          // Charge/ChargeArmed — проп-заряд от урона
 #include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
 #include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
@@ -287,7 +288,8 @@ void rebuild_anchor_bins(Registry& reg, AnchorBins& ab) {
 bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
                                 const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
-                                ParticleBurstQueue* bursts, std::uint32_t seed)
+                                ParticleBurstQueue* bursts, std::uint32_t seed,
+                                Entity source)
 {
     // Соседство ±1 клетки покрывает радиус попадания только пока он не
     // перерос клетку — контракт for_each_near ([sim/cell_bins.h]); заявлен
@@ -333,6 +335,16 @@ bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPo
     });
 
     if (hitEntity != entt::null) {
+        // Заряд с триггером «от урона»: выстрел ВЗВОДИТ, а не срывает —
+        // atTick=0 значит «уже пора», charge_step взорвёт этим же тиком.
+        // Атрибуция килла — стрелявшему (source), не бочке.
+        if (const Charge* c = reg.try_get<Charge>(hitEntity);
+            c && static_cast<ChargeTrigger>(c->trigger) ==
+                     ChargeTrigger::Damage &&
+            !reg.all_of<ChargeArmed>(hitEntity)) {
+            reg.emplace<ChargeArmed>(hitEntity, ChargeArmed{0u, source});
+            return true;
+        }
         vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};
         detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0,
                            bus, bursts, seed);
@@ -505,6 +517,11 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
     // Universal mass from the table ([ecs/components.h] Mass): a falling or
     // thrown prop hits with E = m*v^2/2 like everything else in the game.
     reg.emplace_or_replace<Mass>(e, Mass{static_cast<float>(d.massG) * 0.001f});
+    // Строка-заряд ([combat.h] Charge): потенциал копируется на сущность.
+    // С триггером damage выстрел ВЗВОДИТ такой проп вместо детача
+    // (check_projectile_prop_hits ниже), детонацию решает charge_step.
+    if (prop_is_charge(d))
+        reg.emplace<Charge>(e, Charge{d.explosiveG, d.chargeTrigger, 0});
     // Authored size: the unit shape is scaled to the table's exact metres.
     if (auto* pm = reg.try_get<PropMesh>(e))
         pm->scale = vec3{static_cast<float>(d.sizeXMm) * 0.001f,

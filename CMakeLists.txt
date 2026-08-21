@@ -1203,7 +1203,9 @@ if(GIGA_BUILD_TESTS)
     # ChargeArmed/charge_step, вывод урона и радиуса из массы ВВ);
     # test_grenade мигрирован, grenade_advance мёртв, валидация таблицы
     # различает метательное (dmg=0, правда на пропе) и стволы.
-        PASS_REGULAR_EXPRESSION "game_test: 246475 checks, 0 failures")
+    # 246475 -> 246488 (+13) on 2026-08-22: триггер «от урона» — бочка строкой
+    # CSV: выстрел взводит (не детач), рвёт тот же charge_step/detonate.
+        PASS_REGULAR_EXPRESSION "game_test: 246488 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

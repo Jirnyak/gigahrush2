@@ -10,3 +10,4 @@ toilet_pan,Унитаз,CylinderZ,SimpleFall,None,0,3,880,890,870,2500,35000,0.4
 bed_cot,Койка,Box,SimpleFall,None,0,3,300,340,420,2500,40000,1.9,0.85,0.5,0,0,0,none,0,none
 supply_crate,Ящик,Box,SimpleFall,Crate,0,4,420,460,380,2400,30000,1.1,1.1,0.9,0,0,0,none,0,none
 grenade,Граната Ф-1,CylinderZ,RagdollRoll,None,0,19,420,500,280,0,600,0.06,0.06,0.12,0,0,0,none,60,none
+fuel_barrel,Бочка с горючим,CylinderZ,RagdollRoll,None,0,19,700,280,200,0,170000,0.6,0.6,0.9,0,0,0,none,150,damage

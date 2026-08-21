@@ -1925,12 +1925,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
     // перед вызовами: destroy пропа перетряхивает пулы Transform/Velocity,
     // по которым идёт view.
     {
-        struct PropShot { Entity e; vec3 pos; vec3 vel; };
+        struct PropShot { Entity e; vec3 pos; vec3 vel; Entity src; };
         std::vector<PropShot> flying;
         for (auto e : reg.view<Projectile, Transform, Velocity>()) {
             const Transform& tr = reg.get<Transform>(e);
             if (tr.layer != layer) continue;
-            flying.push_back(PropShot{e, tr.pos, reg.get<Velocity>(e).v});
+            flying.push_back(PropShot{e, tr.pos, reg.get<Velocity>(e).v,
+                                      reg.get<Projectile>(e).source});
         }
         for (const PropShot& s : flying) {
             // kProjHitRadius — тот же радиус, каким снаряд трогает тела:
@@ -1944,7 +1945,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             if (!check_projectile_prop_hits(
                     reg, layer, s.pos, s.vel, kProjHitRadius, bus, particles,
                     static_cast<std::uint32_t>(tick) ^
-                        static_cast<std::uint32_t>(entt::to_integral(s.e))))
+                        static_cast<std::uint32_t>(entt::to_integral(s.e)),
+                    s.src))
                 continue;
             // Снаряд гибнет как при h.onWall: проп его остановил. Попадание
             // считается — счётчик hits и так меряет «во что-то попал».

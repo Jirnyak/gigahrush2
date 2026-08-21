@@ -4060,6 +4060,68 @@ static void test_grenade() {
                      "(same pair without the wall: %d vs %d)\n",
                      4.0f, openA, wallB, openA2, wallB2);
     }
+
+    // ---- 8. ЗАРЯД ОТ УРОНА: выстрел по бочке взводит, charge_step рвёт --------
+    //
+    // ChargeTrigger::Damage — вторая строка данных той же системы: бочка
+    // приезжает из props.csv со своим потенциалом (spawn_prop_from_id
+    // цепляет Charge), пуля ВЗВОДИТ её вместо детача (atTick=0 — «уже
+    // пора»), рвёт тот же charge_step тем же detonate(). Ноль нового кода
+    // на вид взрывчатки — только строка CSV.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        bus.init();
+
+        SubVoxelAnchor anchor{};
+        anchor.cx = 22;
+        anchor.cy = 20;
+        anchor.cz = 19;   // бетонный пол полой комнаты, построенный выше
+        anchor.subX = 4;
+        anchor.subY = 4;
+        anchor.subZ = 7;
+        anchor.face = 0;
+        const vec3 bpos{45.0f, 41.0f, 40.5f};
+        const PropId barrelId = prop_id_by_string("fuel_barrel");
+        CHECK(prop_valid(barrelId));
+        Entity barrel = spawn_prop_from_id(reg, stack.layer(layer), bpos,
+                                           anchor, barrelId, layer);
+        CHECK(reg.valid(barrel));
+        CHECK(reg.all_of<Charge>(barrel));   // потенциал приехал со строки
+        CHECK(static_cast<ChargeTrigger>(reg.get<Charge>(barrel).trigger) ==
+              ChargeTrigger::Damage);
+
+        Entity shooter = reg.create();       // атрибуция — стрелявшему
+        Entity mob = reg.create();
+        Transform bt;
+        bt.pos = vec3{bpos.x + 2.0f, bpos.y, bpos.z};
+        bt.layer = layer;
+        reg.emplace<Transform>(mob, bt);
+        reg.emplace<MobRef>(mob, MobRef{0, 1, 4000, 4000});
+
+        // Пуля в бочку: заряд взводится, проп НЕ детачится и НЕ гибнет.
+        CHECK(check_projectile_prop_hits(reg, layer, bpos,
+                                         vec3{0.0f, 0.0f, -40.0f},
+                                         kProjHitRadius, bus, nullptr, 7u,
+                                         shooter));
+        CHECK(reg.valid(barrel));
+        CHECK(reg.all_of<StaticPropTag>(barrel));
+        CHECK(reg.all_of<ChargeArmed>(barrel));
+        CHECK(reg.get<ChargeArmed>(barrel).source == shooter);
+
+        // Тем же тиком фитиль «уже пора» — charge_step взрывает и убирает.
+        CHECK(charge_step(reg, pool, stack, layer, 960u) == 1);
+        CHECK(!reg.valid(barrel));
+        CHECK(reg.get<MobRef>(mob).hp < 4000);   // осколки достали
+        // Вывод из 150 г: 150 × 1.5 = 225 в центре.
+        CHECK(charge_dmg(150) == 225);
+        std::fprintf(stderr,
+                     "[grenade] barrel: shot arms, charge_step detonates "
+                     "(dmg %d, R %.1f m)\n",
+                     charge_dmg(150), charge_radius_m(150));
+    }
 }
 
 // РИКОШЕТ: пуля по касательной от твёрдой грани живёт и летит дальше;

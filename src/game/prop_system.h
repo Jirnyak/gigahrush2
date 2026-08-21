@@ -184,11 +184,14 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
                                                  std::vector<PropMeshInstance>& out);
 
 
+// `source` — стрелявший, только для атрибуции килла заряда-от-урона
+// (бочка: выстрел взводит ChargeArmed вместо детача; [combat.h] Charge).
 bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
                                 const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts = nullptr,
-                                std::uint32_t seed = 0);
+                                std::uint32_t seed = 0,
+                                Entity source = entt::null);
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
 // `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
