@@ -4311,23 +4311,20 @@ int main(int argc, char** argv) {
                         // ящик больше не пылесос, он ХРАНИЛИЩЕ: можно и брать,
                         // и класть ([container.h] condition — износ едет).
                         if (!handled) {
-                            Entity bestBox = entt::null;
-                            float bestD2 =
-                                game::kContainerReach * game::kContainerReach;
-                            for (auto ce :
-                                 reg.view<game::Container, const Transform>()) {
-                                const Transform& bt =
-                                    reg.get<const Transform>(ce);
-                                if (bt.layer != activeLayer) continue;
-                                const float dx = wrap_delta_f(ppos.x, bt.pos.x,
-                                                              kWorldExtent);
-                                const float dy = wrap_delta_f(ppos.y, bt.pos.y,
-                                                              kWorldExtent);
-                                const float dz = wrap_delta_f(ppos.z, bt.pos.z,
-                                                              kWorldExtent);
-                                const float d2 = dx * dx + dy * dy + dz * dz;
-                                if (d2 < bestD2) { bestD2 = d2; bestBox = ce; }
-                            }
+                            // Ящик — обычный Interactable (S14.1 B2): кастомный
+                            // перебор по дистанции умер, ищет тот же
+                            // find_nearest_interactable, что трупы и терминалы;
+                            // reach — из interactables.csv.
+                            const game::InteractionHit crateHit =
+                                game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::Crate,
+                                    game::interact_def(game::InteractKind::Crate)
+                                        .reachM);
+                            Entity bestBox =
+                                crateHit.hit &&
+                                        reg.all_of<game::Container>(crateHit.entity)
+                                    ? crateHit.entity
+                                    : entt::null;
                             if (bestBox != entt::null) {
                                 handled = true;
                                 lootEntity = bestBox;
