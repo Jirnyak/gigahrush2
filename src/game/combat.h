@@ -54,6 +54,10 @@
 
 namespace giga::game {
 
+// Строка таблицы пропов ([prop_table.h]) — forward: заголовок минимален,
+// enum с явным подлежащим типом декларируется без включения таблицы.
+enum class PropId : std::uint16_t;
+
 inline std::uint64_t cell_key(int x, int y, int z) {
     return (static_cast<std::uint64_t>(x & 0xFFFF) << 32) |
            (static_cast<std::uint64_t>(y & 0xFFFF) << 16) |
@@ -378,21 +382,11 @@ struct Projectile {
     // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
     // on the 18 rows of the reference's data/psi.ts.
     std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
-    // Blast radius in DECIMETRES, 0 for anything that is not explosive.
-    //
-    // Carried here for the third time and for the third identical reason (`proj`
-    // and `channel` above): the thrower may be dead — indeed a grenade dropped at
-    // your own feet is *expected* to outlive you — and what a detonation does must
-    // not depend on whether whoever threw it survived the fuse.
-    //
-    // Decimetres and not metres, because a u8 of metres cannot say 4.5 m and the
-    // whole scale of interest is 1..10 m. 0.1 m of resolution over a 25.5 m ceiling.
-    //
-    // It is also the ONE field that decides a detonation happens at all: `ttlMs`
-    // reaching zero is the fuse, and a Bullet reaching the same zero is a spent shot
-    // that vanishes. Same timer, two meanings, told apart by `proj` — see
-    // `projectile_step`.
-    std::uint8_t blastDm = 0;
+    // Поля blastDm здесь больше НЕТ (2026-08-22): граната перестала быть
+    // снарядом. Метательный заряд — RagdollRoll-проп рагдолл-ядра со
+    // взведённым фитилём (Charge + ChargeArmed ниже), его отскок решает
+    // rigid по субвокселям и материальным парам, а не второй интегратор;
+    // ttlMs у снаряда снова означает ровно одно — предохранитель полёта.
 };
 
 // Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL
@@ -489,6 +483,47 @@ inline constexpr float kMeleeReachSlack = 0.9f;   // metres
 inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres
+
+// ---- ЗАРЯД: проп, который взрывается --------------------------------------
+//
+// Решение владельца 2026-08-21: «пропы в целом могут взрываться, расширяемо».
+// Потенциал заряда — строка props.csv (explosive_g, charge_trigger,
+// [prop_table.h] ChargeTrigger); Charge — копия потенциала на сущности,
+// ChargeArmed — догорающий фитиль. Новая взрывчатка = строка CSV, ноль кода.
+//
+// Урон и радиус ВЫВОДЯТСЯ из массы ВВ (S11), не назначаются. Калибровка —
+// Ф-1 (60 г ТНТ): 90 урона в центре и 5.0 м осколочного радиуса — числа
+// прежней оружейной таблицы, баланс сохранён. Урон ∝ m: энергия E = m·q
+// (q ≈ 4.6 МДж/кг) линейна по массе. Радиус ∝ √m: осколков ∝ m, их
+// плотность на сфере ∝ m/R², порог поражения на кромке — константа →
+// R = c·√m.
+inline constexpr float kChargeDmgPerGram = 90.0f / 60.0f;
+inline constexpr float kChargeRadiusMPerSqrtG = 5.0f / 7.7459667f; // 5 м/√60 г
+
+inline std::int16_t charge_dmg(std::uint16_t explosiveG) {
+    return static_cast<std::int16_t>(
+        static_cast<float>(explosiveG) * kChargeDmgPerGram + 0.5f);
+}
+inline float charge_radius_m(std::uint16_t explosiveG) {
+    return kChargeRadiusMPerSqrtG * std::sqrt(static_cast<float>(explosiveG));
+}
+
+// Потенциал заряда на сущности-пропе. POD-копия строки таблицы, как PropLight:
+// строка может смениться при перегенерации, сущность живёт со своей правдой.
+struct Charge {
+    std::uint16_t explosiveG = 0; // масса ВВ, граммы — единственный источник
+    std::uint8_t trigger = 0;     // ChargeTrigger ([prop_table.h])
+    std::uint8_t channel =
+        static_cast<std::uint8_t>(DamageChannel::Kinetic); // чем бьют осколки
+};
+
+// Взведён: фитиль догорает до сим-тика atTick, дальше detonate() и смерть
+// пропа. source — атрибуция килла, никогда не исключение (правило владельца
+// 2026-08-12: у вылетевшего заряда нет команды).
+struct ChargeArmed {
+    std::uint64_t atTick = 0;
+    Entity source = entt::null;
+};
 
 // РЕШЕНИЕ ВЛАДЕЛЬЦА 2026-08-16, не «чинить»: пуля летит честно весь TTL, и
 // быстрейшие стволы (сегодня 32..44 cells/s x 4000 мс = 256..352 м) перелетают
@@ -735,15 +770,20 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // authored per weapon rather than the shared 4 s backstop, and it carries a blast
 // radius. Only the muzzle offset is shared.
 //
-// `fuseMs` becomes `Projectile::ttlMs` outright. There is deliberately no second
-// timer: the fuse IS the lifetime, and a grenade that has not detonated has not
-// expired. Anything else would be two clocks that can disagree — the defect
-// [combat.h]'s header note calls "one cooldown decrement".
-void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
-                   const vec3& dir, std::int16_t dmg,
-                   std::uint16_t projSpeedMmps, Entity source,
-                   std::uint8_t blastDm, std::uint16_t fuseMs,
-                   std::uint8_t channel = 0);
+// 2026-08-22: бросок рождает НЕ снаряд, а RagdollRoll-проп рагдолл-ядра со
+// взведённым фитилём (Charge + ChargeArmed). Оружейная строка называет проп
+// (RangedDef::thrownPropId), проп несёт массу ВВ; урон и радиус выводятся
+// при детонации (charge_dmg/charge_radius_m). Второй интегратор отскока
+// (grenade_advance, макроклеточный — улика S2 «отскок от прокарванной дыры»)
+// умер: гранату катает rigid по субвокселям и материальным парам, и она
+// честно отскакивает от тел (решение владельца 2026-08-22 — прежний пролёт
+// сквозь плечо был костылём снарядного пути).
+// Возвращает сущность заряда (или entt::null при вырожденном dir).
+Entity spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                     const vec3& dir, PropId prop,
+                     std::uint16_t projSpeedMmps, Entity source,
+                     std::uint16_t fuseMs, std::uint64_t tick,
+                     std::uint8_t channel = 0);
 
 // The camera holder throws the best explosive in its inventory. Sibling of
 // player_ranged_step, and NOT a branch inside it, because a throw and a shot agree
@@ -761,17 +801,16 @@ void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
 // AFTER player_ranged_step in the sim order, on the same tick, or the timer runs at
 // half speed on any tick a throw is wanted.
 //
-// No `dt`, no `tick`, no `NoiseField` — the three parameters its siblings carry and
-// this one would not read. A throw ages no timer of its own, needs no random seed
-// (there is no spread cone: a thrown weight goes where you are looking), and is
-// nearly silent; what a floor hears is the detonation, published by `projectile_step`
-// three seconds later and somewhere else. An unread parameter is how a field becomes
-// write-only, which is the defect both `Projectile::proj` and `RangedDef::channel`
-// had to be dug out of.
+// No `dt`, no `NoiseField` — параметры, которых бросок не читает. A throw ages
+// no timer of its own, needs no random seed (there is no spread cone: a thrown
+// weight goes where you are looking), and is nearly silent; what a floor hears
+// is the detonation, published by `charge_step` three seconds later and
+// somewhere else. `tick` появился 2026-08-22 вместе с фитилём: ChargeArmed
+// хранит абсолютный сим-тик детонации, и взводит его бросающий.
 //
 // Returns 1 when a grenade actually left the hand.
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow);
+                                bool wantThrow, std::uint64_t tick);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.
@@ -914,6 +953,15 @@ bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
               std::uint32_t seedSalt, CarveProposalQueue* carves = nullptr,
               ParticleBurstQueue* particles = nullptr,
               NoiseField* noise = nullptr);
+
+// Фитили: взведённый заряд (Charge + ChargeArmed), чей atTick наступил,
+// детонирует примитивом detonate() и умирает. Сбор — потом взрыв
+// (apply_damage перетряхивает пулы под view). Возвращает число детонаций.
+std::uint32_t charge_step(Registry& reg, NpcPool& pool, LevelStack& stack,
+                          LayerId layer, std::uint64_t tick,
+                          CarveProposalQueue* carves = nullptr,
+                          ParticleBurstQueue* particles = nullptr,
+                          NoiseField* noise = nullptr);
 
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               LevelStack& stack, LayerId layer, float dt,

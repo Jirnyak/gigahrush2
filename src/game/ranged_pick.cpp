@@ -1,4 +1,5 @@
 #include "game/ranged_table.h"
+#include "game/prop_table.h" // prop_def — сила метательного = масса ВВ пропа
 
 namespace giga::game {
 
@@ -46,8 +47,11 @@ ItemId equipped_throwable(const Inventory& inv) {
         // throw a launcher. If these two predicates ever stop being complements, a
         // weapon becomes either unpickable or pickable twice.
         if (!ranged_is_thrown(sl.item)) continue;
-        const float score = static_cast<float>(d->dmg) *
-                            static_cast<float>(d->blastDm);
+        // Сила метательного — масса ВВ его пропа: урон и радиус оба
+        // монотонны по ней ([combat.h] charge_dmg/charge_radius_m), так что
+        // порядок «лучший заряд» тот же, что давал прежний dmg×blast.
+        const float score = static_cast<float>(
+            prop_def(static_cast<PropId>(d->thrownPropId)).explosiveG);
         if (score > bestScore) {
             bestScore = score;
             best = sl.item;

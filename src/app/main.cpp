@@ -3833,14 +3833,20 @@ int main(int argc, char** argv) {
                                     pool.inventory(nrg->id).slots[0] =
                                         game::ItemSlot{gid, 3};
                                     grenForced = true;
+                                    const game::PropDef& gp = game::prop_def(
+                                        static_cast<game::PropId>(
+                                            gd.thrownPropId));
                                     std::fprintf(
                                         stderr,
-                                        "[gren] FORCE item=%u name=%s dmg=%u "
-                                        "blast=%.1f m fuse=%.1f s\n",
+                                        "[gren] FORCE item=%u name=%s dmg=%d "
+                                        "blast=%.1f m fuse=%.1f s (ВВ %u г)\n",
                                         static_cast<unsigned>(gid),
                                         game::item_name(gid),
-                                        static_cast<unsigned>(gd.dmg),
-                                        gd.blastDm * 0.1f, gd.fuseDs * 0.1f);
+                                        static_cast<int>(
+                                            game::charge_dmg(gp.explosiveG)),
+                                        game::charge_radius_m(gp.explosiveG),
+                                        gd.fuseDs * 0.1f,
+                                        static_cast<unsigned>(gp.explosiveG));
                                 }
                             }
                         }
@@ -4645,7 +4651,7 @@ int main(int argc, char** argv) {
                 if (throwWanted) {
                     throwWanted = false;
                     if (shell.playing() && game::player_throw_step(reg, pool, activeLayer,
-                                                           true) > 0)
+                                                           true, simTick) > 0)
                         ++shots;
                 }
                 game::player_melee_step(
@@ -4679,6 +4685,12 @@ int main(int argc, char** argv) {
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
                     &playerStatus, player, &combatCarves, &stainDirty,
                     &particleBursts, &noiseField);
+                // Фитили проп-зарядов: граната — RagdollRoll-проп, её
+                // детонацию решает charge_step тем же примитивом detonate()
+                // и в те же очереди (carve/частицы/шум), что и снаряды.
+                meleeHits += game::charge_step(reg, pool, stack, activeLayer,
+                                               simTick, &combatCarves,
+                                               &particleBursts, &noiseField);
                 if (bus.cycle_count(game::EventType::PropDetached) >
                     propDetachedBeforeShots)
                     propPassNeedsRebuild = true;

@@ -57,7 +57,7 @@ static void test_shot_carves_updown() {
         reg.emplace<AABB>(b, AABB{vec3{0.05f, 0.05f, 0.05f}});
         reg.emplace<Projectile>(
             b, Projectile{entt::null, 100, 5000, 0,
-                          static_cast<std::uint8_t>(ProjType::Bullet), 0, 0});
+                          static_cast<std::uint8_t>(ProjType::Bullet), 0});
 
         CarveProposalQueue carves;
         CarveScratch scratch;

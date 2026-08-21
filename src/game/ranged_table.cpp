@@ -6,65 +6,65 @@ namespace giga::game {
 
 const std::array<RangedDef, kRangedCount> kRangedTable = {{
     // [ 0] makarov                  ammo_9mm x1
-    RangedDef{ 22, 520, 22000, 120, 1000, 12, 1, 8, 0, 0, 0, 0 },
+    RangedDef{ 22, 520, 22000, 120, 1000, 12, 1, 8, 0, 0, 255, 0 },
     // [ 1] tt_pistol                ammo_762tt x1
-    RangedDef{ 34, 550, 23000, 500, 1000, 11, 1, 8, 0, 0, 0, 0 },
+    RangedDef{ 34, 550, 23000, 500, 1000, 11, 1, 8, 0, 0, 255, 0 },
     // [ 2] nagant                   ammo_nagant x1
-    RangedDef{ 48, 1250, 23000, 60, 1000, 20, 1, 7, 0, 0, 0, 0 },
+    RangedDef{ 48, 1250, 23000, 60, 1000, 20, 1, 7, 0, 0, 255, 0 },
     // [ 3] homemade_pistol          ammo_9mm x1
-    RangedDef{ 27, 920, 15000, 2000, 1000, 12, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 27, 920, 15000, 2000, 1000, 12, 1, 1, 0, 0, 255, 0 },
     // [ 4] karkarov_pistol          ammo_9mm x1
-    RangedDef{ 18, 480, 21000, 350, 1000, 12, 1, 8, 0, 0, 0, 0 },
+    RangedDef{ 18, 480, 21000, 350, 1000, 12, 1, 8, 0, 0, 255, 0 },
     // [ 5] zatychkin_pistol         ammo_9mm x1
-    RangedDef{ 17, 180, 20000, 800, 1000, 12, 1, 8, 0, 0, 0, 0 },
+    RangedDef{ 17, 180, 20000, 800, 1000, 12, 1, 8, 0, 0, 255, 0 },
     // [ 6] ppsh                     ammo_9mm x1
-    RangedDef{ 8, 70, 18000, 1500, 1000, 12, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 8, 70, 18000, 1500, 1000, 12, 1, 1, 0, 0, 255, 0 },
     // [ 7] slyoznev_pps41           ammo_9mm x1
-    RangedDef{ 7, 55, 18000, 1900, 1000, 12, 1, 71, 0, 0, 0, 0 },
+    RangedDef{ 7, 55, 18000, 1900, 1000, 12, 1, 71, 0, 0, 255, 0 },
     // [ 8] ak47                     ammo_762 x1
-    RangedDef{ 26, 140, 25000, 900, 1000, 10, 1, 30, 0, 0, 0, 0 },
+    RangedDef{ 26, 140, 25000, 900, 1000, 10, 1, 30, 0, 0, 255, 0 },
     // [ 9] eralashnikov_auto        ammo_762 x1
-    RangedDef{ 23, 120, 24000, 1100, 1000, 10, 1, 30, 0, 0, 0, 0 },
+    RangedDef{ 23, 120, 24000, 1100, 1000, 10, 1, 30, 0, 0, 255, 0 },
     // [10] machinegun               ammo_belt x1
-    RangedDef{ 13, 50, 21000, 2000, 1000, 13, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 13, 50, 21000, 2000, 1000, 13, 1, 1, 0, 0, 255, 0 },
     // [11] rpl23_lmg                ammo_belt x1
-    RangedDef{ 14, 60, 22000, 1700, 1000, 13, 1, 100, 0, 0, 0, 0 },
+    RangedDef{ 14, 60, 22000, 1700, 1000, 13, 1, 100, 0, 0, 255, 0 },
     // [12] p41_heavy_mg             ammo_belt x1
-    RangedDef{ 18, 45, 21000, 2400, 1000, 13, 1, 100, 0, 0, 0, 0 },
+    RangedDef{ 18, 45, 21000, 2400, 1000, 13, 1, 100, 0, 0, 255, 0 },
     // [13] nosin_rifle              ammo_762 x1
-    RangedDef{ 55, 1450, 26000, 180, 1000, 10, 1, 5, 0, 0, 0, 0 },
+    RangedDef{ 55, 1450, 26000, 180, 1000, 10, 1, 5, 0, 0, 255, 0 },
     // [14] moskvin_rifle            ammo_762 x1
-    RangedDef{ 76, 1900, 29000, 60, 1000, 10, 1, 5, 0, 0, 0, 0 },
+    RangedDef{ 76, 1900, 29000, 60, 1000, 10, 1, 5, 0, 0, 255, 0 },
     // [15] tanev_svt40              ammo_762 x1
-    RangedDef{ 105, 2550, 33000, 20, 1000, 10, 1, 10, 0, 0, 0, 0 },
+    RangedDef{ 105, 2550, 33000, 20, 1000, 10, 1, 10, 0, 0, 255, 0 },
     // [16] losyash_rifle            rifle_bolt_pack x1
-    RangedDef{ 140, 2850, 32000, 20, 1000, 333, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 140, 2850, 32000, 20, 1000, 333, 1, 1, 0, 0, 255, 0 },
     // [17] ptrs_liquidator          ammo_harpoon x1
-    RangedDef{ 170, 4250, 34000, 15, 1000, 18, 1, 5, 0, 0, 0, 0 },
+    RangedDef{ 170, 4250, 34000, 15, 1000, 18, 1, 5, 0, 0, 255, 0 },
     // [18] shotgun                  ammo_shells x7
-    RangedDef{ 12, 1200, 15000, 3400, 1000, 23, 7, 1, 0, 0, 0, 0 },
+    RangedDef{ 12, 1200, 15000, 3400, 1000, 23, 7, 1, 0, 0, 255, 0 },
     // [19] toz_shotgun              ammo_shells x8
-    RangedDef{ 11, 1600, 20000, 1300, 1000, 23, 8, 2, 0, 0, 0, 0 },
+    RangedDef{ 11, 1600, 20000, 1300, 1000, 23, 8, 2, 0, 0, 255, 0 },
     // [20] chizh3_shotgun           ammo_shells x8
-    RangedDef{ 13, 1000, 17000, 2400, 1000, 23, 8, 2, 0, 0, 0, 0 },
+    RangedDef{ 13, 1000, 17000, 2400, 1000, 23, 8, 2, 0, 0, 255, 0 },
     // [21] conscripts_doublebarrel  ammo_shells x7
-    RangedDef{ 10, 1450, 15000, 2800, 1000, 23, 7, 2, 0, 0, 0, 0 },
+    RangedDef{ 10, 1450, 15000, 2800, 1000, 23, 7, 2, 0, 0, 255, 0 },
     // [22] rb91_auto_shotgun        ammo_shells x9
-    RangedDef{ 11, 650, 16000, 3000, 1000, 23, 9, 10, 0, 0, 0, 0 },
+    RangedDef{ 11, 650, 16000, 3000, 1000, 23, 9, 10, 0, 0, 255, 0 },
     // [23] granit4u_belt_shotgun    ammo_shells x12
-    RangedDef{ 8, 2350, 14000, 4600, 1000, 23, 12, 20, 0, 0, 0, 0 },
+    RangedDef{ 8, 2350, 14000, 4600, 1000, 23, 12, 20, 0, 0, 255, 0 },
     // [24] pushkin_shotgun          ammo_shells x6
-    RangedDef{ 14, 820, 19000, 1200, 1000, 23, 6, 6, 0, 0, 0, 0 },
+    RangedDef{ 14, 820, 19000, 1200, 1000, 23, 6, 6, 0, 0, 255, 0 },
     // [25] nailgun                  ammo_nails x1
-    RangedDef{ 14, 330, 20000, 140, 1000, 21, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 14, 330, 20000, 140, 1000, 21, 1, 1, 0, 0, 255, 0 },
     // [26] harpoon_gun              ammo_harpoon x1
-    RangedDef{ 88, 2350, 18000, 30, 1000, 18, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 88, 2350, 18000, 30, 1000, 18, 1, 1, 0, 0, 255, 0 },
     // [27] gauss                    ammo_energy x1
-    RangedDef{ 180, 2600, 44000, 0, 1000, 16, 1, 1, 0, 0, 0, 0 },
+    RangedDef{ 180, 2600, 44000, 0, 1000, 16, 1, 1, 0, 0, 255, 0 },
     // [28] plasma                   ammo_energy x1
-    RangedDef{ 26, 160, 14000, 1800, 1000, 16, 1, 1, 0, 0, 0, 0 },
-    // [29] grenade                  grenade x1 blast 5.0 m fuse 3.0 s
-    RangedDef{ 90, 1200, 8000, 300, 0, 172, 1, 1, 0, 2, 50, 30 },
+    RangedDef{ 26, 160, 14000, 1800, 1000, 16, 1, 1, 0, 0, 255, 0 },
+    // [29] grenade                  grenade x1 prop grenade fuse 3.0 s
+    RangedDef{ 0, 1200, 8000, 300, 0, 172, 1, 1, 0, 2, 10, 30 },
 }};
 
 // Index by ItemId, ONE-BASED: 0 means "not a ranged weapon" and N

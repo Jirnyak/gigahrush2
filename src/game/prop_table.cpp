@@ -26,7 +26,7 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     // [9] supply_crate
     PropDef{ 30000, 0, 0, 6, 0, 4, 0, 420, 460, 380, 2400, 1100, 1100, 900, 0, 0, 0, 0, 0 },
     // [10] grenade
-    PropDef{ 600, 3, 1, 255, 0, 19, 0, 420, 500, 280, 0, 60, 60, 120, 0, 0, 0, 1, 60 },
+    PropDef{ 600, 3, 1, 255, 0, 19, 0, 420, 500, 280, 0, 60, 60, 120, 0, 0, 0, 0, 60 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.

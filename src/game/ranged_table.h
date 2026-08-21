@@ -98,15 +98,17 @@ struct RangedDef {
     // Deriving "explosive" from `blastDm > 0` would have worked for exactly the first
     // of those and then have had to be undone.
     std::uint8_t projType;        // 15
-    // Blast radius in DECIMETRES, and fuse in DECISECONDS. Both zero on every
-    // non-explosive row, and the generator refuses a row that sets one without the
-    // other — half an explosive is a grenade that never goes off, or one that goes
-    // off with no radius, and both are silent.
+    // ЧЕМ метательное становится после броска: PropId строки props.csv (255 =
+    // не метательное). Урон и радиус детонации живут НА ПРОПЕ — выводятся из
+    // его массы ВВ ([combat.h] charge_dmg/charge_radius_m, решение владельца
+    // 2026-08-21); прежний blastDm умер, потому что вторая цифра рядом с
+    // массой ВВ обязана была бы разойтись с первой. Связь резолвится
+    // генератором конвенцией «prop id == item_id» — выведена, не объявлена,
+    // как ranged_is_thrown из ammo == self.
     //
-    // Decimetres/deciseconds rather than metres/seconds for the reason `spreadE4`
-    // states about its own unit: the table is integral so it is bit-identical across
-    // builds, and a u8 of whole metres cannot express a 4.5 m blast.
-    std::uint8_t blastDm;         // 16  0, or 10..255 (1.0..25.5 m)
+    // fuse в ДЕЦИСЕКУНДАХ — фитиль принадлежит броску (взводит бросающий),
+    // не пропу: бочка (заряд от урона) фитиля не имеет.
+    std::uint8_t thrownPropId;    // 16  PropId или 255
     std::uint8_t fuseDs;          // 17  0, or 1..255 (0.1..25.5 s)
 };
 static_assert(sizeof(RangedDef) == 18, "RangedDef must stay a tight 18-byte row");
@@ -142,11 +144,12 @@ inline bool ranged_is_thrown(ItemId id) {
     return d != nullptr && d->ammo == id;
 }
 
-// True when the row detonates. `blastDm` is the field that decides, because it is the
-// field `projectile_step` reads; `projType` says what the projectile IS and this says
-// what it DOES, and a row where the two disagree cannot be generated (see
-// tools/gen_ranged_table.py).
-inline bool ranged_is_explosive(const RangedDef& d) { return d.blastDm > 0; }
+// True when the row detonates. `thrownPropId` is the field that decides: строка
+// взрывается тем, чем становится после броска — проп-зарядом; a row where
+// projType and this disagree cannot be generated (see tools/gen_ranged_table.py).
+inline bool ranged_is_explosive(const RangedDef& d) {
+    return d.thrownPropId != 255;
+}
 
 // Damage-per-second of a whole burst, for choosing which gun in the inventory to
 // hold. Pellets count: a shotgun's 12x8 is 96 a shot, not 8.

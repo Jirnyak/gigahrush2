@@ -1199,7 +1199,11 @@ if(GIGA_BUILD_TESTS)
     # 236627 -> 246455 (+9828) on 2026-08-21: §59.1 — is_power_cut получил
     # битовый брод-фейз; test_power_cut_broadphase пинит эквивалентность
     # старому точному скану сеткой 2×17³ проб вокруг щитков у обоих швов.
-        PASS_REGULAR_EXPRESSION "game_test: 246455 checks, 0 failures")
+    # 246455 -> 246475 (+20) on 2026-08-22: граната = проп-заряд (Charge/
+    # ChargeArmed/charge_step, вывод урона и радиуса из массы ВВ);
+    # test_grenade мигрирован, grenade_advance мёртв, валидация таблицы
+    # различает метательное (dmg=0, правда на пропе) и стволы.
+        PASS_REGULAR_EXPRESSION "game_test: 246475 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

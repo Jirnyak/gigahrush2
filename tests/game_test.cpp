@@ -55,6 +55,9 @@
 
 #include "sim/drag.h"    // drag_q — предсказание замкнутой формы в тесте трения
 #include "sim/physics.h"
+#include "sim/rigid.h"   // rigid_attach_sphere/rigid_body_step — граната = тело ядра
+#include "world/material_props.h" // kMatHardness — упругость заряда из материала
+#include "game/prop_table.h"      // PropDef/prop_def — заряд читается со строки
 #include "world/lattice.h"
 #include "world/materials.h"
 #include "world/gravity.h"
@@ -2787,7 +2790,16 @@ static void test_ranged_table() {
             CHECK(static_cast<ItemCategory>(item_def(d->ammo).category) ==
                   ItemCategory::Ammo);
         }
-        CHECK(d->dmg > 0 && d->pellets >= 1 && d->magazine >= 1);
+        // Метательное несёт dmg=0 намеренно: урон выводится из массы ВВ
+        // его пропа (charge_dmg), и генератор ОТКАЗЫВАЕТ гранатной строке
+        // с ненулевым dmg — вторая цифра разошлась бы с первой.
+        if (ranged_is_explosive(*d)) {
+            CHECK(d->dmg == 0);
+            CHECK(prop_def(static_cast<PropId>(d->thrownPropId)).explosiveG > 0);
+        } else {
+            CHECK(d->dmg > 0);
+        }
+        CHECK(d->pellets >= 1 && d->magazine >= 1);
         CHECK(d->cooldownMs > 0 && d->projSpeedMmps > 0);
     }
     // Exactly one today. Pinned so that a second thrown row has to arrive with its
@@ -3486,7 +3498,7 @@ static void test_lob_isotropy() {
 // REVERSE POLARITY — the change it guards was broken on purpose and the named CHECK
 // was watched to fail — because a green assertion that cannot go red is a comment.
 static void test_grenade() {
-    // ---- 0. THE ROW, and the trap it sets for the gun picker ------------------
+    // ---- 0. THE ROW: оружие называет ПРОП, урон и радиус — вывод из ВВ --------
     ItemId gren = kInvalidItem;
     for (ItemId i = 1; i <= kItemCount; ++i)
         if (const RangedDef* d = ranged_for_item(i))
@@ -3495,26 +3507,31 @@ static void test_grenade() {
     const RangedDef& gdef = *ranged_for_item(gren);
     CHECK(static_cast<ProjType>(gdef.projType) == ProjType::Grenade);
     CHECK(ranged_is_thrown(gren));                 // it is its own ammunition
-    CHECK(gdef.blastDm == 50 && gdef.fuseDs == 30);  // 5.0 m, 3.0 s
-    CHECK(gdef.dmg == 90);   // data/items.csv: "Урон 90 по площади"
-    const float kBlastR = static_cast<float>(gdef.blastDm) * 0.1f;
+    CHECK(gdef.fuseDs == 30);                      // 3.0 s
+    // Урона в оружейной строке больше НЕТ: одна правда — масса ВВ пропа,
+    // gen_ranged_table отказывает гранатной строке с dmg != 0.
+    CHECK(gdef.dmg == 0);
+    CHECK(gdef.thrownPropId != 255);
+    const PropDef& gprop = prop_def(static_cast<PropId>(gdef.thrownPropId));
+    CHECK(gprop.explosiveG == 60);                 // Ф-1: 60 г ТНТ
+    CHECK(static_cast<PropFallMode>(gprop.fallMode) ==
+          PropFallMode::RagdollRoll);              // граната КАТАЕТСЯ (S3)
+    // Калибровка вывода держит старый баланс бит-в-бит: 90 в центре, 5.0 м.
+    CHECK(charge_dmg(gprop.explosiveG) == 90);
+    const float kBlastR = charge_radius_m(gprop.explosiveG);
+    CHECK(std::fabs(kBlastR - 5.0f) < 1e-3f);
 
     // The blast must not be narrower than the sphere in which a plain bullet already
-    // connects, or the radius is a lie at its own edge. The generator refuses such a
-    // row; this is the same rule asserted against the shipped table.
+    // connects, or the radius is a lie at its own edge.
     CHECK(kBlastR > kProjHitRadius);
 
-    // THE DPS TRAP. A grenade is 75 burst DPS and beats 26 of the 29 firearms, so a
-    // picker that ranks on DPS alone hands the player a grenade and player_ranged_step
-    // fires one down the camera ray per trigger pull. The two pickers must be
-    // complements: never both, never neither.
+    // Пикеры — комплементы: never both, never neither.
     {
         ItemId rifle = kInvalidItem;
         for (ItemId i = 1; i <= kItemCount; ++i)
             if (const RangedDef* d = ranged_for_item(i))
                 if (d->dmg == 170) rifle = i;      // ptrs_liquidator
         CHECK(rifle != kInvalidItem);
-        CHECK(ranged_dps(gdef) > ranged_dps(*ranged_for_item(rifle)));  // the trap is real
 
         Inventory bag;
         bag.slots[0] = ItemSlot{gren, 3};
@@ -3543,22 +3560,31 @@ static void test_grenade() {
             stack.layer(layer).grid().fill_cell(x, y, 19, kMatConcrete);
     const float dt = kSimDt;
 
-    // Places a grenade by hand, stationary, with a fuse of `fuseMs`. Hand-built for
-    // the same reason the bullet suite hand-builds its point-blank shot: the test is
-    // about what a detonation DOES, and a thrown arc would make the position an
-    // outcome rather than an input. The throw itself is block 5.
-    auto plant = [&](Registry& r, const vec3& at, Entity src, std::uint16_t fuseMs) {
+    // Places an ARMED CHARGE PROP by hand, stationary, fuse at absolute sim
+    // tick `atTick`. Hand-built for the same reason the bullet suite
+    // hand-builds its point-blank shot: the test is about what a detonation
+    // DOES, and a thrown arc would make the position an outcome rather than
+    // an input. The throw itself is block 5. Тело — рагдолл-ядра, тем же
+    // законом, что spawn_grenade.
+    auto plant = [&](Registry& r, const vec3& at, Entity src,
+                     std::uint64_t atTick) {
         Entity g = r.create();
         Transform t;
         t.pos = at;
         t.layer = layer;
         r.emplace<Transform>(g, t);
         r.emplace<Velocity>(g, Velocity{vec3{0.0f, 0.0f, 0.0f}});
-        r.emplace<AABB>(g, AABB{vec3{0.1f, 0.1f, 0.1f}});
-        r.emplace<Projectile>(
-            g, Projectile{src, static_cast<std::int16_t>(gdef.dmg), fuseMs, 100,
-                          static_cast<std::uint8_t>(ProjType::Grenade), 0,
-                          gdef.blastDm});
+        const vec3 half{static_cast<float>(gprop.sizeXMm) * 0.0005f,
+                        static_cast<float>(gprop.sizeYMm) * 0.0005f,
+                        static_cast<float>(gprop.sizeZMm) * 0.0005f};
+        r.emplace<AABB>(g, AABB{half});
+        const float hard = static_cast<float>(kMatHardness[gprop.matId]);
+        rigid_attach_sphere(r, g, std::min({half.x, half.y, half.z}),
+                            static_cast<float>(gprop.massG) * 0.001f,
+                            restitution_from_hardness(hard),
+                            friction_from_hardness(hard));
+        r.emplace<Charge>(g, Charge{gprop.explosiveG, gprop.chargeTrigger, 0});
+        r.emplace<ChargeArmed>(g, ChargeArmed{atTick, src});
         return g;
     };
 
@@ -3585,21 +3611,22 @@ static void test_grenade() {
 
         // 2 m away — the distance a grenade you dropped ends up at.
         const vec3 at{mt.pos.x + 2.0f, mt.pos.y, mt.pos.z};
-        plant(reg, at, me, 1u);   // fuse expires on the first step
+        plant(reg, at, me, 1u);   // фитиль истёк к первому charge_step
 
         const std::int16_t hp0 = pool.hp(tid);
-        const std::uint32_t hits =
-            projectile_step(reg, pool, bus, stack, layer, dt, 10u);
-        CHECK(hits == 1);
+        const std::uint32_t booms = charge_step(reg, pool, stack, layer, 10u);
+        CHECK(booms == 1);
         CHECK(pool.hp(tid) < hp0);        // <<< осколки бьют и владельца
 
-        // And the number is the authored falloff, not "some damage": 90 x (1 - 2/5).
+        // And the number is the DERIVED falloff, not "some damage":
+        // charge_dmg(60 г) = 90, x (1 - 2/5).
         const std::int16_t expect =
             static_cast<std::int16_t>(90.0f * (1.0f - 2.0f / kBlastR) + 0.5f);
         CHECK(hp0 - pool.hp(tid) == expect);
         CHECK(expect == 54);
         // The grenade is spent. A fuse that fires twice would double every blast.
-        CHECK(reg.view<const Projectile>().empty());
+        CHECK(reg.view<const Charge>().empty());
+        (void)bus;
         std::fprintf(stderr,
                      "[grenade] own blast: thrower took %d at %.1f m of %.1f m\n",
                      hp0 - pool.hp(tid), 2.0f, kBlastR);
@@ -3628,7 +3655,8 @@ static void test_grenade() {
             reg.emplace<MobRef>(m[i], MobRef{0, 1, 4000, 4000});
         }
         plant(reg, c, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 20u);
+        charge_step(reg, pool, stack, layer, 20u);
+        (void)bus;
 
         std::int16_t took[4];
         for (int i = 0; i < 4; ++i)
@@ -3637,30 +3665,25 @@ static void test_grenade() {
         CHECK(took[1] > took[2]);
         CHECK(took[2] >= 1);      // inside the radius is never free
         CHECK(took[3] == 0);      // outside it is never charged
-        // Nearest is the authored 90 x (1 - 0.5/5.0) = 81, within the rounding the
-        // one-tick gravity drop can introduce.
-        CHECK(took[0] >= 80 && took[0] <= 82);
+        // Nearest is the derived 90 x (1 - 0.5/5.0) = 81 (заряд стоит на
+        // месте — гравитационного сдвига за тик больше нет).
+        CHECK(took[0] == 81);
         std::fprintf(stderr,
                      "[grenade] falloff over %.1f m: %d %d %d %d at %.1f/%.1f/%.1f/%.1f m\n",
                      kBlastR, took[0], took[1], took[2], took[3],
                      dist[0], dist[1], dist[2], dist[3]);
     }
 
-    // ---- 3. IT BOUNCES OFF A WALL, AND DOES NOT GO OFF ON IT ------------------
+    // ---- 3. ОТСКОК — РАГДОЛЛ-ЯДРОМ, И СТЕНА НЕ ДЕТОНИРУЕТ ЗАРЯД --------------
     //
-    // Run on all THREE axes with the same code and the same expectation, because the
-    // isotropy law ([problems.md] §34) is not "z is special-cased correctly", it is
-    // "no letter is special at all". The component normal to the face crossed must
-    // flip and lose energy; the other two must not flip.
-    //
-    // Reverse polarity: replace the swept-face search in `grenade_advance` with "the
-    // axis of the largest velocity component" and the diagonal case below (axis 2,
-    // thrown into a ceiling while drifting sideways) reverses the wrong component.
+    // Прежний grenade_advance (ВТОРОЙ интегратор отскока, макроклеточный —
+    // отскакивал от прокарванной насквозь клетки, улика закона двух масштабов
+    // S2) умер 2026-08-22: гранату катает rigid по субвокселям и материальным
+    // парам, у которого свои тесты изотропии. Здесь пинится ШОВ: тело
+    // отражается от построенной стены на всех трёх осях, остаётся зарядом со
+    // взведённым фитилём, и контакт со стеной НЕ детонирует его — фитиль
+    // единственная смерть заряда.
     {
-        // The wall is BUILT, not assumed. My first version picked cells just outside
-        // the hollowed room and trusted the generator to have filled them; two of the
-        // three were already air, so the grenade flew past the "wall" and the failure
-        // read as a broken bounce rather than as a missing wall.
         const int solid[3][3] = {{31, 20, 21}, {22, 25, 21}, {22, 20, 25}};
         for (int a = 0; a < 3; ++a) {
             for (int dx = -1; dx <= 1; ++dx)
@@ -3674,23 +3697,20 @@ static void test_grenade() {
             Registry reg;
             NpcPool pool;
             pool.init();
-            EventBus bus;
 
-            // Start one cell short of the wall, moving at it, with a small drift on
-            // the other two axes so "which face" is a real question rather than a
-            // one-dimensional certainty.
+            // Start one cell short of the wall, moving at it, with a small
+            // drift on the other two axes.
             vec3 start{static_cast<float>(solid[a][0]) * kCellSize + 1.0f,
                        static_cast<float>(solid[a][1]) * kCellSize + 1.0f,
                        static_cast<float>(solid[a][2]) * kCellSize + 1.0f};
             vec3 vel{0.6f, 0.6f, 0.6f};
-            // Step back along `a` into the open room and aim at the wall.
             (a == 0 ? start.x : a == 1 ? start.y : start.z) -= 2.0f * kCellSize;
             (a == 0 ? vel.x : a == 1 ? vel.y : vel.z) = 14.0f;
 
-            Entity g = plant(reg, start, entt::null, kProjTtlMs);
+            Entity g = plant(reg, start, entt::null, 1000000u); // фитиль далеко
             reg.get<Velocity>(g).v = vel;
-            // A body pressed against the wall: if the grenade detonated on contact,
-            // this is what would take the damage.
+            // A body pressed against the wall: if the charge detonated on
+            // contact, this is what would take the damage.
             Entity witness = reg.create();
             Transform wt;
             wt.pos = start;
@@ -3699,75 +3719,24 @@ static void test_grenade() {
             reg.emplace<Transform>(witness, wt);
             reg.emplace<MobRef>(witness, MobRef{0, 1, 4000, 4000});
 
-            const float v0 = (a == 0 ? vel.x : a == 1 ? vel.y : vel.z);
             bool flipped = false;
-            for (int i = 0; i < 60 && reg.valid(g) && !flipped; ++i) {
-                projectile_step(reg, pool, bus, stack, layer, dt,
-                                30u + static_cast<std::uint64_t>(i));
+            for (int i = 0; i < 120 && !flipped; ++i) {
+                rigid_body_step(reg, stack, dt);
+                charge_step(reg, pool, stack, layer,
+                            30u + static_cast<std::uint64_t>(i));
                 if (!reg.valid(g)) break;
                 const vec3& v = reg.get<Velocity>(g).v;
                 const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
                 if (vn < 0.0f) flipped = true;
             }
-            CHECK(flipped);                       // it came back off the face
-            CHECK(reg.valid(g));                  // and it is STILL A GRENADE
-            const vec3& v = reg.get<Velocity>(g).v;
-            const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
-            CHECK(std::fabs(vn) < v0);            // and it lost energy doing it
-            // The other two components kept their sign: nothing else was reflected.
-            for (int b = 0; b < 3; ++b) {
-                if (b == a) continue;
-                const float vb = (b == 0 ? v.x : b == 1 ? v.y : v.z);
-                CHECK(vb >= 0.0f);
-            }
-            // NOTHING DETONATED ON THE WALL. A bullet would be gone and the witness
-            // beside the impact would be hurt; the grenade is neither.
+            CHECK(flipped);                      // it came back off the wall
+            CHECK(reg.valid(g));                 // and it is STILL A CHARGE
+            CHECK(reg.all_of<ChargeArmed>(g));   // фитиль всё ещё горит
+            // NOTHING DETONATED ON THE WALL: contact is not a trigger.
             CHECK(reg.get<MobRef>(witness).hp == 4000);
-            CHECK(reg.get<Projectile>(g).ttlMs > 0);
         }
-
-        // THE GRAZING CASE, and it is the only one of the four that can tell a FACE
-        // from an AXIS LETTER.
-        //
-        // The three above cannot, and I only found that out by mutating the code:
-        // replacing the swept-face search with "reflect the largest velocity
-        // component" left all three of them GREEN, because in each the fast axis and
-        // the wall's axis are the same one. A test that cannot fail is a comment.
-        //
-        // So: fast along +x, slow along +z, and a ceiling 0.06 m overhead. The face
-        // crossed is the ceiling's; the biggest component is x. Face reflection turns
-        // z around and leaves x alone. Axis-letter reflection does the opposite, and
-        // both CHECKs below catch it.
-        {
-            for (int cx = 21; cx <= 24; ++cx)
-                for (int cy = 19; cy <= 21; ++cy)
-                    stack.layer(layer).grid().fill_cell(cx, cy, 24, kMatConcrete);
-
-            Registry reg;
-            NpcPool pool;
-            pool.init();
-            EventBus bus;
-            Entity g = plant(reg, vec3{45.0f, 41.0f, 47.94f}, entt::null, kProjTtlMs);
-            reg.get<Velocity>(g).v = vec3{14.0f, 0.0f, 6.0f};
-
-            bool hitCeiling = false;
-            for (int i = 0; i < 20 && reg.valid(g) && !hitCeiling; ++i) {
-                projectile_step(reg, pool, bus, stack, layer, dt,
-                                600u + static_cast<std::uint64_t>(i));
-                if (reg.valid(g) && reg.get<Velocity>(g).v.z < 0.0f) hitCeiling = true;
-            }
-            CHECK(hitCeiling);
-            CHECK(reg.valid(g));
-            const vec3& v = reg.get<Velocity>(g).v;
-            CHECK(v.z < 0.0f);   // the CEILING's face turned it back down
-            CHECK(v.x > 0.0f);   // ...and the fast axis was NOT the one reflected
-            CHECK(v.x < 14.0f);  // only damped, by the tangential friction
-            std::fprintf(stderr,
-                         "[grenade] grazing bounce: v=(%.2f, %.2f, %.2f) — the face "
-                         "reflected, not the biggest component\n",
-                         v.x, v.y, v.z);
-        }
-        std::fprintf(stderr, "[grenade] bounced off a face on all 3 axes, no early blast\n");
+        std::fprintf(stderr,
+                     "[grenade] rigid bounce on all 3 axes, no early blast\n");
     }
 
     // ---- 4. THE DETONATION DESTROYS GEOMETRY ----------------------------------
@@ -3790,14 +3759,14 @@ static void test_grenade() {
         // Right against the wall of the hollow room, so there is masonry to remove.
         const vec3 at{31.0f * kCellSize - 0.5f, 41.0f, 42.0f};
         plant(reg, at, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 40u, nullptr, entt::null,
-                        &carves, nullptr, &bursts);
+        charge_step(reg, pool, stack, layer, 40u, &carves, &bursts);
+        (void)bus;
 
         CHECK(carves.count == 1);
         CHECK(carves.droppedFull == 0 && carves.droppedDegenerate == 0);
         const CarveProposal& pr = carves.items[0];
         CHECK(std::fabs(pr.radius - kBlastR * kBlastCarveScale) < 1e-4f);
-        CHECK(pr.power == carve_power_from_dmg(static_cast<std::int16_t>(gdef.dmg)));
+        CHECK(pr.power == carve_power_from_dmg(charge_dmg(gprop.explosiveG)));
         CHECK(pr.power > 256);    // above concrete's hardness: it opens a real hole
         // Sparks AND debris, two rows of data/particles.csv with two lifetimes.
         CHECK(bursts.count == 2);
@@ -3860,23 +3829,23 @@ static void test_grenade() {
         CHECK(reg.get<PlayerMelee>(me).kills == 0);
 
         // The trigger is gated on the SHARED cooldown, which player_ranged_step owns.
-        CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false) == 0);
-        CHECK(player_throw_step(reg, pool, layer, true) == 1);
-        CHECK(player_throw_step(reg, pool, layer, true) == 0);   // cooldown holds
+        CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false, 49u) == 0);
+        CHECK(player_throw_step(reg, pool, layer, true, 49u) == 1);
+        CHECK(player_throw_step(reg, pool, layer, true, 49u) == 0); // cooldown
         // ONE grenade left the bag — the weapon IS the round.
         std::uint16_t left = 0;
         for (const ItemSlot& sl : inv.slots)
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
         CHECK(reg.get<PlayerRanged>(me).cooldownMs == gdef.cooldownMs);
-        // It is in the air, it is a GRENADE, and its fuse is the authored one.
+        // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
+        // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;
-        for (auto e : reg.view<const Projectile>()) {
-            const Projectile& p = reg.get<const Projectile>(e);
-            CHECK(static_cast<ProjType>(p.proj) == ProjType::Grenade);
-            CHECK(p.ttlMs == gdef.fuseDs * 100u);
-            CHECK(p.blastDm == gdef.blastDm);
-            CHECK(p.source == me);
+        for (auto e : reg.view<const Charge, const ChargeArmed>()) {
+            const ChargeArmed& arm = reg.get<const ChargeArmed>(e);
+            CHECK(arm.atTick == 49u + 375u);
+            CHECK(arm.source == me);
+            CHECK(reg.all_of<RigidBody>(e)); // не снаряд — тело ядра
             ++flying;
         }
         CHECK(flying == 1);
@@ -3891,10 +3860,11 @@ static void test_grenade() {
 
         NoiseField noise;
         const std::int16_t myHp0 = pool.hp(tid);
-        for (int i = 0; i < 500 && !reg.view<const Projectile>().empty(); ++i)
-            projectile_step(reg, pool, bus, stack, layer, dt,
-                            50u + static_cast<std::uint64_t>(i), nullptr, me,
-                            nullptr, nullptr, nullptr, &noise);
+        for (std::uint64_t t = 50; t <= 500 &&
+                                   !reg.view<const ChargeArmed>().empty(); ++t) {
+            rigid_body_step(reg, stack, dt); // граната падает и катится честно
+            charge_step(reg, pool, stack, layer, t, nullptr, nullptr, &noise);
+        }
         CHECK(reg.all_of<Dead>(mob));
         CHECK(reg.get<Dead>(mob).killer == me);      // §40: it was the player's
         CHECK(pool.hp(tid) < myHp0);                 // ...and it cost him too
@@ -3955,7 +3925,8 @@ static void test_grenade() {
         reg.emplace<MobRef>(victim, MobRef{0, 1, 30, 30});
 
         plant(reg, vt.pos, gunner, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 700u);
+        charge_step(reg, pool, stack, layer, 700u);
+        (void)bus;
         CHECK(reg.all_of<Dead>(victim));
         CHECK(reg.get<Dead>(victim).killer == gunner);
         CHECK(reg.get<Dead>(victim).killer != me);   // §40: NOT the player's kill
@@ -3988,8 +3959,8 @@ static void test_grenade() {
         const std::uint16_t dropped0 = carves.droppedFull;
 
         plant(reg, vec3{44.0f, 41.0f, 42.0f}, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 800u, nullptr, entt::null,
-                        &carves);
+        charge_step(reg, pool, stack, layer, 800u, &carves);
+        (void)bus;
         CHECK(carves.droppedFull == dropped0 + 1);   // visible as a number
         std::fprintf(stderr,
                      "[grenade] full carve queue: dropped_full=%u (counted, not silent)\n",
@@ -4016,7 +3987,7 @@ static void test_grenade() {
             static_cast<std::int16_t>(90.0f * (1.0f - 4.0f / kBlastR) + 0.5f);
         CHECK(expect == 18);
 
-        auto detonate = [&](bool withWall, std::int16_t& openTook,
+        auto boom = [&](bool withWall, std::int16_t& openTook,
                             std::int16_t& shieldedTook) {
             // A SLAB, not a single cell — and the first version of this test used
             // one cell and failed, which was the test being wrong rather than the
@@ -4049,18 +4020,19 @@ static void test_grenade() {
             Entity a = body(openSide);
             Entity b = body(wallSide);
             plant(reg, at, entt::null, 1u);
-            projectile_step(reg, pool, bus, stack, layer, dt, 900u);
+            charge_step(reg, pool, stack, layer, 900u);
+            (void)bus;
             openTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(a).hp);
             shieldedTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(b).hp);
         };
 
         std::int16_t openA = 0, wallB = 0;
-        detonate(/*withWall=*/true, openA, wallB);
+        boom(/*withWall=*/true, openA, wallB);
         CHECK(openA == expect);   // the one in the open pays in full
         CHECK(wallB == 0);        // <<< the one behind the wall pays NOTHING
 
         std::int16_t openA2 = 0, wallB2 = 0;
-        detonate(/*withWall=*/false, openA2, wallB2);
+        boom(/*withWall=*/false, openA2, wallB2);
         CHECK(openA2 == expect);  // unchanged, so the wall is what moved
         CHECK(wallB2 == expect);  // ...and the same body, same distance, now pays
 
@@ -4076,8 +4048,8 @@ static void test_grenade() {
             EventBus bus;
             CarveProposalQueue carves;
             plant(reg, at, entt::null, 1u);
-            projectile_step(reg, pool, bus, stack, layer, dt, 950u, nullptr,
-                            entt::null, &carves);
+            charge_step(reg, pool, stack, layer, 950u, &carves);
+            (void)bus;
             CHECK(carves.count == 1);
             for (int wy = 19; wy <= 21; ++wy)
                 for (int wz = 20; wz <= 22; ++wz)
@@ -4123,7 +4095,7 @@ static void test_ricochet() {
         // gravityPct 0: тест про геометрию отражения, не про баллистику.
         r.emplace<Projectile>(
             b, Projectile{entt::null, dmg, 5000, 0,
-                          static_cast<std::uint8_t>(ProjType::Bullet), 0, 0});
+                          static_cast<std::uint8_t>(ProjType::Bullet), 0});
         return b;
     };
 

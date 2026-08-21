@@ -15,7 +15,11 @@
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
 #include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
+#include "game/prop_table.h"  // PropId/PropDef — метательный заряд = проп
 #include "sim/cell_bins.h"    // общий примитив клеточных бинов (§59.3)
+#include "sim/rigid.h"        // rigid_attach_sphere — граната = тело ядра
+#include "world/material_props.h" // kMatHardness — упругость/трение заряда
+#include "core/tick.h"        // kSimHz — фитиль мс → сим-тики
 
 
 #include "game/faction_relations.h"
@@ -53,122 +57,12 @@ bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
 
 // Component `a` of a vec3 by index, 0/1/2.
 //
-// The grenade bounce below is written entirely over this accessor rather than over
-// `.x` / `.y` / `.z`, and that is [problems.md] §34's isotropy law in code form: the
-// three axes are searched by ONE loop, so none of them can quietly acquire a special
-// case the way "reflect whichever component is biggest" would. What reflects a
-// grenade is the cell FACE it crossed; which letter that face belongs to is a
-// result, never an input.
+// The bullet RICOCHET below is written entirely over this accessor rather than
+// over `.x` / `.y` / `.z`, and that is [problems.md] §34's isotropy law in code
+// form: the axis of the reflected face is a RESULT of the sub-voxel march,
+// never an input letter. (Гранатный отскок здесь больше не живёт: граната —
+// RagdollRoll-проп рагдолл-ядра, 2026-08-22.)
 inline float& axis(vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
-inline float axis(const vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
-
-// Is the cell containing `p` solid? Cell level and not sub-voxel, for the reason the
-// bullet path states: a grenade clipping the corner of a wall should bounce, and the
-// sub-voxel mask would let it slip through a half-carved cell that reads as solid.
-//
-// `MacroGrid::cell` wraps all three indices itself, so an unwrapped world position
-// is safe here — which is what lets the sweep below work in unwrapped coordinates
-// and wrap once, at the end. Out-of-stack z is solid: the bottom of the level has no
-// floor below it to fall through, and a grenade that fell out of the world would
-// detonate 200 m away from where the player watched it land.
-bool cell_solid(const MacroGrid& grid, const vec3& p) {
-    const int cz = static_cast<int>(std::floor(p.z / kCellSize));
-    if (cz < 0 || cz >= kMacroDim) return true;
-    return grid.cell(static_cast<int>(std::floor(p.x / kCellSize)),
-                     static_cast<int>(std::floor(p.y / kCellSize)), cz) != kCellAir;
-}
-
-// How far past a face to place the grenade after a reflection, metres. Big enough
-// that the next step's `floor(p / kCellSize)` lands in the new cell despite float
-// error, small enough to be invisible at a 2 m cell.
-inline constexpr float kBounceEpsilon = 1e-3f;
-
-// Advance one grenade by `dt`, reflecting it off every cell face it crosses.
-//
-// A miniature DDA rather than "integrate, then test the destination": the destination
-// test alone is wrong at a corner, where the step crosses an AIR face first and the
-// solid cell second — it would reflect off the wrong face and send the grenade back
-// up the corridor it came from. So the step is walked crossing by crossing, and each
-// crossing asks the cell it is about to ENTER whether it is solid.
-//
-// Bounded at four crossings. One 8 ms step at the 16 m/s throw speed covers 0.13 m
-// against a 2 m cell, so three is already unreachable; the fourth is there so the
-// bound is a bound and not a guess.
-void grenade_advance(const MacroGrid& grid, vec3& pos, vec3& vel, float dt) {
-    vec3 from = pos;
-    float remain = dt;
-    for (int iter = 0; iter < 4 && remain > 1e-6f; ++iter) {
-        const vec3 to = from + vel * remain;
-
-        // The earliest cell-boundary plane this segment crosses, over all three axes
-        // by the same rule.
-        float bestT = 2.0f;
-        int bestA = -1;
-        float bestDelta = 0.0f;
-        for (int a = 0; a < 3; ++a) {
-            const float f = axis(from, a);
-            const float d = axis(to, a) - f;
-            if (d > -1e-9f && d < 1e-9f) continue;
-            const int cf = static_cast<int>(std::floor(f / kCellSize));
-            const int ct = static_cast<int>(std::floor(axis(to, a) / kCellSize));
-            if (cf == ct) continue;
-            const float plane =
-                static_cast<float>(d > 0.0f ? cf + 1 : cf) * kCellSize;
-            const float t = (plane - f) / d;
-            if (t >= 0.0f && t < bestT) {
-                bestT = t;
-                bestA = a;
-                bestDelta = d;
-            }
-        }
-        if (bestA < 0) {
-            // No face in the way. Either the whole step is free, or the grenade is
-            // ALREADY inside solid — thrown point-blank into a wall from a body that
-            // is itself clipped into geometry. There is no face to reflect off in
-            // that case, so it stops dead and the fuse finishes the job; the
-            // alternative is picking an axis to push out along, which is exactly the
-            // guess §34 forbids. Drifting on through the rock is the one answer that
-            // is definitely wrong.
-            if (cell_solid(grid, to)) vel = vec3{0.0f, 0.0f, 0.0f};
-            else from = to;
-            remain = 0.0f;
-            break;
-        }
-
-        // Contact point, nudged just inside the cell being entered so the solidity
-        // question is asked about that cell and not about the boundary itself.
-        vec3 hit = from + (to - from) * bestT;
-        const float nSign = bestDelta > 0.0f ? -1.0f : 1.0f;
-        vec3 probe = hit;
-        axis(probe, bestA) -= nSign * kBounceEpsilon;
-        remain *= (1.0f - bestT);
-
-        if (!cell_solid(grid, probe)) {   // an open face; keep going
-            from = probe;
-            continue;
-        }
-
-        // REFLECT off this face. The normal component flips and keeps
-        // kGrenadeRestitution; the two tangential components — whichever two are not
-        // `bestA` — keep kGrenadeFriction, which is what turns a bounce into a roll
-        // instead of letting a grenade skate down a corridor forever.
-        for (int a = 0; a < 3; ++a) {
-            if (a == bestA) axis(vel, a) = -axis(vel, a) * kGrenadeRestitution;
-            else axis(vel, a) *= kGrenadeFriction;
-        }
-        axis(hit, bestA) += nSign * kBounceEpsilon;   // rest OUTSIDE the face
-        from = hit;
-        if (length(vel) < kGrenadeRestSpeed) {
-            vel = vec3{0.0f, 0.0f, 0.0f};   // settled; see kGrenadeRestSpeed
-            break;
-        }
-    }
-    // x/y wrap, z does not — the same convention the bullet integrator uses, and the
-    // same one the level stack has (W does not wrap either, [AGENTS.md]).
-    pos.x = wrapf(from.x, kWorldExtent);
-    pos.y = wrapf(from.y, kWorldExtent);
-    pos.z = from.z;
-}
 
 // WHERE THE BARREL IS — the one function that decides it, for every spawner.
 //
@@ -1237,24 +1131,25 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
 
-void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
-                   const vec3& dir, std::int16_t dmg,
-                   std::uint16_t projSpeedMmps, Entity source,
-                   std::uint8_t blastDm, std::uint16_t fuseMs,
-                   std::uint8_t channel) {
+Entity spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                     const vec3& dir, PropId prop,
+                     std::uint16_t projSpeedMmps, Entity source,
+                     std::uint16_t fuseMs, std::uint64_t tick,
+                     std::uint8_t channel) {
+    if (!prop_valid(prop)) return entt::null;
+    const PropDef& def = prop_def(prop);
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;
     const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-    if (len < 1e-4f) return;
+    if (len < 1e-4f) return entt::null;
     const float inv = 1.0f / len;
 
     Entity e = reg.create();
     Transform tr;
-    // The same `muzzle_point` as every other spawner. A grenade could get away with
-    // less — it does no contact damage, so being born inside the thrower costs
-    // nothing — but "where the barrel is" having one answer is worth more than the
-    // two lines saved, and the day a thrown weapon does something on contact this
-    // will already be right.
+    // The same `muzzle_point` as every other spawner: "where the barrel is"
+    // has one answer, and a rigid-body grenade DOES do things on contact now
+    // (честный отскок от тел, решение владельца 2026-08-22) — being born
+    // outside the thrower is load-bearing, not cosmetic.
     const vec3 u{dir.x * inv, dir.y * inv, dir.z * inv};
     const Transform* stf = reg.valid(source) ? reg.try_get<Transform>(source)
                                              : nullptr;
@@ -1267,18 +1162,69 @@ void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
     reg.emplace<Velocity>(e, Velocity{vec3{dir.x * inv * speed,
                                            dir.y * inv * speed,
                                            dir.z * inv * speed}});
-    reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
-    reg.emplace<SelfIntegrating>(e);
-    // Olive-drab, and darker than either tracer: the one projectile you are supposed
-    // to be able to spot lying on the floor and run away from.
-    reg.emplace<Renderable>(e, Renderable{vec3{0.42f, 0.50f, 0.28f}});
-    // gravityPct 100 — a thrown weight obeys gravity in full. The 40% flattening
-    // exists so a camera-aimed BULLET is not handed a lob it did not aim
-    // ([combat.h] Projectile::gravityPct); an arc is the whole point of a throw.
-    reg.emplace<Projectile>(
-        e, Projectile{source, dmg, fuseMs, 100,
-                      static_cast<std::uint8_t>(ProjType::Grenade), channel,
-                      blastDm});
+
+    // Тело РАГДОЛЛ-ЯДРА, не снаряд: габарит и масса — авторские, из строки
+    // props.csv; упругость и трение — из материала строки, тем же законом,
+    // каким детач отдаёт сорванный проп ([prop_system] detach_single_prop).
+    // Сфера по тонкой стороне — граната катается, а не кувыркается.
+    const vec3 half{static_cast<float>(def.sizeXMm) * 0.0005f,
+                    static_cast<float>(def.sizeYMm) * 0.0005f,
+                    static_cast<float>(def.sizeZMm) * 0.0005f};
+    const float hardness = static_cast<float>(
+        def.matId < kMatCount ? kMatHardness[def.matId] : 64);
+    rigid_attach_sphere(reg, e, std::min({half.x, half.y, half.z}),
+                        static_cast<float>(def.massG) * 0.001f,
+                        restitution_from_hardness(hardness),
+                        friction_from_hardness(hardness));
+    // BodyPass needs AABB — без него заряд невидим (закон детача).
+    reg.emplace<AABB>(e, AABB{half});
+    // Olive-drab, and darker than either tracer: the one thing you are
+    // supposed to be able to spot lying on the floor and run away from.
+    reg.emplace<Renderable>(e, Renderable{prop_color(def)});
+
+    // Потенциал — копия строки; фитиль — абсолютный сим-тик, взводит
+    // бросающий (мс → тики, вверх: фитиль не короче авторского).
+    reg.emplace<Charge>(e, Charge{def.explosiveG, def.chargeTrigger, channel});
+    const std::uint64_t fuseTicks =
+        (static_cast<std::uint64_t>(fuseMs) * kSimHz + 999u) / 1000u;
+    reg.emplace<ChargeArmed>(e, ChargeArmed{tick + fuseTicks, source});
+    return e;
+}
+
+// Фитили. Сбор — потом взрыв: detonate() зовёт apply_damage, а тот
+// emplace'ит Dead и может переаллоцировать пулы под view.
+std::uint32_t charge_step(Registry& reg, NpcPool& pool, LevelStack& stack,
+                          LayerId layer, std::uint64_t tick,
+                          CarveProposalQueue* carves,
+                          ParticleBurstQueue* particles, NoiseField* noise) {
+    struct Boom {
+        Entity e;
+        vec3 at;
+        std::uint16_t explosiveG;
+        Entity src;
+        std::uint8_t ch;
+    };
+    static thread_local std::vector<Boom> due;
+    due.clear();
+    for (auto e : reg.view<const Charge, const ChargeArmed, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const ChargeArmed& arm = reg.get<const ChargeArmed>(e);
+        if (tick < arm.atTick) continue;
+        const Charge& c = reg.get<const Charge>(e);
+        due.push_back(Boom{e, tr.pos, c.explosiveG, arm.source, c.channel});
+    }
+    for (const Boom& b : due) {
+        // Урон и радиус — вывод из массы ВВ ([combat.h] charge_dmg/
+        // charge_radius_m); соль сидов — энтити заряда, как у снаряда была.
+        detonate(reg, pool, stack, layer, b.at, charge_dmg(b.explosiveG),
+                 charge_radius_m(b.explosiveG), b.src,
+                 static_cast<DamageChannel>(b.ch), tick,
+                 static_cast<std::uint32_t>(entt::to_integral(b.e)), carves,
+                 particles, noise);
+        if (reg.valid(b.e)) reg.destroy(b.e);
+    }
+    return static_cast<std::uint32_t>(due.size());
 }
 
 // **Never call this from inside a live view.** The first web in a session runs
@@ -1562,15 +1508,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // Wall impact: solid geometry stopped the shot. impactPos is the contact
         // point (projectile position at the stop). onWall is mutually exclusive
         // with onVictim/other — a body hit never also carves the wall behind it.
+        // (Детонации здесь больше нет: граната — проп-заряд, фитиль решает
+        // charge_step, 2026-08-22.)
         bool onWall = false;
         vec3 impactPos{0, 0, 0};
-        // The fuse ran out on a grenade. Mutually exclusive with all three of the
-        // above: a detonation strikes nothing in particular, it strikes a PLACE
-        // (impactPos) and everything standing in it. Blast radius in decimetres,
-        // carried off the Projectile in phase 1 for the same reason projType and
-        // channel are — the entity is destroyed at the end of the resolution loop.
-        bool onDetonate = false;
-        std::uint8_t blastDm = 0;
     };
     std::vector<Hit> resolved;
 
@@ -1649,47 +1590,23 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                  pm ? pm->kg : Mass{}.kg),
                           dt);
         }
-        // A GRENADE SKIPS ACROSS THE VOXELS INSTEAD OF ENDING ON THEM. Everything
-        // above this line is shared — one integrator, one gravity vector — and
-        // everything below it differs, because contact means the opposite thing for
-        // the two: a bullet is spent by the first solid it meets, a grenade is
-        // redirected by it. [ARCHITECTURE.md] §Манифест п.5.
-        const bool grenade = static_cast<ProjType>(p.proj) == ProjType::Grenade;
         // Точка ДО интеграции — из неё восстанавливается пересечённая грань,
         // если шаг закончился в твёрдом (рикошет ниже). Без обёртки: тест
         // плоскостей работает в непрерывных координатах, обернёт финал.
+        // (Гранатной развилки интегратора больше нет: снаряд — только
+        // быстрое, летящее и решаемое маршем; медленное катает rigid.)
         const vec3 prevPos = tr.pos;
-        if (grenade) {
-            grenade_advance(grid, tr.pos, v.v, dt);
-        } else {
-            tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
-            tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-            tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
-        }
+        tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
+        tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
+        tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
 
         if (p.ttlMs == 0) {
-            // THE SAME ZERO, TWO MEANINGS. For a bullet the TTL is a backstop and
-            // reaching it means the shot is spent — dmg 0, nothing happens, the
-            // entity goes away. For a grenade it is the FUSE, and reaching it is the
-            // entire point of the object.
-            Hit h{e, grenade ? p.dmg : static_cast<std::int16_t>(0), p.source, false};
-            if (grenade) {
-                h.onDetonate = true;
-                h.impactPos = tr.pos;
-                h.projType = p.proj;
-                h.channel = p.channel;
-                h.blastDm = p.blastDm;
-            }
-            resolved.push_back(h);
+            // TTL is a backstop: reaching it means the shot is spent — dmg 0,
+            // nothing happens, the entity goes away.
+            resolved.push_back(
+                Hit{e, static_cast<std::int16_t>(0), p.source, false});
             continue;
         }
-
-        // A live grenade touches nothing else. Not the body it flies past — a
-        // shoulder is not a wall and must not stop it — and not the wall it just
-        // bounced off, which the block above already resolved. Its whole interaction
-        // with the world for the next three seconds is geometry, and geometry is
-        // handled. The fuse is the only thing that can end it.
-        if (grenade) continue;
 
         // The camera holder, tested like anything else — INCLUDING against his own
         // bullet, since 2026-08-13.
@@ -1925,18 +1842,6 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // `h.source` is read exactly twice below, both times to CREDIT a kill, never
         // to skip a target. That is the whole of the attribution/exclusion
         // distinction the 2026-08-12 ruling turns on.
-        if (h.onDetonate && h.blastDm > 0) {
-            // Вся детонация — примитив detonate() выше: этот вызов и
-            // charge_step проп-зарядов зовут ОДИН взрыв. Соль сидов — энтити
-            // снаряда, как и была: воспроизводимость бит-в-бит.
-            const float R = static_cast<float>(h.blastDm) * 0.1f;
-            if (detonate(reg, pool, stack, layer, h.impactPos, h.dmg, R,
-                         h.source, ch, tick,
-                         static_cast<std::uint32_t>(entt::to_integral(h.proj)),
-                         carves, particles, noise))
-                landed = true;
-        }
-
         if (h.onVictim && victim != entt::null) {
             DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
                                           &grid, particles,
@@ -2018,17 +1923,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
     // стену или тело, к этому месту уже уничтожены — пуля, остановленная
     // стеной, не разбивает заодно лампу за ней. Снимок (entity, pos, vel)
     // перед вызовами: destroy пропа перетряхивает пулы Transform/Velocity,
-    // по которым идёт view. Граната пропы не трогает — как и тела в фазе 1:
-    // её единственная развязка с миром до фитиля — геометрия.
+    // по которым идёт view.
     {
         struct PropShot { Entity e; vec3 pos; vec3 vel; };
         std::vector<PropShot> flying;
         for (auto e : reg.view<Projectile, Transform, Velocity>()) {
             const Transform& tr = reg.get<Transform>(e);
             if (tr.layer != layer) continue;
-            if (static_cast<ProjType>(reg.get<Projectile>(e).proj) ==
-                ProjType::Grenade)
-                continue;
             flying.push_back(PropShot{e, tr.pos, reg.get<Velocity>(e).v});
         }
         for (const PropShot& s : flying) {
@@ -2215,7 +2116,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 }
 
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow) {
+                                bool wantThrow, std::uint64_t tick) {
     Entity thrower = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -2264,18 +2165,15 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     // look at your feet to throw short — the arc is gravity's, and the aim is yours.
     const vec3 dir = camera_forward(cam.yaw, cam.pitch);
 
-    spawn_grenade(reg, layer, eye, dir, static_cast<std::int16_t>(def->dmg),
-                  def->projSpeedMmps, thrower, def->blastDm,
-                  static_cast<std::uint16_t>(def->fuseDs) * 100u, def->channel);
+    spawn_grenade(reg, layer, eye, dir,
+                  static_cast<PropId>(def->thrownPropId), def->projSpeedMmps,
+                  thrower, static_cast<std::uint16_t>(def->fuseDs) * 100u,
+                  tick, def->channel);
 
-    // NO NoiseField AND NO TICK PARAMETER, which is why this signature is shorter
-    // than its two siblings rather than symmetrical with them. A throw is nearly
-    // silent — what a floor hears is the detonation, three seconds later and
-    // somewhere else, and `projectile_step` publishes exactly that ([noise.h]
-    // blast_noise). A tick would be the seed for a spread cone, and there is no cone:
-    // a thrown weight goes where you are looking. Carrying either as an unread
-    // parameter is how a field becomes write-only, which is the defect
-    // `Projectile::proj` and `RangedDef::channel` were both dug out of.
+    // NO NoiseField — a throw is nearly silent; what a floor hears is the
+    // detonation, three seconds later and somewhere else, published by
+    // `charge_step` ([noise.h] blast_noise). `tick` взводит фитиль
+    // (ChargeArmed.atTick — абсолютный сим-тик).
     pr.cooldownMs = def->cooldownMs;
     ++pr.shots;
     return 1;
