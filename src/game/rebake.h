@@ -198,6 +198,10 @@ public:
     // Поколение мира, которое отражает живой граф. bakedGen != worldGen —
     // запечённое устарело, планировщик сам доведёт (SLA-тест ассертит это).
     std::uint64_t baked_gen() const { return bakedGen_; }
+    // Сколько раз свет печёкся ПОЛНОСТЬЮ (Fresh + Rebake-full). Тест
+    // гарантии №1: карв при неизменной таблице ламп НЕ двигает счётчик —
+    // актуальность держат патчи, полный бейк живёт по смене таблицы/дедлайну.
+    std::uint32_t light_full_bakes() const { return lightFullBakes_; }
 
     // Тайминги последнего завершённого бейка, для HUD и строк [rooms]/[nav] —
     // чтобы цена не превращалась в фольклор (тот же довод, что у AsyncBake).
@@ -216,9 +220,10 @@ public:
                (navBits_.words.capacity() + bodyBits_.words.capacity() +
                 snapNav_.words.capacity() + snapBody_.words.capacity()) *
                    sizeof(std::uint64_t) +
-               (snapGrid_ ? snapGrid_->masks().capacity() * sizeof(SubMask) +
-                                snapGrid_->types().capacity() * sizeof(CellType)
-                          : 0) +
+               (shadowGrid_ ? shadowGrid_->masks().capacity() * sizeof(SubMask) +
+                                  shadowGrid_->types().capacity() *
+                                      sizeof(CellType)
+                            : 0) +
                pendingRooms_.resident_bytes() + lightVis_.resident_bytes() +
                pendingLight_.resident_bytes() +
                (lampsLive_.capacity() + lampsSnap_.capacity()) *
@@ -236,6 +241,7 @@ private:
     void discard_pending();
     void start_rebake(std::uint64_t simTick, std::uint64_t worldGen);
     void start_light_patch(std::uint64_t worldGen);
+    void sync_shadow(); // O(1)-долив карвнутых клеток в теневую сетку
 
     // --- живая сторона: пишется только в step()/start_fresh на главном потоке
     nav::CoarseGraph coarse_{};
@@ -254,6 +260,17 @@ private:
     std::uint64_t lightGen_ = 0;
     bool lightSwapPending_ = false;
     bool lightPatchPending_ = false;
+    // Поколение СОСТАВА таблицы ламп (растёт в set_light_table) против
+    // поколения, которое отражает последний ПОЛНЫЙ бейк света. Пока таблица
+    // не менялась, патчи держат списки истинными по построению (добавки +
+    // чистота rays_one_lamp) — полному бейку в цикле нечего добавить, кроме
+    // формы (top-K-хвосты при переливе, вычистка надгробий), и он печётся
+    // только на смене таблицы или по дедлайну (страховка формы).
+    std::uint64_t lightTableGen_ = 1;
+    std::uint64_t lightTableBakedGen_ = 0;
+    std::uint64_t lightTableGenSnap_ = 0; // состав на старте цикла
+    bool cycleLightFull_ = false; // свет этого Rebake-цикла: полный или патч
+    std::uint32_t lightFullBakes_ = 0; // счётчик полных бейков (тест #1)
     std::vector<std::uint32_t> patchChangedCells_; // выход последнего патча
     // Карвнутые макроклетки с последнего свапа света — вход дельта-лампового
     // патча. Копятся в patch_carved_cells (тот же дренаж CarveResult, что у
@@ -272,15 +289,17 @@ private:
     LightVisBake pendingLight_{};
     WalkBits snapNav_;  // снапшот по значению (2×256 KiB, ~75 мкс)
     WalkBits snapBody_;
-    // Снапшот масок+типов для света: ~134 МиБ ТРАНЗИЕНТНО на цикл Rebake
-    // (копия ~10-15 мс на старте цикла, освобождается на свапе; «бери больше
-    // во благо» — решение владельца 2026-08-20). unique_ptr, а не член по
-    // значению: MacroGrid() плотный и держал бы 134 МиБ всегда, даже пустым.
-    // Вместе с битсетами — ВСЁ, что воркер знает о мире. Дельта-патч света
-    // переиспользует тот же снапшот-механизм (134 МиБ ради 44 ламп — жирно,
-    // но путь уже написан; ужать до боксов ламп — следующий шаг, если 10-15
-    // мс старта окажутся заметны).
-    std::unique_ptr<MacroGrid> snapGrid_;
+    // ТЕНЕВАЯ копия масок+типов для света (проблема 59.21): ~134 МиБ
+    // РЕЗИДЕНТНО («памяти щедро» — решение владельца), копируется ОДИН раз на
+    // входе этажа и дальше правится O(1) на карв (sync_shadow из копилки
+    // carvedSinceLight_ перед каждым стартом воркера) — копия мира на главном
+    // потоке на каждый цикл (15-40 мс = 1-3 кадра) мертва. Двери в тени
+    // остаются как на входе — ВСЕ ОТКРЫТЫ: та же премиса all-open, что у
+    // nav-битсетов, ошибка — «посветить лишним» сквозь проём (реальную тень
+    // от закрытой двери всё равно кладёт попиксельный DDA-марш по живому
+    // зеркалу). unique_ptr, а не член по значению: MacroGrid() плотный и
+    // держал бы 134 МиБ даже у пустого планировщика.
+    std::unique_ptr<MacroGrid> shadowGrid_;
     std::vector<LightVisLamp> lampsSnap_;
     LightVisPatch pendingPatch_; // выход воркера дельта-патча
 
@@ -311,7 +330,7 @@ private:
     float roomsMs_ = 0.0f;
     float coarseMs_ = 0.0f;
     float fineMs_ = 0.0f;
-    float snapCopyMs_ = 0.0f; // копия 134 МиБ на главном потоке (59.1)
+    float snapCopyMs_ = 0.0f; // O(1)-долив тени на главном потоке (59.21)
 };
 
 } // namespace giga::game

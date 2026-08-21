@@ -227,6 +227,41 @@ void sla_holds_on_a_real_floor() {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         CHECK(s.baked_gen() == gen);
+
+        // --- Гарантия №1 (carve-hitch.md): карв при НЕИЗМЕННОЙ таблице ламп
+        // не запускает полный бейк света — актуальность держат патчи
+        // (одиночный или патч-в-цикле), счётчик полных бейков СТОИТ, при
+        // этом lightGen всё равно доводится до текущего поколения.
+        const std::uint32_t fullBakes = s.light_full_bakes();
+        int target3 = -1;
+        for (int dz = -2; dz <= 2 && target3 < 0; ++dz)
+            for (int dy = -2; dy <= 2 && target3 < 0; ++dy)
+                for (int dx = -2; dx <= 2 && target3 < 0; ++dx) {
+                    const int cx = wrap_macro(nbx + dx);
+                    const int cy = wrap_macro(nby + dy);
+                    const int cz = wrap_macro(nbz + dz);
+                    const std::size_t ci = macro_index(cx, cy, cz);
+                    if (w.grid().masks()[ci].full())
+                        target3 = static_cast<int>(ci);
+                }
+        CHECK(target3 >= 0);
+        w.grid().clear_cell(target3 % kMacroDim,
+                            (target3 / kMacroDim) % kMacroDim,
+                            target3 / (kMacroDim * kMacroDim));
+        const std::uint32_t dirty3[] = {static_cast<std::uint32_t>(target3)};
+        s.patch_carved_cells(w.grid(), noDoors, dirty3, 1);
+        ++gen;
+        const std::uint64_t carve3 = clock.now();
+        for (;;) {
+            const std::uint64_t t = clock.now();
+            s.step(t, gen);
+            if (s.light_gen() == gen && s.baked_gen() == gen) break;
+            if (t - carve3 > 2u * RebakeScheduler::kRebakeCeilTicks) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(s.light_gen() == gen);              // свет актуален...
+        CHECK(s.baked_gen() == gen);              // ...нав доведён...
+        CHECK(s.light_full_bakes() == fullBakes); // ...без полного бейка света
     }
 }
 

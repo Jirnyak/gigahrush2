@@ -41,6 +41,25 @@ void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
     lampsLive_.assign(lamps, lamps + n);
     lightSlots_ = slots;
     lightClusterBase_ = clusterBase;
+    // Состав таблицы изменился (рождение/смерть лампы) — следующий
+    // Rebake-цикл обязан печь свет ПОЛНОСТЬЮ (форма: слоты, кластеры).
+    ++lightTableGen_;
+}
+
+void RebakeScheduler::sync_shadow() {
+    // Теневая сетка догоняет живую O(1)-копиями ровно карвнутых клеток —
+    // зовётся ТОЛЬКО при стоящем воркере (обе start_* сначала джойнят).
+    // Идемпотентно: возврат клеток из отменённого цикла копирует их дважды.
+    if (shadowGrid_ == nullptr || liveGrid_ == nullptr) return;
+    const std::vector<SubMask>& masks = liveGrid_->masks();
+    const std::vector<CellType>& types = liveGrid_->types();
+    for (std::uint32_t idx : carvedSinceLight_) {
+        const int x = static_cast<int>(idx % kMacroDim);
+        const int y = static_cast<int>((idx / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(idx / (kMacroDim * kMacroDim));
+        shadowGrid_->mask(x, y, z) = masks[idx];
+        shadowGrid_->set_cell(x, y, z, types[idx]);
+    }
 }
 
 void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
@@ -52,18 +71,16 @@ void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
 
+    // Тень догоняет мир ДО отъёма списка (sync читает его же); копий мира
+    // на главном потоке больше нет (59.21) — только O(1)-долив.
+    const auto tSnap = std::chrono::steady_clock::now();
+    sync_shadow();
+    snapCopyMs_ = ms_between(tSnap, std::chrono::steady_clock::now());
     carvedSnap_ = std::move(carvedSinceLight_);
     carvedSinceLight_.clear();
     std::sort(carvedSnap_.begin(), carvedSnap_.end());
     carvedSnap_.erase(std::unique(carvedSnap_.begin(), carvedSnap_.end()),
                       carvedSnap_.end());
-    // Копия снапшота — ГЛАВНЫЙ поток, и это цена кадра (проблема 59.1:
-    // ~134 МиБ, 10-40 мс — незамеренной ей больше не жить; ужать до боксов
-    // затронутых ламп — кандидат следующего инкремента).
-    const auto tSnap = std::chrono::steady_clock::now();
-    if (liveGrid_ != nullptr)
-        snapGrid_ = std::make_unique<MacroGrid>(*liveGrid_);
-    snapCopyMs_ = ms_between(tSnap, std::chrono::steady_clock::now());
     lampsSnap_ = lampsLive_;
     snapGen_ = worldGen;
 
@@ -71,8 +88,8 @@ void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
     mode_ = Mode::LightPatch;
     const int threads = rebakeThreads_;
     worker_ = std::thread([this, threads]() {
-        if (snapGrid_ != nullptr)
-            bake_light_visibility_patch(*snapGrid_, lampsSnap_.data(),
+        if (shadowGrid_ != nullptr)
+            bake_light_visibility_patch(*shadowGrid_, lampsSnap_.data(),
                                         lampsSnap_.size(), carvedSnap_.data(),
                                         carvedSnap_.size(), pendingPatch_,
                                         threads, &cancel_);
@@ -96,7 +113,7 @@ void RebakeScheduler::discard_pending() {
     carvedSinceLight_.insert(carvedSinceLight_.end(), carvedSnap_.begin(),
                              carvedSnap_.end());
     carvedSnap_.clear();
-    snapGrid_.reset(); // 134 МиБ масок — транзиент цикла, не резидент
+    // shadowGrid_ НЕ трогаем: тень — резидент этажа, воркер её только читал.
     lightDone_.store(false, std::memory_order_relaxed);
     roomsDone_.store(false, std::memory_order_relaxed);
     coarseDone_.store(false, std::memory_order_relaxed);
@@ -136,8 +153,12 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     nav::build_walk_bits(grid, navBits_);
     build_body_walk_bits(grid, bodyBits_);
     // Свету битсета мало — его лучи субвоксельные (S2): Fresh печёт прямо с
-    // живой сетки (мы на главном потоке), Rebake снимет копию в start_rebake.
+    // живой сетки (мы на главном потоке); фоновые циклы читают ТЕНЬ —
+    // резидентную копию, которую sync_shadow дальше правит O(1) на карв
+    // (59.21: копия мира на каждый цикл мертва). Единственная полная копия —
+    // здесь, на входе этажа, где кадр и так платит генерацию/загрузку.
     liveGrid_ = &grid;
+    shadowGrid_ = std::make_unique<MacroGrid>(grid);
 
     // Rooms — синхронно, текущая семантика: поля комнат целы до первого тика,
     // который мог бы их читать, и второй истории владения не существует.
@@ -157,6 +178,8 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
                               lightClusterBase_);
         lightGen_ = worldGen;
         lightSwapPending_ = true;
+        lightTableBakedGen_ = lightTableGen_; // Fresh = полный бейк состава
+        ++lightFullBakes_;
         std::fprintf(stderr,
                      "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
                      "(mean %.1f packed %.1f max %u/cell, overflow %u), R_max %.1f m, "
@@ -214,25 +237,36 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
 
-    // Снапшот по значению: два битсета (2×256 KiB, ~75 мкс), копия
-    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ) и — для субвоксельных лучей
-    // света (S2) — маски+типы целиком (~134 МиБ, ~10-15 мс; транзиентно до
-    // свапа, освобождается в step()). Дальше живой мир может меняться сколько
-    // угодно — воркер его не видит, а расхождение честно останется как
-    // bakedGen < worldGen после свапа.
+    // Снапшот по значению: два битсета (2×256 KiB, ~75 мкс) и копия
+    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ); субвоксельные лучи света
+    // (S2) читают резидентную ТЕНЬ, доливаемую sync_shadow O(1)-копиями
+    // карвнутых клеток (59.21 — копия мира на каждый цикл мертва). Дальше
+    // живой мир может меняться сколько угодно — воркер его не видит, а
+    // расхождение честно останется как bakedGen < worldGen после свапа.
     snapNav_.words = navBits_.words;
     snapBody_.words = bodyBits_.words;
-    // Та же копия на главном потоке, что у патча — и тот же замер (59.1).
+    // Тень догоняет мир O(1)-доливом — копия 134 МиБ мертва (59.21).
     const auto tSnap = std::chrono::steady_clock::now();
-    if (liveGrid_ != nullptr)
-        snapGrid_ = std::make_unique<MacroGrid>(*liveGrid_);
+    sync_shadow();
     snapCopyMs_ = ms_between(tSnap, std::chrono::steady_clock::now());
     lampsSnap_ = lampsLive_;
-    // Полный бейк света кроет все карвы ≤ снапшота — их список уезжает в
-    // carvedSnap_ и умирает на свапе секции света (на отмене — вернётся).
+    // Карв-долг света уезжает в carvedSnap_ (на отмене — вернётся). Свет
+    // цикла: ПОЛНЫЙ, если менялся состав таблицы (рождение/смерть лампы) или
+    // дедлайн формы; иначе — ПАТЧЕМ этого же долга (гарантия: ни один карв не
+    // остаётся непокрытым, каким бы расписанием ни шли циклы). Если долга нет
+    // и полный не нужен — секции света в цикле нет вовсе.
     carvedSnap_.insert(carvedSnap_.end(), carvedSinceLight_.begin(),
                        carvedSinceLight_.end());
     carvedSinceLight_.clear();
+    std::sort(carvedSnap_.begin(), carvedSnap_.end());
+    carvedSnap_.erase(std::unique(carvedSnap_.begin(), carvedSnap_.end()),
+                      carvedSnap_.end());
+    const bool overdue =
+        haveDirty_ && simTick - firstDirtyTick_ >= kRebakeDeadlineTicks;
+    cycleLightFull_ = (lightTableGen_ != lightTableBakedGen_) || overdue;
+    lightTableGenSnap_ = lightTableGen_;
+    if (!cycleLightFull_ && carvedSnap_.empty())
+        lightSwapped_ = true; // свету нечего делать — секция закрыта заранее
     snapGen_ = worldGen;
     lastStartTick_ = simTick;
 
@@ -248,20 +282,31 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         // его свап ужимает раздутые карвами списки клеток и возвращает кадры
         // сразу; затем приоритеты плана §3: rooms -> coarse -> fine.
         const auto tL = clock::now();
-        if (snapGrid_ != nullptr)
-            bake_light_visibility(*snapGrid_, lampsSnap_.data(),
+        if (shadowGrid_ != nullptr && cycleLightFull_) {
+            bake_light_visibility(*shadowGrid_, lampsSnap_.data(),
                                   lampsSnap_.size(), lightSlots_,
                                   pendingLight_, threads, &cancel_,
                                   lightClusterBase_);
-        if (!cancel_.load(std::memory_order_relaxed)) {
-            std::fprintf(stderr,
-                         "[lightvis] floor %d gen %llu rebaked: %u lamps -> "
-                         "%u lit cells (overflow %u) in %.0f ms @ %d threads\n",
-                         number, static_cast<unsigned long long>(snapGen_),
-                         pendingLight_.lampCount, pendingLight_.litCells,
-                         pendingLight_.overflowCells, pendingLight_.bakeMs,
-                         threads);
-            lightDone_.store(true, std::memory_order_release);
+            if (!cancel_.load(std::memory_order_relaxed)) {
+                std::fprintf(
+                    stderr,
+                    "[lightvis] floor %d gen %llu rebaked FULL: %u lamps -> "
+                    "%u lit cells (overflow %u) in %.0f ms @ %d threads\n",
+                    number, static_cast<unsigned long long>(snapGen_),
+                    pendingLight_.lampCount, pendingLight_.litCells,
+                    pendingLight_.overflowCells, pendingLight_.bakeMs,
+                    threads);
+                lightDone_.store(true, std::memory_order_release);
+            }
+        } else if (shadowGrid_ != nullptr && !carvedSnap_.empty()) {
+            // Таблица не менялась — долг цикла закрывает дельта-патч
+            // (та же гарантия покрытия при в разы меньшей работе).
+            bake_light_visibility_patch(*shadowGrid_, lampsSnap_.data(),
+                                        lampsSnap_.size(), carvedSnap_.data(),
+                                        carvedSnap_.size(), pendingPatch_,
+                                        threads, &cancel_);
+            if (!cancel_.load(std::memory_order_relaxed))
+                lightDone_.store(true, std::memory_order_release);
         }
         const auto t0 = clock::now();
         bake_room_zones(snapBody_, kind, number, pendingRooms_, threads,
@@ -287,7 +332,7 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             std::fprintf(stderr,
                          "[rebake] floor %d gen %llu baked: rooms %.0f + "
                          "coarse %.0f + fine %.0f ms = %.1f s @ %d threads | "
-                         "snap copy %.0f ms MAIN\n",
+                         "shadow sync %.2f ms MAIN\n",
                          number, static_cast<unsigned long long>(snapGen_),
                          roomsMs_, coarseMs_, fineMs_,
                          ms_between(t0, t3) / 1000.0f, threads, snapCopyMs_);
@@ -354,25 +399,44 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 std::fprintf(
                     stderr,
                     "[lightvis] floor %d gen %llu patch: %u lamps affected -> "
-                    "%zu cells changed in %.1f ms @ %d threads | snap copy "
-                    "%.0f ms MAIN\n",
+                    "%zu cells changed in %.1f ms @ %d threads | shadow sync "
+                    "%.2f ms MAIN\n",
                     floorNumber_, static_cast<unsigned long long>(snapGen_),
                     pendingPatch_.affectedLamps, changed,
                     pendingPatch_.bakeMs, rebakeThreads_, snapCopyMs_);
                 carvedSnap_.clear(); // допечены
                 pendingPatch_ = LightVisPatch{};
-                snapGrid_.reset();
                 mode_ = Mode::Idle;
             }
         } else { // Mode::Rebake — посекционно: light -> rooms -> coarse -> fine
             if (!lightSwapped_ &&
                 lightDone_.load(std::memory_order_acquire)) {
-                lightVis_ = std::move(pendingLight_);
-                pendingLight_ = LightVisBake{};
+                if (cycleLightFull_) {
+                    lightVis_ = std::move(pendingLight_);
+                    pendingLight_ = LightVisBake{};
+                    lightSwapPending_ = true; // перезалить GPU-грид целиком
+                    lightTableBakedGen_ = lightTableGenSnap_;
+                    ++lightFullBakes_;
+                } else {
+                    // Свет цикла — патчем: те же добавки в живые списки и
+                    // частичная заливка, что у одиночного LightPatch.
+                    const std::size_t changed = light_vis_apply_patch(
+                        lightVis_, pendingPatch_, lampsSnap_.data(),
+                        lampsSnap_.size(), &patchChangedCells_);
+                    lightPatchPending_ = true;
+                    std::fprintf(
+                        stderr,
+                        "[lightvis] floor %d gen %llu patch-in-cycle: %u "
+                        "lamps affected -> %zu cells changed in %.1f ms\n",
+                        floorNumber_,
+                        static_cast<unsigned long long>(snapGen_),
+                        pendingPatch_.affectedLamps, changed,
+                        pendingPatch_.bakeMs);
+                    pendingPatch_ = LightVisPatch{};
+                }
                 lightGen_ = snapGen_;
-                lightSwapPending_ = true; // вызывающий перезальёт GPU-грид
                 lightSwapped_ = true;
-                carvedSnap_.clear(); // полный бейк их покрыл
+                carvedSnap_.clear(); // долг покрыт (полным или патчем)
             }
             if (!roomsSwapped_ &&
                 roomsDone_.load(std::memory_order_acquire)) {
@@ -392,7 +456,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 bakedGen_ = snapGen_;
                 lastRebakeDurTicks_ = simTick - lastStartTick_;
                 mode_ = Mode::Idle;
-                snapGrid_.reset(); // транзиент цикла отдан (134 МиБ масок)
+                // тень живёт дальше — транзиента цикла больше нет (59.21)
                 // Память на свапе: транзиентный пик (старый+новый fine ~260
                 // MiB) уже позади, но capacity — то, что держит аллокатор.
                 std::fprintf(

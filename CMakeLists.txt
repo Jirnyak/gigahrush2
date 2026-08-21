@@ -1196,7 +1196,7 @@ if(GIGA_BUILD_TESTS)
     # 236605 -> 236606 (+1) on 2026-08-21: форма как ДАННЫЕ (ragdoll.md §9) —
     # data/prop_forms.csv + кодоген; тест больше не пинит «6 сущностей», он
     # выводит их из таблицы и требует, чтобы доли масс складывались в целое.
-        PASS_REGULAR_EXPRESSION "game_test: 236623 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 236627 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
