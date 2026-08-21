@@ -399,15 +399,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 
-    // 4. Emissive Loot Containers & Supply Crates
-    for (auto e : reg.view<const game::Container, const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != activeLayer) continue;
-        const game::Container& cnt = reg.get<const game::Container>(e);
-        if (!cnt.opened && light_reaches_view(tr.pos, 6.0f)) {
-            grid.add_light(tr.pos + vec3{0.0f, 0.0f, 0.5f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
-        }
-    }
+    // 4. Маячок неоткрытого ящика УДАЛЁН (решение владельца 2026-08-21,
+    // реализм: ящик не лампа; лут ищется глазами и фонарём). Ящик — проп
+    // (B1), светиться может только строкой props.csv, как любой проп.
 
     // 5. Flying Tracer & Plasma Projectile Light Emitters
     for (auto e : reg.view<const game::Projectile, const Transform>()) {
