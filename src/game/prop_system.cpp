@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <vector>
 #include <unordered_set>
-#include <cmath>
 #include <cstdio>
 #include "core/wrap.h"
 #include "core/rng.h"
@@ -241,6 +240,57 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     reg.emplace_or_replace<AABB>(prop, AABB{half});
 }
 
+// §59.2: снаряд платил полный проход по ВСЕМ якорным пропам каждый тик ради
+// брод-фейза «якорь в ±1 клетке» — 20 пуль × 12646 пропов × 125 Гц ≈ 32 млн
+// итераций/с, худшая per-tick находка каталога. Индекс: бины по макроклетке
+// якоря (плоский отсортированный CSR, как rigid.cpp:543, но ПЕРСИСТЕНТНЫЙ —
+// якорь неподвижен по построению, множество меняется только спавном/детачем/
+// смертью). Живёт в reg.ctx(): состояние едет с реестром, глобала нет, тесты
+// получают индекс даром. Грязнится сигналами EnTT на SubVoxelAnchor —
+// emplace, remove и destroy сущности будят один флаг, и любой БУДУЩИЙ
+// мутатор якоря платит тот же долг автоматически, без списка мест.
+namespace {
+
+struct AnchorBins {
+    struct Entry {
+        std::uint32_t cell; // macro_index якоря — тот же ключ, что брод-фейз
+        Entity e;
+    };
+    std::vector<Entry> entries; // отсортированы по (cell, e) — детерминизм
+    bool dirty = true;
+};
+
+void mark_anchor_bins_dirty(Registry& reg, Entity) {
+    if (AnchorBins* b = reg.ctx().find<AnchorBins>()) b->dirty = true;
+}
+
+AnchorBins& anchor_bins(Registry& reg) {
+    if (AnchorBins* b = reg.ctx().find<AnchorBins>()) return *b;
+    AnchorBins& b = reg.ctx().emplace<AnchorBins>();
+    reg.on_construct<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
+    reg.on_destroy<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
+    return b;
+}
+
+void rebuild_anchor_bins(Registry& reg, AnchorBins& bins) {
+    bins.entries.clear();
+    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+    for (auto entity : view) {
+        const auto& a = view.get<SubVoxelAnchor>(entity);
+        bins.entries.push_back(
+            {static_cast<std::uint32_t>(macro_index(
+                 wrap_macro(a.cx), wrap_macro(a.cy), wrap_macro(a.cz))),
+             entity});
+    }
+    std::sort(bins.entries.begin(), bins.entries.end(),
+              [](const AnchorBins::Entry& a, const AnchorBins::Entry& b) {
+                  return a.cell != b.cell ? a.cell < b.cell : a.e < b.e;
+              });
+    bins.dirty = false;
+}
+
+} // namespace
+
 bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts, std::uint32_t seed)
@@ -250,33 +300,54 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     const int pcy = wrap_macro(static_cast<int>(projPos.y / kCellSize));
     const int pcz = wrap_macro(static_cast<int>(projPos.z / kCellSize));
 
+    AnchorBins& bins = anchor_bins(reg);
+    if (bins.dirty) rebuild_anchor_bins(reg, bins);
+
     Entity hitEntity = entt::null;
     PropFallMode hitMode = PropFallMode::SimpleFall;
     vec3 hitPos{0.0f, 0.0f, 0.0f};
     vec3 hitColor{0.8f, 0.8f, 0.8f};
 
+    // 27 соседних бакетов вместо полного view — то же множество кандидатов,
+    // что давал старый фильтр |wrap_delta(anchor, pc)| ≤ 1 по каждой оси;
+    // узкая фаза (точная wrap-дистанция по позиции) не менялась.
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
-    for (auto entity : view) {
-        const auto& anchor = view.get<SubVoxelAnchor>(entity);
+    for (int dz = -1; dz <= 1 && hitEntity == entt::null; ++dz) {
+        for (int dy = -1; dy <= 1 && hitEntity == entt::null; ++dy) {
+            for (int dx = -1; dx <= 1 && hitEntity == entt::null; ++dx) {
+                const std::uint32_t cell = static_cast<std::uint32_t>(
+                    macro_index(wrap_macro(pcx + dx), wrap_macro(pcy + dy),
+                                wrap_macro(pcz + dz)));
+                auto it = std::lower_bound(
+                    bins.entries.begin(), bins.entries.end(), cell,
+                    [](const AnchorBins::Entry& e, std::uint32_t c) {
+                        return e.cell < c;
+                    });
+                for (; it != bins.entries.end() && it->cell == cell; ++it) {
+                    const Entity entity = it->e;
+                    // Потеря компонента-соседа (Transform/PropFallMode) не
+                    // грязнит индекс якорей — страховка членством во view.
+                    if (!view.contains(entity)) continue;
 
-        if (std::abs(wrap_delta(anchor.cx, pcx, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cy, pcy, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cz, pcz, kMacroDim)) > 1)
-        {
-            continue;
-        }
+                    const auto& tr = view.get<Transform>(entity);
+                    const float ddx =
+                        wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
+                    const float ddy =
+                        wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
+                    const float ddz =
+                        wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
 
-        const auto& tr = view.get<Transform>(entity);
-        const float dx = wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
-        const float dy = wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
-
-        if (dx * dx + dy * dy + dz * dz <= radiusSq) {
-            hitEntity = entity;
-            hitMode = view.get<PropFallMode>(entity);
-            hitPos = tr.pos;
-            hitColor = reg.all_of<Renderable>(entity) ? reg.get<Renderable>(entity).color : vec3{0.8f, 0.8f, 0.8f};
-            break;
+                    if (ddx * ddx + ddy * ddy + ddz * ddz <= radiusSq) {
+                        hitEntity = entity;
+                        hitMode = view.get<PropFallMode>(entity);
+                        hitPos = tr.pos;
+                        hitColor = reg.all_of<Renderable>(entity)
+                                       ? reg.get<Renderable>(entity).color
+                                       : vec3{0.8f, 0.8f, 0.8f};
+                        break;
+                    }
+                }
+            }
         }
     }
 
