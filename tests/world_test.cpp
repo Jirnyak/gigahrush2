@@ -303,6 +303,60 @@ static void test_rigid_ball_settles_and_sleeps() {
     CHECK(!reg.get<RigidBody>(e).asleep);
 }
 
+// Инкремент 2 ([markoaudit/plans/ragdoll.md]): форма из контактных сфер.
+// Бокс (солвер видит 14 сфер: 8 углов + 6 граней) сброшен с подкруткой —
+// кувыркается, гасится трением (у бокса Кулон останавливает, качения нет),
+// ложится ПЛАШМЯ на свою полувысоту и засыпает.
+static void test_rigid_box_lies_flat() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 5.75f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{vec3{1.5f, 0.0f, 0.0f}});
+
+    // Дерево (паркет 700 кг/м³), ящик 1.1×1.1×0.9 — как spawn_box.
+    const vec3 half{0.55f, 0.55f, 0.45f};
+    const float dx = 1.1f, dy = 1.1f, dz = 0.9f;
+    const float mass = 700.0f * dx * dy * dz;
+    ContactForm formSpheres;
+    const float bound = form_from_box(half, formSpheres);
+    CHECK(formSpheres.count == 14);
+
+    RigidBody rb;
+    rb.radius = bound;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 18.0f / (mass * (dx * dx + dy * dy + dz * dz));
+    rb.restitution = 0.09f;
+    rb.friction = 0.9f;
+    rb.w = vec3{0.0f, -3.0f, 0.0f}; // кувырок вперёд по X
+    reg.emplace<RigidBody>(e, rb);
+    reg.emplace<ContactForm>(e, formSpheres);
+
+    for (int i = 0; i < 10 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    const auto& out = reg.get<Transform>(e);
+    const auto& b = reg.get<RigidBody>(e);
+    const float floorTop = 5.0f * kCellSize;
+    CHECK(b.asleep);
+    // Плашмя = центр на одной из ПОЛУВЫСОТ бокса (0.45 или 0.55 — на какую
+    // грань лёг кувырок), а не на радиусе ограничивающей сферы (0.9).
+    const float rest = out.pos.z - floorTop;
+    CHECK(rest > 0.40f);
+    CHECK(rest < 0.60f);
+    const float qn =
+        b.q.x * b.q.x + b.q.y * b.q.y + b.q.z * b.q.z + b.q.w * b.q.w;
+    CHECK(std::fabs(qn - 1.0f) < 1e-3f);
+}
+
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
 // терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
 // владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
@@ -967,6 +1021,7 @@ int main() {
     test_aabb_overlap();
     test_physics_lands_on_floor();
     test_rigid_ball_settles_and_sleeps();
+    test_rigid_box_lies_flat();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();

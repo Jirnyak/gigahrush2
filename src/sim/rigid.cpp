@@ -165,56 +165,84 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                           h);
             tr.pos += vel.v * h;
 
-            const SphereContact c =
-                sphere_deepest_contact(w, tr.pos, rb.radius);
-            if (c.depth >= 0.0f) {
+            // Набор контактных сфер: ContactForm (бокс и композиции — их
+            // сферы жёстко сидят во фрейме тела), без него — вырожденный
+            // случай: одна сфера RigidBody.radius в центре (мяч).
+            const ContactForm* form = reg.try_get<ContactForm>(e);
+            const int nSph = (form && form->count) ? form->count : 1;
+
+            bool contactThisStep = false;
+            vec3 contactN{0.0f, 0.0f, 0.0f};
+
+            for (int i = 0; i < nSph; ++i) {
+                vec3 off{0.0f, 0.0f, 0.0f};
+                float sr = rb.radius;
+                if (form && form->count) {
+                    off = quat_rotate(rb.q, form->off[i]);
+                    sr = form->r[i];
+                }
+                const SphereContact c =
+                    sphere_deepest_contact(w, tr.pos + off, sr);
+                if (c.depth < 0.0f) continue;
                 touched = true;
-                // Позиционное выталкивание — тело не тонет в субвоксель.
+                contactThisStep = true;
+                contactN = c.n;
+                // Позиционное выталкивание всего тела — не тонет.
                 tr.pos += c.n * c.depth;
 
-                const float vn = dot(vel.v, c.n);
-                if (vn < 0.0f) {
-                    maxApproach = std::max(maxApproach, -vn);
+                // Плечо контакта от центра тела: r_c = off − n·r. У мяча
+                // (off=0) r_c коллинеарно нормали, угловые вклады по n
+                // нулевые — формулы ниже вырождаются в инкремент 1 точно.
+                const vec3 rc = off + c.n * (-sr);
+                const vec3 vp = vel.v + cross(rb.w, rc);
+                const float vn = dot(vp, c.n);
+                if (vn >= 0.0f) continue;
+                maxApproach = std::max(maxApproach, -vn);
 
-                    // Нормальный импульс. Мир статичен; у сферы плечо контакта
-                    // коллинеарно нормали, углового вклада вдоль неё нет:
-                    // v_n' = -e·v_n точно.
-                    const float e =
-                        (-vn > kBounceMinV) ? rb.restitution : 0.0f;
-                    const float jn = -(1.0f + e) * vn / rb.invMass;
-                    vel.v += c.n * (jn * rb.invMass);
+                // Обобщённый нормальный импульс (sequential impulses):
+                // k_n = 1/m + |r_c×n|²/I — угловая податливость контакта.
+                const vec3 rxn = cross(rc, c.n);
+                const float kn =
+                    rb.invMass + rb.invInertia * dot(rxn, rxn);
+                const float e_ =
+                    (-vn > kBounceMinV) ? rb.restitution : 0.0f;
+                const float jn = -(1.0f + e_) * vn / kn;
+                vel.v += c.n * (jn * rb.invMass);
+                rb.w += cross(rc, c.n * jn) * rb.invInertia;
 
-                    // Кулоново трение ЧЕРЕЗ ТОЧКУ КОНТАКТА: r_c = -r·n,
-                    // v_p = v + w×r_c. Тормозя скольжение точки, импульс
-                    // раскручивает тело — качение возникает из физики.
-                    const vec3 rc = c.n * (-rb.radius);
-                    const vec3 vp = vel.v + cross(rb.w, rc);
-                    const vec3 vt = vp - c.n * dot(vp, c.n);
-                    const float vtLen = length(vt);
-                    if (vtLen > 1e-5f) {
-                        const vec3 t = vt * (1.0f / vtLen);
-                        // Эффективная масса вдоль касательной у сферы:
-                        // k = 1/m + r²/I.
-                        const float k = rb.invMass +
-                            rb.invInertia * rb.radius * rb.radius;
-                        float jt = -vtLen / k;
-                        const float jtMax = rb.friction * jn;
-                        jt = std::clamp(jt, -jtMax, jtMax);
-                        vel.v += t * (jt * rb.invMass);
-                        rb.w += cross(rc, t * jt) * rb.invInertia;
-                    }
-
-                    // Трение качения: замедление a = Crr·g вдоль движения.
-                    const float g = length(w.gravity().at(tr.pos));
-                    const float vLen = length(vel.v);
-                    if (vLen > 1e-5f) {
-                        const float dv = std::min(vLen, kRollCrr * g * h);
-                        vel.v += vel.v * (-dv / vLen);
-                    }
-                    // Сверление: гасим только компоненту w вдоль нормали.
-                    const float wn = dot(rb.w, c.n);
-                    rb.w += c.n * (wn * (std::exp(-kSpinDamp * h) - 1.0f));
+                // Кулоново трение ЧЕРЕЗ ТОЧКУ КОНТАКТА (скорость точки —
+                // после нормального импульса). Тормозя скольжение точки,
+                // импульс раскручивает тело — качение возникает из физики.
+                const vec3 vp2 = vel.v + cross(rb.w, rc);
+                const vec3 vt = vp2 - c.n * dot(vp2, c.n);
+                const float vtLen = length(vt);
+                if (vtLen > 1e-5f) {
+                    const vec3 t = vt * (1.0f / vtLen);
+                    const vec3 rxt = cross(rc, t);
+                    const float kt =
+                        rb.invMass + rb.invInertia * dot(rxt, rxt);
+                    float jt = -vtLen / kt;
+                    const float jtMax = rb.friction * jn;
+                    jt = std::clamp(jt, -jtMax, jtMax);
+                    vel.v += t * (jt * rb.invMass);
+                    rb.w += cross(rc, t * jt) * rb.invInertia;
                 }
+            }
+
+            // Качение и сверление — РАЗ на подшаг, не на сферу: у бокса на
+            // плоскости контактных сфер четыре, и повтор в цикле давал бы
+            // четырёхкратное трение качения.
+            if (contactThisStep) {
+                // Трение качения: замедление a = Crr·g вдоль движения.
+                const float g = length(w.gravity().at(tr.pos));
+                const float vLen = length(vel.v);
+                if (vLen > 1e-5f) {
+                    const float dv = std::min(vLen, kRollCrr * g * h);
+                    vel.v += vel.v * (-dv / vLen);
+                }
+                // Сверление: гасим только компоненту w вдоль нормали.
+                const float wn = dot(rb.w, contactN);
+                rb.w += contactN * (wn * (std::exp(-kSpinDamp * h) - 1.0f));
             }
 
             rb.q = quat_integrate(rb.q, rb.w, h);
@@ -247,6 +275,44 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             rb.sleepTicks = 0;
         }
     }
+}
+
+float form_from_box(vec3 half, ContactForm& out) {
+    // Радиус контактных сфер ВЫВЕДЕН из тонкой стороны бокса: r = min(half)/2
+    // — сфера сидит внутри заподлицо с гранью (офсет = half − r), рёбра
+    // скруглены ровно этим радиусом. Тоньше бокс — мельче сферы, форма
+    // остаётся честной и для дверного полотна.
+    const float r = 0.5f * std::min({half.x, half.y, half.z});
+    int n = 0;
+    // 8 углов — момент и кувырок.
+    for (int sz = -1; sz <= 1; sz += 2)
+        for (int sy = -1; sy <= 1; sy += 2)
+            for (int sx = -1; sx <= 1; sx += 2) {
+                out.off[n] = vec3{static_cast<float>(sx) * (half.x - r),
+                                  static_cast<float>(sy) * (half.y - r),
+                                  static_cast<float>(sz) * (half.z - r)};
+                out.r[n] = r;
+                ++n;
+            }
+    // 6 центров граней — плоское лежание опирается не только на углы, и
+    // длинная грань не провисает в субвоксельную щель.
+    for (int a = 0; a < 3; ++a)
+        for (int s = -1; s <= 1; s += 2) {
+            vec3 off{0.0f, 0.0f, 0.0f};
+            const float d = static_cast<float>(s);
+            if (a == 0) off.x = d * (half.x - r);
+            else if (a == 1) off.y = d * (half.y - r);
+            else off.z = d * (half.z - r);
+            out.off[n] = off;
+            out.r[n] = r;
+            ++n;
+        }
+    out.count = static_cast<std::uint8_t>(n);
+
+    float bound = 0.0f;
+    for (int i = 0; i < n; ++i)
+        bound = std::max(bound, length(out.off[i]) + out.r[i]);
+    return bound;
 }
 
 } // namespace giga

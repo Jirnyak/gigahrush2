@@ -12,6 +12,8 @@
 // спавнит и выводит параметры из таблиц, ядро таблиц не знает.
 #pragma once
 
+#include "core/math.h"
+#include "ecs/components.h" // ContactForm
 #include "ecs/registry.h"
 #include "world/level_stack.h"
 
@@ -19,5 +21,13 @@ namespace giga {
 
 // Advance every awake RigidBody + Transform + Velocity by dt against its layer.
 void rigid_body_step(Registry& reg, LevelStack& stack, float dt);
+
+// Раскладка БОКСА в контактные сферы (фундамент формы: словарь автора — сфера
+// и бокс, словарь солвера — только сфера). Радиус выведен, не назначен:
+// r = min(half)/2 — сферы сидят внутри бокса заподлицо с гранями, рёбра
+// скруглены этим радиусом. 8 углов дают момент и кувырок, 6 центров граней
+// держат плоское лежание. Возвращает радиус ограничивающей сферы —
+// вызывающий кладёт его в RigidBody.radius (брод-фаза).
+float form_from_box(vec3 half, ContactForm& out);
 
 } // namespace giga

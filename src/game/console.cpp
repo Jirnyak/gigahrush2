@@ -15,6 +15,7 @@
 #include "game/mob_spawn.h"      // spawn_mob_at
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
 #include "game/npc_pool.h"       // NpcPool cx/cy for hub boarding
+#include "sim/rigid.h"           // form_from_box — spawn_box контактные сферы
 #include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
 #include "world/types.h"         // kCellSize, wrap_macro
 
@@ -653,6 +654,89 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
 // The trio is the player-side writer of Equipped, the exact counterpart of
 // ai_equip_step for AiBrain bodies.
 
+// --- spawn_box [hx hy hz] ----------------------------------------------------
+// Стенд формы ([markoaudit/plans/ragdoll.md] инкремент 2): деревянный ящик на
+// том же рагдолл-ядре. Автор задаёт БОКС, солвер получает контактные сферы
+// (form_from_box: 8 углов + 6 граней) — единственная контактная процедура
+// ядра остаётся сферической. Бросается вперёд с подкруткой, чтобы кувырок и
+// укладка плашмя были видны сразу.
+//
+// Вывод параметров (S11): дерево (kMatParquet, 700 кг/м³): масса = плотность ×
+// объём бокса; скалярная инерция — среднее диагонали тензора бокса
+// I_avg = m·(dx²+dy²+dz²)/18; отскок/трение — та же шкала hardness, что у
+// spawn_ball (паркет 48 → e≈0.09, μ≈0.9: падает и ложится, почти не скачет).
+
+bool cmd_spawn_box(ConsoleContext& ctx, int argc, const char* const* argv,
+                   char* out, std::size_t cap) {
+    if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
+        if (out && cap) put(out, cap, "spawn_box: player or ecs missing");
+        return false;
+    }
+    const auto* tr = ctx.ecs->try_get<Transform>(ctx.player);
+    if (!tr) {
+        if (out && cap) put(out, cap, "spawn_box: player has no transform");
+        return false;
+    }
+    // Полугабариты аргументами; дефолт — пропорции ящика (S14 supply_crate
+    // 1.1×1.1×0.9 м / 2). Пол по тонкой стороне — субвоксель.
+    vec3 half{0.55f, 0.55f, 0.45f};
+    if (argc >= 4) {
+        half.x = std::clamp(static_cast<float>(std::atof(argv[1])),
+                            kVoxelSize, 1.5f);
+        half.y = std::clamp(static_cast<float>(std::atof(argv[2])),
+                            kVoxelSize, 1.5f);
+        half.z = std::clamp(static_cast<float>(std::atof(argv[3])),
+                            kVoxelSize, 1.5f);
+    }
+    vec3 offset{2.0f, 0.0f, 0.8f};
+    vec3 fwd{1.0f, 0.0f, 0.0f};
+    if (const auto* cam = ctx.ecs->try_get<CameraTag>(ctx.player)) {
+        const float c = std::cos(cam->yaw);
+        const float s = std::sin(cam->yaw);
+        offset = vec3{c * 2.0f, s * 2.0f, 0.8f};
+        fwd = vec3{c, s, 0.0f};
+    }
+    const vec3 spawnPos = tr->pos + offset;
+
+    const float density = kMatDensity[kMatParquet]; // 700 кг/м³, дерево
+    const float dx = half.x * 2.0f, dy = half.y * 2.0f, dz = half.z * 2.0f;
+    const float mass = density * dx * dy * dz;
+    const float inertia = mass * (dx * dx + dy * dy + dz * dz) / 18.0f;
+    const float hardness = static_cast<float>(kMatHardness[kMatParquet]);
+
+    ContactForm formSpheres;
+    const float bound = form_from_box(half, formSpheres);
+
+    RigidBody rb;
+    rb.radius = bound; // ограничивающая сфера — брод-фаза
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / inertia;
+    rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
+    rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
+
+    Entity box = ctx.ecs->create();
+    ctx.ecs->emplace<Transform>(box, Transform{spawnPos, tr->layer});
+    // AABB = авторский бокс: BodyPass рисует ровно форму (с кватернионом).
+    ctx.ecs->emplace<AABB>(box, AABB{half});
+    // Бросок с подкруткой: кувырок виден с первого спавна.
+    ctx.ecs->emplace<Velocity>(box, Velocity{fwd * 5.0f});
+    rb.w = vec3{fwd.y * 4.0f, -fwd.x * 4.0f, 0.0f}; // кувырок вперёд
+    ctx.ecs->emplace<Renderable>(box, Renderable{vec3{0.75f, 0.55f, 0.20f}});
+    ctx.ecs->emplace<DynamicBodyTag>(box);
+    ctx.ecs->emplace<RigidBody>(box, rb);
+    ctx.ecs->emplace<ContactForm>(box, formSpheres);
+    ctx.ecs->emplace<SelfIntegrating>(box);
+
+    if (out && cap)
+        std::snprintf(out, cap,
+                      "spawn_box: %.2fx%.2fx%.2f m, %.0f kg, %u spheres L%u",
+                      static_cast<double>(dx), static_cast<double>(dy),
+                      static_cast<double>(dz), static_cast<double>(mass),
+                      static_cast<unsigned>(formSpheres.count),
+                      static_cast<unsigned>(tr->layer));
+    return true;
+}
+
 // Shared preamble: the player's pool row id, or false with a put() message.
 bool equip_ctx(ConsoleContext& ctx, const char* who, char* out, std::size_t cap,
                NpcId* id) {
@@ -843,9 +927,12 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});
-    ok &= con.add({"spawn_ball", "spawn_ball",
-                   "spawn a rolling test ball (Type A) beside player",
+    ok &= con.add({"spawn_ball", "spawn_ball [radius_m]",
+                   "spawn a rigid-core test ball beside player",
                    cmd_spawn_ball, nullptr});
+    ok &= con.add({"spawn_box", "spawn_box [hx hy hz]",
+                   "spawn a tumbling rigid-core box (contact spheres)",
+                   cmd_spawn_box, nullptr});
     ok &= con.add({"give", "give <item> [count]",
                    "spawn an item from data/items.csv into the pack",
                    cmd_give, nullptr});

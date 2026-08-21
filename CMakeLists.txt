@@ -553,7 +553,10 @@ if(GIGA_BUILD_TESTS)
         # 23422 + 6 (test_rigid_ball_settles_and_sleeps: рагдолл-ядро — качение
         # из трения, оседание на радиусе, сон, пробуждение записью Velocity,
         # единичный кватернион; [markoaudit/plans/ragdoll.md]) = 23428.
-        PASS_REGULAR_EXPRESSION "23428/23428 checks passed"
+        # 23428 + 5 (test_rigid_box_lies_flat: форма из контактных сфер — бокс
+        # 14 сфер кувыркается, ложится ПЛАШМЯ на полувысоту, не на
+        # ограничивающий радиус, и засыпает) = 23433.
+        PASS_REGULAR_EXPRESSION "23433/23433 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
