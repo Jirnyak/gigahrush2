@@ -53,6 +53,12 @@ INTERACTS = _load_interacts()
 # FlickerProfile ordinals — lockstep с src/game/flicker.h и shaders/flicker.glsl.
 FLICKER = {"none": 0, "mains": 1, "arc": 2, "pulse": 3, "crt": 4}
 
+# ChargeTrigger ordinals — lockstep с enum class ChargeTrigger в prop_table.h
+# (эмитится этим же генератором ниже). none = проп не детонирует сам (заряд
+# может быть взведён извне — фитиль гранаты взводит бросающий); damage =
+# детонация вместо детача, когда проп сбивают выстрелом/ударом (бочка).
+CHARGE_TRIGGERS = {"none": 0, "damage": 1}
+
 
 def die(msg):
     sys.stderr.write("gen_prop_table: %s\n" % msg)
@@ -138,6 +144,15 @@ def main():
         if (light_radius == 0) != (light_intensity == 0):
             die("%r: light_radius_mm and light_intensity_e3 must be both zero "
                 "or both set" % sid)
+        explosive = num(r, "explosive_g", 0, 65535)
+        trigger = (r.get("charge_trigger") or "").strip()
+        if trigger not in CHARGE_TRIGGERS:
+            die("%r: unknown charge_trigger %r (want %s)"
+                % (sid, trigger, ", ".join(sorted(CHARGE_TRIGGERS))))
+        # Триггер без взрывчатки — заряд, который сработает нулём: молчаливый
+        # обман того же сорта, что blastDm без fuseDs у оружейной таблицы.
+        if CHARGE_TRIGGERS[trigger] != 0 and explosive == 0:
+            die("%r: charge_trigger %r requires explosive_g > 0" % (sid, trigger))
 
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
@@ -164,10 +179,11 @@ def main():
         if not (0 < massG <= 4294967295):
             die("row %d: mass_g %r out of range (1..2^32-1, and a prop may not be "
                 "massless)" % (i, mass_raw))
-        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker + pads.
+        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker,
+        # chargeTrigger (бывший pad0_), explosiveG (бывший pad1_).
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, 0, 0 }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, sid,
                 massG,
                 shape,
@@ -180,7 +196,9 @@ def main():
                 reach,
                 sizes[0], sizes[1], sizes[2],
                 light_radius, light_intensity,
-                FLICKER[flicker]))
+                FLICKER[flicker],
+                CHARGE_TRIGGERS[trigger],
+                explosive))
 
     count = len(rows)
 
@@ -278,12 +296,25 @@ struct PropDef {
     std::uint16_t lightIntensityE3; // 26 интенсивность x1000
     std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
                                     //    свет И emissive носителя, синхронно
-    std::uint8_t  pad0_ = 0;        // 29
-    std::uint16_t pad1_ = 0;        // 30
+    // ЗАРЯД ([combat.h] Charge, решение владельца 2026-08-21: «пропы в целом
+    // могут взрываться»). explosiveG — масса ВВ в граммах, 0 = не заряд;
+    // урон и радиус детонации ВЫВОДЯТСЯ из неё (S11), не назначаются.
+    // Оба поля заняли бывшие pad0_/pad1_ — строка осталась 32 байта.
+    std::uint8_t  chargeTrigger;    // 29 ChargeTrigger ниже
+    std::uint16_t explosiveG;       // 30 масса ВВ, граммы
 };
 static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
+
+// Как заряд срабатывает. none — сам не детонирует (взводится извне: фитиль
+// гранаты взводит бросающий, [combat.h] spawn_grenade); damage — детонация
+// вместо детача, когда проп сбивают выстрелом (бочка, баллон).
+// Lockstep с CHARGE_TRIGGERS генератора.
+enum class ChargeTrigger : std::uint8_t { None = 0, Damage = 1 };
+
+// Строка — заряд? Выводится из массы ВВ, не объявляется отдельным флагом.
+inline bool prop_is_charge(const PropDef& d) { return d.explosiveG > 0; }
 
 
 // Generated from data/props.csv by tools/gen_prop_table.py.
