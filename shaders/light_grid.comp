@@ -54,6 +54,16 @@ layout(set = 0, binding = 3, std430) readonly buffer DirtyGenBuffer {
     uint uDirtyGen[];
 };
 
+// Бакеты динамического хвоста (проблема 59.14): CPU сплатит каждый динамик
+// (снаряд, моб-эмиттер, фонарь) сферой в решётку dynBucketDim³; клетка
+// читает ТОЛЬКО свой бакет вместо прохода по всему хвосту. Слово 0 бакета —
+// счётчик; kDynFallback = перелив: клетка честно сканирует весь хвост
+// (ошибка — «заплатить больше», никогда «потерять лампу»).
+layout(set = 0, binding = 4, std430) readonly buffer DynBucketBuffer {
+    uint uDynBuckets[];
+};
+const uint kDynFallback = 0xFFFFFFFFu;
+
 // Камеры в пуше НЕТ по построению: биннинг камеронезависим (S7), и мёртвая
 // лейна camPos возилась зря (аудит 2026-08-20). uTime/maxLights тоже умерли:
 // слоты приходят дефайном, время компьюту не нужно.
@@ -64,8 +74,8 @@ layout(push_constant) uniform GridPush {
                     // y = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
     uint genBaked;       // поколение мира в живом bakedGrid
     uint genStaticCount; // граница секций таблицы: [0..S) статики, [S..N) динамики
-    uint genPad0;
-    uint genPad1;
+    uint dynBucketDim;   // решётка бакетов динамиков (= kDynBucketDim хоста)
+    uint dynBucketSlots; // слотов на бакет (= kDynBucketSlots хоста)
 } pc;
 
 // Toroidal wrap. The period is PUSHED, never written here: this helper used to be
@@ -209,15 +219,41 @@ void main() {
         }
     }
 
-    // Динамический хвост (мобы-эмиттеры, снаряды, фонарик): единицы-десятки,
-    // тайл и бейк не нужны — прямой дистанционный тест каждым потоком.
-    for (uint i = staticCount; i < activeCount; ++i) {
-        vec4 pr = uPointLights[i].posRadius;
-        float radius = pr.w;
-        // CPU add_light уже отверг radius<=0 и intensity<=0.001 у динамиков.
-        float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.y);
-        if (dSq > radius * radius) continue;
-        consider(i, dSq / (radius * radius));
+    // Динамический хвост (мобы-эмиттеры, снаряды, фонарик) — ЧЕРЕЗ БАКЕТЫ
+    // (59.14): раньше каждая клетка сканировала весь хвост, и перестрелка
+    // (каждый снаряд — лампа) дорожала линейно от интенсивности боя. Теперь
+    // клетка читает свой бакет; перелив бакета честно падает на старый
+    // полный скан — свет не теряется по построению.
+    if (activeCount > staticCount) {
+        vec3 cc = (cellMin + cellMax) * 0.5;
+        float bucketM = pc.params.y / float(pc.dynBucketDim);
+        uint mask = pc.dynBucketDim - 1u;
+        uint bx = uint(floor(cc.x / bucketM)) & mask;
+        uint by = uint(floor(cc.y / bucketM)) & mask;
+        uint bz = uint(floor(cc.z / bucketM)) & mask;
+        uint base = (bx + by * pc.dynBucketDim +
+                     bz * pc.dynBucketDim * pc.dynBucketDim) *
+                    (1u + pc.dynBucketSlots);
+        uint cnt = uDynBuckets[base];
+        if (cnt == kDynFallback) {
+            for (uint i = staticCount; i < activeCount; ++i) {
+                vec4 pr = uPointLights[i].posRadius;
+                float radius = pr.w;
+                // CPU add_light уже отверг radius<=0 и intensity<=0.001.
+                float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.y);
+                if (dSq > radius * radius) continue;
+                consider(i, dSq / (radius * radius));
+            }
+        } else {
+            for (uint k = 0u; k < cnt; ++k) {
+                uint i = uDynBuckets[base + 1u + k];
+                vec4 pr = uPointLights[i].posRadius;
+                float radius = pr.w;
+                float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.y);
+                if (dSq > radius * radius) continue;
+                consider(i, dSq / (radius * radius));
+            }
+        }
     }
 
     // Список клетки пишется ОТСОРТИРОВАННЫМ по вкладу (лучший — первым):

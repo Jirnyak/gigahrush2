@@ -84,6 +84,21 @@ struct alignas(16) GpuGridCell {
 static_assert(sizeof(GpuGridCell) == kGridCellBytes,
               "GpuGridCell std430 layout must equal kGridCellBytes");
 
+// Бакеты ДИНАМИЧЕСКОГО хвоста (проблема 59.14): раньше каждая из 262144
+// клеток сканировала весь хвост [staticCount..activeCount) каждый кадр —
+// перестрелка (каждый снаряд = лампа) дорожала линейно от интенсивности боя.
+// Теперь CPU сплатит динамики сферами в решётку 16³ (бакет = период/16 =
+// 16 м), клетка компьюта читает ТОЛЬКО свой бакет. Вывод ёмкости: динамиков
+// единицы-десятки, сфера снаряда ~5-10 м накрывает ≤8 бакетов — 15 слотов
+// держат ~2 плотных боя в одном бакете; переполнение НЕ роняет свет: бакет
+// помечается kDynBucketFallback и клетка честно сканирует весь хвост (ошибка
+// всегда «заплатить больше», не «потерять лампу» — S11 вслух строкой).
+static constexpr uint32_t kDynBucketDim = 16;
+static constexpr uint32_t kDynBucketCount =
+    kDynBucketDim * kDynBucketDim * kDynBucketDim; // 4096
+static constexpr uint32_t kDynBucketSlots = 15;    // 16 слов: счётчик + 15 id
+static constexpr uint32_t kDynBucketFallback = 0xFFFFFFFFu;
+
 // Matches GridPush in shaders/light_grid.comp
 // Камеры в пуше НЕТ (S7: биннинг камеронезависим); uTime/maxLights умерли —
 // компьют их не читал (аудит 2026-08-20). Раскладка обязана совпадать с
@@ -97,8 +112,8 @@ struct alignas(16) GridPush {
     // z/w = резерв. У32, не float: поколение обязано сравниваться точно.
     uint32_t genBaked = 0;
     uint32_t genStaticCount = 0;
-    uint32_t genPad0 = 0;
-    uint32_t genPad1 = 0;
+    uint32_t dynBucketDim = 0;   // решётка бакетов динамиков (= kDynBucketDim)
+    uint32_t dynBucketSlots = 0; // слотов на бакет (= kDynBucketSlots)
 };
 static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
 #if defined(_MSC_VER)
@@ -201,10 +216,13 @@ private:
     VulkanBuffer bakedGrid_{};    // DEVICE_LOCAL, kTotalGridCells × kGridCellBytes
     VulkanBuffer bakedStaging_{}; // HOST_VISIBLE persistent mapped, тот же размер
     VulkanBuffer dirtyGen_{};     // HOST_VISIBLE persistent mapped, kTotalGridCells × 4
+    VulkanBuffer dynBuckets_{};   // HOST_VISIBLE, бакеты динамиков (59.14), 256 КиБ
 
     void* lightMapped_ = nullptr;
     void* bakedMapped_ = nullptr;
     uint32_t* dirtyMapped_ = nullptr;
+    uint32_t* dynBucketsMapped_ = nullptr;
+    uint32_t dynBucketOverflowFrames_ = 0; // троттлинг строки перелива
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;

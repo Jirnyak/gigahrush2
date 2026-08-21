@@ -123,6 +123,18 @@ bool GpuLightGrid::create_buffers() noexcept {
     // пережили бы его), поэтому обнуление больше никогда не нужно.
     std::memset(dirtyMapped_, 0, static_cast<std::size_t>(kDirtySize));
 
+    // Бакеты динамиков (59.14): 4096 × 16 u32 = 256 КиБ, CPU пересплачивает
+    // каждый кадр (чистятся только счётчики, слоты дописываются поверх).
+    constexpr VkDeviceSize kDynSize =
+        static_cast<VkDeviceSize>(kDynBucketCount) * (1 + kDynBucketSlots) *
+        sizeof(uint32_t);
+    if (!dynBuckets_.create_host_visible(*dev_, kDynSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-dyn-buckets")) {
+        return false;
+    }
+    dynBucketsMapped_ = static_cast<uint32_t*>(dynBuckets_.mapped);
+    std::memset(dynBucketsMapped_, 0, static_cast<std::size_t>(kDynSize));
+
     return true;
 }
 
@@ -133,8 +145,9 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     // Binding 1: LightGridBuffer (Set 0)
     // Binding 2: BakedGridBuffer — запечённая видимость (compute-only)
     // Binding 3: DirtyGenBuffer — поколения мутаций клеток (compute-only)
-    VkDescriptorSetLayoutBinding bindings[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    // Binding 4: DynBucketBuffer — бакеты динамиков 59.14 (compute-only)
+    VkDescriptorSetLayoutBinding bindings[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -145,14 +158,14 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslci.bindingCount = 4;
+    dslci.bindingCount = 5;
     dslci.pBindings = bindings;
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descriptorSetLayout_));
 
     // Pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 4;
+    poolSize.descriptorCount = 5;
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -170,18 +183,19 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     VK_TRY(vkAllocateDescriptorSets(d, &alloci, &descriptorSet_));
 
     // Write descriptor sets
-    VkDescriptorBufferInfo bufi[4]{};
+    VkDescriptorBufferInfo bufi[5]{};
     bufi[0].buffer = lightBuf_.buffer;
     bufi[1].buffer = gridSSBO_.buffer;
     bufi[2].buffer = bakedGrid_.buffer;
     bufi[3].buffer = dirtyGen_.buffer;
+    bufi[4].buffer = dynBuckets_.buffer;
     for (auto& b : bufi) {
         b.offset = 0;
         b.range = VK_WHOLE_SIZE;
     }
 
-    VkWriteDescriptorSet writes[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
+    VkWriteDescriptorSet writes[5]{};
+    for (uint32_t i = 0; i < 5; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = descriptorSet_;
         writes[i].dstBinding = i;
@@ -189,7 +203,7 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo = &bufi[i];
     }
-    vkUpdateDescriptorSets(d, 4, writes, 0, nullptr);
+    vkUpdateDescriptorSets(d, 5, writes, 0, nullptr);
     return true;
 }
 
@@ -472,6 +486,65 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
                     clusterCount_ * sizeof(GpuPointLight));
     }
 
+    // Сплат динамиков по бакетам (59.14): каждый динамик ложится id-шником
+    // во все бакеты, которых касается его сфера (тор: отрицательный индекс
+    // оборачивается битовым И — степень двойки). Переполненный бакет
+    // помечается фоллбэком «сканируй весь хвост»: свет не теряется по
+    // построению, теряется только выигрыш — и это видно строкой (S11).
+    if (dynBucketsMapped_ != nullptr) {
+        constexpr uint32_t stride = 1u + kDynBucketSlots;
+        for (uint32_t b = 0; b < kDynBucketCount; ++b)
+            dynBucketsMapped_[b * stride] = 0u;
+        const float bucketM = kWorldExtent / static_cast<float>(kDynBucketDim);
+        uint32_t overflowed = 0;
+        for (uint32_t i = staticCount_; i < uploadCount; ++i) {
+            const vec4 pr = stagingLights_[i].posRadius;
+            if (pr.w <= 0.0f) continue;
+            const float p[3] = {pr.x, pr.y, pr.z};
+            int lo[3], span[3];
+            for (int a = 0; a < 3; ++a) {
+                lo[a] = static_cast<int>(std::floor((p[a] - pr.w) / bucketM));
+                const int hi =
+                    static_cast<int>(std::floor((p[a] + pr.w) / bucketM));
+                span[a] = hi - lo[a] + 1;
+                if (span[a] > static_cast<int>(kDynBucketDim))
+                    span[a] = static_cast<int>(kDynBucketDim);
+            }
+            for (int dz = 0; dz < span[2]; ++dz)
+                for (int dy = 0; dy < span[1]; ++dy)
+                    for (int dx = 0; dx < span[0]; ++dx) {
+                        const uint32_t bx =
+                            static_cast<uint32_t>(lo[0] + dx) &
+                            (kDynBucketDim - 1u);
+                        const uint32_t by =
+                            static_cast<uint32_t>(lo[1] + dy) &
+                            (kDynBucketDim - 1u);
+                        const uint32_t bz =
+                            static_cast<uint32_t>(lo[2] + dz) &
+                            (kDynBucketDim - 1u);
+                        const uint32_t base =
+                            (bx + by * kDynBucketDim +
+                             bz * kDynBucketDim * kDynBucketDim) *
+                            stride;
+                        const uint32_t cnt = dynBucketsMapped_[base];
+                        if (cnt == kDynBucketFallback) continue;
+                        if (cnt >= kDynBucketSlots) {
+                            dynBucketsMapped_[base] = kDynBucketFallback;
+                            ++overflowed;
+                            continue;
+                        }
+                        dynBucketsMapped_[base + 1 + cnt] = i;
+                        dynBucketsMapped_[base] = cnt + 1u;
+                    }
+        }
+        if (overflowed != 0 && (dynBucketOverflowFrames_++ % 300u) == 0u) {
+            std::fprintf(stderr,
+                         "[light-grid] dyn bucket overflow: %u buckets fell "
+                         "back to full-tail scan (slots %u)\n",
+                         overflowed, kDynBucketSlots);
+        }
+    }
+
     // World-aligned: сетка — весь тор, начало в нуле мира, камера ни при чём.
     // Врап у потребителей — битовое И индекса; «вне сетки» не существует.
     GridPush push{};
@@ -490,6 +563,8 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     push.params = vec4{static_cast<float>(uploadCount), kWorldExtent, 0.0f, 0.0f};
     push.genBaked = bakedGen_;
     push.genStaticCount = staticCount_;
+    push.dynBucketDim = kDynBucketDim;
+    push.dynBucketSlots = kDynBucketSlots;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_, 0, 1, &descriptorSet_, 0, nullptr);
@@ -534,6 +609,8 @@ void GpuLightGrid::destroy() noexcept {
     bakedGrid_.destroy(*dev_);
     bakedStaging_.destroy(*dev_);
     dirtyGen_.destroy(*dev_);
+    dynBuckets_.destroy(*dev_);
+    dynBucketsMapped_ = nullptr;
     lightMapped_ = nullptr;
     bakedMapped_ = nullptr;
     dirtyMapped_ = nullptr;
