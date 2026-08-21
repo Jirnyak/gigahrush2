@@ -1215,7 +1215,7 @@ static void test_projectile_shatters_lamp_and_light_dies() {
 
     // Промах: снаряд в пяти клетках — лампа стоит, очередь пуста.
     CHECK(!game::check_projectile_prop_hits(
-        reg, vec3{pos.x + 10.0f, pos.y, pos.z}, vec3{0.0f, 0.0f, -40.0f},
+        reg, layer, vec3{pos.x + 10.0f, pos.y, pos.z}, vec3{0.0f, 0.0f, -40.0f},
         game::kProjHitRadius, bus, &bursts, 5u));
     CHECK(reg.valid(lamp));
     CHECK(bursts.count == 0u);
@@ -1224,7 +1224,7 @@ static void test_projectile_shatters_lamp_and_light_dies() {
     // трогает тела (kProjHitRadius, combat.h).
     bus.clear();
     CHECK(game::check_projectile_prop_hits(
-        reg, vec3{pos.x, pos.y, pos.z + 0.3f}, vec3{0.0f, 0.0f, -40.0f},
+        reg, layer, vec3{pos.x, pos.y, pos.z + 0.3f}, vec3{0.0f, 0.0f, -40.0f},
         game::kProjHitRadius, bus, &bursts, 5u));
 
     // Всплеск: осколки, тонированные материалом лампы — neon_tube, не air.

@@ -184,7 +184,8 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
                                                  std::vector<PropMeshInstance>& out);
 
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
+                                const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts = nullptr,
                                 std::uint32_t seed = 0);

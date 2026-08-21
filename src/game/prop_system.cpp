@@ -1,5 +1,6 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
 #include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
 #include "world/material_props.h" // kMatDensity/kMatHardness — масса и e/μ
@@ -242,21 +243,18 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
 
 // §59.2: снаряд платил полный проход по ВСЕМ якорным пропам каждый тик ради
 // брод-фейза «якорь в ±1 клетке» — 20 пуль × 12646 пропов × 125 Гц ≈ 32 млн
-// итераций/с, худшая per-tick находка каталога. Индекс: бины по макроклетке
-// якоря (плоский отсортированный CSR, как rigid.cpp:543, но ПЕРСИСТЕНТНЫЙ —
-// якорь неподвижен по построению, множество меняется только спавном/детачем/
-// смертью). Живёт в reg.ctx(): состояние едет с реестром, глобала нет, тесты
-// получают индекс даром. Грязнится сигналами EnTT на SubVoxelAnchor —
-// emplace, remove и destroy сущности будят один флаг, и любой БУДУЩИЙ
-// мутатор якоря платит тот же долг автоматически, без списка мест.
+// итераций/с, худшая per-tick находка каталога. Контейнер и закон ключа —
+// общий примитив [sim/cell_bins.h]; политика этого потребителя —
+// ПЕРСИСТЕНТНОСТЬ: якорь неподвижен по построению, множество меняется только
+// спавном/детачем/смертью. Живёт в reg.ctx(): состояние едет с реестром,
+// глобала нет, тесты получают индекс даром. Грязнится сигналами EnTT на
+// SubVoxelAnchor — emplace, remove и destroy сущности будят один флаг, и
+// любой БУДУЩИЙ мутатор якоря платит тот же долг автоматически, без списка
+// мест.
 namespace {
 
 struct AnchorBins {
-    struct Entry {
-        std::uint32_t cell; // macro_index якоря — тот же ключ, что брод-фейз
-        Entity e;
-    };
-    std::vector<Entry> entries; // отсортированы по (cell, e) — детерминизм
+    CellBins bins;
     bool dirty = true;
 };
 
@@ -272,36 +270,35 @@ AnchorBins& anchor_bins(Registry& reg) {
     return b;
 }
 
-void rebuild_anchor_bins(Registry& reg, AnchorBins& bins) {
-    bins.entries.clear();
+void rebuild_anchor_bins(Registry& reg, AnchorBins& ab) {
+    ab.bins.clear();
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
     for (auto entity : view) {
         const auto& a = view.get<SubVoxelAnchor>(entity);
-        bins.entries.push_back(
-            {static_cast<std::uint32_t>(macro_index(
-                 wrap_macro(a.cx), wrap_macro(a.cy), wrap_macro(a.cz))),
-             entity});
+        const auto& tr = view.get<Transform>(entity);
+        ab.bins.add(cell_bin_key(tr.layer, a.cx, a.cy, a.cz), entity);
     }
-    std::sort(bins.entries.begin(), bins.entries.end(),
-              [](const AnchorBins::Entry& a, const AnchorBins::Entry& b) {
-                  return a.cell != b.cell ? a.cell < b.cell : a.e < b.e;
-              });
-    bins.dirty = false;
+    ab.bins.build();
+    ab.dirty = false;
 }
 
 } // namespace
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
+                                const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts, std::uint32_t seed)
 {
+    // Соседство ±1 клетки покрывает радиус попадания только пока он не
+    // перерос клетку — контракт for_each_near ([sim/cell_bins.h]); заявлен
+    // static_assert-ом у владельца константы (kProjHitRadius, combat.cpp).
     const float radiusSq = projHitRadius * projHitRadius;
-    const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
-    const int pcy = wrap_macro(static_cast<int>(projPos.y / kCellSize));
-    const int pcz = wrap_macro(static_cast<int>(projPos.z / kCellSize));
+    const int pcx = cell_coord(projPos.x);
+    const int pcy = cell_coord(projPos.y);
+    const int pcz = cell_coord(projPos.z);
 
-    AnchorBins& bins = anchor_bins(reg);
-    if (bins.dirty) rebuild_anchor_bins(reg, bins);
+    AnchorBins& ab = anchor_bins(reg);
+    if (ab.dirty) rebuild_anchor_bins(reg, ab);
 
     Entity hitEntity = entt::null;
     PropFallMode hitMode = PropFallMode::SimpleFall;
@@ -310,46 +307,30 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
 
     // 27 соседних бакетов вместо полного view — то же множество кандидатов,
     // что давал старый фильтр |wrap_delta(anchor, pc)| ≤ 1 по каждой оси;
-    // узкая фаза (точная wrap-дистанция по позиции) не менялась.
+    // узкая фаза (точная wrap-дистанция по позиции) не менялась. Ключ
+    // слойный: проп чужого слоя больше не кандидат (латентный межслойный
+    // хит по совпавшим xyz умер вместе со старым бесслойным фильтром).
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
-    for (int dz = -1; dz <= 1 && hitEntity == entt::null; ++dz) {
-        for (int dy = -1; dy <= 1 && hitEntity == entt::null; ++dy) {
-            for (int dx = -1; dx <= 1 && hitEntity == entt::null; ++dx) {
-                const std::uint32_t cell = static_cast<std::uint32_t>(
-                    macro_index(wrap_macro(pcx + dx), wrap_macro(pcy + dy),
-                                wrap_macro(pcz + dz)));
-                auto it = std::lower_bound(
-                    bins.entries.begin(), bins.entries.end(), cell,
-                    [](const AnchorBins::Entry& e, std::uint32_t c) {
-                        return e.cell < c;
-                    });
-                for (; it != bins.entries.end() && it->cell == cell; ++it) {
-                    const Entity entity = it->e;
-                    // Потеря компонента-соседа (Transform/PropFallMode) не
-                    // грязнит индекс якорей — страховка членством во view.
-                    if (!view.contains(entity)) continue;
+    ab.bins.for_each_near(layer, pcx, pcy, pcz, [&](Entity entity) {
+        if (hitEntity != entt::null) return; // первый найденный уже взят
+        // Потеря компонента-соседа (Transform/PropFallMode) не грязнит
+        // индекс якорей — страховка членством во view.
+        if (!view.contains(entity)) return;
 
-                    const auto& tr = view.get<Transform>(entity);
-                    const float ddx =
-                        wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
-                    const float ddy =
-                        wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
-                    const float ddz =
-                        wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
+        const auto& tr = view.get<Transform>(entity);
+        const float ddx = wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
+        const float ddy = wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
+        const float ddz = wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
 
-                    if (ddx * ddx + ddy * ddy + ddz * ddz <= radiusSq) {
-                        hitEntity = entity;
-                        hitMode = view.get<PropFallMode>(entity);
-                        hitPos = tr.pos;
-                        hitColor = reg.all_of<Renderable>(entity)
-                                       ? reg.get<Renderable>(entity).color
-                                       : vec3{0.8f, 0.8f, 0.8f};
-                        break;
-                    }
-                }
-            }
+        if (ddx * ddx + ddy * ddy + ddz * ddz <= radiusSq) {
+            hitEntity = entity;
+            hitMode = view.get<PropFallMode>(entity);
+            hitPos = tr.pos;
+            hitColor = reg.all_of<Renderable>(entity)
+                           ? reg.get<Renderable>(entity).color
+                           : vec3{0.8f, 0.8f, 0.8f};
         }
-    }
+    });
 
     if (hitEntity != entt::null) {
         vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};

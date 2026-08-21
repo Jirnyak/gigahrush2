@@ -1977,8 +1977,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             // проп не особеннее туловища. Внутри — detach по fall_mode строки:
             // GpuHandoff-лампа рвётся в burst и гаснет (reg.destroy уносит
             // PropLight вместе с сущностью), терминал падает целым.
+            // Контракт брод-фейза бинов ([sim/cell_bins.h]): соседство ±1
+            // клетки покрывает радиус, лишь пока он не перерос клетку.
+            static_assert(kProjHitRadius <= kCellSize,
+                          "27-соседство брод-фейза покрывает радиус ≤ клетки");
             if (!check_projectile_prop_hits(
-                    reg, s.pos, s.vel, kProjHitRadius, bus, particles,
+                    reg, layer, s.pos, s.vel, kProjHitRadius, bus, particles,
                     static_cast<std::uint32_t>(tick) ^
                         static_cast<std::uint32_t>(entt::to_integral(s.e))))
                 continue;
