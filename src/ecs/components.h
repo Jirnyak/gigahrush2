@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "ecs/registry.h" // Entity — JointLink ссылается на тела
 #include "world/level_stack.h"
 
 namespace giga {
@@ -171,7 +172,9 @@ struct RigidBody {
     float friction = 0.5f;       // Кулон μ — он же раскручивает качение
     std::uint8_t sleepTicks = 0; // подряд тихих тиков с контактом
     bool asleep = false;         // спит: v=w=0, интегратор пропускает;
-                                 // будится записью Velocity извне
+                                 // будится записью Velocity извне и линком
+    bool touchedTick = false;    // ТРАНЗИТ: был контакт с миром в этом тике
+                                 // (пишет rigid_body_step, больше никто)
 };
 
 // Форма тела для солвера ([markoaudit/plans/ragdoll.md] фундамент, решения
@@ -189,6 +192,24 @@ struct ContactForm {
     std::uint8_t count = 0;
     vec3 off[kMaxContactSpheres]{};  // офсеты в ФРЕЙМЕ ТЕЛА
     float r[kMaxContactSpheres]{};   // радиусы контактных сфер
+};
+
+// Связь двух твердотел — ОТДЕЛЬНАЯ ЛИНК-СУЩНОСТЬ, не свойство формы
+// ([markoaudit/plans/ragdoll.md] фундамент §8, решение владельца 2026-08-21):
+// разрубание = destroy линк-сущности, связывание (верёвка, трос, сцепка) =
+// create линка между ЛЮБЫМИ двумя телами. Ядро агностично: труп, люстра на
+// тросе, два ящика верёвкой — одна механика.
+//
+// b == entt::null — якорь В МИРЕ: anchorB тогда мировая точка (подвес на
+// крюк). rope — линк только ТЯНЕТ (dist > restLen), жёсткая штанга тянет и
+// толкает. Решается импульсами в том же солвере, что контакты.
+struct JointLink {
+    Entity a = entt::null;
+    Entity b = entt::null;            // entt::null = мировой якорь
+    vec3 anchorA{0.0f, 0.0f, 0.0f};   // фрейм тела a
+    vec3 anchorB{0.0f, 0.0f, 0.0f};   // фрейм тела b, либо мировая точка
+    float restLen = 0.0f;             // покойная длина, м
+    bool rope = false;                // true: только тянет
 };
 
 // Prop render-path filter tags ([jirnyak.md] section 18).

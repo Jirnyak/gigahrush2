@@ -122,6 +122,13 @@ constexpr float kRollCrr = 0.03f;
 // той же постоянной, что качение.
 constexpr float kSpinDamp = 3.0f; // 1/с
 
+// Линки: итерации sequential impulses на подшаг (цепь из ~8 звеньев сходится
+// за столько же проходов — по звену за проход в худшем случае) и
+// Baumgarte-подтяжка позиционной ошибки: β·C/h, β=0.2 — стандартная доля,
+// при которой подтяжка не накачивает энергию на наших подшагах 2-4 мс.
+constexpr int kJointIters = 8;
+constexpr float kJointBias = 0.2f;
+
 } // namespace
 
 void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
@@ -137,26 +144,102 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     const float h = dt / static_cast<float>(steps);
 
     auto view = reg.view<RigidBody, Transform, Velocity>();
+    auto links = reg.view<JointLink>();
+
+    // Решение одного линка импульсом (sequential impulses, тот же словарь,
+    // что у контакта). wakePass — на первой итерации подшага спящая сторона
+    // будится движущейся: цепь просыпается через связи, а не по волшебству.
+    auto solve_link = [&](JointLink& jl, bool wakePass) {
+        if (jl.a == entt::null || !reg.valid(jl.a) ||
+            !reg.all_of<RigidBody, Transform, Velocity>(jl.a))
+            return; // тело умерло — линк вырожден, чистит владелец линка
+        auto& ra = reg.get<RigidBody>(jl.a);
+        auto& ta = reg.get<Transform>(jl.a);
+        auto& va = reg.get<Velocity>(jl.a);
+        RigidBody* rbB = nullptr;
+        Transform* tb = nullptr;
+        Velocity* vb = nullptr;
+        if (jl.b != entt::null) {
+            if (!reg.valid(jl.b) ||
+                !reg.all_of<RigidBody, Transform, Velocity>(jl.b))
+                return;
+            rbB = &reg.get<RigidBody>(jl.b);
+            tb = &reg.get<Transform>(jl.b);
+            vb = &reg.get<Velocity>(jl.b);
+        }
+        if (wakePass) {
+            const bool aAsleep = ra.asleep;
+            const bool bAsleep = rbB ? rbB->asleep : true;
+            if (aAsleep != bAsleep) {
+                if (aAsleep) { ra.asleep = false; ra.sleepTicks = 0; }
+                else if (rbB) { rbB->asleep = false; rbB->sleepTicks = 0; }
+            }
+        }
+        if (ra.asleep && (!rbB || rbB->asleep)) return;
+
+        const vec3 rcA = quat_rotate(ra.q, jl.anchorA);
+        const vec3 pa = ta.pos + rcA;
+        vec3 rcB{0.0f, 0.0f, 0.0f};
+        vec3 pb;
+        if (rbB) {
+            rcB = quat_rotate(rbB->q, jl.anchorB);
+            pb = tb->pos + rcB;
+        } else {
+            pb = jl.anchorB; // мировой якорь (подвес)
+        }
+        // Кратчайший вектор ТОРА от a к b — линк через шов не рвётся.
+        const vec3 d = wrap_delta3(pa, pb, kWorldExtent);
+        const float dist = length(d);
+        if (dist < 1e-4f) return;
+        const vec3 dir = d * (1.0f / dist);
+        const float C = dist - jl.restLen;
+        if (jl.rope && C <= 0.0f) return; // верёвка не толкает
+
+        const vec3 vpA = va.v + cross(ra.w, rcA);
+        const vec3 vpB =
+            rbB ? vb->v + cross(rbB->w, rcB) : vec3{0.0f, 0.0f, 0.0f};
+        const float vRel = dot(vpB - vpA, dir); // >0 — растягивается
+        const vec3 rxA = cross(rcA, dir);
+        const float kA = ra.invMass + ra.invInertia * dot(rxA, rxA);
+        float kB = 0.0f;
+        if (rbB) {
+            const vec3 rxB = cross(rcB, dir);
+            kB = rbB->invMass + rbB->invInertia * dot(rxB, rxB);
+        }
+        // Импульс с Baumgarte-подтяжкой позиционной ошибки: β·C/h.
+        const float j = -(vRel + kJointBias * C / h) / (kA + kB);
+        // j<0 при растяжении: B тянется к A, A — к B.
+        va.v += dir * (-j * ra.invMass);
+        ra.w += cross(rcA, dir * (-j)) * ra.invInertia;
+        if (rbB) {
+            vb->v += dir * (j * rbB->invMass);
+            rbB->w += cross(rcB, dir * j) * rbB->invInertia;
+        }
+    };
+
+    // Пробуждение внешней записью Velocity (взрыв, толчок, пинок пишут её —
+    // естественный интерфейс) + сброс тик-аккумулятора касаний.
     for (auto e : view) {
         auto& rb = view.get<RigidBody>(e);
-        auto& tr = view.get<Transform>(e);
-        auto& vel = view.get<Velocity>(e);
-        if (!stack.valid(tr.layer)) continue;
-        World& w = stack.layer(tr.layer);
-
-        if (rb.asleep) {
-            // Спит = интегратор пропускает целиком. Будит только внешняя
-            // запись Velocity (взрыв, толчок, пинок) — естественный интерфейс:
-            // писатели импульсов уже пишут именно её.
-            if (dot(vel.v, vel.v) < kWakeV2) continue;
+        rb.touchedTick = false;
+        if (rb.asleep &&
+            dot(view.get<Velocity>(e).v, view.get<Velocity>(e).v) >= kWakeV2) {
             rb.asleep = false;
             rb.sleepTicks = 0;
         }
+    }
 
-        bool touched = false;
-        float maxApproach = 0.0f;
+    // Substep-major: тела интегрируются, ПОТОМ линки стягивают пары — иначе
+    // констрейнт видел бы позиции разных подшагов у разных тел.
+    for (int s = 0; s < steps; ++s) {
+        for (auto e : view) {
+            auto& rb = view.get<RigidBody>(e);
+            if (rb.asleep) continue;
+            auto& tr = view.get<Transform>(e);
+            auto& vel = view.get<Velocity>(e);
+            if (!stack.valid(tr.layer)) continue;
+            World& w = stack.layer(tr.layer);
 
-        for (int s = 0; s < steps; ++s) {
             vel.v += w.gravity().at(tr.pos) * h;
             // Тот же квадратичный закон воздуха, что у всех тел ([sim/drag.h]).
             const float mass = 1.0f / std::max(rb.invMass, 1e-6f);
@@ -184,7 +267,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 const SphereContact c =
                     sphere_deepest_contact(w, tr.pos + off, sr);
                 if (c.depth < 0.0f) continue;
-                touched = true;
+                rb.touchedTick = true;
                 contactThisStep = true;
                 contactN = c.n;
                 // Позиционное выталкивание всего тела — не тонет.
@@ -197,7 +280,13 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 const vec3 vp = vel.v + cross(rb.w, rc);
                 const float vn = dot(vp, c.n);
                 if (vn >= 0.0f) continue;
-                maxApproach = std::max(maxApproach, -vn);
+                // Импакт-шов — тот же закон, что у свепт-AABB (E = m·v²/2
+                // считает потребитель): сближение выше 4 м/с (пол свободной
+                // зоны прыжка) публикуется как Impact.
+                if (-vn > 4.0f) {
+                    Impact& im = reg.get_or_emplace<Impact>(e);
+                    if (-vn > im.speed) im.speed = -vn;
+                }
 
                 // Обобщённый нормальный импульс (sequential impulses):
                 // k_n = 1/m + |r_c×n|²/I — угловая податливость контакта.
@@ -252,20 +341,27 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
         }
 
-        // Импакт-шов — тот же закон, что у свепт-AABB (E = m·v²/2 считает
-        // потребитель): скорость сближения выше 4 м/с (пол свободной зоны
-        // прыжка) публикуется как Impact.
-        if (maxApproach > 4.0f) {
-            Impact& im = reg.get_or_emplace<Impact>(e);
-            if (maxApproach > im.speed) im.speed = maxApproach;
+        // Фаза линков: kJointIters проходов sequential impulses по всем
+        // связям (цепь сходится итерациями, как контакты у бокса).
+        for (int it = 0; it < kJointIters; ++it) {
+            for (auto le : links) {
+                solve_link(links.get<JointLink>(le), it == 0);
+            }
         }
+    }
 
-        // Сон: тихая линейка И тихое вращение (|w|·r в тех же единицах м/с),
-        // и обязательно контакт — свободно падающее тело не засыпает.
+    // Сон: тихая линейка И тихое вращение (|w|·r в тех же единицах м/с), и
+    // обязательно контакт с миром в этом тике — свободно падающее и ВИСЯЩЕЕ
+    // (цепь на подвесе) тело не засыпает: спящему линк не даёт провиснуть,
+    // а разруб не смог бы его разбудить падением.
+    for (auto e : view) {
+        auto& rb = view.get<RigidBody>(e);
+        if (rb.asleep) continue;
+        auto& vel = view.get<Velocity>(e);
         const float wr2 = dot(rb.w, rb.w) * rb.radius * rb.radius;
         const bool quiet =
             dot(vel.v, vel.v) < kSleepV2 && wr2 < kSleepV2;
-        if (quiet && touched) {
+        if (quiet && rb.touchedTick) {
             if (++rb.sleepTicks >= kSleepAfter) {
                 rb.asleep = true;
                 vel.v = vec3{0.0f, 0.0f, 0.0f};

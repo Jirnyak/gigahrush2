@@ -148,11 +148,11 @@ static void test_console_completion() {
     const char* cands[32];
 
     // First word -> command names. "sp" matches spawn + spawn_ball +
-    // spawn_box + spawn_test_ball (defaults grew beyond a single spawn row;
-    // spawn_box — рагдолл-стенд формы, [markoaudit/plans/ragdoll.md] инкр. 2).
+    // spawn_box + spawn_chain + spawn_test_ball (defaults grew beyond a single
+    // spawn row; рагдолл-стенды — [markoaudit/plans/ragdoll.md] инкр. 2-3).
     std::uint32_t n = con.complete(ctx, "sp", cands, 32);
     CHECK(n >= 1);
-    CHECK(n <= 4);
+    CHECK(n <= 5);
     {
         bool hasSpawn = false;
         for (std::uint32_t i = 0; i < n; ++i)

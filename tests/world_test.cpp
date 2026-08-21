@@ -357,6 +357,101 @@ static void test_rigid_box_lies_flat() {
     CHECK(std::fabs(qn - 1.0f) < 1e-3f);
 }
 
+// Инкремент 3 ([markoaudit/plans/ragdoll.md] §8): связи — линк-СУЩНОСТИ.
+// Цепь из 4 шаров на мировом якоре (JointLink с b=null) висит связно над
+// полом; разрубание (destroy линка подвеса + пробуждение) роняет её на пол,
+// и звенья остаются связанными между собой.
+static void test_rigid_chain_hangs_and_cuts() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize; // 10 м
+    const vec3 anchor{10.5f * kCellSize, 10.5f * kCellSize, floorTop + 3.0f};
+    constexpr int kN = 4;
+    const float radius = 0.15f;
+    const float restLen = 3.0f * radius; // шаг цепи — как в spawn_chain
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    Entity balls[kN];
+    Entity worldLink = entt::null;
+    Entity prev = entt::null;
+    for (int i = 0; i < kN; ++i) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f;
+        rb.friction = 0.6f;
+        Entity ball = reg.create();
+        reg.emplace<Transform>(
+            ball, Transform{anchor - vec3{0.0f, 0.0f,
+                                          restLen * static_cast<float>(i + 1)},
+                            g});
+        reg.emplace<Velocity>(ball);
+        reg.emplace<RigidBody>(ball, rb);
+        balls[i] = ball;
+
+        Entity link = reg.create();
+        JointLink jl;
+        jl.a = ball;
+        if (i == 0) {
+            jl.b = entt::null;
+            jl.anchorB = anchor;
+            worldLink = link;
+        } else {
+            jl.b = prev;
+        }
+        jl.restLen = restLen;
+        // Верёвочные звенья — как у spawn_chain по умолчанию: жёсткое звено
+        // толкает, и разрубленная цепь стояла бы колонной (честная физика
+        // стержней), а не падала.
+        jl.rope = true;
+        reg.emplace<JointLink>(link, jl);
+        prev = ball;
+    }
+
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    auto linkDist = [&](int i, int j) {
+        const vec3 d = reg.get<Transform>(balls[i]).pos -
+                       reg.get<Transform>(balls[j]).pos;
+        return length(d);
+    };
+    bool connected = true;
+    for (int i = 1; i < kN; ++i)
+        if (linkDist(i, i - 1) > restLen * 1.35f) connected = false;
+    CHECK(connected);
+    // Висит: нижний шар заметно выше пола (подвес 3 м − цепь 1.8 м).
+    CHECK(reg.get<Transform>(balls[kN - 1]).pos.z > floorTop + 0.5f);
+
+    // РАЗРУБ подвеса: destroy линк-сущности + пробуждение (как cut_link).
+    for (int i = 0; i < kN; ++i) {
+        auto& rb = reg.get<RigidBody>(balls[i]);
+        rb.asleep = false;
+        rb.sleepTicks = 0;
+    }
+    reg.destroy(worldLink);
+
+    for (int i = 0; i < 4 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    bool onFloor = true;
+    for (int i = 0; i < kN; ++i) {
+        const float z = reg.get<Transform>(balls[i]).pos.z;
+        if (z > floorTop + 0.5f) onFloor = false;
+    }
+    CHECK(onFloor);
+    bool stillConnected = true;
+    for (int i = 1; i < kN; ++i)
+        if (linkDist(i, i - 1) > restLen * 1.5f) stillConnected = false;
+    CHECK(stillConnected);
+}
+
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
 // терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
 // владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
@@ -1022,6 +1117,7 @@ int main() {
     test_physics_lands_on_floor();
     test_rigid_ball_settles_and_sleeps();
     test_rigid_box_lies_flat();
+    test_rigid_chain_hangs_and_cuts();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();

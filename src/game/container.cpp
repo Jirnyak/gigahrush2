@@ -20,9 +20,9 @@ namespace giga::game {
 
 namespace {
 
-// Grey-green crate, deliberately unlike the pickup colour and unlike the monster red
-// axis. An unopened container must read as "go there" at a distance.
-constexpr vec3 kShutColour{0.42f, 0.46f, 0.38f};
+// Цвет неоткрытого ящика переехал в data/props.csv строкой supply_crate
+// (B1 эпика one-container: ящик — проп); здесь остался только цвет
+// ОПУСТОШЁННОГО — это состояние рантайма, а не строка ассета.
 // Emptied: much darker, same hue. Same silhouette, obviously spent.
 constexpr vec3 kOpenColour{0.16f, 0.18f, 0.15f};
 

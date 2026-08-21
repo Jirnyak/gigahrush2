@@ -556,7 +556,11 @@ if(GIGA_BUILD_TESTS)
         # 23428 + 5 (test_rigid_box_lies_flat: форма из контактных сфер — бокс
         # 14 сфер кувыркается, ложится ПЛАШМЯ на полувысоту, не на
         # ограничивающий радиус, и засыпает) = 23433.
-        PASS_REGULAR_EXPRESSION "23433/23433 checks passed"
+        # 23433 + 4 (test_rigid_chain_hangs_and_cuts: линк-сущности — цепь на
+        # мировом якоре висит связно, разруб = destroy линка, падает на пол и
+        # остаётся цепью; звенья ВЕРЁВОЧНЫЕ — жёсткие стояли бы колонной) =
+        # 23437.
+        PASS_REGULAR_EXPRESSION "23437/23437 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1161,7 +1165,11 @@ if(GIGA_BUILD_TESTS)
     # ([markoaudit/plans/ragdoll.md] инкремент 1) — GravityAffected-чек стал
     # RigidBody-чеком (0), новый чек SelfIntegrating (+1): без тега physics_step
     # двигал бы тело вторым разом — та же двойная скорость, что была у снарядов.
-        PASS_REGULAR_EXPRESSION "game_test: 236579 checks, 0 failures")
+    # 236579 -> 236582 (+3) on 2026-08-21: линк с мировым якорем идёт через
+    # ЕДИНУЮ якорную систему (ragdoll.md §8, решение владельца): линк-сущность
+    # несёт SubVoxelAnchor, anchor_validate_step рвёт подвес по смерти опоры
+    # (обе полярности + пробуждение спящей стороны).
+        PASS_REGULAR_EXPRESSION "game_test: 236582 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

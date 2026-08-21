@@ -397,6 +397,54 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     }
 }
 
+// Рагдолл-эпик §8 (ragdoll.md, решение владельца 2026-08-21): линк с мировым
+// якорем живёт по ЕДИНОЙ якорной системе — линк-сущность несёт SubVoxelAnchor,
+// и карв опоры рвёт линк в anchor_validate_step: подвешенная цепь падает.
+// Обе полярности: чужой dirty-ключ линк не трогает, смерть опоры — рвёт и
+// будит стороны.
+static void test_world_anchored_link_severed_by_carve() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+
+    // Потолок и шар на подвесе под ним.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+    Entity ball = reg.create();
+    reg.emplace<Transform>(ball, Transform{vec3{21.0f, 9.0f, 18.5f}, 2});
+    reg.emplace<Velocity>(ball);
+    RigidBody rb;
+    rb.asleep = true; // спит — разруб обязан разбудить
+    reg.emplace<RigidBody>(ball, rb);
+
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = ball;
+    jl.b = entt::null;
+    jl.anchorB = vec3{21.0f, 9.0f, 20.0f};
+    jl.restLen = 1.5f;
+    reg.emplace<JointLink>(link, jl);
+    game::SubVoxelAnchor sva{};
+    sva.cx = 10; sva.cy = 4; sva.cz = 10;
+    sva.subX = 4; sva.subY = 4; sva.subZ = 0;
+    sva.face = anchor_face_pack(2, -1); // нижняя грань потолка
+    reg.emplace<game::SubVoxelAnchor>(link, sva);
+
+    // Полярность 1: dirty ЧУЖОЙ клетки — линк жив.
+    const std::vector<std::uint32_t> dirtyOther{
+        static_cast<std::uint32_t>(macro_index(11, 4, 10))};
+    game::anchor_validate_step(reg, world, bus, dirtyOther);
+    CHECK(reg.valid(link));
+
+    // Полярность 2: опора выкарвлена — линк уничтожен, шар разбужен.
+    world.grid().clear_cell(10, 4, 10);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(10, 4, 10))};
+    game::anchor_validate_step(reg, world, bus, dirty);
+    CHECK(!reg.valid(link));
+    CHECK(!reg.get<RigidBody>(ball).asleep);
+}
+
 // Инкремент 3 якорного эпика (anchor-unify.md): проба живости — КОЛОНКА
 // субвокселей у грани крепления, не один бит. Обе полярности одним тестом
 // (закон run-the-mutation): чужой бит клетки НЕ роняет вещь, смерть колонки
@@ -1157,6 +1205,7 @@ void test_props_game_all() {
     test_ceiling_lights_do_not_collide_with_wall_devices();
     test_padic_props_seed_tags_layer();
     test_spawn_prop_anchor_and_detach_on_air();
+    test_world_anchored_link_severed_by_carve();
     test_anchor_column_probe_both_polarities();
     test_anchor_validate_skips_solid_support();
     test_prop_ragdoll_step_damps_angular();

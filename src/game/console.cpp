@@ -15,7 +15,10 @@
 #include "game/mob_spawn.h"      // spawn_mob_at
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
 #include "game/npc_pool.h"       // NpcPool cx/cy for hub boarding
+#include "game/prop_system.h"    // SubVoxelAnchor — якорь подвеса spawn_chain
 #include "sim/rigid.h"           // form_from_box — spawn_box контактные сферы
+#include "core/wrap.h"           // wrapf — подвес цепи заворачивается тором
+#include "world/anchor.h"        // anchor_face_pack/anchor_alive — подвес
 #include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
 #include "world/types.h"         // kCellSize, wrap_macro
 
@@ -737,6 +740,216 @@ bool cmd_spawn_box(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// --- spawn_chain [n] [free|rope] ---------------------------------------------
+// Стенд линков ([markoaudit/plans/ragdoll.md] инкремент 3): «шарики на цепях»
+// буквально — n стальных шаров, связанных JointLink-СУЩНОСТЯМИ (разрубание =
+// destroy линка, cut_link ниже). По умолчанию цепь ПОДВЕШЕНА на мировой якорь
+// (линк с b = null) перед игроком — висит и мотается; free — без подвеса,
+// падает цепью; rope — связи только тянут (верёвка).
+//
+// Шаг цепи выведен: restLen = 3r — касание звеньев (2r) плюс зазор в радиус.
+
+bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
+                     char* out, std::size_t cap) {
+    if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
+        if (out && cap) put(out, cap, "spawn_chain: player or ecs missing");
+        return false;
+    }
+    const auto* tr = ctx.ecs->try_get<Transform>(ctx.player);
+    if (!tr) {
+        if (out && cap) put(out, cap, "spawn_chain: player has no transform");
+        return false;
+    }
+    int n = 5;
+    if (argc >= 2) n = std::clamp(std::atoi(argv[1]), 2, 12);
+    bool anchored = true;
+    // Цепь по умолчанию — ВЕРЁВОЧНАЯ (звено только тянет): жёсткое звено
+    // толкает тоже, и разрубленная цепь не падает, а стоит колонной на
+    // нижнем шаре — честная физика стержней, но не цепи. rod — для стержней
+    // (позвоночник трупа, сцепка).
+    bool rope = true;
+    if (argc >= 3) {
+        if (ieq(argv[2], "free")) anchored = false;
+        else if (ieq(argv[2], "rod")) rope = false;
+    }
+
+    vec3 fwd{1.0f, 0.0f, 0.0f};
+    if (const auto* cam = ctx.ecs->try_get<CameraTag>(ctx.player)) {
+        fwd = vec3{std::cos(cam->yaw), std::sin(cam->yaw), 0.0f};
+    }
+
+    // Подвес — через ЕДИНУЮ якорную систему ([world/anchor.h], S2, решение
+    // владельца 2026-08-21: «линк к миру через якоря, как провода»): скан
+    // вверх от головы цепи до первого субвокселя с живой колонкой; его нижняя
+    // грань — якорь, и карв опоры рвёт линк (anchor_validate_step). Точка в
+    // воздухе запрещена: цепь без потолка спавнится свободной, вслух.
+    vec3 anchor = tr->pos + fwd * 2.5f + vec3{0.0f, 0.0f, 1.2f};
+    anchor.x = wrapf(anchor.x, kWorldExtent);
+    anchor.y = wrapf(anchor.y, kWorldExtent);
+    anchor.z = wrapf(anchor.z, kWorldExtent);
+    SubVoxelAnchor sva{};
+    const bool wantAnchor = anchored;
+    bool haveSupport = false;
+    if (anchored && ctx.stack && ctx.stack->valid(tr->layer)) {
+        const World& w = ctx.stack->layer(tr->layer);
+        const std::uint8_t face = anchor_face_pack(2, -1); // вещь ПОД опорой
+        const int vx = static_cast<int>(anchor.x / kVoxelSize);
+        const int vy = static_cast<int>(anchor.y / kVoxelSize);
+        const int vz0 = static_cast<int>(anchor.z / kVoxelSize);
+        // Скан 3 клетки (6 м) вверх: выше подвес стенда уже не читается.
+        for (int vz = vz0; vz < vz0 + 3 * kSubDim; ++vz) {
+            const int cx = wrap_macro(vx / kSubDim);
+            const int cy = wrap_macro(vy / kSubDim);
+            const int cz = wrap_macro(vz / kSubDim);
+            const int sx = vx % kSubDim;
+            const int sy = vy % kSubDim;
+            const int sz = vz % kSubDim;
+            const SubMask& mask = w.grid().mask(cx, cy, cz);
+            if (!(mask.words[sz] & (1ULL << (sy * kSubDim + sx)))) continue;
+            // Гейт = проба живости (один вопрос со спавном пропов): колонка
+            // у грани крепления должна жить, иначе якорь умрёт первым карвом.
+            const AnchorUV uv = anchor_face_uv(face, sx, sy, sz);
+            if (!anchor_alive(w.grid(), cx, cy, cz, face, uv.u, uv.v))
+                continue;
+            anchor = vec3{(static_cast<float>(vx) + 0.5f) * kVoxelSize,
+                          (static_cast<float>(vy) + 0.5f) * kVoxelSize,
+                          static_cast<float>(vz) * kVoxelSize};
+            sva = SubVoxelAnchor{cx, cy, cz,
+                                 static_cast<std::uint8_t>(sx),
+                                 static_cast<std::uint8_t>(sy),
+                                 static_cast<std::uint8_t>(sz), face};
+            haveSupport = true;
+            break;
+        }
+    }
+    if (anchored && !haveSupport) anchored = false;
+
+    const float radius = 0.15f;
+    const float restLen = 3.0f * radius;
+    const float density = kMatDensity[kMatPipeMetal];
+    const float mass =
+        density * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+    const float hardness = static_cast<float>(kMatHardness[kMatPipeMetal]);
+
+    Entity prev = entt::null;
+    for (int i = 0; i < n; ++i) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
+        rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
+
+        const vec3 pos =
+            anchor - vec3{0.0f, 0.0f, restLen * static_cast<float>(i + 1)};
+        Entity ball = ctx.ecs->create();
+        ctx.ecs->emplace<Transform>(ball, Transform{pos, tr->layer});
+        ctx.ecs->emplace<AABB>(ball, AABB{vec3{radius, radius, radius}});
+        ctx.ecs->emplace<Velocity>(ball, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        ctx.ecs->emplace<Renderable>(ball,
+                                     Renderable{vec3{0.65f, 0.68f, 0.72f}});
+        ctx.ecs->emplace<DynamicBodyTag>(ball);
+        ctx.ecs->emplace<RigidBody>(ball, rb);
+        ctx.ecs->emplace<SelfIntegrating>(ball);
+
+        // Линк — отдельная сущность: разрубание = её destroy (cut_link).
+        if (i == 0) {
+            if (anchored) {
+                Entity link = ctx.ecs->create();
+                JointLink jl;
+                jl.a = ball;
+                jl.b = entt::null; // мировой якорь
+                jl.anchorB = anchor;
+                jl.restLen = restLen;
+                jl.rope = rope;
+                ctx.ecs->emplace<JointLink>(link, jl);
+                // Якорь линка — грань опоры: карв рвёт подвес
+                // (anchor_validate_step, та же проба, что у пропов).
+                ctx.ecs->emplace<SubVoxelAnchor>(link, sva);
+            }
+        } else {
+            Entity link = ctx.ecs->create();
+            JointLink jl;
+            jl.a = ball;
+            jl.b = prev;
+            jl.restLen = restLen;
+            jl.rope = rope;
+            ctx.ecs->emplace<JointLink>(link, jl);
+        }
+        prev = ball;
+    }
+
+    if (out && cap)
+        std::snprintf(out, cap, "spawn_chain: %d balls %s%s, cut with cut_link",
+                      n,
+                      anchored ? "anchored to ceiling"
+                               : (wantAnchor ? "free (no ceiling)" : "free"),
+                      rope ? "" : " (rod)");
+    return true;
+}
+
+// --- cut_link ----------------------------------------------------------------
+// Разрубание связи — механика фундамента §8: уничтожить ближайшую
+// JointLink-сущность в пределах досягаемости. Обе стороны будятся — обрубок
+// обязан упасть, а не висеть замороженным сном в воздухе.
+
+bool cmd_cut_link(ConsoleContext& ctx, int argc, const char* const* argv,
+                  char* out, std::size_t cap) {
+    (void)argc;
+    (void)argv;
+    if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
+        if (out && cap) put(out, cap, "cut_link: player or ecs missing");
+        return false;
+    }
+    const auto* tr = ctx.ecs->try_get<Transform>(ctx.player);
+    if (!tr) {
+        if (out && cap) put(out, cap, "cut_link: player has no transform");
+        return false;
+    }
+    constexpr float kReach = 5.0f; // стенд: дотянуться до подвешенной цепи
+    Entity bestLink = entt::null;
+    float bestD2 = kReach * kReach;
+    auto links = ctx.ecs->view<JointLink>();
+    for (auto le : links) {
+        const auto& jl = links.get<JointLink>(le);
+        vec3 pa{0.0f, 0.0f, 0.0f};
+        if (jl.a == entt::null || !ctx.ecs->valid(jl.a) ||
+            !ctx.ecs->all_of<Transform>(jl.a))
+            continue;
+        pa = ctx.ecs->get<Transform>(jl.a).pos;
+        vec3 pb = jl.anchorB;
+        if (jl.b != entt::null) {
+            if (!ctx.ecs->valid(jl.b) || !ctx.ecs->all_of<Transform>(jl.b))
+                continue;
+            pb = ctx.ecs->get<Transform>(jl.b).pos;
+        }
+        const vec3 mid = (pa + pb) * 0.5f;
+        const vec3 d = mid - tr->pos;
+        const float d2 = dot(d, d);
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            bestLink = le;
+        }
+    }
+    if (bestLink == entt::null) {
+        if (out && cap) put(out, cap, "cut_link: no link within reach");
+        return false;
+    }
+    // Разбудить обе стороны ДО разруба — обрубок падает, не спит в воздухе.
+    const auto jl = ctx.ecs->get<JointLink>(bestLink);
+    for (Entity side : {jl.a, jl.b}) {
+        if (side != entt::null && ctx.ecs->valid(side) &&
+            ctx.ecs->all_of<RigidBody>(side)) {
+            auto& rb = ctx.ecs->get<RigidBody>(side);
+            rb.asleep = false;
+            rb.sleepTicks = 0;
+        }
+    }
+    ctx.ecs->destroy(bestLink);
+    if (out && cap) put(out, cap, "cut_link: severed");
+    return true;
+}
+
 // Shared preamble: the player's pool row id, or false with a put() message.
 bool equip_ctx(ConsoleContext& ctx, const char* who, char* out, std::size_t cap,
                NpcId* id) {
@@ -933,6 +1146,12 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"spawn_box", "spawn_box [hx hy hz]",
                    "spawn a tumbling rigid-core box (contact spheres)",
                    cmd_spawn_box, nullptr});
+    ok &= con.add({"spawn_chain", "spawn_chain [n] [free|rod]",
+                   "spawn rope-linked balls; anchored overhead by default",
+                   cmd_spawn_chain, nullptr});
+    ok &= con.add({"cut_link", "cut_link",
+                   "sever the nearest joint link within reach",
+                   cmd_cut_link, nullptr});
     ok &= con.add({"give", "give <item> [count]",
                    "spawn an item from data/items.csv into the pack",
                    cmd_give, nullptr});

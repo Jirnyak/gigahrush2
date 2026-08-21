@@ -312,6 +312,42 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
                            item.color, item.meshKind, bus, bursts,
                            seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
     }
+
+    // ЛИНКИ С МИРОВЫМ ЯКОРЕМ ([markoaudit/plans/ragdoll.md] §8, решение
+    // владельца 2026-08-21: «линк к миру — через единую систему якорей»):
+    // линк-сущность несёт SubVoxelAnchor рядом с JointLink, живость — ТА ЖЕ
+    // проба anchor_alive, что у пропов выше и у антуража (S2: выкарвил
+    // субвоксель — вещь отвалилась; теперь и ПОДВЕС отваливается). Опора
+    // умерла → линк уничтожен, обе стороны разбужены — цепь/люстра падает.
+    // Счётчик detached не трогаем: это контракт перестройки проп-скина.
+    static thread_local std::vector<Entity> severedLinks;
+    severedLinks.clear();
+    auto linkView = reg.view<JointLink, SubVoxelAnchor>();
+    for (auto le : linkView) {
+        const auto& anchor = linkView.get<SubVoxelAnchor>(le);
+        const int cx = wrap_macro(anchor.cx);
+        const int cy = wrap_macro(anchor.cy);
+        const int cz = wrap_macro(anchor.cz);
+        const std::uint32_t key =
+            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+        if (!dirtySet.contains(key)) continue;
+        const AnchorUV uv =
+            anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
+        if (anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v))
+            continue;
+        const auto& jl = linkView.get<JointLink>(le);
+        for (Entity side : {jl.a, jl.b}) {
+            if (side != entt::null && reg.valid(side) &&
+                reg.all_of<RigidBody>(side)) {
+                auto& rb = reg.get<RigidBody>(side);
+                rb.asleep = false;
+                rb.sleepTicks = 0;
+            }
+        }
+        severedLinks.push_back(le);
+    }
+    for (Entity le : severedLinks) reg.destroy(le);
+
     return static_cast<std::uint32_t>(detached.size());
 }
 
