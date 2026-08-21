@@ -9,6 +9,7 @@
 #include "game/event_bus.h"
 #include "game/interact_table.h"
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
+#include "game/prop_form_table.h" // FormId — форма составного тела
 #include "game/prop_table.h"
 #include "world/world.h"
 #include "world/level_stack.h"
@@ -216,22 +217,31 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
 // проп — тело рагдолл-ядра (rigid_body_step в src/sim/rigid.cpp), гашение,
 // качение и сон живут там; отдельная косметика вращения не существует.
 
-// ── Многосегментное тело (инкремент 8 рагдолл-эпика) ────────────────────────
+// ── Многосегментное тело (инкременты 8 и 11 рагдолл-эпика) ──────────────────
+// Плоть — контактная пара живого тела: мяса упругости нет (звона не бывает),
+// хват высокий — это одежда и кожа. Живёт здесь, потому что и смерть
+// (combat.cpp), и загрузка сейва (save.cpp) собирают тело ОДНИМИ числами.
+inline constexpr float kFleshRestitution = 0.05f;
+inline constexpr float kFleshFriction = 0.8f;
+
 // Сегмент чужого корня: сущность-сегмент И сущность-линк несут этот маркер,
 // чтобы уборка корня (ребилд трупов при загрузке этажа) забирала всё тело.
 struct BodySegment {
     Entity root = entt::null;
 };
 
-// Развернуть КОРЕНЬ в гуманоида из четырёх тел цепью (голова—грудь—ТАЗ—ноги;
-// корень становится тазом — на нём остаются Container/Interactable/Corpse и
-// сейв-идентичность). Ядро агностично: это просто N тел + штанги-линки; слово
-// «труп» знает только вызывающий. Габариты и массы ВЫВЕДЕНЫ из полугабарита
-// тела и его полной массы (антропометрические доли — вывод в .cpp). Сегменты
-// наследуют скорость и тинт корня. Возвращает число созданных сущностей
-// (сегменты + линки).
-std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
-                                      vec3 bodyHalf, float totalKg);
+// Развернуть КОРЕНЬ в составное тело по строкам data/prop_forms.csv
+// ([prop_form_table.h] — форма это ДАННЫЕ, решение владельца 2026-08-21).
+// Первая строка формы пересобирает САМ корень (на нём остаются
+// Container/Interactable/Corpse и сейв-идентичность), остальные рождают
+// сегменты-сущности и связи. Ядро агностично: N тел + M линков, слово «труп»
+// знает только вызывающий. Габариты и массы — доли `bodyHalf` и `totalKg`
+// (S11: масштабируется телом, а не назначается). Сегменты наследуют скорость
+// и тинт корня. `restitution`/`friction` — контактная пара материала тела
+// (плоть у трупа). Возвращает число созданных сущностей (сегменты + линки).
+std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
+                                  vec3 bodyHalf, float totalKg,
+                                  float restitution, float friction);
 
 // Убрать сегменты и линки, чьи корни в списке (вызвать ДО destroy корней).
 void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);

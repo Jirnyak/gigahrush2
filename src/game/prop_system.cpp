@@ -822,9 +822,13 @@ bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetK
     return interaction_step(reg, player, targetKind, bus, nullptr);
 }
 
-std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
-                                      vec3 bodyHalf, float totalKg) {
+std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
+                                  vec3 bodyHalf, float totalKg,
+                                  float restitution, float friction) {
     if (!reg.valid(root) || !reg.all_of<Transform>(root)) return 0;
+    const FormDef& def = form_def(form);
+    if (def.count == 0) return 0;
+
     const Transform& rootTr = reg.get<Transform>(root);
     const vec3 basePos = rootTr.pos;
     const LayerId layer = rootTr.layer;
@@ -835,81 +839,66 @@ std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
                           ? reg.get<Renderable>(root).color
                           : vec3{0.5f, 0.5f, 0.5f};
 
-    // Антропометрия — вывод из роста H и ширины W тела (S11), не назначение:
-    // рост человека ≈ 7.5 голов → радиус головы H/15; доли массы сегментов —
-    // стандартные (голова ~8%, торс ~33%, таз ~26%, ноги ~33%); высоты
-    // сегментов — доли роста (торс 0.30H, таз 0.20H, ноги 0.44H — вместе с
-    // головой ≈ H). Плоть: e=0.05 (звона у мяса нет), μ=0.8 (цепкая).
-    const float H = bodyHalf.z * 2.0f;
+    // Доли строк — от габарита ЭТОГО тела (S11): ширина W задаёт поперечник,
+    // рост H — вертикаль. Одна строка обслуживает ребёнка и громилу.
     const float W = bodyHalf.x * 2.0f;
-    constexpr float kFleshE = 0.05f, kFleshMu = 0.8f;
-    const float headR = H / 15.0f;
-    const vec3 chestHalf{W * 0.5f, W * 0.30f, H * 0.15f};
-    const vec3 pelvisHalf{W * 0.45f, W * 0.30f, H * 0.10f};
-    const vec3 legsHalf{W * 0.40f, W * 0.30f, H * 0.22f};
-
-    // КОРЕНЬ = ТАЗ: пересобрать его тело под габарит таза (сейв, лут и
-    // интеракция остаются на нём).
-    reg.emplace_or_replace<AABB>(root, AABB{pelvisHalf});
-    rigid_attach_box(reg, root, pelvisHalf, totalKg * 0.26f, kFleshE,
-                     kFleshMu);
-
-    // Столбик от таза вверх и вниз, крошечный сдвиг по X на сегмент —
-    // идеальная соосность складывается в устойчивую башню (урок цепей).
-    constexpr float kGap = 0.02f;
-    struct Seg {
-        vec3 pos;
-        vec3 half;   // half.x<0 → сфера радиуса -half.x
-        float kg;
-    };
-    const float chestZ = pelvisHalf.z + kGap + chestHalf.z;
-    const float headZ = chestZ + chestHalf.z + kGap + headR;
-    const float legsZ = -(pelvisHalf.z + kGap + legsHalf.z);
-    const Seg segs[3] = {
-        {basePos + vec3{0.01f, 0.0f, chestZ}, chestHalf, totalKg * 0.33f},
-        {basePos + vec3{0.02f, 0.0f, headZ},
-         vec3{-headR, 0.0f, 0.0f}, totalKg * 0.08f},
-        {basePos + vec3{-0.01f, 0.0f, legsZ}, legsHalf, totalKg * 0.33f},
+    const float H = bodyHalf.z * 2.0f;
+    auto seg_pos = [&](const FormSegDef& sd) {
+        return basePos + vec3{sd.ox * W, sd.oy * W, sd.oz * H};
     };
 
-    std::uint32_t made = 0;
-    Entity prev = root; // цепь: таз—грудь—голова, таз—ноги
-    for (int i = 0; i < 3; ++i) {
+    // Сегмент 0 — САМ корень: на нём лут, интеракция и сейв-идентичность.
+    Entity made[kMaxFormSegs];
+    const FormSegDef& rootSd = kFormSegs[def.first];
+    {
+        const vec3 half{rootSd.sx * W, rootSd.sy * W, rootSd.sz * H};
+        reg.emplace_or_replace<AABB>(root, AABB{half});
+        rigid_attach_box(reg, root, half, totalKg * rootSd.massFrac,
+                         restitution, friction);
+        made[0] = root;
+    }
+
+    std::uint32_t n = 0;
+    for (std::uint16_t i = 1; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        const vec3 pos = seg_pos(sd);
         Entity seg = reg.create();
-        reg.emplace<Transform>(seg, Transform{segs[i].pos, layer});
+        reg.emplace<Transform>(seg, Transform{pos, layer});
         reg.emplace<Velocity>(seg, Velocity{vel0});
         reg.emplace<Renderable>(seg, Renderable{tint});
         reg.emplace<DynamicBodyTag>(seg);
         reg.emplace<BodySegment>(seg, BodySegment{root});
-        if (segs[i].half.x < 0.0f) {
-            const float r = -segs[i].half.x;
+        const float kg = totalKg * sd.massFrac;
+        if (sd.prim == FormPrim::Sphere) {
+            const float r = sd.sx * H;
             reg.emplace<AABB>(seg, AABB{vec3{r, r, r}});
-            const float kg = segs[i].kg;
-            rigid_attach_sphere(reg, seg, r, kg, kFleshE, kFleshMu);
+            rigid_attach_sphere(reg, seg, r, kg, restitution, friction);
         } else {
-            reg.emplace<AABB>(seg, AABB{segs[i].half});
-            rigid_attach_box(reg, seg, segs[i].half, segs[i].kg, kFleshE,
-                             kFleshMu);
+            const vec3 half{sd.sx * W, sd.sy * W, sd.sz * H};
+            reg.emplace<AABB>(seg, AABB{half});
+            rigid_attach_box(reg, seg, half, kg, restitution, friction);
         }
-        ++made;
+        made[i] = seg;
+        ++n;
 
-        // Штанга между центрами: держит длину тела, гнётся в суставе.
-        // Ноги (i==2) цепляются к ТАЗУ, не к предыдущему сегменту (голове).
-        const Entity parent = (i == 2) ? root : prev;
+        // Связь с родителем: восстановленная длина — фактическое расстояние
+        // между центрами, так форма и есть покойная поза.
+        const Entity parent =
+            (sd.parent == kFormNoParent) ? root : made[sd.parent];
         Entity link = reg.create();
         JointLink jl;
         jl.a = seg;
         jl.b = parent;
         jl.restLen = length(wrap_delta3(
-            segs[i].pos, reg.get<Transform>(parent).pos, kWorldExtent));
-        jl.rope = false; // штанга: позвоночник держит и сжатие
+            pos, reg.get<Transform>(parent).pos, kWorldExtent));
+        jl.rope = sd.rope != 0;
         reg.emplace<JointLink>(link, jl);
         reg.emplace<BodySegment>(link, BodySegment{root});
-        ++made;
-        prev = seg;
+        ++n;
     }
-    return made;
+    return n;
 }
+
 
 Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
                           float reachM) {

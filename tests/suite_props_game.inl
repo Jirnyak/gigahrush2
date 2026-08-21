@@ -566,9 +566,20 @@ static void test_humanoid_segments_fall_and_cleanup() {
     reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
 
     const std::uint32_t made =
-        game::spawn_humanoid_segments(reg, root, vec3{0.4f, 0.4f, 0.9f},
-                                      70.0f);
-    CHECK(made == 6u); // 3 сегмента + 3 линка
+        game::spawn_form_segments(reg, root, game::FormId::Humanoid,
+                                  vec3{0.4f, 0.4f, 0.9f}, 70.0f,
+                                  game::kFleshRestitution,
+                                  game::kFleshFriction);
+    // Форма — ДАННЫЕ: сколько тел и связей, решает data/prop_forms.csv, а не
+    // это число. Строка формы без корня даёт сегмент И линк.
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    CHECK(made == static_cast<std::uint32_t>((fd.count - 1) * 2));
+    // Массы долей обязаны складываться в целое тело — иначе труп весит не
+    // столько, сколько весил живой.
+    float fracSum = 0.0f;
+    for (std::uint16_t i = 0; i < fd.count; ++i)
+        fracSum += game::kFormSegs[fd.first + i].massFrac;
+    CHECK(std::fabs(fracSum - 1.0f) < 0.01f);
     CHECK(reg.all_of<RigidBody>(root)); // корень пересобран в таз
 
     for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);

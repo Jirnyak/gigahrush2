@@ -442,6 +442,11 @@ _giga_csv_vs_header("data/props.csv" "src/game/prop_table.h"
 # would leave the enum short and every later ordinal misread.
 _giga_csv_vs_header("data/interactables.csv" "src/game/interact_table.h"
     "kInteractCount[ \t]*=[ \t]*([0-9]+)" "interactable")
+# Формы составных тел (ragdoll.md §9) — строки СЕГМЕНТОВ, а не форм: индекс
+# сегмента внутри формы это ссылка родителя, поэтому дрейф строк ломает
+# топологию тела молча. Гейт считает строки CSV против kFormSegCount.
+_giga_csv_vs_header("data/prop_forms.csv" "src/game/prop_form_table.h"
+    "kFormSegCount[ \t]*=[ \t]*([0-9]+)" "prop form segment")
 # Particles table — the unified GPU pool's type vocabulary. Same ordinal-ABI
 # law as interactables (ParticleBurst stores the row index), same drift hazard.
 _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"

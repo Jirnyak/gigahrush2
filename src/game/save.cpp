@@ -1041,7 +1041,8 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         reg.emplace<Velocity>(e);
         reg.emplace<PropFallMode>(e, PropFallMode::RagdollRoll);
         reg.emplace<DynamicBodyTag>(e);
-        spawn_humanoid_segments(reg, e, rec.half, Mass{}.kg);
+        spawn_form_segments(reg, e, FormId::Humanoid, rec.half, Mass{}.kg,
+                            kFleshRestitution, kFleshFriction);
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         reg.emplace<Interactable>(

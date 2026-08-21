@@ -555,7 +555,8 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                                       : vec3{0.4f, 0.4f, 0.9f};
                 const float kg =
                     reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg : Mass{}.kg;
-                spawn_humanoid_segments(reg, e, half, kg);
+                spawn_form_segments(reg, e, FormId::Humanoid, half, kg,
+                                    kFleshRestitution, kFleshFriction);
             }
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body
