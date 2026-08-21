@@ -64,6 +64,18 @@ layout(set = 0, binding = 4, std430) readonly buffer DynBucketBuffer {
 };
 const uint kDynFallback = 0xFFFFFFFFu;
 
+// Кластерная топология статиков (инкремент 4 carve-hitch.md): 32³ бакетов
+// по 8 м, пары (memberStart, memberCount) + CSR ламповых id. Грязная клетка
+// У КАМЕРЫ сканирует только соседние бакеты — «все лампы радиуса» без
+// прохода по всей таблице (каждая лампа — член ровно одного бакета, лампа
+// достающая клетку лежит в бакете не дальше R_max + полудиагоналей).
+layout(set = 0, binding = 5, std430) readonly buffer ClusterBucketBuffer {
+    uint uClusterBucketRange[]; // пары (start, count) по бакетам
+};
+layout(set = 0, binding = 6, std430) readonly buffer ClusterMemberBuffer {
+    uint uClusterMembers[];
+};
+
 // Камеры в пуше НЕТ по построению: биннинг камеронезависим (S7), и мёртвая
 // лейна camPos возилась зря (аудит 2026-08-20). uTime/maxLights тоже умерли:
 // слоты приходят дефайном, время компьюту не нужно.
@@ -72,6 +84,12 @@ layout(push_constant) uniform GridPush {
     vec4 gridExt;   // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
     vec4 params;    // x = activeLightCount,
                     // y = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
+                    // z = R_max бейка (м), w = кластерная топология залита (0/1)
+    vec4 camPos;    // xyz = камера; w = порог «близко» для грязного фоллбэка
+                    // (2×R_max — вывод в gpu_light_grid.h). Камера в пуше —
+                    // ТОЛЬКО для этого гейта: закон «свет в дыру тем же
+                    // кадром» камерный (решение владельца 2026-08-21), биннинг
+                    // чистых клеток по-прежнему камеронезависим (S7).
     uint genBaked;       // поколение мира в живом bakedGrid
     uint genStaticCount; // граница секций таблицы: [0..S) статики, [S..N) динамики
     uint dynBucketDim;   // решётка бакетов динамиков (= kDynBucketDim хоста)
@@ -176,12 +194,64 @@ void main() {
     barrier();
     bool groupDirty = sGroupDirty != 0u;
 
-    const uint tid = gl_LocalInvocationIndex;
+    // КАМЕРНЫЙ гейт грязноты (решение владельца 2026-08-21: «свет в дыру тем
+    // же кадром» — закон для камеры). Далёкая грязная группа живёт по
+    // stale-списку до свапа патча (~0.3 с) — её никто не видит, а фоллбэк по
+    // всему тору превращал массовые разрушения в фриз. Порог pc.camPos.w =
+    // 2×R_max (вывод в gpu_light_grid.h). Дистанция считается от бокса ВСЕЙ
+    // воркгруппы (из gl_WorkGroupID — однородно): внутри грязного пути стоят
+    // барьеры, ветка обязана быть group-uniform.
     if (groupDirty) {
-        // Грязная воркгруппа — «все лампы радиуса» (железный инвариант
-        // владельца (б): ошибка всегда «посветить лишним»): полный
-        // дистанционный биннинг по всей статик-таблице, старый тайловый цикл.
-        // Живёт секунды — фоновый ребейк ужмёт и поднимет genBaked.
+        vec3 wgMin = pc.gridMin.xyz +
+                     vec3(gl_WorkGroupID) * vec3(gl_WorkGroupSize) * cellSize;
+        vec3 wgMax = wgMin + vec3(gl_WorkGroupSize) * cellSize;
+        float dCam = dist_sq_point_aabb_toroidal(pc.camPos.xyz, wgMin, wgMax,
+                                                 pc.params.y);
+        if (dCam > pc.camPos.w * pc.camPos.w) groupDirty = false;
+    }
+
+    const uint tid = gl_LocalInvocationIndex;
+    if (groupDirty && pc.params.w > 0.5) {
+        // Грязная группа У КАМЕРЫ, топология залита — «все лампы радиуса»
+        // через КЛАСТЕРНЫЕ БАКЕТЫ (инкремент 4): каждая лампа — член ровно
+        // одного 8-м бакета, лампа достающая клетку лежит не дальше
+        // R_max + полудиагоналей — скан соседних бакетов полон по построению,
+        // инвариант (б) «посветить лишним» цел, всей таблицы больше нет.
+        float cbM = pc.gridMin.w * 2.0;       // бакет = 2 клетки светосетки
+        uint cbDim = uint(pc.gridExt.x) / 2u; // та же производная, что у CPU
+        // R_max + полудиагональ бакета + полудиагональ клетки, в бакетах.
+        int br = int(ceil((pc.params.z + 0.8660254 * (cbM + pc.gridMin.w)) / cbM));
+        vec3 cc0 = (cellMin + cellMax) * 0.5;
+        int cbx = int(floor(cc0.x / cbM));
+        int cby = int(floor(cc0.y / cbM));
+        int cbz = int(floor(cc0.z / cbM));
+        for (int dz2 = -br; dz2 <= br; ++dz2)
+            for (int dy2 = -br; dy2 <= br; ++dy2)
+                for (int dx2 = -br; dx2 <= br; ++dx2) {
+                    uint bx2 = uint(cbx + dx2) & (cbDim - 1u);
+                    uint by2 = uint(cby + dy2) & (cbDim - 1u);
+                    uint bz2 = uint(cbz + dz2) & (cbDim - 1u);
+                    uint bi = (bx2 + by2 * cbDim + bz2 * cbDim * cbDim) * 2u;
+                    uint mCount = uClusterBucketRange[bi + 1u];
+                    if (mCount == 0u) continue;
+                    uint mStart = uClusterBucketRange[bi];
+                    for (uint mk = 0u; mk < mCount; ++mk) {
+                        uint id = uClusterMembers[mStart + mk];
+                        // Надгробие — не кандидат (как в полном скане).
+                        if (uPointLights[id].colorIntensity.w <= kTombstone)
+                            continue;
+                        vec4 pr = uPointLights[id].posRadius;
+                        float radius = pr.w;
+                        float dSq = dist_sq_point_aabb_toroidal(
+                            pr.xyz, cellMin, cellMax, pc.params.y);
+                        if (dSq > radius * radius) continue;
+                        consider(id, dSq / (radius * radius));
+                    }
+                }
+    } else if (groupDirty) {
+        // Топологии нет (этаж без кластерной паковки) — прежний полный
+        // тайловый скан всей статик-таблицы. Ветка group-uniform: params —
+        // пуш-константа.
         for (uint base = 0u; base < staticCount; base += 256u) {
             const uint n = min(staticCount - base, 256u);
             if (tid < n) {

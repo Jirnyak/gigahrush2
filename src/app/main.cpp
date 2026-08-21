@@ -7099,12 +7099,26 @@ int main(int argc, char** argv) {
                     lightGrid.upload_baked_grid(
                         nav.light_vis().cells.data(),
                         nav.light_vis().cells.size(),
-                        static_cast<std::uint32_t>(nav.light_gen()));
+                        static_cast<std::uint32_t>(nav.light_gen()),
+                        nav.light_vis().rMaxM);
                     // Кластеры поколения: записи в верхний регион таблицы +
                     // CSR членов для покадровой суммы (light-cluster.md §3.2).
                     const auto& lv = nav.light_vis();
                     std::vector<gpu::GpuPointLight> recs(lv.clusters.size());
                     g_lightClusterRanges.resize(lv.clusters.size());
+                    // Топология кластеров для грязного фоллбэка (инкремент 4
+                    // carve-hitch.md): бакет -> (start, count) в CSR членов.
+                    // Бакет кластера — по ПЕРВОМУ члену (все члены в одном
+                    // бакете по построению бейка). Шов решёток — assert.
+                    static_assert(gpu::kClusterTopoDim ==
+                                      static_cast<std::uint32_t>(
+                                          game::kClusterGridDim),
+                                  "cluster bucket grids must coincide");
+                    std::vector<std::uint32_t> topo(
+                        static_cast<std::size_t>(gpu::kClusterTopoBuckets) * 2,
+                        0u);
+                    const float cbM =
+                        game::kLightVisCellM * game::kClusterBucketCells;
                     for (std::size_t i = 0; i < lv.clusters.size(); ++i) {
                         const auto& c = lv.clusters[i];
                         recs[i].posRadius =
@@ -7114,10 +7128,39 @@ int main(int argc, char** argv) {
                         recs[i].dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
                         g_lightClusterRanges[i] = {c.memberStart,
                                                    c.memberCount};
+                        if (c.memberCount > 0 &&
+                            lv.clusterMembers[c.memberStart] <
+                                g_staticLamps.size()) {
+                            const vec3& p =
+                                g_staticLamps[lv.clusterMembers[c.memberStart]]
+                                    .pos;
+                            const int bx =
+                                static_cast<int>(std::floor(p.x / cbM)) &
+                                (game::kClusterGridDim - 1);
+                            const int by =
+                                static_cast<int>(std::floor(p.y / cbM)) &
+                                (game::kClusterGridDim - 1);
+                            const int bz =
+                                static_cast<int>(std::floor(p.z / cbM)) &
+                                (game::kClusterGridDim - 1);
+                            const std::size_t bi =
+                                (static_cast<std::size_t>(bx) +
+                                 static_cast<std::size_t>(by) *
+                                     game::kClusterGridDim +
+                                 static_cast<std::size_t>(bz) *
+                                     game::kClusterGridDim *
+                                     game::kClusterGridDim) *
+                                2;
+                            topo[bi] = c.memberStart;
+                            topo[bi + 1] = c.memberCount;
+                        }
                     }
                     g_lightClusterMembers = lv.clusterMembers;
                     lightGrid.set_cluster_records(
                         recs.data(), static_cast<uint32_t>(recs.size()));
+                    lightGrid.set_cluster_topology(
+                        topo.data(), topo.size(), lv.clusterMembers.data(),
+                        lv.clusterMembers.size());
                     g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",
