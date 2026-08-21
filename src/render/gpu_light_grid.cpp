@@ -332,6 +332,49 @@ void GpuLightGrid::upload_baked_grid(const uint32_t* cells, std::size_t words,
     std::memcpy(bakedMapped_, cells, words * sizeof(uint32_t));
     bakedGen_ = bakedGen;
     bakedUploadPending_ = true;
+    bakedRegions_.clear(); // полная копия кроет любые частичные диапазоны
+}
+
+void GpuLightGrid::upload_baked_cells(const uint32_t* cells, std::size_t words,
+                                      const uint32_t* changed,
+                                      std::size_t nChanged,
+                                      uint32_t bakedGen) noexcept {
+    if (!bakedMapped_ || cells == nullptr) return;
+    constexpr std::size_t kExpect =
+        static_cast<std::size_t>(kTotalGridCells) * (kGridCellSlots + 1);
+    if (words != kExpect) {
+        std::fprintf(stderr,
+                     "[light-grid] baked cells layout mismatch: %zu words, "
+                     "expected %zu — patch refused\n",
+                     words, kExpect);
+        return;
+    }
+    // Ген поднимается ВСЕГДА (и при nChanged == 0 — см. заголовок): это и
+    // есть очистка грязного шара для шейдера (клетка чиста ⇔ dirtyGen <=
+    // genBaked, light_grid.comp).
+    bakedGen_ = bakedGen;
+    if (bakedUploadPending_) return; // полная заливка того же кадра главнее
+    constexpr VkDeviceSize kCellBytes = sizeof(GpuGridCell);
+    for (std::size_t i = 0; i < nChanged; ++i) {
+        const uint32_t cell = changed[i];
+        if (cell >= kTotalGridCells) continue;
+        const VkDeviceSize off = static_cast<VkDeviceSize>(cell) * kCellBytes;
+        std::memcpy(static_cast<char*>(bakedMapped_) + off,
+                    cells + static_cast<std::size_t>(cell) *
+                                (kGridCellSlots + 1),
+                    kCellBytes);
+        // Смежные клетки (список отсортирован) склеиваются в один регион.
+        if (!bakedRegions_.empty() &&
+            bakedRegions_.back().srcOffset + bakedRegions_.back().size == off) {
+            bakedRegions_.back().size += kCellBytes;
+        } else {
+            VkBufferCopy r{};
+            r.srcOffset = off;
+            r.dstOffset = off;
+            r.size = kCellBytes;
+            bakedRegions_.push_back(r);
+        }
+    }
 }
 
 void GpuLightGrid::mark_dirty_light_cell(std::size_t cellIndex, uint32_t gen) noexcept {
@@ -350,6 +393,25 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
         VkBufferCopy region{};
         region.size = static_cast<VkDeviceSize>(kTotalGridCells) * sizeof(GpuGridCell);
         vkCmdCopyBuffer(cmd, bakedStaging_.buffer, bakedGrid_.buffer, 1, &region);
+        VkBufferMemoryBarrier copyBarrier{};
+        copyBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        copyBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        copyBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        copyBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copyBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        copyBarrier.buffer = bakedGrid_.buffer;
+        copyBarrier.offset = 0;
+        copyBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
+                             1, &copyBarrier, 0, nullptr);
+    } else if (!bakedRegions_.empty()) {
+        // Частичный свап (дельта-патч): те же стейджинг и барьер, но копия —
+        // только изменённые диапазоны (сотни клеток × 256 Б против 64 МиБ).
+        vkCmdCopyBuffer(cmd, bakedStaging_.buffer, bakedGrid_.buffer,
+                        static_cast<uint32_t>(bakedRegions_.size()),
+                        bakedRegions_.data());
+        bakedRegions_.clear();
         VkBufferMemoryBarrier copyBarrier{};
         copyBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         copyBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;

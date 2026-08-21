@@ -7124,6 +7124,27 @@ int main(int argc, char** argv) {
                                  static_cast<double>(g_frameMark.lightSwapMs),
                                  static_cast<unsigned long long>(nav.light_gen()));
                 }
+                // Свап дельта-патча (carve-hitch.md §3): на GPU едут ТОЛЬКО
+                // изменённые клетки; ген поднимается и при пустом списке —
+                // грязный шар обязан очиститься даже от карва в темноте.
+                {
+                    const std::vector<std::uint32_t>* patchCells = nullptr;
+                    if (nav.take_light_patch(&patchCells) &&
+                        nav.light_vis().valid()) {
+                        const auto ctPt = std::chrono::steady_clock::now();
+                        lightGrid.upload_baked_cells(
+                            nav.light_vis().cells.data(),
+                            nav.light_vis().cells.size(), patchCells->data(),
+                            patchCells->size(),
+                            static_cast<std::uint32_t>(nav.light_gen()));
+                        std::fprintf(
+                            stderr,
+                            "[carve] light_patch upload %zu cells %.2f ms "
+                            "(gen %llu)\n",
+                            patchCells->size(), carve_ms_since(ctPt),
+                            static_cast<unsigned long long>(nav.light_gen()));
+                    }
+                }
                 const auto ctLg = std::chrono::steady_clock::now();
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);

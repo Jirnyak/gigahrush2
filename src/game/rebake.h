@@ -93,6 +93,16 @@ public:
     // плотности карвов в бою: GIGA_CARVE_DBG печатает пачки поштучно.
     static constexpr std::uint64_t kRebakeQuietTicks = 256;
 
+    // Дебаунс ЧАСТИЧНОГО допекания света (carve-hitch.md, инкремент 3). Цикл
+    // дёшев (~единицы-десятки мс — вывод в [game/light_vis_bake.h] у
+    // LightVisPatch), поэтому длинный дебаунс полного цикла ему не нужен:
+    // ждать надо только слияния одной ОЧЕРЕДИ выстрелов в один цикл. Интервал
+    // выстрелов очереди ~0.1 с (600 rpm = 12.5 тиков) — 32 тика (0.26 с)
+    // покрывают два межвыстрельных интервала с запасом. Каждый тик очереди
+    // всё равно продлевает окно от ПОСЛЕДНЕЙ мутации, так что длинная очередь
+    // печётся одним циклом после её конца.
+    static constexpr std::uint64_t kLightPatchQuietTicks = 32;
+
     // Мин-интервал между стартами — НЕ константа, а замер самого планировщика:
     // длительность последнего Rebake в тиках (бессмысленно стартовать чаще,
     // чем бейк успевает крутиться; число решает замер, не вкус — план §9).
@@ -174,6 +184,17 @@ public:
         lightSwapPending_ = false;
         return f;
     }
+    // true один раз после свапа ЧАСТИЧНОГО допекания (дельта-лампы,
+    // carve-hitch.md инкремент 3): *cells — изменённые клетки светосетки,
+    // отсортированы; заливать на GPU только их (upload_baked_cells). Список
+    // может быть ПУСТ (карв в темноте) — заливка всё равно обязана поднять
+    // genBaked, иначе грязные клетки шара остались бы на дорогом фоллбэке.
+    bool take_light_patch(const std::vector<std::uint32_t>** cells) {
+        if (!lightPatchPending_) return false;
+        lightPatchPending_ = false;
+        *cells = &patchChangedCells_;
+        return true;
+    }
     // Поколение мира, которое отражает живой граф. bakedGen != worldGen —
     // запечённое устарело, планировщик сам доведёт (SLA-тест ассертит это).
     std::uint64_t baked_gen() const { return bakedGen_; }
@@ -201,15 +222,20 @@ public:
                pendingRooms_.resident_bytes() + lightVis_.resident_bytes() +
                pendingLight_.resident_bytes() +
                (lampsLive_.capacity() + lampsSnap_.capacity()) *
-                   sizeof(LightVisLamp);
+                   sizeof(LightVisLamp) +
+               (carvedSinceLight_.capacity() + carvedSnap_.capacity() +
+                patchChangedCells_.capacity()) *
+                   sizeof(std::uint32_t) +
+               pendingPatch_.hits.capacity() * sizeof(LightVisPatch::Hit);
     }
 
 private:
-    enum class Mode : std::uint8_t { Idle, Fresh, Rebake };
+    enum class Mode : std::uint8_t { Idle, Fresh, Rebake, LightPatch };
 
     void join_worker();
     void discard_pending();
     void start_rebake(std::uint64_t simTick, std::uint64_t worldGen);
+    void start_light_patch(std::uint64_t worldGen);
 
     // --- живая сторона: пишется только в step()/start_fresh на главном потоке
     nav::CoarseGraph coarse_{};
@@ -227,6 +253,14 @@ private:
     std::uint32_t lightClusterBase_ = 0; // верхний регион таблицы (light-cluster.md)
     std::uint64_t lightGen_ = 0;
     bool lightSwapPending_ = false;
+    bool lightPatchPending_ = false;
+    std::vector<std::uint32_t> patchChangedCells_; // выход последнего патча
+    // Карвнутые макроклетки с последнего свапа света — вход дельта-лампового
+    // патча. Копятся в patch_carved_cells (тот же дренаж CarveResult, что у
+    // битсетов); на старте патча/полного цикла уезжают в carvedSnap_, на
+    // отмене возвращаются (иначе клетки навсегда остались бы грязными на GPU).
+    std::vector<std::uint32_t> carvedSinceLight_;
+    std::vector<std::uint32_t> carvedSnap_;
     RoomZones* rooms_ = nullptr; // живые поля комнат вызывающего
     FloorKind kind_ = FloorKind::Residential;
     int floorNumber_ = 0;
@@ -242,9 +276,13 @@ private:
     // (копия ~10-15 мс на старте цикла, освобождается на свапе; «бери больше
     // во благо» — решение владельца 2026-08-20). unique_ptr, а не член по
     // значению: MacroGrid() плотный и держал бы 134 МиБ всегда, даже пустым.
-    // Вместе с битсетами — ВСЁ, что воркер знает о мире.
+    // Вместе с битсетами — ВСЁ, что воркер знает о мире. Дельта-патч света
+    // переиспользует тот же снапшот-механизм (134 МиБ ради 44 ламп — жирно,
+    // но путь уже написан; ужать до боксов ламп — следующий шаг, если 10-15
+    // мс старта окажутся заметны).
     std::unique_ptr<MacroGrid> snapGrid_;
     std::vector<LightVisLamp> lampsSnap_;
+    LightVisPatch pendingPatch_; // выход воркера дельта-патча
 
     std::thread worker_;
     std::atomic<bool> cancel_{false};
@@ -273,6 +311,7 @@ private:
     float roomsMs_ = 0.0f;
     float coarseMs_ = 0.0f;
     float fineMs_ = 0.0f;
+    float snapCopyMs_ = 0.0f; // копия 134 МиБ на главном потоке (59.1)
 };
 
 } // namespace giga::game

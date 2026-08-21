@@ -145,6 +145,15 @@ public:
     // update_and_dispatch, вне рендер-пасса, кадром заливки.
     void upload_baked_grid(const uint32_t* cells, std::size_t words,
                            uint32_t bakedGen) noexcept;
+    // Частичный свап (дельта-патч, carve-hitch.md §3): записать в стейджинг
+    // ТОЛЬКО изменённые клетки (отсортированный список индексов) и скопировать
+    // их диапазонами кадром заливки — полная копия 64 МиБ (42 мс замером) за
+    // дырку не платится. genBaked поднимается и при НУЛЕ клеток: карв в
+    // темноте всё равно обязан очистить грязный шар, иначе фоллбэк жил бы
+    // вечно. Полная заливка, запрошенная тем же кадром, главнее диапазонов.
+    void upload_baked_cells(const uint32_t* cells, std::size_t words,
+                            const uint32_t* changed, std::size_t nChanged,
+                            uint32_t bakedGen) noexcept;
     // Дренаж карва (инвариант «тем же кадром»): пометить клетку светосетки
     // поколением мутации. Пишется в host-visible буфер ДО записи диспатча
     // этого кадра — компьют уже видит поднятые поколения (план §3.3).
@@ -216,6 +225,9 @@ private:
     uint32_t cellOverflow_ = 0;
     uint32_t bakedGen_ = 0;
     bool bakedUploadPending_ = false;
+    // Диапазоны частичного свапа (смежные клетки склеены); живут до копии в
+    // update_and_dispatch. Полная заливка их обнуляет — копия целиком кроет.
+    std::vector<VkBufferCopy> bakedRegions_;
 };
 #if defined(_MSC_VER)
 #pragma warning(pop)

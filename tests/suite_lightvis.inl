@@ -418,6 +418,149 @@ void carve_expands_same_call() {
     CHECK(present); // свап поднял бы bakedGen ⇒ dirtyGen <= bakedGen, чисто
 }
 
+// Дельта-патч (carve-hitch.md §3): частичное допекание только затронутых
+// ламп. Обе полярности: ДО патча лампа за стеной отсутствует в списке клетки
+// (конструкция пары это гарантирует), ПОСЛЕ применения — присутствует; при
+// этом ни одна старая запись не теряется (слияние — только добавки), а патч
+// бит-идентичен при разном числе потоков (тот же контракт, что у полного).
+void delta_lamp_patch() {
+    World w;
+    std::vector<LightVisLamp> lamps;
+    make_floor_and_lamps(w, lamps);
+    LightVisBake baked;
+    giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
+                                      kSlots, baked, /*threads=*/2);
+
+    // Перекрытая пара (лампа, клетка) — тот же поиск, что в
+    // carve_expands_same_call: в радиусе, но не в списке — за стеной.
+    int lampId = -1;
+    std::size_t targetCell = 0;
+    int tcx = 0, tcy = 0, tcz = 0;
+    for (std::uint32_t li = 0; li < lamps.size() && lampId < 0; ++li) {
+        const LightVisLamp& L = lamps[li];
+        const int lc[3] = {
+            static_cast<int>(std::floor(L.pos.x / giga::game::kLightVisCellM)),
+            static_cast<int>(std::floor(L.pos.y / giga::game::kLightVisCellM)),
+            static_cast<int>(std::floor(L.pos.z / giga::game::kLightVisCellM))};
+        const int br =
+            static_cast<int>(std::ceil(L.radiusM / giga::game::kLightVisCellM));
+        for (int dz = -br; dz <= br && lampId < 0; ++dz)
+            for (int dy = -br; dy <= br && lampId < 0; ++dy)
+                for (int dx = -br; dx <= br && lampId < 0; ++dx) {
+                    const int cx = lc[0] + dx, cy = lc[1] + dy,
+                              cz = lc[2] + dz;
+                    if (giga::game::light_cell_score(L.pos, L.radiusM, cx, cy,
+                                                     cz) > 0.9f)
+                        continue;
+                    const std::size_t cell =
+                        giga::game::light_vis_index(cx, cy, cz);
+                    const std::uint32_t* row =
+                        baked.cells.data() + cell * (1 + kSlots);
+                    bool present = false;
+                    for (std::uint32_t k = 0; k < row[0]; ++k)
+                        if (row[1 + k] == li) present = true;
+                    if (present || row[0] >= kSlots) continue;
+                    lampId = static_cast<int>(li);
+                    targetCell = cell;
+                    tcx = cx; tcy = cy; tcz = cz;
+                }
+    }
+    CHECK(lampId >= 0);
+
+    // Карв: толстый тоннель лампа -> клетка (копия механики соседнего теста).
+    const LightVisLamp& L = lamps[static_cast<std::uint32_t>(lampId)];
+    const float m4 = giga::game::kLightVisCellM;
+    vec3 to{(tcx + 0.5f) * m4, (tcy + 0.5f) * m4, (tcz + 0.5f) * m4};
+    to.x = L.pos.x + wrap_delta_f(L.pos.x, to.x, kWorldExtent);
+    to.y = L.pos.y + wrap_delta_f(L.pos.y, to.y, kWorldExtent);
+    to.z = L.pos.z + wrap_delta_f(L.pos.z, to.z, kWorldExtent);
+    std::vector<std::uint32_t> dirty;
+    {
+        const float steps = 64.0f;
+        for (int i = 0; i <= static_cast<int>(steps); ++i) {
+            const float t = static_cast<float>(i) / steps;
+            const int bx = static_cast<int>(std::floor(
+                (L.pos.x + (to.x - L.pos.x) * t) / kCellSize));
+            const int by = static_cast<int>(std::floor(
+                (L.pos.y + (to.y - L.pos.y) * t) / kCellSize));
+            const int bz = static_cast<int>(std::floor(
+                (L.pos.z + (to.z - L.pos.z) * t) / kCellSize));
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int cx = wrap_macro(bx + dx);
+                        const int cy = wrap_macro(by + dy);
+                        const int cz = wrap_macro(bz + dz);
+                        const std::size_t ci = macro_index(cx, cy, cz);
+                        if (w.grid().masks()[ci].empty()) continue;
+                        w.grid().clear_cell(cx, cy, cz);
+                        dirty.push_back(static_cast<std::uint32_t>(ci));
+                    }
+        }
+    }
+    CHECK(!dirty.empty());
+
+    // Патч: затронутые лампы найдены, наша — среди них.
+    giga::game::LightVisPatch patch;
+    giga::game::bake_light_visibility_patch(w.grid(), lamps.data(),
+                                            lamps.size(), dirty.data(),
+                                            dirty.size(), patch,
+                                            /*threads=*/2);
+    CHECK(patch.affectedLamps >= 1);
+    bool ourLampHitsTarget = false;
+    for (const auto& h : patch.hits)
+        if (h.lamp == static_cast<std::uint32_t>(lampId) &&
+            h.cell == targetCell)
+            ourLampHitsTarget = true;
+    CHECK(ourLampHitsTarget); // лучи патча увидели тоннель
+
+    // Бит-идентичность от потоков — тот же контракт, что у полного бейка.
+    {
+        giga::game::LightVisPatch p1, p3;
+        giga::game::bake_light_visibility_patch(w.grid(), lamps.data(),
+                                                lamps.size(), dirty.data(),
+                                                dirty.size(), p1, 1);
+        giga::game::bake_light_visibility_patch(w.grid(), lamps.data(),
+                                                lamps.size(), dirty.data(),
+                                                dirty.size(), p3, 3);
+        CHECK(p1.hits.size() == patch.hits.size());
+        CHECK(p3.hits.size() == patch.hits.size());
+        bool same = true;
+        for (std::size_t i = 0; i < patch.hits.size() && same; ++i)
+            same = p1.hits[i].cell == patch.hits[i].cell &&
+                   p1.hits[i].lamp == patch.hits[i].lamp &&
+                   p3.hits[i].cell == patch.hits[i].cell &&
+                   p3.hits[i].lamp == patch.hits[i].lamp;
+        CHECK(same);
+    }
+
+    // Слияние: старый список клетки цел (только добавки), лампа появилась,
+    // клетка — в списке изменённых.
+    std::vector<std::uint32_t> oldRow;
+    {
+        const std::uint32_t* row =
+            baked.cells.data() + targetCell * (1 + kSlots);
+        oldRow.assign(row + 1, row + 1 + row[0]);
+    }
+    std::vector<std::uint32_t> changed;
+    const std::size_t nChanged = giga::game::light_vis_apply_patch(
+        baked, patch, lamps.data(), lamps.size(), &changed);
+    CHECK(nChanged > 0);
+    CHECK(std::find(changed.begin(), changed.end(),
+                    static_cast<std::uint32_t>(targetCell)) != changed.end());
+    const std::uint32_t* row = baked.cells.data() + targetCell * (1 + kSlots);
+    bool present = false;
+    for (std::uint32_t k = 0; k < row[0]; ++k)
+        if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
+    CHECK(present); // свет пришёл через дыру ЧАСТИЧНЫМ допеканием
+    for (std::uint32_t oldId : oldRow) {
+        bool kept = false;
+        for (std::uint32_t k = 0; k < row[0]; ++k)
+            if (row[1 + k] == oldId) kept = true;
+        CHECK(kept); // не потерять свет: добавки не вытеснили старое
+    }
+}
+
 // Синтез кластеров (light-cluster.md шаг 1): бакетизация 8 м, членство CSR,
 // центроид по весу radiusM², радиус-охват. Клетки кластеры ещё не ссылают —
 // это шаг 2; здесь проверяется сам синтез.
@@ -518,4 +661,5 @@ void test_lightvis_all() {
     lightvis_test::pin_and_oracle_on_a_real_floor();
     lightvis_test::oracle_reverse_polarity_constructed();
     lightvis_test::carve_expands_same_call();
+    lightvis_test::delta_lamp_patch();
 }

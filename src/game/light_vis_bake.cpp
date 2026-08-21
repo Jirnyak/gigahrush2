@@ -448,4 +448,165 @@ std::uint64_t light_vis_fnv(const LightVisBake& b) {
     return h;
 }
 
+void bake_light_visibility_patch(const MacroGrid& grid,
+                                 const LightVisLamp* lamps,
+                                 std::size_t lampCount,
+                                 const std::uint32_t* carvedCells,
+                                 std::size_t nCarved, LightVisPatch& out,
+                                 int threads,
+                                 const std::atomic<bool>* cancel) {
+    const auto t0 = std::chrono::steady_clock::now();
+    out.hits.clear();
+    out.affectedLamps = 0;
+    out.bakeMs = 0.0f;
+    if (lampCount == 0 || nCarved == 0) return;
+
+    // Затронутые лампы: центр карвнутой макроклетки ближе R + полудиагонали
+    // клетки (луч лампа→цель через дыру ⇒ дыра на отрезке ⇒ дыра внутри R —
+    // геометрия та же, что у шара дренажа в заголовке). Скан lamps × carved —
+    // тысячи × сотни, микросекунды.
+    const float kHalfDiag = 0.8660254f * kCellSize; // sqrt(3)/2 · 2 м
+    std::vector<std::uint32_t> affected;
+    for (std::size_t i = 0; i < lampCount; ++i) {
+        const float R = lamps[i].radiusM;
+        if (R <= 0.0f) continue;
+        const float reach = R + kHalfDiag;
+        const float reach2 = reach * reach;
+        for (std::size_t j = 0; j < nCarved; ++j) {
+            const std::uint32_t idx = carvedCells[j];
+            const float cx =
+                (static_cast<float>(idx % kMacroDim) + 0.5f) * kCellSize;
+            const float cy =
+                (static_cast<float>((idx / kMacroDim) % kMacroDim) + 0.5f) *
+                kCellSize;
+            const float cz =
+                (static_cast<float>(idx / (kMacroDim * kMacroDim)) + 0.5f) *
+                kCellSize;
+            const float dx = shader_wrap_delta(lamps[i].pos.x, cx, kWorldExtent);
+            const float dy = shader_wrap_delta(lamps[i].pos.y, cy, kWorldExtent);
+            const float dz = shader_wrap_delta(lamps[i].pos.z, cz, kWorldExtent);
+            if (dx * dx + dy * dy + dz * dz <= reach2) {
+                affected.push_back(static_cast<std::uint32_t>(i));
+                break;
+            }
+        }
+    }
+    out.affectedLamps = static_cast<std::uint32_t>(affected.size());
+    if (affected.empty()) {
+        out.bakeMs = std::chrono::duration<float, std::milli>(
+                         std::chrono::steady_clock::now() - t0)
+                         .count();
+        return;
+    }
+
+    // Лучи — те же чанки в порядке ламп, что у полного бейка: результат
+    // бит-идентичен при любом числе потоков.
+    int hw = static_cast<int>(std::thread::hardware_concurrency());
+    if (hw < 1) hw = 1;
+    int T = threads > 0 ? threads : hw;
+    if (static_cast<std::size_t>(T) > affected.size()) T = static_cast<int>(affected.size());
+    if (T < 1) T = 1;
+    const std::size_t chunk = (affected.size() + T - 1) / T;
+    std::vector<std::vector<LampCellHit>> hits(static_cast<std::size_t>(T));
+    parallel_for(
+        T,
+        [&](int w) {
+            const std::size_t lo = static_cast<std::size_t>(w) * chunk;
+            const std::size_t hi = std::min(lo + chunk, affected.size());
+            RayScratch sc;
+            for (std::size_t k = lo; k < hi; ++k) {
+                if (cancel && cancel->load(std::memory_order_relaxed)) return;
+                const std::uint32_t id = affected[k];
+                rays_one_lamp(grid, lamps[id], id, sc,
+                              hits[static_cast<std::size_t>(w)]);
+            }
+        },
+        T);
+    if (cancel && cancel->load(std::memory_order_relaxed)) {
+        out.hits.clear(); // результат отменённого бейка — мусор по контракту
+        return;
+    }
+
+    std::size_t total = 0;
+    for (const auto& h : hits) total += h.size();
+    out.hits.reserve(total);
+    for (const auto& h : hits)
+        for (const LampCellHit& e : h)
+            out.hits.push_back(LightVisPatch::Hit{e.cell, e.lamp, e.score});
+    // (cell, lamp) — детерминированный порядок слияния независимо от потоков.
+    std::sort(out.hits.begin(), out.hits.end(),
+              [](const LightVisPatch::Hit& a, const LightVisPatch::Hit& b) {
+                  return a.cell != b.cell ? a.cell < b.cell : a.lamp < b.lamp;
+              });
+    out.bakeMs = std::chrono::duration<float, std::milli>(
+                     std::chrono::steady_clock::now() - t0)
+                     .count();
+}
+
+std::size_t light_vis_apply_patch(LightVisBake& live,
+                                  const LightVisPatch& patch,
+                                  const LightVisLamp* lamps,
+                                  std::size_t lampCount,
+                                  std::vector<std::uint32_t>* changedCells) {
+    if (changedCells) changedCells->clear();
+    if (!live.valid() || patch.hits.empty()) return 0;
+    const std::size_t stride = 1 + live.slots;
+    std::size_t changed = 0;
+
+    std::size_t i = 0;
+    while (i < patch.hits.size()) {
+        const std::uint32_t cell = patch.hits[i].cell;
+        std::uint32_t* dst = live.cells.data() + cell * stride;
+        std::uint32_t count = dst[0];
+        const std::uint32_t wasCount = count;
+        bool cellChanged = false;
+        for (; i < patch.hits.size() && patch.hits[i].cell == cell; ++i) {
+            const std::uint32_t id = patch.hits[i].lamp;
+            bool present = false;
+            for (std::uint32_t k = 0; k < count && !present; ++k)
+                present = dst[1 + k] == id;
+            if (present) continue;
+            if (count < live.slots) {
+                dst[1 + count++] = id;
+                cellChanged = true;
+                continue;
+            }
+            // Клетка полна: вытеснить худшего ЧЕСТНОГО (id < lampCount —
+            // кластерные ссылки живут в верхнем регионе таблицы и не
+            // вытесняются: за ссылкой стоит пачка ламп). Тот же класс ошибки,
+            // что top-K полного бейка, и так же вслух — через overflowCells.
+            const int lx = static_cast<int>(cell) & (kLightVisDim - 1);
+            const int ly = (static_cast<int>(cell) / kLightVisDim) &
+                           (kLightVisDim - 1);
+            const int lz = static_cast<int>(cell) /
+                           (kLightVisDim * kLightVisDim);
+            float worstScore = patch.hits[i].score;
+            std::uint32_t worstK = live.slots; // «вытеснять некого»
+            for (std::uint32_t k = 0; k < count; ++k) {
+                const std::uint32_t eid = dst[1 + k];
+                if (eid >= lampCount) continue; // кластерная ссылка
+                const float s = light_cell_score(
+                    lamps[eid].pos, lamps[eid].radiusM, lx, ly, lz);
+                if (s > worstScore) {
+                    worstScore = s;
+                    worstK = k;
+                }
+            }
+            ++live.overflowCells;
+            if (worstK < live.slots) {
+                dst[1 + worstK] = id;
+                cellChanged = true;
+            }
+        }
+        if (cellChanged) {
+            dst[0] = count;
+            if (wasCount == 0) ++live.litCells;
+            live.maxPerCell = std::max(live.maxPerCell, count);
+            ++changed;
+            if (changedCells) changedCells->push_back(cell);
+        }
+    }
+    return changed;
+}
+
 } // namespace giga::game

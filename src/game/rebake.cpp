@@ -1,5 +1,6 @@
 #include "game/rebake.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -42,6 +43,43 @@ void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
     lightClusterBase_ = clusterBase;
 }
 
+void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
+    // Воркер свободен (running_ проверен вызывающим). Карвы уезжают в
+    // carvedSnap_ — новые, пришедшие во время полёта, лягут в свежий список
+    // и запустят следующий цикл (их клетки останутся грязными по dirtyGen >
+    // snapGen — стандартный приём генераций, гонок нет по построению).
+    join_worker();
+    discard_pending();
+    cancel_.store(false, std::memory_order_relaxed);
+
+    carvedSnap_ = std::move(carvedSinceLight_);
+    carvedSinceLight_.clear();
+    std::sort(carvedSnap_.begin(), carvedSnap_.end());
+    carvedSnap_.erase(std::unique(carvedSnap_.begin(), carvedSnap_.end()),
+                      carvedSnap_.end());
+    // Копия снапшота — ГЛАВНЫЙ поток, и это цена кадра (проблема 59.1:
+    // ~134 МиБ, 10-40 мс — незамеренной ей больше не жить; ужать до боксов
+    // затронутых ламп — кандидат следующего инкремента).
+    const auto tSnap = std::chrono::steady_clock::now();
+    if (liveGrid_ != nullptr)
+        snapGrid_ = std::make_unique<MacroGrid>(*liveGrid_);
+    snapCopyMs_ = ms_between(tSnap, std::chrono::steady_clock::now());
+    lampsSnap_ = lampsLive_;
+    snapGen_ = worldGen;
+
+    running_ = true;
+    mode_ = Mode::LightPatch;
+    const int threads = rebakeThreads_;
+    worker_ = std::thread([this, threads]() {
+        if (snapGrid_ != nullptr)
+            bake_light_visibility_patch(*snapGrid_, lampsSnap_.data(),
+                                        lampsSnap_.size(), carvedSnap_.data(),
+                                        carvedSnap_.size(), pendingPatch_,
+                                        threads, &cancel_);
+        exited_.store(true, std::memory_order_release);
+    });
+}
+
 void RebakeScheduler::discard_pending() {
     // ОСВОБОДИТЬ, не clear() — разница в 128 MiB, тот же довод, что был у
     // AsyncBake::start(): clear() хранит capacity мёртвыми байтами ровно в
@@ -52,6 +90,12 @@ void RebakeScheduler::discard_pending() {
     std::vector<std::uint8_t>().swap(pendingFine_.nearest);
     pendingRooms_ = RoomZones{};
     pendingLight_ = LightVisBake{};
+    pendingPatch_ = LightVisPatch{};
+    // Карвы отменённого цикла — назад в живой список: выброс оставил бы их
+    // клетки навсегда грязными на GPU (dirtyGen > genBaked без допекания).
+    carvedSinceLight_.insert(carvedSinceLight_.end(), carvedSnap_.begin(),
+                             carvedSnap_.end());
+    carvedSnap_.clear();
     snapGrid_.reset(); // 134 МиБ масок — транзиент цикла, не резидент
     lightDone_.store(false, std::memory_order_relaxed);
     roomsDone_.store(false, std::memory_order_relaxed);
@@ -75,6 +119,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     join_worker();
     cancel_.store(false, std::memory_order_relaxed);
     discard_pending();
+    // Карв-долг света — прошлого этажа: Fresh печёт текущую геометрию с нуля.
+    carvedSinceLight_.clear();
+    carvedSnap_.clear();
+    patchChangedCells_.clear();
+    lightPatchPending_ = false;
 
     kind_ = kind;
     floorNumber_ = floorNumber;
@@ -173,9 +222,17 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     // bakedGen < worldGen после свапа.
     snapNav_.words = navBits_.words;
     snapBody_.words = bodyBits_.words;
+    // Та же копия на главном потоке, что у патча — и тот же замер (59.1).
+    const auto tSnap = std::chrono::steady_clock::now();
     if (liveGrid_ != nullptr)
         snapGrid_ = std::make_unique<MacroGrid>(*liveGrid_);
+    snapCopyMs_ = ms_between(tSnap, std::chrono::steady_clock::now());
     lampsSnap_ = lampsLive_;
+    // Полный бейк света кроет все карвы ≤ снапшота — их список уезжает в
+    // carvedSnap_ и умирает на свапе секции света (на отмене — вернётся).
+    carvedSnap_.insert(carvedSnap_.end(), carvedSinceLight_.begin(),
+                       carvedSinceLight_.end());
+    carvedSinceLight_.clear();
     snapGen_ = worldGen;
     lastStartTick_ = simTick;
 
@@ -229,10 +286,11 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             // SLA-константы на реальном железе (S11: вывод, не назначение).
             std::fprintf(stderr,
                          "[rebake] floor %d gen %llu baked: rooms %.0f + "
-                         "coarse %.0f + fine %.0f ms = %.1f s @ %d threads\n",
+                         "coarse %.0f + fine %.0f ms = %.1f s @ %d threads | "
+                         "snap copy %.0f ms MAIN\n",
                          number, static_cast<unsigned long long>(snapGen_),
                          roomsMs_, coarseMs_, fineMs_,
-                         ms_between(t0, t3) / 1000.0f, threads);
+                         ms_between(t0, t3) / 1000.0f, threads, snapCopyMs_);
         }
         exited_.store(true, std::memory_order_release);
     });
@@ -280,6 +338,32 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 mode_ = Mode::Idle;
                 return true; // вызывающий делает finish_floor_nav
             }
+        } else if (mode_ == Mode::LightPatch) {
+            // Свап дельта-патча: добавки вливаются в ЖИВЫЕ списки на главном
+            // потоке (единственная точка записи, тот же закон, что у секций),
+            // lightGen поднимается — грязные клетки шара чистеют, GPU-фоллбэк
+            // умирает. bakedGen НЕ трогается: nav/rooms патч не печёт, полный
+            // цикл останется должен и придёт своим расписанием.
+            if (exited_.load(std::memory_order_acquire)) {
+                join_worker();
+                const std::size_t changed = light_vis_apply_patch(
+                    lightVis_, pendingPatch_, lampsSnap_.data(),
+                    lampsSnap_.size(), &patchChangedCells_);
+                lightGen_ = snapGen_;
+                lightPatchPending_ = true; // вызывающий зальёт клетки на GPU
+                std::fprintf(
+                    stderr,
+                    "[lightvis] floor %d gen %llu patch: %u lamps affected -> "
+                    "%zu cells changed in %.1f ms @ %d threads | snap copy "
+                    "%.0f ms MAIN\n",
+                    floorNumber_, static_cast<unsigned long long>(snapGen_),
+                    pendingPatch_.affectedLamps, changed,
+                    pendingPatch_.bakeMs, rebakeThreads_, snapCopyMs_);
+                carvedSnap_.clear(); // допечены
+                pendingPatch_ = LightVisPatch{};
+                snapGrid_.reset();
+                mode_ = Mode::Idle;
+            }
         } else { // Mode::Rebake — посекционно: light -> rooms -> coarse -> fine
             if (!lightSwapped_ &&
                 lightDone_.load(std::memory_order_acquire)) {
@@ -288,6 +372,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 lightGen_ = snapGen_;
                 lightSwapPending_ = true; // вызывающий перезальёт GPU-грид
                 lightSwapped_ = true;
+                carvedSnap_.clear(); // полный бейк их покрыл
             }
             if (!roomsSwapped_ &&
                 roomsDone_.load(std::memory_order_acquire)) {
@@ -338,9 +423,18 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
     const bool quiet = simTick - lastMutTick_ >= kRebakeQuietTicks;
     const bool overdue =
         haveDirty_ && simTick - firstDirtyTick_ >= kRebakeDeadlineTicks;
-    if (!quiet && !overdue) return false;
-    // Мин-интервал = замер последнего цикла (вывод в заголовке).
-    if (simTick - lastStartTick_ < lastRebakeDurTicks_) return false;
+    const bool fullDue = (quiet || overdue) &&
+                         simTick - lastStartTick_ >= lastRebakeDurTicks_;
+    // 3а. Дельта-патч света (carve-hitch.md §3): дешёвый цикл со своим
+    // коротким дебаунсом — грязное окно GPU-фоллбэка сжимается с секунд до
+    // долей секунды. Полный цикл ГЛАВНЕЕ: если созрел он — стартует он (и
+    // кроет те же карвы целиком), патч лишь заполняет паузу до него.
+    if (!fullDue && lightVis_.valid() && !carvedSinceLight_.empty() &&
+        simTick - lastMutTick_ >= kLightPatchQuietTicks) {
+        start_light_patch(worldGen);
+        return false;
+    }
+    if (!fullDue) return false;
     start_rebake(simTick, worldGen);
     return false;
 }
@@ -361,9 +455,12 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
         const SubMask& m = masks[idx];
         nav::patch_walk_bit(navBits_, idx, m);
         patch_body_walk_bit(bodyBits_, idx, m);
-        // Свету поклеточный патч не нужен: его снапшот — копия масок целиком,
-        // снимаемая заново на каждом старте цикла (start_rebake).
     }
+    // Долг света — вход дельта-патча (carve-hitch.md §3): карвнутые клетки
+    // копятся до ближайшего цикла (патч или полный — кто раньше). ВСЕ клетки,
+    // включая дверные: свет живёт по реальной геометрии, премиса all-open —
+    // навигационная, не световая. Дедуп — на старте цикла, не здесь.
+    carvedSinceLight_.insert(carvedSinceLight_.end(), cells, cells + n);
     (void)types;
 }
 
