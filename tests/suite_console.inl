@@ -13,7 +13,7 @@
 #include "game/embody.h"      // NpcRef — hub boarding needs a pool body
 #include "game/fast_travel.h" // FastTravelState + fast_hub_cell (§24)
 #include "game/npc_pool.h"    // NpcPool for boarding cell
-#include "ecs/components.h"   // AngularVelocity, Rotation (core) — spawn_ball must NOT attach these
+#include "ecs/components.h"   // RigidBody/ContactForm (core) — контракт spawn_ball
 
 
 
@@ -307,10 +307,10 @@ static void test_console_spawn_ball() {
     CHECK(ecs.all_of<RigidBody>(ball));
     CHECK(ecs.all_of<SelfIntegrating>(ball));
     CHECK(ecs.all_of<DynamicBodyTag>(ball));
-    // spawn_ball must NOT attach legacy angular components (RigidBody carries
-    // its own quat orientation; Euler Rotation is the old cosmetic path).
-    CHECK(!ecs.all_of<AngularVelocity>(ball));
-    CHECK(!ecs.all_of<Rotation>(ball));
+    // Мяч — вырожденная форма: одна сфера RigidBody.radius, без ContactForm;
+    // гравитацию интегрирует ядро, GravityAffected не вешается.
+    CHECK(!ecs.all_of<ContactForm>(ball));
+    CHECK(!ecs.all_of<GravityAffected>(ball));
 
     const auto& btr = ecs.get<Transform>(ball);
     CHECK(btr.layer == tr.layer);

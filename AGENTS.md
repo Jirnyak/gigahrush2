@@ -131,6 +131,13 @@ each one**. Correctness first; speed is a side effect of not backtracking.
   must not include SDL, Vulkan, or ImGui. It links only EnTT and ships its own
   math ([src/core/math.h](src/core/math.h)) — no GLM/Eigen. This is what keeps
   the simulation headless-testable and embeddable.
+  **Уточнение владельца 2026-08-21 (CANON S16, мир-автомат):** запрет целит в
+  РЕНДЕР и платформу, не в вычисления — GPU compute как со-процессор
+  мира-автомата объявлен осознанной частью ядра; **headless = «без окна», а не
+  «без GPU»** (Vulkan compute без свапчейна обязан работать в тестах). Как это
+  слоить, не втаскивая `<vulkan.h>` в `giga_core` (compute-библиотека отдельно,
+  ядро видит интерфейс), — решает эпик S16; до него этот пункт действует как
+  написан.
 - **Render is a pure shell; sim never depends on it.** Rendering is a read-only
   skin over the sim: data flows **sim → render only**, the renderer mutates no
   game state, and the game must stay fully "playable" headless with L3 removed

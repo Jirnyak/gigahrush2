@@ -367,7 +367,7 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     CHECK(reg.all_of<game::Interactable>(e));
     CHECK(reg.all_of<game::PropMeshTag>(e));
     CHECK(!reg.all_of<Velocity>(e));
-    CHECK(!reg.all_of<AngularVelocity>(e));
+    CHECK(!reg.all_of<RigidBody>(e)); // статик — не тело ядра до отрыва
     CHECK(!reg.all_of<game::DynamicBodyTag>(e));
 
     const auto& a = reg.get<game::SubVoxelAnchor>(e);
@@ -578,7 +578,7 @@ static void test_detached_prop_is_rigid_body() {
     CHECK(reg.all_of<game::DynamicBodyTag>(e));
     CHECK(reg.all_of<RigidBody>(e));
     CHECK(reg.all_of<SelfIntegrating>(e)); // physics_step не двигает вторым разом
-    CHECK(!reg.all_of<AngularVelocity>(e)); // косметика мертва
+    CHECK(!reg.all_of<GravityAffected>(e)); // гравитацию интегрирует ядро
     // Масса выведена, не дефолт: invMass конечна и не единица-заглушка.
     const auto& rb = reg.get<RigidBody>(e);
     CHECK(rb.invMass > 0.0f);
@@ -929,14 +929,13 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
         CHECK(n > 0u);
     }
 
-    // Zero CPU debris chips. GPU owns the effect now.
+    // Zero CPU debris. GPU owns the effect now — a GpuHandoff shatter must
+    // not leave a rigid-core body behind (инкремент 6: CPU-обломок = тело
+    // ядра, старой AngularVelocity-косметики не существует).
     std::uint32_t chips = 0;
-    auto view = reg.view<const game::DynamicBodyTag, const AngularVelocity,
-                         const Velocity, const Rotation, const AABB>();
+    auto view = reg.view<const game::DynamicBodyTag, const RigidBody>();
     for (auto d : view) {
         CHECK(reg.get<Transform>(d).layer == layer);
-        const vec3& w = reg.get<AngularVelocity>(d).w;
-        CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
         ++chips;
     }
     CHECK(chips == 0u);

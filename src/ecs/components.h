@@ -125,22 +125,10 @@ struct Renderable {
     vec3 color{0.80f, 0.80f, 0.82f};
 };
 
-// Angular motion for ragdoll / tumbling props ([jirnyak.md] section 18).
-//
-// Lives in the CORE — not the game layer — for the same reason as
-// SelfIntegrating / NoClip: `physics_step` (src/sim) must integrate them, and
-// src/sim may not include src/game. The game attaches these on RagdollRoll
-// detach; physics_step advances Rotation from AngularVelocity each substep.
-//
-// Rotation is Euler (radians, XYZ) for now: core/math.h has no quat type yet.
-// A later pass can swap to quat without changing the attachment contract.
-struct AngularVelocity {
-    vec3 w{0.0f, 0.0f, 0.0f}; // rad/s
-};
-
-struct Rotation {
-    vec3 euler{0.0f, 0.0f, 0.0f}; // radians, XYZ
-};
+// AngularVelocity и Rotation (Euler-косметика вращения пропов) УМЕРЛИ
+// инкрементом 6 рагдолл-эпика 2026-08-21: вращение — кватернион RigidBody.q
+// ниже, интегрируемый rigid_body_step; писателей у пары не осталось, а
+// мёртвый API — дефект (S11).
 
 // Импульсный твердотел — универсальное ядро физики пропов
 // ([markoaudit/plans/ragdoll.md], решения владельца 2026-08-21: ОДНА модель на
