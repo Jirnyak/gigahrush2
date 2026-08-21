@@ -153,6 +153,33 @@ struct BinRun {
     bool awake;           // есть ли бодрое тело (снимок начала тика)
 };
 
+// Агент (игрок/NPC — тело свепт-AABB из physics_step) в словаре солвера:
+// ДВЕ сферы вдоль длинной оси его AABB, радиус — из тонкой стороны. Вывод,
+// не назначение (S11): r = min(half), центры на ±(maxHalf − r) — сферы
+// вписаны в бокс заподлицо с торцами. Изотропно: длинная ось — какая есть,
+// не «вертикаль».
+struct AgentForm {
+    vec3 off[2];
+    float r;
+    float bound; // радиус ограничивающей сферы — брод-фаза
+};
+
+AgentForm agent_form(vec3 half) {
+    AgentForm f;
+    f.r = std::min({half.x, half.y, half.z});
+    const float hx = half.x, hy = half.y, hz = half.z;
+    vec3 axis{0.0f, 0.0f, 0.0f};
+    float longest = hz;
+    if (hx >= hy && hx >= hz) { axis = vec3{1.0f, 0.0f, 0.0f}; longest = hx; }
+    else if (hy >= hz) { axis = vec3{0.0f, 1.0f, 0.0f}; longest = hy; }
+    else { axis = vec3{0.0f, 0.0f, 1.0f}; longest = hz; }
+    const float reach = std::max(0.0f, longest - f.r);
+    f.off[0] = axis * reach;
+    f.off[1] = axis * (-reach);
+    f.bound = reach + f.r;
+    return f;
+}
+
 } // namespace
 
 void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
@@ -347,6 +374,72 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
     };
 
+    // Проп ↔ АГЕНТ (игрок/NPC — свепт-AABB тело из physics_step; S3:
+    // RagdollRoll «задевает игрока, может убить», S7: игрок = NPC, особых
+    // случаев нет). Агент в словаре солвера — две сферы вдоль длинной оси
+    // AABB; массы честные (Mass, дефолт 70 кг — тот же фолбэк, что у драга);
+    // вращения у агента нет — ориентацией владеет контроллер. Контакт будит
+    // спящий проп (игрок пинает кучу), позиционное разведение выталкивает
+    // агента из пропа даже если контроллер перепишет скорость, Impact > 4 м/с
+    // идёт в закон урона E=mv²/2 обеих сторон.
+    auto resolve_agent = [&](Entity ep, Entity eg) {
+        auto& rb = view.get<RigidBody>(ep);
+        auto& trP = view.get<Transform>(ep);
+        auto& vP = view.get<Velocity>(ep);
+        auto& trG = reg.get<Transform>(eg);
+        auto& vG = reg.get<Velocity>(eg);
+        const AgentForm ag = agent_form(reg.get<AABB>(eg).half);
+        const vec3 dPG = wrap_delta3(trP.pos, trG.pos, kWorldExtent);
+        const float bound = rb.radius + ag.bound;
+        if (dot(dPG, dPG) >= bound * bound) return;
+        const float agMass =
+            reg.all_of<Mass>(eg) ? reg.get<Mass>(eg).kg : Mass{}.kg;
+        const float invMassG = 1.0f / std::max(agMass, 1.0f);
+        const ContactForm* form = reg.try_get<ContactForm>(ep);
+        const int nSph = (form && form->count) ? form->count : 1;
+        for (int i = 0; i < nSph; ++i) {
+            vec3 offP{0.0f, 0.0f, 0.0f};
+            float rP = rb.radius;
+            if (form && form->count) {
+                offP = quat_rotate(rb.q, form->off[i]);
+                rP = form->r[i];
+            }
+            for (int j = 0; j < 2; ++j) {
+                const vec3 d = dPG + ag.off[j] - offP; // проп → сфера агента
+                const float rSum = rP + ag.r;
+                const float d2 = dot(d, d);
+                if (d2 >= rSum * rSum || d2 < 1e-8f) continue;
+                const float dist = std::sqrt(d2);
+                const vec3 n = d * (1.0f / dist);
+                const float depth = rSum - dist;
+                if (rb.asleep) { rb.asleep = false; rb.sleepTicks = 0; }
+                rb.touchedTick = true;
+                const float invSum = rb.invMass + invMassG;
+                trP.pos += n * (-depth * (rb.invMass / invSum));
+                trG.pos += n * (depth * (invMassG / invSum));
+                const vec3 rcP = offP + n * rP;
+                const vec3 vpP = vP.v + cross(rb.w, rcP);
+                const float vn = dot(vG.v - vpP, n);
+                if (vn >= 0.0f) continue;
+                if (-vn > 4.0f) {
+                    Impact& imP = reg.get_or_emplace<Impact>(ep);
+                    if (-vn > imP.speed) imP.speed = -vn;
+                    Impact& imG = reg.get_or_emplace<Impact>(eg);
+                    if (-vn > imG.speed) imG.speed = -vn;
+                }
+                const float e_ = (-vn > kBounceMinV)
+                                     ? 0.5f * rb.restitution
+                                     : 0.0f;
+                const vec3 rxP = cross(rcP, n);
+                const float kP = rb.invMass + rb.invInertia * dot(rxP, rxP);
+                const float jn = -(1.0f + e_) * vn / (kP + invMassG);
+                vP.v += n * (-jn * rb.invMass);
+                rb.w += cross(rcP, n * (-jn)) * rb.invInertia;
+                vG.v += n * (jn * invMassG);
+            }
+        }
+    };
+
     // Пробуждение внешней записью Velocity (взрыв, толчок, пинок пишут её —
     // естественный интерфейс) + сброс тик-аккумулятора касаний.
     std::uint32_t awakeCount = 0;
@@ -360,10 +453,25 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
         if (!rb.asleep) ++awakeCount;
     }
-    // Мир спит целиком — решать нечего: ни интеграции, ни пар, ни линков
-    // (линк с обеими спящими сторонами и так пропускается). Установившийся
-    // этаж с тысячами пропов стоит один проход пробуждения.
-    if (awakeCount == 0) return;
+
+    // Агенты для фазы проп↔агент. Бодрые пропы обязаны видеть ВСЕХ агентов
+    // (летящий шар против стоящего игрока); спящий мир — только движущихся
+    // (стоящий агент спящему пропу ничего не сделает, а ходящий — пинает).
+    static thread_local std::vector<Entity> agents;
+    agents.clear();
+    {
+        auto agentView = reg.view<Transform, Velocity, AABB, GravityAffected>(
+            entt::exclude<RigidBody, NoClip, SelfIntegrating>);
+        for (auto e : agentView) {
+            const vec3& v = agentView.get<Velocity>(e).v;
+            if (awakeCount > 0 || dot(v, v) >= kWakeV2)
+                agents.push_back(e);
+        }
+    }
+
+    // Мир спит целиком и агентов-возмутителей нет — решать нечего:
+    // установившийся этаж с тысячами пропов стоит один проход пробуждения.
+    if (awakeCount == 0 && agents.empty()) return;
 
     // Корзины строятся РАЗ НА ТИК (тело проходит ≤0.23 м за подшаг — запрос
     // соседей поглощает дрейф в клетку); живость пары внутри resolve_pair
@@ -466,6 +574,80 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 runPairs.push_back({i, j});
         }
     }
+
+    // Корзины АГЕНТОВ + пары (клетка пропов × клетка агентов) — тем же
+    // слиянием, но по всем 27 смещениям: множества разные, дедуп не нужен.
+    static thread_local std::vector<BinEntry> agEntries;
+    static thread_local std::vector<BinRun> agRuns;
+    static thread_local std::vector<std::pair<std::uint32_t, std::uint32_t>>
+        agentPairs;
+    agEntries.clear();
+    agRuns.clear();
+    agentPairs.clear();
+    if (!agents.empty()) {
+    for (std::uint32_t i = 0; i < agents.size(); ++i) {
+        const auto& tr = reg.get<Transform>(agents[i]);
+        const std::uint64_t key =
+            (static_cast<std::uint64_t>(tr.layer) << 32) |
+            static_cast<std::uint32_t>(
+                macro_index(wrap_macro(floor_div(tr.pos.x, kCellSize)),
+                            wrap_macro(floor_div(tr.pos.y, kCellSize)),
+                            wrap_macro(floor_div(tr.pos.z, kCellSize))));
+        agEntries.push_back({key, i});
+    }
+    std::sort(agEntries.begin(), agEntries.end(),
+              [](const BinEntry& a, const BinEntry& b) {
+                  return a.key < b.key;
+              });
+    for (std::uint32_t i = 0; i < agEntries.size();) {
+        std::uint32_t j = i;
+        while (j < agEntries.size() && agEntries[j].key == agEntries[i].key)
+            ++j;
+        agRuns.push_back({agEntries[i].key, i, j, 0, 0, 0, 0, true});
+        i = j;
+    }
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const std::int64_t delta =
+                    dx + dy * kMacroDim +
+                    dz * static_cast<std::int64_t>(kMacroDim) * kMacroDim;
+                std::uint32_t j = 0;
+                for (std::uint32_t i = 0; i < binRuns.size(); ++i) {
+                    const BinRun& X = binRuns[i];
+                    const bool edge =
+                        (dx == 1 && X.cx == kMacroDim - 1) ||
+                        (dx == -1 && X.cx == 0) ||
+                        (dy == 1 && X.cy == kMacroDim - 1) ||
+                        (dy == -1 && X.cy == 0) ||
+                        (dz == 1 && X.cz == kMacroDim - 1) ||
+                        (dz == -1 && X.cz == 0);
+                    if (edge) {
+                        const std::uint64_t key =
+                            (static_cast<std::uint64_t>(X.layer) << 32) |
+                            static_cast<std::uint32_t>(
+                                macro_index(wrap_macro(X.cx + dx),
+                                            wrap_macro(X.cy + dy),
+                                            wrap_macro(X.cz + dz)));
+                        auto it = std::lower_bound(
+                            agRuns.begin(), agRuns.end(), key,
+                            [](const BinRun& r, std::uint64_t k) {
+                                return r.key < k;
+                            });
+                        if (it != agRuns.end() && it->key == key)
+                            agentPairs.push_back(
+                                {i, static_cast<std::uint32_t>(
+                                        it - agRuns.begin())});
+                        continue;
+                    }
+                    const std::uint64_t nkey =
+                        X.key + static_cast<std::uint64_t>(delta);
+                    while (j < agRuns.size() && agRuns[j].key < nkey) ++j;
+                    if (j < agRuns.size() && agRuns[j].key == nkey)
+                        agentPairs.push_back({i, j});
+                }
+            }
+    } // if (!agents.empty())
 
     // Substep-major: тела интегрируются, ПОТОМ линки стягивают пары — иначе
     // констрейнт видел бы позиции разных подшагов у разных тел.
@@ -595,6 +777,16 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 for (std::uint32_t b = Y.lo; b < Y.hi; ++b)
                     resolve_pair(binBodies[binEntries[a].idx],
                                  binBodies[binEntries[b].idx]);
+        }
+
+        // Фаза проп↔агент: готовые пары клеток, обе стороны честные.
+        for (const auto& pr : agentPairs) {
+            const BinRun& X = binRuns[pr.first];
+            const BinRun& A = agRuns[pr.second];
+            for (std::uint32_t a = X.lo; a < X.hi; ++a)
+                for (std::uint32_t g = A.lo; g < A.hi; ++g)
+                    resolve_agent(binBodies[binEntries[a].idx],
+                                  agents[agEntries[g].idx]);
         }
 
         // Фаза линков: kJointIters проходов sequential impulses по всем

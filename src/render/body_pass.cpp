@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring> // memcpy — раздельная укладка кубов и сфер в инстанс-буфер
 #include <string>
 #include <vector>
 
@@ -47,6 +48,41 @@ void build_unit_cube(std::vector<CubeVertex>& out) {
         out.push_back({f.c, f.n});
         out.push_back({f.d, f.n});
     }
+}
+
+// UV-сфера диаметра 1 с центром (0.5,0.5,0.5) — тот же контракт [0,1]³, что у
+// куба, поэтому body.vert не меняется: инстанс растягивает её в half-габарит.
+// Шар физики (RigidBody без ContactForm) обязан ВЫГЛЯДЕТЬ шаром — сфера и
+// есть словарь движка ([markoaudit/plans/ragdoll.md] §6). 12×8 сегментов =
+// 576 вершин: низкополигонально намеренно, стиль дома — гранёный.
+void build_unit_sphere(std::vector<CubeVertex>& out) {
+    constexpr int kLon = 12, kLat = 8;
+    constexpr float kPi = 3.14159265f;
+    auto point = [](int lon, int lat) {
+        const float th = kPi * static_cast<float>(lat) / kLat;   // 0..pi
+        const float ph = 2.0f * kPi * static_cast<float>(lon) / kLon;
+        return vec3{std::sin(th) * std::cos(ph) * 0.5f,
+                    std::sin(th) * std::sin(ph) * 0.5f,
+                    std::cos(th) * 0.5f};
+    };
+    const vec3 c{0.5f, 0.5f, 0.5f};
+    for (int lat = 0; lat < kLat; ++lat)
+        for (int lon = 0; lon < kLon; ++lon) {
+            const vec3 a = point(lon, lat), b = point(lon + 1, lat);
+            const vec3 d = point(lon, lat + 1), e = point(lon + 1, lat + 1);
+            // Плоская нормаль грани — гранёный шейдинг, как у куба.
+            const vec3 n = normalize(a + b + d + e);
+            if (lat > 0) {
+                out.push_back({c + a, n});
+                out.push_back({c + b, n});
+                out.push_back({c + e, n});
+            }
+            if (lat < kLat - 1) {
+                out.push_back({c + a, n});
+                out.push_back({c + e, n});
+                out.push_back({c + d, n});
+            }
+        }
 }
 
 std::string join(const char* dir, const char* file) {
@@ -102,7 +138,14 @@ bool BodyPass::create_cube_mesh() {
     std::vector<CubeVertex> verts;
     build_unit_cube(verts);
     vertexCount_ = static_cast<std::uint32_t>(verts.size());
-    return cubeVerts_.create_device_local(
+    if (!cubeVerts_.create_device_local(
+            *dev_, verts.data(), verts.size() * sizeof(CubeVertex),
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT))
+        return false;
+    verts.clear();
+    build_unit_sphere(verts);
+    sphereVertexCount_ = static_cast<std::uint32_t>(verts.size());
+    return sphereVerts_.create_device_local(
         *dev_, verts.data(), verts.size() * sizeof(CubeVertex),
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
@@ -273,8 +316,12 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     // written out three different ways is how the seam eventually comes back.
     const float period = kWorldExtent;
 
-    auto* dst = static_cast<BodyInstance*>(instances_[frameIndex].mapped);
-    std::uint32_t count = 0;
+    // Two shapes, one pipeline: boxes first, then spheres — a RigidBody with
+    // no ContactForm IS a sphere (the solver's whole vocabulary) and must read
+    // as one. Instances land in one buffer, spheres drawn via firstInstance.
+    static thread_local std::vector<BodyInstance> cubes, spheres;
+    cubes.clear();
+    spheres.clear();
 
     auto view = reg.view<const Transform, const AABB, const Renderable>();
     for (auto e : view) {
@@ -292,19 +339,32 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
         float dx = c.x - camPos.x, dy = c.y - camPos.y, dz = c.z - camPos.z;
         if (dx * dx + dy * dy + dz * dz > fogEndSq) continue; // fogged to black
 
-        dst[count].center = c;
-        dst[count].half = view.get<const AABB>(e).half;
-        dst[count].color = view.get<const Renderable>(e).color;
+        BodyInstance inst;
+        inst.center = c;
+        inst.half = view.get<const AABB>(e).half;
+        inst.color = view.get<const Renderable>(e).color;
         // Tumbling props carry a RigidBody orientation; everything else draws
         // axis-aligned (identity quat). Read-only skin over sim state —
         // sim -> render only, as ever.
+        bool isSphere = false;
         if (const auto* rb = reg.try_get<RigidBody>(e)) {
-            dst[count].rot = vec4{rb->q.x, rb->q.y, rb->q.z, rb->q.w};
+            inst.rot = vec4{rb->q.x, rb->q.y, rb->q.z, rb->q.w};
+            isSphere = !reg.all_of<ContactForm>(e);
         } else {
-            dst[count].rot = vec4{0.0f, 0.0f, 0.0f, 1.0f};
+            inst.rot = vec4{0.0f, 0.0f, 0.0f, 1.0f};
         }
-        if (++count >= instanceCapacity_) break;
+        if (cubes.size() + spheres.size() >= instanceCapacity_) break;
+        (isSphere ? spheres : cubes).push_back(inst);
     }
+    const std::uint32_t nCubes = static_cast<std::uint32_t>(cubes.size());
+    const std::uint32_t nSpheres = static_cast<std::uint32_t>(spheres.size());
+    const std::uint32_t count = nCubes + nSpheres;
+    auto* dst = static_cast<BodyInstance*>(instances_[frameIndex].mapped);
+    if (nCubes)
+        std::memcpy(dst, cubes.data(), nCubes * sizeof(BodyInstance));
+    if (nSpheres)
+        std::memcpy(dst + nCubes, spheres.data(),
+                    nSpheres * sizeof(BodyInstance));
     lastInstanceCount_ = count;
     if (count == 0) return;
 
@@ -321,13 +381,21 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     VkDeviceSize offs[2] = {0, 0};
     VkBuffer bufs[2] = {cubeVerts_.buffer, instances_[frameIndex].buffer};
     vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
-    vkCmdDraw(cmd, vertexCount_, count, 0, 0);
+    if (nCubes) vkCmdDraw(cmd, vertexCount_, nCubes, 0, 0);
+    if (nSpheres) {
+        // Второй меш, тот же инстанс-буфер: firstInstance смещает атрибуты
+        // binding 1 на хвост со сферами.
+        VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &sphereVerts_.buffer, &zero);
+        vkCmdDraw(cmd, sphereVertexCount_, nSpheres, 0, nCubes);
+    }
 }
 
 void BodyPass::destroy() {
     if (!dev_) return;
     for (int i = 0; i < kMaxFramesInFlight; ++i) instances_[i].destroy(*dev_);
     cubeVerts_.destroy(*dev_);
+    sphereVerts_.destroy(*dev_);
     if (pipeline_) { vkDestroyPipeline(dev_->device, pipeline_, nullptr); pipeline_ = VK_NULL_HANDLE; }
     if (layout_) { vkDestroyPipelineLayout(dev_->device, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
 }

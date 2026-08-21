@@ -563,7 +563,11 @@ if(GIGA_BUILD_TESTS)
         # 23437 + 7 (test_rigid_ball_ball_wakes_and_stacks: шар-шар через
         # биннинг — касание будит спящего, пара не проникает, стопка/пара
         # засыпает через touchedTick от пары) = 23444.
-        PASS_REGULAR_EXPRESSION "23444/23444 checks passed"
+        # 23444 + 6 (test_rigid_prop_hits_agent_and_agent_kicks: проп↔агент —
+        # быстрый шар пишет Impact обоим (закон урона, S3 «может убить»),
+        # не пролетает сквозь; идущий агент будит и откатывает спящий шар) =
+        # 23450.
+        PASS_REGULAR_EXPRESSION "23450/23450 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

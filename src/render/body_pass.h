@@ -70,6 +70,11 @@ private:
 
     VulkanBuffer cubeVerts_;   // static per-vertex unit-cube mesh (pos + normal)
     std::uint32_t vertexCount_ = 0;
+    // Unit sphere sharing the [0,1]^3 contract: RigidBody bodies without a
+    // ContactForm ARE spheres (the engine's whole form vocabulary) and must
+    // read as spheres, not red cubes. Same pipeline, second mesh, second draw.
+    VulkanBuffer sphereVerts_;
+    std::uint32_t sphereVertexCount_ = 0;
 
     VulkanBuffer instances_[kMaxFramesInFlight]; // host-visible, per-frame
     std::uint32_t instanceCapacity_ = 0;

@@ -511,6 +511,90 @@ static void test_rigid_ball_ball_wakes_and_stacks() {
     CHECK(reg.get<RigidBody>(top).asleep);
 }
 
+// Инкремент 5 ([markoaudit/plans/ragdoll.md]): проп ↔ агент. S3: RagdollRoll
+// «задевает игрока, может убить»; S7: игрок = NPC. Быстрый шар в стоящего
+// агента — Impact на обоих (в закон урона E=mv²/2) и отскок; идущий агент
+// в спящий шар — шар просыпается и откатывается.
+static void test_rigid_prop_hits_agent_and_agent_kicks() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    const float radius = 0.35f;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    // Агент — тело игрока/NPC: AABB 0.4×0.4×0.9, стоит на плите.
+    Entity agent = reg.create();
+    reg.emplace<Transform>(
+        agent, Transform{vec3{12.0f * kCellSize, 10.5f * kCellSize,
+                              floorTop + 0.9f},
+                         g});
+    reg.emplace<Velocity>(agent);
+    reg.emplace<AABB>(agent, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<GravityAffected>(agent);
+
+    // Стальной шар летит в него на 10 м/с.
+    Entity ball = reg.create();
+    RigidBody rb;
+    rb.radius = radius;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+    rb.restitution = 0.35f;
+    rb.friction = 0.6f;
+    reg.emplace<Transform>(
+        ball, Transform{vec3{12.0f * kCellSize - 3.0f, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(ball, Velocity{vec3{10.0f, 0.0f, 0.0f}});
+    reg.emplace<RigidBody>(ball, rb);
+
+    for (int i = 0; i < kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    // Удар случился: Impact на агенте (урон посчитает impact_damage_step) и
+    // шар не пролетел сквозь — его X левее агента.
+    CHECK(reg.all_of<Impact>(agent));
+    CHECK(reg.get<Impact>(agent).speed > 4.0f);
+    CHECK(reg.get<Transform>(ball).pos.x <
+          reg.get<Transform>(agent).pos.x);
+
+    // Агент идёт в СПЯЩИЙ шар — тот просыпается и сдвигается.
+    Registry reg2;
+    Entity ball2 = reg2.create();
+    RigidBody rb2 = rb;
+    reg2.emplace<Transform>(
+        ball2, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                              floorTop + radius + 0.05f},
+                         g});
+    reg2.emplace<Velocity>(ball2);
+    reg2.emplace<RigidBody>(ball2, rb2);
+    for (int i = 0; i < 3 * kSimHz; ++i) rigid_body_step(reg2, stack, kSimDt);
+    CHECK(reg2.get<RigidBody>(ball2).asleep);
+
+    Entity walker = reg2.create();
+    reg2.emplace<Transform>(
+        walker, Transform{vec3{10.5f * kCellSize - 1.0f, 10.5f * kCellSize,
+                               floorTop + 0.9f},
+                          g});
+    // Контроллерная скорость ходьбы, пишется каждый тик — как в игре.
+    reg2.emplace<Velocity>(walker, Velocity{vec3{1.5f, 0.0f, 0.0f}});
+    reg2.emplace<AABB>(walker, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg2.emplace<GravityAffected>(walker);
+    const float ballX0 = reg2.get<Transform>(ball2).pos.x;
+    for (int i = 0; i < kSimHz; ++i) {
+        // Шаг агента двигает его сам (в игре — physics_step).
+        reg2.get<Transform>(walker).pos.x += 1.5f * kSimDt;
+        reg2.get<Velocity>(walker).v = vec3{1.5f, 0.0f, 0.0f};
+        rigid_body_step(reg2, stack, kSimDt);
+    }
+    CHECK(!reg2.get<RigidBody>(ball2).asleep);
+    CHECK(reg2.get<Transform>(ball2).pos.x > ballX0 + 0.1f);
+}
+
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
 // терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
 // владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
@@ -1178,6 +1262,7 @@ int main() {
     test_rigid_box_lies_flat();
     test_rigid_chain_hangs_and_cuts();
     test_rigid_ball_ball_wakes_and_stacks();
+    test_rigid_prop_hits_agent_and_agent_kicks();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();
