@@ -7,6 +7,7 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "sim/cell_bins.h" // общий примитив клеточных бинов — ключ и контейнер
 #include "sim/drag.h"
 #include "world/material_props.h" // material_hardness — мат-пара контакта
 #include "world/world.h"
@@ -148,14 +149,11 @@ constexpr float kJointBias = 0.2f;
 // соседи ищутся раз на КЛЕТКУ С БОДРЫМИ телами, не раз на тело: спящий мир
 // не платит за фазу пар вообще (замер 2026-08-21: наивные 27 поисков на
 // тело давали 4.5 мс/тик на 4096 бодрых и 0.37 мс на спящих).
-struct BinEntry {
-    std::uint64_t key;
-    std::uint32_t idx;
-};
-
+// Записи бинов — CellBins ([sim/cell_bins.h]); здесь остаётся только
+// НАДСТРОЙКА этого потребителя: пробеги и слияние соседних клеток в пары.
 struct BinRun {
     std::uint64_t key;
-    std::uint32_t lo, hi; // [lo, hi) в binEntries
+    std::uint32_t lo, hi; // [lo, hi) в entries соответствующего CellBins
     int cx, cy, cz;       // клетка (wrap), для ключей соседей
     LayerId layer;
     bool awake;           // есть ли бодрое тело (снимок начала тика)
@@ -534,44 +532,33 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // соседей поглощает дрейф в клетку); живость пары внутри resolve_pair
     // всегда по текущим позициям. Снимок awake — начало тика: разбуженный
     // парой участвует своими парами со следующего тика.
-    static thread_local std::vector<BinEntry> binEntries;
-    static thread_local std::vector<Entity> binBodies;
+    static thread_local CellBins bodyBins;
     static thread_local std::vector<BinRun> binRuns;
-    binEntries.clear();
-    binBodies.clear();
+    bodyBins.clear();
     binRuns.clear();
     for (auto e : view) {
         if (reg.all_of<CarriedBy>(e)) continue; // несомое пар не порождает
         const auto& tr = view.get<Transform>(e);
-        const int cx = wrap_macro(floor_div(tr.pos.x, kCellSize));
-        const int cy = wrap_macro(floor_div(tr.pos.y, kCellSize));
-        const int cz = wrap_macro(floor_div(tr.pos.z, kCellSize));
-        const std::uint64_t key =
-            (static_cast<std::uint64_t>(tr.layer) << 32) |
-            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
-        binEntries.push_back(
-            {key, static_cast<std::uint32_t>(binBodies.size())});
-        binBodies.push_back(e);
+        bodyBins.add(cell_bin_key(tr.layer, cell_coord(tr.pos.x),
+                                  cell_coord(tr.pos.y), cell_coord(tr.pos.z)),
+                     e);
     }
-    std::sort(binEntries.begin(), binEntries.end(),
-              [](const BinEntry& a, const BinEntry& b) {
-                  return a.key < b.key;
-              });
-    for (std::uint32_t i = 0; i < binEntries.size();) {
+    bodyBins.build();
+    for (std::uint32_t i = 0; i < bodyBins.entries.size();) {
         std::uint32_t j = i;
         bool awake = false;
-        while (j < binEntries.size() &&
-               binEntries[j].key == binEntries[i].key) {
-            if (!view.get<RigidBody>(binBodies[binEntries[j].idx]).asleep)
+        while (j < bodyBins.entries.size() &&
+               bodyBins.entries[j].key == bodyBins.entries[i].key) {
+            if (!view.get<RigidBody>(bodyBins.entries[j].e).asleep)
                 awake = true;
             ++j;
         }
-        const Entity first = binBodies[binEntries[i].idx];
+        const Entity first = bodyBins.entries[i].e;
         const auto& tr = view.get<Transform>(first);
-        binRuns.push_back({binEntries[i].key, i, j,
-                           wrap_macro(floor_div(tr.pos.x, kCellSize)),
-                           wrap_macro(floor_div(tr.pos.y, kCellSize)),
-                           wrap_macro(floor_div(tr.pos.z, kCellSize)),
+        binRuns.push_back({bodyBins.entries[i].key, i, j,
+                           wrap_macro(cell_coord(tr.pos.x)),
+                           wrap_macro(cell_coord(tr.pos.y)),
+                           wrap_macro(cell_coord(tr.pos.z)),
                            tr.layer, awake});
         i = j;
     }
@@ -612,12 +599,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 (o[1] == -1 && X.cy == 0) ||
                 (o[2] == 1 && X.cz == kMacroDim - 1);
             if (edge) {
-                const std::uint64_t key =
-                    (static_cast<std::uint64_t>(X.layer) << 32) |
-                    static_cast<std::uint32_t>(
-                        macro_index(wrap_macro(X.cx + o[0]),
-                                    wrap_macro(X.cy + o[1]),
-                                    wrap_macro(X.cz + o[2])));
+                const std::uint64_t key = cell_bin_key(
+                    X.layer, X.cx + o[0], X.cy + o[1], X.cz + o[2]);
                 const std::uint32_t yi = find_run(key);
                 if (yi != 0xFFFFFFFFu &&
                     (X.awake || binRuns[yi].awake))
@@ -635,33 +618,27 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
 
     // Корзины АГЕНТОВ + пары (клетка пропов × клетка агентов) — тем же
     // слиянием, но по всем 27 смещениям: множества разные, дедуп не нужен.
-    static thread_local std::vector<BinEntry> agEntries;
+    static thread_local CellBins agBins;
     static thread_local std::vector<BinRun> agRuns;
     static thread_local std::vector<std::pair<std::uint32_t, std::uint32_t>>
         agentPairs;
-    agEntries.clear();
+    agBins.clear();
     agRuns.clear();
     agentPairs.clear();
     if (!agents.empty()) {
-    for (std::uint32_t i = 0; i < agents.size(); ++i) {
-        const auto& tr = reg.get<Transform>(agents[i]);
-        const std::uint64_t key =
-            (static_cast<std::uint64_t>(tr.layer) << 32) |
-            static_cast<std::uint32_t>(
-                macro_index(wrap_macro(floor_div(tr.pos.x, kCellSize)),
-                            wrap_macro(floor_div(tr.pos.y, kCellSize)),
-                            wrap_macro(floor_div(tr.pos.z, kCellSize))));
-        agEntries.push_back({key, i});
+    for (Entity a : agents) {
+        const auto& tr = reg.get<Transform>(a);
+        agBins.add(cell_bin_key(tr.layer, cell_coord(tr.pos.x),
+                                cell_coord(tr.pos.y), cell_coord(tr.pos.z)),
+                   a);
     }
-    std::sort(agEntries.begin(), agEntries.end(),
-              [](const BinEntry& a, const BinEntry& b) {
-                  return a.key < b.key;
-              });
-    for (std::uint32_t i = 0; i < agEntries.size();) {
+    agBins.build();
+    for (std::uint32_t i = 0; i < agBins.entries.size();) {
         std::uint32_t j = i;
-        while (j < agEntries.size() && agEntries[j].key == agEntries[i].key)
+        while (j < agBins.entries.size() &&
+               agBins.entries[j].key == agBins.entries[i].key)
             ++j;
-        agRuns.push_back({agEntries[i].key, i, j, 0, 0, 0, 0, true});
+        agRuns.push_back({agBins.entries[i].key, i, j, 0, 0, 0, 0, true});
         i = j;
     }
     for (int dz = -1; dz <= 1; ++dz)
@@ -681,12 +658,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                         (dz == 1 && X.cz == kMacroDim - 1) ||
                         (dz == -1 && X.cz == 0);
                     if (edge) {
-                        const std::uint64_t key =
-                            (static_cast<std::uint64_t>(X.layer) << 32) |
-                            static_cast<std::uint32_t>(
-                                macro_index(wrap_macro(X.cx + dx),
-                                            wrap_macro(X.cy + dy),
-                                            wrap_macro(X.cz + dz)));
+                        const std::uint64_t key = cell_bin_key(
+                            X.layer, X.cx + dx, X.cy + dy, X.cz + dz);
                         auto it = std::lower_bound(
                             agRuns.begin(), agRuns.end(), key,
                             [](const BinRun& r, std::uint64_t k) {
@@ -835,16 +808,16 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             if (!X.awake) continue;
             for (std::uint32_t a = X.lo; a < X.hi; ++a)
                 for (std::uint32_t b = a + 1; b < X.hi; ++b)
-                    resolve_pair(binBodies[binEntries[a].idx],
-                                 binBodies[binEntries[b].idx]);
+                    resolve_pair(bodyBins.entries[a].e,
+                                 bodyBins.entries[b].e);
         }
         for (const auto& pr : runPairs) {
             const BinRun& X = binRuns[pr.first];
             const BinRun& Y = binRuns[pr.second];
             for (std::uint32_t a = X.lo; a < X.hi; ++a)
                 for (std::uint32_t b = Y.lo; b < Y.hi; ++b)
-                    resolve_pair(binBodies[binEntries[a].idx],
-                                 binBodies[binEntries[b].idx]);
+                    resolve_pair(bodyBins.entries[a].e,
+                                 bodyBins.entries[b].e);
         }
 
         // Фаза проп↔агент: готовые пары клеток, обе стороны честные.
@@ -853,8 +826,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             const BinRun& A = agRuns[pr.second];
             for (std::uint32_t a = X.lo; a < X.hi; ++a)
                 for (std::uint32_t g = A.lo; g < A.hi; ++g)
-                    resolve_agent(binBodies[binEntries[a].idx],
-                                  agents[agEntries[g].idx]);
+                    resolve_agent(bodyBins.entries[a].e,
+                                  agBins.entries[g].e);
         }
 
         // Фаза линков: kJointIters проходов sequential impulses по всем
