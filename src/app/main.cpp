@@ -336,6 +336,19 @@ static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
         .count();
 }
 
+// Метки кадра для детектора хитча (carve-hitch.md, инкремент 1б): что
+// происходило в кадре, который только что закончился. Пишутся по ходу кадра,
+// читаются в топе СЛЕДУЮЩЕГО — wall-clock кадра впервые известен там, — там
+// же сбрасываются. Детектор закрывает вопрос «CPU или GPU» наверняка: любой
+// ощутимый затык обязан оставить строку [hitch] с разбором.
+struct FrameMark {
+    float carveMs = 0.0f;     // [carve] total этого кадра
+    float lightSwapMs = 0.0f; // залив свапа бейка видимости на GPU
+    float propSkinMs = 0.0f;  // merge_ecs_prop_meshes
+    bool floorEntry = false;  // begin_floor_nav: Fresh-бейк (свет+rooms) синхронно
+};
+static FrameMark g_frameMark;
+
 // Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
 // диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
 // которого было НОЛЬ вызывающих: опасность текла сквозь закрытые двери и не
@@ -1592,6 +1605,9 @@ void begin_floor_nav(const World& world, int floorNumber,
     // бы метки прошлого этажа (dirtyGen > bakedGen до N карвов). Fresh-снапшот
     // просто отражает текущее поколение.
     const game::FloorKind kind = kind_for_floor(floorNumber);
+    // Кадр входа на этаж платит синхронный Fresh-бейк (свет 1144 мс по замеру
+    // 2026-08-21, rooms ~23 мс) — детектор хитча обязан назвать его по имени.
+    g_frameMark.floorEntry = true;
     // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
     // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
     // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
@@ -2905,6 +2921,51 @@ int main(int argc, char** argv) {
             ++wallHead;
             g_wallRing = wallRing;
             g_wallSeen = wallHead;
+        }
+
+        // Детектор хитча ([markoaudit/plans/carve-hitch.md], инкремент 1б):
+        // «не знаю, может GPU» перестаёт быть ответом — любой ощутимый затык
+        // обязан оставить строку с разбором. Порог ВЫВЕДЕН, не выбран: глазу
+        // заметен кадр от ~3 vsync-периодов, 3×16.7 = 50 мс при 60 Гц
+        // (GIGA_HITCH_MS переопределяет — на 120 Гц панели порог вдвое ниже).
+        // frameDt меряет ПРЕДЫДУЩИЙ кадр — метки g_frameMark копились в нём же
+        // и сбрасываются здесь. CPU-виновник виден метками; GPU-виновник —
+        // длинным кадром при пустых метках, его проход называют пики окна
+        // GPU-таймера ([render/gpu_timer.h]: пик — 31 кадр, спайк может доехать
+        // строкой-двумя позже; dropped растёт = цифры несвежие).
+        {
+            static const float hitchMs = [] {
+                const char* e = std::getenv("GIGA_HITCH_MS");
+                return e != nullptr ? static_cast<float>(std::atof(e)) : 50.0f;
+            }();
+            const float wallMs = frameDt * 1000.0f;
+            if (wallMs > hitchMs && g_wallSeen > 1) {
+                const auto& gt = renderer.timer;
+                std::fprintf(
+                    stderr,
+                    "[hitch] frame %.0f ms | carve %.2f, light_swap %.2f, "
+                    "prop_skin %.2f, entry %d | gpu peak %.1f ms: lgrid %.1f, "
+                    "vflush %.1f, cull %.1f, simphys %.1f, world %.1f, "
+                    "bodies %.1f, props %.1f, drawphys %.1f, hud %.1f "
+                    "(dropped %u)\n",
+                    static_cast<double>(wallMs),
+                    static_cast<double>(g_frameMark.carveMs),
+                    static_cast<double>(g_frameMark.lightSwapMs),
+                    static_cast<double>(g_frameMark.propSkinMs),
+                    g_frameMark.floorEntry ? 1 : 0,
+                    static_cast<double>(gt.frame_ms_max()),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::LightGrid)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::VoxelFlush)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Cull)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::SimPhysics)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::World)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Bodies)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Props)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::DrawPhysics)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Hud)),
+                    gt.dropped());
+            }
+            g_frameMark = FrameMark{};
         }
 
         // A console teleport is executed HERE, at the top of a frame, never in
@@ -7057,9 +7118,10 @@ int main(int argc, char** argv) {
                     g_lightClusterMembers = lv.clusterMembers;
                     lightGrid.set_cluster_records(
                         recs.data(), static_cast<uint32_t>(recs.size()));
+                    g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",
-                                 carve_ms_since(ctSw),
+                                 static_cast<double>(g_frameMark.lightSwapMs),
                                  static_cast<unsigned long long>(nav.light_gen()));
                 }
                 const auto ctLg = std::chrono::steady_clock::now();
@@ -7087,7 +7149,9 @@ int main(int argc, char** argv) {
                                       streamer.antourage_at_layer(registry, activeLayer),
                                       stack.layer(activeLayer), &dripEmitters,
                                       &antourageFalling);
-                g_carveT.propSkinMs += carve_ms_since(ctPs);
+                const float psMs = carve_ms_since(ctPs);
+                g_carveT.propSkinMs += psMs;
+                g_frameMark.propSkinMs += psMs;
             }
             // Only when the dressing SET actually changed — never merely because
             // a rigid leg is mid-fall.
@@ -7297,6 +7361,8 @@ int main(int argc, char** argv) {
                                       g_carveT.patchMs + g_carveT.visMs +
                                       g_carveT.partMs + g_carveT.anchorMs +
                                       g_carveT.antrMs;
+                g_frameMark.carveMs = g_carveT.siteMs + g_carveT.propSkinMs +
+                                      g_carveT.lgridMs + g_carveT.flushMs;
                 std::fprintf(
                     stderr,
                     "[carve] total %.2f ms (%zu cells): light_mat %.2f, "
