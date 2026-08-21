@@ -171,7 +171,7 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // v17 (2026-08-21): контейнер несёт канонический Inventory (64 слота, B3
 // one-container.md) — решение владельца: миграции нет, старые сейвы
 // отклоняются, ящики пересеются.
-inline constexpr std::uint32_t kSaveVersion = 17u;
+inline constexpr std::uint32_t kSaveVersion = 18u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -330,6 +330,9 @@ static_assert(kBankWire == 289);
 // B3 (v17): держатель канонический — 64 ItemSlot вместо 4 POD-троек.
 inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 64 * 5;  // 327
 inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 2 + 64 * 5;    // 360
+// v18: сорванный проп — 2 (floor) + 3 × 12 (pos/half/colour) + 3 × 4 (масса и
+// контактная пара) + 1 (флаг сферы) = 51.
+inline constexpr std::size_t kDebrisRecWire = 2 + 36 + 12 + 1;        // 51
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
     kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kBankWire +
@@ -390,10 +393,14 @@ inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 inline constexpr std::size_t save_bytes_for(std::size_t containerCount,
                                             std::size_t corpseCount = 0,
                                             std::size_t poolBytes = 0,
-                                            std::size_t macroBytes = 0) {
+                                            std::size_t macroBytes = 0,
+                                            std::size_t debrisCount = 0) {
+    // v18: секция обломков едет тем же приёмом, что корпуса — счётчик u32
+    // инлайном в payload, а не новым полем шапки.
     return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
            containerCount * kContainerRecWire + 4 +
-           corpseCount * kCorpseRecWire + poolBytes + macroBytes;
+           corpseCount * kCorpseRecWire + 4 +
+           debrisCount * kDebrisRecWire + poolBytes + macroBytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +479,23 @@ struct ContainerRecord {
 // the moment of death — the flattened AABB, the darkened tint, the exact resting
 // position — is recorded rather than re-derived, because the body it was derived
 // FROM no longer exists on a revisit. `deathTick` does not travel (no reader).
+// v18: СОРВАННЫЙ ПРОП — сбитая лампа, упавший щиток, брошенный стендовый мяч
+// (решение владельца 2026-08-21: «сейвить позицию» — обломок часть мира, а не
+// мусор кадра). Поза НЕ сейвится, как у трупа: тело пересобирается и ложится
+// заново физикой. Форма — сфера или бокс, как её вывел детач; контактные
+// параметры уже сведены из материала при отрыве, поэтому едут числами, а не
+// ссылкой на строку таблицы, которая может переехать ([save.h] о сдвиге ids).
+struct DebrisRecord {
+    std::int16_t floor = 0;
+    vec3 pos{};
+    vec3 half{};   // габарит бокса; у сферы — все три равны радиусу
+    vec3 colour{};
+    float massKg = 1.0f;
+    float restitution = 0.3f;
+    float friction = 0.5f;
+    std::uint8_t sphere = 0; // 1 — тело-сфера (нет ContactForm)
+};
+
 struct CorpseRecord {
     std::int16_t floor = 0;      // signed floor label, same convention as the key
     vec3 pos{};                  // exact resting position, not a cell
@@ -592,6 +616,9 @@ struct SaveState {
     // `refresh_floor_records`.
     std::vector<ContainerRecord> containers;
     std::vector<CorpseRecord> corpses;
+    // v18: сорванные пропы (сбитая лампа, упавший щиток, брошенный мяч) —
+    // решение владельца: обломок часть мира. Поза не сейвится.
+    std::vector<DebrisRecord> debris;
     // Version 2: quest log persisted across F5/F9. Written last by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
@@ -653,7 +680,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
 // forget all nine other floors.
 std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
                                   std::vector<ContainerRecord>& boxes,
-                                  std::vector<CorpseRecord>& corpses);
+                                  std::vector<CorpseRecord>& corpses,
+                                  std::vector<DebrisRecord>* debris = nullptr);
 
 // Stamp recorded contents over the freshly generated floor's crates. Call it
 // AFTER `spawn_floor_containers` has built them; returns how many matched. The
@@ -678,6 +706,13 @@ std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumbe
 // corpse is at rest by definition. Returns how many were spawned.
 std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
                                  const CorpseRecord* recs, std::size_t n);
+
+// v18: пересоздать сорванные пропы этажа из записей. Сначала УНИЧТОЖАЕТ живые
+// обломки слоя (F9 на тот же этаж иначе удвоил бы их), потом собирает тела
+// ядра тем же rigid_attach_*, что детач; поза не восстанавливается — тело
+// ложится заново (решение владельца, как у трупа). Возвращает число созданных.
+std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
+                                 const DebrisRecord* recs, std::size_t n);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood

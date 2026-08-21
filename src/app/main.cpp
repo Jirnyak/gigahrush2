@@ -2650,7 +2650,7 @@ int main(int argc, char** argv) {
         // REFRESH, not append and not clear. v15: whole crates AND corpses,
         // contents included — the search screen made both mutable stores. [save.h]
         game::refresh_floor_records(reg, pl, currentFloor, runState.containers,
-                                    runState.corpses);
+                                    runState.corpses, &runState.debris);
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
         pool.save_rows(runState.poolBlob);
@@ -2696,7 +2696,8 @@ int main(int argc, char** argv) {
                                            ? reg.get<Transform>(player).layer
                                            : static_cast<LayerId>(0);
             game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                         runState.containers, runState.corpses);
+                                         runState.containers, runState.corpses,
+                                         &runState.debris);
             // The departing floor's exact grid goes to its own file — this is
             // THE geometry persistence: the next visit (or the next run)
             // stamps it back. A transition is a load screen; I/O is
@@ -2789,6 +2790,10 @@ int main(int argc, char** argv) {
         game::spawn_corpse_records(reg, nl, currentFloor,
                                    runState.corpses.data(),
                                    runState.corpses.size());
+        // v18: сорванные пропы — часть мира (решение владельца).
+        game::spawn_debris_records(reg, nl, currentFloor,
+                                   runState.debris.data(),
+                                   runState.debris.size());
         // (The floor's own file is restored INSIDE ensure_loaded now — before the
         //  dressing bake and the props, not after them. [problems.md] §42)
         // Doors before the bake: all-open geometry into the bitsets. No
@@ -5040,6 +5045,10 @@ int main(int argc, char** argv) {
                                 reg, nl, currentFloor,
                                 runState.corpses.data(),
                                 runState.corpses.size());
+                            game::spawn_debris_records(
+                                reg, nl, currentFloor,
+                                runState.debris.data(),
+                                runState.debris.size());
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
                             refresh_floor_props(
@@ -7318,7 +7327,8 @@ int main(int argc, char** argv) {
                                               : static_cast<LayerId>(0);
                         game::refresh_floor_records(reg, leaveLayer, currentFloor,
                                                     runState.containers,
-                                                    runState.corpses);
+                                                    runState.corpses,
+                                                    &runState.debris);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
                         write_floor_file(stack.layer(leaveLayer), currentFloor);
@@ -7382,6 +7392,9 @@ int main(int argc, char** argv) {
                         game::spawn_corpse_records(
                             reg, nl, currentFloor, runState.corpses.data(),
                             runState.corpses.size());
+                        game::spawn_debris_records(
+                            reg, nl, currentFloor, runState.debris.data(),
+                            runState.debris.size());
                         // Arrival floor file BEFORE doors, then doors before
                         // the bake (all-open geometry into the bitsets) — the
                         // same law as the keyboard ride path. This is the

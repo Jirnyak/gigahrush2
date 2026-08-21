@@ -217,6 +217,19 @@ SaveState busy_run() {
         cr.inv.slots[0] = ItemSlot{40, 2, 200};
         cr.inv.slots[1] = ItemSlot{kItemRuble, 650, 255};
         st.corpses.push_back(cr);
+        // v18: сорванный проп — обломок часть мира (решение владельца
+        // 2026-08-21). Значения намеренно неокруглые: нулевое поле не
+        // доказывает свой кодек (правило этого файла).
+        DebrisRecord dr;
+        dr.floor = -3;
+        dr.pos = vec3{12.5f, 91.25f, 6.75f};
+        dr.half = vec3{0.22f, 0.34f, 0.17f};
+        dr.colour = vec3{0.61f, 0.42f, 0.13f};
+        dr.massKg = 13.5f;
+        dr.restitution = 0.27f;
+        dr.friction = 0.63f;
+        dr.sphere = 1;
+        st.debris.push_back(dr);
     }
 
     // Version 6: a matrix that has drifted from base — a grudge the save must
@@ -445,12 +458,13 @@ void wire_layout() {
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
     static_assert(kSaveFixedWire == 1284);  // v16: +289 bank ([save.h] SAVBANK)
     static_assert(kFactionWire == 36);
-    // v16: 1284 fixed + 36 faction + 64 header + 4 inline corpse count = 1388
-    // empty; a container row is 27 B, a corpse row 81 B.
-    static_assert(save_bytes_for(0) == 1388);
-    static_assert(save_bytes_for(3) == 1388 + 3 * kContainerRecWire);
+    // v18: 1284 fixed + 36 faction + 64 header + 4 inline corpse count +
+    // 4 inline debris count = 1392 empty.
+    static_assert(save_bytes_for(0) == 1392);
+    static_assert(save_bytes_for(3) == 1392 + 3 * kContainerRecWire);
     static_assert(save_bytes_for(3, 1, 100, 50) ==
-                  1388 + 3 * kContainerRecWire + kCorpseRecWire + 150);
+                  1392 + 3 * kContainerRecWire + kCorpseRecWire + 150);
+    static_assert(save_bytes_for(0, 0, 0, 0, 2) == 1392 + 2 * kDebrisRecWire);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -459,7 +473,7 @@ void wire_layout() {
 
     const SaveState st = busy_run();
     save_write(st, bytes);
-    CHECK(bytes.size() == save_bytes_for(3, 1));
+    CHECK(bytes.size() == save_bytes_for(3, 1, 0, 0, 1));
     // 1042 B for a full run with three emptied crates and no macro blobs (those are
     // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
     // per-floor files ([save.h] modular layout), never here. v8 was 965; the
@@ -470,7 +484,8 @@ void wire_layout() {
     // v15 swapped opened keys for whole-crate records (27 B a row, corpse rows
     // 81 B, plus the inline corpse-count u32 in the base); v16 adds the 289 B
     // bank block: busy_run's 3 crates and 1 body land on 1388 + 81 + 81 = 1550.
-    CHECK(bytes.size() == 1388 + 3 * kContainerRecWire + kCorpseRecWire);
+    CHECK(bytes.size() ==
+          1392 + 3 * kContainerRecWire + kCorpseRecWire + kDebrisRecWire);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -505,7 +520,8 @@ void wire_layout() {
     CHECK(h.poolBytes == 0u);
     CHECK(h.macroBytes == 0u);
     CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire +
-                                3u * kContainerRecWire + 4u + kCorpseRecWire);
+                                3u * kContainerRecWire + 4u + kCorpseRecWire +
+                                4u + kDebrisRecWire); // v18: счётчик + ряд
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
     // than an oversight. Nothing currently in the payload is tick-derived — the clock is
@@ -580,6 +596,16 @@ void round_trip() {
     CHECK(dst.containers[0].c.inv.slots[3].item == kItemRuble &&
           dst.containers[0].c.inv.slots[3].count == 12345);
     CHECK(dst.corpses[0].inv.slots[1].count == 650);
+    // v18: обломок пережил круг целиком — форма, масса и контактная пара.
+    CHECK(dst.debris.size() == 1u);
+    CHECK(dst.debris[0].floor == -3);
+    CHECK(dst.debris[0].pos.y == 91.25f);
+    CHECK(dst.debris[0].half.z == 0.17f);
+    CHECK(dst.debris[0].colour.x == 0.61f);
+    CHECK(dst.debris[0].massKg == 13.5f);
+    CHECK(dst.debris[0].restitution == 0.27f);
+    CHECK(dst.debris[0].friction == 0.63f);
+    CHECK(dst.debris[0].sphere == 1);
 }
 
 // Version 6: the macro world is a flat table, so it saves flat. A small society
