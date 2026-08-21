@@ -168,6 +168,46 @@ static void test_inventory() {
     CHECK(inv.first_free() == -1);
 }
 
+// §59.1: is_power_cut был квадратом «каждая лампа × скан всех щитков каждый
+// кадр». Теперь брод-фейз — бит на грубую клетку 4 м, узкая фаза — прежний
+// точный скан. Пин — ЭКВИВАЛЕНТНОСТЬ: на сетке проб вокруг щитка ответ
+// обязан совпасть со старой формулой (сфера R=12 м с wrap по всем осям),
+// включая шов тора с обеих сторон; бит не теряет обесточку и не выдумывает.
+static void test_power_cut_broadphase() {
+    PowerGridState pg{};
+    // Щиток у ВЕРХНЕГО шва (x=254 м): зона перелезает wrap вверх по x.
+    pg.destroy_shield(127, 32, 63);
+    // Щиток у НИЖНЕГО края (x=0, z=0): штамп уходит в отрицательные грубые
+    // координаты — маска заворачивания работает и снизу.
+    pg.destroy_shield(0, 96, 0);
+    CHECK(pg.count == 2);
+
+    const vec3 spA = PowerGridState::shield_pos(pg.destroyedShieldKeys[0]);
+    const vec3 spB = PowerGridState::shield_pos(pg.destroyedShieldKeys[1]);
+    // Референс — старый точный скан, в одну строку на щиток.
+    auto exact = [&](const vec3& p) {
+        return wrap_dist2(spA, p, kWorldExtent) <=
+                   kPowerCutRadius * kPowerCutRadius ||
+               wrap_dist2(spB, p, kWorldExtent) <=
+                   kPowerCutRadius * kPowerCutRadius;
+    };
+    // Сетка шагом 2 м до ±16 м вокруг каждого щитка: граница зоны (12 м) и
+    // консервативная кромка штампа (~15.5 м) обе внутри решётки проб.
+    for (const vec3& sp : {spA, spB})
+        for (int dz = -8; dz <= 8; ++dz)
+            for (int dy = -8; dy <= 8; ++dy)
+                for (int dx = -8; dx <= 8; ++dx) {
+                    const vec3 p{wrapf(sp.x + dx * 2.0f, kWorldExtent),
+                                 wrapf(sp.y + dy * 2.0f, kWorldExtent),
+                                 wrapf(sp.z + dz * 2.0f, kWorldExtent)};
+                    CHECK(pg.is_power_cut(p) == exact(p));
+                }
+    // Другой конец тора: бита нет — мгновенное «нет» без узкой фазы.
+    CHECK(!pg.is_power_cut(vec3{wrapf(spA.x + 128.0f, kWorldExtent),
+                                wrapf(spA.y + 128.0f, kWorldExtent),
+                                wrapf(spA.z + 128.0f, kWorldExtent)}));
+}
+
 static void test_pool_basics() {
     // 2^20 slots is a load-bearing constant (id masking, verbatim serialization
     // with the world) — assert it at build time.
@@ -5270,6 +5310,7 @@ int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
     test_inventory();
+    test_power_cut_broadphase();
     test_pool_basics();
     test_pool_death_keeps_slot();
     test_relationships();

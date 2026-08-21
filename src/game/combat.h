@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio> // fprintf — переполнение капа щитков печатается вслух (S11)
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -61,19 +62,91 @@ inline std::uint64_t cell_key(int x, int y, int z) {
 
 inline constexpr std::size_t kMaxDestroyedShields = 128;
 
+// Радиус локальной обесточки вокруг разрушенного щитка, метры. Число
+// существующее (стояло литералом 12² внутри is_power_cut); вынесено, чтобы
+// точная проба и брод-фейз ниже читали один источник.
+inline constexpr float kPowerCutRadius = 12.0f;
+
+// Брод-фейз обесточки (§59.1): грубая клетка 4 м = 2 макроклетки, решётка
+// 64³, бит на клетку → 32 КиБ. Размер выведен: клетка обязана быть мельче
+// радиуса 12 м (иначе штамп раздувает зону) и степенью двойки от мира,
+// чтобы заворачивание было маской, а не делением.
+inline constexpr float kPowerCutCoarse = 2.0f * kCellSize; // 4 м
+inline constexpr int kPowerCutCoarseDim =
+    static_cast<int>(kWorldExtent / kPowerCutCoarse); // 64
+static_assert((kPowerCutCoarseDim & (kPowerCutCoarseDim - 1)) == 0,
+              "coarse power grid must stay a power of two: wrap is a mask");
+
 // Tracks destroyed electrical shields and localized power outages (Pure POD).
 struct PowerGridState {
     std::uint64_t destroyedShieldKeys[kMaxDestroyedShields] = {};
     std::uint32_t count = 0;
+    // §59.1: бит «рядом есть разрушенный щиток» на грубую клетку. Раньше
+    // КАЖДАЯ лампа платила линейный скан всех щитков каждый кадр (12646 ламп
+    // × кап 128 — квадрат, ~20-25 мс/кадр на капе, а саботаж щитков — штатный
+    // глагол игрока). Теперь is_power_cut — один бит-тест; точный скан
+    // остаётся узкой фазой и работает только у ламп под битом.
+    std::uint64_t cutBits[static_cast<std::size_t>(kPowerCutCoarseDim) *
+                          kPowerCutCoarseDim * kPowerCutCoarseDim / 64] = {};
+
+    static std::uint32_t coarse_bit(int gx, int gy, int gz) {
+        const int m = kPowerCutCoarseDim - 1;
+        return static_cast<std::uint32_t>(
+            ((gz & m) * kPowerCutCoarseDim + (gy & m)) * kPowerCutCoarseDim +
+            (gx & m));
+    }
+
+    static vec3 shield_pos(std::uint64_t k) {
+        const int sx = static_cast<int>((k >> 32) & 0xFFFF);
+        const int sy = static_cast<int>((k >> 16) & 0xFFFF);
+        const int sz = static_cast<int>(k & 0xFFFF);
+        // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
+        return vec3{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
+    }
+
+    // Консервативный штамп брод-фейза: бит получает каждая грубая клетка, чей
+    // ЦЕНТР лежит в R + полудиагональ клетки (4·√3/2 ≈ 3.46 м) от щитка —
+    // тогда любая точка клетки, попадающая в R, гарантированно под битом.
+    // Ложный бит стоит одну узкую пробу; пропавший бит стоил бы света.
+    void stamp_power_cut(const vec3& sp) {
+        const float halfDiag = kPowerCutCoarse * 0.8660254f; // √3/2
+        const float reach = kPowerCutRadius + halfDiag;
+        const int rc = static_cast<int>(reach / kPowerCutCoarse) + 1;
+        for (int dz = -rc; dz <= rc; ++dz)
+            for (int dy = -rc; dy <= rc; ++dy)
+                for (int dx = -rc; dx <= rc; ++dx) {
+                    const int gx =
+                        static_cast<int>(sp.x / kPowerCutCoarse) + dx;
+                    const int gy =
+                        static_cast<int>(sp.y / kPowerCutCoarse) + dy;
+                    const int gz =
+                        static_cast<int>(sp.z / kPowerCutCoarse) + dz;
+                    const vec3 centre{(gx + 0.5f) * kPowerCutCoarse,
+                                      (gy + 0.5f) * kPowerCutCoarse,
+                                      (gz + 0.5f) * kPowerCutCoarse};
+                    if (wrap_dist2(centre, sp, kWorldExtent) > reach * reach)
+                        continue;
+                    const std::uint32_t b = coarse_bit(gx, gy, gz);
+                    cutBits[b >> 6] |= (std::uint64_t{1} << (b & 63));
+                }
+    }
 
     void destroy_shield(int cx, int cy, int cz) {
         std::uint64_t k = cell_key(cx, cy, cz);
         for (std::uint32_t i = 0; i < count; ++i) {
             if (destroyedShieldKeys[i] == k) return;
         }
-        if (count < kMaxDestroyedShields) {
-            destroyedShieldKeys[count++] = k;
+        if (count >= kMaxDestroyedShields) {
+            // Кап корневой; молчаливое обрезание запрещено (S11): щиток не
+            // записан, его обесточки не будет — сказать вслух.
+            std::fprintf(stderr,
+                         "[powergrid] destroyed-shield cap %zu FULL, shield "
+                         "(%d,%d,%d) dropped\n",
+                         kMaxDestroyedShields, cx, cy, cz);
+            return;
         }
+        destroyedShieldKeys[count++] = k;
+        stamp_power_cut(shield_pos(k));
     }
 
     bool is_shield_destroyed(int cx, int cy, int cz) const {
@@ -85,19 +158,18 @@ struct PowerGridState {
     }
 
     bool is_power_cut(const vec3& pos) const {
+        // std::floor, не int-каст: позиция лампы может свеситься чуть ниже
+        // нуля (tr.pos.z − dropM), а обрезание к нулю сорвало бы wrap-маску.
+        const int gx = static_cast<int>(std::floor(pos.x / kPowerCutCoarse));
+        const int gy = static_cast<int>(std::floor(pos.y / kPowerCutCoarse));
+        const int gz = static_cast<int>(std::floor(pos.z / kPowerCutCoarse));
+        const std::uint32_t b = coarse_bit(gx, gy, gz);
+        if (((cutBits[b >> 6] >> (b & 63)) & 1u) == 0u) return false;
+        // Узкая фаза — прежний точный скан; под битом стоят единицы ламп.
         for (std::uint32_t i = 0; i < count; ++i) {
-            std::uint64_t k = destroyedShieldKeys[i];
-            int sx = static_cast<int>((k >> 32) & 0xFFFF);
-            int sy = static_cast<int>((k >> 16) & 0xFFFF);
-            int sz = static_cast<int>(k & 0xFFFF);
-            // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
-            vec3 shieldPos{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
-            float dx = wrap_delta_f(pos.x, shieldPos.x, kWorldExtent);
-            float dy = wrap_delta_f(pos.y, shieldPos.y, kWorldExtent);
-            float dz = wrap_delta_f(pos.z, shieldPos.z, kWorldExtent);
-            if (dx * dx + dy * dy + dz * dz <= 12.0f * 12.0f) {
+            if (wrap_dist2(shield_pos(destroyedShieldKeys[i]), pos,
+                           kWorldExtent) <= kPowerCutRadius * kPowerCutRadius)
                 return true;
-            }
         }
         return false;
     }
