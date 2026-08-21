@@ -216,6 +216,26 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
 // проп — тело рагдолл-ядра (rigid_body_step в src/sim/rigid.cpp), гашение,
 // качение и сон живут там; отдельная косметика вращения не существует.
 
+// ── Многосегментное тело (инкремент 8 рагдолл-эпика) ────────────────────────
+// Сегмент чужого корня: сущность-сегмент И сущность-линк несут этот маркер,
+// чтобы уборка корня (ребилд трупов при загрузке этажа) забирала всё тело.
+struct BodySegment {
+    Entity root = entt::null;
+};
+
+// Развернуть КОРЕНЬ в гуманоида из четырёх тел цепью (голова—грудь—ТАЗ—ноги;
+// корень становится тазом — на нём остаются Container/Interactable/Corpse и
+// сейв-идентичность). Ядро агностично: это просто N тел + штанги-линки; слово
+// «труп» знает только вызывающий. Габариты и массы ВЫВЕДЕНЫ из полугабарита
+// тела и его полной массы (антропометрические доли — вывод в .cpp). Сегменты
+// наследуют скорость и тинт корня. Возвращает число созданных сущностей
+// (сегменты + линки).
+std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
+                                      vec3 bodyHalf, float totalKg);
+
+// Убрать сегменты и линки, чьи корни в списке (вызвать ДО destroy корней).
+void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);
+
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus);
 

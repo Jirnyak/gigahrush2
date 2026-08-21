@@ -18,7 +18,6 @@
 #include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG); Corpse (v15)
 #include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
-#include "sim/rigid.h"        // rigid_attach_box — труп = тело рагдолл-ядра
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
 
@@ -898,6 +897,9 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
     for (auto e : reg.view<const Corpse, const Transform>()) {
         if (reg.get<const Transform>(e).layer == layer) stale.push_back(e);
     }
+    // Сегменты и линки гуманоида умирают ВМЕСТЕ с корнем (инкремент 8) —
+    // иначе после ребилда этажа висели бы осиротевшие головы и ноги.
+    destroy_body_segments(reg, stale);
     for (Entity e : stale) reg.destroy(e);
 
     if (!recs || n == 0) return 0;
@@ -921,13 +923,13 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         box.inv = rec.inv;
         reg.emplace<Container>(e, box);
         // C: труп — RagdollRoll-проп; поза не сейвится (решение владельца) —
-        // тело ложится заново физикой после загрузки. Инкремент 6: тело
-        // ЯДРА — та же сборка, что finalize_deaths (масса — дефолт 70 кг:
-        // Mass в сейве трупа нет, тело уже не агент).
+        // тело ложится заново физикой после загрузки. Инкременты 6+8: та же
+        // сборка гуманоида, что finalize_deaths (масса — дефолт 70 кг: Mass
+        // в сейве трупа нет, тело уже не агент).
         reg.emplace<Velocity>(e);
         reg.emplace<PropFallMode>(e, PropFallMode::RagdollRoll);
         reg.emplace<DynamicBodyTag>(e);
-        rigid_attach_box(reg, e, rec.half, Mass{}.kg, 0.05f, 0.8f);
+        spawn_humanoid_segments(reg, e, rec.half, Mass{}.kg);
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         reg.emplace<Interactable>(

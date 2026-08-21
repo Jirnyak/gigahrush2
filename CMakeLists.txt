@@ -1183,7 +1183,10 @@ if(GIGA_BUILD_TESTS)
     # умерли тесты мёртвой косметики (prop_ragdoll_step damps,
     # debris roll ω=n×v/r в physics_step), взамен test_detached_prop_is_rigid_body
     # (форма/масса выведены из строки пропа, кувырок отдан ядру).
-        PASS_REGULAR_EXPRESSION "game_test: 236580 checks, 0 failures")
+    # 236580 -> 236586 (+6) on 2026-08-21: труп-гуманоид (ragdoll.md инкр. 8)
+    # — test_humanoid_segments_fall_and_cleanup: 3 сегмента + 3 штанги, тело
+    # складывается на пол связным, уборка забирает всё с корнем.
+        PASS_REGULAR_EXPRESSION "game_test: 236586 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

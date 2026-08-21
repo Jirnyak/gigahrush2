@@ -7,6 +7,7 @@
 #include "game/floors/padic/padic.h"
 #include "game/floor_spec.h"
 #include "game/prop_system.h"
+#include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
 #include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
 #include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
 #include "world/world.h"
@@ -539,6 +540,69 @@ static void test_anchor_validate_skips_solid_support() {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
         CHECK(n == 0u);
     }
+}
+
+// Инкремент 8 рагдолл-эпика: труп — ГУМАНОИД из тел ядра. Корень = таз
+// (лут/сейв на нём), голова-грудь-ноги — сегменты со штангами-линками; тело
+// падает, складывается на пол СВЯЗНЫМ и засыпает; уборка забирает всё.
+static void test_humanoid_segments_fall_and_cleanup() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    Entity root = reg.create();
+    // Тело умерло стоя: центр на половине роста над полом.
+    reg.emplace<Transform>(
+        root, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(root, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(root, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
+
+    const std::uint32_t made =
+        game::spawn_humanoid_segments(reg, root, vec3{0.4f, 0.4f, 0.9f},
+                                      70.0f);
+    CHECK(made == 6u); // 3 сегмента + 3 линка
+    CHECK(reg.all_of<RigidBody>(root)); // корень пересобран в таз
+
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    // Все части тела легли к полу (макс. габарит сегмента < 0.6 м) и цепь
+    // цела: каждый сегмент в пределах троекратной длины своей штанги.
+    bool allDown = true, connected = true;
+    auto segView = reg.view<game::BodySegment, Transform>();
+    std::uint32_t segCount = 0;
+    for (auto e : segView) {
+        if (!reg.all_of<RigidBody>(e)) continue; // линки без Transform не тут
+        ++segCount;
+        const float z = segView.get<Transform>(e).pos.z;
+        if (z > floorTop + 0.6f) allDown = false;
+    }
+    auto linkView = reg.view<JointLink>();
+    for (auto le : linkView) {
+        const auto& jl = linkView.get<JointLink>(le);
+        if (jl.b == entt::null) continue;
+        const vec3 d = wrap_delta3(reg.get<Transform>(jl.a).pos,
+                                   reg.get<Transform>(jl.b).pos, kWorldExtent);
+        if (length(d) > jl.restLen * 3.0f) connected = false;
+    }
+    CHECK(segCount == 3u);
+    CHECK(allDown);
+    CHECK(connected);
+
+    // Уборка: сегменты и линки умирают с корнем (ребилд этажа при загрузке).
+    std::vector<Entity> roots{root};
+    game::destroy_body_segments(reg, roots);
+    reg.destroy(root);
+    std::uint32_t left = 0;
+    for (auto e : reg.view<game::BodySegment>()) { (void)e; ++left; }
+    CHECK(left == 0u);
 }
 
 // Инкремент 6 рагдолл-эпика: сорванный проп — тело ЯДРА (RigidBody +
@@ -1184,6 +1248,7 @@ void test_props_game_all() {
     test_anchor_column_probe_both_polarities();
     test_anchor_validate_skips_solid_support();
     test_detached_prop_is_rigid_body();
+    test_humanoid_segments_fall_and_cleanup();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();
     test_furniture_is_not_a_terminal();
