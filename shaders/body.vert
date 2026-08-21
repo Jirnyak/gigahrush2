@@ -12,6 +12,10 @@ layout(location = 1) in vec3 inNormal;   // per-vertex face normal
 layout(location = 2) in vec3 inCenter;   // per-instance body centre (world)
 layout(location = 3) in vec3 inHalf;     // per-instance AABB half-extents
 layout(location = 4) in vec3 inColor;    // per-instance tint
+layout(location = 5) in vec4 inRot;      // per-instance orientation quat xyzw
+                                         // (identity for agents; RigidBody's q
+                                         // for tumbling props — rolling must be
+                                         // VISIBLE, not sliding)
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
@@ -48,13 +52,21 @@ layout(location = 3) out float vAo;
 // exactly as it did.
 layout(location = 4) flat out uint vMat;
 
+// Rotate v by unit quaternion q — the GLSL mirror of core/math.h quat_rotate.
+vec3 quat_rotate(vec4 q, vec3 v) {
+    vec3 t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
 void main() {
-    // Map the [0,1] cube corner onto [-half, +half] around the body centre, so
-    // the box spans the AABB exactly (Transform.pos is the centre; AABB is
-    // half-extents). Uniform-sign scale keeps the axis-aligned normals valid.
-    vec3 world = inCenter + (inPos - 0.5) * (inHalf * 2.0);
+    // Map the [0,1] cube corner onto [-half, +half] around the body centre,
+    // rotated by the instance quaternion (identity for agents), so the box
+    // spans the AABB exactly (Transform.pos is the centre; AABB is
+    // half-extents). The normal rotates with the box so lighting follows the
+    // tumble.
+    vec3 world = inCenter + quat_rotate(inRot, (inPos - 0.5) * (inHalf * 2.0));
     gl_Position = pc.viewProj * vec4(world, 1.0);
-    vNormal = inNormal;
+    vNormal = quat_rotate(inRot, inNormal);
     vColor = inColor;
     vWorldPos = world;
     vAo = 1.0;

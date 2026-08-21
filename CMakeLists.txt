@@ -550,7 +550,10 @@ if(GIGA_BUILD_TESTS)
         # несла 23399 от базы без z-шовного блока los) = 23401 на слитой линии.
         # 23401 + 4 (векторные тор-формы wrap_delta3/wrap_dist2/wrap_pos) = 23405.
         # 23405 + 17 (suite_surface: примитив запроса поверхностей S10) = 23422.
-        PASS_REGULAR_EXPRESSION "23422/23422 checks passed"
+        # 23422 + 6 (test_rigid_ball_settles_and_sleeps: рагдолл-ядро — качение
+        # из трения, оседание на радиусе, сон, пробуждение записью Velocity,
+        # единичный кватернион; [markoaudit/plans/ragdoll.md]) = 23428.
+        PASS_REGULAR_EXPRESSION "23428/23428 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1151,7 +1154,11 @@ if(GIGA_BUILD_TESTS)
     # полярность оракула переехала со случайного этажа на построенную сцену
     # «стена со щелью» — детерминированный красный на мутации «партиал =
     # монолит» (3 новых чека), взамен вероятностного lostBad > 0 (-1).
-        PASS_REGULAR_EXPRESSION "game_test: 236578 checks, 0 failures")
+    # 236578 -> 236579 (+1) on 2026-08-21: spawn_ball на рагдолл-ядре
+    # ([markoaudit/plans/ragdoll.md] инкремент 1) — GravityAffected-чек стал
+    # RigidBody-чеком (0), новый чек SelfIntegrating (+1): без тега physics_step
+    # двигал бы тело вторым разом — та же двойная скорость, что была у снарядов.
+        PASS_REGULAR_EXPRESSION "game_test: 236579 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -139,18 +139,19 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     bindings[1].stride = sizeof(BodyInstance);
     bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-    VkVertexInputAttributeDescription attrs[5]{};
+    VkVertexInputAttributeDescription attrs[6]{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, pos)};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(CubeVertex, normal)};
     attrs[2] = {2, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(BodyInstance, center)};
     attrs[3] = {3, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(BodyInstance, half)};
     attrs[4] = {4, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(BodyInstance, color)};
+    attrs[5] = {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(BodyInstance, rot)};
 
     VkPipelineVertexInputStateCreateInfo vi{};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount = 2;
     vi.pVertexBindingDescriptions = bindings;
-    vi.vertexAttributeDescriptionCount = 5;
+    vi.vertexAttributeDescriptionCount = 6;
     vi.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -294,6 +295,14 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
         dst[count].center = c;
         dst[count].half = view.get<const AABB>(e).half;
         dst[count].color = view.get<const Renderable>(e).color;
+        // Tumbling props carry a RigidBody orientation; everything else draws
+        // axis-aligned (identity quat). Read-only skin over sim state —
+        // sim -> render only, as ever.
+        if (const auto* rb = reg.try_get<RigidBody>(e)) {
+            dst[count].rot = vec4{rb->q.x, rb->q.y, rb->q.z, rb->q.w};
+        } else {
+            dst[count].rot = vec4{0.0f, 0.0f, 0.0f, 1.0f};
+        }
         if (++count >= instanceCapacity_) break;
     }
     lastInstanceCount_ = count;

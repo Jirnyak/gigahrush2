@@ -35,6 +35,43 @@ inline vec3 normalize(vec3 v) {
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
+// Unit quaternion — rigid-body orientation ([markoaudit/plans/ragdoll.md]).
+// w is the scalar part; the default is identity. Euler angles cannot integrate
+// free tumbling (gimbal lock at ±90° pitch), which is why the ragdoll core uses
+// this and the legacy Rotation component stays Euler only for its old callers.
+struct quat { float x = 0.0f, y = 0.0f, z = 0.0f, w = 1.0f; };
+
+inline quat quat_mul(quat a, quat b) {
+    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+inline quat quat_normalize(quat q) {
+    const float n2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (n2 < 1e-12f) return quat{};
+    const float inv = 1.0f / std::sqrt(n2);
+    return {q.x * inv, q.y * inv, q.z * inv, q.w * inv};
+}
+
+// Rotate v by unit quaternion q: v' = v + 2*cross(q.xyz, cross(q.xyz, v) + w*v).
+inline vec3 quat_rotate(quat q, vec3 v) {
+    const vec3 u{q.x, q.y, q.z};
+    const vec3 t = cross(u, v) * 2.0f;
+    return v + t * q.w + cross(u, t);
+}
+
+// Advance orientation by a world-frame angular velocity w (rad/s) over dt:
+// dq/dt = 0.5 * quat(w, 0) * q, one explicit step, then renormalize (the
+// renormalize is what keeps the explicit step stable at sim rates).
+inline quat quat_integrate(quat q, vec3 w, float dt) {
+    const quat dq = quat_mul(quat{w.x, w.y, w.z, 0.0f}, q);
+    const float h = 0.5f * dt;
+    return quat_normalize(
+        {q.x + dq.x * h, q.y + dq.y * h, q.z + dq.z * h, q.w + dq.w * h});
+}
+
 // Column-major 4x4 matrix (same memory layout GLSL expects for a mat4 uniform).
 struct mat4 { float m[16]; };
 

@@ -299,9 +299,15 @@ static void test_console_spawn_ball() {
         break;
     }
     CHECK(ball != entt::null);
-    CHECK(ecs.all_of<GravityAffected>(ball));
+    // Рагдолл-ядро ([markoaudit/plans/ragdoll.md] инкремент 1): шар — тело
+    // импульсного твердотела. Гравитацию интегрирует rigid_body_step, поэтому
+    // GravityAffected НЕ вешается; SelfIntegrating обязан стоять — без него
+    // physics_step двигал бы тело вторым разом (двойная скорость снарядов).
+    CHECK(ecs.all_of<RigidBody>(ball));
+    CHECK(ecs.all_of<SelfIntegrating>(ball));
     CHECK(ecs.all_of<DynamicBodyTag>(ball));
-    // spawn_ball must NOT attach angular components (RagdollRoll props do).
+    // spawn_ball must NOT attach legacy angular components (RigidBody carries
+    // its own quat orientation; Euler Rotation is the old cosmetic path).
     CHECK(!ecs.all_of<AngularVelocity>(ball));
     CHECK(!ecs.all_of<Rotation>(ball));
 

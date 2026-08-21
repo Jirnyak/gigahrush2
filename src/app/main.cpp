@@ -120,6 +120,7 @@
 #include "sim/diffusion.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
+#include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/stain.h"
 #include "world/level_stack.h"
@@ -4111,6 +4112,11 @@ int main(int argc, char** argv) {
                 // Was defined in combat.cpp and never called — dead path until now.
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
+                // Рагдолл-ядро: импульсный твердотел (RigidBody +
+                // SelfIntegrating — physics_step такие тела пропускает).
+                // До impact_damage_step, чтобы его Impact-репорты попали в тот
+                // же универсальный закон урона. [markoaudit/plans/ragdoll.md]
+                rigid_body_step(reg, stack, kSimDt);
                 // The universal impact law, straight after the sweep that wrote
                 // the reports: damage = k*m*v^2/2 over Mass — fall damage and
                 // prop crashes with no per-cause constants ([game/impact.h]).

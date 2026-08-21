@@ -1,5 +1,6 @@
 #include "game/console.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include "game/mob_spawn.h"      // spawn_mob_at
 #include "game/mob_table.h"      // kMobTokens, mob_kind_from_token
 #include "game/npc_pool.h"       // NpcPool cx/cy for hub boarding
+#include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
 #include "world/types.h"         // kCellSize, wrap_macro
 
 
@@ -562,16 +564,19 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
-// --- spawn_ball -------------------------------------------------------------
-// Free body on the live physics/render path: Transform + AABB + Renderable
-// (BodyPass) and Transform + Velocity + GravityAffected (physics_step).
-// AngularVelocity/Rotation are integrated by physics_step when present, but
-// spawn_ball does not attach them — tumbling is for RagdollRoll props.
+// --- spawn_ball [radius_m] ---------------------------------------------------
+// Испытательный стенд рагдолл-ядра ([markoaudit/plans/ragdoll.md] инкремент 1):
+// шар на импульсном твердотеле — RigidBody + SelfIntegrating (physics_step его
+// НЕ двигает; интегратор — rigid_body_step, сфера↔субвоксель, отскок, трение,
+// сон). Бросается вперёд по взгляду, чтобы качение/отскок были видны сразу.
+//
+// Параметры ВЫВЕДЕНЫ из материала (S11), не назначены: шар — стальной
+// (kMatPipeMetal): масса = плотность × (4/3)πr³, инерция сферы = 0.4·m·r².
+// Отскок/трение — грубая шкала от hardness до инкремента 2 (пары материалов
+// по контакту); числа крутятся глазами владельца — метод эпика.
 
 bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
                     char* out, std::size_t cap) {
-    (void)argc;
-    (void)argv;
     if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
         if (out && cap) put(out, cap, "spawn_ball: player or ecs missing");
         return false;
@@ -581,31 +586,64 @@ bool cmd_spawn_ball(ConsoleContext& ctx, int argc, const char* const* argv,
         if (out && cap) put(out, cap, "spawn_ball: player has no transform");
         return false;
     }
+    // Радиус аргументом; дефолт 0.35 м (прежний габарит стенда). Пол — один
+    // субвоксель: шар мельче 0.25/2 проваливается в контактную сетку взгляда.
+    float radius = 0.35f;
+    if (argc >= 2) {
+        radius = std::clamp(static_cast<float>(std::atof(argv[1])),
+                            kVoxelSize * 0.5f, 1.0f);
+    }
     // 2 m ahead of look yaw (Z-up), +0.8 m up so it drops into view clear of
     // the player's own AABB instead of embedding in a wall at the feet.
     vec3 offset{2.0f, 0.0f, 0.8f};
+    vec3 fwd{1.0f, 0.0f, 0.0f};
     if (const auto* cam = ctx.ecs->try_get<CameraTag>(ctx.player)) {
         const float c = std::cos(cam->yaw);
         const float s = std::sin(cam->yaw);
         offset = vec3{c * 2.0f, s * 2.0f, 0.8f};
+        fwd = vec3{c, s, 0.0f};
     }
     const vec3 spawnPos = tr->pos + offset;
 
+    // Вывод из материала: сталь. Масса из плотности и объёма; инерция сферы.
+    const float density = kMatDensity[kMatPipeMetal];              // 7800 кг/м³
+    const float mass =
+        density * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+    const float inertia = 0.4f * mass * radius * radius;
+    const float hardness =
+        static_cast<float>(kMatHardness[kMatPipeMetal]);           // 180
+
+    RigidBody rb;
+    rb.radius = radius;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / inertia;
+    // Твёрже — упруже: шкала на бетон-якорь 256 → e≈0.35 у стали по бетону.
+    rb.restitution = std::clamp(hardness / 512.0f, 0.0f, 0.9f);
+    // Твёрже — глаже: μ падает с твёрдостью, полированное скользит.
+    rb.friction = std::clamp(1.0f - hardness / 1024.0f, 0.2f, 0.9f);
+
     Entity ball = ctx.ecs->create();
     ctx.ecs->emplace<Transform>(ball, Transform{spawnPos, tr->layer});
-    ctx.ecs->emplace<AABB>(ball, AABB{vec3{0.35f, 0.35f, 0.35f}});
-    ctx.ecs->emplace<GravityAffected>(ball);
+    // AABB — рендер-габарит (BodyPass рисует бокс, вписанный в сферу).
+    ctx.ecs->emplace<AABB>(ball, AABB{vec3{radius, radius, radius}});
     // Canonical form — same as combat.cpp projectiles. Bare vec3 is not the
     // house style and has been a footgun when aggregate paren-init drifts.
-    ctx.ecs->emplace<Velocity>(ball, Velocity{vec3{offset.x * 0.5f, offset.y * 0.5f, 0.0f}});
+    // Бросок 6 м/с вперёд: качение и отскок видны с первого спавна.
+    ctx.ecs->emplace<Velocity>(ball, Velocity{fwd * 6.0f});
     ctx.ecs->emplace<Renderable>(ball, Renderable{vec3{0.95f, 0.15f, 0.10f}});
     // BodyPass / physics free-body filter ([jirnyak.md] section 18).
     ctx.ecs->emplace<DynamicBodyTag>(ball);
+    ctx.ecs->emplace<RigidBody>(ball, rb);
+    // Свой интегратор — physics_step обязан пропустить, как снаряды.
+    ctx.ecs->emplace<SelfIntegrating>(ball);
 
     if (out && cap)
         std::snprintf(out, cap,
-                      "spawn_ball: body at (%.1f, %.1f, %.1f) layer %u",
-                      spawnPos.x, spawnPos.y, spawnPos.z,
+                      "spawn_ball: r=%.2f m, %.0f kg at (%.1f, %.1f, %.1f) L%u",
+                      static_cast<double>(radius), static_cast<double>(mass),
+                      static_cast<double>(spawnPos.x),
+                      static_cast<double>(spawnPos.y),
+                      static_cast<double>(spawnPos.z),
                       static_cast<unsigned>(tr->layer));
     return true;
 }

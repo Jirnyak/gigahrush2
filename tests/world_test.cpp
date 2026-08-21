@@ -18,6 +18,7 @@
 #include "sim/drag.h"
 #include "sim/fluid.h"
 #include "sim/physics.h"
+#include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/field.h"
 #include "world/level_stack.h"
@@ -237,6 +238,69 @@ static void test_physics_lands_on_floor() {
     CHECK(reg.get<GravityAffected>(e).grounded);
     // Did not fall through.
     CHECK(!aabb_overlaps_solid(w, out.pos, vec3{0.2f, 0.2f, 0.4f}));
+}
+
+// Рагдолл-ядро ([markoaudit/plans/ragdoll.md] инкремент 1): шар на импульсном
+// твердотеле брошен вбок над плитой — падает, отскакивает (restitution),
+// РАСКРУЧИВАЕТСЯ трением через точку контакта (качение возникает из физики,
+// не из косметики), оседает на своём радиусе и засыпает; спящего будит только
+// внешняя запись Velocity.
+static void test_rigid_ball_settles_and_sleeps() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    // 1.15 м над плитой (верх z-клетки 4 = 10 м): удар ~4.8 м/с, пара
+    // отскоков — и в качение; высокий сброс держал бы фазу отскоков дольше
+    // самого теста.
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 5.75f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    // Вбок медленно (1 м/с): качение тормозит только трение качения, и его
+    // эффективное замедление с поправкой на инерцию сферы Crr·g/(1+2/5) ≈
+    // 0.21 м/с² — метр в секунду выкатывается почти пять секунд.
+    reg.emplace<Velocity>(e, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+
+    // Те же выводы, что у spawn_ball: сталь, сфера.
+    RigidBody rb;
+    rb.radius = 0.35f;
+    const float mass = 7800.0f * (4.0f / 3.0f) * 3.14159265f *
+                       rb.radius * rb.radius * rb.radius;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / (0.4f * mass * rb.radius * rb.radius);
+    rb.restitution = 0.35f;
+    rb.friction = 0.6f;
+    reg.emplace<RigidBody>(e, rb);
+
+    bool spun = false;
+    for (int i = 0; i < 10 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        const auto& b = reg.get<RigidBody>(e);
+        if (dot(b.w, b.w) > 0.01f) spun = true;
+    }
+
+    const auto& out = reg.get<Transform>(e);
+    const auto& b = reg.get<RigidBody>(e);
+    const float floorTop = 5.0f * kCellSize;
+    CHECK(spun);     // трение Кулона раскрутило качение
+    CHECK(b.asleep); // тихое тело с контактом заснуло
+    // Лежит на своём радиусе над плитой (позиционное выталкивание, не тонет).
+    CHECK(out.pos.z >= floorTop + rb.radius - 0.02f);
+    CHECK(out.pos.z <= floorTop + rb.radius + 0.05f);
+    // Кватернион остался единичным — интегратор не разъехался (NaN-страховка).
+    const float qn =
+        b.q.x * b.q.x + b.q.y * b.q.y + b.q.z * b.q.z + b.q.w * b.q.w;
+    CHECK(std::fabs(qn - 1.0f) < 1e-3f);
+    // Пробуждение: внешняя запись скорости (взрыв/толчок пишут Velocity).
+    reg.get<Velocity>(e).v = vec3{2.0f, 0.0f, 0.0f};
+    rigid_body_step(reg, stack, kSimDt);
+    CHECK(!reg.get<RigidBody>(e).asleep);
 }
 
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
@@ -902,6 +966,7 @@ int main() {
     test_level_stack();
     test_aabb_overlap();
     test_physics_lands_on_floor();
+    test_rigid_ball_settles_and_sleeps();
     test_air_drag_terminal_velocity();
     test_fluid_conserves_mass();
     test_diffusion();

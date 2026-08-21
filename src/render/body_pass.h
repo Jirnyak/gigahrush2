@@ -31,11 +31,15 @@ namespace giga::gpu {
 struct VulkanDevice;
 
 // Matches the per-instance attributes in body.vert: a box centred on `center`
-// spanning +/- `half` on each axis, tinted `color`.
+// spanning +/- `half` on each axis, tinted `color`, rotated by unit quaternion
+// `rot` (identity for agents/AABB bodies; a RigidBody's orientation for
+// tumbling props — without it rolling is indistinguishable from sliding,
+// [markoaudit/plans/ragdoll.md] increment 1).
 struct BodyInstance {
     vec3 center;
     vec3 half;
     vec3 color;
+    vec4 rot; // quat xyzw, identity = (0,0,0,1)
 };
 
 class BodyPass {
