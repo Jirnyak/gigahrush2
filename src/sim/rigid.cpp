@@ -236,6 +236,17 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
         if (ra.asleep && (!rbB || rbB->asleep)) return;
 
+        // Несомое тело КИНЕМАТИЧНО в линке: обратные масса и инерция ноль —
+        // импульс его не двигает, но тянет вторую сторону. Так труп волочится
+        // за тащимым корнем, а не растаскивает носителя.
+        const bool aKinematic = reg.all_of<CarriedBy>(jl.a);
+        const bool bKinematic = rbB && reg.all_of<CarriedBy>(jl.b);
+        if (aKinematic && (bKinematic || !rbB)) return; // двигать нечего
+        const float imA = aKinematic ? 0.0f : ra.invMass;
+        const float iiA = aKinematic ? 0.0f : ra.invInertia;
+        const float imB = !rbB ? 0.0f : (bKinematic ? 0.0f : rbB->invMass);
+        const float iiB = !rbB ? 0.0f : (bKinematic ? 0.0f : rbB->invInertia);
+
         const vec3 rcA = quat_rotate(ra.q, jl.anchorA);
         const vec3 pa = ta.pos + rcA;
         vec3 rcB{0.0f, 0.0f, 0.0f};
@@ -259,20 +270,21 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             rbB ? vb->v + cross(rbB->w, rcB) : vec3{0.0f, 0.0f, 0.0f};
         const float vRel = dot(vpB - vpA, dir); // >0 — растягивается
         const vec3 rxA = cross(rcA, dir);
-        const float kA = ra.invMass + ra.invInertia * dot(rxA, rxA);
+        const float kA = imA + iiA * dot(rxA, rxA);
         float kB = 0.0f;
         if (rbB) {
             const vec3 rxB = cross(rcB, dir);
-            kB = rbB->invMass + rbB->invInertia * dot(rxB, rxB);
+            kB = imB + iiB * dot(rxB, rxB);
         }
+        if (kA + kB < 1e-9f) return; // обе стороны кинематичны/мировые
         // Импульс с Baumgarte-подтяжкой позиционной ошибки: β·C/h.
         const float j = -(vRel + kJointBias * C / h) / (kA + kB);
         // j<0 при растяжении: B тянется к A, A — к B.
-        va.v += dir * (-j * ra.invMass);
-        ra.w += cross(rcA, dir * (-j)) * ra.invInertia;
+        va.v += dir * (-j * imA);
+        ra.w += cross(rcA, dir * (-j)) * iiA;
         if (rbB) {
-            vb->v += dir * (j * rbB->invMass);
-            rbB->w += cross(rcB, dir * j) * rbB->invInertia;
+            vb->v += dir * (j * imB);
+            rbB->w += cross(rcB, dir * j) * iiB;
         }
     };
 
@@ -466,6 +478,39 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         if (!rb.asleep) ++awakeCount;
     }
 
+    // ПЕРЕНОСКА: кинематический follow раз на тик (носитель интегрируется
+    // physics_step'ом раз на тик — чаще нечего догонять). До корзин: несомое
+    // не порождает пар и не спит.
+    {
+        static thread_local std::vector<Entity> orphaned;
+        orphaned.clear();
+        auto carriedView = reg.view<RigidBody, Transform, Velocity, CarriedBy>();
+        for (auto e : carriedView) {
+            const auto& cb = carriedView.get<CarriedBy>(e);
+            if (cb.carrier == entt::null || !reg.valid(cb.carrier) ||
+                !reg.all_of<Transform>(cb.carrier)) {
+                orphaned.push_back(e); // носитель умер — тело падает
+                continue;
+            }
+            auto& tr = carriedView.get<Transform>(e);
+            auto& rb = carriedView.get<RigidBody>(e);
+            auto& vel = carriedView.get<Velocity>(e);
+            const auto& ctr = reg.get<Transform>(cb.carrier);
+            tr.pos = ctr.pos + cb.offset;
+            tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
+            tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
+            tr.pos.z = wrapf(tr.pos.z, kWorldExtent);
+            tr.layer = ctr.layer;
+            vel.v = reg.all_of<Velocity>(cb.carrier)
+                        ? reg.get<Velocity>(cb.carrier).v
+                        : vec3{0.0f, 0.0f, 0.0f};
+            rb.w = vec3{0.0f, 0.0f, 0.0f}; // в руках не крутится
+            rb.asleep = false; // кинематика жива для линков
+            rb.sleepTicks = 0;
+        }
+        for (Entity e : orphaned) reg.remove<CarriedBy>(e);
+    }
+
     // Агенты для фазы проп↔агент. Бодрые пропы обязаны видеть ВСЕХ агентов
     // (летящий шар против стоящего игрока); спящий мир — только движущихся
     // (стоящий агент спящему пропу ничего не сделает, а ходящий — пинает).
@@ -496,6 +541,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     binBodies.clear();
     binRuns.clear();
     for (auto e : view) {
+        if (reg.all_of<CarriedBy>(e)) continue; // несомое пар не порождает
         const auto& tr = view.get<Transform>(e);
         const int cx = wrap_macro(floor_div(tr.pos.x, kCellSize));
         const int cy = wrap_macro(floor_div(tr.pos.y, kCellSize));
@@ -667,6 +713,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         for (auto e : view) {
             auto& rb = view.get<RigidBody>(e);
             if (rb.asleep) continue;
+            if (reg.all_of<CarriedBy>(e)) continue; // кинематика носителя
             auto& tr = view.get<Transform>(e);
             auto& vel = view.get<Velocity>(e);
             if (!stack.valid(tr.layer)) continue;

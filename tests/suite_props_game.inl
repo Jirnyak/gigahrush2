@@ -605,6 +605,62 @@ static void test_humanoid_segments_fall_and_cleanup() {
     CHECK(left == 0u);
 }
 
+// Инкремент 9 рагдолл-эпика: ПЕРЕНОСКА. Несомое тело не падает, следует за
+// носителем и наследует его скорость; бросок возвращает в динамику и добавляет
+// скорость поверх. Путь один на всех носителей (S7) — тест гоняет обычную
+// сущность-носителя, не «игрока».
+static void test_carry_follows_and_throw_inherits() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    Entity carrier = reg.create();
+    reg.emplace<Transform>(
+        carrier, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                                floorTop + 0.9f},
+                           g});
+    reg.emplace<Velocity>(carrier, Velocity{vec3{2.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(carrier, AABB{vec3{0.4f, 0.4f, 0.9f}});
+
+    Entity ball = reg.create();
+    const float r = 0.25f;
+    reg.emplace<Transform>(
+        ball, Transform{vec3{10.5f * kCellSize + 1.0f, 10.5f * kCellSize,
+                             floorTop + r},
+                        g});
+    reg.emplace<Velocity>(ball);
+    rigid_attach_sphere(reg, ball, r, 20.0f, 0.3f, 0.6f);
+
+    const vec3 fwd{1.0f, 0.0f, 0.0f};
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f) == ball);
+    CHECK(reg.all_of<CarriedBy>(ball));
+
+    // Носитель идёт вперёд, тело обязано ехать с ним и не падать.
+    for (int i = 0; i < kSimHz; ++i) {
+        reg.get<Transform>(carrier).pos.x += 2.0f * kSimDt;
+        rigid_body_step(reg, stack, kSimDt);
+    }
+    const vec3 cpos = reg.get<Transform>(carrier).pos;
+    const vec3 bpos = reg.get<Transform>(ball).pos;
+    CHECK(bpos.x > cpos.x);                 // держится перед носителем
+    CHECK(std::fabs(bpos.z - (cpos.z + 0.2f)) < 0.01f); // не упало
+    CHECK(length(wrap_delta3(bpos, cpos, kWorldExtent)) < 1.2f);
+
+    // Бросок: скорость носителя (2 м/с) + бросок (6) — тело летит вперёд.
+    CHECK(game::drop_carried(reg, carrier, fwd, 6.0f) == 1u);
+    CHECK(!reg.all_of<CarriedBy>(ball));
+    CHECK(reg.get<Velocity>(ball).v.x > 7.0f);
+    const float thrownX = reg.get<Transform>(ball).pos.x;
+    for (int i = 0; i < kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    CHECK(reg.get<Transform>(ball).pos.x > thrownX + 1.0f); // улетело
+    CHECK(reg.get<Transform>(ball).pos.z < floorTop + 1.0f); // и упало на пол
+}
+
 // Инкремент 6 рагдолл-эпика: сорванный проп — тело ЯДРА (RigidBody +
 // SelfIntegrating, форма и масса выведены из строки пропа), а не косметика
 // AngularVelocity; prop_ragdoll_step умер.
@@ -1249,6 +1305,7 @@ void test_props_game_all() {
     test_anchor_validate_skips_solid_support();
     test_detached_prop_is_rigid_body();
     test_humanoid_segments_fall_and_cleanup();
+    test_carry_follows_and_throw_inherits();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();
     test_furniture_is_not_a_terminal();

@@ -911,6 +911,69 @@ std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
     return made;
 }
 
+Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
+                          float reachM) {
+    if (!reg.valid(carrier) || !reg.all_of<Transform>(carrier))
+        return entt::null;
+    const Transform& ctr = reg.get<Transform>(carrier);
+    const float reachSq = reachM * reachM;
+
+    Entity best = entt::null;
+    float bestD2 = reachSq;
+    auto view = reg.view<RigidBody, Transform>();
+    for (auto e : view) {
+        if (e == carrier) continue;
+        if (reg.all_of<CarriedBy>(e)) continue; // уже в чьих-то руках
+        // Сегмент чужого тела не берётся сам — берётся его КОРЕНЬ, иначе
+        // игрок таскал бы труп за голову, а таз оставался на полу.
+        if (reg.all_of<BodySegment>(e)) continue;
+        const Transform& tr = view.get<Transform>(e);
+        if (tr.layer != ctr.layer) continue;
+        const float d2 = wrap_dist2(ctr.pos, tr.pos, kWorldExtent);
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            best = e;
+        }
+    }
+    if (best == entt::null) return entt::null;
+
+    // Держим перед собой: вперёд на радиус тела плюс полшага, чуть выше
+    // центра носителя — вывод из габаритов, не подобранное число.
+    const float bodyR = reg.get<RigidBody>(best).radius;
+    const float carrierR = reg.all_of<AABB>(carrier)
+                               ? std::max(reg.get<AABB>(carrier).half.x,
+                                          reg.get<AABB>(carrier).half.y)
+                               : 0.4f;
+    const vec3 fwd = normalize(forward);
+    CarriedBy cb;
+    cb.carrier = carrier;
+    cb.offset = fwd * (carrierR + bodyR + 0.1f) + vec3{0.0f, 0.0f, 0.2f};
+    reg.emplace_or_replace<CarriedBy>(best, cb);
+    return best;
+}
+
+std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
+                           float throwSpeed) {
+    static thread_local std::vector<Entity> dropped;
+    dropped.clear();
+    auto view = reg.view<CarriedBy>();
+    for (auto e : view) {
+        if (view.get<CarriedBy>(e).carrier == carrier) dropped.push_back(e);
+    }
+    const vec3 fwd = normalize(forward);
+    for (Entity e : dropped) {
+        reg.remove<CarriedBy>(e);
+        // Скорость носителя уже в теле (кинематический follow её зеркалит) —
+        // бросок добавляется поверх, поэтому на бегу летит дальше.
+        if (auto* vel = reg.try_get<Velocity>(e)) vel->v += fwd * throwSpeed;
+        if (auto* rb = reg.try_get<RigidBody>(e)) {
+            rb->asleep = false;
+            rb->sleepTicks = 0;
+        }
+    }
+    return static_cast<std::uint32_t>(dropped.size());
+}
+
 void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots) {
     if (roots.empty()) return;
     static thread_local std::vector<Entity> doomed;

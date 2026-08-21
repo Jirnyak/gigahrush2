@@ -1186,7 +1186,10 @@ if(GIGA_BUILD_TESTS)
     # 236580 -> 236586 (+6) on 2026-08-21: труп-гуманоид (ragdoll.md инкр. 8)
     # — test_humanoid_segments_fall_and_cleanup: 3 сегмента + 3 штанги, тело
     # складывается на пол связным, уборка забирает всё с корнем.
-        PASS_REGULAR_EXPRESSION "game_test: 236586 checks, 0 failures")
+    # 236586 -> 236596 (+10) on 2026-08-21: переноска (ragdoll.md инкр. 9) —
+    # test_carry_follows_and_throw_inherits: несомое не падает и едет с
+    # носителем, бросок наследует его скорость и возвращает в динамику.
+        PASS_REGULAR_EXPRESSION "game_test: 236596 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

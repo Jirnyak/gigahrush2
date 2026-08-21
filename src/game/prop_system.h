@@ -236,6 +236,20 @@ std::uint32_t spawn_humanoid_segments(Registry& reg, Entity root,
 // Убрать сегменты и линки, чьи корни в списке (вызвать ДО destroy корней).
 void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);
 
+// ── Переноска (инкремент 9) ─────────────────────────────────────────────────
+// Один путь на всех носителей (S7: игрок = NPC): взять ближайшее тело в руки
+// (CarriedBy — кинематика в ядре) и бросить с наследованием скорости носителя.
+// `forward` — направление взгляда носителя (game знает камеру, ядро — нет).
+// carry_nearest_body возвращает взятое тело или entt::null.
+Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
+                          float reachM);
+
+// Бросить всё, что несёт носитель: снять CarriedBy и добавить бросок
+// `throwSpeed` вдоль `forward` поверх унаследованной скорости носителя.
+// Возвращает число брошенных тел.
+std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
+                           float throwSpeed);
+
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus);
 

@@ -875,6 +875,47 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// --- carry [throw_speed] -----------------------------------------------------
+// Переноска ([markoaudit/plans/ragdoll.md] инкремент 9): тоггл — пусты руки,
+// берём ближайшее тело; несём — бросаем вперёд. Путь ОДИН на всех носителей
+// (S7): NPC и монстры позовут те же две функции, когда AI дорастёт.
+// Скорость броска по умолчанию 6 м/с — та же, что у стендового спавна.
+
+bool cmd_carry(ConsoleContext& ctx, int argc, const char* const* argv,
+               char* out, std::size_t cap) {
+    if (!ctx.ecs || ctx.player == entt::null || !ctx.ecs->valid(ctx.player)) {
+        if (out && cap) put(out, cap, "carry: player or ecs missing");
+        return false;
+    }
+    float throwSpeed = 6.0f;
+    if (argc >= 2)
+        throwSpeed = std::clamp(static_cast<float>(std::atof(argv[1])),
+                                0.0f, 30.0f);
+    vec3 fwd{1.0f, 0.0f, 0.0f};
+    if (const auto* cam = ctx.ecs->try_get<CameraTag>(ctx.player)) {
+        // Бросок по взгляду, включая наклон: вверх кинуть тоже надо.
+        const float cp = std::cos(cam->pitch);
+        fwd = vec3{std::cos(cam->yaw) * cp, std::sin(cam->yaw) * cp,
+                   std::sin(cam->pitch)};
+    }
+    const std::uint32_t thrown =
+        drop_carried(*ctx.ecs, ctx.player, fwd, throwSpeed);
+    if (thrown > 0) {
+        if (out && cap)
+            std::snprintf(out, cap, "carry: threw %u at %.1f m/s", thrown,
+                          static_cast<double>(throwSpeed));
+        return true;
+    }
+    // Дотянуться на 2.5 м — та же дистанция, что у обычной интеракции.
+    const Entity taken = carry_nearest_body(*ctx.ecs, ctx.player, fwd, 2.5f);
+    if (taken == entt::null) {
+        if (out && cap) put(out, cap, "carry: nothing within reach");
+        return false;
+    }
+    if (out && cap) put(out, cap, "carry: picked up (carry again to toss it)");
+    return true;
+}
+
 // --- cut_link ----------------------------------------------------------------
 // Разрубание связи — механика фундамента §8: уничтожить ближайшую
 // JointLink-сущность в пределах досягаемости. Обе стороны будятся — обрубок
@@ -1139,6 +1180,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"cut_link", "cut_link",
                    "sever the nearest joint link within reach",
                    cmd_cut_link, nullptr});
+    ok &= con.add({"carry", "carry [toss_speed]",
+                   "pick up the nearest body; carry again to toss it",
+                   cmd_carry, nullptr});
     ok &= con.add({"give", "give <item> [count]",
                    "spawn an item from data/items.csv into the pack",
                    cmd_give, nullptr});
