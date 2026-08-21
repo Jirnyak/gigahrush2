@@ -533,39 +533,29 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             // Pure NPC deaths carry NpcRef only — MobRef is optional.
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
-            if (reg.all_of<Velocity>(e)) reg.remove<Velocity>(e);
             reg.remove<Dead>(e);
 
-
-            if (auto* aabb = reg.try_get<AABB>(e)) {
-                const float h = aabb->half.y;
-                aabb->half.y = 0.18f;                     // Flatten on ground
-                aabb->half.z = std::max(h * 0.75f, 0.55f); // Extend along floor
-            }
-            if (auto* tr = reg.try_get<Transform>(e)) {
-                tr->pos.y -= 0.45f; // Place flush on floor surface
-            }
+            // C (S3/S14.1, 2026-08-21): труп — RagdollRoll-ПРОП с контейнером.
+            // Ручная косметика умерла: плющение AABB и сдвиг pos.y −0.45
+            // (Y-привилегия при Z-мире!) изображали позу — теперь тело честно
+            // валится и катается физикой пропов (тот же путь, что мяч и
+            // ведро). Затемнение тинта остаётся: это состояние материи, не
+            // поза. Velocity НЕ снимается — рагдоллу нужна скорость смерти.
+            if (!reg.all_of<Velocity>(e)) reg.emplace<Velocity>(e);
+            reg.emplace_or_replace<PropFallMode>(e, PropFallMode::RagdollRoll);
+            reg.emplace_or_replace<DynamicBodyTag>(e);
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body
                 rend->color = vec3{rend->color.x * 0.35f, rend->color.y * 0.35f, rend->color.z * 0.40f};
             }
 
-            // CORP1: move staged loot (CorpseLootPending) into the persistent
-            // Corpse. loot_dead_mobs rolls pure data in the Dead window; this is
-            // the only place Corpse is born (defect 2). No floor Pickup path.
+            // Лут уже лежит в Container-компоненте (Dead-окно, loot.cpp) —
+            // канонический держатель один, перекладка pending→corpse умерла.
             Corpse corpse;
             corpse.mobKind = static_cast<std::uint8_t>(kind);
             corpse.deathTick = static_cast<std::uint32_t>(tick);
-            if (const CorpseLootPending* pend = reg.try_get<CorpseLootPending>(e)) {
-                const std::uint8_t n =
-                    pend->slotCount < static_cast<std::uint8_t>(kMaxCorpseSlots)
-                        ? pend->slotCount
-                        : static_cast<std::uint8_t>(kMaxCorpseSlots);
-                for (std::uint8_t i = 0; i < n; ++i)
-                    corpse.lootSlots[i] = pend->slots[i];
-                corpse.slotCount = n;
-                reg.remove<CorpseLootPending>(e);
-            }
+            if (!reg.all_of<Container>(e)) reg.emplace<Container>(e);
+            Container& lootBox = reg.get<Container>(e);
 
             // jirnyak §19: dump the snapshotted 8×8 bag into Corpse (8 slots),
             // then same-cell Containers (128³). CORP1 forbids a floor Pickup path
@@ -581,17 +571,12 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 const int by = wrap_macro(static_cast<int>(std::floor(bodyPos.y / cs)));
                 const int bz = wrap_macro(static_cast<int>(std::floor(bodyPos.z / cs)));
 
-                auto push_corpse = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                // Спилл сумки — ЕДИНСТВЕННЫМ примитивом (ещё одна ручная
+                // реализация «добавить» умерла с B3/C).
+                auto push_corpse = [&](ItemId id, std::uint16_t count,
+                                       std::uint8_t cond) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0) return 0;
-                    if (corpse.slotCount >= static_cast<std::uint8_t>(kMaxCorpseSlots))
-                        return count;
-                    ItemSlot& ls = corpse.lootSlots[corpse.slotCount++];
-                    ls.item = id;
-                    // Addition law ([inventory.h]): the u16 cell holds any legal
-                    // shrapnel count; clamp to the item's own stack cap.
-                    const std::uint16_t cap = item_def(id).stackMax;
-                    ls.count = cap && count > cap ? cap : count;
-                    return 0;
+                    return inventory_give(lootBox.inv, id, count, cond);
                 };
                 auto push_cell_containers = [&](ItemId id, std::uint16_t count,
                                                 std::uint8_t cond) -> std::uint16_t {
@@ -617,7 +602,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
                 for (const ItemSlot& s : spilledInv.slots) {
                     if (s.item == kInvalidItem || s.count == 0) continue;
-                    std::uint16_t left = push_corpse(s.item, s.count);
+                    std::uint16_t left = push_corpse(s.item, s.count, s.condition);
                     if (left > 0)
                         (void)push_cell_containers(s.item, left, s.condition);
                 }

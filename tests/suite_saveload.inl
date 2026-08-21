@@ -213,10 +213,9 @@ SaveState busy_run() {
         cr.colour = vec3{0.2f, 0.1f, 0.1f};
         cr.half = vec3{0.4f, 0.18f, 0.6f};
         cr.mobKind = 7;
-        cr.slotCount = 2;
         cr.searched = 0;
-        cr.slots[0] = ItemSlot{40, 2, 200};
-        cr.slots[1] = ItemSlot{kItemRuble, 650, 255};
+        cr.inv.slots[0] = ItemSlot{40, 2, 200};
+        cr.inv.slots[1] = ItemSlot{kItemRuble, 650, 255};
         st.corpses.push_back(cr);
     }
 
@@ -384,12 +383,11 @@ void same_run(const SaveState& a, const SaveState& b) {
         CHECK(x.colour.x == y.colour.x && x.colour.y == y.colour.y &&
               x.colour.z == y.colour.z);
         CHECK(x.half.x == y.half.x && x.half.y == y.half.y && x.half.z == y.half.z);
-        CHECK(x.mobKind == y.mobKind && x.slotCount == y.slotCount &&
-              x.searched == y.searched);
-        for (std::size_t j = 0; j < kMaxCorpseSlots; ++j) {
-            CHECK(x.slots[j].item == y.slots[j].item);
-            CHECK(x.slots[j].count == y.slots[j].count);
-            CHECK(x.slots[j].condition == y.slots[j].condition);
+        CHECK(x.mobKind == y.mobKind && x.searched == y.searched);
+        for (int j = 0; j < kInvSlots; ++j) {
+            CHECK(x.inv.slots[j].item == y.inv.slots[j].item);
+            CHECK(x.inv.slots[j].count == y.inv.slots[j].count);
+            CHECK(x.inv.slots[j].condition == y.inv.slots[j].condition);
         }
     }
 
@@ -581,7 +579,7 @@ void round_trip() {
     CHECK(dst.containers[0].c.inv.slots[0].count == 3 && dst.containers[0].c.inv.slots[0].condition == 128);
     CHECK(dst.containers[0].c.inv.slots[3].item == kItemRuble &&
           dst.containers[0].c.inv.slots[3].count == 12345);
-    CHECK(dst.corpses[0].slots[1].count == 650);
+    CHECK(dst.corpses[0].inv.slots[1].count == 650);
 }
 
 // Version 6: the macro world is a flat table, so it saves flat. A small society
@@ -1035,10 +1033,11 @@ void floor_records_survive_a_restart() {
         reg.emplace<Renderable>(ce, Renderable{vec3{0.2f, 0.1f, 0.1f}});
         Corpse c;
         c.mobKind = 7;
-        c.slotCount = 2;
-        c.lootSlots[0] = ItemSlot{40, 2, 200};
-        c.lootSlots[1] = ItemSlot{kItemRuble, 650, 255};
         reg.emplace<Corpse>(ce, c);
+        Container cb{};
+        cb.inv.slots[0] = ItemSlot{40, 2, 200};
+        cb.inv.slots[1] = ItemSlot{kItemRuble, 650, 255};
+        reg.emplace<Container>(ce, cb);
     }
 
     // Save. Only the resident floor is scannable, so `refresh_floor_records` is
@@ -1098,6 +1097,7 @@ void floor_records_survive_a_restart() {
     // crates, so the comparison is record-driven, not count-driven.)
     std::size_t openNow = 0, shutNow = 0, matched = 0, deposits = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
+        if (reg.all_of<Corpse>(e)) continue; // трупный лут едет CorpseRecord (C)
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         const Container& c = reg.get<const Container>(e);
@@ -1135,9 +1135,10 @@ void floor_records_survive_a_restart() {
             const Corpse& c = reg.get<const Corpse>(e);
             CHECK(c.mobKind == 7);
             CHECK(!c.searched);
-            CHECK(c.lootSlots[0].item == 40 && c.lootSlots[0].count == 2 &&
-                  c.lootSlots[0].condition == 200);
-            CHECK(c.lootSlots[1].item == kItemRuble && c.lootSlots[1].count == 650);
+            const Inventory& ci = reg.get<const Container>(e).inv;
+            CHECK(ci.slots[0].item == 40 && ci.slots[0].count == 2 &&
+                  ci.slots[0].condition == 200);
+            CHECK(ci.slots[1].item == kItemRuble && ci.slots[1].count == 650);
             CHECK(t.pos.x == corpsePos.x && t.pos.y == corpsePos.y &&
                   t.pos.z == corpsePos.z);
         }

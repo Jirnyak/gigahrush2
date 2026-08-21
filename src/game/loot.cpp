@@ -1,5 +1,6 @@
 #include "core/rng.h"
 #include "game/loot.h"
+#include "game/container.h"
 
 #include <vector>
 
@@ -314,9 +315,11 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
 
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed) {
-    // CORP1: stage loot onto the Dead entity as POD CorpseLootPending.
-    // finalize_deaths moves it into Corpse.lootSlots. No floor Pickup spawn —
-    // that was the double-drop defect (empty corpse + gold boxes on the floor).
+    // CORP1 + C (2026-08-21): stage loot straight into the CANONICAL holder —
+    // a Container component on the Dead entity (finalize keeps sole right to
+    // birth Corpse identity/physics). CorpseLootPending — четвёртая копия
+    // носителя, жившая один тик, — умерла. No floor Pickup spawn — that was
+    // the double-drop defect (empty corpse + gold boxes on the floor).
     //
     // Snapshot entity ids first: emplace_or_replace can reallocate component
     // storage and invalidate a live view iterator.
@@ -324,7 +327,7 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
     for (auto e : reg.view<const Dead, const MobRef, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         // Already staged this death window — do not re-roll.
-        if (reg.all_of<CorpseLootPending>(e)) continue;
+        if (reg.all_of<Container>(e)) continue;
         dead.push_back(e);
     }
 
@@ -336,12 +339,11 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
         const std::uint32_t key =
             static_cast<std::uint32_t>(entt::to_integral(e));
 
-        CorpseLootPending pending{};
-        pending.slotCount = static_cast<std::uint8_t>(roll_mob_loot_slots(
-            m.kind, tier, floorNumber, seed ^ key, pending.slots,
+        Container box{};
+        staged += static_cast<std::uint32_t>(roll_mob_loot_slots(
+            m.kind, tier, floorNumber, seed ^ key, box.inv.slots,
             static_cast<std::uint8_t>(kMaxCorpseSlots)));
-        staged += pending.slotCount;
-        reg.emplace_or_replace<CorpseLootPending>(e, pending);
+        reg.emplace_or_replace<Container>(e, box);
     }
     return staged;
 }
@@ -504,68 +506,33 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     // the inventory is full and nothing moves (they looked; loot stays for later).
     corpse.searched = true;
 
+    // C: сток трупа — канонический Container; ручной дрейн (ещё одна копия
+    // закона добавления, И терявшая condition — дюп-ремонт обыском) умер в
+    // пользу единственного примитива inventory_give.
     Inventory& inv = pool.inventory(selfId);
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        ItemSlot& slotItem = corpse.lootSlots[i];
-        if (!item_valid(slotItem.item) || slotItem.count == 0) continue;
-        const ItemDef& def = item_def(slotItem.item);
-
-        // Drain this corpse slot across as many inventory slots as needed.
-        // Remainder stays on the corpse when the pack is full or a stack caps —
-        // never clamp-and-discard (that was silent item loss).
-        while (slotItem.count > 0 && item_valid(slotItem.item)) {
-            int targetSlot = -1;
-            if (def.stackMax > 1) {
-                for (int s = 0; s < kInvSlots; ++s) {
-                    if (inv.slots[s].item == slotItem.item &&
-                        inv.slots[s].count < def.stackMax) {
-                        targetSlot = s;
-                        break;
-                    }
-                }
-            }
-            if (targetSlot < 0) targetSlot = inv.first_free();
-            if (targetSlot < 0) break;  // inventory full: leave remainder on corpse
-
-            std::uint16_t moved = 0;
-            if (inv.slots[targetSlot].item == slotItem.item) {
-                const std::uint16_t space = static_cast<std::uint16_t>(
-                    def.stackMax > inv.slots[targetSlot].count
-                        ? def.stackMax - inv.slots[targetSlot].count
-                        : 0);
-                if (space == 0) break;
-                moved = slotItem.count < space ? slotItem.count : space;
-                inv.slots[targetSlot].count = static_cast<std::uint16_t>(
-                    inv.slots[targetSlot].count + moved);
-            } else {
-                // Fresh slot: take up to stackMax, leave the rest on the corpse.
-                moved = slotItem.count;
-                if (def.stackMax && moved > def.stackMax)
-                    moved = def.stackMax;
-                inv.slots[targetSlot].item = slotItem.item;
-                inv.slots[targetSlot].count = moved;
-            }
-
-            slotItem.count = static_cast<std::uint16_t>(slotItem.count - moved);
-            res.roublesGained += def.value * static_cast<std::int32_t>(moved);
+    Container* box = reg.try_get<Container>(targetCorpse);
+    if (box) {
+        for (int i = 0; i < kInvSlots; ++i) {
+            ItemSlot& sl = box->inv.slots[i];
+            if (!item_valid(sl.item) || sl.count == 0) continue;
+            const std::uint16_t unplaced =
+                inventory_give(inv, sl.item, sl.count, sl.condition);
+            const std::uint16_t moved =
+                static_cast<std::uint16_t>(sl.count - unplaced);
+            if (moved == 0) break; // inventory full: remainder stays on corpse
+            res.roublesGained +=
+                item_def(sl.item).value * static_cast<std::int32_t>(moved);
             res.itemsTaken++;
             bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId,
-                        slotItem.item, tick);
-            if (slotItem.count == 0) slotItem = {};
+                        sl.item, tick);
+            sl.count = unplaced;
+            if (sl.count == 0) sl = ItemSlot{};
         }
     }
 
-    // Keep slotCount honest: count filled slots after the drain pass.
-    std::uint8_t filled = 0;
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
-            ++filled;
-    }
-    corpse.slotCount = filled;
-
     // [jirnyak.md] §18: empty searched corpse drops out of the interact set so
     // find_nearest_interactable / HUD stop advertising LOOT CORPSE.
-    if (corpse.searched && corpse.slotCount == 0) {
+    if (corpse.searched && (!box || box->inv.empty())) {
         if (Interactable* ia = reg.try_get<Interactable>(targetCorpse))
             ia->active = false;
     }

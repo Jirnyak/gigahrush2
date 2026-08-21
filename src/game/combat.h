@@ -177,23 +177,18 @@ inline constexpr std::size_t kMaxCorpseSlots = 8;
 // Staged mob loot on a Dead entity, filled by loot_dead_mobs in the Dead window
 // and consumed by finalize_deaths when the entity becomes a persistent Corpse.
 //
-// **Why a separate component and not Corpse early:** finalize is the only place
-// that may emplace Corpse (defect 2 — one death finalizer). Staging as data on
-// the still-Dead entity keeps the systems pure: loot writes data, finalize
-// moves data, interact reads data. No floor Pickup double-drop.
-struct CorpseLootPending {
-    ItemSlot slots[kMaxCorpseSlots] = {};
-    std::uint8_t slotCount = 0;
-};
-static_assert(std::is_trivially_copyable_v<CorpseLootPending>,
-              "CorpseLootPending must stay a pure POD struct");
-
-// Persistent corpse lying on the ground after death, available for tactical looting (Pure POD).
+// C (S14.1/S3, 2026-08-21): лут трупа живёт в КАНОНИЧЕСКОМ держателе —
+// Container-компоненте на той же сущности (kind=0). CorpseLootPending
+// (четвёртая копия носителя, жила один тик) умерла: Dead-окно кладёт
+// Container сразу — лут пишет данные, finalize по-прежнему единственный,
+// кто рождает Corpse. kMaxCorpseSlots — кап РОЛЛА (сколько накатывается),
+// не ёмкость: ёмкость каноническая, 64.
+//
+// Persistent corpse identity after death (Pure POD). Труп — RagdollRoll-проп
+// с контейнером (S14.1): физику даёт PropFallMode, лут — Container.
 struct Corpse {
-    ItemSlot lootSlots[kMaxCorpseSlots] = {};
     std::uint32_t deathTick = 0;
     std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
-    std::uint8_t slotCount = 0;
     bool searched = false;
 };
 static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");

@@ -4,14 +4,14 @@
 // which main has had for a while (`loot_dead_mobs`, wired in main.cpp). So block 6 is the
 // one that matters most: it does not test `roll_kind_drop` in isolation and declare
 // victory — it drives the real `loot_dead_mobs` and requires an item to appear in
-// CorpseLootPending that the OTHER roller physically cannot produce. `slime_sample_green`
+// a staged corpse Container that the OTHER roller physically cannot produce. `slime_sample_green`
 // carries `spawn_w_milli == 0`, so `item_weight_on_floor` returns 0 and the weighted
 // catalog pick skips it at every depth; it is not the ammunition of any gun in
 // `kRangedTable`, so the ammo bundler cannot invent it either. Its presence in staged
 // corpse slots after a SlimeWoman dies has exactly one possible cause.
 //
 // CORP1: loot_dead_mobs stages POD slots on the Dead entity (no floor Pickup). Blocks
-// 6–7 assert CorpseLootPending + zero floor Pickups — the production path.
+// 6–7 assert staged corpse Containers + zero floor Pickups — the production path.
 //
 // This is a .inl and not a .cpp for the reason suite_packs.inl states: game_test.cpp owns
 // the CHECK macro, so the include has to land after it, and the suite carries its own
@@ -19,7 +19,8 @@
 
 #include <cstdio>
 
-#include "game/combat.h"      // Dead, CorpseLootPending — the window loot_dead_mobs walks
+#include "game/combat.h"      // Dead — the window loot_dead_mobs walks
+#include "game/container.h"   // Container — canonical staged corpse loot (C)
 #include "game/item_table.h"
 #include "game/loot.h"        // loot_dead_mobs, roll_mob_loot_slots
 #include "game/loot_table.h"
@@ -301,7 +302,7 @@ static void test_loottable_all() {
 
     { // ---- 6. REACHED through the wired path (CORP1 staged slots) --------------
         // Proves the feature is connected: loot_dead_mobs (main.cpp every tick)
-        // stages CorpseLootPending on Dead entities — no floor Pickup. Looks for
+        // stages a Container on Dead entities — no floor Pickup. Looks for
         // slime_sample_green, which the catalog roller cannot produce.
         const int floorZ = -26;
         CHECK(!catalog_can_produce(kSlimeSampleGreen, floorZ));  // spawn_w_milli == 0
@@ -332,13 +333,12 @@ static void test_loottable_all() {
         }
 
         std::uint32_t green = 0, total = 0, overCap = 0, pendingBodies = 0;
-        for (auto e : reg.view<const CorpseLootPending>()) {
-            const CorpseLootPending& p = reg.get<const CorpseLootPending>(e);
+        for (auto e : reg.view<const Container>()) {
+            const Container& p = reg.get<const Container>(e);
             ++pendingBodies;
-            CHECK(p.slotCount <= kMaxCorpseSlots);
             std::uint8_t filled = 0;
-            for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-                const ItemSlot& s = p.slots[i];
+            for (int i = 0; i < kInvSlots; ++i) {
+                const ItemSlot& s = p.inv.slots[i];
                 if (!item_valid(s.item) || s.count == 0) continue;
                 ++filled;
                 ++total;
@@ -347,7 +347,8 @@ static void test_loottable_all() {
                 if (cap && s.count > cap) ++overCap;
                 if (s.item == kSlimeSampleGreen) ++green;
             }
-            CHECK(filled == p.slotCount);
+            // Роллы капятся kMaxCorpseSlots (кап РОЛЛА, не ёмкость — C).
+            CHECK(filled <= kMaxCorpseSlots);
         }
         CHECK(pendingBodies == kCorpses);   // every Dead+MobRef got a pending
         CHECK(total == staged);
@@ -382,8 +383,15 @@ static void test_loottable_all() {
                                                       s * 0x9e3779b9u + 17u);
             CHECK(made >= 5u);    // 5 rolls at 100% — every roll pays one primary
             CHECK(made <= 10u);   // ...plus at most one ammo each, never 11
-            CHECK(one.all_of<CorpseLootPending>(e));
-            CHECK(one.get<CorpseLootPending>(e).slotCount == made);
+            CHECK(one.all_of<Container>(e));
+            {
+                std::uint8_t filled = 0;
+                const Inventory& ci = one.get<Container>(e).inv;
+                for (int i = 0; i < kInvSlots; ++i)
+                    if (item_valid(ci.slots[i].item) && ci.slots[i].count)
+                        ++filled;
+                CHECK(filled == made);
+            }
             {
                 std::uint32_t onFloor = 0;
                 for (auto p : one.view<const Pickup>()) { (void)p; ++onFloor; }
@@ -413,10 +421,10 @@ static void test_loottable_all() {
             CHECK(onFloor == 0);
         }
         std::int64_t rub = 0;
-        for (auto e : reg8.view<const CorpseLootPending>()) {
-            const CorpseLootPending& p = reg8.get<const CorpseLootPending>(e);
-            for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-                const ItemSlot& s = p.slots[i];
+        for (auto e : reg8.view<const Container>()) {
+            const Container& p = reg8.get<const Container>(e);
+            for (int i = 0; i < kInvSlots; ++i) {
+                const ItemSlot& s = p.inv.slots[i];
                 if (!item_valid(s.item) || s.count == 0) continue;
                 rub += static_cast<std::int64_t>(item_def(s.item).value) * s.count;
             }

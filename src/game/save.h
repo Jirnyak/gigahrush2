@@ -329,7 +329,7 @@ static_assert(kBankWire == 289);
 // reads), and serializing a column with no consumer is [problems.md] §35's class.
 // B3 (v17): держатель канонический — 64 ItemSlot вместо 4 POD-троек.
 inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 64 * 5;  // 327
-inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 3 + 8 * 5;     // 81
+inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 2 + 64 * 5;    // 360
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
     kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kBankWire +
@@ -478,9 +478,11 @@ struct CorpseRecord {
     vec3 colour{};               // the darkened body tint finalize computed
     vec3 half{};                 // the flattened silhouette
     std::uint8_t mobKind = 0xFF; // MobKind, or 0xFF for an NPC's body
-    std::uint8_t slotCount = 0;
     std::uint8_t searched = 0;
-    ItemSlot slots[kMaxCorpseSlots] = {};
+    // C (v17): лут трупа — канонический Inventory (Container-компонент);
+    // спилл сумки может занять больше восьми роллов, запись несёт все 64.
+    // half сохраняется как есть (труп больше не плющится: RagdollRoll).
+    Inventory inv{};
 };
 
 // ---------------------------------------------------------------------------

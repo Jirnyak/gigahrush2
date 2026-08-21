@@ -1997,8 +1997,14 @@ static void test_loot_drops_before_the_corpse_is_gone() {
 
     const std::uint32_t staged = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
     CHECK(staged > 0);            // a boss always pays out
-    CHECK(reg.all_of<CorpseLootPending>(boss));
-    CHECK(reg.get<CorpseLootPending>(boss).slotCount == staged);
+    CHECK(reg.all_of<Container>(boss));
+    {
+        std::uint32_t filled = 0;
+        const Inventory& bi = reg.get<Container>(boss).inv;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(bi.slots[i].item) && bi.slots[i].count) ++filled;
+        CHECK(filled == staged);
+    }
     // Staging must not scatter floor Pickups (no double-drop).
     {
         std::uint32_t onFloor = 0;
@@ -2006,19 +2012,19 @@ static void test_loot_drops_before_the_corpse_is_gone() {
         CHECK(onFloor == 0);
     }
 
-    // finalize moves pending → Corpse.lootSlots and the body stays on the floor.
+    // C: лут уже в каноническом Container; finalize даёт трупу идентичность
+    // и физику RagdollRoll — перекладки pending→corpse больше нет.
     CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
     CHECK(reg.valid(boss));
     CHECK(reg.all_of<Corpse>(boss));
-    CHECK(!reg.all_of<CorpseLootPending>(boss));
-    const Corpse& corpse = reg.get<Corpse>(boss);
-    CHECK(corpse.slotCount > 0);
-    CHECK(corpse.slotCount == staged);
+    CHECK(reg.all_of<PropFallMode>(boss));
     std::uint32_t filled = 0;
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
-            ++filled;
+    {
+        const Inventory& bi = reg.get<Container>(boss).inv;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(bi.slots[i].item) && bi.slots[i].count > 0) ++filled;
     }
+    CHECK(filled > 0);
     CHECK(filled == staged);
     {
         std::uint32_t onFloor = 0;
@@ -2037,15 +2043,7 @@ static void test_loot_drops_before_the_corpse_is_gone() {
     CHECK(inventory_value(pool.inventory(pid)) == lr.roublesGained);
     CHECK(lr.roublesGained > 0);
     // Slots cleared after a successful take.
-    {
-        std::uint32_t left = 0;
-        const Corpse& c = reg.get<Corpse>(boss);
-        for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-            if (item_valid(c.lootSlots[i].item) && c.lootSlots[i].count > 0)
-                ++left;
-        }
-        CHECK(left == 0);
-    }
+    CHECK(reg.get<Container>(boss).inv.empty());
 }
 
 

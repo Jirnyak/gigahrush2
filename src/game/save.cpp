@@ -377,12 +377,11 @@ void visit_corpse_rec(Ar& ar, R& rec) {
     visit_vec3(ar, rec.colour);
     visit_vec3(ar, rec.half);
     ar.u8(rec.mobKind);
-    ar.u8(rec.slotCount);
     ar.u8(rec.searched);
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        ar.u16(rec.slots[i].item);
-        ar.u16(rec.slots[i].count);
-        ar.u8(rec.slots[i].condition);
+    for (int i = 0; i < kInvSlots; ++i) {
+        ar.u16(rec.inv.slots[i].item);
+        ar.u16(rec.inv.slots[i].count);
+        ar.u8(rec.inv.slots[i].condition);
     }
 }
 
@@ -812,6 +811,9 @@ std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
     // generator part of the record's meaning — the exact trap the floor-file
     // ceiling comment rejects for geometry. ~64 rows x 27 B is not a cost.
     for (auto e : reg.view<const Container, const Transform>()) {
+        // C: контейнер ТРУПА едет в CorpseRecord.inv — записывать его ещё и
+        // контейнерной записью значило бы дублировать лут при каждом сейве.
+        if (reg.all_of<Corpse>(e)) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         ContainerRecord rec;
@@ -830,9 +832,9 @@ std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
         if (const Renderable* rr = reg.try_get<Renderable>(e)) rec.colour = rr->color;
         if (const AABB* bb = reg.try_get<AABB>(e)) rec.half = bb->half;
         rec.mobKind = c.mobKind;
-        rec.slotCount = c.slotCount;
         rec.searched = c.searched ? 1 : 0;
-        for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) rec.slots[i] = c.lootSlots[i];
+        if (const Container* box = reg.try_get<const Container>(e))
+            rec.inv = box->inv;
         corpses.push_back(rec);
         ++n;
     }
@@ -855,6 +857,7 @@ std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumbe
     // arbitrary, which only ever swaps two boxes standing in the same square).
     std::vector<std::uint8_t> used(n, 0);
     for (auto e : reg.view<Container, const Transform>()) {
+        if (reg.all_of<Corpse>(e)) continue; // трупный лут применяет CorpseRecord
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
 
@@ -911,10 +914,16 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         reg.emplace<Renderable>(e, Renderable{rec.colour});
         Corpse c;
         c.mobKind = rec.mobKind;
-        c.slotCount = rec.slotCount;
         c.searched = rec.searched != 0;
-        for (std::size_t j = 0; j < kMaxCorpseSlots; ++j) c.lootSlots[j] = rec.slots[j];
         reg.emplace<Corpse>(e, c);
+        Container box{};
+        box.inv = rec.inv;
+        reg.emplace<Container>(e, box);
+        // C: труп — RagdollRoll-проп; поза не сейвится (решение владельца) —
+        // тело ложится заново физикой после загрузки.
+        reg.emplace<Velocity>(e);
+        reg.emplace<PropFallMode>(e, PropFallMode::RagdollRoll);
+        reg.emplace<DynamicBodyTag>(e);
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         reg.emplace<Interactable>(

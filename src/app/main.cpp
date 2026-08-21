@@ -6006,12 +6006,15 @@ int main(int argc, char** argv) {
                     policy.dealOk = bpv.ok;
                 } else if (lootEntity != entt::null) {
                     if (lootIsCorpse) {
+                        // C: лут трупа — ТОТ ЖЕ Container, что у ящика; ветка
+                        // отличается титулом и флагом searched. take/give идут
+                        // общим box-путём — второго механизма нет (S11).
                         corpseC = reg.try_get<game::Corpse>(lootEntity);
-                        if (corpseC) {
+                        boxC = reg.try_get<game::Container>(lootEntity);
+                        if (boxC) {
                             side.title = "ТРУП";
-                            side.slots = corpseC->lootSlots;
-                            side.count =
-                                static_cast<int>(game::kMaxCorpseSlots);
+                            side.slots = boxC->inv.slots;
+                            side.count = game::kInvSlots;
                         }
                     } else {
                         boxC = reg.try_get<game::Container>(lootEntity);
@@ -6050,32 +6053,12 @@ int main(int argc, char** argv) {
                     sl.count = unplaced;
                     if (sl.count == 0) sl = game::ItemSlot{};
                 };
-                auto take_corpse_slot = [&](int i) {
-                    if (!corpseC) return;
-                    game::ItemSlot& s = corpseC->lootSlots[i];
-                    if (!game::item_valid(s.item) || s.count == 0) return;
-                    const std::uint16_t unplaced = game::inventory_give(
-                        pinv, s.item, s.count, s.condition);
-                    const std::uint16_t moved =
-                        static_cast<std::uint16_t>(s.count - unplaced);
-                    if (moved == 0) return;
-                    loot += game::item_def(s.item).value * moved;
-                    s.count = unplaced;
-                    if (s.count == 0) s = game::ItemSlot{};
-                };
                 // Пустая цель помечается ПОСЛЕ мутаций: opened — память карты
                 // «здесь уже был» ([container.h]), searched — её труп-близнец.
                 auto mark_if_empty = [&]() {
-                    if (boxC) {
-                        if (boxC->inv.empty()) boxC->opened = true;
-                    }
-                    if (corpseC) {
-                        bool empty = true;
-                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
-                            if (game::item_valid(corpseC->lootSlots[i].item) &&
-                                corpseC->lootSlots[i].count)
-                                empty = false;
-                        if (empty) corpseC->searched = true;
+                    if (boxC && boxC->inv.empty()) {
+                        if (corpseC) corpseC->searched = true;
+                        else boxC->opened = true;
                     }
                 };
 
@@ -6118,8 +6101,6 @@ int main(int argc, char** argv) {
                     case InvUiRequest::Kind::Take: {
                         if (boxC && r.slot < game::kInvSlots)
                             take_box_slot(r.slot);
-                        else if (corpseC && r.slot < game::kMaxCorpseSlots)
-                            take_corpse_slot(r.slot);
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
@@ -6127,8 +6108,6 @@ int main(int argc, char** argv) {
                     case InvUiRequest::Kind::TakeAll: {
                         for (int i = 0; i < game::kInvSlots; ++i)
                             take_box_slot(i);
-                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
-                            take_corpse_slot(static_cast<int>(i));
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
@@ -6143,32 +6122,6 @@ int main(int argc, char** argv) {
                             // «не смешивать износ»).
                             placed = game::inventory_give(boxC->inv, s.item, 1,
                                                           s.condition) == 0;
-                        } else if (corpseC) {
-                            const std::uint16_t stackMax =
-                                game::item_def(s.item).stackMax;
-                            for (std::size_t i = 0;
-                                 i < game::kMaxCorpseSlots && !placed; ++i) {
-                                game::ItemSlot& cs = corpseC->lootSlots[i];
-                                if (cs.item == s.item &&
-                                    cs.condition == s.condition &&
-                                    cs.count < stackMax) {
-                                    ++cs.count;
-                                    placed = true;
-                                }
-                            }
-                            for (std::size_t i = 0;
-                                 i < game::kMaxCorpseSlots && !placed; ++i) {
-                                game::ItemSlot& cs = corpseC->lootSlots[i];
-                                if (!game::item_valid(cs.item) ||
-                                    cs.count == 0) {
-                                    cs = game::ItemSlot{s.item, 1, s.condition};
-                                    if (static_cast<std::size_t>(
-                                            corpseC->slotCount) <= i)
-                                        corpseC->slotCount =
-                                            static_cast<std::uint8_t>(i + 1);
-                                    placed = true;
-                                }
-                            }
                         }
                         if (placed) {
                             if (--s.count == 0) s = game::ItemSlot{};

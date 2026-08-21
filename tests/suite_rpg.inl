@@ -871,19 +871,23 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
     const std::uint32_t n = finalize_deaths(reg, pool, bus, /*tick*/2);
     CHECK(n == 1);
     CHECK(reg.all_of<Corpse>(mob));
-    const Corpse& corpse = reg.get<Corpse>(mob);
-    CHECK(corpse.slotCount == static_cast<std::uint8_t>(kMaxCorpseSlots));
-    // First 8 inventory rows landed on the corpse.
-    for (std::uint8_t i = 0; i < corpse.slotCount; ++i) {
-        CHECK(corpse.lootSlots[i].item == a);
-        CHECK(corpse.lootSlots[i].count == 1);
+    // C: труп несёт канонический 64-слотовый контейнер — ВСЯ сумка легла на
+    // труп (inventory_give стекует), перелив в ящик клетки не понадобился
+    // (путь остался страховкой на действительно полный труп).
+    const Inventory& ci = reg.get<Container>(mob).inv;
+    int foundA = 0, foundBCorpse = 0;
+    for (int i = 0; i < kInvSlots; ++i) {
+        if (ci.slots[i].item == a) foundA += static_cast<int>(ci.slots[i].count);
+        if (ci.slots[i].item == b)
+            foundBCorpse += static_cast<int>(ci.slots[i].count);
     }
-    // Rows 8-9 (item b) overflowed into the cell container.
+    CHECK(foundA == 8);
+    CHECK(foundBCorpse == 2);
     const Container& boxC = reg.get<Container>(box);
     int foundB = 0;
     for (std::uint8_t si = 0; si < kInvSlots; ++si)
         if (boxC.inv.slots[si].item == b) foundB += static_cast<int>(boxC.inv.slots[si].count);
-    CHECK(foundB == 2);
+    CHECK(foundB == 0);
     // Live bag emptied so a recycled row cannot resurrect loot.
     for (const ItemSlot& s : pool.inventory(id).slots) {
         CHECK(s.item == kInvalidItem);

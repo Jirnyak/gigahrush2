@@ -708,10 +708,11 @@ static void test_corpse_and_loot_are_interactable() {
         ct.layer = 0;
         reg.emplace<Transform>(corpse, ct);
         Corpse c{};
-        c.slotCount = 1;
-        c.lootSlots[0] = ItemSlot{ItemId{1}, 1};
         c.searched = false;
         reg.emplace<Corpse>(corpse, c);
+        game::Container cbox{};
+        cbox.inv.slots[0] = ItemSlot{ItemId{1}, 1, 255};
+        reg.emplace<game::Container>(corpse, cbox);
 
         // Mirrors combat.cpp finalize_deaths: Kind::Corpse, radius 2.2, active.
         reg.emplace<game::Interactable>(
@@ -748,7 +749,7 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(lr.itemsTaken == 1);
     }
     CHECK(reg.get<Corpse>(corpse).searched);
-    CHECK(reg.get<Corpse>(corpse).slotCount == 0);
+    CHECK(reg.get<game::Container>(corpse).inv.empty());
     CHECK(reg.all_of<game::Interactable>(corpse));
     CHECK(!reg.get<game::Interactable>(corpse).active);
     {
