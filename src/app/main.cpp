@@ -4785,11 +4785,16 @@ int main(int argc, char** argv) {
                                 propPassNeedsRebuild = true;
                             }
                             g_carveT.anchorMs += carve_ms_since(ct0);
-                            // Same duty for the baked dressing.
+                            // Same duty for the baked dressing. dressingSetChanged
+                            // обязан взводиться и здесь: без него upload_wires/
+                            // cloths не зовутся и GPU симулирует убитые боевым
+                            // карвом цепи до следующего входа на этаж (§59.26).
                             ct0 = std::chrono::steady_clock::now();
                             if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                          pr.seed))
+                                                          pr.seed)) {
                                 propPassNeedsRebuild = true;
+                                dressingSetChanged = true;
+                            }
                             g_carveT.antrMs += carve_ms_since(ct0);
                             g_carveT.siteMs += carve_ms_since(ctSite);
                         }
