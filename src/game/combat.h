@@ -901,6 +901,20 @@ inline std::uint16_t carve_power_from_dmg(std::int16_t dmg) {
 inline constexpr float kBulletCarveRadius = 0.35f;
 inline constexpr float kMeleeCarveRadius = 0.55f;
 
+// ДЕТОНАЦИЯ — один примитив взрыва на всё дерево (решение владельца
+// 2026-08-21: «пропы в целом могут взрываться»). Сбор тел в радиусе с
+// гейтом los_clear, линейный спад, carve-предложение, шум severity-5,
+// частицы. Зовут: гранатная ветка projectile_step и charge_step
+// проп-зарядов. `source` — атрибуция килла, не исключение; `seedSalt` —
+// соль детерминизма (энтити-виновник). Возвращает true, если взрыв
+// кого-то задел или карв принят.
+bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
+              const vec3& at, std::int16_t dmg, float radiusM, Entity source,
+              DamageChannel channel, std::uint64_t tick,
+              std::uint32_t seedSalt, CarveProposalQueue* carves = nullptr,
+              ParticleBurstQueue* particles = nullptr,
+              NoiseField* noise = nullptr);
+
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick,

@@ -1376,6 +1376,144 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
     return live;
 }
 
+// ДЕТОНАЦИЯ — один примитив взрыва (решение владельца 2026-08-21: «пропы в
+// целом могут взрываться, расширяемо»). Вынесена дословно из гранатной
+// ветки projectile_step, чтобы взрыв перестал принадлежать снаряду: её
+// зовут гранатный фитиль и любой проп-заряд (charge_step). Внутри — сбор
+// тел в радиусе с гейтом los_clear (стена останавливает осколок), линейный
+// спад с честной кромкой (пол урона 1), carve-предложение (combat proposes,
+// app disposes), шум severity-5 и две вспышки частиц. `source` — только
+// атрибуция килла, никогда не исключение (правило владельца 2026-08-12).
+// `seedSalt` — соль детерминизма (энтити-виновник); выражения сидов
+// сохранены дословно, взрыв бит-в-бит воспроизводим.
+// Возвращает true, если взрыв кого-то задел или карв принят.
+bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
+              const vec3& at, std::int16_t dmg, float radiusM, Entity source,
+              DamageChannel channel, std::uint64_t tick,
+              std::uint32_t seedSalt, CarveProposalQueue* carves,
+              ParticleBurstQueue* particles, NoiseField* noise) {
+    if (!stack.valid(layer) || radiusM <= 0.0f) return false;
+    const MacroGrid& grid = stack.layer(layer).grid();
+    const float R = radiusM;
+    bool landed = false;
+
+    // Gather first, damage second — the same two-phase discipline as
+    // projectile_step, one level down and for the same reason:
+    // `apply_damage` emplaces `Dead`, which can reallocate the component pool
+    // that the sweep is walking.
+    struct Caught { Entity e; float d; };
+    std::vector<Caught> caught;
+    auto sweep = [&](Entity cand, const vec3& cp) {
+        const float dx = wrap_delta_f(at.x, cp.x, kWorldExtent);
+        const float dy = wrap_delta_f(at.y, cp.y, kWorldExtent);
+        const float dz = wrap_delta_f(at.z, cp.z, kWorldExtent);
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > R * R) return;
+        // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
+        // that may refuse a target. It is not an exclusion: it does not ask
+        // WHO the body is, it asks whether anything solid stands between the
+        // blast and it — the same question, at the same cell granularity,
+        // that already stops a bullet. Distance alone was a grenade that
+        // killed through a load-bearing wall.
+        //
+        // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
+        // it lives in the core because it is a fact about geometry, and
+        // [mob_behaviour.h] has a dropped sight test waiting for it.
+        //
+        // NOT counted here, and the reason is the layer rather than
+        // indifference: every other refusal in this file is counted
+        // (`droppedFull` and friends) because there is a queue to hang the
+        // counter on and an app-side `GIGA_*_DBG` line to print it. There is
+        // neither here, and `giga_game` holds no `getenv` anywhere on
+        // purpose — it stays headless and pure ([AGENTS.md]). So the number
+        // is asserted where it is measured: `test_grenade` block 7 prints
+        // how many bodies the wall shielded, on every ctest run.
+        if (!los_clear(grid, at, cp)) return;
+        caught.push_back(Caught{cand, std::sqrt(d2)});
+    };
+    for (auto m : reg.view<const MobRef, const Transform>()) {
+        const Transform& mt = reg.get<const Transform>(m);
+        if (mt.layer != layer) continue;
+        sweep(m, mt.pos);
+    }
+    for (auto b : reg.view<const NpcRef, const Transform>()) {
+        // Anything already swept as a monster is not swept again as a body.
+        // Nothing in the tree carries both today; a blast that charged such an
+        // entity twice would be a silent double-damage and is cheaper to make
+        // impossible than to notice. The camera holder is an ordinary NpcRef
+        // and IS in this loop — that is how the thrower gets hit.
+        if (reg.all_of<MobRef>(b)) continue;
+        const Transform& bt = reg.get<const Transform>(b);
+        if (bt.layer != layer) continue;
+        sweep(b, bt.pos);
+    }
+
+    for (const Caught& c : caught) {
+        if (!reg.valid(c.e)) continue;
+        // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
+        // and not inverse-square because inverse-square is the law for a
+        // point source radiating into free space, and a fragmentation blast
+        // in a 2 m corridor is not that — it is fragments that spread and
+        // slow. Linear is also the one shape a player can read off two
+        // explosions: half as far, twice the damage.
+        //
+        // The floor of 1 keeps the rim honest: inside the radius you were
+        // caught in the blast, and "caught in the blast for zero" would make
+        // the radius a lie at its own edge.
+        const float f = 1.0f - c.d / R;
+        std::int16_t dmgHere =
+            static_cast<std::int16_t>(static_cast<float>(dmg) * f + 0.5f);
+        if (dmgHere < 1) dmgHere = 1;
+        DamageResult r =
+            apply_damage(reg, pool, c.e, dmgHere, channel, source, &grid,
+                         particles, &stack.layer(layer).gravity());
+        if (!r.hit) continue;
+        landed = true;
+        // Credited exactly as the bullet path credits a shot, so a grenade
+        // kill counts on the same counter the HUD already prints and, through
+        // `Dead::killer` -> the NpcDied event, on the same contract/quest
+        // ledger ([problems.md] §40). A monster's grenade credits a monster
+        // and therefore closes nobody's contract.
+        if (reg.valid(source)) {
+            if (auto* pr = reg.try_get<PlayerRanged>(source)) ++pr->hits;
+            if (r.lethal)
+                if (auto* pm = reg.try_get<PlayerMelee>(source)) ++pm->kills;
+        }
+    }
+
+    // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
+    // the app disposes. A refusal here is COUNTED, never silent —
+    // `droppedFull` is why a grenade that opened no hole can be told from a
+    // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
+    if (carves) {
+        const std::uint32_t seed =
+            static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^ seedSalt;
+        if (carves->push(at.x, at.y, at.z, R * kBlastCarveScale,
+                         carve_power_from_dmg(dmg), seed)) {
+            landed = true;
+        }
+    }
+    // Heard, at severity 5 — the loudest thing in the game, and published at
+    // the BLAST rather than at whoever threw it, because the place a monster
+    // should walk toward is where the bang was.
+    if (noise)
+        noise_publish(*noise, layer, at, blast_noise(R),
+                      static_cast<std::uint32_t>(entt::to_integral(source)));
+    // Flash and debris, through the unified pool ([particles.h]). Two bursts
+    // and not one: the spark is the detonation, the debris is the wall it
+    // took with it, and they are separate rows of data/particles.csv with
+    // separate lifetimes.
+    if (particles) {
+        const std::uint32_t pseed =
+            static_cast<std::uint32_t>(tick) ^ seedSalt;
+        particles->push(at, vec3{0.0f, 0.0f, 1.0f}, ParticleKind::Spark, 24, 0,
+                        pseed);
+        particles->push(at, vec3{0.0f, 0.0f, 0.5f}, ParticleKind::Debris, 18,
+                        0, pseed ^ 0x5bf03635u);
+    }
+    return landed;
+}
+
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick, StatusSet* playerStatus,
@@ -1788,126 +1926,15 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // to skip a target. That is the whole of the attribution/exclusion
         // distinction the 2026-08-12 ruling turns on.
         if (h.onDetonate && h.blastDm > 0) {
+            // Вся детонация — примитив detonate() выше: этот вызов и
+            // charge_step проп-зарядов зовут ОДИН взрыв. Соль сидов — энтити
+            // снаряда, как и была: воспроизводимость бит-в-бит.
             const float R = static_cast<float>(h.blastDm) * 0.1f;
-
-            // Gather first, damage second — the same two-phase discipline as the
-            // enclosing function, one level down and for the same reason:
-            // `apply_damage` emplaces `Dead`, which can reallocate the component pool
-            // that the sweep is walking.
-            struct Caught { Entity e; float d; };
-            std::vector<Caught> caught;
-            auto sweep = [&](Entity cand, const vec3& cp) {
-                const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtent);
-                const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);
-                const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtent);
-                const float d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > R * R) return;
-                // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
-                // that may refuse a target. It is not an exclusion: it does not ask
-                // WHO the body is, it asks whether anything solid stands between the
-                // blast and it — the same question, at the same cell granularity,
-                // that already stops a bullet and bounces a grenade. Distance alone
-                // was a grenade that killed through a load-bearing wall.
-                //
-                // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
-                // it lives in the core because it is a fact about geometry, and
-                // [mob_behaviour.h] has a dropped sight test waiting for it.
-                //
-                // NOT counted here, and the reason is the layer rather than
-                // indifference: every other refusal in this file is counted
-                // (`droppedFull` and friends) because there is a queue to hang the
-                // counter on and an app-side `GIGA_*_DBG` line to print it. There is
-                // neither here, and `giga_game` holds no `getenv` anywhere on
-                // purpose — it stays headless and pure ([AGENTS.md]). So the number
-                // is asserted where it is measured: `test_grenade` block 7 prints
-                // how many bodies the wall shielded, on every ctest run.
-                if (!los_clear(grid, h.impactPos, cp)) return;
-                caught.push_back(Caught{cand, std::sqrt(d2)});
-            };
-            for (auto m : reg.view<const MobRef, const Transform>()) {
-                const Transform& mt = reg.get<const Transform>(m);
-                if (mt.layer != layer) continue;
-                sweep(m, mt.pos);
-            }
-            for (auto b : reg.view<const NpcRef, const Transform>()) {
-                // Anything already swept as a monster is not swept again as a body.
-                // Nothing in the tree carries both today; a blast that charged such an
-                // entity twice would be a silent double-damage and is cheaper to make
-                // impossible than to notice. The camera holder is an ordinary NpcRef
-                // and IS in this loop — that is how the thrower gets hit.
-                if (reg.all_of<MobRef>(b)) continue;
-                const Transform& bt = reg.get<const Transform>(b);
-                if (bt.layer != layer) continue;
-                sweep(b, bt.pos);
-            }
-
-            for (const Caught& c : caught) {
-                if (!reg.valid(c.e)) continue;
-                // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
-                // and not inverse-square because inverse-square is the law for a
-                // point source radiating into free space, and a fragmentation blast
-                // in a 2 m corridor is not that — it is fragments that spread and
-                // slow. Linear is also the one shape a player can read off two
-                // explosions: half as far, twice the damage.
-                //
-                // The floor of 1 keeps the rim honest: inside the radius you were
-                // caught in the blast, and "caught in the blast for zero" would make
-                // the radius a lie at its own edge.
-                const float f = 1.0f - c.d / R;
-                std::int16_t dmgHere =
-                    static_cast<std::int16_t>(static_cast<float>(h.dmg) * f + 0.5f);
-                if (dmgHere < 1) dmgHere = 1;
-                DamageResult r =
-                    apply_damage(reg, pool, c.e, dmgHere, ch, h.source, &grid,
-                                 particles, &stack.layer(layer).gravity());
-                if (!r.hit) continue;
+            if (detonate(reg, pool, stack, layer, h.impactPos, h.dmg, R,
+                         h.source, ch, tick,
+                         static_cast<std::uint32_t>(entt::to_integral(h.proj)),
+                         carves, particles, noise))
                 landed = true;
-                // Credited exactly as the bullet path credits a shot, so a grenade
-                // kill counts on the same counter the HUD already prints and, through
-                // `Dead::killer` -> the NpcDied event, on the same contract/quest
-                // ledger ([problems.md] §40). A monster's grenade credits a monster
-                // and therefore closes nobody's contract.
-                if (reg.valid(h.source)) {
-                    if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
-                    if (r.lethal)
-                        if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
-                }
-            }
-
-            // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
-            // the app disposes. A refusal here is COUNTED, never silent —
-            // `droppedFull` is why a grenade that opened no hole can be told from a
-            // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
-            if (carves) {
-                const std::uint32_t seed =
-                    static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
-                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
-                if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
-                                 R * kBlastCarveScale, carve_power_from_dmg(h.dmg),
-                                 seed)) {
-                    landed = true;
-                }
-            }
-            // Heard, at severity 5 — the loudest thing in the game, and published at
-            // the BLAST rather than at whoever threw it, because the place a monster
-            // should walk toward is where the bang was.
-            if (noise)
-                noise_publish(*noise, layer, h.impactPos, blast_noise(R),
-                              static_cast<std::uint32_t>(
-                                  entt::to_integral(h.source)));
-            // Flash and debris, through the unified pool ([particles.h]). Two bursts
-            // and not one: the spark is the detonation, the debris is the wall it
-            // took with it, and they are separate rows of data/particles.csv with
-            // separate lifetimes.
-            if (particles) {
-                const std::uint32_t pseed =
-                    static_cast<std::uint32_t>(tick) ^
-                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 1.0f},
-                                ParticleKind::Spark, 24, 0, pseed);
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.5f},
-                                ParticleKind::Debris, 18, 0, pseed ^ 0x5bf03635u);
-            }
         }
 
         if (h.onVictim && victim != entt::null) {
