@@ -73,6 +73,12 @@ layout(push_constant) uniform GridPush {
     vec4 gridExt;   // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
     vec4 params;    // x = activeLightCount,
                     // y = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
+    // МЁРТВАЯ ЛЕЙНА бывшего камерного гейта — держит офсеты в лад с хостом
+    // (GridPush 80 байт): её удаление сместило genStaticCount/dynBucketDim
+    // на обнулённую камеру, staticCount читался нулём — и весь свет умер
+    // (поймано владельцем 2026-08-22, «0 света»). Как лейны налобника:
+    // пушится нулями, не читается.
+    vec4 deadCamPad_;
     uint genBaked;       // поколение мира в живом bakedGrid
     uint genStaticCount; // граница секций таблицы: [0..S) статики, [S..N) динамики
     uint dynBucketDim;   // решётка бакетов динамиков (= kDynBucketDim хоста)
