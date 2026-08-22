@@ -97,6 +97,13 @@ struct ConsoleContext {
     // kNoRequest by the app once handled.
     int requestFloor = kNoRequest;
 
+    // Out: команда заспавнила ЯКОРНЫЙ проп (cmd_prop) — статичная шкура
+    // PropPass живёт по флагу propPassNeedsRebuild кадра, и без этого сигнала
+    // проп существует в симе, но невидим до чужого ребилда (пойман владельцем
+    // на fuel_barrel 2026-08-22). Тот же шов, что requestFloor: консоль
+    // просит, приложение исполняет в своей безопасной точке.
+    bool propsChanged = false;
+
     // Out: planar lattice hub (0..15) to land on when requestFloor is a fast
     // travel. -1 means keep mirrored x/y (debug `teleport` / ±1 ride). The app
     // drains this together with requestFloor at its safe point.

@@ -1182,6 +1182,7 @@ bool cmd_prop(ConsoleContext& ctx, int argc, const char* const* argv,
         put(out, cap, "prop: spawn refused");
         return false;
     }
+    ctx.propsChanged = true; // статичная шкура PropPass обязана перестроиться
     if (out && cap)
         std::snprintf(out, cap, "prop: %s at cell (%d,%d,%d)%s",
                       prop_id_str(id), cx, cy, ground + 1,

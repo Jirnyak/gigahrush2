@@ -2979,6 +2979,13 @@ int main(int argc, char** argv) {
             pendingLandHub = -1;
             do_ride(/*absolute=*/true, dst, hub);
         }
+        // Консоль заспавнила якорный проп (cmd_prop) — та же безопасная
+        // точка, что телепорт: шкура PropPass перестраивается этим кадром,
+        // иначе проп существует в симе, но невидим (fuel_barrel 2026-08-22).
+        if (consoleCtx.propsChanged) {
+            consoleCtx.propsChanged = false;
+            propPassNeedsRebuild = true;
+        }
 
         // Events are transient by design ([events.md]): whatever was published
         // last frame has had its chance to be consumed. Clearing here rather than
