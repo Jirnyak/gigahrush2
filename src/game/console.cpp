@@ -1182,6 +1182,14 @@ bool cmd_prop(ConsoleContext& ctx, int argc, const char* const* argv,
         put(out, cap, "prop: spawn refused");
         return false;
     }
+    // RagdollRoll-строка — ЖИВОЕ тело по канону S3 («катается, толкается»),
+    // не якорная мебель: немедленный детач переводит её в рагдолл-ядро тем
+    // же законом, что отрыв (масса/габарит/материал строки). Закон владельца
+    // 2026-08-22: «prop ball» обязан равняться spawn_ball — путь создания
+    // не меняет физику. SimpleFall/GpuHandoff остаются якорной статикой.
+    if (static_cast<PropFallMode>(d.fallMode) == PropFallMode::RagdollRoll &&
+        ctx.bus != nullptr)
+        prop_make_dynamic(*ctx.ecs, e, *ctx.bus);
     ctx.propsChanged = true; // статичная шкура PropPass обязана перестроиться
     if (out && cap)
         std::snprintf(out, cap, "prop: %s at cell (%d,%d,%d)%s",

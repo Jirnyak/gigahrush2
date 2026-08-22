@@ -1544,6 +1544,16 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                       cell_coord(bt.pos.z)),
                          b);
         }
+        // Динамические ПРОПЫ-ЗАРЯДЫ (живая бочка, S3) — тоже мишени: пуля
+        // взводит их той же NEAREST-логикой, что бьёт тела.
+        for (auto b : reg.view<const Charge, const RigidBody, const Transform>()) {
+            const Transform& bt = reg.get<const Transform>(b);
+            if (bt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(bt.pos.x),
+                                      cell_coord(bt.pos.y),
+                                      cell_coord(bt.pos.z)),
+                         b);
+        }
         bodyBins.build();
         bodyBinsBuilt = true;
     };
@@ -1682,6 +1692,16 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                    cell_coord(tr.pos.y), cell_coord(tr.pos.z),
                                    consider);
             if (best != entt::null) {
+                // Заряд от урона: пуля ВЗВОДИТ (atTick=0 — «уже пора»),
+                // charge_step рвёт этим же тиком; атрибуция — стрелявшему.
+                if (const Charge* dc = reg.try_get<Charge>(best);
+                    dc && dc->trigger != 0u &&
+                    !reg.all_of<ChargeArmed>(best)) {
+                    reg.emplace<ChargeArmed>(best, ChargeArmed{0u, p.source});
+                    resolved.push_back(
+                        Hit{e, static_cast<std::int16_t>(0), p.source, false});
+                    continue;
+                }
                 resolved.push_back(Hit{e, p.dmg, p.source, false, best, p.proj,
                                        p.channel});
                 continue;

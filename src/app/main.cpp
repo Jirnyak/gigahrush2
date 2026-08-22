@@ -2633,6 +2633,7 @@ int main(int argc, char** argv) {
     auto refresh_console_ctx = [&]() {
         consoleCtx.ecs = &reg;
         consoleCtx.pool = &pool;
+        consoleCtx.bus = &bus;
         consoleCtx.stack = &stack;
         consoleCtx.floors = &registry;
         consoleCtx.catalog = &floor_catalog();

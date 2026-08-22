@@ -35,6 +35,7 @@ namespace giga::game {
 class FloorRegistry;
 class FloorCatalog;
 class NpcPool;
+class EventBus;
 struct FastTravelState;
 
 // One-shot actions a command may REQUEST of the app — the generic sibling of
@@ -92,6 +93,10 @@ struct ConsoleContext {
     // that never touch `fasttravel`/`ft`. The app owns the state and points
     // this at it each frame via refresh_console_ctx.
     FastTravelState* fastTravel = nullptr;
+
+    // Шина событий — для cmd_prop (перевод RagdollRoll-строки в живое тело
+    // публикует PropDetached тем же швом, что честный отрыв).
+    EventBus* bus = nullptr;
 
     // Out: a cross-floor move the APP must perform (see header note). Reset to
     // kNoRequest by the app once handled.

@@ -184,6 +184,12 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
                                                  std::vector<PropMeshInstance>& out);
 
 
+// Немедленный перевод якорного пропа в живое тело рагдолл-ядра тем же
+// законом, что отрыв карвом. Для RagdollRoll-строк расстановки: канон S3 —
+// «катается, толкается», путь создания не меняет физику (владелец
+// 2026-08-22: prop ball ≡ spawn_ball).
+void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus);
+
 // `source` — стрелявший, только для атрибуции килла заряда-от-урона
 // (бочка: выстрел взводит ChargeArmed вместо детача; [combat.h] Charge).
 bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,

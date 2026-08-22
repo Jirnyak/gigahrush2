@@ -353,6 +353,16 @@ bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPo
     return false;
 }
 
+void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus) {
+    if (!reg.valid(prop) || !reg.all_of<Transform, PropFallMode>(prop)) return;
+    const vec3 pos = reg.get<Transform>(prop).pos;
+    const vec3 color = reg.all_of<Renderable>(prop)
+                           ? reg.get<Renderable>(prop).color
+                           : vec3{0.8f, 0.8f, 0.8f};
+    detach_single_prop(reg, prop, reg.get<PropFallMode>(prop),
+                       vec3{0.0f, 0.0f, 0.1f}, pos, color, 0, bus, nullptr, 1u);
+}
+
 std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
                                    const std::vector<std::uint32_t>& dirtyCells,
                                    ParticleBurstQueue* bursts, std::uint32_t seed)
