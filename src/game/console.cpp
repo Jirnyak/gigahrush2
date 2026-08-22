@@ -565,7 +565,7 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     ctx.carveRadius = radius;
     ctx.carvePower = static_cast<std::uint32_t>(power);
     if (out && cap)
-        std::snprintf(out, cap, "carve: r=%.2f m, power=%ld — queued", radius,
+        std::snprintf(out, cap, "carve: r=%.2f m, power=%ld — next tick", radius,
                       power);
     return true;
 }

@@ -111,8 +111,10 @@ struct ConsoleContext {
 
     // Out: a pending sphere carve ([world/destruct.h]) — the command proposes
     // size and power only; the app aims it from the camera and performs it on
-    // the sim clock, never while a nav bake owns the grid (it stays queued
-    // until the bake lands). radius in metres; <= 0 means none pending.
+    // the NEXT sim tick. Бейк-гейта НЕТ и очереди за воркером НЕТ: воркер
+    // читает снапшот, никогда грид, дыра режется тем же тиком (прежняя
+    // проза «stays queued until the bake lands» устарела вместе с гейтом и
+    // запутала владельца 2026-08-22). radius in metres; <= 0 = none pending.
     float carveRadius = 0.0f;
     std::uint32_t carvePower = 0;
 
