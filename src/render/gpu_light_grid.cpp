@@ -610,7 +610,12 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
     push.params = vec4{static_cast<float>(uploadCount), kWorldExtent,
                        bakedRMaxM_, clusterMembersCount_ > 0 ? 1.0f : 0.0f};
-    push.camPos = vec4{camPos.x, camPos.y, camPos.z, 2.0f * bakedRMaxM_};
+    // МЁРТВАЯ ЛЕЙНА (2026-08-22): камерный гейт вырезан вместе со всей
+    // грязной веткой шейдера (закон владельца: свет ДОГОНЯЕТ мир). Биннинг
+    // снова камеронезависим ПО ПОСТРОЕНИЮ (S7). Нули — как у лейн налобника;
+    // полная чистка пуша/биндингов топологии — вместе с писателями dirtyGen.
+    push.camPos = vec4{0.0f, 0.0f, 0.0f, 0.0f};
+    (void)camPos;
     push.genBaked = bakedGen_;
     push.genStaticCount = staticCount_;
     push.dynBucketDim = kDynBucketDim;
