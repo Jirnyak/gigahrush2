@@ -346,8 +346,18 @@ struct FrameMark {
     float lightSwapMs = 0.0f; // залив свапа бейка видимости на GPU
     float propSkinMs = 0.0f;  // merge_ecs_prop_meshes
     bool floorEntry = false;  // begin_floor_nav: Fresh-бейк (свет+rooms) синхронно
+    // ВЕРХНЕУРОВНЕВЫЕ СЕКЦИИ КАДРА (2026-08-22). Хитч-лог владельца принёс
+    // кадры ~1000 мс со ВСЕМИ нулевыми метками и малым GPU — слепая зона
+    // класса 59.25: точечные метки не покрывают кадр целиком. Две секции
+    // делят его без дыр: simMs — от верха кадра до начала записи рендера
+    // (события, весь сим, консоль); renderMs — запись+сабмит+презент.
+    // «other» в печати = wall − sim − render (ожидание vsync/своп/хвост).
+    float simMs = 0.0f;
+    float renderMs = 0.0f;
 };
 static FrameMark g_frameMark;
+// Верх кадра — точка отсчёта секций; ставится в блоке детектора хитча.
+static std::chrono::steady_clock::time_point g_frameT0;
 
 // Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
 // диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
@@ -2943,12 +2953,17 @@ int main(int argc, char** argv) {
                 const auto& gt = renderer.timer;
                 std::fprintf(
                     stderr,
-                    "[hitch] frame %.0f ms | carve %.2f, light_swap %.2f, "
+                    "[hitch] frame %.0f ms | cpu sim %.1f render %.1f "
+                    "other %.1f | carve %.2f, light_swap %.2f, "
                     "prop_skin %.2f, entry %d | gpu peak %.1f ms: lgrid %.1f, "
                     "vflush %.1f, cull %.1f, simphys %.1f, world %.1f, "
                     "bodies %.1f, props %.1f, drawphys %.1f, hud %.1f "
                     "(dropped %u)\n",
                     static_cast<double>(wallMs),
+                    static_cast<double>(g_frameMark.simMs),
+                    static_cast<double>(g_frameMark.renderMs),
+                    static_cast<double>(wallMs - g_frameMark.simMs -
+                                        g_frameMark.renderMs),
                     static_cast<double>(g_frameMark.carveMs),
                     static_cast<double>(g_frameMark.lightSwapMs),
                     static_cast<double>(g_frameMark.propSkinMs),
@@ -2966,6 +2981,7 @@ int main(int argc, char** argv) {
                     gt.dropped());
             }
             g_frameMark = FrameMark{};
+            g_frameT0 = std::chrono::steady_clock::now();
         }
 
         // A console teleport is executed HERE, at the top of a frame, never in
@@ -7084,6 +7100,9 @@ int main(int argc, char** argv) {
             doors.dirtyCells.clear();
         }
 
+        g_frameMark.simMs = std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - g_frameT0)
+                                .count();
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
             // ВРЕМЯ ВИЗУАЛА — СИМ-ВРЕМЯ, не настенное (владелец 2026-08-20,
@@ -7572,6 +7591,11 @@ int main(int argc, char** argv) {
                                 activeLayer);
             }
             renderer.end_frame(window);
+            g_frameMark.renderMs =
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - g_frameT0)
+                    .count() -
+                g_frameMark.simMs;
 
             // --mirror-verify heartbeat: prove the incremental dirty path (not
             // just the wholesale uploads) against the CPU truth, ~every 5 s.
