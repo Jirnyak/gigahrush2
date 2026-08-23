@@ -194,6 +194,28 @@ static std::vector<game::BakedLight> g_bakedFloorLights;
 static std::vector<game::LightVisLamp> g_staticLamps;
 static std::vector<gpu::GpuPointLight> g_staticLightBase;
 static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
+// Ключ позиции кластера светоматериала -> его слот. СТАБИЛЬНОСТЬ СЛОТОВ
+// (баг найден и починен 2026-08-23): раньше таблица пересобиралась с нуля и
+// слоты раздавались по порядку обхода, поэтому гибель ОДНОЙ лампы сдвигала
+// id всех следующих — а запечённая видимость продолжала ссылаться на старые
+// номера, и до полного ребейка (до секунды) часть клеток светила ЧУЖИМИ
+// лампами. Теперь таблица в пределах этажа только РАСТЁТ: проп узнаёт свой
+// слот по PropLight.slot, кластер светоматериала — по позиции, а умершая
+// лампа оставляет НАДГРОБИЕ (радиус 0) вместо сдвига соседей. Заголовок
+// gpu_light_grid.h обещал эту стабильность с самого начала — теперь код ей
+// соответствует.
+static std::vector<std::pair<std::uint64_t, std::uint32_t>> g_bakedSlotByPos;
+// Поколение таблицы, в котором слот умер (kAlive = живой). ПЕРЕРАБОТКА СЛОТОВ
+// (закон дома «пул с переработкой», CANON S11): новая лампа занимает мёртвый
+// слот, если он есть, и только иначе растит таблицу. Условие переработки —
+// слот обязан быть мёртв ДО последнего завершённого полного бейка видимости:
+// пока живы запечённые списки, ссылающиеся на этот номер, отдать его новой
+// лампе значит подсветить ею чужие клетки — тот самый баг, который здесь и
+// чинится. g_lightVisTableGen — поколение таблицы на момент последнего свапа
+// полного бейка.
+static constexpr std::uint32_t kSlotAlive = 0xFFFFFFFFu;
+static std::vector<std::uint32_t> g_slotDeadGen;
+static std::uint32_t g_lightVisTableGen = 0;
 static std::uint32_t g_staticTableGen = 0;
 static std::uint32_t g_lightTableUploadedGen = 0;
 
@@ -230,7 +252,22 @@ static bool skip_pass(const char* name) {
 // пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
 // светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
 // пишет collect_scene_lights (мерцание/обесточка/поломка; 0 = надгробие).
-static void rebuild_static_light_table(Registry& reg, LayerId layer) {
+// Ключ позиции для матчинга кластеров между пересборками: сантиметры,
+// упакованные в u64 (мир 256 м = 25600 см влезает в 21 бит на ось).
+static std::uint64_t light_pos_key(const vec3& p) {
+    const auto q = [](float v) {
+        return static_cast<std::uint64_t>(
+                   static_cast<std::int64_t>(std::lround(v * 100.0f)) &
+                   0x1FFFFF);
+    };
+    return q(p.x) | (q(p.y) << 21) | (q(p.z) << 42);
+}
+
+// reset — постройка этажа: таблица начинается с нуля (за ней всё равно идёт
+// полный бейк видимости). Без reset (карв по светоматериалу) слоты СТАБИЛЬНЫ:
+// см. вывод у g_bakedSlotByPos.
+static void rebuild_static_light_table(Registry& reg, LayerId layer,
+                                       bool reset) {
     // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
     // 2026-08-18: сколько мс кадра стоят марши к лампам). Режет статик-таблицу
     // до первых N ламп — детерминированно и воспроизводимо; срезанные лампы не
@@ -242,25 +279,56 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
                    ? static_cast<std::uint32_t>(v)
                    : gpu::kRootLights;
     }();
-    g_staticLamps.clear();
-    g_staticLightBase.clear();
+    if (reset) {
+        g_staticLamps.clear();
+        g_staticLightBase.clear();
+        g_bakedSlotByPos.clear();
+        g_slotDeadGen.clear();
+    }
+    g_slotDeadGen.resize(g_staticLamps.size(), kSlotAlive);
     g_bakedLightSlots.clear();
+    // Подтверждённые этой пересборкой слоты; неподтверждённые станут
+    // надгробиями (лампа умерла) — но НЕ исчезнут, иначе поедут чужие id.
+    std::vector<std::uint8_t> confirmed(g_staticLamps.size(), 0);
     std::uint32_t budgetDropped = 0;
-    const auto push_lamp = [&budgetDropped](const vec3& pos, float radiusM,
-                                            const vec3& color) -> std::uint32_t {
-        if (g_staticLamps.size() >= kBudget) {
-            ++budgetDropped;
-            return game::kNoLightSlot;
+    // Записать лампу В КОНКРЕТНЫЙ слот (или в новый, если slot невалиден).
+    // Переработка: свободный мёртвый слот, безопасный по поколению (см. вывод
+    // у g_slotDeadGen). Курсор — чтобы не сканировать таблицу с нуля на каждую
+    // новую лампу: слоты слева от него уже разобраны этой пересборкой.
+    std::uint32_t recycleCursor = 0;
+    const auto take_dead_slot = [&]() -> std::uint32_t {
+        for (; recycleCursor < g_staticLamps.size(); ++recycleCursor) {
+            const std::uint32_t i = recycleCursor;
+            if (confirmed[i] || g_slotDeadGen[i] == kSlotAlive) continue;
+            if (g_slotDeadGen[i] >= g_lightVisTableGen) continue; // списки живы
+            ++recycleCursor;
+            return i;
         }
-        const auto slot = static_cast<std::uint32_t>(g_staticLamps.size());
-        g_staticLamps.push_back({pos, radiusM, color});
-        gpu::GpuPointLight base{};
+        return game::kNoLightSlot;
+    };
+    const auto put_lamp = [&](std::uint32_t slot, const vec3& pos,
+                              float radiusM, const vec3& color) -> std::uint32_t {
+        if (slot >= g_staticLamps.size()) slot = take_dead_slot();
+        if (slot >= g_staticLamps.size()) {
+            if (g_staticLamps.size() >= kBudget) {
+                ++budgetDropped;
+                return game::kNoLightSlot;
+            }
+            slot = static_cast<std::uint32_t>(g_staticLamps.size());
+            g_staticLamps.emplace_back();
+            g_staticLightBase.emplace_back();
+            g_slotDeadGen.push_back(kSlotAlive);
+            confirmed.push_back(0);
+        }
+        g_staticLamps[slot] = {pos, radiusM, color};
+        gpu::GpuPointLight& base = g_staticLightBase[slot];
         base.posRadius = vec4{pos.x, pos.y, pos.z, radiusM};
         base.colorIntensity = vec4{color.x, color.y, color.z, 0.0f};
         // w = -2: сентинель «омни» (см. add_light). Конусные статики появятся
         // вместе с первым конусным пропом — биннинг конус всё равно не режет.
         base.dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
-        g_staticLightBase.push_back(base);
+        confirmed[slot] = 1;
+        g_slotDeadGen[slot] = kSlotAlive;
         return slot;
     };
     auto lampView = reg.view<const Transform, game::PropLight>();
@@ -271,12 +339,46 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
             pl.slot = game::kNoLightSlot;
             continue;
         }
-        pl.slot = push_lamp(tr.pos + vec3{0.0f, 0.0f, -pl.dropM}, pl.radiusM,
-                            pl.color);
+        // Проп помнит свой слот сам — он и есть стабильная идентичность.
+        pl.slot = put_lamp(pl.slot, tr.pos + vec3{0.0f, 0.0f, -pl.dropM},
+                           pl.radiusM, pl.color);
     }
+    // Кластеры светоматериала пекутся заново на каждом карве, идентичности у
+    // них нет — узнаём их по позиции (совпадение до сантиметра).
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> byPos =
+        std::move(g_bakedSlotByPos);
+    std::sort(byPos.begin(), byPos.end());
+    g_bakedSlotByPos.clear();
     for (const game::BakedLight& bl : g_bakedFloorLights) {
-        g_bakedLightSlots.push_back(push_lamp(bl.pos, bl.radiusM, bl.color));
+        const std::uint64_t key = light_pos_key(bl.pos);
+        std::uint32_t slot = game::kNoLightSlot;
+        const auto it = std::lower_bound(
+            byPos.begin(), byPos.end(),
+            std::pair<std::uint64_t, std::uint32_t>{key, 0u});
+        if (it != byPos.end() && it->first == key) slot = it->second;
+        slot = put_lamp(slot, bl.pos, bl.radiusM, bl.color);
+        g_bakedLightSlots.push_back(slot);
+        if (slot != game::kNoLightSlot) g_bakedSlotByPos.emplace_back(key, slot);
     }
+    // Неподтверждённые слоты — надгробия: лампа умерла, но её НОМЕР остаётся
+    // занятым, иначе запечённые списки начнут указывать на чужие лампы.
+    // Радиус 0 = бейк её не печёт, биннинг не биннит, кадр не светит.
+    std::uint32_t tombstoned = 0;
+    for (std::size_t i = 0; i < g_staticLamps.size(); ++i) {
+        if (confirmed[i]) continue;
+        if (g_staticLamps[i].radiusM == 0.0f) continue; // уже надгробие
+        g_staticLamps[i].radiusM = 0.0f;
+        g_staticLightBase[i].posRadius.w = 0.0f;
+        g_staticLightBase[i].colorIntensity.w = 0.0f;
+        g_slotDeadGen[i] = g_staticTableGen; // переработается после полного бейка
+        ++tombstoned;
+    }
+    if (tombstoned > 0)
+        std::fprintf(stderr,
+                     "[light-grid] %u lamps died -> tombstones (slots stay, ids "
+                     "of the rest do not move; recycled after the next full "
+                     "light bake)\n",
+                     tombstoned);
     if (budgetDropped > 0)
         std::fprintf(stderr,
                      "[light-grid] GIGA_LIGHT_BUDGET=%u: %u static lamps cut\n",
@@ -1317,7 +1419,7 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     // Статик-таблица света — из только что расставленных пропов и кластеров;
     // begin_floor_nav (следом за нами у всех вызывающих) отдаст её бейку
     // видимости ДО start_fresh.
-    rebuild_static_light_table(reg, layer);
+    rebuild_static_light_table(reg, layer, /*reset=*/true);
 
     return count;
 }
@@ -4316,7 +4418,8 @@ int main(int argc, char** argv) {
                         // Кластеры пережиты заново — статик-таблица и бейк
                         // видимости обязаны узнать (слоты пропов стабильны,
                         // выкушенный неон умирает вместе со слотом).
-                        rebuild_static_light_table(reg, activeLayer);
+                        rebuild_static_light_table(reg, activeLayer,
+                                                   /*reset=*/false);
                         nav.set_light_table(g_staticLamps.data(),
                                             g_staticLamps.size(), gpu::kGridCellSlots);
                         g_carveT.lightMatMs += carve_ms_since(ct0);
@@ -4725,7 +4828,8 @@ int main(int argc, char** argv) {
                                 stack.layer(activeLayer));
                             // Тот же долг, что у консольного карва: таблица и
                             // бейк видимости узнают о переживших кластерах.
-                            rebuild_static_light_table(reg, activeLayer);
+                            rebuild_static_light_table(reg, activeLayer,
+                                                       /*reset=*/false);
                             nav.set_light_table(g_staticLamps.data(),
                                                 g_staticLamps.size(), gpu::kGridCellSlots);
                             g_carveT.lightMatMs += carve_ms_since(ct0);
@@ -7099,6 +7203,11 @@ int main(int argc, char** argv) {
                         nav.light_vis().cells.data(),
                         nav.light_vis().cells.size(),
                         static_cast<std::uint32_t>(nav.light_gen()));
+                    // Полный бейк лёг — списки клеток больше не ссылаются на
+                    // лампы, умершие до этого поколения таблицы: их слоты с
+                    // этого момента можно отдавать новым лампам (см. вывод у
+                    // g_slotDeadGen).
+                    g_lightVisTableGen = g_staticTableGen;
                     g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",
