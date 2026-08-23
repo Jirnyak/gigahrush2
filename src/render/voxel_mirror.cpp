@@ -45,48 +45,6 @@ std::uint8_t classify(const SubMask& m) {
     return m.full() ? 1 : 2;
 }
 
-// Квадрант маски: 4×4 субвокселя в плоскости XY (words[sz] — z-слой, бит =
-// sx + sy*8), то есть 4 строки по 4 бита. Четыре константы — по одной на
-// (bx,by) блока 1 м.
-constexpr std::uint64_t quad_mask(int bx, int by) {
-    std::uint64_t m = 0;
-    for (int sy = 4 * by; sy < 4 * by + 4; ++sy)
-        m |= std::uint64_t{0xF} << (4 * bx + sy * 8);
-    return m;
-}
-constexpr std::uint64_t kQuad[4] = {quad_mask(0, 0), quad_mask(1, 0),
-                                    quad_mask(0, 1), quad_mask(1, 1)};
-
-// Восемь бит занятости блоков 1 м для одной клетки — из её маски, без
-// побитового обхода 512 субвокселей: блок = 4 z-слоя И квадрант.
-// `touched` (если не null) собирает тронутые слова решётки для заливки.
-void cell_occ_bits(std::uint32_t cell, const SubMask& m,
-                   std::vector<std::uint32_t>& occ,
-                   std::vector<std::uint32_t>* touched) {
-    const std::uint32_t cx = cell & (kMacroDim - 1u);
-    const std::uint32_t cy = (cell >> 7) & (kMacroDim - 1u);
-    const std::uint32_t cz = cell >> 14;
-    for (int bz = 0; bz < 2; ++bz)
-        for (int by = 0; by < 2; ++by)
-            for (int bx = 0; bx < 2; ++bx) {
-                const std::uint64_t q = kQuad[by * 2 + bx];
-                bool occupied = false;
-                for (int sz = 4 * bz; sz < 4 * bz + 4; ++sz)
-                    if (m.words[sz] & q) { occupied = true; break; }
-                const std::uint32_t idx =
-                    (cx * 2 + static_cast<std::uint32_t>(bx)) +
-                    (cy * 2 + static_cast<std::uint32_t>(by)) *
-                        VoxelMirror::kOccDim +
-                    (cz * 2 + static_cast<std::uint32_t>(bz)) *
-                        VoxelMirror::kOccDim * VoxelMirror::kOccDim;
-                const std::uint32_t w = idx >> 5;
-                const std::uint32_t bit = std::uint32_t{1} << (idx & 31u);
-                if (occupied) occ[w] |= bit;
-                else occ[w] &= ~bit;
-                if (touched) touched->push_back(w);
-            }
-}
-
 // CPU stain atoms are 3 B; the GPU page holds one u32 per atom.
 void repack_stain_page(const StainRGB* src, std::uint8_t* dst) {
     for (int i = 0; i < kSubVoxels; ++i) {
@@ -119,9 +77,6 @@ bool VoxelMirror::init(VulkanDevice& dev) {
         return false;
     if (!classes_.create_device_local_empty(dev, kClassBytes, usage,
                                             "voxel-mirror class"))
-        return false;
-    if (!occ_.create_device_local_empty(dev, kOccBytes, usage,
-                                        "voxel-mirror occ-1m"))
         return false;
     if (!fluid_.create_device_local_empty(dev, kFluidBytes, usage,
                                           "voxel-mirror fluid"))
@@ -165,12 +120,12 @@ bool VoxelMirror::init(VulkanDevice& dev) {
     fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     VK_TRY(vkCreateFence(dev.device, &fi, nullptr, &oneShotFence_));
 
-    // Теневой сет для растровых пассов ([ddalight.md]): masks(0) + class(1) +
-    // occ-1m(2), фрагментный стейдж — giga_shadow телам/пропсам маршует ту же
-    // занятость, что мир и физика. Один сет на всех; raymarch держит свой.
+    // Теневой сет для растровых пассов ([ddalight.md]): masks(0) + class(1),
+    // фрагментный стейдж — giga_shadow телам/пропсам маршует ту же занятость,
+    // что мир и физика. Один сет на всех потребителей; raymarch держит свой.
     {
-        VkDescriptorSetLayoutBinding b[3]{};
-        for (uint32_t i = 0; i < 3; ++i) {
+        VkDescriptorSetLayoutBinding b[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
             b[i].binding = i;
             b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             b[i].descriptorCount = 1;
@@ -178,14 +133,14 @@ bool VoxelMirror::init(VulkanDevice& dev) {
         }
         VkDescriptorSetLayoutCreateInfo li{};
         li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 3;
+        li.bindingCount = 2;
         li.pBindings = b;
         VK_TRY(vkCreateDescriptorSetLayout(dev.device, &li, nullptr,
                                            &shadowSetLayout_));
 
         VkDescriptorPoolSize ps{};
         ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps.descriptorCount = 3;
+        ps.descriptorCount = 2;
         VkDescriptorPoolCreateInfo pci{};
         pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pci.maxSets = 1;
@@ -200,15 +155,13 @@ bool VoxelMirror::init(VulkanDevice& dev) {
         sai.pSetLayouts = &shadowSetLayout_;
         VK_TRY(vkAllocateDescriptorSets(dev.device, &sai, &shadowSet_));
 
-        VkDescriptorBufferInfo bi[3]{};
+        VkDescriptorBufferInfo bi[2]{};
         bi[0].buffer = masks_.buffer;
         bi[0].range = VK_WHOLE_SIZE;
         bi[1].buffer = classes_.buffer;
         bi[1].range = VK_WHOLE_SIZE;
-        bi[2].buffer = occ_.buffer;
-        bi[2].range = VK_WHOLE_SIZE;
-        VkWriteDescriptorSet w[3]{};
-        for (uint32_t i = 0; i < 3; ++i) {
+        VkWriteDescriptorSet w[2]{};
+        for (uint32_t i = 0; i < 2; ++i) {
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[i].dstSet = shadowSet_;
             w[i].dstBinding = i;
@@ -216,7 +169,7 @@ bool VoxelMirror::init(VulkanDevice& dev) {
             w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[i].pBufferInfo = &bi[i];
         }
-        vkUpdateDescriptorSets(dev.device, 3, w, 0, nullptr);
+        vkUpdateDescriptorSets(dev.device, 2, w, 0, nullptr);
     }
 
     dirtyBits_.assign((kMacroCells + 63u) / 64u, 0u);
@@ -242,7 +195,6 @@ void VoxelMirror::destroy() {
     stainPool_.destroy(*dev_);
     stainIdx_.destroy(*dev_);
     fluid_.destroy(*dev_);
-    occ_.destroy(*dev_);
     classes_.destroy(*dev_);
     pagePool_.destroy(*dev_);
     pageIdx_.destroy(*dev_);
@@ -311,26 +263,6 @@ bool VoxelMirror::upload_all(const World& world) {
     for (std::size_t i = 0; i < kMacroCells; ++i)
         classScratch_[i] = classify(g.masks()[i]);
     ok = ok && upload_via_staging(classes_, classScratch_.data(), kClassBytes);
-
-    // Занятость блоков 1 м — с нуля от масок; flush() дальше ведёт её
-    // инкрементально по dirty-клеткам. Доля пустых блоков печатается: это
-    // ровно то, что скипу есть скипать (у суперклеток 8 м она была 0%).
-    occScratch_.assign(kOccWords, 0u);
-    for (std::size_t i = 0; i < kMacroCells; ++i)
-        cell_occ_bits(static_cast<std::uint32_t>(i), g.masks()[i], occScratch_,
-                      nullptr);
-    {
-        std::size_t occupied = 0;
-        for (std::uint32_t w : occScratch_)
-            occupied += static_cast<std::size_t>(__builtin_popcount(w));
-        std::fprintf(stderr,
-                     "[mirror] occ-1m: %zu/%zu blocks solid (%.1f%% empty — "
-                     "that is what the shadow ray skips)\n",
-                     occupied, kOccBits,
-                     100.0 * (1.0 - static_cast<double>(occupied) /
-                                        static_cast<double>(kOccBits)));
-    }
-    ok = ok && upload_via_staging(occ_, occScratch_.data(), kOccBytes);
 
     // Fluid: the field's bytes when the layer has one, zeros otherwise — a
     // recycled World must not tint the new floor with the old floor's puddles.
@@ -433,8 +365,7 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
     while (take < dirty_.size()) {
         const std::uint32_t ci = dirty_[take];
         std::size_t c = kMaskBytesPerCell + sizeof(CellType) +
-                        sizeof(std::uint32_t) * 2 + 1 /* class byte */ +
-                        8 * sizeof(std::uint32_t) /* occ-1m: ≤8 слов на клетку */;
+                        sizeof(std::uint32_t) * 2 + 1 /* class byte */;
         if (pageTab && pageTab[ci] < poolCount) c += kPageBytes;
         if (stainTab && stainTab[ci] < stainPages) c += kStainPageBytes;
         if (need + c > kStagingBytes) break;
@@ -451,8 +382,6 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
     idxCopies_.clear();
     poolCopies_.clear();
     classCopies_.clear();
-    occCopies_.clear();
-    occWordsTouched_.clear();
     stainIdxCopies_.clear();
     stainPoolCopies_.clear();
 
@@ -475,14 +404,8 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
             {off, static_cast<VkDeviceSize>(c0) * sizeof(CellType), bytes});
         off += bytes;
 
-        for (std::uint32_t k = 0; k < len; ++k) {
+        for (std::uint32_t k = 0; k < len; ++k)
             base[off + k] = classify(g.masks()[c0 + k]);
-            // Занятость 1 м — та же dirty-клетка, тот же кадр (иначе луч
-            // пропустит только что появившуюся материю).
-            if (occScratch_.size() == kOccWords)
-                cell_occ_bits(c0 + k, g.masks()[c0 + k], occScratch_,
-                              &occWordsTouched_);
-        }
         classCopies_.push_back({off, static_cast<VkDeviceSize>(c0),
                                 static_cast<VkDeviceSize>(len)});
         off += len;
@@ -535,22 +458,6 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         i = j;
     }
 
-    // Тронутые слова решётки занятости: дедуп (соседние клетки делят слово) и
-    // заливка из CPU-истины — 4 байта на слово, единицы слов на карв.
-    if (!occWordsTouched_.empty()) {
-        std::sort(occWordsTouched_.begin(), occWordsTouched_.end());
-        occWordsTouched_.erase(
-            std::unique(occWordsTouched_.begin(), occWordsTouched_.end()),
-            occWordsTouched_.end());
-        for (const std::uint32_t w : occWordsTouched_) {
-            std::memcpy(base + off, &occScratch_[w], sizeof(std::uint32_t));
-            occCopies_.push_back(
-                {off, static_cast<VkDeviceSize>(w) * sizeof(std::uint32_t),
-                 sizeof(std::uint32_t)});
-            off += sizeof(std::uint32_t);
-        }
-    }
-
     if (!maskCopies_.empty())
         vkCmdCopyBuffer(cmd, st.buffer, masks_.buffer,
                         static_cast<std::uint32_t>(maskCopies_.size()),
@@ -566,10 +473,6 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         vkCmdCopyBuffer(cmd, st.buffer, classes_.buffer,
                         static_cast<std::uint32_t>(classCopies_.size()),
                         classCopies_.data());
-    if (!occCopies_.empty())
-        vkCmdCopyBuffer(cmd, st.buffer, occ_.buffer,
-                        static_cast<std::uint32_t>(occCopies_.size()),
-                        occCopies_.data());
     if (!poolCopies_.empty())
         vkCmdCopyBuffer(cmd, st.buffer, pagePool_.buffer,
                         static_cast<std::uint32_t>(poolCopies_.size()),
@@ -690,40 +593,6 @@ bool VoxelMirror::verify(const World& world) {
         classScratch_[i] = classify(g.masks()[i]);
     ok = readback_compare(classes_, classScratch_.data(), kClassBytes, "class",
                           &m4) && ok;
-
-    // Занятость 1 м: истина пересобирается с нуля от свежих масок — ловит и
-    // дрейф GPU-буфера, и дрейф инкрементальных правок flush().
-    std::uint32_t mOcc_ = 0;
-    {
-        // ОРАКУЛ НЕЗАВИСИМЫЙ: наивный обход 4³ субвокселей блока по одному
-        // биту. Сверять с пересчётом ТОЙ ЖЕ cell_occ_bits бессмысленно —
-        // мутация builder'а тогда не ловится (проверено 2026-08-23: мутация
-        // прошла зелёной, поэтому оракул переписан).
-        std::vector<std::uint32_t> occExpect(kOccWords, 0u);
-        for (std::size_t i = 0; i < kMacroCells; ++i) {
-            const SubMask& m = g.masks()[i];
-            const std::uint32_t cx = static_cast<std::uint32_t>(i) & (kMacroDim - 1u);
-            const std::uint32_t cy = (static_cast<std::uint32_t>(i) >> 7) & (kMacroDim - 1u);
-            const std::uint32_t cz = static_cast<std::uint32_t>(i) >> 14;
-            for (int bz = 0; bz < 2; ++bz)
-              for (int by = 0; by < 2; ++by)
-                for (int bx = 0; bx < 2; ++bx) {
-                    bool solid = false;
-                    for (int sz = 4 * bz; sz < 4 * bz + 4 && !solid; ++sz)
-                      for (int sy = 4 * by; sy < 4 * by + 4 && !solid; ++sy)
-                        for (int sx = 4 * bx; sx < 4 * bx + 4; ++sx)
-                            if (m.test(sub_bit(sx, sy, sz))) { solid = true; break; }
-                    if (!solid) continue;
-                    const std::uint32_t idx =
-                        (cx * 2 + static_cast<std::uint32_t>(bx)) +
-                        (cy * 2 + static_cast<std::uint32_t>(by)) * kOccDim +
-                        (cz * 2 + static_cast<std::uint32_t>(bz)) * kOccDim * kOccDim;
-                    occExpect[idx >> 5] |= std::uint32_t{1} << (idx & 31u);
-                }
-        }
-        ok = readback_compare(occ_, occExpect.data(), kOccBytes, "occ-1m",
-                              &mOcc_) && ok;
-    }
     if (sub && poolCount > 0)
         ok = readback_compare(pagePool_, sub->pages_data(),
                               static_cast<std::size_t>(poolCount) * kPageBytes,
@@ -778,10 +647,10 @@ bool VoxelMirror::verify(const World& world) {
     }
     std::fprintf(stderr,
                  "[mirror] verify %s: %u dirty queued | masks %u types %u "
-                 "pageIdx %u pool %u class %u occ1m %u fluid %u stainIdx %u "
-                 "stainPool %u mismatching bytes\n",
-                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, mOcc_,
-                 mFluid, m5, m6);
+                 "pageIdx %u pool %u class %u fluid %u stainIdx %u stainPool %u "
+                 "mismatching bytes\n",
+                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, mFluid,
+                 m5, m6);
     return ok;
 }
 

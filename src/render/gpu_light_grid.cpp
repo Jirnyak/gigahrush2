@@ -467,15 +467,11 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
             if (std::atol(e) != 0) f |= 1u;
         if (const char* e = std::getenv("GIGA_LIGHT_TAIL"))
             if (std::atol(e) != 0) f |= 2u;
-        //   GIGA_OCC_OFF=1 — выключить пропуск по занятости 1 м (occ-1m):
-        //     A/B самой оптимизации на живой сцене одним бинарём.
-        if (const char* e = std::getenv("GIGA_OCC_OFF"))
-            if (std::atol(e) != 0) f |= 4u;
         if (f != 0)
             std::fprintf(stderr,
-                         "[light-grid] measuring flags: nosub=%d tail=%d "
-                         "noocc=%d — measuring, not playing\n",
-                         (f & 1u) != 0, (f & 2u) != 0, (f & 4u) != 0);
+                         "[light-grid] measuring flags: nosub=%d tail=%d — "
+                         "measuring, not playing\n",
+                         (f & 1u) != 0, (f & 2u) != 0);
         return f;
     }();
     uint32_t header[4] = {uploadCount, 0, kShadowFlags, kSurfaceRayOverride};

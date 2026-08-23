@@ -140,10 +140,8 @@ bool RaymarchPass::init(VulkanDevice& dev, VkRenderPass renderPass,
 }
 
 bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
-    // 10 биндингов: 0-4 зеркало, 5 UBO, 6 fluid, 7-8 стейны, 9 — занятость
-    // блоков 1 м по субвокселям (occ-1m, [voxel_mirror.h]).
-    VkDescriptorSetLayoutBinding b[10]{};
-    for (std::uint32_t i = 0; i < 10; ++i) {
+    VkDescriptorSetLayoutBinding b[9]{};
+    for (std::uint32_t i = 0; i < 9; ++i) {
         b[i].binding = i;
         b[i].descriptorType = i == 5 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                      : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -153,13 +151,13 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
 
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 10;
+    li.bindingCount = 9;
     li.pBindings = b;
     VK_TRY(vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &setLayout_));
 
     VkDescriptorPoolSize sizes[2]{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[0].descriptorCount = 9 * kMaxFramesInFlight;
+    sizes[0].descriptorCount = 8 * kMaxFramesInFlight;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[1].descriptorCount = kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
@@ -203,8 +201,8 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             VoxelMirror::kMasksBytes, VoxelMirror::kTypesBytes,
             VoxelMirror::kPageIdxBytes, VoxelMirror::kPoolBytes,
             VoxelMirror::kClassBytes};
-        VkDescriptorBufferInfo bi[10]{};
-        VkWriteDescriptorSet w[10]{};
+        VkDescriptorBufferInfo bi[9]{};
+        VkWriteDescriptorSet w[9]{};
         for (std::uint32_t i = 0; i < 5; ++i) {
             bi[i].buffer = bufs[i];
             bi[i].range = sizesB[i];
@@ -235,9 +233,7 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         bi[7].range = VoxelMirror::kStainIdxBytes;
         bi[8].buffer = mirror.stain_pool_buffer();
         bi[8].range = VoxelMirror::kStainPoolBytes;
-        bi[9].buffer = mirror.occ_buffer();
-        bi[9].range = VoxelMirror::kOccBytes;
-        for (std::uint32_t k = 7; k <= 9; ++k) {
+        for (std::uint32_t k = 7; k <= 8; ++k) {
             w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[k].dstSet = sets_[f];
             w[k].dstBinding = k;
@@ -245,7 +241,7 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[k].pBufferInfo = &bi[k];
         }
-        vkUpdateDescriptorSets(dev_->device, 10, w, 0, nullptr);
+        vkUpdateDescriptorSets(dev_->device, 9, w, 0, nullptr);
     }
     return true;
 }

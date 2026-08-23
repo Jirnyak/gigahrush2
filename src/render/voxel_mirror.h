@@ -108,27 +108,6 @@ public:
     // raymarcher's macro-skip: air costs one byte, full walls hit with no mask
     // read, only boundary cells pay the sub-DDA.
     static constexpr std::size_t kClassBytes = kMacroCells;
-    // ЗАНЯТОСТЬ ПО СУБВОКСЕЛЯМ, блок 1 м = 4³ субвокселя (закон владельца
-    // 2026-08-23: «в свете забыть про клетки 128³ — у нас всё по
-    // субвокселям»). Один БИТ на блок: «есть ли тут хоть один твёрдый
-    // субвоксель». Решётка 256³ бит = 2 МиБ — против 128 МиБ масок, и в
-    // этом вся суть: субвоксельный тест луча ОСТАЁТСЯ (он и есть качество
-    // теней), но там, где метр пуст, луч больше не тянет случайную строку
-    // кэша из 128 МиБ. Замер владельца: субвоксельная половина марша = 5.5
-    // мс кадра (45 → 60 fps при её полном отключении — отключать нельзя,
-    // свет течёт сквозь геометрию).
-    //
-    // Это НЕ иерархия пустоты над клетками (та убита замером в тот же день:
-    // суперклетки 8 м заняты на 100%, скипать нечего). Здесь масштаб МЕЛЬЧЕ
-    // клетки: над полом метр воздуха пуст по построению — там и выигрыш.
-    // Третья ступень лестницы кэшей S2: материал → маска → класс клетки →
-    // бит блока; обновляется тем же dirty-путём, семантика лучей бит-в-бит
-    // (пустой блок не может дать попадания — пропуск консервативен).
-    static constexpr std::uint32_t kOccDim = static_cast<std::uint32_t>(kMacroDim) * 2; // 256
-    static constexpr std::size_t kOccBits =
-        static_cast<std::size_t>(kOccDim) * kOccDim * kOccDim;
-    static constexpr std::size_t kOccWords = kOccBits / 32;   // 524288
-    static constexpr std::size_t kOccBytes = kOccWords * 4;   // 2 MiB
     // The "fluid" macro field, mirrored whole (8 MiB) whenever a fluid step
     // marks it — the marcher tints hit cells from it, which is what retired
     // the last regular invalidate() storm (31/s in maze mode).
@@ -191,7 +170,6 @@ public:
     VkBuffer page_index_buffer() const { return pageIdx_.buffer; }
     VkBuffer page_pool_buffer() const { return pagePool_.buffer; }
     VkBuffer class_buffer() const { return classes_.buffer; }
-    VkBuffer occ_buffer() const { return occ_.buffer; }
     VkBuffer fluid_buffer() const { return fluid_.buffer; }
     VkBuffer stain_index_buffer() const { return stainIdx_.buffer; }
     VkBuffer stain_pool_buffer() const { return stainPool_.buffer; }
@@ -219,7 +197,6 @@ private:
     VulkanBuffer pageIdx_;
     VulkanBuffer pagePool_;
     VulkanBuffer classes_;
-    VulkanBuffer occ_;
     VulkanBuffer fluid_;
     VulkanBuffer stainIdx_;
     VulkanBuffer stainPool_;
@@ -243,14 +220,11 @@ private:
     std::vector<VkBufferCopy> idxCopies_;
     std::vector<VkBufferCopy> poolCopies_;
     std::vector<VkBufferCopy> classCopies_;
-    std::vector<VkBufferCopy> occCopies_;
-    std::vector<std::uint32_t> occWordsTouched_; // слова 2-МиБ решётки за флаш
     std::vector<VkBufferCopy> stainIdxCopies_;
     std::vector<VkBufferCopy> stainPoolCopies_;
     // Reused expectation scratch for upload_all/verify's pageIdx image.
     std::vector<std::uint32_t> idxScratch_;
     std::vector<std::uint8_t> classScratch_;
-    std::vector<std::uint32_t> occScratch_; // CPU-истина битов занятости 1 м
     std::vector<std::uint8_t> stainRepack_;
     std::vector<float> fluidZeros_;
     bool fluidDirty_ = false;

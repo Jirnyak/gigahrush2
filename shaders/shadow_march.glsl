@@ -20,23 +20,9 @@ layout(set = GIGA_SHADOW_SET, binding = 1, std430) readonly buffer ShadowClassBu
     uint sClass[]; // 4 клетки на uint: 0 пусто, 1 цельно, 2 частично
 };
 
-// Занятость по субвокселям, блок 1 м (см. raymarch.frag/voxel_mirror.h):
-// один бит на 4³ атома, решётка 2 МиБ вместо 128 МиБ масок.
-layout(set = GIGA_SHADOW_SET, binding = 2, std430) readonly buffer ShadowOccBuf {
-    uint sOcc[];
-};
-
 const int   kSmMacroDim = GIGA_MACRO_DIM; // -D из CMakeLists <- world/types.h
 const float kSmCell = GIGA_CELL_SIZE;
 const float kSmVoxel = kSmCell / float(GIGA_SUB_DIM);
-const int   kSmOccDim = kSmMacroDim * 2;
-
-bool sm_occ_block(ivec3 b) {
-    b &= (kSmOccDim - 1);
-    uint i = uint(b.x) + uint(b.y) * uint(kSmOccDim) +
-             uint(b.z) * uint(kSmOccDim) * uint(kSmOccDim);
-    return ((sOcc[i >> 5] >> (i & 31u)) & 1u) != 0u;
-}
 
 uint sm_cell_index(ivec3 c) {
     c &= (kSmMacroDim - 1); // тор: врап на битовом И
@@ -53,22 +39,15 @@ bool sm_solid(uint ci, ivec3 s) {
 }
 
 // Суб-воксельный DDA внутри одной частичной клетки, t0..t1.
-bool sm_cell_blocked(uint ci, ivec3 c, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
+bool sm_cell_blocked(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
                      vec3 cellLo, float t0, float t1) {
     vec3 e = ro + rd * (t0 + 1e-5);
     ivec3 s = clamp(ivec3(floor((e - cellLo) / kSmVoxel)), ivec3(0), ivec3(7));
     vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kSmVoxel;
     vec3 sMax = (bound - ro) * rinv;
     vec3 sDelta = vec3(kSmVoxel) * abs(rinv);
-    ivec3 blkCur = ivec3(-1);
-    bool blkOcc = true;
-    bool useOcc = (uShadowFlags & kShadowFlagNoOcc) == 0u;
     for (int i = 0; i < 32; ++i) {
-        if (useOcc) {
-            ivec3 blk = s >> 2;
-            if (blk != blkCur) { blkCur = blk; blkOcc = sm_occ_block(c * 2 + blk); }
-        }
-        if (blkOcc && sm_solid(ci, s)) return true;
+        if (sm_solid(ci, s)) return true;
         int axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
                                    : (sMax.y < sMax.z ? 1 : 2);
         float t = sMax[axis];
@@ -106,7 +85,7 @@ float giga_shadow(vec3 ro, vec3 rd, float dist) {
         // NOSUB — та же измерительная ручка, что в raymarch.frag (маски не
         // читаются; частичные клетки прозрачны). Не режим игры.
         if (cls == 2u && (uShadowFlags & kShadowFlagNoSub) == 0u &&
-            sm_cell_blocked(ci, c, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
+            sm_cell_blocked(ci, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
                             min(tExit, dist)))
             return 0.0;
         int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
