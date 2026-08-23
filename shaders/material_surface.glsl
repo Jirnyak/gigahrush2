@@ -18,13 +18,15 @@ const uint kMaterialCsvRows = 21u;
 // Family per material id — see the kFam* constants in cube.frag.
 //   0 air                  generic  authored                 CV 0.0000
 //     never drawn by the world pass; body.vert writes this id so bodies
-//     keep the pre-existing look
+//     keep the pre-existing look; референс среды: flow/diffusion 1.0 =
+//     воздух уступает место и выравнивается за один подтик — единица шкалы
 //   1 concrete             smooth   authored                 CV 0.0800
 //     aged Soviet panel concrete; poured smooth, no panel seams
 //   2 soil                 smooth   authored                 CV 0.2200
 //     organic earth / soil mottle
 //   3 water_mark           generic  authored                 CV 0.0000
-//     legacy water marker
+//     legacy water marker; вода = референс текучести: flow 1.0 при
+//     вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость
 //   4 slab_tan             smooth   authored                 CV 0.0600
 //     muted tan concrete slab
 //   5 extract              smooth   authored                 CV 0.0300
@@ -49,11 +51,14 @@ const uint kMaterialCsvRows = 21u;
 //     thresholded low-frequency patches ~1.5 m; corroded, weaker than
 //     fresh steel
 //  15 rubble               rubble   rusty_corrugated_iron    CV 0.4437
-//     chunk plateaus at 33 cm; already broken once
+//     chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из
+//     угла естественного откоса щебня ~40° — (45−40)/45 ≈ 0.1 бокового
+//     растекания при осыпании
 //  16 electric_grate       tread    authored                 CV 0.0900
 //     AUTHORED: electrified floor grate — tread lattice, hot hazard tint
 //  17 acid_pool            smooth   authored                 CV 0.1000
-//     AUTHORED: caustic pool surface, broad slicks
+//     AUTHORED: caustic pool surface, broad slicks; жижа ~10 мПа·с → flow
+//     = вязкость_воды/вязкость = 0.1
 //  18 fire_cell            smooth   authored                 CV 0.1500
 //     AUTHORED: burning floor cell
 //  19 pipe_metal           ribbed   authored                 CV 0.1000
@@ -169,4 +174,56 @@ const float kMatEmissive[21] = float[21](
     0.000,  // 18 fire_cell
     0.000,  // 19 pipe_metal
     1.600   // 20 neon_tube
+);
+
+// СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),
+// y = diffusion (газы; 1 = воздух). Читатель — автомат
+// материи; движение НЕ читает kMatPhase (метка для
+// геймплейных предикатов: 0 тв / 1 жид / 2 газ — S16.2).
+const vec2 kMatMedium[21] = vec2[21](
+    vec2(1.000, 1.000),  //  0 air
+    vec2(0.000, 0.000),  //  1 concrete
+    vec2(0.000, 0.000),  //  2 soil
+    vec2(1.000, 0.000),  //  3 water_mark
+    vec2(0.000, 0.000),  //  4 slab_tan
+    vec2(0.000, 0.000),  //  5 extract
+    vec2(0.000, 0.000),  //  6 door
+    vec2(0.000, 0.000),  //  7 hub_pad
+    vec2(0.000, 0.000),  //  8 plaster
+    vec2(0.000, 0.000),  //  9 parquet
+    vec2(0.000, 0.000),  // 10 shop_shutter
+    vec2(0.000, 0.000),  // 11 lino
+    vec2(0.000, 0.000),  // 12 factory_wall
+    vec2(0.000, 0.000),  // 13 tread
+    vec2(0.000, 0.000),  // 14 rust
+    vec2(0.100, 0.000),  // 15 rubble
+    vec2(0.000, 0.000),  // 16 electric_grate
+    vec2(0.100, 0.000),  // 17 acid_pool
+    vec2(0.000, 0.000),  // 18 fire_cell
+    vec2(0.000, 0.000),  // 19 pipe_metal
+    vec2(0.000, 0.000)   // 20 neon_tube
+);
+
+const uint kMatPhase[21] = uint[21](
+    2u,  //  0 air
+    0u,  //  1 concrete
+    0u,  //  2 soil
+    1u,  //  3 water_mark
+    0u,  //  4 slab_tan
+    0u,  //  5 extract
+    0u,  //  6 door
+    0u,  //  7 hub_pad
+    0u,  //  8 plaster
+    0u,  //  9 parquet
+    0u,  // 10 shop_shutter
+    0u,  // 11 lino
+    0u,  // 12 factory_wall
+    0u,  // 13 tread
+    0u,  // 14 rust
+    0u,  // 15 rubble
+    0u,  // 16 electric_grate
+    1u,  // 17 acid_pool
+    0u,  // 18 fire_cell
+    0u,  // 19 pipe_metal
+    0u   // 20 neon_tube
 );

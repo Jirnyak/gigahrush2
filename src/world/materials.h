@@ -19,7 +19,7 @@ namespace giga {
 
 inline constexpr CellType kMatConcrete = 1;       // aged Soviet panel concrete; poured smooth, no panel seams
 inline constexpr CellType kMatSoil = 2;           // organic earth / soil mottle
-inline constexpr CellType kMatWaterMark = 3;      // legacy water marker
+inline constexpr CellType kMatWaterMark = 3;      // legacy water marker; вода = референс текучести: flow 1.0 при вязкости 1 
 inline constexpr CellType kMatSlabTan = 4;        // muted tan concrete slab
 inline constexpr CellType kMatExtract = 5;        // the bank pad: signage, not surface — unbreakable infrastructure
 inline constexpr CellType kMatDoor = 6;           // door leaf + frame; carve-immune, owned by the door state machine
@@ -31,9 +31,9 @@ inline constexpr CellType kMatLino = 11;           // dark rubber with seams; 50
 inline constexpr CellType kMatFactoryWall = 12;    // green corrugated factory metal, 15 cm corrugation
 inline constexpr CellType kMatTread = 13;          // walkway grate, 25 cm studs
 inline constexpr CellType kMatRust = 14;           // thresholded low-frequency patches ~1.5 m; corroded, weaker than fresh st
-inline constexpr CellType kMatRubble = 15;         // chunk plateaus at 33 cm; already broken once
+inline constexpr CellType kMatRubble = 15;         // chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из угла е
 inline constexpr CellType kMatElectricGrate = 16;  // AUTHORED: electrified floor grate — tread lattice, hot hazard tint
-inline constexpr CellType kMatAcidPool = 17;       // AUTHORED: caustic pool surface, broad slicks
+inline constexpr CellType kMatAcidPool = 17;       // AUTHORED: caustic pool surface, broad slicks; жижа ~10 мПа·с → flow = вя
 inline constexpr CellType kMatFireCell = 18;       // AUTHORED: burning floor cell
 inline constexpr CellType kMatPipeMetal = 19;      // AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit, dent
 inline constexpr CellType kMatNeonTube = 20;       // неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк клас

@@ -53,6 +53,10 @@ FAM = {
 # Rec. 709 luminance, matching tools/measure_materials.py.
 LUM = (0.2126, 0.7152, 0.0722)
 
+# Phase is a LABEL for gameplay predicates (passability, buoyancy, breathing);
+# matter MOVEMENT never reads it — only flow/diffusion/density (CANON S16.2).
+PHASE = {"solid": 0, "liquid": 1, "gas": 2}
+
 
 def die(msg):
     sys.stderr.write("gen_material_table: %s\n" % msg)
@@ -166,11 +170,28 @@ def main():
             "emissive_e3": int(fnum(r, "emissive_e3", i, 0, 4000)),
             "light_radius_mm": int(fnum(r, "light_radius_mm", i, 0, 65535)),
             "light_intensity_e3": int(fnum(r, "light_intensity_e3", i, 0, 65535)),
+            "phase": r["phase"].strip(),
+            "flow": fnum(r, "flow", i, 0, 1),
+            "diffusion": fnum(r, "diffusion", i, 0, 1),
             "note": r["note"],
         })
         if (mats[-1]["light_radius_mm"] == 0) != (mats[-1]["light_intensity_e3"] == 0):
             die("row %d (%s): light_radius_mm and light_intensity_e3 must be "
                 "both zero or both set" % (i, r["name"]))
+        # Label and parameters must not be able to disagree (CANON S16.2): the
+        # gameplay label promises behaviour the movement parameters deliver.
+        m = mats[-1]
+        if m["phase"] not in PHASE:
+            die("row %d (%s): unknown phase %r (solid/liquid/gas)"
+                % (i, r["name"], m["phase"]))
+        if i == 0 and m["phase"] != "gas":
+            die("row 0 (air) must be phase=gas — it IS the default medium")
+        if m["phase"] == "liquid" and m["flow"] <= 0.0:
+            die("row %d (%s): a liquid that cannot flow — label/params disagree"
+                % (i, r["name"]))
+        if m["phase"] == "gas" and m["diffusion"] <= 0.0:
+            die("row %d (%s): a gas that cannot diffuse — label/params disagree"
+                % (i, r["name"]))
     n = len(mats)
     names = [m["name"] for m in mats]
 
@@ -265,6 +286,32 @@ inline float material_subvoxel_mass_kg(CellType t) {
     return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
 }
 
+// СРЕДЫ (CANON S16, мир-автомат). Движение материи читает ТОЛЬКО параметры:
+//   flow      — доля, перетекающая вбок за подтик автомата: 0 = твёрдое
+//               (лежит; падает, когда опоры нет — это и есть обломки),
+//               1 = вода (референс: вязкость 1 мПа·с; прочие жидкости =
+//               вязкость_воды/вязкость — вывод в note строки CSV);
+//   diffusion — расползание без гравитации (газы); 1 = воздух (референс:
+//               выравнивается за один подтик).
+// phase — МЕТКА для геймплейных предикатов (проходимость, плавучесть,
+// дыхание); физика движения её НЕ читает и ветки по ней не имеет (S16.2).
+// Метка и параметры не могут разойтись — генератор это гейтит (жидкость
+// обязана течь, газ обязан диффундировать; воздух обязан быть газом).
+enum class MatPhase : std::uint8_t { Solid = 0, Liquid = 1, Gas = 2 };
+
+inline constexpr std::uint8_t kMatPhase[kMatCount] = {
+%(phase)s};
+
+inline constexpr float kMatFlow[kMatCount] = {
+%(flow)s};
+
+inline constexpr float kMatDiffusion[kMatCount] = {
+%(diffusion)s};
+
+inline MatPhase material_phase(CellType t) {
+    return t < kMatCount ? static_cast<MatPhase>(kMatPhase[t]) : MatPhase::Solid;
+}
+
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
 // материала излучают; бейк этажа кластеризует их в статические эмиттеры
 // (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
@@ -291,6 +338,9 @@ inline bool material_emits_light(CellType t) {
 
 } // namespace giga
 """ % {
+            "phase": elements(mats, ["%d" % PHASE[m["phase"]] for m in mats], names),
+            "flow": elements(mats, ["%.3ff" % m["flow"] for m in mats], names),
+            "diffusion": elements(mats, ["%.3ff" % m["diffusion"] for m in mats], names),
             "light_radius": elements(mats, ["%d" % m["light_radius_mm"] for m in mats], names),
             "light_intensity": elements(mats, ["%d" % m["light_intensity_e3"] for m in mats], names),
             "albedo_r": elements(mats, ["%.3ff" % m["albedo"][0] for m in mats], names),
@@ -409,6 +459,19 @@ const uint kMaterialCsvRows = %du;
         fh.write(elements(mats,
                           ["%.3f" % (m["emissive_e3"] * 0.001) for m in mats],
                           names))
+        fh.write(");\n\n")
+
+        fh.write("// СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),\n"
+                 "// y = diffusion (газы; 1 = воздух). Читатель — автомат\n"
+                 "// материи; движение НЕ читает kMatPhase (метка для\n"
+                 "// геймплейных предикатов: 0 тв / 1 жид / 2 газ — S16.2).\n")
+        fh.write("const vec2 kMatMedium[%d] = vec2[%d](\n" % (n, n))
+        fh.write(elements(mats,
+                          ["vec2(%.3f, %.3f)" % (m["flow"], m["diffusion"])
+                           for m in mats], names))
+        fh.write(");\n\n")
+        fh.write("const uint kMatPhase[%d] = uint[%d](\n" % (n, n))
+        fh.write(elements(mats, ["%du" % PHASE[m["phase"]] for m in mats], names))
         fh.write(");\n")
 
     sys.stderr.write(

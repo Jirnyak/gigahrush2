@@ -85,6 +85,95 @@ inline float material_subvoxel_mass_kg(CellType t) {
     return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
 }
 
+// СРЕДЫ (CANON S16, мир-автомат). Движение материи читает ТОЛЬКО параметры:
+//   flow      — доля, перетекающая вбок за подтик автомата: 0 = твёрдое
+//               (лежит; падает, когда опоры нет — это и есть обломки),
+//               1 = вода (референс: вязкость 1 мПа·с; прочие жидкости =
+//               вязкость_воды/вязкость — вывод в note строки CSV);
+//   diffusion — расползание без гравитации (газы); 1 = воздух (референс:
+//               выравнивается за один подтик).
+// phase — МЕТКА для геймплейных предикатов (проходимость, плавучесть,
+// дыхание); физика движения её НЕ читает и ветки по ней не имеет (S16.2).
+// Метка и параметры не могут разойтись — генератор это гейтит (жидкость
+// обязана течь, газ обязан диффундировать; воздух обязан быть газом).
+enum class MatPhase : std::uint8_t { Solid = 0, Liquid = 1, Gas = 2 };
+
+inline constexpr std::uint8_t kMatPhase[kMatCount] = {
+    2,  //  0 air
+    0,  //  1 concrete
+    0,  //  2 soil
+    1,  //  3 water_mark
+    0,  //  4 slab_tan
+    0,  //  5 extract
+    0,  //  6 door
+    0,  //  7 hub_pad
+    0,  //  8 plaster
+    0,  //  9 parquet
+    0,  // 10 shop_shutter
+    0,  // 11 lino
+    0,  // 12 factory_wall
+    0,  // 13 tread
+    0,  // 14 rust
+    0,  // 15 rubble
+    0,  // 16 electric_grate
+    1,  // 17 acid_pool
+    0,  // 18 fire_cell
+    0,  // 19 pipe_metal
+    0   // 20 neon_tube
+};
+
+inline constexpr float kMatFlow[kMatCount] = {
+    1.000f,  //  0 air
+    0.000f,  //  1 concrete
+    0.000f,  //  2 soil
+    1.000f,  //  3 water_mark
+    0.000f,  //  4 slab_tan
+    0.000f,  //  5 extract
+    0.000f,  //  6 door
+    0.000f,  //  7 hub_pad
+    0.000f,  //  8 plaster
+    0.000f,  //  9 parquet
+    0.000f,  // 10 shop_shutter
+    0.000f,  // 11 lino
+    0.000f,  // 12 factory_wall
+    0.000f,  // 13 tread
+    0.000f,  // 14 rust
+    0.100f,  // 15 rubble
+    0.000f,  // 16 electric_grate
+    0.100f,  // 17 acid_pool
+    0.000f,  // 18 fire_cell
+    0.000f,  // 19 pipe_metal
+    0.000f   // 20 neon_tube
+};
+
+inline constexpr float kMatDiffusion[kMatCount] = {
+    1.000f,  //  0 air
+    0.000f,  //  1 concrete
+    0.000f,  //  2 soil
+    0.000f,  //  3 water_mark
+    0.000f,  //  4 slab_tan
+    0.000f,  //  5 extract
+    0.000f,  //  6 door
+    0.000f,  //  7 hub_pad
+    0.000f,  //  8 plaster
+    0.000f,  //  9 parquet
+    0.000f,  // 10 shop_shutter
+    0.000f,  // 11 lino
+    0.000f,  // 12 factory_wall
+    0.000f,  // 13 tread
+    0.000f,  // 14 rust
+    0.000f,  // 15 rubble
+    0.000f,  // 16 electric_grate
+    0.000f,  // 17 acid_pool
+    0.000f,  // 18 fire_cell
+    0.000f,  // 19 pipe_metal
+    0.000f   // 20 neon_tube
+};
+
+inline MatPhase material_phase(CellType t) {
+    return t < kMatCount ? static_cast<MatPhase>(kMatPhase[t]) : MatPhase::Solid;
+}
+
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
 // материала излучают; бейк этажа кластеризует их в статические эмиттеры
 // (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
