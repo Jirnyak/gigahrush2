@@ -36,13 +36,11 @@ void RebakeScheduler::join_worker() {
 }
 
 void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
-                                      std::uint32_t slots,
-                                      std::uint32_t clusterBase) {
+                                      std::uint32_t slots) {
     lampsLive_.assign(lamps, lamps + n);
     lightSlots_ = slots;
-    lightClusterBase_ = clusterBase;
     // Состав таблицы изменился (рождение/смерть лампы) — следующий
-    // Rebake-цикл обязан печь свет ПОЛНОСТЬЮ (форма: слоты, кластеры).
+    // Rebake-цикл обязан печь свет ПОЛНОСТЬЮ (форма: слоты).
     ++lightTableGen_;
 }
 
@@ -174,8 +172,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // печатается вслух — правило «бейк без замера прячет свою регрессию».
     {
         bake_light_visibility(grid, lampsLive_.data(), lampsLive_.size(),
-                              lightSlots_, lightVis_, /*threads=*/0, nullptr,
-                              lightClusterBase_);
+                              lightSlots_, lightVis_, /*threads=*/0, nullptr);
         lightGen_ = worldGen;
         lightSwapPending_ = true;
         lightTableBakedGen_ = lightTableGen_; // Fresh = полный бейк состава
@@ -285,8 +282,7 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         if (shadowGrid_ != nullptr && cycleLightFull_) {
             bake_light_visibility(*shadowGrid_, lampsSnap_.data(),
                                   lampsSnap_.size(), lightSlots_,
-                                  pendingLight_, threads, &cancel_,
-                                  lightClusterBase_);
+                                  pendingLight_, threads, &cancel_);
             if (!cancel_.load(std::memory_order_relaxed)) {
                 std::fprintf(
                     stderr,

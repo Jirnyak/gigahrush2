@@ -192,10 +192,6 @@ static std::vector<game::BakedLight> g_bakedFloorLights;
 // сущности. Перестраивается при постройке этажа и при карве светоматериала;
 // g_staticTableGen — сигнал collect_scene_lights перезалить таблицу в рендер.
 static std::vector<game::LightVisLamp> g_staticLamps;
-// Кластеры текущего поколения бейка (light-cluster.md шаг 2): CSR членов для
-// покадровой суммы интенсивностей. Слоты — верхний регион kClusterSlotBase.
-static std::vector<std::pair<std::uint32_t, std::uint32_t>> g_lightClusterRanges;
-static std::vector<std::uint32_t> g_lightClusterMembers;
 static std::vector<gpu::GpuPointLight> g_staticLightBase;
 static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
 static std::uint32_t g_staticTableGen = 0;
@@ -209,10 +205,6 @@ static_assert(gpu::kGridDimX == game::kLightVisDim &&
               "бейк видимости и светосетка рендера обязаны жить в одной сетке");
 static_assert(gpu::kGridCellMeters == game::kLightVisCellM,
               "клетка светосетки: рендер и бейк разошлись");
-static_assert(gpu::kClusterSlots ==
-                  static_cast<std::uint32_t>(game::kClusterGridDim) *
-                      game::kClusterGridDim * game::kClusterGridDim,
-              "кластерный регион таблицы = ровно максимум 8-м бакетов");
 static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
               "сентинель «нет слота» обязан быть одним значением");
 
@@ -547,18 +539,6 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     for (std::size_t i = 0; i < g_bakedFloorLights.size(); ++i) {
         grid.set_static_intensity(g_bakedLightSlots[i],
                                   g_bakedFloorLights[i].intensity);
-    }
-
-    // 8б. Кластеры: интенсивность = СУММА членов, посчитанных выше (CSR из
-    // бейка; light-cluster.md §2.3). Мерцание толпы усредняется само,
-    // обесточка района гасит кластер, надгробие члена уменьшает сумму тем же
-    // кадром. Порядок обязан быть после всех статик-записей секций 7-8.
-    for (std::size_t ci = 0; ci < g_lightClusterRanges.size(); ++ci) {
-        const auto [mStart, mCount] = g_lightClusterRanges[ci];
-        float sum = 0.0f;
-        for (std::uint32_t k = 0; k < mCount; ++k)
-            sum += grid.staged_intensity(g_lightClusterMembers[mStart + k]);
-        grid.set_cluster_intensity(static_cast<std::uint32_t>(ci), sum);
     }
 
     // 9. Свет из РУК: экипированный инструмент игрока ([equip.h] Tool), чья
@@ -1618,8 +1598,7 @@ void begin_floor_nav(const World& world, int floorNumber,
     // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
     // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
     // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
-    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
-                         gpu::kGridCellSlots, gpu::kClusterSlotBase);
+    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(), gpu::kGridCellSlots);
     // The ROOM zones are baked synchronously inside start_fresh, because they
     // are three multi-source BFS against the async bake's 128 — measured below
     // in the same line the nav timings print. Synchronous also means the
@@ -4339,8 +4318,7 @@ int main(int argc, char** argv) {
                         // выкушенный неон умирает вместе со слотом).
                         rebuild_static_light_table(reg, activeLayer);
                         nav.set_light_table(g_staticLamps.data(),
-                                            g_staticLamps.size(),
-                                            gpu::kGridCellSlots, gpu::kClusterSlotBase);
+                                            g_staticLamps.size(), gpu::kGridCellSlots);
                         g_carveT.lightMatMs += carve_ms_since(ct0);
                     }
                     if (removed > 0) {
@@ -4749,8 +4727,7 @@ int main(int argc, char** argv) {
                             // бейк видимости узнают о переживших кластерах.
                             rebuild_static_light_table(reg, activeLayer);
                             nav.set_light_table(g_staticLamps.data(),
-                                                g_staticLamps.size(),
-                                                gpu::kGridCellSlots, gpu::kClusterSlotBase);
+                                                g_staticLamps.size(), gpu::kGridCellSlots);
                             g_carveT.lightMatMs += carve_ms_since(ct0);
                         }
                         if (removed > 0) {
@@ -7122,26 +7099,6 @@ int main(int argc, char** argv) {
                         nav.light_vis().cells.data(),
                         nav.light_vis().cells.size(),
                         static_cast<std::uint32_t>(nav.light_gen()));
-                    // Кластеры поколения: записи в верхний регион таблицы +
-                    // CSR членов для покадровой суммы (light-cluster.md §3.2).
-                    // (Кластерная ТОПОЛОГИЯ грязного фоллбэка вырезана чисткой
-                    // 2026-08-23 вместе с самой грязной веткой, 37e772d1.)
-                    const auto& lv = nav.light_vis();
-                    std::vector<gpu::GpuPointLight> recs(lv.clusters.size());
-                    g_lightClusterRanges.resize(lv.clusters.size());
-                    for (std::size_t i = 0; i < lv.clusters.size(); ++i) {
-                        const auto& c = lv.clusters[i];
-                        recs[i].posRadius =
-                            vec4{c.pos.x, c.pos.y, c.pos.z, c.radiusM};
-                        recs[i].colorIntensity =
-                            vec4{c.color.x, c.color.y, c.color.z, 0.0f};
-                        recs[i].dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
-                        g_lightClusterRanges[i] = {c.memberStart,
-                                                   c.memberCount};
-                    }
-                    g_lightClusterMembers = lv.clusterMembers;
-                    lightGrid.set_cluster_records(
-                        recs.data(), static_cast<uint32_t>(recs.size()));
                     g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",

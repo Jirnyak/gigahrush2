@@ -263,18 +263,6 @@ void GpuLightGrid::set_static_intensity(uint32_t slot, float intensity) noexcept
     stagingLights_[slot].colorIntensity.w = intensity;
 }
 
-void GpuLightGrid::set_cluster_records(const GpuPointLight* recs,
-                                       uint32_t n) noexcept {
-    clusterCount_ = std::min(n, kClusterSlots);
-    for (uint32_t i = 0; i < clusterCount_; ++i)
-        stagingLights_[kClusterSlotBase + i] = recs[i];
-}
-
-void GpuLightGrid::set_cluster_intensity(uint32_t idx, float v) noexcept {
-    if (idx >= clusterCount_) return;
-    stagingLights_[kClusterSlotBase + idx].colorIntensity.w = v;
-}
-
 float GpuLightGrid::staged_intensity(uint32_t slot) const noexcept {
     return slot < kRootLights ? stagingLights_[slot].colorIntensity.w : 0.0f;
 }
@@ -459,15 +447,6 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
     if (uploadCount > 0) {
         std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),
                     uploadCount * sizeof(GpuPointLight));
-    }
-    // Кластерный регион — вторым куском: живёт наверху таблицы, основной
-    // memcpy низа его не покрывает. Интенсивности кластеров кадр уже сложил.
-    if (clusterCount_ > 0) {
-        std::memcpy(static_cast<char*>(lightMapped_) + 16 +
-                        static_cast<std::size_t>(kClusterSlotBase) *
-                            sizeof(GpuPointLight),
-                    stagingLights_.data() + kClusterSlotBase,
-                    clusterCount_ * sizeof(GpuPointLight));
     }
 
     // Сплат динамиков по бакетам (59.14): каждый динамик ложится id-шником

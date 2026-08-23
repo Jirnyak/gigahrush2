@@ -294,27 +294,16 @@ if(NOT _giga_lgrid_h MATCHES "kGridCellBytes = ([0-9]+)")
     message(FATAL_ERROR "cannot parse kGridCellBytes out of src/render/gpu_light_grid.h.")
 endif()
 set(_giga_lgrid_cell_bytes ${CMAKE_MATCH_1})
-# База кластерного региона таблицы (light-cluster.md): шейдер отличает кластер
-# от лампы по слоту — кластеры без теневого марша (решение владельца).
-if(NOT _giga_lgrid_h MATCHES "kClusterSlotBase = kRootLights - kClusterSlots")
-    message(FATAL_ERROR "cannot find kClusterSlotBase derivation in gpu_light_grid.h.")
-endif()
-if(NOT _giga_lgrid_h MATCHES "kRootLights = ([0-9]+)")
-    message(FATAL_ERROR "cannot parse kRootLights out of src/render/gpu_light_grid.h.")
-endif()
-set(_giga_root_lights ${CMAKE_MATCH_1})
-if(NOT _giga_lgrid_h MATCHES "kClusterSlots = ([0-9]+)")
-    message(FATAL_ERROR "cannot parse kClusterSlots out of src/render/gpu_light_grid.h.")
-endif()
-math(EXPR _giga_cluster_base "${_giga_root_lights} - ${CMAKE_MATCH_1}")
+# (Кластерный регион таблицы удалён 2026-08-23 вместе с самим механизмом:
+# он не работал ни кадра — биннинг выбрасывал все ссылки, — и рвал свет
+# прямоугольниками по клеткам светосетки. Дефайн шейдеру больше не нужен.)
 set(_giga_shader_defs
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
     -DGIGA_CELL_SIZE=${_giga_cell_size}
     -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
     -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
-    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
-    -DGIGA_LIGHT_CLUSTER_BASE=${_giga_cluster_base})
+    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes})
 # Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
 # above go stale while the build stays green.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -1218,6 +1207,14 @@ if(GIGA_BUILD_TESTS)
     # ChargeArmed/charge_step, вывод урона и радиуса из массы ВВ);
     # test_grenade мигрирован, grenade_advance мёртв, валидация таблицы
     # различает метательное (dmg=0, правда на пропе) и стволы.
+    # 246483 -> 246462 (−21) on 2026-08-23: КЛАСТЕРЫ УДАЛЕНЫ (решение
+    # владельца). Механизм не работал ни кадра — биннинг выбрасывал каждую
+    # кластерную ссылку (id 98304+ против порога staticCount ~12646,
+    # light_grid.comp), ветка потребителя была мёртвым кодом, а обрезка
+    # списка клетки до 8 честных ламп при среднем 10.6 рвала свет
+    # прямоугольниками по клеткам 4 м (скриншот владельца). Умерли два
+    # теста кластерной паковки — они пиновали CPU-раскладку, которую никто
+    # не читал; ни одна живая сюита не остановилась.
     # 246488 -> 246483 (−5) on 2026-08-23: ПАДЕНИЕ ОСОЗНАННОЕ — чистка мёртвого
     # дренажа dirtyGen (свет догоняет мир, 37e772d1): умерли 3 чека вывода
     # радиуса грязного шара (dirty_radius_derivation целиком), чек дренажа и
@@ -1226,7 +1223,7 @@ if(GIGA_BUILD_TESTS)
     # останавливалась: lightvis по-прежнему гоняет пин/оракул/патч.
     # 246475 -> 246488 (+13) on 2026-08-22: триггер «от урона» — бочка строкой
     # CSV: выстрел взводит (не детач), рвёт тот же charge_step/detonate.
-        PASS_REGULAR_EXPRESSION "game_test: 246483 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 246462 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

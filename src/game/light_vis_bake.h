@@ -89,37 +89,18 @@ inline std::size_t light_vis_index(int x, int y, int z) {
 struct LightVisLamp {
     vec3 pos{0.0f, 0.0f, 0.0f};
     float radiusM = 0.0f;
-    // Цвет нужен ТОЛЬКО синтезу кластеров (light-cluster.md): кластерная
-    // запись PointLight несёт взвешенный цвет членов. Вес члена — radiusM²
-    // (флюкс-прокси: радиус выводится из силы, а живая интенсивность в base
-    // всегда 0 — её пишет кадр).
+    // Цвет лампы. (Единственным потребителем был синтез кластеров, удалённый
+    // 2026-08-23; поле оставлено — оно описывает лампу, а не механизм.)
     vec3 color{1.0f, 1.0f, 1.0f};
 };
 
-// --- Кластеры (light-cluster.md, решения владельца 2026-08-20) --------------
-//
-// Кластер = пространственный бакет ламп 8 м (= 2 клетки светосетки; вывод:
-// ошибка позиции кластера ≤ полудиагонали бакета ≈ 6.9 м — хвостовые лампы
-// по построению дальние/слабые, угловая ошибка тонет в аттенюации; финал —
-// замером). Кластер — та же запись PointLight для потребителя: позиция =
-// центроид членов по весу radiusM², радиус = охват (max дистанции до члена +
-// его радиус), цвет — взвешенное среднее. Живую интенсивность кластера кадр
-// считает суммой членов (CPU, collect_scene_lights) — мерцание толпы
-// усредняется само, обесточка района гасит кластер честно.
-inline constexpr int kClusterBucketCells = 2;              // клеток светосетки
-inline constexpr int kClusterGridDim = kLightVisDim / kClusterBucketCells; // 32
-// Честных ламп на клетку (топ по вкладу, с настоящими теневыми маршами):
-// вывод — максимум теневого бюджета пикселя (4, volumetric_fog.glsl) × запас
-// 2 на отбраковку порогом/ndotl. Хвост за ними уходит в кластеры (шаг 2).
-inline constexpr std::uint32_t kClusterHonestLamps = 8;
-
-struct LightVisCluster {
-    vec3 pos{0.0f, 0.0f, 0.0f};
-    float radiusM = 0.0f;
-    vec3 color{1.0f, 1.0f, 1.0f};
-    std::uint32_t memberStart = 0; // диапазон в LightVisBake::clusterMembers
-    std::uint32_t memberCount = 0;
-};
+// КЛАСТЕРЫ УДАЛЕНЫ 2026-08-23 (решение владельца). Механизм не работал ни
+// одного кадра: биннинг (light_grid.comp) выбрасывал каждую кластерную
+// ссылку по гварде `id >= staticCount` (98304 против ~12646), а ветка
+// потребителя была мёртвым кодом. Цена бага — обрезка списка клетки до 8
+// честных ламп при среднем 10.6: состав решался поклеточно, и на границах
+// 4-метровых клеток свет и тени рвались прямоугольниками. Клетка снова
+// держит весь свой список (до slots = 63).
 
 // Выход бейка: на клетку светосетки — (1 + slots) слов u32 в лейауте
 // GpuGridCell (count, id[slots]), отсортированных по вкладу (лучший первым),
@@ -142,12 +123,6 @@ struct LightVisBake {
     // реально платит пиксель; сравнивать с meanPerCell (достижимых).
     float packedMeanPerCell = 0.0f;
     float bakeMs = 0.0f;
-    // Кластеры занятых бакетов (порядок — возрастание плоского индекса
-    // бакета: детерминизм) + CSR слотов-членов. Шаг 1 light-cluster.md:
-    // синтез есть, клетки их ещё НЕ ссылают (это шаг 2, вместе со слотами в
-    // статик-таблице — id без записи в таблице был бы чтением мусора).
-    std::vector<LightVisCluster> clusters;
-    std::vector<std::uint32_t> clusterMembers;
 
     bool valid() const { return !cells.empty(); }
     std::size_t resident_bytes() const {
@@ -175,15 +150,11 @@ float light_cell_score(const vec3& lampPos, float radiusM, int cx, int cy,
 // непрерывные чанки ([core/jobs.h]), выход склеивается в порядке ламп.
 // cancel — узловая отмена (гранулярность — лампа). `grid` — живой на Fresh
 // (синхронный бейк главного потока) или снапшот-копия воркера на Rebake.
-// clusterRefBase != 0 включает паковку шага 2 (light-cluster.md): клетка =
-// top-kClusterHonestLamps честных + ссылки кластеров хвостовых бакетов как
-// clusterRefBase + clusterIdx (верхний регион таблицы, рендер передаёт свой
-// kClusterSlotBase — game лейаут-агностичен). 0 = прежняя паковка top-slots.
+// Паковка одна: top-slots по вкладу (кластерная ветка удалена 2026-08-23).
 void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                            std::size_t lampCount, std::uint32_t slots,
                            LightVisBake& out, int threads = 0,
-                           const std::atomic<bool>* cancel = nullptr,
-                           std::uint32_t clusterRefBase = 0);
+                           const std::atomic<bool>* cancel = nullptr);
 
 // FNV-1a содержимого клеток — пин воспроизводимости (GIGA_LIGHT_VIS_PIN,
 // образец GIGA_VERLET_PIN).

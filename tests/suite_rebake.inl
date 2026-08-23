@@ -66,7 +66,7 @@ void sla_holds_on_a_real_floor() {
 
     // Ёмкость клетки светосетки — ДО start_fresh (как в main): без неё
     // stride=1 и дельта-патчу некуда дописывать (проверяется ниже).
-    s.set_light_table(nullptr, 0, 63, 0);
+    s.set_light_table(nullptr, 0, 63);
 
     // --- Fresh: текущая семантика входа на этаж --------------------------
     s.start_fresh(w.grid(), FloorKind::Residential, 0, rooms, gen);
@@ -175,7 +175,7 @@ void sla_holds_on_a_real_floor() {
                         (static_cast<float>(nby) + 0.5f) * kCellSize,
                         (static_cast<float>(nbz) + 0.5f) * kCellSize};
         lamp.radiusM = 8.0f;
-        s.set_light_table(&lamp, 1, 63, 0);
+        s.set_light_table(&lamp, 1, 63);
         // ±2 клетки: худшая диагональ 6.9 м < охвата лампы 8+1.7 м — вторая
         // стена гарантированно в зоне затронутости.
         int target2 = -1;

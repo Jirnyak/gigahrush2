@@ -41,15 +41,12 @@ static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
 // Обязан совпадать с kTombstone в light_grid.comp.
 static constexpr float kTombstoneIntensity = 0.001f;
 
-// Кластерный регион (light-cluster.md §3): ВЕРХ таблицы отдан кластерам
-// бейка — слот = kClusterSlotBase + clusterIdx. Регион = ровно максимум
-// 8-м бакетов (32³ = game::kClusterGridDim³, static_assert на шве в app);
-// низ (статики+динамики, сегодня ~12k) до него не дорастает, а переполнение
-// низа и так печатается. Слоты стабильны на поколение бейка БЕЗ ремапа при
-// аппендах карва; грязный фолбэк биннит только [0, activeCount) — кластеры
-// в него не попадают, двойного света в грязных клетках нет.
-static constexpr uint32_t kClusterSlots = 32768;
-static constexpr uint32_t kClusterSlotBase = kRootLights - kClusterSlots; // 98304
+// КЛАСТЕРЫ УДАЛЕНЫ 2026-08-23 (решение владельца): регион верхних слотов,
+// записи-агрегаты и покадровая сумма их интенсивностей. Механизм не работал
+// ни одного кадра — биннинг выбрасывал каждую кластерную ссылку (id 98304+
+// против порога staticCount ~12646), потребительская ветка шейдера была
+// мёртвым кодом. Цена: клетка жила максимум 8 честными лампами при среднем
+// 10.6, и свет рвался прямоугольниками по границам клеток 4 м.
 // kMaxPointLights = 512 и sort_lights_by_distance УМЕРЛИ (план
 // light-visibility-bake §5): камерный отбор — нарушение S7 («дальние комнаты
 // гаснут»), а сбор кандидатов клетки решает запечённая видимость (bakedGrid)
@@ -145,12 +142,7 @@ public:
     // динамический хвост; порядок кадра: clear -> интенсивности + динамики.
     void set_static_table(const GpuPointLight* base, uint32_t n) noexcept;
     void set_static_intensity(uint32_t slot, float intensity) noexcept;
-    // Кластеры (light-cluster.md): записи при свапе бейка, интенсивность —
-    // сумма членов, которую кадр кладёт после статиков (CPU, CSR членов).
-    void set_cluster_records(const GpuPointLight* recs, uint32_t n) noexcept;
-    void set_cluster_intensity(uint32_t idx, float v) noexcept;
     float staged_intensity(uint32_t slot) const noexcept;
-    uint32_t cluster_count() const noexcept { return clusterCount_; }
     uint32_t static_count() const noexcept { return staticCount_; }
 
     // Свап бейка видимости: залить bakedGrid (лейаут LightVisBake.cells ==
@@ -234,7 +226,6 @@ private:
     uint32_t staticCount_ = 0;
     uint32_t dynamicCount_ = 0;
     uint32_t overflowDropped_ = 0;
-    uint32_t clusterCount_ = 0;
     uint32_t cellOverflow_ = 0;
     uint32_t bakedGen_ = 0;
     bool bakedUploadPending_ = false;

@@ -120,7 +120,7 @@ public:
     // хвост — уже запечённые id не двигаются). slots — ёмкость клетки
     // светосетки, приходит от рендера (kGridCellSlots).
     void set_light_table(const LightVisLamp* lamps, std::size_t n,
-                         std::uint32_t slots, std::uint32_t clusterBase = 0);
+                         std::uint32_t slots);
 
     // Вход на этаж. Отменяет и джойнит любой бейк в полёте (мгновенно —
     // cancel-гранулярность узловая), строит ВСЕ ТРИ живых битсета с текущей
@@ -257,7 +257,6 @@ private:
     LightVisBake lightVis_; // живой запечённый грид видимости
     std::vector<LightVisLamp> lampsLive_; // статик-таблица (индекс = слот id)
     std::uint32_t lightSlots_ = 0;
-    std::uint32_t lightClusterBase_ = 0; // верхний регион таблицы (light-cluster.md)
     std::uint64_t lightGen_ = 0;
     bool lightSwapPending_ = false;
     bool lightPatchPending_ = false;
