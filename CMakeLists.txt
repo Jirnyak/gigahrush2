@@ -502,6 +502,21 @@ if(GIGA_BUILD_TESTS)
 
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
+
+    # Мир-автомат (S16): headless GPU-прогон. CANON S16.3 — headless значит
+    # «без окна», НЕ «без GPU»: автомат обязан гоняться Vulkan compute без
+    # свапчейна прямо в ctest, машина без GPU-устройства — НЕ зелёное дерево
+    # (решение владельца 2026-08-21). Линкует нужные render-исходники напрямую
+    # по прецеденту world_test выше (src/render — не библиотека, и заводить её
+    # ради одного теста — вторая система). SDL3 нужен vk_device.cpp как
+    # заголовок (ensure_moltenvk_icd/SDL_setenv), окно не создаётся.
+    add_executable(medium_test tests/medium_test.cpp
+        src/render/vk_device.cpp src/render/vk_buffer.cpp
+        src/render/vk_common.cpp)
+    target_link_libraries(medium_test PRIVATE giga_core SDL3::SDL3
+        Vulkan::Vulkan)
+    giga_target_flags(medium_test OFF)
+    add_test(NAME medium_test COMMAND medium_test)
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

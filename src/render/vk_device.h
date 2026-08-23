@@ -39,6 +39,16 @@ struct VulkanDevice {
 
     // window must have been created with SDL_WINDOW_VULKAN.
     bool init(SDL_Window* window, bool enableValidation);
+
+    // Безоконный bring-up (CANON S16.3: headless = «без окна», НЕ «без GPU»).
+    // Ни SDL-инициализации, ни surface, ни требования swapchain: расширения
+    // инстанса перечисляются напрямую (портабилити на macOS), физустройство
+    // выбирается по одной compute-способной семье, present-поля алиасят её —
+    // так вся существующая машинерия (VulkanBuffer staging через
+    // graphicsQueue, VoxelMirror, compute-пассы) работает без правок.
+    // Потребители: ctest-прогоны мир-автомата и любой будущий headless-режим.
+    bool init_headless(bool enableValidation);
+
     void destroy();
 
     VulkanDevice() = default;

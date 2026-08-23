@@ -273,6 +273,145 @@ bool VulkanDevice::init(SDL_Window* window, bool enableValidation) {
     return true;
 }
 
+bool VulkanDevice::init_headless(bool enableValidation) {
+#ifdef __APPLE__
+    ensure_moltenvk_icd();
+#endif
+    // No SDL: the only instance extensions are the portability pair macOS
+    // needs; other platforms need none for pure compute.
+    std::vector<const char*> exts;
+#ifdef __APPLE__
+    exts.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    exts.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+
+    validation = enableValidation && instance_has_layer(kValidationLayer);
+    if (enableValidation && !validation)
+        std::fprintf(stderr,
+                     "[vk] validation requested but %s not installed; "
+                     "continuing without.\n", kValidationLayer);
+    if (validation) exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+    VkApplicationInfo app{};
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.pApplicationName = "gigahrush2-headless";
+    app.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
+    app.pEngineName = "gigahrush2";
+    app.engineVersion = VK_MAKE_VERSION(0, 1, 0);
+    app.apiVersion = VK_API_VERSION_1_2;
+
+    VkInstanceCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    ci.pApplicationInfo = &app;
+    ci.enabledExtensionCount = static_cast<std::uint32_t>(exts.size());
+    ci.ppEnabledExtensionNames = exts.data();
+#ifdef __APPLE__
+    ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
+    const char* layers[] = {kValidationLayer};
+    if (validation) {
+        ci.enabledLayerCount = 1;
+        ci.ppEnabledLayerNames = layers;
+    }
+    VkResult ir = vkCreateInstance(&ci, nullptr, &instance);
+    if (ir == VK_ERROR_LAYER_NOT_PRESENT && validation) {
+        validation = false;
+        ci.enabledLayerCount = 0;
+        ci.ppEnabledLayerNames = nullptr;
+        ir = vkCreateInstance(&ci, nullptr, &instance);
+    }
+    if (ir != VK_SUCCESS) {
+        std::fprintf(stderr, "[vk] vkCreateInstance (headless) failed: %s (%d)\n",
+                     vk_result_str(ir), static_cast<int>(ir));
+        return false;
+    }
+
+    std::uint32_t devN = 0;
+    vkEnumeratePhysicalDevices(instance, &devN, nullptr);
+    if (devN == 0) {
+        std::fprintf(stderr, "[vk] no Vulkan physical devices\n");
+        return false;
+    }
+    std::vector<VkPhysicalDevice> devs(devN);
+    vkEnumeratePhysicalDevices(instance, &devN, devs.data());
+
+    // One COMPUTE-capable family is the whole requirement. It lands in
+    // `families.graphics` (the name means "the main family" everywhere the
+    // buffer/staging machinery reads it), and present aliases it so no
+    // consumer ever sees UINT32_MAX.
+    int best = -1;
+    for (auto d : devs) {
+        VkPhysicalDeviceProperties p{};
+        vkGetPhysicalDeviceProperties(d, &p);
+        std::uint32_t n = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(d, &n, nullptr);
+        std::vector<VkQueueFamilyProperties> fams(n);
+        vkGetPhysicalDeviceQueueFamilyProperties(d, &n, fams.data());
+        std::uint32_t compute = UINT32_MAX;
+        for (std::uint32_t i = 0; i < n; ++i) {
+            if (fams[i].queueFlags & VK_QUEUE_COMPUTE_BIT) { compute = i; break; }
+        }
+        if (compute == UINT32_MAX) continue;
+        int sc = score_device(p);
+        if (sc > best) {
+            best = sc;
+            physical = d;
+            families.graphics = compute;
+            families.present = compute;
+            props = p;
+        }
+    }
+    if (physical == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[vk] no compute-capable GPU\n");
+        return false;
+    }
+
+    {
+        std::uint32_t n = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &n, nullptr);
+        std::vector<VkQueueFamilyProperties> fams(n);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &n, fams.data());
+        if (families.graphics < n)
+            graphicsTimestampValidBits = fams[families.graphics].timestampValidBits;
+    }
+
+    float prio = 1.0f;
+    VkDeviceQueueCreateInfo qg{};
+    qg.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qg.queueFamilyIndex = families.graphics;
+    qg.queueCount = 1;
+    qg.pQueuePriorities = &prio;
+
+    // No swapchain extension: there is nothing to present to.
+    std::vector<const char*> devExts;
+    if (device_has_ext(physical, "VK_KHR_portability_subset"))
+        devExts.push_back("VK_KHR_portability_subset");
+
+    VkPhysicalDeviceFeatures feats{};
+    feats.robustBufferAccess = VK_TRUE;
+
+    VkDeviceCreateInfo dci{};
+    dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.queueCreateInfoCount = 1;
+    dci.pQueueCreateInfos = &qg;
+    dci.enabledExtensionCount = static_cast<std::uint32_t>(devExts.size());
+    dci.ppEnabledExtensionNames = devExts.data();
+    dci.pEnabledFeatures = &feats;
+    VK_TRY(vkCreateDevice(physical, &dci, nullptr, &device));
+
+    vkGetDeviceQueue(device, families.graphics, 0, &graphicsQueue);
+    presentQueue = graphicsQueue;
+
+    std::fprintf(stderr,
+                 "[vk] headless device: %s | api %u.%u.%u | compute family %u | "
+                 "validation=%d\n",
+                 props.deviceName, VK_VERSION_MAJOR(props.apiVersion),
+                 VK_VERSION_MINOR(props.apiVersion),
+                 VK_VERSION_PATCH(props.apiVersion), families.graphics,
+                 static_cast<int>(validation));
+    return true;
+}
+
 void VulkanDevice::destroy() {
     if (device) {
         vkDestroyDevice(device, nullptr);
