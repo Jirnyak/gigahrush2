@@ -53,6 +53,11 @@ layout(set = 0, binding = 5) uniform MarchUbo {
 layout(set = 0, binding = 6, std430) readonly buffer FluidBuf { float uFluid[]; };   // 1 float/cell
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
 layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
+// Занятость по СУБВОКСЕЛЯМ, блок 1 м = 4³ атома: один бит «есть ли твёрдое».
+// Решётка 256³ бит = 2 МиБ против 128 МиБ масок — субвоксельный тест луча
+// остаётся (он и есть качество теней), но там, где метр пуст, луч не тянет
+// случайную строку кэша из большого буфера. [voxel_mirror.h occ-1m]
+layout(set = 0, binding = 9, std430) readonly buffer OccBuf { uint uOcc[]; };
 
 #ifdef GIGA_ALBEDO_ARRAY
 // set 2: the photographic albedo/normal/roughness arrays CubePass loaded.
@@ -94,6 +99,17 @@ uint cell_index(ivec3 c) {
 
 uint cell_class(uint ci) { // 0 empty, 1 full, 2 partial
     return (uClass[ci >> 2] >> ((ci & 3u) * 8u)) & 0xFFu;
+}
+
+// Блок 1 м занят? b — координаты блока (клетка*2 + субблок), врап тора тем
+// же битовым И. Размер решётки выведен из kMacroDim (правило 9: литералам
+// решётки в шейдерах нельзя).
+const int kOccDim = kMacroDim * 2;
+bool occ_block(ivec3 b) {
+    b &= (kOccDim - 1);
+    uint i = uint(b.x) + uint(b.y) * uint(kOccDim) +
+             uint(b.z) * uint(kOccDim) * uint(kOccDim);
+    return ((uOcc[i >> 5] >> (i & 31u)) & 1u) != 0u;
 }
 
 uint cell_type(uint ci) {
@@ -277,15 +293,25 @@ float voxel_ao(vec3 hitP, vec3 n) {
 // отвечал мгновенно. Семантика тени бит в бит: стоп на первом твёрдом
 // субвокселе. Прокарвил дыру — свет хлынул в тот же кадр: луч читает тот же
 // обновлённый воксельный mirror. Смещения старта/финиша — у вызывающего.
-bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
-                          vec3 cellLo, float t0, float t1) {
+bool shadow_cell_occluded(uint ci, ivec3 c, vec3 ro, vec3 rd, vec3 rinv,
+                          ivec3 stp, vec3 cellLo, float t0, float t1) {
     vec3 e = ro + rd * (t0 + 1e-5);
     ivec3 s = clamp(ivec3(floor((e - cellLo) / kVoxel)), ivec3(0), ivec3(7));
     vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kVoxel;
     vec3 sMax = (bound - ro) * rinv;
     vec3 sDelta = vec3(kVoxel) * abs(rinv);
+    // Блок 1 м под курсором луча: пока метр пуст, маски (128 МиБ) не
+    // читаются вовсе. Бит блока — консервативная правда о субвокселях, так
+    // что ответ теней бит-в-бит тот же.
+    ivec3 blkCur = ivec3(-1);
+    bool blkOcc = true;
+    bool useOcc = (uShadowFlags & kShadowFlagNoOcc) == 0u;
     for (int i = 0; i < 32; ++i) {
-        if (sub_solid(ci, s)) return true;
+        if (useOcc) {
+            ivec3 blk = s >> 2;
+            if (blk != blkCur) { blkCur = blk; blkOcc = occ_block(c * 2 + blk); }
+        }
+        if (blkOcc && sub_solid(ci, s)) return true;
         int axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
                                    : (sMax.y < sMax.z ? 1 : 2);
         if (sMax[axis] > t1) return false;
@@ -318,7 +344,7 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
         // половины марша = дельта fps с этим флагом. Не режим игры.
         if (cls != 0u && (uShadowFlags & kShadowFlagNoSub) == 0u) {
             float tExit = min(min(tMax.x, tMax.y), tMax.z);
-            if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
+            if (shadow_cell_occluded(ci, c, p, rd, rinv, stp, vec3(c) * kCell, t,
                                      min(tExit, dist)))
                 return 0.0;
         }

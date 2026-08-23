@@ -58,8 +58,11 @@ layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
 //           (перекрывают только ЦЕЛЬНЫЕ): изолирует цену масок 128 МБ;
 //   TAIL  — лампы за бюджетом маршей светят АНАЛИТИЧЕСКИ (как кластеры),
 //           а не выбрасываются: та же яркость, ноль теневых лучей.
+//   NOOCC — выключить пропуск по занятости 1 м (луч читает маски как до
+//           2026-08-23): A/B самой оптимизации на живой сцене одним бинарём.
 const uint kShadowFlagNoSub = 1u;
 const uint kShadowFlagTail = 2u;
+const uint kShadowFlagNoOcc = 4u;
 
 layout(set = 1, binding = 1, std430) readonly buffer LightGridBuffer {
     LightGridCell uGridCells[];
