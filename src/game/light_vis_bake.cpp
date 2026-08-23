@@ -26,20 +26,12 @@ struct LampCellHit {
     std::uint32_t cell;
     std::uint32_t lamp;
     float score;
-    // МАСКА ТЕНИ по 8 макроклеткам (2 м) внутри клетки светосетки (4 м):
-    // бит = «эта двухметровая клетка ЦЕЛИКОМ в тени от этой лампы».
-    // Замер лога владельца 2026-08-23: ~85% теневых лучей возвращают
-    // «перекрыто», то есть НОЛЬ света — пиксель платит за 6 маршей, а светит
-    // его одна лампа. Бит позволяет не пускать луч, ответ которого заранее
-    // известен: картинка по построению та же, работа исчезает.
-    std::uint8_t blockedMask;
 };
 
 // Скретч лучевого бейка одной лампы; буферы переиспользуются воркером.
 struct RayScratch {
     std::vector<std::uint8_t> reached; // бокс клеток светосетки: прямая видимость
     std::vector<std::uint8_t> corner;  // мемо углов: 0 не считан / 1 чист / 2 блок
-    std::vector<std::uint8_t> node2;   // мемо узлов 2 м (+3 = узел в материи)
 };
 
 } // namespace
@@ -121,84 +113,6 @@ void rays_one_lamp(const MacroGrid& grid, const LightVisLamp& lamp,
     // Угол (gx,gy,gz) — узел решётки границ клеток: мировая точка
     // (lc - br + g) * 4 м, без врапа (бокс мал, цель — ближайший образ по
     // построению; врап только в чтении битсета внутри DDA).
-    // Точка внутри твёрдой материи? Такая проба «не в счёт»: свет там не
-    // принимается, затеняемые поверхности живут в ВОЗДУХЕ у грани.
-    auto point_solid = [&grid](float px, float py, float pz) {
-        const int cx = wrap_macro(static_cast<int>(std::floor(px / kCellSize)));
-        const int cy = wrap_macro(static_cast<int>(std::floor(py / kCellSize)));
-        const int cz = wrap_macro(static_cast<int>(std::floor(pz / kCellSize)));
-        const SubMask& m = grid.masks()[macro_index(cx, cy, cz)];
-        if (m.empty()) return false;
-        if (m.full()) return true;
-        const float sv = kCellSize / kSubDim;
-        auto sub = [&](float v, int c) {
-            const int i = static_cast<int>(std::floor((v - c * kCellSize) / sv));
-            return i < 0 ? 0 : (i > kSubDim - 1 ? kSubDim - 1 : i);
-        };
-        return m.test(sub_bit(sub(px, cx), sub(py, cy), sub(pz, cz)));
-    };
-
-    // Маска тени клетки светосетки: бит на каждую из 8 макроклеток (2 м).
-    // Бит ставится, только если ВСЕ воздушные пробы под-клетки перекрыты —
-    // консервативно по построению. Цельносолидная под-клетка бит НЕ получает:
-    // точка касания поверхности округляется в неё же, и потерять там свет
-    // нельзя. Короткое замыкание на первой чистой пробе: в освещённых местах
-    // это один луч, а дорогие «долетевшие» лучи не считаются дважды.
-    // Узлы решётки 2 м — общие для ВОСЬМИ соседних под-клеток, поэтому
-    // мемоизируются (тот же приём, что у углов 4-метровой решётки выше:
-    // без него бейк платил втрое, замер 2026-08-23 — 1.07 → 3.19 с).
-    // 0 = не считано, 1 = чисто, 2 = перекрыто, 3 = узел в материи (не в счёт).
-    const int nside = 2 * side + 1;
-    sc.node2.assign(static_cast<std::size_t>(nside) * nside * nside, 0);
-    auto node2 = [&](int nx, int ny, int nz) {
-        const std::size_t ni = static_cast<std::size_t>(nx) +
-                               static_cast<std::size_t>(ny) * nside +
-                               static_cast<std::size_t>(nz) * nside * nside;
-        if (sc.node2[ni] == 0) {
-            const float in = 0.05f; // узел делят 8 клеток — отступ внутрь
-            const vec3 p{(lc[0] - br) * kLightVisCellM + nx * kCellSize + in,
-                         (lc[1] - br) * kLightVisCellM + ny * kCellSize + in,
-                         (lc[2] - br) * kLightVisCellM + nz * kCellSize + in};
-            sc.node2[ni] =
-                point_solid(p.x, p.y, p.z)
-                    ? 3
-                    : (light_ray_passes(grid, lamp.pos, p, 0.0f) ? 1 : 2);
-        }
-        return sc.node2[ni];
-    };
-
-    auto shadow_mask = [&](int dx, int dy, int dz) {
-        std::uint8_t mask = 0;
-        for (int b = 0; b < 8; ++b) {
-            const int bx = 2 * (dx + br) + (b & 1);
-            const int by = 2 * (dy + br) + ((b >> 1) & 1);
-            const int bz = 2 * (dz + br) + ((b >> 2) & 1);
-            bool anyAir = false, anyClear = false;
-            for (int k = 0; k < 8 && !anyClear; ++k) {
-                const std::uint8_t v = node2(bx + (k & 1), by + ((k >> 1) & 1),
-                                             bz + ((k >> 2) & 1));
-                if (v == 3) continue; // узел в материи — не в счёт
-                anyAir = true;
-                if (v == 1) anyClear = true;
-            }
-            if (!anyAir || anyClear) continue;
-            // Кандидат на «целиком в тени»: подтверждаем центром под-клетки —
-            // узкий световой канал сквозь середину углы могли проскочить.
-            const vec3 ctr{
-                ((lc[0] - br + dx) * kLightVisCellM) + (b & 1) * kCellSize +
-                    kCellSize * 0.5f,
-                ((lc[1] - br + dy) * kLightVisCellM) +
-                    ((b >> 1) & 1) * kCellSize + kCellSize * 0.5f,
-                ((lc[2] - br + dz) * kLightVisCellM) +
-                    ((b >> 2) & 1) * kCellSize + kCellSize * 0.5f};
-            if (!point_solid(ctr.x, ctr.y, ctr.z) &&
-                light_ray_passes(grid, lamp.pos, ctr, 0.0f))
-                continue;
-            mask |= static_cast<std::uint8_t>(1u << b);
-        }
-        return mask;
-    };
-
     auto corner_clear = [&](int gx, int gy, int gz) {
         const std::size_t gi = static_cast<std::size_t>(gx) +
                                static_cast<std::size_t>(gy) * cside +
@@ -253,18 +167,11 @@ void rays_one_lamp(const MacroGrid& grid, const LightVisLamp& lamp,
                                 continue;
                             lit = sc.reached[cell_index(ax, ay, az)] != 0;
                         }
-                if (!lit) continue;
-                // Дилатированные клетки (сами лучом не достигнуты) масок НЕ
-                // получают: дилатация и существует затем, чтобы прикрыть
-                // редкость проб на границе света — гасить её было бы тем же
-                // дефектом, который она лечит.
-                const std::uint8_t mask =
-                    sc.reached[cell_index(dx, dy, dz)] != 0
-                        ? shadow_mask(dx, dy, dz)
-                        : std::uint8_t{0};
-                out.push_back(LampCellHit{
-                    static_cast<std::uint32_t>(light_vis_index(cx, cy, cz)),
-                    lampId, s, mask});
+                if (lit)
+                    out.push_back(LampCellHit{
+                        static_cast<std::uint32_t>(
+                            light_vis_index(cx, cy, cz)),
+                        lampId, s});
             }
 }
 
@@ -359,14 +266,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                                           cellStart.end() - 1);
         for (const auto& h : hits)
             for (const LampCellHit& e : h)
-                // МАСКА ЕДЕТ В СВОБОДНЫХ БИТАХ ID: корневой кап ламп 131072
-                // = 2^17, значит биты 24..31 слова свободны по построению.
-                // Ноль новых буферов и ноль лишней полосы — потребитель
-                // распаковывает одним сдвигом ([volumetric_fog.glsl]).
-                csr[cursor[e.cell]++] =
-                    IdScore{e.lamp |
-                                (static_cast<std::uint32_t>(e.blockedMask) << 24),
-                            e.score};
+                csr[cursor[e.cell]++] = IdScore{e.lamp, e.score};
     }
 
     // --- Синтез кластеров (light-cluster.md шаг 1) ---------------------
@@ -496,7 +396,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                     for (; w2 < keep; ++w2) dst[1 + w2] = s[w2].id;
                     for (std::uint32_t k = keep; k < n && w2 < slots; ++k) {
                         const std::uint32_t ref =
-                            clusterRefBase + clusterIdx[bucketOf[s[k].id & kLampIdMask]];
+                            clusterRefBase + clusterIdx[bucketOf[s[k].id]];
                         bool seen = false;
                         for (std::uint32_t j = keep; j < w2 && !seen; ++j)
                             seen = dst[1 + j] == ref;
@@ -664,7 +564,7 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
             const std::uint32_t id = patch.hits[i].lamp;
             bool present = false;
             for (std::uint32_t k = 0; k < count && !present; ++k)
-                present = (dst[1 + k] & kLampIdMask) == id;
+                present = dst[1 + k] == id;
             if (present) continue;
             if (count < live.slots) {
                 dst[1 + count++] = id;
@@ -683,7 +583,7 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
             float worstScore = patch.hits[i].score;
             std::uint32_t worstK = live.slots; // «вытеснять некого»
             for (std::uint32_t k = 0; k < count; ++k) {
-                const std::uint32_t eid = dst[1 + k] & kLampIdMask;
+                const std::uint32_t eid = dst[1 + k];
                 if (eid >= lampCount) continue; // кластерная ссылка
                 const float s = light_cell_score(
                     lamps[eid].pos, lamps[eid].radiusM, lx, ly, lz);

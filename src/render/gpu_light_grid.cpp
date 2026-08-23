@@ -474,16 +474,11 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
         //     это ЗАМЕР, не режим игры; интересна доля, не кадр.
         if (const char* e = std::getenv("GIGA_SHADOW_STATS"))
             if (std::atol(e) != 0) f |= 8u;
-        //   GIGA_VISMASK_OFF=1 — не читать запечённую маску теней (поведение
-        //     до 2026-08-23): A/B оптимизации одним бинарём.
-        if (const char* e = std::getenv("GIGA_VISMASK_OFF"))
-            if (std::atol(e) != 0) f |= 16u;
         if (f != 0)
             std::fprintf(stderr,
                          "[light-grid] measuring flags: nosub=%d tail=%d "
-                         "stats=%d nomask=%d — measuring, not playing\n",
-                         (f & 1u) != 0, (f & 2u) != 0, (f & 8u) != 0,
-                         (f & 16u) != 0);
+                         "stats=%d — measuring, not playing\n",
+                         (f & 1u) != 0, (f & 2u) != 0, (f & 8u) != 0);
         return f;
     }();
     uint32_t header[4] = {uploadCount, 0, kShadowFlags, kSurfaceRayOverride};
