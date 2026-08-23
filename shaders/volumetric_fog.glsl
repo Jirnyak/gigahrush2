@@ -143,30 +143,19 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     outDiffuse = vec3(0.0);
     outSpecular = vec3(0.0);
 
-    // ПИКСЕЛЬНЫЙ БЮДЖЕТ МАРШЕЙ (закон владельца 2026-08-23: «fps не должен
-    // зависеть от того, в кадре ли лампа»). Прежний «пиксель маршит КАЖДУЮ
-    // честную лампу» давал нестабильность ровно этой формы: тёмная комната —
-    // списки пустые, 60-70 fps; взгляд на лампу — до 30 честных/клетку (лог
-    // владельца: mean 10.6, max 30) × DDA-марш × 1.9 Мпк — 40 fps. Решение —
-    // продление УЖЕ ПРИНЯТОГО закона кластеров на хвост честного списка:
-    // марш получают kShadowBudget СИЛЬНЕЙШИХ (список отсортирован по вкладу
-    // light_grid.comp), хвост светит аналитически — он запечённо-достижим
-    // (стены бейк уже учёл), ошибка хвоста — «посветить лишним» сквозь
-    // субвоксельную мелочь, а не потерять свет. Стоимость пикселя = O(B)
-    // ПО ПОСТРОЕНИЮ, камеронезависимо (S7 цел: ни одной ветки от камеры).
-    // ВЫВОД B (S11): замер 2026-08-17 — 31 марш/пиксель = 20 мс кадра, т.е.
-    // ~0.65 мс/марш на мегапиксельном экране; 8 маршей ≈ 5 мс — свет влезает
-    // в кадр 16.6 мс рядом с миром, а вклад 9-й лампы сортированного списка
-    // уже тонет в хвосте. GIGA_SHADOW_RAYS=N — измерительная ручка поверх
-    // (63 = старое «маршить всех» для A/B).
-    const uint kShadowBudget = 8u;
-    uint budget = uShadowRayOverride != 0u ? uShadowRayOverride : kShadowBudget;
+    // БЮДЖЕТА ЛУЧЕЙ НЕТ (шаг 3 light-cluster.md, владелец: «возврат
+    // чистоты»): длина списка ограничена ПО ПОСТРОЕНИЮ кластеризацией бейка
+    // (топ-K честных + кластеры), и пиксель маршит КАЖДУЮ честную лампу.
+    // Ступени 8/4/2 и 4/2/1 умерли вместе с порогом вклада — в ядре не
+    // осталось ни одной ветки от дистанции камеры. GIGA_SHADOW_RAYS остаётся
+    // ИЗМЕРИТЕЛЬНОЙ ручкой: N != 0 капает марши для A/B.
+    uint budget = uShadowRayOverride != 0u ? uShadowRayOverride : 0xFFFFu;
 
     // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
     uint cellIdx = light_cell_index(P);
     uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
-    for (uint k = 0u; k < cellCount; ++k) {
+    for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
         PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
 
         vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
@@ -184,14 +173,13 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
         float power = lt.colorIntensity.w * att;
         if (power <= 0.0) continue; // погасший/надгробие: нет света — нет луча
 
-        // Кластер ИЛИ хвост за бюджетом — аналитически, без марша (один
-        // закон на оба: свет без DDA, не чернота); сильнейшие — честный DDA.
-        if (uGridCells[cellIdx].lightIndices[k] >= kClusterSlotBase ||
-            budget == 0u) {
+        // Кластер — аналитически, без марша; лампа — честный DDA.
+        if (uGridCells[cellIdx].lightIndices[k] >= kClusterSlotBase) {
             vec3 cCol = lt.colorIntensity.rgb * (power * ndotl);
             outDiffuse += cCol;
             continue;
         }
+        if (budget == 0u) continue;
         budget--;
         // Старт — четверть атома от грани вдоль нормали (не родиться в своём
         // же теле), финиш — 0.2 м до источника (не врезаться в его арматуру:
