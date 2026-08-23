@@ -51,6 +51,13 @@ public:
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                 const CubePush& push, VkDescriptorSet lightGridSet);
 
+    // ЗАМЕР ПОТОЛКА (GIGA_SHADOW_STATS=1, 2026-08-23): сколько теневых лучей
+    // мирового пасса возвращаются «ничего не нашёл». Это верхняя граница
+    // выигрыша ЛЮБОЙ схемы «не пускать бесполезный луч»: неперекрытый луч
+    // проходит весь путь и не рисует ни одной границы тени. Атомики включены
+    // только флагом — в обычном прогоне ноль цены. Читает и обнуляет.
+    void take_shadow_stats(std::uint64_t* rays, std::uint64_t* clear) noexcept;
+
 private:
     bool create_descriptors(const VoxelMirror& mirror);
     bool create_pipeline(VkRenderPass renderPass, const char* shaderDir);
@@ -63,6 +70,7 @@ private:
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet sets_[kMaxFramesInFlight] = {};
     VulkanBuffer ubo_[kMaxFramesInFlight]; // persistently mapped, tiny
+    VulkanBuffer stats_{};                 // 2 u32: лучи / из них без преград
 
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout texSetLayout_ = VK_NULL_HANDLE; // borrowed, not owned

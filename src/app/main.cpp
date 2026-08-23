@@ -7472,6 +7472,24 @@ int main(int argc, char** argv) {
                 raymarchPass.record(cmd, renderer.currentFrame, push,
                                     lightGrid.descriptor_set());
             renderer.timer.pass_end(cmd, gpu::GpuPass::World);
+            // ЗАМЕР ПОТОЛКА теней (GIGA_SHADOW_STATS=1): раз в ~секунду —
+            // сколько теневых лучей пущено и какая доля не встретила преград.
+            // Пустой луч проходит весь путь и не рисует ни одной границы: это
+            // ровно та работа, которую любая будущая схема могла бы не делать.
+            static std::uint32_t shadowStatFrame = 0;
+            if (std::getenv("GIGA_SHADOW_STATS") &&
+                (shadowStatFrame++ % 60u) == 59u) {
+                std::uint64_t rays = 0, clear = 0;
+                raymarchPass.take_shadow_stats(&rays, &clear);
+                if (rays > 0)
+                    std::fprintf(stderr,
+                                 "[shadow-stats] %.2f M rays/frame, %.1f%% "
+                                 "found nothing (потолок выигрыша схем «не "
+                                 "пускать пустой луч»)\n",
+                                 static_cast<double>(rays) / 60.0 / 1e6,
+                                 100.0 * static_cast<double>(clear) /
+                                     static_cast<double>(rays));
+            }
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);

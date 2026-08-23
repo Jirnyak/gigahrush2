@@ -140,8 +140,9 @@ bool RaymarchPass::init(VulkanDevice& dev, VkRenderPass renderPass,
 }
 
 bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
-    VkDescriptorSetLayoutBinding b[9]{};
-    for (std::uint32_t i = 0; i < 9; ++i) {
+    // Биндинг 9 — счётчики замера теней (см. take_shadow_stats).
+    VkDescriptorSetLayoutBinding b[10]{};
+    for (std::uint32_t i = 0; i < 10; ++i) {
         b[i].binding = i;
         b[i].descriptorType = i == 5 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                      : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -151,13 +152,13 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
 
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 9;
+    li.bindingCount = 10;
     li.pBindings = b;
     VK_TRY(vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &setLayout_));
 
     VkDescriptorPoolSize sizes[2]{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[0].descriptorCount = 8 * kMaxFramesInFlight;
+    sizes[0].descriptorCount = 9 * kMaxFramesInFlight;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[1].descriptorCount = kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
@@ -171,6 +172,12 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
     // so record() only ever rewrites the matrix.
     std::uint32_t matCount = 0;
     const vec3* albedo = material_albedo_table(&matCount);
+
+    if (!stats_.create_host_visible(*dev_, 3 * sizeof(std::uint32_t),
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    "raymarch shadow-stats"))
+        return false;
+    std::memset(stats_.mapped, 0, 3 * sizeof(std::uint32_t));
 
     for (int f = 0; f < kMaxFramesInFlight; ++f) {
         if (!ubo_[f].create_host_visible(*dev_, sizeof(MarchUbo),
@@ -201,8 +208,8 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             VoxelMirror::kMasksBytes, VoxelMirror::kTypesBytes,
             VoxelMirror::kPageIdxBytes, VoxelMirror::kPoolBytes,
             VoxelMirror::kClassBytes};
-        VkDescriptorBufferInfo bi[9]{};
-        VkWriteDescriptorSet w[9]{};
+        VkDescriptorBufferInfo bi[10]{};
+        VkWriteDescriptorSet w[10]{};
         for (std::uint32_t i = 0; i < 5; ++i) {
             bi[i].buffer = bufs[i];
             bi[i].range = sizesB[i];
@@ -233,7 +240,9 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         bi[7].range = VoxelMirror::kStainIdxBytes;
         bi[8].buffer = mirror.stain_pool_buffer();
         bi[8].range = VoxelMirror::kStainPoolBytes;
-        for (std::uint32_t k = 7; k <= 8; ++k) {
+        bi[9].buffer = stats_.buffer;
+        bi[9].range = 3 * sizeof(std::uint32_t);
+        for (std::uint32_t k = 7; k <= 9; ++k) {
             w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             w[k].dstSet = sets_[f];
             w[k].dstBinding = k;
@@ -241,7 +250,7 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[k].pBufferInfo = &bi[k];
         }
-        vkUpdateDescriptorSets(dev_->device, 9, w, 0, nullptr);
+        vkUpdateDescriptorSets(dev_->device, 10, w, 0, nullptr);
     }
     return true;
 }
@@ -395,6 +404,22 @@ void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
+void RaymarchPass::take_shadow_stats(std::uint64_t* rays,
+                                     std::uint64_t* clear) noexcept {
+    if (!stats_.mapped) { *rays = 0; *clear = 0; return; }
+    std::uint32_t v[3] = {0, 0, 0};
+    std::memcpy(v, stats_.mapped, sizeof(v));
+    std::memset(stats_.mapped, 0, sizeof(v));
+    *rays = v[0];
+    *clear = v[1];
+    // Инвариант: пущено = пусто + перекрыто. Расхождение = счётчик врёт
+    // (или луч уходит третьим путём) — печатаем вслух, а не верим числу.
+    if (v[0] != v[1] + v[2])
+        std::fprintf(stderr,
+                     "[shadow-stats] INVARIANT BROKEN: rays %u != clear %u + "
+                     "blocked %u\n", v[0], v[1], v[2]);
+}
+
 void RaymarchPass::destroy() {
     if (!dev_) return;
     if (pipeline_) vkDestroyPipeline(dev_->device, pipeline_, nullptr);
@@ -402,6 +427,7 @@ void RaymarchPass::destroy() {
     if (descPool_) vkDestroyDescriptorPool(dev_->device, descPool_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev_->device, setLayout_, nullptr);
     for (int i = 0; i < kMaxFramesInFlight; ++i) ubo_[i].destroy(*dev_);
+    stats_.destroy(*dev_);
     pipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
     descPool_ = VK_NULL_HANDLE;

@@ -58,6 +58,8 @@ layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
 //           (перекрывают только ЦЕЛЬНЫЕ): изолирует цену масок 128 МБ;
 //   TAIL  — лампы за бюджетом маршей светят АНАЛИТИЧЕСКИ (как кластеры),
 //           а не выбрасываются: та же яркость, ноль теневых лучей.
+//   STATS — считать лучи и «пустые» лучи атомиками (замер потолка).
+const uint kShadowFlagStats = 8u;
 const uint kShadowFlagNoSub = 1u;
 const uint kShadowFlagTail = 2u;
 
