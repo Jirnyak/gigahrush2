@@ -7,7 +7,9 @@
 #include <vector>
 
 #include "world/macro_grid.h"
+#include "world/destruct.h"  // kSubMaterialName
 #include "world/material_props.h"
+#include "world/subfield.h"
 #include "world/types.h"
 #include "world/world.h"
 
@@ -35,14 +37,36 @@ std::vector<BakedLight> bake_material_lights(const World& world) {
     const MacroGrid& grid = world.grid();
     std::vector<BakedLight> out;
 
+    // СВЕТЯЩАЯСЯ КЛЕТКА — ЭТО КЛЕТКА С СВЕТЯЩИМИСЯ АТОМАМИ (закон двух
+    // масштабов, CANON S2: локальный вопрос обязан спрашивать субвоксели).
+    // До 2026-08-23 скан спрашивал только ТИП КЛЕТКИ, поэтому неон, нарисованный
+    // субвокселями, не рождал ни одного эмиттера: он светился сам (эмиссив
+    // поверхности) и не освещал ничего — поймано владельцем командой `neon`.
+    // Клеточный тип остаётся быстрым путём: у однородной клетки страницы нет.
+    const SubField<CellType>* sub =
+        world.subfields().find<CellType>(kSubMaterialName);
+    const std::uint32_t* pageTab = sub ? sub->page_table() : nullptr;
+    const CellType* pages = sub ? sub->pages_data() : nullptr;
+    const auto emitting_mat = [&](int x, int y, int z) -> CellType {
+        const CellType t = grid.cell(x, y, z);
+        if (material_emits_light(t)) return t;
+        if (pageTab == nullptr) return 0;
+        const std::uint32_t pg = pageTab[flat_index(x, y, z)];
+        if (pg == SubField<CellType>::kNoPage) return 0;
+        const CellType* atoms = pages + static_cast<std::size_t>(pg) * kSubVoxels;
+        for (int i = 0; i < kSubVoxels; ++i)
+            if (material_emits_light(atoms[i])) return atoms[i];
+        return 0;
+    };
+
     // visited — по одному биту на ячейку тора; светоячеек мало, но скан полный.
     std::vector<bool> visited(kMacroCells, false);
 
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
-                const CellType t = grid.cell(x, y, z);
-                if (!material_emits_light(t)) continue;
+                const CellType t = emitting_mat(x, y, z);
+                if (t == 0) continue;
                 const std::uint32_t seedIdx = flat_index(x, y, z);
                 if (visited[seedIdx]) continue;
 
@@ -68,7 +92,7 @@ std::vector<BakedLight> bake_material_lights(const World& world) {
                     };
                     for (const auto& d : kD) {
                         const ivec3 n{c.x + d[0], c.y + d[1], c.z + d[2]};
-                        if (grid.cell(n.x, n.y, n.z) != t) continue;
+                        if (emitting_mat(n.x, n.y, n.z) != t) continue;
                         const std::uint32_t ni = flat_index(n.x, n.y, n.z);
                         if (visited[ni]) continue;
                         visited[ni] = true;
