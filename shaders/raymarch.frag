@@ -285,7 +285,16 @@ bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
     vec3 sMax = (bound - ro) * rinv;
     vec3 sDelta = vec3(kVoxel) * abs(rinv);
     for (int i = 0; i < 32; ++i) {
-        if (sub_solid(ci, s)) return true;
+        // ЭМИТТЕР НЕ ПРЕГРАДА СВОЕМУ СВЕТУ — тот же закон, что у бейка
+        // видимости ([game/light_vis_bake.h]: «светоматериал не блокирует свой
+        // свет; клетка лампы проходима принудительно»). Без него бейк говорил
+        // «клетка видит лампу», а пиксельный луч упирался в тело самого неона:
+        // светящийся шар освещал комнату только с одной стороны (поймано
+        // владельцем 2026-08-24). Материал берётся тем же sub_mat, что и
+        // рендер, эмиссивность — из той же строки materials.csv.
+        if (sub_solid(ci, s) &&
+            kMatEmissive[min(sub_mat(ci, s), kMatSurfaceCount - 1u)] <= 0.0)
+            return true;
         int axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
                                    : (sMax.y < sMax.z ? 1 : 2);
         if (sMax[axis] > t1) return false;
