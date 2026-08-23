@@ -7477,38 +7477,10 @@ int main(int argc, char** argv) {
             // Пустой луч проходит весь путь и не рисует ни одной границы: это
             // ровно та работа, которую любая будущая схема могла бы не делать.
             static std::uint32_t shadowStatFrame = 0;
-            static std::uint64_t shadowStatPrev = 0;
             if (std::getenv("GIGA_SHADOW_STATS") &&
                 (shadowStatFrame++ % 60u) == 59u) {
                 std::uint64_t rays = 0, clear = 0;
                 raymarchPass.take_shadow_stats(&rays, &clear);
-                // Пишем В ФАЙЛ (shadow_stats.log рядом с бинарём) вместе с
-                // позицией камеры и fps: владелец просто стоит в нужных
-                // точках, а разложить лог по местам можно потом — стоянка
-                // видна тем, что позиция не меняется несколько строк подряд.
-                const std::uint64_t nowTicks = SDL_GetPerformanceCounter();
-                const double secs =
-                    shadowStatPrev
-                        ? static_cast<double>(nowTicks - shadowStatPrev) /
-                              static_cast<double>(SDL_GetPerformanceFrequency())
-                        : 0.0;
-                shadowStatPrev = nowTicks;
-                if (rays > 0) {
-                    if (std::FILE* lf = std::fopen("shadow_stats.log", "a")) {
-                        std::fprintf(
-                            lf,
-                            "cam (%.1f %.1f %.1f) | %.2f M rays/frame | %.1f%% "
-                            "found nothing | %.0f fps\n",
-                            static_cast<double>(push.camPos.x),
-                            static_cast<double>(push.camPos.y),
-                            static_cast<double>(push.camPos.z),
-                            static_cast<double>(rays) / 60.0 / 1e6,
-                            100.0 * static_cast<double>(clear) /
-                                static_cast<double>(rays),
-                            secs > 0.0 ? 60.0 / secs : 0.0);
-                        std::fclose(lf);
-                    }
-                }
                 if (rays > 0)
                     std::fprintf(stderr,
                                  "[shadow-stats] %.2f M rays/frame, %.1f%% "
