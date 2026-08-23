@@ -570,6 +570,32 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
+// --- neon [radius_m] --------------------------------------------------------
+// Кисть светоматериала: рисует неон (materials.csv, светящаяся строка) шаром
+// впереди камеры. Зеркало карва: тот же субвоксельный масштаб, тот же
+// последующий путь (пересветка бейка материалов -> статик-таблица -> бейк
+// видимости). Нужна была, чтобы владелец мог РОЖДАТЬ лампы по команде и тут
+// же их карвить — иначе стабильность слотов проверить в игре нечем.
+bool cmd_neon(ConsoleContext& ctx, int argc, const char* const* argv, char* out,
+              std::size_t cap) {
+    float radius = 0.6f;
+    if (argc >= 2) {
+        char* end = nullptr;
+        radius = std::strtof(argv[1], &end);
+        if (end == argv[1] || !(radius > 0.0f)) {
+            if (out && cap)
+                std::snprintf(out, cap, "neon: '%s' is not a radius (metres)",
+                              argv[1]);
+            return false;
+        }
+    }
+    if (radius > 2.0f) radius = 2.0f; // кисть, а не заливка этажа
+    ctx.neonRadius = radius;
+    if (out && cap)
+        std::snprintf(out, cap, "neon: r=%.2f m — next tick", radius);
+    return true;
+}
+
 // --- spawn_ball [radius_m] ---------------------------------------------------
 // Испытательный стенд рагдолл-ядра ([markoaudit/plans/ragdoll.md] инкремент 1):
 // шар на импульсном твердотеле — RigidBody + SelfIntegrating (physics_step его
@@ -1253,6 +1279,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});
+    ok &= con.add({"neon", "neon [radius_m]",
+                   "paint glowing neon matter ahead of the camera",
+                   cmd_neon, nullptr});
     ok &= con.add({"spawn_ball", "spawn_ball [radius_m] [density]",
                    "spawn a rigid-core test ball (default steel, 100=hollow)",
                    cmd_spawn_ball, nullptr});

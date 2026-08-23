@@ -26,6 +26,7 @@
 #include <cmath>
 #include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -184,6 +185,26 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // печётся в refresh_floor_props, читается collect_scene_lights. Файловый
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
+
+// ЛОГ СВЕТА В ФАЙЛ (GIGA_LIGHT_LOG=1 -> light_debug.log рядом с бинарём).
+// Просьба владельца 2026-08-23: он играет и даёт фидбек, а строки в stderr
+// ловить не может — диагностика обязана оседать в файл сама. Пишем сюда то,
+// по чему судят о жизни ламп: рождение неона, пересборку статик-таблицы,
+// надгробия и переработку слотов, свапы бейка видимости.
+static void light_log(const char* fmt, ...) {
+    static const bool on = [] {
+        const char* e = std::getenv("GIGA_LIGHT_LOG");
+        return e && std::atol(e) != 0;
+    }();
+    if (!on) return;
+    std::FILE* f = std::fopen("light_debug.log", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fclose(f);
+}
 
 // Статик-таблица света этажа (план light-visibility-bake §1.1): пропы-света +
 // кластеры светоматериалов, СТАБИЛЬНЫЕ слот-id на поколение таблицы. Одна
@@ -374,6 +395,9 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
         ++tombstoned;
     }
     if (tombstoned > 0)
+        light_log("[slots] %u lamps died -> tombstones; table %zu slots\n",
+                  tombstoned, g_staticLamps.size());
+    if (tombstoned > 0)
         std::fprintf(stderr,
                      "[light-grid] %u lamps died -> tombstones (slots stay, ids "
                      "of the rest do not move; recycled after the next full "
@@ -383,6 +407,10 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
         std::fprintf(stderr,
                      "[light-grid] GIGA_LIGHT_BUDGET=%u: %u static lamps cut\n",
                      kBudget, budgetDropped);
+    light_log("[slots] table rebuilt: %zu slots, %zu baked clusters, gen %u "
+              "(recycle allowed below gen %u)\n",
+              g_staticLamps.size(), g_bakedLightSlots.size(),
+              g_staticTableGen + 1, g_lightVisTableGen);
     ++g_staticTableGen;
 }
 
@@ -4387,6 +4415,75 @@ int main(int argc, char** argv) {
                 // live off the mutated masks; every baked overlay's debt is
                 // exactly carveResult.dirtyCells, and nav stays stale only
                 // until the scheduler's next background swap.
+                // КИСТЬ НЕОНА (`neon [r]`): рождает светящуюся материю шаром
+                // впереди камеры и гонит её тем же путём, что и карв —
+                // зеркало мира, бейк светоматериалов, статик-таблица, бейк
+                // видимости. Существует ради проверки стабильности слотов:
+                // владельцу нужен способ рождать и убивать лампы по команде.
+                if (consoleCtx.neonRadius > 0.0f && reg.valid(player)) {
+                    const float r = consoleCtx.neonRadius;
+                    consoleCtx.neonRadius = 0.0f;
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+                    const auto& camTag = reg.get<CameraTag>(player);
+                    const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
+                    const float reach = 1.0f + r;
+                    const vec3 c{ppos.x + fwd.x * reach, ppos.y + fwd.y * reach,
+                                 ppos.z + fwd.z * reach};
+                    World& w = stack.layer(activeLayer);
+                    const float sv = kCellSize / kSubDim;
+                    std::vector<std::uint32_t> painted;
+                    const int span = static_cast<int>(std::ceil(r / sv));
+                    const int bx = static_cast<int>(std::floor(c.x / sv));
+                    const int by = static_cast<int>(std::floor(c.y / sv));
+                    const int bz = static_cast<int>(std::floor(c.z / sv));
+                    for (int dz = -span; dz <= span; ++dz)
+                      for (int dy = -span; dy <= span; ++dy)
+                        for (int dx = -span; dx <= span; ++dx) {
+                            const float ox = (bx + dx + 0.5f) * sv - c.x;
+                            const float oy = (by + dy + 0.5f) * sv - c.y;
+                            const float oz = (bz + dz + 0.5f) * sv - c.z;
+                            if (ox * ox + oy * oy + oz * oz > r * r) continue;
+                            const int gx = bx + dx, gy = by + dy, gz = bz + dz;
+                            const int cx = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gx) / kSubDim)));
+                            const int cy = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gy) / kSubDim)));
+                            const int cz = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gz) / kSubDim)));
+                            const int sx = ((gx % kSubDim) + kSubDim) % kSubDim;
+                            const int sy = ((gy % kSubDim) + kSubDim) % kSubDim;
+                            const int sz = ((gz % kSubDim) + kSubDim) % kSubDim;
+                            w.grid().mask(cx, cy, cz).set(sub_bit(sx, sy, sz));
+                            set_sub_material(w, cx, cy, cz, sx, sy, sz,
+                                             kMatNeonTube);
+                            painted.push_back(static_cast<std::uint32_t>(
+                                macro_index(cx, cy, cz)));
+                        }
+                    std::sort(painted.begin(), painted.end());
+                    painted.erase(std::unique(painted.begin(), painted.end()),
+                                  painted.end());
+                    if (!painted.empty()) {
+                        voxelMirror.mark_dirty(painted.data(), painted.size());
+                        ++g_worldGen;
+                        nav.patch_carved_cells(w.grid(), doors, painted.data(),
+                                               painted.size());
+                        g_bakedFloorLights = game::bake_material_lights(w);
+                        rebuild_static_light_table(reg, activeLayer,
+                                                   /*reset=*/false);
+                        nav.set_light_table(g_staticLamps.data(),
+                                            g_staticLamps.size(),
+                                            gpu::kGridCellSlots);
+                        light_log("[neon] painted %zu cells at (%.1f %.1f %.1f), "
+                                  "table now %zu lamps\n",
+                                  painted.size(), static_cast<double>(c.x),
+                                  static_cast<double>(c.y),
+                                  static_cast<double>(c.z),
+                                  g_staticLamps.size());
+                    }
+                }
                 if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
@@ -7208,6 +7305,9 @@ int main(int argc, char** argv) {
                     // этого момента можно отдавать новым лампам (см. вывод у
                     // g_slotDeadGen).
                     g_lightVisTableGen = g_staticTableGen;
+                    light_log("[slots] full light bake landed at gen %u — dead "
+                              "slots below it are now recyclable\n",
+                              g_lightVisTableGen);
                     g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",

@@ -123,6 +123,13 @@ struct ConsoleContext {
     float carveRadius = 0.0f;
     std::uint32_t carvePower = 0;
 
+    // Кисть НЕОНА (команда `neon`, 2026-08-23): нарисовать светящуюся материю
+    // шаром впереди камеры — симметрия карва, тот же субвоксельный масштаб и
+    // тот же путь пересветки. Появилась ради проверки стабильности слотов ламп
+    // (нужен способ РОЖДАТЬ и УБИВАТЬ лампы по команде); радиус в метрах,
+    // <= 0 = ничего не ждёт.
+    float neonRadius = 0.0f;
+
     // Out: one-shot action requests (ConsoleRequest bits). The app drains them
     // once per frame with take_requests() at its safe point.
     std::uint32_t requestBits = 0;
