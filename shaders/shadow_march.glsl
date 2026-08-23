@@ -82,9 +82,7 @@ float giga_shadow(vec3 ro, vec3 rd, float dist) {
         uint cls = sm_class(ci);
         if (cls == 1u) return 0.0; // цельная клетка — свет не пройдёт
         float tExit = min(min(tMax.x, tMax.y), tMax.z);
-        // NOSUB — та же измерительная ручка, что в raymarch.frag (маски не
-        // читаются; частичные клетки прозрачны). Не режим игры.
-        if (cls == 2u && (uShadowFlags & kShadowFlagNoSub) == 0u &&
+        if (cls == 2u &&
             sm_cell_blocked(ci, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
                             min(tExit, dist)))
             return 0.0;

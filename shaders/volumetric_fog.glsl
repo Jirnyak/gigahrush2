@@ -47,19 +47,10 @@ const uint kClusterSlotBase = uint(GIGA_LIGHT_CLUSTER_BASE);
 layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
     uint uPointLightCount;
     uint uCellOverflow;   // атомарный счёт переливших клеток пишет light_grid.comp
-    uint uShadowFlags;    // ИЗМЕРИТЕЛЬНЫЕ биты (бывший uReserved1, слово живо
-                          // с гибели бюджета дымки — занято, не заведено)
-    uint uShadowRayOverride; // бюджет теневых маршей на пиксель (0 = все лампы)
+    uint uReserved1;      // бывший бюджет ламп дымки — член удалён 2026-08-20
+    uint uShadowRayOverride; // 0 = авто-ступени 4/2/1; иначе бюджет лучей surface_light
     PointLight uPointLights[];
 };
-
-// Измерительные биты uShadowFlags — «мерим, не играем» (закон GIGA_SKIP):
-//   NOSUB — теневой луч НЕ входит в субвоксельный DDA частичных клеток
-//           (перекрывают только ЦЕЛЬНЫЕ): изолирует цену масок 128 МБ;
-//   TAIL  — лампы за бюджетом маршей светят АНАЛИТИЧЕСКИ (как кластеры),
-//           а не выбрасываются: та же яркость, ноль теневых лучей.
-const uint kShadowFlagNoSub = 1u;
-const uint kShadowFlagTail = 2u;
 
 layout(set = 1, binding = 1, std430) readonly buffer LightGridBuffer {
     LightGridCell uGridCells[];
@@ -159,15 +150,12 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     // осталось ни одной ветки от дистанции камеры. GIGA_SHADOW_RAYS остаётся
     // ИЗМЕРИТЕЛЬНОЙ ручкой: N != 0 капает марши для A/B.
     uint budget = uShadowRayOverride != 0u ? uShadowRayOverride : 0xFFFFu;
-    // TAIL: за бюджетом лампа не выбрасывается, а светит аналитически — цикл
-    // обязан дойти до конца списка (иначе «бюджет» режет СВЕТ, а не тени).
-    bool analyticTail = (uShadowFlags & kShadowFlagTail) != 0u;
 
     // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
     uint cellIdx = light_cell_index(P);
     uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
-    for (uint k = 0u; k < cellCount && (budget > 0u || analyticTail); ++k) {
+    for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
         PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
 
         vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
@@ -185,11 +173,8 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
         float power = lt.colorIntensity.w * att;
         if (power <= 0.0) continue; // погасший/надгробие: нет света — нет луча
 
-        // Кластер — аналитически, без марша; лампа — честный DDA. С флагом
-        // TAIL хвост за бюджетом идёт тем же аналитическим путём (один закон
-        // на кластеры и хвост: свет без теневого луча, а не темнота).
-        if (uGridCells[cellIdx].lightIndices[k] >= kClusterSlotBase ||
-            (budget == 0u && analyticTail)) {
+        // Кластер — аналитически, без марша; лампа — честный DDA.
+        if (uGridCells[cellIdx].lightIndices[k] >= kClusterSlotBase) {
             vec3 cCol = lt.colorIntensity.rgb * (power * ndotl);
             outDiffuse += cCol;
             continue;
