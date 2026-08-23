@@ -47,39 +47,29 @@ layout(set = 0, binding = 2, std430) readonly buffer BakedGridBuffer {
     LightGridCell uBakedCells[];
 };
 
-// Поколение мутации, запачкавшей клетку (пишет CPU-дренаж карва тем же
-// кадром). Клетка грязная <=> uDirtyGen[cell] > pc.genBaked; очистки нет —
-// свап бейка просто поднимает genBaked (план light-visibility-bake §1.2).
-layout(set = 0, binding = 3, std430) readonly buffer DirtyGenBuffer {
-    uint uDirtyGen[];
-};
-
 // Бакеты динамического хвоста (проблема 59.14): CPU сплатит каждый динамик
 // (снаряд, моб-эмиттер, фонарь) сферой в решётку dynBucketDim³; клетка
 // читает ТОЛЬКО свой бакет вместо прохода по всему хвосту. Слово 0 бакета —
 // счётчик; kDynFallback = перелив: клетка честно сканирует весь хвост
 // (ошибка — «заплатить больше», никогда «потерять лампу»).
-layout(set = 0, binding = 4, std430) readonly buffer DynBucketBuffer {
+// (binding 3: до чистки 2026-08-23 здесь жил DirtyGenBuffer грязной ветки —
+// вырезан ВМЕСТЕ с хостовым layout'ом, писателями и буфером.)
+layout(set = 0, binding = 3, std430) readonly buffer DynBucketBuffer {
     uint uDynBuckets[];
 };
 const uint kDynFallback = 0xFFFFFFFFu;
 
 
-// Камеры в пуше НЕТ по построению: биннинг камеронезависим (S7), и мёртвая
-// лейна camPos возилась зря (аудит 2026-08-20). uTime/maxLights тоже умерли:
-// слоты приходят дефайном, время компьюту не нужно.
+// Камеры в пуше НЕТ по построению: биннинг камеронезависим (S7). Блок ужат
+// чисткой 2026-08-23 (смерть грязной ветки): deadCamPad_ и genBaked вырезаны
+// С ОБЕИХ СТОРОН синхронно (урок «0 света» 2026-08-22: пуш-блок шейдера и
+// host-структура — ОДИН layout, поле умирает только с обеих сторон разом).
+// Раскладка обязана совпадать с gpu_light_grid.h::GridPush.
 layout(push_constant) uniform GridPush {
     vec4 gridMin;   // xyz = min-угол сетки в мире, w = размер клетки x/z (4.0 м)
     vec4 gridExt;   // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
     vec4 params;    // x = activeLightCount,
                     // y = TORUS WRAP PERIOD in metres (kWorldExtent, pushed by the host)
-    // МЁРТВАЯ ЛЕЙНА бывшего камерного гейта — держит офсеты в лад с хостом
-    // (GridPush 80 байт): её удаление сместило genStaticCount/dynBucketDim
-    // на обнулённую камеру, staticCount читался нулём — и весь свет умер
-    // (поймано владельцем 2026-08-22, «0 света»). Как лейны налобника:
-    // пушится нулями, не читается.
-    vec4 deadCamPad_;
-    uint genBaked;       // поколение мира в живом bakedGrid
     uint genStaticCount; // граница секций таблицы: [0..S) статики, [S..N) динамики
     uint dynBucketDim;   // решётка бакетов динамиков (= kDynBucketDim хоста)
     uint dynBucketSlots; // слотов на бакет (= kDynBucketSlots хоста)

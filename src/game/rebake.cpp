@@ -65,8 +65,8 @@ void RebakeScheduler::sync_shadow() {
 void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
     // Воркер свободен (running_ проверен вызывающим). Карвы уезжают в
     // carvedSnap_ — новые, пришедшие во время полёта, лягут в свежий список
-    // и запустят следующий цикл (их клетки останутся грязными по dirtyGen >
-    // snapGen — стандартный приём генераций, гонок нет по построению).
+    // и запустят следующий цикл (стандартный приём генераций, гонок нет по
+    // построению).
     join_worker();
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
@@ -109,7 +109,7 @@ void RebakeScheduler::discard_pending() {
     pendingLight_ = LightVisBake{};
     pendingPatch_ = LightVisPatch{};
     // Карвы отменённого цикла — назад в живой список: выброс оставил бы их
-    // клетки навсегда грязными на GPU (dirtyGen > genBaked без допекания).
+    // клетки навсегда непокрытыми патчем (карв-долг обязан быть допечён).
     carvedSinceLight_.insert(carvedSinceLight_.end(), carvedSnap_.begin(),
                              carvedSnap_.end());
     carvedSnap_.clear();

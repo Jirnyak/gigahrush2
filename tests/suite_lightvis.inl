@@ -226,13 +226,10 @@ void solidity_law() {
     CHECK(giga::game::light_ray_passes(g, from, to));
 }
 
-void dirty_radius_derivation() {
-    // rDirty = ceil((R_max + sqrt(3) + 2*sqrt(3)) / 4): падик R=12 -> 5.
-    CHECK(giga::game::light_dirty_radius_cells(12.0f) == 5);
-    // Блеймовский неон-кластер R~26: ceil((26+5.2)/4) = 8.
-    CHECK(giga::game::light_dirty_radius_cells(26.0f) == 8);
-    CHECK(giga::game::light_dirty_radius_cells(0.0f) >= 2); // полудиагонали
-}
+// dirty_radius_derivation() жил здесь до чистки 2026-08-23: он пиновал вывод
+// радиуса грязного шара (light_dirty_radius_cells). Дренаж «тем же кадром»
+// вырезан вместе с грязной веткой шейдера (закон владельца 2026-08-22: свет
+// ДОГОНЯЕТ мир) — тестировать больше нечего.
 
 void pin_and_oracle_on_a_real_floor() {
     World w;
@@ -393,19 +390,10 @@ void carve_expands_same_call() {
     }
     CHECK(!dirty.empty()); // стена была настоящей
 
-    // --- Мгновенность, шаг 1: дренаж ТЕМ ЖЕ вызовом метит клетку ---------
-    std::vector<std::uint32_t> dirtyGen(giga::game::kLightVisCells, 0);
-    giga::game::for_each_dirty_light_cell(
-        dirty.data(), dirty.size(), baked.rMaxM,
-        [&](std::size_t li) { dirtyGen[li] = 1; });
-    CHECK(dirtyGen[targetCell] == 1); // bakedGen=0 < 1 ⇒ клетка грязная
-
-    // --- Шаг 2: грязный фолбэк (дистанционный биннинг по всей таблице —
-    // CPU-эмуляция ветки шейдера) немедленно видит лампу.
-    CHECK(giga::game::light_cell_score(L.pos, L.radiusM, tcx, tcy, tcz) <=
-          1.0f);
-
-    // --- Шаг 3: фоновый ребейк (снапшот масок снимается заново — поклеточного
+    // (Шаги «мгновенности» — дренаж dirtyGen + грязный фолбэк — жили здесь до
+    // чистки 2026-08-23; инвариант «свет тем же кадром» снят владельцем, свет
+    // догоняет мир патчем. Осталась сама догоняющая половина:)
+    // Фоновый ребейк (снапшот масок снимается заново — поклеточного
     // патча у света нет) ужимает и ВПИСЫВАЕТ лампу.
     LightVisBake after;
     giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
@@ -415,7 +403,7 @@ void carve_expands_same_call() {
     bool present = false;
     for (std::uint32_t k = 0; k < row[0]; ++k)
         if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
-    CHECK(present); // свап поднял бы bakedGen ⇒ dirtyGen <= bakedGen, чисто
+    CHECK(present); // дыра пробита — ребейк обязан увидеть лампу в клетке
 }
 
 // Дельта-патч (carve-hitch.md §3): частичное допекание только затронутых
@@ -657,7 +645,6 @@ void test_lightvis_all() {
     lightvis_test::cluster_synthesis();
     lightvis_test::cluster_packing_oracle();
     lightvis_test::solidity_law();
-    lightvis_test::dirty_radius_derivation();
     lightvis_test::pin_and_oracle_on_a_real_floor();
     lightvis_test::oracle_reverse_polarity_constructed();
     lightvis_test::carve_expands_same_call();

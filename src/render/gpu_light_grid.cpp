@@ -99,8 +99,9 @@ bool GpuLightGrid::create_buffers() noexcept {
 
     // Запечённая видимость: зеркало bakedGrid (device-local, чтобы кадр читал
     // из VRAM, а не через PCIe — Windows-железо дискретно) + host-visible
-    // стейджинг той же раскладки + dirtyGen. «Бери больше во благо» (решение
-    // владельца §7: VRAM +65 МиБ принят).
+    // стейджинг той же раскладки. «Бери больше во благо» (решение владельца
+    // §7: VRAM +65 МиБ принят). Буферы dirtyGen/кластерной топологии грязной
+    // ветки вырезаны чисткой 2026-08-23 (свет ДОГОНЯЕТ мир, 37e772d1).
     if (!bakedGrid_.create_device_local(*dev_, zeroGrid.data(), kGridBufSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             "light-baked-grid")) {
@@ -111,17 +112,6 @@ bool GpuLightGrid::create_buffers() noexcept {
         return false;
     }
     bakedMapped_ = bakedStaging_.mapped;
-
-    constexpr VkDeviceSize kDirtySize = kTotalGridCells * sizeof(uint32_t);
-    if (!dirtyGen_.create_host_visible(*dev_, kDirtySize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-dirty-gen")) {
-        return false;
-    }
-    dirtyMapped_ = static_cast<uint32_t*>(dirtyGen_.mapped);
-    // Нули = «чисто при bakedGen ≥ 0». Поколение мутаций МОНОТОННО через всю
-    // сессию (g_worldGen не сбрасывается на этаже — иначе метки старого этажа
-    // пережили бы его), поэтому обнуление больше никогда не нужно.
-    std::memset(dirtyMapped_, 0, static_cast<std::size_t>(kDirtySize));
 
     // Бакеты динамиков (59.14): 4096 × 16 u32 = 256 КиБ, CPU пересплачивает
     // каждый кадр (чистятся только счётчики, слоты дописываются поверх).
@@ -135,27 +125,6 @@ bool GpuLightGrid::create_buffers() noexcept {
     dynBucketsMapped_ = static_cast<uint32_t*>(dynBuckets_.mapped);
     std::memset(dynBucketsMapped_, 0, static_cast<std::size_t>(kDynSize));
 
-    // Кластерная топология (инкремент 4): 32³ пар (start,count) + CSR членов.
-    // Заливается на полном свапе бейка; нули = топологии нет, полный скан.
-    constexpr VkDeviceSize kClusterBucketSize =
-        static_cast<VkDeviceSize>(kClusterTopoBuckets) * 2 * sizeof(uint32_t);
-    if (!clusterBucketBuf_.create_host_visible(*dev_, kClusterBucketSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-cluster-buckets")) {
-        return false;
-    }
-    clusterBucketMapped_ = static_cast<uint32_t*>(clusterBucketBuf_.mapped);
-    std::memset(clusterBucketMapped_, 0,
-                static_cast<std::size_t>(kClusterBucketSize));
-    constexpr VkDeviceSize kClusterMembersSize =
-        static_cast<VkDeviceSize>(kRootLights) * sizeof(uint32_t);
-    if (!clusterMembersBuf_.create_host_visible(*dev_, kClusterMembersSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "light-cluster-members")) {
-        return false;
-    }
-    clusterMembersMapped_ = static_cast<uint32_t*>(clusterMembersBuf_.mapped);
-    std::memset(clusterMembersMapped_, 0,
-                static_cast<std::size_t>(kClusterMembersSize));
-
     return true;
 }
 
@@ -165,12 +134,11 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     // Binding 0: PointLightBuffer (Set 0)
     // Binding 1: LightGridBuffer (Set 0)
     // Binding 2: BakedGridBuffer — запечённая видимость (compute-only)
-    // Binding 3: DirtyGenBuffer — поколения мутаций клеток (compute-only)
-    // Binding 4: DynBucketBuffer — бакеты динамиков 59.14 (compute-only)
-    // Binding 5: ClusterBucketRange — топология кластеров (compute-only)
-    // Binding 6: ClusterMembers — CSR членов кластеров (compute-only)
-    VkDescriptorSetLayoutBinding bindings[7]{};
-    for (uint32_t i = 0; i < 7; ++i) {
+    // Binding 3: DynBucketBuffer — бакеты динамиков 59.14 (compute-only)
+    // (DirtyGen и кластерная топология — биндинги 3/5/6 до чистки 2026-08-23 —
+    //  вырезаны вместе с шейдерной стороной, layout снова плотный.)
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[i].descriptorCount = 1;
@@ -181,14 +149,14 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslci.bindingCount = 7;
+    dslci.bindingCount = 4;
     dslci.pBindings = bindings;
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descriptorSetLayout_));
 
     // Pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 7;
+    poolSize.descriptorCount = 4;
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -206,21 +174,18 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
     VK_TRY(vkAllocateDescriptorSets(d, &alloci, &descriptorSet_));
 
     // Write descriptor sets
-    VkDescriptorBufferInfo bufi[7]{};
+    VkDescriptorBufferInfo bufi[4]{};
     bufi[0].buffer = lightBuf_.buffer;
     bufi[1].buffer = gridSSBO_.buffer;
     bufi[2].buffer = bakedGrid_.buffer;
-    bufi[3].buffer = dirtyGen_.buffer;
-    bufi[4].buffer = dynBuckets_.buffer;
-    bufi[5].buffer = clusterBucketBuf_.buffer;
-    bufi[6].buffer = clusterMembersBuf_.buffer;
+    bufi[3].buffer = dynBuckets_.buffer;
     for (auto& b : bufi) {
         b.offset = 0;
         b.range = VK_WHOLE_SIZE;
     }
 
-    VkWriteDescriptorSet writes[7]{};
-    for (uint32_t i = 0; i < 7; ++i) {
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t i = 0; i < 4; ++i) {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = descriptorSet_;
         writes[i].dstBinding = i;
@@ -228,7 +193,7 @@ bool GpuLightGrid::create_descriptor_sets() noexcept {
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[i].pBufferInfo = &bufi[i];
     }
-    vkUpdateDescriptorSets(d, 7, writes, 0, nullptr);
+    vkUpdateDescriptorSets(d, 4, writes, 0, nullptr);
     return true;
 }
 
@@ -355,8 +320,7 @@ void GpuLightGrid::add_light(const vec3& pos, float radius, const vec3& color, f
 }
 
 void GpuLightGrid::upload_baked_grid(const uint32_t* cells, std::size_t words,
-                                     uint32_t bakedGen, float rMaxM) noexcept {
-    bakedRMaxM_ = rMaxM;
+                                     uint32_t bakedGen) noexcept {
     if (!bakedMapped_ || cells == nullptr) return;
     constexpr std::size_t kExpect =
         static_cast<std::size_t>(kTotalGridCells) * (kGridCellSlots + 1);
@@ -389,9 +353,8 @@ void GpuLightGrid::upload_baked_cells(const uint32_t* cells, std::size_t words,
                      words, kExpect);
         return;
     }
-    // Ген поднимается ВСЕГДА (и при nChanged == 0 — см. заголовок): это и
-    // есть очистка грязного шара для шейдера (клетка чиста ⇔ dirtyGen <=
-    // genBaked, light_grid.comp).
+    // Ген — CPU-бухгалтерия поколений бейка (rebake); шейдер его больше не
+    // получает (лейна genBaked умерла с грязной веткой, чистка 2026-08-23).
     bakedGen_ = bakedGen;
     if (bakedUploadPending_) return; // полная заливка того же кадра главнее
     constexpr VkDeviceSize kCellBytes = sizeof(GpuGridCell);
@@ -417,34 +380,7 @@ void GpuLightGrid::upload_baked_cells(const uint32_t* cells, std::size_t words,
     }
 }
 
-void GpuLightGrid::set_cluster_topology(const uint32_t* bucketRanges,
-                                        std::size_t nBucketWords,
-                                        const uint32_t* members,
-                                        std::size_t nMembers) noexcept {
-    if (clusterBucketMapped_ == nullptr || clusterMembersMapped_ == nullptr)
-        return;
-    if (nBucketWords != static_cast<std::size_t>(kClusterTopoBuckets) * 2 ||
-        nMembers > kRootLights) {
-        std::fprintf(stderr,
-                     "[light-grid] cluster topology size mismatch: %zu bucket "
-                     "words / %zu members — refused\n",
-                     nBucketWords, nMembers);
-        return;
-    }
-    std::memcpy(clusterBucketMapped_, bucketRanges,
-                nBucketWords * sizeof(uint32_t));
-    if (nMembers > 0)
-        std::memcpy(clusterMembersMapped_, members,
-                    nMembers * sizeof(uint32_t));
-    clusterMembersCount_ = static_cast<uint32_t>(nMembers);
-}
-
-void GpuLightGrid::mark_dirty_light_cell(std::size_t cellIndex, uint32_t gen) noexcept {
-    if (!dirtyMapped_ || cellIndex >= kTotalGridCells) return;
-    dirtyMapped_[cellIndex] = gen;
-}
-
-void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept {
+void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
     if (!ready() || !lightMapped_) return;
 
     // Свап бейка видимости: копия стейджинг -> device-local, вне рендер-пасса
@@ -609,14 +545,7 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd, float timeSec, const
     // period makes the shader's period unfalsifiable by construction — the same
     // rule [problems.md] §7 wrote after the phantom-lamp hunt.
     push.params = vec4{static_cast<float>(uploadCount), kWorldExtent,
-                       bakedRMaxM_, clusterMembersCount_ > 0 ? 1.0f : 0.0f};
-    // МЁРТВАЯ ЛЕЙНА (2026-08-22): камерный гейт вырезан вместе со всей
-    // грязной веткой шейдера (закон владельца: свет ДОГОНЯЕТ мир). Биннинг
-    // снова камеронезависим ПО ПОСТРОЕНИЮ (S7). Нули — как у лейн налобника;
-    // полная чистка пуша/биндингов топологии — вместе с писателями dirtyGen.
-    push.camPos = vec4{0.0f, 0.0f, 0.0f, 0.0f};
-    (void)camPos;
-    push.genBaked = bakedGen_;
+                       0.0f, 0.0f};
     push.genStaticCount = staticCount_;
     push.dynBucketDim = kDynBucketDim;
     push.dynBucketSlots = kDynBucketSlots;
@@ -663,16 +592,10 @@ void GpuLightGrid::destroy() noexcept {
     gridSSBO_.destroy(*dev_);
     bakedGrid_.destroy(*dev_);
     bakedStaging_.destroy(*dev_);
-    dirtyGen_.destroy(*dev_);
     dynBuckets_.destroy(*dev_);
     dynBucketsMapped_ = nullptr;
-    clusterBucketBuf_.destroy(*dev_);
-    clusterMembersBuf_.destroy(*dev_);
-    clusterBucketMapped_ = nullptr;
-    clusterMembersMapped_ = nullptr;
     lightMapped_ = nullptr;
     bakedMapped_ = nullptr;
-    dirtyMapped_ = nullptr;
     dev_ = nullptr;
 }
 

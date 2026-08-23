@@ -294,12 +294,11 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer) {
 
 // Поколение мутаций мира активного этажа — асинк-ребейк
 // ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
-// и боевой дренаж); двери НЕ пишут — нав печётся по премисе all-open
-// ([game/door.h]) и от тоггла не стареет. Читатели — RebakeScheduler
-// ([game/rebake.h]): bakedGen != worldGen ⇔ запечённое устарело, планировщик
-// сам доводит фоновым циклом; и dirtyGen-буфер светосетки (клетка грязная ⇔
-// dirtyGen > bakedGen). МОНОТОННО через всю сессию, на этаже НЕ сбрасывается —
-// сброс оживил бы dirtyGen-метки прошлого этажа.
+// и боевой); двери НЕ пишут — нав печётся по премисе all-open ([game/door.h])
+// и от тоггла не стареет. Читатель — RebakeScheduler ([game/rebake.h]):
+// bakedGen != worldGen ⇔ запечённое устарело, планировщик сам доводит фоновым
+// циклом. (dirtyGen-буфер светосетки вырезан чисткой 2026-08-23.) МОНОТОННО
+// через всю сессию, на этаже НЕ сбрасывается.
 static std::uint64_t g_worldGen = 0;
 
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
@@ -320,7 +319,6 @@ struct CarveTiming {
     float mirrorMarkMs = 0.0f; // voxelMirror.mark_dirty (только метки)
     float diffMs = 0.0f;       // mark_diffusion_dirty
     float patchMs = 0.0f;      // nav.patch_carved_cells
-    float visMs = 0.0f;        // дренаж светосетки (mark_dirty_light_cell)
     float partMs = 0.0f;       // spawn_carve_particles
     float anchorMs = 0.0f;     // anchor_validate_step
     float antrMs = 0.0f;       // antourage_carve_step_here
@@ -1610,10 +1608,9 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // and floor changes cancel-join in tens of ms ([game/rebake.h]).
 void begin_floor_nav(const World& world, int floorNumber,
                      game::RebakeScheduler& bake, game::RoomZones& rooms) {
-    // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается:
-    // dirtyGen-буфер светосетки хранит метки поколений, и сброс к нулю оживил
-    // бы метки прошлого этажа (dirtyGen > bakedGen до N карвов). Fresh-снапшот
-    // просто отражает текущее поколение.
+    // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается
+    // (бухгалтерия RebakeScheduler сверяет поколения между этажами).
+    // Fresh-снапшот просто отражает текущее поколение.
     const game::FloorKind kind = kind_for_floor(floorNumber);
     // Кадр входа на этаж платит синхронный Fresh-бейк (свет 1144 мс по замеру
     // 2026-08-21, rooms ~23 мс) — детектор хитча обязан назвать его по имени.
@@ -4374,20 +4371,10 @@ int main(int argc, char** argv) {
                                                carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
                         g_carveT.patchMs += carve_ms_since(ct0);
-                        // Дренаж светосетки ТЕМ ЖЕ КАДРОМ (железный инвариант
-                        // (б)): шар rDirty из R_max этажа вокруг каждой
-                        // карвнутой клетки — грязные клетки биннятся по всей
-                        // статик-таблице, свет хлынул в дыру немедленно;
-                        // фоновый ребейк потом ужмёт (план §3.3).
-                        ct0 = std::chrono::steady_clock::now();
-                        game::for_each_dirty_light_cell(
-                            carveResult.dirtyCells.data(),
-                            carveResult.dirtyCells.size(),
-                            nav.light_vis().rMaxM, [&](std::size_t idx) {
-                                lightGrid.mark_dirty_light_cell(
-                                    idx, static_cast<std::uint32_t>(g_worldGen));
-                            });
-                        g_carveT.visMs += carve_ms_since(ct0);
+                        // Дренажа светосетки здесь БОЛЬШЕ НЕТ (чистка
+                        // 2026-08-23): инвариант «свет тем же кадром» снят
+                        // владельцем 2026-08-22 — свет ДОГОНЯЕТ мир патчем
+                        // дельта-ламп через RebakeScheduler (~0.3-1 с).
                         // Dust and debris off the blast, tinted by the carved
                         // material ([particle_pass.h]).
                         ct0 = std::chrono::steady_clock::now();
@@ -4788,17 +4775,8 @@ int main(int argc, char** argv) {
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             g_carveT.patchMs += carve_ms_since(ct0);
-                            // И тот же дренаж светосетки тем же кадром.
-                            ct0 = std::chrono::steady_clock::now();
-                            game::for_each_dirty_light_cell(
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size(),
-                                nav.light_vis().rMaxM, [&](std::size_t idx) {
-                                    lightGrid.mark_dirty_light_cell(
-                                        idx,
-                                        static_cast<std::uint32_t>(g_worldGen));
-                                });
-                            g_carveT.visMs += carve_ms_since(ct0);
+                            // Дренаж светосетки вырезан (чистка 2026-08-23,
+                            // см. консольный карв выше).
                             ct0 = std::chrono::steady_clock::now();
                             spawn_carve_particles(particlePass, carveResult,
                                                   pr.seed);
@@ -7143,26 +7121,14 @@ int main(int argc, char** argv) {
                     lightGrid.upload_baked_grid(
                         nav.light_vis().cells.data(),
                         nav.light_vis().cells.size(),
-                        static_cast<std::uint32_t>(nav.light_gen()),
-                        nav.light_vis().rMaxM);
+                        static_cast<std::uint32_t>(nav.light_gen()));
                     // Кластеры поколения: записи в верхний регион таблицы +
                     // CSR членов для покадровой суммы (light-cluster.md §3.2).
+                    // (Кластерная ТОПОЛОГИЯ грязного фоллбэка вырезана чисткой
+                    // 2026-08-23 вместе с самой грязной веткой, 37e772d1.)
                     const auto& lv = nav.light_vis();
                     std::vector<gpu::GpuPointLight> recs(lv.clusters.size());
                     g_lightClusterRanges.resize(lv.clusters.size());
-                    // Топология кластеров для грязного фоллбэка (инкремент 4
-                    // carve-hitch.md): бакет -> (start, count) в CSR членов.
-                    // Бакет кластера — по ПЕРВОМУ члену (все члены в одном
-                    // бакете по построению бейка). Шов решёток — assert.
-                    static_assert(gpu::kClusterTopoDim ==
-                                      static_cast<std::uint32_t>(
-                                          game::kClusterGridDim),
-                                  "cluster bucket grids must coincide");
-                    std::vector<std::uint32_t> topo(
-                        static_cast<std::size_t>(gpu::kClusterTopoBuckets) * 2,
-                        0u);
-                    const float cbM =
-                        game::kLightVisCellM * game::kClusterBucketCells;
                     for (std::size_t i = 0; i < lv.clusters.size(); ++i) {
                         const auto& c = lv.clusters[i];
                         recs[i].posRadius =
@@ -7172,39 +7138,10 @@ int main(int argc, char** argv) {
                         recs[i].dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
                         g_lightClusterRanges[i] = {c.memberStart,
                                                    c.memberCount};
-                        if (c.memberCount > 0 &&
-                            lv.clusterMembers[c.memberStart] <
-                                g_staticLamps.size()) {
-                            const vec3& p =
-                                g_staticLamps[lv.clusterMembers[c.memberStart]]
-                                    .pos;
-                            const int bx =
-                                static_cast<int>(std::floor(p.x / cbM)) &
-                                (game::kClusterGridDim - 1);
-                            const int by =
-                                static_cast<int>(std::floor(p.y / cbM)) &
-                                (game::kClusterGridDim - 1);
-                            const int bz =
-                                static_cast<int>(std::floor(p.z / cbM)) &
-                                (game::kClusterGridDim - 1);
-                            const std::size_t bi =
-                                (static_cast<std::size_t>(bx) +
-                                 static_cast<std::size_t>(by) *
-                                     game::kClusterGridDim +
-                                 static_cast<std::size_t>(bz) *
-                                     game::kClusterGridDim *
-                                     game::kClusterGridDim) *
-                                2;
-                            topo[bi] = c.memberStart;
-                            topo[bi + 1] = c.memberCount;
-                        }
                     }
                     g_lightClusterMembers = lv.clusterMembers;
                     lightGrid.set_cluster_records(
                         recs.data(), static_cast<uint32_t>(recs.size()));
-                    lightGrid.set_cluster_topology(
-                        topo.data(), topo.size(), lv.clusterMembers.data(),
-                        lv.clusterMembers.size());
                     g_frameMark.lightSwapMs = carve_ms_since(ctSw);
                     std::fprintf(stderr,
                                  "[carve] light_swap upload %.2f ms (gen %llu)\n",
@@ -7234,7 +7171,7 @@ int main(int argc, char** argv) {
                 }
                 const auto ctLg = std::chrono::steady_clock::now();
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
-                lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+                lightGrid.update_and_dispatch(cmd);
                 if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
@@ -7466,7 +7403,7 @@ int main(int argc, char** argv) {
             if (g_carveT.carved) {
                 const float compSum = g_carveT.sphereMs + g_carveT.lightMatMs +
                                       g_carveT.mirrorMarkMs + g_carveT.diffMs +
-                                      g_carveT.patchMs + g_carveT.visMs +
+                                      g_carveT.patchMs +
                                       g_carveT.partMs + g_carveT.anchorMs +
                                       g_carveT.antrMs;
                 g_frameMark.carveMs = g_carveT.siteMs + g_carveT.propSkinMs +
@@ -7474,14 +7411,13 @@ int main(int argc, char** argv) {
                 std::fprintf(
                     stderr,
                     "[carve] total %.2f ms (%zu cells): light_mat %.2f, "
-                    "vis %.2f, prop_skin %.2f, mirror_mark %.2f, "
+                    "prop_skin %.2f, mirror_mark %.2f, "
                     "mirror_flush %.2f, lgrid %.2f, sphere %.2f, diff %.2f, "
                     "patch %.2f, anchor %.2f, antr %.2f, part %.2f, "
                     "unmeasured %.2f\n",
                     static_cast<double>(g_carveT.siteMs + g_carveT.propSkinMs +
                                         g_carveT.lgridMs + g_carveT.flushMs),
                     g_carveT.cells, static_cast<double>(g_carveT.lightMatMs),
-                    static_cast<double>(g_carveT.visMs),
                     static_cast<double>(g_carveT.propSkinMs),
                     static_cast<double>(g_carveT.mirrorMarkMs),
                     static_cast<double>(g_carveT.flushMs),

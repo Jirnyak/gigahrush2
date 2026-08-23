@@ -239,44 +239,12 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
                                   std::size_t lampCount,
                                   std::vector<std::uint32_t>* changedCells);
 
-// --- Дренаж карва: мгновенное расширение (инвариант «тем же кадром») --------
+// --- Дренаж карва: ВЫРЕЗАН чисткой 2026-08-23 -------------------------------
 //
-// Карв только УДАЛЯЕТ материю -> видимость только РАСШИРЯЕТСЯ. Какие клетки
-// могли получить НОВУЮ лампу через дыру в клетке C? Путь света L->P проходит
-// через C и короче R_L (дальше света нет), C на отрезке ⇒ dist(C,P) <= R_L <=
-// R_max этажа. Плюс полудиагонали обеих решёток (центр клетки против точки):
-//   rDirty = ceil((R_max + sqrt(3) + 2*sqrt(3)) / 4 м)   [план §3.2]
-//   падик, R_max = 12 м: ceil(17.2 / 4) = 5 клеток светосетки.
-// R_max — вывод из контента этажа (печатается бейком), не константа.
-inline int light_dirty_radius_cells(float rMaxM) {
-    const float kHalfDiagMacro = 1.7320508f;      // sqrt(3) · kCellSize/2
-    const float kHalfDiagLight = 2.0f * 1.7320508f; // sqrt(3) · kLightVisCellM/2
-    return static_cast<int>(
-        std::ceil((rMaxM + kHalfDiagMacro + kHalfDiagLight) / kLightVisCellM));
-}
-
-// Для каждой карвнутой МАКРОклетки (flat macro_index, как в
-// CarveResult::dirtyCells) обойти шар rDirty по КЛЕТКАМ СВЕТОСЕТКИ и позвать
-// fn(lightCellIndex). Маппинг макро->свето — сдвиг на бит (сетки соосны, обе
-// стартуют в нуле мира). Запись идемпотентна — дедупликация не нужна.
-template <class Fn>
-void for_each_dirty_light_cell(const std::uint32_t* dirtyCells, std::size_t n,
-                               float rMaxM, Fn&& fn) {
-    const int r = light_dirty_radius_cells(rMaxM);
-    const int r2 = r * r;
-    for (std::size_t i = 0; i < n; ++i) {
-        const std::uint32_t idx = dirtyCells[i];
-        const int mx = static_cast<int>(idx % kMacroDim);
-        const int my = static_cast<int>((idx / kMacroDim) % kMacroDim);
-        const int mz = static_cast<int>(idx / (kMacroDim * kMacroDim));
-        const int lx = mx >> 1, ly = my >> 1, lz = mz >> 1;
-        for (int dz = -r; dz <= r; ++dz)
-            for (int dy = -r; dy <= r; ++dy)
-                for (int dx = -r; dx <= r; ++dx) {
-                    if (dx * dx + dy * dy + dz * dz > r2) continue;
-                    fn(light_vis_index(lx + dx, ly + dy, lz + dz));
-                }
-    }
-}
+// Здесь жили light_dirty_radius_cells / for_each_dirty_light_cell — расширение
+// грязного шара «тем же кадром» для GPU-фоллбэка. Инвариант снят владельцем
+// 2026-08-22 («жалею о правиле "свет в том же кадре"»), грязная ветка шейдера
+// вырезана (37e772d1): свет ДОГОНЯЕТ мир патчем дельта-ламп через
+// RebakeScheduler (~0.3-1 с), и дренажу больше некого будить.
 
 } // namespace giga::game

@@ -99,37 +99,22 @@ static constexpr uint32_t kDynBucketCount =
 static constexpr uint32_t kDynBucketSlots = 15;    // 16 слов: счётчик + 15 id
 static constexpr uint32_t kDynBucketFallback = 0xFFFFFFFFu;
 
-// Топо-решётка КЛАСТЕРОВ статиков (инкремент 4 carve-hitch.md) ВЫВОДИТСЯ:
-// бакет кластера = 2 клетки светосетки (light-cluster.md), измерение =
-// kGridDimX/2. Совпадение с game-стороной (kClusterGridDim) — общая
-// производная от одной сетки, не два числа.
-static constexpr uint32_t kClusterTopoDim = kGridDimX / 2; // 32
-static constexpr uint32_t kClusterTopoBuckets =
-    kClusterTopoDim * kClusterTopoDim * kClusterTopoDim; // 32768
-
 // Matches GridPush in shaders/light_grid.comp
-// Камеры в пуше НЕТ (S7: биннинг камеронезависим); uTime/maxLights умерли —
-// компьют их не читал (аудит 2026-08-20). Раскладка обязана совпадать с
-// light_grid.comp::GridPush.
+// Камеры в пуше НЕТ (S7: биннинг камеронезависим). Блок ужат чисткой
+// 2026-08-23 (смерть грязной ветки 37e772d1): camPos-гейт, genBaked,
+// params.z (R_max) и params.w (флаг топологии) вырезаны С ОБЕИХ СТОРОН
+// синхронно — урок «0 света» 2026-08-22: пуш-блок шейдера и host-структура
+// суть ОДИН layout, поле умирает только с обеих сторон разом. Раскладка
+// обязана совпадать с light_grid.comp::GridPush.
 struct alignas(16) GridPush {
     vec4 gridMin; // xyz = min-угол сетки в мире, w = размер клетки x/z (4.0 м)
     vec4 gridExt; // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
-    vec4 params;  // x = activeLightCount, y = wrap period (kWorldExtent),
-                  // z = R_max бейка (м), w = кластерная топология на GPU (0/1)
-    // КАМЕРА В ПУШЕ — только для гейта грязного фоллбэка (решение владельца
-    // 2026-08-21: закон «свет в дыру тем же кадром» — КАМЕРНЫЙ; S7-биннинг
-    // чистых клеток по-прежнему камеронезависим). w = порог «близко»,
-    // ВЫВЕДЕН: 2×R_max — дальше вклад лампы утоплен аттенюацией и дымкой,
-    // а патч доедет за ~0.3 с раньше, чем камера доберётся.
-    vec4 camPos;
-    // Слияние с бейком видимости: x = bakedGen (клетка грязная ⇔
-    // dirtyGen[cell] > bakedGen), y = staticCount (граница секций таблицы).
-    uint32_t genBaked = 0;
-    uint32_t genStaticCount = 0;
+    vec4 params;  // x = activeLightCount, y = wrap period (kWorldExtent); z/w свободны
+    uint32_t genStaticCount = 0; // граница секций: [0..S) статики, [S..N) динамики
     uint32_t dynBucketDim = 0;   // решётка бакетов динамиков (= kDynBucketDim)
     uint32_t dynBucketSlots = 0; // слотов на бакет (= kDynBucketSlots)
 };
-static_assert(sizeof(GridPush) == 80, "GridPush layout must be 80 bytes");
+static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
 #if defined(_MSC_VER)
 // MSVC C4324 structure was padded due to alignment specifier is expected:
 // GpuLightGrid is alignas(16) so the GpuPointLight stagingLights_ array
@@ -173,30 +158,16 @@ public:
     // и поднять bakedGen. memcpy в стейджинг здесь; vkCmdCopyBuffer — в
     // update_and_dispatch, вне рендер-пасса, кадром заливки.
     void upload_baked_grid(const uint32_t* cells, std::size_t words,
-                           uint32_t bakedGen, float rMaxM) noexcept;
-    // Кластерная топология бейка на GPU (инкремент 4 carve-hitch.md):
-    // bucketRanges — 32³ пар (memberStart, memberCount) по 8-м бакетам
-    // (kClusterGridDim game-стороны), members — CSR ламповых id. Грязная
-    // клетка У КАМЕРЫ сканирует соседние бакеты вместо всей таблицы; без
-    // топологии (нулевой members) шейдер честно падает на полный скан.
-    // Зовётся на каждом ПОЛНОМ свапе бейка (топология меняется только им).
-    void set_cluster_topology(const uint32_t* bucketRanges,
-                              std::size_t nBucketWords,
-                              const uint32_t* members,
-                              std::size_t nMembers) noexcept;
+                           uint32_t bakedGen) noexcept;
     // Частичный свап (дельта-патч, carve-hitch.md §3): записать в стейджинг
     // ТОЛЬКО изменённые клетки (отсортированный список индексов) и скопировать
     // их диапазонами кадром заливки — полная копия 64 МиБ (42 мс замером) за
-    // дырку не платится. genBaked поднимается и при НУЛЕ клеток: карв в
-    // темноте всё равно обязан очистить грязный шар, иначе фоллбэк жил бы
-    // вечно. Полная заливка, запрошенная тем же кадром, главнее диапазонов.
+    // дырку не платится. Полная заливка, запрошенная тем же кадром, главнее
+    // диапазонов. (Дренаж dirtyGen и кластерная топология грязного фоллбэка
+    // вырезаны чисткой 2026-08-23 — свет ДОГОНЯЕТ мир патчами, 37e772d1.)
     void upload_baked_cells(const uint32_t* cells, std::size_t words,
                             const uint32_t* changed, std::size_t nChanged,
                             uint32_t bakedGen) noexcept;
-    // Дренаж карва (инвариант «тем же кадром»): пометить клетку светосетки
-    // поколением мутации. Пишется в host-visible буфер ДО записи диспатча
-    // этого кадра — компьют уже видит поднятые поколения (план §3.3).
-    void mark_dirty_light_cell(std::size_t cellIndex, uint32_t gen) noexcept;
 
     // Zero-allocation light collection — ДИНАМИЧЕСКИЙ хвост [staticCount..).
     // 4-арг = омни; перегрузка с dir/cosOuter = конус (фонарик, прожектор).
@@ -209,7 +180,9 @@ public:
 
     // Record compute dispatch (3D spatial grid binning) & pipeline memory barrier.
     // Must execute outside active render pass on current_cmd().
-    void update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept;
+    // (timeSec/camPos параметры умерли чисткой 2026-08-23: компьют не читал
+    // ни времени, ни камеры — биннинг камеронезависим, S7.)
+    void update_and_dispatch(VkCommandBuffer cmd) noexcept;
 
     VkDescriptorSetLayout descriptor_set_layout() const noexcept { return descriptorSetLayout_; }
     VkDescriptorSet descriptor_set() const noexcept { return descriptorSet_; }
@@ -234,25 +207,17 @@ private:
     VulkanBuffer gridSSBO_{}; // DEVICE_LOCAL storage for 3D grid cells
     // Запечённая видимость (план light-visibility-bake §1.2): bakedGrid —
     // device-local зеркало LightVisBake.cells (64 МиБ), bakedStaging_ —
-    // host-visible источник копии (каденция — секунды, полоса копейки),
-    // dirtyGen_ — host-visible u32 на клетку (поколение мутации; клетка
-    // грязная ⇔ dirtyGen > bakedGen, очистка не нужна — свап поднимает ген).
+    // host-visible источник копии (каденция — секунды, полоса копейки).
+    // Буферы dirtyGen_/clusterBucketBuf_/clusterMembersBuf_ грязной ветки
+    // вырезаны чисткой 2026-08-23 (−1.25 МиБ host-visible).
     VulkanBuffer bakedGrid_{};    // DEVICE_LOCAL, kTotalGridCells × kGridCellBytes
     VulkanBuffer bakedStaging_{}; // HOST_VISIBLE persistent mapped, тот же размер
-    VulkanBuffer dirtyGen_{};     // HOST_VISIBLE persistent mapped, kTotalGridCells × 4
     VulkanBuffer dynBuckets_{};   // HOST_VISIBLE, бакеты динамиков (59.14), 256 КиБ
-    VulkanBuffer clusterBucketBuf_{};  // HOST_VISIBLE, 32³ пар (start,count), 256 КиБ
-    VulkanBuffer clusterMembersBuf_{}; // HOST_VISIBLE, CSR членов, kRootLights × 4
 
     void* lightMapped_ = nullptr;
     void* bakedMapped_ = nullptr;
-    uint32_t* dirtyMapped_ = nullptr;
     uint32_t* dynBucketsMapped_ = nullptr;
     uint32_t dynBucketOverflowFrames_ = 0; // троттлинг строки перелива
-    uint32_t* clusterBucketMapped_ = nullptr;
-    uint32_t* clusterMembersMapped_ = nullptr;
-    uint32_t clusterMembersCount_ = 0; // 0 = топологии нет, фоллбэк полный
-    float bakedRMaxM_ = 0.0f;          // R_max бейка — порог камерного гейта
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
