@@ -185,6 +185,11 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // печётся в refresh_floor_props, читается collect_scene_lights. Файловый
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
+// Поле светоячеек под этими эмиттерами: полный субвоксельный скан 128³ платится
+// один раз при постройке этажа; карв и кисть neon латают поле по своим
+// dirtyCells — фриз 284 мс на каждом разрушении неона убит этим разделением
+// ([markoaudit/plans/neon-topology.md] §4).
+static game::EmitterField g_emitterField;
 
 // ЛОГ СВЕТА В ФАЙЛ (GIGA_LIGHT_LOG=1 -> light_debug.log рядом с бинарём).
 // Просьба владельца 2026-08-23: он играет и даёт фидбек, а строки в stderr
@@ -496,24 +501,10 @@ static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
     }
 }
 
-// Сфера carve задевает светоматериал? Проверка ДО carve (после — ячейки уже
-// воздух): бокс сферы мал (радиус carve — метры), скан копеечный. true велит
-// вызывающему перепечь эмиттеры этажа — выломал неон, свет погас тем же
-// кадром, ровно как дыра в стене впускает свет: одно событие «ячейка
-// изменилась», два честных следствия. [ddalight.md]
-static bool carve_touches_light_material(const World& w, const CarveOp& op) {
-    const MacroGrid& g = w.grid();
-    const int r = static_cast<int>(op.radius / kCellSize) + 1;
-    const int cx = static_cast<int>(std::floor(op.x / kCellSize));
-    const int cy = static_cast<int>(std::floor(op.y / kCellSize));
-    const int cz = static_cast<int>(std::floor(op.z / kCellSize));
-    for (int dz = -r; dz <= r; ++dz)
-        for (int dy = -r; dy <= r; ++dy)
-            for (int dx = -r; dx <= r; ++dx)
-                if (material_emits_light(g.cell(cx + dx, cy + dy, cz + dz)))
-                    return true;
-    return false;
-}
+// «Задел ли карв светоматериал» отвечает patch_emitter_field по dirtyCells
+// ПОСЛЕ карва: поле помнит, что светило до, — сравнение честное и
+// субвоксельное. Прежняя проверка до карва спрашивала только тип ячейки и не
+// видела неон, нарисованный атомами ([markoaudit/plans/neon-topology.md] §4).
 
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
@@ -1437,9 +1428,11 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
                      floorNumber, furniture);
     }
 
-    // Светоматериалы → статические эмиттеры ([game/light_bake.h]): скан +
-    // кластеризация при каждой постройке этажа, той же геометрии, что и всё.
-    g_bakedFloorLights = game::bake_material_lights(world);
+    // Светоматериалы → статические эмиттеры ([game/light_bake.h]): полный
+    // скан поля + кластеризация при каждой постройке этажа, той же геометрии,
+    // что и всё. Единственное место полного скана — дальше поле только латается.
+    game::rebuild_emitter_field(world, g_emitterField);
+    g_bakedFloorLights = game::bake_material_lights(g_emitterField);
     if (!g_bakedFloorLights.empty())
         std::fprintf(stderr, "[light-bake] floor %d: %zu emitter clusters\n",
                      floorNumber, g_bakedFloorLights.size());
@@ -4470,12 +4463,19 @@ int main(int argc, char** argv) {
                         ++g_worldGen;
                         nav.patch_carved_cells(w.grid(), doors, painted.data(),
                                                painted.size());
-                        g_bakedFloorLights = game::bake_material_lights(w);
-                        rebuild_static_light_table(reg, activeLayer,
-                                                   /*reset=*/false);
-                        nav.set_light_table(g_staticLamps.data(),
-                                            g_staticLamps.size(),
-                                            gpu::kGridCellSlots);
+                        // Патч поля по нарисованным ячейкам — тот же путь, что
+                        // у карва; полного скана этажа в кадре больше нет.
+                        if (game::patch_emitter_field(w, g_emitterField,
+                                                      painted.data(),
+                                                      painted.size())) {
+                            g_bakedFloorLights =
+                                game::bake_material_lights(g_emitterField);
+                            rebuild_static_light_table(reg, activeLayer,
+                                                       /*reset=*/false);
+                            nav.set_light_table(g_staticLamps.data(),
+                                                g_staticLamps.size(),
+                                                gpu::kGridCellSlots);
+                        }
                         light_log("[neon] painted %zu cells at (%.1f %.1f %.1f), "
                                   "table now %zu lamps\n",
                                   painted.size(), static_cast<double>(c.x),
@@ -4501,24 +4501,33 @@ int main(int argc, char** argv) {
                     op.seed = static_cast<std::uint32_t>(simTick);
                     consoleCtx.carveRadius = 0.0f;
                     const auto ctSite = std::chrono::steady_clock::now();
-                    const bool relight = carve_touches_light_material(
-                        stack.layer(activeLayer), op);
                     auto ct0 = std::chrono::steady_clock::now();
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     g_carveT.sphereMs += carve_ms_since(ct0);
-                    if (removed > 0 && relight) {
+                    if (removed > 0) {
                         ct0 = std::chrono::steady_clock::now();
-                        g_bakedFloorLights =
-                            game::bake_material_lights(stack.layer(activeLayer));
-                        // Кластеры пережиты заново — статик-таблица и бейк
-                        // видимости обязаны узнать (слоты пропов стабильны,
-                        // выкушенный неон умирает вместе со слотом).
-                        rebuild_static_light_table(reg, activeLayer,
-                                                   /*reset=*/false);
-                        nav.set_light_table(g_staticLamps.data(),
-                                            g_staticLamps.size(), gpu::kGridCellSlots);
+                        // Патч поля по dirtyCells — он же детектор «задет ли
+                        // свет» (субвоксельно честный, в отличие от прежней
+                        // проверки по типу ячейки). Кластеризация — только по
+                        // светоячейкам поля, микросекунды вместо скана 128³.
+                        const bool relight = game::patch_emitter_field(
+                            stack.layer(activeLayer), g_emitterField,
+                            carveResult.dirtyCells.data(),
+                            carveResult.dirtyCells.size());
+                        if (relight) {
+                            g_bakedFloorLights =
+                                game::bake_material_lights(g_emitterField);
+                            // Кластеры пережиты заново — статик-таблица и бейк
+                            // видимости обязаны узнать (слоты пропов стабильны,
+                            // выкушенный неон умирает вместе со слотом).
+                            rebuild_static_light_table(reg, activeLayer,
+                                                       /*reset=*/false);
+                            nav.set_light_table(g_staticLamps.data(),
+                                                g_staticLamps.size(),
+                                                gpu::kGridCellSlots);
+                        }
                         g_carveT.lightMatMs += carve_ms_since(ct0);
                     }
                     if (removed > 0) {
@@ -4912,23 +4921,28 @@ int main(int argc, char** argv) {
                         op.power = pr.power;
                         op.seed = pr.seed;
                         const auto ctSite = std::chrono::steady_clock::now();
-                        const bool relight = carve_touches_light_material(
-                            stack.layer(activeLayer), op);
                         auto ct0 = std::chrono::steady_clock::now();
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         g_carveT.sphereMs += carve_ms_since(ct0);
-                        if (removed > 0 && relight) {
+                        if (removed > 0) {
                             ct0 = std::chrono::steady_clock::now();
-                            g_bakedFloorLights = game::bake_material_lights(
-                                stack.layer(activeLayer));
-                            // Тот же долг, что у консольного карва: таблица и
-                            // бейк видимости узнают о переживших кластерах.
-                            rebuild_static_light_table(reg, activeLayer,
-                                                       /*reset=*/false);
-                            nav.set_light_table(g_staticLamps.data(),
-                                                g_staticLamps.size(), gpu::kGridCellSlots);
+                            // Тот же приём, что у консольного карва: патч поля
+                            // по dirtyCells и есть детектор задетого света.
+                            const bool relight = game::patch_emitter_field(
+                                stack.layer(activeLayer), g_emitterField,
+                                carveResult.dirtyCells.data(),
+                                carveResult.dirtyCells.size());
+                            if (relight) {
+                                g_bakedFloorLights =
+                                    game::bake_material_lights(g_emitterField);
+                                rebuild_static_light_table(reg, activeLayer,
+                                                           /*reset=*/false);
+                                nav.set_light_table(g_staticLamps.data(),
+                                                    g_staticLamps.size(),
+                                                    gpu::kGridCellSlots);
+                            }
                             g_carveT.lightMatMs += carve_ms_since(ct0);
                         }
                         if (removed > 0) {

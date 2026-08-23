@@ -1223,7 +1223,9 @@ if(GIGA_BUILD_TESTS)
     # останавливалась: lightvis по-прежнему гоняет пин/оракул/патч.
     # 246475 -> 246488 (+13) on 2026-08-22: триггер «от урона» — бочка строкой
     # CSV: выстрел взводит (не детач), рвёт тот же charge_step/detonate.
-        PASS_REGULAR_EXPRESSION "game_test: 246462 checks, 0 failures")
+    # 246462 -> 246470 (+8) on 2026-08-24: EmitterField — пины «патч поля =
+    # полный скан» и «патч видит одиночный субвоксельный атом» (neon-topology §4).
+        PASS_REGULAR_EXPRESSION "game_test: 246470 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
