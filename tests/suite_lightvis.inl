@@ -102,8 +102,12 @@ bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
                     std::size_t cell, std::uint32_t lamp) {
     const std::uint32_t* row = b.cells.data() + cell * (1 + b.slots);
     const std::uint32_t n = row[0];
+    // Слово списка = id | (маска теней 2-м клеток << 24), [light_vis_bake.h]:
+    // сравнивать и индексировать можно только по id. Без снятия маски тест
+    // считал бы каждую помеченную лампу «потерянной» и читал бы lamps[] за
+    // границей — гейт это и поймал на посадке маски 2026-08-23.
     for (std::uint32_t k = 0; k < n; ++k)
-        if (row[1 + k] == lamp) return true;
+        if ((row[1 + k] & giga::game::kLampIdMask) == lamp) return true;
     if (n < b.slots) return false; // места было — потеря света, дефект
     // Список полон: вытеснение законно, только если ВСЕ хранимые вкладнее.
     const int cx = static_cast<int>(cell % giga::game::kLightVisDim);
@@ -114,7 +118,7 @@ bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
     const float cand = giga::game::light_cell_score(
         lamps[lamp].pos, lamps[lamp].radiusM, cx, cy, cz);
     for (std::uint32_t k = 0; k < n; ++k) {
-        const LightVisLamp& s = lamps[row[1 + k]];
+        const LightVisLamp& s = lamps[row[1 + k] & giga::game::kLampIdMask];
         if (giga::game::light_cell_score(s.pos, s.radiusM, cx, cy, cz) > cand)
             return false;
     }
@@ -346,7 +350,7 @@ void carve_expands_same_call() {
                         baked.cells.data() + cell * (1 + kSlots);
                     bool present = false;
                     for (std::uint32_t k = 0; k < row[0]; ++k)
-                        if (row[1 + k] == li) present = true;
+                        if ((row[1 + k] & giga::game::kLampIdMask) == li) present = true;
                     if (present || row[0] >= kSlots) continue;
                     lampId = static_cast<int>(li);
                     targetCell = cell;
@@ -402,7 +406,8 @@ void carve_expands_same_call() {
         after.cells.data() + targetCell * (1 + kSlots);
     bool present = false;
     for (std::uint32_t k = 0; k < row[0]; ++k)
-        if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
+        if ((row[1 + k] & giga::game::kLampIdMask) ==
+            static_cast<std::uint32_t>(lampId)) present = true;
     CHECK(present); // дыра пробита — ребейк обязан увидеть лампу в клетке
 }
 
@@ -446,7 +451,7 @@ void delta_lamp_patch() {
                         baked.cells.data() + cell * (1 + kSlots);
                     bool present = false;
                     for (std::uint32_t k = 0; k < row[0]; ++k)
-                        if (row[1 + k] == li) present = true;
+                        if ((row[1 + k] & giga::game::kLampIdMask) == li) present = true;
                     if (present || row[0] >= kSlots) continue;
                     lampId = static_cast<int>(li);
                     targetCell = cell;
@@ -539,12 +544,13 @@ void delta_lamp_patch() {
     const std::uint32_t* row = baked.cells.data() + targetCell * (1 + kSlots);
     bool present = false;
     for (std::uint32_t k = 0; k < row[0]; ++k)
-        if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
+        if ((row[1 + k] & giga::game::kLampIdMask) ==
+            static_cast<std::uint32_t>(lampId)) present = true;
     CHECK(present); // свет пришёл через дыру ЧАСТИЧНЫМ допеканием
     for (std::uint32_t oldId : oldRow) {
         bool kept = false;
         for (std::uint32_t k = 0; k < row[0]; ++k)
-            if (row[1 + k] == oldId) kept = true;
+            if ((row[1 + k] & giga::game::kLampIdMask) == oldId) kept = true;
         CHECK(kept); // не потерять свет: добавки не вытеснили старое
     }
 }
@@ -612,9 +618,9 @@ void cluster_packing_oracle() {
     int lampRefs = 0, clusterRefs = 0;
     bool tailLampLeaked = false;
     for (std::uint32_t k = 0; k < row[0]; ++k) {
-        if (row[1 + k] >= base) {
+        if ((row[1 + k] & giga::game::kLampIdMask) >= base) {
             ++clusterRefs;
-            CHECK(row[1 + k] == base); // кластер 0 единственного бакета
+            CHECK((row[1 + k] & giga::game::kLampIdMask) == base); // кластер 0
         } else {
             ++lampRefs;
         }
@@ -627,7 +633,7 @@ void cluster_packing_oracle() {
     for (std::uint32_t li = 0; li < 10; ++li) {
         bool inTop = false;
         for (std::uint32_t k = 0; k < row[0]; ++k)
-            if (row[1 + k] == li) inTop = true;
+            if ((row[1 + k] & giga::game::kLampIdMask) == li) inTop = true;
         bool inCluster = false;
         const auto& c = b.clusters[0];
         for (std::uint32_t m = 0; m < c.memberCount; ++m)

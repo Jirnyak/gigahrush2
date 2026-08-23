@@ -75,6 +75,15 @@ inline constexpr std::size_t kLightVisCells =
     static_cast<std::size_t>(kLightVisDim) * kLightVisDim * kLightVisDim;
 inline constexpr float kLightVisCellM = kCellSize * 2.0f; // 4 м
 
+// РАСКЛАДКА СЛОВА СПИСКА КЛЕТКИ: младшие 24 бита — id лампы (корневой кап
+// 131072 = 2^17, запас есть), старшие 8 — МАСКА ТЕНИ по 8 макроклеткам (2 м)
+// внутри клетки светосетки: бит = «эта двухметровая клетка целиком в тени от
+// этой лампы». Потребитель не пускает туда теневой луч: ответ известен,
+// свет от лампы там ноль. Ноль новых буферов — биты были свободны.
+// Обязана совпадать с volumetric_fog.glsl / light_grid.comp.
+inline constexpr std::uint32_t kLampIdMask = 0x00FFFFFFu;
+inline constexpr std::uint32_t kShadowMaskShift = 24;
+
 inline std::size_t light_vis_index(int x, int y, int z) {
     x &= (kLightVisDim - 1);
     y &= (kLightVisDim - 1);

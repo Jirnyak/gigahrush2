@@ -127,6 +127,8 @@ float gWorstScore = -1.0;
 // дальние клетки теряли свои родные лампы, и комната ТЕМНЕЛА при
 // приближении к свету (репорт владельца со скринами, 2026-08-17). Вклад в
 // клетку от камеры не зависит — картинка стабильна с любого расстояния.
+// `id` здесь — СЛОВО (id | маска<<24): отбор судит по вкладу, а слово едет
+// в клетку целиком. Динамики приходят чистым id (маски у них нет).
 void consider(uint id, float score) {
     gCandidates++;
     if (gFound < kCellSlots) {
@@ -168,14 +170,18 @@ void main() {
         // лежат одни id). Тайловый цикл пропущен ЦЕЛИКОМ — это и есть выигрыш.
         uint n = min(uBakedCells[flatCellIndex].count, kCellSlots);
         for (uint k = 0u; k < n; ++k) {
-            uint id = uBakedCells[flatCellIndex].lightIndices[k];
+            // Слово бейка = id | (маска теней 2-м клеток << 24)
+            // ([game/light_vis_bake.h]): биннинг судит по id, маска едет
+            // ДАЛЬШЕ, в список клетки — её читает пиксель.
+            uint word = uBakedCells[flatCellIndex].lightIndices[k];
+            uint id = word & 0x00FFFFFFu;
             if (id >= staticCount) continue; // таблица уехала — ждём свапа
             if (uPointLights[id].colorIntensity.w <= kTombstone) continue;
             vec4 pr = uPointLights[id].posRadius;
             float radius = pr.w;
             float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.y);
             if (dSq > radius * radius) continue;
-            consider(id, dSq / (radius * radius));
+            consider(word, dSq / (radius * radius));
         }
     }
 

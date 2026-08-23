@@ -60,6 +60,9 @@ layout(set = 1, binding = 0, std430) readonly buffer PointLightBuffer {
 //           а не выбрасываются: та же яркость, ноль теневых лучей.
 //   STATS — считать лучи и «пустые» лучи атомиками (замер потолка).
 const uint kShadowFlagStats = 8u;
+//   NOMASK — не читать маску теней из бейка (поведение до 2026-08-23): A/B
+//            самой оптимизации одним бинарём, картинка и fps рядом.
+const uint kShadowFlagNoMask = 16u;
 const uint kShadowFlagNoSub = 1u;
 const uint kShadowFlagTail = 2u;
 
@@ -225,7 +228,8 @@ vec3 dressing_light(vec3 P, vec3 N, float nWeight, float wrapPeriod) {
     uint n = min(uGridCells[cellIdx].count, kLightCellSlots);
     vec3 sum = vec3(0.0);
     for (uint k = 0u; k < n; ++k) {
-        PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
+        PointLight lt =
+            uPointLights[uGridCells[cellIdx].lightIndices[k] & 0x00FFFFFFu];
         vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
         float dSq = dot(toL, toL);
         float radius = lt.posRadius.w;
