@@ -31,7 +31,7 @@ struct LightGridCell {
 layout(set = 0, binding = 0, std430) buffer PointLightBuffer {
     uint uPointLightCount;
     uint uCellOverflow;
-    uint uReserved1;     // бывший бюджет ламп дымки — член удалён 2026-08-20
+    uint uShadowFlags;   // измерительные биты теней (volumetric_fog.glsl); компьют не читает
     uint uShadowRayOverride; // компьют не читает; потребитель — surface_light
     PointLight uPointLights[];
 };

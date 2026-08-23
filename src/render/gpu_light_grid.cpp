@@ -454,7 +454,27 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
         const long v = std::atol(e);
         return static_cast<uint32_t>(std::clamp<long>(v, 0, kGridCellSlots));
     }();
-    uint32_t header[4] = {uploadCount, 0, 0, kSurfaceRayOverride};
+    // Измерительные биты теней — «мерим, не играем», как GIGA_SKIP (main.cpp):
+    //   GIGA_SHADOW_NOSUB=1 — теневой луч не входит в субвоксельный DDA
+    //     частичных клеток (перекрывают только цельные): изолирует цену
+    //     случайных чтений масок (128 МиБ буфер, промах кэша на клетку);
+    //   GIGA_LIGHT_TAIL=1  — лампы за бюджетом GIGA_SHADOW_RAYS светят
+    //     АНАЛИТИЧЕСКИ (как кластеры), а не выбрасываются: бюджет режет
+    //     теневые ЛУЧИ, а не свет — картинка сохраняет яркость.
+    static const uint32_t kShadowFlags = [] {
+        uint32_t f = 0;
+        if (const char* e = std::getenv("GIGA_SHADOW_NOSUB"))
+            if (std::atol(e) != 0) f |= 1u;
+        if (const char* e = std::getenv("GIGA_LIGHT_TAIL"))
+            if (std::atol(e) != 0) f |= 2u;
+        if (f != 0)
+            std::fprintf(stderr,
+                         "[light-grid] measuring flags: nosub=%d tail=%d — "
+                         "measuring, not playing\n",
+                         (f & 1u) != 0, (f & 2u) != 0);
+        return f;
+    }();
+    uint32_t header[4] = {uploadCount, 0, kShadowFlags, kSurfaceRayOverride};
     std::memcpy(lightMapped_, header, sizeof(header));
     if (uploadCount > 0) {
         std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),

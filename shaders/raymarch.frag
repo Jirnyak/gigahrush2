@@ -313,7 +313,10 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
         uint ci = cell_index(c);
         uint cls = cell_class(ci);
         if (cls == 1u) return 0.0; // полная клетка — перекрыто без бит-тестов
-        if (cls != 0u) {
+        // NOSUB — измерительная ручка: частичные клетки не перекрывают, луч не
+        // трогает маски (128 МБ, случайное чтение на клетку). Цена субвоксельной
+        // половины марша = дельта fps с этим флагом. Не режим игры.
+        if (cls != 0u && (uShadowFlags & kShadowFlagNoSub) == 0u) {
             float tExit = min(min(tMax.x, tMax.y), tMax.z);
             if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
                                      min(tExit, dist)))
