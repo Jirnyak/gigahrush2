@@ -53,10 +53,6 @@ layout(set = 0, binding = 5) uniform MarchUbo {
 layout(set = 0, binding = 6, std430) readonly buffer FluidBuf { float uFluid[]; };   // 1 float/cell
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
 layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
-// Счётчики замера теней (GIGA_SHADOW_STATS=1): [0] пущено лучей, [1] из них
-// НЕ встретили преград. Пишутся атомиками ТОЛЬКО под флагом — обычный кадр
-// их не касается. Мерят потолок любой схемы «не пускать бесполезный луч».
-layout(set = 0, binding = 9, std430) buffer ShadowStatsBuf { uint uShadowStats[]; };
 
 #ifdef GIGA_ALBEDO_ARRAY
 // set 2: the photographic albedo/normal/roughness arrays CubePass loaded.
@@ -301,12 +297,7 @@ bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
 }
 
 float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
-    bool stats = (uShadowFlags & kShadowFlagStats) != 0u;
-    if (stats) atomicAdd(uShadowStats[0], 1u);
-    if (dist <= 0.0) {
-        if (stats) atomicAdd(uShadowStats[1], 1u);
-        return 1.0;
-    }
+    if (dist <= 0.0) return 1.0;
     vec3 rd = dirToLight;
     rd.x = abs(rd.x) < 1e-6 ? (rd.x >= 0.0 ? 1e-6 : -1e-6) : rd.x;
     rd.y = abs(rd.y) < 1e-6 ? (rd.y >= 0.0 ? 1e-6 : -1e-6) : rd.y;
@@ -321,32 +312,23 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
     for (int i = 0; i < 224; ++i) {
         uint ci = cell_index(c);
         uint cls = cell_class(ci);
-        if (cls == 1u) {
-            if (stats) atomicAdd(uShadowStats[2], 1u);
-            return 0.0; // полная клетка — перекрыто без бит-тестов
-        }
+        if (cls == 1u) return 0.0; // полная клетка — перекрыто без бит-тестов
         // NOSUB — измерительная ручка: частичные клетки не перекрывают, луч не
         // трогает маски (128 МБ, случайное чтение на клетку). Цена субвоксельной
         // половины марша = дельта fps с этим флагом. Не режим игры.
         if (cls != 0u && (uShadowFlags & kShadowFlagNoSub) == 0u) {
             float tExit = min(min(tMax.x, tMax.y), tMax.z);
             if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
-                                     min(tExit, dist))) {
-                if (stats) atomicAdd(uShadowStats[2], 1u);
+                                     min(tExit, dist)))
                 return 0.0;
-            }
         }
         int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                    : (tMax.y < tMax.z ? 1 : 2);
         t = tMax[axis];
-        if (t > dist) {
-            if (stats) atomicAdd(uShadowStats[1], 1u);
-            return 1.0;
-        }
+        if (t > dist) return 1.0;
         c[axis] += stp[axis];
         tMax[axis] += tDelta[axis];
     }
-    if (stats) atomicAdd(uShadowStats[1], 1u);
     return 1.0;
 }
 

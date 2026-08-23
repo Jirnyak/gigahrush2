@@ -467,18 +467,11 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
             if (std::atol(e) != 0) f |= 1u;
         if (const char* e = std::getenv("GIGA_LIGHT_TAIL"))
             if (std::atol(e) != 0) f |= 2u;
-        //   GIGA_SHADOW_STATS=1 — считать теневые лучи мирового пасса и долю
-        //     тех, что НЕ встретили преград: это потолок выигрыша любой схемы
-        //     «не пускать бесполезный луч» (неперекрытый луч проходит весь
-        //     путь и не рисует ни одной границы тени). Атомики бьют по fps —
-        //     это ЗАМЕР, не режим игры; интересна доля, не кадр.
-        if (const char* e = std::getenv("GIGA_SHADOW_STATS"))
-            if (std::atol(e) != 0) f |= 8u;
         if (f != 0)
             std::fprintf(stderr,
-                         "[light-grid] measuring flags: nosub=%d tail=%d "
-                         "stats=%d — measuring, not playing\n",
-                         (f & 1u) != 0, (f & 2u) != 0, (f & 8u) != 0);
+                         "[light-grid] measuring flags: nosub=%d tail=%d — "
+                         "measuring, not playing\n",
+                         (f & 1u) != 0, (f & 2u) != 0);
         return f;
     }();
     uint32_t header[4] = {uploadCount, 0, kShadowFlags, kSurfaceRayOverride};
