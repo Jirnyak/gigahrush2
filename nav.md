@@ -1,11 +1,13 @@
 # Navigation — Baked lattice, flow fields & routing
 
-> **Status: built, headless `ctest`-green** (2026-07-28). The bake lives in
-> `giga_core` (`src/world`), the disk cache + streaming glue in `giga_game`
-> (`src/game`). It is **wired into floor streaming** (each live floor bakes its
-> nav on load) but **no runtime consumer steers by it yet** — the utility-AI that
-> calls `route_step` is task #12 (`master_prompt.md` §7). So nothing in the
-> running game moves differently yet; the nav is *ready*, not *visible*.
+> **Status: built AND consumed** (сверка 2026-08-23; строки про «no runtime
+> consumer» были ложью с эпохи #12). Потребители ходят по nav каждый тик:
+> `src/game/wander.cpp:120,382` (`coarse_next` + `fine.at`) и
+> `src/game/ai.cpp:1103` `ai_patrol_step(reg, coarse, fine, …)`. Fast-travel
+> подключён (`src/game/fast_travel.cpp`). «Dirty local re-bake» построен другой
+> формой: полный фоновый ребейк со свапом — `RebakeScheduler`
+> (`src/game/rebake.h`, могила `nav::AsyncBake`). `master_prompt.md` удалён —
+> см. CANON.md + markoaudit/plans/.
 >
 > - **Code:** [src/world/lattice.h](src/world/lattice.h) (the fixed node set),
 >   [src/world/nav.h](src/world/nav.h) / [.cpp](src/world/nav.cpp) (the bake +

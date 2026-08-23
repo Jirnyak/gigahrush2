@@ -1,5 +1,10 @@
 # Worldgen — DELETED (2026-08-02)
 
+> **Сверка 2026-08-23:** геометрических модулей теперь ДВА — padic и blame
+> (`floors/blame/blame_module.cpp:13`, этаж 5); «no module seeds standing
+> water» устарело — `padic_gen` сеет `kFluidField`. Флаг `--no-crt` добавился
+> (`main.cpp:1806`). Как надгробие старого worldgen — док годен.
+
 **This system no longer exists.** `src/app/worldgen.{cpp,h}` were removed with the
 legacy meshers, and the two launch modes this file used to document —
 `gigahrush2 maze` and `gigahrush2 floors` — are gone with them:

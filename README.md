@@ -97,7 +97,7 @@
 
 ### 7. Inventory Grid & Equipment
 - **Grid Layout:** Fixed $8 \times 8$ inventory grid + carry weight — **64 kg + 4 kg per point of Strength** ([rpg.h](src/game/rpg.h) `carry_capacity_g`; both constants are powers of two in kg, so a capacity is always even). Every item carries `mass_g` in whole grams, the same unit and column name props and mobs use. Overload costs pace, sleep and stealth — and, because the load joins the body's `Mass`, it also makes falls hurt and knockback shift you less, through laws that did not change ([items.md](items.md), [encumbrance.h](src/game/encumbrance.h)).
-- **Slots:** Weapon, Armor, Psi, Tools (Flashlight with durability/battery).
+- **Slots:** Weapon, Armor, Tool (`equip.h:33` — Psi slot not built yet; Flashlight with durability/battery).
 - **Death Drops:** Dead NPCs drop inventory into floor cell containers ($128^3$).
 
 ---
@@ -108,16 +108,19 @@
 per-system docs; until 2026-08-09 no such index existed here. This is it.
 
 **Authority, in order.** [AGENTS.md](AGENTS.md) (hard rules, working method) →
-[ARCHITECTURE.md](ARCHITECTURE.md) (layers + the owner's game manifesto) → the
-per-system files below. [master_prompt.md](master_prompt.md) wins on "what state
-is the game layer in and what's next"; [problems.md](problems.md) is the defect
-registry (§1–§45) and outranks any doc that disagrees with a measured finding.
+[CANON.md](CANON.md) (**эталон замысла, S1–S16** — всё судится относительно него)
+→ [ARCHITECTURE.md](ARCHITECTURE.md) (layers + the owner's game manifesto) → the
+per-system files below. "What's next" lives in
+[markoaudit/plans/INDEX.md](markoaudit/plans/INDEX.md) and
+[CONTINUE.md](CONTINUE.md); [problems.md](problems.md) is the defect registry
+(§1–§59) and outranks any doc that disagrees with a measured finding —
+but trust its body, not its stale summary. (`master_prompt.md` and
+`Docs/MASTER_ROADMAP.md` deleted 2026-08-23 — superseded by CANON + plans.)
 
 **Design specs & roadmap** — the forward-looking layer, added 2026-08-09:
 
 | Document | Scope |
 |---|---|
-| [Docs/MASTER_ROADMAP.md](Docs/MASTER_ROADMAP.md) | Phased plan 0→6, dependency graph, per-phase acceptance number |
 | [Docs/specs/01_ALIFE_AND_UTILITY_AI.md](Docs/specs/01_ALIFE_AND_UTILITY_AI.md) | Social roles, affordance rows, panic, section hierarchy |
 | [Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md](Docs/specs/02_VOXEL_PHYSICS_AND_FLUIDS.md) | Carving gates, GPU fields, structural stress, gas/fire/smoke |
 | [Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md](Docs/specs/03_ECONOMY_MASS_AND_CRAFTING.md) | Wear/jamming/fouling, equip slots, junk crafting |

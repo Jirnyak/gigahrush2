@@ -1,5 +1,12 @@
 # Monsters — Global monster catalog
 
+> **Сверка 2026-08-23:** «needs тикает только носителя камеры» — ЛОЖЬ:
+> `needs.h:271` двигает часы КАЖДОГО воплощённого тела (`NeedsTick.bodies/
+> recovering/crowdKilled`), room-recovery через `kRoomRecovery`. Видов 68
+> (`data/mobs.csv`), не 69. Труп любого — RagdollRoll-проп с контейнером
+> (S3/S14, v17). `RoomBit`-фильтры (`MobDef::roomMask`) приговорены S12.2
+> (вида комнаты не существует) — уйдут с rooms-object.
+
 > **Status: catalog BUILT and generated from data; per-floor budgets BUILT; spawning
 > BUILT and room-aware.** It lives in `giga_game` (`src/game/`), never `src/app/` -
 > [AGENTS.md](AGENTS.md) requires gameplay macro-systems to link `giga_core` without

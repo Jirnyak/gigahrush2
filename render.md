@@ -1,5 +1,12 @@
 # Rendering — Vulkan backend & raymarched world
 
+> **Сверка 2026-08-23:** таблица модулей устарела — `wire_pass`/`cloth_pass`/
+> `wire_sim.comp`/`cloth_sim.comp` СЛИТЫ в `verlet_pass.h`+`verlet_sim.comp`;
+> в таблице нет живых `gpu_light_grid`, `gpu_gas_pass`, `gpu_cull_pass`,
+> `body_pass`, `prop_mesh`, `screenshot`, UI-пассов. Замеры «717 638 инстансов» —
+> числа удалённого мешера. Правило «сим не зависит от рендера» стоит; уточнение
+> S16: GPU compute — часть ядра мира (headless = «без окна», не «без GPU»).
+
 A minimal-but-real **Vulkan** backend (MoltenVK on macOS, LunarG on Windows) that
 opens an SDL3 window and **raymarches the voxel world per pixel** — a two-level
 DDA over the GPU **voxel mirror** of the same sub-voxel masks physics collides

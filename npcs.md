@@ -1,5 +1,11 @@
 # NPCs — Macro population & embodiment
 
+> **Сверка 2026-08-23:** переиспользование слотов пула ВЗВЕДЕНО —
+> `pool.set_recycling(true)` (`main.cpp:2061`); противоречивый абзац «Two things
+> must land before it can be armed» устарел, как и заметка в `macro_sim.h:99`
+> («still unarmed» — тоже ложь). Игрок и NPC делят один путь (S7); труп —
+> RagdollRoll-проп с контейнером.
+
 > **Status: macro pool + embodiment + one-live-floor streaming built; macro tick
 > BUILT** (migration #10c + social #10d; `macroSim.step` runs every `kSimHz*2`
 > ticks — though from inside the 125 Hz loop, which [problems.md](problems.md)

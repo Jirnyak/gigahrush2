@@ -1,5 +1,11 @@
 # Пропы — интерактивные объекты этажа
 
+> **Сверка 2026-08-23:** `AngularVelocity`/`Rotation` УМЕРЛИ (`components.h:128`,
+> dd8a3952) — тело рагдолла теперь `RigidBody`/`ContactForm` (`components.h:151,179`);
+> `prop_ragdoll_step` УМЕР (`prop_system.h:226`); строк в `props.csv` — 12+
+> (заряды/бочка добавлены 2026-08-22). ЗАКОН владельца 2026-08-22: AABB МЁРТВ,
+> классов пропов ровно два — рагдолл (якорный/свободный) и якорный GpuHandoff.
+
 > **Status: BUILT.** Каталог — `data/props.csv` → `tools/gen_prop_table.py` →
 > `src/game/prop_table.h/.cpp`; сущности и якоря — `src/game/prop_system.h/.cpp`;
 > отрисовка — `src/render/prop_pass.h` + `src/render/prop_mesh.h`.

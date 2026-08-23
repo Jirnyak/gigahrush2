@@ -1,5 +1,12 @@
 # Destruction — the universal carve
 
+> **Сверка 2026-08-23:** `sim/cellular.h` (sandpile) УДАЛЁН 2026-08-10
+> (`destruct.h:35`); `nav::AsyncBake` МЁРТВ — наследник `RebakeScheduler`
+> (`src/game/rebake.h`); гейта/очереди карва НЕТ (b41ab707) — дыра тем же тиком,
+> карв во время бейка легален по построению; сейв давно v18 (`save.h:174`), не
+> v5/v6. БУДУЩЕЕ (CANON S16): карв становится писателем мир-автомата — вырезанное
+> не испаряется, а переводится в рыхлую материю (`rubble_*`-строки CSV).
+
 > Code: `src/world/destruct.h/.cpp`, `src/world/subfield.h`,
 > `src/world/material_props.h` · Tests: `tests/suite_destruct.inl` ·
 > Related: [voxels.md](voxels.md), [fields.md](fields.md), [nav.md](nav.md),

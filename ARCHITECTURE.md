@@ -1,5 +1,13 @@
 # Architecture — gigahrush2
 
+> **Сверка 2026-08-23:** геометрических модулей два (padic + blame); L2 не
+> знает `diffusion` и `rigid` (`src/sim/`); mob table давно построена
+> («pending» устарело); §Simulation loop — три шага из ~15 реальных (нет
+> ai/wander/macro/rebake/charge/rigid/needs). Эталон замысла — `CANON.md`
+> (S1–S16); ссылки на удалённый master_prompt.md мертвы. Уточнение S16: GPU
+> compute — осознанная часть ядра МИРА (headless = «без окна»), запрет
+> «сим не зависит от рендера» стоит как стоял.
+
 The layered design source of truth. [AGENTS.md](AGENTS.md) holds contributor
 rules; [README.md](README.md) orchestrates the per-system docs. This document
 describes *how the pieces fit*, not every function.

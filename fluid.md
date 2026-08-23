@@ -1,5 +1,12 @@
 # Fluid — Cellular liquid
 
+> **Сверка 2026-08-23:** «где работает — НИГДЕ» всё ещё правда (`fluid_step`
+> зовут только два теста), но приговор изменился: CANON **S16 (мир-автомат)**
+> забирает и `fluid.cpp`, и `gas_sim.comp` (тот уже построен на GPU) в единый
+> автомат над субвокселями 1024³. Контракт правила (масса-сохранение,
+> двухбуферность, детерминизм) — переносится; сам файл умирает или сжимается
+> в CPU-твин для тестов. План — `markoaudit/plans/medium-system.md`.
+
 Liquid stored as a runtime **field** and stepped with a deterministic,
 **mass-conserving** cellular rule that pools on sub-voxel terrain.
 

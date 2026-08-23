@@ -63,10 +63,13 @@ vec3 g = diffusion_gradient(field, grid, x, y, z);
 A wrapped central difference over **open** neighbours per axis, falling back to a
 one-sided difference when one side is walled (that side carries no flux) and to 0
 when both sides are walls. Cheap and allocation-free — safe to call per agent on
-the tick. This is the flee vector the utility-AI (#12) is *written* to steer by — but
-nothing wires `diffusion_tick` into the app loop, so `danger` is **null in the
-shipped game**, the threat term reads 0 and no body ever flees
-([src/app/main.cpp](src/app/main.cpp) says so at the call site).
+the tick. This is the flee vector the utility-AI steers by. **Сверка 2026-08-23:
+абзац «nothing wires diffusion_tick» был ложью** — `diffusion_tick` живёт в
+цикле (`src/app/main.cpp:3485`), поле `danger` кормят паникующие тела
+(`ai_panic_publish_step`), градиент читает `src/game/ai.cpp:861`
+(`diffusion_gradient`), тела бегут. Система подключена целиком; S16 (CANON)
+со временем пересадит первичную правду сред на мир-автомат, поля останутся
+языком для AI.
 
 ## What it is *not*
 
