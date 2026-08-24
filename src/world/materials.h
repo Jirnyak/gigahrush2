@@ -44,4 +44,43 @@ inline constexpr CellType kMatGlass = 21;          // стекло — перв�
 // rather than rendering as an unremarkable default.
 inline constexpr CellType kMatCount = 22;
 
+// CSV-имена строк по id — словарь команд и логов (консоль `sphere <имя>`
+// говорит на языке таблицы, не констант). Указатели на литералы, без аллокаций.
+inline constexpr const char* kMatNames[kMatCount] = {
+    "air"           ,  //  0 air
+    "concrete"      ,  //  1 concrete
+    "soil"          ,  //  2 soil
+    "water_mark"    ,  //  3 water_mark
+    "slab_tan"      ,  //  4 slab_tan
+    "extract"       ,  //  5 extract
+    "door"          ,  //  6 door
+    "hub_pad"       ,  //  7 hub_pad
+    "plaster"       ,  //  8 plaster
+    "parquet"       ,  //  9 parquet
+    "shop_shutter"  ,  // 10 shop_shutter
+    "lino"          ,  // 11 lino
+    "factory_wall"  ,  // 12 factory_wall
+    "tread"         ,  // 13 tread
+    "rust"          ,  // 14 rust
+    "rubble"        ,  // 15 rubble
+    "electric_grate",  // 16 electric_grate
+    "acid_pool"     ,  // 17 acid_pool
+    "fire_cell"     ,  // 18 fire_cell
+    "pipe_metal"    ,  // 19 pipe_metal
+    "neon_tube"     ,  // 20 neon_tube
+    "glass"            // 21 glass
+};
+
+// id по CSV-имени (линейный скан таблицы — она мала, зов из консоли).
+// kMatCount = «нет такого материала».
+inline CellType material_id_by_name(const char* name) {
+    for (CellType i = 0; i < kMatCount; ++i) {
+        const char* a = kMatNames[i];
+        const char* b = name;
+        while (*a && *a == *b) { ++a; ++b; }
+        if (*a == 0 && *b == 0) return i;
+    }
+    return kMatCount;
+}
+
 } // namespace giga

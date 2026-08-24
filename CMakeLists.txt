@@ -1232,7 +1232,9 @@ if(GIGA_BUILD_TESTS)
     # пины «полный куб = табличная», «полоса ×5·(R₁/R)³», «плиты ∝ атомам».
     # 246498 -> 246501 (+3) on 2026-08-24: прозрачность колонкой — стекло не
     # светит, но пропускает свет (light_transparent, neon-topology).
-        PASS_REGULAR_EXPRESSION "game_test: 246501 checks, 0 failures")
+    # 246501 -> 246510 (+9) on 2026-08-24: единая `sphere <материал> [r]` из
+    # таблицы (material_id_by_name), зоопарк neon/glass умер; пины парсинга.
+        PASS_REGULAR_EXPRESSION "game_test: 246510 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

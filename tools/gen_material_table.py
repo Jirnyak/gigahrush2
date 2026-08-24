@@ -239,8 +239,25 @@ namespace giga {
 // rather than rendering as an unremarkable default.
 inline constexpr CellType kMatCount = %d;
 
+// CSV-имена строк по id — словарь команд и логов (консоль `sphere <имя>`
+// говорит на языке таблицы, не констант). Указатели на литералы, без аллокаций.
+inline constexpr const char* kMatNames[kMatCount] = {
+%s};
+
+// id по CSV-имени (линейный скан таблицы — она мала, зов из консоли).
+// kMatCount = «нет такого материала».
+inline CellType material_id_by_name(const char* name) {
+    for (CellType i = 0; i < kMatCount; ++i) {
+        const char* a = kMatNames[i];
+        const char* b = name;
+        while (*a && *a == *b) { ++a; ++b; }
+        if (*a == 0 && *b == 0) return i;
+    }
+    return kMatCount;
+}
+
 } // namespace giga
-""" % n)
+""" % (n, elements(mats, ['"%s"' % m["name"] for m in mats], names)))
 
     # --- src/world/material_props.h ----------------------------------------
     with open(OUT_PROPS_H, "w", encoding="utf-8", newline="\n") as fh:

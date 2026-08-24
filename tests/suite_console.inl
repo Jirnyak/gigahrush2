@@ -113,6 +113,21 @@ static void test_console_requests() {
     CHECK(con.complete(ctx, "ride ", cands, 8) == 2);
     CHECK(con.complete(ctx, "ride u", cands, 8) == 1);
     CHECK(std::strcmp(cands[0], "up") == 0);
+
+    // sphere <material> [r] — материал ИЗ ТАБЛИЦЫ по CSV-имени (единый спавн
+    // материи, neon-topology.md): имя строки узнаётся, мусор и пустота
+    // отвергаются, радиус ложится в контекст.
+    CHECK(con.exec(ctx, "sphere neon_tube", out, sizeof out));
+    CHECK(ctx.paintMat == 20 /* neon_tube */ && ctx.paintRadius > 0.0f);
+    ctx.paintRadius = 0.0f;
+    CHECK(con.exec(ctx, "sphere glass 1.5", out, sizeof out));
+    CHECK(ctx.paintMat == 21 /* glass */);
+    CHECK(ctx.paintRadius > 1.49f && ctx.paintRadius < 1.51f);
+    ctx.paintRadius = 0.0f;
+    CHECK(!con.exec(ctx, "sphere adamantium", out, sizeof out));
+    CHECK(!con.exec(ctx, "sphere", out, sizeof out));
+    CHECK(!con.exec(ctx, "sphere glass zero", out, sizeof out));
+    CHECK(ctx.paintRadius == 0.0f);
 }
 
 static void test_console_exec_and_parse() {
@@ -148,11 +163,12 @@ static void test_console_completion() {
     const char* cands[32];
 
     // First word -> command names. "sp" matches spawn + spawn_ball +
-    // spawn_box + spawn_chain + spawn_test_ball (defaults grew beyond a single
-    // spawn row; рагдолл-стенды — [markoaudit/plans/ragdoll.md] инкр. 2-3).
+    // spawn_box + spawn_chain + spawn_test_ball + sphere (defaults grew beyond
+    // a single spawn row; рагдолл-стенды — ragdoll.md инкр. 2-3; sphere —
+    // единый спавн материи, neon-topology.md).
     std::uint32_t n = con.complete(ctx, "sp", cands, 32);
     CHECK(n >= 1);
-    CHECK(n <= 5);
+    CHECK(n <= 6);
     {
         bool hasSpawn = false;
         for (std::uint32_t i = 0; i < n; ++i)

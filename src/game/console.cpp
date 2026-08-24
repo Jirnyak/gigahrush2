@@ -22,7 +22,7 @@
 #include "core/wrap.h"           // wrapf — подвес цепи заворачивается тором
 #include "world/anchor.h"        // anchor_face_pack/anchor_alive — подвес
 #include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
-#include "world/materials.h"     // kMatNeonTube/kMatGlass — cmd_neon/cmd_glass
+#include "world/materials.h"     // material_id_by_name — cmd_sphere
 #include "world/types.h"         // kCellSize, wrap_macro
 
 
@@ -571,24 +571,38 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
-// --- neon/glass [radius_m] --------------------------------------------------
-// Спавн материи шаром впереди камеры. Зеркало карва: тот же субвоксельный
-// масштаб, тот же последующий путь (пересветка бейка материалов ->
-// статик-таблица -> бейк видимости). `neon` нужен был, чтобы владелец мог
-// РОЖДАТЬ лампы по команде и тут же их карвить — иначе стабильность слотов
-// проверить в игре нечем; `glass` — чтобы проверить прозрачность для света
-// (колонка light_transparent, neon-topology.md): свет проходит, материя стоит.
-static bool cmd_paint(ConsoleContext& ctx, CellType mat, const char* name,
-                      int argc, const char* const* argv, char* out,
-                      std::size_t cap) {
+// --- sphere <material> [radius_m] -------------------------------------------
+// ЕДИНЫЙ спавн материи шаром впереди камеры (решение владельца 2026-08-24:
+// вместо зоопарка `neon`/`glass` — одна команда, материал ИЗ ТАБЛИЦЫ по
+// CSV-имени; новый материал = строка materials.csv, команда узнаёт его без
+// правки кода). Зеркало карва: тот же субвоксельный масштаб, тот же
+// последующий путь (патч поля светоматериалов -> статик-таблица -> бейк
+// видимости). Родился как `neon` для проверки стабильности слотов ламп,
+// `sphere glass` проверяет прозрачность для света (neon-topology.md).
+bool cmd_sphere(ConsoleContext& ctx, int argc, const char* const* argv,
+                char* out, std::size_t cap) {
+    if (argc < 2) {
+        if (out && cap)
+            std::snprintf(out, cap,
+                          "sphere <material> [radius_m] — names are "
+                          "data/materials.csv rows (neon_tube, glass, ...)");
+        return false;
+    }
+    const CellType mat = material_id_by_name(argv[1]);
+    if (mat >= kMatCount) {
+        if (out && cap)
+            std::snprintf(out, cap, "sphere: unknown material '%s' "
+                          "(names are data/materials.csv rows)", argv[1]);
+        return false;
+    }
     float radius = 0.6f;
-    if (argc >= 2) {
+    if (argc >= 3) {
         char* end = nullptr;
-        radius = std::strtof(argv[1], &end);
-        if (end == argv[1] || !(radius > 0.0f)) {
+        radius = std::strtof(argv[2], &end);
+        if (end == argv[2] || !(radius > 0.0f)) {
             if (out && cap)
-                std::snprintf(out, cap, "%s: '%s' is not a radius (metres)",
-                              name, argv[1]);
+                std::snprintf(out, cap, "sphere: '%s' is not a radius (metres)",
+                              argv[2]);
             return false;
         }
     }
@@ -596,18 +610,9 @@ static bool cmd_paint(ConsoleContext& ctx, CellType mat, const char* name,
     ctx.paintRadius = radius;
     ctx.paintMat = mat;
     if (out && cap)
-        std::snprintf(out, cap, "%s: r=%.2f m — next tick", name, radius);
+        std::snprintf(out, cap, "sphere: %s r=%.2f m — next tick", argv[1],
+                      radius);
     return true;
-}
-
-bool cmd_neon(ConsoleContext& ctx, int argc, const char* const* argv, char* out,
-              std::size_t cap) {
-    return cmd_paint(ctx, kMatNeonTube, "neon", argc, argv, out, cap);
-}
-
-bool cmd_glass(ConsoleContext& ctx, int argc, const char* const* argv,
-               char* out, std::size_t cap) {
-    return cmd_paint(ctx, kMatGlass, "glass", argc, argv, out, cap);
 }
 
 // --- spawn_ball [radius_m] ---------------------------------------------------
@@ -1293,12 +1298,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"carve", "carve [radius] [power]",
                    "blast a sphere out of the world ahead of the camera",
                    cmd_carve, nullptr});
-    ok &= con.add({"neon", "neon [radius_m]",
-                   "paint glowing neon matter ahead of the camera",
-                   cmd_neon, nullptr});
-    ok &= con.add({"glass", "glass [radius_m]",
-                   "paint light-transparent glass ahead of the camera",
-                   cmd_glass, nullptr});
+    ok &= con.add({"sphere", "sphere <material> [radius_m]",
+                   "spawn a sphere of any materials.csv row ahead of the camera",
+                   cmd_sphere, nullptr});
     ok &= con.add({"spawn_ball", "spawn_ball [radius_m] [density]",
                    "spawn a rigid-core test ball (default steel, 100=hollow)",
                    cmd_spawn_ball, nullptr});
