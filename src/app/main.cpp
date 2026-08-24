@@ -4407,14 +4407,16 @@ int main(int argc, char** argv) {
                 // live off the mutated masks; every baked overlay's debt is
                 // exactly carveResult.dirtyCells, and nav stays stale only
                 // until the scheduler's next background swap.
-                // КИСТЬ НЕОНА (`neon [r]`): рождает светящуюся материю шаром
-                // впереди камеры и гонит её тем же путём, что и карв —
-                // зеркало мира, бейк светоматериалов, статик-таблица, бейк
-                // видимости. Существует ради проверки стабильности слотов:
-                // владельцу нужен способ рождать и убивать лампы по команде.
-                if (consoleCtx.neonRadius > 0.0f && reg.valid(player)) {
-                    const float r = consoleCtx.neonRadius;
-                    consoleCtx.neonRadius = 0.0f;
+                // СПАВН МАТЕРИИ (`neon [r]` / `glass [r]`): рождает шар
+                // материала впереди камеры и гонит его тем же путём, что и
+                // карв — зеркало мира, бейк светоматериалов, статик-таблица,
+                // бейк видимости. `neon` существует ради проверки
+                // стабильности слотов (рождать и убивать лампы по команде),
+                // `glass` — прозрачности для света (light_transparent).
+                if (consoleCtx.paintRadius > 0.0f && reg.valid(player)) {
+                    const float r = consoleCtx.paintRadius;
+                    const CellType paintMat = consoleCtx.paintMat;
+                    consoleCtx.paintRadius = 0.0f;
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
                     const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
@@ -4450,7 +4452,7 @@ int main(int argc, char** argv) {
                             const int sz = ((gz % kSubDim) + kSubDim) % kSubDim;
                             w.grid().mask(cx, cy, cz).set(sub_bit(sx, sy, sz));
                             set_sub_material(w, cx, cy, cz, sx, sy, sz,
-                                             kMatNeonTube);
+                                             paintMat);
                             painted.push_back(static_cast<std::uint32_t>(
                                 macro_index(cx, cy, cz)));
                         }
@@ -4475,8 +4477,9 @@ int main(int argc, char** argv) {
                                                 g_staticLamps.size(),
                                                 gpu::kGridCellSlots);
                         }
-                        light_log("[neon] painted %zu cells at (%.1f %.1f %.1f), "
-                                  "table now %zu lamps\n",
+                        light_log("[paint] mat %u: %zu cells at "
+                                  "(%.1f %.1f %.1f), table now %zu lamps\n",
+                                  static_cast<unsigned>(paintMat),
                                   painted.size(), static_cast<double>(c.x),
                                   static_cast<double>(c.y),
                                   static_cast<double>(c.z),

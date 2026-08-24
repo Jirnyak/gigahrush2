@@ -1,22 +1,23 @@
-id,name,cpp_name,hardness,albedo_r,albedo_g,albedo_b,texture_id,family,cv,pitch,chroma_sigma,chroma_r,chroma_g,chroma_b,bump_scale,note,density_kg_m3,emissive_e3,light_radius_mm,light_intensity_e3,phase,flow,diffusion
-0,air,,0,0.00,0.00,0.00,,generic,0.0,0.0,0.0,1,1,1,0.0,never drawn by the world pass; body.vert writes this id so bodies keep the pre-existing look; референс среды: flow/diffusion 1.0 = воздух уступает место и выравнивается за один подтик — единица шкалы,0,0,0,0,gas,1.0,1.0
-1,concrete,Concrete,256,0.30,0.30,0.28,,smooth,0.08,1.0,0.03,1,1,1,0.04,"aged Soviet panel concrete; poured smooth, no panel seams",2400,0,0,0,solid,0,0
-2,soil,Soil,64,0.24,0.36,0.18,,smooth,0.22,0.8,0.12,1.15,0.9,0.65,0.1,organic earth / soil mottle,1600,0,0,0,solid,0,0
-3,water_mark,WaterMark,96,0.18,0.28,0.55,,generic,0.0,0.0,0.0,1,1,1,0.0,legacy water marker; вода = референс текучести: flow 1.0 при вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость,1000,0,0,0,liquid,1.0,0
-4,slab_tan,SlabTan,192,0.36,0.30,0.22,,smooth,0.06,1.0,0.04,1.05,0.95,0.85,0.03,muted tan concrete slab,2200,0,0,0,solid,0,0
-5,extract,Extract,65535,0.10,0.85,0.42,,smooth,0.03,0.0,0.0,1,1,1,0.02,"the bank pad: signage, not surface — unbreakable infrastructure",2400,0,0,0,solid,0,0
-6,door,Door,65535,0.16,0.24,0.42,,generic,0.0,0.0,0.0,1,1,1,0.0,"door leaf + frame; carve-immune, owned by the door state machine",7800,0,0,0,solid,0,0
-7,hub_pad,HubPad,65535,0.00,0.80,0.95,,smooth,0.03,0.0,0.0,1,1,1,0.02,"nav / fast-travel pad: lattice ground truth, unbreakable",2400,0,0,0,solid,0,0
-8,plaster,Plaster,32,0.48,0.44,0.38,,plaster,0.13,0.7,0.08,1.1,1.0,0.7,0.12,AUTHORED: dirty whitewash over precast panel; broad stains ~2.9 m,800,0,0,0,solid,0,0
-9,parquet,Parquet,48,0.32,0.20,0.10,,plank,0.11,20.0,0.07,1.15,0.95,0.75,0.18,"AUTHORED: varnished oak, board-to-board tone; 10 cm boards",700,0,0,0,solid,0,0
-10,shop_shutter,ShopShutter,128,0.38,0.40,0.42,painted_metal_shutter,ribbed,,28.0,0.05,0.9,0.95,1.1,0.4,"roller-shutter slats, 7 cm",7800,0,0,0,solid,0,0
-11,lino,Lino,40,0.26,0.16,0.12,rubber_tiles,tile,,4.0,0.04,0.95,1.05,0.9,0.2,dark rubber with seams; 50 cm tiles,1200,0,0,0,solid,0,0
-12,factory_wall,FactoryWall,256,0.22,0.30,0.22,factory_wall,ribbed,,13.0,0.08,0.85,1.15,0.8,0.35,"green corrugated factory metal, 15 cm corrugation",7800,0,0,0,solid,0,0
-13,tread,Tread,320,0.38,0.24,0.15,metal_grate_rusty,tread,,8.0,0.09,1.15,0.85,0.65,0.3,"walkway grate, 25 cm studs",7800,0,0,0,solid,0,0
-14,rust,Rust,112,0.40,0.20,0.08,rusty_metal_03,rust,,1.3,0.18,1.25,0.6,0.2,0.25,"thresholded low-frequency patches ~1.5 m; corroded, weaker than fresh steel",5200,0,0,0,solid,0,0
-15,rubble,Rubble,24,0.22,0.18,0.14,rusty_corrugated_iron,rubble,,6.0,0.15,1.1,0.9,0.7,0.35,chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из угла естественного откоса щебня ~40° — (45−40)/45 ≈ 0.1 бокового растекания при осыпании,1800,0,0,0,solid,0.1,0
-16,electric_grate,ElectricGrate,384,0.85,0.70,0.15,,tread,0.09,8.0,0.06,1.1,1.0,0.6,0.3,"AUTHORED: electrified floor grate — tread lattice, hot hazard tint",7800,0,0,0,solid,0,0
-17,acid_pool,AcidPool,16,0.15,0.75,0.12,,smooth,0.10,0.8,0.1,0.8,1.2,0.7,0.05,"AUTHORED: caustic pool surface, broad slicks; жижа ~10 мПа·с → flow = вязкость_воды/вязкость = 0.1",1100,0,0,0,liquid,0.1,0
-18,fire_cell,FireCell,16,0.85,0.25,0.04,,smooth,0.15,1.2,0.12,1.25,0.85,0.5,0.05,AUTHORED: burning floor cell,200,0,0,0,solid,0,0
-19,pipe_metal,PipeMetal,180,0.13,0.16,0.14,,ribbed,0.10,10.0,0.06,0.95,1.00,1.05,0.30,"AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit, dents and joint rings",7800,0,0,0,solid,0,0
-20,neon_tube,NeonTube,48,0.25,0.95,0.85,,smooth,0.04,0.0,0.0,1,1,1,0.0,"неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк кластеризует в эмиттеры (ddalight.md)",1400,1600,8000,1500,solid,0,0
+id,name,cpp_name,hardness,albedo_r,albedo_g,albedo_b,texture_id,family,cv,pitch,chroma_sigma,chroma_r,chroma_g,chroma_b,bump_scale,note,density_kg_m3,emissive_e3,light_radius_mm,light_intensity_e3,phase,flow,diffusion,light_transparent
+0,air,,0,0.00,0.00,0.00,,generic,0.0,0.0,0.0,1,1,1,0.0,never drawn by the world pass; body.vert writes this id so bodies keep the pre-existing look; референс среды: flow/diffusion 1.0 = воздух уступает место и выравнивается за один подтик — единица шкалы,0,0,0,0,gas,1.0,1.0,0
+1,concrete,Concrete,256,0.30,0.30,0.28,,smooth,0.08,1.0,0.03,1,1,1,0.04,"aged Soviet panel concrete; poured smooth, no panel seams",2400,0,0,0,solid,0,0,0
+2,soil,Soil,64,0.24,0.36,0.18,,smooth,0.22,0.8,0.12,1.15,0.9,0.65,0.1,organic earth / soil mottle,1600,0,0,0,solid,0,0,0
+3,water_mark,WaterMark,96,0.18,0.28,0.55,,generic,0.0,0.0,0.0,1,1,1,0.0,legacy water marker; вода = референс текучести: flow 1.0 при вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость,1000,0,0,0,liquid,1.0,0,0
+4,slab_tan,SlabTan,192,0.36,0.30,0.22,,smooth,0.06,1.0,0.04,1.05,0.95,0.85,0.03,muted tan concrete slab,2200,0,0,0,solid,0,0,0
+5,extract,Extract,65535,0.10,0.85,0.42,,smooth,0.03,0.0,0.0,1,1,1,0.02,"the bank pad: signage, not surface — unbreakable infrastructure",2400,0,0,0,solid,0,0,0
+6,door,Door,65535,0.16,0.24,0.42,,generic,0.0,0.0,0.0,1,1,1,0.0,"door leaf + frame; carve-immune, owned by the door state machine",7800,0,0,0,solid,0,0,0
+7,hub_pad,HubPad,65535,0.00,0.80,0.95,,smooth,0.03,0.0,0.0,1,1,1,0.02,"nav / fast-travel pad: lattice ground truth, unbreakable",2400,0,0,0,solid,0,0,0
+8,plaster,Plaster,32,0.48,0.44,0.38,,plaster,0.13,0.7,0.08,1.1,1.0,0.7,0.12,AUTHORED: dirty whitewash over precast panel; broad stains ~2.9 m,800,0,0,0,solid,0,0,0
+9,parquet,Parquet,48,0.32,0.20,0.10,,plank,0.11,20.0,0.07,1.15,0.95,0.75,0.18,"AUTHORED: varnished oak, board-to-board tone; 10 cm boards",700,0,0,0,solid,0,0,0
+10,shop_shutter,ShopShutter,128,0.38,0.40,0.42,painted_metal_shutter,ribbed,,28.0,0.05,0.9,0.95,1.1,0.4,"roller-shutter slats, 7 cm",7800,0,0,0,solid,0,0,0
+11,lino,Lino,40,0.26,0.16,0.12,rubber_tiles,tile,,4.0,0.04,0.95,1.05,0.9,0.2,dark rubber with seams; 50 cm tiles,1200,0,0,0,solid,0,0,0
+12,factory_wall,FactoryWall,256,0.22,0.30,0.22,factory_wall,ribbed,,13.0,0.08,0.85,1.15,0.8,0.35,"green corrugated factory metal, 15 cm corrugation",7800,0,0,0,solid,0,0,0
+13,tread,Tread,320,0.38,0.24,0.15,metal_grate_rusty,tread,,8.0,0.09,1.15,0.85,0.65,0.3,"walkway grate, 25 cm studs",7800,0,0,0,solid,0,0,0
+14,rust,Rust,112,0.40,0.20,0.08,rusty_metal_03,rust,,1.3,0.18,1.25,0.6,0.2,0.25,"thresholded low-frequency patches ~1.5 m; corroded, weaker than fresh steel",5200,0,0,0,solid,0,0,0
+15,rubble,Rubble,24,0.22,0.18,0.14,rusty_corrugated_iron,rubble,,6.0,0.15,1.1,0.9,0.7,0.35,chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из угла естественного откоса щебня ~40° — (45−40)/45 ≈ 0.1 бокового растекания при осыпании,1800,0,0,0,solid,0.1,0,0
+16,electric_grate,ElectricGrate,384,0.85,0.70,0.15,,tread,0.09,8.0,0.06,1.1,1.0,0.6,0.3,"AUTHORED: electrified floor grate — tread lattice, hot hazard tint",7800,0,0,0,solid,0,0,0
+17,acid_pool,AcidPool,16,0.15,0.75,0.12,,smooth,0.10,0.8,0.1,0.8,1.2,0.7,0.05,"AUTHORED: caustic pool surface, broad slicks; жижа ~10 мПа·с → flow = вязкость_воды/вязкость = 0.1",1100,0,0,0,liquid,0.1,0,0
+18,fire_cell,FireCell,16,0.85,0.25,0.04,,smooth,0.15,1.2,0.12,1.25,0.85,0.5,0.05,AUTHORED: burning floor cell,200,0,0,0,solid,0,0,0
+19,pipe_metal,PipeMetal,180,0.13,0.16,0.14,,ribbed,0.10,10.0,0.06,0.95,1.00,1.05,0.30,"AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit, dents and joint rings",7800,0,0,0,solid,0,0,0
+20,neon_tube,NeonTube,48,0.25,0.95,0.85,,smooth,0.04,0.0,0.0,1,1,1,0.0,"неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк кластеризует в эмиттеры (ddalight.md)",1400,1600,8000,1500,solid,0,0,0
+21,glass,Glass,96,0.62,0.70,0.72,,smooth,0.03,1.0,0.02,1,1,1,0.02,"стекло — первый потребитель колонки прозрачности: свет проходит (light_transparent), материя стоит; решение владельца 2026-08-24 (neon-topology.md)",2500,0,0,0,solid,0,0,1

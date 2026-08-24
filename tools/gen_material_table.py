@@ -173,11 +173,19 @@ def main():
             "phase": r["phase"].strip(),
             "flow": fnum(r, "flow", i, 0, 1),
             "diffusion": fnum(r, "diffusion", i, 0, 1),
+            "light_transparent": int(fnum(r, "light_transparent", i, 0, 1)),
             "note": r["note"],
         })
         if (mats[-1]["light_radius_mm"] == 0) != (mats[-1]["light_intensity_e3"] == 0):
             die("row %d (%s): light_radius_mm and light_intensity_e3 must be "
                 "both zero or both set" % (i, r["name"]))
+        # ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (решение владельца 2026-08-24, neon-topology):
+        # колонка light_transparent руками ставится только стеклу; воздух и
+        # эмиттеры прозрачны ПО ПОСТРОЕНИЮ (эмиттер не преграда своему свету,
+        # воздух не преграда ничему) — их значение ВЫВОДИТСЯ, не назначается.
+        mats[-1]["light_pass"] = 1 if (i == 0 or
+                                       mats[-1]["light_radius_mm"] != 0 or
+                                       mats[-1]["light_transparent"]) else 0
         # Label and parameters must not be able to disagree (CANON S16.2): the
         # gameplay label promises behaviour the movement parameters deliver.
         m = mats[-1]
@@ -336,6 +344,20 @@ inline bool material_emits_light(CellType t) {
     return t < kMatCount && kMatLightRadiusMm[t] != 0 && kMatLightIntensityE3[t] != 0;
 }
 
+// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (data/materials.csv light_transparent; решение
+// владельца 2026-08-24, neon-topology): теневой луч и бейк видимости прощают
+// субвоксель, если его материал ПРОЗРАЧЕН — а не если светится. Воздух и
+// эмиттеры прозрачны по построению (выведено кодогеном); стекло — строкой
+// CSV: свет проходит, материя стоит. Оба места одного закона читают эту
+// колонку: shaders/raymarch.frag shadow_cell_occluded (kMatLightPass) и
+// game/light_vis_bake.cpp light_ray_passes (material_passes_light).
+inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
+%(light_pass)s};
+
+inline bool material_passes_light(CellType t) {
+    return t < kMatCount && kMatLightPass[t] != 0;
+}
+
 } // namespace giga
 """ % {
             "phase": elements(mats, ["%d" % PHASE[m["phase"]] for m in mats], names),
@@ -343,6 +365,7 @@ inline bool material_emits_light(CellType t) {
             "diffusion": elements(mats, ["%.3ff" % m["diffusion"] for m in mats], names),
             "light_radius": elements(mats, ["%d" % m["light_radius_mm"] for m in mats], names),
             "light_intensity": elements(mats, ["%d" % m["light_intensity_e3"] for m in mats], names),
+            "light_pass": elements(mats, ["%d" % m["light_pass"] for m in mats], names),
             "albedo_r": elements(mats, ["%.3ff" % m["albedo"][0] for m in mats], names),
             "albedo_g": elements(mats, ["%.3ff" % m["albedo"][1] for m in mats], names),
             "albedo_b": elements(mats, ["%.3ff" % m["albedo"][2] for m in mats], names),
@@ -459,6 +482,14 @@ const uint kMaterialCsvRows = %du;
         fh.write(elements(mats,
                           ["%.3f" % (m["emissive_e3"] * 0.001) for m in mats],
                           names))
+        fh.write(");\n\n")
+
+        fh.write("// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (light_transparent + выведенные\n"
+                 "// воздух/эмиттеры): теневой луч прощает субвоксель\n"
+                 "// прозрачного материала. Тот же закон на CPU —\n"
+                 "// material_passes_light ([world/material_props.h]).\n")
+        fh.write("const uint kMatLightPass[%d] = uint[%d](\n" % (n, n))
+        fh.write(elements(mats, ["%du" % m["light_pass"] for m in mats], names))
         fh.write(");\n\n")
 
         fh.write("// СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),\n"

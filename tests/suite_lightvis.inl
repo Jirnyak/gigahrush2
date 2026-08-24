@@ -219,6 +219,15 @@ void solidity_law() {
     CHECK(material_emits_light(neon)); // предпосылка закона, не вера
     g.fill_cell(8, 5, 5, neon);
     CHECK(giga::game::light_ray_passes(g, from, to));
+    // СТЕКЛО (колонка light_transparent, решение владельца 2026-08-24):
+    // материал НЕ светит, но ПРОЗРАЧЕН — свет проходит, материя стоит.
+    // Прощение по прозрачности, а не по эмиссивности: неон выше прошёл бы и
+    // по старому условию, стекло ловит именно новую колонку.
+    const CellType glass = 21; // glass ([world/materials.h])
+    CHECK(!material_emits_light(glass)); // предпосылка: не эмиттер
+    CHECK(material_passes_light(glass)); // но прозрачен — из колонки
+    g.fill_cell(8, 5, 5, glass);
+    CHECK(giga::game::light_ray_passes(g, from, to));
     // Клетка самой лампы проходима принудительно: замурованная в своём якоре
     // лампа светит наружу, а не гаснет в нулевом сантиметре пути.
     g.clear_cell(8, 5, 5);

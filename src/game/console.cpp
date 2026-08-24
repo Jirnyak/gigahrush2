@@ -22,6 +22,7 @@
 #include "core/wrap.h"           // wrapf — подвес цепи заворачивается тором
 #include "world/anchor.h"        // anchor_face_pack/anchor_alive — подвес
 #include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
+#include "world/materials.h"     // kMatNeonTube/kMatGlass — cmd_neon/cmd_glass
 #include "world/types.h"         // kCellSize, wrap_macro
 
 
@@ -570,30 +571,43 @@ bool cmd_carve(ConsoleContext& ctx, int argc, const char* const* argv,
     return true;
 }
 
-// --- neon [radius_m] --------------------------------------------------------
-// Кисть светоматериала: рисует неон (materials.csv, светящаяся строка) шаром
-// впереди камеры. Зеркало карва: тот же субвоксельный масштаб, тот же
-// последующий путь (пересветка бейка материалов -> статик-таблица -> бейк
-// видимости). Нужна была, чтобы владелец мог РОЖДАТЬ лампы по команде и тут
-// же их карвить — иначе стабильность слотов проверить в игре нечем.
-bool cmd_neon(ConsoleContext& ctx, int argc, const char* const* argv, char* out,
-              std::size_t cap) {
+// --- neon/glass [radius_m] --------------------------------------------------
+// Спавн материи шаром впереди камеры. Зеркало карва: тот же субвоксельный
+// масштаб, тот же последующий путь (пересветка бейка материалов ->
+// статик-таблица -> бейк видимости). `neon` нужен был, чтобы владелец мог
+// РОЖДАТЬ лампы по команде и тут же их карвить — иначе стабильность слотов
+// проверить в игре нечем; `glass` — чтобы проверить прозрачность для света
+// (колонка light_transparent, neon-topology.md): свет проходит, материя стоит.
+static bool cmd_paint(ConsoleContext& ctx, CellType mat, const char* name,
+                      int argc, const char* const* argv, char* out,
+                      std::size_t cap) {
     float radius = 0.6f;
     if (argc >= 2) {
         char* end = nullptr;
         radius = std::strtof(argv[1], &end);
         if (end == argv[1] || !(radius > 0.0f)) {
             if (out && cap)
-                std::snprintf(out, cap, "neon: '%s' is not a radius (metres)",
-                              argv[1]);
+                std::snprintf(out, cap, "%s: '%s' is not a radius (metres)",
+                              name, argv[1]);
             return false;
         }
     }
     if (radius > 2.0f) radius = 2.0f; // кисть, а не заливка этажа
-    ctx.neonRadius = radius;
+    ctx.paintRadius = radius;
+    ctx.paintMat = mat;
     if (out && cap)
-        std::snprintf(out, cap, "neon: r=%.2f m — next tick", radius);
+        std::snprintf(out, cap, "%s: r=%.2f m — next tick", name, radius);
     return true;
+}
+
+bool cmd_neon(ConsoleContext& ctx, int argc, const char* const* argv, char* out,
+              std::size_t cap) {
+    return cmd_paint(ctx, kMatNeonTube, "neon", argc, argv, out, cap);
+}
+
+bool cmd_glass(ConsoleContext& ctx, int argc, const char* const* argv,
+               char* out, std::size_t cap) {
+    return cmd_paint(ctx, kMatGlass, "glass", argc, argv, out, cap);
 }
 
 // --- spawn_ball [radius_m] ---------------------------------------------------
@@ -1282,6 +1296,9 @@ bool console_register_defaults(Console& con) {
     ok &= con.add({"neon", "neon [radius_m]",
                    "paint glowing neon matter ahead of the camera",
                    cmd_neon, nullptr});
+    ok &= con.add({"glass", "glass [radius_m]",
+                   "paint light-transparent glass ahead of the camera",
+                   cmd_glass, nullptr});
     ok &= con.add({"spawn_ball", "spawn_ball [radius_m] [density]",
                    "spawn a rigid-core test ball (default steel, 100=hollow)",
                    cmd_spawn_ball, nullptr});

@@ -37,10 +37,11 @@ inline constexpr CellType kMatAcidPool = 17;       // AUTHORED: caustic pool sur
 inline constexpr CellType kMatFireCell = 18;       // AUTHORED: burning floor cell
 inline constexpr CellType kMatPipeMetal = 19;      // AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit, dent
 inline constexpr CellType kMatNeonTube = 20;       // неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк клас
+inline constexpr CellType kMatGlass = 21;          // стекло — первый потребитель колонки прозрачности: свет проходит (light_t
 
 // One past the last id in use. Every generated sibling table is sized from the
 // same CSV, so a row added without regenerating fails the source_rules gate
 // rather than rendering as an unremarkable default.
-inline constexpr CellType kMatCount = 21;
+inline constexpr CellType kMatCount = 22;
 
 } // namespace giga

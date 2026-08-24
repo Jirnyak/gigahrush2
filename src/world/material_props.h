@@ -40,7 +40,8 @@ inline constexpr std::uint16_t kMatHardness[kMatCount] = {
     16                  ,  // 17 acid_pool
     16                  ,  // 18 fire_cell
     180                 ,  // 19 pipe_metal
-    48                     // 20 neon_tube
+    48                  ,  // 20 neon_tube
+    96                     // 21 glass
 };
 
 static_assert(sizeof(kMatHardness) / sizeof(kMatHardness[0]) == kMatCount,
@@ -76,7 +77,8 @@ inline constexpr float kMatDensity[kMatCount] = {
     1100.0f,  // 17 acid_pool
     200.0f ,  // 18 fire_cell
     7800.0f,  // 19 pipe_metal
-    1400.0f   // 20 neon_tube
+    1400.0f,  // 20 neon_tube
+    2500.0f   // 21 glass
 };
 
 // Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
@@ -119,7 +121,8 @@ inline constexpr std::uint8_t kMatPhase[kMatCount] = {
     1,  // 17 acid_pool
     0,  // 18 fire_cell
     0,  // 19 pipe_metal
-    0   // 20 neon_tube
+    0,  // 20 neon_tube
+    0   // 21 glass
 };
 
 inline constexpr float kMatFlow[kMatCount] = {
@@ -143,7 +146,8 @@ inline constexpr float kMatFlow[kMatCount] = {
     0.100f,  // 17 acid_pool
     0.000f,  // 18 fire_cell
     0.000f,  // 19 pipe_metal
-    0.000f   // 20 neon_tube
+    0.000f,  // 20 neon_tube
+    0.000f   // 21 glass
 };
 
 inline constexpr float kMatDiffusion[kMatCount] = {
@@ -167,7 +171,8 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     0.000f,  // 17 acid_pool
     0.000f,  // 18 fire_cell
     0.000f,  // 19 pipe_metal
-    0.000f   // 20 neon_tube
+    0.000f,  // 20 neon_tube
+    0.000f   // 21 glass
 };
 
 inline MatPhase material_phase(CellType t) {
@@ -200,7 +205,8 @@ inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
     0   ,  // 17 acid_pool
     0   ,  // 18 fire_cell
     0   ,  // 19 pipe_metal
-    8000   // 20 neon_tube
+    8000,  // 20 neon_tube
+    0      // 21 glass
 };
 
 inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
@@ -224,7 +230,8 @@ inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
     0   ,  // 17 acid_pool
     0   ,  // 18 fire_cell
     0   ,  // 19 pipe_metal
-    1500   // 20 neon_tube
+    1500,  // 20 neon_tube
+    0      // 21 glass
 };
 
 // Linear albedo per id — the light colour source for emitters (and the same
@@ -250,7 +257,8 @@ inline constexpr float kMatAlbedoR[kMatCount] = {
     0.150f,  // 17 acid_pool
     0.850f,  // 18 fire_cell
     0.130f,  // 19 pipe_metal
-    0.250f   // 20 neon_tube
+    0.250f,  // 20 neon_tube
+    0.620f   // 21 glass
 };
 inline constexpr float kMatAlbedoG[kMatCount] = {
     0.000f,  //  0 air
@@ -273,7 +281,8 @@ inline constexpr float kMatAlbedoG[kMatCount] = {
     0.750f,  // 17 acid_pool
     0.250f,  // 18 fire_cell
     0.160f,  // 19 pipe_metal
-    0.950f   // 20 neon_tube
+    0.950f,  // 20 neon_tube
+    0.700f   // 21 glass
 };
 inline constexpr float kMatAlbedoB[kMatCount] = {
     0.000f,  //  0 air
@@ -296,11 +305,48 @@ inline constexpr float kMatAlbedoB[kMatCount] = {
     0.120f,  // 17 acid_pool
     0.040f,  // 18 fire_cell
     0.140f,  // 19 pipe_metal
-    0.850f   // 20 neon_tube
+    0.850f,  // 20 neon_tube
+    0.720f   // 21 glass
 };
 
 inline bool material_emits_light(CellType t) {
     return t < kMatCount && kMatLightRadiusMm[t] != 0 && kMatLightIntensityE3[t] != 0;
+}
+
+// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (data/materials.csv light_transparent; решение
+// владельца 2026-08-24, neon-topology): теневой луч и бейк видимости прощают
+// субвоксель, если его материал ПРОЗРАЧЕН — а не если светится. Воздух и
+// эмиттеры прозрачны по построению (выведено кодогеном); стекло — строкой
+// CSV: свет проходит, материя стоит. Оба места одного закона читают эту
+// колонку: shaders/raymarch.frag shadow_cell_occluded (kMatLightPass) и
+// game/light_vis_bake.cpp light_ray_passes (material_passes_light).
+inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
+    1,  //  0 air
+    0,  //  1 concrete
+    0,  //  2 soil
+    0,  //  3 water_mark
+    0,  //  4 slab_tan
+    0,  //  5 extract
+    0,  //  6 door
+    0,  //  7 hub_pad
+    0,  //  8 plaster
+    0,  //  9 parquet
+    0,  // 10 shop_shutter
+    0,  // 11 lino
+    0,  // 12 factory_wall
+    0,  // 13 tread
+    0,  // 14 rust
+    0,  // 15 rubble
+    0,  // 16 electric_grate
+    0,  // 17 acid_pool
+    0,  // 18 fire_cell
+    0,  // 19 pipe_metal
+    1,  // 20 neon_tube
+    1   // 21 glass
+};
+
+inline bool material_passes_light(CellType t) {
+    return t < kMatCount && kMatLightPass[t] != 0;
 }
 
 } // namespace giga

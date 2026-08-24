@@ -13,7 +13,7 @@
 
 // Rows read from data/materials.csv — ONE PER CellType, so this IS the material
 // count. The `source_rules` ctest compares it against the CSV's data-row count.
-const uint kMaterialCsvRows = 21u;
+const uint kMaterialCsvRows = 22u;
 
 // Family per material id — see the kFam* constants in cube.frag.
 //   0 air                  generic  authored                 CV 0.0000
@@ -67,12 +67,16 @@ const uint kMaterialCsvRows = 21u;
 //  20 neon_tube            smooth   authored                 CV 0.0400
 //     неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк
 //     кластеризует в эмиттеры (ddalight.md)
+//  21 glass                smooth   authored                 CV 0.0300
+//     стекло — первый потребитель колонки прозрачности: свет проходит
+//     (light_transparent), материя стоит; решение владельца 2026-08-24
+//     (neon-topology.md)
 // Table length. cube.frag clamps the incoming material id against
 // this, so an id the CPU should never emit cannot index past the
 // arrays — an out-of-range const-array read is undefined in GLSL.
-const uint kMatSurfaceCount = 21u;
+const uint kMatSurfaceCount = 22u;
 
-const uint kMatFamily[21] = uint[21](
+const uint kMatFamily[22] = uint[22](
     0u,  //  0 air
     8u,  //  1 concrete
     8u,  //  2 soil
@@ -93,14 +97,15 @@ const uint kMatFamily[21] = uint[21](
     8u,  // 17 acid_pool
     8u,  // 18 fire_cell
     4u,  // 19 pipe_metal
-    8u   // 20 neon_tube
+    8u,  // 20 neon_tube
+    8u   // 21 glass
 );
 
 // x = lognormal sigma reproducing measured luminance CV,
 // y = structural pitch in cycles per 2 m cell,
 // z = chroma_sigma (lognormal chroma width),
 // w = bump_scale (normal perturbation scale).
-const vec4 kMatSurface[21] = vec4[21](
+const vec4 kMatSurface[22] = vec4[22](
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air
     vec4(0.07987,   1.00, 0.03000, 0.04000),  //  1 concrete
     vec4(0.21741,   0.80, 0.12000, 0.10000),  //  2 soil
@@ -121,11 +126,12 @@ const vec4 kMatSurface[21] = vec4[21](
     vec4(0.09975,   0.80, 0.10000, 0.05000),  // 17 acid_pool
     vec4(0.14917,   1.20, 0.12000, 0.05000),  // 18 fire_cell
     vec4(0.09975,  10.00, 0.06000, 0.30000),  // 19 pipe_metal
-    vec4(0.03998,   0.00, 0.00000, 0.00000)   // 20 neon_tube
+    vec4(0.03998,   0.00, 0.00000, 0.00000),  // 20 neon_tube
+    vec4(0.02999,   1.00, 0.02000, 0.02000)   // 21 glass
 );
 
 // RGB chroma tint axis per material id.
-const vec3 kMatChromaAxis[21] = vec3[21](
+const vec3 kMatChromaAxis[22] = vec3[22](
     vec3(1.00000, 1.00000, 1.00000),  //  0 air
     vec3(1.00000, 1.00000, 1.00000),  //  1 concrete
     vec3(1.15000, 0.90000, 0.65000),  //  2 soil
@@ -146,13 +152,14 @@ const vec3 kMatChromaAxis[21] = vec3[21](
     vec3(0.80000, 1.20000, 0.70000),  // 17 acid_pool
     vec3(1.25000, 0.85000, 0.50000),  // 18 fire_cell
     vec3(0.95000, 1.00000, 1.05000),  // 19 pipe_metal
-    vec3(1.00000, 1.00000, 1.00000)   // 20 neon_tube
+    vec3(1.00000, 1.00000, 1.00000),  // 20 neon_tube
+    vec3(1.00000, 1.00000, 1.00000)   // 21 glass
 );
 
 // Самосвечение поверхности (albedo * kMatEmissive): нарисованный
 // светоматериал читается источником даже в полной тьме; сам СВЕТ
 // от него в сетку кладёт бейк этажа ([ddalight.md]).
-const float kMatEmissive[21] = float[21](
+const float kMatEmissive[22] = float[22](
     0.000,  //  0 air
     0.000,  //  1 concrete
     0.000,  //  2 soil
@@ -173,14 +180,44 @@ const float kMatEmissive[21] = float[21](
     0.000,  // 17 acid_pool
     0.000,  // 18 fire_cell
     0.000,  // 19 pipe_metal
-    1.600   // 20 neon_tube
+    1.600,  // 20 neon_tube
+    0.000   // 21 glass
+);
+
+// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (light_transparent + выведенные
+// воздух/эмиттеры): теневой луч прощает субвоксель
+// прозрачного материала. Тот же закон на CPU —
+// material_passes_light ([world/material_props.h]).
+const uint kMatLightPass[22] = uint[22](
+    1u,  //  0 air
+    0u,  //  1 concrete
+    0u,  //  2 soil
+    0u,  //  3 water_mark
+    0u,  //  4 slab_tan
+    0u,  //  5 extract
+    0u,  //  6 door
+    0u,  //  7 hub_pad
+    0u,  //  8 plaster
+    0u,  //  9 parquet
+    0u,  // 10 shop_shutter
+    0u,  // 11 lino
+    0u,  // 12 factory_wall
+    0u,  // 13 tread
+    0u,  // 14 rust
+    0u,  // 15 rubble
+    0u,  // 16 electric_grate
+    0u,  // 17 acid_pool
+    0u,  // 18 fire_cell
+    0u,  // 19 pipe_metal
+    1u,  // 20 neon_tube
+    1u   // 21 glass
 );
 
 // СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),
 // y = diffusion (газы; 1 = воздух). Читатель — автомат
 // материи; движение НЕ читает kMatPhase (метка для
 // геймплейных предикатов: 0 тв / 1 жид / 2 газ — S16.2).
-const vec2 kMatMedium[21] = vec2[21](
+const vec2 kMatMedium[22] = vec2[22](
     vec2(1.000, 1.000),  //  0 air
     vec2(0.000, 0.000),  //  1 concrete
     vec2(0.000, 0.000),  //  2 soil
@@ -201,10 +238,11 @@ const vec2 kMatMedium[21] = vec2[21](
     vec2(0.100, 0.000),  // 17 acid_pool
     vec2(0.000, 0.000),  // 18 fire_cell
     vec2(0.000, 0.000),  // 19 pipe_metal
-    vec2(0.000, 0.000)   // 20 neon_tube
+    vec2(0.000, 0.000),  // 20 neon_tube
+    vec2(0.000, 0.000)   // 21 glass
 );
 
-const uint kMatPhase[21] = uint[21](
+const uint kMatPhase[22] = uint[22](
     2u,  //  0 air
     0u,  //  1 concrete
     0u,  //  2 soil
@@ -225,5 +263,6 @@ const uint kMatPhase[21] = uint[21](
     1u,  // 17 acid_pool
     0u,  // 18 fire_cell
     0u,  // 19 pipe_metal
-    0u   // 20 neon_tube
+    0u,  // 20 neon_tube
+    0u   // 21 glass
 );
