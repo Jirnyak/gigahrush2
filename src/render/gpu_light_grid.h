@@ -41,19 +41,12 @@ static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
 // Обязан совпадать с kTombstone в light_grid.comp.
 static constexpr float kTombstoneIntensity = 0.001f;
 
-// КЛАСТЕРЫ ХВОСТА — ЗАНОВО 2026-08-24 (light-cluster.md; первая попытка
-// вырезана 86860f58: биннинг выбрасывал каждую ссылку гвардой
-// id >= staticCount, механизм не светил ни кадра — теперь гварда знает
-// регион). Верхний регион таблицы [kClusterSlotBase..kRootLights) — записи
-// виртуальных ламп-агрегатов хвоста (слот стабилен = base + индекс бакета
-// 8 м; game::kClusterSlotBase — шов, его держит static_assert в main.cpp).
-// Записи кладёт свап бейка видимости (set_cluster_records — та же поставка,
-// что списки клеток: рассинхрон невозможен по построению), интенсивность
-// каждого кадра — сумма членов (set_cluster_intensity). Статики/динамики
-// [0..N) до региона не дотягиваются: N ~12.6k << 98304, перелив печатается.
-static constexpr uint32_t kClusterSlotBase = 130560;
-static_assert(kClusterSlotBase == kRootLights - 512,
-              "регион кластеров = ровно максимум бакетов 8^3 (бакет 32 м)");
+// КЛАСТЕРЫ УДАЛЕНЫ 2026-08-23 (решение владельца): регион верхних слотов,
+// записи-агрегаты и покадровая сумма их интенсивностей. Механизм не работал
+// ни одного кадра — биннинг выбрасывал каждую кластерную ссылку (id 98304+
+// против порога staticCount ~12646), потребительская ветка шейдера была
+// мёртвым кодом. Цена: клетка жила максимум 8 честными лампами при среднем
+// 10.6, и свет рвался прямоугольниками по границам клеток 4 м.
 // kMaxPointLights = 512 и sort_lights_by_distance УМЕРЛИ (план
 // light-visibility-bake §5): камерный отбор — нарушение S7 («дальние комнаты
 // гаснут»), а сбор кандидатов клетки решает запечённая видимость (bakedGrid)
@@ -152,15 +145,6 @@ public:
     float staged_intensity(uint32_t slot) const noexcept;
     uint32_t static_count() const noexcept { return staticCount_; }
 
-    // Кластеры хвоста: записи верхнего региона [kClusterSlotBase..).
-    // slots[i] — абсолютный слот записи recs[i]; intensity записей
-    // обнуляется (её каждый кадр пишет set_cluster_intensity суммой членов
-    // — 0 без суммы = надгробие, комп пропустит). Регион едет на GPU спаном
-    // использованных слотов в update_and_dispatch.
-    void set_cluster_records(const GpuPointLight* recs, const uint32_t* slots,
-                             uint32_t n) noexcept;
-    void set_cluster_intensity(uint32_t slot, float intensity) noexcept;
-
     // Свап бейка видимости: залить bakedGrid (лейаут LightVisBake.cells ==
     // GpuGridCell[kTotalGridCells] по построению — слоты приходят от нас же)
     // и поднять bakedGen. memcpy в стейджинг здесь; vkCmdCopyBuffer — в
@@ -210,12 +194,6 @@ private:
     bool create_compute_pipeline(const char* shaderDir) noexcept;
 
     VulkanDevice* dev_ = nullptr;
-
-    // Активные слоты кластеров (для покадрового обнуления интенсивностей в
-    // clear_lights) и спан региона [lo..hi] для копии в update_and_dispatch.
-    std::vector<uint32_t> clusterSlots_;
-    uint32_t clusterLo_ = 0;
-    uint32_t clusterHi_ = 0; // 0 при lo==0 == «кластеров нет»
 
     VulkanBuffer lightBuf_{}; // HOST_VISIBLE persistent mapped storage for point lights
     VulkanBuffer gridSSBO_{}; // DEVICE_LOCAL storage for 3D grid cells

@@ -182,11 +182,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         ++lightFullBakes_;
         std::fprintf(stderr,
                      "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
-                     "(mean %.1f packed %.1f max %u -> packed max %u/cell, "
-                     "overflow %u), R_max %.1f m, %.0f ms sync\n",
+                     "(mean %.1f packed %.1f max %u/cell, overflow %u), R_max %.1f m, "
+                     "%.0f ms sync\n",
                      floorNumber, lightVis_.lampCount, lightVis_.litCells,
                      lightVis_.meanPerCell, lightVis_.packedMeanPerCell,
-                     lightVis_.maxPerCell, lightVis_.packedMaxPerCell,
+                     lightVis_.maxPerCell,
                      lightVis_.overflowCells, lightVis_.rMaxM,
                      lightVis_.bakeMs);
         // Пин видимости (образец GIGA_VERLET_PIN): хэш содержимого клеток

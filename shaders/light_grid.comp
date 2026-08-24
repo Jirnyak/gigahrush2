@@ -177,21 +177,6 @@ void main() {
         for (uint k = 0u; k < n; ++k) {
             uint raw = uBakedCells[flatCellIndex].lightIndices[k];
             uint id = raw & (uint(GIGA_LAMP_DILATED_BIT) - 1u);
-            if (id >= uint(GIGA_LIGHT_CLUSTER_BASE)) {
-                // КЛАСТЕР ХВОСТА ([gpu_light_grid.h] kClusterSlotBase): слот
-                // верхнего региона таблицы, живёт ПОВЕРХ staticCount. Прошлая
-                // гварда строчкой ниже выбрасывала его — механизм не светил ни
-                // кадра (вырезано 86860f58; воскрешено 2026-08-24 с гвардой,
-                // знающей регион). Запись и ссылка приходят ОДНИМ свапом бейка
-                // — рассинхрона нет; интенсивность 0 = надгробие (бакет пуст).
-                if (uPointLights[id].colorIntensity.w <= kTombstone) continue;
-                vec4 cpr = uPointLights[id].posRadius;
-                float cd = dist_sq_point_aabb_toroidal(cpr.xyz, cellMin,
-                                                       cellMax, pc.params.y);
-                if (cd > cpr.w * cpr.w) continue;
-                consider(id, cd / (cpr.w * cpr.w));
-                continue;
-            }
             if (id >= staticCount) continue; // таблица уехала — ждём свапа
             if (uPointLights[id].colorIntensity.w <= kTombstone) continue;
             vec4 pr = uPointLights[id].posRadius;

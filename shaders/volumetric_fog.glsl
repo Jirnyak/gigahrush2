@@ -159,8 +159,7 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     uint cellIdx = light_cell_index(P);
     uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
     for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
-        uint id = uGridCells[cellIdx].lightIndices[k];
-        PointLight lt = uPointLights[id];
+        PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
 
         vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
         float dSq = dot(toL, toL);
@@ -177,14 +176,6 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
         float power = lt.colorIntensity.w * att;
         if (power <= 0.0) continue; // погасший/надгробие: нет света — нет луча
 
-        // КЛАСТЕР ХВОСТА ([gpu_light_grid.h] kClusterSlotBase) идёт ЭТИМ ЖЕ
-        // путём — с теневым маршем (решение владельца 2026-08-24, ОТМЕНА
-        // старого «кластеры без марша»: в интерьере хвост — перекрытые
-        // соседи, кластер без тени светил сквозь стены — репорт владельца).
-        // Якорь кластера — позиция сильнейшего ЧЛЕНА (реальная лампа в
-        // открытом пространстве), поэтому марш к нему осмыслен; спец-ветки
-        // не нужно — кластер неотличим от лампы, худшая клетка платит
-        // ~K+1..2 марша вместо 30.
         if (budget == 0u) continue;
         budget--;
         // Старт — четверть атома от грани вдоль нормали (не родиться в своём

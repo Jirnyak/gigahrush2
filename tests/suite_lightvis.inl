@@ -108,27 +108,6 @@ bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
     const std::uint32_t n = row[0];
     for (std::uint32_t k = 0; k < n; ++k)
         if ((row[1 + k] & giga::game::kLampIdMask) == lamp) return true;
-    // Кластеризация хвоста (light-cluster.md): лампа за топ-K учтена ЧЕРЕЗ
-    // ССЫЛКУ на кластер своего бакета — свет не потерян, он в сумме кластера.
-    {
-        const float bucketM =
-            kWorldExtent / static_cast<float>(giga::game::kClusterGridDim);
-        const vec3& lp = lamps[lamp].pos;
-        const int bx = static_cast<int>(std::floor(lp.x / bucketM)) &
-                       (giga::game::kClusterGridDim - 1);
-        const int by = static_cast<int>(std::floor(lp.y / bucketM)) &
-                       (giga::game::kClusterGridDim - 1);
-        const int bz = static_cast<int>(std::floor(lp.z / bucketM)) &
-                       (giga::game::kClusterGridDim - 1);
-        const std::uint32_t ref =
-            giga::game::kClusterSlotBase +
-            static_cast<std::uint32_t>(
-                bx + by * giga::game::kClusterGridDim +
-                bz * giga::game::kClusterGridDim *
-                    giga::game::kClusterGridDim);
-        for (std::uint32_t k = 0; k < n; ++k)
-            if (row[1 + k] == ref) return true;
-    }
     if (n < b.slots) return false; // места было — потеря света, дефект
     // Список полон: вытеснение законно, только если ВСЕ хранимые вкладнее.
     const int cx = static_cast<int>(cell % giga::game::kLightVisDim);
@@ -140,94 +119,13 @@ bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
         lamps[lamp].pos, lamps[lamp].radiusM, cx, cy, cz);
     for (std::uint32_t k = 0; k < n; ++k) {
         const std::uint32_t raw = row[1 + k];
-        const std::uint32_t sid = raw & giga::game::kLampIdMask;
-        if (sid >= giga::game::kClusterSlotBase) continue; // ссылка кластера
-        const LightVisLamp& s = lamps[sid];
+        const LightVisLamp& s = lamps[raw & giga::game::kLampIdMask];
         const float stored =
             giga::game::light_cell_score(s.pos, s.radiusM, cx, cy, cz) +
             ((raw & giga::game::kLampDilatedBit) != 0 ? 1.0f : 0.0f);
         if (stored > cand + 1.0f) return false;
     }
     return true;
-}
-
-// КЛАСТЕРЫ ХВОСТА (light-cluster.md, заново 2026-08-24). Пины: 12 слабых
-// ламп одного бакета за топ-K сливаются в ОДНУ ссылку; значения кластера —
-// точные числа вывода (центроид по radiusM², радиус-охват, CSR); каждая
-// хвостовая лампа — член кластера, на который клетка ссылается; сильные
-// ближние лампы остаются ЧЕСТНЫМИ (лично в списке).
-void cluster_tail_pins() {
-    World w; // пустой мир: видимость всюду, испытывается ПАКОВКА
-    std::vector<LightVisLamp> lamps;
-    // 8 сильных ламп прямо у целевой клетки (10,10,10) — топ-K честных.
-    const float m4 = giga::game::kLightVisCellM;
-    const vec3 c0{(10 + 0.5f) * m4, (10 + 0.5f) * m4, (10 + 0.5f) * m4};
-    for (int i = 0; i < 8; ++i)
-        lamps.push_back({vec3{c0.x + 0.3f * i, c0.y, c0.z}, 10.0f,
-                         vec3{1.0f, 1.0f, 1.0f}});
-    // 12 слабых в ОДНОМ бакете 8 м поодаль (бакет (9,5,5): 72..80 м) — хвост.
-    for (int i = 0; i < 12; ++i)
-        lamps.push_back({vec3{73.0f + 0.5f * (i % 4), 45.0f + 0.5f * (i / 4),
-                              44.5f},
-                         8.0f, vec3{1.0f, 0.5f, 0.25f}});
-    LightVisBake b;
-    giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
-                                      kSlots, b, /*threads=*/2);
-    // Кластер бакета хвоста существует и его CSR — ровно 12 членов 8..19.
-    // Индекс бакета ВЫВОДИТСЯ из позиции лампы той же формулой, что синтез —
-    // литерал разошёлся бы с размером бакета при перезамере.
-    const float bucketM =
-        kWorldExtent / static_cast<float>(giga::game::kClusterGridDim);
-    const std::uint32_t bx =
-        static_cast<std::uint32_t>(std::floor(lamps[8].pos.x / bucketM)) &
-        (giga::game::kClusterGridDim - 1);
-    const std::uint32_t by =
-        static_cast<std::uint32_t>(std::floor(lamps[8].pos.y / bucketM)) &
-        (giga::game::kClusterGridDim - 1);
-    const std::uint32_t bz =
-        static_cast<std::uint32_t>(std::floor(lamps[8].pos.z / bucketM)) &
-        (giga::game::kClusterGridDim - 1);
-    const std::uint32_t bucket =
-        bx + by * giga::game::kClusterGridDim +
-        bz * giga::game::kClusterGridDim * giga::game::kClusterGridDim;
-    const giga::game::LightVisCluster* cl = nullptr;
-    for (const auto& c : b.clusters)
-        if (c.bucket == bucket) cl = &c;
-    CHECK(cl != nullptr);
-    CHECK(cl->memberCount == 12);
-    bool membersRight = true;
-    for (std::uint32_t k = 0; k < cl->memberCount; ++k) {
-        const std::uint32_t m = b.clusterMembers[cl->memberStart + k];
-        membersRight = membersRight && m >= 8 && m < 20;
-    }
-    CHECK(membersRight);
-    // Радиус-охват ≥ табличного радиуса члена (консервативность).
-    CHECK(cl->radiusM >= 8.0f);
-    // Якорь = позиция сильнейшего члена (равные радиусы → младший слот 8) —
-    // реальная лампа, а не центроид (тот мог лечь внутрь стены и марш гасил
-    // бы кластер навсегда).
-    CHECK(std::fabs(cl->pos.x - lamps[8].pos.x) < 1e-4f);
-    CHECK(std::fabs(cl->pos.y - lamps[8].pos.y) < 1e-4f);
-    CHECK(std::fabs(cl->pos.z - lamps[8].pos.z) < 1e-4f);
-    // Клетка у хвоста, но с сильными за топ-K... целевая клетка ДАЛЕКО от
-    // хвоста — хвост туда не достаёт. Возьмём клетку РЯДОМ с хвостом:
-    // (18,11,11) — все 12 слабых достижимы и близки, 8 сильных далеко
-    // (не достают, r=10 м < ~90 м). Там хвост сам — топ: первые 8 честные,
-    // остальные 4 — ссылка кластера.
-    const std::size_t cellNear = giga::game::light_vis_index(18, 11, 11);
-    const std::uint32_t* row = b.cells.data() + cellNear * (1 + kSlots);
-    CHECK(row[0] == 9); // 8 честных + 1 ссылка
-    std::uint32_t refs = 0;
-    for (std::uint32_t k = 0; k < row[0]; ++k)
-        if (row[1 + k] >= giga::game::kClusterSlotBase) ++refs;
-    CHECK(refs == 1);
-    CHECK(row[1 + row[0] - 1] ==
-          giga::game::kClusterSlotBase + bucket); // ссылка последняя (хвост)
-    // Каждая хвостовая лампа клетки учтена (лично или через ссылку).
-    bool all = true;
-    for (std::uint32_t li = 8; li < 20; ++li)
-        all = all && lamp_accounted(b, lamps.data(), cellNear, li);
-    CHECK(all);
 }
 
 // Оракул: число потерянных пар (лампа доходит прямым лучом, а в списке её
@@ -709,7 +607,6 @@ void delta_lamp_patch() {
 
 void test_lightvis_all() {
     lightvis_test::solidity_law();
-    lightvis_test::cluster_tail_pins();
     lightvis_test::pin_and_oracle_on_a_real_floor();
     lightvis_test::oracle_reverse_polarity_constructed();
     lightvis_test::carve_expands_same_call();
