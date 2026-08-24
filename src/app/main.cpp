@@ -7636,8 +7636,6 @@ int main(int argc, char** argv) {
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
-            renderer.begin_pass(0.0f, 0.0f, 0.0f);
-
             gpu::CubePush push{};
             push.viewProj = mat4_mul(camMat.proj, camMat.view);
             push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
@@ -7655,6 +7653,17 @@ int main(int argc, char** argv) {
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
             push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+
+            // ПОЛУРЕЗНЫЙ СВЕТОВОЙ ПОЛУПАСС — до главного рендер-пасса, тем же
+            // пушем: весь световой цикл (лампы + теневые DDA-лучи) на
+            // полразрешения, полный кадр возьмёт его билатерально
+            // ([render/raymarch_pass.h] record_light, ddalight.md).
+            if (!skip_pass("world"))
+                raymarchPass.record_light(cmd, renderer.currentFrame, push,
+                                          lightGrid.descriptor_set(),
+                                          renderer.swap().extent);
+
+            renderer.begin_pass(0.0f, 0.0f, 0.0f);
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
             // The CPU figure is time spent building instance data on this thread;

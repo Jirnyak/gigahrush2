@@ -133,6 +133,7 @@ bool RaymarchPass::init(VulkanDevice& dev, VkRenderPass renderPass,
     roughnessMask_ = cubePass.roughness_materials();
 
     if (!create_descriptors(mirror)) return false;
+    if (!create_half_pass()) return false;
     if (!create_pipeline(renderPass, shaderDir)) return false;
     std::fprintf(stderr, "[raymarch] world pass up (%s)\n",
                  textured_ ? "textured" : "procedural-only");
@@ -155,17 +156,53 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
     li.pBindings = b;
     VK_TRY(vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &setLayout_));
 
-    VkDescriptorPoolSize sizes[2]{};
+    // Сет полурезного света: 2 сэмплера (диффуз+t, спекуляр). Лейаут нужен
+    // ДО пайплайн-лейаута; сами картинки создаются лениво по размеру кадра.
+    {
+        VkSamplerCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter = VK_FILTER_NEAREST; // билатераль сама берёт 4 текселя
+        si.minFilter = VK_FILTER_NEAREST;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        VK_TRY(vkCreateSampler(dev_->device, &si, nullptr, &halfSampler_));
+        VkDescriptorSetLayoutBinding hb[2]{};
+        for (std::uint32_t i = 0; i < 2; ++i) {
+            hb[i].binding = i;
+            hb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            hb[i].descriptorCount = 1;
+            hb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo hli{};
+        hli.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        hli.bindingCount = 2;
+        hli.pBindings = hb;
+        VK_TRY(vkCreateDescriptorSetLayout(dev_->device, &hli, nullptr,
+                                           &halfSetLayout_));
+    }
+
+    VkDescriptorPoolSize sizes[3]{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     sizes[0].descriptorCount = 8 * kMaxFramesInFlight;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[1].descriptorCount = kMaxFramesInFlight;
+    sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[2].descriptorCount = 2 * kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = kMaxFramesInFlight;
-    pi.poolSizeCount = 2;
+    pi.maxSets = 2 * kMaxFramesInFlight;
+    pi.poolSizeCount = 3;
     pi.pPoolSizes = sizes;
     VK_TRY(vkCreateDescriptorPool(dev_->device, &pi, nullptr, &descPool_));
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        VkDescriptorSetAllocateInfo hai{};
+        hai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        hai.descriptorPool = descPool_;
+        hai.descriptorSetCount = 1;
+        hai.pSetLayouts = &halfSetLayout_;
+        VK_TRY(vkAllocateDescriptorSets(dev_->device, &hai, &halfSets_[f]));
+    }
 
     // The albedo table is boot-time constant; write it into both UBO slots now
     // so record() only ever rewrites the matrix.
@@ -323,11 +360,14 @@ bool RaymarchPass::create_pipeline(VkRenderPass renderPass,
     pcr.offset = 0;
     pcr.size = sizeof(CubePush);
 
-    VkDescriptorSetLayout setLayouts[3] = {setLayout_, lightGridSetLayout_,
-                                           texSetLayout_};
-    std::uint32_t setCount = 1;
-    if (lightGridSetLayout_ != VK_NULL_HANDLE) setCount = 2;
-    if (textured_) setCount = 3;
+    // Сет полурезного света — ПОСЛЕДНИЙ (шейдер: set 3 у текстурного, set 2
+    // у процедурного). Полупасс-пайплайн делит этот же лейаут: лишние сеты
+    // его шейдер просто не объявляет — это легально.
+    VkDescriptorSetLayout setLayouts[4] = {setLayout_, lightGridSetLayout_,
+                                           textured_ ? texSetLayout_
+                                                     : halfSetLayout_,
+                                           halfSetLayout_};
+    std::uint32_t setCount = textured_ ? 4 : 3;
 
     VkPipelineLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -358,10 +398,251 @@ bool RaymarchPass::create_pipeline(VkRenderPass renderPass,
                                        nullptr, &pipeline_) == VK_SUCCESS;
     }
 
-    vkDestroyShaderModule(dev_->device, vs, nullptr);
     vkDestroyShaderModule(dev_->device, fs, nullptr);
-    if (!ok) std::fprintf(stderr, "[vk] raymarch pipeline creation failed\n");
+    if (!ok) {
+        vkDestroyShaderModule(dev_->device, vs, nullptr);
+        std::fprintf(stderr, "[vk] raymarch pipeline creation failed\n");
+        return false;
+    }
+
+    // Полупасс-пайплайн: тот же вершинный треугольник, фрагмент —
+    // raymarch_light (производитель света), 2 цветовые цели, глубины нет.
+    {
+        std::vector<char> lsrc;
+        if (!read_spv(join(shaderDir, "raymarch_light.frag.spv"), lsrc)) {
+            vkDestroyShaderModule(dev_->device, vs, nullptr);
+            return false;
+        }
+        VkShaderModule lfs = VK_NULL_HANDLE;
+        if (!make_module(dev_->device, lsrc, &lfs)) {
+            vkDestroyShaderModule(dev_->device, vs, nullptr);
+            return false;
+        }
+        VkPipelineShaderStageCreateInfo lstages[2] = {stages[0], stages[1]};
+        lstages[1].module = lfs;
+
+        VkPipelineColorBlendAttachmentState lcba[2] = {cba, cba};
+        VkPipelineColorBlendStateCreateInfo lcb = cb;
+        lcb.attachmentCount = 2;
+        lcb.pAttachments = lcba;
+        VkPipelineDepthStencilStateCreateInfo lds{};
+        lds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+        VkGraphicsPipelineCreateInfo gp{};
+        gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gp.stageCount = 2;
+        gp.pStages = lstages;
+        gp.pVertexInputState = &vi;
+        gp.pInputAssemblyState = &ia;
+        gp.pViewportState = &vp;
+        gp.pRasterizationState = &rs;
+        gp.pMultisampleState = &ms;
+        gp.pColorBlendState = &lcb;
+        gp.pDepthStencilState = &lds;
+        gp.pDynamicState = &dsi;
+        gp.layout = layout_;
+        gp.renderPass = halfPass_;
+        gp.subpass = 0;
+        ok = vkCreateGraphicsPipelines(dev_->device, VK_NULL_HANDLE, 1, &gp,
+                                       nullptr, &halfPipeline_) == VK_SUCCESS;
+        vkDestroyShaderModule(dev_->device, lfs, nullptr);
+    }
+
+    vkDestroyShaderModule(dev_->device, vs, nullptr);
+    if (!ok) std::fprintf(stderr, "[vk] raymarch half-light pipeline failed\n");
     return ok;
+}
+
+// Оффскрин-рендерпасс полурезного света: 2×RGBA16F, из UNDEFINED в
+// SHADER_READ_ONLY; зависимость 0→EXTERNAL отдаёт запись фрагментному чтению
+// главного пасса, EXTERNAL→0 ждёт чтение прошлого кадра этих целей.
+bool RaymarchPass::create_half_pass() {
+    VkAttachmentDescription at[2]{};
+    for (int i = 0; i < 2; ++i) {
+        at[i].format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        at[i].samples = VK_SAMPLE_COUNT_1_BIT;
+        at[i].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // перекрывается целиком
+        at[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        at[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        at[i].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        at[i].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+    VkAttachmentReference refs[2] = {
+        {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+    VkSubpassDescription sp{};
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 2;
+    sp.pColorAttachments = refs;
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    VkRenderPassCreateInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rp.attachmentCount = 2;
+    rp.pAttachments = at;
+    rp.subpassCount = 1;
+    rp.pSubpasses = &sp;
+    rp.dependencyCount = 2;
+    rp.pDependencies = deps;
+    VK_TRY(vkCreateRenderPass(dev_->device, &rp, nullptr, &halfPass_));
+    return true;
+}
+
+void RaymarchPass::destroy_half_targets() {
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        if (halfFb_[f]) vkDestroyFramebuffer(dev_->device, halfFb_[f], nullptr);
+        halfFb_[f] = VK_NULL_HANDLE;
+        for (int i = 0; i < 2; ++i) {
+            if (halfView_[f][i])
+                vkDestroyImageView(dev_->device, halfView_[f][i], nullptr);
+            if (halfImg_[f][i])
+                vkDestroyImage(dev_->device, halfImg_[f][i], nullptr);
+            if (halfMem_[f][i])
+                vkFreeMemory(dev_->device, halfMem_[f][i], nullptr);
+            halfView_[f][i] = VK_NULL_HANDLE;
+            halfImg_[f][i] = VK_NULL_HANDLE;
+            halfMem_[f][i] = VK_NULL_HANDLE;
+        }
+    }
+    halfExtent_ = {0, 0};
+}
+
+bool RaymarchPass::create_half_targets(VkExtent2D he) {
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(dev_->physical, &mp);
+    for (int f = 0; f < kMaxFramesInFlight; ++f) {
+        for (int i = 0; i < 2; ++i) {
+            VkImageCreateInfo ii{};
+            ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ii.imageType = VK_IMAGE_TYPE_2D;
+            ii.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            ii.extent = {he.width, he.height, 1};
+            ii.mipLevels = 1;
+            ii.arrayLayers = 1;
+            ii.samples = VK_SAMPLE_COUNT_1_BIT;
+            ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+            ii.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                       VK_IMAGE_USAGE_SAMPLED_BIT;
+            ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VK_TRY(vkCreateImage(dev_->device, &ii, nullptr, &halfImg_[f][i]));
+            VkMemoryRequirements req{};
+            vkGetImageMemoryRequirements(dev_->device, halfImg_[f][i], &req);
+            std::uint32_t type = UINT32_MAX;
+            for (std::uint32_t t = 0; t < mp.memoryTypeCount; ++t)
+                if ((req.memoryTypeBits & (1u << t)) &&
+                    (mp.memoryTypes[t].propertyFlags &
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                    type = t;
+                    break;
+                }
+            if (type == UINT32_MAX) return false;
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = type;
+            VK_TRY(vkAllocateMemory(dev_->device, &ai, nullptr, &halfMem_[f][i]));
+            VK_TRY(vkBindImageMemory(dev_->device, halfImg_[f][i],
+                                     halfMem_[f][i], 0));
+            VkImageViewCreateInfo vi{};
+            vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vi.image = halfImg_[f][i];
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vi.subresourceRange.levelCount = 1;
+            vi.subresourceRange.layerCount = 1;
+            VK_TRY(vkCreateImageView(dev_->device, &vi, nullptr,
+                                     &halfView_[f][i]));
+        }
+        VkImageView att[2] = {halfView_[f][0], halfView_[f][1]};
+        VkFramebufferCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass = halfPass_;
+        fi.attachmentCount = 2;
+        fi.pAttachments = att;
+        fi.width = he.width;
+        fi.height = he.height;
+        fi.layers = 1;
+        VK_TRY(vkCreateFramebuffer(dev_->device, &fi, nullptr, &halfFb_[f]));
+        VkDescriptorImageInfo di[2]{};
+        VkWriteDescriptorSet w[2]{};
+        for (int i = 0; i < 2; ++i) {
+            di[i].sampler = halfSampler_;
+            di[i].imageView = halfView_[f][i];
+            di[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[i].dstSet = halfSets_[f];
+            w[i].dstBinding = static_cast<std::uint32_t>(i);
+            w[i].descriptorCount = 1;
+            w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[i].pImageInfo = &di[i];
+        }
+        vkUpdateDescriptorSets(dev_->device, 2, w, 0, nullptr);
+    }
+    halfExtent_ = he;
+    std::fprintf(stderr, "[raymarch] half-light targets %ux%u\n", he.width,
+                 he.height);
+    return true;
+}
+
+void RaymarchPass::record_light(VkCommandBuffer cmd, std::uint32_t frameIndex,
+                                const CubePush& push,
+                                VkDescriptorSet lightGridSet,
+                                VkExtent2D fullExtent) {
+    if (!ready() || halfPipeline_ == VK_NULL_HANDLE) return;
+    // Полразрешения ВЫВОДИТСЯ из кадра (настройки графики меняют разрешение —
+    // цели следуют за ним; смена редка, waitIdle честнее пула в полёте).
+    const VkExtent2D he{(fullExtent.width + 1) / 2, (fullExtent.height + 1) / 2};
+    if (he.width != halfExtent_.width || he.height != halfExtent_.height) {
+        vkDeviceWaitIdle(dev_->device);
+        destroy_half_targets();
+        if (!create_half_targets(he)) {
+            std::fprintf(stderr, "[raymarch] half-light targets FAILED\n");
+            return;
+        }
+    }
+    const std::uint32_t f = frameIndex % kMaxFramesInFlight;
+    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
+    u->invViewProj = mat4_inverse(push.viewProj);
+    u->timeParams = vec4{push.torus.w, push.torus.z, 0.0f, 0.0f};
+
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = halfPass_;
+    rp.framebuffer = halfFb_[f];
+    rp.renderArea.extent = he;
+    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{};
+    vp.width = static_cast<float>(he.width);
+    vp.height = static_cast<float>(he.height);
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D sc{};
+    sc.extent = he;
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, halfPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
+                            &sets_[f], 0, nullptr);
+    if (lightGridSet != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_,
+                                1, 1, &lightGridSet, 0, nullptr);
+    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                       sizeof(CubePush), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
 }
 
 void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
@@ -382,6 +663,12 @@ void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     if (textured_)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 2,
                                 1, &texSet_, 0, nullptr);
+    // Полурезный свет — последний сет (3 у текстурного, 2 у процедурного);
+    // шейдер полного кадра сэмплит его вместо собственного surface_light.
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_,
+                            textured_ ? 3u : 2u, 1,
+                            &halfSets_[frameIndex % kMaxFramesInFlight], 0,
+                            nullptr);
 
     CubePush p = push;
     p.torus.z = static_cast<float>(texMask_);
@@ -397,6 +684,16 @@ void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
 
 void RaymarchPass::destroy() {
     if (!dev_) return;
+    destroy_half_targets();
+    if (halfPipeline_) vkDestroyPipeline(dev_->device, halfPipeline_, nullptr);
+    if (halfPass_) vkDestroyRenderPass(dev_->device, halfPass_, nullptr);
+    if (halfSampler_) vkDestroySampler(dev_->device, halfSampler_, nullptr);
+    if (halfSetLayout_)
+        vkDestroyDescriptorSetLayout(dev_->device, halfSetLayout_, nullptr);
+    halfPipeline_ = VK_NULL_HANDLE;
+    halfPass_ = VK_NULL_HANDLE;
+    halfSampler_ = VK_NULL_HANDLE;
+    halfSetLayout_ = VK_NULL_HANDLE;
     if (pipeline_) vkDestroyPipeline(dev_->device, pipeline_, nullptr);
     if (layout_) vkDestroyPipelineLayout(dev_->device, layout_, nullptr);
     if (descPool_) vkDestroyDescriptorPool(dev_->device, descPool_, nullptr);
