@@ -27,7 +27,10 @@ const uint kMaterialCsvRows = 22u;
 //   3 water                generic  authored                 CV 0.0000
 //     вода — настоящая материя автомата (S16); референс текучести: flow
 //     1.0 при вязкости 1 мПа·с — flow прочих жидкостей =
-//     вязкость_воды/вязкость; имя water_mark умерло с инкр. 2
+//     вязкость_воды/вязкость; имя water_mark умерло с инкр. 2; diffusion
+//     0.5 = самовыравнивание лужи: латеральный случайный шаг p*a^2*f/4 =
+//     0.5*0.0625*31.25/4 = 0.24 м2/с — фронт метра за ~4 с; у жиж
+//     diffusion = flow*0.5
 //   4 slab_tan             smooth   authored                 CV 0.0600
 //     muted tan concrete slab
 //   5 extract              smooth   authored                 CV 0.0300
@@ -222,7 +225,7 @@ const vec2 kMatMedium[22] = vec2[22](
     vec2(1.000, 1.000),  //  0 air
     vec2(0.000, 0.000),  //  1 concrete
     vec2(0.000, 0.000),  //  2 soil
-    vec2(1.000, 0.000),  //  3 water
+    vec2(1.000, 0.500),  //  3 water
     vec2(0.000, 0.000),  //  4 slab_tan
     vec2(0.000, 0.000),  //  5 extract
     vec2(0.000, 0.000),  //  6 door
@@ -236,7 +239,7 @@ const vec2 kMatMedium[22] = vec2[22](
     vec2(0.000, 0.000),  // 14 rust
     vec2(0.100, 0.000),  // 15 rubble
     vec2(0.000, 0.000),  // 16 electric_grate
-    vec2(0.100, 0.000),  // 17 acid_pool
+    vec2(0.100, 0.050),  // 17 acid_pool
     vec2(0.000, 0.000),  // 18 fire_cell
     vec2(0.000, 0.000),  // 19 pipe_metal
     vec2(0.000, 0.000),  // 20 neon_tube

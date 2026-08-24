@@ -201,23 +201,27 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     CHECK(mirror.upload_all(w));
     static gpu::GpuMediumPass medium;
     CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    // Писатель будит клетку И грани (вода соседей должна получить свободу):
+    // клетка налива + 6 соседей-воздуха = 7.
     medium.wake_cells(&pourCell, 1, w, mirror);
-    CHECK(medium.live_count() == 1);
+    CHECK(medium.live_count() == 7);
 
-    // Прогон до сна: 8 подтиков на батч (кап кадра), потолок 250 батчей =
-    // 2000 подтиков — на порядки больше пути 27 квантов по бассейну 10x10.
+    // ЧИСТЫЙ МАРКОВ (закон владельца 2026-08-24): открытая лужа диффундирует
+    // вечно и НЕ спит — сон больше не цель прогона. Гоняем фиксированные
+    // 100 батчей (800 подтиков = 25.6 с игрового времени) и меряем ФОРМУ.
     std::uint64_t substep = 0;
-    int batches = 0;
-    for (; batches < 250 && medium.live_count() > 0; ++batches) {
+    for (int b = 0; b < 100; ++b) {
         CHECK(run_batch(dev, mirror, medium, w, 8, substep));
         substep += 8;
         medium.poll_activity(w, mirror);
     }
-    std::printf("[medium_test] settled after %d batches (%llu substeps), "
-                "woken %u, slept %u\n",
-                batches, static_cast<unsigned long long>(substep),
+    std::printf("[medium_test] after %llu substeps: live %u, woken %u, "
+                "slept %u\n",
+                static_cast<unsigned long long>(substep), medium.live_count(),
                 medium.woken_total(), medium.slept_total());
-    CHECK(medium.live_count() == 0); // СОН достигнут
+    // Поверхность живой лужи — осознанная цена; live ограничен поверхностью.
+    CHECK(medium.live_count() > 0);
+    CHECK(medium.live_count() < 200);
 
     // Ридбек GPU-истины: pageIdx + занятые страницы пула.
     std::vector<std::uint32_t> idx(kMacroCells);
@@ -269,7 +273,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         if (!solid_at(gx, gy, bz) && !water.count(key(gx, gy, bz)))
             ++unsupported;
     }
-    CHECK(unsupported == 0);
+    // Марковская лужа дышит: снапшот может застать атом в боковом прыжке
+    // над пустотой (упадёт следующим подтиком) — допуск 5%.
+    CHECK(unsupported <= static_cast<int>(kPoured) / 20);
 
     // УРОВЕНЬ: высоты столбов над дном бассейна (внутренность 8x8 клеток =
     // 64x64 столба); перепад соседних столбов с водой <= 1.
@@ -306,15 +312,54 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     std::printf("[medium_test] water: %zu quanta, %d wet columns, max height "
                 "%d, max neighbour step %d\n",
                 water.size(), wetColumns, maxH, maxStep);
-    CHECK(maxStep <= 1);      // УРОВЕНЬ: перепад соседних столбов <= кванта
-    // ПЛОСКАЯ ЛУЖА, не пирамида (фидбек владельца в игре на первую
-    // редакцию): давление рушит столбы >= 2, скольжение доводит до краёв —
-    // 128 квантов обязаны лечь почти монослоем.
-    CHECK(wetColumns >= 80);
+    // ПЛОСКАЯ ЛУЖА из чистого Маркова: диффузия выравнивает, гравитация
+    // прижимает — 128 квантов почти монослоем; флуктуации живой поверхности
+    // дают редкие транзиенты высоты 2.
+    CHECK(maxStep <= 2);
+    CHECK(wetColumns >= 90);
     CHECK(maxH <= 2);
     // Протокол пробуждения работал: минимум клетки падения (6, 5) плюс
     // латеральные соседи лужи.
     CHECK(medium.woken_total() >= 4);
+
+    // ЗАМУРОВАННАЯ вода СПИТ: у полной воды в каменном мешке нет ни одной
+    // пары с воздухом — правило (не зная о сне) не делает ни одного свопа,
+    // и планировщик-наблюдатель усыпляет клетку. Так «спящий брик бесплатен»
+    // (S16.1) уживается с вечно живой поверхностью открытой лужи.
+    {
+        std::vector<std::uint32_t> box;
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int bx = 40 + dx, by = 40 + dy, bzc = 40 + dz;
+                    const std::size_t bci = macro_index(bx, by, bzc);
+                    if (dx == 0 && dy == 0 && dz == 0) {
+                        CellType* wp =
+                            f.ensure_page(bci, w.grid().types()[bci]);
+                        for (int bit = 0; bit < kSubVoxels; ++bit)
+                            wp[bit] = kMatWater;
+                    } else {
+                        w.grid().fill_cell(bx, by, bzc, kMatConcrete);
+                    }
+                    box.push_back(static_cast<std::uint32_t>(bci));
+                }
+        mirror.mark_dirty(box.data(), box.size());
+        // Изоляция от вечно живой поверхности бассейна: чистый лист live.
+        medium.clear_live();
+        const std::uint32_t centre =
+            static_cast<std::uint32_t>(macro_index(40, 40, 40));
+        medium.wake_cells(&centre, 1, w, mirror);
+        // Соседи-грани полнотвёрдые — wake их пропускает: ровно одна клетка.
+        CHECK(medium.live_count() == 1);
+        for (int b = 0; b < 6; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.poll_activity(w, mirror);
+        }
+        std::printf("[medium_test] entombed water: live after %u\n",
+                    medium.live_count());
+        CHECK(medium.live_count() == 0); // мешок уснул
+    }
 
     medium.destroy();
     mirror.destroy();

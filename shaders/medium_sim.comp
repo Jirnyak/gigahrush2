@@ -187,13 +187,6 @@ void run_move(uint slot, uint threadId) {
         mats[i] = sv[i].mat;
     }
 
-    // Структурные ходы (падение, скат, давление) двигают ФОРМУ воды — они
-    // ставят changed и держат клетку бодрой. Скольжение по опоре — ходы,
-    // не меняющие высот, — НЕ структурно: лужа дышит, разливается, но
-    // счётчик сна растёт, и штиль наступает (иначе плоская вода дрожала бы
-    // вечно и спящая материя перестала бы быть бесплатной, S16.1).
-    bool structural = false;
-
     // --- Шаг 1: гравитация — плотный тонет (4 вертикальные пары). ----------
     for (int i = 0; i < 8; ++i) {
         if ((i & axBit) != 0) continue; // берём нижний по индексу слот пары
@@ -203,21 +196,13 @@ void run_move(uint slot, uint threadId) {
         if (can_swap(sv[up], sv[dn]) &&
             kMatDensity[mats[up]] > kMatDensity[mats[dn]]) {
             uint t = mats[up]; mats[up] = mats[dn]; mats[dn] = t;
-            structural = true;
         }
     }
 
-    // --- Шаг 2: растекание — три хода жидкости. -----------------------------
-    // Правило воды, а не песка (пирамидка первой редакции — фидбек владельца
-    // в игре): к строго выравнивающей ДИАГОНАЛИ добавлены ДАВЛЕНИЕ (столб
-    // >= 2 квантов выдавливает нижний атом в пустоту того же уровня — кучка
-    // рушится в стороны) и СКОЛЬЖЕНИЕ ПО ОПОРЕ (горизонтальный шаг по
-    // поверхности — им лужа доползает до краёв). Первые два структурны,
-    // скольжение — нет (см. structural выше): фикспоинт формы = «нет столбов
-    // >= 2 и перепадов >= 2», то есть плоская лужа глубиной в квант, после
-    // чего штиль и сон. Дальняя гидростатика (сифон, U-сосуд) — не этот
-    // инкремент. Вероятности — из flow строки (вода 1.0, жижа 0.1); газовая
-    // диффузия въедет слиянием gas_sim (инкр. 4).
+    // --- Шаг 2: ТЕКУЧЕСТЬ (flow) — скат вниз-вбок. ---------------------------
+    // Верхний слот колонки уходит в нижний слот пустой соседней колонки:
+    // сыпучее (rubble) этим само собой держит конус откоса, жидкость
+    // скатывается с уступов. Один параметр — flow строки.
     // Порядок латеральных осей — от ролла: без него ходы предпочитали бы x.
     int lat0 = downAxis == 0 ? 1 : 0;
     int lat1 = downAxis == 2 ? 1 : 2;
@@ -237,59 +222,59 @@ void run_move(uint slot, uint threadId) {
             int qUp  = downPos ? i + stepBit : i + stepBit + axBit;
             for (int dir = 0; dir < 2; ++dir) {
                 int up  = dir == 0 ? pUp : qUp;
-                int lo  = dir == 0 ? pLow : qLow;
                 int oUp = dir == 0 ? qUp : pUp;
                 int oLo = dir == 0 ? qLow : pLow;
-                if (mats[up] == 0u) continue;
-                float fl = max(kMatMedium[mats[up]].x,
-                               kMatMedium[mats[up]].y);
-                // ДИАГОНАЛЬ: соседняя колонка пуста на обоих уровнях —
-                // скатиться вниз-вбок (target ниже минимум на квант).
-                if (mats[oUp] == 0u && mats[oLo] == 0u &&
-                    can_swap(sv[up], sv[oLo]) && !sv[oUp].masked &&
-                    roll01(pc.params.x, minG,
-                           uint(16 + ax * 32 + i * 4 + dir)) < fl) {
+                if (mats[up] == 0u || mats[oUp] != 0u || mats[oLo] != 0u)
+                    continue;
+                if (!can_swap(sv[up], sv[oLo]) || sv[oUp].masked) continue;
+                if (roll01(pc.params.x, minG,
+                           uint(16 + ax * 32 + i * 4 + dir)) <
+                    kMatMedium[mats[up]].x) {
                     uint t = mats[up]; mats[up] = mats[oLo]; mats[oLo] = t;
-                    structural = true;
-                    continue;
-                }
-                // ДАВЛЕНИЕ: под атомом своя материя (столб >= 2), рядом на
-                // нижнем уровне пусто — нижний атом выдавливается вбок,
-                // столб рухнет гравитацией следующего подтика.
-                if (mats[lo] != 0u && mats[oLo] == 0u &&
-                    can_swap(sv[lo], sv[oLo]) &&
-                    roll01(pc.params.x, minG,
-                           uint(80 + ax * 32 + i * 4 + dir)) <
-                        max(kMatMedium[mats[lo]].x, kMatMedium[mats[lo]].y)) {
-                    uint t = mats[lo]; mats[lo] = mats[oLo]; mats[oLo] = t;
-                    structural = true;
-                    continue;
-                }
-                // СКОЛЬЖЕНИЕ ПО ОПОРЕ: рядом на том же уровне пусто, но под
-                // ним опора — горизонтальный шаг (НЕ структурный: высот не
-                // меняет, сон не откладывает).
-                if (mats[oUp] == 0u && mats[oLo] != 0u &&
-                    can_swap(sv[up], sv[oUp]) &&
-                    roll01(pc.params.x, minG,
-                           uint(144 + ax * 32 + i * 4 + dir)) < fl * 0.5) {
-                    uint t = mats[up]; mats[up] = mats[oUp]; mats[oUp] = t;
                 }
             }
         }
     }
 
+    // --- Шаг 3: ДИФФУЗИЯ — изотропный обмен с воздухом. ---------------------
+    // Один параметр — diffusion строки: жидкость им самовыравнивается
+    // (лужа расползается до монослоя), газ — заполняет объём. Единственное
+    // ограничение выведено из того же закона плотности: диффузия НЕ
+    // поднимает плотное над лёгким (иначе вода кипела бы против гравитации).
+    // Никакого знания о форме, опоре или истории — только пара соседей.
+    for (int ax = 0; ax < 3; ++ax) {
+        int stepBit = 1 << ax;
+        for (int i = 0; i < 8; ++i) {
+            if ((i & stepBit) != 0) continue;
+            int a = i, b = i + stepBit;
+            uint mv = 0u; int dst = -1;
+            if (mats[a] != 0u && mats[b] == 0u) { mv = mats[a]; dst = b; }
+            else if (mats[b] != 0u && mats[a] == 0u) { mv = mats[b]; dst = a; }
+            if (mv == 0u || !can_swap(sv[a], sv[b])) continue;
+            if (ax == downAxis) {
+                // Ход «вверх» (против гравитации; a < b всегда): плотное над
+                // лёгким не поднимаем — то же следствие закона плотности.
+                bool movesUp = downPos ? (dst == a) : (dst == b);
+                if (movesUp && kMatDensity[mv] > kMatDensity[0u]) continue;
+            }
+            if (roll01(pc.params.x, minG, uint(160 + ax * 16 + i)) <
+                kMatMedium[mv].y * 0.5) {
+                uint t = mats[a]; mats[a] = mats[b]; mats[b] = t;
+            }
+        }
+    }
+
     // --- Запись изменившихся + активность. ----------------------------------
-    // changed (сброс счётчика сна) — только от СТРУКТУРНЫХ ходов; будить
-    // чужую клетку (touched-биты) обязана ЛЮБАЯ запись в неё — её settle
-    // должен переставить класс-байт и кванты, иначе уехавшая по слайду вода
-    // невидима рендеру.
+    // Любой своп = changed: правило ЧИСТО МАРКОВСКОЕ (закон владельца
+    // 2026-08-24 — только соседи, параметры и гравитация), планировщик сна
+    // лишь наблюдает за ним снаружи и правил не меняет.
     uint touchedAxes = 0u;
     bool changedOwn = false;
     for (int i = 0; i < 8; ++i) {
         if (mats[i] == sv[i].mat) continue;
         store_mat(sv[i], mats[i]);
         if (sv[i].ci == ci) {
-            if (structural) changedOwn = true;
+            changedOwn = true;
         } else {
             // Блок наезжает только на +октант: соседи по осям, где локальная
             // координата выпала за клетку.
@@ -298,7 +283,7 @@ void run_move(uint slot, uint threadId) {
             if ((g.x >> 3) != cell.x) touchedAxes |= 4u;
             if ((g.y >> 3) != cell.y) touchedAxes |= 8u;
             if ((g.z >> 3) != cell.z) touchedAxes |= 16u;
-            if (structural) atomicOr(uCellAct[sv[i].ci], kActChanged);
+            atomicOr(uCellAct[sv[i].ci], kActChanged);
         }
     }
     if (changedOwn) atomicOr(uCellAct[ci], kActChanged);

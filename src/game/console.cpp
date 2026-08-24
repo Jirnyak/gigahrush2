@@ -585,7 +585,8 @@ bool cmd_sphere(ConsoleContext& ctx, int argc, const char* const* argv,
         if (out && cap)
             std::snprintf(out, cap,
                           "sphere <material> [radius_m] — names are "
-                          "data/materials.csv rows (neon_tube, glass, ...)");
+                          "data/materials.csv rows (water, air, neon_tube, "
+                          "...); air = шар воздуха тем же законом");
         return false;
     }
     const CellType mat = material_id_by_name(argv[1]);

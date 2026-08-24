@@ -222,7 +222,34 @@ void GpuMediumPass::wake_one(std::uint32_t ci, World& world,
 void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
                                World& world, VoxelMirror& mirror) {
     if (!ready()) return;
-    for (std::size_t i = 0; i < n; ++i) wake_one(cells[i], world, mirror);
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t ci = cells[i];
+        wake_one(ci, world, mirror);
+        // Закон писателя: запись меняет и СВОБОДУ материи соседей (вода
+        // рядом с новой дырой обязана потечь) — будим грани; лишние заснут
+        // за kSleepSubsteps.
+        const int cx = static_cast<int>(ci & 127u);
+        const int cy = static_cast<int>((ci >> 7) & 127u);
+        const int cz = static_cast<int>((ci >> 14) & 127u);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(wrap_macro(cx - 1), cy, cz)),
+                 world, mirror);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(wrap_macro(cx + 1), cy, cz)),
+                 world, mirror);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(cx, wrap_macro(cy - 1), cz)),
+                 world, mirror);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(cx, wrap_macro(cy + 1), cz)),
+                 world, mirror);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(cx, cy, wrap_macro(cz - 1))),
+                 world, mirror);
+        wake_one(static_cast<std::uint32_t>(
+                     macro_index(cx, cy, wrap_macro(cz + 1))),
+                 world, mirror);
+    }
 }
 
 void GpuMediumPass::poll_activity(World& world, VoxelMirror& mirror) {

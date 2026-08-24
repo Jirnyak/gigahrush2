@@ -154,7 +154,7 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     1.000f,  //  0 air
     0.000f,  //  1 concrete
     0.000f,  //  2 soil
-    0.000f,  //  3 water
+    0.500f,  //  3 water
     0.000f,  //  4 slab_tan
     0.000f,  //  5 extract
     0.000f,  //  6 door
@@ -168,7 +168,7 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     0.000f,  // 14 rust
     0.000f,  // 15 rubble
     0.000f,  // 16 electric_grate
-    0.000f,  // 17 acid_pool
+    0.050f,  // 17 acid_pool
     0.000f,  // 18 fire_cell
     0.000f,  // 19 pipe_metal
     0.000f,  // 20 neon_tube

@@ -4465,12 +4465,18 @@ int main(int argc, char** argv) {
                             const int sx = ((gx % kSubDim) + kSubDim) % kSubDim;
                             const int sy = ((gy % kSubDim) + kSubDim) % kSubDim;
                             const int sz = ((gz % kSubDim) + kSubDim) % kSubDim;
-                            // Бит SubMask — кэш предиката «твёрдое» (S16.1):
-                            // жидкость и газ его не получают — `sphere water`
-                            // рождает материю, которой владеет автомат, а не
-                            // коллизийную стену.
+                            // УНИВЕРСАЛЬНЫЙ ПИСАТЕЛЬ (решение владельца
+                            // 2026-08-24): сфера честно ПИШЕТ материал в
+                            // истину — и точка. Бит SubMask — производный
+                            // кэш предиката «твёрдое» (S16.1): у твёрдого
+                            // ставится, у жидкости/газа СНИМАЕТСЯ. Отсюда
+                            // `sphere air` = детерминированный шар воздуха —
+                            // карв-кисть тем же законом, ноль особых путей.
                             if (material_phase(paintMat) == MatPhase::Solid)
                                 w.grid().mask(cx, cy, cz).set(
+                                    sub_bit(sx, sy, sz));
+                            else
+                                w.grid().mask(cx, cy, cz).clear(
                                     sub_bit(sx, sy, sz));
                             set_sub_material(w, cx, cy, cz, sx, sy, sz,
                                              paintMat);
@@ -4482,12 +4488,11 @@ int main(int argc, char** argv) {
                                   painted.end());
                     if (!painted.empty()) {
                         voxelMirror.mark_dirty(painted.data(), painted.size());
-                        // Нетвёрдая материя — добыча автомата: разбудить
-                        // нарисованные клетки, дальше гравитация и правило
-                        // сами (решение владельца 2026-08-24: `sphere water`
-                        // и есть налив).
-                        if (mediumPass.ready() &&
-                            material_phase(paintMat) != MatPhase::Solid)
+                        // Писатель будит БЕЗУСЛОВНО (закон S16.1: писатели
+                        // будят, автомат двигает): налитая вода потечёт, в
+                        // шар воздуха стечёт материя соседей, лишние клетки
+                        // мгновенно заснут. wake_cells сам будит и грани.
+                        if (mediumPass.ready())
                             mediumPass.wake_cells(painted.data(),
                                                   painted.size(),
                                                   w, voxelMirror);
