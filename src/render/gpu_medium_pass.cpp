@@ -1,6 +1,7 @@
 #include "render/gpu_medium_pass.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -41,8 +42,9 @@ bool read_spv(const char* path, std::vector<char>& out) {
 // Слоты обратного шва: страница 1 КиБ + маска 64 Б, зеркало шейдера.
 constexpr VkDeviceSize kPageBytesBack = kSubVoxels * sizeof(std::uint16_t);
 constexpr VkDeviceSize kMaskBytesBack = 64;
-// Регион списка: 4 u32 заголовка (count, quanta, woken, slept) + слоты.
-constexpr std::uint32_t kListHeader = 4;
+// Регион списка: 8 u32 заголовка (count, quanta, woken, slept, честный
+// размер списка до окна пака, флаг капа wake_next, 2 резервных) + слоты.
+constexpr std::uint32_t kListHeader = 8;
 
 // Режимы шейдера ([shaders/medium_sim.comp] pc.params.y).
 constexpr std::uint32_t kModePrepare = 0;
@@ -299,11 +301,18 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     lastQuanta_ = list[1];
     wokenTotal_ = list[2];
     sleptTotal_ = list[3];
-    if (list[0] > kRbSlotCap && !overflow_)
+    listTotal_ = list[4];
+    wakeCapHit_ = list[5] != 0;
+    if (list[4] > kRbSlotCap && !rbWindowWarned_) {
+        rbWindowWarned_ = true;
         std::fprintf(stderr,
-                     "[medium] rb window: %u live > %u slots — хвост доедет "
-                     "следующими кадрами\n",
-                     list[0], kRbSlotCap);
+                     "[medium] rb window: %u live > %u slots\n", list[4],
+                     kRbSlotCap);
+    }
+    if (wakeCapHit_ && !wakeCapWarned_) {
+        wakeCapWarned_ = true;
+        std::fprintf(stderr, "[medium] WAKE CAP HIT: список полон\n");
+    }
 
     SubField<CellType>* f =
         world.subfields().find<CellType>(kSubMaterialName);
@@ -315,10 +324,15 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                        static_cast<std::size_t>(region) * kRbSlotCap *
                            kMaskBytesBack;
     lazyDirty_.clear();
+    const bool probeDiag = std::getenv("GIGA_POUR") != nullptr;
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t word = list[kListHeader + i];
         const std::uint32_t ci = word & 0x7FFFFFFFu;
         if (ci >= kMacroCells) continue;
+        if (probeDiag) {
+            seamSeen_.insert(ci);
+            if (word & 0x80000000u) seamLazy_.insert(ci);
+        }
         if (word & 0x80000000u) {
             // GPU видел клетку безстраничной: материализуем лениво — flush
             // довезёт страницу, материя подождёт у границы кадр-два.
@@ -343,6 +357,11 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     if (!lazyDirty_.empty()) {
         mirror.mark_dirty(lazyDirty_.data(), lazyDirty_.size());
         lazyTotal_ += static_cast<std::uint32_t>(lazyDirty_.size());
+        // Закон писателя: материализация — это запись, она меняет свободу
+        // материи соседей. Будим клетку И грани — иначе сосед-владелец
+        // межклеточных блоков мог уснуть об неписуемую страницу, и обрыв
+        // замерзает (тест frontier freeze).
+        wake_cells(lazyDirty_.data(), lazyDirty_.size(), world, mirror);
     }
 }
 
@@ -455,8 +474,9 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     // PACK шва: страницы/маски/список живых — в регион кольца, GPU-пассом.
     const auto region = static_cast<std::uint32_t>(rbGen_ % kRbRegions);
     rbRing_[region].valid = true;
+    // Поколение кольца — паку: вращает окно по списку (хвост не голодает).
+    push.params[0] = static_cast<std::uint32_t>(rbGen_);
     ++rbGen_;
-    push.params[0] = static_cast<std::uint32_t>(substepBase);
     push.params[1] = kModePack;
     push.params[2] = listSel_;
     push.params[3] = region;

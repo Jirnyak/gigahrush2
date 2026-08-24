@@ -835,6 +835,167 @@ void test_carve_agnostic() {
     CHECK(w.grid().mask(fx, cy, cz).test(sub_bit(2, 2, 2)));
 }
 
+// РЕПРО скрина владельца 2026-08-25: «клетки-квадраты, в которые вода не
+// идёт, хотя там пусто по субвокселям». Обрыв у БЕЗстраничного соседа:
+// клетка W стоит с водой в 3 слоя, сосед D — воздух без страницы. Блоки
+// Марголуса через границу W|D принадлежат W, но писать в D нельзя, пока
+// страница D не приедет швом (лаг kRbRegions кадров). Если за это время
+// у W не было ходов — тишина дорастает до сна, и НИКТО не будит W после
+// приезда страницы: обрыв 3:0 замерзает навсегда. Закон писателя обязывает
+// ленивую материализацию будить клетку И грани — вода обязана перелиться.
+void test_frontier_freeze(gpu::VulkanDevice& dev) {
+    static World w;
+    // Дно и бокс 2x1 вдоль +x: W=(80,80,5) с водой, D=(81,80,5) — воздух.
+    for (int x = 79; x <= 82; ++x)
+        for (int y = 79; y <= 81; ++y)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+    w.grid().fill_cell(79, 80, 5, kMatConcrete);
+    w.grid().fill_cell(82, 80, 5, kMatConcrete);
+    w.grid().fill_cell(80, 79, 5, kMatConcrete);
+    w.grid().fill_cell(80, 81, 5, kMatConcrete);
+    w.grid().fill_cell(81, 79, 5, kMatConcrete);
+    w.grid().fill_cell(81, 81, 5, kMatConcrete);
+    const auto wCell = static_cast<std::uint32_t>(macro_index(80, 80, 5));
+    const auto dCell = static_cast<std::uint32_t>(macro_index(81, 80, 5));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(wCell, w.grid().types()[wCell]);
+    constexpr int kPoured = 192; // 3 слоя по 64 — обрыв 3:0 к соседу
+    for (int sx = 0; sx < 8; ++sx)
+        for (int sy = 0; sy < 8; ++sy)
+            for (int sz = 0; sz < 3; ++sz)
+                pg[sub_bit(sx, sy, sz)] = kMatWater;
+    CHECK(!f.paged(dCell)); // суть сцены: сосед-воздух БЕЗ страницы
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    // Будим ТОЛЬКО столб над водой — его грани не трогают D: страница D
+    // обязана приехать честным GPU-путём (wake_next -> pack -> шов), как
+    // на фронте растекания в игре.
+    const auto above = static_cast<std::uint32_t>(macro_index(80, 80, 6));
+    medium.wake_cells(&above, 1, w, mirror);
+
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 40; ++b) { // игровой каденс: 4 подтика на кадр
+        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+        substep += 4;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    const CellType* dp = f.page(dCell);
+    int dq = 0, wq = 0;
+    if (dp)
+        for (int b2 = 0; b2 < kSubVoxels; ++b2)
+            if (dp[b2] == kMatWater) ++dq;
+    const CellType* wp = f.page(wCell);
+    if (wp)
+        for (int b2 = 0; b2 < kSubVoxels; ++b2)
+            if (wp[b2] == kMatWater) ++wq;
+    std::printf("[medium_test] frontier: D page %s, water D %d + W %d\n",
+                dp ? "yes" : "NO", dq, wq);
+    CHECK(dq + wq == kPoured); // масса не рождается и не тонет в шве
+    // Уровень: 192 кванта на 2 клетки дна — в D обязан стоять минимум слой
+    // с запасом на рябь диффузии (полслоя).
+    CHECK(dq >= 32);
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
+// РЕПРО скрина владельца 2026-08-25, механизм №2: ХВОСТ СПИСКА ЗА ОКНОМ
+// ПАКА. При live > kRbSlotCap пак покрывал только первые 8192 слота, а
+// порядок списка между подтиками почти стабилен (выжившие перепушиваются
+// раньше новых) — новорожденная клетка фронта вечно сидела в хвосте: не
+// пакуется -> не помечается -> не материализуется -> вода в неё не идёт.
+// Сцена: одеяло газа > kRbSlotCap клеток держит список толстым, потом
+// обрыв воды у безстраничного соседа — сосед обязан получить страницу
+// вращающимся окном пака и принять воду.
+void test_seam_tail(gpu::VulkanDevice& dev) {
+    static World w;
+    // Газовое одеяло: 96x96 клеток одним слоем на дне из полнотвёрдых.
+    // 9216 живых > окна 8192. По 32 кванта газа — бурлит и не спит.
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    for (int y = 16; y < 112; ++y)
+        for (int x = 16; x < 112; ++x) {
+            w.grid().fill_cell(x, y, 20, kMatConcrete);
+            const auto ci =
+                static_cast<std::uint32_t>(macro_index(x, y, 21));
+            CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+            for (int sy = 2; sy < 6; ++sy)
+                for (int sx = 2; sx < 6; ++sx)
+                    for (int sz = 0; sz < 2; ++sz)
+                        pg[sub_bit(sx, sy, sz)] = kMatToxicGas;
+        }
+    // Обрыв воды НИЖЕ одеяла: бокс 2x1, W с водой, D — воздух без страницы.
+    for (int x = 59; x <= 62; ++x)
+        for (int y = 59; y <= 61; ++y)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+    w.grid().fill_cell(59, 60, 5, kMatConcrete);
+    w.grid().fill_cell(62, 60, 5, kMatConcrete);
+    w.grid().fill_cell(60, 59, 5, kMatConcrete);
+    w.grid().fill_cell(60, 61, 5, kMatConcrete);
+    w.grid().fill_cell(61, 59, 5, kMatConcrete);
+    w.grid().fill_cell(61, 61, 5, kMatConcrete);
+    const auto wCell = static_cast<std::uint32_t>(macro_index(60, 60, 5));
+    const auto dCell = static_cast<std::uint32_t>(macro_index(61, 60, 5));
+    CellType* pg = f.ensure_page(wCell, w.grid().types()[wCell]);
+    constexpr int kPoured = 192;
+    for (int sx = 0; sx < 8; ++sx)
+        for (int sy = 0; sy < 8; ++sy)
+            for (int sz = 0; sz < 3; ++sz)
+                pg[sub_bit(sx, sy, sz)] = kMatWater;
+    CHECK(!f.paged(dCell));
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+    // Будим одеяло волнами под кап инжекта, ПОТОМ воду — газ занимает
+    // голову списка, клетки воды достаются хвосту (порядок как в игре:
+    // старожилы впереди).
+    std::vector<std::uint32_t> wave;
+    std::uint64_t substep = 0;
+    for (int y = 16; y < 112; ++y) {
+        for (int x = 16; x < 112; ++x)
+            wave.push_back(
+                static_cast<std::uint32_t>(macro_index(x, y, 21)));
+        if (wave.size() >= 1000 || y == 111) {
+            medium.wake_cells(wave.data(), wave.size(), w, mirror);
+            wave.clear();
+            CHECK(run_batch(dev, mirror, medium, w, 1, substep));
+            substep += 1;
+            medium.apply_readback(w, mirror);
+        }
+    }
+    const auto above = static_cast<std::uint32_t>(macro_index(60, 60, 6));
+    medium.wake_cells(&above, 1, w, mirror);
+    for (int b = 0; b < 60; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+        substep += 4;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    const CellType* dp = f.page(dCell);
+    int dq = 0;
+    if (dp)
+        for (int b2 = 0; b2 < kSubVoxels; ++b2)
+            if (dp[b2] == kMatWater) ++dq;
+    std::printf("[medium_test] seam tail: list %u, D page %s, D water %d\n",
+                medium.list_total(), dp ? "yes" : "NO", dq);
+    CHECK(medium.list_total() > gpu::GpuMediumPass::kRbSlotCap);
+    CHECK(dq >= 32);
+    (void)kPoured;
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -845,6 +1006,8 @@ int main() {
         CHECK(dev.graphicsQueue != VK_NULL_HANDLE);
         test_headless_roundtrip(dev);
         test_automaton_water(dev);
+        test_frontier_freeze(dev);
+        test_seam_tail(dev);
     }
     test_carve_agnostic();
     dev.destroy();

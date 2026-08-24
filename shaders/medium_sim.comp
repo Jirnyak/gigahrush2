@@ -83,7 +83,7 @@ layout(push_constant) uniform Push {
 
 const int kMacroDim = GIGA_MACRO_DIM;
 const uint kNoPage = 0xFFFFFFFFu;
-const uint kListCap = 32768u; // зеркало GpuMediumPass::kLiveCap
+const uint kListCap = 131072u; // зеркало GpuMediumPass::kLiveCap
 const uint kRbSlotCap = 8192u; // зеркало GpuMediumPass::kRbSlotCap
 
 // --- Слово активности клетки (uCellAct) -------------------------------------
@@ -113,6 +113,10 @@ void wake_next(uint ci) {
         list_next_store(idx, ci);
         atomicAdd(uCnt[10], 1u);
     } else {
+        // Кап: слот не лёг — бит ОБЯЗАН откатиться, иначе клетка мертва
+        // для пробуждений навсегда (сухие клетки-квадраты со скрина
+        // владельца 2026-08-25).
+        atomicAnd(uCellAct[ci], ~kActInList);
         atomicOr(uCnt[9], 1u);
     }
 }
@@ -483,20 +487,32 @@ void run_inject(uint j) {
 void run_pack(uint slot, uint threadId) {
     // pc.params.w = ИНДЕКС региона кольца; базы выводятся: список несёт
     // 4-словный заголовок + kRbSlotCap слотов на регион.
-    uint listBase = pc.params.w * (kRbSlotCap + 4u);
+    uint listBase = pc.params.w * (kRbSlotCap + 8u);
     uint slotBase = pc.params.w * kRbSlotCap;
-    uint count = min(uCnt[cur_x_index()], min(kListCap, kRbSlotCap));
+    uint total = min(uCnt[cur_x_index()], kListCap);
+    // ВРАЩАЮЩЕЕСЯ ОКНО (pc.params.x = поколение кольца): при total > окна
+    // пак покрывает список ЦЕЛИКОМ за ceil(total/окно) кадров — хвост не
+    // голодает, новорожденные клетки фронта материализуются (тест seam
+    // tail: раньше первые 8192 слота монополизировали шов, и клетка за
+    // окном никогда не получала страницу — сухие квадраты в луже).
+    uint chunks = (total + kRbSlotCap - 1u) / kRbSlotCap;
+    uint start = chunks <= 1u ? 0u : (pc.params.x % chunks) * kRbSlotCap;
+    uint count = min(total - start, kRbSlotCap);
     if (slot == 0u && threadId == 0u) {
         uRbList[listBase + 0u] = count;
         uRbList[listBase + 1u] = uCnt[8];
         uRbList[listBase + 2u] = uCnt[10];
         uRbList[listBase + 3u] = uCnt[11];
+        uRbList[listBase + 4u] = total;   // ЧЕСТНЫЙ размер списка (до окна)
+        uRbList[listBase + 5u] = uCnt[9]; // флаг капа wake_next
+        uRbList[listBase + 6u] = start;
+        uRbList[listBase + 7u] = 0u;
     }
     if (slot >= count) return;
-    uint ci = list_cur(slot);
+    uint ci = list_cur(start + slot);
     uint pg = uPageIdx[ci];
     if (threadId == 0u)
-        uRbList[listBase + 4u + slot] =
+        uRbList[listBase + 8u + slot] =
             pg == kNoPage ? (ci | 0x80000000u) : ci;
     if (pg != kNoPage)
         for (uint k = 0u; k < 4u; ++k)

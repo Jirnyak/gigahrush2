@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <unordered_set>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -61,7 +62,12 @@ public:
     // лужи и эмиттеры — сотни. 32768 = запас ~двух порядков, худший случай
     // страниц 32 МиБ (уже в пуле зеркала), и НЕ упирается в лимит Vulkan
     // 65535 воркгрупп по X. Переполнение печатается вслух (S11).
-    static constexpr std::uint32_t kLiveCap = 32768u;
+    // Рабочий набор автомата: пара списков по 4 Б на слот (1 МиБ на кап
+    // 131072). Кап 32768 упирался в газ+воду одного этажа: новорожденные
+    // клетки фронта проигрывали гонку за слоты старожилам (стабильный
+    // порядок пуша) — вода не шла в клетки. Запас = 8 слоёв газа на весь
+    // этаж 128x128.
+    static constexpr std::uint32_t kLiveCap = 131072u;
     // Обратный шов, фенсовая дисциплина (детали у полей ниже): регионов на
     // один больше, чем кадров в полёте; запись кадра F применяется на топе
     // кадра F + kRbRegions — раньше её исполнение не гарантировано, и слот
@@ -131,6 +137,11 @@ public:
     std::uint32_t slept_total() const noexcept { return sleptTotal_; }
     bool overflowed() const noexcept { return overflow_; }
     std::uint32_t lazy_total() const noexcept { return lazyTotal_; }
+    std::uint32_t list_total() const noexcept { return listTotal_; }
+    bool wake_cap_hit() const noexcept { return wakeCapHit_; }
+    // Диагноз (GIGA_POUR): побывала ли клетка в применённых регионах шва.
+    bool seam_seen(std::uint32_t ci) const { return seamSeen_.count(ci) != 0; }
+    bool seam_lazy(std::uint32_t ci) const { return seamLazy_.count(ci) != 0; }
 
 private:
     bool create_buffers() noexcept;
@@ -174,6 +185,10 @@ private:
     bool actNeedsClear_ = true;
 
     std::uint32_t lazyTotal_ = 0; // ленивые материализации шва (диагноз)
+    std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
+    std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
+    bool wakeCapHit_ = false;       // wake_next упирался в kListCap
+    bool rbWindowWarned_ = false, wakeCapWarned_ = false;
     std::uint32_t lastCount_ = 0;
     std::uint32_t lastQuanta_ = 0;
     std::uint32_t wokenTotal_ = 0;

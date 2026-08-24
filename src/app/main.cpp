@@ -4528,6 +4528,173 @@ int main(int argc, char** argv) {
                             "+y %ld -y %ld | reach +x %d -x %d +y %d -y %d\n",
                             static_cast<unsigned long long>(simTick), qXp, qXn,
                             qYp, qYn, rXp, rXn, rYp, rYn);
+                        // ДИАГНОЗ СУХИХ КЛЕТОК: карта воды по клеткам слоя
+                        // налива + сигнатура каждой сухой клетки, граничащей
+                        // с мокрой (тип/маска/страница/состав/газ) — ответ
+                        // «кто запер клетку» без участия владельца.
+                        // Доминирующая z-плоскость лужи (вода падает от
+                        // точки налива вниз) — карта и диагноз строятся по ней.
+                        int zHist[9] = {};
+                        for (int dz = -5; dz <= 3; ++dz)
+                            for (int dy = -8; dy <= 8; ++dy)
+                                for (int dx = -8; dx <= 8; ++dx) {
+                                    const std::size_t ci = macro_index(
+                                        wrap_macro(pcx + dx),
+                                        wrap_macro(pcy + dy),
+                                        wrap_macro(pcz + dz));
+                                    const CellType* pg =
+                                        pf ? pf->page(ci) : nullptr;
+                                    if (!pg) continue;
+                                    for (int b = 0; b < kSubVoxels; ++b)
+                                        if (pg[b] == kMatWater)
+                                            ++zHist[dz + 5];
+                                }
+                        int poolDz = 0;
+                        for (int z = 0; z < 9; ++z)
+                            if (zHist[z] > zHist[poolDz + 5]) poolDz = z - 5;
+                        const int poolCz = wrap_macro(pcz + poolDz);
+                        std::fprintf(stderr, "[pour-map] pool plane dz %+d (%d quanta)\n",
+                                     poolDz, zHist[poolDz + 5]);
+                        int wq[17][17] = {};
+                        for (int dy = -8; dy <= 8; ++dy)
+                            for (int dx = -8; dx <= 8; ++dx) {
+                                const std::size_t ci = macro_index(
+                                    wrap_macro(pcx + dx),
+                                    wrap_macro(pcy + dy), poolCz);
+                                const CellType* pg =
+                                    pf ? pf->page(ci) : nullptr;
+                                if (!pg) continue;
+                                for (int b = 0; b < kSubVoxels; ++b)
+                                    if (pg[b] == kMatWater)
+                                        ++wq[dy + 8][dx + 8];
+                            }
+                        for (int dy = 8; dy >= -8; --dy) {
+                            char row[18];
+                            for (int dx = -8; dx <= 8; ++dx) {
+                                const int q = wq[dy + 8][dx + 8];
+                                row[dx + 8] = q == 0 ? '.'
+                                              : q < 10 ? char('0' + q)
+                                              : q < 100 ? 'x' : 'X';
+                            }
+                            row[17] = 0;
+                            std::fprintf(stderr, "[pour-map] %s\n", row);
+                        }
+                        int printed = 0;
+                        for (int dy = -8; dy <= 8 && printed < 10; ++dy)
+                            for (int dx = -8; dx <= 8 && printed < 10; ++dx) {
+                                if (wq[dy + 8][dx + 8] != 0) continue;
+                                bool frontier = false;
+                                for (int k = 0; k < 4; ++k) {
+                                    const int nx = dx + (k == 0) - (k == 1);
+                                    const int ny = dy + (k == 2) - (k == 3);
+                                    if (nx < -8 || nx > 8 || ny < -8 ||
+                                        ny > 8)
+                                        continue;
+                                    if (wq[ny + 8][nx + 8] >= 8)
+                                        frontier = true;
+                                }
+                                if (!frontier) continue;
+                                const int cx = wrap_macro(pcx + dx);
+                                const int cy = wrap_macro(pcy + dy);
+                                const std::size_t ci =
+                                    macro_index(cx, cy, poolCz);
+                                const CellType base =
+                                    pw.grid().cell(cx, cy, poolCz);
+                                const SubMask& mk = pw.grid().masks()[ci];
+                                int mbits = 0;
+                                for (int wI = 0; wI < int(kSubMaskWords); ++wI)
+                                    mbits += __builtin_popcountll(
+                                        mk.words[wI]);
+                                const CellType* pg =
+                                    pf ? pf->page(ci) : nullptr;
+                                int hist[4] = {};
+                                CellType top[4] = {};
+                                int nAtoms = 0;
+                                if (pg)
+                                    for (int b = 0; b < kSubVoxels; ++b) {
+                                        if (pg[b] == kCellAir) continue;
+                                        ++nAtoms;
+                                        for (int h = 0; h < 4; ++h) {
+                                            if (top[h] == pg[b]) {
+                                                ++hist[h];
+                                                break;
+                                            }
+                                            if (hist[h] == 0) {
+                                                top[h] = pg[b];
+                                                hist[h] = 1;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                // Граничная плоскость мокрого соседа в
+                                // сторону сухой: вода/твердь на ней различают
+                                // «замёрзший фронт» и легитимную стену.
+                                int fw = 0, fs = 0;
+                                {
+                                    int bdx = 0, bdy = 0;
+                                    for (int k = 0; k < 4; ++k) {
+                                        const int nx = dx + (k == 0) - (k == 1);
+                                        const int ny = dy + (k == 2) - (k == 3);
+                                        if (nx < -8 || nx > 8 || ny < -8 ||
+                                            ny > 8)
+                                            continue;
+                                        if (wq[ny + 8][nx + 8] >= 8) {
+                                            bdx = nx; bdy = ny; break;
+                                        }
+                                    }
+                                    const int wcx = wrap_macro(pcx + bdx);
+                                    const int wcy = wrap_macro(pcy + bdy);
+                                    const std::size_t wci =
+                                        macro_index(wcx, wcy, poolCz);
+                                    const CellType* wpg =
+                                        pf ? pf->page(wci) : nullptr;
+                                    const SubMask& wm =
+                                        pw.grid().masks()[wci];
+                                    // Плоскость соседа, обращённая К сухой.
+                                    // Плоскость соседа, ОБРАЩЁННАЯ к
+                                    // сухой: сосед в -x от сухой смотрит
+                                    // на неё своей x==7.
+                                    const int ax = bdx != dx ? 0 : 1;
+                                    const int plane =
+                                        (ax == 0 ? bdx < dx : bdy < dy)
+                                            ? 7 : 0;
+                                    for (int u = 0; u < 8; ++u)
+                                        for (int v = 0; v < 8; ++v) {
+                                            const int b2 =
+                                                ax == 0
+                                                    ? sub_bit(plane, u, v)
+                                                    : sub_bit(u, plane, v);
+                                            if (wpg &&
+                                                wpg[b2] == kMatWater)
+                                                ++fw;
+                                            if (wm.test(b2)) ++fs;
+                                        }
+                                }
+                                std::fprintf(
+                                    stderr,
+                                    "[pour-dry] d(%+d,%+d) base %s mask %d "
+                                    "page %s atoms %d top %s:%d %s:%d | "
+                                    "liq %.2f gas %.2f | seam seen %d lazy "
+                                    "%d | wet-face water %d solid %d\n",
+                                    dx, dy,
+                                    kMatNames[static_cast<int>(base)], mbits,
+                                    pg ? "yes" : "NO", nAtoms,
+                                    hist[0] ? kMatNames[static_cast<int>(
+                                                  top[0])]
+                                            : "-",
+                                    hist[0],
+                                    hist[1] ? kMatNames[static_cast<int>(
+                                                  top[1])]
+                                            : "-",
+                                    hist[1], liquid_frac_at(pw, ci),
+                                    gas_frac_at(pw, ci),
+                                    int(mediumPass.seam_seen(
+                                        static_cast<std::uint32_t>(ci))),
+                                    int(mediumPass.seam_lazy(
+                                        static_cast<std::uint32_t>(ci))),
+                                    fw, fs);
+                                ++printed;
+                            }
                     }
                 }
                 if (consoleCtx.paintRadius > 0.0f && reg.valid(player)) {
@@ -7840,12 +8007,12 @@ int main(int argc, char** argv) {
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, lazy %u, substeps %llu | cpu ms: poll %.2f apply "
+                        "slept %u, lazy %u, listTot %u, substeps %llu | cpu ms: poll %.2f apply "
                         "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
-                        mediumPass.lazy_total(),
+                        mediumPass.lazy_total(), mediumPass.list_total(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
                         static_cast<double>(g_mediumPollMs),
                         static_cast<double>(g_mediumApplyMs),
