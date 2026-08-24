@@ -36,7 +36,22 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.85f, 0.25f, 0.04f},  // 18 fire_cell
     {0.13f, 0.16f, 0.14f},  // 19 pipe_metal
     {0.25f, 0.95f, 0.85f},  // 20 neon_tube
-    {0.62f, 0.70f, 0.72f}   // 21 glass
+    {0.62f, 0.70f, 0.72f},  // 21 glass
+    {0.26f, 0.26f, 0.24f},  // 22 rubble_concrete
+    {0.20f, 0.31f, 0.15f},  // 23 rubble_soil
+    {0.31f, 0.26f, 0.19f},  // 24 rubble_slab_tan
+    {0.41f, 0.37f, 0.32f},  // 25 rubble_plaster
+    {0.27f, 0.17f, 0.09f},  // 26 rubble_parquet
+    {0.32f, 0.34f, 0.36f},  // 27 rubble_shop_shutter
+    {0.22f, 0.14f, 0.10f},  // 28 rubble_lino
+    {0.19f, 0.26f, 0.19f},  // 29 rubble_factory_wall
+    {0.32f, 0.20f, 0.13f},  // 30 rubble_tread
+    {0.34f, 0.17f, 0.07f},  // 31 rubble_rust
+    {0.72f, 0.59f, 0.13f},  // 32 rubble_electric_grate
+    {0.72f, 0.21f, 0.03f},  // 33 rubble_fire_cell
+    {0.11f, 0.14f, 0.12f},  // 34 rubble_pipe_metal
+    {0.21f, 0.81f, 0.72f},  // 35 rubble_neon_tube
+    {0.53f, 0.59f, 0.61f}   // 36 rubble_glass
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id");
@@ -51,12 +66,17 @@ struct MaterialMap {
     float tileScale;        // world-space tiling multiplier
 };
 inline constexpr MaterialMap kMaterialMaps[] = {
-    {kMatShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f},  //  0 shop_shutter
-    {kMatLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                  ,  //  1 lino
-    {kMatFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                           ,  //  2 factory_wall
-    {kMatTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                  ,  //  3 tread
-    {kMatRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                            ,  //  4 rust
-    {kMatRubble, "rusty_corrugated_iron.ktx2", "rusty_corrugated_iron_normal.ktx2", "rusty_corrugated_iron_roughness.ktx2", 0.5f}        //  5 rubble
+    {kMatShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f}      ,  //  0 shop_shutter
+    {kMatLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                        ,  //  1 lino
+    {kMatFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                                 ,  //  2 factory_wall
+    {kMatTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                        ,  //  3 tread
+    {kMatRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                                  ,  //  4 rust
+    {kMatRubble, "rusty_corrugated_iron.ktx2", "rusty_corrugated_iron_normal.ktx2", "rusty_corrugated_iron_roughness.ktx2", 0.5f}           ,  //  5 rubble
+    {kMatRubbleShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f},  //  6 rubble_shop_shutter
+    {kMatRubbleLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                  ,  //  7 rubble_lino
+    {kMatRubbleFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                           ,  //  8 rubble_factory_wall
+    {kMatRubbleTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                  ,  //  9 rubble_tread
+    {kMatRubbleRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                               // 10 rubble_rust
 };
 inline constexpr int kMaterialMapCount =
     static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));

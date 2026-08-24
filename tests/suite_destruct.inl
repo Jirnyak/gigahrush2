@@ -112,7 +112,7 @@ static void test_carve_at() {
         CHECK(res.detached[0].mat == kMatConcrete);
         CHECK(!w.grid().mask(10, 10, 10).empty());
         CHECK(w.grid().mask(10, 10, 10).test(sub_bit(5, 4, 4)));
-        CHECK(sub_material_at(w, 10, 10, 10, 5, 4, 4) == kMatRubble);
+        CHECK(sub_material_at(w, 10, 10, 10, 5, 4, 4) == kMatRubbleConcrete);
         CHECK(res.dirtyCells.size() == 1);
         CHECK(res.dirtyCells[0] == macro_index(10, 10, 10));
         // Second swing at the same spot: nothing there any more.
@@ -130,7 +130,7 @@ static void test_carve_at() {
         CHECK(res.detached.size() == 511);
         CHECK(!w.grid().mask(20, 20, 20).test(sub_bit(0, 0, 0)));
         CHECK(w.grid().mask(20, 20, 20).test(sub_bit(1, 0, 0)));
-        CHECK(sub_material_at(w, 20, 20, 20, 1, 0, 0) == kMatRubble);
+        CHECK(sub_material_at(w, 20, 20, 20, 1, 0, 0) == kMatRubbleConcrete);
     }
 
     // The same chip against a TWO-cell block: 1023 survivors exceed the limit,
@@ -249,7 +249,7 @@ static void test_carve_sphere() {
     // Blob is the AUTOMATON's now: конверсия на месте, маска стоит, падать
     // ему дальше по гравитации фрейма (закон владельца 2026-08-24).
     CHECK(w.grid().mask(13, 10, 10).full());
-    CHECK(sub_material_at(w, 13, 10, 10, 0, 0, 0) == kMatRubble);
+    CHECK(sub_material_at(w, 13, 10, 10, 0, 0, 0) == kMatRubbleConcrete);
     for (const auto& d : res.detached) CHECK(d.mat == kMatConcrete);
     // Dirty list is deduped, sorted, and covers exactly the touched cells.
     CHECK(res.dirtyCells.size() == 2);

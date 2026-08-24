@@ -148,4 +148,15 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
               CarveResult& out);
 
+// ОДИН ЗАКОН СВЯЗНОСТИ НА ВСЕХ ПИСАТЕЛЕЙ (решение владельца 2026-08-24):
+// проверка от ЗАПИСИ, не от разрушения — нарисованная в воздухе сфера
+// бетона обязана осесть. seed — любой атом свежей записи; если его
+// компонент связности не больше limit и не дотягивается до опоры, ВЕСЬ
+// компонент конвертируется в рыхлого двойника (kMatRubbleOf) на месте —
+// дальше его роняет автомат, как при детаче карва. Возвращает число
+// конвертированных атомов; dirtyCells — задетые клетки (маски не меняются).
+std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
+                         int sz, std::int32_t limit, CarveScratch& scratch,
+                         CarveResult& out);
+
 } // namespace giga

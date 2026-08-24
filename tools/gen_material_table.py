@@ -200,6 +200,47 @@ def main():
         if m["phase"] == "gas" and m["diffusion"] <= 0.0:
             die("row %d (%s): a gas that cannot diffuse — label/params disagree"
                 % (i, r["name"]))
+    # --- РЫХЛЫЕ ДВОЙНИКИ СТРОК (решение владельца 2026-08-24; эстафета
+    # п.15: «rubble_* на исходный материал, никаких флажков»). Каждой
+    # РУШИМОЙ твёрдой строке (solid, бьётся, flow==0) порождается двойник
+    # rubble_<имя>: отвязанный детачем кусок меняет строку и падает
+    # автоматом, ВЫГЛЯДЯ исходником — альбедо чуть темнее (0.85, читаемость
+    # обвала), текстура/зерно наследуются. Всё выведено: плотность насыпная
+    # 0.75x (упаковка случайной засыпки), flow 0.1 (угол откоса ~40°, как у
+    # строки rubble), твёрдость /8 (дробить дроблёное легче), света нет
+    # (обломок неона не запитан), прозрачности нет (щебень стекла не лист).
+    # Двойники — ВЫВЕДЕННЫЕ данные, в CSV НЕ пишутся: kMaterialCsvRows
+    # остаётся счётом CSV (гейт Rule 7), kMatCount покрывает всех; сейвы
+    # хранят id — двойники аппендятся ПОСЛЕ CSV-строк, порядок стабилен.
+    csvN = len(mats)
+    rubbleOf = {m["id"]: m["id"] for m in mats}  # дефолт: сам себя
+    derived = []
+    for m in list(mats):
+        if (m["phase"] != "solid" or m["hardness"] >= 65535 or
+                m["flow"] > 0.0 or m["id"] == 0):
+            continue
+        d = dict(m)
+        d["id"] = csvN + len(derived)
+        d["name"] = "rubble_" + m["name"]
+        d["cpp"] = ("Rubble" + m["cpp"]) if m["cpp"] else ""
+        d["hardness"] = max(8, m["hardness"] // 8)
+        d["albedo"] = tuple(a * 0.85 for a in m["albedo"])
+        d["density"] = m["density"] * 0.75
+        d["flow"] = 0.1
+        d["diffusion"] = 0.0
+        d["emissive_e3"] = 0
+        d["light_radius_mm"] = 0
+        d["light_intensity_e3"] = 0
+        d["light_transparent"] = 0
+        d["light_pass"] = 0
+        d["note"] = ("ВЫВЕДЕННЫЙ рыхлый двойник строки %s — детач меняет "
+                     "строку, автомат роняет; вид исходника" % m["name"])
+        rubbleOf[m["id"]] = d["id"]
+        derived.append(d)
+    for d in derived:
+        rubbleOf[d["id"]] = d["id"]  # двойник двойника — сам он
+    mats.extend(derived)
+
     n = len(mats)
     names = [m["name"] for m in mats]
 
@@ -346,6 +387,16 @@ inline bool material_is_medium(CellType t) {
            (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
 }
 
+// РЫХЛЫЙ ДВОЙНИК строки (решение владельца 2026-08-24): детач меняет строку
+// куска на двойника — тот выглядит исходником (альбедо/текстура
+// наследуются) и падает автоматом. Не-рушимое и среды — сами себя.
+inline constexpr CellType kMatRubbleOf[kMatCount] = {
+%(rubble_of)s};
+
+inline CellType material_rubble_of(CellType t) {
+    return t < kMatCount ? kMatRubbleOf[t] : t;
+}
+
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
 // материала излучают; бейк этажа кластеризует их в статические эмиттеры
 // (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
@@ -395,6 +446,7 @@ inline bool material_passes_light(CellType t) {
             "albedo_r": elements(mats, ["%.3ff" % m["albedo"][0] for m in mats], names),
             "albedo_g": elements(mats, ["%.3ff" % m["albedo"][1] for m in mats], names),
             "albedo_b": elements(mats, ["%.3ff" % m["albedo"][2] for m in mats], names),
+            "rubble_of": elements(mats, ["%d" % rubbleOf[m["id"]] for m in mats], names),
         })
 
     # --- src/render/material_table.h ---------------------------------------
@@ -463,11 +515,12 @@ inline constexpr int kMaterialMapCount =
 // a material binds a texture and leaves `cv` blank; the seam/groove DEPTHS are
 // authored per family in cube.frag (the CSV measured colour, not depth).
 
-// Rows read from data/materials.csv — ONE PER CellType, so this IS the material
-// count. The `source_rules` ctest compares it against the CSV's data-row count.
+// Rows read from data/materials.csv. The `source_rules` ctest compares it
+// against the CSV's data-row count; derived rubble twins live PAST this count
+// (kMatCount covers all, see materials.h).
 const uint kMaterialCsvRows = %du;
 
-""" % n)
+""" % csvN)
         fh.write("// Family per material id — see the kFam* constants in cube.frag.\n")
         for m in mats:
             fh.write("//  %2d %-20s %-8s %-24s CV %.4f\n"

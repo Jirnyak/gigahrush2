@@ -532,7 +532,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(carve_at(w, 80, 80, 5, 4, 4, 0, 60000, 77, scratch, res));
         CHECK(res.detached.size() == 6);
         // Конверсия НА МЕСТЕ: те же атомы, материал rubble, маска стоит.
-        CHECK(sub_material_at(w, 80, 80, 5, 4, 4, 3) == kMatRubble);
+        CHECK(sub_material_at(w, 80, 80, 5, 4, 4, 3) == kMatRubbleConcrete);
         CHECK(w.grid().mask(80, 80, 5).test(sub_bit(5, 4, 3)));
 
         mirror.mark_dirty(res.dirtyCells.data(), res.dirtyCells.size());
@@ -554,7 +554,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 for (int sz = 0; sz < 8; ++sz)
                     for (int cxx = 79; cxx <= 81; ++cxx) {
                         if (sub_material_at(w, cxx, 80, 5, sx, sy, sz) !=
-                            kMatRubble)
+                            kMatRubbleConcrete)
                             continue;
                         ++fell;
                         if (sz >= 3) ++still;
@@ -646,6 +646,29 @@ void test_carve_agnostic() {
     const int ux = cx + 6;
     w.grid().set_cell(ux, cy, cz, kMatWater); // пустая маска = вся вода
     CHECK(sub_material_at(w, ux, cy, cz, 3, 3, 3) == kMatWater);
+
+    // 6) РЫХЛЫЕ ДВОЙНИКИ (решение владельца 2026-08-24): детач и писатели
+    //    конвертируют в двойника ИСХОДНИКА (вид сохраняется), среды и
+    //    небьющееся — сами себя.
+    CHECK(kMatRubbleOf[kMatConcrete] == kMatRubbleConcrete);
+    CHECK(kMatRubbleOf[kMatWater] == kMatWater);
+    CHECK(kMatRubbleOf[kMatDoor] == kMatDoor);
+    CHECK(material_is_medium(kMatRubbleConcrete)); // двойник движется строкой
+
+    // 7) ОДИН ЗАКОН СВЯЗНОСТИ НА ПИСАТЕЛЯХ: «шар» бетона в воздухе
+    //    конвертируется detach_scan'ом целиком — дальше его роняет автомат;
+    //    маски стоят (бит-кэш поедет с материей).
+    const int fx = cx + 8;
+    CellType* fp = materialize_sub_page(w, macro_index(fx, cy, cz));
+    for (int sx2 = 2; sx2 < 5; ++sx2)
+        for (int sy2 = 2; sy2 < 5; ++sy2)
+            for (int sz2 = 2; sz2 < 5; ++sz2) {
+                fp[sub_bit(sx2, sy2, sz2)] = kMatConcrete;
+                w.grid().mask(fx, cy, cz).set(sub_bit(sx2, sy2, sz2));
+            }
+    CHECK(detach_scan(w, fx, cy, cz, 3, 3, 3, 27 + 64, scratch, res) == 27);
+    CHECK(sub_material_at(w, fx, cy, cz, 2, 2, 2) == kMatRubbleConcrete);
+    CHECK(w.grid().mask(fx, cy, cz).test(sub_bit(2, 2, 2)));
 }
 
 } // namespace

@@ -41,7 +41,22 @@ inline constexpr std::uint16_t kMatHardness[kMatCount] = {
     16                  ,  // 18 fire_cell
     180                 ,  // 19 pipe_metal
     48                  ,  // 20 neon_tube
-    96                     // 21 glass
+    96                  ,  // 21 glass
+    32                  ,  // 22 rubble_concrete
+    8                   ,  // 23 rubble_soil
+    24                  ,  // 24 rubble_slab_tan
+    8                   ,  // 25 rubble_plaster
+    8                   ,  // 26 rubble_parquet
+    16                  ,  // 27 rubble_shop_shutter
+    8                   ,  // 28 rubble_lino
+    32                  ,  // 29 rubble_factory_wall
+    40                  ,  // 30 rubble_tread
+    14                  ,  // 31 rubble_rust
+    48                  ,  // 32 rubble_electric_grate
+    8                   ,  // 33 rubble_fire_cell
+    22                  ,  // 34 rubble_pipe_metal
+    8                   ,  // 35 rubble_neon_tube
+    12                     // 36 rubble_glass
 };
 
 static_assert(sizeof(kMatHardness) / sizeof(kMatHardness[0]) == kMatCount,
@@ -78,7 +93,22 @@ inline constexpr float kMatDensity[kMatCount] = {
     200.0f ,  // 18 fire_cell
     7800.0f,  // 19 pipe_metal
     1400.0f,  // 20 neon_tube
-    2500.0f   // 21 glass
+    2500.0f,  // 21 glass
+    1800.0f,  // 22 rubble_concrete
+    1200.0f,  // 23 rubble_soil
+    1650.0f,  // 24 rubble_slab_tan
+    600.0f ,  // 25 rubble_plaster
+    525.0f ,  // 26 rubble_parquet
+    5850.0f,  // 27 rubble_shop_shutter
+    900.0f ,  // 28 rubble_lino
+    5850.0f,  // 29 rubble_factory_wall
+    5850.0f,  // 30 rubble_tread
+    3900.0f,  // 31 rubble_rust
+    5850.0f,  // 32 rubble_electric_grate
+    150.0f ,  // 33 rubble_fire_cell
+    5850.0f,  // 34 rubble_pipe_metal
+    1050.0f,  // 35 rubble_neon_tube
+    1875.0f   // 36 rubble_glass
 };
 
 // Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
@@ -122,7 +152,22 @@ inline constexpr std::uint8_t kMatPhase[kMatCount] = {
     0,  // 18 fire_cell
     0,  // 19 pipe_metal
     0,  // 20 neon_tube
-    0   // 21 glass
+    0,  // 21 glass
+    0,  // 22 rubble_concrete
+    0,  // 23 rubble_soil
+    0,  // 24 rubble_slab_tan
+    0,  // 25 rubble_plaster
+    0,  // 26 rubble_parquet
+    0,  // 27 rubble_shop_shutter
+    0,  // 28 rubble_lino
+    0,  // 29 rubble_factory_wall
+    0,  // 30 rubble_tread
+    0,  // 31 rubble_rust
+    0,  // 32 rubble_electric_grate
+    0,  // 33 rubble_fire_cell
+    0,  // 34 rubble_pipe_metal
+    0,  // 35 rubble_neon_tube
+    0   // 36 rubble_glass
 };
 
 inline constexpr float kMatFlow[kMatCount] = {
@@ -147,7 +192,22 @@ inline constexpr float kMatFlow[kMatCount] = {
     0.000f,  // 18 fire_cell
     0.000f,  // 19 pipe_metal
     0.000f,  // 20 neon_tube
-    0.000f   // 21 glass
+    0.000f,  // 21 glass
+    0.100f,  // 22 rubble_concrete
+    0.100f,  // 23 rubble_soil
+    0.100f,  // 24 rubble_slab_tan
+    0.100f,  // 25 rubble_plaster
+    0.100f,  // 26 rubble_parquet
+    0.100f,  // 27 rubble_shop_shutter
+    0.100f,  // 28 rubble_lino
+    0.100f,  // 29 rubble_factory_wall
+    0.100f,  // 30 rubble_tread
+    0.100f,  // 31 rubble_rust
+    0.100f,  // 32 rubble_electric_grate
+    0.100f,  // 33 rubble_fire_cell
+    0.100f,  // 34 rubble_pipe_metal
+    0.100f,  // 35 rubble_neon_tube
+    0.100f   // 36 rubble_glass
 };
 
 inline constexpr float kMatDiffusion[kMatCount] = {
@@ -172,7 +232,22 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     0.000f,  // 18 fire_cell
     0.000f,  // 19 pipe_metal
     0.000f,  // 20 neon_tube
-    0.000f   // 21 glass
+    0.000f,  // 21 glass
+    0.000f,  // 22 rubble_concrete
+    0.000f,  // 23 rubble_soil
+    0.000f,  // 24 rubble_slab_tan
+    0.000f,  // 25 rubble_plaster
+    0.000f,  // 26 rubble_parquet
+    0.000f,  // 27 rubble_shop_shutter
+    0.000f,  // 28 rubble_lino
+    0.000f,  // 29 rubble_factory_wall
+    0.000f,  // 30 rubble_tread
+    0.000f,  // 31 rubble_rust
+    0.000f,  // 32 rubble_electric_grate
+    0.000f,  // 33 rubble_fire_cell
+    0.000f,  // 34 rubble_pipe_metal
+    0.000f,  // 35 rubble_neon_tube
+    0.000f   // 36 rubble_glass
 };
 
 inline MatPhase material_phase(CellType t) {
@@ -186,6 +261,53 @@ inline MatPhase material_phase(CellType t) {
 inline bool material_is_medium(CellType t) {
     return t != 0 && t < kMatCount &&
            (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
+}
+
+// РЫХЛЫЙ ДВОЙНИК строки (решение владельца 2026-08-24): детач меняет строку
+// куска на двойника — тот выглядит исходником (альбедо/текстура
+// наследуются) и падает автоматом. Не-рушимое и среды — сами себя.
+inline constexpr CellType kMatRubbleOf[kMatCount] = {
+    0 ,  //  0 air
+    22,  //  1 concrete
+    23,  //  2 soil
+    3 ,  //  3 water
+    24,  //  4 slab_tan
+    5 ,  //  5 extract
+    6 ,  //  6 door
+    7 ,  //  7 hub_pad
+    25,  //  8 plaster
+    26,  //  9 parquet
+    27,  // 10 shop_shutter
+    28,  // 11 lino
+    29,  // 12 factory_wall
+    30,  // 13 tread
+    31,  // 14 rust
+    15,  // 15 rubble
+    32,  // 16 electric_grate
+    17,  // 17 acid_pool
+    33,  // 18 fire_cell
+    34,  // 19 pipe_metal
+    35,  // 20 neon_tube
+    36,  // 21 glass
+    22,  // 22 rubble_concrete
+    23,  // 23 rubble_soil
+    24,  // 24 rubble_slab_tan
+    25,  // 25 rubble_plaster
+    26,  // 26 rubble_parquet
+    27,  // 27 rubble_shop_shutter
+    28,  // 28 rubble_lino
+    29,  // 29 rubble_factory_wall
+    30,  // 30 rubble_tread
+    31,  // 31 rubble_rust
+    32,  // 32 rubble_electric_grate
+    33,  // 33 rubble_fire_cell
+    34,  // 34 rubble_pipe_metal
+    35,  // 35 rubble_neon_tube
+    36   // 36 rubble_glass
+};
+
+inline CellType material_rubble_of(CellType t) {
+    return t < kMatCount ? kMatRubbleOf[t] : t;
 }
 
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
@@ -215,7 +337,22 @@ inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
     0   ,  // 18 fire_cell
     0   ,  // 19 pipe_metal
     8000,  // 20 neon_tube
-    0      // 21 glass
+    0   ,  // 21 glass
+    0   ,  // 22 rubble_concrete
+    0   ,  // 23 rubble_soil
+    0   ,  // 24 rubble_slab_tan
+    0   ,  // 25 rubble_plaster
+    0   ,  // 26 rubble_parquet
+    0   ,  // 27 rubble_shop_shutter
+    0   ,  // 28 rubble_lino
+    0   ,  // 29 rubble_factory_wall
+    0   ,  // 30 rubble_tread
+    0   ,  // 31 rubble_rust
+    0   ,  // 32 rubble_electric_grate
+    0   ,  // 33 rubble_fire_cell
+    0   ,  // 34 rubble_pipe_metal
+    0   ,  // 35 rubble_neon_tube
+    0      // 36 rubble_glass
 };
 
 inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
@@ -240,7 +377,22 @@ inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
     0   ,  // 18 fire_cell
     0   ,  // 19 pipe_metal
     1500,  // 20 neon_tube
-    0      // 21 glass
+    0   ,  // 21 glass
+    0   ,  // 22 rubble_concrete
+    0   ,  // 23 rubble_soil
+    0   ,  // 24 rubble_slab_tan
+    0   ,  // 25 rubble_plaster
+    0   ,  // 26 rubble_parquet
+    0   ,  // 27 rubble_shop_shutter
+    0   ,  // 28 rubble_lino
+    0   ,  // 29 rubble_factory_wall
+    0   ,  // 30 rubble_tread
+    0   ,  // 31 rubble_rust
+    0   ,  // 32 rubble_electric_grate
+    0   ,  // 33 rubble_fire_cell
+    0   ,  // 34 rubble_pipe_metal
+    0   ,  // 35 rubble_neon_tube
+    0      // 36 rubble_glass
 };
 
 // Linear albedo per id — the light colour source for emitters (and the same
@@ -267,7 +419,22 @@ inline constexpr float kMatAlbedoR[kMatCount] = {
     0.850f,  // 18 fire_cell
     0.130f,  // 19 pipe_metal
     0.250f,  // 20 neon_tube
-    0.620f   // 21 glass
+    0.620f,  // 21 glass
+    0.255f,  // 22 rubble_concrete
+    0.204f,  // 23 rubble_soil
+    0.306f,  // 24 rubble_slab_tan
+    0.408f,  // 25 rubble_plaster
+    0.272f,  // 26 rubble_parquet
+    0.323f,  // 27 rubble_shop_shutter
+    0.221f,  // 28 rubble_lino
+    0.187f,  // 29 rubble_factory_wall
+    0.323f,  // 30 rubble_tread
+    0.340f,  // 31 rubble_rust
+    0.722f,  // 32 rubble_electric_grate
+    0.722f,  // 33 rubble_fire_cell
+    0.111f,  // 34 rubble_pipe_metal
+    0.212f,  // 35 rubble_neon_tube
+    0.527f   // 36 rubble_glass
 };
 inline constexpr float kMatAlbedoG[kMatCount] = {
     0.000f,  //  0 air
@@ -291,7 +458,22 @@ inline constexpr float kMatAlbedoG[kMatCount] = {
     0.250f,  // 18 fire_cell
     0.160f,  // 19 pipe_metal
     0.950f,  // 20 neon_tube
-    0.700f   // 21 glass
+    0.700f,  // 21 glass
+    0.255f,  // 22 rubble_concrete
+    0.306f,  // 23 rubble_soil
+    0.255f,  // 24 rubble_slab_tan
+    0.374f,  // 25 rubble_plaster
+    0.170f,  // 26 rubble_parquet
+    0.340f,  // 27 rubble_shop_shutter
+    0.136f,  // 28 rubble_lino
+    0.255f,  // 29 rubble_factory_wall
+    0.204f,  // 30 rubble_tread
+    0.170f,  // 31 rubble_rust
+    0.595f,  // 32 rubble_electric_grate
+    0.212f,  // 33 rubble_fire_cell
+    0.136f,  // 34 rubble_pipe_metal
+    0.807f,  // 35 rubble_neon_tube
+    0.595f   // 36 rubble_glass
 };
 inline constexpr float kMatAlbedoB[kMatCount] = {
     0.000f,  //  0 air
@@ -315,7 +497,22 @@ inline constexpr float kMatAlbedoB[kMatCount] = {
     0.040f,  // 18 fire_cell
     0.140f,  // 19 pipe_metal
     0.850f,  // 20 neon_tube
-    0.720f   // 21 glass
+    0.720f,  // 21 glass
+    0.238f,  // 22 rubble_concrete
+    0.153f,  // 23 rubble_soil
+    0.187f,  // 24 rubble_slab_tan
+    0.323f,  // 25 rubble_plaster
+    0.085f,  // 26 rubble_parquet
+    0.357f,  // 27 rubble_shop_shutter
+    0.102f,  // 28 rubble_lino
+    0.187f,  // 29 rubble_factory_wall
+    0.128f,  // 30 rubble_tread
+    0.068f,  // 31 rubble_rust
+    0.128f,  // 32 rubble_electric_grate
+    0.034f,  // 33 rubble_fire_cell
+    0.119f,  // 34 rubble_pipe_metal
+    0.722f,  // 35 rubble_neon_tube
+    0.612f   // 36 rubble_glass
 };
 
 inline bool material_emits_light(CellType t) {
@@ -351,7 +548,22 @@ inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
     0,  // 18 fire_cell
     0,  // 19 pipe_metal
     1,  // 20 neon_tube
-    1   // 21 glass
+    1,  // 21 glass
+    0,  // 22 rubble_concrete
+    0,  // 23 rubble_soil
+    0,  // 24 rubble_slab_tan
+    0,  // 25 rubble_plaster
+    0,  // 26 rubble_parquet
+    0,  // 27 rubble_shop_shutter
+    0,  // 28 rubble_lino
+    0,  // 29 rubble_factory_wall
+    0,  // 30 rubble_tread
+    0,  // 31 rubble_rust
+    0,  // 32 rubble_electric_grate
+    0,  // 33 rubble_fire_cell
+    0,  // 34 rubble_pipe_metal
+    0,  // 35 rubble_neon_tube
+    0   // 36 rubble_glass
 };
 
 inline bool material_passes_light(CellType t) {

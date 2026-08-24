@@ -4510,6 +4510,34 @@ int main(int argc, char** argv) {
                             painted.push_back(static_cast<std::uint32_t>(
                                 macro_index(cx, cy, cz)));
                         }
+                    // ОДИН ЗАКОН СВЯЗНОСТИ НА ВСЕХ ПИСАТЕЛЯХ (решение
+                    // владельца 2026-08-24): нарисованный в воздухе твёрдый
+                    // шар не висит — компонент записи проверяется от центра
+                    // тем же детач-свипом, несвязанное конвертируется в
+                    // рыхлого двойника и оседает автоматом. Лимит = атомы
+                    // записи + запас: шар, слившийся со стеной, превышает
+                    // его и стоит как записан.
+                    if (material_phase(paintMat) == MatPhase::Solid &&
+                        !painted.empty()) {
+                        const auto atoms =
+                            static_cast<std::int32_t>(painted.size());
+                        const int dcx = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(bx) / kSubDim)));
+                        const int dcy = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(by) / kSubDim)));
+                        const int dcz = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(bz) / kSubDim)));
+                        static CarveResult paintDetach;
+                        if (detach_scan(w, dcx, dcy, dcz,
+                                        ((bx % kSubDim) + kSubDim) % kSubDim,
+                                        ((by % kSubDim) + kSubDim) % kSubDim,
+                                        ((bz % kSubDim) + kSubDim) % kSubDim,
+                                        atoms + 64, carveScratch,
+                                        paintDetach) > 0)
+                            painted.insert(painted.end(),
+                                           paintDetach.dirtyCells.begin(),
+                                           paintDetach.dirtyCells.end());
+                    }
                     std::sort(painted.begin(), painted.end());
                     painted.erase(std::unique(painted.begin(), painted.end()),
                                   painted.end());

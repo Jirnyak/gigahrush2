@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "world/materials.h" // kMatRubble — детач конвертирует кусок в рыхлое
-
 namespace giga {
 namespace {
 
@@ -222,6 +220,26 @@ bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
 // component into out.detached. Runs AFTER all direct removals so a component
 // severed by the joint effect of many removed voxels is judged once, against
 // the final geometry.
+// Потерявший связность компонент НЕ исчезает и НИЧЕГО не рождает (редакция
+// владельца 2026-08-24): ТЕ ЖЕ атомы на месте меняют строку на РЫХЛОГО
+// ДВОЙНИКА исходника (kMatRubbleOf — выглядит тем же материалом) и дальше
+// честно падают автоматом в гравитации фрейма, как вода: один механизм на
+// всю материю. Маска остаётся стоять — двойник твёрд, бит = кэш фазы, он
+// поедет вместе с атомом.
+void convert_component(World& w, SubField<CellType>* mats,
+                       const std::vector<std::uint32_t>& comp,
+                       CarveResult& out) {
+    for (std::uint32_t k : comp) {
+        const CellType src = mat_key(w, mats, k);
+        out.detached.push_back(
+            CarvedVoxel{k >> 9, static_cast<std::uint16_t>(k & 511u), src});
+        const std::size_t ci = k >> 9;
+        CellType* pg = materialize_sub_page(w, ci);
+        pg[k & 511u] = material_rubble_of(src);
+        out.dirtyCells.push_back(static_cast<std::uint32_t>(ci));
+    }
+}
+
 void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
                   CarveScratch& s, CarveResult& out) {
     if (out.destroyed.empty() || limit <= 0) return;
@@ -242,21 +260,7 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
             if (!solid_key(w.grid(), nk)) continue;
             ++run;
             if (!flood_component(w.grid(), vis, s, nk, run, limit)) continue;
-            for (std::uint32_t k : s.comp) {
-                out.detached.push_back(CarvedVoxel{
-                    k >> 9, static_cast<std::uint16_t>(k & 511u),
-                    mat_key(w, mats, k)});
-                // ИНКРЕМЕНТ 5, редакция владельца 2026-08-24: потерявший
-                // связность кусок НЕ исчезает и НИЧЕГО не рождает — ТЕ ЖЕ
-                // атомы на месте становятся рыхлой строкой (rubble) и дальше
-                // честно падают автоматом в гравитации фрейма, как вода:
-                // один механизм на всю материю. Маска остаётся стоять —
-                // rubble твёрд, бит = кэш фазы, он поедет вместе с атомом.
-                const std::size_t ci = k >> 9;
-                CellType* pg = materialize_sub_page(w, ci);
-                pg[k & 511u] = kMatRubble;
-                out.dirtyCells.push_back(static_cast<std::uint32_t>(ci));
-            }
+            convert_component(w, mats, s.comp, out);
         }
     }
 }
@@ -404,6 +408,24 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.destroyed.size() +
                                      out.detached.size());
+}
+
+std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
+                         int sz, std::int32_t limit, CarveScratch& scratch,
+                         CarveResult& out) {
+    out.clear();
+    if (limit <= 0) return 0;
+    SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    const std::uint32_t key =
+        key_at(wrap_macro(cx) * kSubDim + sx, wrap_macro(cy) * kSubDim + sy,
+               cz * kSubDim + sz);
+    if (!solid_key(w.grid(), key)) return 0;
+    VisitedSet vis(scratch, static_cast<std::size_t>(limit) + 8);
+    if (!flood_component(w.grid(), vis, scratch, key, /*run=*/1, limit))
+        return 0;
+    convert_component(w, mats, scratch.comp, out);
+    finalize_dirty(out);
+    return static_cast<std::int32_t>(out.detached.size());
 }
 
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
