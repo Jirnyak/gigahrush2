@@ -103,6 +103,7 @@ public:
     void clear_live() noexcept {
         live_.clear();
         std::fill(liveBits_.begin(), liveBits_.end(), 0ull);
+        std::fill(liveIndex_.begin(), liveIndex_.end(), 0xFFFFFFFFu);
         lastDispatched_ = 0;
         liveQuanta_ = 0;
         overflow_ = false;
@@ -192,6 +193,11 @@ private:
     };
     std::vector<LiveCell> live_;
     std::vector<std::uint64_t> liveBits_; // kMacroCells бит — дедуп wake
+    // Прямой индекс клетка -> позиция в live_ (8 МиБ, ~0u = не live).
+    // O(live²) линейный поиск в poll_activity был ГЛАВНЫМ ботлнеком газового
+    // обвала fps (замер 2026-08-24: poll 0 -> 6 мс на 4.7k live и рос
+    // квадратом — 50-100 мс на десятках тысяч).
+    std::vector<std::uint32_t> liveIndex_;
     // Снапшот слотов последнего диспатча — ActOut индексируется ИМ, а не
     // текущим live_ (набор мог смениться между кадрами).
     std::vector<std::uint32_t> lastSlots_;

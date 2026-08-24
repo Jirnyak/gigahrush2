@@ -256,9 +256,9 @@ void run_move(uint slot, uint threadId) {
         for (int i = 0; i < 8; ++i) {
             if ((i & stepBit) != 0) continue;
             int a = i, b = i + stepBit;
-            uint mv = 0u; int src = -1, dst = -1;
-            if (mats[a] != 0u && mats[b] == 0u) { mv = mats[a]; src = a; dst = b; }
-            else if (mats[b] != 0u && mats[a] == 0u) { mv = mats[b]; src = b; dst = a; }
+            uint mv = 0u; int dst = -1;
+            if (mats[a] != 0u && mats[b] == 0u) { mv = mats[a]; dst = b; }
+            else if (mats[b] != 0u && mats[a] == 0u) { mv = mats[b]; dst = a; }
             if (mv == 0u || !can_swap(sv[a], sv[b])) continue;
             if (ax == downAxis) {
                 // Ход «вверх» (против гравитации; a < b всегда): плотное над
@@ -266,18 +266,11 @@ void run_move(uint slot, uint threadId) {
                 bool movesUp = downPos ? (dst == a) : (dst == b);
                 if (movesUp && kMatDensity[mv] > kMatDensity[0u]) continue;
             }
-            // ПОВЕРХНОСТНОЕ НАТЯЖЕНИЕ ПО СОСЕДЯМ (владелец 2026-08-24, без
-            // новых механик): отрыв атома от СВОИХ подавлен — каждая связь
-            // в блоке режет вероятность в 8 раз (1, 1/8, 1/64, 1/512).
-            // Одиночный квант блуждает свободно, пока не прилипнет к массе;
-            // прилипнув — не отрывается: лужа собирается, а не разбредается,
-            // и её поверхность не «испаряется» одиночками по этажу.
-            float p = kMatMedium[mv].y * 0.5;
-            for (int nb = 0; nb < 3; ++nb) {
-                int other = src ^ (1 << nb);
-                if (other != dst && mats[other] == mv) p *= 0.125;
-            }
-            if (roll01(pc.params.x, minG, uint(160 + ax * 16 + i)) < p) {
+            // (Поверхностное натяжение по соседям строилось здесь и ВЫРЕЗАНО
+            // решением владельца 2026-08-24: по тестам в игре не работало —
+            // ядро остаётся минимальным, диффузия чистая.)
+            if (roll01(pc.params.x, minG, uint(160 + ax * 16 + i)) <
+                kMatMedium[mv].y * 0.5) {
                 uint t = mats[a]; mats[a] = mats[b]; mats[b] = t;
             }
         }

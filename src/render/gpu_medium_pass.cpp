@@ -66,6 +66,7 @@ bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
     live_.reserve(kLiveCap);
     lastSlots_.reserve(kLiveCap);
     liveBits_.assign(kMacroCells / 64, 0);
+    liveIndex_.assign(kMacroCells, 0xFFFFFFFFu);
     return true;
 }
 
@@ -238,6 +239,7 @@ void GpuMediumPass::wake_one(std::uint32_t ci, World& world,
         mirror.mark_dirty(&ci, 1);
     }
     liveBits_[ci >> 6] |= 1ull << (ci & 63);
+    liveIndex_[ci] = static_cast<std::uint32_t>(live_.size());
     live_.push_back({ci, 0});
     ++wokenTotal_;
 }
@@ -289,9 +291,11 @@ void GpuMediumPass::poll_activity(World& world, VoxelMirror& mirror) {
         const std::uint32_t quanta = (w >> kActQuantaShift) & 0x3FFu;
         liveQuanta_ += quanta;
 
-        LiveCell* lc = nullptr;
-        for (auto& c : live_)
-            if (c.ci == ci) { lc = &c; break; }
+        // O(1) прямым индексом — линейный поиск здесь был квадратом и
+        // главным ботлнеком газового обвала fps (замер 2026-08-24).
+        const std::uint32_t li = liveIndex_[ci];
+        LiveCell* lc = li < live_.size() && live_[li].ci == ci ? &live_[li]
+                                                              : nullptr;
         if (!lc) continue; // уснула раньше — слово опоздало
 
         if (w & kActChanged)
@@ -341,8 +345,11 @@ void GpuMediumPass::poll_activity(World& world, VoxelMirror& mirror) {
         if (live_[i].quiet >= kSleepSubsteps) {
             const std::uint32_t ci = live_[i].ci;
             liveBits_[ci >> 6] &= ~(1ull << (ci & 63));
+            liveIndex_[ci] = 0xFFFFFFFFu;
             live_[i] = live_.back();
             live_.pop_back();
+            if (i < live_.size()) liveIndex_[live_[i].ci] =
+                static_cast<std::uint32_t>(i);
             ++sleptTotal_;
             if (overflow_ && live_.size() < kLiveCap) overflow_ = false;
         } else {

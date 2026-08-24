@@ -453,6 +453,11 @@ struct CarveTiming {
     float flushMs = 0.0f;      // voxelMirror.flush (CPU-сторона стейджинга)
 };
 static CarveTiming g_carveT;
+// CPU-цена мира-автомата в кадре (профиль по числам, закон дома): шов
+// назад (apply), протокол пробуждения (poll), запись подтиков (record).
+static float g_mediumApplyMs = 0.0f;
+static float g_mediumPollMs = 0.0f;
+static float g_mediumRecMs = 0.0f;
 static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<float, std::milli>(
                std::chrono::steady_clock::now() - t0)
@@ -3456,8 +3461,10 @@ int main(int argc, char** argv) {
             }
             static std::vector<std::uint32_t> mediumMaskChanged;
             mediumMaskChanged.clear();
+            const auto ctMedA = std::chrono::steady_clock::now();
             mediumPass.apply_readback(stack.layer(activeLayer),
                                       &mediumMaskChanged);
+            g_mediumApplyMs = carve_ms_since(ctMedA);
             // Маски обломков (инкремент 5) едут с материей: изменённые
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
@@ -3465,7 +3472,9 @@ int main(int argc, char** argv) {
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
+            const auto ctMedP = std::chrono::steady_clock::now();
             mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
+            g_mediumPollMs = carve_ms_since(ctMedP);
         }
 
         // --- fixed-step simulation ----------------------------------------
@@ -7541,63 +7550,10 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // ГАЗ = МАТЕРИЯ АВТОМАТА (инкремент 4, слияние gas_sim по
-            // S16.6): засев шахт при входе на этаж — НАЛИВ toxic_gas по
-            // полю kGasField. Квант субвокселя роллом p = frac/8
-            // (stateless, зеркало carve_roll): полная концентрация поля =
-            // в ожидании 64 кванта на клетку (1 м³ газа) — облако, не
-            // кирпич. Дальше газ живёт правилом: тяжелее воздуха — тонет и
-            // стелется, diffusion строки расползается, карв рассеивает.
-            // Засев лениво по смене (этаж, слой) — один писатель на все
-            // пути входа ПО ПОСТРОЕНИЮ (урок травел-сайтной версии).
-            if (mediumPass.ready()) {
-                static int gasSeedFloor = INT_MIN;
-                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
-                if (gasSeedFloor != currentFloor ||
-                    gasSeedLayer != activeLayer) {
-                    gasSeedFloor = currentFloor;
-                    gasSeedLayer = activeLayer;
-                    World& gw = stack.layer(activeLayer);
-                    const Field<float>* gSeed =
-                        gw.fields().find<float>(kGasField);
-                    if (gSeed) {
-                        static std::vector<std::uint32_t> seeded;
-                        seeded.clear();
-                        for (std::uint32_t sci = 0; sci < kMacroCells; ++sci) {
-                            const float sfrac = gSeed->data()[sci];
-                            if (sfrac <= 0.0f) continue;
-                            CellType* pg = materialize_sub_page(gw, sci);
-                            const SubMask& sm = gw.grid().masks()[sci];
-                            const auto thr = static_cast<std::uint32_t>(
-                                sfrac * 8192.0f);
-                            bool any = false;
-                            for (int b = 0; b < kSubVoxels; ++b) {
-                                if (sm.test(b) || pg[b] != kCellAir) continue;
-                                if ((carve_hash(0x6A5EEDu ^
-                                                    static_cast<std::uint32_t>(
-                                                        currentFloor),
-                                                sci,
-                                                static_cast<std::uint32_t>(b)) &
-                                     0xFFFFu) < thr) {
-                                    pg[b] = kMatToxicGas;
-                                    any = true;
-                                }
-                            }
-                            if (any) seeded.push_back(sci);
-                        }
-                        if (!seeded.empty()) {
-                            voxelMirror.mark_dirty(seeded.data(),
-                                                   seeded.size());
-                            mediumPass.wake_cells(seeded.data(), seeded.size(),
-                                                  gw, voxelMirror);
-                            std::fprintf(stderr,
-                                         "[medium] gas seeded: %zu cells "
-                                         "(floor %d)\n",
-                                         seeded.size(), currentFloor);
-                        }
-                    }
-                }
-            }
+            // Засев газа шахт ВЫРЕЗАН (решение владельца 2026-08-24: газ на
+            // весь этаж бурлил вечно — live тысячами, обвал fps; сначала
+            // минимальное чистое ядро, газам — своё решение). Материал
+            // toxic_gas в таблице жив: `sphere toxic_gas` работает руками.
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
@@ -7758,9 +7714,11 @@ int main(int argc, char** argv) {
                 // доезжает в CPU-канон спокойным кадром.
                 const CellStep md = regime_down(
                     stack.layer(activeLayer).gravity().regime);
+                const auto ctMedR = std::chrono::steady_clock::now();
                 mediumPass.record_substeps(
                     cmd, static_cast<std::uint32_t>(owed), md,
                     mediumSubstepsDone, stack.layer(activeLayer));
+                g_mediumRecMs = carve_ms_since(ctMedR);
                 mediumSubstepsDone += owed;
                 // Числа каждый прогон (S11): раз в игровую секунду, пока
                 // есть живая материя или переполнение.
@@ -7772,11 +7730,15 @@ int main(int argc, char** argv) {
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, substeps %llu%s\n",
+                        "slept %u, substeps %llu | cpu ms: poll %.2f apply "
+                        "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
+                        static_cast<double>(g_mediumPollMs),
+                        static_cast<double>(g_mediumApplyMs),
+                        static_cast<double>(g_mediumRecMs),
                         mediumPass.overflowed() ? " [LIVE CAP OVERFLOW]" : "");
                 }
             }
