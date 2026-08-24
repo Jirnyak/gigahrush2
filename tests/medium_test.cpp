@@ -306,9 +306,12 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     std::printf("[medium_test] water: %zu quanta, %d wet columns, max height "
                 "%d, max neighbour step %d\n",
                 water.size(), wetColumns, maxH, maxStep);
-    CHECK(maxStep <= 1);      // УРОВЕНЬ
-    CHECK(wetColumns >= 30);  // растеклась далеко за след налива 4x4
-    CHECK(maxH <= 6);         // фикспоинт шага 1: пирамида 128 квантов <= 5-6
+    CHECK(maxStep <= 1);      // УРОВЕНЬ: перепад соседних столбов <= кванта
+    // ПЛОСКАЯ ЛУЖА, не пирамида (фидбек владельца в игре на первую
+    // редакцию): давление рушит столбы >= 2, скольжение доводит до краёв —
+    // 128 квантов обязаны лечь почти монослоем.
+    CHECK(wetColumns >= 80);
+    CHECK(maxH <= 2);
     // Протокол пробуждения работал: минимум клетки падения (6, 5) плюс
     // латеральные соседи лужи.
     CHECK(medium.woken_total() >= 4);
