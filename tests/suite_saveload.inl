@@ -750,9 +750,20 @@ void floor_file_round_trips() {
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 0, 3, 3) == giga::kMatPlaster);
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 1, 3, 3) == giga::kMatConcrete);
     // And the twin does NOT contain the post-save hole: it matches the save
-    // moment, not the live world's later state.
-    CHECK(std::memcmp(live.grid().masks().data(), twin.grid().masks().data(),
-                      masksAtSave.size() * sizeof(giga::SubMask)) != 0);
+    // moment, not the live world's later state. С инкремента 5 карв не
+    // испаряет материю: вырезанный атом с опорой тут же принимает
+    // rubble-обломок, и МАСКИ могут совпасть бит-в-бит — расхождение живёт в
+    // МАТЕРИАЛЕ (rubble против исходного), его и сверяем.
+    {
+        const giga::CarvedVoxel& hole = res.destroyed.front();
+        const int hx = static_cast<int>(hole.cell & 127u);
+        const int hy = static_cast<int>((hole.cell >> 7) & 127u);
+        const int hz = static_cast<int>((hole.cell >> 14) & 127u);
+        const int hsx = hole.bit & 7, hsy = (hole.bit >> 3) & 7,
+                  hsz = (hole.bit >> 6) & 7;
+        CHECK(giga::sub_material_at(live, hx, hy, hz, hsx, hsy, hsz) !=
+              giga::sub_material_at(twin, hx, hy, hz, hsx, hsy, hsz));
+    }
 
     // Rejections, each by its own gate: magic, version, size, checksum, and a
     // header-short stub. A refused file must leave a pristine twin usable.

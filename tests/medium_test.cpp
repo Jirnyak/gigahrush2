@@ -415,6 +415,90 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(medium.live_count() == 0); // мешок уснул
     }
 
+    // РУБЛ (инкремент 5): столб обломков, сброшенный в лужу, падает ВМЕСТЕ С
+    // МАСКАМИ (бит — кэш фазы, едет с материей), тонет в воде по плотности
+    // (1800 > 1000 — из строк, не из ветки), оседает и не левитирует; после
+    // шва масок бит совпадает с фазой материала ВО ВСЁМ пуле.
+    {
+        const std::uint32_t rubCell =
+            static_cast<std::uint32_t>(macro_index(65, 65, 6));
+        CellType* rp2 = materialize_sub_page(w, rubCell);
+        for (int sx = 3; sx < 5; ++sx)
+            for (int sy = 3; sy < 5; ++sy)
+                for (int sz = 3; sz < 5; ++sz) {
+                    rp2[sub_bit(sx, sy, sz)] = kMatRubble;
+                    w.grid().mask(65, 65, 6).set(sub_bit(sx, sy, sz));
+                }
+        mirror.mark_dirty(&rubCell, 1);
+        medium.wake_cells(&rubCell, 1, w, mirror);
+        for (int b = 0; b < 60; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w);
+            medium.poll_activity(w, mirror);
+        }
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        medium.apply_readback(w);
+
+        std::vector<std::uint32_t> idx2(kMacroCells);
+        CHECK(readback(dev, mirror.page_index_buffer(),
+                       kMacroCells * sizeof(std::uint32_t), idx2.data()));
+        const std::uint32_t pages2 = mirror.pages_in_pool();
+        std::vector<std::uint16_t> pool2(
+            static_cast<std::size_t>(pages2) * kSubVoxels);
+        CHECK(readback(dev, mirror.page_pool_buffer(),
+                       pool2.size() * sizeof(std::uint16_t), pool2.data()));
+
+        auto gpuMatAt = [&](int gx, int gy, int gz) -> CellType {
+            const std::uint32_t c2 = static_cast<std::uint32_t>(
+                macro_index((gx >> 3) & 127, (gy >> 3) & 127,
+                            (gz >> 3) & 127));
+            const int b2 = sub_bit(gx & 7, gy & 7, gz & 7);
+            if (idx2[c2] != gpu::VoxelMirror::kNoPage && idx2[c2] < pages2)
+                return static_cast<CellType>(
+                    pool2[static_cast<std::size_t>(idx2[c2]) * kSubVoxels +
+                          b2]);
+            const SubMask& mm = w.grid().masks()[c2];
+            return (mm.empty() || mm.test(b2)) ? w.grid().types()[c2]
+                                               : kCellAir;
+        };
+
+        int rubbleQ = 0, floating = 0, onWater = 0, maskMismatch = 0;
+        for (std::uint32_t c2 = 0; c2 < kMacroCells; ++c2) {
+            if (idx2[c2] == gpu::VoxelMirror::kNoPage || idx2[c2] >= pages2)
+                continue;
+            const std::uint16_t* page =
+                pool2.data() + static_cast<std::size_t>(idx2[c2]) * kSubVoxels;
+            const SubMask& mm = w.grid().masks()[c2];
+            const int cx2 = static_cast<int>(c2 & 127u);
+            const int cy2 = static_cast<int>((c2 >> 7) & 127u);
+            const int cz2 = static_cast<int>((c2 >> 14) & 127u);
+            for (int bit = 0; bit < kSubVoxels; ++bit) {
+                const CellType mt = static_cast<CellType>(page[bit]);
+                const bool solid =
+                    mt != kCellAir && material_phase(mt) == MatPhase::Solid;
+                if (mm.test(bit) != solid) ++maskMismatch;
+                if (mt != kMatRubble) continue;
+                ++rubbleQ;
+                const int gx = cx2 * 8 + (bit & 7);
+                const int gy = cy2 * 8 + ((bit >> 3) & 7);
+                const int gz = cz2 * 8 + ((bit >> 6) & 7);
+                const CellType below = gpuMatAt(gx, gy, (gz - 1 + 1024) & 1023);
+                if (below == kCellAir) ++floating;
+                if (below == kMatWater) ++onWater;
+            }
+        }
+        std::printf("[medium_test] rubble: %d quanta, floating %d, on-water "
+                    "%d, mask mismatches %d\n",
+                    rubbleQ, floating, onWater, maskMismatch);
+        // 8 сброшенных + 128 масочного завала генераторной кодировки (та
+        // клетка выше по сцене; она спит и никуда не делась — тоже инвариант).
+        CHECK(rubbleQ == 8 + 128);
+        CHECK(floating == 0);      // осел, не левитирует
+        CHECK(onWater == 0);       // утонул: вода не под рублом
+        CHECK(maskMismatch == 0);  // маска-кэш == фаза материала (весь пул)
+    }
+
     medium.destroy();
     mirror.destroy();
 }
@@ -449,9 +533,12 @@ void test_carve_agnostic() {
     CHECK(carve_at(w, cx, cy, cz, 3, 3, 1, 256, 42, scratch, res));
     CHECK(sub_material_at(w, cx, cy, cz, 3, 3, 1) == kCellAir);
     CHECK(w.grid().mask(cx, cy, cz).test(sub_bit(3, 3, 0)));
-    // 2) Вырезанный бетонный бит НЕ уносит воду клетки.
+    // 2) Вырезанный бетонный бит НЕ уносит воду клетки — а сам, по S16.5,
+    //    НЕ испаряется: плотность бетона выше насыпной, обломок гарантирован,
+    //    и с опорой прямо под ним он ложится на место выреза рублом.
     CHECK(carve_at(w, cx, cy, cz, 0, 0, 0, 60000, 43, scratch, res));
-    CHECK(!w.grid().mask(cx, cy, cz).test(sub_bit(0, 0, 0)));
+    CHECK(sub_material_at(w, cx, cy, cz, 0, 0, 0) == kMatRubble);
+    CHECK(w.grid().mask(cx, cy, cz).test(sub_bit(0, 0, 0)));
     CHECK(sub_material_at(w, cx, cy, cz, 4, 3, 1) == kMatWater);
     // 3) Однородная водная клетка (без страницы): карв одного атома
     //    раскрывает страницу, а не превращает всю клетку в воздух.

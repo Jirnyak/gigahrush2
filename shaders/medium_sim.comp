@@ -24,11 +24,12 @@
 // (растекание), kMatMedium.y = diffusion (расползание). Гравитация — вектор
 // ФРЕЙМА через pc.downStep (regime_down, никакого -Z), образец gas_sim.comp.
 //
-// ЧТО ДВИЖЕТСЯ: только субвоксели БЕЗ бита SubMask. Бит «твёрдое» — кэш
-// предиката по фазе (S16.1), у жидкостей и газов его нет по построению.
-// Твёрдый мир в этом инкременте автомат не трогает вовсе — обломки с
-// масками (rubble_*) войдут carve-унификацией (инкремент 5), когда автомат
-// научится писать маски.
+// ЧТО ДВИЖЕТСЯ: любая материя, чья строка даёт flow или diffusion > 0 —
+// вода, газ, RUBBLE-обломки (инкремент 5). Бит SubMask — кэш предиката
+// «твёрдое» по фазе (S16.1/S16.2): при свопе он ПЕРЕВЫЧИСЛЯЕТСЯ из фазы
+// нового материала слота — обломок падает вместе со своим битом, коллизия
+// и тени видят его живьём. Неподвижная материя (flow=0, diffusion=0 —
+// бетон) не движется параметрически, потолки целы по построению.
 //
 // ДВА РЕЖИМА одним пайплайном (pc.mode):
 //   0 MOVE   — воркгруппа = живая клетка, поток = Margolus-блок (64 блока
@@ -47,7 +48,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(std430, binding = 0) readonly buffer MaskBuf  { uint uMasks[];   }; // 16 uint/клетку
+layout(std430, binding = 0) buffer MaskBuf           { uint uMasks[];   }; // 16 uint/клетку — автомат ПИШЕТ (кэш фазы)
 layout(std430, binding = 1) readonly buffer TypeBuf  { uint uTypes[];   }; // 2 клетки/uint
 layout(std430, binding = 2) readonly buffer PageIdx  { uint uPageIdx[]; }; // 1 uint/клетку
 layout(std430, binding = 3) buffer PoolBuf           { uint uPagePool[];}; // 256 uint/страницу
@@ -105,12 +106,15 @@ float roll01(uint substep, ivec3 blockG, uint salt) {
 }
 
 // --- Субвоксель по глобальной (неврапнутой) суб-координате -------------------
+// Бита маски в структуре НЕТ: маска — кэш предиката «твёрдое» по фазе
+// материала (S16.1/S16.2), store_atom перевычисляет её при каждой записи.
+// Закон чтения держит соответствие бит <-> материал во всех страницах
+// (генераторы честны, сейвы нормализуются) — читать её незачем.
 struct Sub {
     uint ci;       // враппед-индекс клетки
     uint bit;      // 0..511 внутри клетки
     uint mat;      // материал (страница или униформ CellType)
     bool writable; // страница есть — писать можно
-    bool masked;   // бит SubMask стоит — твёрдый кэш, не трогаем
 };
 
 Sub load_sub(ivec3 g) {
@@ -119,7 +123,6 @@ Sub load_sub(ivec3 g) {
     s.ci = cell_index(c);
     ivec3 l = g & 7;
     s.bit = uint(l.x) | (uint(l.y) << 3) | (uint(l.z) << 6);
-    s.masked = mask_bit(s.ci, s.bit);
     uint pg = uPageIdx[s.ci];
     if (pg == kNoPage) {
         s.mat = cell_type(s.ci);
@@ -132,24 +135,30 @@ Sub load_sub(ivec3 g) {
     return s;
 }
 
-void store_mat(Sub s, uint mat) {
+void store_atom(Sub s, uint mat) {
     uint pg = uPageIdx[s.ci];
     uint word = pg * 256u + (s.bit >> 1);
     uint shift = (s.bit & 1u) != 0u ? 16u : 0u;
     atomicAnd(uPagePool[word], ~(0xFFFFu << shift));
     atomicOr(uPagePool[word], (mat & 0xFFFFu) << shift);
+    // Бит маски — производная фазы нового материала (инкремент 5: обломок
+    // падает вместе со своим битом — коллизия и тени видят его живьём).
+    uint mw = s.ci * 16u + (s.bit >> 5);
+    uint mbit = 1u << (s.bit & 31u);
+    if (mat != 0u && kMatPhase[mat] == 0u) atomicOr(uMasks[mw], mbit);
+    else atomicAnd(uMasks[mw], ~mbit);
 }
 
 // Подвижность: воздух — вытесняемая пустота; материя движется, если её
 // строка даёт flow или diffusion > 0. Бетон (0,0) неподвижен ПО ПОСТРОЕНИЮ —
-// потолки не рушатся от пробуждения; обломки подвижны своей строкой rubble_*.
+// потолки не рушатся от пробуждения; обломки (rubble, flow 0.1) подвижны
+// СТРОКОЙ, никакой ветки «твёрдый?» — их бит маски просто едет с ними.
 bool mobile(uint mat) {
     return mat == 0u || kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0;
 }
 
 bool can_swap(Sub a, Sub b) {
-    return a.writable && b.writable && !a.masked && !b.masked &&
-           mobile(a.mat) && mobile(b.mat);
+    return a.writable && b.writable && mobile(a.mat) && mobile(b.mat);
 }
 
 // =============================================================================
@@ -226,7 +235,7 @@ void run_move(uint slot, uint threadId) {
                 int oLo = dir == 0 ? qLow : pLow;
                 if (mats[up] == 0u || mats[oUp] != 0u || mats[oLo] != 0u)
                     continue;
-                if (!can_swap(sv[up], sv[oLo]) || sv[oUp].masked) continue;
+                if (!can_swap(sv[up], sv[oLo])) continue;
                 if (roll01(pc.params.x, minG,
                            uint(16 + ax * 32 + i * 4 + dir)) <
                     kMatMedium[mats[up]].x) {
@@ -272,7 +281,7 @@ void run_move(uint slot, uint threadId) {
     bool changedOwn = false;
     for (int i = 0; i < 8; ++i) {
         if (mats[i] == sv[i].mat) continue;
-        store_mat(sv[i], mats[i]);
+        store_atom(sv[i], mats[i]);
         if (sv[i].ci == ci) {
             changedOwn = true;
         } else {
@@ -293,13 +302,16 @@ void run_move(uint slot, uint threadId) {
 // =============================================================================
 // == SETTLE: воркгруппа = живая клетка ========================================
 // =============================================================================
-shared uint sQuanta;
+shared uint sQuanta;   // ВСЯ подвижная материя (вода + рубл) — сон, лог
+shared uint sFree;     // БЕЗмасочная среда (вода) — класс 3 (мост рендера)
 shared uint sMaskBits;
 shared uint sFaceBits;
 
 void run_settle(uint slot, uint threadId) {
     uint ci = uLive[slot];
-    if (threadId == 0u) { sQuanta = 0u; sMaskBits = 0u; sFaceBits = 0u; }
+    if (threadId == 0u) {
+        sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sFaceBits = 0u;
+    }
     barrier();
 
     uint pg = uPageIdx[ci];
@@ -314,7 +326,7 @@ void run_settle(uint slot, uint threadId) {
     barrier();
     bool maskEmpty = sMaskBits == 0u;
 
-    uint quanta = 0u, faceBits = 0u;
+    uint quanta = 0u, freeQ = 0u, faceBits = 0u;
     for (uint k = 0u; k < 8u; ++k) {
         uint bit = threadId * 8u + k;
         bool m = mask_bit(ci, bit);
@@ -324,11 +336,13 @@ void run_settle(uint slot, uint threadId) {
             uint w = uPagePool[pg * 256u + (bit >> 1)];
             mat = (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
         }
-        // Квант подвижной материи — не воздух, не под маской, строка даёт
-        // движение. Он же — кандидат будить соседа, когда прижат к грани.
-        if (!m && mat != 0u &&
+        // Подвижная материя — не воздух, строка даёт движение (вода И
+        // масочный рубл): грани для пробуждения соседей и счёт для сна.
+        // БЕЗмасочная среда отдельно — она и только она даёт класс 3.
+        if (mat != 0u &&
             (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
             quanta += 1u;
+            if (!m) freeQ += 1u;
             uint x = bit & 7u, y = (bit >> 3) & 7u, z = (bit >> 6) & 7u;
             if (x == 0u) faceBits |= 1u << 8;
             if (x == 7u) faceBits |= 1u << 9;
@@ -339,6 +353,7 @@ void run_settle(uint slot, uint threadId) {
         }
     }
     atomicAdd(sQuanta, quanta);
+    atomicAdd(sFree, freeQ);
     atomicOr(sFaceBits, faceBits);
     barrier();
 
@@ -348,7 +363,7 @@ void run_settle(uint slot, uint threadId) {
     // такие клетки платят фетч страницы на пустых битах маски в DDA.
     uint cls;
     if (sMaskBits == 512u) cls = 1u;
-    else if (sQuanta > 0u) cls = 3u;
+    else if (sFree > 0u) cls = 3u;
     else cls = sMaskBits > 0u ? 2u : 0u;
     uint shift = (ci & 3u) * 8u;
     atomicAnd(uClass[ci >> 2], ~(0xFFu << shift));

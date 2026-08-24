@@ -111,13 +111,17 @@ public:
                          const CellStep& downStep, std::uint64_t substepBase,
                          const World& world);
 
-    // Применить последний ридбек в CPU-канон: memcpy страниц слот-в-слот.
-    // Звать В НАЧАЛЕ кадра, ДО сим-писателей (карв режет уже свежую воду) и
-    // ДО poll_activity (уснувшая клетка успевает отдать финальное
-    // состояние). CPU отстаёт от материи в полёте не больше кадра — допуск
-    // канона S16.3. Чтение без фенса: рваная страница — кадровая рябь,
-    // самовыправляется следующим ридбеком.
-    void apply_readback(World& world);
+    // Применить последний ридбек в CPU-канон: memcpy страниц И МАСОК
+    // слот-в-слот (инкремент 5: автомат двигает масочный рубл — маска-кэш
+    // едет вместе с материей). Звать В НАЧАЛЕ кадра, ДО сим-писателей (карв
+    // режет уже свежую воду) и ДО poll_activity (уснувшая клетка успевает
+    // отдать финальное состояние). CPU отстаёт от материи в полёте не
+    // больше кадра — допуск канона S16.3. Чтение без фенса: рваная
+    // страница — кадровая рябь, самовыправляется следующим ридбеком.
+    // changedMasks (опц.): клетки, чья CPU-маска реально изменилась —
+    // вызывающий гасит нав-долг (patch_carved_cells, O(1)/клетка).
+    void apply_readback(World& world,
+                        std::vector<std::uint32_t>* changedMasks = nullptr);
 
     // Числа для печати каждый прогон (S11: молча не работаем).
     std::uint32_t live_count() const noexcept {
@@ -141,13 +145,16 @@ private:
     VulkanBuffer cellAct_;   // device-local: uint32 x kMacroCells (8 МиБ)
     VulkanBuffer actOut_;    // host-visible: uint32 x kLiveCap
     // Обратный шов: страницы живых клеток, 1 КиБ на слот (32 МиБ на капе;
-    // реальная цена — live x 1 КиБ копий за кадр).
+    // реальная цена — live x 1 КиБ копий за кадр) + их маски (64 Б на слот).
     VulkanBuffer pageBack_;
+    VulkanBuffer maskBack_;
     std::vector<std::uint32_t> rbSlots_;      // ci слота ридбека, ~0u = пуст
     std::vector<VkBufferCopy> rbCopies_;      // скретч без аллокаций в кадре
+    std::vector<VkBufferCopy> rbMaskCopies_;  // копии масок тем же слотам
     bool actNeedsClear_ = true;
 
-    VkBuffer mirrorPool_ = VK_NULL_HANDLE; // pagePool зеркала — источник ридбека
+    VkBuffer mirrorPool_ = VK_NULL_HANDLE;  // pagePool зеркала — источник ридбека
+    VkBuffer mirrorMasks_ = VK_NULL_HANDLE; // masks зеркала — второй источник
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;

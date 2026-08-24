@@ -39,6 +39,8 @@ bool read_spv(const char* path, std::vector<char>& out) {
 
 // Страница sub_material: kSubVoxels x u16 = 1 КиБ — слот обратного шва.
 constexpr VkDeviceSize kPageBytesBack = kSubVoxels * sizeof(std::uint16_t);
+// Маска клетки: 8 x u64 = 64 Б — второй груз шва (инкремент 5, рубл).
+constexpr VkDeviceSize kMaskBytesBack = 64;
 constexpr std::uint32_t kRbEmpty = 0xFFFFFFFFu;
 
 // Биты слова ActOut — зеркало шапки medium_sim.comp.
@@ -56,6 +58,7 @@ bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
     dev_ = dev;
     if (!dev_) return false;
     mirrorPool_ = mirror.page_pool_buffer();
+    mirrorMasks_ = mirror.masks_buffer();
     if (!create_buffers()) return false;
     if (!create_descriptors(mirror)) return false;
     if (!create_pipeline(shaderDir)) return false;
@@ -80,6 +83,7 @@ void GpuMediumPass::destroy() noexcept {
     cellAct_.destroy(*dev_);
     actOut_.destroy(*dev_);
     pageBack_.destroy(*dev_);
+    maskBack_.destroy(*dev_);
     dev_ = nullptr;
 }
 
@@ -91,6 +95,10 @@ bool GpuMediumPass::create_buffers() noexcept {
     if (!pageBack_.create_host_visible(
             *dev_, static_cast<VkDeviceSize>(kLiveCap) * kPageBytesBack,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-page-back"))
+        return false;
+    if (!maskBack_.create_host_visible(
+            *dev_, static_cast<VkDeviceSize>(kLiveCap) * kMaskBytesBack,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-mask-back"))
         return false;
     if (!cellAct_.create_device_local_empty(
             *dev_, kMacroCells * sizeof(std::uint32_t),
@@ -453,6 +461,7 @@ void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
         world.subfields().find<CellType>(kSubMaterialName);
     const std::uint32_t* pageTab = sub ? sub->page_table() : nullptr;
     rbCopies_.clear();
+    rbMaskCopies_.clear();
     if (pageTab) {
         for (std::size_t i = 0; i < live_.size(); ++i) {
             const std::uint32_t pg = pageTab[live_[i].ci];
@@ -462,6 +471,10 @@ void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
                 {static_cast<VkDeviceSize>(pg) * kPageBytesBack,
                  static_cast<VkDeviceSize>(i) * kPageBytesBack,
                  kPageBytesBack});
+            rbMaskCopies_.push_back(
+                {static_cast<VkDeviceSize>(live_[i].ci) * kMaskBytesBack,
+                 static_cast<VkDeviceSize>(i) * kMaskBytesBack,
+                 kMaskBytesBack});
         }
     }
     if (rbCopies_.empty()) return;
@@ -479,22 +492,23 @@ void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
     vkCmdCopyBuffer(cmd, mirrorPool_, pageBack_.buffer,
                     static_cast<std::uint32_t>(rbCopies_.size()),
                     rbCopies_.data());
-    VkBufferMemoryBarrier hb{};
-    hb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    vkCmdCopyBuffer(cmd, mirrorMasks_, maskBack_.buffer,
+                    static_cast<std::uint32_t>(rbMaskCopies_.size()),
+                    rbMaskCopies_.data());
+    VkMemoryBarrier hb{};
+    hb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-    hb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    hb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    hb.buffer = pageBack_.buffer;
-    hb.offset = 0;
-    hb.size = VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &hb, 0,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, nullptr, 0,
                          nullptr);
 }
 
-void GpuMediumPass::apply_readback(World& world) {
-    if (!ready() || rbSlots_.empty() || !pageBack_.mapped) return;
+void GpuMediumPass::apply_readback(World& world,
+                                   std::vector<std::uint32_t>* changedMasks) {
+    if (!ready() || rbSlots_.empty() || !pageBack_.mapped ||
+        !maskBack_.mapped)
+        return;
     SubField<CellType>* f =
         world.subfields().find<CellType>(kSubMaterialName);
     if (!f) {
@@ -502,6 +516,7 @@ void GpuMediumPass::apply_readback(World& world) {
         return;
     }
     const auto* src = static_cast<const std::uint8_t*>(pageBack_.mapped);
+    const auto* msrc = static_cast<const std::uint8_t*>(maskBack_.mapped);
     for (std::size_t i = 0; i < rbSlots_.size(); ++i) {
         const std::uint32_t ci = rbSlots_[i];
         if (ci == kRbEmpty) continue;
@@ -511,6 +526,14 @@ void GpuMediumPass::apply_readback(World& world) {
         if (!pg) continue;
         std::memcpy(pg, src + static_cast<std::size_t>(i) * kPageBytesBack,
                     kPageBytesBack);
+        // Маска-кэш едет вместе с материей (рубл, инкремент 5): изменённые
+        // клетки отдаются вызывающему — он гасит нав-долг патчем.
+        SubMask& m = world.grid().masks_mut()[ci];
+        const void* nm = msrc + static_cast<std::size_t>(i) * kMaskBytesBack;
+        if (std::memcmp(m.words, nm, kMaskBytesBack) != 0) {
+            std::memcpy(m.words, nm, kMaskBytesBack);
+            if (changedMasks) changedMasks->push_back(ci);
+        }
     }
     rbSlots_.clear(); // один ридбек — одно применение
 }

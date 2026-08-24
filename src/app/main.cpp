@@ -3458,7 +3458,17 @@ int main(int argc, char** argv) {
                 mediumPass.clear_live();
                 mediumSubstepsDone = simTick / 4;
             }
-            mediumPass.apply_readback(stack.layer(activeLayer));
+            static std::vector<std::uint32_t> mediumMaskChanged;
+            mediumMaskChanged.clear();
+            mediumPass.apply_readback(stack.layer(activeLayer),
+                                      &mediumMaskChanged);
+            // Маски обломков (инкремент 5) едут с материей: изменённые
+            // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
+            // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
+            if (!mediumMaskChanged.empty())
+                nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
+                                       mediumMaskChanged.data(),
+                                       mediumMaskChanged.size());
             mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
         }
 
