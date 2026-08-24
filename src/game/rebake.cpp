@@ -36,9 +36,11 @@ void RebakeScheduler::join_worker() {
 }
 
 void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
-                                      std::uint32_t slots) {
+                                      std::uint32_t slots,
+                                      std::uint32_t tableGen) {
     lampsLive_.assign(lamps, lamps + n);
     lightSlots_ = slots;
+    lightTableTag_ = tableGen;
     // Состав таблицы изменился (рождение/смерть лампы) — следующий
     // Rebake-цикл обязан печь свет ПОЛНОСТЬЮ (форма: слоты).
     ++lightTableGen_;
@@ -176,6 +178,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         lightGen_ = worldGen;
         lightSwapPending_ = true;
         lightTableBakedGen_ = lightTableGen_; // Fresh = полный бейк состава
+        lightTableBakedTag_ = lightTableTag_; // синхронно с живой таблицы
         ++lightFullBakes_;
         std::fprintf(stderr,
                      "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
@@ -262,6 +265,7 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         haveDirty_ && simTick - firstDirtyTick_ >= kRebakeDeadlineTicks;
     cycleLightFull_ = (lightTableGen_ != lightTableBakedGen_) || overdue;
     lightTableGenSnap_ = lightTableGen_;
+    lightTableTagSnap_ = lightTableTag_; // состав, который бейк УВИДИТ
     if (!cycleLightFull_ && carvedSnap_.empty())
         lightSwapped_ = true; // свету нечего делать — секция закрыта заранее
     snapGen_ = worldGen;
@@ -412,6 +416,10 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                     pendingLight_ = LightVisBake{};
                     lightSwapPending_ = true; // перезалить GPU-грид целиком
                     lightTableBakedGen_ = lightTableGenSnap_;
+                    // Тег состава — СНАПШОТНЫЙ, не текущий (находка №2
+                    // аудита 2026-08-23): таблица могла смениться за время
+                    // полёта бейка, легшие списки отражают снапшот.
+                    lightTableBakedTag_ = lightTableTagSnap_;
                     ++lightFullBakes_;
                 } else {
                     // Свет цикла — патчем: те же добавки в живые списки и

@@ -1720,7 +1720,8 @@ void begin_floor_nav(const World& world, int floorNumber,
     // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
     // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
     // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
-    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(), gpu::kGridCellSlots);
+    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
+                         gpu::kGridCellSlots, g_staticTableGen);
     // The ROOM zones are baked synchronously inside start_fresh, because they
     // are three multi-source BFS against the async bake's 128 — measured below
     // in the same line the nav timings print. Synchronous also means the
@@ -4475,7 +4476,8 @@ int main(int argc, char** argv) {
                                                        /*reset=*/false);
                             nav.set_light_table(g_staticLamps.data(),
                                                 g_staticLamps.size(),
-                                                gpu::kGridCellSlots);
+                                                gpu::kGridCellSlots,
+                                                g_staticTableGen);
                         }
                         light_log("[paint] mat %u: %zu cells at "
                                   "(%.1f %.1f %.1f), table now %zu lamps\n",
@@ -4530,7 +4532,8 @@ int main(int argc, char** argv) {
                                                        /*reset=*/false);
                             nav.set_light_table(g_staticLamps.data(),
                                                 g_staticLamps.size(),
-                                                gpu::kGridCellSlots);
+                                                gpu::kGridCellSlots,
+                                                g_staticTableGen);
                         }
                         g_carveT.lightMatMs += carve_ms_since(ct0);
                     }
@@ -4946,7 +4949,8 @@ int main(int argc, char** argv) {
                                                            /*reset=*/false);
                                 nav.set_light_table(g_staticLamps.data(),
                                                     g_staticLamps.size(),
-                                                    gpu::kGridCellSlots);
+                                                    gpu::kGridCellSlots,
+                                                    g_staticTableGen);
                             }
                             g_carveT.lightMatMs += carve_ms_since(ct0);
                         }
@@ -7320,10 +7324,14 @@ int main(int argc, char** argv) {
                         nav.light_vis().cells.size(),
                         static_cast<std::uint32_t>(nav.light_gen()));
                     // Полный бейк лёг — списки клеток больше не ссылаются на
-                    // лампы, умершие до этого поколения таблицы: их слоты с
-                    // этого момента можно отдавать новым лампам (см. вывод у
-                    // g_slotDeadGen).
-                    g_lightVisTableGen = g_staticTableGen;
+                    // лампы, умершие до поколения СНАПШОТА этого бейка: их
+                    // слоты можно отдавать новым лампам (см. вывод у
+                    // g_slotDeadGen). Тег — СНАПШОТНЫЙ, не текущий (находка
+                    // №2 аудита 2026-08-23): таблица могла смениться за время
+                    // полёта бейка, и текущий тег переработал бы слот лампы,
+                    // на которую легшие списки ещё ссылаются, — клетки
+                    // светили бы чужой лампой до следующего полного бейка.
+                    g_lightVisTableGen = nav.light_table_baked_tag();
                     light_log("[slots] full light bake landed at gen %u — dead "
                               "slots below it are now recyclable\n",
                               g_lightVisTableGen);

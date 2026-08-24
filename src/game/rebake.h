@@ -118,9 +118,21 @@ public:
     // uPointLights[0..staticCount). Зовётся вызывающим ДО start_fresh (лампы
     // сеются при постройке этажа) и на рождении ламп после карва (append в
     // хвост — уже запечённые id не двигаются). slots — ёмкость клетки
-    // светосетки, приходит от рендера (kGridCellSlots).
+    // светосетки, приходит от рендера (kGridCellSlots). tableGen — поколение
+    // СОСТАВА таблицы у вызывающего (g_staticTableGen): полный бейк пекётся
+    // со СНАПШОТА, и вызывающему на свапе нужен тег именно того состава,
+    // который бейк видел, — см. light_table_baked_tag().
     void set_light_table(const LightVisLamp* lamps, std::size_t n,
-                         std::uint32_t slots);
+                         std::uint32_t slots, std::uint32_t tableGen);
+
+    // Поколение состава таблицы (в номерах вызывающего), которое отражает
+    // ПОСЛЕДНИЙ ЛЕГШИЙ полный бейк видимости (находка №2 аудита 2026-08-23:
+    // на свапе брать ТЕКУЩЕЕ поколение — дыра: лампа, умершая за время
+    // полёта бейка, переработалась бы сразу, а только что легшие списки ещё
+    // ссылаются на её слот — клетки светят чужой лампой до следующего
+    // полного бейка). Читается вызывающим в точке свапа (take_light_swap)
+    // как граница переработки мёртвых слотов.
+    std::uint32_t light_table_baked_tag() const { return lightTableBakedTag_; }
 
     // Вход на этаж. Отменяет и джойнит любой бейк в полёте (мгновенно —
     // cancel-гранулярность узловая), строит ВСЕ ТРИ живых битсета с текущей
@@ -269,6 +281,12 @@ private:
     std::uint64_t lightTableGen_ = 1;
     std::uint64_t lightTableBakedGen_ = 0;
     std::uint64_t lightTableGenSnap_ = 0; // состав на старте цикла
+    // Тег состава В НОМЕРАХ ВЫЗЫВАЮЩЕГО (g_staticTableGen): текущий, на
+    // снапшоте цикла, и отражённый последним легшим полным бейком (вывод у
+    // light_table_baked_tag()).
+    std::uint32_t lightTableTag_ = 0;
+    std::uint32_t lightTableTagSnap_ = 0;
+    std::uint32_t lightTableBakedTag_ = 0;
     bool cycleLightFull_ = false; // свет этого Rebake-цикла: полный или патч
     std::uint32_t lightFullBakes_ = 0; // счётчик полных бейков (тест #1)
     std::vector<std::uint32_t> patchChangedCells_; // выход последнего патча

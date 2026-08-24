@@ -66,7 +66,7 @@ void sla_holds_on_a_real_floor() {
 
     // Ёмкость клетки светосетки — ДО start_fresh (как в main): без неё
     // stride=1 и дельта-патчу некуда дописывать (проверяется ниже).
-    s.set_light_table(nullptr, 0, 63);
+    s.set_light_table(nullptr, 0, 63, 1);
 
     // --- Fresh: текущая семантика входа на этаж --------------------------
     s.start_fresh(w.grid(), FloorKind::Residential, 0, rooms, gen);
@@ -83,6 +83,11 @@ void sla_holds_on_a_real_floor() {
     }
     CHECK(freshSwap); // ровно кадр Fresh-свапа — сигнал finish_floor_nav
     CHECK(s.ready());
+    // ТЕГ СОСТАВА (находка №2 аудита 2026-08-23): Fresh пёкся с таблицы
+    // тега 1 — ровно он и отражён; свежая смена таблицы (тег 2 ниже, у
+    // лампы) НЕ двигает baked_tag до следующего ПОЛНОГО бейка: переработка
+    // мёртвых слотов обязана ждать списков, которые их забыли.
+    CHECK(s.light_table_baked_tag() == 1);
 
     // --- Выбрать стену: полностью солидная клетка с nav-открытым соседом,
     // которого старое поле уже знает (иначе пролом вёл бы в закрытую пустоту
@@ -175,7 +180,7 @@ void sla_holds_on_a_real_floor() {
                         (static_cast<float>(nby) + 0.5f) * kCellSize,
                         (static_cast<float>(nbz) + 0.5f) * kCellSize};
         lamp.radiusM = 8.0f;
-        s.set_light_table(&lamp, 1, 63);
+        s.set_light_table(&lamp, 1, 63, 2);
         // ±2 клетки: худшая диагональ 6.9 м < охвата лампы 8+1.7 м — вторая
         // стена гарантированно в зоне затронутости.
         int target2 = -1;
@@ -227,6 +232,9 @@ void sla_holds_on_a_real_floor() {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         CHECK(s.baked_gen() == gen);
+        // Смена таблицы (тег 2) созрела полным циклом — baked_tag догнал
+        // состав ровно на свапе полного бейка, не раньше.
+        CHECK(s.light_table_baked_tag() == 2);
 
         // --- Гарантия №1 (carve-hitch.md): карв при НЕИЗМЕННОЙ таблице ламп
         // не запускает полный бейк света — актуальность держат патчи
@@ -262,6 +270,31 @@ void sla_holds_on_a_real_floor() {
         CHECK(s.light_gen() == gen);              // свет актуален...
         CHECK(s.baked_gen() == gen);              // ...нав доведён...
         CHECK(s.light_full_bakes() == fullBakes); // ...без полного бейка света
+
+        // --- Находка №2 аудита 2026-08-23 (гонка состава): таблица меняется,
+        // ПОКА полный бейк в полёте — свап обязан отразить СНАПШОТНЫЙ тег
+        // (состав, который бейк видел), не текущий: текущий переработал бы
+        // слот лампы, на которую только что легшие списки ещё ссылаются, и
+        // клетки светили бы чужой лампой до следующего полного бейка.
+        s.set_light_table(&lamp, 1, 63, 3); // смена состава → цикл будет полным
+        ++gen; // мутация мира без карва: патч невозможен (карв-долга нет)
+        const std::uint64_t race0 = clock.now();
+        while (!s.baking() &&
+               clock.now() - race0 < 4u * RebakeScheduler::kRebakeCeilTicks) {
+            s.step(clock.now(), gen);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(s.baking()); // полный цикл в полёте, снапшот тега 3 снят
+        s.set_light_table(&lamp, 1, 63, 4); // состав сменился во время полёта
+        for (;;) {
+            const std::uint64_t t = clock.now();
+            s.step(t, gen);
+            if (s.baked_gen() == gen) break;
+            if (t - race0 > 6u * RebakeScheduler::kRebakeCeilTicks) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(s.baked_gen() == gen);
+        CHECK(s.light_table_baked_tag() == 3); // снапшот, не текущий тег 4
     }
 }
 
