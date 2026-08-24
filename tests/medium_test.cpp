@@ -11,12 +11,27 @@
 //
 // Нет GPU-устройства — тест ПАДАЕТ, не скипается: GPU — осознанная часть
 // ядра мира (решение владельца 2026-08-21), дерево без него не зелёное.
+//
+// Инкремент 2: правило автомата гоняется настоящим SPIR-V (medium_sim.comp)
+// над настоящим зеркалом — вода в бассейне падает, растекается, ЗАСЫПАЕТ;
+// масса (счёт квантов) сохраняется точно; осевшие кванты стоят на опоре.
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <unordered_set>
 #include <vector>
 
-#include "render/vk_device.h"
+#include "render/gpu_medium_pass.h"
 #include "render/vk_buffer.h"
+#include "render/vk_device.h"
+#include "render/voxel_mirror.h"
+#include "world/destruct.h" // kSubMaterialName
+#include "world/gravity.h"
+#include "world/macro_grid.h"
+#include "world/materials.h" // kMatWaterMark, kMatConcrete
+#include "world/subfield.h"
+#include "world/world.h"
 
 using namespace giga;
 
@@ -106,6 +121,202 @@ void test_headless_roundtrip(const gpu::VulkanDevice& dev) {
     devBuf.destroy(dev);
 }
 
+// Один батч кадра глазами автомата: flush зеркала (CPU-писатели легли) +
+// n подтиков + settle, отдельной командой с ожиданием — после queue-idle
+// ActOut честен без оговорок про кадры в полёте.
+bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
+               gpu::GpuMediumPass& medium, World& w, std::uint32_t n,
+               std::uint64_t base) {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pci.queueFamilyIndex = dev.families.graphics;
+    if (vkCreateCommandPool(dev.device, &pci, nullptr, &pool) != VK_SUCCESS)
+        return false;
+    bool ok = false;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(dev.device, &ai, &cmd) == VK_SUCCESS) {
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+        mirror.flush(cmd, 0, w);
+        medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base);
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        ok = vkQueueSubmit(dev.graphicsQueue, 1, &si, VK_NULL_HANDLE)
+                 == VK_SUCCESS
+             && vkQueueWaitIdle(dev.graphicsQueue) == VK_SUCCESS;
+    }
+    vkDestroyCommandPool(dev.device, pool, nullptr);
+    return ok;
+}
+
+// Инкремент 2: вода в бассейне. Инварианты, а не пиксели:
+//   1. МАССА: счёт квантов после осадки == налитому (перестановка Margolus
+//      не рождает и не убивает — мутация правила красная именно здесь);
+//   2. СОН: автомат ДОСТИГАЕТ фикспоинта — live-набор пустеет (без этого
+//      спящая материя не бесплатна и S16.1 нарушен);
+//   3. ОПОРА: каждый осевший квант стоит на маске или на воде — материя не
+//      висит и не утонула в полу;
+//   4. УРОВЕНЬ: перепад соседних столбов <= 1 кванта — лужа нашла уровень с
+//      точностью формата (строго выравнивающая диагональ, см. medium_sim).
+void test_automaton_water(gpu::VulkanDevice& dev) {
+    static World w; // 128^3 решётка толще стека — статик, тест один
+    // Бассейн: дно 10x10 клеток на z=4, борта высотой 2 клетки.
+    for (int x = 60; x < 70; ++x)
+        for (int y = 60; y < 70; ++y) {
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+            if (x == 60 || x == 69 || y == 60 || y == 69) {
+                w.grid().fill_cell(x, y, 5, kMatConcrete);
+                w.grid().fill_cell(x, y, 6, kMatConcrete);
+            }
+        }
+    // Налив: столб 4x4x8 = 128 квантов ДВУМЯ КЛЕТКАМИ ВЫШЕ дна — вода
+    // обязана пролететь сквозь спящие нераскрытые клетки (пробуждение по
+    // граням раскрывает им страницы) и растечься за границы клеток вбок:
+    // тест покрывает межклеточный wake-протокол, не только правило.
+    const std::uint32_t pourCell = static_cast<std::uint32_t>(
+        macro_index(65, 65, 7));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(pourCell, w.grid().types()[pourCell]);
+    constexpr std::uint32_t kPoured = 128;
+    for (int sx = 2; sx < 6; ++sx)
+        for (int sy = 2; sy < 6; ++sy)
+            for (int sz = 0; sz < 8; ++sz)
+                pg[sub_bit(sx, sy, sz)] = kMatWaterMark;
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&pourCell, 1, w, mirror);
+    CHECK(medium.live_count() == 1);
+
+    // Прогон до сна: 8 подтиков на батч (кап кадра), потолок 250 батчей =
+    // 2000 подтиков — на порядки больше пути 27 квантов по бассейну 10x10.
+    std::uint64_t substep = 0;
+    int batches = 0;
+    for (; batches < 250 && medium.live_count() > 0; ++batches) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.poll_activity(w, mirror);
+    }
+    std::printf("[medium_test] settled after %d batches (%llu substeps), "
+                "woken %u, slept %u\n",
+                batches, static_cast<unsigned long long>(substep),
+                medium.woken_total(), medium.slept_total());
+    CHECK(medium.live_count() == 0); // СОН достигнут
+
+    // Ридбек GPU-истины: pageIdx + занятые страницы пула.
+    std::vector<std::uint32_t> idx(kMacroCells);
+    CHECK(readback(dev, mirror.page_index_buffer(),
+                   kMacroCells * sizeof(std::uint32_t), idx.data()));
+    const std::uint32_t pages = mirror.pages_in_pool();
+    CHECK(pages > 0);
+    std::vector<std::uint16_t> poolHost(
+        static_cast<std::size_t>(pages) * kSubVoxels);
+    CHECK(readback(dev, mirror.page_pool_buffer(),
+                   poolHost.size() * sizeof(std::uint16_t), poolHost.data()));
+
+    // Сбор квантов воды: глобальные суб-координаты (тор 1024 на ось).
+    std::unordered_set<std::uint64_t> water;
+    auto key = [](int gx, int gy, int gz) {
+        return (static_cast<std::uint64_t>(gz) << 20) |
+               (static_cast<std::uint64_t>(gy) << 10) |
+               static_cast<std::uint64_t>(gx);
+    };
+    for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+        if (idx[ci] == gpu::VoxelMirror::kNoPage || idx[ci] >= pages) continue;
+        const std::uint16_t* page =
+            poolHost.data() + static_cast<std::size_t>(idx[ci]) * kSubVoxels;
+        const SubMask& m = w.grid().masks()[ci];
+        const int cx = static_cast<int>(ci & 127u);
+        const int cy = static_cast<int>((ci >> 7) & 127u);
+        const int cz = static_cast<int>((ci >> 14) & 127u);
+        for (int bit = 0; bit < kSubVoxels; ++bit) {
+            if (page[bit] != kMatWaterMark || m.test(bit)) continue;
+            const int sx = bit & 7, sy = (bit >> 3) & 7, sz = (bit >> 6) & 7;
+            water.insert(key(cx * 8 + sx, cy * 8 + sy, cz * 8 + sz));
+        }
+    }
+    CHECK(water.size() == kPoured); // МАССА
+
+    // ОПОРА (гравитация NegZ): под квантом — маска или вода.
+    auto solid_at = [&](int gx, int gy, int gz) {
+        const int cx = (gx >> 3) & 127, cy = (gy >> 3) & 127,
+                  cz = (gz >> 3) & 127;
+        return w.grid().masks()[macro_index(cx, cy, cz)].test(
+            sub_bit(gx & 7, gy & 7, gz & 7));
+    };
+    int unsupported = 0;
+    for (auto it : water) {
+        const int gx = static_cast<int>(it & 0x3FF);
+        const int gy = static_cast<int>((it >> 10) & 0x3FF);
+        const int gz = static_cast<int>((it >> 20) & 0x3FF);
+        const int bz = (gz - 1 + 1024) & 1023;
+        if (!solid_at(gx, gy, bz) && !water.count(key(gx, gy, bz)))
+            ++unsupported;
+    }
+    CHECK(unsupported == 0);
+
+    // УРОВЕНЬ: высоты столбов над дном бассейна (внутренность 8x8 клеток =
+    // 64x64 столба); перепад соседних столбов с водой <= 1.
+    const int bx0 = 61 * 8, bx1 = 69 * 8; // [bx0, bx1) — внутренность
+    const int by0 = 61 * 8, by1 = 69 * 8;
+    const int zFloor = 4 * 8 + 7; // верхний субвоксель плиты дна
+    std::vector<int> height(static_cast<std::size_t>(bx1 - bx0) *
+                                static_cast<std::size_t>(by1 - by0),
+                            0);
+    auto hAt = [&](int gx, int gy) -> int& {
+        return height[static_cast<std::size_t>(gy - by0) *
+                          static_cast<std::size_t>(bx1 - bx0) +
+                      static_cast<std::size_t>(gx - bx0)];
+    };
+    for (auto it : water) {
+        const int gx = static_cast<int>(it & 0x3FF);
+        const int gy = static_cast<int>((it >> 10) & 0x3FF);
+        const int gz = static_cast<int>((it >> 20) & 0x3FF);
+        if (gx < bx0 || gx >= bx1 || gy < by0 || gy >= by1) continue;
+        const int h = gz - zFloor;
+        if (h > hAt(gx, gy)) hAt(gx, gy) = h;
+    }
+    int maxStep = 0, wetColumns = 0, maxH = 0;
+    for (int gy = by0; gy < by1; ++gy)
+        for (int gx = bx0; gx < bx1; ++gx) {
+            const int h = hAt(gx, gy);
+            if (h > 0) ++wetColumns;
+            if (h > maxH) maxH = h;
+            if (gx + 1 < bx1 && hAt(gx + 1, gy) > 0 && h > 0)
+                maxStep = std::max(maxStep, std::abs(h - hAt(gx + 1, gy)));
+            if (gy + 1 < by1 && hAt(gx, gy + 1) > 0 && h > 0)
+                maxStep = std::max(maxStep, std::abs(h - hAt(gx, gy + 1)));
+        }
+    std::printf("[medium_test] water: %zu quanta, %d wet columns, max height "
+                "%d, max neighbour step %d\n",
+                water.size(), wetColumns, maxH, maxStep);
+    CHECK(maxStep <= 1);      // УРОВЕНЬ
+    CHECK(wetColumns >= 30);  // растеклась далеко за след налива 4x4
+    CHECK(maxH <= 6);         // фикспоинт шага 1: пирамида 128 квантов <= 5-6
+    // Протокол пробуждения работал: минимум клетки падения (6, 5) плюс
+    // латеральные соседи лужи.
+    CHECK(medium.woken_total() >= 4);
+
+    medium.destroy();
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -115,6 +326,7 @@ int main() {
         CHECK(dev.families.graphics != UINT32_MAX);
         CHECK(dev.graphicsQueue != VK_NULL_HANDLE);
         test_headless_roundtrip(dev);
+        test_automaton_water(dev);
     }
     dev.destroy();
 

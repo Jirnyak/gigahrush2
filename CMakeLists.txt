@@ -384,6 +384,19 @@ add_custom_command(
     COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
 
+# МИР-АВТОМАТ (CANON S16): Margolus-правило движения материи прямо в
+# каноническом pagePool зеркала ([gpu_medium_pass.h]). Включает таблицы
+# материалов — material_surface.glsl в DEPENDS, как у растровых шейдеров.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/medium_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/medium_sim.comp
+        -o ${_giga_spv_dir}/medium_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/medium_sim.comp
+        ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl
+    COMMENT "glslc medium_sim.comp -> medium_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/medium_sim.comp.spv)
+
 # GPU verlet for antourage: wires AND cloth, one shader (chain = lattice, H=1).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/verlet_sim.comp.spv
@@ -536,9 +549,15 @@ if(GIGA_BUILD_TESTS)
     # заголовок (ensure_moltenvk_icd/SDL_setenv), окно не создаётся.
     add_executable(medium_test tests/medium_test.cpp
         src/render/vk_device.cpp src/render/vk_buffer.cpp
-        src/render/vk_common.cpp)
+        src/render/vk_common.cpp src/render/voxel_mirror.cpp
+        src/render/gpu_medium_pass.cpp)
     target_link_libraries(medium_test PRIVATE giga_core SDL3::SDL3
         Vulkan::Vulkan)
+    # Автомат (инкремент 2) гоняется в ctest настоящим SPIR-V — тем же, что
+    # играет: тест видит каталог шейдеров сборки и ждёт их компиляции.
+    target_compile_definitions(medium_test PRIVATE
+        GIGA_SHADER_DIR="${_giga_spv_dir}")
+    add_dependencies(medium_test giga_shaders)
     giga_target_flags(medium_test OFF)
     add_test(NAME medium_test COMMAND medium_test)
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField

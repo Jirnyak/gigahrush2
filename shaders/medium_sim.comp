@@ -1,0 +1,327 @@
+#version 450
+// medium_sim.comp — МИР-АВТОМАТ (CANON S16): единственный двигатель материи.
+//
+// Работает ПРЯМО в каноническом pagePool зеркала ([render/voxel_mirror.h]) —
+// «одно зеркало» в буквальном смысле: живой брик = страница sub_material
+// (512 x u16, 1 КиБ, слот-в-слот с CPU-пулом), отдельного пула бриков и
+// ping-pong-копии НЕ существует. Двухбуферность канона достигается иначе:
+// Margolus-разбиение — мир делится на НЕПЕРЕСЕКАЮЩИЕСЯ блоки 2x2x2
+// субвокселя, каждый блок обрабатывает ровно один поток, правило — чистая
+// перестановка внутри блока. Отсюда по построению:
+//   * масса сохраняется (перестановка ничего не рождает и не убивает);
+//   * гонок нет (блоки не пересекаются, in-place законен);
+//   * детерминизм (сдвиг решётки и роллы — функции номера подтика и
+//     координаты блока, ноль состояния — зеркало carve_roll).
+// Сдвиг решётки — ПОЛНЫЙ 8-фазный цикл Маргулуса: offset каждой оси = свой
+// бит номера подтика (все комбинации чётностей за 8 подтиков = 0.26 с).
+// Диагональный 2-фазный сдвиг (0,0,0)/(1,1,1) НЕ ГОДИТСЯ — доказано красным
+// тестом уровня: диагональному ходу нужна пара колонок чётности x одной фазы
+// при паре уровней чётности z другой, и такие пары не попадают в общий блок
+// никогда — ступень в 2 кванта переживала фикспоинт.
+//
+// ДВИЖЕНИЕ ЧИТАЕТ ТОЛЬКО ПАРАМЕТРЫ МАТЕРИАЛА (S16.2, ветка по фазе
+// запрещена): kMatDensity (тяжелее — тонет), kMatMedium.x = flow
+// (растекание), kMatMedium.y = diffusion (расползание). Гравитация — вектор
+// ФРЕЙМА через pc.downStep (regime_down, никакого -Z), образец gas_sim.comp.
+//
+// ЧТО ДВИЖЕТСЯ: только субвоксели БЕЗ бита SubMask. Бит «твёрдое» — кэш
+// предиката по фазе (S16.1), у жидкостей и газов его нет по построению.
+// Твёрдый мир в этом инкременте автомат не трогает вовсе — обломки с
+// масками (rubble_*) войдут carve-унификацией (инкремент 5), когда автомат
+// научится писать маски.
+//
+// ДВА РЕЖИМА одним пайплайном (pc.mode):
+//   0 MOVE   — воркгруппа = живая клетка, поток = Margolus-блок (64 блока
+//              покрывают 8³ клетки при данном сдвиге; блок принадлежит
+//              клетке, содержащей его минимальный угол — разбиение полно и
+//              непересекаемо между воркгруппами).
+//   1 SETTLE — воркгруппа = живая клетка: скан 512 субвокселей → класс-байт
+//              (3 = «есть материя сред» — мост рендера), счёт квантов,
+//              флаги «подвижная материя прижата к грани f» (протокол
+//              пробуждения соседей), сбор и сброс CellAct.
+//
+// Запись u16 в пул — АТОМАРНОЙ ПАРОЙ And/Or: при нечётном сдвиге два
+// соседних по x субвокселя одного 32-битного слова принадлежат РАЗНЫМ
+// блокам; And/Or разных половин слова коммутируют, а свою половину чужой
+// поток не читает (блоки не пересекаются).
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer MaskBuf  { uint uMasks[];   }; // 16 uint/клетку
+layout(std430, binding = 1) readonly buffer TypeBuf  { uint uTypes[];   }; // 2 клетки/uint
+layout(std430, binding = 2) readonly buffer PageIdx  { uint uPageIdx[]; }; // 1 uint/клетку
+layout(std430, binding = 3) buffer PoolBuf           { uint uPagePool[];}; // 256 uint/страницу
+layout(std430, binding = 4) buffer ClassBuf          { uint uClass[];   }; // 4 клетки/uint
+layout(std430, binding = 5) readonly buffer LiveBuf  { uint uLive[];    }; // индексы живых клеток
+layout(std430, binding = 6) buffer ActBuf            { uint uCellAct[]; }; // 1 uint/клетку (device)
+layout(std430, binding = 7) writeonly buffer ActOut  { uint uActOut[];  }; // 1 uint/живой слот (host-visible)
+
+layout(push_constant) uniform Push {
+    ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
+    uvec4 params;   // x = номер подтика, y = число живых клеток, z = режим
+} pc;
+
+#include "material_surface.glsl"
+
+const int kMacroDim = GIGA_MACRO_DIM;
+const uint kNoPage = 0xFFFFFFFFu;
+
+// --- Биты слова активности (CellAct и ActOut) --------------------------------
+// bit 0      — клетка менялась в MOVE этого подтика;
+// bits 2..4  — MOVE трогал/хотел тронуть соседа в +x/+y/+z (Margolus-блок
+//              воркгруппы наезжает только на положительный октант);
+// bits 8..13 — SETTLE: подвижная материя прижата к грани -x/+x/-y/+y/-z/+z
+//              (CPU держит соседа живым, пока клетка не заснула);
+// bits 16..25 — SETTLE: счёт квантов подвижной материи (0..512).
+const uint kActChanged = 1u;
+
+uint cell_index(ivec3 c) {
+    c &= (kMacroDim - 1); // тор: степень двойки = AND по осям
+    return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+}
+
+uint cell_type(uint ci) {
+    uint w = uTypes[ci >> 1];
+    return (ci & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
+}
+
+bool mask_bit(uint ci, uint bit) {
+    return ((uMasks[ci * 16u + (bit >> 5)] >> (bit & 31u)) & 1u) != 0u;
+}
+
+// Детерминированный ролл: хеш (подтик, координата блока, соль) -> [0,1).
+// Тот же дух, что carve_hash ([world/destruct.h]): ноль состояния,
+// bit-identical воспроизводимость.
+float roll01(uint substep, ivec3 blockG, uint salt) {
+    uint h = substep * 0x9E3779B9u;
+    h ^= uint(blockG.x) * 0x85EBCA6Bu;
+    h ^= uint(blockG.y) * 0xC2B2AE35u;
+    h ^= uint(blockG.z) * 0x27D4EB2Fu;
+    h ^= salt * 0x165667B1u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du;
+    h ^= h >> 12; h *= 0x297A2D39u;
+    h ^= h >> 15;
+    return float(h) * (1.0 / 4294967296.0);
+}
+
+// --- Субвоксель по глобальной (неврапнутой) суб-координате -------------------
+struct Sub {
+    uint ci;       // враппед-индекс клетки
+    uint bit;      // 0..511 внутри клетки
+    uint mat;      // материал (страница или униформ CellType)
+    bool writable; // страница есть — писать можно
+    bool masked;   // бит SubMask стоит — твёрдый кэш, не трогаем
+};
+
+Sub load_sub(ivec3 g) {
+    Sub s;
+    ivec3 c = ivec3(g.x >> 3, g.y >> 3, g.z >> 3);
+    s.ci = cell_index(c);
+    ivec3 l = g & 7;
+    s.bit = uint(l.x) | (uint(l.y) << 3) | (uint(l.z) << 6);
+    s.masked = mask_bit(s.ci, s.bit);
+    uint pg = uPageIdx[s.ci];
+    if (pg == kNoPage) {
+        s.mat = cell_type(s.ci);
+        s.writable = false;
+    } else {
+        uint w = uPagePool[pg * 256u + (s.bit >> 1)];
+        s.mat = (s.bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
+        s.writable = true;
+    }
+    return s;
+}
+
+void store_mat(Sub s, uint mat) {
+    uint pg = uPageIdx[s.ci];
+    uint word = pg * 256u + (s.bit >> 1);
+    uint shift = (s.bit & 1u) != 0u ? 16u : 0u;
+    atomicAnd(uPagePool[word], ~(0xFFFFu << shift));
+    atomicOr(uPagePool[word], (mat & 0xFFFFu) << shift);
+}
+
+// Подвижность: воздух — вытесняемая пустота; материя движется, если её
+// строка даёт flow или diffusion > 0. Бетон (0,0) неподвижен ПО ПОСТРОЕНИЮ —
+// потолки не рушатся от пробуждения; обломки подвижны своей строкой rubble_*.
+bool mobile(uint mat) {
+    return mat == 0u || kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0;
+}
+
+bool can_swap(Sub a, Sub b) {
+    return a.writable && b.writable && !a.masked && !b.masked &&
+           mobile(a.mat) && mobile(b.mat);
+}
+
+// =============================================================================
+// == MOVE: поток = Margolus-блок ==============================================
+// =============================================================================
+void run_move(uint slot, uint threadId) {
+    uint ci = uLive[slot];
+    ivec3 cell = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
+                       int((ci >> 14) & 127u));
+    ivec3 off = ivec3(int(pc.params.x & 1u), int((pc.params.x >> 1) & 1u),
+                      int((pc.params.x >> 2) & 1u));
+    // Мин-угол блока в глобальных суб-координатах: 4x4x4 блоков на клетку.
+    ivec3 bc = ivec3(int(threadId & 3u), int((threadId >> 2) & 3u),
+                     int((threadId >> 4) & 3u));
+    ivec3 minG = cell * 8 + bc * 2 + off;
+
+    // Восемь субвокселей блока: индекс i = x + y*2 + z*4 (локально).
+    Sub sv[8];
+    uint mats[8];
+    for (int i = 0; i < 8; ++i) {
+        ivec3 l = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        sv[i] = load_sub(minG + l);
+        mats[i] = sv[i].mat;
+    }
+
+    // Ось и знак гравитации фрейма. downAxis: 0/1/2; downPos — вниз растёт ли
+    // координата.
+    int downAxis = pc.downStep.x != 0 ? 0 : (pc.downStep.y != 0 ? 1 : 2);
+    bool downPos = pc.downStep[downAxis] > 0;
+    int axBit = 1 << downAxis; // шаг локального индекса вдоль оси
+
+    // --- Шаг 1: гравитация — плотный тонет (4 вертикальные пары). ----------
+    for (int i = 0; i < 8; ++i) {
+        if ((i & axBit) != 0) continue; // берём нижний по индексу слот пары
+        int a = i, b = i + axBit;
+        int up = downPos ? a : b;   // «выше» = дальше от направления вниз
+        int dn = downPos ? b : a;
+        if (can_swap(sv[up], sv[dn]) &&
+            kMatDensity[mats[up]] > kMatDensity[mats[dn]]) {
+            uint t = mats[up]; mats[up] = mats[dn]; mats[dn] = t;
+        }
+    }
+
+    // --- Шаг 2: растекание — СТРОГО ВЫРАВНИВАЮЩАЯ диагональ. ---------------
+    // Ход только вниз-вбок: материя с верхнего уровня блока уходит в НИЖНИЙ
+    // слот соседней колонки, когда та пуста на обоих уровнях — target всегда
+    // ниже минимум на квант. Симметричный горизонтальный шаг сознательно
+    // ЗАПРЕЩЁН: он давал вечное случайное блуждание лужи (changed каждый
+    // подтик — сон недостижим), а для уровня он не нужен — диагональ ведёт к
+    // фикспоинту «перепад соседних столбов <= 1 квант», где движение
+    // останавливается и клетка засыпает. Это и есть «лужа нашла уровень» с
+    // точностью до кванта; дальняя гидростатика (сифон) — не этот инкремент.
+    // Вероятность хода = flow (вода 1.0 — скатывается сразу, жижа 0.1 —
+    // оплывает лениво); газовая диффузия въедет слиянием gas_sim (инкр. 4).
+    // Порядок латеральных осей — от ролла: без него скат предпочитал бы x.
+    int lat0 = downAxis == 0 ? 1 : 0;
+    int lat1 = downAxis == 2 ? 1 : 2;
+    if (roll01(pc.params.x, minG, 101u) < 0.5) {
+        int t = lat0; lat0 = lat1; lat1 = t;
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        int ax = pass == 0 ? lat0 : lat1;
+        int stepBit = 1 << ax;
+        for (int i = 0; i < 8; ++i) {
+            if ((i & stepBit) != 0 || (i & axBit) != 0) continue;
+            // Колонки p (нижний слот i) и q (нижний слот i+stepBit) — «низ»
+            // по знаку гравитации.
+            int pLow = downPos ? i + axBit : i;
+            int pUp  = downPos ? i : i + axBit;
+            int qLow = downPos ? i + stepBit + axBit : i + stepBit;
+            int qUp  = downPos ? i + stepBit : i + stepBit + axBit;
+            for (int dir = 0; dir < 2; ++dir) {
+                int up = dir == 0 ? pUp : qUp;
+                int lo = dir == 0 ? qLow : pLow;
+                int mid = dir == 0 ? qUp : pUp;
+                if (mats[up] == 0u || mats[mid] != 0u || mats[lo] != 0u)
+                    continue;
+                if (!can_swap(sv[up], sv[lo]) || sv[mid].masked) continue;
+                float p = max(kMatMedium[mats[up]].x, kMatMedium[mats[up]].y);
+                if (roll01(pc.params.x, minG, uint(16 + ax * 16 + i * 2 + dir))
+                    < p) {
+                    uint t = mats[up]; mats[up] = mats[lo]; mats[lo] = t;
+                }
+            }
+        }
+    }
+
+    // --- Запись изменившихся + активность. ----------------------------------
+    uint touchedAxes = 0u;
+    bool changedOwn = false;
+    for (int i = 0; i < 8; ++i) {
+        if (mats[i] == sv[i].mat) continue;
+        store_mat(sv[i], mats[i]);
+        if (sv[i].ci == ci) {
+            changedOwn = true;
+        } else {
+            // Блок наезжает только на +октант: соседи по осям, где локальная
+            // координата выпала за клетку.
+            ivec3 l = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+            ivec3 g = minG + l;
+            if ((g.x >> 3) != cell.x) touchedAxes |= 4u;
+            if ((g.y >> 3) != cell.y) touchedAxes |= 8u;
+            if ((g.z >> 3) != cell.z) touchedAxes |= 16u;
+            atomicOr(uCellAct[sv[i].ci], kActChanged);
+        }
+    }
+    if (changedOwn) atomicOr(uCellAct[ci], kActChanged);
+    if (touchedAxes != 0u) atomicOr(uCellAct[ci], touchedAxes);
+}
+
+// =============================================================================
+// == SETTLE: воркгруппа = живая клетка ========================================
+// =============================================================================
+shared uint sQuanta;
+shared uint sMaskBits;
+shared uint sFaceBits;
+
+void run_settle(uint slot, uint threadId) {
+    uint ci = uLive[slot];
+    if (threadId == 0u) { sQuanta = 0u; sMaskBits = 0u; sFaceBits = 0u; }
+    barrier();
+
+    uint pg = uPageIdx[ci];
+    uint quanta = 0u, maskBits = 0u, faceBits = 0u;
+    for (uint k = 0u; k < 8u; ++k) {
+        uint bit = threadId * 8u + k;
+        bool m = mask_bit(ci, bit);
+        if (m) maskBits += 1u;
+        uint mat;
+        if (pg == kNoPage) mat = cell_type(ci);
+        else {
+            uint w = uPagePool[pg * 256u + (bit >> 1)];
+            mat = (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
+        }
+        // Квант подвижной материи — не воздух, не под маской, строка даёт
+        // движение. Он же — кандидат будить соседа, когда прижат к грани.
+        if (!m && mat != 0u &&
+            (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
+            quanta += 1u;
+            uint x = bit & 7u, y = (bit >> 3) & 7u, z = (bit >> 6) & 7u;
+            if (x == 0u) faceBits |= 1u << 8;
+            if (x == 7u) faceBits |= 1u << 9;
+            if (y == 0u) faceBits |= 1u << 10;
+            if (y == 7u) faceBits |= 1u << 11;
+            if (z == 0u) faceBits |= 1u << 12;
+            if (z == 7u) faceBits |= 1u << 13;
+        }
+    }
+    atomicAdd(sQuanta, quanta);
+    atomicAdd(sMaskBits, maskBits);
+    atomicOr(sFaceBits, faceBits);
+    barrier();
+
+    if (threadId != 0u) return;
+
+    // Класс-байт — мост рендера: 3 = «частичная С МАТЕРИЕЙ СРЕД», только
+    // такие клетки платят фетч страницы на пустых битах маски в DDA.
+    uint cls;
+    if (sMaskBits == 512u) cls = 1u;
+    else if (sQuanta > 0u) cls = 3u;
+    else cls = sMaskBits > 0u ? 2u : 0u;
+    uint shift = (ci & 3u) * 8u;
+    atomicAnd(uClass[ci >> 2], ~(0xFFu << shift));
+    atomicOr(uClass[ci >> 2], cls << shift);
+
+    uint act = atomicExchange(uCellAct[ci], 0u);
+    uActOut[slot] = (act & 0x1Du) | sFaceBits | (min(sQuanta, 512u) << 16);
+}
+
+void main() {
+    uint slot = gl_WorkGroupID.x;
+    if (slot >= pc.params.y) return;
+    if (pc.params.z == 0u) run_move(slot, gl_LocalInvocationID.x);
+    else run_settle(slot, gl_LocalInvocationID.x);
+}

@@ -97,6 +97,8 @@
 #include "render/cube_pass.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/gpu_gas_pass.h"
+#include "render/gpu_medium_pass.h"
+#include "world/material_props.h" // material_phase — sphere не маскирует жидкость
 #include "render/particle_pass.h"
 #include "render/verlet_pass.h"
 #include "render/prop_pass.h"
@@ -2064,6 +2066,18 @@ int main(int argc, char** argv) {
     if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
         std::fprintf(stderr, "[gas] pass init failed (continuing without gas)\n");
     }
+
+    // МИР-АВТОМАТ (CANON S16): единственный двигатель материи — Margolus-
+    // правило прямо в каноническом pagePool зеркала ([render/gpu_medium_pass.h]).
+    // Такт — каждый 4-й сим-тик (решение владельца 2026-08-24): 125/4 =
+    // 31.25 Гц, падение 0.25 м x 31.25 = 7.8 м/с; пауза и детерминизм
+    // бесплатно — стоят сим-часы, стоит материя.
+    gpu::GpuMediumPass mediumPass;
+    if (!mediumPass.init(&device, GIGA_SHADER_DIR, voxelMirror)) {
+        std::fprintf(stderr,
+                     "[medium] pass init failed (continuing without automaton)\n");
+    }
+    std::uint64_t mediumSubstepsDone = 0;
 
     // The unified particle pool: blood/dust/sparks/drips, one compute sim
     // colliding against the voxel mirror ([render/particle_pass.h]).
@@ -4451,7 +4465,13 @@ int main(int argc, char** argv) {
                             const int sx = ((gx % kSubDim) + kSubDim) % kSubDim;
                             const int sy = ((gy % kSubDim) + kSubDim) % kSubDim;
                             const int sz = ((gz % kSubDim) + kSubDim) % kSubDim;
-                            w.grid().mask(cx, cy, cz).set(sub_bit(sx, sy, sz));
+                            // Бит SubMask — кэш предиката «твёрдое» (S16.1):
+                            // жидкость и газ его не получают — `sphere water`
+                            // рождает материю, которой владеет автомат, а не
+                            // коллизийную стену.
+                            if (material_phase(paintMat) == MatPhase::Solid)
+                                w.grid().mask(cx, cy, cz).set(
+                                    sub_bit(sx, sy, sz));
                             set_sub_material(w, cx, cy, cz, sx, sy, sz,
                                              paintMat);
                             painted.push_back(static_cast<std::uint32_t>(
@@ -4462,6 +4482,15 @@ int main(int argc, char** argv) {
                                   painted.end());
                     if (!painted.empty()) {
                         voxelMirror.mark_dirty(painted.data(), painted.size());
+                        // Нетвёрдая материя — добыча автомата: разбудить
+                        // нарисованные клетки, дальше гравитация и правило
+                        // сами (решение владельца 2026-08-24: `sphere water`
+                        // и есть налив).
+                        if (mediumPass.ready() &&
+                            material_phase(paintMat) != MatPhase::Solid)
+                            mediumPass.wake_cells(painted.data(),
+                                                  painted.size(),
+                                                  w, voxelMirror);
                         ++g_worldGen;
                         nav.patch_carved_cells(w.grid(), doors, painted.data(),
                                                painted.size());
@@ -7581,12 +7610,75 @@ int main(int argc, char** argv) {
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }
+            // МИР-АВТОМАТ, CPU-сторона такта — ДО flush(): poll будит клетки
+            // (ensure_page + mark_dirty), и их страницы уезжают этим же
+            // кадром. Смена слоя = live-набор указывает в старый мир —
+            // сброс (образец газового засева выше).
+            if (mediumPass.ready()) {
+                static LayerId mediumLayer = static_cast<LayerId>(~0u);
+                if (mediumLayer != activeLayer) {
+                    mediumLayer = activeLayer;
+                    mediumPass.clear_live();
+                    mediumSubstepsDone = simTick / 4;
+                }
+                mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
+            }
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             const auto ctVf = std::chrono::steady_clock::now();
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));
             g_carveT.flushMs = carve_ms_since(ctVf);
             renderer.timer.pass_end(cmd, gpu::GpuPass::VoxelFlush);
+
+            // МИР-АВТОМАТ: подтики, назревшие по сим-часам (каждый 4-й
+            // сим-тик), СРАЗУ после flush — писатели CPU легли, барьеры
+            // внутри record_substeps упорядочат автомат до читателей кадра.
+            if (mediumPass.ready()) {
+                const std::uint64_t mediumTarget = simTick / 4;
+                std::uint64_t owed = mediumTarget > mediumSubstepsDone
+                                         ? mediumTarget - mediumSubstepsDone
+                                         : 0;
+                // Кап 8 подтиков/кадр: длинный фриз списывается вслух, а не
+                // раскручивает спираль догоняния (материя в лагах идёт чуть
+                // медленнее реального такта — честный компромисс).
+                constexpr std::uint64_t kMediumMaxPerFrame = 8;
+                if (owed > kMediumMaxPerFrame) {
+                    std::fprintf(stderr,
+                                 "[medium] dropping %llu substeps after a "
+                                 "stall (cap %llu/frame)\n",
+                                 static_cast<unsigned long long>(
+                                     owed - kMediumMaxPerFrame),
+                                 static_cast<unsigned long long>(
+                                     kMediumMaxPerFrame));
+                    mediumSubstepsDone = mediumTarget - kMediumMaxPerFrame;
+                    owed = kMediumMaxPerFrame;
+                }
+                if (owed > 0) {
+                    const CellStep md = regime_down(
+                        stack.layer(activeLayer).gravity().regime);
+                    mediumPass.record_substeps(
+                        cmd, static_cast<std::uint32_t>(owed), md,
+                        mediumSubstepsDone);
+                    mediumSubstepsDone += owed;
+                }
+                // Числа каждый прогон (S11): раз в игровую секунду, пока
+                // есть живая материя или переполнение.
+                static std::uint64_t mediumLastLog = 0;
+                if (std::getenv("GIGA_MEDIUM_DBG") &&
+                    (mediumPass.live_count() > 0 || mediumPass.overflowed()) &&
+                    simTick - mediumLastLog >= 125) {
+                    mediumLastLog = simTick;
+                    std::fprintf(
+                        stderr,
+                        "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
+                        "slept %u, substeps %llu%s\n",
+                        mediumPass.live_count(), mediumPass.live_quanta(),
+                        static_cast<double>(mediumPass.live_quanta()) * 15.6,
+                        mediumPass.woken_total(), mediumPass.slept_total(),
+                        static_cast<unsigned long long>(mediumSubstepsDone),
+                        mediumPass.overflowed() ? " [LIVE CAP OVERFLOW]" : "");
+                }
+            }
 
             // Покомпонентная строка хитча карва — каждый карв, числом, а не
             // ощущением ([markoaudit/plans/carve-hitch.md] гейты). total =
@@ -7985,6 +8077,7 @@ int main(int argc, char** argv) {
 
     particlePass.destroy();
     verletPass.destroy();
+    mediumPass.destroy();
     cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();

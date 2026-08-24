@@ -156,7 +156,7 @@ uint cell_index(ivec3 c) {
     return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
 }
 
-uint cell_class(uint ci) { // 0 empty, 1 full, 2 partial
+uint cell_class(uint ci) { // 0 empty, 1 full, 2 partial, 3 partial+материя сред
     return (uClass[ci >> 2] >> ((ci & 3u) * 8u)) & 0xFFu;
 }
 
@@ -215,8 +215,12 @@ struct Hit {
 
 // March one cell's 8^3 bits between ray times t0..t1. `axisIn` is the axis the
 // macro DDA stepped to enter this cell (-1 on the camera's own cell).
+// `matter` — клетка класса 3 (материя сред, CANON S16): субвоксель занят и
+// тогда, когда бита маски нет, но материал страницы не воздух — так лужа
+// видна ДО рендера сред (инкремент 6: прозрачность/поверхность). Обычные
+// клетки (класс 2) не платят этот фетч вовсе.
 bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
-                float t0, float t1, int axisIn, inout Hit h) {
+                float t0, float t1, int axisIn, bool matter, inout Hit h) {
     vec3 e = ro + rd * (t0 + 1e-5);
     ivec3 s = clamp(ivec3(floor((e - cellLo) / kVoxel)), ivec3(0), ivec3(7));
     vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kVoxel;
@@ -225,7 +229,7 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
     float t = t0;
     int axis = axisIn;
     for (int i = 0; i < 32; ++i) {
-        if (sub_solid(ci, s)) {
+        if (sub_solid(ci, s) || (matter && sub_mat(ci, s) != 0u)) {
             h.t = t;
             h.n = vec3(0.0);
             if (axis >= 0) h.n[axis] = -float(stp[axis]);
@@ -292,7 +296,7 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
                 return h;
             }
             if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
-                           min(tExit, tCap), axis, h))
+                           min(tExit, tCap), axis, cls == 3u, h))
                 return h;
         }
         axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)

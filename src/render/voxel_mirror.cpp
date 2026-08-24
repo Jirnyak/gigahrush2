@@ -8,6 +8,7 @@
 #include "world/destruct.h" // kSubMaterialName
 #include "world/field.h"    // the mirrored "fluid" macro field
 #include "world/macro_grid.h"
+#include "world/material_props.h" // kMatFlow/kMatDiffusion — класс 3 «среды»
 #include "world/stain.h"    // StainRGB — the paged stain mirror
 #include "world/subfield.h"
 #include "world/world.h"
@@ -39,10 +40,29 @@ void barrier_transfer_to_shader(VkCommandBuffer cmd) {
                          0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 
-// 0 empty / 1 full / 2 partial — the raymarcher's macro skip byte.
-std::uint8_t classify(const SubMask& m) {
-    if (m.empty()) return 0;
-    return m.full() ? 1 : 2;
+// 0 empty / 1 full / 2 partial / 3 partial С МАТЕРИЕЙ СРЕД — the raymarcher's
+// macro skip byte. Класс 3 (CANON S16, мост рендера): в клетке есть материя
+// без бита маски, чья строка движется (flow/diffusion > 0) — вода, газ.
+// Только такие клетки платят фетч страницы на пустых битах маски в DDA;
+// обычный мир (0/1/2) стоит ровно как раньше. GPU-двойник закона — settle в
+// [shaders/medium_sim.comp]; разъедутся — verify() покраснеет.
+bool material_is_medium(CellType t) {
+    return t != 0 && t < kMatCount &&
+           (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
+}
+
+std::uint8_t classify(const SubMask& m, CellType type, const CellType* page) {
+    if (m.full()) return 1;
+    if (page) {
+        for (int i = 0; i < kSubVoxels; ++i) {
+            const CellType mt = page[i];
+            if (mt != 0 && !m.test(i) && material_is_medium(mt)) return 3;
+        }
+    } else if (material_is_medium(type)) {
+        // Однородная нетвёрдая клетка (вода схлопнулась в CellType).
+        return 3;
+    }
+    return m.empty() ? 0 : 2;
 }
 
 // CPU stain atoms are 3 B; the GPU page holds one u32 per atom.
@@ -261,7 +281,8 @@ bool VoxelMirror::upload_all(const World& world) {
 
     classScratch_.resize(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
-        classScratch_[i] = classify(g.masks()[i]);
+        classScratch_[i] =
+            classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
     ok = ok && upload_via_staging(classes_, classScratch_.data(), kClassBytes);
 
     // Fluid: the field's bytes when the layer has one, zeros otherwise — a
@@ -405,7 +426,8 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         off += bytes;
 
         for (std::uint32_t k = 0; k < len; ++k)
-            base[off + k] = classify(g.masks()[c0 + k]);
+            base[off + k] = classify(g.masks()[c0 + k], g.types()[c0 + k],
+                                     sub ? sub->page(c0 + k) : nullptr);
         classCopies_.push_back({off, static_cast<VkDeviceSize>(c0),
                                 static_cast<VkDeviceSize>(len)});
         off += len;
@@ -590,7 +612,8 @@ bool VoxelMirror::verify(const World& world) {
                           "page-index", &m2) && ok;
     classScratch_.resize(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
-        classScratch_[i] = classify(g.masks()[i]);
+        classScratch_[i] =
+            classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
     ok = readback_compare(classes_, classScratch_.data(), kClassBytes, "class",
                           &m4) && ok;
     if (sub && poolCount > 0)

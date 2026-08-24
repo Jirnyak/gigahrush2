@@ -520,6 +520,14 @@ const uint kMaterialCsvRows = %du;
         fh.write(");\n\n")
         fh.write("const uint kMatPhase[%d] = uint[%d](\n" % (n, n))
         fh.write(elements(mats, ["%du" % PHASE[m["phase"]] for m in mats], names))
+        fh.write(");\n\n")
+
+        fh.write("// Плотность кг/м³ — третий параметр движения материи\n"
+                 "// (CANON S16.2: тяжелее — тонет, легче — всплывает).\n"
+                 "// Зеркало kMatDensity [world/material_props.h].\n")
+        fh.write("const float kMatDensity[%d] = float[%d](\n" % (n, n))
+        fh.write(elements(mats,
+                          ["%.1f" % m["density"] for m in mats], names))
         fh.write(");\n")
 
     sys.stderr.write(

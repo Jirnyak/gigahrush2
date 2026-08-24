@@ -266,3 +266,31 @@ const uint kMatPhase[22] = uint[22](
     0u,  // 20 neon_tube
     0u   // 21 glass
 );
+
+// Плотность кг/м³ — третий параметр движения материи
+// (CANON S16.2: тяжелее — тонет, легче — всплывает).
+// Зеркало kMatDensity [world/material_props.h].
+const float kMatDensity[22] = float[22](
+    0.0   ,  //  0 air
+    2400.0,  //  1 concrete
+    1600.0,  //  2 soil
+    1000.0,  //  3 water_mark
+    2200.0,  //  4 slab_tan
+    2400.0,  //  5 extract
+    7800.0,  //  6 door
+    2400.0,  //  7 hub_pad
+    800.0 ,  //  8 plaster
+    700.0 ,  //  9 parquet
+    7800.0,  // 10 shop_shutter
+    1200.0,  // 11 lino
+    7800.0,  // 12 factory_wall
+    7800.0,  // 13 tread
+    5200.0,  // 14 rust
+    1800.0,  // 15 rubble
+    7800.0,  // 16 electric_grate
+    1100.0,  // 17 acid_pool
+    200.0 ,  // 18 fire_cell
+    7800.0,  // 19 pipe_metal
+    1400.0,  // 20 neon_tube
+    2500.0   // 21 glass
+);
