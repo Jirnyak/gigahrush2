@@ -182,6 +182,18 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 w.grid().fill_cell(x, y, 6, kMatConcrete);
             }
         }
+    // «Завал» генераторной кодировки на дне бассейна: безстраничная клетка
+    // ТИПА rubble (среда: flow 0.1) с частичной маской. Закон чтения обязан
+    // видеть в её дырах ВОЗДУХ — прежняя трактовка «немаскированное читается
+    // типом» рождала из завала полный куб «грязи» (скриншот владельца).
+    const std::uint32_t moundCell =
+        static_cast<std::uint32_t>(macro_index(63, 63, 5));
+    w.grid().set_cell(63, 63, 5, kMatRubble);
+    for (int sy = 0; sy < 8; ++sy)
+        for (int sx = 0; sx < 8; ++sx)
+            for (int sz = 0; sz < 2; ++sz)
+                w.grid().mask(63, 63, 5).set(sub_bit(sx, sy, sz));
+
     // Налив: столб 4x4x8 = 128 квантов ДВУМЯ КЛЕТКАМИ ВЫШЕ дна — вода
     // обязана пролететь сквозь спящие нераскрытые клетки (пробуждение по
     // граням раскрывает им страницы) и растечься за границы клеток вбок:
@@ -245,6 +257,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                (static_cast<std::uint64_t>(gy) << 10) |
                static_cast<std::uint64_t>(gx);
     };
+    int unmaskedRubble = 0;
     for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
         if (idx[ci] == gpu::VoxelMirror::kNoPage || idx[ci] >= pages) continue;
         const std::uint16_t* page =
@@ -254,12 +267,23 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         const int cy = static_cast<int>((ci >> 7) & 127u);
         const int cz = static_cast<int>((ci >> 14) & 127u);
         for (int bit = 0; bit < kSubVoxels; ++bit) {
+            if (page[bit] == kMatRubble && !m.test(bit)) ++unmaskedRubble;
             if (page[bit] != kMatWater || m.test(bit)) continue;
             const int sx = bit & 7, sy = (bit >> 3) & 7, sz = (bit >> 6) & 7;
             water.insert(key(cx * 8 + sx, cy * 8 + sy, cz * 8 + sz));
         }
     }
     CHECK(water.size() == kPoured); // МАССА
+    CHECK(unmaskedRubble == 0);     // завал не родил материю из ниоткуда
+
+    // Класс клетки завала — 2 (частичная твёрдая), НЕ 3: и CPU-classify
+    // (upload/flush), и GPU-settle (клетку будила вода) обязаны читать закон
+    // одинаково.
+    {
+        std::vector<std::uint8_t> cls(kMacroCells);
+        CHECK(readback(dev, mirror.class_buffer(), kMacroCells, cls.data()));
+        CHECK(cls[moundCell] == 2);
+    }
 
     // ОБРАТНЫЙ ШОВ (инкремент 3): CPU-канон сошёлся с GPU с точностью
     // кадра — карв и сейв видят ту же воду, фантомы стейл-страниц мертвы.
@@ -440,6 +464,21 @@ void test_carve_agnostic() {
         materialize_sub_page(w, macro_index(mx, cy, cz));
     CHECK(mp[sub_bit(1, 1, 1)] == kCellAir);
     CHECK(mp[sub_bit(0, 0, 0)] == kMatConcrete);
+
+    // 5) Закон чтения и для ТИПА-СРЕДЫ (rubble-завал генератора, «блок
+    //    грязи»): частичная маска — дыры воздух и в sub_material_at, и в
+    //    материализации; пустая маска (вода после collapse) — весь тип.
+    const int rx = cx + 5;
+    w.grid().set_cell(rx, cy, cz, kMatRubble);
+    w.grid().mask(rx, cy, cz).set(sub_bit(0, 0, 0));
+    CHECK(sub_material_at(w, rx, cy, cz, 0, 0, 0) == kMatRubble);
+    CHECK(sub_material_at(w, rx, cy, cz, 5, 5, 5) == kCellAir);
+    const CellType* rp = materialize_sub_page(w, macro_index(rx, cy, cz));
+    CHECK(rp[sub_bit(0, 0, 0)] == kMatRubble);
+    CHECK(rp[sub_bit(5, 5, 5)] == kCellAir);
+    const int ux = cx + 6;
+    w.grid().set_cell(ux, cy, cz, kMatWater); // пустая маска = вся вода
+    CHECK(sub_material_at(w, ux, cy, cz, 3, 3, 3) == kMatWater);
 }
 
 } // namespace

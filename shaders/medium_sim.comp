@@ -303,13 +303,23 @@ void run_settle(uint slot, uint threadId) {
     barrier();
 
     uint pg = uPageIdx[ci];
-    uint quanta = 0u, maskBits = 0u, faceBits = 0u;
+    // Фаза 1: счёт маски — закону чтения безстраничной клетки (двойник
+    // sub_material_at [world/destruct.cpp]) нужна ПУСТОТА маски всей клетки:
+    // пустая — клетка однородна типом (вода после collapse); непустая —
+    // немаскированное ВОЗДУХ (rubble-завал генератора — не материя в дырах).
+    uint maskBits = 0u;
+    for (uint k = 0u; k < 8u; ++k)
+        if (mask_bit(ci, threadId * 8u + k)) maskBits += 1u;
+    atomicAdd(sMaskBits, maskBits);
+    barrier();
+    bool maskEmpty = sMaskBits == 0u;
+
+    uint quanta = 0u, faceBits = 0u;
     for (uint k = 0u; k < 8u; ++k) {
         uint bit = threadId * 8u + k;
         bool m = mask_bit(ci, bit);
-        if (m) maskBits += 1u;
         uint mat;
-        if (pg == kNoPage) mat = cell_type(ci);
+        if (pg == kNoPage) mat = maskEmpty ? cell_type(ci) : 0u;
         else {
             uint w = uPagePool[pg * 256u + (bit >> 1)];
             mat = (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
@@ -329,7 +339,6 @@ void run_settle(uint slot, uint threadId) {
         }
     }
     atomicAdd(sQuanta, quanta);
-    atomicAdd(sMaskBits, maskBits);
     atomicOr(sFaceBits, faceBits);
     barrier();
 

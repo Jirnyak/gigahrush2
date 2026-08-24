@@ -279,6 +279,14 @@ bool carve_roll(std::uint32_t h, std::uint16_t power, std::uint16_t hardness) {
            (static_cast<std::uint64_t>(power) << 16);
 }
 
+// ЗАКОН ЧТЕНИЯ БЕЗСТРАНИЧНОЙ КЛЕТКИ (S16.1, единая выписка — двойники:
+// materialize_sub_page ниже, classify [render/voxel_mirror.cpp], settle
+// [shaders/medium_sim.comp]): маска ПУСТА — вся клетка её типа (однородная
+// материя: вода, схлопнутая collapse'ом); маска НЕПУСТА — немаскированный
+// атом ВОЗДУХ. Прежнее «немаскированное читается типом» рождало материю из
+// ниоткуда: клетка rubble-завала (тип rubble + частичная маска, генераторная
+// кодировка) при пробуждении превращалась в полный куб «грязи» — фидбек
+// владельца 2026-08-24, скриншот дыры в полу.
 CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
                          int sy, int sz) {
     const std::size_t ci =
@@ -286,7 +294,9 @@ CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
     const CellType base = w.grid().types()[ci];
     const SubField<CellType>* f =
         w.subfields().find<CellType>(kSubMaterialName);
-    return f ? f->at(ci, sub_bit(sx, sy, sz), base) : base;
+    if (f && f->paged(ci)) return f->page(ci)[sub_bit(sx, sy, sz)];
+    const SubMask& m = w.grid().masks()[ci];
+    return (m.empty() || m.test(sub_bit(sx, sy, sz))) ? base : kCellAir;
 }
 
 CellType* materialize_sub_page(World& w, std::size_t ci) {
@@ -296,14 +306,13 @@ CellType* materialize_sub_page(World& w, std::size_t ci) {
     const CellType base = w.grid().types()[ci];
     CellType* pg = f.ensure_page(ci, base);
     const SubMask& m = w.grid().masks()[ci];
-    if (!m.full()) {
-        // Дыры без бита: воздух; однородная материя сред (вода без масок по
-        // канону S16.2) остаётся своим материалом.
-        const CellType hole = material_is_medium(base) ? base : kCellAir;
-        if (hole != base)
-            for (int b = 0; b < kSubVoxels; ++b)
-                if (!m.test(b)) pg[b] = hole;
-    }
+    // Закон чтения безстраничной клетки (см. sub_material_at): маска пуста —
+    // клетка однородна своим типом (страница уже залита base); маска
+    // непуста — немаскированное ВОЗДУХ. Прежний гейт «medium остаётся
+    // типом» заливал rubble-завалу и дыры — куб «грязи» из ниоткуда.
+    if (!m.full() && !m.empty())
+        for (int b = 0; b < kSubVoxels; ++b)
+            if (!m.test(b)) pg[b] = kCellAir;
     return pg;
 }
 

@@ -54,8 +54,12 @@ std::uint8_t classify(const SubMask& m, CellType type, const CellType* page) {
             const CellType mt = page[i];
             if (mt != 0 && !m.test(i) && material_is_medium(mt)) return 3;
         }
-    } else if (material_is_medium(type)) {
-        // Однородная нетвёрдая клетка (вода схлопнулась в CellType).
+    } else if (m.empty() && material_is_medium(type)) {
+        // Закон чтения безстраничной клетки (sub_material_at,
+        // [world/destruct.cpp]): ТОЛЬКО пустая маска означает «вся клетка
+        // своего типа» (вода после collapse). Частичная маска + тип-среда
+        // (rubble-завал генератора) — НЕ материя в дырах: класс 3 без этого
+        // гейта рождал полный куб «грязи» из ниоткуда.
         return 3;
     }
     return m.empty() ? 0 : 2;
