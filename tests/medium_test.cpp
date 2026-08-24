@@ -257,7 +257,10 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                (static_cast<std::uint64_t>(gy) << 10) |
                static_cast<std::uint64_t>(gx);
     };
-    int unmaskedRubble = 0;
+    // Инвариант закона чтения на ВЕСЬ пул: немаскированного атома ТВЁРДОГО
+    // материала не существует (кубы-призраки = ровно его нарушение: заливка
+    // страниц базой у генераторов/материализации).
+    int unmaskedSolid = 0;
     for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
         if (idx[ci] == gpu::VoxelMirror::kNoPage || idx[ci] >= pages) continue;
         const std::uint16_t* page =
@@ -267,14 +270,16 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         const int cy = static_cast<int>((ci >> 7) & 127u);
         const int cz = static_cast<int>((ci >> 14) & 127u);
         for (int bit = 0; bit < kSubVoxels; ++bit) {
-            if (page[bit] == kMatRubble && !m.test(bit)) ++unmaskedRubble;
-            if (page[bit] != kMatWater || m.test(bit)) continue;
+            const CellType mt = static_cast<CellType>(page[bit]);
+            if (mt != 0 && !m.test(bit) && !material_is_medium(mt))
+                ++unmaskedSolid;
+            if (mt != kMatWater || m.test(bit)) continue;
             const int sx = bit & 7, sy = (bit >> 3) & 7, sz = (bit >> 6) & 7;
             water.insert(key(cx * 8 + sx, cy * 8 + sy, cz * 8 + sz));
         }
     }
     CHECK(water.size() == kPoured); // МАССА
-    CHECK(unmaskedRubble == 0);     // завал не родил материю из ниоткуда
+    CHECK(unmaskedSolid == 0); // материи из ниоткуда нет (закон чтения)
 
     // Класс клетки завала — 2 (частичная твёрдая), НЕ 3: и CPU-classify
     // (upload/flush), и GPU-settle (клетку будила вода) обязаны читать закон

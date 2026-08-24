@@ -298,7 +298,17 @@ void put_bits(MacroGrid& g, SubField<CellType>& sm, int x, int y, int z, int wz,
     if (!page && cur == kCellAir) {
         g.set_cell(x, y, z, mat);
     } else if (page || cur != mat) {
-        CellType* pg = page ? page : sm.ensure_page(ci, cur);
+        CellType* pg = page;
+        if (!pg) {
+            pg = sm.ensure_page(ci, cur);
+            // Закон чтения (S16.1, sub_material_at [world/destruct.h]):
+            // немаскированный атом страницы — ВОЗДУХ. Прежняя заливка базой
+            // клала «паркет» в пустую середину сэндвича — фантомные
+            // кубы-призраки, когда вода делала клетку классом 3 (скриншоты
+            // владельца 2026-08-24).
+            for (int i = 0; i < kSubVoxels; ++i)
+                if (!m.test(i)) pg[i] = kCellAir;
+        }
         for (int i = 0; i < 64; ++i)
             if ((bits >> i) & 1u) pg[wz * 64 + i] = mat;
     }

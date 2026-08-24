@@ -19,6 +19,7 @@
 #include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "sim/rigid.h"        // rigid_attach_* — сборка тел ядра (v18 обломки)
+#include "world/material_props.h" // material_is_medium — нормализация страниц
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
 
@@ -1513,6 +1514,17 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
             for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
         }
         if (at != kSubVoxels) return false;
+        // Закон чтения (S16.1, sub_material_at [world/destruct.h]):
+        // немаскированного атома ТВЁРДОГО материала не существует. Страницы
+        // старых сейвов (заливка базой до 2026-08-24) несут фантомную
+        // материю в дырах — кубы-призраки при классе 3; нормализуем на
+        // входе. Материя сред без маски (вода) легальна.
+        const SubMask& pm = masks[cell];
+        if (!pm.full())
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (!pm.test(b) && pg[b] != kCellAir &&
+                    !material_is_medium(pg[b]))
+                    pg[b] = kCellAir;
     }
     // Every byte consumed, none left over — same discipline as save_read.
     return r.ok() && r.at() == n;
