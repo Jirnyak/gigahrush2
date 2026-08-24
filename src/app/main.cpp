@@ -186,10 +186,14 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
 // Поле светоячеек под этими эмиттерами: полный субвоксельный скан 128³ платится
-// один раз при постройке этажа; карв и кисть neon латают поле по своим
+// один раз при постройке этажа; карв и спавн неона латают поле по своим
 // dirtyCells — фриз 284 мс на каждом разрушении неона убит этим разделением
 // ([markoaudit/plans/neon-topology.md] §4).
 static game::EmitterField g_emitterField;
+// Идентичность кластеров между бейками — из СВЯЗНОСТИ атомов (решение
+// владельца 2026-08-24): id компоненты переживает изменение формы, позиция —
+// производная для рендера. Сбрасывается постройкой этажа вместе с таблицей.
+static game::EmitterClusters g_emitterClusters;
 
 // ЛОГ СВЕТА В ФАЙЛ (GIGA_LIGHT_LOG=1 -> light_debug.log рядом с бинарём).
 // Просьба владельца 2026-08-23: он играет и даёт фидбек, а строки в stderr
@@ -220,17 +224,19 @@ static void light_log(const char* fmt, ...) {
 static std::vector<game::LightVisLamp> g_staticLamps;
 static std::vector<gpu::GpuPointLight> g_staticLightBase;
 static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
-// Ключ позиции кластера светоматериала -> его слот. СТАБИЛЬНОСТЬ СЛОТОВ
+// id компоненты светоматериала -> её слот. СТАБИЛЬНОСТЬ СЛОТОВ
 // (баг найден и починен 2026-08-23): раньше таблица пересобиралась с нуля и
 // слоты раздавались по порядку обхода, поэтому гибель ОДНОЙ лампы сдвигала
 // id всех следующих — а запечённая видимость продолжала ссылаться на старые
 // номера, и до полного ребейка (до секунды) часть клеток светила ЧУЖИМИ
 // лампами. Теперь таблица в пределах этажа только РАСТЁТ: проп узнаёт свой
-// слот по PropLight.slot, кластер светоматериала — по позиции, а умершая
-// лампа оставляет НАДГРОБИЕ (радиус 0) вместо сдвига соседей. Заголовок
-// gpu_light_grid.h обещал эту стабильность с самого начала — теперь код ей
-// соответствует.
-static std::vector<std::pair<std::uint64_t, std::uint32_t>> g_bakedSlotByPos;
+// слот по PropLight.slot, кластер светоматериала — по id связной компоненты
+// атомов ([game/light_bake.h] EmitterClusters; матчить по позиции центроида —
+// хардкод и ошибка, решение владельца 2026-08-24: отломил кусок — центроид
+// уехал — система видела ДРУГУЮ лампу), а умершая лампа оставляет НАДГРОБИЕ
+// (радиус 0) вместо сдвига соседей. Заголовок gpu_light_grid.h обещал эту
+// стабильность с самого начала — теперь код ей соответствует.
+static std::vector<std::pair<std::uint32_t, std::uint32_t>> g_bakedSlotById;
 // Поколение таблицы, в котором слот умер (kAlive = живой). ПЕРЕРАБОТКА СЛОТОВ
 // (закон дома «пул с переработкой», CANON S11): новая лампа занимает мёртвый
 // слот, если он есть, и только иначе растит таблицу. Условие переработки —
@@ -278,20 +284,10 @@ static bool skip_pass(const char* name) {
 // пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
 // светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
 // пишет collect_scene_lights (мерцание/обесточка/поломка; 0 = надгробие).
-// Ключ позиции для матчинга кластеров между пересборками: сантиметры,
-// упакованные в u64 (мир 256 м = 25600 см влезает в 21 бит на ось).
-static std::uint64_t light_pos_key(const vec3& p) {
-    const auto q = [](float v) {
-        return static_cast<std::uint64_t>(
-                   static_cast<std::int64_t>(std::lround(v * 100.0f)) &
-                   0x1FFFFF);
-    };
-    return q(p.x) | (q(p.y) << 21) | (q(p.z) << 42);
-}
-
+//
 // reset — постройка этажа: таблица начинается с нуля (за ней всё равно идёт
 // полный бейк видимости). Без reset (карв по светоматериалу) слоты СТАБИЛЬНЫ:
-// см. вывод у g_bakedSlotByPos.
+// см. вывод у g_bakedSlotById.
 static void rebuild_static_light_table(Registry& reg, LayerId layer,
                                        bool reset) {
     // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
@@ -308,7 +304,7 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
     if (reset) {
         g_staticLamps.clear();
         g_staticLightBase.clear();
-        g_bakedSlotByPos.clear();
+        g_bakedSlotById.clear();
         g_slotDeadGen.clear();
     }
     g_slotDeadGen.resize(g_staticLamps.size(), kSlotAlive);
@@ -369,22 +365,22 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
         pl.slot = put_lamp(pl.slot, tr.pos + vec3{0.0f, 0.0f, -pl.dropM},
                            pl.radiusM, pl.color);
     }
-    // Кластеры светоматериала пекутся заново на каждом карве, идентичности у
-    // них нет — узнаём их по позиции (совпадение до сантиметра).
-    std::vector<std::pair<std::uint64_t, std::uint32_t>> byPos =
-        std::move(g_bakedSlotByPos);
-    std::sort(byPos.begin(), byPos.end());
-    g_bakedSlotByPos.clear();
+    // Кластеры светоматериала узнают свой слот по id связной компоненты
+    // ([game/light_bake.h]): id переживает изменение формы, позиция кластера
+    // между пересборками может уехать сколько угодно — слот тот же.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> byId =
+        std::move(g_bakedSlotById);
+    std::sort(byId.begin(), byId.end());
+    g_bakedSlotById.clear();
     for (const game::BakedLight& bl : g_bakedFloorLights) {
-        const std::uint64_t key = light_pos_key(bl.pos);
         std::uint32_t slot = game::kNoLightSlot;
         const auto it = std::lower_bound(
-            byPos.begin(), byPos.end(),
-            std::pair<std::uint64_t, std::uint32_t>{key, 0u});
-        if (it != byPos.end() && it->first == key) slot = it->second;
+            byId.begin(), byId.end(),
+            std::pair<std::uint32_t, std::uint32_t>{bl.id, 0u});
+        if (it != byId.end() && it->first == bl.id) slot = it->second;
         slot = put_lamp(slot, bl.pos, bl.radiusM, bl.color);
         g_bakedLightSlots.push_back(slot);
-        if (slot != game::kNoLightSlot) g_bakedSlotByPos.emplace_back(key, slot);
+        if (slot != game::kNoLightSlot) g_bakedSlotById.emplace_back(bl.id, slot);
     }
     // Неподтверждённые слоты — надгробия: лампа умерла, но её НОМЕР остаётся
     // занятым, иначе запечённые списки начнут указывать на чужие лампы.
@@ -1430,9 +1426,12 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
 
     // Светоматериалы → статические эмиттеры ([game/light_bake.h]): полный
     // скан поля + кластеризация при каждой постройке этажа, той же геометрии,
-    // что и всё. Единственное место полного скана — дальше поле только латается.
+    // что и всё. Единственное место полного скана — дальше поле только
+    // латается; идентичность компонент начинается с нуля вместе с таблицей.
     game::rebuild_emitter_field(world, g_emitterField);
-    g_bakedFloorLights = game::bake_material_lights(g_emitterField);
+    g_emitterClusters = {};
+    g_bakedFloorLights =
+        game::bake_material_lights(world, g_emitterField, g_emitterClusters);
     if (!g_bakedFloorLights.empty())
         std::fprintf(stderr, "[light-bake] floor %d: %zu emitter clusters\n",
                      floorNumber, g_bakedFloorLights.size());
@@ -4468,8 +4467,8 @@ int main(int argc, char** argv) {
                         if (game::patch_emitter_field(w, g_emitterField,
                                                       painted.data(),
                                                       painted.size())) {
-                            g_bakedFloorLights =
-                                game::bake_material_lights(g_emitterField);
+                            g_bakedFloorLights = game::bake_material_lights(
+                                w, g_emitterField, g_emitterClusters);
                             rebuild_static_light_table(reg, activeLayer,
                                                        /*reset=*/false);
                             nav.set_light_table(g_staticLamps.data(),
@@ -4517,11 +4516,13 @@ int main(int argc, char** argv) {
                             carveResult.dirtyCells.data(),
                             carveResult.dirtyCells.size());
                         if (relight) {
-                            g_bakedFloorLights =
-                                game::bake_material_lights(g_emitterField);
-                            // Кластеры пережиты заново — статик-таблица и бейк
-                            // видимости обязаны узнать (слоты пропов стабильны,
-                            // выкушенный неон умирает вместе со слотом).
+                            g_bakedFloorLights = game::bake_material_lights(
+                                stack.layer(activeLayer), g_emitterField,
+                                g_emitterClusters);
+                            // Кластеры пережиты заново с наследованием id —
+                            // похудевший неон сохраняет слот (списки бейка
+                            // видимости остаются его), умерший целиком
+                            // умирает вместе со слотом (надгробие).
                             rebuild_static_light_table(reg, activeLayer,
                                                        /*reset=*/false);
                             nav.set_light_table(g_staticLamps.data(),
@@ -4935,8 +4936,9 @@ int main(int argc, char** argv) {
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             if (relight) {
-                                g_bakedFloorLights =
-                                    game::bake_material_lights(g_emitterField);
+                                g_bakedFloorLights = game::bake_material_lights(
+                                    stack.layer(activeLayer), g_emitterField,
+                                    g_emitterClusters);
                                 rebuild_static_light_table(reg, activeLayer,
                                                            /*reset=*/false);
                                 nav.set_light_table(g_staticLamps.data(),
