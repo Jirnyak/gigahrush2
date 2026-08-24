@@ -344,12 +344,21 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         }
         CellType* pg = f->page(ci);
         if (!pg) continue; // CPU-писатель схлопнул — его решение свежее
-        std::memcpy(pg, src + static_cast<std::size_t>(i) * kPageBytesBack,
-                    kPageBytesBack);
-        medium_recount(world, ci, pg);
+        const void* np = src + static_cast<std::size_t>(i) * kPageBytesBack;
         SubMask& m = world.grid().masks_mut()[ci];
         const void* nm = msrc + static_cast<std::size_t>(i) * kMaskBytesBack;
-        if (std::memcmp(m.words, nm, kMaskBytesBack) != 0) {
+        // Пак возит ВЕСЬ живой список, но большинство слотов не менялись с
+        // прошлого applied-региона: сравнение дешевле копии с пересчётом
+        // агрегатов (замер 2026-08-25: apply 5-7 мс/кадр при полном окне,
+        // почти весь — memcpy+recount неизменённых страниц).
+        const bool pageSame = std::memcmp(pg, np, kPageBytesBack) == 0;
+        const bool maskSame = std::memcmp(m.words, nm, kMaskBytesBack) == 0;
+        if (pageSame && maskSame) continue;
+        if (!pageSame) {
+            std::memcpy(pg, np, kPageBytesBack);
+            medium_recount(world, ci, pg);
+        }
+        if (!maskSame) {
             std::memcpy(m.words, nm, kMaskBytesBack);
             if (changedMasks) changedMasks->push_back(ci);
         }
