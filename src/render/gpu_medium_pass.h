@@ -33,6 +33,7 @@
 
 #include "core/math.h"
 #include "render/vk_buffer.h"
+#include "render/vk_common.h" // kMaxFramesInFlight — регионы обратного шва
 #include "world/gravity.h"
 
 namespace giga {
@@ -61,6 +62,13 @@ public:
     // страниц 32 МиБ (уже в пуле зеркала), и НЕ упирается в лимит Vulkan
     // 65535 воркгрупп по X. Переполнение печатается вслух (S11).
     static constexpr std::uint32_t kLiveCap = 32768u;
+    // Обратный шов, фенсовая дисциплина (детали у полей ниже): регионов на
+    // один больше, чем кадров в полёте; запись кадра F применяется на топе
+    // кадра F + kRbRegions — раньше её исполнение не гарантировано, и слот
+    // нёс бы страницу чужой клетки (урок «мешанины» 2026-08-24).
+    static constexpr std::uint32_t kRbRegions = kMaxFramesInFlight + 1;
+    static constexpr std::uint32_t kRbSlotCap = 8192;
+
     // Порог сна: 16 тихих подтиков = 0.51 с на 31.25 Гц. Сон — НАБЛЮДЕНИЕ
     // планировщика («ни одного свопа»), правило о нём не знает (чистый
     // Марков, закон владельца 2026-08-24). Спят: осевший щебень, запертая в
@@ -98,6 +106,8 @@ public:
         lastDispatched_ = 0;
         liveQuanta_ = 0;
         overflow_ = false;
+        // Слоты ридбека в полёте указывают в СТАРЫЙ мир — гасим.
+        for (auto& r : rbRing_) r.valid = false;
     }
 
     // Записать n подтиков (move пачкой + settle) в cmd + ОБРАТНЫЙ ШОВ:
@@ -144,11 +154,25 @@ private:
     VulkanBuffer liveBuf_;   // host-visible: uint32 x kLiveCap
     VulkanBuffer cellAct_;   // device-local: uint32 x kMacroCells (8 МиБ)
     VulkanBuffer actOut_;    // host-visible: uint32 x kLiveCap
-    // Обратный шов: страницы живых клеток, 1 КиБ на слот (32 МиБ на капе;
-    // реальная цена — live x 1 КиБ копий за кадр) + их маски (64 Б на слот).
+    // Обратный шов, ФЕНСОВАЯ дисциплина (урок «мешанины» 2026-08-24: чтение
+    // хост-буфера без гарантии исполнения копий подсовывало CPU-канону
+    // страницы ЧУЖИХ клеток — слот i прошлого кадра принадлежал другой
+    // клетке; стены материализовались в воздухе). Запись кадра F применяется
+    // на топе кадра F+R, когда исполнение F гарантировано рендерным фенсом
+    // (begin кадра F+R-1 ждал fence слота на kMaxFramesInFlight назад >= F).
+    // Каждая запись несёт СВОЙ снапшот слотов — расшивка слот->клетка не
+    // может разъехаться. Буферы R x кап (24 МиБ страниц + 1.5 МиБ масок);
+    // live сверх капа доезжает следующими кадрами ротацией курсора.
     VulkanBuffer pageBack_;
     VulkanBuffer maskBack_;
-    std::vector<std::uint32_t> rbSlots_;      // ci слота ридбека, ~0u = пуст
+    struct RbRecord {
+        std::vector<std::uint32_t> slots; // ci слота, ~0u = пуст
+        bool valid = false;
+    };
+    RbRecord rbRing_[kRbRegions];
+    std::uint64_t rbGen_ = 0;    // счётчик записей (region = gen % R)
+    std::uint32_t rbCursor_ = 0; // ротация старта при live > капа
+    bool rbCapWarned_ = false;
     std::vector<VkBufferCopy> rbCopies_;      // скретч без аллокаций в кадре
     std::vector<VkBufferCopy> rbMaskCopies_;  // копии масок тем же слотам
     bool actNeedsClear_ = true;

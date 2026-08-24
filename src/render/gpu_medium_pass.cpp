@@ -93,11 +93,13 @@ bool GpuMediumPass::create_buffers() noexcept {
                                       "medium-live"))
         return false;
     if (!pageBack_.create_host_visible(
-            *dev_, static_cast<VkDeviceSize>(kLiveCap) * kPageBytesBack,
+            *dev_,
+            static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kPageBytesBack,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-page-back"))
         return false;
     if (!maskBack_.create_host_visible(
-            *dev_, static_cast<VkDeviceSize>(kLiveCap) * kMaskBytesBack,
+            *dev_,
+            static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kMaskBytesBack,
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-mask-back"))
         return false;
     if (!cellAct_.create_device_local_empty(
@@ -448,36 +450,60 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     record_readback(cmd, world);
 }
 
-// ОБРАТНЫЙ ШОВ (инкремент 3, S16.3 «туда-сюда макс быстро»): страницы живых
-// клеток — назад байт-копией, слот i ридбека = слот i live-списка. Автомат
-// страниц не выделяет, поэтому CPU-таблица страниц и GPU-таблица совпадают по
-// построению. Едет и при owed == 0 — квант, перешедший границу клеток
-// последним подтиком, доезжает в CPU-канон спокойным кадром. Клетка без
-// страницы (не должна быть live, но страховка) — пустой слот.
+// ОБРАТНЫЙ ШОВ (инкремент 3, S16.3 «туда-сюда макс быстро»): страницы и
+// маски живых клеток — назад байт-копией. ФЕНСОВАЯ дисциплина (см. шапку
+// .h): каждая запись занимает СВОЙ регион кольца и несёт свой снапшот
+// слотов; применит её apply_readback только через kRbRegions кадров, когда
+// исполнение гарантировано. Едет и при owed == 0 — хвост последнего
+// подтика доезжает спокойными кадрами. Live сверх капа слотов доезжает
+// ротацией курсора (печать вслух один раз).
 void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
-    rbSlots_.assign(live_.size(), kRbEmpty);
+    RbRecord& rec = rbRing_[rbGen_ % kRbRegions];
+    rec.valid = false;
+    const std::uint32_t region =
+        static_cast<std::uint32_t>(rbGen_ % kRbRegions);
+    ++rbGen_;
     if (live_.empty()) return;
+
     const SubField<CellType>* sub =
         world.subfields().find<CellType>(kSubMaterialName);
     const std::uint32_t* pageTab = sub ? sub->page_table() : nullptr;
+    if (!pageTab) return;
+
+    const std::size_t n = live_.size();
+    const std::size_t take = n < kRbSlotCap ? n : kRbSlotCap;
+    if (n > kRbSlotCap && !rbCapWarned_) {
+        rbCapWarned_ = true;
+        std::fprintf(stderr,
+                     "[medium] readback cap: %zu live > %u slots/frame — "
+                     "rotating, CPU lag grows with surface\n",
+                     n, kRbSlotCap);
+    }
+    rec.slots.assign(take, kRbEmpty);
     rbCopies_.clear();
     rbMaskCopies_.clear();
-    if (pageTab) {
-        for (std::size_t i = 0; i < live_.size(); ++i) {
-            const std::uint32_t pg = pageTab[live_[i].ci];
-            if (pg == kRbEmpty) continue;
-            rbSlots_[i] = live_[i].ci;
-            rbCopies_.push_back(
-                {static_cast<VkDeviceSize>(pg) * kPageBytesBack,
-                 static_cast<VkDeviceSize>(i) * kPageBytesBack,
-                 kPageBytesBack});
-            rbMaskCopies_.push_back(
-                {static_cast<VkDeviceSize>(live_[i].ci) * kMaskBytesBack,
-                 static_cast<VkDeviceSize>(i) * kMaskBytesBack,
-                 kMaskBytesBack});
-        }
+    const VkDeviceSize pageBase =
+        static_cast<VkDeviceSize>(region) * kRbSlotCap * kPageBytesBack;
+    const VkDeviceSize maskBase =
+        static_cast<VkDeviceSize>(region) * kRbSlotCap * kMaskBytesBack;
+    for (std::size_t j = 0; j < take; ++j) {
+        const std::size_t i = (rbCursor_ + j) % n;
+        const std::uint32_t ci = live_[i].ci;
+        const std::uint32_t pg = pageTab[ci];
+        if (pg == kRbEmpty) continue;
+        rec.slots[j] = ci;
+        rbCopies_.push_back(
+            {static_cast<VkDeviceSize>(pg) * kPageBytesBack,
+             pageBase + static_cast<VkDeviceSize>(j) * kPageBytesBack,
+             kPageBytesBack});
+        rbMaskCopies_.push_back(
+            {static_cast<VkDeviceSize>(ci) * kMaskBytesBack,
+             maskBase + static_cast<VkDeviceSize>(j) * kMaskBytesBack,
+             kMaskBytesBack});
     }
+    rbCursor_ = static_cast<std::uint32_t>((rbCursor_ + take) % n);
     if (rbCopies_.empty()) return;
+    rec.valid = true;
     // Пул могли писать и flush (трансфер, стейл-заливка dirty-клетки), и
     // автомат этого кадра — оба до чтения.
     VkMemoryBarrier tb{};
@@ -506,19 +532,29 @@ void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
 
 void GpuMediumPass::apply_readback(World& world,
                                    std::vector<std::uint32_t>* changedMasks) {
-    if (!ready() || rbSlots_.empty() || !pageBack_.mapped ||
-        !maskBack_.mapped)
-        return;
+    if (!ready() || !pageBack_.mapped || !maskBack_.mapped) return;
+    // Применяется запись возрастом kRbRegions кадров — ровно тот регион,
+    // который record этого же кадра перепишет следом (CPU читает раньше, GPU
+    // пишет после submit — гонки нет). Моложе брать НЕЛЬЗЯ: её копии могли
+    // ещё не исполниться, и слот i нёс бы страницу чужой клетки — «мешанина»
+    // из стен в воздухе (скриншот владельца 2026-08-24, калаш).
+    if (rbGen_ < kRbRegions) return;
+    RbRecord& rec = rbRing_[rbGen_ % kRbRegions];
+    if (!rec.valid) return;
+    rec.valid = false; // одно применение
     SubField<CellType>* f =
         world.subfields().find<CellType>(kSubMaterialName);
-    if (!f) {
-        rbSlots_.clear();
-        return;
-    }
-    const auto* src = static_cast<const std::uint8_t*>(pageBack_.mapped);
-    const auto* msrc = static_cast<const std::uint8_t*>(maskBack_.mapped);
-    for (std::size_t i = 0; i < rbSlots_.size(); ++i) {
-        const std::uint32_t ci = rbSlots_[i];
+    if (!f) return;
+    const std::uint32_t region =
+        static_cast<std::uint32_t>(rbGen_ % kRbRegions);
+    const auto* src = static_cast<const std::uint8_t*>(pageBack_.mapped) +
+                      static_cast<std::size_t>(region) * kRbSlotCap *
+                          kPageBytesBack;
+    const auto* msrc = static_cast<const std::uint8_t*>(maskBack_.mapped) +
+                       static_cast<std::size_t>(region) * kRbSlotCap *
+                           kMaskBytesBack;
+    for (std::size_t i = 0; i < rec.slots.size(); ++i) {
+        const std::uint32_t ci = rec.slots[i];
         if (ci == kRbEmpty) continue;
         CellType* pg = f->page(ci);
         // Страницу мог схлопнуть CPU-писатель (карв в воздух) — его решение
@@ -535,7 +571,6 @@ void GpuMediumPass::apply_readback(World& world,
             if (changedMasks) changedMasks->push_back(ci);
         }
     }
-    rbSlots_.clear(); // один ридбек — одно применение
 }
 
 } // namespace giga::gpu

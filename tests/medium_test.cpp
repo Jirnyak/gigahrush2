@@ -162,6 +162,16 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
     return ok;
 }
 
+// Слить хвост обратного шва: фенсовая дисциплина применяет запись возрастом
+// kRbRegions кадров — спокойные кадры досылают всё в CPU-канон.
+void drain_seam(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
+                gpu::GpuMediumPass& medium, World& w, std::uint64_t& substep) {
+    for (std::uint32_t t = 0; t < gpu::GpuMediumPass::kRbRegions + 1; ++t) {
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        medium.apply_readback(w);
+    }
+}
+
 // Инкремент 2: вода в бассейне. Инварианты, а не пиксели:
 //   1. МАССА: счёт квантов после осадки == налитому (перестановка Margolus
 //      не рождает и не убивает — мутация правила красная именно здесь);
@@ -290,12 +300,10 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(cls[moundCell] == 2);
     }
 
-    // ОБРАТНЫЙ ШОВ (инкремент 3): CPU-канон сошёлся с GPU с точностью
-    // кадра — карв и сейв видят ту же воду, фантомы стейл-страниц мертвы.
-    // Один «спокойный кадр» (owed 0): квант, перешедший границу клеток
-    // последним подтиком, доезжает — как в игре.
-    CHECK(run_batch(dev, mirror, medium, w, 0, substep));
-    medium.apply_readback(w);
+    // ОБРАТНЫЙ ШОВ (инкремент 3): CPU-канон сошёлся с GPU (лаг фенсовой
+    // дисциплины — kRbRegions кадров) — карв и сейв видят ту же воду,
+    // фантомы стейл-страниц мертвы. Спокойные кадры досылают хвост.
+    drain_seam(dev, mirror, medium, w, substep);
     // Независимый счёт по CPU-страницам.
     {
         std::size_t cpuWater = 0;
@@ -437,8 +445,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
             medium.apply_readback(w);
             medium.poll_activity(w, mirror);
         }
-        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
-        medium.apply_readback(w);
+        drain_seam(dev, mirror, medium, w, substep);
 
         std::vector<std::uint32_t> idx2(kMacroCells);
         CHECK(readback(dev, mirror.page_index_buffer(),
@@ -537,8 +544,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
             medium.apply_readback(w);
             medium.poll_activity(w, mirror);
         }
-        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
-        medium.apply_readback(w);
+        drain_seam(dev, mirror, medium, w, substep);
 
         // CPU-канон догнал (шов): 6 квантов рубла осели на полу-опоре, ни
         // один не левитирует; полка не висит на прежней высоте.
