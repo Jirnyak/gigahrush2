@@ -130,6 +130,7 @@ public:
     std::uint32_t woken_total() const noexcept { return wokenTotal_; }
     std::uint32_t slept_total() const noexcept { return sleptTotal_; }
     bool overflowed() const noexcept { return overflow_; }
+    std::uint32_t lazy_total() const noexcept { return lazyTotal_; }
 
 private:
     bool create_buffers() noexcept;
@@ -172,6 +173,7 @@ private:
     std::uint64_t rbGen_ = 0;
     bool actNeedsClear_ = true;
 
+    std::uint32_t lazyTotal_ = 0; // ленивые материализации шва (диагноз)
     std::uint32_t lastCount_ = 0;
     std::uint32_t lastQuanta_ = 0;
     std::uint32_t wokenTotal_ = 0;

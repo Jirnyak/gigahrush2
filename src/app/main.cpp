@@ -4459,6 +4459,77 @@ int main(int argc, char** argv) {
                 // бейк видимости. `neon` существует ради проверки
                 // стабильности слотов (рождать и убивать лампы по команде),
                 // `glass` — прозрачности для света (light_transparent).
+                // РЕПРО-СТЕНД РАСТЕКАНИЯ (GIGA_POUR=1): автоналив воды под
+                // игроком на тике 200 и печать метрики изотропии по
+                // квадрантам на тиках 600/1200/1800 — сверка растекания
+                // числами между коммитами без участия владельца.
+                if (std::getenv("GIGA_POUR")) {
+                    if (simTick == 200 && reg.valid(player)) {
+                        const float pr = static_cast<float>(
+                            std::atof(std::getenv("GIGA_POUR")));
+                        consoleCtx.paintRadius = pr > 0.0f ? pr : 1.0f;
+                        consoleCtx.paintMat = kMatWater;
+                        std::fprintf(stderr, "[pour-probe] pouring at tick 200\n");
+                    }
+                    if ((simTick == 600 || simTick == 1200 ||
+                         simTick == 1800) && reg.valid(player)) {
+                        // Скан CPU-канона по СУБВОКСЕЛЯМ относительно точки
+                        // налива: кванты и дальность фронта по знаку смещения
+                        // (тороидальная центрированная разность, 1024 суб/ось).
+                        constexpr float kSubSize = kCellSize / 8.0f;
+                        constexpr int kSubSpan = kMacroDim * 8;
+                        const vec3 pp = reg.get<Transform>(player).pos;
+                        const int psx = static_cast<int>(
+                            std::floor(pp.x / kSubSize));
+                        const int psy = static_cast<int>(
+                            std::floor(pp.y / kSubSize));
+                        const int pcx = wrap_macro(static_cast<int>(
+                            std::floor(pp.x / kCellSize)));
+                        const int pcy = wrap_macro(static_cast<int>(
+                            std::floor(pp.y / kCellSize)));
+                        const int pcz = wrap_macro(static_cast<int>(
+                            std::floor(pp.z / kCellSize)));
+                        World& pw = stack.layer(activeLayer);
+                        const SubField<CellType>* pf =
+                            pw.subfields().find<CellType>(kSubMaterialName);
+                        auto sdiff = [](int a, int b) {
+                            int d = (a - b) % kSubSpan;
+                            if (d > kSubSpan / 2) d -= kSubSpan;
+                            if (d < -kSubSpan / 2) d += kSubSpan;
+                            return d;
+                        };
+                        long qXp = 0, qXn = 0, qYp = 0, qYn = 0;
+                        int rXp = 0, rXn = 0, rYp = 0, rYn = 0;
+                        for (int dz = -3; dz <= 3; ++dz)
+                            for (int dy = -8; dy <= 8; ++dy)
+                                for (int dx = -8; dx <= 8; ++dx) {
+                                    const int cx = wrap_macro(pcx + dx);
+                                    const int cy = wrap_macro(pcy + dy);
+                                    const std::size_t ci = macro_index(
+                                        cx, cy, wrap_macro(pcz + dz));
+                                    const CellType* pg =
+                                        pf ? pf->page(ci) : nullptr;
+                                    if (!pg) continue;
+                                    for (int b = 0; b < kSubVoxels; ++b) {
+                                        if (pg[b] != kMatWater) continue;
+                                        const int sx = sdiff(
+                                            cx * 8 + (b & 7), psx);
+                                        const int sy = sdiff(
+                                            cy * 8 + ((b >> 3) & 7), psy);
+                                        if (sx > 0) { qXp++; rXp = std::max(rXp, sx); }
+                                        if (sx < 0) { qXn++; rXn = std::max(rXn, -sx); }
+                                        if (sy > 0) { qYp++; rYp = std::max(rYp, sy); }
+                                        if (sy < 0) { qYn++; rYn = std::max(rYn, -sy); }
+                                    }
+                                }
+                        std::fprintf(
+                            stderr,
+                            "[pour-probe] tick %llu: quanta +x %ld -x %ld "
+                            "+y %ld -y %ld | reach +x %d -x %d +y %d -y %d\n",
+                            static_cast<unsigned long long>(simTick), qXp, qXn,
+                            qYp, qYn, rXp, rXn, rYp, rYn);
+                    }
+                }
                 if (consoleCtx.paintRadius > 0.0f && reg.valid(player)) {
                     const float r = consoleCtx.paintRadius;
                     const CellType paintMat = consoleCtx.paintMat;
@@ -7769,11 +7840,12 @@ int main(int argc, char** argv) {
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, substeps %llu | cpu ms: poll %.2f apply "
+                        "slept %u, lazy %u, substeps %llu | cpu ms: poll %.2f apply "
                         "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
+                        mediumPass.lazy_total(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
                         static_cast<double>(g_mediumPollMs),
                         static_cast<double>(g_mediumApplyMs),

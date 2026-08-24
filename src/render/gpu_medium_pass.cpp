@@ -340,8 +340,10 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             if (changedMasks) changedMasks->push_back(ci);
         }
     }
-    if (!lazyDirty_.empty())
+    if (!lazyDirty_.empty()) {
         mirror.mark_dirty(lazyDirty_.data(), lazyDirty_.size());
+        lazyTotal_ += static_cast<std::uint32_t>(lazyDirty_.size());
+    }
 }
 
 void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
