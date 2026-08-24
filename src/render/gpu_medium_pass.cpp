@@ -37,6 +37,10 @@ bool read_spv(const char* path, std::vector<char>& out) {
     return rd == static_cast<std::size_t>(n);
 }
 
+// Страница sub_material: kSubVoxels x u16 = 1 КиБ — слот обратного шва.
+constexpr VkDeviceSize kPageBytesBack = kSubVoxels * sizeof(std::uint16_t);
+constexpr std::uint32_t kRbEmpty = 0xFFFFFFFFu;
+
 // Биты слова ActOut — зеркало шапки medium_sim.comp.
 constexpr std::uint32_t kActChanged = 1u;
 constexpr std::uint32_t kActTouchPosX = 1u << 2;
@@ -51,6 +55,7 @@ bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
                          const VoxelMirror& mirror) {
     dev_ = dev;
     if (!dev_) return false;
+    mirrorPool_ = mirror.page_pool_buffer();
     if (!create_buffers()) return false;
     if (!create_descriptors(mirror)) return false;
     if (!create_pipeline(shaderDir)) return false;
@@ -74,6 +79,7 @@ void GpuMediumPass::destroy() noexcept {
     liveBuf_.destroy(*dev_);
     cellAct_.destroy(*dev_);
     actOut_.destroy(*dev_);
+    pageBack_.destroy(*dev_);
     dev_ = nullptr;
 }
 
@@ -81,6 +87,10 @@ bool GpuMediumPass::create_buffers() noexcept {
     if (!liveBuf_.create_host_visible(*dev_, kLiveCap * sizeof(std::uint32_t),
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                       "medium-live"))
+        return false;
+    if (!pageBack_.create_host_visible(
+            *dev_, static_cast<VkDeviceSize>(kLiveCap) * kPageBytesBack,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-page-back"))
         return false;
     if (!cellAct_.create_device_local_empty(
             *dev_, kMacroCells * sizeof(std::uint32_t),
@@ -205,13 +215,15 @@ void GpuMediumPass::wake_one(std::uint32_t ci, World& world,
         overflow_ = true;
         return;
     }
-    // Автомат пишет только в страницы: раскрыть CPU-страницу базой CellType и
-    // прогнать её зеркальным dirty-путём. Уже раскрытую клетку flush не
-    // трогает — GPU-состояние её материи не перетирается.
+    // Автомат пишет только в страницы: раскрыть CPU-страницу ЧЕСТНО
+    // (материал = истина: маска -> тип, дыры -> ВОЗДУХ — materialize, не
+    // ensure(base): заливка базой делала воздух у стен «бетоном», и вода не
+    // могла втечь в клетку со стеной — пустые швы, фидбек владельца) и
+    // прогнать зеркальным dirty-путём.
     SubField<CellType>& f =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
     if (!f.paged(ci)) {
-        f.ensure_page(ci, world.grid().types()[ci]);
+        materialize_sub_page(world, ci);
         mirror.mark_dirty(&ci, 1);
     }
     liveBits_[ci >> 6] |= 1ull << (ci & 63);
@@ -330,7 +342,8 @@ void GpuMediumPass::poll_activity(World& world, VoxelMirror& mirror) {
 
 void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                                     const CellStep& downStep,
-                                    std::uint64_t substepBase) {
+                                    std::uint64_t substepBase,
+                                    const World& world) {
     if (!ready()) return;
 
     if (actNeedsClear_) {
@@ -350,8 +363,10 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         actNeedsClear_ = false;
     }
 
-    if (n == 0 || live_.empty()) {
+    const bool haveWork = n > 0 && !live_.empty();
+    if (!haveWork) {
         lastDispatched_ = 0;
+        record_readback(cmd, world);
         return;
     }
 
@@ -413,12 +428,91 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     VkMemoryBarrier outBar{};
     outBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     outBar.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    outBar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+    outBar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                             VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT |
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0, 1, &outBar, 0, nullptr, 0, nullptr);
+
+    record_readback(cmd, world);
+}
+
+// ОБРАТНЫЙ ШОВ (инкремент 3, S16.3 «туда-сюда макс быстро»): страницы живых
+// клеток — назад байт-копией, слот i ридбека = слот i live-списка. Автомат
+// страниц не выделяет, поэтому CPU-таблица страниц и GPU-таблица совпадают по
+// построению. Едет и при owed == 0 — квант, перешедший границу клеток
+// последним подтиком, доезжает в CPU-канон спокойным кадром. Клетка без
+// страницы (не должна быть live, но страховка) — пустой слот.
+void GpuMediumPass::record_readback(VkCommandBuffer cmd, const World& world) {
+    rbSlots_.assign(live_.size(), kRbEmpty);
+    if (live_.empty()) return;
+    const SubField<CellType>* sub =
+        world.subfields().find<CellType>(kSubMaterialName);
+    const std::uint32_t* pageTab = sub ? sub->page_table() : nullptr;
+    rbCopies_.clear();
+    if (pageTab) {
+        for (std::size_t i = 0; i < live_.size(); ++i) {
+            const std::uint32_t pg = pageTab[live_[i].ci];
+            if (pg == kRbEmpty) continue;
+            rbSlots_[i] = live_[i].ci;
+            rbCopies_.push_back(
+                {static_cast<VkDeviceSize>(pg) * kPageBytesBack,
+                 static_cast<VkDeviceSize>(i) * kPageBytesBack,
+                 kPageBytesBack});
+        }
+    }
+    if (rbCopies_.empty()) return;
+    // Пул могли писать и flush (трансфер, стейл-заливка dirty-клетки), и
+    // автомат этого кадра — оба до чтения.
+    VkMemoryBarrier tb{};
+    tb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    tb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    tb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &tb, 0, nullptr,
+                         0, nullptr);
+    vkCmdCopyBuffer(cmd, mirrorPool_, pageBack_.buffer,
+                    static_cast<std::uint32_t>(rbCopies_.size()),
+                    rbCopies_.data());
+    VkBufferMemoryBarrier hb{};
+    hb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    hb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    hb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    hb.buffer = pageBack_.buffer;
+    hb.offset = 0;
+    hb.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &hb, 0,
+                         nullptr);
+}
+
+void GpuMediumPass::apply_readback(World& world) {
+    if (!ready() || rbSlots_.empty() || !pageBack_.mapped) return;
+    SubField<CellType>* f =
+        world.subfields().find<CellType>(kSubMaterialName);
+    if (!f) {
+        rbSlots_.clear();
+        return;
+    }
+    const auto* src = static_cast<const std::uint8_t*>(pageBack_.mapped);
+    for (std::size_t i = 0; i < rbSlots_.size(); ++i) {
+        const std::uint32_t ci = rbSlots_[i];
+        if (ci == kRbEmpty) continue;
+        CellType* pg = f->page(ci);
+        // Страницу мог схлопнуть CPU-писатель (карв в воздух) — его решение
+        // свежее ридбека, не воскрешаем.
+        if (!pg) continue;
+        std::memcpy(pg, src + static_cast<std::size_t>(i) * kPageBytesBack,
+                    kPageBytesBack);
+    }
+    rbSlots_.clear(); // один ридбек — одно применение
 }
 
 } // namespace giga::gpu

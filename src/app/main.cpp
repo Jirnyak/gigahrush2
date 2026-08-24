@@ -3445,6 +3445,23 @@ int main(int argc, char** argv) {
         // The layer the player is currently on drives sim + render below.
         // activeLayer already defined at frame top
 
+        // МИР-АВТОМАТ, шов кадра (ДО сим-писателей — порядок закон):
+        // 1) apply_readback — страницы, что автомат вернул прошлым кадром,
+        //    ложатся в CPU-канон: карв этого кадра режет уже СВЕЖУЮ воду
+        //    (инкремент 3 — обратный поток байт-копией, отставание <= кадра);
+        // 2) poll_activity — пробуждение соседей/усыпление по ActOut.
+        // Смена слоя = live-набор указывает в старый мир — сброс.
+        if (mediumPass.ready() && activeLayer != kInvalidLayer) {
+            static LayerId mediumLayer = static_cast<LayerId>(~0u);
+            if (mediumLayer != activeLayer) {
+                mediumLayer = activeLayer;
+                mediumPass.clear_live();
+                mediumSubstepsDone = simTick / 4;
+            }
+            mediumPass.apply_readback(stack.layer(activeLayer));
+            mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
+        }
+
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
         // does not fast-forward the missed interval.
@@ -7628,19 +7645,9 @@ int main(int argc, char** argv) {
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }
-            // МИР-АВТОМАТ, CPU-сторона такта — ДО flush(): poll будит клетки
-            // (ensure_page + mark_dirty), и их страницы уезжают этим же
-            // кадром. Смена слоя = live-набор указывает в старый мир —
-            // сброс (образец газового засева выше).
-            if (mediumPass.ready()) {
-                static LayerId mediumLayer = static_cast<LayerId>(~0u);
-                if (mediumLayer != activeLayer) {
-                    mediumLayer = activeLayer;
-                    mediumPass.clear_live();
-                    mediumSubstepsDone = simTick / 4;
-                }
-                mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
-            }
+            // МИР-АВТОМАТ: apply_readback и poll_activity ушли в НАЧАЛО
+            // кадра (до сим-писателей); здесь остался только диспатч
+            // подтиков после flush.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             const auto ctVf = std::chrono::steady_clock::now();
             voxelMirror.flush(cmd, renderer.currentFrame,
@@ -7671,14 +7678,15 @@ int main(int argc, char** argv) {
                     mediumSubstepsDone = mediumTarget - kMediumMaxPerFrame;
                     owed = kMediumMaxPerFrame;
                 }
-                if (owed > 0) {
-                    const CellStep md = regime_down(
-                        stack.layer(activeLayer).gravity().regime);
-                    mediumPass.record_substeps(
-                        cmd, static_cast<std::uint32_t>(owed), md,
-                        mediumSubstepsDone);
-                    mediumSubstepsDone += owed;
-                }
+                // Звать и при owed == 0: обратный шов (ридбек страниц живых
+                // клеток) едет каждый кадр — хвост последнего подтика
+                // доезжает в CPU-канон спокойным кадром.
+                const CellStep md = regime_down(
+                    stack.layer(activeLayer).gravity().regime);
+                mediumPass.record_substeps(
+                    cmd, static_cast<std::uint32_t>(owed), md,
+                    mediumSubstepsDone, stack.layer(activeLayer));
+                mediumSubstepsDone += owed;
                 // Числа каждый прогон (S11): раз в игровую секунду, пока
                 // есть живая материя или переполнение.
                 static std::uint64_t mediumLastLog = 0;

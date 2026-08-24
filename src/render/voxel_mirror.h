@@ -13,9 +13,13 @@
 //                                   CPU pool ([world/subfield.h]) so no
 //                                   remapping logic exists to go wrong.
 //
-// ONE-WAY FLOW, sim -> GPU ([render.md]): the mirror never writes back, and the
-// CPU grid stays the single source of truth for every gameplay question. It is
-// kept fresh by exactly the seams the sim already publishes:
+// ШОВ ДВУСТОРОННИЙ с 2026-08-24 (CANON S16.3; «ONE-WAY FLOW» умер, как канон
+// и обещал): CPU->GPU — писатели ниже; GPU->CPU — мир-автомат двигает материю
+// в pagePool, и страницы живых клеток каждый кадр текут НАЗАД байт-копией
+// ([render/gpu_medium_pass.h] record_readback/apply_readback, слот-в-слот).
+// CPU-вид остаётся каноном same-tick вопросов (коллизия, рейкасты, сейв);
+// материя В ПОЛЁТЕ видна ему с отставанием до кадра — допуск канона.
+// CPU->GPU released fresh by exactly the seams the sim already publishes:
 //
 //   * wholesale (floor build / arrival / F9 / teleport)  -> upload_all()
 //   * carve ([world/destruct.h] CarveResult::dirtyCells) -> mark_dirty()

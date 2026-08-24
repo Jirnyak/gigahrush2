@@ -147,7 +147,8 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd, &bi);
         mirror.flush(cmd, 0, w);
-        medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base);
+        medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base,
+                               w);
         vkEndCommandBuffer(cmd);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -213,6 +214,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     for (int b = 0; b < 100; ++b) {
         CHECK(run_batch(dev, mirror, medium, w, 8, substep));
         substep += 8;
+        // Кадровый шов: сначала обратный поток в CPU-канон, потом протокол
+        // пробуждения — тот же порядок, что в кадре игры.
+        medium.apply_readback(w);
         medium.poll_activity(w, mirror);
     }
     std::printf("[medium_test] after %llu substeps: live %u, woken %u, "
@@ -256,6 +260,27 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         }
     }
     CHECK(water.size() == kPoured); // МАССА
+
+    // ОБРАТНЫЙ ШОВ (инкремент 3): CPU-канон сошёлся с GPU с точностью
+    // кадра — карв и сейв видят ту же воду, фантомы стейл-страниц мертвы.
+    // Один «спокойный кадр» (owed 0): квант, перешедший границу клеток
+    // последним подтиком, доезжает — как в игре.
+    CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+    medium.apply_readback(w);
+    // Независимый счёт по CPU-страницам.
+    {
+        std::size_t cpuWater = 0;
+        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+            const CellType* pg = f.page(ci);
+            if (!pg) continue;
+            const SubMask& m = w.grid().masks()[ci];
+            for (int bit = 0; bit < kSubVoxels; ++bit)
+                if (pg[bit] == kMatWater && !m.test(bit)) ++cpuWater;
+        }
+        std::printf("[medium_test] reverse seam: CPU sees %zu quanta\n",
+                    cpuWater);
+        CHECK(cpuWater == kPoured);
+    }
 
     // ОПОРА (гравитация NegZ): под квантом — маска или вода.
     auto solid_at = [&](int gx, int gy, int gz) {
@@ -405,6 +430,16 @@ void test_carve_agnostic() {
     CHECK(carve_at(w, cx + 1, cy, cz, 0, 0, 0, 256, 44, scratch, res));
     CHECK(sub_material_at(w, cx + 1, cy, cz, 0, 0, 0) == kCellAir);
     CHECK(sub_material_at(w, cx + 1, cy, cz, 7, 7, 7) == kMatWater);
+
+    // 4) Материализация ЧЕСТНА (швы у стен, фидбек владельца): у частичной
+    //    клетки без страницы дыры — ВОЗДУХ, не заливка базой.
+    const int mx = cx + 3;
+    w.grid().fill_cell(mx, cy, cz, kMatConcrete);
+    w.grid().mask(mx, cy, cz).clear(sub_bit(1, 1, 1));
+    const CellType* mp =
+        materialize_sub_page(w, macro_index(mx, cy, cz));
+    CHECK(mp[sub_bit(1, 1, 1)] == kCellAir);
+    CHECK(mp[sub_bit(0, 0, 0)] == kMatConcrete);
 }
 
 } // namespace

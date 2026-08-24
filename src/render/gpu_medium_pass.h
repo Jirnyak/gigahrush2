@@ -100,11 +100,24 @@ public:
         overflow_ = false;
     }
 
-    // Записать n подтиков (move+settle на каждый) в cmd. Вне рендер-пасса,
-    // ПОСЛЕ voxelMirror.flush() — барьеры внутри. substepBase — сквозной
-    // номер первого подтика (детерминизм роллов).
+    // Записать n подтиков (move пачкой + settle) в cmd + ОБРАТНЫЙ ШОВ:
+    // страницы живых клеток копируются в host-visible буфер — байт-копия
+    // GPU→CPU каждый кадр (инкремент 3, S16.3 «туда-сюда макс быстро»).
+    // Вне рендер-пасса, ПОСЛЕ voxelMirror.flush() — барьеры внутри.
+    // substepBase — сквозной номер первого подтика (детерминизм роллов);
+    // world — таблица страниц (автомат страниц не выделяет, слоты совпадают
+    // по построению).
     void record_substeps(VkCommandBuffer cmd, std::uint32_t n,
-                         const CellStep& downStep, std::uint64_t substepBase);
+                         const CellStep& downStep, std::uint64_t substepBase,
+                         const World& world);
+
+    // Применить последний ридбек в CPU-канон: memcpy страниц слот-в-слот.
+    // Звать В НАЧАЛЕ кадра, ДО сим-писателей (карв режет уже свежую воду) и
+    // ДО poll_activity (уснувшая клетка успевает отдать финальное
+    // состояние). CPU отстаёт от материи в полёте не больше кадра — допуск
+    // канона S16.3. Чтение без фенса: рваная страница — кадровая рябь,
+    // самовыправляется следующим ридбеком.
+    void apply_readback(World& world);
 
     // Числа для печати каждый прогон (S11: молча не работаем).
     std::uint32_t live_count() const noexcept {
@@ -120,13 +133,21 @@ private:
     bool create_descriptors(const VoxelMirror& mirror) noexcept;
     bool create_pipeline(const char* shaderDir) noexcept;
     void wake_one(std::uint32_t ci, World& world, VoxelMirror& mirror);
+    void record_readback(VkCommandBuffer cmd, const World& world);
 
     VulkanDevice* dev_ = nullptr;
 
     VulkanBuffer liveBuf_;   // host-visible: uint32 x kLiveCap
     VulkanBuffer cellAct_;   // device-local: uint32 x kMacroCells (8 МиБ)
     VulkanBuffer actOut_;    // host-visible: uint32 x kLiveCap
+    // Обратный шов: страницы живых клеток, 1 КиБ на слот (32 МиБ на капе;
+    // реальная цена — live x 1 КиБ копий за кадр).
+    VulkanBuffer pageBack_;
+    std::vector<std::uint32_t> rbSlots_;      // ci слота ридбека, ~0u = пуст
+    std::vector<VkBufferCopy> rbCopies_;      // скретч без аллокаций в кадре
     bool actNeedsClear_ = true;
+
+    VkBuffer mirrorPool_ = VK_NULL_HANDLE; // pagePool зеркала — источник ридбека
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;

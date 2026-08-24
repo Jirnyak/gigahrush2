@@ -90,11 +90,11 @@ inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
     m.clear(static_cast<int>(key & 511u));
     dirty.push_back(ci);
     CellType* pg = mats ? mats->page(ci) : nullptr;
-    // Однородную клетку материи сред раскрыть ПЕРЕД удалением одного атома —
-    // иначе вырезанный квант унёс бы всю клетку воды типом.
-    if (!pg && mats && m.empty() &&
-        material_is_medium(w.grid().types()[ci]))
-        pg = mats->ensure_page(ci, w.grid().types()[ci]);
+    // Раскрыть безстраничную клетку ЧЕСТНО (маска -> тип, дыры -> воздух,
+    // однородная материя сред -> её материал): вырезанный атом обязан стать
+    // воздухом в материальной истине, а не читаться базой, и дыра сразу
+    // проходима для автомата.
+    if (!pg && mats) pg = materialize_sub_page(w, ci);
     if (pg) {
         pg[key & 511u] = kCellAir;
         CellType uniform;
@@ -289,6 +289,24 @@ CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
     return f ? f->at(ci, sub_bit(sx, sy, sz), base) : base;
 }
 
+CellType* materialize_sub_page(World& w, std::size_t ci) {
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    if (CellType* pg = f.page(ci)) return pg;
+    const CellType base = w.grid().types()[ci];
+    CellType* pg = f.ensure_page(ci, base);
+    const SubMask& m = w.grid().masks()[ci];
+    if (!m.full()) {
+        // Дыры без бита: воздух; однородная материя сред (вода без масок по
+        // канону S16.2) остаётся своим материалом.
+        const CellType hole = material_is_medium(base) ? base : kCellAir;
+        if (hole != base)
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (!m.test(b)) pg[b] = hole;
+    }
+    return pg;
+}
+
 void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
                       CellType mat) {
     cx = wrap_macro(cx);
@@ -298,8 +316,10 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     const CellType base = w.grid().types()[ci];
     SubField<CellType>& f =
         w.subfields().get_or_create<CellType>(kSubMaterialName);
-    if (!f.paged(ci) && mat == base) return; // still uniform, nothing to page
-    CellType* pg = f.ensure_page(ci, base);
+    if (!f.paged(ci) && mat == base &&
+        w.grid().masks()[ci].test(sub_bit(sx, sy, sz)))
+        return; // масочный атом базы — истина уже такая, страница не нужна
+    CellType* pg = materialize_sub_page(w, ci);
     pg[sub_bit(sx, sy, sz)] = mat;
     CellType uniform;
     // If the write left the whole cell one material again, fold it back into

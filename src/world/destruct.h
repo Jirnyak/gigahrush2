@@ -120,6 +120,15 @@ bool carve_roll(std::uint32_t h, std::uint16_t power, std::uint16_t hardness);
 CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
                          int sy, int sz);
 
+// Раскрыть страницу материалов клетки ЧЕСТНО по S16.1 (материал — истина):
+// под битом маски — CellType клетки, без бита — ВОЗДУХ (у однородной клетки
+// материи сред — её материал: вода остаётся водой). Старый ensure_page(base)
+// заливал базой и дыры: воздух у стен читался «бетоном» — вода не могла
+// втечь в клетку со стеной (пустые швы, фидбек владельца 2026-08-24), а
+// карв-дыры несли фантомную материю. Возвращает страницу (уже раскрытая
+// клетка не трогается).
+CellType* materialize_sub_page(World& w, std::size_t ci);
+
 // Paint one sub-voxel's material (generator/tool side of layering). Pages the
 // cell on first divergence from its CellType; folds back into a plain cell
 // type if the write leaves the cell uniform again.
