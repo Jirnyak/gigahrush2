@@ -150,8 +150,14 @@ uint vMat;
 // ~8 м (k=0.35).
 const float kAbsorbLiquid = 0.55;
 const float kAbsorbGas = 0.35;
+// ПОВЕРХНОСТЬ ЖИДКОСТИ (фикс «регрессии» видимости 2026-08-24: тонкий край
+// лужи поглощал ~4% — невидим, лужа выглядела съёжившейся): первый вход
+// луча в жидкость даёт фиксированную оптическую плёнку — граница фаз видна
+// независимо от толщины (0.5 ~ эквивалент 0.9 м воды, вклад ~40%).
+const float kLiquidSurface = 0.5;
 float gMediaDepth = 0.0;
 vec3 gMediaTint = vec3(0.0);
+bool gLiquidEntered = false;
 
 const float kGamma = 2.2;
 
@@ -251,6 +257,10 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
                 float k =
                     kMatPhase[mm] == 1u ? kAbsorbLiquid : kAbsorbGas;
                 float wgt = k * max(tNext - t, 0.0);
+                if (kMatPhase[mm] == 1u && !gLiquidEntered) {
+                    gLiquidEntered = true;
+                    wgt += kLiquidSurface; // плёнка границы фаз
+                }
                 gMediaDepth += wgt;
                 gMediaTint += ub.albedo[min(mm, 63u)].rgb * wgt;
             }

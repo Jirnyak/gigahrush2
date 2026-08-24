@@ -311,7 +311,13 @@ CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
         w.subfields().find<CellType>(kSubMaterialName);
     if (f && f->paged(ci)) return f->page(ci)[sub_bit(sx, sy, sz)];
     const SubMask& m = w.grid().masks()[ci];
-    return (m.empty() || m.test(sub_bit(sx, sy, sz))) ? base : kCellAir;
+    // Пустая маска = «вся клетка своего типа» ТОЛЬКО для материи сред
+    // (вода после collapse); у ТВЁРДОГО типа пустая маска значит ВОЗДУХ —
+    // карв выбил последний атом (регрессия «вода не течёт вдоль стен»
+    // 2026-08-24 родилась ровно из потери этого гейта: материализация
+    // заливала такую клетку 511 фантомными бетонными атомами).
+    if (m.empty()) return material_is_medium(base) ? base : kCellAir;
+    return m.test(sub_bit(sx, sy, sz)) ? base : kCellAir;
 }
 
 CellType* materialize_sub_page(World& w, std::size_t ci) {
@@ -321,11 +327,14 @@ CellType* materialize_sub_page(World& w, std::size_t ci) {
     const CellType base = w.grid().types()[ci];
     CellType* pg = f.ensure_page(ci, base);
     const SubMask& m = w.grid().masks()[ci];
-    // Закон чтения безстраничной клетки (см. sub_material_at): маска пуста —
-    // клетка однородна своим типом (страница уже залита base); маска
-    // непуста — немаскированное ВОЗДУХ. Прежний гейт «medium остаётся
-    // типом» заливал rubble-завалу и дыры — куб «грязи» из ниоткуда.
-    if (!m.full() && !m.empty())
+    // Закон чтения (двойник sub_material_at): немаскированное — ВОЗДУХ;
+    // исключение одно — ПУСТАЯ маска у типа-СРЕДЫ (вода после collapse):
+    // вся клетка материей. Пустая маска у ТВЁРДОГО типа = выбитая клетка —
+    // чистится в воздух (потеря этого гейта в «упрощении» 2026-08-24 и была
+    // регрессией «вода не течёт вдоль стен»: карв последнего атома рождал
+    // 511 фантомных бетонных атомов).
+    const bool uniformMedium = m.empty() && material_is_medium(base);
+    if (!m.full() && !uniformMedium)
         for (int b = 0; b < kSubVoxels; ++b)
             if (!m.test(b)) pg[b] = kCellAir;
     return pg;

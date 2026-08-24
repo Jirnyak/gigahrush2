@@ -205,6 +205,21 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
             for (int sz = 0; sz < 2; ++sz)
                 w.grid().mask(63, 63, 5).set(sub_bit(sx, sy, sz));
 
+    // РЕПРО РЕГРЕССИИ «вода не растекается вдоль стен» (фидбек владельца
+    // 2026-08-24): внутри бассейна — ЧАСТИЧНАЯ безстраничная стеновая
+    // клетка игрового вида (тип бетона, тонкая стена 2 субвокселя в
+    // центре, БЕЗ страницы — кодировка генератора): вода обязана затечь в
+    // её воздушную часть чисто GPU-путём (пробуждение wake_next + ленивая
+    // материализация по метке pack'а).
+    {
+        w.grid().set_cell(64, 64, 5, kMatConcrete);
+        for (int sy = 0; sy < 8; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                w.grid().mask(64, 64, 5).set(sub_bit(3, sy, sz));
+                w.grid().mask(64, 64, 5).set(sub_bit(4, sy, sz));
+            }
+    }
+
     // Налив: столб 4x4x8 = 128 квантов ДВУМЯ КЛЕТКАМИ ВЫШЕ дна — вода
     // обязана пролететь сквозь спящие нераскрытые клетки (пробуждение по
     // граням раскрывает им страницы) и растечься за границы клеток вбок:
@@ -386,6 +401,20 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     CHECK(maxStep <= 2);
     CHECK(wetColumns >= 90);
     CHECK(maxH <= 2);
+    // Вода ЗАТЕКЛА в воздушную часть частичной стеновой клетки (репро
+    // регрессии): в клетке (64,64,5) есть water-атомы вне маски.
+    {
+        int inWall = 0;
+        const SubField<CellType>* f3 =
+            w.subfields().find<CellType>(kSubMaterialName);
+        const CellType* pg3 = f3 ? f3->page(macro_index(64, 64, 5)) : nullptr;
+        if (pg3)
+            for (int bit = 0; bit < kSubVoxels; ++bit)
+                if (pg3[bit] == kMatWater) ++inWall;
+        std::printf("[medium_test] partial-wall cell: %d water quanta\n",
+                    inWall);
+        CHECK(inWall > 0);
+    }
     // Протокол пробуждения работал: минимум клетки падения (6, 5) плюс
     // латеральные соседи лужи.
     CHECK(medium.woken_total() >= 4);
@@ -767,6 +796,20 @@ void test_carve_agnostic() {
     const int ux = cx + 6;
     w.grid().set_cell(ux, cy, cz, kMatWater); // пустая маска = вся вода
     CHECK(sub_material_at(w, ux, cy, cz, 3, 3, 3) == kMatWater);
+
+    // 5б) РЕГРЕССИЯ «вода не течёт вдоль стен» (владелец ловил ДВАЖДЫ):
+    //    карв ПОСЛЕДНЕГО масочного атома твёрдой клетки не смеет заливать
+    //    её фантомной базой — вся клетка обязана стать воздухом. Пустая
+    //    маска = «весь тип» ТОЛЬКО у материи сред; у твёрдого — воздух.
+    const int lx2 = cx + 10;
+    w.grid().fill_cell(lx2, cy, cz - 1, kMatConcrete); // двухклеточный якорь
+    w.grid().fill_cell(lx2 + 1, cy, cz - 1, kMatConcrete);
+    w.grid().set_cell(lx2, cy, cz, kMatConcrete);
+    w.grid().mask(lx2, cy, cz).set(sub_bit(2, 2, 0));
+    CHECK(carve_at(w, lx2, cy, cz, 2, 2, 0, 60000, 99, scratch, res));
+    CHECK(w.grid().mask(lx2, cy, cz).empty());
+    CHECK(sub_material_at(w, lx2, cy, cz, 5, 5, 5) == kCellAir); // НЕ база!
+    CHECK(w.grid().cell(lx2, cy, cz) == kCellAir); // схлопнулась в воздух
 
     // 6) РЫХЛЫЕ ДВОЙНИКИ (решение владельца 2026-08-24): детач и писатели
     //    конвертируют в двойника ИСХОДНИКА (вид сохраняется), среды и
