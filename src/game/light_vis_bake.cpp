@@ -226,6 +226,88 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
     for (std::size_t i = 0; i < lampCount; ++i)
         out.rMaxM = std::max(out.rMaxM, lamps[i].radiusM);
 
+    // СИНТЕЗ КЛАСТЕРОВ ХВОСТА (light-cluster.md; вывод у kClusterSlotBase в
+    // .h): каждая живая лампа падает в бакет 8 м по позиции; непустой бакет —
+    // кластер: центроид (вес radiusM² — стабильный прокси силы), радиус-охват,
+    // взвешенный цвет, CSR членов. Детерминизм: обход ламп по индексу, бакеты
+    // по возрастанию. Тор: центроид копится wrap-дельтами от ПЕРВОГО члена
+    // бакета — кластер на шве не разъезжается на полмира (тот же приём, что у
+    // неона в light_bake.cpp).
+    out.clusters.clear();
+    out.clusterMembers.clear();
+    {
+        const float bucketM = kWorldExtent / static_cast<float>(kClusterGridDim);
+        std::vector<std::uint32_t> bucketOf(lampCount, kClusterCount);
+        std::vector<std::uint32_t> count(kClusterCount, 0);
+        for (std::size_t i = 0; i < lampCount; ++i) {
+            if (lamps[i].radiusM <= 0.0f) continue; // надгробие — не член
+            const int bx = static_cast<int>(std::floor(lamps[i].pos.x / bucketM)) &
+                           (kClusterGridDim - 1);
+            const int by = static_cast<int>(std::floor(lamps[i].pos.y / bucketM)) &
+                           (kClusterGridDim - 1);
+            const int bz = static_cast<int>(std::floor(lamps[i].pos.z / bucketM)) &
+                           (kClusterGridDim - 1);
+            const std::uint32_t b = static_cast<std::uint32_t>(
+                bx + by * kClusterGridDim +
+                bz * kClusterGridDim * kClusterGridDim);
+            bucketOf[i] = b;
+            ++count[b];
+        }
+        std::vector<std::uint32_t> start(kClusterCount + 1, 0);
+        for (std::uint32_t b = 0; b < kClusterCount; ++b)
+            start[b + 1] = start[b] + count[b];
+        out.clusterMembers.resize(start[kClusterCount]);
+        {
+            std::vector<std::uint32_t> cursor(start.begin(), start.end() - 1);
+            for (std::size_t i = 0; i < lampCount; ++i)
+                if (bucketOf[i] != kClusterCount)
+                    out.clusterMembers[cursor[bucketOf[i]]++] =
+                        static_cast<std::uint32_t>(i);
+        }
+        for (std::uint32_t b = 0; b < kClusterCount; ++b) {
+            if (count[b] == 0) continue;
+            LightVisCluster c;
+            c.bucket = b;
+            c.memberStart = start[b];
+            c.memberCount = count[b];
+            // Якорь = позиция СИЛЬНЕЙШЕГО члена (max radiusM, при равенстве —
+            // младший слот), НЕ центроид: кластер теперь МАРШИТСЯ (решение
+            // владельца 2026-08-24), а центроид ламп по разные стороны стены
+            // ложится ВНУТРЬ стены — марш гасил бы кластер навсегда, теряя
+            // свет. Позиция реальной лампы в открытом пространстве по
+            // построению. Цвет — взвешенное среднее (вес radiusM², стабильный
+            // прокси силы; интенсивность живая, её суммирует кадр).
+            std::uint32_t strongest = out.clusterMembers[start[b]];
+            for (std::uint32_t k = 1; k < count[b]; ++k) {
+                const std::uint32_t m = out.clusterMembers[start[b] + k];
+                if (lamps[m].radiusM > lamps[strongest].radiusM) strongest = m;
+            }
+            c.pos = lamps[strongest].pos;
+            float wSum = 0.0f;
+            vec3 colSum{0.0f, 0.0f, 0.0f};
+            for (std::uint32_t k = 0; k < count[b]; ++k) {
+                const LightVisLamp& L = lamps[out.clusterMembers[start[b] + k]];
+                const float w = L.radiusM * L.radiusM;
+                colSum = vec3{colSum.x + L.color.x * w,
+                              colSum.y + L.color.y * w,
+                              colSum.z + L.color.z * w};
+                wSum += w;
+            }
+            const float inv = 1.0f / wSum;
+            c.color = vec3{colSum.x * inv, colSum.y * inv, colSum.z * inv};
+            for (std::uint32_t k = 0; k < count[b]; ++k) {
+                const LightVisLamp& L = lamps[out.clusterMembers[start[b] + k]];
+                const vec3 d{shader_wrap_delta(c.pos.x, L.pos.x, kWorldExtent),
+                             shader_wrap_delta(c.pos.y, L.pos.y, kWorldExtent),
+                             shader_wrap_delta(c.pos.z, L.pos.z, kWorldExtent)};
+                const float dist =
+                    std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                c.radiusM = std::max(c.radiusM, dist + L.radiusM);
+            }
+            out.clusters.push_back(c);
+        }
+    }
+
     // Чанки ламп — та же арифметика, что parallel_for ([core/jobs.h]):
     // непрерывные диапазоны, выход склеивается в порядке воркеров = порядке
     // ламп, поэтому результат бит-идентичен при ЛЮБОМ числе потоков (сильнее
@@ -292,6 +374,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
     // порядок ради детерминизма), обрезка top-slots, счёт переливов.
     out.cells.assign(kLightVisCells * stride, 0);
     std::atomic<std::uint32_t> lit{0}, overflow{0}, maxPer{0}, packed{0};
+    std::atomic<std::uint32_t> packedMax{0};
     // Параллель по клеткам: каждый индекс пишет только свои слова — контракт
     // непересекающихся записей [core/jobs.h] держится по построению.
     parallel_for(
@@ -301,6 +384,7 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
             const std::size_t lo = static_cast<std::size_t>(w) * per;
             const std::size_t hi = std::min(lo + per, kLightVisCells);
             std::uint32_t myLit = 0, myOver = 0, myMax = 0, myPacked = 0;
+            std::uint32_t myPackedMax = 0;
             for (std::size_t c = lo; c < hi; ++c) {
                 const std::uint32_t b = cellStart[c];
                 const std::uint32_t n = cellCount[c];
@@ -313,13 +397,48 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                                               : a.id < r.id;
                 });
                 std::uint32_t* dst = out.cells.data() + c * stride;
-                    const std::uint32_t keep =
-                        std::min(n, static_cast<std::uint32_t>(slots));
-                    if (n > slots) ++myOver;
-                    dst[0] = keep;
-                    for (std::uint32_t k = 0; k < keep; ++k)
-                        dst[1 + k] = s[k].id;
-                myPacked += (out.cells.data() + c * stride)[0];
+                // ТОП-K ЧЕСТНЫХ + КЛАСТЕРЫ ХВОСТА (light-cluster.md; вывод K
+                // у kHonestLampsPerCell). Хвост за K не выбрасывается — его
+                // бакеты входят ссылками kClusterSlotBase + бакет, по одной,
+                // в порядке первого появления в отсортированном хвосте
+                // (ранжирование по вкладу даром). Инвариант «не потерять
+                // свет»: каждая достижимая лампа либо в топ-K, либо член
+                // кластера, на который клетка ссылается (пин в suite).
+                const std::uint32_t keepHonest = std::min(
+                    n, std::min(kHonestLampsPerCell,
+                                static_cast<std::uint32_t>(slots)));
+                std::uint32_t packedN = keepHonest;
+                for (std::uint32_t k = 0; k < keepHonest; ++k)
+                    dst[1 + k] = s[k].id;
+                const float bucketM =
+                    kWorldExtent / static_cast<float>(kClusterGridDim);
+                for (std::uint32_t k = keepHonest;
+                     k < n && packedN < slots; ++k) {
+                    const vec3& lp = lamps[s[k].id & kLampIdMask].pos;
+                    const int bx =
+                        static_cast<int>(std::floor(lp.x / bucketM)) &
+                        (kClusterGridDim - 1);
+                    const int by =
+                        static_cast<int>(std::floor(lp.y / bucketM)) &
+                        (kClusterGridDim - 1);
+                    const int bz =
+                        static_cast<int>(std::floor(lp.z / bucketM)) &
+                        (kClusterGridDim - 1);
+                    const std::uint32_t ref =
+                        kClusterSlotBase +
+                        static_cast<std::uint32_t>(
+                            bx + by * kClusterGridDim +
+                            bz * kClusterGridDim * kClusterGridDim);
+                    bool seen = false;
+                    for (std::uint32_t q = keepHonest; q < packedN && !seen;
+                         ++q)
+                        seen = dst[1 + q] == ref;
+                    if (!seen) dst[1 + packedN++] = ref;
+                }
+                if (packedN >= slots) ++myOver; // ссылкам не хватило слотов
+                dst[0] = packedN;
+                myPacked += packedN;
+                myPackedMax = std::max(myPackedMax, packedN);
             }
             // атомики только на сводку — не на горячем пути записи клеток
             lit.fetch_add(myLit, std::memory_order_relaxed);
@@ -330,8 +449,14 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
                    !maxPer.compare_exchange_weak(prev, myMax,
                                                  std::memory_order_relaxed)) {
             }
+            prev = packedMax.load(std::memory_order_relaxed);
+            while (prev < myPackedMax &&
+                   !packedMax.compare_exchange_weak(
+                       prev, myPackedMax, std::memory_order_relaxed)) {
+            }
         },
         T);
+    out.packedMaxPerCell = packedMax.load(std::memory_order_relaxed);
     out.litCells = lit.load(std::memory_order_relaxed);
     out.overflowCells = overflow.load(std::memory_order_relaxed);
     out.maxPerCell = maxPer.load(std::memory_order_relaxed);

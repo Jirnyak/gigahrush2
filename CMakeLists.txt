@@ -304,6 +304,13 @@ if(NOT _giga_lvis_h MATCHES "kLampDilatedBit = (0x[0-9A-Fa-f]+)u")
     message(FATAL_ERROR "cannot parse kLampDilatedBit out of src/game/light_vis_bake.h.")
 endif()
 set(_giga_lamp_dilated_bit ${CMAKE_MATCH_1})
+# База региона кластеров хвоста (light-cluster.md): шейдерам тем же дефайном,
+# что и CPU-константа — гварда биннинга и ветка surface_light обязаны знать
+# один регион.
+if(NOT _giga_lgrid_h MATCHES "kClusterSlotBase = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kClusterSlotBase out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_cluster_base ${CMAKE_MATCH_1})
 set(_giga_shader_defs
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
@@ -311,7 +318,8 @@ set(_giga_shader_defs
     -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
     -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
     -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
-    -DGIGA_LAMP_DILATED_BIT=${_giga_lamp_dilated_bit}u)
+    -DGIGA_LAMP_DILATED_BIT=${_giga_lamp_dilated_bit}u
+    -DGIGA_LIGHT_CLUSTER_BASE=${_giga_cluster_base}u)
 # Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
 # above go stale while the build stays green.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -1247,7 +1255,10 @@ if(GIGA_BUILD_TESTS)
     # 246514 -> 246519 (+5) on 2026-08-24: тег состава таблицы на свапе —
     # снапшотный, не текущий (находка №2, гонка «таблица сменилась в полёте
     # бейка»); мутация «текущий тег» ловится гоночным пином.
-        PASS_REGULAR_EXPRESSION "game_test: 246519 checks, 0 failures")
+    # 246519 -> 246530 (+11) on 2026-08-24: кластеры хвоста заново — пины
+    # синтеза (CSR, якорь-сильнейший, охват), паковки (топ-8 + ссылка) и
+    # оракула «хвост учтён через кластер»; мутация «паковка теряет ссылки».
+        PASS_REGULAR_EXPRESSION "game_test: 246530 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -222,6 +222,11 @@ static void light_log(const char* fmt, ...) {
 // сущности. Перестраивается при постройке этажа и при карве светоматериала;
 // g_staticTableGen — сигнал collect_scene_lights перезалить таблицу в рендер.
 static std::vector<game::LightVisLamp> g_staticLamps;
+// Кластеры хвоста последнего ЛЕГШЕГО полного бейка (light-cluster.md):
+// записи уехали в верхний регион таблицы на свапе, кадр суммирует
+// интенсивности членов по CSR в слот кластера (collect_scene_lights).
+static std::vector<game::LightVisCluster> g_clusterList;
+static std::vector<std::uint32_t> g_clusterMembers;
 static std::vector<gpu::GpuPointLight> g_staticLightBase;
 static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
 // id компоненты светоматериала -> её слот. СТАБИЛЬНОСТЬ СЛОТОВ
@@ -261,6 +266,11 @@ static_assert(gpu::kGridCellMeters == game::kLightVisCellM,
               "клетка светосетки: рендер и бейк разошлись");
 static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
               "сентинель «нет слота» обязан быть одним значением");
+static_assert(game::kClusterSlotBase == gpu::kClusterSlotBase,
+              "регион кластеров хвоста: game и render разошлись");
+static_assert(game::kClusterCount ==
+                  gpu::kRootLights - gpu::kClusterSlotBase,
+              "регион кластеров = ровно максимум бакетов");
 
 // GIGA_SKIP=world,bodies,props,physdraw,lightgrid — ИЗМЕРИТЕЛЬНЫЕ тумблеры:
 // выключить пасс и прочитать дельту fps. Существуют потому, что на MoltenVK
@@ -306,6 +316,11 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
         g_staticLightBase.clear();
         g_bakedSlotById.clear();
         g_slotDeadGen.clear();
+        // Кластеры прошлого этажа не должны суммироваться в пустоту: список
+        // очищается, записи региона погаснут порядком кадра (clear -> суммы),
+        // свежие приедут свапом Fresh-бейка.
+        g_clusterList.clear();
+        g_clusterMembers.clear();
     }
     g_slotDeadGen.resize(g_staticLamps.size(), kSlotAlive);
     g_bakedLightSlots.clear();
@@ -656,6 +671,18 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     for (std::size_t i = 0; i < g_bakedFloorLights.size(); ++i) {
         grid.set_static_intensity(g_bakedLightSlots[i],
                                   g_bakedFloorLights[i].intensity);
+    }
+
+    // Кластеры хвоста (light-cluster.md §2.3): интенсивность кластера = Σ
+    // членов ЭТОГО кадра — ПОСЛЕ всех записей статиков выше. Что выпадает
+    // даром: мерцание кластера статистически усредняется (честно для толпы
+    // ламп), обесточка района гасит его кластер, разбитая лампа-надгробие
+    // вычитается тем же кадром. Десятки тысяч сложений — доли мс.
+    for (const game::LightVisCluster& c : g_clusterList) {
+        float sum = 0.0f;
+        for (std::uint32_t k = 0; k < c.memberCount; ++k)
+            sum += grid.staged_intensity(g_clusterMembers[c.memberStart + k]);
+        grid.set_cluster_intensity(gpu::kClusterSlotBase + c.bucket, sum);
     }
 
     // 9. Свет из РУК: экипированный инструмент игрока ([equip.h] Tool), чья
@@ -7332,6 +7359,33 @@ int main(int argc, char** argv) {
                     // на которую легшие списки ещё ссылаются, — клетки
                     // светили бы чужой лампой до следующего полного бейка.
                     g_lightVisTableGen = nav.light_table_baked_tag();
+                    // Кластеры хвоста — ТОЙ ЖЕ поставкой, что списки клеток:
+                    // ссылки и записи одного бейка, рассинхрон невозможен по
+                    // построению (light-cluster.md; прошлая попытка умерла от
+                    // гварды биннинга, не от рассинхрона — но закон полезен).
+                    {
+                        const game::LightVisBake& vis = nav.light_vis();
+                        g_clusterList = vis.clusters;
+                        g_clusterMembers = vis.clusterMembers;
+                        std::vector<gpu::GpuPointLight> recs(
+                            g_clusterList.size());
+                        std::vector<std::uint32_t> slots(g_clusterList.size());
+                        for (std::size_t i = 0; i < g_clusterList.size(); ++i) {
+                            const game::LightVisCluster& c = g_clusterList[i];
+                            recs[i].posRadius = vec4{c.pos.x, c.pos.y, c.pos.z,
+                                                     c.radiusM};
+                            recs[i].colorIntensity =
+                                vec4{c.color.x, c.color.y, c.color.z, 0.0f};
+                            recs[i].dirCone =
+                                vec4{0.0f, 0.0f, 1.0f, -2.0f}; // омни
+                            slots[i] = gpu::kClusterSlotBase + c.bucket;
+                        }
+                        lightGrid.set_cluster_records(
+                            recs.data(), slots.data(),
+                            static_cast<std::uint32_t>(recs.size()));
+                        light_log("[clusters] swap: %zu tail clusters staged\n",
+                                  recs.size());
+                    }
                     light_log("[slots] full light bake landed at gen %u — dead "
                               "slots below it are now recyclable\n",
                               g_lightVisTableGen);

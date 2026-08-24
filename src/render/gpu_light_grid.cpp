@@ -263,6 +263,33 @@ void GpuLightGrid::set_static_intensity(uint32_t slot, float intensity) noexcept
     stagingLights_[slot].colorIntensity.w = intensity;
 }
 
+void GpuLightGrid::set_cluster_records(const GpuPointLight* recs,
+                                       const uint32_t* slots,
+                                       uint32_t n) noexcept {
+    // Прошлый состав региона гасится надгробиями: свежий бейк мог потерять
+    // бакет (лампы умерли), его запись не должна пережить свап.
+    for (uint32_t old : clusterSlots_)
+        stagingLights_[old].colorIntensity.w = 0.0f;
+    clusterSlots_.assign(slots, slots + n);
+    clusterLo_ = kRootLights;
+    clusterHi_ = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t slot = slots[i];
+        if (slot < kClusterSlotBase || slot >= kRootLights) continue;
+        stagingLights_[slot] = recs[i];
+        stagingLights_[slot].colorIntensity.w = 0.0f;
+        clusterLo_ = std::min(clusterLo_, slot);
+        clusterHi_ = std::max(clusterHi_, slot);
+    }
+    if (clusterHi_ < clusterLo_) { clusterLo_ = 0; clusterHi_ = 0; }
+}
+
+void GpuLightGrid::set_cluster_intensity(uint32_t slot,
+                                         float intensity) noexcept {
+    if (slot < kClusterSlotBase || slot >= kRootLights) return;
+    stagingLights_[slot].colorIntensity.w = intensity;
+}
+
 float GpuLightGrid::staged_intensity(uint32_t slot) const noexcept {
     return slot < kRootLights ? stagingLights_[slot].colorIntensity.w : 0.0f;
 }
@@ -273,6 +300,9 @@ void GpuLightGrid::clear_lights() noexcept {
     for (uint32_t i = 0; i < staticCount_; ++i) {
         stagingLights_[i].colorIntensity.w = 0.0f;
     }
+    // Кластеры гаснут тем же порядком кадра: clear -> суммы членов.
+    for (uint32_t slot : clusterSlots_)
+        stagingLights_[slot].colorIntensity.w = 0.0f;
     dynamicCount_ = 0;
     overflowDropped_ = 0;
 }
@@ -447,6 +477,14 @@ void GpuLightGrid::update_and_dispatch(VkCommandBuffer cmd) noexcept {
     if (uploadCount > 0) {
         std::memcpy(static_cast<char*>(lightMapped_) + 16, stagingLights_.data(),
                     uploadCount * sizeof(GpuPointLight));
+    }
+    // Регион кластеров — вторым спаном [lo..hi]: бакеты разбросаны по
+    // региону, спан ~1.5 МиБ худшим случаем — копейки рядом с таблицей.
+    if (clusterHi_ >= clusterLo_ && clusterHi_ != 0) {
+        std::memcpy(static_cast<char*>(lightMapped_) + 16 +
+                        clusterLo_ * sizeof(GpuPointLight),
+                    stagingLights_.data() + clusterLo_,
+                    (clusterHi_ - clusterLo_ + 1) * sizeof(GpuPointLight));
     }
 
     // Сплат динамиков по бакетам (59.14): каждый динамик ложится id-шником
