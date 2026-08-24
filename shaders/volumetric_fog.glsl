@@ -158,7 +158,22 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
     uint cellIdx = light_cell_index(P);
     uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
-    for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
+    // ГИБРИД (решение владельца 2026-08-24, [gpu_light_grid.h]
+    // kFullResLights): список клетки отсортирован по вкладу; полнорезный
+    // пасс маршит ТОЛЬКО топ-K (жёсткий потолок стоимости пикселя),
+    // полурезный полупасс — ТОЛЬКО хвост за K (свет не теряется — дешевеет).
+    // Прочие потребители (тела/пропы) — весь список, как раньше.
+#if defined(GIGA_LIGHT_HALF)
+    uint kBegin = min(uint(GIGA_LIGHT_FULLRES_K), cellCount);
+    uint kEnd = cellCount;
+#elif defined(GIGA_LIGHT_SAMPLED)
+    uint kBegin = 0u;
+    uint kEnd = min(uint(GIGA_LIGHT_FULLRES_K), cellCount);
+#else
+    uint kBegin = 0u;
+    uint kEnd = cellCount;
+#endif
+    for (uint k = kBegin; k < kEnd && budget > 0u; ++k) {
         PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
 
         vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);

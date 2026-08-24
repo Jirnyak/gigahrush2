@@ -856,9 +856,15 @@ void main() {
     // трассеры, конусы. Тень каждого источника — giga_shadow выше.
     vec3 directDiffuse, directSpec;
 #ifdef GIGA_LIGHT_SAMPLED
-    // Свет — из полурезного полупасса (те же лампы, те же теневые DDA-лучи,
-    // вчетверо меньше фрагментов); билатераль с глубинным гейтом выше.
-    sample_half_light(d, directDiffuse, directSpec);
+    // ГИБРИД: топ-K доминант — полнорезно ЗДЕСЬ (surface_light под
+    // GIGA_LIGHT_SAMPLED маршит только [0..K)), хвост — из полурезного
+    // полупасса билатералью (глубинный гейт выше). Сумма — весь свет клетки.
+    surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
+                  d, pc.fog.x, directDiffuse, directSpec);
+    vec3 tailD, tailS;
+    sample_half_light(d, tailD, tailS);
+    directDiffuse += tailD;
+    directSpec += tailS;
 #else
     surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
                   d, pc.fog.x, directDiffuse, directSpec);
