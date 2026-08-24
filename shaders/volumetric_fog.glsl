@@ -157,52 +157,6 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
     // Прямая индексация, НЕ копия структа: `LightGridCell c = ...` грузит всю
     // клетку (kGridCellBytes), здесь читаются только count и индексы бюджета.
     uint cellIdx = light_cell_index(P);
-#ifdef GIGA_QUAD_SHADOWS
-    // КВАД-ТЕНИ («тени реже пикселей», вариант B разбора 2026-08-23,
-    // ddalight.md): один теневой DDA-луч на квад 2×2 — лидер квада маршит от
-    // СВОЕЙ точки, трое соседей берут его ответ бродкастом. Лучей вчетверо
-    // меньше; край тени грубеет до 2 пикселей — родной масштаб бинарной
-    // воксельной тени. Квад-операции законны только в квад-униформном потоке,
-    // поэтому: (1) клетка светосетки берётся ЛИДЕРСКАЯ — списки соседних
-    // клеток делят доминирующие лампы (радиус много больше 4 м), расхождение
-    // лишь в хвосте, зато весь цикл ламп идёт в ногу; (2) пропуск лампы
-    // решается КВАДОМ ЦЕЛИКОМ (subgroupQuadAll), а полинейные отличия
-    // (ndotl, затухание) остаются в вкладе — за радиусом power зануляется
-    // сам. Только фрагментные шейдеры с дефайном (raymarch.frag): вершинным
-    // и компьюту квадов не положено.
-    cellIdx = subgroupQuadBroadcast(cellIdx, 0u);
-    uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
-    for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
-        PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
-
-        vec3 toL = wrap_nearest(lt.posRadius.xyz - P, wrapPeriod);
-        float dSq = dot(toL, toL);
-        float radius = lt.posRadius.w;
-        float d = sqrt(max(dSq, 1e-6));
-        vec3 L = toL / max(d, 1e-3);
-        float ndotl = dot(N, L);
-        float att = dSq >= radius * radius
-                        ? 0.0
-                        : light_attenuation(d, radius) *
-                              spot_factor(lt.dirCone, -L);
-        float power = lt.colorIntensity.w * att;
-        bool lit = power > 0.0 && ndotl > 0.0;
-        // «Хоть один в кваде освещён?» — четырьмя бродкастами базового
-        // квад-расширения: subgroupQuadAll живёт в EXT_shader_quad_control,
-        // которого на MoltenVK может не быть.
-        if (!(subgroupQuadBroadcast(lit, 0u) || subgroupQuadBroadcast(lit, 1u) ||
-              subgroupQuadBroadcast(lit, 2u) || subgroupQuadBroadcast(lit, 3u)))
-            continue; // весь квад мимо — луча нет
-        budget--;
-        // Старт — четверть атома от грани вдоль нормали (не родиться в своём
-        // же теле), финиш — 0.2 м до источника (не врезаться в его арматуру).
-        float vis = 0.0;
-        if ((gl_SubgroupInvocationID & 3u) == 0u)
-            vis = giga_shadow(P + N * 0.06, L, d - 0.26);
-        vis = subgroupQuadBroadcast(vis, 0u);
-        if (vis <= 0.0) continue;
-        if (!lit) continue;
-#else
     uint cellCount = min(uGridCells[cellIdx].count, kLightCellSlots);
     for (uint k = 0u; k < cellCount && budget > 0u; ++k) {
         PointLight lt = uPointLights[uGridCells[cellIdx].lightIndices[k]];
@@ -229,7 +183,6 @@ void surface_light(vec3 P, vec3 N, vec3 viewDir, float specPow,
         // лампочка висит вплотную к потолку).
         float vis = giga_shadow(P + N * 0.06, L, d - 0.26);
         if (vis <= 0.0) continue;
-#endif
 
         vec3 lightCol = lt.colorIntensity.rgb * (power * vis);
         outDiffuse += lightCol * ndotl;

@@ -1,13 +1,5 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// КВАД-ТЕНИ («тени реже пикселей», ddalight.md): один теневой DDA-луч на
-// квад 2×2 в surface_light ([volumetric_fog.glsl], тело под этим дефайном).
-// Субгрупповые операции — SPIR-V 1.3, поэтому raymarch.frag единственный
-// компилится --target-env=vulkan1.1 (CMakeLists); включать дефайн можно
-// только во фрагментных шейдерах.
-#extension GL_KHR_shader_subgroup_basic : require
-#extension GL_KHR_shader_subgroup_quad : require
-#define GIGA_QUAD_SHADOWS 1
 // The world pass as a two-level DDA raymarch over the GPU voxel mirror
 // ([render/voxel_mirror.h]) — stage 2 of the raymarch migration. Replaces the
 // instanced-cube world draw: geometry is read per-ray straight from the same

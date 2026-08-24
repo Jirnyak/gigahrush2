@@ -328,15 +328,9 @@ set(_giga_spv_files "")
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
 foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
-    # raymarch.frag — единственный с субгрупповыми квад-тенями (SPIR-V 1.3 ⇒
-    # target vulkan1.1; инстанс приложения и так 1.2). Остальные — дефолт 1.0.
-    set(_giga_sh_env "")
-    if(_sh STREQUAL "raymarch.frag")
-        set(_giga_sh_env --target-env=vulkan1.1)
-    endif()
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O ${_giga_sh_env} ${_giga_shader_defs}
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O ${_giga_shader_defs}
             ${CMAKE_SOURCE_DIR}/shaders/${_sh}
             -o ${_giga_spv_dir}/${_sh}.spv
         DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${_sh} ${_giga_glsl_includes}
@@ -433,8 +427,7 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
 # arrays, the procedural fallback must not declare them.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/raymarch_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.1
-        -DGIGA_ALBEDO_ARRAY ${_giga_shader_defs}
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag
         -o ${_giga_spv_dir}/raymarch_tex.frag.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag ${_giga_glsl_includes}
