@@ -24,9 +24,10 @@ const uint kMaterialCsvRows = 22u;
 //     aged Soviet panel concrete; poured smooth, no panel seams
 //   2 soil                 smooth   authored                 CV 0.2200
 //     organic earth / soil mottle
-//   3 water_mark           generic  authored                 CV 0.0000
-//     legacy water marker; вода = референс текучести: flow 1.0 при
-//     вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость
+//   3 water                generic  authored                 CV 0.0000
+//     вода — настоящая материя автомата (S16); референс текучести: flow
+//     1.0 при вязкости 1 мПа·с — flow прочих жидкостей =
+//     вязкость_воды/вязкость; имя water_mark умерло с инкр. 2
 //   4 slab_tan             smooth   authored                 CV 0.0600
 //     muted tan concrete slab
 //   5 extract              smooth   authored                 CV 0.0300
@@ -80,7 +81,7 @@ const uint kMatFamily[22] = uint[22](
     0u,  //  0 air
     8u,  //  1 concrete
     8u,  //  2 soil
-    0u,  //  3 water_mark
+    0u,  //  3 water
     8u,  //  4 slab_tan
     8u,  //  5 extract
     0u,  //  6 door
@@ -109,7 +110,7 @@ const vec4 kMatSurface[22] = vec4[22](
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air
     vec4(0.07987,   1.00, 0.03000, 0.04000),  //  1 concrete
     vec4(0.21741,   0.80, 0.12000, 0.10000),  //  2 soil
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  3 water_mark
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  3 water
     vec4(0.05995,   1.00, 0.04000, 0.03000),  //  4 slab_tan
     vec4(0.02999,   0.00, 0.00000, 0.02000),  //  5 extract
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  6 door
@@ -135,7 +136,7 @@ const vec3 kMatChromaAxis[22] = vec3[22](
     vec3(1.00000, 1.00000, 1.00000),  //  0 air
     vec3(1.00000, 1.00000, 1.00000),  //  1 concrete
     vec3(1.15000, 0.90000, 0.65000),  //  2 soil
-    vec3(1.00000, 1.00000, 1.00000),  //  3 water_mark
+    vec3(1.00000, 1.00000, 1.00000),  //  3 water
     vec3(1.05000, 0.95000, 0.85000),  //  4 slab_tan
     vec3(1.00000, 1.00000, 1.00000),  //  5 extract
     vec3(1.00000, 1.00000, 1.00000),  //  6 door
@@ -163,7 +164,7 @@ const float kMatEmissive[22] = float[22](
     0.000,  //  0 air
     0.000,  //  1 concrete
     0.000,  //  2 soil
-    0.000,  //  3 water_mark
+    0.000,  //  3 water
     0.000,  //  4 slab_tan
     0.000,  //  5 extract
     0.000,  //  6 door
@@ -192,7 +193,7 @@ const uint kMatLightPass[22] = uint[22](
     1u,  //  0 air
     0u,  //  1 concrete
     0u,  //  2 soil
-    0u,  //  3 water_mark
+    0u,  //  3 water
     0u,  //  4 slab_tan
     0u,  //  5 extract
     0u,  //  6 door
@@ -221,7 +222,7 @@ const vec2 kMatMedium[22] = vec2[22](
     vec2(1.000, 1.000),  //  0 air
     vec2(0.000, 0.000),  //  1 concrete
     vec2(0.000, 0.000),  //  2 soil
-    vec2(1.000, 0.000),  //  3 water_mark
+    vec2(1.000, 0.000),  //  3 water
     vec2(0.000, 0.000),  //  4 slab_tan
     vec2(0.000, 0.000),  //  5 extract
     vec2(0.000, 0.000),  //  6 door
@@ -246,7 +247,7 @@ const uint kMatPhase[22] = uint[22](
     2u,  //  0 air
     0u,  //  1 concrete
     0u,  //  2 soil
-    1u,  //  3 water_mark
+    1u,  //  3 water
     0u,  //  4 slab_tan
     0u,  //  5 extract
     0u,  //  6 door
@@ -274,7 +275,7 @@ const float kMatDensity[22] = float[22](
     0.0   ,  //  0 air
     2400.0,  //  1 concrete
     1600.0,  //  2 soil
-    1000.0,  //  3 water_mark
+    1000.0,  //  3 water
     2200.0,  //  4 slab_tan
     2400.0,  //  5 extract
     7800.0,  //  6 door

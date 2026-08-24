@@ -42,15 +42,11 @@ void barrier_transfer_to_shader(VkCommandBuffer cmd) {
 
 // 0 empty / 1 full / 2 partial / 3 partial С МАТЕРИЕЙ СРЕД — the raymarcher's
 // macro skip byte. Класс 3 (CANON S16, мост рендера): в клетке есть материя
-// без бита маски, чья строка движется (flow/diffusion > 0) — вода, газ.
-// Только такие клетки платят фетч страницы на пустых битах маски в DDA;
-// обычный мир (0/1/2) стоит ровно как раньше. GPU-двойник закона — settle в
-// [shaders/medium_sim.comp]; разъедутся — verify() покраснеет.
-bool material_is_medium(CellType t) {
-    return t != 0 && t < kMatCount &&
-           (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
-}
-
+// без бита маски, чья строка движется — material_is_medium(), одна выписка
+// закона в [world/material_props.h]. Только такие клетки платят фетч
+// страницы на пустых битах маски в DDA; обычный мир (0/1/2) стоит ровно как
+// раньше. GPU-двойник закона — settle в [shaders/medium_sim.comp];
+// разъедутся — verify() покраснеет.
 std::uint8_t classify(const SubMask& m, CellType type, const CellType* page) {
     if (m.full()) return 1;
     if (page) {

@@ -59,9 +59,29 @@ inline CellType mat_key(const World& w, const SubField<CellType>* mats,
     return mats ? mats->at(ci, static_cast<int>(key & 511u), base) : base;
 }
 
-// Clear one sub-voxel and keep every invariant: an emptied cell reverts to air
-// and sheds its material page; the touched cell is recorded for the caller's
-// dirty marks.
+// Существует ли материя в этом субвокселе — АГНОСТИЧНО к её виду (владелец
+// 2026-08-24: «carve просто удаляет субвоксели»). Три представления атома:
+//   * бит маски — твёрдый кэш (бетон, легаси-мир без страниц);
+//   * страница — материал субвокселя дословно (вода, газ, смешанные клетки);
+//   * однородная клетка материи сред без страницы (вода схлопнулась в
+//     CellType) — вся клетка материя, маски у неё нет по канону S16.2.
+// Немаскированный атом БЕЗ страницы в масочной клетке — уже вырезанный
+// (легаси-кодировка «маска главнее»), материей не считается.
+inline bool atom_exists(const World& w, const SubField<CellType>* mats,
+                        std::uint32_t key) {
+    if (solid_key(w.grid(), key)) return true;
+    const std::size_t ci = key >> 9;
+    if (mats && mats->paged(ci))
+        return mats->page(ci)[key & 511u] != kCellAir;
+    return w.grid().masks()[ci].empty() &&
+           material_is_medium(w.grid().types()[ci]);
+}
+
+// Clear one sub-voxel and keep every invariant: the carved atom becomes air in
+// the MATERIAL truth too, and the page is shed only when no matter of any kind
+// remains — a carved floor bit must not evaporate the puddle sharing its cell
+// (это делал старый drop_page по пустой маске). The touched cell is recorded
+// for the caller's dirty marks.
 inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
     const std::uint32_t ci = key >> 9;
@@ -69,9 +89,19 @@ inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
     m.clear(static_cast<int>(key & 511u));
     dirty.push_back(ci);
-    if (m.empty()) {
+    CellType* pg = mats ? mats->page(ci) : nullptr;
+    // Однородную клетку материи сред раскрыть ПЕРЕД удалением одного атома —
+    // иначе вырезанный квант унёс бы всю клетку воды типом.
+    if (!pg && mats && m.empty() &&
+        material_is_medium(w.grid().types()[ci]))
+        pg = mats->ensure_page(ci, w.grid().types()[ci]);
+    if (pg) {
+        pg[key & 511u] = kCellAir;
+        CellType uniform;
+        if (m.empty() && mats->collapse_if_uniform(ci, &uniform))
+            w.grid().set_cell(c.cx, c.cy, c.cz, uniform);
+    } else if (m.empty()) {
         w.grid().set_cell(c.cx, c.cy, c.cz, kCellAir);
-        if (mats) mats->drop_page(ci);
     }
 }
 
@@ -308,7 +338,9 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
                 const float d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 >= r2) continue;
                 const std::uint32_t key = key_at(ax, ay, az);
-                if (!solid_key(w.grid(), key)) continue;
+                // АГНОСТИЧНО к виду материи (владелец 2026-08-24): бетон,
+                // вода, газ — один ролл, различие только в твёрдости строки.
+                if (!atom_exists(w, mats, key)) continue;
                 const CellType mat = mat_key(w, mats, key);
                 const std::uint16_t hardness = material_hardness(mat);
                 if (hardness == kHardnessUnbreakable) continue;
@@ -343,8 +375,8 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     const std::uint32_t bit =
         static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
     const std::uint32_t key = pack_key(ci, bit);
-    if (!solid_key(w.grid(), key)) return false;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    if (!atom_exists(w, mats, key)) return false;
     const CellType mat = mat_key(w, mats, key);
     if (!carve_roll(carve_hash(seed, ci, bit), power, material_hardness(mat)))
         return false;

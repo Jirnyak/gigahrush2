@@ -18,7 +18,7 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.00f, 0.00f, 0.00f},  //  0 air
     {0.30f, 0.30f, 0.28f},  //  1 concrete
     {0.24f, 0.36f, 0.18f},  //  2 soil
-    {0.18f, 0.28f, 0.55f},  //  3 water_mark
+    {0.18f, 0.28f, 0.55f},  //  3 water
     {0.36f, 0.30f, 0.22f},  //  4 slab_tan
     {0.10f, 0.85f, 0.42f},  //  5 extract
     {0.16f, 0.24f, 0.42f},  //  6 door

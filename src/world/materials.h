@@ -19,7 +19,7 @@ namespace giga {
 
 inline constexpr CellType kMatConcrete = 1;       // aged Soviet panel concrete; poured smooth, no panel seams
 inline constexpr CellType kMatSoil = 2;           // organic earth / soil mottle
-inline constexpr CellType kMatWaterMark = 3;      // legacy water marker; вода = референс текучести: flow 1.0 при вязкости 1 
+inline constexpr CellType kMatWater = 3;          // вода — настоящая материя автомата (S16); референс текучести: flow 1.0 пр
 inline constexpr CellType kMatSlabTan = 4;        // muted tan concrete slab
 inline constexpr CellType kMatExtract = 5;        // the bank pad: signage, not surface — unbreakable infrastructure
 inline constexpr CellType kMatDoor = 6;           // door leaf + frame; carve-immune, owned by the door state machine
@@ -50,7 +50,7 @@ inline constexpr const char* kMatNames[kMatCount] = {
     "air"           ,  //  0 air
     "concrete"      ,  //  1 concrete
     "soil"          ,  //  2 soil
-    "water_mark"    ,  //  3 water_mark
+    "water"         ,  //  3 water
     "slab_tan"      ,  //  4 slab_tan
     "extract"       ,  //  5 extract
     "door"          ,  //  6 door

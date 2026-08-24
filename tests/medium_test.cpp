@@ -194,7 +194,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     for (int sx = 2; sx < 6; ++sx)
         for (int sy = 2; sy < 6; ++sy)
             for (int sz = 0; sz < 8; ++sz)
-                pg[sub_bit(sx, sy, sz)] = kMatWaterMark;
+                pg[sub_bit(sx, sy, sz)] = kMatWater;
 
     static gpu::VoxelMirror mirror;
     CHECK(mirror.init(dev));
@@ -246,7 +246,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         const int cy = static_cast<int>((ci >> 7) & 127u);
         const int cz = static_cast<int>((ci >> 14) & 127u);
         for (int bit = 0; bit < kSubVoxels; ++bit) {
-            if (page[bit] != kMatWaterMark || m.test(bit)) continue;
+            if (page[bit] != kMatWater || m.test(bit)) continue;
             const int sx = bit & 7, sy = (bit >> 3) & 7, sz = (bit >> 6) & 7;
             water.insert(key(cx * 8 + sx, cy * 8 + sy, cz * 8 + sz));
         }
@@ -317,6 +317,48 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// Карв АГНОСТИЧЕН к виду материи (владелец 2026-08-24): вода режется тем же
+// роллом, что бетон, — и наоборот, вырезанный твёрдый атом не уносит воду,
+// делившую с ним клетку (старый remove_key ронял страницу по пустой маске).
+// CPU-тест, GPU не нужен.
+void test_carve_agnostic() {
+    static World w;
+    const int cx = 30, cy = 30, cz = 30;
+    const std::size_t ci = macro_index(cx, cy, cz);
+    // Якорь-клетка снизу: детач-свип не должен судить наш пол «оторванным».
+    w.grid().fill_cell(cx, cy, cz - 1, kMatConcrete);
+    // Пол = нижний слой битов бетона; вода — 4 атома страницей над ним.
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+    for (int sy = 0; sy < 8; ++sy)
+        for (int sx = 0; sx < 8; ++sx) {
+            w.grid().mask(cx, cy, cz).set(sub_bit(sx, sy, 0));
+            pg[sub_bit(sx, sy, 0)] = kMatConcrete;
+        }
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            pg[sub_bit(sx, sy, 1)] = kMatWater;
+
+    CarveScratch scratch;
+    CarveResult res;
+    // 1) Вода режется: power 256 против твёрдости воды 96 — ролл
+    //    гарантирован; маска не тронута (у воды её и не было).
+    CHECK(carve_at(w, cx, cy, cz, 3, 3, 1, 256, 42, scratch, res));
+    CHECK(sub_material_at(w, cx, cy, cz, 3, 3, 1) == kCellAir);
+    CHECK(w.grid().mask(cx, cy, cz).test(sub_bit(3, 3, 0)));
+    // 2) Вырезанный бетонный бит НЕ уносит воду клетки.
+    CHECK(carve_at(w, cx, cy, cz, 0, 0, 0, 60000, 43, scratch, res));
+    CHECK(!w.grid().mask(cx, cy, cz).test(sub_bit(0, 0, 0)));
+    CHECK(sub_material_at(w, cx, cy, cz, 4, 3, 1) == kMatWater);
+    // 3) Однородная водная клетка (без страницы): карв одного атома
+    //    раскрывает страницу, а не превращает всю клетку в воздух.
+    w.grid().set_cell(cx + 1, cy, cz, kMatWater);
+    CHECK(carve_at(w, cx + 1, cy, cz, 0, 0, 0, 256, 44, scratch, res));
+    CHECK(sub_material_at(w, cx + 1, cy, cz, 0, 0, 0) == kCellAir);
+    CHECK(sub_material_at(w, cx + 1, cy, cz, 7, 7, 7) == kMatWater);
+}
+
 } // namespace
 
 int main() {
@@ -328,6 +370,7 @@ int main() {
         test_headless_roundtrip(dev);
         test_automaton_water(dev);
     }
+    test_carve_agnostic();
     dev.destroy();
 
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);

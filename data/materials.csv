@@ -2,7 +2,7 @@ id,name,cpp_name,hardness,albedo_r,albedo_g,albedo_b,texture_id,family,cv,pitch,
 0,air,,0,0.00,0.00,0.00,,generic,0.0,0.0,0.0,1,1,1,0.0,never drawn by the world pass; body.vert writes this id so bodies keep the pre-existing look; референс среды: flow/diffusion 1.0 = воздух уступает место и выравнивается за один подтик — единица шкалы,0,0,0,0,gas,1.0,1.0,0
 1,concrete,Concrete,256,0.30,0.30,0.28,,smooth,0.08,1.0,0.03,1,1,1,0.04,"aged Soviet panel concrete; poured smooth, no panel seams",2400,0,0,0,solid,0,0,0
 2,soil,Soil,64,0.24,0.36,0.18,,smooth,0.22,0.8,0.12,1.15,0.9,0.65,0.1,organic earth / soil mottle,1600,0,0,0,solid,0,0,0
-3,water_mark,WaterMark,96,0.18,0.28,0.55,,generic,0.0,0.0,0.0,1,1,1,0.0,legacy water marker; вода = референс текучести: flow 1.0 при вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость,1000,0,0,0,liquid,1.0,0,0
+3,water,Water,96,0.18,0.28,0.55,,generic,0.0,0.0,0.0,1,1,1,0.0,вода — настоящая материя автомата (S16); референс текучести: flow 1.0 при вязкости 1 мПа·с — flow прочих жидкостей = вязкость_воды/вязкость; имя water_mark умерло с инкр. 2,1000,0,0,0,liquid,1.0,0,0
 4,slab_tan,SlabTan,192,0.36,0.30,0.22,,smooth,0.06,1.0,0.04,1.05,0.95,0.85,0.03,muted tan concrete slab,2200,0,0,0,solid,0,0,0
 5,extract,Extract,65535,0.10,0.85,0.42,,smooth,0.03,0.0,0.0,1,1,1,0.02,"the bank pad: signage, not surface — unbreakable infrastructure",2400,0,0,0,solid,0,0,0
 6,door,Door,65535,0.16,0.24,0.42,,generic,0.0,0.0,0.0,1,1,1,0.0,"door leaf + frame; carve-immune, owned by the door state machine",7800,0,0,0,solid,0,0,0

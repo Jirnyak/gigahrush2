@@ -23,7 +23,7 @@ inline constexpr std::uint16_t kMatHardness[kMatCount] = {
     0                   ,  //  0 air
     256                 ,  //  1 concrete
     64                  ,  //  2 soil
-    96                  ,  //  3 water_mark
+    96                  ,  //  3 water
     192                 ,  //  4 slab_tan
     kHardnessUnbreakable,  //  5 extract
     kHardnessUnbreakable,  //  6 door
@@ -60,7 +60,7 @@ inline constexpr float kMatDensity[kMatCount] = {
     0.0f   ,  //  0 air
     2400.0f,  //  1 concrete
     1600.0f,  //  2 soil
-    1000.0f,  //  3 water_mark
+    1000.0f,  //  3 water
     2200.0f,  //  4 slab_tan
     2400.0f,  //  5 extract
     7800.0f,  //  6 door
@@ -104,7 +104,7 @@ inline constexpr std::uint8_t kMatPhase[kMatCount] = {
     2,  //  0 air
     0,  //  1 concrete
     0,  //  2 soil
-    1,  //  3 water_mark
+    1,  //  3 water
     0,  //  4 slab_tan
     0,  //  5 extract
     0,  //  6 door
@@ -129,7 +129,7 @@ inline constexpr float kMatFlow[kMatCount] = {
     1.000f,  //  0 air
     0.000f,  //  1 concrete
     0.000f,  //  2 soil
-    1.000f,  //  3 water_mark
+    1.000f,  //  3 water
     0.000f,  //  4 slab_tan
     0.000f,  //  5 extract
     0.000f,  //  6 door
@@ -154,7 +154,7 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     1.000f,  //  0 air
     0.000f,  //  1 concrete
     0.000f,  //  2 soil
-    0.000f,  //  3 water_mark
+    0.000f,  //  3 water
     0.000f,  //  4 slab_tan
     0.000f,  //  5 extract
     0.000f,  //  6 door
@@ -179,6 +179,15 @@ inline MatPhase material_phase(CellType t) {
     return t < kMatCount ? static_cast<MatPhase>(kMatPhase[t]) : MatPhase::Solid;
 }
 
+// «Материя сред» — строка даёт движение (flow или diffusion > 0) и это не
+// воздух. ЕДИНСТВЕННАЯ выписка закона: класс-байт 3 зеркала
+// (render/voxel_mirror.cpp), агностичный карв (world/destruct.cpp) и
+// GPU-двойник (shaders/medium_sim.comp, mobile()) обязаны совпадать с ней.
+inline bool material_is_medium(CellType t) {
+    return t != 0 && t < kMatCount &&
+           (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
+}
+
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
 // материала излучают; бейк этажа кластеризует их в статические эмиттеры
 // (game/light_bake.h). Цвет источника = альбедо материала: нарисованный
@@ -188,7 +197,7 @@ inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
     0   ,  //  0 air
     0   ,  //  1 concrete
     0   ,  //  2 soil
-    0   ,  //  3 water_mark
+    0   ,  //  3 water
     0   ,  //  4 slab_tan
     0   ,  //  5 extract
     0   ,  //  6 door
@@ -213,7 +222,7 @@ inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
     0   ,  //  0 air
     0   ,  //  1 concrete
     0   ,  //  2 soil
-    0   ,  //  3 water_mark
+    0   ,  //  3 water
     0   ,  //  4 slab_tan
     0   ,  //  5 extract
     0   ,  //  6 door
@@ -240,7 +249,7 @@ inline constexpr float kMatAlbedoR[kMatCount] = {
     0.000f,  //  0 air
     0.300f,  //  1 concrete
     0.240f,  //  2 soil
-    0.180f,  //  3 water_mark
+    0.180f,  //  3 water
     0.360f,  //  4 slab_tan
     0.100f,  //  5 extract
     0.160f,  //  6 door
@@ -264,7 +273,7 @@ inline constexpr float kMatAlbedoG[kMatCount] = {
     0.000f,  //  0 air
     0.300f,  //  1 concrete
     0.360f,  //  2 soil
-    0.280f,  //  3 water_mark
+    0.280f,  //  3 water
     0.300f,  //  4 slab_tan
     0.850f,  //  5 extract
     0.240f,  //  6 door
@@ -288,7 +297,7 @@ inline constexpr float kMatAlbedoB[kMatCount] = {
     0.000f,  //  0 air
     0.280f,  //  1 concrete
     0.180f,  //  2 soil
-    0.550f,  //  3 water_mark
+    0.550f,  //  3 water
     0.220f,  //  4 slab_tan
     0.420f,  //  5 extract
     0.420f,  //  6 door
@@ -324,7 +333,7 @@ inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
     1,  //  0 air
     0,  //  1 concrete
     0,  //  2 soil
-    0,  //  3 water_mark
+    0,  //  3 water
     0,  //  4 slab_tan
     0,  //  5 extract
     0,  //  6 door

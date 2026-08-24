@@ -337,6 +337,15 @@ inline MatPhase material_phase(CellType t) {
     return t < kMatCount ? static_cast<MatPhase>(kMatPhase[t]) : MatPhase::Solid;
 }
 
+// «Материя сред» — строка даёт движение (flow или diffusion > 0) и это не
+// воздух. ЕДИНСТВЕННАЯ выписка закона: класс-байт 3 зеркала
+// (render/voxel_mirror.cpp), агностичный карв (world/destruct.cpp) и
+// GPU-двойник (shaders/medium_sim.comp, mobile()) обязаны совпадать с ней.
+inline bool material_is_medium(CellType t) {
+    return t != 0 && t < kMatCount &&
+           (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
+}
+
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
 // материала излучают; бейк этажа кластеризует их в статические эмиттеры
 // (game/light_bake.h). Цвет источника = альбедо материала: нарисованный

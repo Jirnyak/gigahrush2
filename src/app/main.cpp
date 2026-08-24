@@ -4578,6 +4578,13 @@ int main(int argc, char** argv) {
                         voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
                                                carveResult.dirtyCells.size());
                         g_carveT.mirrorMarkMs += carve_ms_since(ct0);
+                        // Карв — писатель грида (S16.5): разбудить задетые
+                        // клетки — соседняя материя стечёт в свежую дыру.
+                        if (mediumPass.ready())
+                            mediumPass.wake_cells(
+                                carveResult.dirtyCells.data(),
+                                carveResult.dirtyCells.size(),
+                                stack.layer(activeLayer), voxelMirror);
                         ++g_worldGen; // поколение мутаций — планировщик доведёт
                         ct0 = std::chrono::steady_clock::now();
                         mark_diffusion_dirty(diffusionDriver,
@@ -4991,6 +4998,12 @@ int main(int argc, char** argv) {
                                 carveResult.dirtyCells.data(),
                                 carveResult.dirtyCells.size());
                             g_carveT.mirrorMarkMs += carve_ms_since(ct0);
+                            // Пробуждение задетого — как у консольного карва.
+                            if (mediumPass.ready())
+                                mediumPass.wake_cells(
+                                    carveResult.dirtyCells.data(),
+                                    carveResult.dirtyCells.size(),
+                                    stack.layer(activeLayer), voxelMirror);
                             ++g_worldGen; // поколение мутаций
                             ct0 = std::chrono::steady_clock::now();
                             mark_diffusion_dirty(diffusionDriver,
