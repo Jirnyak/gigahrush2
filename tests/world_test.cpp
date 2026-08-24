@@ -24,6 +24,7 @@
 #include "world/level_stack.h"
 #include "world/los.h"
 #include "world/macro_grid.h"
+#include "world/medium.h" // агрегаты S16.4 — тест плавучести
 #include "world/nav.h"
 #include "world/stain.h"
 #include "world/subfield.h"
@@ -238,6 +239,36 @@ static void test_physics_lands_on_floor() {
     CHECK(reg.get<GravityAffected>(e).grounded);
     // Did not fall through.
     CHECK(!aabb_overlaps_solid(w, out.pos, vec3{0.2f, 0.2f, 0.4f}));
+}
+
+// ПЛАВУЧЕСТЬ (CANON S16.4, инкремент 4): тело читает агрегат СВОЕЙ клетки —
+// один член силы, толчок против гравитации фрейма x погружённость.
+// kBuoyancy = 1000/985 (человек с воздухом в лёгких) — в полной воде тело
+// ВСПЛЫВАЕТ медленно, а не тонет; вязкость гасит скорость. Рядом в сухой
+// клетке — падает как падало (test_physics_lands_on_floor выше).
+static void test_buoyancy() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    // Клетка (10,10,10) целиком «под водой» по агрегату — заполняем поле
+    // напрямую (в игре его пересчитывает обратный шов автомата).
+    medium_level_field(w).data()[macro_index(10, 10, 10)] = kSubVoxels;
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{{0.2f, 0.2f, 0.4f}});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+
+    for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    // Секунда в воде: тело не утонуло (плавучесть чуть положительная) и не
+    // разогналось (вязкость): скорость около нуля, всплытие ползучее.
+    CHECK(reg.get<Transform>(e).pos.z >= tr.pos.z - 0.05f);
+    CHECK(std::fabs(reg.get<Velocity>(e).v.z) < 0.2f);
 }
 
 // Рагдолл-ядро ([markoaudit/plans/ragdoll.md] инкремент 1): шар на импульсном
@@ -1308,6 +1339,7 @@ int main() {
     test_level_stack();
     test_aabb_overlap();
     test_physics_lands_on_floor();
+    test_buoyancy();
     test_rigid_ball_settles_and_sleeps();
     test_rigid_box_lies_flat();
     test_rigid_chain_hangs_and_cuts();

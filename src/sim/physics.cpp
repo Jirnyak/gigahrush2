@@ -7,6 +7,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "sim/drag.h"
+#include "world/medium.h" // liquid_frac_at — плавучесть из агрегата S16.4
 #include "world/world.h"
 
 namespace giga {
@@ -204,6 +205,31 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                 vec3 accel = w.gravity().at(tr.pos) * g->scale;
                 up = normalize(accel * -1.0f);
                 vel.v += accel * h;
+
+                // ПЛАВУЧЕСТЬ + ВЯЗКОСТЬ ВОДЫ (CANON S16.4, инкремент 4):
+                // тело читает агрегат СВОЕЙ клетки — вопрос «в чём я»
+                // макроскопический (тело 4×4×7 субвокселей само размером с
+                // клетку). Один член силы: толчок ПРОТИВ гравитации фрейма,
+                // пропорциональный погружённости; никакой оси Z — вектор.
+                // kBuoyancy = ρ_воды/ρ_тела = 1000/985 (человек с воздухом в
+                // лёгких — слегка положительная плавучесть, как в жизни).
+                // kWaterDrag: терминальная скорость погружённого тела ~2 м/с
+                // при g 9.8 → линейная вязкость 9.8/2 ≈ 4.9 1/с.
+                const float frac = liquid_frac_at(
+                    w, macro_index(
+                           wrap_macro(static_cast<int>(
+                               std::floor(tr.pos.x / kCellSize))),
+                           wrap_macro(static_cast<int>(
+                               std::floor(tr.pos.y / kCellSize))),
+                           wrap_macro(static_cast<int>(
+                               std::floor(tr.pos.z / kCellSize)))));
+                if (frac > 0.0f) {
+                    constexpr float kBuoyancy = 1000.0f / 985.0f;
+                    constexpr float kWaterDrag = 4.9f;
+                    vel.v = vel.v - accel * (frac * kBuoyancy * h);
+                    const float damp = frac * kWaterDrag * h;
+                    vel.v = vel.v * (damp < 1.0f ? 1.0f - damp : 0.0f);
+                }
 
                 if (auto* j = reg.try_get<Jump>(e)) {
                     if (j->wants_jump && g->grounded) {

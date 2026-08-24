@@ -142,8 +142,9 @@ bool status_live(const HudContext& c) {
     if (c.status)
         for (std::size_t i = 0; i < game::kStatusCount; ++i)
             if (c.status->remainMs[i] > 0) return true;
-    return c.gas.valid && (c.gas.tox > 0 || c.gas.smoke > 64 ||
-                           c.gas.oxy < 192 || c.gas.heat > 0);
+    // Газ опасен с первого кванта; вода — статус с полуметра (128 квантов =
+    // четверть клетки: по колено).
+    return c.gas.valid && (c.gas.gas > 0 || c.gas.water >= 128);
 }
 
 void draw_status(const HudContext& c) {
@@ -156,10 +157,9 @@ void draw_status(const HudContext& c) {
         }
     }
     if (c.gas.valid) {
-        if (c.gas.tox > 0) ImGui::TextColored(kDanger, "ГАЗ %u", c.gas.tox);
-        if (c.gas.smoke > 64) ImGui::TextColored(kAmber, "ДЫМ %u", c.gas.smoke);
-        if (c.gas.oxy < 192) ImGui::TextColored(kAmber, "О2 %u", c.gas.oxy);
-        if (c.gas.heat > 0) ImGui::TextColored(kDanger, "ЖАР %u", c.gas.heat);
+        if (c.gas.gas > 0) ImGui::TextColored(kDanger, "ГАЗ %u", c.gas.gas);
+        if (c.gas.water >= 128)
+            ImGui::TextColored(kAmber, "ВОДА %u", c.gas.water);
     }
 }
 

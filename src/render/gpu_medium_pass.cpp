@@ -10,6 +10,7 @@
 #include "render/voxel_mirror.h"
 #include "world/destruct.h" // kSubMaterialName
 #include "world/macro_grid.h"
+#include "world/medium.h"   // medium_recount — агрегаты S16.4 на шве
 #include "world/subfield.h"
 #include "world/world.h"
 
@@ -562,6 +563,9 @@ void GpuMediumPass::apply_readback(World& world,
         if (!pg) continue;
         std::memcpy(pg, src + static_cast<std::size_t>(i) * kPageBytesBack,
                     kPageBytesBack);
+        // Агрегат клетки (S16.4) — пересчёт по свежей странице тут же:
+        // никакого редьюс-пасса и ридбека, шов уже всё привёз.
+        medium_recount(world, ci, pg);
         // Маска-кэш едет вместе с материей (рубл, инкремент 5): изменённые
         // клетки отдаются вызывающему — он гасит нав-долг патчем.
         SubMask& m = world.grid().masks_mut()[ci];

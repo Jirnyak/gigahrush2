@@ -96,9 +96,9 @@
 #include "render/body_pass.h"
 #include "render/cube_pass.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
-#include "render/gpu_gas_pass.h"
 #include "render/gpu_medium_pass.h"
 #include "world/material_props.h" // material_phase — sphere не маскирует жидкость
+#include "world/medium.h" // агрегаты S16.4 — HUD/дыхание читают клетку тела
 #include "render/particle_pass.h"
 #include "render/verlet_pass.h"
 #include "render/prop_pass.h"
@@ -2057,15 +2057,11 @@ int main(int argc, char** argv) {
                      "verlet)\n");
     }
 
-    // GPU gas/atmosphere: 4 канала (toxic/smoke/oxy/heat) над макро-решёткой,
-    // изотропный (regime_down через push) ([render/gpu_gas_pass.h]). Источник —
-    // засев шахт CPU-полем kGasField при входе на этаж; читатель — sample_cell
-    // в HUD. Живая петля с первого дня; туман/удушье подключатся к ЭТОМУ полю
-    // отдельными решениями владельца, не к статичной константе.
-    gpu::GpuGasPass gasPass;
-    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
-        std::fprintf(stderr, "[gas] pass init failed (continuing without gas)\n");
-    }
+    // GPU-газ 4 захардкоженных каналов УМЕР (инкремент 4, CANON S16.6:
+    // хардкод каналов газа запрещён — газ = строка таблицы): toxic_gas
+    // теперь МАТЕРИЯ мира-автомата, засев шахт — налив по kGasField, HUD
+    // читает агрегат клетки (S16.4). Химия горения потеряна осознанно
+    // (решение владельца 2026-08-23).
 
     // МИР-АВТОМАТ (CANON S16): единственный двигатель материи — Margolus-
     // правило прямо в каноническом pagePool зеркала ([render/gpu_medium_pass.h]).
@@ -5789,16 +5785,20 @@ int main(int argc, char** argv) {
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
             hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
-            if (gasPass.ready() && reg.valid(player)) {
+            // Среда клетки под телом — из АГРЕГАТА автомата (S16.4): один
+            // путь для HUD, дыхания и плавучести, спецсистем нет (S16.6).
+            if (reg.valid(player) && activeLayer != kInvalidLayer) {
                 const vec3& gp = reg.get<Transform>(player).pos;
-                const std::uint32_t cell = gasPass.sample_cell(
-                    static_cast<int>(std::floor(gp.x / kCellSize)),
-                    static_cast<int>(std::floor(gp.y / kCellSize)),
-                    static_cast<int>(std::floor(gp.z / kCellSize)));
-                hctx.gas.tox = static_cast<std::uint8_t>(cell & 0xFFu);
-                hctx.gas.smoke = static_cast<std::uint8_t>((cell >> 8) & 0xFFu);
-                hctx.gas.oxy = static_cast<std::uint8_t>((cell >> 16) & 0xFFu);
-                hctx.gas.heat = static_cast<std::uint8_t>((cell >> 24) & 0xFFu);
+                const std::uint32_t lvl = medium_level_at(
+                    stack.layer(activeLayer),
+                    macro_index(wrap_macro(static_cast<int>(
+                                    std::floor(gp.x / kCellSize))),
+                                wrap_macro(static_cast<int>(
+                                    std::floor(gp.y / kCellSize))),
+                                wrap_macro(static_cast<int>(
+                                    std::floor(gp.z / kCellSize)))));
+                hctx.gas.water = static_cast<std::uint16_t>(lvl & 0xFFFFu);
+                hctx.gas.gas = static_cast<std::uint16_t>(lvl >> 16);
                 hctx.gas.valid = true;
             }
             hud_ui_draw(hctx);
@@ -6250,18 +6250,20 @@ int main(int argc, char** argv) {
                             samosborCycles, fogScale, samosborDamage);
                 if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
                     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
-                // Атмосфера клетки под камерой — ЧИТАТЕЛЬ газовой петли
-                // ([gpu_gas_pass.h] sample_cell): без этой строки петля была
-                // бы диспатчем в никуда.
-                if (gasPass.ready() && reg.valid(player)) {
+                // Среда клетки под камерой — читатель агрегата автомата
+                // ([world/medium.h], S16.4): кванты жидкости и газа.
+                if (reg.valid(player) && activeLayer != kInvalidLayer) {
                     const vec3& gp = reg.get<Transform>(player).pos;
-                    const std::uint32_t cell = gasPass.sample_cell(
-                        static_cast<int>(std::floor(gp.x / kCellSize)),
-                        static_cast<int>(std::floor(gp.y / kCellSize)),
-                        static_cast<int>(std::floor(gp.z / kCellSize)));
-                    ImGui::Text("gas: tox %u smoke %u oxy %u heat %u",
-                                cell & 0xFFu, (cell >> 8) & 0xFFu,
-                                (cell >> 16) & 0xFFu, (cell >> 24) & 0xFFu);
+                    const std::uint32_t lvl = medium_level_at(
+                        stack.layer(activeLayer),
+                        macro_index(wrap_macro(static_cast<int>(
+                                        std::floor(gp.x / kCellSize))),
+                                    wrap_macro(static_cast<int>(
+                                        std::floor(gp.y / kCellSize))),
+                                    wrap_macro(static_cast<int>(
+                                        std::floor(gp.z / kCellSize)))));
+                    ImGui::Text("medium: water %u gas %u (кванты клетки)",
+                                lvl & 0xFFFFu, lvl >> 16);
                 }
             }
             {
@@ -7539,27 +7541,62 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // Газ: один диспатч на кадр, изотропный (regime_down активного
-            // слоя через push). Фиксированный шаг 1/60 — поле ВИЗУАЛЬНОЕ/
-            // фоновое, не сим-детерминизм; боевая подключка (удушье) пойдёт
-            // через сим-тик отдельным решением. [gpu_gas_pass.h]
-            if (gasPass.ready()) {
-                // ЗАСЕВ — лениво, по смене (этаж, слой), у самого диспатча:
-                // один писатель на все пути входа (стартовый спавн, do_ride,
-                // fast travel) ПО ПОСТРОЕНИЮ — травел-сайтная версия этого
-                // кода снята именно потому, что стартовый путь шёл мимо неё.
+            // ГАЗ = МАТЕРИЯ АВТОМАТА (инкремент 4, слияние gas_sim по
+            // S16.6): засев шахт при входе на этаж — НАЛИВ toxic_gas по
+            // полю kGasField. Квант субвокселя роллом p = frac/8
+            // (stateless, зеркало carve_roll): полная концентрация поля =
+            // в ожидании 64 кванта на клетку (1 м³ газа) — облако, не
+            // кирпич. Дальше газ живёт правилом: тяжелее воздуха — тонет и
+            // стелется, diffusion строки расползается, карв рассеивает.
+            // Засев лениво по смене (этаж, слой) — один писатель на все
+            // пути входа ПО ПОСТРОЕНИЮ (урок травел-сайтной версии).
+            if (mediumPass.ready()) {
                 static int gasSeedFloor = INT_MIN;
                 static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
-                if (gasSeedFloor != currentFloor || gasSeedLayer != activeLayer) {
+                if (gasSeedFloor != currentFloor ||
+                    gasSeedLayer != activeLayer) {
                     gasSeedFloor = currentFloor;
                     gasSeedLayer = activeLayer;
+                    World& gw = stack.layer(activeLayer);
                     const Field<float>* gSeed =
-                        stack.layer(activeLayer).fields().find<float>(kGasField);
-                    gasPass.upload_field(gSeed ? gSeed->data().data() : nullptr);
+                        gw.fields().find<float>(kGasField);
+                    if (gSeed) {
+                        static std::vector<std::uint32_t> seeded;
+                        seeded.clear();
+                        for (std::uint32_t sci = 0; sci < kMacroCells; ++sci) {
+                            const float sfrac = gSeed->data()[sci];
+                            if (sfrac <= 0.0f) continue;
+                            CellType* pg = materialize_sub_page(gw, sci);
+                            const SubMask& sm = gw.grid().masks()[sci];
+                            const auto thr = static_cast<std::uint32_t>(
+                                sfrac * 8192.0f);
+                            bool any = false;
+                            for (int b = 0; b < kSubVoxels; ++b) {
+                                if (sm.test(b) || pg[b] != kCellAir) continue;
+                                if ((carve_hash(0x6A5EEDu ^
+                                                    static_cast<std::uint32_t>(
+                                                        currentFloor),
+                                                sci,
+                                                static_cast<std::uint32_t>(b)) &
+                                     0xFFFFu) < thr) {
+                                    pg[b] = kMatToxicGas;
+                                    any = true;
+                                }
+                            }
+                            if (any) seeded.push_back(sci);
+                        }
+                        if (!seeded.empty()) {
+                            voxelMirror.mark_dirty(seeded.data(),
+                                                   seeded.size());
+                            mediumPass.wake_cells(seeded.data(), seeded.size(),
+                                                  gw, voxelMirror);
+                            std::fprintf(stderr,
+                                         "[medium] gas seeded: %zu cells "
+                                         "(floor %d)\n",
+                                         seeded.size(), currentFloor);
+                        }
+                    }
                 }
-                const CellStep gd =
-                    regime_down(stack.layer(activeLayer).gravity().regime);
-                gasPass.record_sim(cmd, gd, 1.0f / 60.0f);
             }
 
             // Push bodies for the verlet passes: EVERY body on the active

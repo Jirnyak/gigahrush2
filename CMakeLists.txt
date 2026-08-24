@@ -374,15 +374,8 @@ add_custom_command(
     COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
 
-# GPU 4-channel gas/atmosphere sim over the 128^3 macro grid ([gpu_gas_pass.h]).
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/gas_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
-        ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
-        -o ${_giga_spv_dir}/gas_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
-    COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
+# gas_sim.comp УМЕР (инкремент 4, S16.6: хардкод каналов газа запрещён) —
+# газ теперь материя мира-автомата, строка toxic_gas в materials.csv.
 
 # МИР-АВТОМАТ (CANON S16): Margolus-правило движения материи прямо в
 # каноническом pagePool зеркала ([gpu_medium_pass.h]). Включает таблицы
@@ -631,7 +624,10 @@ if(GIGA_BUILD_TESTS)
         # потерявший связность кусок НЕ исчезает: те же атомы на месте
         # становятся rubble и падают автоматом; пины «клетка -> воздух»
         # заменены пинами «маска стоит, материал rubble» (+3 чека) = 23455.
-        PASS_REGULAR_EXPRESSION "23455/23455 checks passed"
+        # 23455 + 2 on 2026-08-24: test_buoyancy (инкремент 4, S16.4) — тело
+        # в клетке полной воды по агрегату не тонет и не разгоняется (один
+        # член силы против гравитации фрейма + вязкость) = 23457.
+        PASS_REGULAR_EXPRESSION "23457/23457 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

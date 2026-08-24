@@ -29,7 +29,8 @@
 #include "world/destruct.h" // kSubMaterialName
 #include "world/gravity.h"
 #include "world/macro_grid.h"
-#include "world/materials.h" // kMatWaterMark, kMatConcrete
+#include "world/materials.h" // kMatWater, kMatConcrete, kMatToxicGas
+#include "world/medium.h"    // агрегаты S16.4 — чек уровней на шве
 #include "world/subfield.h"
 #include "world/world.h"
 
@@ -317,6 +318,13 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         std::printf("[medium_test] reverse seam: CPU sees %zu quanta\n",
                     cpuWater);
         CHECK(cpuWater == kPoured);
+
+        // АГРЕГАТЫ S16.4 — без редьюс-пасса: шов пересчитал medium_level по
+        // изменённым клеткам; сумма уровней жидкости == всей воде мира.
+        std::size_t aggWater = 0;
+        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
+            aggWater += medium_level_at(w, ci) & 0xFFFFu;
+        CHECK(aggWater == kPoured);
     }
 
     // ОПОРА (гравитация NegZ): под квантом — маска или вода.
@@ -572,6 +580,51 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(fell == 6);     // масса куска цела — ничего не родилось
         CHECK(still == 0);    // полка не висит где висела
         CHECK(floating == 0); // всё на опоре
+    }
+
+    // ГАЗ = МАТЕРИЯ (инкремент 4, слияние gas_sim): toxic_gas тяжелее
+    // табличного воздуха (3 > 0) — облако под потолком камеры ТОНЕТ и
+    // стелется по полу; агрегат клетки считает газ в верхних 16 битах.
+    {
+        for (int gx = 90; gx < 93; ++gx)
+            for (int gy = 90; gy < 93; ++gy) {
+                w.grid().fill_cell(gx, gy, 40, kMatConcrete); // пол
+                if (gx == 90 || gx == 92 || gy == 90 || gy == 92) {
+                    w.grid().fill_cell(gx, gy, 41, kMatConcrete);
+                    w.grid().fill_cell(gx, gy, 42, kMatConcrete);
+                }
+            }
+        const std::uint32_t gasCell =
+            static_cast<std::uint32_t>(macro_index(91, 91, 42)); // под потолком
+        CellType* gp = materialize_sub_page(w, gasCell);
+        for (int sx = 2; sx < 6; ++sx)
+            for (int sy = 2; sy < 6; ++sy)
+                for (int sz = 4; sz < 6; ++sz)
+                    gp[sub_bit(sx, sy, sz)] = kMatToxicGas; // 32 кванта
+        mirror.mark_dirty(&gasCell, 1);
+        medium.wake_cells(&gasCell, 1, w, mirror);
+        for (int b = 0; b < 60; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w);
+            medium.poll_activity(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        std::size_t gasLow = 0, gasHigh = 0, gasAll = 0;
+        for (int cz2 = 40; cz2 <= 42; ++cz2)
+            for (int gx = 90; gx < 93; ++gx)
+                for (int gy = 90; gy < 93; ++gy) {
+                    const std::uint32_t lvl = medium_level_at(
+                        w, macro_index(gx, gy, cz2));
+                    const std::uint32_t g2 = lvl >> 16;
+                    gasAll += g2;
+                    if (cz2 == 41) gasLow += g2;   // нижняя клетка камеры
+                    if (cz2 == 42) gasHigh += g2;  // стартовая, под потолком
+                }
+        std::printf("[medium_test] gas: %zu quanta (low %zu, high %zu)\n",
+                    gasAll, gasLow, gasHigh);
+        CHECK(gasAll == 32);      // масса газа цела (и агрегат её видит)
+        CHECK(gasLow > gasHigh);  // тяжёлый газ ОСЕЛ — стелется по полу
     }
 
     medium.destroy();
