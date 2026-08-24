@@ -3462,7 +3462,7 @@ int main(int argc, char** argv) {
             static std::vector<std::uint32_t> mediumMaskChanged;
             mediumMaskChanged.clear();
             const auto ctMedA = std::chrono::steady_clock::now();
-            mediumPass.apply_readback(stack.layer(activeLayer),
+            mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
                                       &mediumMaskChanged);
             g_mediumApplyMs = carve_ms_since(ctMedA);
             // Маски обломков (инкремент 5) едут с материей: изменённые
@@ -3472,9 +3472,9 @@ int main(int argc, char** argv) {
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
-            const auto ctMedP = std::chrono::steady_clock::now();
-            mediumPass.poll_activity(stack.layer(activeLayer), voxelMirror);
-            g_mediumPollMs = carve_ms_since(ctMedP);
+            // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
+            // (GPU-резидентная петля, решение владельца 2026-08-24).
+            g_mediumPollMs = 0.0f;
         }
 
         // --- fixed-step simulation ----------------------------------------
@@ -7717,7 +7717,8 @@ int main(int argc, char** argv) {
                 const auto ctMedR = std::chrono::steady_clock::now();
                 mediumPass.record_substeps(
                     cmd, static_cast<std::uint32_t>(owed), md,
-                    mediumSubstepsDone, stack.layer(activeLayer));
+                    mediumSubstepsDone, stack.layer(activeLayer),
+                    renderer.currentFrame);
                 g_mediumRecMs = carve_ms_since(ctMedR);
                 mediumSubstepsDone += owed;
                 // Числа каждый прогон (S11): раз в игровую секунду, пока

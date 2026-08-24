@@ -149,7 +149,7 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
         vkBeginCommandBuffer(cmd, &bi);
         mirror.flush(cmd, 0, w);
         medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base,
-                               w);
+                               w, 0);
         vkEndCommandBuffer(cmd);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -169,7 +169,7 @@ void drain_seam(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
                 gpu::GpuMediumPass& medium, World& w, std::uint64_t& substep) {
     for (std::uint32_t t = 0; t < gpu::GpuMediumPass::kRbRegions + 1; ++t) {
         CHECK(run_batch(dev, mirror, medium, w, 0, substep));
-        medium.apply_readback(w);
+        medium.apply_readback(w, mirror);
     }
 }
 
@@ -225,10 +225,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     CHECK(mirror.upload_all(w));
     static gpu::GpuMediumPass medium;
     CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
-    // Писатель будит клетку И грани (вода соседей должна получить свободу):
-    // клетка налива + 6 соседей-воздуха = 7.
+    // Писатель будит клетку И грани; счётчик живых теперь GPU-истина и
+    // приходит швом с лагом кольца — мгновенных чеков здесь больше нет.
     medium.wake_cells(&pourCell, 1, w, mirror);
-    CHECK(medium.live_count() == 7);
 
     // ЧИСТЫЙ МАРКОВ (закон владельца 2026-08-24): открытая лужа диффундирует
     // вечно и НЕ спит — сон больше не цель прогона. Гоняем фиксированные
@@ -239,8 +238,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         substep += 8;
         // Кадровый шов: сначала обратный поток в CPU-канон, потом протокол
         // пробуждения — тот же порядок, что в кадре игры.
-        medium.apply_readback(w);
-        medium.poll_activity(w, mirror);
+        medium.apply_readback(w, mirror);
     }
     std::printf("[medium_test] after %llu substeps: live %u, woken %u, "
                 "slept %u\n",
@@ -419,12 +417,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         const std::uint32_t centre =
             static_cast<std::uint32_t>(macro_index(40, 40, 40));
         medium.wake_cells(&centre, 1, w, mirror);
-        // Соседи-грани полнотвёрдые — wake их пропускает: ровно одна клетка.
-        CHECK(medium.live_count() == 1);
         for (int b = 0; b < 6; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
             substep += 8;
-            medium.poll_activity(w, mirror);
         }
         std::printf("[medium_test] entombed water: live after %u\n",
                     medium.live_count());
@@ -450,8 +445,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         for (int b = 0; b < 60; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
             substep += 8;
-            medium.apply_readback(w);
-            medium.poll_activity(w, mirror);
+            medium.apply_readback(w, mirror);
         }
         drain_seam(dev, mirror, medium, w, substep);
 
@@ -549,8 +543,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         for (int b = 0; b < 40; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
             substep += 8;
-            medium.apply_readback(w);
-            medium.poll_activity(w, mirror);
+            medium.apply_readback(w, mirror);
         }
         drain_seam(dev, mirror, medium, w, substep);
 
@@ -606,8 +599,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         for (int b = 0; b < 60; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
             substep += 8;
-            medium.apply_readback(w);
-            medium.poll_activity(w, mirror);
+            medium.apply_readback(w, mirror);
         }
         drain_seam(dev, mirror, medium, w, substep);
         std::size_t gasLow = 0, gasHigh = 0, gasAll = 0;

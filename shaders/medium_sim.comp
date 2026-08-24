@@ -53,28 +53,69 @@ layout(std430, binding = 1) readonly buffer TypeBuf  { uint uTypes[];   }; // 2 
 layout(std430, binding = 2) readonly buffer PageIdx  { uint uPageIdx[]; }; // 1 uint/клетку
 layout(std430, binding = 3) buffer PoolBuf           { uint uPagePool[];}; // 256 uint/страницу
 layout(std430, binding = 4) buffer ClassBuf          { uint uClass[];   }; // 4 клетки/uint
-layout(std430, binding = 5) readonly buffer LiveBuf  { uint uLive[];    }; // индексы живых клеток
+// GPU-РЕЗИДЕНТНАЯ ПЕТЛЯ (решение владельца 2026-08-24: CPU уходит из
+// диспетчеров подтиков — «изначально плохой дизайн» CPU-протокола): живой
+// список ping-pong A/B строит САМ settle, диспатч indirect от счётчиков,
+// писатели инжектятся мини-пассом, шов пакуется pack-пассом. CPU — только
+// читатель шва и писатель материи.
+layout(std430, binding = 5) buffer ListA             { uint uListA[];   };
 layout(std430, binding = 6) buffer ActBuf            { uint uCellAct[]; }; // 1 uint/клетку (device)
-layout(std430, binding = 7) writeonly buffer ActOut  { uint uActOut[];  }; // 1 uint/живой слот (host-visible)
+layout(std430, binding = 7) buffer ListB             { uint uListB[];   };
+// Счётчики-indirect: [0..2] = диспатч списка A (x,y,z), [4..6] = списка B,
+// [8] = кванты подвижной материи (лог), [9] = флаг переполнения капа,
+// [10] = woken, [11] = slept — накопительные.
+layout(std430, binding = 8) buffer Counters          { uint uCnt[];     };
+layout(std430, binding = 9) readonly buffer AppendBuf { uint uAppend[]; }; // [0]=счёт, дальше клетки
+// Обратный шов, host-visible регионы кольца: pack-пасс пишет сам.
+layout(std430, binding = 10) writeonly buffer RbPages { uint uRbPages[]; }; // 256 u32/слот
+layout(std430, binding = 11) writeonly buffer RbMasks { uint uRbMasks[]; }; // 16 u32/слот
+layout(std430, binding = 12) writeonly buffer RbList  { uint uRbList[];  }; // [0]=count,[1]=quanta,[2]=woken,[3]=slept, дальше ci
 
 layout(push_constant) uniform Push {
     ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
-    uvec4 params;   // x = номер подтика, y = число живых клеток, z = режим
+    // x = номер подтика; y = режим (0 prepare / 1 move / 2 settle /
+    // 3 inject / 4 pack); z = селектор списков (0: cur=A,next=B; 1:
+    // наоборот); w = база rb-региона в СЛОТАХ (pack).
+    uvec4 params;
 } pc;
 
 #include "material_surface.glsl"
 
 const int kMacroDim = GIGA_MACRO_DIM;
 const uint kNoPage = 0xFFFFFFFFu;
+const uint kListCap = 32768u; // зеркало GpuMediumPass::kLiveCap
+const uint kRbSlotCap = 8192u; // зеркало GpuMediumPass::kRbSlotCap
 
-// --- Биты слова активности (CellAct и ActOut) --------------------------------
-// bit 0      — клетка менялась в MOVE этого подтика;
-// bits 2..4  — MOVE трогал/хотел тронуть соседа в +x/+y/+z (Margolus-блок
-//              воркгруппы наезжает только на положительный октант);
-// bits 8..13 — SETTLE: подвижная материя прижата к грани -x/+x/-y/+y/-z/+z
-//              (CPU держит соседа живым, пока клетка не заснула);
-// bits 16..25 — SETTLE: счёт квантов подвижной материи (0..512).
+// --- Слово активности клетки (uCellAct) -------------------------------------
+// bit 0     — клетка менялась в MOVE этого подтика (settle читает и гасит);
+// bits 1..7 — счётчик тихих подтиков (сон при 16);
+// bit 31    — клетка уже в СЛЕДУЮЩЕМ списке (дедуп аппендов).
 const uint kActChanged = 1u;
+const uint kActQuietShift = 1u;
+const uint kActQuietMask = 0x7Fu << 1;
+const uint kActInList = 0x80000000u;
+const uint kSleepSubsteps = 16u;
+
+uint cur_x_index() { return pc.params.z == 0u ? 0u : 4u; }
+uint next_x_index() { return pc.params.z == 0u ? 4u : 0u; }
+uint list_cur(uint i) {
+    return pc.params.z == 0u ? uListA[i] : uListB[i];
+}
+void list_next_store(uint i, uint ci) {
+    if (pc.params.z == 0u) uListB[i] = ci; else uListA[i] = ci;
+}
+
+// Разбудить/удержать клетку в СЛЕДУЮЩЕМ списке: бит-дедуп, кап вслух.
+void wake_next(uint ci) {
+    if ((atomicOr(uCellAct[ci], kActInList) & kActInList) != 0u) return;
+    uint idx = atomicAdd(uCnt[next_x_index()], 1u);
+    if (idx < kListCap) {
+        list_next_store(idx, ci);
+        atomicAdd(uCnt[10], 1u);
+    } else {
+        atomicOr(uCnt[9], 1u);
+    }
+}
 
 uint cell_index(ivec3 c) {
     c &= (kMacroDim - 1); // тор: степень двойки = AND по осям
@@ -165,7 +206,7 @@ bool can_swap(Sub a, Sub b) {
 // == MOVE: поток = Margolus-блок ==============================================
 // =============================================================================
 void run_move(uint slot, uint threadId) {
-    uint ci = uLive[slot];
+    uint ci = list_cur(slot);
     ivec3 cell = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
                        int((ci >> 14) & 127u));
     // Ось и знак гравитации фрейма — нужны РАНЬШЕ сдвига решётки.
@@ -276,11 +317,9 @@ void run_move(uint slot, uint threadId) {
         }
     }
 
-    // --- Запись изменившихся + активность. ----------------------------------
-    // Любой своп = changed: правило ЧИСТО МАРКОВСКОЕ (закон владельца
-    // 2026-08-24 — только соседи, параметры и гравитация), планировщик сна
-    // лишь наблюдает за ним снаружи и правил не меняет.
-    uint touchedAxes = 0u;
+    // --- Запись изменившихся + пробуждение. ---------------------------------
+    // Любой своп = changed; изменённые ЧУЖИЕ клетки будятся ПРЯМО ЗДЕСЬ
+    // (GPU-резидентная петля — CPU-протокола пробуждения не существует).
     bool changedOwn = false;
     for (int i = 0; i < 8; ++i) {
         if (mats[i] == sv[i].mat) continue;
@@ -288,40 +327,40 @@ void run_move(uint slot, uint threadId) {
         if (sv[i].ci == ci) {
             changedOwn = true;
         } else {
-            // Блок наезжает только на +октант: соседи по осям, где локальная
-            // координата выпала за клетку.
-            ivec3 l = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
-            ivec3 g = minG + l;
-            if ((g.x >> 3) != cell.x) touchedAxes |= 4u;
-            if ((g.y >> 3) != cell.y) touchedAxes |= 8u;
-            if ((g.z >> 3) != cell.z) touchedAxes |= 16u;
             atomicOr(uCellAct[sv[i].ci], kActChanged);
+            wake_next(sv[i].ci);
         }
     }
     if (changedOwn) atomicOr(uCellAct[ci], kActChanged);
-    if (touchedAxes != 0u) atomicOr(uCellAct[ci], touchedAxes);
 }
 
 // =============================================================================
 // == SETTLE: воркгруппа = живая клетка ========================================
 // =============================================================================
+// GPU-резидентная петля: settle сам решает судьбу клетки и строит СЛЕДУЮЩИЙ
+// список. Протокол переноса бита kActInList: клетка-владелец слота СНАЧАЛА
+// снимает бит, ПОТОМ (если остаётся) захватывает заново — гонка с
+// пробуждением от соседа разрешается «кто первый Or, тот и пушит»; сосед,
+// промахнувшийся в окно (Or до снятия), повторит на следующем подтике —
+// пробуждение с задержкой в подтик безвредно, материя у грани никуда не
+// делась.
 shared uint sQuanta;   // ВСЯ подвижная материя (вода + рубл) — сон, лог
 shared uint sFree;     // БЕЗмасочная среда (вода) — класс 3 (мост рендера)
 shared uint sMaskBits;
-shared uint sFaceBits;
+shared uint sFaceBits; // биты 0..5: подвижная материя у грани -x+x-y+y-z+z
 
 void run_settle(uint slot, uint threadId) {
-    uint ci = uLive[slot];
+    uint ci = list_cur(slot);
     if (threadId == 0u) {
         sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sFaceBits = 0u;
+        // Владелец слота отпускает бит списка — см. протокол выше.
+        atomicAnd(uCellAct[ci], ~kActInList);
     }
     barrier();
 
     uint pg = uPageIdx[ci];
     // Фаза 1: счёт маски — закону чтения безстраничной клетки (двойник
-    // sub_material_at [world/destruct.cpp]) нужна ПУСТОТА маски всей клетки:
-    // пустая — клетка однородна типом (вода после collapse); непустая —
-    // немаскированное ВОЗДУХ (rubble-завал генератора — не материя в дырах).
+    // sub_material_at [world/destruct.cpp]) нужна ПУСТОТА маски всей клетки.
     uint maskBits = 0u;
     for (uint k = 0u; k < 8u; ++k)
         if (mask_bit(ci, threadId * 8u + k)) maskBits += 1u;
@@ -339,20 +378,17 @@ void run_settle(uint slot, uint threadId) {
             uint w = uPagePool[pg * 256u + (bit >> 1)];
             mat = (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
         }
-        // Подвижная материя — не воздух, строка даёт движение (вода И
-        // масочный рубл): грани для пробуждения соседей и счёт для сна.
-        // БЕЗмасочная среда отдельно — она и только она даёт класс 3.
         if (mat != 0u &&
             (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
             quanta += 1u;
             if (!m) freeQ += 1u;
             uint x = bit & 7u, y = (bit >> 3) & 7u, z = (bit >> 6) & 7u;
-            if (x == 0u) faceBits |= 1u << 8;
-            if (x == 7u) faceBits |= 1u << 9;
-            if (y == 0u) faceBits |= 1u << 10;
-            if (y == 7u) faceBits |= 1u << 11;
-            if (z == 0u) faceBits |= 1u << 12;
-            if (z == 7u) faceBits |= 1u << 13;
+            if (x == 0u) faceBits |= 1u;
+            if (x == 7u) faceBits |= 2u;
+            if (y == 0u) faceBits |= 4u;
+            if (y == 7u) faceBits |= 8u;
+            if (z == 0u) faceBits |= 16u;
+            if (z == 7u) faceBits |= 32u;
         }
     }
     atomicAdd(sQuanta, quanta);
@@ -362,8 +398,7 @@ void run_settle(uint slot, uint threadId) {
 
     if (threadId != 0u) return;
 
-    // Класс-байт — мост рендера: 3 = «частичная С МАТЕРИЕЙ СРЕД», только
-    // такие клетки платят фетч страницы на пустых битах маски в DDA.
+    // Класс-байт — мост рендера: 3 = «частичная С МАТЕРИЕЙ СРЕД».
     uint cls;
     if (sMaskBits == 512u) cls = 1u;
     else if (sFree > 0u) cls = 3u;
@@ -372,13 +407,108 @@ void run_settle(uint slot, uint threadId) {
     atomicAnd(uClass[ci >> 2], ~(0xFFu << shift));
     atomicOr(uClass[ci >> 2], cls << shift);
 
-    uint act = atomicExchange(uCellAct[ci], 0u);
-    uActOut[slot] = (act & 0x1Du) | sFaceBits | (min(sQuanta, 512u) << 16);
+    atomicAdd(uCnt[8], min(sQuanta, 512u));
+
+    // Судьба клетки: changed сбрасывает тишину, тишина растит счётчик.
+    uint act = uCellAct[ci];
+    uint quiet = (act & kActChanged) != 0u
+                     ? 0u
+                     : min(((act & kActQuietMask) >> kActQuietShift) + 1u,
+                           127u);
+    atomicAnd(uCellAct[ci], ~(kActChanged | kActQuietMask));
+    atomicOr(uCellAct[ci], quiet << kActQuietShift);
+    // Остаёмся до порога сна ДАЖЕ пустыми: финальное состояние клетки
+    // (материя ушла) обязано успеть в pack-регион шва — мгновенный выход из
+    // списка оставлял CPU-канону стейл (тест ловил +кванты и маски).
+    bool stay = quiet < kSleepSubsteps;
+    if (stay) {
+        wake_next(ci);
+        // Материя у грани: сосед обязан жить — его блоки покрывают
+        // межклеточную пару.
+        ivec3 c = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
+                        int((ci >> 14) & 127u));
+        if ((sFaceBits & 1u) != 0u)
+            wake_next(cell_index(c + ivec3(-1, 0, 0)));
+        if ((sFaceBits & 2u) != 0u)
+            wake_next(cell_index(c + ivec3(1, 0, 0)));
+        if ((sFaceBits & 4u) != 0u)
+            wake_next(cell_index(c + ivec3(0, -1, 0)));
+        if ((sFaceBits & 8u) != 0u)
+            wake_next(cell_index(c + ivec3(0, 1, 0)));
+        if ((sFaceBits & 16u) != 0u)
+            wake_next(cell_index(c + ivec3(0, 0, -1)));
+        if ((sFaceBits & 32u) != 0u)
+            wake_next(cell_index(c + ivec3(0, 0, 1)));
+    } else {
+        atomicAdd(uCnt[11], 1u);
+    }
+}
+
+// =============================================================================
+// == PREPARE / INJECT / PACK ==================================================
+// =============================================================================
+// PREPARE (1 поток): кламп текущего счётчика к капу (indirect и лимит
+// воркгрупп), сброс следующего и лог-квантов.
+void run_prepare() {
+    uCnt[cur_x_index()] = min(uCnt[cur_x_index()], kListCap);
+    uCnt[cur_x_index() + 1u] = 1u;
+    uCnt[cur_x_index() + 2u] = 1u;
+    uCnt[next_x_index()] = 0u;
+    uCnt[next_x_index() + 1u] = 1u;
+    uCnt[next_x_index() + 2u] = 1u;
+    uCnt[8] = 0u;
+}
+
+// INJECT: писатели CPU (карв, сфера, наливы) — клетки в ТЕКУЩИЙ список.
+// Дедуп тем же битом; «next» на время инжекта = текущий список (селектор
+// в пуше ставит вызывающий).
+void run_inject(uint j) {
+    if (j >= uAppend[0]) return;
+    wake_next(uAppend[1u + j]);
+}
+
+// PACK: обратный шов — страницы, маски и сам список ЖИВЫХ клеток в
+// host-visible регион кольца GPU-пассом (CPU строить копии не должен: он
+// узнаёт состав списка ИЗ этого же региона, фенсовой дисциплиной).
+// Клетка без страницы помечается старшим битом — CPU лениво материализует.
+void run_pack(uint slot, uint threadId) {
+    // pc.params.w = ИНДЕКС региона кольца; базы выводятся: список несёт
+    // 4-словный заголовок + kRbSlotCap слотов на регион.
+    uint listBase = pc.params.w * (kRbSlotCap + 4u);
+    uint slotBase = pc.params.w * kRbSlotCap;
+    uint count = min(uCnt[cur_x_index()], min(kListCap, kRbSlotCap));
+    if (slot == 0u && threadId == 0u) {
+        uRbList[listBase + 0u] = count;
+        uRbList[listBase + 1u] = uCnt[8];
+        uRbList[listBase + 2u] = uCnt[10];
+        uRbList[listBase + 3u] = uCnt[11];
+    }
+    if (slot >= count) return;
+    uint ci = list_cur(slot);
+    uint pg = uPageIdx[ci];
+    if (threadId == 0u)
+        uRbList[listBase + 4u + slot] =
+            pg == kNoPage ? (ci | 0x80000000u) : ci;
+    if (pg != kNoPage)
+        for (uint k = 0u; k < 4u; ++k)
+            uRbPages[(slotBase + slot) * 256u + threadId * 4u + k] =
+                uPagePool[pg * 256u + threadId * 4u + k];
+    if (threadId < 16u)
+        uRbMasks[(slotBase + slot) * 16u + threadId] =
+            uMasks[ci * 16u + threadId];
 }
 
 void main() {
-    uint slot = gl_WorkGroupID.x;
-    if (slot >= pc.params.y) return;
-    if (pc.params.z == 0u) run_move(slot, gl_LocalInvocationID.x);
-    else run_settle(slot, gl_LocalInvocationID.x);
+    uint mode = pc.params.y;
+    if (mode == 0u) {
+        if (gl_GlobalInvocationID.x == 0u) run_prepare();
+    } else if (mode == 1u) {
+        run_move(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+    } else if (mode == 2u) {
+        run_settle(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+    } else if (mode == 3u) {
+        run_inject(gl_GlobalInvocationID.x);
+    } else {
+        run_pack(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+    }
 }
