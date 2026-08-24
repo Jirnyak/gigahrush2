@@ -43,9 +43,17 @@ static void test_light_bake_clusters() {
     const float tableR =
         static_cast<float>(kMatLightRadiusMm[kMatNeonTube]) * 0.001f;
     CHECK(std::fabs(lights[0].radiusM - (tableR + std::sqrt(27.0f))) < 1e-3f);
-    CHECK(std::fabs(lights[0].intensity -
-                    static_cast<float>(kMatLightIntensityE3[kMatNeonTube]) *
-                        0.001f) < 1e-4f);
+    // Яркость выведена из материи и формы спада: I = I_табл · (атомы/512) ·
+    // (R₁/R)³, якорь — полный куб (см. вывод в light_bake.cpp). Полоса из
+    // 5 полных ячеек: 5 · ((R₁)/(R))³.
+    const float tableI =
+        static_cast<float>(kMatLightIntensityE3[kMatNeonTube]) * 0.001f;
+    const float r1 = tableR + std::sqrt(3.0f);
+    {
+        const float rr = r1 / (tableR + std::sqrt(27.0f));
+        CHECK(std::fabs(lights[0].intensity - tableI * 5.0f * rr * rr * rr) <
+              1e-4f);
+    }
     // Цвет источника = альбедо материала.
     CHECK(std::fabs(lights[0].color.y - kMatAlbedoG[kMatNeonTube]) < 1e-4f);
 
@@ -135,7 +143,27 @@ static void test_light_bake_clusters() {
         std::uint32_t soloId = 0;
         for (const auto& l : lights)
             if (l.id != stripId && l.id != spotId) soloId = l.id;
+        // ЯКОРЬ ЯРКОСТИ: одна полная ячейка светит ровно табличной
+        // интенсивностью (N = 512, R = R₁ — оба множителя единичные).
+        for (const auto& l : lights)
+            if (l.id == soloId) CHECK(std::fabs(l.intensity - tableI) < 1e-4f);
+        // МЕНЬШЕ МАТЕРИИ ПРИ ТОМ ЖЕ ОХВАТЕ — ЯРКОСТЬ ∝ АТОМАМ: две полные
+        // плиты (низ и верх) со связующим столбиком — бокс прежний (R тот
+        // же), одна 6-компонента, 64+64+6 = 134 атома из 512.
         SubMask& m = g.mask(70, 70, 70);
+        m.clear_all();
+        for (int sy = 0; sy < kSubDim; ++sy)
+            for (int sx = 0; sx < kSubDim; ++sx) {
+                m.set(sub_bit(sx, sy, 0));
+                m.set(sub_bit(sx, sy, kSubDim - 1));
+            }
+        for (int sz = 1; sz < kSubDim - 1; ++sz) m.set(sub_bit(0, 0, sz));
+        CHECK(game::patch_emitter_field(w, field, d, 1));
+        lights = game::bake_material_lights(w, field, clusters);
+        for (const auto& l : lights)
+            if (l.id == soloId)
+                CHECK(std::fabs(l.intensity - tableI * (134.0f / 512.0f)) <
+                      1e-4f);
         m.clear_all();
         m.set(sub_bit(0, 0, 0));
         CHECK(game::patch_emitter_field(w, field, d, 1));

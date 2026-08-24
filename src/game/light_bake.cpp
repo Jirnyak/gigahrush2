@@ -322,12 +322,31 @@ std::vector<BakedLight> bake_material_lights(const World& world,
                 kVoxelSize};
         const float halfDiag = std::sqrt(
             half.x * half.x + half.y * half.y + half.z * half.z);
-        l.radiusM = static_cast<float>(kMatLightRadiusMm[comp.t]) * 0.001f +
-                    halfDiag;
+        const float tableR =
+            static_cast<float>(kMatLightRadiusMm[comp.t]) * 0.001f;
+        l.radiusM = tableR + halfDiag;
         l.color =
             vec3{kMatAlbedoR[comp.t], kMatAlbedoG[comp.t], kMatAlbedoB[comp.t]};
-        l.intensity =
-            static_cast<float>(kMatLightIntensityE3[comp.t]) * 0.001f;
+        // ЯРКОСТЬ — ИЗ МАТЕРИИ, ПИК — ИЗ ФОРМЫ СПАДА (решение владельца
+        // 2026-08-24: «от материи, но не линейно»). Каждый атом излучает
+        // одинаково, эмиттер прозрачен своему свету (004b013a — оптически
+        // тонкий) ⇒ СУММАРНАЯ мощность кластера линейна от числа атомов. Но
+        // intensity в шейдере — ПИК спада (1−d/R)², а не мощность; мощность
+        // такой лампы ∝ пик·R³. Отсюда пик ВЫВОДИТСЯ:
+        //     I = I_табл · (атомы / kSubVoxels) · (R₁/R)³,
+        // где R₁ — радиус лампы из ОДНОЙ полной ячейки (якорь табличного
+        // значения: полный куб материала светит ровно I_табл). Пределы по
+        // построению: воксель-свечка в сотни раз тусклее вывески; гигантский
+        // билборд НЕ выжигает окрестности — его пик размазан по R³ и даже
+        // падает, зато достаёт дальше (R растёт) и суммарно светит линейно
+        // больше; выбили половину атомов при том же охвате — ровно вполсилы.
+        const float r1 = tableR + std::sqrt(3.0f) * (kCellSize * 0.5f);
+        const float rr = r1 / l.radiusM;
+        l.intensity = static_cast<float>(kMatLightIntensityE3[comp.t]) *
+                      0.001f *
+                      (static_cast<float>(comp.atoms.size()) /
+                       static_cast<float>(kSubVoxels)) *
+                      rr * rr * rr;
         l.id = comp.id;
         out.push_back(l);
     }
