@@ -165,17 +165,26 @@ void main() {
     {
         // Кандидаты — запечённый список клетки (только В ПРИНЦИПЕ
         // достижимые лампы; вклад пересчитывается той же формулой — в бейке
-        // лежат одни id). Тайловый цикл пропущен ЦЕЛИКОМ — это и есть выигрыш.
+        // лежат id). Тайловый цикл пропущен ЦЕЛИКОМ — это и есть выигрыш.
+        // Старший бит id — ДИЛАТАЦИЯ ([game/light_vis_bake.h]
+        // kLampDilatedBit, тот же бит дефайном): лампа попала в список не
+        // прямым лучом, а расширением на соседа. Штраф +1.0 к скору —
+        // геометрический скор внутрирадиусной лампы ≤ 1, поэтому все видимые
+        // ранжируются выше всех перекрытых, и теневой бюджет пикселя
+        // (surface_light идёт по списку сверху) уходит видимым; перекрытая
+        // остаётся в хвосте — ошибка излишком, не потерей.
         uint n = min(uBakedCells[flatCellIndex].count, kCellSlots);
         for (uint k = 0u; k < n; ++k) {
-            uint id = uBakedCells[flatCellIndex].lightIndices[k];
+            uint raw = uBakedCells[flatCellIndex].lightIndices[k];
+            uint id = raw & (uint(GIGA_LAMP_DILATED_BIT) - 1u);
             if (id >= staticCount) continue; // таблица уехала — ждём свапа
             if (uPointLights[id].colorIntensity.w <= kTombstone) continue;
             vec4 pr = uPointLights[id].posRadius;
             float radius = pr.w;
             float dSq = dist_sq_point_aabb_toroidal(pr.xyz, cellMin, cellMax, pc.params.y);
             if (dSq > radius * radius) continue;
-            consider(id, dSq / (radius * radius));
+            float pen = (raw & uint(GIGA_LAMP_DILATED_BIT)) != 0u ? 1.0 : 0.0;
+            consider(id, dSq / (radius * radius) + pen);
         }
     }
 

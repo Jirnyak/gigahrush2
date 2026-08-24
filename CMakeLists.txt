@@ -297,13 +297,21 @@ set(_giga_lgrid_cell_bytes ${CMAKE_MATCH_1})
 # (Кластерный регион таблицы удалён 2026-08-23 вместе с самим механизмом:
 # он не работал ни кадра — биннинг выбрасывал все ссылки, — и рвал свет
 # прямоугольниками по клеткам светосетки. Дефайн шейдеру больше не нужен.)
+# Бит дилатации в id запечённого списка (находка №1 аудита 2026-08-23):
+# CPU-константа живёт в light_vis_bake.h, шейдер получает тот же бит дефайном.
+file(READ ${CMAKE_SOURCE_DIR}/src/game/light_vis_bake.h _giga_lvis_h)
+if(NOT _giga_lvis_h MATCHES "kLampDilatedBit = (0x[0-9A-Fa-f]+)u")
+    message(FATAL_ERROR "cannot parse kLampDilatedBit out of src/game/light_vis_bake.h.")
+endif()
+set(_giga_lamp_dilated_bit ${CMAKE_MATCH_1})
 set(_giga_shader_defs
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
     -DGIGA_CELL_SIZE=${_giga_cell_size}
     -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
     -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
-    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes})
+    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
+    -DGIGA_LAMP_DILATED_BIT=${_giga_lamp_dilated_bit}u)
 # Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
 # above go stale while the build stays green.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -1234,7 +1242,9 @@ if(GIGA_BUILD_TESTS)
     # светит, но пропускает свет (light_transparent, neon-topology).
     # 246501 -> 246510 (+9) on 2026-08-24: единая `sphere <материал> [r]` из
     # таблицы (material_id_by_name), зоопарк neon/glass умер; пины парсинга.
-        PASS_REGULAR_EXPRESSION "game_test: 246510 checks, 0 failures")
+    # 246510 -> 246514 (+4) on 2026-08-24: бит дилатации в ранге ламп (находка
+    # №1 аудита DDA) — за стеной бит стоит, со щелью чист; мутация ловится.
+        PASS_REGULAR_EXPRESSION "game_test: 246514 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -96,14 +96,18 @@ bool ray_clear(const World& w, vec3 from, vec3 to) {
     return true;
 }
 
-// Лампа в списке клетки? При переливе — честность вытеснения: каждый
-// хранимый id обязан иметь вклад не хуже (score не больше) кандидата.
+// Лампа в списке клетки? id несут бит дилатации ([light_vis_bake.h]
+// kLampDilatedBit) — тождество по маске. При переливе — честность вытеснения:
+// каждый хранимый обязан иметь вклад не хуже кандидата; скор хранимого — с
+// дилатационным штрафом (+1), у кандидата штраф оракулу неизвестен (его
+// «дошёл» — плотное сэмплирование, у бейка тот же путь мог быть дилатацией),
+// поэтому граница консервативна ровно на величину штрафа.
 bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
                     std::size_t cell, std::uint32_t lamp) {
     const std::uint32_t* row = b.cells.data() + cell * (1 + b.slots);
     const std::uint32_t n = row[0];
     for (std::uint32_t k = 0; k < n; ++k)
-        if (row[1 + k] == lamp) return true;
+        if ((row[1 + k] & giga::game::kLampIdMask) == lamp) return true;
     if (n < b.slots) return false; // места было — потеря света, дефект
     // Список полон: вытеснение законно, только если ВСЕ хранимые вкладнее.
     const int cx = static_cast<int>(cell % giga::game::kLightVisDim);
@@ -114,9 +118,12 @@ bool lamp_accounted(const LightVisBake& b, const LightVisLamp* lamps,
     const float cand = giga::game::light_cell_score(
         lamps[lamp].pos, lamps[lamp].radiusM, cx, cy, cz);
     for (std::uint32_t k = 0; k < n; ++k) {
-        const LightVisLamp& s = lamps[row[1 + k]];
-        if (giga::game::light_cell_score(s.pos, s.radiusM, cx, cy, cz) > cand)
-            return false;
+        const std::uint32_t raw = row[1 + k];
+        const LightVisLamp& s = lamps[raw & giga::game::kLampIdMask];
+        const float stored =
+            giga::game::light_cell_score(s.pos, s.radiusM, cx, cy, cz) +
+            ((raw & giga::game::kLampDilatedBit) != 0 ? 1.0f : 0.0f);
+        if (stored > cand + 1.0f) return false;
     }
     return true;
 }
@@ -310,6 +317,29 @@ void oracle_reverse_polarity_constructed() {
                                       real, /*threads=*/2);
     CHECK(lamp_accounted(real, lamps.data(), targetCell, 0)); // бейк честен
 
+    // БИТ ДИЛАТАЦИИ ([light_vis_bake.h] kLampDilatedBit, находка №1 аудита
+    // 2026-08-23): клетка (5,2,2) — первая ЗА стеной; со щелью луч к её
+    // центру прямой (бит чист), без щели она достижима только расширением от
+    // передних клеток — бит обязан стоять, чтобы ранг штрафовал перекрытую.
+    const auto raw_id_at = [&](const LightVisBake& b, int cx, int cy, int cz,
+                               bool* found) -> std::uint32_t {
+        const std::size_t cell = giga::game::light_vis_index(cx, cy, cz);
+        const std::uint32_t* row = b.cells.data() + cell * (1 + kSlots);
+        for (std::uint32_t k = 0; k < row[0]; ++k)
+            if ((row[1 + k] & giga::game::kLampIdMask) == 0u) {
+                *found = true;
+                return row[1 + k];
+            }
+        *found = false;
+        return 0;
+    };
+    {
+        bool found = false;
+        const std::uint32_t raw = raw_id_at(real, 5, 2, 2, &found);
+        CHECK(found);
+        CHECK((raw & giga::game::kLampDilatedBit) == 0); // прямой луч — чист
+    }
+
     // МУТАЦИЯ: щель замурована монолитом.
     g.fill_cell(8, 4, 4, rock);
     g.fill_cell(9, 4, 4, rock);
@@ -319,6 +349,12 @@ void oracle_reverse_polarity_constructed() {
     // Референс по настоящей (не замурованной) сетке видел свет, мутант
     // потерял лампу — оракул поймал бы это как lost > 0.
     CHECK(!lamp_accounted(bad, lamps.data(), targetCell, 0));
+    {
+        bool found = false;
+        const std::uint32_t raw = raw_id_at(bad, 5, 2, 2, &found);
+        CHECK(found); // дилатация страхует: лампа в списке — свет не потерян
+        CHECK((raw & giga::game::kLampDilatedBit) != 0); // но помечена
+    }
 }
 
 void carve_expands_same_call() {
@@ -355,7 +391,8 @@ void carve_expands_same_call() {
                         baked.cells.data() + cell * (1 + kSlots);
                     bool present = false;
                     for (std::uint32_t k = 0; k < row[0]; ++k)
-                        if (row[1 + k] == li) present = true;
+                        if ((row[1 + k] & giga::game::kLampIdMask) == li)
+                            present = true;
                     if (present || row[0] >= kSlots) continue;
                     lampId = static_cast<int>(li);
                     targetCell = cell;
@@ -411,7 +448,9 @@ void carve_expands_same_call() {
         after.cells.data() + targetCell * (1 + kSlots);
     bool present = false;
     for (std::uint32_t k = 0; k < row[0]; ++k)
-        if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
+        if ((row[1 + k] & giga::game::kLampIdMask) ==
+            static_cast<std::uint32_t>(lampId))
+            present = true;
     CHECK(present); // дыра пробита — ребейк обязан увидеть лампу в клетке
 }
 
@@ -455,7 +494,8 @@ void delta_lamp_patch() {
                         baked.cells.data() + cell * (1 + kSlots);
                     bool present = false;
                     for (std::uint32_t k = 0; k < row[0]; ++k)
-                        if (row[1 + k] == li) present = true;
+                        if ((row[1 + k] & giga::game::kLampIdMask) == li)
+                            present = true;
                     if (present || row[0] >= kSlots) continue;
                     lampId = static_cast<int>(li);
                     targetCell = cell;
@@ -506,7 +546,8 @@ void delta_lamp_patch() {
     CHECK(patch.affectedLamps >= 1);
     bool ourLampHitsTarget = false;
     for (const auto& h : patch.hits)
-        if (h.lamp == static_cast<std::uint32_t>(lampId) &&
+        if ((h.lamp & giga::game::kLampIdMask) ==
+                static_cast<std::uint32_t>(lampId) &&
             h.cell == targetCell)
             ourLampHitsTarget = true;
     CHECK(ourLampHitsTarget); // лучи патча увидели тоннель
@@ -548,12 +589,16 @@ void delta_lamp_patch() {
     const std::uint32_t* row = baked.cells.data() + targetCell * (1 + kSlots);
     bool present = false;
     for (std::uint32_t k = 0; k < row[0]; ++k)
-        if (row[1 + k] == static_cast<std::uint32_t>(lampId)) present = true;
+        if ((row[1 + k] & giga::game::kLampIdMask) ==
+            static_cast<std::uint32_t>(lampId))
+            present = true;
     CHECK(present); // свет пришёл через дыру ЧАСТИЧНЫМ допеканием
     for (std::uint32_t oldId : oldRow) {
         bool kept = false;
         for (std::uint32_t k = 0; k < row[0]; ++k)
-            if (row[1 + k] == oldId) kept = true;
+            if ((row[1 + k] & giga::game::kLampIdMask) ==
+                (oldId & giga::game::kLampIdMask))
+                kept = true;
         CHECK(kept); // не потерять свет: добавки не вытеснили старое
     }
 }

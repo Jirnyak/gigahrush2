@@ -178,11 +178,16 @@ void rays_one_lamp(const MacroGrid& grid, const LightVisLamp& lamp,
                                 continue;
                             lit = sc.reached[cell_index(ax, ay, az)] != 0;
                         }
-                if (lit)
-                    out.push_back(LampCellHit{
-                        static_cast<std::uint32_t>(
-                            light_vis_index(cx, cy, cz)),
-                        lampId, s});
+                if (!lit) continue;
+                // Прямое попадание против дилатации — В РАНГ (находка №1
+                // аудита 2026-08-23): перекрытая лампа несёт бит в id и +1.0
+                // к скору — все видимые выше всех перекрытых, теневой бюджет
+                // пикселя уходит видимым (вывод у kLampDilatedBit в .h).
+                const bool direct = sc.reached[cell_index(dx, dy, dz)] != 0;
+                out.push_back(LampCellHit{
+                    static_cast<std::uint32_t>(light_vis_index(cx, cy, cz)),
+                    direct ? lampId : (lampId | kLampDilatedBit),
+                    direct ? s : s + 1.0f});
             }
 }
 
@@ -467,19 +472,29 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
         const std::uint32_t wasCount = count;
         bool cellChanged = false;
         for (; i < patch.hits.size() && patch.hits[i].cell == cell; ++i) {
+            // id несёт бит дилатации (kLampDilatedBit): тождество лампы — по
+            // маске, а флаг ЖИВОЙ — карв мог открыть прямой луч (или закрыть,
+            // оставив только дилатацию), и ранг обязан узнать.
             const std::uint32_t id = patch.hits[i].lamp;
             bool present = false;
-            for (std::uint32_t k = 0; k < count && !present; ++k)
-                present = dst[1 + k] == id;
+            for (std::uint32_t k = 0; k < count && !present; ++k) {
+                if ((dst[1 + k] & kLampIdMask) != (id & kLampIdMask)) continue;
+                present = true;
+                if (dst[1 + k] != id) {
+                    dst[1 + k] = id;
+                    cellChanged = true;
+                }
+            }
             if (present) continue;
             if (count < live.slots) {
                 dst[1 + count++] = id;
                 cellChanged = true;
                 continue;
             }
-            // Клетка полна: вытеснить худшего ЧЕСТНОГО (id < lampCount —
-            // кластерные ссылки живут в верхнем регионе таблицы и не
-            // вытесняются: за ссылкой стоит пачка ламп). Тот же класс ошибки,
+            // Клетка полна: вытеснить худшего ЧЕСТНОГО (masked id < lampCount
+            // — кластерные ссылки жили в верхнем регионе таблицы и не
+            // вытеснялись). Скор — тот же, что у ранга: геометрия + штраф
+            // дилатации, перекрытые вытесняются первыми. Тот же класс ошибки,
             // что top-K полного бейка, и так же вслух — через overflowCells.
             const int lx = static_cast<int>(cell) & (kLightVisDim - 1);
             const int ly = (static_cast<int>(cell) / kLightVisDim) &
@@ -489,10 +504,13 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
             float worstScore = patch.hits[i].score;
             std::uint32_t worstK = live.slots; // «вытеснять некого»
             for (std::uint32_t k = 0; k < count; ++k) {
-                const std::uint32_t eid = dst[1 + k];
+                const std::uint32_t raw = dst[1 + k];
+                const std::uint32_t eid = raw & kLampIdMask;
                 if (eid >= lampCount) continue; // кластерная ссылка
-                const float s = light_cell_score(
-                    lamps[eid].pos, lamps[eid].radiusM, lx, ly, lz);
+                const float s =
+                    light_cell_score(lamps[eid].pos, lamps[eid].radiusM, lx,
+                                     ly, lz) +
+                    ((raw & kLampDilatedBit) != 0 ? 1.0f : 0.0f);
                 if (s > worstScore) {
                     worstScore = s;
                     worstK = k;
