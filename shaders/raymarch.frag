@@ -60,7 +60,7 @@ layout(set = 0, binding = 3, std430) readonly buffer PoolBuf { uint uPagePool[];
 layout(set = 0, binding = 4, std430) readonly buffer ClassBuf { uint uClass[]; };    // 4 cells/uint
 layout(set = 0, binding = 5) uniform MarchUbo {
     mat4 invViewProj;   // rays; inverse of pc.viewProj, CPU-inverted per frame
-    vec4 albedo[32];    // display-referred material albedo (cube_pass kMaterial)
+    vec4 albedo[64];    // display-referred material albedo (38 строк + запас)
     vec4 timeParams;    // x = timeSec, y = samosborPulse, z = reserved, w = reserved
 } ub;
 // binding 6 (fluid) УМЕР: воду двигает и рисует мир-автомат (страницы).
@@ -141,6 +141,17 @@ vec3 vColor;
 vec3 vWorldPos;
 float vAo;
 uint vMat;
+
+// СРЕДЫ НА ЛУЧЕ (инкремент 6, рендер сред): прозрачные атомы (жидкость,
+// газ — по фазе строки; рендер фазу читать ВПРАВЕ, S16.2 запрещает её
+// только движению) не останавливают марш — копят оптическую глубину и
+// цвет, поверхность за ними красится поглощением Бэра. Выводы коэффициентов:
+// вода — видимость ~5.5 м (T=5% на 5.5 м -> k=0.55 1/м); газ читаем на
+// ~8 м (k=0.35).
+const float kAbsorbLiquid = 0.55;
+const float kAbsorbGas = 0.35;
+float gMediaDepth = 0.0;
+vec3 gMediaTint = vec3(0.0);
 
 const float kGamma = 2.2;
 
@@ -229,7 +240,22 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
     float t = t0;
     int axis = axisIn;
     for (int i = 0; i < 32; ++i) {
-        if (sub_solid(ci, s) || (matter && sub_mat(ci, s) != 0u)) {
+        if (matter && !sub_solid(ci, s)) {
+            // Класс-3 клетка: немасочный не-воздух — ВСЕГДА среда (закон
+            // чтения: немасочного твёрдого атома не существует). Прозрачный
+            // проход: копим сегмент атома и маршируем дальше.
+            uint mm = sub_mat(ci, s);
+            if (mm != 0u) {
+                float tNext =
+                    min(min(min(sMax.x, sMax.y), sMax.z), t1);
+                float k =
+                    kMatPhase[mm] == 1u ? kAbsorbLiquid : kAbsorbGas;
+                float wgt = k * max(tNext - t, 0.0);
+                gMediaDepth += wgt;
+                gMediaTint += ub.albedo[min(mm, 63u)].rgb * wgt;
+            }
+        }
+        if (sub_solid(ci, s)) {
             h.t = t;
             h.n = vec3(0.0);
             if (axis >= 0) h.n[axis] = -float(stp[axis]);
@@ -728,16 +754,27 @@ void main() {
     }
 #else
     if (!h.ok) {
-        // Past the fog radius everything is black — the same void the raster
-        // pass exposed as clear colour. Depth 1.0: later passes fill it freely.
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        // Past the fog radius everything is black — but среды на луче красят
+        // и пустоту (взгляд сквозь толщу воды в бездну).
+        vec3 miss = vec3(0.0);
+        if (gMediaDepth > 0.0) {
+            float mT = exp(-gMediaDepth);
+            vec3 mediaCol = gMediaTint / max(gMediaDepth, 1e-4);
+            miss = mediaCol * 0.30 * (1.0 - mT);
+            vec3 mx = max(miss, vec3(0.0));
+            miss = clamp((mx * (2.51 * mx + 0.03)) /
+                             (mx * (2.43 * mx + 0.59) + 0.14),
+                         0.0, 1.0);
+            miss = pow(miss, vec3(1.0 / kGamma));
+        }
+        outColor = vec4(miss, 1.0);
         gl_FragDepth = 1.0;
         return;
     }
 
     vWorldPos = ro + rd * h.t;
     vNormal = h.n;
-    vMat = min(h.mat, 31u);
+    vMat = min(h.mat, 63u);
     vColor = ub.albedo[vMat].rgb;
     // Fluid-тинт УМЕР (чистка 2026-08-24): вода — материя автомата, её
     // рисуют сами water-атомы (albedo строки); прозрачность — инкремент 6.
@@ -904,6 +941,15 @@ void main() {
         samosborPulse
     );
     lit = lit * fogVol.a + fogVol.rgb;
+
+    // СРЕДЫ (инкремент 6): поглощение Бэра по накопленной оптической глубине
+    // луча — вода синеет с толщей, газ даёт цветную дымку своим альбедо.
+    // Среда светится окружением (0.30 от собственного цвета), не сама.
+    if (gMediaDepth > 0.0) {
+        float mT = exp(-gMediaDepth);
+        vec3 mediaCol = gMediaTint / max(gMediaDepth, 1e-4);
+        lit = mix(mediaCol * 0.30, lit, mT);
+    }
 
     float fog = distance_fog(d, pc.fog.x, pc.fog.y);
 

@@ -17,10 +17,12 @@ namespace {
 // Matches MarchUbo in shaders/raymarch.frag (std140: mat4 + vec4[32] + vec4 = 592 B).
 struct MarchUbo {
     mat4 invViewProj;
-    vec4 albedo[32];
+    vec4 albedo[64]; // 38 материалов с рыхлыми двойниками; 32 обрезало их цвет
     vec4 timeParams; // x = timeSec, y = samosborPulse
 };
-static_assert(sizeof(MarchUbo) == 592, "MarchUbo must match the shader block");
+// mat4 64 Б + 64 vec4 альбедо 1024 Б + timeParams 16 Б = 1104 Б (альбедо до
+// 64 строк: материалов уже 38 с двойниками, старые 32 обрезали их цвет).
+static_assert(sizeof(MarchUbo) == 1104, "MarchUbo must match the shader block");
 
 // General 4x4 inverse (cofactor expansion). Runs once per frame on the CPU so
 // ray generation matches the raster projection bit-for-bit; render-local, so
@@ -220,7 +222,7 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             return false;
         MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
         u->invViewProj = mat4_identity();
-        for (std::uint32_t i = 0; i < 32; ++i) {
+        for (std::uint32_t i = 0; i < 64; ++i) {
             // Out-of-range material ids must SCREAM, not blend in: a near-white
             // fallback rendered as believable "dead pixels" in a dark world.
             const vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
