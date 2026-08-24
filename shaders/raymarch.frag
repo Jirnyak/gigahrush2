@@ -30,20 +30,7 @@
 // no shader int64).
 
 layout(location = 0) in vec2 vNdc;
-// ПОЛУРЕЗНЫЙ СВЕТ (ddalight.md, после опровержения квад-теней 2026-08-24):
-// три модуля из ОДНОГО исходника. -DGIGA_LIGHT_HALF — производитель света:
-// полурезный кадр, свой первичный DDA, surface_light со ВСЕМИ теневыми
-// лучами, выход — диффуз (до альбедо) + t луча в альфе и спекуляр. Обычный
-// модуль с -DGIGA_LIGHT_SAMPLED — потребитель: вместо своего surface_light
-// берёт свет 4 полурез-текселей билатерально (глубинный гейт по t). Фрагментов
-// со светом вчетверо меньше при ЛЮБОМ разрешении рендера — это и есть рычаг,
-// который квад-шеринг дать не мог (SIMD-лок-степ).
-#ifdef GIGA_LIGHT_HALF
-layout(location = 0) out vec4 outLightDiffuse; // rgb = диффуз до альбедо, a = t (м; <0 = промах)
-layout(location = 1) out vec4 outLightSpec;    // rgb = спекуляр (окрашен светом)
-#else
 layout(location = 0) out vec4 outColor;
-#endif
 
 // Per-material family + measured amplitude, GENERATED from data/materials.csv.
 #include "material_surface.glsl"
@@ -83,57 +70,6 @@ layout(push_constant) uniform Push {
     vec4 torus;    // x = wrap period; y = AO direct share; z = albedo tex mask;
                    // w = packed normal|roughness masks (textured) / uTime
 } pc;
-
-#ifdef GIGA_LIGHT_SAMPLED
-// Полурезный свет полупасса ([render/raymarch_pass.h] record_light). Сет —
-// последний в лейауте: 3 у текстурного модуля (2 занят альбедо-массивами),
-// 2 у процедурного.
-#ifdef GIGA_ALBEDO_ARRAY
-layout(set = 3, binding = 0) uniform sampler2D uHalfDiffuse;
-layout(set = 3, binding = 1) uniform sampler2D uHalfSpec;
-#else
-layout(set = 2, binding = 0) uniform sampler2D uHalfDiffuse;
-layout(set = 2, binding = 1) uniform sampler2D uHalfSpec;
-#endif
-
-// БИЛАТЕРАЛЬНАЯ выборка полурезного света: 4 ближайших полурез-текселя,
-// вес = билинейный × близость глубины (альфа хранит t первичного луча
-// полупасса). Глубинный гейт режет чужие тексели на разрыве (край стены —
-// свет не течёт через угол); если чужие все — ближайший по глубине.
-// Гейт 32: вес падает вдвое при ошибке глубины 1/32 ≈ 3% — порядок
-// субвокселя на дистанции ~8 м (выведено, не подобрано).
-void sample_half_light(float d, out vec3 outDiff, out vec3 outSpec) {
-    vec2 hxy = gl_FragCoord.xy * 0.5 - 0.5;
-    ivec2 base = ivec2(floor(hxy));
-    vec2 f = hxy - vec2(base);
-    ivec2 sz = textureSize(uHalfDiffuse, 0);
-    vec3 accD = vec3(0.0), accS = vec3(0.0);
-    float accW = 0.0;
-    vec3 bestD = vec3(0.0), bestS = vec3(0.0);
-    float bestErr = 1e30;
-    for (int i = 0; i < 4; ++i) {
-        ivec2 o = ivec2(i & 1, i >> 1);
-        ivec2 c = clamp(base + o, ivec2(0), sz - 1);
-        vec4 sd = texelFetch(uHalfDiffuse, c, 0);
-        if (sd.a < 0.0) continue; // полутексель промахнулся (пустота/даль)
-        vec4 sp = texelFetch(uHalfSpec, c, 0);
-        float bw = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
-        float err = abs(sd.a - d) / max(d, 1.0);
-        float w = bw / (1.0 + 32.0 * err);
-        accD += sd.rgb * w;
-        accS += sp.rgb * w;
-        accW += w;
-        if (err < bestErr) { bestErr = err; bestD = sd.rgb; bestS = sp.rgb; }
-    }
-    if (accW > 1e-4) {
-        outDiff = accD / accW;
-        outSpec = accS / accW;
-    } else {
-        outDiff = bestD;
-        outSpec = bestS;
-    }
-}
-#endif
 
 // cube.frag's varyings, filled by the marcher before the ported shading runs.
 vec3 vNormal;
@@ -692,37 +628,6 @@ void main() {
     vec3 rd = normalize(p1.xyz / p1.w - p0.xyz / p0.w);
 
     Hit h = march(ro, rd, pc.fog.y);
-#ifdef GIGA_LIGHT_HALF
-    // ПРОИЗВОДИТЕЛЬ ПОЛУРЕЗНОГО СВЕТА: первичный DDA свой (четверть цены
-    // полного кадра), весь световой цикл с теневыми лучами — здесь, выход —
-    // диффуз до альбедо + t луча (для глубинного гейта потребителя) и
-    // спекуляр. Ни тумана, ни альбедо, ни глубины — это делает полный кадр.
-    if (!h.ok) {
-        outLightDiffuse = vec4(0.0, 0.0, 0.0, -1.0);
-        outLightSpec = vec4(0.0);
-        return;
-    }
-    {
-        vec3 P = ro + rd * h.t;
-        vec3 n = normalize(h.n);
-        vec3 toCam = pc.camPos.xyz - P;
-        float d = length(toCam);
-        vec3 V = toCam / max(d, 1e-4);
-        // Нормаль — ГЕОМЕТРИЧЕСКАЯ: бамп-наклон субпиксельный, полурезная
-        // билатераль его всё равно усреднила бы. Спекуляр — шершавость 0.5,
-        // как у процедурного пути полного кадра.
-        float roughness = 0.50;
-        float specPow = max(
-            2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0,
-            1.0);
-        float specIntensity = (1.0 - roughness) * 0.25;
-        vec3 dd, ss;
-        surface_light(P, n, V, specPow, specIntensity, pc.torus.x, d, pc.fog.x,
-                      dd, ss);
-        outLightDiffuse = vec4(dd, h.t);
-        outLightSpec = vec4(ss, 0.0);
-    }
-#else
     if (!h.ok) {
         // Past the fog radius everything is black — the same void the raster
         // pass exposed as clear colour. Depth 1.0: later passes fill it freely.
@@ -855,14 +760,8 @@ void main() {
     // сетки — его аналитический двойник удалён, он учитывался дважды), мобы,
     // трассеры, конусы. Тень каждого источника — giga_shadow выше.
     vec3 directDiffuse, directSpec;
-#ifdef GIGA_LIGHT_SAMPLED
-    // Свет — из полурезного полупасса (те же лампы, те же теневые DDA-лучи,
-    // вчетверо меньше фрагментов); билатераль с глубинным гейтом выше.
-    sample_half_light(d, directDiffuse, directSpec);
-#else
     surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
                   d, pc.fog.x, directDiffuse, directSpec);
-#endif
 
     float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
 
@@ -911,5 +810,4 @@ void main() {
     vec3 mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
     vec3 srgb = pow(mapped, vec3(1.0 / kGamma));
     outColor = vec4(srgb, 1.0);
-#endif // GIGA_LIGHT_HALF else-ветка (полный кадр)
 }
