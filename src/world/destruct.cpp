@@ -3,8 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "world/gravity.h"   // regime_down — обломки сыплются по фрейму
-#include "world/materials.h" // kMatRubble — рыхлая строка вырезанного
+#include "world/materials.h" // kMatRubble — детач конвертирует кусок в рыхлое
 
 namespace giga {
 namespace {
@@ -247,7 +246,16 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
                 out.detached.push_back(CarvedVoxel{
                     k >> 9, static_cast<std::uint16_t>(k & 511u),
                     mat_key(w, mats, k)});
-                remove_key(w, mats, k, out.dirtyCells);
+                // ИНКРЕМЕНТ 5, редакция владельца 2026-08-24: потерявший
+                // связность кусок НЕ исчезает и НИЧЕГО не рождает — ТЕ ЖЕ
+                // атомы на месте становятся рыхлой строкой (rubble) и дальше
+                // честно падают автоматом в гравитации фрейма, как вода:
+                // один механизм на всю материю. Маска остаётся стоять —
+                // rubble твёрд, бит = кэш фазы, он поедет вместе с атомом.
+                const std::size_t ci = k >> 9;
+                CellType* pg = materialize_sub_page(w, ci);
+                pg[k & 511u] = kMatRubble;
+                out.dirtyCells.push_back(static_cast<std::uint32_t>(ci));
             }
         }
     }
@@ -258,56 +266,6 @@ void finalize_dirty(CarveResult& out) {
     out.dirtyCells.erase(
         std::unique(out.dirtyCells.begin(), out.dirtyCells.end()),
         out.dirtyCells.end());
-}
-
-// ИНКРЕМЕНТ 5 (CANON S16.5): вырезанное НЕ испаряется — твёрдая материя
-// переходит в рыхлую (rubble) и дальше ею владеет автомат. Сам вырезанный
-// атом становится воздухом (дыра честна same-tick — выстрел даёт дыру этим
-// же тиком), а его масса рождается rubble-квантом в первом свободном
-// субвокселе ВНИЗ по гравитации фрейма (обвал — крошка сыплется, не висит).
-// Массовый закон: p = плотность_источника / насыпная_плотность_rubble,
-// ролл — зеркало carve_roll (тот же stateless-хеш, тот же seed-контракт):
-// бетон 2400 -> p=1 капом (плотнее насыпи), штукатурка 800 -> 0.44.
-// Материя сред (вода, сам рубл) обломков не рождает — карв по ней и есть
-// уборка (швабра, S16.5). Пул частиц остаётся косметикой искр.
-void spawn_rubble(World& w, SubField<CellType>* mats,
-                  const std::vector<CarvedVoxel>& removed, std::uint32_t seed,
-                  std::vector<std::uint32_t>& dirty) {
-    if (!mats) return;
-    const CellStep down = regime_down(w.gravity().regime);
-    const float rubbleDens = kMatDensity[kMatRubble];
-    constexpr int kDropSearch = 16; // субвокселей вниз; дальше уронит автомат
-    for (const CarvedVoxel& v : removed) {
-        if (v.mat == kCellAir || material_is_medium(v.mat)) continue;
-        const float p = kMatDensity[v.mat] / rubbleDens;
-        const std::uint32_t h = carve_hash(seed ^ 0x5EEDB1E5u, v.cell, v.bit);
-        if (static_cast<float>(h & 0xFFFFu) >= p * 65536.0f) continue;
-        // Глобальные суб-координаты вырезанного атома (тор 1024 на ось).
-        int gx = static_cast<int>(v.cell & 127u) * 8 + (v.bit & 7);
-        int gy = static_cast<int>((v.cell >> 7) & 127u) * 8 +
-                 ((v.bit >> 3) & 7);
-        int gz = static_cast<int>((v.cell >> 14) & 127u) * 8 +
-                 ((v.bit >> 6) & 7);
-        int lx = gx, ly = gy, lz = gz; // последний свободный по пути вниз
-        for (int step = 0; step < kDropSearch; ++step) {
-            const int nx = (gx + down.x * (step + 1) + 1024) & 1023;
-            const int ny = (gy + down.y * (step + 1) + 1024) & 1023;
-            const int nz = (gz + down.z * (step + 1) + 1024) & 1023;
-            const std::uint32_t nci = static_cast<std::uint32_t>(
-                macro_index(nx >> 3, ny >> 3, nz >> 3));
-            const std::uint32_t nbit = static_cast<std::uint32_t>(
-                sub_bit(nx & 7, ny & 7, nz & 7));
-            if (atom_exists(w, mats, pack_key(nci, nbit))) break; // опора
-            lx = nx; ly = ny; lz = nz;
-        }
-        const std::size_t ci = macro_index(lx >> 3, ly >> 3, lz >> 3);
-        const int bit = sub_bit(lx & 7, ly & 7, lz & 7);
-        CellType* pg = materialize_sub_page(w, ci);
-        pg[bit] = kMatRubble;
-        // Бит маски — кэш фазы: rubble твёрдый, обломок коллизиен сразу.
-        w.grid().masks_mut()[ci].set(bit);
-        dirty.push_back(static_cast<std::uint32_t>(ci));
-    }
 }
 
 } // namespace
@@ -443,9 +401,6 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
     }
 
     detach_sweep(w, mats, op.detachLimit, scratch, out);
-    // Обломки (S16.5): и выбитое ударом, и оторвавшееся детачем — в рыхлое.
-    spawn_rubble(w, mats, out.destroyed, op.seed, out.dirtyCells);
-    spawn_rubble(w, mats, out.detached, op.seed ^ 0xDE7Au, out.dirtyCells);
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.destroyed.size() +
                                      out.detached.size());
@@ -469,8 +424,6 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
         CarvedVoxel{ci, static_cast<std::uint16_t>(bit), mat});
     remove_key(w, mats, key, out.dirtyCells);
     detach_sweep(w, mats, kSubVoxels, scratch, out);
-    spawn_rubble(w, mats, out.destroyed, seed, out.dirtyCells);
-    spawn_rubble(w, mats, out.detached, seed ^ 0xDE7Au, out.dirtyCells);
     finalize_dirty(out);
     return true;
 }

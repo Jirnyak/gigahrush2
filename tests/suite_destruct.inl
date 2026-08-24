@@ -94,9 +94,10 @@ static void test_carve_at() {
     CarveResult res;
 
     // Two lone sub-voxels in an otherwise empty torus. Chipping one must (a)
-    // remove it, (b) find the survivor now floats unsupported, delete it from
-    // the grid and hand it over as debris, (c) collapse the emptied cell to
-    // air. This is the "если воксель висит в воздухе" contract end to end.
+    // remove it, (b) find the survivor now floats unsupported and CONVERT it
+    // to rubble IN PLACE (закон владельца 2026-08-24, S16.5: потерявший
+    // связность кусок не исчезает и ничего не рождает — те же атомы
+    // становятся рыхлой строкой и дальше падают автоматом, как вода).
     {
         World w;
         w.grid().set_cell(10, 10, 10, kMatConcrete);
@@ -106,11 +107,12 @@ static void test_carve_at() {
                        scratch, res));
         CHECK(res.destroyed.size() == 1);
         CHECK(res.destroyed[0].mat == kMatConcrete);
-        CHECK(res.detached.size() == 1); // the orphan, render's problem now
+        CHECK(res.detached.size() == 1); // the orphan — теперь материя автомата
         CHECK(res.detached[0].bit == sub_bit(5, 4, 4));
         CHECK(res.detached[0].mat == kMatConcrete);
-        CHECK(w.grid().mask(10, 10, 10).empty());
-        CHECK(w.grid().cell(10, 10, 10) == kCellAir);
+        CHECK(!w.grid().mask(10, 10, 10).empty());
+        CHECK(w.grid().mask(10, 10, 10).test(sub_bit(5, 4, 4)));
+        CHECK(sub_material_at(w, 10, 10, 10, 5, 4, 4) == kMatRubble);
         CHECK(res.dirtyCells.size() == 1);
         CHECK(res.dirtyCells[0] == macro_index(10, 10, 10));
         // Second swing at the same spot: nothing there any more.
@@ -118,14 +120,17 @@ static void test_carve_at() {
     }
 
     // A single full cell floating in air is one 512-voxel component — exactly
-    // the detach limit — so chipping one voxel off casts the other 511 loose.
+    // the detach limit — so chipping one voxel off casts the other 511 loose:
+    // они конвертируются в rubble НА МЕСТЕ (падать им дальше — автоматом).
     {
         World w;
         w.grid().fill_cell(20, 20, 20, kMatConcrete);
         CHECK(carve_at(w, 20, 20, 20, 0, 0, 0, 256, 5, scratch, res));
         CHECK(res.destroyed.size() == 1);
         CHECK(res.detached.size() == 511);
-        CHECK(w.grid().cell(20, 20, 20) == kCellAir);
+        CHECK(!w.grid().mask(20, 20, 20).test(sub_bit(0, 0, 0)));
+        CHECK(w.grid().mask(20, 20, 20).test(sub_bit(1, 0, 0)));
+        CHECK(sub_material_at(w, 20, 20, 20, 1, 0, 0) == kMatRubble);
     }
 
     // The same chip against a TWO-cell block: 1023 survivors exceed the limit,
@@ -241,8 +246,10 @@ static void test_carve_sphere() {
     CHECK(w.grid().mask(11, 10, 10).full());
     CHECK(w.grid().mask(12, 10, 10).test(sub_bit(0, 4, 4))); // ...stub too
     CHECK(w.grid().mask(12, 10, 10).test(sub_bit(2, 4, 4)));
-    CHECK(w.grid().cell(13, 10, 10) == kCellAir); // blob is render's now
-    CHECK(w.grid().mask(13, 10, 10).empty());
+    // Blob is the AUTOMATON's now: конверсия на месте, маска стоит, падать
+    // ему дальше по гравитации фрейма (закон владельца 2026-08-24).
+    CHECK(w.grid().mask(13, 10, 10).full());
+    CHECK(sub_material_at(w, 13, 10, 10, 0, 0, 0) == kMatRubble);
     for (const auto& d : res.detached) CHECK(d.mat == kMatConcrete);
     // Dirty list is deduped, sorted, and covers exactly the touched cells.
     CHECK(res.dirtyCells.size() == 2);

@@ -499,6 +499,75 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(maskMismatch == 0);  // маска-кэш == фаза материала (весь пул)
     }
 
+    // ДЕТАЧ = ЗАМЫСЕЛ ВЛАДЕЛЬЦА (2026-08-24): потерявший связность кусок НЕ
+    // исчезает и ничего не рождает — ТЕ ЖЕ атомы на месте становятся рыхлой
+    // строкой и честно падают автоматом, как вода: один механизм. Полка на
+    // столбике; срубаем столбик — полка отрывается, конвертируется и падает.
+    {
+        w.grid().fill_cell(80, 80, 4, kMatConcrete); // пол-опора (две клетки —
+        w.grid().fill_cell(81, 80, 4, kMatConcrete); // компонент > лимита)
+        CellType* sp = materialize_sub_page(
+            w, macro_index(80, 80, 5));
+        auto put = [&](int sx, int sy, int sz) {
+            sp[sub_bit(sx, sy, sz)] = kMatConcrete;
+            w.grid().mask(80, 80, 5).set(sub_bit(sx, sy, sz));
+        };
+        for (int sz = 0; sz < 4; ++sz) put(4, 4, sz); // столбик 4
+        for (int sx = 5; sx < 8; ++sx) put(sx, 4, 3); // полка 3 на верхушке
+        const std::uint32_t towerCell =
+            static_cast<std::uint32_t>(macro_index(80, 80, 5));
+        mirror.mark_dirty(&towerCell, 1);
+
+        CarveScratch scratch;
+        CarveResult res;
+        // Срубить НИЖНИЙ атом столбика: верх (3 столбика + 3 полки = 6)
+        // теряет связность с полом.
+        CHECK(carve_at(w, 80, 80, 5, 4, 4, 0, 60000, 77, scratch, res));
+        CHECK(res.detached.size() == 6);
+        // Конверсия НА МЕСТЕ: те же атомы, материал rubble, маска стоит.
+        CHECK(sub_material_at(w, 80, 80, 5, 4, 4, 3) == kMatRubble);
+        CHECK(w.grid().mask(80, 80, 5).test(sub_bit(5, 4, 3)));
+
+        mirror.mark_dirty(res.dirtyCells.data(), res.dirtyCells.size());
+        medium.wake_cells(res.dirtyCells.data(), res.dirtyCells.size(), w,
+                          mirror);
+        for (int b = 0; b < 40; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w);
+            medium.poll_activity(w, mirror);
+        }
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        medium.apply_readback(w);
+
+        // CPU-канон догнал (шов): 6 квантов рубла осели на полу-опоре, ни
+        // один не левитирует; полка не висит на прежней высоте.
+        int fell = 0, still = 0, floating = 0;
+        for (int sx = 0; sx < 8; ++sx)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sz = 0; sz < 8; ++sz)
+                    for (int cxx = 79; cxx <= 81; ++cxx) {
+                        if (sub_material_at(w, cxx, 80, 5, sx, sy, sz) !=
+                            kMatRubble)
+                            continue;
+                        ++fell;
+                        if (sz >= 3) ++still;
+                        const bool sup =
+                            sz > 0
+                                ? w.grid().mask(cxx, 80, 5).test(
+                                      sub_bit(sx, sy, sz - 1))
+                                : w.grid().mask(cxx, 80, 4).test(
+                                      sub_bit(sx, sy, 7));
+                        if (!sup) ++floating;
+                    }
+        std::printf("[medium_test] detach: %d rubble quanta, %d at old "
+                    "height, %d floating\n",
+                    fell, still, floating);
+        CHECK(fell == 6);     // масса куска цела — ничего не родилось
+        CHECK(still == 0);    // полка не висит где висела
+        CHECK(floating == 0); // всё на опоре
+    }
+
     medium.destroy();
     mirror.destroy();
 }
@@ -533,12 +602,12 @@ void test_carve_agnostic() {
     CHECK(carve_at(w, cx, cy, cz, 3, 3, 1, 256, 42, scratch, res));
     CHECK(sub_material_at(w, cx, cy, cz, 3, 3, 1) == kCellAir);
     CHECK(w.grid().mask(cx, cy, cz).test(sub_bit(3, 3, 0)));
-    // 2) Вырезанный бетонный бит НЕ уносит воду клетки — а сам, по S16.5,
-    //    НЕ испаряется: плотность бетона выше насыпной, обломок гарантирован,
-    //    и с опорой прямо под ним он ложится на место выреза рублом.
+    // 2) Вырезанный бетонный бит УДАЛЯЕТСЯ (редакция владельца 2026-08-24:
+    //    никакого рождения субвокселей при разрушении) и НЕ уносит воду
+    //    клетки.
     CHECK(carve_at(w, cx, cy, cz, 0, 0, 0, 60000, 43, scratch, res));
-    CHECK(sub_material_at(w, cx, cy, cz, 0, 0, 0) == kMatRubble);
-    CHECK(w.grid().mask(cx, cy, cz).test(sub_bit(0, 0, 0)));
+    CHECK(!w.grid().mask(cx, cy, cz).test(sub_bit(0, 0, 0)));
+    CHECK(sub_material_at(w, cx, cy, cz, 0, 0, 0) == kCellAir);
     CHECK(sub_material_at(w, cx, cy, cz, 4, 3, 1) == kMatWater);
     // 3) Однородная водная клетка (без страницы): карв одного атома
     //    раскрывает страницу, а не превращает всю клетку в воздух.
