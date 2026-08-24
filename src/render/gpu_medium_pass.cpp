@@ -434,9 +434,9 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         barrier();
     }
 
-    // Подтики: prepare (кламп cur, сброс next) -> move -> settle -> swap.
+    // Подтики: prepare (кламп cur, сброс next+квантов) -> move -> settle.
     for (std::uint32_t s = 0; s < n; ++s) {
-        dispatch_mode(kModePrepare, listSel_, 0, 1);
+        dispatch_mode(kModePrepare, listSel_, 1, 1);
         barrier();
         dispatch_indirect(kModeMove, listSel_, substepBase + s);
         barrier();

@@ -7550,10 +7550,61 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // Засев газа шахт ВЫРЕЗАН (решение владельца 2026-08-24: газ на
-            // весь этаж бурлил вечно — live тысячами, обвал fps; сначала
-            // минимальное чистое ядро, газам — своё решение). Материал
-            // toxic_gas в таблице жив: `sphere toxic_gas` работает руками.
+            // ГАЗ = ПРОСТО МАТЕРИАЛ (владелец 2026-08-24: «ничего
+            // особенного») — засев шахт наливом toxic_gas по полю kGasField,
+            // квант субвокселя роллом p = frac/8 (в ожидании 64 кванта на
+            // клетку — облако, не кирпич). Включён обратно ПОСЛЕ
+            // GPU-резидентной петли — чекаем fps честными числами
+            // [medium]-лога; прошлое включение обваливал CPU-протокол
+            // (O(live²)), которого больше не существует.
+            if (mediumPass.ready()) {
+                static int gasSeedFloor = INT_MIN;
+                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
+                if (gasSeedFloor != currentFloor ||
+                    gasSeedLayer != activeLayer) {
+                    gasSeedFloor = currentFloor;
+                    gasSeedLayer = activeLayer;
+                    World& gw = stack.layer(activeLayer);
+                    const Field<float>* gSeed =
+                        gw.fields().find<float>(kGasField);
+                    if (gSeed) {
+                        static std::vector<std::uint32_t> seeded;
+                        seeded.clear();
+                        for (std::uint32_t sci = 0; sci < kMacroCells; ++sci) {
+                            const float sfrac = gSeed->data()[sci];
+                            if (sfrac <= 0.0f) continue;
+                            CellType* pg = materialize_sub_page(gw, sci);
+                            const SubMask& sm = gw.grid().masks()[sci];
+                            const auto thr = static_cast<std::uint32_t>(
+                                sfrac * 8192.0f);
+                            bool any = false;
+                            for (int b = 0; b < kSubVoxels; ++b) {
+                                if (sm.test(b) || pg[b] != kCellAir) continue;
+                                if ((carve_hash(0x6A5EEDu ^
+                                                    static_cast<std::uint32_t>(
+                                                        currentFloor),
+                                                sci,
+                                                static_cast<std::uint32_t>(b)) &
+                                     0xFFFFu) < thr) {
+                                    pg[b] = kMatToxicGas;
+                                    any = true;
+                                }
+                            }
+                            if (any) seeded.push_back(sci);
+                        }
+                        if (!seeded.empty()) {
+                            voxelMirror.mark_dirty(seeded.data(),
+                                                   seeded.size());
+                            mediumPass.wake_cells(seeded.data(), seeded.size(),
+                                                  gw, voxelMirror);
+                            std::fprintf(stderr,
+                                         "[medium] gas seeded: %zu cells "
+                                         "(floor %d)\n",
+                                         seeded.size(), currentFloor);
+                        }
+                    }
+                }
+            }
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
