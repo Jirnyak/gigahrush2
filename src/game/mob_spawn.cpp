@@ -11,7 +11,7 @@
 #include "ecs/components.h"
 #include "game/floor_gen.h"  // floor_room_stride, floor_room_mask
 #include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
-#include "sim/fluid.h"       // fluid_data/fluid_at — nothing stands in a sealed sump
+#include "world/medium.h"    // medium_level_data — не ставить в утопленное
 #include "world/macro_grid.h"
 #include "world/world.h"
 
@@ -45,9 +45,12 @@ constexpr int kRoomTries = 24;
 //
 // `wet` is the layer's resolved fluid array (nullptr on a dry layer), fetched once per
 // spawn call rather than per candidate — a deep floor tests up to 98,304 candidates.
-bool placeable(const float* wet, const World& w, int x, int y, int z) {
+bool placeable(const std::uint32_t* wet, const World& w, int x, int y, int z) {
     if (!floor_standable(w, x, y, z)) return false;
-    return fluid_at(wet, x, y, z) < kFluidMinFlow;
+    if (!wet) return true;
+    const std::size_t ci =
+        macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+    return (wet[ci] & 0xFFFFu) < kWetQuanta;
 }
 
 // A floor's spawn roster: the rows a weighted draw may pick, with prefix sums.
@@ -232,7 +235,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                FloorTheme theme, LayerId layer,
                                std::uint32_t seed, std::uint32_t cap,
                                FloorKind kind) {
-    const float* wet = fluid_data(world);  // resolved ONCE; see placeable
+    const std::uint32_t* wet = medium_level_data(world); // resolved ONCE
 
     std::uint32_t want =
         static_cast<std::uint32_t>(mob_count_for_floor(floorNumber, danger, theme));
@@ -602,7 +605,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
     if (out.wanted == 0) return out;
     if (roster.n == 0 || roster.total == 0) return out;
 
-    const float* wet = fluid_data(world);  // resolved ONCE; see placeable
+    const std::uint32_t* wet = medium_level_data(world); // resolved ONCE
     const std::uint8_t level = mob_level_for_floor(floorNumber, danger);
     const float nearR2 = kThreatNearRadiusM * kThreatNearRadiusM;
     const float outerR2 = kThreatOuterRadiusM * kThreatOuterRadiusM;

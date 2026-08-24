@@ -141,18 +141,22 @@ bool RaymarchPass::init(VulkanDevice& dev, VkRenderPass renderPass,
 }
 
 bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
-    VkDescriptorSetLayoutBinding b[9]{};
-    for (std::uint32_t i = 0; i < 9; ++i) {
-        b[i].binding = i;
-        b[i].descriptorType = i == 5 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                     : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    // Биндинг 6 (fluid) УМЕР с fluid-полем (чистка 2026-08-24): воду рисуют
+    // её собственные атомы; пропуск номера в лейауте легален.
+    constexpr std::uint32_t kBindIds[8] = {0, 1, 2, 3, 4, 5, 7, 8};
+    VkDescriptorSetLayoutBinding b[8]{};
+    for (std::uint32_t i = 0; i < 8; ++i) {
+        b[i].binding = kBindIds[i];
+        b[i].descriptorType = kBindIds[i] == 5
+                                  ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                  : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[i].descriptorCount = 1;
         b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
 
     VkDescriptorSetLayoutCreateInfo li{};
     li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    li.bindingCount = 9;
+    li.bindingCount = 8;
     li.pBindings = b;
     VK_TRY(vkCreateDescriptorSetLayout(dev_->device, &li, nullptr, &setLayout_));
 
@@ -258,27 +262,21 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         w[5].descriptorCount = 1;
         w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[5].pBufferInfo = &bi[5];
-        bi[6].buffer = mirror.fluid_buffer();
-        bi[6].range = VoxelMirror::kFluidBytes;
-        w[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[6].dstSet = sets_[f];
-        w[6].dstBinding = 6;
-        w[6].descriptorCount = 1;
-        w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w[6].pBufferInfo = &bi[6];
         bi[7].buffer = mirror.stain_index_buffer();
         bi[7].range = VoxelMirror::kStainIdxBytes;
         bi[8].buffer = mirror.stain_pool_buffer();
         bi[8].range = VoxelMirror::kStainPoolBytes;
+        // Слот 6 (fluid) мёртв — записи стейнов уплотняются в w[6..7],
+        // биндинги остаются 7 и 8.
         for (std::uint32_t k = 7; k <= 8; ++k) {
-            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[k].dstSet = sets_[f];
-            w[k].dstBinding = k;
-            w[k].descriptorCount = 1;
-            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w[k].pBufferInfo = &bi[k];
+            w[k - 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[k - 1].dstSet = sets_[f];
+            w[k - 1].dstBinding = k;
+            w[k - 1].descriptorCount = 1;
+            w[k - 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[k - 1].pBufferInfo = &bi[k];
         }
-        vkUpdateDescriptorSets(dev_->device, 9, w, 0, nullptr);
+        vkUpdateDescriptorSets(dev_->device, 8, w, 0, nullptr);
     }
     return true;
 }

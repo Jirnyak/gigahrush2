@@ -237,7 +237,13 @@ void run_move(uint slot, uint threadId) {
         mats[i] = sv[i].mat;
     }
 
+    // Zero-фрейм (S1: гравитация — вектор, бывает нулевой): падение и скат
+    // молчат, живёт только диффузия — изотропия по построению.
+    bool hasGrav = pc.downStep.x != 0 || pc.downStep.y != 0 ||
+                   pc.downStep.z != 0;
+
     // --- Шаг 1: гравитация — плотный тонет (4 вертикальные пары). ----------
+    if (hasGrav)
     for (int i = 0; i < 8; ++i) {
         if ((i & axBit) != 0) continue; // берём нижний по индексу слот пары
         int a = i, b = i + axBit;
@@ -259,7 +265,7 @@ void run_move(uint slot, uint threadId) {
     if (roll01(pc.params.x, minG, 101u) < 0.5) {
         int t = lat0; lat0 = lat1; lat1 = t;
     }
-    for (int pass = 0; pass < 2; ++pass) {
+    for (int pass = 0; pass < 2 && hasGrav; ++pass) {
         int ax = pass == 0 ? lat0 : lat1;
         int stepBit = 1 << ax;
         for (int i = 0; i < 8; ++i) {
@@ -301,7 +307,7 @@ void run_move(uint slot, uint threadId) {
             if (mats[a] != 0u && mats[b] == 0u) { mv = mats[a]; dst = b; }
             else if (mats[b] != 0u && mats[a] == 0u) { mv = mats[b]; dst = a; }
             if (mv == 0u || !can_swap(sv[a], sv[b])) continue;
-            if (ax == downAxis) {
+            if (hasGrav && ax == downAxis) {
                 // Ход «вверх» (против гравитации; a < b всегда): плотное над
                 // лёгким не поднимаем — то же следствие закона плотности.
                 bool movesUp = downPos ? (dst == a) : (dst == b);

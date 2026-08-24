@@ -627,7 +627,10 @@ if(GIGA_BUILD_TESTS)
         # 23455 + 2 on 2026-08-24: test_buoyancy (инкремент 4, S16.4) — тело
         # в клетке полной воды по агрегату не тонет и не разгоняется (один
         # член силы против гравитации фрейма + вязкость) = 23457.
-        PASS_REGULAR_EXPRESSION "23457/23457 checks passed"
+        # 23457 - 2 on 2026-08-24: fluid.cpp ВЫЧИЩЕН (вода = материя
+        # автомата) — test_fluid_conserves_mass умер, масс-инвариант живёт в
+        # medium_test на настоящем SPIR-V = 23455.
+        PASS_REGULAR_EXPRESSION "23455/23455 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1261,6 +1264,10 @@ if(GIGA_BUILD_TESTS)
     # ChargeArmed/charge_step, вывод урона и радиуса из массы ВВ);
     # test_grenade мигрирован, grenade_advance мёртв, валидация таблицы
     # различает метательное (dmg=0, правда на пропе) и стволы.
+    # 246519 -> 246501 (-18) on 2026-08-24: fluid.cpp ВЫЧИЩЕН — умерли два
+    # fluid-теста suite_gravity_regimes (§5.1 b/c, изотропия жидкости);
+    # инвариант живёт в medium_test (test_regime_isotropy, настоящий SPIR-V:
+    # 6 режимов + Zero); suite_monster переехал на воду-материю и агрегат.
     # 2026-08-24 (счёт не менялся, 1-в-1): чек сейвлупа «дыра после сейва не
     # в файле» переехал с memcmp МАСОК на сверку МАТЕРИАЛА вырезанного атома —
     # инкремент 5 (S16.5): детач КОНВЕРТИРУЕТ потерявший связность кусок в
@@ -1298,7 +1305,7 @@ if(GIGA_BUILD_TESTS)
     # 246514 -> 246519 (+5) on 2026-08-24: тег состава таблицы на свапе —
     # снапшотный, не текущий (находка №2, гонка «таблица сменилась в полёте
     # бейка»); мутация «текущий тег» ловится гоночным пином.
-        PASS_REGULAR_EXPRESSION "game_test: 246519 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 246501 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

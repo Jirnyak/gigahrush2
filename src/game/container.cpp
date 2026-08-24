@@ -11,7 +11,7 @@
 #include "game/prop_system.h"
 #include "world/anchor.h"
 #include "world/surface.h"
-#include "sim/fluid.h"     // fluid_at, kFluidMinFlow — a crate does not float
+#include "world/medium.h"  // liquid_frac_at — ящик не ставится в воду
 #include "world/materials.h"
 #include "world/types.h"
 #include "world/world.h"
@@ -337,7 +337,11 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         // where the cell would be air over a solid slab and pass every test above. A
         // crate in a kerbed sump is loot the player can see across the room and never
         // reach. One array index: the field is resolved by name once per call.
-        if (fluid_at(world, cx, cy, cz) >= kFluidMinFlow) continue;
+        if ((medium_level_at(world,
+                             macro_index(wrap_macro(cx), wrap_macro(cy),
+                                         wrap_macro(cz))) &
+             0xFFFFu) >= kWetQuanta)
+            continue;
 
         // What ROOM this is. The one caller that knows both the geometry kind and the
         // floor label, which is exactly the key floor_room_mask is defined on — so the

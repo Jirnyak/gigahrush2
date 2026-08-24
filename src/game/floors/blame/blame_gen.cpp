@@ -39,7 +39,7 @@
 
 #include "game/floor_gen.h"
 #include "game/fast_travel.h" // kFastShaftR / kFastLobbyR — the shaft footprint
-#include "sim/fluid.h"
+#include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -677,10 +677,7 @@ void blame_declare_rules(World& world, int /*number*/, const FloorSpec& /*spec*/
 // created-or-zeroed on every entry.
 void blame_apply_rules(World& world, int /*number*/, const FloorSpec& /*spec*/,
                        unsigned /*seed*/) {
-    Field<float>* wet = world.fields().find<float>(kFluidField);
-    if (wet == nullptr) world.fields().get_or_create<float>(kFluidField, 0.0f);
-    else wet->fill(0.0f);
-
+    // Поле воды МЕРТВО (чистка 2026-08-24): вода — материя автомата.
     Field<float>* gas = world.fields().find<float>(kGasField);
     if (gas == nullptr) world.fields().get_or_create<float>(kGasField, 0.0f);
     else gas->fill(0.0f);

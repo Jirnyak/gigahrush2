@@ -63,7 +63,7 @@ layout(set = 0, binding = 5) uniform MarchUbo {
     vec4 albedo[32];    // display-referred material albedo (cube_pass kMaterial)
     vec4 timeParams;    // x = timeSec, y = samosborPulse, z = reserved, w = reserved
 } ub;
-layout(set = 0, binding = 6, std430) readonly buffer FluidBuf { float uFluid[]; };   // 1 float/cell
+// binding 6 (fluid) УМЕР: воду двигает и рисует мир-автомат (страницы).
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
 layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
 
@@ -739,13 +739,8 @@ void main() {
     vNormal = h.n;
     vMat = min(h.mat, 31u);
     vColor = ub.albedo[vMat].rgb;
-    // Fluid tint — the same collapse-and-lerp the instance builder applied on
-    // the CPU: sub-threshold amounts read as dry, wet cells lerp toward the
-    // water blue. Per-cell, exactly like the instance colour it replaces.
-    float fl = uFluid[h.ci];
-    float tint = fl > 0.05 ? clamp(fl, 0.0, 1.0) : 0.0;
-    if (tint > 0.0)
-        vColor = mix(vColor, vec3(0.15, 0.35, 0.85), tint);
+    // Fluid-тинт УМЕР (чистка 2026-08-24): вода — материя автомата, её
+    // рисуют сами water-атомы (albedo строки); прозрачность — инкремент 6.
     // Stains paint over everything else — wet organic matter on the surface.
     // Strength follows the strongest channel (paint coverage), hue follows the
     // accumulated mix, so blood + urine reads as their blend, emergently.

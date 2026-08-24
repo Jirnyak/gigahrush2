@@ -619,6 +619,82 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(gasLow > gasHigh);  // тяжёлый газ ОСЕЛ — стелется по полу
     }
 
+    // ИЗОТРОПИЯ ПО ФРЕЙМАМ (порт умершего suite_gravity_regimes §5.1 b/c на
+    // настоящий SPIR-V): материя падает СТРОГО по regime_down каждого из 6
+    // режимов; Zero гравитацией не двигает (живёт только диффузия). Ловит
+    // захардкоженную ось в правиле — класс дефектов из isotropy-law.
+    {
+        auto pour8 = [&](int cx, int cy, int cz) {
+            const std::uint32_t ci =
+                static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+            CellType* pg = materialize_sub_page(w, ci);
+            for (int sx = 3; sx < 5; ++sx)
+                for (int sy = 3; sy < 5; ++sy)
+                    for (int sz = 3; sz < 5; ++sz)
+                        pg[sub_bit(sx, sy, sz)] = kMatWater;
+            mirror.mark_dirty(&ci, 1);
+            medium.wake_cells(&ci, 1, w, mirror);
+            return ci;
+        };
+        auto count_at = [&](int cx, int cy, int cz) {
+            const std::size_t ci = macro_index(wrap_macro(cx), wrap_macro(cy),
+                                               wrap_macro(cz));
+            const SubField<CellType>* f2 =
+                w.subfields().find<CellType>(kSubMaterialName);
+            const CellType* pg = f2 ? f2->page(ci) : nullptr;
+            if (!pg) return 0;
+            int n = 0;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (pg[b] == kMatWater) ++n;
+            return n;
+        };
+        const GravityRegime regimes[6] = {
+            GravityRegime::NegZ, GravityRegime::PosZ, GravityRegime::NegY,
+            GravityRegime::PosY, GravityRegime::NegX, GravityRegime::PosX};
+        int rgn = 0;
+        for (GravityRegime r : regimes) {
+            medium.clear_live();
+            w.gravity().regime = r;
+            const int cx = 20 + rgn * 6, cy = 20, cz = 100;
+            pour8(cx, cy, cz);
+            for (int b = 0; b < 4; ++b) {
+                CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+                substep += 8;
+                medium.apply_readback(w, mirror);
+            }
+            drain_seam(dev, mirror, medium, w, substep);
+            const CellStep d = regime_down(r);
+            // За 32 подтика свободного падения масса ушла по d и НЕ пошла
+            // против d.
+            int along = 0, against = 0;
+            for (int k = 1; k <= 5; ++k) {
+                along += count_at(cx + d.x * k, cy + d.y * k, cz + d.z * k);
+                against +=
+                    count_at(cx - d.x * k, cy - d.y * k, cz - d.z * k);
+            }
+            CHECK(along > 0);
+            CHECK(against == 0);
+            ++rgn;
+        }
+        // Zero: гравитации нет — направленного сноса нет (диффузия могла
+        // размазать по соседям, но за 2 клетки по осям — пусто).
+        medium.clear_live();
+        w.gravity().regime = GravityRegime::Zero;
+        const int zx = 20 + rgn * 6, zy = 20, zz = 100;
+        pour8(zx, zy, zz);
+        for (int b = 0; b < 2; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        CHECK(count_at(zx + 2, zy, zz) == 0);
+        CHECK(count_at(zx - 2, zy, zz) == 0);
+        CHECK(count_at(zx, zy, zz + 2) == 0);
+        CHECK(count_at(zx, zy, zz - 2) == 0);
+        w.gravity().regime = GravityRegime::NegZ;
+    }
+
     medium.destroy();
     mirror.destroy();
 }

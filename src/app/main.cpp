@@ -87,7 +87,6 @@
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
-#include "sim/fluid.h"
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -122,7 +121,6 @@
 #include "sim/camera.h"
 #include "sim/controller.h"
 #include "sim/diffusion.h"
-#include "sim/fluid.h"
 #include "sim/physics.h"
 #include "sim/rigid.h"
 #include "world/destruct.h"
@@ -4276,8 +4274,9 @@ int main(int argc, char** argv) {
                     // 1. Wet Regeneration (Lotochnik, etc.)
                     const float regenRate = game::trait_wet_regen_hps(mr.kind);
                     if (regenRate > 0.0f && (simTick % 16 == 0)) {
-                        const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
-                        if (game::pos_wet(fluidData, tr.pos)) {
+                        const std::uint32_t* mediumData =
+                            giga::medium_level_data(stack.layer(activeLayer));
+                        if (game::pos_wet(mediumData, tr.pos)) {
                             mr.hp = std::min<std::int16_t>(mr.maxHp, mr.hp + static_cast<std::int16_t>(regenRate * 0.13f + 0.5f));
 
                         }
@@ -5750,22 +5749,10 @@ int main(int argc, char** argv) {
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
-                // Fluid: `fluid_step` ([sim/fluid.h]) is NOT run here, and the
-                // reason this comment used to give — "no floor module seeds the
-                // field yet" — is FALSE. `padic_gen.cpp` (kFluidField seeding)
-                // runs for every FloorKind via floor_gen.cpp's padic_apply_rules,
-                // so every floor in the game seeds standing water. The consumers
-                // are live and read it each tick (pos_wet below, plus wet-spawn
-                // suppression in mob_spawn.cpp and crate flotation in
-                // container.cpp) — they just read a field that never evolves.
-                // Water is painted and frozen.
-                //
-                // The precondition is met; what is missing is the decision on
-                // WHERE the step belongs. [master_prompt.md] and
-                // [performance.md] both put every cellular field (fluid/gas/heat/
-                // pressure/light) on the GPU as async compute, so wiring the CPU
-                // `fluid_step` into this tick would install the very thing the
-                // performance mandate forbids. Owner call, not a TODO to grab.
+                // Вода/газ: их двигает МИР-АВТОМАТ на GPU (S16, единственный
+                // двигатель материи); мёртвый CPU fluid_step и его поле
+                // вычищены 2026-08-24 — вода наливается генератором материей
+                // и живёт правилом.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }

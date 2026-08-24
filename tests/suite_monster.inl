@@ -39,7 +39,7 @@
 #include "game/mob_table.h"
 #include "game/monster_traits.h"
 #include "game/npc_pool.h"
-#include "sim/fluid.h"
+#include "world/medium.h" // medium_level_data — вода теперь материя автомата
 #include "world/field.h"
 #include "world/world.h"
 
@@ -434,10 +434,10 @@ static void test_monster_all() {
         floor_declare_rules(w, -26, floor_spec(FloorKind::Derelict), 4242u);
         generate_floor(w, -26, floor_spec(FloorKind::Derelict), 4242u);
         floor_apply_rules(w, -26, floor_spec(FloorKind::Derelict), 4242u);
-        for (int i = 0; i < 400; ++i)
-            if (fluid_step(w).moved == 0.0f) break;
-
-        const float* wet = fluid_data(w);
+        // fluid_step УМЕР (чистка 2026-08-24): вода наливается генератором
+        // МАТЕРИЕЙ по уровню (фикспоинт с рождения) и агрегат S16.4 полон
+        // сразу — шагать нечего.
+        const std::uint32_t* wet = medium_level_data(w);
         CHECK(wet != nullptr);   // Derelict seeds sumps; if this fails the rest is moot
 
         int wetCells = 0, wetAndAir = 0;

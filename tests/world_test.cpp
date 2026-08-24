@@ -16,7 +16,6 @@
 #include "sim/camera.h"
 #include "sim/diffusion.h"
 #include "sim/drag.h"
-#include "sim/fluid.h"
 #include "sim/physics.h"
 #include "sim/rigid.h"
 #include "world/destruct.h"
@@ -816,28 +815,9 @@ static void test_stain_layer() {
                       dirty2) == a); // same seed, same bytes
 }
 
-static void test_fluid_conserves_mass() {
-    World w;
-    // Solid floor everywhere at z-cell 0 so fluid cannot drain off the bottom.
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x)
-            w.grid().fill_cell(x, y, 0, 1);
-
-    auto& f = w.fields().get_or_create<float>("fluid", 0.0f);
-    f.at(64, 64, 5) = 10.0f;
-
-    auto total = [&]() {
-        double s = 0;
-        for (float v : f.data()) s += v;
-        return s;
-    };
-    double before = total();
-    for (int i = 0; i < 50; ++i) fluid_step(w);
-    double after = total();
-    // Mass is conserved (no sources/sinks); allow tiny FP drift.
-    CHECK_NEAR(after, before, 1e-3);
-    CHECK(before > 9.9 && before < 10.1);
-}
+// (test_fluid_conserves_mass УМЕР с fluid.cpp — чистка 2026-08-24: воду
+// двигает мир-автомат, масс-инвариант живёт в medium_test на настоящем
+// SPIR-V.)
 
 // The diffusion danger/scent field (increment D): a source spreads to its open
 // neighbours, wraps across the torus seam, is blocked by walls (no flux), yields
@@ -1347,7 +1327,6 @@ int main() {
     test_rigid_prop_hits_agent_and_agent_kicks();
     test_rigid_material_pair_bounce();
     test_air_drag_terminal_velocity();
-    test_fluid_conserves_mass();
     test_diffusion();
     test_camera_component_is_movable();
     test_parallel_for();

@@ -42,7 +42,7 @@
 
 #include "game/floor_gen.h"
 #include "game/fast_travel.h"   // kFastShaftR / kFastLobbyR — the shaft footprint
-#include "sim/fluid.h"
+#include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -600,34 +600,44 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
     Plan p;
     build_plan(p, seed, number);
 
-    // Seed water and gas fluids in staircases and elevator shafts
-    Field<float>* wet = world.fields().find<float>(kFluidField);
-    if (wet == nullptr) wet = &world.fields().get_or_create<float>(kFluidField, 0.0f);
-    else wet->fill(0.0f);
+    // ВОДА = МАТЕРИЯ автомата (fluid-поле УМЕРЛО, чистка 2026-08-24 «не
+    // щадя»): ямы наливаются water-атомами ПО УРОВНЮ снизу вверх — плоская
+    // вода в фикспоинте с рождения, автомат её не трогает, пока писатель
+    // (карв, тело) не потревожит. frac клетки = доля объёма водой.
+    auto pour_level = [&](int cx, int cy, int cz, float frac) {
+        const std::size_t ci =
+            macro_index(wrap_macro(cx), wrap_macro(cy), cz);
+        CellType* pg = materialize_sub_page(world, ci);
+        const SubMask& m = world.grid().masks()[ci];
+        int quanta = static_cast<int>(frac * kSubVoxels);
+        for (int b = 0; b < kSubVoxels && quanta > 0; ++b) {
+            // sub_bit растёт по z старшими битами — порядок b и есть
+            // «снизу вверх» послойно.
+            if (m.test(b) || pg[b] != kCellAir) continue;
+            pg[b] = kMatWater;
+            --quanta;
+        }
+        // Агрегат S16.4 сразу: спокойную генераторную воду шов не понесёт
+        // (она не в списке автомата), а спавн-гейт и слизни читают агрегат.
+        medium_recount(world, ci, pg);
+    };
 
     Field<float>* gas = world.fields().find<float>(kGasField);
     if (gas == nullptr) gas = &world.fields().get_or_create<float>(kGasField, 0.0f);
     else gas->fill(0.0f);
 
-    // Seed water in lattice elevator pit (z=0..2) and stair landing sumps
+    // Water: lattice elevator pit (z=0..2) and stair landing sumps.
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             int cx = lattice_coord(nx);
             int cy = lattice_coord(ny);
-            for (int z = 0; z <= 2; ++z) {
-                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
-                wet->data()[idx] = 0.8f;
-            }
+            for (int z = 0; z <= 2; ++z) pour_level(cx, cy, z, 0.8f);
         }
     }
-    for (const PlanStair& st : p.stairs) {
-        for (int row = 0; row < 2; ++row) {
-            for (int dx = 0; dx < 4; ++dx) {
-                std::size_t idx = macro_index(wrap_macro(st.x + dx), wrap_macro(st.y + row), 1);
-                wet->data()[idx] = 0.5f;
-            }
-        }
-    }
+    for (const PlanStair& st : p.stairs)
+        for (int row = 0; row < 2; ++row)
+            for (int dx = 0; dx < 4; ++dx)
+                pour_level(st.x + dx, st.y + row, 1, 0.5f);
 
     // Seed buoyant gas in elevator shafts (z=3..15)
     for (int ny = 0; ny < kLatticeDim; ++ny) {

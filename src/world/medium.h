@@ -28,10 +28,26 @@ namespace giga {
 
 inline constexpr const char* kMediumLevelField = "medium_level";
 
+// Имя поля-засева газа у генераторов (перенос из УМЕРШЕГО sim/fluid.h —
+// чистка 2026-08-24: fluid-сим и поле воды вычищены, вода = материя).
+inline constexpr const char* kGasField = "gas";
+
+// Порог «мокро» для поведения (спавн, слизни, звук): 8 квантов = 125 л на
+// клетку — заметная лужа, не плёнка. Вывод: меньше ведра — не мокро.
+inline constexpr std::uint32_t kWetQuanta = 8;
+
 // Нижние 16 бит — кванты жидкости клетки (0..512), верхние — кванты газа
 // (не воздуха). Один u32 — одно поле, одна запись на клетку.
 inline Field<std::uint32_t>& medium_level_field(World& w) {
     return w.fields().get_or_create<std::uint32_t>(kMediumLevelField);
+}
+
+// Прямой массив уровней для горячих потребителей (спавн: до 98k кандидатов
+// на загрузке этажа) — nullptr, пока автомат ничего не вернул швом.
+inline const std::uint32_t* medium_level_data(const World& w) {
+    const Field<std::uint32_t>* f =
+        w.fields().find<std::uint32_t>(kMediumLevelField);
+    return f ? f->data().data() : nullptr;
 }
 
 inline std::uint32_t medium_level_at(const World& w, std::size_t ci) {

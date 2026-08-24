@@ -275,22 +275,22 @@ bool monster_traits_rows_indexed();
 // drift from `kFluidMinFlow`, which is the same argument [sim/fluid.h] makes for
 // `kFluidField` itself.
 //
-// `fluid` is `fluid_data(world)`, resolved ONCE by the caller — nullptr means the
-// layer is dry everywhere and every query answers false with no memory touched.
-// Taking a raw pointer rather than a `World&` is not a micro-optimisation: it is what
-// keeps this header free of `sim/fluid.h` and it is the shape `mob_spawn.cpp` already
-// uses for exactly this reason (up to 98,304 candidates per floor load).
+// `medium` is `medium_level_data(world)` ([world/medium.h] — АГРЕГАТ
+// мира-автомата, воду двигает только он; fluid-поле умерло чисткой
+// 2026-08-24), resolved ONCE by the caller — nullptr = сухой слой, каждый
+// запрос отвечает false без касания памяти. Raw pointer, не World&: то же
+// горячее место, до 98,304 кандидатов на загрузке этажа.
 //
 // The reference's `wetTerrainCell` also counts a SINK or TOILET feature as wet
 // (monster_terrain.ts:21). This engine has no furniture features, so only the liquid
 // half is ported; a bathroom reads dry until it has water in it, which is the
 // conservative direction.
-bool cell_wet(const float* fluid, int x, int y, int z);
+bool cell_wet(const std::uint32_t* medium, int x, int y, int z);
 
 // Same, from a world position. Converts to the macro cell the body stands in and
 // wraps toroidally — x/y/z all wrap, so the conversion must go through wrap_macro and
 // never a bare divide ([core/wrap.h]).
-bool pos_wet(const float* fluid, const vec3& pos);
+bool pos_wet(const std::uint32_t* medium, const vec3& pos);
 
 // ---------------------------------------------------------------------------
 // Terrain-keyed multipliers
