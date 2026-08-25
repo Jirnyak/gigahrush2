@@ -2339,22 +2339,28 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             const vec3 eye{me.pos.x + cam.eyeOffset.x,
                            me.pos.y + cam.eyeOffset.y,
                            me.pos.z + cam.eyeOffset.z};
+            // СУБВОКСЕЛЬНЫЙ детект удара (аудит 2026-08-26, семья S2, баг
+            // владельца «полы у стены не карвятся»): прежние 8 клеточных
+            // сэмплов у стены срабатывали в ВОЗДУХЕ рядом с частичной
+            // клеткой стены (клетка 2 м «не воздух» задолго до материи), и
+            // сфера не доставала до пола. sub_march — тот же первый ТВЁРДЫЙ
+            // АТОМ, каким бьёт пуля; центр карва — центр атома попадания,
+            // чтобы сфера накрывала материю, а не полусферу воздуха.
             bool hitWall = false;
             vec3 hitAt{};
-            constexpr int kSteps = 8;
-            for (int i = 1; i <= kSteps; ++i) {
-                const float t = reach * (static_cast<float>(i) / kSteps);
-                const vec3 p{eye.x + fwd.x * t, eye.y + fwd.y * t,
-                             eye.z + fwd.z * t};
-                // floor, не усечение: p ∈ (-2,0) обязан дать клетку 127,
-                // не 0 — торовый шов класса hazard/finalize (аудит c5eaaa50).
-                const int cx = wrap_macro(static_cast<int>(std::floor(p.x / kCellSize)));
-                const int cy = wrap_macro(static_cast<int>(std::floor(p.y / kCellSize)));
-                const int cz = wrap_macro(static_cast<int>(std::floor(p.z / kCellSize)));
-                if (grid->cell(cx, cy, cz) != kCellAir) {
+            {
+                const vec3 to{eye.x + fwd.x * reach, eye.y + fwd.y * reach,
+                              eye.z + fwd.z * reach};
+                SubRayHit hit;
+                if (sub_march(*grid, eye, to, hit)) {
                     hitWall = true;
-                    hitAt = p;
-                    break;
+                    hitAt = vec3{
+                        (static_cast<float>(hit.cx * kSubDim + hit.sx) + 0.5f) *
+                            kVoxelSize,
+                        (static_cast<float>(hit.cy * kSubDim + hit.sy) + 0.5f) *
+                            kVoxelSize,
+                        (static_cast<float>(hit.cz * kSubDim + hit.sz) + 0.5f) *
+                            kVoxelSize};
                 }
             }
             if (hitWall) {
