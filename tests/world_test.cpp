@@ -51,6 +51,7 @@ int g_checks = 0;
 #include "suite_props.inl"
 #include "suite_destruct.inl"
 #include "suite_surface.inl"
+#include "suite_clearance.inl"
 static void test_wrap() {
     CHECK(wrapi(0, 128) == 0);
     CHECK(wrapi(128, 128) == 0);
@@ -1330,6 +1331,7 @@ int main() {
     test_stain_layer();
     test_props_all();
     test_surface_all();
+    test_clearance_all();
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {
         std::printf("FAILED (%d)\n", g_fails);

@@ -632,7 +632,11 @@ if(GIGA_BUILD_TESTS)
         # (§60: ноль живых потребителей — осколки/звук на субвокселях);
         # свойства (изотропия, шов, старт-в-материи, диагональ) переехали
         # на sub_march/sub_thickness_cells = 23458.
-        PASS_REGULAR_EXPRESSION "23458/23458 checks passed"
+        # 23458 + 36 on 2026-08-26: suite_clearance — гранный клиренс (эпик
+        # occupancy, §60/К1-10): макс-квадрат эрозией, закон полупроекций
+        # (стена на грани / посреди клетки / проём 4×4 / шов тора),
+        # патч==ребилд в обе полярности = 23494.
+        PASS_REGULAR_EXPRESSION "23494/23494 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
