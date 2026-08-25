@@ -359,7 +359,7 @@ const vec3 kMatMedium[38] = vec3[38](
     vec3(1.000, 1.000, 0.000000),  //  0 air
     vec3(0.000, 0.000, 0.000000),  //  1 concrete
     vec3(0.000, 0.000, 0.000000),  //  2 soil
-    vec3(1.000, 0.500, 0.000096),  //  3 water
+    vec3(1.000, 0.500, 0.000960),  //  3 water
     vec3(0.000, 0.000, 0.000000),  //  4 slab_tan
     vec3(0.000, 0.000, 0.000000),  //  5 extract
     vec3(0.000, 0.000, 0.000000),  //  6 door
@@ -371,29 +371,29 @@ const vec3 kMatMedium[38] = vec3[38](
     vec3(0.000, 0.000, 0.000000),  // 12 factory_wall
     vec3(0.000, 0.000, 0.000000),  // 13 tread
     vec3(0.000, 0.000, 0.000000),  // 14 rust
-    vec3(0.100, 0.000, 0.000053),  // 15 rubble
+    vec3(0.100, 0.000, 0.000533),  // 15 rubble
     vec3(0.000, 0.000, 0.000000),  // 16 electric_grate
-    vec3(0.100, 0.050, 0.000087),  // 17 acid_pool
+    vec3(0.100, 0.050, 0.000873),  // 17 acid_pool
     vec3(0.000, 0.000, 0.000000),  // 18 fire_cell
     vec3(0.000, 0.000, 0.000000),  // 19 pipe_metal
     vec3(0.000, 0.000, 0.000000),  // 20 neon_tube
     vec3(0.000, 0.000, 0.000000),  // 21 glass
-    vec3(0.000, 0.500, 0.032000),  // 22 toxic_gas
-    vec3(0.100, 0.000, 0.000053),  // 23 rubble_concrete
-    vec3(0.100, 0.000, 0.000080),  // 24 rubble_soil
-    vec3(0.100, 0.000, 0.000058),  // 25 rubble_slab_tan
-    vec3(0.100, 0.000, 0.000160),  // 26 rubble_plaster
-    vec3(0.100, 0.000, 0.000183),  // 27 rubble_parquet
-    vec3(0.100, 0.000, 0.000016),  // 28 rubble_shop_shutter
-    vec3(0.100, 0.000, 0.000107),  // 29 rubble_lino
-    vec3(0.100, 0.000, 0.000016),  // 30 rubble_factory_wall
-    vec3(0.100, 0.000, 0.000016),  // 31 rubble_tread
-    vec3(0.100, 0.000, 0.000025),  // 32 rubble_rust
-    vec3(0.100, 0.000, 0.000016),  // 33 rubble_electric_grate
-    vec3(0.100, 0.000, 0.000640),  // 34 rubble_fire_cell
-    vec3(0.100, 0.000, 0.000016),  // 35 rubble_pipe_metal
-    vec3(0.100, 0.000, 0.000091),  // 36 rubble_neon_tube
-    vec3(0.100, 0.000, 0.000051)   // 37 rubble_glass
+    vec3(0.000, 0.500, 0.031250),  // 22 toxic_gas
+    vec3(0.100, 0.000, 0.000533),  // 23 rubble_concrete
+    vec3(0.100, 0.000, 0.000800),  // 24 rubble_soil
+    vec3(0.100, 0.000, 0.000582),  // 25 rubble_slab_tan
+    vec3(0.100, 0.000, 0.001600),  // 26 rubble_plaster
+    vec3(0.100, 0.000, 0.001829),  // 27 rubble_parquet
+    vec3(0.100, 0.000, 0.000164),  // 28 rubble_shop_shutter
+    vec3(0.100, 0.000, 0.001067),  // 29 rubble_lino
+    vec3(0.100, 0.000, 0.000164),  // 30 rubble_factory_wall
+    vec3(0.100, 0.000, 0.000164),  // 31 rubble_tread
+    vec3(0.100, 0.000, 0.000246),  // 32 rubble_rust
+    vec3(0.100, 0.000, 0.000164),  // 33 rubble_electric_grate
+    vec3(0.100, 0.000, 0.006400),  // 34 rubble_fire_cell
+    vec3(0.100, 0.000, 0.000164),  // 35 rubble_pipe_metal
+    vec3(0.100, 0.000, 0.000914),  // 36 rubble_neon_tube
+    vec3(0.100, 0.000, 0.000512)   // 37 rubble_glass
 );
 
 const uint kMatPhase[38] = uint[38](

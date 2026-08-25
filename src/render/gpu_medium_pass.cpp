@@ -52,6 +52,7 @@ constexpr std::uint32_t kModeMove = 1;
 constexpr std::uint32_t kModeSettle = 2;
 constexpr std::uint32_t kModeInject = 3;
 constexpr std::uint32_t kModePack = 4;
+constexpr std::uint32_t kModeRelease = 5; // снять биты списка до move
 
 } // namespace
 
@@ -468,6 +469,10 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     // Подтики: prepare (кламп cur, сброс next+квантов) -> move -> settle.
     for (std::uint32_t s = 0; s < n; ++s) {
         dispatch_mode(kModePrepare, listSel_, 1, 1);
+        barrier();
+        // Release ДО move: бит после него = «уже в следующем списке»,
+        // дубликаты слотов мертвы по построению ([medium_sim.comp]).
+        dispatch_indirect(kModeRelease, listSel_, substepBase + s);
         barrier();
         dispatch_indirect(kModeMove, listSel_, substepBase + s);
         barrier();
