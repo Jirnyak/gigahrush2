@@ -127,7 +127,7 @@ void test_headless_roundtrip(const gpu::VulkanDevice& dev) {
 // ActOut честен без оговорок про кадры в полёте.
 bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
                gpu::GpuMediumPass& medium, World& w, std::uint32_t n,
-               std::uint64_t base) {
+               std::uint64_t base, std::uint32_t frameSlot = 0) {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -149,7 +149,7 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
         vkBeginCommandBuffer(cmd, &bi);
         mirror.flush(cmd, 0, w);
         medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base,
-                               w, 0);
+                               w, frameSlot);
         vkEndCommandBuffer(cmd);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -920,9 +920,16 @@ void test_frontier_freeze(gpu::VulkanDevice& dev) {
     medium.wake_cells(&above, 1, w, mirror);
 
     std::uint64_t substep = 0;
-    for (int b = 0; b < 40; ++b) { // игровой каденс: 4 подтика на кадр
-        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
-        substep += 4;
+    // ИГРОВОЙ каденс, не тестовый: кадры чередуют слоты (0/1, как
+    // kMaxFramesInFlight в игре) и половина кадров несёт НОЛЬ подтиков
+    // (60 fps против 31.25 подтиков/с) — класс «харнесс не как игра»
+    // дважды прятал баги петли (батчи по 8 и вечный слот 0).
+    for (int b = 0; b < 80; ++b) {
+        const std::uint32_t n = (b & 1) ? 0u : 4u;
+        CHECK(run_batch(dev, mirror, medium, w, n, substep,
+                        static_cast<std::uint32_t>(b) %
+                            gpu::kMaxFramesInFlight));
+        substep += n;
         medium.apply_readback(w, mirror);
     }
     drain_seam(dev, mirror, medium, w, substep);
