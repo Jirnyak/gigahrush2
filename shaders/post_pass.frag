@@ -8,7 +8,7 @@ layout(location = 0) out vec4 outColor;
 layout(binding = 0) uniform sampler2D sSceneColor;
 
 layout(push_constant) uniform PostPush {
-    // params0: x = timeSec, y = darkAdaptation (exposure factor), z = crtEnabled (1.0 or 0.0), w = chromaticAberration (e.g. 0.003)
+    // params0: x = timeSec, y = СВОБОДНАЯ лейна (экспозиция вырезана 2026-08-17), z = crtEnabled (1.0 or 0.0), w = chromaticAberration (e.g. 0.003)
     vec4 params0;
     // params1: x = curvature (e.g. 0.035), y = scanlineIntensity (e.g. 0.35), z = vignettePower (e.g. 0.40), w = phosphorWash (e.g. 0.04)
     vec4 params1;

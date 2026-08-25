@@ -123,8 +123,13 @@ public:
     static constexpr std::size_t kStainPageBytes = kSubVoxels * 4;
     static constexpr std::size_t kStainIdxBytes = kMacroCells * sizeof(std::uint32_t);
     static constexpr std::size_t kStainPoolBytes = kStainPageCap * kStainPageBytes;
-    // Per-frame dirty staging window: cells plus one whole fluid image fit
-    // together; the queue carries any remainder to the next frame.
+    // Per-frame dirty staging window; остаток очередь довозит следующими
+    // кадрами. ВЫВОД ПЕРЕПИСАН (К5-C9, 2026-08-26): прежняя проза выводила
+    // 12 МиБ из «клетки + целый fluid-образ», а fluid вырезан 2026-08-24.
+    // Честный вывод: худший разовый потребитель — вход на этаж/массовый
+    // карв; окно = ~10k dirty-клеток за кадр (10240 x (1 КиБ страница +
+    // 64 Б маски + типы/классы) ~ 11.3 МиБ) — измеренный вход падика
+    // проходит за 2-3 кадра, что и наблюдалось при 12 МиБ до чистки.
     static constexpr std::size_t kStagingBytes = 12u * 1024u * 1024u;
 
     bool init(VulkanDevice& dev);

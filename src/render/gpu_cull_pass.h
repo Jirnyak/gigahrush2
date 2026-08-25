@@ -26,18 +26,21 @@ struct GpuDrawIndexedIndirectCommand {
 };
 static_assert(sizeof(GpuDrawIndexedIndirectCommand) == 20, "GpuDrawIndexedIndirectCommand layout must be 20 bytes");
 
-// Matches CullPush in shaders/cull.comp (128 bytes)
+// Matches CullPush in shaders/cull.comp (112 bytes).
+// Лейны boxMinExt.xyz/boxMaxParams.xyz СНЕСЕНЫ аудитом 2026-08-26 (К5-A5):
+// шейдер читал только .w обеих (границы у кулла ПО-ИНСТАНСНЫЕ, cull.comp
+// считает их из scale) — get_shape_aabb со switch из одной default-ветки
+// возил 24 Б мусора на каждый из 11 шейпов каждый кадр.
 struct alignas(16) CullPush {
     mat4     viewProj;      // 64B: View-Projection matrix
     vec4     camPos;        // 16B: xyz = camera position, w = fogEnd radius
-    vec4     boxMinExt;     // 16B: xyz = AABB min, w = torusPeriod
-    vec4     boxMaxParams;  // 16B: xyz = AABB max, w = float(vertexOffset)
+    vec4     params;        // 16B: x = torusPeriod, y = float(vertexOffset)
     uint32_t objectCount;   //  4B: total input instance count
     uint32_t indexCount;    //  4B: index count for draw command
     uint32_t firstIndex;    //  4B: first index offset
     uint32_t firstInstance; //  4B: base instance offset
 };
-static_assert(sizeof(CullPush) == 128, "CullPush layout size must be exactly 128 bytes");
+static_assert(sizeof(CullPush) == 112, "CullPush layout must match cull.comp");
 
 class GpuCullPass {
 public:
@@ -69,14 +72,10 @@ public:
                      uint32_t firstIndex,
                      int32_t vertexOffset,
                      uint32_t firstInstance,
-                     const vec3& boxMin,
-                     const vec3& boxMax,
                      VkBuffer outCulledInstanceBuf,
                      VkDeviceSize dstOffsetBytes,
                      VkBuffer outIndirectBuf) noexcept;
 
-    // Returns local-space AABB for a given PropShape
-    static void get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept;
 
     bool ready() const noexcept { return pipeline_ != VK_NULL_HANDLE; }
     VkPipelineLayout pipeline_layout() const noexcept { return pipelineLayout_; }

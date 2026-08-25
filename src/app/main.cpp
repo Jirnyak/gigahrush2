@@ -7706,6 +7706,10 @@ int main(int argc, char** argv) {
                     }
                 }
                 const auto ctLg = std::chrono::steady_clock::now();
+                // Полный пере-сбор ламп = 0.48-0.54 мс CPU (замер К5-E1,
+                // 2026-08-26) — dirty-редизайн отложен с числом: придёт
+                // естественно с программой щитка (S15.4), которая всё равно
+                // переустроит «кто пишет интенсивности».
                 collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd);
                 if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
@@ -7767,14 +7771,11 @@ int main(int argc, char** argv) {
                 for (int s = 0; s < gpu::kPropShapeCount; ++s) {
                     uint32_t count = propPass.range_count(s);
                     if (count == 0) continue;
-                    vec3 bMin{-1.0f, -1.0f, -1.0f}, bMax{1.0f, 2.0f, 1.0f};
-                    gpu::GpuCullPass::get_shape_aabb(static_cast<gpu::PropShape>(s), bMin, bMax);
                     cullPass.record_cull(
                         cmd, vp, camMat.eye, fogEnd, torusPeriod,
                         propPass.instance_buffer(fIdx),
                         propPass.range_offset_bytes(s), count,
                         propPass.mesh(s).indexCount, 0, 0, 0,
-                        bMin, bMax,
                         propPass.culled_instance_buffer(fIdx),
                         propPass.range_offset_bytes(s),
                         propPass.indirect_cmd_buffer(s, fIdx));
