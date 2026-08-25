@@ -625,7 +625,10 @@ if(GIGA_BUILD_TESTS)
         # 23457 - 2 on 2026-08-24: fluid.cpp ВЫЧИЩЕН (вода = материя
         # автомата) — test_fluid_conserves_mass умер, масс-инвариант живёт в
         # medium_test на настоящем SPIR-V = 23455.
-        PASS_REGULAR_EXPRESSION "23455/23455 checks passed"
+        # 23455 + 4 on 2026-08-26: test_detach_judge (§60/§61 — судья
+        # связности на шве: ход автомата рвёт мостик, висюк обязан
+        # конвертнуться, опора цела) = 23459.
+        PASS_REGULAR_EXPRESSION "23459/23459 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

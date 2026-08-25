@@ -3538,6 +3538,30 @@ int main(int argc, char** argv) {
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
+            // СУДЬЯ СВЯЗНОСТИ НА ШВЕ (§60/§61-семья, баг владельца
+            // 2026-08-26 «висящие атомы»): автомат — писатель грида, но его
+            // ходы (крошка уехала, одиночка истаяла) рвали мостики без
+            // развёртки отвязки — соседи висели в пустоте до следующего
+            // карва рядом. Лимит 64: судья ловит ОСКОЛКИ у исчезнувших
+            // мостиков; больший компонент считается опёртым — тот же смысл,
+            // что у карв-лимита «атомы записи + 64». Долги конверсии — как
+            // у любого писателя: зеркало + пробуждение (упадёт автоматом).
+            if (!mediumMaskChanged.empty()) {
+                static CarveScratch judgeScratch;
+                static CarveResult judgeResult;
+                if (detach_judge_cells(stack.layer(activeLayer),
+                                       mediumMaskChanged.data(),
+                                       mediumMaskChanged.size(), 64,
+                                       judgeScratch, judgeResult) > 0) {
+                    voxelMirror.mark_dirty(judgeResult.dirtyCells.data(),
+                                           judgeResult.dirtyCells.size());
+                    if (mediumPass.ready())
+                        mediumPass.wake_cells(judgeResult.dirtyCells.data(),
+                                              judgeResult.dirtyCells.size(),
+                                              stack.layer(activeLayer),
+                                              voxelMirror);
+                }
+            }
             // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
             // (GPU-резидентная петля, решение владельца 2026-08-24).
         }

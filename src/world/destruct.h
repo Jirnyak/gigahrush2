@@ -159,4 +159,14 @@ std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
                          int sz, std::int32_t limit, CarveScratch& scratch,
                          CarveResult& out);
 
+// СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ — долг АВТОМАТА как писателя грида (§60/§61):
+// его ходы (крошка уехала, одиночка истаяла) рвут мостики без развёртки
+// отвязки — сосед висит в пустоте до следующего карва рядом. Зовётся на
+// шве по клеткам изменённых масок; сеет от поверхностных твёрдых атомов
+// клетки, судит компоненты тем же флудом и конвертирует отвязанное в
+// рыхлых двойников. Возвращает число конвертированных атомов.
+std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
+                                std::size_t n, std::int32_t limit,
+                                CarveScratch& scratch, CarveResult& out);
+
 } // namespace giga

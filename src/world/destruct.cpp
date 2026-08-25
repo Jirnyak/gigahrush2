@@ -265,6 +265,48 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
     }
 }
 
+// СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ (долг автомата, §60/§61-семья, 2026-08-26):
+// автомат — писатель грида, но его ходы (крошка уехала, одиночка истаяла)
+// не запускали развёртку отвязки — «мостик» исчезал, сосед висел в
+// пустоте до следующего карва рядом (репорт владельца). Судья бежит на
+// шве по клеткам с изменёнными масками: сеет от ТВЁРДЫХ атомов клетки,
+// имеющих воздушного 6-соседа (поверхность), и судит их компоненты тем же
+// флудом, что карв — общий VisitedSet: опёртые регионы судятся один раз.
+void judge_cells(World& w, SubField<CellType>* mats,
+                 const std::uint32_t* cells, std::size_t n,
+                 std::int32_t limit, CarveScratch& s, CarveResult& out) {
+    if (n == 0 || limit <= 0) return;
+    VisitedSet vis(s, static_cast<std::size_t>(limit) * 2 + n * 8);
+    std::uint32_t run = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t ci = cells[i];
+        if (ci >= kMacroCells) continue;
+        const SubMask& m = w.grid().masks()[ci];
+        if (m.empty() || m.full()) continue;
+        const int cx = static_cast<int>(ci & 127u);
+        const int cy = static_cast<int>((ci >> 7) & 127u);
+        const int cz = static_cast<int>((ci >> 14) & 127u);
+        for (int bit = 0; bit < kSubVoxels; ++bit) {
+            if (!m.test(bit)) continue;
+            const int ax = cx * kSubDim + (bit & 7);
+            const int ay = cy * kSubDim + ((bit >> 3) & 7);
+            const int az = cz * kSubDim + ((bit >> 6) & 7);
+            bool surface = false;
+            for (const auto& d : kDir6)
+                if (!solid_key(w.grid(),
+                               key_at(ax + d[0], ay + d[1], az + d[2]))) {
+                    surface = true;
+                    break;
+                }
+            if (!surface) continue;
+            ++run;
+            const std::uint32_t k = key_at(ax, ay, az);
+            if (!flood_component(w.grid(), vis, s, k, run, limit)) continue;
+            convert_component(w, mats, s.comp, out);
+        }
+    }
+}
+
 void finalize_dirty(CarveResult& out) {
     std::sort(out.dirtyCells.begin(), out.dirtyCells.end());
     out.dirtyCells.erase(
@@ -457,6 +499,19 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     detach_sweep(w, mats, kSubVoxels, scratch, out);
     finalize_dirty(out);
     return true;
+}
+
+std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
+                                std::size_t n, std::int32_t limit,
+                                CarveScratch& scratch, CarveResult& out) {
+    out.destroyed.clear();
+    out.detached.clear();
+    out.dirtyCells.clear();
+    SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+    judge_cells(w, mats, cells, n, limit, scratch, out);
+    finalize_dirty(out);
+    return static_cast<std::int32_t>(out.detached.size());
 }
 
 } // namespace giga

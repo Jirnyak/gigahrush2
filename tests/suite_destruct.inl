@@ -318,10 +318,50 @@ static void test_carve_sphere() {
 }
 
 
+// СУДЬЯ СВЯЗНОСТИ НА ШВЕ (§60/§61, баг владельца 2026-08-26 «висящие
+// атомы»): ход АВТОМАТА (не карв!) рвёт мостик — крошка уехала/истаяла,
+// а развёртка отвязки бежала только при карве: сосед висел в пустоте.
+// detach_judge_cells обязан судить клетки изменённых масок и конвертнуть
+// отвязанное; опёртое (упирающееся в большой компонент) — не трогать.
+static void test_detach_judge() {
+    static World w;
+    // Опора: полная клетка. Мостик B и висюк A — атомы в соседней клетке:
+    // A связан с миром ТОЛЬКО через B.
+    w.grid().fill_cell(20, 20, 20, kMatConcrete);
+    const int cx = 21, cy = 20, cz = 20;
+    const std::size_t ci = macro_index(cx, cy, cz);
+    CellType* pg = materialize_sub_page(w, ci);
+    // B у грани опоры (sx=0), A следом (sx=1).
+    const int bB = sub_bit(0, 4, 4);
+    const int bA = sub_bit(1, 4, 4);
+    pg[bB] = kMatRubble;   // мостик — крошка (подвижная, уедет автоматом)
+    pg[bA] = kMatParquet;  // висюк — твёрдый исходник
+    w.grid().mask(cx, cy, cz).set(bB);
+    w.grid().mask(cx, cy, cz).set(bA);
+
+    // ХОД АВТОМАТА: мостик исчез (истаял/уехал) — БЕЗ карва и развёртки.
+    pg[bB] = kCellAir;
+    w.grid().mask(cx, cy, cz).clear(bB);
+
+    // Судья на шве по клетке изменённой маски.
+    CarveScratch scratch;
+    CarveResult res;
+    const std::uint32_t cell32 = static_cast<std::uint32_t>(ci);
+    const std::int32_t judged =
+        detach_judge_cells(w, &cell32, 1, 64, scratch, res);
+    CHECK(judged == 1); // ровно висюк A
+    CHECK(sub_material_at(w, cx, cy, cz, 1, 4, 4) ==
+          material_rubble_of(kMatParquet));
+    // Опора цела: полная клетка не тронута (большой компонент = опёрт).
+    CHECK(w.grid().mask(20, 20, 20).full());
+    CHECK(sub_material_at(w, 20, 20, 20, 4, 4, 4) == kMatConcrete);
+}
+
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
     test_carve_at();
     test_carve_layers();
     test_carve_sphere();
+    test_detach_judge();
 }
