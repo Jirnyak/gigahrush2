@@ -4840,6 +4840,20 @@ int main(int argc, char** argv) {
                 // зеркало, пробуждение автомата (S16.5), диффузия,
                 // нав-битсеты, частицы, якоря пропов, антураж. Вызывающий
                 // добавляет только своё (шум взрыва, боевой лог).
+                // СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH=1, баг владельца
+                // 2026-08-26): кольцо последних выбитых атомов; в сим-тике
+                // ниже проверяется «стал ли атом снова твёрдым» и КАКИМ
+                // материалом — rubble_* = легитимная осадка крошки,
+                // исходник = воскрешение; на первом воскрешении — полная
+                // сверка зеркала CPU==GPU. Логи читает аудит, не владелец.
+                static const bool kRegrowWatch =
+                    std::getenv("GIGA_REGROW_WATCH") != nullptr;
+                struct CarvedAtom {
+                    std::uint32_t key;
+                    CellType was;
+                };
+                static std::vector<CarvedAtom> regrowRing;
+                static std::size_t regrowHead = 0;
                 auto carve_settle = [&](std::uint32_t seed) {
                     auto ct0 = std::chrono::steady_clock::now();
                     // Патч поля по dirtyCells — он же детектор «задет ли
@@ -4913,52 +4927,131 @@ int main(int argc, char** argv) {
                         dressingSetChanged = true;
                     }
                     g_carveT.antrMs += carve_ms_since(ct0);
+                    if (kRegrowWatch) {
+                        constexpr std::size_t kRegrowCap = 8192;
+                        if (regrowRing.size() < kRegrowCap)
+                            regrowRing.resize(kRegrowCap, CarvedAtom{0, 0});
+                        for (const CarvedVoxel& v : carveResult.destroyed) {
+                            regrowRing[regrowHead] = CarvedAtom{
+                                (v.cell << 9) | v.bit, v.mat};
+                            regrowHead = (regrowHead + 1) % kRegrowCap;
+                        }
+                    }
                 };
-                // РЕПРО-СТЕНД «дыра заросла» (GIGA_CARVE_PROBE=1, баг
-                // владельца 2026-08-26): серия слабых ударов (как кулак:
-                // r=0.55, вероятностное расковыривание) в точку A, затем
-                // серия РЯДОМ в B, затем проверка: атомы дыры A не воскресли
-                // (CPU-канон) и зеркало CPU==GPU (voxelMirror.verify).
+                // Скан сторожа: раз в 25 тиков, читает CPU-канон.
+                if (kRegrowWatch && (simTick % 25u) == 0u &&
+                    !regrowRing.empty() && activeLayer != kInvalidLayer) {
+                    World& rw = stack.layer(activeLayer);
+                    const SubField<CellType>* rf =
+                        rw.subfields().find<CellType>(kSubMaterialName);
+                    static bool verifiedOnce = false;
+                    for (auto& ca : regrowRing) {
+                        if (ca.key == 0 && ca.was == 0) continue;
+                        const std::size_t ci = ca.key >> 9;
+                        const int bit = static_cast<int>(ca.key & 511u);
+                        const CellType* pg = rf ? rf->page(ci) : nullptr;
+                        CellType m = kCellAir;
+                        if (pg) m = pg[bit];
+                        else {
+                            const CellType base = rw.grid().types()[ci];
+                            const SubMask& mk = rw.grid().masks()[ci];
+                            if (mk.test(bit)) m = base;
+                            else if (mk.empty() && material_is_medium(base))
+                                m = base;
+                        }
+                        if (m == kCellAir) continue;
+                        const bool mobile = material_is_medium(m);
+                        std::fprintf(
+                            stderr,
+                            "[regrow] tick %llu key %u cell %zu bit %d: был "
+                            "%s, стал %s (%s)\n",
+                            static_cast<unsigned long long>(simTick), ca.key,
+                            ci, bit, kMatNames[static_cast<int>(ca.was)],
+                            kMatNames[static_cast<int>(m)],
+                            mobile ? "ОСАДКА крошки — замысел"
+                                   : "ВОСКРЕШЕНИЕ — БАГ");
+                        if (!mobile && !verifiedOnce) {
+                            verifiedOnce = true;
+                            const bool ok =
+                                voxelMirror.verify(stack.layer(activeLayer));
+                            std::fprintf(stderr,
+                                         "[regrow] mirror verify: %s\n",
+                                         ok ? "CPU==GPU (воскрес КАНОН)"
+                                            : "DIVERGED (воскрес GPU)");
+                        }
+                        ca.key = 0;
+                        ca.was = 0; // отчитан — не спамить
+                    }
+                }
+                // РЕПРО-СТЕНД «дыра заросла» v2 — ПАРАМЕТРЫ ВЛАДЕЛЬЦА из
+                // его лога (power 64, r 0.55, «шагающие» удары по чуть
+                // сдвинутым точкам, этаж 0, z~137.9): GIGA_CARVE_PROBE=
+                // "x,y,z" бьёт серию из 8 ударов и после КАЖДОГО проверяет,
+                // не воскрес ли ЛЮБОЙ ранее выбитый атом (CPU) + сверка
+                // зеркала в конце.
                 static const char* kCarveProbeEnv =
                     std::getenv("GIGA_CARVE_PROBE");
-                if (kCarveProbeEnv && reg.valid(player)) {
+                if (kCarveProbeEnv && activeLayer != kInvalidLayer) {
                     static vec3 probeP{};
-                    static std::vector<std::uint32_t> holeKeys;
-                    const vec3 ppos = reg.get<Transform>(player).pos;
-                    const bool hitA = simTick >= 300 && simTick < 540 &&
-                                      (simTick % 40u) == 20u;
-                    const bool hitB = simTick >= 700 && simTick < 860 &&
-                                      (simTick % 40u) == 20u;
-                    if (hitA || hitB) {
-                        if (simTick < 340) probeP =
-                            vec3{ppos.x, ppos.y, ppos.z - 1.0f};
+                    static bool probeInit = false;
+                    static std::vector<std::pair<std::uint32_t, CellType>>
+                        holeAtoms;
+                    if (!probeInit && simTick >= 250) {
+                        probeInit = true;
+                        float px = 0, py = 0, pz = 0;
+                        if (std::sscanf(kCarveProbeEnv, "%f,%f,%f", &px, &py,
+                                        &pz) == 3)
+                            probeP = vec3{px, py, pz};
+                        else if (reg.valid(player)) {
+                            const vec3 pp = reg.get<Transform>(player).pos;
+                            probeP = vec3{pp.x, pp.y, pp.z - 1.0f};
+                        }
+                    }
+                    // Паттерн владельца: сдвиги ~0.3-0.9 м между ударами.
+                    static const float kOff[8][2] = {
+                        {0.0f, 0.0f},  {0.9f, 0.8f},  {0.8f, 0.5f},
+                        {1.4f, 0.9f},  {2.2f, 0.8f},  {1.0f, 0.0f},
+                        {0.3f, 0.4f},  {1.8f, 0.4f}};
+                    const bool hitNow = probeInit && simTick >= 300 &&
+                                        simTick < 300 + 8 * 60 &&
+                                        ((simTick - 300) % 60u) == 0u;
+                    if (hitNow) {
+                        const auto hi = (simTick - 300) / 60u;
                         CarveOp op;
-                        op.x = probeP.x + (hitB ? 1.2f : 0.0f);
-                        op.y = probeP.y;
+                        op.x = probeP.x + kOff[hi][0];
+                        op.y = probeP.y + kOff[hi][1];
                         op.z = probeP.z;
                         op.radius = 0.55f;
-                        op.power = 220; // слабый удар — расковыривание
+                        op.power = 64;
                         op.seed = static_cast<std::uint32_t>(simTick);
                         const std::int32_t rem = carve_sphere(
                             stack.layer(activeLayer), op, carveScratch,
                             carveResult);
                         if (rem > 0) carve_settle(op.seed);
-                        if (hitA)
-                            for (const CarvedVoxel& v : carveResult.destroyed)
-                                holeKeys.push_back((v.cell << 9) | v.bit);
+                        for (const CarvedVoxel& v : carveResult.destroyed)
+                            holeAtoms.emplace_back((v.cell << 9) | v.bit,
+                                                   v.mat);
                         std::fprintf(stderr,
-                                     "[carve-probe] tick %llu %s removed %d "
-                                     "(det %zu)\n",
-                                     static_cast<unsigned long long>(simTick),
-                                     hitA ? "A" : "B", rem,
-                                     carveResult.detached.size());
+                                     "[carve-probe] hit %llu at "
+                                     "(%.1f,%.1f,%.1f) removed %d (det %zu, "
+                                     "tracked %zu)\n",
+                                     static_cast<unsigned long long>(hi),
+                                     op.x, op.y, op.z, rem,
+                                     carveResult.detached.size(),
+                                     holeAtoms.size());
                     }
-                    if (simTick == 650 || simTick == 1000) {
+                    // Проверка ПОСЛЕ каждого удара (через 30 тиков) и в конце.
+                    const bool checkNow = probeInit &&
+                        ((simTick >= 330 && simTick < 850 &&
+                          ((simTick - 330) % 60u) == 0u) ||
+                         simTick == 1000);
+                    if (checkNow && !holeAtoms.empty()) {
                         World& pw = stack.layer(activeLayer);
                         const SubField<CellType>* pf =
                             pw.subfields().find<CellType>(kSubMaterialName);
-                        int solidAgain = 0, mobileNow = 0, airNow = 0;
-                        for (std::uint32_t k : holeKeys) {
+                        int solidAgain = 0, mobileNow = 0;
+                        CellType firstMat = 0;
+                        for (auto& [k, was] : holeAtoms) {
                             const std::size_t ci = k >> 9;
                             const int bit = static_cast<int>(k & 511u);
                             const CellType* pg = pf ? pf->page(ci) : nullptr;
@@ -4972,22 +5065,30 @@ int main(int argc, char** argv) {
                                          material_is_medium(base))
                                     m = base;
                             }
-                            if (m == kCellAir) ++airNow;
-                            else if (material_is_medium(m)) ++mobileNow;
-                            else ++solidAgain;
+                            if (m == kCellAir) continue;
+                            if (material_is_medium(m)) ++mobileNow;
+                            else {
+                                ++solidAgain;
+                                if (!firstMat) firstMat = m;
+                            }
                         }
                         std::fprintf(stderr,
-                                     "[carve-probe] tick %llu: hole A %zu "
-                                     "keys -> air %d, mobile %d, SOLID AGAIN "
-                                     "%d\n",
+                                     "[carve-probe] tick %llu: %zu atoms -> "
+                                     "mobile %d, SOLID AGAIN %d%s%s\n",
                                      static_cast<unsigned long long>(simTick),
-                                     holeKeys.size(), airNow, mobileNow,
-                                     solidAgain);
-                        const bool mirrorOk =
-                            voxelMirror.verify(stack.layer(activeLayer));
-                        std::fprintf(stderr,
-                                     "[carve-probe] mirror verify: %s\n",
-                                     mirrorOk ? "OK" : "DIVERGED");
+                                     holeAtoms.size(), mobileNow, solidAgain,
+                                     solidAgain ? " мат " : "",
+                                     solidAgain
+                                         ? kMatNames[static_cast<int>(
+                                               firstMat)]
+                                         : "");
+                        if (simTick == 1000) {
+                            const bool ok = voxelMirror.verify(
+                                stack.layer(activeLayer));
+                            std::fprintf(stderr,
+                                         "[carve-probe] mirror verify: %s\n",
+                                         ok ? "OK" : "DIVERGED");
+                        }
                     }
                 }
                 if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
