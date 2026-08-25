@@ -3573,7 +3573,7 @@ int main(int argc, char** argv) {
                         static CarveScratch judgeScratch;
                         static CarveResult judgeResult;
                         if (detach_judge_cells(stack.layer(activeLayer),
-                                               ripe.data(), ripe.size(), 64,
+                                               ripe.data(), ripe.size(),
                                                judgeScratch,
                                                judgeResult) > 0) {
                             voxelMirror.mark_dirty(
@@ -4879,8 +4879,6 @@ int main(int argc, char** argv) {
                     // его и стоит как записан.
                     if (material_phase(paintMat) == MatPhase::Solid &&
                         !painted.empty()) {
-                        const auto atoms =
-                            static_cast<std::int32_t>(painted.size());
                         const int dcx = wrap_macro(static_cast<int>(
                             std::floor(static_cast<float>(bx) / kSubDim)));
                         const int dcy = wrap_macro(static_cast<int>(
@@ -4892,8 +4890,7 @@ int main(int argc, char** argv) {
                                         ((bx % kSubDim) + kSubDim) % kSubDim,
                                         ((by % kSubDim) + kSubDim) % kSubDim,
                                         ((bz % kSubDim) + kSubDim) % kSubDim,
-                                        atoms + 64, carveScratch,
-                                        paintDetach) > 0)
+                                        carveScratch, paintDetach) > 0)
                             painted.insert(painted.end(),
                                            paintDetach.dirtyCells.begin(),
                                            paintDetach.dirtyCells.end());

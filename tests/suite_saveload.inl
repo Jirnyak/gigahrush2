@@ -704,9 +704,12 @@ void macro_world_round_trips() {
 // written, layered sub-materials included. Garbage files are refused whole.
 void floor_file_round_trips() {
     auto genesis = [](giga::World& w) {
-        // An anchored 8x8x2-cell slab (8192 sub-voxels, far over any detach limit).
-        for (int x = 8; x < 16; ++x)
-            for (int y = 8; y < 16; ++y)
+        // An anchored 24x24x2-cell slab: 1152 клетки — больше узлового
+        // бюджета иерархического судьи (kDetachNodeBudget), «сам дом».
+        // Прежние 8x8x2 жили атомным лимитом; под новой аксиомой опоры такой
+        // остров в пустом торе честно рыхлый.
+        for (int x = 8; x < 32; ++x)
+            for (int y = 8; y < 32; ++y)
                 for (int z = 4; z < 6; ++z)
                     w.grid().fill_cell(x, y, z, giga::kMatConcrete);
         // A painted coat so the sub-material pages have something to prove.

@@ -79,7 +79,10 @@ struct CarveOp {
     float radius = 0;          // metres; power falls off quadratically to 0 here
     std::uint16_t power = 0;   // applied power at the centre (hardness scale)
     std::uint32_t seed = 0;    // deterministic stream id — server's choice
-    std::int32_t detachLimit = kSubVoxels; // max component handed to render
+    // >0 — судья связности включён (бюджет ЕДИНЫЙ узловой kDetachNodeBudget,
+    // само значение размера больше не ограничивает — атомный лимит 512 вешал
+    // балки через шов, скриншот владельца 2026-08-25); <=0 — суд выключен.
+    std::int32_t detachLimit = kSubVoxels;
 };
 
 struct CarveResult {
@@ -101,9 +104,28 @@ struct CarveScratch {
     std::vector<std::uint32_t> slots; // open addressing, stores key+1, 0=empty
     std::vector<std::uint32_t> runs;  // run id per slot (valid where slots!=0)
     std::vector<std::uint32_t> used;  // occupied slot indices, for cheap wipe
-    std::vector<std::uint32_t> queue; // BFS worklist of packed keys
-    std::vector<std::uint32_t> comp;  // current component's packed keys
+
+    // --- кэш иерархического судьи (живёт одну развёртку: маски не меняются,
+    // конверсия трогает только материалы) --------------------------------
+    std::vector<std::uint32_t> cellSlotKey; // open addressing: cell+1
+    std::vector<std::uint32_t> cellSlotVal; // -> entry-индекс разбиения
+    std::vector<std::uint32_t> cellSlotUsed;
+    std::vector<std::uint32_t> partFirst;   // entry -> первый компонент
+    std::vector<std::uint16_t> partCount;   // entry -> число компонентов
+    std::vector<std::uint64_t> compWords;   // 8 слов маски на компонент
+    std::vector<std::uint32_t> nodeQueue;   // BFS узлов: (cell<<8)|comp
 };
+
+// Бюджет обхода судьи связности — в УЗЛАХ (узел = 6-связный компонент атомов
+// ОДНОЙ клетки). ВЫВОД: узел стоит ~десятки-сотни нс (полная клетка — один
+// компонент без флуда, частичная — бит-флуд 8 слов до неподвижной точки +
+// 6 гранных AND), целевой потолок суда — доли мс на карв при цене самого
+// карва ~0.5-1 мс → 512 узлов. Покрытие: узел ≤ 512 атомов → кусок до
+// ~260k атомов (512 клеток) судится ЧЕСТНО перечислением; больший — «сам
+// дом», опёрт по определению (в изотропном торе земли нет — держит размер;
+// решение владельца 2026-08-26, связность бинарна). Отсечка печатается
+// (первый раз и каждую 1024-ю), молчаливых капов нет (S11).
+inline constexpr std::int32_t kDetachNodeBudget = 512;
 
 // The deterministic per-sub-voxel roll hash. Public so tests and future
 // consumers (e.g. a client-side predictor) can reproduce the server's rolls.
@@ -151,13 +173,13 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
 // ОДИН ЗАКОН СВЯЗНОСТИ НА ВСЕХ ПИСАТЕЛЕЙ (решение владельца 2026-08-24):
 // проверка от ЗАПИСИ, не от разрушения — нарисованная в воздухе сфера
 // бетона обязана осесть. seed — любой атом свежей записи; если его
-// компонент связности не больше limit и не дотягивается до опоры, ВЕСЬ
-// компонент конвертируется в рыхлого двойника (kMatRubbleOf) на месте —
-// дальше его роняет автомат, как при детаче карва. Возвращает число
-// конвертированных атомов; dirtyCells — задетые клетки (маски не меняются).
+// компонент (иерархический флуд, бюджет kDetachNodeBudget) не дотягивается
+// до опоры, ВЕСЬ компонент конвертируется в рыхлого двойника (kMatRubbleOf)
+// на месте — дальше его роняет автомат, как при детаче карва. Возвращает
+// число конвертированных атомов; dirtyCells — задетые клетки (маски не
+// меняются).
 std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
-                         int sz, std::int32_t limit, CarveScratch& scratch,
-                         CarveResult& out);
+                         int sz, CarveScratch& scratch, CarveResult& out);
 
 // СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ — долг АВТОМАТА как писателя грида (§60/§61):
 // его ходы (крошка уехала, одиночка истаяла) рвут мостики без развёртки
@@ -166,7 +188,7 @@ std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
 // клетки, судит компоненты тем же флудом и конвертирует отвязанное в
 // рыхлых двойников. Возвращает число конвертированных атомов.
 std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
-                                std::size_t n, std::int32_t limit,
-                                CarveScratch& scratch, CarveResult& out);
+                                std::size_t n, CarveScratch& scratch,
+                                CarveResult& out);
 
 } // namespace giga

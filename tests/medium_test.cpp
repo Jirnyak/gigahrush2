@@ -573,8 +573,13 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
     // строкой и честно падают автоматом, как вода: один механизм. Полка на
     // столбике; срубаем столбик — полка отрывается, конвертируется и падает.
     {
-        w.grid().fill_cell(80, 80, 4, kMatConcrete); // пол-опора (две клетки —
-        w.grid().fill_cell(81, 80, 4, kMatConcrete); // компонент > лимита)
+        // Пол-опора — плита 26×26 = 676 клеток: больше узлового бюджета
+        // судьи («сам дом»). Прежние две клетки жили атомным лимитом 512 —
+        // под иерархическим судьёй голая пара клеток в пустом торе честно
+        // рыхлая (спящие клетки плиты автомату безразличны — инертны).
+        for (int px = 68; px <= 93; ++px)
+            for (int py = 68; py <= 93; ++py)
+                w.grid().fill_cell(px, py, 4, kMatConcrete);
         CellType* sp = materialize_sub_page(
             w, macro_index(80, 80, 5));
         auto put = [&](int sx, int sy, int sz) {
@@ -871,7 +876,7 @@ void test_carve_agnostic() {
                 fp[sub_bit(sx2, sy2, sz2)] = kMatConcrete;
                 w.grid().mask(fx, cy, cz).set(sub_bit(sx2, sy2, sz2));
             }
-    CHECK(detach_scan(w, fx, cy, cz, 3, 3, 3, 27 + 64, scratch, res) == 27);
+    CHECK(detach_scan(w, fx, cy, cz, 3, 3, 3, scratch, res) == 27);
     CHECK(sub_material_at(w, fx, cy, cz, 2, 2, 2) == kMatRubbleConcrete);
     CHECK(w.grid().mask(fx, cy, cz).test(sub_bit(2, 2, 2)));
 }

@@ -1,5 +1,8 @@
 #include "world/destruct.h"
 
+#include <bit>     // std::countr_zero — перечисление атомов компонента
+#include <cstdio>  // отсечка бюджета суда печатается вслух (S11)
+
 #include <algorithm>
 #include <cmath>
 
@@ -180,71 +183,289 @@ private:
 const int kDir6[6][3] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},
                          {0, -1, 0}, {0, 0, 1},  {0, 0, -1}};
 
-// Enumerate the 6-connected solid component containing `seedKey`, giving up —
-// and thereby ruling it SUPPORTED — as soon as it either exceeds `limit` or
-// touches a region a previous run already judged. Returns true iff the
-// component was fully enumerated (it dead-ended within the limit), i.e. it is
-// genuinely detached: nothing else in the world holds it. The component's keys
-// are left in scratch.comp.
-bool flood_component(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
-                     std::uint32_t seedKey, std::uint32_t run,
-                     std::int32_t limit) {
-    s.comp.clear();
-    s.queue.clear();
-    if (vis.probe(seedKey, run) != 1) return false;
-    s.comp.push_back(seedKey);
-    s.queue.push_back(seedKey);
+// === ИЕРАРХИЧЕСКИЙ СУДЬЯ СВЯЗНОСТИ (решение владельца 2026-08-26) ==========
+//
+// Единица флуда — не атом, а УЗЕЛ: 6-связный компонент атомов ОДНОЙ клетки
+// (бит-флуд по 8 словам маски, слово = слой sz). Рёбра между узлами — AND
+// граневых слоёв масок соседних клеток: точная атомная смежность через шов
+// за O(слов). Клетка здесь — ступень ПОИСКА, ответ дают атомы (оговорка S2).
+//
+// Прежний атомный флуд с лимитом 512 (= одна клетка) объявлял всё большее
+// «слишком большим, чтобы быть оторванным» — балка через шов клеток висла в
+// воздухе (скриншот владельца 2026-08-25), а ровно-512-атомная опора,
+// наоборот, судилась рыхлой. Узловой бюджет (kDetachNodeBudget, вывод в
+// [world/destruct.h]) покрывает куски в ~500 раз больше за сопоставимую
+// цену: полная клетка — один узел без флуда вовсе, частичная — десятки
+// битовых операций вместо 512 хеш-проб.
+
+constexpr std::uint64_t kSxNo7 = 0x7F7F7F7F7F7F7F7Full; // sx<=6 (перед <<1)
+constexpr std::uint64_t kSxNo0 = 0xFEFEFEFEFEFEFEFEull; // sx>=1 (перед >>1)
+constexpr std::uint64_t kSx7 = ~kSxNo7;
+constexpr std::uint64_t kSx0 = ~kSxNo0;
+constexpr std::uint64_t kSy7 = 0xFF00000000000000ull;
+constexpr std::uint64_t kSy0 = 0x00000000000000FFull;
+
+// Один шаг роста компонента внутри клетки (на месте; сходится к неподвижной
+// точке — рост монотонный). Возвращает «изменилось ли».
+inline bool comp_grow(std::uint64_t* b, const std::uint64_t* mask) {
+    bool changed = false;
+    for (int i = 0; i < 8; ++i) {
+        std::uint64_t g = ((b[i] & kSxNo7) << 1) | ((b[i] & kSxNo0) >> 1) |
+                          (b[i] << 8) | (b[i] >> 8);
+        if (i > 0) g |= b[i - 1];
+        if (i < 7) g |= b[i + 1];
+        g = (b[i] | g) & mask[i];
+        if (g != b[i]) {
+            b[i] = g;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+// Сброс кэша разбиений на входе развёртки. Кэш живёт одну развёртку: маски
+// в ней не меняются (конверсия трогает только материалы), так что запись
+// разбиения верна до конца обхода.
+void part_cache_reset(CarveScratch& s) {
+    if (s.cellSlotKey.size() < 16384) {
+        s.cellSlotKey.assign(16384, 0);
+        s.cellSlotVal.assign(16384, 0);
+        s.cellSlotUsed.clear();
+    } else {
+        for (std::uint32_t i : s.cellSlotUsed) s.cellSlotKey[i] = 0;
+        s.cellSlotUsed.clear();
+    }
+    s.partFirst.clear();
+    s.partCount.clear();
+    s.compWords.clear();
+}
+
+void part_cache_grow(CarveScratch& s) {
+    std::vector<std::uint32_t> keys, vals;
+    keys.reserve(s.cellSlotUsed.size());
+    vals.reserve(s.cellSlotUsed.size());
+    for (std::uint32_t i : s.cellSlotUsed) {
+        keys.push_back(s.cellSlotKey[i]);
+        vals.push_back(s.cellSlotVal[i]);
+    }
+    const std::size_t n = s.cellSlotKey.size() * 2;
+    s.cellSlotKey.assign(n, 0);
+    s.cellSlotVal.assign(n, 0);
+    s.cellSlotUsed.clear();
+    const std::uint32_t mask = static_cast<std::uint32_t>(n - 1);
+    for (std::size_t j = 0; j < keys.size(); ++j) {
+        std::uint32_t i = (keys[j] * 0x9E3779B9u) >> 3 & mask;
+        while (s.cellSlotKey[i]) i = (i + 1) & mask;
+        s.cellSlotKey[i] = keys[j];
+        s.cellSlotVal[i] = vals[j];
+        s.cellSlotUsed.push_back(i);
+    }
+}
+
+// Разбиение маски клетки на компоненты, с кэшем на развёртку. Возвращает
+// entry-индекс (partFirst/partCount). Полная клетка — один компонент без
+// флуда: это интерьер стен и плит, самый массовый случай обхода опёртого.
+std::uint32_t cell_partition(const MacroGrid& g, CarveScratch& s,
+                             std::uint32_t ci) {
+    if ((s.cellSlotUsed.size() + 1) * 2 > s.cellSlotKey.size())
+        part_cache_grow(s);
+    const std::uint32_t mask =
+        static_cast<std::uint32_t>(s.cellSlotKey.size() - 1);
+    std::uint32_t i = ((ci + 1) * 0x9E3779B9u) >> 3 & mask;
+    while (true) {
+        const std::uint32_t k = s.cellSlotKey[i];
+        if (k == ci + 1) return s.cellSlotVal[i];
+        if (k == 0) break;
+        i = (i + 1) & mask;
+    }
+    const SubMask& m = g.masks()[ci];
+    const std::uint32_t entry = static_cast<std::uint32_t>(s.partFirst.size());
+    const std::uint32_t first =
+        static_cast<std::uint32_t>(s.compWords.size() / 8);
+    std::uint16_t count = 0;
+    if (m.full()) {
+        for (int w = 0; w < 8; ++w) s.compWords.push_back(~std::uint64_t{0});
+        count = 1;
+    } else {
+        std::uint64_t rest[8];
+        for (int w = 0; w < 8; ++w) rest[w] = m.words[w];
+        std::uint64_t comp[8];
+        for (;;) {
+            int seedW = -1;
+            for (int w = 0; w < 8; ++w)
+                if (rest[w] != 0) {
+                    seedW = w;
+                    break;
+                }
+            if (seedW < 0) break;
+            for (int w = 0; w < 8; ++w) comp[w] = 0;
+            comp[seedW] = rest[seedW] & (~rest[seedW] + 1); // низший бит
+            while (comp_grow(comp, m.words)) {
+            }
+            for (int w = 0; w < 8; ++w) {
+                s.compWords.push_back(comp[w]);
+                rest[w] &= ~comp[w];
+            }
+            ++count;
+        }
+    }
+    s.partFirst.push_back(first);
+    s.partCount.push_back(count);
+    s.cellSlotKey[i] = ci + 1;
+    s.cellSlotVal[i] = entry;
+    s.cellSlotUsed.push_back(i);
+    return entry;
+}
+
+// Узел, содержащий данный твёрдый атом: (cell << 8) | локальный индекс
+// компонента (компонентов в клетке <= 256 — шахматка одиночек).
+std::uint32_t node_of_atom(const MacroGrid& g, CarveScratch& s,
+                           std::uint32_t key) {
+    const std::uint32_t ci = key >> 9;
+    const std::uint32_t bit = key & 511u;
+    const std::uint32_t e = cell_partition(g, s, ci);
+    const std::uint32_t first = s.partFirst[e];
+    const int wi = static_cast<int>(bit >> 6);
+    const std::uint64_t b = std::uint64_t{1} << (bit & 63u);
+    for (std::uint16_t j = 0; j < s.partCount[e]; ++j)
+        if (s.compWords[(first + j) * 8 + static_cast<std::uint32_t>(wi)] & b)
+            return (ci << 8) | j;
+    return 0xFFFFFFFFu; // атом не твёрд (сид обязан быть твёрдым)
+}
+
+// Отсечки бюджета — вслух (S11), но с дросселем: удар в опёртую стену —
+// штатный путь, кричать каждым карвом нельзя.
+std::uint32_t g_detachCapEvents = 0;
+
+// Флуд по узлам. true — компонент собран ЦЕЛИКОМ в бюджете (оторван; узлы
+// лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом
+// или превысил бюджет («сам дом»).
+bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
+                 std::uint32_t seedNode, std::uint32_t run) {
+    s.nodeQueue.clear();
+    if (vis.probe(seedNode, run) != 1) return false;
+    s.nodeQueue.push_back(seedNode);
     std::size_t head = 0;
-    while (head < s.queue.size()) {
-        const SubCoord c = unpack_key(s.queue[head++]);
-        const int ax = c.cx * kSubDim + c.sx;
-        const int ay = c.cy * kSubDim + c.sy;
-        const int az = c.cz * kSubDim + c.sz;
-        for (const auto& d : kDir6) {
-            const std::uint32_t nk = key_at(ax + d[0], ay + d[1], az + d[2]);
-            if (!solid_key(g, nk)) continue;
-            const int r = vis.probe(nk, run);
-            if (r == 0) continue;       // our own frontier, already queued
-            if (r < 0) return false;    // merged into a supported region
-            s.comp.push_back(nk);
-            s.queue.push_back(nk);
-            if (static_cast<std::int32_t>(s.comp.size()) > limit)
-                return false;           // too big to be loose ([destruct.h])
+    while (head < s.nodeQueue.size()) {
+        const std::uint32_t node = s.nodeQueue[head++];
+        const std::uint32_t ci = node >> 8;
+        const std::uint32_t e = cell_partition(g, s, ci);
+        // Копия слов компонента: cell_partition соседей ниже растит
+        // compWords, указатель внутрь вектора пережил бы реаллокацию.
+        std::uint64_t cw[8];
+        {
+            const std::uint64_t* src =
+                &s.compWords[(s.partFirst[e] + (node & 255u)) * 8];
+            for (int w = 0; w < 8; ++w) cw[w] = src[w];
+        }
+        const int cx = static_cast<int>(ci & 127u);
+        const int cy = static_cast<int>((ci >> 7) & 127u);
+        const int cz = static_cast<int>((ci >> 14) & 127u);
+        for (int d = 0; d < 6; ++d) {
+            const std::size_t nci =
+                macro_index(wrap_macro(cx + kDir6[d][0]),
+                            wrap_macro(cy + kDir6[d][1]),
+                            wrap_macro(cz + kDir6[d][2]));
+            const SubMask& nm = g.masks()[nci];
+            // Граневой слой компонента, сдвинутый в систему соседа, И его
+            // маска: точные атомные пары через шов. kDir6 порядок:
+            // +x,-x,+y,-y,+z,-z.
+            std::uint64_t nb[8] = {};
+            std::uint64_t any = 0;
+            switch (d) {
+            case 0:
+                for (int w = 0; w < 8; ++w)
+                    any |= nb[w] = ((cw[w] & kSx7) >> 7) & nm.words[w];
+                break;
+            case 1:
+                for (int w = 0; w < 8; ++w)
+                    any |= nb[w] = ((cw[w] & kSx0) << 7) & nm.words[w];
+                break;
+            case 2:
+                for (int w = 0; w < 8; ++w)
+                    any |= nb[w] = ((cw[w] & kSy7) >> 56) & nm.words[w];
+                break;
+            case 3:
+                for (int w = 0; w < 8; ++w)
+                    any |= nb[w] = ((cw[w] & kSy0) << 56) & nm.words[w];
+                break;
+            case 4:
+                any = nb[0] = cw[7] & nm.words[0];
+                break;
+            case 5:
+                any = nb[7] = cw[0] & nm.words[7];
+                break;
+            }
+            if (any == 0) continue;
+            const std::uint32_t ne =
+                cell_partition(g, s, static_cast<std::uint32_t>(nci));
+            const std::uint32_t nfirst = s.partFirst[ne];
+            for (std::uint16_t j = 0; j < s.partCount[ne]; ++j) {
+                const std::uint64_t* jw = &s.compWords[(nfirst + j) * 8];
+                bool touch = false;
+                for (int w = 0; w < 8 && !touch; ++w)
+                    touch = (jw[w] & nb[w]) != 0;
+                if (!touch) continue;
+                const std::uint32_t nk =
+                    (static_cast<std::uint32_t>(nci) << 8) | j;
+                const int r = vis.probe(nk, run);
+                if (r == 0) continue;    // свой фронтир
+                if (r < 0) return false; // слился с осуждённым — опёрт
+                s.nodeQueue.push_back(nk);
+            }
+        }
+        if (static_cast<std::int32_t>(s.nodeQueue.size()) >
+            kDetachNodeBudget) {
+            ++g_detachCapEvents;
+            if (g_detachCapEvents == 1 || (g_detachCapEvents & 1023u) == 0)
+                std::fprintf(stderr,
+                             "[detach] бюджет суда: компонент > %d узлов — "
+                             "считаю опёртым (отсечек всего: %u)\n",
+                             kDetachNodeBudget, g_detachCapEvents);
+            return false;
         }
     }
     return true;
 }
 
-// The detachment sweep: seed a bounded flood-fill from every solid neighbour
-// of every sub-voxel the carve removed; delete each fully-enumerated (loose)
-// component into out.detached. Runs AFTER all direct removals so a component
-// severed by the joint effect of many removed voxels is judged once, against
-// the final geometry.
-// Потерявший связность компонент НЕ исчезает и НИЧЕГО не рождает (редакция
-// владельца 2026-08-24): ТЕ ЖЕ атомы на месте меняют строку на РЫХЛОГО
-// ДВОЙНИКА исходника (kMatRubbleOf — выглядит тем же материалом) и дальше
-// честно падают автоматом в гравитации фрейма, как вода: один механизм на
-// всю материю. Маска остаётся стоять — двойник твёрд, бит = кэш фазы, он
-// поедет вместе с атомом.
-void convert_component(World& w, SubField<CellType>* mats,
-                       const std::vector<std::uint32_t>& comp,
-                       CarveResult& out) {
-    for (std::uint32_t k : comp) {
-        const CellType src = mat_key(w, mats, k);
-        out.detached.push_back(
-            CarvedVoxel{k >> 9, static_cast<std::uint16_t>(k & 511u), src});
-        const std::size_t ci = k >> 9;
-        CellType* pg = materialize_sub_page(w, ci);
-        pg[k & 511u] = material_rubble_of(src);
-        out.dirtyCells.push_back(static_cast<std::uint32_t>(ci));
+// Конверсия собранного компонента (все узлы s.nodeQueue) в рыхлого двойника
+// НА МЕСТЕ (редакция владельца 2026-08-24): те же атомы меняют строку на
+// kMatRubbleOf и дальше падают автоматом; маска стоит — двойник твёрд.
+void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
+                   CarveResult& out) {
+    for (const std::uint32_t node : s.nodeQueue) {
+        const std::uint32_t ci = node >> 8;
+        const std::uint32_t e = cell_partition(w.grid(), s, ci); // кэш-хит
+        const std::uint32_t base = (s.partFirst[e] + (node & 255u)) * 8;
+        for (int wi = 0; wi < 8; ++wi) {
+            std::uint64_t bits = s.compWords[base + static_cast<std::uint32_t>(wi)];
+            while (bits != 0) {
+                const int b = std::countr_zero(bits);
+                bits &= bits - 1;
+                const std::uint32_t bit =
+                    static_cast<std::uint32_t>(wi * 64 + b);
+                const std::uint32_t k = pack_key(ci, bit);
+                const CellType src = mat_key(w, mats, k);
+                out.detached.push_back(
+                    CarvedVoxel{ci, static_cast<std::uint16_t>(bit), src});
+                CellType* pg = materialize_sub_page(w, ci);
+                pg[bit] = material_rubble_of(src);
+            }
+        }
+        out.dirtyCells.push_back(ci);
     }
 }
 
-void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
+// The detachment sweep: seed the node flood from every solid neighbour of
+// every sub-voxel the carve removed; convert each fully-enumerated (loose)
+// component in place. Runs AFTER all direct removals so a component severed
+// by the joint effect of many removed voxels is judged once, against the
+// final geometry. `enabled` <= 0 выключает суд (CarveOp::detachLimit).
+void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
                   CarveScratch& s, CarveResult& out) {
-    if (out.destroyed.empty() || limit <= 0) return;
-    VisitedSet vis(s, static_cast<std::size_t>(limit) * 2 +
-                          out.destroyed.size());
+    if (out.destroyed.empty() || enabled <= 0) return;
+    part_cache_reset(s);
+    VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2);
     std::uint32_t run = 0;
     const std::size_t nSeeds = out.destroyed.size();
     for (std::size_t i = 0; i < nSeeds; ++i) {
@@ -255,54 +476,38 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t limit,
         const int az = c.cz * kSubDim + c.sz;
         for (const auto& d : kDir6) {
             const std::uint32_t nk = key_at(ax + d[0], ay + d[1], az + d[2]);
-            // May have gone air already — as part of the carve or of an
-            // earlier detached component.
+            // May have gone air already — as part of the carve itself.
             if (!solid_key(w.grid(), nk)) continue;
+            const std::uint32_t node = node_of_atom(w.grid(), s, nk);
+            if (node == 0xFFFFFFFFu) continue;
             ++run;
-            if (!flood_component(w.grid(), vis, s, nk, run, limit)) continue;
-            convert_component(w, mats, s.comp, out);
+            if (!flood_nodes(w.grid(), vis, s, node, run)) continue;
+            convert_nodes(w, mats, s, out);
         }
     }
 }
 
-// СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ (долг автомата, §60/§61-семья, 2026-08-26):
-// автомат — писатель грида, но его ходы (крошка уехала, одиночка истаяла)
-// не запускали развёртку отвязки — «мостик» исчезал, сосед висел в
-// пустоте до следующего карва рядом (репорт владельца). Судья бежит на
-// шве по клеткам с изменёнными масками: сеет от ТВЁРДЫХ атомов клетки,
-// имеющих воздушного 6-соседа (поверхность), и судит их компоненты тем же
-// флудом, что карв — общий VisitedSet: опёртые регионы судятся один раз.
+// СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ (долг автомата, §60/§61-семья): его ходы
+// (крошка уехала, одиночка истаяла) рвут мостики без развёртки отвязки.
+// Судит КАЖДЫЙ компонент каждой изменённой клетки тем же узловым флудом;
+// опёртые регионы, единожды осуждённые, мержатся мгновенно (VisitedSet).
 void judge_cells(World& w, SubField<CellType>* mats,
-                 const std::uint32_t* cells, std::size_t n,
-                 std::int32_t limit, CarveScratch& s, CarveResult& out) {
-    if (n == 0 || limit <= 0) return;
-    VisitedSet vis(s, static_cast<std::size_t>(limit) * 2 + n * 8);
+                 const std::uint32_t* cells, std::size_t n, CarveScratch& s,
+                 CarveResult& out) {
+    if (n == 0) return;
+    part_cache_reset(s);
+    VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2 + n * 2);
     std::uint32_t run = 0;
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t ci = cells[i];
         if (ci >= kMacroCells) continue;
-        const SubMask& m = w.grid().masks()[ci];
-        if (m.empty() || m.full()) continue;
-        const int cx = static_cast<int>(ci & 127u);
-        const int cy = static_cast<int>((ci >> 7) & 127u);
-        const int cz = static_cast<int>((ci >> 14) & 127u);
-        for (int bit = 0; bit < kSubVoxels; ++bit) {
-            if (!m.test(bit)) continue;
-            const int ax = cx * kSubDim + (bit & 7);
-            const int ay = cy * kSubDim + ((bit >> 3) & 7);
-            const int az = cz * kSubDim + ((bit >> 6) & 7);
-            bool surface = false;
-            for (const auto& d : kDir6)
-                if (!solid_key(w.grid(),
-                               key_at(ax + d[0], ay + d[1], az + d[2]))) {
-                    surface = true;
-                    break;
-                }
-            if (!surface) continue;
+        if (w.grid().masks()[ci].empty()) continue;
+        const std::uint32_t e = cell_partition(w.grid(), s, ci);
+        const std::uint16_t cnt = s.partCount[e];
+        for (std::uint16_t j = 0; j < cnt; ++j) {
             ++run;
-            const std::uint32_t k = key_at(ax, ay, az);
-            if (!flood_component(w.grid(), vis, s, k, run, limit)) continue;
-            convert_component(w, mats, s.comp, out);
+            if (!flood_nodes(w.grid(), vis, s, (ci << 8) | j, run)) continue;
+            convert_nodes(w, mats, s, out);
         }
     }
 }
@@ -462,19 +667,19 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
 }
 
 std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
-                         int sz, std::int32_t limit, CarveScratch& scratch,
-                         CarveResult& out) {
+                         int sz, CarveScratch& scratch, CarveResult& out) {
     out.clear();
-    if (limit <= 0) return 0;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
     const std::uint32_t key =
         key_at(wrap_macro(cx) * kSubDim + sx, wrap_macro(cy) * kSubDim + sy,
-               cz * kSubDim + sz);
+               wrap_macro(cz) * kSubDim + sz);
     if (!solid_key(w.grid(), key)) return 0;
-    VisitedSet vis(scratch, static_cast<std::size_t>(limit) + 8);
-    if (!flood_component(w.grid(), vis, scratch, key, /*run=*/1, limit))
-        return 0;
-    convert_component(w, mats, scratch.comp, out);
+    part_cache_reset(scratch);
+    VisitedSet vis(scratch, static_cast<std::size_t>(kDetachNodeBudget) * 2);
+    const std::uint32_t node = node_of_atom(w.grid(), scratch, key);
+    if (node == 0xFFFFFFFFu) return 0;
+    if (!flood_nodes(w.grid(), vis, scratch, node, /*run=*/1)) return 0;
+    convert_nodes(w, mats, scratch, out);
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.detached.size());
 }
@@ -496,20 +701,20 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     out.destroyed.push_back(
         CarvedVoxel{ci, static_cast<std::uint16_t>(bit), mat});
     remove_key(w, mats, key, out.dirtyCells);
-    detach_sweep(w, mats, kSubVoxels, scratch, out);
+    detach_sweep(w, mats, /*enabled=*/1, scratch, out);
     finalize_dirty(out);
     return true;
 }
 
 std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
-                                std::size_t n, std::int32_t limit,
-                                CarveScratch& scratch, CarveResult& out) {
+                                std::size_t n, CarveScratch& scratch,
+                                CarveResult& out) {
     out.destroyed.clear();
     out.detached.clear();
     out.dirtyCells.clear();
     SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
-    judge_cells(w, mats, cells, n, limit, scratch, out);
+    judge_cells(w, mats, cells, n, scratch, out);
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.detached.size());
 }

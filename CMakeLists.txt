@@ -644,7 +644,14 @@ if(GIGA_BUILD_TESTS)
         # 1 субвоксель глушит сквозной поток за 2 шага, но обтекается за 4»
         # (ёмкость и поток — разные вопросы; мутация клеточного гейта = 3
         # красных) = 23502.
-        PASS_REGULAR_EXPRESSION "23502/23502 checks passed"
+        # 23502 + 49 on 2026-08-26: ИЕРАРХИЧЕСКИЙ СУДЬЯ СВЯЗНОСТИ (висяки на
+        # шве, скриншот владельца): узел = клеточный компонент, рёбра = AND
+        # граневых слоёв; атомный лимит 512 мёртв. Пины: плавающая пара клеток
+        # рушится по всем 3 осям, балка 640 атомов через 4 шва падает от
+        # опорной плиты-«дома» (676 клеток > бюджета), точное выравнивание
+        # граневых битов несёт (Г-стаб + колено моста, 6 переносов × мутация
+        # = красный) = 23551.
+        PASS_REGULAR_EXPRESSION "23551/23551 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

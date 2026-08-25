@@ -133,18 +133,64 @@ static void test_carve_at() {
         CHECK(sub_material_at(w, 20, 20, 20, 1, 0, 0) == kMatRubbleConcrete);
     }
 
-    // The same chip against a TWO-cell block: 1023 survivors exceed the limit,
-    // so the structure is judged supported and stands.
-    {
+    // The same chip against a floating TWO-cell block: 1023 survivors SPAN THE
+    // SEAM, и прежний атомный лимит 512 объявлял их «слишком большими, чтобы
+    // быть оторванными» — блок висел в воздухе (репорт владельца, скриншот
+    // 2026-08-25: балки над прогрызенной дырой). Иерархический судья (узел =
+    // клеточный компонент, рёбра = AND граневых слоёв) обязан судить честно:
+    // весь блок конвертируется в рыхлого двойника и падает автоматом.
+    // …и по ВСЕМ ТРЁМ осям шва (изотропия S1): рёбра судьи — гранёвая
+    // бит-магия с своим сдвигом на каждую ось, ошибка в любом из шести
+    // сдвигов оставила бы висяк ровно на «своей» оси.
+    for (int axis = 0; axis < 3; ++axis) {
         World w;
+        const int nx = 30 + (axis == 0), ny = 30 + (axis == 1),
+                  nz = 30 + (axis == 2);
         w.grid().fill_cell(30, 30, 30, kMatConcrete);
-        w.grid().fill_cell(31, 30, 30, kMatConcrete);
+        w.grid().fill_cell(nx, ny, nz, kMatConcrete);
         CHECK(carve_at(w, 30, 30, 30, 0, 0, 0, 256, 5, scratch, res));
         CHECK(res.destroyed.size() == 1);
-        CHECK(res.detached.empty());
-        CHECK(w.grid().mask(31, 30, 30).full());
+        CHECK(res.detached.size() == 1023); // ОБЕ клетки, шов не спасает
+        CHECK(w.grid().mask(nx, ny, nz).full()); // маска стоит — атомы на месте
         CHECK(!w.grid().mask(30, 30, 30).full());
-        CHECK(w.grid().cell(30, 30, 30) == kMatConcrete); // partial keeps type
+        CHECK(sub_material_at(w, nx, ny, nz, 4, 4, 4) == kMatRubbleConcrete);
+        CHECK(sub_material_at(w, 30, 30, 30, 4, 4, 4) == kMatRubbleConcrete);
+    }
+
+    // Сценарий скриншота: балка 4×4 сечением через ПЯТЬ клеток (40 слоёв ×
+    // 16 = 640 атомов > старого лимита 512), прикреплённая к ОПОРНОЙ плите.
+    // Опора — 26×26 = 676 полных клеток: больше узлового бюджета, «сам дом»
+    // (в пустом торе меньшая опора честно рыхлая — земли нет, держит
+    // размер). Отруб у самой плиты: балка конвертируется ЦЕЛИКОМ, плита —
+    // стоит бетоном.
+    {
+        World w;
+        for (int y = 20; y <= 45; ++y)                // опорная плита x=40
+            for (int z = 20; z <= 45; ++z)
+                w.grid().fill_cell(40, y, z, kMatConcrete);
+        for (int ax = 41 * 8; ax < 46 * 8; ++ax)      // балка по x через швы
+            for (int sy = 2; sy <= 5; ++sy)
+                for (int sz = 2; sz <= 5; ++sz) {
+                    const int cx = ax / 8;
+                    w.grid().set_cell(cx, 40, 40, kMatConcrete);
+                    w.grid().mask(cx, 40, 40).set(sub_bit(ax % 8, sy, sz));
+                }
+        // Срубить первый слой балки (ax=328, все 16 атомов сечения). Пока
+        // сечение цело хоть одним атомом — хвост держится плитой и стоит.
+        CarveResult bres;
+        for (int sy = 2; sy <= 5; ++sy)
+            for (int sz = 2; sz <= 5; ++sz) {
+                CHECK(carve_at(w, 41, 40, 40, 0, sy, sz, 256, 7, scratch,
+                               bres));
+            }
+        // Последний удар оставил висеть 39 слоёв × 16 = 624 атома через
+        // четыре шва — все конвертированы (маски стоят, материал рыхлый).
+        CHECK(sub_material_at(w, 41, 40, 40, 1, 4, 4) == kMatRubbleConcrete);
+        CHECK(sub_material_at(w, 43, 40, 40, 4, 4, 4) == kMatRubbleConcrete);
+        CHECK(sub_material_at(w, 45, 40, 40, 7, 5, 5) == kMatRubbleConcrete);
+        CHECK(w.grid().mask(40, 40, 40).full()); // опора цела и бетонна
+        CHECK(sub_material_at(w, 40, 40, 40, 4, 4, 4) == kMatConcrete);
+        CHECK(sub_material_at(w, 40, 21, 21, 4, 4, 4) == kMatConcrete);
     }
 
     // Unbreakable rows really are: full power, no removal, no dirt.
@@ -162,8 +208,12 @@ static void test_carve_at() {
 // the "краска снаружи, бетон внутри" example verbatim.
 static void test_carve_layers() {
     World w;
-    // Three cells in a row so the painted one is ANCHORED: a lone painted cell
-    // would (correctly) be cast loose by the detach sweep after the chip.
+    // Three cells in a row, ANCHORED into a 676-cell slab («сам дом» — больше
+    // узлового бюджета судьи): под новой аксиомой опоры голая полоса из трёх
+    // клеток в пустом торе честно рыхлая, её ничто не держит.
+    for (int y = 37; y <= 62; ++y)
+        for (int z = 37; z <= 62; ++z)
+            w.grid().fill_cell(53, y, z, kMatConcrete);
     w.grid().fill_cell(50, 50, 50, kMatConcrete);
     w.grid().fill_cell(51, 50, 50, kMatConcrete);
     w.grid().fill_cell(52, 50, 50, kMatConcrete);
@@ -218,6 +268,12 @@ static void test_carve_sphere() {
     // dwarfs hardness there), then detach the blob side (<= limit 1024) and
     // keep the anchor side (> limit).
     auto build = [](World& w) {
+        // Якорь упирается в плиту 26×26 = 676 клеток: больше узлового
+        // бюджета судьи — «сам дом». Двухклеточный якорь без неё под новой
+        // аксиомой честно рыхлый: в пустом торе его ничто не держит.
+        for (int y = 0; y <= 25; ++y)
+            for (int z = 0; z <= 25; ++z)
+                w.grid().fill_cell(9, y, z, kMatConcrete);
         w.grid().fill_cell(10, 10, 10, kMatConcrete); // anchor
         w.grid().fill_cell(11, 10, 10, kMatConcrete);
         w.grid().set_cell(12, 10, 10, kMatConcrete);  // arm cell, 8 voxels
@@ -283,9 +339,13 @@ static void test_carve_sphere() {
     }
 
     // Torus seam: a blast centred at x=0 removes voxels from cells on BOTH
-    // sides of the wrap. Walls are 2 cells thick per side so neither side is
-    // detachable debris.
+    // sides of the wrap. Балка упёрта концом в плиту-«дом» (676 клеток), и
+    // малый кратер её не перерубает — детача нет; голая балка в пустом торе
+    // под новой аксиомой рыхлая с рождения.
     World s;
+    for (int y = 0; y <= 25; ++y)
+        for (int z = 0; z <= 25; ++z)
+            s.grid().fill_cell(125, y, z, kMatConcrete);
     for (int x : {126, 127, 0, 1}) s.grid().fill_cell(x, 5, 5, kMatConcrete);
     CarveOp seam;
     seam.x = 0.0f;
@@ -318,6 +378,70 @@ static void test_carve_sphere() {
 }
 
 
+// ТОЧНОЕ ВЫРАВНИВАНИЕ ГРАНЕВЫХ БИТОВ — несущая часть закона: стаб держится
+// за плиту-«дом» ЕДИНСТВЕННЫМ атомным контактом через грань, по каждой из
+// трёх осей. Пары полных клеток к порче сдвига слепы (любой ненулевой мусор
+// попадает в единственный компонент полного соседа — мутация вживую это
+// показала); одноатомный контакт краснеет от любого неверного сдвига.
+static void test_detach_face_alignment() {
+    CarveScratch scratch;
+    CarveResult res;
+    for (int axis = 0; axis < 3; ++axis)
+        for (int side = 0; side < 2; ++side) { // обе грани оси: 6 переносов
+            World w;
+            const int dir = side == 0 ? 1 : -1;
+            const int tan = (axis + 1) % 3;
+            const int oth = 3 - axis - tan;
+            const int aFace = side == 0 ? 7 : 0;    // граневой слой стаба
+            const int aTouch = side == 0 ? 0 : 7;   // ответный слой моста
+            auto put = [&](MacroGrid& g, int cxx, int cyy, int czz, int a,
+                           int t, int o) {
+                int sv[3];
+                sv[axis] = a;
+                sv[tan] = t;
+                sv[oth] = o;
+                g.set_cell(cxx, cyy, czz, kMatConcrete);
+                g.mask(cxx, cyy, czz).set(sub_bit(sv[0], sv[1], sv[2]));
+            };
+            // Плита-«дом» (676 полных клеток) за клеткой-мостом.
+            for (int u = 20; u <= 45; ++u)
+                for (int v = 20; v <= 45; ++v) {
+                    int c[3];
+                    c[axis] = 30 + 2 * dir;
+                    c[tan] = u;
+                    c[oth] = v;
+                    w.grid().fill_cell(c[0], c[1], c[2], kMatConcrete);
+                }
+            // Стаб в (30,30,30): стержень по оси на (tan=4) + Г-образный
+            // кончик В ГРАНЕВОМ СЛОЕ на (tan=5): слой грани отличается от
+            // предыдущего — перенос не того слоя (z-семья мутаций) рвёт
+            // контакт, а не копирует его.
+            for (int t = 0; t < 4; ++t)
+                put(w.grid(), 30, 30, 30, side == 0 ? 4 + t : 3 - t, 4, 4);
+            put(w.grid(), 30, 30, 30, aFace, 5, 4);
+            // Мост в соседней клетке: контакт (tan=5) + колено (tan=6) +
+            // стержень до плиты на (tan=6). На линии (tan=4/5) вдоль оси
+            // материи НЕТ — мусор неверного СДВИГА (x/y-семья: биты падают
+            // на слой a=1/a=6 с теми же tan) ни во что не попадает.
+            int b[3] = {30, 30, 30};
+            b[axis] = 30 + dir;
+            put(w.grid(), b[0], b[1], b[2], aTouch, 5, 4); // контакт
+            for (int t = 0; t < 8; ++t)                    // колено+стержень
+                put(w.grid(), b[0], b[1], b[2], t, 6, 4);
+            put(w.grid(), b[0], b[1], b[2], aTouch, 6, 4); // смычка колена
+            // Судим клетку стаба: опёртый через точный контакт — не рыхлый.
+            const std::uint32_t ci =
+                static_cast<std::uint32_t>(macro_index(30, 30, 30));
+            CHECK(detach_judge_cells(w, &ci, 1, scratch, res) == 0);
+            int sv[3];
+            sv[axis] = side == 0 ? 4 : 3; // дальний от грани атом стержня
+            sv[tan] = 4;
+            sv[oth] = 4;
+            CHECK(sub_material_at(w, 30, 30, 30, sv[0], sv[1], sv[2]) ==
+                  kMatConcrete);
+        }
+}
+
 // СУДЬЯ СВЯЗНОСТИ НА ШВЕ (§60/§61, баг владельца 2026-08-26 «висящие
 // атомы»): ход АВТОМАТА (не карв!) рвёт мостик — крошка уехала/истаяла,
 // а развёртка отвязки бежала только при карве: сосед висел в пустоте.
@@ -348,7 +472,7 @@ static void test_detach_judge() {
     CarveResult res;
     const std::uint32_t cell32 = static_cast<std::uint32_t>(ci);
     const std::int32_t judged =
-        detach_judge_cells(w, &cell32, 1, 64, scratch, res);
+        detach_judge_cells(w, &cell32, 1, scratch, res);
     CHECK(judged == 1); // ровно висюк A
     CHECK(sub_material_at(w, cx, cy, cz, 1, 4, 4) ==
           material_rubble_of(kMatParquet));
@@ -363,5 +487,6 @@ static void test_destruct_all() {
     test_carve_at();
     test_carve_layers();
     test_carve_sphere();
+    test_detach_face_alignment();
     test_detach_judge();
 }
