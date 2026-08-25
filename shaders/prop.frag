@@ -222,11 +222,7 @@ void main() {
                   d, pc.fog.x, directDiffuse, directSpec);
 
     float spec = 0.0;
-    vec3 Lsun = normalize(pc.sunDir.xyz);
-    if (pc.sunDir.w > 0.0 && dot(n_shading, Lsun) > 0.0) {
-        vec3 Hsun = normalize(Lsun + V);
-        spec += pow(max(dot(n_shading, Hsun), 0.0), specPow) * specIntensity * pc.sunDir.w;
-    }
+    // Солнечный спекуляр и fill ВЫРЕЗАНЫ 2026-08-25 — солнца нет (S15).
     // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal.
     // Масштаб — по ФАКТИЧЕСКИ пришедшему прямому свету (бывший множитель
     // att*camPos.w знал только про убитый налобник).
@@ -239,7 +235,6 @@ void main() {
         spec += anisoSpec * directLum;
     }
 
-    float fill = pc.sunDir.w * max(dot(n_shading, Lsun), 0.0);
 
     float hemi = 0.5 + 0.5 * n_shading.z;
     vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
@@ -247,7 +242,7 @@ void main() {
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
 
-    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
+    vec3 lit = albedo * (amb * ao + directDiffuse * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
 
     float timeSec = pc.torus.w;
     // torus.z IS the pulse: the CPU computes it every frame (main.cpp

@@ -9,6 +9,7 @@
 #include "ecs/components.h"
 #include "sim/cell_bins.h" // общий примитив клеточных бинов — ключ и контейнер
 #include "sim/drag.h"
+#include "world/destruct.h" // sub_material_at — материал контактного АТОМА
 #include "world/material_props.h" // material_hardness — мат-пара контакта
 #include "world/world.h"
 
@@ -35,6 +36,7 @@ struct SphereContact {
 SphereContact sphere_deepest_contact(const World& world, vec3 pos, float r) {
     SphereContact best;
     int bestCx = 0, bestCy = 0, bestCz = 0;
+    int bestSx = 0, bestSy = 0, bestSz = 0;
 
     const int x0 = floor_div(pos.x - r, kVoxelSize);
     const int x1 = floor_div(pos.x + r, kVoxelSize);
@@ -100,11 +102,19 @@ SphereContact sphere_deepest_contact(const World& world, vec3 pos, float r) {
                 bestCx = wrap_macro(cx);
                 bestCy = wrap_macro(cy);
                 bestCz = wrap_macro(cz);
+                bestSx = sx;
+                bestSy = sy;
+                bestSz = sz;
             }
         }
     }
+    // Материал КОНТАКТНОГО СУБВОКСЕЛЯ, не клетки (закон двух масштабов S2:
+    // клеточный тип — кэш, на страничных клетках он врёт про атом; аудит
+    // 2026-08-25: точный субвоксель находился и выбрасывался, а твёрдость/
+    // трение/отскок каждого тела о мир брались у клетки).
     if (best.depth >= 0.0f)
-        best.mat = world.grid().cell(bestCx, bestCy, bestCz);
+        best.mat = sub_material_at(world, bestCx, bestCy, bestCz, bestSx,
+                                   bestSy, bestSz);
     return best;
 }
 

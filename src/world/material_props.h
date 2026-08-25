@@ -113,11 +113,10 @@ inline constexpr float kMatDensity[kMatCount] = {
     1875.0f   // 37 rubble_glass
 };
 
-// Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
-inline constexpr float kSubVoxelVolumeM3 = 0.25f * 0.25f * 0.25f;
-inline float material_subvoxel_mass_kg(CellType t) {
-    return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
-}
+// (material_subvoxel_mass_kg СНЕСЁН аудитом 2026-08-25 решением владельца:
+// ноль вызывающих — детач/рыхлое массу атомов не считает; закон «масса =
+// плотность × 0.25³» вернётся с эпиком цельных кусков-пропов, где он
+// обязателен для урона.)
 
 // СРЕДЫ (CANON S16, мир-автомат). Движение материи читает ТОЛЬКО параметры:
 //   flow      — доля, перетекающая вбок за подтик автомата: 0 = твёрдое

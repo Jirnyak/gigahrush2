@@ -162,7 +162,6 @@ constexpr int kWinH = 720;
 // Свет в руке — предмет: `flashlight` в слоте Tool идёт через `add_light`
 // с конусом и параллаксом от руки (см. ниже по файлу), и NPC получат тот же
 // путь. Разбор — [markoaudit/plans/headlamp-death.md].
-constexpr float kFillStrength = 0.02f;  // sunDir.w, dark subterranean backstop
 constexpr float kAmbient = 0.06f;       // fog.w, scales the atmospheric hemispheric term
 // How much of the DIRECT light (grid + fill) baked AO is allowed to occlude.
 // Ambient is always fully occluded; this is the share of the lamp, and it is a dial
@@ -7795,7 +7794,11 @@ int main(int argc, char** argv) {
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
-                    if (pushBodies.size() >= gpu::kMaxPushBodies) break;
+                    if (pushBodies.size() >= gpu::kMaxPushBodies) {
+                        // S11: переполнение вслух (кричит upload_bodies —
+                        // здесь только не собираем лишнего).
+                        break;
+                    }
                 }
                 verletPass.upload_bodies(
                     pushBodies.data(),
@@ -8022,7 +8025,12 @@ int main(int argc, char** argv) {
 
             gpu::CubePush push{};
             push.viewProj = mat4_mul(camMat.proj, camMat.view);
-            push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
+            // «Солнца» нет (решение владельца 2026-08-25, S15): лейна глушится
+            // единичным вектором с нулевой силой (нормализация в шейдерах не
+            // делит на ноль); снос самой лейны — лейаут-хирургией К5 вместе
+            // с camPos.w/fog.z (урок 9a2b5214: пуш-блок правится с обеих
+            // сторон разом).
+            push.sunDir = vec4{0.0f, 0.0f, 1.0f, 0.0f};
             // w = 0: лейна мертва с гибели налобника (S5). Ноль, а не мусор —
             // чтобы шейдер, случайно прочитавший её, не получил свет из воздуха.
             push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z, 0.0f};

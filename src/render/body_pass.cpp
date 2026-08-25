@@ -353,7 +353,20 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
         } else {
             inst.rot = vec4{0.0f, 0.0f, 0.0f, 1.0f};
         }
-        if (cubes.size() + spheres.size() >= instanceCapacity_) break;
+        if (cubes.size() + spheres.size() >= instanceCapacity_) {
+            // S11: молчаливое обрезание по порядку вставки запрещено —
+            // переполнение кричит (аудит 2026-08-25; сосед verlet кричал,
+            // этот кран молчал).
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::fprintf(stderr,
+                             "[body] INSTANCE CAP: %u тел не влезли, хвост "
+                             "не рисуется\n",
+                             instanceCapacity_);
+            }
+            break;
+        }
         (isSphere ? spheres : cubes).push_back(inst);
     }
     const std::uint32_t nCubes = static_cast<std::uint32_t>(cubes.size());

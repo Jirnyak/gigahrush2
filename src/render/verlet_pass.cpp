@@ -415,6 +415,18 @@ void VerletPass::upload_bodies(const vec4* bodies, std::uint32_t count) {
         bodyCount_ = 0;
         return;
     }
+    if (count > kMaxPushBodies) {
+        // S11: обрезание вслух (аудит 2026-08-25) — 513-е тело молча
+        // переставало толкать провода.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::fprintf(stderr,
+                         "[verlet] PUSH-BODY CAP: %u > %u, хвост толпы не "
+                         "толкает антураж\n",
+                         count, kMaxPushBodies);
+        }
+    }
     bodyCount_ = count < kMaxPushBodies ? count : kMaxPushBodies;
     if (bodyCount_ > 0)
         std::memcpy(bodies_.mapped, bodies, sizeof(vec4) * bodyCount_);

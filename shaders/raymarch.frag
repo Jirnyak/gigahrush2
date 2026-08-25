@@ -916,14 +916,14 @@ void main() {
                   d, pc.fog.x, directDiffuse, directSpec);
 #endif
 
-    float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
+    // Направленный fill вырезан 2026-08-25 — солнца нет (S15).
 
     float hemi = 0.5 + 0.5 * n.z;
     vec3 amb = pc.fog.w * mix(vec3(0.025, 0.022, 0.018), vec3(0.055, 0.048, 0.040), hemi);
 
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + directSpec * aoDirect;
+    vec3 lit = albedo * (amb * ao + directDiffuse * aoDirect) + directSpec * aoDirect;
 
     // Светоматериал светится сам ([ddalight.md]): нарисованный неон читается
     // и в полной тьме; сам СВЕТ от него в сетку кладёт бейк этажа.

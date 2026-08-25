@@ -615,7 +615,8 @@ void main() {
     surface_light(vWorldPos, n, V, specPow, specIntensity, pc.torus.x,
                   d, pc.fog.x, directDiffuse, directSpec);
 
-    float fill = pc.sunDir.w * max(dot(n, normalize(pc.sunDir.xyz)), 0.0);
+    // Направленный fill («солнце») ВЫРЕЗАН решением владельца 2026-08-25:
+    // в Гигахруще нет солнца (S15) — свет только лампы + ambient.
 
     // World +Z as "up" is a render-local aesthetic choice, not a claim about
     // gravity — gravity is a vector and lives in the sim (world.gravity()).
@@ -625,7 +626,7 @@ void main() {
 
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
-    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + directSpec * aoDirect;
+    vec3 lit = albedo * (amb * ao + directDiffuse * aoDirect) + directSpec * aoDirect;
 
     // Светоматериал светится сам ([ddalight.md]): нарисованный неон читается
     // и в полной тьме; сам СВЕТ от него в сетку кладёт бейк этажа.

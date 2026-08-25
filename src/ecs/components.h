@@ -40,9 +40,9 @@ struct AABB {
 // FILLED FROM ONE UNIT. Every content table spells mass as `mass_g`, whole GRAMS
 // in a uint32 — mobs.csv, props.csv and items.csv alike (2026-08-07; before that
 // props meant grams and mobs meant kg x10 in the same 16 bits, which capped a
-// prop at 65.5 kg while mob rows already carried 900). Debris comes from
-// materials.csv density via `material_subvoxel_mass_kg`, and an NPC body from its
-// stature via `body_mass_kg`.
+// prop at 65.5 kg while mob rows already carried 900). An NPC body comes from its
+// stature via `body_mass_kg`. (Массы обломков в коде НЕТ — закон «плотность
+// × 0.25³» вернётся с эпиком цельных кусков-пропов; аудит 2026-08-25.)
 //
 // A BODY'S MASS INCLUDES WHAT IT CARRIES. `encumbrance_step` ([encumbrance.h])
 // recomputes body + inventory, which is why a loaded fall hurts more and a loaded

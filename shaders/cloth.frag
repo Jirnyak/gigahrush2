@@ -25,8 +25,9 @@ layout(location = 0) out vec4 outColor;
 void main() {
     const vec3 canvas = vec3(0.26, 0.23, 0.18);
     vec3 N = normalize(vNormal);
-    float lam = 0.55 + 0.45 * abs(dot(N, normalize(pc.sunDir.xyz)));
+    // Ламберт от «солнца» вырезан 2026-08-25 — солнца нет (S15): ткань
+    // освещают лампы (dressing_light) + плоский ambient.
     vec3 irr = dressing_light(vWorldPos, N, 1.0, pc.torus.x);
-    vec3 lit = canvas * (lam * pc.fog.w + irr);
+    vec3 lit = canvas * (pc.fog.w + irr);
     outColor = vec4(mix(lit, vec3(0.0), vFog), 1.0);
 }

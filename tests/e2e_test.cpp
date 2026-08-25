@@ -1428,10 +1428,11 @@ static void test_t2_f9_04_invalid_regime_enum_safety() {
     CHECK(f.axis == 2 && f.upSign == 1 && !f.pull);
 }
 
-static void test_t2_f9_05_gravity_field_null_region_callback() {
+static void test_t2_f9_05_gravity_field_at_returns_global() {
+    // Крюк RegionFn СНЕСЁН аудитом 2026-08-25 (решение владельца): at()
+    // возвращает global всегда; Custom зарезервирован, механизма нет.
     GravityField g{};
     g.global = vec3{1.0f, 2.0f, 3.0f};
-    g.region = nullptr;
     vec3 out = g.at(vec3{100.0f, 200.0f, 300.0f});
     CHECK(approx_eq(out.x, 1.0f) && approx_eq(out.y, 2.0f) && approx_eq(out.z, 3.0f));
 }
@@ -2418,7 +2419,7 @@ int main() {
     std::fprintf(stderr, "[e2e] test_t2_f9_04_invalid_regime_enum_safety\n");
     test_t2_f9_04_invalid_regime_enum_safety();
     std::fprintf(stderr, "[e2e] test_t2_f9_05_gravity_field_null_region_callback\n");
-    test_t2_f9_05_gravity_field_null_region_callback();
+    test_t2_f9_05_gravity_field_at_returns_global();
 
     // F10 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f10_01_exact_half_period_boundary\n");
