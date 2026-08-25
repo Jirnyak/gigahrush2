@@ -9,7 +9,6 @@
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
-    vec4 sunDir;
     vec4 camPos;
     vec4 fog;
     vec4 torus;

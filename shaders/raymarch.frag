@@ -47,6 +47,7 @@ layout(location = 0) out vec4 outColor;
 
 // Per-material family + measured amplitude, GENERATED from data/materials.csv.
 #include "material_surface.glsl"
+#include "surface_lib.glsl" // общие шум/ambient/spec (дедуп К5)
 
 #define GIGA_VOLUMETRIC_GRID_BINDINGS
 #include "volumetric_fog.glsl" // set 1: the light grid, same as cube.frag
@@ -84,7 +85,6 @@ const float kTexRepeat = 0.5;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
-    vec4 sunDir;   // xyz = direction toward the fill light, w = fill strength
     vec4 camPos;   // xyz = camera world position, w = МЁРТВАЯ ЛЕЙНА (нуль)
     vec4 fog;      // x = fog start, y = fog end, z = МЁРТВАЯ ЛЕЙНА, w = ambient
     vec4 torus;    // x = wrap period; y = AO direct share; z = albedo tex mask;
@@ -456,27 +456,6 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
 // == mesher and cube.frag's world half are deleted) ===========================
 // =============================================================================
 
-float hash21(vec2 p) {
-    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
-}
-
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float grain(vec2 uv) {
-    return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
-}
-
 float seam(vec2 uv) {
     vec2 e = abs(fract(uv) - 0.5);
     float m = max(e.x, e.y);
@@ -502,16 +481,6 @@ const float kNormRib   = 1.4145;
 const float kNormStud  = 2.518;
 const float kMeanStud  = 0.2331;
 const float kNormShade = 2.448;
-
-float mottle(float sigma, float n) {
-    return exp(sigma * n - 0.5 * sigma * sigma);
-}
-
-float resolved(float px, float freq) {
-    return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
-}
-
-
 
 float surface(uint mat, vec2 uv, vec3 aw, float px, float g) {
     uint id = min(mat, kMatSurfaceCount - 1u);
@@ -924,8 +893,7 @@ void main() {
 
     // Направленный fill вырезан 2026-08-25 — солнца нет (S15).
 
-    float hemi = 0.5 + 0.5 * n.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.025, 0.022, 0.018), vec3(0.055, 0.048, 0.040), hemi);
+    vec3 amb = hemi_ambient(n, pc.fog.w); // единая шкала ambient (К5)
 
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
@@ -947,16 +915,14 @@ void main() {
     float samosborPulse = ub.timeParams.y;
     float timeSec = ub.timeParams.x;
 
-    vec4 fogVol = march_volumetric_fog(
+    float fogT = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
         min(d, pc.fog.y),
         gl_FragCoord.xy,
-        pc.sunDir.xyz,
-        pc.sunDir.w,
         samosborPulse
     );
-    lit = lit * fogVol.a + fogVol.rgb;
+    lit = lit * fogT;
 
     // СРЕДЫ (инкремент 6): поглощение Бэра по накопленной оптической глубине
     // луча — вода синеет с толщей, газ даёт цветную дымку своим альбедо.

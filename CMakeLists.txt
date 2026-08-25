@@ -348,7 +348,7 @@ set(_giga_spv_files "")
 # leaves the stale .spv in place, and the change looks like it did nothing. Kept an
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
-set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
+set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/surface_lib.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
 foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
     # raymarch.frag — потребитель полурезного света (сэмплит полупасс вместо
     # собственного surface_light); производитель — raymarch_light ниже.

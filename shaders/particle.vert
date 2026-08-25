@@ -19,7 +19,6 @@ layout(std430, set = 0, binding = 0) readonly buffer Pool { Particle p[]; } pb;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
-    vec4 sunDir;
     vec4 camPos;
     vec4 fog;
     vec4 torus;

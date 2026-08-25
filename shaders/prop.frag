@@ -12,6 +12,7 @@ layout(location = 6) flat in uint  vFlags;
 layout(location = 7) flat in float vAnimPhase;
 
 #include "material_surface.glsl"
+#include "surface_lib.glsl" // общие шум/ambient/spec (дедуп К5)
 
 #define GIGA_VOLUMETRIC_GRID_BINDINGS
 #include "volumetric_fog.glsl"
@@ -24,7 +25,6 @@ layout(location = 7) flat in float vAnimPhase;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
-    vec4 sunDir;
     vec4 camPos;
     vec4 fog;
     vec4 torus; // w = uTime (seconds)
@@ -33,35 +33,6 @@ layout(push_constant) uniform Push {
 layout(location = 0) out vec4 outColor;
 
 const float kGamma = 2.2;
-
-float hash21(vec2 p) {
-    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
-}
-
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float grain(vec2 uv) {
-    return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
-}
-
-float mottle(float sigma, float n) {
-    return exp(sigma * n - 0.5 * sigma * sigma);
-}
-
-float resolved(float px, float freq) {
-    return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
-}
 
 const uint kFamGeneric = 0u;
 const uint kFamPlaster = 1u;
@@ -234,8 +205,10 @@ void main() {
     // materials.csv, если нужен по вкусу владельца.
 
 
-    float hemi = 0.5 + 0.5 * n_shading.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
+    // ЕДИНАЯ шкала ambient (К5, аудит 2026-08-25): прежние числа были в
+    // 4 РАЗА ярче стен без строки обоснования — дрейф копии, не решение.
+    // Пропы теперь живут в той же полусфере, что мир и тела.
+    vec3 amb = hemi_ambient(n_shading, pc.fog.w);
 
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
@@ -252,16 +225,14 @@ void main() {
     float samosborPulse = clamp(pc.torus.z, 0.0, 1.0);
 
     // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
-    vec4 fogVol = march_volumetric_fog(
+    float fogT = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
         min(d, pc.fog.y),
         gl_FragCoord.xy,
-        pc.sunDir.xyz,
-        pc.sunDir.w,
         samosborPulse
     );
-    lit = lit * fogVol.a + fogVol.rgb;
+    lit = lit * fogT;
 
     // Emissive term with time-based animation and Samosbor pulse scaling
     float animEmissive = compute_animated_emissive(vEmissive, vFlags & 7u, vWorldPos, vAnimPhase, timeSec, samosborPulse);

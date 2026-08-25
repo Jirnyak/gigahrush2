@@ -1,6 +1,8 @@
 #ifndef VOLUMETRIC_FOG_GLSL
 #define VOLUMETRIC_FOG_GLSL
 
+#include "surface_lib.glsl" // hash21 — единый не-sin хеш (К5)
+
 // volumetric_fog.glsl — ЕДИНЫЙ заголовок света: универсальная запись источника
 // (точка/конус — один структ), world-aligned light grid на весь тор, прямой
 // свет поверхностям (surface_light) и объёмное рассеяние в дымке
@@ -264,22 +266,29 @@ float sample_volumetric_fog_density(vec3 pos) {
     vec2 i10 = mod(i + vec2(1.0, 0.0), cells);
     vec2 i01 = mod(i + vec2(0.0, 1.0), cells);
     vec2 i11 = mod(i + vec2(1.0, 1.0), cells);
-    float a = fract(sin(dot(i,   vec2(12.9898, 78.233))) * 43758.5453);
-    float b = fract(sin(dot(i10, vec2(12.9898, 78.233))) * 43758.5453);
-    float c = fract(sin(dot(i01, vec2(12.9898, 78.233))) * 43758.5453);
-    float d = fract(sin(dot(i11, vec2(12.9898, 78.233))) * 43758.5453);
+    // hash21 из surface_lib (К5): sin-хеш забракован в дереве за муар на
+    // части драйверов — тут жил его последний экземпляр. Периодичность
+    // тора цела: вход уже обёрнут mod(cells).
+    float a = hash21(i);
+    float b = hash21(i10);
+    float c = hash21(i01);
+    float d = hash21(i11);
     float mistNoise = mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 
     return baseDensity * (0.85 + 0.30 * mistNoise);
 }
 
-vec4 march_volumetric_fog(
+// Мгла: шумовая ПРОЗРАЧНОСТЬ вдоль луча (Beer-Lambert по 12 шагам шумовой
+// плотности + мгла самосбора). Fill-inscatter ВЫРЕЗАН аудитом 2026-08-25
+// (К5): его сила была sunDir.w, солнце убрано в ноль решением владельца —
+// член стал тождественным нулём, а 12 повторов его фазовой функции на
+// пиксель были мёртвой работой (гало ламп удалено ещё 2026-08-20).
+// Возврат свечения дымки, если захочется, — отдельным слоем, не сюда.
+float march_volumetric_fog(
     vec3 rayOrigin,
     vec3 rayDir,
     float maxDist,
     vec2 fragCoord,
-    vec3 fillDir,
-    float fillStrength,
     float samosborPulse
 ) {
     // Step-count-invariant (measured 2026-08-03: 12 vs 24 steps, p99 frame
@@ -288,7 +297,6 @@ vec4 march_volumetric_fog(
     float jitter = ign_jitter(fragCoord);
     float stepSize = maxDist / float(kNumSteps);
 
-    vec3 inscatter = vec3(0.0);
     float transmittance = 1.0;
     // Dynamic extinction scaling when Samosbor hazard strikes (samosbor.pulse)
     float kAbsorption = 0.035 * (1.0 + clamp(samosborPulse, 0.0, 1.0) * 3.5);
@@ -296,41 +304,11 @@ vec4 march_volumetric_fog(
     for (int i = 0; i < kNumSteps; ++i) {
         float t = (float(i) + jitter) * stepSize;
         if (t >= maxDist) break;
-
-        vec3 p = rayOrigin + rayDir * t;
-
-        // Sample fog density at current ray position
-        float density = sample_volumetric_fog_density(p);
-        float stepExtinction = density * kAbsorption * stepSize;
-
-        // Apply Beer-Lambert law
-        float stepTransmittance = exp(-stepExtinction);
-
-        // 1. Fill light ambient scattering
-        float fillCos = dot(-rayDir, normalize(fillDir));
-        float fillPhase = henyey_greenstein_phase(fillCos, 0.25);
-        vec3 fillColor = vec3(0.20, 0.22, 0.28) * (fillStrength * fillPhase * 0.15);
-
-        // 2. Ламповый член дымки (гало вокруг источников; god rays жили тут
-        // же) УДАЛЁН решением владельца 2026-08-20 — «минимум систем, ядро
-        // отполировать»: поверхностный свет несёт картинку целиком, а цикл
-        // «12 шагов × лампы клетки на КАЖДЫЙ пиксель» был половиной
-        // перерасхода кадра (замер вычитанием: без него худший зал 25-30 →
-        // 30-60 fps, вместе со ступенями теней 4/2/1 — 60-80). Возврат гало —
-        // отдельным слоем (например, в полразрешения) поверх этого члена, не
-        // в ядро. Дымка осталась: fill-рассеяние, шум плотности, мгла
-        // самосбора; дистанционный туман — другая формула (distance_fog).
-        vec3 totalStepLight = fillColor;
-
-        // In-scattering integral evaluation
-        vec3 stepInscatter = totalStepLight * density * transmittance * (1.0 - stepTransmittance);
-        inscatter += stepInscatter;
-        transmittance *= stepTransmittance;
-
+        float density = sample_volumetric_fog_density(rayOrigin + rayDir * t);
+        transmittance *= exp(-density * kAbsorption * stepSize);
         if (transmittance < 0.01) break; // Early ray termination
     }
-
-    return vec4(inscatter, transmittance);
+    return transmittance;
 }
 #endif // GIGA_VOLUMETRIC_GRID_BINDINGS
 

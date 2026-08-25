@@ -36,7 +36,6 @@ struct VulkanDevice;
 // lighting knobs deliberately ride in otherwise-dead w lanes for the same reason.
 struct CubePush {
     mat4 viewProj;
-    vec4 sunDir;    // xyz = direction toward the fill light, w = fill strength
     vec4 camPos;    // xyz = camera world position (toroidal placement, fog),
                     // w = МЁРТВАЯ ЛЕЙНА, пушится нулём
     vec4 fog;       // x = fog start dist, y = fog end dist (fades to black),
@@ -56,7 +55,7 @@ struct CubePush {
                     // w = uTime (seconds) / packed normal|roughness masks in
                     //     the textured modules (floatBitsToUint)
 };
-static_assert(sizeof(CubePush) == 128,
+static_assert(sizeof(CubePush) == 112, // mat4 64 + 3 vec4 (sunDir снесён К5)
               "CubePush must not exceed the 128-byte guaranteed push-constant "
               "size; move new parameters to a uniform buffer instead");
 
