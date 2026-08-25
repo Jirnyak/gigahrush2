@@ -1619,6 +1619,39 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
 
 } // namespace
 
+// КЭШ СЛИТЫХ ИНСТАНСОВ (аудит 2026-08-25, К1-6): пока падают куски
+// антуража, кадр раньше пересобирал ВЕСЬ список (ECS-вью по пропам + проба
+// живости КАЖДОГО инстанса антуража об сетку) 8 секунд после любого
+// выстрела — кандидат в хитчи. Сбор (дорогой) и эмиссия (дешёвая) разъяты:
+// кэш строится только на реальную смену набора (propPassNeedsRebuild),
+// падающие кадры платят memcpy кэша + свои несколько кусков.
+static std::vector<std::pair<std::uint8_t, gpu::PropInstance>>
+    g_propMergeCache;
+
+static void emit_prop_instances(
+    gpu::PropPass& propPass,
+    const std::vector<game::DetachedPiece>* falling) {
+    propPass.clear_instances();
+    for (const auto& [shape, pi] : g_propMergeCache)
+        propPass.add_instance(static_cast<gpu::PropShape>(shape), pi);
+    // ОТРЕЗАННЫЕ куски в полёте ([antourage.h] DetachedPiece): те же шейпы,
+    // трансформ — от падающего тела; живут в списке ровно пока летят —
+    // рендеру не нужен второй путь и второй шейдер.
+    if (falling != nullptr) {
+        for (const game::DetachedPiece& d : *falling) {
+            gpu::PropInstance pi{};
+            pi.origin = d.pos;
+            pi.yaw = d.yaw;
+            pi.scale = d.scale;
+            pi.matId = d.matId;
+            pi.color = kMaterial[d.matId < kMatCount ? d.matId : 0];
+            if (d.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
+                propPass.add_instance(static_cast<gpu::PropShape>(d.shape),
+                                      pi);
+        }
+    }
+}
+
 static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   gpu::PropPass& propPass,
                                   const game::AntourageBake* ab,
@@ -1626,7 +1659,10 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   std::vector<vec3>* dripEmitters = nullptr,
                                   const std::vector<game::DetachedPiece>* falling =
                                       nullptr) {
-    propPass.clear_instances();
+    g_propMergeCache.clear();
+    auto cache_instance = [](std::uint8_t shape, const gpu::PropInstance& pi) {
+        g_propMergeCache.emplace_back(shape, pi);
+    };
     static std::vector<game::PropMeshInstance> insts;
     insts.clear();
     game::collect_static_prop_mesh_instances(reg, layer, insts);
@@ -1641,9 +1677,12 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
         pi.emissive  = m.emissive;
         pi.flags     = m.flags;
         pi.animPhase = m.animPhase;
-        propPass.add_instance(static_cast<gpu::PropShape>(m.shape), pi);
+        cache_instance(m.shape, pi);
     }
-    if (ab == nullptr) return;
+    if (ab == nullptr) {
+        emit_prop_instances(propPass, falling);
+        return;
+    }
     // UNIVERSAL antourage instances ([game/antourage/antourage.h]): the core
     // renders whatever a module emitted — shape + transform + material +
     // anchors — with zero knowledge of what it depicts. Aliveness reads the
@@ -1675,25 +1714,10 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   : kMaterial[it.matId < kMatCount ? it.matId
                                                                    : 0];
         if (it.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
-            propPass.add_instance(static_cast<gpu::PropShape>(it.shape), pi);
+            cache_instance(it.shape, pi);
     }
 
-    // SEVERED pieces still in the air ([antourage.h] DetachedPiece): the same
-    // shapes, drawn from the falling body's own transform instead of the bake's.
-    // They live in the instance list exactly as long as they are falling, so the
-    // renderer needs no second path and no second shader.
-    if (falling != nullptr) {
-        for (const game::DetachedPiece& d : *falling) {
-            gpu::PropInstance pi{};
-            pi.origin = d.pos;
-            pi.yaw = d.yaw;
-            pi.scale = d.scale;
-            pi.matId = d.matId;
-            pi.color = kMaterial[d.matId < kMatCount ? d.matId : 0];
-            if (d.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
-                propPass.add_instance(static_cast<gpu::PropShape>(d.shape), pi);
-        }
-    }
+    emit_prop_instances(propPass, falling);
 }
 
 // Kick off this floor's navigation bake on a worker thread — the Fresh mode of
@@ -7541,7 +7565,9 @@ int main(int argc, char** argv) {
         if (!antourageFalling.empty() && activeLayer != kInvalidLayer) {
             game::antourage_detach_step(stack.layer(activeLayer),
                                         antourageFalling, frameDt);
-            propPassNeedsRebuild = true;
+            // propPassNeedsRebuild НЕ взводится: летящие куски эмитятся из
+            // кэша слитых инстансов (К1-6), полная пересборка — только на
+            // реальную смену набора.
         }
         static std::vector<std::uint8_t> wireAliveFrame;
         static std::vector<std::uint8_t> wirePinsFrame;
@@ -7699,15 +7725,26 @@ int main(int argc, char** argv) {
 
             // (Интеграция падающих ног ушла ИЗ скобки в сим-хвост выше —
             // аудит 2026-08-25; здесь остался только репак скинов.)
-            if (propPassNeedsRebuild) {
-                const auto ctPs = std::chrono::steady_clock::now();
-                merge_ecs_prop_meshes(reg, activeLayer, propPass,
-                                      streamer.antourage_at_layer(registry, activeLayer),
-                                      stack.layer(activeLayer), &dripEmitters,
-                                      &antourageFalling);
-                const float psMs = carve_ms_since(ctPs);
-                g_carveT.propSkinMs += psMs;
-                g_frameMark.propSkinMs += psMs;
+            // Полный сбор — ТОЛЬКО на смену набора; кадры с летящими
+            // кусками эмитят из кэша (К1-6: раньше 8 с после выстрела кадр
+            // пересобирал всё с пробами сетки). Хвостовой кадр после
+            // приземления последнего куска эмитит ещё раз — убрать его скин.
+            {
+                const bool fallingActive = !antourageFalling.empty();
+                static bool fallingWasActive = false;
+                if (propPassNeedsRebuild) {
+                    const auto ctPs = std::chrono::steady_clock::now();
+                    merge_ecs_prop_meshes(reg, activeLayer, propPass,
+                                          streamer.antourage_at_layer(registry, activeLayer),
+                                          stack.layer(activeLayer), &dripEmitters,
+                                          &antourageFalling);
+                    const float psMs = carve_ms_since(ctPs);
+                    g_carveT.propSkinMs += psMs;
+                    g_frameMark.propSkinMs += psMs;
+                } else if (fallingActive || fallingWasActive) {
+                    emit_prop_instances(propPass, &antourageFalling);
+                }
+                fallingWasActive = fallingActive;
             }
             // Only when the dressing SET actually changed — never merely because
             // a rigid leg is mid-fall.
