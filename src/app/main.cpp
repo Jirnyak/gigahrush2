@@ -31,6 +31,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "imgui.h"
@@ -3538,28 +3539,52 @@ int main(int argc, char** argv) {
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
-            // СУДЬЯ СВЯЗНОСТИ НА ШВЕ (§60/§61-семья, баг владельца
-            // 2026-08-26 «висящие атомы»): автомат — писатель грида, но его
-            // ходы (крошка уехала, одиночка истаяла) рвали мостики без
-            // развёртки отвязки — соседи висели в пустоте до следующего
-            // карва рядом. Лимит 64: судья ловит ОСКОЛКИ у исчезнувших
-            // мостиков; больший компонент считается опёртым — тот же смысл,
-            // что у карв-лимита «атомы записи + 64». Долги конверсии — как
-            // у любого писателя: зеркало + пробуждение (упадёт автоматом).
-            if (!mediumMaskChanged.empty()) {
-                static CarveScratch judgeScratch;
-                static CarveResult judgeResult;
-                if (detach_judge_cells(stack.layer(activeLayer),
-                                       mediumMaskChanged.data(),
-                                       mediumMaskChanged.size(), 64,
-                                       judgeScratch, judgeResult) > 0) {
-                    voxelMirror.mark_dirty(judgeResult.dirtyCells.data(),
-                                           judgeResult.dirtyCells.size());
-                    if (mediumPass.ready())
-                        mediumPass.wake_cells(judgeResult.dirtyCells.data(),
-                                              judgeResult.dirtyCells.size(),
-                                              stack.layer(activeLayer),
-                                              voxelMirror);
+            // СУДЬЯ СВЯЗНОСТИ — ПОСЛЕ ОСАДКИ (§60/§61-семья, «висящие
+            // атомы»; v2 2026-08-26: судить В ПОЛЁТЕ нельзя — вердикты идут
+            // из CPU-канона, отстающего от GPU на кольцо шва, и конверсия
+            // дёргала падающий атом назад — глитч, пойманный владельцем).
+            // Клетка судится, когда её маски ПЕРЕСТАЛИ меняться: изменение
+            // ставит/обновляет штамп, суд — по тишине в kJudgeQuietFrames.
+            // Вывод срока: сон автомата 16 подтиков ~ 4 кадра + глубина
+            // кольца шва 3 = 7, округлено до 8. Связность судят у покоя,
+            // не у полёта — и по смыслу, и по механике шва.
+            {
+                constexpr std::uint32_t kJudgeQuietFrames = 8;
+                static std::unordered_map<std::uint32_t, std::uint32_t>
+                    judgePending;
+                static std::uint32_t judgeFrame = 0;
+                ++judgeFrame;
+                for (std::uint32_t ci : mediumMaskChanged)
+                    judgePending[ci] = judgeFrame;
+                if (!judgePending.empty()) {
+                    static std::vector<std::uint32_t> ripe;
+                    ripe.clear();
+                    for (auto it = judgePending.begin();
+                         it != judgePending.end();) {
+                        if (judgeFrame - it->second >= kJudgeQuietFrames) {
+                            ripe.push_back(it->first);
+                            it = judgePending.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                    if (!ripe.empty()) {
+                        static CarveScratch judgeScratch;
+                        static CarveResult judgeResult;
+                        if (detach_judge_cells(stack.layer(activeLayer),
+                                               ripe.data(), ripe.size(), 64,
+                                               judgeScratch,
+                                               judgeResult) > 0) {
+                            voxelMirror.mark_dirty(
+                                judgeResult.dirtyCells.data(),
+                                judgeResult.dirtyCells.size());
+                            if (mediumPass.ready())
+                                mediumPass.wake_cells(
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size(),
+                                    stack.layer(activeLayer), voxelMirror);
+                        }
+                    }
                 }
             }
             // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
