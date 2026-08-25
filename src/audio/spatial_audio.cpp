@@ -104,8 +104,12 @@ void spatial_evaluate(const vec3& listenerPos, float listenerYaw, float listener
         return;
     }
 
-    // Voxel ray-march solid blocker count query
-    int blockers = los_blockers(grid, listenerPos, emitterPos);
+    // Толщина материи СУБВОКСЕЛЬНО (аудит 2026-08-25, К1-9): клеточный
+    // los_blockers на лепленом этаже (полных клеток 0.4%) почти никогда не
+    // видел заслона — окклюзия была no-op. sub_thickness_cells отдаёт
+    // «клетки материи» в той же единице, что калибровка кривых ниже
+    // (полная клетка пути = 1), тонкая стена честно даёт 1.
+    int blockers = sub_thickness_cells(grid, listenerPos, emitterPos);
     outCutoffHz = compute_occlusion_cutoff(blockers);
     outWallAtten = compute_wall_attenuation(blockers);
 

@@ -440,34 +440,12 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cull.comp.spv)
 # последний носитель выпиленного аналитического налобника. Текстурные пропсы,
 # когда понадобятся, — вариант prop.frag через -D, как cube_tex ниже.
 
-# cube.frag compiled a SECOND time, with -DGIGA_ALBEDO_ARRAY, into cube_tex.frag.spv.
-#
-# ONE SOURCE, TWO VARIANTS, and the split is deliberate. The world pass samples the six
-# photographic albedo maps through a sampler2DArray; the body pass shares the same
-# fragment source and must NOT, because bodies carry material id 0 and there is no
-# texture for them. A single variant would force every body draw to bind a descriptor
-# set it never reads — and this engine's two pipeline layouts are push-constant only
-# today, which is the property the render audit measured and liked.
-#
-# Compiling one file twice rather than forking it into cube_tex.frag keeps the surface
-# maths in ONE place. That matters here specifically: the procedural surface is
-# calibrated per material to a MEASURED luminance CV from data/materials.csv, so a
-# forked copy would drift from the generator that produces material_surface.glsl and
-# nothing would catch it.
-#
-# NOT part of the foreach above, because that loop's OUTPUT is derived from its input
-# name and this one deliberately differs. `cube_pass.cpp` fails LOUDLY at init if this
-# .spv is missing and names this block in the error — which is how it was found: a
-# missing shader is otherwise a RUNTIME failure behind a perfectly green build, the exact
-# trap AGENTS.md warns about for new shaders.
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/cube_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY ${_giga_shader_defs}
-        ${CMAKE_SOURCE_DIR}/shaders/cube.frag
-        -o ${_giga_spv_dir}/cube_tex.frag.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${_giga_glsl_includes}
-    COMMENT "glslc cube.frag -DGIGA_ALBEDO_ARRAY -> cube_tex.frag.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
+# cube_tex.frag.spv (cube.frag + -DGIGA_ALBEDO_ARRAY) УДАЛЁН аудитом
+# 2026-08-25 (К1-15): компилировался каждый билд, но ни один пасс его не
+# загружал (grep cube_tex по src/ пуст), а комментарий обещал «cube_pass
+# fails LOUDLY if missing» — контракта в коде не существовало. Тот же класс
+# сироты, что prop_tex.frag выше. Текстурный вариант мира живёт в
+# raymarch.frag (сэмплеры под GIGA_ALBEDO_ARRAY), тела — cube.frag без -D.
 
 # raymarch.frag compiled a SECOND time, same scheme and same reason as
 # cube_tex.frag.spv above: the textured module statically uses the sampler

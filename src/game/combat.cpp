@@ -1374,7 +1374,22 @@ bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
         // purpose — it stays headless and pure ([AGENTS.md]). So the number
         // is asserted where it is measured: `test_grenade` block 7 prints
         // how many bodies the wall shielded, on every ctest run.
-        if (!los_clear(grid, at, cp)) return;
+        // Гейт осколка СУБВОКСЕЛЬНО (аудит 2026-08-25, К1-9): клеточный
+        // los_clear на лепленом этаже пропускал осколки сквозь тонкие стены
+        // (полных клеток 0.4%). Правило концов los_clear («свой карман не
+        // экранирует») сохраняется сдвигом старта на одну субъячейку вдоль
+        // луча: граната, лежащая НА полу, не глушится собственной опорой.
+        {
+            const vec3 seg{cp.x - at.x, cp.y - at.y, cp.z - at.z};
+            const float len = std::sqrt(dot(seg, seg));
+            if (len > kVoxelSize * 1.05f) {
+                const float skip = kVoxelSize * 1.05f / len;
+                const vec3 from{at.x + seg.x * skip, at.y + seg.y * skip,
+                                at.z + seg.z * skip};
+                SubRayHit frag;
+                if (sub_march(grid, from, cp, frag)) return;
+            }
+        }
         caught.push_back(Caught{cand, std::sqrt(d2)});
     };
     for (auto m : reg.view<const MobRef, const Transform>()) {

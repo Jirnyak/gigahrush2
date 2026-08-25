@@ -80,4 +80,10 @@ struct SubRayHit {
 bool sub_march(const MacroGrid& grid, const vec3& a, const vec3& b,
                SubRayHit& out);
 
+// Толщина материи вдоль [a,b] в клетках-эквивалентах (солид-субвоксели пути
+// / kSubDim, потолок вверх) — градуированный субвоксельный ответ для
+// окклюзии звука; та же DDA, что sub_march. Для событий и малых наборов —
+// не для тиковых свипов (тот же закон, что у sub_march выше).
+int sub_thickness_cells(const MacroGrid& grid, const vec3& a, const vec3& b);
+
 } // namespace giga

@@ -210,4 +210,57 @@ bool sub_march(const MacroGrid& grid, const vec3& a, const vec3& b,
     return false;
 }
 
+// Толщина материи вдоль отрезка В КЛЕТКАХ-ЭКВИВАЛЕНТАХ: счёт СОЛИДНЫХ
+// субвокселей на DDA-пути / kSubDim, с потолком вверх (тонкая лепленая
+// стена в 2 атома обязана дать 1, не 0). Заменяет клеточный los_blockers
+// у звука (аудит 2026-08-25, К1-9): клеточный предикат на лепленом этаже
+// (полных клеток 0.4%) почти никогда не видел заслона — окклюзия звука
+// была no-op. Та же DDA-шагалка, что sub_march — второго марша нет (S11),
+// отличие только в вопросе («сколько материи» против «первый контакт»).
+int sub_thickness_cells(const MacroGrid& grid, const vec3& a, const vec3& b) {
+    const vec3 d{b.x - a.x, b.y - a.y, b.z - a.z};
+    ivec3 sv{static_cast<int>(std::floor(a.x / kVoxelSize)),
+             static_cast<int>(std::floor(a.y / kVoxelSize)),
+             static_cast<int>(std::floor(a.z / kVoxelSize))};
+    int solidSteps = sub_solid(grid, sv) ? 1 : 0;
+
+    ivec3 stepDir{0, 0, 0};
+    vec3 tMax{0.0f, 0.0f, 0.0f};
+    vec3 tDelta{0.0f, 0.0f, 0.0f};
+    constexpr float kNever = 3.0e30f;
+    for (int i = 0; i < 3; ++i) {
+        const float di = axis(d, i);
+        if (di > -1e-9f && di < 1e-9f) {
+            axis(stepDir, i) = 0;
+            axis(tMax, i) = kNever;
+            axis(tDelta, i) = kNever;
+            continue;
+        }
+        const int s = di > 0.0f ? 1 : -1;
+        axis(stepDir, i) = s;
+        const float origin = axis(a, i);
+        const int c = axis(sv, i);
+        const float boundary =
+            static_cast<float>(s > 0 ? c + 1 : c) * kVoxelSize;
+        axis(tMax, i) = (boundary - origin) / di;
+        axis(tDelta, i) = kVoxelSize / std::fabs(di);
+    }
+    const int guard = 3 * kMacroDim * kSubDim + 3;
+    for (int i = 0; i < guard; ++i) {
+        int stepAxis = 0;
+        float best = axis(tMax, 0);
+        for (int k = 1; k < 3; ++k) {
+            if (axis(tMax, k) < best) {
+                best = axis(tMax, k);
+                stepAxis = k;
+            }
+        }
+        if (best > 1.0f) break;
+        axis(sv, stepAxis) += axis(stepDir, stepAxis);
+        axis(tMax, stepAxis) += axis(tDelta, stepAxis);
+        if (sub_solid(grid, sv)) ++solidSteps;
+    }
+    return (solidSteps + kSubDim - 1) / kSubDim; // потолок вверх
+}
+
 } // namespace giga

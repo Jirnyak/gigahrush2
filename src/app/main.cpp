@@ -451,9 +451,10 @@ struct CarveTiming {
 };
 static CarveTiming g_carveT;
 // CPU-цена мира-автомата в кадре (профиль по числам, закон дома): шов
-// назад (apply), протокол пробуждения (poll), запись подтиков (record).
+// назад (apply) и запись подтиков (record). Лейна poll УБИТА (К1-15,
+// аудит 2026-08-25): печатала вечный 0.00 — читалось «poll бесплатен»
+// вместо правды «poll не существует» (умер с CPU-протоколом).
 static float g_mediumApplyMs = 0.0f;
-static float g_mediumPollMs = 0.0f;
 static float g_mediumRecMs = 0.0f;
 static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<float, std::milli>(
@@ -2398,13 +2399,12 @@ int main(int argc, char** argv) {
     bool running = true;
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
-    // re-plan stagger ([ai.md] #12c) schedules each agent's next decision against
-    // an absolute deadline on this clock; it is frozen with the sim while paused.
-    // [[maybe_unused]]: its only consumer is the PARKED ai_step call below (ai.cpp
-    // is in tools/branch_port_pending/ pending adaptation to main's tables). Kept —
-    // it is advanced correctly every tick, ready for ai_step's return. MSVC did not
-    // warn; Clang -Wunused-but-set-variable does.
-    [[maybe_unused]] double simNow = 0.0;
+    // re-plan stagger ([ai.md] #12c) schedules each agent's next decision
+    // against an absolute deadline on this clock; frozen with the sim while
+    // paused. ЖИВАЯ: ai_step давно распаркован и читает её шестым аргументом
+    // — прежняя пометка «[[maybe_unused]]… PARKED» пережила эпоху и звала
+    // аудитора удалить живой узел (К1-15, аудит 2026-08-25).
+    double simNow = 0.0;
     std::uint64_t prevTicks = SDL_GetPerformanceCounter();
     const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
 
@@ -2473,11 +2473,6 @@ int main(int argc, char** argv) {
     // second writer of anyone's movement.
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
-    // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
-    // component in the HUD) during the branch merge, but the `shots += ...` RHS is a
-    // side-effecting call (it fires the gun), so the accumulator is kept rather than
-    // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
-    [[maybe_unused]] std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger& ledger = runState.ledger;
     // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
     // вклад и долг ([economy.h], [save.h] SAVBANK).
@@ -2512,10 +2507,6 @@ int main(int argc, char** argv) {
     // player only finds out about by losing a run.
     char saveLine[96] = {};
     std::uint64_t saveLineAt = 0;
-    // [[maybe_unused]]: superseded by RunLedger::banked (the HUD reads ledger.banked)
-    // during the branch merge; the `banked += deposit_valuables(...)` RHS still must
-    // run, so the local is kept. MSVC did not warn; Clang does.
-    [[maybe_unused]] std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
     game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
@@ -2559,10 +2550,9 @@ int main(int argc, char** argv) {
     // This is the first reader the nine authored craft_* columns in data/items.csv have
     // ever had: 446 items carried them and item_table.h:17 said in as many words
     // "crafting is not implemented".
-    // The utility AI's config and last-tick report. `enabled` defaults FALSE ([ai.h]):
-    // the system is wired, tested and dormant, and flipping this one bool is the whole
-    // switch — but read the note at the ai_step call site first, because it also needs
-    // ai_init to attach AiBrain and ai_release to clear the token safely.
+    // Конфиг utility-AI. `enabled` ЖИВЁТ true с включения толпы — прежняя
+    // проза «defaults FALSE… dormant» пережила эпоху и врала читателю
+    // (аудит 2026-08-25, К1-15): флаг не конфиг, а исторический рубильник.
     game::AiConfig aiCfg;
     aiCfg.enabled = true;   // utility AI live; brains attached in finish_floor_nav
     aiCfg.memory = true;    // second axis: needs a real AiMemory* at ai_step
@@ -2584,11 +2574,6 @@ int main(int argc, char** argv) {
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
-    // [[maybe_unused]]: the HUD prints `carried` (live inventory value), not this
-    // run-total, after the branch merge — but `loot += ...` wraps the container/pickup
-    // hooks that actually move the roubles, so the accumulator is kept. Clang warns,
-    // MSVC did not.
-    [[maybe_unused]] std::int32_t loot = 0;         // roubles swept up this run
     // Content-layer statuses (zhelemish / web / spore / govnyak). Slowed is the
     // velocity CAP in combat.h; this is the authored table that decides what
     // lands and for how long. Main-owned: Inventory is POD and status must not
@@ -3502,7 +3487,6 @@ int main(int argc, char** argv) {
                                        mediumMaskChanged.size());
             // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
             // (GPU-резидентная петля, решение владельца 2026-08-24).
-            g_mediumPollMs = 0.0f;
         }
 
         // --- fixed-step simulation ----------------------------------------
@@ -4493,10 +4477,11 @@ int main(int argc, char** argv) {
                 // игроком на тике 200 и печать метрики изотропии по
                 // квадрантам на тиках 600/1200/1800 — сверка растекания
                 // числами между коммитами без участия владельца.
-                if (std::getenv("GIGA_POUR")) {
+                static const char* kPourEnv = std::getenv("GIGA_POUR");
+                if (kPourEnv) {
                     if (simTick == 200 && reg.valid(player)) {
-                        const float pr = static_cast<float>(
-                            std::atof(std::getenv("GIGA_POUR")));
+                        const float pr =
+                            static_cast<float>(std::atof(kPourEnv));
                         consoleCtx.paintRadius = pr > 0.0f ? pr : 1.0f;
                         consoleCtx.paintMat = kMatWater;
                         std::fprintf(stderr, "[pour-probe] pouring at tick 200\n");
@@ -5198,7 +5183,9 @@ int main(int argc, char** argv) {
                 // same step. Nothing is dropped for a bake any more — the
                 // worker holds a snapshot, not the grid ([game/rebake.h]).
                 combatCarves.clear();
-                shots += game::player_ranged_step(reg, pool, activeLayer,
+                // Счёт выстрелов живёт в PlayerRanged::shots — локальный
+                // накопитель убит (К1-15), вызов остаётся: он стреляет.
+                game::player_ranged_step(reg, pool, activeLayer,
                                                   haveGun && attackHeld && shell.playing(),
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
@@ -5209,9 +5196,8 @@ int main(int argc, char** argv) {
                 // a sim tick like every other action, not on a frame.
                 if (throwWanted) {
                     throwWanted = false;
-                    if (shell.playing() && game::player_throw_step(reg, pool, activeLayer,
-                                                           true, simTick) > 0)
-                        ++shots;
+                    game::player_throw_step(reg, pool, activeLayer, true,
+                                            simTick);
                 }
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
@@ -5477,7 +5463,7 @@ int main(int argc, char** argv) {
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
                 if (got != 0) {
-                    loot += got;
+                    (void)got; // ценность считает carried; got — для лога ниже
                     // Picking a vest up must actually protect you.
                     game::sync_armour(reg, pool, player);
                 }
@@ -5491,7 +5477,7 @@ int main(int argc, char** argv) {
                             stack.layer(activeLayer).grid(), ptr_.pos)) {
                         if (const auto* nrx = reg.try_get<game::NpcRef>(player))
                             if (pool.valid(nrx->id))
-                                banked += game::deposit_valuables(
+                                game::deposit_valuables(
                                     pool.inventory(nrx->id), ledger);
                     }
                 }
@@ -6319,14 +6305,13 @@ int main(int argc, char** argv) {
                             macroSim.day(),
                             static_cast<unsigned long long>(macroStats.tick), feudHits,
                             relTick.kills, relTick.changes);
-                // The utility AI, and it reads ZERO on purpose while aiCfg.enabled is false
-                // — a dormant system that shows nothing is indistinguishable from a missing
-                // one, which is how the parked call rotted unnoticed for weeks. `ai/wander`
-                // is the single-writer split: those two must never both be non-zero for the
-                // same body on the same tick, and that is what suite_utilai measures. [ai.h]
-                ImGui::Text("ai %s | %u seen / %u replan / %u switch | own ai %u / wander %u"
+                // `ai/wander` — single-writer split: те двое не бывают
+                // ненулевыми на одном теле в один тик (suite_utilai). Ветка
+                // «off (dormant)» была недостижима (enabled константно true
+                // с включения толпы) — врущий тернарник убит (К1-15). [ai.h]
+                ImGui::Text("ai ON | %u seen / %u replan / %u switch | own ai %u / wander %u"
                             " | mem %u recall / %u filed / %u fled",
-                            aiCfg.enabled ? "ON" : "off (dormant)", aiTick.considered,
+                            aiTick.considered,
                             aiTick.replanned, aiTick.switches, aiTick.aiOwned,
                             aiTick.wanderOwned, aiTick.recalled, aiTick.remembered,
                             aiTick.memoryFled);
@@ -6694,7 +6679,7 @@ int main(int argc, char** argv) {
                     const std::uint16_t moved =
                         static_cast<std::uint16_t>(sl.count - unplaced);
                     if (moved == 0) return;  // сумка полна — остаток в ящике
-                    loot += game::item_def(sl.item).value * moved;
+                    // Ценность руками считает carried (живой инвентарь).
                     containerTake += game::item_def(sl.item).value * moved;
                     sl.count = unplaced;
                     if (sl.count == 0) sl = game::ItemSlot{};
@@ -7923,14 +7908,16 @@ int main(int argc, char** argv) {
                 // Числа каждый прогон (S11): раз в игровую секунду, пока
                 // есть живая материя или переполнение.
                 static std::uint64_t mediumLastLog = 0;
-                if (std::getenv("GIGA_MEDIUM_DBG") &&
+                static const bool kMediumDbg =
+                    std::getenv("GIGA_MEDIUM_DBG") != nullptr;
+                if (kMediumDbg &&
                     (mediumPass.live_count() > 0 || mediumPass.overflowed()) &&
                     simTick - mediumLastLog >= 125) {
                     mediumLastLog = simTick;
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, lazy %u, listTot %u, fade %u, substeps %llu | cpu ms: poll %.2f apply "
+                        "slept %u, lazy %u, listTot %u, fade %u, substeps %llu | cpu ms: apply "
                         "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
@@ -7938,7 +7925,6 @@ int main(int argc, char** argv) {
                         mediumPass.lazy_total(), mediumPass.list_total(),
                         mediumPass.fade_total(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
-                        static_cast<double>(g_mediumPollMs),
                         static_cast<double>(g_mediumApplyMs),
                         static_cast<double>(g_mediumRecMs),
                         mediumPass.overflowed() ? " [LIVE CAP OVERFLOW]" : "");
