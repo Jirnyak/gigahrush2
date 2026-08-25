@@ -302,6 +302,7 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     wokenTotal_ = list[2];
     sleptTotal_ = list[3];
     listTotal_ = list[4];
+    fadeTotal_ = list[7];
     wakeCapHit_ = list[5] != 0;
     if (list[4] > kRbSlotCap && !rbWindowWarned_) {
         rbWindowWarned_ = true;

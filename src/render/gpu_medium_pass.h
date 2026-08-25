@@ -138,6 +138,7 @@ public:
     bool overflowed() const noexcept { return overflow_; }
     std::uint32_t lazy_total() const noexcept { return lazyTotal_; }
     std::uint32_t list_total() const noexcept { return listTotal_; }
+    std::uint32_t fade_total() const noexcept { return fadeTotal_; }
     bool wake_cap_hit() const noexcept { return wakeCapHit_; }
     // Диагноз (GIGA_POUR): побывала ли клетка в применённых регионах шва.
     bool seam_seen(std::uint32_t ci) const { return seamSeen_.count(ci) != 0; }
@@ -187,6 +188,7 @@ private:
     std::uint32_t lazyTotal_ = 0; // ленивые материализации шва (диагноз)
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
+    std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)
     bool wakeCapHit_ = false;       // wake_next упирался в kListCap
     bool rbWindowWarned_ = false, wakeCapWarned_ = false;
     std::uint32_t lastCount_ = 0;

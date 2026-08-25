@@ -571,14 +571,34 @@ const uint kMaterialCsvRows = %du;
         fh.write(elements(mats, ["%du" % m["light_pass"] for m in mats], names))
         fh.write(");\n\n")
 
+        # ИСТАИВАНИЕ ОДИНОЧЕК (закон владельца 2026-08-25): подвижный атом
+        # без единого атома своего материала в блоке Марголуса тает роллом.
+        # Шанс обратен МАССЕ кванта (вывод, не назначение): масса = плотность
+        # × объём субвокселя 0.25³; калибровка — одинокий квант газа
+        # (3 кг/м³, 47 г) живёт ~секунду = 31.25 подтика (125 Гц / 4).
+        # p = C/масса, C = 47 г / 31.25 = 1.5 г  =>  p = 0.09375/плотность.
+        # Воздух (материал 0) — вытесняемая пустота, не истаивает.
+        kSubVolume = 0.25 ** 3
+        kGasRefDensity = 3.0
+        kLoneGasLifeSubsteps = 125.0 / 4.0
+        loneC = kGasRefDensity * kSubVolume / kLoneGasLifeSubsteps
+        def lone_fade(i, m):
+            mobile = m["flow"] > 0.0 or m["diffusion"] > 0.0
+            if i == 0 or not mobile or m["density"] <= 0.0:
+                return 0.0
+            return loneC / (m["density"] * kSubVolume)
         fh.write("// СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),\n"
-                 "// y = diffusion (газы; 1 = воздух). Читатель — автомат\n"
-                 "// материи; движение НЕ читает kMatPhase (метка для\n"
-                 "// геймплейных предикатов: 0 тв / 1 жид / 2 газ — S16.2).\n")
-        fh.write("const vec2 kMatMedium[%d] = vec2[%d](\n" % (n, n))
+                 "// y = diffusion (газы; 1 = воздух), z = шанс истаивания\n"
+                 "// ОДИНОЧКИ на подтик (закон 2026-08-25: атом без своего\n"
+                 "// материала в блоке — брызг, тает; шанс обратен массе\n"
+                 "// кванта, калибровка — одиночный квант газа живёт ~1 с).\n"
+                 "// Читатель — автомат материи; движение НЕ читает kMatPhase\n"
+                 "// (метка для геймплейных предикатов — S16.2).\n")
+        fh.write("const vec3 kMatMedium[%d] = vec3[%d](\n" % (n, n))
         fh.write(elements(mats,
-                          ["vec2(%.3f, %.3f)" % (m["flow"], m["diffusion"])
-                           for m in mats], names))
+                          ["vec3(%.3f, %.3f, %.6f)" %
+                           (m["flow"], m["diffusion"], lone_fade(i, m))
+                           for i, m in enumerate(mats)], names))
         fh.write(");\n\n")
         fh.write("const uint kMatPhase[%d] = uint[%d](\n" % (n, n))
         fh.write(elements(mats, ["%du" % PHASE[m["phase"]] for m in mats], names))

@@ -349,48 +349,51 @@ const uint kMatLightPass[38] = uint[38](
 );
 
 // СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),
-// y = diffusion (газы; 1 = воздух). Читатель — автомат
-// материи; движение НЕ читает kMatPhase (метка для
-// геймплейных предикатов: 0 тв / 1 жид / 2 газ — S16.2).
-const vec2 kMatMedium[38] = vec2[38](
-    vec2(1.000, 1.000),  //  0 air
-    vec2(0.000, 0.000),  //  1 concrete
-    vec2(0.000, 0.000),  //  2 soil
-    vec2(1.000, 0.500),  //  3 water
-    vec2(0.000, 0.000),  //  4 slab_tan
-    vec2(0.000, 0.000),  //  5 extract
-    vec2(0.000, 0.000),  //  6 door
-    vec2(0.000, 0.000),  //  7 hub_pad
-    vec2(0.000, 0.000),  //  8 plaster
-    vec2(0.000, 0.000),  //  9 parquet
-    vec2(0.000, 0.000),  // 10 shop_shutter
-    vec2(0.000, 0.000),  // 11 lino
-    vec2(0.000, 0.000),  // 12 factory_wall
-    vec2(0.000, 0.000),  // 13 tread
-    vec2(0.000, 0.000),  // 14 rust
-    vec2(0.100, 0.000),  // 15 rubble
-    vec2(0.000, 0.000),  // 16 electric_grate
-    vec2(0.100, 0.050),  // 17 acid_pool
-    vec2(0.000, 0.000),  // 18 fire_cell
-    vec2(0.000, 0.000),  // 19 pipe_metal
-    vec2(0.000, 0.000),  // 20 neon_tube
-    vec2(0.000, 0.000),  // 21 glass
-    vec2(0.000, 0.500),  // 22 toxic_gas
-    vec2(0.100, 0.000),  // 23 rubble_concrete
-    vec2(0.100, 0.000),  // 24 rubble_soil
-    vec2(0.100, 0.000),  // 25 rubble_slab_tan
-    vec2(0.100, 0.000),  // 26 rubble_plaster
-    vec2(0.100, 0.000),  // 27 rubble_parquet
-    vec2(0.100, 0.000),  // 28 rubble_shop_shutter
-    vec2(0.100, 0.000),  // 29 rubble_lino
-    vec2(0.100, 0.000),  // 30 rubble_factory_wall
-    vec2(0.100, 0.000),  // 31 rubble_tread
-    vec2(0.100, 0.000),  // 32 rubble_rust
-    vec2(0.100, 0.000),  // 33 rubble_electric_grate
-    vec2(0.100, 0.000),  // 34 rubble_fire_cell
-    vec2(0.100, 0.000),  // 35 rubble_pipe_metal
-    vec2(0.100, 0.000),  // 36 rubble_neon_tube
-    vec2(0.100, 0.000)   // 37 rubble_glass
+// y = diffusion (газы; 1 = воздух), z = шанс истаивания
+// ОДИНОЧКИ на подтик (закон 2026-08-25: атом без своего
+// материала в блоке — брызг, тает; шанс обратен массе
+// кванта, калибровка — одиночный квант газа живёт ~1 с).
+// Читатель — автомат материи; движение НЕ читает kMatPhase
+// (метка для геймплейных предикатов — S16.2).
+const vec3 kMatMedium[38] = vec3[38](
+    vec3(1.000, 1.000, 0.000000),  //  0 air
+    vec3(0.000, 0.000, 0.000000),  //  1 concrete
+    vec3(0.000, 0.000, 0.000000),  //  2 soil
+    vec3(1.000, 0.500, 0.000096),  //  3 water
+    vec3(0.000, 0.000, 0.000000),  //  4 slab_tan
+    vec3(0.000, 0.000, 0.000000),  //  5 extract
+    vec3(0.000, 0.000, 0.000000),  //  6 door
+    vec3(0.000, 0.000, 0.000000),  //  7 hub_pad
+    vec3(0.000, 0.000, 0.000000),  //  8 plaster
+    vec3(0.000, 0.000, 0.000000),  //  9 parquet
+    vec3(0.000, 0.000, 0.000000),  // 10 shop_shutter
+    vec3(0.000, 0.000, 0.000000),  // 11 lino
+    vec3(0.000, 0.000, 0.000000),  // 12 factory_wall
+    vec3(0.000, 0.000, 0.000000),  // 13 tread
+    vec3(0.000, 0.000, 0.000000),  // 14 rust
+    vec3(0.100, 0.000, 0.000053),  // 15 rubble
+    vec3(0.000, 0.000, 0.000000),  // 16 electric_grate
+    vec3(0.100, 0.050, 0.000087),  // 17 acid_pool
+    vec3(0.000, 0.000, 0.000000),  // 18 fire_cell
+    vec3(0.000, 0.000, 0.000000),  // 19 pipe_metal
+    vec3(0.000, 0.000, 0.000000),  // 20 neon_tube
+    vec3(0.000, 0.000, 0.000000),  // 21 glass
+    vec3(0.000, 0.500, 0.032000),  // 22 toxic_gas
+    vec3(0.100, 0.000, 0.000053),  // 23 rubble_concrete
+    vec3(0.100, 0.000, 0.000080),  // 24 rubble_soil
+    vec3(0.100, 0.000, 0.000058),  // 25 rubble_slab_tan
+    vec3(0.100, 0.000, 0.000160),  // 26 rubble_plaster
+    vec3(0.100, 0.000, 0.000183),  // 27 rubble_parquet
+    vec3(0.100, 0.000, 0.000016),  // 28 rubble_shop_shutter
+    vec3(0.100, 0.000, 0.000107),  // 29 rubble_lino
+    vec3(0.100, 0.000, 0.000016),  // 30 rubble_factory_wall
+    vec3(0.100, 0.000, 0.000016),  // 31 rubble_tread
+    vec3(0.100, 0.000, 0.000025),  // 32 rubble_rust
+    vec3(0.100, 0.000, 0.000016),  // 33 rubble_electric_grate
+    vec3(0.100, 0.000, 0.000640),  // 34 rubble_fire_cell
+    vec3(0.100, 0.000, 0.000016),  // 35 rubble_pipe_metal
+    vec3(0.100, 0.000, 0.000091),  // 36 rubble_neon_tube
+    vec3(0.100, 0.000, 0.000051)   // 37 rubble_glass
 );
 
 const uint kMatPhase[38] = uint[38](

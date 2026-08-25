@@ -7957,12 +7957,13 @@ int main(int argc, char** argv) {
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, lazy %u, listTot %u, substeps %llu | cpu ms: poll %.2f apply "
+                        "slept %u, lazy %u, listTot %u, fade %u, substeps %llu | cpu ms: poll %.2f apply "
                         "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
                         mediumPass.lazy_total(), mediumPass.list_total(),
+                        mediumPass.fade_total(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
                         static_cast<double>(g_mediumPollMs),
                         static_cast<double>(g_mediumApplyMs),

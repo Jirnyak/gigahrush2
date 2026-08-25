@@ -255,6 +255,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         // пробуждения — тот же порядок, что в кадре игры.
         medium.apply_readback(w, mirror);
     }
+    // Шов до конца: счётчик истаиваний (заголовок пака) обязан догнать
+    // состояние пула ДО счёта массы — иначе гонка лага в 3 региона.
+    drain_seam(dev, mirror, medium, w, substep);
     std::printf("[medium_test] after %llu substeps: live %u, woken %u, "
                 "slept %u\n",
                 static_cast<unsigned long long>(substep), medium.live_count(),
@@ -302,7 +305,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
             water.insert(key(cx * 8 + sx, cy * 8 + sy, cz * 8 + sz));
         }
     }
-    CHECK(water.size() == kPoured); // МАССА
+    // МАССА по новому закону (2026-08-25): одиночки истаивают — сумма
+    // «кванты + истаявшие» точна (счётчик едет тем же швом; дренаж выше).
+    CHECK(water.size() + medium.fade_total() == kPoured);
     CHECK(unmaskedSolid == 0); // материи из ниоткуда нет (закон чтения)
 
     // Класс клетки завала — 2 (частичная твёрдая), НЕ 3: и CPU-classify
@@ -330,14 +335,14 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         }
         std::printf("[medium_test] reverse seam: CPU sees %zu quanta\n",
                     cpuWater);
-        CHECK(cpuWater == kPoured);
+        CHECK(cpuWater + medium.fade_total() == kPoured);
 
         // АГРЕГАТЫ S16.4 — без редьюс-пасса: шов пересчитал medium_level по
         // изменённым клеткам; сумма уровней жидкости == всей воде мира.
         std::size_t aggWater = 0;
         for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
             aggWater += medium_level_at(w, ci) & 0xFFFFu;
-        CHECK(aggWater == kPoured);
+        CHECK(aggWater + medium.fade_total() == kPoured);
     }
 
     // ОПОРА (гравитация NegZ): под квантом — маска или вода.
@@ -624,8 +629,12 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 for (int sz = 4; sz < 6; ++sz)
                     gp[sub_bit(sx, sy, sz)] = kMatToxicGas; // 32 кванта
         mirror.mark_dirty(&gasCell, 1);
+        const std::uint32_t fadeBeforeGas = medium.fade_total();
         medium.wake_cells(&gasCell, 1, w, mirror);
-        for (int b = 0; b < 60; ++b) {
+        // 8 батчей (64 подтика): газу хватает осесть на пол камеры; дольше
+        // нельзя — по закону 2026-08-25 одиночки пуфа истаивают (газ живёт
+        // ~секунду на одиночку), и от облака ничего не останется.
+        for (int b = 0; b < 8; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
             substep += 8;
             medium.apply_readback(w, mirror);
@@ -644,7 +653,13 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 }
         std::printf("[medium_test] gas: %zu quanta (low %zu, high %zu)\n",
                     gasAll, gasLow, gasHigh);
-        CHECK(gasAll == 32);      // масса газа цела (и агрегат её видит)
+        const std::uint32_t gasFaded =
+            medium.fade_total() - fadeBeforeGas;
+        // Масса сходится С УЧЁТОМ истаявших (закон 2026-08-25); из ниоткуда
+        // газ не рождается; большинство доживает до пола за 64 подтика.
+        CHECK(gasAll + gasFaded >= 32);
+        CHECK(gasAll <= 32);
+        CHECK(gasAll >= 16);
         CHECK(gasLow > gasHigh);  // тяжёлый газ ОСЕЛ — стелется по полу
     }
 
@@ -897,7 +912,9 @@ void test_frontier_freeze(gpu::VulkanDevice& dev) {
             if (wp[b2] == kMatWater) ++wq;
     std::printf("[medium_test] frontier: D page %s, water D %d + W %d\n",
                 dp ? "yes" : "NO", dq, wq);
-    CHECK(dq + wq == kPoured); // масса не рождается и не тонет в шве
+    // Масса не рождается и не тонет в шве; истаявшие одиночки (закон
+    // 2026-08-25) на счётчике.
+    CHECK(dq + wq + int(medium.fade_total()) == kPoured);
     // Уровень: 192 кванта на 2 клетки дна — в D обязан стоять минимум слой
     // с запасом на рябь диффузии (полслоя).
     CHECK(dq >= 32);
@@ -925,8 +942,11 @@ void test_seam_tail(gpu::VulkanDevice& dev) {
             const auto ci =
                 static_cast<std::uint32_t>(macro_index(x, y, 21));
             CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
-            for (int sy = 2; sy < 6; ++sy)
-                for (int sx = 2; sx < 6; ++sx)
+            // Плита 8x8x2 НЕПРЕРЫВНА через границы клеток: у нутра всегда
+            // есть блокомейт — закон истаивания одиночек (2026-08-25) ест
+            // только кромку, островки 4x4 испарились бы целиком.
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sx = 0; sx < 8; ++sx)
                     for (int sz = 0; sz < 2; ++sz)
                         pg[sub_bit(sx, sy, sz)] = kMatToxicGas;
         }
@@ -996,6 +1016,71 @@ void test_seam_tail(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ЗАКОН ИСТАИВАНИЯ ОДИНОЧЕК (владелец 2026-08-25): подвижный атом без
+// единого атома СВОЕГО материала в блоке Марголуса тает роллом с шансом,
+// обратным массе кванта (kMatMedium.z, вывод в кодогене). Одинокий квант
+// газа живёт ~секунду — за 640 подтиков шанс выжить ~1e-9; счётчик
+// истаиваний обязан сойтись с массой РОВНО. Плотная вода (полная клетка)
+// не тает: у каждого атома блокомейт в любой фазе.
+void test_lone_fade(gpu::VulkanDevice& dev) {
+    static World w;
+    // Камера: пол, одинокий квант газа в воздухе + полная клетка воды.
+    for (int x = 40; x <= 44; ++x)
+        for (int y = 40; y <= 44; ++y)
+            w.grid().fill_cell(x, y, 30, kMatConcrete);
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    const auto gCell = static_cast<std::uint32_t>(macro_index(41, 41, 31));
+    CellType* gp = f.ensure_page(gCell, w.grid().types()[gCell]);
+    gp[sub_bit(4, 4, 0)] = kMatToxicGas; // одиночка — обязан истаять
+    // Полная клетка воды В СКЛЕПЕ (стены+потолок): двигаться некуда, ни
+    // один атом не одинок ни в одной фазе — масса обязана держаться РОВНО.
+    // (Открытая клетка растекается по платформе, крошит одиночек на краях
+    // и честно истаивает по закону — для пина «вечна» нужна плотность.)
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+            if (dx != 0 || dy != 0)
+                w.grid().fill_cell(43 + dx, 43 + dy, 31, kMatConcrete);
+    w.grid().fill_cell(43, 43, 32, kMatConcrete);
+    const auto wCell = static_cast<std::uint32_t>(macro_index(43, 43, 31));
+    CellType* wp = f.ensure_page(wCell, w.grid().types()[wCell]);
+    for (int b = 0; b < kSubVoxels; ++b)
+        wp[b] = kMatWater;
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    std::uint32_t cells[2] = {gCell, wCell};
+    medium.wake_cells(cells, 2, w, mirror);
+
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 80; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    int gas = 0, water = 0;
+    for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+        const CellType* pg = f.page(ci);
+        if (!pg) continue;
+        for (int b2 = 0; b2 < kSubVoxels; ++b2) {
+            if (pg[b2] == kMatToxicGas) ++gas;
+            if (pg[b2] == kMatWater) ++water;
+        }
+    }
+    std::printf("[medium_test] lone fade: gas %d, water %d, faded %u\n",
+                gas, water, medium.fade_total());
+    CHECK(gas == 0);                        // одиночка истаяла
+    CHECK(water == 512);                    // плотное — вечно, ровно
+    CHECK(medium.fade_total() == 1);        // истаяла ровно одиночка
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -1008,6 +1093,7 @@ int main() {
         test_automaton_water(dev);
         test_frontier_freeze(dev);
         test_seam_tail(dev);
+        test_lone_fade(dev);
     }
     test_carve_agnostic();
     dev.destroy();

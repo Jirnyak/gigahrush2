@@ -327,6 +327,27 @@ void run_move(uint slot, uint threadId) {
         }
     }
 
+    // --- Шаг 4: истаивание одиночек (закон владельца 2026-08-25). ----------
+    // Подвижный атом без единого атома СВОЕГО материала в блоке — брызг:
+    // тает роллом с шансом kMatMedium.z (обратен массе кванта, вывод в
+    // кодогене). Плотные скопления вечны — у нутра и рёбер всегда есть
+    // блокомейт в любой фазе; острые углы луж обкатываются. Масса сходится
+    // счётчиком uCnt[12] (в заголовке пака — тесты и лог считают точно).
+    for (int i = 0; i < 8; ++i) {
+        uint mv = mats[i];
+        if (mv == 0u || !sv[i].writable) continue;
+        float pFade = kMatMedium[mv].z;
+        if (pFade <= 0.0) continue;
+        bool lone = true;
+        for (int j = 0; j < 8; ++j)
+            if (j != i && mats[j] == mv) { lone = false; break; }
+        if (!lone) continue;
+        if (roll01(pc.params.x, minG, 131u + uint(i)) < pFade) {
+            mats[i] = 0u;
+            atomicAdd(uCnt[12], 1u);
+        }
+    }
+
     // --- Запись изменившихся + пробуждение. ---------------------------------
     // Любой своп = changed; изменённые ЧУЖИЕ клетки будятся ПРЯМО ЗДЕСЬ
     // (GPU-резидентная петля — CPU-протокола пробуждения не существует).
@@ -506,7 +527,7 @@ void run_pack(uint slot, uint threadId) {
         uRbList[listBase + 4u] = total;   // ЧЕСТНЫЙ размер списка (до окна)
         uRbList[listBase + 5u] = uCnt[9]; // флаг капа wake_next
         uRbList[listBase + 6u] = start;
-        uRbList[listBase + 7u] = 0u;
+        uRbList[listBase + 7u] = uCnt[12]; // истаявшие одиночки, всего
     }
     if (slot >= count) return;
     uint ci = list_cur(start + slot);
