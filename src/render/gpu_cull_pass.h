@@ -8,6 +8,7 @@
 
 #include <vulkan/vulkan.h>
 #include <array>
+#include <vector>
 #include <cstdint>
 #include "core/math.h"
 #include "render/prop_mesh.h"
@@ -90,7 +91,10 @@ private:
     VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline            pipeline_       = VK_NULL_HANDLE;
     VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
-    std::array<VkDescriptorSet, 64> descSets_{};
+    // Размер = kCullSetRing (вывод в create_descriptors) — вектор, чтобы
+    // счёт жил ОДНОЙ константой (хардкод 64 при выведенном кольце дал
+    // чтение мусора за layouts и редкий SIGSEGV на старте, 2026-08-26).
+    std::vector<VkDescriptorSet> descSets_;
     uint32_t              setHead_        = 0;
 };
 

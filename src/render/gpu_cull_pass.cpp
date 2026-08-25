@@ -112,9 +112,10 @@ bool GpuCullPass::create_descriptor_set_layout() noexcept {
     VkDescriptorSetAllocateInfo alloci{};
     alloci.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloci.descriptorPool     = descPool_;
-    alloci.descriptorSetCount = 64;
+    alloci.descriptorSetCount = kCullSetRing;
     alloci.pSetLayouts        = layouts.data();
 
+    descSets_.resize(kCullSetRing);
     VK_TRY(vkAllocateDescriptorSets(d, &alloci, descSets_.data()));
     return true;
 }
