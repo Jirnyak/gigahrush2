@@ -1,5 +1,10 @@
 #include "render/raymarch_pass.h"
 
+#include <cstdlib>
+#include <cstring>
+
+#include "world/materials.h" // kMatNames — дебаг-подсветка рубла
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -244,10 +249,21 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         u->invViewProj = mat4_identity();
         // Маски карт статичны после загрузки — пишутся один раз здесь.
         write_tex_masks(u, texMask_, normalMask_, roughnessMask_);
+        // GIGA_RUBBLE_DBG=1: рыхлые двойники — МАЛИНОВЫМ. Диагностика
+        // «перестройки» разрушений (репорт владельца 2026-08-26): двойник
+        // выглядит почти как исходник (0.85 яркости), и честная конверсия+
+        // осадка отвязанного читалась как «стена сдвинулась». С подсветкой
+        // видно: малиновое = отвязанный компонент (замысел), НЕ-малиновая
+        // телепортация твёрдого = баг.
+        static const bool rubbleDbg =
+            std::getenv("GIGA_RUBBLE_DBG") != nullptr;
         for (std::uint32_t i = 0; i < 64; ++i) {
             // Out-of-range material ids must SCREAM, not blend in: a near-white
             // fallback rendered as believable "dead pixels" in a dark world.
-            const vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
+            vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
+            if (rubbleDbg && i < matCount &&
+                std::strncmp(kMatNames[i], "rubble", 6) == 0)
+                c = vec3{1.0f, 0.0f, 0.8f};
             u->albedo[i] = vec4{c.x, c.y, c.z, 0.0f};
         }
 
