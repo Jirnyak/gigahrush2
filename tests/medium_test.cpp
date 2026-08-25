@@ -1114,6 +1114,94 @@ void test_lone_fade(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// БАГ ВЛАДЕЛЬЦА 2026-08-26 «дыра переехала»: карв против шва В ПОЛЁТЕ.
+// Живая клетка пакуется каждый кадр; CPU-карв бьёт её между паком и
+// применением; стейл-регион (запакован ДО карва) применяется ПОСЛЕ и
+// воскрешал выбитые атомы в CPU-каноне — дыра «затягивалась», рядом
+// оставалась свежая: выглядело сдвигом дыры. Гейт свежести: клетка с
+// CPU-записью на/после поколения пака не перезаписывается.
+void test_carve_vs_seam(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 99; x <= 101; ++x)
+        for (int y = 99; y <= 101; ++y)
+            w.grid().fill_cell(x, y, 50, kMatConcrete);
+    w.grid().fill_cell(99, 100, 51, kMatConcrete);
+    w.grid().fill_cell(101, 100, 51, kMatConcrete);
+    w.grid().fill_cell(100, 99, 51, kMatConcrete);
+    w.grid().fill_cell(100, 101, 51, kMatConcrete);
+    // Потолок: без него вода за 10 батчей выбурливала из клетки поверх
+    // стенок, и к карву воскрешать было нечего (пустой стейл == пустой
+    // свежий — тест не отличал). Диагонали не текут (свопы осевые).
+    w.grid().fill_cell(100, 100, 52, kMatConcrete);
+    const auto wCell = static_cast<std::uint32_t>(macro_index(100, 100, 51));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(wCell, w.grid().types()[wCell]);
+    // НЕРОВНАЯ поверхность (слой + полслоя): полные слои в склепе спят
+    // (плотное вверх нельзя, латералей нет — ходов ноль), а живость клетки
+    // в момент карва — суть гонки: спящую не пакуют. Латеральная диффузия
+    // полуслоя жива вечно (как поверхность бассейна).
+    for (int sx = 0; sx < 8; ++sx)
+        for (int sy = 0; sy < 8; ++sy) {
+            pg[sub_bit(sx, sy, 0)] = kMatWater;
+            if (sx < 4) pg[sub_bit(sx, sy, 1)] = kMatWater;
+        }
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&wCell, 1, w, mirror);
+
+    // Клетка живёт и пакуется каждый батч; регионы кольца полны её водой.
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 10; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+        substep += 4;
+        medium.apply_readback(w, mirror);
+    }
+
+    {
+        int pre = 0;
+        const CellType* pp2 = f.page(wCell);
+        for (int b4 = 0; b4 < kSubVoxels; ++b4)
+            if (pp2 && pp2[b4] == kMatWater) ++pre;
+        std::printf("[medium_test]   pre-carve W water %d\n", pre);
+    }
+    // КАРВ между паком и применением: CPU выбивает всю воду (путь игры:
+    // страница + wake_cells + флеш придёт следующим батчем).
+    CellType* cp = f.page(wCell);
+    for (int b2 = 0; b2 < kSubVoxels; ++b2)
+        if (cp[b2] == kMatWater) cp[b2] = kCellAir;
+    mirror.mark_dirty(&wCell, 1);
+    medium.wake_cells(&wCell, 1, w, mirror);
+
+    // Окно гонки — ДВА следующих кадра: они потребляют регионы, записанные
+    // ДО карва (полные воды). Батчи с нулём подтиков: флеш+пак без движения
+    // материи — чистое воспроизведение «стейл-шов против свежего карва».
+    for (int b3 = 0; b3 < 2; ++b3) {
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        medium.apply_readback(w, mirror);
+        int dbg = 0;
+        const CellType* dp2 = f.page(wCell);
+        for (int b4 = 0; b4 < kSubVoxels; ++b4)
+            if (dp2 && dp2[b4] == kMatWater) ++dbg;
+        std::printf("[medium_test]   seam tail %d: W water %d, live %u\n",
+                    b3, dbg, medium.live_count());
+    }
+
+    int resurrected = 0;
+    const CellType* rp = f.page(wCell);
+    if (rp)
+        for (int b2 = 0; b2 < kSubVoxels; ++b2)
+            if (rp[b2] == kMatWater) ++resurrected;
+    std::printf("[medium_test] carve vs seam: resurrected %d\n", resurrected);
+    CHECK(resurrected == 0); // выбитое НЕ воскресает стейл-швом
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -1127,6 +1215,7 @@ int main() {
         test_frontier_freeze(dev);
         test_seam_tail(dev);
         test_lone_fade(dev);
+        test_carve_vs_seam(dev);
     }
     test_carve_agnostic();
     dev.destroy();

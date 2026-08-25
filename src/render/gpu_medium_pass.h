@@ -120,6 +120,11 @@ public:
         lastCount_ = 0;
         lastQuanta_ = 0;
         for (auto& r : rbRing_) r.valid = false;
+        // Поколение шва — В НОЛЬ СИНХРОННО (не ждём record): писатель между
+        // clear_live и первым record штамповал бы клетки СТАРЫМ большим
+        // поколением и блокировал их шов навсегда (ловил тест изотропии).
+        rbGen_ = 0;
+        std::fill(cpuWriteGen_.begin(), cpuWriteGen_.end(), 0u);
     }
 
     // Записать n подтиков GPU-петли (inject -> [prepare, move, settle] x n)
@@ -180,12 +185,18 @@ private:
     VulkanBuffer listBack_; // регион: 4 u32 заголовка + kRbSlotCap слотов
     struct RbRecord {
         bool valid = false;
+        std::uint32_t gen = 0; // поколение записи пака — гейт свежести CPU
     };
     RbRecord rbRing_[kRbRegions];
     std::uint64_t rbGen_ = 0;
     bool actNeedsClear_ = true;
 
     std::uint32_t lazyTotal_ = 0; // ленивые материализации шва (диагноз)
+    // Поколение ПОСЛЕДНЕЙ CPU-записи клетки (+1; 0 = не писалась): гейт
+    // «карв против шва в полёте» (баг владельца 2026-08-26: регион,
+    // запакованный ДО карва, применялся ПОСЛЕ и воскрешал выбитые атомы —
+    // «дыра переехала»). 8 МиБ, прецедент O(1)-индекса.
+    std::vector<std::uint32_t> cpuWriteGen_;
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
     std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)

@@ -80,3 +80,5 @@ appDataDir/
 /_*.txt
 light_debug.log
 /medium_log.txt
+medium.log
+*.log

@@ -66,6 +66,7 @@ bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
     if (!create_descriptors(mirror)) return false;
     if (!create_pipeline(shaderDir)) return false;
     appendPending_.reserve(kAppendCap);
+    cpuWriteGen_.assign(kMacroCells, 0u);
     return true;
 }
 
@@ -241,7 +242,7 @@ bool GpuMediumPass::create_pipeline(const char* shaderDir) noexcept {
 void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
                                World& world, VoxelMirror& mirror) {
     if (!ready()) return;
-    auto touch = [&](std::uint32_t ci) {
+    auto touch = [&](std::uint32_t ci, bool wrote) {
         if (ci >= kMacroCells) return;
         // Полнотвёрдую клетку не будим: под маской двигать нечего.
         if (world.grid().masks()[ci].full()) return;
@@ -250,7 +251,15 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
         if (!f.paged(ci)) {
             materialize_sub_page(world, ci);
             mirror.mark_dirty(&ci, 1);
+            wrote = true; // материализация = CPU-запись страницы
         }
+        // Штамп свежести ТОЛЬКО реально записанным (гейт «дыра переехала»
+        // в apply_readback): переданные писателем клетки и материализация.
+        // Разбуженные-но-нетронутые грани НЕ штампуются — иначе ленивое
+        // пробуждение округе блокировало бы шов активной материи (тест
+        // rubble ловил ровно это).
+        if (wrote)
+            cpuWriteGen_[ci] = static_cast<std::uint32_t>(rbGen_) + 1u;
         if (appendPending_.size() < kAppendCap)
             appendPending_.push_back(ci);
         else if (!overflow_) {
@@ -263,23 +272,29 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
     };
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t ci = cells[i];
-        touch(ci);
+        touch(ci, /*wrote=*/true);
         // Закон писателя: запись меняет и свободу материи соседей.
         const int cx = static_cast<int>(ci & 127u);
         const int cy = static_cast<int>((ci >> 7) & 127u);
         const int cz = static_cast<int>((ci >> 14) & 127u);
         touch(static_cast<std::uint32_t>(
-            macro_index(wrap_macro(cx - 1), cy, cz)));
+                  macro_index(wrap_macro(cx - 1), cy, cz)),
+              /*wrote=*/false);
         touch(static_cast<std::uint32_t>(
-            macro_index(wrap_macro(cx + 1), cy, cz)));
+                  macro_index(wrap_macro(cx + 1), cy, cz)),
+              /*wrote=*/false);
         touch(static_cast<std::uint32_t>(
-            macro_index(cx, wrap_macro(cy - 1), cz)));
+                  macro_index(cx, wrap_macro(cy - 1), cz)),
+              /*wrote=*/false);
         touch(static_cast<std::uint32_t>(
-            macro_index(cx, wrap_macro(cy + 1), cz)));
+                  macro_index(cx, wrap_macro(cy + 1), cz)),
+              /*wrote=*/false);
         touch(static_cast<std::uint32_t>(
-            macro_index(cx, cy, wrap_macro(cz - 1))));
+                  macro_index(cx, cy, wrap_macro(cz - 1))),
+              /*wrote=*/false);
         touch(static_cast<std::uint32_t>(
-            macro_index(cx, cy, wrap_macro(cz + 1))));
+                  macro_index(cx, cy, wrap_macro(cz + 1))),
+              /*wrote=*/false);
     }
 }
 
@@ -344,6 +359,15 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             }
             continue;
         }
+        // ГЕЙТ СВЕЖЕСТИ (баг «дыра переехала», 2026-08-26): клетка, в
+        // которую CPU писал НА или ПОСЛЕ поколения этого пака (карв, налив,
+        // дверь — все идут через wake_cells), не перезаписывается стейл-
+        // снапшотом: свежее состояние уже уехало флешем на GPU, следующий
+        // пак принесёт его честно.
+        // Строго СТАРШЕ записи: пак ТОГО ЖЕ поколения свежий — флеш
+        // писателя ложится до записи пака и в кадре, и в тестовом батче.
+        if (cpuWriteGen_[ci] != 0u && cpuWriteGen_[ci] - 1u > rec.gen)
+            continue;
         CellType* pg = f->page(ci);
         if (!pg) continue; // CPU-писатель схлопнул — его решение свежее
         const void* np = src + static_cast<std::size_t>(i) * kPageBytesBack;
@@ -489,6 +513,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     // PACK шва: страницы/маски/список живых — в регион кольца, GPU-пассом.
     const auto region = static_cast<std::uint32_t>(rbGen_ % kRbRegions);
     rbRing_[region].valid = true;
+    rbRing_[region].gen = static_cast<std::uint32_t>(rbGen_);
     // Поколение кольца — паку: вращает окно по списку (хвост не голодает).
     push.params[0] = static_cast<std::uint32_t>(rbGen_);
     ++rbGen_;
