@@ -4818,6 +4818,86 @@ int main(int argc, char** argv) {
                                   g_staticLamps.size());
                     }
                 }
+                // ЕДИНЫЙ ХВОСТ КАРВА (аудит 2026-08-25: жил ТРЕМЯ копиями —
+                // консоль/бой/двери, копии уже разъехались). Всё, что должен
+                // ЛЮБОЙ писатель геометрии после carve_sphere: свет-патч,
+                // зеркало, пробуждение автомата (S16.5), диффузия,
+                // нав-битсеты, частицы, якоря пропов, антураж. Вызывающий
+                // добавляет только своё (шум взрыва, боевой лог).
+                auto carve_settle = [&](std::uint32_t seed) {
+                    auto ct0 = std::chrono::steady_clock::now();
+                    // Патч поля по dirtyCells — он же детектор «задет ли
+                    // свет» (субвоксельно честный). Кластеризация — только по
+                    // светоячейкам поля, микросекунды вместо скана 128³.
+                    const bool relight = game::patch_emitter_field(
+                        stack.layer(activeLayer), g_emitterField,
+                        carveResult.dirtyCells.data(),
+                        carveResult.dirtyCells.size());
+                    if (relight) {
+                        g_bakedFloorLights = game::bake_material_lights(
+                            stack.layer(activeLayer), g_emitterField,
+                            g_emitterClusters);
+                        // Кластеры пережиты с наследованием id — похудевший
+                        // неон сохраняет слот, умерший целиком — надгробие.
+                        rebuild_static_light_table(reg, activeLayer,
+                                                   /*reset=*/false);
+                        nav.set_light_table(g_staticLamps.data(),
+                                            g_staticLamps.size(),
+                                            gpu::kGridCellSlots,
+                                            g_staticTableGen);
+                    }
+                    g_carveT.lightMatMs += carve_ms_since(ct0);
+                    g_carveT.carved = true;
+                    g_carveT.cells += carveResult.dirtyCells.size();
+                    // Зеркало платит только dirty-клетки.
+                    ct0 = std::chrono::steady_clock::now();
+                    voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
+                    g_carveT.mirrorMarkMs += carve_ms_since(ct0);
+                    // Карв — писатель грида (S16.5): разбудить задетые
+                    // клетки — соседняя материя стечёт в свежую дыру.
+                    if (mediumPass.ready())
+                        mediumPass.wake_cells(carveResult.dirtyCells.data(),
+                                              carveResult.dirtyCells.size(),
+                                              stack.layer(activeLayer),
+                                              voxelMirror);
+                    ++g_worldGen; // поколение мутаций — планировщик доведёт
+                    ct0 = std::chrono::steady_clock::now();
+                    mark_diffusion_dirty(diffusionDriver,
+                                         stack.layer(activeLayer).grid(),
+                                         activeLayer, carveResult.dirtyCells);
+                    g_carveT.diffMs += carve_ms_since(ct0);
+                    // Долг живых битсетов проходимости — O(1) на клетку.
+                    ct0 = std::chrono::steady_clock::now();
+                    nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                           doors,
+                                           carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
+                    g_carveT.patchMs += carve_ms_since(ct0);
+                    // Пыль и обломки, тонированные срезанным материалом.
+                    ct0 = std::chrono::steady_clock::now();
+                    spawn_carve_particles(particlePass, carveResult, seed);
+                    g_carveT.partMs += carve_ms_since(ct0);
+                    // Пропы на срезанных якорях падают ([jirnyak.md] §18).
+                    ct0 = std::chrono::steady_clock::now();
+                    if (game::anchor_validate_step(
+                            reg, stack.layer(activeLayer), bus,
+                            carveResult.dirtyCells, &particleBursts,
+                            seed) > 0) {
+                        propPassNeedsRebuild = true;
+                    }
+                    g_carveT.anchorMs += carve_ms_since(ct0);
+                    // Запечённое убранство отвечает тому же взрыву;
+                    // dressingSetChanged взводится — иначе GPU симулирует
+                    // убитые цепи до следующего входа (§59.26).
+                    ct0 = std::chrono::steady_clock::now();
+                    if (antourage_carve_step_here(carveResult.dirtyCells,
+                                                  seed)) {
+                        propPassNeedsRebuild = true;
+                        dressingSetChanged = true;
+                    }
+                    g_carveT.antrMs += carve_ms_since(ct0);
+                };
                 if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
@@ -4835,112 +4915,18 @@ int main(int argc, char** argv) {
                     op.seed = static_cast<std::uint32_t>(simTick);
                     consoleCtx.carveRadius = 0.0f;
                     const auto ctSite = std::chrono::steady_clock::now();
-                    auto ct0 = std::chrono::steady_clock::now();
+                    const auto ct0 = std::chrono::steady_clock::now();
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
                     g_carveT.sphereMs += carve_ms_since(ct0);
                     if (removed > 0) {
-                        ct0 = std::chrono::steady_clock::now();
-                        // Патч поля по dirtyCells — он же детектор «задет ли
-                        // свет» (субвоксельно честный, в отличие от прежней
-                        // проверки по типу ячейки). Кластеризация — только по
-                        // светоячейкам поля, микросекунды вместо скана 128³.
-                        const bool relight = game::patch_emitter_field(
-                            stack.layer(activeLayer), g_emitterField,
-                            carveResult.dirtyCells.data(),
-                            carveResult.dirtyCells.size());
-                        if (relight) {
-                            g_bakedFloorLights = game::bake_material_lights(
-                                stack.layer(activeLayer), g_emitterField,
-                                g_emitterClusters);
-                            // Кластеры пережиты заново с наследованием id —
-                            // похудевший неон сохраняет слот (списки бейка
-                            // видимости остаются его), умерший целиком
-                            // умирает вместе со слотом (надгробие).
-                            rebuild_static_light_table(reg, activeLayer,
-                                                       /*reset=*/false);
-                            nav.set_light_table(g_staticLamps.data(),
-                                                g_staticLamps.size(),
-                                                gpu::kGridCellSlots,
-                                                g_staticTableGen);
-                        }
-                        g_carveT.lightMatMs += carve_ms_since(ct0);
-                    }
-                    if (removed > 0) {
-                        g_carveT.carved = true;
-                        g_carveT.cells += carveResult.dirtyCells.size();
-                        // No log, no bookkeeping: geometry persistence is the
-                        // floor's own file, written when the player leaves
-                        // ([save.h] modular layout) or on F5.
-                        // The GPU mirror pays only the dirty cells — the whole
-                        // point of the raymarch migration.
-                        ct0 = std::chrono::steady_clock::now();
-                        voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
-                                               carveResult.dirtyCells.size());
-                        g_carveT.mirrorMarkMs += carve_ms_since(ct0);
-                        // Карв — писатель грида (S16.5): разбудить задетые
-                        // клетки — соседняя материя стечёт в свежую дыру.
-                        if (mediumPass.ready())
-                            mediumPass.wake_cells(
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size(),
-                                stack.layer(activeLayer), voxelMirror);
-                        ++g_worldGen; // поколение мутаций — планировщик доведёт
-                        ct0 = std::chrono::steady_clock::now();
-                        mark_diffusion_dirty(diffusionDriver,
-                                             stack.layer(activeLayer).grid(),
-                                             activeLayer,
-                                             carveResult.dirtyCells);
-                        g_carveT.diffMs += carve_ms_since(ct0);
-                        // Долг живых битсетов проходимости перед карвом —
-                        // O(1) на клетку, следующий Rebake-снапшот увидит
-                        // пролом ([game/rebake.h]).
-                        ct0 = std::chrono::steady_clock::now();
-                        nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                               doors,
-                                               carveResult.dirtyCells.data(),
-                                               carveResult.dirtyCells.size());
-                        g_carveT.patchMs += carve_ms_since(ct0);
-                        // Дренажа светосетки здесь БОЛЬШЕ НЕТ (чистка
-                        // 2026-08-23): инвариант «свет тем же кадром» снят
-                        // владельцем 2026-08-22 — свет ДОГОНЯЕТ мир патчем
-                        // дельта-ламп через RebakeScheduler (~0.3-1 с).
-                        // Dust and debris off the blast, tinted by the carved
-                        // material ([particle_pass.h]).
-                        ct0 = std::chrono::steady_clock::now();
-                        spawn_carve_particles(particlePass, carveResult,
-                                              op.seed);
-                        g_carveT.partMs += carve_ms_since(ct0);
-
-                        // A blast is the loudest thing after gunfire: let the
-                        // crowd hear it.
+                        carve_settle(op.seed);
+                        // Взрыв — самое громкое после стрельбы: толпа слышит.
                         game::NoiseProfile np{18.0f, 2200, 4,
                                               game::NoiseSource::WeaponFire};
                         game::noise_publish(noiseField, activeLayer,
                                             vec3{op.x, op.y, op.z}, np, 0);
-                        // Props anchored to carved cells fall / ragdoll
-                        // ([jirnyak.md] §18). dirtyCells = flat macro_index.
-                        // Rebuild PropPass static skin when any prop detached —
-                        // otherwise the GPU still draws the old furniture pose.
-                        ct0 = std::chrono::steady_clock::now();
-                        if (game::anchor_validate_step(reg, stack.layer(activeLayer),
-                                                       bus, carveResult.dirtyCells,
-                                                       &particleBursts, op.seed) > 0) {
-                            propPassNeedsRebuild = true;
-                        }
-                        g_carveT.anchorMs += carve_ms_since(ct0);
-                        // ...and the BAKED dressing answers to the same blast
-                        // ([game/antourage] antourage_carve_step): severed
-                        // pipes shed debris and the instance list is re-packed
-                        // so the GPU stops drawing what no longer hangs.
-                        ct0 = std::chrono::steady_clock::now();
-                        if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                      op.seed)) {
-                            propPassNeedsRebuild = true;
-                            dressingSetChanged = true;
-                        }
-                        g_carveT.antrMs += carve_ms_since(ct0);
                         g_carveT.siteMs += carve_ms_since(ctSite);
                     }
 
@@ -5258,102 +5244,24 @@ int main(int argc, char** argv) {
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];
                         CarveOp op;
-                        op.x = pr.x;
-                        op.y = pr.y;
-                        op.z = pr.z;
+                        op.x = pr.x; op.y = pr.y; op.z = pr.z;
                         op.radius = pr.radius;
                         op.power = pr.power;
                         op.seed = pr.seed;
                         const auto ctSite = std::chrono::steady_clock::now();
-                        auto ct0 = std::chrono::steady_clock::now();
+                        const auto ct0 = std::chrono::steady_clock::now();
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
                         g_carveT.sphereMs += carve_ms_since(ct0);
                         if (removed > 0) {
-                            ct0 = std::chrono::steady_clock::now();
-                            // Тот же приём, что у консольного карва: патч поля
-                            // по dirtyCells и есть детектор задетого света.
-                            const bool relight = game::patch_emitter_field(
-                                stack.layer(activeLayer), g_emitterField,
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size());
-                            if (relight) {
-                                g_bakedFloorLights = game::bake_material_lights(
-                                    stack.layer(activeLayer), g_emitterField,
-                                    g_emitterClusters);
-                                rebuild_static_light_table(reg, activeLayer,
-                                                           /*reset=*/false);
-                                nav.set_light_table(g_staticLamps.data(),
-                                                    g_staticLamps.size(),
-                                                    gpu::kGridCellSlots,
-                                                    g_staticTableGen);
-                            }
-                            g_carveT.lightMatMs += carve_ms_since(ct0);
-                        }
-                        if (removed > 0) {
-                            g_carveT.carved = true;
-                            g_carveT.cells += carveResult.dirtyCells.size();
-                            ct0 = std::chrono::steady_clock::now();
-                            voxelMirror.mark_dirty(
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size());
-                            g_carveT.mirrorMarkMs += carve_ms_since(ct0);
-                            // Пробуждение задетого — как у консольного карва.
-                            if (mediumPass.ready())
-                                mediumPass.wake_cells(
-                                    carveResult.dirtyCells.data(),
-                                    carveResult.dirtyCells.size(),
-                                    stack.layer(activeLayer), voxelMirror);
-                            ++g_worldGen; // поколение мутаций
-                            ct0 = std::chrono::steady_clock::now();
-                            mark_diffusion_dirty(diffusionDriver,
-                                                 stack.layer(activeLayer).grid(),
-                                                 activeLayer,
-                                                 carveResult.dirtyCells);
-                            g_carveT.diffMs += carve_ms_since(ct0);
-                            // Тот же долг битсетов, что у консольного карва.
-                            ct0 = std::chrono::steady_clock::now();
-                            nav.patch_carved_cells(
-                                stack.layer(activeLayer).grid(), doors,
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size());
-                            g_carveT.patchMs += carve_ms_since(ct0);
-                            // Дренаж светосетки вырезан (чистка 2026-08-23,
-                            // см. консольный карв выше).
-                            ct0 = std::chrono::steady_clock::now();
-                            spawn_carve_particles(particlePass, carveResult,
-                                                  pr.seed);
-                            g_carveT.partMs += carve_ms_since(ct0);
+                            carve_settle(pr.seed);
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
                                          removed,
                                          static_cast<unsigned>(pr.power),
                                          pr.radius, pr.x, pr.y, pr.z);
-
-                            // Detach props whose anchor cells were carved.
-                            // Rebuild PropPass static skin on any detach so the
-                            // GPU drops the old furniture pose. [jirnyak.md] §18
-                            ct0 = std::chrono::steady_clock::now();
-                            if (game::anchor_validate_step(
-                                    reg, stack.layer(activeLayer), bus,
-                                    carveResult.dirtyCells, &particleBursts,
-                                    pr.seed) > 0) {
-                                propPassNeedsRebuild = true;
-                            }
-                            g_carveT.anchorMs += carve_ms_since(ct0);
-                            // Same duty for the baked dressing. dressingSetChanged
-                            // обязан взводиться и здесь: без него upload_wires/
-                            // cloths не зовутся и GPU симулирует убитые боевым
-                            // карвом цепи до следующего входа на этаж (§59.26).
-                            ct0 = std::chrono::steady_clock::now();
-                            if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                          pr.seed)) {
-                                propPassNeedsRebuild = true;
-                                dressingSetChanged = true;
-                            }
-                            g_carveT.antrMs += carve_ms_since(ct0);
                             g_carveT.siteMs += carve_ms_since(ctSite);
                         }
                     }
@@ -7591,6 +7499,14 @@ int main(int argc, char** argv) {
         if (!doors.dirtyCells.empty()) {
             voxelMirror.mark_dirty(doors.dirtyCells.data(),
                                    doors.dirtyCells.size());
+            // Долг писателя грида (S16.5, «any grid mutator owes the same
+            // debt»): дверь освобождает/занимает клетки — автомат обязан
+            // проснуться, иначе вода не течёт в открытую дверь до чужого
+            // пробуждения (аудит 2026-08-25: дверной хвост отставал).
+            if (mediumPass.ready() && activeLayer != kInvalidLayer)
+                mediumPass.wake_cells(doors.dirtyCells.data(),
+                                      doors.dirtyCells.size(),
+                                      stack.layer(activeLayer), voxelMirror);
             // Door mask edits free/occupy macro cells — detach props
             // whose anchors no longer have solid support. [jirnyak.md] s18
             // Rebuild PropPass when anything detaches so GPU drops stale skins.
@@ -7615,6 +7531,78 @@ int main(int argc, char** argv) {
                                  stack.layer(activeLayer).grid(),
                                  activeLayer, doors.dirtyCells);
             doors.dirtyCells.clear();
+        }
+
+        // СИМ ВНЕ РЕНДЕР-СКОБКИ (аудит 2026-08-25, тот же класс, что дренаж
+        // дверей выше): интеграция падающих ног антуража и часы истаивания
+        // проводов/тканей обязаны идти и при OUT_OF_DATE свапчейна — иначе
+        // ресайз/сворачивание окна замораживает физику. Внутри скобки
+        // остаются только записи в GPU-буферы.
+        if (!antourageFalling.empty() && activeLayer != kInvalidLayer) {
+            game::antourage_detach_step(stack.layer(activeLayer),
+                                        antourageFalling, frameDt);
+            propPassNeedsRebuild = true;
+        }
+        static std::vector<std::uint8_t> wireAliveFrame;
+        static std::vector<std::uint8_t> wirePinsFrame;
+        static std::vector<std::uint8_t> clothAliveFrame;
+        static std::vector<std::uint32_t> clothPinsFrame;
+        wireAliveFrame.clear();
+        wirePinsFrame.clear();
+        clothAliveFrame.clear();
+        clothPinsFrame.clear();
+        if (verletPass.ready() && activeLayer != kInvalidLayer &&
+            (verletPass.chain_count() > 0 || verletPass.sheet_count() > 0)) {
+            if (const game::AntourageBake* ab =
+                    streamer.antourage_at_layer(registry, activeLayer)) {
+                const MacroGrid& wg = stack.layer(activeLayer).grid();
+                if (verletPass.chain_count() > 0) {
+                    // One probe, two answers: the live pin mask says which
+                    // ends still hold, and "no pin left" starts the FALL. The
+                    // chain keeps simulating unpinned for kAntourageFallSec,
+                    // so it drops, lands (world_land in verlet_sim.comp) and
+                    // only then stops being drawn ([antourage.md]).
+                    // Сброс по смене (этаж, слой): смена этажа с тем же
+                    // числом проводов наследовала чужие счётчики.
+                    static game::FallClock wireFall;
+                    static int wireFallFloor = INT_MIN;
+                    static LayerId wireFallLayer = static_cast<LayerId>(~0u);
+                    if (wireFallFloor != currentFloor ||
+                        wireFallLayer != activeLayer ||
+                        wireFall.left.size() != ab->wires.size()) {
+                        wireFall.clear();
+                        wireFallFloor = currentFloor;
+                        wireFallLayer = activeLayer;
+                    }
+                    for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
+                        const std::uint8_t m =
+                            game::wire_live_pins(wg, ab->wires[wi]);
+                        wirePinsFrame.push_back(m);
+                        wireAliveFrame.push_back(
+                            wireFall.step(wi, m != 0u, frameDt) ? 1u : 0u);
+                    }
+                }
+                if (verletPass.sheet_count() > 0) {
+                    // Cloth: same aliveness law, same clock.
+                    static game::FallClock clothFall;
+                    static int clothFallFloor = INT_MIN;
+                    static LayerId clothFallLayer = static_cast<LayerId>(~0u);
+                    if (clothFallFloor != currentFloor ||
+                        clothFallLayer != activeLayer ||
+                        clothFall.left.size() != ab->cloths.size()) {
+                        clothFall.clear();
+                        clothFallFloor = currentFloor;
+                        clothFallLayer = activeLayer;
+                    }
+                    for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
+                        const std::uint32_t m =
+                            game::cloth_live_pins(wg, ab->cloths[si]);
+                        clothPinsFrame.push_back(m);
+                        clothAliveFrame.push_back(
+                            clothFall.step(si, m != 0u, frameDt) ? 1u : 0u);
+                    }
+                }
+            }
         }
 
         g_frameMark.simMs = std::chrono::duration<float, std::milli>(
@@ -7709,15 +7697,8 @@ int main(int argc, char** argv) {
 
 
 
-            // Falling legs are integrated on the SIM's own collision predicate
-            // and re-packed while any of them is still in the air — a handful of
-            // bodies for a few seconds, so the repack is cheaper than a second
-            // draw path would be.
-            if (!antourageFalling.empty()) {
-                game::antourage_detach_step(stack.layer(activeLayer),
-                                            antourageFalling, frameDt);
-                propPassNeedsRebuild = true;
-            }
+            // (Интеграция падающих ног ушла ИЗ скобки в сим-хвост выше —
+            // аудит 2026-08-25; здесь остался только репак скинов.)
             if (propPassNeedsRebuild) {
                 const auto ctPs = std::chrono::steady_clock::now();
                 merge_ecs_prop_meshes(reg, activeLayer, propPass,
@@ -7825,75 +7806,20 @@ int main(int argc, char** argv) {
             const float gpuSimDt = std::min(frameDt, 2.0f / 60.0f);
             if (verletPass.ready() && activeLayer != kInvalidLayer &&
                 (verletPass.chain_count() > 0 || verletPass.sheet_count() > 0)) {
-                if (const game::AntourageBake* ab =
-                        streamer.antourage_at_layer(registry, activeLayer)) {
-                    const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    if (verletPass.chain_count() > 0) {
-                        static std::vector<std::uint8_t> wireAlive, wirePins;
-                        wireAlive.clear();
-                        wirePins.clear();
-                        // One probe, two answers: the live pin mask says which
-                        // ends still hold, and "no pin left" starts the FALL.
-                        // The chain keeps simulating unpinned for
-                        // kAntourageFallSec, so it drops, lands on the floor
-                        // (world_land in verlet_sim.comp) and only then stops
-                        // being drawn ([antourage.md]).
-                        // Сброс по смене (этаж, слой) — образец газа выше:
-                        // смена этажа с ТЕМ ЖЕ числом проводов раньше
-                        // наследовала чужие счётчики, и «истраченные» провода
-                        // молча не рисовались.
-                        static game::FallClock wireFall;
-                        static int wireFallFloor = INT_MIN;
-                        static LayerId wireFallLayer =
-                            static_cast<LayerId>(~0u);
-                        if (wireFallFloor != currentFloor ||
-                            wireFallLayer != activeLayer ||
-                            wireFall.left.size() != ab->wires.size()) {
-                            wireFall.clear();
-                            wireFallFloor = currentFloor;
-                            wireFallLayer = activeLayer;
-                        }
-                        for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
-                            const std::uint8_t m =
-                                game::wire_live_pins(wg, ab->wires[wi]);
-                            wirePins.push_back(m);
-                            wireAlive.push_back(
-                                wireFall.step(wi, m != 0u, frameDt) ? 1u : 0u);
-                        }
-                        const auto wireN =
-                            static_cast<std::uint32_t>(wirePins.size());
-                        verletPass.write_wire_alive(wireAlive.data(), wireN);
-                        verletPass.write_wire_pins(wirePins.data(), wireN);
-                    }
-                    // Cloth: same aliveness law, same clock.
-                    if (verletPass.sheet_count() > 0) {
-                        static std::vector<std::uint8_t> clothAlive;
-                        static std::vector<std::uint32_t> clothPins;
-                        clothAlive.clear();
-                        clothPins.clear();
-                        static game::FallClock clothFall;
-                        static int clothFallFloor = INT_MIN;
-                        static LayerId clothFallLayer =
-                            static_cast<LayerId>(~0u);
-                        if (clothFallFloor != currentFloor ||
-                            clothFallLayer != activeLayer ||
-                            clothFall.left.size() != ab->cloths.size()) {
-                            clothFall.clear();
-                            clothFallFloor = currentFloor;
-                            clothFallLayer = activeLayer;
-                        }
-                        for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
-                            const std::uint32_t m =
-                                game::cloth_live_pins(wg, ab->cloths[si]);
-                            clothPins.push_back(m);
-                            clothAlive.push_back(
-                                clothFall.step(si, m != 0u, frameDt) ? 1u : 0u);
-                        }
-                        const auto clothN =
-                            static_cast<std::uint32_t>(clothPins.size());
-                        verletPass.write_cloth_alive(clothAlive.data(), clothN);
-                        verletPass.write_cloth_pins(clothPins.data(), clothN);
-                    }
+                // Живость и часы посчитаны ДО скобки (сим не зависит от
+                // рендера) — здесь только запись в GPU-буферы.
+                if (verletPass.chain_count() > 0 && !wirePinsFrame.empty()) {
+                    const auto wireN =
+                        static_cast<std::uint32_t>(wirePinsFrame.size());
+                    verletPass.write_wire_alive(wireAliveFrame.data(), wireN);
+                    verletPass.write_wire_pins(wirePinsFrame.data(), wireN);
+                }
+                if (verletPass.sheet_count() > 0 && !clothPinsFrame.empty()) {
+                    const auto clothN =
+                        static_cast<std::uint32_t>(clothPinsFrame.size());
+                    verletPass.write_cloth_alive(clothAliveFrame.data(),
+                                                 clothN);
+                    verletPass.write_cloth_pins(clothPinsFrame.data(), clothN);
                 }
                 if (!noWireSim)
                     verletPass.record_sim(

@@ -2,7 +2,7 @@
 [vk] MoltenVK ICD: /opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json
 [vk] device: Apple M2 Pro | api 1.2.334 | queues g=0 p=0 | validation=0
 [render] swapchain 1280x720 (0.9 Mpx)
-[gpu-timer] on: 40 queries, period 1.000 ns/tick, 64 valid bits, 2-frame readback latency
+[gpu-timer] on: 48 queries, period 1.000 ns/tick, 64 valid bits, 2-frame readback latency
 [vk-mem] light-point-buf: 6.00 MiB -> type 1 heap 0 (16384 MiB) DEVICE_LOCAL HOST_VISIBLE HOST_COHERENT HOST_CACHED
 [vk-mem] light-grid-ssbo: 64.00 MiB -> type 0 heap 0 (16384 MiB) DEVICE_LOCAL
 [vk-mem] light-baked-grid: 64.00 MiB -> type 0 heap 0 (16384 MiB) DEVICE_LOCAL
@@ -21,39 +21,39 @@
 [vk-mem] albedo array: 203.06 MiB -> type 0 heap 0 (16384 MiB) BC7_SRGB_BLOCK 2048x2048 x38 layers x12 mips
 [vk-mem] albedo array: 203.06 MiB -> type 0 heap 0 (16384 MiB) BC7_UNORM_BLOCK 2048x2048 x38 layers x12 mips
 [vk-mem] albedo array: 203.06 MiB -> type 0 heap 0 (16384 MiB) BC7_UNORM_BLOCK 2048x2048 x38 layers x12 mips
-[tex] layer 10 <- data/textures/painted_metal_shutter.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 67.6 ms decode + 35.3 ms upload
-[tex] layer 10 <- data/textures/painted_metal_shutter_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 3.5 ms decode + 38.0 ms upload
-[tex] layer 10 <- data/textures/painted_metal_shutter_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.4 ms decode + 37.0 ms upload
-[tex] layer 11 <- data/textures/rubber_tiles.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 46.7 ms decode + 0.6 ms upload
-[tex] layer 11 <- data/textures/rubber_tiles_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.7 ms decode + 0.6 ms upload
-[tex] layer 11 <- data/textures/rubber_tiles_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.1 ms decode + 0.6 ms upload
-[tex] layer 12 <- data/textures/factory_wall.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 53.9 ms decode + 0.6 ms upload
-[tex] layer 12 <- data/textures/factory_wall_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.1 ms decode + 0.6 ms upload
-[tex] layer 12 <- data/textures/factory_wall_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.2 ms decode + 0.7 ms upload
-[tex] layer 13 <- data/textures/metal_grate_rusty.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 53.6 ms decode + 0.6 ms upload
-[tex] layer 13 <- data/textures/metal_grate_rusty_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.3 ms decode + 0.6 ms upload
-[tex] layer 13 <- data/textures/metal_grate_rusty_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.8 ms decode + 0.5 ms upload
-[tex] layer 14 <- data/textures/rusty_metal_03.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 52.8 ms decode + 0.7 ms upload
-[tex] layer 14 <- data/textures/rusty_metal_03_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.1 ms decode + 0.3 ms upload
-[tex] layer 14 <- data/textures/rusty_metal_03_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.6 ms decode + 0.5 ms upload
-[tex] layer 15 <- data/textures/rusty_corrugated_iron.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 49.0 ms decode + 0.6 ms upload
-[tex] layer 15 <- data/textures/rusty_corrugated_iron_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.9 ms decode + 0.5 ms upload
-[tex] layer 15 <- data/textures/rusty_corrugated_iron_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.6 ms decode + 0.6 ms upload
-[tex] layer 28 <- data/textures/painted_metal_shutter.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 47.5 ms decode + 0.5 ms upload
-[tex] layer 28 <- data/textures/painted_metal_shutter_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.3 ms decode + 0.5 ms upload
-[tex] layer 28 <- data/textures/painted_metal_shutter_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.0 ms decode + 0.5 ms upload
-[tex] layer 29 <- data/textures/rubber_tiles.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 43.9 ms decode + 0.6 ms upload
+[tex] layer 10 <- data/textures/painted_metal_shutter.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 61.3 ms decode + 9.7 ms upload
+[tex] layer 10 <- data/textures/painted_metal_shutter_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.0 ms decode + 41.8 ms upload
+[tex] layer 10 <- data/textures/painted_metal_shutter_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.5 ms decode + 30.3 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 46.0 ms decode + 0.6 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.6 ms decode + 0.6 ms upload
+[tex] layer 11 <- data/textures/rubber_tiles_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.2 ms decode + 0.7 ms upload
+[tex] layer 12 <- data/textures/factory_wall.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 51.6 ms decode + 0.6 ms upload
+[tex] layer 12 <- data/textures/factory_wall_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.5 ms decode + 0.6 ms upload
+[tex] layer 12 <- data/textures/factory_wall_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.5 ms decode + 0.5 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 49.7 ms decode + 0.3 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.5 ms decode + 0.5 ms upload
+[tex] layer 13 <- data/textures/metal_grate_rusty_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.6 ms decode + 0.5 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 50.5 ms decode + 0.6 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.7 ms decode + 0.5 ms upload
+[tex] layer 14 <- data/textures/rusty_metal_03_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 2.2 ms decode + 0.5 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 49.5 ms decode + 0.6 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.5 ms decode + 0.5 ms upload
+[tex] layer 15 <- data/textures/rusty_corrugated_iron_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.6 ms decode + 0.5 ms upload
+[tex] layer 28 <- data/textures/painted_metal_shutter.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 47.1 ms decode + 0.5 ms upload
+[tex] layer 28 <- data/textures/painted_metal_shutter_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
+[tex] layer 28 <- data/textures/painted_metal_shutter_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
+[tex] layer 29 <- data/textures/rubber_tiles.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 43.5 ms decode + 0.6 ms upload
 [tex] layer 29 <- data/textures/rubber_tiles_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
-[tex] layer 29 <- data/textures/rubber_tiles_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
-[tex] layer 30 <- data/textures/factory_wall.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 49.6 ms decode + 0.6 ms upload
-[tex] layer 30 <- data/textures/factory_wall_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.6 ms upload
-[tex] layer 30 <- data/textures/factory_wall_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.9 ms decode + 0.7 ms upload
+[tex] layer 29 <- data/textures/rubber_tiles_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.7 ms decode + 0.5 ms upload
+[tex] layer 30 <- data/textures/factory_wall.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 49.6 ms decode + 0.5 ms upload
+[tex] layer 30 <- data/textures/factory_wall_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.9 ms decode + 0.5 ms upload
+[tex] layer 30 <- data/textures/factory_wall_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.7 ms decode + 0.5 ms upload
 [tex] layer 31 <- data/textures/metal_grate_rusty.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 48.6 ms decode + 0.6 ms upload
-[tex] layer 31 <- data/textures/metal_grate_rusty_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
-[tex] layer 31 <- data/textures/metal_grate_rusty_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.7 ms decode + 0.5 ms upload
-[tex] layer 32 <- data/textures/rusty_metal_03.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 48.1 ms decode + 0.5 ms upload
-[tex] layer 32 <- data/textures/rusty_metal_03_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.7 ms decode + 0.5 ms upload
-[tex] layer 32 <- data/textures/rusty_metal_03_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
+[tex] layer 31 <- data/textures/metal_grate_rusty_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.6 ms upload
+[tex] layer 31 <- data/textures/metal_grate_rusty_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 0.8 ms decode + 0.5 ms upload
+[tex] layer 32 <- data/textures/rusty_metal_03.ktx2: 5592432 B decoded -> BC7_SRGB_BLOCK, 12 levels, 51.7 ms decode + 0.6 ms upload
+[tex] layer 32 <- data/textures/rusty_metal_03_normal.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.0 ms decode + 0.6 ms upload
+[tex] layer 32 <- data/textures/rusty_metal_03_roughness.ktx2: 5592432 B decoded -> BC7_UNORM_BLOCK, 12 levels, 1.1 ms decode + 0.6 ms upload
 [cube] albedo: 11/11 materials (mask 0xf000fc01), normal: 11/11 (mask 0xf000fc01), roughness: 11/11 (mask 0xf000fc01)
 [vk-mem] raymarch ubo: 0.00 MiB -> type 1 heap 0 (16384 MiB) DEVICE_LOCAL HOST_VISIBLE HOST_COHERENT HOST_CACHED
 [vk-mem] raymarch ubo: 0.00 MiB -> type 1 heap 0 (16384 MiB) DEVICE_LOCAL HOST_VISIBLE HOST_COHERENT HOST_CACHED
@@ -102,7 +102,7 @@
 [vk-mem] medium-list-back: 0.09 MiB -> type 1 heap 0 (16384 MiB) DEVICE_LOCAL HOST_VISIBLE HOST_COHERENT HOST_CACHED
 [vk-mem] particle-pool: 2.00 MiB -> type 1 heap 0 (16384 MiB) DEVICE_LOCAL HOST_VISIBLE HOST_COHERENT HOST_CACHED
 [pop] seeded 1964 cold records across 12 registered floors
-[floor] 0: laws 0.7 ms | RESTORED 1727.2 ms | rules 0.8 ms
+[floor] 0: laws 0.8 ms | RESTORED 1750.1 ms | rules 0.9 ms
 [place] MOVE body (51,3,65)->(51,3,66) rings=1 supp=1
 [place] MOVE body (83,3,88)->(83,2,87) rings=1 supp=1
 [place] MOVE body (35,19,56)->(36,19,57) rings=1 supp=1
@@ -301,782 +301,544 @@
 [place] MOVE body (25,70,31)->(25,69,30) rings=1 supp=1
 [props] wall devices seeded: 3516
 [rooms] floor 0: 787 pieces of furniture placed
-[lights] field rebuilt: 0 emitting cells in 218.0 ms
-[lightvis] floor 0 FRESH: 12646 lamps -> 262140 lit cells (mean 10.6 packed 10.6 max 30/cell, overflow 0), R_max 24.0 m, 1044 ms sync
-[rooms] floor 0: kind=0 baked mask 0x003E (10496000 bytes resident) in 26 ms
+[lights] field rebuilt: 0 emitting cells in 216.0 ms
+[lightvis] floor 0 FRESH: 12646 lamps -> 262140 lit cells (mean 10.6 packed 10.6 max 30/cell, overflow 0), R_max 24.0 m, 1018 ms sync
+[rooms] floor 0: kind=0 baked mask 0x003E (10496000 bytes resident) in 23 ms
 [nav] bake begins: nav holds 197.1 MiB
 [audio] AudioSystem initialized: 48 kHz stereo 32-bit float (SDL3 AudioStream)
-[nav] bake coarse 233 ms | fine 253 ms | resident 327.1 MiB | 16134 agents wandering | 0 AI brains attached (async, off the main thread)
-[carve] light_swap upload 7.14 ms (gen 0)
+[nav] bake coarse 198 ms | fine 291 ms | resident 327.1 MiB | 16134 agents wandering | 0 AI brains attached (async, off the main thread)
+[carve] light_swap upload 8.17 ms (gen 0)
 [raymarch] half-light targets 640x360
-[hitch] frame 51 ms | cpu sim 36.5 render 14.6 other 0.0 | carve 0.00, light_swap 7.14, prop_skin 0.00, entry 0 | gpu peak 0.0 ms: lgrid 0.0, vflush 0.0, cull 0.0, simphys 0.0, world 0.0, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
 [render] swapchain 1728x1080 (1.9 Mpx)
-[hitch] frame 156 ms | cpu sim 144.3 render 11.9 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 8.2 ms: lgrid 0.9, vflush 0.0, cull 0.0, simphys 1.8, world 0.0, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
+[hitch] frame 222 ms | cpu sim 209.6 render 11.9 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 8.0 ms: lgrid 0.9, vflush 0.0, cull 0.0, simphys 1.7, world 0.1, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
 [raymarch] half-light targets 864x540
-[hitch] frame 1003 ms | cpu sim 0.1 render 1003.4 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 8.2 ms: lgrid 0.9, vflush 0.0, cull 0.0, simphys 1.9, world 0.0, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
-[diffuse] walkable bitset rebuilt in 26.1 ms
+[hitch] frame 1004 ms | cpu sim 0.1 render 1003.8 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 8.7 ms: lgrid 0.9, vflush 0.0, cull 0.0, simphys 1.7, world 0.5, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
+[diffuse] walkable bitset rebuilt in 17.9 ms
 [aimem] STEP tick=0 layer=1 seen=419 replan=419 own_ai=298 own_wander=121 errand=281 settled=27 step=254 column=0 lost=40 stalled=0 meandist=7.6 recall=419 filed=0 fled=0 rows=0 writes=0 coal=0 evict=0 bytes=0
 [aimem] INTENT tick=0 flee=17 work=321 patrol=80 wander=1
 [needs] tick=0 bodies=420 recovering=187 crowd_dead_total=0
 [aimem] STEP tick=60 layer=1 seen=419 replan=0 own_ai=302 own_wander=117 errand=285 settled=27 step=258 column=0 lost=36 stalled=0 meandist=7.5 recall=17 filed=0 fled=0 rows=4096 writes=351 coal=15304 evict=0 bytes=262144
 [aimem] INTENT tick=60 flee=17 work=321 patrol=80 wander=1
 [needs] tick=60 bodies=420 recovering=187 crowd_dead_total=0
-[hitch] frame 51 ms | cpu sim 50.0 render 1.2 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 12.7 ms: lgrid 1.0, vflush 0.0, cull 0.0, simphys 1.9, world 0.0, bodies 0.1, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
-[aimem] STEP tick=120 layer=1 seen=419 replan=0 own_ai=302 own_wander=117 errand=285 settled=38 step=247 column=0 lost=36 stalled=0 meandist=7.4 recall=17 filed=0 fled=0 rows=4096 writes=549 coal=28859 evict=0 bytes=262144
+[hitch] frame 65 ms | cpu sim 63.6 render 1.4 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 12.4 ms: lgrid 1.0, vflush 0.0, cull 0.0, simphys 1.8, world 0.1, bodies 0.1, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
+[aimem] STEP tick=120 layer=1 seen=419 replan=0 own_ai=302 own_wander=117 errand=285 settled=38 step=247 column=0 lost=36 stalled=0 meandist=7.4 recall=17 filed=0 fled=0 rows=4096 writes=547 coal=28799 evict=0 bytes=262144
 [aimem] INTENT tick=120 flee=17 work=321 patrol=80 wander=1
-[needs] tick=120 bodies=420 recovering=138 crowd_dead_total=0
-[aimem] STEP tick=180 layer=1 seen=419 replan=0 own_ai=301 own_wander=118 errand=284 settled=38 step=245 column=1 lost=37 stalled=0 meandist=7.3 recall=17 filed=0 fled=0 rows=4096 writes=571 coal=39836 evict=1 bytes=262144
+[needs] tick=120 bodies=420 recovering=137 crowd_dead_total=0
+[aimem] STEP tick=180 layer=1 seen=419 replan=0 own_ai=301 own_wander=118 errand=284 settled=38 step=245 column=1 lost=37 stalled=0 meandist=7.3 recall=17 filed=0 fled=0 rows=4096 writes=569 coal=39740 evict=1 bytes=262144
 [aimem] INTENT tick=180 flee=17 work=321 patrol=80 wander=1
-[needs] tick=180 bodies=420 recovering=133 crowd_dead_total=0
-[aimem] STEP tick=240 layer=1 seen=419 replan=2 own_ai=303 own_wander=116 errand=287 settled=37 step=250 column=0 lost=36 stalled=0 meandist=7.4 recall=18 filed=0 fled=0 rows=4096 writes=597 coal=49718 evict=2 bytes=262144
+[needs] tick=180 bodies=420 recovering=134 crowd_dead_total=0
+[aimem] STEP tick=240 layer=1 seen=419 replan=2 own_ai=303 own_wander=116 errand=287 settled=37 step=250 column=0 lost=36 stalled=0 meandist=7.4 recall=18 filed=0 fled=0 rows=4096 writes=597 coal=49682 evict=2 bytes=262144
 [aimem] INTENT tick=240 flee=16 drink=15 work=308 patrol=79 wander=1
 [needs] tick=240 bodies=420 recovering=123 crowd_dead_total=0
 [macro] tick=1 day=7.0 living=1964 births=1 deaths=1 blocked=0 depart=1 arrive=0 transit=1 reserve=1046612
-[aimem] STEP tick=300 layer=1 seen=419 replan=3 own_ai=305 own_wander=114 errand=289 settled=55 step=233 column=1 lost=36 stalled=0 meandist=7.4 recall=19 filed=0 fled=0 rows=4096 writes=708 coal=58717 evict=2 bytes=262144
+[aimem] STEP tick=300 layer=1 seen=419 replan=3 own_ai=305 own_wander=114 errand=289 settled=55 step=233 column=1 lost=36 stalled=0 meandist=7.4 recall=19 filed=0 fled=0 rows=4096 writes=710 coal=58763 evict=2 bytes=262144
 [aimem] INTENT tick=300 flee=16 drink=32 eat=1 work=292 patrol=77 wander=1
-[needs] tick=300 bodies=420 recovering=114 crowd_dead_total=0
-[aimem] STEP tick=360 layer=1 seen=419 replan=0 own_ai=306 own_wander=113 errand=291 settled=54 step=236 column=1 lost=37 stalled=0 meandist=7.4 recall=15 filed=0 fled=0 rows=4096 writes=729 coal=67434 evict=2 bytes=262144
+[needs] tick=300 bodies=420 recovering=115 crowd_dead_total=0
+[aimem] STEP tick=360 layer=1 seen=419 replan=0 own_ai=306 own_wander=113 errand=291 settled=54 step=236 column=1 lost=37 stalled=0 meandist=7.4 recall=15 filed=0 fled=0 rows=4096 writes=733 coal=67594 evict=2 bytes=262144
 [aimem] INTENT tick=360 flee=15 drink=48 eat=2 work=278 patrol=75 wander=1
 [needs] tick=360 bodies=420 recovering=114 crowd_dead_total=0
-[aimem] STEP tick=420 layer=1 seen=419 replan=6 own_ai=307 own_wander=112 errand=293 settled=55 step=237 column=1 lost=36 stalled=0 meandist=7.2 recall=19 filed=0 fled=0 rows=4096 writes=907 coal=75812 evict=152 bytes=262144
+[aimem] STEP tick=420 layer=1 seen=419 replan=6 own_ai=307 own_wander=112 errand=293 settled=55 step=237 column=1 lost=36 stalled=0 meandist=7.2 recall=19 filed=0 fled=0 rows=4096 writes=911 coal=75980 evict=152 bytes=262144
 [aimem] INTENT tick=420 flee=14 drink=62 eat=2 work=265 patrol=75 wander=1
-[needs] tick=420 bodies=419 recovering=114 crowd_dead_total=0
-[aimem] STEP tick=480 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=295 settled=71 step=223 column=1 lost=38 stalled=0 meandist=7.2 recall=16 filed=0 fled=0 rows=4096 writes=1244 coal=84590 evict=393 bytes=262144
+[needs] tick=420 bodies=419 recovering=115 crowd_dead_total=0
+[aimem] STEP tick=480 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=295 settled=71 step=223 column=1 lost=38 stalled=0 meandist=7.2 recall=16 filed=0 fled=0 rows=4096 writes=1248 coal=84790 evict=393 bytes=262144
 [aimem] INTENT tick=480 flee=14 drink=81 eat=2 sleep=1 work=249 patrol=71 wander=1
 [needs] tick=480 bodies=419 recovering=124 crowd_dead_total=0
 [macro] tick=2 day=14.0 living=1963 births=2 deaths=2 blocked=0 depart=1 arrive=0 transit=2 reserve=1046613
-[aimem] STEP tick=540 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=296 settled=69 step=226 column=1 lost=38 stalled=0 meandist=7.3 recall=15 filed=0 fled=0 rows=4096 writes=1559 coal=94397 evict=691 bytes=262144
+[aimem] STEP tick=540 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=296 settled=69 step=226 column=1 lost=38 stalled=0 meandist=7.3 recall=15 filed=0 fled=0 rows=4096 writes=1563 coal=94597 evict=691 bytes=262144
 [aimem] INTENT tick=540 flee=13 drink=84 eat=3 sleep=1 work=246 patrol=71 wander=1
 [needs] tick=540 bodies=420 recovering=126 crowd_dead_total=0
-[aimem] STEP tick=600 layer=1 seen=419 replan=4 own_ai=309 own_wander=110 errand=296 settled=74 step=221 column=1 lost=38 stalled=0 meandist=7.1 recall=17 filed=1 fled=0 rows=4096 writes=1906 coal=104208 evict=986 bytes=262144
+[aimem] STEP tick=600 layer=1 seen=419 replan=4 own_ai=309 own_wander=110 errand=296 settled=74 step=221 column=1 lost=38 stalled=0 meandist=7.1 recall=17 filed=1 fled=0 rows=4096 writes=1910 coal=104408 evict=986 bytes=262144
 [aimem] INTENT tick=600 flee=13 drink=84 eat=3 sleep=1 work=246 patrol=71 wander=1
 [needs] tick=600 bodies=420 recovering=125 crowd_dead_total=0
-[aimem] STEP tick=660 layer=1 seen=419 replan=5 own_ai=309 own_wander=110 errand=296 settled=88 step=207 column=1 lost=38 stalled=1 meandist=7.3 recall=18 filed=0 fled=0 rows=4096 writes=2273 coal=114188 evict=1278 bytes=262144
+[aimem] STEP tick=660 layer=1 seen=419 replan=5 own_ai=309 own_wander=110 errand=296 settled=88 step=207 column=1 lost=38 stalled=1 meandist=7.3 recall=18 filed=0 fled=0 rows=4096 writes=2277 coal=114388 evict=1278 bytes=262144
 [aimem] INTENT tick=660 flee=13 drink=84 eat=3 sleep=1 work=246 patrol=71 wander=1
 [needs] tick=660 bodies=420 recovering=131 crowd_dead_total=0
-[hitch] frame 708 ms | cpu sim 706.7 render 1.4 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 17.9 ms: lgrid 1.0, vflush 0.0, cull 0.0, simphys 1.9, world 0.0, bodies 0.0, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
-[aimem] STEP tick=720 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=296 settled=89 step=205 column=2 lost=38 stalled=0 meandist=7.3 recall=15 filed=0 fled=0 rows=4096 writes=2871 coal=124546 evict=1834 bytes=262144
+[aimem] STEP tick=720 layer=1 seen=419 replan=2 own_ai=309 own_wander=110 errand=296 settled=89 step=205 column=2 lost=38 stalled=0 meandist=7.3 recall=15 filed=0 fled=0 rows=4096 writes=2875 coal=124746 evict=1834 bytes=262144
 [aimem] INTENT tick=720 flee=13 drink=85 eat=3 sleep=1 work=245 patrol=71 wander=1
 [needs] tick=720 bodies=419 recovering=132 crowd_dead_total=0
+[hitch] frame 746 ms | cpu sim 744.8 render 1.5 other 0.0 | carve 0.00, light_swap 0.00, prop_skin 0.00, entry 0 | gpu peak 13.5 ms: lgrid 1.0, vflush 0.0, cull 0.0, simphys 1.9, world 0.1, bodies 0.1, props 0.0, drawphys 0.0, hud 0.0 (dropped 0)
 [macro] tick=3 day=21.0 living=1962 births=2 deaths=2 blocked=0 depart=1 arrive=1 transit=2 reserve=1046614
-[aimem] STEP tick=780 layer=1 seen=419 replan=4 own_ai=308 own_wander=111 errand=295 settled=99 step=195 column=1 lost=39 stalled=0 meandist=7.2 recall=17 filed=0 fled=0 rows=4096 writes=3746 coal=134835 evict=2666 bytes=262144
+[aimem] STEP tick=780 layer=1 seen=419 replan=4 own_ai=308 own_wander=111 errand=295 settled=99 step=195 column=1 lost=39 stalled=0 meandist=7.2 recall=17 filed=0 fled=0 rows=4096 writes=3750 coal=135035 evict=2666 bytes=262144
 [aimem] INTENT tick=780 flee=13 drink=85 eat=3 sleep=1 work=244 heal=1 patrol=71 wander=1
 [needs] tick=780 bodies=419 recovering=134 crowd_dead_total=0
-[aimem] STEP tick=840 layer=1 seen=419 replan=6 own_ai=308 own_wander=111 errand=295 settled=104 step=190 column=1 lost=39 stalled=0 meandist=7.1 recall=18 filed=1 fled=0 rows=4096 writes=4758 coal=144850 evict=3653 bytes=262144
+[aimem] STEP tick=840 layer=1 seen=419 replan=6 own_ai=308 own_wander=111 errand=295 settled=104 step=190 column=1 lost=39 stalled=0 meandist=7.1 recall=18 filed=1 fled=0 rows=4096 writes=4762 coal=145050 evict=3653 bytes=262144
 [aimem] INTENT tick=840 flee=13 drink=86 eat=3 sleep=1 work=243 heal=1 patrol=71 wander=1
 [needs] tick=840 bodies=417 recovering=122 crowd_dead_total=0
-[aimem] STEP tick=900 layer=1 seen=419 replan=7 own_ai=307 own_wander=112 errand=294 settled=111 step=182 column=1 lost=40 stalled=0 meandist=7.2 recall=20 filed=0 fled=0 rows=4096 writes=6034 coal=153565 evict=4891 bytes=262144
+[aimem] STEP tick=900 layer=1 seen=419 replan=7 own_ai=307 own_wander=112 errand=294 settled=111 step=182 column=1 lost=40 stalled=0 meandist=7.2 recall=20 filed=0 fled=0 rows=4096 writes=6038 coal=153765 evict=4891 bytes=262144
 [aimem] INTENT tick=900 flee=13 drink=85 eat=3 sleep=1 work=242 heal=3 patrol=71 wander=1
 [needs] tick=900 bodies=415 recovering=121 crowd_dead_total=0
-[aimem] STEP tick=960 layer=1 seen=419 replan=5 own_ai=304 own_wander=115 errand=291 settled=118 step=173 column=0 lost=43 stalled=0 meandist=7.0 recall=18 filed=0 fled=0 rows=4096 writes=7549 coal=161893 evict=6362 bytes=262144
+[aimem] STEP tick=960 layer=1 seen=419 replan=5 own_ai=304 own_wander=115 errand=291 settled=118 step=173 column=0 lost=43 stalled=0 meandist=7.0 recall=18 filed=0 fled=0 rows=4096 writes=7553 coal=162093 evict=6362 bytes=262144
 [aimem] INTENT tick=960 flee=13 drink=83 eat=3 sleep=1 work=242 heal=5 patrol=71 wander=1
 [needs] tick=960 bodies=414 recovering=119 crowd_dead_total=0
 [macro] tick=4 day=28.0 living=1956 births=1 deaths=1 blocked=0 depart=0 arrive=1 transit=1 reserve=1046620
-[aimem] STEP tick=1020 layer=1 seen=419 replan=5 own_ai=301 own_wander=118 errand=287 settled=124 step=163 column=0 lost=46 stalled=0 meandist=7.0 recall=18 filed=0 fled=0 rows=4096 writes=9212 coal=170283 evict=7993 bytes=262144
+[aimem] STEP tick=1020 layer=1 seen=419 replan=5 own_ai=301 own_wander=118 errand=287 settled=124 step=163 column=0 lost=46 stalled=0 meandist=7.0 recall=18 filed=0 fled=0 rows=4096 writes=9216 coal=170483 evict=7993 bytes=262144
 [aimem] INTENT tick=1020 flee=14 drink=82 eat=3 sleep=1 work=240 heal=7 patrol=71 wander=1
 [needs] tick=1020 bodies=414 recovering=118 crowd_dead_total=0
-[aimem] STEP tick=1080 layer=1 seen=419 replan=4 own_ai=302 own_wander=117 errand=288 settled=127 step=161 column=0 lost=45 stalled=0 meandist=7.0 recall=17 filed=0 fled=0 rows=4096 writes=10726 coal=178816 evict=9478 bytes=262144
+[aimem] STEP tick=1080 layer=1 seen=419 replan=4 own_ai=302 own_wander=117 errand=288 settled=127 step=161 column=0 lost=45 stalled=0 meandist=7.0 recall=17 filed=0 fled=0 rows=4096 writes=10730 coal=179016 evict=9478 bytes=262144
 [aimem] INTENT tick=1080 flee=14 drink=82 eat=3 sleep=1 work=240 heal=7 patrol=71 wander=1
 [needs] tick=1080 bodies=412 recovering=119 crowd_dead_total=0
-[aimem] STEP tick=1140 layer=1 seen=419 replan=8 own_ai=301 own_wander=118 errand=287 settled=136 step=151 column=0 lost=46 stalled=0 meandist=6.9 recall=22 filed=0 fled=0 rows=4096 writes=12242 coal=187376 evict=10960 bytes=262144
+[aimem] STEP tick=1140 layer=1 seen=419 replan=8 own_ai=301 own_wander=118 errand=287 settled=136 step=151 column=0 lost=46 stalled=0 meandist=6.9 recall=22 filed=0 fled=0 rows=4096 writes=12246 coal=187576 evict=10960 bytes=262144
 [aimem] INTENT tick=1140 flee=14 drink=81 eat=3 sleep=1 work=241 heal=7 patrol=71 wander=1
 [needs] tick=1140 bodies=412 recovering=119 crowd_dead_total=0
-[aimem] STEP tick=1200 layer=1 seen=419 replan=8 own_ai=300 own_wander=119 errand=286 settled=140 step=146 column=0 lost=47 stalled=0 meandist=7.0 recall=22 filed=0 fled=0 rows=4096 writes=13447 coal=196255 evict=12139 bytes=262144
+[aimem] STEP tick=1200 layer=1 seen=419 replan=8 own_ai=300 own_wander=119 errand=286 settled=140 step=146 column=0 lost=47 stalled=0 meandist=7.0 recall=22 filed=0 fled=0 rows=4096 writes=13451 coal=196455 evict=12139 bytes=262144
 [aimem] INTENT tick=1200 flee=14 drink=80 eat=3 sleep=1 work=241 heal=8 patrol=71 wander=1
 [needs] tick=1200 bodies=410 recovering=121 crowd_dead_total=0
 [macro] tick=5 day=35.0 living=1952 births=1 deaths=1 blocked=0 depart=1 arrive=1 transit=1 reserve=1046624
-[aimem] STEP tick=1260 layer=1 seen=419 replan=8 own_ai=299 own_wander=120 errand=286 settled=151 step=134 column=1 lost=48 stalled=0 meandist=7.1 recall=20 filed=0 fled=0 rows=4096 writes=14858 coal=205438 evict=13505 bytes=262144
+[aimem] STEP tick=1260 layer=1 seen=419 replan=8 own_ai=299 own_wander=120 errand=286 settled=151 step=134 column=1 lost=48 stalled=0 meandist=7.1 recall=20 filed=0 fled=0 rows=4096 writes=14862 coal=205638 evict=13505 bytes=262144
 [aimem] INTENT tick=1260 flee=13 drink=78 eat=3 sleep=1 work=243 heal=9 patrol=71 wander=1
 [needs] tick=1260 bodies=410 recovering=126 crowd_dead_total=0
-[aimem] STEP tick=1320 layer=1 seen=419 replan=8 own_ai=297 own_wander=122 errand=285 settled=155 step=129 column=1 lost=49 stalled=0 meandist=7.0 recall=21 filed=0 fled=0 rows=4096 writes=16369 coal=214634 evict=14998 bytes=262144
+[aimem] STEP tick=1320 layer=1 seen=419 replan=8 own_ai=297 own_wander=122 errand=285 settled=155 step=129 column=1 lost=49 stalled=0 meandist=7.0 recall=21 filed=0 fled=0 rows=4096 writes=16373 coal=214834 evict=14998 bytes=262144
 [aimem] INTENT tick=1320 flee=13 drink=76 eat=3 sleep=1 work=245 heal=9 patrol=71 wander=1
 [needs] tick=1320 bodies=410 recovering=125 crowd_dead_total=0
-[aimem] STEP tick=1380 layer=1 seen=419 replan=4 own_ai=296 own_wander=123 errand=283 settled=155 step=127 column=1 lost=51 stalled=1 meandist=7.0 recall=17 filed=0 fled=0 rows=4096 writes=17861 coal=223624 evict=16474 bytes=262144
+[aimem] STEP tick=1380 layer=1 seen=419 replan=4 own_ai=296 own_wander=123 errand=283 settled=155 step=127 column=1 lost=51 stalled=1 meandist=7.0 recall=17 filed=0 fled=0 rows=4096 writes=17865 coal=223824 evict=16474 bytes=262144
 [aimem] INTENT tick=1380 flee=13 drink=74 eat=3 sleep=1 work=246 heal=10 patrol=71 wander=1
 [needs] tick=1380 bodies=409 recovering=121 crowd_dead_total=0
-[aimem] STEP tick=1440 layer=1 seen=419 replan=5 own_ai=295 own_wander=124 errand=282 settled=161 step=121 column=0 lost=51 stalled=1 meandist=6.8 recall=18 filed=0 fled=0 rows=4096 writes=19519 coal=232196 evict=18097 bytes=262144
+[aimem] STEP tick=1440 layer=1 seen=419 replan=5 own_ai=295 own_wander=124 errand=282 settled=161 step=121 column=0 lost=51 stalled=1 meandist=6.8 recall=18 filed=0 fled=0 rows=4096 writes=19523 coal=232396 evict=18097 bytes=262144
 [aimem] INTENT tick=1440 flee=13 drink=72 eat=3 sleep=1 work=247 heal=10 patrol=72 wander=1
 [needs] tick=1440 bodies=409 recovering=115 crowd_dead_total=0
 [macro] tick=6 day=42.0 living=1951 births=0 deaths=0 blocked=0 depart=0 arrive=1 transit=0 reserve=1046625
-[aimem] STEP tick=1500 layer=1 seen=419 replan=5 own_ai=293 own_wander=126 errand=280 settled=163 step=115 column=2 lost=53 stalled=1 meandist=6.6 recall=18 filed=0 fled=0 rows=4096 writes=21275 coal=240616 evict=19816 bytes=262144
+[aimem] STEP tick=1500 layer=1 seen=419 replan=5 own_ai=293 own_wander=126 errand=280 settled=163 step=115 column=2 lost=53 stalled=1 meandist=6.6 recall=18 filed=0 fled=0 rows=4096 writes=21279 coal=240816 evict=19816 bytes=262144
 [aimem] INTENT tick=1500 flee=13 drink=70 eat=3 sleep=1 work=248 heal=11 patrol=72 wander=1
 [needs] tick=1500 bodies=409 recovering=116 crowd_dead_total=0
-[aimem] STEP tick=1560 layer=1 seen=419 replan=5 own_ai=294 own_wander=125 errand=279 settled=160 step=119 column=0 lost=51 stalled=0 meandist=6.6 recall=20 filed=0 fled=0 rows=4096 writes=23099 coal=249056 evict=21622 bytes=262144
+[rpgcmbt] melee dmg=8 cd=327 str=3 agi=2 lvl=8 weapon=0
+[carve] COMBAT removed=15 power=64 r=0.55 at (85.7,48.2,138.0)
+[carve] total 1.71 ms (3 cells): light_mat 0.01, prop_skin 0.00, mirror_mark 0.02, mirror_flush 0.02, lgrid 0.32, sphere 0.08, diff 0.00, patch 0.01, anchor 0.78, antr 0.42, part 0.01, unmeasured 0.04
+[medium] live 16 cells, 0 quanta (0 l), woken 16, slept 0, lazy 0, listTot 16, fade 0, substeps 380 | cpu ms: poll 0.00 apply 0.03 rec 0.00
+[lightvis] floor 0 gen 1 patch: 25 lamps affected -> 0 cells changed in 12.5 ms @ 6 threads | shadow sync 0.02 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 1)
+[aimem] STEP tick=1560 layer=1 seen=419 replan=5 own_ai=294 own_wander=125 errand=279 settled=160 step=119 column=0 lost=51 stalled=0 meandist=6.6 recall=20 filed=0 fled=0 rows=4096 writes=23103 coal=249256 evict=21622 bytes=262144
 [aimem] INTENT tick=1560 flee=15 drink=67 eat=3 sleep=1 work=247 heal=12 patrol=73 wander=1
 [needs] tick=1560 bodies=409 recovering=114 crowd_dead_total=0
-[aimem] STEP tick=1620 layer=1 seen=419 replan=4 own_ai=295 own_wander=124 errand=280 settled=168 step=111 column=1 lost=50 stalled=0 meandist=6.6 recall=19 filed=0 fled=0 rows=4096 writes=25059 coal=257197 evict=23557 bytes=262144
+[carve] COMBAT removed=18 power=64 r=0.55 at (87.6,47.5,137.9)
+[carve] total 0.86 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.29, sphere 0.03, diff 0.00, patch 0.00, anchor 0.22, antr 0.29, part 0.00, unmeasured 0.02
+[lightvis] floor 0 gen 2 patch: 27 lamps affected -> 0 cells changed in 10.2 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 2)
+[carve] COMBAT removed=16 power=64 r=0.55 at (89.5,47.3,137.9)
+[carve] total 0.73 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.29, sphere 0.03, diff 0.00, patch 0.00, anchor 0.20, antr 0.19, part 0.00, unmeasured 0.01
+[aimem] STEP tick=1620 layer=1 seen=419 replan=4 own_ai=295 own_wander=124 errand=280 settled=168 step=111 column=1 lost=50 stalled=0 meandist=6.6 recall=19 filed=0 fled=0 rows=4096 writes=25063 coal=257397 evict=23557 bytes=262144
 [aimem] INTENT tick=1620 flee=15 drink=66 eat=3 sleep=1 work=248 heal=12 patrol=73 wander=1
 [needs] tick=1620 bodies=409 recovering=112 crowd_dead_total=0
-[aimem] STEP tick=1680 layer=1 seen=419 replan=12 own_ai=294 own_wander=125 errand=279 settled=167 step=110 column=2 lost=51 stalled=1 meandist=6.5 recall=26 filed=0 fled=0 rows=4096 writes=27482 coal=264786 evict=25971 bytes=262144
+[lightvis] floor 0 gen 3 patch: 25 lamps affected -> 0 cells changed in 11.9 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 3)
+[medium] live 4 cells, 0 quanta (0 l), woken 362, slept 22, lazy 0, listTot 4, fade 0, substeps 412 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[carve] COMBAT removed=16 power=64 r=0.55 at (90.5,47.6,137.9)
+[carve] total 0.79 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.17, part 0.00, unmeasured 0.03
+[aimem] STEP tick=1680 layer=1 seen=419 replan=12 own_ai=294 own_wander=125 errand=279 settled=167 step=110 column=2 lost=51 stalled=1 meandist=6.5 recall=26 filed=0 fled=0 rows=4096 writes=27486 coal=264986 evict=25971 bytes=262144
 [aimem] INTENT tick=1680 flee=15 drink=66 eat=3 sleep=1 work=248 heal=12 patrol=73 wander=1
 [needs] tick=1680 bodies=406 recovering=103 crowd_dead_total=0
-[medium] live 61 cells, 2150 quanta (33540 l), woken 122, slept 0, lazy 0, listTot 61, fade 0, substeps 433 | cpu ms: poll 0.00 apply 0.07 rec 0.00
-[aimem] STEP tick=1740 layer=1 seen=419 replan=5 own_ai=294 own_wander=125 errand=279 settled=174 step=104 column=1 lost=51 stalled=1 meandist=6.7 recall=20 filed=0 fled=0 rows=4096 writes=30022 coal=271469 evict=28495 bytes=262144
+[lightvis] floor 0 gen 4 patch: 24 lamps affected -> 0 cells changed in 10.0 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 4)
+[carve] COMBAT removed=14 power=64 r=0.55 at (91.1,48.4,137.9)
+[carve] total 0.77 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.30, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.17, part 0.00, unmeasured 0.02
+[lightvis] floor 0 gen 5 patch: 25 lamps affected -> 0 cells changed in 11.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 5)
+[aimem] STEP tick=1740 layer=1 seen=419 replan=5 own_ai=294 own_wander=125 errand=279 settled=174 step=104 column=1 lost=51 stalled=1 meandist=6.7 recall=20 filed=0 fled=0 rows=4096 writes=30026 coal=271669 evict=28495 bytes=262144
 [aimem] INTENT tick=1740 flee=15 drink=66 eat=3 sleep=1 work=248 heal=12 patrol=73 wander=1
 [needs] tick=1740 bodies=406 recovering=103 crowd_dead_total=0
 [macro] tick=7 day=49.0 living=1948 births=1 deaths=1 blocked=0 depart=1 arrive=0 transit=1 reserve=1046628
-[lightvis] floor 0 gen 1 patch: 43 lamps affected -> 0 cells changed in 20.5 ms @ 6 threads | shadow sync 0.06 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 1)
-[aimem] STEP tick=1800 layer=1 seen=419 replan=8 own_ai=291 own_wander=128 errand=277 settled=177 step=100 column=0 lost=55 stalled=2 meandist=6.7 recall=23 filed=0 fled=0 rows=4096 writes=32471 coal=278318 evict=30930 bytes=262144
+[carve] COMBAT removed=20 power=64 r=0.55 at (90.6,49.0,137.9)
+[carve] total 0.82 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.32, sphere 0.03, diff 0.00, patch 0.00, anchor 0.25, antr 0.19, part 0.00, unmeasured 0.03
+[medium] live 7 cells, 0 quanta (0 l), woken 536, slept 34, lazy 0, listTot 7, fade 0, substeps 443 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[lightvis] floor 0 gen 6 patch: 25 lamps affected -> 0 cells changed in 12.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 6)
+[aimem] STEP tick=1800 layer=1 seen=419 replan=8 own_ai=291 own_wander=128 errand=277 settled=177 step=100 column=0 lost=55 stalled=2 meandist=6.7 recall=23 filed=0 fled=0 rows=4096 writes=32475 coal=278518 evict=30930 bytes=262144
 [aimem] INTENT tick=1800 flee=15 drink=64 eat=3 sleep=1 work=251 heal=13 patrol=71 wander=1
 [needs] tick=1800 bodies=407 recovering=103 crowd_dead_total=0
-[aimem] STEP tick=1860 layer=1 seen=419 replan=5 own_ai=290 own_wander=129 errand=275 settled=176 step=99 column=0 lost=57 stalled=1 meandist=6.6 recall=18 filed=0 fled=0 rows=4096 writes=34625 coal=285171 evict=33072 bytes=262144
+[carve] COMBAT removed=4 power=64 r=0.55 at (90.7,48.8,137.8)
+[carve] total 0.83 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.21, part 0.00, unmeasured 0.02
+[aimem] STEP tick=1860 layer=1 seen=419 replan=5 own_ai=290 own_wander=129 errand=275 settled=176 step=99 column=0 lost=57 stalled=1 meandist=6.6 recall=18 filed=0 fled=0 rows=4096 writes=34629 coal=285371 evict=33072 bytes=262144
 [aimem] INTENT tick=1860 flee=15 drink=63 eat=3 sleep=1 work=251 heal=14 patrol=71 wander=1
 [needs] tick=1860 bodies=407 recovering=100 crowd_dead_total=0
-[medium] live 63 cells, 2146 quanta (33478 l), woken 1896, slept 182, lazy 5, listTot 63, fade 4, substeps 465 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=1920 layer=1 seen=419 replan=6 own_ai=290 own_wander=129 errand=275 settled=179 step=95 column=1 lost=57 stalled=1 meandist=6.5 recall=21 filed=1 fled=0 rows=4096 writes=36618 coal=292023 evict=35049 bytes=262144
+[lightvis] floor 0 gen 7 patch: 25 lamps affected -> 0 cells changed in 12.1 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 7)
+[carve] COMBAT removed=19 power=64 r=0.55 at (91.4,49.3,137.8)
+[carve] total 0.77 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.33, sphere 0.03, diff 0.00, patch 0.00, anchor 0.22, antr 0.16, part 0.00, unmeasured 0.02
+[medium] live 4 cells, 0 quanta (0 l), woken 533, slept 34, lazy 0, listTot 4, fade 0, substeps 474 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[lightvis] floor 0 gen 8 patch: 25 lamps affected -> 0 cells changed in 12.0 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 8)
+[carve] COMBAT removed=6 power=64 r=0.55 at (90.8,48.9,137.8)
+[carve] total 0.77 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.18, part 0.00, unmeasured 0.01
+[aimem] STEP tick=1920 layer=1 seen=419 replan=6 own_ai=290 own_wander=129 errand=275 settled=179 step=95 column=1 lost=57 stalled=1 meandist=6.5 recall=21 filed=1 fled=0 rows=4096 writes=36622 coal=292223 evict=35049 bytes=262144
 [aimem] INTENT tick=1920 flee=15 drink=62 eat=3 sleep=2 work=251 heal=14 patrol=71 wander=1
 [needs] tick=1920 bodies=405 recovering=99 crowd_dead_total=0
-[rpgcmbt] melee dmg=8 cd=327 str=3 agi=2 lvl=8 weapon=0
-[aimem] STEP tick=1980 layer=1 seen=419 replan=8 own_ai=289 own_wander=130 errand=274 settled=186 step=88 column=0 lost=58 stalled=1 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=38503 coal=298988 evict=36911 bytes=262144
+[lightvis] floor 0 gen 9 patch: 25 lamps affected -> 0 cells changed in 11.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 9)
+[carve] COMBAT removed=7 power=64 r=0.55 at (91.2,48.4,137.8)
+[carve] total 0.78 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.18, part 0.00, unmeasured 0.02
+[aimem] STEP tick=1980 layer=1 seen=419 replan=8 own_ai=289 own_wander=130 errand=274 settled=186 step=88 column=0 lost=58 stalled=1 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=38507 coal=299188 evict=36911 bytes=262144
 [aimem] INTENT tick=1980 flee=15 drink=61 eat=3 sleep=2 work=250 heal=16 patrol=71 wander=1
 [needs] tick=1980 bodies=402 recovering=96 crowd_dead_total=0
-[medium] live 59 cells, 2140 quanta (33384 l), woken 3749, slept 797, lazy 8, listTot 59, fade 10, substeps 497 | cpu ms: poll 0.00 apply 0.04 rec 0.00
 [macro] tick=8 day=56.0 living=1944 births=1 deaths=0 blocked=0 depart=0 arrive=1 transit=0 reserve=1046632
-[rebake] floor 0 gen 1 baked: rooms 60 + coarse 193 + fine 198 ms = 0.5 s @ 6 threads | shadow sync 0.00 ms MAIN
-[rebake] swap: floor 0 gen 1 live | 58 ticks start->swap | resident 327.7 MiB
-[aimem] STEP tick=2040 layer=1 seen=419 replan=6 own_ai=285 own_wander=134 errand=270 settled=187 step=83 column=0 lost=62 stalled=1 meandist=6.5 recall=20 filed=0 fled=0 rows=4096 writes=40135 coal=306021 evict=38536 bytes=262144
+[lightvis] floor 0 gen 10 patch: 25 lamps affected -> 0 cells changed in 11.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 10)
+[lightvis] floor 0 gen 10 patch: 25 lamps affected -> 0 cells changed in 10.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 10)
+[carve] COMBAT removed=16 power=64 r=0.55 at (91.7,48.8,137.8)
+[carve] total 0.79 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.24, sphere 0.03, diff 0.00, patch 0.00, anchor 0.35, antr 0.16, part 0.00, unmeasured 0.01
+[lightvis] floor 0 gen 10 patch: 25 lamps affected -> 0 cells changed in 9.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 10)
+[medium] live 4 cells, 0 quanta (0 l), woken 584, slept 77, lazy 0, listTot 4, fade 0, substeps 506 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2040 layer=1 seen=419 replan=6 own_ai=285 own_wander=134 errand=270 settled=187 step=83 column=0 lost=62 stalled=1 meandist=6.5 recall=20 filed=0 fled=0 rows=4096 writes=40139 coal=306221 evict=38536 bytes=262144
 [aimem] INTENT tick=2040 flee=15 drink=58 eat=3 sleep=2 work=250 heal=19 patrol=71 wander=1
 [needs] tick=2040 bodies=403 recovering=95 crowd_dead_total=0
-[aimem] STEP tick=2100 layer=1 seen=419 replan=10 own_ai=285 own_wander=134 errand=270 settled=197 step=72 column=1 lost=62 stalled=1 meandist=6.8 recall=24 filed=0 fled=0 rows=4096 writes=41983 coal=312945 evict=40370 bytes=262144
+[lightvis] floor 0 gen 11 patch: 27 lamps affected -> 0 cells changed in 11.3 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 11)
+[carve] COMBAT removed=19 power=64 r=0.55 at (90.9,49.7,137.8)
+[carve] total 0.92 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.27, sphere 0.03, diff 0.00, patch 0.00, anchor 0.38, antr 0.19, part 0.00, unmeasured 0.03
+[lightvis] floor 0 gen 12 patch: 27 lamps affected -> 0 cells changed in 11.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 12)
+[aimem] STEP tick=2100 layer=1 seen=419 replan=10 own_ai=285 own_wander=134 errand=270 settled=197 step=72 column=1 lost=62 stalled=1 meandist=6.8 recall=24 filed=0 fled=0 rows=4096 writes=41987 coal=313145 evict=40370 bytes=262144
 [aimem] INTENT tick=2100 flee=15 drink=57 eat=3 sleep=2 work=251 heal=19 patrol=71 wander=1
 [needs] tick=2100 bodies=402 recovering=95 crowd_dead_total=0
-[medium] live 57 cells, 2138 quanta (33353 l), woken 5593, slept 1625, lazy 8, listTot 57, fade 12, substeps 528 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=2160 layer=1 seen=419 replan=8 own_ai=283 own_wander=136 errand=269 settled=199 step=70 column=0 lost=63 stalled=1 meandist=6.8 recall=22 filed=0 fled=0 rows=4096 writes=43791 coal=319934 evict=42164 bytes=262144
+[carve] COMBAT removed=13 power=64 r=0.55 at (91.4,49.1,137.8)
+[carve] total 0.91 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.25, antr 0.27, part 0.00, unmeasured 0.04
+[medium] live 4 cells, 0 quanta (0 l), woken 703, slept 88, lazy 0, listTot 4, fade 0, substeps 537 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2160 layer=1 seen=419 replan=8 own_ai=283 own_wander=136 errand=269 settled=199 step=70 column=0 lost=63 stalled=1 meandist=6.8 recall=22 filed=0 fled=0 rows=4096 writes=43795 coal=320134 evict=42164 bytes=262144
 [aimem] INTENT tick=2160 flee=15 drink=56 eat=3 sleep=2 work=252 heal=19 patrol=71 wander=1
 [needs] tick=2160 bodies=402 recovering=88 crowd_dead_total=0
-[aimem] STEP tick=2220 layer=1 seen=419 replan=5 own_ai=285 own_wander=134 errand=271 settled=199 step=72 column=0 lost=61 stalled=1 meandist=6.8 recall=20 filed=0 fled=0 rows=4096 writes=45350 coal=326837 evict=43712 bytes=262144
+[lightvis] floor 0 gen 13 patch: 27 lamps affected -> 0 cells changed in 11.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 13)
+[carve] COMBAT removed=1 power=64 r=0.55 at (90.9,48.7,137.8)
+[carve] total 0.79 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.31, sphere 0.03, diff 0.00, patch 0.00, anchor 0.24, antr 0.17, part 0.00, unmeasured 0.03
+[aimem] STEP tick=2220 layer=1 seen=419 replan=5 own_ai=285 own_wander=134 errand=271 settled=199 step=72 column=0 lost=61 stalled=1 meandist=6.8 recall=20 filed=0 fled=0 rows=4096 writes=45354 coal=327037 evict=43712 bytes=262144
 [aimem] INTENT tick=2220 flee=15 drink=54 eat=3 sleep=2 work=254 heal=19 patrol=71 wander=1
 [needs] tick=2220 bodies=402 recovering=92 crowd_dead_total=0
-[medium] live 62 cells, 2137 quanta (33337 l), woken 7501, slept 2515, lazy 8, listTot 62, fade 13, substeps 560 | cpu ms: poll 0.00 apply 0.03 rec 0.00
+[lightvis] floor 0 gen 14 patch: 25 lamps affected -> 0 cells changed in 11.9 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 14)
+[carve] COMBAT removed=25 power=64 r=0.55 at (90.0,48.1,137.8)
+[carve] total 0.92 ms (4 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.31, sphere 0.04, diff 0.00, patch 0.00, anchor 0.36, antr 0.17, part 0.00, unmeasured 0.02
 [macro] tick=9 day=63.0 living=1942 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046634
-[aimem] STEP tick=2280 layer=1 seen=419 replan=9 own_ai=284 own_wander=135 errand=272 settled=200 step=72 column=0 lost=60 stalled=1 meandist=6.8 recall=24 filed=0 fled=0 rows=4096 writes=47122 coal=333603 evict=45473 bytes=262144
+[medium] live 5 cells, 6 quanta (94 l), woken 767, slept 129, lazy 0, listTot 5, fade 0, substeps 569 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2280 layer=1 seen=419 replan=9 own_ai=284 own_wander=135 errand=272 settled=200 step=72 column=0 lost=60 stalled=1 meandist=6.8 recall=24 filed=0 fled=0 rows=4096 writes=47126 coal=333803 evict=45473 bytes=262144
 [aimem] INTENT tick=2280 flee=15 drink=53 eat=3 sleep=2 work=255 heal=19 patrol=71 wander=1
 [needs] tick=2280 bodies=401 recovering=89 crowd_dead_total=0
-[aimem] STEP tick=2340 layer=1 seen=419 replan=8 own_ai=281 own_wander=138 errand=269 settled=198 step=71 column=0 lost=64 stalled=1 meandist=6.8 recall=23 filed=0 fled=0 rows=4096 writes=49174 coal=339797 evict=47518 bytes=262144
+[lightvis] floor 0 gen 15 patch: 29 lamps affected -> 0 cells changed in 11.4 ms @ 6 threads | shadow sync 0.01 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 26 lamps affected -> 0 cells changed in 10.1 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 26 lamps affected -> 0 cells changed in 9.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 26 lamps affected -> 0 cells changed in 9.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 26 lamps affected -> 0 cells changed in 9.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 24 lamps affected -> 0 cells changed in 7.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 24 lamps affected -> 0 cells changed in 7.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 24 lamps affected -> 0 cells changed in 7.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 24 lamps affected -> 0 cells changed in 7.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 24 lamps affected -> 0 cells changed in 7.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 27 lamps affected -> 0 cells changed in 9.8 ms @ 6 threads | shadow sync 0.01 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[lightvis] floor 0 gen 15 patch: 27 lamps affected -> 0 cells changed in 9.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] COMBAT removed=12 power=64 r=0.55 at (89.8,48.5,137.8)
+[carve] light_patch upload 0 cells 0.00 ms (gen 15)
+[carve] total 0.77 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.24, sphere 0.02, diff 0.00, patch 0.00, anchor 0.34, antr 0.15, part 0.00, unmeasured 0.01
+[aimem] STEP tick=2340 layer=1 seen=419 replan=8 own_ai=281 own_wander=138 errand=269 settled=198 step=71 column=0 lost=64 stalled=1 meandist=6.8 recall=23 filed=0 fled=0 rows=4096 writes=49178 coal=339997 evict=47518 bytes=262144
 [aimem] INTENT tick=2340 flee=15 drink=52 eat=2 sleep=2 work=257 heal=20 patrol=70 wander=1
 [needs] tick=2340 bodies=401 recovering=88 crowd_dead_total=0
-[medium] live 69 cells, 2137 quanta (33337 l), woken 9538, slept 3438, lazy 9, listTot 69, fade 13, substeps 591 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=2400 layer=1 seen=419 replan=8 own_ai=282 own_wander=137 errand=268 settled=204 step=64 column=0 lost=65 stalled=1 meandist=7.1 recall=23 filed=0 fled=0 rows=4096 writes=50856 coal=346037 evict=49195 bytes=262144
+[lightvis] floor 0 gen 16 patch: 30 lamps affected -> 0 cells changed in 11.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 16)
+[lightvis] floor 0 gen 16 patch: 26 lamps affected -> 0 cells changed in 10.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 16)
+[carve] COMBAT removed=5 power=64 r=0.55 at (90.2,49.0,137.8)
+[carve] total 0.87 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.28, sphere 0.03, diff 0.00, patch 0.00, anchor 0.38, antr 0.16, part 0.00, unmeasured 0.02
+[aimem] STEP tick=2400 layer=1 seen=419 replan=8 own_ai=282 own_wander=137 errand=268 settled=204 step=64 column=0 lost=65 stalled=1 meandist=7.1 recall=23 filed=0 fled=0 rows=4096 writes=50860 coal=346237 evict=49195 bytes=262144
 [aimem] INTENT tick=2400 flee=15 drink=51 eat=2 sleep=2 work=257 heal=21 patrol=70 wander=1
 [needs] tick=2400 bodies=399 recovering=85 crowd_dead_total=0
-[aimem] STEP tick=2460 layer=1 seen=419 replan=6 own_ai=282 own_wander=137 errand=268 settled=205 step=63 column=0 lost=65 stalled=1 meandist=7.0 recall=21 filed=0 fled=0 rows=4096 writes=52502 coal=352037 evict=50838 bytes=262144
+[medium] live 5 cells, 7 quanta (109 l), woken 994, slept 188, lazy 1, listTot 5, fade 0, substeps 600 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[lightvis] floor 0 gen 17 patch: 28 lamps affected -> 0 cells changed in 11.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 26 lamps affected -> 0 cells changed in 10.9 ms @ 6 threads | shadow sync 0.01 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 10.1 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 9.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 9.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 9.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 9.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 25 lamps affected -> 0 cells changed in 9.8 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 27 lamps affected -> 0 cells changed in 10.6 ms @ 6 threads | shadow sync 0.01 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[aimem] STEP tick=2460 layer=1 seen=419 replan=6 own_ai=282 own_wander=137 errand=268 settled=205 step=63 column=0 lost=65 stalled=1 meandist=7.0 recall=21 filed=0 fled=0 rows=4096 writes=52506 coal=352237 evict=50838 bytes=262144
 [aimem] INTENT tick=2460 flee=15 drink=51 eat=2 sleep=2 work=257 heal=21 patrol=70 wander=1
 [needs] tick=2460 bodies=399 recovering=88 crowd_dead_total=0
-[medium] live 83 cells, 2137 quanta (33337 l), woken 11942, slept 4502, lazy 13, listTot 83, fade 13, substeps 623 | cpu ms: poll 0.00 apply 0.04 rec 0.00
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.4 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
+[lightvis] floor 0 gen 17 patch: 24 lamps affected -> 0 cells changed in 8.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
+[carve] light_patch upload 0 cells 0.00 ms (gen 17)
 [macro] tick=10 day=70.0 living=1939 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046637
-[aimem] STEP tick=2520 layer=1 seen=419 replan=8 own_ai=281 own_wander=138 errand=267 settled=205 step=62 column=0 lost=66 stalled=1 meandist=7.0 recall=22 filed=0 fled=0 rows=4096 writes=54314 coal=358242 evict=52645 bytes=262144
+[aimem] STEP tick=2520 layer=1 seen=419 replan=8 own_ai=281 own_wander=138 errand=267 settled=205 step=62 column=0 lost=66 stalled=1 meandist=7.0 recall=22 filed=0 fled=0 rows=4096 writes=54318 coal=358442 evict=52645 bytes=262144
 [aimem] INTENT tick=2520 flee=15 drink=49 eat=2 sleep=2 work=258 heal=22 patrol=70 wander=1
 [needs] tick=2520 bodies=398 recovering=93 crowd_dead_total=0
-[aimem] STEP tick=2580 layer=1 seen=419 replan=5 own_ai=281 own_wander=138 errand=266 settled=204 step=62 column=0 lost=67 stalled=1 meandist=6.9 recall=20 filed=0 fled=0 rows=4096 writes=56079 coal=364382 evict=54400 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1167, slept 246, lazy 2, listTot 3, fade 0, substeps 631 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2580 layer=1 seen=419 replan=5 own_ai=281 own_wander=138 errand=266 settled=204 step=62 column=0 lost=67 stalled=1 meandist=6.9 recall=20 filed=0 fled=0 rows=4096 writes=56083 coal=364582 evict=54400 bytes=262144
 [aimem] INTENT tick=2580 flee=15 drink=47 eat=2 sleep=2 work=260 heal=22 patrol=70 wander=1
 [needs] tick=2580 bodies=397 recovering=90 crowd_dead_total=0
-[medium] live 72 cells, 2136 quanta (33322 l), woken 14363, slept 5646, lazy 13, listTot 72, fade 14, substeps 655 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=2640 layer=1 seen=419 replan=10 own_ai=281 own_wander=138 errand=266 settled=205 step=61 column=0 lost=68 stalled=1 meandist=6.8 recall=25 filed=0 fled=0 rows=4096 writes=57908 coal=370545 evict=56220 bytes=262144
+[aimem] STEP tick=2640 layer=1 seen=419 replan=10 own_ai=281 own_wander=138 errand=266 settled=205 step=61 column=0 lost=68 stalled=1 meandist=6.8 recall=25 filed=0 fled=0 rows=4096 writes=57910 coal=370651 evict=56220 bytes=262144
 [aimem] INTENT tick=2640 flee=15 drink=47 eat=2 sleep=2 work=259 heal=24 patrol=69 wander=1
 [needs] tick=2640 bodies=396 recovering=91 crowd_dead_total=0
-[aimem] STEP tick=2700 layer=1 seen=419 replan=9 own_ai=279 own_wander=140 errand=265 settled=205 step=60 column=0 lost=69 stalled=1 meandist=6.6 recall=24 filed=0 fled=0 rows=4096 writes=59834 coal=376569 evict=58144 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 663 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[rebake] floor 0 gen 17 baked: rooms 54 + coarse 195 + fine 199 ms = 0.4 s @ 6 threads | shadow sync 0.00 ms MAIN
+[rebake] swap: floor 0 gen 17 live | 56 ticks start->swap | resident 327.7 MiB
+[aimem] STEP tick=2700 layer=1 seen=419 replan=9 own_ai=279 own_wander=140 errand=265 settled=205 step=60 column=0 lost=69 stalled=1 meandist=6.6 recall=24 filed=0 fled=0 rows=4096 writes=59836 coal=376675 evict=58144 bytes=262144
 [aimem] INTENT tick=2700 flee=15 drink=46 eat=2 sleep=2 work=259 heal=25 patrol=69 wander=1
 [needs] tick=2700 bodies=396 recovering=91 crowd_dead_total=0
-[medium] live 75 cells, 2134 quanta (33290 l), woken 16715, slept 6778, lazy 14, listTot 75, fade 16, substeps 686 | cpu ms: poll 0.00 apply 0.04 rec 0.00
 [macro] tick=11 day=77.0 living=1938 births=2 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046638
-[aimem] STEP tick=2760 layer=1 seen=419 replan=4 own_ai=278 own_wander=141 errand=264 settled=209 step=55 column=0 lost=69 stalled=1 meandist=6.9 recall=19 filed=1 fled=0 rows=4096 writes=61493 coal=382715 evict=59794 bytes=262144
+[aimem] STEP tick=2760 layer=1 seen=419 replan=4 own_ai=278 own_wander=141 errand=264 settled=209 step=55 column=0 lost=69 stalled=1 meandist=6.9 recall=19 filed=1 fled=0 rows=4096 writes=61547 coal=382821 evict=59846 bytes=262144
 [aimem] INTENT tick=2760 flee=15 drink=45 eat=2 sleep=2 work=259 heal=25 patrol=70 wander=1
-[needs] tick=2760 bodies=398 recovering=91 crowd_dead_total=0
-[aimem] STEP tick=2820 layer=1 seen=419 replan=4 own_ai=277 own_wander=142 errand=262 settled=210 step=52 column=0 lost=70 stalled=1 meandist=6.8 recall=19 filed=1 fled=0 rows=4096 writes=62994 coal=389168 evict=61288 bytes=262144
+[needs] tick=2760 bodies=398 recovering=92 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 694 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2820 layer=1 seen=419 replan=4 own_ai=277 own_wander=142 errand=262 settled=210 step=52 column=0 lost=70 stalled=1 meandist=6.8 recall=19 filed=1 fled=0 rows=4096 writes=63166 coal=389208 evict=61460 bytes=262144
 [aimem] INTENT tick=2820 flee=15 drink=44 eat=2 sleep=2 work=258 heal=26 patrol=71 wander=1
 [needs] tick=2820 bodies=398 recovering=92 crowd_dead_total=0
-[medium] live 80 cells, 2130 quanta (33228 l), woken 19222, slept 7980, lazy 15, listTot 80, fade 20, substeps 717 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=2880 layer=1 seen=419 replan=8 own_ai=277 own_wander=142 errand=262 settled=212 step=50 column=0 lost=70 stalled=1 meandist=6.8 recall=23 filed=0 fled=0 rows=4096 writes=64458 coal=395682 evict=62747 bytes=262144
+[aimem] STEP tick=2880 layer=1 seen=419 replan=8 own_ai=277 own_wander=142 errand=262 settled=212 step=50 column=0 lost=70 stalled=1 meandist=6.8 recall=23 filed=0 fled=0 rows=4096 writes=64750 coal=395602 evict=63039 bytes=262144
 [aimem] INTENT tick=2880 flee=15 drink=44 eat=2 sleep=2 work=258 heal=26 patrol=71 wander=1
 [needs] tick=2880 bodies=396 recovering=90 crowd_dead_total=0
-[aimem] STEP tick=2940 layer=1 seen=419 replan=12 own_ai=277 own_wander=142 errand=263 settled=214 step=49 column=0 lost=69 stalled=1 meandist=6.7 recall=26 filed=0 fled=0 rows=4096 writes=66004 coal=402074 evict=64290 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 725 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=2940 layer=1 seen=419 replan=12 own_ai=277 own_wander=142 errand=263 settled=214 step=49 column=0 lost=69 stalled=1 meandist=6.7 recall=26 filed=0 fled=0 rows=4096 writes=66416 coal=401874 evict=64702 bytes=262144
 [aimem] INTENT tick=2940 flee=15 drink=44 eat=2 sleep=2 work=258 heal=26 patrol=71 wander=1
 [needs] tick=2940 bodies=396 recovering=89 crowd_dead_total=0
-[medium] live 83 cells, 2129 quanta (33212 l), woken 21732, slept 9204, lazy 15, listTot 83, fade 21, substeps 749 | cpu ms: poll 0.00 apply 0.01 rec 0.00
 [macro] tick=12 day=84.0 living=1936 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046640
-[aimem] STEP tick=3000 layer=1 seen=419 replan=6 own_ai=276 own_wander=143 errand=263 settled=215 step=48 column=0 lost=69 stalled=1 meandist=6.9 recall=21 filed=0 fled=0 rows=4096 writes=67580 coal=408311 evict=65859 bytes=262144
+[aimem] STEP tick=3000 layer=1 seen=419 replan=6 own_ai=276 own_wander=143 errand=263 settled=215 step=48 column=0 lost=69 stalled=1 meandist=6.9 recall=21 filed=0 fled=0 rows=4096 writes=68050 coal=407991 evict=66329 bytes=262144
 [aimem] INTENT tick=3000 flee=15 drink=44 eat=3 sleep=2 work=257 heal=26 patrol=71 wander=1
 [needs] tick=3000 bodies=397 recovering=90 crowd_dead_total=0
-[aimem] STEP tick=3060 layer=1 seen=419 replan=5 own_ai=278 own_wander=141 errand=264 settled=216 step=48 column=0 lost=68 stalled=1 meandist=6.8 recall=19 filed=0 fled=0 rows=4096 writes=69145 coal=414663 evict=67421 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 757 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3060 layer=1 seen=419 replan=5 own_ai=278 own_wander=141 errand=264 settled=216 step=48 column=0 lost=68 stalled=1 meandist=6.8 recall=19 filed=0 fled=0 rows=4096 writes=69735 coal=414223 evict=68011 bytes=262144
 [aimem] INTENT tick=3060 flee=15 drink=45 eat=3 sleep=2 work=257 heal=25 patrol=71 wander=1
 [needs] tick=3060 bodies=397 recovering=89 crowd_dead_total=0
-[aimem] STEP tick=3120 layer=1 seen=419 replan=10 own_ai=279 own_wander=140 errand=265 settled=217 step=48 column=0 lost=67 stalled=1 meandist=6.8 recall=25 filed=0 fled=0 rows=4096 writes=70677 coal=421056 evict=68950 bytes=262144
+[aimem] STEP tick=3120 layer=1 seen=419 replan=10 own_ai=279 own_wander=140 errand=265 settled=217 step=48 column=0 lost=67 stalled=1 meandist=6.8 recall=25 filed=0 fled=0 rows=4096 writes=71387 coal=420496 evict=69660 bytes=262144
 [aimem] INTENT tick=3120 flee=15 drink=45 eat=3 sleep=2 work=257 heal=25 patrol=71 wander=1
 [needs] tick=3120 bodies=395 recovering=89 crowd_dead_total=0
-[medium] live 89 cells, 2126 quanta (33166 l), woken 24450, slept 10552, lazy 15, listTot 89, fade 24, substeps 780 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=3180 layer=1 seen=419 replan=5 own_ai=278 own_wander=141 errand=264 settled=217 step=47 column=0 lost=68 stalled=2 meandist=7.0 recall=19 filed=0 fled=0 rows=4096 writes=72013 coal=427413 evict=70280 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 788 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3180 layer=1 seen=419 replan=5 own_ai=278 own_wander=141 errand=264 settled=217 step=47 column=0 lost=68 stalled=2 meandist=7.0 recall=19 filed=0 fled=0 rows=4096 writes=72843 coal=426733 evict=71110 bytes=262144
 [aimem] INTENT tick=3180 flee=15 drink=43 eat=3 sleep=2 work=258 heal=26 patrol=71 wander=1
 [needs] tick=3180 bodies=395 recovering=85 crowd_dead_total=0
-[aimem] STEP tick=3240 layer=1 seen=419 replan=6 own_ai=276 own_wander=143 errand=262 settled=219 step=43 column=0 lost=70 stalled=1 meandist=7.1 recall=20 filed=0 fled=0 rows=4096 writes=73296 coal=433756 evict=71555 bytes=262144
+[aimem] STEP tick=3240 layer=1 seen=419 replan=6 own_ai=276 own_wander=143 errand=262 settled=219 step=43 column=0 lost=70 stalled=1 meandist=7.1 recall=20 filed=0 fled=0 rows=4096 writes=74188 coal=432956 evict=72447 bytes=262144
 [aimem] INTENT tick=3240 flee=15 drink=44 eat=3 sleep=2 work=256 heal=27 patrol=71 wander=1
-[needs] tick=3240 bodies=393 recovering=85 crowd_dead_total=0
-[medium] live 92 cells, 2123 quanta (33119 l), woken 27407, slept 11948, lazy 16, listTot 92, fade 27, substeps 812 | cpu ms: poll 0.00 apply 0.04 rec 0.00
+[needs] tick=3240 bodies=393 recovering=84 crowd_dead_total=0
 [macro] tick=13 day=91.0 living=1932 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046644
-[aimem] STEP tick=3300 layer=1 seen=419 replan=9 own_ai=276 own_wander=143 errand=262 settled=219 step=43 column=0 lost=70 stalled=1 meandist=7.0 recall=24 filed=0 fled=0 rows=4096 writes=74420 coal=440171 evict=72674 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 819 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3300 layer=1 seen=419 replan=9 own_ai=276 own_wander=143 errand=262 settled=219 step=43 column=0 lost=70 stalled=1 meandist=7.0 recall=24 filed=0 fled=0 rows=4096 writes=75312 coal=439251 evict=73566 bytes=262144
 [aimem] INTENT tick=3300 flee=15 drink=45 eat=3 sleep=2 work=255 heal=27 patrol=71 wander=1
-[needs] tick=3300 bodies=393 recovering=84 crowd_dead_total=0
-[aimem] STEP tick=3360 layer=1 seen=419 replan=12 own_ai=275 own_wander=144 errand=261 settled=222 step=39 column=0 lost=72 stalled=2 meandist=7.3 recall=26 filed=0 fled=0 rows=4096 writes=75582 coal=446536 evict=73836 bytes=262144
+[needs] tick=3300 bodies=393 recovering=83 crowd_dead_total=0
+[aimem] STEP tick=3360 layer=1 seen=419 replan=12 own_ai=275 own_wander=144 errand=261 settled=222 step=39 column=0 lost=72 stalled=1 meandist=7.3 recall=26 filed=0 fled=0 rows=4096 writes=76394 coal=445576 evict=74648 bytes=262144
 [aimem] INTENT tick=3360 flee=15 drink=45 eat=3 sleep=2 work=256 heal=27 patrol=70 wander=1
-[needs] tick=3360 bodies=393 recovering=86 crowd_dead_total=0
-[medium] live 97 cells, 2120 quanta (33072 l), woken 30321, slept 13350, lazy 17, listTot 97, fade 30, substeps 843 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=3420 layer=1 seen=419 replan=8 own_ai=275 own_wander=144 errand=260 settled=224 step=36 column=0 lost=73 stalled=1 meandist=7.4 recall=23 filed=0 fled=0 rows=4096 writes=76769 coal=452979 evict=75018 bytes=262144
+[needs] tick=3360 bodies=393 recovering=85 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 851 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3420 layer=1 seen=419 replan=8 own_ai=275 own_wander=144 errand=260 settled=224 step=36 column=0 lost=73 stalled=2 meandist=7.4 recall=23 filed=0 fled=0 rows=4096 writes=77499 coal=452019 evict=75748 bytes=262144
 [aimem] INTENT tick=3420 flee=15 drink=45 eat=2 sleep=1 work=257 heal=28 patrol=70 wander=1
-[needs] tick=3420 bodies=393 recovering=84 crowd_dead_total=0
-[aimem] STEP tick=3480 layer=1 seen=419 replan=5 own_ai=274 own_wander=145 errand=259 settled=225 step=34 column=0 lost=74 stalled=2 meandist=7.3 recall=20 filed=0 fled=0 rows=4096 writes=77920 coal=459370 evict=76166 bytes=262144
+[needs] tick=3420 bodies=393 recovering=85 crowd_dead_total=0
+[aimem] STEP tick=3480 layer=1 seen=419 replan=5 own_ai=274 own_wander=145 errand=259 settled=225 step=34 column=0 lost=74 stalled=1 meandist=7.3 recall=20 filed=0 fled=0 rows=4096 writes=78770 coal=458410 evict=77016 bytes=262144
 [aimem] INTENT tick=3480 flee=15 drink=44 eat=2 sleep=1 work=257 heal=29 patrol=70 wander=1
-[needs] tick=3480 bodies=393 recovering=83 crowd_dead_total=0
+[needs] tick=3480 bodies=393 recovering=84 crowd_dead_total=0
 [macro] tick=14 day=98.0 living=1932 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046644
-[medium] live 99 cells, 2116 quanta (33010 l), woken 33394, slept 14831, lazy 18, listTot 99, fade 34, substeps 875 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=3540 layer=1 seen=419 replan=7 own_ai=274 own_wander=145 errand=259 settled=224 step=35 column=0 lost=74 stalled=1 meandist=6.9 recall=22 filed=0 fled=0 rows=4096 writes=79125 coal=465656 evict=77369 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 882 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3540 layer=1 seen=419 replan=7 own_ai=274 own_wander=145 errand=259 settled=224 step=35 column=0 lost=74 stalled=1 meandist=6.9 recall=22 filed=0 fled=0 rows=4096 writes=80095 coal=464696 evict=78339 bytes=262144
 [aimem] INTENT tick=3540 flee=15 drink=43 eat=2 sleep=1 work=257 heal=30 patrol=70 wander=1
-[needs] tick=3540 bodies=393 recovering=82 crowd_dead_total=0
-[aimem] STEP tick=3600 layer=1 seen=419 replan=12 own_ai=274 own_wander=145 errand=259 settled=226 step=33 column=0 lost=74 stalled=1 meandist=7.0 recall=27 filed=0 fled=0 rows=4096 writes=80313 coal=471859 evict=78553 bytes=262144
+[needs] tick=3540 bodies=393 recovering=83 crowd_dead_total=0
+[aimem] STEP tick=3600 layer=1 seen=419 replan=12 own_ai=274 own_wander=145 errand=259 settled=226 step=33 column=0 lost=74 stalled=1 meandist=7.0 recall=27 filed=0 fled=0 rows=4096 writes=81349 coal=470899 evict=79589 bytes=262144
 [aimem] INTENT tick=3600 flee=15 drink=43 eat=2 sleep=1 work=257 heal=30 patrol=70 wander=1
 [needs] tick=3600 bodies=393 recovering=81 crowd_dead_total=0
-[medium] live 98 cells, 2115 quanta (32994 l), woken 36540, slept 16376, lazy 19, listTot 98, fade 35, substeps 906 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=3660 layer=1 seen=419 replan=4 own_ai=273 own_wander=146 errand=259 settled=227 step=32 column=0 lost=74 stalled=1 meandist=6.9 recall=19 filed=0 fled=0 rows=4096 writes=81500 coal=478022 evict=79740 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 914 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3660 layer=1 seen=419 replan=4 own_ai=273 own_wander=146 errand=259 settled=227 step=32 column=0 lost=74 stalled=1 meandist=6.9 recall=19 filed=0 fled=0 rows=4096 writes=82536 coal=477062 evict=80776 bytes=262144
 [aimem] INTENT tick=3660 flee=15 drink=43 eat=2 sleep=1 work=257 heal=30 patrol=70 wander=1
 [needs] tick=3660 bodies=393 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=3720 layer=1 seen=419 replan=5 own_ai=272 own_wander=147 errand=258 settled=226 step=32 column=0 lost=75 stalled=1 meandist=6.5 recall=18 filed=0 fled=0 rows=4096 writes=82708 coal=484246 evict=80941 bytes=262144
+[aimem] STEP tick=3720 layer=1 seen=419 replan=5 own_ai=272 own_wander=147 errand=258 settled=226 step=32 column=0 lost=75 stalled=1 meandist=6.5 recall=18 filed=0 fled=0 rows=4096 writes=83744 coal=483286 evict=81977 bytes=262144
 [aimem] INTENT tick=3720 flee=15 drink=42 eat=2 sleep=1 work=257 heal=31 patrol=70 wander=1
 [needs] tick=3720 bodies=392 recovering=82 crowd_dead_total=0
 [macro] tick=15 day=105.0 living=1931 births=1 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046645
-[medium] live 100 cells, 2111 quanta (32932 l), woken 39779, slept 17932, lazy 19, listTot 100, fade 39, substeps 937 | cpu ms: poll 0.00 apply 0.03 rec 0.00
-[aimem] STEP tick=3780 layer=1 seen=419 replan=11 own_ai=271 own_wander=148 errand=257 settled=228 step=28 column=1 lost=76 stalled=1 meandist=6.7 recall=25 filed=0 fled=0 rows=4096 writes=83853 coal=490395 evict=82082 bytes=262144
+[aimem] STEP tick=3780 layer=1 seen=419 replan=11 own_ai=271 own_wander=148 errand=257 settled=228 step=28 column=1 lost=76 stalled=1 meandist=6.7 recall=25 filed=0 fled=0 rows=4096 writes=84889 coal=489435 evict=83118 bytes=262144
 [aimem] INTENT tick=3780 flee=15 drink=41 eat=2 sleep=1 work=258 heal=31 patrol=70 wander=1
 [needs] tick=3780 bodies=392 recovering=81 crowd_dead_total=0
-[aimem] STEP tick=3840 layer=1 seen=419 replan=6 own_ai=274 own_wander=145 errand=259 settled=228 step=30 column=1 lost=74 stalled=1 meandist=6.6 recall=21 filed=0 fled=0 rows=4096 writes=85224 coal=496423 evict=83452 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 945 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3840 layer=1 seen=419 replan=6 own_ai=274 own_wander=145 errand=259 settled=228 step=30 column=1 lost=74 stalled=1 meandist=6.6 recall=21 filed=0 fled=0 rows=4096 writes=86260 coal=495463 evict=84488 bytes=262144
 [aimem] INTENT tick=3840 flee=15 drink=42 eat=2 sleep=1 work=258 heal=30 patrol=70 wander=1
 [needs] tick=3840 bodies=392 recovering=82 crowd_dead_total=0
-[medium] live 108 cells, 2107 quanta (32869 l), woken 42989, slept 19491, lazy 21, listTot 108, fade 43, substeps 969 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=3900 layer=1 seen=419 replan=10 own_ai=273 own_wander=146 errand=258 settled=227 step=31 column=0 lost=75 stalled=1 meandist=6.6 recall=25 filed=0 fled=0 rows=4096 writes=86294 coal=502778 evict=84519 bytes=262144
+[aimem] STEP tick=3900 layer=1 seen=419 replan=10 own_ai=273 own_wander=146 errand=258 settled=227 step=31 column=0 lost=75 stalled=1 meandist=6.6 recall=25 filed=0 fled=0 rows=4096 writes=87330 coal=501818 evict=85555 bytes=262144
 [aimem] INTENT tick=3900 flee=15 drink=41 eat=2 sleep=1 work=259 heal=30 patrol=70 wander=1
 [needs] tick=3900 bodies=392 recovering=81 crowd_dead_total=0
-[aimem] STEP tick=3960 layer=1 seen=419 replan=11 own_ai=271 own_wander=148 errand=256 settled=226 step=30 column=0 lost=77 stalled=1 meandist=6.4 recall=26 filed=0 fled=0 rows=4096 writes=87166 coal=508924 evict=85389 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 977 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=3960 layer=1 seen=419 replan=11 own_ai=271 own_wander=148 errand=256 settled=226 step=30 column=0 lost=77 stalled=1 meandist=6.4 recall=26 filed=0 fled=0 rows=4096 writes=88202 coal=507964 evict=86425 bytes=262144
 [aimem] INTENT tick=3960 flee=15 drink=39 eat=2 sleep=2 work=259 heal=31 patrol=70 wander=1
 [needs] tick=3960 bodies=392 recovering=76 crowd_dead_total=0
 [macro] tick=16 day=112.0 living=1931 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046645
-[medium] live 106 cells, 2103 quanta (32807 l), woken 46394, slept 21141, lazy 21, listTot 106, fade 47, substeps 1000 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=4020 layer=1 seen=419 replan=9 own_ai=273 own_wander=146 errand=258 settled=226 step=31 column=1 lost=75 stalled=1 meandist=6.1 recall=24 filed=0 fled=0 rows=4096 writes=87890 coal=514965 evict=86111 bytes=262144
+[aimem] STEP tick=4020 layer=1 seen=419 replan=9 own_ai=273 own_wander=146 errand=258 settled=226 step=31 column=1 lost=75 stalled=1 meandist=6.1 recall=24 filed=0 fled=0 rows=4096 writes=88926 coal=514005 evict=87147 bytes=262144
 [aimem] INTENT tick=4020 flee=15 drink=39 eat=2 sleep=2 work=259 heal=31 patrol=70 wander=1
 [needs] tick=4020 bodies=392 recovering=75 crowd_dead_total=0
-[aimem] STEP tick=4080 layer=1 seen=419 replan=10 own_ai=274 own_wander=145 errand=259 settled=228 step=30 column=1 lost=75 stalled=1 meandist=6.2 recall=24 filed=0 fled=0 rows=4096 writes=88593 coal=521005 evict=86812 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1008 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4080 layer=1 seen=419 replan=10 own_ai=274 own_wander=145 errand=259 settled=228 step=30 column=1 lost=75 stalled=1 meandist=6.2 recall=24 filed=0 fled=0 rows=4096 writes=89629 coal=520045 evict=87848 bytes=262144
 [aimem] INTENT tick=4080 flee=15 drink=40 eat=2 sleep=2 work=259 heal=31 patrol=69 wander=1
 [needs] tick=4080 bodies=392 recovering=78 crowd_dead_total=0
-[medium] live 112 cells, 2101 quanta (32776 l), woken 49807, slept 22795, lazy 22, listTot 112, fade 49, substeps 1031 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=4140 layer=1 seen=419 replan=5 own_ai=274 own_wander=145 errand=258 settled=231 step=27 column=0 lost=75 stalled=1 meandist=6.3 recall=21 filed=0 fled=0 rows=4096 writes=89201 coal=527047 evict=87420 bytes=262144
+[aimem] STEP tick=4140 layer=1 seen=419 replan=5 own_ai=274 own_wander=145 errand=258 settled=231 step=27 column=0 lost=75 stalled=1 meandist=6.3 recall=21 filed=0 fled=0 rows=4096 writes=90237 coal=526087 evict=88456 bytes=262144
 [aimem] INTENT tick=4140 flee=16 drink=40 eat=2 sleep=2 work=258 heal=31 patrol=69 wander=1
 [needs] tick=4140 bodies=392 recovering=77 crowd_dead_total=0
-[aimem] STEP tick=4200 layer=1 seen=419 replan=11 own_ai=275 own_wander=144 errand=259 settled=232 step=26 column=1 lost=74 stalled=1 meandist=6.2 recall=26 filed=0 fled=0 rows=4096 writes=89816 coal=533129 evict=88032 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1040 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4200 layer=1 seen=419 replan=11 own_ai=275 own_wander=144 errand=259 settled=232 step=26 column=1 lost=74 stalled=1 meandist=6.2 recall=26 filed=0 fled=0 rows=4096 writes=90852 coal=532169 evict=89068 bytes=262144
 [aimem] INTENT tick=4200 flee=16 drink=40 eat=2 sleep=2 work=258 heal=31 patrol=69 wander=1
 [needs] tick=4200 bodies=391 recovering=76 crowd_dead_total=0
 [macro] tick=17 day=119.0 living=1927 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046649
-[medium] live 109 cells, 2098 quanta (32729 l), woken 53231, slept 24458, lazy 22, listTot 109, fade 52, substeps 1063 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=4260 layer=1 seen=419 replan=7 own_ai=274 own_wander=145 errand=258 settled=234 step=24 column=0 lost=75 stalled=1 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=90430 coal=539288 evict=88642 bytes=262144
+[aimem] STEP tick=4260 layer=1 seen=419 replan=7 own_ai=274 own_wander=145 errand=258 settled=234 step=24 column=0 lost=75 stalled=1 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=91466 coal=538328 evict=89678 bytes=262144
 [aimem] INTENT tick=4260 flee=16 drink=40 eat=2 sleep=2 work=258 heal=31 patrol=69 wander=1
 [needs] tick=4260 bodies=388 recovering=77 crowd_dead_total=0
-[aimem] STEP tick=4320 layer=1 seen=419 replan=11 own_ai=273 own_wander=146 errand=257 settled=234 step=23 column=0 lost=76 stalled=1 meandist=5.9 recall=26 filed=0 fled=1 rows=4096 writes=90935 coal=545544 evict=89147 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1071 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4320 layer=1 seen=419 replan=11 own_ai=273 own_wander=146 errand=257 settled=234 step=23 column=0 lost=76 stalled=1 meandist=5.9 recall=26 filed=0 fled=1 rows=4096 writes=91971 coal=544584 evict=90183 bytes=262144
 [aimem] INTENT tick=4320 flee=16 drink=39 eat=2 sleep=2 work=257 heal=33 patrol=69 wander=1
 [needs] tick=4320 bodies=387 recovering=77 crowd_dead_total=0
-[medium] live 115 cells, 2095 quanta (32682 l), woken 56754, slept 26212, lazy 23, listTot 115, fade 55, substeps 1094 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=4380 layer=1 seen=419 replan=9 own_ai=272 own_wander=147 errand=256 settled=236 step=20 column=0 lost=77 stalled=1 meandist=5.8 recall=25 filed=0 fled=0 rows=4096 writes=91397 coal=551901 evict=89607 bytes=262144
+[aimem] STEP tick=4380 layer=1 seen=419 replan=9 own_ai=272 own_wander=147 errand=256 settled=236 step=20 column=0 lost=77 stalled=1 meandist=5.8 recall=25 filed=0 fled=0 rows=4096 writes=92433 coal=550941 evict=90643 bytes=262144
 [aimem] INTENT tick=4380 flee=16 drink=39 eat=2 sleep=2 work=256 heal=34 patrol=69 wander=1
 [needs] tick=4380 bodies=387 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=4440 layer=1 seen=419 replan=5 own_ai=271 own_wander=148 errand=255 settled=235 step=20 column=0 lost=79 stalled=2 meandist=5.8 recall=21 filed=0 fled=0 rows=4096 writes=91795 coal=558466 evict=90002 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1102 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4440 layer=1 seen=419 replan=5 own_ai=271 own_wander=148 errand=255 settled=235 step=20 column=0 lost=79 stalled=2 meandist=5.8 recall=21 filed=0 fled=0 rows=4096 writes=92831 coal=557506 evict=91038 bytes=262144
 [aimem] INTENT tick=4440 flee=16 drink=40 eat=2 sleep=2 work=255 heal=35 patrol=68 wander=1
 [needs] tick=4440 bodies=386 recovering=78 crowd_dead_total=0
 [macro] tick=18 day=126.0 living=1925 births=2 deaths=2 blocked=0 depart=0 arrive=0 transit=0 reserve=1046651
-[aimem] STEP tick=4500 layer=1 seen=419 replan=9 own_ai=270 own_wander=149 errand=255 settled=237 step=18 column=0 lost=80 stalled=1 meandist=5.8 recall=24 filed=0 fled=0 rows=4096 writes=92159 coal=565052 evict=90363 bytes=262144
+[aimem] STEP tick=4500 layer=1 seen=419 replan=9 own_ai=270 own_wander=149 errand=255 settled=237 step=18 column=0 lost=80 stalled=1 meandist=5.8 recall=24 filed=0 fled=0 rows=4096 writes=93195 coal=564092 evict=91399 bytes=262144
 [aimem] INTENT tick=4500 flee=15 drink=40 eat=2 sleep=2 work=255 heal=36 patrol=68 wander=1
 [needs] tick=4500 bodies=387 recovering=77 crowd_dead_total=0
-[medium] live 117 cells, 2091 quanta (32620 l), woken 60418, slept 27922, lazy 24, listTot 117, fade 59, substeps 1125 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[carve] COMBAT removed=19 power=64 r=0.55 at (74.4,71.4,137.9)
-[carve] total 0.92 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.25, sphere 0.05, diff 0.00, patch 0.00, anchor 0.35, antr 0.23, part 0.00, unmeasured 0.03
-[lightvis] floor 0 gen 2 patch: 33 lamps affected -> 0 cells changed in 13.5 ms @ 6 threads | shadow sync 0.01 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 2)
-[carve] COMBAT removed=6 power=64 r=0.55 at (74.2,71.4,138.0)
-[carve] total 0.74 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.25, sphere 0.02, diff 0.00, patch 0.00, anchor 0.28, antr 0.16, part 0.00, unmeasured 0.03
-[aimem] STEP tick=4560 layer=1 seen=419 replan=12 own_ai=270 own_wander=149 errand=255 settled=238 step=17 column=0 lost=80 stalled=1 meandist=5.8 recall=27 filed=0 fled=0 rows=4096 writes=92618 coal=571490 evict=90819 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1134 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4560 layer=1 seen=419 replan=12 own_ai=270 own_wander=149 errand=255 settled=238 step=17 column=0 lost=80 stalled=1 meandist=5.8 recall=27 filed=0 fled=0 rows=4096 writes=93654 coal=570530 evict=91855 bytes=262144
 [aimem] INTENT tick=4560 flee=15 drink=40 eat=2 sleep=2 work=255 heal=36 patrol=68 wander=1
 [needs] tick=4560 bodies=387 recovering=76 crowd_dead_total=0
-[lightvis] floor 0 gen 3 patch: 33 lamps affected -> 0 cells changed in 13.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 3)
-[carve] COMBAT removed=2 power=64 r=0.55 at (74.2,71.4,138.0)
-[carve] total 0.75 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.25, sphere 0.03, diff 0.00, patch 0.00, anchor 0.30, antr 0.15, part 0.00, unmeasured 0.02
-[aimem] STEP tick=4620 layer=1 seen=419 replan=13 own_ai=271 own_wander=148 errand=255 settled=239 step=16 column=0 lost=79 stalled=1 meandist=6.0 recall=28 filed=0 fled=0 rows=4096 writes=93136 coal=577792 evict=91337 bytes=262144
+[aimem] STEP tick=4620 layer=1 seen=419 replan=13 own_ai=271 own_wander=148 errand=255 settled=239 step=16 column=0 lost=79 stalled=1 meandist=6.0 recall=28 filed=0 fled=0 rows=4096 writes=94172 coal=576832 evict=92373 bytes=262144
 [aimem] INTENT tick=4620 flee=16 drink=40 eat=2 sleep=2 work=255 heal=35 patrol=68 wander=1
 [needs] tick=4620 bodies=386 recovering=77 crowd_dead_total=0
-[medium] live 118 cells, 2085 quanta (32526 l), woken 64257, slept 29801, lazy 24, listTot 118, fade 65, substeps 1157 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[lightvis] floor 0 gen 4 patch: 33 lamps affected -> 0 cells changed in 13.5 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 4)
-[carve] COMBAT removed=11 power=64 r=0.55 at (74.3,70.9,137.8)
-[carve] total 0.75 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.25, sphere 0.02, diff 0.00, patch 0.00, anchor 0.30, antr 0.15, part 0.00, unmeasured 0.03
-[lightvis] floor 0 gen 5 patch: 33 lamps affected -> 0 cells changed in 13.7 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 5)
-[aimem] STEP tick=4680 layer=1 seen=419 replan=9 own_ai=271 own_wander=148 errand=255 settled=239 step=16 column=0 lost=79 stalled=1 meandist=5.8 recall=25 filed=0 fled=0 rows=4096 writes=93497 coal=584159 evict=91698 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1166 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4680 layer=1 seen=419 replan=9 own_ai=271 own_wander=148 errand=255 settled=239 step=16 column=0 lost=79 stalled=1 meandist=5.8 recall=25 filed=0 fled=0 rows=4096 writes=94533 coal=583199 evict=92734 bytes=262144
 [aimem] INTENT tick=4680 flee=16 drink=40 eat=2 sleep=2 work=255 heal=35 patrol=68 wander=1
 [needs] tick=4680 bodies=386 recovering=76 crowd_dead_total=0
-[carve] COMBAT removed=4 power=64 r=0.55 at (74.7,71.3,137.8)
-[carve] total 0.73 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.26, sphere 0.02, diff 0.00, patch 0.00, anchor 0.26, antr 0.16, part 0.00, unmeasured 0.02
-[lightvis] floor 0 gen 6 patch: 33 lamps affected -> 0 cells changed in 13.6 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 6)
-[aimem] STEP tick=4740 layer=1 seen=419 replan=3 own_ai=270 own_wander=149 errand=254 settled=242 step=12 column=0 lost=80 stalled=1 meandist=6.2 recall=19 filed=0 fled=0 rows=4096 writes=93904 coal=590572 evict=92103 bytes=262144
+[aimem] STEP tick=4740 layer=1 seen=419 replan=3 own_ai=270 own_wander=149 errand=254 settled=242 step=12 column=0 lost=80 stalled=1 meandist=6.2 recall=19 filed=0 fled=0 rows=4096 writes=94940 coal=589612 evict=93139 bytes=262144
 [aimem] INTENT tick=4740 flee=16 drink=40 eat=2 sleep=2 work=254 heal=36 patrol=68 wander=1
 [needs] tick=4740 bodies=386 recovering=77 crowd_dead_total=0
 [macro] tick=19 day=133.0 living=1924 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046652
-[medium] live 135 cells, 2079 quanta (32432 l), woken 68119, slept 31593, lazy 26, listTot 135, fade 71, substeps 1188 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=4800 layer=1 seen=419 replan=11 own_ai=270 own_wander=149 errand=254 settled=240 step=14 column=0 lost=80 stalled=1 meandist=6.2 recall=27 filed=0 fled=0 rows=4096 writes=94359 coal=597005 evict=92555 bytes=262144
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1197 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4800 layer=1 seen=419 replan=11 own_ai=270 own_wander=149 errand=254 settled=240 step=14 column=0 lost=80 stalled=1 meandist=6.2 recall=27 filed=0 fled=0 rows=4096 writes=95397 coal=596058 evict=93593 bytes=262144
 [aimem] INTENT tick=4800 flee=16 drink=40 eat=2 sleep=2 work=254 heal=36 patrol=68 wander=1
-[needs] tick=4800 bodies=387 recovering=77 crowd_dead_total=0
-[aimem] STEP tick=4860 layer=1 seen=419 replan=8 own_ai=270 own_wander=149 errand=254 settled=240 step=14 column=0 lost=80 stalled=1 meandist=6.1 recall=23 filed=0 fled=0 rows=4096 writes=94840 coal=603345 evict=93036 bytes=262144
+[needs] tick=4800 bodies=387 recovering=78 crowd_dead_total=0
+[aimem] STEP tick=4860 layer=1 seen=419 replan=8 own_ai=270 own_wander=149 errand=254 settled=240 step=14 column=0 lost=80 stalled=1 meandist=6.1 recall=23 filed=0 fled=0 rows=4096 writes=95883 coal=602453 evict=94079 bytes=262144
 [aimem] INTENT tick=4860 flee=16 drink=40 eat=2 sleep=2 work=254 heal=36 patrol=68 wander=1
-[needs] tick=4860 bodies=386 recovering=76 crowd_dead_total=0
-[medium] live 129 cells, 2073 quanta (32339 l), woken 72217, slept 33459, lazy 28, listTot 129, fade 77, substeps 1220 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=4920 layer=1 seen=419 replan=7 own_ai=270 own_wander=149 errand=254 settled=241 step=13 column=0 lost=80 stalled=1 meandist=6.0 recall=23 filed=0 fled=0 rows=4096 writes=95263 coal=609703 evict=93456 bytes=262144
+[needs] tick=4860 bodies=386 recovering=77 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1229 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=4920 layer=1 seen=419 replan=7 own_ai=270 own_wander=149 errand=254 settled=241 step=13 column=0 lost=80 stalled=1 meandist=6.0 recall=23 filed=0 fled=0 rows=4096 writes=96312 coal=608865 evict=94505 bytes=262144
 [aimem] INTENT tick=4920 flee=16 drink=40 eat=2 sleep=2 work=254 heal=36 patrol=68 wander=1
-[needs] tick=4920 bodies=386 recovering=76 crowd_dead_total=0
-[carve] COMBAT removed=9 power=64 r=0.55 at (74.0,71.0,137.8)
-[carve] total 0.79 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.27, sphere 0.02, diff 0.00, patch 0.00, anchor 0.28, antr 0.18, part 0.00, unmeasured 0.02
-[lightvis] floor 0 gen 7 patch: 30 lamps affected -> 0 cells changed in 11.3 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 7)
-[carve] COMBAT removed=10 power=64 r=0.55 at (73.4,71.0,137.8)
-[carve] total 0.75 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.27, sphere 0.03, diff 0.00, patch 0.00, anchor 0.26, antr 0.16, part 0.00, unmeasured 0.02
-[aimem] STEP tick=4980 layer=1 seen=419 replan=4 own_ai=269 own_wander=150 errand=254 settled=241 step=13 column=0 lost=80 stalled=1 meandist=5.8 recall=20 filed=0 fled=0 rows=4096 writes=95624 coal=616155 evict=93816 bytes=262144
+[needs] tick=4920 bodies=386 recovering=77 crowd_dead_total=0
+[aimem] STEP tick=4980 layer=1 seen=419 replan=4 own_ai=269 own_wander=150 errand=254 settled=241 step=13 column=0 lost=80 stalled=1 meandist=5.8 recall=20 filed=0 fled=0 rows=4096 writes=96680 coal=615370 evict=94872 bytes=262144
 [aimem] INTENT tick=4980 flee=16 drink=40 eat=2 sleep=2 work=254 heal=36 patrol=68 wander=1
-[needs] tick=4980 bodies=386 recovering=77 crowd_dead_total=0
+[needs] tick=4980 bodies=386 recovering=78 crowd_dead_total=0
 [macro] tick=20 day=140.0 living=1923 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046653
-[medium] live 128 cells, 2071 quanta (32308 l), woken 76208, slept 35400, lazy 29, listTot 128, fade 79, substeps 1251 | cpu ms: poll 0.00 apply 0.02 rec 0.00
-[lightvis] floor 0 gen 8 patch: 30 lamps affected -> 0 cells changed in 11.0 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 8)
-[carve] COMBAT removed=2 power=64 r=0.55 at (73.9,71.0,137.8)
-[carve] total 0.76 ms (1 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.00, lgrid 0.26, sphere 0.02, diff 0.00, patch 0.00, anchor 0.27, antr 0.19, part 0.00, unmeasured 0.02
-[aimem] STEP tick=5040 layer=1 seen=419 replan=14 own_ai=268 own_wander=151 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=6.5 recall=29 filed=0 fled=0 rows=4096 writes=95987 coal=622668 evict=94179 bytes=262144
+[aimem] STEP tick=5040 layer=1 seen=419 replan=14 own_ai=268 own_wander=151 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=6.5 recall=29 filed=0 fled=0 rows=4096 writes=97050 coal=621936 evict=95242 bytes=262144
 [aimem] INTENT tick=5040 flee=16 drink=40 eat=2 sleep=1 work=254 heal=36 patrol=69 wander=1
-[needs] tick=5040 bodies=386 recovering=78 crowd_dead_total=0
-[lightvis] floor 0 gen 9 patch: 30 lamps affected -> 0 cells changed in 10.1 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 9)
-[carve] COMBAT removed=9 power=64 r=0.55 at (73.9,71.7,137.8)
-[carve] total 0.84 ms (3 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.26, sphere 0.03, diff 0.00, patch 0.00, anchor 0.38, antr 0.15, part 0.00, unmeasured 0.02
-[lightvis] floor 0 gen 10 patch: 34 lamps affected -> 0 cells changed in 12.6 ms @ 6 threads | shadow sync 0.01 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 10)
-[aimem] STEP tick=5100 layer=1 seen=419 replan=12 own_ai=269 own_wander=150 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=6.0 recall=26 filed=0 fled=0 rows=4096 writes=96348 coal=629267 evict=94540 bytes=262144
+[needs] tick=5040 bodies=386 recovering=79 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1260 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5100 layer=1 seen=419 replan=12 own_ai=269 own_wander=150 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=6.0 recall=26 filed=0 fled=0 rows=4096 writes=97418 coal=628588 evict=95610 bytes=262144
 [aimem] INTENT tick=5100 flee=16 drink=40 eat=2 sleep=1 work=254 heal=36 patrol=69 wander=1
-[needs] tick=5100 bodies=386 recovering=77 crowd_dead_total=0
-[carve] COMBAT removed=3 power=64 r=0.55 at (73.9,71.9,137.8)
-[carve] total 0.81 ms (2 cells): light_mat 0.00, prop_skin 0.00, mirror_mark 0.00, mirror_flush 0.01, lgrid 0.25, sphere 0.03, diff 0.00, patch 0.00, anchor 0.34, antr 0.16, part 0.00, unmeasured 0.02
-[medium] live 131 cells, 2070 quanta (32292 l), woken 80404, slept 37414, lazy 30, listTot 131, fade 80, substeps 1282 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[lightvis] floor 0 gen 11 patch: 32 lamps affected -> 0 cells changed in 14.1 ms @ 6 threads | shadow sync 0.00 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 11)
-[aimem] STEP tick=5160 layer=1 seen=419 replan=5 own_ai=269 own_wander=150 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=5.9 recall=21 filed=0 fled=0 rows=4096 writes=96708 coal=635868 evict=94900 bytes=262144
+[needs] tick=5100 bodies=386 recovering=78 crowd_dead_total=0
+[aimem] STEP tick=5160 layer=1 seen=419 replan=5 own_ai=269 own_wander=150 errand=253 settled=242 step=11 column=0 lost=80 stalled=1 meandist=5.9 recall=21 filed=0 fled=0 rows=4096 writes=97786 coal=635241 evict=95978 bytes=262144
 [aimem] INTENT tick=5160 flee=16 drink=40 eat=2 sleep=1 work=254 heal=36 patrol=69 wander=1
-[needs] tick=5160 bodies=386 recovering=77 crowd_dead_total=0
-[aimem] STEP tick=5220 layer=1 seen=419 replan=6 own_ai=270 own_wander=149 errand=254 settled=242 step=12 column=0 lost=79 stalled=1 meandist=5.8 recall=22 filed=0 fled=0 rows=4096 writes=97070 coal=642467 evict=95262 bytes=262144
+[needs] tick=5160 bodies=386 recovering=78 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1292 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5220 layer=1 seen=419 replan=6 own_ai=270 own_wander=149 errand=254 settled=242 step=12 column=0 lost=79 stalled=1 meandist=5.8 recall=22 filed=0 fled=0 rows=4096 writes=98156 coal=641892 evict=96348 bytes=262144
 [aimem] INTENT tick=5220 flee=16 drink=40 eat=2 sleep=1 work=254 heal=36 patrol=69 wander=1
-[needs] tick=5220 bodies=386 recovering=77 crowd_dead_total=0
-[macro] tick=21 day=147.0 living=1922 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046654
-[medium] live 139 cells, 2069 quanta (32276 l), woken 84626, slept 39409, lazy 32, listTot 139, fade 81, substeps 1314 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=5280 layer=1 seen=419 replan=10 own_ai=268 own_wander=151 errand=252 settled=240 step=12 column=0 lost=80 stalled=1 meandist=5.3 recall=26 filed=0 fled=0 rows=4096 writes=97431 coal=648956 evict=95623 bytes=262144
-[aimem] INTENT tick=5280 flee=16 drink=39 eat=2 sleep=1 work=253 heal=37 patrol=70 wander=1
-[needs] tick=5280 bodies=385 recovering=74 crowd_dead_total=0
-[aimem] STEP tick=5340 layer=1 seen=419 replan=7 own_ai=268 own_wander=151 errand=252 settled=240 step=12 column=0 lost=80 stalled=2 meandist=5.6 recall=23 filed=0 fled=0 rows=4096 writes=97791 coal=655242 evict=95983 bytes=262144
-[aimem] INTENT tick=5340 flee=16 drink=40 eat=2 sleep=1 work=252 heal=37 patrol=70 wander=1
-[needs] tick=5340 bodies=385 recovering=73 crowd_dead_total=0
-[medium] live 135 cells, 2064 quanta (32198 l), woken 88959, slept 41466, lazy 32, listTot 135, fade 86, substeps 1345 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=5400 layer=1 seen=419 replan=12 own_ai=268 own_wander=151 errand=252 settled=239 step=12 column=1 lost=80 stalled=1 meandist=5.7 recall=27 filed=0 fled=0 rows=4096 writes=98164 coal=661470 evict=96356 bytes=262144
-[aimem] INTENT tick=5400 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5400 bodies=385 recovering=73 crowd_dead_total=0
-[rebake] floor 0 gen 11 baked: rooms 55 + coarse 185 + fine 192 ms = 0.4 s @ 6 threads | shadow sync 0.00 ms MAIN
-[rebake] swap: floor 0 gen 11 live | 54 ticks start->swap | resident 327.7 MiB
-[aimem] STEP tick=5460 layer=1 seen=419 replan=19 own_ai=267 own_wander=152 errand=252 settled=241 step=11 column=0 lost=80 stalled=1 meandist=6.2 recall=34 filed=0 fled=0 rows=4096 writes=98647 coal=667722 evict=96837 bytes=262144
-[aimem] INTENT tick=5460 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5460 bodies=385 recovering=76 crowd_dead_total=0
-[macro] tick=22 day=154.0 living=1922 births=0 deaths=0 blocked=0 depart=2 arrive=0 transit=2 reserve=1046654
-[medium] live 144 cells, 2061 quanta (32152 l), woken 93190, slept 43566, lazy 33, listTot 144, fade 89, substeps 1377 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=5520 layer=1 seen=419 replan=8 own_ai=267 own_wander=152 errand=252 settled=242 step=10 column=0 lost=80 stalled=1 meandist=6.2 recall=24 filed=0 fled=0 rows=4096 writes=99127 coal=674084 evict=97317 bytes=262144
-[aimem] INTENT tick=5520 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5520 bodies=385 recovering=76 crowd_dead_total=0
-[aimem] STEP tick=5580 layer=1 seen=419 replan=6 own_ai=267 own_wander=152 errand=252 settled=242 step=9 column=1 lost=80 stalled=1 meandist=5.8 recall=20 filed=0 fled=0 rows=4096 writes=99609 coal=680410 evict=97797 bytes=262144
-[aimem] INTENT tick=5580 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5580 bodies=385 recovering=75 crowd_dead_total=0
-[medium] live 141 cells, 2058 quanta (32105 l), woken 97597, slept 45707, lazy 33, listTot 141, fade 92, substeps 1408 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=5640 layer=1 seen=419 replan=6 own_ai=268 own_wander=151 errand=252 settled=243 step=9 column=0 lost=80 stalled=1 meandist=6.1 recall=22 filed=0 fled=0 rows=4096 writes=100090 coal=686711 evict=98277 bytes=262144
-[aimem] INTENT tick=5640 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5640 bodies=385 recovering=75 crowd_dead_total=0
-[aimem] STEP tick=5700 layer=1 seen=419 replan=12 own_ai=268 own_wander=151 errand=252 settled=243 step=9 column=0 lost=80 stalled=1 meandist=5.9 recall=28 filed=0 fled=0 rows=4096 writes=100570 coal=693011 evict=98757 bytes=262144
-[aimem] INTENT tick=5700 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=5700 bodies=385 recovering=75 crowd_dead_total=0
-[macro] tick=23 day=161.0 living=1922 births=0 deaths=0 blocked=0 depart=0 arrive=2 transit=0 reserve=1046654
-[medium] live 139 cells, 2050 quanta (31980 l), woken 102027, slept 47893, lazy 33, listTot 139, fade 100, substeps 1439 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=5760 layer=1 seen=419 replan=9 own_ai=267 own_wander=152 errand=251 settled=245 step=6 column=0 lost=81 stalled=1 meandist=6.5 recall=25 filed=0 fled=0 rows=4096 writes=101052 coal=699359 evict=99239 bytes=262144
-[aimem] INTENT tick=5760 flee=16 drink=40 eat=2 sleep=1 work=251 heal=38 patrol=70 wander=1
-[needs] tick=5760 bodies=385 recovering=76 crowd_dead_total=0
-[aimem] STEP tick=5820 layer=1 seen=419 replan=3 own_ai=267 own_wander=152 errand=251 settled=246 step=5 column=0 lost=81 stalled=1 meandist=7.4 recall=19 filed=0 fled=0 rows=4096 writes=101540 coal=705882 evict=99721 bytes=262144
-[aimem] INTENT tick=5820 flee=16 drink=40 eat=2 sleep=1 work=251 heal=38 patrol=70 wander=1
-[needs] tick=5820 bodies=385 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=5880 layer=1 seen=419 replan=13 own_ai=267 own_wander=152 errand=251 settled=247 step=4 column=0 lost=82 stalled=1 meandist=8.5 recall=28 filed=1 fled=0 rows=4096 writes=102022 coal=712453 evict=100201 bytes=262144
-[aimem] INTENT tick=5880 flee=16 drink=40 eat=2 sleep=1 work=251 heal=39 patrol=69 wander=1
-[needs] tick=5880 bodies=384 recovering=78 crowd_dead_total=0
-[medium] live 145 cells, 2047 quanta (31933 l), woken 106486, slept 50030, lazy 34, listTot 145, fade 103, substeps 1471 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=5940 layer=1 seen=419 replan=12 own_ai=267 own_wander=152 errand=251 settled=246 step=5 column=0 lost=82 stalled=1 meandist=8.2 recall=28 filed=0 fled=0 rows=4096 writes=102502 coal=719113 evict=100681 bytes=262144
-[aimem] INTENT tick=5940 flee=16 drink=41 eat=2 sleep=1 work=250 heal=39 patrol=69 wander=1
-[needs] tick=5940 bodies=384 recovering=78 crowd_dead_total=0
-[macro] tick=24 day=168.0 living=1922 births=2 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046654
-[aimem] STEP tick=6000 layer=1 seen=419 replan=10 own_ai=266 own_wander=153 errand=251 settled=246 step=5 column=0 lost=82 stalled=1 meandist=8.2 recall=26 filed=0 fled=0 rows=4096 writes=102988 coal=725729 evict=101162 bytes=262144
-[aimem] INTENT tick=6000 flee=16 drink=41 eat=2 sleep=1 work=250 heal=39 patrol=69 wander=1
-[needs] tick=6000 bodies=386 recovering=77 crowd_dead_total=0
-[medium] live 148 cells, 2042 quanta (31855 l), woken 111057, slept 52279, lazy 35, listTot 148, fade 108, substeps 1502 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=6060 layer=1 seen=419 replan=7 own_ai=266 own_wander=153 errand=251 settled=245 step=6 column=0 lost=81 stalled=1 meandist=7.5 recall=22 filed=0 fled=0 rows=4096 writes=103470 coal=732352 evict=101642 bytes=262144
-[aimem] INTENT tick=6060 flee=16 drink=41 eat=2 sleep=1 work=251 heal=37 patrol=70 wander=1
-[needs] tick=6060 bodies=386 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=6120 layer=1 seen=419 replan=6 own_ai=265 own_wander=154 errand=250 settled=245 step=5 column=0 lost=82 stalled=1 meandist=8.2 recall=21 filed=0 fled=0 rows=4096 writes=103832 coal=739251 evict=102003 bytes=262144
-[aimem] INTENT tick=6120 flee=16 drink=42 eat=2 sleep=1 work=250 heal=37 patrol=70 wander=1
-[needs] tick=6120 bodies=386 recovering=79 crowd_dead_total=0
-[medium] live 141 cells, 2035 quanta (31746 l), woken 115535, slept 54448, lazy 35, listTot 141, fade 115, substeps 1533 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=6180 layer=1 seen=419 replan=5 own_ai=266 own_wander=153 errand=250 settled=245 step=5 column=0 lost=82 stalled=1 meandist=7.2 recall=20 filed=0 fled=0 rows=4096 writes=104196 coal=746183 evict=102365 bytes=262144
-[aimem] INTENT tick=6180 flee=16 drink=42 eat=2 sleep=1 work=250 heal=37 patrol=70 wander=1
-[needs] tick=6180 bodies=385 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=6240 layer=1 seen=419 replan=12 own_ai=266 own_wander=153 errand=250 settled=245 step=5 column=0 lost=83 stalled=1 meandist=7.0 recall=28 filed=0 fled=0 rows=4096 writes=104556 coal=753057 evict=102725 bytes=262144
-[aimem] INTENT tick=6240 flee=16 drink=43 eat=2 sleep=1 work=250 heal=37 patrol=69 wander=1
-[needs] tick=6240 bodies=385 recovering=79 crowd_dead_total=0
+[needs] tick=5220 bodies=386 recovering=78 crowd_dead_total=0
+[macro] tick=21 day=147.0 living=1923 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046653
+[aimem] STEP tick=5280 layer=1 seen=419 replan=10 own_ai=269 own_wander=150 errand=253 settled=241 step=12 column=0 lost=79 stalled=1 meandist=5.3 recall=26 filed=0 fled=0 rows=4096 writes=98525 coal=648432 evict=96717 bytes=262144
+[aimem] INTENT tick=5280 flee=16 drink=39 eat=2 sleep=1 work=254 heal=36 patrol=70 wander=1
+[needs] tick=5280 bodies=386 recovering=75 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1323 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5340 layer=1 seen=419 replan=7 own_ai=269 own_wander=150 errand=253 settled=241 step=12 column=0 lost=79 stalled=2 meandist=5.6 recall=23 filed=0 fled=0 rows=4096 writes=98894 coal=654769 evict=97086 bytes=262144
+[aimem] INTENT tick=5340 flee=16 drink=40 eat=2 sleep=1 work=253 heal=36 patrol=70 wander=1
+[needs] tick=5340 bodies=386 recovering=74 crowd_dead_total=0
+[aimem] STEP tick=5400 layer=1 seen=419 replan=12 own_ai=269 own_wander=150 errand=253 settled=240 step=12 column=1 lost=79 stalled=1 meandist=5.7 recall=27 filed=0 fled=0 rows=4096 writes=99276 coal=661048 evict=97468 bytes=262144
+[aimem] INTENT tick=5400 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5400 bodies=386 recovering=74 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1355 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5460 layer=1 seen=419 replan=19 own_ai=268 own_wander=151 errand=253 settled=242 step=11 column=0 lost=79 stalled=1 meandist=6.2 recall=34 filed=0 fled=0 rows=4096 writes=99764 coal=667331 evict=97954 bytes=262144
+[aimem] INTENT tick=5460 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5460 bodies=386 recovering=76 crowd_dead_total=0
+[macro] tick=22 day=154.0 living=1923 births=0 deaths=0 blocked=0 depart=2 arrive=0 transit=2 reserve=1046653
+[aimem] STEP tick=5520 layer=1 seen=419 replan=8 own_ai=268 own_wander=151 errand=253 settled=243 step=10 column=0 lost=79 stalled=1 meandist=6.2 recall=24 filed=0 fled=0 rows=4096 writes=100244 coal=673693 evict=98434 bytes=262144
+[aimem] INTENT tick=5520 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5520 bodies=386 recovering=76 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1386 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5580 layer=1 seen=419 replan=6 own_ai=268 own_wander=151 errand=253 settled=243 step=9 column=1 lost=79 stalled=1 meandist=5.8 recall=20 filed=0 fled=0 rows=4096 writes=100726 coal=680019 evict=98914 bytes=262144
+[aimem] INTENT tick=5580 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5580 bodies=386 recovering=75 crowd_dead_total=0
+[aimem] STEP tick=5640 layer=1 seen=419 replan=6 own_ai=269 own_wander=150 errand=253 settled=244 step=9 column=0 lost=79 stalled=1 meandist=6.1 recall=22 filed=0 fled=0 rows=4096 writes=101207 coal=686320 evict=99394 bytes=262144
+[aimem] INTENT tick=5640 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5640 bodies=386 recovering=75 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1418 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5700 layer=1 seen=419 replan=12 own_ai=269 own_wander=150 errand=253 settled=244 step=9 column=0 lost=79 stalled=1 meandist=5.9 recall=28 filed=0 fled=0 rows=4096 writes=101687 coal=692620 evict=99874 bytes=262144
+[aimem] INTENT tick=5700 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=5700 bodies=386 recovering=75 crowd_dead_total=0
+[macro] tick=23 day=161.0 living=1923 births=0 deaths=0 blocked=0 depart=0 arrive=2 transit=0 reserve=1046653
+[aimem] STEP tick=5760 layer=1 seen=419 replan=9 own_ai=268 own_wander=151 errand=252 settled=246 step=6 column=0 lost=80 stalled=1 meandist=6.5 recall=25 filed=0 fled=0 rows=4096 writes=102169 coal=698968 evict=100356 bytes=262144
+[aimem] INTENT tick=5760 flee=16 drink=40 eat=2 sleep=1 work=252 heal=37 patrol=70 wander=1
+[needs] tick=5760 bodies=386 recovering=76 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1449 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5820 layer=1 seen=419 replan=3 own_ai=268 own_wander=151 errand=252 settled=247 step=5 column=0 lost=80 stalled=1 meandist=7.4 recall=19 filed=0 fled=0 rows=4096 writes=102657 coal=705491 evict=100838 bytes=262144
+[aimem] INTENT tick=5820 flee=16 drink=40 eat=2 sleep=1 work=252 heal=37 patrol=70 wander=1
+[needs] tick=5820 bodies=386 recovering=78 crowd_dead_total=0
+[aimem] STEP tick=5880 layer=1 seen=419 replan=13 own_ai=268 own_wander=151 errand=252 settled=248 step=4 column=0 lost=81 stalled=1 meandist=8.5 recall=28 filed=1 fled=0 rows=4096 writes=103139 coal=712062 evict=101318 bytes=262144
+[aimem] INTENT tick=5880 flee=16 drink=40 eat=2 sleep=1 work=252 heal=38 patrol=69 wander=1
+[needs] tick=5880 bodies=385 recovering=78 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1481 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=5940 layer=1 seen=419 replan=12 own_ai=268 own_wander=151 errand=252 settled=247 step=5 column=0 lost=81 stalled=1 meandist=8.2 recall=28 filed=0 fled=0 rows=4096 writes=103619 coal=718722 evict=101798 bytes=262144
+[aimem] INTENT tick=5940 flee=16 drink=41 eat=2 sleep=1 work=251 heal=38 patrol=69 wander=1
+[needs] tick=5940 bodies=385 recovering=78 crowd_dead_total=0
+[macro] tick=24 day=168.0 living=1923 births=2 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046653
+[aimem] STEP tick=6000 layer=1 seen=419 replan=10 own_ai=267 own_wander=152 errand=252 settled=247 step=5 column=0 lost=81 stalled=1 meandist=8.2 recall=26 filed=0 fled=0 rows=4096 writes=104105 coal=725338 evict=102279 bytes=262144
+[aimem] INTENT tick=6000 flee=16 drink=41 eat=2 sleep=1 work=251 heal=38 patrol=69 wander=1
+[needs] tick=6000 bodies=387 recovering=77 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1176, slept 252, lazy 2, listTot 3, fade 0, substeps 1512 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=6060 layer=1 seen=419 replan=7 own_ai=267 own_wander=152 errand=252 settled=246 step=6 column=0 lost=80 stalled=1 meandist=7.7 recall=22 filed=0 fled=0 rows=4096 writes=104587 coal=731961 evict=102759 bytes=262144
+[aimem] INTENT tick=6060 flee=16 drink=41 eat=2 sleep=1 work=252 heal=36 patrol=70 wander=1
+[needs] tick=6060 bodies=387 recovering=78 crowd_dead_total=0
+[death] possessed record 838
+[aimem] STEP tick=6120 layer=1 seen=418 replan=6 own_ai=265 own_wander=153 errand=250 settled=245 step=5 column=0 lost=81 stalled=1 meandist=8.2 recall=21 filed=0 fled=0 rows=4096 writes=104951 coal=738944 evict=103120 bytes=262144
+[aimem] INTENT tick=6120 flee=16 drink=42 eat=2 sleep=1 work=250 heal=36 patrol=70 wander=1
+[needs] tick=6120 bodies=386 recovering=80 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1543 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=6180 layer=1 seen=418 replan=5 own_ai=266 own_wander=152 errand=250 settled=245 step=5 column=0 lost=81 stalled=1 meandist=7.2 recall=20 filed=0 fled=0 rows=4096 writes=105315 coal=745996 evict=103482 bytes=262144
+[aimem] INTENT tick=6180 flee=16 drink=42 eat=2 sleep=1 work=250 heal=36 patrol=70 wander=1
+[needs] tick=6180 bodies=385 recovering=81 crowd_dead_total=0
+[aimem] STEP tick=6240 layer=1 seen=418 replan=12 own_ai=266 own_wander=152 errand=250 settled=245 step=5 column=0 lost=82 stalled=1 meandist=7.2 recall=28 filed=0 fled=0 rows=4096 writes=105675 coal=752990 evict=103842 bytes=262144
+[aimem] INTENT tick=6240 flee=16 drink=43 eat=2 sleep=1 work=250 heal=36 patrol=69 wander=1
+[needs] tick=6240 bodies=385 recovering=80 crowd_dead_total=0
 [macro] tick=25 day=175.0 living=1921 births=1 deaths=1 blocked=0 depart=3 arrive=0 transit=3 reserve=1046655
-[medium] live 146 cells, 2028 quanta (31637 l), woken 120056, slept 56702, lazy 35, listTot 146, fade 122, substeps 1565 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=6300 layer=1 seen=419 replan=16 own_ai=266 own_wander=153 errand=250 settled=244 step=6 column=0 lost=83 stalled=2 meandist=6.3 recall=31 filed=0 fled=0 rows=4096 writes=104920 coal=759942 evict=103086 bytes=262144
-[aimem] INTENT tick=6300 flee=16 drink=44 eat=2 sleep=1 work=249 heal=37 patrol=69 wander=1
-[needs] tick=6300 bodies=385 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=6360 layer=1 seen=419 replan=6 own_ai=266 own_wander=153 errand=250 settled=244 step=6 column=0 lost=83 stalled=1 meandist=6.3 recall=21 filed=0 fled=0 rows=4096 writes=105280 coal=766844 evict=103446 bytes=262144
-[aimem] INTENT tick=6360 flee=16 drink=44 eat=2 sleep=1 work=249 heal=37 patrol=69 wander=1
-[needs] tick=6360 bodies=385 recovering=80 crowd_dead_total=0
-[medium] live 141 cells, 2022 quanta (31543 l), woken 124604, slept 58908, lazy 35, listTot 141, fade 128, substeps 1596 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=6420 layer=1 seen=419 replan=3 own_ai=266 own_wander=153 errand=250 settled=244 step=6 column=0 lost=83 stalled=1 meandist=6.3 recall=19 filed=0 fled=0 rows=4096 writes=105640 coal=773744 evict=103806 bytes=262144
-[aimem] INTENT tick=6420 flee=16 drink=45 eat=2 sleep=1 work=248 heal=37 patrol=69 wander=1
+[aimem] STEP tick=6300 layer=1 seen=418 replan=16 own_ai=266 own_wander=152 errand=250 settled=244 step=6 column=0 lost=82 stalled=2 meandist=6.3 recall=31 filed=0 fled=0 rows=4096 writes=106040 coal=759969 evict=104203 bytes=262144
+[aimem] INTENT tick=6300 flee=16 drink=44 eat=2 sleep=1 work=249 heal=36 patrol=69 wander=1
+[needs] tick=6300 bodies=385 recovering=81 crowd_dead_total=0
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1575 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=6360 layer=1 seen=418 replan=6 own_ai=266 own_wander=152 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=6.3 recall=21 filed=0 fled=0 rows=4096 writes=106400 coal=766931 evict=104563 bytes=262144
+[aimem] INTENT tick=6360 flee=16 drink=44 eat=2 sleep=1 work=249 heal=36 patrol=69 wander=1
+[needs] tick=6360 bodies=385 recovering=81 crowd_dead_total=0
+[aimem] STEP tick=6420 layer=1 seen=418 replan=3 own_ai=266 own_wander=152 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=6.3 recall=19 filed=0 fled=0 rows=4096 writes=106760 coal=773856 evict=104923 bytes=262144
+[aimem] INTENT tick=6420 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=69 wander=1
 [needs] tick=6420 bodies=385 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=6480 layer=1 seen=419 replan=10 own_ai=265 own_wander=154 errand=250 settled=244 step=6 column=0 lost=83 stalled=1 meandist=6.2 recall=25 filed=0 fled=0 rows=4096 writes=106002 coal=780644 evict=104167 bytes=262144
-[aimem] INTENT tick=6480 flee=16 drink=45 eat=2 sleep=1 work=248 heal=37 patrol=69 wander=1
+[medium] live 3 cells, 1 quanta (16 l), woken 1179, slept 254, lazy 2, listTot 3, fade 0, substeps 1608 | cpu ms: poll 0.00 apply 0.00 rec 0.00
+[aimem] STEP tick=6480 layer=1 seen=418 replan=10 own_ai=265 own_wander=153 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=6.2 recall=25 filed=0 fled=0 rows=4096 writes=107122 coal=780756 evict=105284 bytes=262144
+[aimem] INTENT tick=6480 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=69 wander=1
 [needs] tick=6480 bodies=385 recovering=80 crowd_dead_total=0
 [macro] tick=26 day=182.0 living=1921 births=1 deaths=1 blocked=0 depart=1 arrive=0 transit=4 reserve=1046655
-[medium] live 145 cells, 2019 quanta (31496 l), woken 129195, slept 61118, lazy 36, listTot 145, fade 131, substeps 1627 | cpu ms: poll 0.00 apply 0.05 rec 0.00
-[aimem] STEP tick=6540 layer=1 seen=419 replan=7 own_ai=265 own_wander=154 errand=250 settled=243 step=7 column=0 lost=83 stalled=2 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=106260 coal=787646 evict=104425 bytes=262144
-[aimem] INTENT tick=6540 flee=16 drink=45 eat=2 sleep=1 work=248 heal=37 patrol=69 wander=1
+[aimem] STEP tick=6540 layer=1 seen=418 replan=7 own_ai=265 own_wander=153 errand=250 settled=243 step=7 column=0 lost=82 stalled=2 meandist=6.4 recall=23 filed=0 fled=0 rows=4096 writes=107380 coal=787758 evict=105542 bytes=262144
+[aimem] INTENT tick=6540 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=69 wander=1
 [needs] tick=6540 bodies=386 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=6600 layer=1 seen=419 replan=13 own_ai=265 own_wander=154 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=6.4 recall=29 filed=0 fled=0 rows=4096 writes=106500 coal=794622 evict=104665 bytes=262144
-[aimem] INTENT tick=6600 flee=16 drink=45 eat=2 sleep=1 work=248 heal=37 patrol=69 wander=1
-[needs] tick=6600 bodies=386 recovering=79 crowd_dead_total=0
-[medium] live 149 cells, 2013 quanta (31403 l), woken 133823, slept 63415, lazy 36, listTot 149, fade 137, substeps 1659 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=6660 layer=1 seen=419 replan=5 own_ai=265 own_wander=154 errand=250 settled=243 step=7 column=0 lost=82 stalled=1 meandist=6.7 recall=21 filed=0 fled=0 rows=4096 writes=106742 coal=801544 evict=104906 bytes=262144
-[aimem] INTENT tick=6660 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=70 wander=1
-[needs] tick=6660 bodies=386 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=6720 layer=1 seen=419 replan=15 own_ai=266 own_wander=153 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=7.3 recall=30 filed=0 fled=0 rows=4096 writes=106923 coal=808508 evict=105087 bytes=262144
-[aimem] INTENT tick=6720 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=70 wander=1
-[needs] tick=6720 bodies=386 recovering=78 crowd_dead_total=0
-[macro] tick=27 day=189.0 living=1921 births=1 deaths=1 blocked=0 depart=2 arrive=3 transit=3 reserve=1046655
-[medium] live 144 cells, 2004 quanta (31262 l), woken 138364, slept 65618, lazy 36, listTot 144, fade 146, substeps 1690 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=6780 layer=1 seen=419 replan=5 own_ai=266 own_wander=153 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=7.2 recall=21 filed=0 fled=0 rows=4096 writes=107043 coal=815529 evict=105207 bytes=262144
-[aimem] INTENT tick=6780 flee=16 drink=45 eat=2 sleep=1 work=248 heal=36 patrol=70 wander=1
-[needs] tick=6780 bodies=387 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=6840 layer=1 seen=419 replan=9 own_ai=266 own_wander=153 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=7.1 recall=25 filed=0 fled=0 rows=4096 writes=107163 coal=822551 evict=105327 bytes=262144
-[aimem] INTENT tick=6840 flee=16 drink=47 eat=2 sleep=1 work=247 heal=36 patrol=69 wander=1
-[needs] tick=6840 bodies=387 recovering=78 crowd_dead_total=0
-[medium] live 151 cells, 2001 quanta (31216 l), woken 143134, slept 67919, lazy 36, listTot 151, fade 149, substeps 1721 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=6900 layer=1 seen=419 replan=7 own_ai=265 own_wander=154 errand=249 settled=242 step=7 column=0 lost=85 stalled=1 meandist=7.3 recall=23 filed=0 fled=0 rows=4096 writes=107283 coal=829573 evict=105447 bytes=262144
-[aimem] INTENT tick=6900 flee=16 drink=48 eat=2 sleep=1 work=246 heal=37 patrol=68 wander=1
-[needs] tick=6900 bodies=387 recovering=78 crowd_dead_total=0
-[aimem] STEP tick=6960 layer=1 seen=419 replan=9 own_ai=265 own_wander=154 errand=249 settled=242 step=7 column=0 lost=85 stalled=1 meandist=7.0 recall=25 filed=0 fled=0 rows=4096 writes=107404 coal=836549 evict=105568 bytes=262144
-[aimem] INTENT tick=6960 flee=16 drink=48 eat=2 sleep=1 work=246 heal=37 patrol=68 wander=1
-[needs] tick=6960 bodies=387 recovering=78 crowd_dead_total=0
-[macro] tick=28 day=196.0 living=1921 births=1 deaths=1 blocked=0 depart=0 arrive=2 transit=1 reserve=1046655
-[medium] live 166 cells, 1995 quanta (31122 l), woken 148055, slept 70245, lazy 37, listTot 166, fade 155, substeps 1752 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=7020 layer=1 seen=419 replan=11 own_ai=266 own_wander=153 errand=249 settled=242 step=7 column=0 lost=84 stalled=1 meandist=7.3 recall=27 filed=0 fled=0 rows=4096 writes=107525 coal=843503 evict=105689 bytes=262144
-[aimem] INTENT tick=7020 flee=17 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=68 wander=1
-[needs] tick=7020 bodies=388 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=7080 layer=1 seen=419 replan=7 own_ai=266 own_wander=153 errand=249 settled=242 step=7 column=0 lost=85 stalled=1 meandist=7.3 recall=24 filed=0 fled=0 rows=4096 writes=107645 coal=850467 evict=105809 bytes=262144
-[aimem] INTENT tick=7080 flee=17 drink=48 eat=2 sleep=1 work=246 heal=37 patrol=67 wander=1
-[needs] tick=7080 bodies=387 recovering=79 crowd_dead_total=0
-[medium] live 151 cells, 1990 quanta (31044 l), woken 152962, slept 72592, lazy 37, listTot 151, fade 160, substeps 1784 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=7140 layer=1 seen=419 replan=13 own_ai=266 own_wander=153 errand=249 settled=243 step=6 column=0 lost=85 stalled=1 meandist=7.3 recall=28 filed=0 fled=0 rows=4096 writes=107766 coal=857428 evict=105930 bytes=262144
-[aimem] INTENT tick=7140 flee=17 drink=48 eat=2 sleep=1 work=246 heal=37 patrol=67 wander=1
-[needs] tick=7140 bodies=387 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=7200 layer=1 seen=419 replan=15 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.7 recall=32 filed=0 fled=0 rows=4096 writes=107886 coal=864388 evict=106050 bytes=262144
-[aimem] INTENT tick=7200 flee=18 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=67 wander=1
-[needs] tick=7200 bodies=387 recovering=80 crowd_dead_total=0
-[macro] tick=29 day=203.0 living=1921 births=1 deaths=0 blocked=0 depart=0 arrive=1 transit=0 reserve=1046655
-[aimem] STEP tick=7260 layer=1 seen=419 replan=10 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.7 recall=28 filed=0 fled=0 rows=4096 writes=108007 coal=871410 evict=106170 bytes=262144
-[aimem] INTENT tick=7260 flee=18 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=67 wander=1
-[needs] tick=7260 bodies=388 recovering=80 crowd_dead_total=0
-[medium] live 152 cells, 1982 quanta (30919 l), woken 157813, slept 74934, lazy 37, listTot 152, fade 168, substeps 1815 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=7320 layer=1 seen=419 replan=7 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.3 recall=24 filed=0 fled=0 rows=4096 writes=108128 coal=878461 evict=106290 bytes=262144
-[aimem] INTENT tick=7320 flee=18 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=67 wander=1
-[needs] tick=7320 bodies=388 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=7380 layer=1 seen=419 replan=8 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.3 recall=26 filed=0 fled=0 rows=4096 writes=108249 coal=885434 evict=106410 bytes=262144
-[aimem] INTENT tick=7380 flee=18 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=67 wander=1
-[needs] tick=7380 bodies=388 recovering=78 crowd_dead_total=0
-[medium] live 162 cells, 1978 quanta (30857 l), woken 162755, slept 77287, lazy 40, listTot 162, fade 172, substeps 1847 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=7440 layer=1 seen=419 replan=7 own_ai=267 own_wander=152 errand=249 settled=244 step=5 column=0 lost=84 stalled=1 meandist=6.8 recall=23 filed=0 fled=0 rows=4096 writes=108373 coal=892443 evict=106532 bytes=262144
-[aimem] INTENT tick=7440 flee=18 drink=48 eat=2 sleep=1 work=246 heal=36 patrol=67 wander=1
-[needs] tick=7440 bodies=388 recovering=80 crowd_dead_total=0
-[macro] tick=30 day=210.0 living=1921 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046655
-[aimem] STEP tick=7500 layer=1 seen=419 replan=5 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=83 stalled=1 meandist=6.3 recall=23 filed=0 fled=0 rows=4096 writes=108493 coal=899587 evict=106652 bytes=262144
-[aimem] INTENT tick=7500 flee=18 drink=49 eat=2 sleep=1 work=246 heal=35 patrol=67 wander=1
-[needs] tick=7500 bodies=388 recovering=80 crowd_dead_total=0
-[medium] live 162 cells, 1972 quanta (30763 l), woken 168035, slept 79687, lazy 41, listTot 162, fade 178, substeps 1879 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=7560 layer=1 seen=419 replan=13 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=6.0 recall=29 filed=0 fled=0 rows=4096 writes=108613 coal=906677 evict=106772 bytes=262144
-[aimem] INTENT tick=7560 flee=18 drink=50 eat=2 sleep=1 work=245 heal=35 patrol=67 wander=1
-[needs] tick=7560 bodies=388 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=7620 layer=1 seen=419 replan=2 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=5.9 recall=20 filed=0 fled=0 rows=4096 writes=108736 coal=913756 evict=106893 bytes=262144
-[aimem] INTENT tick=7620 flee=18 drink=50 eat=2 sleep=1 work=245 heal=35 patrol=67 wander=1
-[needs] tick=7620 bodies=388 recovering=79 crowd_dead_total=0
-[medium] live 173 cells, 1966 quanta (30670 l), woken 173223, slept 82189, lazy 42, listTot 173, fade 184, substeps 1910 | cpu ms: poll 0.00 apply 0.02 rec 0.00
-[aimem] STEP tick=7680 layer=1 seen=419 replan=6 own_ai=267 own_wander=152 errand=249 settled=242 step=7 column=0 lost=84 stalled=1 meandist=5.7 recall=24 filed=0 fled=0 rows=4096 writes=108815 coal=920877 evict=106972 bytes=262144
-[aimem] INTENT tick=7680 flee=18 drink=51 eat=2 work=245 heal=35 patrol=67 wander=1
-[needs] tick=7680 bodies=388 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=7740 layer=1 seen=419 replan=6 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.2 recall=24 filed=0 fled=0 rows=4096 writes=108821 coal=928164 evict=106972 bytes=262144
-[aimem] INTENT tick=7740 flee=18 drink=51 eat=2 work=245 heal=35 patrol=67 wander=1
-[needs] tick=7740 bodies=388 recovering=80 crowd_dead_total=0
-[macro] tick=31 day=217.0 living=1922 births=2 deaths=1 blocked=0 depart=1 arrive=0 transit=1 reserve=1046654
-[medium] live 163 cells, 1958 quanta (30545 l), woken 178611, slept 84753, lazy 42, listTot 163, fade 192, substeps 1941 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=7800 layer=1 seen=419 replan=12 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=83 stalled=1 meandist=6.0 recall=30 filed=0 fled=0 rows=4096 writes=108828 coal=935528 evict=106973 bytes=262144
-[aimem] INTENT tick=7800 flee=18 drink=51 eat=2 work=245 heal=34 patrol=68 wander=1
-[needs] tick=7800 bodies=390 recovering=81 crowd_dead_total=0
-[aimem] STEP tick=7860 layer=1 seen=419 replan=4 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=83 stalled=1 meandist=6.0 recall=22 filed=0 fled=0 rows=4096 writes=108836 coal=942938 evict=106978 bytes=262144
-[aimem] INTENT tick=7860 flee=18 drink=51 eat=2 work=245 heal=34 patrol=68 wander=1
-[needs] tick=7860 bodies=390 recovering=82 crowd_dead_total=0
-[medium] live 161 cells, 1952 quanta (30451 l), woken 183678, slept 87178, lazy 42, listTot 161, fade 198, substeps 1973 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=7920 layer=1 seen=419 replan=13 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=2 meandist=6.0 recall=31 filed=0 fled=0 rows=4096 writes=108851 coal=950437 evict=106988 bytes=262144
-[aimem] INTENT tick=7920 flee=18 drink=52 eat=2 work=245 heal=34 patrol=67 wander=1
-[needs] tick=7920 bodies=389 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=7980 layer=1 seen=419 replan=16 own_ai=268 own_wander=151 errand=250 settled=243 step=6 column=1 lost=83 stalled=1 meandist=6.3 recall=33 filed=0 fled=0 rows=4096 writes=108977 coal=957847 evict=107114 bytes=262144
-[aimem] INTENT tick=7980 flee=18 drink=53 eat=2 work=245 heal=33 patrol=67 wander=1
-[needs] tick=7980 bodies=389 recovering=82 crowd_dead_total=0
-[macro] tick=32 day=224.0 living=1921 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=1 reserve=1046655
-[medium] live 160 cells, 1947 quanta (30373 l), woken 188827, slept 89747, lazy 43, listTot 160, fade 203, substeps 2004 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=8040 layer=1 seen=419 replan=9 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=6.4 recall=27 filed=0 fled=0 rows=4096 writes=109105 coal=965219 evict=107241 bytes=262144
-[aimem] INTENT tick=8040 flee=18 drink=53 eat=2 work=245 heal=33 patrol=67 wander=1
-[needs] tick=8040 bodies=389 recovering=82 crowd_dead_total=0
-[aimem] STEP tick=8100 layer=1 seen=419 replan=11 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=83 stalled=1 meandist=6.8 recall=29 filed=0 fled=0 rows=4096 writes=109240 coal=972687 evict=107372 bytes=262144
-[aimem] INTENT tick=8100 flee=18 drink=53 eat=2 work=245 heal=33 patrol=67 wander=1
-[needs] tick=8100 bodies=389 recovering=83 crowd_dead_total=0
-[medium] live 162 cells, 1944 quanta (30326 l), woken 193932, slept 92214, lazy 43, listTot 162, fade 206, substeps 2036 | cpu ms: poll 0.00 apply 0.08 rec 0.00
-[aimem] STEP tick=8160 layer=1 seen=419 replan=10 own_ai=268 own_wander=151 errand=250 settled=245 step=4 column=1 lost=83 stalled=2 meandist=7.8 recall=27 filed=0 fled=0 rows=4096 writes=109383 coal=980308 evict=107515 bytes=262144
-[aimem] INTENT tick=8160 flee=18 drink=53 eat=2 work=245 heal=33 patrol=67 wander=1
-[needs] tick=8160 bodies=389 recovering=85 crowd_dead_total=0
-[aimem] STEP tick=8220 layer=1 seen=419 replan=0 own_ai=268 own_wander=151 errand=250 settled=244 step=5 column=1 lost=83 stalled=1 meandist=8.0 recall=18 filed=0 fled=0 rows=4096 writes=109503 coal=987990 evict=107635 bytes=262144
-[aimem] INTENT tick=8220 flee=18 drink=52 eat=2 work=246 heal=33 patrol=67 wander=1
-[needs] tick=8220 bodies=389 recovering=85 crowd_dead_total=0
-[macro] tick=33 day=231.0 living=1922 births=3 deaths=2 blocked=0 depart=0 arrive=0 transit=1 reserve=1046654
-[medium] live 171 cells, 1940 quanta (30264 l), woken 199110, slept 94709, lazy 43, listTot 171, fade 210, substeps 2067 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=8280 layer=1 seen=419 replan=5 own_ai=268 own_wander=151 errand=250 settled=244 step=5 column=1 lost=83 stalled=1 meandist=7.7 recall=23 filed=0 fled=1 rows=4096 writes=109626 coal=995699 evict=107758 bytes=262144
-[aimem] INTENT tick=8280 flee=18 drink=52 eat=2 work=246 heal=33 patrol=67 wander=1
-[needs] tick=8280 bodies=392 recovering=86 crowd_dead_total=0
-[aimem] STEP tick=8340 layer=1 seen=419 replan=5 own_ai=268 own_wander=151 errand=250 settled=244 step=5 column=1 lost=83 stalled=1 meandist=7.5 recall=23 filed=0 fled=0 rows=4096 writes=109748 coal=1003443 evict=107878 bytes=262144
-[aimem] INTENT tick=8340 flee=18 drink=52 eat=2 work=246 heal=33 patrol=67 wander=1
-[needs] tick=8340 bodies=392 recovering=86 crowd_dead_total=0
-[medium] live 168 cells, 1933 quanta (30155 l), woken 204592, slept 97349, lazy 43, listTot 168, fade 217, substeps 2098 | cpu ms: poll 0.00 apply 0.06 rec 0.00
-[aimem] STEP tick=8400 layer=1 seen=419 replan=19 own_ai=268 own_wander=151 errand=250 settled=243 step=6 column=1 lost=83 stalled=3 meandist=7.4 recall=35 filed=0 fled=0 rows=4096 writes=109873 coal=1011167 evict=108002 bytes=262144
-[aimem] INTENT tick=8400 flee=18 drink=51 eat=2 work=247 heal=33 patrol=67 wander=1
-[needs] tick=8400 bodies=391 recovering=86 crowd_dead_total=0
-[aimem] STEP tick=8460 layer=1 seen=419 replan=6 own_ai=268 own_wander=151 errand=250 settled=243 step=6 column=1 lost=83 stalled=2 meandist=7.3 recall=24 filed=0 fled=1 rows=4096 writes=109996 coal=1018846 evict=108125 bytes=262144
-[aimem] INTENT tick=8460 flee=18 drink=51 eat=2 work=247 heal=33 patrol=67 wander=1
-[needs] tick=8460 bodies=391 recovering=86 crowd_dead_total=0
-[macro] tick=34 day=238.0 living=1921 births=0 deaths=0 blocked=0 depart=1 arrive=1 transit=1 reserve=1046655
-[aimem] STEP tick=8520 layer=1 seen=419 replan=7 own_ai=268 own_wander=151 errand=250 settled=242 step=7 column=1 lost=83 stalled=2 meandist=7.2 recall=25 filed=0 fled=1 rows=4096 writes=110118 coal=1026524 evict=108246 bytes=262144
-[aimem] INTENT tick=8520 flee=18 drink=52 eat=2 work=246 heal=33 patrol=67 wander=1
-[needs] tick=8520 bodies=391 recovering=86 crowd_dead_total=0
-[medium] live 167 cells, 1929 quanta (30092 l), woken 209757, slept 99843, lazy 43, listTot 167, fade 221, substeps 2130 | cpu ms: poll 0.00 apply 0.01 rec 0.00
-[aimem] STEP tick=8580 layer=1 seen=419 replan=12 own_ai=268 own_wander=151 errand=250 settled=241 step=8 column=1 lost=83 stalled=2 meandist=7.2 recall=30 filed=0 fled=0 rows=4096 writes=110240 coal=1034158 evict=108366 bytes=262144
-[aimem] INTENT tick=8580 flee=18 drink=54 eat=2 work=245 heal=32 patrol=67 wander=1
-[needs] tick=8580 bodies=391 recovering=85 crowd_dead_total=0
-[lightvis] floor 0 gen 12 patch: 39 lamps affected -> 43 cells changed in 15.0 ms @ 6 threads | shadow sync 0.02 ms MAIN
-[carve] light_patch upload 43 cells 0.00 ms (gen 12)
-[aimem] STEP tick=8640 layer=1 seen=419 replan=14 own_ai=269 own_wander=150 errand=251 settled=241 step=10 column=0 lost=82 stalled=2 meandist=7.4 recall=31 filed=0 fled=0 rows=4096 writes=110468 coal=1041677 evict=108593 bytes=262144
-[aimem] INTENT tick=8640 flee=18 drink=55 eat=2 work=245 heal=31 patrol=67 wander=1
-[needs] tick=8640 bodies=391 recovering=85 crowd_dead_total=0
-[medium] live 244 cells, 4008 quanta (62525 l), woken 216409, slept 102487, lazy 51, listTot 244, fade 313, substeps 2162 | cpu ms: poll 0.00 apply 0.13 rec 0.00
-[aimem] STEP tick=8700 layer=1 seen=419 replan=8 own_ai=269 own_wander=150 errand=251 settled=240 step=11 column=0 lost=82 stalled=2 meandist=7.0 recall=26 filed=0 fled=0 rows=4096 writes=110714 coal=1049173 evict=108839 bytes=262144
-[aimem] INTENT tick=8700 flee=18 drink=54 eat=2 work=246 heal=31 patrol=67 wander=1
-[needs] tick=8700 bodies=391 recovering=85 crowd_dead_total=0
-[macro] tick=35 day=245.0 living=1922 births=1 deaths=0 blocked=0 depart=0 arrive=0 transit=1 reserve=1046654
-[aimem] STEP tick=8760 layer=1 seen=419 replan=9 own_ai=268 own_wander=151 errand=251 settled=240 step=11 column=0 lost=82 stalled=1 meandist=6.8 recall=27 filed=0 fled=0 rows=4096 writes=110859 coal=1056688 evict=108984 bytes=262144
-[aimem] INTENT tick=8760 flee=18 drink=54 eat=2 work=246 heal=31 patrol=67 wander=1
-[needs] tick=8760 bodies=392 recovering=84 crowd_dead_total=0
-[medium] live 248 cells, 3796 quanta (59218 l), woken 224443, slept 105567, lazy 59, listTot 248, fade 524, substeps 2193 | cpu ms: poll 0.00 apply 0.12 rec 0.00
-[aimem] STEP tick=8820 layer=1 seen=419 replan=15 own_ai=267 own_wander=152 errand=250 settled=239 step=11 column=0 lost=82 stalled=1 meandist=6.9 recall=32 filed=0 fled=0 rows=4096 writes=111019 coal=1064151 evict=109142 bytes=262144
-[aimem] INTENT tick=8820 flee=18 drink=53 eat=2 work=246 heal=31 patrol=68 wander=1
-[needs] tick=8820 bodies=392 recovering=84 crowd_dead_total=0
-[rebake] floor 0 gen 12 baked: rooms 54 + coarse 186 + fine 199 ms = 0.4 s @ 6 threads | shadow sync 0.00 ms MAIN
-[rebake] swap: floor 0 gen 12 live | 57 ticks start->swap | resident 327.7 MiB
-[aimem] STEP tick=8880 layer=1 seen=419 replan=7 own_ai=266 own_wander=153 errand=249 settled=238 step=11 column=0 lost=83 stalled=1 meandist=6.7 recall=25 filed=0 fled=0 rows=4096 writes=111259 coal=1071595 evict=109382 bytes=262144
-[aimem] INTENT tick=8880 flee=18 drink=54 eat=2 work=245 heal=31 patrol=68 wander=1
-[needs] tick=8880 bodies=391 recovering=84 crowd_dead_total=0
-[medium] live 256 cells, 3648 quanta (56909 l), woken 232239, slept 108984, lazy 64, listTot 256, fade 673, substeps 2225 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=8940 layer=1 seen=419 replan=0 own_ai=267 own_wander=152 errand=249 settled=239 step=10 column=0 lost=83 stalled=1 meandist=6.9 recall=18 filed=1 fled=0 rows=4096 writes=111502 coal=1078958 evict=109625 bytes=262144
-[aimem] INTENT tick=8940 flee=18 drink=54 eat=2 work=245 heal=31 patrol=68 wander=1
-[needs] tick=8940 bodies=390 recovering=83 crowd_dead_total=0
-[macro] tick=36 day=252.0 living=1921 births=1 deaths=0 blocked=0 depart=0 arrive=1 transit=0 reserve=1046655
-[aimem] STEP tick=9000 layer=1 seen=419 replan=10 own_ai=266 own_wander=153 errand=248 settled=238 step=10 column=0 lost=85 stalled=2 meandist=5.9 recall=28 filed=0 fled=0 rows=4096 writes=111743 coal=1086204 evict=109866 bytes=262144
-[aimem] INTENT tick=9000 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9000 bodies=391 recovering=81 crowd_dead_total=0
-[medium] live 263 cells, 3480 quanta (54288 l), woken 240794, slept 112705, lazy 68, listTot 263, fade 841, substeps 2256 | cpu ms: poll 0.00 apply 0.11 rec 0.00
-[aimem] STEP tick=9060 layer=1 seen=419 replan=4 own_ai=266 own_wander=153 errand=248 settled=239 step=9 column=0 lost=85 stalled=1 meandist=5.9 recall=22 filed=0 fled=0 rows=4096 writes=111984 coal=1093377 evict=110106 bytes=262144
-[aimem] INTENT tick=9060 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9060 bodies=391 recovering=79 crowd_dead_total=0
-[aimem] STEP tick=9120 layer=1 seen=419 replan=12 own_ai=267 own_wander=152 errand=249 settled=240 step=9 column=0 lost=84 stalled=1 meandist=5.6 recall=30 filed=0 fled=0 rows=4096 writes=112164 coal=1100349 evict=110284 bytes=262144
-[aimem] INTENT tick=9120 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9120 bodies=390 recovering=78 crowd_dead_total=0
-[medium] live 291 cells, 3351 quanta (52276 l), woken 249144, slept 116407, lazy 73, listTot 291, fade 970, substeps 2287 | cpu ms: poll 0.00 apply 0.11 rec 0.00
-[aimem] STEP tick=9180 layer=1 seen=419 replan=8 own_ai=267 own_wander=152 errand=249 settled=241 step=8 column=0 lost=84 stalled=1 meandist=5.8 recall=25 filed=0 fled=0 rows=4096 writes=112289 coal=1107424 evict=110406 bytes=262144
-[aimem] INTENT tick=9180 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9180 bodies=390 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=9240 layer=1 seen=419 replan=16 own_ai=267 own_wander=152 errand=249 settled=241 step=8 column=0 lost=84 stalled=1 meandist=5.2 recall=33 filed=0 fled=0 rows=4096 writes=112343 coal=1114635 evict=110460 bytes=262144
-[aimem] INTENT tick=9240 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9240 bodies=390 recovering=80 crowd_dead_total=0
-[macro] tick=37 day=259.0 living=1921 births=1 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046655
-[medium] live 280 cells, 3218 quanta (50201 l), woken 257904, slept 120300, lazy 75, listTot 280, fade 1103, substeps 2319 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=9300 layer=1 seen=419 replan=8 own_ai=267 own_wander=152 errand=249 settled=242 step=7 column=0 lost=84 stalled=1 meandist=5.7 recall=24 filed=0 fled=0 rows=4096 writes=112351 coal=1121953 evict=110468 bytes=262144
-[aimem] INTENT tick=9300 flee=18 drink=53 eat=2 sleep=1 work=245 heal=32 patrol=67 wander=1
-[needs] tick=9300 bodies=391 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=9360 layer=1 seen=419 replan=14 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=83 stalled=1 meandist=5.6 recall=32 filed=0 fled=0 rows=4096 writes=112357 coal=1129243 evict=110472 bytes=262144
-[aimem] INTENT tick=9360 flee=18 drink=54 eat=2 sleep=1 work=245 heal=31 patrol=67 wander=1
-[needs] tick=9360 bodies=391 recovering=79 crowd_dead_total=0
-[medium] live 264 cells, 3114 quanta (48578 l), woken 266242, slept 124160, lazy 75, listTot 264, fade 1207, substeps 2350 | cpu ms: poll 0.00 apply 0.02 rec 0.00
-[aimem] STEP tick=9420 layer=1 seen=419 replan=1 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=6.0 recall=19 filed=0 fled=0 rows=4096 writes=112361 coal=1136528 evict=110474 bytes=262144
-[aimem] INTENT tick=9420 flee=18 drink=55 eat=2 sleep=1 work=244 heal=31 patrol=67 wander=1
-[needs] tick=9420 bodies=391 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=9480 layer=1 seen=419 replan=3 own_ai=266 own_wander=153 errand=249 settled=243 step=6 column=0 lost=84 stalled=1 meandist=5.7 recall=21 filed=0 fled=0 rows=4096 writes=112363 coal=1143960 evict=110474 bytes=262144
-[aimem] INTENT tick=9480 flee=18 drink=55 eat=2 sleep=1 work=244 heal=31 patrol=67 wander=1
-[needs] tick=9480 bodies=391 recovering=81 crowd_dead_total=0
-[macro] tick=38 day=266.0 living=1922 births=3 deaths=2 blocked=0 depart=0 arrive=0 transit=0 reserve=1046654
-[medium] live 257 cells, 3008 quanta (46925 l), woken 274683, slept 128074, lazy 79, listTot 257, fade 1313, substeps 2381 | cpu ms: poll 0.00 apply 0.09 rec 0.00
-[aimem] STEP tick=9540 layer=1 seen=419 replan=5 own_ai=268 own_wander=151 errand=251 settled=245 step=6 column=0 lost=82 stalled=1 meandist=7.0 recall=22 filed=0 fled=0 rows=4096 writes=112403 coal=1151462 evict=110514 bytes=262144
-[aimem] INTENT tick=9540 flee=18 drink=56 eat=2 sleep=1 work=245 heal=29 patrol=67 wander=1
-[needs] tick=9540 bodies=394 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=9600 layer=1 seen=419 replan=12 own_ai=267 own_wander=152 errand=250 settled=245 step=5 column=0 lost=82 stalled=1 meandist=6.8 recall=29 filed=0 fled=0 rows=4096 writes=112646 coal=1158968 evict=110757 bytes=262144
-[aimem] INTENT tick=9600 flee=18 drink=55 eat=2 sleep=1 work=245 heal=29 patrol=68 wander=1
-[needs] tick=9600 bodies=394 recovering=84 crowd_dead_total=0
-[medium] live 237 cells, 2922 quanta (45583 l), woken 282247, slept 131645, lazy 79, listTot 237, fade 1399, substeps 2413 | cpu ms: poll 0.00 apply 0.09 rec 0.00
-[aimem] STEP tick=9660 layer=1 seen=419 replan=12 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=6.0 recall=29 filed=0 fled=0 rows=4096 writes=112887 coal=1166440 evict=110997 bytes=262144
-[aimem] INTENT tick=9660 flee=18 drink=54 eat=2 sleep=1 work=246 heal=29 patrol=68 wander=1
-[needs] tick=9660 bodies=393 recovering=84 crowd_dead_total=0
-[aimem] STEP tick=9720 layer=1 seen=419 replan=10 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=5.7 recall=26 filed=0 fled=0 rows=4096 writes=113130 coal=1173878 evict=111240 bytes=262144
-[aimem] INTENT tick=9720 flee=18 drink=54 eat=2 sleep=1 work=246 heal=29 patrol=68 wander=1
-[needs] tick=9720 bodies=393 recovering=83 crowd_dead_total=0
-[lightvis] floor 0 gen 13 patch: 46 lamps affected -> 0 cells changed in 17.0 ms @ 6 threads | shadow sync 0.02 ms MAIN
-[carve] light_patch upload 0 cells 0.00 ms (gen 13)
-[macro] tick=39 day=273.0 living=1922 births=1 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046654
-[medium] live 262 cells, 4952 quanta (77251 l), woken 290224, slept 135243, lazy 80, listTot 262, fade 1531, substeps 2444 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=9780 layer=1 seen=419 replan=4 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=5.5 recall=22 filed=0 fled=0 rows=4096 writes=113372 coal=1181142 evict=111482 bytes=262144
-[aimem] INTENT tick=9780 flee=18 drink=54 eat=2 sleep=1 work=246 heal=29 patrol=68 wander=1
-[needs] tick=9780 bodies=394 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=9840 layer=1 seen=419 replan=9 own_ai=268 own_wander=151 errand=250 settled=244 step=6 column=0 lost=82 stalled=1 meandist=5.2 recall=27 filed=0 fled=0 rows=4096 writes=113613 coal=1188377 evict=111723 bytes=262144
-[aimem] INTENT tick=9840 flee=18 drink=54 eat=2 sleep=1 work=246 heal=29 patrol=68 wander=1
-[needs] tick=9840 bodies=394 recovering=82 crowd_dead_total=0
-[rpgcmbt] melee dmg=8 cd=327 str=3 agi=2 lvl=8 weapon=0
-[aimem] STEP tick=9900 layer=1 seen=419 replan=16 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=83 stalled=2 meandist=5.0 recall=34 filed=0 fled=0 rows=4096 writes=113854 coal=1195517 evict=111964 bytes=262144
-[aimem] INTENT tick=9900 flee=18 drink=55 eat=2 sleep=1 work=245 heal=29 patrol=68 wander=1
-[needs] tick=9900 bodies=394 recovering=82 crowd_dead_total=0
-[medium] live 254 cells, 4843 quanta (75551 l), woken 298211, slept 138876, lazy 81, listTot 254, fade 1640, substeps 2475 | cpu ms: poll 0.00 apply 0.04 rec 0.00
-[aimem] STEP tick=9960 layer=1 seen=419 replan=4 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=83 stalled=1 meandist=5.0 recall=22 filed=0 fled=0 rows=4096 writes=114066 coal=1202750 evict=112176 bytes=262144
-[aimem] INTENT tick=9960 flee=18 drink=56 eat=2 sleep=1 work=243 heal=30 patrol=68 wander=1
-[needs] tick=9960 bodies=393 recovering=82 crowd_dead_total=0
-[macro] tick=40 day=280.0 living=1921 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046655
-[rebake] floor 0 gen 13 baked: rooms 53 + coarse 183 + fine 188 ms = 0.4 s @ 6 threads | shadow sync 0.00 ms MAIN
-[rebake] swap: floor 0 gen 13 live | 55 ticks start->swap | resident 327.7 MiB
-[aimem] STEP tick=10020 layer=1 seen=419 replan=2 own_ai=267 own_wander=152 errand=249 settled=243 step=6 column=0 lost=83 stalled=1 meandist=4.8 recall=20 filed=0 fled=0 rows=4096 writes=114306 coal=1209891 evict=112416 bytes=262144
-[aimem] INTENT tick=10020 flee=18 drink=56 eat=2 sleep=1 work=243 heal=30 patrol=68 wander=1
-[needs] tick=10020 bodies=393 recovering=82 crowd_dead_total=0
-[medium] live 251 cells, 4731 quanta (73804 l), woken 306298, slept 142597, lazy 82, listTot 251, fade 1752, substeps 2507 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=10080 layer=1 seen=419 replan=17 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=82 stalled=1 meandist=4.7 recall=34 filed=0 fled=0 rows=4096 writes=114548 coal=1217111 evict=112657 bytes=262144
-[aimem] INTENT tick=10080 flee=18 drink=57 eat=2 sleep=1 work=243 heal=29 patrol=68 wander=1
-[needs] tick=10080 bodies=393 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=10140 layer=1 seen=419 replan=4 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=82 stalled=1 meandist=4.3 recall=22 filed=0 fled=1 rows=4096 writes=114796 coal=1224432 evict=112904 bytes=262144
-[aimem] INTENT tick=10140 flee=18 drink=57 eat=2 sleep=1 work=243 heal=29 patrol=68 wander=1
-[needs] tick=10140 bodies=393 recovering=82 crowd_dead_total=0
-[medium] live 250 cells, 4617 quanta (72025 l), woken 314305, slept 146409, lazy 83, listTot 250, fade 1866, substeps 2539 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=10200 layer=1 seen=419 replan=14 own_ai=267 own_wander=152 errand=249 settled=242 step=7 column=0 lost=83 stalled=1 meandist=5.3 recall=30 filed=0 fled=0 rows=4096 writes=114947 coal=1231676 evict=113053 bytes=262144
-[aimem] INTENT tick=10200 flee=18 drink=57 eat=2 sleep=1 work=243 heal=29 patrol=68 wander=1
-[needs] tick=10200 bodies=392 recovering=82 crowd_dead_total=0
-[macro] tick=41 day=287.0 living=1920 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046656
-[aimem] STEP tick=10260 layer=1 seen=419 replan=10 own_ai=268 own_wander=151 errand=250 settled=243 step=7 column=0 lost=82 stalled=1 meandist=5.1 recall=28 filed=0 fled=0 rows=4096 writes=115076 coal=1239127 evict=113174 bytes=262144
-[aimem] INTENT tick=10260 flee=18 drink=57 eat=2 sleep=1 work=243 heal=29 patrol=68 wander=1
-[needs] tick=10260 bodies=392 recovering=84 crowd_dead_total=0
-[medium] live 237 cells, 4504 quanta (70262 l), woken 322178, slept 150143, lazy 83, listTot 237, fade 1979, substeps 2570 | cpu ms: poll 0.00 apply 0.09 rec 0.00
-[aimem] STEP tick=10320 layer=1 seen=419 replan=7 own_ai=267 own_wander=152 errand=249 settled=244 step=5 column=0 lost=83 stalled=1 meandist=6.0 recall=25 filed=0 fled=0 rows=4096 writes=115342 coal=1246614 evict=113438 bytes=262144
-[aimem] INTENT tick=10320 flee=18 drink=56 eat=2 sleep=1 work=243 heal=30 patrol=68 wander=1
-[needs] tick=10320 bodies=392 recovering=86 crowd_dead_total=0
-[aimem] STEP tick=10380 layer=1 seen=419 replan=2 own_ai=266 own_wander=153 errand=249 settled=244 step=5 column=0 lost=83 stalled=1 meandist=5.8 recall=20 filed=0 fled=0 rows=4096 writes=115623 coal=1254076 evict=113719 bytes=262144
-[aimem] INTENT tick=10380 flee=18 drink=56 eat=2 sleep=1 work=243 heal=30 patrol=68 wander=1
-[needs] tick=10380 bodies=391 recovering=84 crowd_dead_total=0
-[medium] live 244 cells, 4390 quanta (68484 l), woken 330370, slept 154023, lazy 85, listTot 244, fade 2093, substeps 2602 | cpu ms: poll 0.00 apply 0.09 rec 0.00
-[aimem] STEP tick=10440 layer=1 seen=419 replan=6 own_ai=265 own_wander=154 errand=248 settled=243 step=5 column=0 lost=84 stalled=1 meandist=5.6 recall=24 filed=0 fled=0 rows=4096 writes=115864 coal=1261517 evict=113960 bytes=262144
-[aimem] INTENT tick=10440 flee=18 drink=55 eat=2 sleep=1 work=243 heal=31 patrol=68 wander=1
-[needs] tick=10440 bodies=391 recovering=84 crowd_dead_total=0
-[macro] tick=42 day=294.0 living=1919 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046657
-[aimem] STEP tick=10500 layer=1 seen=419 replan=12 own_ai=265 own_wander=154 errand=248 settled=243 step=5 column=0 lost=84 stalled=2 meandist=5.8 recall=29 filed=0 fled=0 rows=4096 writes=116163 coal=1268941 evict=114255 bytes=262144
-[aimem] INTENT tick=10500 flee=18 drink=55 eat=2 work=244 heal=31 patrol=68 wander=1
-[needs] tick=10500 bodies=391 recovering=85 crowd_dead_total=0
-[medium] live 249 cells, 4278 quanta (66737 l), woken 338386, slept 157891, lazy 87, listTot 249, fade 2204, substeps 2634 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=10560 layer=1 seen=419 replan=13 own_ai=265 own_wander=154 errand=248 settled=242 step=6 column=0 lost=84 stalled=1 meandist=6.3 recall=31 filed=0 fled=0 rows=4096 writes=116526 coal=1276413 evict=114616 bytes=262144
-[aimem] INTENT tick=10560 flee=18 drink=56 eat=2 work=243 heal=31 patrol=68 wander=1
-[needs] tick=10560 bodies=391 recovering=86 crowd_dead_total=0
-[aimem] STEP tick=10620 layer=1 seen=419 replan=7 own_ai=265 own_wander=154 errand=247 settled=241 step=6 column=0 lost=85 stalled=1 meandist=6.3 recall=25 filed=0 fled=0 rows=4096 writes=116889 coal=1283912 evict=114977 bytes=262144
-[aimem] INTENT tick=10620 flee=18 drink=55 eat=2 sleep=1 work=243 heal=31 patrol=68 wander=1
-[needs] tick=10620 bodies=391 recovering=85 crowd_dead_total=0
-[medium] live 252 cells, 4169 quanta (65036 l), woken 346249, slept 161593, lazy 89, listTot 252, fade 2313, substeps 2666 | cpu ms: poll 0.00 apply 0.09 rec 0.00
-[aimem] STEP tick=10680 layer=1 seen=419 replan=7 own_ai=265 own_wander=154 errand=247 settled=241 step=6 column=0 lost=85 stalled=1 meandist=6.0 recall=25 filed=0 fled=0 rows=4096 writes=117130 coal=1291388 evict=115218 bytes=262144
-[aimem] INTENT tick=10680 flee=18 drink=55 eat=2 sleep=1 work=243 heal=31 patrol=68 wander=1
-[needs] tick=10680 bodies=391 recovering=83 crowd_dead_total=0
-[aimem] STEP tick=10740 layer=1 seen=419 replan=1 own_ai=265 own_wander=154 errand=246 settled=240 step=6 column=0 lost=86 stalled=1 meandist=5.8 recall=19 filed=0 fled=0 rows=4096 writes=117375 coal=1298768 evict=115459 bytes=262144
-[aimem] INTENT tick=10740 flee=19 drink=54 eat=2 sleep=1 work=243 heal=32 patrol=67 wander=1
-[needs] tick=10740 bodies=390 recovering=83 crowd_dead_total=0
-[macro] tick=43 day=301.0 living=1919 births=1 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046657
-[medium] live 252 cells, 4059 quanta (63320 l), woken 353962, slept 165283, lazy 89, listTot 252, fade 2424, substeps 2697 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=10800 layer=1 seen=419 replan=18 own_ai=264 own_wander=155 errand=245 settled=238 step=7 column=0 lost=87 stalled=2 meandist=6.7 recall=35 filed=0 fled=0 rows=4096 writes=117615 coal=1306091 evict=115699 bytes=262144
-[aimem] INTENT tick=10800 flee=19 drink=52 eat=2 sleep=2 work=244 heal=32 patrol=67 wander=1
-[needs] tick=10800 bodies=391 recovering=82 crowd_dead_total=0
-[aimem] STEP tick=10860 layer=1 seen=419 replan=0 own_ai=264 own_wander=155 errand=245 settled=239 step=6 column=0 lost=87 stalled=1 meandist=7.2 recall=19 filed=0 fled=0 rows=4096 writes=117861 coal=1313365 evict=115945 bytes=262144
-[aimem] INTENT tick=10860 flee=19 drink=52 eat=2 sleep=2 work=244 heal=32 patrol=67 wander=1
-[needs] tick=10860 bodies=390 recovering=83 crowd_dead_total=0
-[medium] live 264 cells, 3951 quanta (61636 l), woken 361939, slept 169166, lazy 89, listTot 264, fade 2532, substeps 2728 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=10920 layer=1 seen=419 replan=20 own_ai=264 own_wander=155 errand=245 settled=239 step=6 column=0 lost=87 stalled=1 meandist=7.2 recall=38 filed=0 fled=0 rows=4096 writes=118221 coal=1320565 evict=116305 bytes=262144
-[aimem] INTENT tick=10920 flee=19 drink=52 eat=2 sleep=2 work=244 heal=32 patrol=67 wander=1
-[needs] tick=10920 bodies=390 recovering=82 crowd_dead_total=0
-[aimem] STEP tick=10980 layer=1 seen=419 replan=4 own_ai=264 own_wander=155 errand=245 settled=239 step=6 column=0 lost=87 stalled=1 meandist=6.8 recall=23 filed=0 fled=2 rows=4096 writes=118582 coal=1327678 evict=116666 bytes=262144
-[aimem] INTENT tick=10980 flee=19 drink=52 eat=2 sleep=2 work=244 heal=32 patrol=67 wander=1
-[needs] tick=10980 bodies=390 recovering=81 crowd_dead_total=0
-[macro] tick=44 day=308.0 living=1918 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046658
-[aimem] STEP tick=11040 layer=1 seen=419 replan=8 own_ai=263 own_wander=156 errand=245 settled=239 step=6 column=0 lost=87 stalled=1 meandist=6.7 recall=27 filed=0 fled=0 rows=4096 writes=118866 coal=1334699 evict=116950 bytes=262144
-[aimem] INTENT tick=11040 flee=19 drink=52 eat=2 sleep=2 work=244 heal=32 patrol=67 wander=1
-[needs] tick=11040 bodies=391 recovering=80 crowd_dead_total=0
-[medium] live 265 cells, 3826 quanta (59686 l), woken 370181, slept 173157, lazy 89, listTot 265, fade 2657, substeps 2760 | cpu ms: poll 0.00 apply 0.02 rec 0.00
-[aimem] STEP tick=11100 layer=1 seen=419 replan=8 own_ai=263 own_wander=156 errand=245 settled=238 step=7 column=0 lost=87 stalled=2 meandist=6.7 recall=27 filed=0 fled=0 rows=4096 writes=119106 coal=1341725 evict=117190 bytes=262144
-[aimem] INTENT tick=11100 flee=19 drink=53 eat=2 sleep=2 work=243 heal=32 patrol=67 wander=1
-[needs] tick=11100 bodies=391 recovering=80 crowd_dead_total=0
-[aimem] STEP tick=11160 layer=1 seen=419 replan=6 own_ai=263 own_wander=156 errand=245 settled=238 step=7 column=0 lost=87 stalled=1 meandist=6.6 recall=23 filed=0 fled=0 rows=4096 writes=119351 coal=1348750 evict=117435 bytes=262144
-[aimem] INTENT tick=11160 flee=19 drink=53 eat=2 sleep=2 work=243 heal=32 patrol=67 wander=1
-[needs] tick=11160 bodies=390 recovering=80 crowd_dead_total=0
-[medium] live 262 cells, 3716 quanta (57970 l), woken 378322, slept 177108, lazy 90, listTot 262, fade 2767, substeps 2791 | cpu ms: poll 0.00 apply 0.10 rec 0.00
-[aimem] STEP tick=11220 layer=1 seen=419 replan=11 own_ai=264 own_wander=155 errand=245 settled=237 step=8 column=0 lost=87 stalled=1 meandist=6.2 recall=29 filed=0 fled=0 rows=4096 writes=119591 coal=1355772 evict=117675 bytes=262144
-[aimem] INTENT tick=11220 flee=19 drink=54 eat=2 sleep=2 work=242 heal=32 patrol=67 wander=1
-[needs] tick=11220 bodies=390 recovering=80 crowd_dead_total=0
-[macro] tick=45 day=315.0 living=1917 births=1 deaths=1 blocked=0 depart=0 arrive=0 transit=0 reserve=1046659
-[aimem] STEP tick=11280 layer=1 seen=419 replan=8 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.9 recall=27 filed=0 fled=0 rows=4096 writes=119847 coal=1362878 evict=117931 bytes=262144
-[aimem] INTENT tick=11280 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11280 bodies=390 recovering=81 crowd_dead_total=0
-[medium] live 268 cells, 3614 quanta (56378 l), woken 386784, slept 181277, lazy 91, listTot 268, fade 2869, substeps 2823 | cpu ms: poll 0.00 apply 0.11 rec 0.00
-[aimem] STEP tick=11340 layer=1 seen=419 replan=13 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.8 recall=31 filed=0 fled=0 rows=4096 writes=120107 coal=1370001 evict=118191 bytes=262144
-[aimem] INTENT tick=11340 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11340 bodies=390 recovering=81 crowd_dead_total=0
-[aimem] STEP tick=11400 layer=1 seen=419 replan=14 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.7 recall=33 filed=0 fled=0 rows=4096 writes=120374 coal=1377173 evict=118458 bytes=262144
-[aimem] INTENT tick=11400 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11400 bodies=390 recovering=82 crowd_dead_total=0
-[medium] live 266 cells, 3483 quanta (54335 l), woken 395278, slept 185421, lazy 91, listTot 266, fade 3000, substeps 2854 | cpu ms: poll 0.00 apply 0.07 rec 0.00
-[aimem] STEP tick=11460 layer=1 seen=419 replan=2 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.3 recall=21 filed=0 fled=0 rows=4096 writes=120639 coal=1384349 evict=118723 bytes=262144
-[aimem] INTENT tick=11460 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11460 bodies=390 recovering=82 crowd_dead_total=0
-[macro] tick=46 day=322.0 living=1917 births=0 deaths=0 blocked=0 depart=0 arrive=0 transit=0 reserve=1046659
-[aimem] STEP tick=11520 layer=1 seen=419 replan=9 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.3 recall=28 filed=0 fled=0 rows=4096 writes=120905 coal=1391523 evict=118989 bytes=262144
-[aimem] INTENT tick=11520 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11520 bodies=390 recovering=82 crowd_dead_total=0
-[medium] live 266 cells, 3389 quanta (52868 l), woken 403516, slept 189483, lazy 91, listTot 266, fade 3094, substeps 2886 | cpu ms: poll 0.00 apply 0.11 rec 0.00
-[aimem] STEP tick=11580 layer=1 seen=419 replan=3 own_ai=264 own_wander=155 errand=245 settled=236 step=9 column=0 lost=87 stalled=1 meandist=5.2 recall=22 filed=0 fled=0 rows=4096 writes=121243 coal=1398630 evict=119326 bytes=262144
-[aimem] INTENT tick=11580 flee=19 drink=55 eat=2 sleep=2 work=241 heal=32 patrol=67 wander=1
-[needs] tick=11580 bodies=390 recovering=82 crowd_dead_total=0
