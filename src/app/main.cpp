@@ -2062,7 +2062,7 @@ int main(int argc, char** argv) {
 
     // GPU-газ 4 захардкоженных каналов УМЕР (инкремент 4, CANON S16.6:
     // хардкод каналов газа запрещён — газ = строка таблицы): toxic_gas
-    // теперь МАТЕРИЯ мира-автомата, засев шахт — налив по kGasField, HUD
+    // теперь МАТЕРИЯ мира-автомата (засев вырезан 2026-08-25), HUD
     // читает агрегат клетки (S16.4). Химия горения потеряна осознанно
     // (решение владельца 2026-08-23).
 
@@ -7775,61 +7775,11 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // ГАЗ = ПРОСТО МАТЕРИАЛ (владелец 2026-08-24: «ничего
-            // особенного») — засев шахт наливом toxic_gas по полю kGasField,
-            // квант субвокселя роллом p = frac/8 (в ожидании 64 кванта на
-            // клетку — облако, не кирпич). Включён обратно ПОСЛЕ
-            // GPU-резидентной петли — чекаем fps честными числами
-            // [medium]-лога; прошлое включение обваливал CPU-протокол
-            // (O(live²)), которого больше не существует.
-            if (mediumPass.ready()) {
-                static int gasSeedFloor = INT_MIN;
-                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
-                if (gasSeedFloor != currentFloor ||
-                    gasSeedLayer != activeLayer) {
-                    gasSeedFloor = currentFloor;
-                    gasSeedLayer = activeLayer;
-                    World& gw = stack.layer(activeLayer);
-                    const Field<float>* gSeed =
-                        gw.fields().find<float>(kGasField);
-                    if (gSeed) {
-                        static std::vector<std::uint32_t> seeded;
-                        seeded.clear();
-                        for (std::uint32_t sci = 0; sci < kMacroCells; ++sci) {
-                            const float sfrac = gSeed->data()[sci];
-                            if (sfrac <= 0.0f) continue;
-                            CellType* pg = materialize_sub_page(gw, sci);
-                            const SubMask& sm = gw.grid().masks()[sci];
-                            const auto thr = static_cast<std::uint32_t>(
-                                sfrac * 8192.0f);
-                            bool any = false;
-                            for (int b = 0; b < kSubVoxels; ++b) {
-                                if (sm.test(b) || pg[b] != kCellAir) continue;
-                                if ((carve_hash(0x6A5EEDu ^
-                                                    static_cast<std::uint32_t>(
-                                                        currentFloor),
-                                                sci,
-                                                static_cast<std::uint32_t>(b)) &
-                                     0xFFFFu) < thr) {
-                                    pg[b] = kMatToxicGas;
-                                    any = true;
-                                }
-                            }
-                            if (any) seeded.push_back(sci);
-                        }
-                        if (!seeded.empty()) {
-                            voxelMirror.mark_dirty(seeded.data(),
-                                                   seeded.size());
-                            mediumPass.wake_cells(seeded.data(), seeded.size(),
-                                                  gw, voxelMirror);
-                            std::fprintf(stderr,
-                                         "[medium] gas seeded: %zu cells "
-                                         "(floor %d)\n",
-                                         seeded.size(), currentFloor);
-                        }
-                    }
-                }
-            }
+            // Засев газа ВЫРЕЗАН (решение владельца 2026-08-25, стабилизация):
+            // газ без фикспоинта держал 50k+ клеток вечно живыми — 8 мс GPU
+            // + 5 мс CPU-шва (замер core-stabilization.md). Материал
+            // toxic_gas жив строкой CSV (`sphere toxic_gas` руками); дизайн
+            // сна сред — решение владельца перед возвратом газа.
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —

@@ -677,10 +677,8 @@ void blame_declare_rules(World& world, int /*number*/, const FloorSpec& /*spec*/
 // created-or-zeroed on every entry.
 void blame_apply_rules(World& world, int /*number*/, const FloorSpec& /*spec*/,
                        unsigned /*seed*/) {
-    // Поле воды МЕРТВО (чистка 2026-08-24): вода — материя автомата.
-    Field<float>* gas = world.fields().find<float>(kGasField);
-    if (gas == nullptr) world.fields().get_or_create<float>(kGasField, 0.0f);
-    else gas->fill(0.0f);
+    // Поля воды и газа МЕРТВЫ (чистки 2026-08-24/25): вода — материя
+    // автомата, засев газа вырезан стабилизацией.
 }
 
 void generate_blame_floor(World& world, int number, const FloorSpec& spec,

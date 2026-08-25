@@ -622,9 +622,6 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
         medium_recount(world, ci, pg);
     };
 
-    Field<float>* gas = world.fields().find<float>(kGasField);
-    if (gas == nullptr) gas = &world.fields().get_or_create<float>(kGasField, 0.0f);
-    else gas->fill(0.0f);
 
     // Water: lattice elevator pit (z=0..2) and stair landing sumps.
     for (int ny = 0; ny < kLatticeDim; ++ny) {
@@ -638,18 +635,6 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
         for (int row = 0; row < 2; ++row)
             for (int dx = 0; dx < 4; ++dx)
                 pour_level(st.x + dx, st.y + row, 1, 0.5f);
-
-    // Seed buoyant gas in elevator shafts (z=3..15)
-    for (int ny = 0; ny < kLatticeDim; ++ny) {
-        for (int nx = 0; nx < kLatticeDim; ++nx) {
-            int cx = lattice_coord(nx);
-            int cy = lattice_coord(ny);
-            for (int z = 3; z <= 15; ++z) {
-                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
-                gas->data()[idx] = 0.6f;
-            }
-        }
-    }
 
 }
 

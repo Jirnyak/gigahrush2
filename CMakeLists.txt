@@ -495,7 +495,9 @@ target_compile_definitions(gigahrush2 PRIVATE
 # giga_core/giga_game must stay free of platform and third-party headers (AGENTS.md). Also
 # note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
 # exports it unnamespaced when built as a subproject.
-target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
+# giga_core приезжает транзитивно из giga_game (PUBLIC) — явный повтор
+# давал ld-варнинг «ignoring duplicate libraries» каждым линком.
+target_link_libraries(gigahrush2 PRIVATE giga_game giga_imgui
     SDL3::SDL3 Vulkan::Vulkan ktx)
 target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
