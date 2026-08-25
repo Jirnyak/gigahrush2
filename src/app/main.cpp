@@ -506,6 +506,8 @@ static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
 // субвоксельное. Прежняя проверка до карва спрашивала только тип ячейки и не
 // видела неон, нарисованный атомами ([markoaudit/plans/neon-topology.md] §4).
 
+float samosbor_fog_scale(const game::SamosborState& st); // определение ниже
+
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
@@ -534,7 +536,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // «загорается» при приближении (репорт владельца — каллы были 32-48 м при
     // видимости 128). Камерный сорт и kMaxPointLights мертвы (V-A/V-C):
     // отбор статикам даёт бейк видимости, динамиков — единицы. [ddalight.md]
-    const float kFogRadius = kWorldExtent * 0.5f; // = fog.y (push ниже по файлу)
+    // Радиус видимости — ТА ЖЕ формула, что fog.y пуша (kWorldExtent/2 ×
+    // множитель самосбора): ручная копия без fogScale разъехалась (К1-13,
+    // аудит 2026-08-25) — весь самосбор свет отбирался по полному радиусу,
+    // и параметр samosbor в сигнатуре висел неиспользуемым.
+    const float kFogRadius =
+        kWorldExtent * 0.5f * samosbor_fog_scale(samosbor);
     auto light_reaches_view = [&](const vec3& pos, float radius) {
         const float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
         const float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);

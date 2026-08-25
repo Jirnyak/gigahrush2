@@ -83,8 +83,10 @@ layout(push_constant) uniform Push {
 
 const int kMacroDim = GIGA_MACRO_DIM;
 const uint kNoPage = 0xFFFFFFFFu;
-const uint kListCap = 131072u; // зеркало GpuMediumPass::kLiveCap
-const uint kRbSlotCap = 8192u; // зеркало GpuMediumPass::kRbSlotCap
+// Капы приезжают -D дефайнами из gpu_medium_pass.h (CMake парсит хедер —
+// GLSL и C++ не могут разойтись; прежнее «зеркало» числом держалось верой).
+const uint kListCap = GIGA_MEDIUM_LIST_CAP;
+const uint kRbSlotCap = GIGA_MEDIUM_RB_SLOTS;
 
 // --- Слово активности клетки (uCellAct) -------------------------------------
 // bit 0     — клетка менялась в MOVE этого подтика (settle читает и гасит);
