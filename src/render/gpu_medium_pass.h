@@ -120,11 +120,9 @@ public:
         lastCount_ = 0;
         lastQuanta_ = 0;
         for (auto& r : rbRing_) r.valid = false;
-        // Поколение шва — В НОЛЬ СИНХРОННО (не ждём record): писатель между
-        // clear_live и первым record штамповал бы клетки СТАРЫМ большим
-        // поколением и блокировал их шов навсегда (ловил тест изотропии).
+        // Поколение шва — В НОЛЬ СИНХРОННО (гейт свежести живёт на клоке
+        // ЗЕРКАЛА и смену слоя переживает сам — flushGen монотонен).
         rbGen_ = 0;
-        std::fill(cpuWriteGen_.begin(), cpuWriteGen_.end(), 0u);
     }
 
     // Записать n подтиков GPU-петли (inject -> [prepare, move, settle] x n)
@@ -133,7 +131,8 @@ public:
     // ещё может читать).
     void record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                          const CellStep& downStep, std::uint64_t substepBase,
-                         const World& world, std::uint32_t frameSlot);
+                         const World& world, std::uint32_t frameSlot,
+                         std::uint32_t mirrorFlushGen);
 
     // Числа для печати каждый прогон (S11) — с лагом фенсового кольца.
     std::uint32_t live_count() const noexcept { return lastCount_; }
@@ -185,18 +184,18 @@ private:
     VulkanBuffer listBack_; // регион: 4 u32 заголовка + kRbSlotCap слотов
     struct RbRecord {
         bool valid = false;
-        std::uint32_t gen = 0; // поколение записи пака — гейт свежести CPU
+        // Счётчик ФЛЕШЕЙ ЗЕРКАЛА на момент записи пака (клок кадров зеркала,
+        // флеш до пака): гейт свежести сравнивает пак с ДОСТАВКОЙ CPU-записи
+        // — гейт от записи ломался остатком окна стейджинга («дыра
+        // заросла», 2026-08-26: пак между записью и её доставкой нёс
+        // до-карвное состояние и воскрешал атомы).
+        std::uint32_t flushCount = 0;
     };
     RbRecord rbRing_[kRbRegions];
     std::uint64_t rbGen_ = 0;
     bool actNeedsClear_ = true;
 
     std::uint32_t lazyTotal_ = 0; // ленивые материализации шва (диагноз)
-    // Поколение ПОСЛЕДНЕЙ CPU-записи клетки (+1; 0 = не писалась): гейт
-    // «карв против шва в полёте» (баг владельца 2026-08-26: регион,
-    // запакованный ДО карва, применялся ПОСЛЕ и воскрешал выбитые атомы —
-    // «дыра переехала»). 8 МиБ, прецедент O(1)-индекса.
-    std::vector<std::uint32_t> cpuWriteGen_;
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
     std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)

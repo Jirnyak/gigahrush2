@@ -190,6 +190,8 @@ bool VoxelMirror::init(VulkanDevice& dev) {
 
     dirtyBits_.assign((kMacroCells + 63u) / 64u, 0u);
     dirty_.reserve(4096);
+    markGen_.assign(kMacroCells, 0u);
+    uploadGen_.assign(kMacroCells, 0u);
     ready_ = true;
     return true;
 }
@@ -328,6 +330,9 @@ void VoxelMirror::mark_dirty(const std::uint32_t* cells, std::size_t n) {
         if (ci >= kMacroCells) continue;
         std::uint64_t& w = dirtyBits_[ci >> 6];
         const std::uint64_t bit = std::uint64_t{1} << (ci & 63u);
+        // Поколение записи — ВСЕГДА (и для уже-стоящих в очереди: свежая
+        // запись той же клетки должна отодвинуть её «доставлено»).
+        markGen_[ci] = flushGen_;
         if (w & bit) continue;
         w |= bit;
         dirty_.push_back(ci);
@@ -338,6 +343,9 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                         const World& world) {
     lastFlushCells_ = 0;
     lastFlushBytes_ = 0;
+    // Клок кадров тикает КАЖДЫЙ флеш, включая пустые — поколения доставки
+    // сравнимы со счётчиком паков автомата (оба 1/кадр, флеш до пака).
+    const std::uint32_t thisFlush = flushGen_++;
     if (!ready_) return;
     if (dirty_.empty()) return;
 
@@ -500,6 +508,7 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
     for (std::size_t k = 0; k < take; ++k) {
         const std::uint32_t ci = dirty_[k];
         dirtyBits_[ci >> 6] &= ~(std::uint64_t{1} << (ci & 63u));
+        uploadGen_[ci] = thisFlush; // запись ДОСТАВЛЕНА этим флешем
     }
     if (take == dirty_.size()) {
         dirty_.clear();

@@ -4914,6 +4914,82 @@ int main(int argc, char** argv) {
                     }
                     g_carveT.antrMs += carve_ms_since(ct0);
                 };
+                // РЕПРО-СТЕНД «дыра заросла» (GIGA_CARVE_PROBE=1, баг
+                // владельца 2026-08-26): серия слабых ударов (как кулак:
+                // r=0.55, вероятностное расковыривание) в точку A, затем
+                // серия РЯДОМ в B, затем проверка: атомы дыры A не воскресли
+                // (CPU-канон) и зеркало CPU==GPU (voxelMirror.verify).
+                static const char* kCarveProbeEnv =
+                    std::getenv("GIGA_CARVE_PROBE");
+                if (kCarveProbeEnv && reg.valid(player)) {
+                    static vec3 probeP{};
+                    static std::vector<std::uint32_t> holeKeys;
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+                    const bool hitA = simTick >= 300 && simTick < 540 &&
+                                      (simTick % 40u) == 20u;
+                    const bool hitB = simTick >= 700 && simTick < 860 &&
+                                      (simTick % 40u) == 20u;
+                    if (hitA || hitB) {
+                        if (simTick < 340) probeP =
+                            vec3{ppos.x, ppos.y, ppos.z - 1.0f};
+                        CarveOp op;
+                        op.x = probeP.x + (hitB ? 1.2f : 0.0f);
+                        op.y = probeP.y;
+                        op.z = probeP.z;
+                        op.radius = 0.55f;
+                        op.power = 220; // слабый удар — расковыривание
+                        op.seed = static_cast<std::uint32_t>(simTick);
+                        const std::int32_t rem = carve_sphere(
+                            stack.layer(activeLayer), op, carveScratch,
+                            carveResult);
+                        if (rem > 0) carve_settle(op.seed);
+                        if (hitA)
+                            for (const CarvedVoxel& v : carveResult.destroyed)
+                                holeKeys.push_back((v.cell << 9) | v.bit);
+                        std::fprintf(stderr,
+                                     "[carve-probe] tick %llu %s removed %d "
+                                     "(det %zu)\n",
+                                     static_cast<unsigned long long>(simTick),
+                                     hitA ? "A" : "B", rem,
+                                     carveResult.detached.size());
+                    }
+                    if (simTick == 650 || simTick == 1000) {
+                        World& pw = stack.layer(activeLayer);
+                        const SubField<CellType>* pf =
+                            pw.subfields().find<CellType>(kSubMaterialName);
+                        int solidAgain = 0, mobileNow = 0, airNow = 0;
+                        for (std::uint32_t k : holeKeys) {
+                            const std::size_t ci = k >> 9;
+                            const int bit = static_cast<int>(k & 511u);
+                            const CellType* pg = pf ? pf->page(ci) : nullptr;
+                            CellType m = kCellAir;
+                            if (pg) m = pg[bit];
+                            else {
+                                const CellType base = pw.grid().types()[ci];
+                                const SubMask& mk = pw.grid().masks()[ci];
+                                if (mk.test(bit)) m = base;
+                                else if (mk.empty() &&
+                                         material_is_medium(base))
+                                    m = base;
+                            }
+                            if (m == kCellAir) ++airNow;
+                            else if (material_is_medium(m)) ++mobileNow;
+                            else ++solidAgain;
+                        }
+                        std::fprintf(stderr,
+                                     "[carve-probe] tick %llu: hole A %zu "
+                                     "keys -> air %d, mobile %d, SOLID AGAIN "
+                                     "%d\n",
+                                     static_cast<unsigned long long>(simTick),
+                                     holeKeys.size(), airNow, mobileNow,
+                                     solidAgain);
+                        const bool mirrorOk =
+                            voxelMirror.verify(stack.layer(activeLayer));
+                        std::fprintf(stderr,
+                                     "[carve-probe] mirror verify: %s\n",
+                                     mirrorOk ? "OK" : "DIVERGED");
+                    }
+                }
                 if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
@@ -7903,7 +7979,7 @@ int main(int argc, char** argv) {
                 mediumPass.record_substeps(
                     cmd, static_cast<std::uint32_t>(owed), md,
                     mediumSubstepsDone, stack.layer(activeLayer),
-                    renderer.currentFrame);
+                    renderer.currentFrame, voxelMirror.flush_gen());
                 g_mediumRecMs = carve_ms_since(ctMedR);
                 mediumSubstepsDone += owed;
                 // Числа каждый прогон (S11): раз в игровую секунду, пока

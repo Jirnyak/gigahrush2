@@ -149,7 +149,7 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
         vkBeginCommandBuffer(cmd, &bi);
         mirror.flush(cmd, 0, w);
         medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base,
-                               w, frameSlot);
+                               w, frameSlot, mirror.flush_gen());
         vkEndCommandBuffer(cmd);
         VkSubmitInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1198,6 +1198,58 @@ void test_carve_vs_seam(gpu::VulkanDevice& dev) {
             if (rp[b2] == kMatWater) ++resurrected;
     std::printf("[medium_test] carve vs seam: resurrected %d\n", resurrected);
     CHECK(resurrected == 0); // выбитое НЕ воскресает стейл-швом
+
+    // ФАЗА 2 — ЗАТОР СТЕЙДЖИНГА (вторая половина бага «дыра заросла»):
+    // гейт «от момента записи» ломался, когда окно стейджинга (12 МиБ)
+    // не довозило карв тем же кадром: пак, записанный МЕЖДУ записью и её
+    // доставкой, нёс до-карвную воду. Забиваем очередь ~11.5k страничных
+    // клеток С МЛАДШИМИ ci (флеш сортирует по ci — карв в хвосте окна),
+    // карвим, гоним кадры: вода не смеет вернуться.
+    {
+        CellType* wp2 = f.page(wCell);
+        for (int sx = 0; sx < 8; ++sx)
+            for (int sy = 0; sy < 8; ++sy) {
+                wp2[sub_bit(sx, sy, 0)] = kMatWater;
+                if (sx < 4) wp2[sub_bit(sx, sy, 1)] = kMatWater;
+            }
+        mirror.mark_dirty(&wCell, 1);
+        medium.wake_cells(&wCell, 1, w, mirror);
+        for (int b = 0; b < 10; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+            substep += 4;
+            medium.apply_readback(w, mirror);
+        }
+        static std::vector<std::uint32_t> bulk;
+        bulk.clear();
+        for (int cz2 = 8; cz2 <= 10 && bulk.size() < 11500; ++cz2)
+            for (int cy2 = 8; cy2 < 72 && bulk.size() < 11500; ++cy2)
+                for (int cx2 = 8; cx2 < 72 && bulk.size() < 11500; ++cx2) {
+                    const auto ci = static_cast<std::uint32_t>(
+                        macro_index(cx2, cy2, cz2));
+                    f.ensure_page(ci, w.grid().types()[ci]);
+                    bulk.push_back(ci);
+                }
+        mirror.mark_dirty(bulk.data(), bulk.size());
+        CellType* cp2 = f.page(wCell);
+        int carved2 = 0;
+        for (int b2 = 0; b2 < kSubVoxels; ++b2)
+            if (cp2[b2] == kMatWater) { cp2[b2] = kCellAir; ++carved2; }
+        mirror.mark_dirty(&wCell, 1);
+        medium.wake_cells(&wCell, 1, w, mirror);
+        for (int b3 = 0; b3 < 6; ++b3) {
+            CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+            medium.apply_readback(w, mirror);
+        }
+        int res2 = 0;
+        const CellType* rp2 = f.page(wCell);
+        if (rp2)
+            for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                if (rp2[b2] == kMatWater) ++res2;
+        std::printf("[medium_test] carve vs backlog: carved %d, "
+                    "resurrected %d\n",
+                    carved2, res2);
+        CHECK(res2 == 0); // затор не возвращает до-карвную воду
+    }
     medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
     mirror.destroy();
 }

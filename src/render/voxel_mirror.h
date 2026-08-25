@@ -162,6 +162,18 @@ public:
 
     // HUD stats.
     std::uint32_t last_flush_cells() const { return lastFlushCells_; }
+
+    // ПОКОЛЕНИЯ ЗАПИСИ/ДОСТАВКИ на клетку (баг «дыра заросла», 2026-08-26):
+    // окно стейджинга возит остаток следующими кадрами, и пак автомата,
+    // записанный между CPU-записью и её ДОСТАВКОЙ на GPU, несёт до-записи
+    // состояние — применять его назад нельзя. flush_gen — счётчик флешей
+    // (клок кадров); write_pending — запись ещё в очереди; upload_gen —
+    // флеш, доставивший последнюю запись.
+    std::uint32_t flush_gen() const { return flushGen_; }
+    bool write_pending(std::uint32_t ci) const {
+        return markGen_[ci] > uploadGen_[ci];
+    }
+    std::uint32_t upload_gen(std::uint32_t ci) const { return uploadGen_[ci]; }
     std::uint32_t last_flush_bytes() const { return lastFlushBytes_; }
     std::uint32_t dirty_backlog() const { return static_cast<std::uint32_t>(dirty_.size()); }
     std::uint32_t pages_in_pool() const { return poolPages_; }
@@ -229,6 +241,9 @@ private:
     std::vector<std::uint8_t> stainRepack_;
 
     std::uint32_t lastFlushCells_ = 0;
+    std::uint32_t flushGen_ = 0;              // клок флешей (1/кадр)
+    std::vector<std::uint32_t> markGen_;      // flushGen_ на момент записи
+    std::vector<std::uint32_t> uploadGen_;    // flushGen_ доставившего флеша
     std::uint32_t lastFlushBytes_ = 0;
     std::uint32_t poolPages_ = 0;
     std::uint32_t overflowEvents_ = 0;
