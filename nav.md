@@ -70,8 +70,14 @@ CoarseGraph { Dist edge[64][6];  Dist dist[64][64];  uint8 next[64][64]; }
 ```
 
 `Dist = uint16`, `kUnreachable = 0xFFFF`. Query `coarse_next(g, from, to)` → the
-next **node** to step to (O(1)). A few KB total. Walkable ≡ `!mask.full()` (a
-fully-solid macro cell blocks; anything partially carved is passable — the same
+next **node** to step to (O(1)). A few KB total. Проходимость — ГРАННЫЙ
+КЛИРЕНС (эпик occupancy 2026-08-26, §60/К1-10): шаг между клетками разрешён,
+когда `face_clearance >= габарит` ([src/world/clearance.h] — макс. квадрат из
+AND воздушных полупроекций двух масок; габарит тела 4 субвокселя выведен в
+[src/game/embody.h]). Прежний закон `!mask.full()` (планка 1 атом из 512) вёл
+флоу-поля сквозь лепленые стены и СНЕСЁН; дисковый кэш нава поднят до v3 —
+v2-блобы отбраковываются и перепекаются. (Историческая строка ниже
+сохранена как то, чем закон БЫЛ: the same
 rule diffusion and physics use).
 
 ### L2 — fine flow fields + nearest-node (`bake_fine` → `FineNav`)
