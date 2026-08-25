@@ -64,6 +64,14 @@ int max_square(std::uint64_t bitmap);
 // упаковки слов маски. Ответ 0 (глухо) .. 8 (обе половины — воздух).
 std::uint8_t face_clearance(const SubMask& a, const SubMask& b, int axis);
 
+// Тот же закон по координатам: клиренс +axis-грани клетки (x,y,z) с её
+// соседом сверху по оси (заворот внутри). Для потребителей, которым нужна
+// ОДНА грань — например, двере-осведомлённый дренаж карва в game, который
+// обязан пропускать грани, упирающиеся в клетку двери (премиса all-open,
+// [game/rebake.h] patch_carved_cells).
+std::uint8_t face_clearance_at(const MacroGrid& grid, int x, int y, int z,
+                               int axis);
+
 // Поле клиренса этажа: 3 нибла на клетку — её +x/+y/+z грани (минус-грань
 // клетки — это плюс-грань соседа, второй раз не хранится). u16 на клетку =
 // 4 МиБ на этаж; снапшот для фонового ребейка — копия вектора.
@@ -97,6 +105,17 @@ struct ClearanceField {
     // половину эта маска сторожит. Обязан жить в ОБОИХ путях (бейк и патч
     // карва) — закон дрейфа предикатов [world/walk_bits.h].
     void patch(const MacroGrid& grid, int x, int y, int z);
+
+    // Запись ОДНОЙ +axis-грани клетки — для дренажей с политикой (двери):
+    // game сам решает, какие грани пересчитывать, и кладёт сюда результат
+    // face_clearance_at. Координаты заворачиваются.
+    void set_face(int x, int y, int z, int axis, std::uint8_t v) {
+        std::uint16_t& w =
+            vals[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+        w = static_cast<std::uint16_t>(
+            (w & ~(0xFu << (4 * axis))) |
+            (static_cast<std::uint16_t>(v & 0xFu) << (4 * axis)));
+    }
 };
 
 } // namespace giga

@@ -27,6 +27,7 @@
 #include "ecs/registry.h"
 #include "game/door.h"
 #include "game/npc_pool.h"
+#include "world/types.h" // kVoxelSize — вывод kBodyClearanceSub
 
 namespace giga::game {
 
@@ -45,6 +46,23 @@ inline constexpr float kEmbodyCellSize = 2.0f;
 // A record shorter than this (mm) is treated as unset and embodied at a default
 // adult stature, so a zeroed reserve slot still produces a sane body.
 inline constexpr std::uint16_t kDefaultHeightMm = 1800; // 1.8 m
+
+// Полуширина коллайдера тела (embody ставит AABB{kBodyHalfWidth, ..., hh}) —
+// плечи взрослого ~0.8 м на полный габарит; в отличие от роста, ширина не
+// data-driven (одна на всех), поэтому константа живёт здесь, у шва воплощения.
+inline constexpr float kBodyHalfWidth = 0.4f;
+
+// Габарит тела для гранного клиренса ([world/clearance.h], эпик occupancy) —
+// ВЫВЕДЕН (S11): полная ширина 2·0.4 м / субвоксель kVoxelSize 0.25 м = 3.2,
+// потолок → 4 (тело не худеет от округления). Это `size` всех нав-бейков
+// этажа — решение владельца 2026-08-26 «один бейк s=4»: мелкие ходоки идут
+// по нему консервативно, крупные — по факту жалоб.
+inline constexpr float kBodyWidthSub = 2.0f * kBodyHalfWidth / kVoxelSize;
+inline constexpr int kBodyClearanceSub =
+    static_cast<int>(kBodyWidthSub) +
+    (static_cast<float>(static_cast<int>(kBodyWidthSub)) < kBodyWidthSub ? 1
+                                                                         : 0);
+static_assert(kBodyClearanceSub == 4, "derivation: ceil(0.8 m / 0.25 m) = 4");
 
 // Convert a record's stature to the collider half-height (world units). Half of
 // the height, since the AABB is expressed as half-extents around Transform::pos.

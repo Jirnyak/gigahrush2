@@ -98,9 +98,10 @@ static_assert(kNavCacheHeaderWire == 52, "11 x u32/i32 + 1 x u64");
 static_assert(kNavCoarseWire == 13056, "768 + 8192 + 4096 at kNodes = 64");
 static_assert(kNavFineWire == 134217728u, "64 flow fields x 128^3 bytes = 128 MiB");
 static_assert(kNavNearestWire == 2097152u, "one anchor byte per cell = 2 MiB");
-static_assert(kNavCacheVersion == 2u,
-              "version 2 is the first that carries FineNav::nearest. If this fires, the "
-              "wire layout moved and every offset asserted below moved with it.");
+static_assert(kNavCacheVersion == 3u,
+              "v2 first carried FineNav::nearest; v3 = смена ЗАКОНА (гранный "
+              "клиренс, эпик occupancy 2026-08-26) при неизменной раскладке — "
+              "если раскладка двинется, двинутся и офсеты ниже.");
 // The two fine sections are one bake product, so the mask has a name for "both". These
 // are facts about the build, not about a run — a CHECK on a constant would also trip
 // MSVC's C4127 at /W4.
@@ -831,11 +832,13 @@ void invalidation_rejects(std::vector<std::uint8_t>& blob, const NavCacheKey& ke
     // --- the blob is not ours, or not this version ---
     refuse_with_poked_u32(blob, kOffMagic, 0x4E324848u, key, NavCacheError::BadMagic);
     refuse_with_poked_u32(blob, kOffMagic, 0u, key, NavCacheError::BadMagic);
-    // Version 1 is the pre-`nearest` format. A v1 blob under a v2 magic is refused on
-    // the version check, which is what makes "bump the version when the BAKE changes"
-    // an enforceable rule and not a hope.
+    // Version 1 is the pre-`nearest` format, 2 — клеточный закон до occupancy;
+    // оба под текущим магиком режутся на version check, which is what makes
+    // "bump the version when the BAKE changes" an enforceable rule and not a
+    // hope. И версия из будущего (v4) — тоже отказ, не попытка прочитать.
     refuse_with_poked_u32(blob, kOffVersion, 1u, key, NavCacheError::BadVersion);
-    refuse_with_poked_u32(blob, kOffVersion, 3u, key, NavCacheError::BadVersion);
+    refuse_with_poked_u32(blob, kOffVersion, 2u, key, NavCacheError::BadVersion);
+    refuse_with_poked_u32(blob, kOffVersion, 4u, key, NavCacheError::BadVersion);
 
     // --- right format, WRONG FLOOR. This is the invalidation that matters at runtime:
     //     the key is the cache's whole theory of staleness, because geometry is a pure
@@ -1113,9 +1116,9 @@ void baked_round_trip_routes_identically() {
     generate_floor(w, key.number, floor_spec(key.kind), key.seed);
 
     nav::CoarseGraph cold{};
-    nav::bake_coarse(w.grid(), cold);
+    nav::bake_coarse(w.grid(), kBodyClearanceSub, cold);
     nav::FineNav coldFine;
-    nav::bake_fine(w.grid(), coldFine);
+    nav::bake_fine(w.grid(), kBodyClearanceSub, coldFine);
     CHECK(coldFine.flow.size() == kNavFineWire);
     CHECK(coldFine.nearest.size() == kNavNearestWire);
 

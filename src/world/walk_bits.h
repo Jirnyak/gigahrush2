@@ -1,28 +1,26 @@
 // A dense 128^3 walkability bitset — the bake's snapshot of the world.
 //
-// Both heavy bakes (nav's 64-node BFS, the room-zone fields) read the world
-// through exactly ONE per-cell predicate: "can this macro cell be occupied".
-// Nav asks `!mask.full()` ([world/nav.cpp]); room zones ask a body-sized
-// footprint test ([game/room_zone.cpp]). Everything else in those bakes is
-// lattice arithmetic. So the world state a bake worker needs is not the
-// 132 MiB MacroGrid — it is one bit per cell: 2M bits = 256 KiB, copyable in
-// ~50 us. That is what lets the async-rebake scheduler hand a worker a
-// SNAPSHOT by value instead of a raw pointer into the live grid, and with it
-// retire the whole `doors.frozen` freeze-the-world protocol
-// (markoaudit/plans/async-rebake.md §0, §3).
+// A heavy bake reads the world through ONE precomputed per-cell predicate,
+// so the world state its worker needs is not the 132 MiB MacroGrid — it is
+// one bit per cell: 2M bits = 256 KiB, copyable in ~50 us. That is what lets
+// the async-rebake scheduler hand a worker a SNAPSHOT by value instead of a
+// raw pointer into the live grid, and with it retire the whole `doors.frozen`
+// freeze-the-world protocol (markoaudit/plans/async-rebake.md §0, §3).
 //
-// GENERIC ON PURPOSE. The two predicates live in different layers — nav's is
-// world's own, the body footprint belongs to game/room_zone — and world must
+// Сегодняшний единственный потребитель — телесный битсет комнат (`bodyOpen`,
+// [game/room_zone.cpp]). Нав из этого файла УШЁЛ (эпик occupancy 2026-08-26,
+// §60): его закон стал гранным, не поклеточным, и его снапшот — само поле
+// клиренса ([world/clearance.h], та же схема «оракул по значению», 4 МиБ).
+//
+// GENERIC ON PURPOSE. Predicates live in their systems' layers and world must
 // not see game. So this struct knows nothing about SubMask or walkability
 // laws: the caller injects the predicate into `build`, and each system owns
-// its one-bit patch helper next to its predicate (nav::patch_walk_bit,
-// game::patch_body_walk_bit) so the law and its incremental form cannot
-// drift apart in two files.
+// its one-bit patch helper next to its predicate (game::patch_body_walk_bit)
+// so the law and its incremental form cannot drift apart in two files.
 //
-// Bit convention: SET = open (the cell can be occupied), CLEAR = blocked.
-// Both plan-§2 bitsets (`navOpen`, `bodyOpen`) are open-sets, and storing the
-// positive fact keeps every patch site a plain `set(i, predicate(mask))` with
-// no negation to get backwards.
+// Bit convention: SET = open (the cell can be occupied), CLEAR = blocked —
+// every patch site stays a plain `set(i, predicate(mask))` with no negation
+// to get backwards.
 #pragma once
 
 #include <cstddef>

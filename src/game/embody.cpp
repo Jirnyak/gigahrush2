@@ -50,9 +50,10 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e);
 
-    // Stature drives the collider: ~0.4 m half-width, half-height from height.
+    // Stature drives the collider: half-width one for all (kBodyHalfWidth —
+    // из него же выведен клиренс-габарит), half-height from height.
     float hh = body_half_height(pool.height_mm(id));
-    reg.emplace<AABB>(e, AABB{vec3{0.4f, 0.4f, hh}});
+    reg.emplace<AABB>(e, AABB{vec3{kBodyHalfWidth, kBodyHalfWidth, hh}});
     // Universal mass from stature ([embody.h] body_mass_kg). Feeds E = m*v^2/2
     // (fall damage) and p = m*v everywhere. This is the BODY only; what it is
     // CARRYING is folded in by `encumbrance_step` ([encumbrance.h]), which is what

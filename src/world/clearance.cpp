@@ -67,19 +67,12 @@ std::uint64_t half_proj_solid(const SubMask& m, int axis, bool high) {
     return proj;
 }
 
-// Клиренс одной грани по КООРДИНАТАМ: клетка (x,y,z) и её сосед сверху по оси.
-inline std::uint8_t face_at(const MacroGrid& g, int x, int y, int z, int axis) {
-    const int nx = axis == 0 ? wrap_macro(x + 1) : x;
-    const int ny = axis == 1 ? wrap_macro(y + 1) : y;
-    const int nz = axis == 2 ? wrap_macro(z + 1) : z;
-    return face_clearance(g.mask(x, y, z), g.mask(nx, ny, nz), axis);
-}
-
 // Все три плюс-нибла клетки одним значением.
 inline std::uint16_t cell_faces(const MacroGrid& g, int x, int y, int z) {
-    return static_cast<std::uint16_t>(face_at(g, x, y, z, 0) |
-                                      (face_at(g, x, y, z, 1) << 4) |
-                                      (face_at(g, x, y, z, 2) << 8));
+    return static_cast<std::uint16_t>(
+        face_clearance_at(g, x, y, z, 0) |
+        (face_clearance_at(g, x, y, z, 1) << 4) |
+        (face_clearance_at(g, x, y, z, 2) << 8));
 }
 
 } // namespace
@@ -97,6 +90,14 @@ int max_square(std::uint64_t bitmap) {
         b &= (b >> kSubDim);
     }
     return s;
+}
+
+std::uint8_t face_clearance_at(const MacroGrid& g, int x, int y, int z,
+                               int axis) {
+    const int nx = axis == 0 ? wrap_macro(x + 1) : x;
+    const int ny = axis == 1 ? wrap_macro(y + 1) : y;
+    const int nz = axis == 2 ? wrap_macro(z + 1) : z;
+    return face_clearance(g.mask(x, y, z), g.mask(nx, ny, nz), axis);
 }
 
 std::uint8_t face_clearance(const SubMask& a, const SubMask& b, int axis) {
@@ -134,7 +135,7 @@ void ClearanceField::patch(const MacroGrid& grid, int x, int y, int z) {
         std::uint16_t& v = vals[macro_index(px, py, pz)];
         v = static_cast<std::uint16_t>(
             (v & ~(0xFu << (4 * axis))) |
-            (static_cast<std::uint16_t>(face_at(grid, px, py, pz, axis))
+            (static_cast<std::uint16_t>(face_clearance_at(grid, px, py, pz, axis))
              << (4 * axis)));
     };
     redo(mx, cy, cz, 0);

@@ -1241,7 +1241,7 @@ static void test_nav_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    bake_coarse(res.grid(), kBodyClearanceSub, g);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j)
             CHECK(g.dist[i][j] != kUnreachable); // fully connected
@@ -1255,7 +1255,7 @@ static void test_nav_realfloor() {
 
     // Deterministic on real geometry too.
     CoarseGraph g2{};
-    bake_coarse(res.grid(), g2);
+    bake_coarse(res.grid(), kBodyClearanceSub, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 
     // Derelict randomly drops slab/wall cells, but the lattice is carved LAST and
@@ -1264,7 +1264,7 @@ static void test_nav_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    bake_coarse(der.grid(), kBodyClearanceSub, gd);
     for (int i = 0; i < kNodes; ++i) {
         CHECK(gd.edge[i][4] == kLatticeSpacing);
         CHECK(gd.edge[i][5] == kLatticeSpacing);
@@ -1280,7 +1280,7 @@ static void test_nav_fine_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     FineNav f;
-    bake_fine(res.grid(), f);
+    bake_fine(res.grid(), kBodyClearanceSub, f);
 
     // Descend `node`'s field from a start cell, asserting nothing it steps onto
     // is solid. Returns steps to arrive, -1 at a dead end (kFlowNone), -2 if it
@@ -1317,7 +1317,7 @@ static void test_nav_fine_realfloor() {
 
     // Deterministic on real geometry (schedule-invariant across the 64 threads).
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    bake_fine(res.grid(), kBodyClearanceSub, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
 }
@@ -1679,8 +1679,8 @@ static void test_wander_moves_the_crowd() {
 
     nav::CoarseGraph coarse;
     nav::FineNav fine;
-    nav::bake_coarse(stack.layer(layer).grid(), coarse);
-    nav::bake_fine(stack.layer(layer).grid(), fine);
+    nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
+    nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
 
     const std::uint32_t wandering = wander_init(reg, layer, 4u);
     CHECK(wandering > 0);
@@ -4900,9 +4900,9 @@ static void test_route_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    bake_coarse(res.grid(), kBodyClearanceSub, g);
     FineNav f;
-    bake_fine(res.grid(), f);
+    bake_fine(res.grid(), kBodyClearanceSub, f);
 
     // Each node's own cell is its own anchor (seeded at distance 0).
     for (int id = 0; id < kNodes; ++id) {
@@ -4914,7 +4914,7 @@ static void test_route_realfloor() {
 
     // Nearest-node field is deterministic on real geometry too.
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    bake_fine(res.grid(), kBodyClearanceSub, f2);
     CHECK(f.nearest.size() == f2.nearest.size());
     CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
 
@@ -4924,9 +4924,9 @@ static void test_route_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    bake_coarse(der.grid(), kBodyClearanceSub, gd);
     FineNav fd;
-    bake_fine(der.grid(), fd);
+    bake_fine(der.grid(), kBodyClearanceSub, fd);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j) {
             if (i == j) continue;
@@ -4972,9 +4972,9 @@ static void test_streamed_nav() {
     World ref;
     generate_floor(ref, /*number=*/0, floor_spec(FloorKind::Residential), seed);
     CoarseGraph gref{};
-    bake_coarse(ref.grid(), gref);
+    bake_coarse(ref.grid(), kBodyClearanceSub, gref);
     FineNav fref;
-    bake_fine(ref.grid(), fref);
+    bake_fine(ref.grid(), kBodyClearanceSub, fref);
     CHECK(std::memcmp(&fn->coarse, &gref, sizeof(CoarseGraph)) == 0);
     CHECK(fn->fine.flow.size() == fref.flow.size());
     CHECK(std::memcmp(fn->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
@@ -5012,9 +5012,9 @@ static void test_nav_cache_roundtrip() {
     World w;
     generate_floor(w, /*number=*/-3, floor_spec(FloorKind::Commercial), 77u);
     CoarseGraph g{};
-    bake_coarse(w.grid(), g);
+    bake_coarse(w.grid(), kBodyClearanceSub, g);
     FineNav f;
-    bake_fine(w.grid(), f);
+    bake_fine(w.grid(), kBodyClearanceSub, f);
 
     const std::string dir = "navcache_test_tmp";
     const std::string path = dir + "/" + nav_cache_name(-3, FloorKind::Commercial, 77u);

@@ -76,8 +76,8 @@ struct NavFixture {
     void init() {
         if (!initialized) {
             generate_floor(world, 0, floor_spec(FloorKind::Residential), 42u);
-            nav::bake_coarse(world.grid(), cg);
-            nav::bake_fine(world.grid(), fn);
+            nav::bake_coarse(world.grid(), game::kBodyClearanceSub, cg);
+            nav::bake_fine(world.grid(), game::kBodyClearanceSub, fn);
             initialized = true;
         }
     }

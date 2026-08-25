@@ -56,8 +56,9 @@
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
 #include "game/room_zone.h"   // RoomZones, bake_room_zones, patch_body_walk_bit
 #include "world/macro_grid.h" // MacroGrid — снапшот масок по значению (свет)
-#include "world/nav.h"        // CoarseGraph, FineNav, bake_*, patch_walk_bit
-#include "world/walk_bits.h"  // WalkBits — живые битсеты и их снапшоты
+#include "world/clearance.h"  // ClearanceField — гранный оракул нава (occupancy)
+#include "world/nav.h"        // CoarseGraph, FineNav, bake_*
+#include "world/walk_bits.h"  // WalkBits — телесный битсет комнат и его снапшот
 
 namespace giga::game {
 
@@ -230,8 +231,9 @@ public:
         return fine_.flow.capacity() + fine_.nearest.capacity() +
                pendingFine_.flow.capacity() + pendingFine_.nearest.capacity() +
                sizeof(nav::CoarseGraph) * 2 +
-               (navBits_.words.capacity() + bodyBits_.words.capacity() +
-                snapNav_.words.capacity() + snapBody_.words.capacity()) *
+               (navClear_.vals.capacity() + snapClear_.vals.capacity()) *
+                   sizeof(std::uint16_t) +
+               (bodyBits_.words.capacity() + snapBody_.words.capacity()) *
                    sizeof(std::uint64_t) +
                (shadowGrid_ ? shadowGrid_->masks().capacity() * sizeof(SubMask) +
                                   shadowGrid_->types().capacity() *
@@ -259,7 +261,11 @@ private:
     // --- живая сторона: пишется только в step()/start_fresh на главном потоке
     nav::CoarseGraph coarse_{};
     nav::FineNav fine_{};
-    WalkBits navBits_;  // живые открыто-сеты, патчатся дренажом карвов
+    // Живые оракулы, патчатся дренажом карвов: нав — гранный клиренс (4 МиБ,
+    // [world/clearance.h], эпик occupancy 2026-08-26 — прежний битсет
+    // `!full()` вёл маршруты сквозь лепленые стены), комнаты — телесный
+    // битсет (256 КиБ, [game/room_zone.h]).
+    ClearanceField navClear_;
     WalkBits bodyBits_;
     // Живая сетка этажа вызывающего — источник снапшота масок для секции
     // света (лучи бейка субвоксельные, S2; битсета им мало). Тот же контракт
@@ -305,8 +311,8 @@ private:
     nav::FineNav pendingFine_{};
     RoomZones pendingRooms_{};
     LightVisBake pendingLight_{};
-    WalkBits snapNav_;  // снапшот по значению (2×256 KiB, ~75 мкс)
-    WalkBits snapBody_;
+    ClearanceField snapClear_; // снапшот по значению (4 МиБ, доли мс)
+    WalkBits snapBody_;        // (256 KiB)
     // ТЕНЕВАЯ копия масок+типов для света (проблема 59.21): ~134 МиБ
     // РЕЗИДЕНТНО («памяти щедро» — решение владельца), копируется ОДИН раз на
     // входе этажа и дальше правится O(1) на карв (sync_shadow из копилки

@@ -294,9 +294,9 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
     World w;
     generate_floor(w, /*number=*/0, floor_spec(FloorKind::Industrial), 4242u);
     nav::CoarseGraph coarse{};
-    nav::bake_coarse(w.grid(), coarse);
+    nav::bake_coarse(w.grid(), kBodyClearanceSub, coarse);
     nav::FineNav fine;
-    nav::bake_fine(w.grid(), fine);
+    nav::bake_fine(w.grid(), kBodyClearanceSub, fine);
 
     // Two identical worlds-in-miniature: same seeds, same positions, same ticks. The
     // ONLY difference is whether the gunshot is published.

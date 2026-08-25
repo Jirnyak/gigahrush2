@@ -113,7 +113,13 @@ inline constexpr std::uint32_t kNavCacheMagic = 0x4E324847u;
 // behind an eight-byte "GHNAVBK1" magic); a v1 file is rejected on the magic check
 // before the version is even consulted, which is the correct outcome — the caller
 // re-bakes and overwrites it.
-inline constexpr std::uint32_t kNavCacheVersion = 2u;
+//
+// Version 3: закон проходимости сменился (эпик occupancy 2026-08-26, §60) —
+// клеточный `!full()` умер, бейки идут по гранному клиренсу с габаритом тела
+// ([world/clearance.h]). Раскладка блоба не менялась ни на байт — это ровно
+// тот «undetectable from the payload» случай из шапки, ради которого
+// константа существует: v2-файлы обязаны отбраковаться и перепечься.
+inline constexpr std::uint32_t kNavCacheVersion = 3u;
 
 // Which sections a blob carries. A bitmask rather than three bools because it is what
 // goes on the wire, and because "coarse only" is a first-class mode rather than a

@@ -636,7 +636,11 @@ if(GIGA_BUILD_TESTS)
         # occupancy, §60/К1-10): макс-квадрат эрозией, закон полупроекций
         # (стена на грани / посреди клетки / проём 4×4 / шов тора),
         # патч==ребилд в обе полярности = 23494.
-        PASS_REGULAR_EXPRESSION "23494/23494 checks passed"
+        # 23494 + 4 on 2026-08-26: нав на клиренсе — test_nav_subvoxel_wall
+        # (красный до фикса: обход лепленой стены 96, флоу не в стену, спуск
+        # 111) и двухклеточный карман в route_step (одноклеточный стал
+        # изолятором по построению) = 23498.
+        PASS_REGULAR_EXPRESSION "23498/23498 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1311,7 +1315,13 @@ if(GIGA_BUILD_TESTS)
     # 246514 -> 246519 (+5) on 2026-08-24: тег состава таблицы на свапе —
     # снапшотный, не текущий (находка №2, гонка «таблица сменилась в полёте
     # бейка»); мутация «текущий тег» ловится гоночным пином.
-        PASS_REGULAR_EXPRESSION "game_test: 246501 checks, 0 failures")
+    # 246501 -> 246520 (+19) on 2026-08-26: НАВ НА ГРАННОМ КЛИРЕНСЕ (эпик
+    # occupancy, §60/К1-10): suite_walkbits переписан под ClearanceField
+    # (наивный эталон закона на выборке 037, пин §60 «атом не открывает
+    # клетку»), nav-кэш v3 (v2 отбраковывается: та же раскладка, другой
+    # закон). Поведение толпы на лепленых этажах МЕНЯЕТСЯ ЗАКОННО — прежний
+    # `!full()` вёл сквозь стены.
+        PASS_REGULAR_EXPRESSION "game_test: 246520 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "game/embody.h" // kBodyClearanceSub — габарит всех нав-бейков
 #include "world/macro_grid.h"
 
 namespace giga::game {
@@ -146,11 +147,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     floorNumber_ = floorNumber;
     rooms_ = &rooms;
 
-    // Все три живых битсета — с текущей геометрии, на всех ядрах (build сам
+    // Оба живых оракула — с текущей геометрии, на всех ядрах (build сам
     // parallel_for). Двери к этому моменту все открыты (door_build зовётся до
     // begin_floor_nav и оставляет Open), так что премиса all-open впекается в
-    // битсеты по построению — и patch_carved_cells её дальше хранит.
-    nav::build_walk_bits(grid, navBits_);
+    // оракулы по построению — и patch_carved_cells её дальше хранит.
+    navClear_.build(grid);
     build_body_walk_bits(grid, bodyBits_);
     // Свету битсета мало — его лучи субвоксельные (S2): Fresh печёт прямо с
     // живой сетки (мы на главном потоке); фоновые циклы читают ТЕНЬ —
@@ -205,7 +206,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     std::vector<std::uint8_t>().swap(fine_.nearest);
 
     // Снапшот по значению — воркер не знает про World вообще.
-    snapNav_.words = navBits_.words;
+    snapClear_.vals = navClear_.vals;
     snapGen_ = worldGen;
     bakedGen_ = worldGen;
     lastSeenGen_ = worldGen;
@@ -218,9 +219,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     worker_ = std::thread([this]() {
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
-        nav::bake_coarse(snapNav_, pendingCoarse_, /*threads=*/0, &cancel_);
+        nav::bake_coarse(snapClear_, kBodyClearanceSub, pendingCoarse_,
+                         /*threads=*/0, &cancel_);
         const auto t1 = clock::now();
-        nav::bake_fine(snapNav_, pendingFine_, /*threads=*/0, &cancel_);
+        nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_,
+                       /*threads=*/0, &cancel_);
         const auto t2 = clock::now();
         if (!cancel_.load(std::memory_order_relaxed)) {
             coarseMs_ = ms_between(t0, t1);
@@ -237,13 +240,14 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
 
-    // Снапшот по значению: два битсета (2×256 KiB, ~75 мкс) и копия
-    // статик-таблицы ламп (12.5k × 16 Б ≈ 200 КБ); субвоксельные лучи света
-    // (S2) читают резидентную ТЕНЬ, доливаемую sync_shadow O(1)-копиями
-    // карвнутых клеток (59.21 — копия мира на каждый цикл мертва). Дальше
-    // живой мир может меняться сколько угодно — воркер его не видит, а
-    // расхождение честно останется как bakedGen < worldGen после свапа.
-    snapNav_.words = navBits_.words;
+    // Снапшот по значению: клиренс-поле нава (4 МиБ, доли мс) + телесный
+    // битсет комнат (256 KiB) и копия статик-таблицы ламп (12.5k × 16 Б ≈
+    // 200 КБ); субвоксельные лучи света (S2) читают резидентную ТЕНЬ,
+    // доливаемую sync_shadow O(1)-копиями карвнутых клеток (59.21 — копия
+    // мира на каждый цикл мертва). Дальше живой мир может меняться сколько
+    // угодно — воркер его не видит, а расхождение честно останется как
+    // bakedGen < worldGen после свапа.
+    snapClear_.vals = navClear_.vals;
     snapBody_.words = bodyBits_.words;
     // Тень догоняет мир O(1)-доливом — копия 134 МиБ мертва (59.21).
     const auto tSnap = std::chrono::steady_clock::now();
@@ -317,13 +321,15 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             roomsMs_ = ms_between(t0, t1);
             roomsDone_.store(true, std::memory_order_release);
         }
-        nav::bake_coarse(snapNav_, pendingCoarse_, threads, &cancel_);
+        nav::bake_coarse(snapClear_, kBodyClearanceSub, pendingCoarse_,
+                         threads, &cancel_);
         const auto t2 = clock::now();
         if (!cancel_.load(std::memory_order_relaxed)) {
             coarseMs_ = ms_between(t1, t2);
             coarseDone_.store(true, std::memory_order_release);
         }
-        nav::bake_fine(snapNav_, pendingFine_, threads, &cancel_);
+        nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_, threads,
+                       &cancel_);
         const auto t3 = clock::now();
         if (!cancel_.load(std::memory_order_relaxed)) {
             fineMs_ = ms_between(t2, t3);
@@ -485,7 +491,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
 
     // 3. Планировщик старта фонового цикла.
     if (!ready()) return false; // нет живого графа — Fresh ещё не свапнулся
-    if (rooms_ == nullptr || !navBits_.built() || !bodyBits_.built())
+    if (rooms_ == nullptr || !navClear_.built() || !bodyBits_.built())
         return false;
     if (bakedGen_ == worldGen) return false; // запечённое актуально
     const bool quiet = simTick - lastMutTick_ >= kRebakeQuietTicks;
@@ -511,18 +517,45 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                          const DoorSet& doors,
                                          const std::uint32_t* cells,
                                          std::size_t n) {
-    if (!navBits_.built() || !bodyBits_.built()) return;
+    if (!navClear_.built() || !bodyBits_.built()) return;
     const std::vector<SubMask>& masks = grid.masks();
     const std::vector<CellType>& types = grid.types();
+    // Клетка двери (по индексу, координатам). Премиса all-open ([game/door.h]):
+    // оракулы построены на входе этажа при открытых дверях и обязаны её
+    // хранить — честный патч по маске закрытой двери впёк бы дверь в фоновый
+    // бейк. У гранного клиренса премиса живёт на уровне ГРАНИ: пропускается
+    // любая грань, чей ВТОРОЙ конец — клетка двери (её половину перехода
+    // считало открытое состояние).
+    auto door_at = [&doors](int x, int y, int z) {
+        return !doors.index.empty() &&
+               doors.index[macro_index(wrap_macro(x), wrap_macro(y),
+                                       wrap_macro(z))] != 0u;
+    };
     for (std::size_t i = 0; i < n; ++i) {
         const std::size_t idx = cells[i];
-        // Премиса all-open ([game/door.h]): клетка двери в битсетах ВСЕГДА
-        // открыта, какой бы ни была живая маска (закрытая дверь солидна).
-        // Обоснование — заголовок patch_carved_cells.
         if (!doors.index.empty() && doors.index[idx] != 0u) continue;
         const SubMask& m = masks[idx];
-        nav::patch_walk_bit(navBits_, idx, m);
         patch_body_walk_bit(bodyBits_, idx, m);
+        // Шесть граней карвнутой клетки: свои три плюс-нибла и плюс-ниблы
+        // трёх минус-соседей ([world/clearance.h] patch — та же шестёрка,
+        // здесь вручную ради дверного фильтра по граням).
+        const int cx = static_cast<int>(idx % kMacroDim);
+        const int cy = static_cast<int>((idx / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(idx / (kMacroDim * kMacroDim));
+        for (int axis = 0; axis < 3; ++axis) {
+            const int px = axis == 0 ? cx + 1 : cx;
+            const int py = axis == 1 ? cy + 1 : cy;
+            const int pz = axis == 2 ? cz + 1 : cz;
+            if (!door_at(px, py, pz))
+                navClear_.set_face(cx, cy, cz, axis,
+                                   face_clearance_at(grid, cx, cy, cz, axis));
+            const int mx = axis == 0 ? cx - 1 : cx;
+            const int my = axis == 1 ? cy - 1 : cy;
+            const int mz = axis == 2 ? cz - 1 : cz;
+            if (!door_at(mx, my, mz))
+                navClear_.set_face(mx, my, mz, axis,
+                                   face_clearance_at(grid, mx, my, mz, axis));
+        }
     }
     // Долг света — вход дельта-патча (carve-hitch.md §3): карвнутые клетки
     // копятся до ближайшего цикла (патч или полный — кто раньше). ВСЕ клетки,

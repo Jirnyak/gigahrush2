@@ -1,29 +1,31 @@
-// walk_bits — the walkability oracle, and the two claims phase C will stand on.
+// Оракулы тяжёлых бейков — клиренс нава и телесный битсет комнат — и два
+// утверждения, на которых стоит async-rebake phase C.
 //
 // Included into game_test.cpp, so it uses that file's CHECK macro and its
 // `using namespace giga` / `using namespace giga::game`. Everything except the
 // entry point `test_walkbits_all()` lives in `namespace walkbits_test`.
 //
-// The async-rebake plan (markoaudit/plans/async-rebake.md §2, §7g) replaces the
-// bake worker's raw pointer into the live MacroGrid with a 256 KiB WalkBits
-// snapshot. That substitution is sound if and only if TWO things hold, and they
-// are exactly what this suite pins:
+// Планировщик фонового допекания держит у воркера СНАПШОТ оракула по значению
+// (клиренс-поле 4 МиБ + телесный битсет 256 КиБ), не указатель в живой грид.
+// Подстановка законна тогда и только тогда, когда:
 //
-//   1. BIT-IDENTITY: baking through the bits produces byte-for-byte the output
-//      of baking through the grid — for nav (edge/dist/next, flow, nearest) AND
-//      for room zones (flow, nearRoom, baked). The bits are built HERE, by
-//      hand, from the predicates spelled out in this file — not by calling the
-//      production builders — so a drift in either law (nav's `!full()`,
-//      room_zone's body footprint) breaks this suite instead of silently
-//      re-defining what a wall is. The production builders are then checked
-//      AGAINST the hand-built bits, which is the same claim from the other end.
+//   1. БИТ-ИДЕНТИЧНОСТЬ: бейк через оракул даёт байт-в-байт результат бейка
+//      через грид — для нава (edge/dist/next, flow, nearest) И для комнат
+//      (flow, nearRoom, baked). Эталонные оракулы построены ЗДЕСЬ, руками, из
+//      законов, переписанных в этом файле НЕЗАВИСИМО от продакшн-кода (для
+//      клиренса — наивные циклы по субвокселям, без бит-магии): дрейф закона
+//      ломает этот сьют, а не молча переопределяет, что такое стена.
+//      Продакшн-строители сверяются С эталоном — то же утверждение с другого
+//      конца.
 //
-//   2. PATCH == REBUILD: the O(1) per-cell patch (the future dirtyCells drain)
-//      leaves the bitset in exactly the state a full rebuild reaches. Proven by
-//      mutating real cells in every direction the predicates can flip —
-//      including the one where the two laws DIVERGE (a single carved voxel
-//      opens nav's bit and leaves the body's shut), because that divergence is
-//      the whole reason there are two bitsets and two patch functions.
+//   2. ПАТЧ == РЕБИЛД: O(1)-патч клетки (дренаж dirtyCells) оставляет оракул
+//      ровно в состоянии полной пересборки — в обе полярности (карв открывает,
+//      заливка закрывает), на настоящем лепленом этаже.
+//
+// Сюда же — пин §60/К1-10 (эпик occupancy): прежний нав-закон `!full()`
+// открывал клетку по одному выбитому атому из 512; гранный клиренс обязан
+// НЕ открыться на одном атоме — это дословно та «дыра», через которую
+// флоу-поля вели толпу сквозь лепленые стены.
 //
 // One real floor, generated once and shared: the mutation test runs LAST
 // because it carves the world the identity tests measured.
@@ -32,20 +34,61 @@
 #include "game/floor_gen.h"   // generate_floor — a real carved floor, not a toy
 #include "game/floor_spec.h"  // FloorKind, floor_spec
 #include "game/room_zone.h"   // bake_room_zones + the body-law oracle helpers
+#include "world/clearance.h"  // ClearanceField — нав-оракул (occupancy)
 #include "world/macro_grid.h" // SubMask — the mutation test carves masks directly
-#include "world/nav.h"        // bake_coarse/bake_fine + the nav-law oracle helpers
+#include "world/nav.h"        // bake_coarse/bake_fine
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index
-#include "world/walk_bits.h"  // WalkBits — the module under test
+#include "world/walk_bits.h"  // WalkBits — телесный битсет комнат
 #include "world/world.h"
 
 namespace walkbits_test {
 
-// The two walkability laws, restated INDEPENDENTLY of the production helpers
-// (nav.cpp's `cell_open`, room_zone.cpp's `blocked`). A suite that built its
-// reference bits by calling the code under test could only prove the code
-// agrees with itself; these two lambdas are the contract written down twice,
-// which is what makes a predicate drift a red test instead of a redefinition.
-inline bool ref_nav_open(const SubMask& m) { return !m.full(); }
+// Законы, переписанные НЕЗАВИСИМО от продакшн-хелперов (clearance.cpp,
+// room_zone.cpp). Сьют, строящий эталон вызовом кода под тестом, доказал бы
+// лишь согласие кода с самим собой; эти функции — контракт, записанный
+// дважды, и потому дрейф предиката — красный тест, а не переопределение.
+
+// Гранный клиренс наивно: максимум s, при котором найдётся квадрат s×s
+// тангенциальных колонок, чистых от материи в БЛИЖНИХ К ГРАНИ половинах обеих
+// клеток (переход через +axis-грань клетки (x,y,z)). Никакой бит-магии:
+// четыре вложенных цикла и SubMask::test.
+inline bool ref_col_clear(const SubMask& m, int axis, int u, int v, int d) {
+    // Раскладка (u,v) как в законе: x->(sy,sz), y->(sx,sz), z->(sx,sy);
+    // d — глубина вдоль оси перехода.
+    const int sx = axis == 0 ? d : u;
+    const int sy = axis == 0 ? u : (axis == 1 ? d : v);
+    const int sz = axis == 2 ? d : v;
+    return !m.test(sub_bit(sx, sy, sz));
+}
+inline int ref_face_clearance(const MacroGrid& g, int x, int y, int z,
+                              int axis) {
+    const SubMask& a = g.mask(x, y, z);
+    const SubMask& b = g.mask(axis == 0 ? x + 1 : x, axis == 1 ? y + 1 : y,
+                              axis == 2 ? z + 1 : z); // mask() заворачивает
+    auto clear = [&](int u, int v) {
+        for (int d = kSubDim / 2; d < kSubDim; ++d) // ближняя к грани половина A
+            if (!ref_col_clear(a, axis, u, v, d)) return false;
+        for (int d = 0; d < kSubDim / 2; ++d)       // ближняя половина B
+            if (!ref_col_clear(b, axis, u, v, d)) return false;
+        return true;
+    };
+    int best = 0;
+    for (int s = 1; s <= kSubDim; ++s) {
+        bool found = false;
+        for (int v0 = 0; v0 + s <= kSubDim && !found; ++v0)
+            for (int u0 = 0; u0 + s <= kSubDim && !found; ++u0) {
+                bool ok = true;
+                for (int v = v0; v < v0 + s && ok; ++v)
+                    for (int u = u0; u < u0 + s && ok; ++u)
+                        ok = clear(u, v);
+                found = ok;
+            }
+        if (!found) break;
+        best = s;
+    }
+    return best;
+}
+
 inline bool ref_body_open(const MacroGrid& g, int x, int y, int z) {
     // The GRID form of the body law, i.e. the public contract predicate —
     // deliberately the other spelling than build_body_walk_bits' mask form, so
@@ -53,38 +96,47 @@ inline bool ref_body_open(const MacroGrid& g, int x, int y, int z) {
     return room_body_walkable(g, x, y, z);
 }
 
-void nav_bake_through_bits_is_bit_identical(const World& w) {
-    // The grid path — the entry every synchronous caller still uses.
+void nav_bake_through_field_is_bit_identical(const World& w) {
+    // The grid path — the entry every synchronous caller still uses. Габарит
+    // — тело NPC (kBodyClearanceSub, вывод в [game/embody.h]).
     nav::CoarseGraph g1;
-    nav::bake_coarse(w.grid(), g1);
+    nav::bake_coarse(w.grid(), kBodyClearanceSub, g1);
     nav::FineNav f1;
-    nav::bake_fine(w.grid(), f1);
+    nav::bake_fine(w.grid(), kBodyClearanceSub, f1);
 
-    // Hand-built oracle: one bit per cell from the law spelled above, through
-    // the plain at/set API (which this also exercises bit by bit).
-    WalkBits bits;
-    bits.words.assign(WalkBits::kWords, 0u);
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x)
-                bits.set(macro_index(x, y, z),
-                         ref_nav_open(w.grid().mask(x, y, z)));
-
-    // The production builder must agree with the hand-built reference word for
-    // word — this is the predicate-drift pin of plan §7(г).
-    WalkBits built;
-    nav::build_walk_bits(w.grid(), built);
-    CHECK(built.words == bits.words);
+    // Продакшн-поле против наивного эталона — на детерминированной выборке
+    // клеток (полный этаж наивным законом — минуты; выборка держит и дрейф,
+    // и все три оси). Шаг 037 взаимно прост с 128, так что выборка обходит
+    // все остатки по каждой оси, а не полосу.
+    ClearanceField field;
+    field.build(w.grid());
+    int checked = 0, mismatched = 0;
+    for (std::size_t i = 0; i < kMacroCells; i += 37) {
+        const int x = static_cast<int>(i % kMacroDim);
+        const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
+        for (int axis = 0; axis < 3; ++axis) {
+            const int prod = face_clearance_at(w.grid(), x, y, z, axis);
+            if (prod != ref_face_clearance(w.grid(), x, y, z, axis))
+                ++mismatched;
+            // И то же значение обязано лежать в построенном поле (нибл
+            // +axis-грани = at() с плюс-направлением 2*axis+1).
+            if (field.at(x, y, z, 2 * axis + 1) != prod) ++mismatched;
+            ++checked;
+        }
+    }
+    CHECK(mismatched == 0);
+    CHECK(checked >= 3 * static_cast<int>(kMacroCells / 37)); // выборка не съёжилась
 
     // And the oracle bakes must reproduce the grid bakes byte for byte.
     // memcmp over CoarseGraph is safe here for the reason suite_navcache.inl
     // states: nav_cache.cpp static_asserts the struct is padding-free.
     nav::CoarseGraph g2;
-    nav::bake_coarse(bits, g2);
+    nav::bake_coarse(field, kBodyClearanceSub, g2);
     CHECK(std::memcmp(&g1, &g2, sizeof(nav::CoarseGraph)) == 0);
 
     nav::FineNav f2;
-    nav::bake_fine(bits, f2);
+    nav::bake_fine(field, kBodyClearanceSub, f2);
     CHECK(f1.flow == f2.flow);
     CHECK(f1.nearest == f2.nearest);
     // Not an empty-vs-empty accident: the floor really produced fields.
@@ -123,16 +175,17 @@ void rooms_bake_through_bits_is_bit_identical(const World& w) {
 }
 
 // Mutate real cells in every direction the laws can flip, patch the resident
-// bitsets per cell, and demand the patched state EQUALS a from-scratch rebuild.
-// This is the exact obligation of the future dirtyCells drain: after phase C a
-// patched bit that disagreed with a rebuild would steer a background bake by a
-// world that never existed.
+// oracles per cell, and demand the patched state EQUALS a from-scratch rebuild.
+// This is the exact obligation of the dirtyCells drain: a patched oracle that
+// disagreed with a rebuild would steer a background bake by a world that never
+// existed.
 void patch_equals_rebuild(World& w) {
     MacroGrid& g = w.grid();
 
-    // Resident bitsets, as phase C will hold them.
-    WalkBits navBits, bodyBits;
-    nav::build_walk_bits(g, navBits);
+    // Resident oracles, as the scheduler holds them.
+    ClearanceField navClear;
+    navClear.build(g);
+    WalkBits bodyBits;
     build_body_walk_bits(g, bodyBits);
 
     // Find one fully-solid cell and one air cell by deterministic scan, so the
@@ -154,52 +207,57 @@ void patch_equals_rebuild(World& w) {
     coord(solidI, sx, sy, sz);
     coord(airI, ax, ay, az);
 
-    // Direction 1 — air -> fully solid: BOTH laws flip open -> blocked.
+    // Direction 1 — air -> fully solid: both laws flip open -> blocked. Все
+    // шесть граней залитой клетки глухие для любого габарита.
     g.fill_cell(ax, ay, az, 1);
-    // Direction 2 — one voxel carved out of a solid cell: the DIVERGENCE. Nav
-    // ("not fully solid") flips blocked -> open; the body footprint is still
-    // walled, so the body bit must NOT move. This asymmetry is why there are
-    // two bitsets at all.
+    // Direction 2 — one voxel carved out of a solid cell: ПИН §60. Прежний
+    // нав-закон «не полностью твёрдая» здесь открывал клетку — дыра, через
+    // которую маршруты шли сквозь лепленые стены. Клиренс обязан НЕ дать
+    // телу хода: одиночный атом — не проход 4×4.
     g.mask(sx, sy, sz).clear(sub_bit(0, 0, 0));
 
     const std::size_t si = static_cast<std::size_t>(solidI);
     const std::size_t ai = static_cast<std::size_t>(airI);
-    nav::patch_walk_bit(navBits, ai, g.mask(ax, ay, az));
-    nav::patch_walk_bit(navBits, si, g.mask(sx, sy, sz));
+    navClear.patch(g, ax, ay, az);
+    navClear.patch(g, sx, sy, sz);
     patch_body_walk_bit(bodyBits, ai, g.mask(ax, ay, az));
     patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
 
-    CHECK(!navBits.at(ai));
+    for (int d = 0; d < 6; ++d) {
+        CHECK(navClear.at(ax, ay, az, d) == 0);
+        CHECK(navClear.at(sx, sy, sz, d) < kBodyClearanceSub); // §60: не открылась
+    }
     CHECK(!bodyBits.at(ai));
-    CHECK(navBits.at(si));   // one missing voxel is "not fully solid"
-    CHECK(!bodyBits.at(si)); // ...but no body fits through a 1-voxel hole
+    CHECK(!bodyBits.at(si)); // no body fits through a 1-voxel hole either
 
-    // Direction 3 — carve the solid cell down to a body-sized channel: clear
-    // the centred 4x4 footprint over sub-layers 0..6 ([room_zone.cpp]
-    // kBodyFootprint x kBodySubLayers). Now the body law opens too.
-    for (int lz = 0; lz < 7; ++lz)
+    // Direction 3 — carve the solid cell down to a body-sized shaft: clear the
+    // centred 4x4 footprint through ALL eight sub-layers. Its ±z faces open to
+    // body clearance as soon as the ±z neighbours can offer the matching half
+    // (проверяется финальной сверкой с ребилдом — соседи тут произвольные
+    // клетки настоящего этажа); телесный закон открывается уже сейчас.
+    for (int lz = 0; lz < kSubDim; ++lz)
         for (int ly = 2; ly <= 5; ++ly)
             for (int lx = 2; lx <= 5; ++lx)
                 g.mask(sx, sy, sz).clear(sub_bit(lx, ly, lz));
-    nav::patch_walk_bit(navBits, si, g.mask(sx, sy, sz));
+    navClear.patch(g, sx, sy, sz);
     patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
-    CHECK(navBits.at(si));
     CHECK(bodyBits.at(si));
 
     // Direction 4 — back to full: blocked again for both. Round-tripping the
     // same cell is what a real battle does to a wall (carve, then samosbor
     // re-fill), and a patch that only worked one way would pass 1-3.
     g.fill_cell(sx, sy, sz, 1);
-    nav::patch_walk_bit(navBits, si, g.mask(sx, sy, sz));
+    navClear.patch(g, sx, sy, sz);
     patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
-    CHECK(!navBits.at(si));
+    for (int d = 0; d < 6; ++d) CHECK(navClear.at(sx, sy, sz, d) == 0);
     CHECK(!bodyBits.at(si));
 
     // THE claim: after all of it, patched == rebuilt, word for word.
-    WalkBits navRef, bodyRef;
-    nav::build_walk_bits(g, navRef);
+    ClearanceField navRef;
+    navRef.build(g);
+    WalkBits bodyRef;
     build_body_walk_bits(g, bodyRef);
-    CHECK(navBits.words == navRef.words);
+    CHECK(navClear.vals == navRef.vals);
     CHECK(bodyBits.words == bodyRef.words);
 }
 
@@ -211,7 +269,7 @@ void test_walkbits_all() {
     // compares real fields, not eleven empty vectors against eleven others.
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
-    walkbits_test::nav_bake_through_bits_is_bit_identical(w);
+    walkbits_test::nav_bake_through_field_is_bit_identical(w);
     walkbits_test::rooms_bake_through_bits_is_bit_identical(w);
     // Last: it carves the floor the identity tests just measured.
     walkbits_test::patch_equals_rebuild(w);

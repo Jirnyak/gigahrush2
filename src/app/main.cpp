@@ -1792,9 +1792,10 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // stands still until the bake lands, because wander_step no-ops on an empty flow
 // field. That degradation is automatic rather than special-cased.
 //
-// The worker owns a 256 KiB WalkBits SNAPSHOT, never a pointer into the live
-// grid — so there is no ordering contract with door toggles or carves any more,
-// and floor changes cancel-join in tens of ms ([game/rebake.h]).
+// The worker owns oracle SNAPSHOTS by value (клиренс-поле нава 4 МиБ +
+// телесный битсет комнат 256 КиБ), never a pointer into the live grid — so
+// there is no ordering contract with door toggles or carves any more, and
+// floor changes cancel-join in tens of ms ([game/rebake.h]).
 void begin_floor_nav(const World& world, int floorNumber,
                      game::RebakeScheduler& bake, game::RoomZones& rooms) {
     // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается

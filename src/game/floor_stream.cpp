@@ -8,6 +8,7 @@
 #include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
+#include "world/clearance.h"  // ClearanceField — оракул нав-бейков (occupancy)
 #include "game/population.h"  // seed_floor_from_spec
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
 
@@ -359,8 +360,12 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
                                  fn->fine);
     }
     if (!haveNav) {
-        nav::bake_coarse(stack.layer(slot).grid(), fn->coarse);
-        nav::bake_fine(stack.layer(slot).grid(), fn->fine);
+        // Один оракул на оба бейка (грид читается один раз на грань), габарит
+        // — тело NPC ([game/embody.h] kBodyClearanceSub, вывод там).
+        ClearanceField clear;
+        clear.build(stack.layer(slot).grid());
+        nav::bake_coarse(clear, kBodyClearanceSub, fn->coarse);
+        nav::bake_fine(clear, kBodyClearanceSub, fn->fine);
         if (!cachePath.empty())
             save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
                            fn->fine);

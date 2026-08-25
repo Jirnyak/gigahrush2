@@ -965,7 +965,9 @@ static void test_nav_coarse() {
     using namespace nav;
     MacroGrid air;
     CoarseGraph g{};
-    bake_coarse(air, g);
+    // Габарит бейков в world-тестах — 4 субвокселя (тело NPC; вывод у
+    // потребителя, [game/embody.h] kBodyClearanceSub).
+    bake_coarse(air, 4, g);
 
     for (int i = 0; i < kNodes; ++i) {
         CHECK(g.dist[i][i] == 0);
@@ -994,7 +996,7 @@ static void test_nav_coarse() {
 
     // Deterministic: a second bake is bit-identical (schedule-invariant).
     CoarseGraph g2{};
-    bake_coarse(air, g2);
+    bake_coarse(air, 4, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 }
 
@@ -1006,7 +1008,7 @@ static void test_nav_fine() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    bake_fine(air, 4, f);
 
     // The node cell itself is "arrived".
     CHECK(f.at(0, 16, 16, 16) == kFlowArrived);
@@ -1053,11 +1055,52 @@ static void test_nav_fine() {
     // Deterministic: a second bake is bit-identical (schedule-invariant), for
     // both the flow fields and the (single-threaded) nearest-node field.
     FineNav f2;
-    bake_fine(air, f2);
+    bake_fine(air, 4, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
     CHECK(f.nearest.size() == f2.nearest.size());
     CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
+}
+
+// ЛЕПЛЕНАЯ СТЕНА (§60/К1-10, эпик occupancy): плоскость x=32 из стенок
+// толщиной в ОДИН субвоксель (sx=3, середина младшей половины) — ни одна
+// клетка не полная, но переходы 31→32 глухие для любого габарита. Клеточный
+// закон `!full()` эту стену не видел вовсе и вёл толпу сквозь неё; гранный
+// клиренс обязан гнать маршрут в обход по завороту тора: 96 клеток, не 32.
+static void test_nav_subvoxel_wall() {
+    using namespace nav;
+    MacroGrid g;
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y) {
+            g.set_cell(32, y, z, kMatConcrete);
+            SubMask& m = g.mask(32, y, z);
+            for (int sz = 0; sz < kSubDim; ++sz)
+                for (int sy = 0; sy < kSubDim; ++sy)
+                    m.set(sub_bit(3, sy, sz));
+        }
+
+    CoarseGraph cg{};
+    bake_coarse(g, 4, cg);
+    // Ребро узла 0 (16,16,16) → сосед +x (48,16,16): геодезия обязана обойти
+    // стену через заворот (16→0→127→...→48 = 96), а не пройти сквозь неё.
+    CHECK(cg.edge[0][1] == 3 * kLatticeSpacing);
+
+    FineNav f;
+    bake_fine(g, 4, f);
+    // Флоу-поле узла 0 из клетки (33,16,16): шаг -x — это шаг в стену.
+    CHECK(f.at(0, 33, 16, 16) != 0);
+    // И спуск по полю обязан прийти в узел за длину обхода на восток:
+    // (128 − 33) + 16 = 111 клеток (на запад — упор в стену на переходе 32→31).
+    int cx = 33, cy = 16, cz = 16, steps = 0;
+    for (; steps <= 4 * kMacroDim; ++steps) {
+        const std::uint8_t d = f.at(0, cx, cy, cz);
+        if (d == kFlowArrived) break;
+        if (d == kFlowNone) { steps = -1; break; }
+        cx = wrap_macro(cx + kNavDir[d][0]);
+        cy = wrap_macro(cy + kNavDir[d][1]);
+        cz = wrap_macro(cz + kNavDir[d][2]);
+    }
+    CHECK(steps == 111);
 }
 
 // route_step (master_prompt #11 C.2): the O(1) tick query that composes the
@@ -1067,9 +1110,9 @@ static void test_route_step() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    bake_fine(air, 4, f);
     CoarseGraph g{};
-    bake_coarse(air, g);
+    bake_coarse(air, 4, g);
 
     // Standing on the destination cell: arrived, no step.
     CHECK(route_step(g, f, ivec3{40, 40, 40}, ivec3{40, 40, 40}) == kFlowArrived);
@@ -1095,26 +1138,35 @@ static void test_route_step() {
     MacroGrid walled;
     walled.fill_cell(0, 0, 0, 1);
     FineNav fw;
-    bake_fine(walled, fw);
+    bake_fine(walled, 4, fw);
     CoarseGraph gw{};
-    bake_coarse(walled, gw);
+    bake_coarse(walled, 4, gw);
     CHECK(fw.nearest_node(0, 0, 0) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{16, 16, 16}, ivec3{0, 0, 0}) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{0, 0, 0}, ivec3{16, 16, 16}) == kFlowNone);
 
-    // Coarse-unreachable branch: wall node 0's centre in on all 6 faces so its
-    // air pocket is a disconnected component. Its anchor still claims its own
-    // cell, but nothing reaches it, so routing to it returns kFlowNone via the
-    // O(1) coarse reachability guard — a different path than "target in solid".
+    // Coarse-unreachable branch: seal node 0's centre into a TWO-cell air
+    // pocket (its cell + eastern neighbour, walled all around). Под гранным
+    // законом одноклеточный карман — ИЗОЛЯТОР (ни одного проходимого ребра),
+    // якорь в нём не сеется; двухклеточный держит живое ребро, узел сеется и
+    // владеет карманом, но отрезан от мира — routing to it returns kFlowNone
+    // via the O(1) coarse reachability guard, a different path than "target
+    // in solid".
     MacroGrid isolated;
-    for (int d = 0; d < 6; ++d)
-        isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
-                           16 + kNavDir[d][2], 1);
+    for (int d = 0; d < 6; ++d) {
+        if (d != 1) // восточная грань узла — вход в карман, не стена
+            isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
+                               16 + kNavDir[d][2], 1);
+        if (d != 0) // западная грань соседа смотрит назад в узел
+            isolated.fill_cell(17 + kNavDir[d][0], 16 + kNavDir[d][1],
+                               16 + kNavDir[d][2], 1);
+    }
     FineNav fi;
-    bake_fine(isolated, fi);
+    bake_fine(isolated, 4, fi);
     CoarseGraph gi{};
-    bake_coarse(isolated, gi);
-    CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its own cell
+    bake_coarse(isolated, 4, gi);
+    CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its pocket
+    CHECK(fi.nearest_node(17, 16, 16) == 0);
     CHECK(gi.dist[1][0] == kUnreachable);     // but it is cut off from the rest
     CHECK(route_step(gi, fi, ivec3{48, 48, 48}, ivec3{16, 16, 16}) == kFlowNone);
 }
@@ -1324,6 +1376,7 @@ int main() {
     test_parallel_for();
     test_nav_coarse();
     test_nav_fine();
+    test_nav_subvoxel_wall();
     test_route_step();
     test_destruct_all();
 
