@@ -29,6 +29,10 @@
 #include "game/npc_pool.h"
 #include "world/types.h" // kVoxelSize — вывод kBodyClearanceSub
 
+namespace giga {
+class MacroGrid; // world/macro_grid.h — body_wall_adjacent читает маски законом клиренса
+}
+
 namespace giga::game {
 
 // Game-layer component: the alife identity behind an embodied entity. Every
@@ -63,6 +67,17 @@ inline constexpr int kBodyClearanceSub =
     (static_cast<float>(static_cast<int>(kBodyWidthSub)) < kBodyWidthSub ? 1
                                                                          : 0);
 static_assert(kBodyClearanceSub == 4, "derivation: ceil(0.8 m / 0.25 m) = 4");
+
+// «Стена рядом с телом»: хотя бы одна из четырёх боковых граней клетки тела
+// непроходима для габарита kBodyClearanceSub. ЕДИНСТВЕННАЯ проба стены для
+// поведения (WallBias-урон Арматуры в combat, прижимной шаг в wander) — была
+// двумя дословными дублями по grid.cell != kCellAir, то есть отвечала ТИПОМ
+// КЛЕТКИ на локальный вопрос (§60): лепленая стена в клетке «воздух» была
+// невидима, а колонна в дальнем углу клетки читалась как стена вплотную.
+// Теперь ответ — закон клиренса ([world/clearance.h]) с тем же габаритом,
+// которым тело ходит. Боковые оси x/y — как в прежних дублях (вопрос фрейма
+// гравитации у этой пробы прежний, не новый).
+bool body_wall_adjacent(const MacroGrid& grid, const vec3& pos);
 
 // Convert a record's stature to the collider half-height (world units). Half of
 // the height, since the AABB is expressed as half-extents around Transform::pos.

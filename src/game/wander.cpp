@@ -100,20 +100,6 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
 
 namespace {
 
-// Is any of the four cardinal neighbours solid? The reference's wall-bias context
-// runs a radius-2 disc scan and derives several scores from it; only `adjacentWall`
-// has a consumer here, so only that is computed — four cell reads instead of
-// twenty-one, for the one number that is actually read.
-bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
-    return grid.cell(cx + 1, cy, cz) != kCellAir ||
-           grid.cell(cx - 1, cy, cz) != kCellAir ||
-           grid.cell(cx, cy + 1, cz) != kCellAir ||
-           grid.cell(cx, cy - 1, cz) != kCellAir;
-}
-
 } // namespace
 
 void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
@@ -346,7 +332,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     // 69 kinds, so the four cardinal cell reads stay off the other
                     // 64 — wave 2 added the query for exactly one more kind.
                     if (wall_query_needed(md.aiFlags, beh)) {
-                        const bool wall = adjacent_wall(grid, tr.pos);
+                        const bool wall = body_wall_adjacent(grid, tr.pos);
                         const MoveMult bm = behaviour_move_mult(beh, wall);
                         sp *= bm.claimed ? bm.mult
                                          : wall_bias_speed(md.aiFlags, wall);

@@ -90,6 +90,37 @@ inline std::uint64_t licensed_epoch_start(std::uint32_t mobId) {
 
 } // namespace behaviours_detail
 
+// §60: проба «стена рядом» (WallBias-урон, прижимной шаг) отвечает АТОМАМИ
+// через закон клиренса, а не типом клетки. Оба края расхождения со снесённым
+// дублем grid.cell != kCellAir испытаны: лепленая панель в «воздушной» клетке
+// ВИДНА, колонна в дальней половине типизированной клетки — НЕ стена вплотную.
+static void test_wall_probe(MacroGrid& grid) {
+    // Клетка (50,50,50) далеко от арены блоков ниже (те живут у (100,110)).
+    const vec3 at{101.0f, 101.0f, 101.0f}; // центр клетки (50,50,50)
+    CHECK(!body_wall_adjacent(grid, at)); // пустота — стен нет
+
+    // Панель в один субвоксель у ближней грани соседа +x. Тип клетки НЕ
+    // ставится — по старому закону она «воздух» и стены не было вовсе.
+    for (int sy = 0; sy < kSubDim; ++sy)
+        for (int sz = 0; sz < kSubDim; ++sz)
+            grid.mask(51, 50, 50).set(sub_bit(0, sy, sz));
+    CHECK(body_wall_adjacent(grid, at));
+    grid.mask(51, 50, 50).clear_all();
+
+    // Колонна в ДАЛЬНЕЙ половине типизированной клетки-соседа: старый закон
+    // читал тип и кричал «стена», хотя до материи 1.5 м и тело проходит.
+    grid.set_cell(51, 50, 50, kMatConcrete);
+    for (int sy = 0; sy < kSubDim; ++sy)
+        for (int sz = 0; sz < kSubDim; ++sz) {
+            grid.mask(51, 50, 50).set(sub_bit(6, sy, sz));
+            grid.mask(51, 50, 50).set(sub_bit(7, sy, sz));
+        }
+    CHECK(!body_wall_adjacent(grid, at));
+    grid.mask(51, 50, 50).clear_all();
+    grid.set_cell(51, 50, 50, kCellAir);
+    std::printf("[behaviours] проба стены: панель видна, дальняя колонна — нет\n");
+}
+
 static void test_behaviours_all() {
     using namespace behaviours_detail;
 
@@ -101,6 +132,8 @@ static void test_behaviours_all() {
     // laid out so no two of them share a cell or a neighbour.
     MacroGrid grid;
     grid.fill_cell(56, 50, 1, kMatConcrete);   // the ONE wall in the arena
+
+    test_wall_probe(grid); // прибирает за собой — арена блоков не задета
 
     nav::CoarseGraph coarse{};                 // next[i][j] == 0 for every pair
     nav::FineNav fine;

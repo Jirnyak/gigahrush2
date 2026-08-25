@@ -45,16 +45,6 @@ namespace giga::game {
 
 namespace {
 
-bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
-    return grid.cell(cx + 1, cy, cz) != kCellAir ||
-           grid.cell(cx - 1, cy, cz) != kCellAir ||
-           grid.cell(cx, cy + 1, cz) != kCellAir ||
-           grid.cell(cx, cy - 1, cz) != kCellAir;
-}
-
 // Component `a` of a vec3 by index, 0/1/2.
 //
 // The bullet RICOCHET below is written entirely over this accessor rather than
@@ -183,7 +173,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                 const auto beh = static_cast<MobBehaviour>(def.behaviour);
                 if (wall_query_needed(def.aiFlags, beh)) {
                     if (const Transform* tr = reg.try_get<Transform>(target)) {
-                        const bool nearWall = adjacent_wall(*grid, tr->pos);
+                        const bool nearWall = body_wall_adjacent(*grid, tr->pos);
                         const float incMult = behaviour_incoming_mult(beh, nearWall);
                         if (incMult != 1.0f) {
                             int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
@@ -739,7 +729,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // Wall-adjacency bias and precedence logic
         const auto beh = static_cast<MobBehaviour>(def.behaviour);
         const bool nearWall = wall_query_needed(def.aiFlags, beh)
-                                  ? adjacent_wall(grid, tr.pos)
+                                  ? body_wall_adjacent(grid, tr.pos)
                                   : false;
         if (behaviour_claims_damage(beh)) {
             dmg *= behaviour_damage_mult(beh, nearWall);

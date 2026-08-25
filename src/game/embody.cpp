@@ -1,6 +1,8 @@
 #include "game/embody.h"
 
 #include "game/equip.h"    // Equipped — the empty decision cells on embodiment
+#include "world/clearance.h"  // face_clearance_at — закон пробы стены
+#include "world/macro_grid.h"
 #include "game/faction.h"
 #include "game/prop_system.h" // Interactable — a living body is a menu ([conversation.md])
 #include "game/rpg.h"      // RpgStats, random_rpg
@@ -20,6 +22,19 @@ std::uint16_t resolved_height_mm(std::uint16_t stored) {
 }
 
 } // namespace
+
+bool body_wall_adjacent(const MacroGrid& grid, const vec3& pos) {
+    const int cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
+    const int cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
+    const int cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    // Четыре боковые грани клетки тела; «стена» = грань, в которую тело не
+    // пролезает. Бит грани у младшей клетки оси: минус-грани спрашиваются у
+    // минус-соседа ([world/clearance.h]).
+    return face_clearance_at(grid, cx, cy, cz, 0) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx - 1, cy, cz, 0) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx, cy, cz, 1) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx, cy - 1, cz, 1) < kBodyClearanceSub;
+}
 
 float body_half_height(std::uint16_t height_mm) {
     return resolved_height_mm(height_mm) * 0.001f * 0.5f;
