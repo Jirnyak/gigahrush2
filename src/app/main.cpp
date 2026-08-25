@@ -8042,11 +8042,14 @@ int main(int argc, char** argv) {
             // пушем: весь световой цикл (лампы + теневые DDA-лучи) на
             // полразрешения, полный кадр возьмёт его билатерально
             // ([render/raymarch_pass.h] record_light, ddalight.md).
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Light);
             if (!skip_pass("world"))
                 raymarchPass.record_light(cmd, renderer.currentFrame, push,
                                           lightGrid.descriptor_set(),
                                           renderer.swap().extent);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Light);
 
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Raster);
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
             // Each pass is bracketed by GPU timestamps as well as by the CPU
             // clock: the two answer different questions and need opposite fixes.
@@ -8097,6 +8100,11 @@ int main(int argc, char** argv) {
             // яркости кадра, осознанной системой, не суммой дистанций.
             // Сцена закрыта; CRT-треугольник в свопчейн; ImGui — поверх, резкий.
             renderer.begin_post_pass();
+            // Скобка Raster закрывается ПОСЛЕ конца мирового пасса (он
+            // завершён внутри begin_post_pass) — тайлер обязан дорисовать
+            // его фрагменты до этого таймстемпа. Пост+CRT остаются в
+            // «frame − Σ скобок».
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Raster);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
@@ -8284,7 +8292,10 @@ int main(int argc, char** argv) {
                         static const char* kPassName[] = {
                             "lightgrid", "voxelflush", "cull", "sim",
                             "world",     "bodies",     "props", "drawphys",
-                            "hud"};
+                            "hud",       "light",      "raster"};
+                        static_assert(sizeof(kPassName) / sizeof(kPassName[0]) ==
+                                          gpu::kGpuPassCount,
+                                      "имена пассов == enum");
                         for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p)
                             std::fprintf(
                                 stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f\n",

@@ -79,6 +79,13 @@ enum class GpuPass : std::uint32_t {
     Props,      // prop_pass
     DrawPhysics, // wire/cloth/particle draw
     Hud,
+    // Честные скобки для тайловых GPU (Apple/MoltenVK): таймстемп ВНУТРИ
+    // рендер-пасса меряет пустоту — фрагментная работа исполняется вся на
+    // vkCmdEndRenderPass. Меряем ЦЕЛЫЕ рендер-пассы: скобка вокруг
+    // завершённого пасса честна и на тайлере, и на IMR. Старые пер-дров
+    // скобки внутри пасса остаются — на десктопных IMR они осмысленны.
+    Light,  // световой полупасс (полразрешения, свой рендер-пасс целиком)
+    Raster, // главный мировой рендер-пасс целиком (begin_pass..end)
     kCount
 };
 inline constexpr std::uint32_t kGpuPassCount =
