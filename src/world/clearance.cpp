@@ -101,8 +101,13 @@ std::uint8_t face_clearance_at(const MacroGrid& g, int x, int y, int z,
 }
 
 std::uint8_t face_clearance(const SubMask& a, const SubMask& b, int axis) {
-    // Обе половины пусты — самый массовый случай этажа (воздух над воздухом):
-    // ответ 8 без проекций и эрозии.
+    // Воздух-над-воздухом — подавляющий случай этажа (полных клеток 0.4%, а
+    // непустых масок и того меньше): 16 OR-ов слов вместо двух проекций с
+    // ниблово-байтовой сборкой. Замер на диффузионном ребилде всего этажа:
+    // 45 -> 12 мс.
+    std::uint64_t any = 0;
+    for (int i = 0; i < kSubDim; ++i) any |= a.words[i] | b.words[i];
+    if (any == 0) return static_cast<std::uint8_t>(kSubDim);
     const std::uint64_t solid = half_proj_solid(a, axis, /*high=*/true) |
                                 half_proj_solid(b, axis, /*high=*/false);
     if (solid == 0) return static_cast<std::uint8_t>(kSubDim);

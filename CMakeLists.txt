@@ -640,7 +640,11 @@ if(GIGA_BUILD_TESTS)
         # (красный до фикса: обход лепленой стены 96, флоу не в стену, спуск
         # 111) и двухклеточный карман в route_step (одноклеточный стал
         # изолятором по построению) = 23498.
-        PASS_REGULAR_EXPRESSION "23498/23498 checks passed"
+        # 23498 + 4 on 2026-08-26: диффузия на гранных гейтах — пин «панель в
+        # 1 субвоксель глушит сквозной поток за 2 шага, но обтекается за 4»
+        # (ёмкость и поток — разные вопросы; мутация клеточного гейта = 3
+        # красных) = 23502.
+        PASS_REGULAR_EXPRESSION "23502/23502 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

@@ -262,7 +262,18 @@ struct DiffusionStep {
 // boundaries and read on every sweep — the same bake-once/read-O(1) shape as nav.
 struct DiffusionScratch {
     std::vector<float> back;         // 8.00 MiB, sized on first sweep, then reused
-    std::vector<std::uint64_t> open; // 256 KiB walkability bitset, 1 = cell is open
+    // ЁМКОСТЬ: 1 = клетка может ДЕРЖАТЬ запах (в маске есть воздух, !full).
+    // Это честный поклеточный вопрос — стена не хранит поле; вопросом ПОТОКА
+    // он больше не является (эпик occupancy 2026-08-26, §60/К1-10: прежний
+    // код гейтил им и поток, и запах тёк сквозь лепленые стены).
+    std::vector<std::uint64_t> open; // 256 KiB, 1 = cell can hold the field
+    // ПОТОК: гранные битсеты — 1 = переход открыт газу. Закон один на дерево
+    // ([world/clearance.h]): face_clearance >= 1, «газу хватает одного
+    // атома» — сквозной воздушной колонки через полуокна обеих клеток.
+    // Бит грани лежит у МЛАДШЕЙ клетки оси: faceX[i] = грань (i, i+x̂) и т.д.
+    std::vector<std::uint64_t> faceX; // 3 × 256 KiB
+    std::vector<std::uint64_t> faceY;
+    std::vector<std::uint64_t> faceZ;
 
     // 4 KiB, one bit per 64-cell run: 1 = that run of the field is not all zero. Sized
     // and REWRITTEN by every sweep, so it is pure scratch — nothing outside
@@ -274,12 +285,13 @@ struct DiffusionScratch {
     // valve; diffusion_mark_cell is the cheap one.
     bool geomDirty = false;
 
-    // True once `open` reflects a MacroGrid. A sweep with an empty bitset builds it
-    // from the grid it was handed rather than silently treating the world as solid.
-    bool walkable_ready() const { return !open.empty(); }
+    // True once the bitsets reflect a MacroGrid. A sweep with empty bitsets
+    // builds them from the grid it was handed rather than silently treating
+    // the world as solid.
+    bool walkable_ready() const { return !open.empty() && !faceX.empty(); }
 };
 
-// (Re)build the walkability bitset from `grid`, and clear `geomDirty`. Call at every
+// (Re)build the capacity + face-flux bitsets from `grid`, and clear `geomDirty`. Call at every
 // geometry boundary the nav bake is also called at — floor load, post-samosbor stitch,
 // and after any dirty local re-bake — because a stale bitset diffuses danger through a
 // wall that now exists, or holds it out of a doorway that was just blown open.
@@ -289,7 +301,8 @@ struct DiffusionScratch {
 // it twice costs time and nothing else.
 void diffusion_refresh_walkable(const MacroGrid& grid, DiffusionScratch& scratch);
 
-// O(1) patch of ONE cell's walkability bit — the sanctioned "dirty local re-bake"
+// O(1) patch of ONE cell — её бит ёмкости и ШЕСТЬ граней (3 свои + 3 минус-
+// соседей), the sanctioned "dirty local re-bake"
 // ([performance.md] §Two regimes) for a caller that knows exactly which cell moved.
 // A door is the live case: [game/door.cpp] fill_cell/clear_cells a door's column on
 // every open and every break, which is a geometry mutation on the tick that a full
@@ -400,10 +413,10 @@ DiffusionStep diffusion_step(World& world, const DiffusionParams& params = {});
 // pass. Use the bitset overload below for a crowd.
 vec3 diffusion_gradient(const Field<float>& f, const MacroGrid& g, int x, int y, int z);
 
-// Same gradient, answering walkability from a DiffusionScratch bitset (256 KiB, L2
-// resident) instead of the 128 MiB mask array. Identical results by construction —
-// both forms ask `!mask.full()`, one of them just asked it earlier. This is the form a
-// per-agent tick should call.
+// Same gradient, answering flux from the DiffusionScratch face bitsets (L2
+// resident) instead of the 128 MiB mask array. Identical results by
+// construction — both forms ask the ONE clearance law, one of them just asked
+// it earlier. This is the form a per-agent tick should call.
 vec3 diffusion_gradient(const Field<float>& f, const DiffusionScratch& scratch, int x,
                         int y, int z);
 

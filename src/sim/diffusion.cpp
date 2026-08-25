@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring> // std::memcmp, std::memset — the group zero test and the group clear
 
+#include "world/clearance.h"  // face_clearance_at — единый закон потока (occupancy)
 #include "world/macro_grid.h" // giga::MacroGrid, SubMask
 #include "world/types.h"      // kMacroCells, kMacroDim, kCellSize, macro_index, wrap_macro
 
@@ -92,12 +93,18 @@ constexpr std::size_t kGroupWords = (kOpenWords + 63) / 64;
 // on a P-core at a de-boosted clock, is ~2x the same sweep on a boosted P-core. That is
 // why test_diffusion_all asserts work counts and merely PRINTS milliseconds.
 
-// A cell participates unless it is FULLY solid — the same coarse walkability
-// [world/nav.h] bakes against and [sim/physics.h] collides against. A wall holds no
-// scent and passes no flux. Nothing in the tree writes a PARTIAL mask today, so in
-// practice this is air-vs-solid.
+// Два РАЗНЫХ вопроса, бывших одним предикатом (ложная посылка «никто не
+// пишет частичную маску» — К1-10; карв пишет её тысячами, и запах тёк сквозь
+// лепленые стены, §60):
+//  - ЁМКОСТЬ, поклеточно: клетка держит поле, если в маске есть воздух.
+//  - ПОТОК, погранно: переход открыт газу при face_clearance >= 1 — сквозной
+//    воздушной колонке через полуокна обеих клеток ([world/clearance.h] —
+//    ЕДИНСТВЕННОЕ место, где живёт закон; газу хватает одного атома, S2).
 inline bool cell_open(const MacroGrid& g, int x, int y, int z) {
     return !g.mask(x, y, z).full();
+}
+inline bool face_open(const MacroGrid& g, int x, int y, int z, int axis) {
+    return face_clearance_at(g, x, y, z, axis) >= 1;
 }
 
 // Macro cell containing a world-space coordinate. Truncation then wrap, matching
@@ -107,24 +114,26 @@ inline int cell_of(float coord) {
     return wrap_macro(static_cast<int>(coord / kCellSize));
 }
 
-// The gradient, once, over any walkability oracle. `isOpen(x, y, z)` takes RAW
-// (possibly out-of-range) coordinates and wraps internally, exactly as Field::at does,
-// so the two halves of every difference below agree about which cell they mean.
+// The gradient, once, over any FACE oracle. `openFace(x, y, z, axis)` takes RAW
+// (possibly out-of-range) coordinates of the axis-МЛАДШЕЙ клетки грани and wraps
+// internally, exactly as Field::at does, so the two halves of every difference
+// below agree about which faces they mean.
 //
-// Per axis: central difference when both sides are open; one-sided toward the open side
-// when the other is a wall (a wall carries no flux, so it must not contribute a slope);
-// zero when both sides are walls. Substituting `here` for a walled side is what makes
-// the one-sided case fall out of the same expression.
-template <class OpenFn>
-vec3 gradient_impl(const Field<float>& f, OpenFn isOpen, int x, int y, int z) {
+// Per axis: central difference when both faces pass flux; one-sided toward the
+// open face when the other is walled (a wall carries no flux, so it must not
+// contribute a slope); zero when both are walled. Substituting `here` for a
+// walled side is what makes the one-sided case fall out of the same expression.
+template <class FaceFn>
+vec3 gradient_impl(const Field<float>& f, FaceFn openFace, int x, int y, int z) {
     const float here = f.at(x, y, z);
     auto slope = [&](int ax) -> float {
         int p[3] = {x, y, z};
         int m[3] = {x, y, z};
         p[ax] += 1;
         m[ax] -= 1;
-        const bool pOpen = isOpen(p[0], p[1], p[2]);
-        const bool mOpen = isOpen(m[0], m[1], m[2]);
+        // Грань (here → p) лежит у here; грань (m → here) — у m.
+        const bool pOpen = openFace(x, y, z, ax);
+        const bool mOpen = openFace(m[0], m[1], m[2], ax);
         const float hp = pOpen ? f.at(p[0], p[1], p[2]) : here;
         const float hm = mOpen ? f.at(m[0], m[1], m[2]) : here;
         if (pOpen && mOpen) return 0.5f * (hp - hm);
@@ -145,12 +154,28 @@ void diffusion_refresh_walkable(const MacroGrid& grid, DiffusionScratch& scratch
     // assign() rather than resize() so a rebuild starts from all-solid and cannot
     // inherit stale open bits from the previous floor's geometry.
     scratch.open.assign(kOpenWords, 0ull);
+    scratch.faceX.assign(kOpenWords, 0ull);
+    scratch.faceY.assign(kOpenWords, 0ull);
+    scratch.faceZ.assign(kOpenWords, 0ull);
     std::uint64_t* words = scratch.open.data();
+    std::uint64_t* fx = scratch.faceX.data();
+    std::uint64_t* fy = scratch.faceY.data();
+    std::uint64_t* fz = scratch.faceZ.data();
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y) {
             std::size_t i = macro_index(0, y, z); // x is the contiguous axis
-            for (int x = 0; x < kMacroDim; ++x, ++i)
-                if (cell_open(grid, x, y, z)) words[i >> 6] |= 1ull << (i & 63);
+            for (int x = 0; x < kMacroDim; ++x, ++i) {
+                const std::uint64_t bit = 1ull << (i & 63);
+                if (cell_open(grid, x, y, z)) {
+                    words[i >> 6] |= bit;
+                    // Грани считаются только от непустой ёмкости: у полной
+                    // клетки все три плюс-грани глухие по закону (полуокно
+                    // без воздуха), сам вызов — лишняя эрозия на 40% клеток.
+                    if (face_open(grid, x, y, z, 0)) fx[i >> 6] |= bit;
+                    if (face_open(grid, x, y, z, 1)) fy[i >> 6] |= bit;
+                    if (face_open(grid, x, y, z, 2)) fz[i >> 6] |= bit;
+                }
+            }
         }
     scratch.geomDirty = false;
     const double ms = std::chrono::duration<double, std::milli>(
@@ -233,6 +258,9 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
     const float* __restrict src = f.data().data();
     float* __restrict dst = scratch.back.data();
     const std::uint64_t* __restrict open = scratch.open.data();
+    const std::uint64_t* __restrict faceXp = scratch.faceX.data();
+    const std::uint64_t* __restrict faceYp = scratch.faceY.data();
+    const std::uint64_t* __restrict faceZp = scratch.faceZ.data();
 
     // Clamped, not rejected: there is no exception to raise ([AGENTS.md]) and a rate
     // above 1/6 makes the explicit 6-neighbour stencil unstable, so the checkerboard
@@ -340,13 +368,15 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
                 const int xm = (x == 0) ? (kMacroDim - 1) : (x - 1);
                 const int xp = (x == kMacroDim - 1) ? 0 : (x + 1);
                 const float c = rs[x];
+                // Гейт потока — ГРАННЫЙ бит; бит грани лежит у младшей клетки
+                // оси, поэтому «минус»-сосед проверяется по СВОЕМУ индексу.
                 float acc = 0.0f;
-                if (bit_open(open, i0 + static_cast<std::size_t>(xm))) acc += rs[xm] - c;
-                if (bit_open(open, i0 + static_cast<std::size_t>(xp))) acc += rs[xp] - c;
-                if (bit_open(open, i + ym)) acc += rym[x] - c;
-                if (bit_open(open, i + yp)) acc += ryp[x] - c;
-                if (bit_open(open, i + zm)) acc += rzm[x] - c;
-                if (bit_open(open, i + zp)) acc += rzp[x] - c;
+                if (bit_open(faceXp, i0 + static_cast<std::size_t>(xm))) acc += rs[xm] - c;
+                if (bit_open(faceXp, i)) acc += rs[xp] - c;
+                if (bit_open(faceYp, i + ym)) acc += rym[x] - c;
+                if (bit_open(faceYp, i)) acc += ryp[x] - c;
+                if (bit_open(faceZp, i + zm)) acc += rzm[x] - c;
+                if (bit_open(faceZp, i)) acc += rzp[x] - c;
                 float next = (c + rate * acc) * keep;
                 if (next < minLevel) next = 0.0f;
                 rd[x] = next;
@@ -370,8 +400,11 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
                     !group_hot(w0 + (g + 1) % kWordsPerRow) && !group_hot(wym + g) &&
                     !group_hot(wyp + g) && !group_hot(wzm + g) && !group_hot(wzp + g))
                     continue; // provably all zero — see the PASS 1 proof above
-                const std::uint64_t mym = open[wym + g], myp = open[wyp + g];
-                const std::uint64_t mzm = open[wzm + g], mzp = open[wzp + g];
+                // Гранные слова группы: x-грани свои (бит b = грань b→b+1),
+                // минус-грани y/z лежат в СЛОВЕ МИНУС-СОСЕДА по своей оси.
+                const std::uint64_t fxw = faceXp[w0 + g];
+                const std::uint64_t fym = faceYp[wym + g], fyp = faceYp[w0 + g];
+                const std::uint64_t fzm = faceZp[wzm + g], fzp = faceZp[w0 + g];
 
                 edge_cell(xg); // x order: bit 0, then bits 1..62, then bit 63
 
@@ -385,21 +418,21 @@ DiffusionStep diffusion_step(World& world, DiffusionScratch& scratch,
                     m &= m - 1ull;
                     const int x = xg + b;
                     const float c = rs[x];
-                    // Discrete Laplacian over the OPEN neighbours only, in the same
-                    // order and with the same float operations as the per-cell form it
-                    // replaced. Each open pair (a, b) exchanges rate*(b - a) and
-                    // rate*(a - b), which is symmetric, so the sum over the field is
-                    // preserved exactly; a walled neighbour contributes to neither
-                    // side, which is precisely a no-flux boundary. Total mass is
-                    // therefore multiplied by `keep` and by nothing else — the property
-                    // test_diffusion_all pins.
+                    // Discrete Laplacian over the OPEN FACES only, in the same
+                    // order and with the same float operations as before. Обе
+                    // клетки пары читают ОДИН гранный бит, so each open pair
+                    // exchanges rate*(b - a) and rate*(a - b) symmetric, and
+                    // the sum over the field is preserved exactly; a walled
+                    // face contributes to neither side — precisely a no-flux
+                    // boundary. Total mass is therefore multiplied by `keep`
+                    // and by nothing else — the property test_diffusion pins.
                     float acc = 0.0f;
-                    if ((self >> (b - 1)) & 1ull) acc += rs[x - 1] - c;
-                    if ((self >> (b + 1)) & 1ull) acc += rs[x + 1] - c;
-                    if ((mym >> b) & 1ull) acc += rym[x] - c;
-                    if ((myp >> b) & 1ull) acc += ryp[x] - c;
-                    if ((mzm >> b) & 1ull) acc += rzm[x] - c;
-                    if ((mzp >> b) & 1ull) acc += rzp[x] - c;
+                    if ((fxw >> (b - 1)) & 1ull) acc += rs[x - 1] - c;
+                    if ((fxw >> b) & 1ull) acc += rs[x + 1] - c;
+                    if ((fym >> b) & 1ull) acc += rym[x] - c;
+                    if ((fyp >> b) & 1ull) acc += ryp[x] - c;
+                    if ((fzm >> b) & 1ull) acc += rzm[x] - c;
+                    if ((fzp >> b) & 1ull) acc += rzp[x] - c;
                     float next = (c + rate * acc) * keep;
                     // Clamps residue AND any small negative excursion, so the field
                     // cannot accumulate a tail of denormals that costs time and means
@@ -438,26 +471,30 @@ vec3 diffusion_gradient(const Field<float>& f, const MacroGrid& g, int x, int y,
                         int z) {
     return gradient_impl(
         f,
-        [&g](int cx, int cy, int cz) {
-            return cell_open(g, wrap_macro(cx), wrap_macro(cy), wrap_macro(cz));
+        [&g](int cx, int cy, int cz, int ax) {
+            return face_open(g, wrap_macro(cx), wrap_macro(cy), wrap_macro(cz),
+                             ax);
         },
         x, y, z);
 }
 
 vec3 diffusion_gradient(const Field<float>& f, const DiffusionScratch& scratch, int x,
                         int y, int z) {
-    // An unbuilt bitset would report every cell solid and hand back a zero gradient,
+    // Unbuilt bitsets would report every face walled and hand back a zero gradient,
     // which reads as "nothing here" instead of as "I do not know". Say the second thing
     // by falling back to a bare central difference over the field alone: with no
     // geometry loaded there are no walls to respect.
     if (!scratch.walkable_ready())
-        return gradient_impl(f, [](int, int, int) { return true; }, x, y, z);
-    const std::uint64_t* open = scratch.open.data();
+        return gradient_impl(f, [](int, int, int, int) { return true; }, x, y, z);
+    const std::uint64_t* fX = scratch.faceX.data();
+    const std::uint64_t* fY = scratch.faceY.data();
+    const std::uint64_t* fZ = scratch.faceZ.data();
     return gradient_impl(
         f,
-        [open](int cx, int cy, int cz) {
-            return bit_open(open, macro_index(wrap_macro(cx), wrap_macro(cy),
-                                              wrap_macro(cz)));
+        [fX, fY, fZ](int cx, int cy, int cz, int ax) {
+            const std::uint64_t* v = ax == 0 ? fX : (ax == 1 ? fY : fZ);
+            return bit_open(v, macro_index(wrap_macro(cx), wrap_macro(cy),
+                                           wrap_macro(cz)));
         },
         x, y, z);
 }
