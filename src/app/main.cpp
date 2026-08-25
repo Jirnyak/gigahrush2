@@ -450,6 +450,56 @@ struct CarveTiming {
     float flushMs = 0.0f;      // voxelMirror.flush (CPU-сторона стейджинга)
 };
 static CarveTiming g_carveT;
+
+// СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH, баг «дыра заросла»): кольцо
+// выбитых атомов + скан «стал ли атом снова твёрдым» в CPU-каноне.
+// WATCH=1 — скан раз в 25 тиков в сим-секции; WATCH=2 — скан в ЧЕТЫРЁХ
+// точках кадра (после шва / после дверей / после сима / после рендера),
+// каждая печатает своё имя: виновник — система между двумя точками.
+struct RegrowAtom {
+    std::uint32_t key;
+    CellType was;
+};
+static int g_regrowWatch = 0; // 0 выкл / 1 редкий скан / 2 поточечный
+static std::vector<RegrowAtom> g_regrowRing;
+static std::size_t g_regrowHead = 0;
+static std::uint32_t g_regrowVerifies = 0;
+
+static void regrow_check(World& w, gpu::VoxelMirror& mirror,
+                         const char* where, std::uint64_t tick) {
+    if (g_regrowRing.empty()) return;
+    const SubField<CellType>* rf =
+        w.subfields().find<CellType>(kSubMaterialName);
+    for (auto& ca : g_regrowRing) {
+        if (ca.key == 0 && ca.was == 0) continue;
+        const std::size_t ci = ca.key >> 9;
+        const int bit = static_cast<int>(ca.key & 511u);
+        const CellType* pg = rf ? rf->page(ci) : nullptr;
+        CellType m = kCellAir;
+        if (pg) m = pg[bit];
+        else {
+            const CellType base = w.grid().types()[ci];
+            const SubMask& mk = w.grid().masks()[ci];
+            if (mk.test(bit)) m = base;
+            else if (mk.empty() && material_is_medium(base)) m = base;
+        }
+        if (m == kCellAir || material_is_medium(m)) continue;
+        std::fprintf(stderr,
+                     "[regrow] tick %llu ТОЧКА <%s> cell %zu bit %d: был %s, "
+                     "стал %s — ВОСКРЕС В CPU-КАНОНЕ\n",
+                     static_cast<unsigned long long>(tick), where, ci, bit,
+                     kMatNames[static_cast<int>(ca.was)],
+                     kMatNames[static_cast<int>(m)]);
+        if (g_regrowVerifies < 3) {
+            ++g_regrowVerifies;
+            const bool ok = mirror.verify(w);
+            std::fprintf(stderr, "[regrow] mirror verify: %s\n",
+                         ok ? "CPU==GPU" : "DIVERGED");
+        }
+        ca.key = 0;
+        ca.was = 0;
+    }
+}
 // CPU-цена мира-автомата в кадре (профиль по числам, закон дома): шов
 // назад (apply) и запись подтиков (record). Лейна poll УБИТА (К1-15,
 // аудит 2026-08-25): печатала вечный 0.00 — читалось «poll бесплатен»
@@ -3477,6 +3527,9 @@ int main(int argc, char** argv) {
             const auto ctMedA = std::chrono::steady_clock::now();
             mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
                                       &mediumMaskChanged);
+            if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+                regrow_check(stack.layer(activeLayer), voxelMirror, "шов",
+                             simTick);
             g_mediumApplyMs = carve_ms_since(ctMedA);
             // Маски обломков (инкремент 5) едут с материей: изменённые
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
@@ -4846,14 +4899,15 @@ int main(int argc, char** argv) {
                 // материалом — rubble_* = легитимная осадка крошки,
                 // исходник = воскрешение; на первом воскрешении — полная
                 // сверка зеркала CPU==GPU. Логи читает аудит, не владелец.
-                static const bool kRegrowWatch =
-                    std::getenv("GIGA_REGROW_WATCH") != nullptr;
-                struct CarvedAtom {
-                    std::uint32_t key;
-                    CellType was;
-                };
-                static std::vector<CarvedAtom> regrowRing;
-                static std::size_t regrowHead = 0;
+                {
+                    static bool once = false;
+                    if (!once) {
+                        once = true;
+                        const char* e = std::getenv("GIGA_REGROW_WATCH");
+                        g_regrowWatch = e ? std::atoi(e) : 0;
+                        if (g_regrowWatch < 0) g_regrowWatch = 0;
+                    }
+                }
                 auto carve_settle = [&](std::uint32_t seed) {
                     auto ct0 = std::chrono::steady_clock::now();
                     // Патч поля по dirtyCells — он же детектор «задет ли
@@ -4927,62 +4981,22 @@ int main(int argc, char** argv) {
                         dressingSetChanged = true;
                     }
                     g_carveT.antrMs += carve_ms_since(ct0);
-                    if (kRegrowWatch) {
+                    if (g_regrowWatch > 0) {
                         constexpr std::size_t kRegrowCap = 8192;
-                        if (regrowRing.size() < kRegrowCap)
-                            regrowRing.resize(kRegrowCap, CarvedAtom{0, 0});
+                        if (g_regrowRing.size() < kRegrowCap)
+                            g_regrowRing.resize(kRegrowCap, RegrowAtom{0, 0});
                         for (const CarvedVoxel& v : carveResult.destroyed) {
-                            regrowRing[regrowHead] = CarvedAtom{
+                            g_regrowRing[g_regrowHead] = RegrowAtom{
                                 (v.cell << 9) | v.bit, v.mat};
-                            regrowHead = (regrowHead + 1) % kRegrowCap;
+                            g_regrowHead = (g_regrowHead + 1) % kRegrowCap;
                         }
                     }
                 };
-                // Скан сторожа: раз в 25 тиков, читает CPU-канон.
-                if (kRegrowWatch && (simTick % 25u) == 0u &&
-                    !regrowRing.empty() && activeLayer != kInvalidLayer) {
-                    World& rw = stack.layer(activeLayer);
-                    const SubField<CellType>* rf =
-                        rw.subfields().find<CellType>(kSubMaterialName);
-                    static bool verifiedOnce = false;
-                    for (auto& ca : regrowRing) {
-                        if (ca.key == 0 && ca.was == 0) continue;
-                        const std::size_t ci = ca.key >> 9;
-                        const int bit = static_cast<int>(ca.key & 511u);
-                        const CellType* pg = rf ? rf->page(ci) : nullptr;
-                        CellType m = kCellAir;
-                        if (pg) m = pg[bit];
-                        else {
-                            const CellType base = rw.grid().types()[ci];
-                            const SubMask& mk = rw.grid().masks()[ci];
-                            if (mk.test(bit)) m = base;
-                            else if (mk.empty() && material_is_medium(base))
-                                m = base;
-                        }
-                        if (m == kCellAir) continue;
-                        const bool mobile = material_is_medium(m);
-                        std::fprintf(
-                            stderr,
-                            "[regrow] tick %llu key %u cell %zu bit %d: был "
-                            "%s, стал %s (%s)\n",
-                            static_cast<unsigned long long>(simTick), ca.key,
-                            ci, bit, kMatNames[static_cast<int>(ca.was)],
-                            kMatNames[static_cast<int>(m)],
-                            mobile ? "ОСАДКА крошки — замысел"
-                                   : "ВОСКРЕШЕНИЕ — БАГ");
-                        if (!mobile && !verifiedOnce) {
-                            verifiedOnce = true;
-                            const bool ok =
-                                voxelMirror.verify(stack.layer(activeLayer));
-                            std::fprintf(stderr,
-                                         "[regrow] mirror verify: %s\n",
-                                         ok ? "CPU==GPU (воскрес КАНОН)"
-                                            : "DIVERGED (воскрес GPU)");
-                        }
-                        ca.key = 0;
-                        ca.was = 0; // отчитан — не спамить
-                    }
-                }
+                if (g_regrowWatch >= 1 &&
+                    (g_regrowWatch >= 2 || (simTick % 25u) == 0u) &&
+                    activeLayer != kInvalidLayer)
+                    regrow_check(stack.layer(activeLayer), voxelMirror,
+                                 "сим", simTick);
                 // РЕПРО-СТЕНД «дыра заросла» v2 — ПАРАМЕТРЫ ВЛАДЕЛЬЦА из
                 // его лога (power 64, r 0.55, «шагающие» удары по чуть
                 // сдвинутым точкам, этаж 0, z~137.9): GIGA_CARVE_PROBE=
@@ -7725,6 +7739,9 @@ int main(int argc, char** argv) {
                                  activeLayer, doors.dirtyCells);
             doors.dirtyCells.clear();
         }
+        if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+            regrow_check(stack.layer(activeLayer), voxelMirror, "двери",
+                         simTick);
 
         // СИМ ВНЕ РЕНДЕР-СКОБКИ (аудит 2026-08-25, тот же класс, что дренаж
         // дверей выше): интеграция падающих ног антуража и часы истаивания
@@ -7800,6 +7817,9 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+            regrow_check(stack.layer(activeLayer), voxelMirror,
+                         "перед-рендером", simTick);
         g_frameMark.simMs = std::chrono::duration<float, std::milli>(
                                 std::chrono::steady_clock::now() - g_frameT0)
                                 .count();
@@ -8095,13 +8115,13 @@ int main(int argc, char** argv) {
                     std::fprintf(
                         stderr,
                         "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
-                        "slept %u, lazy %u, listTot %u, fade %u, substeps %llu | cpu ms: apply "
+                        "slept %u, lazy %u, listTot %u, fade %u, skip %u, substeps %llu | cpu ms: apply "
                         "%.2f rec %.2f%s\n",
                         mediumPass.live_count(), mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
                         mediumPass.lazy_total(), mediumPass.list_total(),
-                        mediumPass.fade_total(),
+                        mediumPass.fade_total(), mediumPass.stale_skips(),
                         static_cast<unsigned long long>(mediumSubstepsDone),
                         static_cast<double>(g_mediumApplyMs),
                         static_cast<double>(g_mediumRecMs),

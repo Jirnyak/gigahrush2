@@ -42,9 +42,10 @@ bool read_spv(const char* path, std::vector<char>& out) {
 // Слоты обратного шва: страница 1 КиБ + маска 64 Б, зеркало шейдера.
 constexpr VkDeviceSize kPageBytesBack = kSubVoxels * sizeof(std::uint16_t);
 constexpr VkDeviceSize kMaskBytesBack = 64;
-// Регион списка: 8 u32 заголовка (count, quanta, woken, slept, честный
-// размер списка до окна пака, флаг капа wake_next, 2 резервных) + слоты.
-constexpr std::uint32_t kListHeader = 8;
+// Регион списка: 12 u32 заголовка (count, quanta, woken, slept, честный
+// размер списка, флаг капа, start окна, истаявшие, ПОДПИСЬ ПАКА (ген),
+// 3 резервных) + слоты.
+constexpr std::uint32_t kListHeader = 12;
 
 // Режимы шейдера ([shaders/medium_sim.comp] pc.params.y).
 constexpr std::uint32_t kModePrepare = 0;
@@ -300,6 +301,17 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     const std::uint32_t count = std::min(list[0], kRbSlotCap);
     lastCount_ = list[0];
     lastQuanta_ = list[1];
+    // ГЕЙТ ПОДПИСИ (корень «зарастаний», 2026-08-26): применяем регион,
+    // только если GPU РЕАЛЬНО записал в него ожидаемый пак. Счёт кадров
+    // (kRbRegions) в рантайме не держится: канарейка показала чужие паки
+    // с лагом 3-45 кадров в 167 из 168 применений — шов возил старьё
+    // (все «мешанины» и «дыра заросла» — этот корень). Непринятый регион
+    // остаётся valid и добирается, когда GPU догонит.
+    if (list[kListHeader - 4] != rec.packGen) {
+        rec.valid = true; // вернуть — попробуем на следующем кадре
+        ++staleSkips_;
+        return;
+    }
     wokenTotal_ = list[2];
     sleptTotal_ = list[3];
     listTotal_ = list[4];
@@ -335,6 +347,41 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             seamSeen_.insert(ci);
             if (word & 0x80000000u) seamLazy_.insert(ci);
         }
+        static const char* dbgEnv = std::getenv("GIGA_SEAM_DBG");
+        static const std::uint32_t dbgCell =
+            dbgEnv ? static_cast<std::uint32_t>(std::atoi(dbgEnv))
+                   : 0xFFFFFFFFu;
+        if (ci == dbgCell) {
+            const auto* rpg = reinterpret_cast<const std::uint16_t*>(
+                src + static_cast<std::size_t>(i) * kPageBytesBack);
+            int packSolid = 0;
+            for (int b2 = 0; b2 < static_cast<int>(kSubVoxels); ++b2)
+                if (rpg[b2] != 0) ++packSolid;
+            int cpuSolid = 0;
+            if (SubField<CellType>* fdbg =
+                    world.subfields().find<CellType>(kSubMaterialName))
+                if (const CellType* cpg = fdbg->page(ci))
+                    for (int b2 = 0; b2 < static_cast<int>(kSubVoxels); ++b2)
+                        if (cpg[b2] != 0) ++cpuSolid;
+            std::fprintf(stderr,
+                         "[seam-dbg] slot %u top %d recFlush %u upload %u "
+                         "mark-pend %d packAtoms %d cpuAtoms %d\n",
+                         i, (word & 0x80000000u) ? 1 : 0, rec.flushCount,
+                         mirror.upload_gen(ci),
+                         mirror.write_pending(ci) ? 1 : 0, packSolid,
+                         cpuSolid);
+        }
+        // ГЕЙТ СВЕЖЕСТИ ОТ ДОСТАВКИ — ДО ленивой ветки (2026-08-26 v2:
+        // стейл-регион с меткой «бесстраничная» материализовал по маскам
+        // МИМО гейта — маскированные биты заливались базой) (баг «дыра заросла», 2026-08-26):
+        // CPU-запись честна на GPU только после её ФЛЕША; окно стейджинга
+        // возит остаток кадрами, поэтому гейт «от момента записи» ломался:
+        // пак между записью и её доставкой нёс до-записное состояние и
+        // воскрешал выбитые карвом атомы. Скип, пока запись в очереди, и
+        // для паков, записанных не позже доставившего флеша.
+        if (mirror.write_pending(ci) ||
+            rec.flushCount <= mirror.upload_gen(ci))
+            continue;
         if (word & 0x80000000u) {
             // GPU видел клетку безстраничной: материализуем лениво — flush
             // довезёт страницу, материя подождёт у границы кадр-два.
@@ -344,15 +391,6 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             }
             continue;
         }
-        // ГЕЙТ СВЕЖЕСТИ ОТ ДОСТАВКИ (баг «дыра заросла», 2026-08-26):
-        // CPU-запись честна на GPU только после её ФЛЕША; окно стейджинга
-        // возит остаток кадрами, поэтому гейт «от момента записи» ломался:
-        // пак между записью и её доставкой нёс до-записное состояние и
-        // воскрешал выбитые карвом атомы. Скип, пока запись в очереди, и
-        // для паков, записанных не позже доставившего флеша.
-        if (mirror.write_pending(ci) ||
-            rec.flushCount <= mirror.upload_gen(ci))
-            continue;
         CellType* pg = f->page(ci);
         if (!pg) continue; // CPU-писатель схлопнул — его решение свежее
         const void* np = src + static_cast<std::size_t>(i) * kPageBytesBack;
@@ -500,6 +538,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     const auto region = static_cast<std::uint32_t>(rbGen_ % kRbRegions);
     rbRing_[region].valid = true;
     rbRing_[region].flushCount = mirrorFlushGen;
+    rbRing_[region].packGen = static_cast<std::uint32_t>(rbGen_);
     // Поколение кольца — паку: вращает окно по списку (хвост не голодает).
     push.params[0] = static_cast<std::uint32_t>(rbGen_);
     ++rbGen_;

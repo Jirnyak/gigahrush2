@@ -519,7 +519,7 @@ void run_inject(uint j) {
 void run_pack(uint slot, uint threadId) {
     // pc.params.w = ИНДЕКС региона кольца; базы выводятся: список несёт
     // 4-словный заголовок + kRbSlotCap слотов на регион.
-    uint listBase = pc.params.w * (kRbSlotCap + 8u);
+    uint listBase = pc.params.w * (kRbSlotCap + 12u);
     uint slotBase = pc.params.w * kRbSlotCap;
     uint total = min(uCnt[cur_x_index()], kListCap);
     // ВРАЩАЮЩЕЕСЯ ОКНО (pc.params.x = поколение кольца): при total > окна
@@ -539,12 +539,21 @@ void run_pack(uint slot, uint threadId) {
         uRbList[listBase + 5u] = uCnt[9]; // флаг капа wake_next
         uRbList[listBase + 6u] = start;
         uRbList[listBase + 7u] = uCnt[12]; // истаявшие одиночки, всего
+        // ПОДПИСЬ ПАКА (корень «зарастаний», 2026-08-26): ген пака в
+        // регион — apply применяет ТОЛЬКО совпавший. Фенсовый счёт кадров
+        // («готов через kRbRegions») в реальном рантайме ЛОЖЬ: GPU
+        // отставал на 3-45 кадров, и apply читал регион с чужим/старым
+        // паком — шов возил до-карвное состояние и воскрешал атомы.
+        uRbList[listBase + 8u] = pc.params.x;
+        uRbList[listBase + 9u] = 0u;
+        uRbList[listBase + 10u] = 0u;
+        uRbList[listBase + 11u] = 0u;
     }
     if (slot >= count) return;
     uint ci = list_cur(start + slot);
     uint pg = uPageIdx[ci];
     if (threadId == 0u)
-        uRbList[listBase + 8u + slot] =
+        uRbList[listBase + 12u + slot] =
             pg == kNoPage ? (ci | 0x80000000u) : ci;
     if (pg != kNoPage)
         for (uint k = 0u; k < 4u; ++k)

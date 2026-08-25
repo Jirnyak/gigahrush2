@@ -143,6 +143,7 @@ public:
     std::uint32_t lazy_total() const noexcept { return lazyTotal_; }
     std::uint32_t list_total() const noexcept { return listTotal_; }
     std::uint32_t fade_total() const noexcept { return fadeTotal_; }
+    std::uint32_t stale_skips() const noexcept { return staleSkips_; }
     bool wake_cap_hit() const noexcept { return wakeCapHit_; }
     // Диагноз (GIGA_POUR): побывала ли клетка в применённых регионах шва.
     bool seam_seen(std::uint32_t ci) const { return seamSeen_.count(ci) != 0; }
@@ -190,6 +191,7 @@ private:
         // заросла», 2026-08-26: пак между записью и её доставкой нёс
         // до-карвное состояние и воскрешал атомы).
         std::uint32_t flushCount = 0;
+        std::uint32_t packGen = 0; // ВРЕМЕННО: ожидаемый ген в header[2]
     };
     RbRecord rbRing_[kRbRegions];
     std::uint64_t rbGen_ = 0;
@@ -199,6 +201,7 @@ private:
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
     std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)
+    std::uint32_t staleSkips_ = 0;  // регионы с чужой подписью (шов ждал GPU)
     bool wakeCapHit_ = false;       // wake_next упирался в kListCap
     bool rbWindowWarned_ = false, wakeCapWarned_ = false;
     std::uint32_t lastCount_ = 0;
