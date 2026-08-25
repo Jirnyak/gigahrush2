@@ -122,13 +122,13 @@ void CubePass::load_material_textures() {
         // Every file name comes from the generated table (data/textures.csv);
         // an empty field means the asset set carries no such map.
         if (albedo_.load_layer(m.id, join(dir, m.albedo).c_str()))
-            texMask_ |= 1u << m.id;
+            texMask_ |= std::uint64_t{1} << m.id;
         if (m.normal[0] != '\0' &&
             normal_.load_layer(m.id, join(dir, m.normal).c_str()))
-            normalMask_ |= 1u << m.id;
+            normalMask_ |= std::uint64_t{1} << m.id;
         if (m.roughness[0] != '\0' &&
             roughness_.load_layer(m.id, join(dir, m.roughness).c_str()))
-            roughnessMask_ |= 1u << m.id;
+            roughnessMask_ |= std::uint64_t{1} << m.id;
     }
 
     if (texMask_ == 0) {
@@ -211,11 +211,14 @@ void CubePass::load_material_textures() {
 
     textured_ = albedo_.ready();
     std::fprintf(stderr,
-                 "[cube] albedo: %u/%d materials (mask 0x%04x), normal: %u/%d "
-                 "(mask 0x%04x), roughness: %u/%d (mask 0x%04x)\n",
-                 albedo_.layers_loaded(), kMaterialMapCount, texMask_,
-                 normal_.layers_loaded(), kMaterialMapCount, normalMask_,
-                 roughness_.layers_loaded(), kMaterialMapCount, roughnessMask_);
+                 "[cube] albedo: %u/%d materials (mask 0x%llx), normal: %u/%d "
+                 "(mask 0x%llx), roughness: %u/%d (mask 0x%llx)\n",
+                 albedo_.layers_loaded(), kMaterialMapCount,
+                 static_cast<unsigned long long>(texMask_),
+                 normal_.layers_loaded(), kMaterialMapCount,
+                 static_cast<unsigned long long>(normalMask_),
+                 roughness_.layers_loaded(), kMaterialMapCount,
+                 static_cast<unsigned long long>(roughnessMask_));
 }
 
 // The shared layout the prop pass borrows: (set0 textures-or-dummy,

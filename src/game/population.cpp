@@ -19,7 +19,7 @@ namespace {
 // seeded BLIND (their World may not even exist yet); embodiment resolves each
 // body onto the nearest standable cell (floor_stream.cpp, place_body_safely).
 //
-// Records sit on a 16-cell room lattice at interior offsets {3,6,9,12} — a
+// Records sit on a 16-cell room lattice at interior offsets {3,6,9,13} — a
 // best-effort spread, same idea.
 constexpr int kRoomStride = 16;        // placement lattice pitch
 constexpr int kRoomsPerAxis = 128 / kRoomStride; // 8
@@ -28,7 +28,11 @@ constexpr int kRoomCount = kRoomsPerAxis * kRoomsPerAxis; // 64
 // Interior placement offsets within a room (local 1..15 is air; 0 is the wall).
 // A 4x4 grid of these gives 16 wall-safe slots per room — enough for the
 // densest spec without stacking bodies on one cell.
-constexpr int kInteriorOff[4] = {3, 6, 9, 12};
+// НИ ОДНО смещение не кратно 4: стены ТАКСОНОМИИ комнат (room_bit_at,
+// страйд 4) лежат на кратных 4 линиях — прежняя 12 сажала каждого
+// четвёртого жителя «в стену» (room_bit 0), и errand у него молча не
+// работал (аудит 2026-08-25, К1-4).
+constexpr int kInteriorOff[4] = {3, 6, 9, 13};
 constexpr int kSlotsPerRoom = 16;
 
 // Sample a faction 0..3 from relative weights. Zero total falls back to a flat

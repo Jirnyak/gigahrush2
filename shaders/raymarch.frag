@@ -62,7 +62,14 @@ layout(set = 0, binding = 5) uniform MarchUbo {
     mat4 invViewProj;   // rays; inverse of pc.viewProj, CPU-inverted per frame
     vec4 albedo[64];    // display-referred material albedo (38 строк + запас)
     vec4 timeParams;    // x = timeSec, y = samosborPulse, z = reserved, w = reserved
+    uvec4 texMaskAN;    // albedo lo,hi; normal lo,hi — 64-битные маски карт
+    uvec4 texMaskR;     // roughness lo,hi (К1-2: float-путь корёжил маску)
 } ub;
+
+// 64-битная маска парой u32: id материалов доходят до 37 (двойники).
+bool mat_has_map(uint lo, uint hi, uint mid) {
+    return ((mid < 32u ? (lo >> mid) : (hi >> (mid - 32u))) & 1u) != 0u;
+}
 // binding 6 (fluid) УМЕР: воду двигает и рисует мир-автомат (страницы).
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
 layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
@@ -841,11 +848,10 @@ void main() {
     }
 
 #ifdef GIGA_ALBEDO_ARRAY
-    uint packedMasks = floatBitsToUint(pc.torus.w);
-    uint normalMask = packedMasks & 0xFFFFu;
-    uint roughnessMask = (packedMasks >> 16u) & 0xFFFFu;
+    // Маски карт — из UBO, 64-битно (К1-2): пуш-упаковка 16+16 молча
+    // отрезала карты с id >= 16, а float(torus.z) округлял маску целиком.
 
-    if (normalMask != 0u && (normalMask & (1u << mid)) != 0u) {
+    if (mat_has_map(ub.texMaskAN.z, ub.texMaskAN.w, mid)) {
         vec3 mapN = texture(uNormal, vec3(uv * kTexRepeat, float(mid))).xyz * 2.0 - 1.0;
         vec3 dp1 = dFdx(vWorldPos);
         vec3 dp2 = dFdy(vWorldPos);
@@ -869,7 +875,7 @@ void main() {
 
 #ifdef GIGA_ALBEDO_ARRAY
     vec3 albedo;
-    if ((uint(pc.torus.z) & (1u << mid)) != 0u) {
+    if (mat_has_map(ub.texMaskAN.x, ub.texMaskAN.y, mid)) {
         albedo = texture(uAlbedo, vec3(uv * kTexRepeat, float(mid))).rgb * vColor;
     } else {
         albedo = pow(vColor, vec3(kGamma));
@@ -889,7 +895,7 @@ void main() {
     vec3 V = toCam / max(d, 1e-4);
 
 #ifdef GIGA_ALBEDO_ARRAY
-    if (roughnessMask != 0u && (roughnessMask & (1u << mid)) != 0u) {
+    if (mat_has_map(ub.texMaskR.x, ub.texMaskR.y, mid)) {
         roughness = texture(uRoughness, vec3(uv * kTexRepeat, float(mid))).r;
     }
 #endif

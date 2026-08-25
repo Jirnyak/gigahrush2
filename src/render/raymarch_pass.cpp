@@ -19,10 +19,30 @@ struct MarchUbo {
     mat4 invViewProj;
     vec4 albedo[64]; // 38 материалов с рыхлыми двойниками; 32 обрезало их цвет
     vec4 timeParams; // x = timeSec, y = samosborPulse
+    // Маски карт материалов ПАРАМИ u32 (lo,hi) = честные 64 бита (К1-2,
+    // аудит 2026-08-25): прежний путь «float(torus.z)» с id двойников за
+    // 24 бита мантиссы корёжил округлением ВСЮ маску альбедо, а упаковка
+    // 16+16 в torus.w молча отрезала карты материалов с id >= 16.
+    std::uint32_t texMaskAN[4]; // albedo lo,hi; normal lo,hi
+    std::uint32_t texMaskR[4];  // roughness lo,hi; z,w резерв
 };
-// mat4 64 Б + 64 vec4 альбедо 1024 Б + timeParams 16 Б = 1104 Б (альбедо до
-// 64 строк: материалов уже 38 с двойниками, старые 32 обрезали их цвет).
-static_assert(sizeof(MarchUbo) == 1104, "MarchUbo must match the shader block");
+// mat4 64 Б + 64 vec4 альбедо 1024 Б + timeParams 16 Б + 2 uvec4 масок
+// 32 Б = 1136 Б (std140: uvec4 выравнены по 16).
+static_assert(sizeof(MarchUbo) == 1136, "MarchUbo must match the shader block");
+
+namespace {
+void write_tex_masks(MarchUbo* u, std::uint64_t a, std::uint64_t n,
+                     std::uint64_t r) {
+    u->texMaskAN[0] = static_cast<std::uint32_t>(a);
+    u->texMaskAN[1] = static_cast<std::uint32_t>(a >> 32);
+    u->texMaskAN[2] = static_cast<std::uint32_t>(n);
+    u->texMaskAN[3] = static_cast<std::uint32_t>(n >> 32);
+    u->texMaskR[0] = static_cast<std::uint32_t>(r);
+    u->texMaskR[1] = static_cast<std::uint32_t>(r >> 32);
+    u->texMaskR[2] = 0u;
+    u->texMaskR[3] = 0u;
+}
+} // namespace
 
 // General 4x4 inverse (cofactor expansion). Runs once per frame on the CPU so
 // ray generation matches the raster projection bit-for-bit; render-local, so
@@ -222,6 +242,8 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             return false;
         MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
         u->invViewProj = mat4_identity();
+        // Маски карт статичны после загрузки — пишутся один раз здесь.
+        write_tex_masks(u, texMask_, normalMask_, roughnessMask_);
         for (std::uint32_t i = 0; i < 64; ++i) {
             // Out-of-range material ids must SCREAM, not blend in: a near-white
             // fallback rendered as believable "dead pixels" in a dark world.
@@ -670,15 +692,11 @@ void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                             &halfSets_[frameIndex % kMaxFramesInFlight], 0,
                             nullptr);
 
-    CubePush p = push;
-    p.torus.z = static_cast<float>(texMask_);
-    std::uint32_t packedMasks =
-        (normalMask_ & 0xFFFFu) | ((roughnessMask_ & 0xFFFFu) << 16);
-    float packedF;
-    std::memcpy(&packedF, &packedMasks, sizeof(packedF));
-    p.torus.w = packedF;
+    // Маски карт едут в MarchUbo (64 бита честно, К1-2) — torus.z/w
+    // остаются тем, чем их положил кадр (samosborPulse/время): двойное
+    // назначение лейны и float-округление маски умерли.
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(CubePush), &p);
+                       sizeof(CubePush), &push);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 

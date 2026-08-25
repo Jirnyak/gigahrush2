@@ -149,7 +149,11 @@ float compute_prop_roughness(uint mat_id, float g_noise) {
     float sigma = kMatSurface[mid].x;
 
     float baseRoughness = 0.50;
-    if (fam == kFamSmooth || mat_id >= 3u) {
+    // Порог `|| mat_id >= 3u` ВЫРЕЗАН (аудит 2026-08-25, К1-3): остаток
+    // таблицы из четырёх материалов — он перехватывал ВСЕ материалы с
+    // id >= 3, и три семейства ниже были недостижимы (трубы/ржавчина/рубл
+    // считались формулой гладкой поверхности).
+    if (fam == kFamSmooth) {
         baseRoughness = 0.22 + sigma * 1.5;
     } else if (fam == kFamRibbed) {
         baseRoughness = 0.42 + sigma;
@@ -223,17 +227,11 @@ void main() {
 
     float spec = 0.0;
     // Солнечный спекуляр и fill ВЫРЕЗАНЫ 2026-08-25 — солнца нет (S15).
-    // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal.
-    // Масштаб — по ФАКТИЧЕСКИ пришедшему прямому свету (бывший множитель
-    // att*camPos.w знал только про убитый налобник).
-    if (vMat == 4u || vMat == 3u) {
-        vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-        vec3 anisotropicH = cross(n_shading, T);
-        float anisoDot = dot(anisotropicH, V);
-        float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.5) * specIntensity * 1.2;
-        float directLum = dot(directDiffuse, vec3(0.2126, 0.7152, 0.0722));
-        spec += anisoSpec * directLum;
-    }
+    // Анизотропный блик «для труб и металла» ВЫРЕЗАН (аудит 2026-08-25,
+    // К1-3): ветка держалась за id 3/4 СТАРОЙ таблицы материалов — после
+    // роста до 38 строк это ВОДА и бежевая плита; настоящие трубы
+    // (pipe_metal=19) блика не имели давно. Вернётся data-driven колонкой
+    // materials.csv, если нужен по вкусу владельца.
 
 
     float hemi = 0.5 + 0.5 * n_shading.z;

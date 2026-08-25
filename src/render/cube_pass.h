@@ -78,9 +78,13 @@ public:
 
     // Bit i set == material id i draws from a real photograph rather than the
     // procedural surface. 0 means the whole pack fell back.
-    std::uint32_t textured_materials() const { return texMask_; }
-    std::uint32_t normal_materials() const { return normalMask_; }
-    std::uint32_t roughness_materials() const { return roughnessMask_; }
+    // Маски «у материала есть карта» — uint64 ПО ПОСТРОЕНИЮ (аудит
+    // 2026-08-25, К1-2): id двойников доходят до 37, прежний u32 давал UB
+    // `1u<<32`, а упаковка в float(torus.z) с ростом id за 24 бита мантиссы
+    // корёжила ВСЮ маску округлением. Возятся в MarchUbo, не в пуше.
+    std::uint64_t textured_materials() const { return texMask_; }
+    std::uint64_t normal_materials() const { return normalMask_; }
+    std::uint64_t roughness_materials() const { return roughnessMask_; }
 
     // Borrowed by passes that share the same push-constant block (PropPass).
     VkPipelineLayout pipeline_layout() const { return layout_; }
@@ -102,9 +106,9 @@ private:
     VulkanTextureArray normal_;
     VulkanTextureArray roughness_;
 
-    std::uint32_t texMask_ = 0;
-    std::uint32_t normalMask_ = 0;
-    std::uint32_t roughnessMask_ = 0;
+    std::uint64_t texMask_ = 0;
+    std::uint64_t normalMask_ = 0;
+    std::uint64_t roughnessMask_ = 0;
     bool textured_ = false;
 };
 

@@ -82,9 +82,9 @@ private:
     VkDescriptorSetLayout texSetLayout_ = VK_NULL_HANDLE; // borrowed, not owned
     VkDescriptorSet texSet_ = VK_NULL_HANDLE;             // borrowed, not owned
     bool textured_ = false;
-    std::uint32_t texMask_ = 0;
-    std::uint32_t normalMask_ = 0;
-    std::uint32_t roughnessMask_ = 0;
+    std::uint64_t texMask_ = 0;      // 64 бита: id двойников до 37 (К1-2)
+    std::uint64_t normalMask_ = 0;
+    std::uint64_t roughnessMask_ = 0;
 
     // Полурезный свет: 2 цели RGBA16F (диффуз+t, спекуляр) НА КАДР В ПОЛЁТЕ —
     // кадр N+1 пишет, пока кадр N ещё читает свои. Пересоздаются при смене
