@@ -628,7 +628,11 @@ if(GIGA_BUILD_TESTS)
         # 23455 + 4 on 2026-08-26: test_detach_judge (§60/§61 — судья
         # связности на шве: ход автомата рвёт мостик, висюк обязан
         # конвертнуться, опора цела) = 23459.
-        PASS_REGULAR_EXPRESSION "23459/23459 checks passed"
+        # 23459 - 1 on 2026-08-26: клеточный los_clear/los_blockers СНЕСЁН
+        # (§60: ноль живых потребителей — осколки/звук на субвокселях);
+        # свойства (изотропия, шов, старт-в-материи, диагональ) переехали
+        # на sub_march/sub_thickness_cells = 23458.
+        PASS_REGULAR_EXPRESSION "23458/23458 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

@@ -1210,24 +1210,24 @@ static void test_mat4_lookAt() {
 // against "does it return true in a room": the endpoint cells, the toroidal seam,
 // the axes, and the diagonal that clips a corner.
 static void test_los() {
-    MacroGrid g;   // all air
-
+    // Клеточный los_clear/los_blockers СНЕСЁН (§60, 2026-08-26): свойства
+    // (изотропия, шов, старт-в-материи) переезжают на ЖИВОЙ примитив —
+    // sub_march / sub_thickness_cells; консумеры (осколки, звук) ходят ими.
+    MacroGrid g;
     const float c = kCellSize;   // 2 m
     auto mid = [&](int cx, int cy, int cz) {
         return vec3{(cx + 0.5f) * c, (cy + 0.5f) * c, (cz + 0.5f) * c};
     };
+    SubRayHit hit;
 
-    // Open air is clear, in both directions and at every separation.
-    CHECK(los_clear(g, mid(10, 10, 10), mid(20, 10, 10)));
-    CHECK(los_clear(g, mid(20, 10, 10), mid(10, 10, 10)));
-    CHECK(los_blockers(g, mid(10, 10, 10), mid(20, 10, 10)) == 0);
-    // Same cell: there is nothing BETWEEN, so it is clear by definition.
-    CHECK(los_clear(g, mid(10, 10, 10), mid(10, 10, 10)));
-    CHECK(los_clear(g, vec3{20.1f, 20.1f, 20.1f}, vec3{20.9f, 20.9f, 20.9f}));
+    // Открытый воздух чист в обе стороны; толщина материи нулевая.
+    CHECK(!sub_march(g, mid(10, 10, 10), mid(20, 10, 10), hit));
+    CHECK(!sub_march(g, mid(20, 10, 10), mid(10, 10, 10), hit));
+    CHECK(sub_thickness_cells(g, mid(10, 10, 10), mid(20, 10, 10)) == 0);
 
-    // ONE cell of wall blocks — on every axis, by the same code and the same
-    // expectation. Isotropy is not "z is special-cased correctly", it is "no letter
-    // is special at all" ([problems.md] §34).
+    // ОДНА клетка стены блокирует — на каждой оси одним и тем же кодом
+    // (изотропия: ни одна буква не особенная, [problems.md] §34); снятие
+    // стены возвращает простреливаемость; толщина полной клетки пути == 1.
     for (int a = 0; a < 3; ++a) {
         MacroGrid w;
         int lo[3] = {10, 10, 10};
@@ -1239,73 +1239,64 @@ static void test_los() {
         w.fill_cell(wall[0], wall[1], wall[2], kMatConcrete);
         const vec3 A = mid(lo[0], lo[1], lo[2]);
         const vec3 B = mid(hi[0], hi[1], hi[2]);
-        CHECK(!los_clear(w, A, B));
-        CHECK(los_blockers(w, A, B) == 1);
-        CHECK(!los_clear(w, B, A));           // symmetric
-        // ...and removing it restores sight, which is what makes the CHECK above a
-        // statement about the wall rather than about the geometry of the test.
+        CHECK(sub_march(w, A, B, hit));
+        CHECK(sub_march(w, B, A, hit)); // symmetric
+        CHECK(sub_thickness_cells(w, A, B) == 1);
         w.clear_cell(wall[0], wall[1], wall[2]);
-        CHECK(los_clear(w, A, B));
+        CHECK(!sub_march(w, A, B, hit));
     }
 
-    // THE ENDPOINT RULE. A body standing INSIDE a solid cell (a doorway, a carved
-    // pocket, geometry that closed over it) must not be shielded by the cell it is
-    // standing in — otherwise a blast at its feet reads as "did nothing".
+    // СТАРТ В МАТЕРИИ: пуля, рождённая в тверди, стопится ею (t=0, грани
+    // входа нет) — противоположно правилу концов покойного los_clear, и
+    // это НЕ случайность (см. шапку los.h): марш отвечает «первое
+    // касание», не «что стоит между».
     {
         MacroGrid w;
-        w.fill_cell(10, 10, 10, kMatConcrete);   // the start cell itself
-        w.fill_cell(14, 10, 10, kMatConcrete);   // and the end cell itself
-        CHECK(los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
-        // But one cell BETWEEN them does block, so the exemption is exactly the two
-        // endpoints and not "solid cells are ignored".
-        w.fill_cell(12, 10, 10, kMatConcrete);
-        CHECK(!los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
+        w.fill_cell(10, 10, 10, kMatConcrete);
+        CHECK(sub_march(w, mid(10, 10, 10), mid(14, 10, 10), hit));
+        CHECK(hit.t == 0.0f);
+        CHECK(hit.axis == -1);
     }
 
-    // THE SEAM. x/y wrap, so a blast at cell 1 and a body at cell 126 are four cells
-    // apart the short way, not 125 the long way. The wall is placed on the SHORT
-    // path; a version that walked the long way round would report clear.
-    {
+    // ШОВ ТОРА: потребитель марширует к БЛИЖАЙШЕМУ образу (сегмент даётся
+    // как есть — так ходит снарядный интегратор): стена на КОРОТКОМ пути
+    // блокирует, на длинном — нет. Оси x и z одним кодом (z заворачивает,
+    // [AGENTS.md]).
+    for (int a = 0; a < 3; a += 2) {
+        int lo[3] = {10, 10, 10};
+        lo[a] = 1;
+        int hi[3] = {10, 10, 10};
+        hi[a] = kMacroDim - 2;
+        int wall[3] = {10, 10, 10};
+        wall[a] = kMacroDim - 1;
+        const vec3 A = mid(lo[0], lo[1], lo[2]);
+        const vec3 Bfar = mid(hi[0], hi[1], hi[2]);
+        vec3 Bnear = A; // ближайший образ B: короткая дорога через шов
+        // wrap_delta_f(a, b) = b - a обёрнутое (см. core/wrap.h).
+        Bnear.x += wrap_delta_f(A.x, Bfar.x, kWorldExtent);
+        Bnear.y += wrap_delta_f(A.y, Bfar.y, kWorldExtent);
+        Bnear.z += wrap_delta_f(A.z, Bfar.z, kWorldExtent);
         MacroGrid w;
-        const vec3 A = mid(1, 10, 10);
-        const vec3 B = mid(kMacroDim - 2, 10, 10);
-        CHECK(los_clear(w, A, B));
-        w.fill_cell(kMacroDim - 1, 10, 10, kMatConcrete);   // cell 127, between them
-        CHECK(!los_clear(w, A, B));
-        // And a wall on the LONG way round changes nothing.
+        CHECK(!sub_march(w, A, Bnear, hit));
+        w.fill_cell(wall[0], wall[1], wall[2], kMatConcrete);
+        CHECK(sub_march(w, A, Bnear, hit));
         MacroGrid w2;
-        w2.fill_cell(64, 10, 10, kMatConcrete);
-        CHECK(los_clear(w2, A, B));
+        int far3[3] = {10, 10, 10};
+        far3[a] = 64;
+        w2.fill_cell(far3[0], far3[1], far3[2], kMatConcrete);
+        CHECK(!sub_march(w2, A, Bnear, hit));
     }
 
-    // THE Z SEAM wraps exactly like x/y ([AGENTS.md]: x/y/z wrap; W does not).
-    // The previous CHECK here pinned the OPPOSITE — "off the top of the stack
-    // blocks" — citing AGENTS.md for a claim the file never made, and a green
-    // ctest guaranteed the divergence survived. Same three-part proof as the
-    // x-seam block above: clear through the seam, a wall on the SHORT path
-    // blocks, a wall on the long way round changes nothing.
-    {
-        MacroGrid w;
-        const vec3 A = mid(10, 10, 1);
-        const vec3 B = mid(10, 10, kMacroDim - 2);
-        CHECK(los_clear(w, A, B));
-        w.fill_cell(10, 10, kMacroDim - 1, kMatConcrete);   // cell 127, between them
-        CHECK(!los_clear(w, A, B));
-        MacroGrid w2;
-        w2.fill_cell(10, 10, 64, kMatConcrete);
-        CHECK(los_clear(w2, A, B));
-    }
-
-    // A DIAGONAL through a corner. The two cells forming the corner are solid and
-    // the segment passes exactly between them; an implementation that steps one axis
-    // at a time without visiting both boundary cells slips through the seam.
+    // ДИАГОНАЛЬ через угол: сегмент проходит ровно между двумя твёрдыми
+    // клетками — реализация, шагающая по одной оси и не посещающая обе
+    // граничные, проскользнула бы.
     {
         MacroGrid w;
         w.fill_cell(11, 10, 10, kMatConcrete);
         w.fill_cell(10, 11, 10, kMatConcrete);
-        CHECK(!los_clear(w, mid(10, 10, 10), mid(11, 11, 10)));
+        CHECK(sub_march(w, mid(10, 10, 10), mid(11, 11, 10), hit));
     }
-    std::printf("[los] blocked on 3 axes, endpoints exempt, seam honoured\n");
+    std::printf("[los] sub_march: 3 оси, старт-в-материи, шов, диагональ\n");
 }
 
 int main() {

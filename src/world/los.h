@@ -7,9 +7,11 @@
 // system here, so that test is dropped, and the behaviour degrades". That test now
 // has something to call.
 //
-// **Two granularities, each with its reason.** `los_clear`/`los_blockers` are
-// cell-level: they answer "may this EVENT reach that place" for blasts and sight
-// checks, где клетка — честная единица заслона. `sub_march` — субвоксельный:
+// КЛЕТОЧНЫЙ los_clear/los_blockers СНЕСЁН аудитом 2026-08-26 (§60): его
+// «клетка — честная единица заслона» была мимикрией — на лепленом этаже
+// полных клеток 0.4%, и предикат почти всегда отвечал «свободно»; все
+// потребители (осколки, звук) переведены на субвоксельные ответы, живых
+// вызовов не осталось. `sub_march` — субвоксельный:
 // он отвечает «где луч ВПЕРВЫЕ коснулся материи», и по канону ([CANON.md] S2 —
 // геометрия этажа состоит из субвокселей) на этот вопрос нельзя отвечать
 // клеткой: падик-сэндвич держит плиту в двух верхних подслоях, и макро-ответ
@@ -30,29 +32,7 @@ namespace giga {
 
 class MacroGrid;
 
-// True when nothing solid stands between `a` and `b`.
-//
-// **The cells CONTAINING the endpoints do not block.** A grenade resting in a carved
-// pocket, or a body whose centre sits inside a doorway cell, would otherwise be
-// shielded by the geometry it is standing in — which reads as "the blast did
-// nothing" and is the wrong answer to the right question. Only what is genuinely
-// BETWEEN them counts.
-//
-// Toroidal on x/y: the segment is walked toward `b`'s nearest image, so a blast at
-// x = 1 and a body at x = 255 are two metres apart and see each other, exactly as
-// every other distance in the game already measures ([core/wrap.h] wrap_delta_f).
-// z does not wrap, matching the projectile integrator; a segment leaving the stack
-// vertically is BLOCKED rather than wrapped, because there is nothing above the top
-// layer to see through.
-//
-// Degenerate input (a and b in the same cell) is clear by definition: there is no
-// cell between them.
-bool los_clear(const MacroGrid& grid, const vec3& a, const vec3& b);
 
-// How many solid cells stand between `a` and `b`. `los_clear` is `== 0`, and this is
-// the form to use when a caller wants to attenuate rather than block outright — a
-// future pressure model, or a noise occlusion pass. Same endpoint rule.
-int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b);
 
 // Первый твёрдый СУБВОКСЕЛЬ на отрезке `a`→`b`, тем же Amanatides–Woo, что и
 // los_blockers, но по решётке 0.25 м ([world/types.h] kVoxelSize). ЕДИНСТВЕННЫЙ
