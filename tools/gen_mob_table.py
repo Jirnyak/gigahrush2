@@ -193,7 +193,6 @@ def main():
              u8(MobBehaviour::{beh}), u8(ProjType::{proj}),
              {samo}, static_cast<std::uint8_t>({floors}),
              u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread},
-             {nstep}, {nclimb}, {ndrop}, {nfly},
              {massx10} }},"""
             .format(
                 idx=i, rid=r["id"],
@@ -217,12 +216,8 @@ def main():
                 pmin=fixed(r["pack_min"], 1, "pack_min", i, 0, 8),
                 pmax=fixed(r["pack_max"], 1, "pack_max", i, 0, 16),
                 pspread=fixed(r["pack_spread"], 1, "pack_spread", i, 0, 10),
-                # Nav traversal profile in sub-voxels; blank = humanoid default
-                # (step 1 riser, climb one 2 m cell, drop 4 m, walker).
-                nstep=fixed(r.get("nav_step_sub") or "1", 1, "nav_step_sub", i, 0, 32),
-                nclimb=fixed(r.get("nav_climb_sub") or "8", 1, "nav_climb_sub", i, 0, 64),
-                ndrop=fixed(r.get("nav_drop_sub") or "16", 1, "nav_drop_sub", i, 0, 255),
-                nfly=fixed(r.get("nav_fly") or "0", 1, "nav_fly", i, 0, 1),
+                # (nav_*_sub/nav_fly columns cut 2026-08-27 — write-only since
+                # birth; clearance from body size is the one traversal law now.)
                 # Universal mass, kg x10 (blank = 80 kg placeholder).
                 # GRAMS, read as an integer and never scaled here — the same column
                 # name and unit props and items use ([mob_table.h] massG). The

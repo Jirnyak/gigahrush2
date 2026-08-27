@@ -33,25 +33,4 @@ const std::array<const char*, kEconomyBands> kBandNames = {{
     "богатство эндгейма",
 }};
 
-const std::array<WealthTier, kWealthTierCount> kWealthTiers = {{
-    // [0] poor
-    WealthTier{ 0ll, 100ll },
-    // [1] stable
-    WealthTier{ 100ll, 2000ll },
-    // [2] official
-    WealthTier{ 2000ll, 50000ll },
-    // [3] rich
-    WealthTier{ 50000ll, 1000000ll },
-    // [4] millionaire
-    WealthTier{ 1000000ll, 5000000ll },
-}};
-
-const std::array<const char*, kWealthTierCount> kWealthTierNames = {{
-    "бедняк",
-    "устойчивый",
-    "служебный",
-    "богатый",
-    "миллионер",
-}};
-
 } // namespace giga::game

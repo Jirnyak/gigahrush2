@@ -184,17 +184,12 @@ struct MobDef {
     std::uint8_t packMin;          // 33  1..8
     std::uint8_t packMax;          // 34  1..16
     std::uint8_t packSpread;       // 35  cells, 0..10
-    // --- nav traversal profile, in SUB-VOXELS (0.25 m) ---------------------
-    // The universal articulation numbers the nav bake tags graph edges with:
-    // a rise <= navStepSub is a walk (stairs are 1-sub risers), a rise <=
-    // navClimbSub is a jump/climb (8 = one 2 m cell), a fall <= navDropSub is a
-    // drop. navFly != 0 ignores gravity entirely (and everyone flies under a
-    // Zero-g regime — [world/gravity.h]). Axis-generic on purpose: "rise" is
-    // against the floor module's declared gravity, never a named axis.
-    std::uint8_t navStepSub;       // 36  walkable riser, sub-voxels
-    std::uint8_t navClimbSub;      // 37  jump/climb height, sub-voxels
-    std::uint8_t navDropSub;       // 38  safe drop, sub-voxels
-    std::uint8_t navFly;           // 39  0 = walker, 1 = flyer
+    // (nav-профиль navStepSub/navClimbSub/navDropSub/navFly — 4×69 write-only
+    // с рождения — СНЕСЁН вердиктом владельца 2026-08-27, §35-класс: нав-бейк
+    // эти колонки не читал никогда. После эпика occupancy проходимость — один
+    // закон от РАЗМЕРА (world/clearance.h); если мобам разных габаритов
+    // понадобится свой клиренс-порог, он будет ВЫВОДОМ из габарита тела (S11),
+    // а не четырьмя назначенными колонками.)
     // --- universal mass ([ecs/components.h] Mass) --------------------------
     // GRAMS, and the unit is the same one [prop_table.h] uses — that is the whole
     // reason this field changed shape. It used to be kg x10 here and grams in a
@@ -204,14 +199,14 @@ struct MobDef {
     // 900 kg rows, so a kitchen stove had to be written down as 65 kg.
     //
     // The widening cost NOTHING: `massKgX10` plus the two pad bytes that followed
-    // it were already four contiguous bytes at a 4-aligned offset, so the row is
-    // still exactly 44. Range 1 g .. 4294 t covers a cartridge and a lift cabin.
+    // it were already four contiguous bytes at a 4-aligned offset. Range
+    // 1 g .. 4294 t covers a cartridge and a lift cabin.
     //
     // Feeds E = m*v^2/2 and p = m*v — fall damage, knockback, ragdoll swing —
     // never a per-system constant.
-    std::uint32_t massG;           // 40
+    std::uint32_t massG;           // 36
 };
-static_assert(sizeof(MobDef) == 44, "MobDef must stay a tight 44-byte row");
+static_assert(sizeof(MobDef) == 40, "MobDef must stay a tight 40-byte row");
 static_assert(alignof(MobDef) == 4);
 static_assert(std::is_trivially_copyable_v<MobDef>);
 static_assert(offsetof(MobDef, projSpeedMmps) == 14, "hot prefix boundary moved");

@@ -75,14 +75,7 @@ inline std::uint64_t digest(const BankAccount& a) {
     fold(static_cast<std::uint64_t>(a.interestPaid));
     fold(a.lastInterestTick);
     fold(static_cast<std::uint64_t>(static_cast<std::uint32_t>(a.creditLimit)));
-    fold(a.entries);
     fold(a.band);
-    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
-        fold(static_cast<std::uint64_t>(static_cast<std::uint32_t>(a.ledger[i].amount)));
-        fold(a.ledger[i].tick);
-        fold(a.ledger[i].op);
-        fold(a.ledger[i].band);
-    }
     return h;
 }
 
@@ -170,12 +163,10 @@ static void test_economy_all() {
         // emits C4127 (conditional expression is constant) for a CHECK on a constant,
         // and "zero warnings" is a hard rule (AGENTS.md SSBuild). A static_assert is also
         // the stronger statement — it cannot be reached-and-skipped.
-        static_assert(kEconomyRows == 10);
-        static_assert(kEconomyRows == kEconomyBands + kWealthTierCount);
+        static_assert(kEconomyRows == 5);
+        static_assert(kEconomyRows == kEconomyBands);
         CHECK(kBankTerms.size() == kEconomyBands);
         CHECK(kBandNames.size() == kEconomyBands);
-        CHECK(kWealthTiers.size() == kWealthTierCount);
-        CHECK(kWealthTierNames.size() == kWealthTierCount);
 
         for (std::size_t b = 0; b < kEconomyBands; ++b) {
             const BankTerms& t = kBankTerms[b];
@@ -217,7 +208,6 @@ static void test_economy_all() {
         // The reference's own two constants, verbatim.
         CHECK(kBankTerms[0].creditLimit == 500);          // BANKING_DEFAULT_CREDIT_LIMIT
         CHECK(kBankTerms[0].loanBp * 2 == kBankTerms[0].depositBp * 3);  // 0.015 / 0.010
-        static_assert(kBankLedgerSlots == 24);            // BANKING_LEDGER_CAPACITY
         static_assert(kBankMaxCatchupPeriods == 24u);     // BANKING_MAX_INTEREST_PERIODS
         // The reference's ECONOMY_MONEY_BANDS columns, verbatim.
         const std::int32_t refCash[5] = {250, 2000, 25000, 250000, 5000000};
@@ -245,36 +235,12 @@ static void test_economy_all() {
         // are dereferenced immediately by their callers.
         CHECK(&bank_terms(200) == &kBankTerms[kEconomyBands - 1]);
         CHECK(band_name(200) == kBandNames[kEconomyBands - 1]);
-        CHECK(wealth_tier_name(200) == kWealthTierNames[kWealthTierCount - 1]);
-
-        // Wealth tiers: contiguous, ascending, and the reference's own brackets.
-        const std::int64_t refLo[5] = {0, 100, 2000, 50000, 1000000};
-        for (std::size_t i = 0; i < kWealthTierCount; ++i) {
-            CHECK(kWealthTiers[i].lo == refLo[i]);
-            CHECK(kWealthTiers[i].lo < kWealthTiers[i].hi);
-            if (i > 0) CHECK(kWealthTiers[i].lo == kWealthTiers[i - 1].hi);
-            CHECK(std::strlen(kWealthTierNames[i]) > 0);
-        }
-        CHECK(kWealthTiers[kWealthTierCount - 1].hi == 5000000);   // the reference cap
-        // Both clamps, including a net worth dragged negative by debt.
-        CHECK(wealth_tier(-1) == 0);
-        CHECK(wealth_tier(-999999) == 0);
-        CHECK(wealth_tier(0) == 0);
-        CHECK(wealth_tier(99) == 0);
-        CHECK(wealth_tier(100) == 1);
-        CHECK(wealth_tier(1999) == 1);
-        CHECK(wealth_tier(2000) == 2);
-        CHECK(wealth_tier(49999) == 2);
-        CHECK(wealth_tier(50000) == 3);
-        CHECK(wealth_tier(999999) == 3);
-        CHECK(wealth_tier(1000000) == 4);
-        CHECK(wealth_tier(9000000000ll) == 4);   // past the reference cap, still a tier
 
         std::fprintf(stderr,
-                     "[economy] %zu bands + %zu wealth tiers resolve; bands E0..E4 "
+                     "[economy] %zu bands resolve; bands E0..E4 "
                      "deposit %u/%u/%u/%u/%u bp, loan %u/%u/%u/%u/%u bp, credit "
                      "%d/%d/%d/%d/%d rub\n",
-                     static_cast<std::size_t>(kEconomyBands), kWealthTierCount,
+                     static_cast<std::size_t>(kEconomyBands),
                      kBankTerms[0].depositBp, kBankTerms[1].depositBp,
                      kBankTerms[2].depositBp, kBankTerms[3].depositBp,
                      kBankTerms[4].depositBp,
@@ -419,19 +385,6 @@ static void test_economy_all() {
                      static_cast<long long>(acct.interestEarned),
                      static_cast<long long>(acct.interestPaid));
 
-        // The ledger ring holds the last 24 and nothing else, and the newest entry is
-        // findable. `entries` is the lifetime count, so it exceeds the ring.
-        CHECK(acct.entries > kBankLedgerSlots);
-        const BankEntry* last = bank_last_entry(acct);
-        CHECK(last != nullptr);
-        if (last) {
-            CHECK(last->amount > 0);
-            CHECK(last->op != static_cast<std::uint8_t>(BankOp::None));
-            CHECK(std::strcmp(bank_op_name(static_cast<BankOp>(last->op)),
-                              "none") != 0);
-        }
-        for (std::size_t i = 0; i < kBankLedgerSlots; ++i)
-            CHECK(acct.ledger[i].amount > 0);   // all 24 slots filled by real movements
     }
 
     { // ---- 4. DEATH: what it takes and what it does not ------------------------
@@ -792,8 +745,6 @@ static void test_economy_all() {
         CHECK(bank_take_loan(z, zl, -50, 0u) == 0);
         CHECK(bank_repay(z, zl, -50, 0u) == 0);
         CHECK(zl.banked == 1000);
-        CHECK(z.entries == 0u);          // and none of them wrote history
-        CHECK(bank_last_entry(z) == nullptr);
         CHECK(net_worth(zl, z) == 1000);
 
         // Withdrawing or repaying more than exists takes what exists and no more.

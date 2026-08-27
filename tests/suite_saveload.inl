@@ -246,10 +246,7 @@ SaveState busy_run() {
     st.bank.interestEarned = 210;
     st.bank.interestPaid = 96;
     st.bank.creditLimit = 2500;
-    st.bank.entries = 5;
     st.bank.band = 2;
-    st.bank.ledger[0] = BankEntry{111, 2222u, 1, 2};
-    st.bank.ledger[4] = BankEntry{333, 4444u, 3, 2};
 
     // Version 10 / SAVCLOCK. Every field gets a DISTINCT non-round value, which is
     // this file's own standing rule and the one §6a.1 of Docs/specs/10 accused it of
@@ -354,14 +351,7 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.bank.interestEarned == b.bank.interestEarned);
     CHECK(a.bank.interestPaid == b.bank.interestPaid);
     CHECK(a.bank.creditLimit == b.bank.creditLimit);
-    CHECK(a.bank.entries == b.bank.entries);
     CHECK(a.bank.band == b.bank.band);
-    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
-        CHECK(a.bank.ledger[i].amount == b.bank.ledger[i].amount);
-        CHECK(a.bank.ledger[i].tick == b.bank.ledger[i].tick);
-        CHECK(a.bank.ledger[i].op == b.bank.ledger[i].op);
-        CHECK(a.bank.ledger[i].band == b.bank.ledger[i].band);
-    }
 
     CHECK(a.containers.size() == b.containers.size());
     const std::size_t nk = a.containers.size() < b.containers.size()
@@ -456,15 +446,15 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1284);  // v16: +289 bank ([save.h] SAVBANK)
+    static_assert(kSaveFixedWire == 1040);  // v16: +289 bank; v19: bank 289 -> 45
     static_assert(kFactionWire == 36);
-    // v18: 1284 fixed + 36 faction + 64 header + 4 inline corpse count +
-    // 4 inline debris count = 1392 empty.
-    static_assert(save_bytes_for(0) == 1392);
-    static_assert(save_bytes_for(3) == 1392 + 3 * kContainerRecWire);
+    // v19: 1040 fixed + 36 faction + 64 header + 4 inline corpse count +
+    // 4 inline debris count = 1148 empty.
+    static_assert(save_bytes_for(0) == 1148);
+    static_assert(save_bytes_for(3) == 1148 + 3 * kContainerRecWire);
     static_assert(save_bytes_for(3, 1, 100, 50) ==
-                  1392 + 3 * kContainerRecWire + kCorpseRecWire + 150);
-    static_assert(save_bytes_for(0, 0, 0, 0, 2) == 1392 + 2 * kDebrisRecWire);
+                  1148 + 3 * kContainerRecWire + kCorpseRecWire + 150);
+    static_assert(save_bytes_for(0, 0, 0, 0, 2) == 1148 + 2 * kDebrisRecWire);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -482,10 +472,10 @@ void wire_layout() {
     // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
     // player's Equipped cells (+4); v14 widens the slot count to u16 (+64);
     // v15 swapped opened keys for whole-crate records (27 B a row, corpse rows
-    // 81 B, plus the inline corpse-count u32 in the base); v16 adds the 289 B
-    // bank block: busy_run's 3 crates and 1 body land on 1388 + 81 + 81 = 1550.
+    // 81 B, plus the inline corpse-count u32 in the base); v16 added the 289 B
+    // bank block; v19 cut the bank ring (289 -> 45, base 1392 -> 1148).
     CHECK(bytes.size() ==
-          1392 + 3 * kContainerRecWire + kCorpseRecWire + kDebrisRecWire);
+          1148 + 3 * kContainerRecWire + kCorpseRecWire + kDebrisRecWire);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

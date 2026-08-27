@@ -1814,7 +1814,7 @@ static void test_t3_03_bank_debt_and_interest_across_floor_transit() {
 
     bank_step(acct, 7500u);
     CHECK(bank_debt(acct) >= initialDebt);
-    CHECK(wealth_tier(net_worth(led, acct)) == 0);
+    CHECK(net_worth(led, acct) <= 0);   // 400 borrowed, 400 owed + accrued interest
 }
 
 static void test_t3_04_prop_interaction_during_ai_navigation_single_writer() {

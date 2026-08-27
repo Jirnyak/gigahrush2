@@ -412,14 +412,7 @@ void visit_bank(Ar& ar, B& b) {
     ar.i64(b.interestEarned);
     ar.i64(b.interestPaid);
     ar.i32(b.creditLimit);
-    ar.u32(b.entries);
     ar.u8(b.band);
-    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
-        ar.i32(b.ledger[i].amount);
-        ar.u32(b.ledger[i].tick);
-        ar.u8(b.ledger[i].op);
-        ar.u8(b.ledger[i].band);
-    }
 }
 
 // CRC-32 (reflected 0xEDB88320), computed bit-serially rather than from a table.
@@ -525,15 +518,16 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // the version field is what tells them apart, not this sum.
 static_assert(kSaveFixedWire ==
               946 + kSamosborWire + kFastTravelWire + kBankWire);
-static_assert(kSaveFixedWire == 1284);  // v16: +289 bank
+static_assert(kSaveFixedWire == 1040);  // v16: +289 bank; v19: bank 289 -> 45 (ring cut)
 static_assert(kFactionWire == 36);
-// v16: the empty save carries the fixed 1284 + faction 36 + header 64 + the
-// inline corpse-count u32 = 1388; v18 adds the inline debris-count u32 = 1392.
-static_assert(save_bytes_for(0) == 1392);
-static_assert(save_bytes_for(2) == 1392 + 2 * kContainerRecWire);
-static_assert(save_bytes_for(0, 3) == 1392 + 3 * kCorpseRecWire);
-static_assert(save_bytes_for(0, 0, 100, 50) == 1392 + 150);
-static_assert(save_bytes_for(0, 0, 0, 0, 4) == 1392 + 4 * kDebrisRecWire);
+// v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
+// corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
+// cut the bank ring (-244): 1392 - 244 = 1148.
+static_assert(save_bytes_for(0) == 1148);
+static_assert(save_bytes_for(2) == 1148 + 2 * kContainerRecWire);
+static_assert(save_bytes_for(0, 3) == 1148 + 3 * kCorpseRecWire);
+static_assert(save_bytes_for(0, 0, 100, 50) == 1148 + 150);
+static_assert(save_bytes_for(0, 0, 0, 0, 4) == 1148 + 4 * kDebrisRecWire);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

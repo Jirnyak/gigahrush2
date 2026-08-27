@@ -159,19 +159,23 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // both a floor re-entry and a save. The old mechanism is deleted, not wrapped:
 // two writers stamping the same crate is how they disagree. [barter increment A]
 // Version 16 / SAVBANK: the BANK ACCOUNT travels — deposit, loan principal +
-// accrued, lifetime interest counters, credit limit, band and the 24-entry op
-// ring ([economy.h] BankAccount, wired to the Duty clerk's counter and to the
-// sim tick this same day; problems.md §52's bank_step entry closes with it).
+// accrued, lifetime interest counters, credit limit and band ([economy.h]
+// BankAccount, wired to the Duty clerk's counter and to the sim tick this same
+// day; problems.md §52's bank_step entry closes with it). The 24-entry op ring
+// travelled v16..v18 and was cut in v19 (write-only history, no reader).
 // `lastInterestTick` deliberately does NOT travel: the sim clock restarts every
 // session, so a saved tick would be a lie in a new one — the loader re-arms the
 // clock at the current tick instead, costing at most one 60-second period of
-// interest per reload and making save-scumming interest impossible. Entry ticks
-// in the ring are session-relative history and ride as-is (cosmetic). v15 saves
+// interest per reload and making save-scumming interest impossible. v15 saves
 // are rejected, standing rule.
 // v17 (2026-08-21): контейнер несёт канонический Inventory (64 слота, B3
 // one-container.md) — решение владельца: миграции нет, старые сейвы
 // отклоняются, ящики пересеются.
-inline constexpr std::uint32_t kSaveVersion = 18u;
+// v19 (2026-08-27): кольцо BankEntry ledger[24] + entries СНЕСЕНЫ из
+// BankAccount (вердикт владельца: write-only история без единого читателя в
+// игре, §35-класс) — банк-блок ужат 289 → 45 Б. Стандартное правило: старые
+// сейвы отклоняются.
+inline constexpr std::uint32_t kSaveVersion = 19u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -316,11 +320,10 @@ static_assert(kSamosborWire == 17);
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
 // Version 16 / SAVBANK: BankAccount field by field (NOT sizeof — tail padding),
-// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + entries
-// + band + 24 entries x (amount 4 + tick 4 + op 1 + band 1).
-inline constexpr std::size_t kBankWire =
-    5 * 8 + 4 + 4 + 1 + kBankLedgerSlots * 10;  // 289
-static_assert(kBankWire == 289);
+// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + band.
+// v19: кольцо ledger[24] + entries умерли вместе со структурой (289 → 45).
+inline constexpr std::size_t kBankWire = 5 * 8 + 4 + 1;  // 45
+static_assert(kBankWire == 45);
 // v15 records. A container row is its key + the whole component: 5 (key) + 1
 // (kind) + 1 (opened) + 4 slots x 5 B ([inventory] cell wire) = 27. A corpse row
 // is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) + 3 (mobKind /
