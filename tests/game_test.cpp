@@ -757,12 +757,12 @@ static void test_floor_gen() {
                     else
                         CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
                 }
-                CHECK(g.cell(cx + 2, cy, 1) == kCellAir);  // lobby opened
-                // Elevator column: diagonal corner posts are solid hub-pad type
-                // the FULL height (span the whole map; Z wraps into a loop).
-                CHECK(g.cell(cx + 2, cy + 2, 0) == kMatHubPad);
-                CHECK(g.cell(cx + 2, cy + 2, 1) == kMatHubPad);
-                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) == kMatHubPad);
+                // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27):
+                // лобби, hub-pad слои и синие угловые столбы больше НЕ
+                // штампуются — угловая колонна обязана быть тем, что построил
+                // сам модуль, а не kMatHubPad.
+                CHECK(g.cell(cx + 2, cy + 2, 0) != kMatHubPad);
+                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) != kMatHubPad);
             }
     }
 }
@@ -2668,14 +2668,16 @@ static void test_extraction_reachable() {
         }
     CHECK(leaked == 0);
 
-    // The nav pads must still be there and must still NOT bank: they are a
-    // different material for a reason, and this pins the two apart.
+    // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27): hub-pad
+    // перекраска узловых слоёв снесена вместе с синими столбами — на узловом
+    // слое падика hub-pad клеток больше НЕТ, и это теперь пин. Материал жив
+    // (хрущи мостят им землю), различие «банк != пад» — тоже.
     static_assert(kMatExtract != kMatHubPad, "the bank and the nav pad must differ");
     int navPads = 0;
     for (int y = 0; y < kMacroDim; ++y)
         for (int x = 0; x < kMacroDim; ++x)
             if (hub.grid().cell(x, y, 16) == kMatHubPad) ++navPads;
-    CHECK(navPads > 0);
+    CHECK(navPads == 0);
 }
 
 

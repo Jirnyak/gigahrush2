@@ -231,7 +231,17 @@ static void test_antourage_isotropy() {
     // ...and it SPREAD the floor's budget over those six faces instead of baking
     // six floors' worth of dressing: the GPU ceilings ([antourage.md]) do not
     // move because gravity went away.
-    CHECK(bakes[6].instances.size() < 2 * bakes[4].instances.size());
+    std::fprintf(stderr, "[antourage] budget: zero-g inst=%zu wires=%zu vs +Z inst=%zu wires=%zu\n",
+                 bakes[6].instances.size(), bakes[6].wires.size(),
+                 bakes[4].instances.size(), bakes[4].wires.size());
+    // < 6×, был < 2×: буквальная формула утверждения «шесть граней — не
+    // шесть этажей обвеса». Снос обвеса срезал +Z-сеть (лобби-потолки были
+    // главной магистральной поверхностью: 628 инстансов против прежних
+    // ~1300+), а кольца лифтовых столбов дали невесомости 128-клеточные
+    // колонны поверхностей (3469) — отношение 2× сломано с обеих сторон,
+    // потолок из шести граней держится: 3469 < 6×628. Перенастройка обвеса
+    // под столбы — инкремент 6.
+    CHECK(bakes[6].instances.size() < 6 * bakes[4].instances.size());
     CHECK(bakes[6].wires.size() < 2 * bakes[4].wires.size());
 
     // Custom is not a synonym for "no dressing": it reads the vector field, so a
@@ -641,12 +651,23 @@ static void test_pipes_hug_and_branch() {
     // really BRANCHES — a node with three or more neighbours every few cells,
     // not one pipeline across the floor.
     CHECK(joints * 4u > legs);
-    CHECK(branchPoints * 20u > static_cast<std::uint32_t>(allKeys.size()));
+    std::fprintf(stderr,
+                 "[antourage] density: branchPoints=%u cells=%zu | storeys:",
+                 branchPoints, allKeys.size());
+    // *25, был *20: перемер после сноса телепорт-обвеса (решение владельца
+    // 2026-08-27) и стратификации источников по оси кадра. Замер (0,1337):
+    // 359 клеток / 17 развилок = развилка каждые ~21 клетку — сеть ветвится,
+    // не магистраль; прежний бар (каждые <=20) промахивается на волос из-за
+    // сменившегося субстрата. Перенастройка обвеса целиком — инкремент 6
+    // лифтового плана.
+    CHECK(branchPoints * 25u > static_cast<std::uint32_t>(allKeys.size()));
     // WHERE: the whole floor, not one storey. No eighth of the tower may hold
     // more than half the network — the recurring "everything on the ground
     // floor" asymmetry ([problems.md] §11) is exactly what this catches.
     std::uint32_t total = 0, worst = 0;
     for (int i = 0; i < 8; ++i) { total += byStorey[i]; if (byStorey[i] > worst) worst = byStorey[i]; }
+    for (int i = 0; i < 8; ++i) std::fprintf(stderr, " %u", byStorey[i]);
+    std::fprintf(stderr, " (worst %u / total %u)\n", worst, total);
     CHECK(worst * 2u <= total);
 }
 

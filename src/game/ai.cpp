@@ -912,12 +912,37 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // body at its seat is stopped ON PURPOSE, so counting it as stalled made
             // the metric read 64 of 64 pinned at the exact moment all 64 had
             // arrived. A stall counter that fires on success is worse than none.
-            if (want != 0 && (here & want) == 0 &&
+            // ...AND GROUNDED. A body in free fall has near-zero horizontal
+            // speed by physics, not by refusal — an errand route that crosses
+            // an open lattice well drops the walker, it splashes into the pit
+            // and climbs back out (measured: the faller still reaches its
+            // kitchen). Counting the fall as a stall made the probe fire on
+            // WORKING physics — a stall counter that fires on gravity is as
+            // wrong as one that fires on arrival (the settled exclusion above).
+            const auto* grav = reg.try_get<GravityAffected>(e);
+            const bool airborne = grav != nullptr && !grav->grounded;
+            if (want != 0 && (here & want) == 0 && !airborne &&
                 brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
                 const vec3& prev = view.get<Velocity>(e).v;
                 const vec3 walk = tangent(prev.x, prev.y, prev.z);
                 const float sp2 = walk.x * walk.x + walk.y * walk.y + walk.z * walk.z;
-                if (sp2 < kErrandSpeed * kErrandSpeed * 0.0625f) ++out.errandStalled;
+                if (sp2 < kErrandSpeed * kErrandSpeed * 0.0625f) {
+                    ++out.errandStalled;
+                    // Место затыка — вслух (первые несколько раз за процесс):
+                    // счётчик без адреса заставлял гадать, ОБ ЧТО упёрлось
+                    // тело — а «где» и есть вся диагностика этого класса.
+                    static int stallSaid = 0;
+                    if (stallSaid < 6) {
+                        ++stallSaid;
+                        const Transform& st = view.get<Transform>(e);
+                        std::fprintf(stderr,
+                                     "[ai] errand STALL at cell (%d,%d,%d) pos "
+                                     "(%.1f,%.1f,%.1f) want=0x%x\n",
+                                     cx, cy,
+                                     static_cast<int>(st.pos.z / kCellSize),
+                                     st.pos.x, st.pos.y, st.pos.z, want);
+                    }
+                }
             }
 
             if (want != 0 && (here & want) != 0) {

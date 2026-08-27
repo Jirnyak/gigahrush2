@@ -624,32 +624,14 @@ void stamp_roofs(MacroGrid& g, SubField<CellType>& sm,
 }
 
 // ---- lattice ground truth ----------------------------------------------------
-// Markers after everything else, exactly padic's pattern: hub-pad recolour at
-// the node layers and the four full-height corner posts — plus a final shaft
-// re-clear so no sub-voxel spill from decks or flights can foul a cabin column.
+// МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27, как у падика):
+// hub-pad перекраска узловых слоёв и четыре синих угловых столба умерли с
+// бескабинным телепортом. Остался финальный re-clear шахты — чтобы ни один
+// суб-воксельный захлёст палуб/пролётов не запачкал кабинную колонну.
 void stamp_lattice_markers(MacroGrid& g, SubField<CellType>& sm) {
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx), cy = lattice_coord(ny);
-            for (int nz = 0; nz < kLatticeDim; ++nz) {
-                const int z0 = lattice_coord(nz);
-                for (int dy = -kFastLobbyR; dy <= kFastLobbyR; ++dy)
-                    for (int dx = -kFastLobbyR; dx <= kFastLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        if (g.cell(x, y, z0) != kCellAir) {
-                            sm.drop_page(macro_index(x, y, z0));
-                            g.set_cell(x, y, z0, kMatHubPad);
-                        }
-                    }
-            }
-            for (int sy = -1; sy <= 1; sy += 2)
-                for (int sx = -1; sx <= 1; sx += 2)
-                    for (int z = 0; z < kDim; ++z) {
-                        const int x = wrap_macro(cx + sx * 2);
-                        const int y = wrap_macro(cy + sy * 2);
-                        sm.drop_page(macro_index(x, y, z));
-                        g.fill_cell(x, y, z, kMatHubPad);
-                    }
             for (int z = 0; z < kDim; ++z)
                 for (int dy = -kFastShaftR; dy <= kFastShaftR; ++dy)
                     for (int dx = -kFastShaftR; dx <= kFastShaftR; ++dx) {

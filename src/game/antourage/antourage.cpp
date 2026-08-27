@@ -302,10 +302,34 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
     constexpr int kBuckets = kBendCost + 1;
     std::vector<std::uint32_t> bucket[kBuckets];
     std::vector<std::uint16_t> dist(net.size(), 0xFFFFu);
+    // Источники СТРАТИФИЦИРОВАНЫ вдоль оси кадра, не сыплются из общего
+    // мешка. Раньше pick был `nodes[h % nodes.size()]`, и «сеть по всей
+    // башне» держалась удачей хеша: перетасовка кандидатов (снос
+    // телепорт-обвеса 2026-08-27) пересдала кости, и все три источника легли
+    // на два яруса из восьми — ровно асимметрия §11, которую тест и ловит.
+    // Полоса источника s — равный отрезок оси (середины третей для трёх
+    // источников); внутри полосы выбирает прежний хеш. Пустая полоса
+    // (сплошная скала) делегирует общему мешку — источник не пропадает.
+    std::vector<std::uint32_t> byBand[kPipeSources];
+    {
+        const int bandSpan = kMacroDim / kPipeSources;
+        for (std::uint32_t st : nodes) {
+            const std::size_t ci = st / 6u;
+            const int cx = static_cast<int>(ci % kMacroDim);
+            const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+            const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+            const int along = f.axis == 0 ? cx : f.axis == 1 ? cy : cz;
+            int b = along / bandSpan;
+            if (b >= kPipeSources) b = kPipeSources - 1;
+            byBand[b].push_back(st);
+        }
+    }
     for (int s = 0; s < kPipeSources; ++s) {
         const std::uint32_t h =
             hash_u32(fseed ^ (static_cast<std::uint32_t>(s) * 0x9E3779B9u));
-        const std::uint32_t pick = nodes[h % nodes.size()];
+        const std::vector<std::uint32_t>& pool =
+            byBand[s].empty() ? nodes : byBand[s];
+        const std::uint32_t pick = pool[h % pool.size()];
         if (net[pick].pred != -3) continue;
         net[pick].pred = -1;
         dist[pick] = 0;

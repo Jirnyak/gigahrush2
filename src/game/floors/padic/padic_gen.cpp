@@ -483,16 +483,21 @@ void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
     }
 }
 
-// The mandatory fast-travel lattice ([torus-nav-baking]): open shaft columns,
-// lobbies cleared per storey, hub pads and the four corner posts.
+// The mandatory lattice ([torus-nav-baking]): open shaft columns only.
+//
+// МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27, elevators-2x2.md):
+// лобби 7×7 на каждом ярусе, hub-pad перекраска узловых слоёв и четыре синих
+// угловых столба kMatHubPad во всю высоту умерли вместе с бескабинным
+// телепортом — единая система теперь = 4 закрытых лифтовых столба
+// (stamp_lift_pillars поверх модуля) + 12 открытых шахт-колодцев. Коридоры
+// и так бегут по линиям решётки (см. шапку файла), так что связность узлам
+// дают они, а не расчищенное лобби. Маркер эвакуации — отдельная система,
+// остаётся.
 void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
-    // The radii come from [game/fast_travel.h], not from locals here. They used to be
-    // locals, and that made the geometry and the "are you at a shaft" test two
-    // independent numbers that happened to agree — the same shape as
-    // padic_module.cpp's local `kLatticeDim`, which shadows the real one and would
-    // not follow a change to it.
+    // The radius comes from [game/fast_travel.h], not from locals here. It used
+    // to be a local, and that made the geometry and the "are you at a shaft"
+    // test two independent numbers that happened to agree.
     constexpr int kShaftR = kFastShaftR;
-    constexpr int kLobbyR = kFastLobbyR;
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx);
@@ -504,43 +509,11 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                         g.clear_cell(x, y, z);
                         sm.drop_page(macro_index(x, y, z));
                     }
-            for (int b = 0; b <= kLastBase; b += kStorey) {
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        for (int z = b; z < b + 2; ++z) {
-                            g.clear_cell(x, y, z);
-                            sm.drop_page(macro_index(x, y, z));
-                        }
-                        // b+2: strip wall lintels, keep the sandwich — the
-                        // lobby keeps its ceiling and the storey above keeps
-                        // its floor.
-                        SubMask& m = g.mask(x, y, b + 2);
-                        for (int wz = 0; wz < 6; ++wz) m.words[wz] = 0;
-                        if (m.empty()) {
-                            g.clear_cell(x, y, b + 2);
-                            sm.drop_page(macro_index(x, y, b + 2));
-                        }
-                    }
-            }
-            // Hub pads: recolour whatever is solid at the node layers. A paged
-            // cell recolours by dropping the page — the pad marker wins.
-            for (int nz = 0; nz < kLatticeDim; ++nz) {
-                const int z0 = lattice_coord(nz);
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        if (g.cell(x, y, z0) != kCellAir) {
-                            sm.drop_page(macro_index(x, y, z0));
-                            g.set_cell(x, y, z0, kMatHubPad);
-                        }
-                    }
-            }
             if (number == 0) {
                 // Extraction marker: the walking floor of storey 0 is the attic
                 // sandwich at z=127 — recolour it, plus whatever stands at z=0.
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
+                for (int dy = -kFastLobbyR; dy <= kFastLobbyR; ++dy)
+                    for (int dx = -kFastLobbyR; dx <= kFastLobbyR; ++dx) {
                         const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
                         for (const int z : {0, kMacroDim - 1})
                             if (g.cell(x, y, z) != kCellAir) {
@@ -549,14 +522,6 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                             }
                     }
             }
-            for (int sy = -1; sy <= 1; sy += 2)
-                for (int sx = -1; sx <= 1; sx += 2)
-                    for (int z = 0; z < kMacroDim; ++z) {
-                        const int x = wrap_macro(cx + sx * 2);
-                        const int y = wrap_macro(cy + sy * 2);
-                        sm.drop_page(macro_index(x, y, z));
-                        g.fill_cell(x, y, z, kMatHubPad);
-                    }
         }
     }
 }
