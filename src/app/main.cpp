@@ -22,7 +22,8 @@
 #include <algorithm>
 #include <SDL3/SDL_vulkan.h>
 
-#include <chrono>   // покомпонентный замер [carve] — carve-hitch.md
+#include <chrono>
+#include <future>   // фоновая запись floor-файла (5a)   // покомпонентный замер [carve] — carve-hitch.md
 #include <cmath>
 #include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
@@ -1354,6 +1355,58 @@ bool write_floor_file(const World& w, int floor) {
     char path[128];
     floor_save_path(floor, path, sizeof path);
     return write_bytes_file(bytes, path);
+}
+
+// --- 5a (elevators-2x2.md, решение владельца): ДИСК — ФОНОМ ----------------
+// Кодек снимка бежит на main (слот World тут же перерабатывается под
+// целевой этаж — фоновому энкодеру не из чего читать), а вот запись байтов
+// на диск (~2 c из замеренных ~2.9 c кадра свапа) кадру не принадлежит.
+// Один полёт за раз: новый старт ждёт прежний (поездки разделены секундами),
+// а КАЖДЫЙ ЧИТАТЕЛЬ floor-файлов обязан сперва дождаться хвоста —
+// flush_floor_write зовут F9-загрузка, prebuild-старт (restore-ветка читает
+// файл воркером!) и выход.
+std::future<bool> g_floorWritePending;
+void flush_floor_write() {
+    if (g_floorWritePending.valid()) {
+        const bool ok = g_floorWritePending.get();
+        if (!ok)
+            std::fprintf(stderr, "[save] BACKGROUND floor write FAILED\n");
+    }
+}
+void write_floor_file_async(const World& w, int floor) {
+    flush_floor_write();
+    // Кадру принадлежит только КОПИЯ того, что читает кодек (грид + страницы
+    // суб-материалов, memcpy сотни мс) — сам RLE-кодек (замерен 2.7 с!) и
+    // диск уезжают в фон. Слот World перерабатывается сразу после свапа,
+    // поэтому фоновому кодеку не из чего читать, кроме копии; RAM транзиентно
+    // щедрая — закон владельца.
+    const auto t0 = std::chrono::steady_clock::now();
+    auto types = std::make_shared<std::vector<CellType>>(w.grid().types());
+    auto masks = std::make_shared<std::vector<SubMask>>(w.grid().masks());
+    std::shared_ptr<SubField<CellType>> mats;
+    if (const SubField<CellType>* f =
+            w.subfields().find<CellType>(kSubMaterialName))
+        mats = std::make_shared<SubField<CellType>>(*f);
+    char path[128];
+    floor_save_path(floor, path, sizeof path);
+    std::string p(path);
+    std::fprintf(stderr, "[lift] leave %d: copy %.0f ms, encode+disk in background\n",
+                 floor,
+                 std::chrono::duration<float, std::milli>(
+                     std::chrono::steady_clock::now() - t0)
+                     .count());
+    g_floorWritePending =
+        std::async(std::launch::async, [types, masks, mats, floor, p]() {
+            World tmp;
+            tmp.grid().types_mut() = std::move(*types);
+            tmp.grid().masks_mut() = std::move(*masks);
+            if (mats)
+                tmp.subfields().get_or_create<CellType>(kSubMaterialName) =
+                    std::move(*mats);
+            std::vector<std::uint8_t> bytes;
+            game::floor_file_write(tmp, floor, bytes);
+            return write_bytes_file(bytes, p.c_str());
+        });
 }
 
 // Stamp a floor's saved state over its freshly generated geometry, if a file
@@ -2940,15 +2993,7 @@ int main(int argc, char** argv) {
         // THE geometry persistence: the next visit (or the next run)
         // stamps it back. A transition is a load screen; I/O is
         // sanctioned here. [save.h]
-        {
-            const auto tW = std::chrono::steady_clock::now();
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
-            std::fprintf(stderr, "[lift] leave %d: floor file %.0f ms\n",
-                         currentFloor,
-                         std::chrono::duration<float, std::milli>(
-                             std::chrono::steady_clock::now() - tW)
-                             .count());
-        }
+        write_floor_file_async(stack.layer(leaveLayer), currentFloor);
         // AIMEM: clear MotionOwner::Ai on the leaving floor before the
         // streamer recycles the layer. unload() also releases; this is the
         // keyboard/--shot leave seam so a ride without an immediate unload
@@ -3130,6 +3175,10 @@ int main(int argc, char** argv) {
             // синхронная поездка тем же законом прибытия.
             return do_ride(/*absolute=*/true, dst, hub);
         }
+        // Хвост фоновой записи — ДО старта воркера: restore-ветка Prebuild
+        // читает файл целевого этажа, а туда-обратно (0->4->0) целевой этаж
+        // и есть последний покинутый.
+        flush_floor_write();
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
         liftFreshDone = false;
@@ -5962,6 +6011,9 @@ int main(int argc, char** argv) {
                         streamer.prebuild_cancel();
                         liftRide = LiftRide::Idle;
                     }
+                    // Загрузка читает floor-файлы — фоновый хвост обязан
+                    // долететь до диска (5a).
+                    flush_floor_write();
                     {
                         loadWanted = false;
                         char runPath[128];
@@ -8628,15 +8680,7 @@ int main(int argc, char** argv) {
                                                     &runState.debris);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
-                        {
-            const auto tW = std::chrono::steady_clock::now();
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
-            std::fprintf(stderr, "[lift] leave %d: floor file %.0f ms\n",
-                         currentFloor,
-                         std::chrono::duration<float, std::milli>(
-                             std::chrono::steady_clock::now() - tW)
-                             .count());
-        }
+                        write_floor_file_async(stack.layer(leaveLayer), currentFloor);
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
