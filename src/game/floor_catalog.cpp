@@ -1,7 +1,8 @@
 #include "game/floor_catalog.h"
 
-#include "game/floors/blame/blame.h" // register_blame_floor — the folder claims its number
-#include "game/floors/padic/padic.h" // register_padic_floor — the folder claims its number
+#include "game/floors/blame/blame.h"     // register_blame_floor — the folder claims its number
+#include "game/floors/khrushi/khrushi.h" // register_khrushi_floor — the folder claims its number
+#include "game/floors/padic/padic.h"     // register_padic_floor — the folder claims its number
 
 namespace giga::game {
 
@@ -83,6 +84,9 @@ bool build_default_floor_catalog(FloorCatalog& cat) {
     // Blame claims 5 — the modulo chain alone would make 5 Commercial
     // (5 % 3 == 2), so the claim is again the module's, not a pattern's.
     ok &= register_blame_floor(cat);
+    // Khrushi claims 6 — the modulo chain alone would make 6 Derelict
+    // (6 % 7 == 6), so the claim is again the module's, not a pattern's.
+    ok &= register_khrushi_floor(cat);
 
     return ok;
 }

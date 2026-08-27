@@ -93,6 +93,7 @@ inline constexpr std::uint8_t kRoleWeights[kFloorKindCount][kRoleCount] = {
     /* Derelict    */ {  10,    2,    1,    20,    40 },
     /* Padic       */ {  20,    5,    2,    15,    20 },
     /* Blame       */ {  10,    5,    2,    25,    15 },
+    /* Khrushi     */ {  65,    6,    3,     4,     1 },
 };
 
 inline constexpr std::uint32_t kRoleSalt = 0x726F6C65u; // "role"

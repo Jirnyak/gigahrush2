@@ -28,6 +28,7 @@ enum class FloorKind : std::uint8_t {
     Derelict,    // near-empty and dangerous (high monster weight)
     Padic,       // 4D spectrum fractal geometry
     Blame,       // megastructure void — vertical technodemo geometry
+    Khrushi,     // open microdistrict — street plan + ten-storey blocks
     Count,
 };
 

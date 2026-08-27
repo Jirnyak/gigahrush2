@@ -1353,7 +1353,12 @@ if(GIGA_BUILD_TESTS)
     # equal_states гонял entries+ledger[24]×4 поля в 5 roundtrip'ах сейва;
     # 35 — блок wealth-тиров suite_economy (размеры, брекеты, 12 клампов);
     # 29 — история кольца (1+1+3+24 слотов); 2 — zero-op «не пишет историю».
-        PASS_REGULAR_EXPRESSION "game_test: 245972 checks, 0 failures")
+    # 245972 -> 246339 (+367) on 2026-08-27: МОДУЛЬ ХРУЩЕЙ (FloorKind::Khrushi,
+    # клейм этажа 6): +90 navcache roundtrip имён (15 номеров × 6 сидов на
+    # новый kind, пин 540→630 ×2 места), +3 клейм-проверки suite_floorcatalog,
+    # остальное — циклы по FloorKind::Count в спеках/ролях/таксономии, которые
+    # выросли на строку каталога.
+        PASS_REGULAR_EXPRESSION "game_test: 246339 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

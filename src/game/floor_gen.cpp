@@ -5,8 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "game/floors/blame/blame.h" // the megastructure module (kind Blame)
-#include "game/floors/padic/padic.h" // the module every OTHER kind dispatches to
+#include "game/floors/blame/blame.h"     // the megastructure module (kind Blame)
+#include "game/floors/khrushi/khrushi.h" // the open microdistrict (kind Khrushi)
+#include "game/floors/padic/padic.h"     // the module every OTHER kind dispatches to
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
@@ -66,6 +67,13 @@ constexpr RoomMix kRoomsBlame[] = {
     {RoomBit::Corridor, 30}, {RoomBit::Storage, 28},
     {RoomBit::Production, 22}, {RoomBit::Common, 20},
 };
+// The open microdistrict: apartment living upstairs, common ground outside —
+// the residential palette, with common/corridor weighted up for the streets
+// and stair cores that make up the outdoor half of the floor.
+constexpr RoomMix kRoomsKhrushi[] = {
+    {RoomBit::Living, 28},   {RoomBit::Kitchen, 14}, {RoomBit::Bathroom, 10},
+    {RoomBit::Common, 20},   {RoomBit::Corridor, 14}, {RoomBit::Storage, 14},
+};
 
 struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
 
@@ -78,6 +86,7 @@ constexpr RoomMixRow kRoomMix[] = {
     room_row(kRoomsResidential), room_row(kRoomsCommercial),
     room_row(kRoomsIndustrial),  room_row(kRoomsDerelict),
     room_row(kRoomsPadic),       room_row(kRoomsBlame),
+    room_row(kRoomsKhrushi),
 };
 static_assert(sizeof(kRoomMix) / sizeof(kRoomMix[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
@@ -168,7 +177,10 @@ std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out) {
     // Blame punches raw openings, never doorable ones — its labyrinth mouths
     // onto the abyss have no jambs for a leaf, so it contributes zero rows.
-    if (spec.kind == FloorKind::Blame) return 0;
+    // Khrushi contributes zero until its blocks grow doorable entrances
+    // (module increment: подъезды + квартирные двери).
+    if (spec.kind == FloorKind::Blame || spec.kind == FloorKind::Khrushi)
+        return 0;
     return padic_doorways(number, seed, out);
 }
 
@@ -189,22 +201,25 @@ constexpr FloorGeneratorFunc kGenerators[] = {
     generate_padic_floor,   // Derelict
     generate_padic_floor,   // Padic
     generate_blame_floor,   // Blame — the megastructure module's own geometry
+    generate_khrushi_floor, // Khrushi — the open microdistrict's own geometry
 };
 static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "generator table must have exactly one row per FloorKind");
 
 constexpr FloorGeneratorFunc kRuleDeclarers[] = {
-    padic_declare_rules, padic_declare_rules, padic_declare_rules,
-    padic_declare_rules, padic_declare_rules, blame_declare_rules,
+    padic_declare_rules, padic_declare_rules,   padic_declare_rules,
+    padic_declare_rules, padic_declare_rules,   blame_declare_rules,
+    khrushi_declare_rules,
 };
 static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "rule-declarer table must have exactly one row per FloorKind");
 
 constexpr FloorGeneratorFunc kRuleAppliers[] = {
-    padic_apply_rules, padic_apply_rules, padic_apply_rules,
-    padic_apply_rules, padic_apply_rules, blame_apply_rules,
+    padic_apply_rules, padic_apply_rules,   padic_apply_rules,
+    padic_apply_rules, padic_apply_rules,   blame_apply_rules,
+    khrushi_apply_rules,
 };
 static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),

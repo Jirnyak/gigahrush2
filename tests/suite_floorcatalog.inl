@@ -13,6 +13,7 @@
 
 #include "game/floor_catalog.h"
 #include "game/floors/blame/blame.h"
+#include "game/floors/khrushi/khrushi.h"
 #include "game/floors/padic/padic.h"
 
 static void test_catalog_duplicate_claim_refused() {
@@ -59,6 +60,12 @@ static void test_catalog_explicit_beats_pattern() {
     CHECK(floor_spec_for(kBlameFloorNumber).kind == FloorKind::Commercial);
     CHECK(cat.claimed(kBlameFloorNumber) != nullptr);
     CHECK(cat.resolve(kBlameFloorNumber).kind == FloorKind::Blame);
+
+    // Same proof for the khrushi module: the chain would make 6 Derelict
+    // (6 % 7 == 6), the claim makes it the open microdistrict.
+    CHECK(floor_spec_for(kKhrushiFloorNumber).kind == FloorKind::Derelict);
+    CHECK(cat.claimed(kKhrushiFloorNumber) != nullptr);
+    CHECK(cat.resolve(kKhrushiFloorNumber).kind == FloorKind::Khrushi);
 }
 
 static void test_catalog_patterns_match_floor_spec_for() {
