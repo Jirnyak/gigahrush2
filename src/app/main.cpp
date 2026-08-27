@@ -3536,6 +3536,34 @@ int main(int argc, char** argv) {
                 mediumLayer = activeLayer;
                 mediumPass.clear_live();
                 mediumSubstepsDone = simTick / 4;
+                // БУДИЛЬНИК ЭТАЖА (вердикт владельца 2026-08-27, «висячая
+                // вода»): генераторный налив (pour_level падика) СПИТ с
+                // рождения — не в списке автомата, и висячую воду в шахтах
+                // не будит ничто (пуля ищет твёрдый атом и пролетает воду
+                // насквозь — наблюдение владельца). При активации этажа
+                // будим ВСЕ клетки с материей сред. Универсально через
+                // агрегаты S16.4 (medium_level пишет сам генератор в
+                // medium_recount) — будильник модуля не знает; вода с
+                // опорой оседает в подтик и засыпает нутром, висячая —
+                // честно падает автоматом на глазах. Скан 128³ один раз на
+                // смену слоя, не на тик.
+                {
+                    World& mw = stack.layer(activeLayer);
+                    const std::uint32_t* lvl = medium_level_data(mw);
+                    static std::vector<std::uint32_t> wet;
+                    wet.clear();
+                    if (lvl)
+                        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
+                            if (lvl[ci] != 0u) wet.push_back(ci);
+                    if (!wet.empty()) {
+                        mediumPass.wake_cells(wet.data(), wet.size(), mw,
+                                              voxelMirror);
+                        std::fprintf(stderr,
+                                     "[medium] floor alarm: %zu cells with "
+                                     "medium woken on layer switch\n",
+                                     wet.size());
+                    }
+                }
             }
             static std::vector<std::uint32_t> mediumMaskChanged;
             mediumMaskChanged.clear();
@@ -4599,7 +4627,25 @@ int main(int argc, char** argv) {
                         const float pr =
                             static_cast<float>(std::atof(kPourEnv));
                         consoleCtx.paintRadius = pr > 0.0f ? pr : 1.0f;
+                        // GIGA_POUR_MAT=<имя строки materials.csv> — материал
+                        // стенда, дефолт water. Появился для замера ВОЗВРАТА
+                        // ГАЗА без сна сред (вердикт владельца 2026-08-27
+                        // «замер сначала»): GIGA_POUR=4 GIGA_POUR_MAT=toxic_gas
+                        // — тот же стенд, та же метрика [medium], ноль новых
+                        // механизмов.
                         consoleCtx.paintMat = kMatWater;
+                        static const char* kPourMatEnv =
+                            std::getenv("GIGA_POUR_MAT");
+                        if (kPourMatEnv) {
+                            const CellType pm = material_id_by_name(kPourMatEnv);
+                            if (pm < kMatCount)
+                                consoleCtx.paintMat = pm;
+                            else
+                                std::fprintf(stderr,
+                                             "[pour-probe] unknown material "
+                                             "'%s', water used\n",
+                                             kPourMatEnv);
+                        }
                         std::fprintf(stderr, "[pour-probe] pouring at tick 200\n");
                     }
                     if ((simTick == 600 || simTick == 1200 ||
