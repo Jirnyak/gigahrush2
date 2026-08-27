@@ -37,8 +37,14 @@
 // Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
+#include "ecs/registry.h"
+#include "game/event_bus.h"
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "world/gravity.h"   // GravityRegime — the module declares its frame
+#include "world/level_stack.h"
 
 namespace giga {
 class World;
@@ -86,5 +92,44 @@ void khrushi_apply_rules(World& world, int number, const FloorSpec& spec,
 // contract ([floor_gen.h]). Pure function of (number, seed).
 void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
                             unsigned seed);
+
+// A street-lamp pole: a voxel pipe column on the kerb with a hook arm over
+// the road; (dx,dy) is the unit step towards the road. The lamp prop hangs
+// from the hook's under-face; wires run pole to pole. ONE function is the
+// source of every pole position — the generator stamps them, the module
+// seeder hangs lamps on them, the antourage hook strings wires between them
+// (the padic lesson: a local copy of layout constants is a standing defect).
+struct KhrushiPole {
+    std::uint8_t x, y;  // kerb cell of the pole
+    std::int8_t dx, dy; // unit step towards the road (the hook direction)
+};
+
+// Pole height in sub-voxels (5 m): the hook arm is its top two sub-layers, so
+// the lamp seeder and the wire hook both derive the hook cell from THIS.
+inline constexpr int kKhrushiPoleTopH = 20;
+
+// A подъезд: the facade cell holding the entrance opening, and the outward
+// step into the courtyard. One per section, emitted in building order.
+struct KhrushiEntrance {
+    std::uint8_t x, y;
+    std::int8_t dx, dy;
+};
+
+// Deterministic replay of the plan's entrance list (same law as the poles:
+// one source, no local copies).
+std::uint32_t khrushi_entrances(unsigned seed, int number,
+                                std::vector<KhrushiEntrance>& out);
+
+// Deterministic in (seed, number) like the geometry. Returns count appended.
+std::uint32_t khrushi_poles(unsigned seed, int number,
+                            std::vector<KhrushiPole>& out);
+
+// Module dressing: street lamps hung from the pole hooks, подъезд bulbs on
+// every stairwell landing, a bulb over every entrance. The generic seeders
+// (ceiling lights, wall interactables, furniture) run separately and cover
+// the flats; this is only the layout the module owns.
+std::uint32_t seed_khrushi_props(Registry& reg, const World& world,
+                                 LayerId layer, int number, unsigned seed,
+                                 EventBus& bus);
 
 } // namespace giga::game

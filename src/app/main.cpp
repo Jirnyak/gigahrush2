@@ -83,6 +83,7 @@
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
+#include "game/floors/khrushi/khrushi.h"
 #include "game/floors/padic/padic.h"
 #include "game/flicker.h"
 #include "game/light_bake.h"
@@ -1469,6 +1470,8 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
+    if (kind_for_floor(floorNumber) == game::FloorKind::Khrushi)
+        count += game::seed_khrushi_props(reg, world, layer, floorNumber, padicSeed, bus);
     // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
     // debug overlay: until this landed a "kitchen" was a hash of the room's
     // coordinates and NOTHING in the world said so, which meant the crowd's whole

@@ -130,10 +130,7 @@ struct Building {
     std::int8_t courtSign;   // which side of the DEPTH axis faces the courtyard
 };
 
-struct Entrance {
-    std::uint8_t x, y;   // the facade cell the подъезд opening lives in
-    std::int8_t dx, dy;  // outward step into the courtyard
-};
+using Entrance = KhrushiEntrance; // the manifest's public type ([khrushi.h])
 
 struct CityPlan {
     std::uint8_t surf[kMacroDim * kMacroDim];
@@ -461,6 +458,39 @@ void stamp_section_flats(MacroGrid& g, SubField<CellType>& sm,
             wall(base + kSectionLen - 1, dc, bandFHi, 0);
 }
 
+// ---- street-lamp poles -----------------------------------------------------
+//
+// The pole is VOXELS, not a prop: a 0.5 m pipe column on the kerb, 5 m tall,
+// with a 2 m hook arm reaching over the road. The lamp is the prop, anchored
+// to the hook's under-face (S2: carve the pole and the lamp falls); wires run
+// hook to hook. Heights derived: lamp face at 4.5 m over the street — an СВ
+// pole over a 4 m lane.
+void stamp_pole(MacroGrid& g, SubField<CellType>& sm, const KhrushiPole& p) {
+    // Base cell chosen so every sub-voxel offset stays non-negative even when
+    // the hook points to −x/−y (put_sub spills forward only).
+    const int bx = p.dx < 0 ? p.x - 1 : p.x;
+    const int by = p.dy < 0 ? p.y - 1 : p.y;
+    const int cx0 = (p.x - bx) * kSubDim;
+    const int cy0 = (p.y - by) * kSubDim;
+    for (int H = 0; H < kKhrushiPoleTopH; ++H)
+        for (int a = 3; a <= 4; ++a)
+            for (int c = 3; c <= 4; ++c)
+                put_sub(g, sm, bx, by, kKhrushiGroundCoord, cx0 + a, cy0 + c, H,
+                        kMatPipeMetal);
+    // Hook arm: the top two sub-layers, 2 wide, running 2 m towards the road
+    // (1.25 m of it over the road cell, where the lamp will hang).
+    for (int H = kKhrushiPoleTopH - 2; H < kKhrushiPoleTopH; ++H)
+        for (int i = 0; i < 8; ++i)
+            for (int w = 3; w <= 4; ++w) {
+                const int ox = p.dx ? cx0 + (p.dx > 0 ? 5 + i : 10 - i)
+                                    : cx0 + w;
+                const int oy = p.dy ? cy0 + (p.dy > 0 ? 5 + i : 10 - i)
+                                    : cy0 + w;
+                put_sub(g, sm, bx, by, kKhrushiGroundCoord, ox, oy, H,
+                        kMatPipeMetal);
+            }
+}
+
 void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
     const int La = b.axis ? b.lenY : b.lenX;
     const int sections = building_sections(b);
@@ -595,6 +625,40 @@ void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
 
 } // namespace
 
+// Replay of the plan's entrance list for the module seeder (lamps over the
+// подъезды) — deterministic in (seed, number) like everything else.
+std::uint32_t khrushi_entrances(unsigned seed, int number,
+                                std::vector<KhrushiEntrance>& out) {
+    CityPlan p;
+    build_city_plan(p, seed, number);
+    out.insert(out.end(), p.doors.begin(), p.doors.end());
+    return static_cast<std::uint32_t>(p.doors.size());
+}
+
+// Pole layout: every 8 cells (16 m — city lamp pitch) along both kerbs of
+// every avenue, phase 4 so no pole lands inside a hub square (pad cells are
+// node±3; t ≡ 4 (mod 8) keeps |t − node| ≥ 4 for nodes at 16 + 32k). The
+// layout is regular by design — jitter would break the wire spans; seed and
+// number stay in the signature for the day the module wants variants.
+std::uint32_t khrushi_poles(unsigned /*seed*/, int /*number*/,
+                            std::vector<KhrushiPole>& out) {
+    std::uint32_t n = 0;
+    for (int r = 0; r < kLatticeDim; ++r) {
+        const int rc = lattice_coord(r);
+        const int lo = wrap_macro(rc + kRoadHalfLo - 1); // kerb cell, low side
+        const int hi = wrap_macro(rc + kRoadHalfHi + 1); // kerb cell, high side
+        for (int t = 4; t < kMacroDim; t += 8) {
+            const std::uint8_t tt = static_cast<std::uint8_t>(t);
+            out.push_back({static_cast<std::uint8_t>(lo), tt, +1, 0});
+            out.push_back({static_cast<std::uint8_t>(hi), tt, -1, 0});
+            out.push_back({tt, static_cast<std::uint8_t>(lo), 0, +1});
+            out.push_back({tt, static_cast<std::uint8_t>(hi), 0, -1});
+            n += 4;
+        }
+    }
+    return n;
+}
+
 void khrushi_declare_rules(World& world, int /*number*/,
                            const FloorSpec& /*spec*/, unsigned /*seed*/) {
     // The sub-material registry has to exist before either geometry writer —
@@ -651,6 +715,11 @@ void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
 
     // Stage 3 — the blocks.
     for (const Building& b : plan.bldgs) stamp_building(g, sm, b);
+
+    // Stage 4 — street-lamp poles along both kerbs of every avenue.
+    std::vector<KhrushiPole> poles;
+    khrushi_poles(seed, number, poles);
+    for (const KhrushiPole& p : poles) stamp_pole(g, sm, p);
 
     // Hub square corner bollards: one cell tall, at the pad's corners — the
     // square reads as a stop from street level without blocking the cabin.
