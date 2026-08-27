@@ -375,12 +375,23 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                : 0u;
 
     // How many sorted cells fit this frame's staging window.
+    //
+    // +3: ПОТОЛОК ВЫРАВНИВАНИЯ. Писатель ниже после класс-байтов ровняет off
+    // до 4 (`(off + 3) & ~3` — uint32-волны обязаны быть выровнены), т.е. до
+    // 3 неучтённых байт НА КАЖДЫЙ РАН. Ранов не больше, чем клеток, так что
+    // +3 на клетку — честная верхняя граница (~4% окна). Без неё лавина
+    // РАССЫПАННЫХ грязных клеток (десятки тысяч ранов — восстановленный этаж
+    // с проснувшимися средами) выгоняла off за staging-буфер: memmove бил
+    // SIGBUS либо молча портил кучу, и падали СЛУЧАЙНЫЕ жертвы — судья
+    // детача посреди cell_partition, деструктор зеркала на выходе. Три
+    // крашрепорта 2026-08-27, один корень.
     std::size_t take = 0;
     std::size_t need = 0;
     while (take < dirty_.size()) {
         const std::uint32_t ci = dirty_[take];
         std::size_t c = kMaskBytesPerCell + sizeof(CellType) +
-                        sizeof(std::uint32_t) * 2 + 1 /* class byte */;
+                        sizeof(std::uint32_t) * 2 + 1 /* class byte */ +
+                        3 /* потолок выравнивания рана — вывод выше */;
         if (pageTab && pageTab[ci] < poolCount) c += kPageBytes;
         if (stainTab && stainTab[ci] < stainPages) c += kStainPageBytes;
         if (need + c > kStagingBytes) break;
@@ -472,6 +483,15 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                 off += kStainPageBytes;
             }
         i = j;
+    }
+    // Пояс к потолку выше: если оценщик и писатель когда-нибудь разойдутся
+    // снова, обрыв ЗДЕСЬ — с именем и числами — а не порча кучи с крашем в
+    // случайной жертве тремя минутами позже.
+    if (off > kStagingBytes) {
+        std::fprintf(stderr,
+                     "[mirror] FATAL: staging overrun %zu > %zu (take %zu)\n",
+                     off, static_cast<std::size_t>(kStagingBytes), take);
+        std::abort();
     }
 
     if (!maskCopies_.empty())
