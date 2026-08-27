@@ -2940,7 +2940,15 @@ int main(int argc, char** argv) {
         // THE geometry persistence: the next visit (or the next run)
         // stamps it back. A transition is a load screen; I/O is
         // sanctioned here. [save.h]
-        write_floor_file(stack.layer(leaveLayer), currentFloor);
+        {
+            const auto tW = std::chrono::steady_clock::now();
+            write_floor_file(stack.layer(leaveLayer), currentFloor);
+            std::fprintf(stderr, "[lift] leave %d: floor file %.0f ms\n",
+                         currentFloor,
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tW)
+                             .count());
+        }
         // AIMEM: clear MotionOwner::Ai on the leaving floor before the
         // streamer recycles the layer. unload() also releases; this is the
         // keyboard/--shot leave seam so a ride without an immediate unload
@@ -2961,6 +2969,16 @@ int main(int argc, char** argv) {
     // и arrive лежит асинхронный Prebuild, а хвост обязан быть ТЕМ ЖЕ кодом.
     auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
         if (!ride.moved) return false;
+        // Разбивка цены прибытия — вслух каждый раз ([lift] arrive): кадр
+        // свапа мерился 9-10 СЕКУНД (лог владельца 2026-08-27), и лечить
+        // фриз можно только зная, какой шаг сколько ест.
+        const auto tArr0 = std::chrono::steady_clock::now();
+        auto arrMs = [&]() {
+            return std::chrono::duration<float, std::milli>(
+                       std::chrono::steady_clock::now() - tArr0)
+                .count();
+        };
+        float mRefresh = 0, mDoors = 0, mNav = 0, mUpload = 0;
         player = ride.player;
         currentFloor = ride.floor;
         // (vendorKind died with the window; barter prices by the partner's
@@ -3013,6 +3031,7 @@ int main(int argc, char** argv) {
         // destroyed and the arrival's are spawned fresh (deterministically, so
         // a floor looks the same every visit).
         LayerId nl = reg.get<Transform>(player).layer;
+        const float mPre = arrMs();
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
@@ -3034,11 +3053,14 @@ int main(int argc, char** argv) {
         //  dressing bake and the props, not after them. [problems.md] §42)
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
+        mRefresh = arrMs() - mPre;
         if (currentSpec)
             doorsBuilt = game::door_build(
                 stack.layer(nl), doors, currentFloor, *currentSpec,
                 streamer.floor_seed_of(registry, currentFloor));
+        mDoors = arrMs() - mPre - mRefresh;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+        mNav = arrMs() - mPre - mRefresh - mDoors;
         // Arrival geometry is final (floor file + doors stamped): re-snapshot
         // the GPU voxel mirror for the recycled World object.
         voxelMirror.upload_all(stack.layer(nl));
@@ -3055,6 +3077,11 @@ int main(int argc, char** argv) {
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
+        mUpload = arrMs() - mPre - mRefresh - mDoors - mNav;
+        std::fprintf(stderr,
+                     "[lift] arrive %d: pre %.0f | refresh %.0f | doors %.0f "
+                     "| nav+light %.0f | upload+place %.0f ms\n",
+                     currentFloor, mPre, mRefresh, mDoors, mNav, mUpload);
         // Publish the new slot to the enclosing frame. ONE place, so a fifth
         // travel site cannot forget it the way two of the first four did.
         activeLayer = nl;
@@ -8601,7 +8628,15 @@ int main(int argc, char** argv) {
                                                     &runState.debris);
                         // Same departure floor-file write as the keyboard
                         // path — two travel sites, one law. [save.h]
-                        write_floor_file(stack.layer(leaveLayer), currentFloor);
+                        {
+            const auto tW = std::chrono::steady_clock::now();
+            write_floor_file(stack.layer(leaveLayer), currentFloor);
+            std::fprintf(stderr, "[lift] leave %d: floor file %.0f ms\n",
+                         currentFloor,
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tW)
+                             .count());
+        }
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
