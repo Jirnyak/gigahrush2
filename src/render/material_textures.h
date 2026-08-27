@@ -1,10 +1,12 @@
-// Material state shared by every world-space pass — what remains of the cube
-// mesher after the raymarch migration deleted it.
+// Material state shared by every world-space pass. Née CubePass — what remained
+// of the cube mesher after the raymarch migration deleted it; renamed 2026-08-27
+// (К5 стабилизации) when the last pretence of being a *pass* (a dead record())
+// was long gone and the name kept promising one.
 //
 // The instanced-cube world draw, its greedy meshers (sub_mesh.h, cube_merge.h)
 // and its 2×64 MiB instance buffers are GONE: the world is drawn by
 // render/raymarch_pass.h over the GPU voxel mirror, and destruction costs the
-// renderer 64 B per dirty cell instead of a 2.1 M-cell rebuild. This class now
+// renderer 64 B per dirty cell instead of a 2.1 M-cell rebuild. This class
 // owns exactly two things the surviving passes share:
 //
 //   * the photographic material arrays (albedo/normal/roughness KTX2 packs)
@@ -59,7 +61,7 @@ static_assert(sizeof(CubePush) == 112, // mat4 64 + 3 vec4 (sunDir снесён 
               "CubePush must not exceed the 128-byte guaranteed push-constant "
               "size; move new parameters to a uniform buffer instead");
 
-class CubePass {
+class MaterialTextures {
 public:
     // Loads the material texture pack and builds the shared pipeline layout.
     // Never fails on missing/corrupt textures — the procedural surface is the

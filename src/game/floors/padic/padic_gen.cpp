@@ -285,7 +285,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
 // OR `bits` into layer word `wz` of cell (x,y,z) as material `mat`. Pages are
 // created only when a second material genuinely lands in the cell, and a page's
 // content is fully deterministic — the render stretch relies on byte-identical
-// pages ([render/cube_pass.cpp]).
+// pages ([render/material_textures.cpp]).
 void put_bits(MacroGrid& g, SubField<CellType>& sm, int x, int y, int z, int wz,
               std::uint64_t bits, CellType mat) {
     if (bits == 0 || z < 0 || z >= kMacroDim) return;

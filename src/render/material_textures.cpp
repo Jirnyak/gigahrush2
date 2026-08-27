@@ -1,4 +1,4 @@
-#include "render/cube_pass.h"
+#include "render/material_textures.h"
 
 #include "render/vk_common.h"
 #include "render/vk_device.h"
@@ -88,7 +88,7 @@ std::string join(const std::string& a, const char* b) {
 
 } // namespace
 
-bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout,
+bool MaterialTextures::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout,
                     VkDescriptorSetLayout shadowSetLayout) {
     dev_ = &dev;
     lightGridSetLayout_ = lightGridSetLayout;
@@ -100,7 +100,7 @@ bool CubePass::init(VulkanDevice& dev, VkDescriptorSetLayout lightGridSetLayout,
 // Load the pack, and say out loud what happened either way. This function
 // CANNOT fail the pass: every failure leaves the procedural surface — the
 // renderer this project shipped for its whole life — and one loud line.
-void CubePass::load_material_textures() {
+void MaterialTextures::load_material_textures() {
     const std::string dirStr = resolve_texture_dir();
     const char* dir = dirStr.c_str();
 
@@ -224,7 +224,7 @@ void CubePass::load_material_textures() {
 // The shared layout the prop pass borrows: (set0 textures-or-dummy,
 // set1 light grid) + the 128-byte CubePush range — byte-identical to what the
 // mesher-era pipeline used, so prop pipelines keep working unchanged.
-bool CubePass::create_layout() {
+bool MaterialTextures::create_layout() {
     VkPushConstantRange pcr{};
     pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcr.offset = 0;
@@ -273,7 +273,7 @@ bool CubePass::create_layout() {
     return ok;
 }
 
-void CubePass::destroy() {
+void MaterialTextures::destroy() {
     if (!dev_) return;
     if (layout_) { vkDestroyPipelineLayout(dev_->device, layout_, nullptr); layout_ = VK_NULL_HANDLE; }
     if (descriptorPool_) { vkDestroyDescriptorPool(dev_->device, descriptorPool_, nullptr); descriptorPool_ = VK_NULL_HANDLE; }

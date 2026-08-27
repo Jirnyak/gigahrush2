@@ -17,7 +17,7 @@
 //   2. Call add_instance() / clear_instances() to populate the scene list.
 //   3. Before the render pass, call upload_instances(frame) and run
 //      GpuCullPass::record_cull per shape over the returned ranges.
-//   4. Inside the render pass, after CubePass::record(), call record() with
+//   4. Inside the render pass, after the world draw, call record() with
 //      the same push constants the cube pass received.
 #pragma once
 
@@ -26,7 +26,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "render/cube_pass.h"   // CubePush (shared push-constant block)
+#include "render/material_textures.h"   // CubePush (shared push-constant block)
 #include "render/prop_mesh.h"
 #include "render/vk_buffer.h"
 #include "render/vk_device.h"
@@ -52,7 +52,7 @@ public:
     PropPass(const PropPass&)            = delete;
     PropPass& operator=(const PropPass&) = delete;
 
-    // `pipelineLayout` is borrowed from CubePass (same push-constant block).
+    // `pipelineLayout` is borrowed from MaterialTextures (same push-constant block).
     // `shaderDir` must contain prop.vert.spv and prop.frag.spv (falls back to
     // cube.frag.spv when prop.frag.spv is absent).
     bool init(VulkanDevice* dev, VkPipelineLayout pipelineLayout,
@@ -70,7 +70,7 @@ public:
     void upload_instances(uint32_t frameIndex);
 
     // Record all prop draw calls into `cmd`. Push constants must already be
-    // bound by the caller (CubePass::record() does this for the world pass;
+    // bound by the caller (the world pass does this;
     // the prop pass is drawn inside the same render-pass subpass so they carry
     // over without a re-push).
     void record(VkCommandBuffer cmd, uint32_t frameIndex,

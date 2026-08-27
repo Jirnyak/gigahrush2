@@ -52,7 +52,7 @@
 // the whole module at init(), which is the only way to find out what the eight
 // timestamp writes and the query-pool reset cost per frame: a BOTTOM_OF_PIPE
 // timestamp is an ordering point the driver has to honour, and "it is probably
-// free" is an opinion. Same-binary A/B, like GIGA_CUBE_MAXRUN in cube_pass.cpp,
+// free" is an opinion. Same-binary A/B, like GIGA_CUBE_MAXRUN in material_textures.cpp,
 // because a rebuild between two numbers is how a thermally-downclocked
 // "improvement" gets published.
 #pragma once

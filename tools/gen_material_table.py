@@ -346,11 +346,14 @@ inline constexpr float kMatDensity[kMatCount] = {
         fh.write(elements(mats, vals, names))
         fh.write("""};
 
-// Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
-inline constexpr float kSubVoxelVolumeM3 = 0.25f * 0.25f * 0.25f;
-inline float material_subvoxel_mass_kg(CellType t) {
-    return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
-}
+// (material_subvoxel_mass_kg СНЕСЁН аудитом 2026-08-25 решением владельца:
+// ноль вызывающих — детач/рыхлое массу атомов не считает. ЗАМЫСЕЛ записан
+// вердиктом владельца 2026-08-27: закон «масса = kMatDensity × 0.25³»
+// вернётся с эпиком цельных кусков-пропов — когда обломок мира из вокселей
+// конвертируется в ПРОП (S3/S16.3: тяжёлый кусок, обязанный бить больно,
+// = RagdollRoll) и его масса обязана быть Σ масс атомов, а не назначением;
+// без неё урон падения E = mv²/2 (impact.cpp) посчитать нечем. До того
+// эпика функции не существует намеренно — мёртвый API дороже надгробия.)
 
 // СРЕДЫ (CANON S16, мир-автомат). Движение материи читает ТОЛЬКО параметры:
 //   flow      — доля, перетекающая вбок за подтик автомата: 0 = твёрдое
@@ -458,7 +461,7 @@ inline bool material_passes_light(CellType t) {
 // referred — the shading linearises once with pow(2.2)), and which KTX2 texture
 // set skins an id. Albedos bound to a texture are MEASURED off the real
 // photograph (data/textures.csv carries the linear mean and provenance);
-// unbound rows are authored. Consumed by render/cube_pass.cpp only.
+// unbound rows are authored. Consumed by render/material_textures.cpp only.
 #pragma once
 
 #include "core/math.h"

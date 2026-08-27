@@ -94,7 +94,7 @@
 #include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
-#include "render/cube_pass.h"
+#include "render/material_textures.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
 #include "render/gpu_medium_pass.h"
 #include "world/material_props.h" // material_phase — sphere не маскирует жидкость
@@ -159,7 +159,7 @@ constexpr int kWinH = 720;
 // ехала в `camPos.w`, радиус в `fog.z`, и три шейдера считали по ним обратный
 // квадрат. Обе лейны теперь МЁРТВЫ и пушатся нулями — намеренно, а не по
 // забывчивости: занять их нечем, а `CubePush` уже ровно 128 Б, то есть
-// гарантированный потолок пуш-констант ([cube_pass.h]).
+// гарантированный потолок пуш-констант ([material_textures.h]).
 // Свет в руке — предмет: `flashlight` в слоте Tool идёт через `add_light`
 // с конусом и параллаксом от руки (см. ниже по файлу), и NPC получат тот же
 // путь. Разбор — [markoaudit/plans/headlamp-death.md].
@@ -2069,8 +2069,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    gpu::CubePass cubePass;
-    if (!cubePass.init(device, lightGrid.descriptor_set_layout(),
+    gpu::MaterialTextures materialTex;
+    if (!materialTex.init(device, lightGrid.descriptor_set_layout(),
                        voxelMirror.shadow_set_layout())) {
         std::fprintf(stderr, "Cube pass init failed\n");
         voxelMirror.destroy();
@@ -2083,16 +2083,16 @@ int main(int argc, char** argv) {
     }
 
     // The world renderer: a fullscreen two-level DDA over the mirror
-    // ([render/raymarch_pass.h]). CubePass stays alive as the texture-array
+    // ([render/raymarch_pass.h]). MaterialTextures is the texture-array
     // owner and the body/prop pipeline-layout donor until the mesher deletion
     // lands; its record() is no longer called, so invalidate() is free.
     gpu::RaymarchPass raymarchPass;
     if (!raymarchPass.init(device, renderer.renderPass, GIGA_SHADER_DIR,
-                           voxelMirror, cubePass,
+                           voxelMirror, materialTex,
                            lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "Raymarch pass init failed\n");
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -2108,7 +2108,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Body pass init failed\n");
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -2118,10 +2118,10 @@ int main(int argc, char** argv) {
     }
 
     // GPU-instanced arbitrary prop meshes (cylinders, arches, barrels, pipes).
-    // Shares CubePass's pipeline layout and cube.frag so props receive identical
+    // Shares MaterialTextures' pipeline layout and cube.frag so props receive identical
     // PBR lighting, fog, and material shading as the voxel world.
     gpu::PropPass propPass;
-    if (!propPass.init(&device, cubePass.pipeline_layout(),
+    if (!propPass.init(&device, materialTex.pipeline_layout(),
                        renderer.renderPass, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
         // Non-fatal: the game runs fine without props.
@@ -2186,7 +2186,7 @@ int main(int argc, char** argv) {
         bodyPass.destroy();
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         renderer.destroy();
         device.destroy();
         SDL_DestroyWindow(window);
@@ -2424,7 +2424,7 @@ int main(int argc, char** argv) {
         bodyPass.destroy();
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         renderer.destroy();
         device.destroy();
         SDL_DestroyWindow(window);
@@ -8592,7 +8592,7 @@ int main(int argc, char** argv) {
     bodyPass.destroy();
     raymarchPass.destroy();
     voxelMirror.destroy();
-    cubePass.destroy();
+    materialTex.destroy();
     lightGrid.destroy();
     renderer.destroy();
     device.destroy();

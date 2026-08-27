@@ -1,6 +1,6 @@
 // The fullscreen raymarch world pass — stage 2 of the raymarch migration.
 //
-// Replaces CubePass::record for the WORLD: one vertex-buffer-free fullscreen
+// The WORLD draw (replaced the old cube-mesher pass): one vertex-buffer-free fullscreen
 // triangle whose fragment shader (shaders/raymarch.frag) runs a two-level DDA
 // over the VoxelMirror's SSBOs and writes colour + honest gl_FragDepth through
 // the same CubePush::viewProj the raster passes push — so bodies, props and
@@ -14,7 +14,7 @@
 //
 // Sets: 0 = the mirror (5 SSBOs + a small UBO: inverse view-proj for ray
 // generation, CPU-inverted, plus the material albedo table); 1 = the light
-// grid (same layout every lit pass shares); 2 = CubePass's photographic
+// grid (same layout every lit pass shares); 2 = MaterialTextures' photographic
 // texture arrays, present only in the -DGIGA_ALBEDO_ARRAY module — the same
 // two-modules-from-one-source scheme cube.frag uses, for the same reason.
 #pragma once
@@ -31,15 +31,15 @@ namespace giga::gpu {
 
 struct VulkanDevice;
 struct CubePush;
-class CubePass;
+class MaterialTextures;
 class VoxelMirror;
 
 class RaymarchPass {
 public:
     // `mirror` must outlive this pass (its buffers back the descriptor sets);
-    // `cubePass` lends its texture arrays + masks, which are boot-time state.
+    // `materials` lends its texture arrays + masks, which are boot-time state.
     bool init(VulkanDevice& dev, VkRenderPass renderPass, const char* shaderDir,
-              const VoxelMirror& mirror, const CubePass& cubePass,
+              const VoxelMirror& mirror, const MaterialTextures& materials,
               VkDescriptorSetLayout lightGridSetLayout);
     void destroy();
     bool ready() const { return pipeline_ != VK_NULL_HANDLE; }
@@ -57,7 +57,7 @@ public:
 
     // Draw the world for this frame. Inverts push.viewProj on the CPU into the
     // frame's UBO slot; overwrites push.torus.z/.w with the texture masks,
-    // exactly as CubePass::record did, so the shared shading sees the same
+    // exactly as the old cube pass did, so the shared shading sees the same
     // lanes it always saw.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                 const CubePush& push, VkDescriptorSet lightGridSet);

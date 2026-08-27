@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "render/cube_pass.h" // CubePush, material_albedo_table, texture getters
+#include "render/material_textures.h" // CubePush, material_albedo_table, texture getters
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
@@ -147,17 +147,17 @@ bool make_module(VkDevice dev, const std::vector<char>& code, VkShaderModule* ou
 
 bool RaymarchPass::init(VulkanDevice& dev, VkRenderPass renderPass,
                         const char* shaderDir, const VoxelMirror& mirror,
-                        const CubePass& cubePass,
+                        const MaterialTextures& materials,
                         VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = &dev;
     lightGridSetLayout_ = lightGridSetLayout;
-    texSetLayout_ = cubePass.texture_set_layout();
-    texSet_ = cubePass.texture_descriptor_set();
-    textured_ = cubePass.textured() && texSetLayout_ != VK_NULL_HANDLE &&
+    texSetLayout_ = materials.texture_set_layout();
+    texSet_ = materials.texture_descriptor_set();
+    textured_ = materials.textured() && texSetLayout_ != VK_NULL_HANDLE &&
                 texSet_ != VK_NULL_HANDLE;
-    texMask_ = cubePass.textured_materials();
-    normalMask_ = cubePass.normal_materials();
-    roughnessMask_ = cubePass.roughness_materials();
+    texMask_ = materials.textured_materials();
+    normalMask_ = materials.normal_materials();
+    roughnessMask_ = materials.roughness_materials();
 
     if (!create_descriptors(mirror)) return false;
     if (!create_half_pass()) return false;

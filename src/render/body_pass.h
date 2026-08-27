@@ -1,6 +1,6 @@
 // The body renderer: draws every embodied entity as one lit, instanced box.
 //
-// Companion to CubePass. Where the cube pass draws the static voxel world, this
+// Companion to RaymarchPass (world) and MaterialTextures (shared material state);
 // pass draws the *population*: each ECS entity carrying a Transform + AABB +
 // Renderable becomes one box, centred on its Transform and sized to its AABB
 // half-extents (so a child record embodies short, an adult tall), tinted by the
@@ -12,7 +12,7 @@
 // the far side of the torus shows in front of the player, never at the seam.
 // Render is a read-only skin (sim -> render only): this pass mutates no ECS
 // state and reads only core components, never the game layer. It shares
-// CubePass's push-constant block and reuses cube.frag for shading.
+// the shared CubePush block ([material_textures.h]) and reuses cube.frag for shading.
 #pragma once
 
 #include <vulkan/vulkan.h>
@@ -21,7 +21,7 @@
 
 #include "core/math.h"
 #include "ecs/registry.h"
-#include "render/cube_pass.h"  // CubePush (shared push-constant block)
+#include "render/material_textures.h"  // CubePush (shared push-constant block)
 #include "render/vk_buffer.h"
 #include "render/vk_renderer.h"
 #include "world/level_stack.h" // LayerId

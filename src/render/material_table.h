@@ -6,7 +6,7 @@
 // referred — the shading linearises once with pow(2.2)), and which KTX2 texture
 // set skins an id. Albedos bound to a texture are MEASURED off the real
 // photograph (data/textures.csv carries the linear mean and provenance);
-// unbound rows are authored. Consumed by render/cube_pass.cpp only.
+// unbound rows are authored. Consumed by render/material_textures.cpp only.
 #pragma once
 
 #include "core/math.h"

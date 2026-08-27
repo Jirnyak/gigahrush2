@@ -20,7 +20,7 @@
 #include <cstdint>
 
 #include "core/math.h"
-#include "render/cube_pass.h" // CubePush — the shared push-constant block
+#include "render/material_textures.h" // CubePush — the shared push-constant block
 #include "render/vk_buffer.h"
 
 namespace giga::gpu {
