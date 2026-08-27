@@ -1,6 +1,9 @@
 # Floors — Modules on the level stack
 
-> **Сверка 2026-08-23:** резидентов ДВА — padic и blame (этаж 5); `nav::AsyncBake`
+> **Сверка 2026-08-27:** резидентов ТРИ — padic, blame (этаж 5) и khrushi
+> (этаж 6, открытый микрорайон — `src/game/floors/khrushi/khrushi.md`);
+> появился четвёртый per-kind шов `floor_antourage_extra` (модульный антураж
+> поверх generic-бейка, строка в таблице floor_gen.cpp). `nav::AsyncBake`
 > МЁРТВ (двойной бейк §26 закрыт — `RebakeScheduler`, `rebake.h:3`); сериализация
 > number→module и холодного пула СДЕЛАНА (`save.h` v18). Раздел room_zone
 > описывает код верно, но CANON S12.2/S13.9 его отменяют (вида комнаты не

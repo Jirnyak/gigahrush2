@@ -1,6 +1,7 @@
 # Worldgen — DELETED (2026-08-02)
 
-> **Сверка 2026-08-23:** геометрических модулей теперь ДВА — padic и blame
+> **Сверка 2026-08-27:** геометрических модулей теперь ТРИ — padic, blame и
+> khrushi (этаж 6)
 > (`floors/blame/blame_module.cpp:13`, этаж 5); «no module seeds standing
 > water» устарело — `padic_gen` сеет `kFluidField`. Флаг `--no-crt` добавился
 > (`main.cpp:1806`). Как надгробие старого worldgen — док годен.

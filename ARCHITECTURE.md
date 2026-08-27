@@ -1,6 +1,7 @@
 # Architecture — gigahrush2
 
-> **Сверка 2026-08-23:** геометрических модулей два (padic + blame); L2 не
+> **Сверка 2026-08-27:** геометрических модулей три (padic + blame + khrushi,
+> этаж 6 — открытый микрорайон); L2 не
 > знает `diffusion` и `rigid` (`src/sim/`); mob table давно построена
 > («pending» устарело); §Simulation loop — три шага из ~15 реальных (нет
 > ai/wander/macro/rebake/charge/rigid/needs). Эталон замысла — `CANON.md`
