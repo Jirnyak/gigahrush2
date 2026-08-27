@@ -302,6 +302,20 @@ private:
     LayerId alloc_slot();
     void free_slot(LayerId slot);
 
+    // The WORLD HALF of a floor entry (разрез — elevators-2x2.md, решение 1):
+    // laws -> restore-or-generate fork -> rules -> antourage bake. Writes ONLY
+    // into `w` and the returned bake — no Registry, no NpcPool, no
+    // FloorRegistry, and `const` so it cannot touch a member. That is exactly
+    // the ownership a Prebuild worker takes wholesale (async-rebake.md §5);
+    // everything below this line in ensure_loaded is the ECS half and stays on
+    // the main thread. Takes number/kind/seed BY VALUE, not a FloorModule&,
+    // so a worker never holds a reference into modules_ the main thread owns.
+    // The [floor] timing line prints here — the restore read (~6.4 s) vs
+    // generate (~130 ms) split must never turn back into folklore.
+    std::unique_ptr<AntourageBake> build_world_half(World& w, int number,
+                                                    FloorKind kind,
+                                                    std::uint32_t seed) const;
+
     // Embody a module's cold crowd onto `layer`. See ensure_loaded for the
     // player-designation and skip-already-embodied rules.
     void embody_crowd(Registry& ecs, NpcPool& pool, const World& world,

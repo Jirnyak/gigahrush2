@@ -237,6 +237,64 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
     }
 }
 
+std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
+    World& w, int number, FloorKind kind, std::uint32_t seed) const {
+    // A FLOOR ENTRY IS THREE STEPS ([floor_gen.h]), and the middle one is a FORK.
+    //
+    //   1. LAWS      — always. The module says what kind of place this is:
+    //                  gravity frame, registries. Not in the snapshot, because
+    //                  it is a property of the MODULE, not of the saved bytes.
+    //   2. GEOMETRY  — restored from the floor's snapshot if it was ever
+    //                  visited, generated from (seed, number) if it was not.
+    //                  One or the other, never both.
+    //   3. RULES     — always, on top of whichever geometry step ran: fluids and
+    //                  seeded content, so a revisited floor gets its water back
+    //                  even though the snapshot carries geometry only.
+    //
+    // Generation and rules used to be fused inside the module generator, which is
+    // what forced a visited floor to be BUILT before its snapshot could be laid
+    // over it — 126 ms of voxels written and immediately overwritten, and worse,
+    // the ordering bug that hung lamps in mid-air ([problems.md] §42). Now the
+    // fork is literal: a visited floor is its snapshot plus its module's rules.
+    //
+    // Timings are printed because which half costs what was folklore until it was
+    // measured: generate ~130 ms against a ~6.4 s snapshot read on this floor.
+    const auto t0 = std::chrono::steady_clock::now();
+    floor_declare_rules(w, number, floor_spec(kind), seed);
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const bool restored = restore_ && restore_(w, number);
+    const auto t2 = std::chrono::steady_clock::now();
+    if (!restored)
+        generate_floor(w, number, floor_spec(kind), seed);
+    const auto t3 = std::chrono::steady_clock::now();
+
+    floor_apply_rules(w, number, floor_spec(kind), seed);
+    const auto t4 = std::chrono::steady_clock::now();
+    {
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[floor] %d: laws %.1f ms | %s %.1f ms | rules %.1f ms\n",
+                     number, ms(t0, t1),
+                     restored ? "RESTORED" : "generated",
+                     restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
+    }
+
+    // Antourage AFTER the geometry: it READS the finished grid as context and
+    // never writes it ([antourage.md] — the dressing is mesh on anchors, so
+    // nav has nothing to route around and does not care where in the load this
+    // runs). Deterministic in (grid, number, seed) — a recycled slot re-bakes
+    // bit-for-bit like the geometry itself, which is why nothing is persisted.
+    // Returned, not stored: the member write is the ECS half's job (a worker
+    // has no business near antourage_[]).
+    auto ab = std::make_unique<AntourageBake>();
+    bake_antourage(w, number, seed, *ab);
+    floor_antourage_extra(w, number, floor_spec(kind), seed, *ab);
+    return ab;
+}
+
 LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
                                         Registry& ecs, NpcPool& pool, int number,
                                         NpcId& playerId) {
@@ -284,59 +342,10 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // floor bit-for-bit (floor_gen.h) — no layout is ever persisted.
     LayerId slot = alloc_slot();
     if (slot == kInvalidLayer) return out; // slot pool exhausted (should not happen)
-    // A FLOOR ENTRY IS THREE STEPS ([floor_gen.h]), and the middle one is a FORK.
-    //
-    //   1. LAWS      — always. The module says what kind of place this is:
-    //                  gravity frame, registries. Not in the snapshot, because
-    //                  it is a property of the MODULE, not of the saved bytes.
-    //   2. GEOMETRY  — restored from the floor's snapshot if it was ever
-    //                  visited, generated from (seed, number) if it was not.
-    //                  One or the other, never both.
-    //   3. RULES     — always, on top of whichever geometry step ran: fluids and
-    //                  seeded content, so a revisited floor gets its water back
-    //                  even though the snapshot carries geometry only.
-    //
-    // Generation and rules used to be fused inside the module generator, which is
-    // what forced a visited floor to be BUILT before its snapshot could be laid
-    // over it — 126 ms of voxels written and immediately overwritten, and worse,
-    // the ordering bug that hung lamps in mid-air ([problems.md] §42). Now the
-    // fork is literal: a visited floor is its snapshot plus its module's rules.
-    //
-    // Timings are printed because which half costs what was folklore until it was
-    // measured: generate ~130 ms against a ~6.4 s snapshot read on this floor.
-    const auto t0 = std::chrono::steady_clock::now();
-    floor_declare_rules(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
-
-    const auto t1 = std::chrono::steady_clock::now();
-    const bool restored = restore_ && restore_(stack.layer(slot), fm.number);
-    const auto t2 = std::chrono::steady_clock::now();
-    if (!restored)
-        generate_floor(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
-    const auto t3 = std::chrono::steady_clock::now();
-
-    floor_apply_rules(stack.layer(slot), fm.number, floor_spec(fm.kind), fm.seed);
-    const auto t4 = std::chrono::steady_clock::now();
-    {
-        auto ms = [](auto a, auto b) {
-            return std::chrono::duration<double, std::milli>(b - a).count();
-        };
-        std::fprintf(stderr,
-                     "[floor] %d: laws %.1f ms | %s %.1f ms | rules %.1f ms\n",
-                     fm.number, ms(t0, t1),
-                     restored ? "RESTORED" : "generated",
-                     restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
-    }
-
-    // Antourage AFTER the geometry: it READS the finished grid as context and
-    // never writes it ([antourage.md] — the dressing is mesh on anchors, so
-    // nav has nothing to route around and does not care where in the load this
-    // runs). Deterministic in (grid, number, seed) — a recycled slot re-bakes
-    // bit-for-bit like the geometry itself, which is why nothing is persisted.
-    auto ab = std::make_unique<AntourageBake>();
-    bake_antourage(stack.layer(slot), fm.number, fm.seed, *ab);
-    floor_antourage_extra(stack.layer(slot), fm.number, floor_spec(fm.kind),
-                          fm.seed, *ab);
-    antourage_[m] = std::move(ab);
+    // Everything from here to set_resident that touches the slot's World is the
+    // WORLD HALF — see build_world_half below. What remains in THIS function is
+    // the ECS half: residency, the (test-only) nav bake, the crowd.
+    antourage_[m] = build_world_half(stack.layer(slot), fm.number, fm.kind, fm.seed);
     reg.set_resident(m, slot);
 
     // Bring up this floor's navigation into a per-module holder that lives only
