@@ -7193,12 +7193,14 @@ int main(int argc, char** argv) {
             }
         }
 
-        // --- THE SHAFT MENU -------------------------------------------------
+        // --- THE LIFT MENU --------------------------------------------------
         // The manifesto (p.4) asks for three KINDS of transition: a fixed
         // fast-travel grid, a procedural ride down, and a procedural ride up. It
         // spells that as three separate 4x4 sets of columns — 48 shafts. Owner's
-        // decision 2026-08-12: keep ONE set of 16 and let the column offer all three,
-        // which is what this window is.
+        // decision 2026-08-12: keep ONE set and let the column offer all three,
+        // which is what this window is. Owner's decision 2026-08-27
+        // (elevators-2x2.md): lifts sit on the 2×2 SUBSET of the lattice — 4
+        // cabins per floor; the other 12 columns stay geometry without a menu.
         //
         // That is not only cheaper to build, it is the only version that does not
         // move `kLatticeDim` — and `nav::kNodes == kLatticeCount == kLatticeDim^3`,
@@ -7221,12 +7223,13 @@ int main(int argc, char** argv) {
             if (ImGui::Begin("ЛИФТ / ELEVATOR", &elevOpen)) {
                 if (shaft < 0) {
                     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
-                                       "[NOT IN A SHAFT]");
+                                       "[NOT IN A LIFT]");
                     ImGui::TextWrapped(
-                        "Встаньте в колонну лифта — 16 шахт на решётке 4x4, "
-                        "одинаково на каждом этаже.");
+                        "Встаньте в кабину лифта — 4 лифта на узлах 2x2 "
+                        "(каждый второй узел решётки), одинаково на каждом "
+                        "этаже.");
                 } else {
-                    ImGui::Text("ШАХТА %d  |  ЭТАЖ %d", shaft, currentFloor);
+                    ImGui::Text("ЛИФТ %d  |  ЭТАЖ %d", shaft, currentFloor);
                     ImGui::Separator();
                     refresh_console_ctx();
                     // 1 & 2 — the procedural halves. `ride` walks to the nearest

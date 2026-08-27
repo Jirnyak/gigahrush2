@@ -3,10 +3,12 @@
 > **Status: adjacent travel built, fast travel built on the PLANAR lattice**
 > (game layer, `src/game` / `giga_game`), on top of [floors.md](floors.md) /
 > [world.md](world.md). The `±1` ride with load-on-demand is implemented and
-> wired to `[` / `]`. Fast travel ships as **16 planar hub cabins** (the `4×4`
-> xy face of the lattice) with a discovery-unlock set and a console command; the
-> full **`4×4×4` = 64-node** version — boarding a hub at a specific `iz` rather
-> than any storey — is still the design below.
+> wired to `[` / `]`. Fast travel ships as **4 planar lift cabins** — the `2×2`
+> SUBSET of the lattice, every second node on both axes (owner 2026-08-27,
+> [markoaudit/plans/elevators-2x2.md](markoaudit/plans/elevators-2x2.md): 4×4
+> was too dense; the other 12 columns stay geometry without a cabin) — with a
+> discovery-unlock set and a console command. The lift EPIC (diegetic cabin,
+> Prebuild ride, doors wait for the Fresh swap) is in flight per that plan.
 >
 > - **Code:** [src/game/elevator.h](src/game/elevator.h) /
 >   [.cpp](src/game/elevator.cpp) (`ride_elevator`, `landHub`), driven load-first
@@ -41,7 +43,8 @@ stack.
   yaw/pitch/fov + fly mode across the fresh body. The rider keeps x/y and lands
   at the **mirrored position** on the adjacent floor. `FloorStreamer::travel`
   wraps it to **load the destination on demand first** (see below).
-- **Fast travel — the planar `4×4` cabins (built 2026-08-04).** A **teleport** to
+- **Fast travel — the planar cabins (built 2026-08-04; grid cut to `2×2` = 4
+  lifts 2026-08-27, elevators-2x2.md).** A **teleport** to
   any *already-unlocked* floor number, skipping intermediate floors — usable
   **only while standing on a hub cabin** (`on_fast_hub`, an exact lattice centre
   in the two coordinates tangent to the module's gravity axis). A floor joins the
@@ -51,7 +54,7 @@ stack.
   number through the same `FloorRegistry` chain. The landing plants the rider on
   the **same hub index** on the destination floor, so a fast ride is
   positionally stable up and down the stack. Refusals are a typed enum
-  (`NotOnHub` / `Locked` / `NoFloor` / `SameFloor`), not a bool.
+  (`NotInCabin` / `Locked` / `NoFloor` / `SameFloor`), not a bool.
   Still design-only: boarding a *specific* `iz` node rather than the storey the
   rider is on, and the unlocked-floor UI menu.
 

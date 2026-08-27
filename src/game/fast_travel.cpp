@@ -9,7 +9,7 @@ FastTravelGate fast_travel_gate(const FastTravelState& ft,
     if (floors.module_at(toFloor) == kInvalidModule) return FastTravelGate::NoFloor;
     if (!ft.unlocked(toFloor)) return FastTravelGate::Locked;
     const int hub = fast_hub_at(cx, cy);
-    if (hub < 0) return FastTravelGate::NotOnHub;
+    if (hub < 0) return FastTravelGate::NotInCabin;
     if (hubOut) *hubOut = hub;
     return FastTravelGate::Ok;
 }

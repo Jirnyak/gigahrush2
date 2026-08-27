@@ -452,9 +452,10 @@ bool cmd_fasttravel(ConsoleContext& ctx, int argc, const char* const* argv,
     case FastTravelGate::SameFloor:
         put(out, cap, "fasttravel: already there");
         return true;
-    case FastTravelGate::NotOnHub:
+    case FastTravelGate::NotInCabin:
         put(out, cap,
-            "fasttravel: stand on a lattice hub cabin (exact 4x4 centre cell)");
+            "fasttravel: not in a lift cabin (lifts sit on the 2x2 even "
+            "lattice nodes)");
         return false;
     case FastTravelGate::Locked:
         if (out && cap)

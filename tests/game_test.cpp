@@ -919,20 +919,24 @@ static void test_fast_travel() {
     ft.unlock(-9999);
     CHECK(!ft.unlocked(-9999));
 
-    // --- Hub cell geometry: hub = iy*4+ix, cell = (lattice_coord(ix),
-    // lattice_coord(iy)). Out-of-range is a no-op (cx/cy unchanged). ---
+    // --- Hub cell geometry (лифтовая сетка 2×2, elevators-2x2.md): hub =
+    // ly*kLiftGridDim+lx над ЧЁТНЫМИ латтис-индексами — кабины на {16, 80}².
+    // Out-of-range is a no-op (cx/cy unchanged). ---
     std::uint8_t hx = 1, hy = 1;
     fast_hub_cell(/*hub=*/0, hx, hy);
     CHECK(hx == static_cast<std::uint8_t>(lattice_coord(0)));
     CHECK(hy == static_cast<std::uint8_t>(lattice_coord(0)));
-    std::uint8_t hx15 = 1, hy15 = 1;
-    fast_hub_cell(/*hub=*/15, hx15, hy15);
-    CHECK(hx15 == static_cast<std::uint8_t>(lattice_coord(3)));
-    CHECK(hy15 == static_cast<std::uint8_t>(lattice_coord(3)));
+    std::uint8_t hx3 = 1, hy3 = 1;
+    fast_hub_cell(/*hub=*/3, hx3, hy3);
+    CHECK(hx3 == static_cast<std::uint8_t>(lattice_coord(2)));
+    CHECK(hy3 == static_cast<std::uint8_t>(lattice_coord(2)));
     std::uint8_t fbX = 40, fbY = 50;
     fast_hub_cell(/*hub=*/-1, fbX, fbY);
     CHECK(fbX == 40 && fbY == 50);
     fast_hub_cell(/*hub=*/99, fbX, fbY);
+    CHECK(fbX == 40 && fbY == 50);
+    // Прежний хаб 15 (решётка 4×4) мёртв вместе с сеткой — no-op, не кабина.
+    fast_hub_cell(/*hub=*/15, fbX, fbY);
     CHECK(fbX == 40 && fbY == 50);
 
     // --- Boarding: exact cabin centre cell only ---
@@ -940,6 +944,13 @@ static void test_fast_travel() {
     CHECK(fast_hub_at(hx, hy) == 0);
     CHECK(!on_fast_hub(static_cast<int>(hx) + 1, hy));
     CHECK(!on_fast_hub(hx, static_cast<int>(hy) + 1));
+    // НЕЧЁТНЫЙ узел решётки — колонна без лифта: и центр, и вся шахта
+    // отказывают. Это и есть смерть 12 хабов из 16 (решение владельца).
+    CHECK(!on_fast_hub(lattice_coord(1), lattice_coord(1)));
+    CHECK(fast_hub_at(lattice_coord(1), lattice_coord(1)) < 0);
+    CHECK(fast_hub_near(lattice_coord(1), lattice_coord(1)) < 0);
+    CHECK(!on_fast_hub(lattice_coord(1), lattice_coord(0)));
+    CHECK(fast_hub_near(lattice_coord(3), lattice_coord(2)) < 0);
 
     // --- fast_hub_near: the SHAFT, not the centre cell ------------------------
     // Two different questions, and conflating them is why this needed a second
@@ -960,9 +971,9 @@ static void test_fast_travel() {
     // ...and one cell further out is NOT the shaft, on either axis.
     CHECK(fast_hub_near(static_cast<int>(hx) + kFastShaftR + 1, hy) < 0);
     CHECK(fast_hub_near(hx, static_cast<int>(hy) + kFastShaftR + 1) < 0);
-    // Every one of the 16 shafts answers with its own index, and the answer agrees
-    // with `fast_hub_at` at the centre — the two functions must not disagree about
-    // WHICH shaft, only about how close you have to be.
+    // Every one of the 4 lift shafts answers with its own index, and the answer
+    // agrees with `fast_hub_at` at the centre — the two functions must not
+    // disagree about WHICH cabin, only about how close you have to be.
     for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
         std::uint8_t cx = 0, cy = 0;
         fast_hub_cell(hub, cx, cy);
@@ -1021,7 +1032,10 @@ static void test_fast_travel() {
     CHECK(fast_travel_gate(net, freg, /*from=*/0, /*to=*/0, hx, hy, &hub) ==
           FastTravelGate::SameFloor);
     CHECK(fast_travel_gate(net, freg, 0, 5, /*cx=*/1, /*cy=*/1, &hub) ==
-          FastTravelGate::NotOnHub);
+          FastTravelGate::NotInCabin);
+    // Нелифтовый узел решётки — тот же отказ: колонна есть, кабины нет.
+    CHECK(fast_travel_gate(net, freg, 0, 5, lattice_coord(1), lattice_coord(1),
+                           &hub) == FastTravelGate::NotInCabin);
     CHECK(fast_travel_gate(net, freg, 0, 12, hx, hy, &hub) ==
           FastTravelGate::Locked);
     CHECK(fast_travel_gate(net, freg, 0, 99, hx, hy, &hub) ==
