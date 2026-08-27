@@ -2923,48 +2923,43 @@ int main(int argc, char** argv) {
     // allocates before `unload` frees, so the id alternates on EVERY ride — the
     // corruption was guaranteed, not occasional. [problems.md] §24.
     LayerId activeLayer = reg.get<Transform>(player).layer;
-    auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
-        // Pass the player's durable record id so the destination crowd skips it
-        // instead of spawning a second player.
-        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
-                                            : game::kInvalidNpc;
+    // Половина «покинуть этаж» — общая для синхронной поездки (do_ride) и
+    // лифтовой машины (elevators-2x2.md): записи мира, файл этажа, AIMEM.
+    auto leave_current_floor = [&]() {
         // Opened crates are world state, not a free respawn. Capture the
         // leaving floor BEFORE travel: the streamer may recycle the LayerId and
         // refresh_floor_containers destroys every crate on the arrival slot.
         // Without this, loot → leave → return refills every emptied box. [save.h]
+        const LayerId leaveLayer = reg.valid(player)
+                                       ? reg.get<Transform>(player).layer
+                                       : static_cast<LayerId>(0);
+        game::refresh_floor_records(reg, leaveLayer, currentFloor,
+                                     runState.containers, runState.corpses,
+                                     &runState.debris);
+        // The departing floor's exact grid goes to its own file — this is
+        // THE geometry persistence: the next visit (or the next run)
+        // stamps it back. A transition is a load screen; I/O is
+        // sanctioned here. [save.h]
+        write_floor_file(stack.layer(leaveLayer), currentFloor);
+        // AIMEM: clear MotionOwner::Ai on the leaving floor before the
+        // streamer recycles the layer. unload() also releases; this is the
+        // keyboard/--shot leave seam so a ride without an immediate unload
+        // still cannot strand tokens. Idempotent. [ai.h]
         {
-            const LayerId leaveLayer = reg.valid(player)
-                                           ? reg.get<Transform>(player).layer
-                                           : static_cast<LayerId>(0);
-            game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                         runState.containers, runState.corpses,
-                                         &runState.debris);
-            // The departing floor's exact grid goes to its own file — this is
-            // THE geometry persistence: the next visit (or the next run)
-            // stamps it back. A transition is a load screen; I/O is
-            // sanctioned here. [save.h]
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
-            // AIMEM: clear MotionOwner::Ai on the leaving floor before the
-            // streamer recycles the layer. unload() also releases; this is the
-            // keyboard/--shot leave seam so a ride without an immediate unload
-            // still cannot strand tokens. Idempotent. [ai.h]
-            {
-                const std::uint32_t released =
-                    game::ai_release(reg, leaveLayer);
-                std::fprintf(stderr,
-                             "[aimem] LEAVE floor=%d layer=%u released=%u "
-                             "mem_rows=%u\n",
-                             currentFloor, static_cast<unsigned>(leaveLayer),
-                             released, aiMem.rows());
-            }
+            const std::uint32_t released =
+                game::ai_release(reg, leaveLayer);
+            std::fprintf(stderr,
+                         "[aimem] LEAVE floor=%d layer=%u released=%u "
+                         "mem_rows=%u\n",
+                         currentFloor, static_cast<unsigned>(leaveLayer),
+                         released, aiMem.rows());
         }
-        game::RideResult ride =
-            absolute ? streamer.teleport(stack, registry, reg, pool, player,
-                                         currentFloor, target, game::kArrivalCoord,
-                                         pid, landHub)
-                     : streamer.travel(stack, registry, reg, pool, player,
-                                       currentFloor, target, game::kArrivalCoord,
-                                       pid);
+    };
+    // Половина «прибыть» — общий хвост обеих поездок: всё, что делает свежий
+    // этаж домом (журналы, двери, Fresh-бейк, зеркала GPU, тело в безопасной
+    // клетке). Вынесено из do_ride ради лифтовой машины — у неё между leave
+    // и arrive лежит асинхронный Prebuild, а хвост обязан быть ТЕМ ЖЕ кодом.
+    auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
         if (!ride.moved) return false;
         player = ride.player;
         currentFloor = ride.floor;
@@ -3067,6 +3062,48 @@ int main(int argc, char** argv) {
         // costs at most the current floor's progress. The departed floor's
         // file is already on disk (written above, before travel).
         save_run_now();
+        return true;
+    };
+    auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
+        // Pass the player's durable record id so the destination crowd skips it
+        // instead of spawning a second player.
+        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
+                                            : game::kInvalidNpc;
+        leave_current_floor();
+        game::RideResult ride =
+            absolute ? streamer.teleport(stack, registry, reg, pool, player,
+                                         currentFloor, target, game::kArrivalCoord,
+                                         pid, landHub)
+                     : streamer.travel(stack, registry, reg, pool, player,
+                                       currentFloor, target, game::kArrivalCoord,
+                                       pid);
+        return arrive_after_ride(ride, landHub);
+    };
+
+    // --- Лифтовая машина (elevators-2x2.md; ЗАКОН ДВЕРЕЙ — один пекарь) -----
+    // Idle -> Prebuilding: воркер строит мир целевого этажа в свободный слот,
+    // игрок заперт в кабине столба; -> WaitFresh: мир свапнут, игрок уже в
+    // кабине НАЗНАЧЕНИЯ, Fresh-бейк печётся «за закрытыми дверьми»; -> Idle:
+    // nav.step() вернул true (Fresh-свап) — двери открылись. Лифт сам ничего
+    // не печёт и не ждёт констант: финал даёт существующий сигнал пекаря.
+    enum class LiftRide : std::uint8_t { Idle, Prebuilding, WaitFresh };
+    LiftRide liftRide = LiftRide::Idle;
+    int liftDst = 0;
+    int liftHub = -1;
+    std::uint64_t liftT0 = 0; // сим-тик старта: строка [lift] ride + иллюзия
+    auto start_lift_ride = [&](int dst, int hub) -> bool {
+        if (liftRide != LiftRide::Idle) return false;
+        std::function<void()> job;
+        if (!streamer.prebuild_begin(stack, registry, dst, job)) {
+            // Уже резидентен или нет слота — редкий дев-случай: честная
+            // синхронная поездка тем же законом прибытия.
+            return do_ride(/*absolute=*/true, dst, hub);
+        }
+        nav.start_prebuild(std::move(job));
+        liftRide = LiftRide::Prebuilding;
+        liftDst = dst;
+        liftHub = hub;
+        liftT0 = simTick;
         return true;
     };
 
@@ -3186,7 +3223,10 @@ int main(int argc, char** argv) {
             const int hub = pendingLandHub;
             pendingTeleport = game::ConsoleContext::kNoRequest;
             pendingLandHub = -1;
-            do_ride(/*absolute=*/true, dst, hub);
+            // Дев-телепорт во время лифтовой поездки молча гасится: два
+            // одновременных перехода делят два физических слота и мир под
+            // закрытыми дверьми — гонка по построению.
+            if (liftRide == LiftRide::Idle) do_ride(/*absolute=*/true, dst, hub);
         }
         // Консоль заспавнила якорный проп (cmd_prop) — та же безопасная
         // точка, что телепорт: шкура PropPass перестраивается этим кадром,
@@ -3266,6 +3306,57 @@ int main(int argc, char** argv) {
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, 0xA11FEu, nav);
+            // Лифт: Fresh-свап целевого этажа = «двери открылись» (закон
+            // дверей). Замер поездки печатается всегда — цена не фольклор.
+            if (liftRide == LiftRide::WaitFresh) {
+                liftRide = LiftRide::Idle;
+                std::fprintf(stderr,
+                             "[lift] ride to %d: %llu ticks cabin-to-doors\n",
+                             currentFloor,
+                             static_cast<unsigned long long>(simTick - liftT0));
+            }
+        }
+        // Лифтовая машина, фаза свапа: воркер отдал мир — ecs-половина,
+        // перенос тела в кабину назначения и ВЕСЬ обычный хвост прибытия
+        // (arrive_after_ride запускает Fresh-бейк через begin_floor_nav);
+        // дальше ждём Fresh-свапа выше. Тот же топ кадра, что у телепорта:
+        // мир не дёргается под закоммиченным кадром.
+        if (liftRide == LiftRide::Prebuilding && nav.take_prebuilt()) {
+            game::NpcId pid = reg.valid(player)
+                                  ? reg.get<game::NpcRef>(player).id
+                                  : game::kInvalidNpc;
+            leave_current_floor();
+            streamer.prebuild_finish(stack, registry, reg, pool, pid);
+            // Прибытие — в кабину СВОЕГО столба на этаже назначения: storey
+            // входа называет модуль этажа (lift_entrance — тот же закон, что
+            // штамповал геометрию).
+            const game::FloorSpec* dspec = spec_for_floor(liftDst);
+            const int arriveH =
+                dspec ? game::lift_entrance(
+                            dspec->kind, liftDst, liftHub,
+                            streamer.floor_seed_of(registry, liftDst))
+                            .h
+                      : game::kArrivalCoord;
+            game::RideResult ride = streamer.teleport(
+                stack, registry, reg, pool, player, currentFloor, liftDst,
+                static_cast<std::uint8_t>(arriveH), pid, liftHub);
+            if (arrive_after_ride(ride, liftHub)) {
+                liftRide = LiftRide::WaitFresh;
+            } else {
+                // Не должно случаться (гейт уже пропустил); честный откат.
+                streamer.prebuild_cancel();
+                liftRide = LiftRide::Idle;
+            }
+        }
+        // Кабина заперта на всю поездку: контроллер в бокс — тело держится в
+        // клетке шахты (стены столба держат остальное), взгляд свободен.
+        // Створки/анимация — инкремент 5.
+        if (liftRide != LiftRide::Idle && reg.valid(player) && liftHub >= 0) {
+            std::uint8_t ccx = 0, ccy = 0;
+            game::fast_hub_cell(liftHub, ccx, ccy);
+            auto& ltr = reg.get<Transform>(player);
+            ltr.pos.x = (static_cast<float>(ccx) + 0.5f) * kCellSize;
+            ltr.pos.y = (static_cast<float>(ccy) + 0.5f) * kCellSize;
         }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
@@ -3436,9 +3527,13 @@ int main(int argc, char** argv) {
             // folds the departed floor's crowd back into the cold pool, so only
             // ONE floor is ever live. The whole depart/arrive sequence is shared
             // with the console teleport — see do_ride above the loop.
-            if (has(ConsoleRequest::FloorDown) && shell.playing())
+            // Гейт liftRide: дев-поездка поверх лифтовой машины = два
+            // перехода на двух слотах разом (та же причина, что у телепорта).
+            if (has(ConsoleRequest::FloorDown) && shell.playing() &&
+                liftRide == LiftRide::Idle)
                 do_ride(/*absolute=*/false, -1);
-            if (has(ConsoleRequest::FloorUp) && shell.playing())
+            if (has(ConsoleRequest::FloorUp) && shell.playing() &&
+                liftRide == LiftRide::Idle)
                 do_ride(/*absolute=*/false, +1);
             // Fly stays a PlayerCommand button: the bridge queues the edge and
             // the server flips the state ([netcode-seam]).
@@ -5811,6 +5906,22 @@ int main(int argc, char** argv) {
                     // begin_floor_nav мгновенный) — воркер владеет только
                     // снапшотом битсетов, миру он не опасен. [game/rebake.h]
                     nav.cancel();
+                    // Лифтовая поездка в полёте — особый случай: Prebuild-
+                    // задание неделимо (restore-чтение файла не опрашивает
+                    // отмену), а его слот нужен самой загрузке (keepRadius=0
+                    // => физических слоёв ровно два). Дождаться выхода
+                    // воркера и вернуть слот; худший случай — секунды
+                    // restore-чтения. «F9 во время бейка = отменить и
+                    // грузить» — решение владельца (async-rebake.md §9).
+                    if (liftRide != LiftRide::Idle) {
+                        while (nav.baking()) {
+                            nav.step(simTick, g_worldGen);
+                            SDL_Delay(2);
+                        }
+                        (void)nav.take_prebuilt(); // мусор по контракту
+                        streamer.prebuild_cancel();
+                        liftRide = LiftRide::Idle;
+                    }
                     {
                         loadWanted = false;
                         char runPath[128];
@@ -7230,6 +7341,9 @@ int main(int argc, char** argv) {
                         "этаже.");
                 } else {
                     ImGui::Text("ЛИФТ %d  |  ЭТАЖ %d", shaft, currentFloor);
+                    if (game::fast_hub_at(ecx, ecy) < 0)
+                        ImGui::TextDisabled(
+                            "встаньте в кабину (центр шахты) для поездки");
                     ImGui::Separator();
                     refresh_console_ctx();
                     // 1 & 2 — the procedural halves. `ride` walks to the nearest
@@ -7252,9 +7366,21 @@ int main(int argc, char** argv) {
                         char row[64];
                         std::snprintf(row, sizeof row, "ЭТАЖ %d##ft%d", f, f);
                         if (ImGui::Button(row, ImVec2(-FLT_MIN, 0))) {
-                            char cmd[32];
-                            std::snprintf(cmd, sizeof cmd, "ft %d", f);
-                            exec_command(cmd);
+                            // Диегетический путь один — кабина: поездка через
+                            // Prebuild, двери ждут Fresh-свапа (закон дверей,
+                            // elevators-2x2.md). Консольный `ft` остаётся
+                            // дев-инструментом с прежним синхронным хитчем.
+                            int hub = -1;
+                            if (game::fast_travel_gate(fastTravel, registry,
+                                                       currentFloor, f, ecx,
+                                                       ecy, &hub) ==
+                                game::FastTravelGate::Ok) {
+                                // Посадка = открытие ЭТОГО этажа (§24) — тот
+                                // же акт, что у консольной команды.
+                                fastTravel.unlock(currentFloor);
+                                if (start_lift_ride(f, hub))
+                                    shell.close_window();
+                            }
                         }
                         ++offered;
                     }
