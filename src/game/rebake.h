@@ -48,6 +48,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional> // std::function — задание Prebuild (мировая половина этажа)
 #include <memory>
 #include <thread>
 
@@ -151,6 +152,30 @@ public:
     // выбрасывает мусор). Дешёвая и идемпотентная; start_fresh делает это сам.
     void cancel();
 
+    // Prebuild — поездка лифта (elevators-2x2.md, закон дверей: ОДИН пекарь).
+    // Воркер выполняет `job` — мировую половину ЧУЖОГО этажа в нерезидентный
+    // слот (замыкание собирает FloorStreamer::prebuild_begin над
+    // build_world_half). Снапшота нет: воркер — единоличный владелец
+    // строящегося World (async-rebake.md §5), живые структуры ТЕКУЩЕГО этажа
+    // не трогаются вовсе — толпа источника ходит по своему графу всю поездку.
+    // Любой цикл в полёте отменяется и джойнится; пока Prebuild летит,
+    // фоновые циклы источника не стартуют (один воркер, очередь глубины 1) —
+    // потолок устаревания 65 с кроет любую поездку с запасом.
+    // NB: job НЕ опрашивает cancel_ — restore-чтение файла и генерация
+    // неделимы; отмена (F9 в кабине) означает «дождаться выхода воркера и
+    // выбросить» (худший случай ~6.4 с restore-чтения), не мгновенный join.
+    void start_prebuild(std::function<void()> job);
+    // true один раз, когда Prebuild завершился НЕотменённым и воркер джойнут:
+    // с этого кадра построенный World принадлежит главному потоку (release
+    // выхода воркера / acquire в step() упорядочили все его записи).
+    // Вызывающий делает свап: FloorStreamer::prebuild_finish, затем обычный
+    // start_fresh целевого этажа — двери открываются на его Fresh-свапе.
+    bool take_prebuilt() {
+        const bool f = prebuiltPending_;
+        prebuiltPending_ = false;
+        return f;
+    }
+
     // Шаг планировщика + свап готовых секций. Раз в кадр, на главном потоке,
     // в топе кадра до сим-подшагов (та же точка, где стоял AsyncBake::poll).
     // Возвращает true ровно на кадре Fresh-свапа — сигнал вызывающему сделать
@@ -250,7 +275,7 @@ public:
     }
 
 private:
-    enum class Mode : std::uint8_t { Idle, Fresh, Rebake, LightPatch };
+    enum class Mode : std::uint8_t { Idle, Fresh, Rebake, LightPatch, Prebuild };
 
     void join_worker();
     void discard_pending();
@@ -336,6 +361,7 @@ private:
     std::atomic<bool> exited_{false};
     bool running_ = false;
     Mode mode_ = Mode::Idle;
+    bool prebuiltPending_ = false; // см. take_prebuilt
     bool lightSwapped_ = false;
     bool roomsSwapped_ = false;
     bool coarseSwapped_ = false;

@@ -142,6 +142,7 @@ int g_checks = 0;
 #include "suite_gravity_regimes.inl"
 #include "suite_walkbits.inl"
 #include "suite_rebake.inl"
+#include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
 #include "suite_shotsub.inl"
 #include "suite_watch.inl"
@@ -5465,6 +5466,7 @@ int main() {
     test_gravity_regimes_all();
     test_walkbits_all();
     test_rebake_all();
+    test_prebuild_all();
     test_lightvis_all();
     test_route_realfloor();
     test_streamed_nav();

@@ -73,26 +73,34 @@ std::uint32_t FloorStreamer::floor_seed_of(const FloorRegistry& reg,
     return modules_[m].seed;
 }
 
+void FloorStreamer::seed_module_once(NpcPool& pool, FloorModule& fm) {
+    if (!fm.used || fm.seeded) return;
+    const FloorSpec& spec = floor_spec(fm.kind);
+    // fm.number goes through UNCAST. This used to be
+    // static_cast<std::uint16_t>(fm.number), which is the exact line that wrote
+    // the demo stack's negative labels into the pool as garbage: floor -50 became
+    // 65486, -36 became 65500, -8 became 65528. Every floor below the hub was
+    // stored wrong and nothing in src/ ever read pool.floor() back, so it was a
+    // silent corruption waiting for master_prompt #10's per-floor bucket index —
+    // the first reader — to inherit it. The label is signed all the way through
+    // now (FloorRegistry kMinFloor -127 .. kMaxFloor +127, NpcPool::floor()
+    // std::int16_t), so the cast has nothing left to do.
+    //
+    // `fm.candidate` is written rather than discarded because the first load
+    // reads it to pick the module's player-designate — dropping it would make
+    // floor 0's player selection depend on WHICH entry point seeded.
+    fm.candidate = mint_candidate(
+        pool, seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt));
+    fm.seeded = true;
+}
+
 std::uint32_t FloorStreamer::seed_all_modules(NpcPool& pool) {
     // Exactly the seeding half of ensure_loaded, hoisted so it can run before anybody
     // has visited anything. No layer, no geometry, no ECS entity: the records are
     // created COLD, which is the state every macro_sim pass requires (migration and the
     // social sweep both skip pool.embodied, so an embodied record is invisible to them).
-    //
-    // `fm.candidate` is written here rather than discarded because ensure_loaded reads
-    // it to pick the module's player-designate on a first load, and that first load is
-    // no longer the thing that seeds. Dropping it would make floor 0's player selection
-    // depend on whether this ran.
     const NpcId before = pool.count();
-    for (ModuleId m = 0; m < next_; ++m) {
-        FloorModule& fm = modules_[m];
-        if (!fm.used || fm.seeded) continue;
-        const FloorSpec& spec = floor_spec(fm.kind);
-        const NpcId cand =
-            seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt);
-        fm.candidate = mint_candidate(pool, cand);
-        fm.seeded = true;
-    }
+    for (ModuleId m = 0; m < next_; ++m) seed_module_once(pool, modules_[m]);
     return static_cast<std::uint32_t>(pool.count() - before);
 }
 
@@ -310,32 +318,11 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
         return out;
     }
 
-    // Seed the cold crowd exactly once, on the first ever load. The pool bump-
-    // allocates, so the crowd occupies a contiguous id range we remember; every
-    // later load re-embodies THAT range rather than seeding new records, so the
-    // population never grows per visit (master_prompt #9).
-    if (!fm.seeded) {
-        const FloorSpec& spec = floor_spec(fm.kind);
-        // fm.number goes through UNCAST. This used to be
-        // static_cast<std::uint16_t>(fm.number), which is the exact line that wrote
-        // the demo stack's negative labels into the pool as garbage: floor -50 became
-        // 65486, -36 became 65500, -8 became 65528. Every floor below the hub was
-        // stored wrong and nothing in src/ ever read pool.floor() back, so it was a
-        // silent corruption waiting for master_prompt #10's per-floor bucket index —
-        // the first reader — to inherit it. The label is signed all the way through
-        // now (FloorRegistry kMinFloor -127 .. kMaxFloor +127, NpcPool::floor()
-        // std::int16_t), so the cast has nothing left to do.
-        fm.candidate = mint_candidate(
-            pool, seed_floor_from_spec(pool, fm.number, spec, fm.seed ^ kPopSeedSalt));
-        // No firstId/count recorded any more: FloorModule dropped them because the
-        // crowd IS pool.floor_bucket(number) once seed_floor_from_spec has labelled
-        // every record it spawned. A frozen [firstId, count) range could not express a
-        // record migrating in or out of this floor; the label can, and macro_sim
-        // migration is exactly that operation. A `NpcId before = pool.count()` also
-        // survived here, feeding a delta that was deleted with those fields — dead
-        // since, and a C4189 the zero-warning standard should have caught.
-        fm.seeded = true;
-    }
+    // Seed the cold crowd exactly once, on the first ever load. The crowd IS
+    // pool.floor_bucket(number) once seed_floor_from_spec has labelled every
+    // record it spawned — no frozen id range, so a macro migration in/out of
+    // this floor is reflected on the next load (master_prompt #9/#10b).
+    seed_module_once(pool, fm);
 
     // Take a recyclable physical layer and rebuild the floor's geometry into it.
     // generate_floor clears to air first, so a recycled slot regenerates the
@@ -388,6 +375,83 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
     out.layer = slot;
     return out;
+}
+
+bool FloorStreamer::prebuild_begin(LevelStack& stack, const FloorRegistry& reg,
+                                   int number, std::function<void()>& outJob) {
+    if (prebuildModule_ != kInvalidModule) return false; // один Prebuild за раз
+    const ModuleId m = reg.module_at(number);
+    if (m == kInvalidModule || !modules_[m].used) return false;
+    if (reg.layer_of(m) != kInvalidLayer) return false; // уже резидентен
+    const LayerId slot = alloc_slot();
+    if (slot == kInvalidLayer) return false; // слотов нет (не должно случаться)
+
+    prebuildModule_ = m;
+    prebuildSlot_ = slot;
+    prebuildBake_.reset();
+    prebuildWorldMs_ = 0.0f;
+
+    // Задание — build_world_half над World слота. Значения, не ссылки в
+    // modules_ (контракт build_world_half); слотом до take_prebuilt() владеет
+    // только воркер, а prebuildBake_/prebuildWorldMs_ он пишет под тем же
+    // release/acquire-порядком (см. комментарий у членов в .h).
+    World& w = stack.layer(slot);
+    const int num = modules_[m].number;
+    const FloorKind kind = modules_[m].kind;
+    const std::uint32_t seed = modules_[m].seed;
+    outJob = [this, &w, num, kind, seed]() {
+        const auto t0 = std::chrono::steady_clock::now();
+        auto bake = build_world_half(w, num, kind, seed);
+        prebuildWorldMs_ = std::chrono::duration<float, std::milli>(
+                               std::chrono::steady_clock::now() - t0)
+                               .count();
+        prebuildBake_ = std::move(bake);
+    };
+    return true;
+}
+
+LoadResult FloorStreamer::prebuild_finish(LevelStack& stack, FloorRegistry& reg,
+                                          Registry& ecs, NpcPool& pool,
+                                          NpcId& playerId) {
+    LoadResult out;
+    if (prebuildModule_ == kInvalidModule) return out; // нечего завершать
+    const auto t0 = std::chrono::steady_clock::now();
+    const ModuleId m = prebuildModule_;
+    const LayerId slot = prebuildSlot_;
+    FloorModule& fm = modules_[m];
+
+    // Тот же хвост, что у ensure_loaded, в том же порядке — минус тест-онли
+    // nav-блок (запекание — собственность RebakeScheduler, закон дверей).
+    // Сидинг здесь, а не в begin: pool трогается только на главном потоке; в
+    // апе все модули давно засеяны seed_all_modules — ветка для голых стеков.
+    seed_module_once(pool, fm);
+    antourage_[m] = std::move(prebuildBake_);
+    reg.set_resident(m, slot);
+    fm.bodies.clear();
+    embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
+    out.layer = slot;
+
+    const float ecsMs = std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+    // Замер, который нельзя потерять (план): restore-ветка стоит секунды и
+    // обязана оставаться видимой каждый прогон.
+    std::fprintf(stderr, "[lift] prebuild %d: world %.1f ms | ecs %.1f ms\n",
+                 fm.number, prebuildWorldMs_, ecsMs);
+
+    prebuildModule_ = kInvalidModule;
+    prebuildSlot_ = kInvalidLayer;
+    return out;
+}
+
+void FloorStreamer::prebuild_cancel() {
+    if (prebuildModule_ == kInvalidModule) return;
+    // Слот назад в пул: его World перезапишет следующий generate_floor
+    // (clear-to-air первым делом), персистентности у слотов нет по закону.
+    free_slot(prebuildSlot_);
+    prebuildBake_.reset();
+    prebuildModule_ = kInvalidModule;
+    prebuildSlot_ = kInvalidLayer;
 }
 
 void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,

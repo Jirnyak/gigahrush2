@@ -1358,7 +1358,11 @@ if(GIGA_BUILD_TESTS)
     # новый kind, пин 540→630 ×2 места), +3 клейм-проверки suite_floorcatalog,
     # остальное — циклы по FloorKind::Count в спеках/ролях/таксономии, которые
     # выросли на строку каталога.
-        PASS_REGULAR_EXPRESSION "game_test: 246339 checks, 0 failures")
+    # 246339 -> 246394 (+55) on 2026-08-27: suite_prebuild (лифтовый эпик,
+    # инкремент 2): бит-идентичность Prebuild == ensure_loaded на generate- и
+    # restore-ветках (snapshot_floor байт в байт, дезигнат, пул, антураж),
+    # restore-хук исполняется воркером, протокол отмены обеих сторон шва.
+        PASS_REGULAR_EXPRESSION "game_test: 246394 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

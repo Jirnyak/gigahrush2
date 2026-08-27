@@ -234,6 +234,26 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     });
 }
 
+void RebakeScheduler::start_prebuild(std::function<void()> job) {
+    // Цикл в полёте — отменить и джойнить (узловая гранулярность — десятки
+    // мс): поездка главнее фонового допекания, а его долг никуда не денется —
+    // bakedGen < worldGen переживёт Prebuild, и цикл перезапустится сам.
+    cancel_.store(true, std::memory_order_relaxed);
+    join_worker();
+    cancel_.store(false, std::memory_order_relaxed);
+    discard_pending();
+    prebuiltPending_ = false;
+
+    // Живая сторона ЭТОГО этажа не трогается ничем: ни графа, ни тени, ни
+    // карв-долга — источник живёт по stale до самого свапа поездки.
+    running_ = true;
+    mode_ = Mode::Prebuild;
+    worker_ = std::thread([this, job = std::move(job)]() {
+        job();
+        exited_.store(true, std::memory_order_release);
+    });
+}
+
 void RebakeScheduler::start_rebake(std::uint64_t simTick,
                                    std::uint64_t worldGen) {
     join_worker(); // не бежит (running_ проверен вызывающим) — страховка
@@ -388,6 +408,16 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 }
                 mode_ = Mode::Idle;
                 return true; // вызывающий делает finish_floor_nav
+            }
+        } else if (mode_ == Mode::Prebuild) {
+            // Свапать нечего: продукт — World в нерезидентном слоте, которым
+            // до этого кадра владел воркер. Здесь только передача владения
+            // главному потоку (acquire ниже + join); сам свап делает
+            // вызывающий (prebuild_finish + start_fresh целевого этажа).
+            if (exited_.load(std::memory_order_acquire)) {
+                join_worker();
+                mode_ = Mode::Idle;
+                prebuiltPending_ = true;
             }
         } else if (mode_ == Mode::LightPatch) {
             // Свап дельта-патча: добавки вливаются в ЖИВЫЕ списки на главном

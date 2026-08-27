@@ -274,6 +274,41 @@ public:
                         std::uint8_t arrivalCoord, NpcId& playerId,
                         int landHub = -1);
 
+    // --- Prebuild: асинхронная загрузка ЧУЖОГО этажа (лифтовый эпик) --------
+    // Поездка = begin (слот + мировая половина замыканием для
+    // RebakeScheduler::start_prebuild) → воркер единолично владеет World
+    // слота → take_prebuilt() у планировщика → finish (ecs-половина на
+    // главном потоке: сидинг, резидентность, толпа) → обычный start_fresh —
+    // двери открываются на его Fresh-свапе (закон дверей, elevators-2x2.md).
+    //
+    // Контракт вызывающего:
+    //   * finish зовётся ТОЛЬКО после take_prebuilt() — release выхода
+    //     воркера / acquire в step() упорядочили записи бейка и таймингов;
+    //   * между begin и finish/cancel не звать ensure_loaded/unload по этому
+    //     же этажу (двойная стройка одного модуля в два слота);
+    //   * cancel возвращает слот — путь отмены поездки (F9 в кабине).
+    //
+    // Тест-онли nav-путь (set_nav_bake) здесь НЕ воспроизводится: запекание —
+    // собственность RebakeScheduler, а путь умирает инкрементом 7 плана.
+    //
+    // begin: false = этаж не зарегистрирован / уже резидентен / слотов нет /
+    // другой Prebuild в полёте. Задание НЕ исполняется здесь — только
+    // собирается (значения, не ссылки в modules_; см. build_world_half).
+    bool prebuild_begin(LevelStack& stack, const FloorRegistry& reg, int number,
+                        std::function<void()>& outJob);
+    // ecs-половина + строка `[lift] prebuild N: world X ms | ecs Y ms` —
+    // замер, который нельзя потерять (restore 6.4 с против generate 130 мс).
+    LoadResult prebuild_finish(LevelStack& stack, FloorRegistry& reg,
+                               Registry& ecs, NpcPool& pool, NpcId& playerId);
+    void prebuild_cancel();
+    // Этаж, который сейчас строит воркер (kNoFloor — никакой): гейт
+    // «второй поездки нет» и табло кабины читают отсюда.
+    int prebuild_floor() const {
+        return prebuildModule_ == kInvalidModule
+                   ? FloorRegistry::kNoFloor
+                   : modules_[prebuildModule_].number;
+    }
+
     // True when floor `number` currently has a resident layer.
     bool loaded(const FloorRegistry& reg, int number) const {
         return reg.layer_at(number) != kInvalidLayer;
@@ -301,6 +336,11 @@ private:
 
     LayerId alloc_slot();
     void free_slot(LayerId slot);
+
+    // Seed a module's cold crowd exactly once (the shared body of
+    // seed_all_modules / ensure_loaded / prebuild_finish — one law, three
+    // entry points). No-op when already seeded.
+    void seed_module_once(NpcPool& pool, FloorModule& fm);
 
     // The WORLD HALF of a floor entry (разрез — elevators-2x2.md, решение 1):
     // laws -> restore-or-generate fork -> rules -> antourage bake. Writes ONLY
@@ -333,6 +373,14 @@ private:
     std::unique_ptr<AntourageBake> antourage_[kMaxModules];
     ModuleId next_ = 0; // bump allocator for ModuleId
     std::vector<LayerId> freeSlots_;
+    // --- Prebuild в полёте (один за раз). prebuildBake_ и prebuildWorldMs_
+    // ПИШЕТ ВОРКЕР изнутри задания; главный поток читает их только в
+    // prebuild_finish, куда по контракту приходят после take_prebuilt() —
+    // release/acquire выхода воркера упорядочивает записи (см. rebake.h).
+    ModuleId prebuildModule_ = kInvalidModule;
+    LayerId prebuildSlot_ = kInvalidLayer;
+    std::unique_ptr<AntourageBake> prebuildBake_;
+    float prebuildWorldMs_ = 0.0f;
     int keepRadius_ = 0;
     std::string navCacheDir_; // empty = on-disk nav cache disabled
     bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
