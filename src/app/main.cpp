@@ -7354,18 +7354,42 @@ int main(int argc, char** argv) {
                         "этаже.");
                 } else {
                     ImGui::Text("ЛИФТ %d  |  ЭТАЖ %d", shaft, currentFloor);
-                    if (game::fast_hub_at(ecx, ecy) < 0)
+                    const int cabin = game::fast_hub_at(ecx, ecy);
+                    if (cabin < 0)
                         ImGui::TextDisabled(
                             "встаньте в кабину (центр шахты) для поездки");
+                    // ПОСАДКА = ОТКРЫТИЕ (§24): встал в кабину с открытой
+                    // панелью — этаж в сети. Раньше открывала только
+                    // консольная ft, и свежая игра видела пустой список —
+                    // бутстрап сети был мёртв (лог владельца 2026-08-27:
+                    // ни одной поездки).
+                    if (cabin >= 0) fastTravel.unlock(currentFloor);
                     ImGui::Separator();
                     refresh_console_ctx();
-                    // 1 & 2 — the procedural halves. `ride` walks to the nearest
-                    // LABELLED floor on that side, which is why this says "next"
-                    // and not "-1": a sparse stack is legal.
-                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0)))
-                        exec_command("ride down");
-                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0)))
-                        exec_command("ride up");
+                    // 1 & 2 — соседние по номерам ДОСТУПНЫ ВСЕГДА (план,
+                    // решение 2). Из кабины — честная лифтовая поездка
+                    // (Prebuild + двери по закону); вне кабины — прежний
+                    // дев-телепорт консолью.
+                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0))) {
+                        const int dst =
+                            game::next_labelled_floor(registry, currentFloor, -1);
+                        if (cabin >= 0 && dst != currentFloor) {
+                            if (start_lift_ride(dst, cabin))
+                                shell.close_window();
+                        } else if (cabin < 0) {
+                            exec_command("ride down");
+                        }
+                    }
+                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0))) {
+                        const int dst =
+                            game::next_labelled_floor(registry, currentFloor, +1);
+                        if (cabin >= 0 && dst != currentFloor) {
+                            if (start_lift_ride(dst, cabin))
+                                shell.close_window();
+                        } else if (cabin < 0) {
+                            exec_command("ride up");
+                        }
+                    }
                     ImGui::Separator();
                     // 3 — fast travel, and the list IS the unlock set. A floor the
                     // player has never boarded from is simply not here, so the gate
