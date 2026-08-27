@@ -162,6 +162,12 @@ public:
                          const World& world, std::uint32_t frameSlot,
                          std::uint32_t mirrorFlushGen);
 
+    // Очередь пробуждений ещё несёт остаток — «этаж не допробужен».
+    // Читает лифт: двери кабины ждут пустой очереди (решение владельца
+    // 2026-08-27 — лавина будильника этажа целиком уходит за закрытые
+    // двери бесшовной загрузки; суб-степовый инжект не нужен по построению).
+    bool wakes_pending() const noexcept { return !wakeQueue_.empty(); }
+
     // Числа для печати каждый прогон (S11) — с лагом фенсового кольца.
     std::uint32_t live_count() const noexcept { return lastCount_; }
     std::uint32_t live_quanta() const noexcept { return lastQuanta_; }

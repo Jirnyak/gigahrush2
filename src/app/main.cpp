@@ -3091,6 +3091,10 @@ int main(int argc, char** argv) {
     int liftDst = 0;
     int liftHub = -1;
     std::uint64_t liftT0 = 0; // сим-тик старта: строка [lift] ride + иллюзия
+    // Fresh-свап целевого этажа уже прошёл; двери ждут ещё и ПОЛНОГО
+    // пробуждения сред (mediumPass.wakes_pending — решение владельца:
+    // лавина будильника этажа целиком за закрытыми дверьми).
+    bool liftFreshDone = false;
     auto start_lift_ride = [&](int dst, int hub) -> bool {
         if (liftRide != LiftRide::Idle) return false;
         std::function<void()> job;
@@ -3101,6 +3105,7 @@ int main(int argc, char** argv) {
         }
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
+        liftFreshDone = false;
         liftDst = dst;
         liftHub = hub;
         liftT0 = simTick;
@@ -3306,15 +3311,9 @@ int main(int argc, char** argv) {
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, 0xA11FEu, nav);
-            // Лифт: Fresh-свап целевого этажа = «двери открылись» (закон
-            // дверей). Замер поездки печатается всегда — цена не фольклор.
-            if (liftRide == LiftRide::WaitFresh) {
-                liftRide = LiftRide::Idle;
-                std::fprintf(stderr,
-                             "[lift] ride to %d: %llu ticks cabin-to-doors\n",
-                             currentFloor,
-                             static_cast<unsigned long long>(simTick - liftT0));
-            }
+            // Лифт: Fresh-свап целевого этажа — первая половина «дверей»;
+            // вторая — пустая очередь пробуждений сред (ниже).
+            if (liftRide == LiftRide::WaitFresh) liftFreshDone = true;
         }
         // Лифтовая машина, фаза свапа: воркер отдал мир — ecs-половина,
         // перенос тела в кабину назначения и ВЕСЬ обычный хвост прибытия
@@ -3347,6 +3346,20 @@ int main(int argc, char** argv) {
                 streamer.prebuild_cancel();
                 liftRide = LiftRide::Idle;
             }
+        }
+        // Двери открываются, когда запечено И допробужено: Fresh-свап
+        // прошёл, а очередь пробуждений будильника этажа выпита — вся вода
+        // этажа уже в живом списке автомата и падает физикой за закрытыми
+        // дверьми (решение владельца 2026-08-27). Замер — всегда.
+        if (liftRide == LiftRide::WaitFresh && liftFreshDone &&
+            !mediumPass.wakes_pending()) {
+            liftRide = LiftRide::Idle;
+            liftFreshDone = false;
+            std::fprintf(stderr,
+                         "[lift] ride to %d: %llu ticks cabin-to-doors "
+                         "(baked+woken)\n",
+                         currentFloor,
+                         static_cast<unsigned long long>(simTick - liftT0));
         }
         // Кабина заперта на всю поездку: контроллер в бокс — тело держится в
         // клетке шахты (стены столба держат остальное), взгляд свободен.
