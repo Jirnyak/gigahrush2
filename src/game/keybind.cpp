@@ -126,7 +126,8 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"heal", "heal", scan::kH, 0});
     ok &= t.add({"eat", "eat", scan::kG, 0});
     ok &= t.add({"drink", "drink", scan::kT, 0});
-    ok &= t.add({"door", "door", scan::kQ, 0});
+    // "door"-строка (Q) умерла 2026-08-28: единая интеракция — двери
+    // слушают interact (E), как все потребители (решение владельца).
     ok &= t.add({"possess", "possess", scan::kP, 0});
     ok &= t.add({"interact", "interact", scan::kE, 0});
     // Z and not the genre's G, because G is `eat` and has been since before there

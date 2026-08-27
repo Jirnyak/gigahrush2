@@ -1,5 +1,8 @@
 #include "game/door.h"
 
+#include "game/fast_travel.h" // лифтовые узлы — механизм-створки (5b)
+#include "game/floor_gen.h"   // lift_entrance — закон входа столба
+
 #include <cmath>
 
 #include "core/wrap.h"
@@ -170,7 +173,61 @@ std::uint32_t door_build(World& world, DoorSet& doors, int number,
         if (g.cell(cx, cy, cz + h) != kCellAir)
             g.set_cell(cx, cy, cz + h, kMatDoor);
     }
+
+    // --- Лифтовые створки (elevators-2x2.md §5b) ---------------------------
+    // Механизм-двери на проёмах 4 столбов: позиция — тот же закон
+    // lift_entrance, что штамповал геометрию. Строятся Open (кнопка вызова —
+    // 5c поставит закрытый дефолт); владелец — лифт-машина через
+    // door_set_state; акторы их не тоглят и не ломают (mechanism), полотно
+    // живёт под щитом области.
+    for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
+        doors.lift[hub] = kNoDoor;
+        std::uint8_t hcx = 0, hcy = 0;
+        fast_hub_cell(hub, hcx, hcy);
+        const LiftEntrance e = lift_entrance(spec.kind, number, hub, seed);
+        const int dx = e.side == 0 ? 1 : e.side == 1 ? -1 : 0;
+        const int dy = e.side == 2 ? 1 : e.side == 3 ? -1 : 0;
+        Door d;
+        d.cx = static_cast<std::uint8_t>(wrap_macro(hcx + dx));
+        d.cy = static_cast<std::uint8_t>(wrap_macro(hcy + dy));
+        d.cz = static_cast<std::uint8_t>(e.h);
+        d.h = 1;
+        d.axis = (dy != 0) ? 1 : 0;
+        d.mechanism = 1;
+        d.state = static_cast<std::uint8_t>(DoorState::Open);
+        d.hp = kDoorHp;
+        const std::uint32_t id = static_cast<std::uint32_t>(doors.doors.size());
+        doors.doors.push_back(d);
+        doors.index[macro_index(d.cx, d.cy, d.cz)] = id + 1u;
+        doors.lift[hub] = id;
+        // Рама, как у обычных дверей: косяки и перемычка перекрашены в
+        // kMatDoor — вход в столб ЧИТАЕТСЯ с расстояния (жалоба владельца
+        // «вход — просто дыра»), твёрдость не меняется, щиту всё равно.
+        const int jx = d.axis == 0 ? 0 : 1;
+        const int jy = d.axis == 0 ? 1 : 0;
+        g.set_cell(d.cx - jx, d.cy - jy, d.cz, kMatDoor);
+        g.set_cell(d.cx + jx, d.cy + jy, d.cz, kMatDoor);
+        if (g.cell(d.cx, d.cy, d.cz + 1) != kCellAir)
+            g.set_cell(d.cx, d.cy, d.cz + 1, kMatDoor);
+    }
     return static_cast<std::uint32_t>(doors.doors.size());
+}
+
+void door_set_state(World& world, DoorSet& doors, std::uint32_t id,
+                    DoorState st) {
+    if (id >= doors.doors.size()) return;
+    Door& d = doors.doors[id];
+    const bool wasShut = d.state == static_cast<std::uint8_t>(DoorState::Shut);
+    const bool shut = st == DoorState::Shut;
+    if (shut && !wasShut) {
+        fill_leaf(world.grid(), doors, d);
+        ++doors.shut;
+    } else if (!shut && wasShut) {
+        clear_leaf(world.grid(), doors, d);
+        if (doors.shut) --doors.shut;
+    }
+    d.state = static_cast<std::uint8_t>(st);
+    d.forceMs = 0;
 }
 
 bool door_set(World& world, DoorSet& doors, const Registry& reg, LayerId layer,
@@ -229,6 +286,7 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
                 const std::uint32_t id = doors.at(cx + dx, cy + dy, cz + dz);
                 if (id == kNoDoor) continue;
                 const Door& d = doors.doors[id];
+                if (d.mechanism) continue; // створкой владеет машина, не актор
                 if (d.state == static_cast<std::uint8_t>(DoorState::Broken))
                     continue;
                 // True toroidal distance to the leaf's centre, so the reach is a
@@ -279,6 +337,7 @@ std::uint32_t door_query_near(const DoorSet& doors, const vec3& pos) {
                 const std::uint32_t id = doors.at(cx + dx, cy + dy, cz + dz);
                 if (id == kNoDoor) continue;
                 const Door& d = doors.doors[id];
+                if (d.mechanism) continue; // створкой владеет машина, не актор
                 if (d.state == static_cast<std::uint8_t>(DoorState::Broken))
                     continue;
                 const float ex = wrap_delta_f(
@@ -351,6 +410,9 @@ DoorTick door_step(Registry& reg, World& world, DoorSet& doors, LayerId layer,
         if (id == kNoDoor) continue;
 
         Door& d = doors.doors[id];
+        // Механизм-створка (лифт): агент её не ломает и не открывает —
+        // владеет машина, полотно под щитом области. Давящий просто ждёт.
+        if (d.mechanism) continue;
         ++out.pressing;
 
         // A monster with an attack hits it. Rate straight off its own table row, so

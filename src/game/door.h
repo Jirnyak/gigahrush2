@@ -128,10 +128,18 @@ struct Door {
     std::uint8_t cz = 0;    // BOTTOM leaf cell, Z
     std::uint8_t h = 0;     // leaf height in cells
     std::uint8_t axis : 2 = 0;        // Doorway::axis (0 or 1)
-    std::uint8_t keycardTier : 5 = 0; // Keycard access tier (0=None, 1=Red, 2=Blue, 3=Master)
+    // 4 бита, было 5: KeycardTier занимает значения 0..3 (2 бита с запасом),
+    // освобождённый бит ушёл mechanism — Door остаётся тугой 16-байтной
+    // строкой (static_assert ниже это держит).
+    std::uint8_t keycardTier : 4 = 0; // Keycard access tier (0=None,1=Red,2=Blue,3=Master)
     // §23 гермодверь: apartment door on Living / Medical / Hq. Seals Samosbor
     // purple fog while Shut/Locked and hp > 0. Tagged at door_build.
     std::uint8_t hermetic : 1 = 0;
+    // МЕХАНИЗМ-владелец (двери-агностик, решение владельца 2026-08-27):
+    // створкой владеет не актор, а машина (лифт). Актор её не тоглит, агент
+    // не ломает и не открывает в door_step; полотно живёт под щитом области
+    // ([world/protect.h]) — карв его и так не берёт.
+    std::uint8_t mechanism : 1 = 0;
     std::uint8_t state = static_cast<std::uint8_t>(DoorState::Open);
     std::int16_t hp = kDoorHp;
     // Damage below one whole HP, in milli-HP. Lets a 1.1 dmg/s monster make
@@ -157,6 +165,8 @@ struct DoorSet {
     std::vector<Door> doors;
     std::vector<std::uint32_t> index;  // doorId + 1 per cell; 0 = no door
     std::uint32_t shut = 0;            // doors currently in DoorState::Shut
+    std::uint32_t lift[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+                             0xFFFFFFFFu}; // id механизм-створок лифтов по хабам
     std::uint32_t broken = 0;          // doors destroyed on this visit
 
     // Macro cells whose masks this system changed since the app last drained
@@ -229,6 +239,16 @@ std::uint32_t door_toggle_near(World& world, DoorSet& doors, const Registry& reg
 // or kNoDoor when nothing is in range. Same cell-indexed O(75) search as
 // door_toggle_near but mutates nothing — safe for per-frame HUD prompts.
 std::uint32_t door_query_near(const DoorSet& doors, const vec3& pos);
+
+// --- лифтовые створки (elevators-2x2.md §5b) --------------------------------
+// door_build сам регистрирует 4 механизм-створки на проёмах лифтовых столбов
+// (позиции — lift_entrance, тот же закон, что штамповал геометрию) и пишет их
+// id сюда. Открытием/закрытием владеет лифт-машина через door_set_state.
+// kNoDoor в слоте = столб без створки (не должно случаться на боевых этажах).
+// door_set_state: прямая установка Open/Shut с честным штампом/снятием
+// полотна — для механизмов, минуя все правила акторов.
+void door_set_state(World& world, DoorSet& doors, std::uint32_t id,
+                    DoorState st);
 
 // Shut every door that will accept it. For a capture, a test, or a future
 // "lock-down" event; returns how many closed.

@@ -2366,7 +2366,7 @@ int main(int argc, char** argv) {
     game::DoorSet doors;
     game::DoorTick doorTick{};      // last step's report, for the HUD
     std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
-    bool doorWanted = false;        // Q, consumed by one sim step
+    bool doorWanted = false;        // E (единая интеракция), consumed by one sim step
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     bool throwWanted = false;       // Z, consumed by one sim step (player_throw_step)
@@ -3179,6 +3179,11 @@ int main(int argc, char** argv) {
         // читает файл целевого этажа, а туда-обратно (0->4->0) целевой этаж
         // и есть последний покинутый.
         flush_floor_write();
+        // Створка зарастает субвокселями — игрок заперт в кабине (двери-
+        // агностик §5b: владеет лифт-машина, не актор).
+        if (hub >= 0 && hub < 4 && doors.lift[hub] != game::kNoDoor)
+            game::door_set_state(stack.layer(activeLayer), doors,
+                                 doors.lift[hub], game::DoorState::Shut);
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
         liftFreshDone = false;
@@ -3416,6 +3421,13 @@ int main(int argc, char** argv) {
                 stack, registry, reg, pool, player, currentFloor, liftDst,
                 static_cast<std::uint8_t>(arriveH), pid, liftHub);
             if (arrive_after_ride(ride, liftHub)) {
+                // Прибыли в кабину целевого столба — его створка (door_build
+                // построил Open) зарастает до полной готовности этажа.
+                if (liftHub >= 0 && liftHub < 4 &&
+                    doors.lift[liftHub] != game::kNoDoor)
+                    game::door_set_state(
+                        stack.layer(reg.get<Transform>(player).layer), doors,
+                        doors.lift[liftHub], game::DoorState::Shut);
                 liftRide = LiftRide::WaitFresh;
             } else {
                 // Не должно случаться (гейт уже пропустил); честный откат.
@@ -3431,6 +3443,12 @@ int main(int argc, char** argv) {
             !mediumPass.wakes_pending()) {
             liftRide = LiftRide::Idle;
             liftFreshDone = false;
+            // «Лифт приехал»: створка субвоксельно открывается.
+            if (liftHub >= 0 && liftHub < 4 &&
+                doors.lift[liftHub] != game::kNoDoor)
+                game::door_set_state(stack.layer(activeLayer), doors,
+                                     doors.lift[liftHub],
+                                     game::DoorState::Open);
             std::fprintf(stderr,
                          "[lift] ride to %d: %llu ticks cabin-to-doors "
                          "(baked+woken)\n",
@@ -3690,6 +3708,10 @@ int main(int argc, char** argv) {
             // contract_accept refuses the same. [quest.h, contract.h]
             if (has(ConsoleRequest::Interact)) {
                 interactWanted = true;
+                // Единая интеракция (решение владельца 2026-08-28): дверь —
+                // такой же потребитель E, как терминал/ящик; каждый сам
+                // решает по близости, door_toggle_near no-op без двери.
+                doorWanted = true;
                 if (game::contract_accept(contracts, offer, ledger)) {
                     offer = game::Contract{};
                     offerLine[0] = 0;
@@ -7739,11 +7761,11 @@ int main(int argc, char** argv) {
                         if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
                     }
                     const bool hasCard = pInv && game::inventory_has_keycard(*pInv, d.keycardTier);
-                    set_prompt("door", hasCard ? "UNLOCK DOOR" : "KEYCARD REQUIRED");
+                    set_prompt("interact", hasCard ? "UNLOCK DOOR" : "KEYCARD REQUIRED");
                 } else if (isShutOrLocked) {
-                    set_prompt("door", "OPEN DOOR");
+                    set_prompt("interact", "OPEN DOOR");
                 } else {
-                    set_prompt("door", "CLOSE DOOR");
+                    set_prompt("interact", "CLOSE DOOR");
                 }
             }
 

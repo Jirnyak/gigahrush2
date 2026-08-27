@@ -62,20 +62,24 @@ static void test_keybind_defaults_resolve_in_console() {
 static void test_keybind_scancode_dispatch() {
     KeybindTable t;
     CHECK(keybind_register_defaults(t));
-    // Q is BOTH the fly-descend axis and the door command; dispatch must find
-    // the command row (axis rows are polled, not dispatched).
-    const KeyBind* q = t.find_scancode(scan::kQ);
-    CHECK(q != nullptr);
-    CHECK(std::strcmp(q->action, "door") == 0);
+    // ЕДИНАЯ ИНТЕРАКЦИЯ (решение владельца 2026-08-28): строка "door" (Q)
+    // умерла — двери слушают interact (E), как терминал/ящик. Q остаётся
+    // только полётной осью (axis rows are polled, not dispatched).
+    CHECK(t.find_scancode(scan::kQ) == nullptr);
+    const KeyBind* eKey = t.find_scancode(scan::kE);
+    CHECK(eKey != nullptr);
+    CHECK(std::strcmp(eKey->action, "interact") == 0);
     // W is only an axis row — no command to dispatch.
     CHECK(t.find_scancode(scan::kW) == nullptr);
     // A key nothing is bound to.
     CHECK(t.find_scancode(200) == nullptr);
     // The dual use above is by design, not a conflict; two COMMAND rows on one
     // key would be.
-    CHECK(t.conflicts("door") == 0);
-    CHECK(t.rebind("heal", scan::kQ)); // heal onto Q too -> real ambiguity
-    CHECK(t.conflicts("door") == 1);
+    CHECK(t.conflicts("interact") == 0);
+    // Реальная неоднозначность: две КОМАНДНЫЕ строки на одной клавише
+    // (heal поверх interact на E — "door"-строки больше нет).
+    CHECK(t.rebind("heal", scan::kE));
+    CHECK(t.conflicts("interact") == 1);
     CHECK(t.conflicts("heal") == 1);
 }
 
