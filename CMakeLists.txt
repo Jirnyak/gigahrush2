@@ -548,6 +548,16 @@ if(GIGA_BUILD_TESTS)
     add_dependencies(medium_test giga_shaders)
     giga_target_flags(medium_test OFF)
     add_test(NAME medium_test COMMAND medium_test)
+    # Пин добавлен 2026-08-27 (до того medium_test жил БЕЗ пина — только код
+    # возврата, падение счёта чеков было невидимо). 593 -> 772 (+179):
+    # test_cadence_equivalence — игровой каденс 0..4 подтика/кадр против
+    # стендовых батчей по 8 (~137 кадров Б + 29 батчей А по CHECK на сабмит
+    # + 6 инициализаций + 6 финальных пинов массы/формы). Находка теста:
+    # бит-идентичности каденсов НЕТ — ленивая материализация ждёт КАДРАМИ
+    # («кадр-два»), фронт пересекает границы клеток на разных подтиках;
+    # пинится то, что дизайн обещает: масса точна и форма в обоих каденсах.
+    set_tests_properties(medium_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "772/772 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

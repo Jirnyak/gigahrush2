@@ -1259,6 +1259,176 @@ void test_carve_vs_seam(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ---------------------------------------------------------------------------
+// ИГРОВОЙ КАДЕНС (остаток п.1 core-stabilization.md, решение владельца
+// 2026-08-27: «тест до правок, не менять вслепую»). Весь этот файл гоняет
+// автомат батчами по 8 подтиков при frameSlot=0; кадр игры (main.cpp,
+// «МИР-АВТОМАТ: подтики, назревшие по сим-часам») дёргает 0..4 подтика с
+// чередованием слота 0/1 и швом каждый кадр. Фаза Марголуса — функция НОМЕРА
+// подтика (base), не нарезки на батчи и не слота кадра — но БИТ-идентичности
+// между каденсами НЕТ, и это не баг теста, а ИЗМЕРЕННОЕ СЛЕДСТВИЕ ДИЗАЙНА
+// (находка этого теста, 2026-08-27): ленивая материализация страниц ждёт
+// «кадр-два» (apply_readback: «материя подождёт у границы кадр-два») — ждёт
+// КАДРАМИ, а подтиков в кадре у стенда 8, у игры 0..4, поэтому материя
+// пересекает границы нераскрытых клеток на РАЗНЫХ номерах подтиков и
+// эволюция расходится (следствие: скорость фронта через границы клеток
+// зависит от fps; допуск S16.3 «отставание до кадра» это покрывает, но
+// следствие тут названо вслух — решение владельца, если оно не устроит, —
+// бюджет материализации в ПОДТИКАХ, не кадрах). Что каденс МЕНЯТЬ НЕ
+// ВПРАВЕ и что этот тест пинит для ОБОИХ каденсов: сохранение массы
+// (подвижная + истаявшая == налитой) и форму (вся вода в бассейне).
+// Расхождение печатается вслух. Этот пин обязан стоять ДО правок сна
+// сред (макро-дельта) и будильника генераторного налива.
+
+void cadence_build_scene(World& w, std::uint32_t& pourCell) {
+    // Бассейн 10x10 с бортами — вторая копия сцены первого теста в ДРУГОМ
+    // углу тора: статики миров живут до конца процесса, сцены не должны
+    // пересекаться.
+    for (int x = 24; x < 34; ++x)
+        for (int y = 24; y < 34; ++y) {
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+            if (x == 24 || x == 33 || y == 24 || y == 33) {
+                w.grid().fill_cell(x, y, 5, kMatConcrete);
+                w.grid().fill_cell(x, y, 6, kMatConcrete);
+            }
+        }
+    pourCell = static_cast<std::uint32_t>(macro_index(29, 29, 7));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(pourCell, w.grid().types()[pourCell]);
+    for (int sx = 2; sx < 6; ++sx)
+        for (int sy = 2; sy < 6; ++sy)
+            for (int sz = 0; sz < 8; ++sz)
+                pg[sub_bit(sx, sy, sz)] = kMatWater;
+}
+
+// FNV-дайджест всего CPU-канона: тип клетки, маска, страница материалов.
+// Пустые клетки хеш не кормят — дайджест не зависит от порядка обхода пула.
+std::uint64_t cadence_digest(World& w, std::size_t* waterOut,
+                              std::size_t* outsideOut) {
+    const SubField<CellType>* f =
+        w.subfields().find<CellType>(kSubMaterialName);
+    std::uint64_t h = 1469598103934665603ull;
+    auto fold = [&h](std::uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            h ^= (v >> (i * 8)) & 0xFFull;
+            h *= 1099511628211ull;
+        }
+    };
+    std::size_t water = 0;
+    std::size_t outside = 0;
+    std::size_t ci = 0;
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y)
+            for (int x = 0; x < kMacroDim; ++x, ++ci) {
+                const CellType t = w.grid().types()[ci];
+                const SubMask& m = w.grid().mask(x, y, z);
+                const CellType* pg = f ? f->page(ci) : nullptr;
+                bool any = t != kCellAir || pg != nullptr;
+                for (int wi = 0; wi < 8 && !any; ++wi)
+                    if (m.words[wi] != 0) any = true;
+                if (!any) continue;
+                fold(ci);
+                fold(t);
+                for (int wi = 0; wi < 8; ++wi) fold(m.words[wi]);
+                if (pg)
+                    for (int b = 0; b < kSubVoxels; ++b) {
+                        fold(pg[b]);
+                        if (pg[b] == kMatWater && !m.test(b)) {
+                            ++water;
+                            // Бассейн сцены + столб налива над ним.
+                            const bool inBox = x >= 24 && x < 34 &&
+                                               y >= 24 && y < 34 &&
+                                               z >= 4 && z <= 7;
+                            if (!inBox) ++outside;
+                        }
+                    }
+            }
+    if (waterOut) *waterOut = water;
+    if (outsideOut) *outsideOut = outside;
+    return h;
+}
+
+void test_cadence_equivalence(gpu::VulkanDevice& dev) {
+    constexpr std::uint64_t kTotalSubsteps = 200; // как пины формы: 6.4 с
+    constexpr std::size_t kPoured = 128;
+    std::uint64_t dig[2] = {0, 0};
+    std::size_t water[2] = {0, 0};
+    std::size_t outside[2] = {0, 0};
+    unsigned live[2] = {0, 0};
+    unsigned fade[2] = {0, 0};
+
+    { // Каденс А — стендовый: батчи по 8, слот всегда 0.
+        static World w;
+        std::uint32_t pourCell = 0;
+        cadence_build_scene(w, pourCell);
+        static gpu::VoxelMirror mirror;
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        static gpu::GpuMediumPass medium;
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+        medium.wake_cells(&pourCell, 1, w, mirror);
+        std::uint64_t substep = 0;
+        while (substep < kTotalSubsteps) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        live[0] = medium.live_count();
+        fade[0] = medium.fade_total();
+        dig[0] = cadence_digest(w, &water[0], &outside[0]);
+        medium.destroy();
+        mirror.destroy();
+    }
+
+    { // Каденс Б — игровой: 0..4 подтика/кадр, слот 0/1, шов каждый кадр.
+        static World w;
+        std::uint32_t pourCell = 0;
+        cadence_build_scene(w, pourCell);
+        static gpu::VoxelMirror mirror;
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        static gpu::GpuMediumPass medium;
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+        medium.wake_cells(&pourCell, 1, w, mirror);
+        // Паттерн покрывает весь игровой диапазон: пустые кадры (owed 0 —
+        // шов едет и без подтиков), обычные 1-2, и 3-4 после лага (кап 8
+        // покрыт каденсом А).
+        static const std::uint32_t kPat[8] = {1, 0, 2, 1, 0, 4, 3, 1};
+        std::uint64_t substep = 0;
+        std::uint32_t frame = 0;
+        while (substep < kTotalSubsteps) {
+            std::uint32_t n = kPat[frame & 7u];
+            const std::uint64_t left = kTotalSubsteps - substep;
+            if (n > left) n = static_cast<std::uint32_t>(left);
+            CHECK(run_batch(dev, mirror, medium, w, n, substep, frame & 1u));
+            substep += n;
+            medium.apply_readback(w, mirror);
+            ++frame;
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        live[1] = medium.live_count();
+        fade[1] = medium.fade_total();
+        dig[1] = cadence_digest(w, &water[1], &outside[1]);
+        medium.destroy();
+        mirror.destroy();
+    }
+
+    std::printf("[medium_test] cadence: batch %016llx water %zu+%u fade "
+                "(live %u) vs game %016llx water %zu+%u fade (live %u)%s\n",
+                static_cast<unsigned long long>(dig[0]), water[0], fade[0],
+                live[0], static_cast<unsigned long long>(dig[1]), water[1],
+                fade[1], live[1],
+                dig[0] == dig[1] ? "" : "  [cadence-divergence: by design,"
+                                        " see comment]");
+    for (int c = 0; c < 2; ++c) {
+        CHECK(water[c] > 0);                      // сцена не пустая
+        CHECK(water[c] + fade[c] == kPoured);     // масса точна в КАЖДОМ каденсе
+        CHECK(outside[c] == 0);                   // вся вода в бассейне
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1273,6 +1443,7 @@ int main() {
         test_seam_tail(dev);
         test_lone_fade(dev);
         test_carve_vs_seam(dev);
+        test_cadence_equivalence(dev);
     }
     test_carve_agnostic();
     dev.destroy();
