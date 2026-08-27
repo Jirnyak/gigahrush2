@@ -64,6 +64,28 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed);
 
+// --- Лифтовые столбы (elevators-2x2.md, решения владельца 2026-08-27) -------
+// Узел лифта = ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор (z
+// заворачивается — у столба нет ни начала, ни конца), шахта 1 клетка в
+// центре. Кабина НЕ движется: на этаже входа в шахте стоит пол (клетка под
+// storey входа), «приезд кабины» — иллюзия поездки. ВХОД — один проём в
+// кольце: storey называет МОДУЛЬ этажа (S10 — политика в модуле; сегодня все
+// три модуля называют свой ходовой ground), сторону — хеш (сид, этаж, узел).
+// От этой структуры считают ВСЕ потребители: посадка ride_elevator, кнопка
+// вызова, панель кабины — второй копии закона не существует.
+struct LiftEntrance {
+    int h;    // walkable storey клетки входа (и пола кабины под ней)
+    int side; // 0..3 = +x, -x, +y, -y — сторона проёма в кольце
+};
+// node — лифтовый хаб [0, kFastHubsPerFloor) из fast_travel.h.
+LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed);
+
+// Проштамповать 4 столба поверх ЛЮБОГО модуля — generate_floor зовёт это
+// сам после генератора. В снимок ревизита столбы входят обычными клетками,
+// restore-ветка ничего не перештамповывает.
+void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
+                        unsigned seed);
+
 // The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
 // (stride-1)^2 interior between four wall lines; the wall lines themselves sit on
 // every cell whose x or y is a multiple of the stride.

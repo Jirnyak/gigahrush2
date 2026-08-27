@@ -731,15 +731,32 @@ static void test_floor_gen() {
     // through the FULL height (Z wraps, so this also links top -> 0), the ground
     // lobby is opened, and the diagonal corner posts are solid hub-pad columns
     // spanning the whole map. Node-to-node reachability is exercised by the nav
-    // no-seam test (#11).
+    // no-seam test (#11). ONE exception since elevators-2x2.md: the 4 LIFT
+    // columns carry a cabin floor cell under the entrance storey — the shaft
+    // stays air everywhere else.
     {
         auto& g = res.grid();
         for (int ny = 0; ny < kLatticeDim; ++ny)
             for (int nx = 0; nx < kLatticeDim; ++nx) {
                 const int cx = lattice_coord(nx);
                 const int cy = lattice_coord(ny);
-                for (int z = 0; z < kMacroDim; ++z)
-                    CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
+                const bool lift =
+                    lift_axis_of(nx) >= 0 && lift_axis_of(ny) >= 0;
+                const int cabinFloor =
+                    lift ? wrap_macro(
+                               lift_entrance(FloorKind::Residential, 0,
+                                             lift_axis_of(ny) * kLiftGridDim +
+                                                 lift_axis_of(nx),
+                                             3u)
+                                   .h -
+                               1)
+                         : -1;
+                for (int z = 0; z < kMacroDim; ++z) {
+                    if (z == cabinFloor)
+                        CHECK(g.cell(cx, cy, z) != kCellAir); // пол кабины
+                    else
+                        CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
+                }
                 CHECK(g.cell(cx + 2, cy, 1) == kCellAir);  // lobby opened
                 // Elevator column: diagonal corner posts are solid hub-pad type
                 // the FULL height (span the whole map; Z wraps into a loop).
@@ -986,37 +1003,50 @@ static void test_fast_travel() {
     CHECK(fast_hub_near(static_cast<int>(hx) + kMacroDim, hy) == 0);
     CHECK(fast_hub_near(static_cast<int>(hx) - kMacroDim, hy) == 0);
 
-    // --- AND THE SHAFT IS REALLY THERE ---------------------------------------
-    // The assertion that makes sharing `kFastShaftR` worth anything. Everything
-    // above is arithmetic about arithmetic; this asks the GENERATED GRID whether
-    // every cell `fast_hub_near` accepts is a cell a body can stand in. Without it,
-    // the constant could be shared and still wrong — both halves agreeing on a
-    // radius that does not match what was stamped.
+    // --- AND THE PILLAR IS REALLY THERE --------------------------------------
+    // Everything above is arithmetic about arithmetic; this asks the GENERATED
+    // GRID whether the closed pillar (elevators-2x2.md: кольцо стен 3×3 через
+    // весь тор, шахта 1 клетка, один проём со стороны из хеша, пол кабины под
+    // storey входа) was really stamped — the structure every consumer (ride,
+    // кнопка, панель) computes from.
     {
         World shaftWorld;
         generate_floor(shaftWorld, 0, floor_spec(FloorKind::Residential), 4242u);
-        const int gz = floor_ground_z();
-        int cellsProbed = 0;
-        bool allAir = true;
+        const MacroGrid& g = shaftWorld.grid();
         for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
             std::uint8_t cx = 0, cy = 0;
             fast_hub_cell(hub, cx, cy);
-            for (int dy = -kFastShaftR; dy <= kFastShaftR; ++dy)
-                for (int dx = -kFastShaftR; dx <= kFastShaftR; ++dx) {
-                    const int x = wrap_macro(static_cast<int>(cx) + dx);
-                    const int y = wrap_macro(static_cast<int>(cy) + dy);
-                    // The cell the menu is reachable from must be standable, and the
-                    // one above it too — the shaft is a column, not a hole.
-                    if (shaftWorld.grid().cell(x, y, gz) != kCellAir) allAir = false;
-                    if (shaftWorld.grid().cell(x, y, gz + 1) != kCellAir) allAir = false;
-                    ++cellsProbed;
+            const LiftEntrance e =
+                lift_entrance(FloorKind::Residential, 0, hub, 4242u);
+            // Кабина: шахта — воздух на storey входа, пол под ней — твердь.
+            CHECK(g.cell(cx, cy, e.h) == kCellAir);
+            CHECK(g.cell(cx, cy, e.h - 1) != kCellAir);
+            // Кольцо на storey входа: ровно один проём, остальные 7 — стены.
+            int airRing = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    if (g.cell(static_cast<int>(cx) + dx,
+                               static_cast<int>(cy) + dy, e.h) == kCellAir)
+                        ++airRing;
                 }
+            CHECK(airRing == 1);
+            // Столб замкнут по ВСЕМУ тору: вдали от входа — глухое кольцо
+            // вокруг открытой шахты.
+            const int zAway = wrap_macro(e.h + 40);
+            CHECK(g.cell(cx, cy, zAway) == kCellAir);
+            int solidAway = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if ((dx != 0 || dy != 0) &&
+                        g.cell(static_cast<int>(cx) + dx,
+                               static_cast<int>(cy) + dy,
+                               zAway) != kCellAir)
+                        ++solidAway;
+            CHECK(solidAway == 8);
         }
-        std::printf("[shaft] %d cells across %d shafts, all air: %s\n", cellsProbed,
-                    kFastHubsPerFloor, allAir ? "yes" : "NO");
-        CHECK(cellsProbed == kFastHubsPerFloor * (2 * kFastShaftR + 1) *
-                                 (2 * kFastShaftR + 1));
-        CHECK(allAir);
+        std::printf("[shaft] %d closed lift pillars probed: cabin+ring+torus\n",
+                    kFastHubsPerFloor);
     }
 
     // --- Gate: registered + unlocked + on hub ---
@@ -1263,9 +1293,20 @@ static void test_nav_realfloor() {
 
     // Vertical neighbours share a shaft carved to air through every slab, so the
     // +/-z edge is the pure spacing (32): a straight open column, no detour.
+    // Exception (elevators-2x2.md): the 4 LIFT columns carry the cabin floor
+    // under the entrance storey, which severs exactly the WRAP crossing
+    // (iz0 -z / iz3 +z pass through it). The three in-shaft links stay 32; the
+    // severed pair is whatever detour the floor offers, and is NOT pinned.
+    auto liftCol = [](int i) {
+        return lift_axis_of(i & 3) >= 0 && lift_axis_of((i >> 2) & 3) >= 0;
+    };
+    auto severedDown = [&](int i) { return liftCol(i) && (i >> 4) == 0; };
+    auto severedUp = [&](int i) {
+        return liftCol(i) && (i >> 4) == kLatticeDim - 1;
+    };
     for (int i = 0; i < kNodes; ++i) {
-        CHECK(g.edge[i][4] == kLatticeSpacing); // -z
-        CHECK(g.edge[i][5] == kLatticeSpacing); // +z
+        if (!severedDown(i)) CHECK(g.edge[i][4] == kLatticeSpacing); // -z
+        if (!severedUp(i)) CHECK(g.edge[i][5] == kLatticeSpacing);   // +z
     }
 
     // Deterministic on real geometry too.
@@ -1281,8 +1322,8 @@ static void test_nav_realfloor() {
     CoarseGraph gd{};
     bake_coarse(der.grid(), kBodyClearanceSub, gd);
     for (int i = 0; i < kNodes; ++i) {
-        CHECK(gd.edge[i][4] == kLatticeSpacing);
-        CHECK(gd.edge[i][5] == kLatticeSpacing);
+        if (!severedDown(i)) CHECK(gd.edge[i][4] == kLatticeSpacing);
+        if (!severedUp(i)) CHECK(gd.edge[i][5] == kLatticeSpacing);
     }
 }
 

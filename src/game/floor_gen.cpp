@@ -8,7 +8,9 @@
 #include "game/floors/blame/blame.h"     // the megastructure module (kind Blame)
 #include "game/floors/khrushi/khrushi.h" // the open microdistrict (kind Khrushi)
 #include "game/floors/padic/padic.h"     // the module every OTHER kind dispatches to
+#include "game/fast_travel.h"        // лифтовая сетка 2×2 — узлы столбов
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
+#include "world/destruct.h"          // kSubMaterialName — страницы под штампом
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
 
@@ -250,6 +252,74 @@ void floor_declare_rules(World& world, int number, const FloorSpec& spec,
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     kGenerators[kind_row(spec)](world, number, spec, seed);
+    // Лифтовые столбы — поверх любого модуля (вывод у stamp_lift_pillars).
+    stamp_lift_pillars(world, number, spec, seed);
+}
+
+LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed) {
+    // Storey входа называет МОДУЛЬ (S10). Сегодня у всех трёх модулей одна
+    // политика — ходовой ground (walkable-клетка прибытия, floor_ground_z);
+    // другая политика (случайный жилой storey, улица, машинное) = новая
+    // строка здесь при посадке лобби инкремента 6, не ветка у потребителей.
+    (void)kind;
+    LiftEntrance e;
+    e.h = floor_ground_z();
+    // Сторона проёма — чистый хеш идентичности столба: свой на каждом этаже,
+    // одинаковый в каждом прогоне (тот же приём, что floor_room_mask).
+    e.side = static_cast<int>(
+        hash_u32(static_cast<std::uint32_t>(seed) * 0x9E3779B9u ^
+                 static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
+                 static_cast<std::uint32_t>(node) * 0x27220A95u) &
+        3u);
+    return e;
+}
+
+// side 0..3 -> направление проёма из центра столба.
+static constexpr int kLiftSideStep[4][2] = {
+    {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
+                        unsigned seed) {
+    MacroGrid& g = world.grid();
+    SubField<CellType>& sm =
+        world.subfields().get_or_create<CellType>(kSubMaterialName);
+    // fill/clear правят тип+маску; страница суб-материалов, оставленная
+    // модулем под футпринтом столба (узорные стены и т.п.), обязана умереть
+    // вместе с узором — иначе тип говорит «бетон», а страница светит гипсом.
+    auto restamp_page = [&](int x, int y, int z, CellType t) {
+        const std::size_t ci =
+            macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+        if (CellType* pg = sm.page(ci))
+            for (int b = 0; b < kSubVoxels; ++b) pg[b] = t;
+    };
+    for (int node = 0; node < kFastHubsPerFloor; ++node) {
+        std::uint8_t cx8 = 0, cy8 = 0;
+        fast_hub_cell(node, cx8, cy8);
+        const int cx = cx8, cy = cy8;
+        // Кольцо стен + шахта — через ВСЕ z: столб замкнут на торе.
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int x = wrap_macro(cx + dx);
+                    const int y = wrap_macro(cy + dy);
+                    if (dx == 0 && dy == 0) {
+                        g.clear_cell(x, y, z);
+                        restamp_page(x, y, z, kCellAir);
+                    } else {
+                        g.fill_cell(x, y, z, kMatConcrete);
+                        restamp_page(x, y, z, kMatConcrete);
+                    }
+                }
+        const LiftEntrance e = lift_entrance(spec.kind, number, node, seed);
+        // Проём — walkable клетка кольца на storey входа; пол кабины — под
+        // центром шахты, чтобы вошедший стоял, а не падал в колодец.
+        const int ex = wrap_macro(cx + kLiftSideStep[e.side][0]);
+        const int ey = wrap_macro(cy + kLiftSideStep[e.side][1]);
+        g.clear_cell(ex, ey, e.h);
+        restamp_page(ex, ey, e.h, kCellAir);
+        g.fill_cell(cx, cy, wrap_macro(e.h - 1), kMatConcrete);
+        restamp_page(cx, cy, e.h - 1, kMatConcrete);
+    }
 }
 
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
