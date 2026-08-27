@@ -147,6 +147,9 @@ bool run_batch(gpu::VulkanDevice& dev, gpu::VoxelMirror& mirror,
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cmd, &bi);
+        // Как в кадре игры: дренаж очереди пробуждений ДО flush (страницы
+        // фронтира порции уезжают этим же кадром), инжект — в record ниже.
+        medium.drain_wakes(w, mirror);
         mirror.flush(cmd, 0, w);
         medium.record_substeps(cmd, n, regime_down(w.gravity().regime), base,
                                w, frameSlot, mirror.flush_gen());

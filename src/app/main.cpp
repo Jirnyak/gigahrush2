@@ -8296,6 +8296,11 @@ int main(int argc, char** argv) {
             // МИР-АВТОМАТ: apply_readback и poll_activity ушли в НАЧАЛО
             // кадра (до сим-писателей); здесь остался только диспатч
             // подтиков после flush.
+            // Дренаж очереди пробуждений — ДО flush: страницы фронтира
+            // порции обязаны уехать на GPU этим же кадром, а инжект-буфер
+            // порции съест record_substeps ниже. Остаток очереди честно
+            // переносится (см. drain_wakes — прежний кап молча терял).
+            mediumPass.drain_wakes(stack.layer(activeLayer), voxelMirror);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             const auto ctVf = std::chrono::steady_clock::now();
             voxelMirror.flush(cmd, renderer.currentFrame,
@@ -8360,7 +8365,7 @@ int main(int argc, char** argv) {
                         static_cast<unsigned long long>(mediumSubstepsDone),
                         static_cast<double>(g_mediumApplyMs),
                         static_cast<double>(g_mediumRecMs),
-                        mediumPass.overflowed() ? " [LIVE CAP OVERFLOW]" : "");
+                        mediumPass.overflowed() ? " [WAKE CARRY]" : "");
                 }
             }
 

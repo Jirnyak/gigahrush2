@@ -467,6 +467,10 @@ std::size_t light_vis_apply_patch(LightVisBake& live,
     std::size_t i = 0;
     while (i < patch.hits.size()) {
         const std::uint32_t cell = patch.hits[i].cell;
+        // Пояс границы (аудит 2026-08-27): индекс клетки рождается у
+        // light_vis_index и замаскирован по построению, но это единственная
+        // точка цепочки, где границу держало доверие, а не проверка.
+        if (cell >= kLightVisCells) continue;
         std::uint32_t* dst = live.cells.data() + cell * stride;
         std::uint32_t count = dst[0];
         const std::uint32_t wasCount = count;

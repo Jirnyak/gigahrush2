@@ -286,49 +286,74 @@ bool GpuMediumPass::create_pipeline(const char* shaderDir) noexcept {
 void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
                                World& world, VoxelMirror& mirror) {
     if (!ready()) return;
-    auto touch = [&](std::uint32_t ci) {
-        if (ci >= kMacroCells) return;
-        // Полнотвёрдую клетку не будим: под маской двигать нечего.
-        if (world.grid().masks()[ci].full()) return;
-        // Материализацией владеет ОДИН путь — open_frontier ниже (радиус
-        // покрывает клетку и грани тем же предикатом); здесь только
-        // пробуждение. Вторая копия materialize жила тут до 2026-08-27.
-        if (appendPending_.size() < kAppendCap)
-            appendPending_.push_back(ci);
-        else if (!overflow_) {
-            overflow_ = true;
-            std::fprintf(stderr,
-                         "[medium] APPEND OVERFLOW: %u pending, further wakes "
-                         "drop this frame\n",
-                         kAppendCap);
-        }
-    };
+    (void)mirror;
+    // Только постановка в дедуп-очередь: раскрытие граней (×7), фронтир и
+    // инжект — в drain_wakes, порцией под бюджет кадра. Клетка стоит в
+    // очереди один раз (битсет), повторная запись того же кадра бесплатна —
+    // это и убивает прежнюю ×7-амплификацию дублей в инжект-буфере.
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t ci = cells[i];
+        if (ci >= kMacroCells) continue;
+        // Полнотвёрдую клетку не будим: под маской двигать нечего.
+        if (world.grid().masks()[ci].full()) continue;
+        std::uint64_t& w = wakeBits_[ci >> 6];
+        const std::uint64_t bit = 1ull << (ci & 63u);
+        if (w & bit) continue;
+        w |= bit;
+        wakeQueue_.push_back(ci);
+    }
+}
+
+void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
+    if (!ready() || wakeQueue_.empty()) return;
+    // Бюджет кадра — инжект-буфер: источник стоит до 7 touch-ей (сам + 6
+    // граней), порция режется так, чтобы влезли все. Остаток ПЕРЕНОСИТСЯ.
+    auto touch = [&](std::uint32_t ci) {
+        if (ci >= kMacroCells) return;
+        if (world.grid().masks()[ci].full()) return;
+        if (appendPending_.size() < kAppendCap) appendPending_.push_back(ci);
+    };
+    std::size_t take = 0;
+    while (take < wakeQueue_.size() &&
+           appendPending_.size() + 7u <= kAppendCap) {
+        const std::uint32_t ci = wakeQueue_[take++];
+        wakeBits_[ci >> 6] &= ~(1ull << (ci & 63u));
         touch(ci);
         // Закон писателя: запись меняет и свободу материи соседей.
-        const int cx = static_cast<int>(ci & 127u);
-        const int cy = static_cast<int>((ci >> 7) & 127u);
-        const int cz = static_cast<int>((ci >> 14) & 127u);
+        const int cx = static_cast<int>(ci % kMacroDim);
+        const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
         touch(static_cast<std::uint32_t>(
-                  macro_index(wrap_macro(cx - 1), cy, cz)));
+            macro_index(wrap_macro(cx - 1), cy, cz)));
         touch(static_cast<std::uint32_t>(
-                  macro_index(wrap_macro(cx + 1), cy, cz)));
+            macro_index(wrap_macro(cx + 1), cy, cz)));
         touch(static_cast<std::uint32_t>(
-                  macro_index(cx, wrap_macro(cy - 1), cz)));
+            macro_index(cx, wrap_macro(cy - 1), cz)));
         touch(static_cast<std::uint32_t>(
-                  macro_index(cx, wrap_macro(cy + 1), cz)));
+            macro_index(cx, wrap_macro(cy + 1), cz)));
         touch(static_cast<std::uint32_t>(
-                  macro_index(cx, cy, wrap_macro(cz - 1))));
+            macro_index(cx, cy, wrap_macro(cz - 1))));
         touch(static_cast<std::uint32_t>(
-                  macro_index(cx, cy, wrap_macro(cz + 1))));
+            macro_index(cx, cy, wrap_macro(cz + 1))));
     }
     // Закон писателя, продолжение (2026-08-27): запись РАСКРЫВАЕТ округу —
-    // страницы радиуса фронтира существуют с нулевого подтика, одинаково
-    // при любом каденсе кадров. Без этого старт зависел от кадра: первый
-    // шов приезжает через kRbRegions+1 кадра, а это РАЗНОЕ число подтиков
-    // у разных fps (поймано test_cadence_equivalence).
-    open_frontier(world, mirror, cells, n);
+    // фронтир только ПОРЦИИ кадра, не всей пачке (прежний вызов на всю
+    // пачку будильника = разовый ~18-миллионный проход, хитч).
+    open_frontier(world, mirror, wakeQueue_.data(), take);
+    if (take == wakeQueue_.size()) {
+        wakeQueue_.clear();
+        overflow_ = false;
+    } else {
+        wakeQueue_.erase(wakeQueue_.begin(),
+                         wakeQueue_.begin() +
+                             static_cast<std::ptrdiff_t>(take));
+        overflow_ = true;
+        if ((wakeCarryEvents_++ % 64u) == 0u)
+            std::fprintf(stderr,
+                         "[medium] wake carry: %zu cells queued to next "
+                         "frames (drained %zu)\n",
+                         wakeQueue_.size(), take);
+    }
 }
 
 void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
@@ -346,8 +371,6 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                        static_cast<std::size_t>(region) *
                            (kListHeader + kRbSlotCap);
     const std::uint32_t count = std::min(list[0], kRbSlotCap);
-    lastCount_ = list[0];
-    lastQuanta_ = list[1];
     // ГЕЙТ ПОДПИСИ (корень «зарастаний», 2026-08-26): применяем регион,
     // только если GPU РЕАЛЬНО записал в него ожидаемый пак. Счёт кадров
     // (kRbRegions) в рантайме не держится: канарейка показала чужие паки
@@ -359,9 +382,15 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         ++staleSkips_;
         return;
     }
+    // Метрики — ПОСЛЕ гейта подписи (аудит 2026-08-27: стейл-регион успевал
+    // переписать их чужими числами) и ЧЕСТНЫЕ: live = полный список list[4],
+    // не оконный count — при переливе rb-окна оконный счёт показывал
+    // 8192/12 попеременно.
     wokenTotal_ = list[2];
     sleptTotal_ = list[3];
     listTotal_ = list[4];
+    lastCount_ = list[4];
+    lastQuanta_ = list[1];
     fadeTotal_ = list[7];
     wakeCapHit_ = list[5] != 0;
     if (list[4] > kRbSlotCap && !rbWindowWarned_) {

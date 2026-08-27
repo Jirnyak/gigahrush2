@@ -663,6 +663,19 @@ bool VulkanRenderer::end_frame(SDL_Window* window) {
     // A pending capture is recorded HERE: after the render pass, before submit and
     // present. This is the only point at which the swapchain image is legally ours to
     // read — handed to us by vkAcquireNextImageKHR and not yet handed back.
+    if (captureTo_ != VK_NULL_HANDLE &&
+        (swapchain_->extent.width != captureExtent_.width ||
+         swapchain_->extent.height != captureExtent_.height)) {
+        // Свопчейн пересоздался между запросом и копией — буфер захвата
+        // сайзился под старый extent, копия нового размера писала бы за
+        // его конец. Захват роняем громко; вызывающий увидит !capture_done.
+        std::fprintf(stderr,
+                     "[shot] capture dropped: swapchain %ux%u != requested "
+                     "%ux%u\n",
+                     swapchain_->extent.width, swapchain_->extent.height,
+                     captureExtent_.width, captureExtent_.height);
+        clear_capture();
+    }
     if (captureTo_ != VK_NULL_HANDLE) {
         VkImageMemoryBarrier b{};
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

@@ -28,6 +28,8 @@
 
 #include <algorithm>
 #include <cstdint>
+
+#include "world/types.h" // kMacroCells — битсет очереди пробуждений
 #include <unordered_set>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -94,12 +96,24 @@ public:
     void destroy() noexcept;
     bool ready() const noexcept { return pipeline_ != VK_NULL_HANDLE; }
 
-    // Писатель разбудил клетки (flat macro-индексы): CPU материализует
-    // страницы (materialize + mark_dirty) клеткам И ГРАНЯМ — автомат пишет
-    // только в страницы, — а сами клетки уезжают инжект-пассом в GPU-список
-    // на ближайшем record_substeps. Полнотвёрдые не будятся.
+    // Писатель разбудил клетки (flat macro-индексы): источники ложатся в
+    // ДЕДУП-ОЧЕРЕДЬ С ПЕРЕНОСОМ (битсет по kMacroCells — клетка стоит в
+    // очереди один раз). Раскрытие граней (×7), материализация фронтира и
+    // инжект происходят в drain_wakes — порцией под бюджет кадра, остаток
+    // честно ПЕРЕНОСИТСЯ, не выбрасывается. До 2026-08-27 всё сверх
+    // kAppendCap за кадр молча терялось (будильник этажа терял ~86%
+    // пробуждений), а фронтир на всю пачку разом давал разовый
+    // 18-миллионный проход — хитч.
     void wake_cells(const std::uint32_t* cells, std::size_t n, World& world,
                     VoxelMirror& mirror);
+
+    // Дренаж очереди пробуждений: порция источников под бюджет
+    // инжект-буфера (kAppendCap touch-ей с гранями), фронтир — только
+    // порции. Звать раз в кадр ПЕРЕД voxelMirror.flush (страницы фронтира
+    // обязаны уехать этим же кадром) и до record_substeps. Бит-идентичность
+    // каденса держится, пока пачка писателя укладывается в бюджет кадра
+    // (стенды под капом); суб-степовый инжект — отдельное решение владельца.
+    void drain_wakes(World& world, VoxelMirror& mirror);
 
     // Раскрыть страницы вокруг клеток БЕЗ пробуждения (фронтир впереди
     // материи, закон «ничего не зависит от кадра» 2026-08-27): радиус и его
@@ -123,6 +137,13 @@ public:
     // (счётчики и биты обнулит клир на ближайшем record).
     void clear_live() noexcept {
         appendPending_.clear();
+        wakeQueue_.clear();
+        std::fill(wakeBits_.begin(), wakeBits_.end(), 0ull);
+        // Предупреждения — ПО-ЭТАЖНО, не раз за процесс: молчащий после
+        // первого раза кап неотличим от здорового (аудит 2026-08-27).
+        overflow_ = false;
+        rbWindowWarned_ = false;
+        wakeCapWarned_ = false;
         actNeedsClear_ = true;
         lastCount_ = 0;
         lastQuanta_ = 0;
@@ -182,6 +203,10 @@ private:
     static constexpr std::uint32_t kAppendCap = 8192u;
     VulkanBuffer appendBuf_[kMaxFramesInFlight];
     std::vector<std::uint32_t> appendPending_;
+    // Очередь пробуждений с переносом + битсет «уже в очереди» (256 КиБ).
+    std::vector<std::uint32_t> wakeQueue_;
+    std::vector<std::uint64_t> wakeBits_ =
+        std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
     std::uint32_t listSel_ = 0; // чей список ТЕКУЩИЙ (персистентен)
 
@@ -215,7 +240,8 @@ private:
     std::uint32_t lastQuanta_ = 0;
     std::uint32_t wokenTotal_ = 0;
     std::uint32_t sleptTotal_ = 0;
-    bool overflow_ = false;
+    bool overflow_ = false;      // очередь пробуждений несёт остаток (см. drain_wakes)
+    std::uint32_t wakeCarryEvents_ = 0; // рейт-лимит строки wake carry
 };
 
 } // namespace giga::gpu

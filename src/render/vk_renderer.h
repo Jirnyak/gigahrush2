@@ -125,7 +125,15 @@ struct VulkanRenderer {
     //
     // Recorded into the SAME command buffer as the draws, immediately after
     // vkCmdEndRenderPass, which is the only window in which the image is ours.
-    void request_capture(VkBuffer dst) { captureTo_ = dst; captureDone_ = false; }
+    // Захват несёт EXTENT своего запроса: буфер сайзился под него, а копия
+    // пишется кадром ПОЗЖЕ — свопчейн между ними может пересоздаться
+    // (ресайз/фуллскрин), и копия нового размера писала бы за буфер GPU-ом
+    // (аудит 2026-08-27). Несовпадение роняет захват громко, не память.
+    void request_capture(VkBuffer dst, VkExtent2D extent) {
+        captureTo_ = dst;
+        captureExtent_ = extent;
+        captureDone_ = false;
+    }
     bool capture_done() const { return captureDone_; }
     void clear_capture() { captureTo_ = VK_NULL_HANDLE; captureDone_ = false; }
 
@@ -136,6 +144,7 @@ struct VulkanRenderer {
 private:
     VulkanSwapchain* swapchain_ = nullptr;
     VkBuffer captureTo_ = VK_NULL_HANDLE;
+    VkExtent2D captureExtent_{0, 0}; // extent, под который сайзился буфер
     bool captureDone_ = false;
     VkFramebuffer sceneFramebuffer_ = VK_NULL_HANDLE; // hdrView + depthView
     std::vector<VkFramebuffer> postFramebuffers_;     // по свопчейн-имиджу
