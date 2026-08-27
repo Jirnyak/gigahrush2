@@ -180,4 +180,16 @@ struct Doorway {
 std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out);
 
+// MODULE antourage on top of the generic bake: after bake_antourage reads the
+// finished grid, the floor's own module may append instances/wires/cloths it
+// can only lay out from its plan (khrushi strings wires between its street
+// poles). Per-kind table row in floor_gen.cpp — a row, never a branch; kinds
+// without module dressing have a null row and this is a no-op. Deterministic
+// in (grid, number, seed) like the generic bake, and it obeys the same law:
+// READ the grid, never write it.
+struct AntourageBake;
+void floor_antourage_extra(const World& world, int number,
+                           const FloorSpec& spec, unsigned seed,
+                           AntourageBake& out);
+
 } // namespace giga::game

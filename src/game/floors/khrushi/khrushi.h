@@ -124,6 +124,13 @@ std::uint32_t khrushi_entrances(unsigned seed, int number,
 std::uint32_t khrushi_poles(unsigned seed, int number,
                             std::vector<KhrushiPole>& out);
 
+// Module antourage (dispatched by floor_antourage_extra's per-kind table):
+// wires strung hook to hook along every kerb line, sagging over the road.
+// READS the grid law: appends to the bake, never writes voxels.
+struct AntourageBake;
+void khrushi_bake_antourage(const World& world, int number, unsigned seed,
+                            AntourageBake& out);
+
 // Module dressing: street lamps hung from the pole hooks, подъезд bulbs on
 // every stairwell landing, a bulb over every entrance. The generic seeders
 // (ceiling lights, wall interactables, furniture) run separately and cover

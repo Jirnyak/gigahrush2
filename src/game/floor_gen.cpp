@@ -225,6 +225,18 @@ static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "rule-applier table must have exactly one row per FloorKind");
 
+// Module antourage rows: null = the kind adds nothing over the generic bake.
+using AntourageExtraFunc = void (*)(const World&, int, unsigned,
+                                    AntourageBake&);
+constexpr AntourageExtraFunc kAntourageExtras[] = {
+    nullptr, nullptr, nullptr,
+    nullptr, nullptr, nullptr,
+    khrushi_bake_antourage, // Khrushi — wires between the street poles
+};
+static_assert(sizeof(kAntourageExtras) / sizeof(kAntourageExtras[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "antourage-extra table must have exactly one row per FloorKind");
+
 std::size_t kind_row(const FloorSpec& spec) {
     const std::size_t k = static_cast<std::size_t>(spec.kind);
     return k >= static_cast<std::size_t>(FloorKind::Count) ? 0 : k;
@@ -243,6 +255,13 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed) {
     kRuleAppliers[kind_row(spec)](world, number, spec, seed);
+}
+
+void floor_antourage_extra(const World& world, int number,
+                           const FloorSpec& spec, unsigned seed,
+                           AntourageBake& out) {
+    if (AntourageExtraFunc fn = kAntourageExtras[kind_row(spec)])
+        fn(world, number, seed, out);
 }
 
 } // namespace giga::game

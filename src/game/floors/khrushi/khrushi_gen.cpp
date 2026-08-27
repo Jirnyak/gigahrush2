@@ -22,8 +22,10 @@
 #include "core/rng.h"
 #include "game/floors/khrushi/khrushi.h"
 
+#include "game/antourage/antourage.h" // AntourageBake, WireChain — street wires
 #include "game/fast_travel.h" // kFastLobbyR — the hub square footprint
 #include "game/floor_gen.h"
+#include "world/anchor.h"   // anchor_face_pack — the wire's attachment face
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -31,6 +33,7 @@
 #include "world/types.h"
 #include "world/world.h"
 
+#include <cstdio>
 #include <vector>
 
 namespace giga::game {
@@ -624,6 +627,80 @@ void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
 }
 
 } // namespace
+
+// Street wires: hook to hook along every kerb line, the module's antourage on
+// top of the generic bake. The pole list is replayed from khrushi_poles —
+// poles are emitted 4 per pitch step (road r: vert-lo, vert-hi, horiz-lo,
+// horiz-hi), so line (r, k) is every 4th entry and consecutive entries on a
+// line are one 8-cell (16 m) span apart; the last span wraps the torus, built
+// UNWRAPPED in metres like bake_wires' spans (a wrapped mesh would be a
+// 250-metre ghost), with only the anchor cells wrapped.
+void khrushi_bake_antourage(const World& /*world*/, int number, unsigned seed,
+                            AntourageBake& out) {
+    std::vector<KhrushiPole> poles;
+    khrushi_poles(seed, number, poles);
+    std::uint32_t strung = 0;
+    const int pitchSteps = kMacroDim / 8; // poles per line
+    const float hookZ =
+        static_cast<float>(kKhrushiGroundCoord * kSubDim + kKhrushiPoleTopH -
+                           2) *
+        (kCellSize / 8.0f); // under-face of the hook arm: 10.5 m absolute
+
+    // Attach at the hook tip over the road: pole centre + 1.75 m towards it.
+    auto attach = [&](const KhrushiPole& p, float along) {
+        vec3 a{(static_cast<float>(p.x) + 0.5f) * kCellSize +
+                   static_cast<float>(p.dx) * 1.75f,
+               (static_cast<float>(p.y) + 0.5f) * kCellSize +
+                   static_cast<float>(p.dy) * 1.75f,
+               hookZ - 0.05f};
+        // The along-axis coordinate comes in unwrapped for the wrap span.
+        if (p.dx != 0) a.y = along;
+        else a.x = along;
+        return a;
+    };
+
+    for (std::size_t line = 0; line < 16; ++line) {
+        const std::size_t r = line / 4, k = line % 4;
+        for (int i = 0; i < pitchSteps; ++i) {
+            const int j = (i + 1) % pitchSteps;
+            const KhrushiPole& pa = poles[(r * pitchSteps + i) * 4 + k];
+            const KhrushiPole& pb = poles[(r * pitchSteps + j) * 4 + k];
+            const float ta = (static_cast<float>(4 + 8 * i) + 0.5f) * kCellSize;
+            const float tb = ta + 8.0f * kCellSize; // unwrapped: wrap span too
+            WireChain c{};
+            const vec3 a = attach(pa, ta);
+            const vec3 b = attach(pb, tb);
+            const float spanM = 8.0f * kCellSize;
+            // Street cable sag: 5% of the span (0.8 m over 16 m) — a strung
+            // line, not the loose indoor flex bake_wires drapes at 15%.
+            const float sag = 0.05f * spanM;
+            for (int pt = 0; pt < kWirePoints; ++pt) {
+                const float s = static_cast<float>(pt) /
+                                static_cast<float>(kWirePoints - 1);
+                vec3 q{a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s,
+                       a.z + (b.z - a.z) * s};
+                q.z -= sag * 4.0f * s * (1.0f - s);
+                c.p[pt] = q;
+            }
+            c.restLen = spanM * 1.02f / static_cast<float>(kWirePoints - 1);
+            c.massKg = spanM * 0.35f; // cable ~0.35 kg/m, as the generic bake
+            c.ax0 = static_cast<std::uint8_t>(wrap_macro(pa.x + pa.dx));
+            c.ay0 = static_cast<std::uint8_t>(wrap_macro(pa.y + pa.dy));
+            c.az0 = static_cast<std::uint8_t>(
+                kKhrushiGroundCoord + ((kKhrushiPoleTopH - 1) >> 3));
+            c.ax1 = static_cast<std::uint8_t>(wrap_macro(pb.x + pb.dx));
+            c.ay1 = static_cast<std::uint8_t>(wrap_macro(pb.y + pb.dy));
+            c.az1 = c.az0;
+            c.pinMask = 0x81; // both ends on hooks
+            c.face = anchor_face_pack(2, -1); // hangs off the hook's under-face
+            c.matId = kMatPipeMetal;
+            out.wires.push_back(c);
+            ++strung;
+        }
+    }
+    std::fprintf(stderr, "[khrushi] street wires: %u strung, %zu total in bake\n",
+                 strung, out.wires.size());
+}
 
 // Replay of the plan's entrance list for the module seeder (lamps over the
 // подъезды) — deterministic in (seed, number) like everything else.

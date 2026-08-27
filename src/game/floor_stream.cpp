@@ -334,6 +334,8 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // bit-for-bit like the geometry itself, which is why nothing is persisted.
     auto ab = std::make_unique<AntourageBake>();
     bake_antourage(stack.layer(slot), fm.number, fm.seed, *ab);
+    floor_antourage_extra(stack.layer(slot), fm.number, floor_spec(fm.kind),
+                          fm.seed, *ab);
     antourage_[m] = std::move(ab);
     reg.set_resident(m, slot);
 
