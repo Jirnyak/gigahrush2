@@ -101,6 +101,13 @@ public:
     void wake_cells(const std::uint32_t* cells, std::size_t n, World& world,
                     VoxelMirror& mirror);
 
+    // Раскрыть страницы вокруг клеток БЕЗ пробуждения (фронтир впереди
+    // материи, закон «ничего не зависит от кадра» 2026-08-27): радиус и его
+    // вывод — kFrontierRadius в .cpp. Зовут писатель (wake_cells) и шов
+    // (apply_readback); пустые страницы в живой список не входят.
+    void open_frontier(World& world, VoxelMirror& mirror,
+                       const std::uint32_t* cells, std::size_t n);
+
     // Применить готовый (по фенсовой дисциплине) регион шва в CPU-канон:
     // СПИСОК живых клеток пришёл ИЗ РЕГИОНА (его собрал pack-пасс GPU —
     // CPU-протокола диспетчеризации не существует, решение владельца

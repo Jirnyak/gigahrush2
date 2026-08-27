@@ -730,7 +730,10 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         for (GravityRegime r : regimes) {
             medium.clear_live();
             w.gravity().regime = r;
-            const int cx = 20 + rgn * 6, cy = 20, cz = 100;
+            // Шаг сцен 12 клеток: с фронтиром (страницы впереди материи,
+            // 2026-08-27) масса летит свободно все 32 подтика = 4 клетки, и
+            // прежний шаг 6 позволял ±X-каплям долетать до соседнего пина.
+            const int cx = 20 + rgn * 12, cy = 20, cz = 100;
             pour8(cx, cy, cz);
             for (int b = 0; b < 4; ++b) {
                 CHECK(run_batch(dev, mirror, medium, w, 8, substep));
@@ -755,7 +758,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         // размазать по соседям, но за 2 клетки по осям — пусто).
         medium.clear_live();
         w.gravity().regime = GravityRegime::Zero;
-        const int zx = 20 + rgn * 6, zy = 20, zz = 100;
+        const int zx = 20 + rgn * 12, zy = 20, zz = 100;
         pour8(zx, zy, zz);
         for (int b = 0; b < 2; ++b) {
             CHECK(run_batch(dev, mirror, medium, w, 8, substep));
@@ -1033,10 +1036,16 @@ void test_seam_tail(gpu::VulkanDevice& dev) {
     }
     const auto above = static_cast<std::uint32_t>(macro_index(60, 60, 6));
     medium.wake_cells(&above, 1, w, mirror);
+    // Пик списка ловится ПО ХОДУ прогона: с фронтиром (2026-08-27) осевшая
+    // вода честно засыпает, и к концу лист садится ниже окна — прежний пин
+    // «в конце всё ещё > окна» был прокси, живым за счёт замороженных
+    // границ. Свойство теста — «окно вращалось» — меряется пиком.
+    std::uint32_t peakList = 0;
     for (int b = 0; b < 60; ++b) {
         CHECK(run_batch(dev, mirror, medium, w, 4, substep));
         substep += 4;
         medium.apply_readback(w, mirror);
+        if (medium.list_total() > peakList) peakList = medium.list_total();
     }
     drain_seam(dev, mirror, medium, w, substep);
 
@@ -1045,9 +1054,10 @@ void test_seam_tail(gpu::VulkanDevice& dev) {
     if (dp)
         for (int b2 = 0; b2 < kSubVoxels; ++b2)
             if (dp[b2] == kMatWater) ++dq;
-    std::printf("[medium_test] seam tail: list %u, D page %s, D water %d\n",
-                medium.list_total(), dp ? "yes" : "NO", dq);
-    CHECK(medium.list_total() > gpu::GpuMediumPass::kRbSlotCap);
+    std::printf("[medium_test] seam tail: list %u (peak %u), D page %s, "
+                "D water %d\n",
+                medium.list_total(), peakList, dp ? "yes" : "NO", dq);
+    CHECK(peakList > gpu::GpuMediumPass::kRbSlotCap);
     CHECK(dq >= 32);
     (void)kPoured;
     medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
@@ -1265,20 +1275,17 @@ void test_carve_vs_seam(gpu::VulkanDevice& dev) {
 // автомат батчами по 8 подтиков при frameSlot=0; кадр игры (main.cpp,
 // «МИР-АВТОМАТ: подтики, назревшие по сим-часам») дёргает 0..4 подтика с
 // чередованием слота 0/1 и швом каждый кадр. Фаза Марголуса — функция НОМЕРА
-// подтика (base), не нарезки на батчи и не слота кадра — но БИТ-идентичности
-// между каденсами НЕТ, и это не баг теста, а ИЗМЕРЕННОЕ СЛЕДСТВИЕ ДИЗАЙНА
-// (находка этого теста, 2026-08-27): ленивая материализация страниц ждёт
-// «кадр-два» (apply_readback: «материя подождёт у границы кадр-два») — ждёт
-// КАДРАМИ, а подтиков в кадре у стенда 8, у игры 0..4, поэтому материя
-// пересекает границы нераскрытых клеток на РАЗНЫХ номерах подтиков и
-// эволюция расходится (следствие: скорость фронта через границы клеток
-// зависит от fps; допуск S16.3 «отставание до кадра» это покрывает, но
-// следствие тут названо вслух — решение владельца, если оно не устроит, —
-// бюджет материализации в ПОДТИКАХ, не кадрах). Что каденс МЕНЯТЬ НЕ
-// ВПРАВЕ и что этот тест пинит для ОБОИХ каденсов: сохранение массы
-// (подвижная + истаявшая == налитой) и форму (вся вода в бассейне).
-// Расхождение печатается вслух. Этот пин обязан стоять ДО правок сна
-// сред (макро-дельта) и будильника генераторного налива.
+// подтика (base), не нарезки на батчи и не слота кадра, и потому каденсы
+// ОБЯЗАНЫ давать БИТ-ИДЕНТИЧНЫЙ CPU-канон — это закон владельца 2026-08-27
+// («в игре ничего не должно зависеть от кадра»). Первая версия этого теста
+// поймала расхождение (125 против 121 кванта): ленивая материализация ждала
+// КАДРАМИ («кадр-два»), и фронт пересекал границы нераскрытых клеток на
+// разных номерах подтиков — скорость воды зависела от fps. Вылечено
+// фронтиром ([gpu_medium_pass.cpp] apply_readback: страницы соседей живых
+// клеток строятся ВПЕРЕДИ материи, гейт не срабатывает). Дополнительно
+// пинится то, что верно при любом каденсе: масса точна (подвижная +
+// истаявшая == налитой) и форма (вся вода в бассейне). Этот пин обязан
+// стоять ДО правок сна сред (макро-дельта) и будильника налива.
 
 void cadence_build_scene(World& w, std::uint32_t& pourCell) {
     // Бассейн 10x10 с бортами — вторая копия сцены первого теста в ДРУГОМ
@@ -1420,13 +1427,14 @@ void test_cadence_equivalence(gpu::VulkanDevice& dev) {
                 static_cast<unsigned long long>(dig[0]), water[0], fade[0],
                 live[0], static_cast<unsigned long long>(dig[1]), water[1],
                 fade[1], live[1],
-                dig[0] == dig[1] ? "" : "  [cadence-divergence: by design,"
-                                        " see comment]");
+                dig[0] == dig[1] ? "" : "  [CADENCE DIVERGENCE — REGRESSION]");
     for (int c = 0; c < 2; ++c) {
         CHECK(water[c] > 0);                      // сцена не пустая
         CHECK(water[c] + fade[c] == kPoured);     // масса точна в КАЖДОМ каденсе
         CHECK(outside[c] == 0);                   // вся вода в бассейне
     }
+    CHECK(dig[0] == dig[1]);      // ЗАКОН: физика не зависит от нарезки кадров
+    CHECK(water[0] == water[1]);  // и кванты сходятся квант в квант
 }
 
 } // namespace

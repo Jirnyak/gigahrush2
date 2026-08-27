@@ -55,7 +55,51 @@ constexpr std::uint32_t kModeInject = 3;
 constexpr std::uint32_t kModePack = 4;
 constexpr std::uint32_t kModeRelease = 5; // снять биты списка до move
 
+// РАДИУС ФРОНТИРА — вывод (S11), от полного круга доставки страницы:
+// GPU-факт «клетка жива» едет в CPU kRbRegions+1 кадра (кольцо шва),
+// материализованная страница едет назад флешем ещё кадр — kRbRegions+2 = 5
+// кадров; кадр несёт до kMediumMaxPerFrame = 8 подтиков (кап догона; стенд
+// batch-8 живёт на этом же потолке), Марголус двигает не быстрее
+// 1 субвокселя/подтик => клетка пересекается не быстрее kSubDim = 8
+// подтиков. R = (kRbRegions+2)*8/8 = 5, плюс 1 запаса: равенство на
+// потолке — не запас. Закон владельца 2026-08-27: «в игре ничего не должно
+// зависеть от кадра» — страницы обязаны существовать ДО прихода материи,
+// чтобы гейт «нераскрытая клетка» не срабатывал и физика оставалась чистой
+// функцией номера подтика (пин: test_cadence_equivalence).
+constexpr int kFrontierRadius = 6;
+
 } // namespace
+
+// Раскрыть (материализовать) страницы вокруг клеток БЕЗ пробуждения: пустые
+// страницы не входят в живой список (пробуждение пустых плодило каскад —
+// live 51 -> 5428 на одном наливе), материя будит цели сама wake-протоколом
+// move. Дедуп бесплатен: материализация делает клетку paged, повторный сосед
+// отсеивается первой проверкой; полнотвёрдые не трогаем — входа материи нет.
+void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
+                                  const std::uint32_t* cells, std::size_t n) {
+    SubField<CellType>& f =
+        world.subfields().get_or_create<CellType>(kSubMaterialName);
+    std::vector<std::uint32_t> dirty;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t lc = cells[i];
+        if (lc >= kMacroCells) continue;
+        const int cx = static_cast<int>(lc % kMacroDim);
+        const int cy = static_cast<int>((lc / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(lc / (kMacroDim * kMacroDim));
+        for (int dz = -kFrontierRadius; dz <= kFrontierRadius; ++dz)
+            for (int dy = -kFrontierRadius; dy <= kFrontierRadius; ++dy)
+                for (int dx = -kFrontierRadius; dx <= kFrontierRadius; ++dx) {
+                    const auto ci2 = static_cast<std::uint32_t>(macro_index(
+                        wrap_macro(cx + dx), wrap_macro(cy + dy),
+                        wrap_macro(cz + dz)));
+                    if (f.paged(ci2)) continue;
+                    if (world.grid().masks()[ci2].full()) continue;
+                    materialize_sub_page(world, ci2);
+                    dirty.push_back(ci2);
+                }
+    }
+    if (!dirty.empty()) mirror.mark_dirty(dirty.data(), dirty.size());
+}
 
 bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
                          const VoxelMirror& mirror) {
@@ -282,6 +326,12 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
         touch(static_cast<std::uint32_t>(
                   macro_index(cx, cy, wrap_macro(cz + 1))));
     }
+    // Закон писателя, продолжение (2026-08-27): запись РАСКРЫВАЕТ округу —
+    // страницы радиуса фронтира существуют с нулевого подтика, одинаково
+    // при любом каденсе кадров. Без этого старт зависел от кадра: первый
+    // шов приезжает через kRbRegions+1 кадра, а это РАЗНОЕ число подтиков
+    // у разных fps (поймано test_cadence_equivalence).
+    open_frontier(world, mirror, cells, n);
 }
 
 void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
@@ -338,11 +388,14 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                        static_cast<std::size_t>(region) * kRbSlotCap *
                            kMaskBytesBack;
     lazyDirty_.clear();
+    std::vector<std::uint32_t> liveCis;
+    liveCis.reserve(count);
     const bool probeDiag = std::getenv("GIGA_POUR") != nullptr;
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t word = list[kListHeader + i];
         const std::uint32_t ci = word & 0x7FFFFFFFu;
         if (ci >= kMacroCells) continue;
+        liveCis.push_back(ci);
         if (probeDiag) {
             seamSeen_.insert(ci);
             if (word & 0x80000000u) seamLazy_.insert(ci);
@@ -412,6 +465,16 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             if (changedMasks) changedMasks->push_back(ci);
         }
     }
+    // ФРОНТИР СТРОИТСЯ ВПЕРЁД МАТЕРИИ (закон владельца 2026-08-27: «в игре
+    // ничего не должно зависеть от кадра»). Ленивый путь выше ждёт страницу
+    // КАДРАМИ («материя подождёт у границы кадр-два») — скорость фронта
+    // через границы клеток зависела от fps (test_cadence_equivalence: 125
+    // против 121 кванта на тех же 200 подтиках). Лечение: страницы соседей
+    // живых клеток строятся ВПЕРЕДИ материи (радиус и вывод — у
+    // kFrontierRadius), стартовую округу раскрывает сам писатель
+    // (wake_cells), ленивый путь остаётся фолбэком на экстремальный догон.
+    if (!liveCis.empty())
+        open_frontier(world, mirror, liveCis.data(), liveCis.size());
     if (!lazyDirty_.empty()) {
         mirror.mark_dirty(lazyDirty_.data(), lazyDirty_.size());
         lazyTotal_ += static_cast<std::uint32_t>(lazyDirty_.size());
