@@ -157,6 +157,14 @@ uint vMat;
 // ~8 м (k=0.35).
 const float kAbsorbLiquid = 0.55;
 const float kAbsorbGas = 0.35;
+// СТЕКЛО ГЛАЗУ (владелец 2026-08-27; допуск про ВИД — S16.3): первичный луч
+// проходит сквозь свет-прозрачный НЕ-эмиттерный solid-атом, тонируя сегмент
+// тем же аккумулятором Бэра, что и среды. Условие — та же колонка
+// light_transparent, что у теневого марша (:400) и бейка видимости; эмиттер
+// исключён по kMatEmissive, иначе неон перестал бы рисоваться. Вывод 0.6:
+// оконная банда 0.5 м даёт exp(-0.3) ≈ 74% пропускания — стекло читается
+// тоном, но квартиры видны насквозь.
+const float kAbsorbGlass = 0.6;
 // ПОВЕРХНОСТЬ ЖИДКОСТИ (фикс «регрессии» видимости 2026-08-24: тонкий край
 // лужи поглощал ~4% — невидим, лужа выглядела съёжившейся): первый вход
 // луча в жидкость даёт фиксированную оптическую плёнку — граница фаз видна
@@ -273,15 +281,25 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
             }
         }
         if (sub_solid(ci, s)) {
-            h.t = t;
-            h.n = vec3(0.0);
-            if (axis >= 0) h.n[axis] = -float(stp[axis]);
-            else h.n = -rd; // camera embedded in a solid voxel
-            h.mat = sub_mat(ci, s);
-            h.ci = ci;
-            h.sub = s;
-            h.ok = true;
-            return true;
+            uint sm = sub_mat(ci, s);
+            uint smi = min(sm, kMatSurfaceCount - 1u);
+            if (kMatLightPass[smi] == 1u && kMatEmissive[smi] == 0.0) {
+                // Стекло: тонируем сегмент и маршируем дальше (см. kAbsorbGlass).
+                float tNext = min(min(min(sMax.x, sMax.y), sMax.z), t1);
+                float wgt = kAbsorbGlass * max(tNext - t, 0.0);
+                gMediaDepth += wgt;
+                gMediaTint += ub.albedo[min(sm, 63u)].rgb * wgt;
+            } else {
+                h.t = t;
+                h.n = vec3(0.0);
+                if (axis >= 0) h.n[axis] = -float(stp[axis]);
+                else h.n = -rd; // camera embedded in a solid voxel
+                h.mat = sm;
+                h.ci = ci;
+                h.sub = s;
+                h.ok = true;
+                return true;
+            }
         }
         axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
                                : (sMax.y < sMax.z ? 1 : 2);
@@ -323,20 +341,29 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
         uint cls = cell_class(ci);
         if (cls != 0u) {
             float tExit = min(min(tMax.x, tMax.y), tMax.z);
+            bool glassEntry = false;
             if (cls == 1u) {
-                // Fully solid: the entry face is the hit — no bit tests.
+                // Fully solid: the entry face is the hit — no bit tests…
                 vec3 q = ro + rd * (t + 1e-4);
                 ivec3 s = clamp(ivec3(floor((q - vec3(c) * kCell) / kVoxel)),
                                 ivec3(0), ivec3(7));
-                h.t = t;
-                h.n = vec3(0.0);
-                if (axis >= 0) h.n[axis] = -float(stp[axis]);
-                else h.n = -rd;
-                h.mat = sub_mat(ci, s);
-                h.ci = ci;
-                h.sub = s;
-                h.ok = true;
-                return h;
+                uint em = sub_mat(ci, s);
+                uint emi = min(em, kMatSurfaceCount - 1u);
+                // …если только вход не стеклянный: цельностеклянная клетка
+                // (sphere glass) идёт битовым маршем со стеклянным пропуском.
+                glassEntry =
+                    kMatLightPass[emi] == 1u && kMatEmissive[emi] == 0.0;
+                if (!glassEntry) {
+                    h.t = t;
+                    h.n = vec3(0.0);
+                    if (axis >= 0) h.n[axis] = -float(stp[axis]);
+                    else h.n = -rd;
+                    h.mat = em;
+                    h.ci = ci;
+                    h.sub = s;
+                    h.ok = true;
+                    return h;
+                }
             }
             if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
                            min(tExit, tCap), axis, cls == 3u, h))

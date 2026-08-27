@@ -290,12 +290,9 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
         if (ci >= kMacroCells) return;
         // Полнотвёрдую клетку не будим: под маской двигать нечего.
         if (world.grid().masks()[ci].full()) return;
-        SubField<CellType>& f =
-            world.subfields().get_or_create<CellType>(kSubMaterialName);
-        if (!f.paged(ci)) {
-            materialize_sub_page(world, ci);
-            mirror.mark_dirty(&ci, 1);
-        }
+        // Материализацией владеет ОДИН путь — open_frontier ниже (радиус
+        // покрывает клетку и грани тем же предикатом); здесь только
+        // пробуждение. Вторая копия materialize жила тут до 2026-08-27.
         if (appendPending_.size() < kAppendCap)
             appendPending_.push_back(ci);
         else if (!overflow_) {
