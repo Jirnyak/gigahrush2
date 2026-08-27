@@ -427,6 +427,7 @@ static std::uint64_t g_worldGen = 0;
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
 static const float* g_wallRing = nullptr;
 static unsigned g_wallSeen = 0;
+static float g_wallFirstMs = -1.0f;  // первый кадр (загрузка); в кольце его нет
 
 // Покомпонентный замер карв-пути ([markoaudit/plans/carve-hitch.md],
 // инкремент 1 — ТОЛЬКО замер, чинить до чисел запрещено). Компоненты копятся
@@ -3104,11 +3105,20 @@ int main(int argc, char** argv) {
         // Wall-clock гистограмма кадра для [gpu-shot]-свода: GPU-таймер не
         // видит CPU-кость (сим, толпа, сбор света, презент). Пишем последние
         // 256 кадров кольцом; свод печатает медиану/пик на выходе --shot.
+        // Первый кадр в кольцо НЕ входит: он несёт загрузку/первые бейки
+        // (сотни мс) и в коротком прогоне маскирует настоящий пик стационара —
+        // свод печатает его отдельной строкой (вопрос «пик 621 мс = первый
+        // кадр?» из core-stabilization.md перестаёт быть вопросом: первый
+        // кадр назван по имени, пик кольца — всегда стационар).
         {
             static float wallRing[256];
             static unsigned wallHead = 0;
-            wallRing[wallHead & 255u] = frameDt * 1000.0f;
-            ++wallHead;
+            if (g_wallFirstMs < 0.0f) {
+                g_wallFirstMs = frameDt * 1000.0f;
+            } else {
+                wallRing[wallHead & 255u] = frameDt * 1000.0f;
+                ++wallHead;
+            }
             g_wallRing = wallRing;
             g_wallSeen = wallHead;
         }
@@ -8502,14 +8512,35 @@ int main(int argc, char** argv) {
                         static_assert(sizeof(kPassName) / sizeof(kPassName[0]) ==
                                           gpu::kGpuPassCount,
                                       "имена пассов == enum");
+                        // Скобки ВНУТРИ рендер-пасса (world..hud) на тайловом
+                        // GPU меряют пустоту — фрагментная работа исполняется
+                        // вся на vkCmdEndRenderPass ([gpu_timer.h] GpuPass).
+                        // «world 0.002 мс при кадре 12.7» — не сломанный
+                        // таймер, а свойство архитектуры; честные строки там —
+                        // light/raster (целые пассы). Помечаем, чтобы свод
+                        // нельзя было прочитать как «марш бесплатен».
+                        const bool tiler =
+#ifdef __APPLE__
+                            true;
+#else
+                            false;
+#endif
+                        const bool inPass[gpu::kGpuPassCount] = {
+                            false, false, false, false,  // lightgrid..sim
+                            true,  true,  true,  true,   // world..drawphys
+                            true,                        // hud
+                            false, false};               // light, raster
                         for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p)
                             std::fprintf(
-                                stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f\n",
+                                stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f%s\n",
                                 kPassName[p],
                                 renderer.timer.pass_ms(
                                     static_cast<gpu::GpuPass>(p)),
                                 renderer.timer.pass_ms_max(
-                                    static_cast<gpu::GpuPass>(p)));
+                                    static_cast<gpu::GpuPass>(p)),
+                                (tiler && inPass[p])
+                                    ? "  [in-pass: на тайлере работа в raster]"
+                                    : "");
                         std::fprintf(stderr,
                                      "[gpu-shot] frame      %8.3f ms  peak %8.3f"
                                      "  drop %u\n",
@@ -8524,9 +8555,10 @@ int main(int argc, char** argv) {
                         std::sort(tmp, tmp + n);
                         std::fprintf(stderr,
                                      "[cpu-shot] wall frame median %.3f ms  p90 "
-                                     "%.3f  peak %.3f (over %u frames)\n",
+                                     "%.3f  peak %.3f (over %u frames, "
+                                     "first frame %.1f ms excluded)\n",
                                      tmp[n / 2], tmp[(n * 9) / 10], tmp[n - 1],
-                                     n);
+                                     n, g_wallFirstMs);
                     }
                     if (shotAction == "mag" && reg.valid(player)) {
                         const game::PlayerRanged* pr =
