@@ -6,6 +6,7 @@
 #pragma once
 #include "world/field.h"
 #include "world/gravity.h"
+#include "world/protect.h"
 #include "world/macro_grid.h"
 #include "world/subfield.h"
 
@@ -28,11 +29,17 @@ public:
     GravityField& gravity() { return gravity_; }
     const GravityField& gravity() const { return gravity_; }
 
+    // Щит защищённых областей ([world/protect.h]): модуль этажа объявляет
+    // неприкосновенные объёмы; писатели геометрии обязаны его спрашивать.
+    ProtectMask& protect() { return protect_; }
+    const ProtectMask& protect() const { return protect_; }
+
 private:
     MacroGrid grid_;
     FieldRegistry fields_;
     SubFieldRegistry subfields_;
     GravityField gravity_;
+    ProtectMask protect_;
 };
 
 } // namespace giga

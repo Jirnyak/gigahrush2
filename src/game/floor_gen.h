@@ -86,6 +86,14 @@ LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed);
 void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
                         unsigned seed);
 
+// ЩИТ лифтов ([world/protect.h], решение владельца 2026-08-27): весь объём
+// каждого столба 3×3 через все z — защищённая область (кольцо, шахта, пол
+// кабины, проём — ни карв, ни детач, ни будущий самосбор их не меняют;
+// лифт — ключевая механика). Маска НЕ в снимке — чистая функция сетки, её
+// штампует ensure_loaded/Prebuild на КАЖДОМ входе, обеими ветками
+// (build_world_half). Чистит маску слота и кладёт свою.
+void stamp_lift_protection(World& world);
+
 // The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
 // (stride-1)^2 interior between four wall lines; the wall lines themselves sit on
 // every cell whose x or y is a multiple of the stride.

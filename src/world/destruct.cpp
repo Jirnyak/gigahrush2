@@ -88,6 +88,10 @@ inline bool atom_exists(const World& w, const SubField<CellType>* mats,
 inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
     const std::uint32_t ci = key >> 9;
+    // ЩИТ ([world/protect.h]): клетка защищённой области не меняется НИКАКИМ
+    // писателем геометрии. Гейт стоит в единственной точке выреза атома —
+    // обходных путей у карва нет по построению.
+    if (w.protect().test(ci)) return;
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
     m.clear(static_cast<int>(key & 511u));
@@ -435,6 +439,11 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
                    CarveResult& out) {
     for (const std::uint32_t node : s.nodeQueue) {
         const std::uint32_t ci = node >> 8;
+        // ЩИТ: атомы защищённой области не конвертируются в рыхлого
+        // двойника — второй (и последний) писатель геометрии после
+        // remove_key. Компонент, цепляющийся за щит, к тому же опёрт по
+        // построению: щит-клетки никогда не пустеют.
+        if (w.protect().test(ci)) continue;
         const std::uint32_t e = cell_partition(w.grid(), s, ci); // кэш-хит
         const std::uint32_t base = (s.partFirst[e] + (node & 255u)) * 8;
         for (int wi = 0; wi < 8; ++wi) {

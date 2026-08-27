@@ -290,6 +290,11 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
                      restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
     }
 
+    // ЩИТ лифтов — ПОСЛЕ развилки, ОБЕИМИ ветками: маска не в снимке
+    // (чистая функция сетки), restore обязан получить её так же, как
+    // generate ([world/protect.h], решение владельца 2026-08-27).
+    stamp_lift_protection(w);
+
     // Antourage AFTER the geometry: it READS the finished grid as context and
     // never writes it ([antourage.md] — the dressing is mesh on anchors, so
     // nav has nothing to route around and does not care where in the load this

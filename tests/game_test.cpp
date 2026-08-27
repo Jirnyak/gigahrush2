@@ -1047,6 +1047,53 @@ static void test_fast_travel() {
         }
         std::printf("[shaft] %d closed lift pillars probed: cabin+ring+torus\n",
                     kFastHubsPerFloor);
+
+        // --- ЩИТ ([world/protect.h], решение владельца 2026-08-27) ----------
+        // Лифт — ключевая механика: весь объём столба защищён областью, а не
+        // материалом. Карв мощью выше любой твёрдости обязан отскочить от
+        // стены столба и при этом честно прогрызть стену В ДВУХ КЛЕТКАХ от
+        // него — щит границей, не глобальным иммунитетом.
+        stamp_lift_protection(shaftWorld);
+        std::uint8_t pcx = 0, pcy = 0;
+        fast_hub_cell(0, pcx, pcy);
+        const LiftEntrance pe =
+            lift_entrance(FloorKind::Residential, 0, 0, 4242u);
+        const int wallX = static_cast<int>(pcx) + 1; // клетка кольца
+        const int wallY = static_cast<int>(pcy);
+        CHECK(shaftWorld.protect().test(
+            macro_index(wallX, wallY, wrap_macro(pe.h + 40))));
+        {
+            CarveScratch scratch;
+            CarveResult res;
+            CarveOp op;
+            op.x = (wallX + 0.5f) * kCellSize;
+            op.y = (wallY + 0.5f) * kCellSize;
+            op.z = (wrap_macro(pe.h + 40) + 0.5f) * kCellSize;
+            op.radius = 1.5f;
+            op.power = 0xFFFF; // выше любой твёрдости — держит только щит
+            op.seed = 7u;
+            carve_sphere(shaftWorld, op, scratch, res);
+            CHECK(g.mask(wallX, wallY, wrap_macro(pe.h + 40)).full());
+        }
+        {
+            // Контроль: та же мощь в двух клетках от щита грызёт стену.
+            const int off = wallX + 3; // вне 3×3 футпринта столба
+            const int zc = wrap_macro(pe.h + 40);
+            if (g.cell(off, wallY, zc) != kCellAir) {
+                CarveScratch scratch;
+                CarveResult res;
+                CarveOp op;
+                op.x = (off + 0.5f) * kCellSize;
+                op.y = (wallY + 0.5f) * kCellSize;
+                op.z = (zc + 0.5f) * kCellSize;
+                op.radius = 1.5f;
+                op.power = 0xFFFF;
+                op.seed = 7u;
+                const std::int32_t removed =
+                    carve_sphere(shaftWorld, op, scratch, res);
+                CHECK(removed > 0);
+            }
+        }
     }
 
     // --- Gate: registered + unlocked + on hub ---

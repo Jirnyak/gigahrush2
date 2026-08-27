@@ -278,6 +278,20 @@ LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed) 
 static constexpr int kLiftSideStep[4][2] = {
     {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
+void stamp_lift_protection(World& world) {
+    ProtectMask& pm = world.protect();
+    pm.clear_all(); // слот перерабатывается — чужой щит умирает с этажом
+    for (int node = 0; node < kFastHubsPerFloor; ++node) {
+        std::uint8_t cx8 = 0, cy8 = 0;
+        fast_hub_cell(node, cx8, cy8);
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    pm.set(macro_index(wrap_macro(cx8 + dx),
+                                       wrap_macro(cy8 + dy), z));
+    }
+}
+
 void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
                         unsigned seed) {
     MacroGrid& g = world.grid();
