@@ -481,13 +481,17 @@ void stamp_pole(MacroGrid& g, SubField<CellType>& sm, const KhrushiPole& p) {
                 put_sub(g, sm, bx, by, kKhrushiGroundCoord, cx0 + a, cy0 + c, H,
                         kMatPipeMetal);
     // Hook arm: the top two sub-layers, 2 wide, running 2 m towards the road
-    // (1.25 m of it over the road cell, where the lamp will hang).
+    // (1.25 m of it over the road cell, where the lamp will hang). The
+    // negative arm is the MIRROR of the positive one about the pole centre
+    // (3.5): offset o mirrors to 7-o, so 5+i mirrors to 2-i — the first cut
+    // used 10-i, which reaches AWAY from the road, and every high-side lamp
+    // silently refused to spawn (owner's screenshot, 2026-08-27).
     for (int H = kKhrushiPoleTopH - 2; H < kKhrushiPoleTopH; ++H)
         for (int i = 0; i < 8; ++i)
             for (int w = 3; w <= 4; ++w) {
-                const int ox = p.dx ? cx0 + (p.dx > 0 ? 5 + i : 10 - i)
+                const int ox = p.dx ? cx0 + (p.dx > 0 ? 5 + i : 2 - i)
                                     : cx0 + w;
-                const int oy = p.dy ? cy0 + (p.dy > 0 ? 5 + i : 10 - i)
+                const int oy = p.dy ? cy0 + (p.dy > 0 ? 5 + i : 2 - i)
                                     : cy0 + w;
                 put_sub(g, sm, bx, by, kKhrushiGroundCoord, ox, oy, H,
                         kMatPipeMetal);
@@ -646,12 +650,15 @@ void khrushi_bake_antourage(const World& /*world*/, int number, unsigned seed,
                            2) *
         (kCellSize / 8.0f); // under-face of the hook arm: 10.5 m absolute
 
-    // Attach at the hook tip over the road: pole centre + 1.75 m towards it.
+    // Attach at the hook ELBOW — the corner where the arm leaves the pole
+    // (0.3 m off the pole face), NOT at the tip: the tip is where the lamp
+    // hangs, and a wire pinned there ran straight through the shade
+    // (owner's screenshot, 2026-08-27). The line sags behind the lamps.
     auto attach = [&](const KhrushiPole& p, float along) {
         vec3 a{(static_cast<float>(p.x) + 0.5f) * kCellSize +
-                   static_cast<float>(p.dx) * 1.75f,
+                   static_cast<float>(p.dx) * 0.3f,
                (static_cast<float>(p.y) + 0.5f) * kCellSize +
-                   static_cast<float>(p.dy) * 1.75f,
+                   static_cast<float>(p.dy) * 0.3f,
                hookZ - 0.05f};
         // The along-axis coordinate comes in unwrapped for the wrap span.
         if (p.dx != 0) a.y = along;
@@ -684,14 +691,16 @@ void khrushi_bake_antourage(const World& /*world*/, int number, unsigned seed,
             }
             c.restLen = spanM * 1.02f / static_cast<float>(kWirePoints - 1);
             c.massKg = spanM * 0.35f; // cable ~0.35 kg/m, as the generic bake
-            c.ax0 = static_cast<std::uint8_t>(wrap_macro(pa.x + pa.dx));
-            c.ay0 = static_cast<std::uint8_t>(wrap_macro(pa.y + pa.dy));
+            // Anchors in the POLE cells (the elbow's support column), so the
+            // wire lets go when the pole is carved, not when the road is.
+            c.ax0 = pa.x;
+            c.ay0 = pa.y;
             c.az0 = static_cast<std::uint8_t>(
                 kKhrushiGroundCoord + ((kKhrushiPoleTopH - 1) >> 3));
-            c.ax1 = static_cast<std::uint8_t>(wrap_macro(pb.x + pb.dx));
-            c.ay1 = static_cast<std::uint8_t>(wrap_macro(pb.y + pb.dy));
+            c.ax1 = pb.x;
+            c.ay1 = pb.y;
             c.az1 = c.az0;
-            c.pinMask = 0x81; // both ends on hooks
+            c.pinMask = 0x81; // both ends at the elbows
             c.face = anchor_face_pack(2, -1); // hangs off the hook's under-face
             c.matId = kMatPipeMetal;
             out.wires.push_back(c);
