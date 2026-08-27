@@ -346,6 +346,19 @@ inline constexpr std::uint64_t kWinXLo = 0x0000030303030000ull;  // sy in [2,6)
 inline constexpr std::uint64_t kWinXHi = 0x0000C0C0C0C00000ull;
 inline constexpr std::uint64_t kWinYLo = 0x0000000000003C3Cull;  // sx in [2,6)
 inline constexpr std::uint64_t kWinYHi = 0x3C3C000000000000ull;
+// Interior door openings are 6 wide (1.5 m): the 4×4×7-sub-voxel body clears
+// them with margin, where a 1 m opening would be exactly the body's width.
+inline constexpr std::uint64_t kDoorXLo = 0x0003030303030300ull; // sy in [1,7)
+inline constexpr std::uint64_t kDoorXHi = 0x00C0C0C0C0C0C000ull;
+inline constexpr std::uint64_t kDoorYLo = 0x0000000000007E7Eull; // sx in [1,7)
+inline constexpr std::uint64_t kDoorYHi = 0x7E7E000000000000ull;
+
+inline int bcellx(const Building& b, int fa, int dc) {
+    return b.axis ? b.x0 + dc : b.x0 + fa;
+}
+inline int bcelly(const Building& b, int fa, int dc) {
+    return b.axis ? b.y0 + fa : b.y0 + dc;
+}
 
 // Is (fa, dc) one of the two OPEN core cells of some section (the stair well —
 // flights and midlanding — that storey slabs must not cover)?
@@ -354,6 +367,98 @@ bool core_open_cell(const Building& b, int fa, int dc) {
     if (dc < lo || dc >= lo + 2) return false;           // core depth cells
     const int m = fa % kSectionLen;
     return m == 2 || m == 3;
+}
+
+// Apartments: TWO flats per storey per section, mirrored about the core — the
+// honest хрущёвка plan scaled to 2 m cells. Flat-local frame: `f` runs along
+// the facade away from the core (0 = gable-ward column), `j` runs along the
+// depth FROM THE STREET (0..2 street strip, 3..5 courtyard wing):
+//
+//   j=5 (двор):   санузел(0,5)   прихожая(1,5)  | ПЛОЩАДКА (core)
+//   j=4:          кухня  (0,4)   коридор (1,4)  | пролёты
+//   j=3:          кладовка(0,3)  коридор (1,3)  | пролёты
+//   j=0..2:       спальня(0,*)   зал (1..2,*)   — street strip
+//
+// Partitions are 0.5 m plaster bands with 1.5 m door openings; kitchen,
+// bath and corridor get lino, the rooms parquet. No door leaves: the door
+// system stamps whole-cell leaves (door.cpp fill_leaf), which cannot sit in
+// a 1.5-cell storey — leaves are an owner question, openings are honest.
+void stamp_section_flats(MacroGrid& g, SubField<CellType>& sm,
+                         const Building& b, int sec) {
+    const int base = sec * kSectionLen;
+    const std::uint64_t bandDLo = b.axis ? kBandXLo : kBandYLo;
+    const std::uint64_t bandDHi = b.axis ? kBandXHi : kBandYHi;
+    const std::uint64_t bandFLo = b.axis ? kBandYLo : kBandXLo;
+    const std::uint64_t bandFHi = b.axis ? kBandYHi : kBandXHi;
+    const std::uint64_t doorFLo = b.axis ? kDoorYLo : kDoorXLo;
+    const std::uint64_t doorFHi = b.axis ? kDoorYHi : kDoorXHi;
+    const std::uint64_t toStreet = b.courtSign > 0 ? bandDLo : bandDHi;
+    const std::uint64_t doorStreet = b.courtSign > 0
+                                         ? (b.axis ? kDoorXLo : kDoorYLo)
+                                         : (b.axis ? kDoorXHi : kDoorYHi);
+    const std::uint64_t toCourt = b.courtSign > 0 ? bandDHi : bandDLo;
+
+    // depth cell of street-relative index j
+    auto DC = [&](int j) { return b.courtSign > 0 ? j : kBldgDepth - 1 - j; };
+
+    // A plaster partition band in one cell, full building height, storey air
+    // only (the slabs are their own layer); optional 1.5 m door opening.
+    auto wall = [&](int fa, int dc, std::uint64_t band, std::uint64_t door) {
+        const int x = bcellx(b, fa, dc), y = bcelly(b, fa, dc);
+        for (int H = 0; H < kBldgTopH; ++H) {
+            const int hs = H % kStoreyRise;
+            if (hs >= 10) continue;
+            std::uint64_t bits = band;
+            if (door && hs < 9) bits &= ~door;
+            put_hlayer(g, sm, x, y, H, bits, kMatPlaster);
+        }
+    };
+
+    for (int side = 0; side < 2; ++side) {
+        auto F = [&](int f) { return base + (side ? kSectionLen - 1 - f : f); };
+        const std::uint64_t bandWet = side ? bandFHi : bandFLo;
+        const std::uint64_t doorWet = side ? doorFHi : doorFLo;
+        const std::uint64_t bandBed = side ? bandFLo : bandFHi;
+        const std::uint64_t doorBed = side ? doorFLo : doorFHi;
+
+        // corridor|wet-cells wall, a door onto each wet cell
+        for (int j = 3; j <= 5; ++j) wall(F(1), DC(j), bandWet, doorWet);
+        // wet partitions: bath|kitchen and kitchen|pantry, blank
+        wall(F(0), DC(4), toCourt, 0);
+        wall(F(0), DC(3), toCourt, 0);
+        // wing|street-strip wall: blank at the gable column, door where the
+        // corridor meets the hall (the core cells already carry their wall)
+        wall(F(0), DC(3), toStreet, 0);
+        wall(F(1), DC(3), toStreet, doorStreet);
+        // bedroom|hall wall with its door by the entrance corner
+        for (int j = 0; j <= 2; ++j)
+            wall(F(0), DC(j), bandBed, j == 2 ? doorBed : 0);
+
+        // floor wearing course, storey by storey: lino for the wet/corridor
+        // half, parquet for the rooms (the ground storey repaints the street
+        // slab's top sub-layer; upper storeys the slab's top sub-layer)
+        auto floor_over = [&](int fa, int dc, CellType mat) {
+            const int x = bcellx(b, fa, dc), y = bcelly(b, fa, dc);
+            put_bits(g, sm, x, y, kKhrushiSlabZ, kSubDim - 1, ~std::uint64_t{0},
+                     mat);
+            for (int s = 1; s < kStoreys; ++s)
+                put_hlayer(g, sm, x, y, s * kStoreyRise - 1, ~std::uint64_t{0},
+                           mat);
+        };
+        for (int j = 3; j <= 5; ++j) {
+            floor_over(F(0), DC(j), kMatLino);
+            floor_over(F(1), DC(j), kMatLino);
+        }
+        for (int j = 0; j <= 2; ++j)
+            for (int f = 0; f <= 2; ++f) floor_over(F(f), DC(j), kMatParquet);
+    }
+
+    // flat A | flat B divider across the street strip (one wall, not two)
+    for (int j = 0; j <= 2; ++j) wall(base + 2, DC(j), bandFHi, 0);
+    // section | section divider (the gable columns of inner sections)
+    if ((base + kSectionLen) < (b.axis ? b.lenY : b.lenX))
+        for (int dc = 0; dc < kBldgDepth; ++dc)
+            wall(base + kSectionLen - 1, dc, bandFHi, 0);
 }
 
 void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
@@ -483,6 +588,8 @@ void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
             for (int cf : {cf0, cf1})
                 put_hlayer(g, sm, cellx(cf, dcStreet), celly(cf, dcStreet), H,
                            bandS, kMatPlaster);
+
+        stamp_section_flats(g, sm, b, sec);
     }
 }
 
