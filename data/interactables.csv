@@ -6,3 +6,5 @@ corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
 loot,Loot,PICK UP,2.0,floor loot pickup
 npc,Npc,BARTER / TRADE,2.2,living body: two-sided barter deal on the search screen
 crate,Crate,SEARCH CRATE,2.4,supply crate: two-sided search screen (S14.1 B2)
+lift_call,LiftCall,CALL LIFT,2.6,кнопка вызова снаружи столба (5c): E открывает створку — «лифт приехал»
+lift_panel,LiftPanel,LIFT PANEL,2.6,панель в кабине (5c): E открывает меню этажей (замена клавиши L)

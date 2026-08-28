@@ -12,3 +12,5 @@ supply_crate,Ящик,Box,SimpleFall,Crate,0,4,420,460,380,2400,30000,1.1,1.1,0.
 grenade,Граната Ф-1,CylinderZ,RagdollRoll,None,0,19,420,500,280,0,600,0.06,0.06,0.12,0,0,0,none,60,none
 fuel_barrel,Бочка с горючим,CylinderZ,RagdollRoll,None,0,19,700,280,200,0,170000,0.6,0.6,0.9,0,0,0,none,150,damage
 street_lamp,Уличный фонарь,CylinderZ,GpuHandoff,LightBulb,200,20,1000,760,380,2500,2000,0.24,0.24,0.35,16000,2600,0,mains,0,none
+lift_button,Кнопка лифта,Box,SimpleFall,LiftCall,1,4,850,300,200,2600,800,0.18,0.06,0.26,0,0,0,none,0,none
+lift_panel,Панель лифта,Box,SimpleFall,LiftPanel,1,4,880,860,700,2600,2500,0.34,0.05,0.5,0,0,0,none,0,none

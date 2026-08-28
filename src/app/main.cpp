@@ -2358,6 +2358,65 @@ int main(int argc, char** argv) {
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
     std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+        // 5c: обвес лифтовых порталов — кнопка вызова СНАРУЖИ у проёма,
+    // панель ВНУТРИ кабины (оба — пропы-интеракторы строками CSV), и
+    // дефолт створок «ЗАКРЫТО, пока не вызвал» (решение владельца:
+    // вызов открывает вход — «лифт приехал»). Зовётся после каждого
+    // door_declare + refresh_floor_props входа.
+    auto dress_lift_portals = [&](LayerId nl) {
+        World& w = stack.layer(nl);
+        const game::FloorSpec* sp = spec_for_floor(currentFloor);
+        if (sp == nullptr) return;
+        const unsigned fseed =
+            streamer.floor_seed_of(registry, currentFloor);
+        for (int hub = 0; hub < 4; ++hub) {
+            if (doors.lift[hub] == game::kNoPortal) continue;
+            const game::DoorPortal& p = doors.list[doors.lift[hub]];
+            const game::LiftEntrance le =
+                game::lift_entrance(sp->kind, currentFloor, hub, fseed);
+            const int ox = le.side == 0 ? 1 : le.side == 1 ? -1 : 0;
+            const int oy = le.side == 2 ? 1 : le.side == 3 ? -1 : 0;
+            const int jx = oy != 0 ? 1 : 0; // вдоль стены кольца
+            const int jy = ox != 0 ? 1 : 0;
+            // Кнопка: наружная грань косяка рядом с проёмом.
+            {
+                game::SubVoxelAnchor a{};
+                a.cx = static_cast<std::uint8_t>(wrap_macro(p.cx + jx));
+                a.cy = static_cast<std::uint8_t>(wrap_macro(p.cy + jy));
+                a.cz = p.cz;
+                a.subX = 4; a.subY = 4; a.subZ = 4;
+                const vec3 bp{
+                    (static_cast<float>(wrap_macro(p.cx + jx)) + 0.5f +
+                     static_cast<float>(ox) * 0.62f) * kCellSize,
+                    (static_cast<float>(wrap_macro(p.cy + jy)) + 0.5f +
+                     static_cast<float>(oy) * 0.62f) * kCellSize,
+                    (static_cast<float>(p.cz) + 0.6f) * kCellSize};
+                game::spawn_prop_from_id(reg, w, bp, a,
+                                         game::PropId::LiftButton, nl);
+            }
+            // Панель: стена кабины напротив проёма.
+            {
+                std::uint8_t hcx = 0, hcy = 0;
+                game::fast_hub_cell(hub, hcx, hcy);
+                game::SubVoxelAnchor a{};
+                a.cx = static_cast<std::uint8_t>(wrap_macro(hcx - ox));
+                a.cy = static_cast<std::uint8_t>(wrap_macro(hcy - oy));
+                a.cz = p.cz;
+                a.subX = 4; a.subY = 4; a.subZ = 4;
+                const vec3 pp{
+                    (static_cast<float>(hcx) + 0.5f -
+                     static_cast<float>(ox) * 0.42f) * kCellSize,
+                    (static_cast<float>(hcy) + 0.5f -
+                     static_cast<float>(oy) * 0.42f) * kCellSize,
+                    (static_cast<float>(p.cz) + 0.65f) * kCellSize};
+                game::spawn_prop_from_id(reg, w, pp, a,
+                                         game::PropId::LiftPanel, nl);
+            }
+            // Дефолт: створка закрыта (видима сталью — «где дверь»
+            // больше не вопрос); тело в проёме — оставим открытой.
+            game::door_close(w, p, reg, nl, doorDirty);
+        }
+    };
     bool doorWanted = false;        // E (единая интеракция), consumed once
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
@@ -2453,6 +2512,7 @@ int main(int argc, char** argv) {
             // so doors may move mid-bake. [door.h, game/rebake.h]
             game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+            dress_lift_portals(l0);
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -3091,6 +3151,7 @@ int main(int argc, char** argv) {
         mRefresh = arrMs() - mPre;
         game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+            dress_lift_portals(nl);
         mDoors = arrMs() - mPre - mRefresh;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         mNav = arrMs() - mPre - mRefresh - mDoors;
@@ -5511,7 +5572,54 @@ int main(int argc, char** argv) {
                             game::InteractionHit termHit = game::find_nearest_interactable(
                                 reg, player, game::Interactable::Kind::Terminal,
                     game::interact_def(game::InteractKind::Terminal).reachM);
-                            // МОГИЛА ДВЕРЕЙ (2026-08-28). Терминал больше не тумблер замков — новая роль придёт с новой дверью.
+                            // МОГИЛА ДВЕРЕЙ (2026-08-28): терминал больше не тумблер замков.
+                        // 5c: КНОПКА ВЫЗОВА снаружи столба — «лифт приехал»,
+                        // створка открывается (иллюзия приезда — следующий
+                        // инкремент); ПАНЕЛЬ в кабине — меню этажей (E, как
+                        // всё; клавиша L остаётся дев-дублёром).
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            const game::InteractionHit callHit =
+                                game::find_nearest_interactable(
+                                    reg, player,
+                                    game::Interactable::Kind::LiftCall,
+                                    game::interact_def(
+                                        game::InteractKind::LiftCall)
+                                        .reachM);
+                            if (callHit.hit) {
+                                const int hcx = wrap_macro(static_cast<int>(
+                                    callHit.pos.x / kCellSize));
+                                const int hcy = wrap_macro(static_cast<int>(
+                                    callHit.pos.y / kCellSize));
+                                const int hub = game::fast_hub_near(hcx, hcy);
+                                if (hub >= 0 &&
+                                    doors.lift[hub] != game::kNoPortal) {
+                                    game::door_open(
+                                        stack.layer(activeLayer),
+                                        doors.list[doors.lift[hub]],
+                                        doorDirty);
+                                    handled = true;
+                                    std::fprintf(stderr,
+                                                 "[lift] called at hub %d — "
+                                                 "door opens\n",
+                                                 hub);
+                                }
+                            }
+                        }
+                        if (!handled && activeLayer != kInvalidLayer) {
+                            const game::InteractionHit panHit =
+                                game::find_nearest_interactable(
+                                    reg, player,
+                                    game::Interactable::Kind::LiftPanel,
+                                    game::interact_def(
+                                        game::InteractKind::LiftPanel)
+                                        .reachM);
+                            if (panHit.hit) {
+                                shell.toggle(UiWindow::Elevator);
+                                if (shell.window != UiWindow::None)
+                                    input.set_mouselook(false);
+                                handled = true;
+                            }
+                        }
 
                         }
 
@@ -6141,6 +6249,7 @@ int main(int argc, char** argv) {
                                 bus);
                             game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+            dress_lift_portals(nl);
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -8682,6 +8791,7 @@ int main(int argc, char** argv) {
                         // leaves --shot proving nothing. [save.h, door.h]
                         game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+            dress_lift_portals(nl);
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

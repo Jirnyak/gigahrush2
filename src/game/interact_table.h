@@ -24,10 +24,12 @@ enum class InteractKind : std::uint8_t {
     Loot = 4,
     Npc = 5,
     Crate = 6,
+    LiftCall = 7,
+    LiftPanel = 8,
     Count
 };
 
-inline constexpr std::uint8_t kInteractCount = 7u;
+inline constexpr std::uint8_t kInteractCount = 9u;
 
 struct InteractDef {
     const char* id;      // CSV slug
@@ -43,6 +45,8 @@ inline constexpr InteractDef kInteractTable[kInteractCount] = {
     {"loot", "PICK UP", 2.0f},
     {"npc", "BARTER / TRADE", 2.2f},
     {"crate", "SEARCH CRATE", 2.4f},
+    {"lift_call", "CALL LIFT", 2.6f},
+    {"lift_panel", "LIFT PANEL", 2.6f},
 };
 
 inline const InteractDef& interact_def(InteractKind k) {
