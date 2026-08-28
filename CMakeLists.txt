@@ -1414,7 +1414,11 @@ if(GIGA_BUILD_TESTS)
     # объявляют комнаты: падик 14154 (BSP-листья x 42 яруса), blame 256
     # гермолобби, хрущи 5900 (5 комнат на квартиру, ярус по правилу центра
     # клетки); overlap 0 у всех; детерминизм roomAt бит-в-бит.
-        PASS_REGULAR_EXPRESSION "game_test: 224034 checks, 0 failures")
+    # 224034 -> 224072 (+38) on 2026-08-28: инкремент D — supply-оракул:
+    # выведенные таблицы глаголов (kPropVerbs/kItemVerbs) живы, rebuild ==
+    # инкрементальный путь побитово, чужой слой не считается, снятие
+    # симметрично, kNoRoom — no-op.
+        PASS_REGULAR_EXPRESSION "game_test: 224072 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

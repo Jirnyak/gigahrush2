@@ -51,6 +51,7 @@
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
+#include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
@@ -2480,6 +2481,7 @@ int main(int argc, char** argv) {
             game::rooms_declare(floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
+            game::rooms_supply_rebuild(floorRooms, reg, l0);
             dress_lift_portals(l0);
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
@@ -3120,6 +3122,7 @@ int main(int argc, char** argv) {
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+        game::rooms_supply_rebuild(floorRooms, reg, nl);
         dress_lift_portals(nl);
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
     };
@@ -6306,6 +6309,7 @@ int main(int argc, char** argv) {
                                 floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
+                            game::rooms_supply_rebuild(floorRooms, reg, nl);
             dress_lift_portals(nl);
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
@@ -8751,6 +8755,7 @@ int main(int argc, char** argv) {
                             floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+                        game::rooms_supply_rebuild(floorRooms, reg, nl);
             dress_lift_portals(nl);
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));

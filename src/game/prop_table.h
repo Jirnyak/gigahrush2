@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "core/math.h"
+#include "game/verb_table.h"  // kVerbCount — вектор глаголов пропа (S12.3)
 
 namespace giga::game {
 
@@ -102,6 +103,13 @@ inline bool prop_is_charge(const PropDef& d) { return d.explosiveG > 0; }
 extern const std::array<PropDef, kPropCount> kPropTable;
 extern const std::array<const char*, kPropCount> kPropNames;
 extern const std::array<const char*, kPropCount> kPropIds;
+
+// Глаголы, которые проп ПРЕДОСТАВЛЯЕТ (CANON S12.3: возможность, не
+// тратится) — колонка verbs в props.csv, вектор длины K из data/verbs.csv.
+// Слагаемое ОСНАЩЕНИЕ предложения комнаты (S12.4). Живёт параллельной
+// таблицей, не полем POD: PropDef — ровно 32 байта по контракту.
+extern const std::array<std::array<std::int16_t, kVerbCount>, kPropCount>
+    kPropVerbs;
 
 inline bool prop_valid(PropId id) {
     return static_cast<std::size_t>(id) < kPropCount;

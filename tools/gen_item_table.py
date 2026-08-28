@@ -14,6 +14,25 @@ import csv
 import os
 import sys
 
+# Глаголы, которые предмет УТОЛЯЕТ (CANON S12.3: ресурс, тратится) — слагаемое
+# ЗАПАС предложения комнаты (S12.5). ВЫВОДЯТСЯ из существующих колонок (S11:
+# константа выводится, не назначается): нажива = value_rub (кап i16), а
+# есть/пить/лечиться/спать = use_a строки по её use_effect. Ручной колонки
+# глаголов у предметов НЕТ — 443 строки не размечаются руками.
+USE_VERB = {
+    "Feed": "eat", "FeedRisky": "eat",
+    "Drink": "drink",
+    "Heal": "heal", "HealPsi": "heal",
+    "SleepingPills": "sleep",
+}
+
+
+def load_verbs():
+    """Словарь глаголов: токен -> ординал, K = число строк verbs.csv."""
+    path = os.path.join(REPO, "data", "verbs.csv")
+    with open(path, encoding="utf-8", newline="") as fh:
+        return {r["id"].strip(): i for i, r in enumerate(csv.DictReader(fh))}
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "item_table.cpp")
@@ -160,6 +179,8 @@ def main():
     seen, out, names, descs = set(), [], [], []
     used_cat, used_use = set(), set()
     resolved = []
+    verbs = load_verbs()
+    verb_vecs = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -209,6 +230,12 @@ def main():
                # durability: USES until ruined; empty column = 0 = never wears.
                num(r, "durability", i, 0, 65535),
                light_radius, light_intensity, light_cone, FLICKER[flicker]))
+        vec = [0] * len(verbs)
+        vec[verbs["profit"]] = min(num(r, "value_rub", i, 0, 2000000000), 32767)
+        if ue in USE_VERB:
+            vec[verbs[USE_VERB[ue]]] = num(r, "use_a", i, -32768, 32767)
+        verb_vecs.append(vec)
+
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
         # Authored flavour text — all 442 rows carry one. The inventory card
         # ([inventory.md]) is its consumer; an empty cell would be a CSV defect.
@@ -274,6 +301,15 @@ def main():
         fh.write("const std::array<const char*, kItemCount> kItemIdStrs = {{\n")
         for iid in ids:
             fh.write('    "%s",\n' % iid)
+        fh.write("}};\n\n")
+        fh.write("// Глаголы предмета (S12.3: что УТОЛЯЕТ; ресурс, тратится).\n"
+                 "// ВЫВЕДЕНЫ из value_rub (нажива) и use_effect/use_a\n"
+                 "// (есть/пить/лечиться/спать) — ручной разметки нет (S11).\n")
+        fh.write("const std::array<std::array<std::int16_t, kVerbCount>, "
+                 "kItemCount> kItemVerbs = {{\n")
+        for iid, vec in zip(ids, verb_vecs):
+            fh.write("    {{%s}},  // %s\n"
+                     % (", ".join(str(v) for v in vec), iid))
         fh.write("}};\n\n")
         fh.write(FOOTER)
 

@@ -37,6 +37,7 @@
 #include <type_traits>
 
 #include "game/inventory.h"  // Inventory/ItemSlot — carried-weight reader below
+#include "game/verb_table.h" // kVerbCount — вектор глаголов предмета (S12.3)
 #include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
 
 namespace giga::game {
@@ -148,6 +149,13 @@ extern const std::array<ItemDef, kItemCount> kItemTable;
 // stays pointer-free and trivially serializable.
 extern const std::array<const char*, kItemCount> kItemNames;
 extern const std::array<const char*, kItemCount> kItemIdStrs;
+
+// Глаголы, которые предмет УТОЛЯЕТ (CANON S12.3: ресурс, тратится) —
+// слагаемое ЗАПАС предложения комнаты (S12.5). ВЫВЕДЕНЫ генератором из
+// существующих колонок (S11): нажива = value_rub (кап i16), есть/пить/
+// лечиться/спать = use_a по use_effect. Параллельная таблица, не поле POD.
+extern const std::array<std::array<std::int16_t, kVerbCount>, kItemCount>
+    kItemVerbs;
 
 // Item ids are 1-based; these are the only sanctioned way to index the table.
 inline bool item_valid(ItemId id) {

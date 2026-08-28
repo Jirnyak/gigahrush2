@@ -138,6 +138,12 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   std::uint8_t emissive = 0, std::uint8_t matId = 0,
                   std::uint8_t animPhase = 0, std::uint8_t flags = 0);
 
+// Какой строкой props.csv рождён проп. Ставится только табличным спавном —
+// проп без PropOf (тест-шар spawn_prop) не имеет строки и глаголов (S12.3).
+struct PropOf {
+    PropId id;
+};
+
 // Spawn from data/props.csv row (PropId). shape/fall/interact/color/emissive/
 // matId/reach come from the generated table — call sites must not hardcode
 // those. yaw/animPhase/flags stay procedural (placement). [jirnyak.md] §21.

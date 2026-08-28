@@ -1,16 +1,16 @@
-id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_g,size_x_m,size_y_m,size_z_m,light_radius_mm,light_intensity_e3,light_cone_deg,flicker,explosive_g,charge_trigger
-terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45000,0.9,0.45,1.4,3000,400,0,crt,0,none
-electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25000,0.6,0.22,0.9,0,0,0,none,0,none
-bare_bulb,Лампочка Ильича,CylinderZ,GpuHandoff,LightBulb,210,20,1000,780,450,2500,300,0.12,0.12,0.22,12000,1800,0,mains,0,none
-flood_lamp,Прожектор,Box,GpuHandoff,LightBulb,150,20,1000,780,450,2500,6000,0.5,0.14,0.28,24000,3000,0,mains,0,none
-padic_stair_bulb,Лампочка падика,CylinderZ,GpuHandoff,LightBulb,210,20,1000,950,700,2500,300,0.12,0.12,0.22,12000,1800,0,mains,0,none
-kitchen_stove,Плита,Box,SimpleFall,None,0,4,420,430,400,2500,80000,0.7,0.6,0.9,0,0,0,none,0,none
-kitchen_table,Стол,Box,SimpleFall,None,0,3,520,420,300,2500,25000,1.1,0.7,0.78,0,0,0,none,0,none
-toilet_pan,Унитаз,CylinderZ,SimpleFall,None,0,3,880,890,870,2500,35000,0.4,0.4,0.75,0,0,0,none,0,none
-bed_cot,Койка,Box,SimpleFall,None,0,3,300,340,420,2500,40000,1.9,0.85,0.5,0,0,0,none,0,none
-supply_crate,Ящик,Box,SimpleFall,Crate,0,4,420,460,380,2400,30000,1.1,1.1,0.9,0,0,0,none,0,none
-grenade,Граната Ф-1,CylinderZ,RagdollRoll,None,0,19,420,500,280,0,600,0.06,0.06,0.12,0,0,0,none,60,none
-fuel_barrel,Бочка с горючим,CylinderZ,RagdollRoll,None,0,19,700,280,200,0,170000,0.6,0.6,0.9,0,0,0,none,150,damage
-street_lamp,Уличный фонарь,CylinderZ,GpuHandoff,LightBulb,200,20,1000,760,380,2500,2000,0.24,0.24,0.35,16000,2600,0,mains,0,none
-lift_button,Кнопка лифта,Box,SimpleFall,LiftCall,1,4,850,300,200,2600,800,0.18,0.06,0.26,0,0,0,none,0,none
-lift_panel,Панель лифта,Box,SimpleFall,LiftPanel,1,4,880,860,700,2600,2500,0.34,0.05,0.5,0,0,0,none,0,none
+id,name,shape,fall_mode,interact,emissive,mat_id,color_r_e3,color_g_e3,color_b_e3,reach_mm,mass_g,size_x_m,size_y_m,size_z_m,light_radius_mm,light_intensity_e3,light_cone_deg,flicker,explosive_g,charge_trigger,verbs
+terminal,Терминал,Box,SimpleFall,Terminal,0,3,320,350,380,2500,45000,0.9,0.45,1.4,3000,400,0,crt,0,none,work:15
+electrical_shield,Электрощиток,Box,SimpleFall,ElectricalShield,0,4,180,200,220,2500,25000,0.6,0.22,0.9,0,0,0,none,0,none,work:6
+bare_bulb,Лампочка Ильича,CylinderZ,GpuHandoff,LightBulb,210,20,1000,780,450,2500,300,0.12,0.12,0.22,12000,1800,0,mains,0,none,
+flood_lamp,Прожектор,Box,GpuHandoff,LightBulb,150,20,1000,780,450,2500,6000,0.5,0.14,0.28,24000,3000,0,mains,0,none,
+padic_stair_bulb,Лампочка падика,CylinderZ,GpuHandoff,LightBulb,210,20,1000,950,700,2500,300,0.12,0.12,0.22,12000,1800,0,mains,0,none,
+kitchen_stove,Плита,Box,SimpleFall,None,0,4,420,430,400,2500,80000,0.7,0.6,0.9,0,0,0,none,0,none,eat:12
+kitchen_table,Стол,Box,SimpleFall,None,0,3,520,420,300,2500,25000,1.1,0.7,0.78,0,0,0,none,0,none,eat:4|social:3
+toilet_pan,Унитаз,CylinderZ,SimpleFall,None,0,3,880,890,870,2500,35000,0.4,0.4,0.75,0,0,0,none,0,none,toilet:19
+bed_cot,Койка,Box,SimpleFall,None,0,3,300,340,420,2500,40000,1.9,0.85,0.5,0,0,0,none,0,none,sleep:17
+supply_crate,Ящик,Box,SimpleFall,Crate,0,4,420,460,380,2400,30000,1.1,1.1,0.9,0,0,0,none,0,none,store:20
+grenade,Граната Ф-1,CylinderZ,RagdollRoll,None,0,19,420,500,280,0,600,0.06,0.06,0.12,0,0,0,none,60,none,
+fuel_barrel,Бочка с горючим,CylinderZ,RagdollRoll,None,0,19,700,280,200,0,170000,0.6,0.6,0.9,0,0,0,none,150,damage,
+street_lamp,Уличный фонарь,CylinderZ,GpuHandoff,LightBulb,200,20,1000,760,380,2500,2000,0.24,0.24,0.35,16000,2600,0,mains,0,none,
+lift_button,Кнопка лифта,Box,SimpleFall,LiftCall,1,4,850,300,200,2600,800,0.18,0.06,0.26,0,0,0,none,0,none,
+lift_panel,Панель лифта,Box,SimpleFall,LiftPanel,1,4,880,860,700,2600,2500,0.34,0.05,0.5,0,0,0,none,0,none,

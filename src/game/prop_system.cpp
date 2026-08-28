@@ -524,6 +524,10 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                           d.shape,
                           layer, yaw, d.emissive, d.matId, animPhase, flags);
     if (e == entt::null) return entt::null;
+    // Строка таблицы на сущности: язык глаголов (S12.3) и любой будущий
+    // потребитель словаря спрашивают, ЧЕМ проп является, — supply комнаты
+    // (room_supply) читает kPropVerbs[id] через этот компонент.
+    reg.emplace<PropOf>(e, PropOf{id});
     // Universal mass from the table ([ecs/components.h] Mass): a falling or
     // thrown prop hits with E = m*v^2/2 like everything else in the game.
     reg.emplace_or_replace<Mass>(e, Mass{static_cast<float>(d.massG) * 0.001f});

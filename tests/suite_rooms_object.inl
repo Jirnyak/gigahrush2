@@ -16,6 +16,7 @@
 #include "game/floor_gen.h"  // rooms_declare — диспетч в объявитель модуля
 #include "game/floor_spec.h" // floor_spec(kind)
 #include "game/room.h"
+#include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС: оракул rebuild == инкремент
 
 // Повернуть клетку перестановкой осей perm: outAxis <- inAxis perm[outAxis].
 static void rooms_permute_cell(const int perm[3], int in[3], int out[3]) {
@@ -215,10 +216,91 @@ static void test_rooms_modules_declare() {
     CHECK(saw6);
 }
 
+// Supply (инкремент D): выведенные таблицы глаголов живы, а полный пересчёт
+// (rebuild) и инкрементальный путь (supply_add_*) дают ПОБИТОВО одинаковый
+// вектор — гейт закона S12.4 «инкрементально, событием, а не опросом».
+static void test_rooms_supply_oracle() {
+    using namespace giga::game;
+    // Таблицы: у койки спать 17 (props.csv verbs), у хлеба есть и нажива
+    // ВЫВЕДЕНЫ из use_a и value_rub — не нули и согласованы с items.csv.
+    const ItemId bread = item_by_string("bread");
+    CHECK(bread != kInvalidItem);
+    CHECK(kItemVerbs[bread - 1][kVerbEat] > 0);
+    CHECK(kItemVerbs[bread - 1][kVerbProfit] ==
+          static_cast<std::int16_t>(kItemTable[bread - 1].value));
+    bool propProvides = false;
+    for (std::size_t p = 0; p < kPropCount; ++p)
+        propProvides = propProvides || kPropVerbs[p][kVerbSleep] > 0;
+    CHECK(propProvides);
+
+    // Оракул: комната + контейнер с хлебом + проп-койка + пикап; rebuild
+    // против ручной суммы инкрементальным путём.
+    FloorRooms fr;
+    rooms_reset(fr);
+    const RoomBox box{10, 10, 10, 6, 6, 3};
+    const RoomId room = room_declare(fr, &box, 1, 0, 0);
+    CHECK(room != kNoRoom);
+
+    Registry reg;
+    const LayerId layer = 3;
+    const vec3 inRoom{25.0f, 25.0f, 21.0f}; // клетка (12,12,10) — внутри зоны
+    CHECK(room_at_pos(fr, inRoom) == room);
+    // Контейнер с 2 хлебами.
+    {
+        Entity e = reg.create();
+        reg.emplace<Transform>(e, inRoom, layer);
+        Container c;
+        c.inv.slots[0] = ItemSlot{bread, 2, 255, 0};
+        reg.emplace<Container>(e, c);
+    }
+    // Проп-койка (bed_cot — строка props.csv со спать 17).
+    PropId bed = static_cast<PropId>(0);
+    for (std::size_t p = 0; p < kPropCount; ++p)
+        if (kPropVerbs[p][kVerbSleep] > 0) bed = static_cast<PropId>(p);
+    {
+        Entity e = reg.create();
+        reg.emplace<Transform>(e, inRoom, layer);
+        reg.emplace<PropOf>(e, PropOf{bed});
+    }
+    // Пикап хлеба на полу + контейнер НА ДРУГОМ СЛОЕ (не должен считаться).
+    {
+        Entity e = reg.create();
+        reg.emplace<Transform>(e, inRoom, layer);
+        reg.emplace<Pickup>(e, Pickup{bread, 3, 255});
+        Entity other = reg.create();
+        reg.emplace<Transform>(other, inRoom, static_cast<LayerId>(layer + 1));
+        Container c;
+        c.inv.slots[0] = ItemSlot{bread, 99, 255, 0};
+        reg.emplace<Container>(other, c);
+    }
+
+    rooms_supply_rebuild(fr, reg, layer);
+    std::int32_t rebuilt[kVerbCount];
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        rebuilt[v] = room_of(fr, room)->supply[v];
+
+    // Инкрементальный путь с нуля: те же события руками.
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        room_of(fr, room)->supply[v] = 0;
+    supply_add_item(fr, room, bread, 2); // контейнер
+    supply_add_prop(fr, room, bed, +1);  // койка
+    supply_add_item(fr, room, bread, 3); // пикап
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        CHECK(room_of(fr, room)->supply[v] == rebuilt[v]);
+    // И симметрия: убрать всё — ноль (взятое возвращает предложение).
+    supply_add_item(fr, room, bread, -5);
+    supply_add_prop(fr, room, bed, -1);
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        CHECK(room_of(fr, room)->supply[v] == 0);
+    // Событие в коридоре (kNoRoom) — законный no-op, не падение.
+    supply_add_item(fr, kNoRoom, bread, 5);
+}
+
 static void test_rooms_object_all() {
     test_rooms_isotropy();
     test_rooms_no_overlap_no_empty();
     test_rooms_wrap_all_axes();
     test_rooms_deterministic_ids_and_alias();
     test_rooms_modules_declare();
+    test_rooms_supply_oracle();
 }
