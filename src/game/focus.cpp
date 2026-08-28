@@ -34,6 +34,15 @@ struct Cand {
     float off = 0.0f;   // отклонение от оси
 };
 
+// Тороидальная 3D-дистанция глаз→точка — для диагностики «где ближайший
+// кандидат» ([FocusDebug]); выбор цели её не читает, он живёт на (along, off).
+float wrap_dist(const vec3& eye, const vec3& p) {
+    const float dx = wrap_delta_f(eye.x, p.x, kWorldExtent);
+    const float dy = wrap_delta_f(eye.y, p.y, kWorldExtent);
+    const float dz = wrap_delta_f(eye.z, p.z, kWorldExtent);
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 // Проекция точки на луч: (along, off). along < 0 — цель позади.
 Cand project(const vec3& eye, const vec3& dir, const vec3& p) {
     // ПОРЯДОК АРГУМЕНТОВ: wrap_delta_f(a, b) = b - a ([core/wrap.h]), то
@@ -76,7 +85,7 @@ bool blocked(const World& w, const vec3& eye, const vec3& dir,
 
 Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
                        const vec3& eye, const vec3& dir, const Doors& doors,
-                       FocusDebug& dbg) {
+                       FocusDebug& dbg, Entity self) {
     Focus best;
     float bestAlong = 1e9f;
 
@@ -93,11 +102,19 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
     // 1. Сущности с Interactable — вид и досягаемость из таблицы.
     auto view = reg.view<const Interactable, const Transform>();
     for (auto e : view) {
+        // Своё тело — не цель: оно тоже Interactable ([game/embody.cpp],
+        // «finders skip self») и без пропуска перебивает всё как ближайшее.
+        if (e == self) continue;
         const Interactable& it = view.get<const Interactable>(e);
         if (!it.active) continue;
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
         ++dbg.entTotal;
+        const float d3 = wrap_dist(eye, tr.pos);
+        if (d3 < dbg.nearEntDist) {
+            dbg.nearEntDist = d3;
+            dbg.nearEntPos = tr.pos;
+        }
         const Cand c = project(eye, dir, tr.pos);
         float half = 0.45f; // тело NPC, если габарит не объявлен
         if (const auto* pm = reg.try_get<PropMesh>(e)) {
@@ -131,6 +148,11 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
                       (static_cast<float>(p.cy) + 0.5f) * kCellSize,
                       (static_cast<float>(p.cz) +
                        static_cast<float>(p.h) * 0.5f) * kCellSize};
+        const float d3 = wrap_dist(eye, pp);
+        if (d3 < dbg.nearPortDist) {
+            dbg.nearPortDist = d3;
+            dbg.nearPortPos = pp;
+        }
         const Cand c = project(eye, dir, pp);
         const float halfDoor = kCellSize * 0.5f;
         if (c.along > 0.0f && c.along <= kDoorReachM) ++dbg.portReach;
@@ -152,9 +174,10 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
 }
 
 Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
-                 const vec3& eye, const vec3& dir, const Doors& doors) {
+                 const vec3& eye, const vec3& dir, const Doors& doors,
+                 Entity self) {
     FocusDebug ignored;
-    return focus_pick_debug(reg, w, layer, eye, dir, doors, ignored);
+    return focus_pick_debug(reg, w, layer, eye, dir, doors, ignored, self);
 }
 
 const char* focus_prompt(const Focus& f, const World& w, const Doors& doors) {

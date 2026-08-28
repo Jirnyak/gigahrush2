@@ -54,8 +54,15 @@ struct Focus {
 // Кандидат проходит, если он: на этом слое, в пределах СВОЕГО reach (таблица
 // для сущностей, kDoorReachM для порталов), в конусе взгляда и виден
 // (los_clear). Побеждает ближайший по расстоянию вдоль луча.
+//
+// `self` — тело СМОТРЯЩЕГО, и оно не кандидат никогда: каждое живое тело
+// несёт Interactable, включая собственное ([game/embody.cpp]: «finders skip
+// self» — контракт воплощения). Без пропуска своё тело стоит в конусе в
+// четверти метра от глаза и, как ближайшее, перебивает ВСЁ — замер
+// GIGA_FOCUS_DBG 2026-08-28: what=Entity dist=0.22 при любом взгляде.
 Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
-                 const vec3& eye, const vec3& dir, const Doors& doors);
+                 const vec3& eye, const vec3& dir, const Doors& doors,
+                 Entity self = entt::null);
 
 // Счётчики отсева для диагностики в игре (GIGA_FOCUS_DBG): сколько
 // кандидатов прошло каждую ступень. Ответ «почему таблички нет» обязан
@@ -63,10 +70,16 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
 struct FocusDebug {
     std::uint32_t entTotal = 0, entReach = 0, entCone = 0, entSeen = 0;
     std::uint32_t portTotal = 0, portReach = 0, portCone = 0, portSeen = 0;
+    // Ближайшие кандидаты по 3D-дистанции (не вдоль луча): ответ на «я
+    // стою у кнопки, а прицел молчит — далеко ли она на самом деле и где».
+    vec3 nearEntPos{0, 0, 0};
+    float nearEntDist = 1e9f;
+    vec3 nearPortPos{0, 0, 0};
+    float nearPortDist = 1e9f;
 };
 Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
                        const vec3& eye, const vec3& dir, const Doors& doors,
-                       FocusDebug& dbg);
+                       FocusDebug& dbg, Entity self = entt::null);
 
 // Текст таблички БЕЗ имени клавиши (её подставляет вызывающий из биндов —
 // промпт обязан называть бинд, а не литерал). Для двери — по состоянию мира.

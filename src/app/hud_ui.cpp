@@ -163,6 +163,16 @@ void draw_status(const HudContext& c) {
     }
 }
 
+// Табличка интеракции: цель под прицелом ([game/focus.h]). Строку собирает
+// приложение; тихий элемент — нет цели, нет строки. Жила отдельным окном под
+// showHud (флагом ДЕБАГ-панели, выключенной по умолчанию) — игрок с чистым
+// худом не видел «F» никогда; это и была половина бага «таблички нет».
+bool interact_live(const HudContext& c) { return c.interactPrompt != nullptr; }
+
+void draw_interact(const HudContext& c) {
+    ImGui::TextColored(kAmber, "%s", c.interactPrompt);
+}
+
 // Алерты: то, что требует реакции СЕЙЧАС. Пока два источника — самосбор
 // (сирена этажа) и кровотечение нужд; лента одноразовых событий («поднял:
 // бинт») придёт строкой сюда же, когда у неё будет шов-источник.
@@ -206,6 +216,7 @@ HudElement g_elements[] = {
     // угол до сих пор пустовал.
     {"time",      "Время",       HudSlot::TopLeft,     true, draw_time},
     {"status",    "Статусы",     HudSlot::TopLeft,     true, draw_status, status_live},
+    {"interact",  "Интеракция",  HudSlot::Center,      true, draw_interact, interact_live},
     {"alerts",    "Алерты",      HudSlot::Center,      true, draw_alerts, alerts_live},
 };
 

@@ -9,6 +9,7 @@
 //      на входе не существует по построению).
 #include "game/door.h"
 #include "game/focus.h"
+#include "game/prop_system.h" // Interactable — тело смотрящего в гейте фокуса
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
 #include "game/save.h"
@@ -115,12 +116,22 @@ void snapshot_carries_closed_door() {
 // что первая версия молчала в игре по двум причинам сразу — своя формула
 // взгляда вместо camera_forward и марш, стартующий В МАТЕРИИ (заслонял всё).
 // Оба дефекта headless-ловимы, и этот тест их ловит.
+//
+// Третья причина немоты — СВОЁ ТЕЛО: каждое живое тело несёт Interactable,
+// включая тело смотрящего ([game/embody.cpp] «finders skip self»), и без
+// пропуска self оно, стоя в четверти метра от глаза, перебивало ЛЮБУЮ дверь
+// (замер GIGA_FOCUS_DBG 2026-08-28: what=Entity dist=0.22 при любом
+// взгляде). Тест возит тело смотрящего вместе с глазом.
 void focus_aims_at_a_real_door() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     Doors d;
     door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
     Registry reg;
+    const Entity self = reg.create();
+    reg.emplace<Transform>(self, Transform{{0, 0, 0}, 0});
+    reg.emplace<Interactable>(
+        self, Interactable{InteractKind::Npc, 2.5f, true});
 
     int seen = 0, promptOk = 0;
     for (std::uint32_t i = 0; i < d.list.size() && seen < 8; ++i) {
@@ -138,9 +149,16 @@ void focus_aims_at_a_real_door() {
         for (int k = 0; k < 4 && !aimed; ++k) {
             const vec3 eye{centre.x - off[k][0] * 1.5f,
                            centre.y - off[k][1] * 1.5f, centre.z};
-            const vec3 dir{static_cast<float>(off[k][0]),
-                           static_cast<float>(off[k][1]), 0.0f};
-            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir, d);
+            // Взгляд С НАКЛОНОМ ВНИЗ, как в живом замере (aim.z = −0.48):
+            // при горизонтальном взгляде своё тело даёт along=0 и мутация
+            // «пропуск self снят» не ловится — тело выигрывает только когда
+            // проекция на луч положительна, то есть почти всегда в игре.
+            const vec3 dir{0.877f * off[k][0], 0.877f * off[k][1], -0.48f};
+            // Тело смотрящего стоит под глазом, как в игре (глаз выше
+            // центра тела): без пропуска self оно ближайшая цель всегда.
+            reg.get<Transform>(self).pos = {eye.x, eye.y, eye.z - 0.7f};
+            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir, d, self);
+            CHECK(!(f.what == Focus::What::Entity && f.entity == self));
             if (f.what == Focus::What::Portal && f.portal == i) {
                 aimed = true;
                 // Табличка приходит ИЗ СИСТЕМЫ, не из литерала у действия.

@@ -3562,7 +3562,7 @@ int main(int argc, char** argv) {
                 if (pool.valid(nrF->id))
                     eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
             g_focus = game::focus_pick(reg, stack.layer(activeLayer),
-                                       activeLayer, eyeF, aimF, doors);
+                                       activeLayer, eyeF, aimF, doors, player);
             // ФАКТЫ ВМЕСТО ДОГАДОК (владелец: «таблички нет, смотрю в
             // упор»): раз в игровую секунду — что видит прицел. GIGA_FOCUS_DBG.
             static const bool kFocusDbg =
@@ -3572,17 +3572,23 @@ int main(int argc, char** argv) {
                 focusSaid = simTick;
                 game::FocusDebug fd{};
                 game::focus_pick_debug(reg, stack.layer(activeLayer),
-                                       activeLayer, eyeF, aimF, doors, fd);
+                                       activeLayer, eyeF, aimF, doors, fd,
+                                       player);
                 std::fprintf(stderr,
                              "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,%.2f)"
                              " | ents %u (в reach %u, в конусе %u, видимых %u)"
                              " | portals %u (в reach %u, в конусе %u, видимых"
-                             " %u) -> what=%d dist=%.2f\n",
+                             " %u) -> what=%d dist=%.2f | ближ ent %.1f м"
+                             " (%.1f,%.1f,%.1f), ближ door %.1f м"
+                             " (%.1f,%.1f,%.1f)\n",
                              eyeF.x, eyeF.y, eyeF.z, aimF.x, aimF.y, aimF.z,
                              fd.entTotal, fd.entReach, fd.entCone, fd.entSeen,
                              fd.portTotal, fd.portReach, fd.portCone,
                              fd.portSeen, static_cast<int>(g_focus.what),
-                             g_focus.dist);
+                             g_focus.dist, fd.nearEntDist, fd.nearEntPos.x,
+                             fd.nearEntPos.y, fd.nearEntPos.z, fd.nearPortDist,
+                             fd.nearPortPos.x, fd.nearPortPos.y,
+                             fd.nearPortPos.z);
             }
         } else {
             g_focus = game::Focus{};
@@ -6568,6 +6574,9 @@ int main(int argc, char** argv) {
         // в Playing: пауза показывает меню, заставка — ничего. Рисуется и при
         // открытом окне/консоли — стекло не гаснет от того, что поверх него
         // подняли аппаратуру.
+        // Табличка интеракции — элемент худа ([hud_ui.h]); буфер живёт кадр
+        // рендера, пока hud_ui_draw не отрисует строку.
+        char interactBuf[96];
         if (shell.screen == AppScreen::Playing) {
             HudContext hctx;
             hctx.reg = &reg;
@@ -6577,6 +6586,20 @@ int main(int argc, char** argv) {
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
             hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
+            // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца 2026-08-28):
+            // под прицелом ровно одна цель, текст — из таблицы интерактивов
+            // (или состояния двери), клавиша — из биндов. Жила отдельным
+            // окном под showHud — флагом ДЕБАГ-панели: игрок с чистым худом
+            // не видел «F» никогда. Теперь это элемент стекла.
+            if (shell.playing() && reg.valid(player) &&
+                activeLayer != kInvalidLayer) {
+                if (const char* what = game::focus_prompt(
+                        g_focus, stack.layer(activeLayer), doors)) {
+                    std::snprintf(interactBuf, sizeof interactBuf, "[%s]  %s",
+                                  bind_key("interact"), what);
+                    hctx.interactPrompt = interactBuf;
+                }
+            }
             // Среда клетки под телом — из АГРЕГАТА автомата (S16.4): один
             // путь для HUD, дыхания и плавучести, спецсистем нет (S16.6).
             if (reg.valid(player) && activeLayer != kInvalidLayer) {
@@ -7839,48 +7862,6 @@ int main(int argc, char** argv) {
                     input.set_mouselook(true);
                     SDL_SetWindowRelativeMouseMode(window, true);
                 }
-            }
-        }
-
-        // ── Contextual interaction prompt ──────────────────────────────
-        // A centered bottom-screen hint that appears when the player is
-        // close enough to interact with a door or terminal. Rendered as a
-        // borderless auto-sized ImGui window so it floats cleanly.
-        if (showHud && shell.playing() && reg.valid(player)) {
-            const vec3 ppos = reg.get<Transform>(player).pos;
-            // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца
-            // 2026-08-28): под прицелом ровно одна цель, текст — из
-            // таблицы интерактивов (или состояния двери), клавиша — из
-            // биндов. Рукописная лестница if-ов, где каждый интерактив
-            // был прописан дважды (и кнопки лифта остались без таблички),
-            // умерла здесь.
-            const char* promptText = nullptr;
-            char promptBuf[96];
-            // Взгляд — ЧЕРЕЗ camera_forward ([sim/camera.h]): второй
-            // формулы курса в дереве не существует (моя собственная
-            // тригонометрия здесь и была причиной «двери не реагируют»).
-            if (const char* what = game::focus_prompt(
-                    g_focus, stack.layer(activeLayer), doors)) {
-                std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
-                              bind_key("interact"), what);
-                promptText = promptBuf;
-            }
-            if (promptText) {
-                ImGuiIO& io = ImGui::GetIO();
-                ImGui::SetNextWindowPos(
-                    ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.78f),
-                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                ImGui::SetNextWindowBgAlpha(0.55f);
-                ImGui::Begin("##interact_prompt", nullptr,
-                             ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_AlwaysAutoResize |
-                                 ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_NoFocusOnAppearing |
-                                 ImGuiWindowFlags_NoNav |
-                                 ImGuiWindowFlags_NoMove);
-                ImGui::TextColored(ImVec4(1.0f, 0.92f, 0.55f, 1.0f),
-                                   "%s", promptText);
-                ImGui::End();
             }
         }
 
