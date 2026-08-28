@@ -5529,7 +5529,13 @@ int main(int argc, char** argv) {
                 }
                 if (interactWanted) {
                     interactWanted = false;
-                    if (reg.valid(player)) {
+                    // ЦЕЛЬ РЕШАЕТ ФОКУС: если под прицелом дверь, её и
+                    // работаем — ветки ниже ищут по БЛИЗОСТИ и раньше
+                    // перехватывали E у самой двери (жалоба владельца).
+                    if (reg.valid(player) &&
+                        g_focus.what == game::Focus::What::Portal) {
+                        interactWanted = false;
+                    } else if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
 
@@ -5661,6 +5667,17 @@ int main(int argc, char** argv) {
                                 }
                             }
                         }
+                        // КРАФТ — ОТ ВЕРСТАКА (вердикт владельца): клавиша C
+                        // снята, окно открывает интерактив терминала/верстака
+                        // под прицелом.
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::Terminal) {
+                            shell.window = UiWindow::Craft;
+                            input.set_mouselook(false);
+                            SDL_SetWindowRelativeMouseMode(window, false);
+                            handled = true;
+                        }
                         if (!handled &&
                             g_focus.what == game::Focus::What::Entity &&
                             g_focus.kind == game::InteractKind::LiftPanel) {
@@ -5695,34 +5712,16 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // 3. Physiological relief fallback
-                        if (!handled) {
-                            if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
-                                if (pool.valid(nrg->id)) {
-                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
-                                    if (rr.pee > 0.0f || rr.poo > 0.0f) {
-                                        // The puddle: urine through the same
-                                        // universal stain layer blood uses —
-                                        // mixing with anything already there
-                                        // is just channel addition.
-                                        if (rr.pee > 0.0f)
-                                            stain_splat(stack.layer(activeLayer),
-                                                        ppos, vec3{0, 0, -1.0f},
-                                                        1.4f, /*rays=*/14,
-                                                        kStainUrine,
-                                                        static_cast<std::uint32_t>(simTick),
-                                                        stainDirty);
-                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                      "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
-                                                      rr.pee, rr.poo);
-                                        elevDiagAt = simTick;
+                        // ОБЛЕГЧЕНИЕ БОЛЬШЕ НЕ НА КЛАВИШЕ (вердикт
+                        // владельца 2026-08-28: «писать надо, но не кнопкой»).
+                        // Эта ветка стояла ПОСЛЕДНИМ fallback-ом клавиши E и
+                        // ловила любое нажатие, которому не досталось цели —
+                        // отсюда «жму E у двери, а персонаж мочится». Нужда
+                        // остаётся ([needs.h] relieve_needs — живой API,
+                        // потребитель придёт своим законом: туалет как
+                        // интерактив или автоматическое облегчение по
+                        // давлению).
 
-                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
-                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
                 if (possessWanted) {
