@@ -3563,6 +3563,27 @@ int main(int argc, char** argv) {
                     eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
             g_focus = game::focus_pick(reg, stack.layer(activeLayer),
                                        activeLayer, eyeF, aimF, doors);
+            // ФАКТЫ ВМЕСТО ДОГАДОК (владелец: «таблички нет, смотрю в
+            // упор»): раз в игровую секунду — что видит прицел. GIGA_FOCUS_DBG.
+            static const bool kFocusDbg =
+                std::getenv("GIGA_FOCUS_DBG") != nullptr;
+            static std::uint64_t focusSaid = 0;
+            if (kFocusDbg && simTick - focusSaid > kSimHz) {
+                focusSaid = simTick;
+                game::FocusDebug fd{};
+                game::focus_pick_debug(reg, stack.layer(activeLayer),
+                                       activeLayer, eyeF, aimF, doors, fd);
+                std::fprintf(stderr,
+                             "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,%.2f)"
+                             " | ents %u (в reach %u, в конусе %u, видимых %u)"
+                             " | portals %u (в reach %u, в конусе %u, видимых"
+                             " %u) -> what=%d dist=%.2f\n",
+                             eyeF.x, eyeF.y, eyeF.z, aimF.x, aimF.y, aimF.z,
+                             fd.entTotal, fd.entReach, fd.entCone, fd.entSeen,
+                             fd.portTotal, fd.portReach, fd.portCone,
+                             fd.portSeen, static_cast<int>(g_focus.what),
+                             g_focus.dist);
+            }
         } else {
             g_focus = game::Focus{};
         }

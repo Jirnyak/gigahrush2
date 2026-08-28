@@ -101,7 +101,7 @@ std::uint32_t KeybindTable::parse(const char* text) {
 // интерфейсах и клавишах насрано»). СНЯТЫ С КЛАВИАТУРЫ 14 строк:
 //   * дев-инструменты — attr_str/agi/int (прокачка с клавиатуры!), possess,
 //     scrap, floor_up/floor_down (телепорт), elevator (L — заменён панелью
-//     кабины), fly_ascend (висел на той же E, что интеракция — конфликт);
+//     кабины); оси полёта E/Q ЖИВЫ — интеракция уехала на F, конфликта нет;
 //   * действия с ПРЕДМЕТАМИ — heal/eat/drink (место в инвентаре: использовать
 //     предмет), craft (верстак-интерактив), grenade (слот оружия).
 // Все они остаются КОНСОЛЬНЫМИ командами: механика жива, кнопки нет.
@@ -133,8 +133,10 @@ bool keybind_register_defaults(KeybindTable& t) {
     // mechanism ([fast_travel.h]). `[` and `]` keep working from anywhere.
     // Survival + interaction one-shots.
     // "door"-строка (Q) умерла 2026-08-28: единая интеракция — двери
-    // слушают interact (E), как все потребители (решение владельца).
-    ok &= t.add({"interact", "interact", scan::kE, 0});
+    // слушают interact, как все потребители (решение владельца). Клавиша —
+    // F (перевод 2026-08-28): E исторически делила себя с полётом noclip и
+    // с россыпью разовых действий; F свободна и ничем не занята.
+    ok &= t.add({"interact", "interact", scan::kF, 0});
     // Z and not the genre's G, because G is `eat` and has been since before there
     // was anything to throw. Rebinding a shipped key to make room for a new one is
     // churn the table exists to avoid — that is what the rebind menu is for.
@@ -152,7 +154,11 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"move_back", "", scan::kS, 0});
     ok &= t.add({"move_left", "", scan::kA, 0});
     ok &= t.add({"move_right", "", scan::kD, 0});
+    // Оси полёта-noclip ЖИВУТ на E/Q: конфликта больше нет — интеракция
+    // уехала на F (я снял их зря, поправка владельца 2026-08-28).
+    ok &= t.add({"fly_ascend", "", scan::kE, 0});
     ok &= t.add({"fly_descend", "", scan::kQ, 0});
+
     ok &= t.add({"fly_descend_alt", "", scan::kLCtrl, 0});
     ok &= t.add({"jump", "", scan::kSpace, 0});
     return ok;

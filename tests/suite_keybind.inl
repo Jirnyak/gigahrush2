@@ -48,8 +48,8 @@ static void test_keybind_registry_rules() {
     CHECK(defaults.find("grenade") == nullptr);
     CHECK(defaults.find("craft") == nullptr);
     CHECK(defaults.find("scrap") == nullptr);
-    // ...и E больше не делит клавишу с полётом (fly_ascend снят).
-    CHECK(defaults.find("fly_ascend") == nullptr);
+    // ...и интеракция не делит клавишу ни с чем.
+    CHECK(defaults.find("fly_ascend") != nullptr); // ось полёта жива
     CHECK(defaults.conflicts("interact") == 0);
 }
 
@@ -81,10 +81,14 @@ static void test_keybind_scancode_dispatch() {
     // ЕДИНАЯ ИНТЕРАКЦИЯ (решение владельца 2026-08-28): строка "door" (Q)
     // умерла — двери слушают interact (E), как терминал/ящик. Q остаётся
     // только полётной осью (axis rows are polled, not dispatched).
+    // ЧИСТКА 2026-08-28: интеракция на F; Q/E остаются ОСЯМИ полёта —
+    // осевые строки поллятся, а не диспатчатся, поэтому find_scancode их
+    // не возвращает.
     CHECK(t.find_scancode(scan::kQ) == nullptr);
-    const KeyBind* eKey = t.find_scancode(scan::kE);
-    CHECK(eKey != nullptr);
-    CHECK(std::strcmp(eKey->action, "interact") == 0);
+    CHECK(t.find_scancode(scan::kE) == nullptr);
+    const KeyBind* fKey = t.find_scancode(scan::kF);
+    CHECK(fKey != nullptr);
+    CHECK(std::strcmp(fKey->action, "interact") == 0);
     // W is only an axis row — no command to dispatch.
     CHECK(t.find_scancode(scan::kW) == nullptr);
     // A key nothing is bound to.
@@ -95,7 +99,7 @@ static void test_keybind_scancode_dispatch() {
     // Реальная неоднозначность: две КОМАНДНЫЕ строки на одной клавише
     // (inventory поверх interact на E — heal-строки больше нет, чистка
     // 2026-08-28).
-    CHECK(t.rebind("inventory", scan::kE));
+    CHECK(t.rebind("inventory", scan::kF));
     CHECK(t.conflicts("interact") == 1);
     CHECK(t.conflicts("inventory") == 1);
 }

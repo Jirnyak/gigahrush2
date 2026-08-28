@@ -57,6 +57,17 @@ struct Focus {
 Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
                  const vec3& eye, const vec3& dir, const Doors& doors);
 
+// Счётчики отсева для диагностики в игре (GIGA_FOCUS_DBG): сколько
+// кандидатов прошло каждую ступень. Ответ «почему таблички нет» обязан
+// приходить числом, а не догадкой.
+struct FocusDebug {
+    std::uint32_t entTotal = 0, entReach = 0, entCone = 0, entSeen = 0;
+    std::uint32_t portTotal = 0, portReach = 0, portCone = 0, portSeen = 0;
+};
+Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
+                       const vec3& eye, const vec3& dir, const Doors& doors,
+                       FocusDebug& dbg);
+
 // Текст таблички БЕЗ имени клавиши (её подставляет вызывающий из биндов —
 // промпт обязан называть бинд, а не литерал). Для двери — по состоянию мира.
 const char* focus_prompt(const Focus& f, const World& w, const Doors& doors);

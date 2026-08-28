@@ -1,7 +1,7 @@
 #include "game/focus.h"
 
 #include "ecs/components.h"    // Transform
-#include "game/prop_system.h"  // Interactable
+#include "game/prop_system.h"  // Interactable, PropMesh
 #include "world/los.h"         // sub_march — единственный субвоксельный луч
 #include "world/world.h"
 
@@ -15,7 +15,14 @@ namespace {
 // центру такой в упор попасть нельзя без «липкости» примерно её половины;
 // 0.35 м = радиус, при котором прицел прощает промах в полкнопки и всё ещё
 // не хватает соседнюю дверь (проёмы разнесены на клетку, 2 м).
-constexpr float kAimSlackM = 0.35f;
+// ИСПРАВЛЕНО ЗАМЕРОМ (GIGA_FOCUS_DBG, 2026-08-28): линейный допуск 0.35 м
+// давал «209 целей в досягаемости, В КОНУСЕ НОЛЬ» — на дистанции 2.5 м это
+// 8°, то есть требование попасть почти в центр объекта. Прицел стал
+// УГЛОВЫМ и от СИЛУЭТА: цель наведена, если луч проходит внутри её
+// габарита (PropMesh::scale из props.csv; у дверного проёма — клетка) плюс
+// человеческий разброс tan(12°) с полом 0.20 м вблизи.
+constexpr float kAimConeTan = 0.21f;
+constexpr float kAimFloorM = 0.20f;
 
 // Досягаемость дверного портала. Двери нет строки в interactables.csv (она
 // материя мира, а не сущность), поэтому её reach живёт здесь — рядом с
@@ -67,14 +74,19 @@ bool blocked(const World& w, const vec3& eye, const vec3& dir,
 
 } // namespace
 
-Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
-                 const vec3& eye, const vec3& dir, const Doors& doors) {
+Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
+                       const vec3& eye, const vec3& dir, const Doors& doors,
+                       FocusDebug& dbg) {
     Focus best;
     float bestAlong = 1e9f;
 
-    auto consider = [&](float along, float off, float reach) {
-        if (along <= 0.0f || along > reach) return false; // позади или далеко
-        if (off > kAimSlackM) return false;               // мимо прицела
+    auto slack_for = [](float along, float halfExtent) {
+        const float ang = along * kAimConeTan;
+        return halfExtent + (ang > kAimFloorM ? ang : kAimFloorM);
+    };
+    auto consider = [&](float along, float off, float reach, float halfExt) {
+        if (along <= 0.0f || along > reach) return false;
+        if (off > slack_for(along, halfExt)) return false;
         return along < bestAlong;
     };
 
@@ -85,9 +97,21 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
         if (!it.active) continue;
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
+        ++dbg.entTotal;
         const Cand c = project(eye, dir, tr.pos);
-        if (!consider(c.along, c.off, it.reachM)) continue;
+        float half = 0.45f; // тело NPC, если габарит не объявлен
+        if (const auto* pm = reg.try_get<PropMesh>(e)) {
+            const float mx =
+                pm->scale.x > pm->scale.y ? pm->scale.x : pm->scale.y;
+            half = 0.5f * (mx > pm->scale.z ? mx : pm->scale.z);
+        }
+        if (c.along > 0.0f && c.along <= it.reachM) ++dbg.entReach;
+        if (c.along > 0.0f && c.along <= it.reachM &&
+            c.off <= slack_for(c.along, half))
+            ++dbg.entCone;
+        if (!consider(c.along, c.off, it.reachM, half)) continue;
         if (blocked(w, eye, dir, tr.pos, c.along)) continue;
+        ++dbg.entSeen;
         bestAlong = c.along;
         best.what = Focus::What::Entity;
         best.entity = e;
@@ -102,13 +126,20 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
     for (std::uint32_t i = 0; i < doors.list.size(); ++i) {
         const DoorPortal& p = doors.list[i];
         if (p.mechanism) continue;
+        ++dbg.portTotal;
         const vec3 pp{(static_cast<float>(p.cx) + 0.5f) * kCellSize,
                       (static_cast<float>(p.cy) + 0.5f) * kCellSize,
                       (static_cast<float>(p.cz) +
                        static_cast<float>(p.h) * 0.5f) * kCellSize};
         const Cand c = project(eye, dir, pp);
-        if (!consider(c.along, c.off, kDoorReachM)) continue;
+        const float halfDoor = kCellSize * 0.5f;
+        if (c.along > 0.0f && c.along <= kDoorReachM) ++dbg.portReach;
+        if (c.along > 0.0f && c.along <= kDoorReachM &&
+            c.off <= slack_for(c.along, halfDoor))
+            ++dbg.portCone;
+        if (!consider(c.along, c.off, kDoorReachM, halfDoor)) continue;
         if (blocked(w, eye, dir, pp, c.along)) continue;
+        ++dbg.portSeen;
         bestAlong = c.along;
         best.what = Focus::What::Portal;
         best.entity = entt::null;
@@ -118,6 +149,12 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
     }
 
     return best;
+}
+
+Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
+                 const vec3& eye, const vec3& dir, const Doors& doors) {
+    FocusDebug ignored;
+    return focus_pick_debug(reg, w, layer, eye, dir, doors, ignored);
 }
 
 const char* focus_prompt(const Focus& f, const World& w, const Doors& doors) {
