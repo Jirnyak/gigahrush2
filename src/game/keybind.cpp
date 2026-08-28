@@ -137,6 +137,13 @@ bool keybind_register_defaults(KeybindTable& t) {
     // F (перевод 2026-08-28): E исторически делила себя с полётом noclip и
     // с россыпью разовых действий; F свободна и ничем не занята.
     ok &= t.add({"interact", "interact", scan::kF, 0});
+    // ОБЛЕГЧЕНИЕ на P (решение владельца 2026-08-28: «оба канала + спец
+    // клавиша»): осознанное — этой клавишей, невольное — автоматика
+    // давления ([needs.h]). Исключение из закона чистки «разовое действие —
+    // не клавиша» дано владельцем явно; P мнемонична и далеко от WASD —
+    // случайного нажатия в бою, из-за которого облегчение сняли с E/F,
+    // здесь не случится.
+    ok &= t.add({"relief", "relief", scan::kP, 0});
     // Z and not the genre's G, because G is `eat` and has been since before there
     // was anything to throw. Rebinding a shipped key to make room for a new one is
     // churn the table exists to avoid — that is what the rebind menu is for.

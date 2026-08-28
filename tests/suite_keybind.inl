@@ -31,6 +31,10 @@ static void test_keybind_registry_rules() {
     CHECK(defaults.find("menu") != nullptr);
     CHECK(defaults.find("jump") != nullptr);
     CHECK(defaults.find("interact") != nullptr);
+    // ОБЛЕГЧЕНИЕ на P (решение владельца 2026-08-28: «оба канала + спец
+    // клавиша» — явное исключение из закона чистки).
+    CHECK(defaults.find("relief") != nullptr &&
+          defaults.find("relief")->scancode == scan::kP);
     // ЧИСТКА 2026-08-28 (вердикт владельца): дев-строки и разовые действия
     // с предметами сняты с клавиатуры и живут консольными командами.
     // Пин обратной полярности: они обязаны ОТСУТСТВОВАТЬ, иначе тихо

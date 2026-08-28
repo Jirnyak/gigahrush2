@@ -2661,6 +2661,7 @@ int main(int argc, char** argv) {
 
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
+    bool reliefWanted = false;    // P, осознанное облегчение ([needs.h])
     bool drinkWanted = false;     // T, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
@@ -3733,6 +3734,7 @@ int main(int argc, char** argv) {
             // first tick after resume rather than vanishing.)
             if (has(ConsoleRequest::Heal)) healWanted = true;
             if (has(ConsoleRequest::Eat)) eatWanted = true;
+            if (has(ConsoleRequest::Relief)) reliefWanted = true;
             if (has(ConsoleRequest::Drink)) drinkWanted = true;
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
@@ -6441,6 +6443,32 @@ int main(int argc, char** argv) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
                     healWanted = false;
+                }
+                // ОСОЗНАННОЕ ОБЛЕГЧЕНИЕ (P): полное опорожнение обеих
+                // ёмкостей ([needs.h] relieve_needs), лужа — тем же
+                // универсальным стейном, что кровь. Невольный канал
+                // (давление на капе) — закон клока нужд, не клавиши.
+                if (reliefWanted) {
+                    reliefWanted = false;
+                    if (reg.valid(player)) {
+                        if (const auto* nrr = reg.try_get<game::NpcRef>(player);
+                            nrr && pool.valid(nrr->id)) {
+                            const game::ReliefResult rr = game::relieve_needs(
+                                pool.needs(nrr->id), 100.0f, 100.0f);
+                            if (rr.pee > 0.0f) {
+                                const vec3 rp = reg.get<Transform>(player).pos;
+                                stain_splat(stack.layer(activeLayer), rp,
+                                            vec3{0, 0, -1.0f}, 1.4f,
+                                            /*rays=*/14, kStainUrine,
+                                            static_cast<std::uint32_t>(simTick),
+                                            stainDirty);
+                            }
+                            if (rr.pee > 0.0f || rr.poo > 0.0f)
+                                std::fprintf(stderr,
+                                             "[relief] осознанно: pee %.0f "
+                                             "poo %.0f\n", rr.pee, rr.poo);
+                        }
+                    }
                 }
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.

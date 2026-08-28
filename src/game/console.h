@@ -57,6 +57,9 @@ enum class ConsoleRequest : std::uint32_t {
     Save,      // save the run
     Load,      // load the run
     Heal, Eat, Drink,        // survival one-shots
+    Relief,    // осознанное облегчение (клавиша P — решение владельца
+               // 2026-08-28: «оба канала + спец-клавиша»); невольный канал —
+               // автоматика давления в needs, не запрос
     Door, Possess, Interact, // world interaction one-shots
     Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
     // (Sell/Vendor/Resupply died with the pad shop — торговля стала сделкой
