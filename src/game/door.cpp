@@ -1,5 +1,7 @@
 #include "game/door.h"
 
+#include <cstdio>
+
 #include "ecs/components.h"    // Transform — «тело в проёме»
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
 #include "game/floor_gen.h"    // floor_doorways, lift_entrance, floor_room_mask
@@ -87,6 +89,19 @@ void door_declare(Doors& doors, int number, const FloorSpec& spec,
         }
         p.mat = herm ? kMatDoorHermetic : kMatDoorSteel;
         doors.list.push_back(p);
+    }
+
+    // Диагностика UX (владелец 2026-08-28 «не вижу табличек»): первые
+    // порталы — вслух, чтобы координаты для проверки радиуса были в логе.
+    {
+        int byCz[8] = {0};
+        for (const DoorPortal& q : doors.list)
+            if (q.cz < 64) ++byCz[q.cz % 8];
+        std::fprintf(stderr,
+                     "[door] declared %zu portals; cz%%8 histogram: "
+                     "%d %d %d %d %d %d %d %d\n",
+                     doors.list.size(), byCz[0], byCz[1], byCz[2], byCz[3],
+                     byCz[4], byCz[5], byCz[6], byCz[7]);
     }
 
     // Лифтовые створки: механизм-порталы на проёмах столбов, той же
