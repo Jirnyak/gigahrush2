@@ -7683,6 +7683,16 @@ int main(int argc, char** argv) {
             // Дверной проём в досягаемости — промпт единой интеракции.
             {
                 const std::uint32_t nd = game::door_query_near(doors, ppos);
+                // Диагностика UX (жалоба владельца «промпт не возникает»):
+                // первые срабатывания — вслух, чтобы лог отвечал, ловит ли
+                // радиус вообще.
+                static int doorPromptSaid = 0;
+                if (nd != game::kNoPortal && doorPromptSaid < 3) {
+                    ++doorPromptSaid;
+                    std::fprintf(stderr,
+                                 "[door] prompt: portal %u near (%.1f,%.1f,%.1f)\n",
+                                 nd, ppos.x, ppos.y, ppos.z);
+                }
                 if (nd != game::kNoPortal)
                     set_prompt("interact",
                                game::door_closed(stack.layer(activeLayer),
