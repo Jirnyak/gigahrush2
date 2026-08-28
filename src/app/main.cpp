@@ -49,6 +49,7 @@
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
 #include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
+#include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -2355,9 +2356,9 @@ int main(int argc, char** argv) {
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
 
-    // Every door on the live floor. Rebuilt per arrival like mobs and containers,
-    // because a door belongs to the floor and not to the player — and because the
-    // МОГИЛА ДВЕРЕЙ (2026-08-28).
+        game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
+    std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+    bool doorWanted = false;        // E (единая интеракция), consumed once
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     bool throwWanted = false;       // Z, consumed by one sim step (player_throw_step)
@@ -2450,7 +2451,8 @@ int main(int argc, char** argv) {
             // all-open geometry (an upper bound on connectivity) the bake must
             // assume. No freeze: the worker owns a snapshot, never the grid,
             // so doors may move mid-bake. [door.h, game/rebake.h]
-            // МОГИЛА ДВЕРЕЙ (2026-08-28).
+            game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -3087,7 +3089,8 @@ int main(int argc, char** argv) {
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
         mRefresh = arrMs() - mPre;
-        // МОГИЛА ДВЕРЕЙ (2026-08-28).
+        game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
         mDoors = arrMs() - mPre - mRefresh;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         mNav = arrMs() - mPre - mRefresh - mDoors;
@@ -3164,7 +3167,12 @@ int main(int argc, char** argv) {
         // читает файл целевого этажа, а туда-обратно (0->4->0) целевой этаж
         // и есть последний покинутый.
         flush_floor_write();
-        // МОГИЛА ДВЕРЕЙ (2026-08-28). Створка вернётся с новой системой.
+        // Створка посадки зарастает — игрок заперт в кабине (механизм-API
+        // новой двери; дренаж doorDirty — швом карва в топе кадра).
+        if (hub >= 0 && hub < 4 && doors.lift[hub] != game::kNoPortal)
+            game::door_close(stack.layer(activeLayer),
+                             doors.list[doors.lift[hub]], reg, activeLayer,
+                             doorDirty);
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
         liftFreshDone = false;
@@ -3402,7 +3410,14 @@ int main(int argc, char** argv) {
                 stack, registry, reg, pool, player, currentFloor, liftDst,
                 static_cast<std::uint8_t>(arriveH), pid, liftHub);
             if (arrive_after_ride(ride, liftHub)) {
-                // МОГИЛА ДВЕРЕЙ (2026-08-28).
+                // Кабина назначения зарастает до полной готовности этажа
+                // (двери объявлены внутри arrive; механизм-API).
+                if (liftHub >= 0 && liftHub < 4 &&
+                    doors.lift[liftHub] != game::kNoPortal)
+                    game::door_close(
+                        stack.layer(reg.get<Transform>(player).layer),
+                        doors.list[doors.lift[liftHub]], reg,
+                        reg.get<Transform>(player).layer, doorDirty);
                 liftRide = LiftRide::WaitFresh;
             } else {
                 // Не должно случаться (гейт уже пропустил); честный откат.
@@ -3418,7 +3433,11 @@ int main(int argc, char** argv) {
             !mediumPass.wakes_pending()) {
             liftRide = LiftRide::Idle;
             liftFreshDone = false;
-            // МОГИЛА ДВЕРЕЙ (2026-08-28).
+            // «Лифт приехал» — створка субвоксельно открывается.
+            if (liftHub >= 0 && liftHub < 4 &&
+                doors.lift[liftHub] != game::kNoPortal)
+                game::door_open(stack.layer(activeLayer),
+                                doors.list[doors.lift[liftHub]], doorDirty);
             std::fprintf(stderr,
                          "[lift] ride to %d: %llu ticks cabin-to-doors "
                          "(baked+woken)\n",
@@ -3677,6 +3696,9 @@ int main(int argc, char** argv) {
             // contract_accept refuses the same. [quest.h, contract.h]
             if (has(ConsoleRequest::Interact)) {
                 interactWanted = true;
+                // Единая интеракция: дверь — такой же потребитель E, как
+                // терминал/ящик (door_toggle_near no-op без проёма рядом).
+                doorWanted = true;
                 if (game::contract_accept(contracts, offer, ledger)) {
                     offer = game::Contract{};
                     offerLine[0] = 0;
@@ -4725,7 +4747,24 @@ int main(int argc, char** argv) {
                 game::impact_damage_step(reg, pool, &particleBursts);
                 // prop_ragdoll_step умер (рагдолл-эпик, инкремент 6):
                 // сорванные пропы — тела rigid_body_step выше.
-                // МОГИЛА ДВЕРЕЙ (2026-08-28). door_step/тоггл вырезаны целиком.
+                // НОВАЯ ДВЕРЬ: тоггл актором — единая интеракция E.
+                // door_step не существует: полотно — настоящая материя,
+                // физика/среды видят его без посредника.
+                if (doorWanted) {
+                    doorWanted = false;
+                    if (reg.valid(player)) {
+                        const vec3 dpos = reg.get<Transform>(player).pos;
+                        const std::uint32_t did = game::door_toggle_near(
+                            stack.layer(activeLayer), doors, reg, activeLayer,
+                            dpos, doorDirty);
+                        if (did != game::kNoPortal) {
+                            game::NoiseProfile np{10.0f, 1200, 2,
+                                                  game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, dpos,
+                                                np, 0);
+                        }
+                    }
+                }
 
                 // Universal destruction ([world/destruct.h]): the console/tools
                 // PROPOSED a sphere; the sim disposes here, on its own clock.
@@ -6100,7 +6139,8 @@ int main(int argc, char** argv) {
                                 reg, stack.layer(nl), currentFloor, nl,
                                 streamer.floor_seed_of(registry, currentFloor),
                                 bus);
-                            // МОГИЛА ДВЕРЕЙ (2026-08-28).
+                            game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -7640,7 +7680,16 @@ int main(int argc, char** argv) {
                 promptText = promptBuf;
             };
 
-            // МОГИЛА ДВЕРЕЙ (2026-08-28). Промпт двери вернётся с новой системой.
+            // Дверной проём в досягаемости — промпт единой интеракции.
+            {
+                const std::uint32_t nd = game::door_query_near(doors, ppos);
+                if (nd != game::kNoPortal)
+                    set_prompt("interact",
+                               game::door_closed(stack.layer(activeLayer),
+                                                 doors.list[nd])
+                                   ? "OPEN DOOR"
+                                   : "CLOSE DOOR");
+            }
 
 
             // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
@@ -7950,7 +7999,17 @@ int main(int argc, char** argv) {
         // their mask edits the same way carve does ([game/door.h]
         // dirtyCells) — drain once per frame, then record this frame's
         // dirty-cell copies.
-        // МОГИЛА ДВЕРЕЙ (2026-08-28).
+        if (!doorDirty.empty()) {
+            voxelMirror.mark_dirty(doorDirty.data(), doorDirty.size());
+            nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                   doorDirty.data(), doorDirty.size());
+            if (mediumPass.ready())
+                mediumPass.wake_cells(doorDirty.data(), doorDirty.size(),
+                                      stack.layer(activeLayer), voxelMirror);
+            if (antourage_carve_step_here(doorDirty, 0xD00Du))
+                dressingSetChanged = true;
+            doorDirty.clear();
+        }
 
         if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
             regrow_check(stack.layer(activeLayer), voxelMirror, "двери",
@@ -8611,7 +8670,8 @@ int main(int argc, char** argv) {
                         // same law as the keyboard ride path. This is the
                         // SECOND travel site; a fix that touches only one path
                         // leaves --shot proving nothing. [save.h, door.h]
-                        // МОГИЛА ДВЕРЕЙ (2026-08-28).
+                        game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

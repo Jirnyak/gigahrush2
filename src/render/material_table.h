@@ -39,22 +39,25 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.62f, 0.70f, 0.72f},  // 21 glass
     {0.35f, 0.55f, 0.25f},  // 22 toxic_gas
     {0.09f, 0.09f, 0.10f},  // 23 asphalt
-    {0.26f, 0.26f, 0.24f},  // 24 rubble_concrete
-    {0.20f, 0.31f, 0.15f},  // 25 rubble_soil
-    {0.31f, 0.26f, 0.19f},  // 26 rubble_slab_tan
-    {0.41f, 0.37f, 0.32f},  // 27 rubble_plaster
-    {0.27f, 0.17f, 0.09f},  // 28 rubble_parquet
-    {0.32f, 0.34f, 0.36f},  // 29 rubble_shop_shutter
-    {0.22f, 0.14f, 0.10f},  // 30 rubble_lino
-    {0.19f, 0.26f, 0.19f},  // 31 rubble_factory_wall
-    {0.32f, 0.20f, 0.13f},  // 32 rubble_tread
-    {0.34f, 0.17f, 0.07f},  // 33 rubble_rust
-    {0.72f, 0.59f, 0.13f},  // 34 rubble_electric_grate
-    {0.72f, 0.21f, 0.03f},  // 35 rubble_fire_cell
-    {0.11f, 0.14f, 0.12f},  // 36 rubble_pipe_metal
-    {0.21f, 0.81f, 0.72f},  // 37 rubble_neon_tube
-    {0.53f, 0.59f, 0.61f},  // 38 rubble_glass
-    {0.08f, 0.08f, 0.09f}   // 39 rubble_asphalt
+    {0.34f, 0.36f, 0.38f},  // 24 door_steel
+    {0.30f, 0.33f, 0.31f},  // 25 door_hermetic
+    {0.26f, 0.26f, 0.24f},  // 26 rubble_concrete
+    {0.20f, 0.31f, 0.15f},  // 27 rubble_soil
+    {0.31f, 0.26f, 0.19f},  // 28 rubble_slab_tan
+    {0.41f, 0.37f, 0.32f},  // 29 rubble_plaster
+    {0.27f, 0.17f, 0.09f},  // 30 rubble_parquet
+    {0.32f, 0.34f, 0.36f},  // 31 rubble_shop_shutter
+    {0.22f, 0.14f, 0.10f},  // 32 rubble_lino
+    {0.19f, 0.26f, 0.19f},  // 33 rubble_factory_wall
+    {0.32f, 0.20f, 0.13f},  // 34 rubble_tread
+    {0.34f, 0.17f, 0.07f},  // 35 rubble_rust
+    {0.72f, 0.59f, 0.13f},  // 36 rubble_electric_grate
+    {0.72f, 0.21f, 0.03f},  // 37 rubble_fire_cell
+    {0.11f, 0.14f, 0.12f},  // 38 rubble_pipe_metal
+    {0.21f, 0.81f, 0.72f},  // 39 rubble_neon_tube
+    {0.53f, 0.59f, 0.61f},  // 40 rubble_glass
+    {0.08f, 0.08f, 0.09f},  // 41 rubble_asphalt
+    {0.29f, 0.31f, 0.32f}   // 42 rubble_door_steel
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id");
