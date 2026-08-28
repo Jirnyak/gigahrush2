@@ -29,12 +29,28 @@ static void test_keybind_registry_rules() {
     CHECK(keybind_register_defaults(defaults));
     CHECK(defaults.find("fly") != nullptr);
     CHECK(defaults.find("menu") != nullptr);
-    CHECK(defaults.find("floor_up") != nullptr);
     CHECK(defaults.find("jump") != nullptr);
-    CHECK(defaults.find("attr_str") != nullptr);
-    CHECK(defaults.find("attr_agi") != nullptr);
-    CHECK(defaults.find("attr_int") != nullptr);
-    CHECK(defaults.find("attr_str")->scancode == scan::k1);
+    CHECK(defaults.find("interact") != nullptr);
+    // ЧИСТКА 2026-08-28 (вердикт владельца): дев-строки и разовые действия
+    // с предметами сняты с клавиатуры и живут консольными командами.
+    // Пин обратной полярности: они обязаны ОТСУТСТВОВАТЬ, иначе тихо
+    // вернутся вместе с чужой правкой.
+    CHECK(defaults.find("attr_str") == nullptr);
+    CHECK(defaults.find("attr_agi") == nullptr);
+    CHECK(defaults.find("attr_int") == nullptr);
+    CHECK(defaults.find("floor_up") == nullptr);
+    CHECK(defaults.find("floor_down") == nullptr);
+    CHECK(defaults.find("elevator") == nullptr);
+    CHECK(defaults.find("heal") == nullptr);
+    CHECK(defaults.find("eat") == nullptr);
+    CHECK(defaults.find("drink") == nullptr);
+    CHECK(defaults.find("possess") == nullptr);
+    CHECK(defaults.find("grenade") == nullptr);
+    CHECK(defaults.find("craft") == nullptr);
+    CHECK(defaults.find("scrap") == nullptr);
+    // ...и E больше не делит клавишу с полётом (fly_ascend снят).
+    CHECK(defaults.find("fly_ascend") == nullptr);
+    CHECK(defaults.conflicts("interact") == 0);
 }
 
 static void test_keybind_defaults_resolve_in_console() {
@@ -77,10 +93,11 @@ static void test_keybind_scancode_dispatch() {
     // key would be.
     CHECK(t.conflicts("interact") == 0);
     // Реальная неоднозначность: две КОМАНДНЫЕ строки на одной клавише
-    // (heal поверх interact на E — "door"-строки больше нет).
-    CHECK(t.rebind("heal", scan::kE));
+    // (inventory поверх interact на E — heal-строки больше нет, чистка
+    // 2026-08-28).
+    CHECK(t.rebind("inventory", scan::kE));
     CHECK(t.conflicts("interact") == 1);
-    CHECK(t.conflicts("heal") == 1);
+    CHECK(t.conflicts("inventory") == 1);
 }
 
 static void test_keybind_rebind_bounds() {
