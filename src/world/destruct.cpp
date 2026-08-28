@@ -477,6 +477,7 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
     VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2);
     std::uint32_t run = 0;
     const std::size_t nSeeds = out.destroyed.size();
+    static const bool kDbg = std::getenv("GIGA_DETACH_DBG") != nullptr;
     for (std::size_t i = 0; i < nSeeds; ++i) {
         const SubCoord c = unpack_key(
             pack_key(out.destroyed[i].cell, out.destroyed[i].bit));
@@ -490,7 +491,17 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
             const std::uint32_t node = node_of_atom(w.grid(), s, nk);
             if (node == 0xFFFFFFFFu) continue;
             ++run;
-            if (!flood_nodes(w.grid(), vis, s, node, run)) continue;
+            const bool loose = flood_nodes(w.grid(), vis, s, node, run);
+            if (kDbg)
+                std::fprintf(stderr,
+                             "[detach-dbg] seed atom (%d,%d,%d) -> node cell "
+                             "(%u,%u,%u) comp %u: %s\n",
+                             ax + d[0], ay + d[1], az + d[2],
+                             (node >> 8) % kMacroDim,
+                             ((node >> 8) / kMacroDim) % kMacroDim,
+                             (node >> 8) / (kMacroDim * kMacroDim),
+                             node & 255u, loose ? "LOOSE" : "supported/seen");
+            if (!loose) continue;
             convert_nodes(w, mats, s, out);
         }
     }

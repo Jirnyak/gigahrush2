@@ -5443,7 +5443,112 @@ static void test_stream_migration_reembodies() {
 // surviving test_mob_table above is main version.
 
 
+static void repro_grate_hang() {
+    // ЛОКАЛЬНЫЙ РЕПРО (не коммитить): «решётка отвязана, но висит».
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    const SubField<CellType>* sm =
+        w.subfields().find<CellType>(kSubMaterialName);
+    CHECK(sm != nullptr);
+    // Найти клетки решётки (страница содержит kMatElectricGrate в слове 7).
+    int tried = 0, converted = 0, hung = 0, supported = 0;
+    {   // разведка: есть ли решётка вообще и в каком виде
+        int paged = 0, uniform = 0;
+        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+            if (w.grid().types()[ci] == kMatElectricGrate) ++uniform;
+            const CellType* pg = sm->page(ci);
+            if (!pg) continue;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (pg[b] == kMatElectricGrate) { ++paged; break; }
+        }
+        std::printf("[repro] grate presence: paged cells %d, uniform %d\n",
+                    paged, uniform);
+    }
+    for (std::uint32_t ci = 0; ci < kMacroCells && tried < 40; ++ci) {
+        if (w.grid().types()[ci] != kMatElectricGrate) continue; // однородная
+        const int cx = static_cast<int>(ci % kMacroDim);
+        const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+        // Полоса вдоль Y: режем два разреза по y-соседям (обрезаем нить с
+        // обеих сторон), середина остаётся сегментом в этой клетке.
+        CarveResult res;
+        auto cut = [&](float wx, float wy, float wz) {
+            CarveScratch scr; // СВОЙ scratch каждому разрезу — проверка
+                              // гипотезы «VisitedSet переживает свипы»
+            CarveOp op;
+            op.x = wx; op.y = wy; op.z = wz;
+            op.radius = 1.0f;
+            op.power = 512; // решётка мягкая (24? grate hardness?) — режет
+            op.seed = 99u + ci;
+            res = CarveResult{};
+            const std::int32_t rem = carve_sphere(w, op, scr, res);
+            if (tried < 3)
+                std::printf("[repro]   cut at (%.0f,%.0f,%.0f): removed %d, "
+                            "detached %zu, dirty %zu\n",
+                            wx, wy, wz, rem, res.detached.size(),
+                            res.dirtyCells.size());
+        };
+        const float zc = (cz + 0.9f) * kCellSize; // верхний слой клетки
+        cut((cx + 0.5f) * kCellSize, (cy - 0.5f) * kCellSize, zc);
+        cut((cx + 0.5f) * kCellSize, (cy + 1.5f) * kCellSize, zc);
+        ++tried;
+        // Что осталось в средней клетке?
+        const CellType* pg2 = sm->page(ci);
+        bool stillGrate = false, nowRubble = false;
+        for (int b = 0; b < kSubVoxels; ++b) {
+            if (!w.grid().masks()[ci].test(b)) continue;
+            const CellType m2 =
+                pg2 ? pg2[b] : w.grid().types()[ci];
+            if (m2 == kMatElectricGrate) stillGrate = true;
+            if (m2 == material_rubble_of(kMatElectricGrate)) nowRubble = true;
+        }
+        if (nowRubble && !stillGrate) ++converted;
+        else if (stillGrate) {
+            ++hung;
+            // Дифференциал: судья НАПРЯМУЮ на висящую клетку — если
+            // конвертирует, дефект в сидинге карва; если нет — в суде.
+            if (hung <= 3) {
+                CarveScratch scr2;
+                CarveResult res2;
+                std::uint32_t one = ci;
+                const std::int32_t conv =
+                    detach_judge_cells(w, &one, 1, scr2, res2);
+                std::printf("[repro]   direct judge on hung cell (%d,%d,%d): "
+                            "converted %d; atoms:",
+                            cx, cy, cz, conv);
+                for (std::size_t k = 0; k < res2.detached.size() && k < 24;
+                     ++k) {
+                    const auto& dv = res2.detached[k];
+                    const int sx = dv.bit & 7, sy = (dv.bit >> 3) & 7,
+                              sz = dv.bit >> 6;
+                    std::printf(" (%d,%d,%d|%d,%d,%d)",
+                                static_cast<int>(dv.cell % kMacroDim),
+                                static_cast<int>((dv.cell / kMacroDim) %
+                                                 kMacroDim),
+                                static_cast<int>(dv.cell /
+                                                 (kMacroDim * kMacroDim)),
+                                sx, sy, sz);
+                }
+                std::printf("\n");
+            }
+        }
+        else ++supported;
+    }
+    std::printf("[repro] grate cells tried %d: converted %d, HUNG %d, "
+                "emptied/other %d\n",
+                tried, converted, hung, supported);
+}
+
 int main() {
+    // СТЕНД (владелец 2026-08-28, «решётки висят»): GIGA_GRATE_REPRO=1 —
+    // только репро и выход. Репро ЛОВИТ дефект 40/40: сегмент решётки,
+    // отрезанный двумя карвами, не конвертируется свипом карва, при этом
+    // ПРЯМОЙ судья той же клетки конвертирует его (детали в памяти сессии).
+    if (std::getenv("GIGA_GRATE_REPRO") != nullptr) {
+        setvbuf(stdout, nullptr, _IONBF, 0);
+        repro_grate_hang();
+        return 0;
+    }
     // Unbuffered stdio so redirected CI/agent runs show suite progress live
     // instead of looking hung at the first long suite (npcpool/samosbor2).
     setvbuf(stdout, nullptr, _IONBF, 0);
