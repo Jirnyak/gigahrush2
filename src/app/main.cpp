@@ -5995,6 +5995,20 @@ int main(int argc, char** argv) {
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
                                          &aiMem, simNow);
                 needsHpLost += needs.hpLost;
+                // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
+                // слил его, где застало). Лужа — тот же стейн, что канал P.
+                // Социальная цена (свидетели чужой территории) придёт
+                // системой свидетельства (CANON.md S19), не веткой здесь.
+                if (needs.voidedPee && reg.valid(player)) {
+                    const vec3 rp = reg.get<Transform>(player).pos;
+                    stain_splat(stack.layer(activeLayer), rp,
+                                vec3{0, 0, -1.0f}, 1.4f, /*rays=*/14,
+                                kStainUrine,
+                                static_cast<std::uint32_t>(simTick),
+                                stainDirty);
+                    std::fprintf(stderr,
+                                 "[relief] невольно: мочевой лопнул\n");
+                }
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually
                 // feeding people, and `crowdDead` is the number that would climb if

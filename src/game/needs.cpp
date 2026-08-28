@@ -178,13 +178,24 @@ Needs needs_roll_resident(std::uint32_t seed) {
     return n;
 }
 
-void needs_advance(Needs& n, float dt) {
+void needs_advance(Needs& n, float dt, ReliefResult* voided) {
     if (dt <= 0.0f) return;
     n.food  = clamp_need(n.food  - kFoodDrainPerSec  * dt);
     n.water = clamp_need(n.water - kWaterDrainPerSec * dt);
     n.sleep = clamp_need(n.sleep - kSleepDrainPerSec * dt);
     digest(n.pendingPee, n.pee, kPeeDigestPerSec * dt);
     digest(n.pendingPoo, n.poo, kPooDigestPerSec * dt);
+    // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (владелец 2026-08-28): кап не состояние, а
+    // событие — давление слилось, бар пошёл заново, очередь продолжает
+    // метериться в пустое. Урона от давлений больше не существует.
+    if (n.pee >= kNeedMax) {
+        if (voided) voided->pee += n.pee;
+        n.pee = 0.0f;
+    }
+    if (n.poo >= kNeedMax) {
+        if (voided) voided->poo += n.poo;
+        n.poo = 0.0f;
+    }
 }
 
 std::uint8_t needs_failed_mask(const Needs& n) {
@@ -208,14 +219,13 @@ std::uint8_t needs_warn_mask(const Needs& n) {
 }
 
 float needs_hp_rate(const Needs& n) {
-    // Additive across every failed need, capped by nothing: four at once is
-    // 1.0 HP/s. Sleep is absent on purpose — see the header.
+    // Additive across every failed need, capped by nothing: both at once is
+    // 0.8 HP/s. Sleep is absent on purpose — see the header. Давления тоже:
+    // кап сливается клоком (невольное облегчение), урона не существует.
     const std::uint8_t f = needs_failed_mask(n);
     float rate = 0.0f;
     if (f & NeedFood)  rate += kHungerHpPerSec;
     if (f & NeedWater) rate += kDehydrationHpPerSec;
-    if (f & NeedPee)   rate += kOverflowHpPerSec;
-    if (f & NeedPoo)   rate += kOverflowHpPerSec;
     return rate;
 }
 
@@ -226,16 +236,8 @@ float needs_seconds_to_damage(const Needs& n) {
     const float water = n.water / kWaterDrainPerSec;
     if (water < soonest) soonest = water;
 
-    // A pressure only ticks toward overflow while its queue has something left,
-    // so an empty queue is not a clock at all.
-    if (n.pendingPee > 0.0f) {
-        const float t = (kNeedMax - n.pee) / kPeeDigestPerSec;
-        if (t < soonest) soonest = t;
-    }
-    if (n.pendingPoo > 0.0f) {
-        const float t = (kNeedMax - n.poo) / kPooDigestPerSec;
-        if (t < soonest) soonest = t;
-    }
+    // Давления к урону больше не ведут (кап сливается клоком) — часами
+    // повреждения они быть перестали; предупреждение живёт в warn_mask.
     return soonest;
 }
 
@@ -283,7 +285,12 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             n = camera ? needs_roll(seed) : needs_roll_resident(seed);
         }
 
-        needs_advance(n, dt);
+        ReliefResult voided;
+        needs_advance(n, dt, &voided);
+        if (camera) {
+            out.voidedPee = voided.pee > 0.0f ? 1 : 0;
+            out.voidedPoo = voided.poo > 0.0f ? 1 : 0;
+        }
         ++out.bodies;
 
         // AMBIENT RECOVERY — the other half of the widened scope. Standing in a

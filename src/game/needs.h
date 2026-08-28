@@ -96,12 +96,14 @@ static_assert(kWaterDrainPerSec > kFoodDrainPerSec,
 inline constexpr float kPeeDigestPerSec = 0.10f;
 inline constexpr float kPooDigestPerSec = 0.06f;
 
-// HP/s once a need has failed (`needs.ts:201-213`). ADDITIVE: all four at once is
-// exactly 1.0 HP/s, which is what makes ignoring the clock lethal rather than merely
-// irritating.
+// HP/s once a need has failed (`needs.ts:201-213`). ADDITIVE: both at once is
+// 0.8 HP/s, which is what makes ignoring the clock lethal rather than merely
+// irritating. ДАВЛЕНИЯ HP НЕ ГРЫЗУТ (закон владельца 2026-08-28): давление
+// на капе сливается самим клоком (`needs_advance` — невольное облегчение,
+// где застало); цена — лужа и свидетели (CANON.md S19), не здоровье.
+// kOverflowHpPerSec умер вместе со старым законом «стоит на капе и платит».
 inline constexpr float kHungerHpPerSec      = 0.3f;   // food  <= 0
 inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
-inline constexpr float kOverflowHpPerSec    = 0.1f;   // pee or poo >= 100, each
 
 // `main.ts:3777-3786`: flat, binary, no ramp.
 inline constexpr float kSleepExhaustedAt = 10.0f;
@@ -234,6 +236,10 @@ struct NeedsTick {
     bool ticked = false;          // false when no camera holder is on this layer
     // -- the widened scope; the fields above stay ABOUT THE CAMERA HOLDER so every
     //    existing HUD/consumer reads what it always read --
+    // Невольный слив клока у НОСИТЕЛЯ КАМЕРЫ этим шагом ([needs_advance]):
+    // потребитель рисует лужу тем же стейном, что осознанный канал P.
+    std::uint8_t voidedPee = 0;
+    std::uint8_t voidedPoo = 0;
     std::uint32_t bodies = 0;     // clocks advanced this step, camera holder included
     std::uint32_t recovering = 0; // of those, standing in a room that restores
     std::uint32_t crowdKilled = 0; // non-camera bodies this step's attrition finished
@@ -249,9 +255,22 @@ Needs needs_roll(std::uint32_t seed);
 // resident's state is always a state the ordinary clock could have produced.
 Needs needs_roll_resident(std::uint32_t seed);
 
+// Returns what actually came off, so "you did not need to" is distinguishable
+// from "that helped". Filled by `relieve_needs` (canal 1: осознанное, клавиша
+// P) and by the clock itself (canal 2: невольный слив на капе).
+struct ReliefResult {
+    float pee = 0.0f;
+    float poo = 0.0f;
+};
+
 // The pure clock: no registry, no HP, no allocation. The piece the macro sim can
 // reuse on its own coarse clock, and the piece a test can drive without a world.
-void needs_advance(Needs& n, float dt);
+//
+// НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (закон владельца 2026-08-28, «оба канала»): давление,
+// дошедшее до kNeedMax, СЛИВАЕТСЯ здесь же — тело опорожняется, где застало.
+// Один закон для всех тел (S7: игрок = NPC = резидент через needs_roll).
+// `voided` (опц.) накапливает слитое — потребитель клока рисует лужу.
+void needs_advance(Needs& n, float dt, ReliefResult* voided = nullptr);
 
 // Sleep IS reported when empty, but contributes 0 HP/s — use `needs_hp_rate`.
 std::uint8_t needs_failed_mask(const Needs& n);
@@ -397,12 +416,7 @@ ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
                             LayerId layer, std::uint64_t tick);
 
-// Returns what actually came off, so "you did not need to" is distinguishable from
-// "that helped". The hook a toilet object calls once one exists.
-struct ReliefResult {
-    float pee = 0.0f;
-    float poo = 0.0f;
-};
+// Осознанное опорожнение (ReliefResult объявлен у needs_advance выше).
 ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount);
 
 } // namespace giga::game

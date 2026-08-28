@@ -96,16 +96,16 @@ void queue_metering_rate() {
     CHECK(t <= perBottle / kPeeDigestPerSec + 2.0f * kStep);
     CHECK(approx(one.pee, perBottle, 1e-3f));                       // all 21.0 landed
 
-    // EIGHT BOTTLES FROM A HALF-FULL BLADDER — the shape that reads as `pee ==
-    // 50 + queued` and is wrong twice over. queued is 8 * 21.0 = 168.0 points.
-    //   (1) RATE: 600 s meters kPeeDigestPerSec * 600 = 60.0 points. 108.0 of the
-    //       queue is still owed, and the queue as a whole needs
-    //       168.0 / 0.10 = 1680 s = 28 min.
-    //   (2) CLAMP: only the first 50.0 points can land at all before the bar
-    //       saturates at kNeedMax, and `digest` decrements `pending` by what it
-    //       metered whether or not it fitted. So 50 + 168 = 218 is unreachable at any
-    //       dt, after any elapsed time, forever — and even the reachable 100 is hit
-    //       after 500 s, not 600.
+    // EIGHT BOTTLES FROM A HALF-FULL BLADDER — queued is 8 * 21.0 = 168.0
+    // points, and the RATE still rules: 600 s meters kPeeDigestPerSec * 600 =
+    // 60.0 points; 108.0 of the queue is still owed, and the queue as a whole
+    // needs 168.0 / 0.10 = 1680 s = 28 min.
+    //
+    // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (закон владельца 2026-08-28) СМЕНИЛО СУДЬБУ
+    // КЛАМПА: бар, дошедший до 100, не стоит и не платит HP — клок сливает
+    // его сам, и очередь продолжает метериться в пустое. Точки больше НЕ
+    // уничтожаются об кап: 50 стартовых + все 168 из очереди в итоге
+    // проходят через тело — 200 в двух сливах, 18 остаются на баре.
     Needs run = full_clock();
     run.pee = 50.0f;
     float queued = 0.0f;
@@ -115,50 +115,40 @@ void queue_metering_rate() {
     }
     CHECK(approx(queued, 8.0f * perBottle, 1e-3f));          // 168.0
     CHECK(approx(run.pendingPee, queued, 1e-3f));
-    CHECK(50.0f + queued > kNeedMax);                        // the clamp really binds
-    CHECK(queued > kPeeDigestPerSec * 600.0f);               // ...and so does the rate
+    CHECK(50.0f + queued > kNeedMax);                        // кап встретится
+    CHECK(queued > kPeeDigestPerSec * 600.0f);               // и rate тоже
 
-    // Top the other bars back up before running the clock, because this block is about
-    // PEE overflow alone and needs_hp_rate is ADDITIVE across every failed need. The
-    // loop above zeroes water eight times to fake a long trip between bottles, so it
-    // ends holding one bottle's worth; 600 s of drain at kWaterDrainPerSec = 0.12 then
-    // takes water past 0 as well, NeedWater joins the mask, and the rate below is
-    // kOverflowHpPerSec + kDehydrationHpPerSec rather than the pee term this is
-    // measuring. Isolating the need under test is the point — a rate assertion that
-    // silently sums two failures is not measuring either one.
+    // Top the other bars back up before running the clock: the loop above
+    // zeroes water eight times, and 600 s of drain would fail NeedWater and
+    // pollute the rate assertion below. Isolating the need under test.
     run.food = kNeedMax;
     run.water = kNeedMax;
     run.sleep = kNeedMax;
 
     advance_seconds(run, 600.0f);
-    CHECK(approx(run.pee, kNeedMax, 1e-2f));                 // 100, not 218
-    // 0.05 of a point, not tighter: 2400 float subtractions from ~168 accumulate up to
-    // 2400 * ulp(168)/2 = 0.018. A genuine rate bug would be off by a factor, not 2 %.
+    // Бар дошёл до капа на 500-й секунде (50 + 0.1*500) и СЛИЛСЯ; остальные
+    // 100 с метерились в пустой: 10.0 на баре. 0.05 of a point, not tighter:
+    // 2400 float subtractions accumulate up to ~0.018.
+    CHECK(approx(run.pee, 10.0f, 0.05f));
     CHECK(approx(run.pendingPee, queued - kPeeDigestPerSec * 600.0f, 0.05f));  // 108.0
-    CHECK((needs_failed_mask(run) & NeedPee) != 0);
-    CHECK(approx(needs_hp_rate(run), kOverflowHpPerSec, 1e-6f));
+    CHECK((needs_failed_mask(run) & NeedPee) == 0);   // кап — событие, не состояние
+    CHECK(needs_hp_rate(run) == 0.0f);                // урона от давлений нет
 
-    // The discarded points are gone, not deferred: relieving and then waiting out the
-    // rest of the queue lands the remainder and no more. Of 168.0 billed, only
-    // (100 - 50) + kToiletPeeRelief = 120.0 can ever land on this bar, so 48.0 points
-    // were destroyed at the moment they were metered and no amount of walking to a
-    // toilet gets them back.
-    const ReliefResult rel = relieve_needs(run, kToiletPeeRelief, 0.0f);
-    CHECK(approx(rel.pee, kToiletPeeRelief, 1e-4f));
-    CHECK(approx(run.pee, kNeedMax - kToiletPeeRelief, 1e-3f));   // 30.0
+    // Дожить очередь до конца: ещё один слив на 1500-й секунде общего пути,
+    // остаток 218 - 200 = 18.0 на баре, очередь пуста. Допуск шире (0.3):
+    // ещё 14400 вычитаний дрейфа.
     advance_seconds(run, 3600.0f);
     CHECK(run.pendingPee == 0.0f);
-    CHECK(approx(run.pee, kNeedMax, 1e-2f));                      // 30 + 70, clamped
-    const float landable = (kNeedMax - 50.0f) + kToiletPeeRelief;
-    CHECK(approx(queued - landable, 48.0f, 0.05f));
+    CHECK(approx(run.pee, 18.0f, 0.3f));
 
-    // A queue that fits loses nothing, which is the control for the case above: same
-    // dt, same code path, 21.0 points onto a 90.0 bar destroys 11.0 and holds none.
+    // A queue that fits UNDER the cap loses nothing and holds nothing back;
+    // one that crosses it voids once and keeps the remainder: 21.0 onto a
+    // 90.0 bar crosses at +10.0, voids, and lands the other 11.0.
     Needs tight = full_clock();
     tight.pee = kNeedMax - 10.0f;
     tight.pendingPee = perBottle;
     advance_seconds(tight, 3600.0f);
-    CHECK(tight.pee == kNeedMax);
+    CHECK(approx(tight.pee, perBottle - 10.0f, 0.05f));   // 11.0
     CHECK(tight.pendingPee == 0.0f);   // spent, not held as a backlog
 }
 
@@ -260,16 +250,17 @@ void pressure_clock_is_feelable() {
     // it a cost of playing well rather than a second way to lose.
     CHECK(trip.water > 0.0f);
 
-    // THE GAP THIS DOES NOT CLOSE, stated because the numbers above are otherwise
-    // reassuring: `relieve_needs` has no call site in src/ — kToiletPeeRelief and
-    // kToiletPooRelief are reachable only from tests. So a trip past ~20 min currently
-    // ends with 0.1 HP/s of overflow and no way to pay it off, and 0.2 HP/s once the
-    // bowel follows ~5 min later. The clock is wired; the drain on it is not.
+    // ЗАКРЫТЫЙ GAP (2026-08-28): у relieve_needs теперь есть вызывающий
+    // (клавиша P), а «застрять на капе» невозможно по построению — клок
+    // сливает давление сам (невольное облегчение), урона от давлений нет.
     Needs stuck = full_clock();
     stuck.pee = kNeedMax;
     stuck.poo = kNeedMax;
-    CHECK(approx(needs_hp_rate(stuck), 2.0f * kOverflowHpPerSec, 1e-6f));
-    CHECK(needs_seconds_to_damage(stuck) == 0.0f);
+    CHECK(needs_hp_rate(stuck) == 0.0f);   // даже рукой поставленный кап нем
+    ReliefResult burst;
+    needs_advance(stuck, kStep, &burst);
+    CHECK(burst.pee >= kNeedMax && burst.poo >= kNeedMax); // слились оба
+    CHECK(stuck.pee < 1.0f && stuck.poo < 1.0f);
 }
 
 // ---------------------------------------------------------------------------

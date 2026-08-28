@@ -324,7 +324,9 @@ void attrition() {
     CHECK(approx(needs_hp_rate(n), 0.8f, 1e-6f));
     n.pee = kNeedMax;
     n.poo = kNeedMax;
-    CHECK(approx(needs_hp_rate(n), 1.0f, 1e-6f));   // all four = exactly 1.0 HP/s
+    // Давления к таблице урона больше не относятся (невольный слив,
+    // 2026-08-28): даже рукой поставленный кап не добавляет ни сотой.
+    CHECK(approx(needs_hp_rate(n), 0.8f, 1e-6f));
 
     // Sleep at zero adds NOTHING to that rate — the no-death-spiral rule.
     Needs sleepy = full_clock();
@@ -783,40 +785,52 @@ void pressure() {
     CHECK(approx(n.pee, 30.0f, 1e-3f));
     static_assert(kPooDigestPerSec < kPeeDigestPerSec, "food lingers, water does not");
 
-    // Overflow caps at 100 and costs kOverflowHpPerSec per failing pressure.
+    // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (закон владельца 2026-08-28): кап — не
+    // состояние, а событие. Давление, дошедшее до 100, клок сливает сам:
+    // бар пуст, слитое отдано наружу, урона от давлений НЕ СУЩЕСТВУЕТ.
     Needs over = full_clock();
     over.pee = 99.0f;
     over.pendingPee = 50.0f;
-    needs_advance(over, 100.0f);
-    CHECK(over.pee == kNeedMax);   // clamped; no backlog kept above 100
-    CHECK((needs_failed_mask(over) & NeedPee) != 0);
-    CHECK(approx(needs_hp_rate(over), kOverflowHpPerSec, 1e-6f));
+    ReliefResult voided;
+    needs_advance(over, 100.0f, &voided);
+    CHECK(approx(voided.pee, kNeedMax, 1e-3f)); // слило полный пузырь
+    CHECK(over.pee < kNeedMax);                  // и бар пошёл заново
+    CHECK((needs_failed_mask(over) & NeedPee) == 0);
+    CHECK(needs_hp_rate(over) == 0.0f);
 
     // Relief reports what actually came off, so "you did not need to" is
     // distinguishable from "that helped" — and it is partial by design.
+    over.pee = kNeedMax - 1.0f; // рукой: осознанный канал до слива
     const ReliefResult r = relieve_needs(over, kToiletPeeRelief, kToiletPooRelief);
     CHECK(approx(r.pee, kToiletPeeRelief, 1e-4f));
     CHECK(r.poo == 0.0f);          // there was nothing to relieve
-    CHECK(approx(over.pee, kNeedMax - kToiletPeeRelief, 1e-4f));
+    CHECK(approx(over.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f));
     CHECK(needs_hp_rate(over) == 0.0f && over.pee > 0.0f);
     const ReliefResult again = relieve_needs(over, 1000.0f, 0.0f);
-    CHECK(approx(again.pee, kNeedMax - kToiletPeeRelief, 1e-4f));   // clamped, honest
+    CHECK(approx(again.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f)); // clamped, honest
     CHECK(over.pee == 0.0f);
     CHECK(relieve_needs(over, 0.0f, 0.0f).pee == 0.0f);
 
-    // End to end: drinking enough water WILL eventually cost you HP. That is the
-    // pacing tax on chugging.
+    // End to end: чаггинг больше не стоит HP — он стоит ЛУЖ. Очередь дожита,
+    // всё, что перелилось за кап, слилось невольно, и МАТЕРИЯ СХОДИТСЯ:
+    // стартовое давление + вся очередь = слитое + оставшееся на баре.
     const ItemId water = first_with_effect(UseEffect::Drink);
     Needs chug = full_clock();
     chug.pee = kStartPeeHi;
+    float queuedChug = 0.0f;
     for (int i = 0; i < 8; ++i) {
         chug.water = 0.0f;   // pretend a long trip between bottles
-        apply_consumable(chug, water, 100);
+        queuedChug += apply_consumable(chug, water, 100).peeQueued;
     }
     CHECK(chug.pendingPee > 0.0f);
-    for (int i = 0; i < 4 * 3600; ++i) needs_advance(chug, kRefPeriod);
-    CHECK(chug.pee == kNeedMax);
-    CHECK((needs_failed_mask(chug) & NeedPee) != 0);
+    ReliefResult leaked;
+    for (int i = 0; i < 4 * 3600; ++i) needs_advance(chug, kRefPeriod, &leaked);
+    CHECK(chug.pendingPee == 0.0f);
+    CHECK(chug.pee < kNeedMax);
+    // Резервы за 4 часа честно иссякли (их урон — не предмет этого блока);
+    // ДАВЛЕНИЕ в маске отказов не появляется никогда.
+    CHECK((needs_failed_mask(chug) & (NeedPee | NeedPoo)) == 0);
+    CHECK(approx(leaked.pee + chug.pee, kStartPeeHi + queuedChug, 0.5f));
 }
 
 void survives_the_body_swap() {
