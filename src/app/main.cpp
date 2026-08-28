@@ -2002,6 +2002,12 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 } // namespace
 
 int main(int argc, char** argv) {
+    // ОТМЕТКА СБОРКИ — первой строкой всякого запуска. Вопрос «тот ли билд
+    // я запустил» стоил владельцу целого круга тестирования 2026-08-28:
+    // рядом с рабочим деревом лежит старый бинарь (gigahrush2_backup), и
+    // отличить их в игре было нечем. Теперь любой лог сам себя датирует.
+    std::fprintf(stderr, "[build] gigahrush2 собран %s %s\n", __DATE__,
+                 __TIME__);
     // --shot FILE [--frames N] [--ride N]: render, capture, exit.
     //
     // Visual work has to be looked at, and grabbing the window through the compositor
@@ -7825,6 +7831,20 @@ int main(int argc, char** argv) {
                     eye.z += game::body_eye_height(pool.height_mm(nrF->id));
             g_focus = game::focus_pick(reg, stack.layer(activeLayer),
                                        activeLayer, eye, aim, doors);
+            // Диагностика прицела В ИГРЕ (владелец: «всё равно молчит»):
+            // раз в игровую секунду — что видит фокус на самом деле.
+            {
+                static std::uint64_t lastSay = 0;
+                if (simTick - lastSay > kSimHz) {
+                    lastSay = simTick;
+                    std::fprintf(stderr,
+                                 "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,"
+                                 "%.2f) portals=%zu -> what=%d dist=%.2f\n",
+                                 eye.x, eye.y, eye.z, aim.x, aim.y, aim.z,
+                                 doors.list.size(),
+                                 static_cast<int>(g_focus.what), g_focus.dist);
+                }
+            }
             if (const char* what = game::focus_prompt(
                     g_focus, stack.layer(activeLayer), doors)) {
                 std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
