@@ -50,6 +50,7 @@
 #include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
+#include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -2358,6 +2359,7 @@ int main(int argc, char** argv) {
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
     std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+    game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
         // 5c: обвес лифтовых порталов — кнопка вызова СНАРУЖИ у проёма,
     // панель ВНУТРИ кабины (оба — пропы-интеракторы строками CSV), и
     // дефолт створок «ЗАКРЫТО, пока не вызвал» (решение владельца:
@@ -4839,12 +4841,22 @@ int main(int argc, char** argv) {
                 // физика/среды видят его без посредника.
                 if (doorWanted) {
                     doorWanted = false;
-                    if (reg.valid(player)) {
+                    // E исполняет РОВНО ПОКАЗАННОЕ: дверь работает, только
+                    // если она и есть цель под прицелом ([game/focus.h]).
+                    if (reg.valid(player) &&
+                        g_focus.what == game::Focus::What::Portal &&
+                        g_focus.portal < doors.list.size()) {
                         const vec3 dpos = reg.get<Transform>(player).pos;
-                        const std::uint32_t did = game::door_toggle_near(
-                            stack.layer(activeLayer), doors, reg, activeLayer,
-                            dpos, doorDirty);
-                        if (did != game::kNoPortal) {
+                        const game::DoorPortal& fp = doors.list[g_focus.portal];
+                        const bool wasClosed =
+                            game::door_closed(stack.layer(activeLayer), fp);
+                        if (wasClosed)
+                            game::door_open(stack.layer(activeLayer), fp,
+                                            doorDirty);
+                        else
+                            game::door_close(stack.layer(activeLayer), fp, reg,
+                                             activeLayer, doorDirty);
+                        {
                             game::NoiseProfile np{10.0f, 1200, 2,
                                                   game::NoiseSource::Door};
                             game::noise_publish(noiseField, activeLayer, dpos,
@@ -5603,19 +5615,14 @@ int main(int argc, char** argv) {
                         // створка открывается (иллюзия приезда — следующий
                         // инкремент); ПАНЕЛЬ в кабине — меню этажей (E, как
                         // всё; клавиша L остаётся дев-дублёром).
-                        if (!handled && activeLayer != kInvalidLayer) {
-                            const game::InteractionHit callHit =
-                                game::find_nearest_interactable(
-                                    reg, player,
-                                    game::Interactable::Kind::LiftCall,
-                                    game::interact_def(
-                                        game::InteractKind::LiftCall)
-                                        .reachM);
-                            if (callHit.hit) {
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::LiftCall) {
+                            {
                                 const int hcx = wrap_macro(static_cast<int>(
-                                    callHit.pos.x / kCellSize));
+                                    g_focus.pos.x / kCellSize));
                                 const int hcy = wrap_macro(static_cast<int>(
-                                    callHit.pos.y / kCellSize));
+                                    g_focus.pos.y / kCellSize));
                                 const int hub = game::fast_hub_near(hcx, hcy);
                                 if (hub >= 0 &&
                                     doors.lift[hub] != game::kNoPortal) {
@@ -5631,20 +5638,13 @@ int main(int argc, char** argv) {
                                 }
                             }
                         }
-                        if (!handled && activeLayer != kInvalidLayer) {
-                            const game::InteractionHit panHit =
-                                game::find_nearest_interactable(
-                                    reg, player,
-                                    game::Interactable::Kind::LiftPanel,
-                                    game::interact_def(
-                                        game::InteractKind::LiftPanel)
-                                        .reachM);
-                            if (panHit.hit) {
-                                shell.toggle(UiWindow::Elevator);
-                                if (shell.window != UiWindow::None)
-                                    input.set_mouselook(false);
-                                handled = true;
-                            }
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::LiftPanel) {
+                            shell.toggle(UiWindow::Elevator);
+                            if (shell.window != UiWindow::None)
+                                input.set_mouselook(false);
+                            handled = true;
                         }
 
                         }
@@ -7805,125 +7805,30 @@ int main(int argc, char** argv) {
         // borderless auto-sized ImGui window so it floats cleanly.
         if (showHud && shell.playing() && reg.valid(player)) {
             const vec3 ppos = reg.get<Transform>(player).pos;
+            // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца
+            // 2026-08-28): под прицелом ровно одна цель, текст — из
+            // таблицы интерактивов (или состояния двери), клавиша — из
+            // биндов. Рукописная лестница if-ов, где каждый интерактив
+            // был прописан дважды (и кнопки лифта остались без таблички),
+            // умерла здесь.
             const char* promptText = nullptr;
-            // Prompts name the BOUND key, not a literal: rebind `door` in the
-            // menu and every hint follows.
             char promptBuf[96];
-            auto set_prompt = [&](const char* action, const char* what) {
+            const auto& camF = reg.get<CameraTag>(player);
+            const float cyaw = camF.yaw, cpit = camF.pitch;
+            const vec3 aim{std::cos(cpit) * std::cos(cyaw),
+                           std::cos(cpit) * std::sin(cyaw), std::sin(cpit)};
+            vec3 eye = ppos;
+            if (const auto* nrF = reg.try_get<game::NpcRef>(player))
+                if (pool.valid(nrF->id))
+                    eye.z += game::body_eye_height(pool.height_mm(nrF->id));
+            g_focus = game::focus_pick(reg, stack.layer(activeLayer),
+                                       activeLayer, eye, aim, doors);
+            if (const char* what = game::focus_prompt(
+                    g_focus, stack.layer(activeLayer), doors)) {
                 std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
-                              bind_key(action), what);
+                              bind_key("interact"), what);
                 promptText = promptBuf;
-            };
-
-            // Дверной проём в досягаемости — промпт единой интеракции.
-            {
-                const std::uint32_t nd = game::door_query_near(doors, ppos);
-                // Диагностика UX (жалоба владельца «промпт не возникает»):
-                // первые срабатывания — вслух, чтобы лог отвечал, ловит ли
-                // радиус вообще.
-                static int doorPromptSaid = 0;
-                if (nd != game::kNoPortal && doorPromptSaid < 3) {
-                    ++doorPromptSaid;
-                    std::fprintf(stderr,
-                                 "[door] prompt: portal %u near (%.1f,%.1f,%.1f)\n",
-                                 nd, ppos.x, ppos.y, ppos.z);
-                }
-                if (nd != game::kNoPortal)
-                    set_prompt("interact",
-                               game::door_closed(stack.layer(activeLayer),
-                                                 doors.list[nd])
-                                   ? "OPEN DOOR"
-                                   : "CLOSE DOOR");
             }
-
-
-            // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit termHit = game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM);
-                if (termHit.hit) {
-                    set_prompt("interact", game::interact_def(game::InteractKind::Terminal).prompt);
-                }
-            }
-
-            // ElectricalShield proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit shieldHit = game::find_nearest_interactable(
-                    reg, player,
-                    game::Interactable::Kind::ElectricalShield,
-                    game::interact_def(game::InteractKind::ElectricalShield).reachM);
-                if (shieldHit.hit) {
-                    const vec3& sp = shieldHit.pos;
-                    int scx = static_cast<int>(sp.x / kCellSize);
-                    int scy = static_cast<int>(sp.y / kCellSize);
-                    int scz = static_cast<int>(sp.z / kCellSize);
-                    if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                        set_prompt("interact",
-                                   game::interact_def(game::InteractKind::ElectricalShield).prompt);
-                    }
-                }
-            }
-
-            // Corpse proximity — §18 find_nearest Kind::Corpse. Empty searched
-            // corpses deactivate Interactable in loot_corpse_interact, so they
-            // drop out of the query without a manual Corpse view scan.
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit corpseHit =
-                    game::find_nearest_interactable(
-                        reg, player, game::Interactable::Kind::Corpse,
-                        game::interact_def(game::InteractKind::Corpse).reachM);
-                if (corpseHit.hit && reg.valid(corpseHit.entity)) {
-                    if (const game::Corpse* corpse =
-                            reg.try_get<game::Corpse>(corpseHit.entity)) {
-                        set_prompt("interact",
-                                   corpse->searched
-                                       ? "LOOT CORPSE (REMAINDER)"
-                                       : game::interact_def(game::InteractKind::Corpse).prompt);
-                    } else {
-                        set_prompt("interact",
-                                   game::interact_def(game::InteractKind::Corpse).prompt);
-                    }
-                }
-            }
-
-            // Nearby resident for body possession (P key)
-            if (!promptText) {
-                for (auto npcEnt : reg.view<const game::NpcRef, const Transform>()) {
-                    if (reg.get<const Transform>(npcEnt).layer != activeLayer) continue;
-                    if (reg.all_of<CameraTag>(npcEnt)) continue; // skip self
-                    const game::NpcId id = reg.get<const game::NpcRef>(npcEnt).id;
-                    if (!pool.valid(id) || !pool.alive(id)) continue;
-                    const vec3& npos = reg.get<const Transform>(npcEnt).pos;
-                    if (wrap_dist2(ppos, npos, kWorldExtent) < 6.0f * 6.0f) {
-                        set_prompt("possess", "POSSESS SURVIVOR");
-                        break;
-                    }
-                }
-            }
-
-            // Standing in a shaft. Ranked BELOW doors and bodies on purpose: the
-            // shaft is 3x3 and never urgent, while a door you are pressed against
-            // or a survivor you can take over both are.
-            if (!promptText) {
-                const int pcx = wrap_macro(static_cast<int>(ppos.x / kCellSize));
-                const int pcy = wrap_macro(static_cast<int>(ppos.y / kCellSize));
-                if (game::fast_hub_near(pcx, pcy) >= 0)
-                    set_prompt("elevator", "ELEVATOR");
-            }
-
-            // Bladder/Bowel pressure relief fallback
-            if (!promptText) {
-                if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
-                    if (pool.valid(nrg->id)) {
-                        const auto& nd = pool.needs(nrg->id);
-                        if (nd.pee >= 30.0f || nd.poo >= 30.0f) {
-                            set_prompt("interact", "RELIEVE BLADDER/BOWEL");
-                        }
-                    }
-                }
-            }
-
             if (promptText) {
                 ImGuiIO& io = ImGui::GetIO();
                 ImGui::SetNextWindowPos(
