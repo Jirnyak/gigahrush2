@@ -1017,6 +1017,8 @@ void floor_records_survive_a_restart() {
     generate_floor(w, floorZ, floor_spec(kind), 1337u);
 
     Registry reg;
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), floorZ, floor_spec(kind),
+                  1337u);
     const LayerId layer = 0;
     const std::uint32_t made =
         spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);

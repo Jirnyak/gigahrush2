@@ -33,14 +33,6 @@ namespace packs_detail {
 // pre-change: 59 of 194 heads, and never a clump above 4).
 inline constexpr float kGroupRadiusCells = 3.0f;
 
-// A head's room index on the generator's own wall lattice. The stride comes from
-// floor_room_stride, so this can never disagree with where the walls actually are.
-inline int room_of(const vec3& pos, int stride, int roomsPerAxis) {
-    const int cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    const int cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    return (cy / stride) * roomsPerAxis + (cx / stride);
-}
-
 inline float flat_dist(const vec3& a, const vec3& b) {
     const float dx = wrap_delta_f(a.x, b.x, kWorldExtent);
     const float dy = wrap_delta_f(a.y, b.y, kWorldExtent);
@@ -100,12 +92,6 @@ static void test_packs_all() {
         generate_floor(w, 4, spec, 11u);
         const std::uint8_t danger = danger_for_hostility(spec.hostility);
         const FloorTheme theme = theme_for_kind(FloorKind::Derelict);
-        const int stride = floor_room_stride(FloorKind::Derelict);
-        const int roomsPerAxis = kMacroDim / stride;
-        const int roomCount = roomsPerAxis * roomsPerAxis;
-        CHECK(stride > 0 && (kMacroDim % stride) == 0); // the module's pitch
-        CHECK(roomCount == roomsPerAxis * roomsPerAxis);
-
         Registry reg;
         // НАСТОЯЩИЕ комнаты этажа в reg.ctx (rooms-object E): спавн селит
         // паки в объявленных модулем комнатах; (number, seed) — те же, что у
@@ -292,14 +278,8 @@ static void test_packs_all() {
         CHECK(spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, 0,
                                FloorKind::Derelict) == n);
 
-        // The room pitch is read from the generator, not guessed. Geometry comes
-        // from the one registered module, so every kind reports the SAME pitch,
-        // and it tiles the torus.
-        const int pitch = floor_room_stride(FloorKind::Residential);
-        CHECK(pitch > 0 && (kMacroDim % pitch) == 0);
-        CHECK(floor_room_stride(FloorKind::Commercial) == pitch);
-        CHECK(floor_room_stride(FloorKind::Industrial) == pitch);
-        CHECK(floor_room_stride(FloorKind::Derelict) == pitch);
+        // Решётка умерла (rooms-object F): «шаг комнат» больше не существует,
+        // зоны объявляет модуль и их пины живут в suite_rooms_object.
     }
 
     { // ---- the destination is the PACK's, not the entity's ------------------

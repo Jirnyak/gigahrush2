@@ -127,7 +127,7 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // is built to prevent. [samosbor.h] [fast_travel.h] SAVCLOCK
 //
 // Version 11: Needs grows `hpBank` (+4 on the wire) — the crowd heal bank behind
-// the IntentHeal -> Medical affordance ([room_zone.h] TABLE 2). Version 10 saves
+// the IntentHeal heal bank (умершая комнатная регенерация). Version 10 saves
 // are rejected, same standing rule as above.
 //
 // Version 12: the crafting bank shrinks from nine axes to eight (-4 on the wire)

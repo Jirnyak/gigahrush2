@@ -135,6 +135,6 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed);
 // How many containers a floor should hold, before the cap. Scales with the room count
 // rather than with depth: a deeper floor is RICHER, not fuller, and conflating the two
 // is how a deep floor becomes a supermarket.
-std::uint32_t container_budget(FloorKind kind);
+std::uint32_t container_budget(std::size_t roomCount);
 
 } // namespace giga::game

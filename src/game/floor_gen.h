@@ -103,16 +103,6 @@ void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
 // (build_world_half). Чистит маску слота и кладёт свою.
 void stamp_lift_protection(World& world);
 
-// The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
-// (stride-1)^2 interior between four wall lines; the wall lines themselves sit on
-// every cell whose x or y is a multiple of the stride.
-//
-// Exported rather than copied because the mob spawner places packs BY ROOM and has
-// to agree with the generator exactly. A duplicated stride table would keep
-// compiling and start placing "rooms" straddling wall lines the day the module's
-// geometry is retuned — a silent, seed-dependent drift.
-int floor_room_stride(FloorKind kind);
-
 // ---------------------------------------------------------------------------
 // Gravity frame — the module's declared regime, and axis-generic ground queries
 // ---------------------------------------------------------------------------
@@ -147,41 +137,11 @@ void floor_ground_cell(const World& w, int u, int v, int& x, int& y, int& z);
 int floor_ground_z();
 
 // ---------------------------------------------------------------------------
-// Room taxonomy — what KIND of room a lattice cell is
+// РЕШЁТОЧНАЯ ТАКСОНОМИЯ КОМНАТ УМЕРЛА (rooms-object F, 2026-08-28): хеш
+// «вида» по (kind, number, rx, ry) заменён НАСТОЯЩИМИ комнатами модуля —
+// game/room.h (RoomId, roomAt, теги, глаголы). floor_room_mask/stride/
+// bit_index и RoomBit не существуют; грепный гейт в check_source_rules.
 // ---------------------------------------------------------------------------
-// `RoomBit` ([mob_table.h]) is authored on all 69 mob rows (`rooms`) and on 356 of the
-// 446 item rows (`spawn_rooms`) — and measured, those 356 are EXACTLY the rows with a
-// non-zero spawn weight, so a room filter can never drop a rollable item for want of
-// authoring. Until this existed **nothing read either column**: every caller of
-// `item_weight_on_floor` passed a mask of 0, and `MobDef::roomMask` had no reader at
-// all. The generator is the only thing that can close that, because it is the only
-// thing that knows a room's identity — it lays the lattice, so room (rx, ry) is a
-// place before anything is spawned into it.
-//
-// One BIT per room, not a set: a room is a kitchen or a store room, and a room that
-// is both filters like neither. Which bits a kind may produce is a per-FloorKind
-// weight table in the .cpp, so retuning a floor family's character is a row edit.
-//
-// Keyed on (kind, number, rx, ry) and deliberately NOT on the world seed. Every
-// consumer must agree about what room 5 is, and the two live consumers are handed
-// DIFFERENT seeds by main.cpp (0xC0FFEE-derived for containers, 0xB0B5EED-derived for
-// mobs) while neither is handed the worldgen seed. Keying on a seed would therefore
-// have made the container system and the mob system disagree about the same room —
-// the exact silent, per-consumer drift the note on floor_room_stride above warns
-// about. The cost is that a floor label's taxonomy repeats across runs; the layout it
-// is stamped onto does not.
-//
-// Returns a single-bit mask, never 0.
-std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry);
-
-// How many bits RoomBit defines (Corridor .. Hq). Lives here rather than in
-// mob_table.h so the generated-table header stays untouched; the static_assert in
-// floor_gen.cpp pins it against the enum.
-inline constexpr std::size_t kFloorRoomBits = 11;
-
-// Index of a single-bit room mask, 0..kFloorRoomBits-1, or -1 for 0 / out of range.
-// Consumers use it to key a per-room-kind lookup table without a switch.
-int floor_room_bit_index(std::uint16_t mask);
 
 // One opening this generator punches through an interior wall — the cell a DOOR
 // occupies ([door.h]). Positions are macro cells, so a byte each.
@@ -202,7 +162,7 @@ struct Doorway {
 // appending to `out`; returns how many were added. Empty for a pillar-mode kind
 // (an open plate has no wall segments to open).
 //
-// Exported for the same reason floor_room_stride is: a second consumer has to
+// Exported so a second consumer has to
 // agree with the generator EXACTLY. door.cpp needs the doorway cells at floor
 // load, and the two ways to get them are both traps —
 //

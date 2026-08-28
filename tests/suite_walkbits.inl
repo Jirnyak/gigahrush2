@@ -33,7 +33,7 @@
 
 #include "game/floor_gen.h"   // generate_floor — a real carved floor, not a toy
 #include "game/floor_spec.h"  // FloorKind, floor_spec
-#include "game/room_zone.h"   // bake_room_zones + the body-law oracle helpers
+#include "game/body_walk.h"   // телесный оракул — выживший rooms-object F
 #include "world/clearance.h"  // ClearanceField — нав-оракул (occupancy)
 #include "world/macro_grid.h" // SubMask — the mutation test carves masks directly
 #include "world/nav.h"        // bake_coarse/bake_fine
@@ -144,13 +144,9 @@ void nav_bake_through_field_is_bit_identical(const World& w) {
     CHECK(f1.nearest.size() == kMacroCells);
 }
 
-void rooms_bake_through_bits_is_bit_identical(const World& w) {
-    const FloorKind kind = FloorKind::Residential;
-    RoomZones z1;
-    bake_room_zones(w.grid(), kind, 0, z1);
-    CHECK(z1.ready()); // the comparison below must not be zero-against-zero
-
-    // Hand-built BODY oracle from the grid-form law.
+void body_oracle_is_bit_identical(const World& w) {
+    // Зонная половина умерла (rooms-object F: flow-полей нет); закон тела —
+    // выживший, и его две формы обязаны совпасть побитово.
     WalkBits body;
     body.words.assign(WalkBits::kWords, 0u);
     for (int z = 0; z < kMacroDim; ++z)
@@ -162,16 +158,6 @@ void rooms_bake_through_bits_is_bit_identical(const World& w) {
     WalkBits built;
     build_body_walk_bits(w.grid(), built);
     CHECK(built.words == body.words);
-
-    RoomZones z2;
-    bake_room_zones(body, kind, 0, z2);
-    CHECK(z2.baked == z1.baked);
-    CHECK(z2.kind == z1.kind);
-    CHECK(z2.number == z1.number);
-    for (std::size_t bi = 0; bi < kFloorRoomBits; ++bi) {
-        CHECK(z1.flow[bi] == z2.flow[bi]);
-        CHECK(z1.nearRoom[bi] == z2.nearRoom[bi]);
-    }
 }
 
 // Mutate real cells in every direction the laws can flip, patch the resident
@@ -270,7 +256,7 @@ void test_walkbits_all() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     walkbits_test::nav_bake_through_field_is_bit_identical(w);
-    walkbits_test::rooms_bake_through_bits_is_bit_identical(w);
+    walkbits_test::body_oracle_is_bit_identical(w);
     // Last: it carves the floor the identity tests just measured.
     walkbits_test::patch_equals_rebuild(w);
 }

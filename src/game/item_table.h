@@ -38,7 +38,6 @@
 
 #include "game/inventory.h"  // Inventory/ItemSlot — carried-weight reader below
 #include "game/verb_table.h" // kVerbCount — вектор глаголов предмета (S12.3)
-#include "game/mob_table.h"  // RoomBit — items and mobs share the room taxonomy
 
 namespace giga::game {
 
@@ -111,8 +110,9 @@ struct ItemDef {
     // not build.
     std::uint32_t massG;        //  4
     std::uint16_t spawnWeight;  //  8  milli-weight, 0..50,000; 0 = never random
-    std::uint16_t roomMask;     // 10  RoomBit bitmask — where it is found
-    std::int16_t useA;          // 12  primary use magnitude, signed (-6 .. 60)
+    // roomMask УМЕР (rooms-object F, S12.2: вида комнаты нет) — «где предмет
+    // водится» решают модуль и глаголы, не общая таксономия.
+    std::int16_t useA;          // 10  primary use magnitude, signed (-6 .. 60)
     // 1..65535. Was u8 at offset 16 with a pad byte at 23; widened for the
     // RUBLE row (money stacks to the honest u16 ceiling, [inventory.h]) and
     // moved up beside the other u16s, which is what keeps the row at 28 B
@@ -236,6 +236,6 @@ std::uint8_t economy_band(int floorZ);
 
 // Spawn weight of `id` on a floor, after depth gating. Returns 0 when the item
 // cannot appear there at all (weight 0, or wrong room).
-std::uint32_t item_weight_on_floor(ItemId id, int floorZ, std::uint16_t roomMask);
+std::uint32_t item_weight_on_floor(ItemId id, int floorZ);
 
 } // namespace giga::game

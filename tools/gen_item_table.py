@@ -57,12 +57,6 @@ USE = {
     "TechnicalSpirit": "TechnicalSpirit", "Unpack": "Unpack",
     "UnsealSample": "UnsealSample", "RedeemCoupon": "RedeemCoupon",
 }
-ROOM = {
-    "CORRIDOR": "Corridor", "COMMON": "Common", "STORAGE": "Storage",
-    "KITCHEN": "Kitchen", "BATHROOM": "Bathroom", "LIVING": "Living",
-    "OFFICE": "Office", "MEDICAL": "Medical", "PRODUCTION": "Production",
-    "SMOKING": "Smoking", "HQ": "Hq",
-}
 RESIST_COLS = ["resist_kinetic", "resist_buckshot", "resist_energy",
                "resist_fire", "resist_psi"]
 
@@ -109,21 +103,6 @@ def spawn_weight(row, i):
             "0.35 there is 350 here. Write the milli value, or 0 to mean never."
             % (i, row["id"], text))
     return v
-
-
-def room_mask(row, i):
-    text = (row.get("spawn_rooms") or "").strip()
-    if not text:
-        return "0"
-    bits = []
-    for tok in text.split("|"):
-        tok = tok.strip()
-        if not tok:
-            continue
-        if tok not in ROOM:
-            die("row %d (%s): unknown room %r" % (i, row["id"], tok))
-        bits.append("u16(RoomBit::%s)" % ROOM[tok])
-    return " | ".join(bits) if bits else "0"
 
 
 def cpp_string(s):
@@ -211,14 +190,13 @@ def main():
 
         out.append(
             "    // [%d] id %d  %s  (%d g)\n"
-            "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d, %d,\n"
+            "    ItemDef{ %d, %d, %d, %d, %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s),\n"
             "             u8(UseEffect::%s), {%s}, %d, %d, %d, %d, %d },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
                spawn_weight(r, i),
-               room_mask(r, i),
                num(r, "use_a", i, -32768, 32767),
                # stack_max is u16 since the ruble row (money stacks to the
                # honest u16 ceiling); field order follows ItemDef, where the
@@ -336,7 +314,6 @@ namespace {
 constexpr std::uint8_t u8(ItemCategory v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(EquipSlot v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(UseEffect v) { return static_cast<std::uint8_t>(v); }
-constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 } // namespace
 
 """
@@ -354,11 +331,10 @@ std::uint8_t economy_band(int floorZ) {
     return 4;
 }
 
-std::uint32_t item_weight_on_floor(ItemId id, int floorZ, std::uint16_t roomMask) {
+std::uint32_t item_weight_on_floor(ItemId id, int floorZ) {
     if (!item_valid(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.spawnWeight == 0) return 0;                    // never spawns randomly
-    if (roomMask != 0 && (d.roomMask & roomMask) == 0) return 0;  // wrong room
 
     const std::int32_t cap = kLootValueCap[economy_band(floorZ)];
     if (d.value <= cap) return d.spawnWeight;

@@ -43,7 +43,7 @@
 #include "game/npc_pool.h"
 #include "game/prop_system.h"
 #include "game/role.h"
-#include "game/room_zone.h"
+#include "game/room.h"      // НАСТОЯЩИЕ комнаты: roomAt = раскраска клеток
 #include "game/samosbor.h"
 #include "world/destruct.h"
 #include "world/gravity.h"
@@ -486,7 +486,7 @@ struct WorldContext {
         dummyBus.init();
         seed_wall_interactables(ecs, stack.layer(loadedLayer), loadedLayer, fseed);
         seed_ceiling_lights(ecs, stack.layer(loadedLayer), loadedLayer, fseed);
-        seed_room_furniture(ecs, stack.layer(loadedLayer), loadedLayer, spec.kind, floorNum);
+        // seed_room_furniture умер (rooms-object F, S10: мебель ставит модуль).
 
         return true;
     }
@@ -650,6 +650,11 @@ void render_mode_zones(Image& img, WorldContext& ctx, const ToolOptions& opt) {
     const World& world = ctx.stack.layer(ctx.loadedLayer);
     const MacroGrid& grid = world.grid();
     FloorKind kind = ctx.catalog.resolve(ctx.loadedFloor).kind;
+    // НАСТОЯЩИЕ комнаты модуля (rooms-object F): мир — разноцветные клеточные
+    // зоны, буквально; цвет — хеш RoomId, гермотег подсвечен.
+    FloorRooms fr;
+    rooms_declare(fr, ctx.loadedFloor, floor_spec(kind),
+                  floor_seed_like_main(ctx.loadedFloor));
 
     for (std::uint32_t py = 0; py < img.height; ++py) {
         int cy = static_cast<int>((static_cast<std::uint64_t>(py) * kMacroDim) / img.height);
@@ -663,32 +668,19 @@ void render_mode_zones(Image& img, WorldContext& ctx, const ToolOptions& opt) {
                 continue;
             }
 
-            std::uint16_t rbit = room_bit_at(kind, ctx.loadedFloor, cx, cy);
-            if (rbit == 0 || rbit == room_bit(RoomBit::Corridor)) {
-                // Corridor
-                img.set_pixel(px, py, 21, 101, 192); // Deep Blue #1565C0
-            } else if (rbit == room_bit(RoomBit::Living)) {
-                img.set_pixel(px, py, 141, 110, 99); // Warm Slate/Brown #8D6E63
-            } else if (rbit == room_bit(RoomBit::Kitchen)) {
-                img.set_pixel(px, py, 239, 108, 0); // Orange #EF6C00
-            } else if (rbit == room_bit(RoomBit::Bathroom)) {
-                img.set_pixel(px, py, 0, 137, 123); // Teal #00897B
-            } else if (rbit == room_bit(RoomBit::Common)) {
-                img.set_pixel(px, py, 255, 160, 0); // Amber Gold #FFA000
-            } else if (rbit == room_bit(RoomBit::Office)) {
-                img.set_pixel(px, py, 57, 73, 171); // Indigo #3949AB
-            } else if (rbit == room_bit(RoomBit::Medical)) {
-                img.set_pixel(px, py, 0, 229, 255); // Cyan #00E5FF
-            } else if (rbit == room_bit(RoomBit::Production)) {
-                img.set_pixel(px, py, 216, 67, 21); // Rust #D84315
-            } else if (rbit == room_bit(RoomBit::Storage)) {
-                img.set_pixel(px, py, 69, 90, 100); // Steel #455A64
-            } else if (rbit == room_bit(RoomBit::Smoking)) {
-                img.set_pixel(px, py, 123, 31, 162); // Purple #7B1FA2
-            } else if (rbit == room_bit(RoomBit::Hq)) {
-                img.set_pixel(px, py, 194, 24, 91); // Crimson #C2185B
+            // Зона клетки — НАСТОЯЩАЯ комната (raskraska roomAt): цвет из
+            // хеша RoomId (стабилен между кадрами), гермотег — тёплый сдвиг.
+            const RoomId rid = room_at(fr, cx, cy, opt.sliceZ >= 0 ? opt.sliceZ : 3);
+            if (rid == kNoRoom) {
+                img.set_pixel(px, py, 21, 101, 192); // коридор/проход
             } else {
-                img.set_pixel(px, py, 14, 35, 51);
+                const Room* rm = room_of(fr, rid);
+                const std::uint32_t h = giga::hash_u32(rid * 0x9E3779B9u);
+                std::uint8_t r = static_cast<std::uint8_t>(64 + (h & 0x7F));
+                std::uint8_t g = static_cast<std::uint8_t>(64 + ((h >> 8) & 0x7F));
+                std::uint8_t b = static_cast<std::uint8_t>(64 + ((h >> 16) & 0x7F));
+                if (rm != nullptr && (rm->tags & kRoomTagHermetic) != 0) r = 255;
+                img.set_pixel(px, py, r, g, b);
             }
         }
     }

@@ -4,8 +4,7 @@
 
 #include "ecs/components.h"    // Transform — «тело в проёме»
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
-#include "game/floor_gen.h"    // floor_doorways, lift_entrance, floor_room_mask
-#include "game/mob_table.h"    // RoomBit — гермо-таксономия (Living/Medical/Hq)
+#include "game/floor_gen.h"    // floor_doorways, lift_entrance
 #include "game/prop_system.h"  // spawn_prop_from_id — обвес кнопки/панели
 #include "world/destruct.h"    // materialize_sub_page, kSubMaterialName
 #include "world/medium.h"      // medium_recount — агрегат клетки после штампа

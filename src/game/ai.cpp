@@ -1,4 +1,6 @@
 #include "game/ai.h"
+#include "world/nav.h"     // flee-маршруты (шёл транзитом через room_zone.h)
+#include "world/lattice.h" // LatticeNode — укрытия у решётки
 #include <algorithm>
 
 #include <cmath>
@@ -14,7 +16,6 @@
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
-#include "game/room_zone.h"   // room affordance table + baked fields (§27 legs a,b)
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
 #include "world/gravity.h"    // GravityFrame / regime_frame — the steering plane
@@ -586,8 +587,7 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
-               const void* doorsDead, const World* world,
-               const RoomZones* rooms) {
+               const void* doorsDead, const World* world) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -601,10 +601,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     const bool useMem = (mem != nullptr) && cfg.memory;
     // Rooms are OFF unless a bake landed AND that bake found something. A floor
     // whose mix rolls no kitchen, no bathroom and no flat bakes nothing
-    // ([room_zone.h]), so `ready()` is false and this pass is bit-for-bit the
+    // (умершие flow-поля), so this pass is bit-for-bit the
     // pre-rooms one — the degradation is a property of the data, not a branch.
-    const bool useRooms = (rooms != nullptr) && rooms->ready();
-    const int roomStride = useRooms ? floor_room_stride(rooms->kind) : 0;
     // The gravity FRAME, hoisted: the regime is a property of the world, not of a
     // body. Every steering vector below is built in the tangent plane of this
     // frame — under NegZ that reduces to the old {dx, dy, 0} literals bit-for-bit.
@@ -872,211 +870,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     viaMemory = true;
                 }
             }
-        } else if (useRooms) {
-            // --- THE ERRAND: a non-flee intent that has somewhere to be --------
-            // This is §27 leg (a). Everything about it is a TABLE read: which room
-            // kind satisfies this intent, where the nearest one is, and what one
-            // second inside it does. No intent is named in this branch — adding
-            // "work happens in a Production room" is a row in kRoomAffordance and
-            // not a line here ([room_zone.h]).
-            std::uint16_t want = intent_room_mask(brain.currentIntent);
-            // A role STATES its own home and workplace ([role.h] TABLE 1): a Duty
-            // body works in HQ, a Medic in Medical, and the affordance row is the
-            // roleless default. REPLACE, not AND — Production & Hq is 0, and an
-            // AND would quietly cancel every specialist's errand instead of
-            // redirecting it. A zero mask (Looter's homeRooms) delegates, exactly
-            // like an intent with no row. The fields exist because kRoomFieldMask
-            // folds the role rooms in ([room_zone.h]).
-            {
-                const RoleTraits& rrt = role_traits(static_cast<RoleId>(roleId));
-                if (brain.currentIntent == IntentSleep) want = rrt.homeRooms;
-                else if (brain.currentIntent == IntentWork && rrt.workRooms != 0)
-                    want = rrt.workRooms;
-            }
-            const std::uint16_t here =
-                want != 0 ? room_bit_at(rooms->kind, rooms->number, cx, cy) : 0;
-            // Stall probe, read BEFORE this pass overwrites Velocity — see AiTick.
-            // SETTLED BODIES ARE EXCLUDED and the exclusion is the whole point: a
-            // body at its seat is stopped ON PURPOSE, so counting it as stalled made
-            // the metric read 64 of 64 pinned at the exact moment all 64 had
-            // arrived. A stall counter that fires on success is worse than none.
-            // ...AND GROUNDED. A body in free fall has near-zero horizontal
-            // speed by physics, not by refusal — an errand route that crosses
-            // an open lattice well drops the walker, it splashes into the pit
-            // and climbs back out (measured: the faller still reaches its
-            // kitchen). Counting the fall as a stall made the probe fire on
-            // WORKING physics — a stall counter that fires on gravity is as
-            // wrong as one that fires on arrival (the settled exclusion above).
-            const auto* grav = reg.try_get<GravityAffected>(e);
-            const bool airborne = grav != nullptr && !grav->grounded;
-            if (want != 0 && (here & want) == 0 && !airborne &&
-                brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
-                const vec3& prev = view.get<Velocity>(e).v;
-                const vec3 walk = tangent(prev.x, prev.y, prev.z);
-                const float sp2 = walk.x * walk.x + walk.y * walk.y + walk.z * walk.z;
-                if (sp2 < kErrandSpeed * kErrandSpeed * 0.0625f) {
-                    ++out.errandStalled;
-                    // Место затыка — вслух (первые несколько раз за процесс):
-                    // счётчик без адреса заставлял гадать, ОБ ЧТО упёрлось
-                    // тело — а «где» и есть вся диагностика этого класса.
-                    static int stallSaid = 0;
-                    if (stallSaid < 6) {
-                        ++stallSaid;
-                        const Transform& st = view.get<Transform>(e);
-                        std::fprintf(stderr,
-                                     "[ai] errand STALL at cell (%d,%d,%d) pos "
-                                     "(%.1f,%.1f,%.1f) want=0x%x\n",
-                                     cx, cy,
-                                     static_cast<int>(st.pos.z / kCellSize),
-                                     st.pos.x, st.pos.y, st.pos.z, want);
-                    }
-                }
-            }
-
-            if (want != 0 && (here & want) != 0) {
-                // ALREADY IN THE RIGHT ROOM — so the goal is no longer the room, it
-                // is the MICRO-GOAL: this body's own seat among the room's nine
-                // interior cells, hashed from its identity so a hungry crowd
-                // spreads across the kitchen instead of converging on one voxel.
-                // Stateless by construction; see the [room_zone.h] banner.
-                const int rx = cx / roomStride;
-                const int ry = cy / roomStride;
-                int ox = 0, oy = 0;
-                // Seated AT the furniture when the room has any: a stove, a pan, a
-                // cot ([room_zone.h] kRoomFurniture). The same table the furnisher
-                // placed them from, so the body walks to a thing that is really
-                // there — which is what makes the whole errand VISIBLE instead of
-                // being a number in stderr.
-                //
-                // CLAIMED THIS TICK, RE-CLAIMED EVERY TICK ([problems.md] §27):
-                // the loop below rotates to the next seat while the hashed one is
-                // already on this tick's claim list. No persistent owner state —
-                // the list dies with the tick, and because this view is iterated
-                // in a stable order (nothing here emplaces or destroys, the same
-                // structural fact the sweep banner states), the same body wins
-                // the same contest every tick: no flicker, and a vacated better
-                // seat is re-won on the very next tick.
-                int sx = 0, sy = 0;
-                for (int attempt = 0; attempt < kSeatClaimAttempts; ++attempt) {
-                    room_seat_offset(idSeed, here, rx, ry, roomStride, ox, oy,
-                                     attempt);
-                    sx = rx * roomStride + ox;
-                    sy = ry * roomStride + oy;
-                    // The seat's CELL, all three axes: kMacroDim is 128, so 7
-                    // bits per axis pack losslessly. Dropping cz would make two
-                    // storeys of one kitchen column contest a single seat.
-                    const std::uint32_t seatKey =
-                        static_cast<std::uint32_t>(sx) |
-                        (static_cast<std::uint32_t>(sy) << 7) |
-                        (static_cast<std::uint32_t>(cz & 127) << 14);
-                    bool taken = false;
-                    for (int i = 0; i < numSeatClaims; ++i) {
-                        if (seatClaims[i] == seatKey) { taken = true; break; }
-                    }
-                    if (!taken) {
-                        if (numSeatClaims < kSeatClaimCap)
-                            seatClaims[numSeatClaims++] = seatKey;
-                        break;
-                    }
-                    // All attempts taken: keep the last candidate — a shared seat
-                    // is the pre-claims behaviour, not a new failure mode.
-                }
-
-                // A seat inside solid geometry is unreachable, and a body that
-                // cannot reach its seat would push into the wall for the rest of
-                // the session. Standing anywhere in the right room is what the
-                // recovery actually keys on ([room_zone.h] room_bit_at), so an
-                // unreachable seat degrades to "settled where you are" rather than
-                // to a permanent shove.
-                if (grid.mask(sx, sy, cz).full()) {
-                    owned = true; // settled: hold still, the room does the work
-                } else {
-                    const float tx = (static_cast<float>(sx) + 0.5f) * kCellSize;
-                    const float ty = (static_cast<float>(sy) + 0.5f) * kCellSize;
-                    // Seat targets are (x, y) data — the 2D caveat above: the
-                    // along-gravity delta is honestly zero, not measured.
-                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
-                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
-                                            0.0f);
-                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
-                    owned = true;
-                    if (d2 > kSeatArriveM * kSeatArriveM)
-                        dir = to * (1.0f / std::sqrt(d2));
-                    // else: dir stays zero — SETTLED. Owning the body and writing a
-                    // zero is the point, not an oversight: handing it back to
-                    // wander here would walk it out of the kitchen mid-meal, which
-                    // is the one failure mode this whole leg exists to prevent.
-                }
-                if (owned) ++out.settled;
-            } else if (want != 0) {
-                // NOT THERE YET — descend the room kind's baked field.
-                const RoomRoute r = room_route(*rooms, want, cx, cy, cz);
-                if (r.bit != 0) {
-                    const int ddx = wrap_delta(cx, r.targetX, kMacroDim);
-                    const int ddy = wrap_delta(cy, r.targetY, kMacroDim);
-                    out.errandDistCells += static_cast<std::uint32_t>(
-                        (ddx < 0 ? -ddx : ddx) + (ddy < 0 ? -ddy : ddy));
-                }
-                if (r.bit != 0 && (r.dir >> 1) != gf.axis) {
-                    // A step in the WALKING PLANE. kNavDir pairs 0..5 are ±x/±y/±z;
-                    // the pair whose axis is the gravity axis (r.dir >> 1 == gf.axis)
-                    // is the vertical one, and that component of Velocity belongs to
-                    // physics. Under NegZ this is the old `r.dir < 4` exactly.
-                    //
-                    // AIM AT THE NEXT CELL'S CENTRE, NOT ALONG THE AXIS, and the
-                    // difference is not cosmetic — it was measured. Steering by the
-                    // raw axis vector lets a body keep whatever lateral offset it
-                    // entered the cell with, and the clearance the field guarantees
-                    // is the CENTRED 4x4 footprint ([room_zone.h]), so an off-centre
-                    // body clips the jamb of the very doorway the field routed it
-                    // through. Through the real collider that took arrivals from
-                    // 64/64 down to 23/64. Aiming at the centre makes the walk
-                    // self-correcting: every step pulls the body back onto the line
-                    // the clearance test actually cleared.
-                    const int nx = wrap_macro(cx + nav::kNavDir[r.dir][0]);
-                    const int ny = wrap_macro(cy + nav::kNavDir[r.dir][1]);
-                    const int nz = wrap_macro(cz + nav::kNavDir[r.dir][2]);
-                    const float tx = (static_cast<float>(nx) + 0.5f) * kCellSize;
-                    const float ty = (static_cast<float>(ny) + 0.5f) * kCellSize;
-                    const float tz = (static_cast<float>(nz) + 0.5f) * kCellSize;
-                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
-                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
-                                            wrap_delta_f(tr.pos.z, tz, kWorldExtent));
-                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
-                    if (d2 > kMinFleeGrad2) {
-                        dir = to * (1.0f / std::sqrt(d2));
-                        owned = true;
-                        ++out.errandStep;
-                    }
-                } else if (r.bit != 0) {
-                    // THE VERTICAL STEP, and it is not a rare case: the field is
-                    // 6-connected, so a route may legitimately begin by going up a
-                    // storey, and a walking body cannot climb one. `wander_step`
-                    // measured the same thing (110 of 120 ground-storey residents
-                    // get a vertical first step) and takes the same fallback: walk
-                    // toward the target room's COLUMN and let physics resolve what
-                    // it meets. `targetX/targetY` is exact, not a guess — it is the
-                    // nearest room of that kind, brute-forced at bake time.
-                    const float tx = (static_cast<float>(r.targetX) + 0.5f) * kCellSize;
-                    const float ty = (static_cast<float>(r.targetY) + 0.5f) * kCellSize;
-                    // Room columns are (x, y) data — the 2D caveat above.
-                    const vec3 to = tangent(wrap_delta_f(tr.pos.x, tx, kWorldExtent),
-                                            wrap_delta_f(tr.pos.y, ty, kWorldExtent),
-                                            0.0f);
-                    const float d2 = to.x * to.x + to.y * to.y + to.z * to.z;
-                    if (d2 > kMinFleeGrad2) {
-                        dir = to * (1.0f / std::sqrt(d2));
-                        owned = true;
-                        ++out.errandColumn;
-                    }
-                } else {
-                    ++out.errandLost;
-                }
-                // r.bit == 0 means no room of that kind is REACHABLE from here (a
-                // sealed pocket, or a floor that has none). Fall through to wander.
-            }
-            if (owned) ++out.roomOwned;
         }
+        // ЭРРАНД-ВЕТКА УМЕРЛА (rooms-object F): flow-полей по виду комнаты
+        // больше нет (S13.4 — вторая навигация). Комнатную наводку интентов
+        // возвращает agent-goals честным скором S13 по объявленным комнатам;
+        // до него не-flee интенты делегируют wander_step ниже.
+
 
         ++out.byIntent[brain.currentIntent < kIntentCount
                            ? brain.currentIntent

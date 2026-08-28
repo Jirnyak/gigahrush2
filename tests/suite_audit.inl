@@ -1,4 +1,6 @@
 #include "core/tick.h"
+#include "game/room.h"        // FloorRooms — ящики селятся в зонах
+#include "game/floor_gen.h"   // rooms_declare
 // Audit suite — one test per defect found by reading the whole of src/game and
 // src/render after the 45-commit burst. Compiled as its own translation unit by
 // tests/audit_test.cpp — NOT included into game_test.cpp any more, because sharing an
@@ -980,6 +982,8 @@ static void travel_keeps_crate_records() {
     generate_floor(w, floorZ, floor_spec(kind), 1337u);
 
     Registry reg;
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), floorZ, floor_spec(kind),
+                  1337u);
     const LayerId layer = 0;
     const std::uint32_t made =
         spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);

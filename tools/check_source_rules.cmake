@@ -462,6 +462,25 @@ _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
 _giga_csv_vs_header("data/verbs.csv" "src/game/verb_table.h"
     "kVerbCount[ \t]*=[ \t]*([0-9]+)" "verb")
 
+# ---- Rule: решёточная таксономия комнат МЕРТВА (rooms-object F) -------------
+# Комнаты — объекты модуля (game/room.h, roomAt-раскраска); хеш «вида» по
+# решётке, RoomBit и flow-поля по виду не воскресают ни под каким именем.
+# Проверять код, не комментарии-эпитафии: только строки с вызовом/типом.
+foreach(_dead_sym floor_room_mask floor_room_stride RoomBit bake_room_zones)
+    foreach(_f IN LISTS GIGA_ALL_FILES)
+        _giga_read_lines("${_f}" _dead_lines)
+        set(_ln 0)
+        foreach(_l IN LISTS _dead_lines)
+            math(EXPR _ln "${_ln} + 1")
+            _giga_restore_line(_l)
+            if(_l MATCHES "${_dead_sym}[ \t]*\\(" OR _l MATCHES "${_dead_sym}::")
+                list(APPEND GIGA_FAILURES
+                    "${_f}:${_ln}: '${_dead_sym}' воскрес — решёточная таксономия комнат умерла (rooms-object F, CANON S12.2); комнаты объявляет модуль в game/room.h.")
+            endif()
+        endforeach()
+    endforeach()
+endforeach()
+
 # ---- Rule 8: incomplete toroidal triple (AGENTS.md: x/y/z wrap) -------------
 # The world wraps on all three axes, and the failure mode this rule exists for
 # is PARTIAL wrapping: a distance computed with wrap_delta_f on two axes and a

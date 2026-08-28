@@ -114,7 +114,7 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
                 cum.reserve(64);
                 for (std::size_t i = 0; i < kItemCount; ++i) {
                     const ItemId cid = static_cast<ItemId>(i + 1);
-                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber);
                     if (w == 0) continue;
                     total += w;
                     pool.push_back(cid);
@@ -199,7 +199,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                 cum.reserve(64);
                 for (std::size_t i = 0; i < kItemCount; ++i) {
                     const ItemId cid = static_cast<ItemId>(i + 1);
-                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber);
                     if (w == 0) continue;
                     total += w;
                     pool.push_back(cid);

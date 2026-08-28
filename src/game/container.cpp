@@ -1,12 +1,13 @@
 #include "game/container.h"
 
+#include <cstdio>
 #include <vector>
 
 #include "core/wrap.h"
 #include "core/rng.h"
 #include "ecs/components.h"
 #include "game/embody.h"   // NpcRef
-#include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
+#include "game/floor_gen.h" // floor_cell/floor_standable — гравифрейм размещения
 #include "game/npc_pool.h"
 #include "game/room_supply.h" // живой хук: взятое покидает запас комнаты
 #include "game/prop_system.h"
@@ -68,17 +69,15 @@ ContainerKind pick_kind(FloorKind fk, std::uint32_t h) {
 // A cell a body can stand in, with something solid under it. The second half matters:
 // Derelict drops 12% of its slab cells, and a container spawned over a hole falls out
 // of the world.
-// Candidates for one container: every item that can appear on this floor, in this
-// ROOM, under this container kind's share of the band cap. Returns the cumulative
-// weight total; `pool`/`cum` are parallel and must come in empty.
-//
-// Split out of roll_container because it is now called TWICE — see the fallback there.
+// Candidates for one container: every item that can appear on this floor under
+// this container kind's share of the band cap. Returns the cumulative weight
+// total; `pool`/`cum` are parallel and must come in empty.
 std::uint32_t build_pool(ContainerKind kind, int floorZ, std::int32_t cap,
-                         std::uint16_t roomMask, std::vector<ItemId>& pool,
+                         std::vector<ItemId>& pool,
                          std::vector<std::uint32_t>& cum) {
     std::uint32_t total = 0;
     for (ItemId id = 1; id <= kItemCount; ++id) {
-        const std::uint32_t w = item_weight_on_floor(id, floorZ, roomMask);
+        const std::uint32_t w = item_weight_on_floor(id, floorZ);
         if (w == 0) continue;
         const ItemDef& d = item_def(id);
         if (d.value > cap) continue;
@@ -135,28 +134,9 @@ void roll_cash(Container& c, ContainerKind kind, std::int32_t cap,
     }
 }
 
-// Roll one container's contents against a specific ROOM.
-//
-// **The fallback is the whole difficulty of this function, and it is measured.**
-// `item_weight_on_floor` returns 0 when the room mask does not match, and the
-// container kind then filters by CATEGORY on top, so the two masks intersect and the
-// intersection is empty far more often than either alone. Candidate counts, over
-// data/items.csv with the real depth decay and the real per-kind value share:
-//
-//              PublicBox  RoomStash  Safe  WeaponCrate      (floor 0 / floor -26)
-//   unmasked      13/46     112/344  234/355     6/64
-//   Corridor       0/0         3/11    8/11      0/1
-//   Bathroom       3/8        18/24   23/24      0/0
-//   Living         0/1        24/38   34/38      1/3
-//   Hq             0/7         9/98   47/101     0/31
-//
-// A PublicBox in a CORRIDOR has ZERO legal items at every depth — and container.h
-// documents a public box as exactly a corridor-and-lobby fixture, so the strict filter
-// would empty the one placement the kind exists for. So: try the room, and fall back to
-// the floor's whole table when the room has nothing to offer THIS kind. The taxonomy
-// shapes what a room holds; it never gets to make a room hold nothing.
-Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
-                       std::uint16_t roomMask) {
+// Roll one container's contents off the floor's table (комнатная маска умерла,
+// rooms-object F — тематику места дадут модуль и глаголы).
+Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed) {
     Container c;
     c.kind = static_cast<std::uint8_t>(kind);
 
@@ -170,12 +150,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
     // uses, so one item table drives both.
     std::vector<ItemId> pool;
     std::vector<std::uint32_t> cum;
-    std::uint32_t total = build_pool(kind, floorZ, cap, roomMask, pool, cum);
-    if (total == 0 && roomMask != 0) {
-        pool.clear();
-        cum.clear();
-        total = build_pool(kind, floorZ, cap, 0, pool, cum);
-    }
+    std::uint32_t total = build_pool(kind, floorZ, cap, pool, cum);
     if (total == 0) {           // no legal item here; the cash still rides
         roll_cash(c, kind, cap, seed);
         return c;
@@ -259,7 +234,7 @@ Container roll_in_room(ContainerKind kind, int floorZ, std::uint32_t seed,
 
 } // namespace
 
-std::uint32_t container_budget(FloorKind kind) {
+std::uint32_t container_budget(std::size_t roomCount) {
     // Scaled on the room count, thinned — and then FLOORED, which is the correction
     // that matters.
     //
@@ -273,9 +248,12 @@ std::uint32_t container_budget(FloorKind kind) {
     // Scaling on rooms rather than on depth stays deliberate: a deeper floor should be
     // RICHER, not fuller, and conflating the two turns the bottom of the building into
     // a supermarket. The floor is a floor, not a depth bonus.
-    const int stride = floor_room_stride(kind);
-    const int rooms = (kMacroDim / stride) * (kMacroDim / stride);
-    std::uint32_t n = static_cast<std::uint32_t>(rooms) / 6u;
+    //
+    // Знаменатель — НАСТОЯЩИЕ комнаты модуля (rooms-object F): ~ящик на 16
+    // комнат; вызывающий и так капит бюджет (main: 64). Пол kContainerFloorMin
+    // держит редкокомнатные этажи (blame: 256 лобби) экономикой, не ошибкой
+    // округления.
+    std::uint32_t n = static_cast<std::uint32_t>(roomCount / 16u);
     if (n < kContainerFloorMin) n = kContainerFloorMin;
     return n;
 }
@@ -285,46 +263,46 @@ Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed) {
     // room to name: the tests that pin the value cap, and any future consumer that
     // rolls a crate outside the floor lattice. Mask 0 means "the whole floor table",
     // which is the behaviour every call site had before the taxonomy existed.
-    return roll_in_room(kind, floorZ, seed, 0);
+    return roll_in_room(kind, floorZ, seed);
 }
 
 std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
                                      int floorNumber, FloorKind kind, LayerId layer,
                                      std::uint32_t seed, std::uint32_t cap) {
     const MacroGrid& g = world.grid();
-    const int stride = floor_room_stride(kind);
-    const int perAxis = kMacroDim / stride;
-    std::uint32_t want = container_budget(kind);
+    (void)kind;
+    // НАСТОЯЩИЕ комнаты этажа (rooms-object F): ящик селится в объявленной
+    // модулем комнате — случайная комната, случайная клетка её бокса; зона
+    // несёт и ярус, так что «любой storey» получается из самих комнат.
+    const FloorRooms* fr = rooms_in_ctx(reg);
+    if (fr == nullptr || fr->list.empty()) {
+        std::printf("[crates] floor %d: no declared rooms — spawn skipped\n",
+                    floorNumber);
+        return 0;
+    }
+    std::uint32_t want = container_budget(fr->list.size());
     if (cap && want > cap) want = cap;
 
     std::uint32_t made = 0;
     for (std::uint32_t i = 0; i < want; ++i) {
         const std::uint32_t h = giga::hash_u32(seed ^ (i * 0x85ebca6bu));
-        // A room, then a cell inside it. Room interiors are offset off the lattice
-        // lines, which is what keeps containers out of the walls themselves.
-        const int rx = static_cast<int>((h % static_cast<std::uint32_t>(perAxis)));
-        const int ry = static_cast<int>(((h >> 8) %
-                                        static_cast<std::uint32_t>(perAxis)));
-        const int ox = 2 + static_cast<int>((h >> 16) %
-                                            static_cast<std::uint32_t>(
-                                                stride > 4 ? stride - 3 : 1));
-        const int oy = 2 + static_cast<int>((h >> 24) %
-                                            static_cast<std::uint32_t>(
-                                                stride > 4 ? stride - 3 : 1));
-        // ANY storey, and only where a body could actually reach it. The cell
-        // comes from the module's GRAVITY FRAME ([floor_gen.h]): the two room
-        // draws are tangent coordinates, and the HEIGHT coordinate is drawn
-        // over the whole axis — the torus has no privileged storey, so crates
-        // land on every floor of the tower, not only the arrival one. A few
-        // tries per crate because most height draws land inside a slab.
+        const Room& rm =
+            fr->list[h % static_cast<std::uint32_t>(fr->list.size())];
+        const RoomBox& bx =
+            fr->boxes[rm.boxFirst +
+                      giga::hash_u32(h ^ 0x51ED270Bu) % rm.boxCount];
         int cx = 0, cy = 0, cz = 0;
         bool spotFound = false;
         for (std::uint32_t t = 0; t < 6 && !spotFound; ++t) {
             const std::uint32_t hh = giga::hash_u32(h ^ ((t + 1u) * 0x9E3779B9u));
-            const int ch =
-                static_cast<int>(hh % static_cast<std::uint32_t>(kMacroDim));
-            floor_cell(world, wrap_macro(rx * stride + ox),
-                       wrap_macro(ry * stride + oy), ch, cx, cy, cz);
+            cx = wrap_macro(bx.x + static_cast<int>(
+                                       (hh >> 7) %
+                                       static_cast<std::uint32_t>(bx.sx)));
+            cy = wrap_macro(bx.y + static_cast<int>(
+                                       (hh >> 19) %
+                                       static_cast<std::uint32_t>(bx.sy)));
+            cz = wrap_macro(bx.z + static_cast<int>(
+                                       hh % static_cast<std::uint32_t>(bx.sz)));
             spotFound = floor_standable(world, cx, cy, cz);
         }
         if (!spotFound) continue;
@@ -373,12 +351,11 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         Entity e = spawn_prop_from_id(reg, world, pos, anchor,
                                       PropId::SupplyCrate, layer);
         if (e == entt::null) continue;
-        // Маска «вид комнаты» умерла (S12.2, rooms-object E): содержимое
-        // катится без комнатного фильтра — 0 у roll_in_room и раньше значил
-        // «не фильтровать». Тематику места дадут модуль и глаголы, не вид.
+        // «Вид комнаты» мёртв (S12.2, rooms-object F): содержимое катится по
+        // этажной таблице; тематику места дадут модуль и глаголы, не вид.
         reg.emplace<Container>(
             e, roll_in_room(pick_kind(kind, giga::hash_u32(h ^ 0x5bf03635u)), floorNumber,
-                            giga::hash_u32(h ^ 0xc2b2ae35u), /*roomMask=*/0));
+                            giga::hash_u32(h ^ 0xc2b2ae35u)));
         ++made;
     }
     return made;

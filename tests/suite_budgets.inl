@@ -32,7 +32,6 @@
 
 #include "core/tick.h"
 #include "game/floor_gen.h"
-#include "game/room_zone.h"
 #include "game/npc_pool.h"
 #include "game/combat.h"      // CarveProposalQueue
 #include "world/nav.h"
@@ -93,39 +92,9 @@ static void nav_footprint_is_what_the_header_claims() {
 // (floor_gen.cpp), so the true worst case is ~12.6 MiB even if EVERY kind gets an
 // affordance row. 16 MiB leaves that headroom and still fails loudly if somebody
 // makes the fields per-sub-voxel or adds a second plane per bit.
-static void room_zone_footprint() {
-    World w;
-    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+// room_zone_footprint УМЕР (rooms-object F): flow-полей нет, бюджет зон
+// заменил roomAt u16 = 4 МиБ на этаж (замер в suite_rooms_object).
 
-    RoomZones z;
-    const auto t0 = std::chrono::steady_clock::now();
-    bake_room_zones(w.grid(), FloorKind::Residential, 0, z);
-    const auto t1 = std::chrono::steady_clock::now();
-    const double bakeMs =
-        std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-    CHECK(z.ready());
-    check_budget("room_zones_bytes", static_cast<double>(z.resident_bytes()),
-                 16.0 * 1024.0 * 1024.0, "B");
-
-    // Per-bit cost, asserted rather than assumed: one dense byte per macro cell
-    // plus the room lattice. This is the number Docs/specs/08 §4.1 got wrong by
-    // three orders of magnitude (it said the field was the 32x32 lattice), so it
-    // is worth an assertion and not a comment.
-    int bakedBits = 0;
-    for (int b = 0; b < static_cast<int>(kFloorRoomBits); ++b)
-        if ((z.baked & static_cast<std::uint16_t>(1u << b)) != 0) ++bakedBits;
-    CHECK(bakedBits > 0);
-    const std::size_t perBit = z.resident_bytes() / static_cast<std::size_t>(bakedBits);
-    CHECK(perBit >= kMacroCells);           // at least the dense byte plane
-    CHECK(perBit <= kMacroCells + 65536u);  // and nothing like a second one
-
-    // Bake time is generous ON PURPOSE: this runs on whatever machine ctest runs
-    // on, and a tight time bound is a flaky test, which is worse than no test.
-    // 4000 ms guards against an accidental O(n^2) or a per-bit walkability pass,
-    // not against a slow laptop — measured cost is tens of milliseconds.
-    check_budget("room_bake_ms", bakeMs, 4000.0, "ms");
-}
 
 // --- 3. The macro population: 2^20 rows is the stated goal -------------------
 //
@@ -235,7 +204,6 @@ static void carve_queue_overflow_is_counted_not_silent() {
 static void test_budgets_all() {
     using namespace budgets_test;
     nav_footprint_is_what_the_header_claims();
-    room_zone_footprint();
     pool_cost_per_head();
     carve_queue_overflow_is_counted_not_silent();
 }

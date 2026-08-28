@@ -52,12 +52,9 @@ struct TickClock {
 };
 
 void sla_holds_on_a_real_floor() {
-    // Residential: комнатный микс даёт настоящие room-поля, так что
-    // посекционный свап rooms проверяется на непустых данных.
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
 
-    RoomZones rooms;
     RebakeScheduler s;
     s.set_rebake_threads(2);
 
@@ -69,10 +66,9 @@ void sla_holds_on_a_real_floor() {
     s.set_light_table(nullptr, 0, 63, 1);
 
     // --- Fresh: текущая семантика входа на этаж --------------------------
-    s.start_fresh(w.grid(), FloorKind::Residential, 0, rooms, gen);
+    s.start_fresh(w.grid(), FloorKind::Residential, 0, gen);
     CHECK(s.baking());
     CHECK(!s.ready());    // живой граф освобождён — толпа стояла бы, не блуждала
-    CHECK(rooms.ready()); // rooms синхронны: целы до первого тика-читателя
 
     bool freshSwap = false;
     // Страховочный потолок 16384 тиков (~131 с wall) — чтобы сломанный свап
@@ -161,9 +157,7 @@ void sla_holds_on_a_real_floor() {
     const std::uint8_t freshStep = nav::route_step(
         s.coarse(), s.fine(), ivec3{nbx, nby, nbz}, ivec3{tx, ty, tz});
     CHECK(freshStep != nav::kFlowNone); // маршрут в проём существует
-    // Посекционный свап rooms отработал: поля комнат живы (двойной буфер не
-    // оставил вызывающему пустышку).
-    CHECK(rooms.ready());
+    // Секция rooms умерла (rooms-object F); свап нава проверен выше.
 
     // --- Дельта-патч света (carve-hitch.md §3): дешёвый цикл обгоняет
     // полный, а полный всё равно приходит. Часы те же — сим-тики.

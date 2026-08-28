@@ -119,21 +119,8 @@ enum class MobPackMode : std::uint8_t { Loner = 0, Crowd, Territorial, Roamer, C
 // the day a monster row does author `grenade`, it costs a CSV cell and no code.
 enum class ProjType : std::uint8_t { Bullet = 0, Web, Grenade, Count };
 
-// Room kinds a monster may be placed in. 11 of the reference's RoomTypes are
-// actually referenced by ecology rows.
-enum class RoomBit : std::uint16_t {
-    Corridor   = 1u << 0,
-    Common     = 1u << 1,
-    Storage    = 1u << 2,
-    Kitchen    = 1u << 3,
-    Bathroom   = 1u << 4,
-    Living     = 1u << 5,
-    Office     = 1u << 6,
-    Medical    = 1u << 7,
-    Production = 1u << 8,
-    Smoking    = 1u << 9,
-    Hq         = 1u << 10,
-};
+// RoomBit УМЕР (rooms-object F, S12.2: вида комнаты не существует) — экология
+// «моб живёт в кухнях» вернётся глаголом «логово» и политикой модуля (S13.7).
 
 // The six signed floor anchors the reference's ecology rows key off. Kept as a
 // bitmask so a row's habitat is one AND, not a list walk. Note these are anchors
@@ -168,7 +155,6 @@ struct MobDef {
     // --- warm: read on spawn / on shot ------------------------------------
     std::uint16_t projSpeedMmps;   // 14  cells/s * 1000, 0 = melee only
     std::uint16_t spawnWeightX10;  // 16  ecology.spawnWeight * 10, 0..85
-    std::uint16_t roomMask;        // 18  RoomBit bitmask
     // --- ranged: 13 of 69 kinds; zero on the rest ------------------------
     std::uint16_t shotRangeMm;     // 20  cells * 1000, 0 = melee only
     std::uint16_t minRangeMm;      // 22  dead zone; inside it a ranged kind closes

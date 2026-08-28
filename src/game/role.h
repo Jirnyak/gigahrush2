@@ -25,7 +25,6 @@
 
 #include "core/rng.h"        // hash3, rand_below
 #include "game/floor_spec.h" // FloorKind
-#include "game/mob_table.h"  // RoomBit — homeRooms / workRooms are masks
 #include "game/npc_pool.h"   // NpcId
 
 namespace giga::game {
@@ -36,7 +35,7 @@ enum class RoleId : std::uint8_t {
     Resident = 0, // ~70% residential; the baseline all others diverge from
     Duty,         // 2-5%; wants HQ and patrol; the future consumer of route_step
     Medic,        // 1-3%; the only role that acts on ANOTHER body's hpBank
-    Looter,       // 3-8%; grows with |floor|; homeRooms = 0 (sleeps anywhere)
+    Looter,       // 3-8%; grows with |floor|; sleeps anywhere
     Cultist,      // 0% residential; up to 40% on Derelict
     kRoleCount,
 };
@@ -50,33 +49,19 @@ struct RoleTraits {
     float sociability;    // multiplier on IntentSocial score; Cultist > 1.0
     float scavengeDrive;  // additive term: scavenging from local room recall
     float careDrive;      // additive term on IntentHeal from nearby wounded
-    std::uint16_t homeRooms; // RoomBit mask; narrows IntentSleep's destination
-    std::uint16_t workRooms; // RoomBit mask; narrows IntentWork's destination
+    // homeRooms/workRooms УМЕРЛИ (rooms-object F, S12.2): маски вида заменят
+    // ЯКОРЯ (ModuleId, RoomId) на агенте, раздаваемые заселением по
+    // declared-вектору комнат (решение владельца 2026-08-28) — agent-goals.
 };
 
-inline constexpr std::uint16_t role_room_bit(RoomBit b) {
-    return static_cast<std::uint16_t>(b);
-}
-
-// TABLE 1 — 5×7 role traits matrix.
+// TABLE 1 — 5×5 role traits matrix.
 inline constexpr RoleTraits kRoleTraits[kRoleCount] = {
-    //           workDrv patrol social scaveng care  homeRooms / workRooms
-    /* Resident */ { 1.00f, 1.00f, 1.00f, 0.10f, 0.05f,
-                     role_room_bit(RoomBit::Living),
-                     role_room_bit(RoomBit::Common) },
-    /* Duty     */ { 1.00f, 1.50f, 0.60f, 0.05f, 0.20f,
-                     role_room_bit(RoomBit::Living),
-                     role_room_bit(RoomBit::Hq) },
-    /* Medic    */ { 1.00f, 0.20f, 0.80f, 0.10f, 1.00f,
-                     role_room_bit(RoomBit::Living),
-                     role_room_bit(RoomBit::Medical) },
-    /* Looter   */ { 0.20f, 0.10f, 0.40f, 1.00f, 0.00f,
-                     0u,
-                     role_room_bit(RoomBit::Storage) },
-    /* Cultist  */ { 0.60f, 0.40f, 1.20f, 0.30f, 0.10f,
-                     role_room_bit(RoomBit::Living),
-                     static_cast<std::uint16_t>(role_room_bit(RoomBit::Smoking) |
-                                                role_room_bit(RoomBit::Hq)) },
+    //           workDrv patrol social scaveng care
+    /* Resident */ { 1.00f, 1.00f, 1.00f, 0.10f, 0.05f },
+    /* Duty     */ { 1.00f, 1.50f, 0.60f, 0.05f, 0.20f },
+    /* Medic    */ { 1.00f, 0.20f, 0.80f, 0.10f, 1.00f },
+    /* Looter   */ { 0.20f, 0.10f, 0.40f, 1.00f, 0.00f },
+    /* Cultist  */ { 0.60f, 0.40f, 1.20f, 0.30f, 0.10f },
 };
 
 inline constexpr std::size_t kFloorKindCount =
@@ -145,7 +130,7 @@ static_assert(sizeof(PatrolPlan) == 4,
 inline constexpr std::uint32_t kPatrolSalt = 0x70617472u; // "patr"
 
 // Medic constants. The heal credit lands in the PATIENT's Needs::hpBank — the
-// same bank the Medical room feeds ([room_zone.h] TABLE 2), so a medic in a ward
+// same bank (Needs::hpBank), so a medic in a ward
 // stacks with the ward instead of inventing a second heal path. 3 HP/s is ~2× the
 // ward's own rate on a 100-max body: a person beats a room.
 inline constexpr float kMedicReachM        = 2.0f; // metres, one macro cell

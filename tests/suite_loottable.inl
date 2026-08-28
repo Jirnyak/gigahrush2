@@ -45,7 +45,7 @@ constexpr ItemId kSpring              = 392;
 // The catalog roll's own gate, so the suite can assert "the catalog CANNOT produce this"
 // from the same function `drop_mob_loot` calls rather than from a claim in a comment.
 bool catalog_can_produce(ItemId id, int floorZ) {
-    return item_weight_on_floor(id, floorZ, 0) != 0;
+    return item_weight_on_floor(id, floorZ) != 0;
 }
 
 // How often `roll_kind_drop` yields `want` for `kind` on `floorZ`, over `n` seeds. Seeds
@@ -192,7 +192,7 @@ static void test_loottable_all() {
         for (ItemId id = 1; id <= static_cast<ItemId>(kItemCount); ++id) {
             const ItemDef& d = item_def(id);
             if (d.spawnWeight == 0 || d.value <= kLootValueCap[0]) continue;
-            const std::uint32_t w = item_weight_on_floor(id, 0, 0);
+            const std::uint32_t w = item_weight_on_floor(id, 0);
             const std::uint32_t expect = static_cast<std::uint32_t>(
                 static_cast<float>(d.spawnWeight) * band_drop_scale(id, 0));
             CHECK(w + 1 >= expect && expect + 1 >= w);
@@ -450,7 +450,7 @@ static void test_loottable_all() {
         for (int z = -60; z <= 60; z += 10) {
             std::uint32_t any = 0;
             for (ItemId id = 1; id <= static_cast<ItemId>(kItemCount) && any == 0; ++id)
-                any += item_weight_on_floor(id, z, 0);
+                any += item_weight_on_floor(id, z);
             CHECK(any > 0);
         }
     }

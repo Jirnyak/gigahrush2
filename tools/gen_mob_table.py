@@ -33,12 +33,6 @@ TIER = {
 PACK = {"loner": "Loner", "crowd": "Crowd", "territorial": "Territorial",
         "roamer": "Roamer"}
 PROJ = {"": "Bullet", "WEB": "Web"}
-ROOM = {
-    "CORRIDOR": "Corridor", "COMMON": "Common", "STORAGE": "Storage",
-    "KITCHEN": "Kitchen", "BATHROOM": "Bathroom", "LIVING": "Living",
-    "OFFICE": "Office", "MEDICAL": "Medical", "PRODUCTION": "Production",
-    "SMOKING": "Smoking", "HQ": "Hq",
-}
 FLOOR = {"-50": "ZMinus50", "-36": "ZMinus36", "-26": "ZMinus26",
          "0": "Z0", "14": "ZPlus14", "30": "ZPlus30"}
 SHARED = {"foodBait": "FoodBait", "wallBias": "WallBias",
@@ -187,7 +181,7 @@ def main():
         out.append("""    // [{idx}] {rid}
     MobDef{{ {flags},
              {hp}, {dmg}, {spd}, {cd}, {reach},
-             {pspd}, {sw}, static_cast<std::uint16_t>({rooms}),
+             {pspd}, {sw},
              {shot}, {minr}, {wind},
              u8(MobKind::{kind}), u8(MobTier::{tier}),
              u8(MobBehaviour::{beh}), u8(ProjType::{proj}),
@@ -204,7 +198,6 @@ def main():
                 reach=fixed(r["melee_reach_cells"], 1000, "melee_reach_cells", i),
                 pspd=fixed(r["proj_speed_cps"], 1000, "proj_speed_cps", i),
                 sw=fixed_nonzero(r["spawn_weight"], 10, "spawn_weight", i),
-                rooms=mask(r["rooms"], ROOM, "RoomBit", "rooms", i),
                 shot=fixed(r["shot_range_cells"], 1000, "shot_range_cells", i),
                 minr=fixed(r["min_range_cells"], 1000, "min_range_cells", i),
                 wind=fixed(r["windup_s"], 1000, "windup_s", i),
@@ -297,7 +290,6 @@ constexpr std::uint8_t u8(MobBehaviour v) { return static_cast<std::uint8_t>(v);
 constexpr std::uint8_t u8(ProjType v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(MobPackMode v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(FloorBit v) { return static_cast<std::uint8_t>(v); }
-constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 constexpr std::uint32_t f(AiFlag v) { return static_cast<std::uint32_t>(v); }
 } // namespace
 

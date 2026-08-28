@@ -19,21 +19,10 @@ namespace {
 // seeded BLIND (their World may not even exist yet); embodiment resolves each
 // body onto the nearest standable cell (floor_stream.cpp, place_body_safely).
 //
-// Records sit on a 16-cell room lattice at interior offsets {3,6,9,13} — a
-// best-effort spread, same idea.
-constexpr int kRoomStride = 16;        // placement lattice pitch
-constexpr int kRoomsPerAxis = 128 / kRoomStride; // 8
-constexpr int kRoomCount = kRoomsPerAxis * kRoomsPerAxis; // 64
-
-// Interior placement offsets within a room (local 1..15 is air; 0 is the wall).
-// A 4x4 grid of these gives 16 wall-safe slots per room — enough for the
-// densest spec without stacking bodies on one cell.
-// НИ ОДНО смещение не кратно 4: стены ТАКСОНОМИИ комнат (room_bit_at,
-// страйд 4) лежат на кратных 4 линиях — прежняя 12 сажала каждого
-// четвёртого жителя «в стену» (room_bit 0), и errand у него молча не
-// работал (аудит 2026-08-25, К1-4).
-constexpr int kInteriorOff[4] = {3, 6, 9, 13};
-constexpr int kSlotsPerRoom = 16;
+// ВТОРАЯ РЕШЁТКА КОМНАТ УМЕРЛА (rooms-object F): холодные записи сеются
+// слепыми хеш-координатами по всему тору — их World может ещё не существовать,
+// и воплощение всё равно решает place_body_safely. Раздача якорей дома/работы
+// по НАСТОЯЩИМ комнатам (declared-вектор + вместимость) — agent-goals.
 
 // Sample a faction 0..3 from relative weights. Zero total falls back to a flat
 // spread so a blank spec still produces a mixed crowd rather than all faction 0.
@@ -91,7 +80,7 @@ PocketCatalog build_pocket_catalog(int floor) {
         if (static_cast<EquipSlot>(d.equipSlot) != EquipSlot::None) continue;
         if (static_cast<ItemCategory>(d.category) == ItemCategory::Weapon)
             continue;
-        const std::uint32_t w = item_weight_on_floor(id, floor, 0);
+        const std::uint32_t w = item_weight_on_floor(id, floor);
         if (w == 0) continue;
         cat.total += w;
         cat.ids.push_back(id);
@@ -182,16 +171,13 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
 
         std::uint32_t r = hash_u32(seed ^ (i * 0x9e3779b9u));
 
-        // Fill rooms round-robin (even spread), then step through interior slots
-        // within each room. Wraps past kSlotsPerRoom only at very high density.
-        int room = static_cast<int>(i) % kRoomCount;
-        int slot = (static_cast<int>(i) / kRoomCount) % kSlotsPerRoom;
-        int rx = room % kRoomsPerAxis;
-        int ry = room / kRoomsPerAxis;
-        int ox = kInteriorOff[slot % 4];
-        int oy = kInteriorOff[slot / 4];
-        pool.cx(id) = static_cast<std::uint8_t>(rx * kRoomStride + ox);
-        pool.cy(id) = static_cast<std::uint8_t>(ry * kRoomStride + oy);
+        // Слепые хеш-координаты по всему тору (решётка умерла, rooms-object
+        // F): запись холодная, мира может не быть; воплощение решает
+        // place_body_safely, а честные дома раздаст agent-goals.
+        pool.cx(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x27220A95u) %
+                                                static_cast<std::uint32_t>(kMacroDim));
+        pool.cy(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x165667B1u) %
+                                                static_cast<std::uint32_t>(kMacroDim));
         pool.cz(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x51ED270Bu) %
                                                 static_cast<std::uint32_t>(kMacroDim));
 

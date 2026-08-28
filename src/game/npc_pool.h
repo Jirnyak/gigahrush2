@@ -169,7 +169,7 @@ struct Needs {
     float hpDebt = 0.0f;      // sub-1-HP attrition carried between ticks
     // Fractional heal bank — the MIRROR of hpDebt: HP is an integer on the crowd
     // body, so a fractional per-second heal cannot land directly. Medical recovery
-    // accumulates here (percent-of-max, [room_zone.h] TABLE 2) and `needs_step`
+    // accumulates here (percent-of-max; кормит медик, [role.h]) and `needs_step`
     // spills the whole part into `pool.hp()`. Unpaid healing is still owed across
     // a reload for the same reason unpaid damage is.
     float hpBank = 0.0f;

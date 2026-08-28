@@ -12,7 +12,7 @@
 // время бейка просто оставляет bakedGen < worldGen после свапа, и цикл
 // перезапускается по своим таймерам.
 //
-// Живёт в game, а не в world, потому что оркеструет game::RoomZones — world
+// Живёт в game, а не в world, потому что оркеструет игровые бейки — world
 // game не видит ([world/walk_bits.h] о том же для предикатов). Аргумент
 // безопасности AsyncBake сохранён дословно: живые структуры пишутся ровно в
 // одной точке — внутри step() на главном потоке, после того как воркер отдал
@@ -54,7 +54,6 @@
 
 #include "game/floor_spec.h" // FloorKind
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
-#include "game/room_zone.h"   // RoomZones, bake_room_zones, patch_body_walk_bit
 #include "world/macro_grid.h" // MacroGrid — снапшот масок по значению (свет)
 #include "world/clearance.h"  // ClearanceField — гранный оракул нава (occupancy)
 #include "world/nav.h"        // CoarseGraph, FineNav, bake_*
@@ -138,14 +137,14 @@ public:
     // Вход на этаж. Отменяет и джойнит любой бейк в полёте (мгновенно —
     // cancel-гранулярность узловая), строит ВСЕ ТРИ живых битсета с текущей
     // геометрии (двери к этому моменту все открыты — door_build зовётся ДО,
-    // и премиса all-open впекается в битсеты по построению), печёт rooms и
-    // СВЕТ синхронно (хитч 0.1–0.3 с принят владельцем — план light-visibility
+    // и премиса all-open впекается в битсеты по построению), печёт СВЕТ
+    // синхронно (хитч 0.1–0.3 с принят владельцем — план light-visibility
     // §решения; цена печатается строкой [lightvis]), освобождает живой
-    // nav-граф и запускает Fresh-воркер на всех ядрах. `rooms` — живой объект
-    // вызывающего: сюда же лягут и Rebake-свапы. `worldGen` — текущее
-    // поколение мутаций (на входе этажа вызывающий его обнуляет).
+    // nav-граф и запускает Fresh-воркер на всех ядрах. Секция rooms УМЕРЛА
+    // (rooms-object F): комнаты — раскраска roomAt, штампуется rooms_declare
+    // на входе, допекать нечего. `worldGen` — текущее поколение мутаций.
     void start_fresh(const MacroGrid& grid, FloorKind kind, int floorNumber,
-                     RoomZones& rooms, std::uint64_t worldGen);
+                     std::uint64_t worldGen);
 
     // Отменить бейк в полёте (флаг; воркер бросает узлы и выходит, step()
     // выбрасывает мусор). Дешёвая и идемпотентная; start_fresh делает это сам.
@@ -182,7 +181,7 @@ public:
     bool step(std::uint64_t simTick, std::uint64_t worldGen);
 
     // Дренаж CarveResult::dirtyCells — O(1)-патч обоих живых битсетов из живых
-    // масок ([world/nav.h] patch_walk_bit, [game/room_zone.h]
+    // масок ([world/nav.h] patch_walk_bit, [game/body_walk.h]
     // patch_body_walk_bit). Дверные клетки ПРОПУСКАЮТСЯ: оба бейка живут по
     // премисе «все двери открыты» ([game/door.h]), битсеты построены на входе
     // этажа при открытых дверях и обязаны её хранить — честный патч по маске
@@ -245,7 +244,6 @@ public:
 
     // Тайминги последнего завершённого бейка, для HUD и строк [rooms]/[nav] —
     // чтобы цена не превращалась в фольклор (тот же довод, что у AsyncBake).
-    float last_rooms_ms() const { return roomsMs_; }
     float last_coarse_ms() const { return coarseMs_; }
     float last_fine_ms() const { return fineMs_; }
 
@@ -259,13 +257,11 @@ public:
                sizeof(nav::CoarseGraph) * 2 +
                (navClear_.vals.capacity() + snapClear_.vals.capacity()) *
                    sizeof(std::uint16_t) +
-               (bodyBits_.words.capacity() + snapBody_.words.capacity()) *
-                   sizeof(std::uint64_t) +
                (shadowGrid_ ? shadowGrid_->masks().capacity() * sizeof(SubMask) +
                                   shadowGrid_->types().capacity() *
                                       sizeof(CellType)
                             : 0) +
-               pendingRooms_.resident_bytes() + lightVis_.resident_bytes() +
+               lightVis_.resident_bytes() +
                pendingLight_.resident_bytes() +
                (lampsLive_.capacity() + lampsSnap_.capacity()) *
                    sizeof(LightVisLamp) +
@@ -290,12 +286,11 @@ private:
     // Живые оракулы, патчатся дренажом карвов: нав — гранный клиренс (4 МиБ,
     // [world/clearance.h], эпик occupancy 2026-08-26 — прежний битсет
     // `!full()` вёл маршруты сквозь лепленые стены), комнаты — телесный
-    // битсет (256 КиБ, [game/room_zone.h]).
+    // битсет (256 КиБ, [game/body_walk.h]).
     ClearanceField navClear_;
-    WalkBits bodyBits_;
     // Живая сетка этажа вызывающего — источник снапшота масок для секции
     // света (лучи бейка субвоксельные, S2; битсета им мало). Тот же контракт
-    // жизни, что у rooms_: живёт, пока жив этаж; читается ТОЛЬКО на главном
+    // жизни: живёт, пока жив этаж; читается ТОЛЬКО на главном
     // потоке в start_fresh/start_rebake.
     const MacroGrid* liveGrid_ = nullptr;
     LightVisBake lightVis_; // живой запечённый грид видимости
@@ -328,17 +323,14 @@ private:
     // отмене возвращаются (иначе клетки навсегда остались бы грязными на GPU).
     std::vector<std::uint32_t> carvedSinceLight_;
     std::vector<std::uint32_t> carvedSnap_;
-    RoomZones* rooms_ = nullptr; // живые поля комнат вызывающего
     FloorKind kind_ = FloorKind::Residential;
     int floorNumber_ = 0;
 
     // --- сторона воркера: его собственность на время полёта -----------------
     nav::CoarseGraph pendingCoarse_{};
     nav::FineNav pendingFine_{};
-    RoomZones pendingRooms_{};
     LightVisBake pendingLight_{};
     ClearanceField snapClear_; // снапшот по значению (4 МиБ, доли мс)
-    WalkBits snapBody_;        // (256 KiB)
     // ТЕНЕВАЯ копия масок+типов для света (проблема 59.21): ~134 МиБ
     // РЕЗИДЕНТНО («памяти щедро» — решение владельца), копируется ОДИН раз на
     // входе этажа и дальше правится O(1) на карв (sync_shadow из копилки
@@ -357,14 +349,12 @@ private:
     std::atomic<bool> cancel_{false};
     // release-store воркера / acquire-load step() — посекционная передача.
     std::atomic<bool> lightDone_{false};
-    std::atomic<bool> roomsDone_{false};
     std::atomic<bool> coarseDone_{false};
     std::atomic<bool> exited_{false};
     bool running_ = false;
     Mode mode_ = Mode::Idle;
     bool prebuiltPending_ = false; // см. take_prebuilt
     bool lightSwapped_ = false;
-    bool roomsSwapped_ = false;
     bool coarseSwapped_ = false;
 
     // --- планировщик (все часы — сим-тики) ----------------------------------
@@ -378,7 +368,6 @@ private:
     std::uint64_t lastRebakeDurTicks_ = 0; // замер = мин-интервал
     int rebakeThreads_;
 
-    float roomsMs_ = 0.0f;
     float coarseMs_ = 0.0f;
     float fineMs_ = 0.0f;
     float snapCopyMs_ = 0.0f; // O(1)-долив тени на главном потоке (59.21)

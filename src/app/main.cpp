@@ -47,7 +47,6 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
-#include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
@@ -1529,24 +1528,9 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
     if (kind_for_floor(floorNumber) == game::FloorKind::Khrushi)
         count += game::seed_khrushi_props(reg, world, layer, floorNumber, padicSeed, bus);
-    // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
-    // debug overlay: until this landed a "kitchen" was a hash of the room's
-    // coordinates and NOTHING in the world said so, which meant the crowd's whole
-    // errand behaviour ([problems.md] §27) could only be checked by reading stderr.
-    // A stove you can see is what makes "he went to the kitchen" an observation
-    // instead of a claim — and the AI seats bodies AT these same pieces, off the
-    // same table, so the two cannot drift apart.
-    //
-    // Keyed on (kind, number) like every other room-taxonomy consumer, so it needs
-    // no seed of its own and agrees with the container and mob spawners by
-    // construction ([floor_gen.h]).
-    {
-        const std::uint32_t furniture = game::seed_room_furniture(
-            reg, world, layer, kind_for_floor(floorNumber), floorNumber);
-        count += furniture;
-        std::fprintf(stderr, "[rooms] floor %d: %u pieces of furniture placed\n",
-                     floorNumber, furniture);
-    }
+    // Общий мебельный сидер УМЕР (rooms-object F + S10: политика расстановки
+    // в общем коде — дефект). Мебель ставит МОДУЛЬ по своим комнатам, как
+    // свет и антураж; глагольный вектор пропа делает её видимой выбору цели.
 
     // Светоматериалы → статические эмиттеры ([game/light_bake.h]): полный
     // скан поля + кластеризация при каждой постройке этажа, той же геометрии,
@@ -1858,7 +1842,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // there is no ordering contract with door toggles or carves any more, and
 // floor changes cancel-join in tens of ms ([game/rebake.h]).
 void begin_floor_nav(const World& world, int floorNumber,
-                     game::RebakeScheduler& bake, game::RoomZones& rooms) {
+                     game::RebakeScheduler& bake) {
     // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается
     // (бухгалтерия RebakeScheduler сверяет поколения между этажами).
     // Fresh-снапшот просто отражает текущее поколение.
@@ -1871,23 +1855,9 @@ void begin_floor_nav(const World& world, int floorNumber,
     // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
     bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
                          gpu::kGridCellSlots, g_staticTableGen);
-    // The ROOM zones are baked synchronously inside start_fresh, because they
-    // are three multi-source BFS against the async bake's 128 — measured below
-    // in the same line the nav timings print. Synchronous also means the
-    // fields are complete before the first tick that could read them, so
-    // `ai_step` never sees a half-built field.
-    bake.start_fresh(world.grid(), kind, floorNumber, rooms, g_worldGen);
-    // TIMED, and the timing is not decoration. An untimed synchronous bake once cost
-    // ~25 s of load without a single line saying so, and the only symptom anyone saw
-    // was the sim running 4140 ticks per 4000 frames one day and 600 the next
-    // ([room_zone.cpp] bake_walkable). A bake that does not print its own cost hides
-    // exactly the regression it is most likely to cause.
-    std::fprintf(stderr,
-                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident) "
-                 "in %.0f ms\n",
-                 floorNumber, static_cast<int>(kind),
-                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(),
-                 bake.last_rooms_ms());
+    // Секция rooms умерла (rooms-object F): комнаты — раскраска roomAt из
+    // rooms_declare, flow-полей по виду больше нет — на балансе −18 МиБ.
+    bake.start_fresh(world.grid(), kind, floorNumber, g_worldGen);
     // Nav memory AT THE START of the bake, which is the number no document carried
     // and the only moment it can be wrong. The scheduler frees the live flow field
     // in start_fresh (the AsyncBake 260-MiB-peak lesson), so this reads ~1 MiB —
@@ -2274,13 +2244,6 @@ int main(int argc, char** argv) {
     // the background-rebake planner that keeps the bake current as the floor
     // is carved (game/rebake.h).
     game::RebakeScheduler nav;
-    // Room zones for the SAME one live floor ([room_zone.h]): which macro cells are
-    // a kitchen / a bathroom / a flat, and the dense field a body descends to reach
-    // one. ~6 MiB on a Residential floor, 0 on a floor whose room mix rolls none of
-    // them. Baked SYNCHRONOUSLY inside begin_floor_nav — three multi-source BFS
-    // against nav's 128, so it is a rounding error on a load the same function is
-    // already spending seconds on, and a synchronous bake needs no ownership story.
-    game::RoomZones roomZones;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -2488,7 +2451,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(l0);
-            begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
+            begin_floor_nav(stack.layer(l0), 0, nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -3132,7 +3095,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
         dress_lift_portals(nl);
-        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav);
     };
     auto arrive_upload = [&](LayerId nl) {
         voxelMirror.upload_all(stack.layer(nl));
@@ -4098,17 +4061,14 @@ int main(int argc, char** argv) {
                 // really hiding — a commented-out call is not a call, and nothing checks it.
                 // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
                 // door_nearest_shelter (sealed apartments) before −∇danger / memory.
-                // §27 legs (a)+(b): `roomZones` is what lets a winning eat/drink/
-                // toilet/sleep intent actually STEER a body — without it every
-                // non-flee intent hands motion straight back to wander_step and the
-                // scorer is decoration (measured: own_ai=0 of 419).
+                // Эрранды по виду комнаты умерли (rooms-object F) — комнатную
+                // наводку интентов возвращает agent-goals скором S13.
                 game::ai_panic_publish_step(reg, pool, diffusionDriver,
                                             activeWorld, activeLayer, kSimDt);
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
                 danger = activeWorld.fields().find<float>("danger");
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
-                                       &roomZones);
+                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld);
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
                 game::ai_equip_step(reg, pool, activeLayer, simTick);
@@ -4118,24 +4078,16 @@ int main(int argc, char** argv) {
                 if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
                                      simTick - lastAimemLogTick >= 60ull)) {
                     lastAimemLogTick = simTick;
+                    // Эрранд-половина пульса умерла с flow-полями (rooms-object F).
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
-                                 "own_ai=%u own_wander=%u errand=%u settled=%u "
-                                 "step=%u column=%u lost=%u stalled=%u meandist=%.1f "
+                                 "own_ai=%u own_wander=%u "
                                  "recall=%u filed=%u fled=%u "
                                  "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
                                  static_cast<unsigned long long>(simTick),
                                  static_cast<unsigned>(activeLayer),
                                  aiTick.considered, aiTick.replanned,
                                  aiTick.aiOwned, aiTick.wanderOwned,
-                                 aiTick.roomOwned, aiTick.settled,
-                                 aiTick.errandStep, aiTick.errandColumn,
-                                 aiTick.errandLost, aiTick.errandStalled,
-                                 (aiTick.errandStep + aiTick.errandColumn) != 0
-                                     ? static_cast<double>(aiTick.errandDistCells) /
-                                           static_cast<double>(aiTick.errandStep +
-                                                               aiTick.errandColumn)
-                                     : 0.0,
                                  aiTick.recalled, aiTick.remembered,
                                  aiTick.memoryFled, aiMem.rows(),
                                  aiMem.writes(), aiMem.coalesced(),
@@ -6002,17 +5954,14 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // §27 legs (c)+(d): the clock now runs for EVERY embodied body on
-                // the floor, and `roomZones` is the half that keeps that from being
-                // a morgue — a body in a kitchen fills, a body in a bathroom
-                // empties. Passing null here would reinstate the ~14-minute
-                // population wipe [needs.h] blocked the widening on.
+                // Амбиентная регенерация по виду комнаты умерла (rooms-object
+                // F; S12.5 — потребление реальное, вернёт agent-goals).
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
-                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt,
                                          &aiMem, simNow);
                 needsHpLost += needs.hpLost;
                 // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
@@ -6322,7 +6271,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
-                            begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                            begin_floor_nav(stack.layer(nl), currentFloor, nav);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -8771,7 +8720,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
-                        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                        begin_floor_nav(stack.layer(nl), currentFloor, nav);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

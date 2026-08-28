@@ -293,18 +293,10 @@ float needs_speed_scale(const Needs& n);
 // and the camera holder gets `needs_roll` where a resident gets
 // `needs_roll_resident` (see the scope note in this file's banner).
 //
-// `rooms` is the ambient-recovery half ([room_zone.h], `needs.ts:253-280`): a body
-// standing in a kitchen fills, a body in a bathroom empties, and eating queues the
-// digestion that later sends it to one. WITHOUT IT THE WIDENED SCOPE IS A MORGUE —
-// the population dehydrates in ~14 minutes with nothing to drink — so passing null
-// is a legitimate but SHORT-LIVED state (a floor still baking, a unit test measuring
-// the drain in isolation), never the shipping wiring.
-//
-// Only `RoomZones::kind` and `::number` are read here, not the baked fields: what
-// restores a body is STANDING IN THE ROOM, which is a property of the taxonomy and
-// true whether or not anything baked a route to it. That is also why an Industrial
-// floor — which bakes no field at all — still lets a body recover in the one room
-// kind its mix happens to roll.
+// АМБИЕНТНАЯ РЕГЕНЕРАЦИЯ ПО ВИДУ КОМНАТЫ УМЕРЛА (rooms-object F): вида нет
+// (S12.2), потребление реальное (S12.5) — еда берётся из предмета, а не из
+// стояния в «кухне». До agent-goals толпа живёт на медленном клоке нужд;
+// смерть от нужд остаётся честной.
 //
 // NeedsTick's `hpLost` / `failed` / `warned` / `speedScale` / `ticked` stay ABOUT
 // THE CAMERA HOLDER, so every existing consumer (HUD, warning line) reads exactly
@@ -324,9 +316,7 @@ float needs_speed_scale(const Needs& n);
 // are dead.
 //
 // No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
-struct RoomZones; // room_zone.h — incomplete OK; the full type is only needed in the .cpp
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms = nullptr,
                      class AiMemory* mem = nullptr, double now = 0.0);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:

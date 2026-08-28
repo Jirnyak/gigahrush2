@@ -1064,6 +1064,8 @@ static void test_clear_layer_props_spares_containers() {
     game::generate_floor(w, floorZ, game::floor_spec(kind), 1337u);
 
     Registry reg;
+    game::rooms_declare(reg.ctx().emplace<game::FloorRooms>(), floorZ,
+                        game::floor_spec(kind), 1337u);
     const LayerId layer = 0;
     const std::uint32_t made =
         game::spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);

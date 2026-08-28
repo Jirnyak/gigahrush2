@@ -106,7 +106,6 @@ void RebakeScheduler::discard_pending() {
     // реализация вправе отказаться, — не гарантия.
     std::vector<std::uint8_t>().swap(pendingFine_.flow);
     std::vector<std::uint8_t>().swap(pendingFine_.nearest);
-    pendingRooms_ = RoomZones{};
     pendingLight_ = LightVisBake{};
     pendingPatch_ = LightVisPatch{};
     // Карвы отменённого цикла — назад в живой список: выброс оставил бы их
@@ -116,11 +115,9 @@ void RebakeScheduler::discard_pending() {
     carvedSnap_.clear();
     // shadowGrid_ НЕ трогаем: тень — резидент этажа, воркер её только читал.
     lightDone_.store(false, std::memory_order_relaxed);
-    roomsDone_.store(false, std::memory_order_relaxed);
     coarseDone_.store(false, std::memory_order_relaxed);
     exited_.store(false, std::memory_order_relaxed);
     lightSwapped_ = false;
-    roomsSwapped_ = false;
     coarseSwapped_ = false;
 }
 
@@ -129,8 +126,7 @@ void RebakeScheduler::cancel() {
 }
 
 void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
-                                  int floorNumber, RoomZones& rooms,
-                                  std::uint64_t worldGen) {
+                                  int floorNumber, std::uint64_t worldGen) {
     // Любой бейк в полёте — отменить и джойнить. Отмена узловая, так что join
     // здесь — десятки мс, не секунды: это и есть «F9/травел отменяет и едет».
     cancel_.store(true, std::memory_order_relaxed);
@@ -145,14 +141,12 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
 
     kind_ = kind;
     floorNumber_ = floorNumber;
-    rooms_ = &rooms;
 
     // Оба живых оракула — с текущей геометрии, на всех ядрах (build сам
     // parallel_for). Двери к этому моменту все открыты (door_build зовётся до
     // begin_floor_nav и оставляет Open), так что премиса all-open впекается в
     // оракулы по построению — и patch_carved_cells её дальше хранит.
     navClear_.build(grid);
-    build_body_walk_bits(grid, bodyBits_);
     // Свету битсета мало — его лучи субвоксельные (S2): Fresh печёт прямо с
     // живой сетки (мы на главном потоке); фоновые циклы читают ТЕНЬ —
     // резидентную копию, которую sync_shadow дальше правит O(1) на карв
@@ -161,13 +155,8 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     liveGrid_ = &grid;
     shadowGrid_ = std::make_unique<MacroGrid>(grid);
 
-    // Rooms — синхронно, текущая семантика: поля комнат целы до первого тика,
-    // который мог бы их читать, и второй истории владения не существует.
-    {
-        const auto t0 = std::chrono::steady_clock::now();
-        bake_room_zones(bodyBits_, kind, floorNumber, rooms);
-        roomsMs_ = ms_between(t0, std::chrono::steady_clock::now());
-    }
+    // Секция rooms УМЕРЛА (rooms-object F): комнаты — раскраска roomAt,
+    // штампуется rooms_declare на входе; flow-полей по виду больше нет.
 
     // Свет — СИНХРОННО на всех ядрах (решение владельца: хитч Fresh 0.1–0.3 с
     // принят; альтернатива «войти со всеми грязными клетками» стоила бы
@@ -268,7 +257,6 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     // угодно — воркер его не видит, а расхождение честно останется как
     // bakedGen < worldGen после свапа.
     snapClear_.vals = navClear_.vals;
-    snapBody_.words = bodyBits_.words;
     // Тень догоняет мир O(1)-доливом — копия 134 МиБ мертва (59.21).
     const auto tSnap = std::chrono::steady_clock::now();
     sync_shadow();
@@ -332,15 +320,11 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             if (!cancel_.load(std::memory_order_relaxed))
                 lightDone_.store(true, std::memory_order_release);
         }
+        // Секция rooms умерла (rooms-object F) — фоновому циклу остались
+        // coarse/fine нава и свет.
         const auto t0 = clock::now();
-        bake_room_zones(snapBody_, kind, number, pendingRooms_, threads,
-                        &cancel_);
-        const auto t1 = clock::now();
+        const auto t1 = t0;
         (void)tL;
-        if (!cancel_.load(std::memory_order_relaxed)) {
-            roomsMs_ = ms_between(t0, t1);
-            roomsDone_.store(true, std::memory_order_release);
-        }
         nav::bake_coarse(snapClear_, kBodyClearanceSub, pendingCoarse_,
                          threads, &cancel_);
         const auto t2 = clock::now();
@@ -356,11 +340,11 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             // Строка-замер: по ней уточняются kWorstBakeTicks и производные
             // SLA-константы на реальном железе (S11: вывод, не назначение).
             std::fprintf(stderr,
-                         "[rebake] floor %d gen %llu baked: rooms %.0f + "
-                         "coarse %.0f + fine %.0f ms = %.1f s @ %d threads | "
+                         "[rebake] floor %d gen %llu baked: coarse %.0f + "
+                         "fine %.0f ms = %.1f s @ %d threads | "
                          "shadow sync %.2f ms MAIN\n",
                          number, static_cast<unsigned long long>(snapGen_),
-                         roomsMs_, coarseMs_, fineMs_,
+                         coarseMs_, fineMs_,
                          ms_between(t0, t3) / 1000.0f, threads, snapCopyMs_);
         }
         exited_.store(true, std::memory_order_release);
@@ -478,12 +462,6 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 lightSwapped_ = true;
                 carvedSnap_.clear(); // долг покрыт (полным или патчем)
             }
-            if (!roomsSwapped_ &&
-                roomsDone_.load(std::memory_order_acquire)) {
-                *rooms_ = std::move(pendingRooms_);
-                pendingRooms_ = RoomZones{};
-                roomsSwapped_ = true;
-            }
             if (!coarseSwapped_ &&
                 coarseDone_.load(std::memory_order_acquire)) {
                 coarse_ = pendingCoarse_;
@@ -521,8 +499,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
 
     // 3. Планировщик старта фонового цикла.
     if (!ready()) return false; // нет живого графа — Fresh ещё не свапнулся
-    if (rooms_ == nullptr || !navClear_.built() || !bodyBits_.built())
-        return false;
+    if (!navClear_.built()) return false;
     if (bakedGen_ == worldGen) return false; // запечённое актуально
     const bool quiet = simTick - lastMutTick_ >= kRebakeQuietTicks;
     const bool overdue =
@@ -546,7 +523,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
 void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                          const std::uint32_t* cells,
                                          std::size_t n) {
-    if (!navClear_.built() || !bodyBits_.built()) return;
+    if (!navClear_.built()) return;
     const std::vector<SubMask>& masks = grid.masks();
     const std::vector<CellType>& types = grid.types();
     // Клетка двери (по индексу, координатам). Премиса all-open ([game/door.h]):
@@ -560,7 +537,6 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
     for (std::size_t i = 0; i < n; ++i) {
         const std::size_t idx = cells[i];
         const SubMask& m = masks[idx];
-        patch_body_walk_bit(bodyBits_, idx, m);
         // Шесть граней карвнутой клетки: свои три плюс-нибла и плюс-ниблы
         // трёх минус-соседей ([world/clearance.h] patch — та же шестёрка,
         // здесь вручную ради дверного фильтра по граням).

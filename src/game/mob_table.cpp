@@ -12,7 +12,6 @@ constexpr std::uint8_t u8(MobBehaviour v) { return static_cast<std::uint8_t>(v);
 constexpr std::uint8_t u8(ProjType v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(MobPackMode v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(FloorBit v) { return static_cast<std::uint8_t>(v); }
-constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 constexpr std::uint32_t f(AiFlag v) { return static_cast<std::uint32_t>(v); }
 } // namespace
 
@@ -20,7 +19,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [0] SBORKA
     MobDef{ f(AiFlag::FoodBait),
              8, 3, 3150, 650, 1200,
-             0, 85, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Storage)),
+             0, 85,
              0, 0, 0,
              u8(MobKind::Sborka), u8(MobTier::Trash),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -30,7 +29,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [1] TVAR
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::WallBias),
              54, 13, 1650, 1150, 1550,
-             0, 62, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Storage)),
+             0, 62,
              0, 0, 0,
              u8(MobKind::Tvar), u8(MobTier::Medium),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -40,7 +39,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [2] POLZUN
     MobDef{ f(AiFlag::FoodBait),
              168, 22, 850, 2250, 1350,
-             0, 43, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Bathroom) | u16(RoomBit::Production) | u16(RoomBit::Storage)),
+             0, 43,
              0, 0, 0,
              u8(MobKind::Polzun), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -50,7 +49,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [3] BETONNIK
     MobDef{ f(AiFlag::Rare),
              1000, 35, 800, 3000, 1200,
-             0, 6, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Hq) | u16(RoomBit::Common)),
+             0, 6,
              0, 0, 0,
              u8(MobKind::Betonnik), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -60,7 +59,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [4] ZOMBIE
     MobDef{ 0u,
              35, 8, 1400, 1500, 1200,
-             0, 34, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Kitchen) | u16(RoomBit::Common) | u16(RoomBit::Office)),
+             0, 34,
              0, 0, 0,
              u8(MobKind::Zombie), u8(MobTier::Medium),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -70,7 +69,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [5] EYE
     MobDef{ f(AiFlag::Flying) | f(AiFlag::Ranged),
              20, 14, 2200, 2500, 1200,
-             8000, 31, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office) | u16(RoomBit::Production) | u16(RoomBit::Common)),
+             8000, 31,
              15000, 1500, 850,
              u8(MobKind::Eye), u8(MobTier::Light),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -80,7 +79,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [6] NIGHTMARE
     MobDef{ f(AiFlag::Rare),
              260, 32, 1350, 1150, 1200,
-             0, 14, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Medical) | u16(RoomBit::Corridor)),
+             0, 14,
              0, 0, 0,
              u8(MobKind::Nightmare), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -90,7 +89,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [7] SHADOW
     MobDef{ 0u,
              50, 12, 2400, 1000, 1200,
-             0, 36, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Smoking) | u16(RoomBit::Office) | u16(RoomBit::Common)),
+             0, 36,
              0, 0, 0,
              u8(MobKind::Shadow), u8(MobTier::Medium),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -100,7 +99,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [8] REBAR
     MobDef{ f(AiFlag::WallBias) | f(AiFlag::Rare),
              210, 24, 820, 2400, 1200,
-             0, 11, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 11,
              0, 0, 0,
              u8(MobKind::Rebar), u8(MobTier::Elite),
              u8(MobBehaviour::DebrisLurker), u8(ProjType::Bullet),
@@ -110,7 +109,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [9] MATKA
     MobDef{ f(AiFlag::Rare),
              350, 12, 400, 3500, 1200,
-             0, 4, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Common) | u16(RoomBit::Production) | u16(RoomBit::Corridor)),
+             0, 4,
              0, 0, 0,
              u8(MobKind::Matka), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -120,7 +119,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [10] IDOL
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare) | f(AiFlag::Immobile),
              100, 30, 0, 2000, 1200,
-             12000, 9, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Office) | u16(RoomBit::Smoking) | u16(RoomBit::Hq)),
+             12000, 9,
              15000, 1250, 1050,
              u8(MobKind::Idol), u8(MobTier::Heavy),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -130,7 +129,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [11] MANCOBUS
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              400, 40, 700, 3000, 1200,
-             6000, 3, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Common)),
+             6000, 3,
              14000, 2200, 1050,
              u8(MobKind::Mancobus), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -140,7 +139,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [12] HERALD
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              250, 30, 1400, 2000, 1200,
-             7000, 3, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Corridor)),
+             7000, 3,
              16000, 1800, 900,
              u8(MobKind::Herald), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -150,7 +149,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [13] CREATOR
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Boss) | f(AiFlag::Rare),
              520, 44, 1050, 2350, 1200,
-             7500, 0, static_cast<std::uint16_t>(u16(RoomBit::Common) | u16(RoomBit::Hq)),
+             7500, 0,
              18000, 2400, 1250,
              u8(MobKind::Creator), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -160,7 +159,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [14] SPIRIT
     MobDef{ f(AiFlag::Flying) | f(AiFlag::Rare),
              40, 15, 2000, 1500, 1200,
-             0, 11, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Common)),
+             0, 11,
              0, 0, 0,
              u8(MobKind::Spirit), u8(MobTier::Medium),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -170,7 +169,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [15] ROBOT
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              65, 18, 1800, 1800, 1200,
-             9000, 14, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Hq) | u16(RoomBit::Corridor) | u16(RoomBit::Office)),
+             9000, 14,
              15000, 1500, 620,
              u8(MobKind::Robot), u8(MobTier::Heavy),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -180,7 +179,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [16] SHOVNIK
     MobDef{ f(AiFlag::WallBias),
              45, 11, 2100, 1100, 1200,
-             0, 32, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Common)),
+             0, 32,
              0, 0, 0,
              u8(MobKind::Shovnik), u8(MobTier::Medium),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -190,7 +189,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [17] LAMPOVY
     MobDef{ 0u,
              38, 11, 1750, 1000, 1200,
-             0, 28, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Production)),
+             0, 28,
              0, 0, 0,
              u8(MobKind::Lampovy), u8(MobTier::Medium),
              u8(MobBehaviour::LampPowered), u8(ProjType::Bullet),
@@ -200,7 +199,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [18] PECHATEED
     MobDef{ 0u,
              58, 10, 1620, 1450, 1200,
-             0, 26, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Common) | u16(RoomBit::Smoking) | u16(RoomBit::Corridor)),
+             0, 26,
              0, 0, 0,
              u8(MobKind::Pechateed), u8(MobTier::Medium),
              u8(MobBehaviour::DocumentHunter), u8(ProjType::Bullet),
@@ -210,7 +209,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [19] PARAGRAPH
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              46, 15, 1050, 2350, 1200,
-             6500, 15, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Corridor) | u16(RoomBit::Common)),
+             6500, 15,
              15000, 1500, 800,
              u8(MobKind::Paragraph), u8(MobTier::Medium),
              u8(MobBehaviour::RangedClause), u8(ProjType::Bullet),
@@ -220,7 +219,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [20] NELYUD
     MobDef{ f(AiFlag::Rare),
              80, 18, 1800, 1400, 1200,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Kitchen) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::Nelyud), u8(MobTier::Heavy),
              u8(MobBehaviour::CloseReveal), u8(ProjType::Bullet),
@@ -230,7 +229,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [21] KRYSNOZHKA
     MobDef{ f(AiFlag::FoodBait),
              14, 3, 2450, 650, 1200,
-             0, 32, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Corridor) | u16(RoomBit::Common)),
+             0, 32,
              0, 0, 0,
              u8(MobKind::Krysnozhka), u8(MobTier::Light),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -240,7 +239,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [22] KOSTOREZ
     MobDef{ f(AiFlag::Rare),
              150, 17, 1550, 2800, 1200,
-             0, 4, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 4,
              0, 0, 0,
              u8(MobKind::Kostorez), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -250,7 +249,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [23] SAFEGUARD
     MobDef{ f(AiFlag::Rare),
              185, 24, 2150, 2400, 1200,
-             0, 2, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Corridor)),
+             0, 2,
              0, 0, 0,
              u8(MobKind::Safeguard), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -260,7 +259,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [24] BLACK_LIQUIDATOR
     MobDef{ f(AiFlag::Rare),
              92, 15, 1220, 1800, 1350,
-             0, 1, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Storage)),
+             0, 1,
              0, 0, 0,
              u8(MobKind::BlackLiquidator), u8(MobTier::Heavy),
              u8(MobBehaviour::FalsePatrol), u8(ProjType::Bullet),
@@ -270,7 +269,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [25] KHOROVAYA_MATKA
     MobDef{ f(AiFlag::Rare),
              420, 10, 280, 3800, 1200,
-             0, 3, static_cast<std::uint16_t>(u16(RoomBit::Hq) | u16(RoomBit::Common) | u16(RoomBit::Production) | u16(RoomBit::Corridor)),
+             0, 3,
              0, 0, 0,
              u8(MobKind::KhorovayaMatka), u8(MobTier::Boss),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -280,7 +279,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [26] SLIMEVIK
     MobDef{ 0u,
              18, 2, 1050, 1800, 1200,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Bathroom) | u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::Slimevik), u8(MobTier::Light),
              u8(MobBehaviour::SlimeScavenger), u8(ProjType::Bullet),
@@ -290,7 +289,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [27] SOBRANNYY
     MobDef{ f(AiFlag::Rare),
              260, 24, 1180, 3100, 1200,
-             0, 3, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             0, 3,
              0, 0, 0,
              u8(MobKind::Sobrannyy), u8(MobTier::Elite),
              u8(MobBehaviour::MeatGrowth), u8(ProjType::Bullet),
@@ -300,7 +299,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [28] ZHORNAYA_TVAR
     MobDef{ f(AiFlag::FoodBait),
              62, 19, 1720, 2650, 1200,
-             0, 22, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             0, 22,
              0, 0, 0,
              u8(MobKind::ZhornayaTvar), u8(MobTier::Heavy),
              u8(MobBehaviour::ScentOvercommit), u8(ProjType::Bullet),
@@ -310,7 +309,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [29] BEZEKHIY
     MobDef{ 0u,
              58, 9, 1280, 1450, 1200,
-             0, 16, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Living) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Office)),
+             0, 16,
              0, 0, 0,
              u8(MobKind::Bezekhiy), u8(MobTier::Medium),
              u8(MobBehaviour::DeadEcho), u8(ProjType::Bullet),
@@ -320,7 +319,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [30] PSEUDOLIFT
     MobDef{ f(AiFlag::Rare),
              125, 24, 550, 780, 1200,
-             0, 0, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Common)),
+             0, 0,
              0, 0, 0,
              u8(MobKind::Pseudolift), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -330,7 +329,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [31] SLEPOGLAZ
     MobDef{ 0u,
              52, 24, 620, 3400, 1200,
-             0, 10, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Common)),
+             0, 10,
              0, 0, 0,
              u8(MobKind::Slepoglaz), u8(MobTier::Medium),
              u8(MobBehaviour::LastSoundBeam), u8(ProjType::Bullet),
@@ -340,7 +339,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [32] OLGOY
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::Rare),
              118, 22, 950, 2250, 1480,
-             0, 8, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)),
+             0, 8,
              0, 0, 0,
              u8(MobKind::Olgoy), u8(MobTier::Heavy),
              u8(MobBehaviour::MeatWorm), u8(ProjType::Bullet),
@@ -350,7 +349,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [33] VODYANOY_KOSHMAR
     MobDef{ 0u,
              86, 10, 1340, 1200, 1200,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Bathroom)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::VodyanoyKoshmar), u8(MobTier::Heavy),
              u8(MobBehaviour::WaterPressureLine), u8(ProjType::Bullet),
@@ -360,7 +359,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [34] LAMPOGLAZ
     MobDef{ f(AiFlag::Ranged),
              44, 10, 280, 1900, 1200,
-             13000, 22, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office) | u16(RoomBit::Common)),
+             13000, 22,
              17000, 900, 950,
              u8(MobKind::Lampoglaz), u8(MobTier::Medium),
              u8(MobBehaviour::LightLock), u8(ProjType::Bullet),
@@ -370,7 +369,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [35] TUMANNIK
     MobDef{ 0u,
              64, 9, 1900, 720, 1200,
-             0, 14, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Smoking)),
+             0, 14,
              0, 0, 0,
              u8(MobKind::Tumannik), u8(MobTier::Heavy),
              u8(MobBehaviour::FogOffset), u8(ProjType::Bullet),
@@ -380,7 +379,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [36] CHERNOSLIZ
     MobDef{ f(AiFlag::Ranged),
              18, 18, 500, 3100, 1200,
-             9000, 14, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Storage)),
+             9000, 14,
              15000, 750, 550,
              u8(MobKind::Chernosliz), u8(MobTier::Light),
              u8(MobBehaviour::BlackWaterWake), u8(ProjType::Bullet),
@@ -390,7 +389,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [37] RZHAVNIK
     MobDef{ 0u,
              72, 13, 1350, 1550, 1200,
-             0, 8, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Corridor)),
+             0, 8,
              0, 0, 0,
              u8(MobKind::Rzhavnik), u8(MobTier::Heavy),
              u8(MobBehaviour::ScrapWake), u8(ProjType::Bullet),
@@ -400,7 +399,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [38] BETONOED
     MobDef{ f(AiFlag::WallBias) | f(AiFlag::Rare),
              360, 28, 980, 2350, 1200,
-             0, 1, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Corridor) | u16(RoomBit::Production)),
+             0, 1,
              0, 0, 0,
              u8(MobKind::Betonoed), u8(MobTier::Boss),
              u8(MobBehaviour::WeakWallBreach), u8(ProjType::Bullet),
@@ -410,7 +409,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [39] PANELNIK
     MobDef{ 0u,
              96, 16, 1080, 1450, 1160,
-             0, 17, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Corridor) | u16(RoomBit::Storage)),
+             0, 17,
              0, 0, 0,
              u8(MobKind::Panelnik), u8(MobTier::Heavy),
              u8(MobBehaviour::WallBrace), u8(ProjType::Bullet),
@@ -420,7 +419,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [40] PAUPSINA
     MobDef{ f(AiFlag::Ranged),
              32, 0, 2250, 2650, 1200,
-             9500, 12, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Corridor) | u16(RoomBit::Common)),
+             9500, 12,
              11500, 3400, 480,
              u8(MobKind::Paupsina), u8(MobTier::Medium),
              u8(MobBehaviour::WebSpitter), u8(ProjType::Web),
@@ -430,7 +429,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [41] BORSHCHEVIK
     MobDef{ f(AiFlag::Immobile),
              62, 12, 0, 1450, 1200,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Common)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::Borshchevik), u8(MobTier::Heavy),
              u8(MobBehaviour::RootedPlant), u8(ProjType::Bullet),
@@ -440,7 +439,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [42] OBZHIVALSHCHIK
     MobDef{ 0u,
              92, 16, 1050, 1550, 1200,
-             0, 7, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Kitchen) | u16(RoomBit::Storage)),
+             0, 7,
              0, 0, 0,
              u8(MobKind::Obzhivalshchik), u8(MobTier::Heavy),
              u8(MobBehaviour::RoomBoundAberration), u8(ProjType::Bullet),
@@ -450,7 +449,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [43] HEAD_SLUG
     MobDef{ f(AiFlag::Rare),
              58, 6, 1480, 1150, 1200,
-             0, 4, static_cast<std::uint16_t>(u16(RoomBit::Medical) | u16(RoomBit::Common) | u16(RoomBit::Office) | u16(RoomBit::Corridor) | u16(RoomBit::Storage)),
+             0, 4,
              0, 0, 0,
              u8(MobKind::HeadSlug), u8(MobTier::Medium),
              u8(MobBehaviour::HostParasite), u8(ProjType::Bullet),
@@ -460,7 +459,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [44] PROTOKOLNIK
     MobDef{ f(AiFlag::Rare),
              112, 6, 1080, 2400, 1200,
-             0, 7, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Common)),
+             0, 7,
              0, 0, 0,
              u8(MobKind::Protokolnik), u8(MobTier::Heavy),
              u8(MobBehaviour::ProtocolPressure), u8(ProjType::Bullet),
@@ -470,7 +469,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [45] DIKIY_MERTVYAK
     MobDef{ 0u,
              22, 7, 2550, 1050, 1200,
-             0, 22, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Kitchen) | u16(RoomBit::Living)),
+             0, 22,
              0, 0, 0,
              u8(MobKind::DikiyMertvyak), u8(MobTier::Light),
              u8(MobBehaviour::CrowdShove), u8(ProjType::Bullet),
@@ -480,7 +479,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [46] KONTORSHCHIK
     MobDef{ f(AiFlag::Rare),
              72, 12, 950, 1650, 1200,
-             0, 10, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             0, 10,
              0, 0, 0,
              u8(MobKind::Kontorshchik), u8(MobTier::Heavy),
              u8(MobBehaviour::DocumentScent), u8(ProjType::Bullet),
@@ -490,7 +489,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [47] TONKAYA_TEN
     MobDef{ 0u,
              28, 5, 2950, 1450, 1200,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Office) | u16(RoomBit::Living) | u16(RoomBit::Common)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::TonkayaTen), u8(MobTier::Medium),
              u8(MobBehaviour::BaitLine), u8(ProjType::Bullet),
@@ -500,7 +499,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [48] KANTSELYARSKIY_IDOL
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare) | f(AiFlag::Immobile),
              72, 18, 0, 2900, 1200,
-             7200, 7, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             7200, 7,
              14500, 2350, 1120,
              u8(MobKind::KantselyarskiyIdol), u8(MobTier::Heavy),
              u8(MobBehaviour::OfficeField), u8(ProjType::Bullet),
@@ -510,7 +509,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [49] LOZHNYY_DUKH
     MobDef{ f(AiFlag::Rare),
              34, 9, 2250, 1650, 1200,
-             0, 7, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Corridor) | u16(RoomBit::Living) | u16(RoomBit::Common)),
+             0, 7,
              0, 0, 0,
              u8(MobKind::LozhnyyDukh), u8(MobTier::Medium),
              u8(MobBehaviour::FalsePhase), u8(ProjType::Bullet),
@@ -520,7 +519,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [50] CHERVIE_AVATAR
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              118, 17, 1450, 2150, 1200,
-             5800, 4, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Production) | u16(RoomBit::Corridor)),
+             5800, 4,
              15000, 1500, 700,
              u8(MobKind::ChervieAvatar), u8(MobTier::Heavy),
              u8(MobBehaviour::NetPossessor), u8(ProjType::Bullet),
@@ -530,7 +529,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [51] POMOYNY_ROY
     MobDef{ f(AiFlag::FoodBait),
              38, 2, 2180, 380, 1200,
-             0, 29, static_cast<std::uint16_t>(u16(RoomBit::Kitchen) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Corridor)),
+             0, 29,
              0, 0, 0,
              u8(MobKind::PomoynyRoy), u8(MobTier::Medium),
              u8(MobBehaviour::GarbageSurround), u8(ProjType::Bullet),
@@ -540,7 +539,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [52] SCULPTURE
     MobDef{ f(AiFlag::Rare),
              250, 1000, 8500, 250, 1200,
-             0, 1, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage) | u16(RoomBit::Production)),
+             0, 1,
              0, 0, 0,
              u8(MobKind::Sculpture), u8(MobTier::Elite),
              u8(MobBehaviour::WeepingAngel), u8(ProjType::Bullet),
@@ -550,7 +549,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [53] TRUBNYY_AVTOMAT
     MobDef{ f(AiFlag::Ranged) | f(AiFlag::Rare),
              150, 25, 820, 2750, 1200,
-             13000, 12, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Storage)),
+             13000, 12,
              18000, 2250, 1050,
              u8(MobKind::TrubnyyAvtomat), u8(MobTier::Elite),
              u8(MobBehaviour::WetLineShot), u8(ProjType::Bullet),
@@ -560,7 +559,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [54] LOTOCHNIK
     MobDef{ f(AiFlag::WaterStrider),
              74, 13, 1250, 1250, 1200,
-             0, 21, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Bathroom) | u16(RoomBit::Common)),
+             0, 21,
              0, 0, 0,
              u8(MobKind::Lotochnik), u8(MobTier::Heavy),
              u8(MobBehaviour::DrainArmor), u8(ProjType::Bullet),
@@ -570,7 +569,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [55] TRESKOTNIK
     MobDef{ 0u,
              18, 15, 2750, 1650, 1200,
-             0, 24, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Living)),
+             0, 24,
              0, 0, 0,
              u8(MobKind::Treskotnik), u8(MobTier::Light),
              u8(MobBehaviour::FractureSprint), u8(ProjType::Bullet),
@@ -580,7 +579,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [56] ZAKALENNAYA_ARMATURA
     MobDef{ f(AiFlag::Rare),
              265, 31, 620, 2900, 1200,
-             0, 3, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 3,
              0, 0, 0,
              u8(MobKind::ZakalennayaArmatura), u8(MobTier::Elite),
              u8(MobBehaviour::Plain), u8(ProjType::Bullet),
@@ -590,7 +589,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [57] GLUBINNAYA_TEN
     MobDef{ 0u,
              64, 18, 1820, 1700, 1200,
-             0, 6, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Storage)),
+             0, 6,
              0, 0, 0,
              u8(MobKind::GlubinnayaTen), u8(MobTier::Heavy),
              u8(MobBehaviour::SecondBeat), u8(ProjType::Bullet),
@@ -600,7 +599,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [58] GREEN_DOG
     MobDef{ f(AiFlag::FoodBait),
              34, 9, 2550, 820, 1200,
-             0, 24, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Living) | u16(RoomBit::Kitchen)),
+             0, 24,
              0, 0, 0,
              u8(MobKind::GreenDog), u8(MobTier::Medium),
              u8(MobBehaviour::GreenDogPack), u8(ProjType::Bullet),
@@ -610,7 +609,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [59] SLIME_WOMAN
     MobDef{ f(AiFlag::Rare),
              118, 17, 1180, 1550, 1380,
-             0, 4, static_cast<std::uint16_t>(u16(RoomBit::Bathroom) | u16(RoomBit::Production) | u16(RoomBit::Medical) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 4,
              0, 0, 0,
              u8(MobKind::SlimeWoman), u8(MobTier::Heavy),
              u8(MobBehaviour::SlimeStrider), u8(ProjType::Bullet),
@@ -620,7 +619,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [60] GNILUSHKA
     MobDef{ f(AiFlag::Rare),
              74, 16, 1420, 1050, 1200,
-             0, 2, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Common) | u16(RoomBit::Storage) | u16(RoomBit::Kitchen) | u16(RoomBit::Corridor)),
+             0, 2,
              0, 0, 0,
              u8(MobKind::Gnilushka), u8(MobTier::Heavy),
              u8(MobBehaviour::DefensiveNeutral), u8(ProjType::Bullet),
@@ -630,7 +629,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [61] MUKHOZHUK_HOST
     MobDef{ f(AiFlag::FoodBait) | f(AiFlag::Rare),
              118, 13, 1280, 1280, 1200,
-             0, 2, static_cast<std::uint16_t>(u16(RoomBit::Office) | u16(RoomBit::Hq) | u16(RoomBit::Storage) | u16(RoomBit::Corridor)),
+             0, 2,
              0, 0, 0,
              u8(MobKind::MukhozhukHost), u8(MobTier::Heavy),
              u8(MobBehaviour::ParasiteLeader), u8(ProjType::Bullet),
@@ -640,7 +639,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [62] FOG_SHARK
     MobDef{ 0u,
              18, 12, 2850, 780, 1200,
-             0, 10, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Production) | u16(RoomBit::Common) | u16(RoomBit::Bathroom)),
+             0, 10,
              0, 0, 0,
              u8(MobKind::FogShark), u8(MobTier::Light),
              u8(MobBehaviour::FogSwimmer), u8(ProjType::Bullet),
@@ -650,7 +649,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [63] BLOOD_PLANT
     MobDef{ f(AiFlag::Rare) | f(AiFlag::Immobile),
              96, 19, 0, 2850, 1200,
-             0, 2, static_cast<std::uint16_t>(u16(RoomBit::Production) | u16(RoomBit::Storage) | u16(RoomBit::Common) | u16(RoomBit::Living)),
+             0, 2,
              0, 0, 0,
              u8(MobKind::BloodPlant), u8(MobTier::Heavy),
              u8(MobBehaviour::RootHive), u8(ProjType::Bullet),
@@ -660,7 +659,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [64] SWARM
     MobDef{ f(AiFlag::FoodBait),
              12, 2, 2750, 240, 1050,
-             0, 12, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Storage) | u16(RoomBit::Production) | u16(RoomBit::Kitchen)),
+             0, 12,
              0, 0, 0,
              u8(MobKind::Swarm), u8(MobTier::Trash),
              u8(MobBehaviour::SourceSwarm), u8(ProjType::Bullet),
@@ -670,7 +669,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [65] SPORE_CARPET
     MobDef{ 0u,
              24, 4, 820, 1400, 1200,
-             0, 7, static_cast<std::uint16_t>(u16(RoomBit::Living) | u16(RoomBit::Office) | u16(RoomBit::Storage) | u16(RoomBit::Corridor) | u16(RoomBit::Production)),
+             0, 7,
              0, 0, 0,
              u8(MobKind::SporeCarpet), u8(MobTier::Light),
              u8(MobBehaviour::LurkingFurniture), u8(ProjType::Bullet),
@@ -680,7 +679,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [66] LISHENNYY
     MobDef{ 0u,
              76, 11, 1720, 1050, 1200,
-             0, 6, static_cast<std::uint16_t>(u16(RoomBit::Corridor) | u16(RoomBit::Common) | u16(RoomBit::Hq) | u16(RoomBit::Storage)),
+             0, 6,
              0, 0, 0,
              u8(MobKind::Lishennyy), u8(MobTier::Heavy),
              u8(MobBehaviour::LightFollower), u8(ProjType::Bullet),
@@ -690,7 +689,7 @@ const std::array<MobDef, kMobKindCount> kMobTable = {{
     // [67] GNOME
     MobDef{ 0u,
              25, 8, 2800, 800, 1200,
-             0, 15, static_cast<std::uint16_t>(u16(RoomBit::Storage) | u16(RoomBit::Corridor) | u16(RoomBit::Production)),
+             0, 15,
              0, 0, 0,
              u8(MobKind::Gnome), u8(MobTier::Light),
              u8(MobBehaviour::Melee), u8(ProjType::Bullet),

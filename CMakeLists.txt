@@ -722,9 +722,13 @@ if(GIGA_BUILD_TESTS)
     # 2026-07-29: a corrected pin appeared to fail twice for exactly this reason, and the obvious
     # wrong conclusion was that the NEW number was also wrong. Run tools\win\build.bat (it
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
+    # 926 -> 1374 on 2026-08-28 (rooms-object F): контейнеры селятся в
+    # НАСТОЯЩИХ комнатах модуля (тысячи зон падика вместо решётки) — ящиков
+    # на этаже больше, и циклы сьюта по ним дают больше чеков. Прочитано с
+    # бинаря по правилу выше; мёртвый дефект не закрывался.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 926 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 1374 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -1423,7 +1427,11 @@ if(GIGA_BUILD_TESTS)
     # линии» -> «внутри объявленной зоны»), гермополотно от тега комнаты,
     # живые хуки supply, ростер один на этаж (roomMask-фильтр мёртв).
     # Падение счёта — смерть старых решёточных проверок, не потеря сьютов.
-        PASS_REGULAR_EXPRESSION "game_test: 223864 checks, 0 failures")
+    # 223864 -> 222869 (−995) on 2026-08-28: инкремент F — СМЕРТЬ решёточной
+    # таксономии: suite_rooms целиком (эрранды/сиденья/мебель/регенерация на
+    # flow-полях), зонные половины walkbits/budgets/needs/rebake, пины
+    # roomMask/stride. Наследники живут: suite_rooms_object + body-оракул.
+        PASS_REGULAR_EXPRESSION "game_test: 222869 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

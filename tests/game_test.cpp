@@ -47,7 +47,8 @@
 #include "game/wander.h"
 #include "game/population.h"
 #include "game/encumbrance.h"
-#include "game/room_zone.h"
+#include "game/body_walk.h" // телесный оракул — выживший rooms-object F
+#include "game/role.h"      // RoleId/role_for (шёл транзитом через room_zone.h)
 #include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
@@ -109,7 +110,6 @@ int g_checks = 0;
 #include "suite_diffusion.inl"
 #include "suite_loottable.inl"
 #include "suite_utilai.inl"
-#include "suite_rooms.inl"
 // The first budget suite in the project (2026-08-12). Asserts bytes and
 // milliseconds rather than behaviour, and PRINTS every number whether it passes
 // or fails — see the banner in the file for why the printing half matters more
@@ -554,8 +554,9 @@ static void test_seed_from_spec() {
         CHECK(pool.age(id) >= 20 && pool.age(id) <= 40); // spec age window honored
         CHECK(pool.height_mm(id) > 0);
         CHECK(pool.faction(id) == 0);                    // mix {1,0,0,0}
-        // Never seeded inside the wall lattice (walls sit on local coord 0).
-        CHECK((pool.cx(id) % 16) != 0 && (pool.cy(id) % 16) != 0);
+        // Решётка посева умерла (rooms-object F): слепые хеш-координаты,
+        // воплощение решает place_body_safely.
+        CHECK(pool.cx(id) < kMacroDim && pool.cy(id) < kMacroDim);
     }
 
     // Density follows the catalog: residential seeds a bigger crowd than derelict,
@@ -1500,8 +1501,7 @@ static void test_mob_table() {
         CHECK(m.packSpread <= 10);
 
         // Every kind has a habitat: an empty mask would make it unspawnable
-        // everywhere, silently.
-        CHECK(m.roomMask != 0);
+        // everywhere, silently. (roomMask умер — rooms-object F.)
         CHECK(m.floorMask != 0);
 
         // Derived flags must agree with the fields they were derived from.
@@ -2131,8 +2131,8 @@ static void test_economy_bands_gate_by_depth() {
         if (d.spawnWeight > 0 && d.value > 5000) { pricey = id; break; }
     }
     CHECK(pricey != kInvalidItem);
-    const std::uint32_t shallow = item_weight_on_floor(pricey, 0, 0);
-    const std::uint32_t deep = item_weight_on_floor(pricey, 50, 0);
+    const std::uint32_t shallow = item_weight_on_floor(pricey, 0);
+    const std::uint32_t deep = item_weight_on_floor(pricey, 50);
     CHECK(deep > shallow);
     // Decay, not a cut: at its own band the weight is exactly the authored one.
     CHECK(deep == item_def(pricey).spawnWeight);
@@ -2147,16 +2147,16 @@ static void test_economy_bands_gate_by_depth() {
         }
     }
     CHECK(cheap != kInvalidItem);
-    CHECK(item_weight_on_floor(cheap, 0, 0) == item_def(cheap).spawnWeight);
-    CHECK(item_weight_on_floor(cheap, 50, 0) == item_def(cheap).spawnWeight);
+    CHECK(item_weight_on_floor(cheap, 0) == item_def(cheap).spawnWeight);
+    CHECK(item_weight_on_floor(cheap, 50) == item_def(cheap).spawnWeight);
 
     // Weight 0 means never random, whatever the floor.
     for (std::size_t i = 0; i < kItemCount; ++i) {
         const ItemId id = static_cast<ItemId>(i + 1);
         if (item_def(id).spawnWeight == 0)
-            CHECK(item_weight_on_floor(id, 30, 0) == 0);
+            CHECK(item_weight_on_floor(id, 30) == 0);
     }
-    CHECK(item_weight_on_floor(kInvalidItem, 0, 0) == 0);
+    CHECK(item_weight_on_floor(kInvalidItem, 0) == 0);
 }
 
 // CORP1: loot stages in the Dead window onto CorpseLootPending, then moves into
@@ -4544,6 +4544,8 @@ static void test_containers() {
     World w;
     generate_floor(w, -50, floor_spec(FloorKind::Derelict), 3u);
     Registry reg;
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), -50,
+                  floor_spec(FloorKind::Derelict), 3u);
     const std::uint32_t made = spawn_floor_containers(
         reg, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
     CHECK(made > 8);
@@ -4554,10 +4556,11 @@ static void test_containers() {
     // caught that before a capture did.
     for (FloorKind fk : {FloorKind::Residential, FloorKind::Commercial,
                          FloorKind::Industrial, FloorKind::Derelict}) {
-        CHECK(container_budget(fk) >= kContainerFloorMin);
+        CHECK(container_budget(/*roomCount=*/256) >= kContainerFloorMin);
         World fw;
         generate_floor(fw, -26, floor_spec(fk), 11u);
         Registry fr;
+        rooms_declare(fr.ctx().emplace<FloorRooms>(), -26, floor_spec(fk), 11u);
         const std::uint32_t n = spawn_floor_containers(
             fr, fw, -26, fk, 0, /*seed=*/5u, /*cap=*/64);
         CHECK(n >= 8);
@@ -4577,6 +4580,8 @@ static void test_containers() {
     // Deterministic: the same floor holds the same crates in the same places, which is
     // what makes the building a place rather than a slot machine.
     Registry r2;
+    rooms_declare(r2.ctx().emplace<FloorRooms>(), -50,
+                  floor_spec(FloorKind::Derelict), 3u);
     const std::uint32_t again = spawn_floor_containers(
         r2, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
     CHECK(again == made);
@@ -4624,7 +4629,7 @@ static void test_contracts() {
                     ++fetches;
                     CHECK(item_valid(c.subject));
                     // Findable AT THIS DEPTH — this is the impossible-quest guard.
-                    CHECK(item_weight_on_floor(c.subject, fz, 0) > 0);
+                    CHECK(item_weight_on_floor(c.subject, fz) > 0);
                     break;
                 case ObjectiveKind::Hunt:
                     ++hunts;
@@ -4774,10 +4779,12 @@ static void test_full_loop() {
     generate_floor(stack.layer(layer), -26, floor_spec(FloorKind::Derelict), 11u);
 
     // --- seam 1: containers put value in rooms -------------------------------
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), -26,
+                  floor_spec(FloorKind::Derelict), 11u);
     const std::uint32_t crates =
         spawn_floor_containers(reg, stack.layer(layer), -26, FloorKind::Derelict,
                                layer, 4242u,
-                               container_budget(FloorKind::Derelict));
+                               container_budget(/*roomCount=*/1024));
     CHECK(crates > 0);
 
     // Find a crate holding something the BANK will take, and stand on it.
@@ -5699,16 +5706,10 @@ int main() {
     test_diffusion_all();
     test_loottable_all();
     test_utilai_all();
-    // Room zones: leg (b)+(c) of §27 — where a need can be satisfied, and what
-    // standing there does. The descent block is the one that measures the property
-    // the complaint names.
-    rooms_taxonomy_is_read_the_same_way();
-    rooms_bake_follows_the_floor_mix();
-    rooms_descent_actually_arrives();
-    rooms_seat_is_the_micro_goal();
-    rooms_a_hungry_body_walks_to_a_kitchen();
-    rooms_furniture_makes_the_errand_visible();
-    rooms_recovery_closes_the_loop();
+    // suite_rooms УМЕР с эррандами по виду комнаты (rooms-object F):
+    // спуск/сиденья/кухня/мебель/регенерация жили на flow-полях и
+    // kRoomAffordance. Наследник — suite_rooms_object (зоны, supply) и
+    // agent-goals (хождение к целям по скором S13).
     test_budgets_all();
     test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
