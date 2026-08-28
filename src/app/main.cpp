@@ -2367,69 +2367,17 @@ int main(int argc, char** argv) {
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
     std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
     game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
-        // 5c: обвес лифтовых порталов — кнопка вызова СНАРУЖИ у проёма,
-    // панель ВНУТРИ кабины (оба — пропы-интеракторы строками CSV), и
-    // дефолт створок «ЗАКРЫТО, пока не вызвал» (решение владельца:
-    // вызов открывает вход — «лифт приехал»). Зовётся после каждого
-    // door_declare + refresh_floor_props входа.
+        // 5c: обвес лифтовых порталов — game::dress_lift_portals
+    // ([game/door.h]): кнопка снаружи (DoorRef на створку хаба — активация
+    // ссылкой S18), панель в кабине, дефолт «закрыто». Перенесён в
+    // game-слой, чтобы быть headless-тестируемым (suite_doors).
     auto dress_lift_portals = [&](LayerId nl) {
-        World& w = stack.layer(nl);
         const game::FloorSpec* sp = spec_for_floor(currentFloor);
         if (sp == nullptr) return;
-        const unsigned fseed =
-            streamer.floor_seed_of(registry, currentFloor);
-        for (int hub = 0; hub < 4; ++hub) {
-            if (doors.lift[hub] == game::kNoPortal) continue;
-            const MaskGroup& p = doors.list[doors.lift[hub]];
-            // Створка лифта — группа из одной клетки; координаты — из ci.
-            const std::uint32_t dci = p.cells.front().ci;
-            const int pcx2 = static_cast<int>(dci % kMacroDim);
-            const int pcy2 = static_cast<int>((dci / kMacroDim) % kMacroDim);
-            const int pcz2 = static_cast<int>(dci / (kMacroDim * kMacroDim));
-            const game::LiftEntrance le =
-                game::lift_entrance(sp->kind, currentFloor, hub, fseed);
-            const int ox = le.side == 0 ? 1 : le.side == 1 ? -1 : 0;
-            const int oy = le.side == 2 ? 1 : le.side == 3 ? -1 : 0;
-            const int jx = oy != 0 ? 1 : 0; // вдоль стены кольца
-            const int jy = ox != 0 ? 1 : 0;
-            // Кнопка: наружная грань косяка рядом с проёмом.
-            {
-                game::SubVoxelAnchor a{};
-                a.cx = static_cast<std::uint8_t>(wrap_macro(pcx2 + jx));
-                a.cy = static_cast<std::uint8_t>(wrap_macro(pcy2 + jy));
-                a.cz = pcz2;
-                a.subX = 4; a.subY = 4; a.subZ = 4;
-                const vec3 bp{
-                    (static_cast<float>(wrap_macro(pcx2 + jx)) + 0.5f +
-                     static_cast<float>(ox) * 0.62f) * kCellSize,
-                    (static_cast<float>(wrap_macro(pcy2 + jy)) + 0.5f +
-                     static_cast<float>(oy) * 0.62f) * kCellSize,
-                    (static_cast<float>(pcz2) + 0.6f) * kCellSize};
-                game::spawn_prop_from_id(reg, w, bp, a,
-                                         game::PropId::LiftButton, nl);
-            }
-            // Панель: стена кабины напротив проёма.
-            {
-                std::uint8_t hcx = 0, hcy = 0;
-                game::fast_hub_cell(hub, hcx, hcy);
-                game::SubVoxelAnchor a{};
-                a.cx = static_cast<std::uint8_t>(wrap_macro(hcx - ox));
-                a.cy = static_cast<std::uint8_t>(wrap_macro(hcy - oy));
-                a.cz = pcz2;
-                a.subX = 4; a.subY = 4; a.subZ = 4;
-                const vec3 pp{
-                    (static_cast<float>(hcx) + 0.5f -
-                     static_cast<float>(ox) * 0.42f) * kCellSize,
-                    (static_cast<float>(hcy) + 0.5f -
-                     static_cast<float>(oy) * 0.42f) * kCellSize,
-                    (static_cast<float>(pcz2) + 0.65f) * kCellSize};
-                game::spawn_prop_from_id(reg, w, pp, a,
-                                         game::PropId::LiftPanel, nl);
-            }
-            // Дефолт: створка закрыта (видима сталью — «где дверь»
-            // больше не вопрос); тело в проёме — оставим открытой.
-            game::door_close(w, p, reg, nl, doorDirty);
-        }
+        game::dress_lift_portals(reg, stack.layer(nl), doors, currentFloor,
+                                 *sp,
+                                 streamer.floor_seed_of(registry, currentFloor),
+                                 nl, doorDirty);
     };
     bool doorWanted = false;        // E (единая интеракция), consumed once
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
@@ -5676,27 +5624,27 @@ int main(int argc, char** argv) {
                         // створка открывается (иллюзия приезда — следующий
                         // инкремент); ПАНЕЛЬ в кабине — меню этажей (E, как
                         // всё; клавиша L остаётся дев-дублёром).
+                        // АКТИВАЦИЯ ССЫЛКОЙ (S18): кнопка несёт DoorRef
+                        // на створку своего хаба — деривация хаба из
+                        // позиции кнопки (fast_hub_near) умерла. Кнопка
+                        // без ссылки — дефект обвеса, и он кричит.
                         if (!handled &&
                             g_focus.what == game::Focus::What::Entity &&
                             g_focus.kind == game::InteractKind::LiftCall) {
-                            {
-                                const int hcx = wrap_macro(static_cast<int>(
-                                    g_focus.pos.x / kCellSize));
-                                const int hcy = wrap_macro(static_cast<int>(
-                                    g_focus.pos.y / kCellSize));
-                                const int hub = game::fast_hub_near(hcx, hcy);
-                                if (hub >= 0 &&
-                                    doors.lift[hub] != game::kNoPortal) {
-                                    game::door_open(
-                                        stack.layer(activeLayer),
-                                        doors.list[doors.lift[hub]],
-                                        doorDirty);
-                                    handled = true;
-                                    std::fprintf(stderr,
-                                                 "[lift] called at hub %d — "
-                                                 "door opens\n",
-                                                 hub);
-                                }
+                            const auto* dr =
+                                reg.try_get<game::DoorRef>(g_focus.entity);
+                            if (dr && dr->group < doors.list.size()) {
+                                game::door_open(stack.layer(activeLayer),
+                                                doors.list[dr->group],
+                                                doorDirty);
+                                handled = true;
+                                std::fprintf(stderr,
+                                             "[lift] called — door group %u "
+                                             "opens\n", dr->group);
+                            } else {
+                                std::fprintf(stderr,
+                                             "[lift] LiftCall БЕЗ DoorRef — "
+                                             "дефект обвеса\n");
                             }
                         }
                         // КРАФТ — ОТ ВЕРСТАКА (вердикт владельца): клавиша C

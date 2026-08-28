@@ -64,6 +64,15 @@ struct Doors {
     std::uint32_t lift[4] = {kNoPortal, kNoPortal, kNoPortal, kNoPortal};
 };
 
+// АКТИВАЦИЯ ССЫЛКОЙ (S18, решение владельца 3): интерактор — кнопка,
+// рычаг, панель — несёт id группы, которой служит; дверь сама ничего не
+// слушает. Кто на что ссылается — решает тот, кто ставил интерактор
+// (модуль этажа, обвес лифта), а не деривация из позиции: угадывание
+// «какой двери служит кнопка» по геометрии было дефектом по построению.
+struct DoorRef {
+    std::uint32_t group = kNoPortal; // индекс в Doors.list этого этажа
+};
+
 // Объявить двери этажа: проёмы модуля (floor_doorways; гермо-комнаты
 // Living/Medical/Hq получают гермополотно — та же таксономия, что решала
 // раньше) + 4 механизм-створки лифтовых столбов (lift_entrance).
@@ -92,5 +101,14 @@ bool door_close(World& w, const MaskGroup& g, const Registry& reg,
                 LayerId layer, std::vector<std::uint32_t>& dirty);
 void door_open(World& w, const MaskGroup& g,
                std::vector<std::uint32_t>& dirty);
+
+// Обвес лифтовых порталов: кнопка вызова СНАРУЖИ у проёма (несёт DoorRef
+// на створку своего хаба — активация ссылкой), панель ВНУТРИ кабины,
+// дефолт створок «ЗАКРЫТО, пока не вызвал». Зовётся после каждого
+// door_declare + refresh_floor_props входа. Жил лямбдой в приложении —
+// перенесён в game-слой, чтобы обвес был headless-тестируем (suite_doors).
+void dress_lift_portals(Registry& reg, World& w, const Doors& doors,
+                        int number, const FloorSpec& spec, unsigned seed,
+                        LayerId layer, std::vector<std::uint32_t>& dirty);
 
 } // namespace giga::game

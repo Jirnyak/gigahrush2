@@ -6,6 +6,7 @@
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
 #include "game/floor_gen.h"    // floor_doorways, lift_entrance, floor_room_mask
 #include "game/mob_table.h"    // RoomBit — гермо-таксономия (Living/Medical/Hq)
+#include "game/prop_system.h"  // spawn_prop_from_id — обвес кнопки/панели
 #include "world/destruct.h"    // materialize_sub_page, kSubMaterialName
 #include "world/medium.h"      // medium_recount — агрегат клетки после штампа
 #include "world/world.h"
@@ -271,6 +272,67 @@ bool door_close(World& w, const MaskGroup& g, const Registry& reg,
 void door_open(World& w, const MaskGroup& g,
                std::vector<std::uint32_t>& dirty) {
     clear_group(w, g, dirty);
+}
+
+// 5c: обвес лифтовых порталов — кнопка вызова СНАРУЖИ у проёма, панель
+// ВНУТРИ кабины (оба — пропы-интеракторы строками CSV), и дефолт створок
+// «ЗАКРЫТО, пока не вызвал» (решение владельца: вызов открывает вход —
+// «лифт приехал»). Кнопка несёт DoorRef на створку СВОЕГО хаба:
+// активация ссылкой (S18), деривация хаба из позиции кнопки умерла.
+void dress_lift_portals(Registry& reg, World& w, const Doors& doors,
+                        int number, const FloorSpec& spec, unsigned seed,
+                        LayerId layer, std::vector<std::uint32_t>& dirty) {
+    for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
+        if (doors.lift[hub] == kNoPortal) continue;
+        const MaskGroup& p = doors.list[doors.lift[hub]];
+        // Створка лифта — группа из одной клетки; координаты — из ci.
+        int pcx = 0, pcy = 0, pcz = 0;
+        cell_coords(p.cells.front().ci, pcx, pcy, pcz);
+        const LiftEntrance le = lift_entrance(spec.kind, number, hub, seed);
+        const int ox = le.side == 0 ? 1 : le.side == 1 ? -1 : 0;
+        const int oy = le.side == 2 ? 1 : le.side == 3 ? -1 : 0;
+        const int jx = oy != 0 ? 1 : 0; // вдоль стены кольца
+        const int jy = ox != 0 ? 1 : 0;
+        // Кнопка: наружная грань косяка рядом с проёмом.
+        {
+            SubVoxelAnchor a{};
+            a.cx = static_cast<std::uint8_t>(wrap_macro(pcx + jx));
+            a.cy = static_cast<std::uint8_t>(wrap_macro(pcy + jy));
+            a.cz = static_cast<std::uint8_t>(pcz);
+            a.subX = 4; a.subY = 4; a.subZ = 4;
+            const vec3 bp{
+                (static_cast<float>(wrap_macro(pcx + jx)) + 0.5f +
+                 static_cast<float>(ox) * 0.62f) * kCellSize,
+                (static_cast<float>(wrap_macro(pcy + jy)) + 0.5f +
+                 static_cast<float>(oy) * 0.62f) * kCellSize,
+                (static_cast<float>(pcz) + 0.6f) * kCellSize};
+            const Entity btn = spawn_prop_from_id(reg, w, bp, a,
+                                                  PropId::LiftButton, layer);
+            if (btn != entt::null)
+                reg.emplace_or_replace<DoorRef>(btn,
+                                                DoorRef{doors.lift[hub]});
+        }
+        // Панель: стена кабины напротив проёма.
+        {
+            std::uint8_t hcx = 0, hcy = 0;
+            fast_hub_cell(hub, hcx, hcy);
+            SubVoxelAnchor a{};
+            a.cx = static_cast<std::uint8_t>(wrap_macro(hcx - ox));
+            a.cy = static_cast<std::uint8_t>(wrap_macro(hcy - oy));
+            a.cz = static_cast<std::uint8_t>(pcz);
+            a.subX = 4; a.subY = 4; a.subZ = 4;
+            const vec3 pp{
+                (static_cast<float>(hcx) + 0.5f -
+                 static_cast<float>(ox) * 0.42f) * kCellSize,
+                (static_cast<float>(hcy) + 0.5f -
+                 static_cast<float>(oy) * 0.42f) * kCellSize,
+                (static_cast<float>(pcz) + 0.65f) * kCellSize};
+            spawn_prop_from_id(reg, w, pp, a, PropId::LiftPanel, layer);
+        }
+        // Дефолт: створка закрыта (видима сталью — «где дверь» больше не
+        // вопрос); тело в проёме — оставим открытой.
+        door_close(w, p, reg, layer, dirty);
+    }
 }
 
 } // namespace giga::game

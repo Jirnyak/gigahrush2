@@ -209,6 +209,41 @@ void arbitrary_shape_door() {
     CHECK(w.grid().masks()[ci].empty()); // сняла ровно свои — клетка чиста
 }
 
+// ОБВЕС ЛИФТА + АКТИВАЦИЯ ССЫЛКОЙ (S18, решение 3): кнопка вызова несёт
+// DoorRef на створку СВОЕГО хаба; дверь сама ничего не слушает. Гейт
+// существует, потому что прежний обработчик ДЕРИВИРОВАЛ хаб из позиции
+// кнопки — угадывание, которое «кнопка снаружи не срабатывает» и дало.
+void lift_dressing_and_reference() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
+    Registry reg;
+    std::vector<std::uint32_t> dirty;
+    dress_lift_portals(reg, w, d, 0, floor_spec(FloorKind::Residential),
+                       1337u, 0, dirty);
+    // Дефолт: все 4 створки закрыты («где дверь» больше не вопрос).
+    for (int hub = 0; hub < 4; ++hub)
+        CHECK(door_closed(w, d.list[d.lift[hub]]));
+    // Кнопки: 4 интерактора с DoorRef, каждый ссылается на створку лифта,
+    // и активация ссылкой открывает её.
+    int found = 0;
+    auto view = reg.view<const DoorRef>();
+    for (auto e : view) {
+        const std::uint32_t g = view.get<const DoorRef>(e).group;
+        CHECK(g < d.list.size());
+        bool isLift = false;
+        for (int hub = 0; hub < 4; ++hub)
+            if (d.lift[hub] == g) isLift = true;
+        CHECK(isLift);
+        dirty.clear();
+        door_open(w, d.list[g], dirty);
+        CHECK(!door_closed(w, d.list[g]));
+        ++found;
+    }
+    CHECK(found == 4);
+}
+
 } // namespace doors_test
 
 static void test_doors_all() {
@@ -216,5 +251,6 @@ static void test_doors_all() {
     doors_test::snapshot_carries_closed_door();
     doors_test::focus_aims_at_a_real_door();
     doors_test::arbitrary_shape_door();
+    doors_test::lift_dressing_and_reference();
     std::printf("doors suite done (материя, не состояние)\n");
 }
