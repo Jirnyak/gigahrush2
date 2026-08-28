@@ -17,7 +17,7 @@
 //     floor 0 against 138 MB raw; disk is free at save points, [jirnyak.md] §6),
 //     stamped back verbatim on load. State beats history where it matters: the
 //     snapshot un-carves post-F5 holes, which no replay could. Doors still reset on
-//     load (door_build re-stamps its leaves AFTER the snapshot, keeping DoorSet and
+//     load (двери — МОГИЛА 2026-08-28, полотен нет; исторический контекст:
 //     cells agreed).
 //   * **Monsters.** They are destroyed on unload and re-rolled deterministically per
 //     (floor, seed) on entry ([monsters.md]). A monster has no macro existence to
@@ -650,8 +650,7 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
 // wholesale. Returns false — leaving `w` in its pre-call state for the types/masks
 // it has not yet touched is NOT guaranteed on a malformed blob, so the caller should
 // treat false as "regenerate and fall back to the carve log". `floorOut` (optional)
-// receives the floor number the snapshot claims. Call BEFORE door_build, so the
-// fresh DoorSet re-stamps its leaves over whatever door state the snapshot froze.
+// receives the floor number the snapshot claims. (Двери — МОГИЛА 2026-08-28.)
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
                           std::int32_t* floorOut = nullptr);
 

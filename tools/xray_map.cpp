@@ -27,7 +27,6 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"
-#include "game/door.h"
 #include "game/elevator.h"
 #include "game/embody.h"
 #include "game/faction.h"
@@ -421,7 +420,6 @@ struct WorldContext {
     NpcPool pool;
     MacroSim macroSim;
     Registry ecs;
-    DoorSet doors;
     int loadedFloor = 0;
     LayerId loadedLayer = kInvalidLayer;
     Entity playerEntity = entt::null;
@@ -483,8 +481,6 @@ struct WorldContext {
         // Build doors and props
         const FloorSpec& spec = floor_spec(catalog.resolve(floorNum).kind);
         std::uint32_t fseed = streamer.floor_seed_of(registry, floorNum);
-        doors = DoorSet{};
-        door_build(stack.layer(loadedLayer), doors, floorNum, spec, fseed);
 
         EventBus dummyBus;
         dummyBus.init();
@@ -620,18 +616,7 @@ void render_mode_struct(Image& img, WorldContext& ctx, const ToolOptions& opt) {
         }
     }
 
-    // Overlay Doors (Yellow #FFFF00)
-    for (const Door& d : ctx.doors.doors) {
-        int px = static_cast<int>((static_cast<std::int64_t>(d.cx) * img.width) / kMacroDim);
-        int py = static_cast<int>((static_cast<std::int64_t>(d.cy) * img.height) / kMacroDim);
-        int len = static_cast<int>((2 * img.width) / kMacroDim);
-        if (len < 2) len = 2;
-        if (d.axis == 0) {
-            img.draw_line(px, py - len, px, py + len, 255, 255, 0, 1.0f);
-        } else {
-            img.draw_line(px - len, py, px + len, py, 255, 255, 0, 1.0f);
-        }
-    }
+    // МОГИЛА ДВЕРЕЙ (2026-08-28).
 
     // Overlay NPCs if requested
     if (opt.pop) {

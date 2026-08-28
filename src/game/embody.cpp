@@ -164,16 +164,5 @@ void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
     if (reg.valid(e)) reg.destroy(e);
 }
 
-TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& terminalPos) {
-    // Proximity is the caller's job (find_nearest_interactable / interaction_step).
-    // This only applies the terminal effect — never invent a hit at playerPos.
-    TerminalInteractResult res;
-    res.interacted = true;
-    res.propPos = terminalPos;
-    res.doorsToggled = door_toggle_locks(world, doors, reg, layer);
-    res.doorsLocked = (doors.shut > 0);
-    return res;
-}
 
 } // namespace giga::game

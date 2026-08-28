@@ -52,7 +52,6 @@
 #include <memory>
 #include <thread>
 
-#include "game/door.h"       // DoorSet — премиса all-open в патче битсетов
 #include "game/floor_spec.h" // FloorKind
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
 #include "game/room_zone.h"   // RoomZones, bake_room_zones, patch_body_walk_bit
@@ -190,8 +189,10 @@ public:
     // закрытой двери впёк бы дверь в фоновый бейк, ровно то, от чего премиса
     // защищает. (Тоггл двери битсеты не трогает по той же причине — и потому
     // же двери не инкрементируют worldGen.)
-    void patch_carved_cells(const MacroGrid& grid, const DoorSet& doors,
-                            const std::uint32_t* cells, std::size_t n);
+    // МОГИЛА ДВЕРЕЙ (2026-08-28): премиса all-open умерла вместе с
+    // системой — патч честный по живой геометрии каждой клетки.
+    void patch_carved_cells(const MacroGrid& grid, const std::uint32_t* cells,
+                            std::size_t n);
 
     // Бюджет потоков фонового Rebake. Дефолт max(2, hw/2): hw/2 — решение
     // владельца (план §6/§9), нижний клэмп 2 — на 2-4-ядерном железе hw/2

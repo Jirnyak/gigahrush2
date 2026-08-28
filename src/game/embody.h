@@ -25,7 +25,6 @@
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
-#include "game/door.h"
 #include "game/npc_pool.h"
 #include "world/types.h" // kVoxelSize — вывод kBodyClearanceSub
 
@@ -112,18 +111,8 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
 // entity. Leaves the record otherwise intact and frozen in the cold pool.
 void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e);
 
-struct TerminalInteractResult {
-    bool interacted = false;
-    vec3 propPos{0.0f, 0.0f, 0.0f};
-    bool doorsLocked = false;
-    std::uint32_t doorsToggled = 0;
-};
-
-// Apply terminal door-lock toggle at a known Terminal world position.
-// Caller must already have verified proximity (prefer find_nearest_interactable /
-// interaction_step — zero heap). Returns interacted=true and toggles locks.
-// [jirnyak.md] §18 — no fake hit when no terminal is in reach.
-TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& terminalPos);
+// МОГИЛА ДВЕРЕЙ (приказ владельца 2026-08-28): система дверей вырезана
+// целиком — терминальный тумблер замков умер с ней. Новая дверь строится
+// с нуля («зарастание» субвокселями) обсуждением с владельцем.
 
 } // namespace giga::game

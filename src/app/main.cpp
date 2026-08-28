@@ -74,7 +74,6 @@
 #include "game/craft.h"
 #include "game/quest.h"
 #include "game/container.h"
-#include "game/door.h"
 #include "game/combat.h"
 #include "game/status.h"
 #include "game/rpg.h"
@@ -2358,15 +2357,7 @@ int main(int argc, char** argv) {
 
     // Every door on the live floor. Rebuilt per arrival like mobs and containers,
     // because a door belongs to the floor and not to the player — and because the
-    // dense cell->door index is sized for exactly ONE layer ([door.h]).
-    //
-    // Declared up here rather than beside the ledger because the FIRST floor is set
-    // up above the ledger, and a DoorSet declared later compiled as "undeclared
-    // identifier" at the very site that has to build the starting floor's doors.
-    game::DoorSet doors;
-    game::DoorTick doorTick{};      // last step's report, for the HUD
-    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
-    bool doorWanted = false;        // E (единая интеракция), consumed by one sim step
+    // МОГИЛА ДВЕРЕЙ (2026-08-28).
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     bool throwWanted = false;       // Z, consumed by one sim step (player_throw_step)
@@ -2459,10 +2450,7 @@ int main(int argc, char** argv) {
             // all-open geometry (an upper bound on connectivity) the bake must
             // assume. No freeze: the worker owns a snapshot, never the grid,
             // so doors may move mid-bake. [door.h, game/rebake.h]
-            if (currentSpec)
-                doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
-                                              *currentSpec,
-                                              streamer.floor_seed_of(registry, 0));
+            // МОГИЛА ДВЕРЕЙ (2026-08-28).
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -3099,10 +3087,7 @@ int main(int argc, char** argv) {
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
         mRefresh = arrMs() - mPre;
-        if (currentSpec)
-            doorsBuilt = game::door_build(
-                stack.layer(nl), doors, currentFloor, *currentSpec,
-                streamer.floor_seed_of(registry, currentFloor));
+        // МОГИЛА ДВЕРЕЙ (2026-08-28).
         mDoors = arrMs() - mPre - mRefresh;
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
         mNav = arrMs() - mPre - mRefresh - mDoors;
@@ -3179,11 +3164,7 @@ int main(int argc, char** argv) {
         // читает файл целевого этажа, а туда-обратно (0->4->0) целевой этаж
         // и есть последний покинутый.
         flush_floor_write();
-        // Створка зарастает субвокселями — игрок заперт в кабине (двери-
-        // агностик §5b: владеет лифт-машина, не актор).
-        if (hub >= 0 && hub < 4 && doors.lift[hub] != game::kNoDoor)
-            game::door_set_state(stack.layer(activeLayer), doors,
-                                 doors.lift[hub], game::DoorState::Shut);
+        // МОГИЛА ДВЕРЕЙ (2026-08-28). Створка вернётся с новой системой.
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
         liftFreshDone = false;
@@ -3421,13 +3402,7 @@ int main(int argc, char** argv) {
                 stack, registry, reg, pool, player, currentFloor, liftDst,
                 static_cast<std::uint8_t>(arriveH), pid, liftHub);
             if (arrive_after_ride(ride, liftHub)) {
-                // Прибыли в кабину целевого столба — его створка (door_build
-                // построил Open) зарастает до полной готовности этажа.
-                if (liftHub >= 0 && liftHub < 4 &&
-                    doors.lift[liftHub] != game::kNoDoor)
-                    game::door_set_state(
-                        stack.layer(reg.get<Transform>(player).layer), doors,
-                        doors.lift[liftHub], game::DoorState::Shut);
+                // МОГИЛА ДВЕРЕЙ (2026-08-28).
                 liftRide = LiftRide::WaitFresh;
             } else {
                 // Не должно случаться (гейт уже пропустил); честный откат.
@@ -3443,12 +3418,7 @@ int main(int argc, char** argv) {
             !mediumPass.wakes_pending()) {
             liftRide = LiftRide::Idle;
             liftFreshDone = false;
-            // «Лифт приехал»: створка субвоксельно открывается.
-            if (liftHub >= 0 && liftHub < 4 &&
-                doors.lift[liftHub] != game::kNoDoor)
-                game::door_set_state(stack.layer(activeLayer), doors,
-                                     doors.lift[liftHub],
-                                     game::DoorState::Open);
+            // МОГИЛА ДВЕРЕЙ (2026-08-28).
             std::fprintf(stderr,
                          "[lift] ride to %d: %llu ticks cabin-to-doors "
                          "(baked+woken)\n",
@@ -3653,7 +3623,6 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Heal)) healWanted = true;
             if (has(ConsoleRequest::Eat)) eatWanted = true;
             if (has(ConsoleRequest::Drink)) drinkWanted = true;
-            if (has(ConsoleRequest::Door)) doorWanted = true;
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
             if (has(ConsoleRequest::Load)) loadWanted = true;
@@ -3708,10 +3677,6 @@ int main(int argc, char** argv) {
             // contract_accept refuses the same. [quest.h, contract.h]
             if (has(ConsoleRequest::Interact)) {
                 interactWanted = true;
-                // Единая интеракция (решение владельца 2026-08-28): дверь —
-                // такой же потребитель E, как терминал/ящик; каждый сам
-                // решает по близости, door_toggle_near no-op без двери.
-                doorWanted = true;
                 if (game::contract_accept(contracts, offer, ledger)) {
                     offer = game::Contract{};
                     offerLine[0] = 0;
@@ -3784,7 +3749,7 @@ int main(int argc, char** argv) {
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
             if (!mediumMaskChanged.empty())
-                nav.patch_carved_cells(stack.layer(activeLayer).grid(), doors,
+                nav.patch_carved_cells(stack.layer(activeLayer).grid(),
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
             // СУДЬЯ СВЯЗНОСТИ — ПОСЛЕ ОСАДКИ (§60/§61-семья, «висящие
@@ -3819,10 +3784,24 @@ int main(int argc, char** argv) {
                     if (!ripe.empty()) {
                         static CarveScratch judgeScratch;
                         static CarveResult judgeResult;
-                        if (detach_judge_cells(stack.layer(activeLayer),
-                                               ripe.data(), ripe.size(),
-                                               judgeScratch,
-                                               judgeResult) > 0) {
+                        const std::int32_t judged = detach_judge_cells(
+                            stack.layer(activeLayer), ripe.data(),
+                            ripe.size(), judgeScratch, judgeResult);
+                        // Диагностика причины «куч дебриса у лестниц»
+                        // (владелец 2026-08-28): КТО судится и ЧТО рушится.
+                        static std::uint32_t judgeSaid = 0;
+                        if (judged > 0 && judgeSaid < 12) {
+                            ++judgeSaid;
+                            const std::uint32_t c0 = ripe[0];
+                            std::fprintf(
+                                stderr,
+                                "[judge] medium-mask verdict: %u cells ripe, "
+                                "%d converted; first cell (%u,%u,%u)\n",
+                                static_cast<unsigned>(ripe.size()), judged,
+                                c0 % kMacroDim, (c0 / kMacroDim) % kMacroDim,
+                                c0 / (kMacroDim * kMacroDim));
+                        }
+                        if (judged > 0) {
                             voxelMirror.mark_dirty(
                                 judgeResult.dirtyCells.data(),
                                 judgeResult.dirtyCells.size());
@@ -3992,7 +3971,7 @@ int main(int argc, char** argv) {
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
                 danger = activeWorld.fields().find<float>("danger");
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
+                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
                                        &roomZones);
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
@@ -4110,19 +4089,7 @@ int main(int argc, char** argv) {
                         const int pcy = wrap_macro(static_cast<int>(std::floor(meTr.pos.y / kCellSize)));
                         const int pcz = wrap_macro(static_cast<int>(std::floor(meTr.pos.z / kCellSize)));
                         bool playerSheltered = false;
-                        for (const auto& d : doors.doors) {
-                            if (d.hermetic && d.hp > 0 &&
-                                (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
-                                 d.state == static_cast<std::uint8_t>(game::DoorState::Locked))) {
-                                const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDim);
-                                const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDim);
-                                const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDim);
-                                if (dx * dx + dy * dy + dz * dz <= 16) {
-                                    playerSheltered = true;
-                                    break;
-                                }
-                            }
-                        }
+                        // МОГИЛА ДВЕРЕЙ (2026-08-28). Гермо-укрытий нет — новая дверь вернёт их своим законом.
                         if (!playerSheltered) {
                             const game::SamosborPressure sp =
                                 game::samosbor_unsheltered_pressure(
@@ -4758,58 +4725,8 @@ int main(int argc, char** argv) {
                 game::impact_damage_step(reg, pool, &particleBursts);
                 // prop_ragdoll_step умер (рагдолл-эпик, инкремент 6):
                 // сорванные пропы — тела rigid_body_step выше.
-                // Doors resolve AFTER physics for the same reason melee does: contact
-                // is tested by ADJACENCY against where bodies actually ended up this
-                // step, not where they intended to go. Costs nothing while no door is
-                // shut — door_step early-outs on doors.shut == 0. [door.h]
-                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
-                                           activeLayer, kSimDt, simTick);
-                // Door VFX: debris + noise on monster break / force-open.
-                // doorTick carries the world pos of the last event this tick.
-                if (doorTick.broken > 0) {
-                    // Loud crash — audible across a wide radius
-                    game::NoiseProfile np{18.0f, 3500, 4,
-                                           game::NoiseSource::Door};
-                    game::noise_publish(noiseField, activeLayer,
-                                        doorTick.lastBreakPos, np, 0);
-                }
-                if (doorTick.opened > 0) {
-                    game::NoiseProfile np{8.0f, 800, 2,
-                                           game::NoiseSource::Door};
-                    game::noise_publish(noiseField, activeLayer,
-                                        doorTick.lastOpenPos, np, 0);
-                }
-                // Q, consumed once. The player works a door with a keypress; leaning
-                // on one is how MONSTERS open it, and door_step skips the camera
-                // holder precisely so the two cannot be confused.
-                if (doorWanted) {
-                    doorWanted = false;
-                    if (reg.valid(player)) {
-                        const vec3 ppos = reg.get<Transform>(player).pos;
-                        const game::Inventory* pInv = nullptr;
-                        if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                            if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
-                        }
-                        std::uint32_t toggled = game::door_toggle_near(
-                            stack.layer(activeLayer), doors, reg,
-                            activeLayer, ppos, pInv);
-                        if (toggled != game::kNoDoor) {
-                            // Reconstruct door world position for particle/sound
-                            const game::Door& d = doors.doors[toggled];
-                            vec3 doorPos{
-                                (static_cast<float>(d.cx) + 0.5f) * kCellSize,
-                                (static_cast<float>(d.cy) + 0.5f) * kCellSize,
-                                (static_cast<float>(d.cz) +
-                                 static_cast<float>(d.h) * 0.5f) * kCellSize};
+                // МОГИЛА ДВЕРЕЙ (2026-08-28). door_step/тоггл вырезаны целиком.
 
-                            // Slam noise so mobs hear it
-                            game::NoiseProfile np{10.0f, 1200, 2,
-                                                   game::NoiseSource::Door};
-                            game::noise_publish(noiseField, activeLayer,
-                                                doorPos, np, 0);
-                        }
-                    }
-                }
                 // Universal destruction ([world/destruct.h]): the console/tools
                 // PROPOSED a sphere; the sim disposes here, on its own clock.
                 // No bake gate: the worker reads a snapshot, never the grid
@@ -5174,7 +5091,7 @@ int main(int argc, char** argv) {
                                                   painted.size(),
                                                   w, voxelMirror);
                         ++g_worldGen;
-                        nav.patch_carved_cells(w.grid(), doors, painted.data(),
+                        nav.patch_carved_cells(w.grid(), painted.data(),
                                                painted.size());
                         // Патч поля по нарисованным ячейкам — тот же путь, что
                         // у карва; полного скана этажа в кадре больше нет.
@@ -5266,7 +5183,6 @@ int main(int argc, char** argv) {
                     // Долг живых битсетов проходимости — O(1) на клетку.
                     ct0 = std::chrono::steady_clock::now();
                     nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                           doors,
                                            carveResult.dirtyCells.data(),
                                            carveResult.dirtyCells.size());
                     g_carveT.patchMs += carve_ms_since(ct0);
@@ -5556,25 +5472,8 @@ int main(int argc, char** argv) {
                             game::InteractionHit termHit = game::find_nearest_interactable(
                                 reg, player, game::Interactable::Kind::Terminal,
                     game::interact_def(game::InteractKind::Terminal).reachM);
-                            if (termHit.hit) {
-                                game::TerminalInteractResult tres =
-                                    game::embody_interact_terminal(
-                                        reg, stack.layer(activeLayer), doors,
-                                        activeLayer, termHit.pos);
-                                if (tres.interacted) {
-                                    handled = true;
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
-                                                  currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
-                                    elevDiagAt = simTick;
-                                    std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
-                                                 tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
-                                                 tres.propPos.x, tres.propPos.y, tres.propPos.z);
+                            // МОГИЛА ДВЕРЕЙ (2026-08-28). Терминал больше не тумблер замков — новая роль придёт с новой дверью.
 
-                                    game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
-                                    game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
-                                }
-                            }
                         }
 
                         // 3. ElectricalShield sabotage — zero-heap nearest.
@@ -6201,12 +6100,7 @@ int main(int argc, char** argv) {
                                 reg, stack.layer(nl), currentFloor, nl,
                                 streamer.floor_seed_of(registry, currentFloor),
                                 bus);
-                            if (currentSpec)
-                                doorsBuilt = game::door_build(
-                                    stack.layer(nl), doors, currentFloor,
-                                    *currentSpec,
-                                    streamer.floor_seed_of(registry,
-                                                           currentFloor));
+                            // МОГИЛА ДВЕРЕЙ (2026-08-28).
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -6752,8 +6646,6 @@ int main(int argc, char** argv) {
                 // is a save the player only finds out about by losing a run.
                 if (saveLine[0] && simTick - saveLineAt < 6u * kSimHz)
                     ImGui::TextUnformatted(saveLine);
-                ImGui::Text("doors %u built | %u shut | %u broken | %u pressing",
-                            doorsBuilt, doors.shut, doors.broken, doorTick.pressing);
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
@@ -7748,26 +7640,8 @@ int main(int argc, char** argv) {
                 promptText = promptBuf;
             };
 
-            // Door proximity (same indexed search door_toggle_near uses)
-            std::uint32_t nearDoor = game::door_query_near(doors, ppos);
-            if (nearDoor != game::kNoDoor) {
-                const game::Door& d = doors.doors[nearDoor];
-                const bool isShutOrLocked = (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
-                                             d.state == static_cast<std::uint8_t>(game::DoorState::Locked));
+            // МОГИЛА ДВЕРЕЙ (2026-08-28). Промпт двери вернётся с новой системой.
 
-                if (isShutOrLocked && d.keycardTier > 0) {
-                    const game::Inventory* pInv = nullptr;
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                        if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
-                    }
-                    const bool hasCard = pInv && game::inventory_has_keycard(*pInv, d.keycardTier);
-                    set_prompt("interact", hasCard ? "UNLOCK DOOR" : "KEYCARD REQUIRED");
-                } else if (isShutOrLocked) {
-                    set_prompt("interact", "OPEN DOOR");
-                } else {
-                    set_prompt("interact", "CLOSE DOOR");
-                }
-            }
 
             // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
             if (!promptText && activeLayer != kInvalidLayer) {
@@ -8076,42 +7950,8 @@ int main(int argc, char** argv) {
         // their mask edits the same way carve does ([game/door.h]
         // dirtyCells) — drain once per frame, then record this frame's
         // dirty-cell copies.
-        if (!doors.dirtyCells.empty()) {
-            voxelMirror.mark_dirty(doors.dirtyCells.data(),
-                                   doors.dirtyCells.size());
-            // Долг писателя грида (S16.5, «any grid mutator owes the same
-            // debt»): дверь освобождает/занимает клетки — автомат обязан
-            // проснуться, иначе вода не течёт в открытую дверь до чужого
-            // пробуждения (аудит 2026-08-25: дверной хвост отставал).
-            if (mediumPass.ready() && activeLayer != kInvalidLayer)
-                mediumPass.wake_cells(doors.dirtyCells.data(),
-                                      doors.dirtyCells.size(),
-                                      stack.layer(activeLayer), voxelMirror);
-            // Door mask edits free/occupy macro cells — detach props
-            // whose anchors no longer have solid support. [jirnyak.md] s18
-            // Rebuild PropPass when anything detaches so GPU drops stale skins.
-            if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                           doors.dirtyCells, &particleBursts,
-                                           static_cast<std::uint32_t>(simTick)) > 0) {
-                propPassNeedsRebuild = true;
-            }
-            // A door leaf sliding away empties cells too — dressing that
-            // hung off them is just as severed as by a blast.
-            if (antourage_carve_step_here(doors.dirtyCells,
-                                          static_cast<std::uint32_t>(simTick))) {
-                propPassNeedsRebuild = true;
-                dressingSetChanged = true;
-            }
-            // Same per-cell debt carve pays: a door leaf filling or freeing
-            // a cell must reach the diffusion walkable bitset, or danger
-            // keeps flowing through a shut door (the audit's §1.8 half that
-            // belongs to doors). worldGen is NOT bumped — nav bakes the
-            // all-open premise ([game/door.h]) and a toggle cannot stale it.
-            mark_diffusion_dirty(diffusionDriver,
-                                 stack.layer(activeLayer).grid(),
-                                 activeLayer, doors.dirtyCells);
-            doors.dirtyCells.clear();
-        }
+        // МОГИЛА ДВЕРЕЙ (2026-08-28).
+
         if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
             regrow_check(stack.layer(activeLayer), voxelMirror, "двери",
                          simTick);
@@ -8655,7 +8495,7 @@ int main(int argc, char** argv) {
                 audioSys.update(frameDt, atr.pos, acam ? acam->yaw : 0.0f,
                                 acam ? acam->pitch : 0.0f,
                                 stack.layer(activeLayer).grid(), adanger,
-                                samosbor, bus, noiseField, 1.0f, &doors,
+                                samosbor, bus, noiseField, 1.0f,
                                 activeLayer);
             }
             renderer.end_frame(window);
@@ -8771,11 +8611,7 @@ int main(int argc, char** argv) {
                         // same law as the keyboard ride path. This is the
                         // SECOND travel site; a fix that touches only one path
                         // leaves --shot proving nothing. [save.h, door.h]
-                        if (currentSpec)
-                            doorsBuilt = game::door_build(
-                                stack.layer(nl), doors, currentFloor,
-                                *currentSpec,
-                                streamer.floor_seed_of(registry, currentFloor));
+                        // МОГИЛА ДВЕРЕЙ (2026-08-28).
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

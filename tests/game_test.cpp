@@ -89,7 +89,6 @@ int g_checks = 0;
 #include "suite_packs.inl"
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
-#include "suite_doors.inl"
 #include "suite_antourage.inl"
 #include "suite_audio.inl"
 #include "suite_saveload.inl"
@@ -5513,7 +5512,6 @@ int main() {
     test_noise_all();
     test_packs_all();
     test_samosbor_all();
-    test_doors_all();
     test_pipes_hug_and_branch();
     test_antourage_all();
     test_antourage_carve_drops_the_wire();

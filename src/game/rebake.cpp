@@ -544,7 +544,6 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
 }
 
 void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
-                                         const DoorSet& doors,
                                          const std::uint32_t* cells,
                                          std::size_t n) {
     if (!navClear_.built() || !bodyBits_.built()) return;
@@ -556,14 +555,10 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
     // бейк. У гранного клиренса премиса живёт на уровне ГРАНИ: пропускается
     // любая грань, чей ВТОРОЙ конец — клетка двери (её половину перехода
     // считало открытое состояние).
-    auto door_at = [&doors](int x, int y, int z) {
-        return !doors.index.empty() &&
-               doors.index[macro_index(wrap_macro(x), wrap_macro(y),
-                                       wrap_macro(z))] != 0u;
-    };
+    // Дверей нет — каждая грань патчится по живой геометрии.
+    auto door_at = [](int, int, int) { return false; };
     for (std::size_t i = 0; i < n; ++i) {
         const std::size_t idx = cells[i];
-        if (!doors.index.empty() && doors.index[idx] != 0u) continue;
         const SubMask& m = masks[idx];
         patch_body_walk_bit(bodyBits_, idx, m);
         // Шесть граней карвнутой клетки: свои три плюс-нибла и плюс-ниблы

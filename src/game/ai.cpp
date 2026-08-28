@@ -10,7 +10,6 @@
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
-#include "game/door.h"        // door_nearest_shelter — hermetic flee target (§23)
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
@@ -587,7 +586,7 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
-               const DoorSet* doors, const World* world,
+               const void* doorsDead, const World* world,
                const RoomZones* rooms) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
@@ -840,20 +839,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // keep the prior gradient/memory path bit-for-bit). Already-inside a
             // sealed room is handled by door_nearest_shelter returning the body's
             // own cell — dx/dy then fall below kMinFleeGrad2 and we fall through.
-            if (world != nullptr && doors != nullptr) {
-                int ox = cx, oy = cy, oz = cz;
-                if (door_nearest_shelter(*world, *doors, cx, cy, cz, ox, oy, oz)) {
-                    const vec3 away = tangent(
-                        static_cast<float>(wrap_delta(cx, ox, kMacroDim)),
-                        static_cast<float>(wrap_delta(cy, oy, kMacroDim)),
-                        static_cast<float>(wrap_delta(cz, oz, kMacroDim)));
-                    const float d2 = away.x * away.x + away.y * away.y + away.z * away.z;
-                    if (d2 > kMinFleeGrad2) {
-                        dir = away * (1.0f / std::sqrt(d2));
-                        owned = true;
-                    }
-                }
-            }
+// МОГИЛА ДВЕРЕЙ (2026-08-28): гермо-укрытий больше нет — бегство
+            // остаётся чистым -градиентом опасности; новая дверь вернёт
+            // укрытия своим законом.
             // Live danger gradient: preferred over memory when no shelter
             // direction is available (no hermetic door on floor, or already there).
             if (!owned && danger != nullptr) {

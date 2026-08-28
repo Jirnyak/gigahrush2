@@ -124,8 +124,7 @@ void sla_holds_on_a_real_floor() {
     // поколение мутаций — ровно то, что делает дренаж dirtyCells в main.
     w.grid().clear_cell(tx, ty, tz);
     const std::uint32_t dirty[] = {static_cast<std::uint32_t>(target)};
-    const DoorSet noDoors; // пустой индекс — премисе all-open нечего хранить
-    s.patch_carved_cells(w.grid(), noDoors, dirty, 1);
+    s.patch_carved_cells(w.grid(), dirty, 1);
     ++gen;
     const std::uint64_t carveTick = clock.now();
 
@@ -199,7 +198,7 @@ void sla_holds_on_a_real_floor() {
                             (target2 / kMacroDim) % kMacroDim,
                             target2 / (kMacroDim * kMacroDim));
         const std::uint32_t dirty2[] = {static_cast<std::uint32_t>(target2)};
-        s.patch_carved_cells(w.grid(), noDoors, dirty2, 1);
+        s.patch_carved_cells(w.grid(), dirty2, 1);
         ++gen;
         const std::uint64_t carve2 = clock.now();
 
@@ -257,7 +256,7 @@ void sla_holds_on_a_real_floor() {
                             (target3 / kMacroDim) % kMacroDim,
                             target3 / (kMacroDim * kMacroDim));
         const std::uint32_t dirty3[] = {static_cast<std::uint32_t>(target3)};
-        s.patch_carved_cells(w.grid(), noDoors, dirty3, 1);
+        s.patch_carved_cells(w.grid(), dirty3, 1);
         ++gen;
         const std::uint64_t carve3 = clock.now();
         for (;;) {

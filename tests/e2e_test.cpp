@@ -32,7 +32,6 @@
 #include "game/npc_pool.h"
 #include "game/needs.h"
 #include "game/combat.h"
-#include "game/door.h"
 #include "game/samosbor.h"
 #include "game/wander.h"
 #include "game/population.h"

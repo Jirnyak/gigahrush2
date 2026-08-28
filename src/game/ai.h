@@ -975,10 +975,6 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // Pure game layer over EnTT + NpcPool + a read-only field/grid, so it is
 // exercised headless by `game_test`.
 //
-// `doors` + `world` (optional, §23 follow-up): when both non-null, IntentFlee
-// prefers door_nearest_shelter over pure −∇danger so NPCs run to hermetic
-// apartments during Samosbor purple fog. Either null keeps bit-for-bit prior
-// behaviour (tests pass nullptr; main wires activeWorld + doors).
 //
 // `rooms` (optional, §27 leg (a)+(b)) is what ends "IntentFlee is the ONLY owning
 // intent". With it, an intent the affordance table gives a destination
@@ -993,12 +989,11 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // re-derived every tick. What changed is only the SET of intents that can earn it;
 // `wander_step` and `faction_feud_step` read the same `ai_owns_motion` guard and
 // neither had to learn anything about rooms.
-struct DoorSet;   // door.h — incomplete OK; full type only needed in ai.cpp
 struct RoomZones; // room_zone.h — likewise
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
-               const DoorSet* doors = nullptr,
+               const void* doorsDead = nullptr, // МОГИЛА ДВЕРЕЙ: слот пустует до новой системы
                const World* world = nullptr,
                const RoomZones* rooms = nullptr);
 

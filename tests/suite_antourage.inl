@@ -750,10 +750,7 @@ static void test_antourage_all() {
     CHECK(again.cloths.size() == bake.cloths.size());
     CHECK(w.grid().types() == w2.grid().types());
 
-    // The dressing must not eat the doors: door_build still validates a real
-    // door population against the dressed grid.
-    DoorSet doors;
-    CHECK(door_build(w, doors, 0, floor_spec(FloorKind::Residential), 1337u) > 0);
+    // МОГИЛА ДВЕРЕЙ (2026-08-28): проверка door_build умерла с системой.
 
     // DESTRUCTION reaches the dressing ([antourage.h] antourage_carve_step —
     // the antourage twin of anchor_validate_step). Empty the first instance's

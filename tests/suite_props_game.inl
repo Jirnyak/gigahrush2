@@ -780,36 +780,7 @@ static void test_find_nearest_terminal_respects_reach() {
     }
 }
 
-static void test_embody_interact_terminal_applies_at_given_pos() {
-    // embody_interact_terminal no longer searches: caller gates proximity.
-    // Calling it always reports interacted=true at the supplied terminalPos
-    // (door toggle count depends on DoorSet contents -- empty set -> 0).
-    Registry reg;
-    World world;
-    game::DoorSet doors{};
-    const LayerId layer = 1;
-    const vec3 termPos{5.0f, 1.0f, 5.0f};
-
-    const game::TerminalInteractResult res =
-        game::embody_interact_terminal(reg, world, doors, layer, termPos);
-    CHECK(res.interacted);
-    CHECK(res.propPos.x == termPos.x);
-    CHECK(res.propPos.y == termPos.y);
-    CHECK(res.propPos.z == termPos.z);
-    CHECK(res.doorsToggled == 0u);
-
-    // Miss path for live E-key: find_nearest returns !hit when nothing in reach,
-    // so main must NOT call embody_interact_terminal. That contract is what
-    // killed the old always-true fake hit at playerPos.
-    const Entity actor = make_actor_at(reg, layer, vec3{0.0f, 1.0f, 0.0f});
-    const game::InteractionHit miss = game::find_nearest_interactable(
-        reg, actor, game::Interactable::Kind::Terminal, 4.0f);
-    CHECK(!miss.hit);
-}
-
-
-// --- [jirnyak.md] section 18: PropPass passive skin (ECS PropMesh collect) ----
-
+// МОГИЛА ДВЕРЕЙ (2026-08-28): терминальный тумблер замков умер с системой.
 static void test_collect_static_prop_mesh_instances_shapes() {
     Registry reg;
     World world;
@@ -1324,7 +1295,6 @@ void test_props_game_all() {
     test_projectile_shatters_lamp_and_light_dies();
     test_find_nearest_terminal_respects_reach();
     test_sim_owned_terminals_seed_and_interact();
-    test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();
     test_corpse_and_loot_are_interactable();
 }

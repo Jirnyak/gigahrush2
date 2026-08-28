@@ -23,7 +23,7 @@
 //
 //   * wholesale (floor build / arrival / F9 / teleport)  -> upload_all()
 //   * carve ([world/destruct.h] CarveResult::dirtyCells) -> mark_dirty()
-//   * doors  ([game/door.h] DoorSet::dirtyCells)         -> mark_dirty()
+//   * (двери — МОГИЛА 2026-08-28; новая система придёт со своим дренажом)
 //   * any future grid mutator owes the same debt the carve table in
 //     [destruct.md] already states. (The cellular sandpile module that used to
 //     be named here was deleted 2026-08-10: 1492 lines, zero reachable.)
