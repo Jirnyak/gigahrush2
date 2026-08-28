@@ -3550,6 +3550,22 @@ int main(int argc, char** argv) {
             ltr.pos.x = (static_cast<float>(ccx) + 0.5f) * kCellSize;
             ltr.pos.y = (static_cast<float>(ccy) + 0.5f) * kCellSize;
         }
+        // ФОКУС ПРИЦЕЛА — состояние КАДРА, не рисования ([game/focus.h]).
+        // Считался внутри HUD-ветки (под showHud/playing/valid), а
+        // потребитель — обработчик E — живёт в сим-ветке: цель зависела от
+        // того, рисуется ли табличка. Теперь одна точка, до всех читателей.
+        if (reg.valid(player) && activeLayer != kInvalidLayer) {
+            const auto& camF = reg.get<CameraTag>(player);
+            const vec3 aimF = camera_forward(camF.yaw, camF.pitch);
+            vec3 eyeF = reg.get<Transform>(player).pos;
+            if (const auto* nrF = reg.try_get<game::NpcRef>(player))
+                if (pool.valid(nrF->id))
+                    eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
+            g_focus = game::focus_pick(reg, stack.layer(activeLayer),
+                                       activeLayer, eyeF, aimF, doors);
+        } else {
+            g_focus = game::Focus{};
+        }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
         // --- events --------------------------------------------------------
@@ -7823,28 +7839,6 @@ int main(int argc, char** argv) {
             // Взгляд — ЧЕРЕЗ camera_forward ([sim/camera.h]): второй
             // формулы курса в дереве не существует (моя собственная
             // тригонометрия здесь и была причиной «двери не реагируют»).
-            const auto& camF = reg.get<CameraTag>(player);
-            const vec3 aim = camera_forward(camF.yaw, camF.pitch);
-            vec3 eye = ppos;
-            if (const auto* nrF = reg.try_get<game::NpcRef>(player))
-                if (pool.valid(nrF->id))
-                    eye.z += game::body_eye_height(pool.height_mm(nrF->id));
-            g_focus = game::focus_pick(reg, stack.layer(activeLayer),
-                                       activeLayer, eye, aim, doors);
-            // Диагностика прицела В ИГРЕ (владелец: «всё равно молчит»):
-            // раз в игровую секунду — что видит фокус на самом деле.
-            {
-                static std::uint64_t lastSay = 0;
-                if (simTick - lastSay > kSimHz) {
-                    lastSay = simTick;
-                    std::fprintf(stderr,
-                                 "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,"
-                                 "%.2f) portals=%zu -> what=%d dist=%.2f\n",
-                                 eye.x, eye.y, eye.z, aim.x, aim.y, aim.z,
-                                 doors.list.size(),
-                                 static_cast<int>(g_focus.what), g_focus.dist);
-                }
-            }
             if (const char* what = game::focus_prompt(
                     g_focus, stack.layer(activeLayer), doors)) {
                 std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
