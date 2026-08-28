@@ -30,7 +30,7 @@ void declaration_and_toggle() {
     }
     // На жилом этаже есть и гермополотна (Living/Medical/Hq) и сталь.
     bool sawSteel = false, sawHermetic = false;
-    for (const DoorPortal& p : d.list) {
+    for (const MaskGroup& p : d.list) {
         if (p.mat == kMatDoorSteel) sawSteel = true;
         if (p.mat == kMatDoorHermetic) sawHermetic = true;
     }
@@ -46,16 +46,15 @@ void declaration_and_toggle() {
         if (!door_closed(w, d.list[i])) { id = i; break; }
     }
     CHECK(id != kNoPortal);
-    const DoorPortal& p = d.list[id];
-    const vec3 at{(p.cx + 0.5f) * kCellSize, (p.cy + 0.5f) * kCellSize,
-                  (p.cz + 0.5f) * kCellSize};
+    const MaskGroup& p = d.list[id];
+    const vec3 at = p.centre;
 
     // Тоггл закрывает: настоящая материя в маске+странице, состояние —
     // производная от мира.
     CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
     CHECK(door_closed(w, p));
     CHECK(!dirty.empty());
-    CHECK(!w.grid().mask(p.cx, p.cy, p.cz).empty());
+    CHECK(!w.grid().masks()[p.cells.front().ci].empty());
 
     // Тоггл открывает: свои биты сняты, проём снова воздух.
     dirty.clear();
@@ -72,9 +71,8 @@ void declaration_and_toggle() {
 
     // Механизм-API: лифтовая створка закрывается/открывается машиной,
     // акторный запрос её не видит.
-    const DoorPortal& lp = d.list[d.lift[0]];
-    const vec3 lat{(lp.cx + 0.5f) * kCellSize, (lp.cy + 0.5f) * kCellSize,
-                   (lp.cz + 0.5f) * kCellSize};
+    const MaskGroup& lp = d.list[d.lift[0]];
+    const vec3 lat = lp.centre;
     CHECK(door_query_near(d, lat) == kNoPortal || 
           !d.list[door_query_near(d, lat)].mechanism);
     dirty.clear();
@@ -95,9 +93,8 @@ void snapshot_carries_closed_door() {
     for (std::uint32_t i = 0; i < d.list.size(); ++i)
         if (!d.list[i].mechanism && !door_closed(w, d.list[i])) { id = i; break; }
     CHECK(id != kNoPortal);
-    const DoorPortal& p = d.list[id];
-    const vec3 at{(p.cx + 0.5f) * kCellSize, (p.cy + 0.5f) * kCellSize,
-                  (p.cz + 0.5f) * kCellSize};
+    const MaskGroup& p = d.list[id];
+    const vec3 at = p.centre;
     CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
     CHECK(door_closed(w, p));
 
@@ -135,10 +132,9 @@ void focus_aims_at_a_real_door() {
 
     int seen = 0, promptOk = 0;
     for (std::uint32_t i = 0; i < d.list.size() && seen < 8; ++i) {
-        const DoorPortal& p = d.list[i];
+        const MaskGroup& p = d.list[i];
         if (p.mechanism) continue;
-        const vec3 centre{(p.cx + 0.5f) * kCellSize, (p.cy + 0.5f) * kCellSize,
-                          (p.cz + p.h * 0.5f) * kCellSize};
+        const vec3 centre = p.centre;
         // Глаз в полутора метрах по -X от проёма, смотрит на него: тот же
         // вектор, что даёт camera_forward(yaw=0) — ось +X.
         // Подход с ЧЕТЫРЁХ сторон, как в игре: проём стоит в стене вдоль
@@ -174,11 +170,51 @@ void focus_aims_at_a_real_door() {
     CHECK(promptOk == seen);
 }
 
+// ДВЕРЬ ЛЮБОЙ ФОРМЫ ([world/mask.h], владелец 2026-08-28: «проём, решётка
+// толщиной в один субвоксель, толстая гермодверь, створки ворот»). Форма —
+// биты allow: полотно в один субвоксель толщиной штампует РОВНО свои биты
+// и снимает ровно их — ни атомом больше.
+void arbitrary_shape_door() {
+    World w;
+    Doors d;
+    MaskGroup g;
+    g.props = kMaskDoor;
+    g.mat = kMatDoorSteel;
+    SubMask plate; // стенка sx==0: 8×8 = 64 атома, толщина 0.25 м
+    for (int sz = 0; sz < kSubDim; ++sz)
+        for (int sy = 0; sy < kSubDim; ++sy)
+            plate.set(sub_bit(0, sy, sz));
+    const std::uint32_t ci =
+        static_cast<std::uint32_t>(macro_index(10, 10, 10));
+    g.cells.push_back(MaskCell{ci, plate});
+    g.centre = vec3{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+    d.list.push_back(g);
+
+    Registry reg;
+    std::vector<std::uint32_t> dirty;
+    CHECK(!door_closed(w, d.list[0]));
+    CHECK(door_toggle_near(w, d, reg, 0, g.centre, dirty) == 0);
+    CHECK(door_closed(w, d.list[0]));
+    const SubMask& m = w.grid().masks()[ci];
+    int stamped = 0;
+    for (int b = 0; b < kSubVoxels; ++b) {
+        if (!m.test(b)) continue;
+        CHECK(plate.test(b)); // ни атома вне формы
+        ++stamped;
+    }
+    CHECK(stamped == kSubDim * kSubDim);
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, g.centre, dirty) == 0);
+    CHECK(!door_closed(w, d.list[0]));
+    CHECK(w.grid().masks()[ci].empty()); // сняла ровно свои — клетка чиста
+}
+
 } // namespace doors_test
 
 static void test_doors_all() {
     doors_test::declaration_and_toggle();
     doors_test::snapshot_carries_closed_door();
     doors_test::focus_aims_at_a_real_door();
+    doors_test::arbitrary_shape_door();
     std::printf("doors suite done (материя, не состояние)\n");
 }

@@ -2380,7 +2380,12 @@ int main(int argc, char** argv) {
             streamer.floor_seed_of(registry, currentFloor);
         for (int hub = 0; hub < 4; ++hub) {
             if (doors.lift[hub] == game::kNoPortal) continue;
-            const game::DoorPortal& p = doors.list[doors.lift[hub]];
+            const MaskGroup& p = doors.list[doors.lift[hub]];
+            // Створка лифта — группа из одной клетки; координаты — из ci.
+            const std::uint32_t dci = p.cells.front().ci;
+            const int pcx2 = static_cast<int>(dci % kMacroDim);
+            const int pcy2 = static_cast<int>((dci / kMacroDim) % kMacroDim);
+            const int pcz2 = static_cast<int>(dci / (kMacroDim * kMacroDim));
             const game::LiftEntrance le =
                 game::lift_entrance(sp->kind, currentFloor, hub, fseed);
             const int ox = le.side == 0 ? 1 : le.side == 1 ? -1 : 0;
@@ -2390,16 +2395,16 @@ int main(int argc, char** argv) {
             // Кнопка: наружная грань косяка рядом с проёмом.
             {
                 game::SubVoxelAnchor a{};
-                a.cx = static_cast<std::uint8_t>(wrap_macro(p.cx + jx));
-                a.cy = static_cast<std::uint8_t>(wrap_macro(p.cy + jy));
-                a.cz = p.cz;
+                a.cx = static_cast<std::uint8_t>(wrap_macro(pcx2 + jx));
+                a.cy = static_cast<std::uint8_t>(wrap_macro(pcy2 + jy));
+                a.cz = pcz2;
                 a.subX = 4; a.subY = 4; a.subZ = 4;
                 const vec3 bp{
-                    (static_cast<float>(wrap_macro(p.cx + jx)) + 0.5f +
+                    (static_cast<float>(wrap_macro(pcx2 + jx)) + 0.5f +
                      static_cast<float>(ox) * 0.62f) * kCellSize,
-                    (static_cast<float>(wrap_macro(p.cy + jy)) + 0.5f +
+                    (static_cast<float>(wrap_macro(pcy2 + jy)) + 0.5f +
                      static_cast<float>(oy) * 0.62f) * kCellSize,
-                    (static_cast<float>(p.cz) + 0.6f) * kCellSize};
+                    (static_cast<float>(pcz2) + 0.6f) * kCellSize};
                 game::spawn_prop_from_id(reg, w, bp, a,
                                          game::PropId::LiftButton, nl);
             }
@@ -2410,14 +2415,14 @@ int main(int argc, char** argv) {
                 game::SubVoxelAnchor a{};
                 a.cx = static_cast<std::uint8_t>(wrap_macro(hcx - ox));
                 a.cy = static_cast<std::uint8_t>(wrap_macro(hcy - oy));
-                a.cz = p.cz;
+                a.cz = pcz2;
                 a.subX = 4; a.subY = 4; a.subZ = 4;
                 const vec3 pp{
                     (static_cast<float>(hcx) + 0.5f -
                      static_cast<float>(ox) * 0.42f) * kCellSize,
                     (static_cast<float>(hcy) + 0.5f -
                      static_cast<float>(oy) * 0.42f) * kCellSize,
-                    (static_cast<float>(p.cz) + 0.65f) * kCellSize};
+                    (static_cast<float>(pcz2) + 0.65f) * kCellSize};
                 game::spawn_prop_from_id(reg, w, pp, a,
                                          game::PropId::LiftPanel, nl);
             }
@@ -4897,7 +4902,7 @@ int main(int argc, char** argv) {
                         g_focus.what == game::Focus::What::Portal &&
                         g_focus.portal < doors.list.size()) {
                         const vec3 dpos = reg.get<Transform>(player).pos;
-                        const game::DoorPortal& fp = doors.list[g_focus.portal];
+                        const MaskGroup& fp = doors.list[g_focus.portal];
                         const bool wasClosed =
                             game::door_closed(stack.layer(activeLayer), fp);
                         if (wasClosed)

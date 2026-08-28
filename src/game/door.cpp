@@ -18,28 +18,56 @@ namespace {
 // системы: тело 0.8 м у клетки 2 м — работать дверью можно из соседней.
 constexpr float kDoorReachM = 2.6f;
 
-bool body_in_portal(const DoorPortal& p, const Registry& reg, LayerId layer) {
+// Проём-колонна модуля -> группа: клетки с ПОЛНОЙ формой allow (дверь
+// занимает весь проём; решётки и частичные формы модуль объявит теми же
+// битами, когда возьмётся). Центр ВЫВЕДЕН из клеток — представитель для
+// прицела и дистанций.
+MaskGroup column_group(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
+                       std::uint8_t h, CellType mat, std::uint8_t mechanism) {
+    MaskGroup g;
+    g.props = kMaskDoor;
+    g.mat = mat;
+    g.mechanism = mechanism;
+    SubMask full;
+    for (std::size_t wd = 0; wd < kSubMaskWords; ++wd) full.words[wd] = ~0ull;
+    for (int z = cz; z < cz + h; ++z)
+        g.cells.push_back(MaskCell{
+            static_cast<std::uint32_t>(
+                macro_index(cx, cy, wrap_macro(z))),
+            full});
+    g.centre = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                    (static_cast<float>(cy) + 0.5f) * kCellSize,
+                    (static_cast<float>(cz) + static_cast<float>(h) * 0.5f) *
+                        kCellSize};
+    return g;
+}
+
+bool body_in_portal(const MaskGroup& g, const Registry& reg, LayerId layer) {
     auto view = reg.view<const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
-        if (cx != p.cx || cy != p.cy) continue;
-        if (cz >= p.cz && cz < p.cz + p.h) return true;
+        const std::uint32_t ci = static_cast<std::uint32_t>(macro_index(
+            wrap_macro(static_cast<int>(tr.pos.x / kCellSize)),
+            wrap_macro(static_cast<int>(tr.pos.y / kCellSize)),
+            wrap_macro(static_cast<int>(tr.pos.z / kCellSize))));
+        for (const MaskCell& mc : g.cells)
+            if (mc.ci == ci) return true;
     }
     return false;
 }
 
-float portal_dist2(const DoorPortal& p, const vec3& pos) {
-    const float px = (static_cast<float>(p.cx) + 0.5f) * kCellSize;
-    const float py = (static_cast<float>(p.cy) + 0.5f) * kCellSize;
-    const float pz =
-        (static_cast<float>(p.cz) + static_cast<float>(p.h) * 0.5f) * kCellSize;
-    const float dx = wrap_delta_f(pos.x, px, kWorldExtent);
-    const float dy = wrap_delta_f(pos.y, py, kWorldExtent);
-    const float dz = wrap_delta_f(pos.z, pz, kWorldExtent);
+// Обратная macro_index: координаты клетки из ci (x + y*dim + z*dim²).
+void cell_coords(std::uint32_t ci, int& x, int& y, int& z) {
+    x = static_cast<int>(ci % kMacroDim);
+    y = static_cast<int>((ci / kMacroDim) % kMacroDim);
+    z = static_cast<int>(ci / (kMacroDim * kMacroDim));
+}
+
+float group_dist2(const MaskGroup& g, const vec3& pos) {
+    const float dx = wrap_delta_f(pos.x, g.centre.x, kWorldExtent);
+    const float dy = wrap_delta_f(pos.y, g.centre.y, kWorldExtent);
+    const float dz = wrap_delta_f(pos.z, g.centre.z, kWorldExtent);
     return dx * dx + dy * dy + dz * dz;
 }
 
@@ -64,12 +92,6 @@ void door_declare(Doors& doors, int number, const FloorSpec& spec,
     };
 
     for (const Doorway& w : ways) {
-        DoorPortal p;
-        p.cx = w.cx;
-        p.cy = w.cy;
-        p.cz = w.cz;
-        p.h = w.h;
-        p.mechanism = 0;
         // Гермополотно квартирного класса — та же таксономия комнат, что
         // выбирала гермодвери раньше: любая из двух смежных комнат
         // Living/Medical/Hq. Неразрушимость — свойством материала (закон 3).
@@ -87,16 +109,19 @@ void door_declare(Doors& doors, int number, const FloorSpec& spec,
                 herm = hermetic_room(rx, ryD) || hermetic_room(rx, ryU);
             }
         }
-        p.mat = herm ? kMatDoorHermetic : kMatDoorSteel;
-        doors.list.push_back(p);
+        doors.list.push_back(column_group(
+            w.cx, w.cy, w.cz, w.h,
+            herm ? kMatDoorHermetic : kMatDoorSteel, /*mechanism=*/0));
     }
 
-    // Диагностика UX (владелец 2026-08-28 «не вижу табличек»): первые
-    // порталы — вслух, чтобы координаты для проверки радиуса были в логе.
+    // Диагностика UX (владелец 2026-08-28 «не вижу табличек»): гистограмма
+    // высот — координаты для проверки радиуса в логе.
     {
         int byCz[8] = {0};
-        for (const DoorPortal& q : doors.list)
-            if (q.cz < 64) ++byCz[q.cz % 8];
+        for (const MaskGroup& q : doors.list) {
+            const int cz = static_cast<int>(q.centre.z / kCellSize);
+            if (cz < 64) ++byCz[cz % 8];
+        }
         std::fprintf(stderr,
                      "[door] declared %zu portals; cz%%8 histogram: "
                      "%d %d %d %d %d %d %d %d\n",
@@ -104,7 +129,7 @@ void door_declare(Doors& doors, int number, const FloorSpec& spec,
                      byCz[4], byCz[5], byCz[6], byCz[7]);
     }
 
-    // Лифтовые створки: механизм-порталы на проёмах столбов, той же
+    // Лифтовые створки: механизм-группы на проёмах столбов, той же
     // арифметикой, что штамповала геометрию (lift_entrance). Сталь: щит
     // области и так делает их неприкосновенными, гермо-материал не нужен.
     for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
@@ -113,91 +138,93 @@ void door_declare(Doors& doors, int number, const FloorSpec& spec,
         const LiftEntrance e = lift_entrance(spec.kind, number, hub, seed);
         const int dx = e.side == 0 ? 1 : e.side == 1 ? -1 : 0;
         const int dy = e.side == 2 ? 1 : e.side == 3 ? -1 : 0;
-        DoorPortal p;
-        p.cx = static_cast<std::uint8_t>(wrap_macro(hcx + dx));
-        p.cy = static_cast<std::uint8_t>(wrap_macro(hcy + dy));
-        p.cz = static_cast<std::uint8_t>(e.h);
-        p.h = 1;
-        p.mat = kMatDoorSteel;
-        p.mechanism = 1;
         doors.lift[hub] = static_cast<std::uint32_t>(doors.list.size());
-        doors.list.push_back(p);
+        doors.list.push_back(column_group(
+            static_cast<std::uint8_t>(wrap_macro(hcx + dx)),
+            static_cast<std::uint8_t>(wrap_macro(hcy + dy)),
+            static_cast<std::uint8_t>(e.h), /*h=*/1, kMatDoorSteel,
+            /*mechanism=*/1));
     }
 }
 
-bool door_closed(const World& w, const DoorPortal& p) {
+bool door_closed(const World& w, const MaskGroup& g) {
     const SubField<CellType>* f =
         w.subfields().find<CellType>(kSubMaterialName);
-    for (int z = p.cz; z < p.cz + p.h; ++z) {
-        const std::size_t ci = macro_index(p.cx, p.cy, wrap_macro(z));
-        const SubMask& m = w.grid().masks()[ci];
+    for (const MaskCell& mc : g.cells) {
+        const SubMask& m = w.grid().masks()[mc.ci];
         if (m.empty()) continue;
         // Однородная клетка без страницы: тип и есть материал всей маски.
-        const CellType* pg = f ? f->page(ci) : nullptr;
+        const CellType* pg = f ? f->page(mc.ci) : nullptr;
         if (!pg) {
-            if (w.grid().types()[ci] == p.mat) return true;
+            if (w.grid().types()[mc.ci] != g.mat) continue;
+            for (std::size_t wd = 0; wd < kSubMaskWords; ++wd)
+                if (m.words[wd] & mc.allow.words[wd]) return true;
             continue;
         }
         for (int b = 0; b < kSubVoxels; ++b)
-            if (m.test(b) && pg[b] == p.mat) return true;
+            if (mc.allow.test(b) && m.test(b) && pg[b] == g.mat) return true;
     }
     return false;
 }
 
 namespace {
 
-// Закрыть: материя полотна в каждый СВОБОДНЫЙ субвоксель проёма — чужая
-// материя (косяки, вода) не трогается, полотно обтекает её честно.
-void stamp_portal(World& w, const DoorPortal& p,
-                  std::vector<std::uint32_t>& dirty) {
-    for (int z = p.cz; z < p.cz + p.h; ++z) {
-        const std::size_t ci = macro_index(p.cx, p.cy, wrap_macro(z));
-        SubMask& m = w.grid().mask(p.cx, p.cy, z);
-        CellType* pg = materialize_sub_page(w, ci);
+// Закрыть: материя полотна в каждый СВОБОДНЫЙ субвоксель ФОРМЫ (allow) —
+// чужая материя (косяки, вода) не трогается, полотно обтекает её честно.
+void stamp_group(World& w, const MaskGroup& g,
+                 std::vector<std::uint32_t>& dirty) {
+    for (const MaskCell& mc : g.cells) {
+        int cx = 0, cy = 0, cz = 0;
+        cell_coords(mc.ci, cx, cy, cz);
+        SubMask& m = w.grid().mask(cx, cy, cz);
+        CellType* pg = materialize_sub_page(w, mc.ci);
         bool wrote = false;
         for (int b = 0; b < kSubVoxels; ++b) {
+            if (!mc.allow.test(b)) continue; // не моя форма — не трогаю
             if (m.test(b)) continue;
             if (pg[b] != kCellAir) continue; // среда стоит — не замуровываем
             m.set(b);
-            pg[b] = p.mat;
+            pg[b] = g.mat;
             wrote = true;
         }
-        if (m.full()) w.grid().set_cell(p.cx, p.cy, z, p.mat);
+        if (m.full()) w.grid().set_cell(cx, cy, cz, g.mat);
         if (wrote) {
-            medium_recount(w, ci, pg);
-            dirty.push_back(static_cast<std::uint32_t>(ci));
+            medium_recount(w, mc.ci, pg);
+            dirty.push_back(mc.ci);
         }
     }
 }
 
-// Открыть: снять ровно СВОИ биты (страница == материал полотна). Выбитое
+// Открыть: снять ровно СВОИ биты (форма allow + материал полотна). Выбитое
 // карвом полотно чинить нечем — снимается что осталось.
-void clear_portal(World& w, const DoorPortal& p,
-                  std::vector<std::uint32_t>& dirty) {
+void clear_group(World& w, const MaskGroup& g,
+                 std::vector<std::uint32_t>& dirty) {
     const SubField<CellType>* f =
         w.subfields().find<CellType>(kSubMaterialName);
-    for (int z = p.cz; z < p.cz + p.h; ++z) {
-        const std::size_t ci = macro_index(p.cx, p.cy, wrap_macro(z));
-        SubMask& m = w.grid().mask(p.cx, p.cy, z);
+    for (const MaskCell& mc : g.cells) {
+        int cx = 0, cy = 0, cz = 0;
+        cell_coords(mc.ci, cx, cy, cz);
+        SubMask& m = w.grid().mask(cx, cy, cz);
         CellType* pg = nullptr;
-        if (f && f->page(ci)) {
-            pg = materialize_sub_page(w, ci);
-        } else if (w.grid().types()[ci] == p.mat) {
+        if (f && f->page(mc.ci)) {
+            pg = materialize_sub_page(w, mc.ci);
+        } else if (w.grid().types()[mc.ci] == g.mat) {
             // Однородное полотно без страницы (set_cell при full выше).
-            pg = materialize_sub_page(w, ci);
+            pg = materialize_sub_page(w, mc.ci);
         }
         if (!pg) continue;
         bool wrote = false;
         for (int b = 0; b < kSubVoxels; ++b) {
-            if (!m.test(b) || pg[b] != p.mat) continue;
+            if (!mc.allow.test(b)) continue;
+            if (!m.test(b) || pg[b] != g.mat) continue;
             m.clear(b);
             pg[b] = kCellAir;
             wrote = true;
         }
         if (wrote) {
-            if (m.empty()) w.grid().set_cell(p.cx, p.cy, z, kCellAir);
-            medium_recount(w, ci, pg);
-            dirty.push_back(static_cast<std::uint32_t>(ci));
+            if (m.empty()) w.grid().set_cell(cx, cy, cz, kCellAir);
+            medium_recount(w, mc.ci, pg);
+            dirty.push_back(mc.ci);
         }
     }
 }
@@ -208,9 +235,9 @@ std::uint32_t door_query_near(const Doors& doors, const vec3& pos) {
     std::uint32_t best = kNoPortal;
     float bestD2 = kDoorReachM * kDoorReachM;
     for (std::uint32_t i = 0; i < doors.list.size(); ++i) {
-        const DoorPortal& p = doors.list[i];
-        if (p.mechanism) continue; // створкой владеет машина, не актор
-        const float d2 = portal_dist2(p, pos);
+        const MaskGroup& g = doors.list[i];
+        if (g.mechanism) continue; // створкой владеет машина, не актор
+        const float d2 = group_dist2(g, pos);
         if (d2 < bestD2) {
             bestD2 = d2;
             best = i;
@@ -224,26 +251,26 @@ std::uint32_t door_toggle_near(World& w, Doors& doors, const Registry& reg,
                                std::vector<std::uint32_t>& dirty) {
     const std::uint32_t id = door_query_near(doors, pos);
     if (id == kNoPortal) return kNoPortal;
-    const DoorPortal& p = doors.list[id];
-    if (door_closed(w, p)) {
-        clear_portal(w, p, dirty);
+    const MaskGroup& g = doors.list[id];
+    if (door_closed(w, g)) {
+        clear_group(w, g, dirty);
     } else {
-        if (body_in_portal(p, reg, layer)) return kNoPortal; // не замуровываем
-        stamp_portal(w, p, dirty);
+        if (body_in_portal(g, reg, layer)) return kNoPortal; // не замуровываем
+        stamp_group(w, g, dirty);
     }
     return id;
 }
 
-bool door_close(World& w, const DoorPortal& p, const Registry& reg,
+bool door_close(World& w, const MaskGroup& g, const Registry& reg,
                 LayerId layer, std::vector<std::uint32_t>& dirty) {
-    if (body_in_portal(p, reg, layer)) return false;
-    stamp_portal(w, p, dirty);
+    if (body_in_portal(g, reg, layer)) return false;
+    stamp_group(w, g, dirty);
     return true;
 }
 
-void door_open(World& w, const DoorPortal& p,
+void door_open(World& w, const MaskGroup& g,
                std::vector<std::uint32_t>& dirty) {
-    clear_portal(w, p, dirty);
+    clear_group(w, g, dirty);
 }
 
 } // namespace giga::game

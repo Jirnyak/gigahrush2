@@ -138,16 +138,14 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
         best.dist = c.along;
     }
 
-    // 2. Дверные порталы — механизм-створки пропускаются (ими владеет
-    // машина, актор их не трогает: [game/door.h]).
+    // 2. Дверные группы — механизм-створки пропускаются (ими владеет
+    // машина, актор их не трогает: [game/door.h]). Представитель объёма —
+    // centre группы, выведенный при объявлении ([world/mask.h]).
     for (std::uint32_t i = 0; i < doors.list.size(); ++i) {
-        const DoorPortal& p = doors.list[i];
+        const MaskGroup& p = doors.list[i];
         if (p.mechanism) continue;
         ++dbg.portTotal;
-        const vec3 pp{(static_cast<float>(p.cx) + 0.5f) * kCellSize,
-                      (static_cast<float>(p.cy) + 0.5f) * kCellSize,
-                      (static_cast<float>(p.cz) +
-                       static_cast<float>(p.h) * 0.5f) * kCellSize};
+        const vec3 pp = p.centre;
         const float d3 = wrap_dist(eye, pp);
         if (d3 < dbg.nearPortDist) {
             dbg.nearPortDist = d3;
