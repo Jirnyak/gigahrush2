@@ -2368,8 +2368,10 @@ int main(int argc, char** argv) {
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
     std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
-    game::FloorRooms floorRooms;    // комнаты этажа: объявляет модуль (S12.1),
-                                    // перештамповка на каждом входе (rooms_declare)
+    // Комнаты этажа: объявляет модуль (S12.1), перештамповка на каждом входе
+    // (rooms_declare). Живут в reg.ctx() (прецедент AnchorBins), чтобы живые
+    // хуки supply на швах предметов/пропов не тащили их через сигнатуры.
+    game::FloorRooms& floorRooms = reg.ctx().emplace<game::FloorRooms>();
     game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
         // 5c: обвес лифтовых порталов — game::dress_lift_portals
     // ([game/door.h]): кнопка снаружи (DoorRef на створку хаба — активация
@@ -2467,6 +2469,11 @@ int main(int argc, char** argv) {
                 cam.pitch = customPitch;
             }
             LayerId l0 = reg.get<Transform>(player).layer;
+            // Комнаты РАНЬШЕ сидеров: спавн паков селится в объявленных
+            // комнатах (mob_spawn читает их из reg.ctx), двери — по тегу.
+            game::rooms_declare(floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
             refresh_floor_containers(reg, stack.layer(l0), 0, l0);
             refresh_floor_props(reg, stack.layer(l0), 0, l0,
@@ -2476,12 +2483,10 @@ int main(int argc, char** argv) {
             // all-open geometry (an upper bound on connectivity) the bake must
             // assume. No freeze: the worker owns a snapshot, never the grid,
             // so doors may move mid-bake. [door.h, game/rebake.h]
-            game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
-            game::rooms_declare(floorRooms, currentFloor,
-                                *spec_for_floor(currentFloor),
-                                streamer.floor_seed_of(registry, currentFloor));
             game::rooms_supply_rebuild(floorRooms, reg, l0);
+            game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(l0);
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
@@ -3094,6 +3099,11 @@ int main(int argc, char** argv) {
         return reg.get<Transform>(player).layer;
     };
     auto arrive_refresh = [&](LayerId nl) {
+        // Комнаты РАНЬШЕ сидеров: спавн паков селится в объявленных комнатах
+        // (mob_spawn читает их из reg.ctx), двери потом — по тегу.
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
@@ -3117,12 +3127,10 @@ int main(int argc, char** argv) {
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
     };
     auto arrive_doors_nav = [&](LayerId nl) {
-        game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
-        game::rooms_declare(floorRooms, currentFloor,
-                            *spec_for_floor(currentFloor),
-                            streamer.floor_seed_of(registry, currentFloor));
         game::rooms_supply_rebuild(floorRooms, reg, nl);
+        game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
         dress_lift_portals(nl);
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
     };
@@ -6297,19 +6305,22 @@ int main(int argc, char** argv) {
                                 reg, nl, currentFloor,
                                 runState.debris.data(),
                                 runState.debris.size());
+                            // Комнаты РАНЬШЕ сидеров (спавн паков селится в
+                            // объявленных комнатах; двери — по тегу, S12.1).
+                            game::rooms_declare(
+                                floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
                             refresh_floor_props(
                                 reg, stack.layer(nl), currentFloor, nl,
                                 streamer.floor_seed_of(registry, currentFloor),
                                 bus);
-                            game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
-                            game::rooms_declare(
-                                floorRooms, currentFloor,
-                                *spec_for_floor(currentFloor),
-                                streamer.floor_seed_of(registry, currentFloor));
                             game::rooms_supply_rebuild(floorRooms, reg, nl);
+                            game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
@@ -8727,6 +8738,12 @@ int main(int argc, char** argv) {
                         // recycled slot keeps the departed floor's danger.
                         diffusion_driver_on_floor_built(diffusionDriver,
                                                         stack.layer(nl), nl);
+                        // Комнаты РАНЬШЕ сидеров: спавн паков селится в
+                        // объявленных комнатах (mob_spawn читает reg.ctx).
+                        game::rooms_declare(
+                            floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
                         refresh_floor_containers(reg, stack.layer(nl),
                                                  currentFloor, nl);
@@ -8749,13 +8766,10 @@ int main(int argc, char** argv) {
                         // same law as the keyboard ride path. This is the
                         // SECOND travel site; a fix that touches only one path
                         // leaves --shot proving nothing. [save.h, door.h]
-                        game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
-                        game::rooms_declare(
-                            floorRooms, currentFloor,
-                            *spec_for_floor(currentFloor),
-                            streamer.floor_seed_of(registry, currentFloor));
                         game::rooms_supply_rebuild(floorRooms, reg, nl);
+                        game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));

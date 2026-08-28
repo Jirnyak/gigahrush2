@@ -1,6 +1,7 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "game/combat.h"          // Charge/ChargeArmed — проп-заряд от урона
+#include "game/room_supply.h"     // живые хуки: проп встал += / умер −= (S12.4)
 #include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
 #include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
@@ -126,8 +127,15 @@ static inline bool is_solid_cell(CellType type) {
 // Swap StaticPropTag -> DynamicBodyTag without destroying the entity
 // ([jirnyak.md] §18 — PropPass/BodyPass filter, no recreate).
 static void mark_dynamic(Registry& reg, Entity prop) {
-    if (reg.all_of<StaticPropTag>(prop))
+    if (reg.all_of<StaticPropTag>(prop)) {
         reg.remove<StaticPropTag>(prop);
+        // Сорванный проп перестаёт быть ОСНАЩЕНИЕМ комнаты (живой хук
+        // supply, S12.4): сожгли диван — предложение вернулось к
+        // объявленному, а не осталось врать.
+        if (const auto* po = reg.try_get<PropOf>(prop))
+            if (const auto* t = reg.try_get<Transform>(prop))
+                supply_prop_at(reg, t->pos, po->id, -1);
+    }
     reg.emplace_or_replace<DynamicBodyTag>(prop);
 }
 
@@ -175,6 +183,10 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
             bursts->push(pos, dir, ParticleKind::Debris, 6,
                          matId, seed ^ 0xD3B15u);
         }
+        // Погибший GpuHandoff-проп покидает ОСНАЩЕНИЕ (живой хук supply,
+        // S12.4) — тем же законом, что детач ниже (mark_dynamic).
+        if (const auto* po = reg.try_get<PropOf>(prop))
+            supply_prop_at(reg, pos, po->id, -1);
         reg.destroy(prop);
         return;
     }
@@ -528,6 +540,9 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
     // потребитель словаря спрашивают, ЧЕМ проп является, — supply комнаты
     // (room_supply) читает kPropVerbs[id] через этот компонент.
     reg.emplace<PropOf>(e, PropOf{id});
+    // Поставленный проп — ОСНАЩЕНИЕ комнаты (живой хук supply, S12.4).
+    // На входе на этаж rebuild пересчитает с нуля — двойного счёта нет.
+    supply_prop_at(reg, worldPos, id, +1);
     // Universal mass from the table ([ecs/components.h] Mass): a falling or
     // thrown prop hits with E = m*v^2/2 like everything else in the game.
     reg.emplace_or_replace<Mass>(e, Mass{static_cast<float>(d.massG) * 0.001f});

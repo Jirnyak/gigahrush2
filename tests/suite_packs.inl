@@ -21,6 +21,8 @@
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/floor_gen.h"
 #include "game/mob_spawn.h"
+#include "game/room.h"        // FloorRooms — паки селятся в объявленных зонах
+#include "game/room_supply.h" // room_at_pos
 #include "game/wander.h"
 
 namespace packs_detail {
@@ -105,6 +107,11 @@ static void test_packs_all() {
         CHECK(roomCount == roomsPerAxis * roomsPerAxis);
 
         Registry reg;
+        // НАСТОЯЩИЕ комнаты этажа в reg.ctx (rooms-object E): спавн селит
+        // паки в объявленных модулем комнатах; (number, seed) — те же, что у
+        // геометрии, иначе зоны и стены разойдутся.
+        FloorRooms& fr = reg.ctx().emplace<FloorRooms>();
+        rooms_declare(fr, 4, spec, 11u);
         const std::uint32_t n =
             spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u,
                              /*cap=*/0, FloorKind::Derelict);
@@ -119,7 +126,7 @@ static void test_packs_all() {
 
         std::vector<vec3> at;
         std::vector<std::uint8_t> kindOf, packOf;
-        std::vector<std::uint8_t> roomTaken(static_cast<std::size_t>(roomCount), 0u);
+        std::vector<std::uint8_t> roomTaken(fr.list.size() + 1, 0u);
         std::size_t occupied = 0;
         for (auto e : reg.view<const MobRef, const Transform>()) {
             const MobRef& m = reg.get<const MobRef>(e);
@@ -127,16 +134,12 @@ static void test_packs_all() {
             at.push_back(p);
             kindOf.push_back(m.kind);
             packOf.push_back(m.pack);
-            const int room = room_of(p, stride, roomsPerAxis);
-            if (!roomTaken[static_cast<std::size_t>(room)]++) ++occupied;
-
-            // Never on the wall lattice. A head at local 0 stands in a doorway or
-            // inside a knocked-out wall cell, which the old whole-grid rejection
-            // sampler placed freely.
-            const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
-            const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
-            CHECK((cx % stride) != 0);
-            CHECK((cy % stride) != 0);
+            // Каждая голова стоит ВНУТРИ объявленной комнаты — сильнее
+            // прежнего «не на линии решётки»: линии больше не закон, зоны —
+            // закон (rooms-object E; roomAt = раскраска клеток).
+            const RoomId room = room_at_pos(fr, p);
+            CHECK(room != kNoRoom);
+            if (!roomTaken[room]++) ++occupied;
             // Every head belongs to a pack; 0 is reserved for "never grouped".
             CHECK(m.pack != 0);
         }
@@ -175,14 +178,16 @@ static void test_packs_all() {
         // fall damage would be uniform and the column would be decorative.
         CHECK(kgMax > kgMin);
 
-        // OCCUPIED ROOMS DROP SUBSTANTIALLY. 134 of 256 before, and the assertion is
-        // deliberately a hard bound rather than "fewer than before": a later change
-        // that half-restores the sprinkle would still pass a relative test.
+        // Паков много меньше, чем комнат (у падика их тысячи), поэтому
+        // «одна комната — один пак» держится без исключений: занятых комнат
+        // ровно столько, сколько паков, и это пересчитано ниже (packs ==
+        // occupied). Хардбаунд прежней решётки (occupied < 90 из 256) умер
+        // вместе с решёткой.
         std::fprintf(stderr,
-                     "[packs] floor 4 derelict: heads=%u rooms=%d occupied=%zu\n",
-                     n, roomCount, occupied);
-        CHECK(occupied < 90);
+                     "[packs] floor 4 derelict: heads=%u rooms=%zu occupied=%zu\n",
+                     n, fr.list.size(), occupied);
         CHECK(occupied > 0);
+        CHECK(occupied < fr.list.size() / 4); // паки — соль, не сплошная заливка
 
         // One kind per pack. This is the room contract — a room's roster is rolled
         // once — and it is what makes a group read as a swarm rather than a queue.
@@ -283,6 +288,7 @@ static void test_packs_all() {
 
         // Determinism survives the restructure: same floor + seed, same result.
         Registry again;
+        rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
         CHECK(spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, 0,
                                FloorKind::Derelict) == n);
 
@@ -338,6 +344,10 @@ static void test_packs_all() {
         // Living theme budgets 77 heads and only 8 of its packs hold more than one
         // member, which is too few to say anything about a distribution.
         Registry reg;
+        // Комнаты ГЕОМЕТРИИ (4, Derelict, 11u): мир w сгенерирован ею, а
+        // номер 12 в спавне — только бюджет; зоны обязаны совпадать с миром.
+        rooms_declare(reg.ctx().emplace<FloorRooms>(), 4,
+                      floor_spec(FloorKind::Derelict), 11u);
         const std::uint32_t n = spawn_floor_mobs(
             reg, w, 12, /*danger=*/5, FloorTheme::Hell, layer, /*seed=*/31u,
             /*cap=*/300, FloorKind::Residential);

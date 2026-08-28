@@ -46,6 +46,7 @@
 #include "core/math.h"           // vec3
 #include "ecs/registry.h"        // Registry
 #include "game/floor_spec.h"     // FloorSpec
+#include "game/room.h"           // FloorRooms — гермополотно от тега комнаты
 #include "world/level_stack.h"   // LayerId
 #include "world/macro_grid.h"    // CellType, kMacroDim
 #include "world/mask.h"          // MaskGroup — единый носитель масок (S18)
@@ -73,12 +74,13 @@ struct DoorRef {
     std::uint32_t group = kNoPortal; // индекс в Doors.list этого этажа
 };
 
-// Объявить двери этажа: проёмы модуля (floor_doorways; гермо-комнаты
-// Living/Medical/Hq получают гермополотно — та же таксономия, что решала
-// раньше) + 4 механизм-створки лифтовых столбов (lift_entrance).
-// Только список — мир не трогается: полотна там, где их оставила материя.
-void door_declare(Doors& doors, int number, const FloorSpec& spec,
-                  unsigned seed);
+// Объявить двери этажа: проёмы модуля (floor_doorways; гермополотно — у
+// проёмов комнат с ТЕГОМ kRoomTagHermetic, S12.1: гермозона — тег, не вид;
+// зовите ПОСЛЕ rooms_declare) + 4 механизм-створки лифтовых столбов
+// (lift_entrance). Только список — мир не трогается: полотна там, где их
+// оставила материя.
+void door_declare(Doors& doors, const FloorRooms& rooms, int number,
+                  const FloorSpec& spec, unsigned seed);
 
 // «Закрыта» — вопрос к миру (закон 2): в allow-битах группы есть
 // субвоксели её материала.

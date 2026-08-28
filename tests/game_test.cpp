@@ -1600,6 +1600,9 @@ static void test_mob_spawn() {
     generate_floor(w, 4, spec, 11u);
 
     Registry reg;
+    // Комнаты геометрии (4, Derelict, 11u) в ctx — спавн селит паки по
+    // объявленным зонам (rooms-object E).
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     const std::uint8_t danger = danger_for_hostility(spec.hostility);
     const FloorTheme theme = theme_for_kind(FloorKind::Derelict);
     CHECK(danger == 5);                        // 0.90 hostility -> danger 5
@@ -1645,6 +1648,7 @@ static void test_mob_spawn() {
     // The cap bounds the spawn regardless of budget — this is what keeps a deep
     // floor from adding thousands of entities in one frame.
     Registry capped;
+    rooms_declare(capped.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     std::uint32_t c = spawn_floor_mobs(capped, w, 4, danger, theme, 0, 77u,
                                        /*cap=*/5);
     CHECK(c <= 5);
@@ -1652,6 +1656,7 @@ static void test_mob_spawn() {
     // Determinism: same (floor, seed) must reproduce the same roster in the same
     // places, or unloading and reloading a floor visibly rearranges it.
     Registry again;
+    rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     std::uint32_t n2 = spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u);
     CHECK(n2 == n);
 
@@ -1668,9 +1673,14 @@ static void test_mob_spawn_v_shape_in_world() {
     generate_floor(hub, 0, floor_spec(FloorKind::Residential), 3u);
     generate_floor(deep, 40, floor_spec(FloorKind::Derelict), 3u);
 
+    // ctx несёт комнаты ОДНОГО этажа — как в игре: перед каждым спавном
+    // перештамповка под его геометрию (rooms-object E).
+    FloorRooms& vfr = reg.ctx().emplace<FloorRooms>();
+    rooms_declare(vfr, 0, floor_spec(FloorKind::Residential), 3u);
     std::uint32_t nHub = spawn_floor_mobs(
         reg, hub, 0, danger_for_hostility(floor_spec(FloorKind::Residential).hostility),
         theme_for_kind(FloorKind::Residential), 0, 5u, /*cap=*/4096);
+    rooms_declare(vfr, 40, floor_spec(FloorKind::Derelict), 3u);
     std::uint32_t nDeep = spawn_floor_mobs(
         reg, deep, 40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
         theme_for_kind(FloorKind::Derelict), 1, 5u, /*cap=*/4096);
@@ -1684,6 +1694,8 @@ static void test_mob_spawn_v_shape_in_world() {
     World roof;
     generate_floor(roof, -40, floor_spec(FloorKind::Derelict), 3u);
     Registry r2;
+    rooms_declare(r2.ctx().emplace<FloorRooms>(), -40,
+                  floor_spec(FloorKind::Derelict), 3u);
     std::uint32_t nRoof = spawn_floor_mobs(
         r2, roof, -40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
         theme_for_kind(FloorKind::Derelict), 0, 5u, /*cap=*/4096);
@@ -1871,6 +1883,7 @@ static void test_wander_moves_the_crowd() {
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
     Registry mobReg;
+    rooms_declare(mobReg.ctx().emplace<FloorRooms>(), 0, spec, 21u);
     spawn_floor_mobs(mobReg, w, 0, danger_for_hostility(spec.hostility),
                      theme_for_kind(FloorKind::Residential), layer, 3u, 400);
     wander_init(mobReg, layer, 7u);

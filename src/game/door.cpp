@@ -74,42 +74,30 @@ float group_dist2(const MaskGroup& g, const vec3& pos) {
 
 } // namespace
 
-void door_declare(Doors& doors, int number, const FloorSpec& spec,
-                  unsigned seed) {
+void door_declare(Doors& doors, const FloorRooms& rooms, int number,
+                  const FloorSpec& spec, unsigned seed) {
     doors.list.clear();
     for (auto& l : doors.lift) l = kNoPortal;
 
     std::vector<Doorway> ways;
     floor_doorways(number, spec, seed, ways);
-    const int stride = floor_room_stride(spec.kind);
-    const int roomsPerAxis = stride > 0 ? kMacroDim / stride : 1;
-    constexpr std::uint16_t kHermeticBits =
-        static_cast<std::uint16_t>(RoomBit::Living) |
-        static_cast<std::uint16_t>(RoomBit::Medical) |
-        static_cast<std::uint16_t>(RoomBit::Hq);
-    auto hermetic_room = [&](int rx, int ry) {
-        return (floor_room_mask(spec.kind, number, rx, ry) & kHermeticBits) !=
-               0;
+    // Гермозона — ТЕГ КОМНАТЫ (CANON S12.1/S13.10: kHermeticRoomMask умер
+    // вместе с видом комнаты): проём получает гермополотно, когда любая из
+    // двух смежных клеток принадлежит комнате с kRoomTagHermetic. Какие
+    // комнаты гермо — решает МОДУЛЬ при объявлении (падик метит квартирные
+    // листья), не общая таксономия.
+    auto hermetic_side = [&](int cx, int cy, int cz) {
+        const Room* r = room_of(rooms, room_at(rooms, cx, cy, cz));
+        return r != nullptr && (r->tags & kRoomTagHermetic) != 0;
     };
 
     for (const Doorway& w : ways) {
-        // Гермополотно квартирного класса — та же таксономия комнат, что
-        // выбирала гермодвери раньше: любая из двух смежных комнат
-        // Living/Medical/Hq. Неразрушимость — свойством материала (закон 3).
-        bool herm = false;
-        if (stride > 0) {
-            if (w.axis == 0) {
-                const int rxR = w.cx / stride;
-                const int rxL = (rxR - 1 + roomsPerAxis) % roomsPerAxis;
-                const int ry = w.cy / stride;
-                herm = hermetic_room(rxL, ry) || hermetic_room(rxR, ry);
-            } else {
-                const int ryU = w.cy / stride;
-                const int ryD = (ryU - 1 + roomsPerAxis) % roomsPerAxis;
-                const int rx = w.cx / stride;
-                herm = hermetic_room(rx, ryD) || hermetic_room(rx, ryU);
-            }
-        }
+        // Стороны проёма поперёк его оси; z — воздух его же яруса.
+        const bool herm =
+            w.axis == 0 ? (hermetic_side(w.cx - 1, w.cy, w.cz) ||
+                           hermetic_side(w.cx + 1, w.cy, w.cz))
+                        : (hermetic_side(w.cx, w.cy - 1, w.cz) ||
+                           hermetic_side(w.cx, w.cy + 1, w.cz));
         doors.list.push_back(column_group(
             w.cx, w.cy, w.cz, w.h,
             herm ? kMatDoorHermetic : kMatDoorSteel, /*mechanism=*/0));

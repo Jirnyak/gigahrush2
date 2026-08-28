@@ -512,6 +512,7 @@ static void test_samosbor2_all() {
         const LayerId layer = 0;
 
         Registry reg;
+        rooms_declare(reg.ctx().emplace<FloorRooms>(), -50, spec, 11u);
         // A real floor population underneath, capped, so the despawn has something
         // it must NOT touch.
         const std::uint32_t floorHeads =

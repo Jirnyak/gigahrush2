@@ -342,6 +342,9 @@ static void test_hunt_all() {
             ++residents;
             if (!mob_hostile_to(pool, id)) ++exempt;
         }
+        // Комнаты геометрии (15, Residential, 4242u) в reg.ctx — спавн селит
+        // паки по объявленным зонам (rooms-object E).
+        rooms_declare(reg.ctx().emplace<FloorRooms>(), 15, spec, 4242u);
         const std::uint32_t mobs = spawn_floor_mobs(
             reg, stack.layer(layer), 15, danger_for_hostility(spec.hostility),
             theme_for_kind(FloorKind::Residential), layer, 31u, 0,
@@ -444,7 +447,12 @@ static void test_hunt_all() {
         // NOTE for the content pass: cross-storey hunting needs the nav
         // connectivity classes (climb/drop edges) before per-storey contact can
         // be tuned back up.
-        CHECK(deaths >= 20u);                   // corpses really are produced
+        // 20 -> 10 on 2026-08-28 (rooms-object E): спавн паков переехал в
+        // ОБЪЯВЛЕННЫЕ комнаты — монстры больше не рождаются на случайном
+        // storey у проломов и реже гибнут падением, так что «фоновые» трупы
+        // просели (замер: 14 за 10 минут против прежних ~20+). Предация
+        // end-to-end закрыта блоком 2; здесь — только «трупы вообще есть».
+        CHECK(deaths >= 10u);                   // corpses really are produced
         CHECK(survivors >= 380u);               // the crowd survives the spread
         CHECK(survivors <= 420u);
         // The hard floor, independent of tuning: below half the crowd the systems that

@@ -709,6 +709,11 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
     declared[kLeafToilet][kVerbToilet] = 20;
     declared[kLeafKitchen][kVerbEat] = 12;
     declared[kLeafStrip][kVerbStore] = 15;
+    // Гермокласс — решение МОДУЛЯ (S12.1): квартирные листья гермо (жилой
+    // фонд общажной башни — то, что прежде выбирала таксономия Living),
+    // кладовки лестничной полосы — обычная сталь.
+    const std::uint16_t tags[4] = {kRoomTagHermetic, kRoomTagHermetic,
+                                   kRoomTagHermetic, 0};
 
     std::uint32_t n = 0;
     // Один 2D-план на все ярусы (настоящий падик повторяет планировку), но
@@ -725,7 +730,7 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
                               static_cast<std::uint8_t>(sx),
                               static_cast<std::uint8_t>(sy),
                               static_cast<std::uint8_t>(kStorey)};
-            if (room_declare(out, &box, 1, /*tags=*/0, /*owner=*/0,
+            if (room_declare(out, &box, 1, tags[pr.leaf], /*owner=*/0,
                              declared[pr.leaf]) != kNoRoom)
                 ++n;
         }

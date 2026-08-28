@@ -9,7 +9,9 @@
 #include "core/math.h"
 #include "core/wrap.h"        // wrap_delta_f — the census and the placement must agree
 #include "ecs/components.h"
-#include "game/floor_gen.h"  // floor_room_stride, floor_room_mask
+#include "game/floor_gen.h"
+#include "game/room.h"        // FloorRooms — пак селится в объявленной комнате
+#include "game/room_supply.h" // rooms_in_ctx
 #include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
 #include "world/medium.h"    // medium_level_data — не ставить в утопленное
 #include "world/macro_grid.h"
@@ -246,56 +248,31 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     const std::uint8_t floorBit =
         static_cast<std::uint8_t>(anchor_for_floor(floorNumber));
 
-    // Build the rosters for this floor once: every row whose habitat includes this
-    // floor's anchor and which can actually be rolled (weight > 0 excludes the
-    // hand-placed kinds like CREATOR). This is the "per-floor weights over one
-    // global table" contract — nothing here redefines a stat row.
-    //
-    // **`MobDef::roomMask` gets its first reader here.** All 69 rows author a `rooms`
-    // column and nothing in the tree had ever looked at one, so the whole ecology
-    // column was decoration. A room now draws only from the kinds authored to live in
-    // that kind of room.
-    //
-    // Slot kFloorRoomBits is the unfiltered roster, and it is a FALLBACK rather than a
-    // spare: the room filter empties the roster outright on real floors. Measured over
-    // data/mobs.csv against the six habitat anchors — bathroom is empty at Z-50, Z+14
-    // and Z+30; kitchen at Z-50; smoking at Z-26; hq at Z+14. A room whose roster came
-    // out empty would silently drop that pack, and a floor whose mix leans on such a
-    // bit would lose a slice of its whole population. So an empty room roster falls
-    // back to the floor's, exactly as samosbor_fog_roster relaxes rather than starving
-    // ([mob_spawn.h]).
-    Roster rosters[kFloorRoomBits + 1] = {};
+    // ОДИН ростер этажа: «вид пака от вида комнаты» умер вместе с видом
+    // (S12.2, rooms-object E) — MobDef::roomMask потерял читателя и умирает
+    // инкрементом F. Где какие твари живут, решает модуль этажа и глагол
+    // «логово» (S13.7), не общая таксономия.
+    Roster floorRoster{};
     for (std::size_t i = 0; i < kMobKindCount; ++i) {
         const MobDef& m = kMobTable[i];
         if ((m.floorMask & floorBit) == 0) continue;
         if (m.spawnWeightX10 == 0) continue;
-        roster_add(rosters[kFloorRoomBits], i, m.spawnWeightX10);
-        for (std::size_t b = 0; b < kFloorRoomBits; ++b)
-            if ((m.roomMask & (1u << b)) != 0)
-                roster_add(rosters[b], i, m.spawnWeightX10);
+        roster_add(floorRoster, i, m.spawnWeightX10);
     }
-    const Roster& floorRoster = rosters[kFloorRoomBits];
     if (floorRoster.n == 0 || floorRoster.total == 0) return 0;
+    (void)kind;
 
-    // The room lattice, straight from the generator so the two can never disagree
-    // about where a wall is. A room is the (stride-1)^2 interior at local 1..span.
-    // Clamped rather than trusted. The authored strides are 8/16/32, but a stride of
-    // 1 leaves a room with no interior and a stride above 128 makes the room count
-    // zero — a modulo by zero followed by an out-of-bounds write, the kind of crash
-    // that appears only the day someone authors a one-room floor. Clamping here
-    // keeps every index below in range by construction: span <= 127 and
-    // x0 + span <= 127.
-    int stride = floor_room_stride(kind);
-    if (stride < 2) stride = 2;
-    if (stride > kMacroDim) stride = kMacroDim;
-    const int roomsPerAxis = kMacroDim / stride;
-    const int span = stride - 1;
-    // One byte per room, sized from the real room count rather than a worst-case
-    // constant: a std::vector here is a single allocation at FLOOR LOAD, which is
-    // not a hot path (the same call is about to create up to 4096 entities), and it
-    // is what makes a future tighter room pitch impossible to overflow.
-    std::vector<std::uint8_t> packsInRoom(
-        static_cast<std::size_t>(roomsPerAxis * roomsPerAxis), 0u);
+    // НАСТОЯЩИЕ комнаты этажа (rooms-object): пак селится в объявленной
+    // комнате модуля, и ярус пака — ярус КОМНАТЫ, а не случайный z: раньше
+    // storey рисовался по всей оси и пак мог зависнуть в толще сэндвича.
+    const FloorRooms* fr = rooms_in_ctx(reg);
+    if (fr == nullptr || fr->list.empty()) {
+        std::printf("[mobs] floor %d: no declared rooms — spawn skipped\n",
+                    floorNumber);
+        return 0;
+    }
+    // Один байт на комнату, от настоящего счёта комнат (тысячи на падике).
+    std::vector<std::uint8_t> packsInRoom(fr->list.size() + 1, 0u);
 
     std::uint32_t spawned = 0;
     std::uint32_t packSeq = 0;
@@ -308,38 +285,25 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             hash_u32(seed ^ (p * 0x9e3779b9u) ^
                 static_cast<std::uint32_t>(floorNumber) * 0x85ebca6bu);
 
-        // 1. Draw a room, preferring an empty one. This is the entire difference
+        // 1. Draw a ROOM, preferring an empty one. This is the entire difference
         //    between a floor that has quiet rooms in it and a floor that is evenly
-        //    salted: an independent cell per monster fills 134 of 256 rooms on a
-        //    stride-8 floor from 194 heads, so nowhere is ever empty.
-        int room = 0;
+        //    salted. Комнаты теперь настоящие — объявленные модулем (S12.1).
+        RoomId room = 1;
         for (int t = 0; t < kRoomTries; ++t) {
             const std::uint32_t h =
                 hash_u32(r ^ (static_cast<std::uint32_t>(t) * 0x27220a95u));
-            const int rx = static_cast<int>(
-                (h >> 8) % static_cast<std::uint32_t>(roomsPerAxis));
-            const int ry = static_cast<int>(
-                (h >> 20) % static_cast<std::uint32_t>(roomsPerAxis));
-            room = ry * roomsPerAxis + rx;
-            if (packsInRoom[static_cast<std::size_t>(room)] == 0) break;
+            room = static_cast<RoomId>(
+                1u + h % static_cast<std::uint32_t>(fr->list.size()));
+            if (packsInRoom[room] == 0) break;
         }
-        std::uint8_t& roomUse = packsInRoom[static_cast<std::size_t>(room)];
+        std::uint8_t& roomUse = packsInRoom[room];
         if (roomUse < 0xFFu) ++roomUse;
+        const Room& rm = fr->list[room - 1u];
 
-        const int rx = room % roomsPerAxis;
-        const int ry = room / roomsPerAxis;
-
-        // 2. ONE kind for the whole room, drawn from THAT ROOM'S roster. Rolled from
-        //    its own hash rather than from `r` directly, so the room draw and the kind
-        //    draw are not correlated.
-        //
-        //    `floor_room_mask` is keyed on (kind, floorNumber, room) and on nothing
-        //    else, which is what lets the container spawner agree with this about what
-        //    room 5 is without either storing a tag ([floor_gen.h]).
-        const int bit =
-            floor_room_bit_index(floor_room_mask(kind, floorNumber, rx, ry));
-        const Roster& rs =
-            (bit >= 0 && rosters[bit].n != 0) ? rosters[bit] : floorRoster;
+        // 2. ONE kind for the whole pack, from the floor roster. Rolled from
+        //    its own hash rather than from `r` directly, so the room draw and
+        //    the kind draw are not correlated.
+        const Roster& rs = floorRoster;
         const std::uint32_t pick = hash_u32(r ^ 0x2545f491u) % rs.total;
         std::uint32_t ri = 0;
         while (ri + 1 < rs.n && pick >= rs.cum[ri]) ++ri;
@@ -360,24 +324,28 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         // than allowed to overshoot it.
         if (heads > want - spawned) heads = want - spawned;
 
-        // 4. The pack's anchor: a standable cell inside the room. floor_gen
-        //    guarantees a solid slab at z=0, so "air, and dry" is sufficient.
-        const int x0 = rx * stride;
-        const int y0 = ry * stride;
+        // 4. The pack's anchor: a standable cell inside the ROOM'S OWN box —
+        //    зона комнаты несёт и ярус (S12.1: разные ярусы — разные
+        //    комнаты), так что пак больше не рисует storey по всей оси и не
+        //    зависает в толще сэндвича.
+        const RoomBox& bx =
+            fr->boxes[rm.boxFirst +
+                      hash_u32(r ^ 0x51ed270bu) % rm.boxCount];
+        int aox = 0, aoy = 0; // якорь в координатах бокса (для клампа спреда)
         int ax = 0, ay = 0, packH = 0;
         bool haveAnchor = false;
         for (int t = 0; t < kPlaceTries; ++t) {
             const std::uint32_t h =
                 hash_u32(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
-            ax = x0 + 1 +
-                 static_cast<int>((h >> 7) % static_cast<std::uint32_t>(span));
-            ay = y0 + 1 +
-                 static_cast<int>((h >> 19) % static_cast<std::uint32_t>(span));
-            // The pack's storey, drawn over the WHOLE gravity axis: the torus
-            // has no privileged floor, so packs live on every storey of the
-            // tower. Members below share it — a pack is one room on one storey.
-            packH = static_cast<int>(hash_u32(h ^ 0xA5A5A5A5u) %
-                                     static_cast<std::uint32_t>(kMacroDim));
+            aox = static_cast<int>((h >> 7) %
+                                   static_cast<std::uint32_t>(bx.sx));
+            aoy = static_cast<int>((h >> 19) %
+                                   static_cast<std::uint32_t>(bx.sy));
+            ax = wrap_macro(bx.x + aox);
+            ay = wrap_macro(bx.y + aoy);
+            packH = wrap_macro(
+                bx.z + static_cast<int>(hash_u32(h ^ 0xA5A5A5A5u) %
+                                        static_cast<std::uint32_t>(bx.sz)));
             if (placeable(wet, world, ax, ay, packH)) { haveAnchor = true; break; }
         }
         if (!haveAnchor) continue;  // a room filled solid with rubble
@@ -409,8 +377,10 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                     // room", which is the honest resolution: letting the spread win
                     // would push half the pack through the walls into two other
                     // rooms and undo the grouping this whole function exists for.
-                    cx = x0 + std::clamp(ax - x0 + dx, 1, span);
-                    cy = y0 + std::clamp(ay - y0 + dy, 1, span);
+                    cx = wrap_macro(bx.x +
+                                    std::clamp(aox + dx, 0, bx.sx - 1));
+                    cy = wrap_macro(bx.y +
+                                    std::clamp(aoy + dy, 0, bx.sy - 1));
                     if (placeable(wet, world, cx, cy, packH)) {
                         placed = true;
                         break;

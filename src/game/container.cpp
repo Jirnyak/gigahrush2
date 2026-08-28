@@ -8,6 +8,7 @@
 #include "game/embody.h"   // NpcRef
 #include "game/floor_gen.h" // floor_room_mask — the crate's contents follow the ROOM
 #include "game/npc_pool.h"
+#include "game/room_supply.h" // живой хук: взятое покидает запас комнаты
 #include "game/prop_system.h"
 #include "world/anchor.h"
 #include "world/surface.h"
@@ -343,12 +344,6 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
              0xFFFFu) >= kWetQuanta)
             continue;
 
-        // What ROOM this is. The one caller that knows both the geometry kind and the
-        // floor label, which is exactly the key floor_room_mask is defined on — so the
-        // mob spawner reading the same room gets the same answer without either of them
-        // storing it.
-        const std::uint16_t roomMask = floor_room_mask(kind, floorNumber, rx, ry);
-
         // ЯЩИК — ПРОП (S14.1, B1, решение владельца 2026-08-21): спавн
         // проп-системой (строка props.csv supply_crate — скин/AABB/масса из
         // данных) с ЧЕСТНЫМ якорем из примитива поверхностей по опоре из
@@ -378,9 +373,12 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
         Entity e = spawn_prop_from_id(reg, world, pos, anchor,
                                       PropId::SupplyCrate, layer);
         if (e == entt::null) continue;
+        // Маска «вид комнаты» умерла (S12.2, rooms-object E): содержимое
+        // катится без комнатного фильтра — 0 у roll_in_room и раньше значил
+        // «не фильтровать». Тематику места дадут модуль и глаголы, не вид.
         reg.emplace<Container>(
             e, roll_in_room(pick_kind(kind, giga::hash_u32(h ^ 0x5bf03635u)), floorNumber,
-                            giga::hash_u32(h ^ 0xc2b2ae35u), roomMask));
+                            giga::hash_u32(h ^ 0xc2b2ae35u), /*roomMask=*/0));
         ++made;
     }
     return made;
@@ -430,6 +428,9 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
             const std::uint16_t moved =
                 static_cast<std::uint16_t>(sl.count - unplaced);
             if (moved == 0) break;  // full: the rest stays in the box
+            // Взятое покидает МЕСТО (S12.4/S12.5, живой хук supply): запас
+            // комнаты падает, следующий голодный видит меньшее «есть».
+            supply_item_at(reg, t.pos, sl.item, -static_cast<int>(moved));
             took += item_def(sl.item).value * moved;
             sl.count = unplaced;
             if (sl.count == 0) sl = ItemSlot{};

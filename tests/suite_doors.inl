@@ -21,7 +21,9 @@ void declaration_and_toggle() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     Doors d;
-    door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
     CHECK(!d.list.empty());
     // Лифтовые створки: 4 механизм-портала, акторному промпту невидимы.
     for (int hub = 0; hub < 4; ++hub) {
@@ -86,7 +88,9 @@ void snapshot_carries_closed_door() {
     World w;
     generate_floor(w, 3, floor_spec(FloorKind::Residential), 777u);
     Doors d;
-    door_declare(d, 3, floor_spec(FloorKind::Residential), 777u);
+    FloorRooms fr;
+    rooms_declare(fr, 3, floor_spec(FloorKind::Residential), 777u);
+    door_declare(d, fr, 3, floor_spec(FloorKind::Residential), 777u);
     Registry reg;
     std::vector<std::uint32_t> dirty;
     std::uint32_t id = kNoPortal;
@@ -123,7 +127,9 @@ void focus_aims_at_a_real_door() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     Doors d;
-    door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
     Registry reg;
     const Entity self = reg.create();
     reg.emplace<Transform>(self, Transform{{0, 0, 0}, 0});
@@ -217,7 +223,9 @@ void lift_dressing_and_reference() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     Doors d;
-    door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
     Registry reg;
     std::vector<std::uint32_t> dirty;
     dress_lift_portals(reg, w, d, 0, floor_spec(FloorKind::Residential),

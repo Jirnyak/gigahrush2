@@ -11,6 +11,7 @@
 #include "game/embody.h"
 #include "game/loot_table.h"  // roll_kind_drop — the per-kind identity half of a roll
 #include "game/mob_spawn.h"  // MobRef
+#include "game/room_supply.h" // живые хуки: упало += / подобрано −= (S12.5)
 #include "game/mob_table.h"
 #include "game/prop_system.h" // Interactable::Kind::Loot — §18 interaction tag
 #include "game/ranged_table.h"
@@ -237,6 +238,9 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
         reg.emplace<Pickup>(e, Pickup{id, kd.count});
+        // Упавшее СТАНОВИТСЯ местом (живой хук supply, S12.5): место бойни
+        // само делается запасом и стягивает мародёров.
+        supply_item_at(reg, tr.pos, id, static_cast<int>(kd.count));
         // MASS, and its absence here was a real hole: a rifle lying on the floor is
         // as much a concrete object as the mob that dropped it, yet loot was the ONE
         // spawn path in the tree that emplaced no `Mass`. Mobs, props and embodied
@@ -301,6 +305,8 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     const std::uint32_t bundled = count;   // already stack-capped above; u16 cell
     reg.emplace<Pickup>(e, Pickup{def->ammo,
                                   static_cast<std::uint16_t>(bundled)});
+    supply_item_at(reg, tr.pos, def->ammo,
+                   static_cast<int>(bundled)); // живой хук supply (S12.5)
     // The bundle weighs its ROUNDS, not one round — the same stack multiply
     // `inventory_mass_g` does, because a pile of sixty on the floor and the same
     // sixty in a pocket must not disagree about what they weigh.
@@ -392,6 +398,9 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         const std::uint16_t placed =
             static_cast<std::uint16_t>(p.count - unplaced);
         if (placed == 0) continue;  // full: it stays where it is
+        // Подобранное покидает МЕСТО (живой хук supply, S12.5): носимое
+        // принадлежит агенту, а не комнате.
+        supply_item_at(reg, tr.pos, p.item, -static_cast<int>(placed));
         gained += def.value * static_cast<std::int32_t>(placed);
 
         // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.

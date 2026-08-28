@@ -60,4 +60,19 @@ void rooms_supply_rebuild(FloorRooms& fr, Registry& reg, LayerId layer) {
                             static_cast<int>(p.count));
 }
 
+FloorRooms* rooms_in_ctx(Registry& reg) {
+    return reg.ctx().find<FloorRooms>();
+}
+
+void supply_item_at(Registry& reg, const vec3& pos, std::uint16_t item,
+                    int countDelta) {
+    if (FloorRooms* fr = rooms_in_ctx(reg))
+        supply_add_item(*fr, room_at_pos(*fr, pos), item, countDelta);
+}
+
+void supply_prop_at(Registry& reg, const vec3& pos, PropId id, int sign) {
+    if (FloorRooms* fr = rooms_in_ctx(reg))
+        supply_add_prop(*fr, room_at_pos(*fr, pos), id, sign);
+}
+
 } // namespace giga::game

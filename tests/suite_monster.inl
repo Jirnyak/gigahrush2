@@ -488,6 +488,8 @@ static void test_monster_all() {
         // src/, so this number is unchanged by this lane and must stay unchanged until
         // the sealed-basin trap is answered.
         Registry reg;
+        rooms_declare(reg.ctx().emplace<FloorRooms>(), -26,
+                      floor_spec(FloorKind::Derelict), 4242u);
         const std::uint8_t danger =
             danger_for_hostility(floor_spec(FloorKind::Derelict).hostility);
         const std::uint32_t heads = spawn_floor_mobs(
