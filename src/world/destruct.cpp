@@ -88,10 +88,11 @@ inline bool atom_exists(const World& w, const SubField<CellType>* mats,
 inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
     const std::uint32_t ci = key >> 9;
-    // ЩИТ ([world/protect.h]): клетка защищённой области не меняется НИКАКИМ
+    // ЩИТ ([world/mask.h], S18): защищённый АТОМ не меняется никаким
     // писателем геометрии. Гейт стоит в единственной точке выреза атома —
-    // обходных путей у карва нет по построению.
-    if (w.protect().test(ci)) return;
+    // обходных путей у карва нет по построению. Отсев субвоксельный:
+    // модуль вправе защитить решётку, не целую клетку.
+    if (w.masks().shielded(ci, static_cast<int>(key & 511u))) return;
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
     m.clear(static_cast<int>(key & 511u));
@@ -475,13 +476,16 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
                    CarveResult& out) {
     for (const std::uint32_t node : s.nodeQueue) {
         const std::uint32_t ci = node >> 8;
-        // ЩИТ: атомы защищённой области не конвертируются в рыхлого
-        // двойника — второй (и последний) писатель геометрии после
-        // remove_key. Компонент, цепляющийся за щит, к тому же опёрт по
-        // построению: щит-клетки никогда не пустеют.
-        if (w.protect().test(ci)) continue;
+        // ЩИТ ([world/mask.h]): защищённые атомы не конвертируются в
+        // рыхлого двойника — второй (и последний) писатель геометрии после
+        // remove_key. Отсев клеточным кэшем; спуск в биты — только в
+        // клетках со щитом (частичный щит: незащищённая половина клетки
+        // конвертируется честно). Компонент, цепляющийся за щит, опёрт по
+        // построению: щит-биты никогда не пустеют.
+        const bool cellShielded = w.masks().shielded_cell(ci);
         const std::uint32_t e = cell_partition(w.grid(), s, ci); // кэш-хит
         const std::uint32_t base = (s.partFirst[e] + (node & 255u)) * 8;
+        bool wrote = false;
         for (int wi = 0; wi < 8; ++wi) {
             std::uint64_t bits = s.compWords[base + static_cast<std::uint32_t>(wi)];
             while (bits != 0) {
@@ -489,6 +493,9 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
                 bits &= bits - 1;
                 const std::uint32_t bit =
                     static_cast<std::uint32_t>(wi * 64 + b);
+                if (cellShielded && w.masks().shielded(ci, static_cast<int>(bit)))
+                    continue;
+                wrote = true;
                 const std::uint32_t k = pack_key(ci, bit);
                 const CellType src = mat_key(w, mats, k);
                 out.detached.push_back(
@@ -497,7 +504,7 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
                 pg[bit] = material_rubble_of(src);
             }
         }
-        out.dirtyCells.push_back(ci);
+        if (wrote) out.dirtyCells.push_back(ci);
     }
 }
 

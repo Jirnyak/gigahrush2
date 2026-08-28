@@ -6,7 +6,7 @@
 #pragma once
 #include "world/field.h"
 #include "world/gravity.h"
-#include "world/protect.h"
+#include "world/mask.h"
 #include "world/macro_grid.h"
 #include "world/subfield.h"
 
@@ -29,17 +29,18 @@ public:
     GravityField& gravity() { return gravity_; }
     const GravityField& gravity() const { return gravity_; }
 
-    // Щит защищённых областей ([world/protect.h]): модуль этажа объявляет
-    // неприкосновенные объёмы; писатели геометрии обязаны его спрашивать.
-    ProtectMask& protect() { return protect_; }
-    const ProtectMask& protect() const { return protect_; }
+    // Маски этажа ([world/mask.h], S18): модуль объявляет пометки объёма
+    // (щит, дверь); потребители — писатели геометрии, интеракция — сами
+    // спрашивают их. Маска не в снимке: перештамповка на каждом входе.
+    FloorMasks& masks() { return masks_; }
+    const FloorMasks& masks() const { return masks_; }
 
 private:
     MacroGrid grid_;
     FieldRegistry fields_;
     SubFieldRegistry subfields_;
     GravityField gravity_;
-    ProtectMask protect_;
+    FloorMasks masks_;
 };
 
 } // namespace giga

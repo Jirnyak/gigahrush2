@@ -1048,7 +1048,8 @@ static void test_fast_travel() {
         std::printf("[shaft] %d closed lift pillars probed: cabin+ring+torus\n",
                     kFastHubsPerFloor);
 
-        // --- ЩИТ ([world/protect.h], решение владельца 2026-08-27) ----------
+        // --- ЩИТ ([world/mask.h], решение владельца 2026-08-27; S18-группы
+        // и субвоксельность — 2026-08-28) ------------------------------------
         // Лифт — ключевая механика: весь объём столба защищён областью, а не
         // материалом. Карв мощью выше любой твёрдости обязан отскочить от
         // стены столба и при этом честно прогрызть стену В ДВУХ КЛЕТКАХ от
@@ -1060,8 +1061,8 @@ static void test_fast_travel() {
             lift_entrance(FloorKind::Residential, 0, 0, 4242u);
         const int wallX = static_cast<int>(pcx) + 1; // клетка кольца
         const int wallY = static_cast<int>(pcy);
-        CHECK(shaftWorld.protect().test(
-            macro_index(wallX, wallY, wrap_macro(pe.h + 40))));
+        CHECK(shaftWorld.masks().shielded(
+            macro_index(wallX, wallY, wrap_macro(pe.h + 40)), 0));
         {
             CarveScratch scratch;
             CarveResult res;
@@ -1093,6 +1094,43 @@ static void test_fast_travel() {
                     carve_sphere(shaftWorld, op, scratch, res);
                 CHECK(removed > 0);
             }
+        }
+        {
+            // СУБВОКСЕЛЬНОСТЬ щита (решение владельца 2026-08-28): маска —
+            // «эти субвоксели мои», не «эта клетка моя». Частичный щит на
+            // нижней половине сплошной клетки: карв в упор сносит верхнюю
+            // половину и не трогает НИ ОДНОГО защищённого атома.
+            const int hx2 = wallX + 6, hy2 = wallY, hz2 = wrap_macro(pe.h + 44);
+            shaftWorld.grid().fill_cell(hx2, hy2, hz2, kMatConcrete);
+            SubMask lowHalf;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if ((b / (kSubDim * kSubDim)) < kSubDim / 2) lowHalf.set(b);
+            MaskGroup pg2;
+            pg2.props = kMaskShield;
+            pg2.cells.push_back(MaskCell{
+                static_cast<std::uint32_t>(macro_index(hx2, hy2, hz2)),
+                lowHalf});
+            shaftWorld.masks().groups.push_back(std::move(pg2));
+            shaftWorld.masks().rebuild_shield_cache();
+            CarveScratch scratch;
+            CarveResult res;
+            CarveOp op;
+            op.x = (hx2 + 0.5f) * kCellSize;
+            op.y = (hy2 + 0.5f) * kCellSize;
+            op.z = (hz2 + 0.5f) * kCellSize;
+            op.radius = 2.0f;
+            op.power = 0xFFFF;
+            op.seed = 11u;
+            carve_sphere(shaftWorld, op, scratch, res);
+            const SubMask& after = g.mask(hx2, hy2, hz2);
+            int lowStand = 0, highStand = 0;
+            for (int b = 0; b < kSubVoxels; ++b) {
+                if (!after.test(b)) continue;
+                if (lowHalf.test(b)) ++lowStand;
+                else ++highStand;
+            }
+            CHECK(lowStand == kSubVoxels / 2); // защищённая половина целиком
+            CHECK(highStand < kSubVoxels / 2); // незащищённая — карвится
         }
     }
 
