@@ -29,9 +29,13 @@ struct Cand {
 
 // Проекция точки на луч: (along, off). along < 0 — цель позади.
 Cand project(const vec3& eye, const vec3& dir, const vec3& p) {
-    const float dx = wrap_delta_f(p.x, eye.x, kWorldExtent);
-    const float dy = wrap_delta_f(p.y, eye.y, kWorldExtent);
-    const float dz = wrap_delta_f(p.z, eye.z, kWorldExtent);
+    // ПОРЯДОК АРГУМЕНТОВ: wrap_delta_f(a, b) = b - a ([core/wrap.h]), то
+    // есть «от eye к p» — это (eye, p), а не (p, eye). Инверсия знака здесь
+    // считала ВСЕ цели стоящими позади игрока: третья причина немого
+    // прицела (первые две — своя формула взгляда и марш из материи).
+    const float dx = wrap_delta_f(eye.x, p.x, kWorldExtent);
+    const float dy = wrap_delta_f(eye.y, p.y, kWorldExtent);
+    const float dz = wrap_delta_f(eye.z, p.z, kWorldExtent);
     Cand c;
     c.along = dx * dir.x + dy * dir.y + dz * dir.z;
     const float ox = dx - dir.x * c.along;
@@ -43,14 +47,22 @@ Cand project(const vec3& eye, const vec3& dir, const vec3& p) {
 
 // Стена между глазом и целью? Марш — субвоксельный (единственный в дереве);
 // касание ЗА целью не считается заслоном.
-bool blocked(const World& w, const vec3& eye, const vec3& target,
-             float along) {
+bool blocked(const World& w, const vec3& eye, const vec3& dir,
+             const vec3& target, float along) {
+    if (along <= 0.05f) return false;
+    // Старт СМЕЩЁН вперёд на четверть метра: у sub_march «стартовый
+    // субвоксель участвует» (пуля, рождённая в материи, ею и стоит), а глаз
+    // стоит в клетке, где почти всегда есть материя — марш возвращал
+    // касание t=0 и заслонял ВСЁ. Это и была вторая половина дефекта «двери
+    // не реагируют, таблички нет».
+    const vec3 from{eye.x + dir.x * 0.25f, eye.y + dir.y * 0.25f,
+                    eye.z + dir.z * 0.25f};
     SubRayHit hit;
-    if (!sub_march(w.grid(), eye, target, hit)) return false;
-    const float dist = along > 0.01f ? along : 0.01f;
-    // t — доля отрезка; заслон засчитан, только если он ближе цели на
-    // полклетки (иначе марш ловит саму цель: полотно двери, корпус пропа).
-    return hit.t * dist < dist - kCellSize * 0.5f;
+    if (!sub_march(w.grid(), from, target, hit)) return false;
+    // Заслон засчитан, только если он ближе цели на полклетки — иначе марш
+    // ловит саму цель (полотно двери, корпус пропа).
+    const float seg = along - 0.25f;
+    return hit.t * seg < seg - kCellSize * 0.5f;
 }
 
 } // namespace
@@ -75,7 +87,7 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
         if (tr.layer != layer) continue;
         const Cand c = project(eye, dir, tr.pos);
         if (!consider(c.along, c.off, it.reachM)) continue;
-        if (blocked(w, eye, tr.pos, c.along)) continue;
+        if (blocked(w, eye, dir, tr.pos, c.along)) continue;
         bestAlong = c.along;
         best.what = Focus::What::Entity;
         best.entity = e;
@@ -96,7 +108,7 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
                        static_cast<float>(p.h) * 0.5f) * kCellSize};
         const Cand c = project(eye, dir, pp);
         if (!consider(c.along, c.off, kDoorReachM)) continue;
-        if (blocked(w, eye, pp, c.along)) continue;
+        if (blocked(w, eye, dir, pp, c.along)) continue;
         bestAlong = c.along;
         best.what = Focus::What::Portal;
         best.entity = entt::null;

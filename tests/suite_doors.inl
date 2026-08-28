@@ -8,6 +8,7 @@
 //   3. Полотно — материя: снимок этажа несёт закрытую дверь сам (сброса
 //      на входе не существует по построению).
 #include "game/door.h"
+#include "game/focus.h"
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
 #include "game/save.h"
@@ -110,10 +111,56 @@ void snapshot_carries_closed_door() {
     CHECK(door_closed(w2, p)); // материя вернулась — дверь закрыта
 }
 
+// ФОКУС ПРИЦЕЛА на РЕАЛЬНОМ этаже ([game/focus.h]). Гейт существует, потому
+// что первая версия молчала в игре по двум причинам сразу — своя формула
+// взгляда вместо camera_forward и марш, стартующий В МАТЕРИИ (заслонял всё).
+// Оба дефекта headless-ловимы, и этот тест их ловит.
+void focus_aims_at_a_real_door() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    door_declare(d, 0, floor_spec(FloorKind::Residential), 1337u);
+    Registry reg;
+
+    int seen = 0, promptOk = 0;
+    for (std::uint32_t i = 0; i < d.list.size() && seen < 8; ++i) {
+        const DoorPortal& p = d.list[i];
+        if (p.mechanism) continue;
+        const vec3 centre{(p.cx + 0.5f) * kCellSize, (p.cy + 0.5f) * kCellSize,
+                          (p.cz + p.h * 0.5f) * kCellSize};
+        // Глаз в полутора метрах по -X от проёма, смотрит на него: тот же
+        // вектор, что даёт camera_forward(yaw=0) — ось +X.
+        // Подход с ЧЕТЫРЁХ сторон, как в игре: проём стоит в стене вдоль
+        // одной оси, и с двух сторон к нему не подойти вовсе.
+        ++seen;
+        const int off[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        bool aimed = false;
+        for (int k = 0; k < 4 && !aimed; ++k) {
+            const vec3 eye{centre.x - off[k][0] * 1.5f,
+                           centre.y - off[k][1] * 1.5f, centre.z};
+            const vec3 dir{static_cast<float>(off[k][0]),
+                           static_cast<float>(off[k][1]), 0.0f};
+            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir, d);
+            if (f.what == Focus::What::Portal && f.portal == i) {
+                aimed = true;
+                // Табличка приходит ИЗ СИСТЕМЫ, не из литерала у действия.
+                CHECK(focus_prompt(f, w, d) != nullptr);
+            }
+        }
+        if (aimed) ++promptOk;
+    }
+    std::printf("[focus] doors probed %d, aimed %d\n", seen, promptOk);
+    CHECK(seen > 0);
+    // Хоть с одной из четырёх сторон обязан ловиться КАЖДЫЙ проём: иначе
+    // дверь в игре нема (жалоба владельца 2026-08-28).
+    CHECK(promptOk == seen);
+}
+
 } // namespace doors_test
 
 static void test_doors_all() {
     doors_test::declaration_and_toggle();
     doors_test::snapshot_carries_closed_door();
+    doors_test::focus_aims_at_a_real_door();
     std::printf("doors suite done (материя, не состояние)\n");
 }

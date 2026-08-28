@@ -51,6 +51,7 @@
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
+#include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -7813,10 +7814,11 @@ int main(int argc, char** argv) {
             // умерла здесь.
             const char* promptText = nullptr;
             char promptBuf[96];
+            // Взгляд — ЧЕРЕЗ camera_forward ([sim/camera.h]): второй
+            // формулы курса в дереве не существует (моя собственная
+            // тригонометрия здесь и была причиной «двери не реагируют»).
             const auto& camF = reg.get<CameraTag>(player);
-            const float cyaw = camF.yaw, cpit = camF.pitch;
-            const vec3 aim{std::cos(cpit) * std::cos(cyaw),
-                           std::cos(cpit) * std::sin(cyaw), std::sin(cpit)};
+            const vec3 aim = camera_forward(camF.yaw, camF.pitch);
             vec3 eye = ppos;
             if (const auto* nrF = reg.try_get<game::NpcRef>(player))
                 if (pool.valid(nrF->id))
