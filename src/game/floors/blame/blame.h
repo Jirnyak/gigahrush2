@@ -81,4 +81,11 @@ void blame_apply_rules(World& world, int number, const FloorSpec& spec,
 void generate_blame_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed);
 
+// Объявить комнаты модуля (rooms-object C, S12.1): лобби решётки — 16 узлов
+// x 16 бэндов, гарантированное воздушное ядро 5x5x2, тег hermetic
+// ([blame.md]: «лобби — герметичная комната под городом»). Чистая функция;
+// вызывающий делает rooms_reset. Возвращает число объявленных комнат.
+struct FloorRooms;
+std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out);
+
 } // namespace giga::game

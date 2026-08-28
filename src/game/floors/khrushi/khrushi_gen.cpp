@@ -25,6 +25,7 @@
 #include "game/antourage/antourage.h" // AntourageBake, WireChain — street wires
 #include "game/fast_travel.h" // kFastLobbyR — the hub square footprint
 #include "game/floor_gen.h"
+#include "game/room.h"        // room_declare — модуль объявляет свои комнаты (S12.1)
 #include "world/anchor.h"   // anchor_face_pack — the wire's attachment face
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
@@ -819,6 +820,99 @@ void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
         }
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
+}
+
+std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out) {
+    // Комнаты модуля (rooms-object C): фиксированная раскладка квартиры
+    // stamp_section_flats, город из build_city_plan — обе чистые функции
+    // (seed, number), объявление перештамповывается на каждом входе.
+    //
+    // ПОЛУТОРНЫЙ ЯРУС — внутреннее дело модуля (решение владельца 2026-08-28:
+    // «комнаты строго по клеткам 128^3, модуль сам разбирается со своими»):
+    // ярус s занимает суб-слои [s*kStoreyRise, (s+1)*kStoreyRise), клетка
+    // достаётся ярусу, в котором лежит её ЦЕНТР — ярусы чередуются высотой
+    // 1 и 2 клетки, дыр и пересечений нет по построению.
+    //
+    // Прихожая и коридор квартиры НЕ комнаты (владелец 2026-08-28 + S12.1:
+    // проход — то, через что идут); их клетки остаются kNoRoom, как коридоры
+    // этажа и подъездные площадки.
+    CityPlan plan;
+    build_city_plan(plan, seed, number);
+
+    // ОБЪЯВЛЕННОЕ предложение (S12.4, шкала референса 8..40): спальня спать
+    // 30 — канонический пример S13.3; зал — диван и стол вполсилы (полное
+    // дают пропы, S12.3); кухня/санузел/кладовка — как у падика.
+    enum { kFlatBed = 0, kFlatHall, kFlatKitchen, kFlatBath, kFlatPantry };
+    std::int16_t declared[5][kVerbCount] = {};
+    declared[kFlatBed][kVerbSleep] = 30;
+    declared[kFlatHall][kVerbSleep] = 10;
+    declared[kFlatHall][kVerbSocial] = 12;
+    declared[kFlatKitchen][kVerbEat] = 12;
+    declared[kFlatBath][kVerbToilet] = 20;
+    declared[kFlatPantry][kVerbStore] = 15;
+
+    // Комната квартиры в осях (f: вдоль фасада от торца, j: от улицы вглубь)
+    // — прямоугольник [f0..f1] x [j0..j1], см. схему stamp_section_flats.
+    struct FlatRoom {
+        std::uint8_t role, f0, f1, j0, j1;
+    };
+    constexpr FlatRoom kFlatRooms[] = {
+        {kFlatBed, 0, 0, 0, 2},     // спальня — колонна у торца
+        {kFlatHall, 1, 2, 0, 2},    // зал — уличная полоса у ядра
+        {kFlatPantry, 0, 0, 3, 3},  // кладовка
+        {kFlatKitchen, 0, 0, 4, 4}, // кухня
+        {kFlatBath, 0, 0, 5, 5},    // санузел
+        // прихожая (1,5) + коридор (1,3..4) — проход, не объявляется
+    };
+
+    std::uint32_t n = 0;
+    for (const Building& b : plan.bldgs) {
+        const int sections = building_sections(b);
+        for (int sec = 0; sec < sections; ++sec) {
+            const int base = sec * kSectionLen;
+            for (int side = 0; side < 2; ++side) {
+                auto F = [&](int f) {
+                    return base + (side ? kSectionLen - 1 - f : f);
+                };
+                auto DC = [&](int j) {
+                    return b.courtSign > 0 ? j : kBldgDepth - 1 - j;
+                };
+                for (int s = 0; s < kStoreys; ++s) {
+                    // Клетки яруса s по правилу центра: r — клетка от земли.
+                    int r0 = -1, r1 = -1;
+                    for (int r = 0; r * 8 < kBldgTopH; ++r) {
+                        if ((r * 8 + 4) / kStoreyRise != s) continue;
+                        if (r0 < 0) r0 = r;
+                        r1 = r;
+                    }
+                    if (r0 < 0) continue;
+                    for (const FlatRoom& fr : kFlatRooms) {
+                        // Прямоугольник (f,j) -> клетки мира: маппинг
+                        // монотонен по каждой оси, углы дают min-корнер.
+                        const int fa0 = std::min(F(fr.f0), F(fr.f1));
+                        const int fa1 = std::max(F(fr.f0), F(fr.f1));
+                        const int dc0 = std::min(DC(fr.j0), DC(fr.j1));
+                        const int dc1 = std::max(DC(fr.j0), DC(fr.j1));
+                        const int x0 = bcellx(b, fa0, dc0);
+                        const int y0 = bcelly(b, fa0, dc0);
+                        const int x1 = bcellx(b, fa1, dc1);
+                        const int y1 = bcelly(b, fa1, dc1);
+                        const RoomBox box{
+                            static_cast<std::uint8_t>(wrap_macro(x0)),
+                            static_cast<std::uint8_t>(wrap_macro(y0)),
+                            static_cast<std::uint8_t>(kKhrushiGroundCoord + r0),
+                            static_cast<std::uint8_t>(x1 - x0 + 1),
+                            static_cast<std::uint8_t>(y1 - y0 + 1),
+                            static_cast<std::uint8_t>(r1 - r0 + 1)};
+                        if (room_declare(out, &box, 1, /*tags=*/0, /*owner=*/0,
+                                         declared[fr.role]) != kNoRoom)
+                            ++n;
+                    }
+                }
+            }
+        }
+    }
+    return n;
 }
 
 } // namespace giga::game

@@ -50,6 +50,7 @@
 #include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
+#include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
@@ -2366,6 +2367,8 @@ int main(int argc, char** argv) {
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
     std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+    game::FloorRooms floorRooms;    // комнаты этажа: объявляет модуль (S12.1),
+                                    // перештамповка на каждом входе (rooms_declare)
     game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
         // 5c: обвес лифтовых порталов — game::dress_lift_portals
     // ([game/door.h]): кнопка снаружи (DoorRef на створку хаба — активация
@@ -2474,6 +2477,9 @@ int main(int argc, char** argv) {
             // so doors may move mid-bake. [door.h, game/rebake.h]
             game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+            game::rooms_declare(floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(l0);
             begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
             game::ai_init(reg, l0);
@@ -3111,6 +3117,9 @@ int main(int argc, char** argv) {
     auto arrive_doors_nav = [&](LayerId nl) {
         game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
         dress_lift_portals(nl);
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
     };
@@ -6293,6 +6302,10 @@ int main(int argc, char** argv) {
                                 bus);
                             game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+                            game::rooms_declare(
+                                floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
                             begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                             if (propPass.ready()) {
@@ -8734,6 +8747,10 @@ int main(int argc, char** argv) {
                         // leaves --shot proving nothing. [save.h, door.h]
                         game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+                        game::rooms_declare(
+                            floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
             dress_lift_portals(nl);
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
                         voxelMirror.upload_all(stack.layer(nl));

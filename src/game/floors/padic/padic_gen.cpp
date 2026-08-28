@@ -41,6 +41,7 @@
 #include "game/floors/padic/padic.h"
 
 #include "game/floor_gen.h"
+#include "game/room.h"          // room_declare — модуль объявляет свои комнаты (S12.1)
 #include "game/fast_travel.h"   // kFastShaftR / kFastLobbyR — the shaft footprint
 #include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
@@ -96,10 +97,32 @@ struct PlanWall {
 struct PlanStair {
     std::uint8_t x, y; // box cells [x, x+3] times rows {y (flight A), y+1 (flight B)}
 };
+// A rectangle of WALL LINES, in unwrapped coordinates (a block on the torus seam
+// runs past 127 and every emitted cell wraps). Interior cells are strictly
+// inside the lines.
+struct Rect {
+    int x0, x1, y0, y1;
+};
+// Роль BSP-листа в плане — знание, которое раньше умирало вместе с листом
+// (rooms-object C: модуль знает свои комнаты и обязан их объявить). НЕ вид
+// комнаты (S12.2) — внутренняя пометка планировщика, из которой модуль
+// выводит ОБЪЯВЛЕННОЕ предложение и материал пола.
+enum : std::uint8_t {
+    kLeafDwelling = 0, // жилая комната квартиры (паркет)
+    kLeafToilet = 1,   // самый малый лист квартиры — санузел (лино)
+    kLeafKitchen = 2,  // второй малый — кухонная ниша (лино)
+    kLeafStrip = 3,    // кладовки/концьержки лестничной полосы
+};
+struct PlanRoom {
+    Rect r;
+    std::uint8_t leaf; // kLeaf*
+};
+
 struct Plan {
     std::vector<PlanWall> walls;
     std::vector<Doorway> doors;      // z ignored here; stamped per storey
     std::vector<PlanStair> stairs;
+    std::vector<PlanRoom> rooms;     // все обитаемые листья — для объявления комнат
     std::vector<std::uint8_t> floorMat;  // per plan cell; 0 = open shaft column
     std::vector<std::uint8_t> grate;     // corridor grate strips
     std::vector<std::uint8_t> opening;   // doorway/entry-gap cells: no wall at z=b..b+1
@@ -111,13 +134,6 @@ inline std::uint8_t w8(int c) { return static_cast<std::uint8_t>(wrap_macro(c));
 inline std::size_t p2(int x, int y) {
     return static_cast<std::size_t>(wrap_macro(y)) * kMacroDim + wrap_macro(x);
 }
-
-// A rectangle of WALL LINES, in unwrapped coordinates (a block on the torus seam
-// runs past 127 and every emitted cell wraps). Interior cells are strictly
-// inside the lines.
-struct Rect {
-    int x0, x1, y0, y1;
-};
 
 void add_wall(Plan& p, int axis, int c, int a0, int a1) {
     p.walls.push_back({static_cast<std::uint8_t>(axis), w8(c), w8(a0),
@@ -171,6 +187,9 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
     std::vector<Rect> rooms;
     bsp(p, rng, apt, 5, /*doors=*/true, rooms);
     // Two smallest rooms go lino. Plain selection sort over a handful.
+    // Тот же выбор даёт листьям РОЛИ (rooms-object C): pass 0 — санузел,
+    // pass 1 — кухонная ниша, остаток — жилые. Роль рождается там же, где
+    // рождается материал пола, — план знает свои комнаты и объявляет их.
     for (int pass = 0; pass < 2 && pass < static_cast<int>(rooms.size()); ++pass) {
         std::size_t best = 0;
         long bestArea = 0x7FFFFFFF;
@@ -180,8 +199,11 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
             if (a < bestArea) { bestArea = a; best = i; }
         }
         fill_mat(p, rooms[best], kMatLino, /*interiorOnly=*/true);
+        p.rooms.push_back({rooms[best],
+                           pass == 0 ? kLeafToilet : kLeafKitchen});
         rooms.erase(rooms.begin() + static_cast<long>(best));
     }
+    for (const Rect& r : rooms) p.rooms.push_back({r, kLeafDwelling});
     // Entry: an edge lying on the block perimeter (every perimeter line faces a
     // corridor). Fallback — a landlocked apartment (rare) opens into its
     // neighbour instead: communal.
@@ -268,6 +290,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
                 for (const Rect& s : strip) {
                     const int at = rnd(rng, s.x0 + 1, s.x1 - 1);
                     add_door(p, at, by, 1); // each opens onto the corridor
+                    p.rooms.push_back({s, kLeafStrip});
                 }
                 main.y0 = by + 3;
             }
@@ -663,6 +686,48 @@ std::uint32_t padic_doorways(int number, unsigned seed,
             w.h = 2;
             out.push_back(w);
             ++n;
+        }
+    return n;
+}
+
+std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
+    // Тот же приём, что padic_doorways: план — чистая функция (seed, number),
+    // объявление перештамповывается на каждом входе (generate И restore, закон
+    // масок S18), порядок обхода детерминирован — он и есть источник
+    // устойчивости RoomId между сессиями.
+    Plan p;
+    build_plan(p, seed, number);
+
+    // ОБЪЯВЛЕННОЕ предложение по роли листа (S12.4: неразрушимая часть —
+    // работает с генерации, до всякой расстановки). Шкала — референсная
+    // 8..40 ([rooms-object.md] §разведка): жилая спать 30 — канонический
+    // пример S13.3 («своя жилая комната: объявлено 30»); санузел сортир 20 и
+    // ниша есть 12 — вполсилы от полноценного оснащения (полное даёт проп,
+    // S12.3); кладовка хранить 15 — полка без ящика хранит хуже склада.
+    std::int16_t declared[4][kVerbCount] = {};
+    declared[kLeafDwelling][kVerbSleep] = 30;
+    declared[kLeafToilet][kVerbToilet] = 20;
+    declared[kLeafKitchen][kVerbEat] = 12;
+    declared[kLeafStrip][kVerbStore] = 15;
+
+    std::uint32_t n = 0;
+    // Один 2D-план на все ярусы (настоящий падик повторяет планировку), но
+    // РАЗНЫЕ ярусы — РАЗНЫЕ комнаты (S12.1): свой RoomId на каждый storey.
+    // Зона яруса — все его 3 клетки (b..b+2): сэндвич принадлежит комнате
+    // под ним, дыр между ярусами нет.
+    for (int b = 0; b <= kLastBase; b += kStorey)
+        for (const PlanRoom& pr : p.rooms) {
+            const int sx = pr.r.x1 - pr.r.x0 - 1; // интерьер строго внутри линий
+            const int sy = pr.r.y1 - pr.r.y0 - 1;
+            if (sx <= 0 || sy <= 0) continue;
+            const RoomBox box{w8(pr.r.x0 + 1), w8(pr.r.y0 + 1),
+                              static_cast<std::uint8_t>(b),
+                              static_cast<std::uint8_t>(sx),
+                              static_cast<std::uint8_t>(sy),
+                              static_cast<std::uint8_t>(kStorey)};
+            if (room_declare(out, &box, 1, /*tags=*/0, /*owner=*/0,
+                             declared[pr.leaf]) != kNoRoom)
+                ++n;
         }
     return n;
 }

@@ -141,6 +141,8 @@ int g_checks = 0;
 #include "suite_gravity_regimes.inl"
 #include "suite_walkbits.inl"
 #include "suite_doors.inl"
+#include "suite_verbs.inl"
+#include "suite_rooms_object.inl"
 #include "suite_rebake.inl"
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
@@ -5715,6 +5717,8 @@ int main() {
     test_gravity_regimes_all();
     test_walkbits_all();
     test_doors_all();
+    test_verbs_all();
+    test_rooms_object_all();
     test_rebake_all();
     test_prebuild_all();
     test_lightvis_all();

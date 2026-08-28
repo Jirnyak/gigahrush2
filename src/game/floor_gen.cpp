@@ -4,12 +4,14 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include "game/floors/blame/blame.h"     // the megastructure module (kind Blame)
 #include "game/floors/khrushi/khrushi.h" // the open microdistrict (kind Khrushi)
 #include "game/floors/padic/padic.h"     // the module every OTHER kind dispatches to
 #include "game/fast_travel.h"        // лифтовая сетка 2×2 — узлы столбов
 #include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
+#include "game/room.h"               // FloorRooms — комнаты объявляет модуль (S12.1)
 #include "world/destruct.h"          // kSubMaterialName — страницы под штампом
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
@@ -223,6 +225,19 @@ constexpr FloorGeneratorFunc kRuleAppliers[] = {
     padic_apply_rules, padic_apply_rules,   blame_apply_rules,
     khrushi_apply_rules,
 };
+
+// Объявители комнат (rooms-object C, S12.1: комнаты объявляет МОДУЛЬ) —
+// та же строка данных на kind, что генератор и законы. Чистые функции
+// (number, seed), перештамповка на каждом входе (закон масок S18).
+using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
+constexpr FloorRoomsFunc kRoomDeclarers[] = {
+    padic_rooms, padic_rooms,   padic_rooms,
+    padic_rooms, padic_rooms,   blame_rooms,
+    khrushi_rooms,
+};
+static_assert(sizeof(kRoomDeclarers) / sizeof(kRoomDeclarers[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "room-declarer table must have exactly one row per FloorKind");
 static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "rule-applier table must have exactly one row per FloorKind");
@@ -254,6 +269,23 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     kGenerators[kind_row(spec)](world, number, spec, seed);
     // Лифтовые столбы — поверх любого модуля (вывод у stamp_lift_pillars).
     stamp_lift_pillars(world, number, spec, seed);
+}
+
+void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
+                   unsigned seed) {
+    rooms_reset(rooms);
+    const std::uint32_t n = kRoomDeclarers[kind_row(spec)](number, seed, rooms);
+    std::size_t cells = 0;
+    for (const Room& r : rooms.list) cells += r.cells;
+    // Счёт всегда вслух (S11: молчаливого обрезания и молчаливого нуля нет);
+    // пересечение зон и отказы — дефект объявителя, кричим отдельно.
+    std::printf("[rooms] %s floor %d: %u rooms, %zu cells\n", spec.name, number,
+                n, cells);
+    if (rooms.overlapCells != 0 || rooms.refused != 0)
+        std::printf("[rooms] WARN floor %d: overlap=%u cells, refused=%u "
+                    "declarations — модуль объявил пересекающиеся или пустые "
+                    "зоны\n",
+                    number, rooms.overlapCells, rooms.refused);
 }
 
 LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed) {

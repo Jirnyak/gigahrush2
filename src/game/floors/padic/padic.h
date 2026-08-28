@@ -95,6 +95,14 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
 struct Doorway;
 std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& out);
 
+// Объявить комнаты модуля (rooms-object C, канон S12.1: комнаты объявляет
+// МОДУЛЬ при генерации): все BSP-листья плана — жилые, санузлы, ниши,
+// кладовки — на каждом из 42 ярусов, свой RoomId на ярус. Чистая функция
+// (number, seed), как padic_doorways; вызывающий делает rooms_reset.
+// Возвращает число объявленных комнат.
+struct FloorRooms;
+std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out);
+
 // Seed props and test-balls for the Padic floor (ceiling lightbulbs & rolling/anchored
 // test-balls). layer tags Transform so a recycled LayerId slot can be cleared on the
 // next arrival ([prop_system.h]).

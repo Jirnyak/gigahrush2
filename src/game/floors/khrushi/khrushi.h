@@ -93,6 +93,15 @@ void khrushi_apply_rules(World& world, int number, const FloorSpec& spec,
 void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
                             unsigned seed);
 
+// Объявить комнаты модуля (rooms-object C, S12.1): спальня/зал/кухня/санузел/
+// кладовка на секцию-сторону-ярус по фиксированной раскладке квартиры;
+// прихожая и коридор — проход, не комнаты. Полуторный ярус — внутреннее дело
+// модуля: клетка достаётся ярусу её центра (решение владельца 2026-08-28:
+// «комнаты строго по клеткам, модуль сам разбирается»). Чистая функция;
+// вызывающий делает rooms_reset. Возвращает число объявленных комнат.
+struct FloorRooms;
+std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out);
+
 // A street-lamp pole: a voxel pipe column on the kerb with a hook arm over
 // the road; (dx,dy) is the unit step towards the road. The lamp prop hangs
 // from the hook's under-face; wires run pole to pole. ONE function is the

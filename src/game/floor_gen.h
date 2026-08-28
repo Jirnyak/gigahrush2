@@ -64,6 +64,15 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed);
 
+// Объявить комнаты этажа (rooms-object, канон S12.1): rooms_reset + диспетч
+// в объявитель модуля (строка данных, как генератор). Зовётся на КАЖДОМ входе
+// на этаж — generate и restore (закон масок S18: декларация — чистая функция
+// (kind, number, seed), в снимок не едет). Печатает счёт вслух; пересечение
+// зон или отказ объявления — WARN, гейт в suite_rooms_object.
+struct FloorRooms;
+void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
+                   unsigned seed);
+
 // --- Лифтовые столбы (elevators-2x2.md, решения владельца 2026-08-27) -------
 // Узел лифта = ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор (z
 // заворачивается — у столба нет ни начала, ни конца), шахта 1 клетка в

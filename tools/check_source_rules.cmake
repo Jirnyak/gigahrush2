@@ -455,6 +455,12 @@ _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
 # table, so it drifts the moment a row is added to the CSV alone.
 _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
     "kMonsterTraitRows[ \t]*=[ \t]*([0-9]+)" "monster traits")
+# Verb vocabulary (CANON S12.2-S12.3, rooms-object gate A) — K = kVerbCount is
+# the length of EVERY verb-indexed vector (prop offer, item satisfy, room
+# declared/supply, agent demand, deed price); a row added without a re-run
+# would leave every one of them short.
+_giga_csv_vs_header("data/verbs.csv" "src/game/verb_table.h"
+    "kVerbCount[ \t]*=[ \t]*([0-9]+)" "verb")
 
 # ---- Rule 8: incomplete toroidal triple (AGENTS.md: x/y/z wrap) -------------
 # The world wraps on all three axes, and the failure mode this rule exists for

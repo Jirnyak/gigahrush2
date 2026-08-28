@@ -38,6 +38,7 @@
 #include "game/floors/blame/blame.h"
 
 #include "game/floor_gen.h"
+#include "game/room.h"        // room_declare — модуль объявляет свои комнаты (S12.1)
 #include "game/fast_travel.h" // kFastShaftR / kFastLobbyR — the shaft footprint
 #include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
@@ -705,6 +706,35 @@ void generate_blame_floor(World& world, int number, const FloorSpec& spec,
     stamp_lattice_markers(g, sm);
 
     (void)spec.population; // geometry ignores population; the seeder consumes it
+}
+
+std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out) {
+    // Комнаты мегаструктуры (rooms-object C): у пустоты жильё одно — лобби
+    // решётки, «герметичная комната под городом» ([blame.md]). sculpt_lattice
+    // гарантирует воздух зоны 5x5 на КАЖДОМ узле (у пилона lr=2, у массива 3;
+    // зона агностична к геометрии — берём гарантированное ядро, не заглядывая
+    // в скульпт) и пол под ним; band k: воздух 8k+3..8k+4. Чистая функция —
+    // от (seed, number) здесь не зависит ничего, но сигнатура диспетчера
+    // едина, и будущая грамматика комнат города ею воспользуется.
+    (void)number;
+    (void)seed;
+    std::int16_t declared[kVerbCount] = {};
+    declared[kVerbShelter] = 10; // гермолобби: за стеной лучше, чем снаружи (S13.3)
+    std::uint32_t n = 0;
+    for (int ny = 0; ny < kLatticeDim; ++ny)
+        for (int nx = 0; nx < kLatticeDim; ++nx) {
+            const int cx = lattice_coord(nx), cy = lattice_coord(ny);
+            for (int k = 0; k < 16; ++k) {
+                const RoomBox box{static_cast<std::uint8_t>(wrap_macro(cx - 2)),
+                                  static_cast<std::uint8_t>(wrap_macro(cy - 2)),
+                                  static_cast<std::uint8_t>(8 * k + 3),
+                                  5, 5, 2};
+                if (room_declare(out, &box, 1, kRoomTagHermetic, /*owner=*/0,
+                                 declared) != kNoRoom)
+                    ++n;
+            }
+        }
+    return n;
 }
 
 } // namespace giga::game
