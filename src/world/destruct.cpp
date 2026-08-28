@@ -152,6 +152,35 @@ public:
         }
     }
 
+    // ОТКАТ ПОМЕТОК ОБОРВАННОГО РАНА (охота 2026-08-28). Пометка значит
+    // «этот узел уже осуждён как ОПЁРТЫЙ»; ран, оборванный БЮДЖЕТОМ, такого
+    // не доказал — он просто сдался, а его пометки заражали всё, что он
+    // успел обойти: следующий сид на реально отвязанную нить видел чужую
+    // пометку и вешал кусок навсегда (баг владельца «решётки не падают»).
+    // Откатываем ровно слоты, добавленные этим раном (used растёт только
+    // на вставке — хвост от mark и есть его след).
+    void rollback_run(std::size_t usedMark) {
+        while (s_.used.size() > usedMark) {
+            const std::uint32_t i = s_.used.back();
+            s_.used.pop_back();
+            s_.slots[i] = 0;
+            s_.runs[i] = 0;
+        }
+    }
+    std::size_t used_mark() const { return s_.used.size(); }
+
+    // Диагностика (охота на висящие решётки): каким раном помечен ключ.
+    std::uint32_t lookup_run(std::uint32_t key) const {
+        const std::uint32_t v = key + 1;
+        std::uint32_t i = mix(key) & mask_;
+        while (true) {
+            const std::uint32_t cur = s_.slots[i];
+            if (cur == 0) return 0xFFFFFFFFu;
+            if (cur == v) return s_.runs[i];
+            i = (i + 1) & mask_;
+        }
+    }
+
 private:
     static std::uint32_t mix(std::uint32_t k) {
         k *= 0x9E3779B9u;
@@ -344,10 +373,14 @@ std::uint32_t g_detachCapEvents = 0;
 // Флуд по узлам. true — компонент собран ЦЕЛИКОМ в бюджете (оторван; узлы
 // лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом
 // или превысил бюджет («сам дом»).
+// why: 0=loose, 1=сид уже помечен, 2=слился с осуждённым, 3=бюджет
 bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
-                 std::uint32_t seedNode, std::uint32_t run) {
+                 std::uint32_t seedNode, std::uint32_t run, int* why) {
+    auto set_why = [&](int v) { if (why) *why = v; };
+    set_why(0);
     s.nodeQueue.clear();
-    if (vis.probe(seedNode, run) != 1) return false;
+    const std::size_t usedMark = vis.used_mark();
+    if (vis.probe(seedNode, run) != 1) { set_why(1); return false; }
     s.nodeQueue.push_back(seedNode);
     std::size_t head = 0;
     while (head < s.nodeQueue.size()) {
@@ -414,7 +447,7 @@ bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
                     (static_cast<std::uint32_t>(nci) << 8) | j;
                 const int r = vis.probe(nk, run);
                 if (r == 0) continue;    // свой фронтир
-                if (r < 0) return false; // слился с осуждённым — опёрт
+                if (r < 0) { set_why(2); return false; } // слился с осуждённым
                 s.nodeQueue.push_back(nk);
             }
         }
@@ -426,6 +459,9 @@ bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
                              "[detach] бюджет суда: компонент > %d узлов — "
                              "считаю опёртым (отсечек всего: %u)\n",
                              kDetachNodeBudget, g_detachCapEvents);
+            set_why(3);
+            // Ничего не доказано — пометки этого рана снять (см. rollback_run).
+            vis.rollback_run(usedMark);
             return false;
         }
     }
@@ -478,6 +514,7 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
     std::uint32_t run = 0;
     const std::size_t nSeeds = out.destroyed.size();
     static const bool kDbg = std::getenv("GIGA_DETACH_DBG") != nullptr;
+    std::vector<std::uint8_t> runVerdict(1, 0); // [run] 1=loose, иначе why+2
     for (std::size_t i = 0; i < nSeeds; ++i) {
         const SubCoord c = unpack_key(
             pack_key(out.destroyed[i].cell, out.destroyed[i].bit));
@@ -491,16 +528,32 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
             const std::uint32_t node = node_of_atom(w.grid(), s, nk);
             if (node == 0xFFFFFFFFu) continue;
             ++run;
-            const bool loose = flood_nodes(w.grid(), vis, s, node, run);
-            if (kDbg)
-                std::fprintf(stderr,
-                             "[detach-dbg] seed atom (%d,%d,%d) -> node cell "
-                             "(%u,%u,%u) comp %u: %s\n",
-                             ax + d[0], ay + d[1], az + d[2],
-                             (node >> 8) % kMacroDim,
-                             ((node >> 8) / kMacroDim) % kMacroDim,
-                             (node >> 8) / (kMacroDim * kMacroDim),
-                             node & 255u, loose ? "LOOSE" : "supported/seen");
+            int why = 0;
+            const bool loose = flood_nodes(w.grid(), vis, s, node, run, &why);
+            runVerdict.push_back(loose ? 1 : static_cast<std::uint8_t>(why + 2));
+            if (kDbg) {
+                const std::uint32_t marker = vis.lookup_run(node);
+                std::fprintf(
+                    stderr,
+                    "[detach-dbg] seed atom (%d,%d,%d) -> node cell "
+                    "(%u,%u,%u) comp %u: %s (node marked by run %u, its "
+                    "verdict %s)\n",
+                    ax + d[0], ay + d[1], az + d[2],
+                    (node >> 8) % kMacroDim,
+                    ((node >> 8) / kMacroDim) % kMacroDim,
+                    (node >> 8) / (kMacroDim * kMacroDim), node & 255u,
+                    loose ? "LOOSE" : (why == 1 ? "seen-seed"
+                                     : why == 2 ? "merged-judged"
+                                                : "budget"),
+                    marker,
+                    marker < runVerdict.size()
+                        ? (runVerdict[marker] == 1   ? "loose"
+                           : runVerdict[marker] == 3 ? "seen-seed"
+                           : runVerdict[marker] == 4 ? "merged"
+                           : runVerdict[marker] == 5 ? "budget"
+                                                     : "?")
+                        : "self");
+            }
             if (!loose) continue;
             convert_nodes(w, mats, s, out);
         }
@@ -526,7 +579,8 @@ void judge_cells(World& w, SubField<CellType>* mats,
         const std::uint16_t cnt = s.partCount[e];
         for (std::uint16_t j = 0; j < cnt; ++j) {
             ++run;
-            if (!flood_nodes(w.grid(), vis, s, (ci << 8) | j, run)) continue;
+            if (!flood_nodes(w.grid(), vis, s, (ci << 8) | j, run, nullptr))
+                continue;
             convert_nodes(w, mats, s, out);
         }
     }
@@ -698,7 +752,8 @@ std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
     VisitedSet vis(scratch, static_cast<std::size_t>(kDetachNodeBudget) * 2);
     const std::uint32_t node = node_of_atom(w.grid(), scratch, key);
     if (node == 0xFFFFFFFFu) return 0;
-    if (!flood_nodes(w.grid(), vis, scratch, node, /*run=*/1)) return 0;
+    if (!flood_nodes(w.grid(), vis, scratch, node, /*run=*/1, nullptr))
+        return 0;
     convert_nodes(w, mats, scratch, out);
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.detached.size());
