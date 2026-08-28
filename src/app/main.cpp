@@ -3062,18 +3062,13 @@ int main(int argc, char** argv) {
     // этаж домом (журналы, двери, Fresh-бейк, зеркала GPU, тело в безопасной
     // клетке). Вынесено из do_ride ради лифтовой машины — у неё между leave
     // и arrive лежит асинхронный Prebuild, а хвост обязан быть ТЕМ ЖЕ кодом.
-    auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
-        if (!ride.moved) return false;
-        // Разбивка цены прибытия — вслух каждый раз ([lift] arrive): кадр
-        // свапа мерился 9-10 СЕКУНД (лог владельца 2026-08-27), и лечить
-        // фриз можно только зная, какой шаг сколько ест.
-        const auto tArr0 = std::chrono::steady_clock::now();
-        auto arrMs = [&]() {
-            return std::chrono::duration<float, std::milli>(
-                       std::chrono::steady_clock::now() - tArr0)
-                .count();
-        };
-        float mRefresh = 0, mDoors = 0, mNav = 0, mUpload = 0;
+    // Прибытие разрезано на ШАГИ (5d, решение владельца: «фриз лечить по
+    // уму»): синхронный путь зовёт все подряд, лифтовая машина — ПО КАДРУ ЗА
+    // ШАГ за закрытой створкой, чтобы рендер дышал. Свет остаётся синхронным
+    // внутри своего шага (решение владельца) — его 1.3-2.9 с живут одним
+    // кадром, остальное больше не складывается с ним в один 10-секундный.
+    auto arrive_head = [&](game::RideResult ride, int landHub) -> LayerId {
+        if (!ride.moved) return kInvalidLayer;
         player = ride.player;
         currentFloor = ride.floor;
         // (vendorKind died with the window; barter prices by the partner's
@@ -3125,8 +3120,9 @@ int main(int argc, char** argv) {
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
         // a floor looks the same every visit).
-        LayerId nl = reg.get<Transform>(player).layer;
-        const float mPre = arrMs();
+        return reg.get<Transform>(player).layer;
+    };
+    auto arrive_refresh = [&](LayerId nl) {
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
         refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
@@ -3148,15 +3144,14 @@ int main(int argc, char** argv) {
         //  dressing bake and the props, not after them. [problems.md] §42)
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
-        mRefresh = arrMs() - mPre;
+    };
+    auto arrive_doors_nav = [&](LayerId nl) {
         game::door_declare(doors, currentFloor, *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
-            dress_lift_portals(nl);
-        mDoors = arrMs() - mPre - mRefresh;
+        dress_lift_portals(nl);
         begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
-        mNav = arrMs() - mPre - mRefresh - mDoors;
-        // Arrival geometry is final (floor file + doors stamped): re-snapshot
-        // the GPU voxel mirror for the recycled World object.
+    };
+    auto arrive_upload = [&](LayerId nl) {
         voxelMirror.upload_all(stack.layer(nl));
         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
         if (propPass.ready()) {
@@ -3171,18 +3166,22 @@ int main(int argc, char** argv) {
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
-        mUpload = arrMs() - mPre - mRefresh - mDoors - mNav;
-        std::fprintf(stderr,
-                     "[lift] arrive %d: pre %.0f | refresh %.0f | doors %.0f "
-                     "| nav+light %.0f | upload+place %.0f ms\n",
-                     currentFloor, mPre, mRefresh, mDoors, mNav, mUpload);
-        // Publish the new slot to the enclosing frame. ONE place, so a fifth
-        // travel site cannot forget it the way two of the first four did.
+        // Publish the new slot to the enclosing frame. ONE place.
         activeLayer = nl;
-        // AUTOSAVE: every floor transition checkpoints the run, so a crash
-        // costs at most the current floor's progress. The departed floor's
-        // file is already on disk (written above, before travel).
         save_run_now();
+    };
+    auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
+        const auto t0 = std::chrono::steady_clock::now();
+        const LayerId nl = arrive_head(ride, landHub);
+        if (nl == kInvalidLayer) return false;
+        arrive_refresh(nl);
+        arrive_doors_nav(nl);
+        arrive_upload(nl);
+        std::fprintf(stderr, "[lift] arrive %d: %.0f ms (sync, one frame)\n",
+                     currentFloor,
+                     std::chrono::duration<float, std::milli>(
+                         std::chrono::steady_clock::now() - t0)
+                         .count());
         return true;
     };
     auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
@@ -3207,7 +3206,14 @@ int main(int argc, char** argv) {
     // кабине НАЗНАЧЕНИЯ, Fresh-бейк печётся «за закрытыми дверьми»; -> Idle:
     // nav.step() вернул true (Fresh-свап) — двери открылись. Лифт сам ничего
     // не печёт и не ждёт констант: финал даёт существующий сигнал пекаря.
-    enum class LiftRide : std::uint8_t { Idle, Prebuilding, WaitFresh };
+    enum class LiftRide : std::uint8_t {
+        Idle,
+        Prebuilding,
+        SwapRefresh,   // 5d: шаги посадки — по кадру за шаг, за створкой
+        SwapDoorsNav,  // двери+нав (свет синхронный — толстый кадр один)
+        SwapUpload,    // зеркала GPU + автосейв
+        WaitFresh
+    };
     LiftRide liftRide = LiftRide::Idle;
     int liftDst = 0;
     int liftHub = -1;
@@ -3216,6 +3222,7 @@ int main(int argc, char** argv) {
     // пробуждения сред (mediumPass.wakes_pending — решение владельца:
     // лавина будильника этажа целиком за закрытыми дверьми).
     bool liftFreshDone = false;
+    LayerId liftSwapLayer = kInvalidLayer; // слой шагов посадки (5d)
     auto start_lift_ride = [&](int dst, int hub) -> bool {
         if (liftRide != LiftRide::Idle) return false;
         std::function<void()> job;
@@ -3457,9 +3464,6 @@ int main(int argc, char** argv) {
                                   : game::kInvalidNpc;
             leave_current_floor();
             streamer.prebuild_finish(stack, registry, reg, pool, pid);
-            // Прибытие — в кабину СВОЕГО столба на этаже назначения: storey
-            // входа называет модуль этажа (lift_entrance — тот же закон, что
-            // штамповал геометрию).
             const game::FloorSpec* dspec = spec_for_floor(liftDst);
             const int arriveH =
                 dspec ? game::lift_entrance(
@@ -3470,21 +3474,43 @@ int main(int argc, char** argv) {
             game::RideResult ride = streamer.teleport(
                 stack, registry, reg, pool, player, currentFloor, liftDst,
                 static_cast<std::uint8_t>(arriveH), pid, liftHub);
-            if (arrive_after_ride(ride, liftHub)) {
-                // Кабина назначения зарастает до полной готовности этажа
-                // (двери объявлены внутри arrive; механизм-API).
-                if (liftHub >= 0 && liftHub < 4 &&
-                    doors.lift[liftHub] != game::kNoPortal)
-                    game::door_close(
-                        stack.layer(reg.get<Transform>(player).layer),
-                        doors.list[doors.lift[liftHub]], reg,
-                        reg.get<Transform>(player).layer, doorDirty);
-                liftRide = LiftRide::WaitFresh;
+            liftSwapLayer = arrive_head(ride, liftHub);
+            if (liftSwapLayer != kInvalidLayer) {
+                liftRide = LiftRide::SwapRefresh; // шаги — по кадру (5d)
             } else {
-                // Не должно случаться (гейт уже пропустил); честный откат.
                 streamer.prebuild_cancel();
                 liftRide = LiftRide::Idle;
             }
+        } else if (liftRide == LiftRide::SwapRefresh) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_refresh(liftSwapLayer);
+            std::fprintf(stderr, "[lift] swap: refresh %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::SwapDoorsNav;
+        } else if (liftRide == LiftRide::SwapDoorsNav) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_doors_nav(liftSwapLayer);
+            // Кабина назначения зарастает до готовности (двери объявлены).
+            if (liftHub >= 0 && liftHub < 4 &&
+                doors.lift[liftHub] != game::kNoPortal)
+                game::door_close(stack.layer(liftSwapLayer),
+                                 doors.list[doors.lift[liftHub]], reg,
+                                 liftSwapLayer, doorDirty);
+            std::fprintf(stderr, "[lift] swap: doors+nav %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::SwapUpload;
+        } else if (liftRide == LiftRide::SwapUpload) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_upload(liftSwapLayer);
+            std::fprintf(stderr, "[lift] swap: upload %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::WaitFresh;
         }
         // Двери открываются, когда запечено И допробужено: Fresh-свап
         // прошёл, а очередь пробуждений будильника этажа выпита — вся вода
