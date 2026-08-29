@@ -1351,11 +1351,20 @@ bool write_run(const game::SaveState& st, const char* path) {
     return write_bytes_file(bytes, path);
 }
 
+void flush_floor_write(); // 5a, определён ниже — синхронный писатель ждёт хвост
+
 // Persist one floor's exact grid + СУЩНОСТИ (v20/F) to its own file. A floor
 // transition is a load screen, so this is sanctioned I/O ([jirnyak.md] §6).
+// ЖДЁТ фоновый хвост (аудит F, жук №1): провалившаяся поездка (`[` на дне
+// стека) оставляет игрока НА этаже, чей async-кодек ещё летит; F5 в этом
+// окне писал ТОТ ЖЕ floor_<N>.sav.tmp вторым потоком — перемешанные байты,
+// rename битого поверх хорошего, CRC-отказ и «pristine» на следующем входе.
+// Этот же flush закрывает крэш-окно дюпа (№4): floor-файл покинутого этажа
+// долетает до диска РАНЬШЕ, чем save_run_now запишет run.sav с лутом.
 bool write_floor_file(const World& w, int floor,
                       const game::FloorEntityState& ents,
                       const game::FloorModuleKey& key) {
+    flush_floor_write();
     std::vector<std::uint8_t> bytes;
     game::floor_file_write(w, floor, bytes, &ents, &key);
     char path[128];
@@ -1443,6 +1452,15 @@ bool take_pending_restore(int floor, game::FloorEntityState& out) {
 // в том числе ModuleChanged (S20.6 закон 4: модуль изменился → честная
 // перегенерация, полуслияние запрещено).
 bool apply_floor_file(World& w, int floor, const game::FloorModuleKey& key) {
+    // СТУХШАЯ запись умирает ДО чтения (аудит F, жук №3): отменённый prebuild
+    // или провал поездки оставляли запись в карте; если СЛЕДУЮЩЕЕ чтение
+    // файла откажет, прибытие взяло бы RAM-состояние на пристинной материи —
+    // сидеры молчат, якорная проба массово детачит. Стирание первым делом
+    // делает «запись есть == ЭТО построение восстановлено» инвариантом.
+    {
+        std::lock_guard<std::mutex> lk(g_restoreMx);
+        g_pendingRestore.erase(floor);
+    }
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
@@ -2353,6 +2371,9 @@ int main(int argc, char** argv) {
     // bus is "this happened" and is wiped every tick, this is "this happened HERE and
     // is still fading". No init() — it is a 2 KB POD with no allocation anywhere.
     game::NoiseField noiseField;
+    // Акустика на скелете (G, S20.1): шары путевых дистанций живых шумов —
+    // ~7.5 МБ, на куче. Бейкается одним шагом перед потребителями слуха.
+    auto noiseAcoustics = std::make_unique<game::NoiseAcoustics>();
     game::FloorRegistry registry;
 
     // Streaming keeps only the ACTIVE floor's World + crowd live; every other
@@ -3217,6 +3238,51 @@ int main(int argc, char** argv) {
                          .count());
         return true;
     };
+    // ПОЛНАЯ пересборка резидентного этажа с диска/генерации — «Новая игра»
+    // (аудит F, жук №2): этаж 0 строится ДО меню и мог быть ВОССТАНОВЛЕН из
+    // файлов прежнего рана в слоте по умолчанию (материя — испокон, сущности
+    // — с v20). Свежий ран обязан начаться на девственном этаже: после вайпа
+    // слота файлов нет → ensure_loaded генерирует, развилка сущностей идёт
+    // generate-веткой и сеет всё свежим. Тот же F9-хребет: unload → build →
+    // сущностная половина → двери/нав/зеркала → тело.
+    auto rebuild_current_floor = [&]() {
+        flush_floor_write();
+        {
+            std::lock_guard<std::mutex> lk(g_restoreMx);
+            g_pendingRestore.clear(); // бут мог начитать чужой слот
+        }
+        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
+                                            : game::kInvalidNpc;
+        streamer.unload(stack, registry, reg, pool, currentFloor);
+        const game::LoadResult lr = streamer.ensure_loaded(
+            stack, registry, reg, pool, currentFloor, pid);
+        const LayerId nl = lr.layer;
+        activeLayer = nl;
+        player = pid != game::kInvalidNpc
+                     ? game::embody_as_player(reg, pool, pid, nl)
+                     : lr.player;
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        arrivedRestored = floor_entity_half(nl, currentFloor);
+        diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
+        arrive_doors_nav(nl);
+        voxelMirror.upload_all(stack.layer(nl));
+        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+        if (propPass.ready()) {
+            merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), &dripEmitters);
+            upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+            upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
+        }
+        if (reg.valid(player)) {
+            game::place_body_safely(reg, stack.layer(nl), player);
+            aim_player(reg, player);
+        }
+    };
+
     auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
         // Pass the player's durable record id so the destination crowd skips it
         // instead of spawning a second player.
@@ -4772,7 +4838,14 @@ int main(int argc, char** argv) {
                 // lattice node. Purely additive on top of wander_step and it returns
                 // before touching an entity when the field is quiet, which is almost
                 // every tick. [investigate.h]
-                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer, simTick);
+                // Добейк шаров акустики свежим шумам (G): один системный шаг,
+                // писатели шума об акустике не знают. После него слух этого
+                // тика отвечает по скелету — стены глушат.
+                game::noise_acoustics_step(*noiseAcoustics, noiseField,
+                                           stack.layer(activeLayer),
+                                           activeLayer);
+                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
+                                                   simTick, noiseAcoustics.get());
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
                 for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
@@ -6191,6 +6264,12 @@ int main(int argc, char** argv) {
                         (void)nav.take_prebuilt(); // мусор по контракту
                         streamer.prebuild_cancel();
                         liftRide = LiftRide::Idle;
+                        // Запись воркера для отменённого этажа — сирота
+                        // (~6 МБ на 15k пропов): прибытия не будет, а
+                        // корректность держит erase-first в apply_floor_file
+                        // (аудит F, жук №3). Чистим гигиены ради.
+                        std::lock_guard<std::mutex> lk(g_restoreMx);
+                        g_pendingRestore.clear();
                     }
                     // Загрузка читает floor-файлы — фоновый хвост обязан
                     // долететь до диска (5a).
@@ -7074,7 +7153,8 @@ int main(int argc, char** argv) {
                     ? game::loudest_heard(noiseField, activeLayer,
                                           reg.get<Transform>(player).pos,
                                           /*hearingMult=*/1.0f, /*minSeverity=*/0,
-                                          /*ignoreActor=*/0, &nd)
+                                          /*ignoreActor=*/0, &nd,
+                                          noiseAcoustics.get())
                     : nullptr;
                 if (ln)
                     ImGui::TextColored(ImVec4(0.98f, 0.79f, 0.55f, 1.0f),
@@ -8041,6 +8121,13 @@ int main(int argc, char** argv) {
                         slot_dir_path(dir, sizeof dir, s);
                         std::error_code ec;
                         std::filesystem::remove_all(dir, ec);
+                        // ...и ПЕРЕСТРОИТЬ уже построенный этаж (аудит F,
+                        // жук №2): бут восстановил этаж 0 из слота по
+                        // умолчанию до всякого меню — без пересборки свежий
+                        // ран начинался среди вылутанных ящиков, чужих
+                        // трупов и обесточки покойника, и первый же leave
+                        // вписал бы это в чистый слот.
+                        rebuild_current_floor();
                         menu_start_playing();
                     }
                 }

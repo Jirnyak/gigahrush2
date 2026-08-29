@@ -719,6 +719,10 @@ std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
 // сорванные, с якорями, инвентарём ящиков, DoorRef), трупы, лут на полу,
 // обломки без строки, ключи обесточки (`power` может быть null). Зовётся на
 // выходе с этажа — единственный писатель секций сущностей floor-файла.
+// НЕСОМЫЙ (CarriedBy) проп записывается ЭТИМ этажом в позиции рук — игрок
+// приезжает с пустыми руками, вещь ждёт на старом этаже (линки транзиентны
+// по решению владельца; лучше прежней немой потери, зафиксировано аудитом F).
+// Заряды в полёте (Charge/ChargeArmed вне пропа) — транзиент боя, не едут.
 std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
                                   FloorEntityState& out,
                                   const PowerGridState* power = nullptr);

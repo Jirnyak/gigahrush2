@@ -874,8 +874,15 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         reg.emplace_or_replace<AABB>(e, AABB{rec.half});
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
+        // `active` ВЫВОДИТСЯ, как гасил живой путь ([loot.cpp]): обысканный
+        // ПУСТОЙ труп выходит из интеракций — иначе restore снова предлагал
+        // LOOT CORPSE над выпотрошенным телом (аудит F, №9).
+        bool hasLoot = false;
+        for (int s = 0; s < kInvSlots && !hasLoot; ++s)
+            hasLoot = rec.inv.slots[s].item != 0 && rec.inv.slots[s].count > 0;
         reg.emplace<Interactable>(
-            e, Interactable{Interactable::Kind::Corpse, 2.2f, true});
+            e, Interactable{Interactable::Kind::Corpse, 2.2f,
+                            hasLoot || rec.searched == 0});
         ++made;
     }
     return made;
@@ -956,6 +963,10 @@ std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
         if (reg.all_of<Corpse>(e) || reg.all_of<Container>(e)) continue;
         if (reg.all_of<BodySegment>(e)) continue;
         if (reg.all_of<PropOf>(e)) continue;
+        // Заряды в полёте (граната, догорающий фитиль) — транзиент боя, не
+        // накопленное этажом: запись возрождала бы их инертными шарами без
+        // Charge, копящимися с каждым циклом (аудит F, риск №5).
+        if (reg.all_of<Charge>(e) || reg.all_of<ChargeArmed>(e)) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         const RigidBody& rb = reg.get<const RigidBody>(e);
@@ -1580,7 +1591,24 @@ void floor_file_write(const World& w, int floorNumber,
         blob.insert(blob.end(), geo.begin(), geo.end());
     }
 
-    // SAY IT when the writer outgrows the reader. There is no guard here on
+    // SAY IT when the writer outgrows the reader — И ДЛЯ СЧЁТЧИКОВ СЕКЦИЙ
+    // (аудит F, №6 — тот же §37-класс, что размер blob ниже): читатель
+    // отвергает cnt > kMaxFloorRecords целиком, и этаж, накопивший больше
+    // (трупы копятся неограниченно — мобы пересеиваются каждый визит),
+    // молча писал бы файл, который сам же всегда откажет.
+    if (ents) {
+        const std::size_t counts[5] = {ents->props.size(), ents->corpses.size(),
+                                       ents->pickups.size(), ents->debris.size(),
+                                       ents->powerKeys.size()};
+        for (std::size_t c : counts)
+            if (c > static_cast<std::size_t>(kMaxFloorRecords))
+                std::fprintf(stderr,
+                             "[save] floor %d entity section holds %zu rows, "
+                             "past the %u read cap — this file will be "
+                             "REFUSED on load\n",
+                             floorNumber, c, kMaxFloorRecords);
+    }
+    // There is no guard here on
     // purpose — refusing to write would lose the floor silently, which is worse —
     // but the reader rejects anything over kMaxSnapBytes, and for a year the two
     // disagreed with no diagnostic at either end: floor files were written and
@@ -1629,10 +1657,14 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
         return fail(SaveError::BadChecksum);
 
-    // v3-мета: ключ модуля + секции сущностей, геометрия хвостом. ВСЕ ворота
-    // — ДО первого касания мира: отказ обязан оставить World нетронутым
-    // (закон 4 — «полуслияние запрещено»), поэтому сущности парсятся в
-    // локалы, а мир штампуется последним.
+    // v3-мета: ключ модуля + секции сущностей, геометрия хвостом. Ворота
+    // КЛЮЧА и СУЩНОСТЕЙ — до первого касания мира (закон 4 — «полуслияние
+    // запрещено»): сущности парсятся в локалы, мир штампуется последним.
+    // ЧЕСТНАЯ ГРАНИЦА гарантии (аудит F, №7): CRC-валидный, но враждебно
+    // сформированный ГЕОМЕТРИЧЕСКИЙ хвост может упасть посреди
+    // apply_floor_snapshot, который штампует по ходу парса (его же
+    // контракт) — вызывающий обязан считать false «перегенерируй», что
+    // боевой путь и делает (build_world_half → generate_floor, clear-to-air).
     const std::uint8_t* p = bytes + kFloorHeaderWire;
     std::size_t left = blobBytes;
     Reader br(p, left);
