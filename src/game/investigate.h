@@ -95,8 +95,10 @@ struct InvestigateHeard {
 //
 // `mobId` is the mob's own `entt::to_integral`, so it cannot investigate a noise it
 // made itself (13 of the 69 kinds shoot).
+// `ac` (G, S20.1): акустика на скелете — стены глушат; nullptr = прямолинейно.
 InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, LayerId layer,
-                    const vec3& mobPos, std::uint32_t mobId);
+                    const vec3& mobPos, std::uint32_t mobId,
+                    const NoiseAcoustics* ac = nullptr);
 
 // One staggered investigation pass. Overwrites horizontal velocity for every mob on
 // `layer` that heard something and is not in sight-aggro; leaves every other mob
@@ -108,6 +110,7 @@ InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, Lay
 // `pool` is read only to resolve the camera holder's faction, for the same reason
 // `wander_step` reads it — the sight test must be the same test.
 std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& pool,
-                        LayerId layer, std::uint64_t tick);
+                        LayerId layer, std::uint64_t tick,
+                        const NoiseAcoustics* ac = nullptr);
 
 } // namespace giga::game

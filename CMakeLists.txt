@@ -1474,7 +1474,10 @@ if(GIGA_BUILD_TESTS)
     # keys_not_entity_ids чеки v15-матчинга умерли с ключом;
     # floor_records_survive_a_restart переписан на floor-файл v3 и
     # «спавн из записей» = 222306.
-        PASS_REGULAR_EXPRESSION "game_test: 222306 checks, 0 failures")
+    # 222306 + 13 on 2026-08-29 (G, S20.1): test_noise_walls_deafen —
+    # акустика на скелете обеими полярностями (открыто слышно/за стеной
+    # нет/сквозь щель обходом; мутация «стены не держат» — 3 FAIL) = 222319.
+        PASS_REGULAR_EXPRESSION "game_test: 222319 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

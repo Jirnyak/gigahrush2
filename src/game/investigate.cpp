@@ -19,7 +19,8 @@ namespace {
 } // namespace
 
 InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, LayerId layer,
-                    const vec3& mobPos, std::uint32_t mobId) {
+                    const vec3& mobPos, std::uint32_t mobId,
+                    const NoiseAcoustics* ac) {
     InvestigateHeard out;
     if (field.quiet()) return out;
 
@@ -32,7 +33,7 @@ InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, Lay
 
     float dist = 0.0f;
     const Noise* n = loudest_heard(field, layer, mobPos, kInvestigateHearing,
-                                   kInvestigateMinSeverity, mobId, &dist);
+                                   kInvestigateMinSeverity, mobId, &dist, ac);
     if (!n) return out;
 
     out.heard = true;
@@ -45,7 +46,8 @@ InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, Lay
 }
 
 std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& pool,
-                        LayerId layer, std::uint64_t tick) {
+                        LayerId layer, std::uint64_t tick,
+                        const NoiseAcoustics* ac) {
     // The gate that makes this system free. Almost every tick nothing is making a
     // noise, and on those ticks this pass does not touch a single entity.
     if (field.quiet()) return 0;
@@ -100,7 +102,7 @@ std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& 
             if (ax * ax + ay * ay + az * az < radius * radius) continue;
         }
 
-        const InvestigateHeard hh = investigate_hear(field, beh, layer, tr.pos, id);
+        const InvestigateHeard hh = investigate_hear(field, beh, layer, tr.pos, id, ac);
         if (!hh.heard) continue;
 
         Velocity& vel = view.get<Velocity>(e);
