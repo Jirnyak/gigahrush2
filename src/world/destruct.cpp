@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "world/stain.h" // стейн вырезанного атома чистится вместе с ним
+
 namespace giga {
 namespace {
 
@@ -85,14 +87,19 @@ inline bool atom_exists(const World& w, const SubField<CellType>* mats,
 // remains — a carved floor bit must not evaporate the puddle sharing its cell
 // (это делал старый drop_page по пустой маске). The touched cell is recorded
 // for the caller's dirty marks.
-inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
+// Возвращает «атом ДЕЙСТВИТЕЛЬНО вырезан»: щитовый отказ — false, и caller
+// НЕ числит атом в destroyed (прежде carve_sphere/carve_at пушили ДО
+// remove_key — частицы летели из целого бетона, detach_sweep сеял от
+// несуществующих дыр, счёт возврата врал; ложь CarveResult, S20.7).
+inline bool remove_key(World& w, SubField<CellType>* mats,
+                       SubField<StainRGB>* stains, std::uint32_t key,
                        std::vector<std::uint32_t>& dirty) {
     const std::uint32_t ci = key >> 9;
     // ЩИТ ([world/mask.h], S18): защищённый АТОМ не меняется никаким
     // писателем геометрии. Гейт стоит в единственной точке выреза атома —
     // обходных путей у карва нет по построению. Отсев субвоксельный:
     // модуль вправе защитить решётку, не целую клетку.
-    if (w.masks().shielded(ci, static_cast<int>(key & 511u))) return;
+    if (w.masks().shielded(ci, static_cast<int>(key & 511u))) return false;
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
     m.clear(static_cast<int>(key & 511u));
@@ -111,6 +118,11 @@ inline void remove_key(World& w, SubField<CellType>* mats, std::uint32_t key,
     } else if (m.empty()) {
         w.grid().set_cell(c.cx, c.cy, c.cz, kCellAir);
     }
+    // Краска живёт только на материи: стейн вырезанного атома чистится
+    // вместе с ним (раньше висел на несуществующем атоме до опустошения
+    // клетки — мелкий долг S20.7).
+    if (stains && stains->paged(ci)) stains->page(ci)[key & 511u] = StainRGB{};
+    return true;
 }
 
 // --- visited set over CarveScratch ------------------------------------------
@@ -739,6 +751,8 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
     out.clear();
     if (op.radius <= 0.0f || op.power == 0) return 0;
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    SubField<StainRGB>* stains =
+        w.subfields().find<StainRGB>(kStainFieldName);
 
     // Work in sub-voxel units. The unwrapped distance inside the iteration box
     // is exact as long as the sphere fits inside a half-torus; clamp far below
@@ -779,9 +793,11 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
                 if (!carve_roll(carve_hash(op.seed, ci, key & 511u), peff,
                                 hardness))
                     continue;
+                // Учёт — ПОСЛЕ выреза: щитовый отказ не числится дырой.
+                if (!remove_key(w, mats, stains, key, out.dirtyCells))
+                    continue;
                 out.destroyed.push_back(CarvedVoxel{
                     ci, static_cast<std::uint16_t>(key & 511u), mat});
-                remove_key(w, mats, key, out.dirtyCells);
             }
         }
     }
@@ -821,13 +837,16 @@ bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
         static_cast<std::uint32_t>(sub_bit(sx, sy, sz));
     const std::uint32_t key = pack_key(ci, bit);
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    SubField<StainRGB>* stains =
+        w.subfields().find<StainRGB>(kStainFieldName);
     if (!atom_exists(w, mats, key)) return false;
     const CellType mat = mat_key(w, mats, key);
     if (!carve_roll(carve_hash(seed, ci, bit), power, material_hardness(mat)))
         return false;
+    // Учёт — ПОСЛЕ выреза: щитовый отказ не числится дырой (S18/S20.7).
+    if (!remove_key(w, mats, stains, key, out.dirtyCells)) return false;
     out.destroyed.push_back(
         CarvedVoxel{ci, static_cast<std::uint16_t>(bit), mat});
-    remove_key(w, mats, key, out.dirtyCells);
     detach_sweep(w, mats, /*enabled=*/1, scratch, out);
     finalize_dirty(out);
     return true;

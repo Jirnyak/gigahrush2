@@ -6,7 +6,9 @@
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
 #include "game/floor_gen.h"    // floor_doorways, lift_entrance
 #include "game/prop_system.h"  // spawn_prop_from_id — обвес кнопки/панели
+#include "world/anchor.h"      // anchor_face_pack — честная грань обвеса
 #include "world/destruct.h"    // materialize_sub_page, kSubMaterialName
+#include "world/surface.h"     // surface_face_at — точка крепления обвеса
 #include "world/medium.h"      // medium_recount — агрегат клетки после штампа
 #include "world/world.h"
 
@@ -280,41 +282,71 @@ void dress_lift_portals(Registry& reg, World& w, const Doors& doors,
         const int oy = le.side == 2 ? 1 : le.side == 3 ? -1 : 0;
         const int jx = oy != 0 ? 1 : 0; // вдоль стены кольца
         const int jy = ox != 0 ? 1 : 0;
+        // Грань крепления обвеса ВЫВЕДЕНА из стороны проёма (нормаль от
+        // опорной стены к вещи = ±ox/±oy), точка — из примитива
+        // поверхностей. Прежний `SubVoxelAnchor a{}` оставлял face=0 (грань
+        // X+ независимо от стороны) и субвоксель-константу центра клетки —
+        // проба живости сканировала НЕ ТУ колонку (таблица S20.7).
+        const auto anchor_on = [&w](int cx, int cy, int cz, int nx, int ny,
+                                    SubVoxelAnchor& out) {
+            const std::uint8_t face =
+                anchor_face_pack(nx != 0 ? 0 : 1, nx + ny);
+            const SurfaceFace sf =
+                surface_face_at(w.grid(), cx, cy, cz, face);
+            if (sf.columns == 0) return false; // опора без открытой грани
+            const int axis = anchor_face_axis(face);
+            out.cx = sf.cx;
+            out.cy = sf.cy;
+            out.cz = sf.cz;
+            out.subX = axis == 0 ? sf.layer : sf.su;
+            out.subY = axis == 1 ? sf.layer : (axis == 0 ? sf.su : sf.sv);
+            out.subZ = axis == 2 ? sf.layer : sf.sv;
+            out.face = face;
+            return true;
+        };
         // Кнопка: наружная грань косяка рядом с проёмом.
         {
             SubVoxelAnchor a{};
-            a.cx = static_cast<std::uint8_t>(wrap_macro(pcx + jx));
-            a.cy = static_cast<std::uint8_t>(wrap_macro(pcy + jy));
-            a.cz = static_cast<std::uint8_t>(pcz);
-            a.subX = 4; a.subY = 4; a.subZ = 4;
-            const vec3 bp{
-                (static_cast<float>(wrap_macro(pcx + jx)) + 0.5f +
-                 static_cast<float>(ox) * 0.62f) * kCellSize,
-                (static_cast<float>(wrap_macro(pcy + jy)) + 0.5f +
-                 static_cast<float>(oy) * 0.62f) * kCellSize,
-                (static_cast<float>(pcz) + 0.6f) * kCellSize};
-            const Entity btn = spawn_prop_from_id(reg, w, bp, a,
-                                                  PropId::LiftButton, layer);
-            if (btn != entt::null)
-                reg.emplace_or_replace<DoorRef>(btn,
-                                                DoorRef{doors.lift[hub]});
+            if (anchor_on(wrap_macro(pcx + jx), wrap_macro(pcy + jy), pcz,
+                          ox, oy, a)) {
+                const vec3 bp{
+                    (static_cast<float>(wrap_macro(pcx + jx)) + 0.5f +
+                     static_cast<float>(ox) * 0.62f) * kCellSize,
+                    (static_cast<float>(wrap_macro(pcy + jy)) + 0.5f +
+                     static_cast<float>(oy) * 0.62f) * kCellSize,
+                    (static_cast<float>(pcz) + 0.6f) * kCellSize};
+                const Entity btn = spawn_prop_from_id(
+                    reg, w, bp, a, PropId::LiftButton, layer);
+                if (btn != entt::null)
+                    reg.emplace_or_replace<DoorRef>(btn,
+                                                    DoorRef{doors.lift[hub]});
+            } else {
+                std::fprintf(stderr,
+                             "[lift] hub %d: у косяка нет открытой грани — "
+                             "кнопка не рождена (дефект геометрии обвеса)\n",
+                             hub);
+            }
         }
-        // Панель: стена кабины напротив проёма.
+        // Панель: стена кабины напротив проёма (нормаль — В кабину).
         {
             std::uint8_t hcx = 0, hcy = 0;
             fast_hub_cell(hub, hcx, hcy);
             SubVoxelAnchor a{};
-            a.cx = static_cast<std::uint8_t>(wrap_macro(hcx - ox));
-            a.cy = static_cast<std::uint8_t>(wrap_macro(hcy - oy));
-            a.cz = static_cast<std::uint8_t>(pcz);
-            a.subX = 4; a.subY = 4; a.subZ = 4;
-            const vec3 pp{
-                (static_cast<float>(hcx) + 0.5f -
-                 static_cast<float>(ox) * 0.42f) * kCellSize,
-                (static_cast<float>(hcy) + 0.5f -
-                 static_cast<float>(oy) * 0.42f) * kCellSize,
-                (static_cast<float>(pcz) + 0.65f) * kCellSize};
-            spawn_prop_from_id(reg, w, pp, a, PropId::LiftPanel, layer);
+            if (anchor_on(wrap_macro(hcx - ox), wrap_macro(hcy - oy), pcz,
+                          ox, oy, a)) {
+                const vec3 pp{
+                    (static_cast<float>(hcx) + 0.5f -
+                     static_cast<float>(ox) * 0.42f) * kCellSize,
+                    (static_cast<float>(hcy) + 0.5f -
+                     static_cast<float>(oy) * 0.42f) * kCellSize,
+                    (static_cast<float>(pcz) + 0.65f) * kCellSize};
+                spawn_prop_from_id(reg, w, pp, a, PropId::LiftPanel, layer);
+            } else {
+                std::fprintf(stderr,
+                             "[lift] hub %d: у стены кабины нет открытой "
+                             "грани — панель не рождена\n",
+                             hub);
+            }
         }
         // Дефолт: створка закрыта (видима сталью — «где дверь» больше не
         // вопрос); тело в проёме — оставим открытой.

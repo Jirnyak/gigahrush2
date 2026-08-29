@@ -22,6 +22,7 @@
 #include "core/wrap.h"           // wrapf — подвес цепи заворачивается тором
 #include "world/anchor.h"        // anchor_face_pack/anchor_alive — подвес
 #include "world/material_props.h" // kMatDensity/kMatHardness — spawn_ball derives
+#include "world/surface.h"       // surface_face_at — честный якорь cmd_prop
 #include "world/materials.h"     // material_id_by_name — cmd_sphere
 #include "world/types.h"         // kCellSize, wrap_macro
 
@@ -1203,27 +1204,40 @@ bool cmd_prop(ConsoleContext& ctx, int argc, const char* const* argv,
     const int cy = wrap_macro(static_cast<int>(std::floor(at.y / kCellSize)));
     const int cz0 = static_cast<int>(std::floor(at.z / kCellSize));
     int ground = -1;
-    for (int dz = 0; dz < 8 && cz0 - dz >= 0; ++dz)
-        if (w.grid().cell(cx, cy, cz0 - dz) != kCellAir) {
-            ground = cz0 - dz;
+    // Скан вниз врапает по Z, как всё на торе (прежний `cz0 - dz >= 0`
+    // обрезал поиск у нулевой клетки).
+    for (int dz = 0; dz < 8; ++dz) {
+        const int czq = wrap_macro(cz0 - dz);
+        if (w.grid().cell(cx, cy, czq) != kCellAir) {
+            ground = czq;
             break;
         }
+    }
     if (ground < 0) {
         put(out, cap, "prop: no floor below the aim point");
         return false;
     }
+    // Честный якорь пола: грань Z+ (вещь СТОИТ на опоре — шаг от опоры к
+    // вещи вверх), точка — из примитива поверхностей. Прежний face=0 был
+    // гранью X+ у вещи, стоящей на полу: проба сканировала не ту колонку.
+    const std::uint8_t face = anchor_face_pack(2, 1);
+    const SurfaceFace sf = surface_face_at(w.grid(), cx, cy, ground, face);
+    if (sf.columns == 0) {
+        put(out, cap, "prop: floor has no exposed top face");
+        return false;
+    }
     SubVoxelAnchor sva{};
-    sva.cx = cx;
-    sva.cy = cy;
-    sva.cz = ground;
-    sva.subX = 4;
-    sva.subY = 4;
-    sva.subZ = 7;
-    sva.face = 0;
+    sva.cx = sf.cx;
+    sva.cy = sf.cy;
+    sva.cz = sf.cz;
+    sva.subX = sf.su;
+    sva.subY = sf.sv;
+    sva.subZ = sf.layer;
+    sva.face = face;
     const PropDef& d = prop_def(id);
     const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
                    (static_cast<float>(cy) + 0.5f) * kCellSize,
-                   static_cast<float>(ground + 1) * kCellSize +
+                   static_cast<float>(wrap_macro(ground + 1)) * kCellSize +
                        static_cast<float>(d.sizeZMm) * 0.0005f};
     Entity e = spawn_prop_from_id(*ctx.ecs, w, pos, sva, id, tr.layer);
     if (e == entt::null) {

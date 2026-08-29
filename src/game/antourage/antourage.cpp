@@ -845,7 +845,12 @@ namespace {
 bool anchor_died(const World& w, const std::uint32_t* dirty, std::size_t n,
                  int x, int y, int z, std::uint8_t face) {
     if (!anchor_gone(w, x, y, z, face)) return false;
-    const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
+    // wrap перед macro_index: контракт индекса — канонический диапазон
+    // (types.h), а координаты приходят из uint8-полей якоря. Сегодня все
+    // писатели врапают при записи, но генератор, забывший это завтра,
+    // получал бы тихо неверный ключ и пропущенный детач (мина S20.7).
+    const std::uint32_t key = static_cast<std::uint32_t>(
+        macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z)));
     for (std::size_t i = 0; i < n; ++i)
         if (dirty[i] == key) return true;
     return false;

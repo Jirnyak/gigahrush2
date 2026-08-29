@@ -26,7 +26,9 @@ enum class PropFallMode : std::uint8_t {
 struct SubVoxelAnchor {
     int cx = 0, cy = 0, cz = 0;                  // Координаты макро-ячейки (128³)
     std::uint8_t subX = 0, subY = 0, subZ = 0;   // Локальный субоксель (0..7)
-    std::uint8_t face = 0;                       // Опора: 0=Floor, 1=WallNorth, 2=Ceiling...
+    std::uint8_t face = 0; // anchor_face_pack(axis, dir) = axis*2 + (dir<0):
+                           // 0=X+ 1=X- 2=Y+ 3=Y- 4=Z+ 5=Z- ([world/anchor.h]).
+                           // dir — шаг ОТ опоры К вещи (нормаль крепления).
 };
 
 // The KIND is a row of data/interactables.csv ([interact_table.h] — generated

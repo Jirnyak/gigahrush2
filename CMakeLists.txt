@@ -672,7 +672,10 @@ if(GIGA_BUILD_TESTS)
         # ход автомата не может осиротить статику по S20.5; входная
         # развёртка = collect_mobile_support_cells (домен: подвижное + 6
         # соседей) + идемпотентность входа = 23576.
-        PASS_REGULAR_EXPRESSION "23576/23576 checks passed"
+        # 23576 + 12 on 2026-08-29 (инкремент C): честность CarveResult под
+        # щитом (обе полярности: под щитом ноль в отчёте и маска цела, без
+        # щита рубит) + стейн вырезанного атома чистится = 23588.
+        PASS_REGULAR_EXPRESSION "23588/23588 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

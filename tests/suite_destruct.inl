@@ -6,7 +6,9 @@
 #include <thread>
 #include "world/anchor.h"
 #include "world/lattice.h"
+#include "world/mask.h"
 #include "world/nav.h"
+#include "world/stain.h"
 
 // The sparse sub-field: uniform cells cost nothing, mixed cells page, pages
 // collapse back and recycle, and the WORST case is pinned to exactly the dense
@@ -602,6 +604,66 @@ static void test_support_law() {
     }
 }
 
+// S18/S20.7 «ложь CarveResult»: щитовый атом НЕ числится уничтоженным.
+// Прежде carve пушил в destroyed ДО remove_key, а тот при щите молча
+// выходил — частицы летели из целого бетона, сев детача шёл от
+// несуществующих дыр, возврат врал. Обе полярности: под щитом карв
+// бессилен И честен (ноль в отчёте), без щита та же операция рубит.
+static void test_carve_shield_honesty() {
+    static World w;
+    w.grid().fill_cell(70, 70, 70, kMatConcrete);
+    const std::size_t ci = macro_index(70, 70, 70);
+    MaskGroup g;
+    g.props = kMaskShield;
+    MaskCell mc;
+    mc.ci = static_cast<std::uint32_t>(ci);
+    for (std::size_t i = 0; i < kSubMaskWords; ++i)
+        mc.allow.words[i] = ~std::uint64_t{0};
+    g.cells.push_back(mc);
+    w.masks().groups.push_back(g);
+    w.masks().rebuild_shield_cache();
+
+    CarveScratch scratch;
+    CarveResult res;
+    CarveOp op;
+    op.x = 70.5f * kCellSize;
+    op.y = 70.5f * kCellSize;
+    op.z = 70.5f * kCellSize;
+    op.radius = 1.0f;
+    op.power = 60000;
+    op.seed = 7u;
+    CHECK(carve_sphere(w, op, scratch, res) == 0);
+    CHECK(res.destroyed.empty());
+    CHECK(res.detached.empty());
+    CHECK(w.grid().mask(70, 70, 70).full());
+    // Обратная полярность: щит снят — та же операция рубит и честно числит.
+    w.masks().clear_all();
+    CHECK(carve_sphere(w, op, scratch, res) > 0);
+    CHECK(!res.destroyed.empty());
+}
+
+// S20.7 «краска на несуществующей материи»: стейн вырезанного атома
+// чистится вместе с ним. Обе полярности: до карва пятно стоит, после —
+// нулевое.
+static void test_carve_clears_stain() {
+    static World w;
+    w.grid().fill_cell(75, 75, 75, kMatConcrete);
+    const int gx = 75 * kSubDim + 4, gy = 75 * kSubDim + 4,
+              gz = 75 * kSubDim + 7;
+    CHECK(stain_paint(w, gx, gy, gz, kStainBlood) != UINT32_MAX);
+    auto* sf = w.subfields().find<StainRGB>(kStainFieldName);
+    CHECK(sf != nullptr);
+    const std::size_t ci = macro_index(75, 75, 75);
+    const int bit = sub_bit(4, 4, 7);
+    CHECK(sf->page(ci) != nullptr);
+    CHECK(!(sf->page(ci)[bit] == StainRGB{}));
+    CarveScratch scratch;
+    CarveResult res;
+    CHECK(carve_at(w, 75, 75, 75, 4, 4, 7, /*power*/60000, /*seed*/3,
+                   scratch, res));
+    CHECK(sf->page(ci)[bit] == StainRGB{});
+}
+
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
@@ -611,4 +673,6 @@ static void test_destruct_all() {
     test_detach_face_alignment();
     test_detach_judge();
     test_support_law();
+    test_carve_shield_honesty();
+    test_carve_clears_stain();
 }
