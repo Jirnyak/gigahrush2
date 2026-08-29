@@ -139,12 +139,18 @@ struct InteractionHit {
 // ordinal stored on PropMesh (GPU skin). Optional `yaw`/`emissive`/`matId`/
 // `animPhase` fill the rest of the PropPass instance payload.
 // [jirnyak.md] §18.
+// `gateAnchor=false` — ЕДИНСТВЕННО для пути восстановления снимка (S20.6):
+// запись обязана родить сущность даже над мёртвым якорем, потому что судьбу
+// решает якорная проба restore (закон 3 — честный детач), а не молчаливая
+// потеря вещи. Любой другой писатель обязан оставить гейт: спавн и проба
+// живости задают ОДИН вопрос.
 Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
                   LayerId layer = 0, float yaw = 0.0f,
                   std::uint8_t emissive = 0, std::uint8_t matId = 0,
-                  std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+                  std::uint8_t animPhase = 0, std::uint8_t flags = 0,
+                  bool gateAnchor = true);
 
 // Какой строкой props.csv рождён проп. Ставится только табличным спавном —
 // проп без PropOf (тест-шар spawn_prop) не имеет строки и глаголов (S12.3).
@@ -158,7 +164,16 @@ struct PropOf {
 Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
                           const SubVoxelAnchor& anchor, PropId id,
                           LayerId layer = 0, float yaw = 0.0f,
-                          std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+                          std::uint8_t animPhase = 0, std::uint8_t flags = 0,
+                          bool gateAnchor = true);
+
+// ГЛАГОЛ ДЕТАЧА для пути восстановления (S20.6 закон 3): тот же единственный
+// детач, которым платят валидатор якорей и попадание снаряда, — снимает якорь,
+// свапает StaticPropTag → DynamicBodyTag, собирает тело ядра по PropFallMode
+// (GpuHandoff — честная смерть всплеском). Импульса нет — вещь просто ложится
+// физикой, как труп при пересборке. `bursts` может быть null (headless).
+void prop_detach(Registry& reg, Entity prop, EventBus& bus,
+                 ParticleBurstQueue* bursts = nullptr, std::uint32_t seed = 0);
 
 
 // Destroy every StaticPropTag prop on `layer` (terminals, shields, bulbs…).

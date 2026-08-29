@@ -16,6 +16,8 @@
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
 #include "game/rpg.h"         // RpgStats (visit_rpg)
 #include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG); Corpse (v15)
+#include "game/door.h"        // DoorRef — ссылка кнопки в записи пропа (v20/F)
+#include "game/loot.h"        // Pickup, spawn_pickup — лут на полу в снимке (v20/F)
 #include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "sim/rigid.h"        // rigid_attach_* — сборка тел ядра (v18 обломки)
@@ -170,6 +172,12 @@ public:
 
     bool ok() const { return ok_; }
     std::size_t at() const { return at_; }
+    // Подглядеть байт на +k от курсора, не двигая его (floor file v3: флаг
+    // записи пропа решает ширину строки ДО visit). За границей — 0;
+    // вызывающий уже оплатил длину фикс-части своим take().
+    std::uint8_t peek(std::size_t k) const {
+        return at_ + k < n_ ? p_[at_ + k] : 0;
+    }
 
 private:
     const std::uint8_t* p_;
@@ -401,6 +409,52 @@ void visit_debris_rec(Ar& ar, R& rec) {
     ar.u8(rec.sphere);
 }
 
+// v20 / floor file v3: один проп этажа (S20.6 инкремент F). Контейнерная
+// секция — ХВОСТОМ под флагом: запись без ящика не платит 322 Б за пустые
+// слоты. Якорь — 7 байт, клетка и субвоксель байты по построению.
+template <class Ar, class R>
+void visit_prop_rec(Ar& ar, R& rec) {
+    ar.u16(rec.propId);
+    ar.u8(rec.flags);
+    visit_vec3(ar, rec.pos);
+    ar.f32(rec.yaw);
+    ar.u8(rec.animPhase);
+    ar.u8(rec.meshFlags);
+    // SubVoxelAnchor.cx/cy/cz — int в записи движка; провод — байты (макро-
+    // координаты 0..127). Reader/Writer обеим сторонам нужен u8-посредник.
+    std::uint8_t acx = static_cast<std::uint8_t>(rec.anchor.cx);
+    std::uint8_t acy = static_cast<std::uint8_t>(rec.anchor.cy);
+    std::uint8_t acz = static_cast<std::uint8_t>(rec.anchor.cz);
+    ar.u8(acx);
+    ar.u8(acy);
+    ar.u8(acz);
+    rec.anchor.cx = acx;
+    rec.anchor.cy = acy;
+    rec.anchor.cz = acz;
+    ar.u8(rec.anchor.subX);
+    ar.u8(rec.anchor.subY);
+    ar.u8(rec.anchor.subZ);
+    ar.u8(rec.anchor.face);
+    ar.u32(rec.doorGroup);
+    if (rec.flags & kPropRecHasContainer) {
+        ar.u8(rec.box.kind);
+        ar.b8(rec.box.opened);
+        for (int i = 0; i < kInvSlots; ++i) {
+            ar.u16(rec.box.inv.slots[i].item);
+            ar.u16(rec.box.inv.slots[i].count);
+            ar.u8(rec.box.inv.slots[i].condition);
+        }
+    }
+}
+
+template <class Ar, class R>
+void visit_pickup_rec(Ar& ar, R& rec) {
+    ar.u16(rec.item);
+    ar.u16(rec.count);
+    ar.u8(rec.condition);
+    visit_vec3(ar, rec.pos);
+}
+
 // v16 / SAVBANK: the account, field by field. lastInterestTick is skipped by
 // design ([save.h] version note) — the READER arms it to zero and the load site
 // re-bases it to the current sim tick.
@@ -480,6 +534,7 @@ const char* save_error_text(SaveError e) {
         case SaveError::LayoutMismatch:    return "a saved struct changed size";
         case SaveError::SizeMismatch:      return "save header contradicts its payload";
         case SaveError::BadChecksum:       return "save file is corrupt";
+        case SaveError::ModuleChanged:     return "floor module changed since this snapshot";
         default:                           return "unknown save error";
     }
 }
@@ -915,11 +970,14 @@ std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
 std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
                                  const DebrisRecord* recs, std::size_t n) {
     // Destroy-first, как у трупов: F9 на резидентный этаж иначе удвоил бы
-    // каждый обломок.
+    // каждый обломок. Минус PropOf (v20/F): сорванный проп — тело ядра, но
+    // он СВОЯ секция (PropRecord с идентичностью); подметать его здесь
+    // значило бы убить только что восстановленную запись.
     std::vector<Entity> stale;
     for (auto e : reg.view<const RigidBody, const Transform>()) {
         if (reg.all_of<Corpse>(e) || reg.all_of<Container>(e)) continue;
         if (reg.all_of<BodySegment>(e)) continue;
+        if (reg.all_of<PropOf>(e)) continue;
         if (reg.get<const Transform>(e).layer == layer) stale.push_back(e);
     }
     for (Entity e : stale) reg.destroy(e);
@@ -1038,6 +1096,12 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         reg.emplace<DynamicBodyTag>(e);
         spawn_form_segments(reg, e, FormId::Humanoid, rec.half, Mass{}.kg,
                             kFleshRestitution, kFleshFriction);
+        // Записанный силуэт — НЕПОДВИЖНАЯ ТОЧКА пересборки (v20/F, гейт
+        // бит-в-бит): spawn_form_segments перезаписывает корневой AABB долей
+        // rootSd от габарита, и цикл «gather → rebuild» усушал труп ×0.9 на
+        // каждом ревизите (живой дрейф v15). Запись — закон, корень получает
+        // её обратно; сегменты честно выведены из неё же.
+        reg.emplace_or_replace<AABB>(e, AABB{rec.half});
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         reg.emplace<Interactable>(
@@ -1045,6 +1109,179 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         ++made;
     }
     return made;
+}
+
+// ---------------------------------------------------------------------------
+// Сущности этажа ↔ снимок (S20.6 инкремент F)
+// ---------------------------------------------------------------------------
+
+std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
+                                  FloorEntityState& out,
+                                  const PowerGridState* power) {
+    out = FloorEntityState{};
+    // floor в записях трупов/обломков — этикетка спавнеров (они фильтруют по
+    // ней при применении); у пропов/лута этажность даёт сам файл.
+    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
+    // ПРОПЫ — всё с PropOf на слое: статика с якорем И сорванные (у сорванного
+    // якоря нет — kPropRecDetached, тело ложится заново). Идентичность записи
+    // — сама запись; ни хэндла, ни позиционного ключа (S20.6 закон 1).
+    for (auto e : reg.view<const PropOf, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        if (reg.all_of<Corpse>(e)) continue; // труп — своя секция
+        PropRecord rec;
+        rec.propId = static_cast<std::uint16_t>(reg.get<const PropOf>(e).id);
+        rec.pos = t.pos;
+        if (const PropMesh* pm = reg.try_get<PropMesh>(e)) {
+            rec.yaw = pm->yaw;
+            rec.animPhase = pm->animPhase;
+            rec.meshFlags = pm->flags;
+        }
+        if (const SubVoxelAnchor* a = reg.try_get<SubVoxelAnchor>(e))
+            rec.anchor = *a;
+        if (!reg.all_of<StaticPropTag>(e)) rec.flags |= kPropRecDetached;
+        if (const Interactable* ia = reg.try_get<Interactable>(e))
+            if (!ia->active) rec.flags |= kPropRecInactive;
+        if (const Container* box = reg.try_get<Container>(e)) {
+            rec.flags |= kPropRecHasContainer;
+            rec.box = *box;
+        }
+        if (const DoorRef* dr = reg.try_get<DoorRef>(e))
+            rec.doorGroup = dr->group;
+        out.props.push_back(rec);
+    }
+    // ТРУПЫ — прежняя запись v15/v17 (пересборка формой, решение владельца).
+    for (auto e : reg.view<const Corpse, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const Corpse& c = reg.get<const Corpse>(e);
+        CorpseRecord rec;
+        rec.floor = f;
+        rec.pos = t.pos;
+        if (const Renderable* rr = reg.try_get<Renderable>(e))
+            rec.colour = rr->color;
+        if (const AABB* bb = reg.try_get<AABB>(e)) rec.half = bb->half;
+        rec.mobKind = c.mobKind;
+        rec.searched = c.searched ? 1 : 0;
+        if (const Container* box = reg.try_get<const Container>(e))
+            rec.inv = box->inv;
+        out.corpses.push_back(rec);
+    }
+    // ЛУТ НА ПОЛУ — раньше терялся (unload подметал без записи).
+    for (auto e : reg.view<const Pickup, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const Pickup& p = reg.get<const Pickup>(e);
+        PickupRecord rec;
+        rec.item = p.item;
+        rec.count = p.count;
+        rec.condition = p.condition;
+        rec.pos = t.pos;
+        out.pickups.push_back(rec);
+    }
+    // ОБЛОМКИ БЕЗ СТРОКИ — тела ядра без PropOf (мяч стенда): прежний отбор
+    // v18 минус пропы (сорванный проп теперь едет С ИДЕНТИЧНОСТЬЮ выше;
+    // возить его ещё и обломком значило бы дублировать тело на ревизите).
+    for (auto e : reg.view<const RigidBody, const Transform>()) {
+        if (reg.all_of<Corpse>(e) || reg.all_of<Container>(e)) continue;
+        if (reg.all_of<BodySegment>(e)) continue;
+        if (reg.all_of<PropOf>(e)) continue;
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const RigidBody& rb = reg.get<const RigidBody>(e);
+        DebrisRecord rec;
+        rec.floor = f;
+        rec.pos = t.pos;
+        rec.half = reg.all_of<AABB>(e) ? reg.get<AABB>(e).half
+                                       : vec3{rb.radius, rb.radius, rb.radius};
+        if (const Renderable* rr = reg.try_get<Renderable>(e))
+            rec.colour = rr->color;
+        rec.massKg = 1.0f / (rb.invMass > 1e-9f ? rb.invMass : 1.0f);
+        rec.restitution = rb.restitution;
+        rec.friction = rb.friction;
+        rec.sphere = reg.all_of<ContactForm>(e) ? 0 : 1;
+        out.debris.push_back(rec);
+    }
+    // ОБЕСТОЧКА: все ключи текущего состояния — они принадлежат ЭТОМУ этажу
+    // по построению (PowerGridState чистится на каждом прибытии).
+    if (power)
+        for (std::uint32_t i = 0; i < power->count; ++i)
+            out.powerKeys.push_back(power->destroyedShieldKeys[i]);
+    return out.props.size() + out.corpses.size() + out.pickups.size() +
+           out.debris.size() + out.powerKeys.size();
+}
+
+std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
+                               const PropRecord* recs, std::size_t n,
+                               EventBus& bus) {
+    // Destroy-first по PropOf (идемпотентность F9 на резидентный этаж) —
+    // покрывает и статику, и сорванные; трупы не PropOf и не задеваются.
+    std::vector<Entity> stale;
+    for (auto e : reg.view<const PropOf, const Transform>())
+        if (reg.get<const Transform>(e).layer == layer) stale.push_back(e);
+    for (Entity e : stale) reg.destroy(e);
+
+    if (!recs || n == 0) return 0;
+    std::size_t made = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const PropRecord& rec = recs[i];
+        // Гейт якоря ВЫКЛЮЧЕН (единственный законный обход, [prop_system.h]):
+        // судьбу записи решает проба ниже, потеря вещи молчанием запрещена.
+        Entity e = spawn_prop_from_id(reg, world, rec.pos, rec.anchor,
+                                      static_cast<PropId>(rec.propId), layer,
+                                      rec.yaw, rec.animPhase, /*flags*/ 0,
+                                      /*gateAnchor=*/false);
+        if (e == entt::null) continue; // невалидная строка таблицы
+        if (PropMesh* pm = reg.try_get<PropMesh>(e)) {
+            // Верните флаги как были: спавн уже вклеил мерцание из таблицы,
+            // запись хранит точное поле (яблоко от яблока — бит в бит).
+            pm->flags = rec.meshFlags;
+        }
+        if (rec.flags & kPropRecInactive)
+            if (Interactable* ia = reg.try_get<Interactable>(e))
+                ia->active = false;
+        if (rec.flags & kPropRecHasContainer)
+            reg.emplace_or_replace<Container>(e, rec.box);
+        if (rec.doorGroup != 0xFFFFFFFFu)
+            reg.emplace_or_replace<DoorRef>(e, DoorRef{rec.doorGroup});
+        ++made;
+        // ЯКОРНАЯ ПРОБА RESTORE (закон 3): сорванное остаётся сорванным, а
+        // якорь, мёртвый в восстановленной материи, — честный детач тем же
+        // единственным глаголом. Несовместимость снимков невозможна как
+        // состояние.
+        if ((rec.flags & kPropRecDetached) || !anchor_alive(world, rec.anchor))
+            prop_detach(reg, e, bus);
+    }
+    return made;
+}
+
+std::size_t spawn_pickup_records(Registry& reg, LayerId layer,
+                                 const PickupRecord* recs, std::size_t n) {
+    std::vector<Entity> stale;
+    for (auto e : reg.view<const Pickup, const Transform>())
+        if (reg.get<const Transform>(e).layer == layer) stale.push_back(e);
+    for (Entity e : stale) reg.destroy(e);
+
+    if (!recs || n == 0) return 0;
+    std::size_t made = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const PickupRecord& rec = recs[i];
+        // Тот же единственный писатель, что у живого дропа ([loot.h]
+        // spawn_pickup) — восстановленный лут неотличим по построению.
+        if (spawn_pickup(reg, layer, rec.pos, static_cast<ItemId>(rec.item),
+                         rec.count, rec.condition) != entt::null)
+            ++made;
+    }
+    return made;
+}
+
+void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
+                        std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        if (power.count >= kMaxDestroyedShields) break;
+        power.destroyedShieldKeys[power.count++] = keys[i];
+        power.stamp_power_cut(PowerGridState::shield_pos(keys[i]));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1525,9 +1762,53 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
 }
 
 void floor_file_write(const World& w, int floorNumber,
-                      std::vector<std::uint8_t>& out) {
+                      std::vector<std::uint8_t>& out,
+                      const FloorEntityState* ents,
+                      const FloorModuleKey* key) {
+    // v3 ([save.h] раскладка): floor уже внутри снимка геометрии (его пишет
+    // snapshot_floor), поэтому мета v3 — только ключ модуля и сущности,
+    // геометрия хвостом.
     std::vector<std::uint8_t> blob;
-    snapshot_floor(w, floorNumber, blob);
+    {
+        Writer bw(blob);
+        const FloorModuleKey k = key ? *key : FloorModuleKey{};
+        bw.u8(k.kind);
+        bw.u32(k.seed);
+        bw.u32(k.genVersion);
+        static const FloorEntityState kEmpty{};
+        const FloorEntityState& e = ents ? *ents : kEmpty;
+        bw.u32(static_cast<std::uint32_t>(e.props.size()));
+        for (const PropRecord& rec : e.props) {
+            PropRecord tmp = rec; // визитёр read/write; write-сторона копирует
+            visit_prop_rec(bw, tmp);
+        }
+        bw.u32(static_cast<std::uint32_t>(e.corpses.size()));
+        for (const CorpseRecord& rec : e.corpses) {
+            CorpseRecord tmp = rec;
+            visit_corpse_rec(bw, tmp);
+        }
+        bw.u32(static_cast<std::uint32_t>(e.pickups.size()));
+        for (const PickupRecord& rec : e.pickups) {
+            PickupRecord tmp = rec;
+            visit_pickup_rec(bw, tmp);
+        }
+        bw.u32(static_cast<std::uint32_t>(e.debris.size()));
+        for (const DebrisRecord& rec : e.debris) {
+            DebrisRecord tmp = rec;
+            visit_debris_rec(bw, tmp);
+        }
+        bw.u32(static_cast<std::uint32_t>(e.powerKeys.size()));
+        for (std::uint64_t kkey : e.powerKeys) bw.u64(kkey);
+    }
+    {
+        // snapshot_floor чистит out первым делом (контракт) — геометрия
+        // кодируется в свой буфер и подшивается хвостом. Одна лишняя копия
+        // RLE-вывода на переезде этажа — транзиентная RAM щедрая (закон
+        // владельца, 5a).
+        std::vector<std::uint8_t> geo;
+        snapshot_floor(w, floorNumber, geo);
+        blob.insert(blob.end(), geo.begin(), geo.end());
+    }
 
     // SAY IT when the writer outgrows the reader. There is no guard here on
     // purpose — refusing to write would lose the floor silently, which is worse —
@@ -1555,8 +1836,10 @@ void floor_file_write(const World& w, int floorNumber,
 }
 
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
-                     std::int32_t* floorOut, SaveError* err) {
+                     std::int32_t* floorOut, SaveError* err,
+                     const FloorModuleKey* expect, FloorEntityState* entsOut) {
     if (err) *err = SaveError::None;
+    if (entsOut) *entsOut = FloorEntityState{};
     auto fail = [err](SaveError e) {
         if (err) *err = e;
         return false;
@@ -1575,8 +1858,83 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
         return fail(SaveError::SizeMismatch);
     if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
         return fail(SaveError::BadChecksum);
-    if (!apply_floor_snapshot(w, bytes + kFloorHeaderWire, blobBytes, floorOut))
+
+    // v3-мета: ключ модуля + секции сущностей, геометрия хвостом. ВСЕ ворота
+    // — ДО первого касания мира: отказ обязан оставить World нетронутым
+    // (закон 4 — «полуслияние запрещено»), поэтому сущности парсятся в
+    // локалы, а мир штампуется последним.
+    const std::uint8_t* p = bytes + kFloorHeaderWire;
+    std::size_t left = blobBytes;
+    Reader br(p, left);
+    std::uint8_t kind = 0;
+    std::uint32_t seed = 0, genVersion = 0;
+    // Reader без границы? — br создан на весь blob; счётчики ниже вычитаются
+    // из left вручную, любой недобор = SizeMismatch до касания мира.
+    if (left < 9) return fail(SaveError::SizeMismatch);
+    br.u8(kind);
+    br.u32(seed);
+    br.u32(genVersion);
+    left -= 9;
+    if (expect && (kind != expect->kind || seed != expect->seed ||
+                   genVersion != expect->genVersion))
+        return fail(SaveError::ModuleChanged);
+
+    FloorEntityState ents;
+    auto take = [&left](std::size_t bytesNeeded) {
+        if (left < bytesNeeded) return false;
+        left -= bytesNeeded;
+        return true;
+    };
+    std::uint32_t cnt = 0;
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    ents.props.resize(cnt);
+    for (PropRecord& rec : ents.props) {
+        // Ширина строки зависит от флага — сперва байты фикс-части.
+        if (!take(kPropRecWire)) return fail(SaveError::SizeMismatch);
+        // Флаг лежит третьим байтом строки; читать придётся визитёром, но
+        // контейнерный хвост надо учесть в left ДО visit (Reader сам границ
+        // не держит). Подглядываем флаг напрямую: propId(2) + flags(1).
+        const std::uint8_t fl = br.peek(2);
+        if ((fl & kPropRecHasContainer) &&
+            !take(kPropRecContainerWire))
+            return fail(SaveError::SizeMismatch);
+        visit_prop_rec(br, rec);
+    }
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (!take(static_cast<std::size_t>(cnt) * kCorpseRecWire))
         return fail(SaveError::SizeMismatch);
+    ents.corpses.resize(cnt);
+    for (CorpseRecord& rec : ents.corpses) visit_corpse_rec(br, rec);
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (!take(static_cast<std::size_t>(cnt) * kPickupRecWire))
+        return fail(SaveError::SizeMismatch);
+    ents.pickups.resize(cnt);
+    for (PickupRecord& rec : ents.pickups) visit_pickup_rec(br, rec);
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (!take(static_cast<std::size_t>(cnt) * kDebrisRecWire))
+        return fail(SaveError::SizeMismatch);
+    ents.debris.resize(cnt);
+    for (DebrisRecord& rec : ents.debris) visit_debris_rec(br, rec);
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (!take(static_cast<std::size_t>(cnt) * 8)) return fail(SaveError::SizeMismatch);
+    ents.powerKeys.resize(cnt);
+    for (std::uint64_t& kkey : ents.powerKeys) br.u64(kkey);
+
+    // Геометрия — остаток blob, последним касанием.
+    const std::size_t geoOff = blobBytes - left;
+    if (!apply_floor_snapshot(w, p + geoOff, left, floorOut))
+        return fail(SaveError::SizeMismatch);
+    if (entsOut) *entsOut = std::move(ents);
     return true;
 }
 

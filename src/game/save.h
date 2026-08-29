@@ -64,6 +64,7 @@
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
 #include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
+#include "world/anchor.h"     // SubVoxelAnchor — якорь в записи пропа (v20/F)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -74,6 +75,7 @@ namespace giga::game {
 // `save.cpp` includes game/floor_stream.h, which defines both.
 class FloorRegistry;
 class FloorStreamer;
+class EventBus; // spawn_prop_records публикует PropDetached (закон 3)
 
 // On-disk bytes spell "GH2S". Written little-endian byte by byte, so the four
 // leading bytes of a save file are readable in a hex dump on any host.
@@ -231,6 +233,7 @@ enum class SaveError : std::uint8_t {
     LayoutMismatch,      // a serialized struct changed size in this build
     SizeMismatch,        // declared payload length disagrees with its own contents
     BadChecksum,         // payload corrupt
+    ModuleChanged,       // floor file v3: kind/seed/genVersion ≠ ключ модуля (S20.6 закон 4)
     Count
 };
 const char* save_error_text(SaveError e);
@@ -513,6 +516,79 @@ struct CorpseRecord {
 };
 
 // ---------------------------------------------------------------------------
+// v20 / floor file v3 — СУЩНОСТИ ЭТАЖА В СНИМКЕ (CANON S20.6, инкремент F)
+// ---------------------------------------------------------------------------
+// Этаж помнит ВСЁ накопленное: материю И сущности. Записи самодостаточные
+// POD-ы — идентичность сущности снимка есть сама её запись; ни entt-хэндла
+// (переиспользуется), ни позиционного ключа (OpenedContainerKey коллидировал
+// на ~13% Residential-этажей и умер вместе с матчингом: restore не сеет и не
+// матчит, он СПАВНИТ из записей). Ссылок между записями нет по построению:
+// линки и CarriedBy транзиентны (жнец связей, E-1), антураж — чистая функция
+// грида (перебейк), DoorRef кнопки — индекс закона door_declare, валидный под
+// той же версией генерации модуля (закон 4 гейтит снимок целиком).
+
+// Один проп этажа — строка props.csv + якорь + изменяемое состояние.
+// Ящик — это проп (S14.1): его инвентарь едет флагом kPropRecHasContainer.
+// Сорванный проп (kPropRecDetached) сохраняет ИДЕНТИЧНОСТЬ — прежний
+// DebrisRecord возвращал сбитую лампу серым ящиком без строки и света;
+// теперь запись без якоря пересобирает проп и кладёт его физикой заново.
+inline constexpr std::uint8_t kPropRecDetached = 1u << 0;
+inline constexpr std::uint8_t kPropRecInactive = 1u << 1; // Interactable.active == false
+inline constexpr std::uint8_t kPropRecHasContainer = 1u << 2;
+
+struct PropRecord {
+    std::uint16_t propId = 0;   // строка props.csv (PropId)
+    std::uint8_t flags = 0;     // kPropRec*
+    vec3 pos{};
+    float yaw = 0.0f;
+    std::uint8_t animPhase = 0;
+    std::uint8_t meshFlags = 0; // PropMesh.flags как есть (мерцание и пр.)
+    SubVoxelAnchor anchor{};    // осмыслен только без kPropRecDetached
+    std::uint32_t doorGroup = 0xFFFFFFFFu; // DoorRef (kNoPortal = нет)
+    Container box{};            // осмыслен только под kPropRecHasContainer
+};
+
+// Лут на полу — раньше терялся целиком (unload подметал Pickup без записи).
+struct PickupRecord {
+    std::uint16_t item = 0;      // ItemId
+    std::uint16_t count = 0;
+    std::uint8_t condition = 255;
+    vec3 pos{};
+};
+
+// Все сущности одного этажа, как их несёт floor_<N>.sav v3. Собирается
+// gather_floor_entities на выходе с этажа, применяется spawn_*_records на
+// restore-ветке. Секции контейнеров/трупов/обломков в run.sav мертвы с v20 —
+// у состояния этажа ровно один дом.
+struct FloorEntityState {
+    std::vector<PropRecord> props;
+    std::vector<CorpseRecord> corpses;
+    std::vector<PickupRecord> pickups;
+    std::vector<DebrisRecord> debris; // тела БЕЗ PropOf (мяч стенда и т.п.)
+    // Обесточка: ключи разрушенных щитков ЭТОГО этажа ([combat.h] cell_key).
+    // PowerGridState чистится на каждом прибытии (бесэтажные ключи гасили те
+    // же клетки на всех этажах — межэтажный дефект умер этой же правкой) и
+    // восстанавливается отсюда на restore.
+    std::vector<std::uint64_t> powerKeys;
+};
+
+// Проводные ширины записей. Якорь: клетка 3×u8 (макро-координаты — байты по
+// построению) + субвоксель 3×u8 + грань u8 = 7.
+inline constexpr std::size_t kPropRecWire =
+    2 + 1 + 12 + 4 + 1 + 1 + 7 + 4;                       // 32
+inline constexpr std::size_t kPropRecContainerWire = 1 + 1 + 64 * 5; // 322
+inline constexpr std::size_t kPickupRecWire = 2 + 2 + 1 + 12;        // 17
+
+// Ключ модуля, которому обязан отвечать снимок (закон 4): kind И seed И
+// версия генерации. Любое несовпадение = «модуль изменился» → снимок
+// инвалидируется целиком, этаж перегенерируется девственным.
+struct FloorModuleKey {
+    std::uint8_t kind = 0;        // FloorKind
+    std::uint32_t seed = 0;       // сид модуля (FloorModule.seed)
+    std::uint32_t genVersion = 0; // module_gen_version(kind)
+};
+
+// ---------------------------------------------------------------------------
 // Per-floor state files — the modular half of the save
 // ---------------------------------------------------------------------------
 // One `floor_<N>.sav` per visited floor, in the app's save directory. Written when
@@ -529,18 +605,37 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // A page is 512 materials and almost never 512 distinct ones, so the raw form
 // spent 1024 B on what usually needs a dozen. Nothing about the material model
 // changed — a page may still hold any mix of atoms, it just encodes cheaply.
-inline constexpr std::uint32_t kFloorFileVersion = 2u;
+// v3 (2026-08-29, S20.6 инкремент F): снимок несёт СУЩНОСТИ (FloorEntityState
+// выше) и КЛЮЧ МОДУЛЯ (kind+seed+genVersion). Раскладка blob:
+//   i32 floor | u8 kind | u32 seed | u32 genVersion
+//   | u32 nProps; props | u32 nCorpses; corpses | u32 nPickups; pickups
+//   | u32 nDebris; debris | u32 nPowerKeys; u64 keys
+//   | геометрия (тот же кодек, что v2, до конца blob)
+// Сущности ПЕРЕД геометрией: их ширины — арифметика счётчиков, геометрия
+// самоограничена хвостом. v2-файлы отклоняются целиком (честная инвалидация
+// вместо миграции — стандартное правило).
+inline constexpr std::uint32_t kFloorFileVersion = 3u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
-// Encode the World into a complete floor file (header + CRC + snapshot blob).
+// Encode the World + сущности этажа into a complete floor file
+// (header + CRC + blob). `ents` может быть null — пустые секции; `key` —
+// ключ модуля от вызывающего (он один знает сид модуля), null = нулевой
+// ключ (headless-тест, читается только с expect=null).
 void floor_file_write(const World& w, int floorNumber,
-                      std::vector<std::uint8_t>& out);
+                      std::vector<std::uint8_t>& out,
+                      const FloorEntityState* ents = nullptr,
+                      const FloorModuleKey* key = nullptr);
 
 // Validate a floor file and stamp it onto `w`. False on any rejection (magic,
 // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
 // where it can, says so out loud. `floorOut` reports the floor the blob claims.
+// `expect` — ключ модуля (закон 4): несовпадение kind/seed/genVersion =
+// SaveError::ModuleChanged, мир не тронут. null = не проверять (тестовый путь).
+// `entsOut` получает секции сущностей (очищается первым делом).
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
-                     std::int32_t* floorOut = nullptr, SaveError* err = nullptr);
+                     std::int32_t* floorOut = nullptr, SaveError* err = nullptr,
+                     const FloorModuleKey* expect = nullptr,
+                     FloorEntityState* entsOut = nullptr);
 
 // ---------------------------------------------------------------------------
 // What travels
@@ -715,6 +810,39 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 // ложится заново (решение владельца, как у трупа). Возвращает число созданных.
 std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
                                  const DebrisRecord* recs, std::size_t n);
+
+// ---------------------------------------------------------------------------
+// Сущности этажа ↔ снимок (S20.6 инкремент F)
+// ---------------------------------------------------------------------------
+
+// Собрать ВСЕ сущности слоя в записи снимка (out очищается): пропы (статик и
+// сорванные, с якорями, инвентарём ящиков, DoorRef), трупы, лут на полу,
+// обломки без строки, ключи обесточки (`power` может быть null). Зовётся на
+// выходе с этажа — единственный писатель секций сущностей floor-файла.
+std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
+                                  FloorEntityState& out,
+                                  const PowerGridState* power = nullptr);
+
+// Пересоздать пропы этажа из записей. Destroy-first по PropOf на слое
+// (идемпотентность F9). Каждая запись рождает проп ЧЕРЕЗ таблицу
+// (spawn_prop_from_id, гейт якоря выключен — судьбу решает проба ниже),
+// возвращает состояние (active, инвентарь, DoorRef) и завершается ЯКОРНОЙ
+// ПРОБОЙ (закон 3): запись detached ИЛИ якорь, мёртвый в восстановленной
+// материи, → честный prop_detach — несовместимость снимков невозможна как
+// состояние. Возвращает число созданных сущностей.
+std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
+                               const PropRecord* recs, std::size_t n,
+                               EventBus& bus);
+
+// Пересоздать лут на полу. Destroy-first по Pickup на слое.
+std::size_t spawn_pickup_records(Registry& reg, LayerId layer,
+                                 const PickupRecord* recs, std::size_t n);
+
+// Восстановить обесточку этажа из ключей снимка: чистый POD-штамп — сброс
+// внутри НЕ делается, вызывающий обязан начать с PowerGridState{} (правило
+// «чистить на каждом прибытии», см. FloorEntityState::powerKeys).
+void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
+                        std::size_t n);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood

@@ -254,6 +254,21 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     reg.emplace_or_replace<AABB>(prop, AABB{half});
 }
 
+void prop_detach(Registry& reg, Entity prop, EventBus& bus,
+                 ParticleBurstQueue* bursts, std::uint32_t seed) {
+    if (!reg.valid(prop)) return;
+    const PropFallMode mode = reg.all_of<PropFallMode>(prop)
+                                  ? reg.get<PropFallMode>(prop)
+                                  : PropFallMode::SimpleFall;
+    const vec3 pos = reg.all_of<Transform>(prop)
+                         ? reg.get<Transform>(prop).pos
+                         : vec3{};
+    // Нулевой импульс: детач без удара (restore, закон 3) — тело просто
+    // ложится физикой; ветки внутри честно берут свой запасной вектор.
+    detach_single_prop(reg, prop, mode, vec3{}, pos, vec3{}, 0u, bus, bursts,
+                       seed);
+}
+
 // §59.2: снаряд платил полный проход по ВСЕМ якорным пропам каждый тик ради
 // брод-фейза «якорь в ±1 клетке» — 20 пуль × 12646 пропов × 125 Гц ≈ 32 млн
 // итераций/с, худшая per-tick находка каталога. Контейнер и закон ключа —
@@ -604,7 +619,8 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
                   LayerId layer, float yaw, std::uint8_t emissive,
-                  std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags)
+                  std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags,
+                  bool gateAnchor)
 {
     int cx = wrap_macro(anchor.cx);
     int cy = wrap_macro(anchor.cy);
@@ -613,10 +629,12 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     // Гейт спавна и проба живости обязаны задавать ОДИН вопрос (иначе вещь
     // спавнится и отваливается первым же карвом соседнего бита): колонка у
     // грани крепления, как в anchor_validate_step выше. Строго шире прежнего
-    // побитового теста — всё, что спавнилось, спавнится.
+    // побитового теста — всё, что спавнилось, спавнится. Обход гейта — только
+    // путь записи снимка, который платит якорной пробой сам (шапка в .h).
     const AnchorUV uv =
         anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
-    if (!anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
+    if (gateAnchor &&
+        !anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
         return entt::null;
     }
 
@@ -648,7 +666,8 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
 Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
                           const SubVoxelAnchor& anchor, PropId id,
                           LayerId layer, float yaw,
-                          std::uint8_t animPhase, std::uint8_t flags)
+                          std::uint8_t animPhase, std::uint8_t flags,
+                          bool gateAnchor)
 {
     if (!prop_valid(id)) return entt::null;
     const PropDef& d = prop_def(id);
@@ -657,7 +676,8 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                           fall_mode_from_u8(d.fallMode),
                           prop_color(d),
                           d.shape,
-                          layer, yaw, d.emissive, d.matId, animPhase, flags);
+                          layer, yaw, d.emissive, d.matId, animPhase, flags,
+                          gateAnchor);
     if (e == entt::null) return entt::null;
     // Строка таблицы на сущности: язык глаголов (S12.3) и любой будущий
     // потребитель словаря спрашивают, ЧЕМ проп является, — supply комнаты

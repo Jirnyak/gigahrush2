@@ -142,9 +142,33 @@ std::size_t kind_row(const FloorSpec& spec) {
     return k >= static_cast<std::size_t>(FloorKind::Count) ? 0 : k;
 }
 
+// Версии генерации модулей (S20.6 закон 4) — строка данных на kind, как
+// генератор. ПОДНИМАТЬ РУКОЙ при любом изменении выхода generate_floor
+// этого kind; изменение общего каркаса (stamp_lift_pillars, сид-формулы)
+// поднимает ВСЕ строки. Стартуют с 1: 0 — «версии нет» у до-F снимков.
+constexpr std::uint32_t kModuleGenVersions[] = {
+    1, // Residential (padic геометрия)
+    1, // Commercial
+    1, // Industrial
+    1, // Derelict
+    1, // Padic
+    1, // Blame
+    1, // Khrushi
+};
+static_assert(sizeof(kModuleGenVersions) / sizeof(kModuleGenVersions[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "gen-version table must have exactly one row per FloorKind");
+
 void floor_declare_rules(World& world, int number, const FloorSpec& spec,
                          unsigned seed) {
     kRuleDeclarers[kind_row(spec)](world, number, spec, seed);
+}
+
+std::uint32_t module_gen_version(FloorKind kind) {
+    const std::size_t k = static_cast<std::size_t>(kind);
+    return kModuleGenVersions[k >= static_cast<std::size_t>(FloorKind::Count)
+                                  ? 0
+                                  : k];
 }
 
 void generate_floor(World& world, int number, const FloorSpec& spec,

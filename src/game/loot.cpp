@@ -159,6 +159,33 @@ std::int32_t inventory_value(const Inventory& inv) {
     return total;
 }
 
+Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
+                    std::uint16_t count, std::uint8_t condition) {
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = pos;
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{kPickupHalf});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+    reg.emplace<Renderable>(e, Renderable{kPickupColor});
+    reg.emplace<Pickup>(e, Pickup{id, count, condition});
+    // Упавшее СТАНОВИТСЯ местом (живой хук supply, S12.5): место бойни
+    // само делается запасом и стягивает мародёров.
+    supply_item_at(reg, tr.pos, id, static_cast<int>(count));
+    // MASS: the bundle weighs its rounds, not one round — the same stack
+    // multiply `inventory_mass_g` does; a pile on the floor and the same pile
+    // in a pocket must not disagree about what they weigh.
+    reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) * 0.001f *
+                              static_cast<float>(count)});
+    // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
+    // can route through find_nearest_interactable. Backend remains pickup_step.
+    reg.emplace<Interactable>(
+        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+    return e;
+}
+
 std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                             std::uint8_t mobKind, std::uint8_t mobTier,
                             int floorNumber, std::uint32_t seed) {
@@ -221,15 +248,6 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         const float ox = (static_cast<float>(j & 0xFFu) / 255.0f - 0.5f) * 1.2f;
         const float oy = (static_cast<float>((j >> 8) & 0xFFu) / 255.0f - 0.5f) * 1.2f;
 
-        Entity e = reg.create();
-        Transform tr;
-        tr.pos = vec3{pos.x + ox, pos.y + oy, pos.z};
-        tr.layer = layer;
-        reg.emplace<Transform>(e, tr);
-        reg.emplace<Velocity>(e);
-        reg.emplace<AABB>(e, AABB{kPickupHalf});
-        reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-        reg.emplace<Renderable>(e, Renderable{kPickupColor});
         // Never over the item's own stack cap: a single pickup carrying more than an
         // inventory slot may legally hold is silently truncated by pickup_step. The
         // authored counts are 1..2 and every count-bearing row stacks well past that, so
@@ -237,23 +255,8 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         const std::uint16_t cap = item_def(id).stackMax;
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
-        reg.emplace<Pickup>(e, Pickup{id, kd.count});
-        // Упавшее СТАНОВИТСЯ местом (живой хук supply, S12.5): место бойни
-        // само делается запасом и стягивает мародёров.
-        supply_item_at(reg, tr.pos, id, static_cast<int>(kd.count));
-        // MASS, and its absence here was a real hole: a rifle lying on the floor is
-        // as much a concrete object as the mob that dropped it, yet loot was the ONE
-        // spawn path in the tree that emplaced no `Mass`. Mobs, props and embodied
-        // bodies all carry it, so `impact.cpp` charged E = m*v^2/2 to every falling
-        // thing in the game EXCEPT the loot. It could not be fixed before items had
-        // a weight at all ([item_table.h] massG) — which is what makes this the
-        // first line of the payoff rather than an afterthought.
-        reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) *
-                                  0.001f * static_cast<float>(kd.count)});
-        // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
-        // can route through find_nearest_interactable. Backend remains pickup_step.
-        reg.emplace<Interactable>(
-            e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+        spawn_pickup(reg, layer, vec3{pos.x + ox, pos.y + oy, pos.z}, id,
+                     kd.count);
         ++made;
 
         // A gun without bullets is a paperweight. Bundle its ammo at the moment it
@@ -266,7 +269,9 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         // none of the five appears in `kRangedTable`, so `ranged_for_item` answers nullptr
         // for all of them. One call site covers both halves of the roll; a guard would
         // only encode which half we are in.
-        made += drop_weapon_ammo(reg, layer, tr.pos, id, seed ^ (j * 0x2545F491u));
+        made += drop_weapon_ammo(reg, layer,
+                                 vec3{pos.x + ox, pos.y + oy, pos.z}, id,
+                                 seed ^ (j * 0x2545F491u));
     }
     return made;
 }
@@ -291,30 +296,10 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     const std::uint16_t cap = item_def(def->ammo).stackMax;
     if (cap && count > cap) count = cap;
 
-    Entity e = reg.create();
-    Transform tr;
     // Beside the gun, not inside it: two pickups at the same point are one pickup you
     // can see.
-    tr.pos = vec3{pos.x + 0.45f, pos.y - 0.35f, pos.z};
-    tr.layer = layer;
-    reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(e);
-    reg.emplace<AABB>(e, AABB{kPickupHalf});
-    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-    reg.emplace<Renderable>(e, Renderable{kPickupColor});
-    const std::uint32_t bundled = count;   // already stack-capped above; u16 cell
-    reg.emplace<Pickup>(e, Pickup{def->ammo,
-                                  static_cast<std::uint16_t>(bundled)});
-    supply_item_at(reg, tr.pos, def->ammo,
-                   static_cast<int>(bundled)); // живой хук supply (S12.5)
-    // The bundle weighs its ROUNDS, not one round — the same stack multiply
-    // `inventory_mass_g` does, because a pile of sixty on the floor and the same
-    // sixty in a pocket must not disagree about what they weigh.
-    reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(def->ammo).massG) *
-                              0.001f * static_cast<float>(bundled)});
-    // [jirnyak.md] §18: ammo bundles are floor Loot interactables too.
-    reg.emplace<Interactable>(
-        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+    spawn_pickup(reg, layer, vec3{pos.x + 0.45f, pos.y - 0.35f, pos.z},
+                 def->ammo, count);
     return 1;
 }
 
