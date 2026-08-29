@@ -1340,7 +1340,64 @@ static void test_writer_wakes_sleeping_bodies() {
     CHECK(!reg.get<RigidBody>(b).asleep);
 }
 
+// S20.3: ЖНЕЦ СВЯЗЕЙ — одно правило смерти носителя (вместо трёх швов) и
+// глагол якорения. Обе полярности: живые стороны — связь стоит; сторона
+// умерла — линк уничтожен, живая разбужена; сегмент без корня прибран;
+// мировой линк жнец не трогает (его рвёт карв), а его точка солвера —
+// производная записи якоря (один писатель — link_attach_world).
+static void test_attachment_reaper_and_verbs() {
+    Registry reg;
+    Entity a = reg.create(), b = reg.create();
+    reg.emplace<Transform>(a, Transform{vec3{1.0f, 1.0f, 1.0f}, 0});
+    reg.emplace<Transform>(b, Transform{vec3{2.0f, 1.0f, 1.0f}, 0});
+    RigidBody rb;
+    rb.asleep = true;
+    reg.emplace<RigidBody>(a, rb);
+    reg.emplace<RigidBody>(b, rb);
+    const Entity link =
+        game::link_attach(reg, a, b, vec3{}, vec3{}, 1.0f, true);
+    CHECK(reg.valid(link));
+    CHECK(game::attachment_reaper_step(reg) == 0u); // обе стороны живы
+    CHECK(reg.valid(link));
+    reg.destroy(b);
+    CHECK(game::attachment_reaper_step(reg) == 1u);
+    CHECK(!reg.valid(link));
+    CHECK(!reg.get<RigidBody>(a).asleep); // живая сторона разбужена
+
+    Entity root = reg.create();
+    Entity seg = reg.create();
+    reg.emplace<game::BodySegment>(seg, game::BodySegment{root});
+    CHECK(game::attachment_reaper_step(reg) == 0u);
+    reg.destroy(root);
+    CHECK(game::attachment_reaper_step(reg) == 1u);
+    CHECK(!reg.valid(seg));
+
+    World w;
+    w.grid().fill_cell(5, 5, 5, kMatConcrete);
+    game::SubVoxelAnchor sva{};
+    sva.cx = 5; sva.cy = 5; sva.cz = 5;
+    sva.subX = 3; sva.subY = 3; sva.subZ = 0;
+    sva.face = anchor_face_pack(2, -1);
+    Entity ball = reg.create();
+    reg.emplace<Transform>(ball, Transform{vec3{11.0f, 11.0f, 9.0f}, 0});
+    reg.emplace<RigidBody>(ball, rb);
+    const Entity wl =
+        game::link_attach_world(reg, ball, vec3{}, sva, 1.0f, true);
+    CHECK(reg.valid(wl));
+    CHECK(game::attachment_reaper_step(reg) == 0u);
+    // Производная точка солвера сидит на нижней грани опорного субвокселя.
+    const JointLink& jl = reg.get<JointLink>(wl);
+    CHECK(std::fabs(jl.anchorB.z -
+                    static_cast<float>(5 * kSubDim) * 0.25f) < 1e-4f);
+    // Снятие глаголом будит сторону.
+    reg.get<RigidBody>(ball).asleep = true;
+    game::link_detach(reg, wl);
+    CHECK(!reg.valid(wl));
+    CHECK(!reg.get<RigidBody>(ball).asleep);
+}
+
 void test_props_game_all() {
+    test_attachment_reaper_and_verbs();
     test_anchor_validate_layer_filter();
     test_writer_wakes_sleeping_bodies();
     test_wall_interactables_seed_and_collect();

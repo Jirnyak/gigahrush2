@@ -892,27 +892,13 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
 
         // Линк — отдельная сущность: разрубание = её destroy (cut_link).
         if (i == 0) {
-            if (anchored) {
-                Entity link = ctx.ecs->create();
-                JointLink jl;
-                jl.a = ball;
-                jl.b = entt::null; // мировой якорь
-                jl.anchorB = anchor;
-                jl.restLen = restLen;
-                jl.rope = rope;
-                ctx.ecs->emplace<JointLink>(link, jl);
-                // Якорь линка — грань опоры: карв рвёт подвес
-                // (anchor_validate_step, та же проба, что у пропов).
-                ctx.ecs->emplace<SubVoxelAnchor>(link, sva);
-            }
+            // Глагол якорения (S20.3): мировая точка солвера ВЫВОДИТСЯ из
+            // записи якоря внутри link_attach_world — ручной пары
+            // «anchorB + запись» здесь больше нет.
+            if (anchored)
+                link_attach_world(*ctx.ecs, ball, vec3{}, sva, restLen, rope);
         } else {
-            Entity link = ctx.ecs->create();
-            JointLink jl;
-            jl.a = ball;
-            jl.b = prev;
-            jl.restLen = restLen;
-            jl.rope = rope;
-            ctx.ecs->emplace<JointLink>(link, jl);
+            link_attach(*ctx.ecs, ball, prev, vec3{}, vec3{}, restLen, rope);
         }
         prev = ball;
     }

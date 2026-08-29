@@ -195,6 +195,29 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
 // 2026-08-22: prop ball ≡ spawn_ball).
 void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus);
 
+// ГЛАГОЛ ЯКОРЕНИЯ (CANON S20.3): поставить связь — одна операция, доступная
+// генерации И геймплею (крюк, сцепка, подвес, прицепить проп к пропу).
+// Связь — линк-сущность (разруб = destroy); мировая сторона несёт ЕДИНУЮ
+// запись якоря, и точка солвера ВЫВОДИТСЯ из неё здесь же — двум половинкам
+// («vec3 для солвера + запись для пробы») больше нечем разойтись: писатель
+// один. Снять — link_detach (будит стороны).
+Entity link_attach_world(Registry& reg, Entity body, const vec3& anchorA,
+                         const SubVoxelAnchor& a, float restLen, bool rope);
+Entity link_attach(Registry& reg, Entity a, Entity b, const vec3& anchorA,
+                   const vec3& anchorB, float restLen, bool rope);
+void link_detach(Registry& reg, Entity link);
+
+// ЖНЕЦ СВЯЗЕЙ — ОДНО правило смерти носителя (S20.3; раньше швов было три:
+// CarriedBy чистил rigid-степ, линки молча вырождались в солвере и ТЕКЛИ
+// при выгрузке этажа — у линк-сущности нет Transform, слоевые свипы её не
+// видели, — сегменты чистил только сейв). Раз в тик: линк с умершей
+// непустой стороной уничтожается (живая сторона разбужена), сегмент с
+// умершим корнем уничтожается. Выгрузка этажа закрыта ПО ПОСТРОЕНИЮ:
+// стороны несут Transform и умирают слоевым свипом — их связи умирают
+// следующим тиком здесь. CarriedBy остаётся в rigid-степе (кинематика
+// несомого решается там же тем же тиком). Возвращает число прибранного.
+std::uint32_t attachment_reaper_step(Registry& reg);
+
 // `source` — стрелявший, только для атрибуции килла заряда-от-урона
 // (бочка: выстрел взводит ChargeArmed вместо детача; [combat.h] Charge).
 bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,

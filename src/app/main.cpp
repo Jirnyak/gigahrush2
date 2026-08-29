@@ -4810,6 +4810,11 @@ int main(int argc, char** argv) {
                 // До impact_damage_step, чтобы его Impact-репорты попали в тот
                 // же универсальный закон урона. [markoaudit/plans/ragdoll.md]
                 rigid_body_step(reg, stack, kSimDt);
+                // Жнец связей — одно правило смерти носителя (S20.3):
+                // линк с умершей стороной уничтожается (живая разбужена),
+                // сегмент без корня тоже; утечка линков при выгрузке этажа
+                // закрыта по построению — связи умирают тиком после сторон.
+                game::attachment_reaper_step(reg);
                 // The universal impact law, straight after the sweep that wrote
                 // the reports: damage = k*m*v^2/2 over Mass — fall damage and
                 // prop crashes with no per-cause constants ([game/impact.h]).

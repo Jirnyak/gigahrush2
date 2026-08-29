@@ -365,6 +365,102 @@ bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPo
     return false;
 }
 
+Entity link_attach_world(Registry& reg, Entity body, const vec3& anchorA,
+                         const SubVoxelAnchor& a, float restLen, bool rope) {
+    if (!reg.valid(body)) return entt::null;
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = body;
+    jl.b = entt::null; // мировой якорь
+    jl.anchorA = anchorA;
+    // Точка солвера — ПРОИЗВОДНАЯ записи якоря: центр субвокселя точки
+    // крепления, выдвинутый на полсубвокселя по нормали грани (подвес
+    // висит НА поверхности опоры, не в её толще). Единственный писатель
+    // пары — этот; запись остаётся источником правды для пробы живости.
+    {
+        const float sub = kCellSize / static_cast<float>(kSubDim); // 0.25 м
+        vec3 p{(static_cast<float>(wrap_macro(a.cx)) * kSubDim +
+                static_cast<float>(a.subX) + 0.5f) *
+                   sub,
+               (static_cast<float>(wrap_macro(a.cy)) * kSubDim +
+                static_cast<float>(a.subY) + 0.5f) *
+                   sub,
+               (static_cast<float>(wrap_macro(a.cz)) * kSubDim +
+                static_cast<float>(a.subZ) + 0.5f) *
+                   sub};
+        const int axis = anchor_face_axis(a.face);
+        const float dir = static_cast<float>(anchor_face_dir(a.face));
+        if (axis == 0) p.x += dir * 0.5f * sub;
+        else if (axis == 1) p.y += dir * 0.5f * sub;
+        else p.z += dir * 0.5f * sub;
+        jl.anchorB = p;
+    }
+    jl.restLen = restLen;
+    jl.rope = rope;
+    reg.emplace<JointLink>(link, jl);
+    reg.emplace<SubVoxelAnchor>(link, a); // карв рвёт подвес той же пробой
+    return link;
+}
+
+Entity link_attach(Registry& reg, Entity a, Entity b, const vec3& anchorA,
+                   const vec3& anchorB, float restLen, bool rope) {
+    if (!reg.valid(a) || !reg.valid(b)) return entt::null;
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = a;
+    jl.b = b;
+    jl.anchorA = anchorA;
+    jl.anchorB = anchorB;
+    jl.restLen = restLen;
+    jl.rope = rope;
+    reg.emplace<JointLink>(link, jl);
+    return link;
+}
+
+namespace {
+void wake_side(Registry& reg, Entity side) {
+    if (side != entt::null && reg.valid(side) && reg.all_of<RigidBody>(side)) {
+        auto& rb = reg.get<RigidBody>(side);
+        rb.asleep = false;
+        rb.sleepTicks = 0;
+    }
+}
+} // namespace
+
+void link_detach(Registry& reg, Entity link) {
+    if (!reg.valid(link) || !reg.all_of<JointLink>(link)) return;
+    const JointLink jl = reg.get<JointLink>(link);
+    wake_side(reg, jl.a);
+    wake_side(reg, jl.b);
+    reg.destroy(link);
+}
+
+std::uint32_t attachment_reaper_step(Registry& reg) {
+    static thread_local std::vector<Entity> doomed;
+    doomed.clear();
+    auto links = reg.view<JointLink>();
+    for (auto le : links) {
+        const JointLink& jl = links.get<JointLink>(le);
+        const bool aDead = jl.a != entt::null && !reg.valid(jl.a);
+        const bool bDead = jl.b != entt::null && !reg.valid(jl.b);
+        const bool empty = jl.a == entt::null && jl.b == entt::null;
+        if (aDead || bDead || empty) doomed.push_back(le);
+    }
+    for (Entity le : doomed) link_detach(reg, le);
+    const std::uint32_t linksReaped =
+        static_cast<std::uint32_t>(doomed.size());
+    doomed.clear();
+    auto segs = reg.view<BodySegment>();
+    for (auto se : segs) {
+        const Entity root = segs.get<BodySegment>(se).root;
+        if (root == entt::null || !reg.valid(root)) doomed.push_back(se);
+    }
+    for (Entity se : doomed) {
+        if (reg.valid(se)) reg.destroy(se);
+    }
+    return linksReaped + static_cast<std::uint32_t>(doomed.size());
+}
+
 void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus) {
     if (!reg.valid(prop) || !reg.all_of<Transform, PropFallMode>(prop)) return;
     const vec3 pos = reg.get<Transform>(prop).pos;
