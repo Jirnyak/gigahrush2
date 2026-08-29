@@ -34,7 +34,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERBS_CSV = os.path.join(REPO, "data", "verbs.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "verb_table.h")
 
-EXPECTED_COLS = ["id", "name", "patience_e3", "note"]
+EXPECTED_COLS = ["id", "name", "patience_e3", "rel_delta", "rep_delta",
+                 "turf_mult_e3", "victim_mult_e3", "hear_m", "note"]
 
 
 def die(msg):
@@ -72,6 +73,20 @@ def main():
             die("%r: patience_e3 %r is not an integer" % (vid, row["patience_e3"]))
         if not (0 <= p <= 1000):
             die("%r: patience_e3 %d out of [0, 1000]" % (vid, p))
+        # ЦЕНЫ ДЕЯНИЙ (S19.2): новая механика с ценой = правка данных,
+        # ноль веток. Диапазоны — узкие рамки от здравого смысла матрицы
+        # (int8 в faction_relations) и репутации комнаты (int16).
+        for col, lo, hi in (("rel_delta", -100, 100),
+                            ("rep_delta", -1000, 1000),
+                            ("turf_mult_e3", 0, 4000),
+                            ("victim_mult_e3", 0, 4000),
+                            ("hear_m", 0, 48)):
+            try:
+                val = int(row[col])
+            except ValueError:
+                die("%r: %s %r is not an integer" % (vid, col, row[col]))
+            if not (lo <= val <= hi):
+                die("%r: %s %d out of [%d, %d]" % (vid, col, val, lo, hi))
 
     lines = []
     w = lines.append
@@ -109,6 +124,37 @@ def main():
     w("inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {")
     for row in rows:
         w("    %s,  // %s" % (row["patience_e3"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("// ЦЕНЫ ДЕЯНИЙ (CANON S19.2) — колонки CSV, кодоген как materials.csv:")
+    w("// базовая дельта матрицы фракций, дельта репутации комнаты, множитель")
+    w("// своей территории (свидетель из фракции собственника), множитель")
+    w("// своей жертвы (жертва из фракции свидетеля), радиус слышимости деяния")
+    w("// в метрах (0 = только видимое). Уместность (комната предлагает глагол)")
+    w("// зануляет цену ЦЕЛИКОМ — механика, не колонка (S19.1.3).")
+    w("inline constexpr std::int8_t kVerbRelDelta[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["rel_delta"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::int16_t kVerbRepDelta[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["rep_delta"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::uint16_t kVerbTurfMultE3[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["turf_mult_e3"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::uint16_t kVerbVictimMultE3[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["victim_mult_e3"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::uint8_t kVerbHearM[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["hear_m"].strip(), row["id"].strip()))
     w("};")
     w("")
     w("// CSV tokens — for sibling generators' column names and debug output.")

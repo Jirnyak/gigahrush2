@@ -134,6 +134,13 @@ bool event_line(const Event& e, char* out, std::size_t cap) {
         case EventType::PropDetached:
             std::snprintf(out, cap, "prop detached at (%u,%u,%u)", e.a, e.b, e.c);
             return true;
+        // Деяние (S19): глагол и клетка распакованы из c (см. [event_bus.h]);
+        // актор — entt-хэндл (0xFFFFFFFF = никто), жертва — NpcId.
+        case EventType::Deed:
+            std::snprintf(out, cap, "deed verb %u by entity %u at (%u,%u,%u)",
+                          e.c >> 24, e.a, e.c & 0xFFu, (e.c >> 8) & 0xFFu,
+                          (e.c >> 16) & 0xFFu);
+            return true;
         case EventType::None:
         default:
             return false;

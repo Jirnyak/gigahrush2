@@ -85,6 +85,7 @@
 #include "game/extraction.h"
 #include "game/save.h"
 #include "game/faction_relations.h"
+#include "game/witness.h"      // S19: деяние/свидетель/цена — witness_step, deed_publish
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
@@ -3529,12 +3530,25 @@ int main(int argc, char** argv) {
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
         // reason: one notion of death, not three. Deliberately here and NOT beside
         // `finalize_deaths` in the substep — a frame can run several substeps, each
-        // publishing NpcDied, and a per-substep drain would re-read the earlier
-        // substeps' events and bill those kills again. `relations_drain_deaths` is only
+        // publishing Deed, and a per-substep drain would re-read the earlier
+        // substeps' events and bill those deeds again. `witness_step` is only
         // snapshot-bounded WITHIN one call. Draining once per frame, immediately before
         // `bus.clear()`, is exactly the contract the header asks for and is
-        // double-count-free. [faction_relations.h]
-        relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
+        // double-count-free.
+        //
+        // S19 ЗАКРЫЛ ВСЕВИДЕНИЕ: relations_drain_deaths гнул матрицу без
+        // единого свидетеля; теперь убийство — деяние (Deed kill из
+        // finalize_deaths), и дипломатию двигает ТОЛЬКО воспринявший
+        // (sub_march-зрение / skeleton_audible-слух). Незамеченное убийство
+        // оставляет труп, но не дипломатию. [witness.h]
+        {
+            const game::WitnessTick wt = game::witness_step(
+                reg, pool, factionRel, bus, floorRooms,
+                stack.layer(activeLayer), activeLayer, simTick);
+            relTick = {};
+            relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
+            relTick.changes = wt.changes;
+        }
         bus.clear();
 
         // Планировщик допекания ([game/rebake.h]): раз в кадр, в топе кадра до
@@ -6623,10 +6637,18 @@ int main(int argc, char** argv) {
                                             static_cast<std::uint32_t>(simTick),
                                             stainDirty);
                             }
-                            if (rr.pee > 0.0f || rr.poo > 0.0f)
+                            if (rr.pee > 0.0f || rr.poo > 0.0f) {
                                 std::fprintf(stderr,
                                              "[relief] осознанно: pee %.0f "
                                              "poo %.0f\n", rr.pee, rr.poo);
+                                // ДЕЯНИЕ «сортир» (S19): облегчение — факт в
+                                // шину; в уместной комнате потребитель сам
+                                // занулит цену (S19.1.3), здесь ветки нет.
+                                game::deed_publish(
+                                    bus, game::kVerbToilet, player,
+                                    game::kInvalidNpc,
+                                    reg.get<Transform>(player).pos, simTick);
+                            }
                         }
                     }
                 }

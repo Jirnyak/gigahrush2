@@ -14,6 +14,10 @@
 // its own #include of the system under test to keep that diff two lines.
 
 #include "game/faction_relations.h"
+#include "game/room.h"     // FloorRooms — контекст свидетеля (S19)
+#include "game/witness.h"  // deed_publish/witness_step — потребитель деяний
+#include "world/materials.h"
+#include "world/world.h"
 
 namespace faction2 {
 
@@ -400,22 +404,22 @@ static void test_faction2_all() {
         CHECK(cpool.hp(b) == 100);
     }
 
-    // ---- 6. relations_drain_deaths: a kill has a consequence -----------------
+    // ---- 6. СВИДЕТЕЛЬСТВО (S19): убийство имеет цену, ТОЛЬКО ЗАМЕЧЕННОЕ -----
     //
-    // The point of the whole exercise, and the only reason a MUTABLE matrix beats a
-    // constant table. Ten murders and the matrix crosses the hostility boundary, at
-    // which moment the same `bodies_hostile` section 1 tests starts answering
-    // differently — because of what the player did, with no new code path.
+    // Прежний relations_drain_deaths был всевидящ — матрица гнулась без
+    // единого свидетеля (расхождение S19.3, закрыто witness_step): деяние
+    // «убить» — строка цены verbs.csv, прогнанная через воспринявших.
     {
         Registry reg;
         NpcPool pool;
         pool.init();
         EventBus bus;
         bus.init();
+        World w;              // голый воздух: зрение свидетеля ничем не заперто
+        FloorRooms rooms;     // комнат нет: ни уместности, ни репутации места
 
         FactionRelations rel{};
-        CHECK(rel.at(kPly, kCit) == 0);               // zeroed, not authored
-        rel.reset();                                  // kBaseFactionMatrix, live
+        rel.reset();
         CHECK(rel.at(kPly, kCit) == 50);
 
         const vec3 home{40.0f, 40.0f, 4.0f};
@@ -425,107 +429,125 @@ static void test_faction2_all() {
         pool.max_hp(pid) = 100;
         Entity player = embody_as_player(reg, pool, pid, kLayer);
         reg.get<Transform>(player).pos = home;
-        const std::uint32_t killer =
-            static_cast<std::uint32_t>(entt::to_integral(player));
 
-        // A bystanding citizen, so the payoff can be asserted on a body and not only
-        // on a matrix cell.
+        // Свидетель-горожанин в двух метрах: видит (sub_march чист).
         NpcId bystander = 0;
         make_body(reg, pool, Faction::Citizens,
                   vec3{home.x + 2.0f, home.y, home.z}, 100, bystander);
         CHECK(!bodies_hostile(rel, pool, pid, bystander));
 
-        // Ten citizens, murdered one per drain. The victim rows come out of real
-        // pool records, so `rel_row` is doing the resolving rather than the test.
-        for (int k = 0; k < 10; ++k) {
+        // ЗАМЕЧЕННОЕ убийство горожанина при горожанине: жертва из фракции
+        // свидетеля → цена = rel_delta(kill) × victim_mult = −10 × 1.5 = −15.
+        {
             NpcId victim = 0;
             Entity v = make_body(reg, pool, Faction::Citizens, home, 100, victim);
-            reg.destroy(v);                           // what finalize_deaths does...
-            pool.kill(victim);                        // ...both halves of it
-            bus.publish(EventType::NpcDied, victim, 0xFFu, killer,
-                        static_cast<std::uint64_t>(k));
-            const RelationTick rt = relations_drain_deaths(
-                rel, reg, pool, bus, static_cast<std::uint64_t>(k));
-            CHECK(rt.kills == 1);
-            CHECK(rt.changes == 1);
-            CHECK(rt.lastA == kPly);
-            CHECK(rt.lastB == kCit);
-            CHECK(rt.lastValue == static_cast<std::int8_t>(50 - (k + 1) * 10));
-            // RelationChanged has a producer now, and this is it. Published into the
-            // very ring being drained, which is safe only because the ring's data
-            // pointer is stable and the drain loop is snapshot-bounded.
+            reg.destroy(v);                       // обе половины finalize_deaths
+            pool.kill(victim);
+            deed_publish(bus, kVerbKill, player, victim, home, 1u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 1u);
+            CHECK(wt.deeds == 1);
+            CHECK(wt.witnessed == 1);
+            CHECK(wt.changes == 1);
+            CHECK(rel.at(kPly, kCit) == 35);      // 50 − 15
             CHECK(bus.cycle_count(EventType::RelationChanged) == 1);
-            CHECK(bus.size() == 2);
-            const Event& last = bus.events()[1];
+            const Event& last = bus.events()[bus.size() - 1];
             CHECK(last.type == EventType::RelationChanged);
             CHECK(last.a == kPly && last.b == kCit);
-            CHECK(event_relation(last.c) == rt.lastValue);
+            CHECK(event_relation(last.c) == 35);
             bus.clear();
         }
-        // +50 - 10x10 lands on EXACTLY -50, and -50 IS hostile: the boundary is
-        // inclusive, which the header calls the single most breakable line in it.
-        CHECK(rel.at(kPly, kCit) == kHostileRelation);
-        CHECK(rel.hostile(kPly, kCit));
-        CHECK(rel.at(kCit, kPly) == kHostileRelation);      // symmetric, both cells
-        // The payoff: the crowd now fights the player.
-        CHECK(bodies_hostile(rel, pool, pid, bystander));
 
-        // A MONSTER's kill is not diplomacy. Same victim shape, killer entity with no
-        // NpcRef on it: the matrix must not move.
+        // НЕЗАМЕЧЕННОЕ убийство — НОВЫЙ ЗАКОН: деяние в 60 м (за зрением 25 м
+        // и слухом kill 12 м) оставляет труп, но не дипломатию. Идеальное
+        // преступление возможно по построению.
         {
-            const std::int8_t before = rel.at(kPly, kLiq);
+            const std::int8_t before = rel.at(kPly, kCit);
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, home, 100, victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            deed_publish(bus, kVerbKill, player, victim,
+                         vec3{home.x + 60.0f, home.y, home.z}, 2u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 2u);
+            CHECK(wt.deeds == 1);
+            CHECK(wt.witnessed == 0);
+            CHECK(wt.changes == 0);
+            CHECK(rel.at(kPly, kCit) == before);
+            bus.clear();
+        }
+
+        // СТЕНА СКРЫВАЕТ: полная плоскость между деянием и свидетелем глушит
+        // и зрение (sub_march), и слух (skeleton_audible) — цены нет. Обе
+        // полярности одного закона восприятия на одном стенде.
+        {
+            for (int y = 0; y < kMacroDim; ++y)
+                for (int z = 0; z < kMacroDim; ++z)
+                    w.grid().fill_cell(15, y, z, kMatConcrete);
+            const std::int8_t before = rel.at(kPly, kCit);
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, home, 100, victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            // Деяние по ту сторону плоскости-клетки x=15 (деяние в клетке 10,
+            // свидетель в клетке 21 — стена ровно между).
+            const vec3 far{20.0f, home.y, home.z};
+            deed_publish(bus, kVerbKill, player, victim, far, 3u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 3u);
+            CHECK(wt.witnessed == 0);
+            CHECK(rel.at(kPly, kCit) == before);
+            bus.clear();
+            for (int y = 0; y < kMacroDim; ++y)
+                for (int z = 0; z < kMacroDim; ++z)
+                    w.grid().clear_cell(15, y, z);
+        }
+
+        // Убийство МОНСТРОМ — не дипломатия (актор без NpcRef).
+        {
+            const std::int8_t before = rel.at(kPly, kCit);
             Entity mob = reg.create();
             NpcId victim = 0;
             Entity v = make_body(reg, pool, Faction::Citizens, home, 100, victim);
             reg.destroy(v);
             pool.kill(victim);
-            bus.publish(EventType::NpcDied, victim, 0xFFu,
-                        static_cast<std::uint32_t>(entt::to_integral(mob)), 99u);
-            const RelationTick rt = relations_drain_deaths(rel, reg, pool, bus, 99u);
-            CHECK(rt.kills == 0);
-            CHECK(rt.changes == 0);
-            CHECK(rel.at(kPly, kLiq) == before);
-            CHECK(bus.cycle_count(EventType::RelationChanged) == 0);
+            deed_publish(bus, kVerbKill, mob, victim, home, 4u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 4u);
+            CHECK(wt.changes == 0);
+            CHECK(rel.at(kPly, kCit) == before);
             bus.clear();
         }
 
-        // A dead MOB (`a` == kInvalidNpc) is skipped before anything else is read.
-        bus.publish(EventType::NpcDied, kInvalidNpc, 7u, killer, 100u);
-        CHECK(relations_drain_deaths(rel, reg, pool, bus, 100u).kills == 0);
-        bus.clear();
-
-        // Killing your OWN row bends nothing. There is no pair to bend, and
-        // add_mutual on (r, r) would write the diagonal — the +100 that makes
-        // "nobody is hostile to themselves" true for every row.
+        // Свидетель ИЗ ФРАКЦИИ АКТОРА дипломатию не двигает (свои — прест-
+        // упление, не дипломатия); ТРЕТЬЯ фракция братоубийство судит.
         {
-            // Strip the player bit so the killer resolves to its body row and the two
-            // rows line up. (The victim cannot carry the bit: pool.kill clears it.)
             pool.set_player(pid, false);
             CHECK(rel_row(pool, pid) == kLiq);
-            const std::int8_t before = rel.at(kLiq, kLiq);
-            CHECK(before == 100);
+            const std::int8_t before = rel.at(kLiq, kCit);
             NpcId sameRow = 0;
-            Entity v = make_body(reg, pool, Faction::Liquidators, home, 100, sameRow);
+            Entity v = make_body(reg, pool, Faction::Liquidators, home, 100,
+                                 sameRow);
             reg.destroy(v);
             pool.kill(sameRow);
-            bus.publish(EventType::NpcDied, sameRow, 0xFFu, killer, 101u);
-            const RelationTick rt = relations_drain_deaths(rel, reg, pool, bus, 101u);
-            CHECK(rt.kills == 1);       // it counted as a killing...
-            CHECK(rt.changes == 0);     // ...that moved no pair
-            CHECK(rel.at(kLiq, kLiq) == 100);
+            deed_publish(bus, kVerbKill, player, sameRow, home, 5u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 5u);
+            // Горожанин-свидетель судит: жертва НЕ его фракции — базовая
+            // цена −10 без множителя жертвы.
+            CHECK(wt.changes == 1);
+            CHECK(rel.at(kLiq, kCit) == before - 10);
+            CHECK(rel.at(kLiq, kLiq) == 100); // диагональ не тронута
             pool.set_player(pid, true);
             bus.clear();
         }
 
-        // Rebirth. The player's row and column go back to authored; the world's own
-        // politics do not. Asserted against a matrix the DRAIN bent rather than a
-        // synthetic one — this is the state possess_a_survivor actually inherits.
-        rel.add_mutual(kCit, kLiq, -70);              // the world bends too
-        CHECK(rel.at(kCit, kLiq) == -20);
+        // Rebirth. The player's row and column go back to authored; the world's
+        // own politics do not.
+        rel.add_mutual(kCit, kLiq, -70);
         rel.reset_player_row_col();
         CHECK(rel.at(kPly, kCit) == 50);              // forgiven
-        CHECK(rel.at(kCit, kPly) == 50);
-        CHECK(rel.at(kCit, kLiq) == -20);             // remembered — the whole point
         CHECK(!bodies_hostile(rel, pool, pid, bystander));
     }
 

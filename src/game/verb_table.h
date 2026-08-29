@@ -23,9 +23,9 @@ using VerbId = std::uint8_t;
 inline constexpr VerbId kVerbSleep = 0;  // канон S13.5
 inline constexpr VerbId kVerbEat = 1;  // канон S13.5
 inline constexpr VerbId kVerbDrink = 2;  // реф npc_utility: жажда чуть острее голода
-inline constexpr VerbId kVerbToilet = 3;  // канон S13.5
+inline constexpr VerbId kVerbToilet = 3;  // канон S13.5; цена S19 — облегчение ВНЕ уместной комнаты (уместность зануляет)
 inline constexpr VerbId kVerbWork = 4;  // канон S13.5
-inline constexpr VerbId kVerbHeal = 5;  // реф: боль не терпит
+inline constexpr VerbId kVerbHeal = 5;  // реф: боль не терпит; цена S19 — лечение ДРУГОГО на глазах
 inline constexpr VerbId kVerbTrade = 6;  // реф NPC_UTILITY_INTENT_PATIENCE
 inline constexpr VerbId kVerbStore = 7;  // плановое дело — как работа
 inline constexpr VerbId kVerbSocial = 8;  // реф NPC_UTILITY_INTENT_PATIENCE
@@ -36,8 +36,11 @@ inline constexpr VerbId kVerbNest = 12;  // мобье: тяга домой ус
 inline constexpr VerbId kVerbHunt = 13;  // голод хищника
 inline constexpr VerbId kVerbHaul = 14;  // донести важнее прогулки но уступает угрозе
 inline constexpr VerbId kVerbProfit = 15;  // ценность — глагол (S12.3); шкала как у торговли
+inline constexpr VerbId kVerbStrike = 16;  // деяние S19; rel = kill/5 (пять ударов = цена убийства); patience не читается — деяние не хотят
+inline constexpr VerbId kVerbKill = 17;  // деяние S19; rel = прежний kKillRelationDelta — матрица гнётся как раньше но ТОЛЬКО при свидетеле
+inline constexpr VerbId kVerbRob = 18;  // деяние S19; rel = kill/2; продюсер — сделка без согласия (S14.2 при посадке)
 
-inline constexpr std::size_t kVerbCount = 16;
+inline constexpr std::size_t kVerbCount = 19;
 
 // Patience x1000 (S13.5), CSV column patience_e3.
 inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {
@@ -57,6 +60,125 @@ inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {
     500,  // hunt
     400,  // haul
     850,  // profit
+    1000,  // strike
+    1000,  // kill
+    1000,  // rob
+};
+
+// ЦЕНЫ ДЕЯНИЙ (CANON S19.2) — колонки CSV, кодоген как materials.csv:
+// базовая дельта матрицы фракций, дельта репутации комнаты, множитель
+// своей территории (свидетель из фракции собственника), множитель
+// своей жертвы (жертва из фракции свидетеля), радиус слышимости деяния
+// в метрах (0 = только видимое). Уместность (комната предлагает глагол)
+// зануляет цену ЦЕЛИКОМ — механика, не колонка (S19.1.3).
+inline constexpr std::int8_t kVerbRelDelta[kVerbCount] = {
+    0,  // sleep
+    0,  // eat
+    0,  // drink
+    -5,  // toilet
+    0,  // work
+    10,  // heal
+    0,  // trade
+    0,  // store
+    0,  // social
+    0,  // shelter
+    0,  // patrol
+    0,  // wander
+    0,  // nest
+    0,  // hunt
+    0,  // haul
+    0,  // profit
+    -2,  // strike
+    -10,  // kill
+    -5,  // rob
+};
+
+inline constexpr std::int16_t kVerbRepDelta[kVerbCount] = {
+    0,  // sleep
+    0,  // eat
+    0,  // drink
+    -8,  // toilet
+    0,  // work
+    6,  // heal
+    0,  // trade
+    0,  // store
+    0,  // social
+    0,  // shelter
+    0,  // patrol
+    0,  // wander
+    0,  // nest
+    0,  // hunt
+    0,  // haul
+    0,  // profit
+    -5,  // strike
+    -30,  // kill
+    -12,  // rob
+};
+
+inline constexpr std::uint16_t kVerbTurfMultE3[kVerbCount] = {
+    1000,  // sleep
+    1000,  // eat
+    1000,  // drink
+    1500,  // toilet
+    1000,  // work
+    1000,  // heal
+    1000,  // trade
+    1000,  // store
+    1000,  // social
+    1000,  // shelter
+    1000,  // patrol
+    1000,  // wander
+    1000,  // nest
+    1000,  // hunt
+    1000,  // haul
+    1000,  // profit
+    1500,  // strike
+    1500,  // kill
+    1500,  // rob
+};
+
+inline constexpr std::uint16_t kVerbVictimMultE3[kVerbCount] = {
+    1000,  // sleep
+    1000,  // eat
+    1000,  // drink
+    1000,  // toilet
+    1000,  // work
+    1500,  // heal
+    1000,  // trade
+    1000,  // store
+    1000,  // social
+    1000,  // shelter
+    1000,  // patrol
+    1000,  // wander
+    1000,  // nest
+    1000,  // hunt
+    1000,  // haul
+    1000,  // profit
+    1500,  // strike
+    1500,  // kill
+    1500,  // rob
+};
+
+inline constexpr std::uint8_t kVerbHearM[kVerbCount] = {
+    0,  // sleep
+    0,  // eat
+    0,  // drink
+    0,  // toilet
+    0,  // work
+    0,  // heal
+    0,  // trade
+    0,  // store
+    0,  // social
+    0,  // shelter
+    0,  // patrol
+    0,  // wander
+    0,  // nest
+    0,  // hunt
+    0,  // haul
+    0,  // profit
+    10,  // strike
+    12,  // kill
+    4,  // rob
 };
 
 // CSV tokens — for sibling generators' column names and debug output.
@@ -77,6 +199,9 @@ inline constexpr const char* kVerbIds[kVerbCount] = {
     "hunt",
     "haul",
     "profit",
+    "strike",
+    "kill",
+    "rob",
 };
 
 // Display names — text for the player, never a lookup key (S13.9).
@@ -97,6 +222,9 @@ inline constexpr const char* kVerbNames[kVerbCount] = {
     "охотиться",
     "нести добычу",
     "нажива",
+    "ударить",
+    "убить",
+    "обобрать",
 };
 
 } // namespace giga::game

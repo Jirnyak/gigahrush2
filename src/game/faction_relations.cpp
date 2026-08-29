@@ -386,56 +386,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
     return hits;
 }
 
-RelationTick relations_drain_deaths(FactionRelations& rel, const Registry& reg,
-                                   const NpcPool& pool, EventBus& bus,
-                                   std::uint64_t tick) {
-    RelationTick out;
-
-    // Snapshot the batch ONCE. The RelationChanged events published below land in
-    // the same ring, and re-reading size() each iteration would feed this loop its
-    // own output — an unbounded cascade in the worst case. The data pointer is
-    // stable across publish ([event_bus.h] events()), so holding it is safe.
-    const std::size_t n = bus.size();
-    const Event* batch = bus.events();
-
-    for (std::size_t i = 0; i < n; ++i) {
-        const Event& ev = batch[i];
-        if (ev.type != EventType::NpcDied) continue;
-        // `a` is kInvalidNpc when the dead thing had no record, i.e. a monster.
-        // A monster's death is not diplomacy.
-        const NpcId victim = ev.a;
-        if (!pool.valid(victim)) continue;
-
-        // `c` is an ENTITY id, not a pool id ([event_bus.h] NpcDied). entt keeps the
-        // version bits inside the integral form, so the cast round-trips and
-        // reg.valid() correctly rejects a handle that has since been recycled.
-        const Entity killer = static_cast<Entity>(ev.c);
-        if (killer == entt::null || !reg.valid(killer)) continue;
-        // No NpcRef means a monster (or a projectile's dead owner) did it. Only a
-        // person's kill moves the matrix. all_of + get<const T> rather than try_get,
-        // matching the const-Registry idiom hunt.cpp's nearest_prey already uses.
-        if (!reg.all_of<NpcRef>(killer)) continue;
-        const NpcId killerId = reg.get<const NpcRef>(killer).id;
-        if (!pool.valid(killerId)) continue;
-
-        ++out.kills;
-
-        const std::uint8_t rowK = rel_row(pool, killerId);
-        const std::uint8_t rowV = rel_row(pool, victim);
-        // Killing one of your own row is a crime, not a diplomatic incident: there
-        // is no pair to bend, and add_mutual on (r, r) would corrupt the +100
-        // diagonal the whole matrix relies on for "nobody is hostile to themselves".
-        if (rowK == rowV) continue;
-
-        const std::int8_t nv = rel.add_mutual(rowK, rowV, kKillRelationDelta);
-        ++out.changes;
-        out.lastA = rowK;
-        out.lastB = rowV;
-        out.lastValue = nv;
-        bus.publish(EventType::RelationChanged, rowK, rowV, pack_relation(nv),
-                    tick);
-    }
-    return out;
-}
+// relations_drain_deaths ВЫРЕЗАН (S19, 2026-08-29) — см. witness.cpp:
+// всевидящий потребитель NpcDied стал ценой глагола «убить» через свидетелей.
 
 } // namespace giga::game

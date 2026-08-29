@@ -312,6 +312,86 @@ void bake_ball(NoiseAcoustics& ac, const World& world, std::size_t slot,
 
 } // namespace
 
+bool skeleton_audible(const World& world, const vec3& from, const vec3& to,
+                      float radiusM) {
+    if (!(radiusM > 0.0f)) return false;
+    float limitM = radiusM;
+    if (limitM > kNoiseRadiusCap) limitM = kNoiseRadiusCap;
+    const int limit = static_cast<int>(limitM);
+    const int sx = wrap_macro(static_cast<int>(from.x / kCellSize));
+    const int sy = wrap_macro(static_cast<int>(from.y / kCellSize));
+    const int sz = wrap_macro(static_cast<int>(from.z / kCellSize));
+    const int tx = wrap_macro(static_cast<int>(to.x / kCellSize));
+    const int ty = wrap_macro(static_cast<int>(to.y / kCellSize));
+    const int tz = wrap_macro(static_cast<int>(to.z / kCellSize));
+    // Дельта цели на торе; за пределом флуда — не слышно без флуда.
+    auto wrapDelta = [](int a, int b) {
+        return ((b - a + kMacroDim / 2) & (kMacroDim - 1)) - kMacroDim / 2;
+    };
+    const int gx = wrapDelta(sx, tx);
+    const int gy = wrapDelta(sy, ty);
+    const int gz = wrapDelta(sz, tz);
+    if (gx < -kNoiseBallRadiusCells || gx > kNoiseBallRadiusCells ||
+        gy < -kNoiseBallRadiusCells || gy > kNoiseBallRadiusCells ||
+        gz < -kNoiseBallRadiusCells || gz > kNoiseBallRadiusCells)
+        return false;
+    if (gx == 0 && gy == 0 && gz == 0) return true;
+
+    // Тот же флуд, что bake_ball, но одноразовый (скретч на стеке байтами
+    // шара — 117 КБ, событие оплачивает) и с ранним выходом на цели.
+    static thread_local std::vector<std::uint8_t> dist;
+    static thread_local std::vector<std::int32_t> queue;
+    dist.assign(kNoiseBallCells, kNoiseUnreachable);
+    queue.clear();
+    const MacroGrid& g = world.grid();
+    auto pack = [](int dx, int dy, int dz) {
+        return ((dz + kNoiseBallRadiusCells) << 12) |
+               ((dy + kNoiseBallRadiusCells) << 6) |
+               (dx + kNoiseBallRadiusCells);
+    };
+    dist[ball_index(0, 0, 0)] = 0;
+    queue.push_back(pack(0, 0, 0));
+    std::size_t head = 0;
+    while (head < queue.size()) {
+        const int p = queue[head++];
+        const int dx = (p & 63) - kNoiseBallRadiusCells;
+        const int dy = ((p >> 6) & 63) - kNoiseBallRadiusCells;
+        const int dz = ((p >> 12) & 63) - kNoiseBallRadiusCells;
+        const int cand = dist[ball_index(dx, dy, dz)] +
+                         static_cast<int>(kCellSize);
+        if (cand > limit) continue;
+        const int x = wrap_macro(sx + dx);
+        const int y = wrap_macro(sy + dy);
+        const int z = wrap_macro(sz + dz);
+        struct Step { int ax, sxs, dxn, dyn, dzn; };
+        const Step steps[6] = {
+            {0, +1, dx + 1, dy, dz}, {0, -1, dx - 1, dy, dz},
+            {1, +1, dx, dy + 1, dz}, {1, -1, dx, dy - 1, dz},
+            {2, +1, dx, dy, dz + 1}, {2, -1, dx, dy, dz - 1},
+        };
+        for (const Step& s : steps) {
+            if (s.dxn < -kNoiseBallRadiusCells || s.dxn > kNoiseBallRadiusCells ||
+                s.dyn < -kNoiseBallRadiusCells || s.dyn > kNoiseBallRadiusCells ||
+                s.dzn < -kNoiseBallRadiusCells || s.dzn > kNoiseBallRadiusCells)
+                continue;
+            std::uint8_t& slotD = dist[ball_index(s.dxn, s.dyn, s.dzn)];
+            if (slotD != kNoiseUnreachable) continue;
+            const std::uint8_t clr =
+                s.sxs > 0 ? face_clearance_at(g, x, y, z, s.ax)
+                          : face_clearance_at(g, s.ax == 0 ? wrap_macro(x - 1) : x,
+                                              s.ax == 1 ? wrap_macro(y - 1) : y,
+                                              s.ax == 2 ? wrap_macro(z - 1) : z,
+                                              s.ax);
+            if (clr < 1) continue;
+            slotD = static_cast<std::uint8_t>(cand);
+            if (s.dxn == gx && s.dyn == gy && s.dzn == gz)
+                return true; // ранний выход: слушатель достигнут в пределе
+            queue.push_back(pack(s.dxn, s.dyn, s.dzn));
+        }
+    }
+    return false;
+}
+
 std::uint32_t noise_acoustics_step(NoiseAcoustics& ac, const NoiseField& field,
                                    const World& world, LayerId layer) {
     if (field.quiet()) return 0;

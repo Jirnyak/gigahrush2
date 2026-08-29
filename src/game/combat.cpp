@@ -16,6 +16,7 @@
 #include "game/mob_spawn.h"
 #include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
 #include "game/prop_table.h"  // PropId/PropDef — метательный заряд = проп
+#include "game/witness.h"     // deed_publish — убийство = деяние (S19)
 #include "sim/cell_bins.h"    // общий примитив клеточных бинов (§59.3)
 #include "sim/rigid.h"        // rigid_attach_sphere — граната = тело ядра
 #include "world/material_props.h" // kMatHardness — упругость/трение заряда
@@ -406,6 +407,14 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
         // an entity has vanished.
         bus.publish(EventType::NpcDied, victim, kind,
                     static_cast<std::uint32_t>(entt::to_integral(d.killer)), tick);
+        // ДЕЯНИЕ «убить» (S19): убийство ЧЕЛОВЕКА человеком — с местом, для
+        // свидетелей. Смерть монстра — не дипломатия (тот же гейт, что был у
+        // всевидящего relations_drain_deaths, теперь у продюсера). Цена и
+        // локализация — у потребителя witness_step; NpcDied остаётся
+        // бухгалтерией для остальных читателей.
+        if (pool.valid(victim) && d.killer != entt::null && reg.valid(d.killer))
+            if (const Transform* vt = reg.try_get<Transform>(e))
+                deed_publish(bus, kVerbKill, d.killer, victim, vt->pos, tick);
 
         // Player / camera holder entities are destroyed for body swapping
         if (reg.all_of<CameraTag>(e)) {

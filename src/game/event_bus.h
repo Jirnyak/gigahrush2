@@ -117,13 +117,21 @@ enum class EventType : std::uint16_t {
     // A prop fell out of the world and needs a GPU handoff.
     // a = pos.x, b = pos.y, c = pos.z
     PropDetached,
+    // ДЕЯНИЕ (CANON S19.1.1): поступок с потенциальной социальной ценой.
+    // `a` = актор как entt::to_integral (0 = никто), `b` = жертва NpcId
+    // (kInvalidNpc = нет жертвы), `c` = verb<<24 | cz<<16 | cy<<8 | cx —
+    // глагол деяния (verbs.csv, пятый стол) и макро-клетка места (u8 каждая).
+    // Деяние не знает о последствиях; цену считает потребитель-свидетель
+    // (witness_step) по таблице цен. Producers: finalize_deaths (kill),
+    // облегчение (toilet, main); strike/rob — при посадке своих швов.
+    Deed,
 };
 
 // How many EventType values there are, for the per-type tally arrays. The
-// static_assert is what keeps this honest: add a value past PropDetached and the
-// build stops here rather than silently dropping it out of every count.
-inline constexpr std::size_t kEventTypeCount = 8;
-static_assert(static_cast<std::size_t>(EventType::PropDetached) + 1 ==
+// static_assert is what keeps this honest: add a value past the last one and
+// the build stops here rather than silently dropping it out of every count.
+inline constexpr std::size_t kEventTypeCount = 9;
+static_assert(static_cast<std::size_t>(EventType::Deed) + 1 ==
                   kEventTypeCount,
               "kEventTypeCount must cover every EventType value");
 
