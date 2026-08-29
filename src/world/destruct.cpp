@@ -637,33 +637,6 @@ void judge_cells(World& w, SubField<CellType>* mats,
     }
 }
 
-// Судья от СИДОВ (S20.5, гигиена «сеять от изменения»): вместо пересуда
-// всех компонентов клетки судятся только компоненты, СОСЕДНИЕ с реально
-// изменёнными атомами (XOR масок на шве автомата). Ход автомата меняет
-// только подвижные биты — их опорные соседи и есть все кандидаты на
-// осиротение; остальная клетка не пересуживается.
-void judge_seed_atoms(World& w, SubField<CellType>* mats,
-                      const JudgeSeed* seeds, std::size_t n, CarveScratch& s,
-                      CarveResult& out) {
-    if (n == 0) return;
-    part_cache_reset(s);
-    VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2 + n * 2);
-    std::uint32_t run = 0;
-    for (std::size_t i = 0; i < n; ++i) {
-        const std::uint32_t ci = seeds[i].cell;
-        if (ci >= kMacroCells) continue;
-        for (int wi = 0; wi < 8; ++wi) {
-            std::uint64_t bits = seeds[i].changed[wi];
-            while (bits != 0) {
-                const int b = std::countr_zero(bits);
-                bits &= bits - 1;
-                judge_atom_neighbours(
-                    w, mats, vis, s, out, run, ci,
-                    static_cast<std::uint16_t>(wi * 64 + b), false);
-            }
-        }
-    }
-}
 
 void finalize_dirty(CarveResult& out) {
     std::sort(out.dirtyCells.begin(), out.dirtyCells.end());
@@ -873,17 +846,63 @@ std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
     return static_cast<std::int32_t>(out.detached.size());
 }
 
-std::int32_t detach_judge_seeds(World& w, const JudgeSeed* seeds,
-                                std::size_t n, CarveScratch& scratch,
-                                CarveResult& out) {
-    out.destroyed.clear();
-    out.detached.clear();
-    out.dirtyCells.clear();
-    SubField<CellType>* mats =
+void collect_mobile_support_cells(const World& w,
+                                  std::vector<std::uint32_t>& out) {
+    out.clear();
+    const SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
-    judge_seed_atoms(w, mats, seeds, n, scratch, out);
-    finalize_dirty(out);
-    return static_cast<std::int32_t>(out.detached.size());
+    // Плоский битсет пометок: клетка + 6 соседей, дубли гасятся даром.
+    static_assert(kMacroCells % 64 == 0, "битсет пометок словами");
+    std::vector<std::uint64_t> marked(kMacroCells / 64, 0);
+    auto mark = [&](int x, int y, int z) {
+        const std::size_t ci =
+            macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+        marked[ci >> 6] |= std::uint64_t{1} << (ci & 63u);
+    };
+    for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+        const SubMask& m = w.grid().masks()[ci];
+        bool mobile = false;
+        if (m.empty()) {
+            // Пустая маска = вся клетка типа только у материи сред (закон
+            // чтения) — это и есть однородная жидкость/газ.
+            mobile = material_is_medium(w.grid().types()[ci]);
+        } else if (mats && mats->paged(ci)) {
+            const CellType* pg = mats->page(ci);
+            for (int wi = 0; wi < 8 && !mobile; ++wi) {
+                std::uint64_t bits = m.words[wi];
+                while (bits != 0) {
+                    const int b = std::countr_zero(bits);
+                    bits &= bits - 1;
+                    const CellType mt = pg[wi * 64 + b];
+                    if (mt != kCellAir && !material_bears_load(mt)) {
+                        mobile = true;
+                        break;
+                    }
+                }
+            }
+        } else {
+            mobile = !material_bears_load(w.grid().types()[ci]);
+        }
+        if (!mobile) continue;
+        const int x = static_cast<int>(ci & 127u);
+        const int y = static_cast<int>((ci >> 7) & 127u);
+        const int z = static_cast<int>(ci >> 14);
+        mark(x, y, z);
+        mark(x + 1, y, z);
+        mark(x - 1, y, z);
+        mark(x, y + 1, z);
+        mark(x, y - 1, z);
+        mark(x, y, z + 1);
+        mark(x, y, z - 1);
+    }
+    for (std::uint32_t wi = 0; wi < kMacroCells / 64; ++wi) {
+        std::uint64_t bits = marked[wi];
+        while (bits != 0) {
+            const int b = std::countr_zero(bits);
+            bits &= bits - 1;
+            out.push_back(wi * 64 + static_cast<std::uint32_t>(b));
+        }
+    }
 }
 
 } // namespace giga

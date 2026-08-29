@@ -544,9 +544,9 @@ static void test_support_law() {
         CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 0);
     }
 
-    // СИД ОТ ИЗМЕНЕНИЯ (detach_judge_seeds): новый висюк на новой крошке;
-    // сид = XOR-бит самой крошки (так автомат и рапортует её ход) — судятся
-    // только опорные СОСЕДИ изменённого атома.
+    // ВХОДНАЯ РАЗВЁРТКА (collect_mobile_support_cells + судья): домен —
+    // клетки с подвижной материей и их соседи; новый висюк на новой крошке
+    // попадает в домен через клетку крошки и рыхлеет одним входным судом.
     {
         const int bD = sub_bit(6, 6, 0); // крошка
         const int bC = sub_bit(6, 6, 1); // висюк
@@ -555,19 +555,25 @@ static void test_support_law() {
         pg[bC] = kMatParquet;
         w.grid().mask(cx, cy, cz).set(bD);
         w.grid().mask(cx, cy, cz).set(bC);
-        JudgeSeed sd{};
-        sd.cell = cell32;
-        sd.changed[bD >> 6] = std::uint64_t{1} << (bD & 63);
-        CHECK(detach_judge_seeds(w, &sd, 1, scratch, res) == 1);
+        std::vector<std::uint32_t> domain;
+        collect_mobile_support_cells(w, domain);
+        // Клетка крошки и все 6 её соседей в домене.
+        auto in_domain = [&](std::uint32_t c) {
+            return std::find(domain.begin(), domain.end(), c) != domain.end();
+        };
+        CHECK(in_domain(cell32));
+        CHECK(in_domain(static_cast<std::uint32_t>(
+            macro_index(cx - 1, cy, cz))));
+        CHECK(in_domain(static_cast<std::uint32_t>(
+            macro_index(cx, cy, cz + 1))));
+        CHECK(detach_judge_cells(w, domain.data(), domain.size(), scratch,
+                                 res) == 1);
         CHECK(sub_material_at(w, cx, cy, cz, 6, 6, 1) ==
               material_rubble_of(kMatParquet));
-        // Обратная полярность сида: изменение в дальнем пустом углу клетки
-        // никого не судит — «сеять от изменения» не пересуживает клетку.
-        JudgeSeed far{};
-        far.cell = cell32;
-        far.changed[sub_bit(0, 0, 7) >> 6] = std::uint64_t{1}
-                                             << (sub_bit(0, 0, 7) & 63);
-        CHECK(detach_judge_seeds(w, &far, 1, scratch, res) == 0);
+        // Идемпотентность входа: повторная развёртка — ноль конверсий.
+        collect_mobile_support_cells(w, domain);
+        CHECK(detach_judge_cells(w, domain.data(), domain.size(), scratch,
+                                 res) == 0);
     }
 
     // ЯКОРЬ (S20.2): колонка, стоящая на рыхлом, мертва для World-пробы;

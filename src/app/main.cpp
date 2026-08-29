@@ -3832,10 +3832,42 @@ int main(int argc, char** argv) {
                                      "medium woken on layer switch\n",
                                      wet.size());
                     }
+                    // ВХОДНАЯ РАЗВЁРТКА СУДЬИ (S20.5): единственный момент,
+                    // когда судья бегает по среде. Автомат двигает только
+                    // подвижную материю, а подвижное — не опора, значит ход
+                    // автомата не может осиротить статику ПО ПОСТРОЕНИЮ —
+                    // покадровый судья на изменениях масок был выброшен как
+                    // избыточный (и дорогой: 27k бюджетных флудов за 2000
+                    // кадров на floor 0). Остаются легаси-висяки старых
+                    // миров «статик на куче» — их снимает один суд клеток с
+                    // подвижной материей и их соседей на активации этажа.
+                    {
+                        static std::vector<std::uint32_t> mobileCells;
+                        collect_mobile_support_cells(mw, mobileCells);
+                        if (!mobileCells.empty()) {
+                            static CarveScratch judgeScratch;
+                            static CarveResult judgeResult;
+                            const std::int32_t judged = detach_judge_cells(
+                                mw, mobileCells.data(), mobileCells.size(),
+                                judgeScratch, judgeResult);
+                            std::fprintf(stderr,
+                                         "[judge] entry sweep: %zu cells, "
+                                         "%d converted\n",
+                                         mobileCells.size(), judged);
+                            if (judged > 0) {
+                                voxelMirror.mark_dirty(
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size());
+                                mediumPass.wake_cells(
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size(), mw,
+                                    voxelMirror);
+                            }
+                        }
+                    }
                 }
             }
-            static std::vector<gpu::GpuMediumPass::ChangedMask>
-                mediumMaskChanged;
+            static std::vector<std::uint32_t> mediumMaskChanged;
             mediumMaskChanged.clear();
             const auto ctMedA = std::chrono::steady_clock::now();
             mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
@@ -3847,98 +3879,16 @@ int main(int argc, char** argv) {
             // Маски обломков (инкремент 5) едут с материей: изменённые
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
-            if (!mediumMaskChanged.empty()) {
-                static std::vector<std::uint32_t> changedCis;
-                changedCis.clear();
-                for (const auto& cm : mediumMaskChanged)
-                    changedCis.push_back(cm.ci);
+            if (!mediumMaskChanged.empty())
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                       changedCis.data(), changedCis.size());
-            }
-            // СУДЬЯ СВЯЗНОСТИ — ПОСЛЕ ОСАДКИ (§60/§61-семья, «висящие
-            // атомы»; v2 2026-08-26: судить В ПОЛЁТЕ нельзя — вердикты идут
-            // из CPU-канона, отстающего от GPU на кольцо шва, и конверсия
-            // дёргала падающий атом назад — глитч, пойманный владельцем).
-            // Клетка судится, когда её маски ПЕРЕСТАЛИ меняться: изменение
-            // ставит/обновляет штамп, суд — по тишине в kJudgeQuietFrames.
-            // Вывод срока: сон автомата 16 подтиков ~ 4 кадра + глубина
-            // кольца шва 3 = 7, округлено до 8. Связность судят у покоя,
-            // не у полёта — и по смыслу, и по механике шва.
-            {
-                constexpr std::uint32_t kJudgeQuietFrames = 8;
-                struct PendingJudge {
-                    std::uint32_t frame = 0;
-                    std::uint64_t bits[8] = {};
-                };
-                static std::unordered_map<std::uint32_t, PendingJudge>
-                    judgePending;
-                static std::uint32_t judgeFrame = 0;
-                // СЛОЙ — ЧАСТЬ КЛЮЧА ДОЗРЕВАНИЯ (S20.4): клетки, помеченные
-                // на этаже A, не должны дозреть и судиться на мире этажа B —
-                // совпадение macro_index между этажами не совпадение места.
-                static LayerId judgeLayer = static_cast<LayerId>(~0u);
-                if (judgeLayer != activeLayer) {
-                    judgeLayer = activeLayer;
-                    judgePending.clear();
-                }
-                ++judgeFrame;
-                // XOR изменённых битов копится за окно тишины: судья сеет
-                // от ИЗМЕНЕНИЯ (S20.5), а не пересуживает всю клетку.
-                for (const auto& cm : mediumMaskChanged) {
-                    PendingJudge& p = judgePending[cm.ci];
-                    p.frame = judgeFrame;
-                    for (int b = 0; b < 8; ++b) p.bits[b] |= cm.bits[b];
-                }
-                if (!judgePending.empty()) {
-                    static std::vector<JudgeSeed> ripe;
-                    ripe.clear();
-                    for (auto it = judgePending.begin();
-                         it != judgePending.end();) {
-                        if (judgeFrame - it->second.frame >=
-                            kJudgeQuietFrames) {
-                            JudgeSeed sd;
-                            sd.cell = it->first;
-                            std::memcpy(sd.changed, it->second.bits,
-                                        sizeof sd.changed);
-                            ripe.push_back(sd);
-                            it = judgePending.erase(it);
-                        } else {
-                            ++it;
-                        }
-                    }
-                    if (!ripe.empty()) {
-                        static CarveScratch judgeScratch;
-                        static CarveResult judgeResult;
-                        const std::int32_t judged = detach_judge_seeds(
-                            stack.layer(activeLayer), ripe.data(),
-                            ripe.size(), judgeScratch, judgeResult);
-                        // Диагностика причины «куч дебриса у лестниц»
-                        // (владелец 2026-08-28): КТО судится и ЧТО рушится.
-                        static std::uint32_t judgeSaid = 0;
-                        if (judged > 0 && judgeSaid < 12) {
-                            ++judgeSaid;
-                            const std::uint32_t c0 = ripe[0].cell;
-                            std::fprintf(
-                                stderr,
-                                "[judge] medium-mask verdict: %u cells ripe, "
-                                "%d converted; first cell (%u,%u,%u)\n",
-                                static_cast<unsigned>(ripe.size()), judged,
-                                c0 % kMacroDim, (c0 / kMacroDim) % kMacroDim,
-                                c0 / (kMacroDim * kMacroDim));
-                        }
-                        if (judged > 0) {
-                            voxelMirror.mark_dirty(
-                                judgeResult.dirtyCells.data(),
-                                judgeResult.dirtyCells.size());
-                            if (mediumPass.ready())
-                                mediumPass.wake_cells(
-                                    judgeResult.dirtyCells.data(),
-                                    judgeResult.dirtyCells.size(),
-                                    stack.layer(activeLayer), voxelMirror);
-                        }
-                    }
-                }
-            }
+                                       mediumMaskChanged.data(),
+                                       mediumMaskChanged.size());
+            // Покадрового судьи связности на изменениях масок БОЛЬШЕ НЕТ
+            // (S20.5, замер 2026-08-29): автомат двигает только подвижную
+            // материю, подвижное — не опора, значит ход автомата не может
+            // осиротить статику по построению. Легаси-висяки снимает
+            // входная развёртка на активации этажа (блок будильника выше);
+            // писатели статики (карв, дверь) судят своими развёртками.
             // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
             // (GPU-резидентная петля, решение владельца 2026-08-24).
         }

@@ -668,7 +668,11 @@ if(GIGA_BUILD_TESTS)
         # полярности (мост-бетон против моста-крошки), сид от изменения
         # (detach_judge_seeds), якорь на рыхлом мёртв World-пробой — мутация
         # material_bears_load в обе стороны даёт 10 красных = 23573.
-        PASS_REGULAR_EXPRESSION "23573/23573 checks passed"
+        # 23573 + 3 on 2026-08-29 (той же сессией): судья стал СОБЫТИЙНЫМ —
+        # ход автомата не может осиротить статику по S20.5; входная
+        # развёртка = collect_mobile_support_cells (домен: подвижное + 6
+        # соседей) + идемпотентность входа = 23576.
+        PASS_REGULAR_EXPRESSION "23576/23576 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

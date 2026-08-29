@@ -357,7 +357,7 @@ void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
 }
 
 void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
-                                   std::vector<ChangedMask>* changedMasks) {
+                                   std::vector<std::uint32_t>* changedMasks) {
     if (!ready() || !pageBack_.mapped || !maskBack_.mapped ||
         !listBack_.mapped)
         return;
@@ -487,18 +487,8 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             medium_recount(world, ci, pg);
         }
         if (!maskSame) {
-            if (changedMasks) {
-                // XOR до перезаписи: какие именно атомы пришли/ушли — сид
-                // судьи связности (S20.5 «сеять от изменения»).
-                ChangedMask cm;
-                cm.ci = ci;
-                std::uint64_t nw[8];
-                std::memcpy(nw, nm, sizeof nw);
-                for (int b2 = 0; b2 < 8; ++b2)
-                    cm.bits[b2] = m.words[b2] ^ nw[b2];
-                changedMasks->push_back(cm);
-            }
             std::memcpy(m.words, nm, kMaskBytesBack);
+            if (changedMasks) changedMasks->push_back(ci);
         }
     }
     // ФРОНТИР СТРОИТСЯ ВПЕРЁД МАТЕРИИ (закон владельца 2026-08-27: «в игре
