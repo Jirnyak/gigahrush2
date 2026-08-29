@@ -943,4 +943,42 @@ void rigid_attach_box(Registry& reg, Entity e, vec3 half, float massKg,
     if (!reg.all_of<SelfIntegrating>(e)) reg.emplace<SelfIntegrating>(e);
 }
 
+std::uint32_t rigid_wake_dirty_cells(Registry& reg, LayerId layer,
+                                     const std::uint32_t* cells,
+                                     std::size_t n) {
+    if (cells == nullptr || n == 0) return 0;
+    // Обход инвертирован против бинов: спящих тел обычно немного, а
+    // dirty-список бывает большим (шов автомата) — дешевле спросить 27
+    // соседей каждого спящего у хеш-набора, чем биновать dirty.
+    static thread_local std::vector<std::uint32_t> dirtySorted;
+    dirtySorted.assign(cells, cells + n);
+    std::sort(dirtySorted.begin(), dirtySorted.end());
+    auto in_dirty = [&](std::uint32_t key) {
+        return std::binary_search(dirtySorted.begin(), dirtySorted.end(), key);
+    };
+    std::uint32_t woken = 0;
+    auto view = reg.view<Transform, RigidBody>();
+    for (auto e : view) {
+        auto& rb = view.get<RigidBody>(e);
+        if (!rb.asleep) continue;
+        const auto& tr = view.get<Transform>(e);
+        if (tr.layer != layer) continue;
+        const int cx = cell_coord(tr.pos.x);
+        const int cy = cell_coord(tr.pos.y);
+        const int cz = cell_coord(tr.pos.z);
+        bool hit = false;
+        for (int dz = -1; dz <= 1 && !hit; ++dz)
+            for (int dy = -1; dy <= 1 && !hit; ++dy)
+                for (int dx = -1; dx <= 1 && !hit; ++dx)
+                    hit = in_dirty(static_cast<std::uint32_t>(macro_index(
+                        wrap_macro(cx + dx), wrap_macro(cy + dy),
+                        wrap_macro(cz + dz))));
+        if (!hit) continue;
+        rb.asleep = false;
+        rb.sleepTicks = 0;
+        ++woken;
+    }
+    return woken;
+}
+
 } // namespace giga

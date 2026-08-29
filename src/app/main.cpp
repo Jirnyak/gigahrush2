@@ -3862,6 +3862,24 @@ int main(int argc, char** argv) {
                                     judgeResult.dirtyCells.data(),
                                     judgeResult.dirtyCells.size(), mw,
                                     voxelMirror);
+                                // Конверсия — писатель (S20.4): маска стоит,
+                                // но МАТЕРИАЛ сменился на подвижный — якоря
+                                // на конвертированном мертвы World-пробой,
+                                // антураж и спящие тела платят тот же долг.
+                                // Нав не трогаем: проходимость — от масок,
+                                // они не менялись.
+                                if (game::anchor_validate_step(
+                                        reg, mw, activeLayer, bus,
+                                        judgeResult.dirtyCells,
+                                        &particleBursts, 0x5EEDBEEFu) > 0)
+                                    propPassNeedsRebuild = true;
+                                if (antourage_carve_step_here(
+                                        judgeResult.dirtyCells, 0x5EEDBEEFu))
+                                    dressingSetChanged = true;
+                                rigid_wake_dirty_cells(
+                                    reg, activeLayer,
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size());
                             }
                         }
                     }
@@ -3879,10 +3897,19 @@ int main(int argc, char** argv) {
             // Маски обломков (инкремент 5) едут с материей: изменённые
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
-            if (!mediumMaskChanged.empty())
+            if (!mediumMaskChanged.empty()) {
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(),
                                        mediumMaskChanged.data(),
                                        mediumMaskChanged.size());
+                // Из якорного долга автомату остаётся ТОЛЬКО пробуждение
+                // тел (S20.4-уточнение): подвижное — не опора (S20.5), так
+                // что ход автомата не рвёт ни якоря, ни антураж по
+                // построению; но ТЕЛО честно лежит и на куче — куча уехала,
+                // спящий труп обязан проснуться и упасть.
+                rigid_wake_dirty_cells(reg, activeLayer,
+                                       mediumMaskChanged.data(),
+                                       mediumMaskChanged.size());
+            }
             // Покадрового судьи связности на изменениях масок БОЛЬШЕ НЕТ
             // (S20.5, замер 2026-08-29): автомат двигает только подвижную
             // материю, подвижное — не опора, значит ход автомата не может
@@ -5284,11 +5311,17 @@ int main(int argc, char** argv) {
                     // Пропы на срезанных якорях падают ([jirnyak.md] §18).
                     ct0 = std::chrono::steady_clock::now();
                     if (game::anchor_validate_step(
-                            reg, stack.layer(activeLayer), bus,
+                            reg, stack.layer(activeLayer), activeLayer, bus,
                             carveResult.dirtyCells, &particleBursts,
                             seed) > 0) {
                         propPassNeedsRebuild = true;
                     }
+                    // Спящие тела над срезанной опорой просыпаются — долг
+                    // писателя (S20.4): труп на плите падает вместе с ней,
+                    // а не висит до первого толчка.
+                    rigid_wake_dirty_cells(reg, activeLayer,
+                                           carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
                     g_carveT.anchorMs += carve_ms_since(ct0);
                     // Запечённое убранство отвечает тому же взрыву;
                     // dressingSetChanged взводится — иначе GPU симулирует
@@ -8023,6 +8056,16 @@ int main(int argc, char** argv) {
                                       stack.layer(activeLayer), voxelMirror);
             if (antourage_carve_step_here(doorDirty, 0xD00Du))
                 dressingSetChanged = true;
+            // ДОЛГ ПИСАТЕЛЯ ОДИН И ПОЛНЫЙ (S20.4): дверь — писатель статики,
+            // как карв. Раньше она рвала антураж, но НЕ пропы и не будила
+            // тела — проп на атомах полотна висел после открытия, вопреки
+            // контракту prop_system.h («whatever emptied these cells»).
+            if (game::anchor_validate_step(reg, stack.layer(activeLayer),
+                                           activeLayer, bus, doorDirty,
+                                           &particleBursts, 0xD00Du) > 0)
+                propPassNeedsRebuild = true;
+            rigid_wake_dirty_cells(reg, activeLayer, doorDirty.data(),
+                                   doorDirty.size());
             doorDirty.clear();
         }
 

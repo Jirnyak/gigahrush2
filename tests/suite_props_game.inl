@@ -384,7 +384,7 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(10, 4, 10))};
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
 
     CHECK(!reg.all_of<game::StaticPropTag>(e));
     CHECK(!reg.all_of<game::SubVoxelAnchor>(e));
@@ -409,6 +409,7 @@ static void test_world_anchored_link_severed_by_carve() {
     World world;
     EventBus bus;
     bus.init();
+    const LayerId layer = 2; // слой шара — валидатор фильтрует по нему
 
     // Потолок и шар на подвесе под ним.
     world.grid().fill_cell(10, 4, 10, kMatConcrete);
@@ -435,14 +436,14 @@ static void test_world_anchored_link_severed_by_carve() {
     // Полярность 1: dirty ЧУЖОЙ клетки — линк жив.
     const std::vector<std::uint32_t> dirtyOther{
         static_cast<std::uint32_t>(macro_index(11, 4, 10))};
-    game::anchor_validate_step(reg, world, bus, dirtyOther);
+    game::anchor_validate_step(reg, world, layer, bus, dirtyOther);
     CHECK(reg.valid(link));
 
     // Полярность 2: опора выкарвлена — линк уничтожен, шар разбужен.
     world.grid().clear_cell(10, 4, 10);
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(10, 4, 10))};
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
     CHECK(!reg.valid(link));
     CHECK(!reg.get<RigidBody>(ball).asleep);
 }
@@ -487,7 +488,7 @@ static void test_anchor_column_probe_both_polarities() {
     world.grid().mask(10, 4, 10).clear(sub_bit(0, 0, 7));
     world.grid().mask(10, 4, 10).clear(sub_bit(4, 4, 0));
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
     CHECK(reg.all_of<game::StaticPropTag>(e));
     CHECK(reg.all_of<game::SubVoxelAnchor>(e));
 
@@ -499,7 +500,7 @@ static void test_anchor_column_probe_both_polarities() {
             for (int sx = 4; sx <= 5; ++sx)
                 world.grid().mask(10, 4, 10).clear(sub_bit(sx, sy, sz));
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
     CHECK(!reg.all_of<game::StaticPropTag>(e));
     CHECK(reg.all_of<game::DynamicBodyTag>(e));
     CHECK(bus.cycle_count(EventType::PropDetached) > 0u);
@@ -532,7 +533,7 @@ static void test_anchor_validate_skips_solid_support() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(3, 2, 3))};
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
     CHECK(reg.all_of<game::StaticPropTag>(e));
     CHECK(reg.all_of<game::SubVoxelAnchor>(e));
     CHECK(!reg.all_of<Velocity>(e));
@@ -703,7 +704,7 @@ static void test_detached_prop_is_rigid_body() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(7, 3, 7))};
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
 
     CHECK(!reg.all_of<game::StaticPropTag>(e));
     CHECK(reg.all_of<game::DynamicBodyTag>(e));
@@ -841,7 +842,7 @@ static void test_collect_static_prop_mesh_instances_shapes() {
         bus.init();
         const std::vector<std::uint32_t> dirty{
             static_cast<std::uint32_t>(macro_index(a.cx, a.cy, a.cz))};
-        game::anchor_validate_step(reg, world, bus, dirty);
+        game::anchor_validate_step(reg, world, layer, bus, dirty);
         // Лампы — GpuHandoff (data/props.csv, решение 2026-08-18): detach
         // уносит сущность целиком в GPU-burst, а не переводит в
         // DynamicBodyTag, как делал прежний RagdollRoll этих строк.
@@ -1015,7 +1016,7 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     // silence was the half of the bug that outlived the CPU-debris half.
     game::ParticleBurstQueue bursts;
     const std::uint32_t detached =
-        game::anchor_validate_step(reg, world, bus, dirty, &bursts, 77u);
+        game::anchor_validate_step(reg, world, layer, bus, dirty, &bursts, 77u);
     CHECK(detached == 1u);
     CHECK(bursts.count == 1u);
     CHECK(bursts.items[0].count > 0u);
@@ -1024,7 +1025,7 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     CHECK(bursts.items[0].pos.x == pos.x && bursts.items[0].pos.z == pos.z);
     // ...and the queue stays untouched when the caller does not offer one
     // (headless sim, tests, a server with no renderer).
-    CHECK(game::anchor_validate_step(reg, world, bus, dirty) == 0u);
+    CHECK(game::anchor_validate_step(reg, world, layer, bus, dirty) == 0u);
     CHECK(!reg.valid(e)); // parent destroyed
     {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
@@ -1275,7 +1276,73 @@ static void test_sim_owned_terminals_seed_and_interact() {
            nWall, terms.size(), shields.size());
 }
 
+// S20.4: слой — часть ключа dirty-вопроса. Совпадение macro_index между
+// этажами — не совпадение места: карв этажа A не роняет проп этажа B. Обе
+// полярности: чужой слой не трогает даже мёртвую опору, свой — рвёт.
+static void test_anchor_validate_layer_filter() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2;
+    world.grid().fill_cell(12, 5, 12, kMatConcrete);
+    game::SubVoxelAnchor a{};
+    a.cx = 12; a.cy = 5; a.cz = 12;
+    a.subX = 4; a.subY = 4; a.subZ = 7;
+    a.face = anchor_face_pack(2, 1);
+    const vec3 pos{12.5f * kCellSize, 5.5f * kCellSize, 13.2f * kCellSize};
+    const auto e = game::spawn_prop(reg, world, pos, a,
+                                    game::Interactable::Kind::Terminal,
+                                    game::PropFallMode::SimpleFall,
+                                    vec3{0.3f, 0.3f, 0.3f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    world.grid().clear_cell(12, 5, 12); // опора умерла
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(12, 5, 12))};
+    // Писатель ЧУЖОГО слоя: проп стоит, хоть опора и мертва.
+    game::anchor_validate_step(reg, world, layer + 1, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    // Писатель СВОЕГО слоя: детач.
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+}
+
+// S20.4: спящее тело будит ПИСАТЕЛЬ, изменивший опору, — иначе труп над
+// выкарвленной плитой висит в воздухе до первого толчка (единственный
+// прочий путь пробуждения — запись Velocity). Обе полярности: дальняя
+// dirty-клетка не будит, клетка-сосед опоры — будит; чужой слой — нет.
+static void test_writer_wakes_sleeping_bodies() {
+    Registry reg;
+    const LayerId layer = 2;
+    Entity b = reg.create();
+    reg.emplace<Transform>(
+        b, Transform{vec3{20.5f * kCellSize, 20.5f * kCellSize,
+                          21.2f * kCellSize},
+                     layer});
+    RigidBody rb;
+    rb.asleep = true;
+    reg.emplace<RigidBody>(b, rb);
+    // Дальняя клетка — спит.
+    const std::vector<std::uint32_t> far{
+        static_cast<std::uint32_t>(macro_index(50, 50, 50))};
+    CHECK(rigid_wake_dirty_cells(reg, layer, far.data(), far.size()) == 0u);
+    CHECK(reg.get<RigidBody>(b).asleep);
+    // Опора под телом, но ЧУЖОЙ слой — спит (S20.4: слой в ключе).
+    const std::vector<std::uint32_t> under{
+        static_cast<std::uint32_t>(macro_index(20, 20, 20))};
+    CHECK(rigid_wake_dirty_cells(reg, layer + 1, under.data(),
+                                 under.size()) == 0u);
+    CHECK(reg.get<RigidBody>(b).asleep);
+    // Свой слой — проснулся.
+    CHECK(rigid_wake_dirty_cells(reg, layer, under.data(), under.size()) ==
+          1u);
+    CHECK(!reg.get<RigidBody>(b).asleep);
+}
+
 void test_props_game_all() {
+    test_anchor_validate_layer_filter();
+    test_writer_wakes_sleeping_bodies();
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
     test_ceiling_lights_seed_and_collect();

@@ -252,10 +252,85 @@ void lift_dressing_and_reference() {
     CHECK(found == 4);
 }
 
+// S20.4 «долг писателя один и полный»: дверь — писатель статики, как карв.
+// Проп, заякоренный к атомам ЗАКРЫТОГО полотна, обязан отвалиться при
+// открытии — та же anchor_validate_step на DoorSet::dirtyCells, которой
+// платит карв (в main дверной дренаж зовёт её теперь же). Обе полярности:
+// на закрытом полотне проп живёт, открытие — рвёт.
+void door_open_rips_anchored_prop() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    Registry reg;
+    EventBus bus;
+    bus.init();
+    std::vector<std::uint32_t> dirty;
+    std::uint32_t id = kNoPortal;
+    for (std::uint32_t i = 0; i < d.list.size(); ++i)
+        if (!d.list[i].mechanism && !door_closed(w, d.list[i])) {
+            id = i;
+            break;
+        }
+    CHECK(id != kNoPortal);
+    const MaskGroup& p = d.list[id];
+    // Клетка ЧИСТОГО проёма (маска пуста до закрытия): после открытия в
+    // ней гарантированно не останется несущей материи — проба якоря умрёт
+    // именно от снятия полотна, а не случайно выживет на коробке.
+    std::uint32_t ci = 0xFFFFFFFFu;
+    for (const MaskCell& mc : p.cells)
+        if (w.grid().masks()[mc.ci].empty()) {
+            ci = mc.ci;
+            break;
+        }
+    CHECK(ci != 0xFFFFFFFFu);
+    CHECK(door_toggle_near(w, d, reg, 0, p.centre, dirty) == id);
+    CHECK(door_closed(w, p));
+    game::SubVoxelAnchor a{};
+    a.cx = static_cast<int>(ci & 127u);
+    a.cy = static_cast<int>((ci >> 7) & 127u);
+    a.cz = static_cast<int>(ci >> 14);
+    a.subX = 4; a.subY = 4; a.subZ = 4;
+    bool anchored = false;
+    for (std::uint8_t f = 0; f < 6 && !anchored; ++f) {
+        const AnchorUV uv = anchor_face_uv(f, a.subX, a.subY, a.subZ);
+        if (anchor_alive(w, a.cx, a.cy, a.cz, f, uv.u, uv.v)) {
+            a.face = f;
+            anchored = true;
+        }
+    }
+    CHECK(anchored);
+    const vec3 pos{(static_cast<float>(a.cx) + 0.5f) * kCellSize,
+                   (static_cast<float>(a.cy) + 0.5f) * kCellSize,
+                   (static_cast<float>(a.cz) + 0.5f) * kCellSize};
+    const auto prop = game::spawn_prop(reg, w, pos, a,
+                                       game::Interactable::Kind::Terminal,
+                                       game::PropFallMode::SimpleFall,
+                                       vec3{0.3f, 0.3f, 0.3f},
+                                       /*meshKind*/0, /*layer*/0);
+    CHECK(reg.valid(prop));
+    CHECK(reg.all_of<game::StaticPropTag>(prop));
+
+    // Полярность «закрыто»: дренаж закрытия проп не трогает.
+    game::anchor_validate_step(reg, w, /*layer*/0, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(prop));
+
+    // Открытие: свои биты сняты — проп на полотне отваливается тем же
+    // валидатором, что у карва.
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, p.centre, dirty) == id);
+    CHECK(!door_closed(w, p));
+    game::anchor_validate_step(reg, w, /*layer*/0, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(prop));
+}
+
 } // namespace doors_test
 
 static void test_doors_all() {
     doors_test::declaration_and_toggle();
+    doors_test::door_open_rips_anchored_prop();
     doors_test::snapshot_carries_closed_door();
     doors_test::focus_aims_at_a_real_door();
     doors_test::arbitrary_shape_door();

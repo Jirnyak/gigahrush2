@@ -1440,7 +1440,11 @@ if(GIGA_BUILD_TESTS)
     # таксономии: suite_rooms целиком (эрранды/сиденья/мебель/регенерация на
     # flow-полях), зонные половины walkbits/budgets/needs/rebake, пины
     # roomMask/stride. Наследники живут: suite_rooms_object + body-оракул.
-        PASS_REGULAR_EXPRESSION "game_test: 222869 checks, 0 failures")
+    # 222869 + 20 on 2026-08-29: ДОЛГ ПИСАТЕЛЯ S20.4 (skeleton-anchor B) —
+    # дверь рвёт проп на полотне (обе полярности, клетка чистого проёма),
+    # спящее тело будится своим слоем и не будится чужим/дальним,
+    # межслойный фильтр валидатора обеими полярностями = 222889.
+        PASS_REGULAR_EXPRESSION "game_test: 222889 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -375,7 +375,8 @@ void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus) {
                        vec3{0.0f, 0.0f, 0.1f}, pos, color, 0, bus, nullptr, 1u);
 }
 
-std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+std::uint32_t anchor_validate_step(Registry& reg, const World& world,
+                                   LayerId layer, EventBus& bus,
                                    const std::vector<std::uint32_t>& dirtyCells,
                                    ParticleBurstQueue* bursts, std::uint32_t seed)
 {
@@ -389,46 +390,59 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
     static thread_local std::vector<PendingDetachedProp> detached;
     detached.clear();
 
+    // Пропы — через персистентные AnchorBins точными бакетами dirty-клеток
+    // (§59.2-семья: полный view на каждый карв — тот же класс, что чинили
+    // для снарядов). Ключ бина СЛОЙНЫЙ: якорь чужого резидентного этажа с
+    // совпавшим macro_index не кандидат — прежний бесслойный проход ронял
+    // проп этажа B карвом этажа A (S20.4: слой — часть ключа).
+    AnchorBins& ab = anchor_bins(reg);
+    if (ab.dirty) rebuild_anchor_bins(reg, ab);
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
-    for (auto entity : view) {
-        const auto& anchor = view.get<SubVoxelAnchor>(entity);
-
-        const int cx = wrap_macro(anchor.cx);
-        const int cy = wrap_macro(anchor.cy);
-        const int cz = wrap_macro(anchor.cz);
-        const std::uint32_t key =
-            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
-
-        if (!dirtySet.contains(key)) continue;
-
-        // Опора потеряна, когда умерла КОЛОНКА субвокселей у грани крепления
-        // ([world/anchor.h] anchor_alive, окно 2×2 в точке крепления) — тот же
-        // вопрос, что у антуража, второй пробы больше нет (S11). Прежний тест
-        // одного бита из 512 врал в обе стороны: потолок выкарвлен вокруг
-        // лампы, а её бит цел — висит на игле; и жизнь вещи была привязана к
-        // точке, которой игрок не видит (S2).
-        const AnchorUV uv =
-            anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
-        if (!anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
-            const auto& tr = view.get<Transform>(entity);
-            vec3 col = reg.all_of<Renderable>(entity)
-                           ? reg.get<Renderable>(entity).color
-                           : vec3{0.8f, 0.8f, 0.8f};
-            std::uint32_t mk = 0;
-            if (reg.all_of<PropMesh>(entity))
-                mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
-            // Направление отрыва = НОРМАЛЬ ГРАНИ крепления (от опоры к вещи)
-            // — face наконец читается, как S10 и требовал; провис дальше
-            // делает гравитация (S1: геометрия — фрейм, сила — провис). Так
-            // уже жил антураж. Прежний толчок «против гравитации» пинал
-            // потолочную лампу ВВЕРХ — в только что выкарванный потолок.
-            const int fAxis = anchor_face_axis(anchor.face);
-            const float fDir = static_cast<float>(anchor_face_dir(anchor.face));
-            const vec3 n{fAxis == 0 ? fDir : 0.0f, fAxis == 1 ? fDir : 0.0f,
-                         fAxis == 2 ? fDir : 0.0f};
-            detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                n, col, mk});
-        }
+    for (const std::uint32_t key : dirtySet) {
+        if (key >= kMacroCells) continue;
+        const int cx = static_cast<int>(key & 127u);
+        const int cy = static_cast<int>((key >> 7) & 127u);
+        const int cz = static_cast<int>(key >> 14);
+        ab.bins.for_each_in(
+            cell_bin_key(layer, cx, cy, cz), [&](Entity entity) {
+                // Потеря компонента-соседа не грязнит индекс якорей —
+                // страховка членством во view.
+                if (!view.contains(entity)) return;
+                const auto& anchor = view.get<SubVoxelAnchor>(entity);
+                // Опора потеряна, когда умерла КОЛОНКА субвокселей у грани
+                // крепления ([world/anchor.h] anchor_alive, окно 2×2 в точке
+                // крепления) — тот же вопрос, что у антуража, второй пробы
+                // больше нет (S11). Прежний тест одного бита из 512 врал в
+                // обе стороны: потолок выкарвлен вокруг лампы, а её бит цел
+                // — висит на игле; и жизнь вещи была привязана к точке,
+                // которой игрок не видит (S2).
+                const AnchorUV uv = anchor_face_uv(anchor.face, anchor.subX,
+                                                   anchor.subY, anchor.subZ);
+                if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))
+                    return;
+                const auto& tr = view.get<Transform>(entity);
+                vec3 col = reg.all_of<Renderable>(entity)
+                               ? reg.get<Renderable>(entity).color
+                               : vec3{0.8f, 0.8f, 0.8f};
+                std::uint32_t mk = 0;
+                if (reg.all_of<PropMesh>(entity))
+                    mk = static_cast<std::uint32_t>(
+                        reg.get<PropMesh>(entity).shape);
+                // Направление отрыва = НОРМАЛЬ ГРАНИ крепления (от опоры к
+                // вещи) — face наконец читается, как S10 и требовал; провис
+                // дальше делает гравитация (S1: геометрия — фрейм, сила —
+                // провис). Так уже жил антураж. Прежний толчок «против
+                // гравитации» пинал потолочную лампу ВВЕРХ — в только что
+                // выкарванный потолок.
+                const int fAxis = anchor_face_axis(anchor.face);
+                const float fDir =
+                    static_cast<float>(anchor_face_dir(anchor.face));
+                const vec3 n{fAxis == 0 ? fDir : 0.0f,
+                             fAxis == 1 ? fDir : 0.0f,
+                             fAxis == 2 ? fDir : 0.0f};
+                detached.push_back({entity, view.get<PropFallMode>(entity),
+                                    tr.pos, n, col, mk});
+            });
     }
 
     for (std::size_t i = 0; i < detached.size(); ++i) {
@@ -456,6 +470,19 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
         const std::uint32_t key =
             static_cast<std::uint32_t>(macro_index(cx, cy, cz));
         if (!dirtySet.contains(key)) continue;
+        // Слой линка — от его тел: своего Transform у линк-сущности нет
+        // (долг S20.3 «линк со слоем»); до посадки E фильтруем по стороне.
+        {
+            const auto& jl0 = linkView.get<JointLink>(le);
+            LayerId linkLayer = layer;
+            for (Entity side : {jl0.a, jl0.b})
+                if (side != entt::null && reg.valid(side) &&
+                    reg.all_of<Transform>(side)) {
+                    linkLayer = reg.get<Transform>(side).layer;
+                    break;
+                }
+            if (linkLayer != layer) continue;
+        }
         const AnchorUV uv =
             anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
         if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))

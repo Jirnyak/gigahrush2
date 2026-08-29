@@ -206,14 +206,20 @@ bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPo
                                 Entity source = entt::null);
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
-// `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
-// macro_index keys (uint32), NOT a packed xyz64. Returns how many props
-// detached (StaticPropTag → DynamicBodyTag) so the caller can rebuild the
-// static PropPass skin. [jirnyak.md] §18.
+// `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells /
+// судейские dirty — flat macro_index keys (uint32), NOT a packed xyz64.
+// Returns how many props detached (StaticPropTag → DynamicBodyTag) so the
+// caller can rebuild the static PropPass skin. [jirnyak.md] §18.
+// `layer` — СЛОЙ ПИСАТЕЛЯ (S20.4: слой — часть ключа dirty-вопроса):
+// пробы идут против `world` этого слоя, и якоря чужих резидентных этажей с
+// совпавшим macro_index не трогаются — прежний бесслойный проход ронял
+// проп этажа B карвом этажа A. Пропы идут через персистентные AnchorBins
+// (точные бакеты dirty-клеток), не полным view (§59.2-семья).
 // Optional `bursts`: the shared particle queue ([game/particles.h]). A
-// GpuHandoff prop shatters into it instead of vanishing silently — pass it and
-// the mode finally does what its name says.
-std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+// GpuHandoff prop shatters into it instead of vanishing silently — pass it
+// and the mode finally does what its name says.
+std::uint32_t anchor_validate_step(Registry& reg, const World& world,
+                                   LayerId layer, EventBus& bus,
                                    const std::vector<std::uint32_t>& dirtyCells,
                                    ParticleBurstQueue* bursts = nullptr,
                                    std::uint32_t seed = 0);
