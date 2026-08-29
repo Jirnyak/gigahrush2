@@ -7,7 +7,9 @@
 #pragma once
 #include <cstdint>
 
+#include "world/destruct.h" // kSubMaterialName — страница материалов для закона опоры
 #include "world/macro_grid.h"
+#include "world/material_props.h"
 #include "world/types.h"
 
 namespace giga {
@@ -44,12 +46,62 @@ inline constexpr AnchorUV anchor_face_uv(std::uint8_t face, int sx, int sy,
 // дыра ровно под вещью оставляет клетку на 90% полной (владелец, live play
 // 2026-08-05). Дефолт (u,v) — центр грани: поведение антуража, проверенное
 // владельцем на проводах, бит в бит; пропы передают точку крепления.
+//
+// МАСОЧНЫЙ вариант — уровень кэша: он не видит материалов и потому не знает
+// закона опоры S20.5. Законен в чисто-масочных мирах (тесты, миры без
+// страниц); боевые потребители обязаны звать World-вариант ниже.
 inline bool anchor_alive(const MacroGrid& g, int x, int y, int z,
                          std::uint8_t face, int u = kSubDim / 2 - 1,
                          int v = kSubDim / 2 - 1) {
     if (g.cell(x, y, z) == kCellAir) return false;
     return g.mask(x, y, z).face_layer_window(anchor_face_axis(face),
                                              anchor_face_dir(face), u, v) >= 0;
+}
+
+// Та же проба + ЗАКОН ОПОРЫ (CANON S20.5, решение владельца 2026-08-29):
+// атом ПОДВИЖНОГО материала (material_bears_load == false — рыхлые двойники,
+// материя сред) якорь не держит. Вещь, стоящая на куче рубла, мертва: куча
+// уедет автоматом, и висеть на ней нельзя было с самого начала.
+// Быстрые пути: клетка-воздух и бесстраничная клетка отвечают как масочный
+// вариант (материал клетки один, kMatFlow решает за всю колонку разом);
+// спуск в атомы — только у страничных клеток. Раскладка (s,a,b)→субвоксель —
+// обратная anchor_face_uv, та же, что в face_layer_window.
+inline bool anchor_alive(const World& w, int x, int y, int z,
+                         std::uint8_t face, int u = kSubDim / 2 - 1,
+                         int v = kSubDim / 2 - 1) {
+    const std::size_t ci =
+        macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+    const CellType base = w.grid().types()[ci];
+    if (base == kCellAir) return false;
+    const SubField<CellType>* f =
+        w.subfields().find<CellType>(kSubMaterialName);
+    const CellType* pg = (f && f->paged(ci)) ? f->page(ci) : nullptr;
+    const int axis = anchor_face_axis(face);
+    const int dir = anchor_face_dir(face);
+    if (!pg) {
+        if (!material_bears_load(base)) return false; // клетка целиком подвижная
+        return w.grid().masks()[ci].face_layer_window(axis, dir, u, v) >= 0;
+    }
+    const SubMask& m = w.grid().masks()[ci];
+    const int u0 = u < 0 ? 0 : (u > kSubDim - 2 ? kSubDim - 2 : u);
+    const int v0 = v < 0 ? 0 : (v > kSubDim - 2 ? kSubDim - 2 : v);
+    for (int i = 0; i < kSubDim; ++i) {
+        const int s = dir > 0 ? kSubDim - 1 - i : i;
+        for (int a = u0; a <= u0 + 1; ++a)
+            for (int b = v0; b <= v0 + 1; ++b) {
+                const int bit = axis == 0   ? sub_bit(s, a, b)
+                                : axis == 1 ? sub_bit(a, s, b)
+                                            : sub_bit(a, b, s);
+                if (!m.test(bit)) continue;
+                // Маскированный атом со страничным «воздухом» — легаси-
+                // десинк писателя (fill_cell мимо страницы): существование
+                // по маске (atom_exists), материал — типом клетки.
+                CellType mt = pg[bit];
+                if (mt == kCellAir) mt = base;
+                if (material_bears_load(mt)) return true;
+            }
+    }
+    return false;
 }
 
 } // namespace giga

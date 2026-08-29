@@ -794,42 +794,44 @@ void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
 // everything anchored to the voxel skeleton — antourage asks it at the face
 // CENTRE (the default), which is where its ends hang; props ask at their own
 // attachment point. This wrapper only keeps the local negative-polarity name.
-static bool anchor_gone(const MacroGrid& g, int x, int y, int z,
+// World, не MacroGrid: проба несёт закон опоры S20.5 (подвижный атом якорь
+// не держит), а для него нужен материал из страницы.
+static bool anchor_gone(const World& w, int x, int y, int z,
                         std::uint8_t face) {
-    return !anchor_alive(g, x, y, z, face);
+    return !anchor_alive(w, x, y, z, face);
 }
 
 
-bool antourage_alive(const MacroGrid& g, const AntourageInstance& it) {
+bool antourage_alive(const World& w, const AntourageInstance& it) {
     // BOTH ends, and each by the SUB-VOXEL column it hugs (anchor_gone below):
     // a pipe with one end in the void is not a pipe, and a pipe whose wall was
     // shot out where it clamps is not hanging on anything either.
-    return !anchor_gone(g, it.ax0, it.ay0, it.az0, it.face) &&
-           !anchor_gone(g, it.ax1, it.ay1, it.az1, it.face);
+    return !anchor_gone(w, it.ax0, it.ay0, it.az0, it.face) &&
+           !anchor_gone(w, it.ax1, it.ay1, it.az1, it.face);
 }
-std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c) {
+std::uint8_t wire_live_pins(const World& w, const WireChain& c) {
     std::uint8_t m = c.pinMask;
-    if (anchor_gone(g, c.ax0, c.ay0, c.az0, c.face)) m &= ~std::uint8_t{1u};
-    if (anchor_gone(g, c.ax1, c.ay1, c.az1, c.face))
+    if (anchor_gone(w, c.ax0, c.ay0, c.az0, c.face)) m &= ~std::uint8_t{1u};
+    if (anchor_gone(w, c.ax1, c.ay1, c.az1, c.face))
         m &= static_cast<std::uint8_t>(~(1u << (kWirePoints - 1)));
     return m;
 }
 
-std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s) {
+std::uint32_t cloth_live_pins(const World& w, const ClothSheet& s) {
     std::uint32_t m = s.pinMask;
     // The top row splits between the two corner cells it hangs from.
     constexpr std::uint32_t kLeft = (1u << (kClothW / 2)) - 1u;      // 0x0F
     constexpr std::uint32_t kRight = ((1u << kClothW) - 1u) & ~kLeft; // 0xF0
-    if (anchor_gone(g, s.ax0, s.ay0, s.az0, s.face)) m &= ~kLeft;
-    if (anchor_gone(g, s.ax1, s.ay1, s.az1, s.face)) m &= ~kRight;
+    if (anchor_gone(w, s.ax0, s.ay0, s.az0, s.face)) m &= ~kLeft;
+    if (anchor_gone(w, s.ax1, s.ay1, s.az1, s.face)) m &= ~kRight;
     return m;
 }
 
-bool antourage_alive(const MacroGrid& g, const WireChain& c) {
-    return wire_live_pins(g, c) != 0u;
+bool antourage_alive(const World& w, const WireChain& c) {
+    return wire_live_pins(w, c) != 0u;
 }
-bool antourage_alive(const MacroGrid& g, const ClothSheet& s) {
-    return cloth_live_pins(g, s) != 0u;
+bool antourage_alive(const World& w, const ClothSheet& s) {
+    return cloth_live_pins(w, s) != 0u;
 }
 
 namespace {
@@ -840,9 +842,9 @@ namespace {
 // was this carve that took it. The dirty list names cells whose MASK changed, so
 // a partial carve of a still-solid cell is in it — which is exactly the case the
 // cell-level test used to miss.
-bool anchor_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
+bool anchor_died(const World& w, const std::uint32_t* dirty, std::size_t n,
                  int x, int y, int z, std::uint8_t face) {
-    if (!anchor_gone(g, x, y, z, face)) return false;
+    if (!anchor_gone(w, x, y, z, face)) return false;
     const std::uint32_t key = static_cast<std::uint32_t>(macro_index(x, y, z));
     for (std::size_t i = 0; i < n; ++i)
         if (dirty[i] == key) return true;
@@ -860,14 +862,14 @@ bool anchor_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
 // the CELL non-air, so this said "nothing died" while the renderer stopped
 // drawing the piece — it vanished instead of falling, with no debris and no
 // body handed over.
-bool pair_died(const MacroGrid& g, const std::uint32_t* dirty, std::size_t n,
+bool pair_died(const World& w, const std::uint32_t* dirty, std::size_t n,
                int x0, int y0, int z0, int x1, int y1, int z1,
                std::uint8_t face) {
-    const bool d0 = anchor_died(g, dirty, n, x0, y0, z0, face);
-    const bool d1 = anchor_died(g, dirty, n, x1, y1, z1, face);
+    const bool d0 = anchor_died(w, dirty, n, x0, y0, z0, face);
+    const bool d1 = anchor_died(w, dirty, n, x1, y1, z1, face);
     if (!d0 && !d1) return false;
-    if (!d0 && anchor_gone(g, x0, y0, z0, face)) return false; // already dead
-    if (!d1 && anchor_gone(g, x1, y1, z1, face)) return false;
+    if (!d0 && anchor_gone(w, x0, y0, z0, face)) return false; // already dead
+    if (!d1 && anchor_gone(w, x1, y1, z1, face)) return false;
     return true;
 }
 
@@ -880,7 +882,6 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
                                    std::uint32_t seed,
                                    std::vector<DetachedPiece>* fell) {
     if (dirtyCells == nullptr || dirtyCount == 0) return 0;
-    const MacroGrid& g = w.grid();
     // Debris falls along gravity — the VECTOR at the piece, not a regime branch:
     // a regional field tips the burst the way it tips a body, and in zero-g the
     // shards drift from where they were cut instead of down a decreed axis.
@@ -888,7 +889,7 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     std::uint32_t dead = 0;
     for (std::size_t i = 0; i < bake.instances.size(); ++i) {
         const AntourageInstance& it = bake.instances[i];
-        if (!pair_died(g, dirtyCells, dirtyCount, it.ax0, it.ay0, it.az0,
+        if (!pair_died(w, dirtyCells, dirtyCount, it.ax0, it.ay0, it.az0,
                        it.ax1, it.ay1, it.az1, it.face))
             continue;
         ++dead;
@@ -921,9 +922,9 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     for (std::size_t i = 0; i < bake.wires.size(); ++i) {
         const WireChain& c = bake.wires[i];
         const bool cut =
-            anchor_died(g, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.face) ||
-            anchor_died(g, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1, c.face);
-        if (!cut || antourage_alive(g, c)) continue;
+            anchor_died(w, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.face) ||
+            anchor_died(w, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1, c.face);
+        if (!cut || antourage_alive(w, c)) continue;
         ++dead;
         const vec3 mid = c.p[kWirePoints / 2];
         bursts.push(mid, fall(mid), ParticleKind::Debris, 3,
@@ -933,9 +934,9 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     for (std::size_t i = 0; i < bake.cloths.size(); ++i) {
         const ClothSheet& s = bake.cloths[i];
         const bool cut =
-            anchor_died(g, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.face) ||
-            anchor_died(g, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1, s.face);
-        if (!cut || antourage_alive(g, s)) continue;
+            anchor_died(w, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.face) ||
+            anchor_died(w, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1, s.face);
+        if (!cut || antourage_alive(w, s)) continue;
         ++dead;
         // Canvas tears into dust, not chunks.
         const vec3 mid = s.p[kClothPoints / 2];

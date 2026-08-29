@@ -271,7 +271,7 @@ static void test_antourage_carve_drops_the_wire() {
         if (c.ax0 != c.ax1 || c.ay0 != c.ay1 || c.az0 != c.az1) { pick = &c; break; }
     CHECK(pick != nullptr);
     const WireChain wire = *pick;
-    CHECK(wire_live_pins(w.grid(), wire) == wire.pinMask);
+    CHECK(wire_live_pins(w, wire) == wire.pinMask);
 
     // Blow a hole exactly where point 0 is pinned, with the console/weapon
     // radius (main.cpp consoleCtx.carveRadius = 1.5 m).
@@ -294,11 +294,11 @@ static void test_antourage_carve_drops_the_wire() {
     CHECK(w.grid().cell(wire.ax0, wire.ay0, wire.az0) != kCellAir);
 
     // ...and yet the column the wire hung from is gone, so THAT end lets go.
-    const std::uint8_t pins = wire_live_pins(w.grid(), wire);
+    const std::uint8_t pins = wire_live_pins(w, wire);
     CHECK((pins & 1u) == 0u);
     // ...while the far anchor still holds it: a cut end lets go, it does not
     // delete the chain ([antourage.md] partial death).
-    CHECK(antourage_alive(w.grid(), wire));
+    CHECK(antourage_alive(w, wire));
     std::fprintf(stderr,
                  "[antourage] 0.6 m carve at the pin: cell still solid, "
                  "pins %02X -> %02X\n", wire.pinMask, pins);
@@ -310,7 +310,7 @@ static void test_antourage_carve_drops_the_wire() {
                          bursts, 11u);
     // The far end still holds this chain, so IT sheds nothing yet; whatever else
     // that blast severed is free to report.
-    CHECK(antourage_alive(w.grid(), wire));
+    CHECK(antourage_alive(w, wire));
 }
 
 // Death is a STATE, not an event ([antourage.h] FallClock): the last anchor
@@ -406,7 +406,7 @@ static void test_antourage_detached_pipe_falls_and_lands() {
             if (it.shape != kShapeBox) { pipe = &it; break; }
         CHECK(pipe != nullptr);
         const AntourageInstance target = *pipe;
-        CHECK(antourage_alive(wp.grid(), target));
+        CHECK(antourage_alive(wp, target));
         // Shoot the pipe itself with the console/weapon radius.
         CarveOp op{};
         op.x = target.pos.x; op.y = target.pos.y; op.z = target.pos.z;
@@ -418,7 +418,7 @@ static void test_antourage_detached_pipe_falls_and_lands() {
         carve_sphere(wp, op, sc, res2);
         CHECK(!res2.dirtyCells.empty());
         // Its clamp column is gone, so the piece is dead...
-        CHECK(!antourage_alive(wp.grid(), target));
+        CHECK(!antourage_alive(wp, target));
         // ...and the very same op hands it over as a falling body.
         ParticleBurstQueue q3;
         std::vector<DetachedPiece> fell3;
@@ -761,7 +761,7 @@ static void test_antourage_all() {
         // segment belongs to its own cell), so "already dead" is exercised by
         // carving the same anchor twice rather than one end at a time.
         const AntourageInstance& victim = bake.instances.front();
-        CHECK(antourage_alive(w.grid(), victim));
+        CHECK(antourage_alive(w, victim));
         ParticleBurstQueue bursts;
         // A dirty list that names an untouched cell kills nobody.
         const std::uint32_t innocent = static_cast<std::uint32_t>(
@@ -772,7 +772,7 @@ static void test_antourage_all() {
         w.grid().set_cell(victim.ax0, victim.ay0, victim.az0, kCellAir);
         const std::uint32_t dirty = static_cast<std::uint32_t>(
             macro_index(victim.ax0, victim.ay0, victim.az0));
-        CHECK(!antourage_alive(w.grid(), victim));
+        CHECK(!antourage_alive(w, victim));
         const std::uint32_t dead =
             antourage_carve_step(w, bake, &dirty, 1, bursts, 7u);
         CHECK(dead > 0);  // at least the victim; anchor cells are shared
@@ -807,14 +807,14 @@ static void test_antourage_all() {
         bake_antourage(w3, 0, 1337u, b3);
         CHECK(!b3.wires.empty());
         const WireChain wire = b3.wires.front();
-        CHECK(wire_live_pins(w3.grid(), wire) == wire.pinMask); // intact
-        CHECK(antourage_alive(w3.grid(), wire));
+        CHECK(wire_live_pins(w3, wire) == wire.pinMask); // intact
+        CHECK(antourage_alive(w3, wire));
 
         w3.grid().set_cell(wire.ax0, wire.ay0, wire.az0, kCellAir);
-        const std::uint8_t halfPins = wire_live_pins(w3.grid(), wire);
+        const std::uint8_t halfPins = wire_live_pins(w3, wire);
         CHECK((halfPins & 1u) == 0u);                    // that end let go
         CHECK((halfPins >> (kWirePoints - 1)) & 1u);     // this one still holds
-        CHECK(antourage_alive(w3.grid(), wire));         // still hanging
+        CHECK(antourage_alive(w3, wire));         // still hanging
         // ...and a carve that only cuts one end sheds NO debris for the chain
         // (pipes sharing that ceiling cell may still die — check the chain's
         // own midpoint, not the total).
@@ -829,8 +829,8 @@ static void test_antourage_all() {
         const std::uint16_t afterFirst = q.count;
 
         w3.grid().set_cell(wire.ax1, wire.ay1, wire.az1, kCellAir);
-        CHECK(wire_live_pins(w3.grid(), wire) == 0u);
-        CHECK(!antourage_alive(w3.grid(), wire));
+        CHECK(wire_live_pins(w3, wire) == 0u);
+        CHECK(!antourage_alive(w3, wire));
         const std::uint32_t cut1 = static_cast<std::uint32_t>(
             macro_index(wire.ax1, wire.ay1, wire.az1));
         CHECK(antourage_carve_step(w3, b3, &cut1, 1, q, 4u) > 0);
@@ -847,14 +847,14 @@ static void test_antourage_all() {
             }
         CHECK(intact != nullptr);
         const ClothSheet sheet = *intact;
-        CHECK(cloth_live_pins(w3.grid(), sheet) == sheet.pinMask);
+        CHECK(cloth_live_pins(w3, sheet) == sheet.pinMask);
         w3.grid().set_cell(sheet.ax0, sheet.ay0, sheet.az0, kCellAir);
-        const std::uint32_t halfSheet = cloth_live_pins(w3.grid(), sheet);
+        const std::uint32_t halfSheet = cloth_live_pins(w3, sheet);
         CHECK((halfSheet & 0x0Fu) == 0u);   // left half of the top row let go
         CHECK((halfSheet & 0xF0u) != 0u);   // right half still holds
-        CHECK(antourage_alive(w3.grid(), sheet));
+        CHECK(antourage_alive(w3, sheet));
         w3.grid().set_cell(sheet.ax1, sheet.ay1, sheet.az1, kCellAir);
-        CHECK(cloth_live_pins(w3.grid(), sheet) == 0u);
-        CHECK(!antourage_alive(w3.grid(), sheet));
+        CHECK(cloth_live_pins(w3, sheet) == 0u);
+        CHECK(!antourage_alive(w3, sheet));
     }
 }

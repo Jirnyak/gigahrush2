@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <thread>
+#include "world/anchor.h"
 #include "world/lattice.h"
 #include "world/nav.h"
 
@@ -481,6 +482,120 @@ static void test_detach_judge() {
     CHECK(sub_material_at(w, 20, 20, 20, 4, 4, 4) == kMatConcrete);
 }
 
+// ЗАКОН ОПОРЫ (CANON S20.5, решение владельца 2026-08-29): «подвижное — не
+// опора». Атом материала-среды (рыхлые двойники, вода) не передаёт опору
+// судье и не держит якорь. Корень бага «кучи дебриса у лестниц»: пока
+// rubble считался опорой, балка на куче жила до отъезда кучи, суд шёл
+// вслед движению, и каждый вердикт рождал новое rubble — петля. Теперь
+// балка, держащаяся только за кучу, рыхлеет ОДНИМ судом, а движение кучи
+// не пересуживает ничего. Обе полярности + сид от изменения + якорь.
+static void test_support_law() {
+    // Таблица: закон выведен из параметров строки (S16.2), не назначен.
+    CHECK(material_bears_load(kMatConcrete));
+    CHECK(!material_bears_load(kMatRubble));
+    CHECK(!material_bears_load(material_rubble_of(kMatConcrete)));
+    CHECK(!material_bears_load(kMatWater));
+    CHECK(!material_bears_load(kCellAir));
+
+    // Плита-«дом» (676 полных клеток > бюджет 512 узлов) — честная опора
+    // на торе; над ней клетка с мостом-крошкой и висюком.
+    static World w;
+    for (int x = 20; x <= 45; ++x)
+        for (int y = 20; y <= 45; ++y)
+            w.grid().fill_cell(x, y, 39, kMatConcrete);
+    const int cx = 30, cy = 30, cz = 40;
+    const std::size_t ci = macro_index(cx, cy, cz);
+    const int bB = sub_bit(4, 4, 0); // мост у грани плиты
+    const int bA = sub_bit(4, 4, 1); // висюк на мосту
+    CarveScratch scratch;
+    CarveResult res;
+    const std::uint32_t cell32 = static_cast<std::uint32_t>(ci);
+
+    // ПОЛЯРНОСТЬ «опёрт»: мост из БЕТОНА — компонент дотекает до плиты,
+    // бюджет зовёт его домом, суд молчит.
+    {
+        CellType* pg = materialize_sub_page(w, ci);
+        pg[bB] = kMatConcrete;
+        pg[bA] = kMatParquet;
+        w.grid().mask(cx, cy, cz).set(bB);
+        w.grid().mask(cx, cy, cz).set(bA);
+        CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 0);
+        CHECK(sub_material_at(w, cx, cy, cz, 4, 4, 1) == kMatParquet);
+    }
+
+    // ПОЛЯРНОСТЬ «рыхлое — не опора»: тот же мост из КРОШКИ — висюк
+    // конвертируется ОДНИМ судом, крошка не судится (идемпотентно) и
+    // маской стоит, плита цела.
+    {
+        CellType* pg = materialize_sub_page(w, ci);
+        pg[bB] = kMatRubble;
+        CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 1);
+        CHECK(sub_material_at(w, cx, cy, cz, 4, 4, 1) ==
+              material_rubble_of(kMatParquet));
+        CHECK(sub_material_at(w, cx, cy, cz, 4, 4, 0) == kMatRubble);
+        CHECK(w.grid().mask(cx, cy, cz).test(bB));
+        CHECK(w.grid().mask(30, 30, 39).full());
+        // Повторный суд той же клетки — НОЛЬ: всё оставшееся подвижно,
+        // компонентов нет. «Куча уехала — пересуда нет».
+        CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 0);
+        // ...и «отъезд» крошки (ход автомата) тоже ничего не рождает.
+        pg[bB] = kCellAir;
+        w.grid().mask(cx, cy, cz).clear(bB);
+        CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 0);
+    }
+
+    // СИД ОТ ИЗМЕНЕНИЯ (detach_judge_seeds): новый висюк на новой крошке;
+    // сид = XOR-бит самой крошки (так автомат и рапортует её ход) — судятся
+    // только опорные СОСЕДИ изменённого атома.
+    {
+        const int bD = sub_bit(6, 6, 0); // крошка
+        const int bC = sub_bit(6, 6, 1); // висюк
+        CellType* pg = materialize_sub_page(w, ci);
+        pg[bD] = kMatRubble;
+        pg[bC] = kMatParquet;
+        w.grid().mask(cx, cy, cz).set(bD);
+        w.grid().mask(cx, cy, cz).set(bC);
+        JudgeSeed sd{};
+        sd.cell = cell32;
+        sd.changed[bD >> 6] = std::uint64_t{1} << (bD & 63);
+        CHECK(detach_judge_seeds(w, &sd, 1, scratch, res) == 1);
+        CHECK(sub_material_at(w, cx, cy, cz, 6, 6, 1) ==
+              material_rubble_of(kMatParquet));
+        // Обратная полярность сида: изменение в дальнем пустом углу клетки
+        // никого не судит — «сеять от изменения» не пересуживает клетку.
+        JudgeSeed far{};
+        far.cell = cell32;
+        far.changed[sub_bit(0, 0, 7) >> 6] = std::uint64_t{1}
+                                             << (sub_bit(0, 0, 7) & 63);
+        CHECK(detach_judge_seeds(w, &far, 1, scratch, res) == 0);
+    }
+
+    // ЯКОРЬ (S20.2): колонка, стоящая на рыхлом, мертва для World-пробы;
+    // масочная проба — уровень кэша, закона не знает (обе полярности).
+    {
+        static World wa;
+        const int ax = 60, ay = 60, az = 60;
+        const std::uint8_t face = anchor_face_pack(2, -1);
+        const std::size_t aci = macro_index(ax, ay, az);
+        // Страничная клетка: единственный атом окна — рыхлый → мёртв...
+        CellType* pg = materialize_sub_page(wa, aci);
+        const int bit = sub_bit(3, 3, 0);
+        pg[bit] = kMatRubble;
+        wa.grid().mask(ax, ay, az).set(bit);
+        wa.grid().set_cell(ax, ay, az, kMatConcrete); // тип-кэш непуст
+        CHECK(anchor_alive(wa.grid(), ax, ay, az, face)); // маска: жив
+        CHECK(!anchor_alive(wa, ax, ay, az, face));       // закон: мёртв
+        // ...бетонный — жив обеими пробами.
+        pg[bit] = kMatConcrete;
+        CHECK(anchor_alive(wa, ax, ay, az, face));
+        // Бесстраничная клетка целиком из рыхлого: тип решает за всех.
+        static World wb;
+        wb.grid().fill_cell(ax, ay, az, material_rubble_of(kMatConcrete));
+        CHECK(anchor_alive(wb.grid(), ax, ay, az, face));
+        CHECK(!anchor_alive(wb, ax, ay, az, face));
+    }
+}
+
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
@@ -489,4 +604,5 @@ static void test_destruct_all() {
     test_carve_sphere();
     test_detach_face_alignment();
     test_detach_judge();
+    test_support_law();
 }

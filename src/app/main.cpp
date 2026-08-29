@@ -1793,10 +1793,9 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
     // LIVE grid: carve an anchor away and the piece stops being drawn.
     static const bool antourageDebug =
         std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr;
-    const MacroGrid& g = world.grid();
     if (dripEmitters) dripEmitters->clear();
     for (const game::AntourageInstance& it : ab->instances) {
-        if (!game::antourage_alive(g, it)) {
+        if (!game::antourage_alive(world, it)) {
             // A severed pipe piece: its anchor was carved away, so the mesh
             // stops drawing — and the stump becomes a DRIP emitter for the
             // unified particle pool (owner's design: якорь мёртв → эмиттер).
@@ -3835,7 +3834,8 @@ int main(int argc, char** argv) {
                     }
                 }
             }
-            static std::vector<std::uint32_t> mediumMaskChanged;
+            static std::vector<gpu::GpuMediumPass::ChangedMask>
+                mediumMaskChanged;
             mediumMaskChanged.clear();
             const auto ctMedA = std::chrono::steady_clock::now();
             mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
@@ -3847,10 +3847,14 @@ int main(int argc, char** argv) {
             // Маски обломков (инкремент 5) едут с материей: изменённые
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
-            if (!mediumMaskChanged.empty())
+            if (!mediumMaskChanged.empty()) {
+                static std::vector<std::uint32_t> changedCis;
+                changedCis.clear();
+                for (const auto& cm : mediumMaskChanged)
+                    changedCis.push_back(cm.ci);
                 nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                       mediumMaskChanged.data(),
-                                       mediumMaskChanged.size());
+                                       changedCis.data(), changedCis.size());
+            }
             // СУДЬЯ СВЯЗНОСТИ — ПОСЛЕ ОСАДКИ (§60/§61-семья, «висящие
             // атомы»; v2 2026-08-26: судить В ПОЛЁТЕ нельзя — вердикты идут
             // из CPU-канона, отстающего от GPU на кольцо шва, и конверсия
@@ -3862,19 +3866,41 @@ int main(int argc, char** argv) {
             // не у полёта — и по смыслу, и по механике шва.
             {
                 constexpr std::uint32_t kJudgeQuietFrames = 8;
-                static std::unordered_map<std::uint32_t, std::uint32_t>
+                struct PendingJudge {
+                    std::uint32_t frame = 0;
+                    std::uint64_t bits[8] = {};
+                };
+                static std::unordered_map<std::uint32_t, PendingJudge>
                     judgePending;
                 static std::uint32_t judgeFrame = 0;
+                // СЛОЙ — ЧАСТЬ КЛЮЧА ДОЗРЕВАНИЯ (S20.4): клетки, помеченные
+                // на этаже A, не должны дозреть и судиться на мире этажа B —
+                // совпадение macro_index между этажами не совпадение места.
+                static LayerId judgeLayer = static_cast<LayerId>(~0u);
+                if (judgeLayer != activeLayer) {
+                    judgeLayer = activeLayer;
+                    judgePending.clear();
+                }
                 ++judgeFrame;
-                for (std::uint32_t ci : mediumMaskChanged)
-                    judgePending[ci] = judgeFrame;
+                // XOR изменённых битов копится за окно тишины: судья сеет
+                // от ИЗМЕНЕНИЯ (S20.5), а не пересуживает всю клетку.
+                for (const auto& cm : mediumMaskChanged) {
+                    PendingJudge& p = judgePending[cm.ci];
+                    p.frame = judgeFrame;
+                    for (int b = 0; b < 8; ++b) p.bits[b] |= cm.bits[b];
+                }
                 if (!judgePending.empty()) {
-                    static std::vector<std::uint32_t> ripe;
+                    static std::vector<JudgeSeed> ripe;
                     ripe.clear();
                     for (auto it = judgePending.begin();
                          it != judgePending.end();) {
-                        if (judgeFrame - it->second >= kJudgeQuietFrames) {
-                            ripe.push_back(it->first);
+                        if (judgeFrame - it->second.frame >=
+                            kJudgeQuietFrames) {
+                            JudgeSeed sd;
+                            sd.cell = it->first;
+                            std::memcpy(sd.changed, it->second.bits,
+                                        sizeof sd.changed);
+                            ripe.push_back(sd);
                             it = judgePending.erase(it);
                         } else {
                             ++it;
@@ -3883,7 +3909,7 @@ int main(int argc, char** argv) {
                     if (!ripe.empty()) {
                         static CarveScratch judgeScratch;
                         static CarveResult judgeResult;
-                        const std::int32_t judged = detach_judge_cells(
+                        const std::int32_t judged = detach_judge_seeds(
                             stack.layer(activeLayer), ripe.data(),
                             ripe.size(), judgeScratch, judgeResult);
                         // Диагностика причины «куч дебриса у лестниц»
@@ -3891,7 +3917,7 @@ int main(int argc, char** argv) {
                         static std::uint32_t judgeSaid = 0;
                         if (judged > 0 && judgeSaid < 12) {
                             ++judgeSaid;
-                            const std::uint32_t c0 = ripe[0];
+                            const std::uint32_t c0 = ripe[0].cell;
                             std::fprintf(
                                 stderr,
                                 "[judge] medium-mask verdict: %u cells ripe, "
@@ -8078,7 +8104,7 @@ int main(int argc, char** argv) {
             (verletPass.chain_count() > 0 || verletPass.sheet_count() > 0)) {
             if (const game::AntourageBake* ab =
                     streamer.antourage_at_layer(registry, activeLayer)) {
-                const MacroGrid& wg = stack.layer(activeLayer).grid();
+                const World& wg = stack.layer(activeLayer);
                 if (verletPass.chain_count() > 0) {
                     // One probe, two answers: the live pin mask says which
                     // ends still hold, and "no pin left" starts the FALL. The

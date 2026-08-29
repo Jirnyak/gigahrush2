@@ -409,7 +409,7 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
         // точке, которой игрок не видит (S2).
         const AnchorUV uv =
             anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
-        if (!anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v)) {
+        if (!anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
             const auto& tr = view.get<Transform>(entity);
             vec3 col = reg.all_of<Renderable>(entity)
                            ? reg.get<Renderable>(entity).color
@@ -458,7 +458,7 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
         if (!dirtySet.contains(key)) continue;
         const AnchorUV uv =
             anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
-        if (anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v))
+        if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))
             continue;
         const auto& jl = linkView.get<JointLink>(le);
         for (Entity side : {jl.a, jl.b}) {
@@ -493,7 +493,7 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     // побитового теста — всё, что спавнилось, спавнится.
     const AnchorUV uv =
         anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
-    if (!anchor_alive(world.grid(), cx, cy, cz, anchor.face, uv.u, uv.v)) {
+    if (!anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
         return entt::null;
     }
 

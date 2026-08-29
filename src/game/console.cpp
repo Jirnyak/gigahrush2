@@ -849,7 +849,7 @@ bool cmd_spawn_chain(ConsoleContext& ctx, int argc, const char* const* argv,
             // Гейт = проба живости (один вопрос со спавном пропов): колонка
             // у грани крепления должна жить, иначе якорь умрёт первым карвом.
             const AnchorUV uv = anchor_face_uv(face, sx, sy, sz);
-            if (!anchor_alive(w.grid(), cx, cy, cz, face, uv.u, uv.v))
+            if (!anchor_alive(w, cx, cy, cz, face, uv.u, uv.v))
                 continue;
             anchor = vec3{(static_cast<float>(vx) + 0.5f) * kVoxelSize,
                           (static_cast<float>(vy) + 0.5f) * kVoxelSize,

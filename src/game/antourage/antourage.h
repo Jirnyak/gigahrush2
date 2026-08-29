@@ -171,9 +171,12 @@ void bake_antourage(const World& w, int number, unsigned seed,
 // A rigid instance needs BOTH anchors: a pipe leg with one end in the void is
 // not a pipe leg. A verlet chain or sheet is different — it can hang from what
 // is left, so its aliveness is "some point is still pinned to solid matter".
-bool antourage_alive(const MacroGrid& g, const AntourageInstance& it);
-bool antourage_alive(const MacroGrid& g, const WireChain& c);
-bool antourage_alive(const MacroGrid& g, const ClothSheet& s);
+// Проба берёт WORLD, не MacroGrid: закон опоры S20.5 спрашивает МАТЕРИАЛ
+// (подвижный атом — рыхлый двойник — якорь не держит), а материал живёт в
+// странице, которой у маски нет.
+bool antourage_alive(const World& w, const AntourageInstance& it);
+bool antourage_alive(const World& w, const WireChain& c);
+bool antourage_alive(const World& w, const ClothSheet& s);
 
 // The pin mask a chain/sheet actually has against the LIVE grid: a severed
 // anchor LETS ITS END GO and the thing swings from whatever still holds it —
@@ -183,8 +186,8 @@ bool antourage_alive(const MacroGrid& g, const ClothSheet& s);
 //
 // Point 0 belongs to anchor 0 and the last point to anchor 1; a sheet's top row
 // splits down the middle, left half to anchor 0, right half to anchor 1.
-std::uint8_t wire_live_pins(const MacroGrid& g, const WireChain& c);
-std::uint32_t cloth_live_pins(const MacroGrid& g, const ClothSheet& s);
+std::uint8_t wire_live_pins(const World& w, const WireChain& c);
+std::uint32_t cloth_live_pins(const World& w, const ClothSheet& s);
 
 // --- THE FALL CLOCK ---------------------------------------------------------
 // Death is a STATE, not an event (owner, 2026-08-05): the last anchor letting go

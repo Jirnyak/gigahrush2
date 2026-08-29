@@ -170,18 +170,6 @@ public:
     }
     std::size_t used_mark() const { return s_.used.size(); }
 
-    // Диагностика (охота на висящие решётки): каким раном помечен ключ.
-    std::uint32_t lookup_run(std::uint32_t key) const {
-        const std::uint32_t v = key + 1;
-        std::uint32_t i = mix(key) & mask_;
-        while (true) {
-            const std::uint32_t cur = s_.slots[i];
-            if (cur == 0) return 0xFFFFFFFFu;
-            if (cur == v) return s_.runs[i];
-            i = (i + 1) & mask_;
-        }
-    }
-
 private:
     static std::uint32_t mix(std::uint32_t k) {
         k *= 0x9E3779B9u;
@@ -257,9 +245,51 @@ inline bool comp_grow(std::uint64_t* b, const std::uint64_t* mask) {
     return changed;
 }
 
-// Сброс кэша разбиений на входе развёртки. Кэш живёт одну развёртку: маски
-// в ней не меняются (конверсия трогает только материалы), так что запись
-// разбиения верна до конца обхода.
+// ОПОРНАЯ МАСКА КЛЕТКИ (CANON S20.5 «подвижное — не опора», решение
+// владельца 2026-08-29): биты твёрдой НЕПОДВИЖНОЙ материи. Атом подвижного
+// материала (рыхлые двойники, материя сред — material_bears_load == false)
+// в опорный граф не входит: судья не строит из него узлов и не передаёт
+// через него связность. Балка, державшаяся только за кучу рубла, рыхлеет
+// одним судом; дальнейшее движение кучи ничего не пересуживает — петля
+// «дебрис рождает дебрис» разомкнута по построению. Вывод — из параметров
+// строки CSV (S16.2), ни флага, ни ветки по имени материала.
+void load_bearing_words(const World& w, const SubField<CellType>* mats,
+                        std::uint32_t ci, std::uint64_t out[8]) {
+    const SubMask& m = w.grid().masks()[ci];
+    const CellType* pg = (mats && mats->paged(ci)) ? mats->page(ci) : nullptr;
+    if (!pg) {
+        // Бесстраничная клетка однородна: kMatFlow решает за все атомы разом.
+        const std::uint64_t keep =
+            material_bears_load(w.grid().types()[ci]) ? ~std::uint64_t{0}
+                                                      : std::uint64_t{0};
+        for (int i = 0; i < 8; ++i) out[i] = m.words[i] & keep;
+        return;
+    }
+    const CellType base = w.grid().types()[ci];
+    for (int i = 0; i < 8; ++i) {
+        std::uint64_t bits = m.words[i], keep = 0;
+        while (bits != 0) {
+            const int b = std::countr_zero(bits);
+            bits &= bits - 1;
+            // Маскированный атом со страничным «воздухом» — легаси-десинк
+            // писателя (fill_cell пишет тип+маску мимо страницы): для
+            // СУЩЕСТВОВАНИЯ маска главнее (atom_exists), для материала
+            // честнее всего тип клетки — так и читаем.
+            CellType mt = pg[i * 64 + b];
+            if (mt == kCellAir) mt = base;
+            if (material_bears_load(mt)) keep |= std::uint64_t{1} << b;
+        }
+        out[i] = keep;
+    }
+}
+
+// Сброс кэша разбиений на входе развёртки. Кэш жив до конца обхода И ПРИ
+// опорном разбиении S20.5, хотя конверсия теперь меняет то, от чего оно
+// зависит (материалы): конверсия снимает ЦЕЛЫЙ максимальный связный
+// компонент, значит ни один оставшийся компонент не терял опоры через
+// него (иначе был бы его частью), а поздний сид, чей флуд дотекает до
+// конвертированных узлов кэшированного разбиения, видит их пометки чужого
+// рана и корректно скипается как «уже осуждённое».
 void part_cache_reset(CarveScratch& s) {
     if (s.cellSlotKey.size() < 16384) {
         s.cellSlotKey.assign(16384, 0);
@@ -296,11 +326,14 @@ void part_cache_grow(CarveScratch& s) {
     }
 }
 
-// Разбиение маски клетки на компоненты, с кэшем на развёртку. Возвращает
-// entry-индекс (partFirst/partCount). Полная клетка — один компонент без
-// флуда: это интерьер стен и плит, самый массовый случай обхода опёртого.
-std::uint32_t cell_partition(const MacroGrid& g, CarveScratch& s,
-                             std::uint32_t ci) {
+// Разбиение ОПОРНОЙ маски клетки (load_bearing_words, S20.5) на компоненты,
+// с кэшем на развёртку. Возвращает entry-индекс (partFirst/partCount).
+// Полная опорная клетка — один компонент без флуда: это интерьер стен и
+// плит, самый массовый случай обхода опёртого. Клетка из одного рыхлого
+// даёт НОЛЬ компонентов — рыхлое не судится (конверсия идемпотентна) и не
+// несёт.
+std::uint32_t cell_partition(const World& w, const SubField<CellType>* mats,
+                             CarveScratch& s, std::uint32_t ci) {
     if ((s.cellSlotUsed.size() + 1) * 2 > s.cellSlotKey.size())
         part_cache_grow(s);
     const std::uint32_t mask =
@@ -312,33 +345,36 @@ std::uint32_t cell_partition(const MacroGrid& g, CarveScratch& s,
         if (k == 0) break;
         i = (i + 1) & mask;
     }
-    const SubMask& m = g.masks()[ci];
+    std::uint64_t sw[8];
+    load_bearing_words(w, mats, ci, sw);
+    bool full = true;
+    for (int wi = 0; wi < 8 && full; ++wi) full = sw[wi] == ~std::uint64_t{0};
     const std::uint32_t entry = static_cast<std::uint32_t>(s.partFirst.size());
     const std::uint32_t first =
         static_cast<std::uint32_t>(s.compWords.size() / 8);
     std::uint16_t count = 0;
-    if (m.full()) {
-        for (int w = 0; w < 8; ++w) s.compWords.push_back(~std::uint64_t{0});
+    if (full) {
+        for (int wi = 0; wi < 8; ++wi) s.compWords.push_back(~std::uint64_t{0});
         count = 1;
     } else {
         std::uint64_t rest[8];
-        for (int w = 0; w < 8; ++w) rest[w] = m.words[w];
+        for (int wi = 0; wi < 8; ++wi) rest[wi] = sw[wi];
         std::uint64_t comp[8];
         for (;;) {
             int seedW = -1;
-            for (int w = 0; w < 8; ++w)
-                if (rest[w] != 0) {
-                    seedW = w;
+            for (int wi = 0; wi < 8; ++wi)
+                if (rest[wi] != 0) {
+                    seedW = wi;
                     break;
                 }
             if (seedW < 0) break;
-            for (int w = 0; w < 8; ++w) comp[w] = 0;
+            for (int wi = 0; wi < 8; ++wi) comp[wi] = 0;
             comp[seedW] = rest[seedW] & (~rest[seedW] + 1); // низший бит
-            while (comp_grow(comp, m.words)) {
+            while (comp_grow(comp, sw)) {
             }
-            for (int w = 0; w < 8; ++w) {
-                s.compWords.push_back(comp[w]);
-                rest[w] &= ~comp[w];
+            for (int wi = 0; wi < 8; ++wi) {
+                s.compWords.push_back(comp[wi]);
+                rest[wi] &= ~comp[wi];
             }
             ++count;
         }
@@ -351,20 +387,22 @@ std::uint32_t cell_partition(const MacroGrid& g, CarveScratch& s,
     return entry;
 }
 
-// Узел, содержащий данный твёрдый атом: (cell << 8) | локальный индекс
+// Узел, содержащий данный НЕСУЩИЙ атом: (cell << 8) | локальный индекс
 // компонента (компонентов в клетке <= 256 — шахматка одиночек).
-std::uint32_t node_of_atom(const MacroGrid& g, CarveScratch& s,
-                           std::uint32_t key) {
+// 0xFFFFFFFF — атом не в опорном множестве: воздух ИЛИ подвижный материал
+// (S20.5) — такой сид не судится.
+std::uint32_t node_of_atom(const World& w, const SubField<CellType>* mats,
+                           CarveScratch& s, std::uint32_t key) {
     const std::uint32_t ci = key >> 9;
     const std::uint32_t bit = key & 511u;
-    const std::uint32_t e = cell_partition(g, s, ci);
+    const std::uint32_t e = cell_partition(w, mats, s, ci);
     const std::uint32_t first = s.partFirst[e];
     const int wi = static_cast<int>(bit >> 6);
     const std::uint64_t b = std::uint64_t{1} << (bit & 63u);
     for (std::uint16_t j = 0; j < s.partCount[e]; ++j)
         if (s.compWords[(first + j) * 8 + static_cast<std::uint32_t>(wi)] & b)
             return (ci << 8) | j;
-    return 0xFFFFFFFFu; // атом не твёрд (сид обязан быть твёрдым)
+    return 0xFFFFFFFFu;
 }
 
 // Отсечки бюджета — вслух (S11), но с дросселем: удар в опёртую стену —
@@ -373,10 +411,12 @@ std::uint32_t g_detachCapEvents = 0;
 
 // Флуд по узлам. true — компонент собран ЦЕЛИКОМ в бюджете (оторван; узлы
 // лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом
-// или превысил бюджет («сам дом»).
+// или превысил бюджет («сам дом»). Узлы и рёбра — только по ОПОРНОЙ маске
+// (cell_partition, S20.5): связность через подвижный атом не течёт.
 // why: 0=loose, 1=сид уже помечен, 2=слился с осуждённым, 3=бюджет
-bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
-                 std::uint32_t seedNode, std::uint32_t run, int* why) {
+bool flood_nodes(const World& w, const SubField<CellType>* mats,
+                 VisitedSet& vis, CarveScratch& s, std::uint32_t seedNode,
+                 std::uint32_t run, int* why) {
     auto set_why = [&](int v) { if (why) *why = v; };
     set_why(0);
     s.nodeQueue.clear();
@@ -387,7 +427,7 @@ bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
     while (head < s.nodeQueue.size()) {
         const std::uint32_t node = s.nodeQueue[head++];
         const std::uint32_t ci = node >> 8;
-        const std::uint32_t e = cell_partition(g, s, ci);
+        const std::uint32_t e = cell_partition(w, mats, s, ci);
         // Копия слов компонента: cell_partition соседей ниже растит
         // compWords, указатель внутрь вектора пережил бы реаллокацию.
         std::uint64_t cw[8];
@@ -404,7 +444,9 @@ bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
                 macro_index(wrap_macro(cx + kDir6[d][0]),
                             wrap_macro(cy + kDir6[d][1]),
                             wrap_macro(cz + kDir6[d][2]));
-            const SubMask& nm = g.masks()[nci];
+            // Сырая маска соседа — только ПРЕДФИЛЬТР (надмножество опорной):
+            // решает пересечение с его опорными компонентами ниже.
+            const SubMask& nm = w.grid().masks()[nci];
             // Граневой слой компонента, сдвинутый в систему соседа, И его
             // маска: точные атомные пары через шов. kDir6 порядок:
             // +x,-x,+y,-y,+z,-z.
@@ -436,7 +478,7 @@ bool flood_nodes(const MacroGrid& g, VisitedSet& vis, CarveScratch& s,
             }
             if (any == 0) continue;
             const std::uint32_t ne =
-                cell_partition(g, s, static_cast<std::uint32_t>(nci));
+                cell_partition(w, mats, s, static_cast<std::uint32_t>(nci));
             const std::uint32_t nfirst = s.partFirst[ne];
             for (std::uint16_t j = 0; j < s.partCount[ne]; ++j) {
                 const std::uint64_t* jw = &s.compWords[(nfirst + j) * 8];
@@ -483,7 +525,7 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
         // конвертируется честно). Компонент, цепляющийся за щит, опёрт по
         // построению: щит-биты никогда не пустеют.
         const bool cellShielded = w.masks().shielded_cell(ci);
-        const std::uint32_t e = cell_partition(w.grid(), s, ci); // кэш-хит
+        const std::uint32_t e = cell_partition(w, mats, s, ci); // кэш-хит
         const std::uint32_t base = (s.partFirst[e] + (node & 255u)) * 8;
         bool wrote = false;
         for (int wi = 0; wi < 8; ++wi) {
@@ -508,6 +550,49 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
     }
 }
 
+// Осудить опорные компоненты вокруг атома (cell,bit): сам атом + 6 соседей.
+// Так развёртка карва сеяла всегда (соседи удалённого); тем же сидом идёт
+// судья шва автомата (сид = изменённый маской атом, S20.5 «сеять от
+// изменения»). Каскада после конверсии НЕ нужно по построению: конверсия
+// снимает целый максимальный компонент, и терявший через него опору был бы
+// его частью (см. part_cache_reset).
+void judge_atom_neighbours(World& w, SubField<CellType>* mats, VisitedSet& vis,
+                           CarveScratch& s, CarveResult& out,
+                           std::uint32_t& run, std::uint32_t cell,
+                           std::uint16_t bit, bool dbg) {
+    const SubCoord c = unpack_key(pack_key(cell, bit));
+    const int ax = c.cx * kSubDim + c.sx;
+    const int ay = c.cy * kSubDim + c.sy;
+    const int az = c.cz * kSubDim + c.sz;
+    static const int kSelf6[7][3] = {{0, 0, 0},  {1, 0, 0},  {-1, 0, 0},
+                                     {0, 1, 0},  {0, -1, 0}, {0, 0, 1},
+                                     {0, 0, -1}};
+    for (const auto& d : kSelf6) {
+        const std::uint32_t nk = key_at(ax + d[0], ay + d[1], az + d[2]);
+        // May have gone air already — as part of the carve itself.
+        if (!solid_key(w.grid(), nk)) continue;
+        const std::uint32_t node = node_of_atom(w, mats, s, nk);
+        if (node == 0xFFFFFFFFu) continue; // воздух или подвижный (S20.5)
+        ++run;
+        int why = 0;
+        const bool loose = flood_nodes(w, mats, vis, s, node, run, &why);
+        if (dbg)
+            std::fprintf(
+                stderr,
+                "[detach-dbg] seed atom (%d,%d,%d) -> node cell (%u,%u,%u) "
+                "comp %u: %s\n",
+                ax + d[0], ay + d[1], az + d[2], (node >> 8) % kMacroDim,
+                ((node >> 8) / kMacroDim) % kMacroDim,
+                (node >> 8) / (kMacroDim * kMacroDim), node & 255u,
+                loose ? "LOOSE"
+                      : (why == 1   ? "seen-seed"
+                         : why == 2 ? "merged-judged"
+                                    : "budget"));
+        if (!loose) continue;
+        convert_nodes(w, mats, s, out);
+    }
+}
+
 // The detachment sweep: seed the node flood from every solid neighbour of
 // every sub-voxel the carve removed; convert each fully-enumerated (loose)
 // component in place. Runs AFTER all direct removals so a component severed
@@ -519,58 +604,17 @@ void detach_sweep(World& w, SubField<CellType>* mats, std::int32_t enabled,
     part_cache_reset(s);
     VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2);
     std::uint32_t run = 0;
-    const std::size_t nSeeds = out.destroyed.size();
     static const bool kDbg = std::getenv("GIGA_DETACH_DBG") != nullptr;
-    std::vector<std::uint8_t> runVerdict(1, 0); // [run] 1=loose, иначе why+2
-    for (std::size_t i = 0; i < nSeeds; ++i) {
-        const SubCoord c = unpack_key(
-            pack_key(out.destroyed[i].cell, out.destroyed[i].bit));
-        const int ax = c.cx * kSubDim + c.sx;
-        const int ay = c.cy * kSubDim + c.sy;
-        const int az = c.cz * kSubDim + c.sz;
-        for (const auto& d : kDir6) {
-            const std::uint32_t nk = key_at(ax + d[0], ay + d[1], az + d[2]);
-            // May have gone air already — as part of the carve itself.
-            if (!solid_key(w.grid(), nk)) continue;
-            const std::uint32_t node = node_of_atom(w.grid(), s, nk);
-            if (node == 0xFFFFFFFFu) continue;
-            ++run;
-            int why = 0;
-            const bool loose = flood_nodes(w.grid(), vis, s, node, run, &why);
-            runVerdict.push_back(loose ? 1 : static_cast<std::uint8_t>(why + 2));
-            if (kDbg) {
-                const std::uint32_t marker = vis.lookup_run(node);
-                std::fprintf(
-                    stderr,
-                    "[detach-dbg] seed atom (%d,%d,%d) -> node cell "
-                    "(%u,%u,%u) comp %u: %s (node marked by run %u, its "
-                    "verdict %s)\n",
-                    ax + d[0], ay + d[1], az + d[2],
-                    (node >> 8) % kMacroDim,
-                    ((node >> 8) / kMacroDim) % kMacroDim,
-                    (node >> 8) / (kMacroDim * kMacroDim), node & 255u,
-                    loose ? "LOOSE" : (why == 1 ? "seen-seed"
-                                     : why == 2 ? "merged-judged"
-                                                : "budget"),
-                    marker,
-                    marker < runVerdict.size()
-                        ? (runVerdict[marker] == 1   ? "loose"
-                           : runVerdict[marker] == 3 ? "seen-seed"
-                           : runVerdict[marker] == 4 ? "merged"
-                           : runVerdict[marker] == 5 ? "budget"
-                                                     : "?")
-                        : "self");
-            }
-            if (!loose) continue;
-            convert_nodes(w, mats, s, out);
-        }
-    }
+    const std::size_t nSeeds = out.destroyed.size();
+    for (std::size_t i = 0; i < nSeeds; ++i)
+        judge_atom_neighbours(w, mats, vis, s, out, run, out.destroyed[i].cell,
+                              out.destroyed[i].bit, kDbg);
 }
 
 // СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ (долг автомата, §60/§61-семья): его ходы
 // (крошка уехала, одиночка истаяла) рвут мостики без развёртки отвязки.
-// Судит КАЖДЫЙ компонент каждой изменённой клетки тем же узловым флудом;
-// опёртые регионы, единожды осуждённые, мержатся мгновенно (VisitedSet).
+// Судит каждый ОПОРНЫЙ компонент изменённой клетки тем же узловым флудом;
+// клетка из одного рыхлого даёт 0 компонентов и не судится вовсе (S20.5).
 void judge_cells(World& w, SubField<CellType>* mats,
                  const std::uint32_t* cells, std::size_t n, CarveScratch& s,
                  CarveResult& out) {
@@ -582,13 +626,41 @@ void judge_cells(World& w, SubField<CellType>* mats,
         const std::uint32_t ci = cells[i];
         if (ci >= kMacroCells) continue;
         if (w.grid().masks()[ci].empty()) continue;
-        const std::uint32_t e = cell_partition(w.grid(), s, ci);
+        const std::uint32_t e = cell_partition(w, mats, s, ci);
         const std::uint16_t cnt = s.partCount[e];
         for (std::uint16_t j = 0; j < cnt; ++j) {
             ++run;
-            if (!flood_nodes(w.grid(), vis, s, (ci << 8) | j, run, nullptr))
+            if (!flood_nodes(w, mats, vis, s, (ci << 8) | j, run, nullptr))
                 continue;
             convert_nodes(w, mats, s, out);
+        }
+    }
+}
+
+// Судья от СИДОВ (S20.5, гигиена «сеять от изменения»): вместо пересуда
+// всех компонентов клетки судятся только компоненты, СОСЕДНИЕ с реально
+// изменёнными атомами (XOR масок на шве автомата). Ход автомата меняет
+// только подвижные биты — их опорные соседи и есть все кандидаты на
+// осиротение; остальная клетка не пересуживается.
+void judge_seed_atoms(World& w, SubField<CellType>* mats,
+                      const JudgeSeed* seeds, std::size_t n, CarveScratch& s,
+                      CarveResult& out) {
+    if (n == 0) return;
+    part_cache_reset(s);
+    VisitedSet vis(s, static_cast<std::size_t>(kDetachNodeBudget) * 2 + n * 2);
+    std::uint32_t run = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t ci = seeds[i].cell;
+        if (ci >= kMacroCells) continue;
+        for (int wi = 0; wi < 8; ++wi) {
+            std::uint64_t bits = seeds[i].changed[wi];
+            while (bits != 0) {
+                const int b = std::countr_zero(bits);
+                bits &= bits - 1;
+                judge_atom_neighbours(
+                    w, mats, vis, s, out, run, ci,
+                    static_cast<std::uint16_t>(wi * 64 + b), false);
+            }
         }
     }
 }
@@ -757,9 +829,9 @@ std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
     if (!solid_key(w.grid(), key)) return 0;
     part_cache_reset(scratch);
     VisitedSet vis(scratch, static_cast<std::size_t>(kDetachNodeBudget) * 2);
-    const std::uint32_t node = node_of_atom(w.grid(), scratch, key);
+    const std::uint32_t node = node_of_atom(w, mats, scratch, key);
     if (node == 0xFFFFFFFFu) return 0;
-    if (!flood_nodes(w.grid(), vis, scratch, node, /*run=*/1, nullptr))
+    if (!flood_nodes(w, mats, vis, scratch, node, /*run=*/1, nullptr))
         return 0;
     convert_nodes(w, mats, scratch, out);
     finalize_dirty(out);
@@ -797,6 +869,19 @@ std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
     SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
     judge_cells(w, mats, cells, n, scratch, out);
+    finalize_dirty(out);
+    return static_cast<std::int32_t>(out.detached.size());
+}
+
+std::int32_t detach_judge_seeds(World& w, const JudgeSeed* seeds,
+                                std::size_t n, CarveScratch& scratch,
+                                CarveResult& out) {
+    out.destroyed.clear();
+    out.detached.clear();
+    out.dirtyCells.clear();
+    SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+    judge_seed_atoms(w, mats, seeds, n, scratch, out);
     finalize_dirty(out);
     return static_cast<std::int32_t>(out.detached.size());
 }
