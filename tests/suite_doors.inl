@@ -30,14 +30,16 @@ void declaration_and_toggle() {
         CHECK(d.lift[hub] != kNoPortal);
         CHECK(d.list[d.lift[hub]].mechanism == 1);
     }
-    // На жилом этаже есть и гермополотна (Living/Medical/Hq) и сталь.
+    // Вердикт владельца 2026-08-29: жилой фонд падика — НЕ гермозоны, все
+    // квартирные двери сталь (ломаются упорным карвом). Гермополотна живут
+    // у настоящих гермозон (гермолобби blame) — обе полярности ниже.
     bool sawSteel = false, sawHermetic = false;
     for (const MaskGroup& p : d.list) {
         if (p.mat == kMatDoorSteel) sawSteel = true;
         if (p.mat == kMatDoorHermetic) sawHermetic = true;
     }
     CHECK(sawSteel);
-    CHECK(sawHermetic);
+    CHECK(!sawHermetic);
 
     // Первый акторный портал с чистым проёмом.
     Registry reg;
