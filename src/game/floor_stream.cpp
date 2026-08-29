@@ -486,9 +486,7 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     // a clean no-op on an invalid handle.
     for (Entity e : fm.bodies) {
         if (!ecs.valid(e)) continue;
-        NpcId id = kInvalidNpc;
-        if (auto* ref = ecs.try_get<NpcRef>(e)) id = ref->id;
-        if (id != kInvalidNpc) fold_back(ecs, pool, id, e);
+        if (auto* ref = ecs.try_get<NpcRef>(e)) fold_back(ecs, pool, *ref, e);
         else ecs.destroy(e);
     }
     fm.bodies.clear();

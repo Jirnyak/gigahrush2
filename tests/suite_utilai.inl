@@ -1510,7 +1510,7 @@ static void test_utilai_all() {
         CHECK(decisionsBefore > 0u);
 
         // Ride the elevator: the record folds back and re-embodies as a NEW entity.
-        fold_back(reg, pool, id, e);
+        fold_back(reg, pool, NpcRef{id, pool.generation(id)}, e);
         CHECK(!reg.valid(e));
         e = embody(reg, pool, id, kLayer);
         reg.get<Transform>(e).pos = vec3{55.5f * kCellSize, 55.5f * kCellSize,

@@ -55,7 +55,7 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     if (!pool.valid(id)) return entt::null;
 
     Entity e = reg.create();
-    reg.emplace<NpcRef>(e, NpcRef{id});
+    reg.emplace<NpcRef>(e, NpcRef{id, pool.generation(id)});
 
     Transform tr;
     tr.pos = vec3{(static_cast<float>(pool.cx(id)) + 0.5f) * kEmbodyCellSize,
@@ -143,8 +143,9 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     return e;
 }
 
-void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
-    if (pool.valid(id) && reg.valid(e)) {
+void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e) {
+    const NpcId id = ref.id;
+    if (npc_ref_current(pool, ref) && reg.valid(e)) {
         // Freeze the live state back into the cold record: position -> macro
         // cell (clamped into the 0..255 cell range), then de-embody.
         if (auto* tr = reg.try_get<Transform>(e)) {

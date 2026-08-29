@@ -96,7 +96,7 @@ inline constexpr std::int16_t kSocialAffinityMax =  127;
 //
 // `Relationship::target` ([npc_pool.h]) is a bare NpcId held ACROSS TICKS, and the
 // social pass below is its only writer in src/. A bare id is a SLOT NUMBER, so the
-// moment the pool recycles (`set_recycling(true)`, still unarmed in src/app/main.cpp)
+// moment the pool recycles (`set_recycling(true)`, ARMED in src/app/main.cpp)
 // an edge outlives the person it names and then silently points at whoever inherited
 // the slot: a friendship becomes a friendship with a stranger, and a hostile edge
 // becomes hostility toward a newborn who has done nothing. Identical in shape to the

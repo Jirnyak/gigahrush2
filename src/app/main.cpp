@@ -2272,16 +2272,14 @@ int main(int argc, char** argv) {
     //                                  room for the 12-bit generation). A stale designate
     //                                  RE-DESIGNATES from the floor's live roster instead of
     //                                  handing the camera to whoever inherited the slot.
-    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
-    //                      change. Its lifetime is COUPLED, not merely short: the macro
-    //                      demographic sweep skips `pool.embodied(id)` before it can reach
-    //                      either kill() (macro_sim.cpp), so a macro death can never touch
-    //                      an embodied body; and the only other pool.kill() caller anywhere
-    //                      in src/ is combat.cpp, which kills the record at :138 and
-    //                      destroys the entity at :148 in the same loop. So no entity can
-    //                      outlive the record its NpcRef names. That is an argument from
-    //                      the call graph rather than a generation check — if a third
-    //                      pool.kill() caller ever appears, this line is what it invalidates.
+    //   DONE  NpcRef::id — шестое хранилище закрыто ПОКОЛЕНИЕМ (E-2
+    //                      skeleton-anchor, 2026-08-29): NpcRef несёт gen слота
+    //                      на момент воплощения, npc_ref_current — единственная
+    //                      проверка, fold_back со стейл-ссылкой не пишет строку
+    //                      наследника. Прежний аргумент «по графу вызовов»
+    //                      (совместная смерть записи и тела в combat.cpp) был
+    //                      хрупким по собственному признанию — третий вызывающий
+    //                      pool.kill() больше ничего не инвалидирует.
     pool.set_recycling(true);
     //
     // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding

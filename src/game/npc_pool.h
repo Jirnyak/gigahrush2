@@ -20,11 +20,13 @@
 //     preference — 950,000 records in a 2^20 pool leave a 98,576-slot reserve, and
 //     demographic replacement births drain it in ~2.9 simulated years, after which
 //     the population can only decay ([macro_sim.h] banner, which names this pool
-//     change as the fix). It is OFF by default because a recycled id is a REUSED id
-//     and six places in src/ store a bare NpcId across time — Relationship::target,
-//     NpcRef::id, Contract::giver, FloorModule::candidate, MacroSim::Journey::id,
-//     RelationEdge::id — so each has to move to the generation-checked handle below
-//     before the shipping pool may flip it on. See "Slot recycling" further down.
+//     change as the fix). It is OFF by default because a recycled id is a REUSED id.
+//     Все шесть мест, хранивших голый NpcId через время, ЗАКРЫТЫ поколением
+//     (последний — NpcRef::id, E-2 skeleton-anchor 2026-08-29: поле gen +
+//     npc_ref_current; до того Contract::giver / Journey::id / candidate /
+//     social_edge — на NpcHandle, Relationship::target — поколением в pad), и
+//     main.cpp взводит set_recycling(true) с честной проверкой, а не с
+//     аргументом «по графу вызовов». See "Slot recycling" further down.
 //   * Both procedural and authored ("design") NPCs share this one linear store,
 //     distinguished only by a flag bit, never by living in different arrays.
 //   * Columns are allocated by DEMAND, not uniformly. The ROW LAYOUT below is

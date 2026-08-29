@@ -40,7 +40,21 @@ namespace giga::game {
 // player entity is just an NpcRef whose record has the NpcPlayer bit.
 struct NpcRef {
     NpcId id = kInvalidNpc;
+    // Поколение слота НА МОМЕНТ воплощения (E-2 skeleton-anchor, 2026-08-29;
+    // образец — Relationship::pad). Голый id — номер слота, а переработка
+    // слотов ВЗВЕДЕНА (main.cpp set_recycling): без поколения сущность,
+    // пережившая запись (труп, поздний читатель), молча указывала бы на
+    // новорождённого наследника слота. Прежняя защита была аргументом «по
+    // графу вызовов» — хрупким по собственному признанию.
+    std::uint16_t gen = 0;
 };
+
+// Жив ли за ссылкой ТОТ ЖЕ житель: слот валиден И поколение совпадает.
+// Единственная честная проверка ссылки через время (S20.3); сравнение
+// поколений вручную — дефект.
+inline bool npc_ref_current(const NpcPool& pool, const NpcRef& ref) {
+    return pool.valid(ref.id) && pool.generation(ref.id) == ref.gen;
+}
 
 // World units per macro cell (2 m cells; see worldgen). Kept here so embodiment
 // can place a record's macro cell into world-space without pulling in app code.
@@ -109,7 +123,10 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
 // Fold a live entity's transient state back into its record and de-embody it:
 // writes the macro cell (and clears NpcEmbodied / NpcPlayer), then destroys the
 // entity. Leaves the record otherwise intact and frozen in the cold pool.
-void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e);
+// Гейт поколения (E-2): ссылка не текущая (слот переработан, пока сущность
+// жила) → строка НЕ пишется — только уничтожение тела. Прежняя сигнатура с
+// голым id писала бы координаты в строку наследника слота.
+void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e);
 
 // МОГИЛА ДВЕРЕЙ (приказ владельца 2026-08-28): система дверей вырезана
 // целиком — терминальный тумблер замков умер с ней. Новая дверь строится

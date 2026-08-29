@@ -410,10 +410,45 @@ static void test_embody_and_foldback() {
     // Move the live entity, then fold back: the record's cell follows, and it is
     // de-embodied. hp/inventory were never duplicated onto the entity.
     reg.get<Transform>(e).pos.x = 100.0f; // -> cell 50
-    fold_back(reg, pool, id, e);
+    fold_back(reg, pool, NpcRef{id, pool.generation(id)}, e);
     CHECK(!pool.embodied(id));
     CHECK(pool.cx(id) == 50);
     CHECK(!reg.valid(e));
+}
+
+// E-2 skeleton-anchor (S20.3): NpcRef — ГЕНЕРАЦИОННАЯ ссылка. Переработка
+// слотов взведена (main.cpp set_recycling), и прежняя защита была
+// аргументом «по графу вызовов» — хрупким по собственному признанию. Обе
+// полярности: стейл-ссылка на переработанный слот НЕ текущая и fold_back
+// с ней не пишет строку наследника; свежая ссылка — текущая и пишет.
+static void test_npc_ref_generation() {
+    NpcPool pool;
+    pool.init();
+    pool.set_recycling(true);
+    Registry reg;
+    const NpcId id = pool.spawn();
+    Entity e = embody(reg, pool, id, 0);
+    const NpcRef ref = reg.get<NpcRef>(e);
+    CHECK(npc_ref_current(pool, ref));
+    // Слот умер и переработан: тот же номер, другое поколение = другой
+    // житель.
+    pool.kill(id);
+    const NpcId heir = pool.spawn();
+    CHECK(heir == id);
+    CHECK(!npc_ref_current(pool, ref));
+    // fold_back со стейл-ссылкой: тело уничтожено, строка наследника цела.
+    pool.cx(heir) = 7;
+    reg.get<Transform>(e).pos.x = 100.0f; // клетка 50 — НЕ должна записаться
+    fold_back(reg, pool, ref, e);
+    CHECK(!reg.valid(e));
+    CHECK(pool.cx(heir) == 7);
+    // Свежая ссылка на наследника — текущая, fold_back пишет как всегда.
+    Entity e2 = embody(reg, pool, heir, 0);
+    const NpcRef ref2 = reg.get<NpcRef>(e2);
+    CHECK(npc_ref_current(pool, ref2));
+    reg.get<Transform>(e2).pos.x = 100.0f;
+    fold_back(reg, pool, ref2, e2);
+    CHECK(pool.cx(heir) == 50);
 }
 
 static void test_player_is_a_record() {
@@ -433,7 +468,7 @@ static void test_player_is_a_record() {
 
     // Switch bodies: fold the short one back, embody the tall one as player. The
     // camera eye height must jump to the taller stature (the body-swap rule).
-    fold_back(reg, pool, shortId, shortP);
+    fold_back(reg, pool, NpcRef{shortId, pool.generation(shortId)}, shortP);
     CHECK(!pool.is_player(shortId));
     Entity tallP = embody_as_player(reg, pool, tallId, 0);
     float tallEye = reg.get<CameraTag>(tallP).eyeOffset.z;
@@ -5628,6 +5663,7 @@ int main() {
     test_attribute_block();
     test_height_maps_to_body();
     test_embody_and_foldback();
+    test_npc_ref_generation();
     test_player_is_a_record();
     test_population_seed();
     test_floor_spec();
