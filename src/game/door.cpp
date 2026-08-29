@@ -316,7 +316,8 @@ void dress_lift_portals(Registry& reg, World& w, const Doors& doors,
                      static_cast<float>(oy) * 0.62f) * kCellSize,
                     (static_cast<float>(pcz) + 0.6f) * kCellSize};
                 const Entity btn = spawn_prop_from_id(
-                    reg, w, bp, a, PropId::LiftButton, layer);
+                    reg, w, bp, a, PropId::LiftButton, layer,
+                    prop_wall_yaw(a.face));
                 if (btn != entt::null)
                     reg.emplace_or_replace<DoorRef>(btn,
                                                     DoorRef{doors.lift[hub]});
@@ -340,7 +341,8 @@ void dress_lift_portals(Registry& reg, World& w, const Doors& doors,
                     (static_cast<float>(hcy) + 0.5f -
                      static_cast<float>(oy) * 0.42f) * kCellSize,
                     (static_cast<float>(pcz) + 0.65f) * kCellSize};
-                spawn_prop_from_id(reg, w, pp, a, PropId::LiftPanel, layer);
+                spawn_prop_from_id(reg, w, pp, a, PropId::LiftPanel, layer,
+                                   prop_wall_yaw(a.face));
             } else {
                 std::fprintf(stderr,
                              "[lift] hub %d: у стены кабины нет открытой "

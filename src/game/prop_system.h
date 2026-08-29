@@ -28,6 +28,15 @@ enum class PropFallMode : std::uint8_t {
 // структура — ECS-компонент пропа, оба конца антуража, мировой линк цепи.
 using giga::SubVoxelAnchor;
 
+// Yaw настенного пропа ВЫВОДИТСЯ из грани якоря: размеры props.csv авторские
+// для yaw-0 панели лицом по ±Y (width=X, thickness=Y), X-стена — четверть
+// оборота. Z-грани (пол/потолок) поворота не диктуют — там yaw остаётся
+// размещению. Единственный словарь «грань → поворот»; вывод по месту спавна —
+// дефект (кнопка лифта стояла ребром: dress_lift_portals не передавал yaw).
+inline float prop_wall_yaw(std::uint8_t face) {
+    return anchor_face_axis(face) == 0 ? 1.5707963267948966f : 0.0f;
+}
+
 // The KIND is a row of data/interactables.csv ([interact_table.h] — generated
 // enum, so a new interactive is a CSV row, never an enum edit here). reachM
 // defaults from the table row; a prop's authored reach_mm overrides per spawn.

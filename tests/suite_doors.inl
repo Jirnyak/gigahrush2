@@ -223,14 +223,17 @@ void arbitrary_shape_door() {
 // кнопки — угадывание, которое «кнопка снаружи не срабатывает» и дало.
 void lift_dressing_and_reference() {
     World w;
-    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    // Номер 2 (не 0): хеш lift_entrance на сиде 1337 даёт этажу 2 стороны
+    // обеих осей (1 2 1 2) — проверка четверти оборота ниже не пуста; у
+    // этажа 0 все четыре входа одноосные.
+    generate_floor(w, 2, floor_spec(FloorKind::Residential), 1337u);
     Doors d;
     FloorRooms fr;
-    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
-    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    rooms_declare(fr, 2, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 2, floor_spec(FloorKind::Residential), 1337u);
     Registry reg;
     std::vector<std::uint32_t> dirty;
-    dress_lift_portals(reg, w, d, 0, floor_spec(FloorKind::Residential),
+    dress_lift_portals(reg, w, d, 2, floor_spec(FloorKind::Residential),
                        1337u, 0, dirty);
     // Дефолт: все 4 створки закрыты («где дверь» больше не вопрос).
     for (int hub = 0; hub < 4; ++hub)
@@ -252,6 +255,21 @@ void lift_dressing_and_reference() {
         ++found;
     }
     CHECK(found == 4);
+    // Ориентация ВЫВОДИТСЯ из грани якоря (плейтест 2026-08-29: кнопка
+    // стояла ребром — dress_lift_portals не передавал yaw). Каждый элемент
+    // обвеса: yaw == prop_wall_yaw(face); сид обязан покрыть обе оси стен,
+    // иначе проверка четверти оборота пуста.
+    bool axisX = false, axisY = false;
+    auto dressed =
+        reg.view<const PropOf, const PropMesh, const SubVoxelAnchor>();
+    for (auto e : dressed) {
+        const PropId pid = dressed.get<const PropOf>(e).id;
+        if (pid != PropId::LiftButton && pid != PropId::LiftPanel) continue;
+        const std::uint8_t face = dressed.get<const SubVoxelAnchor>(e).face;
+        CHECK(dressed.get<const PropMesh>(e).yaw == prop_wall_yaw(face));
+        (anchor_face_axis(face) == 0 ? axisX : axisY) = true;
+    }
+    CHECK(axisX && axisY);
 }
 
 // S20.4 «долг писателя один и полный»: дверь — писатель статики, как карв.

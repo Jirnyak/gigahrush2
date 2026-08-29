@@ -769,15 +769,14 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const PropDef& d = prop_def(pid);
                 const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 
-                // The wall it hangs on: normal direction + flush offset + yaw.
-                // Sizes are authored width(X) x thickness(Y) x height(Z) for a
-                // yaw-0 panel facing +-Y; X/Y walls rotate a quarter turn.
+                // The wall it hangs on: normal direction + flush offset.
+                // Yaw выводится из грани якоря ниже (prop_wall_yaw) — один
+                // словарь «грань → поворот» на всех настенных писателей.
                 int wxd = 0, wyd = 0;
-                float yawVal = 0.0f;
-                if (solidWest)       { wxd = -1; yawVal = kHalfPi; }
-                else if (solidEast)  { wxd = 1;  yawVal = kHalfPi; }
-                else if (solidSouth) { wyd = -1; yawVal = 0.0f; }
-                else                 { wyd = 1;  yawVal = 0.0f; }
+                if (solidWest)       { wxd = -1; }
+                else if (solidEast)  { wxd = 1;  }
+                else if (solidSouth) { wyd = -1; }
+                else                 { wyd = 1;  }
 
                 // ЗАПРОС ПОВЕРХНОСТЕЙ ([world/surface.h], S10): экспонирована
                 // ли грань стены и где её реальная поверхность. Стены лепленые
@@ -817,7 +816,8 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
-                                             pid, layer, yawVal, anim, /*flags*/0);
+                                             pid, layer, prop_wall_yaw(wallFace),
+                                             anim, /*flags*/0);
                 if (e != entt::null) ++count;
             }
         }
