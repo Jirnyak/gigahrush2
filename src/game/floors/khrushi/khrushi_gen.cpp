@@ -694,15 +694,15 @@ void khrushi_bake_antourage(const World& /*world*/, int number, unsigned seed,
             c.massKg = spanM * 0.35f; // cable ~0.35 kg/m, as the generic bake
             // Anchors in the POLE cells (the elbow's support column), so the
             // wire lets go when the pole is carved, not when the road is.
-            c.ax0 = pa.x;
-            c.ay0 = pa.y;
-            c.az0 = static_cast<std::uint8_t>(
-                kKhrushiGroundCoord + ((kKhrushiPoleTopH - 1) >> 3));
-            c.ax1 = pb.x;
-            c.ay1 = pb.y;
-            c.az1 = c.az0;
+            {
+                const int az = kKhrushiGroundCoord +
+                               ((kKhrushiPoleTopH - 1) >> 3);
+                // hangs off the hook's under-face
+                const std::uint8_t hangFace = anchor_face_pack(2, -1);
+                c.a0 = anchor_centre(pa.x, pa.y, az, hangFace);
+                c.a1 = anchor_centre(pb.x, pb.y, az, hangFace);
+            }
             c.pinMask = 0x81; // both ends at the elbows
-            c.face = anchor_face_pack(2, -1); // hangs off the hook's under-face
             c.matId = kMatPipeMetal;
             out.wires.push_back(c);
             ++strung;

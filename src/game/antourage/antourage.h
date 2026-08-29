@@ -49,27 +49,18 @@ struct WireChain {
     vec3 p[kWirePoints];       // rest pose, world units
     float restLen = 0.0f;      // segment rest length (uniform per chain)
     float massKg = 0.0f;       // whole-chain mass (materials density * volume)
-    // The two anchor CELLS. Carve one and that END lets go (the chain hangs
-    // from the other); carve both and the chain is dead — probed against the
-    // live grid by the consumer, never cached.
-    std::uint8_t ax0, ay0, az0;
-    std::uint8_t ax1, ay1, az1;
+    // ДВА ПОЛНЫХ ЯКОРЯ (D.1, S20.2: единая запись клетка+грань+точка —
+    // [world/anchor.h] SubVoxelAnchor). Carve one and that END lets go (the
+    // chain hangs from the other); carve both and the chain is dead — probed
+    // against the live grid by the consumer, never cached. Прежнее «две
+    // клетки + ОДНА face на пару» не выражало колено через угол и пробовало
+    // центр грани вместо точки крепления.
+    SubVoxelAnchor a0, a1;
     // Which of the 8 points are PINNED (bit i = point i). 0x81 = both ends —
     // a hanging wire. 0x01 = top end only — a strip curtain that swings free
     // and is pushed aside by whoever walks through (the GPU verlet already
     // does the pushing; this mask is all a designer needs to set).
     std::uint8_t pinMask = 0x81;
-    // WHICH FACE of the anchor cells this hangs off, as `axis * 2 + (dir < 0)`
-    // where `dir` points from the anchor cell TOWARD the chain
-    // ([world/anchor.h] anchor_face_*). The aliveness probe needs it because a carve
-    // works in SUB-VOXELS while a cell is 2 m: "the cell is air" only becomes
-    // true once all 512 sub-voxels are gone, so a player-sized hole punched
-    // exactly where the wire is pinned left it hanging from nothing. With the
-    // face recorded, the probe asks the question the bake asked — is there still
-    // matter in the column I was pinned to — and the wire lets go when the
-    // matter it hung from does. Stored, not derived: the world's regime may flip
-    // at runtime, but a thing hangs where it was hung.
-    std::uint8_t face = 0;
     // Material row the chain is made of ([world/materials.h]). The draw is a
     // plain line today; this is what tints the DEBRIS when a carve severs it,
     // so the shred matches the thing that shredded — data, not a constant in
@@ -90,15 +81,13 @@ struct ClothSheet {
     vec3 p[kClothPoints];    // rest pose, world units, row-major from the top
     float restX = 0.0f;      // horizontal neighbour rest length
     float restY = 0.0f;      // vertical neighbour rest length
-    // The two anchor CELLS (the ceiling cells over the top corners). Carve one
-    // and that HALF of the top row lets go — the sheet hangs by a corner;
-    // carve both and it is dead. Probed against the LIVE grid.
-    std::uint8_t ax0, ay0, az0;
-    std::uint8_t ax1, ay1, az1;
+    // ДВА ПОЛНЫХ ЯКОРЯ потолочных углов (D.1, единая запись). Carve one and
+    // that HALF of the top row lets go — the sheet hangs by a corner; carve
+    // both and it is dead. Probed against the LIVE grid.
+    SubVoxelAnchor a0, a1;
     // Bit i pins point i. Default: the whole top row hangs, the rest swings.
     std::uint32_t pinMask = 0xFFu;
     std::uint8_t matId = 0; // debris tint, as on WireChain
-    std::uint8_t face = 0;  // attachment face, as on WireChain
 };
 
 // The attachment face lives in [world/anchor.h] now (anchor_face_pack/axis/dir):
@@ -124,14 +113,10 @@ struct AntourageInstance {
     std::uint8_t shape = 0;
     std::uint8_t matId = 0;
     std::uint8_t emissive = 0;
-    // The face this piece HUGS, packed like WireChain::face. A pipe is anchored
-    // to the column it touches, not merely to a 2 m cell — same rule as the
-    // chains, because a rule that differs per primitive drifts (owner,
-    // 2026-08-05: "асимметрия это плохо").
-    std::uint8_t face = 0;
-    std::uint8_t ax0, ay0, az0;   // anchor cells for the LIVE-grid probe
-    std::uint8_t ax1, ay1, az1;
-    std::uint8_t pad2_ = 0, pad3_ = 0;
+    // ДВА ПОЛНЫХ ЯКОРЯ (D.1): у колена трубы через угол каждый конец —
+    // СВОЯ грань своего узла сети (прежний один face на пару был заведомой
+    // аппроксимацией). Point pieces set both anchors to one spot.
+    SubVoxelAnchor a0, a1;
 };
 
 // Everything one floor's antourage bake produced. Owned per resident floor

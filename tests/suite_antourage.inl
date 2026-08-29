@@ -46,9 +46,9 @@ static bool same_bake(const AntourageBake& a, const AntourageBake& b) {
         const AntourageInstance& y = b.instances[i];
         if (!same_v3(x.pos, y.pos) || !same_v3(x.scale, y.scale) ||
             !same_v3(x.color, y.color) || x.yaw != y.yaw || x.shape != y.shape ||
-            x.matId != y.matId || x.emissive != y.emissive || x.ax0 != y.ax0 ||
-            x.ay0 != y.ay0 || x.az0 != y.az0 || x.ax1 != y.ax1 ||
-            x.ay1 != y.ay1 || x.az1 != y.az1)
+            x.matId != y.matId || x.emissive != y.emissive || x.a0.cx != y.a0.cx ||
+            x.a0.cy != y.a0.cy || x.a0.cz != y.a0.cz || x.a1.cx != y.a1.cx ||
+            x.a1.cy != y.a1.cy || x.a1.cz != y.a1.cz)
             return false;
     }
     for (std::size_t i = 0; i < a.wires.size(); ++i) {
@@ -57,9 +57,9 @@ static bool same_bake(const AntourageBake& a, const AntourageBake& b) {
         for (int p = 0; p < kWirePoints; ++p)
             if (!same_v3(x.p[p], y.p[p])) return false;
         if (x.restLen != y.restLen || x.massKg != y.massKg ||
-            x.pinMask != y.pinMask || x.matId != y.matId || x.ax0 != y.ax0 ||
-            x.ay0 != y.ay0 || x.az0 != y.az0 || x.ax1 != y.ax1 ||
-            x.ay1 != y.ay1 || x.az1 != y.az1)
+            x.pinMask != y.pinMask || x.matId != y.matId || x.a0.cx != y.a0.cx ||
+            x.a0.cy != y.a0.cy || x.a0.cz != y.a0.cz || x.a1.cx != y.a1.cx ||
+            x.a1.cy != y.a1.cy || x.a1.cz != y.a1.cz)
             return false;
     }
     for (std::size_t i = 0; i < a.cloths.size(); ++i) {
@@ -68,9 +68,9 @@ static bool same_bake(const AntourageBake& a, const AntourageBake& b) {
         for (int p = 0; p < kClothPoints; ++p)
             if (!same_v3(x.p[p], y.p[p])) return false;
         if (x.restX != y.restX || x.restY != y.restY || x.pinMask != y.pinMask ||
-            x.matId != y.matId || x.ax0 != y.ax0 || x.ay0 != y.ay0 ||
-            x.az0 != y.az0 || x.ax1 != y.ax1 || x.ay1 != y.ay1 ||
-            x.az1 != y.az1)
+            x.matId != y.matId || x.a0.cx != y.a0.cx || x.a0.cy != y.a0.cy ||
+            x.a0.cz != y.a0.cz || x.a1.cx != y.a1.cx || x.a1.cy != y.a1.cy ||
+            x.a1.cz != y.a1.cz)
             return false;
     }
     return true;
@@ -176,15 +176,15 @@ static void test_antourage_isotropy() {
                 ++airAnchors;
         };
         for (const AntourageInstance& it : b.instances) {
-            anchors_solid(it.ax0, it.ay0, it.az0, it.ax1, it.ay1, it.az1);
+            anchors_solid(it.a0.cx, it.a0.cy, it.a0.cz, it.a1.cx, it.a1.cy, it.a1.cz);
             if (it.shape > kShapeCylinderZ) ++badShape;
             if (it.scale.x <= 0.0f || it.scale.y <= 0.0f || it.scale.z <= 0.0f)
                 ++badScale;
         }
         for (const WireChain& c : b.wires)
-            anchors_solid(c.ax0, c.ay0, c.az0, c.ax1, c.ay1, c.az1);
+            anchors_solid(c.a0.cx, c.a0.cy, c.a0.cz, c.a1.cx, c.a1.cy, c.a1.cz);
         for (const ClothSheet& s : b.cloths)
-            anchors_solid(s.ax0, s.ay0, s.az0, s.ax1, s.ay1, s.az1);
+            anchors_solid(s.a0.cx, s.a0.cy, s.a0.cz, s.a1.cx, s.a1.cy, s.a1.cz);
         CHECK(airAnchors == 0);
         CHECK(badShape == 0);
         CHECK(badScale == 0);
@@ -268,7 +268,7 @@ static void test_antourage_carve_drops_the_wire() {
     // A wire whose two anchors are DIFFERENT cells, so one carve cuts one end.
     const WireChain* pick = nullptr;
     for (const WireChain& c : bake.wires)
-        if (c.ax0 != c.ax1 || c.ay0 != c.ay1 || c.az0 != c.az1) { pick = &c; break; }
+        if (c.a0.cx != c.a1.cx || c.a0.cy != c.a1.cy || c.a0.cz != c.a1.cz) { pick = &c; break; }
     CHECK(pick != nullptr);
     const WireChain wire = *pick;
     CHECK(wire_live_pins(w, wire) == wire.pinMask);
@@ -291,7 +291,7 @@ static void test_antourage_carve_drops_the_wire() {
     carve_sphere(w, op, scratch, res);
     CHECK(!res.dirtyCells.empty());
     // THE DISCRIMINATOR: the cell is still nominally solid...
-    CHECK(w.grid().cell(wire.ax0, wire.ay0, wire.az0) != kCellAir);
+    CHECK(w.grid().cell(wire.a0.cx, wire.a0.cy, wire.a0.cz) != kCellAir);
 
     // ...and yet the column the wire hung from is gone, so THAT end lets go.
     const std::uint8_t pins = wire_live_pins(w, wire);
@@ -438,9 +438,9 @@ static void test_antourage_detached_pipe_falls_and_lands() {
     AntourageBake b2;
     bake_antourage(w2, 0, 1337u, b2);
     const AntourageInstance victim = b2.instances.front();
-    w2.grid().set_cell(victim.ax0, victim.ay0, victim.az0, kCellAir);
+    w2.grid().set_cell(victim.a0.cx, victim.a0.cy, victim.a0.cz, kCellAir);
     const std::uint32_t dirty = static_cast<std::uint32_t>(
-        macro_index(victim.ax0, victim.ay0, victim.az0));
+        macro_index(victim.a0.cx, victim.a0.cy, victim.a0.cz));
     ParticleBurstQueue bursts;
     std::vector<DetachedPiece> fell;
     const std::uint32_t dead =
@@ -489,11 +489,11 @@ static void test_pipes_hug_and_branch() {
         // be the mounting gap, not a metre of air. Ray-marching from the
         // instance CENTRE looked right but lied both ways — a half-link reaches
         // into the neighbour's cell, where the ceiling may be higher.
-        const int ax = anchor_face_axis(it.face);
-        const int dr = anchor_face_dir(it.face);
-        const int s = w.grid().mask(it.ax0, it.ay0, it.az0).face_layer(ax, dr, true);
+        const int ax = anchor_face_axis(it.a0.face);
+        const int dr = anchor_face_dir(it.a0.face);
+        const int s = w.grid().mask(it.a0.cx, it.a0.cy, it.a0.cz).face_layer(ax, dr, true);
         if (s < 0) { ++floating; continue; }         // nothing to clamp to at all
-        const int anchorCoord = ax == 0 ? it.ax0 : ax == 1 ? it.ay0 : it.az0;
+        const int anchorCoord = ax == 0 ? it.a0.cx : ax == 1 ? it.a0.cy : it.a0.cz;
         const int edge = dr < 0 ? s : s + 1;
         const float face_m = static_cast<float>(anchorCoord) * kCellSize +
                              static_cast<float>(edge) * step;
@@ -521,7 +521,7 @@ static void test_pipes_hug_and_branch() {
     };
     std::vector<std::uint64_t> runKeys, fitKeys;
     for (const AntourageInstance& it : b.instances) {
-        const std::uint64_t k = key_of(it.ax0, it.ay0, it.az0, it.face);
+        const std::uint64_t k = key_of(it.a0.cx, it.a0.cy, it.a0.cz, it.a0.face);
         if (it.shape == kShapeBox) fitKeys.push_back(k);
         else runKeys.push_back(k);
     }
@@ -603,17 +603,17 @@ static void test_pipes_hug_and_branch() {
     std::uint32_t orphans = 0;
     for (const AntourageInstance& it : b.instances) {
         if (it.shape == kShapeBox) continue;
-        if (has(fitKeys, key_of(it.ax0, it.ay0, it.az0, it.face))) continue;
+        if (has(fitKeys, key_of(it.a0.cx, it.a0.cy, it.a0.cz, it.a0.face))) continue;
         const int axis = it.shape == kShapeCylinderX ? 0
                        : it.shape == kShapeCylinderY ? 1 : 2;
         bool linked = false;
         for (int s = -1; s <= 1 && !linked; s += 2) {
-            int a[3] = {it.ax0, it.ay0, it.az0};
+            int a[3] = {it.a0.cx, it.a0.cy, it.a0.cz};
             a[axis] = wrap_macro(a[axis] + s);
             const std::uint64_t nk = key_of(static_cast<std::uint8_t>(a[0]),
                                             static_cast<std::uint8_t>(a[1]),
                                             static_cast<std::uint8_t>(a[2]),
-                                            it.face);
+                                            it.a0.face);
             linked = has(runKeys, nk) || has(fitKeys, nk);
         }
         if (!linked) ++orphans;
@@ -623,7 +623,7 @@ static void test_pipes_hug_and_branch() {
     // asymmetry ([problems.md] §11), and only a histogram catches it.
     std::uint32_t byStorey[8] = {0,0,0,0,0,0,0,0};
     for (const AntourageInstance& it : b.instances)
-        ++byStorey[(it.az0 * 8u) / kMacroDim];
+        ++byStorey[(it.a0.cz * 8u) / kMacroDim];
     std::fprintf(stderr, "[antourage] pieces by z-eighth: %u %u %u %u %u %u %u %u\n",
                  byStorey[0], byStorey[1], byStorey[2], byStorey[3],
                  byStorey[4], byStorey[5], byStorey[6], byStorey[7]);
@@ -631,7 +631,7 @@ static void test_pipes_hug_and_branch() {
     for (const AntourageInstance& it : b.instances) {
         if (it.shape == kShapeBox) continue;
         ++byAxis[it.shape == kShapeCylinderX ? 0 : it.shape == kShapeCylinderY ? 1 : 2];
-        ++byFace[it.face % 6u];
+        ++byFace[it.a0.face % 6u];
     }
     std::fprintf(stderr,
                  "[antourage] pipes: %u legs, %u joints, %u floating, %u orphans\n",
@@ -692,8 +692,8 @@ static void test_antourage_all() {
     // contradiction. Every anchor it recorded is real SOLID matter, every
     // shape ordinal is a real catalog row, every scale is positive.
     for (const AntourageInstance& it : bake.instances) {
-        CHECK(w.grid().cell(it.ax0, it.ay0, it.az0) != kCellAir);
-        CHECK(w.grid().cell(it.ax1, it.ay1, it.az1) != kCellAir);
+        CHECK(w.grid().cell(it.a0.cx, it.a0.cy, it.a0.cz) != kCellAir);
+        CHECK(w.grid().cell(it.a1.cx, it.a1.cy, it.a1.cz) != kCellAir);
         CHECK(it.shape <= kShapeCylinderZ);
         CHECK(it.scale.x > 0.0f && it.scale.y > 0.0f && it.scale.z > 0.0f);
     }
@@ -709,8 +709,8 @@ static void test_antourage_all() {
     // GHOST: every wire hangs from real ceilings over clear air, and its rest
     // pose sags between its anchors, never above them.
     for (const WireChain& c : bake.wires) {
-        CHECK(w.grid().cell(c.ax0, c.ay0, c.az0) != kCellAir); // anchors solid
-        CHECK(w.grid().cell(c.ax1, c.ay1, c.az1) != kCellAir);
+        CHECK(w.grid().cell(c.a0.cx, c.a0.cy, c.a0.cz) != kCellAir); // anchors solid
+        CHECK(w.grid().cell(c.a1.cx, c.a1.cy, c.a1.cz) != kCellAir);
         CHECK(c.restLen > 0.0f);
         CHECK(c.massKg > 0.0f);
         // Ends may sit at DIFFERENT heights now (each anchors to its own
@@ -728,8 +728,8 @@ static void test_antourage_all() {
     CHECK(!bake.cloths.empty());
     std::fprintf(stderr, "[antourage] cloths: %zu\n", bake.cloths.size());
     for (const ClothSheet& s : bake.cloths) {
-        CHECK(w.grid().cell(s.ax0, s.ay0, s.az0) != kCellAir);
-        CHECK(w.grid().cell(s.ax1, s.ay1, s.az1) != kCellAir);
+        CHECK(w.grid().cell(s.a0.cx, s.a0.cy, s.a0.cz) != kCellAir);
+        CHECK(w.grid().cell(s.a1.cx, s.a1.cy, s.a1.cz) != kCellAir);
         CHECK(s.restX > 0.0f);
         CHECK(s.restY > 0.0f);
         CHECK(s.pinMask == 0xFFu); // this module pins exactly the top row
@@ -765,13 +765,13 @@ static void test_antourage_all() {
         ParticleBurstQueue bursts;
         // A dirty list that names an untouched cell kills nobody.
         const std::uint32_t innocent = static_cast<std::uint32_t>(
-            macro_index(victim.ax0, victim.ay0, wrap_macro(victim.az0 + 4)));
+            macro_index(victim.a0.cx, victim.a0.cy, wrap_macro(victim.a0.cz + 4)));
         CHECK(antourage_carve_step(w, bake, &innocent, 1, bursts, 7u) == 0);
         CHECK(bursts.count == 0);
 
-        w.grid().set_cell(victim.ax0, victim.ay0, victim.az0, kCellAir);
+        w.grid().set_cell(victim.a0.cx, victim.a0.cy, victim.a0.cz, kCellAir);
         const std::uint32_t dirty = static_cast<std::uint32_t>(
-            macro_index(victim.ax0, victim.ay0, victim.az0));
+            macro_index(victim.a0.cx, victim.a0.cy, victim.a0.cz));
         CHECK(!antourage_alive(w, victim));
         const std::uint32_t dead =
             antourage_carve_step(w, bake, &dirty, 1, bursts, 7u);
@@ -784,10 +784,10 @@ static void test_antourage_all() {
         // neighbouring cell empties now, and the piece — dead since the first
         // op — stays silent.
         ParticleBurstQueue again;
-        const int nx = wrap_macro(victim.ax1 + 1);
-        w.grid().set_cell(nx, victim.ay1, victim.az1, kCellAir);
+        const int nx = wrap_macro(victim.a1.cx + 1);
+        w.grid().set_cell(nx, victim.a1.cy, victim.a1.cz, kCellAir);
         const std::uint32_t dirty2 = static_cast<std::uint32_t>(
-            macro_index(nx, victim.ay1, victim.az1));
+            macro_index(nx, victim.a1.cy, victim.a1.cz));
         const std::uint32_t dead2 =
             antourage_carve_step(w, bake, &dirty2, 1, again, 9u);
         for (std::uint16_t i = 0; i < again.count; ++i)
@@ -810,7 +810,7 @@ static void test_antourage_all() {
         CHECK(wire_live_pins(w3, wire) == wire.pinMask); // intact
         CHECK(antourage_alive(w3, wire));
 
-        w3.grid().set_cell(wire.ax0, wire.ay0, wire.az0, kCellAir);
+        w3.grid().set_cell(wire.a0.cx, wire.a0.cy, wire.a0.cz, kCellAir);
         const std::uint8_t halfPins = wire_live_pins(w3, wire);
         CHECK((halfPins & 1u) == 0u);                    // that end let go
         CHECK((halfPins >> (kWirePoints - 1)) & 1u);     // this one still holds
@@ -821,18 +821,18 @@ static void test_antourage_all() {
         ParticleBurstQueue q;
         const vec3 mid = wire.p[kWirePoints / 2];
         const std::uint32_t cut0 = static_cast<std::uint32_t>(
-            macro_index(wire.ax0, wire.ay0, wire.az0));
+            macro_index(wire.a0.cx, wire.a0.cy, wire.a0.cz));
         antourage_carve_step(w3, b3, &cut0, 1, q, 3u);
         for (std::uint16_t i = 0; i < q.count; ++i)
             CHECK(q.items[i].pos.x != mid.x || q.items[i].pos.y != mid.y ||
                   q.items[i].pos.z != mid.z);
         const std::uint16_t afterFirst = q.count;
 
-        w3.grid().set_cell(wire.ax1, wire.ay1, wire.az1, kCellAir);
+        w3.grid().set_cell(wire.a1.cx, wire.a1.cy, wire.a1.cz, kCellAir);
         CHECK(wire_live_pins(w3, wire) == 0u);
         CHECK(!antourage_alive(w3, wire));
         const std::uint32_t cut1 = static_cast<std::uint32_t>(
-            macro_index(wire.ax1, wire.ay1, wire.az1));
+            macro_index(wire.a1.cx, wire.a1.cy, wire.a1.cz));
         CHECK(antourage_carve_step(w3, b3, &cut1, 1, q, 4u) > 0);
         CHECK(q.count > afterFirst); // the chain finally shed its debris
 
@@ -840,20 +840,20 @@ static void test_antourage_all() {
         // Pick a sheet the two carves above did not already touch.
         const ClothSheet* intact = nullptr;
         for (const ClothSheet& s : b3.cloths)
-            if (w3.grid().cell(s.ax0, s.ay0, s.az0) != kCellAir &&
-                w3.grid().cell(s.ax1, s.ay1, s.az1) != kCellAir) {
+            if (w3.grid().cell(s.a0.cx, s.a0.cy, s.a0.cz) != kCellAir &&
+                w3.grid().cell(s.a1.cx, s.a1.cy, s.a1.cz) != kCellAir) {
                 intact = &s;
                 break;
             }
         CHECK(intact != nullptr);
         const ClothSheet sheet = *intact;
         CHECK(cloth_live_pins(w3, sheet) == sheet.pinMask);
-        w3.grid().set_cell(sheet.ax0, sheet.ay0, sheet.az0, kCellAir);
+        w3.grid().set_cell(sheet.a0.cx, sheet.a0.cy, sheet.a0.cz, kCellAir);
         const std::uint32_t halfSheet = cloth_live_pins(w3, sheet);
         CHECK((halfSheet & 0x0Fu) == 0u);   // left half of the top row let go
         CHECK((halfSheet & 0xF0u) != 0u);   // right half still holds
         CHECK(antourage_alive(w3, sheet));
-        w3.grid().set_cell(sheet.ax1, sheet.ay1, sheet.az1, kCellAir);
+        w3.grid().set_cell(sheet.a1.cx, sheet.a1.cy, sheet.a1.cz, kCellAir);
         CHECK(cloth_live_pins(w3, sheet) == 0u);
         CHECK(!antourage_alive(w3, sheet));
     }

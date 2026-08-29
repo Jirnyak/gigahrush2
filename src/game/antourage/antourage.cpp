@@ -237,17 +237,18 @@ WalkCell face_anchor(const WalkCell& c, int face) {
     return stepped(c, anchor_face_axis(face), -anchor_face_dir(face));
 }
 
-void push_box(AntourageBake& out, vec3 pos, vec3 scale, std::uint8_t face,
-              const WalkCell& anchor) {
+// Два (грань, опора) — фитинг колена честно держится за ОБЕ грани, которые
+// соединяет (D.1); прямой кусок передаёт одну пару дважды.
+void push_box(AntourageBake& out, vec3 pos, vec3 scale, std::uint8_t face0,
+              const WalkCell& anchor0, std::uint8_t face1,
+              const WalkCell& anchor1) {
     AntourageInstance b{};
     b.pos = pos;
     b.scale = scale;
     b.shape = kShapeBox;
     b.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-    b.face = face;
-    b.ax0 = b.ax1 = static_cast<std::uint8_t>(anchor.x);
-    b.ay0 = b.ay1 = static_cast<std::uint8_t>(anchor.y);
-    b.az0 = b.az1 = static_cast<std::uint8_t>(anchor.z);
+    b.a0 = anchor_centre(anchor0.x, anchor0.y, anchor0.z, face0);
+    b.a1 = anchor_centre(anchor1.x, anchor1.y, anchor1.z, face1);
     out.instances.push_back(b);
 }
 
@@ -467,7 +468,9 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             vec3 hi{std::fmax(a.x, b.x), std::fmax(a.y, b.y), std::fmax(a.z, b.z)};
             push_box(out, (lo + hi) * 0.5f,
                      vec3{hi.x - lo.x + d, hi.y - lo.y + d, hi.z - lo.z + d},
-                     static_cast<std::uint8_t>(face), an);
+                     static_cast<std::uint8_t>(face), an,
+                     static_cast<std::uint8_t>(other),
+                     face_anchor(c, other));
         }
 
         auto emit_pipe = [&](int axis, float len, vec3 pos) {
@@ -479,10 +482,8 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                 axis == 0 ? kShapeCylinderX : axis == 1 ? kShapeCylinderY
                                                         : kShapeCylinderZ);
             inst.matId = static_cast<std::uint8_t>(kMatPipeMetal);
-            inst.face = static_cast<std::uint8_t>(face);
-            inst.ax0 = inst.ax1 = static_cast<std::uint8_t>(an.x);
-            inst.ay0 = inst.ay1 = static_cast<std::uint8_t>(an.y);
-            inst.az0 = inst.az1 = static_cast<std::uint8_t>(an.z);
+            inst.a0 = inst.a1 = anchor_centre(
+                an.x, an.y, an.z, static_cast<std::uint8_t>(face));
             out.instances.push_back(inst);
         };
 
@@ -509,7 +510,8 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
             // so it must not be measured by the rule that says a run hugs.
             vec3 sc{d, d, d};
             vec_set(sc, fax, std::fabs(step) + d);
-            push_box(out, jog, sc, static_cast<std::uint8_t>(face), an);
+            push_box(out, jog, sc, static_cast<std::uint8_t>(face), an,
+                     static_cast<std::uint8_t>(face), an);
         }
 
         const bool straight = links == 2 && !bends &&
@@ -531,6 +533,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                             : links == 2 ? 2.1f * kPipeRadius
                                          : 1.8f * kPipeRadius;
             push_box(out, a, vec3{hub, hub, hub},
+                     static_cast<std::uint8_t>(face), an,
                      static_cast<std::uint8_t>(face), an);
             sinceBracket = 0;
             continue;
@@ -543,6 +546,7 @@ void bake_pipes(const World& w, const GravityFrame& f, std::uint32_t fseed,
                                     kPipeRadius);
             push_box(out, clamp, vec3{1.5f * kPipeRadius, 1.5f * kPipeRadius,
                                       1.5f * kPipeRadius},
+                     static_cast<std::uint8_t>(face), an,
                      static_cast<std::uint8_t>(face), an);
         }
     }
@@ -605,12 +609,11 @@ void bake_wires(const World& w, const GravityFrame& f, std::uint32_t fseed,
         const WalkCell h0 = wrap_all(stepped(c0, f.axis, f.upSign));
         const WalkCell h1 = wrap_all(stepped(c1, f.axis, f.upSign));
         WireChain c{};
-        c.ax0 = static_cast<std::uint8_t>(h0.x);
-        c.ay0 = static_cast<std::uint8_t>(h0.y);
-        c.az0 = static_cast<std::uint8_t>(h0.z);
-        c.ax1 = static_cast<std::uint8_t>(h1.x);
-        c.ay1 = static_cast<std::uint8_t>(h1.y);
-        c.az1 = static_cast<std::uint8_t>(h1.z);
+        {
+            const std::uint8_t hangFace = anchor_face_pack(f.axis, -f.upSign);
+            c.a0 = anchor_centre(h0.x, h0.y, h0.z, hangFace);
+            c.a1 = anchor_centre(h1.x, h1.y, h1.z, hangFace);
+        }
         const vec3 a = anchor_point(f, c0, face0, 0.12f);
         const vec3 b = anchor_point(f, c1, face1, 0.12f);
         const float spanM = static_cast<float>(span) * kCellSize;
@@ -631,7 +634,6 @@ void bake_wires(const World& w, const GravityFrame& f, std::uint32_t fseed,
         c.restLen = (f.pull ? spanM * 1.02f : spanM) /
                     static_cast<float>(kWirePoints - 1);
         c.massKg = spanM * kWireKgPerMetre;
-        c.face = anchor_face_pack(f.axis, -f.upSign);
         c.matId = static_cast<std::uint8_t>(kMatPipeMetal); // cable sheath
         out.wires.push_back(c);
     }
@@ -671,12 +673,11 @@ void bake_cloths(const World& w, const GravityFrame& f, std::uint32_t fseed,
         const WalkCell h0 = wrap_all(stepped(c0, f.axis, f.upSign));
         const WalkCell h1 = wrap_all(stepped(c1, f.axis, f.upSign));
         ClothSheet s{};
-        s.ax0 = static_cast<std::uint8_t>(h0.x);
-        s.ay0 = static_cast<std::uint8_t>(h0.y);
-        s.az0 = static_cast<std::uint8_t>(h0.z);
-        s.ax1 = static_cast<std::uint8_t>(h1.x);
-        s.ay1 = static_cast<std::uint8_t>(h1.y);
-        s.az1 = static_cast<std::uint8_t>(h1.z);
+        {
+            const std::uint8_t hangFace = anchor_face_pack(f.axis, -f.upSign);
+            s.a0 = anchor_centre(h0.x, h0.y, h0.z, hangFace);
+            s.a1 = anchor_centre(h1.x, h1.y, h1.z, hangFace);
+        }
         // Top edge: centred between the two cells, sunk to whichever real face
         // is further DOWN so no corner pins into air.
         const float up = static_cast<float>(f.upSign);
@@ -701,7 +702,6 @@ void bake_cloths(const World& w, const GravityFrame& f, std::uint32_t fseed,
         s.pinMask = 0xFFu; // the top row
         // Canvas has no material row of its own yet; plaster's dusty beige is
         // the closest honest tint for the shreds. One CSV line from real.
-        s.face = anchor_face_pack(f.axis, -f.upSign);
         s.matId = static_cast<std::uint8_t>(kMatPlaster);
         out.cloths.push_back(s);
     }
@@ -796,9 +796,8 @@ void antourage_detach_step(const World& w, std::vector<DetachedPiece>& pieces,
 // attachment point. This wrapper only keeps the local negative-polarity name.
 // World, не MacroGrid: проба несёт закон опоры S20.5 (подвижный атом якорь
 // не держит), а для него нужен материал из страницы.
-static bool anchor_gone(const World& w, int x, int y, int z,
-                        std::uint8_t face) {
-    return !anchor_alive(w, x, y, z, face);
+static bool anchor_gone(const World& w, const SubVoxelAnchor& a) {
+    return !anchor_alive(w, a);
 }
 
 
@@ -806,13 +805,12 @@ bool antourage_alive(const World& w, const AntourageInstance& it) {
     // BOTH ends, and each by the SUB-VOXEL column it hugs (anchor_gone below):
     // a pipe with one end in the void is not a pipe, and a pipe whose wall was
     // shot out where it clamps is not hanging on anything either.
-    return !anchor_gone(w, it.ax0, it.ay0, it.az0, it.face) &&
-           !anchor_gone(w, it.ax1, it.ay1, it.az1, it.face);
+    return !anchor_gone(w, it.a0) && !anchor_gone(w, it.a1);
 }
 std::uint8_t wire_live_pins(const World& w, const WireChain& c) {
     std::uint8_t m = c.pinMask;
-    if (anchor_gone(w, c.ax0, c.ay0, c.az0, c.face)) m &= ~std::uint8_t{1u};
-    if (anchor_gone(w, c.ax1, c.ay1, c.az1, c.face))
+    if (anchor_gone(w, c.a0)) m &= ~std::uint8_t{1u};
+    if (anchor_gone(w, c.a1))
         m &= static_cast<std::uint8_t>(~(1u << (kWirePoints - 1)));
     return m;
 }
@@ -822,8 +820,8 @@ std::uint32_t cloth_live_pins(const World& w, const ClothSheet& s) {
     // The top row splits between the two corner cells it hangs from.
     constexpr std::uint32_t kLeft = (1u << (kClothW / 2)) - 1u;      // 0x0F
     constexpr std::uint32_t kRight = ((1u << kClothW) - 1u) & ~kLeft; // 0xF0
-    if (anchor_gone(w, s.ax0, s.ay0, s.az0, s.face)) m &= ~kLeft;
-    if (anchor_gone(w, s.ax1, s.ay1, s.az1, s.face)) m &= ~kRight;
+    if (anchor_gone(w, s.a0)) m &= ~kLeft;
+    if (anchor_gone(w, s.a1)) m &= ~kRight;
     return m;
 }
 
@@ -843,14 +841,13 @@ namespace {
 // a partial carve of a still-solid cell is in it — which is exactly the case the
 // cell-level test used to miss.
 bool anchor_died(const World& w, const std::uint32_t* dirty, std::size_t n,
-                 int x, int y, int z, std::uint8_t face) {
-    if (!anchor_gone(w, x, y, z, face)) return false;
+                 const SubVoxelAnchor& a) {
+    if (!anchor_gone(w, a)) return false;
     // wrap перед macro_index: контракт индекса — канонический диапазон
-    // (types.h), а координаты приходят из uint8-полей якоря. Сегодня все
-    // писатели врапают при записи, но генератор, забывший это завтра,
-    // получал бы тихо неверный ключ и пропущенный детач (мина S20.7).
+    // (types.h). Писатели врапают при записи, но генератор, забывший это
+    // завтра, получал бы тихо неверный ключ и пропущенный детач (S20.7).
     const std::uint32_t key = static_cast<std::uint32_t>(
-        macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z)));
+        macro_index(wrap_macro(a.cx), wrap_macro(a.cy), wrap_macro(a.cz)));
     for (std::size_t i = 0; i < n; ++i)
         if (dirty[i] == key) return true;
     return false;
@@ -868,13 +865,12 @@ bool anchor_died(const World& w, const std::uint32_t* dirty, std::size_t n,
 // drawing the piece — it vanished instead of falling, with no debris and no
 // body handed over.
 bool pair_died(const World& w, const std::uint32_t* dirty, std::size_t n,
-               int x0, int y0, int z0, int x1, int y1, int z1,
-               std::uint8_t face) {
-    const bool d0 = anchor_died(w, dirty, n, x0, y0, z0, face);
-    const bool d1 = anchor_died(w, dirty, n, x1, y1, z1, face);
+               const SubVoxelAnchor& a0, const SubVoxelAnchor& a1) {
+    const bool d0 = anchor_died(w, dirty, n, a0);
+    const bool d1 = anchor_died(w, dirty, n, a1);
     if (!d0 && !d1) return false;
-    if (!d0 && anchor_gone(w, x0, y0, z0, face)) return false; // already dead
-    if (!d1 && anchor_gone(w, x1, y1, z1, face)) return false;
+    if (!d0 && anchor_gone(w, a0)) return false; // already dead
+    if (!d1 && anchor_gone(w, a1)) return false;
     return true;
 }
 
@@ -894,8 +890,7 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     std::uint32_t dead = 0;
     for (std::size_t i = 0; i < bake.instances.size(); ++i) {
         const AntourageInstance& it = bake.instances[i];
-        if (!pair_died(w, dirtyCells, dirtyCount, it.ax0, it.ay0, it.az0,
-                       it.ax1, it.ay1, it.az1, it.face))
+        if (!pair_died(w, dirtyCells, dirtyCount, it.a0, it.a1))
             continue;
         ++dead;
         bursts.push(it.pos, fall(it.pos), ParticleKind::Debris, 4, it.matId,
@@ -911,8 +906,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
             // A nudge off the wall it hugged, so it visibly lets go instead of
             // sliding straight down the surface, plus a lazy tumble.
             d.vel = normalize(fall(it.pos)) * 0.6f;
-            vec_add(d.vel, anchor_face_axis(it.face),
-                    static_cast<float>(anchor_face_dir(it.face)) * 0.45f);
+            vec_add(d.vel, anchor_face_axis(it.a0.face),
+                    static_cast<float>(anchor_face_dir(it.a0.face)) * 0.45f);
             d.yaw = it.yaw;
             d.spin = (static_cast<float>(h & 255u) / 255.0f - 0.5f) * 2.4f;
             d.life = kAntourageFallSec;
@@ -927,8 +922,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     for (std::size_t i = 0; i < bake.wires.size(); ++i) {
         const WireChain& c = bake.wires[i];
         const bool cut =
-            anchor_died(w, dirtyCells, dirtyCount, c.ax0, c.ay0, c.az0, c.face) ||
-            anchor_died(w, dirtyCells, dirtyCount, c.ax1, c.ay1, c.az1, c.face);
+            anchor_died(w, dirtyCells, dirtyCount, c.a0) ||
+            anchor_died(w, dirtyCells, dirtyCount, c.a1);
         if (!cut || antourage_alive(w, c)) continue;
         ++dead;
         const vec3 mid = c.p[kWirePoints / 2];
@@ -939,8 +934,8 @@ std::uint32_t antourage_carve_step(const World& w, const AntourageBake& bake,
     for (std::size_t i = 0; i < bake.cloths.size(); ++i) {
         const ClothSheet& s = bake.cloths[i];
         const bool cut =
-            anchor_died(w, dirtyCells, dirtyCount, s.ax0, s.ay0, s.az0, s.face) ||
-            anchor_died(w, dirtyCells, dirtyCount, s.ax1, s.ay1, s.az1, s.face);
+            anchor_died(w, dirtyCells, dirtyCount, s.a0) ||
+            anchor_died(w, dirtyCells, dirtyCount, s.a1);
         if (!cut || antourage_alive(w, s)) continue;
         ++dead;
         // Canvas tears into dust, not chunks.

@@ -11,6 +11,7 @@
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
 #include "game/prop_form_table.h" // FormId — форма составного тела
 #include "game/prop_table.h"
+#include "world/anchor.h" // SubVoxelAnchor — ЕДИНАЯ запись якоря (S20.2)
 #include "world/world.h"
 #include "world/level_stack.h"
 
@@ -23,13 +24,9 @@ enum class PropFallMode : std::uint8_t {
     GpuHandoff   // 3. Уничтожить сущность, осколки — всплеск в GPU-пул частиц
 };
 
-struct SubVoxelAnchor {
-    int cx = 0, cy = 0, cz = 0;                  // Координаты макро-ячейки (128³)
-    std::uint8_t subX = 0, subY = 0, subZ = 0;   // Локальный субоксель (0..7)
-    std::uint8_t face = 0; // anchor_face_pack(axis, dir) = axis*2 + (dir<0):
-                           // 0=X+ 1=X- 2=Y+ 3=Y- 4=Z+ 5=Z- ([world/anchor.h]).
-                           // dir — шаг ОТ опоры К вещи (нормаль крепления).
-};
+// Запись якоря переехала в движок ([world/anchor.h], D.1): одна и та же
+// структура — ECS-компонент пропа, оба конца антуража, мировой линк цепи.
+using giga::SubVoxelAnchor;
 
 // The KIND is a row of data/interactables.csv ([interact_table.h] — generated
 // enum, so a new interactive is a CSV row, never an enum edit here). reachM

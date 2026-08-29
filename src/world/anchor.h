@@ -26,6 +26,19 @@ inline constexpr int anchor_face_dir(std::uint8_t face) {
     return (face & 1u) ? -1 : 1;
 }
 
+// ЕДИНАЯ ЗАПИСЬ ЯКОРЯ (CANON S20.2): опорная клетка + субвоксель точки
+// крепления + грань. Живёт рядом с пробой, а не у потребителя: её несут
+// пропы (ECS-компонент), ОБА конца антуража (D.1: у колена трубы через
+// угол каждый конец — своя грань), мировые линки цепей. Вторая запись
+// якоря — дефект (S20.8).
+struct SubVoxelAnchor {
+    int cx = 0, cy = 0, cz = 0;                // опорная макро-клетка (128³)
+    std::uint8_t subX = 0, subY = 0, subZ = 0; // субвоксель точки крепления
+    std::uint8_t face = 0; // anchor_face_pack(axis, dir) = axis*2 + (dir<0):
+                           // 0=X+ 1=X- 2=Y+ 3=Y- 4=Z+ 5=Z-; dir — шаг ОТ
+                           // опоры К вещи (нормаль крепления).
+};
+
 // Точка крепления на грани: субвоксель опоры → (u,v) по тангенциальным осям
 // грани. Соответствие осей задано face_layer_window (X-грань → (y,z),
 // Y-грань → (x,z), Z-грань → (x,y)) и живёт ТОЛЬКО здесь — потребитель
@@ -102,6 +115,27 @@ inline bool anchor_alive(const World& w, int x, int y, int z,
             }
     }
     return false;
+}
+
+// Проба ЗАПИСИ якоря — (u,v) выводится из её субвокселя. Единственная
+// форма вопроса для всех носителей записи (пропы, концы антуража, линки).
+inline bool anchor_alive(const World& w, const SubVoxelAnchor& a) {
+    const AnchorUV uv = anchor_face_uv(a.face, a.subX, a.subY, a.subZ);
+    return anchor_alive(w, a.cx, a.cy, a.cz, a.face, uv.u, uv.v);
+}
+
+// Якорь В ЦЕНТРЕ грани — дефолт антуража (провода/тенты вешаются к центрам
+// клеток; поведение проверено владельцем на проводах бит в бит). Центр =
+// (kSubDim/2-1)³ — тот же (u,v), что дефолт колонковой пробы.
+inline SubVoxelAnchor anchor_centre(int cx, int cy, int cz,
+                                    std::uint8_t face) {
+    SubVoxelAnchor a;
+    a.cx = cx;
+    a.cy = cy;
+    a.cz = cz;
+    a.subX = a.subY = a.subZ = kSubDim / 2 - 1;
+    a.face = face;
+    return a;
 }
 
 } // namespace giga
