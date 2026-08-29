@@ -675,7 +675,10 @@ if(GIGA_BUILD_TESTS)
         # 23576 + 12 on 2026-08-29 (инкремент C): честность CarveResult под
         # щитом (обе полярности: под щитом ноль в отчёте и маска цела, без
         # щита рубит) + стейн вырезанного атома чистится = 23588.
-        PASS_REGULAR_EXPRESSION "23588/23588 checks passed"
+        # 23588 + 4 on 2026-08-29 (D.3): «щит = земля» судьи — столбик на
+        # щите стоит, без щита рыхлеет целиком; кросс-пины словарей
+        # nav_dir_to_anchor_face compile-time = 23592.
+        PASS_REGULAR_EXPRESSION "23592/23592 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

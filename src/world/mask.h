@@ -114,6 +114,22 @@ struct FloorMasks {
                it->ci == static_cast<std::uint32_t>(ci) && it->allow.test(bit);
     }
 
+    // Пересекается ли НАБОР атомов (8 слов) со щит-битами клетки — вопрос
+    // судьи связности (S20.5 «щит = земля»: компонент, держащийся за
+    // неразрушимое, опёрт по определению, а не по надежде в комментарии).
+    // Тот же bsearch, что shielded(), но AND по словам разом.
+    bool shield_overlap(std::size_t ci, const std::uint64_t* words) const {
+        if (!shielded_cell(ci)) return false;
+        const auto it = std::lower_bound(
+            shieldSub_.begin(), shieldSub_.end(), static_cast<std::uint32_t>(ci),
+            [](const MaskCell& a, std::uint32_t key) { return a.ci < key; });
+        if (it == shieldSub_.end() || it->ci != static_cast<std::uint32_t>(ci))
+            return false;
+        for (std::size_t wd = 0; wd < kSubMaskWords; ++wd)
+            if (it->allow.words[wd] & words[wd]) return true;
+        return false;
+    }
+
 private:
     // Кэши предиката щита над группами — та же лестница, что CellType над
     // маской (S2): правда в группах, битсет производен.

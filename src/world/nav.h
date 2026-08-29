@@ -109,9 +109,29 @@ inline int coarse_next(const CoarseGraph& g, int from, int to) {
 // The 6 unit steps, in the SAME order the BFS and lattice neighbours use:
 // -x,+x,-y,+y,-z,+z. A flow byte in [0,6) indexes this table; note reverse(d)
 // == (d ^ 1), which the bake relies on to point a cell back toward its parent.
+//
+// ВНИМАНИЕ (S20.7, пин 2026-08-29): этот порядок ИНВЕРТИРОВАН ПО ЧЁТНОСТИ
+// против словаря граней якоря ([world/anchor.h] anchor_face_pack = axis*2 +
+// (dir<0)): одна и та же (ось, знак) даёт nav-индекс d = axis*2 + (dir>0),
+// то есть d == face ^ 1. Смешение индексов — тихо неверная грань. Пока
+// словари не слиты (миграция нава — отдельная цена), конвертор ОДИН и
+// именованный; голый `^ 1` на месте потребления — дефект.
 inline constexpr int kNavDir[6][3] = {
     {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
 };
+
+// nav-направление ↔ грань якоря (единственный законный мост между
+// словарями). Пины ниже держат оба порядка: сломается любой — ошибка
+// компиляции здесь, у моста, а не тихая грань не с той стороны.
+inline constexpr std::uint8_t nav_dir_to_anchor_face(int d) {
+    return static_cast<std::uint8_t>(d ^ 1);
+}
+inline constexpr int anchor_face_to_nav_dir(std::uint8_t face) {
+    return face ^ 1;
+}
+static_assert(kNavDir[0][0] == -1 && kNavDir[1][0] == 1 &&
+                  kNavDir[4][2] == -1 && kNavDir[5][2] == 1,
+              "kNavDir order changed — nav_dir_to_anchor_face is now wrong");
 
 // Flow bytes that are not a step direction.
 inline constexpr std::uint8_t kFlowArrived = 6;   // this cell IS the node

@@ -664,6 +664,47 @@ static void test_carve_clears_stain() {
     CHECK(sf->page(ci)[bit] == StainRGB{});
 }
 
+// Кросс-пин двух словарей направлений (S20.7): nav-порядок инвертирован по
+// чётности против anchor_face_pack; мост — nav_dir_to_anchor_face. Сломается
+// любой словарь — красный компилятор ЗДЕСЬ, а не тихая грань не с той
+// стороны.
+static_assert(nav::nav_dir_to_anchor_face(0) == anchor_face_pack(0, -1));
+static_assert(nav::nav_dir_to_anchor_face(1) == anchor_face_pack(0, +1));
+static_assert(nav::nav_dir_to_anchor_face(2) == anchor_face_pack(1, -1));
+static_assert(nav::nav_dir_to_anchor_face(5) == anchor_face_pack(2, +1));
+
+// S20.5/D.3 «щит = земля»: компонент, касающийся щит-битов, опёрт по
+// определению — судья не рушит гермостену. Прежде это была надежда в
+// комментарии convert_nodes без единого теста. Обе полярности: столбик на
+// щите стоит, тот же столбик без щита рыхлеет целиком.
+static void test_judge_shield_is_ground() {
+    static World w;
+    // Отдельно стоящий столбик: 2 полные клетки = 2 узла < бюджета — без
+    // щита судья честно объявляет его рыхлым.
+    w.grid().fill_cell(80, 80, 80, kMatConcrete);
+    w.grid().fill_cell(80, 80, 81, kMatConcrete);
+    CarveScratch scratch;
+    CarveResult res;
+    const std::uint32_t cell32 =
+        static_cast<std::uint32_t>(macro_index(80, 80, 80));
+    MaskGroup g;
+    g.props = kMaskShield;
+    MaskCell mc;
+    mc.ci = cell32;
+    for (std::size_t i = 0; i < kSubMaskWords; ++i)
+        mc.allow.words[i] = ~std::uint64_t{0};
+    g.cells.push_back(mc);
+    w.masks().groups.push_back(g);
+    w.masks().rebuild_shield_cache();
+    CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 0);
+    CHECK(sub_material_at(w, 80, 80, 81, 4, 4, 4) == kMatConcrete);
+    // Обратная полярность: щит снят — столбик рыхлеет целиком (1024 атома).
+    w.masks().clear_all();
+    CHECK(detach_judge_cells(w, &cell32, 1, scratch, res) == 1024);
+    CHECK(sub_material_at(w, 80, 80, 81, 4, 4, 4) ==
+          material_rubble_of(kMatConcrete));
+}
+
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
@@ -675,4 +716,5 @@ static void test_destruct_all() {
     test_support_law();
     test_carve_shield_honesty();
     test_carve_clears_stain();
+    test_judge_shield_is_ground();
 }

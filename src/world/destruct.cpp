@@ -422,10 +422,11 @@ std::uint32_t node_of_atom(const World& w, const SubField<CellType>* mats,
 std::uint32_t g_detachCapEvents = 0;
 
 // Флуд по узлам. true — компонент собран ЦЕЛИКОМ в бюджете (оторван; узлы
-// лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом
-// или превысил бюджет («сам дом»). Узлы и рёбра — только по ОПОРНОЙ маске
-// (cell_partition, S20.5): связность через подвижный атом не течёт.
-// why: 0=loose, 1=сид уже помечен, 2=слился с осуждённым, 3=бюджет
+// лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом,
+// превысил бюджет («сам дом») или коснулся ЩИТА («земля», S20.5/D.3).
+// Узлы и рёбра — только по ОПОРНОЙ маске (cell_partition, S20.5):
+// связность через подвижный атом не течёт.
+// why: 0=loose, 1=сид уже помечен, 2=слился с осуждённым, 3=бюджет, 4=щит
 bool flood_nodes(const World& w, const SubField<CellType>* mats,
                  VisitedSet& vis, CarveScratch& s, std::uint32_t seedNode,
                  std::uint32_t run, int* why) {
@@ -447,6 +448,17 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
             const std::uint64_t* src =
                 &s.compWords[(s.partFirst[e] + (node & 255u)) * 8];
             for (int w = 0; w < 8; ++w) cw[w] = src[w];
+        }
+        // ЩИТ = ЗЕМЛЯ (S20.5, D.3): компонент, касающийся щит-битов,
+        // опёрт ПО ОПРЕДЕЛЕНИЮ — неразрушимое и есть точка «земли» на
+        // торе. Прежде это была надежда в комментарии convert_nodes
+        // («щит-биты никогда не пустеют»); теперь судья спрашивает маску
+        // (S18 закон 3), и гермостена в бюджет не упирается. Пометки
+        // рана НЕ откатываются: «держится за щит» — доказанный вердикт.
+        if (w.masks().shielded_cell(ci) &&
+            w.masks().shield_overlap(ci, cw)) {
+            set_why(4);
+            return false;
         }
         const int cx = static_cast<int>(ci & 127u);
         const int cy = static_cast<int>((ci >> 7) & 127u);
@@ -533,9 +545,9 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
         // ЩИТ ([world/mask.h]): защищённые атомы не конвертируются в
         // рыхлого двойника — второй (и последний) писатель геометрии после
         // remove_key. Отсев клеточным кэшем; спуск в биты — только в
-        // клетках со щитом (частичный щит: незащищённая половина клетки
-        // конвертируется честно). Компонент, цепляющийся за щит, опёрт по
-        // построению: щит-биты никогда не пустеют.
+        // клетках со щитом. С D.3 «щит = земля» компонент, КАСАЮЩИЙСЯ
+        // щит-битов, сюда не доходит вовсе (flood_nodes отвечает «опёрт»);
+        // этот гейт остаётся страховкой писателя на несвязный случай.
         const bool cellShielded = w.masks().shielded_cell(ci);
         const std::uint32_t e = cell_partition(w, mats, s, ci); // кэш-хит
         const std::uint32_t base = (s.partFirst[e] + (node & 255u)) * 8;
@@ -599,7 +611,8 @@ void judge_atom_neighbours(World& w, SubField<CellType>* mats, VisitedSet& vis,
                 loose ? "LOOSE"
                       : (why == 1   ? "seen-seed"
                          : why == 2 ? "merged-judged"
-                                    : "budget"));
+                         : why == 3 ? "budget"
+                                    : "shield"));
         if (!loose) continue;
         convert_nodes(w, mats, s, out);
     }
