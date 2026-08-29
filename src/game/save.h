@@ -177,7 +177,15 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // BankAccount (вердикт владельца: write-only история без единого читателя в
 // игре, §35-класс) — банк-блок ужат 289 → 45 Б. Стандартное правило: старые
 // сейвы отклоняются.
-inline constexpr std::uint32_t kSaveVersion = 19u;
+// v20 (2026-08-29, CANON S20.6 инкремент F): секции сущностей —
+// ContainerRecord-ряды, трупы, обломки — ПЕРЕЕХАЛИ в floor_<N>.sav v3
+// (у состояния этажа ровно один дом: материя И сущности в одном снимке,
+// под одним ключом модуля). run.sav несёт только БЕГ: леджер, контракты,
+// игрок, прогрессия, часы, банк, квесты, макромир. OpenedContainerKey
+// (позиционный ключ, коллизия ~13% Residential) мёртв вместе с матчингом —
+// restore не матчит, он спавнит из самодостаточных записей. Header-поле
+// containerCount осталось в 64-байтовой шапке и обязано быть 0.
+inline constexpr std::uint32_t kSaveVersion = 20u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -327,14 +335,12 @@ inline constexpr std::size_t kFastTravelWire = 32;
 // v19: кольцо ledger[24] + entries умерли вместе со структурой (289 → 45).
 inline constexpr std::size_t kBankWire = 5 * 8 + 4 + 1;  // 45
 static_assert(kBankWire == 45);
-// v15 records. A container row is its key + the whole component: 5 (key) + 1
-// (kind) + 1 (opened) + 4 slots x 5 B ([inventory] cell wire) = 27. A corpse row
-// is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) + 3 (mobKind /
-// slotCount / searched) + 8 slots x 5 B = 81. `deathTick` deliberately does NOT
-// travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
+// Записи трупов/обломков живут в floor_<N>.sav v3 (v20); ширины прежние.
+// A corpse row is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) +
+// 2 (mobKind / searched) + 64 slots x 5 B = 360. `deathTick` deliberately does
+// NOT travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
 // reads), and serializing a column with no consumer is [problems.md] §35's class.
 // B3 (v17): держатель канонический — 64 ItemSlot вместо 4 POD-троек.
-inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 64 * 5;  // 327
 inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 2 + 64 * 5;    // 360
 // v18: сорванный проп — 2 (floor) + 3 × 12 (pos/half/colour) + 3 × 4 (масса и
 // контактная пара) + 1 (флаг сферы) = 51.
@@ -392,94 +398,22 @@ inline constexpr std::size_t kFactionWire =
 // decodes every existing save into a subtly different floor.
 inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
-// Exact byte count `save_write` will produce for the given section sizes. The
-// bare `+ 4` is the corpse-count u32: corpses ride AFTER the container rows the
-// header already counts, so their count lives inline in the payload rather than
-// growing the 64-byte header.
-inline constexpr std::size_t save_bytes_for(std::size_t containerCount,
-                                            std::size_t corpseCount = 0,
-                                            std::size_t poolBytes = 0,
-                                            std::size_t macroBytes = 0,
-                                            std::size_t debrisCount = 0) {
-    // v18: секция обломков едет тем же приёмом, что корпуса — счётчик u32
-    // инлайном в payload, а не новым полем шапки.
-    return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
-           containerCount * kContainerRecWire + 4 +
-           corpseCount * kCorpseRecWire + 4 +
-           debrisCount * kDebrisRecWire + poolBytes + macroBytes;
+// Exact byte count `save_write` will produce for the given section sizes.
+// v20: секций сущностей в run.sav больше нет — они в floor_<N>.sav v3.
+inline constexpr std::size_t save_bytes_for(std::size_t poolBytes = 0,
+                                            std::size_t macroBytes = 0) {
+    return kSaveHeaderWire + kSaveFixedWire + kFactionWire + poolBytes +
+           macroBytes;
 }
 
 // ---------------------------------------------------------------------------
-// A crate, identified by something that survives a restart
+// Записи трупов и обломков (v15/v18; с v20 живут в floor_<N>.sav v3)
 // ---------------------------------------------------------------------------
-// (The key predates v15 and kept its name: renaming it would touch every test
-// that spells it for zero wire change. It stopped meaning "this crate was
-// opened" and now means "this crate", full stop — the v15 record it keys
-// carries the whole component, opened flag included.)
-// `Container` state lives in an ECS component ([container.h]), i.e. it is
-// per-ENTITY — and an entity id is the one thing that is guaranteed NOT to be stable.
-// The crates are destroyed and respawned on every floor entry
-// ([main.cpp] refresh_floor_containers), and EnTT recycles handles, so an `entt::entity`
-// written to disk names a different object on the next run, or nothing at all.
-//
-// So the key is what the GENERATOR is a function of: the floor number, plus the macro
-// cell the crate stands in. `spawn_floor_containers` is deterministic in
-// (floorNumber, seed) and places each crate at a wrapped macro cell, so the same crate
-// reappears in the same cell every visit and the pair (floor, cell) reproduces.
-//
-// **The honest limitation, with the number:** the generator's own spawn index `i` would
-// be a perfect key, and it is not recoverable — nothing stores it on the entity and
-// `Container` has no room for it. The cell is therefore a key that can collide. Worked
-// out for Residential, the densest case: stride 8 gives 16x16 = 256 rooms, each offering
-// a 5x5 block of interior offsets (`ox`/`oy` in [2, 7), [container.cpp]), so 6,400
-// candidate cells for `container_budget` = 256/6 = 42 draws. Expected colliding pairs
-// C(42,2)/6400 = 0.135, i.e. **one collision on about 13% of Residential floors**. When
-// it happens, ONE record stamps BOTH crates (v15): the second crate's own rolled
-// contents are shadowed by the first's — a crate's roll lost, never an item
-// duplicated, because refresh scans live entities and a scan cannot invent items. The strong fix is one `std::uint16_t spawnIndex` on `Container`, set
-// by `spawn_floor_containers`; that is an edit to `container.h`, which this lane does not
-// own, so the cell key ships and the collision is measured rather than hidden.
-//
-// The floor is the signed FLOOR NUMBER, never a `LayerId` (a recycled storage slot,
-// [floors.md]) and never `NpcPool::floor()`.
-//
-// **Corrected 2026-07-29:** the reason given here used to be that `NpcPool::floor()` is
-// a `std::uint16_t` storing floor -50 as 65486. That is no longer true — the column is
-// `std::int16_t` today ([npc_pool.h], widened with the demo stack's negative labels as
-// the stated reason), so a negative label round-trips through it fine. The live reason
-// is different and stronger: that column is written in exactly ONE place,
-// `seed_floor_from_spec` ([population.cpp]), and read in NONE. Nothing updates it when
-// the player travels — `ride_elevator` writes `pool.cz` and nothing else — so it names
-// the floor a record was SEEDED on, not the floor its body is standing on. For the
-// player those two diverge on the first elevator ride.
-struct OpenedContainerKey {
-    std::int16_t floor = 0;     // in-game floor number, [-127, 127]
-    std::uint8_t cx = 0;        // macro cell, already wrapped onto [0, 128)
-    std::uint8_t cy = 0;
-    std::uint8_t cz = 0;
-    std::uint8_t pad_ = 0;      // keeps the struct 6 B and trivially comparable
-};
-static_assert(sizeof(OpenedContainerKey) == 6);
-
-inline bool same_container(const OpenedContainerKey& a, const OpenedContainerKey& b) {
-    return a.floor == b.floor && a.cx == b.cx && a.cy == b.cy && a.cz == b.cz;
-}
-
-// The key a crate at `pos` on floor `floorNumber` would be saved under. Pure; exposed
-// so a test can key a crate without a registry.
-OpenedContainerKey container_key(int floorNumber, const vec3& pos);
-
-// ---------------------------------------------------------------------------
-// v15 records — the world's containers and corpses, whole
-// ---------------------------------------------------------------------------
-// One crate: its key plus the COMPONENT, verbatim. Carrying `Container` itself
-// rather than a projection is the point — the search screen mutates the
-// component ([inventory.md]), so any field it can touch is state, and a record
-// that picked fields would silently drop the next one the screen learns to edit.
-struct ContainerRecord {
-    OpenedContainerKey key{};
-    Container c{};
-};
+// OpenedContainerKey и ContainerRecord МЕРТВЫ (v20/F): позиционный ключ
+// (floor, клетка) коллидировал на ~13% Residential-этажей по собственной
+// честной оценке, а матчинг «пересеять и проштамповать» умер вместе с
+// пересевом — restore не сеет, ящик-проп едет PropRecord-ом с инвентарём
+// внутри ([FloorEntityState] выше).
 
 // One fallen body. Everything `finalize_deaths` derived from the live body at
 // the moment of death — the flattened AABB, the darkened tint, the exact resting
@@ -708,15 +642,9 @@ struct SaveState {
     // it like the ledger), so F5/F9 stopped forgetting the deposit and the debt
     // — the gap economy.h stated in words since the day it was written.
     BankAccount bank{};
-    // v15: every crate and every corpse anywhere in the building, contents and
-    // all — not just the live floor's. Only the resident floor's are live
-    // entities, so the other floors' exist ONLY in these lists — see
-    // `refresh_floor_records`.
-    std::vector<ContainerRecord> containers;
-    std::vector<CorpseRecord> corpses;
-    // v18: сорванные пропы (сбитая лампа, упавший щиток, брошенный мяч) —
-    // решение владельца: обломок часть мира. Поза не сейвится.
-    std::vector<DebrisRecord> debris;
+    // v20: списки контейнеров/трупов/обломков МЕРТВЫ — сущности этажа живут
+    // в его собственном floor_<N>.sav v3 под ключом модуля (S20.6): у
+    // состояния этажа ровно один дом, и полуслияние невозможно по построению.
     // Version 2: quest log persisted across F5/F9. Written last by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
@@ -762,38 +690,10 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
                SaveError* err = nullptr, SaveHeader* hdrOut = nullptr);
 
 // ---------------------------------------------------------------------------
-// Container / corpse state <-> registry (v15)
+// Corpse / debris records <-> registry (v15/v18; кормятся из floor-файла v20)
 // ---------------------------------------------------------------------------
-
-// Bring BOTH record lists up to date for ONE floor: drop every record already
-// held for `floorNumber`, then re-scan that floor's live entities — every crate
-// (not only the touched ones: recording all ~24..64 costs under 2 KB and needs
-// no diff against a re-roll) and every corpse. Returns records now contributed.
-//
-// This is the function a save AND a floor-leave call, and the reason is that
-// only ONE floor is ever resident ([floor_stream.h] keeps a single World live).
-// Every other floor's state exists nowhere but in these lists, so a plain
-// append would duplicate the live floor on every save, and a plain clear would
-// forget all nine other floors.
-std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
-                                  std::vector<ContainerRecord>& boxes,
-                                  std::vector<CorpseRecord>& corpses,
-                                  std::vector<DebrisRecord>* debris = nullptr);
-
-// Stamp recorded contents over the freshly generated floor's crates. Call it
-// AFTER `spawn_floor_containers` has built them; returns how many matched. The
-// whole component is stamped — contents, wear, opened — so a half-taken crate
-// comes back half-taken and a deposit is still there, which is the state the
-// search screen made real ([inventory.md]).
-//
-// `openedColour` is optional and exists because the "spent crate" tint is
-// `kOpenColour`, a file-static constant inside `container.cpp` — unreachable from
-// here and NOT worth copying, since a copied colour drifts silently the day the
-// original is retuned. Pass it from the call site, or pass nullptr and accept
-// that a restored spent crate looks unopened until `container.h` hoists it.
-std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumber,
-                                    const ContainerRecord* recs, std::size_t n,
-                                    const vec3* openedColour = nullptr);
+// refresh_floor_records и apply_container_records МЕРТВЫ (v20/F): сборщик —
+// gather_floor_entities ниже, применение — spawn_*_records; матчинга нет.
 
 // Rebuild the floor's corpses from records: DESTROYS every Corpse entity on
 // `layer` first (an F9 onto the same floor would otherwise duplicate every

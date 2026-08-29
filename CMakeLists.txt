@@ -741,9 +741,12 @@ if(GIGA_BUILD_TESTS)
     # НАСТОЯЩИХ комнатах модуля (тысячи зон падика вместо решётки) — ящиков
     # на этаже больше, и циклы сьюта по ним дают больше чеков. Прочитано с
     # бинаря по правилу выше; мёртвый дефект не закрывался.
+    # 1374 -> 1371 on 2026-08-29 (v20/F): пин travel-шва переписан с
+    # «пересев+штамп по ключу» на «спавн из записей» (restore не сеет) —
+    # три чека матчинга по OpenedContainerKey умерли вместе с ключом.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 1374 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 1371 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -1466,7 +1469,12 @@ if(GIGA_BUILD_TESTS)
     # выключена — 4 FAIL, дрейф трупа ×0.9 — пойман до фикса), ворота
     # kind/seed/genVersion/v2/CRC/обрубок обеими полярностями, якорная
     # проба restore, версии генерации всех kind = 222999.
-        PASS_REGULAR_EXPRESSION "game_test: 222999 checks, 0 failures")
+    # 222999 - 693 on 2026-08-29 (v20/F-2): run.sav теряет секции сущностей
+    # (containers/corpses/debris → floor-файл): busy_run/round_trip/
+    # keys_not_entity_ids чеки v15-матчинга умерли с ключом;
+    # floor_records_survive_a_restart переписан на floor-файл v3 и
+    # «спавн из записей» = 222306.
+        PASS_REGULAR_EXPRESSION "game_test: 222306 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

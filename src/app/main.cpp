@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <mutex>    // канал восстановленных сущностей (v20/F): хук в воркере
 #include <unordered_map>
 #include <vector>
 
@@ -1350,11 +1351,13 @@ bool write_run(const game::SaveState& st, const char* path) {
     return write_bytes_file(bytes, path);
 }
 
-// Persist one floor's exact grid to its own file. A floor transition is a load
-// screen, so this is sanctioned I/O ([jirnyak.md] §6).
-bool write_floor_file(const World& w, int floor) {
+// Persist one floor's exact grid + СУЩНОСТИ (v20/F) to its own file. A floor
+// transition is a load screen, so this is sanctioned I/O ([jirnyak.md] §6).
+bool write_floor_file(const World& w, int floor,
+                      const game::FloorEntityState& ents,
+                      const game::FloorModuleKey& key) {
     std::vector<std::uint8_t> bytes;
-    game::floor_file_write(w, floor, bytes);
+    game::floor_file_write(w, floor, bytes, &ents, &key);
     char path[128];
     floor_save_path(floor, path, sizeof path);
     return write_bytes_file(bytes, path);
@@ -1376,13 +1379,16 @@ void flush_floor_write() {
             std::fprintf(stderr, "[save] BACKGROUND floor write FAILED\n");
     }
 }
-void write_floor_file_async(const World& w, int floor) {
+void write_floor_file_async(const World& w, int floor,
+                            game::FloorEntityState ents,
+                            game::FloorModuleKey key) {
     flush_floor_write();
     // Кадру принадлежит только КОПИЯ того, что читает кодек (грид + страницы
     // суб-материалов, memcpy сотни мс) — сам RLE-кодек (замерен 2.7 с!) и
     // диск уезжают в фон. Слот World перерабатывается сразу после свапа,
     // поэтому фоновому кодеку не из чего читать, кроме копии; RAM транзиентно
-    // щедрая — закон владельца.
+    // щедрая — закон владельца. Сущности (v20/F) собраны вызывающим на
+    // главном потоке (ECS воркеру не принадлежит) и едут значением.
     const auto t0 = std::chrono::steady_clock::now();
     auto types = std::make_shared<std::vector<CellType>>(w.grid().types());
     auto masks = std::make_shared<std::vector<SubMask>>(w.grid().masks());
@@ -1390,6 +1396,7 @@ void write_floor_file_async(const World& w, int floor) {
     if (const SubField<CellType>* f =
             w.subfields().find<CellType>(kSubMaterialName))
         mats = std::make_shared<SubField<CellType>>(*f);
+    auto ep = std::make_shared<game::FloorEntityState>(std::move(ents));
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::string p(path);
@@ -1399,7 +1406,7 @@ void write_floor_file_async(const World& w, int floor) {
                      std::chrono::steady_clock::now() - t0)
                      .count());
     g_floorWritePending =
-        std::async(std::launch::async, [types, masks, mats, floor, p]() {
+        std::async(std::launch::async, [types, masks, mats, ep, key, floor, p]() {
             World tmp;
             tmp.grid().types_mut() = std::move(*types);
             tmp.grid().masks_mut() = std::move(*masks);
@@ -1407,23 +1414,50 @@ void write_floor_file_async(const World& w, int floor) {
                 tmp.subfields().get_or_create<CellType>(kSubMaterialName) =
                     std::move(*mats);
             std::vector<std::uint8_t> bytes;
-            game::floor_file_write(tmp, floor, bytes);
+            game::floor_file_write(tmp, floor, bytes, ep.get(), &key);
             return write_bytes_file(bytes, p.c_str());
         });
 }
 
+// --- КАНАЛ ВОССТАНОВЛЕННЫХ СУЩНОСТЕЙ (v20/F, S20.6) ------------------------
+// Хук restore бежит и в prebuild-ВОРКЕРЕ (build_world_half), а спавн
+// сущностей — только на главном потоке в ECS-половине прибытия. Мост — карта
+// «этаж → секции сущностей» под мьютексом: хук кладёт, прибытие забирает.
+// Наличие записи == «этаж ВОССТАНОВЛЕН» (эта же запись — сигнал развилки
+// сидеров: restore не сеет). Пустые секции — законное состояние (всё
+// вынесено/сломано), поэтому сигнал — присутствие ключа, не размер.
+std::mutex g_restoreMx;
+std::unordered_map<int, game::FloorEntityState> g_pendingRestore;
+
+bool take_pending_restore(int floor, game::FloorEntityState& out) {
+    std::lock_guard<std::mutex> lk(g_restoreMx);
+    auto it = g_pendingRestore.find(floor);
+    if (it == g_pendingRestore.end()) return false;
+    out = std::move(it->second);
+    g_pendingRestore.erase(it);
+    return true;
+}
+
 // Stamp a floor's saved state over its freshly generated geometry, if a file
-// exists. Absent file = pristine floor; a REFUSED file is said out loud.
-bool apply_floor_file(World& w, int floor) {
+// exists. Absent file = pristine floor; a REFUSED file is said out loud —
+// в том числе ModuleChanged (S20.6 закон 4: модуль изменился → честная
+// перегенерация, полуслияние запрещено).
+bool apply_floor_file(World& w, int floor, const game::FloorModuleKey& key) {
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
     if (!read_bytes_file(bytes, path)) return false;
     game::SaveError err = game::SaveError::None;
-    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err)) {
+    game::FloorEntityState ents;
+    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err,
+                               &key, &ents)) {
         std::fprintf(stderr, "[save] %s refused: %s (floor regenerates pristine)\n",
                      path, game::save_error_text(err));
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_restoreMx);
+        g_pendingRestore[floor] = std::move(ents);
     }
     return true;
 }
@@ -1495,14 +1529,12 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     return count;
 }
 
-// Floor interactive props: clear the recycled LayerId slot, seed Terminal +
-// ElectricalShield + LightBulb Interactables (with PropMesh for PropPass skin),
-// then padic-only corridor bulbs. [jirnyak.md] §18 — sim queries Registry;
-// PropPass is filled via merge_ecs_prop_meshes.
-std::uint32_t refresh_floor_props(Registry& reg, const World& world,
-                                  int floorNumber, LayerId layer,
-                                  unsigned padicSeed, game::EventBus& bus) {
-    game::clear_layer_props(reg, layer);
+// СИДЕР пропов этажа — ТОЛЬКО ветка generate (S20.6 закон 2: restore НЕ
+// сеет; на restore пропы приходят из записей снимка). Клир слота и световой
+// хвост живут отдельно (floor_light_rebuild) — их платят ОБЕ ветки.
+std::uint32_t seed_floor_props(Registry& reg, const World& world,
+                               int floorNumber, LayerId layer,
+                               unsigned padicSeed, game::EventBus& bus) {
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
@@ -1531,7 +1563,15 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     // Общий мебельный сидер УМЕР (rooms-object F + S10: политика расстановки
     // в общем коде — дефект). Мебель ставит МОДУЛЬ по своим комнатам, как
     // свет и антураж; глагольный вектор пропа делает её видимой выбору цели.
+    return count;
+}
 
+// СВЕТОВОЙ ХВОСТ постройки этажа — обе ветки развилки, ПОСЛЕ того как пропы
+// существуют (сидер или записи снимка): эмиттеры материалов, кластеры,
+// статик-таблица ламп. PropLight.slot не персистится — перештамповка здесь
+// и есть его законная идентичность на генерацию.
+void floor_light_rebuild(Registry& reg, const World& world, int floorNumber,
+                         LayerId layer) {
     // Светоматериалы → статические эмиттеры ([game/light_bake.h]): полный
     // скан поля + кластеризация при каждой постройке этажа, той же геометрии,
     // что и всё. Единственное место полного скана — дальше поле только
@@ -1548,8 +1588,6 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     // begin_floor_nav (следом за нами у всех вызывающих) отдаст её бейку
     // видимости ДО start_fresh.
     rebuild_static_light_table(reg, layer, /*reset=*/true);
-
-    return count;
 }
 
 
@@ -2352,6 +2390,60 @@ int main(int argc, char** argv) {
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
     game::PowerGridState powerGrid{};
+    // Ключ модуля этажа (S20.6 закон 4) — kind И сид И версия генерации; им
+    // подписывается каждый floor-файл и им же он спрашивается на restore.
+    auto module_key_for = [&](int floorNo) {
+        const game::FloorKind k = kind_for_floor(floorNo);
+        return game::FloorModuleKey{
+            static_cast<std::uint8_t>(k),
+            streamer.floor_seed_of(registry, floorNo),
+            game::module_gen_version(k)};
+    };
+    // СУЩНОСТНАЯ ПОЛОВИНА прибытия — РАЗВИЛКА (S20.6 закон 2: restore НЕ
+    // сеет). Обе ветки: клир слота + обесточка с нуля (ключи PowerGridState
+    // бесэтажны — саботаж щитка на этаже 0 гасил те же клетки на всех этажах;
+    // чистка каждым прибытием убивает межэтажный дефект по построению).
+    // generate: сидеры ящиков и пропов — ПОСЛЕ клира (прежний порядок сеял
+    // ящики до clear_layer_props, и клир убивал их той же активацией — этаж
+    // прибытия жил без единого ящика с посадки «ящик-проп» 2026-08-21).
+    // restore: сущности из снимка + якорная проба (закон 3), сидеры молчат.
+    // Возвращает «этаж восстановлен» — обвес лифта (dress) сеют только на
+    // generate, состояние створок на restore несёт сама материя снимка.
+    auto floor_entity_half = [&](LayerId nl, int floorNo) -> bool {
+        game::FloorEntityState ents;
+        const bool restored = take_pending_restore(floorNo, ents);
+        powerGrid = game::PowerGridState{};
+        game::clear_layer_props(reg, nl);
+        if (restored) {
+            const std::size_t np = game::spawn_prop_records(
+                reg, stack.layer(nl), nl, ents.props.data(),
+                ents.props.size(), bus);
+            game::spawn_corpse_records(reg, nl, floorNo, ents.corpses.data(),
+                                       ents.corpses.size());
+            game::spawn_pickup_records(reg, nl, ents.pickups.data(),
+                                       ents.pickups.size());
+            game::spawn_debris_records(reg, nl, floorNo, ents.debris.data(),
+                                       ents.debris.size());
+            game::restore_power_keys(powerGrid, ents.powerKeys.data(),
+                                     ents.powerKeys.size());
+            std::fprintf(stderr,
+                         "[persist] floor %d entities RESTORED: %zu props, "
+                         "%zu corpses, %zu pickups, %zu debris, %zu power "
+                         "keys\n",
+                         floorNo, np, ents.corpses.size(),
+                         ents.pickups.size(), ents.debris.size(),
+                         ents.powerKeys.size());
+        } else {
+            refresh_floor_containers(reg, stack.layer(nl), floorNo, nl);
+            seed_floor_props(reg, stack.layer(nl), floorNo, nl,
+                             streamer.floor_seed_of(registry, floorNo), bus);
+        }
+        floor_light_rebuild(reg, stack.layer(nl), floorNo, nl);
+        return restored;
+    };
+    // Флаг «текущее прибытие — restore»: пишет floor_entity_half на каждом
+    // прибытии, читает шаг дверей (dress только на generate).
+    bool arrivedRestored = false;
     // Doors derive from THE FLOOR'S OWN SEED — streamer.floor_seed_of(), the same
     // value its geometry was generated from. There used to be a separate
     // kDoorSeed constant here, and it was a bug factory, not a knob: door_build
@@ -2406,8 +2498,16 @@ int main(int argc, char** argv) {
         // back, and it restores immediately after generating — before the pipes
         // are routed and the lamps are hung, so nothing is ever anchored to
         // geometry that is about to change under it. [problems.md] §42
-        streamer.set_floor_restore([](World& w, int floorNumber) {
-            return apply_floor_file(w, floorNumber);
+        streamer.set_floor_restore([&streamer, &registry](World& w,
+                                                          int floorNumber) {
+            // Ключ строится здесь, а не module_key_for: хук бежит и в
+            // prebuild-воркере, капчер минимален и только-чтение.
+            const game::FloorKind k = kind_for_floor(floorNumber);
+            const game::FloorModuleKey key{
+                static_cast<std::uint8_t>(k),
+                streamer.floor_seed_of(registry, floorNumber),
+                game::module_gen_version(k)};
+            return apply_floor_file(w, floorNumber, key);
         });
 
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
@@ -2435,9 +2535,8 @@ int main(int argc, char** argv) {
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
-            refresh_floor_containers(reg, stack.layer(l0), 0, l0);
-            refresh_floor_props(reg, stack.layer(l0), 0, l0,
-                               streamer.floor_seed_of(registry, 0), bus);
+            // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
+            arrivedRestored = floor_entity_half(l0, 0);
             // Doors BEFORE the bake: door_build leaves every door open, so the
             // walkability bitsets built at the top of begin_floor_nav carry the
             // all-open geometry (an upper bound on connectivity) the bake must
@@ -2447,7 +2546,7 @@ int main(int argc, char** argv) {
             game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
-            dress_lift_portals(l0);
+            if (!arrivedRestored) dress_lift_portals(l0);
             begin_floor_nav(stack.layer(l0), 0, nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
@@ -2927,16 +3026,20 @@ int main(int argc, char** argv) {
         // discovered ([problems.md] §43). [samosbor.h] [fast_travel.h]
         runState.samosbor = samosbor;
         runState.fastTravel = fastTravel;
-        // REFRESH, not append and not clear. v15: whole crates AND corpses,
-        // contents included — the search screen made both mutable stores. [save.h]
-        game::refresh_floor_records(reg, pl, currentFloor, runState.containers,
-                                    runState.corpses, &runState.debris);
+        // v20/F: сущности резидентного этажа едут в ЕГО файл (материя И
+        // сущности одним снимком под ключом модуля), не в run.sav.
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
-        write_floor_file(stack.layer(pl), currentFloor);
+        {
+            game::FloorEntityState ents;
+            game::gather_floor_entities(reg, pl, currentFloor, ents,
+                                        &powerGrid);
+            write_floor_file(stack.layer(pl), currentFloor, ents,
+                             module_key_for(currentFloor));
+        }
         char runPath[128];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
@@ -2965,21 +3068,20 @@ int main(int argc, char** argv) {
     // Половина «покинуть этаж» — общая для синхронной поездки (do_ride) и
     // лифтовой машины (elevators-2x2.md): записи мира, файл этажа, AIMEM.
     auto leave_current_floor = [&]() {
-        // Opened crates are world state, not a free respawn. Capture the
-        // leaving floor BEFORE travel: the streamer may recycle the LayerId and
-        // refresh_floor_containers destroys every crate on the arrival slot.
-        // Without this, loot → leave → return refills every emptied box. [save.h]
+        // Всё накопленное этажом — мир И сущности — уезжает в ЕГО файл ДО
+        // переработки слота (v20/F, S20.6: «этаж помнит ВСЁ»). Сбор — на
+        // главном потоке (ECS воркеру не принадлежит), кодек и диск — фоном.
         const LayerId leaveLayer = reg.valid(player)
                                        ? reg.get<Transform>(player).layer
                                        : static_cast<LayerId>(0);
-        game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                     runState.containers, runState.corpses,
-                                     &runState.debris);
-        // The departing floor's exact grid goes to its own file — this is
-        // THE geometry persistence: the next visit (or the next run)
-        // stamps it back. A transition is a load screen; I/O is
-        // sanctioned here. [save.h]
-        write_floor_file_async(stack.layer(leaveLayer), currentFloor);
+        {
+            game::FloorEntityState ents;
+            game::gather_floor_entities(reg, leaveLayer, currentFloor, ents,
+                                        &powerGrid);
+            write_floor_file_async(stack.layer(leaveLayer), currentFloor,
+                                   std::move(ents),
+                                   module_key_for(currentFloor));
+        }
         // AIMEM: clear MotionOwner::Ai on the leaving floor before the
         // streamer recycles the layer. unload() also releases; this is the
         // keyboard/--shot leave seam so a ride without an immediate unload
@@ -3065,24 +3167,9 @@ int main(int argc, char** argv) {
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
-        refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
-                           streamer.floor_seed_of(registry, currentFloor), bus);
-        // Stamp recorded state over the deterministic respawn: a half-taken
-        // crate comes back half-taken, a deposit is still inside, and the
-        // floor's corpses lie where they fell. Same seam as F9 apply. [save.h]
-        game::apply_container_records(reg, nl, currentFloor,
-                                      runState.containers.data(),
-                                      runState.containers.size());
-        game::spawn_corpse_records(reg, nl, currentFloor,
-                                   runState.corpses.data(),
-                                   runState.corpses.size());
-        // v18: сорванные пропы — часть мира (решение владельца).
-        game::spawn_debris_records(reg, nl, currentFloor,
-                                   runState.debris.data(),
-                                   runState.debris.size());
-        // (The floor's own file is restored INSIDE ensure_loaded now — before the
-        //  dressing bake and the props, not after them. [problems.md] §42)
+        // РАЗВИЛКА S20.6 (закон 2): первый вход — сидеры, ревизит — записи
+        // снимка (клир слота, обесточка, свет — внутри, обеими ветками).
+        arrivedRestored = floor_entity_half(nl, currentFloor);
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
     };
@@ -3091,7 +3178,10 @@ int main(int argc, char** argv) {
         game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
-        dress_lift_portals(nl);
+        // Обвес лифта — СИДЕР (кнопка/панель — сущности, дефолт «закрыто» —
+        // состояние): на restore кнопки приходят записями, створки — материей
+        // снимка; пересеивать их значило бы воскрешать сорванное (закон 2).
+        if (!arrivedRestored) dress_lift_portals(nl);
         begin_floor_nav(stack.layer(nl), currentFloor, nav);
     };
     auto arrive_upload = [&](LayerId nl) {
@@ -6063,11 +6153,9 @@ int main(int argc, char** argv) {
                     // run.sav + the resident floor's own file. [save.h]
                     if (save_run_now())
                         std::snprintf(saveLine, sizeof(saveLine),
-                                      "saved: floor %d, %u rub, %u crates",
+                                      "saved: floor %d, %u rub",
                                       currentFloor,
-                                      static_cast<unsigned>(ledger.banked),
-                                      static_cast<unsigned>(
-                                          runState.containers.size()));
+                                      static_cast<unsigned>(ledger.banked));
                     else {
                         char runPath[128];
                         run_save_path(runPath, sizeof runPath);
@@ -6248,41 +6336,31 @@ int main(int argc, char** argv) {
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
-                            // Arrival order is load-path law: containers before
-                            // re-open, mobs, floor file, doors, freeze, bake,
-                            // then placement. [save.h]
-                            refresh_floor_containers(reg, stack.layer(nl),
-                                                     currentFloor, nl);
-                            const std::size_t reopened =
-                                game::apply_container_records(
-                                    reg, nl, currentFloor,
-                                    runState.containers.data(),
-                                    runState.containers.size());
-                            game::spawn_corpse_records(
-                                reg, nl, currentFloor,
-                                runState.corpses.data(),
-                                runState.corpses.size());
-                            game::spawn_debris_records(
-                                reg, nl, currentFloor,
-                                runState.debris.data(),
-                                runState.debris.size());
-                            // Комнаты РАНЬШЕ сидеров (спавн паков селится в
-                            // объявленных комнатах; двери — по тегу, S12.1).
+                            // Тот же порядок прибытия, что у поездки (F9 —
+                            // третий сайт того же закона): комнаты РАНЬШЕ
+                            // сидеров (F9 объявлял их ПОСЛЕ сева ящиков —
+                            // ящики селились по комнатам покинутого этажа),
+                            // затем развилка сущностей (записи — из floor-
+                            // файла, прочитанного restore-веткой
+                            // ensure_loaded, НЕ из run.sav — v20).
                             game::rooms_declare(
                                 floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
-                            refresh_floor_props(
-                                reg, stack.layer(nl), currentFloor, nl,
-                                streamer.floor_seed_of(registry, currentFloor),
-                                bus);
+                            arrivedRestored =
+                                floor_entity_half(nl, currentFloor);
+                            // Диффузия: F9 — единственный сайт прибытия, не
+                            // звавший контрактную чистку ([diffusion.h]) —
+                            // опасность покинутого этажа жила в клетках слота.
+                            diffusion_driver_on_floor_built(
+                                diffusionDriver, stack.layer(nl), nl);
                             game::rooms_supply_rebuild(floorRooms, reg, nl);
                             game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
-            dress_lift_portals(nl);
+                            if (!arrivedRestored) dress_lift_portals(nl);
                             begin_floor_nav(stack.layer(nl), currentFloor, nav);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
@@ -6305,9 +6383,9 @@ int main(int argc, char** argv) {
                             if (!placed.ok) {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
-                                    "loaded %u rub floor %d; place refused, %u crates",
+                                    "loaded %u rub floor %d; place refused%s",
                                     static_cast<unsigned>(ledger.banked), currentFloor,
-                                    static_cast<unsigned>(reopened));
+                                    arrivedRestored ? " (floor restored)" : "");
                             } else {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
@@ -8656,13 +8734,17 @@ int main(int argc, char** argv) {
                         const LayerId leaveLayer =
                             reg.valid(player) ? reg.get<Transform>(player).layer
                                               : static_cast<LayerId>(0);
-                        game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                                    runState.containers,
-                                                    runState.corpses,
-                                                    &runState.debris);
                         // Same departure floor-file write as the keyboard
-                        // path — two travel sites, one law. [save.h]
-                        write_floor_file_async(stack.layer(leaveLayer), currentFloor);
+                        // path — two travel sites, one law (v20: сущности
+                        // едут в файл этажа). [save.h]
+                        game::FloorEntityState leaveEnts;
+                        game::gather_floor_entities(reg, leaveLayer,
+                                                    currentFloor, leaveEnts,
+                                                    &powerGrid);
+                        write_floor_file_async(stack.layer(leaveLayer),
+                                               currentFloor,
+                                               std::move(leaveEnts),
+                                               module_key_for(currentFloor));
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
@@ -8716,32 +8798,16 @@ int main(int argc, char** argv) {
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-                        refresh_floor_containers(reg, stack.layer(nl),
-                                                 currentFloor, nl);
-                        refresh_floor_props(
-                            reg, stack.layer(nl), currentFloor, nl,
-                            streamer.floor_seed_of(registry, currentFloor), bus);
-                        // Stamp recorded crate/corpse state over the respawn.
-                        // Same seam as keyboard ride + F9 apply. [save.h]
-                        game::apply_container_records(
-                            reg, nl, currentFloor, runState.containers.data(),
-                            runState.containers.size());
-                        game::spawn_corpse_records(
-                            reg, nl, currentFloor, runState.corpses.data(),
-                            runState.corpses.size());
-                        game::spawn_debris_records(
-                            reg, nl, currentFloor, runState.debris.data(),
-                            runState.debris.size());
-                        // Arrival floor file BEFORE doors, then doors before
-                        // the bake (all-open geometry into the bitsets) — the
-                        // same law as the keyboard ride path. This is the
-                        // SECOND travel site; a fix that touches only one path
-                        // leaves --shot proving nothing. [save.h, door.h]
+                        // РАЗВИЛКА S20.6 — тот же закон, что у клавиатурной
+                        // поездки: сидеры ИЛИ записи снимка, не оба. Второй
+                        // travel-сайт; правка одного пути ничего не докажет
+                        // под --shot. [save.h]
+                        arrivedRestored = floor_entity_half(nl, currentFloor);
                         game::rooms_supply_rebuild(floorRooms, reg, nl);
                         game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
-            dress_lift_portals(nl);
+                        if (!arrivedRestored) dress_lift_portals(nl);
                         begin_floor_nav(stack.layer(nl), currentFloor, nav);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));

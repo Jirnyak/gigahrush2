@@ -347,30 +347,8 @@ void visit_samosbor(Ar& ar, S& s) {
     ar.b8(s.sealed);
 }
 
-template <class Ar, class K>
-void visit_key(Ar& ar, K& k) {
-    ar.i16(k.floor);
-    ar.u8(k.cx);
-    ar.u8(k.cy);
-    ar.u8(k.cz);
-}
-
-// v15: one crate, whole. The slot triple matches visit_inventory's cell wire.
-template <class Ar, class R>
-void visit_container_rec(Ar& ar, R& rec) {
-    visit_key(ar, rec.key);
-    ar.u8(rec.c.kind);
-    std::uint8_t opened = rec.c.opened ? 1 : 0;
-    ar.u8(opened);
-    rec.c.opened = opened != 0;
-    // B3: держатель канонический — 64 ItemSlot (бамп версии сейва по
-    // решению владельца, миграции старых 4-слотовых записей нет).
-    for (int i = 0; i < kInvSlots; ++i) {
-        ar.u16(rec.c.inv.slots[i].item);
-        ar.u16(rec.c.inv.slots[i].count);
-        ar.u8(rec.c.inv.slots[i].condition);
-    }
-}
+// visit_key/visit_container_rec МЕРТВЫ (v20/F): ящик — PropRecord с
+// инвентарём внутри floor-файла, позиционного ключа не существует.
 
 template <class Ar>
 void visit_vec3(Ar& ar, vec3& v) {
@@ -577,12 +555,10 @@ static_assert(kSaveFixedWire == 1040);  // v16: +289 bank; v19: bank 289 -> 45 (
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
-// cut the bank ring (-244): 1392 - 244 = 1148.
-static_assert(save_bytes_for(0) == 1148);
-static_assert(save_bytes_for(2) == 1148 + 2 * kContainerRecWire);
-static_assert(save_bytes_for(0, 3) == 1148 + 3 * kCorpseRecWire);
-static_assert(save_bytes_for(0, 0, 100, 50) == 1148 + 150);
-static_assert(save_bytes_for(0, 0, 0, 0, 4) == 1148 + 4 * kDebrisRecWire);
+// cut the bank ring (-244) = 1148; v20 cut both inline counts with their
+// sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
+static_assert(save_bytes_for() == 1140);
+static_assert(save_bytes_for(100, 50) == 1140 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
@@ -602,9 +578,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // The same size the writer will actually produce, minus the header this
     // buffer does not carry — `save_bytes_for` is the one place that arithmetic
     // lives, so the reserve cannot drift from the wire format.
-    body.reserve(save_bytes_for(st.containers.size(), st.corpses.size(),
-                                st.poolBlob.size(), st.macroBlob.size(),
-                                st.debris.size()) -
+    body.reserve(save_bytes_for(st.poolBlob.size(), st.macroBlob.size()) -
                  kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
@@ -635,23 +609,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
         BankAccount tmpBank = st.bank;   // the visitor is read/write
         visit_bank(bw, tmpBank);
     }
-    // Version 15: the container rows (header-counted), then the corpse rows
-    // behind their own inline u32 — see save_bytes_for for why the count is here.
-    for (const ContainerRecord& rec : st.containers) {
-        ContainerRecord tmp = rec;   // the visitor is read/write; write side copies
-        visit_container_rec(bw, tmp);
-    }
-    bw.u32(static_cast<std::uint32_t>(st.corpses.size()));
-    for (const CorpseRecord& rec : st.corpses) {
-        CorpseRecord tmp = rec;
-        visit_corpse_rec(bw, tmp);
-    }
-    // v18: обломки — тем же приёмом, счётчик инлайном перед рядами.
-    bw.u32(static_cast<std::uint32_t>(st.debris.size()));
-    for (const DebrisRecord& rec : st.debris) {
-        DebrisRecord tmp = rec;
-        visit_debris_rec(bw, tmp);
-    }
+    // v20: секций сущностей нет — они в floor_<N>.sav v3 ([save.h]).
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
     body.insert(body.end(), st.macroBlob.begin(), st.macroBlob.end());
@@ -669,7 +627,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.mobKindCount = static_cast<std::uint32_t>(kMobKindCount);
     h.itemFingerprint = item_table_fingerprint();
     h.mobFingerprint = mob_table_fingerprint();
-    h.containerCount = static_cast<std::uint32_t>(st.containers.size());
+    h.containerCount = 0; // v20: поле шапки осталось, секция мертва
     h.poolBytes = static_cast<std::uint32_t>(st.poolBlob.size());
     h.macroBytes = static_cast<std::uint32_t>(st.macroBlob.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
@@ -730,30 +688,17 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Bound the count BEFORE it is used to size anything, so a corrupt or hostile header
     // cannot ask for a large allocation on the strength of numbers the checksum has not
     // vouched for yet.
-    if (h.containerCount > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (h.containerCount != 0) return fail(SaveError::SizeMismatch); // v20
     if (h.poolBytes > kMaxPoolBytes) return fail(SaveError::SizeMismatch);
     if (h.macroBytes > kMaxMacroBytes) return fail(SaveError::SizeMismatch);
-    // v15: the corpse count rides inline (the 64-byte header is full), so the
-    // size gate works by SUBTRACTION — every other section is exactly
-    // computable from the header, and what remains must be a whole number of
-    // corpse rows under the same ceiling. The inline count is then required to
-    // agree with this remainder during the parse, so a payload cannot smuggle
-    // a different row count past the arithmetic.
-    //
-    // v18 добавила ВТОРУЮ секцию переменной длины (обломки), и чистое
-    // вычитание перестало разделять две неизвестные. Поэтому остаток
-    // считается один раз, а инлайновые счётчики обязаны сойтись с ним ТОЧНО
-    // при разборе — свойство «payload не может протащить другое число рядов»
-    // сохранено, просто проверка стала уравнением на два слагаемых.
+    // v20: переменных секций сущностей нет — payload обязан сойтись с
+    // арифметикой шапки РОВНО (квест-лог — фикс-ширина внутри kSaveFixedWire).
     const std::size_t wantFixed =
         kSaveFixedWire + kFactionWire +
-        static_cast<std::size_t>(h.containerCount) * kContainerRecWire + 4 + 4 +
         static_cast<std::size_t>(h.poolBytes) +
         static_cast<std::size_t>(h.macroBytes);
-    if (static_cast<std::size_t>(h.payloadBytes) < wantFixed)
+    if (static_cast<std::size_t>(h.payloadBytes) != wantFixed)
         return fail(SaveError::SizeMismatch);
-    const std::size_t varBytes =
-        static_cast<std::size_t>(h.payloadBytes) - wantFixed;
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::TooShort);
     if (crc32(bytes + kSaveHeaderWire, h.payloadBytes) != h.payloadCrc)
@@ -794,33 +739,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
     visit_bank(r, tmp.bank);
     tmp.bank.lastInterestTick = 0;   // re-armed by the load site ([save.h])
-    tmp.containers.resize(static_cast<std::size_t>(h.containerCount));
-    for (ContainerRecord& rec : tmp.containers) visit_container_rec(r, rec);
-    {
-        std::uint32_t nCorpses = 0;
-        r.u32(nCorpses);
-        if (!r.ok()) return fail(SaveError::TooShort);
-        // Оба потолка ДО resize: аллокация не делается на числах, за которые
-        // ещё никто не поручился.
-        if (nCorpses > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
-        if (static_cast<std::size_t>(nCorpses) * kCorpseRecWire > varBytes)
-            return fail(SaveError::SizeMismatch);
-        tmp.corpses.resize(nCorpses);
-        for (CorpseRecord& rec : tmp.corpses) visit_corpse_rec(r, rec);
-
-        std::uint32_t nDebris = 0;
-        r.u32(nDebris);
-        if (!r.ok()) return fail(SaveError::TooShort);
-        if (nDebris > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
-        // Уравнение обязано сойтись ровно: два счётчика вместе объясняют
-        // весь переменный остаток, лишний байт — SizeMismatch.
-        if (static_cast<std::size_t>(nCorpses) * kCorpseRecWire +
-                static_cast<std::size_t>(nDebris) * kDebrisRecWire !=
-            varBytes)
-            return fail(SaveError::SizeMismatch);
-        tmp.debris.resize(nDebris);
-        for (DebrisRecord& rec : tmp.debris) visit_debris_rec(r, rec);
-    }
+    // v20: секций сущностей нет — они в floor_<N>.sav v3.
     // Version 6: the macro blobs, verbatim (decoded by their owners against live
     // objects, which a parse must not require), then the faction matrix.
     {
@@ -860,112 +779,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
 // ---------------------------------------------------------------------------
 // Container state <-> registry
 // ---------------------------------------------------------------------------
-
-OpenedContainerKey container_key(int floorNumber, const vec3& pos) {
-    OpenedContainerKey k{};
-    k.floor = static_cast<std::int16_t>(floorNumber);
-    // Same truncation MacroGrid and `on_extraction_pad` use, and it is exact here rather
-    // than approximate: `spawn_floor_containers` centres a crate at
-    // `(cell + 0.5) * kCellSize` in x/y and `cell * kCellSize + kContainerHalf.z` in z,
-    // and kContainerHalf.z is 0.45 m inside a 2 m cell — so the truncation lands on the
-    // spawning cell for every axis, with 0.55 m of margin on the tightest one.
-    //
-    // Through the shared helper rather than inline, so a crate's key and a restored
-    // body's cell cannot end up one cell apart over a difference in how two copies of
-    // this expression round.
-    macro_cell_of(pos, k.cx, k.cy, k.cz);
-    return k;
-}
-
-std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
-                                  std::vector<ContainerRecord>& boxes,
-                                  std::vector<CorpseRecord>& corpses,
-                                  std::vector<DebrisRecord>* debris) {
-    // Compact in place rather than erase-remove: the lists are a few hundred small
-    // rows, and one pass with no allocation is easier to be sure about than an
-    // iterator dance.
-    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
-    std::size_t keep = 0;
-    for (std::size_t i = 0; i < boxes.size(); ++i) {
-        if (boxes[i].key.floor == f) continue;
-        boxes[keep++] = boxes[i];
-    }
-    boxes.resize(keep);
-    keep = 0;
-    for (std::size_t i = 0; i < corpses.size(); ++i) {
-        if (corpses[i].floor == f) continue;
-        corpses[keep++] = corpses[i];
-    }
-    corpses.resize(keep);
-
-    std::size_t n = 0;
-    // EVERY crate, not only the touched ones. A "changed since roll" diff would
-    // need the pristine roll to compare against, i.e. it would make the
-    // generator part of the record's meaning — the exact trap the floor-file
-    // ceiling comment rejects for geometry. ~64 rows x 27 B is not a cost.
-    for (auto e : reg.view<const Container, const Transform>()) {
-        // C: контейнер ТРУПА едет в CorpseRecord.inv — записывать его ещё и
-        // контейнерной записью значило бы дублировать лут при каждом сейве.
-        if (reg.all_of<Corpse>(e)) continue;
-        const Transform& t = reg.get<const Transform>(e);
-        if (t.layer != layer) continue;
-        ContainerRecord rec;
-        rec.key = container_key(floorNumber, t.pos);
-        rec.c = reg.get<const Container>(e);
-        boxes.push_back(rec);
-        ++n;
-    }
-    for (auto e : reg.view<const Corpse, const Transform>()) {
-        const Transform& t = reg.get<const Transform>(e);
-        if (t.layer != layer) continue;
-        const Corpse& c = reg.get<const Corpse>(e);
-        CorpseRecord rec;
-        rec.floor = f;
-        rec.pos = t.pos;
-        if (const Renderable* rr = reg.try_get<Renderable>(e)) rec.colour = rr->color;
-        if (const AABB* bb = reg.try_get<AABB>(e)) rec.half = bb->half;
-        rec.mobKind = c.mobKind;
-        rec.searched = c.searched ? 1 : 0;
-        if (const Container* box = reg.try_get<const Container>(e))
-            rec.inv = box->inv;
-        corpses.push_back(rec);
-        ++n;
-    }
-    // v18: СОРВАННЫЕ ПРОПЫ (решение владельца: обломок часть мира). Живое
-    // тело ядра без Corpse и без Container — то есть не труп и не ящик, оба
-    // едут своими секциями. Сегменты трупа тоже пропускаются: они
-    // пересобираются вместе с корнем.
-    if (debris) {
-        std::size_t keepD = 0;
-        for (std::size_t i = 0; i < debris->size(); ++i) {
-            if ((*debris)[i].floor == f) continue;
-            (*debris)[keepD++] = (*debris)[i];
-        }
-        debris->resize(keepD);
-        for (auto e : reg.view<const RigidBody, const Transform>()) {
-            if (reg.all_of<Corpse>(e) || reg.all_of<Container>(e)) continue;
-            if (reg.all_of<BodySegment>(e)) continue;
-            const Transform& t = reg.get<const Transform>(e);
-            if (t.layer != layer) continue;
-            const RigidBody& rb = reg.get<const RigidBody>(e);
-            DebrisRecord rec;
-            rec.floor = f;
-            rec.pos = t.pos;
-            rec.half = reg.all_of<AABB>(e)
-                           ? reg.get<AABB>(e).half
-                           : vec3{rb.radius, rb.radius, rb.radius};
-            if (const Renderable* rr = reg.try_get<Renderable>(e))
-                rec.colour = rr->color;
-            rec.massKg = 1.0f / (rb.invMass > 1e-9f ? rb.invMass : 1.0f);
-            rec.restitution = rb.restitution;
-            rec.friction = rb.friction;
-            rec.sphere = reg.all_of<ContactForm>(e) ? 0 : 1;
-            debris->push_back(rec);
-            ++n;
-        }
-    }
-    return n;
-}
+// container_key / refresh_floor_records / apply_container_records МЕРТВЫ
+// (v20/F): сборщик — gather_floor_entities, применение — spawn_*_records.
 
 std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
                                  const DebrisRecord* recs, std::size_t n) {
@@ -1004,51 +819,6 @@ std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
         ++made;
     }
     return made;
-}
-
-std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumber,
-                                    const ContainerRecord* recs, std::size_t n,
-                                    const vec3* openedColour) {
-    if (!recs || n == 0) return 0;
-    const std::int16_t f = static_cast<std::int16_t>(floorNumber);
-
-    std::size_t hits = 0;
-    // Records are CONSUMED one-to-one, not shared: the (floor, cell) key can
-    // collide — two crates in one cell produce two records under one key — and
-    // a first-match-wins lookup would stamp the FIRST record onto BOTH crates,
-    // losing the second's state and, when the survivor is the un-opened one,
-    // quietly resurrecting loot. Consuming makes the match a multiset: N crates
-    // in a cell take that cell's N records (assignment within the cell is
-    // arbitrary, which only ever swaps two boxes standing in the same square).
-    std::vector<std::uint8_t> used(n, 0);
-    for (auto e : reg.view<Container, const Transform>()) {
-        if (reg.all_of<Corpse>(e)) continue; // трупный лут применяет CorpseRecord
-        const Transform& t = reg.get<const Transform>(e);
-        if (t.layer != layer) continue;
-
-        const OpenedContainerKey k = container_key(floorNumber, t.pos);
-        const ContainerRecord* hit = nullptr;
-        for (std::size_t i = 0; i < n && !hit; ++i) {
-            if (used[i]) continue;
-            if (recs[i].key.floor != f) continue;  // other floors, skipped cheaply
-            if (same_container(recs[i].key, k)) {
-                hit = &recs[i];
-                used[i] = 1;
-            }
-        }
-        if (!hit) continue;   // a crate with no record keeps its fresh roll
-
-        // The WHOLE component, not a flag: a half-taken crate comes back
-        // half-taken, a deposit is still inside, wear bytes and all.
-        reg.get<Container>(e) = hit->c;
-        if (hit->c.opened && openedColour)
-            if (Renderable* rr = reg.try_get<Renderable>(e)) rr->color = *openedColour;
-        ++hits;
-    }
-    // O(crates x records) — 64 x 640 worst case on the demo stack, once per floor
-    // entry. Load time is unbounded by contract ([performance.md]) and the sim
-    // tick never runs this, so a hash set would buy nothing but an allocation.
-    return hits;
 }
 
 std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,

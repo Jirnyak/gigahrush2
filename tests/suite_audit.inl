@@ -956,22 +956,17 @@ static void budget_vs_demo_cap() {
 }
 
 // ---------------------------------------------------------------------------
-// PIN (green): travel destroy+respawn keeps crate CONTENTS (v15 records)
+// PIN (green): travel keeps crate CONTENTS (v20: записи снимка, не пересев)
 // ---------------------------------------------------------------------------
-// main.cpp refresh_floor_containers tears down every Container on the arrival layer and
-// re-rolls spawn_floor_containers with seed 0xC0FFEE ^ floor*0x9e3779b9. That is correct
-// for a first visit. A RETURN visit must stamp back the recorded state — otherwise
-// loot -> elevator -> return is a free refill, and (v15, the stronger half) a partial
-// take or a DEPOSIT would be silently rolled away.
-//
-// All travel paths and the save do:
-//   refresh_floor_records(leaveLayer, floor)          // BEFORE streamer.travel
-//   ... travel + refresh_floor_containers ...
-//   apply_container_records(nl, floor, recs)          // AFTER respawn
-//   spawn_corpse_records(nl, floor, recs)
-// This pin is that seam without the streamer: spawn -> mutate -> capture -> destroy ->
-// respawn same seed -> apply -> assert stamped. saveload's floor_records_survive_a_restart
-// covers the F5/F9 byte round-trip; this one covers the in-memory travel path.
+// v20/F (S20.6 закон 2): ветка ревизита НЕ сеет — сущности приходят из
+// записей floor-файла. Все travel-пути делают:
+//   gather_floor_entities(leaveLayer, floor)          // BEFORE streamer.travel
+//   ... travel ...
+//   spawn_prop_records / spawn_corpse_records / ...   // restore branch
+// This pin is that seam without the streamer and without the file: spawn ->
+// mutate -> gather -> destroy -> spawn from records -> assert equal. saveload's
+// floor_records_survive_a_restart covers the byte round-trip through the
+// floor file; this one covers the in-memory travel seam.
 static void travel_keeps_crate_records() {
     World w;
     const int floorZ = -3;
@@ -1012,33 +1007,25 @@ static void travel_keeps_crate_records() {
     CHECK(openedByHand > 1);
     CHECK(deposits > 0);
 
-    std::vector<ContainerRecord> boxes;
-    std::vector<CorpseRecord> corpses;
-    // Foreign-floor record must survive a floor-scoped refresh (travel only rewrites
-    // the floor being left).
-    boxes.push_back(ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}});
-    const std::size_t fromFloor =
-        refresh_floor_records(reg, layer, floorZ, boxes, corpses);
-    CHECK(fromFloor == static_cast<std::size_t>(made));   // every crate, no corpse
-    CHECK(boxes.size() == 1u + made);
-    CHECK(boxes[0].key.floor == 2);
-    CHECK(corpses.empty());
+    game::FloorEntityState ents;
+    const std::size_t gathered =
+        gather_floor_entities(reg, layer, floorZ, ents, nullptr);
+    CHECK(gathered >= static_cast<std::size_t>(made));
+    CHECK(ents.props.size() == static_cast<std::size_t>(made));
 
-    // Tear down — the streamer recycles LayerId; refresh_floor_containers does this.
+    // Tear down — the streamer recycles LayerId; unload's sweep does this.
     std::vector<Entity> dead;
     for (auto e : reg.view<const Container, const Transform>())
         if (reg.get<const Transform>(e).layer == layer) dead.push_back(e);
     CHECK(!dead.empty());
     for (Entity e : dead) reg.destroy(e);
 
-    const std::uint32_t remade =
-        spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
-    CHECK(remade == made);
-
-    // Without apply, every remade crate is full again — the refill bug.
-    const std::size_t hits = apply_container_records(
-        reg, layer, floorZ, boxes.data(), boxes.size());
-    CHECK(hits == static_cast<std::size_t>(made));   // every crate has a record
+    // Ревизит: НЕ пересев + штамп, а спавн из записей (restore не сеет).
+    EventBus bus;
+    bus.init();
+    const std::size_t remade = spawn_prop_records(
+        reg, w, layer, ents.props.data(), ents.props.size(), bus);
+    CHECK(remade == static_cast<std::size_t>(made));
 
     std::size_t openNow = 0, depositNow = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
