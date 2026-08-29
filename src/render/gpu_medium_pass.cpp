@@ -501,6 +501,57 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     // (wake_cells), ленивый путь остаётся фолбэком на экстремальный догон.
     if (!liveCis.empty())
         open_frontier(world, mirror, liveCis.data(), liveCis.size());
+    // ГИСТОГРАММА СОСТАВА live-набора (§63 problems.md, инструмент вопроса 1:
+    // «кто эти 8k клеток и почему 108 мокрых не осели в 108 спящих»).
+    // Оконная выборка (rb-окно вращается по всему списку — за несколько
+    // секунд покрывает всё). Классы — по агрегату сред: СУХАЯ живая клетка
+    // (level 0 — щебень/маски без материи сред) против жидкости/газа/смеси;
+    // плюс топ z-этажей — водопады шахт видны столбами. Только под флагом.
+    if (std::getenv("GIGA_MEDIUM_DBG") != nullptr && !liveCis.empty()) {
+        static std::uint32_t applies = 0;
+        if (++applies % 128u == 0u) {
+            std::uint32_t dry = 0, liq = 0, gas = 0, mixed = 0;
+            static std::uint32_t zHist[kMacroDim];
+            std::memset(zHist, 0, sizeof zHist);
+            for (std::uint32_t ci : liveCis) {
+                const std::uint32_t lvl = medium_level_at(world, ci);
+                const std::uint32_t l = lvl & 0xFFFFu, g = lvl >> 16;
+                if (l == 0 && g == 0) ++dry;
+                else if (l > 0 && g > 0) ++mixed;
+                else if (l > 0) ++liq;
+                else ++gas;
+                ++zHist[(ci / (kMacroDim * kMacroDim)) & (kMacroDim - 1)];
+            }
+            std::fprintf(stderr,
+                         "[medium-dbg] live window %zu (list %u): dry %u "
+                         "liq %u gas %u mixed %u\n",
+                         liveCis.size(), lastCount_, dry, liq, gas, mixed);
+            for (int pass = 0; pass < 5; ++pass) {
+                std::uint32_t bestZ = 0, bestN = 0;
+                for (std::uint32_t z = 0; z < kMacroDim; ++z)
+                    if (zHist[z] > bestN) { bestN = zHist[z]; bestZ = z; }
+                if (bestN == 0) break;
+                std::fprintf(stderr, "[medium-dbg]   z=%u: %u cells\n",
+                             bestZ, bestN);
+                zHist[bestZ] = 0;
+            }
+            // Топ XY-колонок — водопады шахт видны адресами столбов.
+            static std::uint32_t xyHist[kMacroDim * kMacroDim];
+            std::memset(xyHist, 0, sizeof xyHist);
+            for (std::uint32_t ci : liveCis)
+                ++xyHist[ci % (kMacroDim * kMacroDim)];
+            for (int pass = 0; pass < 4; ++pass) {
+                std::uint32_t bestI = 0, bestN = 0;
+                for (std::uint32_t i = 0; i < kMacroDim * kMacroDim; ++i)
+                    if (xyHist[i] > bestN) { bestN = xyHist[i]; bestI = i; }
+                if (bestN == 0) break;
+                std::fprintf(stderr,
+                             "[medium-dbg]   column x=%u y=%u: %u cells\n",
+                             bestI % kMacroDim, bestI / kMacroDim, bestN);
+                xyHist[bestI] = 0;
+            }
+        }
+    }
     if (!lazyDirty_.empty()) {
         mirror.mark_dirty(lazyDirty_.data(), lazyDirty_.size());
         lazyTotal_ += static_cast<std::uint32_t>(lazyDirty_.size());
