@@ -112,6 +112,7 @@
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
+#include "core/prof.h"  // GIGA_PROF=1 — per-system свод кадра ([prof] ниже)
 
 #include "render/gpu_cull_pass.h"
 #include "app/ui_shell.h"
@@ -519,6 +520,51 @@ static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
     return std::chrono::duration<float, std::milli>(
                std::chrono::steady_clock::now() - t0)
         .count();
+}
+
+// [prof] GIGA_PROF=1 — постоянная per-system разбивка CPU-кадра. Детектор
+// [hitch] ниже печатает разбор только дороже порога (50 мс) — кадр между
+// бюджетом и порогом был НЕМЫМ (слепая зона §59.25). Здесь каждая именованная
+// система копит мс в g_profFrameMs, топ следующего кадра толкает суммы в
+// кольца ([core/prof.h]) и раз в 256 кадров печатает свод: медиана/p90/пик
+// по каждой строке + счётчики live + GPU-пассы. Выключено (по умолчанию) —
+// ноль замеров: prof_now() не читает часы, prof_add() — одна ветка.
+enum ProfSlot : unsigned {
+    // внутри сим-тика (сумма по подшагам кадра)
+    kProfTick,        // весь while(simAccum) — «прочее тика» = tick − сумма имён
+    kProfNoise,       // noise_step — старение поля шума
+    kProfDiffusion,   // ai_panic_publish_step + diffusion_tick
+    kProfAi,          // ai_step + ai_equip_step
+    kProfController,  // controller_step
+    kProfWander,      // ai_patrol_step + wander_step (толпа)
+    kProfAcoustics,   // noise_acoustics_step + investigate_step (скелет слуха)
+    kProfCombat,      // player_melee..mob_attack..hazard..projectile..charge
+    kProfPhysics,     // slow_step + physics_step (агенты)
+    kProfRigid,       // rigid_body_step (твердотелы/рагдоллы)
+    kProfImpact,      // attachment_reaper_step + impact_damage_step
+    kProfNeeds,       // encumbrance_step + needs_step
+    // раз в кадр
+    kProfFocus,       // focus_pick — прицел интеракций
+    kProfWitness,     // witness_step (S19)
+    kProfNav,         // nav.step — амортизированный ребейк
+    kProfCount
+};
+static const char* const kProfName[kProfCount] = {
+    "tick",   "noise",     "diffusion", "ai",     "controller",
+    "wander", "acoustics", "combat",    "physics", "rigid",
+    "impact", "needs",     "focus",     "witness", "nav"};
+static const bool g_profOn = [] {
+    const char* e = std::getenv("GIGA_PROF");
+    return e != nullptr && e[0] != '\0' && e[0] != '0';
+}();
+static float g_profFrameMs[kProfCount] = {};
+static giga::prof::Ring g_profRing[kProfCount];
+static std::chrono::steady_clock::time_point prof_now() {
+    return g_profOn ? std::chrono::steady_clock::now()
+                    : std::chrono::steady_clock::time_point{};
+}
+static void prof_add(unsigned slot, std::chrono::steady_clock::time_point t0) {
+    if (g_profOn) g_profFrameMs[slot] += carve_ms_since(t0);
 }
 
 // Метки кадра для детектора хитча (carve-hitch.md, инкремент 1б): что
@@ -3453,6 +3499,89 @@ int main(int argc, char** argv) {
                     static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Hud)),
                     gt.dropped());
             }
+            // [prof] свод per-system: суммы прошлого кадра — в кольца, раз в
+            // 256 кадров (~4 с) — печать. Читается здесь же, где хитч-детектор,
+            // потому что это единственная точка, где wall-clock кадра уже
+            // известен, а метки ещё не сброшены.
+            if (g_profOn && g_wallSeen > 1) {
+                static giga::prof::Ring profWall, profSim, profRender,
+                    profCarve, profLightSwap, profPropSkin, profMedApply,
+                    profMedRec;
+                profWall.push(wallMs);
+                profSim.push(g_frameMark.simMs);
+                profRender.push(g_frameMark.renderMs);
+                profCarve.push(g_frameMark.carveMs);
+                profLightSwap.push(g_frameMark.lightSwapMs);
+                profPropSkin.push(g_frameMark.propSkinMs);
+                profMedApply.push(g_mediumApplyMs);
+                profMedRec.push(g_mediumRecMs);
+                for (unsigned s = 0; s < kProfCount; ++s) {
+                    g_profRing[s].push(g_profFrameMs[s]);
+                    g_profFrameMs[s] = 0.0f;
+                }
+                static unsigned profFrames = 0;
+                if ((++profFrames & 255u) == 0u) {
+                    const giga::prof::Stats w = giga::prof::ring_stats(profWall);
+                    std::fprintf(stderr,
+                                 "[prof] ===== %u кадров | wall med %.2f p90 "
+                                 "%.2f peak %.2f мс | medium live %u quanta %u "
+                                 "| bodies %u =====\n",
+                                 profFrames, static_cast<double>(w.median),
+                                 static_cast<double>(w.p90),
+                                 static_cast<double>(w.peak),
+                                 mediumPass.live_count(),
+                                 mediumPass.live_quanta(),
+                                 bodyPass.last_instance_count());
+                    const auto line = [](const char* name,
+                                         const giga::prof::Ring& r) {
+                        const giga::prof::Stats st = giga::prof::ring_stats(r);
+                        std::fprintf(stderr,
+                                     "[prof] %-11s med %8.3f  p90 %8.3f  peak "
+                                     "%8.3f\n",
+                                     name, static_cast<double>(st.median),
+                                     static_cast<double>(st.p90),
+                                     static_cast<double>(st.peak));
+                    };
+                    line("sim", profSim);
+                    line("render", profRender);
+                    for (unsigned s = 0; s < kProfCount; ++s)
+                        line(kProfName[s], g_profRing[s]);
+                    line("carve", profCarve);
+                    line("light_swap", profLightSwap);
+                    line("prop_skin", profPropSkin);
+                    line("med_apply", profMedApply);
+                    line("med_record", profMedRec);
+                    if (renderer.timer.supported()) {
+                        const auto& gt = renderer.timer;
+                        std::fprintf(
+                            stderr,
+                            "[prof] gpu lgrid %.2f vflush %.2f cull %.2f "
+                            "simphys %.2f world %.2f bodies %.2f props %.2f "
+                            "drawphys %.2f hud %.2f light %.2f raster %.2f | "
+                            "frame %.2f peak %.2f (dropped %u)\n",
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::LightGrid)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::VoxelFlush)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Cull)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::SimPhysics)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::World)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::Bodies)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Props)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::DrawPhysics)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Hud)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Light)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::Raster)),
+                            static_cast<double>(gt.frame_ms()),
+                            static_cast<double>(gt.frame_ms_max()),
+                            gt.dropped());
+                    }
+                }
+            }
             g_frameMark = FrameMark{};
             g_frameT0 = std::chrono::steady_clock::now();
         }
@@ -3542,9 +3671,11 @@ int main(int argc, char** argv) {
         // (sub_march-зрение / skeleton_audible-слух). Незамеченное убийство
         // оставляет труп, но не дипломатию. [witness.h]
         {
+            const auto profWitnessT0 = prof_now();
             const game::WitnessTick wt = game::witness_step(
                 reg, pool, factionRel, bus, floorRooms,
                 stack.layer(activeLayer), activeLayer, simTick);
+            prof_add(kProfWitness, profWitnessT0);
             relTick = {};
             relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
             relTick.changes = wt.changes;
@@ -3557,6 +3688,7 @@ int main(int argc, char** argv) {
         // пишутся только здесь, на главном потоке) и старт новых циклов по
         // дебаунсу/дедлайну. true ровно на кадре Fresh-свапа — момент, когда
         // толпе нового этажа пора ходить; Rebake-свапы пересева не требуют.
+        const auto profNavT0 = prof_now();
         if (nav.step(simTick, g_worldGen)) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
@@ -3566,6 +3698,7 @@ int main(int argc, char** argv) {
             // вторая — пустая очередь пробуждений сред (ниже).
             if (liftRide == LiftRide::WaitFresh) liftFreshDone = true;
         }
+        prof_add(kProfNav, profNavT0);
         // Лифтовая машина, фаза свапа: воркер отдал мир — ecs-половина,
         // перенос тела в кабину назначения и ВЕСЬ обычный хвост прибытия
         // (arrive_after_ride запускает Fresh-бейк через begin_floor_nav);
@@ -3665,8 +3798,10 @@ int main(int argc, char** argv) {
             if (const auto* nrF = reg.try_get<game::NpcRef>(player))
                 if (pool.valid(nrF->id))
                     eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
+            const auto profFocusT0 = prof_now();
             g_focus = game::focus_pick(reg, stack.layer(activeLayer),
                                        activeLayer, eyeF, aimF, doors, player);
+            prof_add(kProfFocus, profFocusT0);
             // ФАКТЫ ВМЕСТО ДОГАДОК (владелец: «таблички нет, смотрю в
             // упор»): раз в игровую секунду — что видит прицел. GIGA_FOCUS_DBG.
             static const bool kFocusDbg =
@@ -4109,14 +4244,17 @@ int main(int argc, char** argv) {
             const Field<float>* danger = activeWorld.fields().find<float>("danger");
             const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
+            const auto profTickT0 = prof_now();
             while (simAccum >= kSimDt && guard++ < 8) {
                 // Age the noise field ONCE per tick, at the top ([noise.h]). Everything
                 // published later in this tick therefore gets a full tick of life before
                 // it can expire, and investigate_step below reads a field that nothing has yet
                 // mutated this tick — so a gunshot fired on tick N is investigated on
                 // tick N+1 rather than racing the pass that fired it.
+                const auto profNoiseT0 = prof_now();
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                prof_add(kProfNoise, profNoiseT0);
                 // While the console is OPEN, WASD is text, not movement: skip
                 // the bridge and park the intent so the body does not glide on
                 // the last pre-console wishDir. The open inventory grid owns
@@ -4234,15 +4372,19 @@ int main(int argc, char** argv) {
                 // door_nearest_shelter (sealed apartments) before −∇danger / memory.
                 // Эрранды по виду комнаты умерли (rooms-object F) — комнатную
                 // наводку интентов возвращает agent-goals скором S13.
+                const auto profDiffT0 = prof_now();
                 game::ai_panic_publish_step(reg, pool, diffusionDriver,
                                             activeWorld, activeLayer, kSimDt);
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
+                prof_add(kProfDiffusion, profDiffT0);
                 danger = activeWorld.fields().find<float>("danger");
+                const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, nullptr, &activeWorld);
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
                 game::ai_equip_step(reg, pool, activeLayer, simTick);
+                prof_add(kProfAi, profAiT0);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
@@ -4282,7 +4424,9 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[aimem] INTENT tick=%llu%s\n",
                                  static_cast<unsigned long long>(simTick), intents);
                 }
+                const auto profCtlT0 = prof_now();
                 controller_step(reg, kSimDt, &activeWorld.gravity());
+                prof_add(kProfController, profCtlT0);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
                 // Банк тикает ЗДЕСЬ же: bank_open идемпотентен по (этаж, сид)
@@ -4832,12 +4976,14 @@ int main(int argc, char** argv) {
                 // guard then skips them — one Velocity writer per body per tick.
                 // Runs on the same baked nav wander reads; while the bake is in
                 // flight the flow is empty and patrol bodies wander like everyone.
+                const auto profWanderT0 = prof_now();
                 game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
                                      kSimDt, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick,
                                   &activeWorld.gravity());
+                prof_add(kProfWander, profWanderT0);
 
                 // Шаги игрока БОЛЬШЕ НЕ ЗДЕСЬ. Их публикует encumbrance_step —
                 // один закон на все тела, камера включительно (игрок = NPC), с
@@ -4855,11 +5001,13 @@ int main(int argc, char** argv) {
                 // Добейк шаров акустики свежим шумам (G): один системный шаг,
                 // писатели шума об акустике не знают. После него слух этого
                 // тика отвечает по скелету — стены глушат.
+                const auto profAcoustT0 = prof_now();
                 game::noise_acoustics_step(*noiseAcoustics, noiseField,
                                            stack.layer(activeLayer),
                                            activeLayer);
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
                                                    simTick, noiseAcoustics.get());
+                prof_add(kProfAcoustics, profAcoustT0);
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
                 for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
@@ -4978,22 +5126,28 @@ int main(int argc, char** argv) {
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
+                const auto profPhysT0 = prof_now();
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
+                prof_add(kProfPhysics, profPhysT0);
                 // Рагдолл-ядро: импульсный твердотел (RigidBody +
                 // SelfIntegrating — physics_step такие тела пропускает).
                 // До impact_damage_step, чтобы его Impact-репорты попали в тот
                 // же универсальный закон урона. [markoaudit/plans/ragdoll.md]
+                const auto profRigidT0 = prof_now();
                 rigid_body_step(reg, stack, kSimDt);
+                prof_add(kProfRigid, profRigidT0);
                 // Жнец связей — одно правило смерти носителя (S20.3):
                 // линк с умершей стороной уничтожается (живая разбужена),
                 // сегмент без корня тоже; утечка линков при выгрузке этажа
                 // закрыта по построению — связи умирают тиком после сторон.
+                const auto profImpactT0 = prof_now();
                 game::attachment_reaper_step(reg);
                 // The universal impact law, straight after the sweep that wrote
                 // the reports: damage = k*m*v^2/2 over Mass — fall damage and
                 // prop crashes with no per-cause constants ([game/impact.h]).
                 game::impact_damage_step(reg, pool, &particleBursts);
+                prof_add(kProfImpact, profImpactT0);
                 // prop_ragdoll_step умер (рагдолл-эпик, инкремент 6):
                 // сорванные пропы — тела rigid_body_step выше.
                 // НОВАЯ ДВЕРЬ: тоггл актором — единая интеракция E.
@@ -5939,6 +6093,7 @@ int main(int argc, char** argv) {
                     game::player_throw_step(reg, pool, activeLayer, true,
                                             simTick);
                 }
+                const auto profCombatT0 = prof_now();
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
                     !haveGun && attackHeld && shell.playing(), simTick,
@@ -5976,6 +6131,7 @@ int main(int argc, char** argv) {
                 meleeHits += game::charge_step(reg, pool, stack, activeLayer,
                                                simTick, &combatCarves,
                                                &particleBursts, &noiseField);
+                prof_add(kProfCombat, profCombatT0);
                 if (bus.cycle_count(game::EventType::PropDetached) >
                     propDetachedBeforeShots)
                     propPassNeedsRebuild = true;
@@ -6148,10 +6304,12 @@ int main(int argc, char** argv) {
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
+                const auto profNeedsT0 = prof_now();
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt,
                                          &aiMem, simNow);
+                prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
                 // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
                 // слил его, где застало). Лужа — тот же стейн, что канал P.
@@ -6721,6 +6879,7 @@ int main(int argc, char** argv) {
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
+            prof_add(kProfTick, profTickT0);
         }
 
         // --- render --------------------------------------------------------

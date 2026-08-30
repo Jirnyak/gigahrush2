@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+#include "core/prof.h"   // кольцо профиля кадра — математика строк [prof]
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -116,6 +117,7 @@ int g_checks = 0;
 // or fails — see the banner in the file for why the printing half matters more
 // than the asserting half.
 #include "suite_budgets.inl"
+#include "suite_prof.inl"
 // Wired 2026-07-29. This suite existed for its whole life without being included by any
 // translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
 // and never touched this file, so 733 lines and 104 CHECK sites were dead text while
@@ -5783,6 +5785,7 @@ int main() {
     test_props_game_all();
     test_light_bake_clusters();
     test_watch_all();
+    test_prof_ring_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 
