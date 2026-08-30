@@ -1,5 +1,6 @@
 #include "render/gpu_medium_pass.h"
 
+#include <chrono> // состав med_apply — фазовый замер §63
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -83,6 +84,10 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t lc = cells[i];
         if (lc >= kMacroCells) continue;
+        // Раз на клетку за этаж ([gpu_medium_pass.h] frontierDone_): скан
+        // идемпотентен, повторы на живом окне были 85-100% цены фронтира.
+        if ((frontierDone_[lc >> 6] >> (lc & 63u)) & 1ull) continue;
+        frontierDone_[lc >> 6] |= 1ull << (lc & 63u);
         const int cx = static_cast<int>(lc % kMacroDim);
         const int cy = static_cast<int>((lc / kMacroDim) % kMacroDim);
         const int cz = static_cast<int>(lc / (kMacroDim * kMacroDim));
@@ -298,6 +303,10 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
         if (world.grid().masks()[ci].full()) continue;
         std::uint64_t& w = wakeBits_[ci >> 6];
         const std::uint64_t bit = 1ull << (ci & 63u);
+        // Запись раскрывает округу ЗАНОВО (писатель мог схлопнуть страницу
+        // соседа/свою): бит «фронтир уже открыт» снимается, drain_wakes
+        // пересканирует R=6 этой клетки.
+        frontierDone_[ci >> 6] &= ~bit;
         if (w & bit) continue;
         w |= bit;
         wakeQueue_.push_back(ci);
@@ -420,6 +429,11 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     std::vector<std::uint32_t> liveCis;
     liveCis.reserve(count);
     const bool probeDiag = std::getenv("GIGA_POUR") != nullptr;
+    // Состав med_apply (§63, добро владельца 2026-08-30): фазовый замер —
+    // прежде чем трогать run_move, шов обязан назвать, кто ест его 11 мс.
+    applyWindow_ = count;
+    applyCmpOnly_ = applyCopied_ = applyLazy_ = applySkipFresh_ = 0;
+    const auto applyLoopT0 = std::chrono::steady_clock::now();
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t word = list[kListHeader + i];
         const std::uint32_t ci = word & 0x7FFFFFFFu;
@@ -462,14 +476,17 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         // воскрешал выбитые карвом атомы. Скип, пока запись в очереди, и
         // для паков, записанных не позже доставившего флеша.
         if (mirror.write_pending(ci) ||
-            rec.flushCount <= mirror.upload_gen(ci))
+            rec.flushCount <= mirror.upload_gen(ci)) {
+            ++applySkipFresh_;
             continue;
+        }
         if (word & 0x80000000u) {
             // GPU видел клетку безстраничной: материализуем лениво — flush
             // довезёт страницу, материя подождёт у границы кадр-два.
             if (!f->paged(ci)) {
                 materialize_sub_page(world, ci);
                 lazyDirty_.push_back(ci);
+                ++applyLazy_;
             }
             continue;
         }
@@ -484,8 +501,12 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         // почти весь — memcpy+recount неизменённых страниц).
         const bool pageSame = std::memcmp(pg, np, kPageBytesBack) == 0;
         const bool maskSame = std::memcmp(m.words, nm, kMaskBytesBack) == 0;
-        if (pageSame && maskSame) continue;
+        if (pageSame && maskSame) {
+            ++applyCmpOnly_;
+            continue;
+        }
         if (!pageSame) {
+            ++applyCopied_;
             std::memcpy(pg, np, kPageBytesBack);
             medium_recount(world, ci, pg);
         }
@@ -502,8 +523,15 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     // живых клеток строятся ВПЕРЕДИ материи (радиус и вывод — у
     // kFrontierRadius), стартовую округу раскрывает сам писатель
     // (wake_cells), ленивый путь остаётся фолбэком на экстремальный догон.
+    applyLoopMs_ = std::chrono::duration<float, std::milli>(
+                       std::chrono::steady_clock::now() - applyLoopT0)
+                       .count();
+    const auto applyFrontT0 = std::chrono::steady_clock::now();
     if (!liveCis.empty())
         open_frontier(world, mirror, liveCis.data(), liveCis.size());
+    applyFrontierMs_ = std::chrono::duration<float, std::milli>(
+                           std::chrono::steady_clock::now() - applyFrontT0)
+                           .count();
     // ГИСТОГРАММА СОСТАВА live-набора (§63 problems.md, инструмент вопроса 1:
     // «кто эти 8k клеток и почему 108 мокрых не осели в 108 спящих»).
     // Оконная выборка (rb-окно вращается по всему списку — за несколько

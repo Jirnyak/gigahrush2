@@ -147,6 +147,7 @@ public:
         rbWindowWarned_ = false;
         wakeCapWarned_ = false;
         actNeedsClear_ = true;
+        std::fill(frontierDone_.begin(), frontierDone_.end(), 0ull);
         lastCount_ = 0;
         lastQuanta_ = 0;
         for (auto& r : rbRing_) r.valid = false;
@@ -215,6 +216,15 @@ private:
     std::vector<std::uint32_t> wakeQueue_;
     std::vector<std::uint64_t> wakeBits_ =
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
+    // Битсет «округа клетки уже раскрыта» (256 КиБ): скан R=6 = 2197 проб,
+    // и open_frontier звался на всё окно каждый кадр — 4-8 мс при 85-100%
+    // повторной работы (замер 2026-08-30). Скан идемпотентен, страницы сами
+    // не исчезают (схлопыватели — CPU-писатели, их wake-путь раскрывает
+    // округу записи заново по своим клеткам) — раз на клетку за этаж
+    // достаточно, набор страниц по таймлайну подтиков не меняется
+    // (пин test_cadence_equivalence). Сброс — clear_live().
+    std::vector<std::uint64_t> frontierDone_ =
+        std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
     std::uint32_t listSel_ = 0; // чей список ТЕКУЩИЙ (персистентен)
 
@@ -248,6 +258,27 @@ private:
     std::uint32_t zombieTotal_ = 0;
     std::uint32_t faceWakeTotal_ = 0;
     std::uint32_t dryLiveTotal_ = 0;
+
+public:
+    // СОСТАВ med_apply (замер по добру владельца 2026-08-30, §63: куда
+    // уходят 11 мс шва — прежде чем трогать run_move). Значения ПОСЛЕДНЕГО
+    // применения; [prof] в main.cpp кладёт мс в кольца и печатает свод.
+    float apply_loop_ms() const noexcept { return applyLoopMs_; }
+    float apply_frontier_ms() const noexcept { return applyFrontierMs_; }
+    std::uint32_t apply_window() const noexcept { return applyWindow_; }
+    std::uint32_t apply_cmp_only() const noexcept { return applyCmpOnly_; }
+    std::uint32_t apply_copied() const noexcept { return applyCopied_; }
+    std::uint32_t apply_lazy() const noexcept { return applyLazy_; }
+    std::uint32_t apply_skip_fresh() const noexcept { return applySkipFresh_; }
+
+private:
+    float applyLoopMs_ = 0.0f;      // цикл по окну: гейты+memcmp+копии
+    float applyFrontierMs_ = 0.0f;  // open_frontier по liveCis в хвосте
+    std::uint32_t applyWindow_ = 0;    // клеток в применённом окне
+    std::uint32_t applyCmpOnly_ = 0;   // страница+маска НЕ менялись (чистый memcmp)
+    std::uint32_t applyCopied_ = 0;    // страница менялась (memcpy+recount)
+    std::uint32_t applyLazy_ = 0;      // ленивые материализации
+    std::uint32_t applySkipFresh_ = 0; // скипы гейта свежести/write_pending
     std::uint32_t staleSkips_ = 0;  // регионы с чужой подписью (шов ждал GPU)
     bool wakeCapHit_ = false;       // wake_next упирался в kListCap
     bool rbWindowWarned_ = false, wakeCapWarned_ = false;

@@ -3509,7 +3509,9 @@ int main(int argc, char** argv) {
             if (g_profOn && g_wallSeen > 1) {
                 static giga::prof::Ring profWall, profSim, profRender,
                     profCarve, profLightSwap, profPropSkin, profMedApply,
-                    profMedRec;
+                    profMedRec, profMedLoop, profMedFrontier;
+                profMedLoop.push(mediumPass.apply_loop_ms());
+                profMedFrontier.push(mediumPass.apply_frontier_ms());
                 profWall.push(wallMs);
                 profSim.push(g_frameMark.simMs);
                 profRender.push(g_frameMark.renderMs);
@@ -3554,6 +3556,18 @@ int main(int argc, char** argv) {
                     line("prop_skin", profPropSkin);
                     line("med_apply", profMedApply);
                     line("med_record", profMedRec);
+                    line("med_loop", profMedLoop);
+                    line("med_frontier", profMedFrontier);
+                    // Состав окна последнего применения: cmp-only = чистая
+                    // цена memcmp неизменённых, copied = memcpy+recount.
+                    std::fprintf(stderr,
+                                 "[prof] med-apply-mix window %u cmp-only %u "
+                                 "copied %u lazy %u skip-fresh %u\n",
+                                 mediumPass.apply_window(),
+                                 mediumPass.apply_cmp_only(),
+                                 mediumPass.apply_copied(),
+                                 mediumPass.apply_lazy(),
+                                 mediumPass.apply_skip_fresh());
                     // Состав rigid-сцены последнего тика (§59.11): разводит
                     // «спящие платят за бины» от «дорогая физика бодрых».
                     if (const RigidStats* rs = reg.ctx().find<RigidStats>())
