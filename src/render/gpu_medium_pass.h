@@ -241,6 +241,13 @@ private:
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
     std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)
+    // Зомби-замер §63 (накопительные, как woken/slept): пуш клетки, чья
+    // тишина уже доросла до порога сна / face-пуш из settle / голос «живая
+    // при нуле подвижных квантов». Их соотношение называет, кто держит
+    // сухой шлейф бодрым — печать в [medium-dbg].
+    std::uint32_t zombieTotal_ = 0;
+    std::uint32_t faceWakeTotal_ = 0;
+    std::uint32_t dryLiveTotal_ = 0;
     std::uint32_t staleSkips_ = 0;  // регионы с чужой подписью (шов ждал GPU)
     bool wakeCapHit_ = false;       // wake_next упирался в kListCap
     bool rbWindowWarned_ = false, wakeCapWarned_ = false;

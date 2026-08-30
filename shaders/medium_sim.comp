@@ -108,12 +108,19 @@ void list_next_store(uint i, uint ci) {
 }
 
 // Разбудить/удержать клетку в СЛЕДУЮЩЕМ списке: бит-дедуп, кап вслух.
-void wake_next(uint ci) {
-    if ((atomicOr(uCellAct[ci], kActInList) & kActInList) != 0u) return;
+// Возвращает «слот лёг» — settle этим атрибутирует face-пуши (uCnt[14]).
+// uCnt[13] — «зомби»: клетка, чья тишина УЖЕ доросла до порога сна, но её
+// вернул внешний пуш. Замер корня §63: закон сна перекрывается извне.
+bool wake_next(uint ci) {
+    uint old = atomicOr(uCellAct[ci], kActInList);
+    if ((old & kActInList) != 0u) return false;
     uint idx = atomicAdd(uCnt[next_x_index()], 1u);
     if (idx < kListCap) {
         list_next_store(idx, ci);
         atomicAdd(uCnt[10], 1u);
+        if (((old & kActQuietMask) >> kActQuietShift) >= kSleepSubsteps)
+            atomicAdd(uCnt[13], 1u);
+        return true;
     } else {
         // Кап: слот не лёг — бит ОБЯЗАН откатиться, иначе клетка мертва
         // для пробуждений навсегда (сухие клетки-квадраты со скрина
@@ -121,6 +128,13 @@ void wake_next(uint ci) {
         atomicAnd(uCellAct[ci], ~kActInList);
         atomicOr(uCnt[9], 1u);
     }
+    return false;
+}
+
+// Face-пуш из settle — отдельный счётчик успешных укладок (uCnt[14]):
+// его доля от uCnt[13] и решает вопрос «кто держит сухой шлейф бодрым».
+void wake_face(uint ci) {
+    if (wake_next(ci)) atomicAdd(uCnt[14], 1u);
 }
 
 uint cell_index(ivec3 c) {
@@ -439,6 +453,9 @@ void run_settle(uint slot, uint threadId) {
     atomicOr(uClass[ci >> 2], cls << shift);
 
     atomicAdd(uCnt[8], min(sQuanta, 512u));
+    // GPU-честное «сухая живая»: ноль подвижных квантов в клетке этого
+    // подтика (uCnt[15]) — без искажений CPU-агрегата и окна пака.
+    if (sQuanta == 0u) atomicAdd(uCnt[15], 1u);
 
     // Судьба клетки: changed сбрасывает тишину, тишина растит счётчик.
     uint act = uCellAct[ci];
@@ -459,17 +476,17 @@ void run_settle(uint slot, uint threadId) {
         ivec3 c = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
                         int((ci >> 14) & 127u));
         if ((sFaceBits & 1u) != 0u)
-            wake_next(cell_index(c + ivec3(-1, 0, 0)));
+            wake_face(cell_index(c + ivec3(-1, 0, 0)));
         if ((sFaceBits & 2u) != 0u)
-            wake_next(cell_index(c + ivec3(1, 0, 0)));
+            wake_face(cell_index(c + ivec3(1, 0, 0)));
         if ((sFaceBits & 4u) != 0u)
-            wake_next(cell_index(c + ivec3(0, -1, 0)));
+            wake_face(cell_index(c + ivec3(0, -1, 0)));
         if ((sFaceBits & 8u) != 0u)
-            wake_next(cell_index(c + ivec3(0, 1, 0)));
+            wake_face(cell_index(c + ivec3(0, 1, 0)));
         if ((sFaceBits & 16u) != 0u)
-            wake_next(cell_index(c + ivec3(0, 0, -1)));
+            wake_face(cell_index(c + ivec3(0, 0, -1)));
         if ((sFaceBits & 32u) != 0u)
-            wake_next(cell_index(c + ivec3(0, 0, 1)));
+            wake_face(cell_index(c + ivec3(0, 0, 1)));
     } else {
         atomicAdd(uCnt[11], 1u);
     }
@@ -545,9 +562,11 @@ void run_pack(uint slot, uint threadId) {
         // отставал на 3-45 кадров, и apply читал регион с чужим/старым
         // паком — шов возил до-карвное состояние и воскрешал атомы.
         uRbList[listBase + 8u] = pc.params.x;
-        uRbList[listBase + 9u] = 0u;
-        uRbList[listBase + 10u] = 0u;
-        uRbList[listBase + 11u] = 0u;
+        // Зомби-замер §63 (слоты были зарезервированы нулями): накопительные,
+        // как woken/slept — CPU дифференцирует.
+        uRbList[listBase + 9u] = uCnt[13];  // зомби-пуши
+        uRbList[listBase + 10u] = uCnt[14]; // face-пуши из settle
+        uRbList[listBase + 11u] = uCnt[15]; // живые с нулём квантов, голосов
     }
     if (slot >= count) return;
     uint ci = list_cur(start + slot);

@@ -24,6 +24,25 @@ namespace giga {
 // Advance every awake RigidBody + Transform + Velocity by dt against its layer.
 void rigid_body_step(Registry& reg, LevelStack& stack, float dt);
 
+// Замер §59.11 (строка rigid в [prof], main.cpp): состав сцены и мс двух
+// групп фаз ПОСЛЕДНЕГО тика. Пишет rigid_body_step в reg.ctx(), читает
+// печать профиля — тем же идиомом, что AnchorBins ([game/prop_system.cpp]).
+// binsMs — пересборки/сортировки корзин и свипы пар (платится от ВСЕХ тел,
+// спящих тоже); solveMs — подшаги (интеграция/пары/агенты/линки).
+struct RigidStats {
+    std::uint32_t bodies = 0;  // все RigidBody слоя (вид целиком)
+    std::uint32_t awake = 0;   // бодрые на входе тика
+    std::uint32_t agents = 0;  // вход фазы проп↔агент
+    std::uint32_t links = 0;   // JointLink — каждый решается S·J раз за тик
+    // Почему бодрое тело НЕ уснуло в этом тике (свип сна): не тихое
+    // (скорость/вращение выше порога — линки дёргают?) против тихое-но-без-
+    // контакта-с-миром (труп на трупе опоры не видит). Сумма ≈ awake.
+    std::uint32_t noisyBodies = 0;
+    std::uint32_t quietNoTouch = 0;
+    float binsMs = 0.0f;
+    float solveMs = 0.0f;
+};
+
 // ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ (CANON S20.4): спящее тело не проверяет опору —
 // его будит тот, кто опору изменил. Без этого труп/ведро/граната, уснувшие
 // на плите, зависают в воздухе после её выкарвивания: единственный прочий

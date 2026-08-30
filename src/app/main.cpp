@@ -559,6 +559,9 @@ static const bool g_profOn = [] {
 }();
 static float g_profFrameMs[kProfCount] = {};
 static giga::prof::Ring g_profRing[kProfCount];
+// Накопительный счёт тел, разбуженных долгом писателя АВТОМАТА (шов
+// mediumMaskChanged → rigid_wake_dirty_cells) — печатается в rigid-stats.
+static std::uint64_t g_profMediumRigidWakes = 0;
 static std::chrono::steady_clock::time_point prof_now() {
     return g_profOn ? std::chrono::steady_clock::now()
                     : std::chrono::steady_clock::time_point{};
@@ -3551,6 +3554,22 @@ int main(int argc, char** argv) {
                     line("prop_skin", profPropSkin);
                     line("med_apply", profMedApply);
                     line("med_record", profMedRec);
+                    // Состав rigid-сцены последнего тика (§59.11): разводит
+                    // «спящие платят за бины» от «дорогая физика бодрых».
+                    if (const RigidStats* rs = reg.ctx().find<RigidStats>())
+                        std::fprintf(stderr,
+                                     "[prof] rigid-stats bodies %u awake %u "
+                                     "agents %u links %u | noisy %u "
+                                     "quiet-no-touch %u | bins %.3f ms "
+                                     "solve %.3f ms (последний тик) | "
+                                     "medium-wakes %llu (всего)\n",
+                                     rs->bodies, rs->awake, rs->agents,
+                                     rs->links, rs->noisyBodies,
+                                     rs->quietNoTouch,
+                                     static_cast<double>(rs->binsMs),
+                                     static_cast<double>(rs->solveMs),
+                                     static_cast<unsigned long long>(
+                                         g_profMediumRigidWakes));
                     if (renderer.timer.supported()) {
                         const auto& gt = renderer.timer;
                         std::fprintf(
@@ -4209,9 +4228,12 @@ int main(int argc, char** argv) {
                 // что ход автомата не рвёт ни якоря, ни антураж по
                 // построению; но ТЕЛО честно лежит и на куче — куча уехала,
                 // спящий труп обязан проснуться и упасть.
-                rigid_wake_dirty_cells(reg, activeLayer,
-                                       mediumMaskChanged.data(),
-                                       mediumMaskChanged.size());
+                // Замер §59.11-пересмотра: сколько тел будит ИМЕННО автомат
+                // (кандидат «водопады держат rigid бодрым» против «тело на
+                // теле не касается мира и не спит»). Печать — rigid-stats.
+                g_profMediumRigidWakes += rigid_wake_dirty_cells(
+                    reg, activeLayer, mediumMaskChanged.data(),
+                    mediumMaskChanged.size());
             }
             // Покадрового судьи связности на изменениях масок БОЛЬШЕ НЕТ
             // (S20.5, замер 2026-08-29): автомат двигает только подвижную

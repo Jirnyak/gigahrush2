@@ -1,6 +1,7 @@
 #include "sim/rigid.h"
 
 #include <algorithm>
+#include <chrono> // RigidStats — мс фаз последнего тика ([prof] в main.cpp)
 #include <cmath>
 #include <vector>
 
@@ -474,8 +475,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
 
     // Пробуждение внешней записью Velocity (взрыв, толчок, пинок пишут её —
     // естественный интерфейс) + сброс тик-аккумулятора касаний.
+    RigidStats stats; // замер §59.11 — пишется в reg.ctx() на каждом выходе
     std::uint32_t awakeCount = 0;
     for (auto e : view) {
+        ++stats.bodies;
         auto& rb = view.get<RigidBody>(e);
         rb.touchedTick = false;
         if (rb.asleep &&
@@ -534,9 +537,18 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
     }
 
+    stats.awake = awakeCount;
+    stats.agents = static_cast<std::uint32_t>(agents.size());
+    stats.links = static_cast<std::uint32_t>(links.size());
+
     // Мир спит целиком и агентов-возмутителей нет — решать нечего:
     // установившийся этаж с тысячами пропов стоит один проход пробуждения.
-    if (awakeCount == 0 && agents.empty()) return;
+    if (awakeCount == 0 && agents.empty()) {
+        reg.ctx().insert_or_assign(stats);
+        return;
+    }
+
+    const auto statsBinsT0 = std::chrono::steady_clock::now();
 
     // Корзины строятся РАЗ НА ТИК (тело проходит ≤0.23 м за подшаг — запрос
     // соседей поглощает дрейф в клетку); живость пары внутри resolve_pair
@@ -689,6 +701,11 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 }
             }
     } // if (!agents.empty())
+
+    stats.binsMs = std::chrono::duration<float, std::milli>(
+                       std::chrono::steady_clock::now() - statsBinsT0)
+                       .count();
+    const auto statsSolveT0 = std::chrono::steady_clock::now();
 
     // Substep-major: тела интегрируются, ПОТОМ линки стягивают пары — иначе
     // констрейнт видел бы позиции разных подшагов у разных тел.
@@ -849,6 +866,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
     }
 
+    stats.solveMs = std::chrono::duration<float, std::milli>(
+                        std::chrono::steady_clock::now() - statsSolveT0)
+                        .count();
+
     // Сон: тихая линейка И тихое вращение (|w|·r в тех же единицах м/с), и
     // обязательно контакт с миром в этом тике — свободно падающее и ВИСЯЩЕЕ
     // (цепь на подвесе) тело не засыпает: спящему линк не даёт провиснуть,
@@ -867,9 +888,12 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 rb.w = vec3{0.0f, 0.0f, 0.0f};
             }
         } else {
+            if (!quiet) ++stats.noisyBodies;
+            else ++stats.quietNoTouch;
             rb.sleepTicks = 0;
         }
     }
+    reg.ctx().insert_or_assign(stats);
 }
 
 float form_from_box(vec3 half, ContactForm& out) {
