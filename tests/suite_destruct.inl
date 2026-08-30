@@ -705,6 +705,111 @@ static void test_judge_shield_is_ground() {
           material_rubble_of(kMatConcrete));
 }
 
+// БОЛЬШОЙ СУД ([markoaudit/plans/big-judge.md] A-C). Что запинено:
+// (1) ТОР-ПЕРКОЛЯЦИЯ = ОПОРА — кольцо через весь тор оправдано, ни один
+//     атом не тронут (мутация «без проверки смещений» роняет ровно это);
+// (2) висячий ящик БОЛЬШЕ бюджета малого судьи получает вердикт «без
+//     опоры» и конвертируется в рыхлого двойника ЦЕЛИКОМ, маски стоят
+//     (масса бит-в-бит), конверсия идёт порциями (бюджет шага);
+// (3) башня на перколирующей плите ОПРАВДАНА — земля этажа опёрта тем же
+//     законом перколяции, отдельного понятия «земля» нет;
+// (4) валидация грязи: запись статики во время дела даёт пересуд
+//     (retries растёт), вердикт всё равно доезжает.
+static void big_judge_run_to_idle(World& w) {
+    std::vector<std::uint32_t> dirty;
+    for (int i = 0; i < 200000; ++i) {
+        big_judge_step(w, dirty);
+        const BigCourtStatus st = big_judge_status();
+        if (st.phase == 0 && st.pending == 0) return;
+    }
+    CHECK(false); // суд не сошёлся за 200k шагов — дефект
+}
+
+static void test_big_judge() {
+    big_judge_budgets(64, 64); // тесные бюджеты: резюмируемость под тестом
+
+    { // (1) кольцо через тор: 128 полных клеток вдоль x, ни к чему не
+      // крепится — оправдано перколяцией, материал не тронут.
+        World w;
+        big_judge_reset();
+        for (int x = 0; x < kMacroDim; ++x)
+            w.grid().fill_cell(x, 60, 60, kMatConcrete);
+        big_judge_enqueue(
+            static_cast<std::uint32_t>(macro_index(5, 60, 60)));
+        big_judge_run_to_idle(w);
+        const BigCourtStatus st = big_judge_status();
+        CHECK(st.verdictsSupported == 1);
+        CHECK(st.verdictsLoose == 0);
+        CHECK(sub_material_at(w, 5, 60, 60, 0, 0, 0) == kMatConcrete);
+    }
+
+    { // (2) висячий ящик 9x9x9 = 729 клеток > 512 узлов малого бюджета:
+      // без опоры, конвертирован целиком, маски стоят.
+        World w;
+        big_judge_reset();
+        for (int x = 40; x < 49; ++x)
+            for (int y = 40; y < 49; ++y)
+                for (int z = 40; z < 49; ++z)
+                    w.grid().fill_cell(x, y, z, kMatConcrete);
+        big_judge_enqueue(
+            static_cast<std::uint32_t>(macro_index(44, 44, 44)));
+        big_judge_run_to_idle(w);
+        const BigCourtStatus st = big_judge_status();
+        CHECK(st.verdictsLoose == 1);
+        CHECK(st.verdictsSupported == 0);
+        // Угол и центр — рыхлый двойник; маска полна (масса на месте).
+        CHECK(sub_material_at(w, 40, 40, 40, 0, 0, 0) == kMatRubbleConcrete);
+        CHECK(sub_material_at(w, 44, 44, 44, 4, 4, 4) == kMatRubbleConcrete);
+        CHECK(sub_material_at(w, 48, 48, 48, 7, 7, 7) == kMatRubbleConcrete);
+        CHECK(w.grid().mask(44, 44, 44).full());
+        CHECK(w.grid().mask(40, 40, 40).full());
+    }
+
+    { // (3) башня на перколирующей плите: плита z=4 на весь тор (земля
+      // этажа), башня 3x3 к ней приросла — оправдана перколяцией плиты.
+        World w;
+        big_judge_reset();
+        for (int x = 0; x < kMacroDim; ++x)
+            for (int y = 0; y < kMacroDim; ++y)
+                w.grid().fill_cell(x, y, 4, kMatConcrete);
+        for (int x = 60; x < 63; ++x)
+            for (int y = 60; y < 63; ++y)
+                for (int z = 5; z < 30; ++z)
+                    w.grid().fill_cell(x, y, z, kMatConcrete);
+        big_judge_enqueue(
+            static_cast<std::uint32_t>(macro_index(61, 61, 25)));
+        big_judge_run_to_idle(w);
+        const BigCourtStatus st = big_judge_status();
+        CHECK(st.verdictsSupported == 1);
+        CHECK(st.verdictsLoose == 0);
+        CHECK(sub_material_at(w, 61, 61, 25, 0, 0, 0) == kMatConcrete);
+    }
+
+    { // (4) грязь: запись статики ПОСЛЕ первой порции флуда — пересуд
+      // (retries), вердикт всё равно доезжает.
+        World w;
+        big_judge_reset();
+        for (int x = 40; x < 49; ++x)
+            for (int y = 40; y < 49; ++y)
+                for (int z = 40; z < 49; ++z)
+                    w.grid().fill_cell(x, y, z, kMatConcrete);
+        big_judge_enqueue(
+            static_cast<std::uint32_t>(macro_index(44, 44, 44)));
+        std::vector<std::uint32_t> dirty;
+        big_judge_step(w, dirty); // первая порция (64 узла из 729)
+        CHECK(big_judge_status().phase == 1);
+        // Писатель статики вдалеке — ген уехал, дело обязано пересудиться.
+        set_sub_material(w, 100, 100, 100, 0, 0, 0, kMatConcrete);
+        big_judge_run_to_idle(w);
+        const BigCourtStatus st = big_judge_status();
+        CHECK(st.retries >= 1);
+        CHECK(st.verdictsLoose == 1);
+        CHECK(sub_material_at(w, 44, 44, 44, 4, 4, 4) == kMatRubbleConcrete);
+    }
+
+    big_judge_reset();
+}
+
 static void test_destruct_all() {
     test_subfield();
     test_carve_roll();
@@ -717,4 +822,5 @@ static void test_destruct_all() {
     test_carve_shield_honesty();
     test_carve_clears_stain();
     test_judge_shield_is_ground();
+    test_big_judge();
 }

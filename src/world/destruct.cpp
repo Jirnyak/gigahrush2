@@ -57,6 +57,11 @@ inline bool solid_key(const MacroGrid& g, std::uint32_t key) {
     return g.masks()[key >> 9].test(static_cast<int>(key & 511u));
 }
 
+// Поколение ОПОРНОЙ материи (большой суд, big-judge.md C): растят
+// писатели статики — remove_key, set_sub_material, конверсии. Подвижная
+// материя (автомат) опору не меняет по построению (S20.5) и ген не растит.
+std::uint64_t g_supportGen = 0;
+
 inline CellType mat_key(const World& w, const SubField<CellType>* mats,
                         std::uint32_t key) {
     const std::size_t ci = key >> 9;
@@ -103,6 +108,7 @@ inline bool remove_key(World& w, SubField<CellType>* mats,
     const SubCoord c = unpack_key(key);
     SubMask& m = w.grid().mask(c.cx, c.cy, c.cz);
     m.clear(static_cast<int>(key & 511u));
+    ++g_supportGen; // опорная материя изменилась — дела большого суда стухают
     dirty.push_back(ci);
     CellType* pg = mats ? mats->page(ci) : nullptr;
     // Раскрыть безстраничную клетку ЧЕСТНО (маска -> тип, дыры -> воздух,
@@ -421,6 +427,39 @@ std::uint32_t node_of_atom(const World& w, const SubField<CellType>* mats,
 // штатный путь, кричать каждым карвом нельзя.
 std::uint32_t g_detachCapEvents = 0;
 
+// Граневой слой компонента cw, сдвинутый в систему соседа по направлению
+// d (порядок kDir6: +x,-x,+y,-y,+z,-z), И маска соседа nm — атомные пары
+// через шов клеток. Один примитив на малый и большой суд (S11).
+inline std::uint64_t face_overlap(const std::uint64_t cw[8], int d,
+                                  const SubMask& nm, std::uint64_t nb[8]) {
+    std::uint64_t any = 0;
+    switch (d) {
+    case 0:
+        for (int w = 0; w < 8; ++w)
+            any |= nb[w] = ((cw[w] & kSx7) >> 7) & nm.words[w];
+        break;
+    case 1:
+        for (int w = 0; w < 8; ++w)
+            any |= nb[w] = ((cw[w] & kSx0) << 7) & nm.words[w];
+        break;
+    case 2:
+        for (int w = 0; w < 8; ++w)
+            any |= nb[w] = ((cw[w] & kSy7) >> 56) & nm.words[w];
+        break;
+    case 3:
+        for (int w = 0; w < 8; ++w)
+            any |= nb[w] = ((cw[w] & kSy0) << 56) & nm.words[w];
+        break;
+    case 4:
+        any = nb[0] = cw[7] & nm.words[0];
+        break;
+    case 5:
+        any = nb[7] = cw[0] & nm.words[7];
+        break;
+    }
+    return any;
+}
+
 // Флуд по узлам. true — компонент собран ЦЕЛИКОМ в бюджете (оторван; узлы
 // лежат в s.nodeQueue); false — опёрт: слился с уже осуждённым регионом,
 // превысил бюджет («сам дом») или коснулся ЩИТА («земля», S20.5/D.3).
@@ -472,34 +511,10 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
             // решает пересечение с его опорными компонентами ниже.
             const SubMask& nm = w.grid().masks()[nci];
             // Граневой слой компонента, сдвинутый в систему соседа, И его
-            // маска: точные атомные пары через шов. kDir6 порядок:
-            // +x,-x,+y,-y,+z,-z.
+            // маска: точные атомные пары через шов ([face_overlap] — общий
+            // примитив малого и большого суда, S11).
             std::uint64_t nb[8] = {};
-            std::uint64_t any = 0;
-            switch (d) {
-            case 0:
-                for (int w = 0; w < 8; ++w)
-                    any |= nb[w] = ((cw[w] & kSx7) >> 7) & nm.words[w];
-                break;
-            case 1:
-                for (int w = 0; w < 8; ++w)
-                    any |= nb[w] = ((cw[w] & kSx0) << 7) & nm.words[w];
-                break;
-            case 2:
-                for (int w = 0; w < 8; ++w)
-                    any |= nb[w] = ((cw[w] & kSy7) >> 56) & nm.words[w];
-                break;
-            case 3:
-                for (int w = 0; w < 8; ++w)
-                    any |= nb[w] = ((cw[w] & kSy0) << 56) & nm.words[w];
-                break;
-            case 4:
-                any = nb[0] = cw[7] & nm.words[0];
-                break;
-            case 5:
-                any = nb[7] = cw[0] & nm.words[7];
-                break;
-            }
+            const std::uint64_t any = face_overlap(cw, d, nm, nb);
             if (any == 0) continue;
             const std::uint32_t ne =
                 cell_partition(w, mats, s, static_cast<std::uint32_t>(nci));
@@ -527,6 +542,10 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
                              "считаю опёртым (отсечек всего: %u)\n",
                              kDetachNodeBudget, g_detachCapEvents);
             set_why(3);
+            // ПЕРЕДАЧА ДЕЛА (big-judge.md A): отсечка — больше не вердикт.
+            // Очаг уходит большому суду; тот судит без бюджета на суд
+            // (порциями кадра) и с тор-перколяцией как опорой.
+            big_judge_enqueue(s.nodeQueue[0] >> 8);
             // Ничего не доказано — пометки этого рана снять (см. rollback_run).
             vis.rollback_run(usedMark);
             return false;
@@ -570,7 +589,10 @@ void convert_nodes(World& w, SubField<CellType>* mats, CarveScratch& s,
                 pg[bit] = material_rubble_of(src);
             }
         }
-        if (wrote) out.dirtyCells.push_back(ci);
+        if (wrote) {
+            out.dirtyCells.push_back(ci);
+            ++g_supportGen; // конверсия выводит атомы из опорного множества
+        }
     }
 }
 
@@ -752,6 +774,7 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
         return; // масочный атом базы — истина уже такая, страница не нужна
     CellType* pg = materialize_sub_page(w, ci);
     pg[sub_bit(sx, sy, sz)] = mat;
+    ++g_supportGen; // писатель статики — см. support_gen()
     CellType uniform;
     // If the write left the whole cell one material again, fold it back into
     // the plain per-cell type and shed the page.
@@ -934,6 +957,391 @@ void collect_mobile_support_cells(const World& w,
             bits &= bits - 1;
             out.push_back(wi * 64 + static_cast<std::uint32_t>(b));
         }
+    }
+}
+
+// ===== БОЛЬШОЙ СУД ([markoaudit/plans/big-judge.md] A–C; контракт в .h) ======
+
+namespace {
+
+// Бюджеты шага — ВЫВОД, не выбор: узел стоит ~100-200 нс (партиция кэшем +
+// 6 гранных AND) → 4096 узлов ≈ 0.4-0.8 мс кадра; конверсия узла ~1-2 мкс
+// (страница + биты) → 512 узлов ≈ 0.5-1 мс. Хрущёвка ~50k узлов судится
+// за ~12 кадров, конвертируется за ~100 — латентность в секунды, как и
+// принято владельцем. Ручки — big_judge_budgets (тесты) и env (A/B).
+std::uint32_t g_bigFloodBudget = [] {
+    const char* e = std::getenv("GIGA_BIGJUDGE_NODES");
+    return e ? static_cast<std::uint32_t>(std::atol(e)) : 4096u;
+}();
+std::uint32_t g_bigConvertBudget = [] {
+    const char* e = std::getenv("GIGA_BIGJUDGE_CONVERT");
+    return e ? static_cast<std::uint32_t>(std::atol(e)) : 512u;
+}();
+
+struct BigCourt {
+    // Очередь дел (A): кольцо на векторе + дедуп-битсет по клеткам.
+    std::vector<std::uint32_t> pending;
+    std::size_t pendingHead = 0;
+    std::vector<std::uint64_t> pendingBits =
+        std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
+    // Кэш оправданий РЕГИОНОМ: вердикт «опёрт» оправдывает ВСЕ клетки,
+    // пройденные флудом, до следующей записи статики (эпоха = support_gen).
+    // Без этого каждый очаг того же здания флудил бы его заново — замер
+    // смоука: суд молотил стационар по 2.7 мс/кадр. Битсет 256 КиБ, wipe
+    // ленивый (по несовпадению эпохи).
+    std::vector<std::uint64_t> acqBits =
+        std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
+    std::uint64_t acqEpoch = ~0ull;
+
+    int phase = 0; // 0 idle / 1 флуд / 2 конверсия
+    std::uint32_t seedCell = 0;
+    std::uint64_t genAtStart = 0;
+    bool retried = false;
+    CarveScratch s; // партиции клеток — свои, не карвовые
+
+    // Пройденные узлы: open addressing node+1 → индекс в offs (перколяция).
+    std::vector<std::uint32_t> vKey;
+    std::vector<std::uint32_t> vVal;
+    std::vector<std::uint32_t> vUsed;
+    // Очередь дела + развёрнутое смещение КЛЕТКИ узла от сида (обмотка).
+    std::vector<std::uint32_t> queue;
+    std::vector<std::int32_t> qOff; // 3 на узел
+    std::size_t head = 0;
+
+    // Вердикт «без опоры»: слова компонентов скопированы (валидны — ген
+    // чист на вердикте), конверсия порциями сверяет каждый бит с ЖИВОЙ
+    // маской (атом мог быть выбит карвом после вердикта).
+    struct StoredNode {
+        std::uint32_t ci;
+        std::uint64_t wv[8];
+    };
+    std::vector<StoredNode> convert;
+    std::size_t convertHead = 0;
+
+    BigCourtStatus stat;
+};
+BigCourt g_bigCourt;
+
+// visited-проба: 1 = новый (вставлен с off), 0 = виден (outIdx = слот qOff).
+int big_probe(BigCourt& c, std::uint32_t node, std::uint32_t offIdx,
+              std::uint32_t* seenOffIdx) {
+    if ((c.vUsed.size() + 1) * 2 > c.vKey.size()) {
+        // Перехэш ростом ×2 (тот же приём, что part_cache_grow).
+        std::vector<std::uint32_t> keys, vals;
+        keys.reserve(c.vUsed.size());
+        vals.reserve(c.vUsed.size());
+        for (std::uint32_t i : c.vUsed) {
+            keys.push_back(c.vKey[i]);
+            vals.push_back(c.vVal[i]);
+        }
+        const std::size_t n = c.vKey.size() * 2;
+        c.vKey.assign(n, 0);
+        c.vVal.assign(n, 0);
+        c.vUsed.clear();
+        const auto mask = static_cast<std::uint32_t>(n - 1);
+        for (std::size_t j = 0; j < keys.size(); ++j) {
+            std::uint32_t i = (keys[j] * 0x9E3779B9u) >> 3 & mask;
+            while (c.vKey[i]) i = (i + 1) & mask;
+            c.vKey[i] = keys[j];
+            c.vVal[i] = vals[j];
+            c.vUsed.push_back(i);
+        }
+    }
+    const auto mask = static_cast<std::uint32_t>(c.vKey.size() - 1);
+    std::uint32_t i = ((node + 1) * 0x9E3779B9u) >> 3 & mask;
+    while (true) {
+        const std::uint32_t k = c.vKey[i];
+        if (k == node + 1) {
+            *seenOffIdx = c.vVal[i];
+            return 0;
+        }
+        if (k == 0) break;
+        i = (i + 1) & mask;
+    }
+    c.vKey[i] = node + 1;
+    c.vVal[i] = offIdx;
+    c.vUsed.push_back(i);
+    return 1;
+}
+
+void big_close_case(bool supported) {
+    BigCourt& c = g_bigCourt;
+    if (supported) {
+        ++c.stat.verdictsSupported;
+        // Оправдание РЕГИОНОМ: все пройденные клетки — при этой эпохе.
+        if (c.acqEpoch != g_supportGen) {
+            std::fill(c.acqBits.begin(), c.acqBits.end(), 0ull);
+            c.acqEpoch = g_supportGen;
+        }
+        for (const std::uint32_t node : c.queue) {
+            const std::uint32_t ci = node >> 8;
+            c.acqBits[ci >> 6] |= 1ull << (ci & 63u);
+        }
+    }
+    c.phase = 0;
+    c.queue.clear();
+    c.qOff.clear();
+    c.head = 0;
+    c.convert.clear();
+    c.convertHead = 0;
+}
+
+// Открыть дело: партиции сида в очередь со смещением {0,0,0}.
+// false = дело пустое (клетка стала воздухом/подвижной) — закрыто молча.
+bool big_open_case(const World& w, const SubField<CellType>* mats) {
+    BigCourt& c = g_bigCourt;
+    part_cache_reset(c.s);
+    if (c.vKey.size() < 4096) {
+        c.vKey.assign(4096, 0);
+        c.vVal.assign(4096, 0);
+    } else {
+        for (std::uint32_t i : c.vUsed) c.vKey[i] = 0;
+    }
+    c.vUsed.clear();
+    c.queue.clear();
+    c.qOff.clear();
+    c.head = 0;
+    c.genAtStart = g_supportGen;
+    const std::uint32_t e = cell_partition(w, mats, c.s, c.seedCell);
+    for (std::uint16_t j = 0; j < c.s.partCount[e]; ++j) {
+        const std::uint32_t node = (c.seedCell << 8) | j;
+        std::uint32_t seen = 0;
+        if (big_probe(c, node, static_cast<std::uint32_t>(c.queue.size()),
+                      &seen) == 1) {
+            c.queue.push_back(node);
+            c.qOff.push_back(0);
+            c.qOff.push_back(0);
+            c.qOff.push_back(0);
+        }
+    }
+    if (c.queue.empty()) return false;
+    c.phase = 1;
+    return true;
+}
+
+} // namespace
+
+std::uint64_t support_gen() { return g_supportGen; }
+
+void big_judge_budgets(std::uint32_t floodNodes, std::uint32_t convertCells) {
+    if (floodNodes) g_bigFloodBudget = floodNodes;
+    if (convertCells) g_bigConvertBudget = convertCells;
+}
+
+void big_judge_enqueue(std::uint32_t cell) {
+    BigCourt& c = g_bigCourt;
+    if (cell >= kMacroCells) return;
+    const std::uint64_t bit = 1ull << (cell & 63u);
+    if (c.pendingBits[cell >> 6] & bit) return; // уже в очереди/деле
+    if (c.acqEpoch == g_supportGen && (c.acqBits[cell >> 6] & bit))
+        return; // регион оправдан при этом же поколении опоры
+    c.pendingBits[cell >> 6] |= bit;
+    c.pending.push_back(cell);
+    static bool said = false;
+    if (!said) {
+        said = true;
+        std::fprintf(stderr,
+                     "[big-judge] первое дело принято: клетка (%u,%u,%u)\n",
+                     cell % kMacroDim, (cell / kMacroDim) % kMacroDim,
+                     cell / (kMacroDim * kMacroDim));
+    }
+}
+
+void big_judge_reset() {
+    BigCourt& c = g_bigCourt;
+    c.pending.clear();
+    c.pendingHead = 0;
+    std::fill(c.pendingBits.begin(), c.pendingBits.end(), 0ull);
+    std::fill(c.acqBits.begin(), c.acqBits.end(), 0ull);
+    c.acqEpoch = ~0ull;
+    big_close_case(false);
+    c.stat = BigCourtStatus{};
+}
+
+BigCourtStatus big_judge_status() {
+    BigCourt& c = g_bigCourt;
+    BigCourtStatus st = c.stat;
+    st.pending =
+        static_cast<std::uint32_t>(c.pending.size() - c.pendingHead);
+    st.phase = static_cast<std::uint32_t>(c.phase);
+    st.caseNodes = static_cast<std::uint32_t>(c.queue.size());
+    st.convertLeft =
+        static_cast<std::uint32_t>(c.convert.size() - c.convertHead);
+    return st;
+}
+
+void big_judge_step(World& w, std::vector<std::uint32_t>& dirtyOut) {
+    BigCourt& c = g_bigCourt;
+    SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+
+    if (c.phase == 0) {
+        // Взять следующее дело.
+        while (c.pendingHead < c.pending.size()) {
+            c.seedCell = c.pending[c.pendingHead++];
+            c.pendingBits[c.seedCell >> 6] &=
+                ~(1ull << (c.seedCell & 63u));
+            // Оправдание региона могло приехать ПОСЛЕ постановки в очередь
+            // (вход этажа сыплет сотни очагов одного здания разом) —
+            // перепроверка при взятии дела.
+            if (c.acqEpoch == g_supportGen &&
+                (c.acqBits[c.seedCell >> 6] &
+                 (1ull << (c.seedCell & 63u))))
+                continue;
+            c.retried = false;
+            if (big_open_case(w, mats)) break;
+        }
+        if (c.pendingHead >= c.pending.size()) {
+            c.pending.clear();
+            c.pendingHead = 0;
+        }
+        if (c.phase != 1) return;
+    }
+
+    if (c.phase == 1) {
+        // Порция флуда.
+        std::uint32_t budget = g_bigFloodBudget;
+        while (budget-- > 0 && c.head < c.queue.size()) {
+            const std::uint32_t node = c.queue[c.head];
+            const std::int32_t ox = c.qOff[c.head * 3 + 0];
+            const std::int32_t oy = c.qOff[c.head * 3 + 1];
+            const std::int32_t oz = c.qOff[c.head * 3 + 2];
+            ++c.head;
+            const std::uint32_t ci = node >> 8;
+            const std::uint32_t e = cell_partition(w, mats, c.s, ci);
+            std::uint64_t cw[8];
+            {
+                const std::uint64_t* src =
+                    &c.s.compWords[(c.s.partFirst[e] + (node & 255u)) * 8];
+                for (int wi = 0; wi < 8; ++wi) cw[wi] = src[wi];
+            }
+            // Щит = земля — и в большом суде (S20.5/D.3).
+            if (w.masks().shielded_cell(ci) &&
+                w.masks().shield_overlap(ci, cw)) {
+                big_close_case(true);
+                return;
+            }
+            const int cx = static_cast<int>(ci & 127u);
+            const int cy = static_cast<int>((ci >> 7) & 127u);
+            const int cz = static_cast<int>((ci >> 14) & 127u);
+            for (int d = 0; d < 6; ++d) {
+                const std::size_t nci =
+                    macro_index(wrap_macro(cx + kDir6[d][0]),
+                                wrap_macro(cy + kDir6[d][1]),
+                                wrap_macro(cz + kDir6[d][2]));
+                const SubMask& nm = w.grid().masks()[nci];
+                std::uint64_t nb[8] = {};
+                if (face_overlap(cw, d, nm, nb) == 0) continue;
+                const std::int32_t nOff[3] = {ox + kDir6[d][0],
+                                              oy + kDir6[d][1],
+                                              oz + kDir6[d][2]};
+                const std::uint32_t ne = cell_partition(
+                    w, mats, c.s, static_cast<std::uint32_t>(nci));
+                const std::uint32_t nfirst = c.s.partFirst[ne];
+                for (std::uint16_t j = 0; j < c.s.partCount[ne]; ++j) {
+                    const std::uint64_t* jw = &c.s.compWords[(nfirst + j) * 8];
+                    bool touch = false;
+                    for (int wi = 0; wi < 8 && !touch; ++wi)
+                        touch = (jw[wi] & nb[wi]) != 0;
+                    if (!touch) continue;
+                    const std::uint32_t nk =
+                        (static_cast<std::uint32_t>(nci) << 8) | j;
+                    std::uint32_t seenIdx = 0;
+                    if (big_probe(c, nk,
+                                  static_cast<std::uint32_t>(c.queue.size()),
+                                  &seenIdx) == 1) {
+                        c.queue.push_back(nk);
+                        c.qOff.push_back(nOff[0]);
+                        c.qOff.push_back(nOff[1]);
+                        c.qOff.push_back(nOff[2]);
+                    } else if (c.qOff[seenIdx * 3 + 0] != nOff[0] ||
+                               c.qOff[seenIdx * 3 + 1] != nOff[1] ||
+                               c.qOff[seenIdx * 3 + 2] != nOff[2]) {
+                        // ПЕРКОЛЯЦИЯ: два пути с разными развёрнутыми
+                        // смещениями = цикл с ненулевой обмоткой тора —
+                        // «сам дом», опёрт топологически.
+                        big_close_case(true);
+                        return;
+                    }
+                }
+            }
+        }
+        if (c.head < c.queue.size()) return; // порция кончилась — дособерём
+        // Дособрали: валидация грязи (big-judge.md C).
+        if (g_supportGen != c.genAtStart) {
+            ++c.stat.retries;
+            if (!c.retried) {
+                c.retried = true;
+                if (!big_open_case(w, mats)) big_close_case(false);
+                return;
+            }
+            // Дважды грязно — в хвост очереди, судить позже.
+            big_close_case(false);
+            big_judge_enqueue(c.seedCell);
+            return;
+        }
+        // Вердикт: без опоры. Слова компонентов — в план конверсии
+        // (партиции валидны: ген чист с открытия дела).
+        c.convert.clear();
+        c.convert.reserve(c.queue.size());
+        for (const std::uint32_t node : c.queue) {
+            const std::uint32_t ci = node >> 8;
+            const std::uint32_t e = cell_partition(w, mats, c.s, ci);
+            BigCourt::StoredNode sn;
+            sn.ci = ci;
+            const std::uint64_t* src =
+                &c.s.compWords[(c.s.partFirst[e] + (node & 255u)) * 8];
+            for (int wi = 0; wi < 8; ++wi) sn.wv[wi] = src[wi];
+            c.convert.push_back(sn);
+        }
+        ++c.stat.verdictsLoose;
+        std::fprintf(stderr,
+                     "[big-judge] вердикт: БЕЗ ОПОРЫ, %zu узлов — конверсия "
+                     "порциями по %u\n",
+                     c.convert.size(), g_bigConvertBudget);
+        c.convertHead = 0;
+        c.phase = 2;
+        return;
+    }
+
+    // phase == 2: порция конверсии. Каждый бит сверяется с ЖИВОЙ маской —
+    // выбитое карвом после вердикта не воскрешаем.
+    std::uint32_t budget = g_bigConvertBudget;
+    bool wroteAny = false;
+    while (budget-- > 0 && c.convertHead < c.convert.size()) {
+        const BigCourt::StoredNode& sn = c.convert[c.convertHead++];
+        const std::uint32_t ci = sn.ci;
+        const bool cellShielded = w.masks().shielded_cell(ci);
+        const SubMask& m = w.grid().masks()[ci];
+        bool wrote = false;
+        for (int wi = 0; wi < 8; ++wi) {
+            std::uint64_t bits = sn.wv[wi] & m.words[wi];
+            while (bits != 0) {
+                const int b = std::countr_zero(bits);
+                bits &= bits - 1;
+                const auto bit = static_cast<std::uint32_t>(wi * 64 + b);
+                if (cellShielded &&
+                    w.masks().shielded(ci, static_cast<int>(bit)))
+                    continue;
+                const std::uint32_t k = pack_key(ci, bit);
+                const CellType src = mat_key(w, mats, k);
+                const CellType dst = material_rubble_of(src);
+                if (dst == src) continue; // уже рыхлое/не конвертируемо
+                CellType* pg = materialize_sub_page(w, ci);
+                pg[bit] = dst;
+                wrote = true;
+            }
+        }
+        if (wrote) {
+            dirtyOut.push_back(ci);
+            wroteAny = true;
+        }
+    }
+    if (wroteAny) ++g_supportGen; // конверсия — писатель опоры
+    if (c.convertHead >= c.convert.size()) {
+        std::fprintf(stderr, "[big-judge] конверсия завершена (%zu узлов)\n",
+                     c.convert.size());
+        big_close_case(false);
     }
 }
 

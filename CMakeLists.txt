@@ -686,7 +686,12 @@ if(GIGA_BUILD_TESTS)
         # 23588 + 4 on 2026-08-29 (D.3): «щит = земля» судьи — столбик на
         # щите стоит, без щита рыхлеет целиком; кросс-пины словарей
         # nav_dir_to_anchor_face compile-time = 23592.
-        PASS_REGULAR_EXPRESSION "23592/23592 checks passed"
+        # 23592 + 17 on 2026-08-30 (big-judge A-C): test_big_judge — кольцо
+        # через тор оправдано перколяцией, висячий ящик 729 узлов рыхлеет
+        # целиком порциями (маски стоят), башня на перколирующей плите
+        # оправдана, грязь даёт пересуд. Мутация «перколяция слепа» — 6 FAIL
+        # (кольцо И башня рушатся), прогнана и откачена = 23609.
+        PASS_REGULAR_EXPRESSION "23609/23609 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

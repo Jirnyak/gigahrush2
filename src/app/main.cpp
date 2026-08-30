@@ -547,12 +547,14 @@ enum ProfSlot : unsigned {
     kProfFocus,       // focus_pick — прицел интеракций
     kProfWitness,     // witness_step (S19)
     kProfNav,         // nav.step — амортизированный ребейк
+    kProfBigJudge,    // большой суд — порция флуда/конверсии (big-judge.md)
     kProfCount
 };
 static const char* const kProfName[kProfCount] = {
     "tick",   "noise",     "diffusion", "ai",     "controller",
     "wander", "acoustics", "combat",    "physics", "rigid",
-    "impact", "needs",     "focus",     "witness", "nav"};
+    "impact", "needs",     "focus",     "witness", "nav",
+    "big_judge"};
 static const bool g_profOn = [] {
     const char* e = std::getenv("GIGA_PROF");
     return e != nullptr && e[0] != '\0' && e[0] != '0';
@@ -3568,6 +3570,17 @@ int main(int argc, char** argv) {
                                  mediumPass.apply_copied(),
                                  mediumPass.apply_lazy(),
                                  mediumPass.apply_skip_fresh());
+                    // Большой суд (big-judge.md): очередь/фаза/вердикты.
+                    {
+                        const BigCourtStatus bj = big_judge_status();
+                        std::fprintf(stderr,
+                                     "[prof] big-judge pending %u phase %u "
+                                     "case %u conv-left %u | loose %u "
+                                     "supported %u retries %u\n",
+                                     bj.pending, bj.phase, bj.caseNodes,
+                                     bj.convertLeft, bj.verdictsLoose,
+                                     bj.verdictsSupported, bj.retries);
+                    }
                     // Состав rigid-сцены последнего тика (§59.11): разводит
                     // «спящие платят за бины» от «дорогая физика бодрых».
                     if (const RigidStats* rs = reg.ctx().find<RigidStats>())
@@ -4140,6 +4153,7 @@ int main(int argc, char** argv) {
             if (mediumLayer != activeLayer) {
                 mediumLayer = activeLayer;
                 mediumPass.clear_live();
+                big_judge_reset(); // очередь дел указывала в уехавший этаж
                 mediumSubstepsDone = simTick / 4;
                 // БУДИЛЬНИК ЭТАЖА (вердикт владельца 2026-08-27, «висячая
                 // вода»): генераторный налив (pour_level падика) СПИТ с
@@ -4257,6 +4271,25 @@ int main(int argc, char** argv) {
             // писатели статики (карв, дверь) судят своими развёртками.
             // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
             // (GPU-резидентная петля, решение владельца 2026-08-24).
+
+            // БОЛЬШОЙ СУД (big-judge.md): порция флуда опоры или конверсии
+            // кадром; конвертированные клетки качаются в зеркало и автомат
+            // тем же швом, что entry-sweep (маски НЕ меняются — нав/свет/
+            // якоря не должники конверсии; их долги придут mediumMaskChanged
+            // когда автомат реально сдвинет рыхлое).
+            {
+                const auto profBigT0 = prof_now();
+                static std::vector<std::uint32_t> bigDirty;
+                bigDirty.clear();
+                big_judge_step(stack.layer(activeLayer), bigDirty);
+                if (!bigDirty.empty()) {
+                    voxelMirror.mark_dirty(bigDirty.data(), bigDirty.size());
+                    mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
+                                          stack.layer(activeLayer),
+                                          voxelMirror);
+                }
+                prof_add(kProfBigJudge, profBigT0);
+            }
         }
 
         // --- fixed-step simulation ----------------------------------------
