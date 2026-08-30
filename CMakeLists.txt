@@ -558,8 +558,16 @@ if(GIGA_BUILD_TESTS)
     # gpu_medium_pass.cpp open_frontier) по закону владельца «в игре ничего
     # не должно зависеть от кадра» — теперь тест требует БИТ-ИДЕНТИЧНОСТИ
     # дайджестов плюс точной массы и формы в обоих каденсах.
+    # 774 -> 878 (+104) on 2026-08-30: test_budget_dispatch (big-judge.md D,
+    # бюджетный диспатч автомата) — 3 прогона той же сцены (полный темп /
+    # бюджет 4 / бюджет 4 повтором): масса точна под бюджетом, два
+    # бюджетных прогона бит-в-бит, тесный бюджет != полный темп (мутация
+    # «cell_budgeted всегда true» роняет ровно последний CHECK). Гейт
+    # отработал до посадки: первая реализация ключевала расписание по СЛОТУ
+    # списка (порядок — гонка atomicAdd) — пин детерминизма поймал с
+    # первого прогона, ключ переведён на хэш КЛЕТКИ.
     set_tests_properties(medium_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "774/774 checks passed")
+        PASS_REGULAR_EXPRESSION "878/878 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

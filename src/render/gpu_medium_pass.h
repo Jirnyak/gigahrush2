@@ -173,7 +173,19 @@ public:
 
     // Числа для печати каждый прогон (S11) — с лагом фенсового кольца.
     std::uint32_t live_count() const noexcept { return lastCount_; }
+    // ОГОВОРКА БЮДЖЕТА: uCnt[8] суммируют только ИСПОЛНЕННЫЕ в подтик
+    // клетки — при live > budget метрика занижена в ~stride раз (полная
+    // ≈ quanta × ceil(live/budget)). Потребители — только диагностика.
     std::uint32_t live_quanta() const noexcept { return lastQuanta_; }
+
+    // БЮДЖЕТНЫЙ ДИСПАТЧ (big-judge.md D): за подтик исполняется не более
+    // ~budget слотов live-списка нечётно-страйдовой ротацией (изотропия по
+    // фазам гарантирована — [medium_sim.comp] slot_budgeted). 0 = без
+    // бюджета. Дефолт = kRbSlotCap: live в пределах окна шва живёт полным
+    // темпом, ровно как до бюджета; перекрытие GIGA_MEDIUM_BUDGET — A/B-
+    // ручка перф-кривой (как GIGA_LIGHT_BUDGET). Тесты зовут set_budget.
+    void set_budget(std::uint32_t b) noexcept { budget_ = b; }
+    std::uint32_t budget() const noexcept { return budget_; }
     std::uint32_t woken_total() const noexcept { return wokenTotal_; }
     std::uint32_t slept_total() const noexcept { return sleptTotal_; }
     bool overflowed() const noexcept { return overflow_; }
@@ -227,6 +239,7 @@ private:
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
     std::uint32_t listSel_ = 0; // чей список ТЕКУЩИЙ (персистентен)
+    std::uint32_t budget_ = kRbSlotCap; // бюджет диспатча (см. set_budget)
 
     // Обратный шов (фенсовое кольцо kRbRegions): страницы/маски/СПИСОК
     // регионов пишет pack-пасс GPU — CPU только читает готовые.

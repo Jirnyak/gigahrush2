@@ -112,6 +112,10 @@ bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
     if (!dev_) return false;
     mirrorPool_ = mirror.page_pool_buffer();
     mirrorMasks_ = mirror.masks_buffer();
+    // A/B-ручка бюджета диспатча ([gpu_medium_pass.h] set_budget); дефолт
+    // kRbSlotCap уже стоит в поле.
+    if (const char* e = std::getenv("GIGA_MEDIUM_BUDGET"))
+        budget_ = static_cast<std::uint32_t>(std::atol(e));
     if (!create_buffers()) return false;
     if (!create_descriptors(mirror)) return false;
     if (!create_pipeline(shaderDir)) return false;
@@ -650,7 +654,10 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     };
 
     MediumPush push{};
-    push.downStep = ivec4{downStep.x, downStep.y, downStep.z, 0};
+    // downStep.w = бюджет диспатча (big-judge.md D): читают только
+    // move/settle (slot_budgeted), остальным модам поле безразлично.
+    push.downStep = ivec4{downStep.x, downStep.y, downStep.z,
+                          static_cast<std::int32_t>(budget_)};
     auto dispatch_mode = [&](std::uint32_t mode, std::uint32_t sel,
                              std::uint32_t region, std::uint32_t groups) {
         push.params[0] = static_cast<std::uint32_t>(substepBase);

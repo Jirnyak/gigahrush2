@@ -1440,6 +1440,65 @@ void test_cadence_equivalence(gpu::VulkanDevice& dev) {
     CHECK(water[0] == water[1]);  // и кванты сходятся квант в квант
 }
 
+// БЮДЖЕТНЫЙ ДИСПАТЧ (markoaudit/plans/big-judge.md D, закон владельца
+// 2026-08-30): за подтик исполняется ~total/stride слотов, остальные
+// переносятся замороженными. Что запинено: (1) МАССА точна под бюджетом —
+// заморозка не теряет и не плодит атомы; (2) ДЕТЕРМИНИЗМ — два бюджетных
+// прогона бит-в-бит (расписание — чистая функция номера подтика);
+// (3) БЮДЖЕТ КУСАЕТ — тесный бюджет даёт ДРУГУЮ траекторию, чем полный
+// темп (мутация «slot_budgeted всегда true» роняет ровно этот CHECK);
+// (4) вся вода в бассейне — заморозка не телепортирует материю.
+void test_budget_dispatch(gpu::VulkanDevice& dev) {
+    constexpr std::uint64_t kSub = 200;
+    constexpr std::size_t kPoured = 128;
+    std::uint64_t dig[3] = {0, 0, 0};
+    std::size_t water[3] = {0, 0, 0};
+    std::size_t outside[3] = {0, 0, 0};
+    unsigned fade[3] = {0, 0, 0};
+    // Бюджет 4 при live ~50 даёт страйд ~13 (нечётный) — окно кусает
+    // сильно, траектория обязана отличаться от полного темпа.
+    static World w0, w1, w2;
+    World* ws[3] = {&w0, &w1, &w2};
+    const std::uint32_t kBudget[3] = {0u, 4u, 4u};
+    for (int r = 0; r < 3; ++r) {
+        World& w = *ws[r];
+        std::uint32_t pourCell = 0;
+        cadence_build_scene(w, pourCell);
+        static gpu::VoxelMirror mirrors[3];
+        static gpu::GpuMediumPass mediums[3];
+        gpu::VoxelMirror& mirror = mirrors[r];
+        gpu::GpuMediumPass& medium = mediums[r];
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+        medium.set_budget(kBudget[r]);
+        medium.wake_cells(&pourCell, 1, w, mirror);
+        std::uint64_t substep = 0;
+        while (substep < kSub) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        dig[r] = cadence_digest(w, &water[r], &outside[r]);
+        fade[r] = medium.fade_total();
+        medium.destroy();
+        mirror.destroy();
+    }
+    std::printf("[medium_test] budget: full %016llx water %zu+%u | b4 "
+                "%016llx water %zu+%u | b4' %016llx%s\n",
+                static_cast<unsigned long long>(dig[0]), water[0], fade[0],
+                static_cast<unsigned long long>(dig[1]), water[1], fade[1],
+                static_cast<unsigned long long>(dig[2]),
+                dig[1] == dig[2] ? "" : "  [BUDGET NONDETERMINISM]");
+    for (int r = 0; r < 3; ++r) {
+        CHECK(water[r] + fade[r] == kPoured); // масса точна под бюджетом
+        CHECK(outside[r] == 0);               // заморозка не телепортирует
+    }
+    CHECK(dig[1] == dig[2]); // детерминизм бюджетного расписания
+    CHECK(dig[0] != dig[1]); // бюджет кусает: тесный темп != полный
+}
+
 } // namespace
 
 int main() {
@@ -1455,6 +1514,7 @@ int main() {
         test_lone_fade(dev);
         test_carve_vs_seam(dev);
         test_cadence_equivalence(dev);
+        test_budget_dispatch(dev);
     }
     test_carve_agnostic();
     dev.destroy();
