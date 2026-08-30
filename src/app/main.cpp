@@ -4487,10 +4487,6 @@ int main(int argc, char** argv) {
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
                     // 4 — the correction that mattered most in the port.
                     if (tr_.sealed && reg.valid(player)) {
-                        const auto& meTr = reg.get<const Transform>(player);
-                        const int pcx = wrap_macro(static_cast<int>(std::floor(meTr.pos.x / kCellSize)));
-                        const int pcy = wrap_macro(static_cast<int>(std::floor(meTr.pos.y / kCellSize)));
-                        const int pcz = wrap_macro(static_cast<int>(std::floor(meTr.pos.z / kCellSize)));
                         bool playerSheltered = false;
                         // МОГИЛА ДВЕРЕЙ (2026-08-28). Гермо-укрытий нет — новая дверь вернёт их своим законом.
                         if (!playerSheltered) {
@@ -5933,10 +5929,9 @@ int main(int argc, char** argv) {
                         // ([jirnyak.md] §18 interaction_step). No vector collect,
                         // no fake hit when nothing is in reach.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            game::InteractionHit termHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM);
-                            // МОГИЛА ДВЕРЕЙ (2026-08-28): терминал больше не тумблер замков.
+                            // МОГИЛА ДВЕРЕЙ (2026-08-28): терминал больше не
+                            // тумблер замков; его скан по близости умер вместе
+                            // с ролью — окна ниже открывает ФОКУС (g_focus).
                         // 5c: КНОПКА ВЫЗОВА снаружи столба — «лифт приехал»,
                         // створка открывается (иллюзия приезда — следующий
                         // инкремент); ПАНЕЛЬ в кабине — меню этажей (E, как
