@@ -752,6 +752,11 @@ static void test_detached_prop_is_rigid_body() {
                                     vec3{0.9f, 0.85f, 0.4f},
                                     /*meshKind*/0, layer);
     CHECK(reg.valid(e));
+    // Авторский поворот меша — как у настенного пропа: детач ОБЯЗАН пронести
+    // его в тело (до фикса 2026-08-31 q стартовал identity и проп скакал
+    // ровно на -yaw в кадр отрыва).
+    const float testYaw = 1.5707963f;
+    reg.get<game::PropMesh>(e).yaw = testYaw;
 
     world.grid().clear_cell(7, 3, 7);
     const std::vector<std::uint32_t> dirty{
@@ -767,8 +772,16 @@ static void test_detached_prop_is_rigid_body() {
     // Масса выведена, не дефолт: invMass конечна и не единица-заглушка.
     const auto& rb = reg.get<RigidBody>(e);
     CHECK(rb.invMass > 0.0f);
-    // Стартовый кувырок отрыва передан ядру.
+    // Ориентация тела = ориентация меша: q — поворот вокруг Z ровно на yaw
+    // (та же формула, что применяет prop.vert). Скачок в identity — баг.
+    CHECK(std::fabs(rb.q.z - std::sin(testYaw * 0.5f)) < 1e-5f);
+    CHECK(std::fabs(rb.q.w - std::cos(testYaw * 0.5f)) < 1e-5f);
+    CHECK(std::fabs(rb.q.x) < 1e-6f && std::fabs(rb.q.y) < 1e-6f);
+    // Кувырок ВЫВЕДЕН из рычага точки крепления (ω = arm × v / rg²), а не
+    // назначен: точка (4,4,0) смещена от центра — кувырок ненулевой, но
+    // прежняя константа w.z = 1.0 рад/с мертва (v вдоль Z ⇒ ω.z ≡ 0).
     CHECK(dot(rb.w, rb.w) > 0.0f);
+    CHECK(std::fabs(rb.w.z) < 1e-6f);
 }
 
 

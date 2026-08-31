@@ -592,8 +592,11 @@ if(GIGA_BUILD_TESTS)
     # держит ручной GIGA_VERLET_PIN-протокол (verlet-merge.md §6).
     # 77 -> 76 тем же днём: SoA-раскладка (инкр. 2) — чек mapped-указателей
     # умер вместе с ними, чтение состояния пошло через gather_chain/sheet.
+    # 76 -> 95 тем же днём: test_dead_element_freezes — страховка §59.26
+    # переехала сюда со смертяного ре-аплоада (тот телепортировал живой сим
+    # этажа в rest, §28.4); мутация «скип мёртвого сломан» = 14 FAIL.
     set_tests_properties(verlet_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "76/76 checks passed")
+        PASS_REGULAR_EXPRESSION "95/95 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
@@ -1561,7 +1564,10 @@ if(GIGA_BUILD_TESTS)
     # переписан на закон руки: ПКМ-граната бросается wantR (не wantL),
     # платит кулдаун ПКМ, ЛКМ не задета; wantBag = скан сумки рукой ЛКМ.
     # Провода v22: ranged 24, fixed 1048, пустой 1148 = 222340.
-        PASS_REGULAR_EXPRESSION "game_test: 222340 checks, 0 failures")
+    # 222340 + 4 on 2026-08-31 (детач сохраняет позу): q тела = поворот на
+    # yaw меша (3 чека) + ω.z ≡ 0 (константа w.z=1.0 «из ниоткуда» мертва,
+    # кувырок выведен ω = arm × v / rg²) = 222344.
+        PASS_REGULAR_EXPRESSION "game_test: 222344 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

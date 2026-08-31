@@ -12,6 +12,7 @@
 #include "world/types.h"
 #include "world/world.h"
 #include <algorithm>
+#include <cmath>
 #include <vector>
 #include <unordered_set>
 #include <cstdio>
@@ -191,6 +192,21 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         return;
     }
 
+    // Рычаг отрыва — вектор от центра тела к ТОЧКЕ КРЕПЛЕНИЯ (запись якоря
+    // S20.2), снятый ДО смерти якоря. Тороидальная дельта поосно. Нет якоря
+    // (снаряд в свободный проп, restore) — рычага нет, кувырок будет нулевым.
+    vec3 detachArm{};
+    if (const auto* an = reg.try_get<SubVoxelAnchor>(prop)) {
+        const vec3 ap{
+            (static_cast<float>(an->cx) * 8.0f + an->subX + 0.5f) * 0.25f,
+            (static_cast<float>(an->cy) * 8.0f + an->subY + 0.5f) * 0.25f,
+            (static_cast<float>(an->cz) * 8.0f + an->subZ + 0.5f) * 0.25f};
+        detachArm = ap - pos;
+        detachArm.x -= kWorldExtent * std::floor(detachArm.x / kWorldExtent + 0.5f);
+        detachArm.y -= kWorldExtent * std::floor(detachArm.y / kWorldExtent + 0.5f);
+        detachArm.z -= kWorldExtent * std::floor(detachArm.z / kWorldExtent + 0.5f);
+    }
+
     // Keep entity identity; drop anchor and flip the static/dynamic tag pair.
     if (reg.all_of<SubVoxelAnchor>(prop))
         reg.remove<SubVoxelAnchor>(prop);
@@ -203,9 +219,11 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
     // плотности материала × объём (S11).
     vec3 half{0.2f, 0.2f, 0.2f};
     std::uint8_t matId = 0;
+    float meshYaw = 0.0f;
     if (const auto* pm = reg.try_get<PropMesh>(prop)) {
         half = pm->scale * 0.5f;
         matId = pm->matId;
+        meshYaw = pm->yaw;
     } else if (const auto* box = reg.try_get<AABB>(prop)) {
         half = box->half;
     }
@@ -236,8 +254,6 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                 density * 8.0f * half.x * half.y * half.z;
             rigid_attach_box(reg, prop, half, mass, e_, mu);
         }
-        // Стартовый кувырок от импульса отрыва — прежний авторский вектор.
-        reg.get<RigidBody>(prop).w = vec3{impulse.z, impulse.x, 1.0f};
     } else {
         // SimpleFall: a small shove along the pull. Derived by negating the
         // caller's up-facing impulse instead of hardcoding -Z, for the same
@@ -248,6 +264,29 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         reg.emplace_or_replace<Velocity>(prop, Velocity{down});
         const float mass = density * 8.0f * half.x * half.y * half.z;
         rigid_attach_box(reg, prop, half, mass, e_, mu);
+    }
+
+    // ОРИЕНТАЦИЯ ТЕЛА = ОРИЕНТАЦИЯ МЕША: тот же поворот вокруг Z на yaw, что
+    // prop.vert применяет к якорному пропу. rigid_attach_* создаёт RigidBody
+    // с identity-кватернионом, и до этой строки настенный проп (yaw = π/2)
+    // скакал ровно на -90° в кадр отрыва, а restore повторял скачок каждую
+    // загрузку (баг владельца 2026-08-31). Солвер и BodyPass вращают форму
+    // и меш кватернионом, поэтому half честно остаётся в авторском фрейме.
+    {
+        RigidBody& rb = reg.get<RigidBody>(prop);
+        rb.q = quat{0.0f, 0.0f, std::sin(meshYaw * 0.5f),
+                    std::cos(meshYaw * 0.5f)};
+        // КУВЫРОК ВЫВЕДЕН, НЕ НАЗНАЧЕН (S11; прежний w.z = 1.0 рад/с был
+        // константой из ниоткуда и крутил даже лежащий restore-проп).
+        // Скорость v приложена в точке крепления с рычагом arm от центра:
+        // ω = (arm × v) / rg², rg² = (hx²+hy²+hz²)/3 — радиус инерции
+        // бокса по трём осям. Симметричный подвес (arm ∥ v) даёт ноль —
+        // вещь падает плашмя, и это физика; смещённая точка крепления даёт
+        // честный кувырок. Нулевой импульс (restore) → ноль.
+        const float rg2 = std::max(
+            (half.x * half.x + half.y * half.y + half.z * half.z) / 3.0f,
+            1e-4f);
+        rb.w = cross(detachArm, impulse) * (1.0f / rg2);
     }
 
     // BodyPass needs AABB -- without it a detached prop is invisible.

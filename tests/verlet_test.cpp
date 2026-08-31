@@ -230,6 +230,34 @@ void test_cloth_hangs(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     }
 }
 
+// СМЕРТЬ ЭЛЕМЕНТА: write_wire_alive(0) — и цепь ЗАМИРАЕТ (шейдер скипает по
+// elems.alive). Это страховка §59.26 «GPU не симулирует убитые цепи»,
+// которую раньше держал ре-аплоад бейка по dressingSetChanged — он же
+// телепортировал живой сим всего этажа в rest-позы (§28.4, баг владельца
+// 2026-08-31). Ре-аплоад умер; закон держит ЭТОТ гейт.
+void test_dead_element_freezes(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
+    vec3 pts[8];
+    bool pin[8] = {true, false, false, false, false, false, false, false};
+    for (int i = 0; i < 8; ++i)
+        pts[i] = vec3{10.0f + 0.28f * static_cast<float>(i), 10.0f, 30.0f};
+    const gpu::GpuWireChain up = make_chain(pts, pin, 0.28f);
+    pass.upload_wires(&up, 1);
+    pass.upload_bodies(nullptr, 0);
+    CHECK(run_sims(dev, pass, 30, vec3{0.0f, 0.0f, -9.81f}));
+    gpu::GpuWireChain mid{};
+    pass.gather_chain(0, &mid);
+    CHECK(rest_metric(mid) > 1e-3f); // цепь ещё движется — стенд честный
+    const std::uint8_t dead = 0;
+    pass.write_wire_alive(&dead, 1);
+    CHECK(run_sims(dev, pass, 60, vec3{0.0f, 0.0f, -9.81f}));
+    gpu::GpuWireChain got{};
+    pass.gather_chain(0, &got);
+    for (int i = 0; i < 8; ++i) { // замерла ровно там, где умерла
+        CHECK(got.cur[i].x == mid.cur[i].x);
+        CHECK(got.cur[i].z == mid.cur[i].z);
+    }
+}
+
 // ДЕТЕРМИНИЗМ: одинаковый вход — бит-идентичный выход. Это фундамент всего
 // пин-протокола слияния (§6.2: «побитово, где математика не тронута»).
 void test_determinism(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
@@ -313,6 +341,7 @@ int main() {
         test_severed_lands(dev, pass);
         test_isotropy_landing(dev, pass);
         test_cloth_hangs(dev, pass);
+        test_dead_element_freezes(dev, pass);
         test_determinism(dev, pass);
         test_body_pushes(dev, pass);
 

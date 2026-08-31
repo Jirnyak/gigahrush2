@@ -3410,16 +3410,16 @@ int main(int argc, char** argv) {
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
         bool propPassNeedsRebuild = false;
-        // SEPARATE from the instance repack above, and the separation is the fix.
-        // Re-packing the prop instance list and re-uploading the verlet STATE are
-        // different events that shared one flag: `upload_wires`/`upload_cloths`
-        // rewrite both `cur` and `prev` from the BAKE pose, i.e. they reset every
-        // chain and sheet on the floor to rest with zero velocity. Since the flag
-        // is also raised every frame while any severed leg is still falling
-        // (kAntourageFallSec = 8 s), one shot at a wall froze all the dressing on
-        // the floor for eight seconds. Pin changes never needed it anyway —
-        // `write_pins` publishes those per frame. [problems.md] section 28.4
-        bool dressingSetChanged = false;
+        // dressingSetChanged МЁРТВ (2026-08-31, приказ владельца): смерть
+        // антуража больше НЕ триггерит upload_wires/upload_cloths. Аплоад
+        // пишет rest-позы бейка поверх ЖИВОГО GPU-сима всего этажа — провод,
+        // потерявший последний якорь, телепортировался в дефолт-катенарию и
+        // падал из неё; любая смерть жёсткой ноги сбрасывала ВСЕ провода и
+        // шторы этажа (вторая половина §28.4). Страховка §59.26 («GPU не
+        // симулирует убитые цепи») живёт в покадровом пути: wire_live_pins +
+        // FallClock → write_wire_alive/write_wire_pins — и заперта гейтом
+        // verlet_test «мёртвый элемент замирает». Аплоады верле — только
+        // вход на этаж и полный ребилд.
 
         // The dressing's half of every geometry mutation, next to the ECS-prop
         // half (anchor_validate_step): whatever emptied these cells — a blast,
@@ -4232,9 +4232,8 @@ int main(int argc, char** argv) {
                                         judgeResult.dirtyCells,
                                         &particleBursts, 0x5EEDBEEFu) > 0)
                                     propPassNeedsRebuild = true;
-                                if (antourage_carve_step_here(
-                                        judgeResult.dirtyCells, 0x5EEDBEEFu))
-                                    dressingSetChanged = true;
+                                antourage_carve_step_here(
+                                    judgeResult.dirtyCells, 0x5EEDBEEFu);
                                 rigid_wake_dirty_cells(
                                     reg, activeLayer,
                                     judgeResult.dirtyCells.data(),
@@ -4306,8 +4305,7 @@ int main(int argc, char** argv) {
                             reg, stack.layer(activeLayer), activeLayer, bus,
                             bigDirty, &particleBursts, 0x5EEDBEEFu) > 0)
                         propPassNeedsRebuild = true;
-                    if (antourage_carve_step_here(bigDirty, 0x5EEDBEEFu))
-                        dressingSetChanged = true;
+                    antourage_carve_step_here(bigDirty, 0x5EEDBEEFu);
                     rigid_wake_dirty_cells(reg, activeLayer, bigDirty.data(),
                                            bigDirty.size());
                 }
@@ -5748,15 +5746,13 @@ int main(int argc, char** argv) {
                                            carveResult.dirtyCells.data(),
                                            carveResult.dirtyCells.size());
                     g_carveT.anchorMs += carve_ms_since(ct0);
-                    // Запечённое убранство отвечает тому же взрыву;
-                    // dressingSetChanged взводится — иначе GPU симулирует
-                    // убитые цепи до следующего входа (§59.26).
+                    // Запечённое убранство отвечает тому же взрыву. Смерть
+                    // публикуется ПОКАДРОВО (write_alive/write_pins), а не
+                    // ре-аплоадом — тот телепортировал живой сим в rest (§28.4).
                     ct0 = std::chrono::steady_clock::now();
                     if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                  seed)) {
+                                                  seed))
                         propPassNeedsRebuild = true;
-                        dressingSetChanged = true;
-                    }
                     g_carveT.antrMs += carve_ms_since(ct0);
                     if (g_regrowWatch > 0) {
                         constexpr std::size_t kRegrowCap = 8192;
@@ -8601,8 +8597,7 @@ int main(int argc, char** argv) {
             if (mediumPass.ready())
                 mediumPass.wake_cells(doorDirty.data(), doorDirty.size(),
                                       stack.layer(activeLayer), voxelMirror);
-            if (antourage_carve_step_here(doorDirty, 0xD00Du))
-                dressingSetChanged = true;
+            antourage_carve_step_here(doorDirty, 0xD00Du);
             // ДОЛГ ПИСАТЕЛЯ ОДИН И ПОЛНЫЙ (S20.4): дверь — писатель статики,
             // как карв. Раньше она рвала антураж, но НЕ пропы и не будила
             // тела — проп на атомах полотна висел после открытия, вопреки
@@ -8816,13 +8811,6 @@ int main(int argc, char** argv) {
                 }
                 fallingWasActive = fallingActive;
             }
-            // Only when the dressing SET actually changed — never merely because
-            // a rigid leg is mid-fall.
-            if (dressingSetChanged) {
-                upload_wires(verletPass, streamer.antourage_at_layer(registry, activeLayer));
-                upload_cloths(verletPass, streamer.antourage_at_layer(registry, activeLayer));
-            }
-
             // GIGA_NO_GPU_CULL=1 falls back to the CPU cull — the A/B switch
             // that separates "cull.comp corrupts instances" from every other
             // mesh-path suspect in one relaunch.
