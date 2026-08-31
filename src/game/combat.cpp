@@ -2173,7 +2173,8 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId item = equipped_throwable(inv);
+    const ItemId item =
+        equipped_throwable(inv, reg.try_get<Equipped>(thrower));
     const RangedDef* def = ranged_for_item(item);
     if (!def || !ranged_is_explosive(*def)) return 0;
 

@@ -35,7 +35,16 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
     return best;
 }
 
-ItemId equipped_throwable(const Inventory& inv) {
+ItemId equipped_throwable(const Inventory& inv, const Equipped* eq) {
+    // Решение игрока сильнее скана сумки ([ranged_table.h]): метательное в
+    // слоте оружия бросается именно оно — вторая половина «grenade — слот
+    // оружия» из чистки клавиш 2026-08-28, до 2026-08-31 не построенная
+    // (клавишу Z сняли, а слот-путь не подключили — гранаты «надевались»
+    // и не кидались, находка владельца).
+    if (eq) {
+        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
+        if (ranged_for_item(chosen) && ranged_is_thrown(chosen)) return chosen;
+    }
     ItemId best = kInvalidItem;
     float bestScore = 0.0f;
     for (const ItemSlot& sl : inv.slots) {

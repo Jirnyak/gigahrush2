@@ -183,6 +183,10 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq = nullptr);
 // punch, and radius alone the day a firecracker outranks a frag. The product is the
 // crude stand-in for "how much of the room does this remove" — same spirit as
 // `ranged_dps`, and just as replaceable by a selection UI.
-ItemId equipped_throwable(const Inventory& inv);
+//
+// `eq` non-null — предпочтение РЕШЕНИЯ (чистка клавиш 2026-08-28: «grenade —
+// слот оружия»): если в слоте оружия лежит МЕТАТЕЛЬНОЕ, бросается именно оно;
+// иначе — скан сумки, как раньше (путь консольной команды `grenade`).
+ItemId equipped_throwable(const Inventory& inv, const Equipped* eq = nullptr);
 
 } // namespace giga::game

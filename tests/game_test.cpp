@@ -3736,6 +3736,20 @@ static void test_grenade() {
         bag.slots[1] = ItemSlot{rifle, 1};
         CHECK(equipped_ranged(bag) == rifle);          // ...even beside a worse gun
         CHECK(equipped_throwable(bag) == gren);
+
+        // ГРАНАТА В СЛОТЕ ОРУЖИЯ (вторая половина чистки клавиш 2026-08-28,
+        // построена 2026-08-31 по находке владельца «надевается и не
+        // кидается»): решение игрока в Equipped сильнее скана сумки — и
+        // строго комплементарно пикеру огнестрела: граната в слоте НЕ
+        // делает руку стволом, ствол в слоте НЕ делает её метательной
+        // (бросок тогда падает на скан сумки — путь консольной команды).
+        Equipped eq{};
+        CHECK(equip_item(bag, eq, 0)); // слот оружия = граната
+        CHECK(equipped_ranged(bag, &eq) == kInvalidItem);
+        CHECK(equipped_throwable(bag, &eq) == gren);
+        CHECK(equip_item(bag, eq, 1)); // слот оружия = ствол
+        CHECK(equipped_ranged(bag, &eq) == rifle);
+        CHECK(equipped_throwable(bag, &eq) == gren); // фолбэк на сумку
     }
 
     // A hollow room to work in: floors are dense interiors, and a grenade in a solid

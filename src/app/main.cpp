@@ -3966,16 +3966,9 @@ int main(int argc, char** argv) {
                            e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = false;
                 }
-                if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
-                    input.set_mouselook(true);
-                    SDL_SetWindowRelativeMouseMode(window, true);
-                }
-                if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
-                    input.set_mouselook(false);
-                    SDL_SetWindowRelativeMouseMode(window, false);
-                }
+                // МОГИЛА ЗАЖИМА-ВЗГЛЯДА НА ПКМ (приказ владельца 2026-08-31):
+                // ПКМ — вторая РУКА (эпик двух рук, план two-hands.md),
+                // взгляд остаётся тогглом Tab (mouselook-бинд).
                 // Feed movement/look events unless the HUD wants the cursor (only
                 // relevant when look is off — relative mode hides the cursor).
                 if (input.mouselook() || !ImGui::GetIO().WantCaptureMouse)
@@ -6144,13 +6137,30 @@ int main(int argc, char** argv) {
                     game::entity_health(reg, pool, player, preHp, preMax);
 
                 bool haveGun = false;
+                bool haveThrown = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrg->id))
+                        if (pool.valid(nrg->id)) {
+                            const game::Equipped* peq =
+                                reg.try_get<game::Equipped>(player);
                             haveGun = game::equipped_ranged(
-                                          pool.inventory(nrg->id),
-                                          reg.try_get<game::Equipped>(player)) !=
+                                          pool.inventory(nrg->id), peq) !=
                                       game::kInvalidItem;
+                            // МЕТАТЕЛЬНОЕ В СЛОТЕ ОРУЖИЯ — вторая половина
+                            // чистки клавиш 2026-08-28 («grenade — слот
+                            // оружия»): клавишу Z сняли, а слот-путь не
+                            // построили — граната «надевалась» и не
+                            // кидалась (находка владельца 2026-08-31).
+                            // ЛКМ бросает, как калаш стреляет; темп гейтит
+                            // общий cooldownMs внутри player_throw_step.
+                            if (peq)
+                                haveThrown =
+                                    game::ranged_is_thrown(game::equipped_item(
+                                        pool.inventory(nrg->id), *peq,
+                                        game::EquipSlot::Weapon));
+                        }
+                if (haveThrown && attackHeld && shell.playing())
+                    throwWanted = true;
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step. Nothing is dropped for a bake any more — the
                 // worker holds a snapshot, not the grid ([game/rebake.h]).
@@ -6174,7 +6184,10 @@ int main(int argc, char** argv) {
                 const auto profCombatT0 = prof_now();
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && attackHeld && shell.playing(), simTick,
+                    // Гранату в руке не сопровождаем кулаками: ЛКМ при
+                    // метательном — бросок (throwWanted выше), не удар.
+                    !haveGun && !haveThrown && attackHeld && shell.playing(),
+                    simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
                     &playerStatus, &particleBursts,
                     &stack.layer(activeLayer).gravity());
