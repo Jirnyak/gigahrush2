@@ -77,6 +77,8 @@ public:
     // it: the sim collides against the render-side copy of the grid, so a piece
     // that lost its last pin falls and LANDS instead of sinking through the
     // floor. The mirror outlives this pass, so the raw handle is safe to keep.
+    // `renderPass` may be VK_NULL_HANDLE: compute-only mode for headless tests
+    // (verlet_test) — the sim runs, the draws are never created.
     bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
               VkBuffer masksBuffer,
               VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
@@ -85,6 +87,7 @@ public:
         return wireDrawPipeline_ != VK_NULL_HANDLE &&
                clothDrawPipeline_ != VK_NULL_HANDLE;
     }
+    bool sim_ready() const { return simPipeline_ != VK_NULL_HANDLE; }
 
     // Replace an element set (floor load / prop rebuild). Uploads rest poses;
     // the verlet state restarts from rest, which is invisible on a load.
@@ -125,6 +128,11 @@ public:
 
     std::uint32_t chain_count() const { return wire_.count; }
     std::uint32_t sheet_count() const { return cloth_.count; }
+
+    // Host-visible section memory for headless tests (verlet_test) — the very
+    // bytes GIGA_VERLET_PIN hashes; valid after init, stable across uploads.
+    const void* wire_mapped() const { return wire_.points.mapped; }
+    const void* cloth_mapped() const { return cloth_.points.mapped; }
 
 private:
     // One antourage section (chains or sheets): its state buffer, its

@@ -568,6 +568,30 @@ if(GIGA_BUILD_TESTS)
     # первого прогона, ключ переведён на хэш КЛЕТКИ.
     set_tests_properties(medium_test PROPERTIES
         PASS_REGULAR_EXPRESSION "878/878 checks passed")
+
+    # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
+    # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
+    # «ctest не исполняет ни одной строки GLSL этого сима»; теперь подвес,
+    # посадка на маску, изотропия вектором, ткань, детерминизм и толкатели
+    # гоняются тем же законом, что medium_test: без окна, без свапчейна,
+    # compute-only VerletPass (renderPass = null). Без GPU — НЕ зелёное дерево.
+    add_executable(verlet_test tests/verlet_test.cpp
+        src/render/vk_device.cpp src/render/vk_buffer.cpp
+        src/render/vk_common.cpp src/render/voxel_mirror.cpp
+        src/render/verlet_pass.cpp)
+    target_link_libraries(verlet_test PRIVATE giga_core SDL3::SDL3
+        Vulkan::Vulkan)
+    target_compile_definitions(verlet_test PRIVATE
+        GIGA_SHADER_DIR="${_giga_spv_dir}")
+    add_dependencies(verlet_test giga_shaders)
+    giga_target_flags(verlet_test OFF)
+    add_test(NAME verlet_test COMMAND verlet_test)
+    # Пин 77 чеков с рождения (2026-08-31). Мутации гейта прогнаны поштучно:
+    # обход world_land -> 59/77 (посадка И изотропия сквозь опору), нулевые
+    # итерации солвера -> 76/77 (restY ткани). Инвариантные ноги ловят законы;
+    # точные числа держит ручной GIGA_VERLET_PIN-протокол (verlet-merge.md §6).
+    set_tests_properties(verlet_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "77/77 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

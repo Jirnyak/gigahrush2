@@ -202,6 +202,11 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
         if (!ok) return false;
     }
 
+    // Headless compute-only mode (verlet_test): no render pass — the sim is
+    // fully functional, the draws are simply never created. Same seam as
+    // GpuMediumPass, which never needed a render pass at all.
+    if (renderPass == VK_NULL_HANDLE) return true;
+
     // --- graphics: two pipelines over one layout, one state recipe ---------
     // The section primitives differ (camera-facing ribbon vs two-sided quad)
     // but every fixed-function state is IDENTICAL — the old passes proved it
