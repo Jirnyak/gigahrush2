@@ -179,7 +179,6 @@ SaveState busy_run() {
     st.ranged.hand[1].weapon = 2;
     st.ranged.shots = 42u;
     st.ranged.hits = 11u;
-    st.ranged.throwCooldownMs = 777u;
     st.kills = 99u;
 
     // Version 9 / SAVSTAT: non-default status timers so a dropped StatusSet
@@ -295,7 +294,6 @@ void same_run(const SaveState& a, const SaveState& b) {
     }
     CHECK(a.ranged.shots == b.ranged.shots);
     CHECK(a.ranged.hits == b.ranged.hits);
-    CHECK(a.ranged.throwCooldownMs == b.ranged.throwCooldownMs);
     CHECK(a.kills == b.kills);
 
     // Version 9 / SAVSTAT: live status effects round-trip field-by-field.
@@ -362,19 +360,19 @@ void wire_layout() {
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 89);
-    static_assert(kRangedWire == 26); // v21: две руки
-    static_assert(kCombatSaveWire == 31);
+    static_assert(kRangedWire == 24); // v22: две руки
+    static_assert(kCombatSaveWire == 29);
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1050);  // v21: ranged 16 -> 26 (две руки)
+    static_assert(kSaveFixedWire == 1048);  // v22
     static_assert(kFactionWire == 36);
     // v20: 1040 fixed + 36 faction + 64 header = 1140 empty; инлайновые
     // счётчики трупов/обломков ушли в floor-файл вместе с секциями.
-    static_assert(save_bytes_for() == 1150); // v21: +10 (две руки)
-    static_assert(save_bytes_for(100, 50) == 1150 + 150);
+    static_assert(save_bytes_for() == 1148); // v22
+    static_assert(save_bytes_for(100, 50) == 1148 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;

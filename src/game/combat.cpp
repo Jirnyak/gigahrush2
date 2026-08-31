@@ -2021,8 +2021,6 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (gh.reloadMs > elapsedMs) gh.reloadMs -= elapsedMs;
         else gh.reloadMs = 0;
     }
-    if (pr.throwCooldownMs > elapsedMs) pr.throwCooldownMs -= elapsedMs;
-    else pr.throwCooldownMs = 0;
 
     const NpcRef* nr = reg.try_get<NpcRef>(shooter);
     if (!nr || !pool.valid(nr->id)) return 0;
@@ -2162,7 +2160,8 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
 }
 
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow, std::uint64_t tick) {
+                                bool wantL, bool wantR, bool wantBag,
+                                std::uint64_t tick) {
     Entity thrower = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -2170,62 +2169,63 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
         break;
     }
     if (thrower == entt::null) return 0;
+    if (!wantL && !wantR && !wantBag) return 0;
 
-    // NO DECREMENT HERE. The cooldown is `player_ranged_step`'s and it is aged there,
-    // exactly once per tick, before any early-out — defect 3 in this file's header,
-    // the one the reference committed at ~60 sites. This function READS the timer it
-    // shares and never advances it; see [combat.h] for the ordering requirement that
-    // makes that safe.
+    // Таймеры стареют в player_ranged_step (дефект 3) — здесь только чтение.
     PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(thrower);
-    // Свой таймер, не ствольный (two-hands.md: руки независимы) — старится
-    // в player_ranged_step вместе с остальными.
-    if (!wantThrow || pr.throwCooldownMs > 0) return 0;
-
     const NpcRef* nr = reg.try_get<NpcRef>(thrower);
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
+    const Equipped* eqp = reg.try_get<Equipped>(thrower);
 
-    const ItemId item =
-        equipped_throwable(inv, reg.try_get<Equipped>(thrower));
-    const RangedDef* def = ranged_for_item(item);
-    if (!def || !ranged_is_explosive(*def)) return 0;
+    std::uint32_t thrown = 0;
+    for (int hIdx = 0; hIdx < 2; ++hIdx) {
+        // Рука несёт и делает то, чем экипирована (закон владельца):
+        // спуск руки бросает предмет ЕЁ ячейки; wantBag — путь без
+        // решателя (консоль/фикстуры), скан сумки, руки ЛКМ.
+        const bool want = hIdx == 1 ? wantR : (wantL || wantBag);
+        if (!want) continue;
+        GunHand& gh = pr.hand[hIdx];
+        if (gh.cooldownMs > 0) continue; // рука занята действием
+        ItemId item = kInvalidItem;
+        if (eqp) {
+            const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
+            if (ranged_for_item(hi) && ranged_is_thrown(hi)) item = hi;
+        }
+        if (item == kInvalidItem && hIdx == 0 && wantBag)
+            item = equipped_throwable(inv);
+        const RangedDef* def = ranged_for_item(item);
+        if (!def || !ranged_is_explosive(*def)) continue;
 
-    // SPEND THE WEAPON, and spend it BEFORE the throw. There is no magazine here and
-    // no reload: the thing in your hand is the round, so one throw is one item out of
-    // the bag. Taken first so a spawn that refuses (a degenerate aim vector) cannot
-    // leave the player holding a grenade he has already thrown.
-    bool paid = false;
-    for (ItemSlot& sl : inv.slots) {
-        if (sl.item != item || sl.count == 0) continue;
-        --sl.count;
-        if (sl.count == 0) sl.item = kInvalidItem;
-        paid = true;
-        break;
+        // SPEND THE WEAPON, and spend it BEFORE the throw: the thing in the
+        // hand is the round, one throw is one item out of the bag.
+        bool paid = false;
+        for (ItemSlot& sl : inv.slots) {
+            if (sl.item != item || sl.count == 0) continue;
+            --sl.count;
+            if (sl.count == 0) sl.item = kInvalidItem;
+            paid = true;
+            break;
+        }
+        if (!paid) continue;
+
+        const CameraTag& cam = reg.get<const CameraTag>(thrower);
+        const Transform& tr = reg.get<const Transform>(thrower);
+        const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                       tr.pos.z + cam.eyeOffset.z};
+        const vec3 dir = camera_forward(cam.yaw, cam.pitch);
+        // Заряд-проп рагдолл-ядра, авторский фитиль; атрибуция броска.
+        // Тихо: этаж слышит детонацию (charge_step), не бросок.
+        spawn_grenade(reg, layer, eye, dir,
+                      static_cast<PropId>(def->thrownPropId),
+                      def->projSpeedMmps, thrower,
+                      static_cast<std::uint16_t>(def->fuseDs) * 100u, tick,
+                      def->channel);
+        gh.cooldownMs = def->cooldownMs; // темп СВОЕЙ руки
+        ++pr.shots;
+        ++thrown;
     }
-    if (!paid) return 0;
-
-    const CameraTag& cam = reg.get<const CameraTag>(thrower);
-    const Transform& tr = reg.get<const Transform>(thrower);
-    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
-                   tr.pos.z + cam.eyeOffset.z};
-    // Straight down the look ray, and DELIBERATELY not lofted. An automatic upward
-    // arc would be the aimbot `Projectile::gravityPct` exists to refuse, one axis
-    // over: the player would be handed a throw he did not aim. Look up to throw far,
-    // look at your feet to throw short — the arc is gravity's, and the aim is yours.
-    const vec3 dir = camera_forward(cam.yaw, cam.pitch);
-
-    spawn_grenade(reg, layer, eye, dir,
-                  static_cast<PropId>(def->thrownPropId), def->projSpeedMmps,
-                  thrower, static_cast<std::uint16_t>(def->fuseDs) * 100u,
-                  tick, def->channel);
-
-    // NO NoiseField — a throw is nearly silent; what a floor hears is the
-    // detonation, three seconds later and somewhere else, published by
-    // `charge_step` ([noise.h] blast_noise). `tick` взводит фитиль
-    // (ChargeArmed.atTick — абсолютный сим-тик).
-    pr.throwCooldownMs = def->cooldownMs; // своя рука — свой темп
-    ++pr.shots;
-    return 1;
+    return thrown;
 }
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,

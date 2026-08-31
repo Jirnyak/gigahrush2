@@ -184,9 +184,8 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq = nullptr);
 // crude stand-in for "how much of the room does this remove" — same spirit as
 // `ranged_dps`, and just as replaceable by a selection UI.
 //
-// `eq` non-null — предпочтение РЕШЕНИЯ (чистка клавиш 2026-08-28: «grenade —
-// слот оружия»): если в слоте оружия лежит МЕТАТЕЛЬНОЕ, бросается именно оно;
-// иначе — скан сумки, как раньше (путь консольной команды `grenade`).
-ItemId equipped_throwable(const Inventory& inv, const Equipped* eq = nullptr);
+// Путь БЕЗ решателя (консольная `grenade`); выбор руки — в
+// player_throw_step («рука бросает своё», приоритетов нет по построению).
+ItemId equipped_throwable(const Inventory& inv);
 
 } // namespace giga::game

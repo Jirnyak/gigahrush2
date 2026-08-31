@@ -3737,19 +3737,16 @@ static void test_grenade() {
         CHECK(equipped_ranged(bag) == rifle);          // ...even beside a worse gun
         CHECK(equipped_throwable(bag) == gren);
 
-        // ГРАНАТА В СЛОТЕ ОРУЖИЯ (вторая половина чистки клавиш 2026-08-28,
-        // построена 2026-08-31 по находке владельца «надевается и не
-        // кидается»): решение игрока в Equipped сильнее скана сумки — и
-        // строго комплементарно пикеру огнестрела: граната в слоте НЕ
-        // делает руку стволом, ствол в слоте НЕ делает её метательной
-        // (бросок тогда падает на скан сумки — путь консольной команды).
+        // ГРАНАТА В РУКЕ (two-hands.md, закон владельца: «рука несёт и
+        // делает то, чем экипирована»): граната в руке НЕ делает её
+        // стволом — пикер огнестрела видит только настоящие стволы обеих
+        // рук; выбор метательного живёт в player_throw_step (рука бросает
+        // СВОЁ), приоритетов между руками нет по построению.
         Equipped eq{};
-        CHECK(equip_item(bag, eq, 0)); // слот оружия = граната
-        CHECK(equipped_ranged(bag, &eq) == kInvalidItem);
-        CHECK(equipped_throwable(bag, &eq) == gren);
-        CHECK(equip_item(bag, eq, 1)); // слот оружия = ствол
+        CHECK(equip_hand(bag, eq, 0, /*right=*/true)); // ПКМ = граната
+        CHECK(equipped_ranged(bag, &eq) == kInvalidItem); // граната не ствол
+        CHECK(equip_item(bag, eq, 1)); // ЛКМ = ствол
         CHECK(equipped_ranged(bag, &eq) == rifle);
-        CHECK(equipped_throwable(bag, &eq) == gren); // фолбэк на сумку
     }
 
     // A hollow room to work in: floors are dense interiors, and a grenade in a solid
@@ -4027,7 +4024,7 @@ static void test_grenade() {
         cam.pitch = -1.5707f;
 
         Inventory& inv = pool.inventory(tid);
-        inv.slots[0] = ItemSlot{gren, 2};
+        inv.slots[0] = ItemSlot{gren, 3};
 
         // One idle melee pass, exactly as the app runs every tick, because that is
         // what attaches `PlayerMelee` lazily. The kill counter the HUD prints lives
@@ -4038,20 +4035,42 @@ static void test_grenade() {
         CHECK(reg.all_of<PlayerMelee>(me));
         CHECK(reg.get<PlayerMelee>(me).kills == 0);
 
-        // РУКИ НЕЗАВИСИМЫ (two-hands.md, закон владельца 2026-08-31): бросок
-        // гейтится СВОИМ throwCooldownMs, ствольный cooldownMs не делит и не
-        // трогает — «палишь очередью с одной, кидаешь другой». Старый пин
-        // «shared cooldown» перевёрнут этой строкой.
-        CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false, 49u) == 0);
-        CHECK(player_throw_step(reg, pool, layer, true, 49u) == 1);
-        CHECK(player_throw_step(reg, pool, layer, true, 49u) == 0); // cooldown
+        // РУКА НЕСЁТ И ДЕЛАЕТ ТО, ЧЕМ ЭКИПИРОВАНА (закон владельца
+        // 2026-08-31): спуск руки бросает предмет ЕЁ ячейки и платит
+        // кулдаун СВОЕЙ руки; вторая рука не задета. Сначала — ПКМ-рука с
+        // экипированной гранатой: wantL ничего не бросает (ЛКМ пуста),
+        // wantR бросает и занимает ПКМ.
+        {
+            Equipped& teq = reg.get_or_emplace<Equipped>(me);
+            CHECK(equip_hand(inv, teq, 0, /*right=*/true));
+            CHECK(player_throw_step(reg, pool, layer, /*L*/ true, false,
+                                    false, 40u) == 0); // ЛКМ пуста — тишина
+            CHECK(player_throw_step(reg, pool, layer, false, /*R*/ true,
+                                    false, 40u) == 1);
+            CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs ==
+                  gdef.cooldownMs); // темп ПКМ
+            CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs == 0);
+            reg.get<PlayerRanged>(me).hand[1].cooldownMs = 0; // стенд дальше
+            unequip_slot(teq, EquipSlot::Tool);
+            // Улетевший ПКМ-заряд рвётся вдали от стенда — дальнейшие пины
+            // (flying == 1 и т.д.) считают только следующий бросок.
+            for (auto e : reg.view<const Charge>()) reg.destroy(e);
+        }
+        // Путь без решателя (wantBag) — скан сумки, рука ЛКМ (консоль).
+        CHECK(player_throw_step(reg, pool, layer, false, false, false,
+                                49u) == 0);
+        CHECK(player_throw_step(reg, pool, layer, false, false, true,
+                                49u) == 1);
+        CHECK(player_throw_step(reg, pool, layer, false, false, true,
+                                49u) == 0); // рука ЛКМ занята
         // ONE grenade left the bag — the weapon IS the round.
         std::uint16_t left = 0;
         for (const ItemSlot& sl : inv.slots)
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
-        CHECK(reg.get<PlayerRanged>(me).throwCooldownMs == gdef.cooldownMs);
-        CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs == 0); // ствол не задет
+        CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs ==
+              gdef.cooldownMs); // темп руки ЛКМ
+        CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs == 0); // ПКМ свободна
         // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
         // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;

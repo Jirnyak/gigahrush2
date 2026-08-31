@@ -39,21 +39,11 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
     return best;
 }
 
-ItemId equipped_throwable(const Inventory& inv, const Equipped* eq) {
-    // Решение игрока сильнее скана сумки ([ranged_table.h]): метательное в
-    // слоте оружия бросается именно оно — вторая половина «grenade — слот
-    // оружия» из чистки клавиш 2026-08-28, до 2026-08-31 не построенная
-    // (клавишу Z сняли, а слот-путь не подключили — гранаты «надевались»
-    // и не кидались, находка владельца).
-    if (eq) {
-        // ДВЕ РУКИ: метательное ищется в обеих, ПКМ первой (граната в ПКМ
-        // при стволе в ЛКМ — канонический лоадаут владельца).
-        for (int r = 0; r < 2; ++r) {
-            const ItemId chosen = equipped_hand(inv, *eq, r == 0);
-            if (ranged_for_item(chosen) && ranged_is_thrown(chosen))
-                return chosen;
-        }
-    }
+ItemId equipped_throwable(const Inventory& inv) {
+    // Чистый скан сумки — путь БЕЗ решателя (консольная `grenade`,
+    // фикстуры). Выбор руки живёт в player_throw_step: рука бросает СВОЁ,
+    // приоритетов между руками нет по построению (владелец 2026-08-31:
+    // «не надо никаких приоритетов»).
     ItemId best = kInvalidItem;
     float bestScore = 0.0f;
     for (const ItemSlot& sl : inv.slots) {

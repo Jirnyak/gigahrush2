@@ -6183,9 +6183,13 @@ int main(int argc, char** argv) {
                                     (hr ? thrownR : thrownL) = thr;
                                 }
                         }
-                if (((thrownL && attackHeld) || (thrownR && rmbHeld)) &&
-                    shell.playing())
-                    throwWanted = true;
+                // Рука несёт и делает то, чем экипирована: спуск руки с
+                // метательным — бросок ЕЁ предмета (закон владельца,
+                // приоритетов нет по построению). throwWanted остаётся
+                // путём консоли/харнесса (скан сумки).
+                const bool throwHandL =
+                    thrownL && attackHeld && shell.playing();
+                const bool throwHandR = thrownR && rmbHeld && shell.playing();
                 // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): верб занятой руки —
                 // «бросить несомое», по фронту нажатия её кнопки; та же
                 // скорость 6 м/с, что у консольной команды carry.
@@ -6231,11 +6235,9 @@ int main(int argc, char** argv) {
                 // above owns its single decrement ([combat.h] player_throw_step).
                 // Consumed here rather than at the request site so the throw lands on
                 // a sim tick like every other action, not on a frame.
-                if (throwWanted) {
-                    throwWanted = false;
-                    game::player_throw_step(reg, pool, activeLayer, true,
-                                            simTick);
-                }
+                game::player_throw_step(reg, pool, activeLayer, throwHandL,
+                                        throwHandR, throwWanted, simTick);
+                throwWanted = false;
                 const auto profCombatT0 = prof_now();
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,

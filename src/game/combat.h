@@ -448,9 +448,6 @@ struct PlayerRanged {
     GunHand hand[2];            // [0] = ЛКМ, [1] = ПКМ
     std::uint32_t shots = 0;    // cumulative; survives possession like kills does
     std::uint32_t hits = 0;
-    // Бросок — свой таймер (руки независимы); старится в player_ranged_step,
-    // ровно один декремент (дефект 3 референса).
-    std::uint16_t throwCooldownMs = 0;
 };
 
 // The camera holder's swing state. Attached lazily by player_melee_step, so
@@ -797,32 +794,26 @@ Entity spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
                      std::uint16_t fuseMs, std::uint64_t tick,
                      std::uint8_t channel = 0);
 
-// The camera holder throws the best explosive in its inventory. Sibling of
-// player_ranged_step, and NOT a branch inside it, because a throw and a shot agree
-// on almost nothing: there is no magazine (the weapon IS the ammunition, so it
-// leaves the inventory one item per throw), there is no reload, and the spread cone
-// belongs to a barrel rather than to an arm.
+// Бросок метательного. Sibling of player_ranged_step, and NOT a branch
+// inside it: у броска нет ни магазина (предмет — сам себе боеприпас), ни
+// перезарядки, ни конуса разлёта.
 //
-// It DOES share `PlayerRanged::cooldownMs`, and that is a decision rather than
-// reuse: a body has one pair of hands. Sharing the timer means you cannot throw a
-// grenade and empty a magazine in the same instant, which is what a second
-// independent cooldown would have quietly allowed.
+// ДВЕ РУКИ (закон владельца 2026-08-31): «рука несёт и делает то, чем
+// экипирована» — выбора верба НЕТ по построению: предмет в ячейке руки и
+// есть её действие. wantL/wantR — спуски рук; рука с метательным бросает
+// его и платит кулдаун СВОЕЙ руки (GunHand.cooldownMs = «рука занята
+// действием», отдельного throw-таймера нет — стреляющая рука бросить не
+// может физически, у неё ствол в пальцах). wantBag — путь без решателя
+// (консольная команда `grenade`, старые фикстуры): лучший заряд скана
+// сумки, темп руки ЛКМ.
 //
-// Because the cooldown is shared, the decrement must NOT be repeated here — it is
-// `player_ranged_step`'s, at the top, exactly once per tick (defect 3). Call this
-// AFTER player_ranged_step in the sim order, on the same tick, or the timer runs at
-// half speed on any tick a throw is wanted.
+// Таймеры стареют в player_ranged_step (ровно один декремент, дефект 3) —
+// звать ПОСЛЕ него тем же тиком. `tick` взводит фитиль (ChargeArmed).
 //
-// No `dt`, no `NoiseField` — параметры, которых бросок не читает. A throw ages
-// no timer of its own, needs no random seed (there is no spread cone: a thrown
-// weight goes where you are looking), and is nearly silent; what a floor hears
-// is the detonation, published by `charge_step` three seconds later and
-// somewhere else. `tick` появился 2026-08-22 вместе с фитилём: ChargeArmed
-// хранит абсолютный сим-тик детонации, и взводит его бросающий.
-//
-// Returns 1 when a grenade actually left the hand.
+// Returns число покинувших руки зарядов.
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow, std::uint64_t tick);
+                                bool wantL, bool wantR, bool wantBag,
+                                std::uint64_t tick);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.

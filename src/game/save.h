@@ -185,9 +185,10 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // (позиционный ключ, коллизия ~13% Residential) мёртв вместе с матчингом —
 // restore не матчит, он спавнит из самодостаточных записей. Header-поле
 // containerCount осталось в 64-байтовой шапке и обязано быть 0.
-// v21 (2026-08-31, две руки): PlayerRanged = GunHand[2] (свой магазин/
-// затвор/кулдаун на руку — акимбо-агностика владельца) + throwCooldownMs.
-inline constexpr std::uint32_t kSaveVersion = 21u;
+// v22 (2026-08-31, две руки): PlayerRanged = GunHand[2] (свой магазин/
+// затвор/кулдаун на руку — акимбо-агностика владельца). Отдельного
+// throw-таймера НЕТ: кулдаун руки — «рука занята действием».
+inline constexpr std::uint32_t kSaveVersion = 22u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -315,11 +316,11 @@ static_assert(kRpgWire == 12);
 // weapon = 8 Б × 2) + shots/hits + throwCooldownMs (бросок — свой таймер,
 // руки независимы). 16 → 26.
 inline constexpr std::size_t kRangedWire =
-    2 * (2 + 2 + 2 + 2) + 4 + 4 + 2;  // hand[2] + shots, hits, throwCd = 26
-static_assert(kRangedWire == 26);
+    2 * (2 + 2 + 2 + 2) + 4 + 4;  // hand[2] + shots, hits = 24
+static_assert(kRangedWire == 24);
 inline constexpr std::size_t kCombatSaveWire =
-    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 31
-static_assert(kCombatSaveWire == 31);
+    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 29
+static_assert(kCombatSaveWire == 29);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
 // 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
 inline constexpr std::size_t kStatusWire =
