@@ -617,6 +617,48 @@ static void test_humanoid_segments_fall_and_cleanup() {
     CHECK(left == 0u);
 }
 
+// СТИКЦИЯ (§64): НАСТОЯЩИЙ труп-гуманоид (боксы-сегменты из prop_forms.csv
+// + жёсткие штанги) обязан ДОСТИЧЬ сна на полу. До трения покоя это было
+// невозможно: штанги дерутся с контактами 16 раз за тик, тело дрожало выше
+// порога сна вечно (noisy 1241/1335 в игре, rigid 15.8 мс/кадр навсегда
+// после обрушения). Мутация «kStictionRate = 0» обязана ронять ровно
+// CHECK-и сна (верёвочная цепь world_test для полярности НЕ годится —
+// провисшие звенья засыпают и без стикции, проверено прогоном мутации).
+static void test_humanoid_reaches_sleep() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    Entity root = reg.create();
+    reg.emplace<Transform>(
+        root, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(root, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(root, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
+    game::spawn_form_segments(reg, root, game::FormId::Humanoid,
+                              vec3{0.4f, 0.4f, 0.9f}, 70.0f,
+                              game::kFleshRestitution, game::kFleshFriction);
+
+    // 12 секунд: падение + оседание + стикция (~0.2 с зоны) + порог сна
+    // (0.26 с) — запас многократный. До стикции не хватало НИКАКОГО времени.
+    for (int i = 0; i < 12 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    std::uint32_t segs = 0, asleep = 0;
+    for (auto e : reg.view<RigidBody>()) {
+        ++segs;
+        if (reg.get<RigidBody>(e).asleep) ++asleep;
+    }
+    CHECK(segs == 4u);   // таз + 3 сегмента формы
+    CHECK(asleep == segs); // труп ДОСТИГ тишины — §64 закрыт по классу
+}
+
 // Инкремент 9 рагдолл-эпика: ПЕРЕНОСКА. Несомое тело не падает, следует за
 // носителем и наследует его скорость; бросок возвращает в динамику и добавляет
 // скорость поверх. Путь один на всех носителей (S7) — тест гоняет обычную
@@ -1413,6 +1455,7 @@ void test_props_game_all() {
     test_anchor_validate_skips_solid_support();
     test_detached_prop_is_rigid_body();
     test_humanoid_segments_fall_and_cleanup();
+    test_humanoid_reaches_sleep();
     test_carry_follows_and_throw_inherits();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();

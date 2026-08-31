@@ -691,7 +691,12 @@ if(GIGA_BUILD_TESTS)
         # целиком порциями (маски стоят), башня на перколирующей плите
         # оправдана, грязь даёт пересуд. Мутация «перколяция слепа» — 6 FAIL
         # (кольцо И башня рушатся), прогнана и откачена = 23609.
-        PASS_REGULAR_EXPRESSION "23609/23609 checks passed"
+        # 23609 + 8 on 2026-08-31 (§64): test_rigid_chain_sleeps_on_floor —
+        # верёвочная цепь на полу спит (4×2 CHECK). ЧЕСТНОСТЬ: мутация
+        # «стикция = 0» этот тест НЕ роняет (провисшие верёвки засыпают и
+        # без неё) — несущий гейт §64 живёт в game_test
+        # (test_humanoid_reaches_sleep, настоящий труп) = 23617.
+        PASS_REGULAR_EXPRESSION "23617/23617 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -1501,7 +1506,14 @@ if(GIGA_BUILD_TESTS)
     # (выброс) + 3 (вытеснение эпохи) + 2 (вытеснение старейшего) CHECK-сайтов,
     # все вне циклов. Мутации прогнаны: «median = tmp[0]» — 1 FAIL (:31),
     # «peak = tmp[0]» — 3 FAIL (:33,:44,:66) = 222301.
-        PASS_REGULAR_EXPRESSION "game_test: 222301 checks, 0 failures")
+    # 222301 + 2 on 2026-08-31 (§64): test_humanoid_reaches_sleep —
+    # НАСТОЯЩИЙ труп-гуманоид (боксы + штанги prop_forms.csv) обязан
+    # достичь сна на полу. Мутации прогнаны ПОШТУЧНО: «kJointSlop = 0» —
+    # FAIL (Baumgarte воюет за миллиметры, предельный цикл 0.1-0.2 м/с);
+    # «wakePass будит просто бодрым» — FAIL (пинг-понг сбросов сна);
+    # «kStictionRate = 0» — PASS (стикция для трупов НЕ несущая, остаётся
+    # страховочным стоком по решению владельца) = 222303.
+        PASS_REGULAR_EXPRESSION "game_test: 222303 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

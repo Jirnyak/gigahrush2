@@ -142,6 +142,13 @@ constexpr float kRollCrr = 0.03f;
 // тормозится ни Кулоном (v_контакта = 0), ни качением — гасим экспонентой с
 // той же постоянной, что качение.
 constexpr float kSpinDamp = 3.0f; // 1/с
+// Стикция (§64): темп трения покоя. ×µ пары даёт эффективную скорость
+// гашения; 20/с при µ≈0.55 — десятикратное затухание за ~0.2 с (мягко,
+// по просьбе владельца: «не вечно крутились, а через некоторое время»).
+constexpr float kStictionRate = 20.0f; // 1/с, множится на µ пары
+// Люфт сустава (§64, вывод у solve_link): 1 см — невидим глазом на
+// сегментах 0.3-0.5 м, на порядок больше дрейфа тика.
+constexpr float kJointSlop = 0.01f; // м
 
 // Линки: итерации sequential impulses на подшаг (цепь из ~8 звеньев сходится
 // за столько же проходов — по звену за проход в худшем случае) и
@@ -239,8 +246,20 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             const bool aAsleep = ra.asleep;
             const bool bAsleep = rbB ? rbB->asleep : true;
             if (aAsleep != bAsleep) {
-                if (aAsleep) { ra.asleep = false; ra.sleepTicks = 0; }
-                else if (rbB) { rbB->asleep = false; rbB->sleepTicks = 0; }
+                // Будит ДВИЖУЩАЯСЯ сторона — как проза выше и обещала;
+                // код же будил ПРОСТО БОДРОЙ. Почти неподвижный бодрый
+                // сосед вечно сбрасывал сон партнёра — сегменты одного
+                // трупа копили sleepTicks 4/16/22 и никогда не доходили
+                // до 32 все разом (пинг-понг сбросов, §64). Порог — тот
+                // же kWakeV2, что у всех пробуждений.
+                const RigidBody& mover = aAsleep ? *rbB : ra;
+                const vec3& mv = aAsleep ? vb->v : va.v;
+                const float mwr2 = dot(mover.w, mover.w) * mover.radius *
+                                   mover.radius;
+                if (dot(mv, mv) >= kWakeV2 || mwr2 >= kWakeV2) {
+                    if (aAsleep) { ra.asleep = false; ra.sleepTicks = 0; }
+                    else if (rbB) { rbB->asleep = false; rbB->sleepTicks = 0; }
+                }
             }
         }
         if (ra.asleep && (!rbB || rbB->asleep)) return;
@@ -273,6 +292,17 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         const vec3 dir = d * (1.0f / dist);
         const float C = dist - jl.restLen;
         if (jl.rope && C <= 0.0f) return; // верёвка не толкает
+        // ЛЮФТ СУСТАВА (§64): Baumgarte не воюет за последние миллиметры.
+        // Лежащий труп не может удовлетворить restLen точно (сегменты на
+        // полу), и подтяжка β·C/h вечно превращала остаток ошибки в
+        // скорость — контакт отбивал, предельный цикл жил на 0.1-0.2 м/с
+        // (замер: труп не спал НИКОГДА, §64). Внутри люфта позиционный
+        // член ноль, импульс решает только vRel — то есть ЧИСТО ГАСИТ
+        // относительное движение пары, и дрожь умирает; стикция и сон
+        // доедают остаток. 1 см: меньше видимого зазора сегментов, на
+        // порядок больше позиционного дрейфа тика (g·h·тик ≈ 0.6 мм).
+        const float Cb = C > kJointSlop    ? C - kJointSlop
+                         : (C < -kJointSlop ? C + kJointSlop : 0.0f);
 
         const vec3 vpA = va.v + cross(ra.w, rcA);
         const vec3 vpB =
@@ -286,8 +316,9 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             kB = imB + iiB * dot(rxB, rxB);
         }
         if (kA + kB < 1e-9f) return; // обе стороны кинематичны/мировые
-        // Импульс с Baumgarte-подтяжкой позиционной ошибки: β·C/h.
-        const float j = -(vRel + kJointBias * C / h) / (kA + kB);
+        // Импульс с Baumgarte-подтяжкой позиционной ошибки: β·C/h (C — за
+        // вычетом люфта, см. выше).
+        const float j = -(vRel + kJointBias * Cb / h) / (kA + kB);
         // j<0 при растяжении: B тянется к A, A — к B.
         va.v += dir * (-j * imA);
         ra.w += cross(rcA, dir * (-j)) * iiA;
@@ -735,6 +766,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
 
             bool contactThisStep = false;
             vec3 contactN{0.0f, 0.0f, 0.0f};
+            float contactMu = 0.0f; // сильнейшее µ пары подшага — стикция
 
             for (int i = 0; i < nSph; ++i) {
                 vec3 off{0.0f, 0.0f, 0.0f};
@@ -776,6 +808,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     rb.restitution, restitution_from_hardness(surfH));
                 const float muPair = pair_friction(
                     rb.friction, friction_from_hardness(surfH));
+                contactMu = std::max(contactMu, muPair);
 
                 // Обобщённый нормальный импульс (sequential impulses):
                 // k_n = 1/m + |r_c×n|²/I — угловая податливость контакта.
@@ -820,6 +853,28 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 // Сверление: гасим только компоненту w вдоль нормали.
                 const float wn = dot(rb.w, contactN);
                 rb.w += contactN * (wn * (std::exp(-kSpinDamp * h) - 1.0f));
+
+                // ТРЕНИЕ ПОКОЯ (стикция, §64): ниже порога пробуждения
+                // контакт съедает остаток линейной И угловой скорости —
+                // тело ДОСТИГАЕТ тишины и засыпает существующим законом.
+                // Дырка была ровно здесь: суставы цепи впрыскивают
+                // микро-энергию 2×8 раз за тик, стока в контакте не было —
+                // труп дрожал выше порога сна вечно (замер §64:
+                // noisy 1241/1335, rigid 15.8 мс/кадр). Выше порога — ни
+                // одного бита: полёт, удар, качение нетронуты («как только
+                // толчок — сразу честный сим», закон владельца 2026-08-31).
+                // Темп — ОТ МАТЕРИАЛЬНОЙ ПАРЫ: то же µ, что у кулонова
+                // трения (щебень глохнет быстрее стали, ни одной новой
+                // константы материала). kStictionRate выведен мягким по
+                // просьбе владельца: при µ бетон-по-бетону (~0.55)
+                // остаточная скорость падает ×10 за ~0.2 с — в зоне
+                // 0.8 мм/тик глазу это уже неподвижный предмет.
+                if (dot(vel.v, vel.v) < kWakeV2 &&
+                    dot(rb.w, rb.w) * rb.radius * rb.radius < kWakeV2) {
+                    const float f = std::exp(-kStictionRate * contactMu * h);
+                    vel.v = vel.v * f;
+                    rb.w = rb.w * f;
+                }
             }
 
             rb.q = quat_integrate(rb.q, rb.w, h);

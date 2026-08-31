@@ -486,6 +486,75 @@ static void test_rigid_chain_hangs_and_cuts() {
     CHECK(stillConnected);
 }
 
+// СТИКЦИЯ (§64): линк-цепь, УПАВШАЯ на пол, обязана ДОСТИЧЬ сна. До
+// демпфера трения покоя это было невозможно по построению: суставы
+// впрыскивают микро-энергию 16 раз за тик, стока в контакте не было —
+// осевшая цепь (труп = та же механика: 4 тела + 3 линка) дрожала выше
+// порога сна вечно (noisy 1241/1335 в игре, rigid 15.8 мс/кадр навсегда
+// после обрушения). Мутация «kStictionRate = 0» роняет ровно CHECK-и
+// сна — гейт закрывает класс, а не симптом.
+static void test_rigid_chain_sleeps_on_floor() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    constexpr int kN = 4;
+    const float radius = 0.15f;
+    const float restLen = 3.0f * radius;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    Entity balls[kN];
+    Entity prev = entt::null;
+    for (int i = 0; i < kN; ++i) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f;
+        rb.friction = 0.6f;
+        Entity ball = reg.create();
+        // Лежит горизонтально чуть над полом, лёгкий сдвиг по y — падение
+        // несимметрично, как настоящий труп.
+        reg.emplace<Transform>(
+            ball,
+            Transform{vec3{(8.0f + 0.5f * static_cast<float>(i)) * kCellSize,
+                           10.0f * kCellSize +
+                               0.03f * static_cast<float>(i),
+                           floorTop + 0.6f},
+                      g});
+        reg.emplace<Velocity>(ball);
+        reg.emplace<RigidBody>(ball, rb);
+        balls[i] = ball;
+        if (i > 0) {
+            Entity link = reg.create();
+            JointLink jl;
+            jl.a = ball;
+            jl.b = prev;
+            jl.restLen = restLen;
+            jl.rope = true;
+            reg.emplace<JointLink>(link, jl);
+        }
+        prev = ball;
+    }
+
+    // 8 секунд: падение ~0.35 с + оседание; сон обязан наступить с большим
+    // запасом (стикция глушит зону за ~0.2 с, порог сна — ещё 0.26 с).
+    for (int i = 0; i < 8 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    for (int i = 0; i < kN; ++i) {
+        const auto& rb = reg.get<RigidBody>(balls[i]);
+        CHECK(rb.asleep); // цепь ДОСТИГЛА тишины — §64 закрыт по классу
+        const float z = reg.get<Transform>(balls[i]).pos.z;
+        CHECK(z < floorTop + 0.5f); // уснула НА полу, а не зависнув
+    }
+}
+
 // Инкремент 4 ([markoaudit/plans/ragdoll.md]): шар-шар через клеточный
 // биннинг. Падающий шар БУДИТ спящего касанием (куча оживает), пара
 // разрешается импульсом (не проходят друг сквозь друга): идеально соосная
@@ -1395,6 +1464,7 @@ int main() {
     test_rigid_ball_settles_and_sleeps();
     test_rigid_box_lies_flat();
     test_rigid_chain_hangs_and_cuts();
+    test_rigid_chain_sleeps_on_floor();
     test_rigid_ball_ball_wakes_and_stacks();
     test_rigid_prop_hits_agent_and_agent_kicks();
     test_rigid_material_pair_bounce();
