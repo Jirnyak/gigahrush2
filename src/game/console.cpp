@@ -943,8 +943,30 @@ bool cmd_carry(ConsoleContext& ctx, int argc, const char* const* argv,
                           static_cast<double>(throwSpeed));
         return true;
     }
+    // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): свободна = ни экипировки, ни уже
+    // несомого. Маску выводит каллер — ядро Equipped не знает.
+    std::uint8_t freeHands = 0x3u;
+    if (const auto* nre = ctx.ecs->try_get<NpcRef>(ctx.player))
+        if (const auto* peq = ctx.ecs->try_get<Equipped>(ctx.player);
+            peq && ctx.pool->valid(nre->id)) {
+            const Inventory& pin = ctx.pool->inventory(nre->id);
+            if (equipped_hand(pin, *peq, false) != kInvalidItem)
+                freeHands &= ~0x1u;
+            if (equipped_hand(pin, *peq, true) != kInvalidItem)
+                freeHands &= ~0x2u;
+        }
+    for (auto ce : ctx.ecs->view<CarriedBy>()) {
+        const CarriedBy& cb = ctx.ecs->get<CarriedBy>(ce);
+        if (cb.carrier == ctx.player)
+            freeHands &= static_cast<std::uint8_t>(~(1u << cb.hand));
+    }
+    if (freeHands == 0) {
+        if (out && cap) put(out, cap, "carry: обе руки заняты");
+        return false;
+    }
     // Дотянуться на 2.5 м — та же дистанция, что у обычной интеракции.
-    const Entity taken = carry_nearest_body(*ctx.ecs, ctx.player, fwd, 2.5f);
+    const Entity taken =
+        carry_nearest_body(*ctx.ecs, ctx.player, fwd, 2.5f, freeHands);
     if (taken == entt::null) {
         if (out && cap) put(out, cap, "carry: nothing within reach");
         return false;

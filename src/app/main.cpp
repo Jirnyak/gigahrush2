@@ -790,10 +790,14 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     if (pool && reg.valid(player)) {
         const game::NpcRef* nr = reg.try_get<game::NpcRef>(player);
         const game::Equipped* eq = reg.try_get<game::Equipped>(player);
-        if (nr && eq && pool->valid(nr->id)) {
-            const game::ItemId tool = game::equipped_item(
-                pool->inventory(nr->id), *eq, game::EquipSlot::Tool);
-            if (tool != game::kInvalidItem) {
+        if (nr && eq && pool->valid(nr->id))
+            // ДВЕ РУКИ (two-hands.md, верб «светить»): светящий предмет
+            // светит из ТОЙ руки, где лежит — фонарик на ЛКМ или ПКМ, или
+            // по одному в каждой. Параллакс руки зеркален по стороне.
+            for (int hIdx = 0; hIdx < 2; ++hIdx) {
+                const game::ItemId tool = game::equipped_hand(
+                    pool->inventory(nr->id), *eq, hIdx == 1);
+                if (tool == game::kInvalidItem) continue;
                 const game::ItemDef& d = game::item_def(tool);
                 if (d.lightRadiusMm != 0 && d.lightIntensityE3 != 0) {
                     // Фонарик — В РУКЕ, не в глазу. Свет с нулевым параллаксом
@@ -805,10 +809,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                     // край луча; камера просто рендерит. NPC получат ту же
                     // руку от своего Transform/facing.
                     const vec3 right = normalize(cross(camForward, camUp));
+                    // ПКМ-рука справа (+0.28), ЛКМ — слева (−0.28).
+                    const float side = hIdx == 1 ? 0.28f : -0.28f;
                     const vec3 handPos = vec3{
-                        camPos.x + right.x * 0.28f - camUp.x * 0.30f + camForward.x * 0.10f,
-                        camPos.y + right.y * 0.28f - camUp.y * 0.30f + camForward.y * 0.10f,
-                        camPos.z + right.z * 0.28f - camUp.z * 0.30f + camForward.z * 0.10f};
+                        camPos.x + right.x * side - camUp.x * 0.30f + camForward.x * 0.10f,
+                        camPos.y + right.y * side - camUp.y * 0.30f + camForward.y * 0.10f,
+                        camPos.z + right.z * side - camUp.z * 0.30f + camForward.z * 0.10f};
                     const float radius =
                         static_cast<float>(d.lightRadiusMm) * 0.001f;
                     const float intensity =
@@ -828,7 +834,6 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                     }
                 }
             }
-        }
     }
 
     // GIGA_LIGHT_DBG=1: строка раз в ~2 с — кто из пропов-светов жив и куда
@@ -6181,10 +6186,36 @@ int main(int argc, char** argv) {
                 if (((thrownL && attackHeld) || (thrownR && rmbHeld)) &&
                     shell.playing())
                     throwWanted = true;
-                // Пустая (без верб-предмета) рука бьёт — любой кнопкой.
+                // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): верб занятой руки —
+                // «бросить несомое», по фронту нажатия её кнопки; та же
+                // скорость 6 м/с, что у консольной команды carry.
+                bool carriedL = false, carriedR = false;
+                for (auto ce : reg.view<CarriedBy>()) {
+                    const auto& cb = reg.get<CarriedBy>(ce);
+                    if (cb.carrier != player) continue;
+                    (cb.hand != 0 ? carriedR : carriedL) = true;
+                }
+                {
+                    static bool prevAtk = false, prevRmb = false;
+                    const bool atkEdge = attackHeld && !prevAtk;
+                    const bool rmbEdge = rmbHeld && !prevRmb;
+                    prevAtk = attackHeld;
+                    prevRmb = rmbHeld;
+                    if (shell.playing() && (carriedL || carriedR) &&
+                        reg.valid(player)) {
+                        const auto& pcam = reg.get<CameraTag>(player);
+                        const vec3 pfwd =
+                            camera_forward(pcam.yaw, pcam.pitch);
+                        if (carriedL && atkEdge)
+                            game::drop_carried(reg, player, pfwd, 6.0f, 0);
+                        if (carriedR && rmbEdge)
+                            game::drop_carried(reg, player, pfwd, 6.0f, 1);
+                    }
+                }
+                // Пустая (без верб-предмета и без пропа) рука бьёт.
                 const bool meleeWanted =
-                    (attackHeld && !gunL && !thrownL) ||
-                    (rmbHeld && !gunR && !thrownR);
+                    (attackHeld && !gunL && !thrownL && !carriedL) ||
+                    (rmbHeld && !gunR && !thrownR && !carriedR);
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step. Nothing is dropped for a bake any more — the
                 // worker holds a snapshot, not the grid ([game/rebake.h]).
@@ -7857,16 +7888,30 @@ int main(int argc, char** argv) {
                         }
                         break;
                     }
-                    case InvUiRequest::Kind::Equip:
+                    case InvUiRequest::Kind::Equip: {
                         // Адрес руки несёт заявка (two-hands.md): Weapon =
                         // ЛКМ, Tool = ПКМ; броня — по def, как раньше.
-                        if (game::hand_accepts(r.eqSlot)
-                                ? game::equip_hand(pinv, peq, r.slot,
-                                                   r.eqSlot ==
-                                                       game::EquipSlot::Tool)
-                                : game::equip_item(pinv, peq, r.slot))
+                        // Рука, занятая НЕСОМЫМ пропом, экипировку не берёт
+                        // (эмерджентность владельца: проп занимает руку).
+                        bool handBusy = false;
+                        if (game::hand_accepts(r.eqSlot)) {
+                            const std::uint8_t h =
+                                r.eqSlot == game::EquipSlot::Tool ? 1u : 0u;
+                            for (auto ce : reg.view<CarriedBy>()) {
+                                const auto& cb = reg.get<CarriedBy>(ce);
+                                if (cb.carrier == player && cb.hand == h)
+                                    handBusy = true;
+                            }
+                        }
+                        if (!handBusy &&
+                            (game::hand_accepts(r.eqSlot)
+                                 ? game::equip_hand(
+                                       pinv, peq, r.slot,
+                                       r.eqSlot == game::EquipSlot::Tool)
+                                 : game::equip_item(pinv, peq, r.slot)))
                             game::sync_armour(reg, pool, player);
                         break;
+                    }
                     case InvUiRequest::Kind::Unequip:
                         game::unequip_slot(peq, r.eqSlot);
                         game::sync_armour(reg, pool, player);

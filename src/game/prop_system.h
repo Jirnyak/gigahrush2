@@ -319,14 +319,19 @@ void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);
 // (CarriedBy — кинематика в ядре) и бросить с наследованием скорости носителя.
 // `forward` — направление взгляда носителя (game знает камеру, ядро — нет).
 // carry_nearest_body возвращает взятое тело или entt::null.
+// ПРОП ЗАНИМАЕТ РУКУ (two-hands.md, эмерджентность владельца): freeHands —
+// битмаска свободных рук носителя (bit0 = ЛКМ, bit1 = ПКМ), выводит КАЛЛЕР
+// (свободна = ни экипировки, ни несомого; ядро Equipped не знает).
+// 0 = обе заняты, взять нечем — отказ. Берёт младшей свободной.
 Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
-                          float reachM);
+                          float reachM, std::uint8_t freeHands = 0x3);
 
-// Бросить всё, что несёт носитель: снять CarriedBy и добавить бросок
-// `throwSpeed` вдоль `forward` поверх унаследованной скорости носителя.
+// Бросить несомое: снять CarriedBy и добавить бросок `throwSpeed` вдоль
+// `forward` поверх унаследованной скорости носителя. hand: 0/1 — только
+// этой руки (кнопка руки бросает своё), -1 — всё (консольная команда).
 // Возвращает число брошенных тел.
 std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
-                           float throwSpeed);
+                           float throwSpeed, int hand = -1);
 
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus);

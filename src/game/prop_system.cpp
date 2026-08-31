@@ -1142,7 +1142,8 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
 
 
 Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
-                          float reachM) {
+                          float reachM, std::uint8_t freeHands) {
+    if ((freeHands & 0x3u) == 0) return entt::null; // обе руки заняты
     if (!reg.valid(carrier) || !reg.all_of<Transform>(carrier))
         return entt::null;
     const Transform& ctr = reg.get<Transform>(carrier);
@@ -1178,17 +1179,21 @@ Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
     CarriedBy cb;
     cb.carrier = carrier;
     cb.offset = fwd * (carrierR + bodyR + 0.1f) + vec3{0.0f, 0.0f, 0.2f};
+    cb.hand = (freeHands & 0x1u) != 0 ? 0u : 1u; // младшая свободная рука
     reg.emplace_or_replace<CarriedBy>(best, cb);
     return best;
 }
 
 std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
-                           float throwSpeed) {
+                           float throwSpeed, int hand) {
     static thread_local std::vector<Entity> dropped;
     dropped.clear();
     auto view = reg.view<CarriedBy>();
     for (auto e : view) {
-        if (view.get<CarriedBy>(e).carrier == carrier) dropped.push_back(e);
+        const CarriedBy& cb = view.get<CarriedBy>(e);
+        if (cb.carrier != carrier) continue;
+        if (hand >= 0 && cb.hand != static_cast<std::uint8_t>(hand)) continue;
+        dropped.push_back(e);
     }
     const vec3 fwd = normalize(forward);
     for (Entity e : dropped) {

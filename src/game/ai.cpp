@@ -1129,8 +1129,32 @@ void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
             equip_item(inv, eq, static_cast<std::uint8_t>(bestArm));
         else
             unequip_slot(eq, EquipSlot::Armor);
-        // TOOL: no scorer yet — nothing consumes a held tool. The cell exists
-        // so the day one does, the decision has a place to land.
+        // ПКМ-РУКА (two-hands.md, NPC = игрок): лучшая граната из сумки —
+        // в правую руку; толпа готова к будущему ИИ-броску (сегодня
+        // гранаты бросает только player_throw_step, но решение уже
+        // записано тем же законом, что у игрока). Лучшая = тот же скоринг,
+        // что у equipped_throwable (масса ВВ).
+        {
+            int bestThr = -1;
+            float bestThrScore = 0.0f;
+            for (int i = 0; i < kInvSlots; ++i) {
+                const ItemSlot& s = inv.slots[i];
+                if (s.item == kInvalidItem || s.count == 0 ||
+                    !item_valid(s.item))
+                    continue;
+                const RangedDef* rd = ranged_for_item(s.item);
+                if (!rd || !ranged_is_thrown(s.item)) continue;
+                const float sc = static_cast<float>(rd->dmg) + 1.0f;
+                if (bestThr < 0 || sc > bestThrScore) {
+                    bestThr = i;
+                    bestThrScore = sc;
+                }
+            }
+            if (bestThr >= 0)
+                equip_hand(inv, eq, static_cast<std::uint8_t>(bestThr), true);
+            else
+                unequip_slot(eq, EquipSlot::Tool); // адрес ПКМ-руки
+        }
 
         // The decision changed what is WORN, so the Armour component must
         // follow now — sync_armour is documented as "call after anything that

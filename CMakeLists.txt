@@ -1526,7 +1526,10 @@ if(GIGA_BUILD_TESTS)
     # ОБЕИХ рук + throwCooldownMs (suite_saveload, +23) и пер-рука чтения
     # в suite_rpg/фикстурах (+2). Провода: kRangedWire 16 -> 26,
     # kSaveFixedWire 1040 -> 1050, пустой сейв 1140 -> 1150 = 222335.
-        PASS_REGULAR_EXPRESSION "game_test: 222335 checks, 0 failures")
+    # 222335 + 7 on 2026-08-31 (проп занимает руку): маска свободных рук
+    # (0 = взять нечем), занятая левая -> берёт правой, бросок чужой руки
+    # не роняет несомое, младшая свободная — левая = 222342.
+        PASS_REGULAR_EXPRESSION "game_test: 222342 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

@@ -691,7 +691,18 @@ static void test_carry_follows_and_throw_inherits() {
     rigid_attach_sphere(reg, ball, r, 20.0f, 0.3f, 0.6f);
 
     const vec3 fwd{1.0f, 0.0f, 0.0f};
+    // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): обе заняты — взять нечем; занята
+    // левая — берёт правой (hand=1); бросок чужой руки не роняет несомое.
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f, 0x0u) ==
+          entt::null);
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f, 0x2u) == ball);
+    CHECK(reg.get<CarriedBy>(ball).hand == 1u); // правая
+    CHECK(game::drop_carried(reg, carrier, fwd, 6.0f, /*hand=*/0) == 0u);
+    CHECK(reg.all_of<CarriedBy>(ball)); // левая рука пуста — ничего не ушло
+    CHECK(game::drop_carried(reg, carrier, fwd, 0.0f, /*hand=*/1) == 1u);
+    reg.get<Velocity>(ball).v = vec3{0.0f, 0.0f, 0.0f};
     CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f) == ball);
+    CHECK(reg.get<CarriedBy>(ball).hand == 0u); // младшая свободная — левая
     CHECK(reg.all_of<CarriedBy>(ball));
 
     // Носитель идёт вперёд, тело обязано ехать с ним и не падать.
