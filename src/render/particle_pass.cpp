@@ -1,6 +1,7 @@
 #include "render/particle_pass.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -44,7 +45,32 @@ struct SimPush {
 static_assert(sizeof(SimPush) == 32,
               "sim push must stay under the 128-byte guaranteed range");
 
+// --- GIGA_PARTICLE_PIN=N: twin of GIGA_VERLET_PIN (verlet_pass.cpp) --------
+// Reproducible pool snapshot after N recorded sims: alive-count curve every
+// 100 sims plus an FNV-1a hash of alive positions at N. Counted in sims since
+// init, dt forced to the 60 Hz reference under the flag — same law and same
+// reasons as the verlet pin. The fnv1a duplicate dies with this whole TU when
+// stage 2 of the merge folds particles into VerletPass.
+int particle_pin_sims() {
+    static const int n = [] {
+        const char* e = std::getenv("GIGA_PARTICLE_PIN");
+        return e != nullptr ? std::atoi(e) : 0;
+    }();
+    return n;
+}
+
+std::uint64_t fnv1a(const void* data, std::size_t bytes, std::uint64_t h) {
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < bytes; ++i) {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
 } // namespace
+
+bool particle_pin_active() { return particle_pin_sims() > 0; }
 
 bool ParticlePass::init(VulkanDevice* dev, VkRenderPass renderPass,
                         const char* shaderDir, VkBuffer masksBuffer,
@@ -273,8 +299,38 @@ void ParticlePass::spawn(const GpuParticle* items, std::uint32_t count) {
     spawnedTotal_ += count;
 }
 
+void ParticlePass::maybe_pin_dump() {
+    const int pin = particle_pin_sims();
+    if (pin <= 0 || pinDumped_ || simsRecorded_ == 0) return;
+    // Alive-count curve (plan §6.2): a cheap checkpoint every 100 sims — the
+    // curve is a direct function of life/drag/bounce, the hash alone would
+    // hide WHICH of them drifted.
+    const bool checkpoint = (simsRecorded_ % 100u) == 0u;
+    const bool final = simsRecorded_ >= static_cast<std::uint32_t>(pin);
+    if (!checkpoint && !final) return;
+    vkDeviceWaitIdle(dev_->device);
+    const auto* p = static_cast<const GpuParticle*>(pool_.mapped);
+    std::uint32_t alive = 0;
+    std::uint64_t h = 1469598103934665603ull; // FNV-1a offset basis
+    for (std::uint32_t i = 0; i < kMaxParticles; ++i) {
+        if (p[i].posLife.w <= 0.0f) continue;
+        ++alive;
+        h = fnv1a(&p[i].posLife, sizeof(float) * 3, h);
+    }
+    std::fprintf(stderr, "[particle-pin] sims=%u alive=%u fnv=%016llx\n",
+                 simsRecorded_, alive, static_cast<unsigned long long>(h));
+    if (final) pinDumped_ = true;
+}
+
 void ParticlePass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     if (simPipeline_ == VK_NULL_HANDLE) return;
+
+    // Under the pin the step is the 60 Hz reference, not the wall-clock frame
+    // dt — same law as GIGA_VERLET_PIN (run-dependent dt poisons the hash).
+    if (particle_pin_sims() > 0) {
+        dt = 1.0f / 60.0f;
+        maybe_pin_dump();
+    }
 
     // Last frame's draw read the pool; order this write after it. Also order CPU host writes.
     VkMemoryBarrier mb{};
@@ -295,6 +351,7 @@ void ParticlePass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(SimPush), &p);
     vkCmdDispatch(cmd, (kMaxParticles + 63u) / 64u, 1, 1);
+    ++simsRecorded_;
 
     VkMemoryBarrier mb2{};
     mb2.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;

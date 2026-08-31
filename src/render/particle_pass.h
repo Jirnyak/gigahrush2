@@ -41,6 +41,12 @@ static_assert(sizeof(GpuParticle) == 64, "four-vec4-clean layout");
 
 inline constexpr std::uint32_t kMaxParticles = 32768;
 
+// GIGA_PARTICLE_PIN=N is set (twin of GIGA_VERLET_PIN): main gates the
+// nondeterministic writers (crowd blood via the burst queue) and injects one
+// fixed-seed synthetic burst instead, so the pool state after N sims is
+// comparable across runs.
+bool particle_pin_active();
+
 class ParticlePass {
 public:
     ParticlePass() = default;
@@ -87,11 +93,14 @@ public:
 
 private:
     bool create_pipelines(VkRenderPass renderPass, const char* shaderDir);
+    void maybe_pin_dump(); // GIGA_PARTICLE_PIN bookkeeping, see .cpp
 
     VulkanDevice* dev_ = nullptr;
     VulkanBuffer pool_;                         // persistent, host-visible
     std::uint32_t cursor_ = 0;
     std::uint32_t spawnedTotal_ = 0;
+    std::uint32_t simsRecorded_ = 0; // GIGA_PARTICLE_PIN: sims since init
+    bool pinDumped_ = false;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;

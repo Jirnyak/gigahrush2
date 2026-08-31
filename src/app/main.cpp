@@ -6371,7 +6371,34 @@ int main(int argc, char** argv) {
                         static_cast<std::uint32_t>(simTick));
                 }
                 // Drain this tick's blood/spark proposals into the GPU pool.
-                drain_particle_bursts(particlePass, particleBursts);
+                // Under GIGA_PARTICLE_PIN the queue is dropped instead: the
+                // crowd bleeds nondeterministically and would poison the pin
+                // hash — the pin's only writer is the synthetic burst below.
+                if (gpu::particle_pin_active())
+                    particleBursts.clear();
+                else
+                    drain_particle_bursts(particlePass, particleBursts);
+                // GIGA_PARTICLE_PIN: one fixed-seed burst at the player spawn
+                // point, injected exactly once — the deterministic input the
+                // pin protocol hashes (markoaudit/plans/verlet-merge.md §6.1).
+                static bool particlePinInjected = false;
+                if (gpu::particle_pin_active() && !particlePinInjected &&
+                    reg.valid(player)) {
+                    particlePinInjected = true;
+                    static std::vector<gpu::GpuParticle> pinTmp;
+                    pinTmp.clear();
+                    const vec3 pp = reg.get<Transform>(player).pos;
+                    const auto& def = game::kParticleTable[static_cast<int>(
+                        game::ParticleKind::Debris)];
+                    pack_particles(pinTmp,
+                                   vec3{pp.x, pp.y, pp.z + 1.2f},
+                                   vec3{0.0f, 0.0f, 1.0f}, def,
+                                   kMaterial[kMatElectricGrate], 64,
+                                   0xC0FFEEu);
+                    particlePass.spawn(pinTmp.data(),
+                                       static_cast<std::uint32_t>(
+                                           pinTmp.size()));
+                }
 
 
 
