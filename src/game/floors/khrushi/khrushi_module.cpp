@@ -65,8 +65,8 @@ std::uint32_t seed_khrushi_props(Registry& reg, const World& world,
     std::uint32_t count = 0;
     const MacroGrid& grid = world.grid();
 
-    // Street lamps: one under every pole hook. The hook is the pole's top two
-    // sub-layers, so its cell derives from kKhrushiPoleTopH — one source.
+    // Street lamps: one under every pole hook. The hook is the pole's top
+    // sub-layer, so its cell derives from kKhrushiPoleTopH — one source.
     std::vector<KhrushiPole> poles;
     khrushi_poles(seed, number, poles);
     const int hookZ = kKhrushiGroundCoord + ((kKhrushiPoleTopH - 1) >> 3);

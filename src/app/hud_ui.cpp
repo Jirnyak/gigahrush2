@@ -119,21 +119,29 @@ void draw_hands(const HudContext& c) {
     const auto* eq = c.reg->try_get<game::Equipped>(c.player);
     const auto* pr = c.reg->try_get<game::PlayerRanged>(c.player);
 
-    if (const game::ItemId gun = game::equipped_ranged(inv, eq)) {
-        if (const game::RangedDef* rd = game::ranged_for_item(gun)) {
-            if (pr && pr->reloadMs > 0)
-                ImGui::TextColored(kAmber, "%s  ПЕРЕЗАРЯДКА %.1fс",
-                                   game::item_name(gun),
-                                   pr->reloadMs * 0.001);
+    // ДВЕ РУКИ (two-hands.md): по строке на руку — худ отражает то, чем
+    // ударит ЕЁ кнопка. Магазин/затвор — свои у каждой (GunHand).
+    for (int h = 0; h < 2; ++h) {
+        const char* tag = h == 1 ? "ПКМ" : "ЛКМ";
+        const game::ItemId hi =
+            eq ? game::equipped_hand(inv, *eq, h == 1) : game::kInvalidItem;
+        const game::RangedDef* rd = game::ranged_for_item(hi);
+        if (rd && !game::ranged_is_thrown(hi)) {
+            const game::GunHand* gh = pr ? &pr->hand[h] : nullptr;
+            if (gh && gh->reloadMs > 0)
+                ImGui::TextColored(kAmber, "%s: %s  ПЕРЕЗАРЯДКА %.1fс", tag,
+                                   game::item_name(hi), gh->reloadMs * 0.001);
             else
-                ImGui::Text("%s  %u/%u", game::item_name(gun),
-                            pr ? pr->magCount : 0, rd->magazine);
+                ImGui::Text("%s: %s  %u/%u", tag, game::item_name(hi),
+                            gh ? gh->magCount : 0, rd->magazine);
+        } else if (rd) { // метательное — сам себе боеприпас
+            ImGui::Text("%s: %s", tag, game::item_name(hi));
+        } else {
+            ImGui::TextColored(kDim, "%s: %s", tag,
+                               hi == game::kInvalidItem ? "кулаки"
+                                                        : game::item_name(hi));
         }
     }
-    const game::ItemId wpn = game::equipped_melee(inv, eq);
-    ImGui::TextColored(kDim, "%s", wpn == game::kInvalidItem
-                                       ? "кулаки"
-                                       : game::item_name(wpn));
 }
 
 // Статусы + атмосфера клетки: всё, что прямо сейчас искажает тело или воздух.

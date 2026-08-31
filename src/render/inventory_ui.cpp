@@ -389,9 +389,11 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         const bool wearable = es != EquipSlot::None;
         if (policy.allowEquip && wearable) {
             if (game::hand_accepts(es)) {
-                // ДВЕ РУКИ (two-hands.md): E — решение ЛКМ-руки, ПКМ-клик
-                // по клетке — решение ПКМ-руки (зеркальность владельца).
+                // ДВЕ РУКИ (two-hands.md): E — решение ЛКМ-руки; Q ИЛИ
+                // ПКМ-клик по клетке — решение ПКМ-руки (симметрия E/Q —
+                // владелец 2026-08-31).
                 const bool inL = eq && eq->handL == st.sel;
+                const bool inR = eq && eq->handR == st.sel;
                 if (inL) {
                     if (ImGui::Button("Снять ЛКМ [E]") ||
                         ImGui::IsKeyPressed(ImGuiKey_E, false))
@@ -402,6 +404,18 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                         ImGui::IsKeyPressed(ImGuiKey_E, false))
                         req = {InvUiRequest::Kind::Equip, slot8,
                                EquipSlot::Weapon};
+                }
+                ImGui::SameLine();
+                if (inR) {
+                    if (ImGui::Button("Снять ПКМ [Q]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                        req = {InvUiRequest::Kind::Unequip, slot8,
+                               EquipSlot::Tool};
+                } else {
+                    if (ImGui::Button("В ПКМ-руку [Q]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                        req = {InvUiRequest::Kind::Equip, slot8,
+                               EquipSlot::Tool};
                 }
             } else {
                 const bool decidedHere = eq && eq->armor == st.sel;

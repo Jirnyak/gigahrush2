@@ -670,9 +670,9 @@ static void test_rpg_combat_wire() {
         reg.emplace<PlayerRanged>(
             shooter, PlayerRanged{0, 0, def->magazine, gun, 0, 0});
 
-        CHECK(player_ranged_step(reg, pool, layer, /*wantFire=*/true, dt,
+        CHECK(player_ranged_step(reg, pool, layer, /*wantFireL=*/true, false, dt,
                                  /*tick=*/1u) == 1u);
-        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def->cooldownMs);
+        CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs == def->cooldownMs);
     }
 
     // ---- 4. Ranged, high AGI → shortened cooldown --------------------------
@@ -728,9 +728,9 @@ static void test_rpg_combat_wire() {
         CHECK(expectCd < def->cooldownMs);
         CHECK(expectCd >= 1u);
 
-        CHECK(player_ranged_step(reg, pool, layer, /*wantFire=*/true, dt,
+        CHECK(player_ranged_step(reg, pool, layer, /*wantFireL=*/true, false, dt,
                                  /*tick=*/1u) == 1u);
-        CHECK(reg.get<PlayerRanged>(shooter).cooldownMs ==
+        CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs ==
               static_cast<std::uint16_t>(expectCd));
     }
 }
@@ -777,8 +777,8 @@ static void test_rpg_possess_transfer() {
     reg.emplace<PlayerMelee>(from, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
     {
         PlayerRanged pr{};
-        pr.magCount = 12;
-        pr.weapon = static_cast<ItemId>(7);
+        pr.hand[0].magCount = 12;
+        pr.hand[0].weapon = static_cast<ItemId>(7);
         pr.shots = 7;
         pr.hits = 3;
         reg.emplace<PlayerRanged>(from, pr);
@@ -805,10 +805,10 @@ static void test_rpg_possess_transfer() {
     CHECK(reg.all_of<PlayerRanged>(to));
     CHECK(reg.get<PlayerRanged>(to).shots == 7);
     CHECK(reg.get<PlayerRanged>(to).hits == 3);
-    CHECK(reg.get<PlayerRanged>(to).magCount == 0);
-    CHECK(reg.get<PlayerRanged>(to).weapon == static_cast<ItemId>(0));
-    CHECK(reg.get<PlayerRanged>(from).magCount == 12);
-    CHECK(reg.get<PlayerRanged>(from).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(to).hand[0].magCount == 0);
+    CHECK(reg.get<PlayerRanged>(to).hand[0].weapon == static_cast<ItemId>(0));
+    CHECK(reg.get<PlayerRanged>(from).hand[0].magCount == 12);
+    CHECK(reg.get<PlayerRanged>(from).hand[0].weapon == static_cast<ItemId>(7));
     CHECK(reg.get<PlayerRanged>(from).shots == 0);
     CHECK(reg.get<PlayerRanged>(from).hits == 0);
 

@@ -4736,10 +4736,10 @@ int main(int argc, char** argv) {
                                     inv.slots[0] = game::ItemSlot{gun, 1};
                                     inv.slots[1] = game::ItemSlot{def.ammo, 30};
                                     game::PlayerRanged pr{};
-                                    pr.cooldownMs = 0;
-                                    pr.reloadMs = 0;
-                                    pr.magCount = magStamp;
-                                    pr.weapon = gun;
+                                    pr.hand[0].cooldownMs = 0;
+                                    pr.hand[0].reloadMs = 0;
+                                    pr.hand[0].magCount = magStamp;
+                                    pr.hand[0].weapon = gun;
                                     pr.shots = 42;
                                     pr.hits = 13;
                                     reg.emplace_or_replace<game::PlayerRanged>(
@@ -4751,7 +4751,7 @@ int main(int argc, char** argv) {
                                                  "mag=%u/%u shots=%u hits=%u\n",
                                                  static_cast<unsigned>(gun),
                                                  game::item_name(gun),
-                                                 static_cast<unsigned>(pr.magCount),
+                                                 static_cast<unsigned>(pr.hand[0].magCount),
                                                  static_cast<unsigned>(def.magazine),
                                                  pr.shots, pr.hits);
                                 }
@@ -4763,14 +4763,17 @@ int main(int argc, char** argv) {
                             const game::PlayerRanged* pr =
                                 reg.try_get<game::PlayerRanged>(player);
                             const unsigned mag =
-                                pr ? static_cast<unsigned>(pr->magCount) : 0u;
+                                pr ? static_cast<unsigned>(pr->hand[0].magCount)
+                                   : 0u;
                             const unsigned wpn =
-                                pr ? static_cast<unsigned>(pr->weapon) : 0u;
+                                pr ? static_cast<unsigned>(pr->hand[0].weapon)
+                                   : 0u;
                             const unsigned sh = pr ? pr->shots : 0u;
                             const unsigned hi = pr ? pr->hits : 0u;
                             const int ok =
-                                (pr && pr->magCount == magStamp &&
-                                 pr->weapon == magGun && pr->shots == 42u &&
+                                (pr && pr->hand[0].magCount == magStamp &&
+                                 pr->hand[0].weapon == magGun &&
+                                 pr->shots == 42u &&
                                  pr->hits == 13u)
                                     ? 1
                                     : 0;
@@ -6175,8 +6178,6 @@ int main(int argc, char** argv) {
                                     (hr ? thrownR : thrownL) = thr;
                                 }
                         }
-                const bool fireWanted = (gunL && attackHeld) ||
-                                        (gunR && rmbHeld);
                 if (((thrownL && attackHeld) || (thrownR && rmbHeld)) &&
                     shell.playing())
                     throwWanted = true;
@@ -6190,10 +6191,10 @@ int main(int argc, char** argv) {
                 combatCarves.clear();
                 // Счёт выстрелов живёт в PlayerRanged::shots — локальный
                 // накопитель убит (К1-15), вызов остаётся: он стреляет.
-                game::player_ranged_step(reg, pool, activeLayer,
-                                                  fireWanted && shell.playing(),
-                                                  kSimDt, simTick, &noiseField,
-                                                  &playerStatus);
+                game::player_ranged_step(
+                    reg, pool, activeLayer, attackHeld && shell.playing(),
+                    rmbHeld && shell.playing(), kSimDt, simTick, &noiseField,
+                    &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
                 // share `PlayerRanged::cooldownMs` (one pair of hands) and the step
                 // above owns its single decrement ([combat.h] player_throw_step).
@@ -7251,7 +7252,11 @@ int main(int argc, char** argv) {
                             ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
                                         "%u shots %u hits",
                                         game::item_name(g_), rd->dmg, rd->pellets,
-                                        prs ? prs->magCount : 0, rd->magazine,
+                                        prs ? (prs->hand[0].weapon == g_
+                                                   ? prs->hand[0].magCount
+                                                   : prs->hand[1].magCount)
+                                            : 0,
+                                        rd->magazine,
                                         prs ? prs->shots : 0, prs ? prs->hits : 0);
                     }
                     {
@@ -9307,11 +9312,15 @@ int main(int argc, char** argv) {
                                      "[mag] FINAL has=%d mag=%u weapon=%u "
                                      "shots=%u hits=%u rideDone=%d\n",
                                      pr ? 1 : 0,
-                                     pr ? static_cast<unsigned>(pr->magCount) : 0u,
-                                     pr ? static_cast<unsigned>(pr->weapon) : 0u,
+                                     pr ? static_cast<unsigned>(
+                                              pr->hand[0].magCount)
+                                        : 0u,
+                                     pr ? static_cast<unsigned>(
+                                              pr->hand[0].weapon)
+                                        : 0u,
                                      pr ? pr->shots : 0u, pr ? pr->hits : 0u,
                                      shotRideDone);
-                        if (pr && pr->magCount == 7u && pr->shots == 42u &&
+                        if (pr && pr->hand[0].magCount == 7u && pr->shots == 42u &&
                             pr->hits == 13u)
                             std::fprintf(stderr, "[mag] PROOF=GREEN\n");
                         else

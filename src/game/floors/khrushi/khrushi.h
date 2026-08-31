@@ -113,8 +113,8 @@ struct KhrushiPole {
     std::int8_t dx, dy; // unit step towards the road (the hook direction)
 };
 
-// Pole height in sub-voxels (5 m): the hook arm is its top two sub-layers, so
-// the lamp seeder and the wire hook both derive the hook cell from THIS.
+// Pole height in sub-voxels (5 m): the hook arm is its top sub-layer, so the
+// lamp seeder and the wire hook both derive the hook cell from THIS.
 inline constexpr int kKhrushiPoleTopH = 20;
 
 // A подъезд: the facade cell holding the entrance opening, and the outward

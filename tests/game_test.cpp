@@ -847,10 +847,10 @@ static void test_elevator() {
     CHECK(!reg.all_of<PlayerMelee>(p));
     {
         PlayerRanged pr{};
-        pr.cooldownMs = 0;
-        pr.reloadMs = 0;
-        pr.magCount = 12;
-        pr.weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
+        pr.hand[0].cooldownMs = 0;
+        pr.hand[0].reloadMs = 0;
+        pr.hand[0].magCount = 12;
+        pr.hand[0].weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
         pr.shots = 7;
         pr.hits = 3;
         reg.emplace<PlayerRanged>(p, pr);
@@ -900,8 +900,8 @@ static void test_elevator() {
     CHECK(approx(reg.get<CameraTag>(p).pitch, -0.321f));
     // Combat state must survive the body swap (FOR1 pin).
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
-    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].weapon == static_cast<ItemId>(7));
     CHECK(reg.get<PlayerRanged>(p).shots == 7);
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
@@ -927,7 +927,7 @@ static void test_elevator() {
     CHECK(reg.get<Transform>(p).layer == l1);
     // No-op must not strip combat components either.
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
     CHECK(reg.all_of<PlayerMelee>(p));
     CHECK(reg.get<PlayerMelee>(p).kills == 99);
 
@@ -942,8 +942,8 @@ static void test_elevator() {
     CHECK(reg.get<Transform>(p).layer == l0);
     CHECK(pool.is_player(id));
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
-    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].weapon == static_cast<ItemId>(7));
     CHECK(reg.get<PlayerRanged>(p).shots == 7);
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
@@ -3296,11 +3296,11 @@ static void test_player_shoots() {
 
     // First call with the trigger down must RELOAD, not fire: the magazine starts
     // empty and a gun that fired on an empty chamber would be free ammo.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt, 0) == 0);
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt, 0) == 0);
     const PlayerRanged* pr = reg.try_get<PlayerRanged>(shooter);
     CHECK(pr != nullptr);
-    CHECK(pr->magCount == def.magazine);       // a full magazine came out of the pack
-    CHECK(pr->reloadMs > 0);
+    CHECK(pr->hand[0].magCount == def.magazine);       // a full magazine came out of the pack
+    CHECK(pr->hand[0].reloadMs > 0);
     // ...and the rounds LEFT the inventory. A reload that duplicated ammo would be
     // invisible until someone counted.
     std::uint16_t left = 0;
@@ -3318,17 +3318,17 @@ static void test_player_shoots() {
     // 1000 ms reload therefore clears on step ceil(1000/8) = 125.
     const std::uint16_t stepMs = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
     const int clearAt = (def.reloadMs + stepMs - 1) / stepMs;
-    const std::uint16_t magBefore = reg.get<PlayerRanged>(shooter).magCount;
+    const std::uint16_t magBefore = reg.get<PlayerRanged>(shooter).hand[0].magCount;
     for (int i = 1; i < clearAt; ++i)
-        CHECK(player_ranged_step(reg, pool, layer, true, dt,
+        CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                                  static_cast<std::uint64_t>(i)) == 0);
-    CHECK(reg.get<PlayerRanged>(shooter).reloadMs > 0);   // still not ready
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs > 0);   // still not ready
     // The step that clears the reload is the step that fires.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt,
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                              static_cast<std::uint64_t>(clearAt)) == 1);
-    CHECK(reg.get<PlayerRanged>(shooter).reloadMs == 0);
-    CHECK(reg.get<PlayerRanged>(shooter).magCount == magBefore - 1);
-    CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def.cooldownMs);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs == 0);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].magCount == magBefore - 1);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs == def.cooldownMs);
 
     // One pellet, tagged as the player's, flying flat.
     int inFlight = 0;
@@ -3341,7 +3341,7 @@ static void test_player_shoots() {
     CHECK(inFlight == def.pellets);
 
     // The cooldown gates the next shot rather than the trigger being polled.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt, 501u) == 0);
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt, 501u) == 0);
 
     // Fly it. THE assertion: the monster loses HP and the SHOOTER does not.
     const std::int16_t mobHp0 = reg.get<MobRef>(mob).hp;
@@ -4051,7 +4051,7 @@ static void test_grenade() {
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
         CHECK(reg.get<PlayerRanged>(me).throwCooldownMs == gdef.cooldownMs);
-        CHECK(reg.get<PlayerRanged>(me).cooldownMs == 0); // ствол не задет
+        CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs == 0); // ствол не задет
         // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
         // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;

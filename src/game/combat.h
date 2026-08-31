@@ -432,17 +432,24 @@ inline constexpr float kMuzzleForward = 1.7f;
 //
 // `weapon` records which gun the magazine belongs to: swapping guns empties it, since
 // a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
-struct PlayerRanged {
+// Ствольное состояние ОДНОЙ руки — руки АГНОСТИЧНЫ (закон владельца
+// 2026-08-31: «один слот не должен знать о втором»): свой магазин, свой
+// затвор, свой кулдаун, своё оружие. Смена ствола в руке очищает ЕЁ
+// магазин, не соседкин; два одинаковых ствола честно тянут патроны из
+// одного рюкзака по очереди перезарядок.
+struct GunHand {
     std::uint16_t cooldownMs = 0;
     std::uint16_t reloadMs = 0;
     std::uint16_t magCount = 0;
     ItemId weapon = 0;
+};
+
+struct PlayerRanged {
+    GunHand hand[2];            // [0] = ЛКМ, [1] = ПКМ
     std::uint32_t shots = 0;    // cumulative; survives possession like kills does
     std::uint32_t hits = 0;
-    // РУКИ НЕЗАВИСИМЫ (two-hands.md, решение владельца 2026-08-31: «палишь
-    // очередью с одной — кидаешь гранату другой»): бросок больше НЕ делит
-    // cooldownMs со стволом, у него свой таймер. Старится там же, где все
-    // (player_ranged_step, ровно один декремент — дефект 3 референса).
+    // Бросок — свой таймер (руки независимы); старится в player_ranged_step,
+    // ровно один декремент (дефект 3 референса).
     std::uint16_t throwCooldownMs = 0;
 };
 
@@ -1005,8 +1012,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 // nullptr and the shot is silent, which is the pre-noise behaviour exactly.
 // Optional `status`: when non-null, spread is scaled by status_aim_mult_e3
 // (SporeHaze widens the cone). Null keeps the pre-STATAIM path bit-for-bit.
+// wantFireL/R — спуски ДВУХ рук (two-hands.md): каждая рука стреляет своим
+// стволом со своим магазином/затвором; ствол ищется валидированным чтением
+// её ячейки Equipped, руки друг о друге не знают.
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick,
+                                 bool wantFireL, bool wantFireR, float dt,
+                                 std::uint64_t tick,
                                  NoiseField* noise = nullptr,
                                  const StatusSet* status = nullptr);
 

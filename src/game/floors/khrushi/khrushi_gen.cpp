@@ -464,11 +464,17 @@ void stamp_section_flats(MacroGrid& g, SubField<CellType>& sm,
 
 // ---- street-lamp poles -----------------------------------------------------
 //
-// The pole is VOXELS, not a prop: a 0.5 m pipe column on the kerb, 5 m tall,
+// The pole is VOXELS, not a prop: a 0.25 m pipe column on the kerb, 5 m tall,
 // with a 2 m hook arm reaching over the road. The lamp is the prop, anchored
 // to the hook's under-face (S2: carve the pole and the lamp falls); wires run
 // hook to hook. Heights derived: lamp face at 4.5 m over the street — an СВ
 // pole over a 4 m lane.
+//
+// Section is ONE sub-voxel, pole and arm alike (owner, 2026-08-29): a street
+// pipe reads as a line, not as a 0.5 m mast. On the road axis the pole sits on
+// the very face the arm leaves from — 4 for a positive hook, 3 for a negative
+// one, the same mirror pair (o ↔ 7-o) the arm itself obeys — so the L stays
+// welded whichever way it points.
 void stamp_pole(MacroGrid& g, SubField<CellType>& sm, const KhrushiPole& p) {
     // Base cell chosen so every sub-voxel offset stays non-negative even when
     // the hook points to −x/−y (put_sub spills forward only).
@@ -476,27 +482,25 @@ void stamp_pole(MacroGrid& g, SubField<CellType>& sm, const KhrushiPole& p) {
     const int by = p.dy < 0 ? p.y - 1 : p.y;
     const int cx0 = (p.x - bx) * kSubDim;
     const int cy0 = (p.y - by) * kSubDim;
+    // Across the road axis the column stands at sub 3 — an eighth of a cell off
+    // the centre line, which is where the arm's own cross offset already was.
+    const int kAcross = 3;
+    const int px = p.dx ? cx0 + (p.dx > 0 ? 4 : 3) : cx0 + kAcross;
+    const int py = p.dy ? cy0 + (p.dy > 0 ? 4 : 3) : cy0 + kAcross;
     for (int H = 0; H < kKhrushiPoleTopH; ++H)
-        for (int a = 3; a <= 4; ++a)
-            for (int c = 3; c <= 4; ++c)
-                put_sub(g, sm, bx, by, kKhrushiGroundCoord, cx0 + a, cy0 + c, H,
-                        kMatPipeMetal);
-    // Hook arm: the top two sub-layers, 2 wide, running 2 m towards the road
+        put_sub(g, sm, bx, by, kKhrushiGroundCoord, px, py, H, kMatPipeMetal);
+    // Hook arm: the top sub-layer, one wide, running 2 m towards the road
     // (1.25 m of it over the road cell, where the lamp will hang). The
     // negative arm is the MIRROR of the positive one about the pole centre
     // (3.5): offset o mirrors to 7-o, so 5+i mirrors to 2-i — the first cut
     // used 10-i, which reaches AWAY from the road, and every high-side lamp
     // silently refused to spawn (owner's screenshot, 2026-08-27).
-    for (int H = kKhrushiPoleTopH - 2; H < kKhrushiPoleTopH; ++H)
-        for (int i = 0; i < 8; ++i)
-            for (int w = 3; w <= 4; ++w) {
-                const int ox = p.dx ? cx0 + (p.dx > 0 ? 5 + i : 2 - i)
-                                    : cx0 + w;
-                const int oy = p.dy ? cy0 + (p.dy > 0 ? 5 + i : 2 - i)
-                                    : cy0 + w;
-                put_sub(g, sm, bx, by, kKhrushiGroundCoord, ox, oy, H,
-                        kMatPipeMetal);
-            }
+    const int H = kKhrushiPoleTopH - 1;
+    for (int i = 0; i < 8; ++i) {
+        const int ox = p.dx ? cx0 + (p.dx > 0 ? 5 + i : 2 - i) : px;
+        const int oy = p.dy ? cy0 + (p.dy > 0 ? 5 + i : 2 - i) : py;
+        put_sub(g, sm, bx, by, kKhrushiGroundCoord, ox, oy, H, kMatPipeMetal);
+    }
 }
 
 void stamp_building(MacroGrid& g, SubField<CellType>& sm, const Building& b) {
@@ -648,8 +652,8 @@ void khrushi_bake_antourage(const World& /*world*/, int number, unsigned seed,
     const int pitchSteps = kMacroDim / 8; // poles per line
     const float hookZ =
         static_cast<float>(kKhrushiGroundCoord * kSubDim + kKhrushiPoleTopH -
-                           2) *
-        (kCellSize / 8.0f); // under-face of the hook arm: 10.5 m absolute
+                           1) *
+        (kCellSize / 8.0f); // under-face of the hook arm: 10.75 m absolute
 
     // Attach at the hook ELBOW — the corner where the arm leaves the pole
     // (0.3 m off the pole face), NOT at the tip: the tip is where the lamp

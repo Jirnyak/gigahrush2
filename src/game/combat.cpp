@@ -1994,8 +1994,9 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise, const StatusSet* status) {
+                                 bool wantFireL, bool wantFireR, float dt,
+                                 std::uint64_t tick, NoiseField* noise,
+                                 const StatusSet* status) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -2014,8 +2015,12 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // Decremented EXACTLY ONCE, at the top, before any early-out. Defect 3: the
     // reference decremented cooldowns at ~60 sites and some monsters out-attacked
     // their own authored rate.
-    if (pr.cooldownMs > elapsedMs) pr.cooldownMs -= elapsedMs; else pr.cooldownMs = 0;
-    if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+    for (GunHand& gh : pr.hand) {
+        if (gh.cooldownMs > elapsedMs) gh.cooldownMs -= elapsedMs;
+        else gh.cooldownMs = 0;
+        if (gh.reloadMs > elapsedMs) gh.reloadMs -= elapsedMs;
+        else gh.reloadMs = 0;
+    }
     if (pr.throwCooldownMs > elapsedMs) pr.throwCooldownMs -= elapsedMs;
     else pr.throwCooldownMs = 0;
 
@@ -2023,134 +2028,137 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId gun = equipped_ranged(inv, reg.try_get<Equipped>(shooter));
-    const RangedDef* def = ranged_for_item(gun);
-    if (!def) return 0;
-
-    // Swapping guns empties the magazine: a magazine of shells is not a magazine of
-    // 9mm, and carrying the count across would let a shotgun fire rifle rounds.
-    if (pr.weapon != gun) {
-        pr.weapon = gun;
-        pr.magCount = 0;
-        pr.reloadMs = 0;
-    }
-
-    if (pr.reloadMs > 0) return 0;
-
-    if (pr.magCount == 0) {
-        // Reload: move up to a magazine's worth out of the inventory. Counting first
-        // and only starting the timer if something is actually there, so an empty
-        // pack does not lock the player into a permanent reload.
-        std::uint16_t want = def->magazine;
-        std::uint16_t got = 0;
-        for (ItemSlot& sl : inv.slots) {
-            if (got >= want) break;
-            if (sl.item != def->ammo || sl.count == 0) continue;
-            const std::uint16_t take =
-                static_cast<std::uint16_t>(sl.count < (want - got) ? sl.count
-                                                                   : (want - got));
-            sl.count = static_cast<std::uint16_t>(sl.count - take);
-            if (sl.count == 0) sl.item = kInvalidItem;
-            got = static_cast<std::uint16_t>(got + take);
+    // ДВЕ РУКИ (two-hands.md, закон владельца: руки агностичны — «один слот
+    // не должен знать о втором»): каждая рука со СВОИМ стволом, магазином,
+    // затвором и кулдауном; прицел общий (одна голова). Два одинаковых
+    // ствола честно тянут патроны из одного рюкзака порознь.
+    const Equipped* eqp = reg.try_get<Equipped>(shooter);
+    std::uint32_t fired = 0;
+    for (int hIdx = 0; hIdx < 2; ++hIdx) {
+        GunHand& gh = pr.hand[hIdx];
+        ItemId gun = kInvalidItem;
+        if (eqp) {
+            const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
+            if (ranged_for_item(hi) && !ranged_is_thrown(hi)) gun = hi;
+        } else if (hIdx == 0) {
+            // Решателя НЕТ (монстры, холодные пути, старые фикстуры) —
+            // старый скан сумки, семантика [equip.h] дословно; вторая рука
+            // без решателя пуста (скан — не решение о двух руках).
+            gun = equipped_ranged(inv, nullptr);
         }
-        if (got == 0) return 0;   // out of ammo entirely; nothing to do but not fire
-        pr.magCount = got;
-        pr.reloadMs = def->reloadMs;
-        return 0;
+        // Swapping guns empties the magazine: a magazine of shells is not a
+        // magazine of 9mm. Пустая/неогнестрельная рука тоже чистит состояние
+        // (граната в руке не хранит чужой магазин).
+        if (gh.weapon != gun) {
+            gh.weapon = gun;
+            gh.magCount = 0;
+            gh.reloadMs = 0;
+        }
+        const RangedDef* def = ranged_for_item(gun);
+        if (!def || gun == kInvalidItem) continue;
+        if (gh.reloadMs > 0) continue;
+
+        if (gh.magCount == 0) {
+            // Reload: move up to a magazine's worth out of the inventory.
+            // Counting first and only starting the timer if something is
+            // actually there, so an empty pack does not lock a permanent
+            // reload.
+            std::uint16_t want = def->magazine;
+            std::uint16_t got = 0;
+            for (ItemSlot& sl : inv.slots) {
+                if (got >= want) break;
+                if (sl.item != def->ammo || sl.count == 0) continue;
+                const std::uint16_t take = static_cast<std::uint16_t>(
+                    sl.count < (want - got) ? sl.count : (want - got));
+                sl.count = static_cast<std::uint16_t>(sl.count - take);
+                if (sl.count == 0) sl.item = kInvalidItem;
+                got = static_cast<std::uint16_t>(got + take);
+            }
+            if (got == 0) continue; // out of ammo entirely
+            gh.magCount = got;
+            gh.reloadMs = def->reloadMs;
+            continue;
+        }
+
+        const bool want = hIdx == 1 ? wantFireR : wantFireL;
+        if (!want || gh.cooldownMs > 0) continue;
+
+        const CameraTag& cam = reg.get<const CameraTag>(shooter);
+        const Transform& tr = reg.get<const Transform>(shooter);
+        const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                       tr.pos.z + cam.eyeOffset.z};
+        const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+
+        // Spread is a CONE (see the 3D-vs-2.5D note in the git history of
+        // this block); AGI and statuses scale it.
+        float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+        if (const RpgStats* rs = reg.try_get<RpgStats>(shooter))
+            spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
+        if (status) {
+            const std::uint16_t am = status_aim_mult_e3(*status);
+            if (am != 1000u) spread *= static_cast<float>(am) / 1000.0f;
+        }
+        vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0}
+                                                  : vec3{0, 0, 1};
+        vec3 rt{fwd.y * up.z - fwd.z * up.y, fwd.z * up.x - fwd.x * up.z,
+                fwd.x * up.y - fwd.y * up.x};
+        float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
+        if (rl < 1e-4f) continue;
+        rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
+        vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
+                rt.x * fwd.y - rt.y * fwd.x};
+
+        std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                             static_cast<std::uint32_t>(
+                                 entt::to_integral(shooter)) ^
+                             (hIdx != 0 ? 0xB16B00B5u : 0u); // руки — разные роллы
+        for (std::uint8_t i = 0; i < def->pellets; ++i) {
+            seed += 0x9e3779b9u;
+            std::uint32_t h = seed;
+            h ^= h >> 16; h *= 0x7feb352du;
+            h ^= h >> 15; h *= 0x846ca68bu;
+            h ^= h >> 16;
+            const float a =
+                static_cast<float>(h & 0xFFFFu) / 65535.0f * 6.2831853f;
+            const float r = static_cast<float>((h >> 16) & 0xFFFFu) / 65535.0f;
+            const float m = std::sqrt(r) * spread * 0.5f;
+            const float ox = std::cos(a) * m, oy = std::sin(a) * m;
+            const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
+                           fwd.y + rt.y * ox + ud.y * oy,
+                           fwd.z + rt.z * ox + ud.z * oy};
+            spawn_projectile_dir(reg, layer, eye, dir,
+                                 static_cast<std::int16_t>(def->dmg),
+                                 def->projSpeedMmps, shooter, kPlayerGravityPct,
+                                 def->channel);
+        }
+
+        // ONE noise per trigger pull, not per pellet. [noise.h]
+        if (noise)
+            noise_publish(*noise, layer, tr.pos, weapon_fire_noise(*def),
+                          static_cast<std::uint32_t>(
+                              entt::to_integral(shooter)));
+
+        // ONE round per shot regardless of pellet count.
+        --gh.magCount;
+        // WEAR: адрес руки — Weapon (ЛКМ) или Tool (ПКМ) [equip.h].
+        if (eqp)
+            wear_equipped(inv, *eqp,
+                          hIdx == 1 ? EquipSlot::Tool : EquipSlot::Weapon,
+                          hash3(static_cast<std::uint32_t>(tick), nr->id,
+                                0x57EA9u + static_cast<std::uint32_t>(hIdx)));
+        std::uint16_t rcd = def->cooldownMs;
+        if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+            const std::uint32_t cd =
+                (static_cast<std::uint32_t>(def->cooldownMs) *
+                 agi_attack_speed_mult_e3(*rs)) / 1000u;
+            rcd = static_cast<std::uint16_t>(
+                cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+        }
+        gh.cooldownMs = rcd;
+        ++pr.shots;
+        ++fired;
     }
-
-    if (!wantFire || pr.cooldownMs > 0) return 0;
-
-    const CameraTag& cam = reg.get<const CameraTag>(shooter);
-    const Transform& tr = reg.get<const Transform>(shooter);
-    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
-                   tr.pos.z + cam.eyeOffset.z};
-    const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
-
-    // Spread is applied as a CONE, not as the reference's yaw-only jitter. The
-    // reference is 2.5D, so jittering yaw alone was correct there; in true 3D it
-    // would put a shotgun's pellets in a dead-flat horizontal line, which reads as a
-    // bug rather than as a spread.
-    // RPGCMBT: AGI tightens the cone (agi_ranged_spread_mult_e3 < 1000).
-    float spread = static_cast<float>(def->spreadE4) * 1e-4f;
-    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
-        spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
-    }
-    // STATAIM: SporeHaze (and friends) widen the cone via status_aim_mult_e3.
-    if (status) {
-        const std::uint16_t am = status_aim_mult_e3(*status);
-        if (am != 1000u)
-            spread *= static_cast<float>(am) / 1000.0f;
-    }
-    // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
-    // keeps the cross product well-conditioned when looking straight up or down.
-    vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
-    vec3 rt{fwd.y * up.z - fwd.z * up.y, fwd.z * up.x - fwd.x * up.z,
-            fwd.x * up.y - fwd.y * up.x};
-    float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
-    if (rl < 1e-4f) return 0;
-    rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
-    vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
-            rt.x * fwd.y - rt.y * fwd.x};
-
-    std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
-                         static_cast<std::uint32_t>(entt::to_integral(shooter));
-    for (std::uint8_t i = 0; i < def->pellets; ++i) {
-        // splitmix-ish, the same idiom the spawner and the loot roller use.
-        seed += 0x9e3779b9u;
-        std::uint32_t h = seed;
-        h ^= h >> 16; h *= 0x7feb352du;
-        h ^= h >> 15; h *= 0x846ca68bu;
-        h ^= h >> 16;
-        const float a = static_cast<float>(h & 0xFFFFu) / 65535.0f * 6.2831853f;
-        const float r = static_cast<float>((h >> 16) & 0xFFFFu) / 65535.0f;
-        // sqrt(r) so pellets are uniform over the cone's DISC rather than piling up
-        // in the middle, which is what a bare uniform radius would do.
-        const float m = std::sqrt(r) * spread * 0.5f;
-        const float ox = std::cos(a) * m, oy = std::sin(a) * m;
-        const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
-                       fwd.y + rt.y * ox + ud.y * oy,
-                       fwd.z + rt.z * ox + ud.z * oy};
-        // `def->channel` and not a hardcoded Kinetic: the column exists in
-        // [ranged_table.h], the generator fills it from data/weapons_ranged.csv, and
-        // until this line NOTHING in src/ read it. Armour's resist[5], the psi-resist
-        // rows in data/items.csv and every per-channel column in [monster_traits.h]
-        // were all mitigating against a channel that only ever arrived as Kinetic.
-        spawn_projectile_dir(reg, layer, eye, dir,
-                             static_cast<std::int16_t>(def->dmg),
-                             def->projSpeedMmps, shooter, kPlayerGravityPct,
-                             def->channel);
-    }
-
-    // The shot is heard. ONE noise per trigger pull, not one per pellet: a shotgun
-    // blast is one bang, and twelve records would also evict everything else in a
-    // 64-slot field. Published at the SHOOTER's position rather than the muzzle so a
-    // monster investigating the sound walks at the player and not at a point 1.7 m in
-    // front of him. [noise.h]
-    if (noise)
-        noise_publish(*noise, layer, tr.pos, weapon_fire_noise(*def),
-                      static_cast<std::uint32_t>(entt::to_integral(shooter)));
-
-    // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
-    // and produces up to twelve projectiles. The reference's rule.
-    --pr.magCount;
-    // WEAR: one shot = one use of the decided firearm ([equip.h]). Sleeps
-    // until firearm rows carry a durability number; thrown weapons are their
-    // own ammo and never reach this line.
-    if (const Equipped* seq = reg.try_get<Equipped>(shooter))
-        wear_equipped(inv, *seq, EquipSlot::Weapon,
-                      hash3(static_cast<std::uint32_t>(tick), nr->id, 0x57EA9u));
-    // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
-    std::uint16_t rcd = def->cooldownMs;
-    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
-        const std::uint32_t cd =
-            (static_cast<std::uint32_t>(def->cooldownMs) *
-             agi_attack_speed_mult_e3(*rs)) / 1000u;
-        rcd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
-    }
-    pr.cooldownMs = rcd;
-    ++pr.shots;
-    return 1;
+    return fired;
 }
 
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,

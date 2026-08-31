@@ -169,12 +169,17 @@ SaveState busy_run() {
     // Version 8 / SAVMAG: non-default chamber + kills so a dropped combat
     // section cannot hide behind zero defaults.
     st.hasRanged = 1;
-    st.ranged.cooldownMs = 120u;
-    st.ranged.reloadMs = 450u;
-    st.ranged.magCount = 7u;
-    st.ranged.weapon = 1;       // any non-zero ItemId; table drift is separate
+    st.ranged.hand[0].cooldownMs = 120u;   // v21: две руки, обе в раундтрипе
+    st.ranged.hand[0].reloadMs = 450u;
+    st.ranged.hand[0].magCount = 7u;
+    st.ranged.hand[0].weapon = 1; // any non-zero ItemId; table drift is separate
+    st.ranged.hand[1].cooldownMs = 60u;
+    st.ranged.hand[1].reloadMs = 90u;
+    st.ranged.hand[1].magCount = 3u;
+    st.ranged.hand[1].weapon = 2;
     st.ranged.shots = 42u;
     st.ranged.hits = 11u;
+    st.ranged.throwCooldownMs = 777u;
     st.kills = 99u;
 
     // Version 9 / SAVSTAT: non-default status timers so a dropped StatusSet
@@ -282,12 +287,15 @@ void same_run(const SaveState& a, const SaveState& b) {
 
     // Version 8 / SAVMAG: chambered firearm + kill tally.
     CHECK(a.hasRanged == b.hasRanged);
-    CHECK(a.ranged.cooldownMs == b.ranged.cooldownMs);
-    CHECK(a.ranged.reloadMs == b.ranged.reloadMs);
-    CHECK(a.ranged.magCount == b.ranged.magCount);
-    CHECK(a.ranged.weapon == b.ranged.weapon);
+    for (int h = 0; h < 2; ++h) {
+        CHECK(a.ranged.hand[h].cooldownMs == b.ranged.hand[h].cooldownMs);
+        CHECK(a.ranged.hand[h].reloadMs == b.ranged.hand[h].reloadMs);
+        CHECK(a.ranged.hand[h].magCount == b.ranged.hand[h].magCount);
+        CHECK(a.ranged.hand[h].weapon == b.ranged.hand[h].weapon);
+    }
     CHECK(a.ranged.shots == b.ranged.shots);
     CHECK(a.ranged.hits == b.ranged.hits);
+    CHECK(a.ranged.throwCooldownMs == b.ranged.throwCooldownMs);
     CHECK(a.kills == b.kills);
 
     // Version 9 / SAVSTAT: live status effects round-trip field-by-field.
@@ -354,19 +362,19 @@ void wire_layout() {
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 89);
-    static_assert(kRangedWire == 16);
-    static_assert(kCombatSaveWire == 21);
+    static_assert(kRangedWire == 26); // v21: две руки
+    static_assert(kCombatSaveWire == 31);
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1040);  // v16: +289 bank; v19: bank 289 -> 45
+    static_assert(kSaveFixedWire == 1050);  // v21: ranged 16 -> 26 (две руки)
     static_assert(kFactionWire == 36);
     // v20: 1040 fixed + 36 faction + 64 header = 1140 empty; инлайновые
     // счётчики трупов/обломков ушли в floor-файл вместе с секциями.
-    static_assert(save_bytes_for() == 1140);
-    static_assert(save_bytes_for(100, 50) == 1140 + 150);
+    static_assert(save_bytes_for() == 1150); // v21: +10 (две руки)
+    static_assert(save_bytes_for(100, 50) == 1150 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;

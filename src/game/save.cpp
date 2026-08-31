@@ -314,12 +314,17 @@ void visit_rpg(Ar& ar, R& r) {
 // Version 8 / SAVMAG: PlayerRanged field-by-field. weapon is ItemId = u16.
 template <class Ar, class R>
 void visit_ranged(Ar& ar, R& r) {
-    ar.u16(r.cooldownMs);
-    ar.u16(r.reloadMs);
-    ar.u16(r.magCount);
-    ar.u16(r.weapon);
+    // v21: ДВЕ РУКИ — ствольное состояние поле-за-полем на каждую
+    // ([combat.h] GunHand; акимбо-агностика владельца 2026-08-31).
+    for (int h = 0; h < 2; ++h) {
+        ar.u16(r.hand[h].cooldownMs);
+        ar.u16(r.hand[h].reloadMs);
+        ar.u16(r.hand[h].magCount);
+        ar.u16(r.hand[h].weapon);
+    }
     ar.u32(r.shots);
     ar.u32(r.hits);
+    ar.u16(r.throwCooldownMs);
 }
 
 // Version 9 / SAVSTAT: StatusSet field-by-field. Order is remainMs then
@@ -538,8 +543,8 @@ static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + conditi
 // ONLY in asserts and the prose only names the parts.
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 89);
-static_assert(kRangedWire == 16);
-static_assert(kCombatSaveWire == 21);
+static_assert(kRangedWire == 26); // v21: две руки (+10)
+static_assert(kCombatSaveWire == 31);
 static_assert(kStatusWire == 42);
 static_assert(kSamosborWire == 17);
 static_assert(kFastTravelWire == 32);
@@ -550,15 +555,15 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
 static_assert(kSaveFixedWire ==
-              946 + kSamosborWire + kFastTravelWire + kBankWire);
-static_assert(kSaveFixedWire == 1040);  // v16: +289 bank; v19: bank 289 -> 45 (ring cut)
+              956 + kSamosborWire + kFastTravelWire + kBankWire); // v21 +10
+static_assert(kSaveFixedWire == 1050);  // v21: ranged 16 -> 26 (две руки)
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
 // cut the bank ring (-244) = 1148; v20 cut both inline counts with their
 // sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
-static_assert(save_bytes_for() == 1140);
-static_assert(save_bytes_for(100, 50) == 1140 + 150);
+static_assert(save_bytes_for() == 1150); // v21: +10
+static_assert(save_bytes_for(100, 50) == 1150 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

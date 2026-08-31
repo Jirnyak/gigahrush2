@@ -1522,7 +1522,11 @@ if(GIGA_BUILD_TESTS)
     # cooldown» ПЕРЕВЁРНУТ законом владельца «руки независимы» — бросок
     # гейтится своим throwCooldownMs, ствольный cooldownMs не задет
     # (+CHECK «ствол = 0 после броска») = 222310.
-        PASS_REGULAR_EXPRESSION "game_test: 222310 checks, 0 failures")
+    # 222310 + 25 on 2026-08-31 (акимбо v21): GunHand[2] — сейв-раундтрип
+    # ОБЕИХ рук + throwCooldownMs (suite_saveload, +23) и пер-рука чтения
+    # в suite_rpg/фикстурах (+2). Провода: kRangedWire 16 -> 26,
+    # kSaveFixedWire 1040 -> 1050, пустой сейв 1140 -> 1150 = 222335.
+        PASS_REGULAR_EXPRESSION "game_test: 222335 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

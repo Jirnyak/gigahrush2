@@ -437,7 +437,8 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
             // ONLY difference between the two runs is the noise record.
             if (t == 0) {
                 const std::uint32_t s = player_ranged_step(
-                    r->reg, r->pool, 0, /*wantFire=*/true, dt, t,
+                    r->reg, r->pool, 0, /*wantFireL=*/true,
+                    /*wantFireR=*/false, dt, t,
                     audible ? &r->noise : nullptr);
                 if (audible) shotsFired += s;
             }
