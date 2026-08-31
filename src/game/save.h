@@ -481,6 +481,11 @@ struct PropRecord {
     std::uint8_t flags = 0;     // kPropRec*
     vec3 pos{};
     float yaw = 0.0f;
+    // Ориентация ТЕЛА лежащего пропа (v4, 2026-08-31): без неё загрузка
+    // ставила упавший проп «стоймя» в позу yaw — restore шёл через
+    // prop_detach, а тот сеет q из yaw. Осмыслена под kPropRecDetached;
+    // у якорной статики ориентация — сам yaw, как и была.
+    quat q{};
     std::uint8_t animPhase = 0;
     std::uint8_t meshFlags = 0; // PropMesh.flags как есть (мерцание и пр.)
     SubVoxelAnchor anchor{};    // осмыслен только без kPropRecDetached
@@ -515,7 +520,7 @@ struct FloorEntityState {
 // Проводные ширины записей. Якорь: клетка 3×u8 (макро-координаты — байты по
 // построению) + субвоксель 3×u8 + грань u8 = 7.
 inline constexpr std::size_t kPropRecWire =
-    2 + 1 + 12 + 4 + 1 + 1 + 7 + 4;                       // 32
+    2 + 1 + 12 + 4 + 16 + 1 + 1 + 7 + 4;                  // 48: +16 = q (v4)
 inline constexpr std::size_t kPropRecContainerWire = 1 + 1 + 64 * 5; // 322
 inline constexpr std::size_t kPickupRecWire = 2 + 2 + 1 + 12;        // 17
 
@@ -554,7 +559,10 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // Сущности ПЕРЕД геометрией: их ширины — арифметика счётчиков, геометрия
 // самоограничена хвостом. v2-файлы отклоняются целиком (честная инвалидация
 // вместо миграции — стандартное правило).
-inline constexpr std::uint32_t kFloorFileVersion = 3u;
+// v3 -> v4 (2026-08-31): PropRecord несёт q лежащего тела («в сейв пишем всё
+// честно — снимок этажа», решение владельца). Старые файлы отвергаются
+// целиком (S20.6 закон 4) — этаж перегенерируется.
+inline constexpr std::uint32_t kFloorFileVersion = 4u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World + сущности этажа into a complete floor file

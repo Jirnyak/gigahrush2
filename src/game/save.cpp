@@ -400,6 +400,10 @@ void visit_prop_rec(Ar& ar, R& rec) {
     ar.u8(rec.flags);
     visit_vec3(ar, rec.pos);
     ar.f32(rec.yaw);
+    ar.f32(rec.q.x); // ориентация лежащего тела (v4) — см. PropRecord
+    ar.f32(rec.q.y);
+    ar.f32(rec.q.z);
+    ar.f32(rec.q.w);
     ar.u8(rec.animPhase);
     ar.u8(rec.meshFlags);
     // SubVoxelAnchor.cx/cy/cz — int в записи движка; провод — байты (макро-
@@ -920,7 +924,13 @@ std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
         }
         if (const SubVoxelAnchor* a = reg.try_get<SubVoxelAnchor>(e))
             rec.anchor = *a;
-        if (!reg.all_of<StaticPropTag>(e)) rec.flags |= kPropRecDetached;
+        if (!reg.all_of<StaticPropTag>(e)) {
+            rec.flags |= kPropRecDetached;
+            // Ориентация лежащего тела — честный снимок (v4): без неё
+            // загрузка ставила упавший проп стоймя.
+            if (const RigidBody* rb = reg.try_get<RigidBody>(e))
+                rec.q = rb->q;
+        }
         if (const Interactable* ia = reg.try_get<Interactable>(e))
             if (!ia->active) rec.flags |= kPropRecInactive;
         if (const Container* box = reg.try_get<Container>(e)) {
@@ -1036,6 +1046,11 @@ std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
         // состояние.
         if ((rec.flags & kPropRecDetached) || !anchor_alive(world, rec.anchor))
             prop_detach(reg, e, bus);
+        // Снятая при выгрузке ориентация тела возвращается ПОВЕРХ детача
+        // (тот сеет q из yaw как дефолт): лежавший на боку встаёт на бок.
+        // Ненулевой w-компонент отличает честную запись v4 от пустой.
+        if ((rec.flags & kPropRecDetached) && rec.q.w != 0.0f)
+            if (RigidBody* rb = reg.try_get<RigidBody>(e)) rb->q = rec.q;
     }
     return made;
 }

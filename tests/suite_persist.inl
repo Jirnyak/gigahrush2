@@ -123,6 +123,10 @@ void full_round_trip() {
     CHECK(torn != entt::null);
     prop_detach(reg, torn, bus);
     CHECK(!reg.all_of<StaticPropTag>(torn));
+    // Лежащая ПОЗА (v4): тело перевёрнуто — 120° вокруг (1,1,1). Сейв обязан
+    // вернуть её бит-в-бит; до v4 restore ставил упавший проп «стоймя»
+    // позой yaw (баг владельца 2026-08-31, «в сейв пишем всё честно»).
+    reg.get<RigidBody>(torn).q = quat{0.5f, 0.5f, 0.5f, 0.5f};
 
     // Лут на полу — единственным писателем.
     Entity pk = spawn_pickup(reg, layer,
@@ -250,6 +254,10 @@ void full_round_trip() {
         if (!reg2.all_of<StaticPropTag>(e)) {
             ++dynamicProps;
             CHECK(reg2.all_of<RigidBody>(e));
+            // Лежащая поза вернулась бит-в-бит (v4), не «стоймя» из yaw.
+            const RigidBody& rb = reg2.get<RigidBody>(e);
+            CHECK(rb.q.x == 0.5f && rb.q.y == 0.5f && rb.q.z == 0.5f &&
+                  rb.q.w == 0.5f);
         }
     }
     CHECK(crates == 1);
