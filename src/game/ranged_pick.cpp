@@ -10,9 +10,13 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
     // or a gun, and this reader answers only when it is a real firearm — thrown
     // stays excluded for the same load-bearing reason as the scan below.
     if (eq) {
-        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
-        if (!ranged_for_item(chosen) || ranged_is_thrown(chosen)) return kInvalidItem;
-        return chosen;
+        // ДВЕ РУКИ (two-hands.md): огнестрел ищется в обеих, ЛКМ первой.
+        for (int r = 0; r < 2; ++r) {
+            const ItemId chosen = equipped_hand(inv, *eq, r == 1);
+            if (ranged_for_item(chosen) && !ranged_is_thrown(chosen))
+                return chosen;
+        }
+        return kInvalidItem;
     }
     ItemId best = kInvalidItem;
     float bestDps = 0.0f;
@@ -42,8 +46,13 @@ ItemId equipped_throwable(const Inventory& inv, const Equipped* eq) {
     // (клавишу Z сняли, а слот-путь не подключили — гранаты «надевались»
     // и не кидались, находка владельца).
     if (eq) {
-        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
-        if (ranged_for_item(chosen) && ranged_is_thrown(chosen)) return chosen;
+        // ДВЕ РУКИ: метательное ищется в обеих, ПКМ первой (граната в ПКМ
+        // при стволе в ЛКМ — канонический лоадаут владельца).
+        for (int r = 0; r < 2; ++r) {
+            const ItemId chosen = equipped_hand(inv, *eq, r == 0);
+            if (ranged_for_item(chosen) && ranged_is_thrown(chosen))
+                return chosen;
+        }
     }
     ItemId best = kInvalidItem;
     float bestScore = 0.0f;

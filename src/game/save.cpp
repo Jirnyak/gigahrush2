@@ -291,9 +291,9 @@ void visit_player(Ar& ar, P& p) {
     // v13: the player's equip decisions ride the snapshot ([save.h] eq).
     // pad_ is written so the wire is exactly 4 and a future non-zero pad
     // cannot silently drop — the same rule visit_rpg states.
-    ar.u8(p.eq.weapon);
+    ar.u8(p.eq.handL); // байт бывшего weapon — раскладка сейва не менялась
     ar.u8(p.eq.armor);
-    ar.u8(p.eq.tool);
+    ar.u8(p.eq.handR); // байт бывшего tool — старый tool честно в правой руке
     ar.u8(p.eq.pad_);
 }
 

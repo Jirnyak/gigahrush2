@@ -2790,6 +2790,7 @@ int main(int argc, char** argv) {
     // record's own rolled build.
     game::RpgStats carriedRpg = game::fresh_rpg(1);
     bool attackHeld = false;
+    bool rmbHeld = false; // ПКМ-рука (two-hands.md)
     // Carve scratch + result, reused across ops so a carve allocates nothing
     // after warmup ([world/destruct.h]).
     CarveScratch carveScratch;
@@ -3965,6 +3966,16 @@ int main(int argc, char** argv) {
                 } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
                            e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = false;
+                }
+                // ПКМ = вторая РУКА (two-hands.md): тот же гейт по окну,
+                // что у ЛКМ — клик по сетке до боя не доходит.
+                if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+                    e.button.button == SDL_BUTTON_RIGHT &&
+                    shell.window == UiWindow::None) {
+                    rmbHeld = true;
+                } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           e.button.button == SDL_BUTTON_RIGHT) {
+                    rmbHeld = false;
                 }
                 // МОГИЛА ЗАЖИМА-ВЗГЛЯДА НА ПКМ (приказ владельца 2026-08-31):
                 // ПКМ — вторая РУКА (эпик двух рук, план two-hands.md),
@@ -6136,31 +6147,43 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     game::entity_health(reg, pool, player, preHp, preMax);
 
-                bool haveGun = false;
-                bool haveThrown = false;
+                // ДВЕ РУКИ (two-hands.md): верб каждой руки решает ТИП
+                // предмета в ней таблицами — ствол стреляет, метательное
+                // бросается, пустая/холодная рука бьёт. Руки НЕЗАВИСИМЫ
+                // (решение владельца: очередь с одной, граната с другой —
+                // ствольный cooldownMs и throwCooldownMs раздельны).
+                bool gunL = false, gunR = false;
+                bool thrownL = false, thrownR = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrg->id)) {
                             const game::Equipped* peq =
                                 reg.try_get<game::Equipped>(player);
-                            haveGun = game::equipped_ranged(
-                                          pool.inventory(nrg->id), peq) !=
-                                      game::kInvalidItem;
-                            // МЕТАТЕЛЬНОЕ В СЛОТЕ ОРУЖИЯ — вторая половина
-                            // чистки клавиш 2026-08-28 («grenade — слот
-                            // оружия»): клавишу Z сняли, а слот-путь не
-                            // построили — граната «надевалась» и не
-                            // кидалась (находка владельца 2026-08-31).
-                            // ЛКМ бросает, как калаш стреляет; темп гейтит
-                            // общий cooldownMs внутри player_throw_step.
                             if (peq)
-                                haveThrown =
-                                    game::ranged_is_thrown(game::equipped_item(
-                                        pool.inventory(nrg->id), *peq,
-                                        game::EquipSlot::Weapon));
+                                for (int hr = 0; hr < 2; ++hr) {
+                                    const game::ItemId hi =
+                                        game::equipped_hand(
+                                            pool.inventory(nrg->id), *peq,
+                                            hr == 1);
+                                    const bool gun =
+                                        game::ranged_for_item(hi) != nullptr &&
+                                        !game::ranged_is_thrown(hi);
+                                    const bool thr =
+                                        game::ranged_for_item(hi) != nullptr &&
+                                        game::ranged_is_thrown(hi);
+                                    (hr ? gunR : gunL) = gun;
+                                    (hr ? thrownR : thrownL) = thr;
+                                }
                         }
-                if (haveThrown && attackHeld && shell.playing())
+                const bool fireWanted = (gunL && attackHeld) ||
+                                        (gunR && rmbHeld);
+                if (((thrownL && attackHeld) || (thrownR && rmbHeld)) &&
+                    shell.playing())
                     throwWanted = true;
+                // Пустая (без верб-предмета) рука бьёт — любой кнопкой.
+                const bool meleeWanted =
+                    (attackHeld && !gunL && !thrownL) ||
+                    (rmbHeld && !gunR && !thrownR);
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step. Nothing is dropped for a bake any more — the
                 // worker holds a snapshot, not the grid ([game/rebake.h]).
@@ -6168,7 +6191,7 @@ int main(int argc, char** argv) {
                 // Счёт выстрелов живёт в PlayerRanged::shots — локальный
                 // накопитель убит (К1-15), вызов остаётся: он стреляет.
                 game::player_ranged_step(reg, pool, activeLayer,
-                                                  haveGun && attackHeld && shell.playing(),
+                                                  fireWanted && shell.playing(),
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
@@ -6184,10 +6207,9 @@ int main(int argc, char** argv) {
                 const auto profCombatT0 = prof_now();
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    // Гранату в руке не сопровождаем кулаками: ЛКМ при
-                    // метательном — бросок (throwWanted выше), не удар.
-                    !haveGun && !haveThrown && attackHeld && shell.playing(),
-                    simTick,
+                    // Бьёт рука без верб-предмета (two-hands.md): кнопка
+                    // руки с гранатой/стволом кулаком не машет.
+                    meleeWanted && shell.playing(), simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
                     &playerStatus, &particleBursts,
                     &stack.layer(activeLayer).gravity());
@@ -7831,7 +7853,13 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::Equip:
-                        if (game::equip_item(pinv, peq, r.slot))
+                        // Адрес руки несёт заявка (two-hands.md): Weapon =
+                        // ЛКМ, Tool = ПКМ; броня — по def, как раньше.
+                        if (game::hand_accepts(r.eqSlot)
+                                ? game::equip_hand(pinv, peq, r.slot,
+                                                   r.eqSlot ==
+                                                       game::EquipSlot::Tool)
+                                : game::equip_item(pinv, peq, r.slot))
                             game::sync_armour(reg, pool, player);
                         break;
                     case InvUiRequest::Kind::Unequip:

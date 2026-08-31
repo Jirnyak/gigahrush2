@@ -2016,6 +2016,8 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // their own authored rate.
     if (pr.cooldownMs > elapsedMs) pr.cooldownMs -= elapsedMs; else pr.cooldownMs = 0;
     if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+    if (pr.throwCooldownMs > elapsedMs) pr.throwCooldownMs -= elapsedMs;
+    else pr.throwCooldownMs = 0;
 
     const NpcRef* nr = reg.try_get<NpcRef>(shooter);
     if (!nr || !pool.valid(nr->id)) return 0;
@@ -2167,7 +2169,9 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     // shares and never advances it; see [combat.h] for the ordering requirement that
     // makes that safe.
     PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(thrower);
-    if (!wantThrow || pr.cooldownMs > 0) return 0;
+    // Свой таймер, не ствольный (two-hands.md: руки независимы) — старится
+    // в player_ranged_step вместе с остальными.
+    if (!wantThrow || pr.throwCooldownMs > 0) return 0;
 
     const NpcRef* nr = reg.try_get<NpcRef>(thrower);
     if (!nr || !pool.valid(nr->id)) return 0;
@@ -2211,7 +2215,7 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     // detonation, three seconds later and somewhere else, published by
     // `charge_step` ([noise.h] blast_noise). `tick` взводит фитиль
     // (ChargeArmed.atTick — абсолютный сим-тик).
-    pr.cooldownMs = def->cooldownMs;
+    pr.throwCooldownMs = def->cooldownMs; // своя рука — свой темп
     ++pr.shots;
     return 1;
 }

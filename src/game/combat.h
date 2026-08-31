@@ -439,6 +439,11 @@ struct PlayerRanged {
     ItemId weapon = 0;
     std::uint32_t shots = 0;    // cumulative; survives possession like kills does
     std::uint32_t hits = 0;
+    // РУКИ НЕЗАВИСИМЫ (two-hands.md, решение владельца 2026-08-31: «палишь
+    // очередью с одной — кидаешь гранату другой»): бросок больше НЕ делит
+    // cooldownMs со стволом, у него свой таймер. Старится там же, где все
+    // (player_ranged_step, ровно один декремент — дефект 3 референса).
+    std::uint16_t throwCooldownMs = 0;
 };
 
 // The camera holder's swing state. Attached lazily by player_melee_step, so

@@ -133,7 +133,7 @@ namespace {
 void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
                 int count, int* sel, bool focused, bool* clickedFocus,
                 const game::Equipped* eq, const char* idPrefix,
-                std::uint64_t marks = 0) {
+                std::uint64_t marks = 0, int* rmbCell = nullptr) {
     for (int i = 0; i < count; ++i) {
         const int col = i % kInvCols, row = i / kInvCols;
         const ImVec2 a(g0.x + col * cell, g0.y + row * cell);
@@ -163,6 +163,13 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
             *sel = i;
             *clickedFocus = true;
         }
+        // ЗЕРКАЛО РУК (two-hands.md, «да» владельца на зеркальность):
+        // ПКМ-клик по клетке = решение ПКМ-руки (кладёт/снимает), E — ЛКМ.
+        if (rmbCell && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+            *sel = i;
+            *clickedFocus = true;
+            *rmbCell = i;
+        }
 
         if (!filled) continue;
         const game::ItemDef& d = game::item_def(s.item);
@@ -184,7 +191,7 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
         }
         // Метка РЕШЕНИЯ ([equip.h]): скобки-уголки на экипированной клетке.
         const bool decided =
-            eq && (eq->weapon == i || eq->armor == i || eq->tool == i);
+            eq && (eq->handL == i || eq->armor == i || eq->handR == i);
         if (decided) {
             dl->AddLine(ImVec2(a.x + 1, a.y + 7), ImVec2(a.x + 1, a.y + 1), kPhosphor, 2.0f);
             dl->AddLine(ImVec2(a.x + 1, a.y + 1), ImVec2(a.x + 7, a.y + 1), kPhosphor, 2.0f);
@@ -285,10 +292,26 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     if (twoSided)
         dl->AddText(ImVec2(g0.x, top.y), st.focusOther ? kPhosphorDim : kPhosphor,
                     "СВОЁ");
+    // ПКМ-клик по своей клетке = решение ПКМ-руки (зеркало рук, ниже).
+    int rmbCell = -1;
     draw_cells(dl, g0, cell, inv.slots, kInvSlots, &st.sel, !st.focusOther,
-               &clickOwn, eq, "cell", policy.ownMarks);
+               &clickOwn, eq, "cell", policy.ownMarks,
+               policy.allowEquip ? &rmbCell : nullptr);
     if (clickOther) st.focusOther = true;
     if (clickOwn) st.focusOther = false;
+    if (rmbCell >= 0) {
+        const ItemSlot& rs = inv.slots[rmbCell];
+        if (rs.item != kInvalidItem && rs.count > 0 &&
+            game::item_valid(rs.item) &&
+            game::hand_accepts(static_cast<game::EquipSlot>(
+                game::item_def(rs.item).equipSlot))) {
+            const bool inR =
+                eq && eq->handR == static_cast<std::uint8_t>(rmbCell);
+            req = {inR ? InvUiRequest::Kind::Unequip
+                       : InvUiRequest::Kind::Equip,
+                   static_cast<std::uint8_t>(rmbCell), EquipSlot::Tool};
+        }
+    }
 
     // Перенос — клавишами, симметрично: Enter несёт выбранное С АКТИВНОЙ
     // стороны на другую, T — забрать всё (хоткей форка). Заявки, не мутации.
@@ -364,19 +387,33 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         const std::uint8_t slot8 = static_cast<std::uint8_t>(st.sel);
         const EquipSlot es = static_cast<EquipSlot>(d.equipSlot);
         const bool wearable = es != EquipSlot::None;
-        const bool decidedHere =
-            eq && ((es == EquipSlot::Weapon && eq->weapon == st.sel) ||
-                   (es == EquipSlot::Armor && eq->armor == st.sel) ||
-                   (es == EquipSlot::Tool && eq->tool == st.sel));
         if (policy.allowEquip && wearable) {
-            if (decidedHere) {
-                if (ImGui::Button("Снять [E]") ||
-                    ImGui::IsKeyPressed(ImGuiKey_E, false))
-                    req = {InvUiRequest::Kind::Unequip, slot8, es};
+            if (game::hand_accepts(es)) {
+                // ДВЕ РУКИ (two-hands.md): E — решение ЛКМ-руки, ПКМ-клик
+                // по клетке — решение ПКМ-руки (зеркальность владельца).
+                const bool inL = eq && eq->handL == st.sel;
+                if (inL) {
+                    if (ImGui::Button("Снять ЛКМ [E]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_E, false))
+                        req = {InvUiRequest::Kind::Unequip, slot8,
+                               EquipSlot::Weapon};
+                } else {
+                    if (ImGui::Button("В ЛКМ-руку [E]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_E, false))
+                        req = {InvUiRequest::Kind::Equip, slot8,
+                               EquipSlot::Weapon};
+                }
             } else {
-                if (ImGui::Button("Экипировать [E]") ||
-                    ImGui::IsKeyPressed(ImGuiKey_E, false))
-                    req = {InvUiRequest::Kind::Equip, slot8, es};
+                const bool decidedHere = eq && eq->armor == st.sel;
+                if (decidedHere) {
+                    if (ImGui::Button("Снять [E]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_E, false))
+                        req = {InvUiRequest::Kind::Unequip, slot8, es};
+                } else {
+                    if (ImGui::Button("Экипировать [E]") ||
+                        ImGui::IsKeyPressed(ImGuiKey_E, false))
+                        req = {InvUiRequest::Kind::Equip, slot8, es};
+                }
             }
             ImGui::SameLine();
         }

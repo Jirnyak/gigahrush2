@@ -4038,7 +4038,10 @@ static void test_grenade() {
         CHECK(reg.all_of<PlayerMelee>(me));
         CHECK(reg.get<PlayerMelee>(me).kills == 0);
 
-        // The trigger is gated on the SHARED cooldown, which player_ranged_step owns.
+        // РУКИ НЕЗАВИСИМЫ (two-hands.md, закон владельца 2026-08-31): бросок
+        // гейтится СВОИМ throwCooldownMs, ствольный cooldownMs не делит и не
+        // трогает — «палишь очередью с одной, кидаешь другой». Старый пин
+        // «shared cooldown» перевёрнут этой строкой.
         CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false, 49u) == 0);
         CHECK(player_throw_step(reg, pool, layer, true, 49u) == 1);
         CHECK(player_throw_step(reg, pool, layer, true, 49u) == 0); // cooldown
@@ -4047,7 +4050,8 @@ static void test_grenade() {
         for (const ItemSlot& sl : inv.slots)
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
-        CHECK(reg.get<PlayerRanged>(me).cooldownMs == gdef.cooldownMs);
+        CHECK(reg.get<PlayerRanged>(me).throwCooldownMs == gdef.cooldownMs);
+        CHECK(reg.get<PlayerRanged>(me).cooldownMs == 0); // ствол не задет
         // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
         // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;

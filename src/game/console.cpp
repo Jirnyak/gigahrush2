@@ -1071,7 +1071,13 @@ bool cmd_equip(ConsoleContext& ctx, int argc, const char* const* argv,
         return false;
     }
     Equipped& eq = ctx.ecs->get_or_emplace<Equipped>(ctx.player);
-    if (!equip_item(inv, eq, static_cast<std::uint8_t>(idx))) {
+    // `equip <слот|имя> [rmb]` — рука адресуется словом (two-hands.md);
+    // без слова hand-предмет идёт в ЛКМ (маршрут equip_item по def).
+    const bool toR = argc >= 3 && std::strcmp(argv[2], "rmb") == 0;
+    const bool okEq =
+        toR ? equip_hand(inv, eq, static_cast<std::uint8_t>(idx), true)
+            : equip_item(inv, eq, static_cast<std::uint8_t>(idx));
+    if (!okEq) {
         if (out && cap)
             std::snprintf(out, cap, "equip: slot %ld is empty or not wearable",
                           idx);
@@ -1092,12 +1098,18 @@ bool cmd_unequip(ConsoleContext& ctx, int argc, const char* const* argv,
     if (!equip_ctx(ctx, "unequip", out, cap, &id)) return false;
     EquipSlot slot = EquipSlot::None;
     if (argc >= 2) {
-        if (std::strcmp(argv[1], "weapon") == 0) slot = EquipSlot::Weapon;
+        // lmb/rmb — имена рук (two-hands.md); weapon/tool — легаси-алиасы
+        // тех же адресов (Tool-СЛОТ убит, байт стал ПКМ-рукой).
+        if (std::strcmp(argv[1], "weapon") == 0 ||
+            std::strcmp(argv[1], "lmb") == 0)
+            slot = EquipSlot::Weapon;
         else if (std::strcmp(argv[1], "armor") == 0) slot = EquipSlot::Armor;
-        else if (std::strcmp(argv[1], "tool") == 0) slot = EquipSlot::Tool;
+        else if (std::strcmp(argv[1], "tool") == 0 ||
+                 std::strcmp(argv[1], "rmb") == 0)
+            slot = EquipSlot::Tool;
     }
     if (slot == EquipSlot::None) {
-        put(out, cap, "usage: unequip <weapon|armor|tool>");
+        put(out, cap, "usage: unequip <lmb|rmb|armor>");
         return false;
     }
     Equipped& eq = ctx.ecs->get_or_emplace<Equipped>(ctx.player);
