@@ -4285,32 +4285,12 @@ int main(int argc, char** argv) {
             // тем же швом, что entry-sweep (маски НЕ меняются — нав/свет/
             // якоря не должники конверсии; их долги придут mediumMaskChanged
             // когда автомат реально сдвинет рыхлое).
-            {
-                const auto profBigT0 = prof_now();
-                static std::vector<std::uint32_t> bigDirty;
-                bigDirty.clear();
-                big_judge_step(stack.layer(activeLayer), bigDirty);
-                if (!bigDirty.empty()) {
-                    voxelMirror.mark_dirty(bigDirty.data(), bigDirty.size());
-                    mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
-                                          stack.layer(activeLayer),
-                                          voxelMirror);
-                    // ДОЛГИ ПИСАТЕЛЯ — зеркально entry-sweep (плейтест
-                    // владельца 2026-08-31: лампы висели в пустоте после
-                    // обрушения — конверсия меняет МАТЕРИАЛ на подвижный,
-                    // якоря на нём мертвы World-пробой; антураж (провода/
-                    // тряпки) и спящие тела платят тот же долг. Нав не
-                    // трогаем: маски не менялись.
-                    if (game::anchor_validate_step(
-                            reg, stack.layer(activeLayer), activeLayer, bus,
-                            bigDirty, &particleBursts, 0x5EEDBEEFu) > 0)
-                        propPassNeedsRebuild = true;
-                    antourage_carve_step_here(bigDirty, 0x5EEDBEEFu);
-                    rigid_wake_dirty_cells(reg, activeLayer, bigDirty.data(),
-                                           bigDirty.size());
-                }
-                prof_add(kProfBigJudge, profBigT0);
-            }
+            // Порция суда переехала В СИМ-ЦИКЛ (2026-08-31, решение
+            // владельца): кадровый темп привязывал скорость обрушения к fps
+            // (60 порций/с на 60 fps, 30 на 30) — против закона каденса
+            // S16.3 «в игре ничего не должно зависеть от кадра». Теперь
+            // порция идёт на СИМ-ТИК (125 Гц) и стоит на паузе вместе с
+            // миром. Размер порции — крутить ПО ЗАМЕРУ [prof] big-judge.
         }
 
         // --- fixed-step simulation ----------------------------------------
@@ -4345,6 +4325,39 @@ int main(int argc, char** argv) {
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
                 prof_add(kProfNoise, profNoiseT0);
+                // БОЛЬШОЙ СУД (big-judge.md): порция флуда опоры или
+                // конверсии НА СИМ-ТИК (не на кадр — закон каденса S16.3;
+                // переезд 2026-08-31). Конвертированные клетки качаются в
+                // зеркало и автомат тем же швом, что entry-sweep.
+                {
+                    const auto profBigT0 = prof_now();
+                    static std::vector<std::uint32_t> bigDirty;
+                    bigDirty.clear();
+                    big_judge_step(stack.layer(activeLayer), bigDirty);
+                    if (!bigDirty.empty()) {
+                        voxelMirror.mark_dirty(bigDirty.data(),
+                                               bigDirty.size());
+                        mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
+                                              stack.layer(activeLayer),
+                                              voxelMirror);
+                        // ДОЛГИ ПИСАТЕЛЯ — зеркально entry-sweep (плейтест
+                        // владельца 2026-08-31: лампы висели в пустоте после
+                        // обрушения — конверсия меняет МАТЕРИАЛ на подвижный,
+                        // якоря на нём мертвы World-пробой; антураж (провода/
+                        // тряпки) и спящие тела платят тот же долг. Нав не
+                        // трогаем: маски не менялись.
+                        if (game::anchor_validate_step(
+                                reg, stack.layer(activeLayer), activeLayer,
+                                bus, bigDirty, &particleBursts,
+                                0x5EEDBEEFu) > 0)
+                            propPassNeedsRebuild = true;
+                        antourage_carve_step_here(bigDirty, 0x5EEDBEEFu);
+                        rigid_wake_dirty_cells(reg, activeLayer,
+                                               bigDirty.data(),
+                                               bigDirty.size());
+                    }
+                    prof_add(kProfBigJudge, profBigT0);
+                }
                 // While the console is OPEN, WASD is text, not movement: skip
                 // the bridge and park the intent so the body does not glide on
                 // the last pre-console wishDir. The open inventory grid owns
