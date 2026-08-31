@@ -1,37 +1,51 @@
 #version 450
 // verlet_sim.comp — THE GPU verlet for antourage: wires AND cloth in one
-// shader. A chain is just a W x 1 lattice: at H == 1 the vertical constraint
-// loop never runs and the horizontal loop degenerates into the old wire chain
-// sweep in the same traversal order, so no chain-specific code exists at all
-// (the merge's central fact, markoaudit/plans/verlet-merge.md §2.3).
+// shader over ONE SoA point pool (stage 2 of the merge, 2026-08-31). A chain
+// is just a W x 1 lattice: at H == 1 the vertical constraint loop never runs
+// and the horizontal loop degenerates into the old wire chain sweep in the
+// same traversal order — no chain-specific code exists at all.
+//
+// TWO PHASES, one pipeline, pc.dims.w switches (plan §2.3):
+//   phase 0 — POINTS: one invocation per point; verlet integrate, body push,
+//             axis-wise landing on the world. Fully parallel by construction
+//             (a point writes only itself), which is exactly why the pool
+//             relayout could go point-granular without changing one float.
+//   phase 1 — ELEMENTS: one invocation per element; the serial constraint
+//             relaxation, byte-identical math to the pre-SoA shader.
+//
+// BANKS, not indirection: wires occupy points [0 .. clothPointBase), cloths
+// the rest; element sizes are compile-time facts (8 and 8x4 = 32), so bank
+// membership and the point<->element map are ARITHMETIC off pc.dims.y —
+// plan §2.1's "no indirection buffer" carried into the merged layout.
 //
 // ONE-WAY by law ([game/antourage/antourage.h]): bodies push antourage,
 // antourage pushes nothing back — the whole sim lives on the render side and
-// the CPU tick pays zero. One invocation per ELEMENT (a chain of 8 or a sheet
-// of 32 points): counts are tiny, so the constraint relaxation runs serially
-// per thread and needs no cross-invocation sync.
+// the CPU tick pays zero.
 //
-// Layout must stay in LOCKSTEP with gpu::GpuWireChain / gpu::GpuClothSheet
-// (render/verlet_pass.h) and shaders/wire.vert / cloth.vert. An element is
-// {vec4 meta; vec4 cur[P]; vec4 prev[P]} with P = W*H from the push block —
-// byte-for-byte the old per-kind records, addressed here as raw vec4s so ONE
-// shader walks both strides. meta.x = horizontal rest, meta.y = alive flag
-// (CPU writes it from the anchor probe), meta.z = vertical rest (a chain
-// parks massKg there — never read at H == 1), cur.w = inverse mass
-// (0 = pinned point).
+// Layout must stay in LOCKSTEP with gpu::VerletPoint / gpu::VerletElem
+// (render/verlet_pass.h) and shaders/wire.vert / cloth.vert. A point is
+// {vec4 cur; vec4 prev}; cur.w = inverse mass (0 = pinned; the pass also
+// freezes nothing else — a dead ELEMENT is skipped whole via elems.alive).
+// An element is ONE vec4: {restX, restY, alive, massKg} — massKg is parked
+// for the medium-damping increment (materials.csv, owner 2026-08-31).
 
 layout(local_size_x = 64) in;
 
-layout(std430, binding = 0) buffer Points { vec4 v[]; } eb;
+struct Pt {
+    vec4 cur;
+    vec4 prev;
+};
+layout(std430, binding = 0) buffer Points { Pt p[]; } eb;
+layout(std430, binding = 1) readonly buffer Elems { vec4 e[]; } el;
 // This frame's push bodies: xyz = world pos, w = radius. EVERY body on the
 // layer is here — the player is one of them, an NPC with a camera, never a
 // special case (owner's law).
-layout(std430, binding = 1) readonly buffer Bodies { vec4 b[]; } bb;
+layout(std430, binding = 2) readonly buffer Bodies { vec4 b[]; } bb;
 
 // VoxelMirror masks — the same SSBO particle_sim.comp collides against, so a
 // piece that lost its last pin FALLS AND LANDS instead of sinking through the
 // floor. One view of the truth, one collision rule.
-layout(std430, binding = 2) readonly buffer MaskBuf { uint uMasks[]; };
+layout(std430, binding = 3) readonly buffer MaskBuf { uint uMasks[]; };
 
 // Solidity of the sub-voxel containing world point `w` (toroidal).
 // Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
@@ -62,54 +76,65 @@ vec3 world_land(vec3 cur, vec3 np) {
     return pos;
 }
 
-// One name, one meaning per field — the three old SimPush structs died with
-// the wire/cloth pass merge (sim.w used to mean damping OR the torus period
-// depending on the file; never again).
+// One name, one meaning per field — mirrors gpu::VerletPush.
 layout(push_constant) uniform VerletPush {
-    vec4 dims; // x = element count, y = body count, z = grid W, w = grid H
-    vec4 sim;  // x = dt, y = damping, z = wrap period (m), w = unused
-    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w = unused — NEVER assume -Z
+    vec4 dims; // x = total points, y = cloth point base, z = body count, w = phase
+    vec4 sim;  // x = dt, y = damping, z = wrap period (m), w = element count
+    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w — NEVER assume -Z
 } pc;
 
-void main() {
-    uint i = gl_GlobalInvocationID.x;
+const int kWireW = 8;
+const int kClothW = 8;
+const int kClothH = 4;
+const int kClothP = kClothW * kClothH;
+
+void phase_points(uint i) {
     if (i >= uint(pc.dims.x)) return;
+    const uint clothBase = uint(pc.dims.y);
+    const uint nWires = clothBase / uint(kWireW);
 
-    const int W = int(pc.dims.z);
-    const int H = int(pc.dims.w);
-    const int P = W * H;
-    const uint curB = i * uint(1 + 2 * P) + 1u;  // element base, past meta
-    const uint prevB = curB + uint(P);
+    // Bank arithmetic: which element owns this point.
+    const uint e = i < clothBase
+                       ? i / uint(kWireW)
+                       : nWires + (i - clothBase) / uint(kClothP);
+    if (el.e[e].z < 0.5) return; // dead element: anchors carved away
 
-    vec4 meta = eb.v[curB - 1u];
-    if (meta.y < 0.5) return;           // dead element: anchors carved away
+    vec4 cur = eb.p[i].cur;
+    if (cur.w == 0.0) return; // pinned point
 
     const float dt = pc.sim.x;
-    const float restX = meta.x;
-    const float restY = meta.z;
     const float per = pc.sim.z;
-
-    // Verlet integrate every free point, bodies pushing (torus-wrapped delta).
-    for (int k = 0; k < P; ++k) {
-        vec4 cur = eb.v[curB + uint(k)];
-        if (cur.w == 0.0) continue;     // pinned point
-        vec3 vel = (cur.xyz - eb.v[prevB + uint(k)].xyz) * pc.sim.y;
-        vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
-        for (uint bi = 0u; bi < uint(pc.dims.y); ++bi) {
-            vec3 dp = np - bb.b[bi].xyz;
-            dp -= per * floor(dp / per + 0.5);
-            float r = bb.b[bi].w;
-            float d2 = dot(dp, dp);
-            if (d2 < r * r && d2 > 1e-6) {
-                float d = sqrt(d2);
-                np += dp / d * (r - d) * 0.35;
-            }
+    vec3 vel = (cur.xyz - eb.p[i].prev.xyz) * pc.sim.y;
+    vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
+    for (uint bi = 0u; bi < uint(pc.dims.z); ++bi) {
+        vec3 dp = np - bb.b[bi].xyz;
+        dp -= per * floor(dp / per + 0.5);
+        float r = bb.b[bi].w;
+        float d2 = dot(dp, dp);
+        if (d2 < r * r && d2 > 1e-6) {
+            float d = sqrt(d2);
+            np += dp / d * (r - d) * 0.35;
         }
-        // Land on the world instead of sinking through it (see world_land:
-        // `prev` staying put IS the stop).
-        eb.v[prevB + uint(k)] = vec4(cur.xyz, 0.0);
-        eb.v[curB + uint(k)] = vec4(world_land(cur.xyz, np), cur.w);
     }
+    // Land on the world instead of sinking through it (see world_land:
+    // `prev` staying put IS the stop).
+    eb.p[i].prev = vec4(cur.xyz, eb.p[i].prev.w);
+    eb.p[i].cur = vec4(world_land(cur.xyz, np), cur.w);
+}
+
+void phase_elements(uint k) {
+    if (k >= uint(pc.sim.w)) return;
+    const uint clothBase = uint(pc.dims.y);
+    const uint nWires = clothBase / uint(kWireW);
+    if (el.e[k].z < 0.5) return; // dead element
+
+    const bool isWire = k < nWires;
+    const int W = isWire ? kWireW : kClothW;
+    const int H = isWire ? 1 : kClothH;
+    const uint base = isWire ? k * uint(kWireW)
+                             : clothBase + (k - nWires) * uint(kClothP);
+    const float restX = el.e[k].x;
+    const float restY = el.e[k].y;
 
     // Distance constraints, a few relaxation sweeps. At H == 1 the horizontal
     // sweep IS the old wire chain loop (r = 0, c = 0..W-2, same order) and the
@@ -118,32 +143,39 @@ void main() {
         // Horizontal neighbours.
         for (int r = 0; r < H; ++r)
             for (int c = 0; c < W - 1; ++c) {
-                uint a = curB + uint(r * W + c), e = a + 1u;
-                vec4 A = eb.v[a];
-                vec4 B = eb.v[e];
+                uint a = base + uint(r * W + c), e2 = a + 1u;
+                vec4 A = eb.p[a].cur;
+                vec4 B = eb.p[e2].cur;
                 vec3 d = B.xyz - A.xyz;
                 float len = length(d);
                 if (len < 1e-5) continue;
                 float ws = A.w + B.w;
                 if (ws <= 0.0) continue;
                 vec3 corr = d * ((len - restX) / len);
-                eb.v[a].xyz += corr * (A.w / ws);
-                eb.v[e].xyz -= corr * (B.w / ws);
+                eb.p[a].cur.xyz += corr * (A.w / ws);
+                eb.p[e2].cur.xyz -= corr * (B.w / ws);
             }
         // Vertical neighbours.
         for (int r = 0; r < H - 1; ++r)
             for (int c = 0; c < W; ++c) {
-                uint a = curB + uint(r * W + c), e = a + uint(W);
-                vec4 A = eb.v[a];
-                vec4 B = eb.v[e];
+                uint a = base + uint(r * W + c), e2 = a + uint(W);
+                vec4 A = eb.p[a].cur;
+                vec4 B = eb.p[e2].cur;
                 vec3 d = B.xyz - A.xyz;
                 float len = length(d);
                 if (len < 1e-5) continue;
                 float ws = A.w + B.w;
                 if (ws <= 0.0) continue;
                 vec3 corr = d * ((len - restY) / len);
-                eb.v[a].xyz += corr * (A.w / ws);
-                eb.v[e].xyz -= corr * (B.w / ws);
+                eb.p[a].cur.xyz += corr * (A.w / ws);
+                eb.p[e2].cur.xyz -= corr * (B.w / ws);
             }
     }
+}
+
+void main() {
+    if (pc.dims.w < 0.5)
+        phase_points(gl_GlobalInvocationID.x);
+    else
+        phase_elements(gl_GlobalInvocationID.x);
 }

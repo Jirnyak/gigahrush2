@@ -126,16 +126,9 @@ std::uint64_t hash_chain(const gpu::GpuWireChain& c) {
     return h;
 }
 
-const gpu::GpuWireChain* mapped_chain(const gpu::VerletPass& pass,
-                                      const void* mapped, int idx) {
-    (void)pass;
-    return static_cast<const gpu::GpuWireChain*>(mapped) + idx;
-}
-
 // ПОДВЕС: два пина на 2 м, суммарный rest 2.8 м — середина обязана провиснуть
 // и успокоиться; пины не двигаются вообще (в шейдере ранний continue).
-void test_hanging_chain(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                        const void* wireMapped) {
+void test_hanging_chain(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     vec3 pts[8];
     bool pin[8] = {true, false, false, false, false, false, false, true};
     for (int i = 0; i < 8; ++i)
@@ -145,7 +138,8 @@ void test_hanging_chain(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
     pass.upload_wires(&up, 1);
     pass.upload_bodies(nullptr, 0);
     CHECK(run_sims(dev, pass, 600, vec3{0.0f, 0.0f, -9.81f}));
-    const gpu::GpuWireChain got = *mapped_chain(pass, wireMapped, 0);
+    gpu::GpuWireChain got{};
+    pass.gather_chain(0, &got);
     // Пины стоят точно там, где их поставили.
     CHECK(got.cur[0].x == 10.0f && got.cur[0].z == 30.0f);
     CHECK(got.cur[7].x == 12.0f && got.cur[7].z == 30.0f);
@@ -160,8 +154,7 @@ void test_hanging_chain(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
 
 // ПОСАДКА: цепь без единого пина над бетонной плитой — падает и ложится НА
 // поверхность (верх плиты z=10), не проваливаясь и не зависая.
-void test_severed_lands(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                        const void* wireMapped) {
+void test_severed_lands(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     vec3 pts[8];
     bool pin[8] = {false, false, false, false, false, false, false, false};
     for (int i = 0; i < 8; ++i)
@@ -170,7 +163,8 @@ void test_severed_lands(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
     pass.upload_wires(&up, 1);
     pass.upload_bodies(nullptr, 0);
     CHECK(run_sims(dev, pass, 600, vec3{0.0f, 0.0f, -9.81f}));
-    const gpu::GpuWireChain got = *mapped_chain(pass, wireMapped, 0);
+    gpu::GpuWireChain got{};
+    pass.gather_chain(0, &got);
     for (int i = 0; i < 8; ++i) {
         CHECK(got.cur[i].z >= 9.99f); // не утонула в плите
         CHECK(got.cur[i].z <= 10.6f); // и не зависла в воздухе
@@ -180,8 +174,7 @@ void test_severed_lands(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
 
 // ИЗОТРОПИЯ: гравитация — ВЕКТОР (+X), опора — стена, перпендикулярная X.
 // Тот же закон посадки, ни одной оси в правиле (S1; канон «NEVER assume -Z»).
-void test_isotropy_landing(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                           const void* wireMapped) {
+void test_isotropy_landing(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     vec3 pts[8];
     bool pin[8] = {false, false, false, false, false, false, false, false};
     for (int i = 0; i < 8; ++i)
@@ -190,7 +183,8 @@ void test_isotropy_landing(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
     pass.upload_wires(&up, 1);
     pass.upload_bodies(nullptr, 0);
     CHECK(run_sims(dev, pass, 600, vec3{9.81f, 0.0f, 0.0f}));
-    const gpu::GpuWireChain got = *mapped_chain(pass, wireMapped, 0);
+    gpu::GpuWireChain got{};
+    pass.gather_chain(0, &got);
     for (int i = 0; i < 8; ++i) {
         CHECK(got.cur[i].x >= 79.99f); // долетела до стены (грань x=80)
         CHECK(got.cur[i].x <= 80.6f);  // и не вошла в неё
@@ -200,8 +194,7 @@ void test_isotropy_landing(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
 
 // ТКАНЬ: решётка 8x4, верхняя строка пиновая. Вертикальный солвер (H>1 —
 // ветка, которой нет у цепей) держит restY, нижняя строка висит ниже верхней.
-void test_cloth_hangs(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                      const void* clothMapped) {
+void test_cloth_hangs(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     gpu::GpuClothSheet s{};
     const float restX = 0.25f, restY = 0.25f;
     s.meta = vec4{restX, 1.0f, restY, 0.0f};
@@ -216,7 +209,9 @@ void test_cloth_hangs(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
     pass.upload_cloths(&s, 1);
     pass.upload_bodies(nullptr, 0);
     CHECK(run_sims(dev, pass, 600, vec3{0.0f, 0.0f, -9.81f}));
-    const auto* got = static_cast<const gpu::GpuClothSheet*>(clothMapped);
+    gpu::GpuClothSheet sheet{};
+    pass.gather_sheet(0, &sheet);
+    const gpu::GpuClothSheet* got = &sheet;
     // Верхняя строка приколота, нижняя — ниже неё.
     CHECK(got->cur[0].z == 30.0f);
     for (int c = 0; c < gpu::kClothGridW; ++c) {
@@ -237,8 +232,7 @@ void test_cloth_hangs(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
 
 // ДЕТЕРМИНИЗМ: одинаковый вход — бит-идентичный выход. Это фундамент всего
 // пин-протокола слияния (§6.2: «побитово, где математика не тронута»).
-void test_determinism(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                      const void* wireMapped) {
+void test_determinism(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     std::uint64_t h[2] = {0, 0};
     for (int run = 0; run < 2; ++run) {
         vec3 pts[8];
@@ -250,7 +244,9 @@ void test_determinism(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
         pass.upload_wires(&up, 1);
         pass.upload_bodies(nullptr, 0);
         CHECK(run_sims(dev, pass, 300, vec3{0.0f, 0.0f, -9.81f}));
-        h[run] = hash_chain(*mapped_chain(pass, wireMapped, 0));
+        gpu::GpuWireChain got{};
+        pass.gather_chain(0, &got);
+        h[run] = hash_chain(got);
     }
     CHECK(h[0] == h[1]);
     CHECK(h[0] != 1469598103934665603ull); // хеш не пустышка
@@ -259,8 +255,7 @@ void test_determinism(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
 // ТЕЛА: толкатель в точке провиса — успокоившаяся цепь обязана лежать ВНЕ
 // его радиуса (единственный тест байндинга тел; у частиц его не было никогда,
 // и слияние подарит им этот же путь).
-void test_body_pushes(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
-                      const void* wireMapped) {
+void test_body_pushes(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     vec3 pts[8];
     bool pin[8] = {true, false, false, false, false, false, false, true};
     for (int i = 0; i < 8; ++i)
@@ -271,7 +266,8 @@ void test_body_pushes(gpu::VulkanDevice& dev, gpu::VerletPass& pass,
     const vec4 body{11.0f, 10.0f, 29.4f, 0.6f}; // там, куда цепь провисает
     pass.upload_bodies(&body, 1);
     CHECK(run_sims(dev, pass, 600, vec3{0.0f, 0.0f, -9.81f}));
-    const gpu::GpuWireChain got = *mapped_chain(pass, wireMapped, 0);
+    gpu::GpuWireChain got{};
+    pass.gather_chain(0, &got);
     int inside = 0;
     for (int i = 1; i < 7; ++i) {
         const float dx = got.cur[i].x - body.x;
@@ -311,29 +307,14 @@ int main() {
         CHECK(pass.sim_ready());
         CHECK(!pass.ready()); // draw-пайплайны не создавались
 
-        // Прямые mapped-указатели секций: тест читает то же, что хеширует
-        // GIGA_VERLET_PIN. Доступ через дружественный шов не нужен — буферы
-        // host-visible по построению (иначе бы и пин не работал).
-        const void* wireMapped = nullptr;
-        const void* clothMapped = nullptr;
-        {
-            // Одна цепь-зонд, чтобы достать указатели через section state:
-            // upload не меняет адрес буфера, только содержимое.
-            vec3 pts[8] = {};
-            bool pin[8] = {};
-            const gpu::GpuWireChain probe = make_chain(pts, pin, 0.3f);
-            pass.upload_wires(&probe, 1);
-            wireMapped = pass.wire_mapped();
-            clothMapped = pass.cloth_mapped();
-            CHECK(wireMapped != nullptr && clothMapped != nullptr);
-        }
-
-        test_hanging_chain(dev, pass, wireMapped);
-        test_severed_lands(dev, pass, wireMapped);
-        test_isotropy_landing(dev, pass, wireMapped);
-        test_cloth_hangs(dev, pass, clothMapped);
-        test_determinism(dev, pass, wireMapped);
-        test_body_pushes(dev, pass, wireMapped);
+        // Чтение состояния — gather_chain/gather_sheet: тот же шов, которым
+        // GIGA_VERLET_PIN собирает элемент из SoA-пула.
+        test_hanging_chain(dev, pass);
+        test_severed_lands(dev, pass);
+        test_isotropy_landing(dev, pass);
+        test_cloth_hangs(dev, pass);
+        test_determinism(dev, pass);
+        test_body_pushes(dev, pass);
 
         pass.destroy();
         mirror.destroy();

@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "render/vk_device.h"
-#include "world/types.h" // kWorldExtent — the torus period for body deltas
+#include "world/types.h" // kWorldExtent — the sim's wrap period
 
 namespace giga::gpu {
 
@@ -38,31 +38,32 @@ std::string join(const char* dir, const char* file) {
     return s;
 }
 
-// One push block, one meaning per field — the three old SimPush structs (two
-// 48 B, one 32 B, sim.w = damping OR torus period depending on the file) were
-// an ODR trap waiting for exactly this merge. Mirrors verlet_sim.comp.
+// One push block, one meaning per field. Mirrors verlet_sim.comp. Bank
+// membership of a point/element is arithmetic off dims.y (the cloth bank's
+// first point) — the SoA pool has no indirection table by design (plan §2.1).
 struct VerletPush {
-    vec4 dims; // x element count, y body count, z grid W, w grid H
-    vec4 sim;  // x dt, y damping, z wrap period (m), w unused
+    vec4 dims; // x total points, y cloth point base, z body count, w phase
+    vec4 sim;  // x dt, y damping, z wrap period (m), w element count
     vec4 grav; // xyz gravity vector (m/s^2), w unused — NEVER assume -Z
 };
 static_assert(sizeof(VerletPush) == 48,
               "sim push must stay under the 128-byte guaranteed range");
 
 // Verlet damping per step. A LITERAL by explicit owner decision for the
-// behaviour-preserving merge: deriving it from the element's mass (which the
-// bake already packs into meta.z) is a SEMANTIC change and lives in its own
-// increment (markoaudit/plans/verlet-merge.md §3, stage 1.5).
+// behaviour-preserving merge: deriving it from the element's mass and the
+// MEDIUM it hangs in (materials.csv density — owner's extension 2026-08-31)
+// is a SEMANTIC change and lives in its own increment (verlet-merge.md инкр. 4).
 constexpr float kVerletDamping = 0.985f;
 
 // --- GIGA_VERLET_PIN=N: reproducible state snapshot after N recorded sims ---
-// The ONLY test surface the GPU verlet has (ctest executes no GLSL, see
-// markoaudit/plans/verlet-merge.md §6). Counted in SIMS SINCE THE LAST
-// upload, never frames or ticks: the --shot harness presents a run-dependent
-// number of frames before travel fires, so only "sims since this floor's
-// upload" is comparable across runs. Under the flag the push bodies are
-// dropped too — the crowd walks nondeterministically and would poison the
-// hash. Zero cost when the env var is absent. PERMANENT tool, do not remove.
+// Counted in SIMS SINCE THE LAST upload, never frames or ticks: the --shot
+// harness presents a run-dependent number of frames before travel fires, so
+// only "sims since this floor's upload" is comparable across runs. Under the
+// flag the push bodies are dropped too — the crowd walks nondeterministically
+// and would poison the hash. Zero cost when the env var is absent.
+// PERMANENT tool, do not remove. The hash walks cur.xyz per element in point
+// order — IDENTICAL byte order before and after the SoA relayout, so pins
+// stay comparable across the merge.
 int verlet_pin_sims() {
     static const int n = [] {
         const char* e = std::getenv("GIGA_VERLET_PIN");
@@ -87,79 +88,79 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                       VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
     lightGridSetLayout_ = lightGridSetLayout;
-    if (!wire_.points.create_host_visible(
-            *dev_, sizeof(GpuWireChain) * kMaxWireChains,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "wire-chains"))
+    if (!points_.create_host_visible(
+            *dev_, sizeof(VerletPoint) * kRootAntouragePoints,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "verlet-points"))
         return false;
-    if (!cloth_.points.create_host_visible(
-            *dev_, sizeof(GpuClothSheet) * kMaxClothSheets,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "cloth-sheets"))
+    if (!elems_.create_host_visible(*dev_,
+                                    sizeof(VerletElem) * kMaxAntourageElems,
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    "verlet-elems"))
         return false;
     if (!bodies_.create_host_visible(*dev_, sizeof(vec4) * kMaxPushBodies,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      "verlet-bodies"))
         return false;
 
-    VkDescriptorSetLayoutBinding b[3]{};
-    b[0].binding = 0; // the section's elements (chains or sheets)
+    VkDescriptorSetLayoutBinding b[4]{};
+    b[0].binding = 0; // the point pool (banks back to back)
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[0].descriptorCount = 1;
     b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT;
-    b[1].binding = 1; // this frame's push bodies, compute only
+    b[1].binding = 1; // the element table {restX, restY, alive, massKg}
     b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[1].descriptorCount = 1;
-    b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    b[2].binding = 2; // VoxelMirror masks — what a severed piece lands ON
+    b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT;
+    b[2].binding = 2; // this frame's push bodies, compute only
     b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[2].descriptorCount = 1;
     b[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[3].binding = 3; // VoxelMirror masks — what a severed piece lands ON
+    b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[3].descriptorCount = 1;
+    b[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo slci{};
     slci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    slci.bindingCount = 3;
+    slci.bindingCount = 4;
     slci.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev_->device, &slci, nullptr, &setLayout_) !=
         VK_SUCCESS)
         return false;
 
-    // Two sets — wire and cloth — over ONE layout: only binding 0 differs.
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6};
+    // ONE set: the banks stopped owning buffers, so the two per-section sets
+    // of the pre-SoA pass collapsed with them.
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pci.maxSets = 2;
+    pci.maxSets = 1;
     pci.poolSizeCount = 1;
     pci.pPoolSizes = &ps;
     if (vkCreateDescriptorPool(dev_->device, &pci, nullptr, &pool_) != VK_SUCCESS)
         return false;
-    VkDescriptorSetLayout layouts[2] = {setLayout_, setLayout_};
-    VkDescriptorSet sets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = pool_;
-    ai.descriptorSetCount = 2;
-    ai.pSetLayouts = layouts;
-    if (vkAllocateDescriptorSets(dev_->device, &ai, sets) != VK_SUCCESS)
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &setLayout_;
+    if (vkAllocateDescriptorSets(dev_->device, &ai, &set_) != VK_SUCCESS)
         return false;
-    wire_.set = sets[0];
-    cloth_.set = sets[1];
 
-    const VkBuffer pointBufs[2] = {wire_.points.buffer, cloth_.points.buffer};
-    for (int si = 0; si < 2; ++si) {
-        VkDescriptorBufferInfo bi[3] = {
-            {pointBufs[si], 0, VK_WHOLE_SIZE},
-            {bodies_.buffer, 0, VK_WHOLE_SIZE},
-            {masksBuffer, 0, VK_WHOLE_SIZE},
-        };
-        VkWriteDescriptorSet w[3]{};
-        for (int i = 0; i < 3; ++i) {
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = sets[si];
-            w[i].dstBinding = static_cast<std::uint32_t>(i);
-            w[i].descriptorCount = 1;
-            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w[i].pBufferInfo = &bi[i];
-        }
-        vkUpdateDescriptorSets(dev_->device, 3, w, 0, nullptr);
+    VkDescriptorBufferInfo bi[4] = {
+        {points_.buffer, 0, VK_WHOLE_SIZE},
+        {elems_.buffer, 0, VK_WHOLE_SIZE},
+        {bodies_.buffer, 0, VK_WHOLE_SIZE},
+        {masksBuffer, 0, VK_WHOLE_SIZE},
+    };
+    VkWriteDescriptorSet w[4]{};
+    for (int i = 0; i < 4; ++i) {
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = set_;
+        w[i].dstBinding = static_cast<std::uint32_t>(i);
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w[i].pBufferInfo = &bi[i];
     }
+    vkUpdateDescriptorSets(dev_->device, 4, w, 0, nullptr);
 
     return create_pipelines(renderPass, shaderDir);
 }
@@ -168,7 +169,7 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
                                   const char* shaderDir) {
     VkDevice d = dev_->device;
 
-    // --- compute: ONE pipeline for both sections ---------------------------
+    // --- compute: ONE pipeline for both phases (points / constraints) ------
     {
         VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                sizeof(VerletPush)};
@@ -212,9 +213,15 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
     // but every fixed-function state is IDENTICAL — the old passes proved it
     // by diff, so the recipe is written once and fed two shader pairs.
     {
-        VkPushConstantRange pr{
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-            sizeof(CubePush)};
+        // Two ranges: CubePush (family-shared, vertex+fragment) plus the
+        // 16-byte VerletDrawPush the instanced verts need to address the pool
+        // (vertex-only, right after CubePush; together exactly 128 B).
+        VkPushConstantRange pr[2] = {
+            {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+             sizeof(CubePush)},
+            {VK_SHADER_STAGE_VERTEX_BIT, sizeof(CubePush),
+             sizeof(VerletDrawPush)},
+        };
         // Set 1 — световая сетка (S5-долг закрыт 2026-08-21): dressing_light
         // в wire/cloth.frag читает те же лампы и кластеры, что стены.
         VkDescriptorSetLayout sls[2] = {setLayout_, lightGridSetLayout_};
@@ -222,8 +229,8 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
         pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pl.setLayoutCount = lightGridSetLayout_ != VK_NULL_HANDLE ? 2u : 1u;
         pl.pSetLayouts = sls;
-        pl.pushConstantRangeCount = 1;
-        pl.pPushConstantRanges = &pr;
+        pl.pushConstantRangeCount = 2;
+        pl.pPushConstantRanges = pr;
         if (vkCreatePipelineLayout(d, &pl, nullptr, &drawLayout_) != VK_SUCCESS)
             return false;
 
@@ -334,82 +341,116 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
     return true;
 }
 
-void VerletPass::begin_upload(Section& s) {
-    // Fresh verlet state = a fresh pin epoch: the sim counter restarts so a
-    // GIGA_VERLET_PIN snapshot always means "N sims after THIS upload".
-    s.simsSinceUpload = 0;
-    s.pinDumped = false;
-    ++s.uploadEpoch;
+void VerletPass::repack() {
+    if (!points_.mapped || !elems_.mapped) return;
+    // Root-cap honesty (S11): the tail that does not fit is dropped OUT LOUD,
+    // wires first (they were staged first). With the root at 2^20 points a
+    // padic floor (~750 chains + ~150 sheets ≈ 11k points) uses ~1 %.
+    std::uint32_t nw = static_cast<std::uint32_t>(wireStage_.size());
+    std::uint32_t nc = static_cast<std::uint32_t>(clothStage_.size());
+    const std::uint32_t wirePts = nw * kWireChainPoints;
+    if (wirePts > kRootAntouragePoints) {
+        nw = kRootAntouragePoints / kWireChainPoints;
+        std::fprintf(stderr,
+                     "[verlet] TRUNCATED: %zu chains baked, pool fits %u\n",
+                     wireStage_.size(), nw);
+    }
+    const std::uint32_t clothCap =
+        (kRootAntouragePoints - nw * kWireChainPoints) / kClothGridPoints;
+    if (nc > clothCap) {
+        std::fprintf(stderr,
+                     "[verlet] TRUNCATED: %zu sheets baked, pool fits %u\n",
+                     clothStage_.size(), clothCap);
+        nc = clothCap;
+    }
+    if (nw + nc > kMaxAntourageElems) { // derived cap, unreachable while the
+        nc = kMaxAntourageElems - nw;   // smallest element is the divisor
+        std::fprintf(stderr, "[verlet] TRUNCATED: element table full\n");
+    }
+    wireCount_ = nw;
+    clothCount_ = nc;
+
+    auto* pts = static_cast<VerletPoint*>(points_.mapped);
+    auto* els = static_cast<VerletElem*>(elems_.mapped);
+    for (std::uint32_t i = 0; i < nw; ++i) {
+        const GpuWireChain& c = wireStage_[i];
+        els[i].v = vec4{c.meta.x, 0.0f, c.meta.y, c.meta.z};
+        for (int k = 0; k < kWireChainPoints; ++k) {
+            pts[i * kWireChainPoints + k].cur = c.cur[k];
+            pts[i * kWireChainPoints + k].prev = c.prev[k];
+        }
+    }
+    const std::uint32_t cb = cloth_point_base();
+    for (std::uint32_t i = 0; i < nc; ++i) {
+        const GpuClothSheet& s = clothStage_[i];
+        els[nw + i].v = vec4{s.meta.x, s.meta.z, s.meta.y, 0.0f};
+        for (int k = 0; k < kClothGridPoints; ++k) {
+            pts[cb + i * kClothGridPoints + k].cur = s.cur[k];
+            pts[cb + i * kClothGridPoints + k].prev = s.prev[k];
+        }
+    }
 }
 
 void VerletPass::upload_wires(const GpuWireChain* chains, std::uint32_t count) {
-    if (!wire_.points.mapped) return;
-    begin_upload(wire_);
-    wire_.count = count < kMaxWireChains ? count : kMaxWireChains;
-    // A silent truncation reads as "the floor has this many wires" forever.
-    // Say it out loud instead: the bake is already at ~800 on a padic floor.
-    if (count > kMaxWireChains)
-        std::fprintf(stderr,
-                     "[wire] TRUNCATED: %u chains baked, cap %u — %u are NOT "
-                     "drawn or simulated (raise kMaxWireChains)\n",
-                     count, kMaxWireChains, count - kMaxWireChains);
-    if (wire_.count > 0)
-        std::memcpy(wire_.points.mapped, chains,
-                    sizeof(GpuWireChain) * wire_.count);
+    if (!points_.mapped) return;
+    // Fresh verlet state = a fresh pin epoch: the sim counter restarts so a
+    // GIGA_VERLET_PIN snapshot always means "N sims after THIS upload".
+    wirePin_.simsSinceUpload = 0;
+    wirePin_.pinDumped = false;
+    ++wirePin_.uploadEpoch;
+    wireStage_.assign(chains, chains + count);
+    repack();
 }
 
 void VerletPass::upload_cloths(const GpuClothSheet* sheets,
                                std::uint32_t count) {
-    if (!cloth_.points.mapped) return;
-    begin_upload(cloth_);
-    cloth_.count = count < kMaxClothSheets ? count : kMaxClothSheets;
-    // Same honesty rule as upload_wires — no silent ceiling.
-    if (count > kMaxClothSheets)
-        std::fprintf(stderr,
-                     "[cloth] TRUNCATED: %u sheets baked, cap %u — %u are NOT "
-                     "drawn or simulated (raise kMaxClothSheets)\n",
-                     count, kMaxClothSheets, count - kMaxClothSheets);
-    if (cloth_.count > 0)
-        std::memcpy(cloth_.points.mapped, sheets,
-                    sizeof(GpuClothSheet) * cloth_.count);
+    if (!points_.mapped) return;
+    clothPin_.simsSinceUpload = 0;
+    clothPin_.pinDumped = false;
+    ++clothPin_.uploadEpoch;
+    clothStage_.assign(sheets, sheets + count);
+    repack();
 }
 
 void VerletPass::write_wire_pins(const std::uint8_t* masks,
                                  std::uint32_t count) {
-    if (!wire_.points.mapped) return;
-    auto* c = static_cast<GpuWireChain*>(wire_.points.mapped);
-    const std::uint32_t n = count < wire_.count ? count : wire_.count;
+    if (!points_.mapped) return;
+    auto* pts = static_cast<VerletPoint*>(points_.mapped);
+    const std::uint32_t n = count < wireCount_ ? count : wireCount_;
     for (std::uint32_t i = 0; i < n; ++i)
         for (int j = 0; j < kWireChainPoints; ++j)
-            c[i].cur[j].w = ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
+            pts[i * kWireChainPoints + j].cur.w =
+                ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
 }
 
 void VerletPass::write_cloth_pins(const std::uint32_t* masks,
                                   std::uint32_t count) {
-    if (!cloth_.points.mapped) return;
-    auto* c = static_cast<GpuClothSheet*>(cloth_.points.mapped);
-    const std::uint32_t n = count < cloth_.count ? count : cloth_.count;
+    if (!points_.mapped) return;
+    auto* pts = static_cast<VerletPoint*>(points_.mapped);
+    const std::uint32_t cb = cloth_point_base();
+    const std::uint32_t n = count < clothCount_ ? count : clothCount_;
     for (std::uint32_t i = 0; i < n; ++i)
         for (int j = 0; j < kClothGridPoints; ++j)
-            c[i].cur[j].w = ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
+            pts[cb + i * kClothGridPoints + j].cur.w =
+                ((masks[i] >> j) & 1u) ? 0.0f : 1.0f;
 }
 
 void VerletPass::write_wire_alive(const std::uint8_t* flags,
                                   std::uint32_t count) {
-    if (!wire_.points.mapped) return;
-    auto* c = static_cast<GpuWireChain*>(wire_.points.mapped);
-    const std::uint32_t n = count < wire_.count ? count : wire_.count;
+    if (!elems_.mapped) return;
+    auto* els = static_cast<VerletElem*>(elems_.mapped);
+    const std::uint32_t n = count < wireCount_ ? count : wireCount_;
     for (std::uint32_t i = 0; i < n; ++i)
-        c[i].meta.y = flags[i] ? 1.0f : 0.0f;
+        els[i].v.z = flags[i] ? 1.0f : 0.0f;
 }
 
 void VerletPass::write_cloth_alive(const std::uint8_t* flags,
                                    std::uint32_t count) {
-    if (!cloth_.points.mapped) return;
-    auto* c = static_cast<GpuClothSheet*>(cloth_.points.mapped);
-    const std::uint32_t n = count < cloth_.count ? count : cloth_.count;
+    if (!elems_.mapped) return;
+    auto* els = static_cast<VerletElem*>(elems_.mapped);
+    const std::uint32_t n = count < clothCount_ ? count : clothCount_;
     for (std::uint32_t i = 0; i < n; ++i)
-        c[i].meta.y = flags[i] ? 1.0f : 0.0f;
+        els[wireCount_ + i].v.z = flags[i] ? 1.0f : 0.0f;
 }
 
 void VerletPass::upload_bodies(const vec4* bodies, std::uint32_t count) {
@@ -437,9 +478,38 @@ void VerletPass::upload_bodies(const vec4* bodies, std::uint32_t count) {
         std::memcpy(bodies_.mapped, bodies, sizeof(vec4) * bodyCount_);
 }
 
-void VerletPass::maybe_pin_dump(Section& s, const char* tag,
+void VerletPass::gather_chain(std::uint32_t idx, GpuWireChain* out) const {
+    *out = GpuWireChain{};
+    if (!points_.mapped || idx >= wireCount_) return;
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
+    const auto* els = static_cast<const VerletElem*>(elems_.mapped);
+    out->meta = vec4{els[idx].v.x, els[idx].v.z, els[idx].v.w, 0.0f};
+    for (int k = 0; k < kWireChainPoints; ++k) {
+        out->cur[k] = pts[idx * kWireChainPoints + k].cur;
+        out->prev[k] = pts[idx * kWireChainPoints + k].prev;
+    }
+}
+
+void VerletPass::gather_sheet(std::uint32_t idx, GpuClothSheet* out) const {
+    *out = GpuClothSheet{};
+    if (!points_.mapped || idx >= clothCount_) return;
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
+    const auto* els = static_cast<const VerletElem*>(elems_.mapped);
+    const VerletElem& e = els[wireCount_ + idx];
+    out->meta = vec4{e.v.x, e.v.z, e.v.y, 0.0f};
+    const std::uint32_t cb = cloth_point_base();
+    for (int k = 0; k < kClothGridPoints; ++k) {
+        out->cur[k] = pts[cb + idx * kClothGridPoints + k].cur;
+        out->prev[k] = pts[cb + idx * kClothGridPoints + k].prev;
+    }
+}
+
+void VerletPass::maybe_pin_dump(BankPin& s, const char* tag,
+                                std::uint32_t elemBase,
+                                std::uint32_t pointBase, std::uint32_t count,
                                 std::uint32_t pointsPer) {
-    if (verlet_pin_sims() <= 0 || s.pinDumped || s.count == 0) return;
+    (void)elemBase;
+    if (verlet_pin_sims() <= 0 || s.pinDumped || count == 0) return;
     if (s.simsSinceUpload < static_cast<std::uint32_t>(verlet_pin_sims()))
         return;
     s.pinDumped = true;
@@ -447,25 +517,23 @@ void VerletPass::maybe_pin_dump(Section& s, const char* tag,
     // sim per presented frame), so after an idle the mapped buffer holds
     // exactly the post-sim-N state.
     vkDeviceWaitIdle(dev_->device);
-    // Element = {vec4 meta; vec4 cur[P]; vec4 prev[P]} — walked as raw vec4s,
-    // the same arithmetic verlet_sim.comp uses.
-    const auto* v = static_cast<const vec4*>(s.points.mapped);
-    const std::uint32_t stride = 1u + 2u * pointsPer;
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
     std::uint64_t h = 1469598103934665603ull; // FNV-1a offset basis
-    for (std::uint32_t i = 0; i < s.count; ++i)
+    for (std::uint32_t i = 0; i < count; ++i)
         for (std::uint32_t k = 0; k < pointsPer; ++k)
-            h = fnv1a(&v[i * stride + 1u + k], sizeof(float) * 3, h);
-    const vec4 f0 = v[1];
-    const vec4 f1 = v[2];
-    const std::uint32_t lastBase = (s.count - 1u) * stride + 1u;
-    const vec4 l1 = v[lastBase + pointsPer - 2u];
-    const vec4 l0 = v[lastBase + pointsPer - 1u];
+            h = fnv1a(&pts[pointBase + i * pointsPer + k].cur,
+                      sizeof(float) * 3, h);
+    const vec4 f0 = pts[pointBase + 0].cur;
+    const vec4 f1 = pts[pointBase + 1].cur;
+    const std::uint32_t lastBase = pointBase + (count - 1u) * pointsPer;
+    const vec4 l1 = pts[lastBase + pointsPer - 2u].cur;
+    const vec4 l0 = pts[lastBase + pointsPer - 1u].cur;
     std::fprintf(stderr,
                  "[verlet-pin] %s epoch=%u sims=%u elems=%u points=%u "
                  "fnv=%016llx first=(%.6f %.6f %.6f)(%.6f %.6f %.6f) "
                  "last=(%.6f %.6f %.6f)(%.6f %.6f %.6f)\n",
-                 tag, s.uploadEpoch, s.simsSinceUpload, s.count,
-                 s.count * pointsPer, static_cast<unsigned long long>(h), f0.x,
+                 tag, s.uploadEpoch, s.simsSinceUpload, count,
+                 count * pointsPer, static_cast<unsigned long long>(h), f0.x,
                  f0.y, f0.z, f1.x, f1.y, f1.z, l1.x, l1.y, l1.z, l0.x, l0.y,
                  l0.z);
     // Full positions for the tolerance-level comparison (plan §6.2): raw xyz
@@ -475,34 +543,18 @@ void VerletPass::maybe_pin_dump(Section& s, const char* tag,
         std::snprintf(path, sizeof path, "%s_%s_e%u.bin", pfx, tag,
                       s.uploadEpoch);
         if (std::FILE* fp = std::fopen(path, "wb")) {
-            for (std::uint32_t i = 0; i < s.count; ++i)
+            for (std::uint32_t i = 0; i < count; ++i)
                 for (std::uint32_t k = 0; k < pointsPer; ++k)
-                    std::fwrite(&v[i * stride + 1u + k], sizeof(float), 3, fp);
+                    std::fwrite(&pts[pointBase + i * pointsPer + k].cur,
+                                sizeof(float), 3, fp);
             std::fclose(fp);
         }
     }
 }
 
-void VerletPass::record_section_sim(VkCommandBuffer cmd, Section& s,
-                                    float gridW, float gridH, float dt,
-                                    vec3 gravity) {
-    if (s.count == 0) return;
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simLayout_, 0,
-                            1, &s.set, 0, nullptr);
-    VerletPush p{};
-    p.dims = vec4{static_cast<float>(s.count), static_cast<float>(bodyCount_),
-                  gridW, gridH};
-    p.sim = vec4{dt, kVerletDamping, static_cast<float>(kWorldExtent), 0.0f};
-    p.grav = vec4{gravity.x, gravity.y, gravity.z, 0.0f};
-    vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(VerletPush), &p);
-    vkCmdDispatch(cmd, (s.count + 63u) / 64u, 1, 1);
-    ++s.simsSinceUpload;
-}
-
 void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     if (simPipeline_ == VK_NULL_HANDLE) return;
-    if (wire_.count == 0 && cloth_.count == 0) return;
+    if (wireCount_ == 0 && clothCount_ == 0) return;
 
     // Under GIGA_VERLET_PIN the step is the 60 Hz reference, not the caller's
     // frame dt: the pin hashes state after N sims, and the live dt is
@@ -510,25 +562,59 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     // hash exactly like the push bodies (dropped above for the same reason).
     if (verlet_pin_sims() > 0) dt = 1.0f / 60.0f;
 
-    maybe_pin_dump(wire_, "wire", kWireChainPoints);
-    maybe_pin_dump(cloth_, "cloth", kClothGridPoints);
+    maybe_pin_dump(wirePin_, "wire", 0, 0, wireCount_, kWireChainPoints);
+    maybe_pin_dump(clothPin_, "cloth", wireCount_, cloth_point_base(),
+                   clothCount_, kClothGridPoints);
 
-    // Last frame's draws read the points; order the writes after them. The
-    // two dispatches touch disjoint buffers, so no barrier between them.
+    const std::uint32_t totalPoints =
+        cloth_point_base() + clothCount_ * kClothGridPoints;
+    const std::uint32_t elemCount = wireCount_ + clothCount_;
+
+    VerletPush p{};
+    p.dims = vec4{static_cast<float>(totalPoints),
+                  static_cast<float>(cloth_point_base()),
+                  static_cast<float>(bodyCount_), 0.0f};
+    p.sim = vec4{dt, kVerletDamping, static_cast<float>(kWorldExtent),
+                 static_cast<float>(elemCount)};
+    p.grav = vec4{gravity.x, gravity.y, gravity.z, 0.0f};
+
+    // Last frame's draws read the points; order the writes after them.
     VkMemoryBarrier mb{};
     mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(
-        cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0, nullptr, 0,
-        nullptr);
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                             VK_PIPELINE_STAGE_HOST_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mb, 0,
+                         nullptr, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simPipeline_);
-    record_section_sim(cmd, wire_, static_cast<float>(kWireChainPoints), 1.0f,
-                       dt, gravity);
-    record_section_sim(cmd, cloth_, static_cast<float>(kClothGridW),
-                       static_cast<float>(kClothGridH), dt, gravity);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simLayout_, 0,
+                            1, &set_, 0, nullptr);
+
+    // Phase 0 — POINTS: integrate + bodies + world landing, thread per point.
+    vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(VerletPush), &p);
+    vkCmdDispatch(cmd, (totalPoints + 63u) / 64u, 1, 1);
+
+    // Constraints read what integration wrote — one compute-compute barrier.
+    VkMemoryBarrier mid{};
+    mid.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mid.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mid.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mid, 0,
+                         nullptr, 0, nullptr);
+
+    // Phase 1 — ELEMENTS: serial relaxation per element, thread per element.
+    p.dims.w = 1.0f;
+    vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(VerletPush), &p);
+    vkCmdDispatch(cmd, (elemCount + 63u) / 64u, 1, 1);
+
+    if (wireCount_ > 0) ++wirePin_.simsSinceUpload;
+    if (clothCount_ > 0) ++clothPin_.simsSinceUpload;
 
     VkMemoryBarrier mb2{};
     mb2.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -540,35 +626,42 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
 }
 
 void VerletPass::record_draw_wires(VkCommandBuffer cmd, const CubePush& push,
-                                VkDescriptorSet lightSet) {
-    if (wireDrawPipeline_ == VK_NULL_HANDLE || wire_.count == 0) return;
+                                   VkDescriptorSet lightSet) {
+    if (wireDrawPipeline_ == VK_NULL_HANDLE || wireCount_ == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wireDrawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
-                            0, 1, &wire_.set, 0, nullptr);
+                            0, 1, &set_, 0, nullptr);
     if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 drawLayout_, 1, 1, &lightSet, 0, nullptr);
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);
-    vkCmdDraw(cmd, wire_.count * 42u, 1, 0, 0); // 7 segs x 2 tris x 3
+    const VerletDrawPush extra{cloth_point_base(), wireCount_, 0, 0};
+    vkCmdPushConstants(cmd, drawLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(CubePush), sizeof(VerletDrawPush), &extra);
+    // One INSTANCE per chain: 7 segs x 2 tris x 3 verts.
+    vkCmdDraw(cmd, 42u, wireCount_, 0, 0);
 }
 
 void VerletPass::record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
-                                VkDescriptorSet lightSet) {
-    if (clothDrawPipeline_ == VK_NULL_HANDLE || cloth_.count == 0) return;
+                                    VkDescriptorSet lightSet) {
+    if (clothDrawPipeline_ == VK_NULL_HANDLE || clothCount_ == 0) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clothDrawPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
-                            0, 1, &cloth_.set, 0, nullptr);
+                            0, 1, &set_, 0, nullptr);
     if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 drawLayout_, 1, 1, &lightSet, 0, nullptr);
     vkCmdPushConstants(cmd, drawLayout_,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(CubePush), &push);
-    vkCmdDraw(cmd, cloth_.count * kClothVertsPerSheet, 1, 0, 0);
+    const VerletDrawPush extra{cloth_point_base(), wireCount_, 0, 0};
+    vkCmdPushConstants(cmd, drawLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(CubePush), sizeof(VerletDrawPush), &extra);
+    vkCmdDraw(cmd, kClothVertsPerSheet, clothCount_, 0, 0);
 }
 
 void VerletPass::destroy() {
@@ -581,8 +674,8 @@ void VerletPass::destroy() {
     if (simLayout_) vkDestroyPipelineLayout(d, simLayout_, nullptr);
     if (pool_) vkDestroyDescriptorPool(d, pool_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
-    wire_.points.destroy(*dev_);
-    cloth_.points.destroy(*dev_);
+    points_.destroy(*dev_);
+    elems_.destroy(*dev_);
     bodies_.destroy(*dev_);
     wireDrawPipeline_ = VK_NULL_HANDLE;
     clothDrawPipeline_ = VK_NULL_HANDLE;
@@ -591,8 +684,7 @@ void VerletPass::destroy() {
     simLayout_ = VK_NULL_HANDLE;
     pool_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
-    wire_.set = VK_NULL_HANDLE;
-    cloth_.set = VK_NULL_HANDLE;
+    set_ = VK_NULL_HANDLE;
     dev_ = nullptr;
 }
 

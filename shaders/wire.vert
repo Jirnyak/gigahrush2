@@ -1,22 +1,28 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "volumetric_fog.glsl" // только distance_fog(); SSBO-биндинги за ifdef
-// wire.vert — pulls verlet points straight from the sim SSBO (no vertex
-// buffer): 14 vertices per chain = 7 line segments over 8 points.
-// Push block layout = CubePush, shared with the whole pass family.
+// wire.vert — pulls verlet points straight from the SoA pool (no vertex
+// buffer). INSTANCED since the pool relayout (2026-08-31): one instance per
+// chain (gl_InstanceIndex), 42 vertices each = 7 segments x 2 tris x 3.
+// Push = CubePush (family-shared) + VerletDrawPush (bank numbers, see
+// render/verlet_pass.h) laid back to back in one 128-byte block.
 
-struct WChain {
-    vec4 meta;
-    vec4 cur[8];
-    vec4 prev[8];
+struct Pt {
+    vec4 cur;
+    vec4 prev;
 };
-layout(std430, set = 0, binding = 0) readonly buffer Wires { WChain c[]; } wb;
+layout(std430, set = 0, binding = 0) readonly buffer Points { Pt p[]; } pb;
+layout(std430, set = 0, binding = 1) readonly buffer Elems { vec4 e[]; } el;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 camPos;
     vec4 fog;
     vec4 torus;
+    uint clothPointBase;
+    uint wireElemCount;
+    uint pad0;
+    uint pad1;
 } pc;
 
 layout(location = 0) out float vFog;
@@ -33,27 +39,27 @@ vec3 nearest_image(vec3 p, vec3 cam, float per) {
 }
 
 void main() {
-    uint seg = uint(gl_VertexIndex) / 6u;
-    uint chain = seg / 7u;
-    uint s = seg % 7u;
+    uint chain = uint(gl_InstanceIndex);
+    uint s = uint(gl_VertexIndex) / 6u; // segment 0..6
     uint corner = uint(gl_VertexIndex) % 6u;
+    uint base = chain * 8u;
 
     // Dead chain: clip cleanly (the cloth.vert pattern). Collapsing p0 == p1
     // instead sent normalize(cross(vec3(0), v)) — NaN clip coords, UB.
-    if (wb.c[chain].meta.y < 0.5) {
+    if (el.e[chain].z < 0.5) {
         gl_Position = vec4(1e9, 1e9, 1e9, 1.0);
         vFog = 1.0;
         vWorldPos = vec3(0.0);
         return;
     }
 
-    vec3 p0 = wb.c[chain].cur[s].xyz;
-    vec3 p1 = wb.c[chain].cur[s + 1u].xyz;
+    vec3 p0 = pb.p[base + s].cur.xyz;
+    vec3 p1 = pb.p[base + s + 1u].cur.xyz;
 
     // ONE wrap decision per chain — its first point. Per-segment wrapping let
     // neighbouring segments disagree near the seam and the cable tore.
     float per = pc.torus.x;
-    vec3 anchor0 = wb.c[chain].cur[0].xyz;
+    vec3 anchor0 = pb.p[base].cur.xyz;
     vec3 shift = nearest_image(anchor0, pc.camPos.xyz, per) - anchor0;
     vec3 w0 = p0 + shift;
     vec3 w1 = p1 + shift;

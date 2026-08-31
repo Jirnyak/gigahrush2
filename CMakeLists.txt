@@ -587,11 +587,13 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(verlet_test OFF)
     add_test(NAME verlet_test COMMAND verlet_test)
     # Пин 77 чеков с рождения (2026-08-31). Мутации гейта прогнаны поштучно:
-    # обход world_land -> 59/77 (посадка И изотропия сквозь опору), нулевые
-    # итерации солвера -> 76/77 (restY ткани). Инвариантные ноги ловят законы;
-    # точные числа держит ручной GIGA_VERLET_PIN-протокол (verlet-merge.md §6).
+    # обход world_land -> посадка И изотропия сквозь опору, нулевые итерации
+    # солвера -> restY ткани. Инвариантные ноги ловят законы; точные числа
+    # держит ручной GIGA_VERLET_PIN-протокол (verlet-merge.md §6).
+    # 77 -> 76 тем же днём: SoA-раскладка (инкр. 2) — чек mapped-указателей
+    # умер вместе с ними, чтение состояния пошло через gather_chain/sheet.
     set_tests_properties(verlet_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "77/77 checks passed")
+        PASS_REGULAR_EXPRESSION "76/76 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
