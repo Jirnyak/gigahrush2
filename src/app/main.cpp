@@ -4287,6 +4287,20 @@ int main(int argc, char** argv) {
                     mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
                                           stack.layer(activeLayer),
                                           voxelMirror);
+                    // ДОЛГИ ПИСАТЕЛЯ — зеркально entry-sweep (плейтест
+                    // владельца 2026-08-31: лампы висели в пустоте после
+                    // обрушения — конверсия меняет МАТЕРИАЛ на подвижный,
+                    // якоря на нём мертвы World-пробой; антураж (провода/
+                    // тряпки) и спящие тела платят тот же долг. Нав не
+                    // трогаем: маски не менялись.
+                    if (game::anchor_validate_step(
+                            reg, stack.layer(activeLayer), activeLayer, bus,
+                            bigDirty, &particleBursts, 0x5EEDBEEFu) > 0)
+                        propPassNeedsRebuild = true;
+                    if (antourage_carve_step_here(bigDirty, 0x5EEDBEEFu))
+                        dressingSetChanged = true;
+                    rigid_wake_dirty_cells(reg, activeLayer, bigDirty.data(),
+                                           bigDirty.size());
                 }
                 prof_add(kProfBigJudge, profBigT0);
             }
