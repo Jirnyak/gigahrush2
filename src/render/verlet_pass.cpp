@@ -52,11 +52,25 @@ struct VerletPush {
 static_assert(sizeof(VerletPush) == 48,
               "sim push must stay under the 128-byte guaranteed range");
 
-// Verlet damping per step. A LITERAL by explicit owner decision for the
-// behaviour-preserving merge: deriving it from the element's mass and the
-// MEDIUM it hangs in (materials.csv density — owner's extension 2026-08-31)
-// is a SEMANTIC change and lives in its own increment (verlet-merge.md инкр. 4).
-constexpr float kVerletDamping = 0.985f;
+// ДЕМПФЕР ИЗ ФИЗИКИ СРЕДЫ (инкр. 4, решение владельца: «честная константа,
+// картинка пересматривается» + его идея — среда из materials.csv). Литерал
+// 0.985/шаг МЁРТВ; вязкое трение точки о среду линеаризуется при
+// характерной скорости качания v₀: γ_среды = ½·C_d·A·v₀·ρ/m [1/с], где
+// C_d — коэффициент сопротивления формы, A — обдуваемая площадь точки,
+// m — её масса, ρ — плотность СРЕДЫ в клетке точки (таблица материалов;
+// конец провода в воде глохнет, середина в воздухе качается). CPU выводит
+// на элемент множитель dragK = ½·C_d·A·v₀/m (els.w — парковка massKg
+// наконец потреблена), GPU умножает на ρ клетки. Плюс внутреннее трение
+// подвеса kStructuralDamp (в шейдере): вязкоупругость оболочки/ткани,
+// логарифмический декремент δ ≈ 0.3 на период T ≈ 2 с → δ/T ≈ 0.15 1/с —
+// без него честный воздух (γ ≈ 0.05 у кабеля) качал бы провода минутами.
+constexpr float kCdCylinder = 1.2f;  // цилиндр поперёк потока (справочный)
+constexpr float kCdPlate = 1.2f;     // пластина ткани — тот же порядок
+constexpr float kSwingV0 = 0.5f;     // м/с — масштаб скорости качания точек
+                                     // (линеаризация квадратичного закона)
+constexpr float kWireDiameterM = 0.044f; // = 2·kHalfWidth (wire.vert);
+                                         // диаметр из бейка — будущий шов
+constexpr float kClothKgPerM2 = 0.4f;    // брезент ~400 г/м² (справочный)
 
 // --- GIGA_VERLET_PIN=N: reproducible state snapshot after N recorded sims ---
 // Counted in SIMS SINCE THE LAST upload, never frames or ticks: the --shot
@@ -100,6 +114,7 @@ bool particle_pin_active() { return particle_pin_sims() > 0; }
 
 bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                       const char* shaderDir, VkBuffer masksBuffer,
+                      VkBuffer typesBuffer,
                       VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
     lightGridSetLayout_ = lightGridSetLayout;
@@ -126,7 +141,7 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                                   "verlet-particle-aux"))
         return false;
 
-    VkDescriptorSetLayoutBinding b[5]{};
+    VkDescriptorSetLayoutBinding b[6]{};
     b[0].binding = 0; // the point pool (banks back to back)
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[0].descriptorCount = 1;
@@ -147,9 +162,13 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[4].descriptorCount = 1;
     b[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT;
+    b[5].binding = 5; // VoxelMirror cell types — СРЕДА точки (S16.4)
+    b[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[5].descriptorCount = 1;
+    b[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     VkDescriptorSetLayoutCreateInfo slci{};
     slci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    slci.bindingCount = 5;
+    slci.bindingCount = 6;
     slci.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev_->device, &slci, nullptr, &setLayout_) !=
         VK_SUCCESS)
@@ -157,7 +176,7 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
 
     // ONE set: the banks stopped owning buffers, so the two per-section sets
     // of the pre-SoA pass collapsed with them.
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6};
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = 1;
@@ -173,15 +192,16 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     if (vkAllocateDescriptorSets(dev_->device, &ai, &set_) != VK_SUCCESS)
         return false;
 
-    VkDescriptorBufferInfo bi[5] = {
+    VkDescriptorBufferInfo bi[6] = {
         {points_.buffer, 0, VK_WHOLE_SIZE},
         {elems_.buffer, 0, VK_WHOLE_SIZE},
         {bodies_.buffer, 0, VK_WHOLE_SIZE},
         {masksBuffer, 0, VK_WHOLE_SIZE},
         {aux_.buffer, 0, VK_WHOLE_SIZE},
+        {typesBuffer, 0, VK_WHOLE_SIZE},
     };
-    VkWriteDescriptorSet w[5]{};
-    for (int i = 0; i < 5; ++i) {
+    VkWriteDescriptorSet w[6]{};
+    for (int i = 0; i < 6; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = set_;
         w[i].dstBinding = static_cast<std::uint32_t>(i);
@@ -189,7 +209,7 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &bi[i];
     }
-    vkUpdateDescriptorSets(dev_->device, 5, w, 0, nullptr);
+    vkUpdateDescriptorSets(dev_->device, 6, w, 0, nullptr);
 
     return create_pipelines(renderPass, shaderDir);
 }
@@ -417,7 +437,15 @@ void VerletPass::repack() {
     auto* els = static_cast<VerletElem*>(elems_.mapped);
     for (std::uint32_t i = 0; i < nw; ++i) {
         const GpuWireChain& c = wireStage_[i];
-        els[i].v = vec4{c.meta.x, 0.0f, c.meta.y, c.meta.z};
+        // dragK кабеля: точка несёт m = massKg/8 и обдувается цилиндром
+        // A = d·ℓ (ℓ = restX); λ = m/ℓ сокращает ℓ: k = ½·C_d·d·v₀/λ.
+        const float span = c.meta.x * (kWireChainPoints - 1);
+        const float lambda = span > 1e-4f && c.meta.z > 1e-4f
+                                 ? c.meta.z / span
+                                 : 0.35f; // страховка: kWireKgPerMetre бейка
+        const float dragK =
+            0.5f * kCdCylinder * kWireDiameterM * kSwingV0 / lambda;
+        els[i].v = vec4{c.meta.x, 0.0f, c.meta.y, dragK};
         for (int k = 0; k < kWireChainPoints; ++k) {
             pts[i * kWireChainPoints + k].cur = c.cur[k];
             pts[i * kWireChainPoints + k].prev = c.prev[k];
@@ -426,7 +454,11 @@ void VerletPass::repack() {
     const std::uint32_t cb = cloth_point_base();
     for (std::uint32_t i = 0; i < nc; ++i) {
         const GpuClothSheet& s = clothStage_[i];
-        els[nw + i].v = vec4{s.meta.x, s.meta.z, s.meta.y, 0.0f};
+        // dragK ткани: точка листа — пластина A = restX·restY массой σ·A;
+        // площадь сокращается: k = ½·C_d·v₀/σ. В воздухе (ρ 1.204) это
+        // γ ≈ 0.9 1/с — прежний литерал ткань почти не заметит.
+        const float dragK = 0.5f * kCdPlate * kSwingV0 / kClothKgPerM2;
+        els[nw + i].v = vec4{s.meta.x, s.meta.z, s.meta.y, dragK};
         for (int k = 0; k < kClothGridPoints; ++k) {
             pts[cb + i * kClothGridPoints + k].cur = s.cur[k];
             pts[cb + i * kClothGridPoints + k].prev = s.prev[k];
@@ -638,7 +670,9 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     VerletPush p{};
     p.dims = vec4{static_cast<float>(antouragePoints), 0.0f,
                   static_cast<float>(cloth_point_base()), 0.0f};
-    p.sim = vec4{dt, kVerletDamping, static_cast<float>(kWorldExtent),
+    // sim.y свободна: демпфер стал per-точечным (dragK элемента × ρ среды
+    // клетки + kStructuralDamp в шейдере) — пушить больше нечего.
+    p.sim = vec4{dt, 0.0f, static_cast<float>(kWorldExtent),
                  static_cast<float>(elemCount)};
     p.grav = vec4{gravity.x, gravity.y, gravity.z,
                   static_cast<float>(bodyCount_)};

@@ -23,7 +23,7 @@
 #include "render/verlet_pass.h"
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
-#include "world/materials.h" // kMatConcrete
+#include "world/materials.h" // kMatConcrete, kMatWater
 #include "world/world.h"
 
 using namespace giga;
@@ -44,6 +44,8 @@ int g_checks = 0;
     } while (0)
 
 namespace {
+
+World* gWorld = nullptr; // диагностика типов клеток из тестов
 
 constexpr float kDt = 1.0f / 60.0f; // референсный шаг пин-протокола
 
@@ -306,6 +308,59 @@ void test_body_pushes(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     CHECK(inside == 0);
 }
 
+// СРЕДА ГЛУШИТ (инкр. 4): γ = kStructuralDamp + dragK·ρ(клетки точки) —
+// две одинаковые цепи, одна в водяных клетках (тип без маски: коллизии
+// нет, среда есть), окно короткое, обе ещё живы. Вода (ρ 1000 против
+// воздуха 1.204) обязана глушить на порядки. Мутация «плотность всегда
+// воздух» разваливает именно эту ногу.
+void test_medium_damps(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
+    vec3 air[8], wat[8];
+    bool pin[8] = {true, false, false, false, false, false, false, true};
+    for (int i = 0; i < 8; ++i) {
+        const float t = 2.0f * static_cast<float>(i) / 7.0f;
+        air[i] = vec3{10.0f + t, 10.0f, 30.0f};
+        wat[i] = vec3{61.0f + t, 63.0f, 35.0f}; // внутри водяного блока
+    }
+    gpu::GpuWireChain two[2] = {make_chain(air, pin, 0.4f),
+                                make_chain(wat, pin, 0.4f)};
+    // МАЯТНИК: боковой толчок 2 м/с свободным точкам (prev смещён — верле).
+    // Метрика покоя тут слепа: в стационаре она меряет вечный цикл
+    // «g вниз — солвер вверх», одинаковый при любом γ (замерено пробой
+    // γ=1000). Затухание видит АМПЛИТУДА бокового отклонения.
+    for (int c = 0; c < 2; ++c)
+        for (int i = 1; i < 7; ++i) two[c].prev[i].y -= 2.0f / 60.0f;
+    pass.upload_wires(two, 2);
+    pass.upload_bodies(nullptr, 0);
+    CHECK(run_sims(dev, pass, 45, vec3{0.0f, 0.0f, -9.81f})); // 0.75 c
+    gpu::GpuWireChain a{}, w2{};
+    pass.gather_chain(0, &a);
+    pass.gather_chain(1, &w2);
+    float devAir = 0.0f, devWater = 0.0f;
+    for (int i = 1; i < 7; ++i) {
+        devAir = std::max(devAir, std::fabs(a.cur[i].y - 10.0f));
+        devWater = std::max(devWater, std::fabs(w2.cur[i].y - 63.0f));
+    }
+    std::printf("[verlet_test] medium swing@45: air %.4f m, water %.4f m\n",
+                static_cast<double>(devAir), static_cast<double>(devWater));
+    // Вода режет размах (проба ρ=1000 на ВСЕХ дала воздуху ровно водяной
+    // размах — чтение среды доказано ею; порог из фактического закона).
+    CHECK(devAir > 0.2f);
+    CHECK(devWater < devAir * 0.75f);
+    // И вода УСПОКАИВАЕТСЯ ПЕРВОЙ: к 300-му симу водяная цепь замерла у
+    // центра, воздушный маятник ещё качается.
+    CHECK(run_sims(dev, pass, 255, vec3{0.0f, 0.0f, -9.81f}));
+    pass.gather_chain(0, &a);
+    pass.gather_chain(1, &w2);
+    float lateAir = 0.0f, lateWater = 0.0f;
+    for (int i = 1; i < 7; ++i) {
+        lateAir = std::max(lateAir, std::fabs(a.cur[i].y - 10.0f));
+        lateWater = std::max(lateWater, std::fabs(w2.cur[i].y - 63.0f));
+    }
+    std::printf("[verlet_test] medium swing@300: air %.4f m, water %.4f m\n",
+                static_cast<double>(lateAir), static_cast<double>(lateWater));
+    CHECK(lateWater < lateAir * 0.5f); // вода уже спит, воздух качается
+}
+
 // ЧАСТИЦЫ — третий банк пула (этап 2, 2026-09-01): верле-интегратор
 // (решение владельца — один интегратор навсегда), жизнь в prev.w, отскок
 // зеркалом prev, γ из aux. Ноги: падение и посадка на плиту (не тонет),
@@ -381,7 +436,14 @@ int main() {
         for (int y = 37; y < 43; ++y)
             for (int z = 37; z < 43; ++z)
                 w.grid().fill_cell(40, y, z, kMatConcrete);
+        // Водяной блок для test_medium_damps: ТИП без маски — среда есть,
+        // коллизии нет (вода не твёрдое; solid_at читает маски).
+        for (int x = 29; x < 34; ++x)
+            for (int y = 29; y < 34; ++y)
+                for (int z = 15; z < 20; ++z)
+                    w.grid().set_cell(x, y, z, kMatWater);
 
+        gWorld = &w;
         static gpu::VoxelMirror mirror;
         CHECK(mirror.init(dev));
         CHECK(mirror.upload_all(w));
@@ -390,7 +452,7 @@ int main() {
         // renderPass = null: compute-only — рисующих пайплайнов НЕТ, физика
         // полная. Это и есть headless-разрез инкремента 1.
         CHECK(pass.init(&dev, VK_NULL_HANDLE, GIGA_SHADER_DIR,
-                        mirror.masks_buffer()));
+                        mirror.masks_buffer(), mirror.types_buffer()));
         CHECK(pass.sim_ready());
         CHECK(!pass.ready()); // draw-пайплайны не создавались
 
@@ -403,6 +465,7 @@ int main() {
         test_dead_element_freezes(dev, pass);
         test_determinism(dev, pass);
         test_body_pushes(dev, pass);
+        test_medium_damps(dev, pass);
         test_particles(dev, pass);
 
         pass.destroy();

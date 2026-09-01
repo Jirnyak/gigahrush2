@@ -597,8 +597,13 @@ if(GIGA_BUILD_TESTS)
     # (слияние этапа 2, particle_pass/particle_sim мертвы): падение и посадка
     # на маску верле-интегратором, отскок зеркалом prev, смерть по жизни,
     # детерминизм спавна от сида.
+    # 109 -> 114 тем же днём: test_medium_damps — демпфер из ФИЗИКИ СРЕДЫ
+    # (инкр. 4): маятниковый толчок двух цепей, водяная режет размах @45 и
+    # успокаивается первой @300 (вода 0.013 против воздуха 0.075). Мутация
+    # «среда слепа» (ρ всегда воздух) = 2 FAIL. Проба ρ=1000-всем доказала
+    # чтение таблицы: воздух получил ровно водяной размах.
     set_tests_properties(verlet_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "109/109 checks passed")
+        PASS_REGULAR_EXPRESSION "114/114 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

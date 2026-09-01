@@ -95,9 +95,13 @@ struct VerletPoint {
 };
 static_assert(sizeof(VerletPoint) == 32, "two-vec4-clean layout");
 
-// An element: ONE vec4 — {restX, restY, alive, massKg}. Its first point and
+// An element: ONE vec4 — {restX, restY, alive, dragK}. Its first point and
 // its W x H are arithmetic off the bank bases (see file header), so the old
-// per-element meta shrank 272/1040 B → 16 B.
+// per-element meta shrank 272/1040 B → 16 B. dragK is the MEDIUM-drag
+// coefficient DERIVED in repack() from the bake's honest mass (½·C_d·A·v₀/m
+// per point — the parked-and-unread massKg finally got consumed): the sim's
+// γ = kStructuralDamp + dragK·ρ(медиа клетки точки) — провод в воде глохнет,
+// в воздухе качается (физика среды из materials.csv, решение владельца).
 struct VerletElem {
     vec4 v;
 };
@@ -165,8 +169,11 @@ public:
     // floor. The mirror outlives this pass, so the raw handle is safe to keep.
     // `renderPass` may be VK_NULL_HANDLE: compute-only mode for headless tests
     // (verlet_test) — the sim runs, the draws are never created.
+    // `typesBuffer` — VoxelMirror cell types (u16/cell): the CELL of a point
+    // names the medium it swings in (macro question, S16.4 law — density
+    // from the one materials table scales the drag).
     bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
-              VkBuffer masksBuffer,
+              VkBuffer masksBuffer, VkBuffer typesBuffer,
               VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
     void destroy();
     bool ready() const {

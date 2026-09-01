@@ -2284,7 +2284,7 @@ int main(int argc, char** argv) {
     // compute shader — a chain is a lattice at H=1 ([render/verlet_pass.h]).
     gpu::VerletPass verletPass;
     if (!verletPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                         voxelMirror.masks_buffer(),
+                         voxelMirror.masks_buffer(), voxelMirror.types_buffer(),
                          lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr,
                      "[verlet] pass init failed (continuing without antourage "
