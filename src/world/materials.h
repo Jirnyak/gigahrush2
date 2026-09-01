@@ -31,7 +31,7 @@ inline constexpr CellType kMatLino = 11;           // dark rubber with seams; 50
 inline constexpr CellType kMatFactoryWall = 12;    // green corrugated factory metal, 15 cm corrugation
 inline constexpr CellType kMatTread = 13;          // walkway grate, 25 cm studs
 inline constexpr CellType kMatRust = 14;           // thresholded low-frequency patches ~1.5 m; corroded, weaker than fresh st
-inline constexpr CellType kMatRubble = 15;         // chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из угла е
+inline constexpr CellType kMatRubble = 15;         // chunk plateaus at 33 cm; already broken once; рыхлое: flow 1.0 — осыпь л
 inline constexpr CellType kMatElectricGrate = 16;  // AUTHORED: electrified floor grate — tread lattice, hot hazard tint
 inline constexpr CellType kMatAcidPool = 17;       // AUTHORED: caustic pool surface, broad slicks; жижа ~10 мПа·с → flow = вя
 inline constexpr CellType kMatFireCell = 18;       // AUTHORED: burning floor cell

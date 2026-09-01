@@ -207,7 +207,7 @@ inline constexpr float kMatFlow[kMatCount] = {
     0.000f,  // 12 factory_wall
     0.000f,  // 13 tread
     0.000f,  // 14 rust
-    0.100f,  // 15 rubble
+    1.000f,  // 15 rubble
     0.000f,  // 16 electric_grate
     0.100f,  // 17 acid_pool
     0.000f,  // 18 fire_cell
@@ -218,23 +218,23 @@ inline constexpr float kMatFlow[kMatCount] = {
     0.000f,  // 23 asphalt
     0.000f,  // 24 door_steel
     0.000f,  // 25 door_hermetic
-    0.100f,  // 26 rubble_concrete
-    0.100f,  // 27 rubble_soil
-    0.100f,  // 28 rubble_slab_tan
-    0.100f,  // 29 rubble_plaster
-    0.100f,  // 30 rubble_parquet
-    0.100f,  // 31 rubble_shop_shutter
-    0.100f,  // 32 rubble_lino
-    0.100f,  // 33 rubble_factory_wall
-    0.100f,  // 34 rubble_tread
-    0.100f,  // 35 rubble_rust
-    0.100f,  // 36 rubble_electric_grate
-    0.100f,  // 37 rubble_fire_cell
-    0.100f,  // 38 rubble_pipe_metal
-    0.100f,  // 39 rubble_neon_tube
-    0.100f,  // 40 rubble_glass
-    0.100f,  // 41 rubble_asphalt
-    0.100f   // 42 rubble_door_steel
+    1.000f,  // 26 rubble_concrete
+    1.000f,  // 27 rubble_soil
+    1.000f,  // 28 rubble_slab_tan
+    1.000f,  // 29 rubble_plaster
+    1.000f,  // 30 rubble_parquet
+    1.000f,  // 31 rubble_shop_shutter
+    1.000f,  // 32 rubble_lino
+    1.000f,  // 33 rubble_factory_wall
+    1.000f,  // 34 rubble_tread
+    1.000f,  // 35 rubble_rust
+    1.000f,  // 36 rubble_electric_grate
+    1.000f,  // 37 rubble_fire_cell
+    1.000f,  // 38 rubble_pipe_metal
+    1.000f,  // 39 rubble_neon_tube
+    1.000f,  // 40 rubble_glass
+    1.000f,  // 41 rubble_asphalt
+    1.000f   // 42 rubble_door_steel
 };
 
 inline constexpr float kMatDiffusion[kMatCount] = {

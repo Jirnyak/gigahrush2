@@ -1499,6 +1499,78 @@ void test_budget_dispatch(gpu::VulkanDevice& dev) {
     CHECK(dig[0] != dig[1]); // бюджет кусает: тесный темп != полный
 }
 
+// flow РЫХЛОГО = 1.0 (решение владельца 2026-09-01): осыпь ЛАВИННА на
+// масштабе подтика и ДОСТИГАЕТ СНА — прежние 0.1 кодировали угол откоса в
+// вероятность, а угол держит сама геометрия ската Марголуса; вероятность
+// лишь растягивала осадку в «плач» редкими каплями, и куча не могла
+// заснуть (плейтест владельца: «рабл словно плачет субвокселями»).
+// Гейт СКОРОСТИ СНА: столб рыхлого оседает и live пустеет за 10 батчей
+// (80 подтиков = 2.5 с); мутация flow 0.1 оставляет live непустым.
+void test_rubble_settles_fast(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 40; x < 46; ++x)
+        for (int y = 40; y < 46; ++y)
+            w.grid().fill_cell(x, y, 30, kMatConcrete);
+    const std::uint32_t pourCell =
+        static_cast<std::uint32_t>(macro_index(42, 42, 32));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(pourCell, w.grid().types()[pourCell]);
+    // Узкая БАШНЯ 2x2x8: после падения на плиту обязана расползтись именно
+    // СКАТОМ (перепад >= 2) — гравитация одна такой столб не разбирает.
+    std::uint32_t poured = 0;
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                pg[sub_bit(sx, sy, sz)] = kMatRubble;
+                ++poured;
+            }
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&pourCell, 1, w, mirror);
+    std::uint64_t substep = 0;
+    std::uint32_t liveEarly = ~0u;
+    std::uint32_t liveTail[3] = {~0u, ~0u, ~0u};
+    for (int b = 0; b < 10; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+        if (b == 4) liveEarly = medium.live_count();
+        if (b >= 7) liveTail[b - 7] = medium.live_count();
+    }
+    std::printf("[medium_test] rubble-settle: live@5 %u, live %u/%u/%u (батчи 8..10), "
+                "fade %u\n",
+                liveEarly, liveTail[0], liveTail[1], liveTail[2],
+                medium.fade_total());
+    // Лавина осела и ЗАМЕРЛА: хвост live мал (зомби-владельцы граничных
+    // блоков Марголуса — принятый хвост §63, live==0 у границ клеток
+    // недостижим по построению) и СТАБИЛЕН три батча подряд — «плач»
+    // (редкие капли, будящие клетки) мёртв.
+    CHECK(liveTail[2] <= 8);
+    CHECK(liveTail[0] == liveTail[1] && liveTail[1] == liveTail[2]);
+    // ЛАВИННОСТЬ: к 40-му подтику (батч 5) осадка уже финальна — live
+    // равен хвосту. Тянущийся скат (flow 0.1) на 40-м ещё капает.
+    CHECK(liveEarly == liveTail[2]);
+    drain_seam(dev, mirror, medium, w, substep);
+    // Масса точна: осевшее в CPU-каноне + истаявшие одиночки == налитому.
+    std::uint32_t settled = 0;
+    for (int cz = 30; cz <= 33; ++cz)
+        for (int cx = 40; cx < 46; ++cx)
+            for (int cy = 40; cy < 46; ++cy) {
+                const CellType* p = f.page(static_cast<std::size_t>(
+                    macro_index(cx, cy, cz)));
+                if (!p) continue;
+                for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                    if (p[b2] == kMatRubble) ++settled;
+            }
+    CHECK(settled + medium.fade_total() == poured);
+    medium.destroy();
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -1515,6 +1587,7 @@ int main() {
         test_carve_vs_seam(dev);
         test_cadence_equivalence(dev);
         test_budget_dispatch(dev);
+        test_rubble_settles_fast(dev);
     }
     test_carve_agnostic();
     dev.destroy();

@@ -56,9 +56,9 @@ const uint kMaterialCsvRows = 26u;
 //     thresholded low-frequency patches ~1.5 m; corroded, weaker than
 //     fresh steel
 //  15 rubble               rubble   rusty_corrugated_iron    CV 0.4437
-//     chunk plateaus at 33 cm; already broken once; рыхлое: flow 0.1 из
-//     угла естественного откоса щебня ~40° — (45−40)/45 ≈ 0.1 бокового
-//     растекания при осыпании
+//     chunk plateaus at 33 cm; already broken once; рыхлое: flow 1.0 —
+//     осыпь лавинна на масштабе подтика (владелец 2026-09-01); угол откоса
+//     держит геометрия ската Марголуса а не вероятность
 //  16 electric_grate       tread    authored                 CV 0.0900
 //     AUTHORED: electrified floor grate — tread lattice, hot hazard tint
 //  17 acid_pool            smooth   authored                 CV 0.1000
@@ -418,7 +418,7 @@ const vec3 kMatMedium[43] = vec3[43](
     vec3(0.000, 0.000, 0.000000),  // 12 factory_wall
     vec3(0.000, 0.000, 0.000000),  // 13 tread
     vec3(0.000, 0.000, 0.000000),  // 14 rust
-    vec3(0.100, 0.000, 0.000533),  // 15 rubble
+    vec3(1.000, 0.000, 0.000533),  // 15 rubble
     vec3(0.000, 0.000, 0.000000),  // 16 electric_grate
     vec3(0.100, 0.050, 0.000873),  // 17 acid_pool
     vec3(0.000, 0.000, 0.000000),  // 18 fire_cell
@@ -429,23 +429,23 @@ const vec3 kMatMedium[43] = vec3[43](
     vec3(0.000, 0.000, 0.000000),  // 23 asphalt
     vec3(0.000, 0.000, 0.000000),  // 24 door_steel
     vec3(0.000, 0.000, 0.000000),  // 25 door_hermetic
-    vec3(0.100, 0.000, 0.000533),  // 26 rubble_concrete
-    vec3(0.100, 0.000, 0.000800),  // 27 rubble_soil
-    vec3(0.100, 0.000, 0.000582),  // 28 rubble_slab_tan
-    vec3(0.100, 0.000, 0.001600),  // 29 rubble_plaster
-    vec3(0.100, 0.000, 0.001829),  // 30 rubble_parquet
-    vec3(0.100, 0.000, 0.000164),  // 31 rubble_shop_shutter
-    vec3(0.100, 0.000, 0.001067),  // 32 rubble_lino
-    vec3(0.100, 0.000, 0.000164),  // 33 rubble_factory_wall
-    vec3(0.100, 0.000, 0.000164),  // 34 rubble_tread
-    vec3(0.100, 0.000, 0.000246),  // 35 rubble_rust
-    vec3(0.100, 0.000, 0.000164),  // 36 rubble_electric_grate
-    vec3(0.100, 0.000, 0.006400),  // 37 rubble_fire_cell
-    vec3(0.100, 0.000, 0.000164),  // 38 rubble_pipe_metal
-    vec3(0.100, 0.000, 0.000914),  // 39 rubble_neon_tube
-    vec3(0.100, 0.000, 0.000512),  // 40 rubble_glass
-    vec3(0.100, 0.000, 0.000557),  // 41 rubble_asphalt
-    vec3(0.100, 0.000, 0.000441)   // 42 rubble_door_steel
+    vec3(1.000, 0.000, 0.000533),  // 26 rubble_concrete
+    vec3(1.000, 0.000, 0.000800),  // 27 rubble_soil
+    vec3(1.000, 0.000, 0.000582),  // 28 rubble_slab_tan
+    vec3(1.000, 0.000, 0.001600),  // 29 rubble_plaster
+    vec3(1.000, 0.000, 0.001829),  // 30 rubble_parquet
+    vec3(1.000, 0.000, 0.000164),  // 31 rubble_shop_shutter
+    vec3(1.000, 0.000, 0.001067),  // 32 rubble_lino
+    vec3(1.000, 0.000, 0.000164),  // 33 rubble_factory_wall
+    vec3(1.000, 0.000, 0.000164),  // 34 rubble_tread
+    vec3(1.000, 0.000, 0.000246),  // 35 rubble_rust
+    vec3(1.000, 0.000, 0.000164),  // 36 rubble_electric_grate
+    vec3(1.000, 0.000, 0.006400),  // 37 rubble_fire_cell
+    vec3(1.000, 0.000, 0.000164),  // 38 rubble_pipe_metal
+    vec3(1.000, 0.000, 0.000914),  // 39 rubble_neon_tube
+    vec3(1.000, 0.000, 0.000512),  // 40 rubble_glass
+    vec3(1.000, 0.000, 0.000557),  // 41 rubble_asphalt
+    vec3(1.000, 0.000, 0.000441)   // 42 rubble_door_steel
 );
 
 const uint kMatPhase[43] = uint[43](
