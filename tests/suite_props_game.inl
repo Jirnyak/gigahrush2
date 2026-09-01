@@ -1084,10 +1084,13 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     const std::uint32_t detached =
         game::anchor_validate_step(reg, world, layer, bus, dirty, &bursts, 77u);
     CHECK(detached == 1u);
-    CHECK(bursts.count == 1u);
+    // Инкр. 5: развал = ЧЕРЕПКИ (куски, сохраняющие вид) + пыль сверху.
+    CHECK(bursts.count == 2u);
     CHECK(bursts.items[0].count > 0u);
     CHECK(bursts.items[0].kind ==
-          static_cast<std::uint8_t>(game::ParticleKind::Debris));
+          static_cast<std::uint8_t>(game::ParticleKind::Shard));
+    CHECK(bursts.items[1].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Dust));
     CHECK(bursts.items[0].pos.x == pos.x && bursts.items[0].pos.z == pos.z);
     // ...and the queue stays untouched when the caller does not offer one
     // (headless sim, tests, a server with no renderer).
@@ -1267,12 +1270,15 @@ static void test_projectile_shatters_lamp_and_light_dies() {
         reg, layer, vec3{pos.x, pos.y, pos.z + 0.3f}, vec3{0.0f, 0.0f, -40.0f},
         game::kProjHitRadius, bus, &bursts, 5u));
 
-    // Всплеск: осколки, тонированные материалом лампы — neon_tube, не air.
-    CHECK(bursts.count > 0u);
+    // Всплеск: ЧЕРЕПКИ (инкр. 5 — куски, сохраняющие вид) + пыль, оба
+    // тонированы материалом лампы — neon_tube, не air.
+    CHECK(bursts.count > 1u);
     CHECK(bursts.items[0].count > 0u);
     CHECK(bursts.items[0].kind ==
-          static_cast<std::uint8_t>(game::ParticleKind::Debris));
+          static_cast<std::uint8_t>(game::ParticleKind::Shard));
     CHECK(bursts.items[0].matId == 20u);
+    CHECK(bursts.items[1].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Dust));
 
     // Сущность унесена целиком (GpuHandoff: ноль CPU-обломков)...
     CHECK(!reg.valid(lamp));

@@ -289,11 +289,12 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
             VkPipeline* out;
             bool translucent; // particles: alpha-blend, no depth write
         };
-        const DrawSpec specs[3] = {
+        const DrawSpec specs[4] = {
             {"wire.vert.spv", "wire.frag.spv", &wireDrawPipeline_, false},
             {"cloth.vert.spv", "cloth.frag.spv", &clothDrawPipeline_, false},
             {"particle.vert.spv", "particle.frag.spv",
              &particleDrawPipeline_, true},
+            {"shard.vert.spv", "shard.frag.spv", &shardDrawPipeline_, false},
         };
         for (const DrawSpec& spec : specs) {
             std::vector<char> vs, fs;
@@ -412,22 +413,22 @@ void VerletPass::repack() {
     std::uint32_t nw = static_cast<std::uint32_t>(wireStage_.size());
     std::uint32_t nc = static_cast<std::uint32_t>(clothStage_.size());
     const std::uint32_t wirePts = nw * kWireChainPoints;
-    if (wirePts > kRootAntouragePoints) {
-        nw = kRootAntouragePoints / kWireChainPoints;
+    if (wirePts > kShardPointBase) { // осколки живут фикс-банком перед частицами
+        nw = kShardPointBase / kWireChainPoints;
         std::fprintf(stderr,
                      "[verlet] TRUNCATED: %zu chains baked, pool fits %u\n",
                      wireStage_.size(), nw);
     }
     const std::uint32_t clothCap =
-        (kRootAntouragePoints - nw * kWireChainPoints) / kClothGridPoints;
+        (kShardPointBase - nw * kWireChainPoints) / kClothGridPoints;
     if (nc > clothCap) {
         std::fprintf(stderr,
                      "[verlet] TRUNCATED: %zu sheets baked, pool fits %u\n",
                      clothStage_.size(), clothCap);
         nc = clothCap;
     }
-    if (nw + nc > kMaxAntourageElems) { // derived cap, unreachable while the
-        nc = kMaxAntourageElems - nw;   // smallest element is the divisor
+    if (nw + nc > kShardElemBase) { // хвост таблицы элементов — осколкам
+        nc = kShardElemBase - nw;
         std::fprintf(stderr, "[verlet] TRUNCATED: element table full\n");
     }
     wireCount_ = nw;
@@ -708,6 +709,12 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
         vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(VerletPush), &pp);
         vkCmdDispatch(cmd, (kRootParticles + 63u) / 64u, 1, 1);
+        // Осколки — свой пролёт того же пасса (третий дизъюнктный спан).
+        pp.dims.x = static_cast<float>(kRootShards * kShardPoints);
+        pp.dims.y = static_cast<float>(kShardPointBase);
+        vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(VerletPush), &pp);
+        vkCmdDispatch(cmd, (kRootShards * kShardPoints + 63u) / 64u, 1, 1);
         ++particleSims_;
     }
 
@@ -722,12 +729,23 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
 
     // Phase 1 — ELEMENTS: serial relaxation per element, thread per element.
     // Particles have no elements — «ноль связей» is absence from this
-    // dispatch, not an early-out (plan §2.3).
+    // dispatch, not an early-out (plan §2.3). В фазе 1 dims.y = БАЗА
+    // ЭЛЕМЕНТОВ спана (в фазе 0 та же лейна — база точек).
     if (doAntourage && elemCount > 0) {
         p.dims.w = 1.0f;
+        p.dims.y = 0.0f;
         vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(VerletPush), &p);
         vkCmdDispatch(cmd, (elemCount + 63u) / 64u, 1, 1);
+    }
+    if (doParticles) { // констрейнты пар черепков
+        VerletPush ps = p;
+        ps.dims.w = 1.0f;
+        ps.dims.y = static_cast<float>(kShardElemBase);
+        ps.sim.w = static_cast<float>(kRootShards);
+        vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(VerletPush), &ps);
+        vkCmdDispatch(cmd, (kRootShards + 63u) / 64u, 1, 1);
     }
 
     if (wireCount_ > 0) ++wirePin_.simsSinceUpload;
@@ -768,6 +786,71 @@ void VerletPass::spawn_particles(const GpuParticle* items,
         a.phys = vec4{s.phys.x, -std::log(drag) * 60.0f, s.phys.z, s.phys.w};
         a.meta = vec4{s.velTotal.w, 0.0f, 0.0f, 0.0f};
     }
+}
+
+void VerletPass::spawn_shards(const GpuParticle* items, std::uint32_t count,
+                              std::uint32_t seed) {
+    if (!points_.mapped || !elems_.mapped || items == nullptr) return;
+    auto* pts = static_cast<VerletPoint*>(points_.mapped);
+    auto* els = static_cast<VerletElem*>(elems_.mapped);
+    for (std::uint32_t k = 0; k < count; ++k) {
+        const GpuParticle& s = items[k];
+        const std::uint32_t slot = shardCursor_;
+        shardCursor_ = (shardCursor_ + 1u) % kRootShards;
+        const std::uint32_t base = kShardPointBase + slot * kShardPoints;
+        // Детерминированная ось черепка — stateless-хеш (seed, k), как
+        // carve_roll: bit-identical по сиду, ноль состояния.
+        std::uint32_t h = (seed ^ (k * 0x9E3779B9u)) * 2654435761u;
+        h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+        const float a1 = static_cast<float>(h & 0xFFFFu) * 9.58738e-5f;
+        const float a2 =
+            static_cast<float>((h >> 16) & 0xFFFFu) * 4.79369e-5f;
+        const vec3 axis{std::cos(a1) * std::sin(a2),
+                        std::sin(a1) * std::sin(a2), std::cos(a2)};
+        const float len = s.colorSize.w; // size_m строки CSV = длина черепка
+        const float dtRef = 1.0f / 60.0f;
+        // Кувырок: концы получают противоположные добавки скорости поперёк
+        // оси — момент из того же хеша, выведен от скорости разлёта.
+        const vec3 spin{axis.y * s.velTotal.z - axis.z * s.velTotal.y,
+                        axis.z * s.velTotal.x - axis.x * s.velTotal.z,
+                        axis.x * s.velTotal.y - axis.y * s.velTotal.x};
+        for (int e2 = 0; e2 < kShardPoints; ++e2) {
+            const float sgn = e2 == 0 ? -0.5f : 0.5f;
+            const vec3 cp{s.posLife.x + axis.x * len * sgn,
+                          s.posLife.y + axis.y * len * sgn,
+                          s.posLife.z + axis.z * len * sgn};
+            const vec3 v{s.velTotal.x + spin.x * sgn,
+                         s.velTotal.y + spin.y * sgn,
+                         s.velTotal.z + spin.z * sgn};
+            pts[base + e2].cur = vec4{cp.x, cp.y, cp.z, 1.0f};
+            pts[base + e2].prev = vec4{cp.x - v.x * dtRef, cp.y - v.y * dtRef,
+                                       cp.z - v.z * dtRef, s.posLife.w};
+        }
+        // Элемент черепка: {длина, цвет паком, lifeTotal, γ_air}. Семантика
+        // .w у ШАРДОВ — готовая γ строки CSV (как у частиц), не dragK
+        // антуража: черепок — данные частицы, не бейка.
+        const std::uint32_t rgb =
+            (static_cast<std::uint32_t>(s.colorSize.x * 255.0f) & 0xFFu) |
+            ((static_cast<std::uint32_t>(s.colorSize.y * 255.0f) & 0xFFu)
+             << 8) |
+            ((static_cast<std::uint32_t>(s.colorSize.z * 255.0f) & 0xFFu)
+             << 16);
+        float colorBits;
+        std::memcpy(&colorBits, &rgb, sizeof colorBits);
+        const float drag = s.phys.y > 0.0f ? s.phys.y : 1.0f;
+        els[kShardElemBase + slot].v =
+            vec4{len, colorBits, s.velTotal.w, -std::log(drag) * 60.0f};
+    }
+}
+
+void VerletPass::gather_shard(std::uint32_t slot,
+                              VerletPoint out[kShardPoints]) const {
+    out[0] = VerletPoint{};
+    out[1] = VerletPoint{};
+    if (!points_.mapped || slot >= kRootShards) return;
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
+    out[0] = pts[kShardPointBase + slot * kShardPoints];
+    out[1] = pts[kShardPointBase + slot * kShardPoints + 1];
 }
 
 std::uint32_t VerletPass::particle_alive_count() const {
@@ -841,6 +924,26 @@ void VerletPass::record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
     vkCmdDraw(cmd, kClothVertsPerSheet, clothCount_, 0, 0);
 }
 
+void VerletPass::record_draw_shards(VkCommandBuffer cmd, const CubePush& push,
+                                    VkDescriptorSet lightSet) {
+    if (shardDrawPipeline_ == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      shardDrawPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
+                            0, 1, &set_, 0, nullptr);
+    if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                drawLayout_, 1, 1, &lightSet, 0, nullptr);
+    vkCmdPushConstants(cmd, drawLayout_,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(CubePush), &push);
+    const VerletDrawPush extra{cloth_point_base(), wireCount_, 0, 0};
+    vkCmdPushConstants(cmd, drawLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(CubePush), sizeof(VerletDrawPush), &extra);
+    // Один инстанс на черепок, 6 вершин ленты; мёртвые клипятся вертом.
+    vkCmdDraw(cmd, 6u, kRootShards, 0, 0);
+}
+
 void VerletPass::record_draw_particles(VkCommandBuffer cmd,
                                        const CubePush& push,
                                        VkDescriptorSet lightSet) {
@@ -870,6 +973,7 @@ void VerletPass::destroy() {
     if (clothDrawPipeline_) vkDestroyPipeline(d, clothDrawPipeline_, nullptr);
     if (particleDrawPipeline_)
         vkDestroyPipeline(d, particleDrawPipeline_, nullptr);
+    if (shardDrawPipeline_) vkDestroyPipeline(d, shardDrawPipeline_, nullptr);
     if (drawLayout_) vkDestroyPipelineLayout(d, drawLayout_, nullptr);
     if (simPipeline_) vkDestroyPipeline(d, simPipeline_, nullptr);
     if (simLayout_) vkDestroyPipelineLayout(d, simLayout_, nullptr);

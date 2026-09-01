@@ -80,6 +80,20 @@ inline constexpr std::uint32_t kParticlePointBase = kRootAntouragePoints;
 inline constexpr std::uint32_t kPoolPoints =
     kRootAntouragePoints + kRootParticles;
 
+// ОСКОЛКИ GpuHandoff (инкр. 5, решение владельца «осколки-элементы»): кусок
+// = ПАРА верле-точек с констрейнтом — ориентированный черепок с материалом
+// пропа, кувыркается и ложится (полный замысел S3 вместо чистых искр).
+// Кап ПРОИЗВОДНЫЙ от корня частиц: кусков на расколе на порядок меньше,
+// чем искр — kRootParticles/32. Банк точек — фиксированно ПЕРЕД частицами
+// (репак антуража усечён до него), элементы — фиксированный ХВОСТ таблицы.
+inline constexpr std::uint32_t kRootShards = kRootParticles / 32; // 1024
+inline constexpr int kShardPoints = 2;
+inline constexpr std::uint32_t kShardPointBase =
+    kParticlePointBase - kRootShards * kShardPoints;
+inline constexpr std::uint32_t kShardElemBase =
+    kRootAntouragePoints / static_cast<std::uint32_t>(kWireChainPoints) -
+    kRootShards; // = kMaxAntourageElems − kRootShards (объявлен ниже)
+
 // DERIVED: the element table can never outgrow the pool divided by the
 // smallest element (a chain, 8 points). The GpuHandoff-shard increment adds a
 // smaller element (2–4 points) and MUST re-derive this divisor with it.
@@ -209,6 +223,13 @@ public:
     // spawn POD to the pool verlet form; CPU-writes host-visible memory.
     void spawn_particles(const GpuParticle* items, std::uint32_t count);
 
+    // Осколки: тот же спавн-POD (pos/vel/цвет/жизнь), каждый сид разворачи-
+    // вается в ПАРУ точек по детерминированной оси (хеш от seed+k) с
+    // кувырком; кольцевой курсор своего банка.
+    void spawn_shards(const GpuParticle* items, std::uint32_t count,
+                      std::uint32_t seed);
+    void gather_shard(std::uint32_t slot, VerletPoint out[kShardPoints]) const;
+
     // Live-particle census off the mapped pool (HUD/diagnostic cadence).
     std::uint32_t particle_alive_count() const;
     std::uint32_t particle_spawned_total() const { return particleSpawned_; }
@@ -231,6 +252,10 @@ public:
     // one draw of the family with its own fixed-function state.
     void record_draw_particles(VkCommandBuffer cmd, const CubePush& push,
                                VkDescriptorSet lightSet);
+    // Черепки: солидные ориентированные ленты-обломки (свой vert, wire-класс
+    // fixed-function) — рисуются с антуражем, до полупрозрачных частиц.
+    void record_draw_shards(VkCommandBuffer cmd, const CubePush& push,
+                            VkDescriptorSet lightSet);
 
     std::uint32_t chain_count() const { return wireCount_; }
     std::uint32_t sheet_count() const { return clothCount_; }
@@ -270,6 +295,7 @@ private:
     std::uint32_t wireCount_ = 0;
     std::uint32_t clothCount_ = 0;
     std::uint32_t particleCursor_ = 0;   // spawn ring over the particle bank
+    std::uint32_t shardCursor_ = 0;      // spawn ring over the shard bank
     std::uint32_t particleSpawned_ = 0;  // HUD/diagnostic total
     std::uint32_t particleSims_ = 0;     // GIGA_PARTICLE_PIN bookkeeping
     bool particlePinDumped_ = false;
@@ -291,6 +317,7 @@ private:
     VkPipeline wireDrawPipeline_ = VK_NULL_HANDLE;
     VkPipeline clothDrawPipeline_ = VK_NULL_HANDLE;
     VkPipeline particleDrawPipeline_ = VK_NULL_HANDLE;
+    VkPipeline shardDrawPipeline_ = VK_NULL_HANDLE;
 };
 
 } // namespace giga::gpu

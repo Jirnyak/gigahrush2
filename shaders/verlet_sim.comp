@@ -80,6 +80,10 @@ float medium_density(vec3 w) {
 // LOCKSTEP with gpu::kParticlePointBase (render/verlet_pass.h): the particle
 // bank starts here; everything below is antourage.
 const uint kParticleBase = 1048576u;
+// LOCKSTEP with gpu::kShardPointBase / kShardElemBase: осколки GpuHandoff —
+// пары точек фикс-банком перед частицами, элементы хвостом таблицы.
+const uint kShardBase = 1048576u - 2048u;
+const uint kShardElem = 131072u - 1024u;
 
 // Solidity of the sub-voxel containing world point `w` (toroidal).
 // Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
@@ -185,11 +189,35 @@ void particle_point(uint i) {
     eb.p[i].prev = vec4(newPrev, life);
 }
 
+// Точка ЧЕРЕПКА: жизнь как у частиц (prev.w), γ = γ_air строки CSV × ρ/ρ_air
+// (семантика els.w у шардов), посадка антуражным world_land — черепок
+// кувыркается констрейнтом пары и ЛОЖИТСЯ, без отскока.
+void shard_point(uint i) {
+    const uint e = kShardElem + (i - kShardBase) / 2u;
+    if (el.e[e].z < 0.5) return; // пустой слот кольца
+    vec4 cur = eb.p[i].cur;
+    vec4 prev = eb.p[i].prev;
+    float life = prev.w;
+    if (life <= 0.0) return;
+    const float dt = pc.sim.x;
+    life -= dt;
+    const float rhoScale = medium_density(cur.xyz) / kRhoAir;
+    vec3 disp = (cur.xyz - prev.xyz) * exp(-el.e[e].w * rhoScale * dt) +
+                pc.grav.xyz * dt * dt;
+    vec3 np = body_push(cur.xyz + disp, pc.sim.z);
+    eb.p[i].prev = vec4(cur.xyz, life);
+    eb.p[i].cur = vec4(world_land(cur.xyz, np), cur.w);
+}
+
 void phase_points(uint gid) {
     if (gid >= uint(pc.dims.x)) return;
     const uint i = uint(pc.dims.y) + gid; // dispatch span base (plan §2.3)
     if (i >= kParticleBase) {
         particle_point(i);
+        return;
+    }
+    if (i >= kShardBase) {
+        shard_point(i);
         return;
     }
     const uint clothBase = uint(pc.dims.z);
@@ -219,17 +247,22 @@ void phase_points(uint gid) {
     eb.p[i].cur = vec4(world_land(cur.xyz, np), cur.w);
 }
 
-void phase_elements(uint k) {
-    if (k >= uint(pc.sim.w)) return;
+void phase_elements(uint gid) {
+    if (gid >= uint(pc.sim.w)) return;
+    const uint k = uint(pc.dims.y) + gid; // в фазе 1 dims.y = база ЭЛЕМЕНТОВ
     const uint clothBase = uint(pc.dims.z);
     const uint nWires = clothBase / uint(kWireW);
-    if (el.e[k].z < 0.5) return; // dead element
+    if (el.e[k].z < 0.5) return; // dead element / пустой слот черепка
 
-    const bool isWire = k < nWires;
-    const int W = isWire ? kWireW : kClothW;
-    const int H = isWire ? 1 : kClothH;
-    const uint base = isWire ? k * uint(kWireW)
-                             : clothBase + (k - nWires) * uint(kClothP);
+    const bool isShard = k >= kShardElem;
+    const bool isWire = !isShard && k < nWires;
+    const int W = isShard ? 2 : (isWire ? kWireW : kClothW);
+    const int H = isShard || isWire ? 1 : kClothH;
+    const uint base = isShard
+                          ? kShardBase + (k - kShardElem) * 2u
+                          : (isWire ? k * uint(kWireW)
+                                    : clothBase + (k - nWires) * uint(kClothP));
+    if (isShard && eb.p[base].prev.w <= 0.0) return; // черепок дожил
     const float restX = el.e[k].x;
     const float restY = el.e[k].y;
 

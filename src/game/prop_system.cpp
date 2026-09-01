@@ -181,8 +181,13 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
             const float iLen = length(impulse);
             const vec3 dir = iLen > 1e-6f ? impulse * (0.35f / iLen)
                                           : vec3{0.0f, 0.0f, 0.35f};
-            bursts->push(pos, dir, ParticleKind::Debris, 6,
+            // ПОЛНЫЙ ВИД GpuHandoff (S3, инкр. 5 verlet-merge): развал на
+            // ЧЕРЕПКИ — пары верле-точек с материалом пропа, кувыркаются и
+            // ложатся; пыль сверху — косметика раскола.
+            bursts->push(pos, dir, ParticleKind::Shard, 5,
                          matId, seed ^ 0xD3B15u);
+            bursts->push(pos, dir, ParticleKind::Dust, 3,
+                         matId, seed ^ 0xD157u);
         }
         // Погибший GpuHandoff-проп покидает ОСНАЩЕНИЕ (живой хук supply,
         // S12.4) — тем же законом, что детач ниже (mark_dynamic).

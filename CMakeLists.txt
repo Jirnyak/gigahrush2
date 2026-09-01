@@ -349,7 +349,7 @@ set(_giga_spv_files "")
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
 set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/surface_lib.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag shard.vert shard.frag post_pass.vert post_pass.frag)
     # raymarch.frag — потребитель полурезного света (сэмплит полупасс вместо
     # собственного surface_light); производитель — raymarch_light ниже.
     set(_giga_sh_extra "")
@@ -602,8 +602,11 @@ if(GIGA_BUILD_TESTS)
     # успокаивается первой @300 (вода 0.013 против воздуха 0.075). Мутация
     # «среда слепа» (ρ всегда воздух) = 2 FAIL. Проба ρ=1000-всем доказала
     # чтение таблицы: воздух получил ровно водяной размах.
+    # 114 -> 125 on 2026-09-01: test_shards — черепки GpuHandoff (инкр. 5,
+    # последний): пара верле-точек падает, ложится на плиту, констрейнт
+    # держит длину, жизнь кончается. Мутация «пара без связи» = 1 FAIL.
     set_tests_properties(verlet_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "114/114 checks passed")
+        PASS_REGULAR_EXPRESSION "125/125 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
@@ -1577,7 +1580,10 @@ if(GIGA_BUILD_TESTS)
     # 222344 + 1 тем же днём (floor v4): лежащая поза едет в PropRecord.q и
     # возвращается бит-в-бит (до того загрузка ставила упавший проп стоймя);
     # мутация «restore не применяет q» = 2 FAIL (чек + идемпотентность байт).
-        PASS_REGULAR_EXPRESSION "game_test: 222345 checks, 0 failures")
+    # 222345 + 10 on 2026-09-01 (инкр. 5): GpuHandoff разваливается на
+    # ЧЕРЕПКИ+пыль (два push вместо одного Debris) — оба burst-теста пинят
+    # новый закон (kind Shard + kind Dust).
+        PASS_REGULAR_EXPRESSION "game_test: 222355 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

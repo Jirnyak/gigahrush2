@@ -1785,6 +1785,18 @@ void drain_particle_bursts(gpu::VerletPass& pass,
         const vec3 tint = def.colorFromMaterial
                               ? kMaterial[b.matId < kMatCount ? b.matId : 0]
                               : vec3{def.r, def.g, def.b};
+        if (b.kind == static_cast<std::uint8_t>(game::ParticleKind::Shard)) {
+            // Черепки — свой банк пула: спавн-POD тот же, разворот в пары
+            // делает пасс (ось/кувырок из сида — bit-identical).
+            static std::vector<gpu::GpuParticle> shardTmp;
+            shardTmp.clear();
+            pack_particles(shardTmp, b.pos, b.dir, def, tint, b.count,
+                           b.seed);
+            pass.spawn_shards(shardTmp.data(),
+                              static_cast<std::uint32_t>(shardTmp.size()),
+                              b.seed);
+            continue;
+        }
         pack_particles(tmp, b.pos, b.dir, def, tint, b.count, b.seed);
     }
     pass.spawn_particles(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
@@ -9113,6 +9125,8 @@ int main(int argc, char** argv) {
             verletPass.record_draw_cloths(cmd, push, lightGrid.descriptor_set());
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
+            verletPass.record_draw_shards(cmd, push,
+                                          lightGrid.descriptor_set());
             verletPass.record_draw_particles(cmd, push,
                                              lightGrid.descriptor_set());
             }

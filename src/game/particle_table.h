@@ -5,7 +5,7 @@
 // One row per PARTICLE TYPE of the unified GPU pool: mob blood and concrete
 // dust differ by a row, never by code. The physics knobs (gravity multiplier,
 // per-tick drag, restitution) are stamped onto each particle at spawn, so the
-// compute sim (shaders/verlet_sim.comp, банк частиц) needs no table of its own and can
+// compute sim (shaders/particle_sim.comp) needs no table of its own and can
 // never drift from this one. `colorFromMaterial` rows take their tint from the
 // generated kMaterial albedo of whatever was hit; the rest carry their own.
 #pragma once
@@ -22,10 +22,11 @@ enum class ParticleKind : std::uint8_t {
     Blood = 2,
     Spark = 3,
     Drip = 4,
+    Shard = 5,
     Count
 };
 
-inline constexpr std::uint8_t kParticleKindCount = 5u;
+inline constexpr std::uint8_t kParticleKindCount = 6u;
 
 struct ParticleDef {
     const char* id;         // CSV slug
@@ -46,6 +47,7 @@ inline constexpr ParticleDef kParticleTable[kParticleKindCount] = {
     {"blood", false, 0.42f, 0.03f, 0.03f, 0, 1.0f, 0.99f, 0.0f, 0.075f, 1.8f, 2.8f},
     {"spark", false, 1.0f, 0.72f, 0.28f, 235, 0.45f, 0.996f, 0.55f, 0.035f, 0.8f, 6.5f},
     {"drip", false, 0.32f, 0.36f, 0.40f, 0, 1.0f, 1.0f, 0.0f, 0.055f, 4.0f, 0.3f},
+    {"shard", true, 0.0f, 0.0f, 0.0f, 0, 1.0f, 0.997f, 0.2f, 0.15f, 12.0f, 2.2f},
 };
 
 inline const ParticleDef& particle_def(ParticleKind k) {

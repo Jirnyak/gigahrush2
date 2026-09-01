@@ -420,6 +420,37 @@ void test_particles(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
           p1.cur.z == p2.cur.z);
 }
 
+// ЧЕРЕПКИ GpuHandoff (инкр. 5): спавн-POD → пара верле-точек с констрейнтом
+// длины; падает, кувыркается, ложится НА плиту, живёт по prev.w и умирает.
+void test_shards(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
+    gpu::GpuParticle s{};
+    s.posLife = vec4{11.0f, 11.0f, 11.4f, 3.0f};
+    s.velTotal = vec4{0.5f, 0.2f, 0.0f, 3.0f};
+    s.colorSize = vec4{0.6f, 0.5f, 0.4f, 0.15f}; // size = длина черепка
+    s.phys = vec4{1.0f, 0.997f, 0.2f, 0.0f};
+    pass.spawn_shards(&s, 1, 0xC0FFEEu);
+    gpu::VerletPoint pr[2];
+    pass.gather_shard(0, pr);
+    CHECK(pr[0].prev.w > 0.0f && pr[1].prev.w > 0.0f); // пара жива
+    CHECK(run_sims(dev, pass, 120, vec3{0.0f, 0.0f, -9.81f})); // 2 c
+    pass.gather_shard(0, pr);
+    // Села на плиту (верх z=10), не утонула и не левитирует.
+    for (int i = 0; i < 2; ++i) {
+        CHECK(pr[i].cur.z >= 9.99f);
+        CHECK(pr[i].cur.z <= 10.6f);
+        CHECK(pr[i].prev.w > 0.0f); // ещё жива (3 − 2 с)
+    }
+    // Констрейнт держит длину пары (±15% — солвер после посадки).
+    const float dx = pr[1].cur.x - pr[0].cur.x;
+    const float dy = pr[1].cur.y - pr[0].cur.y;
+    const float dz = pr[1].cur.z - pr[0].cur.z;
+    const float len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    CHECK(std::fabs(len - 0.15f) < 0.15f * 0.15f);
+    CHECK(run_sims(dev, pass, 90, vec3{0.0f, 0.0f, -9.81f})); // всего 3.5 c
+    pass.gather_shard(0, pr);
+    CHECK(pr[0].prev.w <= 0.0f); // жизнь вышла — черепок мёртв
+}
+
 } // namespace
 
 int main() {
@@ -467,6 +498,7 @@ int main() {
         test_body_pushes(dev, pass);
         test_medium_damps(dev, pass);
         test_particles(dev, pass);
+        test_shards(dev, pass);
 
         pass.destroy();
         mirror.destroy();
