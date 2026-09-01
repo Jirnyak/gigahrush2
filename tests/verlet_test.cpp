@@ -306,6 +306,65 @@ void test_body_pushes(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
     CHECK(inside == 0);
 }
 
+// ЧАСТИЦЫ — третий банк пула (этап 2, 2026-09-01): верле-интегратор
+// (решение владельца — один интегратор навсегда), жизнь в prev.w, отскок
+// зеркалом prev, γ из aux. Ноги: падение и посадка на плиту (не тонет),
+// отскок живёт (bounce > 0 меняет знак вертикальной скорости), жизнь
+// кончается — слот мёртв, детерминизм спавна от сида.
+void test_particles(gpu::VulkanDevice& dev, gpu::VerletPass& pass) {
+    // Пустые банки антуража: только частицы в этом прогоне.
+    pass.upload_wires(nullptr, 0);
+    pass.upload_cloths(nullptr, 0);
+    pass.upload_bodies(nullptr, 0);
+    // Один «дебрис» над плитой (верх z=10): падает 1.5 м, садится, живёт.
+    gpu::GpuParticle s{};
+    s.posLife = vec4{11.0f, 11.0f, 11.5f, 3.0f};  // жизнь 3 с
+    s.velTotal = vec4{0.0f, 0.0f, 0.0f, 3.0f};
+    s.colorSize = vec4{1.0f, 0.5f, 0.2f, 0.14f};
+    s.phys = vec4{1.0f, 0.997f, 0.35f, 0.0f}; // gravMul, drag@60Hz, bounce
+    pass.spawn_particles(&s, 1);
+    CHECK(pass.particle_alive_count() == 1);
+    CHECK(run_sims(dev, pass, 120, vec3{0.0f, 0.0f, -9.81f})); // 2 c
+    gpu::VerletPoint got{};
+    pass.gather_particle(0, &got);
+    CHECK(got.prev.w > 0.0f);   // ещё жива (3 − 2 с)
+    CHECK(got.cur.z >= 9.99f);  // села НА плиту, не утонула
+    CHECK(got.cur.z <= 10.6f);  // и не левитирует
+    CHECK(std::fabs(got.cur.x - 11.0f) < 0.05f); // падала отвесно
+    CHECK(run_sims(dev, pass, 90, vec3{0.0f, 0.0f, -9.81f})); // всего 3.5 с
+    CHECK(pass.particle_alive_count() == 0); // жизнь вышла — слот мёртв
+
+    // Отскок: bounce=1 (идеальный) — через пару симов после касания
+    // вертикальная скорость направлена ВВЕРХ (prev.z > cur.z невозможен у
+    // лежащей; у отскочившей cur уходит вверх от prev).
+    gpu::GpuParticle b = s;
+    b.posLife = vec4{12.0f, 12.0f, 10.8f, 30.0f};
+    b.velTotal = vec4{0.0f, 0.0f, -6.0f, 30.0f};
+    b.phys = vec4{1.0f, 1.0f, 1.0f, 0.0f}; // без драга, полный отскок
+    pass.spawn_particles(&b, 1);
+    CHECK(run_sims(dev, pass, 12, vec3{0.0f, 0.0f, -9.81f}));
+    gpu::VerletPoint bounced{};
+    pass.gather_particle(1, &bounced);
+    CHECK(bounced.prev.w > 0.0f);
+    CHECK(bounced.cur.z - bounced.prev.z > 0.0f); // летит вверх — отскочила
+
+    // Детерминизм спавна+сима: два одинаковых бёрста в свежие слоты дают
+    // бит-идентичные позиции после равного числа симов.
+    gpu::GpuParticle d = s;
+    d.posLife = vec4{13.0f, 13.0f, 11.2f, 20.0f};
+    d.velTotal = vec4{0.4f, -0.3f, 0.5f, 20.0f};
+    pass.spawn_particles(&d, 1);
+    CHECK(run_sims(dev, pass, 40, vec3{0.0f, 0.0f, -9.81f}));
+    gpu::VerletPoint p1{};
+    pass.gather_particle(2, &p1);
+    pass.spawn_particles(&d, 1);
+    CHECK(run_sims(dev, pass, 40, vec3{0.0f, 0.0f, -9.81f}));
+    gpu::VerletPoint p2{};
+    pass.gather_particle(3, &p2);
+    CHECK(p1.cur.x == p2.cur.x && p1.cur.y == p2.cur.y &&
+          p1.cur.z == p2.cur.z);
+}
+
 } // namespace
 
 int main() {
@@ -344,6 +403,7 @@ int main() {
         test_dead_element_freezes(dev, pass);
         test_determinism(dev, pass);
         test_body_pushes(dev, pass);
+        test_particles(dev, pass);
 
         pass.destroy();
         mirror.destroy();

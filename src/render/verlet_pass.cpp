@@ -1,5 +1,6 @@
 #include "render/verlet_pass.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -39,12 +40,14 @@ std::string join(const char* dir, const char* file) {
 }
 
 // One push block, one meaning per field. Mirrors verlet_sim.comp. Bank
-// membership of a point/element is arithmetic off dims.y (the cloth bank's
-// first point) — the SoA pool has no indirection table by design (plan §2.1).
+// membership of a point/element is arithmetic off the bank bases — the SoA
+// pool has no indirection table by design (plan §2.1). The particle bank
+// base is a compile-time lockstep constant on both sides, not a push lane.
 struct VerletPush {
-    vec4 dims; // x total points, y cloth point base, z body count, w phase
+    vec4 dims; // x point count (this dispatch), y point base (offset),
+               //   z cloth point base, w phase
     vec4 sim;  // x dt, y damping, z wrap period (m), w element count
-    vec4 grav; // xyz gravity vector (m/s^2), w unused — NEVER assume -Z
+    vec4 grav; // xyz gravity vector (m/s^2), w body count — NEVER assume -Z
 };
 static_assert(sizeof(VerletPush) == 48,
               "sim push must stay under the 128-byte guaranteed range");
@@ -72,6 +75,16 @@ int verlet_pin_sims() {
     return n;
 }
 
+// GIGA_PARTICLE_PIN=N — twin counter for the particle bank (see
+// maybe_particle_pin_dump); migrated with the ParticlePass merge.
+int particle_pin_sims() {
+    static const int n = [] {
+        const char* e = std::getenv("GIGA_PARTICLE_PIN");
+        return e != nullptr ? std::atoi(e) : 0;
+    }();
+    return n;
+}
+
 std::uint64_t fnv1a(const void* data, std::size_t bytes, std::uint64_t h) {
     const auto* p = static_cast<const unsigned char*>(data);
     for (std::size_t i = 0; i < bytes; ++i) {
@@ -83,15 +96,21 @@ std::uint64_t fnv1a(const void* data, std::size_t bytes, std::uint64_t h) {
 
 } // namespace
 
+bool particle_pin_active() { return particle_pin_sims() > 0; }
+
 bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                       const char* shaderDir, VkBuffer masksBuffer,
                       VkDescriptorSetLayout lightGridSetLayout) {
     dev_ = dev;
     lightGridSetLayout_ = lightGridSetLayout;
-    if (!points_.create_host_visible(
-            *dev_, sizeof(VerletPoint) * kRootAntouragePoints,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "verlet-points"))
+    if (!points_.create_host_visible(*dev_, sizeof(VerletPoint) * kPoolPoints,
+                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     "verlet-points"))
         return false;
+    // The particle bank starts all dead: prev.w (life) <= 0 skips the sim
+    // and clips the draw.
+    std::memset(static_cast<VerletPoint*>(points_.mapped) + kParticlePointBase,
+                0, sizeof(VerletPoint) * kRootParticles);
     if (!elems_.create_host_visible(*dev_,
                                     sizeof(VerletElem) * kMaxAntourageElems,
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -101,8 +120,13 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      "verlet-bodies"))
         return false;
+    if (!aux_.create_host_visible(*dev_,
+                                  sizeof(VerletParticleAux) * kRootParticles,
+                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  "verlet-particle-aux"))
+        return false;
 
-    VkDescriptorSetLayoutBinding b[4]{};
+    VkDescriptorSetLayoutBinding b[5]{};
     b[0].binding = 0; // the point pool (banks back to back)
     b[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[0].descriptorCount = 1;
@@ -119,9 +143,13 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     b[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     b[3].descriptorCount = 1;
     b[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    b[4].binding = 4; // particle aux bank (γ/bounce in sim, tint in vert)
+    b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    b[4].descriptorCount = 1;
+    b[4].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo slci{};
     slci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    slci.bindingCount = 4;
+    slci.bindingCount = 5;
     slci.pBindings = b;
     if (vkCreateDescriptorSetLayout(dev_->device, &slci, nullptr, &setLayout_) !=
         VK_SUCCESS)
@@ -129,7 +157,7 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
 
     // ONE set: the banks stopped owning buffers, so the two per-section sets
     // of the pre-SoA pass collapsed with them.
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
+    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5};
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = 1;
@@ -145,14 +173,15 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
     if (vkAllocateDescriptorSets(dev_->device, &ai, &set_) != VK_SUCCESS)
         return false;
 
-    VkDescriptorBufferInfo bi[4] = {
+    VkDescriptorBufferInfo bi[5] = {
         {points_.buffer, 0, VK_WHOLE_SIZE},
         {elems_.buffer, 0, VK_WHOLE_SIZE},
         {bodies_.buffer, 0, VK_WHOLE_SIZE},
         {masksBuffer, 0, VK_WHOLE_SIZE},
+        {aux_.buffer, 0, VK_WHOLE_SIZE},
     };
-    VkWriteDescriptorSet w[4]{};
-    for (int i = 0; i < 4; ++i) {
+    VkWriteDescriptorSet w[5]{};
+    for (int i = 0; i < 5; ++i) {
         w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[i].dstSet = set_;
         w[i].dstBinding = static_cast<std::uint32_t>(i);
@@ -160,7 +189,7 @@ bool VerletPass::init(VulkanDevice* dev, VkRenderPass renderPass,
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[i].pBufferInfo = &bi[i];
     }
-    vkUpdateDescriptorSets(dev_->device, 4, w, 0, nullptr);
+    vkUpdateDescriptorSets(dev_->device, 5, w, 0, nullptr);
 
     return create_pipelines(renderPass, shaderDir);
 }
@@ -238,10 +267,13 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
             const char* vert;
             const char* frag;
             VkPipeline* out;
+            bool translucent; // particles: alpha-blend, no depth write
         };
-        const DrawSpec specs[2] = {
-            {"wire.vert.spv", "wire.frag.spv", &wireDrawPipeline_},
-            {"cloth.vert.spv", "cloth.frag.spv", &clothDrawPipeline_},
+        const DrawSpec specs[3] = {
+            {"wire.vert.spv", "wire.frag.spv", &wireDrawPipeline_, false},
+            {"cloth.vert.spv", "cloth.frag.spv", &clothDrawPipeline_, false},
+            {"particle.vert.spv", "particle.frag.spv",
+             &particleDrawPipeline_, true},
         };
         for (const DrawSpec& spec : specs) {
             std::vector<char> vs, fs;
@@ -293,14 +325,25 @@ bool VerletPass::create_pipelines(VkRenderPass renderPass,
             ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
             ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+            // Particles: depth TEST against the solid world, no WRITE —
+            // translucent sprites must not punch holes in each other's blend.
             VkPipelineDepthStencilStateCreateInfo ds{};
             ds.sType =
                 VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             ds.depthTestEnable = VK_TRUE;
-            ds.depthWriteEnable = VK_TRUE;
+            ds.depthWriteEnable = spec.translucent ? VK_FALSE : VK_TRUE;
             ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
             VkPipelineColorBlendAttachmentState att{};
+            if (spec.translucent) {
+                att.blendEnable = VK_TRUE;
+                att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                att.colorBlendOp = VK_BLEND_OP_ADD;
+                att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                att.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
             att.colorWriteMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -398,7 +441,10 @@ void VerletPass::upload_wires(const GpuWireChain* chains, std::uint32_t count) {
     wirePin_.simsSinceUpload = 0;
     wirePin_.pinDumped = false;
     ++wirePin_.uploadEpoch;
-    wireStage_.assign(chains, chains + count);
+    if (chains != nullptr && count > 0)
+        wireStage_.assign(chains, chains + count);
+    else
+        wireStage_.clear();
     repack();
 }
 
@@ -408,7 +454,10 @@ void VerletPass::upload_cloths(const GpuClothSheet* sheets,
     clothPin_.simsSinceUpload = 0;
     clothPin_.pinDumped = false;
     ++clothPin_.uploadEpoch;
-    clothStage_.assign(sheets, sheets + count);
+    if (sheets != nullptr && count > 0)
+        clothStage_.assign(sheets, sheets + count);
+    else
+        clothStage_.clear();
     repack();
 }
 
@@ -457,7 +506,7 @@ void VerletPass::upload_bodies(const vec4* bodies, std::uint32_t count) {
     if (!bodies_.mapped) return;
     // Pin protocol: the crowd is nondeterministic, so a pinned run sims
     // without push bodies — otherwise no two runs could ever hash equal.
-    if (verlet_pin_sims() > 0) {
+    if (verlet_pin_sims() > 0 || particle_pin_sims() > 0) {
         bodyCount_ = 0;
         return;
     }
@@ -502,6 +551,13 @@ void VerletPass::gather_sheet(std::uint32_t idx, GpuClothSheet* out) const {
         out->cur[k] = pts[cb + idx * kClothGridPoints + k].cur;
         out->prev[k] = pts[cb + idx * kClothGridPoints + k].prev;
     }
+}
+
+void VerletPass::gather_particle(std::uint32_t slot, VerletPoint* out) const {
+    *out = VerletPoint{};
+    if (!points_.mapped || slot >= kRootParticles) return;
+    *out = static_cast<const VerletPoint*>(
+        points_.mapped)[kParticlePointBase + slot];
 }
 
 void VerletPass::maybe_pin_dump(BankPin& s, const char* tag,
@@ -554,29 +610,38 @@ void VerletPass::maybe_pin_dump(BankPin& s, const char* tag,
 
 void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     if (simPipeline_ == VK_NULL_HANDLE) return;
-    if (wireCount_ == 0 && clothCount_ == 0) return;
+    // Bank skip flags: the old per-pass GIGA_*_NOSIM A/B switches, one home.
+    static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
+    static const bool noParticleSim =
+        std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
+    const bool doAntourage =
+        !noWireSim && (wireCount_ > 0 || clothCount_ > 0);
+    const bool doParticles = !noParticleSim;
+    if (!doAntourage && !doParticles) return;
 
     // Under GIGA_VERLET_PIN the step is the 60 Hz reference, not the caller's
     // frame dt: the pin hashes state after N sims, and the live dt is
     // min(frameDt, 2/60) — wall-clock, run-dependent — it would poison the
     // hash exactly like the push bodies (dropped above for the same reason).
-    if (verlet_pin_sims() > 0) dt = 1.0f / 60.0f;
+    // GIGA_PARTICLE_PIN forces the same reference dt (same law, own counter).
+    if (verlet_pin_sims() > 0 || particle_pin_sims() > 0) dt = 1.0f / 60.0f;
 
     maybe_pin_dump(wirePin_, "wire", 0, 0, wireCount_, kWireChainPoints);
     maybe_pin_dump(clothPin_, "cloth", wireCount_, cloth_point_base(),
                    clothCount_, kClothGridPoints);
+    maybe_particle_pin_dump();
 
-    const std::uint32_t totalPoints =
+    const std::uint32_t antouragePoints =
         cloth_point_base() + clothCount_ * kClothGridPoints;
     const std::uint32_t elemCount = wireCount_ + clothCount_;
 
     VerletPush p{};
-    p.dims = vec4{static_cast<float>(totalPoints),
-                  static_cast<float>(cloth_point_base()),
-                  static_cast<float>(bodyCount_), 0.0f};
+    p.dims = vec4{static_cast<float>(antouragePoints), 0.0f,
+                  static_cast<float>(cloth_point_base()), 0.0f};
     p.sim = vec4{dt, kVerletDamping, static_cast<float>(kWorldExtent),
                  static_cast<float>(elemCount)};
-    p.grav = vec4{gravity.x, gravity.y, gravity.z, 0.0f};
+    p.grav = vec4{gravity.x, gravity.y, gravity.z,
+                  static_cast<float>(bodyCount_)};
 
     // Last frame's draws read the points; order the writes after them.
     VkMemoryBarrier mb{};
@@ -593,10 +658,24 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, simLayout_, 0,
                             1, &set_, 0, nullptr);
 
-    // Phase 0 — POINTS: integrate + bodies + world landing, thread per point.
-    vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(VerletPush), &p);
-    vkCmdDispatch(cmd, (totalPoints + 63u) / 64u, 1, 1);
+    // Phase 0 — POINTS, two disjoint spans of the one pool, no barrier
+    // between them: antourage [0..antouragePoints), particles at the fixed
+    // bank base (full region always — measured free at zero alive,
+    // перф-замер 2026-08-30 «частицы при нуле живых = 0.00 мс GPU»).
+    if (doAntourage && antouragePoints > 0) {
+        vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(VerletPush), &p);
+        vkCmdDispatch(cmd, (antouragePoints + 63u) / 64u, 1, 1);
+    }
+    if (doParticles) {
+        VerletPush pp = p;
+        pp.dims.x = static_cast<float>(kRootParticles);
+        pp.dims.y = static_cast<float>(kParticlePointBase);
+        vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(VerletPush), &pp);
+        vkCmdDispatch(cmd, (kRootParticles + 63u) / 64u, 1, 1);
+        ++particleSims_;
+    }
 
     // Constraints read what integration wrote — one compute-compute barrier.
     VkMemoryBarrier mid{};
@@ -608,10 +687,14 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
                          nullptr, 0, nullptr);
 
     // Phase 1 — ELEMENTS: serial relaxation per element, thread per element.
-    p.dims.w = 1.0f;
-    vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                       sizeof(VerletPush), &p);
-    vkCmdDispatch(cmd, (elemCount + 63u) / 64u, 1, 1);
+    // Particles have no elements — «ноль связей» is absence from this
+    // dispatch, not an early-out (plan §2.3).
+    if (doAntourage && elemCount > 0) {
+        p.dims.w = 1.0f;
+        vkCmdPushConstants(cmd, simLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(VerletPush), &p);
+        vkCmdDispatch(cmd, (elemCount + 63u) / 64u, 1, 1);
+    }
 
     if (wireCount_ > 0) ++wirePin_.simsSinceUpload;
     if (clothCount_ > 0) ++clothPin_.simsSinceUpload;
@@ -623,6 +706,66 @@ void VerletPass::record_sim(VkCommandBuffer cmd, float dt, vec3 gravity) {
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0, 1, &mb2, 0,
                          nullptr, 0, nullptr);
+}
+
+void VerletPass::spawn_particles(const GpuParticle* items,
+                                 std::uint32_t count) {
+    if (!points_.mapped || !aux_.mapped || items == nullptr) return;
+    auto* pts = static_cast<VerletPoint*>(points_.mapped);
+    auto* aux = static_cast<VerletParticleAux*>(aux_.mapped);
+    particleSpawned_ += count;
+    for (std::uint32_t k = 0; k < count; ++k) {
+        const GpuParticle& s = items[k];
+        const std::uint32_t slot = particleCursor_;
+        particleCursor_ = (particleCursor_ + 1u) % kRootParticles;
+        const std::uint32_t i = kParticlePointBase + slot;
+        // Verlet form: velocity is implied by cur − prev over the 60 Hz
+        // reference step (the pin dt — one honest constant, not a new knob).
+        const float dtRef = 1.0f / 60.0f;
+        pts[i].cur = vec4{s.posLife.x, s.posLife.y, s.posLife.z, 1.0f};
+        pts[i].prev = vec4{s.posLife.x - s.velTotal.x * dtRef,
+                           s.posLife.y - s.velTotal.y * dtRef,
+                           s.posLife.z - s.velTotal.z * dtRef, s.posLife.w};
+        VerletParticleAux& a = aux[slot];
+        a.colorSize = s.colorSize;
+        // γ = −ln(drag)·60: the CSV stays «drag per 60 Hz step», the sim
+        // becomes dt-honest exp(−γ·dt) — plan §3's bonus, applied here once.
+        const float drag = s.phys.y > 0.0f ? s.phys.y : 1.0f;
+        a.phys = vec4{s.phys.x, -std::log(drag) * 60.0f, s.phys.z, s.phys.w};
+        a.meta = vec4{s.velTotal.w, 0.0f, 0.0f, 0.0f};
+    }
+}
+
+std::uint32_t VerletPass::particle_alive_count() const {
+    if (!points_.mapped) return 0;
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
+    std::uint32_t n = 0;
+    for (std::uint32_t i = 0; i < kRootParticles; ++i)
+        if (pts[kParticlePointBase + i].prev.w > 0.0f) ++n;
+    return n;
+}
+
+// GIGA_PARTICLE_PIN=N — migrated intact from the dead ParticlePass: curve of
+// alive counts every 100 sims plus an FNV-1a hash of alive positions at N.
+void VerletPass::maybe_particle_pin_dump() {
+    const int pin = particle_pin_sims();
+    if (pin <= 0 || particlePinDumped_ || particleSims_ == 0) return;
+    const bool checkpoint = (particleSims_ % 100u) == 0u;
+    const bool final = particleSims_ >= static_cast<std::uint32_t>(pin);
+    if (!checkpoint && !final) return;
+    vkDeviceWaitIdle(dev_->device);
+    const auto* pts = static_cast<const VerletPoint*>(points_.mapped);
+    std::uint32_t alive = 0;
+    std::uint64_t h = 1469598103934665603ull; // FNV-1a offset basis
+    for (std::uint32_t i = 0; i < kRootParticles; ++i) {
+        const VerletPoint& q = pts[kParticlePointBase + i];
+        if (q.prev.w <= 0.0f) continue;
+        ++alive;
+        h = fnv1a(&q.cur, sizeof(float) * 3, h);
+    }
+    std::fprintf(stderr, "[particle-pin] sims=%u alive=%u fnv=%016llx\n",
+                 particleSims_, alive, static_cast<unsigned long long>(h));
+    if (final) particlePinDumped_ = true;
 }
 
 void VerletPass::record_draw_wires(VkCommandBuffer cmd, const CubePush& push,
@@ -664,11 +807,35 @@ void VerletPass::record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
     vkCmdDraw(cmd, kClothVertsPerSheet, clothCount_, 0, 0);
 }
 
+void VerletPass::record_draw_particles(VkCommandBuffer cmd,
+                                       const CubePush& push,
+                                       VkDescriptorSet lightSet) {
+    if (particleDrawPipeline_ == VK_NULL_HANDLE) return;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      particleDrawPipeline_);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout_,
+                            0, 1, &set_, 0, nullptr);
+    if (lightSet != VK_NULL_HANDLE && lightGridSetLayout_ != VK_NULL_HANDLE)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                drawLayout_, 1, 1, &lightSet, 0, nullptr);
+    vkCmdPushConstants(cmd, drawLayout_,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(CubePush), &push);
+    const VerletDrawPush extra{cloth_point_base(), wireCount_, 0, 0};
+    vkCmdPushConstants(cmd, drawLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+                       sizeof(CubePush), sizeof(VerletDrawPush), &extra);
+    // 6 verts per billboard, full bank — dead ones clip in the vert (life
+    // rides prev.w), exactly the old ParticlePass draw.
+    vkCmdDraw(cmd, kRootParticles * 6u, 1, 0, 0);
+}
+
 void VerletPass::destroy() {
     if (dev_ == nullptr) return;
     VkDevice d = dev_->device;
     if (wireDrawPipeline_) vkDestroyPipeline(d, wireDrawPipeline_, nullptr);
     if (clothDrawPipeline_) vkDestroyPipeline(d, clothDrawPipeline_, nullptr);
+    if (particleDrawPipeline_)
+        vkDestroyPipeline(d, particleDrawPipeline_, nullptr);
     if (drawLayout_) vkDestroyPipelineLayout(d, drawLayout_, nullptr);
     if (simPipeline_) vkDestroyPipeline(d, simPipeline_, nullptr);
     if (simLayout_) vkDestroyPipelineLayout(d, simLayout_, nullptr);
@@ -677,8 +844,10 @@ void VerletPass::destroy() {
     points_.destroy(*dev_);
     elems_.destroy(*dev_);
     bodies_.destroy(*dev_);
+    aux_.destroy(*dev_);
     wireDrawPipeline_ = VK_NULL_HANDLE;
     clothDrawPipeline_ = VK_NULL_HANDLE;
+    particleDrawPipeline_ = VK_NULL_HANDLE;
     drawLayout_ = VK_NULL_HANDLE;
     simPipeline_ = VK_NULL_HANDLE;
     simLayout_ = VK_NULL_HANDLE;

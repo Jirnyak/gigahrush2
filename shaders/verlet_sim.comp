@@ -42,10 +42,19 @@ layout(std430, binding = 1) readonly buffer Elems { vec4 e[]; } el;
 // special case (owner's law).
 layout(std430, binding = 2) readonly buffer Bodies { vec4 b[]; } bb;
 
-// VoxelMirror masks — the same SSBO particle_sim.comp collides against, so a
-// piece that lost its last pin FALLS AND LANDS instead of sinking through the
-// floor. One view of the truth, one collision rule.
+// VoxelMirror masks — what everything in the pool collides against: a piece
+// that lost its last pin FALLS AND LANDS instead of sinking through the
+// floor. One view of the truth, one collision rule (the third copy of
+// solid_at died with particle_sim.comp).
 layout(std430, binding = 3) readonly buffer MaskBuf { uint uMasks[]; };
+
+// Particle aux bank: [pid*3+0] colorSize (vert), [pid*3+1] phys
+// {gravMul, γ 1/с, bounce, emissive}, [pid*3+2] meta {lifeTotal}.
+layout(std430, binding = 4) readonly buffer Aux { vec4 a[]; } ax;
+
+// LOCKSTEP with gpu::kParticlePointBase (render/verlet_pass.h): the particle
+// bank starts here; everything below is antourage.
+const uint kParticleBase = 1048576u;
 
 // Solidity of the sub-voxel containing world point `w` (toroidal).
 // Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
@@ -78,9 +87,10 @@ vec3 world_land(vec3 cur, vec3 np) {
 
 // One name, one meaning per field — mirrors gpu::VerletPush.
 layout(push_constant) uniform VerletPush {
-    vec4 dims; // x = total points, y = cloth point base, z = body count, w = phase
+    vec4 dims; // x = point count (this dispatch), y = point base (offset),
+               //   z = cloth point base, w = phase
     vec4 sim;  // x = dt, y = damping, z = wrap period (m), w = element count
-    vec4 grav; // xyz = gravity acceleration VECTOR (m/s^2), w — NEVER assume -Z
+    vec4 grav; // xyz = gravity VECTOR (m/s^2), w = body count — NEVER assume -Z
 } pc;
 
 const int kWireW = 8;
@@ -88,9 +98,73 @@ const int kClothW = 8;
 const int kClothH = 4;
 const int kClothP = kClothW * kClothH;
 
-void phase_points(uint i) {
-    if (i >= uint(pc.dims.x)) return;
-    const uint clothBase = uint(pc.dims.y);
+// Body push shared by both banks: torus-wrapped delta to every pusher.
+vec3 body_push(vec3 np, float per) {
+    for (uint bi = 0u; bi < uint(pc.grav.w); ++bi) {
+        vec3 dp = np - bb.b[bi].xyz;
+        dp -= per * floor(dp / per + 0.5);
+        float r = bb.b[bi].w;
+        float d2 = dot(dp, dp);
+        if (d2 < r * r && d2 > 1e-6) {
+            float d = sqrt(d2);
+            np += dp / d * (r - d) * 0.35;
+        }
+    }
+    return np;
+}
+
+// The particle half of the points phase: VERLET now (owner's decision — one
+// integrator forever; the old Euler died with particle_sim.comp). Life rides
+// prev.w, damping is per-particle exp(−γ·dt) from the aux bank (dt-honest —
+// the hardwired 60 Hz pow died here), positions WRAP (bank property, plan
+// §2.5), a blocked axis reflects by mirroring prev with the bounce scale,
+// bounce <= 0 lets the contact bleed the life out — exactly the old rule.
+void particle_point(uint i) {
+    const uint pi = i - kParticleBase;
+    vec4 cur = eb.p[i].cur;
+    vec4 prev = eb.p[i].prev;
+    float life = prev.w;
+    if (life <= 0.0) return; // dead slot
+    const float dt = pc.sim.x;
+    const float per = pc.sim.z;
+    life -= dt;
+
+    vec4 phys = ax.a[pi * 3u + 1u];
+    vec3 disp = (cur.xyz - prev.xyz) * exp(-phys.y * dt) +
+                pc.grav.xyz * phys.x * dt * dt;
+    vec3 target = body_push(cur.xyz + disp, per);
+    disp = target - cur.xyz;
+
+    // Axis-wise landing with reflection: pos advances where free; a blocked
+    // axis keeps pos and mirrors prev so the NEXT step's velocity is
+    // −disp·bounce on exactly that axis.
+    vec3 pos = cur.xyz;
+    vec3 newPrev = cur.xyz;
+    for (int a = 0; a < 3; ++a) {
+        vec3 cand = pos;
+        cand[a] = cur[a] + disp[a];
+        if (!solid_at(cand)) {
+            pos[a] = cur[a] + disp[a];
+        } else {
+            newPrev[a] = cur[a] + disp[a] * phys.z;
+            if (phys.z <= 0.0) life = min(life, 0.12);
+        }
+    }
+    // Wrap the pair TOGETHER — the implied velocity must survive the seam.
+    vec3 wrapped = mod(pos, vec3(per));
+    newPrev += wrapped - pos;
+    eb.p[i].cur = vec4(wrapped, cur.w);
+    eb.p[i].prev = vec4(newPrev, life);
+}
+
+void phase_points(uint gid) {
+    if (gid >= uint(pc.dims.x)) return;
+    const uint i = uint(pc.dims.y) + gid; // dispatch span base (plan §2.3)
+    if (i >= kParticleBase) {
+        particle_point(i);
+        return;
+    }
+    const uint clothBase = uint(pc.dims.z);
     const uint nWires = clothBase / uint(kWireW);
 
     // Bank arithmetic: which element owns this point.
@@ -106,16 +180,7 @@ void phase_points(uint i) {
     const float per = pc.sim.z;
     vec3 vel = (cur.xyz - eb.p[i].prev.xyz) * pc.sim.y;
     vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
-    for (uint bi = 0u; bi < uint(pc.dims.z); ++bi) {
-        vec3 dp = np - bb.b[bi].xyz;
-        dp -= per * floor(dp / per + 0.5);
-        float r = bb.b[bi].w;
-        float d2 = dot(dp, dp);
-        if (d2 < r * r && d2 > 1e-6) {
-            float d = sqrt(d2);
-            np += dp / d * (r - d) * 0.35;
-        }
-    }
+    np = body_push(np, per);
     // Land on the world instead of sinking through it (see world_land:
     // `prev` staying put IS the stop).
     eb.p[i].prev = vec4(cur.xyz, eb.p[i].prev.w);
@@ -124,7 +189,7 @@ void phase_points(uint i) {
 
 void phase_elements(uint k) {
     if (k >= uint(pc.sim.w)) return;
-    const uint clothBase = uint(pc.dims.y);
+    const uint clothBase = uint(pc.dims.z);
     const uint nWires = clothBase / uint(kWireW);
     if (el.e[k].z < 0.5) return; // dead element
 

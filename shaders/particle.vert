@@ -1,27 +1,37 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "volumetric_fog.glsl" // только distance_fog(); SSBO-биндинги за ifdef
-// particle.vert — camera-facing billboards pulled straight from the particle
-// pool SSBO (no vertex buffer): 6 vertices per particle, one quad. Dead
-// particles (life <= 0) clip to 1e9, same trick as dead wire chains.
-// Push block layout = CubePush, shared with the whole pass family.
+// particle.vert — camera-facing billboards pulled straight from the SoA
+// VERLET POOL (stage-2 merge, 2026-09-01): the particle bank lives at a fixed
+// base after the antourage span, aux (tint/phys/life-total) rides binding 4.
+// 6 vertices per particle, one quad. Dead particles (life <= 0, in prev.w
+// since the pool relayout) clip to 1e9, same trick as dead wire chains.
+// Push = CubePush + VerletDrawPush (family layout; the bank numbers are
+// unused here — the particle base is a compile-time lockstep constant).
 //
 // TORUS LAW ([prop.vert]): the ANCHOR wraps, never the vertices — one
 // nearest_image per particle, corners offset after.
 
-struct Particle {
-    vec4 posLife;
-    vec4 velTotal;
-    vec4 colorSize;
-    vec4 phys;
+struct Pt {
+    vec4 cur;
+    vec4 prev;
 };
-layout(std430, set = 0, binding = 0) readonly buffer Pool { Particle p[]; } pb;
+layout(std430, set = 0, binding = 0) readonly buffer Points { Pt p[]; } pb;
+// Aux bank: [pid*3+0] colorSize, [pid*3+1] phys, [pid*3+2] meta(lifeTotal).
+layout(std430, set = 0, binding = 4) readonly buffer Aux { vec4 a[]; } ax;
+
+// LOCKSTEP with gpu::kParticlePointBase (render/verlet_pass.h).
+const uint kParticleBase = 1048576u;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
     vec4 camPos;
     vec4 fog;
     vec4 torus;
+    uint clothPointBase;
+    uint wireElemCount;
+    uint pad0;
+    uint pad1;
 } pc;
 
 layout(location = 0) out vec3 vColor;
@@ -37,8 +47,9 @@ vec3 nearest_image(vec3 p, vec3 cam, float per) {
 void main() {
     uint id = uint(gl_VertexIndex) / 6u;
     uint corner = uint(gl_VertexIndex) % 6u;
+    uint i = kParticleBase + id;
 
-    float life = pb.p[id].posLife.w;
+    float life = pb.p[i].prev.w;
     if (life <= 0.0) {
         gl_Position = vec4(1e9, 1e9, 1e9, 1.0);
         vColor = vec3(0.0);
@@ -48,9 +59,9 @@ void main() {
         return;
     }
 
-    vec3 centre =
-        nearest_image(pb.p[id].posLife.xyz, pc.camPos.xyz, pc.torus.x);
-    float halfEdge = pb.p[id].colorSize.w * 0.5;
+    vec4 colorSize = ax.a[id * 3u + 0u];
+    vec3 centre = nearest_image(pb.p[i].cur.xyz, pc.camPos.xyz, pc.torus.x);
+    float halfEdge = colorSize.w * 0.5;
 
     vec3 viewDir = normalize(centre - pc.camPos.xyz + vec3(1e-5));
     vec3 upRef = abs(viewDir.z) > 0.99 ? vec3(1.0, 0.0, 0.0)
@@ -67,15 +78,15 @@ void main() {
 
     gl_Position = pc.viewProj * vec4(world, 1.0);
 
-    float lifeTotal = max(pb.p[id].velTotal.w, 1e-3);
+    float lifeTotal = max(ax.a[id * 3u + 2u].x, 1e-3);
     // Fade over the last third of life — spawn is full-strength immediately.
     float alpha = clamp(life / (lifeTotal * 0.33), 0.0, 1.0);
 
     float dist = length(world - pc.camPos.xyz);
     float fogF = distance_fog(dist, pc.fog.x, pc.fog.y);
 
-    vColor = pb.p[id].colorSize.rgb;
-    vMisc = vec3(fogF, pb.p[id].phys.w / 255.0, alpha);
+    vColor = colorSize.rgb;
+    vMisc = vec3(fogF, ax.a[id * 3u + 1u].w / 255.0, alpha);
     vUv = c;
     vWorldPos = world;
 }

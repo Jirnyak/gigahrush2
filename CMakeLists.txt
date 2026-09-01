@@ -415,15 +415,7 @@ add_custom_command(
     COMMENT "glslc verlet_sim.comp -> verlet_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/verlet_sim.comp.spv)
 
-# GPU sim for the unified particle pool (blood/dust/sparks/drips).
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/particle_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
-        ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
-        -o ${_giga_spv_dir}/particle_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
-    COMMENT "glslc particle_sim.comp -> particle_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/particle_sim.comp.spv)
+# particle_sim.comp МЁРТВ (2026-09-01): частицы — третий банк verlet_sim.comp.
 
 # GPU compute prop frustum culling shader.
 add_custom_command(
@@ -601,8 +593,12 @@ if(GIGA_BUILD_TESTS)
     # 76 -> 95 тем же днём: test_dead_element_freezes — страховка §59.26
     # переехала сюда со смертяного ре-аплоада (тот телепортировал живой сим
     # этажа в rest, §28.4); мутация «скип мёртвого сломан» = 14 FAIL.
+    # 95 -> 109 on 2026-09-01: test_particles — частицы = ТРЕТИЙ БАНК пула
+    # (слияние этапа 2, particle_pass/particle_sim мертвы): падение и посадка
+    # на маску верле-интегратором, отскок зеркалом prev, смерть по жизни,
+    # детерминизм спавна от сида.
     set_tests_properties(verlet_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "95/95 checks passed")
+        PASS_REGULAR_EXPRESSION "109/109 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.

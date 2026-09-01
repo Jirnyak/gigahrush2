@@ -5,7 +5,7 @@
 // One row per PARTICLE TYPE of the unified GPU pool: mob blood and concrete
 // dust differ by a row, never by code. The physics knobs (gravity multiplier,
 // per-tick drag, restitution) are stamped onto each particle at spawn, so the
-// compute sim (shaders/particle_sim.comp) needs no table of its own and can
+// compute sim (shaders/verlet_sim.comp, банк частиц) needs no table of its own and can
 // never drift from this one. `colorFromMaterial` rows take their tint from the
 // generated kMaterial albedo of whatever was hit; the rest carry their own.
 #pragma once

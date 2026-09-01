@@ -70,6 +70,16 @@ inline constexpr std::uint32_t kClothVertsPerSheet =
 // 32 MiB host-visible — the price of the canonical density target, paid once.
 inline constexpr std::uint32_t kRootAntouragePoints = 1u << 20;
 
+// THE root cap of the particle system (CANON S9/S11: «частицы 32768-пул»,
+// recycling ring — the exemplary root). Particles are the pool's THIRD BANK
+// at a FIXED base right after the antourage span: the antourage repack can
+// never reach it by construction (it truncates at kRootAntouragePoints).
+// Must stay in LOCKSTEP with kParticleBase in verlet_sim.comp/particle.vert.
+inline constexpr std::uint32_t kRootParticles = 32768;
+inline constexpr std::uint32_t kParticlePointBase = kRootAntouragePoints;
+inline constexpr std::uint32_t kPoolPoints =
+    kRootAntouragePoints + kRootParticles;
+
 // DERIVED: the element table can never outgrow the pool divided by the
 // smallest element (a chain, 8 points). The GpuHandoff-shard increment adds a
 // smaller element (2–4 points) and MUST re-derive this divisor with it.
@@ -93,6 +103,34 @@ struct VerletElem {
 };
 static_assert(sizeof(VerletElem) == 16, "one-vec4-clean layout");
 
+// SPAWN POD of one particle — the app seam (writers/pack_particles speak it,
+// exactly as GpuWireChain is the wire upload seam). The pass converts it to
+// the pool form: cur = pos (w = invMass 1), prev = pos − vel·(1/60 reference
+// step, the pin dt), prev.w = life remaining; the rest goes to the aux bank.
+//   posLife  = xyz world metres, w = life remaining s (<= 0 -> dead)
+//   velTotal = xyz m/s,          w = life total s (the vert's fade base)
+//   colorSize= rgb tint,         w = billboard edge, metres
+//   phys     = x gravity mul, y drag (per 60 Hz step; the pass converts to
+//              γ = −ln(drag)·60 so the sim is dt-honest), z restitution
+//              (0 = a wall hit kills it), w = emissive 0..255
+struct GpuParticle {
+    vec4 posLife;
+    vec4 velTotal;
+    vec4 colorSize;
+    vec4 phys;
+};
+static_assert(sizeof(GpuParticle) == 64, "four-vec4-clean layout");
+
+// Per-particle aux bank (binding 4): what the pool point cannot carry.
+// Simplicity over bytes (48 B × 32768 = 1.5 MiB): {colorSize; phys with γ
+// in .y; meta.x = life total for the vert's fade}.
+struct VerletParticleAux {
+    vec4 colorSize;
+    vec4 phys;
+    vec4 meta;
+};
+static_assert(sizeof(VerletParticleAux) == 48, "three-vec4-clean layout");
+
 // Draw-stage extra push range at offset sizeof(CubePush): the two bank
 // numbers the instanced vertex shaders need to address the pool. Lives BESIDE
 // CubePush (vertex-only range), never inside it — CubePush is shared by the
@@ -104,6 +142,10 @@ struct VerletDrawPush {
 };
 static_assert(sizeof(CubePush) + sizeof(VerletDrawPush) <= 128,
               "must fit the 128-byte guaranteed push range");
+
+// GIGA_PARTICLE_PIN is set (main gates the nondeterministic burst writers
+// and injects one fixed-seed synthetic burst instead — pin protocol).
+bool particle_pin_active();
 
 // Push-body cap. Every body on the active layer brushes wires and cloth —
 // the player is just one of them (an NPC with a camera, owner's law). One
@@ -155,6 +197,15 @@ public:
     // camera holder among them — nobody special). vec4 = xyz pos, w radius.
     void upload_bodies(const vec4* bodies, std::uint32_t count);
 
+    // Drop `count` fresh particles at the ring cursor (wraps, overwrites the
+    // oldest — cosmetics may drop, the frame must not stall). Converts the
+    // spawn POD to the pool verlet form; CPU-writes host-visible memory.
+    void spawn_particles(const GpuParticle* items, std::uint32_t count);
+
+    // Live-particle census off the mapped pool (HUD/diagnostic cadence).
+    std::uint32_t particle_alive_count() const;
+    std::uint32_t particle_spawned_total() const { return particleSpawned_; }
+
     // The verlet step: ONE pipeline, TWO dispatches (plan §2.3) — points
     // (integration + bodies + world landing, thread per point) then elements
     // (constraint relaxation, thread per element), one barrier between.
@@ -169,6 +220,10 @@ public:
                            VkDescriptorSet lightSet);
     void record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
                             VkDescriptorSet lightSet);
+    // Particle billboards: alpha-blended, depth-tested, NO depth write — the
+    // one draw of the family with its own fixed-function state.
+    void record_draw_particles(VkCommandBuffer cmd, const CubePush& push,
+                               VkDescriptorSet lightSet);
 
     std::uint32_t chain_count() const { return wireCount_; }
     std::uint32_t sheet_count() const { return clothCount_; }
@@ -178,6 +233,7 @@ public:
     // pre-relayout hash walked, so pins stay comparable across the merge).
     void gather_chain(std::uint32_t idx, GpuWireChain* out) const;
     void gather_sheet(std::uint32_t idx, GpuClothSheet* out) const;
+    void gather_particle(std::uint32_t slot, VerletPoint* out) const;
 
 private:
     // Pin bookkeeping per bank (sims since upload, upload ordinal, dump latch).
@@ -196,13 +252,20 @@ private:
         return wireCount_ * static_cast<std::uint32_t>(kWireChainPoints);
     }
 
+    void maybe_particle_pin_dump(); // GIGA_PARTICLE_PIN, migrated intact
+
     VulkanDevice* dev_ = nullptr;
     VulkanBuffer points_; // persistent, host-visible: the ONE pool
     VulkanBuffer elems_;  // persistent, host-visible: the element table
     VulkanBuffer bodies_; // per-frame push bodies
+    VulkanBuffer aux_;    // persistent, host-visible: particle aux bank
     std::uint32_t bodyCount_ = 0;
     std::uint32_t wireCount_ = 0;
     std::uint32_t clothCount_ = 0;
+    std::uint32_t particleCursor_ = 0;   // spawn ring over the particle bank
+    std::uint32_t particleSpawned_ = 0;  // HUD/diagnostic total
+    std::uint32_t particleSims_ = 0;     // GIGA_PARTICLE_PIN bookkeeping
+    bool particlePinDumped_ = false;
     BankPin wirePin_;
     BankPin clothPin_;
 
@@ -220,6 +283,7 @@ private:
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkPipeline wireDrawPipeline_ = VK_NULL_HANDLE;
     VkPipeline clothDrawPipeline_ = VK_NULL_HANDLE;
+    VkPipeline particleDrawPipeline_ = VK_NULL_HANDLE;
 };
 
 } // namespace giga::gpu

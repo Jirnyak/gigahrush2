@@ -106,7 +106,6 @@
 #include "render/gpu_medium_pass.h"
 #include "world/material_props.h" // material_phase — sphere не маскирует жидкость
 #include "world/medium.h" // агрегаты S16.4 — HUD/дыхание читают клетку тела
-#include "render/particle_pass.h"
 #include "render/verlet_pass.h"
 #include "render/prop_pass.h"
 
@@ -1772,7 +1771,7 @@ void pack_particles(std::vector<gpu::GpuParticle>& out, const vec3& pos,
     }
 }
 
-void drain_particle_bursts(gpu::ParticlePass& pass,
+void drain_particle_bursts(gpu::VerletPass& pass,
                            game::ParticleBurstQueue& q) {
     if (!pass.ready() || q.count == 0) {
         q.clear();
@@ -1788,7 +1787,7 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
                               : vec3{def.r, def.g, def.b};
         pack_particles(tmp, b.pos, b.dir, def, tint, b.count, b.seed);
     }
-    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+    pass.spawn_particles(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
     q.clear();
 }
 
@@ -1796,7 +1795,7 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
 // WITH its material ([world/destruct.h] CarvedVoxel), so the puff is tinted by
 // the very wall it came from. Sampled with a stride — a blast stays a cloud,
 // not tens of thousands of sprites.
-void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
+void spawn_carve_particles(gpu::VerletPass& pass, const CarveResult& res,
                            std::uint32_t seed) {
     if (!pass.ready()) return;
     static std::vector<gpu::GpuParticle> tmp;
@@ -1831,7 +1830,7 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
                        tint, 1, seed ^ 0x5bd1e995u ^
                                     static_cast<std::uint32_t>(i));
     }
-    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+    pass.spawn_particles(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
 }
 
 } // namespace
@@ -2310,15 +2309,9 @@ int main(int argc, char** argv) {
     }
     std::uint64_t mediumSubstepsDone = 0;
 
-    // The unified particle pool: blood/dust/sparks/drips, one compute sim
-    // colliding against the voxel mirror ([render/particle_pass.h]).
-    gpu::ParticlePass particlePass;
-    if (!particlePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                           voxelMirror.masks_buffer(),
-                           lightGrid.descriptor_set_layout())) {
-        std::fprintf(stderr,
-                     "[particle] pass init failed (continuing without particles)\n");
-    }
+    // Частицы живут ТРЕТЬИМ БАНКОМ пула VerletPass (слияние 2026-09-01):
+    // отдельного пасса больше нет — кровь/пыль/искры/капли симулятся тем же
+    // verlet_sim.comp и коллизят о то же зеркало.
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
@@ -5742,7 +5735,7 @@ int main(int argc, char** argv) {
                     g_carveT.patchMs += carve_ms_since(ct0);
                     // Пыль и обломки, тонированные срезанным материалом.
                     ct0 = std::chrono::steady_clock::now();
-                    spawn_carve_particles(particlePass, carveResult, seed);
+                    spawn_carve_particles(verletPass, carveResult, seed);
                     g_carveT.partMs += carve_ms_since(ct0);
                     // Пропы на срезанных якорях падают ([jirnyak.md] §18).
                     ct0 = std::chrono::steady_clock::now();
@@ -6341,7 +6334,7 @@ int main(int argc, char** argv) {
                 // → эмиттер" writer). Emitters are refilled at every prop
                 // merge, so a re-carved or reloaded floor stays honest.
                 if ((simTick % 50u) == 0u && !dripEmitters.empty() &&
-                    particlePass.ready()) {
+                    verletPass.sim_ready()) {
                     static std::vector<gpu::GpuParticle> dripTmp;
                     dripTmp.clear();
                     const game::ParticleDef& dripDef =
@@ -6352,7 +6345,7 @@ int main(int argc, char** argv) {
                                        vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
                                        static_cast<std::uint32_t>(simTick) ^
                                            static_cast<std::uint32_t>(i));
-                    particlePass.spawn(dripTmp.data(),
+                    verletPass.spawn_particles(dripTmp.data(),
                                        static_cast<std::uint32_t>(
                                            dripTmp.size()));
                 }
@@ -6386,7 +6379,7 @@ int main(int argc, char** argv) {
                 if (gpu::particle_pin_active())
                     particleBursts.clear();
                 else
-                    drain_particle_bursts(particlePass, particleBursts);
+                    drain_particle_bursts(verletPass, particleBursts);
                 // GIGA_PARTICLE_PIN: one fixed-seed burst at the player spawn
                 // point, injected exactly once — the deterministic input the
                 // pin protocol hashes (markoaudit/plans/verlet-merge.md §6.1).
@@ -6404,7 +6397,7 @@ int main(int argc, char** argv) {
                                    vec3{0.0f, 0.0f, 1.0f}, def,
                                    kMaterial[kMatElectricGrate], 64,
                                    0xC0FFEEu);
-                    particlePass.spawn(pinTmp.data(),
+                    verletPass.spawn_particles(pinTmp.data(),
                                        static_cast<std::uint32_t>(
                                            pinTmp.size()));
                 }
@@ -7230,8 +7223,9 @@ int main(int argc, char** argv) {
                             hudAb ? hudAb->cloths.size() : 0,
                             verletPass.sheet_count());
                 ImGui::Text("particles: %u alive / %u spawned | %zu drip emitters",
-                            particlePass.alive_count(),
-                            particlePass.spawned_total(), dripEmitters.size());
+                            verletPass.particle_alive_count(),
+                            verletPass.particle_spawned_total(),
+                            dripEmitters.size());
             }
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
@@ -8828,8 +8822,6 @@ int main(int argc, char** argv) {
             // that separates "cull.comp corrupts instances" from every other
             // mesh-path suspect in one relaunch.
             static const bool noGpuCull = std::getenv("GIGA_NO_GPU_CULL") != nullptr;
-            static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
-            static const bool noParticleSim = std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
             if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
@@ -8926,10 +8918,6 @@ int main(int argc, char** argv) {
                                                  clothN);
                     verletPass.write_cloth_pins(clothPinsFrame.data(), clothN);
                 }
-                if (!noWireSim)
-                    verletPass.record_sim(
-                        cmd, gpuSimDt,
-                        stack.layer(activeLayer).gravity().global);
             }
 
             if (!stainDirty.empty()) {
@@ -9054,8 +9042,12 @@ int main(int argc, char** argv) {
             // with THIS frame's carve holes, not last frame's walls.
             // Gravity is the layer's declared VECTOR — the flush above already
             // dereferences activeLayer, so it is valid here.
-            if (!noParticleSim)
-                particlePass.record_sim(
+            // ЕДИНЫЙ верле-сим (антураж + частицы) — ПОСЛЕ flush зеркала:
+            // теперь и антураж коллизит с дырами ЭТОГО кадра, не прошлого
+            // (частицы жили так всегда; слияние подарило закон обоим).
+            // GIGA_WIRE_NOSIM / GIGA_PARTICLE_NOSIM пасс читает сам.
+            if (activeLayer != kInvalidLayer)
+                verletPass.record_sim(
                     cmd, gpuSimDt,
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
@@ -9121,7 +9113,8 @@ int main(int argc, char** argv) {
             verletPass.record_draw_cloths(cmd, push, lightGrid.descriptor_set());
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
-            particlePass.record_draw(cmd, push, lightGrid.descriptor_set());
+            verletPass.record_draw_particles(cmd, push,
+                                             lightGrid.descriptor_set());
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 
@@ -9440,7 +9433,6 @@ int main(int argc, char** argv) {
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
 
-    particlePass.destroy();
     verletPass.destroy();
     mediumPass.destroy();
     cullPass.destroy();
