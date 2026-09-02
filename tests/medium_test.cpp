@@ -1684,6 +1684,169 @@ void test_bitset_execution(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== ИНКРЕМЕНТ 3 «АВТОМАТ-2»: сон-состояние (medium-bitmask.md) ===========
+// ГЕЙТ «ВИСЯКИ» (план §3.3, корень В1 плейтеста «первый раз идеально, потом
+// висяки»): куча оседает и ЗАСЫПАЕТ (тишина насыщена) → карв нижнего слоя
+// путём игры (страница + mark_dirty + wake_cells) → верх ОБЯЗАН упасть и
+// доспать: ни одного атома без опоры, масса точна, live снова 0. До
+// инкремента 3 разбуженная писателем клетка получала РОВНО ОДИН подтик
+// (settle видел зрелую тишину и усыплял обратно) — нижний слой висел.
+void test_recarve_no_floating(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 60; x < 66; ++x)
+        for (int y = 60; y < 66; ++y)
+            w.grid().fill_cell(x, y, 30, kMatConcrete);
+    const auto towerCell = static_cast<std::uint32_t>(macro_index(62, 62, 32));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(towerCell, w.grid().types()[towerCell]);
+    std::uint32_t poured = 0;
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                pg[sub_bit(sx, sy, sz)] = kMatRubble;
+                ++poured;
+            }
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&towerCell, 1, w, mirror);
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 8; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    CHECK(medium.live_count() == 0); // куча уснула, тишина насыщена
+
+    // СДВИГ НА НЕЧЁТНУЮ ФАЗУ: первый подтик после карва обязан быть
+    // НЕудачным для падения (off_z=1 — пара z (1,2), верхний атом
+    // неподвижен), иначе детерминированное расписание маскирует корень В1
+    // удачной чётностью (атом падает первым же подтиком и сам ставит себе
+    // changed — мутация «инжект не гасит часы» оставалась зелёной).
+    CHECK(run_batch(dev, mirror, medium, w, 1, substep));
+    substep += 1;
+
+    // Повторный карв: нижний слой осевшей кучи — в воздух (путь игры).
+    const auto bedCell = static_cast<std::uint32_t>(macro_index(62, 62, 31));
+    CellType* bp = f.page(bedCell);
+    CHECK(bp != nullptr);
+    std::uint32_t carved = 0;
+    for (int sx = 0; sx < 8; ++sx)
+        for (int sy = 0; sy < 8; ++sy)
+            if (bp[sub_bit(sx, sy, 0)] == kMatRubble) {
+                bp[sub_bit(sx, sy, 0)] = kCellAir;
+                ++carved;
+            }
+    CHECK(carved > 0);
+    mirror.mark_dirty(&bedCell, 1);
+    medium.wake_cells(&bedCell, 1, w, mirror);
+
+    for (int b = 0; b < 8; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    // Ни одного атома без опоры; масса точна; куча доспала.
+    auto mat_at = [&](int gx, int gy, int gz) -> CellType {
+        const auto ci = static_cast<std::uint32_t>(macro_index(
+            (gx >> 3) & (kMacroDim - 1), (gy >> 3) & (kMacroDim - 1),
+            (gz >> 3) & (kMacroDim - 1)));
+        const CellType* p = f.page(ci);
+        if (p) return p[sub_bit(gx & 7, gy & 7, gz & 7)];
+        return w.grid().types()[ci];
+    };
+    int floating = 0;
+    std::uint32_t settled = 0;
+    for (int cz = 30; cz <= 33; ++cz)
+        for (int cx = 60; cx < 66; ++cx)
+            for (int cy = 60; cy < 66; ++cy) {
+                const CellType* p = f.page(
+                    static_cast<std::uint32_t>(macro_index(cx, cy, cz)));
+                if (!p) continue;
+                for (int bit = 0; bit < kSubVoxels; ++bit) {
+                    if (p[bit] != kMatRubble) continue;
+                    ++settled;
+                    const int gx = cx * 8 + (bit & 7);
+                    const int gy = cy * 8 + ((bit >> 3) & 7);
+                    const int gz = cz * 8 + ((bit >> 6) & 7);
+                    if (mat_at(gx, gy, gz - 1) == kCellAir) ++floating;
+                }
+            }
+    std::printf("[medium_test] recarve: carved %u, settled %u, floating %d, "
+                "live %u, fade %u\n",
+                carved, settled, floating, medium.live_count(),
+                medium.fade_total());
+    CHECK(floating == 0); // висяков нет: верх упал следом
+    CHECK(settled + medium.fade_total() == poured - carved);
+    CHECK(medium.live_count() == 0); // и доспала обратно в ЗОМБИ-НОЛЬ
+    medium.destroy();
+    mirror.destroy();
+}
+
+// ГЕЙТ «СХОДИМОСТЬ ПОД БЮДЖЕТОМ» (план §3.1, петля К2 — доказана A/B на
+// сейве владельца: с бюджетом live рос без плато, потому что часы тишины
+// замерзали у неисполненных и сток сна делился на страйд). Тесный бюджет 2
+// при live ~30-50: физика честно замедлена в разы, но СТОК СНА работает на
+// полной скорости у тихих — башня рыхлого ОБЯЗАНА доспать до нуля за
+// разумное число подтиков. Расписание бюджета детерминировано (хеш клетки
+// и подтика) — номер батча сна воспроизводим бит-в-бит.
+void test_sleep_under_budget(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 40; x < 46; ++x)
+        for (int y = 40; y < 46; ++y)
+            w.grid().fill_cell(x, y, 30, kMatConcrete);
+    const auto pourCell = static_cast<std::uint32_t>(macro_index(42, 42, 32));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(pourCell, w.grid().types()[pourCell]);
+    std::uint32_t poured = 0;
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                pg[sub_bit(sx, sy, sz)] = kMatRubble;
+                ++poured;
+            }
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.set_budget(2);
+    medium.wake_cells(&pourCell, 1, w, mirror);
+    std::uint64_t substep = 0;
+    std::uint32_t liveAt = ~0u;
+    for (int b = 0; b < 40; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+        if (b == 39) liveAt = medium.live_count();
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    std::printf("[medium_test] sleep-under-budget: live@40 %u, fade %u\n",
+                liveAt, medium.fade_total());
+    CHECK(liveAt == 0);
+    // Масса точна и под тесным бюджетом.
+    std::uint32_t settled = 0;
+    for (int cz = 30; cz <= 33; ++cz)
+        for (int cx = 40; cx < 46; ++cx)
+            for (int cy = 40; cy < 46; ++cy) {
+                const CellType* p = f.page(
+                    static_cast<std::uint32_t>(macro_index(cx, cy, cz)));
+                if (!p) continue;
+                for (int bit = 0; bit < kSubVoxels; ++bit)
+                    if (p[bit] == kMatRubble) ++settled;
+            }
+    CHECK(settled + medium.fade_total() == poured);
+    medium.destroy();
+    mirror.destroy();
+}
+
 // ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
 // Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
 // Формы плотного гейта (shaders/bitmask_stand.comp):
@@ -2084,6 +2247,8 @@ int main() {
         test_budget_dispatch(dev);
         test_rubble_settles_fast(dev);
         test_bitset_execution(dev);
+        test_recarve_no_floating(dev);
+        test_sleep_under_budget(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

@@ -115,7 +115,9 @@ const uint kMaxGroupsX = 32768u;
 const uint kActChanged = 1u;
 const uint kActQuietShift = 1u;
 const uint kActQuietMask = 0x7Fu << 1;
-const uint kSleepSubsteps = 16u;
+// Порог сна — -D мостом из gpu_medium_pass.h (инкр. 3: прежде жил ДВУМЯ
+// независимыми литералами 16 в хедере и здесь — разъехались бы молча).
+const uint kSleepSubsteps = GIGA_MEDIUM_SLEEP;
 
 // Пробуждение = БИТ (Автомат-2 инкр. 2): идемпотентный atomicOr — писатель
 // не думает «кого будить» и не борется за слоты; очередь, кап и откат
@@ -431,9 +433,29 @@ shared uint sMaskBits;
 void run_settle(uint slot, uint threadId) {
     uint ci = uListA[slot];
     if (!cell_budgeted(ci)) {
-        // Незасимулированная по бюджету клетка: судьба решается только в
-        // её ход — бит просто остаётся как есть, переносить нечего
-        // (список-однодневка умирает в конце подтика).
+        // СОН — СОСТОЯНИЕ, НЕ САМОПРОДЛЕНИЕ (инкр. 3, разрыв петли К2
+        // «live↑ → p↓ → сон растягивается → live↑», доказанной A/B на
+        // сейве владельца: с бюджетом live рос 1.4k→17k без плато, без
+        // бюджета — горб и рассасывание). Часы тишины идут и под
+        // заморозкой бюджета — но ТОЛЬКО у клетки, чьё последнее
+        // ИСПОЛНЕНИЕ было тихим (quiet > 0): её физика уже тиха, ждать
+        // нечего, сток сна работает на полной скорости. Клетка,
+        // замороженная ПОСРЕДИ движения (quiet == 0), ждёт своего хода —
+        // бюджет не досуживает её физику за неё. Въехавший атом ставит
+        // changed и честно сбрасывает часы.
+        if (threadId != 0u) return;
+        uint fact = uCellAct[ci];
+        if ((fact & kActChanged) != 0u) {
+            atomicAnd(uCellAct[ci], ~(kActChanged | kActQuietMask));
+            wake_next(ci);
+            return;
+        }
+        uint fq = (fact & kActQuietMask) >> kActQuietShift;
+        if (fq == 0u) return; // заморожена в движении — часы стоят
+        fq = min(fq + 1u, 127u);
+        atomicAnd(uCellAct[ci], ~kActQuietMask);
+        atomicOr(uCellAct[ci], fq << kActQuietShift);
+        if (fq >= kSleepSubsteps) sleep_cell(ci);
         return;
     }
     if (threadId == 0u) {
@@ -573,10 +595,18 @@ void run_finalize() {
     uCnt[2] = 1u;
 }
 
-// INJECT: писатели CPU (карв, сфера, наливы) — просто ставят биты.
+// INJECT: писатели CPU (карв, сфера, наливы) — бит + ЧАСЫ С НУЛЯ.
+// Обнуление часов — лечение корня В1 висяков (инкр. 3): клетка осевшей
+// кучи с насыщенной тишиной (quiet >= порога) получала после повторного
+// карва РОВНО ОДИН подтик — settle видел зрелую тишину и усыплял её
+// обратно, нижний слой атомов повисал в пустоте («первый раз идеально,
+// потом висяки» плейтеста владельца). Писательское пробуждение = часы с
+// нуля: полные 16 подтиков жизни, как у свежерождённого рабла.
 void run_inject(uint j) {
     if (j >= uAppend[0]) return;
-    wake_next(uAppend[1u + j]);
+    uint ci = uAppend[1u + j];
+    atomicAnd(uCellAct[ci], ~kActQuietMask);
+    wake_next(ci);
 }
 
 // PACK: обратный шов — страницы, маски и сам список ЖИВЫХ клеток в

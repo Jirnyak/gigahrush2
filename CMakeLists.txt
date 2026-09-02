@@ -323,9 +323,16 @@ if(NOT _giga_medium_h MATCHES "kRbSlotCap = ([0-9]+)")
     message(FATAL_ERROR "cannot parse kRbSlotCap out of src/render/gpu_medium_pass.h.")
 endif()
 set(_giga_medium_rb_slots ${CMAKE_MATCH_1})
+# Порог сна тем же законом (инкр. 3 «Автомат-2»: прежде жил ДВУМЯ
+# независимыми литералами 16 в хедере и шейдере — разъехались бы молча).
+if(NOT _giga_medium_h MATCHES "kSleepSubsteps = ([0-9]+)u")
+    message(FATAL_ERROR "cannot parse kSleepSubsteps out of src/render/gpu_medium_pass.h.")
+endif()
+set(_giga_medium_sleep ${CMAKE_MATCH_1})
 set(_giga_shader_defs
     -DGIGA_MEDIUM_LIST_CAP=${_giga_medium_live_cap}
     -DGIGA_MEDIUM_RB_SLOTS=${_giga_medium_rb_slots}
+    -DGIGA_MEDIUM_SLEEP=${_giga_medium_sleep}u
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
     -DGIGA_SUB_DIM=${_giga_sub_dim}
     -DGIGA_CELL_SIZE=${_giga_cell_size}
@@ -612,8 +619,22 @@ if(GIGA_BUILD_TESTS)
     # сверки + вода у границ), сон-не-снимает-бит = 978 (оба ЗОМБИ-НОЛЯ),
     # бюджет-всегда = 982 (ровно «бюджет кусает»), пол FINALIZE = 981
     # (ровно оба ЗОМБИ-НОЛЯ стейлом).
+    # 983 -> 1066 (+83) on 2026-09-02: ИНКРЕМЕНТ 3 «Автомат-2» — СОН-
+    # СОСТОЯНИЕ. (а) Часы тишины идут и под заморозкой бюджета — но только
+    # у клетки с ТИХИМ последним исполнением (quiet>0): сток сна на полной
+    # скорости, петля К2 «live↑→p↓→сон растягивается→live↑» разорвана;
+    # (б) писательское пробуждение (run_inject) гасит часы — корень В1
+    # висяков; (в) kSleepSubsteps сведён в один источник -D мостом.
+    # Гейты плана: СХОДИМОСТЬ (test_sleep_under_budget: башня при бюджете 2
+    # досыпает до 0 к батчу 23, кривая 32/28/16/12/8/0) и ВИСЯКИ
+    # (test_recarve_no_floating: сон→карв нижнего слоя→верх падает и
+    # доспит; карв СДВИНУТ НА НЕЧЁТНУЮ ФАЗУ — на чётной атом падал первым
+    # же подтиком и маскировал корень, первая мутация Б осталась зелёной).
+    # Мутации поштучно: часы-только-у-исполненных = 1064/1065 (ровно
+    # сходимость, live@40=20), инжект-не-гасит = 1065/1066 (ровно
+    # floating==0, ВИСЯКИ 8 атомов — симптом владельца в пробирке).
     set_tests_properties(medium_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "983/983 checks passed")
+        PASS_REGULAR_EXPRESSION "1066/1066 checks passed")
 
     # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
     # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
