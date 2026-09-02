@@ -59,16 +59,11 @@ static_assert(sizeof(MediumPush) == 32, "MediumPush layout must be 32 bytes");
 
 class GpuMediumPass {
 public:
-    // Кап живых клеток. Вывод: самый жирный разовый писатель — sphere r=2 м
-    // (кап команды) = 33.5 м³ ≈ 2144 кванта ≈ до ~500 клеток с фронтом;
-    // лужи и эмиттеры — сотни. 32768 = запас ~двух порядков, худший случай
-    // страниц 32 МиБ (уже в пуле зеркала), и НЕ упирается в лимит Vulkan
-    // 65535 воркгрупп по X. Переполнение печатается вслух (S11).
-    // Рабочий набор автомата: пара списков по 4 Б на слот (1 МиБ на кап
-    // 131072). Кап 32768 упирался в газ+воду одного этажа: новорожденные
-    // клетки фронта проигрывали гонку за слоты старожилам (стабильный
-    // порядок пуша) — вода не шла в клетки. Запас = 8 слоёв газа на весь
-    // этаж 128x128.
+    // Кап живых клеток МЁРТВ СМЫСЛОМ с инкремента 2 «Автомат-2»: список-
+    // однодневка вмещает все kMacroCells по построению, переполнение
+    // невозможно. Константа жива только для -D моста CMake
+    // (GIGA_MEDIUM_LIST_CAP, шейдером больше не читается) — уборка вместе
+    // с перенумерацией биндингов в инкременте 6.
     static constexpr std::uint32_t kLiveCap = 131072u;
     // Обратный шов, фенсовая дисциплина (детали у полей ниже): регионов на
     // один больше, чем кадров в полёте; запись кадра F применяется на топе
@@ -198,17 +193,13 @@ public:
     bool seam_seen(std::uint32_t ci) const { return seamSeen_.count(ci) != 0; }
     bool seam_lazy(std::uint32_t ci) const { return seamLazy_.count(ci) != 0; }
 
-    // ТЕНЕВОЙ БИТСЕТ (эпик «Автомат-2» инкремент 1, medium-bitmask.md):
-    // точное зеркало бита kActInList в отдельном битсете 256 КиБ — гейт
-    // test_shadow_bitset после queue-idle требует «множество битов ==
-    // множеству следующего списка». Аксессоры — только для этой сверки.
-    VkBuffer shadow_bits_buffer() const noexcept { return shadowBits_.buffer; }
-    VkBuffer list_buffer(std::uint32_t sel) const noexcept {
-        return sel != 0 ? listB_.buffer : listA_.buffer;
-    }
+    // БИТСЕТ АКТИВНОСТИ (эпик «Автомат-2», medium-bitmask.md) — нервная
+    // система автомата: словный гейт пересобирает из него список-однодневку
+    // исполнимых клеток каждый подтик. Аксессоры — только для гейт-сверки
+    // test_bitset_execution («список == дилатация битсета» после idle).
+    VkBuffer active_bits_buffer() const noexcept { return shadowBits_.buffer; }
+    VkBuffer exec_list_buffer() const noexcept { return listA_.buffer; }
     VkBuffer counters_buffer() const noexcept { return counters_.buffer; }
-    // Чей список будет ТЕКУЩИМ на следующем подтике (его счёт — uCnt[sel*4]).
-    std::uint32_t list_sel() const noexcept { return listSel_; }
 
 private:
     bool create_buffers() noexcept;
@@ -226,13 +217,12 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 
-    // GPU-резидентная петля: ping-pong списки + счётчики-indirect
-    // ([shaders/medium_sim.comp], биндинги 5..12).
-    VulkanBuffer listA_;
-    VulkanBuffer listB_;
+    // GPU-резидентная петля (Автомат-2): битсет активности + список-
+    // однодневка от гейта + счётчики-indirect (биндинги 5..13).
+    VulkanBuffer listA_;    // список-однодневка исполнимых (2М слотов, 8 МиБ)
     VulkanBuffer counters_; // 16 u32; usage INDIRECT — диспатч от них
     VulkanBuffer cellAct_;  // device-local: uint32 x kMacroCells (8 МиБ)
-    VulkanBuffer shadowBits_; // теневой битсет kActInList (256 КиБ, инкр. 1)
+    VulkanBuffer shadowBits_; // БИТСЕТ АКТИВНОСТИ (256 КиБ) — нерв автомата
     // Инжект писателей: слот на кадр в полёте.
     static constexpr std::uint32_t kAppendCap = 8192u;
     VulkanBuffer appendBuf_[kMaxFramesInFlight];
@@ -251,7 +241,6 @@ private:
     std::vector<std::uint64_t> frontierDone_ =
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
-    std::uint32_t listSel_ = 0; // чей список ТЕКУЩИЙ (персистентен)
     std::uint32_t budget_ = kRbSlotCap; // бюджет диспатча (см. set_budget)
 
     // Обратный шов (фенсовое кольцо kRbRegions): страницы/маски/СПИСОК

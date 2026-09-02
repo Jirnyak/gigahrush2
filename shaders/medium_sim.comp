@@ -58,100 +58,78 @@ layout(std430, binding = 4) buffer ClassBuf          { uint uClass[];   }; // 4 
 // список ping-pong A/B строит САМ settle, диспатч indirect от счётчиков,
 // писатели инжектятся мини-пассом, шов пакуется pack-пассом. CPU — только
 // читатель шва и писатель материи.
+// СПИСОК-ОДНОДНЕВКА (Автомат-2 инкр. 2): плотный список ИСПОЛНИМЫХ клеток,
+// который словный гейт (run_gate32) пересобирает КАЖДЫЙ подтик из битсета
+// активности. У него нет жизненного цикла — нет сна, пробуждений, капов,
+// переносов и ping-pong (ListB мёртв). Исполнима клетка, когда активна ОНА
+// или любой из 7 «+»-соседей: блоки Марголуса minG-владельца тянутся в «+»,
+// материя «+»-соседа лежит в НАШИХ блоках — прежде это эмулировали
+// зомби-жители live-списка (66% списка на сейве владельца).
 layout(std430, binding = 5) buffer ListA             { uint uListA[];   };
 layout(std430, binding = 6) buffer ActBuf            { uint uCellAct[]; }; // 1 uint/клетку (device)
-layout(std430, binding = 7) buffer ListB             { uint uListB[];   };
-// Счётчики-indirect: [0..2] = диспатч списка A (x,y,z), [4..6] = списка B,
-// [8] = кванты подвижной материи (лог), [9] = флаг переполнения капа,
-// [10] = woken, [11] = slept — накопительные.
+// binding 7 (ListB) МЁРТВ инкрементом 2 — слот занят listA_ до уборки.
+// Счётчики: [0..2] = indirect-команда исполнения (x,y,z — 2D-складка
+// FINALIZE, лимит оси 65535), [3] = счёт исполнимых клеток от гейта,
+// [8] = кванты подвижной материи (лог), [9] = мёртв (кап списка умер),
+// [10] = woken, [11] = slept — накопительные, по переходам бита.
 layout(std430, binding = 8) buffer Counters          { uint uCnt[];     };
 layout(std430, binding = 9) readonly buffer AppendBuf { uint uAppend[]; }; // [0]=счёт, дальше клетки
 // Обратный шов, host-visible регионы кольца: pack-пасс пишет сам.
 layout(std430, binding = 10) writeonly buffer RbPages { uint uRbPages[]; }; // 256 u32/слот
 layout(std430, binding = 11) writeonly buffer RbMasks { uint uRbMasks[]; }; // 16 u32/слот
 layout(std430, binding = 12) writeonly buffer RbList  { uint uRbList[];  }; // [0]=count,[1]=quanta,[2]=woken,[3]=slept, дальше ci
-// ТЕНЕВОЙ БИТСЕТ АКТИВНОСТИ (эпик «Автомат-2» инкремент 1, medium-bitmask.md):
-// 1 бит/клетку, ТОЧНОЕ зеркало бита kActInList — каждый atomicOr/And бита
-// списка дублируется тем же потоком сюда. Валидация модели «пробуждение =
-// бит» на боевой конкуренции: после сабмита множество битов ОБЯЗАНО
-// равняться множеству следующего списка (гейт test_shadow_bitset).
-// Инкремент 2 переводит исполнение с списка на этот битсет.
-layout(std430, binding = 13) buffer ShadowBits { uint uShadowBits[]; };
+// БИТСЕТ АКТИВНОСТИ (эпик «Автомат-2», medium-bitmask.md) — нервная
+// система автомата: 1 бит/клетку = 256 КиБ. Пробуждение = atomicOr бита
+// (идемпотентно, писатель не думает «кого будить»), сон = atomicAnd.
+// Исполнение каждый подтик собирает словный гейт (run_gate32) — теневой
+// режим инкремента 1 стал боевым в инкременте 2.
+layout(std430, binding = 13) buffer ActiveBits { uint uActiveBits[]; };
 
 layout(push_constant) uniform Push {
     ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
     // x = номер подтика; y = режим (0 prepare / 1 move / 2 settle /
-    // 3 inject / 4 pack); z = селектор списков (0: cur=A,next=B; 1:
-    // наоборот); w = база rb-региона в СЛОТАХ (pack).
+    // 3 inject / 6 gate32 / 7 finalize / иначе pack); z = свободен
+    // (селектор списков умер с ping-pong); w = ИНДЕКС rb-региона (pack) /
+    // флаг настоящего подтика (prepare).
     uvec4 params;
 } pc;
 
 #include "material_surface.glsl"
 
 const int kMacroDim = GIGA_MACRO_DIM;
+const uint kCells = uint(kMacroDim * kMacroDim * kMacroDim);
 const uint kNoPage = 0xFFFFFFFFu;
-// Капы приезжают -D дефайнами из gpu_medium_pass.h (CMake парсит хедер —
-// GLSL и C++ не могут разойтись; прежнее «зеркало» числом держалось верой).
-const uint kListCap = GIGA_MEDIUM_LIST_CAP;
+// Кап окна шва приезжает -D дефайном из gpu_medium_pass.h (CMake парсит
+// хедер — GLSL и C++ не могут разойтись). Кап СПИСКА умер: список-однодневка
+// вмещает все 2М клеток по построению.
 const uint kRbSlotCap = GIGA_MEDIUM_RB_SLOTS;
+// Складка indirect-диспатча по X: 2М/64 = 32768 групп словного гейта, он же
+// потолок строки indirect-команды (гарантированный лимит оси — 65535;
+// прежний indirect по списку кап 131072 был формально вне спеки).
+const uint kMaxGroupsX = 32768u;
 
 // --- Слово активности клетки (uCellAct) -------------------------------------
 // bit 0     — клетка менялась в MOVE этого подтика (settle читает и гасит);
-// bits 1..7 — счётчик тихих подтиков (сон при 16);
-// bit 31    — клетка уже в СЛЕДУЮЩЕМ списке (дедуп аппендов).
+// bits 1..7 — счётчик тихих подтиков (сон при 16).
+// bit 31 (kActInList) МЁРТВ инкрементом 2: членство = бит в uActiveBits.
 const uint kActChanged = 1u;
 const uint kActQuietShift = 1u;
 const uint kActQuietMask = 0x7Fu << 1;
-const uint kActInList = 0x80000000u;
 const uint kSleepSubsteps = 16u;
 
-uint cur_x_index() { return pc.params.z == 0u ? 0u : 4u; }
-uint next_x_index() { return pc.params.z == 0u ? 4u : 0u; }
-uint list_cur(uint i) {
-    return pc.params.z == 0u ? uListA[i] : uListB[i];
-}
-void list_next_store(uint i, uint ci) {
-    if (pc.params.z == 0u) uListB[i] = ci; else uListA[i] = ci;
-}
-
-// Разбудить/удержать клетку в СЛЕДУЮЩЕМ списке: бит-дедуп, кап вслух.
-// Возвращает «слот лёг» — settle этим атрибутирует face-пуши (uCnt[14]).
-// uCnt[13] — «зомби»: клетка, чья тишина УЖЕ доросла до порога сна, но её
-// вернул внешний пуш. Замер корня §63: закон сна перекрывается извне.
-// Зеркальные операции теневого битсета — ВСЕГДА рядом со своей операцией
-// над kActInList тем же потоком (только так множества совпадают при любом
-// чередовании; читателей в шейдере нет — сверка читает после queue-idle).
-void shadow_or(uint ci) { atomicOr(uShadowBits[ci >> 5u], 1u << (ci & 31u)); }
-void shadow_and(uint ci) {
-    atomicAnd(uShadowBits[ci >> 5u], ~(1u << (ci & 31u)));
+// Пробуждение = БИТ (Автомат-2 инкр. 2): идемпотентный atomicOr — писатель
+// не думает «кого будить» и не борется за слоты; очередь, кап и откат
+// умерли по построению. woken/slept (uCnt[10]/[11]) считают ПЕРЕХОДЫ бита.
+void wake_next(uint ci) {
+    uint m = 1u << (ci & 31u);
+    uint old = atomicOr(uActiveBits[ci >> 5u], m);
+    if ((old & m) == 0u) atomicAdd(uCnt[10], 1u);
 }
 
-bool wake_next(uint ci) {
-    uint old = atomicOr(uCellAct[ci], kActInList);
-    if ((old & kActInList) != 0u) return false;
-    shadow_or(ci); // теневой битсет: зеркало перехода 0->1
-    uint idx = atomicAdd(uCnt[next_x_index()], 1u);
-    if (idx < kListCap) {
-        list_next_store(idx, ci);
-        atomicAdd(uCnt[10], 1u);
-        if (((old & kActQuietMask) >> kActQuietShift) >= kSleepSubsteps)
-            atomicAdd(uCnt[13], 1u);
-        return true;
-    } else {
-        // Кап: слот не лёг — бит ОБЯЗАН откатиться, иначе клетка мертва
-        // для пробуждений навсегда (сухие клетки-квадраты со скрина
-        // владельца 2026-08-25).
-        atomicAnd(uCellAct[ci], ~kActInList);
-        shadow_and(ci); // зеркало отката
-        atomicOr(uCnt[9], 1u);
-    }
-    return false;
-}
-
-// Face-пуш из settle — отдельный счётчик успешных укладок (uCnt[14]):
-// его доля от uCnt[13] и решает вопрос «кто держит сухой шлейф бодрым».
-void wake_face(uint ci) {
-    if (wake_next(ci)) atomicAdd(uCnt[14], 1u);
+void sleep_cell(uint ci) {
+    uint m = 1u << (ci & 31u);
+    uint old = atomicAnd(uActiveBits[ci >> 5u], ~m);
+    if ((old & m) != 0u) atomicAdd(uCnt[11], 1u);
 }
 
 // БЮДЖЕТНЫЙ ДИСПАТЧ (big-judge.md D, закон владельца 2026-08-30): за подтик
@@ -180,7 +158,7 @@ void wake_face(uint ci) {
 bool cell_budgeted(uint ci) {
     uint budget = uint(pc.downStep.w);
     if (budget == 0u) return true;
-    uint total = uCnt[cur_x_index()];
+    uint total = uCnt[3]; // счёт исполнимых от гейта этого подтика
     if (total <= budget) return true;
     // Финализатор (murmur3-класс) над (клетка, подтик): равномерность по
     // ОБОИМ входам — Кнут один размазывает клетки, но не пару.
@@ -282,7 +260,7 @@ bool can_swap(Sub a, Sub b) {
 // == MOVE: поток = Margolus-блок ==============================================
 // =============================================================================
 void run_move(uint slot, uint threadId) {
-    uint ci = list_cur(slot);
+    uint ci = uListA[slot];
     if (!cell_budgeted(ci)) return; // заморожен локально — ждёт очереди
     ivec3 cell = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
                        int((ci >> 14) & 127u));
@@ -441,30 +419,25 @@ void run_move(uint slot, uint threadId) {
 // =============================================================================
 // == SETTLE: воркгруппа = живая клетка ========================================
 // =============================================================================
-// GPU-резидентная петля: settle сам решает судьбу клетки и строит СЛЕДУЮЩИЙ
-// список. Протокол бита kActInList: release-пасс снимает биты всего
-// текущего списка ДО move — с этого момента бит означает ровно «уже в
-// СЛЕДУЮЩЕМ списке», и любой wake_next (move, settle, инжект) дедупится
-// честно; двойных слотов не существует по построению (см. run_release).
+// Судьба клетки решается БИТОМ (Автомат-2 инкр. 2): stay держит бит,
+// сон снимает. Список не строится — его пересоберёт гейт следующего
+// подтика из битсета. Исполнимая-но-неактивная клетка (сосед активен)
+// судится тоже: её тишина копится, а въехавшая материя (kActChanged от
+// move) честно ставит ей бит через stay.
 shared uint sQuanta;   // ВСЯ подвижная материя (вода + рубл) — сон, лог
 shared uint sFree;     // БЕЗмасочная среда (вода) — класс 3 (мост рендера)
 shared uint sMaskBits;
-shared uint sFaceBits; // биты 0..5: подвижная материя у грани -x+x-y+y-z+z
 
 void run_settle(uint slot, uint threadId) {
-    uint ci = list_cur(slot);
+    uint ci = uListA[slot];
     if (!cell_budgeted(ci)) {
-        // ПЕРЕНОС незасимулированного слота в следующий список без суда:
-        // судьба (сон/пробуждение граней) решается только в его ход — часы
-        // тишины замерзают вместе с материей, темп сна делится на stride
-        // так же, как темп физики. Дедуп — тем же битом wake_next.
-        if (threadId == 0u) wake_next(ci);
+        // Незасимулированная по бюджету клетка: судьба решается только в
+        // её ход — бит просто остаётся как есть, переносить нечего
+        // (список-однодневка умирает в конце подтика).
         return;
     }
     if (threadId == 0u) {
-        sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sFaceBits = 0u;
-        // Бит снят release-пассом ДО move (см. run_release) — здесь клетка
-        // только решает судьбу и пушится заново при stay.
+        sQuanta = 0u; sFree = 0u; sMaskBits = 0u;
     }
     barrier();
 
@@ -478,7 +451,7 @@ void run_settle(uint slot, uint threadId) {
     barrier();
     bool maskEmpty = sMaskBits == 0u;
 
-    uint quanta = 0u, freeQ = 0u, faceBits = 0u;
+    uint quanta = 0u, freeQ = 0u;
     for (uint k = 0u; k < 8u; ++k) {
         uint bit = threadId * 8u + k;
         bool m = mask_bit(ci, bit);
@@ -492,18 +465,10 @@ void run_settle(uint slot, uint threadId) {
             (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
             quanta += 1u;
             if (!m) freeQ += 1u;
-            uint x = bit & 7u, y = (bit >> 3) & 7u, z = (bit >> 6) & 7u;
-            if (x == 0u) faceBits |= 1u;
-            if (x == 7u) faceBits |= 2u;
-            if (y == 0u) faceBits |= 4u;
-            if (y == 7u) faceBits |= 8u;
-            if (z == 0u) faceBits |= 16u;
-            if (z == 7u) faceBits |= 32u;
         }
     }
     atomicAdd(sQuanta, quanta);
     atomicAdd(sFree, freeQ);
-    atomicOr(sFaceBits, faceBits);
     barrier();
 
     if (threadId != 0u) return;
@@ -530,73 +495,85 @@ void run_settle(uint slot, uint threadId) {
                            127u);
     atomicAnd(uCellAct[ci], ~(kActChanged | kActQuietMask));
     atomicOr(uCellAct[ci], quiet << kActQuietShift);
-    // Остаёмся до порога сна ДАЖЕ пустыми: финальное состояние клетки
-    // (материя ушла) обязано успеть в pack-регион шва — мгновенный выход из
-    // списка оставлял CPU-канону стейл (тест ловил +кванты и маски).
-    bool stay = quiet < kSleepSubsteps;
-    if (stay) {
-        wake_next(ci);
-        // Материя у грани: сосед обязан жить — его блоки покрывают
-        // межклеточную пару.
-        ivec3 c = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
-                        int((ci >> 14) & 127u));
-        // ТОЛЬКО ОТРИЦАТЕЛЬНЫЕ грани (§63, лечение сухого шлейфа): блок
-        // Марголуса принадлежит клетке минимального угла (minG = cell*8 +
-        // bc*2 + off, off >= 0 — блоки тянутся только в ПЛЮС), поэтому пары,
-        // пересекающие нашу +границу, исполняют НАШИ блоки — будить соседа
-        // незачем: материю, реально въехавшую к нему, run_move метит и будит
-        // адресно (kActChanged + wake_next). А вот пары нашей −границы (в
-        // т.ч. вертикальные падения ВНУТРИ нашего слоя 0 в фазах off=1)
-        // исполняет −сосед — его будим безусловно, даже полнотвёрдого:
-        // без него вода вдоль стены падала бы половину фаз (класс бага
-        // «вода не текла вдоль стен», закрыт 2026-08-24). До правки будились
-        // все 6 граней — сухой шлейф столба жил вечным зомби (40M зомби-
-        // пушей за прогон, uCnt[13]).
-        if ((sFaceBits & 1u) != 0u)
-            wake_face(cell_index(c + ivec3(-1, 0, 0)));
-        if ((sFaceBits & 4u) != 0u)
-            wake_face(cell_index(c + ivec3(0, -1, 0)));
-        if ((sFaceBits & 16u) != 0u)
-            wake_face(cell_index(c + ivec3(0, 0, -1)));
-    } else {
-        atomicAdd(uCnt[11], 1u);
+    // Судьба битом — ТРИ исхода, и середина не вербует (урок первого
+    // прогона инкремента 2: «stay = wake_next» ставил бит ГАЛО-клеткам,
+    // исполнимым лишь через соседа, — те вербовали собственное гало, и
+    // активность расползалась лесным пожаром +1 клетка/подтик по тору,
+    // live 700k):
+    //   изменилась         -> бит ставится (материя въехала/сдвинулась);
+    //   тихая незрелая     -> бит КАК ЕСТЬ: активная остаётся до порога
+    //                         (финальное состояние обязано успеть в pack —
+    //                         «остаёмся даже пустыми»), гало не вербуется;
+    //   тишина дозрела     -> бит снимается (сон).
+    // Face-пуши УМЕРЛИ: пары нашей −границы исполняет −сосед по правилу
+    // «+7» гейта (мы — его «+»-сосед, он исполним, пока мы активны) —
+    // вечный зомби-цикл «face-пуш держит соседа в списке» невозможен по
+    // построению.
+    if (quiet >= kSleepSubsteps) sleep_cell(ci);
+    else if ((act & kActChanged) != 0u) wake_next(ci);
+}
+
+// =============================================================================
+// == PREPARE / GATE32 / FINALIZE / INJECT / PACK ==============================
+// =============================================================================
+// PREPARE (1 поток, только НАСТОЯЩИЙ подтик): сброс счёта гейта и
+// лог-квантов. На спокойном кадре не диспатчится вовсе — pack показывает
+// честный список и кванты последнего исполненного подтика (S11).
+void run_prepare() {
+    uCnt[0] = 0u;
+    uCnt[1] = 1u;
+    uCnt[2] = 1u;
+    uCnt[3] = 0u;
+    uCnt[8] = 0u;
+}
+
+// СЛОВНЫЙ ГЕЙТ (форма А2 стенда инкремента 0 — выбрана ЧИСЛОМ:
+// 0.055-0.119 мс/подтик против 0.26-0.54 у потредовой и 14.5 у плотной):
+// тред судит 32 клетки одним словом битсета. Предикат «бит мой | 7
+// „+"-соседей» — 3D-дилатация, словно-параллельная по x: «+x»-сосед =
+// сдвиг слова на 1 с заносом из следующего слова x-строки (тор по x —
+// кольцо из kMacroDim/32 слов). 8 чтений СЛОВА вместо 256 чтений бита.
+void run_gate32(uint w) {
+    const uint kWordsPerRow = uint(kMacroDim) / 32u; // 4
+    if (w >= kCells / 32u) return;
+    uint wx = w % kWordsPerRow;
+    uint y = (w / kWordsPerRow) % uint(kMacroDim);
+    uint z = w / (kWordsPerRow * uint(kMacroDim));
+    uint execWord = 0u;
+    for (uint dz = 0u; dz <= 1u; ++dz)
+        for (uint dy = 0u; dy <= 1u; ++dy) {
+            uint rowBase = (((y + dy) % uint(kMacroDim))
+                            + ((z + dz) % uint(kMacroDim)) * uint(kMacroDim))
+                           * kWordsPerRow;
+            uint r = uActiveBits[rowBase + wx];
+            uint rn = uActiveBits[rowBase + (wx + 1u) % kWordsPerRow];
+            execWord |= r | (r >> 1u) | (rn << 31u);
+        }
+    if (execWord == 0u) return;
+    uint base = w * 32u;
+    while (execWord != 0u) {
+        uint b = uint(findLSB(execWord));
+        execWord &= execWord - 1u;
+        uint idx = atomicAdd(uCnt[3], 1u);
+        uListA[idx] = base + b; // капа нет: список вмещает 2М по построению
     }
 }
 
-// =============================================================================
-// == PREPARE / INJECT / PACK ==================================================
-// =============================================================================
-// PREPARE (1 поток): кламп текущего счётчика к капу (indirect и лимит
-// воркгрупп), сброс следующего и лог-квантов.
-void run_prepare() {
-    uCnt[cur_x_index()] = min(uCnt[cur_x_index()], kListCap);
-    uCnt[cur_x_index() + 1u] = 1u;
-    uCnt[cur_x_index() + 2u] = 1u;
-    uCnt[next_x_index()] = 0u;
-    uCnt[next_x_index() + 1u] = 1u;
-    uCnt[next_x_index() + 2u] = 1u;
-    // Кванты сбрасываются только перед НАСТОЯЩИМ подтиком (params.w != 0);
-    // prepare спокойного кадра лишь клампит — pack обязан показать честные
-    // кванты последнего settle, а не ноль (S11: числа не врут).
-    if (pc.params.w != 0u) uCnt[8] = 0u;
+// FINALIZE (1 поток): укладка счёта гейта в 2D indirect-команду —
+// x <= 32768, y = ceil(count/32768); исполнители разворачивают слот
+// складкой slot = wg.y * kMaxGroupsX + wg.x (лимит оси 65535).
+void run_finalize() {
+    uint n = uCnt[3];
+    // Минимум ОДНА группа даже при пустом списке: pack обязан записать
+    // заголовок «счёт 0» — иначе CPU вечно видит последний ненулевой live
+    // (урок ЗОМБИ-НОЛЯ: раньше счёт не падал до нуля никогда, и дыры не
+    // было). Фантомная группа move/settle гасится гардом slot >= счёт.
+    uCnt[0] = max(min(n, kMaxGroupsX), 1u);
+    uCnt[1] = max((n + kMaxGroupsX - 1u) / kMaxGroupsX, 1u);
+    uCnt[2] = 1u;
 }
 
-// RELEASE: снять бит kActInList у ВСЕХ клеток текущего списка ДО move.
-// Протокол: после релиза бит означает РОВНО «уже в СЛЕДУЮЩЕМ списке».
-// Прежний танец «settle снимает и передобирает» имел дыру: move этого же
-// подтика уже разбудил клетку в следующий список (бит+слот), settle снимал
-// ЧУЖОЙ бит и пушил второй слот — клетка исполнялась дважды. Свопы от
-// этого идемпотентны (одинаковые роллы — одинаковый результат), но каждый
-// atomicAdd — нет: счётчик истаиваний ловил +1 (тест массы бассейна).
-void run_release(uint slot) {
-    uint ci = list_cur(slot);
-    atomicAnd(uCellAct[ci], ~kActInList);
-    shadow_and(ci); // теневой битсет: зеркало релиза
-}
-
-// INJECT: писатели CPU (карв, сфера, наливы) — клетки в ТЕКУЩИЙ список.
-// Дедуп тем же битом; «next» на время инжекта = текущий список (селектор
-// в пуше ставит вызывающий).
+// INJECT: писатели CPU (карв, сфера, наливы) — просто ставят биты.
 void run_inject(uint j) {
     if (j >= uAppend[0]) return;
     wake_next(uAppend[1u + j]);
@@ -611,7 +588,7 @@ void run_pack(uint slot, uint threadId) {
     // 4-словный заголовок + kRbSlotCap слотов на регион.
     uint listBase = pc.params.w * (kRbSlotCap + 12u);
     uint slotBase = pc.params.w * kRbSlotCap;
-    uint total = min(uCnt[cur_x_index()], kListCap);
+    uint total = uCnt[3]; // список-однодневка последнего гейта
     // ВРАЩАЮЩЕЕСЯ ОКНО (pc.params.x = поколение кольца): при total > окна
     // пак покрывает список ЦЕЛИКОМ за ceil(total/окно) кадров — хвост не
     // голодает, новорожденные клетки фронта материализуются (тест seam
@@ -635,14 +612,14 @@ void run_pack(uint slot, uint threadId) {
         // отставал на 3-45 кадров, и apply читал регион с чужим/старым
         // паком — шов возил до-карвное состояние и воскрешал атомы.
         uRbList[listBase + 8u] = pc.params.x;
-        // Зомби-замер §63 (слоты были зарезервированы нулями): накопительные,
-        // как woken/slept — CPU дифференцирует.
-        uRbList[listBase + 9u] = uCnt[13];  // зомби-пуши
-        uRbList[listBase + 10u] = uCnt[14]; // face-пуши из settle
+        // Зомби- и face-пуши МЕРТВЫ инкрементом 2 (класс убит правилом
+        // «+7» гейта) — слоты 9/10 несут нули до уборки заголовка.
+        uRbList[listBase + 9u] = uCnt[13];
+        uRbList[listBase + 10u] = uCnt[14];
         uRbList[listBase + 11u] = uCnt[15]; // живые с нулём квантов, голосов
     }
     if (slot >= count) return;
-    uint ci = list_cur(start + slot);
+    uint ci = uListA[start + slot];
     uint pg = uPageIdx[ci];
     if (threadId == 0u)
         uRbList[listBase + 12u + slot] =
@@ -656,19 +633,32 @@ void run_pack(uint slot, uint threadId) {
             uMasks[ci * 16u + threadId];
 }
 
+// Слот исполнителя из 2D-складки FINALIZE. Условие «slot >= счёт» единообразно
+// на всю воркгруппу (слот — функция gl_WorkGroupID) — ранний выход до
+// барьеров settle легален.
+uint folded_slot() {
+    return gl_WorkGroupID.y * kMaxGroupsX + gl_WorkGroupID.x;
+}
+
 void main() {
     uint mode = pc.params.y;
     if (mode == 0u) {
         if (gl_GlobalInvocationID.x == 0u) run_prepare();
     } else if (mode == 1u) {
-        run_move(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+        uint slot = folded_slot();
+        if (slot >= uCnt[3]) return;
+        run_move(slot, gl_LocalInvocationID.x);
     } else if (mode == 2u) {
-        run_settle(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+        uint slot = folded_slot();
+        if (slot >= uCnt[3]) return;
+        run_settle(slot, gl_LocalInvocationID.x);
     } else if (mode == 3u) {
         run_inject(gl_GlobalInvocationID.x);
-    } else if (mode == 5u) {
-        run_release(gl_WorkGroupID.x);
+    } else if (mode == 6u) {
+        run_gate32(gl_GlobalInvocationID.x);
+    } else if (mode == 7u) {
+        if (gl_GlobalInvocationID.x == 0u) run_finalize();
     } else {
-        run_pack(gl_WorkGroupID.x, gl_LocalInvocationID.x);
+        run_pack(folded_slot(), gl_LocalInvocationID.x);
     }
 }

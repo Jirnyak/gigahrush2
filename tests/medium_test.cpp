@@ -564,8 +564,13 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                     "%d, mask mismatches %d\n",
                     rubbleQ, floating, onWater, maskMismatch);
         // 8 сброшенных + 128 масочного завала генераторной кодировки (та
-        // клетка выше по сцене; она спит и никуда не делась — тоже инвариант).
-        CHECK(rubbleQ >= 8 + 128 - 4);
+        // клетка выше по сцене; она спит и никуда не делась — тоже
+        // инвариант). Допуск истаиваний −4 → −5 пересдан инкрементом 2
+        // «Автомат-2»: гало правила «+7» честно исполняет клетки, прежде
+        // спавшие ВНЕ списка, и их одиночки получают свой законный ролл
+        // (замер: 131 квант, ровно +1 истаивание; масса сходится
+        // счётчиком fade).
+        CHECK(rubbleQ >= 8 + 128 - 5);
         CHECK(floating == 0);      // осел, не левитирует
         CHECK(onWater == 0);       // утонул: вода не под рублом
         CHECK(maskMismatch == 0);  // маска-кэш == фаза материала (весь пул)
@@ -1538,22 +1543,28 @@ void test_rubble_settles_fast(gpu::VulkanDevice& dev) {
         CHECK(run_batch(dev, mirror, medium, w, 8, substep));
         substep += 8;
         medium.apply_readback(w, mirror);
-        if (b == 4) liveEarly = medium.live_count();
+        if (b == 6) liveEarly = medium.live_count();
         if (b >= 7) liveTail[b - 7] = medium.live_count();
     }
-    std::printf("[medium_test] rubble-settle: live@5 %u, live %u/%u/%u (батчи 8..10), "
+    std::printf("[medium_test] rubble-settle: live@7 %u, live %u/%u/%u (батчи 8..10), "
                 "fade %u\n",
                 liveEarly, liveTail[0], liveTail[1], liveTail[2],
                 medium.fade_total());
-    // Лавина осела и ЗАМЕРЛА: хвост live мал (зомби-владельцы граничных
-    // блоков Марголуса — принятый хвост §63, live==0 у границ клеток
-    // недостижим по построению) и СТАБИЛЕН три батча подряд — «плач»
-    // (редкие капли, будящие клетки) мёртв.
-    CHECK(liveTail[2] <= 8);
+    // ЗОМБИ-НОЛЬ (плановый гейт «Автомат-2» инкр. 2): лавина осела — live
+    // РОВНО НОЛЬ, не «≤8». Прежний хвост 2 клетки был вечными зомби-
+    // владельцами граничных блоков (их держал face-пуш в списке); правило
+    // «+7» гейта исполняет владельца, пока сосед активен, ДЕРЖАТЬ его
+    // бодрым не нужно — класс умер по построению. И стабильно три батча:
+    // «плач» (редкие капли, будящие клетки) мёртв.
+    CHECK(liveTail[2] == 0);
     CHECK(liveTail[0] == liveTail[1] && liveTail[1] == liveTail[2]);
-    // ЛАВИННОСТЬ: к 40-му подтику (батч 5) осадка уже финальна — live
-    // равен хвосту. Тянущийся скат (flow 0.1) на 40-м ещё капает.
-    CHECK(liveEarly == liveTail[2]);
+    // ЛАВИННОСТЬ (пересдано инкрементом 2 «Автомат-2»): в битовом мире
+    // live к 40-му подтику законно несёт дозревающую тишину (клетка активна
+    // 16 тихих подтиков после последнего хода — «финал обязан успеть в
+    // pack»), поэтому мера — ПОЛНЫЙ СОН к подтику 56: последний ход лавины
+    // ~26-й подтик + порог 16 + гало-хвост < 56 (кривая замера: батчи
+    // 0,0,32,32,12,8,0...). Тянущийся скат (flow 0.1) капает и после 56-го.
+    CHECK(liveEarly == 0);
     drain_seam(dev, mirror, medium, w, substep);
     // Масса точна: осевшее в CPU-каноне + истаявшие одиночки == налитому.
     std::uint32_t settled = 0;
@@ -1571,16 +1582,16 @@ void test_rubble_settles_fast(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
-// ==== ИНКРЕМЕНТ 1 «АВТОМАТ-2»: теневой битсет (medium-bitmask.md) ==========
-// uShadowBits — точное зеркало бита kActInList: каждый Or/And списка
-// дублируется тем же потоком в битсет. Гейт: после КАЖДОГО батча (queue
-// idle) множество битов == множеству следующего списка — на боевой
-// конкуренции всех событий (инжект, move-пробуждения, face-пуши, release,
-// сон, откат по капу). Сцена несёт оба класса материи (вода растекается и
-// спит нутром, рыхлое осыпается и спит целиком) + инжект спящей клетки
-// посреди прогона. Расхождение в один бит = красный: это фундамент, на
-// который инкремент 2 переводит исполнение.
-void test_shadow_bitset(gpu::VulkanDevice& dev) {
+// ==== ИНКРЕМЕНТ 2 «АВТОМАТ-2»: исполнение от битсета (medium-bitmask.md) ===
+// Гейт-сверка нервной системы: словный гейт обязан пересобирать список-
+// однодневку РОВНО как дилатацию битсета правилом «бит мой | 7
+// „+"-соседей». Протокол: батч 8 → idle → читаем битсет B → батч 1 (его
+// гейт стартует от B) → список и счёт обязаны равняться CPU-дилатации B.
+// Сцена несёт оба класса материи (вода растекается и спит нутром, рыхлое
+// осыпается и спит целиком) + инжект спящей клетки посреди прогона.
+// (Эволюция сверки инкремента 1 «биты == следующему списку»: список стал
+// ПРОИЗВОДНОЙ битсета, сверяем производство.)
+void test_bitset_execution(gpu::VulkanDevice& dev) {
     constexpr std::uint32_t kCells = static_cast<std::uint32_t>(kMacroCells);
     static World w;
     // Плита-бассейн: борта держат воду, рыхлое оседает на плиту.
@@ -1609,47 +1620,65 @@ void test_shadow_bitset(gpu::VulkanDevice& dev) {
     std::uint32_t seeds[2] = {rubbleCell, waterCell};
     medium.wake_cells(seeds, 2, w, mirror);
 
-    // Сверка множеств: биты теневого битсета == клетки следующего списка.
-    auto shadow_check = [&]() {
-        std::uint32_t cnt[8] = {0};
-        if (!readback(dev, medium.counters_buffer(), sizeof(cnt), cnt))
-            return false;
-        const std::uint32_t sel = medium.list_sel();
-        const std::uint32_t count = cnt[sel != 0 ? 4 : 0];
-        static std::vector<std::uint32_t> list;
-        list.assign(count, 0u);
-        if (count > 0 &&
-            !readback(dev, medium.list_buffer(sel),
-                      count * sizeof(std::uint32_t), list.data()))
-            return false;
-        static std::vector<std::uint32_t> bits;
-        bits.assign(kCells / 32u, 0u);
-        if (!readback(dev, medium.shadow_bits_buffer(), kCells / 8u,
+    // Сверка производства: список-однодневка == CPU-дилатация битсета,
+    // снятого ДО подтика, чей гейт его собрал.
+    std::vector<std::uint32_t> bits(kCells / 32u);
+    std::vector<std::uint8_t> exec(kCells);
+    auto gate_check = [&](std::uint64_t& sub) {
+        // Битсет B на паузе (queue idle) — вход следующего гейта.
+        if (!readback(dev, medium.active_bits_buffer(), kCells / 8u,
                       bits.data()))
             return false;
-        std::uint32_t pop = 0;
-        for (std::uint32_t word : bits)
-            pop += static_cast<std::uint32_t>(__builtin_popcount(word));
-        if (pop != count) return false; // лишние или потерянные биты
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const std::uint32_t ci = list[i];
-            if (((bits[ci >> 5] >> (ci & 31u)) & 1u) == 0u)
-                return false; // клетка списка без бита
-        }
-        return true;
+        // CPU-эталон дилатации «бит мой | 7 „+"-соседей» (тор).
+        auto bit_at = [&](int x, int y, int z) {
+            std::uint32_t ci = static_cast<std::uint32_t>(macro_index(
+                x & (kMacroDim - 1), y & (kMacroDim - 1),
+                z & (kMacroDim - 1)));
+            return (bits[ci >> 5] >> (ci & 31u)) & 1u;
+        };
+        std::uint32_t expected = 0;
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int y = 0; y < kMacroDim; ++y)
+                for (int x = 0; x < kMacroDim; ++x) {
+                    std::uint32_t e = 0;
+                    for (int dz = 0; dz <= 1 && !e; ++dz)
+                        for (int dy = 0; dy <= 1 && !e; ++dy)
+                            for (int dx = 0; dx <= 1 && !e; ++dx)
+                                e |= bit_at(x + dx, y + dy, z + dz);
+                    exec[macro_index(x, y, z)] =
+                        static_cast<std::uint8_t>(e);
+                    expected += e;
+                }
+        // Один подтик (в общей нумерации — закон каденса): его гейт
+        // стартует ровно от B.
+        if (!run_batch(dev, mirror, medium, w, 1, sub)) return false;
+        sub += 1;
+        std::uint32_t cnt[4] = {0};
+        if (!readback(dev, medium.counters_buffer(), sizeof(cnt), cnt))
+            return false;
+        if (cnt[3] != expected) return false; // счёт гейта == эталону
+        static std::vector<std::uint32_t> list;
+        list.assign(cnt[3], 0u);
+        if (cnt[3] > 0 &&
+            !readback(dev, medium.exec_list_buffer(),
+                      cnt[3] * sizeof(std::uint32_t), list.data()))
+            return false;
+        for (std::uint32_t ci : list)
+            if (!exec[ci]) return false; // клетка списка вне дилатации
+        return true; // счёт == |E| и все в E => равенство множеств
     };
 
     std::uint64_t substep = 0;
-    for (int b = 0; b < 14; ++b) {
+    for (int b = 0; b < 6; ++b) {
         CHECK(run_batch(dev, mirror, medium, w, 8, substep));
         substep += 8;
         medium.apply_readback(w, mirror);
-        CHECK(shadow_check());
+        CHECK(gate_check(substep)); // внутри ещё +1 подтик сверки
         // Посреди прогона — инжект по уже осевшему рыхлому (путь
-        // писателя: спящая клетка входит через run_inject).
-        if (b == 9) medium.wake_cells(&rubbleCell, 1, w, mirror);
+        // писателя: спящая клетка входит через run_inject битом).
+        if (b == 3) medium.wake_cells(&rubbleCell, 1, w, mirror);
     }
-    std::printf("[medium_test] shadow-bitset: live %u, сверка 14/14 батчей\n",
+    std::printf("[medium_test] bitset-exec: live %u, сверка 6/6 батчей\n",
                 medium.live_count());
     medium.destroy();
     mirror.destroy();
@@ -2054,7 +2083,7 @@ int main() {
         test_cadence_equivalence(dev);
         test_budget_dispatch(dev);
         test_rubble_settles_fast(dev);
-        test_shadow_bitset(dev);
+        test_bitset_execution(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

@@ -54,7 +54,10 @@ constexpr std::uint32_t kModeMove = 1;
 constexpr std::uint32_t kModeSettle = 2;
 constexpr std::uint32_t kModeInject = 3;
 constexpr std::uint32_t kModePack = 4;
-constexpr std::uint32_t kModeRelease = 5; // снять биты списка до move
+// kModeRelease (5) МЁРТВ инкрементом 2 «Автомат-2»: ping-pong протокол
+// списка умер, членство = бит в uActiveBits.
+constexpr std::uint32_t kModeGate = 6;     // словный гейт битсета
+constexpr std::uint32_t kModeFinalize = 7; // счёт гейта -> 2D indirect
 
 // РАДИУС ФРОНТИРА — вывод (S11), от полного круга доставки страницы:
 // GPU-факт «клетка жива» едет в CPU kRbRegions+1 кадра (кольцо шва),
@@ -135,7 +138,6 @@ void GpuMediumPass::destroy() noexcept {
     pool_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
     listA_.destroy(*dev_);
-    listB_.destroy(*dev_);
     counters_.destroy(*dev_);
     cellAct_.destroy(*dev_);
     shadowBits_.destroy(*dev_);
@@ -148,16 +150,14 @@ void GpuMediumPass::destroy() noexcept {
 
 bool GpuMediumPass::create_buffers() noexcept {
     const VkBufferUsageFlags st = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    // TRANSFER_SRC у списков/счётчиков — гейт-сверка теневого битсета
-    // (test_shadow_bitset) читает их после queue-idle; боевой путь копий
-    // из них не делает.
+    // СПИСОК-ОДНОДНЕВКА (Автомат-2 инкр. 2): пересобирается гейтом каждый
+    // подтик из битсета, вмещает ВСЕ 2М клеток по построению — кап списка
+    // и его переполнение мертвы. TRANSFER_SRC — гейт-сверка битсета
+    // (test_bitset_execution) читает после queue-idle; боевой путь копий
+    // не делает. ListB умер вместе с ping-pong протоколом.
     if (!listA_.create_device_local_empty(
-            *dev_, kLiveCap * sizeof(std::uint32_t),
-            st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "medium-list-a"))
-        return false;
-    if (!listB_.create_device_local_empty(
-            *dev_, kLiveCap * sizeof(std::uint32_t),
-            st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "medium-list-b"))
+            *dev_, kMacroCells * sizeof(std::uint32_t),
+            st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "medium-exec-list"))
         return false;
     if (!counters_.create_device_local_empty(
             *dev_, 16 * sizeof(std::uint32_t),
@@ -247,7 +247,9 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[4] = {mirror.class_buffer(), 0, VK_WHOLE_SIZE};
         bufs[5] = {listA_.buffer, 0, VK_WHOLE_SIZE};
         bufs[6] = {cellAct_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[7] = {listB_.buffer, 0, VK_WHOLE_SIZE};
+        // Биндинг 7 (бывший ListB) мёртв в шейдере — держим валидный
+        // дескриптор до уборки перенумерацией (инкремент 6).
+        bufs[7] = {listA_.buffer, 0, VK_WHOLE_SIZE};
         bufs[8] = {counters_.buffer, 0, VK_WHOLE_SIZE};
         bufs[9] = {appendBuf_[f].buffer, 0, VK_WHOLE_SIZE};
         bufs[10] = {pageBack_.buffer, 0, VK_WHOLE_SIZE};
@@ -637,7 +639,6 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &fb,
                              0, nullptr, 0, nullptr);
         actNeedsClear_ = false;
-        listSel_ = 0;
         rbGen_ = 0;
         for (auto& r : rbRing_) r.valid = false;
     }
@@ -685,20 +686,17 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                            sizeof(push), &push);
         vkCmdDispatch(cmd, groups, 1, 1);
     };
-    auto dispatch_indirect = [&](std::uint32_t mode, std::uint32_t sel,
-                                 std::uint64_t sub) {
+    auto dispatch_indirect = [&](std::uint32_t mode, std::uint64_t sub) {
         push.params[0] = static_cast<std::uint32_t>(sub);
         push.params[1] = mode;
-        push.params[2] = sel;
+        push.params[2] = 0;
         push.params[3] = 0;
         vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(push), &push);
-        vkCmdDispatchIndirect(cmd, counters_.buffer,
-                              sel == 0 ? 0 : 4 * sizeof(std::uint32_t));
+        vkCmdDispatchIndirect(cmd, counters_.buffer, 0);
     };
 
-    // ИНЖЕКТ писателей: клетки кадра — в ТЕКУЩИЙ список (селектор
-    // инвертирован: «next» инжекта = текущий).
+    // ИНЖЕКТ писателей: просто биты в битсет активности (Автомат-2).
     if (!appendPending_.empty() && appendBuf_[slot].mapped) {
         auto* ap = static_cast<std::uint32_t*>(appendBuf_[slot].mapped);
         const auto cnt =
@@ -707,27 +705,26 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         std::memcpy(ap + 1, appendPending_.data(),
                     cnt * sizeof(std::uint32_t));
         appendPending_.clear();
-        dispatch_mode(kModeInject, listSel_ ^ 1u, 0, (cnt + 63) / 64);
+        dispatch_mode(kModeInject, 0, 0, (cnt + 63) / 64);
         barrier();
     }
 
-    // Подтики: prepare (кламп cur, сброс next+квантов) -> move -> settle.
+    // Подтики (Автомат-2 инкр. 2): prepare (сброс счёта) -> словный гейт
+    // (список-однодневка исполнимых из битсета) -> finalize (2D indirect)
+    // -> move -> settle. Release умер вместе с ping-pong протоколом. На
+    // спокойном кадре (n == 0) не диспатчится ничего: pack показывает
+    // список и кванты последнего исполненного подтика.
     for (std::uint32_t s = 0; s < n; ++s) {
-        dispatch_mode(kModePrepare, listSel_, 1, 1);
+        dispatch_mode(kModePrepare, 0, 1, 1);
         barrier();
-        // Release ДО move: бит после него = «уже в следующем списке»,
-        // дубликаты слотов мертвы по построению ([medium_sim.comp]).
-        dispatch_indirect(kModeRelease, listSel_, substepBase + s);
+        dispatch_mode(kModeGate, 0, 0,
+                      static_cast<std::uint32_t>(kMacroCells / 32 / 64));
         barrier();
-        dispatch_indirect(kModeMove, listSel_, substepBase + s);
+        dispatch_mode(kModeFinalize, 0, 0, 1);
         barrier();
-        dispatch_indirect(kModeSettle, listSel_, substepBase + s);
+        dispatch_indirect(kModeMove, substepBase + s);
         barrier();
-        listSel_ ^= 1u;
-    }
-    if (n == 0) {
-        // Спокойный кадр: кламп текущего счётчика всё равно нужен паку.
-        dispatch_mode(kModePrepare, listSel_, 0, 1);
+        dispatch_indirect(kModeSettle, substepBase + s);
         barrier();
     }
 
@@ -740,12 +737,11 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     push.params[0] = static_cast<std::uint32_t>(rbGen_);
     ++rbGen_;
     push.params[1] = kModePack;
-    push.params[2] = listSel_;
+    push.params[2] = 0;
     push.params[3] = region;
     vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(push), &push);
-    vkCmdDispatchIndirect(cmd, counters_.buffer,
-                          listSel_ == 0 ? 0 : 4 * sizeof(std::uint32_t));
+    vkCmdDispatchIndirect(cmd, counters_.buffer, 0);
 
     // Выход: пул/классы/маски читают фрагменты и компьюты; регионы шва —
     // хост (фенсовая дисциплина решает готовность).
