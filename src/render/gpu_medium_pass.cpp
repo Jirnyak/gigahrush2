@@ -420,9 +420,8 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     wokenTotal_ = list[2];
     sleptTotal_ = list[3];
     listTotal_ = list[4];
-    zombieTotal_ = list[9];    // зомби-пуши: тишина >= порога, но вернули
-    faceWakeTotal_ = list[10]; // face-пуши из settle
-    dryLiveTotal_ = list[11];  // голоса «живая с нулём квантов»
+    activeTotal_ = list[9];   // активные биты (зомби-класс мёртв инкр. 2)
+    dryLiveTotal_ = list[11]; // голоса «живая с нулём квантов»
     lastCount_ = list[4];
     lastQuanta_ = list[1];
     fadeTotal_ = list[7];
@@ -576,11 +575,10 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                 ++zHist[(ci / (kMacroDim * kMacroDim)) & (kMacroDim - 1)];
             }
             std::fprintf(stderr,
-                         "[medium-dbg] live window %zu (list %u): dry %u "
-                         "liq %u gas %u mixed %u | zombie %u face %u "
-                         "dry-votes %u (накопительные)\n",
-                         liveCis.size(), lastCount_, dry, liq, gas, mixed,
-                         zombieTotal_, faceWakeTotal_, dryLiveTotal_);
+                         "[medium-dbg] live window %zu (list %u, active %u): "
+                         "dry %u liq %u gas %u mixed %u | dry-votes %u\n",
+                         liveCis.size(), lastCount_, activeTotal_, dry, liq,
+                         gas, mixed, dryLiveTotal_);
             for (int pass = 0; pass < 5; ++pass) {
                 std::uint32_t bestZ = 0, bestN = 0;
                 for (std::uint32_t z = 0; z < kMacroDim; ++z)

@@ -173,16 +173,22 @@ public:
     // ≈ quanta × ceil(live/budget)). Потребители — только диагностика.
     std::uint32_t live_quanta() const noexcept { return lastQuanta_; }
 
-    // БЮДЖЕТНЫЙ ДИСПАТЧ (big-judge.md D): за подтик исполняется не более
-    // ~budget слотов live-списка нечётно-страйдовой ротацией (изотропия по
-    // фазам гарантирована — [medium_sim.comp] slot_budgeted). 0 = без
-    // бюджета. Дефолт = kRbSlotCap: live в пределах окна шва живёт полным
-    // темпом, ровно как до бюджета; перекрытие GIGA_MEDIUM_BUDGET — A/B-
-    // ручка перф-кривой (как GIGA_LIGHT_BUDGET). Тесты зовут set_budget.
+    // БЮДЖЕТНЫЙ ДИСПАТЧ: клетка исполняется с p = budget/активные
+    // (стохастический закон, [medium_sim.comp] cell_budgeted; знаменатель —
+    // АКТИВНЫЕ биты, не исполнимые с гало — гало душило этаж втрое жирнее
+    // закона). 0 = без бюджета. ДЕФОЛТ 2^17 — решение владельца 2026-09-02
+    // («бюджетов не жалко ради блага», ближайшая к 100k степень двойки
+    // сверху): из стенда bitmask_stand 2М исполнений ≈ 7.3 мс/подтик на
+    // M2 Pro => 131072 ≈ 0.46 мс/подтик ≈ 3.7 мс/кадр при ПОЛНОМ насыщении
+    // — потолок закона «fps не зависит от live»; обычный этаж-водопад
+    // (актив ~10-15k) живёт p=1, замедленная съёмка остаётся только на
+    // катастрофах >131k активных. GIGA_MEDIUM_BUDGET — A/B-ручка.
+    static constexpr std::uint32_t kBudgetDefault = 131072u;
     void set_budget(std::uint32_t b) noexcept { budget_ = b; }
     std::uint32_t budget() const noexcept { return budget_; }
     std::uint32_t woken_total() const noexcept { return wokenTotal_; }
     std::uint32_t slept_total() const noexcept { return sleptTotal_; }
+    std::uint32_t active_count() const noexcept { return activeTotal_; }
     bool overflowed() const noexcept { return overflow_; }
     std::uint32_t lazy_total() const noexcept { return lazyTotal_; }
     std::uint32_t list_total() const noexcept { return listTotal_; }
@@ -241,7 +247,7 @@ private:
     std::vector<std::uint64_t> frontierDone_ =
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
-    std::uint32_t budget_ = kRbSlotCap; // бюджет диспатча (см. set_budget)
+    std::uint32_t budget_ = kBudgetDefault; // бюджет диспатча (см. set_budget)
 
     // Обратный шов (фенсовое кольцо kRbRegions): страницы/маски/СПИСОК
     // регионов пишет pack-пасс GPU — CPU только читает готовые.
@@ -266,12 +272,10 @@ private:
     std::unordered_set<std::uint32_t> seamSeen_, seamLazy_; // GIGA_POUR
     std::uint32_t listTotal_ = 0;   // честный размер списка до окна пака
     std::uint32_t fadeTotal_ = 0;   // истаявшие одиночки (закон 2026-08-25)
-    // Зомби-замер §63 (накопительные, как woken/slept): пуш клетки, чья
-    // тишина уже доросла до порога сна / face-пуш из settle / голос «живая
-    // при нуле подвижных квантов». Их соотношение называет, кто держит
-    // сухой шлейф бодрым — печать в [medium-dbg].
-    std::uint32_t zombieTotal_ = 0;
-    std::uint32_t faceWakeTotal_ = 0;
+    // АКТИВНЫЕ биты на момент пака (слот 9 заголовка; зомби-класс мёртв
+    // инкрементом 2): отношение live/active = цена гало «+7», active —
+    // честный знаменатель p бюджета. Печать в [medium]/[medium-dbg].
+    std::uint32_t activeTotal_ = 0;
     std::uint32_t dryLiveTotal_ = 0;
 
 public:

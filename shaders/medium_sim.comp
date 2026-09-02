@@ -70,6 +70,8 @@ layout(std430, binding = 6) buffer ActBuf            { uint uCellAct[]; }; // 1 
 // binding 7 (ListB) МЁРТВ инкрементом 2 — слот занят listA_ до уборки.
 // Счётчики: [0..2] = indirect-команда исполнения (x,y,z — 2D-складка
 // FINALIZE, лимит оси 65535), [3] = счёт исполнимых клеток от гейта,
+// [4] = БЕГУЩИЙ счёт активных битов (переходы wake/sleep), [5] = его
+// снапшот от prepare — знаменатель бюджета подтика (детерминизм),
 // [8] = кванты подвижной материи (лог), [9] = мёртв (кап списка умер),
 // [10] = woken, [11] = slept — накопительные, по переходам бита.
 layout(std430, binding = 8) buffer Counters          { uint uCnt[];     };
@@ -122,16 +124,25 @@ const uint kSleepSubsteps = GIGA_MEDIUM_SLEEP;
 // Пробуждение = БИТ (Автомат-2 инкр. 2): идемпотентный atomicOr — писатель
 // не думает «кого будить» и не борется за слоты; очередь, кап и откат
 // умерли по построению. woken/slept (uCnt[10]/[11]) считают ПЕРЕХОДЫ бита.
+// uCnt[4] — БЕГУЩИЙ счёт активных битов (плюс/минус на переходах, план
+// §1.1): он — знаменатель бюджета (исполнимые с гало ×2-3 душили этаж
+// втрое жирнее закона — плейтест владельца «сразу не бодро»).
 void wake_next(uint ci) {
     uint m = 1u << (ci & 31u);
     uint old = atomicOr(uActiveBits[ci >> 5u], m);
-    if ((old & m) == 0u) atomicAdd(uCnt[10], 1u);
+    if ((old & m) == 0u) {
+        atomicAdd(uCnt[10], 1u);
+        atomicAdd(uCnt[4], 1u);
+    }
 }
 
 void sleep_cell(uint ci) {
     uint m = 1u << (ci & 31u);
     uint old = atomicAnd(uActiveBits[ci >> 5u], ~m);
-    if ((old & m) != 0u) atomicAdd(uCnt[11], 1u);
+    if ((old & m) != 0u) {
+        atomicAdd(uCnt[11], 1u);
+        atomicAdd(uCnt[4], 0xFFFFFFFFu); // −1: переход 1->0
+    }
 }
 
 // БЮДЖЕТНЫЙ ДИСПАТЧ (big-judge.md D, закон владельца 2026-08-30): за подтик
@@ -160,7 +171,10 @@ void sleep_cell(uint ci) {
 bool cell_budgeted(uint ci) {
     uint budget = uint(pc.downStep.w);
     if (budget == 0u) return true;
-    uint total = uCnt[3]; // счёт исполнимых от гейта этого подтика
+    // Знаменатель — АКТИВНЫЕ биты (план §1.1), снапшот prepare (uCnt[5]):
+    // бегущий uCnt[4] мутирует прямо в move/settle — чтение его здесь дало
+    // бы гонку и недетерминизм расписания.
+    uint total = uCnt[5];
     if (total <= budget) return true;
     // Финализатор (murmur3-класс) над (клетка, подтик): равномерность по
     // ОБОИМ входам — Кнут один размазывает клетки, но не пару.
@@ -451,7 +465,14 @@ void run_settle(uint slot, uint threadId) {
             return;
         }
         uint fq = (fact & kActQuietMask) >> kActQuietShift;
-        if (fq == 0u) return; // заморожена в движении — часы стоят
+        // ЗАЩИТА ФАЗ (плейтест владельца «застывшие субвоксели сразу после
+        // карва»): тишина зрела только с ПОЛНОГО цикла фаз Марголуса (8 =
+        // все комбинации чётностей осей). Одно тихое исполнение не в свою
+        // фазу — не приговор: атом нижнего слоя ходит только в нечётные
+        // фазы, и замороженные тики досуживали его до сна, пока он не
+        // успел сходить (~7% фронта карва замерзало при p=0.3). До 8 —
+        // часы только у исполненных.
+        if (fq < 8u) return;
         fq = min(fq + 1u, 127u);
         atomicAnd(uCellAct[ci], ~kActQuietMask);
         atomicOr(uCellAct[ci], fq << kActQuietShift);
@@ -546,6 +567,7 @@ void run_prepare() {
     uCnt[1] = 1u;
     uCnt[2] = 1u;
     uCnt[3] = 0u;
+    uCnt[5] = uCnt[4]; // снапшот активных — знаменатель бюджета подтика
     uCnt[8] = 0u;
 }
 
@@ -642,9 +664,10 @@ void run_pack(uint slot, uint threadId) {
         // отставал на 3-45 кадров, и apply читал регион с чужим/старым
         // паком — шов возил до-карвное состояние и воскрешал атомы.
         uRbList[listBase + 8u] = pc.params.x;
-        // Зомби- и face-пуши МЕРТВЫ инкрементом 2 (класс убит правилом
-        // «+7» гейта) — слоты 9/10 несут нули до уборки заголовка.
-        uRbList[listBase + 9u] = uCnt[13];
+        // Слот 9 (бывшие зомби-пуши — класс мёртв) несёт СЧЁТ АКТИВНЫХ
+        // битов: CPU печатает active рядом с exec (live) — их отношение =
+        // цена гало и честный знаменатель p. Слот 10 — ноль до уборки.
+        uRbList[listBase + 9u] = uCnt[4];
         uRbList[listBase + 10u] = uCnt[14];
         uRbList[listBase + 11u] = uCnt[15]; // живые с нулём квантов, голосов
     }

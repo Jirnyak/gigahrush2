@@ -8997,10 +8997,11 @@ int main(int argc, char** argv) {
                     mediumLastLog = simTick;
                     std::fprintf(
                         stderr,
-                        "[medium] live %u cells, %u quanta (%.0f l), woken %u, "
+                        "[medium] live %u cells (active %u), %u quanta (%.0f l), woken %u, "
                         "slept %u, lazy %u, listTot %u, fade %u, skip %u, substeps %llu | cpu ms: apply "
                         "%.2f rec %.2f%s\n",
-                        mediumPass.live_count(), mediumPass.live_quanta(),
+                        mediumPass.live_count(), mediumPass.active_count(),
+                        mediumPass.live_quanta(),
                         static_cast<double>(mediumPass.live_quanta()) * 15.6,
                         mediumPass.woken_total(), mediumPass.slept_total(),
                         mediumPass.lazy_total(), mediumPass.list_total(),
