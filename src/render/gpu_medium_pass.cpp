@@ -138,6 +138,7 @@ void GpuMediumPass::destroy() noexcept {
     listB_.destroy(*dev_);
     counters_.destroy(*dev_);
     cellAct_.destroy(*dev_);
+    shadowBits_.destroy(*dev_);
     for (auto& b : appendBuf_) b.destroy(*dev_);
     pageBack_.destroy(*dev_);
     maskBack_.destroy(*dev_);
@@ -147,17 +148,31 @@ void GpuMediumPass::destroy() noexcept {
 
 bool GpuMediumPass::create_buffers() noexcept {
     const VkBufferUsageFlags st = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    // TRANSFER_SRC у списков/счётчиков — гейт-сверка теневого битсета
+    // (test_shadow_bitset) читает их после queue-idle; боевой путь копий
+    // из них не делает.
     if (!listA_.create_device_local_empty(
-            *dev_, kLiveCap * sizeof(std::uint32_t), st, "medium-list-a"))
+            *dev_, kLiveCap * sizeof(std::uint32_t),
+            st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "medium-list-a"))
         return false;
     if (!listB_.create_device_local_empty(
-            *dev_, kLiveCap * sizeof(std::uint32_t), st, "medium-list-b"))
+            *dev_, kLiveCap * sizeof(std::uint32_t),
+            st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "medium-list-b"))
         return false;
     if (!counters_.create_device_local_empty(
             *dev_, 16 * sizeof(std::uint32_t),
             st | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             "medium-counters"))
+        return false;
+    // ТЕНЕВОЙ БИТСЕТ (Автомат-2 инкр. 1): 1 бит/клетку = 256 КиБ, точное
+    // зеркало kActInList (см. medium_sim.comp shadow_or/shadow_and).
+    if (!shadowBits_.create_device_local_empty(
+            *dev_, kMacroCells / 8,
+            st | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            "medium-shadow-bits"))
         return false;
     if (!cellAct_.create_device_local_empty(
             *dev_, kMacroCells * sizeof(std::uint32_t),
@@ -189,7 +204,7 @@ bool GpuMediumPass::create_buffers() noexcept {
 
 bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
     VkDevice d = dev_->device;
-    constexpr std::uint32_t kBindings = 13;
+    constexpr std::uint32_t kBindings = 14;
 
     VkDescriptorSetLayoutBinding bindings[kBindings]{};
     for (std::uint32_t b = 0; b < kBindings; ++b) {
@@ -238,6 +253,7 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[10] = {pageBack_.buffer, 0, VK_WHOLE_SIZE};
         bufs[11] = {maskBack_.buffer, 0, VK_WHOLE_SIZE};
         bufs[12] = {listBack_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[13] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[kBindings]{};
         for (std::uint32_t b = 0; b < kBindings; ++b) {
             writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -612,6 +628,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     if (actNeedsClear_) {
         vkCmdFillBuffer(cmd, cellAct_.buffer, 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, counters_.buffer, 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(cmd, shadowBits_.buffer, 0, VK_WHOLE_SIZE, 0u);
         VkMemoryBarrier fb{};
         fb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         fb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;

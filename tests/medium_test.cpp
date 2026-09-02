@@ -1571,6 +1571,90 @@ void test_rubble_settles_fast(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== ИНКРЕМЕНТ 1 «АВТОМАТ-2»: теневой битсет (medium-bitmask.md) ==========
+// uShadowBits — точное зеркало бита kActInList: каждый Or/And списка
+// дублируется тем же потоком в битсет. Гейт: после КАЖДОГО батча (queue
+// idle) множество битов == множеству следующего списка — на боевой
+// конкуренции всех событий (инжект, move-пробуждения, face-пуши, release,
+// сон, откат по капу). Сцена несёт оба класса материи (вода растекается и
+// спит нутром, рыхлое осыпается и спит целиком) + инжект спящей клетки
+// посреди прогона. Расхождение в один бит = красный: это фундамент, на
+// который инкремент 2 переводит исполнение.
+void test_shadow_bitset(gpu::VulkanDevice& dev) {
+    constexpr std::uint32_t kCells = static_cast<std::uint32_t>(kMacroCells);
+    static World w;
+    // Плита-бассейн: борта держат воду, рыхлое оседает на плиту.
+    for (int x = 40; x < 50; ++x)
+        for (int y = 40; y < 50; ++y)
+            w.grid().fill_cell(x, y, 30, kMatConcrete);
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    const std::uint32_t rubbleCell =
+        static_cast<std::uint32_t>(macro_index(42, 42, 32));
+    const std::uint32_t waterCell =
+        static_cast<std::uint32_t>(macro_index(46, 46, 32));
+    CellType* rp = f.ensure_page(rubbleCell, w.grid().types()[rubbleCell]);
+    CellType* wp = f.ensure_page(waterCell, w.grid().types()[waterCell]);
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                rp[sub_bit(sx, sy, sz)] = kMatRubble;
+                wp[sub_bit(sx, sy, sz)] = kMatWater;
+            }
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    std::uint32_t seeds[2] = {rubbleCell, waterCell};
+    medium.wake_cells(seeds, 2, w, mirror);
+
+    // Сверка множеств: биты теневого битсета == клетки следующего списка.
+    auto shadow_check = [&]() {
+        std::uint32_t cnt[8] = {0};
+        if (!readback(dev, medium.counters_buffer(), sizeof(cnt), cnt))
+            return false;
+        const std::uint32_t sel = medium.list_sel();
+        const std::uint32_t count = cnt[sel != 0 ? 4 : 0];
+        static std::vector<std::uint32_t> list;
+        list.assign(count, 0u);
+        if (count > 0 &&
+            !readback(dev, medium.list_buffer(sel),
+                      count * sizeof(std::uint32_t), list.data()))
+            return false;
+        static std::vector<std::uint32_t> bits;
+        bits.assign(kCells / 32u, 0u);
+        if (!readback(dev, medium.shadow_bits_buffer(), kCells / 8u,
+                      bits.data()))
+            return false;
+        std::uint32_t pop = 0;
+        for (std::uint32_t word : bits)
+            pop += static_cast<std::uint32_t>(__builtin_popcount(word));
+        if (pop != count) return false; // лишние или потерянные биты
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::uint32_t ci = list[i];
+            if (((bits[ci >> 5] >> (ci & 31u)) & 1u) == 0u)
+                return false; // клетка списка без бита
+        }
+        return true;
+    };
+
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 14; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+        CHECK(shadow_check());
+        // Посреди прогона — инжект по уже осевшему рыхлому (путь
+        // писателя: спящая клетка входит через run_inject).
+        if (b == 9) medium.wake_cells(&rubbleCell, 1, w, mirror);
+    }
+    std::printf("[medium_test] shadow-bitset: live %u, сверка 14/14 батчей\n",
+                medium.live_count());
+    medium.destroy();
+    mirror.destroy();
+}
+
 // ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
 // Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
 // Формы плотного гейта (shaders/bitmask_stand.comp):
@@ -1970,6 +2054,7 @@ int main() {
         test_cadence_equivalence(dev);
         test_budget_dispatch(dev);
         test_rubble_settles_fast(dev);
+        test_shadow_bitset(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

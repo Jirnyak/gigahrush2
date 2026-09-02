@@ -198,6 +198,18 @@ public:
     bool seam_seen(std::uint32_t ci) const { return seamSeen_.count(ci) != 0; }
     bool seam_lazy(std::uint32_t ci) const { return seamLazy_.count(ci) != 0; }
 
+    // ТЕНЕВОЙ БИТСЕТ (эпик «Автомат-2» инкремент 1, medium-bitmask.md):
+    // точное зеркало бита kActInList в отдельном битсете 256 КиБ — гейт
+    // test_shadow_bitset после queue-idle требует «множество битов ==
+    // множеству следующего списка». Аксессоры — только для этой сверки.
+    VkBuffer shadow_bits_buffer() const noexcept { return shadowBits_.buffer; }
+    VkBuffer list_buffer(std::uint32_t sel) const noexcept {
+        return sel != 0 ? listB_.buffer : listA_.buffer;
+    }
+    VkBuffer counters_buffer() const noexcept { return counters_.buffer; }
+    // Чей список будет ТЕКУЩИМ на следующем подтике (его счёт — uCnt[sel*4]).
+    std::uint32_t list_sel() const noexcept { return listSel_; }
+
 private:
     bool create_buffers() noexcept;
     bool create_descriptors(const VoxelMirror& mirror) noexcept;
@@ -220,6 +232,7 @@ private:
     VulkanBuffer listB_;
     VulkanBuffer counters_; // 16 u32; usage INDIRECT — диспатч от них
     VulkanBuffer cellAct_;  // device-local: uint32 x kMacroCells (8 МиБ)
+    VulkanBuffer shadowBits_; // теневой битсет kActInList (256 КиБ, инкр. 1)
     // Инжект писателей: слот на кадр в полёте.
     static constexpr std::uint32_t kAppendCap = 8192u;
     VulkanBuffer appendBuf_[kMaxFramesInFlight];

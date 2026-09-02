@@ -70,6 +70,13 @@ layout(std430, binding = 9) readonly buffer AppendBuf { uint uAppend[]; }; // [0
 layout(std430, binding = 10) writeonly buffer RbPages { uint uRbPages[]; }; // 256 u32/слот
 layout(std430, binding = 11) writeonly buffer RbMasks { uint uRbMasks[]; }; // 16 u32/слот
 layout(std430, binding = 12) writeonly buffer RbList  { uint uRbList[];  }; // [0]=count,[1]=quanta,[2]=woken,[3]=slept, дальше ci
+// ТЕНЕВОЙ БИТСЕТ АКТИВНОСТИ (эпик «Автомат-2» инкремент 1, medium-bitmask.md):
+// 1 бит/клетку, ТОЧНОЕ зеркало бита kActInList — каждый atomicOr/And бита
+// списка дублируется тем же потоком сюда. Валидация модели «пробуждение =
+// бит» на боевой конкуренции: после сабмита множество битов ОБЯЗАНО
+// равняться множеству следующего списка (гейт test_shadow_bitset).
+// Инкремент 2 переводит исполнение с списка на этот битсет.
+layout(std430, binding = 13) buffer ShadowBits { uint uShadowBits[]; };
 
 layout(push_constant) uniform Push {
     ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
@@ -111,9 +118,18 @@ void list_next_store(uint i, uint ci) {
 // Возвращает «слот лёг» — settle этим атрибутирует face-пуши (uCnt[14]).
 // uCnt[13] — «зомби»: клетка, чья тишина УЖЕ доросла до порога сна, но её
 // вернул внешний пуш. Замер корня §63: закон сна перекрывается извне.
+// Зеркальные операции теневого битсета — ВСЕГДА рядом со своей операцией
+// над kActInList тем же потоком (только так множества совпадают при любом
+// чередовании; читателей в шейдере нет — сверка читает после queue-idle).
+void shadow_or(uint ci) { atomicOr(uShadowBits[ci >> 5u], 1u << (ci & 31u)); }
+void shadow_and(uint ci) {
+    atomicAnd(uShadowBits[ci >> 5u], ~(1u << (ci & 31u)));
+}
+
 bool wake_next(uint ci) {
     uint old = atomicOr(uCellAct[ci], kActInList);
     if ((old & kActInList) != 0u) return false;
+    shadow_or(ci); // теневой битсет: зеркало перехода 0->1
     uint idx = atomicAdd(uCnt[next_x_index()], 1u);
     if (idx < kListCap) {
         list_next_store(idx, ci);
@@ -126,6 +142,7 @@ bool wake_next(uint ci) {
         // для пробуждений навсегда (сухие клетки-квадраты со скрина
         // владельца 2026-08-25).
         atomicAnd(uCellAct[ci], ~kActInList);
+        shadow_and(ci); // зеркало отката
         atomicOr(uCnt[9], 1u);
     }
     return false;
@@ -572,7 +589,9 @@ void run_prepare() {
 // этого идемпотентны (одинаковые роллы — одинаковый результат), но каждый
 // atomicAdd — нет: счётчик истаиваний ловил +1 (тест массы бассейна).
 void run_release(uint slot) {
-    atomicAnd(uCellAct[list_cur(slot)], ~kActInList);
+    uint ci = list_cur(slot);
+    atomicAnd(uCellAct[ci], ~kActInList);
+    shadow_and(ci); // теневой битсет: зеркало релиза
 }
 
 // INJECT: писатели CPU (карв, сфера, наливы) — клетки в ТЕКУЩИЙ список.
