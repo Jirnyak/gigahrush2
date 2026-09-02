@@ -224,7 +224,7 @@ bool GpuMediumPass::create_buffers() noexcept {
 
 bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
     VkDevice d = dev_->device;
-    constexpr std::uint32_t kBindings = 14;
+    constexpr std::uint32_t kBindings = 13;
 
     VkDescriptorSetLayoutBinding bindings[kBindings]{};
     for (std::uint32_t b = 0; b < kBindings; ++b) {
@@ -267,15 +267,12 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[4] = {mirror.class_buffer(), 0, VK_WHOLE_SIZE};
         bufs[5] = {listA_.buffer, 0, VK_WHOLE_SIZE};
         bufs[6] = {cellAct_.buffer, 0, VK_WHOLE_SIZE};
-        // Биндинг 7 (бывший ListB) мёртв в шейдере — держим валидный
-        // дескриптор до уборки перенумерацией (инкремент 6).
-        bufs[7] = {listA_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[8] = {counters_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[9] = {appendBuf_[f].buffer, 0, VK_WHOLE_SIZE};
-        bufs[10] = {pageBack_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[11] = {maskBack_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[12] = {listBack_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[13] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[7] = {counters_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[8] = {appendBuf_[f].buffer, 0, VK_WHOLE_SIZE};
+        bufs[9] = {pageBack_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[10] = {maskBack_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[11] = {listBack_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[12] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[kBindings]{};
         for (std::uint32_t b = 0; b < kBindings; ++b) {
             writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -691,7 +688,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
 
     MediumPush push{};
     // downStep.w = бюджет диспатча (big-judge.md D): читают только
-    // move/settle (slot_budgeted), остальным модам поле безразлично.
+    // move/settle (cell_budgeted), остальным модам поле безразлично.
     push.downStep = ivec4{downStep.x, downStep.y, downStep.z,
                           static_cast<std::int32_t>(budget_)};
     auto dispatch_mode = [&](std::uint32_t mode, std::uint32_t sel,

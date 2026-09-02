@@ -67,25 +67,23 @@ layout(std430, binding = 4) buffer ClassBuf          { uint uClass[];   }; // 4 
 // зомби-жители live-списка (66% списка на сейве владельца).
 layout(std430, binding = 5) buffer ListA             { uint uListA[];   };
 layout(std430, binding = 6) buffer ActBuf            { uint uCellAct[]; }; // 1 uint/клетку (device)
-// binding 7 (ListB) МЁРТВ инкрементом 2 — слот занят listA_ до уборки.
 // Счётчики: [0..2] = indirect-команда исполнения (x,y,z — 2D-складка
 // FINALIZE, лимит оси 65535), [3] = счёт исполнимых клеток от гейта,
 // [4] = БЕГУЩИЙ счёт активных битов (переходы wake/sleep), [5] = его
 // снапшот от prepare — знаменатель бюджета подтика (детерминизм),
-// [8] = кванты подвижной материи (лог), [9] = мёртв (кап списка умер),
-// [10] = woken, [11] = slept — накопительные, по переходам бита.
-layout(std430, binding = 8) buffer Counters          { uint uCnt[];     };
-layout(std430, binding = 9) readonly buffer AppendBuf { uint uAppend[]; }; // [0]=счёт, дальше клетки
+// [8] = кванты подвижной материи (лог), [10] = woken, [11] = slept —
+// накопительные по переходам бита, [12] = истаявшие, [15] = сухие-живые.
+layout(std430, binding = 7) buffer Counters          { uint uCnt[];     };
+layout(std430, binding = 8) readonly buffer AppendBuf { uint uAppend[]; }; // [0]=счёт, дальше клетки
 // Обратный шов, host-visible регионы кольца: pack-пасс пишет сам.
-layout(std430, binding = 10) writeonly buffer RbPages { uint uRbPages[]; }; // 256 u32/слот
-layout(std430, binding = 11) writeonly buffer RbMasks { uint uRbMasks[]; }; // 16 u32/слот
-layout(std430, binding = 12) writeonly buffer RbList  { uint uRbList[];  }; // [0]=count,[1]=quanta,[2]=woken,[3]=slept, дальше ci
+layout(std430, binding = 9) writeonly buffer RbPages  { uint uRbPages[]; }; // 256 u32/слот
+layout(std430, binding = 10) writeonly buffer RbMasks { uint uRbMasks[]; }; // 16 u32/слот
+layout(std430, binding = 11) writeonly buffer RbList  { uint uRbList[];  }; // [0]=count,[1]=quanta,[2]=woken,[3]=slept, дальше ci
 // БИТСЕТ АКТИВНОСТИ (эпик «Автомат-2», medium-bitmask.md) — нервная
 // система автомата: 1 бит/клетку = 256 КиБ. Пробуждение = atomicOr бита
 // (идемпотентно, писатель не думает «кого будить»), сон = atomicAnd.
-// Исполнение каждый подтик собирает словный гейт (run_gate32) — теневой
-// режим инкремента 1 стал боевым в инкременте 2.
-layout(std430, binding = 13) buffer ActiveBits { uint uActiveBits[]; };
+// Исполнение каждый подтик собирает словный гейт (run_gate32).
+layout(std430, binding = 12) buffer ActiveBits { uint uActiveBits[]; };
 
 layout(push_constant) uniform Push {
     ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
@@ -664,11 +662,11 @@ void run_pack(uint slot, uint threadId) {
         // отставал на 3-45 кадров, и apply читал регион с чужим/старым
         // паком — шов возил до-карвное состояние и воскрешал атомы.
         uRbList[listBase + 8u] = pc.params.x;
-        // Слот 9 (бывшие зомби-пуши — класс мёртв) несёт СЧЁТ АКТИВНЫХ
-        // битов: CPU печатает active рядом с exec (live) — их отношение =
-        // цена гало и честный знаменатель p. Слот 10 — ноль до уборки.
+        // Слот 9 — СЧЁТ АКТИВНЫХ битов: CPU печатает active рядом с exec
+        // (live), их отношение = цена гало и честный знаменатель p.
+        // Слот 10 свободен (зомби/face-класс умер инкрементом 2).
         uRbList[listBase + 9u] = uCnt[4];
-        uRbList[listBase + 10u] = uCnt[14];
+        uRbList[listBase + 10u] = 0u;
         uRbList[listBase + 11u] = uCnt[15]; // живые с нулём квантов, голосов
     }
     if (slot >= count) return;

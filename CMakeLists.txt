@@ -311,14 +311,11 @@ if(NOT _giga_lgrid_h MATCHES "kFullResLights = ([0-9]+)")
 endif()
 set(_giga_fullres_k ${CMAKE_MATCH_1})
 # Капы петли мир-автомата — из gpu_medium_pass.h тем же законом (аудит
-# 2026-08-25, К1-12: medium_sim.comp перепечатывал 131072/8192 числами с
-# комментарием «зеркало» — синхронность держалась верой, Rule 9 эти
-# литералы не ловил; прецедент дрейфа — prop.frag 76.8 против 64).
+# 2026-08-25, К1-12: medium_sim.comp перепечатывал числа с комментарием
+# «зеркало» — синхронность держалась верой; прецедент дрейфа — prop.frag
+# 76.8 против 64). kLiveCap/GIGA_MEDIUM_LIST_CAP УМЕРЛИ уборкой
+# «Автомат-2» (кап списка невозможен по построению — однодневка на 2М).
 file(READ ${CMAKE_SOURCE_DIR}/src/render/gpu_medium_pass.h _giga_medium_h)
-if(NOT _giga_medium_h MATCHES "kLiveCap = ([0-9]+)u")
-    message(FATAL_ERROR "cannot parse kLiveCap out of src/render/gpu_medium_pass.h.")
-endif()
-set(_giga_medium_live_cap ${CMAKE_MATCH_1})
 if(NOT _giga_medium_h MATCHES "kRbSlotCap = ([0-9]+)")
     message(FATAL_ERROR "cannot parse kRbSlotCap out of src/render/gpu_medium_pass.h.")
 endif()
@@ -330,7 +327,6 @@ if(NOT _giga_medium_h MATCHES "kSleepSubsteps = ([0-9]+)u")
 endif()
 set(_giga_medium_sleep ${CMAKE_MATCH_1})
 set(_giga_shader_defs
-    -DGIGA_MEDIUM_LIST_CAP=${_giga_medium_live_cap}
     -DGIGA_MEDIUM_RB_SLOTS=${_giga_medium_rb_slots}
     -DGIGA_MEDIUM_SLEEP=${_giga_medium_sleep}u
     -DGIGA_MACRO_DIM=${_giga_macro_dim}
