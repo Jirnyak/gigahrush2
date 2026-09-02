@@ -8933,6 +8933,11 @@ int main(int argc, char** argv) {
             }
 
             if (!stainDirty.empty()) {
+                // В7 (Автомат-2 инкр. 4): грязь — писатель, а запись
+                // будит; прежде страница откатывалась зеркалом БЕЗ
+                // пробуждения — GPU-состояние клетки затиралось молча.
+                mediumPass.wake_cells(stainDirty.data(), stainDirty.size(),
+                                      stack.layer(activeLayer), voxelMirror);
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }

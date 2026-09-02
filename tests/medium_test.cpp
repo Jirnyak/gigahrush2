@@ -1847,6 +1847,77 @@ void test_sleep_under_budget(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== ИНКРЕМЕНТ 4 «АВТОМАТ-2»: фильтры будильников (В2) ====================
+// ПОЛНОМАСОЧНАЯ клетка РЫХЛОГО видима будильникам: прежний фильтр «full()
+// = статика» писался до подвижного рабла и делал клетку, целиком забитую
+// рыхлым (маска полна, flow 1.0), невидимой ВСЕМ будильникам — её нельзя
+// было ни разбудить, ни опейджить (вечный монолит, разбиваемый только
+// прямым карвом). Стенд: полнорабловая клетка в воздухе над плитой →
+// wake_cells (путь писателя) → рыхлое ОБЯЗАНО высыпаться и доспать. Три
+// ноги фильтра (wake_cells / touch дренажа / open_frontier) — мутации
+// поштучно, каждая оставляет монолит висеть.
+void test_full_rubble_wakes(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 70; x < 76; ++x)
+        for (int y = 70; y < 76; ++y)
+            w.grid().fill_cell(x, y, 29, kMatConcrete);
+    // Клетка ЦЕЛИКОМ из рабла (uniform-тип, маска полна, страницы НЕТ) —
+    // в воздухе, зазор в клетку до плиты.
+    w.grid().fill_cell(72, 72, 31, kMatRubble);
+    const auto monoCell = static_cast<std::uint32_t>(macro_index(72, 72, 31));
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&monoCell, 1, w, mirror);
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 14; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    // Монолит высыпался: в исходной клетке рыхлого не осталось (или
+    // остался осевший низ), НИЖЕ появилось, всё на опоре, куча доспала.
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    std::uint32_t inMono = 0, below = 0, total = 0;
+    for (int cz = 29; cz <= 32; ++cz)
+        for (int cx = 70; cx < 76; ++cx)
+            for (int cy = 70; cy < 76; ++cy) {
+                const auto ci =
+                    static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+                const CellType* p = f.page(ci);
+                if (!p) {
+                    // uniform-клетка: рыхлый монолит без страницы
+                    if (w.grid().types()[ci] == kMatRubble &&
+                        w.grid().masks()[ci].full()) {
+                        total += static_cast<std::uint32_t>(kSubVoxels);
+                        if (ci == monoCell)
+                            inMono += static_cast<std::uint32_t>(kSubVoxels);
+                    }
+                    continue;
+                }
+                for (int bit = 0; bit < kSubVoxels; ++bit)
+                    if (p[bit] == kMatRubble) {
+                        ++total;
+                        if (ci == monoCell) ++inMono;
+                        if (cz == 30) ++below;
+                    }
+            }
+    std::printf("[medium_test] full-rubble: total %u, в монолите %u, ниже "
+                "%u, live %u, fade %u\n",
+                total, inMono, below, medium.live_count(),
+                medium.fade_total());
+    CHECK(below > 0);            // рыхлое ВЫСЫПАЛОСЬ вниз
+    CHECK(inMono < 512);         // монолит перестал быть монолитом
+    CHECK(total + medium.fade_total() == 512); // масса точна
+    CHECK(medium.live_count() == 0);           // и доспал (зомби-ноль)
+    medium.destroy();
+    mirror.destroy();
+}
+
 // ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
 // Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
 // Формы плотного гейта (shaders/bitmask_stand.comp):
@@ -2249,6 +2320,7 @@ int main() {
         test_bitset_execution(dev);
         test_recarve_no_floating(dev);
         test_sleep_under_budget(dev);
+        test_full_rubble_wakes(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

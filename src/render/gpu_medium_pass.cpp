@@ -12,6 +12,7 @@
 #include "render/voxel_mirror.h"
 #include "world/destruct.h" // kSubMaterialName, materialize_sub_page
 #include "world/macro_grid.h"
+#include "world/material_props.h" // material_is_medium — фильтр будильников
 #include "world/medium.h"   // medium_recount — агрегаты S16.4 на шве
 #include "world/subfield.h"
 #include "world/world.h"
@@ -72,6 +73,21 @@ constexpr std::uint32_t kModeFinalize = 7; // счёт гейта -> 2D indirect
 // функцией номера подтика (пин: test_cadence_equivalence).
 constexpr int kFrontierRadius = 6;
 
+// Полномасочная клетка СТАТИЧНОЙ материи: будить нечего и страница не
+// нужна — входа материи нет. Прежний фильтр «full() = статика» писался ДО
+// подвижного рабла: полномасочный рыхлый двойник (rubble, flow 1.0)
+// подвижен ЦЕЛИКОМ, и фильтр делал такие клетки невидимыми всем
+// будильникам (корень В2 висяков, medium-stability.md — «Автомат-2»
+// инкр. 4). Предикат — ТОЛЬКО маска + тип (канон CPU): чтение paged()
+// здесь дивергировало каденс (страницы материализуются по таймингам
+// КАДРА — пин test_cadence_equivalence поймал с первого прогона).
+// Хвост: полный СМЕШАННЫЙ пейдж со статичным фоном фильтруется зря —
+// умирает вместе с CPU-страницами подвижного (инкр. 5).
+bool cell_full_static(const World& world, std::uint32_t ci) {
+    return world.grid().masks()[ci].full() &&
+           !material_is_medium(world.grid().types()[ci]);
+}
+
 } // namespace
 
 // Раскрыть (материализовать) страницы вокруг клеток БЕЗ пробуждения: пустые
@@ -101,7 +117,11 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                         wrap_macro(cx + dx), wrap_macro(cy + dy),
                         wrap_macro(cz + dz)));
                     if (f.paged(ci2)) continue;
-                    if (world.grid().masks()[ci2].full()) continue;
+                    // Полная СТАТИКА страницы не получает (входа материи
+                    // нет); полный РЫХЛЫЙ — получает: он поедет целиком.
+                    if (world.grid().masks()[ci2].full() &&
+                        !material_is_medium(world.grid().types()[ci2]))
+                        continue;
                     materialize_sub_page(world, ci2);
                     dirty.push_back(ci2);
                 }
@@ -321,8 +341,8 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t ci = cells[i];
         if (ci >= kMacroCells) continue;
-        // Полнотвёрдую клетку не будим: под маской двигать нечего.
-        if (world.grid().masks()[ci].full()) continue;
+        // Не будим только полную СТАТИКУ (полный рыхлый подвижен — В2).
+        if (cell_full_static(world, ci)) continue;
         std::uint64_t& w = wakeBits_[ci >> 6];
         const std::uint64_t bit = 1ull << (ci & 63u);
         // Запись раскрывает округу ЗАНОВО (писатель мог схлопнуть страницу
@@ -341,7 +361,7 @@ void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
     // граней), порция режется так, чтобы влезли все. Остаток ПЕРЕНОСИТСЯ.
     auto touch = [&](std::uint32_t ci) {
         if (ci >= kMacroCells) return;
-        if (world.grid().masks()[ci].full()) return;
+        if (cell_full_static(world, ci)) return; // полный рыхлый — будим (В2)
         if (appendPending_.size() < kAppendCap) appendPending_.push_back(ci);
     };
     std::size_t take = 0;
