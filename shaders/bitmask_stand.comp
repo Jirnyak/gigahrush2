@@ -1,0 +1,147 @@
+#version 450
+
+// bitmask_stand.comp — СТЕНД инкремента 0 эпика «Автомат-2»
+// (markoaudit/plans/medium-bitmask.md): замер цены битсетной «нервной
+// системы» ДО каких-либо правок боевого medium_sim. Меряются две формы
+// плотного гейта над битсетом активности 128^3 клеток:
+//   форма А: PREPARE (сброс счётчиков) → GATE (2М тредов: «бит мой или
+//            любого из 7 „+"-соседей», atomic-append выживших в плотный
+//            список) → FINALIZE (укладка count в 2D indirect-команду:
+//            x <= 32768, y = ceil(count/32768) — лимит воркгрупп по оси
+//            65535 не позволяет класть count в x напрямую) →
+//            WORK indirect по списку выживших;
+//   форма Б: плотный WORK-диспатч 128^3 воркгрупп (воркгруппа = клетка)
+//            с ранним выходом по тому же предикату.
+// Полезная работа клетки в обеих формах ОДИНАКОВА и минимальна (метка в
+// uOut тредом 0) — она сокращается при сравнении, замер видит чистую
+// ИНФРАСТРУКТУРУ формы. Правило «+7 соседей» — зеркало владения блоками
+// Марголуса (medium_sim.comp: minG-блоки клетки тянутся только в «+»,
+// материя «+»-соседа лежит в НАШИХ блоках) — клетка обязана исполняться,
+// когда активен любой «+»-сосед; сегодня это эмулируют зомби-жители
+// live-списка, здесь это 8 чтений бита.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+const int kDim = GIGA_MACRO_DIM;              // 128 — из gpu-моста CMake
+const uint kCells = uint(kDim * kDim * kDim); // 2 097 152
+// Складка indirect-диспатча по X: 2М/64 = 32768 групп гейта, он же —
+// потолок строки indirect-команды (гарантированный лимит оси — 65535).
+const uint kMaxGroupsX = 32768u;
+
+layout(std430, binding = 0) readonly buffer ActiveBits { uint uBits[]; };
+layout(std430, binding = 1) buffer CompactList { uint uList[]; };
+// [0..2] = indirect-команда (x,y,z), [3] = честный счёт выживших.
+layout(std430, binding = 2) buffer Counters { uint uCnt[]; };
+layout(std430, binding = 3) buffer OutMarks { uint uOut[]; };
+
+layout(push_constant) uniform StandPush { uvec4 params; } pc; // x = режим
+
+const uint kModePrepare = 0u;
+const uint kModeGate = 1u;
+const uint kModeFinalize = 2u;
+const uint kModeWorkList = 3u;
+const uint kModeWorkDense = 4u;
+const uint kModeGate32 = 5u; // словный гейт: 1 тред = 32 клетки
+
+bool bit_at(uint ci) { return (uBits[ci >> 5] & (1u << (ci & 31u))) != 0u; }
+
+uint cell_index(ivec3 c) {
+    c = (c + ivec3(kDim)) % ivec3(kDim); // тор
+    return uint(c.x + c.y * kDim + c.z * kDim * kDim);
+}
+
+// Исполнима ли клетка: активна ОНА или любой из 7 «+»-соседей.
+bool cell_executable(uint ci) {
+    if (bit_at(ci)) return true;
+    ivec3 c = ivec3(int(ci) % kDim, (int(ci) / kDim) % kDim,
+                    int(ci) / (kDim * kDim));
+    for (int dz = 0; dz <= 1; ++dz)
+        for (int dy = 0; dy <= 1; ++dy)
+            for (int dx = 0; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0 && dz == 0) continue;
+                if (bit_at(cell_index(c + ivec3(dx, dy, dz)))) return true;
+            }
+    return false;
+}
+
+// Одинаковая «работа» обеих форм: одна запись тредом 0 (единственный
+// писатель клетки за диспатч — атомик не нужен). Накопление позволяет
+// тесту сверить множество исполненных клеток после серии итераций.
+void do_work(uint ci) {
+    if (gl_LocalInvocationID.x == 0u) uOut[ci] += 1u;
+}
+
+void main() {
+    uint mode = pc.params.x;
+    if (mode == kModePrepare) {
+        if (gl_GlobalInvocationID.x == 0u) {
+            uCnt[0] = 0u;
+            uCnt[1] = 1u;
+            uCnt[2] = 1u;
+            uCnt[3] = 0u;
+        }
+        return;
+    }
+    if (mode == kModeGate) {
+        uint ci = gl_GlobalInvocationID.x;
+        if (ci >= kCells) return;
+        if (!cell_executable(ci)) return;
+        uint idx = atomicAdd(uCnt[3], 1u);
+        uList[idx] = ci;
+        return;
+    }
+    if (mode == kModeFinalize) {
+        if (gl_GlobalInvocationID.x == 0u) {
+            uint n = uCnt[3];
+            uCnt[0] = min(n, kMaxGroupsX);
+            uCnt[1] = (n + kMaxGroupsX - 1u) / kMaxGroupsX;
+            uCnt[2] = 1u;
+        }
+        return;
+    }
+    if (mode == kModeGate32) {
+        // СЛОВНЫЙ гейт: тред судит 32 клетки одним словом. Предикат
+        // «бит мой | 7 „+"-соседей» — 3D-дилатация битсета, словно-
+        // параллельная по x: строка из 32 клеток подряд по x, «+x»-сосед =
+        // сдвиг слова на 1 с заносом из следующего слова x-строки (тор по
+        // x — кольцо из kDim/32 слов). Итого 8 чтений слова вместо 256
+        // чтений бита на те же 32 клетки.
+        uint w = gl_GlobalInvocationID.x;
+        const uint kWordsPerRow = uint(kDim) / 32u; // 4
+        if (w >= kCells / 32u) return;
+        uint wx = w % kWordsPerRow;                  // слово в x-строке
+        uint y = (w / kWordsPerRow) % uint(kDim);
+        uint z = w / (kWordsPerRow * uint(kDim));
+        uint execWord = 0u;
+        for (uint dz = 0u; dz <= 1u; ++dz)
+            for (uint dy = 0u; dy <= 1u; ++dy) {
+                uint rowBase = (((y + dy) % uint(kDim))
+                                + ((z + dz) % uint(kDim)) * uint(kDim))
+                               * kWordsPerRow;
+                uint r = uBits[rowBase + wx];
+                uint rn = uBits[rowBase + (wx + 1u) % kWordsPerRow];
+                execWord |= r | (r >> 1u) | (rn << 31u);
+            }
+        if (execWord == 0u) return;
+        uint base = w * 32u;
+        while (execWord != 0u) {
+            uint b = uint(findLSB(execWord));
+            execWord &= execWord - 1u;
+            uint idx = atomicAdd(uCnt[3], 1u);
+            uList[idx] = base + b;
+        }
+        return;
+    }
+    if (mode == kModeWorkList) {
+        // Слот в 2D-складке: строки по kMaxGroupsX (x == kMaxGroupsX
+        // всегда, когда строк больше одной — см. FINALIZE).
+        uint slot = gl_WorkGroupID.y * kMaxGroupsX + gl_WorkGroupID.x;
+        if (slot >= uCnt[3]) return;
+        do_work(uList[slot]);
+        return;
+    }
+    // kModeWorkDense: воркгруппа = клетка, диспатч 128^3, ранний выход.
+    uint ci = cell_index(ivec3(gl_WorkGroupID));
+    if (!cell_executable(ci)) return;
+    do_work(ci);
+}

@@ -1571,6 +1571,388 @@ void test_rubble_settles_fast(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
+// Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
+// Формы плотного гейта (shaders/bitmask_stand.comp):
+//   А: PREPARE → GATE (2М тредов, atomic-append выживших) → FINALIZE
+//      (count → 2D indirect, лимит оси 65535) → WORK indirect по списку;
+//   Б: плотный WORK 128^3 воркгрупп (воркгруппа = клетка) с ранним выходом.
+// Сценарии битсета — из замеров medium-stability.md: пусто (этаж спит),
+// типичный ~2k активных (live сейва владельца), горб ~24k кластером
+// (§63-горб без бюджета), полный 2М (катастрофа). Тест ПИНИТ КОРРЕКТНОСТЬ
+// (обе формы исполняют ровно множество «бит мой | 7 „+"-соседей», счёт
+// компактации точен — против CPU-эталона), а миллисекунды ПЕЧАТАЕТ: число
+// уходит в план решением «форма А или Б», в CHECK его не заводим — закон
+// дерева: «бенчмарк, роняющий сборку на медленной машине, никто не гоняет».
+
+// Один сабмит с ожиданием — команды пишет вызывающий через рекордер.
+template <typename RecordFn>
+bool stand_submit(const gpu::VulkanDevice& dev, RecordFn record) {
+    VkCommandPool pool = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pci.queueFamilyIndex = dev.families.graphics;
+    if (vkCreateCommandPool(dev.device, &pci, nullptr, &pool) != VK_SUCCESS)
+        return false;
+    bool ok = false;
+    VkCommandBufferAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    ai.commandPool = pool;
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    if (vkAllocateCommandBuffers(dev.device, &ai, &cmd) == VK_SUCCESS) {
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+        record(cmd);
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        ok = vkQueueSubmit(dev.graphicsQueue, 1, &si, VK_NULL_HANDLE)
+                 == VK_SUCCESS
+             && vkQueueWaitIdle(dev.graphicsQueue) == VK_SUCCESS;
+    }
+    vkDestroyCommandPool(dev.device, pool, nullptr);
+    return ok;
+}
+
+void test_bitmask_gate_stand(gpu::VulkanDevice& dev) {
+    constexpr std::uint32_t kCells = static_cast<std::uint32_t>(kMacroCells);
+    constexpr std::uint32_t kWords = kCells / 32u;
+    constexpr std::uint32_t kGateGroups = kCells / 64u; // 32768
+    // Режимы — зеркало bitmask_stand.comp.
+    constexpr std::uint32_t kStPrepare = 0, kStGate = 1, kStFinalize = 2,
+                            kStWorkList = 3, kStWorkDense = 4, kStGate32 = 5;
+    // Прогрев прогоняет пайплайн/кэши, замер делится на kIters.
+    constexpr std::uint32_t kWarm = 4, kIters = 32;
+
+    // Замер без таймстампов — не замер: машина без них не даёт числа
+    // решению «форма А или Б», это красный, как и машина без GPU.
+    CHECK(dev.graphicsTimestampValidBits != 0);
+
+    // --- буферы стенда ---
+    gpu::VulkanBuffer listBuf, cntBuf, outBuf;
+    CHECK(listBuf.create_device_local_empty(
+        dev, kCells * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        "bitmask-stand list"));
+    CHECK(cntBuf.create_device_local_empty(
+        dev, 4 * sizeof(std::uint32_t),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+            | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+            | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+            | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        "bitmask-stand counters"));
+    CHECK(outBuf.create_device_local_empty(
+        dev, kCells * 4ull,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+            | VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+            | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        "bitmask-stand out"));
+
+    // --- дескрипторы: 4 storage-биндинга одним сетом ---
+    VkDescriptorSetLayoutBinding binds[4]{};
+    for (std::uint32_t b = 0; b < 4; ++b) {
+        binds[b].binding = b;
+        binds[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binds[b].descriptorCount = 1;
+        binds[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo slci{};
+    slci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    slci.bindingCount = 4;
+    slci.pBindings = binds;
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    CHECK(vkCreateDescriptorSetLayout(dev.device, &slci, nullptr, &setLayout)
+          == VK_SUCCESS);
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets = 1;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes = &poolSize;
+    VkDescriptorPool descPool = VK_NULL_HANDLE;
+    CHECK(vkCreateDescriptorPool(dev.device, &dpci, nullptr, &descPool)
+          == VK_SUCCESS);
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool = descPool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts = &setLayout;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    CHECK(vkAllocateDescriptorSets(dev.device, &dsai, &set) == VK_SUCCESS);
+    auto bind_buffer = [&](std::uint32_t binding, VkBuffer buf) {
+        VkDescriptorBufferInfo info{buf, 0, VK_WHOLE_SIZE};
+        VkWriteDescriptorSet wr{};
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = set;
+        wr.dstBinding = binding;
+        wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr.pBufferInfo = &info;
+        vkUpdateDescriptorSets(dev.device, 1, &wr, 0, nullptr);
+    };
+    bind_buffer(1, listBuf.buffer);
+    bind_buffer(2, cntBuf.buffer);
+    bind_buffer(3, outBuf.buffer);
+
+    // --- пайплайн из bitmask_stand.comp.spv (скелет — create_pipeline
+    // боевого пасса; push = uvec4, x = режим) ---
+    VkPipelineLayout pipeLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    {
+        std::string spv = GIGA_SHADER_DIR;
+        spv += "/bitmask_stand.comp.spv";
+        std::FILE* f = std::fopen(spv.c_str(), "rb");
+        CHECK(f != nullptr);
+        std::vector<char> code;
+        if (f) {
+            std::fseek(f, 0, SEEK_END);
+            long n = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            code.resize(static_cast<std::size_t>(n));
+            CHECK(std::fread(code.data(), 1, code.size(), f) == code.size());
+            std::fclose(f);
+        }
+        VkShaderModuleCreateInfo smci{};
+        smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smci.codeSize = code.size();
+        smci.pCode = reinterpret_cast<const std::uint32_t*>(code.data());
+        VkShaderModule mod = VK_NULL_HANDLE;
+        CHECK(vkCreateShaderModule(dev.device, &smci, nullptr, &mod)
+              == VK_SUCCESS);
+        VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                4 * sizeof(std::uint32_t)};
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 1;
+        plci.pSetLayouts = &setLayout;
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges = &pcr;
+        CHECK(vkCreatePipelineLayout(dev.device, &plci, nullptr, &pipeLayout)
+              == VK_SUCCESS);
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpci.stage.module = mod;
+        cpci.stage.pName = "main";
+        cpci.layout = pipeLayout;
+        CHECK(vkCreateComputePipelines(dev.device, VK_NULL_HANDLE, 1, &cpci,
+                                       nullptr, &pipeline)
+              == VK_SUCCESS);
+        vkDestroyShaderModule(dev.device, mod, nullptr);
+    }
+
+    // --- таймстампы: свой пул на 2 запроса; MoltenVK-урок gpu_timer.h —
+    // доверять суммарному интервалу, не пер-диспатчным срезам ---
+    VkQueryPool queryPool = VK_NULL_HANDLE;
+    VkQueryPoolCreateInfo qci{};
+    qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qci.queryCount = 2;
+    CHECK(vkCreateQueryPool(dev.device, &qci, nullptr, &queryPool)
+          == VK_SUCCESS);
+    const double periodNs = dev.props.limits.timestampPeriod;
+    const std::uint64_t tsMask =
+        dev.graphicsTimestampValidBits >= 64
+            ? ~0ull
+            : ((1ull << dev.graphicsTimestampValidBits) - 1ull);
+
+    std::printf("[bitmask-stand] warm %u, iters %u; maxWG %u/%u/%u, "
+                "ts period %.3f ns\n",
+                kWarm, kIters, dev.props.limits.maxComputeWorkGroupCount[0],
+                dev.props.limits.maxComputeWorkGroupCount[1],
+                dev.props.limits.maxComputeWorkGroupCount[2], periodNs);
+
+    auto push_mode = [&](VkCommandBuffer cmd, std::uint32_t mode) {
+        std::uint32_t pc[4] = {mode, 0, 0, 0};
+        vkCmdPushConstants(cmd, pipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(pc), pc);
+    };
+    auto barrier = [](VkCommandBuffer cmd) {
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+                           | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                 | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+    };
+    // Один «подтик» форм А/А2: сброс → гейт → укладка indirect → работа.
+    // А судит клетку тредом (2М тредов × 8 бит), А2 — словом (65536
+    // тредов × 8 слов, дилатация сдвигами).
+    enum StandForm { kFormA, kFormA2, kFormB };
+    auto iter_form_a = [&](VkCommandBuffer cmd, bool wordGate) {
+        push_mode(cmd, kStPrepare);
+        vkCmdDispatch(cmd, 1, 1, 1);
+        barrier(cmd);
+        push_mode(cmd, wordGate ? kStGate32 : kStGate);
+        vkCmdDispatch(cmd, wordGate ? kWords / 64u : kGateGroups, 1, 1);
+        barrier(cmd);
+        push_mode(cmd, kStFinalize);
+        vkCmdDispatch(cmd, 1, 1, 1);
+        barrier(cmd);
+        push_mode(cmd, kStWorkList);
+        vkCmdDispatchIndirect(cmd, cntBuf.buffer, 0);
+        barrier(cmd);
+    };
+    // Один «подтик» формы Б: плотный диспатч воркгруппа-на-клетку.
+    auto iter_form_b = [&](VkCommandBuffer cmd) {
+        push_mode(cmd, kStWorkDense);
+        vkCmdDispatch(cmd, static_cast<std::uint32_t>(kMacroDim),
+                      static_cast<std::uint32_t>(kMacroDim),
+                      static_cast<std::uint32_t>(kMacroDim));
+        barrier(cmd);
+    };
+    // Прогон формы: чистый uOut → прогрев → таймстампы вокруг kIters.
+    auto run_form = [&](StandForm form, double& msOut) {
+        bool ok = stand_submit(dev, [&](VkCommandBuffer cmd) {
+            vkCmdFillBuffer(cmd, outBuf.buffer, 0, VK_WHOLE_SIZE, 0);
+            VkMemoryBarrier mb{};
+            mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT
+                               | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1,
+                                 &mb, 0, nullptr, 0, nullptr);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    pipeLayout, 0, 1, &set, 0, nullptr);
+            auto iter = [&](VkCommandBuffer c) {
+                if (form == kFormB) iter_form_b(c);
+                else iter_form_a(c, form == kFormA2);
+            };
+            for (std::uint32_t i = 0; i < kWarm; ++i) iter(cmd);
+            vkCmdResetQueryPool(cmd, queryPool, 0, 2);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                queryPool, 0);
+            for (std::uint32_t i = 0; i < kIters; ++i) iter(cmd);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                queryPool, 1);
+        });
+        CHECK(ok);
+        std::uint64_t ts[2] = {0, 0};
+        CHECK(vkGetQueryPoolResults(dev.device, queryPool, 0, 2, sizeof(ts),
+                                    ts, sizeof(ts[0]),
+                                    VK_QUERY_RESULT_64_BIT
+                                        | VK_QUERY_RESULT_WAIT_BIT)
+              == VK_SUCCESS);
+        msOut = static_cast<double>(((ts[1] & tsMask) - (ts[0] & tsMask))
+                                    & tsMask)
+                * periodNs / 1.0e6 / kIters;
+    };
+    // Сверка множества исполненных: uOut == (kWarm+kIters | 0) поклеточно.
+    auto verify_out = [&](const std::vector<std::uint8_t>& exec) {
+        static std::vector<std::uint32_t> out;
+        out.assign(kCells, 0xFFFFFFFFu);
+        if (!readback(dev, outBuf.buffer, kCells * 4ull, out.data())) return false;
+        for (std::uint32_t ci = 0; ci < kCells; ++ci)
+            if (out[ci] != (exec[ci] ? kWarm + kIters : 0u)) return false;
+        return true;
+    };
+
+    // --- сценарии ---
+    struct Scenario {
+        const char* name;
+        std::uint32_t seeds; // 0 = пусто, ~0 = полный, иначе — счёт
+        bool hump;
+    };
+    const Scenario scenarios[4] = {
+        {"пусто   ", 0u, false},
+        {"типичный", 2048u, false},
+        {"горб    ", 0u, true},
+        {"полный  ", ~0u, false},
+    };
+    std::vector<std::uint32_t> bits(kWords);
+    std::vector<std::uint8_t> exec(kCells);
+    for (const Scenario& sc : scenarios) {
+        std::fill(bits.begin(), bits.end(), 0u);
+        if (sc.seeds == ~0u) {
+            std::fill(bits.begin(), bits.end(), 0xFFFFFFFFu);
+        } else if (sc.hump) {
+            // Кластер обрушения ~24k клеток: куб 29^3 (§63-горб 23.9k).
+            for (int z = 40; z < 69; ++z)
+                for (int y = 40; y < 69; ++y)
+                    for (int x = 40; x < 69; ++x) {
+                        std::uint32_t ci = static_cast<std::uint32_t>(
+                            macro_index(x, y, z));
+                        bits[ci >> 5] |= 1u << (ci & 31u);
+                    }
+        } else {
+            // Рассев мультипликативным хешем — детерминирован, без ГСЧ.
+            for (std::uint32_t k = 0; k < sc.seeds; ++k) {
+                std::uint32_t ci = (k * 2654435761u) % kCells;
+                bits[ci >> 5] |= 1u << (ci & 31u);
+            }
+        }
+        // CPU-эталон предиката «бит мой | 7 „+"-соседей» (тор).
+        std::uint32_t active = 0, expected = 0;
+        auto bit_at = [&](int x, int y, int z) {
+            std::uint32_t ci = static_cast<std::uint32_t>(macro_index(
+                x & (kMacroDim - 1), y & (kMacroDim - 1),
+                z & (kMacroDim - 1)));
+            return (bits[ci >> 5] >> (ci & 31u)) & 1u;
+        };
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int y = 0; y < kMacroDim; ++y)
+                for (int x = 0; x < kMacroDim; ++x) {
+                    std::uint32_t ci =
+                        static_cast<std::uint32_t>(macro_index(x, y, z));
+                    active += bit_at(x, y, z);
+                    std::uint32_t e = 0;
+                    for (int dz = 0; dz <= 1 && !e; ++dz)
+                        for (int dy = 0; dy <= 1 && !e; ++dy)
+                            for (int dx = 0; dx <= 1 && !e; ++dx)
+                                e |= bit_at(x + dx, y + dy, z + dz);
+                    exec[ci] = static_cast<std::uint8_t>(e);
+                    expected += e;
+                }
+
+        gpu::VulkanBuffer bitsBuf;
+        CHECK(bitsBuf.create_device_local(dev, bits.data(), kWords * 4ull,
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                          "bitmask-stand bits"));
+        bind_buffer(0, bitsBuf.buffer);
+
+        double msA = 0.0, msA2 = 0.0, msB = 0.0;
+        // Счёт компактации гейта == CPU-эталону (последняя итерация
+        // оставила его в uCnt[3]) — у ОБЕИХ компактирующих форм.
+        std::uint32_t cnt[4] = {0, 0, 0, 0};
+        run_form(kFormA, msA);
+        CHECK(readback(dev, cntBuf.buffer, sizeof(cnt), cnt));
+        CHECK(cnt[3] == expected);
+        CHECK(verify_out(exec));
+        run_form(kFormA2, msA2);
+        CHECK(readback(dev, cntBuf.buffer, sizeof(cnt), cnt));
+        CHECK(cnt[3] == expected);
+        CHECK(verify_out(exec));
+        run_form(kFormB, msB);
+        CHECK(verify_out(exec));
+
+        std::printf("[bitmask-stand] %s: A %8.3f | А2-слово %8.3f | Б "
+                    "%8.3f мс/подтик (active %u, exec %u)\n",
+                    sc.name, msA, msA2, msB, active, expected);
+        bitsBuf.destroy(dev);
+    }
+
+    vkDestroyQueryPool(dev.device, queryPool, nullptr);
+    vkDestroyPipeline(dev.device, pipeline, nullptr);
+    vkDestroyPipelineLayout(dev.device, pipeLayout, nullptr);
+    vkDestroyDescriptorPool(dev.device, descPool, nullptr);
+    vkDestroyDescriptorSetLayout(dev.device, setLayout, nullptr);
+    outBuf.destroy(dev);
+    cntBuf.destroy(dev);
+    listBuf.destroy(dev);
+}
+
 } // namespace
 
 int main() {
@@ -1588,6 +1970,7 @@ int main() {
         test_cadence_equivalence(dev);
         test_budget_dispatch(dev);
         test_rubble_settles_fast(dev);
+        test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();
     dev.destroy();

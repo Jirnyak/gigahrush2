@@ -405,6 +405,18 @@ add_custom_command(
     COMMENT "glslc medium_sim.comp -> medium_sim.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/medium_sim.comp.spv)
 
+# СТЕНД инкремента 0 эпика «Автомат-2» (markoaudit/plans/medium-bitmask.md):
+# замер плотного гейта по битсету активности, потребитель — только
+# medium_test (боевой пайплайн не трогает).
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/bitmask_stand.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/bitmask_stand.comp
+        -o ${_giga_spv_dir}/bitmask_stand.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/bitmask_stand.comp
+    COMMENT "glslc bitmask_stand.comp -> bitmask_stand.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/bitmask_stand.comp.spv)
+
 # GPU verlet for antourage: wires AND cloth, one shader (chain = lattice, H=1).
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/verlet_sim.comp.spv
@@ -564,8 +576,18 @@ if(GIGA_BUILD_TESTS)
     # live финален уже к 40-му подтику. Мутация flow 0.1 = 898/899 (капли
     # на 40-м ещё идут). Хвост live 2 — зомби-владельцы граничных блоков
     # (принятый хвост §63), live==0 у границ клеток недостижим по построению.
+    # 899 -> 968 (+69) on 2026-09-02: test_bitmask_gate_stand — инкремент 0
+    # эпика «Автомат-2» (medium-bitmask.md): три формы плотного гейта по
+    # битсету активности против CPU-эталона правила «бит мой | 7 „+"-соседей»
+    # на 4 сценариях (пусто/типичный 2k/горб 24k/полный 2М). Пинится
+    # КОРРЕКТНОСТЬ (счёт компактации + множество исполненных обеих
+    # indirect-форм и плотной), миллисекунды печатаются — выбор формы
+    # решён числом: А2-слово 0.055-0.119 мс/подтик на боевых сценариях.
+    # Мутации поштучно: dz-ряды словного гейта = 964, cell_executable = 962,
+    # 2D-складка indirect y=1 = 966 (красен ровно «полный»), компактация
+    # base вместо base+b = 965 (счёт жив, множество красно).
     set_tests_properties(medium_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "899/899 checks passed")
+        PASS_REGULAR_EXPRESSION "968/968 checks passed")
 
     # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
     # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
