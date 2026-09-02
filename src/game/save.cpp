@@ -11,6 +11,7 @@
 #include "game/embody.h"      // NpcRef, kEmbodyCellSize
 #include "game/floor_stream.h"  // FloorStreamer, FloorRegistry, RideResult
 #include "game/item_table.h"  // kItemNames, kItemCount
+#include "world/medium.h"     // medium_revive — этап «оживление сред»
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
 #include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
@@ -1755,6 +1756,13 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     const std::size_t geoOff = blobBytes - left;
     if (!apply_floor_snapshot(w, p + geoOff, left, floorOut))
         return fail(SaveError::SizeMismatch);
+    // ЭТАП «ОЖИВЛЕНИЕ СРЕД» (закон владельца 2026-09-02: загрузка этажа =
+    // эмбриоразвитие, системы отдельными этапами): агрегат medium_level —
+    // вывод из канона и в снапшоте не живёт; без этого этапа будильник
+    // этажа читал нули, и восстановленная стоячая вода не просыпалась.
+    // Путь генерации в этапе не нуждается: его писатели (pour_level)
+    // пересчитывают агрегат законом писателя.
+    medium_revive(w, w.subfields().get_or_create<CellType>(kSubMaterialName));
     if (entsOut) *entsOut = std::move(ents);
     return true;
 }

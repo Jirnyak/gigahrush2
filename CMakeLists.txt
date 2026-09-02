@@ -1666,7 +1666,13 @@ if(GIGA_BUILD_TESTS)
     # 222345 + 10 on 2026-09-01 (инкр. 5): GpuHandoff разваливается на
     # ЧЕРЕПКИ+пыль (два push вместо одного Debris) — оба burst-теста пинят
     # новый закон (kind Shard + kind Dust).
-        PASS_REGULAR_EXPRESSION "game_test: 222355 checks, 0 failures")
+    # 222355 + 3 on 2026-09-02 (Автомат-2, суженный инкр. 5): этап
+    # «ОЖИВЛЕНИЕ СРЕД» (medium_revive в floor_file_read — агрегат
+    # medium_level не в снапшоте, без этапа будильник этажа читал нули и
+    # стоячая вода после загрузки спала мёртвым сном). Три чека floor-
+    # roundtrip: страничная лужа 4, однородная клетка 512, сухая 0.
+    # Мутация «этап вынут» = 2 failures (оба водяных).
+        PASS_REGULAR_EXPRESSION "game_test: 222358 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

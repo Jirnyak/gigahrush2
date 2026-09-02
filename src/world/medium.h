@@ -21,6 +21,7 @@
 
 #include "world/field.h"
 #include "world/material_props.h"
+#include "world/subfield.h" // SubField — этап «оживление сред» ходит по страницам
 #include "world/types.h"
 #include "world/world.h"
 
@@ -77,6 +78,42 @@ inline void medium_recount(World& w, std::size_t ci, const CellType* page) {
         else if (ph == MatPhase::Gas) ++gas;
     }
     medium_level_field(w).data()[ci] = liq | (gas << 16);
+}
+
+// ОЖИВЛЕНИЕ СРЕД — полноценный ЭТАП конвейера загрузки этажа (закон
+// владельца 2026-09-02: загрузка = эмбриоразвитие, системы этапами —
+// сетка → геометрия/субвоксели → пропы → маски → комнаты → НПЦ; воды
+// оживают таким же отдельным предсказуемым этапом). Агрегат medium_level
+// — ВЫВОД из канона, не состояние: в снапшот этажа он не пишется, а
+// восстановленный мир до этого этапа держал нули — будильник этажа
+// (main.cpp, floor alarm) читал их и стоячая вода не просыпалась до
+// первого писателя. Один плотный DOD-проход по всем клеткам: страничная
+// клетка — пересчёт по странице; бесстраничная с пустой маской и
+// текучим/газовым типом — однородная среда (512 квантов по закону
+// чтения S16.1); остальное — ноль. Поле sub_material передаёт вызывающий
+// этап (имя живёт в world/destruct.h — модуль агрегатов не тянет модуль
+// разрушения целиком).
+inline void medium_revive(World& w, const SubField<CellType>& mats) {
+    auto& lvl = medium_level_field(w).data();
+    const auto& types = w.grid().types();
+    const auto& masks = w.grid().masks();
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const CellType* pg = mats.page(ci);
+        if (pg) {
+            medium_recount(w, ci, pg);
+            continue;
+        }
+        std::uint32_t v = 0;
+        const CellType t = types[ci];
+        if (t != kCellAir && masks[ci].empty()) {
+            const MatPhase ph = material_phase(t);
+            if (ph == MatPhase::Liquid)
+                v = static_cast<std::uint32_t>(kSubVoxels);
+            else if (ph == MatPhase::Gas)
+                v = static_cast<std::uint32_t>(kSubVoxels) << 16;
+        }
+        lvl[ci] = v;
+    }
 }
 
 } // namespace giga

@@ -59,6 +59,7 @@
 #include "sim/physics.h"
 #include "sim/rigid.h"   // rigid_attach_sphere/rigid_body_step — граната = тело ядра
 #include "world/material_props.h" // kMatHardness — упругость заряда из материала
+#include "world/medium.h" // medium_level_at — гейт этапа «оживление сред»
 #include "game/prop_table.h"      // PropDef/prop_def — заряд читается со строки
 #include "world/lattice.h"
 #include "world/materials.h"

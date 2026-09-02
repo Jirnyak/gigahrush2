@@ -599,6 +599,12 @@ void floor_file_round_trips() {
             for (int sy = 0; sy < 8; ++sy)
                 giga::set_sub_material(w, 10, 10, 5, 0, sy, sz,
                                        giga::kMatPlaster);
+        // Вода для этапа «оживление сред» (Автомат-2, 2026-09-02):
+        // страничная лужа 4 кванта + ОДНОРОДНАЯ клетка воды без маски
+        // (закон чтения S16.1: бесстраничная среда = 512 квантов).
+        for (int sx = 0; sx < 4; ++sx)
+            giga::set_sub_material(w, 11, 10, 5, sx, 0, 0, giga::kMatWater);
+        w.grid().set_cell(60, 60, 5, giga::kMatWater); // пустая округа
     };
     giga::World live;
     genesis(live);
@@ -634,6 +640,13 @@ void floor_file_round_trips() {
     // The painted coat survived at sub-voxel resolution.
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 0, 3, 3) == giga::kMatPlaster);
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 1, 3, 3) == giga::kMatConcrete);
+    // ЭТАП «ОЖИВЛЕНИЕ СРЕД» (Автомат-2, 2026-09-02): агрегат medium_level
+    // не в снапшоте — floor_file_read обязан пересчитать его отдельным
+    // этапом (иначе будильник этажа читает нули и стоячая вода спит
+    // мёртвым сном). Страничная лужа, однородная клетка, сухая клетка.
+    CHECK(giga::medium_level_at(twin, giga::macro_index(11, 10, 5)) == 4u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(60, 60, 5)) == 512u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(10, 10, 5)) == 0u);
     // And the twin does NOT contain the post-save hole: it matches the save
     // moment, not the live world's later state. С инкремента 5 карв не
     // испаряет материю: вырезанный атом с опорой тут же принимает
