@@ -15,11 +15,15 @@ namespace giga::gpu {
 
 namespace {
 
-// Upper bound on simultaneously-drawn bodies. Embodiment keeps only the active
-// area live (a floor slice / the crowd around the player), so a few tens of
-// thousands is generous headroom; sizing for it once means the per-frame buffer
-// never reallocates. 64k * sizeof(BodyInstance) ~ 2.4 MB per in-flight frame.
-constexpr std::uint32_t kMaxBodies = 1u << 16;
+// КОРНЕВОЙ кап системы тел (решение владельца 2026-09-05, caps-to-canon
+// шаг 3). Вывод — от ЗАМЕРА, не от другого капа: рагдолл-эпик измерил
+// 4096 одновременно бодрых тел = 0.96 мс/тик (ragdoll.md; sim_bench
+// kBodies=4096). Рисуется больше, чем симулируется — «сон — главный
+// механизм: сотни активны, тысячи живут» (rigid.h), множитель сна ×8:
+//   4096 бодрых × 8 спящих на бодрого = 32768 = 2^15.
+// Память: 2^15 × 52 Б (BodyInstance c vec4 rot) × 2 кадра в полёте
+// = 3.25 МиБ host-visible. Переполнение кричит вслух ниже (S11).
+constexpr std::uint32_t kMaxBodies = 1u << 15;
 
 struct CubeVertex {
     vec3 pos;
