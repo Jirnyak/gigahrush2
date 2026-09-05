@@ -147,6 +147,7 @@ int g_checks = 0;
 #include "suite_doors.inl"
 #include "suite_verbs.inl"
 #include "suite_shield.inl"
+#include "suite_goals.inl"
 #include "suite_rooms_object.inl"
 #include "suite_rebake.inl"
 #include "suite_prebuild.inl"
@@ -5827,6 +5828,7 @@ int main() {
     test_doors_all();
     test_verbs_all();
     test_shield_all();
+    test_goals_all();
     test_rooms_object_all();
     test_rebake_all();
     test_prebuild_all();

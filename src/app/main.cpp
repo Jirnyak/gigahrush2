@@ -85,6 +85,7 @@
 #include "game/extraction.h"
 #include "game/save.h"
 #include "game/faction_relations.h"
+#include "game/goals.h"        // S13.2: честный скорер (agent-goals A) — отладка рядом со старым
 #include "game/witness.h"      // S19: деяние/свидетель/цена — witness_step, deed_publish
 #include "game/loot.h"
 #include "game/weapon_table.h"
@@ -4516,6 +4517,35 @@ int main(int argc, char** argv) {
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
                                        &bus, simTick);
+                // AGENT-GOALS ИНКРЕМЕНТ A: новый скорер S13.2 РЯДОМ со
+                // старым — печать argmax, на движение НЕ влияет (переключение
+                // — инкремент C). Секундный каданс, носитель камеры; замер
+                // против гейта «< 0.1 мс на агента» печатается тут же.
+                static const bool goalsDbg =
+                    std::getenv("GIGA_GOALS_DBG") != nullptr;
+                if (goalsDbg && simTick % kSimHz == 0 &&
+                    reg.valid(player)) {
+                    if (const auto* pref = reg.try_get<game::NpcRef>(player);
+                        pref != nullptr && pool.valid(pref->id)) {
+                        float demand[game::kVerbCount];
+                        game::goals_demand_from_needs(pool.needs(pref->id),
+                                                      demand);
+                        const auto gT0 = std::chrono::steady_clock::now();
+                        const game::GoalPick pick = game::goals_pick_room(
+                            demand, floorRooms,
+                            reg.get<Transform>(player).pos);
+                        const float gMs =
+                            std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - gT0)
+                                .count();
+                        std::fprintf(stderr,
+                                     "[goals] room=%u score=%.1f dist=%.1f "
+                                     "verb=%s rooms=%zu cost=%.3fms\n",
+                                     pick.room, pick.score, pick.distCells,
+                                     game::kVerbIds[pick.topVerb],
+                                     floorRooms.list.size(), gMs);
+                    }
+                }
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
                 game::ai_equip_step(reg, pool, activeLayer, simTick);
