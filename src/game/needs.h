@@ -316,8 +316,13 @@ float needs_speed_scale(const Needs& n);
 // are dead.
 //
 // No allocation, no exceptions, O(n) in the EMBODIED bodies on one layer.
+// bus+tick — ДЕЯНИЕ «невольный слив» (S19): клок нужд — единственное место,
+// знающее и тело, и позицию, и факт слива; один шов закрывает NPC и игрока
+// разом. Уместность туалета зануляет цену у ПОТРЕБИТЕЛЯ (witness_step) —
+// ветки «в туалете бесплатно» здесь нет по построению.
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     class AiMemory* mem = nullptr, double now = 0.0);
+                     class AiMemory* mem = nullptr, double now = 0.0,
+                     EventBus* bus = nullptr, std::uint64_t tick = 0);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

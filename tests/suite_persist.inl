@@ -14,6 +14,7 @@
 // Included into game_test.cpp (its CHECK macro, `using namespace giga::game`).
 #include "game/save.h"
 #include "game/loot.h"
+#include "game/room.h" // FloorRooms — секция roomReps (floor v5)
 #include "game/door.h"
 #include "game/event_bus.h"
 #include "game/prop_system.h"
@@ -172,9 +173,22 @@ void full_round_trip() {
     power.destroy_shield(9, 9, 11);
     power.destroy_shield(11, 9, 11);
 
+    // Репутация комнат (S13.6, floor v5): две комнаты, накопленное едет по
+    // индексу объявления — порядок rooms_declare детерминирован и есть ключ.
+    FloorRooms rooms1;
+    rooms_reset(rooms1);
+    const RoomBox rbA{9, 9, 11, 2, 2, 1};
+    const RoomBox rbB{12, 9, 11, 2, 2, 1};
+    CHECK(room_declare(rooms1, &rbA, 1, 0, 0) != kNoRoom);
+    CHECK(room_declare(rooms1, &rbB, 1, 0, 0) != kNoRoom);
+    rooms1.list[0].rep = -120; // здесь убивали
+    rooms1.list[1].rep = 45;   // здесь лечили
+
     const int floorNo = -7;
     FloorEntityState ents1;
-    gather_floor_entities(reg, layer, floorNo, ents1, &power);
+    gather_floor_entities(reg, layer, floorNo, ents1, &power, &rooms1);
+    CHECK(ents1.roomReps.size() == 2);
+    CHECK(ents1.roomReps[0] == -120 && ents1.roomReps[1] == 45);
     CHECK(ents1.props.size() == 4);
     CHECK(ents1.corpses.size() == 1);
     CHECK(ents1.pickups.size() == 1);
@@ -222,9 +236,21 @@ void full_round_trip() {
     CHECK(power2.is_shield_destroyed(9, 9, 11));
     CHECK(power2.is_shield_destroyed(11, 9, 11));
 
+    // Репутация: свежая декларация (перештамповка прибытия, S18) +
+    // накопленное из снимка поверх — знак и величина бит-в-бит; отрицательная
+    // репутация переживает u16-провод.
+    FloorRooms rooms2;
+    rooms_reset(rooms2);
+    CHECK(room_declare(rooms2, &rbA, 1, 0, 0) != kNoRoom);
+    CHECK(room_declare(rooms2, &rbB, 1, 0, 0) != kNoRoom);
+    CHECK(ents2.roomReps.size() == 2);
+    restore_room_reps(rooms2, ents2.roomReps.data(), ents2.roomReps.size());
+    CHECK(rooms2.list[0].rep == -120);
+    CHECK(rooms2.list[1].rep == 45);
+
     // Идемпотентность: gather после восстановления = ТЕ ЖЕ байты файла.
     FloorEntityState ents3;
-    gather_floor_entities(reg2, layer, floorNo, ents3, &power2);
+    gather_floor_entities(reg2, layer, floorNo, ents3, &power2, &rooms2);
     std::vector<std::uint8_t> fileB = canonical_file(w2, floorNo, ents3, key);
     CHECK(fileA.size() == fileB.size());
     CHECK(fileA == fileB);

@@ -2538,6 +2538,21 @@ static void test_ranged_windup_and_deadzone() {
         projectile_step(reg, pool, bus, stack, layer, dt,
                         600u + static_cast<std::uint64_t>(i));
     CHECK(pool.hp(pid) < before);    // it connected
+    // ДЕЯНИЕ «удар» (S19, продюсер projectile_step 2026-09-05): нелетальная
+    // пуля в ЧЕЛОВЕКА (носитель камеры — обычный NpcRef) публикует
+    // Deed(strike) с жертвой-строкой пула; актёра-моба отсеет witness_step —
+    // продюсер бесстрастен по построению.
+    {
+        int strikes = 0;
+        for (std::size_t i = 0; i < bus.size(); ++i) {
+            const Event& ev = bus.events()[i];
+            if (ev.type == EventType::Deed &&
+                (ev.c >> 24) == static_cast<std::uint32_t>(kVerbStrike) &&
+                ev.b == static_cast<std::uint32_t>(pid))
+                ++strikes;
+        }
+        CHECK(strikes >= 1);
+    }
 
     // Nothing lives forever: every projectile is eventually gone.
     for (int i = 0; i < 1000; ++i)

@@ -962,11 +962,16 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // re-derived every tick. What changed is only the SET of intents that can earn it;
 // `wander_step` and `faction_feud_step` read the same `ai_owns_motion` guard and
 // neither had to learn anything about rooms.
+// bus+tick — ДЕЯНИЕ «лечить» (S19): медик кредитует hpBank пациента каждый
+// тик, а деяние публикуется раз в ТАКТ на пациента (stateless дебаунс
+// границей kTactTicks — ср. «одно взятие в час» S12.5).
+class EventBus; // game/event_bus.h — заголовку хватает указателя
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const void* doorsDead = nullptr, // МОГИЛА ДВЕРЕЙ: слот пустует до новой системы
-               const World* world = nullptr);
+               const World* world = nullptr, EventBus* bus = nullptr,
+               std::uint64_t tick = 0);
 
 } // namespace giga::game
 

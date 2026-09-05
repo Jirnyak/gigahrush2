@@ -25,7 +25,12 @@ void EventBus::init() {
 }
 
 bool EventBus::publish(const Event& e) {
-    if (size_ >= kCapacity) {
+    // Шина ДО init() — кольцо не аллоцировано: считаем полным (дроп со
+    // счётчиком), не UB. Вылезло 2026-09-05 посадкой продюсеров деяний:
+    // тестовые шины без init() годами были безопасны, пока шаги игнорировали
+    // bus; писать в ring_[0] пустого вектора — сегфолт. Прод всегда init()ит
+    // — dropped() там от этой ветки не растёт.
+    if (ring_.empty() || size_ >= kCapacity) {
         // Bounded ring stays bounded: count the drop instead of growing.
         //
         // A dropped event is NOT tallied into cycle_/total_, deliberately: those

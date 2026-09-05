@@ -2521,13 +2521,18 @@ int main(int argc, char** argv) {
                                        ents.debris.size());
             game::restore_power_keys(powerGrid, ents.powerKeys.data(),
                                      ents.powerKeys.size());
+            // Репутация комнат (S13.6): rooms_declare этого прибытия уже
+            // отработал (комнаты РАНЬШЕ сидеров) — накопленное ложится
+            // поверх свежей декларации по индексу объявления.
+            game::restore_room_reps(floorRooms, ents.roomReps.data(),
+                                    ents.roomReps.size());
             std::fprintf(stderr,
                          "[persist] floor %d entities RESTORED: %zu props, "
                          "%zu corpses, %zu pickups, %zu debris, %zu power "
-                         "keys\n",
+                         "keys, %zu room reps\n",
                          floorNo, np, ents.corpses.size(),
                          ents.pickups.size(), ents.debris.size(),
-                         ents.powerKeys.size());
+                         ents.powerKeys.size(), ents.roomReps.size());
         } else {
             refresh_floor_containers(reg, stack.layer(nl), floorNo, nl);
             seed_floor_props(reg, stack.layer(nl), floorNo, nl,
@@ -3137,7 +3142,7 @@ int main(int argc, char** argv) {
         {
             game::FloorEntityState ents;
             game::gather_floor_entities(reg, pl, currentFloor, ents,
-                                        &powerGrid);
+                                        &powerGrid, &floorRooms);
             write_floor_file(stack.layer(pl), currentFloor, ents,
                              module_key_for(currentFloor));
         }
@@ -3178,7 +3183,7 @@ int main(int argc, char** argv) {
         {
             game::FloorEntityState ents;
             game::gather_floor_entities(reg, leaveLayer, currentFloor, ents,
-                                        &powerGrid);
+                                        &powerGrid, &floorRooms);
             write_floor_file_async(stack.layer(leaveLayer), currentFloor,
                                    std::move(ents),
                                    module_key_for(currentFloor));
@@ -4509,7 +4514,8 @@ int main(int argc, char** argv) {
                 danger = activeWorld.fields().find<float>("danger");
                 const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld);
+                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
+                                       &bus, simTick);
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
                 game::ai_equip_step(reg, pool, activeLayer, simTick);
@@ -6517,13 +6523,14 @@ int main(int argc, char** argv) {
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt,
-                                         &aiMem, simNow);
+                                         &aiMem, simNow, &bus, simTick);
                 prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
                 // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
                 // слил его, где застало). Лужа — тот же стейн, что канал P.
-                // Социальная цена (свидетели чужой территории) придёт
-                // системой свидетельства (CANON.md S19), не веткой здесь.
+                // Социальная цена — деяние из needs_step (S19, 2026-09-05):
+                // один шов закрыл NPC и игрока, свидетели/уместность — у
+                // witness_step. Здесь остаётся только физика (стейн).
                 if (needs.voidedPee && reg.valid(player)) {
                     const vec3 rp = reg.get<Transform>(player).pos;
                     stain_splat(stack.layer(activeLayer), rp,
@@ -7883,6 +7890,31 @@ int main(int argc, char** argv) {
                     sl.count = unplaced;
                     if (sl.count == 0) sl = game::ItemSlot{};
                 };
+                // ДЕЯНИЕ «обыск/кража» (S14.2 + S19): взятие из контейнера в
+                // комнате, владельцем которой стоит ЧУЖАЯ фракция, — rob; из
+                // ничьей — обыск, цены нет. Владельцы сегодня не назначаются
+                // (решение владельца 2026-09-05: owner == 0 до agent-goals) —
+                // шов спит и оживёт раздачей владельцев без правки здесь.
+                // Одно деяние на ДЕЙСТВИЕ (Take/TakeAll), не на слот.
+                auto publish_rob_if_owned = [&](std::int32_t takenBefore) {
+                    if (containerTake == takenBefore) return; // ничего не взято
+                    if (!reg.valid(player)) return;
+                    const vec3 pp = reg.get<Transform>(player).pos;
+                    const game::RoomId rid = game::room_at(
+                        floorRooms, static_cast<int>(pp.x / kCellSize),
+                        static_cast<int>(pp.y / kCellSize),
+                        static_cast<int>(pp.z / kCellSize));
+                    const game::Room* rm = game::room_of(floorRooms, rid);
+                    if (rm == nullptr || rm->owner == 0) return; // ничья
+                    // У своей фракции не воруют (кодировка S14.3: 1..count).
+                    if (const auto* pref = reg.try_get<game::NpcRef>(player);
+                        pref != nullptr && pool.valid(pref->id) &&
+                        rm->owner <= game::kFactionCount &&
+                        pool.faction(pref->id) + 1u == rm->owner)
+                        return;
+                    game::deed_publish(bus, game::kVerbRob, player,
+                                       game::kInvalidNpc, pp, simTick);
+                };
                 // Пустая цель помечается ПОСЛЕ мутаций: opened — память карты
                 // «здесь уже был» ([container.h]), searched — её труп-близнец.
                 auto mark_if_empty = [&]() {
@@ -7929,15 +7961,19 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::Take: {
+                        const std::int32_t before = containerTake;
                         if (boxC && r.slot < game::kInvSlots)
                             take_box_slot(r.slot);
+                        publish_rob_if_owned(before);
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
                     }
                     case InvUiRequest::Kind::TakeAll: {
+                        const std::int32_t before = containerTake;
                         for (int i = 0; i < game::kInvSlots; ++i)
                             take_box_slot(i);
+                        publish_rob_if_owned(before);
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
@@ -9248,7 +9284,7 @@ int main(int argc, char** argv) {
                         game::FloorEntityState leaveEnts;
                         game::gather_floor_entities(reg, leaveLayer,
                                                     currentFloor, leaveEnts,
-                                                    &powerGrid);
+                                                    &powerGrid, &floorRooms);
                         write_floor_file_async(stack.layer(leaveLayer),
                                                currentFloor,
                                                std::move(leaveEnts),

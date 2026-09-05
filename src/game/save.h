@@ -515,6 +515,12 @@ struct FloorEntityState {
     // же клетки на всех этажах — межэтажный дефект умер этой же правкой) и
     // восстанавливается отсюда на restore.
     std::vector<std::uint64_t> powerKeys;
+    // Репутация комнат (S13.6, решение владельца 2026-09-05: «здесь
+    // убивали» переживает выгрузку этажа — S20.6 «этаж помнит всё»).
+    // НАКОПЛЕННОЕ, не декларация (закон масок S18): комнаты пересоздаются
+    // rooms_declare детерминированно, порядок объявления и есть ключ —
+    // секция пишется по индексу комнаты, без id.
+    std::vector<std::int16_t> roomReps;
 };
 
 // Проводные ширины записей. Якорь: клетка 3×u8 (макро-координаты — байты по
@@ -562,7 +568,10 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // v3 -> v4 (2026-08-31): PropRecord несёт q лежащего тела («в сейв пишем всё
 // честно — снимок этажа», решение владельца). Старые файлы отвергаются
 // целиком (S20.6 закон 4) — этаж перегенерируется.
-inline constexpr std::uint32_t kFloorFileVersion = 4u;
+// v4 -> v5 (2026-09-05): секция roomReps — репутация комнат переживает
+// выгрузку этажа (S13.6 + S20.6, решение владельца). То же правило
+// инвалидации: старый файл отвергается целиком.
+inline constexpr std::uint32_t kFloorFileVersion = 5u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World + сущности этажа into a complete floor file
@@ -737,9 +746,11 @@ std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
 // приезжает с пустыми руками, вещь ждёт на старом этаже (линки транзиентны
 // по решению владельца; лучше прежней немой потери, зафиксировано аудитом F).
 // Заряды в полёте (Charge/ChargeArmed вне пропа) — транзиент боя, не едут.
+struct FloorRooms; // game/room.h — репутация комнат едет секцией снимка
 std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
                                   FloorEntityState& out,
-                                  const PowerGridState* power = nullptr);
+                                  const PowerGridState* power = nullptr,
+                                  const FloorRooms* rooms = nullptr);
 
 // Пересоздать пропы этажа из записей. Destroy-first по PropOf на слое
 // (идемпотентность F9). Каждая запись рождает проп ЧЕРЕЗ таблицу
@@ -761,6 +772,13 @@ std::size_t spawn_pickup_records(Registry& reg, LayerId layer,
 // «чистить на каждом прибытии», см. FloorEntityState::powerKeys).
 void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
                         std::size_t n);
+
+// Вернуть комнатам накопленную репутацию из снимка — по индексу объявления
+// (порядок rooms_declare детерминирован, S12.1). Зовётся ПОСЛЕ rooms_declare
+// текущего прибытия; лишний хвост секции (модуль перенарезал комнаты)
+// молча отбрасывается — декларация главнее накопленного.
+void restore_room_reps(FloorRooms& rooms, const std::int16_t* reps,
+                       std::size_t n);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood

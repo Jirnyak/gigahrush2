@@ -123,7 +123,10 @@ enum class EventType : std::uint16_t {
     // глагол деяния (verbs.csv, пятый стол) и макро-клетка места (u8 каждая).
     // Деяние не знает о последствиях; цену считает потребитель-свидетель
     // (witness_step) по таблице цен. Producers: finalize_deaths (kill),
-    // облегчение (toilet, main); strike/rob — при посадке своих швов.
+    // облегчение осознанное (toilet, main) и невольное (needs_step),
+    // strike (player_melee_step + projectile_step, нелетальные), heal
+    // (медик в ai_step, раз в такт), rob (обыск владетельной комнаты, main;
+    // спит до назначения владельцев — решение владельца 2026-09-05).
     Deed,
 };
 

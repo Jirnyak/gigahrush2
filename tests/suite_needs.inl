@@ -965,6 +965,35 @@ void the_whole_floor_lives_on_one_clock() {
     // морг без еды — честное состояние клока, и ARM 1 выше его меряет.
 }
 
+// ДЕЯНИЕ «невольный слив» (S19, шов needs_step 2026-09-05): лопнувшее
+// давление публикует Deed(toilet) с актором и местом — один шов закрывает
+// NPC и игрока; уместность туалета зануляет цену у witness_step, не здесь.
+// Обе полярности: кап публикует ровно одно деяние, спокойный бар — ноль.
+void involuntary_relief_is_a_deed() {
+    Rig rig;
+    rig.build(100);
+    rig.needs().pee = kNeedMax; // давление на капе — этот же тик сольёт
+    std::size_t before = rig.bus.size();
+    needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr, 0.0, &rig.bus, 777u);
+    int deeds = 0;
+    for (std::size_t i = before; i < rig.bus.size(); ++i) {
+        const Event& ev = rig.bus.events()[i];
+        if (ev.type != EventType::Deed) continue;
+        ++deeds;
+        CHECK(ev.a == static_cast<std::uint32_t>(entt::to_integral(rig.body)));
+        CHECK((ev.c >> 24) == static_cast<std::uint32_t>(kVerbToilet));
+        CHECK(ev.tick == 777u);
+    }
+    CHECK(deeds == 1);
+    // Обратная полярность: без давления деяния нет.
+    before = rig.bus.size();
+    needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr, 0.0, &rig.bus, 778u);
+    deeds = 0;
+    for (std::size_t i = before; i < rig.bus.size(); ++i)
+        if (rig.bus.events()[i].type == EventType::Deed) ++deeds;
+    CHECK(deeds == 0);
+}
+
 } // namespace needs_test
 
 static void test_needs_all() {
@@ -978,4 +1007,5 @@ static void test_needs_all() {
     needs_test::pressure();
     needs_test::survives_the_body_swap();
     needs_test::the_whole_floor_lives_on_one_clock();
+    needs_test::involuntary_relief_is_a_deed();
 }

@@ -1880,7 +1880,16 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
                                           &grid, particles,
                                           &stack.layer(layer).gravity());
-            if (r.hit) landed = true;
+            if (r.hit) {
+                landed = true;
+                // ДЕЯНИЕ «удар» (S19): пуля в ЧЕЛОВЕКА на глазах у свидетелей
+                // — то же деяние, что и кулак (летальную двоит kill — гейт).
+                if (!r.lethal && reg.valid(h.source))
+                    if (const auto* vref = reg.try_get<NpcRef>(victim);
+                        vref != nullptr && pool.valid(vref->id))
+                        deed_publish(bus, kVerbStrike, h.source, vref->id,
+                                     h.impactPos, tick);
+            }
         } else if (h.other != entt::null && reg.valid(h.other)) {
             DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source,
                                           &grid, particles,
@@ -1899,6 +1908,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                     // NAME is now wrong; the behaviour was worse.
                     if (r.lethal)
                         if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+                    // ДЕЯНИЕ «удар» (S19) — как в victim-ветке выше.
+                    if (!r.lethal)
+                        if (const auto* vref = reg.try_get<NpcRef>(h.other);
+                            vref != nullptr && pool.valid(vref->id))
+                            deed_publish(bus, kVerbStrike, h.source, vref->id,
+                                         h.impactPos, tick);
                 }
             }
         }
@@ -2407,6 +2422,11 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     if (r.hit && selfEq && selfId != kInvalidNpc)
         wear_equipped(pool.inventory(selfId), *selfEq, EquipSlot::Weapon,
                       hash3(static_cast<std::uint32_t>(tick), selfId, 0x57EA9u));
+    // ДЕЯНИЕ «удар» по человеку отсюда НЕ публикуется — и это не пропуск:
+    // отбор цели выше идёт ТОЛЬКО по MobRef (кулак не достаёт жителя по
+    // построению), а свидетельство мобов — не дипломатия. Живой продюсер
+    // strike — projectile_step (пуля бьёт оба вида тел). Когда melee
+    // научится бить людей — публикация встаёт сюда тем же швом.
     (void)bus;
     return r.hit;
 }

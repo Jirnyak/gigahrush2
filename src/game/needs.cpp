@@ -6,6 +6,7 @@
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
+#include "game/witness.h"    // deed_publish — невольный слив = деяние (S19)
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -249,7 +250,8 @@ float needs_speed_scale(const Needs& n) {
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     AiMemory* mem, double now) {
+                     AiMemory* mem, double now, EventBus* bus,
+                     std::uint64_t tick) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -286,6 +288,10 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
 
         ReliefResult voided;
         needs_advance(n, dt, &voided);
+        // ДЕЯНИЕ «невольный слив» (S19): позиция и тело в руках только
+        // здесь. Цена/уместность/свидетели — целиком у witness_step.
+        if (bus != nullptr && (voided.pee > 0.0f || voided.poo > 0.0f))
+            deed_publish(*bus, kVerbToilet, e, kInvalidNpc, tr.pos, tick);
         if (camera) {
             out.voidedPee = voided.pee > 0.0f ? 1 : 0;
             out.voidedPoo = voided.poo > 0.0f ? 1 : 0;

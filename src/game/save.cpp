@@ -14,6 +14,7 @@
 #include "world/medium.h"     // medium_revive — этап «оживление сред»
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
 #include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
+#include "game/room.h"        // FloorRooms — репутация комнат в снимке (S13.6)
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
 #include "game/rpg.h"         // RpgStats (visit_rpg)
 #include "game/combat.h"      // PlayerRanged (visit_ranged / SAVMAG); Corpse (v15)
@@ -903,7 +904,8 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 
 std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
                                   FloorEntityState& out,
-                                  const PowerGridState* power) {
+                                  const PowerGridState* power,
+                                  const FloorRooms* rooms) {
     out = FloorEntityState{};
     // floor в записях трупов/обломков — этикетка спавнеров (они фильтруют по
     // ней при применении); у пропов/лута этажность даёт сам файл.
@@ -1003,6 +1005,10 @@ std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
     if (power)
         for (std::uint32_t i = 0; i < power->count; ++i)
             out.powerKeys.push_back(power->destroyedShieldKeys[i]);
+    // РЕПУТАЦИЯ КОМНАТ (S13.6, floor v5): по индексу объявления — порядок
+    // rooms_declare детерминирован и есть ключ (см. FloorEntityState).
+    if (rooms != nullptr)
+        for (const Room& r : rooms->list) out.roomReps.push_back(r.rep);
     return out.props.size() + out.corpses.size() + out.pickups.size() +
            out.debris.size() + out.powerKeys.size();
 }
@@ -1074,6 +1080,14 @@ std::size_t spawn_pickup_records(Registry& reg, LayerId layer,
             ++made;
     }
     return made;
+}
+
+void restore_room_reps(FloorRooms& rooms, const std::int16_t* reps,
+                       std::size_t n) {
+    // По индексу объявления; хвост длиннее списка (модуль перенарезал
+    // комнаты между версиями) отбрасывается — декларация главнее.
+    const std::size_t m = rooms.list.size() < n ? rooms.list.size() : n;
+    for (std::size_t i = 0; i < m; ++i) rooms.list[i].rep = reps[i];
 }
 
 void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
@@ -1600,6 +1614,10 @@ void floor_file_write(const World& w, int floorNumber,
         }
         bw.u32(static_cast<std::uint32_t>(e.powerKeys.size()));
         for (std::uint64_t kkey : e.powerKeys) bw.u64(kkey);
+        // v5: репутация комнат по индексу объявления (S13.6).
+        bw.u32(static_cast<std::uint32_t>(e.roomReps.size()));
+        for (std::int16_t rep : e.roomReps)
+            bw.u16(static_cast<std::uint16_t>(rep));
     }
     {
         // snapshot_floor чистит out первым делом (контракт) — геометрия
@@ -1751,6 +1769,17 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (!take(static_cast<std::size_t>(cnt) * 8)) return fail(SaveError::SizeMismatch);
     ents.powerKeys.resize(cnt);
     for (std::uint64_t& kkey : ents.powerKeys) br.u64(kkey);
+    // v5: репутация комнат.
+    if (!take(4)) return fail(SaveError::SizeMismatch);
+    br.u32(cnt);
+    if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
+    if (!take(static_cast<std::size_t>(cnt) * 2)) return fail(SaveError::SizeMismatch);
+    ents.roomReps.resize(cnt);
+    for (std::int16_t& rep : ents.roomReps) {
+        std::uint16_t u = 0;
+        br.u16(u);
+        rep = static_cast<std::int16_t>(u);
+    }
 
     // Геометрия — остаток blob, последним касанием.
     const std::size_t geoOff = blobBytes - left;

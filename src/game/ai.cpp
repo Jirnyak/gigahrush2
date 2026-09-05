@@ -11,7 +11,9 @@
 #include "ecs/components.h"   // Transform, Velocity, CameraTag
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
+#include "core/watch.h"       // kTactTicks — дебаунс деяния «лечить» (S19)
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
+#include "game/witness.h"     // deed_publish — лечение другого = деяние (S19)
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
@@ -587,7 +589,8 @@ std::uint32_t ai_release(Registry& reg, LayerId layer) {
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
-               const void* doorsDead, const World* world) {
+               const void* doorsDead, const World* world, EventBus* bus,
+               std::uint64_t tick) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and it means nothing can be left half-arbitrated: the token is
@@ -733,6 +736,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     Needs& own = pool.needs(id);
                     own.sleep -= kMedicFatiguePerSec * dt;
                     if (own.sleep < 0.0f) own.sleep = 0.0f;
+                    // ДЕЯНИЕ «лечить» (S19): кредит идёт каждый тик —
+                    // публиковать каждый нельзя. Stateless дебаунс: одно
+                    // деяние на пациента в ТАКТ (граница kTactTicks; ср.
+                    // «одно взятие на агента в час», S12.5).
+                    if (bus != nullptr && (tick & (kTactTicks - 1)) == 0)
+                        deed_publish(*bus, kVerbHeal, e, oid, ot.pos, tick);
                 }
             }
             if (totalCount > 0.0f) nearbyWounded01 = woundedCount / totalCount;
