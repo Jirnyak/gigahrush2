@@ -865,7 +865,7 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     CHECK(nWall + nLamp > 0u);
 
     std::vector<game::PropMeshInstance> insts;
-    const std::uint32_t n = game::collect_static_prop_mesh_instances(reg, layer, insts);
+    const std::uint32_t n = game::collect_static_prop_mesh_instances(reg, layer, 0, insts);
     CHECK(n == nWall + nLamp);
     CHECK(insts.size() == static_cast<std::size_t>(n));
 
@@ -916,7 +916,7 @@ static void test_collect_static_prop_mesh_instances_shapes() {
 
         std::vector<game::PropMeshInstance> after;
         const std::uint32_t n2 =
-            game::collect_static_prop_mesh_instances(reg, layer, after);
+            game::collect_static_prop_mesh_instances(reg, layer, 0, after);
         CHECK(n2 == n - 1u);
     }
 }

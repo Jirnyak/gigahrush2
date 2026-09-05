@@ -11,6 +11,7 @@
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
 #include "game/prop_form_table.h" // FormId — форма составного тела
 #include "game/prop_table.h"
+#include "core/watch.h"   // watch_light_phase — фаза цикла для программы щитка (S15.4)
 #include "world/anchor.h" // SubVoxelAnchor — ЕДИНАЯ запись якоря (S20.2)
 #include "world/world.h"
 #include "world/level_stack.h"
@@ -95,7 +96,52 @@ struct PropLight {
     std::uint32_t slot = kNoLightSlot;
     std::uint8_t coneDeg = 0; // полуугол, 0 = омни
     std::uint8_t flicker = 0; // FlickerProfile ordinal
+    // Кэш программы СВОЕГО щитка (ближайшего по тору; источник —
+    // ShieldProgram, единственный писатель кэша — assign_lamp_shields).
+    // Применяется только к mains — прибор со своим питанием фаз не знает,
+    // ровно как power cut. Дефолт круглосуточный: этаж без щитков светит
+    // как светил.
+    std::uint8_t phaseLevels[4] = {100, 100, 100, 100};
+    std::uint8_t phaseOffset = 0; // сдвиг в фазах 0..3
 };
+
+// ПРОГРАММА ЩИТКА (S15.4, посажена 2026-09-05): фаза цикла — параметр
+// щитка; время ламп не трогает (S15.3 «часы ничего не толкают»). Уровни —
+// проценты по четырём фазам watch_light_phase ([core/watch.h], сдвиг 17 =
+// две вахты). Дефолт — круглосуточный полный: движок политики не навязывает
+// (S10); фазы включаются ДАННЫМИ модуля — stamp_shield_programs выводит
+// программу из declared-глаголов комнаты щитка (решение владельца
+// 2026-09-05: «зависит от дизайна этажа в генераторе — могут быть щитки,
+// которые светят круглосуточно»). Перештамповка на КАЖДОМ прибытии
+// (generate И restore) — закон масок S18: декларация — чистая функция
+// модульных данных, в сейв не едет.
+struct ShieldProgram {
+    std::uint8_t levels[4]   = {100, 100, 100, 100}; // % по фазам цикла
+    std::uint8_t phaseOffset = 0;                    // сдвиг в фазах 0..3
+};
+
+// Уровень фазы на данном тике — ЧИСТАЯ функция (headless-тестируема).
+inline float shield_phase_level(const std::uint8_t levels[4],
+                                std::uint8_t phaseOffset,
+                                std::uint64_t tick) {
+    const int ph = (watch_light_phase(tick) + phaseOffset) & (kLightPhases - 1);
+    return static_cast<float>(levels[ph]) * 0.01f;
+}
+
+struct FloorRooms; // game/room.h — прямой include не нужен заголовку
+
+// Перештамповать программы всех щитков слоя из declared-глаголов их комнат:
+// комната, где модуль объявил «спать» (declared[kVerbSleep] > 0), живёт
+// жилым ритмом полный→рабочий→дежурный→тьма {100,60,25,0} (уровни —
+// решение владельца 2026-08-20); щиток вне таких зон — круглосуточный.
+// Возвращает число щитков. Зовётся на каждом прибытии ПОСЛЕ rooms_declare.
+std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
+                                    LayerId layer);
+
+// Привязать каждую mains-лампу слоя к ближайшему щитку (тороидально) и
+// скопировать его программу в кэш PropLight. Лампа без щитков на этаже
+// остаётся круглосуточной. Возвращает число привязанных ламп.
+std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer);
 
 // Headless POD mirror of gpu::PropInstance for tests / main upload.
 // Collect only StaticPropTag entities (detached props go to BodyPass).
@@ -209,7 +255,11 @@ std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
 // Collect StaticPropTag + PropMesh + Transform (+ optional Renderable) into a
 // flat instance list for PropPass upload. Detached DynamicBodyTag props are
 // excluded (BodyPass owns them). [jirnyak.md] §18 PropPass passive skin.
+// tick — для фазы щитка: плафон mains-лампы гаснет вместе со светом
+// (S15.4 шаг 4, «свет И emissive синхронно»). Пересборка редкая — граница
+// фазы раз в 17.5 мин поднимает propPassNeedsRebuild в app.
 std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::uint64_t tick,
                                                  std::vector<PropMeshInstance>& out);
 
 

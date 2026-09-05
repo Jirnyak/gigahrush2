@@ -1,7 +1,10 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "game/combat.h"          // Charge/ChargeArmed — проп-заряд от урона
+#include "game/flicker.h"         // FlickerProfile — фазы щитка только у mains
+#include "game/room.h"            // room_at/declared — программа щитка из данных модуля
 #include "game/room_supply.h"     // живые хуки: проп встал += / умер −= (S12.4)
+#include "game/verb_table.h"      // kVerbSleep — жилая зона = объявлено «спать»
 #include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
 #include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
@@ -1024,7 +1027,81 @@ std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
     return n;
 }
 
+std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
+                                    LayerId layer)
+{
+    // Жилой ритм — четыре фазы по две вахты: полный → рабочий → дежурный →
+    // тьма (уровни — решение владельца 2026-08-20, план time-watch шаг 2).
+    static constexpr std::uint8_t kDwellLevels[4] = {100, 60, 25, 0};
+    std::uint32_t n = 0;
+    auto view = reg.view<const Transform, const Interactable>();
+    for (auto e : view) {
+        if (view.get<const Interactable>(e).kind !=
+            Interactable::Kind::ElectricalShield)
+            continue;
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        ShieldProgram prog{}; // дефолт — круглосуточный полный (S10)
+        if (rooms != nullptr) {
+            const int cx = static_cast<int>(tr.pos.x / kCellSize);
+            const int cy = static_cast<int>(tr.pos.y / kCellSize);
+            const int cz = static_cast<int>(tr.pos.z / kCellSize);
+            const RoomId rid = room_at(*rooms, cx, cy, cz);
+            const Room* r = room_of(*rooms, rid);
+            // Программа — из ДАННЫХ модуля, не из ветки по виду (правило
+            // владельца 2026-08-23): объявил «спать» — район дышит жилым
+            // ритмом; коридор/цех/улица — круглосуточно.
+            if (r != nullptr && r->declared[kVerbSleep] > 0)
+                std::copy(std::begin(kDwellLevels), std::end(kDwellLevels),
+                          std::begin(prog.levels));
+        }
+        reg.emplace_or_replace<ShieldProgram>(e, prog);
+        ++n;
+    }
+    return n;
+}
+
+std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer)
+{
+    // Щитков на этаж — десятки (полоса ~0.35% настенных клеток), ламп —
+    // тысячи: разовый O(лампы × щитки) на прибытии, в кадре — ноль поиска
+    // (кэш в PropLight).
+    struct ShieldRef { vec3 pos; ShieldProgram prog; };
+    static std::vector<ShieldRef> shields;
+    shields.clear();
+    auto sview = reg.view<const Transform, const ShieldProgram>();
+    for (auto e : sview) {
+        const Transform& tr = sview.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        shields.push_back({tr.pos, sview.get<const ShieldProgram>(e)});
+    }
+
+    std::uint32_t n = 0;
+    auto lamps = reg.view<const Transform, PropLight>();
+    for (auto e : lamps) {
+        const Transform& tr = lamps.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        PropLight& pl = lamps.get<PropLight>(e);
+        // Фазы — только у общей сети, ровно как power cut (S15.4).
+        if (static_cast<FlickerProfile>(pl.flicker) != FlickerProfile::Mains)
+            continue;
+        const ShieldRef* best = nullptr;
+        float bestD2 = 0.0f;
+        for (const ShieldRef& s : shields) {
+            const float d2 = wrap_dist2(s.pos, tr.pos, kWorldExtent);
+            if (best == nullptr || d2 < bestD2) { best = &s; bestD2 = d2; }
+        }
+        if (best == nullptr) continue; // этаж без щитков — круглосуточно
+        std::copy(std::begin(best->prog.levels), std::end(best->prog.levels),
+                  std::begin(pl.phaseLevels));
+        pl.phaseOffset = best->prog.phaseOffset;
+        ++n;
+    }
+    return n;
+}
+
 std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::uint64_t tick,
                                                  std::vector<PropMeshInstance>& out)
 {
     std::uint32_t n = 0;
@@ -1043,6 +1120,17 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
         inst.emissive  = mesh.emissive;
         inst.flags     = mesh.flags;
         inst.animPhase = mesh.animPhase;
+        // Фаза щитка гасит ПЛАФОН вместе со светом (S15.4 шаг 4): иначе
+        // обесточенная фазой лампа светила бы арматурой. Мерцание остаётся
+        // в шейдере (чистая функция времени); фазовый уровень — данные
+        // программы, поэтому едет инстансом при редкой пересборке.
+        if (const auto* pl = reg.try_get<const PropLight>(e);
+            pl != nullptr &&
+            static_cast<FlickerProfile>(pl->flicker) == FlickerProfile::Mains) {
+            inst.emissive = static_cast<std::uint8_t>(
+                static_cast<float>(inst.emissive) *
+                shield_phase_level(pl->phaseLevels, pl->phaseOffset, tick));
+        }
         if (reg.all_of<Renderable>(e))
             inst.color = reg.get<Renderable>(e).color;
         out.push_back(inst);

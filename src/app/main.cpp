@@ -619,7 +619,8 @@ static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
 float samosbor_fog_scale(const game::SamosborState& st); // определение ниже
 
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
-                                 float timeSec, const game::SamosborState& samosbor,
+                                 float timeSec, std::uint64_t simTick,
+                                 const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
                                  const game::NoiseField* noiseField = nullptr,
                                  const game::PowerGridState* powerGrid = nullptr,
@@ -718,7 +719,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // (проп на общей сети, interact LightBulb); прибор со своим питанием живёт
     // при обесточке. [ddalight.md]
     std::uint32_t dbgTotal = 0, dbgLit = 0, dbgUnpowered = 0, dbgInactive = 0,
-                  dbgCulled = 0;
+                  dbgCulled = 0, dbgPhaseDark = 0;
     {
         auto lampView = reg.view<const Transform, const game::PropLight>();
         for (auto e : lampView) {
@@ -734,20 +735,30 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
 
             const vec3 pos = tr.pos + vec3{0.0f, 0.0f, -pl.dropM};
             const auto profile = static_cast<game::FlickerProfile>(pl.flicker);
-            // Только mains-профиль сидит на общей сети — power cut гасит его;
-            // прибор со своим питанием живёт при обесточке. (Сеть под
-            // пересмотром владельца — глубже не связываемся.)
-            if (profile == game::FlickerProfile::Mains && powerGrid &&
-                powerGrid->is_power_cut(pos)) {
-                ++dbgUnpowered;
-                continue;
+            // Только mains-профиль сидит на общей сети — power cut и фаза
+            // щитка гасят его; прибор со своим питанием живёт при обесточке.
+            // (Сеть под пересмотром владельца — глубже не связываемся.)
+            float phaseMul = 1.0f;
+            if (profile == game::FlickerProfile::Mains) {
+                if (powerGrid && powerGrid->is_power_cut(pos)) {
+                    ++dbgUnpowered;
+                    continue;
+                }
+                // Программа щитка (S15.4): фаза «тьма» гасит лампу без
+                // отдельной ветки — нулевая интенсивность не рисуется.
+                phaseMul = game::shield_phase_level(pl.phaseLevels,
+                                                    pl.phaseOffset, simTick);
+                if (phaseMul <= 0.001f) {
+                    ++dbgPhaseDark;
+                    continue;
+                }
             }
 
             // ЕДИНАЯ функция мерцания ([game/flicker.h] == shaders/flicker.glsl):
             // та же математика красит emissive плафона в prop.frag — свет и
             // арматура пульсируют синхронно по построению.
-            const float intensity =
-                pl.intensity * game::flicker_factor(profile, pos, timeSec);
+            const float intensity = pl.intensity * phaseMul *
+                                    game::flicker_factor(profile, pos, timeSec);
 
             // Заякоренный проп — статик-слот: в кадре пишется ТОЛЬКО
             // интенсивность, позиция/радиус испечены таблицей, камерного калла
@@ -844,9 +855,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         static std::uint32_t frame = 0;
         if ((frame++ % 120u) == 0u) {
             std::fprintf(stderr,
-                         "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u culled=%u"
+                         "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u phase-dark=%u culled=%u"
                          " | static=%u total=%u dropped=%u\n",
-                         dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgCulled,
+                         dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgPhaseDark, dbgCulled,
                          grid.static_count(), grid.active_light_count(),
                          grid.overflow_dropped());
         }
@@ -1884,6 +1895,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   gpu::PropPass& propPass,
                                   const game::AntourageBake* ab,
                                   const World& world,
+                                  std::uint64_t simTick,
                                   std::vector<vec3>* dripEmitters = nullptr,
                                   const std::vector<game::DetachedPiece>* falling =
                                       nullptr) {
@@ -1893,7 +1905,7 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
     };
     static std::vector<game::PropMeshInstance> insts;
     insts.clear();
-    game::collect_static_prop_mesh_instances(reg, layer, insts);
+    game::collect_static_prop_mesh_instances(reg, layer, simTick, insts);
     for (const auto& m : insts) {
         if (m.shape >= static_cast<std::uint8_t>(gpu::kPropShapeCount)) continue;
         gpu::PropInstance pi{};
@@ -2626,6 +2638,10 @@ int main(int argc, char** argv) {
             // assume. No freeze: the worker owns a snapshot, never the grid,
             // so doors may move mid-bake. [door.h, game/rebake.h]
             game::rooms_supply_rebuild(floorRooms, reg, l0);
+            // Программы щитков + привязка ламп (S15.4): перештамповка на
+            // КАЖДОМ прибытии — декларация из данных модуля, не сейв (S18).
+            game::stamp_shield_programs(reg, &floorRooms, l0);
+            game::assign_lamp_shields(reg, l0);
             game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
@@ -2635,7 +2651,8 @@ int main(int argc, char** argv) {
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
                                       streamer.antourage_at_layer(registry, l0),
-                                      stack.layer(l0), &dripEmitters);
+                                      stack.layer(l0), /*simTick*/ 0,
+                                      &dripEmitters);
                 upload_wires(verletPass, streamer.antourage_at_layer(registry, l0));
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, l0));
             }
@@ -3259,6 +3276,10 @@ int main(int argc, char** argv) {
     };
     auto arrive_doors_nav = [&](LayerId nl) {
         game::rooms_supply_rebuild(floorRooms, reg, nl);
+        // Программы щитков + привязка ламп (S15.4): декларация модульных
+        // данных, перештамповка на каждом прибытии (S18).
+        game::stamp_shield_programs(reg, &floorRooms, nl);
+        game::assign_lamp_shields(reg, nl);
         game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
@@ -3274,7 +3295,7 @@ int main(int argc, char** argv) {
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
+                                  stack.layer(nl), simTick, &dripEmitters);
                 upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
         }
@@ -3336,7 +3357,7 @@ int main(int argc, char** argv) {
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
+                                  stack.layer(nl), simTick, &dripEmitters);
             upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
             upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
         }
@@ -6796,6 +6817,8 @@ int main(int argc, char** argv) {
                             diffusion_driver_on_floor_built(
                                 diffusionDriver, stack.layer(nl), nl);
                             game::rooms_supply_rebuild(floorRooms, reg, nl);
+                            game::stamp_shield_programs(reg, &floorRooms, nl);
+                            game::assign_lamp_shields(reg, nl);
                             game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
@@ -6804,7 +6827,7 @@ int main(int argc, char** argv) {
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
+                                  stack.layer(nl), simTick, &dripEmitters);
                 upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
                             }
@@ -7032,6 +7055,11 @@ int main(int argc, char** argv) {
                     carriedRpg = *rsLive;
                 }
                 ++simTick;
+                // Граница фазы освещения (S15.4, раз в 17.5 мин): плафоны
+                // mains-ламп несут фазовый уровень в emissive инстанса —
+                // редкая пересборка пасса, ноль CPU между границами.
+                if (watch_light_phase_border(simTick - 1, simTick))
+                    propPassNeedsRebuild = true;
                 // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
                 // exactly 2.000 s at 125 Hz — kSimStepMs is exactly 8 ms, so the
                 // period is lossless and cannot drift. Placed after ++simTick so the
@@ -8798,7 +8826,7 @@ int main(int argc, char** argv) {
                 // 2026-08-26) — dirty-редизайн отложен с числом: придёт
                 // естественно с программой щитка (S15.4), которая всё равно
                 // переустроит «кто пишет интенсивности».
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, simTick, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
                 lightGrid.update_and_dispatch(cmd);
                 if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
             }
@@ -8820,8 +8848,8 @@ int main(int argc, char** argv) {
                     const auto ctPs = std::chrono::steady_clock::now();
                     merge_ecs_prop_meshes(reg, activeLayer, propPass,
                                           streamer.antourage_at_layer(registry, activeLayer),
-                                          stack.layer(activeLayer), &dripEmitters,
-                                          &antourageFalling);
+                                          stack.layer(activeLayer), simTick,
+                                          &dripEmitters, &antourageFalling);
                     const float psMs = carve_ms_since(ctPs);
                     g_carveT.propSkinMs += psMs;
                     g_frameMark.propSkinMs += psMs;
@@ -9284,6 +9312,8 @@ int main(int argc, char** argv) {
                         // под --shot. [save.h]
                         arrivedRestored = floor_entity_half(nl, currentFloor);
                         game::rooms_supply_rebuild(floorRooms, reg, nl);
+                        game::stamp_shield_programs(reg, &floorRooms, nl);
+                        game::assign_lamp_shields(reg, nl);
                         game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
@@ -9296,7 +9326,7 @@ int main(int argc, char** argv) {
                         if (propPass.ready()) {
                             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
+                                  stack.layer(nl), simTick, &dripEmitters);
                 upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
                         }
