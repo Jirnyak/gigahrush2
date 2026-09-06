@@ -133,9 +133,14 @@ static_assert(std::is_trivially_copyable_v<Noise>);
 // worse failure.
 inline constexpr LayerId kNoiseLayerMax = 255u;
 
-// Ring capacity. 64 is the reference's `NOISE_RECORD_CAP`, and it is generous:
-// with the publishers wired today (one gunshot per weapon cooldown, one per crate,
-// one per death) a busy second produces single digits.
+// Ring capacity. 64 is the reference's `NOISE_RECORD_CAP`. Канонический
+// масштаб боя — СОТНИ шумов в секунду (перестрелки сотен участников,
+// problems.md §65), то есть в гуще боя кольцо перемалывается быстрее ttl и
+// журнал — ОКНО последних событий, не память. Это НОРМА по замыслу (решение
+// владельца 2026-09-06): вытеснение слабейшего даёт «громкое живёт, мелочь
+// тонет», а памяти о каждом выстреле агенту и не положено. Прежняя приписка
+// «a busy second produces single digits» была тем самым зашитым допущением
+// о частоте, за которое §65 казнил акустику.
 inline constexpr std::size_t kNoiseCap = 64;
 
 // Hard ceiling on an audible radius, metres. The reference's `NOISE_RADIUS_CAP`.
@@ -154,8 +159,9 @@ struct NoiseField {
     std::uint16_t pad_ = 0;
 
     // True when nothing at all is audible anywhere. THE gate every consumer tests
-    // first, and it is true on almost every tick — which is what makes the whole
-    // system free when nobody is shooting.
+    // first — it makes the system free when nobody is shooting. В бою канона
+    // (сотни шумов/сек, §65) гейт по построению НЕ срабатывает — цена дальше
+    // обязана держаться сама (и держится: всё ниже O(kNoiseCap)).
     bool quiet() const { return liveCount == 0; }
     std::size_t live() const { return liveCount; }
 };
@@ -262,10 +268,10 @@ NoiseProfile container_open_noise();
 // Hearing
 // ---------------------------------------------------------------------------
 
-// Дистанция от `pos` до `n`, метры. С акустикой (`ac` и бейкнутый шар) —
-// ПУТЕВАЯ по скелету: стены глушат, дыры пропускают, недостижимое в шаре =
-// бесконечность. Без неё (nullptr, нет шара, headless-тест) — прежняя
-// прямолинейная тороидальная. THE one place a distance is computed.
+// Дистанция от `pos` до `n`, метры — прямолинейная тороидальная (все три оси
+// заворачиваются, W-стопка не участвует). Стены НЕ глушат — действующий
+// регресс §65 до посадки звукового поля (sound-field.md: стена = глухо,
+// дистанция станет графовой). THE one place a distance is computed.
 float noise_distance(const Noise& n, const vec3& pos);
 
 // Can something at `pos` hear `n`? `hearingMult` scales the noise's radius, which

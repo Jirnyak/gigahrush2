@@ -3764,6 +3764,21 @@ int main(int argc, char** argv) {
             relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
             relTick.changes = wt.changes;
         }
+        // Сторож переполнения шины. event_bus.h обещает «OVERFLOW DROPS,
+        // LOUDLY», но до 2026-09-06 dropped() не читал никто — немое допущение
+        // о масштабе, класс §65. Дроп здесь = потерянные деяния/смерти, то
+        // есть дипломатия; печатается по факту роста, раз на изменение.
+        {
+            static std::uint64_t busDroppedSeen = 0;
+            if (bus.dropped() != busDroppedSeen) {
+                busDroppedSeen = bus.dropped();
+                std::fprintf(stderr,
+                             "[bus] %llu events dropped since init — ring "
+                             "%zu overflowed, deeds/deaths lost\n",
+                             static_cast<unsigned long long>(busDroppedSeen),
+                             game::EventBus::kCapacity);
+            }
+        }
         bus.clear();
 
         // Планировщик допекания ([game/rebake.h]): раз в кадр, в топе кадра до

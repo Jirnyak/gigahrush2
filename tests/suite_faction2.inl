@@ -13,6 +13,8 @@
 // owns the CHECK macro, so the include has to land after it, and the suite carries
 // its own #include of the system under test to keep that diff two lines.
 
+#include <chrono>          // замер цены свидетеля (§66) — стиль замера акустики
+
 #include "game/faction_relations.h"
 #include "game/room.h"     // FloorRooms — контекст свидетеля (S19)
 #include "game/witness.h"  // deed_publish/witness_step — потребитель деяний
@@ -550,6 +552,141 @@ static void test_faction2_all() {
         rel.reset_player_row_col();
         CHECK(rel.at(kPly, kCit) == 50);              // forgiven
         CHECK(!bodies_hostile(rel, pool, pid, bystander));
+    }
+
+    // ---- 6б. ЦЕНА СВИДЕТЕЛЯ (§66) и отсечки до луча --------------------------
+    //
+    // los.h:22-26 запрещает sub_march-свип «over 600 monsters every tick» — 600
+    // тел здесь взяты ИЗ ЭТОГО запрета, не назначены. Толпа одной фракции в
+    // зрении (18 м — за слухом kill 12 м, чтобы каждый непогашенный кандидат
+    // стоил ЛУЧ) при одном деянии; исход по построению — одна строка матрицы.
+    // Замер печатается в stderr ([witness-cost]), числа живут в problems.md §66;
+    // CHECK'и пинят исход, не время. Отсечки инкремента C (sound-field.md)
+    // обязаны сохранить исход ровно этим — строка решается ЛЮБЫМ воспринявшим
+    // её членом, все множители построчные.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        bus.init();
+        World w;              // воздух: каждый луч честно доходит до деяния
+        FloorRooms rooms;
+        FactionRelations rel{};
+        rel.reset();
+
+        const vec3 deed0{40.0f, 40.0f, 4.0f};
+        NpcId actorId = 0;
+        Entity actor = make_body(reg, pool, Faction::Liquidators, deed0,
+                                 100, actorId);
+
+        // 600 горожан кольцом радиуса 18 м вокруг деяния, в горизонте z деяния.
+        constexpr int kSweepBodies = 600;
+        constexpr float kRingM = 18.0f;
+        for (int i = 0; i < kSweepBodies; ++i) {
+            const float a = 6.2831853f * static_cast<float>(i) /
+                            static_cast<float>(kSweepBodies);
+            NpcId id = 0;
+            make_body(reg, pool, Faction::Citizens,
+                      vec3{deed0.x + kRingM * std::cos(a),
+                           deed0.y + kRingM * std::sin(a), deed0.z},
+                      100, id);
+        }
+
+        // Исход: одно деяние, замечено, ровно ОДИН сдвиг матрицы (дедуп строки
+        // держит толпу). Это же — гейт отсечек: убей дедуп, и changes станет
+        // числом воспринявших.
+        {
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, deed0, 100,
+                                 victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            deed_publish(bus, kVerbKill, actor, victim, deed0, 1u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 1u);
+            CHECK(wt.deeds == 1);
+            CHECK(wt.witnessed == 1);
+            CHECK(wt.changes == 1);
+            bus.clear();
+        }
+
+        // Замер: тот же свип K раз (семантика прогона выше, счётчики уже не
+        // проверяются — матрица дальше просто упирается в клامп).
+        {
+            constexpr int kReps = 32;
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, deed0, 100,
+                                 victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            const auto t0 = std::chrono::steady_clock::now();
+            for (int r = 0; r < kReps; ++r) {
+                deed_publish(bus, kVerbKill, actor, victim, deed0,
+                             2u + static_cast<std::uint64_t>(r));
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer,
+                             2u + static_cast<std::uint64_t>(r));
+                bus.clear();
+            }
+            const auto t1 = std::chrono::steady_clock::now();
+            const double usPerDeed =
+                std::chrono::duration<double, std::micro>(t1 - t0).count() /
+                kReps;
+            std::fprintf(stderr,
+                         "[witness-cost] %d тел в зрении, 1 деяние: %.1f us "
+                         "(%.3f us/тело)\n",
+                         kSweepBodies, usPerDeed,
+                         usPerDeed / kSweepBodies);
+        }
+
+        // Свои — ЕДИНСТВЕННЫЙ свидетель: дипломатии нет, но деяние ЗАМЕЧЕНО
+        // (репутация места живёт с anyWitness). Ловит отсечку, поспешившую
+        // резать своих ДО того, как замеченность установлена.
+        {
+            const vec3 deed1{40.0f, 40.0f, 68.0f};   // 64 м от кольца — вне всего
+            NpcId ownEye = 0;
+            make_body(reg, pool, Faction::Liquidators,
+                      vec3{deed1.x + 2.0f, deed1.y, deed1.z}, 100, ownEye);
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, deed1, 100,
+                                 victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            const std::int8_t before = rel.at(kLiq, kCit);
+            deed_publish(bus, kVerbKill, actor, victim, deed1, 40u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 40u);
+            CHECK(wt.witnessed == 1);
+            CHECK(wt.changes == 0);
+            CHECK(rel.at(kLiq, kCit) == before);
+            bus.clear();
+        }
+
+        // Слух ПЕРВЫМ, луч — только неуслышанному: деяние в 8 м ЗА СТЕНОЙ
+        // слышно (прямолинейный слух — действующий закон §65, стена звук не
+        // глушит), и луч зрения ему не нужен. Ловит полярность «зрение решает
+        // одно»: занули слух или дай лучу перезаписать perceived — стена
+        // погасит свидетеля.
+        {
+            const vec3 wit2{28.0f, 41.0f, 132.0f};   // клетка x=14
+            const vec3 deed2{21.0f, 41.0f, 133.0f};  // центр клетки x=10
+            for (int y = 19; y <= 21; ++y)           // заслон 3x3 клетки на луче
+                for (int z = 65; z <= 67; ++z)
+                    w.grid().fill_cell(12, y, z, kMatConcrete);
+            NpcId ear = 0;
+            make_body(reg, pool, Faction::Citizens, wit2, 100, ear);
+            NpcId victim = 0;
+            Entity v = make_body(reg, pool, Faction::Citizens, deed2, 100,
+                                 victim);
+            reg.destroy(v);
+            pool.kill(victim);
+            deed_publish(bus, kVerbKill, actor, victim, deed2, 41u);
+            const WitnessTick wt =
+                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 41u);
+            CHECK(wt.witnessed == 1);
+            CHECK(wt.changes == 1);
+            bus.clear();
+        }
     }
 
     // ---- 7. Event payloads: the signed slot, and the per-type tally ----------

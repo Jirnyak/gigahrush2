@@ -142,25 +142,34 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
             const NpcId wid = view.get<const NpcRef>(w).id;
             if (!pool.valid(wid)) continue;
 
+            // Исходо-эквивалентная отсечка ДО дистанции и луча (§66, дешёвая
+            // половина — sound-field.md инкремент C): строка матрицы решается
+            // ЛЮБЫМ воспринявшим её членом (все множители ниже построчные),
+            // поэтому когда строка уже отреагировала — или свидетель свой,
+            // чей вклад только anyWitness, — восприятие не добавит ничего,
+            // ЕСЛИ замеченность уже установлена. Без anyWitness резать нельзя:
+            // деяние при одних своих всё ещё ЗАМЕЧЕНО (репутация места).
+            const std::uint8_t rowW = rel_row(pool, wid);
+            if (anyWitness && (rowW == rowA || rowSeen[rowW])) continue;
+
             const float dist = std::sqrt(wrap_dist2(tr.pos, deedPos,
                                                     kWorldExtent));
-            bool perceived = false;
-            if (dist <= kWitnessSightM) {
+            // Слух — прямолинейная тороидальная дистанция с капом радиуса:
+            // ОДИН закон слышимости с журналом шумов (решение владельца
+            // 2026-09-06, вырез акустики — problems.md §65). Проверяется
+            // ПЕРВЫМ: услышанному деянию луч не нужен, а sub_march — вся цена
+            // этой системы (§66); исход тот же, восприятие = слух ИЛИ зрение.
+            bool perceived = hearM > 0.0f &&
+                             dist <= (hearM < kNoiseRadiusCap ? hearM
+                                                              : kNoiseRadiusCap);
+            if (!perceived && dist <= kWitnessSightM) {
                 const vec3 eye{tr.pos.x, tr.pos.y, tr.pos.z + kEyeLiftM};
                 SubRayHit hit;
                 perceived = !sub_march(world.grid(), eye, deedPos, hit);
             }
-            // Слух — прямолинейная тороидальная дистанция с капом радиуса:
-            // ОДИН закон слышимости с журналом шумов (решение владельца
-            // 2026-09-06, вырез акустики — problems.md §65). dist выше уже
-            // тороидальный.
-            if (!perceived && hearM > 0.0f)
-                perceived = dist <= (hearM < kNoiseRadiusCap ? hearM
-                                                             : kNoiseRadiusCap);
             if (!perceived) continue;
             anyWitness = true;
 
-            const std::uint8_t rowW = rel_row(pool, wid);
             if (rowW == rowA) continue;      // свои — преступление, не дипломатия
             if (rowSeen[rowW]) continue;     // эта фракция уже отреагировала
             rowSeen[rowW] = true;
