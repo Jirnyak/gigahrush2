@@ -736,6 +736,57 @@ static void test_noise_walls_deafen() {
                 static_cast<unsigned long long>(ac->bakedCells));
 }
 
+// ЦЕНА БЕЙКА ШАРА (вопрос владельца 2026-09-06: «бейк BFS на каждый
+// выстрел — безумие?»). Меряется ХУДШИЙ случай: пустой открытый мир —
+// флуд нечему остановить, каждый бейк заливает максимум своего предела.
+// Два предела: потолок 48 м (взрыв/кап радиуса) и типовой выстрел 20 м
+// (предел 32 м = radius × 1.6). Числа печатаются, не гейтятся (тайминги
+// в CI дрожат); гейтится только факт «по бейку на шум».
+static void test_noise_bake_cost() {
+    World w; // пустой = воздух: худший случай, стен нет
+    NoiseProfile loud;
+    loud.radius = 48.0f;
+    loud.ttlMs = 60000;
+    loud.severity = 5;
+    loud.source = NoiseSource::Explosion;
+
+    NoiseField f;
+    auto ac = std::make_unique<NoiseAcoustics>();
+    for (std::size_t i = 0; i < kNoiseCap; ++i)
+        noise_publish(f, 0,
+                      vec3{static_cast<float>(i * 7), 60.0f, 60.0f}, loud, 0);
+    const std::clock_t w0 = std::clock();
+    const std::uint32_t bakedLoud = noise_acoustics_step(*ac, f, w, 0);
+    const std::clock_t w1 = std::clock();
+    CHECK(bakedLoud == kNoiseCap); // по бейку на шум, ровно один раз
+    const double loudUs =
+        1e6 * static_cast<double>(w1 - w0) / CLOCKS_PER_SEC / kNoiseCap;
+    const std::uint64_t loudCells = ac->bakedCells / ac->bakes;
+
+    NoiseProfile shot;
+    shot.radius = 20.0f; // типовой громкий ствол (формула даёт 9..24)
+    shot.ttlMs = 60000;
+    shot.severity = 3;
+    shot.source = NoiseSource::WeaponFire;
+    NoiseField f2;
+    auto ac2 = std::make_unique<NoiseAcoustics>();
+    for (std::size_t i = 0; i < kNoiseCap; ++i)
+        noise_publish(f2, 0,
+                      vec3{static_cast<float>(i * 7), 60.0f, 60.0f}, shot, 0);
+    const std::clock_t s0 = std::clock();
+    const std::uint32_t bakedShot = noise_acoustics_step(*ac2, f2, w, 0);
+    const std::clock_t s1 = std::clock();
+    CHECK(bakedShot == kNoiseCap);
+    const double shotUs =
+        1e6 * static_cast<double>(s1 - s0) / CLOCKS_PER_SEC / kNoiseCap;
+    const std::uint64_t shotCells = ac2->bakedCells / ac2->bakes;
+
+    std::printf("noise-bake: worst-open blast(48m) %.1f us/bake %llu cells; "
+                "shot(20m) %.1f us/bake %llu cells\n",
+                loudUs, static_cast<unsigned long long>(loudCells), shotUs,
+                static_cast<unsigned long long>(shotCells));
+}
+
 static void test_noise_all() {
     test_noise_field_bounds();
     test_noise_fades();
@@ -747,4 +798,5 @@ static void test_noise_all() {
     test_hunt_precedence_and_deaf_kinds();
     test_noise_walls_deafen();
     test_noise_cost();
+    test_noise_bake_cost();
 }
