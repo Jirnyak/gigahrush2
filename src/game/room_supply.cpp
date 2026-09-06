@@ -22,16 +22,26 @@ void supply_add_item(FloorRooms& fr, RoomId room, std::uint16_t item,
     Room* r = room_of(fr, room);
     if (r == nullptr || !item_valid(item) || countDelta == 0) return;
     const auto& vec = kItemVerbs[item - 1]; // item ids 1-based ([item_table.h])
-    for (std::size_t v = 0; v < kVerbCount; ++v)
+    for (std::size_t v = 0; v < kVerbCount; ++v) {
         r->supply[v] += static_cast<std::int32_t>(vec[v]) * countDelta;
+        // Храповик радиус-отсечки (room.h): граница только растёт — падение
+        // supply её не сужает, поэтому она всегда ВЕРХНЯЯ (S13.2).
+        const std::int32_t bound = r->declared[v] + r->supply[v];
+        if (bound > fr.maxOffer[v]) fr.maxOffer[v] = bound;
+    }
+    if (countDelta > 0) rooms_bin_ceil_raise(fr, *r); // потолки бинов, room.h
 }
 
 void supply_add_prop(FloorRooms& fr, RoomId room, PropId id, int sign) {
     Room* r = room_of(fr, room);
     if (r == nullptr || !prop_valid(id) || sign == 0) return;
     const auto& vec = kPropVerbs[static_cast<std::size_t>(id)];
-    for (std::size_t v = 0; v < kVerbCount; ++v)
+    for (std::size_t v = 0; v < kVerbCount; ++v) {
         r->supply[v] += static_cast<std::int32_t>(vec[v]) * sign;
+        const std::int32_t bound = r->declared[v] + r->supply[v]; // храповик,
+        if (bound > fr.maxOffer[v]) fr.maxOffer[v] = bound;       // см. выше
+    }
+    if (sign > 0) rooms_bin_ceil_raise(fr, *r); // потолки бинов, room.h
 }
 
 void rooms_supply_rebuild(FloorRooms& fr, Registry& reg, LayerId layer) {

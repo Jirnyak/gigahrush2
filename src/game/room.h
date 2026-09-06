@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "game/verb_table.h" // kVerbCount — K из verbs.csv, не литерал
+#include "world/types.h"     // kMacroDim — бины комнат той же сетки, что roomAt
 
 namespace giga::game {
 
@@ -79,12 +80,58 @@ struct Room {
     std::int32_t supply[kVerbCount] = {};
 };
 
+// БИНЫ КОМНАТ — ступень иерархии над roomAt для радиус-отбора кандидатов
+// (agent-goals B). Законна по оговорке S2: бин СУЖАЕТ множество («в этом
+// объёме такие-то комнаты»), ОТВЕЧАЕТ всё равно комната честной дистанцией
+// по своим боксам. CellBins (sim/) не переиспользован осознанно: он
+// сущностный (Entity-ключ, пере-сборка по тику), здесь — статичная карта
+// зон этажа, штампуемая room_declare и живущая до rooms_reset.
+//
+// Бин несёт ДВЕ вещи: список комнат и ПОТОЛОК предложения по глаголу
+// (максимум declared+supply по своим комнатам, храповик — только растёт).
+// Потолок и есть отсечка: Σ спрос·потолок[бин] минус нижняя грань пути до
+// бина — верхняя грань score ЛЮБОЙ комнаты бина; не догоняет лидера —
+// бин пропущен целиком, комнаты даже не суждены. Глобальный максимум
+// (maxOffer ниже) для этого слишком верхний: он собран из максимумов
+// РАЗНЫХ комнат, и одна богатая столовая растягивала радиус на весь тор
+// (живой замер B: cand=14742, все бины впустую).
+//
+// Ребро бина = 8 клеток (kRoomBinShift = 3) — вывод: обход при отсечке
+// потолками упирается не в комнаты, а в сами бины; (128/8)³ = 4096 бинов
+// проверяются одним Σ спрос·потолок даже в худшем случае за копейки, а
+// потолки стоят 4096 × kVerbCount × 4 Б = 304 КиБ поверх 4 МиБ roomAt.
+// Ребро 4 давало бы ×8 бинов и мегабайты потолков ради разрешения
+// отсечки в 4 клетки — гейт B (< 0.1 мс) того не требует.
+inline constexpr int kRoomBinShift = 3;
+inline constexpr int kRoomBinDim = kMacroDim >> kRoomBinShift; // 32
+inline constexpr std::size_t kRoomBinCount =
+    static_cast<std::size_t>(kRoomBinDim) * kRoomBinDim * kRoomBinDim;
+
+inline std::size_t room_bin_index(int bx, int by, int bz) {
+    const int m = kRoomBinDim - 1; // dim — степень двойки, wrap маской
+    return (static_cast<std::size_t>(bz & m) * kRoomBinDim +
+            static_cast<std::size_t>(by & m)) *
+               kRoomBinDim +
+           static_cast<std::size_t>(bx & m);
+}
+
 // Комнаты одного этажа: плотный список + пул боксов + плоский индекс.
 // Пересоздаётся на каждом входе (закон 2) — в снимок этажа не едет.
 struct FloorRooms {
     std::vector<Room> list;      // плотный, без дыр; RoomId = индекс + 1
     std::vector<RoomBox> boxes;  // композиции всех комнат, подряд
     std::vector<RoomId> roomAt;  // kMacroDim^3, u16; пуст до rooms_reset
+    // Бины: какие комнаты пересекают объём бина (комната может лежать в
+    // нескольких — дедуп на обходе штампом эпохи, GoalsScratch).
+    std::vector<std::vector<RoomId>> bins; // kRoomBinCount после rooms_reset
+    // Потолки бинов [бин × kVerbCount], храповик как maxOffer (см. шапку).
+    std::vector<std::int32_t> binCeil;
+    // ХРАПОВИК верхней границы предложения по глаголу: max по комнатам от
+    // (declared + supply). Только растёт (room_declare, supply-хуки) и
+    // сбрасывается rooms_reset — падение supply границу не сужает, значит
+    // она ВСЕГДА верхняя и отсечка радиусом никогда не отрежет честного
+    // кандидата (S13.2: R = maxИнтерес / цена клетки — радиус ВЫВОДИТСЯ).
+    std::int32_t maxOffer[kVerbCount] = {};
     // Псевдонимы модуля: fnv1a(токен) -> id. Линейный список: их единицы
     // на этаж (только авторские комнаты), поиск — по событию, не по тику.
     std::vector<std::pair<std::uint32_t, RoomId>> aliases;
@@ -105,6 +152,11 @@ void rooms_reset(FloorRooms& fr);
 RoomId room_declare(FloorRooms& fr, const RoomBox* boxes, int boxCount,
                     std::uint16_t tags, std::uint16_t owner,
                     const std::int16_t* declared = nullptr);
+
+// Поднять потолки всех бинов комнаты до её текущего declared+supply.
+// Зовут room_declare и supply-хуки (падение supply потолок не опускает —
+// он верхний по построению, как maxOffer).
+void rooms_bin_ceil_raise(FloorRooms& fr, const Room& r);
 
 // В какой комнате клетка (wrap по всем осям). kNoRoom = коридор/толща.
 RoomId room_at(const FloorRooms& fr, int x, int y, int z);

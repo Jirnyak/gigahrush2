@@ -4530,20 +4530,24 @@ int main(int argc, char** argv) {
                         float demand[game::kVerbCount];
                         game::goals_demand_from_needs(pool.needs(pref->id),
                                                       demand);
+                        // Скретч дебаг-решателя живёт у этого каллера
+                        // (goals.h): решателей может быть много, состояние
+                        // не делится.
+                        static game::GoalsScratch goalsScratch;
                         const auto gT0 = std::chrono::steady_clock::now();
                         const game::GoalPick pick = game::goals_pick_room(
                             demand, floorRooms,
-                            reg.get<Transform>(player).pos);
+                            reg.get<Transform>(player).pos, goalsScratch);
                         const float gMs =
                             std::chrono::duration<float, std::milli>(
                                 std::chrono::steady_clock::now() - gT0)
                                 .count();
                         std::fprintf(stderr,
                                      "[goals] room=%u score=%.1f dist=%.1f "
-                                     "verb=%s rooms=%zu cost=%.3fms\n",
+                                     "verb=%s rooms=%zu cand=%u cost=%.3fms\n",
                                      pick.room, pick.score, pick.distCells,
                                      game::kVerbIds[pick.topVerb],
-                                     floorRooms.list.size(), gMs);
+                                     floorRooms.list.size(), pick.scored, gMs);
                     }
                 }
                 // Intent first, wardrobe second: the equip DECIDER re-scores
