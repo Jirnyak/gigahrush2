@@ -650,142 +650,13 @@ static void test_noise_cost() {
     CHECK(quietUs < 5.0);
 }
 
-// ---------------------------------------------------------------------------
-// АКУСТИКА НА СКЕЛЕТЕ (G, S20.1): стены глушат, дыры пропускают
-// ---------------------------------------------------------------------------
-// Обе полярности закона на одном стенде: источник и слушатель по разные
-// стороны стены на одинаковой прямолинейной дистанции. До стены — слышно
-// (открытый путь), со стеной — НЕ слышно (путь бесконечен), с пробитой
-// щелью — слышно снова (газовый закон: звуку хватает щели), и путевая
-// дистанция честно ДЛИННЕЕ прямой (звук обходит через дыру).
-static void test_noise_walls_deafen() {
-    World w;
-    // Стена — ПОЛНАЯ плоскость x=40 через весь тор (все y, все z): фланга
-    // нет ни сверху, ни сбоку, а обратный путь по тору (118 клеток = 236 м)
-    // дальше предела флуда radius×kNoiseHearingMultCeil = 32 м. Пустой мир —
-    // воздух: звук летит без пола, закон спрашивает только грани.
-    auto build_wall = [&](bool withHole) {
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int z = 0; z < kMacroDim; ++z) {
-                if (withHole && y == 40 && z == 10) {
-                    w.grid().clear_cell(40, y, z);
-                    continue;
-                }
-                w.grid().fill_cell(40, y, z, kMatConcrete);
-            }
-    };
-
-    NoiseField f;
-    auto ac = std::make_unique<NoiseAcoustics>();
-    NoiseProfile p;
-    p.radius = 20.0f;
-    p.ttlMs = 2000;
-    p.severity = 3;
-    p.source = NoiseSource::WeaponFire;
-    const vec3 src{35.5f * kCellSize, 40.5f * kCellSize, 10.5f * kCellSize};
-    const vec3 ear{45.5f * kCellSize, 40.5f * kCellSize, 10.5f * kCellSize};
-
-    // 1. Открытый зал: слышно, путь ≈ прямой (по оси — без ромба).
-    const std::uint32_t id1 = noise_publish(f, 0, src, p, 0);
-    CHECK(id1 != 0);
-    CHECK(noise_acoustics_step(*ac, f, w, 0) == 1u);
-    const Noise* n = nullptr;
-    for (const Noise& s : f.slot)
-        if (s.id == id1) n = &s;
-    CHECK(n != nullptr);
-    const float dOpen = noise_distance(*n, ear, ac.get());
-    CHECK(dOpen >= 18.0f && dOpen <= 22.0f); // 10 клеток пути = 20 м
-    CHECK(noise_audible(*n, ear, 1.0f, ac.get()));
-
-    // 2. Глухая стена: тот же выстрел с той же прямой дистанцией НЕ слышен.
-    build_wall(/*withHole=*/false);
-    noise_clear(f);
-    const std::uint32_t id2 = noise_publish(f, 0, src, p, 0);
-    CHECK(noise_acoustics_step(*ac, f, w, 0) == 1u);
-    for (const Noise& s : f.slot)
-        if (s.id == id2) n = &s;
-    CHECK(!noise_audible(*n, ear, 1.0f, ac.get()));
-    CHECK(noise_distance(*n, ear, ac.get()) > 1e29f); // стены держат звук
-    // ...а loudest_heard с акустикой молчит — прямолинейный бы услышал.
-    float dh = 0.0f;
-    CHECK(loudest_heard(f, 0, ear, 1.0f, 0, 0, &dh, ac.get()) == nullptr);
-    CHECK(loudest_heard(f, 0, ear, 1.0f, 0, 0, &dh) != nullptr); // без стенного закона
-
-    // 3. Щель в одну клетку: слышно снова, и путь ДЛИННЕЕ прямого — звук
-    //    обошёл через дыру (клетка дыры не на прямой src→ear по z? дыра на
-    //    оси y=40,z=10 — на прямой; путь равен открытому).
-    build_wall(/*withHole=*/true);
-    noise_clear(f);
-    const std::uint32_t id3 = noise_publish(f, 0, src, p, 0);
-    CHECK(noise_acoustics_step(*ac, f, w, 0) == 1u);
-    for (const Noise& s : f.slot)
-        if (s.id == id3) n = &s;
-    CHECK(noise_audible(*n, ear, 1.0f, ac.get()));
-
-    // 4. Слушатель со СМЕЩЕНИЕМ от дыры: путь через дыру честно длиннее
-    //    прямой — акустическая дистанция обходная.
-    const vec3 earOff{45.5f * kCellSize, 34.5f * kCellSize, 10.5f * kCellSize};
-    const float straight = noise_distance(*n, earOff, nullptr);
-    const float path = noise_distance(*n, earOff, ac.get());
-    CHECK(path > straight);
-
-    std::printf("noise-acoustics: open %.1f m, walled inf, hole path %.1f m "
-                "vs straight %.1f m; bakes %llu, cells %llu\n",
-                dOpen, path, straight,
-                static_cast<unsigned long long>(ac->bakes),
-                static_cast<unsigned long long>(ac->bakedCells));
-}
-
-// ЦЕНА БЕЙКА ШАРА (вопрос владельца 2026-09-06: «бейк BFS на каждый
-// выстрел — безумие?»). Меряется ХУДШИЙ случай: пустой открытый мир —
-// флуд нечему остановить, каждый бейк заливает максимум своего предела.
-// Два предела: потолок 48 м (взрыв/кап радиуса) и типовой выстрел 20 м
-// (предел 32 м = radius × 1.6). Числа печатаются, не гейтятся (тайминги
-// в CI дрожат); гейтится только факт «по бейку на шум».
-static void test_noise_bake_cost() {
-    World w; // пустой = воздух: худший случай, стен нет
-    NoiseProfile loud;
-    loud.radius = 48.0f;
-    loud.ttlMs = 60000;
-    loud.severity = 5;
-    loud.source = NoiseSource::Explosion;
-
-    NoiseField f;
-    auto ac = std::make_unique<NoiseAcoustics>();
-    for (std::size_t i = 0; i < kNoiseCap; ++i)
-        noise_publish(f, 0,
-                      vec3{static_cast<float>(i * 7), 60.0f, 60.0f}, loud, 0);
-    const std::clock_t w0 = std::clock();
-    const std::uint32_t bakedLoud = noise_acoustics_step(*ac, f, w, 0);
-    const std::clock_t w1 = std::clock();
-    CHECK(bakedLoud == kNoiseCap); // по бейку на шум, ровно один раз
-    const double loudUs =
-        1e6 * static_cast<double>(w1 - w0) / CLOCKS_PER_SEC / kNoiseCap;
-    const std::uint64_t loudCells = ac->bakedCells / ac->bakes;
-
-    NoiseProfile shot;
-    shot.radius = 20.0f; // типовой громкий ствол (формула даёт 9..24)
-    shot.ttlMs = 60000;
-    shot.severity = 3;
-    shot.source = NoiseSource::WeaponFire;
-    NoiseField f2;
-    auto ac2 = std::make_unique<NoiseAcoustics>();
-    for (std::size_t i = 0; i < kNoiseCap; ++i)
-        noise_publish(f2, 0,
-                      vec3{static_cast<float>(i * 7), 60.0f, 60.0f}, shot, 0);
-    const std::clock_t s0 = std::clock();
-    const std::uint32_t bakedShot = noise_acoustics_step(*ac2, f2, w, 0);
-    const std::clock_t s1 = std::clock();
-    CHECK(bakedShot == kNoiseCap);
-    const double shotUs =
-        1e6 * static_cast<double>(s1 - s0) / CLOCKS_PER_SEC / kNoiseCap;
-    const std::uint64_t shotCells = ac2->bakedCells / ac2->bakes;
-
-    std::printf("noise-bake: worst-open blast(48m) %.1f us/bake %llu cells; "
-                "shot(20m) %.1f us/bake %llu cells\n",
-                loudUs, static_cast<unsigned long long>(loudCells), shotUs,
-                static_cast<unsigned long long>(shotCells));
-}
+// test_noise_walls_deafen И test_noise_bake_cost ВЫРЕЗАНЫ вместе с шарами
+// акустики (решение владельца 2026-09-06, problems.md §65): пер-шумовой BFS
+// не держит канонический масштаб (сотни выстрелов/сек по этажу; замер цены
+// перед вырезом — 73 мкс/выстрел, 285 мкс/взрыв worst-open — записан в §65).
+// Слышимость снова прямолинейная тором; регресс «слышно сквозь стены» —
+// назван, не спрятан. Честные стены вернёт эпик «звуковое поле этажа»
+// (бейк при генерации, как пути и свет) — стенд стены/щели вернётся с ним.
 
 static void test_noise_all() {
     test_noise_field_bounds();
@@ -796,7 +667,5 @@ static void test_noise_all() {
     test_hunt_shares_the_wander_stagger();
     test_noise_moves_a_monster_that_cannot_see_you();
     test_hunt_precedence_and_deaf_kinds();
-    test_noise_walls_deafen();
     test_noise_cost();
-    test_noise_bake_cost();
 }

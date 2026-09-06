@@ -1,11 +1,9 @@
 #include "game/noise.h"
 
 #include <cmath>
-#include <cstring>
 
 #include "core/wrap.h"
 #include "game/ranged_table.h"
-#include "world/clearance.h" // face_clearance_at — газовый закон граней (G)
 #include "world/types.h"
 #include "world/world.h"
 
@@ -218,195 +216,20 @@ NoiseProfile container_open_noise() {
 }
 
 // ---------------------------------------------------------------------------
-// Акустика на скелете (S20.1, инкремент G) — шар путевых дистанций
+// АКУСТИКА НА СКЕЛЕТЕ ВЫРЕЗАНА (решение владельца 2026-09-06).
+// Шар путевых дистанций (BFS на шум, skeleton-anchor G) жил при допущении
+// «единицы шумов в секунду»; гарантированный сценарий игры — перестрелки
+// сотен участников по всему этажу, то есть сотни шумов в секунду. Замер
+// (suite_noise, коммит с тестом цены): 73 мкс/выстрел и 285 мкс/взрыв на
+// бейк в открытом мире — десятки миллисекунд бейков в секунду, и кольцо
+// из 64 слотов перемалывается быстрее ttl, убивая кэш «один бейк на жизнь
+// шума». Бюджет-кап был бы костылём; вырезано целиком. Слышимость снова
+// прямолинейная тороидальная с капом радиуса (состояние до 2026-08-29,
+// регресс «слышно сквозь стены» назван вслух). Честная акустика со
+// стенами — кандидат «этажный бейк по графу комнат» (S9: печётся при
+// входе, допекается фоном; референс мерил именно регион-графом) — план
+// в next-session-prompt.
 // ---------------------------------------------------------------------------
-
-namespace {
-
-inline std::size_t ball_index(int dx, int dy, int dz) {
-    // Смещение от источника [-R, R] по каждой оси → плотный индекс шара.
-    return (static_cast<std::size_t>(dz + kNoiseBallRadiusCells) *
-                kNoiseBallDim +
-            static_cast<std::size_t>(dy + kNoiseBallRadiusCells)) *
-               kNoiseBallDim +
-           static_cast<std::size_t>(dx + kNoiseBallRadiusCells);
-}
-
-// Ограниченный флуд одного шума: BFS по граням проходимости от клетки
-// источника, газовый закон (clearance >= 1 — «звуку хватает щели», тот же
-// один закон, что у сред и запаха). Дистанция — метры пути, шаг = 2 м.
-void bake_ball(NoiseAcoustics& ac, const World& world, std::size_t slot,
-               const Noise& n) {
-    if (ac.dist.empty())
-        ac.dist.assign(kNoiseCap * kNoiseBallCells, kNoiseUnreachable);
-    std::uint8_t* d = ac.dist.data() + slot * kNoiseBallCells;
-    std::memset(d, kNoiseUnreachable, kNoiseBallCells);
-
-    const int sx = wrap_macro(static_cast<int>(n.x / kCellSize));
-    const int sy = wrap_macro(static_cast<int>(n.y / kCellSize));
-    const int sz = wrap_macro(static_cast<int>(n.z / kCellSize));
-    ac.id[slot] = n.id;
-    ac.srcX[slot] = static_cast<std::uint8_t>(sx);
-    ac.srcY[slot] = static_cast<std::uint8_t>(sy);
-    ac.srcZ[slot] = static_cast<std::uint8_t>(sz);
-
-    // Предел флуда: radius × потолок остроты слуха, не дальше шара.
-    float limitM = n.radius * kNoiseHearingMultCeil;
-    if (limitM > kNoiseRadiusCap) limitM = kNoiseRadiusCap;
-    const int limit = static_cast<int>(limitM); // метров, целых
-
-    const MacroGrid& g = world.grid();
-    ac.queue.clear();
-    d[ball_index(0, 0, 0)] = 0;
-    // Пакуем смещение в один int: (dz+R)<<12 | (dy+R)<<6 | (dx+R); 6 бит на
-    // ось хватает (dim 49 < 64).
-    auto pack = [](int dx, int dy, int dz) {
-        return ((dz + kNoiseBallRadiusCells) << 12) |
-               ((dy + kNoiseBallRadiusCells) << 6) |
-               (dx + kNoiseBallRadiusCells);
-    };
-    ac.queue.push_back(pack(0, 0, 0));
-    std::size_t head = 0;
-    std::uint64_t visited = 1;
-    while (head < ac.queue.size()) {
-        const int p = ac.queue[head++];
-        const int dx = (p & 63) - kNoiseBallRadiusCells;
-        const int dy = ((p >> 6) & 63) - kNoiseBallRadiusCells;
-        const int dz = ((p >> 12) & 63) - kNoiseBallRadiusCells;
-        const int cur = d[ball_index(dx, dy, dz)];
-        const int cand = cur + static_cast<int>(kCellSize); // шаг 2 м
-        if (cand > limit) continue;
-        const int x = wrap_macro(sx + dx);
-        const int y = wrap_macro(sy + dy);
-        const int z = wrap_macro(sz + dz);
-        // 6 граней; проходимость плюс-грани хранит младшая клетка оси.
-        struct Step { int ax, sxs, dxn, dyn, dzn; };
-        const Step steps[6] = {
-            {0, +1, dx + 1, dy, dz}, {0, -1, dx - 1, dy, dz},
-            {1, +1, dx, dy + 1, dz}, {1, -1, dx, dy - 1, dz},
-            {2, +1, dx, dy, dz + 1}, {2, -1, dx, dy, dz - 1},
-        };
-        for (const Step& s : steps) {
-            if (s.dxn < -kNoiseBallRadiusCells || s.dxn > kNoiseBallRadiusCells ||
-                s.dyn < -kNoiseBallRadiusCells || s.dyn > kNoiseBallRadiusCells ||
-                s.dzn < -kNoiseBallRadiusCells || s.dzn > kNoiseBallRadiusCells)
-                continue;
-            std::uint8_t& slotD = d[ball_index(s.dxn, s.dyn, s.dzn)];
-            if (slotD != kNoiseUnreachable) continue; // BFS: первый визит короче
-            const bool plus = s.sxs > 0;
-            const std::uint8_t clr =
-                plus ? face_clearance_at(g, x, y, z, s.ax)
-                     : face_clearance_at(g, s.ax == 0 ? wrap_macro(x - 1) : x,
-                                         s.ax == 1 ? wrap_macro(y - 1) : y,
-                                         s.ax == 2 ? wrap_macro(z - 1) : z,
-                                         s.ax);
-            if (clr < 1) continue; // глухо — стена держит звук
-            slotD = static_cast<std::uint8_t>(cand);
-            ac.queue.push_back(pack(s.dxn, s.dyn, s.dzn));
-            ++visited;
-        }
-    }
-    ++ac.bakes;
-    ac.bakedCells += visited;
-}
-
-} // namespace
-
-bool skeleton_audible(const World& world, const vec3& from, const vec3& to,
-                      float radiusM) {
-    if (!(radiusM > 0.0f)) return false;
-    float limitM = radiusM;
-    if (limitM > kNoiseRadiusCap) limitM = kNoiseRadiusCap;
-    const int limit = static_cast<int>(limitM);
-    const int sx = wrap_macro(static_cast<int>(from.x / kCellSize));
-    const int sy = wrap_macro(static_cast<int>(from.y / kCellSize));
-    const int sz = wrap_macro(static_cast<int>(from.z / kCellSize));
-    const int tx = wrap_macro(static_cast<int>(to.x / kCellSize));
-    const int ty = wrap_macro(static_cast<int>(to.y / kCellSize));
-    const int tz = wrap_macro(static_cast<int>(to.z / kCellSize));
-    // Дельта цели на торе; за пределом флуда — не слышно без флуда.
-    auto wrapDelta = [](int a, int b) {
-        return ((b - a + kMacroDim / 2) & (kMacroDim - 1)) - kMacroDim / 2;
-    };
-    const int gx = wrapDelta(sx, tx);
-    const int gy = wrapDelta(sy, ty);
-    const int gz = wrapDelta(sz, tz);
-    if (gx < -kNoiseBallRadiusCells || gx > kNoiseBallRadiusCells ||
-        gy < -kNoiseBallRadiusCells || gy > kNoiseBallRadiusCells ||
-        gz < -kNoiseBallRadiusCells || gz > kNoiseBallRadiusCells)
-        return false;
-    if (gx == 0 && gy == 0 && gz == 0) return true;
-
-    // Тот же флуд, что bake_ball, но одноразовый (скретч на стеке байтами
-    // шара — 117 КБ, событие оплачивает) и с ранним выходом на цели.
-    static thread_local std::vector<std::uint8_t> dist;
-    static thread_local std::vector<std::int32_t> queue;
-    dist.assign(kNoiseBallCells, kNoiseUnreachable);
-    queue.clear();
-    const MacroGrid& g = world.grid();
-    auto pack = [](int dx, int dy, int dz) {
-        return ((dz + kNoiseBallRadiusCells) << 12) |
-               ((dy + kNoiseBallRadiusCells) << 6) |
-               (dx + kNoiseBallRadiusCells);
-    };
-    dist[ball_index(0, 0, 0)] = 0;
-    queue.push_back(pack(0, 0, 0));
-    std::size_t head = 0;
-    while (head < queue.size()) {
-        const int p = queue[head++];
-        const int dx = (p & 63) - kNoiseBallRadiusCells;
-        const int dy = ((p >> 6) & 63) - kNoiseBallRadiusCells;
-        const int dz = ((p >> 12) & 63) - kNoiseBallRadiusCells;
-        const int cand = dist[ball_index(dx, dy, dz)] +
-                         static_cast<int>(kCellSize);
-        if (cand > limit) continue;
-        const int x = wrap_macro(sx + dx);
-        const int y = wrap_macro(sy + dy);
-        const int z = wrap_macro(sz + dz);
-        struct Step { int ax, sxs, dxn, dyn, dzn; };
-        const Step steps[6] = {
-            {0, +1, dx + 1, dy, dz}, {0, -1, dx - 1, dy, dz},
-            {1, +1, dx, dy + 1, dz}, {1, -1, dx, dy - 1, dz},
-            {2, +1, dx, dy, dz + 1}, {2, -1, dx, dy, dz - 1},
-        };
-        for (const Step& s : steps) {
-            if (s.dxn < -kNoiseBallRadiusCells || s.dxn > kNoiseBallRadiusCells ||
-                s.dyn < -kNoiseBallRadiusCells || s.dyn > kNoiseBallRadiusCells ||
-                s.dzn < -kNoiseBallRadiusCells || s.dzn > kNoiseBallRadiusCells)
-                continue;
-            std::uint8_t& slotD = dist[ball_index(s.dxn, s.dyn, s.dzn)];
-            if (slotD != kNoiseUnreachable) continue;
-            const std::uint8_t clr =
-                s.sxs > 0 ? face_clearance_at(g, x, y, z, s.ax)
-                          : face_clearance_at(g, s.ax == 0 ? wrap_macro(x - 1) : x,
-                                              s.ax == 1 ? wrap_macro(y - 1) : y,
-                                              s.ax == 2 ? wrap_macro(z - 1) : z,
-                                              s.ax);
-            if (clr < 1) continue;
-            slotD = static_cast<std::uint8_t>(cand);
-            if (s.dxn == gx && s.dyn == gy && s.dzn == gz)
-                return true; // ранний выход: слушатель достигнут в пределе
-            queue.push_back(pack(s.dxn, s.dyn, s.dzn));
-        }
-    }
-    return false;
-}
-
-std::uint32_t noise_acoustics_step(NoiseAcoustics& ac, const NoiseField& field,
-                                   const World& world, LayerId layer) {
-    if (field.quiet()) return 0;
-    if (layer > kNoiseLayerMax) return 0;
-    std::uint32_t baked = 0;
-    for (std::size_t i = 0; i < kNoiseCap; ++i) {
-        const Noise& n = field.slot[i];
-        if (n.id == 0) continue;
-        if (n.layer != static_cast<std::uint8_t>(layer)) continue;
-        if (ac.id[i] == n.id) continue; // шар уже есть
-        bake_ball(ac, world, i, n);
-        ++baked;
-    }
-    return baked;
-}
 
 const char* noise_source_name(NoiseSource s) {
     switch (s) {
@@ -425,40 +248,7 @@ const char* noise_source_name(NoiseSource s) {
     return "?";
 }
 
-float noise_distance(const Noise& n, const vec3& pos,
-                     const NoiseAcoustics* ac) {
-    // ПУТЕВАЯ дистанция по скелету, когда у шума есть бейкнутый шар (G):
-    // стены глушат, дыры пропускают. Поиск слота — линейный по 64 id
-    // (дёшево); стухший id живого не совпадёт (монотонность).
-    if (ac && !ac->dist.empty()) {
-        for (std::size_t i = 0; i < kNoiseCap; ++i) {
-            if (ac->id[i] != n.id || n.id == 0) continue;
-            const int lx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-            const int ly = wrap_macro(static_cast<int>(pos.y / kCellSize));
-            const int lz = wrap_macro(static_cast<int>(pos.z / kCellSize));
-            const int dx = ((lx - ac->srcX[i] + kMacroDim / 2) &
-                            (kMacroDim - 1)) - kMacroDim / 2;
-            const int dy = ((ly - ac->srcY[i] + kMacroDim / 2) &
-                            (kMacroDim - 1)) - kMacroDim / 2;
-            const int dz = ((lz - ac->srcZ[i] + kMacroDim / 2) &
-                            (kMacroDim - 1)) - kMacroDim / 2;
-            if (dx < -kNoiseBallRadiusCells || dx > kNoiseBallRadiusCells ||
-                dy < -kNoiseBallRadiusCells || dy > kNoiseBallRadiusCells ||
-                dz < -kNoiseBallRadiusCells || dz > kNoiseBallRadiusCells)
-                return 1e30f; // за шаром = за пределом флуда = не слышно
-            const std::uint8_t d =
-                ac->dist[i * kNoiseBallCells +
-                         ((static_cast<std::size_t>(dz + kNoiseBallRadiusCells) *
-                               kNoiseBallDim +
-                           static_cast<std::size_t>(dy + kNoiseBallRadiusCells)) *
-                              kNoiseBallDim +
-                          static_cast<std::size_t>(dx + kNoiseBallRadiusCells))];
-            if (d == kNoiseUnreachable) return 1e30f; // стены держат звук
-            return static_cast<float>(d);
-        }
-        // Живой шум без шара (издан после шага бейка) — прямолинейный
-        // запасной ответ до следующего тика.
-    }
+float noise_distance(const Noise& n, const vec3& pos) {
     // All three axes wrap ([AGENTS.md]: x/y/z wrap; W does not). The storey
     // stack is W, and W never enters this function — both points live on ONE
     // floor's 256 m torus, where "250 m overhead" IS 6 m away through the
@@ -471,17 +261,15 @@ float noise_distance(const Noise& n, const vec3& pos,
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-bool noise_audible(const Noise& n, const vec3& pos, float hearingMult,
-                   const NoiseAcoustics* ac) {
+bool noise_audible(const Noise& n, const vec3& pos, float hearingMult) {
     if (n.id == 0) return false;
     const float r = n.radius * (hearingMult > 0.0f ? hearingMult : 1.0f);
-    return noise_distance(n, pos, ac) <= r;
+    return noise_distance(n, pos) <= r;
 }
 
 const Noise* loudest_heard(const NoiseField& field, LayerId layer, const vec3& pos,
                            float hearingMult, std::uint8_t minSeverity,
-                           std::uint32_t ignoreActor, float* outDist,
-                           const NoiseAcoustics* ac) {
+                           std::uint32_t ignoreActor, float* outDist) {
     if (outDist) *outDist = 0.0f;
     if (field.quiet()) return nullptr;
     if (layer > kNoiseLayerMax) return nullptr;
@@ -501,7 +289,7 @@ const Noise* loudest_heard(const NoiseField& field, LayerId layer, const vec3& p
         if (ignoreActor != 0 && s.actor == ignoreActor) continue;
 
         const float r = s.radius * mult;
-        const float d = noise_distance(s, pos, ac);
+        const float d = noise_distance(s, pos);
         if (d > r) continue;
 
         // The reference's weighting, verbatim: severity dominates, nearness breaks

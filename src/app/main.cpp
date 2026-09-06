@@ -538,7 +538,7 @@ enum ProfSlot : unsigned {
     kProfAi,          // ai_step + ai_equip_step
     kProfController,  // controller_step
     kProfWander,      // ai_patrol_step + wander_step (толпа)
-    kProfAcoustics,   // noise_acoustics_step + investigate_step (скелет слуха)
+    kProfAcoustics,   // investigate_step (слух мобов; шары вырезаны — problems.md §65)
     kProfCombat,      // player_melee..mob_attack..hazard..projectile..charge
     kProfPhysics,     // slow_step + physics_step (агенты)
     kProfRigid,       // rigid_body_step (твердотелы/рагдоллы)
@@ -2449,7 +2449,6 @@ int main(int argc, char** argv) {
     game::NoiseField noiseField;
     // Акустика на скелете (G, S20.1): шары путевых дистанций живых шумов —
     // ~7.5 МБ, на куче. Бейкается одним шагом перед потребителями слуха.
-    auto noiseAcoustics = std::make_unique<game::NoiseAcoustics>();
     game::FloorRegistry registry;
 
     // Streaming keeps only the ACTIVE floor's World + crowd live; every other
@@ -4540,8 +4539,9 @@ int main(int argc, char** argv) {
                         // СБОРЩИК КАНДИДАТОВ-СУЩНОСТЕЙ (инкремент B;
                         // решение владельца 2026-09-06: акустика + события).
                         // Журнал шумов — готовые «заметил» со старением
-                        // (ttl), слышимость и дистанция ПУТЕВЫЕ по скелету
-                        // (шары акустики — стены уже в них). Предложение
+                        // (ttl); дистанция прямолинейная тором (шары
+                        // вырезаны — problems.md §65, честные стены вернёт
+                        // эпик «звуковое поле этажа»). Предложение
                         // сущности = её контейнер: труп/ящик предлагает
                         // Σ глаголов того, что в нём ЛЕЖИТ (S13.3 «труп →
                         // обобрать» той же шкалой, что запас комнаты).
@@ -4558,8 +4558,7 @@ int main(int argc, char** argv) {
                                                entt::to_integral(player)))
                                 continue; // свой шум — не цель
                             if (!game::noise_audible(n, apos,
-                                                     game::kInvestigateHearing,
-                                                     noiseAcoustics.get()))
+                                                     game::kInvestigateHearing))
                                 continue;
                             const auto ae = static_cast<entt::entity>(n.actor);
                             if (!reg.valid(ae)) continue;
@@ -4585,9 +4584,7 @@ int main(int argc, char** argv) {
                             }
                             if (!any) continue; // болтик = ноль, не влияет
                             c.distCells =
-                                game::noise_distance(n, apos,
-                                                     noiseAcoustics.get()) /
-                                kCellSize;
+                                game::noise_distance(n, apos) / kCellSize;
                             c.handle = n.actor;
                             c.kind = game::GoalKind::Entity;
                             ++candN;
@@ -5253,15 +5250,12 @@ int main(int argc, char** argv) {
                 // lattice node. Purely additive on top of wander_step and it returns
                 // before touching an entity when the field is quiet, which is almost
                 // every tick. [investigate.h]
-                // Добейк шаров акустики свежим шумам (G): один системный шаг,
-                // писатели шума об акустике не знают. После него слух этого
-                // тика отвечает по скелету — стены глушат.
+                // Шары акустики ВЫРЕЗАНЫ (решение владельца 2026-09-06,
+                // problems.md §65): слышимость прямолинейная тором до эпика
+                // «звуковое поле этажа» (печь при генерации, как пути/свет).
                 const auto profAcoustT0 = prof_now();
-                game::noise_acoustics_step(*noiseAcoustics, noiseField,
-                                           stack.layer(activeLayer),
-                                           activeLayer);
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
-                                                   simTick, noiseAcoustics.get());
+                                                   simTick);
                 prof_add(kProfAcoustics, profAcoustT0);
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
@@ -7683,8 +7677,7 @@ int main(int argc, char** argv) {
                     ? game::loudest_heard(noiseField, activeLayer,
                                           reg.get<Transform>(player).pos,
                                           /*hearingMult=*/1.0f, /*minSeverity=*/0,
-                                          /*ignoreActor=*/0, &nd,
-                                          noiseAcoustics.get())
+                                          /*ignoreActor=*/0, &nd)
                     : nullptr;
                 if (ln)
                     ImGui::TextColored(ImVec4(0.98f, 0.79f, 0.55f, 1.0f),

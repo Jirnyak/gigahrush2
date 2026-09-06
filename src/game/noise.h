@@ -60,14 +60,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
-#include <vector>
 
 #include "core/math.h"
 #include "world/level_stack.h"   // LayerId
-
-namespace giga {
-class World; // акустический бейк читает маски скелета (noise.cpp)
-}
 
 namespace giga::game {
 
@@ -250,68 +245,18 @@ NoiseProfile body_fall_noise();
 NoiseProfile container_open_noise();
 
 // ---------------------------------------------------------------------------
-// АКУСТИКА НА СКЕЛЕТЕ (CANON S20.1, skeleton-anchor G, 2026-08-29)
+// АКУСТИКА НА СКЕЛЕТЕ ВЫРЕЗАНА (решение владельца 2026-09-06)
 // ---------------------------------------------------------------------------
-// «Монстры слышат сквозь стены» умерло: вопрос «слышно ли» задаётся МАСКАМ.
-// На каждый живой шум один раз бейкается ШАР ПУТЕВЫХ ДИСТАНЦИЙ — ограниченный
-// флуд от клетки источника по граням проходимости ГАЗОВЫМ законом
-// (face_clearance >= 1, [world/clearance.h]: «звуку хватает щели» — тот же
-// один закон, которым дышат среды и течёт запах). Кольцо выше остаётся
-// ЖУРНАЛОМ событий (id/актор/severity/фейд — это времення́я, не
-// пространственная структура); акустической средой стал скелет, и точечная
-// прямолинейная слышимость — самодельный контейнер вне скелета — мертва.
-// noise_distance и была единственным местом дистанции — интерфейс слуха не
-// изменился, потребители получили стены бесплатно.
-//
-// Метрика — 6-связная путевая дистанция в метрах (шаг = клетка = 2 м).
-// Честная оговорка: по диагонали открытого зала путь длиннее прямой до
-// ×√2..√3 — круг слышимости слегка ромбится. Это принятая цена (закон
-// клиренса сам объявляет «жертвуем точностью ради универсальности»);
-// referenced getAcousticDistance меряет тем же путевым способом по регионам.
-
-// Радиус шара в клетках — выведен: kNoiseRadiusCap / kCellSize.
-inline constexpr int kNoiseBallRadiusCells =
-    static_cast<int>(kNoiseRadiusCap / kCellSize); // 24
-inline constexpr int kNoiseBallDim = kNoiseBallRadiusCells * 2 + 1; // 49
-inline constexpr std::size_t kNoiseBallCells =
-    static_cast<std::size_t>(kNoiseBallDim) * kNoiseBallDim * kNoiseBallDim;
-inline constexpr std::uint8_t kNoiseUnreachable = 0xFFu; // метров не бывает 255
-
-// Потолок остроты слуха: флуд обязан покрыть radius × mult самого ушастого
-// вида (Tumannik 1.55 — [noise.h] Hearing ниже). 1.6 с запасом; вид острее —
-// поднять ЗДЕСЬ, иначе его хвост слышимости обрежется бейком.
-inline constexpr float kNoiseHearingMultCeil = 1.6f;
-
-// Шары дистанций живых шумов. НЕ POD-на-стек: kNoiseCap × 49³ ≈ 7.5 МБ —
-// владелец объекта держит его на куче (main — unique_ptr, тест — heap).
-// Шар слота перезаписывается вместе со слотом кольца; стухший id никогда
-// не совпадёт с живым (id монотонен), отдельной уборки не существует.
-struct NoiseAcoustics {
-    std::vector<std::uint8_t> dist;      // kNoiseCap × kNoiseBallCells, лениво
-    std::uint32_t id[kNoiseCap] = {};    // Noise::id хозяина шара; 0 = пуст
-    std::uint8_t srcX[kNoiseCap] = {};   // клетка источника (центр шара)
-    std::uint8_t srcY[kNoiseCap] = {};
-    std::uint8_t srcZ[kNoiseCap] = {};
-    std::vector<std::int32_t> queue;     // BFS-скретч, переживает бейки
-    // Метрики вслух: бейки и осмотренные клетки — цена системы видима.
-    std::uint64_t bakes = 0;
-    std::uint64_t bakedCells = 0;
-};
-
-// Слышимость ТОЧКА-ТОЧКА по скелету — для СОБЫТИЙ (свидетель S19 слышит
-// деяние), не для тиковых свипов: тот же ограниченный флуд по граням
-// газовым законом, но с ранним выходом при достижении клетки слушателя.
-// Без кэша — деяния редки, шар не окупается. true = путь ≤ radiusM метров.
-bool skeleton_audible(const World& world, const vec3& from, const vec3& to,
-                      float radiusM);
-
-// Добейкать шары всем живым шумам слоя, у которых их ещё нет. ОДИН системный
-// шаг в кадре (main, перед потребителями слуха) — писатели шума не знают об
-// акустике вовсе, как писатели геометрии не знают о свете. Шум, изданный
-// после этого шага, получает шар следующим тиком — та же гарантия «минимум
-// один полный тик жизни», что у свипа. Возвращает число добейканных.
-std::uint32_t noise_acoustics_step(NoiseAcoustics& ac, const NoiseField& field,
-                                   const World& world, LayerId layer);
+// Шары путевых дистанций (NoiseAcoustics, skeleton-anchor G, 2026-08-29)
+// жили при допущении «единицы шумов в секунду» — гарантированный сценарий
+// игры (перестрелки сотен по всему этажу) даёт сотни шумов в секунду:
+// замер 73 мкс/бейк на выстрел × сотни + перемалывание кольца 64 быстрее
+// ttl = архитектурное несоответствие, не константа. Вырезано целиком
+// вместе с точечным skeleton_audible (свидетель S19 слушает тем же
+// законом дистанции). Слышимость — прямолинейная тороидальная с капом
+// радиуса; предупреждение «monsters hear through walls» в шапке файла
+// снова действующее. Честная акустика = кандидат «этажный бейк по графу
+// комнат» (S9), класс грабель и вход эпика — problems.md §65 (переизобретение мимо бейк-инфраструктуры этажа: пути и свет уже печются с торными рецептами).
 
 // ---------------------------------------------------------------------------
 // Hearing
@@ -321,14 +266,12 @@ std::uint32_t noise_acoustics_step(NoiseAcoustics& ac, const NoiseField& field,
 // ПУТЕВАЯ по скелету: стены глушат, дыры пропускают, недостижимое в шаре =
 // бесконечность. Без неё (nullptr, нет шара, headless-тест) — прежняя
 // прямолинейная тороидальная. THE one place a distance is computed.
-float noise_distance(const Noise& n, const vec3& pos,
-                     const NoiseAcoustics* ac = nullptr);
+float noise_distance(const Noise& n, const vec3& pos);
 
 // Can something at `pos` hear `n`? `hearingMult` scales the noise's radius, which
 // is how the reference expresses a sharp-eared kind (1.12 for the shared
 // investigation branch, 1.45 for Slepoglaz, 1.55 for Tumannik).
-bool noise_audible(const Noise& n, const vec3& pos, float hearingMult,
-                   const NoiseAcoustics* ac = nullptr);
+bool noise_audible(const Noise& n, const vec3& pos, float hearingMult);
 
 // The most worth-reacting-to noise a listener at `pos` on `layer` can hear, or
 // nullptr. `outDist` receives the metres when non-null.
@@ -348,8 +291,7 @@ bool noise_audible(const Noise& n, const vec3& pos, float hearingMult,
 // (GreenDogPack's fear, ScrapWake's wake) can store six bytes and answer it.
 const Noise* loudest_heard(const NoiseField& field, LayerId layer, const vec3& pos,
                            float hearingMult, std::uint8_t minSeverity,
-                           std::uint32_t ignoreActor, float* outDist,
-                           const NoiseAcoustics* ac = nullptr);
+                           std::uint32_t ignoreActor, float* outDist);
 
 // Short ASCII label for a source, for the HUD and test output. Never null, and never
 // Cyrillic: the reference's player-facing strings are Russian, but this is a debug

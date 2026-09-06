@@ -7,7 +7,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h" // Transform
 #include "game/embody.h"    // NpcRef
-#include "game/noise.h"     // skeleton_audible — слух свидетеля (G)
+#include "game/noise.h"     // kNoiseRadiusCap — кап радиуса слуха свидетеля
 #include "world/los.h"      // sub_march — зрение свидетеля
 #include "world/types.h"
 #include "world/world.h"
@@ -150,8 +150,13 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
                 SubRayHit hit;
                 perceived = !sub_march(world.grid(), eye, deedPos, hit);
             }
+            // Слух — прямолинейная тороидальная дистанция с капом радиуса:
+            // ОДИН закон слышимости с журналом шумов (решение владельца
+            // 2026-09-06, вырез акустики — problems.md §65). dist выше уже
+            // тороидальный.
             if (!perceived && hearM > 0.0f)
-                perceived = skeleton_audible(world, deedPos, tr.pos, hearM);
+                perceived = dist <= (hearM < kNoiseRadiusCap ? hearM
+                                                             : kNoiseRadiusCap);
             if (!perceived) continue;
             anyWitness = true;
 
