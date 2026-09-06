@@ -82,22 +82,62 @@ static void judge_room(const float demand[kVerbCount], const FloorRooms& rooms,
     const RoomId id = static_cast<RoomId>(i + 1); // RoomId = индекс + 1
     // Ничью решает физика: интерес → расстояние (S13.2); двойную ничью —
     // меньший RoomId, чтобы победитель не зависел от порядка ОБХОДА бинов
-    // (S13.9; джиттер личности заменит это в E). `>` строгий.
+    // (S13.9; джиттер личности заменит это в E). `>` строгий. Полную ничью
+    // с НЕ-комнатой комната забирает (best.room == kNoRoom) — правило
+    // «точка/сущность = худший конец шкалы» при прочих равных.
     if (score > best.score ||
         (score == best.score &&
          (dist < best.distCells ||
           (dist == best.distCells &&
            (best.room == kNoRoom || id < best.room))))) {
+        best.kind = GoalKind::Room;
         best.room = id;
+        best.handle = 0;
         best.score = score;
         best.distCells = dist;
         best.topVerb = top;
     }
 }
 
-GoalPick goals_pick_room(const float demand[kVerbCount],
-                         const FloorRooms& rooms, const vec3& fromPos,
-                         GoalsScratch& scratch) {
+// Судить кандидата каллера (сущность/поле) ТОЙ ЖЕ суммой — вся разница с
+// комнатой в том, что дистанция уже принесена восприятием (путевая, со
+// стенами) и предложение собрано каллером. Ветки по виду нет (S13.9).
+static void judge_candidate(const float demand[kVerbCount],
+                            const GoalCandidate& c, GoalPick& best) {
+    ++best.scored;
+    float offerSum = 0.0f;
+    VerbId top = kVerbWander;
+    float topContrib = 0.0f;
+    for (std::size_t v = 0; v < kVerbCount; ++v) {
+        const float contrib = demand[v] * c.offer[v];
+        offerSum += contrib;
+        if (contrib > topContrib) {
+            topContrib = contrib;
+            top = static_cast<VerbId>(v);
+        }
+    }
+    if (offerSum < best.score) return; // даже даром не догонит
+    const float score = offerSum - c.distCells * kGoalCostPerCell;
+    // Ничья: интерес → дистанция; полная ничья двух кандидатов — меньший
+    // handle (детерминизм до джиттера E); точку кандидат забирает.
+    if (score > best.score ||
+        (score == best.score &&
+         (c.distCells < best.distCells ||
+          (c.distCells == best.distCells &&
+           (best.kind == GoalKind::Point ||
+            (best.kind == c.kind && c.handle < best.handle)))))) {
+        best.kind = c.kind;
+        best.room = kNoRoom;
+        best.handle = c.handle;
+        best.score = score;
+        best.distCells = c.distCells;
+        best.topVerb = top;
+    }
+}
+
+GoalPick goals_pick(const float demand[kVerbCount], const FloorRooms& rooms,
+                    const GoalCandidate* cands, std::size_t candCount,
+                    const vec3& fromPos, GoalsScratch& scratch) {
     const float px = fromPos.x / kCellSize;
     const float py = fromPos.y / kCellSize;
     const float pz = fromPos.z / kCellSize;
@@ -106,12 +146,19 @@ GoalPick goals_pick_room(const float demand[kVerbCount],
     // и ветка «ничего не нашлось» не существует (S13.9). Пол предлагает
     // базовый минимум ФОРМЫ: спать плохо, укрыться плохо.
     GoalPick best;
+    best.kind = GoalKind::Point;
     best.room = kNoRoom;
     best.distCells = 0.0f;
     best.score = kFloorPointOffer *
                  (demand[kVerbSleep] + demand[kVerbShelter] +
                   demand[kVerbWander]);
     best.topVerb = kVerbSleep;
+
+    // Кандидаты восприятия — ДО комнат: воспринятый лидер сужает радиус
+    // обхода бинов даром (best растёт до первого шелла).
+    for (std::size_t c = 0; c < candCount; ++c)
+        judge_candidate(demand, cands[c], best);
+
     if (rooms.list.empty()) return best;
 
     // Этаж без бинов (тесты, собравшие FloorRooms руками до rooms_reset,

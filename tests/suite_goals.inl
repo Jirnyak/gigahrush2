@@ -32,7 +32,14 @@ void demand_zero(float d[kVerbCount]) {
 GoalPick pick(const float d[kVerbCount], const FloorRooms& fr,
               const vec3& at) {
     GoalsScratch scratch;
-    return goals_pick_room(d, fr, at, scratch);
+    return goals_pick(d, fr, nullptr, 0, at, scratch);
+}
+
+GoalPick pick_with(const float d[kVerbCount], const FloorRooms& fr,
+                   const vec3& at, const GoalCandidate* cands,
+                   std::size_t n) {
+    GoalsScratch scratch;
+    return goals_pick(d, fr, cands, n, at, scratch);
 }
 
 void declare_room(FloorRooms& fr, std::uint8_t x, std::uint8_t y,
@@ -205,7 +212,7 @@ void bins_match_brute_force() {
         const vec3 at{static_cast<float>(next() % (kMacroDim * 2)),
                       static_cast<float>(next() % (kMacroDim * 2)),
                       static_cast<float>(next() % (kMacroDim * 2))};
-        const GoalPick a = goals_pick_room(d, fr, at, scratch);
+        const GoalPick a = goals_pick(d, fr, nullptr, 0, at, scratch);
         const GoalPick b = brute_pick(d, fr, at);
         CHECK(a.room == b.room);
         CHECK(a.score == b.score);
@@ -313,6 +320,76 @@ void supply_extends_reach_props() {
     CHECK(p.room == 2);
 }
 
+// ГЕЙТ B-5 (сущность = та же сумма): воспринятый труп с хлебом судится
+// ровно той формулой, что и комната, — различие видов живёт у движения,
+// не у скора (S13.9: ни одного if по виду цели).
+void entity_judged_by_same_sum() {
+    FloorRooms fr;
+    rooms_reset(fr);
+    declare_room(fr, 70, 64, 10, kVerbEat, 20); // кухня в 6 клетках: 20−6=14
+    float d[kVerbCount];
+    demand_zero(d);
+    d[kVerbEat] = 1.0f;
+    // Труп с едой на 30 очков в 2 клетках (путевая дистанция от акустики):
+    // 30 − 2 = 28 > 14 — сущность бьёт комнату той же арифметикой.
+    GoalCandidate corpse{};
+    corpse.offer[kVerbEat] = 30.0f;
+    corpse.distCells = 2.0f;
+    corpse.handle = 777;
+    corpse.kind = GoalKind::Entity;
+    const vec3 at{64.0f * kCellSize, 64.0f * kCellSize, 10.0f * kCellSize};
+    const GoalPick p = pick_with(d, fr, at, &corpse, 1);
+    CHECK(p.kind == GoalKind::Entity);
+    CHECK(p.handle == 777);
+    CHECK(p.score == 28.0f);
+    // Та же сущность ДАЛЬШЕ кухни по счёту — кухня выигрывает: дистанция
+    // режет сущность той же ценой клетки, ветки нет.
+    corpse.distCells = 17.0f; // 30 − 17 = 13 < 14
+    const GoalPick q = pick_with(d, fr, at, &corpse, 1);
+    CHECK(q.kind == GoalKind::Room);
+    CHECK(q.room == 1);
+}
+
+// Нулевой кандидат («болтик») не влияет и не ломает точку под ногами.
+void zero_offer_entity_is_inert() {
+    FloorRooms fr;
+    rooms_reset(fr);
+    float d[kVerbCount];
+    demand_zero(d);
+    d[kVerbSleep] = 1.0f;
+    GoalCandidate bolt{}; // offer нулевой
+    bolt.handle = 5;
+    const GoalPick p =
+        pick_with(d, fr, vec3{10.0f, 10.0f, 10.0f}, &bolt, 1);
+    CHECK(p.kind == GoalKind::Point);
+    CHECK(p.score > 0.0f);
+}
+
+// Полевая цель — кандидат с нулевым путём (S13.3): опасность под ногами
+// предлагает «укрыться» мгновенно и бьёт дальнюю комнату укрытия, пока
+// значение поля высоко; предложение приносит каллер из значения поля.
+void field_candidate_zero_path() {
+    FloorRooms fr;
+    rooms_reset(fr);
+    declare_room(fr, 80, 64, 10, kVerbShelter, 25); // укрытие в 14 клетках
+    float d[kVerbCount];
+    demand_zero(d);
+    d[kVerbShelter] = 1.0f;
+    GoalCandidate danger{};
+    danger.offer[kVerbShelter] = 18.0f; // из значения поля — путь НОЛЬ
+    danger.kind = GoalKind::Field;
+    danger.handle = 1;
+    const vec3 at{64.0f * kCellSize, 64.0f * kCellSize, 10.0f * kCellSize};
+    const GoalPick p = pick_with(d, fr, at, &danger, 1);
+    CHECK(p.kind == GoalKind::Field); // 18 − 0 > 25 − 14
+    // Опасность спала — комната укрытия перебивает голый градиент
+    // (S13.3: «за стеной лучше, чем просто подальше»).
+    danger.offer[kVerbShelter] = 8.0f;
+    const GoalPick q = pick_with(d, fr, at, &danger, 1);
+    CHECK(q.kind == GoalKind::Room);
+    CHECK(q.room == 1);
+}
+
 } // namespace goals_test
 
 static void test_goals_all() {
@@ -326,4 +403,7 @@ static void test_goals_all() {
     goals_test::winner_at_radius_edge();
     goals_test::supply_extends_reach_items();
     goals_test::supply_extends_reach_props();
+    goals_test::entity_judged_by_same_sum();
+    goals_test::zero_offer_entity_is_inert();
+    goals_test::field_candidate_zero_path();
 }

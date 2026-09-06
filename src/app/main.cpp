@@ -96,6 +96,7 @@
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+#include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
@@ -4534,20 +4535,106 @@ int main(int argc, char** argv) {
                         // (goals.h): решателей может быть много, состояние
                         // не делится.
                         static game::GoalsScratch goalsScratch;
+                        const vec3 apos = reg.get<Transform>(player).pos;
                         const auto gT0 = std::chrono::steady_clock::now();
-                        const game::GoalPick pick = game::goals_pick_room(
-                            demand, floorRooms,
-                            reg.get<Transform>(player).pos, goalsScratch);
+                        // СБОРЩИК КАНДИДАТОВ-СУЩНОСТЕЙ (инкремент B;
+                        // решение владельца 2026-09-06: акустика + события).
+                        // Журнал шумов — готовые «заметил» со старением
+                        // (ttl), слышимость и дистанция ПУТЕВЫЕ по скелету
+                        // (шары акустики — стены уже в них). Предложение
+                        // сущности = её контейнер: труп/ящик предлагает
+                        // Σ глаголов того, что в нём ЛЕЖИТ (S13.3 «труп →
+                        // обобрать» той же шкалой, что запас комнаты).
+                        // Пороги — те же, что у разделяемой ветки
+                        // расследования (investigate.h: severity ≥ 2,
+                        // слух 1.12) — второй константы слуха нет.
+                        game::GoalCandidate cands[game::kNoiseCap + 1];
+                        std::size_t candN = 0;
+                        for (const game::Noise& n : noiseField.slot) {
+                            if (n.id == 0 || n.layer != activeLayer) continue;
+                            if (n.severity < game::kInvestigateMinSeverity)
+                                continue;
+                            if (n.actor == static_cast<std::uint32_t>(
+                                               entt::to_integral(player)))
+                                continue; // свой шум — не цель
+                            if (!game::noise_audible(n, apos,
+                                                     game::kInvestigateHearing,
+                                                     noiseAcoustics.get()))
+                                continue;
+                            const auto ae = static_cast<entt::entity>(n.actor);
+                            if (!reg.valid(ae)) continue;
+                            const auto* cont =
+                                reg.try_get<game::Container>(ae);
+                            if (cont == nullptr) continue;
+                            game::GoalCandidate& c = cands[candN];
+                            c = {};
+                            bool any = false;
+                            for (const game::ItemSlot& s : cont->inv.slots) {
+                                if (s.item == 0 || s.count == 0 ||
+                                    !game::item_valid(s.item))
+                                    continue;
+                                const auto& vv = game::kItemVerbs[s.item - 1];
+                                for (std::size_t v = 0; v < game::kVerbCount;
+                                     ++v)
+                                    if (vv[v] != 0) {
+                                        c.offer[v] +=
+                                            static_cast<float>(vv[v]) *
+                                            static_cast<float>(s.count);
+                                        any = true;
+                                    }
+                            }
+                            if (!any) continue; // болтик = ноль, не влияет
+                            c.distCells =
+                                game::noise_distance(n, apos,
+                                                     noiseAcoustics.get()) /
+                                kCellSize;
+                            c.handle = n.actor;
+                            c.kind = game::GoalKind::Entity;
+                            ++candN;
+                        }
+                        // ПОЛЕВАЯ ЦЕЛЬ danger↓ → «укрыться» (S13.3,
+                        // обобщение паники): предложение из ЛОКАЛЬНОГО
+                        // значения поля, путь ноль. Слово «паника» в коде
+                        // не существует — нет опасности, нет предложения.
+                        // Вторая ось (medium_level) ждёт своего глагола в
+                        // verbs.csv — строка данных, не ветка.
+                        if (danger != nullptr) {
+                            const int fx = wrap_macro(static_cast<int>(
+                                std::floor(apos.x / kCellSize)));
+                            const int fy = wrap_macro(static_cast<int>(
+                                std::floor(apos.y / kCellSize)));
+                            const int fz = wrap_macro(static_cast<int>(
+                                std::floor(apos.z / kCellSize)));
+                            const float u =
+                                giga::clamp01(danger->at(fx, fy, fz));
+                            if (u > 0.0f) {
+                                game::GoalCandidate& c = cands[candN];
+                                c = {};
+                                c.offer[game::kVerbShelter] =
+                                    u * game::kFieldDangerOffer;
+                                c.kind = game::GoalKind::Field;
+                                c.handle = 0;
+                                ++candN;
+                            }
+                        }
+                        const game::GoalPick pick = game::goals_pick(
+                            demand, floorRooms, cands, candN, apos,
+                            goalsScratch);
                         const float gMs =
                             std::chrono::duration<float, std::milli>(
                                 std::chrono::steady_clock::now() - gT0)
                                 .count();
                         std::fprintf(stderr,
-                                     "[goals] room=%u score=%.1f dist=%.1f "
-                                     "verb=%s rooms=%zu cand=%u cost=%.3fms\n",
-                                     pick.room, pick.score, pick.distCells,
+                                     "[goals] kind=%u room=%u handle=%u "
+                                     "score=%.1f dist=%.1f verb=%s "
+                                     "rooms=%zu heard=%zu cand=%u "
+                                     "cost=%.3fms\n",
+                                     static_cast<unsigned>(pick.kind),
+                                     pick.room, pick.handle, pick.score,
+                                     pick.distCells,
                                      game::kVerbIds[pick.topVerb],
-                                     floorRooms.list.size(), pick.scored, gMs);
+                                     floorRooms.list.size(), candN,
+                                     pick.scored, gMs);
                     }
                 }
                 // Intent first, wardrobe second: the equip DECIDER re-scores
