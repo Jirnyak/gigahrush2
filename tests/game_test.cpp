@@ -135,6 +135,7 @@ int g_checks = 0;
 #include "suite_economy.inl"
 #include "suite_monster.inl"
 #include "suite_playercmd.inl"
+#include "suite_gamepad.inl"
 
 #include "suite_status.inl"
 #include "suite_rpg.inl"
@@ -5816,6 +5817,7 @@ int main() {
     test_economy_all();
     test_monster_all();
     test_playercmd_all();
+    test_gamepad_all();
 
     test_status_all();
     test_rpg_all();

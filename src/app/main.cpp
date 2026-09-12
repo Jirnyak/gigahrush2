@@ -2227,7 +2227,10 @@ int main(int argc, char** argv) {
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
+    // SDL_INIT_GAMEPAD — без него подсистема не поднимается и ни одно
+    // устройство не видно: до 2026-09-12 в репозитории не было ни одного
+    // SDL_Gamepad вообще ([steam-readiness.md], трек D).
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -6599,13 +6602,22 @@ int main(int argc, char** argv) {
                                     (hr ? thrownR : thrownL) = thr;
                                 }
                         }
+                // ВТОРАЯ ПАРА РУК — ГЕЙМПАД. Триггеры складываются с мышью по
+                // ИЛИ, а не подменяют её: оба устройства живы одновременно,
+                // «режима геймпада» в игре нет и спрашивать игрока, чем он
+                // сейчас играет, не надо. Левый триггер — ЛЕВАЯ рука (та же,
+                // что ЛКМ), правый — ПРАВАЯ (ПКМ): одна кнопка на обе руки
+                // была бы откатом эпика двух рук ([two-hands.md]). Гейт по
+                // открытому окну держит сам InputState — тот же, что у осей.
+                const bool handL = attackHeld || input.hand_left_held();
+                const bool handR = rmbHeld || input.hand_right_held();
                 // Рука несёт и делает то, чем экипирована: спуск руки с
                 // метательным — бросок ЕЁ предмета (закон владельца,
                 // приоритетов нет по построению). throwWanted остаётся
                 // путём консоли/харнесса (скан сумки).
                 const bool throwHandL =
-                    thrownL && attackHeld && shell.playing();
-                const bool throwHandR = thrownR && rmbHeld && shell.playing();
+                    thrownL && handL && shell.playing();
+                const bool throwHandR = thrownR && handR && shell.playing();
                 // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): верб занятой руки —
                 // «бросить несомое», по фронту нажатия её кнопки; та же
                 // скорость 6 м/с, что у консольной команды carry.
@@ -6617,10 +6629,10 @@ int main(int argc, char** argv) {
                 }
                 {
                     static bool prevAtk = false, prevRmb = false;
-                    const bool atkEdge = attackHeld && !prevAtk;
-                    const bool rmbEdge = rmbHeld && !prevRmb;
-                    prevAtk = attackHeld;
-                    prevRmb = rmbHeld;
+                    const bool atkEdge = handL && !prevAtk;
+                    const bool rmbEdge = handR && !prevRmb;
+                    prevAtk = handL;
+                    prevRmb = handR;
                     if (shell.playing() && (carriedL || carriedR) &&
                         reg.valid(player)) {
                         const auto& pcam = reg.get<CameraTag>(player);
@@ -6634,8 +6646,8 @@ int main(int argc, char** argv) {
                 }
                 // Пустая (без верб-предмета и без пропа) рука бьёт.
                 const bool meleeWanted =
-                    (attackHeld && !gunL && !thrownL && !carriedL) ||
-                    (rmbHeld && !gunR && !thrownR && !carriedR);
+                    (handL && !gunL && !thrownL && !carriedL) ||
+                    (handR && !gunR && !thrownR && !carriedR);
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step. Nothing is dropped for a bake any more — the
                 // worker holds a snapshot, not the grid ([game/rebake.h]).
@@ -6643,8 +6655,8 @@ int main(int argc, char** argv) {
                 // Счёт выстрелов живёт в PlayerRanged::shots — локальный
                 // накопитель убит (К1-15), вызов остаётся: он стреляет.
                 game::player_ranged_step(
-                    reg, pool, activeLayer, attackHeld && shell.playing(),
-                    rmbHeld && shell.playing(), kSimDt, simTick, &noiseField,
+                    reg, pool, activeLayer, handL && shell.playing(),
+                    handR && shell.playing(), kSimDt, simTick, &noiseField,
                     &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
                 // share `PlayerRanged::cooldownMs` (one pair of hands) and the step
