@@ -20,6 +20,7 @@
 // Space jump, F fly, Q door, E interact, [ / ] floor travel, ~ console.
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <bit>
 #include <SDL3/SDL_vulkan.h>
 
 #include <chrono>
@@ -5867,7 +5868,7 @@ int main(int argc, char** argv) {
                                 const SubMask& mk = pw.grid().masks()[ci];
                                 int mbits = 0;
                                 for (int wI = 0; wI < int(kSubMaskWords); ++wI)
-                                    mbits += __builtin_popcountll(
+                                    mbits += std::popcount(
                                         mk.words[wI]);
                                 const CellType* pg =
                                     pf ? pf->page(ci) : nullptr;

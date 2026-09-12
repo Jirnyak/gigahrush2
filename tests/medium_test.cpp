@@ -16,6 +16,7 @@
 // над настоящим зеркалом — вода в бассейне падает, растекается, ЗАСЫПАЕТ;
 // масса (счёт квантов) сохраняется точно; осевшие кванты стоят на опоре.
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -306,7 +307,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 const SubMask& pm = w.grid().masks()[ci];
                 int bits = 0;
                 for (std::size_t wI = 0; wI < kSubMaskWords; ++wI)
-                    bits += __builtin_popcountll(pm.words[wI]);
+                    bits += std::popcount(pm.words[wI]);
                 mobileQ += bits ? bits : kSubVoxels;
             }
             continue;
