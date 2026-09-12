@@ -560,8 +560,10 @@ std::uint32_t ai_init(Registry& reg, LayerId layer) {
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
         if (reg.all_of<AiBrain>(e)) continue;   // already has a brain
-        if (reg.all_of<CameraTag>(e)) continue; // the player: controller_step owns it
-        if (reg.all_of<MobRef>(e)) continue;    // mobs keep wander/investigate
+        // Ветвление по решателю ([ai.h] decider_of): этот проход обслуживает
+        // ЖИТЕЛЕЙ. За человеком решает человек, за мобом — его собственное
+        // поведение (wander/investigate).
+        if (decider_of(reg, e) != Decider::Resident) continue;
         fresh.push_back(e);
     }
 
@@ -661,7 +663,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // MotionOwner::Ai would be skipped by wander_step AND steered by
         // controller_step, so it would work by luck until the AI wrote over the
         // player's input.
-        if (reg.all_of<CameraTag>(e) || reg.all_of<MobRef>(e)) {
+        if (decider_of(reg, e) != Decider::Resident) {
             brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
             continue;
         }
@@ -1085,6 +1087,15 @@ void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
     auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
+        // Ветвление по решателю ([ai.h] decider_of) — ОТСУТСТВОВАЛО до
+        // 2026-09-12 и стоило бага Б1 (bugs.md): за телом игрока этот проход
+        // перерешал экипировку раз в 250 тиков (2 с при 125 Гц) и снимал из
+        // руки фонарь, потому что скорер ниже знает только оружие. Рука
+        // человека принадлежит человеку — ровно как в `ai_step` выше.
+        //
+        // Когда скорер научится слотам не-оружия, ветка `Monster` тоже станет
+        // осмысленной; сегодня мобы в этот вид не попадают (у них нет NpcRef).
+        if (decider_of(reg, e) != Decider::Resident) continue;
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!pool.valid(id)) continue;
         if ((tick + id * 37ull) % kEquipDecideTicks != 0) continue;

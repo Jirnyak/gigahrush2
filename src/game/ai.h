@@ -226,7 +226,9 @@
 #include <vector>
 
 #include "core/rng.h"          // hash_u32 / hash2 / rand01 — stateless identity hashing
+#include "ecs/components.h"    // CameraTag — половина ответа decider_of
 #include "ecs/registry.h"      // Registry, Entity
+#include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
 #include "game/faction.h"      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
 #include "world/level_stack.h" // LayerId
@@ -331,6 +333,38 @@ static_assert(sizeof(AiBrain) == 16, "the whole brain is 16 bytes per body");
 inline bool ai_owns_motion(const Registry& reg, Entity e) {
     const AiBrain* b = reg.try_get<AiBrain>(e);
     return b != nullptr && b->motion == static_cast<std::uint8_t>(MotionOwner::Ai);
+}
+
+// --- КТО РЕШАЕТ ЗА ЭТО ТЕЛО -------------------------------------------------
+//
+// Решение владельца 2026-09-12, после бага с фонариком (bugs.md Б1): у тела
+// есть ВИД РЕШАТЕЛЯ, и автоматные проходы ветвятся по нему. Не «это не игрок» в
+// десяти местах, а один вопрос с расширяемым ответом.
+//
+// Игрок здесь НЕ исключение из системы, а её полноправная ветка: он такая же
+// запись алайфа, как все (CANON S11 «синглтона игрока нет»), и через ИИ-проходы
+// идёт честно — просто ветка `Human` пуста, потому что за это тело решает
+// человек за клавиатурой. Так исчезает целый класс багов: раньше каждый новый
+// проход обязан был ВСПОМНИТЬ про носителя камеры, и `ai_equip_step` не
+// вспомнил — снимал фонарь из руки игрока раз в 2 секунды, потому что его
+// оружейный скорер фонарь оружием не считает.
+//
+// Ответов будет больше: у разных мобов и разных жителей будут разные мозги
+// (замысел владельца). Точка расширения — здесь, и только здесь.
+enum class Decider : std::uint8_t {
+    Human,    // носитель камеры: решает человек; автомату делать нечего
+    Resident, // житель: утилитарный мозг S13 — ai_step, ai_equip_step
+    Monster,  // моб: собственное поведение (wander/investigate/mob_behaviour)
+};
+
+// Вид решателя ВЫВОДИТСЯ из тождества тела, а не хранится флажком: держать
+// отдельный бит значило бы завести второй источник правды о том, кто такой
+// игрок, и рассинхронизировать его с CameraTag на первом же вселении (владелец
+// 2026-08-23: «никаких битов-флажков под механики»).
+inline Decider decider_of(const Registry& reg, Entity e) {
+    if (reg.all_of<CameraTag>(e)) return Decider::Human;
+    if (reg.all_of<MobRef>(e)) return Decider::Monster;
+    return Decider::Resident;
 }
 
 // --- Identity hashing -------------------------------------------------------

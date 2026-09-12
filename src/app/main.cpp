@@ -73,6 +73,7 @@
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
+#include "game/body_walk.h"     // room_body_walkable — вердикт для щупа застревания
 #include "game/conversation.h"
 #include "game/dice.h"
 #include "game/economy.h"
@@ -223,6 +224,41 @@ static void light_log(const char* fmt, ...) {
     va_end(ap);
     std::fclose(f);
 }
+
+// ЛОГ ЖИВОГО ПРОГОНА В ФАЙЛ (soak_log.txt рядом с бинарём; GIGA_SOAK=0 гасит).
+// Тот же мотив, что у light_log выше, и та же форма: владелец играет, а не
+// читает stderr. Отличие одно — ВКЛЮЧЁН ПО УМОЛЧАНИЮ, потому что цена прогона
+// живого человека выше цены файла на диске: забытая переменная окружения
+// означает потерянную сессию тестирования, а лишний файл не означает ничего.
+//
+// Пишет две вещи: периодический срез счётчиков (раз в kSoakPeriodSec) и
+// события, которые нельзя восстановить из среза (смерть, вход на этаж, кадр
+// длиннее kSoakBigFrameMs). Открывает файл на каждую строку намеренно: строк
+// ~12 в минуту, а незакрытый дескриптор при падении теряет хвост — то есть
+// ровно то, ради чего лог и заводится.
+static void soak_log(const char* fmt, ...) {
+    static const bool on = [] {
+        const char* e = std::getenv("GIGA_SOAK");
+        return e == nullptr || std::atol(e) != 0;
+    }();
+    if (!on) return;
+    std::FILE* f = std::fopen("soak_log.txt", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fclose(f);
+}
+
+// Срез — раз в 5 с: достаточно редко, чтобы час игры уложился в ~720 строк и
+// читался глазами, достаточно часто, чтобы утечка страниц и накопление трупов
+// были видны как НАКЛОН, а не как две точки.
+constexpr double kSoakPeriodSec = 5.0;
+// Порог «это заметил бы игрок». Детектор хитчей выше стоит на 50 мс (кадр
+// вдвое длиннее вертикальной синхронизации); здесь порог выше, потому что в
+// файл идёт то, что рвёт ощущение, а не то, что видно в профиле.
+constexpr float kSoakBigFrameMs = 120.0f;
 
 // Статик-таблица света этажа (план light-visibility-bake §1.1): пропы-света +
 // кластеры светоматериалов, СТАБИЛЬНЫЕ слот-id на поколение таблицы. Одна
@@ -2055,6 +2091,11 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
     std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
+    // Смерть игрока сегодня не имеет НИ ОДНОГО следа на экране (ни экрана, ни
+    // затемнения, ни строки) — тестирующий человек её попросту не заметит и не
+    // сможет сказать, когда она случилась. В файл она обязана попасть.
+    soak_log("[soak] EVENT death: вселение в запись %u (слой %u)\n", chosenId,
+             static_cast<unsigned>(layer));
     return chosen;
 }
 
@@ -3058,6 +3099,9 @@ int main(int argc, char** argv) {
     };
     // The commands a key/menu row dispatches read the SAME context the typed
     // console does; player/floor move under it, so it is re-pointed each frame.
+    // Намерение «неуязвим» (консольный `god`). Живёт у приложения, а не на
+    // теле, потому что тело расходно — см. console.h::godWanted и bugs.md Б4.
+    bool godWanted = false;
     auto refresh_console_ctx = [&]() {
         consoleCtx.ecs = &reg;
         consoleCtx.pool = &pool;
@@ -3068,6 +3112,15 @@ int main(int argc, char** argv) {
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
         consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
+        consoleCtx.godWanted = &godWanted;   // Б4: неуязвимость переживает тело
+    };
+    // Проекция намерения на ТЕКУЩЕЕ тело (баг Б4, bugs.md). Ставится каждый
+    // кадр, потому что тело меняется без предупреждения: лифт, смерть,
+    // вселение — каждый раз это новая сущность, а человек за клавиатурой тот
+    // же. Снятие делает консоль, поэтому здесь только взвод.
+    auto project_god_onto_body = [&]() {
+        if (godWanted && reg.valid(player) && !reg.all_of<game::GodMode>(player))
+            reg.emplace<game::GodMode>(player);
     };
     auto exec_command = [&](const char* line) {
         char msg[256];
@@ -3441,6 +3494,7 @@ int main(int argc, char** argv) {
 
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
+        project_god_onto_body(); // Б4: тело могло смениться с прошлого кадра
         bool propPassNeedsRebuild = false;
         // dressingSetChanged МЁРТВ (2026-08-31, приказ владельца): смерть
         // антуража больше НЕ триггерит upload_wires/upload_cloths. Аплоад
@@ -3664,6 +3718,197 @@ int main(int argc, char** argv) {
                             static_cast<double>(gt.frame_ms_max()),
                             gt.dropped());
                     }
+                }
+            }
+            // СРЕЗ ЖИВОГО ПРОГОНА (soak_log.txt). Стоит здесь, а не в своём
+            // месте, по той же причине, что и хитч-детектор строкой выше: это
+            // единственная точка кадра, где wall-clock уже известен, а метки
+            // ещё не сброшены. Ничего не считает сам — только читает то, что
+            // системы уже посчитали для себя.
+            {
+                static auto soakT0 = std::chrono::steady_clock::now();
+                static auto soakLast = soakT0;
+                static giga::prof::Ring soakFrame;
+                static unsigned soakFrames = 0, soakHitches = 0;
+                static float soakWorst = 0.0f;
+                static bool soakHeader = false;
+
+                if (!soakHeader) {
+                    soakHeader = true;
+                    int sw = 0, sh = 0;
+                    SDL_GetWindowSizeInPixels(window, &sw, &sh);
+                    soak_log("\n[soak] ===== НОВЫЙ ПРОГОН | сборка %s %s (%s) "
+                             "| окно %dx%d =====\n",
+                             __DATE__, __TIME__, kBuildKind, sw, sh);
+                }
+
+                soakFrame.push(wallMs);
+                ++soakFrames;
+                if (wallMs > soakWorst) soakWorst = wallMs;
+
+                // ЩУП ЗАСТРЕВАНИЯ (bugs.md Б3.2: «невидимая стена в пустой
+                // комнате, и noclip не помог»). Ловит с поличным: игрок ХОЧЕТ
+                // идти (wishDir не ноль), а тело за секунду почти не сдвинулось.
+                //
+                // Печатает всё, что разводит кандидатов, потому что гадать по
+                // симптому здесь бессмысленно — «прижимает в сторону» одинаково
+                // выглядит при боковой гравитации, при отбрасывании от удара
+                // (combat.cpp:231) и при настоящей геометрии:
+                //   * флаги noclip/fly — работал ли аварийный выход ВООБЩЕ;
+                //   * вердикты проходимости клетки против того, что видно;
+                //   * вектор гравитации — «низ» мог оказаться вбок (тор, S-режимы);
+                //   * долг фикс-шага — при 0.2 fps ввод голодает, и это НЕ стена.
+                {
+                    static vec3 stuckLastPos{0, 0, 0};
+                    static double stuckSince = 0.0;
+                    static bool stuckArmed = false;
+                    static double stuckLastReport = -1e9;
+                    const double nowSec =
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - soakT0)
+                            .count();
+                    if (reg.valid(player)) {
+                        const vec3 p = reg.get<Transform>(player).pos;
+                        const Controller* ctl = reg.try_get<Controller>(player);
+                        const float wish =
+                            ctl != nullptr
+                                ? std::fabs(ctl->wishDir.x) +
+                                      std::fabs(ctl->wishDir.y) +
+                                      std::fabs(ctl->wishDir.z)
+                                : 0.0f;
+                        const vec3 d = p - stuckLastPos;
+                        const float moved =
+                            std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                        if (wish > 0.1f && moved < 0.05f) {
+                            if (!stuckArmed) { stuckArmed = true; stuckSince = nowSec; }
+                        } else {
+                            stuckArmed = false;
+                        }
+                        // Порог 1.0 с: короткая заминка об угол — не баг, а
+                        // геометрия. Репорт не чаще раза в 3 с, чтобы застрявший
+                        // игрок не залил файл.
+                        if (stuckArmed && nowSec - stuckSince > 1.0 &&
+                            nowSec - stuckLastReport > 3.0) {
+                            stuckLastReport = nowSec;
+                            const World& w = stack.layer(activeLayer);
+                            const int cx = static_cast<int>(p.x / kCellSize);
+                            const int cy = static_cast<int>(p.y / kCellSize);
+                            const int cz = static_cast<int>(p.z / kCellSize);
+                            const vec3 g = w.gravity().at(p);
+                            soak_log(
+                                "[soak] EVENT stuck: %.1f с | поз %.2f %.2f %.2f "
+                                "клетка %d %d %d | хочет %.2f сдвинулся %.3f м | "
+                                "noclip=%d fly=%d | standable=%d walkable=%d | "
+                                "грав %.2f %.2f %.2f | долг_шага %.1f мс | "
+                                "этаж=%d слой=%u\n",
+                                nowSec - stuckSince, static_cast<double>(p.x),
+                                static_cast<double>(p.y), static_cast<double>(p.z),
+                                cx, cy, cz, static_cast<double>(wish),
+                                static_cast<double>(moved),
+                                reg.all_of<NoClip>(player) ? 1 : 0,
+                                ctl != nullptr && ctl->fly ? 1 : 0,
+                                game::floor_standable(w, cx, cy, cz) ? 1 : 0,
+                                game::room_body_walkable(w.grid(), cx, cy, cz) ? 1 : 0,
+                                static_cast<double>(g.x), static_cast<double>(g.y),
+                                static_cast<double>(g.z),
+                                static_cast<double>(simAccum * 1000.0f),
+                                currentFloor, static_cast<unsigned>(activeLayer));
+                        }
+                        stuckLastPos = p;
+                    }
+                }
+
+                // Вход на этаж и одиночные длинные кадры — события, а не срез:
+                // из усреднённой строки раз в 5 с их не восстановить, а именно
+                // они и есть то, что чувствует человек за клавиатурой.
+                if (g_frameMark.floorEntry) {
+                    soak_log("[soak] EVENT floor-entry: кадр %.0f мс "
+                             "(sim %.1f render %.1f) слой %u\n",
+                             static_cast<double>(wallMs),
+                             static_cast<double>(g_frameMark.simMs),
+                             static_cast<double>(g_frameMark.renderMs),
+                             static_cast<unsigned>(activeLayer));
+                } else if (wallMs > kSoakBigFrameMs && soakFrames > 1) {
+                    ++soakHitches;
+                    soak_log("[soak] EVENT big-frame: %.0f мс (sim %.1f "
+                             "render %.1f carve %.2f light_swap %.2f)\n",
+                             static_cast<double>(wallMs),
+                             static_cast<double>(g_frameMark.simMs),
+                             static_cast<double>(g_frameMark.renderMs),
+                             static_cast<double>(g_frameMark.carveMs),
+                             static_cast<double>(g_frameMark.lightSwapMs));
+                }
+
+                const auto soakNow = std::chrono::steady_clock::now();
+                const double sinceLast =
+                    std::chrono::duration<double>(soakNow - soakLast).count();
+                if (sinceLast >= kSoakPeriodSec && soakFrames > 1) {
+                    const giga::prof::Stats fs =
+                        giga::prof::ring_stats(soakFrame);
+                    // Трупы и линки — носители §64 (накопление rigid). Страницы
+                    // пятен — носитель утечки stain. Обе величины интересны
+                    // ТОЛЬКО как наклон во времени, поэтому печатаются каждый
+                    // срез, даже когда не меняются.
+                    const RigidStats* rs = reg.ctx().find<RigidStats>();
+                    const auto corpses =
+                        reg.view<const game::Corpse>().size();
+                    // `find`, а НЕ `get_or_create`: щуп обязан отличать «поля
+                    // ещё нет» от «страниц ноль». В прогоне 2026-09-12 столбец
+                    // держался в нуле при 479 трупах, и по одному нулю нельзя
+                    // было сказать, утечки нет или измерение недействительно.
+                    // Отсутствие поля печатается как -1.
+                    long stainPages = -1, stainUsed = -1;
+                    if (const SubField<StainRGB>* sf =
+                            stack.layer(activeLayer)
+                                .subfields()
+                                .find<StainRGB>(kStainFieldName)) {
+                        stainPages = static_cast<long>(sf->page_count());
+                        stainUsed = static_cast<long>(sf->pages_in_use());
+                    }
+                    // Клок носителя камеры: вопрос «успевает ли человек
+                    // поесть» решается наклоном food/water, а не ощущением.
+                    float pFood = -1.0f, pWater = -1.0f, pSleep = -1.0f;
+                    int pHp = -1;
+                    if (reg.valid(player))
+                        if (const auto* nrs = reg.try_get<game::NpcRef>(player))
+                            if (pool.valid(nrs->id)) {
+                                const game::Needs& nd = pool.needs(nrs->id);
+                                pFood = nd.food;
+                                pWater = nd.water;
+                                pSleep = nd.sleep;
+                                pHp = pool.hp(nrs->id);
+                            }
+                    soak_log(
+                        "[soak] t=%.0fс этаж=%d слой=%u | fps=%.1f кадр "
+                        "med=%.1f p90=%.1f peak=%.1f мс | gpu=%.1f/%.1f | "
+                        "тела=%u rigid=%u/%u линки=%u трупы=%u | "
+                        "стр_зеркала=%u стр_пятен=%ld/%ld | среда=%u/%u | "
+                        "толпа_мертвых=%u макро_живых=%u | "
+                        "игрок hp=%d еда=%.1f вода=%.1f сон=%.1f | "
+                        "длинных_кадров=%u худший=%.0f мс\n",
+                        std::chrono::duration<double>(soakNow - soakT0).count(),
+                        currentFloor, static_cast<unsigned>(activeLayer),
+                        static_cast<double>(soakFrames) / sinceLast,
+                        static_cast<double>(fs.median),
+                        static_cast<double>(fs.p90),
+                        static_cast<double>(fs.peak),
+                        static_cast<double>(renderer.timer.frame_ms()),
+                        static_cast<double>(renderer.timer.frame_ms_max()),
+                        bodyPass.last_instance_count(),
+                        rs != nullptr ? rs->bodies : 0u,
+                        rs != nullptr ? rs->awake : 0u,
+                        rs != nullptr ? rs->links : 0u,
+                        static_cast<unsigned>(corpses),
+                        voxelMirror.pages_in_pool(), stainPages, stainUsed,
+                        mediumPass.live_count(), mediumPass.live_quanta(),
+                        crowdDead, macroStats.living, pHp,
+                        static_cast<double>(pFood), static_cast<double>(pWater),
+                        static_cast<double>(pSleep), soakHitches,
+                        static_cast<double>(soakWorst));
+                    soakLast = soakNow;
+                    soakFrames = 0;
+                    soakHitches = 0;
+                    soakWorst = 0.0f;
                 }
             }
             g_frameMark = FrameMark{};
@@ -7179,7 +7424,17 @@ int main(int argc, char** argv) {
                     // that helper: the old body is already gone, so this reads the
                     // value saved off at the top of the death path (carriedRpg).
                     player = possess_a_survivor(reg, pool, activeLayer);
-                    if (player == entt::null) { running = false; break; }
+                    if (player == entt::null) {
+                        // Живых на слое не осталось — приложение сейчас просто
+                        // закроется, без единого слова игроку. Для тестирующего
+                        // это неотличимо от краша, поэтому разница обязана
+                        // остаться хотя бы в файле.
+                        soak_log("[soak] EVENT run-over: выживших на слое %u "
+                                 "нет, выход (это НЕ краш)\n",
+                                 static_cast<unsigned>(activeLayer));
+                        running = false;
+                        break;
+                    }
                     aim_player(reg, player);
                     reg.emplace_or_replace<game::PlayerMelee>(
                         player, game::PlayerMelee{0, kills});

@@ -232,12 +232,20 @@ bool cmd_god(ConsoleContext& ctx, int, const char* const*, char* out,
         put(out, cap, "god: no live player");
         return false;
     }
-    if (ctx.ecs->all_of<GodMode>(ctx.player)) {
+    // Переключается НАМЕРЕНИЕ (ctx.godWanted, живёт у приложения и переживает
+    // смену тела — см. console.h), компонент на теле ставится/снимается тут же
+    // как его проекция. Без указателя (headless-тесты) работает по-старому,
+    // прямо по компоненту: поведение тестов не меняется.
+    const bool on = ctx.godWanted != nullptr
+                        ? !*ctx.godWanted
+                        : !ctx.ecs->all_of<GodMode>(ctx.player);
+    if (ctx.godWanted != nullptr) *ctx.godWanted = on;
+    if (on) {
+        ctx.ecs->emplace_or_replace<GodMode>(ctx.player);
+        put(out, cap, "god ON");
+    } else {
         ctx.ecs->remove<GodMode>(ctx.player);
         put(out, cap, "god OFF");
-    } else {
-        ctx.ecs->emplace<GodMode>(ctx.player);
-        put(out, cap, "god ON");
     }
     return true;
 }

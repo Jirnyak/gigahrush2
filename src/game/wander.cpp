@@ -69,7 +69,7 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
     auto view = reg.view<const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
-        if (reg.all_of<CameraTag>(e)) continue;          // the player
+        if (decider_of(reg, e) == Decider::Human) continue; // за человеком решает человек
         if (reg.all_of<WanderTarget>(e)) continue;       // already wandering
         std::uint8_t pack = 0;
         if (const MobRef* m = reg.try_get<MobRef>(e)) {
@@ -206,7 +206,9 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // Checked here rather than by stripping WanderTarget on possession: the
         // component is harmless data, and an exclusion at the point of steering
         // cannot be defeated by a future third way of becoming the player.
-        if (reg.all_of<CameraTag>(e)) continue;
+        // С 2026-09-12 вопрос задаётся общим примитивом ([ai.h] decider_of) —
+        // «третий способ стать игроком» теперь обязан ответить в ОДНОМ месте.
+        if (decider_of(reg, e) == Decider::Human) continue;
 
         // Identity-hash stagger: an agent's slot is a function of its own id, so
         // the crowd spreads evenly across the period with no scheduling state.
