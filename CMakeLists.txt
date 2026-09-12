@@ -62,7 +62,16 @@ else()
     # NOMINMAX is load-bearing: <SDL3/SDL.h> can reach <windows.h>, whose
     # min/max macros collide with the std::min/max/clamp used in core/math.h,
     # sim/fluid.cpp, render/vk_swapchain.cpp and input/input.cpp.
-    add_compile_options(/utf-8 /permissive- /Zc:__cplusplus /MP)
+    # /permissive- НЕ ЗДЕСЬ, а в giga_target_flags() ниже — ЗАМЕРЕНО, а не из
+    # вкуса: директорная опция наследуется каждым подпроектом FetchContent, и
+    # basisu внутри KTX-Software (external/basisu/encoder/cppspmd_sse.h:496,508)
+    # возвращает временный объект неконстантной ССЫЛКОЙ — старое нестандартное
+    # расширение MSVC, которое /permissive- как раз и выключает. Сборка на
+    # раннере 2026-09-12 умирала там error C2440, строго по той же причине, по
+    # которой LTO ниже намеренно не директорная: наша политика третьей стороне
+    # не навязывается. Своим целям conformance-режим остаётся — все до одной
+    # проходят через giga_target_flags(), кроме giga_imgui, а это тоже чужой код.
+    add_compile_options(/utf-8 /Zc:__cplusplus /MP)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     if(GIGA_ASAN)
         add_compile_options(/fsanitize=address)
@@ -81,7 +90,8 @@ endif()
 
 # ---- Per-target policy -----------------------------------------------------
 # One place instead of five near-identical if(MSVC) blocks. Applies our warning
-# level, the RTTI decision, and LTO — so third-party targets get none of it.
+# level, the conformance mode, the RTTI decision, and LTO — so third-party
+# targets get none of it.
 #
 # `rtti` controls whether the target may use RTTI. The no-exceptions rule
 # (AGENTS.md) is enforced by the compiler on Clang/GCC only: MSVC's STL is not
@@ -94,6 +104,7 @@ endif()
 function(giga_target_flags tgt rtti)
     if(MSVC)
         target_compile_options(${tgt} PRIVATE /W4 /EHsc
+            /permissive-  # conformance-режим — ТОЛЬКО своим (см. выше)
             /wd4100  # unreferenced formal parameter (== -Wno-unused-parameter)
         )
         if(NOT rtti)

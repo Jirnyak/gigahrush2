@@ -2150,6 +2150,49 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     return chosen;
 }
 
+// ГДЕ ЛЕЖИТ SPIR-V В МОМЕНТ ЗАПУСКА — вопрос, отдельный от того, где он лежал
+// в момент СБОРКИ. GIGA_SHADER_DIR — абсолютный путь сборочного каталога,
+// вшитый компилятором (CMakeLists.txt, target_compile_definitions). На машине
+// разработчика он существует и всё работает; в распакованном на чужой машине
+// архиве такого пути НЕТ ни у одного файла, и игра не находит ни одного
+// шейдера — то есть собранный билд нельзя отдать никому, включая Стим
+// ([steam-readiness.md]). Одна строка дефайна делала сборку невыдаваемой.
+//
+// Порядок тот же, что у resolve_texture_dir() в render/material_textures.cpp,
+// и по тем же причинам: env перебивает всё, затем каталог РЯДОМ С EXE (это и
+// есть раскладка архива), затем CWD, и только потом вшитый путь сборки.
+// Каталог рядом с exe стоит выше вшитого намеренно и ничего не меняет для
+// разработчика: у build/gigahrush2 каталог exe И ЕСТЬ build/, так что обе
+// ветки дают один и тот же build/shaders.
+//
+// Проверка — fopen конкретного .spv, а не is_directory: пустой каталог
+// shaders/ рядом с exe (ровно то, что оставит неполная распаковка) прошёл бы
+// проверку на каталог и увёл бы поиск от рабочего пути сборки.
+static bool shader_dir_has_spv(const std::string& dir) {
+    const std::string probe = dir + "/cube.frag.spv";
+    std::FILE* f = std::fopen(probe.c_str(), "rb");
+    if (!f) return false;
+    std::fclose(f);
+    return true;
+}
+
+static std::string resolve_shader_dir() {
+    if (const char* env = std::getenv("GIGA_SHADER_DIR")) {
+        if (*env != '\0' && shader_dir_has_spv(env)) return env;
+    }
+    // SDL3: возвращаемую строку НЕ освобождать (владелец — SDL), в отличие от
+    // SDL2. nullptr возможен, если платформа не умеет сказать, где лежит exe.
+    if (const char* base = SDL_GetBasePath()) {
+        const std::string beside = std::string(base) + "shaders";
+        if (shader_dir_has_spv(beside)) return beside;
+    }
+    if (shader_dir_has_spv("shaders")) return "shaders";
+    // Вшитый путь сборки — последним, и возвращается ДАЖЕ когда проверка не
+    // прошла: тогда пассы ругаются на отсутствующий файл привычным текстом со
+    // знакомым путём, а не на пустую строку.
+    return GIGA_SHADER_DIR;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2236,6 +2279,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // После SDL_Init: SDL_GetBasePath спрашивает платформу, где лежит exe.
+    // Печатается тем же тоном, что и отметка сборки выше, и ровно затем же —
+    // «те ли шейдеры я гоняю» ловится глазами в первых строках лога, а не
+    // восемью одинаковыми отказами пассов ниже.
+    const std::string shaderDir = resolve_shader_dir();
+    std::fprintf(stderr, "[build] шейдеры: %s\n", shaderDir.c_str());
+
     SDL_Window* window = SDL_CreateWindow(
         "gigahrush2 — voxel core", kWinW, kWinH,
         SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -2259,7 +2309,7 @@ int main(int argc, char** argv) {
     }
 
     gpu::VulkanRenderer renderer;
-    if (!renderer.init(device, window, GIGA_SHADER_DIR)) {
+    if (!renderer.init(device, window, shaderDir.c_str())) {
         std::fprintf(stderr, "Renderer init failed\n");
         device.destroy();
         SDL_DestroyWindow(window);
@@ -2270,7 +2320,7 @@ int main(int argc, char** argv) {
     renderer.crtEnabled = !noCrt;
 
     gpu::GpuLightGrid lightGrid;
-    if (!lightGrid.init(&device, GIGA_SHADER_DIR)) {
+    if (!lightGrid.init(&device, shaderDir.c_str())) {
         std::fprintf(stderr, "[light-grid] pass init failed\n");
     }
 
@@ -2306,7 +2356,7 @@ int main(int argc, char** argv) {
     // owner and the body/prop pipeline-layout donor until the mesher deletion
     // lands; its record() is no longer called, so invalidate() is free.
     gpu::RaymarchPass raymarchPass;
-    if (!raymarchPass.init(device, renderer.renderPass, GIGA_SHADER_DIR,
+    if (!raymarchPass.init(device, renderer.renderPass, shaderDir.c_str(),
                            voxelMirror, materialTex,
                            lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "Raymarch pass init failed\n");
@@ -2323,7 +2373,7 @@ int main(int argc, char** argv) {
     // Draws the population: one instanced, lit box per embodied entity, sharing
     // the world pass's render pass + depth so bodies and voxels occlude cleanly.
     gpu::BodyPass bodyPass;
-    if (!bodyPass.init(device, renderer.renderPass, GIGA_SHADER_DIR, lightGrid.descriptor_set_layout(), voxelMirror.shadow_set_layout())) {
+    if (!bodyPass.init(device, renderer.renderPass, shaderDir.c_str(), lightGrid.descriptor_set_layout(), voxelMirror.shadow_set_layout())) {
         std::fprintf(stderr, "Body pass init failed\n");
         raymarchPass.destroy();
         voxelMirror.destroy();
@@ -2341,20 +2391,20 @@ int main(int argc, char** argv) {
     // PBR lighting, fog, and material shading as the voxel world.
     gpu::PropPass propPass;
     if (!propPass.init(&device, materialTex.pipeline_layout(),
-                       renderer.renderPass, GIGA_SHADER_DIR)) {
+                       renderer.renderPass, shaderDir.c_str())) {
         std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
         // Non-fatal: the game runs fine without props.
     }
 
     gpu::GpuCullPass cullPass;
-    if (!cullPass.init(&device, GIGA_SHADER_DIR)) {
+    if (!cullPass.init(&device, shaderDir.c_str())) {
         std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
     }
 
     // GPU-verlet antourage: hanging wires AND cloth sheets, one pass, one
     // compute shader — a chain is a lattice at H=1 ([render/verlet_pass.h]).
     gpu::VerletPass verletPass;
-    if (!verletPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
+    if (!verletPass.init(&device, renderer.renderPass, shaderDir.c_str(),
                          voxelMirror.masks_buffer(), voxelMirror.types_buffer(),
                          lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr,
@@ -2374,7 +2424,7 @@ int main(int argc, char** argv) {
     // 31.25 Гц, падение 0.25 м x 31.25 = 7.8 м/с; пауза и детерминизм
     // бесплатно — стоят сим-часы, стоит материя.
     gpu::GpuMediumPass mediumPass;
-    if (!mediumPass.init(&device, GIGA_SHADER_DIR, voxelMirror)) {
+    if (!mediumPass.init(&device, shaderDir.c_str(), voxelMirror)) {
         std::fprintf(stderr,
                      "[medium] pass init failed (continuing without automaton)\n");
     }

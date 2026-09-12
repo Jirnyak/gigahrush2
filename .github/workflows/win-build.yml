@@ -1,0 +1,127 @@
+# Windows build — MSVC + Ninja + LunarG Vulkan SDK on a GitHub-hosted runner.
+#
+# This is the "OTHER option" that source-rules.yml deliberately refused to
+# attempt: the full configure + build + ctest leg. What made it refusable then
+# was provisioning — CMakeLists.txt opens with find_package(Vulkan REQUIRED) and
+# a FATAL_ERROR when glslc is missing, and a bare runner has neither. So the
+# provisioning is the substance of this file, and everything else is a mirror of
+# tools/win/build.bat (vswhere -> vcvars64 -> cmake -G Ninja), which stays the
+# hand-run entry point on a real Windows box.
+#
+# Deliberate deviations from build.bat, each one for a reason a runner forces:
+#
+#   1. ctest EXCLUDES medium_test and verlet_test. Both open a real Vulkan
+#      device and dispatch compute (CANON S16.3: headless means "no window", NOT
+#      "no GPU"). A GitHub-hosted runner has no GPU and no ICD, so they cannot
+#      pass here and their absence is a property of the machine, not a lowered
+#      bar. THE WINDOWS BUILD IS THEREFORE NOT FULLY TESTED BY THIS WORKFLOW —
+#      the GPU suites stay the job of a machine with a GPU.
+#   2. The Vulkan SDK is pinned by version, not "latest". A silent SDK bump is
+#      exactly the kind of moving floor that makes a red build unreadable.
+#   3. The artifact is packaged with shaders/ and data/ beside the exe. Where
+#      the exe LOOKS for them is a separate question from whether it built —
+#      see the packaging step.
+#
+# Runs on push to the working branches and on demand. It does not gate anything
+# yet: make it required only after it has been green enough times to be trusted.
+name: win-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "torus" ]
+    paths-ignore:
+      - "**.md"
+      - "markoaudit/**"
+      - "Docs/**"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # Pinned. Bump deliberately, in its own commit, and say what moved.
+      VULKAN_VERSION: "1.4.357.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ~200 MB installer + ~1 GB unpacked. Cached by version, so only the
+      # first run on a new SDK pays for it.
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-${{ env.VULKAN_VERSION }}
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
+          $exe = "$env:RUNNER_TEMP\vulkan_sdk.exe"
+          Write-Host "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          # Qt Installer Framework: unattended install of the default component
+          # set (which carries glslc.exe and vulkan-1.lib).
+          $proc = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList `
+            "--root", "C:\VulkanSDK\$env:VULKAN_VERSION", `
+            "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          if ($proc.ExitCode -ne 0) { throw "Vulkan SDK installer exited $($proc.ExitCode)" }
+
+      # Verify, never trust the installer's exit code — the same discipline
+      # tools/win/README.md spells out for the VS workload.
+      - name: Export and verify VULKAN_SDK
+        shell: pwsh
+        run: |
+          $sdk = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) {
+            Get-ChildItem C:\VulkanSDK -ErrorAction SilentlyContinue | Out-Host
+            throw "glslc.exe missing under $sdk — the SDK install is not usable"
+          }
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & "$sdk\Bin\glslc.exe" --version | Out-Host
+
+      # EnTT / imgui / KTX-Software / SDL3 are fetched and BUILT from source.
+      # Keyed on CMakeLists.txt because that is where every GIT_TAG lives, so a
+      # pin bump invalidates the cache by construction.
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build-win/_deps
+          key: win-deps-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: win-deps-
+
+      - name: Configure and build (Release)
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          if not defined VSPATH echo ERROR: no VS install carries the C++ x64 toolset & exit /b 1
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          where cl || exit /b 1
+          where ninja || choco install ninja -y || exit /b 1
+          cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
+          cmake --build build-win --parallel || exit /b 1
+
+      # The CPU suites. See deviation 1 in the header for what is excluded and why.
+      - name: Test (CPU suites only)
+        shell: cmd
+        run: ctest --test-dir build-win --output-on-failure -E "medium_test|verlet_test"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dist = "dist/gigahrush2-win64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item build-win/gigahrush2.exe $dist
+          Copy-Item build-win/*.dll $dist -ErrorAction SilentlyContinue
+          Copy-Item -Recurse build-win/shaders "$dist/shaders"
+          Copy-Item -Recurse data "$dist/data"
+          Get-ChildItem -Recurse $dist | Measure-Object -Property Length -Sum |
+            ForEach-Object { "packaged {0:N1} MiB" -f ($_.Sum / 1MB) } | Out-Host
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gigahrush2-win64
+          path: dist/gigahrush2-win64
+          if-no-files-found: error
