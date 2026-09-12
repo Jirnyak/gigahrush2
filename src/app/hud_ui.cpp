@@ -38,17 +38,23 @@ const game::NpcRef* live_ref(const HudContext& c) {
 // --- элементы ---------------------------------------------------------------
 
 // Прицел: крест из четырёх штрихов с зазором, прямо в foreground-список —
-// прицелу не нужно окно, он живёт на самом стекле.
-void draw_crosshair(const HudContext&) {
+void draw_crosshair(const HudContext& ctx) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    const ImVec2 c{ImGui::GetIO().DisplaySize.x * 0.5f,
-                   ImGui::GetIO().DisplaySize.y * 0.5f};
     const ImU32 col = ImGui::GetColorU32(ImVec4(0.349f, 0.949f, 0.400f, 0.85f));
     constexpr float kGap = 3.0f, kLen = 7.0f;
-    dl->AddLine({c.x - kGap - kLen, c.y}, {c.x - kGap, c.y}, col, 1.0f);
-    dl->AddLine({c.x + kGap, c.y}, {c.x + kGap + kLen, c.y}, col, 1.0f);
-    dl->AddLine({c.x, c.y - kGap - kLen}, {c.x, c.y - kGap}, col, 1.0f);
-    dl->AddLine({c.x, c.y + kGap}, {c.x, c.y + kGap + kLen}, col, 1.0f);
+    auto draw_cross = [&](float cx, float cy) {
+        dl->AddLine({cx - kGap - kLen, cy}, {cx - kGap, cy}, col, 1.0f);
+        dl->AddLine({cx + kGap, cy}, {cx + kGap + kLen, cy}, col, 1.0f);
+        dl->AddLine({cx, cy - kGap - kLen}, {cx, cy - kGap}, col, 1.0f);
+        dl->AddLine({cx, cy + kGap}, {cx, cy + kGap + kLen}, col, 1.0f);
+    };
+    float cy = ImGui::GetIO().DisplaySize.y * 0.5f;
+    if (ctx.vrMode) {
+        draw_cross(ImGui::GetIO().DisplaySize.x * 0.25f, cy);
+        draw_cross(ImGui::GetIO().DisplaySize.x * 0.75f, cy);
+    } else {
+        draw_cross(ImGui::GetIO().DisplaySize.x * 0.5f, cy);
+    }
 }
 
 void draw_health(const HudContext& c) {
@@ -193,8 +199,9 @@ HudElement g_elements[] = {
 // Одно угловое окно слота: прижато к своему углу, без ввода и декора, фон —
 // едва заметная подложка (0.35), чтобы фосфор читался поверх яркого дерева,
 // а мир просвечивал ([hud.md] Стиль).
-void begin_slot_window(HudSlot slot) {
-    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+void begin_slot_window(HudSlot slot, bool vrMode) {
+    const ImVec2 fullDs = ImGui::GetIO().DisplaySize;
+    const ImVec2 ds = vrMode ? ImVec2{fullDs.x * 0.5f, fullDs.y} : fullDs;
     constexpr float kPad = 12.0f;
     ImVec2 pos, pivot;
     const char* id = "";
@@ -238,7 +245,7 @@ void hud_ui_draw(const HudContext& ctx) {
             if (el.slot != slot || !el.on) continue;
             if (el.live && !el.live(ctx)) continue;
             if (el.draw == draw_crosshair) { el.draw(ctx); continue; }
-            if (!opened) { begin_slot_window(slot); opened = true; }
+            if (!opened) { begin_slot_window(slot, ctx.vrMode); opened = true; }
             el.draw(ctx);
         }
         if (opened) ImGui::End();

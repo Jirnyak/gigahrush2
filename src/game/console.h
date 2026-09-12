@@ -67,6 +67,7 @@ enum class ConsoleRequest : std::uint32_t {
     AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Inventory, // toggle the inventory grid ([inventory.md] — the ONE cell
                // widget; торговля уже сложилась в него deal-политикой)
+    VrToggle,  // toggle stereoscopic VR Side-by-Side rendering
     Count
 };
 

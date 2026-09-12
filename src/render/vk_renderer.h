@@ -67,6 +67,7 @@ struct VulkanRenderer {
     // Характер трубки. crtEnabled=false (--no-crt) даёт сырой кадр.
     // Экспозиции здесь НЕТ: «тёмная адаптация» вырезана ([ddalight.md] №10).
     bool crtEnabled = true;
+    bool vrMode = false; // Stereoscopic SBS mode (disables full-screen CRT barrel distortion)
     float chromaticAberration = 0.003f;
     float crtCurvature = 0.035f;
     float scanlineIntensity = 0.35f;
@@ -132,6 +133,9 @@ struct VulkanRenderer {
     // Owned swapchain access for the cube pass (viewport, extent, format).
     const VulkanSwapchain& swap() const { return *swapchain_; }
     bool recreate(SDL_Window* window);
+
+    void set_vr_mode(bool on) { vrMode = on; }
+    bool vr_mode() const { return vrMode; }
 
 private:
     VulkanSwapchain* swapchain_ = nullptr;

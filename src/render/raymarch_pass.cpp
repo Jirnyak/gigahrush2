@@ -157,12 +157,12 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
 
     VkDescriptorPoolSize sizes[2]{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[0].descriptorCount = 8 * kMaxFramesInFlight;
+    sizes[0].descriptorCount = 8 * kMaxFramesInFlight * 2;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    sizes[1].descriptorCount = kMaxFramesInFlight;
+    sizes[1].descriptorCount = kMaxFramesInFlight * 2;
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = kMaxFramesInFlight;
+    pi.maxSets = kMaxFramesInFlight * 2;
     pi.poolSizeCount = 2;
     pi.pPoolSizes = sizes;
     VK_TRY(vkCreateDescriptorPool(dev_->device, &pi, nullptr, &descPool_));
@@ -173,75 +173,77 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
     const vec3* albedo = material_albedo_table(&matCount);
 
     for (int f = 0; f < kMaxFramesInFlight; ++f) {
-        if (!ubo_[f].create_host_visible(*dev_, sizeof(MarchUbo),
-                                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                         "raymarch ubo"))
-            return false;
-        MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
-        u->invViewProj = mat4_identity();
-        for (std::uint32_t i = 0; i < 32; ++i) {
-            // Out-of-range material ids must SCREAM, not blend in: a near-white
-            // fallback rendered as believable "dead pixels" in a dark world.
-            const vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
-            u->albedo[i] = vec4{c.x, c.y, c.z, 0.0f};
-        }
+        for (int eye = 0; eye < 2; ++eye) {
+            if (!ubo_[f][eye].create_host_visible(*dev_, sizeof(MarchUbo),
+                                                  VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                  "raymarch ubo"))
+                return false;
+            MarchUbo* u = static_cast<MarchUbo*>(ubo_[f][eye].mapped);
+            u->invViewProj = mat4_identity();
+            for (std::uint32_t i = 0; i < 32; ++i) {
+                // Out-of-range material ids must SCREAM, not blend in: a near-white
+                // fallback rendered as believable "dead pixels" in a dark world.
+                const vec3 c = i < matCount ? albedo[i] : vec3{1.0f, 0.0f, 1.0f};
+                u->albedo[i] = vec4{c.x, c.y, c.z, 0.0f};
+            }
 
-        VkDescriptorSetAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        ai.descriptorPool = descPool_;
-        ai.descriptorSetCount = 1;
-        ai.pSetLayouts = &setLayout_;
-        VK_TRY(vkAllocateDescriptorSets(dev_->device, &ai, &sets_[f]));
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool = descPool_;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts = &setLayout_;
+            VK_TRY(vkAllocateDescriptorSets(dev_->device, &ai, &sets_[f][eye]));
 
-        const VkBuffer bufs[5] = {mirror.masks_buffer(), mirror.types_buffer(),
-                                  mirror.page_index_buffer(),
-                                  mirror.page_pool_buffer(),
-                                  mirror.class_buffer()};
-        const VkDeviceSize sizesB[5] = {
-            VoxelMirror::kMasksBytes, VoxelMirror::kTypesBytes,
-            VoxelMirror::kPageIdxBytes, VoxelMirror::kPoolBytes,
-            VoxelMirror::kClassBytes};
-        VkDescriptorBufferInfo bi[9]{};
-        VkWriteDescriptorSet w[9]{};
-        for (std::uint32_t i = 0; i < 5; ++i) {
-            bi[i].buffer = bufs[i];
-            bi[i].range = sizesB[i];
-            w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = sets_[f];
-            w[i].dstBinding = i;
-            w[i].descriptorCount = 1;
-            w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w[i].pBufferInfo = &bi[i];
+            const VkBuffer bufs[5] = {mirror.masks_buffer(), mirror.types_buffer(),
+                                      mirror.page_index_buffer(),
+                                      mirror.page_pool_buffer(),
+                                      mirror.class_buffer()};
+            const VkDeviceSize sizesB[5] = {
+                VoxelMirror::kMasksBytes, VoxelMirror::kTypesBytes,
+                VoxelMirror::kPageIdxBytes, VoxelMirror::kPoolBytes,
+                VoxelMirror::kClassBytes};
+            VkDescriptorBufferInfo bi[9]{};
+            VkWriteDescriptorSet w[9]{};
+            for (std::uint32_t i = 0; i < 5; ++i) {
+                bi[i].buffer = bufs[i];
+                bi[i].range = sizesB[i];
+                w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[i].dstSet = sets_[f][eye];
+                w[i].dstBinding = i;
+                w[i].descriptorCount = 1;
+                w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[i].pBufferInfo = &bi[i];
+            }
+            bi[5].buffer = ubo_[f][eye].buffer;
+            bi[5].range = sizeof(MarchUbo);
+            w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[5].dstSet = sets_[f][eye];
+            w[5].dstBinding = 5;
+            w[5].descriptorCount = 1;
+            w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[5].pBufferInfo = &bi[5];
+            bi[6].buffer = mirror.fluid_buffer();
+            bi[6].range = VoxelMirror::kFluidBytes;
+            w[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[6].dstSet = sets_[f][eye];
+            w[6].dstBinding = 6;
+            w[6].descriptorCount = 1;
+            w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[6].pBufferInfo = &bi[6];
+            bi[7].buffer = mirror.stain_index_buffer();
+            bi[7].range = VoxelMirror::kStainIdxBytes;
+            bi[8].buffer = mirror.stain_pool_buffer();
+            bi[8].range = VoxelMirror::kStainPoolBytes;
+            for (std::uint32_t k = 7; k <= 8; ++k) {
+                w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w[k].dstSet = sets_[f][eye];
+                w[k].dstBinding = k;
+                w[k].descriptorCount = 1;
+                w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w[k].pBufferInfo = &bi[k];
+            }
+            vkUpdateDescriptorSets(dev_->device, 9, w, 0, nullptr);
         }
-        bi[5].buffer = ubo_[f].buffer;
-        bi[5].range = sizeof(MarchUbo);
-        w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[5].dstSet = sets_[f];
-        w[5].dstBinding = 5;
-        w[5].descriptorCount = 1;
-        w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        w[5].pBufferInfo = &bi[5];
-        bi[6].buffer = mirror.fluid_buffer();
-        bi[6].range = VoxelMirror::kFluidBytes;
-        w[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[6].dstSet = sets_[f];
-        w[6].dstBinding = 6;
-        w[6].descriptorCount = 1;
-        w[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        w[6].pBufferInfo = &bi[6];
-        bi[7].buffer = mirror.stain_index_buffer();
-        bi[7].range = VoxelMirror::kStainIdxBytes;
-        bi[8].buffer = mirror.stain_pool_buffer();
-        bi[8].range = VoxelMirror::kStainPoolBytes;
-        for (std::uint32_t k = 7; k <= 8; ++k) {
-            w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[k].dstSet = sets_[f];
-            w[k].dstBinding = k;
-            w[k].descriptorCount = 1;
-            w[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            w[k].pBufferInfo = &bi[k];
-        }
-        vkUpdateDescriptorSets(dev_->device, 9, w, 0, nullptr);
     }
     return true;
 }
@@ -365,17 +367,19 @@ bool RaymarchPass::create_pipeline(VkRenderPass renderPass,
 }
 
 void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                          const CubePush& push, VkDescriptorSet lightGridSet) {
+                          const CubePush& push, VkDescriptorSet lightGridSet,
+                          std::uint32_t eye) {
     if (!ready()) return;
     const std::uint32_t f = frameIndex % kMaxFramesInFlight;
+    const std::uint32_t e = eye > 1 ? 1 : eye;
 
-    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
+    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f][e].mapped);
     u->invViewProj = mat4_inverse(push.viewProj);
     u->timeParams = vec4{push.torus.w, push.torus.z, 0.0f, 0.0f};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
-                            &sets_[f], 0, nullptr);
+                            &sets_[f][e], 0, nullptr);
     if (lightGridSetLayout_ != VK_NULL_HANDLE && lightGridSet != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1,
                                 1, &lightGridSet, 0, nullptr);
@@ -401,7 +405,11 @@ void RaymarchPass::destroy() {
     if (layout_) vkDestroyPipelineLayout(dev_->device, layout_, nullptr);
     if (descPool_) vkDestroyDescriptorPool(dev_->device, descPool_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev_->device, setLayout_, nullptr);
-    for (int i = 0; i < kMaxFramesInFlight; ++i) ubo_[i].destroy(*dev_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
+        for (int eye = 0; eye < 2; ++eye) {
+            ubo_[i][eye].destroy(*dev_);
+        }
+    }
     pipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
     descPool_ = VK_NULL_HANDLE;

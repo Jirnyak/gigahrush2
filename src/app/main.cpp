@@ -1552,6 +1552,11 @@ int main(int argc, char** argv) {
     // --no-crt: сырой кадр без пост-обработки (диагностика, пиксель-точные
     // сравнения скриншотов). Сама трубка — vk_renderer.h.
     bool noCrt = false;
+    // --vr: стереоскопический рендеринг Side-by-Side (SBS) для Meta Quest 2
+    bool vrMode = false;
+    float vrIpd = 0.064f; // Базовый IPD (64 мм)
+    bool cliVrSet = false;
+    bool cliIpdSet = false;
     // --mirror-verify: after every wholesale upload and every ~300 frames, read
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
@@ -1569,6 +1574,11 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
+        else if (a == "--vr") { vrMode = true; cliVrSet = true; }
+        else if (a == "--ipd" && i + 1 < argc) {
+            vrIpd = static_cast<float>(std::atof(argv[++i]));
+            cliIpdSet = true;
+        }
         else if (a == "--mirror-verify") mirrorVerify = true;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
@@ -1590,7 +1600,7 @@ int main(int argc, char** argv) {
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -1627,6 +1637,7 @@ int main(int argc, char** argv) {
     }
 
     renderer.crtEnabled = !noCrt;
+    renderer.set_vr_mode(vrMode);
 
     gpu::GpuLightGrid lightGrid;
     if (!lightGrid.init(&device, GIGA_SHADER_DIR)) {
@@ -2317,8 +2328,8 @@ int main(int argc, char** argv) {
         HudElement* els = hud_elements(hn);
         for (std::size_t i = 0; i < hn; ++i)
             std::fprintf(f, "hud %s %d\n", els[i].id, els[i].on ? 1 : 0);
-        std::fprintf(f, "crt %d\nfullscreen %d\n", renderer.crtEnabled ? 1 : 0,
-                     fullscreenState ? 1 : 0);
+        std::fprintf(f, "crt %d\nfullscreen %d\nvr %d\nipd %.4f\n", renderer.crtEnabled ? 1 : 0,
+                     fullscreenState ? 1 : 0, vrMode ? 1 : 0, static_cast<double>(vrIpd));
         const audio::AudioConfig& ac = audioSys.mixer().config();
         std::fprintf(f, "vol_master %.3f\nvol_sfx %.3f\nvol_ambient %.3f\n",
                      static_cast<double>(ac.masterGain),
@@ -2347,6 +2358,15 @@ int main(int argc, char** argv) {
                     // --no-crt — диагностический CLI-override и он сильнее
                     // сохранённого предпочтения: флаг просят на ОДИН запуск.
                     if (!noCrt) renderer.crtEnabled = iv != 0;
+                } else if (std::sscanf(line, "vr %d", &iv) == 1) {
+                    if (!cliVrSet) {
+                        vrMode = iv != 0;
+                        renderer.set_vr_mode(vrMode);
+                    }
+                } else if (std::sscanf(line, "ipd %f", &fv) == 1) {
+                    if (!cliIpdSet) {
+                        vrIpd = std::clamp(fv, 0.030f, 0.120f);
+                    }
                 } else if (std::sscanf(line, "fullscreen %d", &iv) == 1) {
                     fullscreenState = iv != 0;
                 } else if (std::sscanf(line, "vol_master %f", &fv) == 1) {
@@ -2369,6 +2389,8 @@ int main(int argc, char** argv) {
         sctx.binds = &binds;
         sctx.rebindCapture = &rebindCapture;
         sctx.crtEnabled = &renderer.crtEnabled;
+        sctx.vrMode = &vrMode;
+        sctx.vrIpd = &vrIpd;
         sctx.fullscreen = &fullscreenState;
         sctx.audio = &audioSys.mixer().config();
         const SettingsRequest sreq = settings_ui_draw(sctx);
@@ -2381,6 +2403,7 @@ int main(int argc, char** argv) {
         }
         if (sreq.uiChanged) {
             SDL_SetWindowFullscreen(window, fullscreenState);
+            renderer.set_vr_mode(vrMode);
             save_ui_cfg();
         }
     };
@@ -2962,6 +2985,11 @@ int main(int argc, char** argv) {
                 craftWanted = true;
                 shell.toggle(UiWindow::Craft);
                 if (shell.window != UiWindow::None) input.set_mouselook(false);
+            }
+            if (has(ConsoleRequest::VrToggle)) {
+                vrMode = !vrMode;
+                renderer.set_vr_mode(vrMode);
+                save_ui_cfg();
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
             // STR immediately credits max-HP the same way award_xp does.
@@ -4305,8 +4333,9 @@ int main(int argc, char** argv) {
                 // Combat carves: clear, fill during melee/projectiles, dispose
                 // same step if !doors.frozen (v1 drops proposals during bake).
                 combatCarves.clear();
+                const bool isAttacking = (attackHeld || input.action_held()) && shell.playing();
                 shots += game::player_ranged_step(reg, pool, activeLayer,
-                                                  haveGun && attackHeld && shell.playing(),
+                                                  haveGun && isAttacking,
                                                   kSimDt, simTick, &noiseField,
                                                   &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
@@ -4322,7 +4351,7 @@ int main(int argc, char** argv) {
                 }
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && attackHeld && shell.playing(), simTick,
+                    !haveGun && isAttacking, simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
                     &playerStatus, &particleBursts,
                     &stack.layer(activeLayer).gravity());
@@ -5071,6 +5100,8 @@ int main(int argc, char** argv) {
             ? stack.layer(activeLayer).gravity().up_vector()
             : vec3{0.0f, 0.0f, 1.0f};
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
+        float eyeAspect = fbh > 0 ? (static_cast<float>(fbw) * 0.5f) / static_cast<float>(fbh) : 1.0f;
+        StereoCameraMatrices stereoCam = compute_stereo_camera(reg, eyeAspect, vrIpd, worldUp);
 
         hud.begin_frame();
         // Худ ИГРОКА ([hud_ui.h]) — таблица элементов по углам стекла. Только
@@ -5085,6 +5116,7 @@ int main(int argc, char** argv) {
             hctx.status = &playerStatus;
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
+            hctx.vrMode = vrMode;
             if (gasPass.ready() && reg.valid(player)) {
                 const vec3& gp = reg.get<Transform>(player).pos;
                 const std::uint32_t cell = gasPass.sample_cell(
@@ -6790,7 +6822,7 @@ int main(int argc, char** argv) {
             static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
             static const bool noParticleSim = std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
-            if (!noGpuCull && cullPass.ready() && propPass.ready()) {
+            if (!noGpuCull && !vrMode && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const uint32_t fIdx = renderer.currentFrame;
@@ -6957,48 +6989,103 @@ int main(int argc, char** argv) {
 
             renderer.begin_pass(0.0f, 0.0f, 0.0f);
 
-            gpu::CubePush push{};
-            push.viewProj = mat4_mul(camMat.proj, camMat.view);
-            push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
-            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
-                               kLampIntensity};
             const float fogScale = samosbor_fog_scale(samosbor);
             const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
-            push.fog = vec4{kWorldExtent * 0.25f * fogScale,
-                            kWorldExtent * 0.50f * fogScale,
-                            kLampRadius, kAmbient};
-            // The wrap period, so cube.vert can place each cell at its nearest
-            // toroidal image itself. Instance origins are absolute, which is what
-            // makes the cube pass's instance cache possible.
-            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
-            // Each pass is bracketed by GPU timestamps as well as by the CPU
-            // clock: the two answer different questions and need opposite fixes.
-            // The CPU figure is time spent building instance data on this thread;
-            // the GPU figure is what the hardware then spent rasterising it.
+
             std::uint64_t t0 = SDL_GetPerformanceCounter();
-            renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
-            raymarchPass.record(cmd, renderer.currentFrame, push,
-                                lightGrid.descriptor_set());
-            renderer.timer.pass_end(cmd, gpu::GpuPass::World);
-            std::uint64_t t1 = SDL_GetPerformanceCounter();
-            // Draw the embodied population on the active layer (shared depth).
-            renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
-            renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
-            // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
-            renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
-            if (propPass.ready())
-                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
-            renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
+            std::uint64_t t1 = t0;
 
+            if (vrMode && stereoCam.valid) {
+                // Stereoscopic Side-by-Side (SBS) rendering for Meta Quest 2
+                const uint32_t totalW = renderer.swap().extent.width;
+                const uint32_t totalH = renderer.swap().extent.height;
+                const uint32_t halfW = totalW / 2;
+                const CameraMatrices* eyeCams[2] = {&stereoCam.left, &stereoCam.right};
 
-            renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
-            wirePass.record_draw(cmd, push);
-            clothPass.record_draw(cmd, push);
-            // Particles LAST among world passes: alpha-blended sprites need
-            // every opaque depth already written.
-            particlePass.record_draw(cmd, push);
-            renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
+                for (uint32_t eye = 0; eye < 2; ++eye) {
+                    const CameraMatrices& eyeCam = *eyeCams[eye];
+
+                    VkViewport vp{};
+                    vp.x = eye == 0 ? 0.0f : static_cast<float>(halfW);
+                    vp.y = 0.0f;
+                    vp.width = eye == 0 ? static_cast<float>(halfW) : static_cast<float>(totalW - halfW);
+                    vp.height = static_cast<float>(totalH);
+                    vp.minDepth = 0.0f;
+                    vp.maxDepth = 1.0f;
+                    vkCmdSetViewport(cmd, 0, 1, &vp);
+
+                    VkRect2D sc{};
+                    sc.offset = {eye == 0 ? 0 : static_cast<int32_t>(halfW), 0};
+                    sc.extent = {eye == 0 ? halfW : (totalW - halfW), totalH};
+                    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+                    gpu::CubePush push{};
+                    push.viewProj = mat4_mul(eyeCam.proj, eyeCam.view);
+                    push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
+                    push.camPos = vec4{eyeCam.eye.x, eyeCam.eye.y, eyeCam.eye.z, kLampIntensity};
+                    push.fog = vec4{kWorldExtent * 0.25f * fogScale,
+                                    kWorldExtent * 0.50f * fogScale,
+                                    kLampRadius, kAmbient};
+                    push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+
+                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
+                    raymarchPass.record(cmd, renderer.currentFrame, push,
+                                        lightGrid.descriptor_set(), eye);
+                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::World);
+
+                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
+                    bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push,
+                                    lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
+
+                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
+                    if (propPass.ready())
+                        propPass.record(cmd, renderer.currentFrame, push,
+                                        lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
+
+                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
+                    wirePass.record_draw(cmd, push);
+                    clothPass.record_draw(cmd, push);
+                    particlePass.record_draw(cmd, push);
+                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
+
+                    if (eye == 0) t1 = SDL_GetPerformanceCounter();
+                }
+            } else {
+                gpu::CubePush push{};
+                push.viewProj = mat4_mul(camMat.proj, camMat.view);
+                push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
+                push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
+                                   kLampIntensity};
+                push.fog = vec4{kWorldExtent * 0.25f * fogScale,
+                                kWorldExtent * 0.50f * fogScale,
+                                kLampRadius, kAmbient};
+                push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
+
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
+                raymarchPass.record(cmd, renderer.currentFrame, push,
+                                    lightGrid.descriptor_set(), 0);
+                renderer.timer.pass_end(cmd, gpu::GpuPass::World);
+                t1 = SDL_GetPerformanceCounter();
+
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
+                bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push,
+                                lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
+
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
+                if (propPass.ready())
+                    propPass.record(cmd, renderer.currentFrame, push,
+                                    lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
+
+                renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
+                wirePass.record_draw(cmd, push);
+                clothPass.record_draw(cmd, push);
+                particlePass.record_draw(cmd, push);
+                renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
+            }
 
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();

@@ -82,6 +82,14 @@ void tab_video(SettingsCtx& c, SettingsRequest& req) {
     if (c.crtEnabled &&
         ImGui::Checkbox("CRT-трубка (скан-линии, виньетка)", c.crtEnabled))
         req.uiChanged = true;
+    if (c.vrMode && ImGui::Checkbox("VR стерео-режим (Side-by-Side 3D)", c.vrMode))
+        req.uiChanged = true;
+    if (c.vrMode && *c.vrMode && c.vrIpd) {
+        ImGui::PushItemWidth(260.0f);
+        if (ImGui::SliderFloat("IPD (база стерео, м)", c.vrIpd, 0.030f, 0.100f, "%.3f м"))
+            req.uiChanged = true;
+        ImGui::PopItemWidth();
+    }
     if (c.fullscreen && ImGui::Checkbox("Во весь экран", c.fullscreen))
         req.uiChanged = true;
 }

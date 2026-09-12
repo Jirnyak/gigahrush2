@@ -49,7 +49,8 @@ public:
     // exactly as CubePass::record did, so the shared shading sees the same
     // lanes it always saw.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                const CubePush& push, VkDescriptorSet lightGridSet);
+                const CubePush& push, VkDescriptorSet lightGridSet,
+                std::uint32_t eye = 0);
 
 private:
     bool create_descriptors(const VoxelMirror& mirror);
@@ -61,8 +62,8 @@ private:
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet sets_[kMaxFramesInFlight] = {};
-    VulkanBuffer ubo_[kMaxFramesInFlight]; // persistently mapped, tiny
+    VkDescriptorSet sets_[kMaxFramesInFlight][2] = {};
+    VulkanBuffer ubo_[kMaxFramesInFlight][2]; // persistently mapped, tiny
 
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout texSetLayout_ = VK_NULL_HANDLE; // borrowed, not owned

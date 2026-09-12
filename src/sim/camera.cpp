@@ -40,4 +40,51 @@ CameraMatrices compute_camera(Registry& reg, float aspect, vec3 up) {
     return out;
 }
 
+StereoCameraMatrices compute_stereo_camera(Registry& reg, float eyeAspect,
+                                           float ipd, vec3 up) {
+    StereoCameraMatrices out;
+    auto view = reg.view<Transform, CameraTag>();
+    for (auto e : view) {
+        auto& tr = view.get<Transform>(e);
+        auto& cam = view.get<CameraTag>(e);
+
+        vec3 eye = tr.pos + cam.eyeOffset;
+        vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+
+        vec3 axis = cross(fwd, up);
+        if (dot(axis, axis) < 1e-6f) {
+            const float ax = std::fabs(fwd.x), ay = std::fabs(fwd.y), az = std::fabs(fwd.z);
+            const vec3 alt = (ax <= ay && ax <= az) ? vec3{1, 0, 0}
+                           : (ay <= az)             ? vec3{0, 1, 0}
+                                                    : vec3{0, 0, 1};
+            axis = cross(fwd, alt);
+        }
+        vec3 right = normalize(axis);
+
+        float halfIpd = ipd * 0.5f;
+        vec3 leftEye = eye - right * halfIpd;
+        vec3 rightEye = eye + right * halfIpd;
+
+        out.left.eye = leftEye;
+        out.left.forward = fwd;
+        out.left.view = mat4_lookAt(leftEye, leftEye + fwd, up);
+
+        out.right.eye = rightEye;
+        out.right.forward = fwd;
+        out.right.view = mat4_lookAt(rightEye, rightEye + fwd, up);
+
+        mat4 proj = mat4_perspective(cam.fovY, eyeAspect > 1e-3f ? eyeAspect : 1.0f,
+                                     0.05f, kWorldExtent);
+        proj.m[5] = -proj.m[5];
+        out.left.proj = proj;
+        out.right.proj = proj;
+
+        out.left.valid = true;
+        out.right.valid = true;
+        out.valid = true;
+        break; // first camera wins
+    }
+    return out;
+}
+
 } // namespace giga

@@ -48,6 +48,7 @@ struct HudContext {
     const game::SamosborState* samosbor = nullptr;
     const game::NeedsTick* needsTick = nullptr;
     HudGas gas;
+    bool vrMode = false;
 };
 
 // Углы стекла. Center — прицел и алерты; остальное прижато к краям.
