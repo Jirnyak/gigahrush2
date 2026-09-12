@@ -33,12 +33,6 @@ TIER = {
 PACK = {"loner": "Loner", "crowd": "Crowd", "territorial": "Territorial",
         "roamer": "Roamer"}
 PROJ = {"": "Bullet", "WEB": "Web"}
-ROOM = {
-    "CORRIDOR": "Corridor", "COMMON": "Common", "STORAGE": "Storage",
-    "KITCHEN": "Kitchen", "BATHROOM": "Bathroom", "LIVING": "Living",
-    "OFFICE": "Office", "MEDICAL": "Medical", "PRODUCTION": "Production",
-    "SMOKING": "Smoking", "HQ": "Hq",
-}
 FLOOR = {"-50": "ZMinus50", "-36": "ZMinus36", "-26": "ZMinus26",
          "0": "Z0", "14": "ZPlus14", "30": "ZPlus30"}
 SHARED = {"foodBait": "FoodBait", "wallBias": "WallBias",
@@ -187,13 +181,12 @@ def main():
         out.append("""    // [{idx}] {rid}
     MobDef{{ {flags},
              {hp}, {dmg}, {spd}, {cd}, {reach},
-             {pspd}, {sw}, static_cast<std::uint16_t>({rooms}),
+             {pspd}, {sw},
              {shot}, {minr}, {wind},
              u8(MobKind::{kind}), u8(MobTier::{tier}),
              u8(MobBehaviour::{beh}), u8(ProjType::{proj}),
              {samo}, static_cast<std::uint8_t>({floors}),
              u8(MobPackMode::{pack}), {pmin}, {pmax}, {pspread},
-             {nstep}, {nclimb}, {ndrop}, {nfly},
              {massx10} }},"""
             .format(
                 idx=i, rid=r["id"],
@@ -205,7 +198,6 @@ def main():
                 reach=fixed(r["melee_reach_cells"], 1000, "melee_reach_cells", i),
                 pspd=fixed(r["proj_speed_cps"], 1000, "proj_speed_cps", i),
                 sw=fixed_nonzero(r["spawn_weight"], 10, "spawn_weight", i),
-                rooms=mask(r["rooms"], ROOM, "RoomBit", "rooms", i),
                 shot=fixed(r["shot_range_cells"], 1000, "shot_range_cells", i),
                 minr=fixed(r["min_range_cells"], 1000, "min_range_cells", i),
                 wind=fixed(r["windup_s"], 1000, "windup_s", i),
@@ -217,12 +209,8 @@ def main():
                 pmin=fixed(r["pack_min"], 1, "pack_min", i, 0, 8),
                 pmax=fixed(r["pack_max"], 1, "pack_max", i, 0, 16),
                 pspread=fixed(r["pack_spread"], 1, "pack_spread", i, 0, 10),
-                # Nav traversal profile in sub-voxels; blank = humanoid default
-                # (step 1 riser, climb one 2 m cell, drop 4 m, walker).
-                nstep=fixed(r.get("nav_step_sub") or "1", 1, "nav_step_sub", i, 0, 32),
-                nclimb=fixed(r.get("nav_climb_sub") or "8", 1, "nav_climb_sub", i, 0, 64),
-                ndrop=fixed(r.get("nav_drop_sub") or "16", 1, "nav_drop_sub", i, 0, 255),
-                nfly=fixed(r.get("nav_fly") or "0", 1, "nav_fly", i, 0, 1),
+                # (nav_*_sub/nav_fly columns cut 2026-08-27 — write-only since
+                # birth; clearance from body size is the one traversal law now.)
                 # Universal mass, kg x10 (blank = 80 kg placeholder).
                 # GRAMS, read as an integer and never scaled here — the same column
                 # name and unit props and items use ([mob_table.h] massG). The
@@ -302,7 +290,6 @@ constexpr std::uint8_t u8(MobBehaviour v) { return static_cast<std::uint8_t>(v);
 constexpr std::uint8_t u8(ProjType v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(MobPackMode v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(FloorBit v) { return static_cast<std::uint8_t>(v); }
-constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 constexpr std::uint32_t f(AiFlag v) { return static_cast<std::uint32_t>(v); }
 } // namespace
 

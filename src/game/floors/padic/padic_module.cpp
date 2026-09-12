@@ -9,6 +9,8 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
 #include "core/wrap.h"
+#include "world/anchor.h"
+#include "world/surface.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -49,28 +51,37 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
         const int wAir = wrap_macro(airZ);
         const int wCeil = wrap_macro(ceilZ);
 
-        if (grid.solid(wcx, wcy, wCeil, 4, 4, 0)) {
+        // ASK THE CEILING WHERE ITS UNDER-FACE IS — теперь одним ЗАПРОСОМ
+        // ПОВЕРХНОСТЕЙ ([world/surface.h], S10): ручной lowest_layer_centre +
+        // добор точного бита и специальный тест известного скульпт-бита
+        // (2,4,6) умерли — примитив находит экспонированную колонку и в
+        // потолочной клетке, и в лепке внутри «воздушной». История дефекта,
+        // который тут лечили руками, — в шапке seed_ceiling_lights.
+        const SurfaceFace sfc =
+            surface_face_at(grid, wcx, wcy, wCeil, anchor_face_pack(2, -1));
+        const SurfaceFace sfa =
+            sfc.columns > 0
+                ? sfc
+                : surface_face_at(grid, wcx, wcy, wAir, anchor_face_pack(2, -1));
+        if (sfa.columns > 0) {
+            const bool inCeil = sfc.columns > 0;
+            const int faceCz = inCeil ? ceilZ : airZ;
             anchor.cx = wcx;
             anchor.cy = wcy;
-            anchor.cz = wCeil;
-            anchor.subX = 4;
-            anchor.subY = 4;
-            anchor.subZ = 0;
-            anchor.face = 2;
+            anchor.cz = static_cast<std::uint8_t>(inCeil ? wCeil : wAir);
+            anchor.subX = sfa.su;
+            anchor.subY = sfa.sv;
+            anchor.subZ = sfa.layer;
+            anchor.face = anchor_face_pack(2, -1); // нижняя грань опоры
+            // Corded bulb: 0.45 m of flex below the face it hangs from —
+            // грань считается от НАЙДЕННОГО слоя найденной клетки, лампы
+            // полного потолка (layer 0 в ceilZ) не сдвинулись ни на мм.
+            const float faceM =
+                static_cast<float>(faceCz) * kCellSize +
+                static_cast<float>(sfa.layer) * (kCellSize / 8.0f);
             bulbPos = vec3{static_cast<float>(cx) * kCellSize + 1.0f,
                            static_cast<float>(cy) * kCellSize + 1.0f,
-                           static_cast<float>(airZ) * kCellSize + 1.55f};
-        } else if (grid.solid(wcx, wcy, wAir, 2, 4, 6)) {
-            anchor.cx = wcx;
-            anchor.cy = wcy;
-            anchor.cz = wAir;
-            anchor.subX = 2;
-            anchor.subY = 4;
-            anchor.subZ = 6;
-            anchor.face = 2;
-            bulbPos = vec3{static_cast<float>(cx) * kCellSize + 0.5f,
-                           static_cast<float>(cy) * kCellSize + 1.0f,
-                           static_cast<float>(airZ) * kCellSize + 1.55f};
+                           faceM - 0.45f};
         } else {
             return false; // no honest solid support — do not float a lamp
         }

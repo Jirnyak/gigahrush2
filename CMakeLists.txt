@@ -249,6 +249,99 @@ target_link_libraries(giga_game PUBLIC giga_core giga_audio)
 giga_target_flags(giga_game OFF)
 
 # ---- Shader compilation (GLSL -> SPIR-V) ----------------------------------
+# Grid constants are PARSED OUT OF THE C++ HEADERS at configure time and handed
+# to every glslc call as -D macros, so GLSL and C++ cannot disagree about the
+# world's shape. Before 2026-08-18 the numbers were retyped as literals in the
+# shaders and drifted exactly the way retyped numbers do: prop.frag divided by
+# a hand-computed 76.8 where the C++ side passes 64 (markoaudit-systems.md
+# §1.8), and shadow_march.glsl carried its own "lockstep" copy that nothing
+# enforced. Rule 9 of tools/check_source_rules.cmake bans the literals from
+# shaders/, so this block is the ONLY source. Parsing failures are FATAL on
+# purpose: a silent default here would be a fifth copy of the number.
+file(READ ${CMAKE_SOURCE_DIR}/src/world/types.h _giga_types_h)
+if(NOT _giga_types_h MATCHES "kMacroDim = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kMacroDim out of src/world/types.h — the "
+        "declaration moved. Fix the regex here; do not hardcode the value.")
+endif()
+set(_giga_macro_dim ${CMAKE_MATCH_1})
+if(NOT _giga_types_h MATCHES "kSubDim = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kSubDim out of src/world/types.h.")
+endif()
+set(_giga_sub_dim ${CMAKE_MATCH_1})
+if(NOT _giga_types_h MATCHES "kCellSize = ([0-9.]+)f")
+    message(FATAL_ERROR "cannot parse kCellSize out of src/world/types.h.")
+endif()
+set(_giga_cell_size ${CMAKE_MATCH_1})
+file(READ ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h _giga_lgrid_h)
+if(NOT _giga_lgrid_h MATCHES "kGridDimX = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kGridDimX out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_dim ${CMAKE_MATCH_1})
+if(NOT _giga_lgrid_h MATCHES "kGridDimY = ${_giga_lgrid_dim}" OR
+   NOT _giga_lgrid_h MATCHES "kGridDimZ = ${_giga_lgrid_dim}")
+    message(FATAL_ERROR "light grid is no longer cubic (gpu_light_grid.h "
+        "kGridDimX/Y/Z differ) — volumetric_fog.glsl assumes one dimension; "
+        "teach it three before changing this.")
+endif()
+if(NOT _giga_lgrid_h MATCHES "kGridCellMeters = ([0-9.]+)f")
+    message(FATAL_ERROR "cannot parse kGridCellMeters out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_cell ${CMAKE_MATCH_1})
+# Байты клетки светосетки — КОРНЕВАЯ константа раскладки LightGridCell
+# (решение владельца: 256 Б = счётчик + 63 id, light-visibility-bake.md).
+# Шейдеры выводят число слотов сами: GIGA_LIGHT_CELL_BYTES / 4 - 1.
+if(NOT _giga_lgrid_h MATCHES "kGridCellBytes = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kGridCellBytes out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_lgrid_cell_bytes ${CMAKE_MATCH_1})
+# (Кластерный регион таблицы удалён 2026-08-23 вместе с самим механизмом:
+# он не работал ни кадра — биннинг выбрасывал все ссылки, — и рвал свет
+# прямоугольниками по клеткам светосетки. Дефайн шейдеру больше не нужен.)
+# Бит дилатации в id запечённого списка (находка №1 аудита 2026-08-23):
+# CPU-константа живёт в light_vis_bake.h, шейдер получает тот же бит дефайном.
+file(READ ${CMAKE_SOURCE_DIR}/src/game/light_vis_bake.h _giga_lvis_h)
+if(NOT _giga_lvis_h MATCHES "kLampDilatedBit = (0x[0-9A-Fa-f]+)u")
+    message(FATAL_ERROR "cannot parse kLampDilatedBit out of src/game/light_vis_bake.h.")
+endif()
+set(_giga_lamp_dilated_bit ${CMAKE_MATCH_1})
+# Гибрид света: топ-K полнорезных маршей пикселя, хвост — полурезный полупасс
+# (gpu_light_grid.h kFullResLights, решение владельца 2026-08-24).
+if(NOT _giga_lgrid_h MATCHES "kFullResLights = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kFullResLights out of src/render/gpu_light_grid.h.")
+endif()
+set(_giga_fullres_k ${CMAKE_MATCH_1})
+# Капы петли мир-автомата — из gpu_medium_pass.h тем же законом (аудит
+# 2026-08-25, К1-12: medium_sim.comp перепечатывал числа с комментарием
+# «зеркало» — синхронность держалась верой; прецедент дрейфа — prop.frag
+# 76.8 против 64). kLiveCap/GIGA_MEDIUM_LIST_CAP УМЕРЛИ уборкой
+# «Автомат-2» (кап списка невозможен по построению — однодневка на 2М).
+file(READ ${CMAKE_SOURCE_DIR}/src/render/gpu_medium_pass.h _giga_medium_h)
+if(NOT _giga_medium_h MATCHES "kRbSlotCap = ([0-9]+)")
+    message(FATAL_ERROR "cannot parse kRbSlotCap out of src/render/gpu_medium_pass.h.")
+endif()
+set(_giga_medium_rb_slots ${CMAKE_MATCH_1})
+# Порог сна тем же законом (инкр. 3 «Автомат-2»: прежде жил ДВУМЯ
+# независимыми литералами 16 в хедере и шейдере — разъехались бы молча).
+if(NOT _giga_medium_h MATCHES "kSleepSubsteps = ([0-9]+)u")
+    message(FATAL_ERROR "cannot parse kSleepSubsteps out of src/render/gpu_medium_pass.h.")
+endif()
+set(_giga_medium_sleep ${CMAKE_MATCH_1})
+set(_giga_shader_defs
+    -DGIGA_MEDIUM_RB_SLOTS=${_giga_medium_rb_slots}
+    -DGIGA_MEDIUM_SLEEP=${_giga_medium_sleep}u
+    -DGIGA_MACRO_DIM=${_giga_macro_dim}
+    -DGIGA_SUB_DIM=${_giga_sub_dim}
+    -DGIGA_CELL_SIZE=${_giga_cell_size}
+    -DGIGA_LIGHT_GRID_DIM=${_giga_lgrid_dim}
+    -DGIGA_LIGHT_GRID_CELL=${_giga_lgrid_cell}
+    -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
+    -DGIGA_LAMP_DILATED_BIT=${_giga_lamp_dilated_bit}u
+    -DGIGA_LIGHT_FULLRES_K=${_giga_fullres_k}u)
+# Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
+# above go stale while the build stays green.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/src/world/types.h
+    ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h)
 set(_giga_spv_dir ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${_giga_spv_dir})
 set(_giga_spv_files "")
@@ -258,11 +351,17 @@ set(_giga_spv_files "")
 # leaves the stale .spv in place, and the change looks like it did nothing. Kept an
 # explicit list rather than a GLOB — a stray .glsl should not silently start forcing
 # every shader to recompile.
-set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
-foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag post_pass.vert post_pass.frag)
+set(_giga_glsl_includes ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl ${CMAKE_SOURCE_DIR}/shaders/surface_lib.glsl ${CMAKE_SOURCE_DIR}/shaders/volumetric_fog.glsl ${CMAKE_SOURCE_DIR}/shaders/flicker.glsl ${CMAKE_SOURCE_DIR}/shaders/shadow_march.glsl)
+foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag wire.vert wire.frag particle.vert particle.frag cloth.vert cloth.frag shard.vert shard.frag post_pass.vert post_pass.frag)
+    # raymarch.frag — потребитель полурезного света (сэмплит полупасс вместо
+    # собственного surface_light); производитель — raymarch_light ниже.
+    set(_giga_sh_extra "")
+    if(_sh STREQUAL "raymarch.frag")
+        set(_giga_sh_extra -DGIGA_LIGHT_SAMPLED)
+    endif()
     add_custom_command(
         OUTPUT ${_giga_spv_dir}/${_sh}.spv
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O ${_giga_sh_extra} ${_giga_shader_defs}
             ${CMAKE_SOURCE_DIR}/shaders/${_sh}
             -o ${_giga_spv_dir}/${_sh}.spv
         DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${_sh} ${_giga_glsl_includes}
@@ -270,60 +369,73 @@ foreach(_sh cube.frag body.vert prop.vert prop.frag raymarch.vert raymarch.frag 
     list(APPEND _giga_spv_files ${_giga_spv_dir}/${_sh}.spv)
 endforeach()
 
+# ПОЛУРЕЗНЫЙ СВЕТОВОЙ ПОЛУПАСС (ddalight.md, решение владельца 2026-08-24
+# после опровержения квад-теней): третий модуль raymarch.frag — производитель
+# света на полразрешения (свой первичный DDA + surface_light со всеми
+# теневыми лучами), фрагментов вчетверо меньше при любом разрешении рендера.
+add_custom_command(
+    OUTPUT ${_giga_spv_dir}/raymarch_light.frag.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_LIGHT_HALF ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag
+        -o ${_giga_spv_dir}/raymarch_light.frag.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag ${_giga_glsl_includes}
+    COMMENT "glslc raymarch.frag -DGIGA_LIGHT_HALF -> raymarch_light.frag.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/raymarch_light.frag.spv)
+
 # GPU compute volumetric light grid shader.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/light_grid.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
         -o ${_giga_spv_dir}/light_grid.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/light_grid.comp
     COMMENT "glslc light_grid.comp -> light_grid.comp.spv")
 list(APPEND _giga_spv_files ${_giga_spv_dir}/light_grid.comp.spv)
 
-# GPU 4-channel gas/atmosphere sim over the 128^3 macro grid ([gpu_gas_pass.h]).
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/gas_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
-        ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
-        -o ${_giga_spv_dir}/gas_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/gas_sim.comp
-    COMMENT "glslc gas_sim.comp -> gas_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/gas_sim.comp.spv)
+# gas_sim.comp УМЕР (инкремент 4, S16.6: хардкод каналов газа запрещён) —
+# газ теперь материя мира-автомата, строка toxic_gas в materials.csv.
 
-# GPU verlet for hanging wires (antourage ghost chains).
+# МИР-АВТОМАТ (CANON S16): Margolus-правило движения материи прямо в
+# каноническом pagePool зеркала ([gpu_medium_pass.h]). Включает таблицы
+# материалов — material_surface.glsl в DEPENDS, как у растровых шейдеров.
 add_custom_command(
-    OUTPUT ${_giga_spv_dir}/wire_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
-        ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
-        -o ${_giga_spv_dir}/wire_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/wire_sim.comp
-    COMMENT "glslc wire_sim.comp -> wire_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/wire_sim.comp.spv)
+    OUTPUT ${_giga_spv_dir}/medium_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/medium_sim.comp
+        -o ${_giga_spv_dir}/medium_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/medium_sim.comp
+        ${CMAKE_SOURCE_DIR}/shaders/material_surface.glsl
+    COMMENT "glslc medium_sim.comp -> medium_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/medium_sim.comp.spv)
 
-# GPU verlet for 2D cloth sheets (antourage curtains/tarps).
+# СТЕНД инкремента 0 эпика «Автомат-2» (markoaudit/plans/medium-bitmask.md):
+# замер плотного гейта по битсету активности, потребитель — только
+# medium_test (боевой пайплайн не трогает).
 add_custom_command(
-    OUTPUT ${_giga_spv_dir}/cloth_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
-        ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
-        -o ${_giga_spv_dir}/cloth_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cloth_sim.comp
-    COMMENT "glslc cloth_sim.comp -> cloth_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/cloth_sim.comp.spv)
+    OUTPUT ${_giga_spv_dir}/bitmask_stand.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/bitmask_stand.comp
+        -o ${_giga_spv_dir}/bitmask_stand.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/bitmask_stand.comp
+    COMMENT "glslc bitmask_stand.comp -> bitmask_stand.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/bitmask_stand.comp.spv)
 
-# GPU sim for the unified particle pool (blood/dust/sparks/drips).
+# GPU verlet for antourage: wires AND cloth, one shader (chain = lattice, H=1).
 add_custom_command(
-    OUTPUT ${_giga_spv_dir}/particle_sim.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
-        ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
-        -o ${_giga_spv_dir}/particle_sim.comp.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/particle_sim.comp
-    COMMENT "glslc particle_sim.comp -> particle_sim.comp.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/particle_sim.comp.spv)
+    OUTPUT ${_giga_spv_dir}/verlet_sim.comp.spv
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
+        ${CMAKE_SOURCE_DIR}/shaders/verlet_sim.comp
+        -o ${_giga_spv_dir}/verlet_sim.comp.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/verlet_sim.comp
+    COMMENT "glslc verlet_sim.comp -> verlet_sim.comp.spv")
+list(APPEND _giga_spv_files ${_giga_spv_dir}/verlet_sim.comp.spv)
+
+# particle_sim.comp МЁРТВ (2026-09-01): частицы — третий банк verlet_sim.comp.
 
 # GPU compute prop frustum culling shader.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/cull.comp.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O --target-env=vulkan1.0 ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/cull.comp
         -o ${_giga_spv_dir}/cull.comp.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cull.comp
@@ -335,41 +447,20 @@ list(APPEND _giga_spv_files ${_giga_spv_dir}/cull.comp.spv)
 # последний носитель выпиленного аналитического налобника. Текстурные пропсы,
 # когда понадобятся, — вариант prop.frag через -D, как cube_tex ниже.
 
-# cube.frag compiled a SECOND time, with -DGIGA_ALBEDO_ARRAY, into cube_tex.frag.spv.
-#
-# ONE SOURCE, TWO VARIANTS, and the split is deliberate. The world pass samples the six
-# photographic albedo maps through a sampler2DArray; the body pass shares the same
-# fragment source and must NOT, because bodies carry material id 0 and there is no
-# texture for them. A single variant would force every body draw to bind a descriptor
-# set it never reads — and this engine's two pipeline layouts are push-constant only
-# today, which is the property the render audit measured and liked.
-#
-# Compiling one file twice rather than forking it into cube_tex.frag keeps the surface
-# maths in ONE place. That matters here specifically: the procedural surface is
-# calibrated per material to a MEASURED luminance CV from data/materials.csv, so a
-# forked copy would drift from the generator that produces material_surface.glsl and
-# nothing would catch it.
-#
-# NOT part of the foreach above, because that loop's OUTPUT is derived from its input
-# name and this one deliberately differs. `cube_pass.cpp` fails LOUDLY at init if this
-# .spv is missing and names this block in the error — which is how it was found: a
-# missing shader is otherwise a RUNTIME failure behind a perfectly green build, the exact
-# trap AGENTS.md warns about for new shaders.
-add_custom_command(
-    OUTPUT ${_giga_spv_dir}/cube_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
-        ${CMAKE_SOURCE_DIR}/shaders/cube.frag
-        -o ${_giga_spv_dir}/cube_tex.frag.spv
-    DEPENDS ${CMAKE_SOURCE_DIR}/shaders/cube.frag ${_giga_glsl_includes}
-    COMMENT "glslc cube.frag -DGIGA_ALBEDO_ARRAY -> cube_tex.frag.spv")
-list(APPEND _giga_spv_files ${_giga_spv_dir}/cube_tex.frag.spv)
+# cube_tex.frag.spv (cube.frag + -DGIGA_ALBEDO_ARRAY) УДАЛЁН аудитом
+# 2026-08-25 (К1-15): компилировался каждый билд, но ни один пасс его не
+# загружал (grep cube_tex по src/ пуст), а комментарий обещал «cube_pass
+# fails LOUDLY if missing» — контракта в коде не существовало. Тот же класс
+# сироты, что prop_tex.frag выше. Текстурный вариант мира живёт в
+# raymarch.frag (сэмплеры под GIGA_ALBEDO_ARRAY), тела — cube.frag без -D.
 
 # raymarch.frag compiled a SECOND time, same scheme and same reason as
 # cube_tex.frag.spv above: the textured module statically uses the sampler
 # arrays, the procedural fallback must not declare them.
 add_custom_command(
     OUTPUT ${_giga_spv_dir}/raymarch_tex.frag.spv
-    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY
+    COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -DGIGA_ALBEDO_ARRAY -DGIGA_LIGHT_SAMPLED
+        ${_giga_shader_defs}
         ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag
         -o ${_giga_spv_dir}/raymarch_tex.frag.spv
     DEPENDS ${CMAKE_SOURCE_DIR}/shaders/raymarch.frag ${_giga_glsl_includes}
@@ -404,7 +495,9 @@ target_compile_definitions(gigahrush2 PRIVATE
 # giga_core/giga_game must stay free of platform and third-party headers (AGENTS.md). Also
 # note the target name is lowercase `ktx`, not a KTX:: namespaced alias — KTX-Software
 # exports it unnamespaced when built as a subproject.
-target_link_libraries(gigahrush2 PRIVATE giga_game giga_core giga_imgui
+# giga_core приезжает транзитивно из giga_game (PUBLIC) — явный повтор
+# давал ld-варнинг «ignoring duplicate libraries» каждым линком.
+target_link_libraries(gigahrush2 PRIVATE giga_game giga_imgui
     SDL3::SDL3 Vulkan::Vulkan ktx)
 target_include_directories(gigahrush2 PRIVATE ${ktx_SOURCE_DIR}/include)
 # RTTI is permitted in the app shell (ON) — only the core/game libs forbid it.
@@ -441,6 +534,158 @@ if(GIGA_BUILD_TESTS)
 
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
+
+    # Мир-автомат (S16): headless GPU-прогон. CANON S16.3 — headless значит
+    # «без окна», НЕ «без GPU»: автомат обязан гоняться Vulkan compute без
+    # свапчейна прямо в ctest, машина без GPU-устройства — НЕ зелёное дерево
+    # (решение владельца 2026-08-21). Линкует нужные render-исходники напрямую
+    # по прецеденту world_test выше (src/render — не библиотека, и заводить её
+    # ради одного теста — вторая система). SDL3 нужен vk_device.cpp как
+    # заголовок (ensure_moltenvk_icd/SDL_setenv), окно не создаётся.
+    add_executable(medium_test tests/medium_test.cpp
+        src/render/vk_device.cpp src/render/vk_buffer.cpp
+        src/render/vk_common.cpp src/render/voxel_mirror.cpp
+        src/render/gpu_medium_pass.cpp)
+    target_link_libraries(medium_test PRIVATE giga_core SDL3::SDL3
+        Vulkan::Vulkan)
+    # Автомат (инкремент 2) гоняется в ctest настоящим SPIR-V — тем же, что
+    # играет: тест видит каталог шейдеров сборки и ждёт их компиляции.
+    target_compile_definitions(medium_test PRIVATE
+        GIGA_SHADER_DIR="${_giga_spv_dir}")
+    add_dependencies(medium_test giga_shaders)
+    giga_target_flags(medium_test OFF)
+    add_test(NAME medium_test COMMAND medium_test)
+    # Пин добавлен 2026-08-27 (до того medium_test жил БЕЗ пина — только код
+    # возврата, падение счёта чеков было невидимо). 593 -> 774 (+181):
+    # test_cadence_equivalence — игровой каденс 0..4 подтика/кадр против
+    # стендовых батчей по 8 (~137 кадров Б + 29 батчей А по CHECK на сабмит
+    # + 6 инициализаций + 8 финальных пинов). Первая версия теста поймала
+    # расхождение каденсов (ленивая материализация ждала КАДРАМИ — скорость
+    # фронта зависела от fps); вылечено ФРОНТИРОМ (страницы впереди материи,
+    # gpu_medium_pass.cpp open_frontier) по закону владельца «в игре ничего
+    # не должно зависеть от кадра» — теперь тест требует БИТ-ИДЕНТИЧНОСТИ
+    # дайджестов плюс точной массы и формы в обоих каденсах.
+    # 774 -> 878 (+104) on 2026-08-30: test_budget_dispatch (big-judge.md D,
+    # бюджетный диспатч автомата) — 3 прогона той же сцены (полный темп /
+    # бюджет 4 / бюджет 4 повтором): масса точна под бюджетом, два
+    # бюджетных прогона бит-в-бит, тесный бюджет != полный темп (мутация
+    # «cell_budgeted всегда true» роняет ровно последний CHECK). Гейт
+    # отработал до посадки: первая реализация ключевала расписание по СЛОТУ
+    # списка (порядок — гонка atomicAdd) — пин детерминизма поймал с
+    # первого прогона, ключ переведён на хэш КЛЕТКИ.
+    # 878 -> 899 on 2026-09-01: test_rubble_settles_fast — flow рыхлого = 1.0
+    # (осыпь лавинна, решение владельца: угол откоса держит геометрия ската,
+    # вероятность лишь растягивала осадку в «плач»); башня 2x2x8 оседает и
+    # live финален уже к 40-му подтику. Мутация flow 0.1 = 898/899 (капли
+    # на 40-м ещё идут). Хвост live 2 — зомби-владельцы граничных блоков
+    # (принятый хвост §63), live==0 у границ клеток недостижим по построению.
+    # 899 -> 968 (+69) on 2026-09-02: test_bitmask_gate_stand — инкремент 0
+    # эпика «Автомат-2» (medium-bitmask.md): три формы плотного гейта по
+    # битсету активности против CPU-эталона правила «бит мой | 7 „+"-соседей»
+    # на 4 сценариях (пусто/типичный 2k/горб 24k/полный 2М). Пинится
+    # КОРРЕКТНОСТЬ (счёт компактации + множество исполненных обеих
+    # indirect-форм и плотной), миллисекунды печатаются — выбор формы
+    # решён числом: А2-слово 0.055-0.119 мс/подтик на боевых сценариях.
+    # Мутации поштучно: dz-ряды словного гейта = 964, cell_executable = 962,
+    # 2D-складка indirect y=1 = 966 (красен ровно «полный»), компактация
+    # base вместо base+b = 965 (счёт жив, множество красно).
+    # 968 -> 999 (+31) on 2026-09-02: test_shadow_bitset — инкремент 1
+    # «Автомат-2»: uShadowBits = точное зеркало бита kActInList (shadow_or/
+    # shadow_and рядом со своей операцией тем же потоком), сверка «множество
+    # битов == множеству следующего списка» после каждого из 14 батчей на
+    # сцене вода+рыхлое+инжект спящего. Мутации: зеркало пробуждения = 985
+    # (все 14 сверок красны), зеркало релиза = 986 (13 — первый батч без
+    # спящих). Нога отката по капу kListCap не мутирована: недостижима на
+    # тестовой сцене без переполнения списка — совесть записана здесь.
+    # 999 -> 983 (-16) on 2026-09-02: ИНКРЕМЕНТ 2 «Автомат-2» — исполнение
+    # от битсета. Словный гейт (форма А2 стенда) пересобирает список-
+    # однодневку исполнимых («бит мой | 7 „+"-соседей») каждый подтик;
+    # ping-pong списков, release-пасс, face-пуши и кап списка МЕРТВЫ.
+    # test_shadow_bitset эволюционировал в test_bitset_execution (сверка
+    # «список == CPU-дилатация битсета», 6 батчей — чеков меньше, отсюда
+    # минус). ЗОМБИ-НОЛЬ (плановый гейт): rubble-settle live РОВНО 0 (было
+    # «<=8» — вечные зомби-владельцы умерли по построению); лавинность
+    # пересдана «полный сон к подтику 56» (кривая 0,0,32,32,12,8,0...);
+    # допуск истаиваний rubble-лега −4→−5 (гало исполняет прежде спавшие
+    # клетки — их одиночки получают законный ролл). Уроки посадки: «stay =
+    # wake» вербовал гало в лесной пожар (live 700k; лечение — тихая
+    # незрелая клетка оставляет бит КАК ЕСТЬ); пак с нулевым счётом не
+    # писал заголовок — CPU вечно видел последний ненулевой live (лечение —
+    # пол 1 группы в FINALIZE). Мутации поштучно: соседи гейта = 974 (все
+    # сверки + вода у границ), сон-не-снимает-бит = 978 (оба ЗОМБИ-НОЛЯ),
+    # бюджет-всегда = 982 (ровно «бюджет кусает»), пол FINALIZE = 981
+    # (ровно оба ЗОМБИ-НОЛЯ стейлом).
+    # 983 -> 1066 (+83) on 2026-09-02: ИНКРЕМЕНТ 3 «Автомат-2» — СОН-
+    # СОСТОЯНИЕ. (а) Часы тишины идут и под заморозкой бюджета — но только
+    # у клетки с ТИХИМ последним исполнением (quiet>0): сток сна на полной
+    # скорости, петля К2 «live↑→p↓→сон растягивается→live↑» разорвана;
+    # (б) писательское пробуждение (run_inject) гасит часы — корень В1
+    # висяков; (в) kSleepSubsteps сведён в один источник -D мостом.
+    # Гейты плана: СХОДИМОСТЬ (test_sleep_under_budget: башня при бюджете 2
+    # досыпает до 0 к батчу 23, кривая 32/28/16/12/8/0) и ВИСЯКИ
+    # (test_recarve_no_floating: сон→карв нижнего слоя→верх падает и
+    # доспит; карв СДВИНУТ НА НЕЧЁТНУЮ ФАЗУ — на чётной атом падал первым
+    # же подтиком и маскировал корень, первая мутация Б осталась зелёной).
+    # Мутации поштучно: часы-только-у-исполненных = 1064/1065 (ровно
+    # сходимость, live@40=20), инжект-не-гасит = 1065/1066 (ровно
+    # floating==0, ВИСЯКИ 8 атомов — симптом владельца в пробирке).
+    # 1066 -> 1091 (+25) on 2026-09-02: ИНКРЕМЕНТ 4 «Автомат-2» (частично —
+    # фильтры и stain; смерть drain-очереди/капа/лифта переехала в инкр. 5
+    # по зависимости: она умирает вместе с фронтиром и CPU-страницами
+    # подвижного). Фильтр «full() = статика» -> «full + НЕПОДВИЖНЫЙ тип»
+    # (cell_full_static из material_is_medium; корень В2: полномасочный
+    # рыхлый был невидим будильникам — вечный монолит). test_full_rubble_
+    # wakes: uniform-клетка рабла в воздухе высыпается и досыпает (511+1
+    # fade, зомби-ноль). УРОК: первая версия предиката читала f.paged() —
+    # пин каденса поймал дивергенцию С ПЕРВОГО ПРОГОНА (страницы живут по
+    # таймингам КАДРА); предикат — только маска+тип. Мутации: wake_cells-
+    # нога = 1089 (монолит цел); ноги touch и frontier ЗЕЛЁНЫЕ — они
+    # страховка, не несущие (правило «+7» исполняет монолит соседом,
+    # ленивый шов довозит страницу) — знание, не слепота стенда. В7:
+    # stain-грязь будит (main.cpp, гейта нет — путь только игровой).
+    set_tests_properties(medium_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "1091/1091 checks passed")
+
+    # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
+    # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
+    # «ctest не исполняет ни одной строки GLSL этого сима»; теперь подвес,
+    # посадка на маску, изотропия вектором, ткань, детерминизм и толкатели
+    # гоняются тем же законом, что medium_test: без окна, без свапчейна,
+    # compute-only VerletPass (renderPass = null). Без GPU — НЕ зелёное дерево.
+    add_executable(verlet_test tests/verlet_test.cpp
+        src/render/vk_device.cpp src/render/vk_buffer.cpp
+        src/render/vk_common.cpp src/render/voxel_mirror.cpp
+        src/render/verlet_pass.cpp)
+    target_link_libraries(verlet_test PRIVATE giga_core SDL3::SDL3
+        Vulkan::Vulkan)
+    target_compile_definitions(verlet_test PRIVATE
+        GIGA_SHADER_DIR="${_giga_spv_dir}")
+    add_dependencies(verlet_test giga_shaders)
+    giga_target_flags(verlet_test OFF)
+    add_test(NAME verlet_test COMMAND verlet_test)
+    # Пин 77 чеков с рождения (2026-08-31). Мутации гейта прогнаны поштучно:
+    # обход world_land -> посадка И изотропия сквозь опору, нулевые итерации
+    # солвера -> restY ткани. Инвариантные ноги ловят законы; точные числа
+    # держит ручной GIGA_VERLET_PIN-протокол (verlet-merge.md §6).
+    # 77 -> 76 тем же днём: SoA-раскладка (инкр. 2) — чек mapped-указателей
+    # умер вместе с ними, чтение состояния пошло через gather_chain/sheet.
+    # 76 -> 95 тем же днём: test_dead_element_freezes — страховка §59.26
+    # переехала сюда со смертяного ре-аплоада (тот телепортировал живой сим
+    # этажа в rest, §28.4); мутация «скип мёртвого сломан» = 14 FAIL.
+    # 95 -> 109 on 2026-09-01: test_particles — частицы = ТРЕТИЙ БАНК пула
+    # (слияние этапа 2, particle_pass/particle_sim мертвы): падение и посадка
+    # на маску верле-интегратором, отскок зеркалом prev, смерть по жизни,
+    # детерминизм спавна от сида.
+    # 109 -> 114 тем же днём: test_medium_damps — демпфер из ФИЗИКИ СРЕДЫ
+    # (инкр. 4): маятниковый толчок двух цепей, водяная режет размах @45 и
+    # успокаивается первой @300 (вода 0.013 против воздуха 0.075). Мутация
+    # «среда слепа» (ρ всегда воздух) = 2 FAIL. Проба ρ=1000-всем доказала
+    # чтение таблицы: воздух получил ровно водяной размах.
+    # 114 -> 125 on 2026-09-01: test_shards — черепки GpuHandoff (инкр. 5,
+    # последний): пара верле-точек падает, ложится на плиту, констрейнт
+    # держит длину, жизнь кончается. Мутация «пара без связи» = 1 FAIL.
+    set_tests_properties(verlet_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "125/125 checks passed")
     # 38712 -> 39331 (+619) on 2026-07-31: suite_destruct.inl landed — SubField
     # paging/collapse, carve_roll statistics (a 4096-iteration loop dominates
     # the delta), carve_at/carve_sphere geometry, layering, seam and detach.
@@ -478,8 +723,104 @@ if(GIGA_BUILD_TESTS)
     # non-unit `up` — the last of which is what fixes WHICH quantity the guard
     # may measure: |cross(f, up)|, never dot(f, up), because `up` is a public
     # parameter under no obligation to be unit-length.
+    # 23391 -> 23399 (+8) on 2026-08-18: кап -> каллер в PropPass. Пер-шейповый
+    # kMaxPropInstances=4096 (молчаливая резка по порядку вставки ДО GpuCullPass)
+    # умер; кап один, корневой — kRootPropInstances=2^17 ИТОГО, формы диапазонами
+    # одного буфера, переполнение печатается. Новый тест
+    # test_prop_root_cap_total_not_per_shape пинит именно ОБЩНОСТЬ капа: полный
+    # буфер в форме 0 отбирает места у формы 1, а overflowDropped_ считает отказ.
     set_tests_properties(world_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "23391/23391 checks passed"
+        # 23393 + 8 (test_prop_root_cap_total_not_per_shape, ветка PropPass
+        # несла 23399 от базы без z-шовного блока los) = 23401 на слитой линии.
+        # 23401 + 4 (векторные тор-формы wrap_delta3/wrap_dist2/wrap_pos) = 23405.
+        # 23405 + 17 (suite_surface: примитив запроса поверхностей S10) = 23422.
+        # 23422 + 6 (test_rigid_ball_settles_and_sleeps: рагдолл-ядро — качение
+        # из трения, оседание на радиусе, сон, пробуждение записью Velocity,
+        # единичный кватернион; [markoaudit/plans/ragdoll.md]) = 23428.
+        # 23428 + 5 (test_rigid_box_lies_flat: форма из контактных сфер — бокс
+        # 14 сфер кувыркается, ложится ПЛАШМЯ на полувысоту, не на
+        # ограничивающий радиус, и засыпает) = 23433.
+        # 23433 + 4 (test_rigid_chain_hangs_and_cuts: линк-сущности — цепь на
+        # мировом якоре висит связно, разруб = destroy линка, падает на пол и
+        # остаётся цепью; звенья ВЕРЁВОЧНЫЕ — жёсткие стояли бы колонной) =
+        # 23437.
+        # 23437 + 7 (test_rigid_ball_ball_wakes_and_stacks: шар-шар через
+        # биннинг — касание будит спящего, пара не проникает, стопка/пара
+        # засыпает через touchedTick от пары) = 23444.
+        # 23444 + 6 (test_rigid_prop_hits_agent_and_agent_kicks: проп↔агент —
+        # быстрый шар пишет Impact обоим (закон урона, S3 «может убить»),
+        # не пролетает сквозь; идущий агент будит и откатывает спящий шар) =
+        # 23450.
+        # 23450 + 2 (test_rigid_material_pair_bounce: мат-пара — один шар на
+        # бетоне звенит, на щебне глохнет; отскок = свойство ПАРЫ) = 23452.
+        # 23452 + 3 on 2026-08-24: детач по закону владельца (S16.5) —
+        # потерявший связность кусок НЕ исчезает: те же атомы на месте
+        # становятся rubble и падают автоматом; пины «клетка -> воздух»
+        # заменены пинами «маска стоит, материал rubble» (+3 чека) = 23455.
+        # 23455 + 2 on 2026-08-24: test_buoyancy (инкремент 4, S16.4) — тело
+        # в клетке полной воды по агрегату не тонет и не разгоняется (один
+        # член силы против гравитации фрейма + вязкость) = 23457.
+        # 23457 - 2 on 2026-08-24: fluid.cpp ВЫЧИЩЕН (вода = материя
+        # автомата) — test_fluid_conserves_mass умер, масс-инвариант живёт в
+        # medium_test на настоящем SPIR-V = 23455.
+        # 23455 + 4 on 2026-08-26: test_detach_judge (§60/§61 — судья
+        # связности на шве: ход автомата рвёт мостик, висюк обязан
+        # конвертнуться, опора цела) = 23459.
+        # 23459 - 1 on 2026-08-26: клеточный los_clear/los_blockers СНЕСЁН
+        # (§60: ноль живых потребителей — осколки/звук на субвокселях);
+        # свойства (изотропия, шов, старт-в-материи, диагональ) переехали
+        # на sub_march/sub_thickness_cells = 23458.
+        # 23458 + 36 on 2026-08-26: suite_clearance — гранный клиренс (эпик
+        # occupancy, §60/К1-10): макс-квадрат эрозией, закон полупроекций
+        # (стена на грани / посреди клетки / проём 4×4 / шов тора),
+        # патч==ребилд в обе полярности = 23494.
+        # 23494 + 4 on 2026-08-26: нав на клиренсе — test_nav_subvoxel_wall
+        # (красный до фикса: обход лепленой стены 96, флоу не в стену, спуск
+        # 111) и двухклеточный карман в route_step (одноклеточный стал
+        # изолятором по построению) = 23498.
+        # 23498 + 4 on 2026-08-26: диффузия на гранных гейтах — пин «панель в
+        # 1 субвоксель глушит сквозной поток за 2 шага, но обтекается за 4»
+        # (ёмкость и поток — разные вопросы; мутация клеточного гейта = 3
+        # красных) = 23502.
+        # 23502 + 49 on 2026-08-26: ИЕРАРХИЧЕСКИЙ СУДЬЯ СВЯЗНОСТИ (висяки на
+        # шве, скриншот владельца): узел = клеточный компонент, рёбра = AND
+        # граневых слоёв; атомный лимит 512 мёртв. Пины: плавающая пара клеток
+        # рушится по всем 3 осям, балка 640 атомов через 4 шва падает от
+        # опорной плиты-«дома» (676 клеток > бюджета), точное выравнивание
+        # граневых битов несёт (Г-стаб + колено моста, 6 переносов × мутация
+        # = красный) = 23551.
+        # 23551 + 22 on 2026-08-29: ЗАКОН ОПОРЫ S20.5 «подвижное — не опора»
+        # (корень куч дебриса у лестниц): rubble не несёт и не судится, обе
+        # полярности (мост-бетон против моста-крошки), сид от изменения
+        # (detach_judge_seeds), якорь на рыхлом мёртв World-пробой — мутация
+        # material_bears_load в обе стороны даёт 10 красных = 23573.
+        # 23573 + 3 on 2026-08-29 (той же сессией): судья стал СОБЫТИЙНЫМ —
+        # ход автомата не может осиротить статику по S20.5; входная
+        # развёртка = collect_mobile_support_cells (домен: подвижное + 6
+        # соседей) + идемпотентность входа = 23576.
+        # 23576 + 12 on 2026-08-29 (инкремент C): честность CarveResult под
+        # щитом (обе полярности: под щитом ноль в отчёте и маска цела, без
+        # щита рубит) + стейн вырезанного атома чистится = 23588.
+        # 23588 + 4 on 2026-08-29 (D.3): «щит = земля» судьи — столбик на
+        # щите стоит, без щита рыхлеет целиком; кросс-пины словарей
+        # nav_dir_to_anchor_face compile-time = 23592.
+        # 23592 + 17 on 2026-08-30 (big-judge A-C): test_big_judge — кольцо
+        # через тор оправдано перколяцией, висячий ящик 729 узлов рыхлеет
+        # целиком порциями (маски стоят), башня на перколирующей плите
+        # оправдана, грязь даёт пересуд. Мутация «перколяция слепа» — 6 FAIL
+        # (кольцо И башня рушатся), прогнана и откачена = 23609.
+        # 23609 + 8 on 2026-08-31 (§64): test_rigid_chain_sleeps_on_floor —
+        # верёвочная цепь на полу спит (4×2 CHECK). ЧЕСТНОСТЬ: мутация
+        # «стикция = 0» этот тест НЕ роняет (провисшие верёвки засыпают и
+        # без неё) — несущий гейт §64 живёт в game_test
+        # (test_humanoid_reaches_sleep, настоящий труп) = 23617.
+        # 23617 + 13 on 2026-09-12: test_stereo_camera_splits_by_ipd —
+        # стереопара как ЗАГОТОВКА (к пассам не подключена, решение владельца).
+        # База ровно IPD и разведена по ПРАВОМУ вектору (перепутанный знак =
+        # вывернутая глубина, ловится только шлемом), центр пары = монокуляр,
+        # оси параллельны (toe-in нет), нулевой IPD схлопывает в монокуляр,
+        # взгляд в зенит не даёт NaN = 23630.
+        PASS_REGULAR_EXPRESSION "23630/23630 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -538,9 +879,16 @@ if(GIGA_BUILD_TESTS)
     # 2026-07-29: a corrected pin appeared to fail twice for exactly this reason, and the obvious
     # wrong conclusion was that the NEW number was also wrong. Run tools\win\build.bat (it
     # configures first) or `cmake -S . -B build-win` before trusting a ctest verdict on a pin.
+    # 926 -> 1374 on 2026-08-28 (rooms-object F): контейнеры селятся в
+    # НАСТОЯЩИХ комнатах модуля (тысячи зон падика вместо решётки) — ящиков
+    # на этаже больше, и циклы сьюта по ним дают больше чеков. Прочитано с
+    # бинаря по правилу выше; мёртвый дефект не закрывался.
+    # 1374 -> 1371 on 2026-08-29 (v20/F): пин travel-шва переписан с
+    # «пересев+штамп по ключу» на «спавн из записей» (restore не сеет) —
+    # три чека матчинга по OpenedContainerKey умерли вместе с ключом.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 146 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 1371 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -668,7 +1016,7 @@ if(GIGA_BUILD_TESTS)
     # (2975 -> 2966 on floor 0) and the rest sit against the matter they touch.
     # 223840 -> 223852 (+12) on 2026-08-05: death is a STATE, not an event —
     # FallClock keeps a severed chain/sheet simulated and drawn for 8 s so it
-    # drops and lands (wire_sim/cloth_sim now collide against the VoxelMirror,
+    # drops and lands (the antourage verlet_sim collides against the VoxelMirror,
     # the same SSBO particle_sim uses) before it stops being drawn. The test
     # pins the three states, including the one the first draft got wrong: a
     # spent clock must STAY spent, or the piece restarts its fall every frame.
@@ -1029,8 +1377,345 @@ if(GIGA_BUILD_TESTS)
     # 243565 -> 243576 (+11) on 2026-08-17: light_bake — светоматериалы в
     # эмиттеры: пустой мир, полоса-кластер (центроид/радиус/цвет/интенсивность),
     # раздельные пятна, кластер через шов тора ([ddalight.md]).
-    # 243576 -> 243209 on 2026-09-12: game_test suite check pin update.
-        PASS_REGULAR_EXPRESSION "game_test: 243209 checks, 0 failures")
+    # 243627 -> 233695 (-9932) on 2026-08-18: потолочные лампы. Шаг раскладки
+    # теперь ВЫВОДИТСЯ из радиуса лампочки в props.csv (одна на 8 клеток = 16 м,
+    # делитель 128 — тайлится по тору без шва), вместо монетки 25% на КАЖДУЮ
+    # потолочную клетку. Минус — почти весь: циклы по лампам в suite_props_game
+    # и suite_light гоняли по 9112 штук на blame и по 25% полосы в фикстурах;
+    # плюс три новых теста (пол под лампой, бутерброд-анкер). Число ламп: padic
+    # 84 -> 11331, blame 9112 -> 3459 (лист 1538 штук на z=127 убран).
+    # 233695 -> 235711 (+2016) там же: лампы лестниц padic спрашивают реальную
+    # нижнюю грань потолка-бутерброда (sz=6), а не подслой 0 — 336 -> 1008 штук,
+    # и циклы suite_props_game по ним стали длиннее.
+    # 235711 -> 235756 (+45) on 2026-08-19: слияние лампового пина с
+    # suite_walkbits (async-rebake фаза B, ветка verlet-walkbits-clean несла
+    # 243672 от до-лампового дерева): бит-идентичность nav через WalkBits
+    # против grid-пути (6), то же для room zones (27), патч==полный ребилд с
+    # явной дивергенцией законов nav/тела на одной выбитой вокселе (12).
+    # 235775 -> 235782 (+7) on 2026-08-19: suite_shotsub — репро асимметрии
+    # карва (падик-сэндвич: removed вниз/вверх, обе пули гибнут — 4) плюс
+    # «прострелил дыру насквозь» (аудит §1.1: жива, вышла с той стороны,
+    # ничего не сколола — 3).
+    # 235782 -> 235780 (-2) on 2026-08-19: смерть doors.frozen (асинк-ребейк
+    # фаза C, [game/rebake.h]) — suite_doors терял ровно два чека «frozen
+    # отказывает мутаторам»: гейта больше нет, воркер читает снапшот битсетов,
+    # а не грид.
+    # 235780 -> 235796 (+16) on 2026-08-19: suite_rebake — SLA-гейт допекания
+    # (фаза D, план §7): Fresh-семантика (3) + свап (2), выбор стены (1),
+    # stale-чтения до свапа живы (4), свап <= потолка 8192 тиков (2), после
+    # свапа поле ведёт в проём (3), rooms-секция свапнулась (1).
+    # 235796 -> 235825 (+29) on 2026-08-20: suite_watch — календарь S15
+    # (такт 2^13 / вахта 2^16 / цикл 2^19 / эпоха 2^22, всё сдвигами):
+    # такт ВЫВЕДЕН из прежнего игрового часа 7500 тиков как ближайшая 2^n (4),
+    # каждый уровень ровно 8 предыдущих и лестница степенями двойки ещё и в
+    # миллисекундах, потому что тик = 8 мс (8), сдвиг == деление на 18 пробах
+    # включая границы уровней и потолок u64 — один CHECK на весь свип, чтобы
+    # не раздувать пин (1), граница выводится СРАВНЕНИЕМ и случается ровно
+    # раз на период: 64 такта / 8 вахт / 4 фазы / 1 цикл за цикл, стоящее
+    # время границы не даёт (8), четыре фазы освещения тайлят цикл по две
+    # вахты и заворачиваются вместе с ним (8).
+    # 235825 -> 235845 (+20) on 2026-08-20: suite_lightvis — запечённая
+    # видимость лампа->клетка (план light-visibility-bake, черри-пик 1736a311
+    # с ветки от 235796; слагаемые независимы от suite_watch, сумма сходится):
+    # закон «твёрд = только mask.full() и не эмиттер» (5), вывод rDirty из
+    # R_max (3), пин бит-идентичности бейка при 1 и 2 потоках + оракул «не
+    # потерять свет» на реальном этаже с обратной полярностью — нарочно
+    # сломанный флуд обязан терять (7), мгновенность карва: дренаж метит тем
+    # же вызовом, фолбэк видит лампу, ребейк вписывает (5).
+    # 235845 -> 235848 (+3) on 2026-08-20: свет стал субвоксельным (S2, замер
+    # «сквозь стены»): закон твёрдости теперь на живых лучах light_ray_passes
+    # и вырос на кейс «замурованная лампа светит» (5 -> 6, +1); обратная
+    # полярность оракула переехала со случайного этажа на построенную сцену
+    # «стена со щелью» — детерминированный красный на мутации «партиал =
+    # монолит» (3 новых чека), взамен вероятностного lostBad > 0 (-1).
+    # 236578 -> 236579 (+1) on 2026-08-21: spawn_ball на рагдолл-ядре
+    # ([markoaudit/plans/ragdoll.md] инкремент 1) — GravityAffected-чек стал
+    # RigidBody-чеком (0), новый чек SelfIntegrating (+1): без тега physics_step
+    # двигал бы тело вторым разом — та же двойная скорость, что была у снарядов.
+    # 236579 -> 236582 (+3) on 2026-08-21: линк с мировым якорем идёт через
+    # ЕДИНУЮ якорную систему (ragdoll.md §8, решение владельца): линк-сущность
+    # несёт SubVoxelAnchor, anchor_validate_step рвёт подвес по смерти опоры
+    # (обе полярности + пробуждение спящей стороны).
+    # 236582 -> 236580 (-2) on 2026-08-21: миграция пропов на рагдолл-ядро
+    # (ragdoll.md инкремент 6) — детач-чек стал RigidBody+SelfIntegrating;
+    # умерли тесты мёртвой косметики (prop_ragdoll_step damps,
+    # debris roll ω=n×v/r в physics_step), взамен test_detached_prop_is_rigid_body
+    # (форма/масса выведены из строки пропа, кувырок отдан ядру).
+    # 236580 -> 236586 (+6) on 2026-08-21: труп-гуманоид (ragdoll.md инкр. 8)
+    # — test_humanoid_segments_fall_and_cleanup: 3 сегмента + 3 штанги, тело
+    # складывается на пол связным, уборка забирает всё с корнем.
+    # 236586 -> 236596 (+10) on 2026-08-21: переноска (ragdoll.md инкр. 9) —
+    # test_carry_follows_and_throw_inherits: несомое не падает и едет с
+    # носителем, бросок наследует его скорость и возвращает в динамику.
+    # 236596 -> 236605 (+9) on 2026-08-21: сейв v18 — сорванные пропы часть
+    # мира (решение владельца): секция DebrisRecord, гейт размера стал
+    # уравнением на ДВА слагаемых (две секции переменной длины), круг пинит
+    # форму/массу/контактную пару обломка.
+    # 236605 -> 236606 (+1) on 2026-08-21: форма как ДАННЫЕ (ragdoll.md §9) —
+    # data/prop_forms.csv + кодоген; тест больше не пинит «6 сущностей», он
+    # выводит их из таблицы и требует, чтобы доли масс складывались в целое.
+    # 236627 -> 246455 (+9828) on 2026-08-21: §59.1 — is_power_cut получил
+    # битовый брод-фейз; test_power_cut_broadphase пинит эквивалентность
+    # старому точному скану сеткой 2×17³ проб вокруг щитков у обоих швов.
+    # 246455 -> 246475 (+20) on 2026-08-22: граната = проп-заряд (Charge/
+    # ChargeArmed/charge_step, вывод урона и радиуса из массы ВВ);
+    # test_grenade мигрирован, grenade_advance мёртв, валидация таблицы
+    # различает метательное (dmg=0, правда на пропе) и стволы.
+    # 246519 -> 246501 (-18) on 2026-08-24: fluid.cpp ВЫЧИЩЕН — умерли два
+    # fluid-теста suite_gravity_regimes (§5.1 b/c, изотропия жидкости);
+    # инвариант живёт в medium_test (test_regime_isotropy, настоящий SPIR-V:
+    # 6 режимов + Zero); suite_monster переехал на воду-материю и агрегат.
+    # 2026-08-24 (счёт не менялся, 1-в-1): чек сейвлупа «дыра после сейва не
+    # в файле» переехал с memcmp МАСОК на сверку МАТЕРИАЛА вырезанного атома —
+    # инкремент 5 (S16.5): детач КОНВЕРТИРУЕТ потерявший связность кусок в
+    # rubble НА МЕСТЕ (маски не меняются — двигает их дальше автомат), поэтому
+    # масковый memcmp мог совпасть; материал вырезанного различается всегда.
+    # 246483 -> 246462 (−21) on 2026-08-23: КЛАСТЕРЫ УДАЛЕНЫ (решение
+    # владельца). Механизм не работал ни кадра — биннинг выбрасывал каждую
+    # кластерную ссылку (id 98304+ против порога staticCount ~12646,
+    # light_grid.comp), ветка потребителя была мёртвым кодом, а обрезка
+    # списка клетки до 8 честных ламп при среднем 10.6 рвала свет
+    # прямоугольниками по клеткам 4 м (скриншот владельца). Умерли два
+    # теста кластерной паковки — они пиновали CPU-раскладку, которую никто
+    # не читал; ни одна живая сюита не остановилась.
+    # 246488 -> 246483 (−5) on 2026-08-23: ПАДЕНИЕ ОСОЗНАННОЕ — чистка мёртвого
+    # дренажа dirtyGen (свет догоняет мир, 37e772d1): умерли 3 чека вывода
+    # радиуса грязного шара (dirty_radius_derivation целиком), чек дренажа и
+    # чек грязного фолбэка в pin_and_oracle — вместе с инвариантом «свет тем
+    # же кадром», снятым владельцем 2026-08-22. Ни одна живая сюита не
+    # останавливалась: lightvis по-прежнему гоняет пин/оракул/патч.
+    # 246475 -> 246488 (+13) on 2026-08-22: триггер «от урона» — бочка строкой
+    # CSV: выстрел взводит (не детач), рвёт тот же charge_step/detonate.
+    # 246462 -> 246470 (+8) on 2026-08-24: EmitterField — пины «патч поля =
+    # полный скан» и «патч видит одиночный субвоксельный атом» (neon-topology §4).
+    # 246470 -> 246495 (+25) on 2026-08-24: идентичность из связности — пины
+    # похудение/разделение/слияние хранят id, светит только атом маски
+    # присутствия, связность атомная а не клеточная (neon-topology §1-3).
+    # 246495 -> 246498 (+3) on 2026-08-24: яркость из материи и формы спада —
+    # пины «полный куб = табличная», «полоса ×5·(R₁/R)³», «плиты ∝ атомам».
+    # 246498 -> 246501 (+3) on 2026-08-24: прозрачность колонкой — стекло не
+    # светит, но пропускает свет (light_transparent, neon-topology).
+    # 246501 -> 246510 (+9) on 2026-08-24: единая `sphere <материал> [r]` из
+    # таблицы (material_id_by_name), зоопарк neon/glass умер; пины парсинга.
+    # 246510 -> 246514 (+4) on 2026-08-24: бит дилатации в ранге ламп (находка
+    # №1 аудита DDA) — за стеной бит стоит, со щелью чист; мутация ловится.
+    # 246514 -> 246519 (+5) on 2026-08-24: тег состава таблицы на свапе —
+    # снапшотный, не текущий (находка №2, гонка «таблица сменилась в полёте
+    # бейка»); мутация «текущий тег» ловится гоночным пином.
+    # 246501 -> 246520 (+19) on 2026-08-26: НАВ НА ГРАННОМ КЛИРЕНСЕ (эпик
+    # occupancy, §60/К1-10): suite_walkbits переписан под ClearanceField
+    # (наивный эталон закона на выборке 037, пин §60 «атом не открывает
+    # клетку»), nav-кэш v3 (v2 отбраковывается: та же раскладка, другой
+    # закон). Поведение толпы на лепленых этажах МЕНЯЕТСЯ ЗАКОННО — прежний
+    # `!full()` вёл сквозь стены.
+    # 246520 -> 246523 (+3) on 2026-08-26: проба «стена рядом» единая на
+    # клиренсе (два дубля grid.cell снесены): панель в «воздушной» клетке
+    # видна, дальняя колонна — не стена; мутация клеточного закона = 2
+    # красных.
+    # 246523 -> 245972 (-551) on 2026-08-27: СНОС БАНК-КОЛЬЦА и WEALTH-ТИРОВ
+    # (вердикт владельца, К2 стабилизации; сейв v19). Слагаемые: 5×97=485 —
+    # equal_states гонял entries+ledger[24]×4 поля в 5 roundtrip'ах сейва;
+    # 35 — блок wealth-тиров suite_economy (размеры, брекеты, 12 клампов);
+    # 29 — история кольца (1+1+3+24 слотов); 2 — zero-op «не пишет историю».
+    # 245972 -> 246339 (+367) on 2026-08-27: МОДУЛЬ ХРУЩЕЙ (FloorKind::Khrushi,
+    # клейм этажа 6): +90 navcache roundtrip имён (15 номеров × 6 сидов на
+    # новый kind, пин 540→630 ×2 места), +3 клейм-проверки suite_floorcatalog,
+    # остальное — циклы по FloorKind::Count в спеках/ролях/таксономии, которые
+    # выросли на строку каталога.
+    # 246339 -> 246394 (+55) on 2026-08-27: suite_prebuild (лифтовый эпик,
+    # инкремент 2): бит-идентичность Prebuild == ensure_loaded на generate- и
+    # restore-ветках (snapshot_floor байт в байт, дезигнат, пул, антураж),
+    # restore-хук исполняется воркером, протокол отмены обеих сторон шва.
+    # 246394 -> 246365 (-29) on 2026-08-27: ЛИФТОВАЯ СЕТКА 2×2 (инкремент 3,
+    # elevators-2x2.md, решение владельца: 4×4 слишком плотно). ПАДЕНИЕ
+    # ЗАКОННО и объяснимо построчно: циклы test_fast_travel по хабам сжались
+    # 16 -> 4 (кабины/шахты/пробы воздуха: −36 чеков), взамен +7 негативных
+    # пинов «нечётный узел — не кабина» (смерть 12 хабов из 16 — само
+    # проверяемое утверждение сетки). Ни один сьют не переставал бегать.
+    # 246365 -> 246371 (+6) on 2026-08-27: ЗАКРЫТЫЕ СТОЛБЫ ЛИФТОВ (инкремент
+    # 4a): проба геометрии переписана с «3×3 воздух» на столб (кабина, пол,
+    # ровно один проём, глухое кольцо на чужом торе-z), пробы полной высоты
+    # шахт учат пол кабины, нав-тест не пинит разорванное полом wrap-ребро.
+    # 246371 -> 226390 (-19981) on 2026-08-27: МОГИЛА ТЕЛЕПОРТ-ОБВЕСА
+    # (решение владельца: лобби 7×7, hub-pad слои и 4 синих угловых столба
+    # снесены у падика и блейма). ПАДЕНИЕ ЗАКОННО, померено по-сьютно
+    # инструментовкой: test_antourage_all 36460 -> 16484 (−19976) — сьют
+    # чекает КАЖДЫЙ сегмент/инстанс восьми бейков, а лобби-потолки были
+    # главным субстратом труб (сеть ужалась ~2×; перенастройка обвеса под
+    # столбы — инкремент 6 плана лифтов); test_saveload_all +73 (другой
+    # контент этажа в roundtrip'ах); navPads>0 стал navPads==0 (пин могилы).
+    # Ни один сьют не выключен — остальные суммы не двигались.
+    # 226390 -> 226392 (+2) on 2026-08-27: ЩИТ ЛИФТОВ (world/protect.h) —
+    # маска области держит карв мощи 0xFFFF на стене столба (защита + пин
+    # маски); контроль «в двух клетках грызёт» условный (клетка сида — воздух).
+    # 226392 -> 223123 (-3269) on 2026-08-28: МОГИЛА ВСЕЙ СИСТЕМЫ ДВЕРЕЙ
+    # (приказ владельца, «не щадя»): suite_doors удалён целиком, дверные
+    # проверки в antourage/props/keybind вырезаны. Новая дверь («зарастание»
+    # субвокселями) строится с нуля обсуждением.
+    # 223123 -> 223154 (+31) on 2026-08-28: НОВАЯ ДВЕРЬ (зарастание проёма
+    # настоящей материей, три закона в game/door.h): suite_doors заново —
+    # объявление модулем + механизм-створки лифта, тоггл штампует/снимает
+    # настоящие субвоксели, отказ при теле в проёме, гермополотно материалом,
+    # СНИМОК НЕСЁТ ЗАКРЫТУЮ ДВЕРЬ (сброса на входе нет по построению).
+    # 223154 -> 223164 (+10) on 2026-08-28: ГЕЙТ ПРИЦЕЛА (game/focus.h) —
+    # каждый дверной проём реального этажа обязан ловиться прицелом хотя бы
+    # с одной из четырёх сторон, табличка приходит из системы. Тест написан
+    # ПОСЛЕ жалобы владельца «двери не реагируют, таблички нет» и ловит все
+    # три причины немоты сразу (своя формула взгляда вместо camera_forward,
+    # марш из материи, инвертированный знак wrap_delta_f).
+    # 223164 -> 223162 (-2) on 2026-08-28: ЧИСТКА КЛАВИШ (вердикт владельца
+    # «в интерфейсах и клавишах насрано за всю историю»): 14 строк сняты с
+    # клавиатуры (дев-инструменты + разовые действия с предметами), их
+    # проверки заменены пинами ОБРАТНОЙ полярности («обязаны отсутствовать»).
+    # 223274 -> 223447 (+173) on 2026-08-28: suite_verbs.inl — словарь глаголов
+    # (rooms-object инкремент A): пины формы канона S13.5 (shelter 0, wander
+    # 1000, оба конца шкалы существуют) + уникальность токенов.
+    # 223447 -> 223505 (+58) on 2026-08-28: suite_rooms_object.inl — комната
+    # как объект (инкремент B): изотропия объявления (все 6 перестановок
+    # осей), непересечение зон + отказ пустым, wrap по трём осям, RoomId
+    # бит-в-бит, псевдонимы модуля.
+    # 223505 -> 224034 (+529) on 2026-08-28: инкремент C — ВСЕ модули
+    # объявляют комнаты: падик 14154 (BSP-листья x 42 яруса), blame 256
+    # гермолобби, хрущи 5900 (5 комнат на квартиру, ярус по правилу центра
+    # клетки); overlap 0 у всех; детерминизм roomAt бит-в-бит.
+    # 224034 -> 224072 (+38) on 2026-08-28: инкремент D — supply-оракул:
+    # выведенные таблицы глаголов (kPropVerbs/kItemVerbs) живы, rebuild ==
+    # инкрементальный путь побитово, чужой слой не считается, снятие
+    # симметрично, kNoRoom — no-op.
+    # 224072 -> 223864 (−208) on 2026-08-28: инкремент E — спавн паков
+    # переехал в ОБЪЯВЛЕННЫЕ комнаты (пины решётки stride умерли: «не на
+    # линии» -> «внутри объявленной зоны»), гермополотно от тега комнаты,
+    # живые хуки supply, ростер один на этаж (roomMask-фильтр мёртв).
+    # Падение счёта — смерть старых решёточных проверок, не потеря сьютов.
+    # 223864 -> 222869 (−995) on 2026-08-28: инкремент F — СМЕРТЬ решёточной
+    # таксономии: suite_rooms целиком (эрранды/сиденья/мебель/регенерация на
+    # flow-полях), зонные половины walkbits/budgets/needs/rebake, пины
+    # roomMask/stride. Наследники живут: suite_rooms_object + body-оракул.
+    # 222869 + 20 on 2026-08-29: ДОЛГ ПИСАТЕЛЯ S20.4 (skeleton-anchor B) —
+    # дверь рвёт проп на полотне (обе полярности, клетка чистого проёма),
+    # спящее тело будится своим слоем и не будится чужим/дальним,
+    # межслойный фильтр валидатора обеими полярностями = 222889.
+    # 222889 + 14 on 2026-08-29 (E-1): жнец связей (линк с умершей стороной
+    # уничтожен, живая разбужена; сегмент без корня прибран; мировой линк
+    # жнецу не подсуден) + глагол якорения (точка солвера — производная
+    # записи, снятие будит) = 222903.
+    # 222903 + 7 on 2026-08-29 (E-2): NpcRef — генерационная ссылка
+    # (стейл-ссылка на переработанный слот не текущая, fold_back с ней не
+    # пишет строку наследника; свежая — пишет) = 222910.
+    # 222910 + 9 on 2026-08-29: yaw обвеса лифта из грани якоря
+    # (prop_wall_yaw; плейтест «кнопка ребром»): 8 yaw-проверок обвеса
+    # (этаж 2 — обе оси стен) + пин покрытия осей = 222919.
+    # 222919 + 80 on 2026-08-29 (S20.6 инкремент F-1): suite_persist —
+    # floor file v3 (материя+сущности+ключ модуля): round-trip бит-в-бит
+    # (мутации: ворота ключа выключены — 12 FAIL, проба якоря restore
+    # выключена — 4 FAIL, дрейф трупа ×0.9 — пойман до фикса), ворота
+    # kind/seed/genVersion/v2/CRC/обрубок обеими полярностями, якорная
+    # проба restore, версии генерации всех kind = 222999.
+    # 222999 - 693 on 2026-08-29 (v20/F-2): run.sav теряет секции сущностей
+    # (containers/corpses/debris → floor-файл): busy_run/round_trip/
+    # keys_not_entity_ids чеки v15-матчинга умерли с ключом;
+    # floor_records_survive_a_restart переписан на floor-файл v3 и
+    # «спавн из записей» = 222306.
+    # 222306 + 13 on 2026-08-29 (G, S20.1): test_noise_walls_deafen —
+    # акустика на скелете обеими полярностями (открыто слышно/за стеной
+    # нет/сквозь щель обходом; мутация «стены не держат» — 3 FAIL) = 222319.
+    # 222319 - 32 on 2026-08-29 (S19 витнес): секция 6 suite_faction2
+    # переписана со всевидящего relations_drain_deaths на witness_step —
+    # замеченное убийство гнёт (жертва фракции свидетеля ×1.5), незамеченное
+    # в 60 м НЕТ, стена скрывает (зрение+слух), монстр не дипломатия,
+    # третья фракция судит братоубийство; мутация «всевидение» — 3 FAIL
+    # = 222287.
+    # 222287 + 14 on 2026-08-30 (GIGA_PROF): suite_prof.inl — кольцо/сводка
+    # профиля кадра ([core/prof.h]); 14 = 3 (пустое) + 4 (частичное) + 2
+    # (выброс) + 3 (вытеснение эпохи) + 2 (вытеснение старейшего) CHECK-сайтов,
+    # все вне циклов. Мутации прогнаны: «median = tmp[0]» — 1 FAIL (:31),
+    # «peak = tmp[0]» — 3 FAIL (:33,:44,:66) = 222301.
+    # 222301 + 2 on 2026-08-31 (§64): test_humanoid_reaches_sleep —
+    # НАСТОЯЩИЙ труп-гуманоид (боксы + штанги prop_forms.csv) обязан
+    # достичь сна на полу. Мутации прогнаны ПОШТУЧНО: «kJointSlop = 0» —
+    # FAIL (Baumgarte воюет за миллиметры, предельный цикл 0.1-0.2 м/с);
+    # «wakePass будит просто бодрым» — FAIL (пинг-понг сбросов сна);
+    # «kStictionRate = 0» — PASS (стикция для трупов НЕ несущая, остаётся
+    # страховочным стоком по решению владельца) = 222303.
+    # 222303 + 6 on 2026-08-31 (граната в руке): test_grenade расширен —
+    # решение Equipped сильнее скана сумки и строго комплементарно пикеру
+    # огнестрела (граната в слоте не ствол, ствол не метательное, фолбэк
+    # на сумку). Вторая половина чистки клавиш 2026-08-28, находка
+    # владельца «надевается и не кидается» = 222309.
+    # 222309 + 1 on 2026-08-31 (две руки, инкремент 2): пин «shared
+    # cooldown» ПЕРЕВЁРНУТ законом владельца «руки независимы» — бросок
+    # гейтится своим throwCooldownMs, ствольный cooldownMs не задет
+    # (+CHECK «ствол = 0 после броска») = 222310.
+    # 222310 + 25 on 2026-08-31 (акимбо v21): GunHand[2] — сейв-раундтрип
+    # ОБЕИХ рук + throwCooldownMs (suite_saveload, +23) и пер-рука чтения
+    # в suite_rpg/фикстурах (+2). Провода: kRangedWire 16 -> 26,
+    # kSaveFixedWire 1040 -> 1050, пустой сейв 1140 -> 1150 = 222335.
+    # 222335 + 7 on 2026-08-31 (проп занимает руку): маска свободных рук
+    # (0 = взять нечем), занятая левая -> берёт правой, бросок чужой руки
+    # не роняет несомое, младшая свободная — левая = 222342.
+    # 222342 - 2 on 2026-08-31 (упрощение владельца «никаких приоритетов»,
+    # v22): throwCooldownMs УДАЛЁН — кулдаун руки один на её верб («рука
+    # несёт и делает то, чем экипирована»); пикер-с-приоритетом умер, тест
+    # переписан на закон руки: ПКМ-граната бросается wantR (не wantL),
+    # платит кулдаун ПКМ, ЛКМ не задета; wantBag = скан сумки рукой ЛКМ.
+    # Провода v22: ranged 24, fixed 1048, пустой 1148 = 222340.
+    # 222340 + 4 on 2026-08-31 (детач сохраняет позу): q тела = поворот на
+    # yaw меша (3 чека) + ω.z ≡ 0 (константа w.z=1.0 «из ниоткуда» мертва,
+    # кувырок выведен ω = arm × v / rg²) = 222344.
+    # 222344 + 1 тем же днём (floor v4): лежащая поза едет в PropRecord.q и
+    # возвращается бит-в-бит (до того загрузка ставила упавший проп стоймя);
+    # мутация «restore не применяет q» = 2 FAIL (чек + идемпотентность байт).
+    # 222345 + 10 on 2026-09-01 (инкр. 5): GpuHandoff разваливается на
+    # ЧЕРЕПКИ+пыль (два push вместо одного Debris) — оба burst-теста пинят
+    # новый закон (kind Shard + kind Dust).
+    # 222355 + 3 on 2026-09-02 (Автомат-2, суженный инкр. 5): этап
+    # «ОЖИВЛЕНИЕ СРЕД» (medium_revive в floor_file_read — агрегат
+    # medium_level не в снапшоте, без этапа будильник этажа читал нули и
+    # стоячая вода после загрузки спала мёртвым сном). Три чека floor-
+    # roundtrip: страничная лужа 4, однородная клетка 512, сухая 0.
+    # Мутация «этап вынут» = 2 failures (оба водяных).
+    # 222358 + 21 on 2026-09-05 (щиток S15.4, suite_shield.inl): кольцо фаз
+    # shield_phase_level 7 + программа из данных модуля (спать→жилой ритм,
+    # коридор→круглосуточно, идемпотентность S18) 6 + привязка лампы к
+    # ближайшему щитку тором (mains-only) 4 + плафон гаснет с фазой 4.
+    # 222379 + 14 on 2026-09-05 (витнес-продюсеры S19): невольный слив =
+    # деяние из needs_step (5: публикация с актором/глаголом/тиком + обратная
+    # полярность «спокойный бар молчит») + репутация комнат в floor v5 (9:
+    # gather по индексу объявления, раундтрип знака через u16-провод,
+    # restore поверх свежей декларации) + strike-гейт в пулевом тесте (1:
+    # нелетальная пуля в человека = Deed(strike) с жертвой-строкой пула).
+    # 222394 + 17 on 2026-09-05 (agent-goals инкремент A, suite_goals.inl):
+    # нужда ведёт 4 + точка под ногами всегда (пустого списка нет) 3 +
+    # ничья тором через шов 4 + радиус выводится (даль проигрывает точке) 3 +
+    # шкала примера S13.3 дословно 3.
+    # 222411 + 870 on 2026-09-06 (agent-goals инкремент B, радиус-отбор):
+    # оракул тождества бины≡перебор 400 деклараций + 64 прогона × 4 (комната/
+    # счёт/дистанция/дедуп scored ≤ комнат) + отсечка scored < 32 + кромка
+    # радиуса (победитель у границы, ловит заниженный break) + supply
+    # растягивает радиус предметом и пропом (потолки бинов)
+    # (гейты B-1..B-4 suite_goals.inl).
+    # 223281 + 12 on 2026-09-06 (инкремент B, кандидаты): сущность = та же
+    # сумма (труп против кухни в обе стороны), болтик инертен, полевая цель
+    # с нулевым путём против комнаты укрытия (гейты B-5.. suite_goals.inl).
+    # 223295 − 15 on 2026-09-06: ВЫРЕЗ шаров акустики (решение владельца,
+    # problems.md §65 — пер-шумовой BFS против канонического масштаба
+    # «сотни выстрелов/сек»): умерли test_noise_walls_deafen (13) и замер
+    # цены бейка (2), сделавший своё дело — числа записаны в §65. Слух
+    # прямолинейный тором; стенд стены/щели вернётся с эпиком «звуковое
+    # поле этажа». Падение счётчика ОБЪЯСНЕНО — это тот случай.
+    # 223280 + 8 on 2026-09-06 (вторая сессия, §66 + sound-field инкремент C):
+    # секция 6б suite_faction2 — исход свипа 600 тел (3: одна строка матрицы
+    # на толпу одной фракции), свои-единственный свидетель (3: замечено без
+    # дипломатии — держит anyWitness против жадной отсечки), слух за стеной
+    # в hear_m (2: слух ПЕРВЫМ, луч не решает один). Замер [witness-cost]
+    # печатается тем же стендом: 631 → 3.9 мкс/деяние после отсечек.
+    # 223288 + 50 on 2026-09-12: suite_gamepad — headless-слой геймпада
+    # ([game/gamepad.h], перенос по смыслу из marko1olo bb62c64a). Мёртвая
+    # зона с перенормировкой (13), молчание без устройства (7), знаки осей
+    # против клавиатуры (8), взгляд как СКОРОСТЬ и мышиный знак (8), ПИН
+    # ВЫВОДА ω = v/r (3), триггеры = две РАЗДЕЛЬНЫЕ руки (8), вертикаль только
+    # в полёте (7) — каждое в обе полярности.
+        PASS_REGULAR_EXPRESSION "game_test: 223338 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

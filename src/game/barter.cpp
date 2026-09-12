@@ -36,7 +36,7 @@ std::int64_t unmarked_rubles(const Inventory& inv, std::uint64_t marks) {
 // Is slot `idx` currently one of the wearer's equip decisions?
 bool slot_equipped(const Equipped* eq, int idx) {
     if (!eq) return false;
-    return eq->weapon == idx || eq->armor == idx || eq->tool == idx;
+    return eq->handL == idx || eq->armor == idx || eq->handR == idx;
 }
 
 bool any_marked_equipped(const Equipped* eq, std::uint64_t marks) {

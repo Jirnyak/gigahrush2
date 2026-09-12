@@ -78,3 +78,11 @@ gigahrush2_save/
 appDataDir/
 .goosehints
 /_*.txt
+light_debug.log
+# Логи живого прогона (markoaudit/plans/steam-readiness.md): регенерируются
+# запуском, а числа, ради которых их снимали, живут в problems.md §67 и bugs.md.
+soak_log.txt
+run_stderr.txt
+/medium_log.txt
+medium.log
+*.log

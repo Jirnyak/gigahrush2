@@ -23,13 +23,17 @@ deterministic double-buffered pattern — but relaxation + decay instead of grav
 1. Read the whole field from one buffer, write the next into a second — so the
    result is **independent of iteration order** (reproducible across runs and
    platforms, `master_prompt.md` §11). Buffers swap at the end.
-2. For each **open** cell (`!mask.full()`, the same walkability
-   [nav.md](nav.md) uses): a discrete Laplacian over its 6 wrapped neighbours,
-   `acc += Σ (neighbour − c)`, then `next = (c + rate·acc) · (1 − decay)`.
-3. A **wall** (fully-solid cell) is held at 0 and skipped in every neighbour sum —
-   which is exactly a **no-flux (Neumann) boundary**: danger cannot cross
-   structure, so it **pools in rooms and leaks through doorways** instead of
-   bleeding through walls.
+2. Два вопроса вместо одного клеточного (эпик occupancy 2026-08-26, §60):
+   **ёмкость** — клетка ДЕРЖИТ поле, если в маске есть воздух (`!full()`);
+   **поток** — каждый из 6 членов Лапласиана гейтится ГРАННЫМ битом:
+   `face_clearance >= 1` («газу хватает атома» — сквозная воздушная колонка
+   через полуокна обеих клеток, закон один на дерево —
+   [src/world/clearance.h]). `acc += Σ (neighbour − c)` по открытым граням,
+   затем `next = (c + rate·acc) · (1 − decay)`.
+3. Глухая грань не пропускает ничего — **no-flux (Neumann) boundary** на
+   уровне ГРАНИ: запах не течёт и сквозь ЛЕПЛЕНУЮ стену в частичной клетке
+   (прежний клеточный предикат её не видел), pools in rooms and leaks
+   through doorways. Полностью твёрдая клетка по-прежнему держится в 0.
 4. Values below `minLevel` clamp to 0, keeping the field tidy (no infinite
    residue tail).
 
@@ -63,10 +67,13 @@ vec3 g = diffusion_gradient(field, grid, x, y, z);
 A wrapped central difference over **open** neighbours per axis, falling back to a
 one-sided difference when one side is walled (that side carries no flux) and to 0
 when both sides are walls. Cheap and allocation-free — safe to call per agent on
-the tick. This is the flee vector the utility-AI (#12) is *written* to steer by — but
-nothing wires `diffusion_tick` into the app loop, so `danger` is **null in the
-shipped game**, the threat term reads 0 and no body ever flees
-([src/app/main.cpp](src/app/main.cpp) says so at the call site).
+the tick. This is the flee vector the utility-AI steers by. **Сверка 2026-08-23:
+абзац «nothing wires diffusion_tick» был ложью** — `diffusion_tick` живёт в
+цикле (`src/app/main.cpp:3485`), поле `danger` кормят паникующие тела
+(`ai_panic_publish_step`), градиент читает `src/game/ai.cpp:861`
+(`diffusion_gradient`), тела бегут. Система подключена целиком; S16 (CANON)
+со временем пересадит первичную правду сред на мир-автомат, поля останутся
+языком для AI.
 
 ## What it is *not*
 

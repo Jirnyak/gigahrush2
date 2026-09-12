@@ -52,7 +52,7 @@
 // the whole module at init(), which is the only way to find out what the eight
 // timestamp writes and the query-pool reset cost per frame: a BOTTOM_OF_PIPE
 // timestamp is an ordering point the driver has to honour, and "it is probably
-// free" is an opinion. Same-binary A/B, like GIGA_CUBE_MAXRUN in cube_pass.cpp,
+// free" is an opinion. Same-binary A/B, like GIGA_CUBE_MAXRUN in material_textures.cpp,
 // because a rebuild between two numbers is how a thermally-downclocked
 // "improvement" gets published.
 #pragma once
@@ -79,6 +79,13 @@ enum class GpuPass : std::uint32_t {
     Props,      // prop_pass
     DrawPhysics, // wire/cloth/particle draw
     Hud,
+    // Честные скобки для тайловых GPU (Apple/MoltenVK): таймстемп ВНУТРИ
+    // рендер-пасса меряет пустоту — фрагментная работа исполняется вся на
+    // vkCmdEndRenderPass. Меряем ЦЕЛЫЕ рендер-пассы: скобка вокруг
+    // завершённого пасса честна и на тайлере, и на IMR. Старые пер-дров
+    // скобки внутри пасса остаются — на десктопных IMR они осмысленны.
+    Light,  // световой полупасс (полразрешения, свой рендер-пасс целиком)
+    Raster, // главный мировой рендер-пасс целиком (begin_pass..end)
     kCount
 };
 inline constexpr std::uint32_t kGpuPassCount =

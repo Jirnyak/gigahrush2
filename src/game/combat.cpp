@@ -15,6 +15,12 @@
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
 #include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
+#include "game/prop_table.h"  // PropId/PropDef — метательный заряд = проп
+#include "game/witness.h"     // deed_publish — убийство = деяние (S19)
+#include "sim/cell_bins.h"    // общий примитив клеточных бинов (§59.3)
+#include "sim/rigid.h"        // rigid_attach_sphere — граната = тело ядра
+#include "world/material_props.h" // kMatHardness — упругость/трение заряда
+#include "core/tick.h"        // kSimHz — фитиль мс → сим-тики
 
 
 #include "game/faction_relations.h"
@@ -29,7 +35,8 @@
 #include "sim/drag.h"    // air_drag_step/drag_q — тот же закон трения, что у тел
 #include "world/macro_grid.h"
 #include "world/material_props.h" // material_hardness — окно угла рикошета
-#include "world/los.h"   // los_clear — a wall stops a fragment
+#include "world/destruct.h" // sub_material_at — материал попавшего субвокселя
+#include "world/los.h"   // los_clear — a wall stops a fragment; sub_march — пуля до материи
 #include "world/stain.h" // blood — the universal stain layer
 #include "world/world.h"
 #include "world/types.h"
@@ -39,134 +46,14 @@ namespace giga::game {
 
 namespace {
 
-bool adjacent_wall(const MacroGrid& grid, const vec3& pos) {
-    const int cx = static_cast<int>(pos.x / kCellSize);
-    const int cy = static_cast<int>(pos.y / kCellSize);
-    const int cz = static_cast<int>(pos.z / kCellSize);
-    return grid.cell(cx + 1, cy, cz) != kCellAir ||
-           grid.cell(cx - 1, cy, cz) != kCellAir ||
-           grid.cell(cx, cy + 1, cz) != kCellAir ||
-           grid.cell(cx, cy - 1, cz) != kCellAir;
-}
-
 // Component `a` of a vec3 by index, 0/1/2.
 //
-// The grenade bounce below is written entirely over this accessor rather than over
-// `.x` / `.y` / `.z`, and that is [problems.md] §34's isotropy law in code form: the
-// three axes are searched by ONE loop, so none of them can quietly acquire a special
-// case the way "reflect whichever component is biggest" would. What reflects a
-// grenade is the cell FACE it crossed; which letter that face belongs to is a
-// result, never an input.
+// The bullet RICOCHET below is written entirely over this accessor rather than
+// over `.x` / `.y` / `.z`, and that is [problems.md] §34's isotropy law in code
+// form: the axis of the reflected face is a RESULT of the sub-voxel march,
+// never an input letter. (Гранатный отскок здесь больше не живёт: граната —
+// RagdollRoll-проп рагдолл-ядра, 2026-08-22.)
 inline float& axis(vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
-inline float axis(const vec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
-
-// Is the cell containing `p` solid? Cell level and not sub-voxel, for the reason the
-// bullet path states: a grenade clipping the corner of a wall should bounce, and the
-// sub-voxel mask would let it slip through a half-carved cell that reads as solid.
-//
-// `MacroGrid::cell` wraps all three indices itself, so an unwrapped world position
-// is safe here — which is what lets the sweep below work in unwrapped coordinates
-// and wrap once, at the end. Out-of-stack z is solid: the bottom of the level has no
-// floor below it to fall through, and a grenade that fell out of the world would
-// detonate 200 m away from where the player watched it land.
-bool cell_solid(const MacroGrid& grid, const vec3& p) {
-    const int cz = static_cast<int>(std::floor(p.z / kCellSize));
-    if (cz < 0 || cz >= kMacroDim) return true;
-    return grid.cell(static_cast<int>(std::floor(p.x / kCellSize)),
-                     static_cast<int>(std::floor(p.y / kCellSize)), cz) != kCellAir;
-}
-
-// How far past a face to place the grenade after a reflection, metres. Big enough
-// that the next step's `floor(p / kCellSize)` lands in the new cell despite float
-// error, small enough to be invisible at a 2 m cell.
-inline constexpr float kBounceEpsilon = 1e-3f;
-
-// Advance one grenade by `dt`, reflecting it off every cell face it crosses.
-//
-// A miniature DDA rather than "integrate, then test the destination": the destination
-// test alone is wrong at a corner, where the step crosses an AIR face first and the
-// solid cell second — it would reflect off the wrong face and send the grenade back
-// up the corridor it came from. So the step is walked crossing by crossing, and each
-// crossing asks the cell it is about to ENTER whether it is solid.
-//
-// Bounded at four crossings. One 8 ms step at the 16 m/s throw speed covers 0.13 m
-// against a 2 m cell, so three is already unreachable; the fourth is there so the
-// bound is a bound and not a guess.
-void grenade_advance(const MacroGrid& grid, vec3& pos, vec3& vel, float dt) {
-    vec3 from = pos;
-    float remain = dt;
-    for (int iter = 0; iter < 4 && remain > 1e-6f; ++iter) {
-        const vec3 to = from + vel * remain;
-
-        // The earliest cell-boundary plane this segment crosses, over all three axes
-        // by the same rule.
-        float bestT = 2.0f;
-        int bestA = -1;
-        float bestDelta = 0.0f;
-        for (int a = 0; a < 3; ++a) {
-            const float f = axis(from, a);
-            const float d = axis(to, a) - f;
-            if (d > -1e-9f && d < 1e-9f) continue;
-            const int cf = static_cast<int>(std::floor(f / kCellSize));
-            const int ct = static_cast<int>(std::floor(axis(to, a) / kCellSize));
-            if (cf == ct) continue;
-            const float plane =
-                static_cast<float>(d > 0.0f ? cf + 1 : cf) * kCellSize;
-            const float t = (plane - f) / d;
-            if (t >= 0.0f && t < bestT) {
-                bestT = t;
-                bestA = a;
-                bestDelta = d;
-            }
-        }
-        if (bestA < 0) {
-            // No face in the way. Either the whole step is free, or the grenade is
-            // ALREADY inside solid — thrown point-blank into a wall from a body that
-            // is itself clipped into geometry. There is no face to reflect off in
-            // that case, so it stops dead and the fuse finishes the job; the
-            // alternative is picking an axis to push out along, which is exactly the
-            // guess §34 forbids. Drifting on through the rock is the one answer that
-            // is definitely wrong.
-            if (cell_solid(grid, to)) vel = vec3{0.0f, 0.0f, 0.0f};
-            else from = to;
-            remain = 0.0f;
-            break;
-        }
-
-        // Contact point, nudged just inside the cell being entered so the solidity
-        // question is asked about that cell and not about the boundary itself.
-        vec3 hit = from + (to - from) * bestT;
-        const float nSign = bestDelta > 0.0f ? -1.0f : 1.0f;
-        vec3 probe = hit;
-        axis(probe, bestA) -= nSign * kBounceEpsilon;
-        remain *= (1.0f - bestT);
-
-        if (!cell_solid(grid, probe)) {   // an open face; keep going
-            from = probe;
-            continue;
-        }
-
-        // REFLECT off this face. The normal component flips and keeps
-        // kGrenadeRestitution; the two tangential components — whichever two are not
-        // `bestA` — keep kGrenadeFriction, which is what turns a bounce into a roll
-        // instead of letting a grenade skate down a corridor forever.
-        for (int a = 0; a < 3; ++a) {
-            if (a == bestA) axis(vel, a) = -axis(vel, a) * kGrenadeRestitution;
-            else axis(vel, a) *= kGrenadeFriction;
-        }
-        axis(hit, bestA) += nSign * kBounceEpsilon;   // rest OUTSIDE the face
-        from = hit;
-        if (length(vel) < kGrenadeRestSpeed) {
-            vel = vec3{0.0f, 0.0f, 0.0f};   // settled; see kGrenadeRestSpeed
-            break;
-        }
-    }
-    // x/y wrap, z does not — the same convention the bullet integrator uses, and the
-    // same one the level stack has (W does not wrap either, [AGENTS.md]).
-    pos.x = wrapf(from.x, kWorldExtent);
-    pos.y = wrapf(from.y, kWorldExtent);
-    pos.z = from.z;
-}
 
 // WHERE THE BARREL IS — the one function that decides it, for every spawner.
 //
@@ -287,7 +174,7 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
                 const auto beh = static_cast<MobBehaviour>(def.behaviour);
                 if (wall_query_needed(def.aiFlags, beh)) {
                     if (const Transform* tr = reg.try_get<Transform>(target)) {
-                        const bool nearWall = adjacent_wall(*grid, tr->pos);
+                        const bool nearWall = body_wall_adjacent(*grid, tr->pos);
                         const float incMult = behaviour_incoming_mult(beh, nearWall);
                         if (incMult != 1.0f) {
                             int mitigated = static_cast<int>(static_cast<float>(dmg) * incMult + 0.5f);
@@ -520,6 +407,14 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
         // an entity has vanished.
         bus.publish(EventType::NpcDied, victim, kind,
                     static_cast<std::uint32_t>(entt::to_integral(d.killer)), tick);
+        // ДЕЯНИЕ «убить» (S19): убийство ЧЕЛОВЕКА человеком — с местом, для
+        // свидетелей. Смерть монстра — не дипломатия (тот же гейт, что был у
+        // всевидящего relations_drain_deaths, теперь у продюсера). Цена и
+        // локализация — у потребителя witness_step; NpcDied остаётся
+        // бухгалтерией для остальных читателей.
+        if (pool.valid(victim) && d.killer != entt::null && reg.valid(d.killer))
+            if (const Transform* vt = reg.try_get<Transform>(e))
+                deed_publish(bus, kVerbKill, d.killer, victim, vt->pos, tick);
 
         // Player / camera holder entities are destroyed for body swapping
         if (reg.all_of<CameraTag>(e)) {
@@ -532,39 +427,43 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             // Pure NPC deaths carry NpcRef only — MobRef is optional.
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
-            if (reg.all_of<Velocity>(e)) reg.remove<Velocity>(e);
             reg.remove<Dead>(e);
 
-
-            if (auto* aabb = reg.try_get<AABB>(e)) {
-                const float h = aabb->half.y;
-                aabb->half.y = 0.18f;                     // Flatten on ground
-                aabb->half.z = std::max(h * 0.75f, 0.55f); // Extend along floor
-            }
-            if (auto* tr = reg.try_get<Transform>(e)) {
-                tr->pos.y -= 0.45f; // Place flush on floor surface
+            // C (S3/S14.1, 2026-08-21): труп — RagdollRoll-ПРОП с контейнером.
+            // Ручная косметика умерла: плющение AABB и сдвиг pos.y −0.45
+            // (Y-привилегия при Z-мире!) изображали позу — теперь тело честно
+            // валится и катается физикой пропов (тот же путь, что мяч и
+            // ведро). Затемнение тинта остаётся: это состояние материи, не
+            // поза. Velocity НЕ снимается — рагдоллу нужна скорость смерти.
+            if (!reg.all_of<Velocity>(e)) reg.emplace<Velocity>(e);
+            reg.emplace_or_replace<PropFallMode>(e, PropFallMode::RagdollRoll);
+            reg.emplace_or_replace<DynamicBodyTag>(e);
+            // Инкременты 6+8 рагдолл-эпика: труп — ГУМАНОИД из тел ЯДРА
+            // (голова—грудь—ТАЗ—ноги цепью штанг; корень = таз, на нём лут и
+            // сейв-идентичность). Габариты и массы выведены из тела; масса
+            // честная (Mass, 70 кг дефолт — тот же фолбэк, что у драга).
+            // SelfIntegrating выводит мёртвого из свепт-AABB пути агентов.
+            {
+                const vec3 half = reg.all_of<AABB>(e)
+                                      ? reg.get<AABB>(e).half
+                                      : vec3{0.4f, 0.4f, 0.9f};
+                const float kg =
+                    reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg : Mass{}.kg;
+                spawn_form_segments(reg, e, FormId::Humanoid, half, kg,
+                                    kFleshRestitution, kFleshFriction);
             }
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body
                 rend->color = vec3{rend->color.x * 0.35f, rend->color.y * 0.35f, rend->color.z * 0.40f};
             }
 
-            // CORP1: move staged loot (CorpseLootPending) into the persistent
-            // Corpse. loot_dead_mobs rolls pure data in the Dead window; this is
-            // the only place Corpse is born (defect 2). No floor Pickup path.
+            // Лут уже лежит в Container-компоненте (Dead-окно, loot.cpp) —
+            // канонический держатель один, перекладка pending→corpse умерла.
             Corpse corpse;
             corpse.mobKind = static_cast<std::uint8_t>(kind);
             corpse.deathTick = static_cast<std::uint32_t>(tick);
-            if (const CorpseLootPending* pend = reg.try_get<CorpseLootPending>(e)) {
-                const std::uint8_t n =
-                    pend->slotCount < static_cast<std::uint8_t>(kMaxCorpseSlots)
-                        ? pend->slotCount
-                        : static_cast<std::uint8_t>(kMaxCorpseSlots);
-                for (std::uint8_t i = 0; i < n; ++i)
-                    corpse.lootSlots[i] = pend->slots[i];
-                corpse.slotCount = n;
-                reg.remove<CorpseLootPending>(e);
-            }
+            if (!reg.all_of<Container>(e)) reg.emplace<Container>(e);
+            Container& lootBox = reg.get<Container>(e);
 
             // jirnyak §19: dump the snapshotted 8×8 bag into Corpse (8 slots),
             // then same-cell Containers (128³). CORP1 forbids a floor Pickup path
@@ -580,19 +479,15 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                 const int by = wrap_macro(static_cast<int>(std::floor(bodyPos.y / cs)));
                 const int bz = wrap_macro(static_cast<int>(std::floor(bodyPos.z / cs)));
 
-                auto push_corpse = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                // Спилл сумки — ЕДИНСТВЕННЫМ примитивом (ещё одна ручная
+                // реализация «добавить» умерла с B3/C).
+                auto push_corpse = [&](ItemId id, std::uint16_t count,
+                                       std::uint8_t cond) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0) return 0;
-                    if (corpse.slotCount >= static_cast<std::uint8_t>(kMaxCorpseSlots))
-                        return count;
-                    ItemSlot& ls = corpse.lootSlots[corpse.slotCount++];
-                    ls.item = id;
-                    // Addition law ([inventory.h]): the u16 cell holds any legal
-                    // shrapnel count; clamp to the item's own stack cap.
-                    const std::uint16_t cap = item_def(id).stackMax;
-                    ls.count = cap && count > cap ? cap : count;
-                    return 0;
+                    return inventory_give(lootBox.inv, id, count, cond);
                 };
-                auto push_cell_containers = [&](ItemId id, std::uint16_t count) -> std::uint16_t {
+                auto push_cell_containers = [&](ItemId id, std::uint16_t count,
+                                                std::uint8_t cond) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0 || !bodyTr) return count;
                     std::uint16_t left = count;
                     for (auto ce : reg.view<Container, const Transform>()) {
@@ -604,35 +499,20 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         const int cz = wrap_macro(static_cast<int>(std::floor(ct.pos.z / cs)));
                         if (cx != bx || cy != by || cz != bz) continue;
                         Container& c = reg.get<Container>(ce);
-                        // Container::count is u16 like the bag cell; the slot's
-                        // ceiling is the item's own stackMax ([inventory.h]).
-                        const std::uint16_t cap = item_def(id).stackMax;
-                        const std::uint16_t lim = cap ? cap : 1;
-                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
-                            if (c.item[si] != id || c.count[si] == 0) continue;
-                            if (c.count[si] >= lim) continue;
-                            const std::uint16_t room =
-                                static_cast<std::uint16_t>(lim - c.count[si]);
-                            const std::uint16_t take = left < room ? left : room;
-                            c.count[si] = static_cast<std::uint16_t>(c.count[si] + take);
-                            left = static_cast<std::uint16_t>(left - take);
-                        }
-                        for (std::uint8_t si = 0; si < kContainerSlots && left > 0; ++si) {
-                            if (c.item[si] != kInvalidItem && c.count[si] != 0) continue;
-                            c.item[si] = id;
-                            const std::uint16_t put = left < lim ? left : lim;
-                            c.count[si] = put;
-                            left = static_cast<std::uint16_t>(left - put);
-                        }
-
+                        // B3: держатель канонический — ручная двухфазная
+                        // раскладка (одна из «восьми реализаций добавить
+                        // предмет», one-container.md) умерла в пользу
+                        // ЕДИНСТВЕННОГО примитива inventory_give.
+                        left = inventory_give(c.inv, id, left, cond);
                     }
                     return left;
                 };
 
                 for (const ItemSlot& s : spilledInv.slots) {
                     if (s.item == kInvalidItem || s.count == 0) continue;
-                    std::uint16_t left = push_corpse(s.item, s.count);
-                    if (left > 0) (void)push_cell_containers(s.item, left);
+                    std::uint16_t left = push_corpse(s.item, s.count, s.condition);
+                    if (left > 0)
+                        (void)push_cell_containers(s.item, left, s.condition);
                 }
             }
 
@@ -858,7 +738,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // Wall-adjacency bias and precedence logic
         const auto beh = static_cast<MobBehaviour>(def.behaviour);
         const bool nearWall = wall_query_needed(def.aiFlags, beh)
-                                  ? adjacent_wall(grid, tr.pos)
+                                  ? body_wall_adjacent(grid, tr.pos)
                                   : false;
         if (behaviour_claims_damage(beh)) {
             dmg *= behaviour_damage_mult(beh, nearWall);
@@ -1250,24 +1130,25 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
                       static_cast<std::uint8_t>(ProjType::Bullet), channel});
 }
 
-void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
-                   const vec3& dir, std::int16_t dmg,
-                   std::uint16_t projSpeedMmps, Entity source,
-                   std::uint8_t blastDm, std::uint16_t fuseMs,
-                   std::uint8_t channel) {
+Entity spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                     const vec3& dir, PropId prop,
+                     std::uint16_t projSpeedMmps, Entity source,
+                     std::uint16_t fuseMs, std::uint64_t tick,
+                     std::uint8_t channel) {
+    if (!prop_valid(prop)) return entt::null;
+    const PropDef& def = prop_def(prop);
     float speed = static_cast<float>(projSpeedMmps) * 0.001f * kCellSize;
     if (speed < 1.0f) speed = 12.0f;
     const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-    if (len < 1e-4f) return;
+    if (len < 1e-4f) return entt::null;
     const float inv = 1.0f / len;
 
     Entity e = reg.create();
     Transform tr;
-    // The same `muzzle_point` as every other spawner. A grenade could get away with
-    // less — it does no contact damage, so being born inside the thrower costs
-    // nothing — but "where the barrel is" having one answer is worth more than the
-    // two lines saved, and the day a thrown weapon does something on contact this
-    // will already be right.
+    // The same `muzzle_point` as every other spawner: "where the barrel is"
+    // has one answer, and a rigid-body grenade DOES do things on contact now
+    // (честный отскок от тел, решение владельца 2026-08-22) — being born
+    // outside the thrower is load-bearing, not cosmetic.
     const vec3 u{dir.x * inv, dir.y * inv, dir.z * inv};
     const Transform* stf = reg.valid(source) ? reg.try_get<Transform>(source)
                                              : nullptr;
@@ -1280,18 +1161,69 @@ void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
     reg.emplace<Velocity>(e, Velocity{vec3{dir.x * inv * speed,
                                            dir.y * inv * speed,
                                            dir.z * inv * speed}});
-    reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
-    reg.emplace<SelfIntegrating>(e);
-    // Olive-drab, and darker than either tracer: the one projectile you are supposed
-    // to be able to spot lying on the floor and run away from.
-    reg.emplace<Renderable>(e, Renderable{vec3{0.42f, 0.50f, 0.28f}});
-    // gravityPct 100 — a thrown weight obeys gravity in full. The 40% flattening
-    // exists so a camera-aimed BULLET is not handed a lob it did not aim
-    // ([combat.h] Projectile::gravityPct); an arc is the whole point of a throw.
-    reg.emplace<Projectile>(
-        e, Projectile{source, dmg, fuseMs, 100,
-                      static_cast<std::uint8_t>(ProjType::Grenade), channel,
-                      blastDm});
+
+    // Тело РАГДОЛЛ-ЯДРА, не снаряд: габарит и масса — авторские, из строки
+    // props.csv; упругость и трение — из материала строки, тем же законом,
+    // каким детач отдаёт сорванный проп ([prop_system] detach_single_prop).
+    // Сфера по тонкой стороне — граната катается, а не кувыркается.
+    const vec3 half{static_cast<float>(def.sizeXMm) * 0.0005f,
+                    static_cast<float>(def.sizeYMm) * 0.0005f,
+                    static_cast<float>(def.sizeZMm) * 0.0005f};
+    const float hardness = static_cast<float>(
+        def.matId < kMatCount ? kMatHardness[def.matId] : 64);
+    rigid_attach_sphere(reg, e, std::min({half.x, half.y, half.z}),
+                        static_cast<float>(def.massG) * 0.001f,
+                        restitution_from_hardness(hardness),
+                        friction_from_hardness(hardness));
+    // BodyPass needs AABB — без него заряд невидим (закон детача).
+    reg.emplace<AABB>(e, AABB{half});
+    // Olive-drab, and darker than either tracer: the one thing you are
+    // supposed to be able to spot lying on the floor and run away from.
+    reg.emplace<Renderable>(e, Renderable{prop_color(def)});
+
+    // Потенциал — копия строки; фитиль — абсолютный сим-тик, взводит
+    // бросающий (мс → тики, вверх: фитиль не короче авторского).
+    reg.emplace<Charge>(e, Charge{def.explosiveG, def.chargeTrigger, channel});
+    const std::uint64_t fuseTicks =
+        (static_cast<std::uint64_t>(fuseMs) * kSimHz + 999u) / 1000u;
+    reg.emplace<ChargeArmed>(e, ChargeArmed{tick + fuseTicks, source});
+    return e;
+}
+
+// Фитили. Сбор — потом взрыв: detonate() зовёт apply_damage, а тот
+// emplace'ит Dead и может переаллоцировать пулы под view.
+std::uint32_t charge_step(Registry& reg, NpcPool& pool, LevelStack& stack,
+                          LayerId layer, std::uint64_t tick,
+                          CarveProposalQueue* carves,
+                          ParticleBurstQueue* particles, NoiseField* noise) {
+    struct Boom {
+        Entity e;
+        vec3 at;
+        std::uint16_t explosiveG;
+        Entity src;
+        std::uint8_t ch;
+    };
+    static thread_local std::vector<Boom> due;
+    due.clear();
+    for (auto e : reg.view<const Charge, const ChargeArmed, const Transform>()) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const ChargeArmed& arm = reg.get<const ChargeArmed>(e);
+        if (tick < arm.atTick) continue;
+        const Charge& c = reg.get<const Charge>(e);
+        due.push_back(Boom{e, tr.pos, c.explosiveG, arm.source, c.channel});
+    }
+    for (const Boom& b : due) {
+        // Урон и радиус — вывод из массы ВВ ([combat.h] charge_dmg/
+        // charge_radius_m); соль сидов — энтити заряда, как у снаряда была.
+        detonate(reg, pool, stack, layer, b.at, charge_dmg(b.explosiveG),
+                 charge_radius_m(b.explosiveG), b.src,
+                 static_cast<DamageChannel>(b.ch), tick,
+                 static_cast<std::uint32_t>(entt::to_integral(b.e)), carves,
+                 particles, noise);
+        if (reg.valid(b.e)) reg.destroy(b.e);
+    }
+    return static_cast<std::uint32_t>(due.size());
 }
 
 // **Never call this from inside a live view.** The first web in a session runs
@@ -1389,6 +1321,159 @@ std::uint32_t slow_step(Registry& reg, LayerId layer, float dt) {
     return live;
 }
 
+// ДЕТОНАЦИЯ — один примитив взрыва (решение владельца 2026-08-21: «пропы в
+// целом могут взрываться, расширяемо»). Вынесена дословно из гранатной
+// ветки projectile_step, чтобы взрыв перестал принадлежать снаряду: её
+// зовут гранатный фитиль и любой проп-заряд (charge_step). Внутри — сбор
+// тел в радиусе с гейтом los_clear (стена останавливает осколок), линейный
+// спад с честной кромкой (пол урона 1), carve-предложение (combat proposes,
+// app disposes), шум severity-5 и две вспышки частиц. `source` — только
+// атрибуция килла, никогда не исключение (правило владельца 2026-08-12).
+// `seedSalt` — соль детерминизма (энтити-виновник); выражения сидов
+// сохранены дословно, взрыв бит-в-бит воспроизводим.
+// Возвращает true, если взрыв кого-то задел или карв принят.
+bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
+              const vec3& at, std::int16_t dmg, float radiusM, Entity source,
+              DamageChannel channel, std::uint64_t tick,
+              std::uint32_t seedSalt, CarveProposalQueue* carves,
+              ParticleBurstQueue* particles, NoiseField* noise) {
+    if (!stack.valid(layer) || radiusM <= 0.0f) return false;
+    const MacroGrid& grid = stack.layer(layer).grid();
+    const float R = radiusM;
+    bool landed = false;
+
+    // Gather first, damage second — the same two-phase discipline as
+    // projectile_step, one level down and for the same reason:
+    // `apply_damage` emplaces `Dead`, which can reallocate the component pool
+    // that the sweep is walking.
+    struct Caught { Entity e; float d; };
+    std::vector<Caught> caught;
+    auto sweep = [&](Entity cand, const vec3& cp) {
+        const float dx = wrap_delta_f(at.x, cp.x, kWorldExtent);
+        const float dy = wrap_delta_f(at.y, cp.y, kWorldExtent);
+        const float dz = wrap_delta_f(at.z, cp.z, kWorldExtent);
+        const float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > R * R) return;
+        // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
+        // that may refuse a target. It is not an exclusion: it does not ask
+        // WHO the body is, it asks whether anything solid stands between the
+        // blast and it — the same question, at the same cell granularity,
+        // that already stops a bullet. Distance alone was a grenade that
+        // killed through a load-bearing wall.
+        //
+        // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
+        // it lives in the core because it is a fact about geometry, and
+        // [mob_behaviour.h] has a dropped sight test waiting for it.
+        //
+        // NOT counted here, and the reason is the layer rather than
+        // indifference: every other refusal in this file is counted
+        // (`droppedFull` and friends) because there is a queue to hang the
+        // counter on and an app-side `GIGA_*_DBG` line to print it. There is
+        // neither here, and `giga_game` holds no `getenv` anywhere on
+        // purpose — it stays headless and pure ([AGENTS.md]). So the number
+        // is asserted where it is measured: `test_grenade` block 7 prints
+        // how many bodies the wall shielded, on every ctest run.
+        // Гейт осколка СУБВОКСЕЛЬНО (аудит 2026-08-25, К1-9): клеточный
+        // los_clear на лепленом этаже пропускал осколки сквозь тонкие стены
+        // (полных клеток 0.4%). Правило концов los_clear («свой карман не
+        // экранирует») сохраняется сдвигом старта на одну субъячейку вдоль
+        // луча: граната, лежащая НА полу, не глушится собственной опорой.
+        {
+            const vec3 seg{cp.x - at.x, cp.y - at.y, cp.z - at.z};
+            const float len = std::sqrt(dot(seg, seg));
+            if (len > kVoxelSize * 1.05f) {
+                const float skip = kVoxelSize * 1.05f / len;
+                const vec3 from{at.x + seg.x * skip, at.y + seg.y * skip,
+                                at.z + seg.z * skip};
+                SubRayHit frag;
+                if (sub_march(grid, from, cp, frag)) return;
+            }
+        }
+        caught.push_back(Caught{cand, std::sqrt(d2)});
+    };
+    for (auto m : reg.view<const MobRef, const Transform>()) {
+        const Transform& mt = reg.get<const Transform>(m);
+        if (mt.layer != layer) continue;
+        sweep(m, mt.pos);
+    }
+    for (auto b : reg.view<const NpcRef, const Transform>()) {
+        // Anything already swept as a monster is not swept again as a body.
+        // Nothing in the tree carries both today; a blast that charged such an
+        // entity twice would be a silent double-damage and is cheaper to make
+        // impossible than to notice. The camera holder is an ordinary NpcRef
+        // and IS in this loop — that is how the thrower gets hit.
+        if (reg.all_of<MobRef>(b)) continue;
+        const Transform& bt = reg.get<const Transform>(b);
+        if (bt.layer != layer) continue;
+        sweep(b, bt.pos);
+    }
+
+    for (const Caught& c : caught) {
+        if (!reg.valid(c.e)) continue;
+        // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
+        // and not inverse-square because inverse-square is the law for a
+        // point source radiating into free space, and a fragmentation blast
+        // in a 2 m corridor is not that — it is fragments that spread and
+        // slow. Linear is also the one shape a player can read off two
+        // explosions: half as far, twice the damage.
+        //
+        // The floor of 1 keeps the rim honest: inside the radius you were
+        // caught in the blast, and "caught in the blast for zero" would make
+        // the radius a lie at its own edge.
+        const float f = 1.0f - c.d / R;
+        std::int16_t dmgHere =
+            static_cast<std::int16_t>(static_cast<float>(dmg) * f + 0.5f);
+        if (dmgHere < 1) dmgHere = 1;
+        DamageResult r =
+            apply_damage(reg, pool, c.e, dmgHere, channel, source, &grid,
+                         particles, &stack.layer(layer).gravity());
+        if (!r.hit) continue;
+        landed = true;
+        // Credited exactly as the bullet path credits a shot, so a grenade
+        // kill counts on the same counter the HUD already prints and, through
+        // `Dead::killer` -> the NpcDied event, on the same contract/quest
+        // ledger ([problems.md] §40). A monster's grenade credits a monster
+        // and therefore closes nobody's contract.
+        if (reg.valid(source)) {
+            if (auto* pr = reg.try_get<PlayerRanged>(source)) ++pr->hits;
+            if (r.lethal)
+                if (auto* pm = reg.try_get<PlayerMelee>(source)) ++pm->kills;
+        }
+    }
+
+    // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
+    // the app disposes. A refusal here is COUNTED, never silent —
+    // `droppedFull` is why a grenade that opened no hole can be told from a
+    // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
+    if (carves) {
+        const std::uint32_t seed =
+            static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^ seedSalt;
+        if (carves->push(at.x, at.y, at.z, R * kBlastCarveScale,
+                         carve_power_from_dmg(dmg), seed)) {
+            landed = true;
+        }
+    }
+    // Heard, at severity 5 — the loudest thing in the game, and published at
+    // the BLAST rather than at whoever threw it, because the place a monster
+    // should walk toward is where the bang was.
+    if (noise)
+        noise_publish(*noise, layer, at, blast_noise(R),
+                      static_cast<std::uint32_t>(entt::to_integral(source)));
+    // Flash and debris, through the unified pool ([particles.h]). Two bursts
+    // and not one: the spark is the detonation, the debris is the wall it
+    // took with it, and they are separate rows of data/particles.csv with
+    // separate lifetimes.
+    if (particles) {
+        const std::uint32_t pseed =
+            static_cast<std::uint32_t>(tick) ^ seedSalt;
+        particles->push(at, vec3{0.0f, 0.0f, 1.0f}, ParticleKind::Spark, 24, 0,
+                        pseed);
+        particles->push(at, vec3{0.0f, 0.0f, 0.5f}, ParticleKind::Debris, 18,
+                        0, pseed ^ 0x5bf03635u);
+    }
+    return landed;
+}
+
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick, StatusSet* playerStatus,
@@ -1437,17 +1522,55 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // Wall impact: solid geometry stopped the shot. impactPos is the contact
         // point (projectile position at the stop). onWall is mutually exclusive
         // with onVictim/other — a body hit never also carves the wall behind it.
+        // (Детонации здесь больше нет: граната — проп-заряд, фитиль решает
+        // charge_step, 2026-08-22.)
         bool onWall = false;
         vec3 impactPos{0, 0, 0};
-        // The fuse ran out on a grenade. Mutually exclusive with all three of the
-        // above: a detonation strikes nothing in particular, it strikes a PLACE
-        // (impactPos) and everything standing in it. Blast radius in decimetres,
-        // carried off the Projectile in phase 1 for the same reason projType and
-        // channel are — the entity is destroyed at the end of the resolution loop.
-        bool onDetonate = false;
-        std::uint8_t blastDm = 0;
     };
     std::vector<Hit> resolved;
+
+    // §59.3: свип «пуля × вся толпа» платил полный проход по MobRef и NpcRef
+    // на каждый снаряд каждый тик (~500 тел × пули × 125 Гц). Бины тел —
+    // общий примитив [sim/cell_bins.h]; политика этого потребителя —
+    // пере-сборка ЛЕНИВО раз на вызов (тела за вызов не движутся, снаряды
+    // читают один снимок), и только когда есть кому стрелять. Членство то
+    // же, что у старых двух view: мобы слоя + толпа слоя без victim
+    // (приоритет камеры разобран до свипа). thread_local — переиспользуем
+    // ёмкость, ноль аллокаций на горячем пути (правило AGENTS.md).
+    static thread_local CellBins bodyBins;
+    bool bodyBinsBuilt = false;
+    auto build_body_bins = [&]() {
+        bodyBins.clear();
+        for (auto m : reg.view<const MobRef, const Transform>()) {
+            const Transform& mt = reg.get<const Transform>(m);
+            if (mt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(mt.pos.x),
+                                      cell_coord(mt.pos.y),
+                                      cell_coord(mt.pos.z)),
+                         m);
+        }
+        for (auto b : reg.view<const NpcRef, const Transform>()) {
+            if (b == victim) continue; // проверен выше, в приоритете
+            const Transform& bt = reg.get<const Transform>(b);
+            if (bt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(bt.pos.x),
+                                      cell_coord(bt.pos.y),
+                                      cell_coord(bt.pos.z)),
+                         b);
+        }
+        // Динамические ПРОПЫ-ЗАРЯДЫ (живая бочка, S3) — тоже мишени: пуля
+        // взводит их той же NEAREST-логикой, что бьёт тела.
+        for (auto b : reg.view<const Charge, const RigidBody, const Transform>()) {
+            const Transform& bt = reg.get<const Transform>(b);
+            if (bt.layer != layer) continue;
+            bodyBins.add(cell_bin_key(layer, cell_coord(bt.pos.x),
+                                      cell_coord(bt.pos.y),
+                                      cell_coord(bt.pos.z)),
+                         b);
+        }
+        bodyBins.build();
+        bodyBinsBuilt = true;
+    };
 
     for (auto e : reg.view<Projectile, Transform, Velocity>()) {
         Transform& tr = reg.get<Transform>(e);
@@ -1491,47 +1614,23 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                                  pm ? pm->kg : Mass{}.kg),
                           dt);
         }
-        // A GRENADE SKIPS ACROSS THE VOXELS INSTEAD OF ENDING ON THEM. Everything
-        // above this line is shared — one integrator, one gravity vector — and
-        // everything below it differs, because contact means the opposite thing for
-        // the two: a bullet is spent by the first solid it meets, a grenade is
-        // redirected by it. [ARCHITECTURE.md] §Манифест п.5.
-        const bool grenade = static_cast<ProjType>(p.proj) == ProjType::Grenade;
         // Точка ДО интеграции — из неё восстанавливается пересечённая грань,
         // если шаг закончился в твёрдом (рикошет ниже). Без обёртки: тест
         // плоскостей работает в непрерывных координатах, обернёт финал.
+        // (Гранатной развилки интегратора больше нет: снаряд — только
+        // быстрое, летящее и решаемое маршем; медленное катает rigid.)
         const vec3 prevPos = tr.pos;
-        if (grenade) {
-            grenade_advance(grid, tr.pos, v.v, dt);
-        } else {
-            tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
-            tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-            tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
-        }
+        tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
+        tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
+        tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
 
         if (p.ttlMs == 0) {
-            // THE SAME ZERO, TWO MEANINGS. For a bullet the TTL is a backstop and
-            // reaching it means the shot is spent — dmg 0, nothing happens, the
-            // entity goes away. For a grenade it is the FUSE, and reaching it is the
-            // entire point of the object.
-            Hit h{e, grenade ? p.dmg : static_cast<std::int16_t>(0), p.source, false};
-            if (grenade) {
-                h.onDetonate = true;
-                h.impactPos = tr.pos;
-                h.projType = p.proj;
-                h.channel = p.channel;
-                h.blastDm = p.blastDm;
-            }
-            resolved.push_back(h);
+            // TTL is a backstop: reaching it means the shot is spent — dmg 0,
+            // nothing happens, the entity goes away.
+            resolved.push_back(
+                Hit{e, static_cast<std::int16_t>(0), p.source, false});
             continue;
         }
-
-        // A live grenade touches nothing else. Not the body it flies past — a
-        // shoulder is not a wall and must not stop it — and not the wall it just
-        // bounced off, which the block above already resolved. Its whole interaction
-        // with the world for the next three seconds is geometry, and geometry is
-        // handled. The fuse is the only thing that can end it.
-        if (grenade) continue;
 
         // The camera holder, tested like anything else — INCLUDING against his own
         // bullet, since 2026-08-13.
@@ -1587,7 +1686,8 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         {
             Entity best = entt::null;
             float bestD2 = kProjHitRadius * kProjHitRadius;
-            auto consider = [&](Entity cand, const vec3& cp) {
+            auto consider = [&](Entity cand) {
+                const vec3& cp = reg.get<const Transform>(cand).pos;
                 const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtent);
                 const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtent);
                 const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtent);
@@ -1597,120 +1697,130 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                     best = cand;
                 }
             };
-            for (auto m : reg.view<const MobRef, const Transform>()) {
-                const Transform& mt = reg.get<const Transform>(m);
-                if (mt.layer != layer) continue;
-                consider(m, mt.pos);
-            }
-            for (auto b : reg.view<const NpcRef, const Transform>()) {
-                if (b == victim) continue;   // already tested above, at priority
-                const Transform& bt = reg.get<const Transform>(b);
-                if (bt.layer != layer) continue;
-                consider(b, bt.pos);
-            }
+            // §59.3: 27 соседних бакетов вместо двух полных view — покрытие
+            // радиуса заявлено static_assert(kProjHitRadius <= kCellSize)
+            // ниже, у вызова пропов; узкая фаза (NEAREST по точной
+            // wrap-дистанции) не менялась.
+            if (!bodyBinsBuilt) build_body_bins();
+            bodyBins.for_each_near(layer, cell_coord(tr.pos.x),
+                                   cell_coord(tr.pos.y), cell_coord(tr.pos.z),
+                                   consider);
             if (best != entt::null) {
+                // Заряд от урона: пуля ВЗВОДИТ (atTick=0 — «уже пора»),
+                // charge_step рвёт этим же тиком; атрибуция — стрелявшему.
+                if (const Charge* dc = reg.try_get<Charge>(best);
+                    dc && dc->trigger != 0u &&
+                    !reg.all_of<ChargeArmed>(best)) {
+                    reg.emplace<ChargeArmed>(best, ChargeArmed{0u, p.source});
+                    resolved.push_back(
+                        Hit{e, static_cast<std::int16_t>(0), p.source, false});
+                    continue;
+                }
                 resolved.push_back(Hit{e, p.dmg, p.source, false, best, p.proj,
                                        p.channel});
                 continue;
             }
         }
 
-        // Solid geometry stops it. Cell-level rather than sub-voxel on purpose: a
-        // shot clipping the corner of a wall should stop, and the sub-voxel mask
-        // would let it slip through a half-carved cell that reads as solid.
-        // Carry p.dmg so phase 2 can propose a wall chip (carve_power_from_dmg);
-        // body damage is still skipped via onWall (no onVictim/other).
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = static_cast<int>(tr.pos.z / kCellSize);
-        const bool outOfZ = cz < 0 || cz >= kMacroDim;
-        if (outOfZ || grid.cell(cx, cy, wrap_macro(cz)) != kCellAir) {
+        // ГЕОМЕТРИЯ — субвоксельный вопрос ([CANON.md] S2: этаж состоит из
+        // субвокселей): попадание есть первый ТВЁРДЫЙ СУБВОКСЕЛЬ на отрезке
+        // шага (sub_march — единственный субвоксельный марш, [world/los.h]),
+        // не макро-клетка. Макро-тест объявлял «стеной» всю клетку с материей
+        // в паре верхних подслоёв (падик-сэндвич: плиты в sz=6..7) — пуля
+        // снизу гибла у нижней грани, в 1.5 м от плиты, и скол-карв катал
+        // пустоту: стрельба вверх и в стены не разрушала ничего, лампа на
+        // потолке не разбивалась (плейтест 2026-08-19, tests/suite_shotsub.inl).
+        // Заодно умерла обратная ловушка (аудит §1.1): пуля больше не вязнет
+        // в макро-твёрдой, но прокарвленной насквозь клетке — нет материи на
+        // отрезке, нет попадания. Направление здесь не упоминается нигде:
+        // марш изотропен по построению.
+        const vec3 to = prevPos + v.v * dt; // непрерывные координаты, обернёт финал
+        SubRayHit sub;
+        if (sub_march(grid, prevPos, to, sub)) {
+            // Материал — честный, у ПОПАВШЕГО субвокселя (sub_material_at
+            // читает страницу смешанной клетки), не у клетки целиком.
+            const CellType mat =
+                sub_material_at(stack.layer(layer), sub.cx, sub.cy, sub.cz,
+                                sub.sx, sub.sy, sub.sz);
+            const float spd = length(v.v);
+            const bool bullet =
+                static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg >= 4;
             // РИКОШЕТ по касательной от твёрдой поверхности (формула форка
             // 16004b86, нормаль — НАША). У форка нормаль бралась из argmax
             // скорости — у такой «нормали» cos падения ≥ 1/√3 ≈ 0.577, что
             // выше обоих порогов (0.55/0.40): его рикошет был мёртвым кодом.
-            // Честная нормаль — грань, через которую шаг ВОШЁЛ в терминальную
-            // клетку: по каждой оси со сменой индекса клетки берётся время
-            // пересечения её границы, грань входа — ПОЗДНЕЙШЕЕ из них (та же
-            // плоскостная арифметика, что в grenade_advance, только с конца).
-            const CellType mat =
-                outOfZ ? kMatConcrete : grid.cell(cx, cy, wrap_macro(cz));
-            const float spd = length(v.v);
-            const bool bullet =
-                static_cast<ProjType>(p.proj) == ProjType::Bullet && p.dmg >= 4;
-            if (bullet && spd > 1.0f) {
+            // Честная нормаль — грань, через которую луч ВОШЁЛ в терминальный
+            // субвоксель; марш отдаёт её сам (axis/sign), плоскостная
+            // арифметика с конца схлопнулась в DDA. axis < 0 — старт уже в
+            // материи, грани входа нет: отражать не от чего, пуля гаснет.
+            if (bullet && spd > 1.0f && sub.axis >= 0) {
                 const vec3 dir = v.v * (1.0f / spd);
-                float bestT = -1.0f;
-                int bestA = -1;
-                float bestD = 0.0f;
-                const vec3 to = prevPos + v.v * dt; // непрерывные координаты
-                for (int a = 0; a < 3; ++a) {
-                    const float f = axis(prevPos, a);
-                    const float d = axis(to, a) - f;
-                    if (d > -1e-9f && d < 1e-9f) continue;
-                    const int cf = static_cast<int>(std::floor(f / kCellSize));
-                    const int ct =
-                        static_cast<int>(std::floor(axis(to, a) / kCellSize));
-                    if (cf == ct) continue;
-                    // Граница терминальной клетки по этой оси, со стороны входа.
-                    const float plane =
-                        static_cast<float>(d > 0.0f ? ct : ct + 1) * kCellSize;
-                    const float t = (plane - f) / d;
-                    if (t > bestT) { bestT = t; bestA = a; bestD = d; }
-                }
-                if (bestA >= 0) {
-                    vec3 n{0.0f, 0.0f, 0.0f};
-                    axis(n, bestA) = bestD > 0.0f ? -1.0f : 1.0f;
-                    const float cosInc = -dot(dir, n); // ~0 — касание вскользь
-                    // Сталь звонче бетона: шире окно угла, выше упругость,
-                    // меньше съеденного урона. Мягкое (hardness < 180 и не из
-                    // списков) не отражает вовсе — пуля вязнет, как раньше.
-                    const bool isSteel =
-                        mat == kMatTread || mat == kMatElectricGrate ||
-                        mat == kMatPipeMetal || mat == kMatDoor ||
-                        mat == kMatShopShutter;
-                    const bool isConcrete = mat == kMatConcrete ||
-                                            mat == kMatFactoryWall ||
-                                            mat == kMatSlabTan || outOfZ;
-                    const bool isHard = material_hardness(mat) >= 180 ||
-                                        isSteel || isConcrete;
-                    const float maxCos = isSteel ? 0.55f : 0.40f;
-                    if (isHard && cosInc > 0.01f && cosInc < maxCos) {
-                        const float eRest = isSteel ? 0.55f : 0.40f;
-                        const float fFric = isSteel ? 0.85f : 0.70f;
-                        const vec3 vn = n * dot(v.v, n);
-                        const vec3 vt = v.v - vn;
-                        v.v = vt * fFric - vn * eRest;
-                        // Точка контакта + отжим от грани, чтобы следующий шаг
-                        // спрашивал воздух, а не ту же клетку.
-                        vec3 hitP =
-                            prevPos + (to - prevPos) * (bestT < 0.0f ? 0.0f : bestT);
-                        axis(hitP, bestA) += axis(n, bestA) * 0.02f;
-                        tr.pos.x = wrapf(hitP.x, kWorldExtent);
-                        tr.pos.y = wrapf(hitP.y, kWorldExtent);
-                        tr.pos.z = hitP.z;
-                        p.dmg = static_cast<std::int16_t>(
-                            (p.dmg * (isSteel ? 65 : 50) + 50) / 100);
-                        const std::uint32_t rseed =
-                            static_cast<std::uint32_t>(tick) ^
-                            static_cast<std::uint32_t>(entt::to_integral(e));
-                        // Скол мельче прямого попадания, искры — от материала,
-                        // который высекли, не от выдуманного.
-                        if (carves)
-                            carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
-                                         kBulletCarveRadius * 0.6f,
-                                         carve_power_from_dmg(p.dmg), rseed);
-                        if (particles)
-                            particles->push(tr.pos, n * 0.5f - dir * 0.5f,
-                                            ParticleKind::Spark,
-                                            isSteel ? 12 : 6, mat, rseed);
-                        continue; // пуля жива и летит дальше
-                    }
+                vec3 n{0.0f, 0.0f, 0.0f};
+                axis(n, sub.axis) = sub.sign;
+                const float cosInc = -dot(dir, n); // ~0 — касание вскользь
+                // Сталь звонче бетона: шире окно угла, выше упругость,
+                // меньше съеденного урона. Мягкое (hardness < 180 и не из
+                // списков) не отражает вовсе — пуля вязнет, как раньше.
+                const bool isSteel =
+                    mat == kMatTread || mat == kMatElectricGrate ||
+                    mat == kMatPipeMetal || mat == kMatDoor ||
+                    mat == kMatShopShutter;
+                const bool isConcrete = mat == kMatConcrete ||
+                                        mat == kMatFactoryWall ||
+                                        mat == kMatSlabTan;
+                const bool isHard = material_hardness(mat) >= 180 ||
+                                    isSteel || isConcrete;
+                const float maxCos = isSteel ? 0.55f : 0.40f;
+                if (isHard && cosInc > 0.01f && cosInc < maxCos) {
+                    const float eRest = isSteel ? 0.55f : 0.40f;
+                    const float fFric = isSteel ? 0.85f : 0.70f;
+                    const vec3 vn = n * dot(v.v, n);
+                    const vec3 vt = v.v - vn;
+                    v.v = vt * fFric - vn * eRest;
+                    // Точка контакта + отжим от грани, чтобы следующий шаг
+                    // спрашивал воздух, а не тот же субвоксель.
+                    vec3 hitP = prevPos + (to - prevPos) * sub.t;
+                    axis(hitP, sub.axis) += axis(n, sub.axis) * 0.02f;
+                    tr.pos.x = wrapf(hitP.x, kWorldExtent);
+                    tr.pos.y = wrapf(hitP.y, kWorldExtent);
+                    tr.pos.z = wrapf(hitP.z, kWorldExtent);
+                    p.dmg = static_cast<std::int16_t>(
+                        (p.dmg * (isSteel ? 65 : 50) + 50) / 100);
+                    const std::uint32_t rseed =
+                        static_cast<std::uint32_t>(tick) ^
+                        static_cast<std::uint32_t>(entt::to_integral(e));
+                    // Скол мельче прямого попадания, искры — от материала,
+                    // который высекли, не от выдуманного. Карв у грани входа:
+                    // материя терминального субвокселя — в четверти метра за ней.
+                    if (carves)
+                        carves->push(tr.pos.x, tr.pos.y, tr.pos.z,
+                                     kBulletCarveRadius * 0.6f,
+                                     carve_power_from_dmg(p.dmg), rseed);
+                    if (particles)
+                        particles->push(tr.pos, n * 0.5f - dir * 0.5f,
+                                        ParticleKind::Spark,
+                                        isSteel ? 12 : 6, mat, rseed);
+                    continue; // пуля жива и летит дальше
                 }
             }
+            // Пуля гибнет о материю — В ТОЧКЕ КОНТАКТА, не в конце шага: и
+            // трассер, и труп сущности остаются у стены, а не внутри неё.
+            const vec3 stopP = prevPos + (to - prevPos) * sub.t;
+            tr.pos.x = wrapf(stopP.x, kWorldExtent);
+            tr.pos.y = wrapf(stopP.y, kWorldExtent);
+            tr.pos.z = wrapf(stopP.z, kWorldExtent);
             Hit h{e, p.dmg, p.source, false};
             h.onWall = true;
-            h.impactPos = tr.pos;
+            // Скол-карв центруется В ЦЕНТРЕ попавшего субвокселя ([CANON.md]
+            // S2): kBulletCarveRadius = 0.35 от него гарантированно накрывает
+            // материю, тогда как центр у грани клетки накрывал воздух.
+            h.impactPos = vec3{
+                (static_cast<float>(sub.cx * kSubDim + sub.sx) + 0.5f) *
+                    kVoxelSize,
+                (static_cast<float>(sub.cy * kSubDim + sub.sy) + 0.5f) *
+                    kVoxelSize,
+                (static_cast<float>(sub.cz * kSubDim + sub.sz) + 0.5f) *
+                    kVoxelSize};
             h.projType = p.proj;
             h.channel = p.channel;
             resolved.push_back(h);
@@ -1766,134 +1876,20 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // `h.source` is read exactly twice below, both times to CREDIT a kill, never
         // to skip a target. That is the whole of the attribution/exclusion
         // distinction the 2026-08-12 ruling turns on.
-        if (h.onDetonate && h.blastDm > 0) {
-            const float R = static_cast<float>(h.blastDm) * 0.1f;
-
-            // Gather first, damage second — the same two-phase discipline as the
-            // enclosing function, one level down and for the same reason:
-            // `apply_damage` emplaces `Dead`, which can reallocate the component pool
-            // that the sweep is walking.
-            struct Caught { Entity e; float d; };
-            std::vector<Caught> caught;
-            auto sweep = [&](Entity cand, const vec3& cp) {
-                const float dx = wrap_delta_f(h.impactPos.x, cp.x, kWorldExtent);
-                const float dy = wrap_delta_f(h.impactPos.y, cp.y, kWorldExtent);
-                const float dz = wrap_delta_f(h.impactPos.z, cp.z, kWorldExtent);
-                const float d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > R * R) return;
-                // A WALL STOPS A FRAGMENT, and this is the only thing in the blast
-                // that may refuse a target. It is not an exclusion: it does not ask
-                // WHO the body is, it asks whether anything solid stands between the
-                // blast and it — the same question, at the same cell granularity,
-                // that already stops a bullet and bounces a grenade. Distance alone
-                // was a grenade that killed through a load-bearing wall.
-                //
-                // `los_clear` is the first LOS primitive in the tree ([world/los.h]);
-                // it lives in the core because it is a fact about geometry, and
-                // [mob_behaviour.h] has a dropped sight test waiting for it.
-                //
-                // NOT counted here, and the reason is the layer rather than
-                // indifference: every other refusal in this file is counted
-                // (`droppedFull` and friends) because there is a queue to hang the
-                // counter on and an app-side `GIGA_*_DBG` line to print it. There is
-                // neither here, and `giga_game` holds no `getenv` anywhere on
-                // purpose — it stays headless and pure ([AGENTS.md]). So the number
-                // is asserted where it is measured: `test_grenade` block 7 prints
-                // how many bodies the wall shielded, on every ctest run.
-                if (!los_clear(grid, h.impactPos, cp)) return;
-                caught.push_back(Caught{cand, std::sqrt(d2)});
-            };
-            for (auto m : reg.view<const MobRef, const Transform>()) {
-                const Transform& mt = reg.get<const Transform>(m);
-                if (mt.layer != layer) continue;
-                sweep(m, mt.pos);
-            }
-            for (auto b : reg.view<const NpcRef, const Transform>()) {
-                // Anything already swept as a monster is not swept again as a body.
-                // Nothing in the tree carries both today; a blast that charged such an
-                // entity twice would be a silent double-damage and is cheaper to make
-                // impossible than to notice. The camera holder is an ordinary NpcRef
-                // and IS in this loop — that is how the thrower gets hit.
-                if (reg.all_of<MobRef>(b)) continue;
-                const Transform& bt = reg.get<const Transform>(b);
-                if (bt.layer != layer) continue;
-                sweep(b, bt.pos);
-            }
-
-            for (const Caught& c : caught) {
-                if (!reg.valid(c.e)) continue;
-                // LINEAR falloff, full damage at the centre and 1 at the rim. Linear
-                // and not inverse-square because inverse-square is the law for a
-                // point source radiating into free space, and a fragmentation blast
-                // in a 2 m corridor is not that — it is fragments that spread and
-                // slow. Linear is also the one shape a player can read off two
-                // explosions: half as far, twice the damage.
-                //
-                // The floor of 1 keeps the rim honest: inside the radius you were
-                // caught in the blast, and "caught in the blast for zero" would make
-                // the radius a lie at its own edge.
-                const float f = 1.0f - c.d / R;
-                std::int16_t dmgHere =
-                    static_cast<std::int16_t>(static_cast<float>(h.dmg) * f + 0.5f);
-                if (dmgHere < 1) dmgHere = 1;
-                DamageResult r =
-                    apply_damage(reg, pool, c.e, dmgHere, ch, h.source, &grid,
-                                 particles, &stack.layer(layer).gravity());
-                if (!r.hit) continue;
-                landed = true;
-                // Credited exactly as the bullet path credits a shot, so a grenade
-                // kill counts on the same counter the HUD already prints and, through
-                // `Dead::killer` -> the NpcDied event, on the same contract/quest
-                // ledger ([problems.md] §40). A monster's grenade credits a monster
-                // and therefore closes nobody's contract.
-                if (reg.valid(h.source)) {
-                    if (auto* pr = reg.try_get<PlayerRanged>(h.source)) ++pr->hits;
-                    if (r.lethal)
-                        if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
-                }
-            }
-
-            // Geometry, through the ONE carve path ([destruct.h]): combat proposes,
-            // the app disposes. A refusal here is COUNTED, never silent —
-            // `droppedFull` is why a grenade that opened no hole can be told from a
-            // grenade whose proposal never got in ([combat.h] CarveProposalQueue).
-            if (carves) {
-                const std::uint32_t seed =
-                    static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
-                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
-                if (carves->push(h.impactPos.x, h.impactPos.y, h.impactPos.z,
-                                 R * kBlastCarveScale, carve_power_from_dmg(h.dmg),
-                                 seed)) {
-                    landed = true;
-                }
-            }
-            // Heard, at severity 5 — the loudest thing in the game, and published at
-            // the BLAST rather than at whoever threw it, because the place a monster
-            // should walk toward is where the bang was.
-            if (noise)
-                noise_publish(*noise, layer, h.impactPos, blast_noise(R),
-                              static_cast<std::uint32_t>(
-                                  entt::to_integral(h.source)));
-            // Flash and debris, through the unified pool ([particles.h]). Two bursts
-            // and not one: the spark is the detonation, the debris is the wall it
-            // took with it, and they are separate rows of data/particles.csv with
-            // separate lifetimes.
-            if (particles) {
-                const std::uint32_t pseed =
-                    static_cast<std::uint32_t>(tick) ^
-                    static_cast<std::uint32_t>(entt::to_integral(h.proj));
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 1.0f},
-                                ParticleKind::Spark, 24, 0, pseed);
-                particles->push(h.impactPos, vec3{0.0f, 0.0f, 0.5f},
-                                ParticleKind::Debris, 18, 0, pseed ^ 0x5bf03635u);
-            }
-        }
-
         if (h.onVictim && victim != entt::null) {
             DamageResult r = apply_damage(reg, pool, victim, h.dmg, ch, h.source,
                                           &grid, particles,
                                           &stack.layer(layer).gravity());
-            if (r.hit) landed = true;
+            if (r.hit) {
+                landed = true;
+                // ДЕЯНИЕ «удар» (S19): пуля в ЧЕЛОВЕКА на глазах у свидетелей
+                // — то же деяние, что и кулак (летальную двоит kill — гейт).
+                if (!r.lethal && reg.valid(h.source))
+                    if (const auto* vref = reg.try_get<NpcRef>(victim);
+                        vref != nullptr && pool.valid(vref->id))
+                        deed_publish(bus, kVerbStrike, h.source, vref->id,
+                                     h.impactPos, tick);
+            }
         } else if (h.other != entt::null && reg.valid(h.other)) {
             DamageResult r = apply_damage(reg, pool, h.other, h.dmg, ch, h.source,
                                           &grid, particles,
@@ -1912,6 +1908,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                     // NAME is now wrong; the behaviour was worse.
                     if (r.lethal)
                         if (auto* pm = reg.try_get<PlayerMelee>(h.source)) ++pm->kills;
+                    // ДЕЯНИЕ «удар» (S19) — как в victim-ветке выше.
+                    if (!r.lethal)
+                        if (const auto* vref = reg.try_get<NpcRef>(h.other);
+                            vref != nullptr && pool.valid(vref->id))
+                            deed_publish(bus, kVerbStrike, h.source, vref->id,
+                                         h.impactPos, tick);
                 }
             }
         }
@@ -1962,14 +1964,54 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         }
         if (reg.valid(h.proj)) reg.destroy(h.proj);
     }
+
+    // ВЫСТРЕЛ В ПРОП — вторая фаза, ПОСЛЕ разбора resolved, по двум причинам
+    // сразу. Во-первых, check_projectile_prop_hits делает reg.destroy(проп)
+    // внутри — в живой итерации view фазы 1 это запрещено (тот же закон, что
+    // выгнал apply_damage во вторую фазу). Во-вторых, снаряды, погибшие об
+    // стену или тело, к этому месту уже уничтожены — пуля, остановленная
+    // стеной, не разбивает заодно лампу за ней. Снимок (entity, pos, vel)
+    // перед вызовами: destroy пропа перетряхивает пулы Transform/Velocity,
+    // по которым идёт view.
+    {
+        struct PropShot { Entity e; vec3 pos; vec3 vel; Entity src; };
+        std::vector<PropShot> flying;
+        for (auto e : reg.view<Projectile, Transform, Velocity>()) {
+            const Transform& tr = reg.get<Transform>(e);
+            if (tr.layer != layer) continue;
+            flying.push_back(PropShot{e, tr.pos, reg.get<Velocity>(e).v,
+                                      reg.get<Projectile>(e).source});
+        }
+        for (const PropShot& s : flying) {
+            // kProjHitRadius — тот же радиус, каким снаряд трогает тела:
+            // проп не особеннее туловища. Внутри — detach по fall_mode строки:
+            // GpuHandoff-лампа рвётся в burst и гаснет (reg.destroy уносит
+            // PropLight вместе с сущностью), терминал падает целым.
+            // Контракт брод-фейза бинов ([sim/cell_bins.h]): соседство ±1
+            // клетки покрывает радиус, лишь пока он не перерос клетку.
+            static_assert(kProjHitRadius <= kCellSize,
+                          "27-соседство брод-фейза покрывает радиус ≤ клетки");
+            if (!check_projectile_prop_hits(
+                    reg, layer, s.pos, s.vel, kProjHitRadius, bus, particles,
+                    static_cast<std::uint32_t>(tick) ^
+                        static_cast<std::uint32_t>(entt::to_integral(s.e)),
+                    s.src))
+                continue;
+            // Снаряд гибнет как при h.onWall: проп его остановил. Попадание
+            // считается — счётчик hits и так меряет «во что-то попал».
+            ++hits;
+            if (reg.valid(s.e)) reg.destroy(s.e);
+        }
+    }
     (void)bus;
     return hits;
 }
 
 
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick,
-                                 NoiseField* noise, const StatusSet* status) {
+                                 bool wantFireL, bool wantFireR, float dt,
+                                 std::uint64_t tick, NoiseField* noise,
+                                 const StatusSet* status) {
     Entity shooter = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -1988,145 +2030,153 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // Decremented EXACTLY ONCE, at the top, before any early-out. Defect 3: the
     // reference decremented cooldowns at ~60 sites and some monsters out-attacked
     // their own authored rate.
-    if (pr.cooldownMs > elapsedMs) pr.cooldownMs -= elapsedMs; else pr.cooldownMs = 0;
-    if (pr.reloadMs > elapsedMs) pr.reloadMs -= elapsedMs; else pr.reloadMs = 0;
+    for (GunHand& gh : pr.hand) {
+        if (gh.cooldownMs > elapsedMs) gh.cooldownMs -= elapsedMs;
+        else gh.cooldownMs = 0;
+        if (gh.reloadMs > elapsedMs) gh.reloadMs -= elapsedMs;
+        else gh.reloadMs = 0;
+    }
 
     const NpcRef* nr = reg.try_get<NpcRef>(shooter);
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
 
-    const ItemId gun = equipped_ranged(inv, reg.try_get<Equipped>(shooter));
-    const RangedDef* def = ranged_for_item(gun);
-    if (!def) return 0;
-
-    // Swapping guns empties the magazine: a magazine of shells is not a magazine of
-    // 9mm, and carrying the count across would let a shotgun fire rifle rounds.
-    if (pr.weapon != gun) {
-        pr.weapon = gun;
-        pr.magCount = 0;
-        pr.reloadMs = 0;
-    }
-
-    if (pr.reloadMs > 0) return 0;
-
-    if (pr.magCount == 0) {
-        // Reload: move up to a magazine's worth out of the inventory. Counting first
-        // and only starting the timer if something is actually there, so an empty
-        // pack does not lock the player into a permanent reload.
-        std::uint16_t want = def->magazine;
-        std::uint16_t got = 0;
-        for (ItemSlot& sl : inv.slots) {
-            if (got >= want) break;
-            if (sl.item != def->ammo || sl.count == 0) continue;
-            const std::uint16_t take =
-                static_cast<std::uint16_t>(sl.count < (want - got) ? sl.count
-                                                                   : (want - got));
-            sl.count = static_cast<std::uint16_t>(sl.count - take);
-            if (sl.count == 0) sl.item = kInvalidItem;
-            got = static_cast<std::uint16_t>(got + take);
+    // ДВЕ РУКИ (two-hands.md, закон владельца: руки агностичны — «один слот
+    // не должен знать о втором»): каждая рука со СВОИМ стволом, магазином,
+    // затвором и кулдауном; прицел общий (одна голова). Два одинаковых
+    // ствола честно тянут патроны из одного рюкзака порознь.
+    const Equipped* eqp = reg.try_get<Equipped>(shooter);
+    std::uint32_t fired = 0;
+    for (int hIdx = 0; hIdx < 2; ++hIdx) {
+        GunHand& gh = pr.hand[hIdx];
+        ItemId gun = kInvalidItem;
+        if (eqp) {
+            const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
+            if (ranged_for_item(hi) && !ranged_is_thrown(hi)) gun = hi;
+        } else if (hIdx == 0) {
+            // Решателя НЕТ (монстры, холодные пути, старые фикстуры) —
+            // старый скан сумки, семантика [equip.h] дословно; вторая рука
+            // без решателя пуста (скан — не решение о двух руках).
+            gun = equipped_ranged(inv, nullptr);
         }
-        if (got == 0) return 0;   // out of ammo entirely; nothing to do but not fire
-        pr.magCount = got;
-        pr.reloadMs = def->reloadMs;
-        return 0;
+        // Swapping guns empties the magazine: a magazine of shells is not a
+        // magazine of 9mm. Пустая/неогнестрельная рука тоже чистит состояние
+        // (граната в руке не хранит чужой магазин).
+        if (gh.weapon != gun) {
+            gh.weapon = gun;
+            gh.magCount = 0;
+            gh.reloadMs = 0;
+        }
+        const RangedDef* def = ranged_for_item(gun);
+        if (!def || gun == kInvalidItem) continue;
+        if (gh.reloadMs > 0) continue;
+
+        if (gh.magCount == 0) {
+            // Reload: move up to a magazine's worth out of the inventory.
+            // Counting first and only starting the timer if something is
+            // actually there, so an empty pack does not lock a permanent
+            // reload.
+            std::uint16_t want = def->magazine;
+            std::uint16_t got = 0;
+            for (ItemSlot& sl : inv.slots) {
+                if (got >= want) break;
+                if (sl.item != def->ammo || sl.count == 0) continue;
+                const std::uint16_t take = static_cast<std::uint16_t>(
+                    sl.count < (want - got) ? sl.count : (want - got));
+                sl.count = static_cast<std::uint16_t>(sl.count - take);
+                if (sl.count == 0) sl.item = kInvalidItem;
+                got = static_cast<std::uint16_t>(got + take);
+            }
+            if (got == 0) continue; // out of ammo entirely
+            gh.magCount = got;
+            gh.reloadMs = def->reloadMs;
+            continue;
+        }
+
+        const bool want = hIdx == 1 ? wantFireR : wantFireL;
+        if (!want || gh.cooldownMs > 0) continue;
+
+        const CameraTag& cam = reg.get<const CameraTag>(shooter);
+        const Transform& tr = reg.get<const Transform>(shooter);
+        const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                       tr.pos.z + cam.eyeOffset.z};
+        const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
+
+        // Spread is a CONE (see the 3D-vs-2.5D note in the git history of
+        // this block); AGI and statuses scale it.
+        float spread = static_cast<float>(def->spreadE4) * 1e-4f;
+        if (const RpgStats* rs = reg.try_get<RpgStats>(shooter))
+            spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
+        if (status) {
+            const std::uint16_t am = status_aim_mult_e3(*status);
+            if (am != 1000u) spread *= static_cast<float>(am) / 1000.0f;
+        }
+        vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0}
+                                                  : vec3{0, 0, 1};
+        vec3 rt{fwd.y * up.z - fwd.z * up.y, fwd.z * up.x - fwd.x * up.z,
+                fwd.x * up.y - fwd.y * up.x};
+        float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
+        if (rl < 1e-4f) continue;
+        rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
+        vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
+                rt.x * fwd.y - rt.y * fwd.x};
+
+        std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
+                             static_cast<std::uint32_t>(
+                                 entt::to_integral(shooter)) ^
+                             (hIdx != 0 ? 0xB16B00B5u : 0u); // руки — разные роллы
+        for (std::uint8_t i = 0; i < def->pellets; ++i) {
+            seed += 0x9e3779b9u;
+            std::uint32_t h = seed;
+            h ^= h >> 16; h *= 0x7feb352du;
+            h ^= h >> 15; h *= 0x846ca68bu;
+            h ^= h >> 16;
+            const float a =
+                static_cast<float>(h & 0xFFFFu) / 65535.0f * 6.2831853f;
+            const float r = static_cast<float>((h >> 16) & 0xFFFFu) / 65535.0f;
+            const float m = std::sqrt(r) * spread * 0.5f;
+            const float ox = std::cos(a) * m, oy = std::sin(a) * m;
+            const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
+                           fwd.y + rt.y * ox + ud.y * oy,
+                           fwd.z + rt.z * ox + ud.z * oy};
+            spawn_projectile_dir(reg, layer, eye, dir,
+                                 static_cast<std::int16_t>(def->dmg),
+                                 def->projSpeedMmps, shooter, kPlayerGravityPct,
+                                 def->channel);
+        }
+
+        // ONE noise per trigger pull, not per pellet. [noise.h]
+        if (noise)
+            noise_publish(*noise, layer, tr.pos, weapon_fire_noise(*def),
+                          static_cast<std::uint32_t>(
+                              entt::to_integral(shooter)));
+
+        // ONE round per shot regardless of pellet count.
+        --gh.magCount;
+        // WEAR: адрес руки — Weapon (ЛКМ) или Tool (ПКМ) [equip.h].
+        if (eqp)
+            wear_equipped(inv, *eqp,
+                          hIdx == 1 ? EquipSlot::Tool : EquipSlot::Weapon,
+                          hash3(static_cast<std::uint32_t>(tick), nr->id,
+                                0x57EA9u + static_cast<std::uint32_t>(hIdx)));
+        std::uint16_t rcd = def->cooldownMs;
+        if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
+            const std::uint32_t cd =
+                (static_cast<std::uint32_t>(def->cooldownMs) *
+                 agi_attack_speed_mult_e3(*rs)) / 1000u;
+            rcd = static_cast<std::uint16_t>(
+                cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
+        }
+        gh.cooldownMs = rcd;
+        ++pr.shots;
+        ++fired;
     }
-
-    if (!wantFire || pr.cooldownMs > 0) return 0;
-
-    const CameraTag& cam = reg.get<const CameraTag>(shooter);
-    const Transform& tr = reg.get<const Transform>(shooter);
-    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
-                   tr.pos.z + cam.eyeOffset.z};
-    const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
-
-    // Spread is applied as a CONE, not as the reference's yaw-only jitter. The
-    // reference is 2.5D, so jittering yaw alone was correct there; in true 3D it
-    // would put a shotgun's pellets in a dead-flat horizontal line, which reads as a
-    // bug rather than as a spread.
-    // RPGCMBT: AGI tightens the cone (agi_ranged_spread_mult_e3 < 1000).
-    float spread = static_cast<float>(def->spreadE4) * 1e-4f;
-    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
-        spread *= static_cast<float>(agi_ranged_spread_mult_e3(*rs)) / 1000.0f;
-    }
-    // STATAIM: SporeHaze (and friends) widen the cone via status_aim_mult_e3.
-    if (status) {
-        const std::uint16_t am = status_aim_mult_e3(*status);
-        if (am != 1000u)
-            spread *= static_cast<float>(am) / 1000.0f;
-    }
-    // Any two vectors perpendicular to fwd. Guarding on |fwd.z| rather than fwd.x
-    // keeps the cross product well-conditioned when looking straight up or down.
-    vec3 up = (fwd.z > 0.9f || fwd.z < -0.9f) ? vec3{1, 0, 0} : vec3{0, 0, 1};
-    vec3 rt{fwd.y * up.z - fwd.z * up.y, fwd.z * up.x - fwd.x * up.z,
-            fwd.x * up.y - fwd.y * up.x};
-    float rl = std::sqrt(rt.x * rt.x + rt.y * rt.y + rt.z * rt.z);
-    if (rl < 1e-4f) return 0;
-    rt = vec3{rt.x / rl, rt.y / rl, rt.z / rl};
-    vec3 ud{rt.y * fwd.z - rt.z * fwd.y, rt.z * fwd.x - rt.x * fwd.z,
-            rt.x * fwd.y - rt.y * fwd.x};
-
-    std::uint32_t seed = static_cast<std::uint32_t>(tick) * 0x9e3779b9u ^
-                         static_cast<std::uint32_t>(entt::to_integral(shooter));
-    for (std::uint8_t i = 0; i < def->pellets; ++i) {
-        // splitmix-ish, the same idiom the spawner and the loot roller use.
-        seed += 0x9e3779b9u;
-        std::uint32_t h = seed;
-        h ^= h >> 16; h *= 0x7feb352du;
-        h ^= h >> 15; h *= 0x846ca68bu;
-        h ^= h >> 16;
-        const float a = static_cast<float>(h & 0xFFFFu) / 65535.0f * 6.2831853f;
-        const float r = static_cast<float>((h >> 16) & 0xFFFFu) / 65535.0f;
-        // sqrt(r) so pellets are uniform over the cone's DISC rather than piling up
-        // in the middle, which is what a bare uniform radius would do.
-        const float m = std::sqrt(r) * spread * 0.5f;
-        const float ox = std::cos(a) * m, oy = std::sin(a) * m;
-        const vec3 dir{fwd.x + rt.x * ox + ud.x * oy,
-                       fwd.y + rt.y * ox + ud.y * oy,
-                       fwd.z + rt.z * ox + ud.z * oy};
-        // `def->channel` and not a hardcoded Kinetic: the column exists in
-        // [ranged_table.h], the generator fills it from data/weapons_ranged.csv, and
-        // until this line NOTHING in src/ read it. Armour's resist[5], the psi-resist
-        // rows in data/items.csv and every per-channel column in [monster_traits.h]
-        // were all mitigating against a channel that only ever arrived as Kinetic.
-        spawn_projectile_dir(reg, layer, eye, dir,
-                             static_cast<std::int16_t>(def->dmg),
-                             def->projSpeedMmps, shooter, kPlayerGravityPct,
-                             def->channel);
-    }
-
-    // The shot is heard. ONE noise per trigger pull, not one per pellet: a shotgun
-    // blast is one bang, and twelve records would also evict everything else in a
-    // 64-slot field. Published at the SHOOTER's position rather than the muzzle so a
-    // monster investigating the sound walks at the player and not at a point 1.7 m in
-    // front of him. [noise.h]
-    if (noise)
-        noise_publish(*noise, layer, tr.pos, weapon_fire_noise(*def),
-                      static_cast<std::uint32_t>(entt::to_integral(shooter)));
-
-    // ONE round per shot regardless of pellet count — a shotgun blast costs one shell
-    // and produces up to twelve projectiles. The reference's rule.
-    --pr.magCount;
-    // WEAR: one shot = one use of the decided firearm ([equip.h]). Sleeps
-    // until firearm rows carry a durability number; thrown weapons are their
-    // own ammo and never reach this line.
-    if (const Equipped* seq = reg.try_get<Equipped>(shooter))
-        wear_equipped(inv, *seq, EquipSlot::Weapon,
-                      hash3(static_cast<std::uint32_t>(tick), nr->id, 0x57EA9u));
-    // RPGCMBT: AGI shortens firearm cooldown (same inverse mult as melee).
-    std::uint16_t rcd = def->cooldownMs;
-    if (const RpgStats* rs = reg.try_get<RpgStats>(shooter)) {
-        const std::uint32_t cd =
-            (static_cast<std::uint32_t>(def->cooldownMs) *
-             agi_attack_speed_mult_e3(*rs)) / 1000u;
-        rcd = static_cast<std::uint16_t>(cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
-    }
-    pr.cooldownMs = rcd;
-    ++pr.shots;
-    return 1;
+    return fired;
 }
 
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow) {
+                                bool wantL, bool wantR, bool wantBag,
+                                std::uint64_t tick) {
     Entity thrower = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
@@ -2134,62 +2184,63 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
         break;
     }
     if (thrower == entt::null) return 0;
+    if (!wantL && !wantR && !wantBag) return 0;
 
-    // NO DECREMENT HERE. The cooldown is `player_ranged_step`'s and it is aged there,
-    // exactly once per tick, before any early-out — defect 3 in this file's header,
-    // the one the reference committed at ~60 sites. This function READS the timer it
-    // shares and never advances it; see [combat.h] for the ordering requirement that
-    // makes that safe.
+    // Таймеры стареют в player_ranged_step (дефект 3) — здесь только чтение.
     PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(thrower);
-    if (!wantThrow || pr.cooldownMs > 0) return 0;
-
     const NpcRef* nr = reg.try_get<NpcRef>(thrower);
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
+    const Equipped* eqp = reg.try_get<Equipped>(thrower);
 
-    const ItemId item = equipped_throwable(inv);
-    const RangedDef* def = ranged_for_item(item);
-    if (!def || !ranged_is_explosive(*def)) return 0;
+    std::uint32_t thrown = 0;
+    for (int hIdx = 0; hIdx < 2; ++hIdx) {
+        // Рука несёт и делает то, чем экипирована (закон владельца):
+        // спуск руки бросает предмет ЕЁ ячейки; wantBag — путь без
+        // решателя (консоль/фикстуры), скан сумки, руки ЛКМ.
+        const bool want = hIdx == 1 ? wantR : (wantL || wantBag);
+        if (!want) continue;
+        GunHand& gh = pr.hand[hIdx];
+        if (gh.cooldownMs > 0) continue; // рука занята действием
+        ItemId item = kInvalidItem;
+        if (eqp) {
+            const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
+            if (ranged_for_item(hi) && ranged_is_thrown(hi)) item = hi;
+        }
+        if (item == kInvalidItem && hIdx == 0 && wantBag)
+            item = equipped_throwable(inv);
+        const RangedDef* def = ranged_for_item(item);
+        if (!def || !ranged_is_explosive(*def)) continue;
 
-    // SPEND THE WEAPON, and spend it BEFORE the throw. There is no magazine here and
-    // no reload: the thing in your hand is the round, so one throw is one item out of
-    // the bag. Taken first so a spawn that refuses (a degenerate aim vector) cannot
-    // leave the player holding a grenade he has already thrown.
-    bool paid = false;
-    for (ItemSlot& sl : inv.slots) {
-        if (sl.item != item || sl.count == 0) continue;
-        --sl.count;
-        if (sl.count == 0) sl.item = kInvalidItem;
-        paid = true;
-        break;
+        // SPEND THE WEAPON, and spend it BEFORE the throw: the thing in the
+        // hand is the round, one throw is one item out of the bag.
+        bool paid = false;
+        for (ItemSlot& sl : inv.slots) {
+            if (sl.item != item || sl.count == 0) continue;
+            --sl.count;
+            if (sl.count == 0) sl.item = kInvalidItem;
+            paid = true;
+            break;
+        }
+        if (!paid) continue;
+
+        const CameraTag& cam = reg.get<const CameraTag>(thrower);
+        const Transform& tr = reg.get<const Transform>(thrower);
+        const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
+                       tr.pos.z + cam.eyeOffset.z};
+        const vec3 dir = camera_forward(cam.yaw, cam.pitch);
+        // Заряд-проп рагдолл-ядра, авторский фитиль; атрибуция броска.
+        // Тихо: этаж слышит детонацию (charge_step), не бросок.
+        spawn_grenade(reg, layer, eye, dir,
+                      static_cast<PropId>(def->thrownPropId),
+                      def->projSpeedMmps, thrower,
+                      static_cast<std::uint16_t>(def->fuseDs) * 100u, tick,
+                      def->channel);
+        gh.cooldownMs = def->cooldownMs; // темп СВОЕЙ руки
+        ++pr.shots;
+        ++thrown;
     }
-    if (!paid) return 0;
-
-    const CameraTag& cam = reg.get<const CameraTag>(thrower);
-    const Transform& tr = reg.get<const Transform>(thrower);
-    const vec3 eye{tr.pos.x + cam.eyeOffset.x, tr.pos.y + cam.eyeOffset.y,
-                   tr.pos.z + cam.eyeOffset.z};
-    // Straight down the look ray, and DELIBERATELY not lofted. An automatic upward
-    // arc would be the aimbot `Projectile::gravityPct` exists to refuse, one axis
-    // over: the player would be handed a throw he did not aim. Look up to throw far,
-    // look at your feet to throw short — the arc is gravity's, and the aim is yours.
-    const vec3 dir = camera_forward(cam.yaw, cam.pitch);
-
-    spawn_grenade(reg, layer, eye, dir, static_cast<std::int16_t>(def->dmg),
-                  def->projSpeedMmps, thrower, def->blastDm,
-                  static_cast<std::uint16_t>(def->fuseDs) * 100u, def->channel);
-
-    // NO NoiseField AND NO TICK PARAMETER, which is why this signature is shorter
-    // than its two siblings rather than symmetrical with them. A throw is nearly
-    // silent — what a floor hears is the detonation, three seconds later and
-    // somewhere else, and `projectile_step` publishes exactly that ([noise.h]
-    // blast_noise). A tick would be the seed for a spread cone, and there is no cone:
-    // a thrown weight goes where you are looking. Carrying either as an unread
-    // parameter is how a field becomes write-only, which is the defect
-    // `Projectile::proj` and `RangedDef::channel` were both dug out of.
-    pr.cooldownMs = def->cooldownMs;
-    ++pr.shots;
-    return 1;
+    return thrown;
 }
 
 bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
@@ -2315,22 +2366,28 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
             const vec3 eye{me.pos.x + cam.eyeOffset.x,
                            me.pos.y + cam.eyeOffset.y,
                            me.pos.z + cam.eyeOffset.z};
+            // СУБВОКСЕЛЬНЫЙ детект удара (аудит 2026-08-26, семья S2, баг
+            // владельца «полы у стены не карвятся»): прежние 8 клеточных
+            // сэмплов у стены срабатывали в ВОЗДУХЕ рядом с частичной
+            // клеткой стены (клетка 2 м «не воздух» задолго до материи), и
+            // сфера не доставала до пола. sub_march — тот же первый ТВЁРДЫЙ
+            // АТОМ, каким бьёт пуля; центр карва — центр атома попадания,
+            // чтобы сфера накрывала материю, а не полусферу воздуха.
             bool hitWall = false;
             vec3 hitAt{};
-            constexpr int kSteps = 8;
-            for (int i = 1; i <= kSteps; ++i) {
-                const float t = reach * (static_cast<float>(i) / kSteps);
-                const vec3 p{eye.x + fwd.x * t, eye.y + fwd.y * t,
-                             eye.z + fwd.z * t};
-                // floor, не усечение: p ∈ (-2,0) обязан дать клетку 127,
-                // не 0 — торовый шов класса hazard/finalize (аудит c5eaaa50).
-                const int cx = wrap_macro(static_cast<int>(std::floor(p.x / kCellSize)));
-                const int cy = wrap_macro(static_cast<int>(std::floor(p.y / kCellSize)));
-                const int cz = wrap_macro(static_cast<int>(std::floor(p.z / kCellSize)));
-                if (grid->cell(cx, cy, cz) != kCellAir) {
+            {
+                const vec3 to{eye.x + fwd.x * reach, eye.y + fwd.y * reach,
+                              eye.z + fwd.z * reach};
+                SubRayHit hit;
+                if (sub_march(*grid, eye, to, hit)) {
                     hitWall = true;
-                    hitAt = p;
-                    break;
+                    hitAt = vec3{
+                        (static_cast<float>(hit.cx * kSubDim + hit.sx) + 0.5f) *
+                            kVoxelSize,
+                        (static_cast<float>(hit.cy * kSubDim + hit.sy) + 0.5f) *
+                            kVoxelSize,
+                        (static_cast<float>(hit.cz * kSubDim + hit.sz) + 0.5f) *
+                            kVoxelSize};
                 }
             }
             if (hitWall) {
@@ -2365,6 +2422,11 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     if (r.hit && selfEq && selfId != kInvalidNpc)
         wear_equipped(pool.inventory(selfId), *selfEq, EquipSlot::Weapon,
                       hash3(static_cast<std::uint32_t>(tick), selfId, 0x57EA9u));
+    // ДЕЯНИЕ «удар» по человеку отсюда НЕ публикуется — и это не пропуск:
+    // отбор цели выше идёт ТОЛЬКО по MobRef (кулак не достаёт жителя по
+    // построению), а свидетельство мобов — не дипломатия. Живой продюсер
+    // strike — projectile_step (пуля бьёт оба вида тел). Когда melee
+    // научится бить людей — публикация встаёт сюда тем же швом.
     (void)bus;
     return r.hit;
 }

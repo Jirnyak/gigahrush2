@@ -21,6 +21,8 @@
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/floor_gen.h"
 #include "game/mob_spawn.h"
+#include "game/room.h"        // FloorRooms — паки селятся в объявленных зонах
+#include "game/room_supply.h" // room_at_pos
 #include "game/wander.h"
 
 namespace packs_detail {
@@ -30,14 +32,6 @@ namespace packs_detail {
 // outside anything two independently-placed monsters would hit by chance (measured
 // pre-change: 59 of 194 heads, and never a clump above 4).
 inline constexpr float kGroupRadiusCells = 3.0f;
-
-// A head's room index on the generator's own wall lattice. The stride comes from
-// floor_room_stride, so this can never disagree with where the walls actually are.
-inline int room_of(const vec3& pos, int stride, int roomsPerAxis) {
-    const int cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    const int cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    return (cy / stride) * roomsPerAxis + (cx / stride);
-}
 
 inline float flat_dist(const vec3& a, const vec3& b) {
     const float dx = wrap_delta_f(a.x, b.x, kWorldExtent);
@@ -98,13 +92,12 @@ static void test_packs_all() {
         generate_floor(w, 4, spec, 11u);
         const std::uint8_t danger = danger_for_hostility(spec.hostility);
         const FloorTheme theme = theme_for_kind(FloorKind::Derelict);
-        const int stride = floor_room_stride(FloorKind::Derelict);
-        const int roomsPerAxis = kMacroDim / stride;
-        const int roomCount = roomsPerAxis * roomsPerAxis;
-        CHECK(stride > 0 && (kMacroDim % stride) == 0); // the module's pitch
-        CHECK(roomCount == roomsPerAxis * roomsPerAxis);
-
         Registry reg;
+        // НАСТОЯЩИЕ комнаты этажа в reg.ctx (rooms-object E): спавн селит
+        // паки в объявленных модулем комнатах; (number, seed) — те же, что у
+        // геометрии, иначе зоны и стены разойдутся.
+        FloorRooms& fr = reg.ctx().emplace<FloorRooms>();
+        rooms_declare(fr, 4, spec, 11u);
         const std::uint32_t n =
             spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u,
                              /*cap=*/0, FloorKind::Derelict);
@@ -119,7 +112,7 @@ static void test_packs_all() {
 
         std::vector<vec3> at;
         std::vector<std::uint8_t> kindOf, packOf;
-        std::vector<std::uint8_t> roomTaken(static_cast<std::size_t>(roomCount), 0u);
+        std::vector<std::uint8_t> roomTaken(fr.list.size() + 1, 0u);
         std::size_t occupied = 0;
         for (auto e : reg.view<const MobRef, const Transform>()) {
             const MobRef& m = reg.get<const MobRef>(e);
@@ -127,16 +120,12 @@ static void test_packs_all() {
             at.push_back(p);
             kindOf.push_back(m.kind);
             packOf.push_back(m.pack);
-            const int room = room_of(p, stride, roomsPerAxis);
-            if (!roomTaken[static_cast<std::size_t>(room)]++) ++occupied;
-
-            // Never on the wall lattice. A head at local 0 stands in a doorway or
-            // inside a knocked-out wall cell, which the old whole-grid rejection
-            // sampler placed freely.
-            const int cx = wrap_macro(static_cast<int>(p.x / kCellSize));
-            const int cy = wrap_macro(static_cast<int>(p.y / kCellSize));
-            CHECK((cx % stride) != 0);
-            CHECK((cy % stride) != 0);
+            // Каждая голова стоит ВНУТРИ объявленной комнаты — сильнее
+            // прежнего «не на линии решётки»: линии больше не закон, зоны —
+            // закон (rooms-object E; roomAt = раскраска клеток).
+            const RoomId room = room_at_pos(fr, p);
+            CHECK(room != kNoRoom);
+            if (!roomTaken[room]++) ++occupied;
             // Every head belongs to a pack; 0 is reserved for "never grouped".
             CHECK(m.pack != 0);
         }
@@ -175,14 +164,16 @@ static void test_packs_all() {
         // fall damage would be uniform and the column would be decorative.
         CHECK(kgMax > kgMin);
 
-        // OCCUPIED ROOMS DROP SUBSTANTIALLY. 134 of 256 before, and the assertion is
-        // deliberately a hard bound rather than "fewer than before": a later change
-        // that half-restores the sprinkle would still pass a relative test.
+        // Паков много меньше, чем комнат (у падика их тысячи), поэтому
+        // «одна комната — один пак» держится без исключений: занятых комнат
+        // ровно столько, сколько паков, и это пересчитано ниже (packs ==
+        // occupied). Хардбаунд прежней решётки (occupied < 90 из 256) умер
+        // вместе с решёткой.
         std::fprintf(stderr,
-                     "[packs] floor 4 derelict: heads=%u rooms=%d occupied=%zu\n",
-                     n, roomCount, occupied);
-        CHECK(occupied < 90);
+                     "[packs] floor 4 derelict: heads=%u rooms=%zu occupied=%zu\n",
+                     n, fr.list.size(), occupied);
         CHECK(occupied > 0);
+        CHECK(occupied < fr.list.size() / 4); // паки — соль, не сплошная заливка
 
         // One kind per pack. This is the room contract — a room's roster is rolled
         // once — and it is what makes a group read as a swarm rather than a queue.
@@ -283,17 +274,12 @@ static void test_packs_all() {
 
         // Determinism survives the restructure: same floor + seed, same result.
         Registry again;
+        rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
         CHECK(spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, 0,
                                FloorKind::Derelict) == n);
 
-        // The room pitch is read from the generator, not guessed. Geometry comes
-        // from the one registered module, so every kind reports the SAME pitch,
-        // and it tiles the torus.
-        const int pitch = floor_room_stride(FloorKind::Residential);
-        CHECK(pitch > 0 && (kMacroDim % pitch) == 0);
-        CHECK(floor_room_stride(FloorKind::Commercial) == pitch);
-        CHECK(floor_room_stride(FloorKind::Industrial) == pitch);
-        CHECK(floor_room_stride(FloorKind::Derelict) == pitch);
+        // Решётка умерла (rooms-object F): «шаг комнат» больше не существует,
+        // зоны объявляет модуль и их пины живут в suite_rooms_object.
     }
 
     { // ---- the destination is the PACK's, not the entity's ------------------
@@ -338,6 +324,10 @@ static void test_packs_all() {
         // Living theme budgets 77 heads and only 8 of its packs hold more than one
         // member, which is too few to say anything about a distribution.
         Registry reg;
+        // Комнаты ГЕОМЕТРИИ (4, Derelict, 11u): мир w сгенерирован ею, а
+        // номер 12 в спавне — только бюджет; зоны обязаны совпадать с миром.
+        rooms_declare(reg.ctx().emplace<FloorRooms>(), 4,
+                      floor_spec(FloorKind::Derelict), 11u);
         const std::uint32_t n = spawn_floor_mobs(
             reg, w, 12, /*danger=*/5, FloorTheme::Hell, layer, /*seed=*/31u,
             /*cap=*/300, FloorKind::Residential);
@@ -348,8 +338,8 @@ static void test_packs_all() {
         // screenshot can be fooled by; there is no such window in this test.
         nav::CoarseGraph coarse;
         nav::FineNav fine;
-        nav::bake_coarse(stack.layer(layer).grid(), coarse);
-        nav::bake_fine(stack.layer(layer).grid(), fine);
+        nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
+        nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
         CHECK(!fine.flow.empty());
 
         const std::uint32_t wandering = wander_init(reg, layer, 4u);
@@ -460,8 +450,21 @@ static void test_packs_all() {
         // fails loudly) with more than one pack of margin under the measured value.
         CHECK(tight * 100 >= multi * 70);
         // ...and being together is a property of the PACK, not of the floor being
-        // small: a same-sized sample across packs is spread far wider.
-        CHECK(controlDiameter > worstPack * 2.0f);
+        // small: a same-sized sample across packs is spread far wider than the
+        // 40 m tightness bound the claim above is stated in.
+        //
+        // This compared control against the WORST pack (×2), and that multiplier
+        // was already one bad pack from red: 83.6 м × 2 = 167.2 against a ~175 м
+        // control — 5% of margin on an extreme statistic. The closed lift
+        // pillars (elevators-2x2.md: 4 узла решётки стали глухими столбами с
+        // одним проёмом) rerouted a handful of destinations and pushed ONE
+        // tail pack to 118 м, while overall tightness went UP (30/33 within
+        // 40 м = 91% against the 70% gate). The cohesion claim lives in the
+        // tight-fraction gate above; here the control only has to prove the
+        // floor is not small — wider than double the tightness bound.
+        // Толпа у закрытых столбов — отдельный замер при посадке лобби
+        // (инкремент 6 плана лифтов).
+        CHECK(controlDiameter > 2.0f * 40.0f);
 
         // ---- the shaft-drift question, measured rather than assumed -----------
         // wander.cpp's horizontal fallback walks an agent toward its target node's

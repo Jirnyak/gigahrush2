@@ -7,11 +7,14 @@ namespace giga::game {
 
 namespace {
 
+// Адресация: Weapon-адрес = рука ЛКМ, Tool-адрес = рука ПКМ (Tool-СЛОТ
+// убит — «теперь руки», владелец 2026-08-31; адресные имена доживают в
+// легаси-вызовах и консольных алиасах).
 std::uint8_t* eq_cell(Equipped& eq, EquipSlot slot) {
     switch (slot) {
-        case EquipSlot::Weapon: return &eq.weapon;
+        case EquipSlot::Weapon: return &eq.handL;
         case EquipSlot::Armor:  return &eq.armor;
-        case EquipSlot::Tool:   return &eq.tool;
+        case EquipSlot::Tool:   return &eq.handR;
         default:                return nullptr;
     }
 }
@@ -47,8 +50,28 @@ int equipped_index(const Inventory& inv, const Equipped& eq, EquipSlot slot) {
     // Протухший индекс — не ошибка, а «решения больше нет»: инвентарь мутировал
     // после записи (продажа, разлив, банк). Валидация по данным, не по памяти.
     if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) return -1;
-    if (static_cast<EquipSlot>(item_def(s.item).equipSlot) != slot) return -1;
+    const auto ds = static_cast<EquipSlot>(item_def(s.item).equipSlot);
+    // Рука принимает ОБЕ hand-категории (пистолет и лом в любой руке);
+    // строгое равенство остаётся у брони.
+    if (hand_accepts(slot) ? !hand_accepts(ds) : ds != slot) return -1;
     return static_cast<int>(*cell);
+}
+
+bool equip_hand(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx,
+                bool right) {
+    if (slotIdx >= kInvSlots) return false;
+    const ItemSlot& s = inv.slots[slotIdx];
+    if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item))
+        return false;
+    if (!hand_accepts(static_cast<EquipSlot>(item_def(s.item).equipSlot)))
+        return false;
+    (right ? eq.handR : eq.handL) = slotIdx;
+    return true;
+}
+
+ItemId equipped_hand(const Inventory& inv, const Equipped& eq, bool right) {
+    return equipped_item(inv, eq,
+                         right ? EquipSlot::Tool : EquipSlot::Weapon);
 }
 
 ItemId equipped_item(const Inventory& inv, const Equipped& eq, EquipSlot slot) {

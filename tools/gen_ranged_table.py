@@ -90,6 +90,18 @@ def main():
     item_index = {r["id"]: i + 1 for i, r in enumerate(items)}
     item_cat = {r["id"]: (r.get("category") or "").strip().upper() for r in items}
 
+    # props.csv — для резолюции «метательное → проп-заряд» (thrownPropId).
+    # Индекс нулевой (PropId — прямой индекс таблицы пропов).
+    with open(os.path.join(REPO, "data", "props.csv"),
+              encoding="utf-8", newline="") as fh:
+        props = list(csv.DictReader(fh))
+    prop_index = {r["id"].strip(): i for i, r in enumerate(props)}
+    prop_explosive = {r["id"].strip(): (r.get("explosive_g") or "0").strip()
+                      for r in props}
+    if len(props) > 255:
+        die("props.csv has %d rows — thrownPropId is a uint8 with 255 = none"
+            % len(props))
+
     by_item = [0] * (EXPECTED_ITEM_ROWS + 1)
     out = []
     for i, r in enumerate(rows):
@@ -128,35 +140,40 @@ def main():
                 % (name, projTok, "/".join(sorted(PROJ_TYPES))))
         projType = PROJ_TYPES[projTok]
 
-        # Decimetres and deciseconds — the units [ranged_table.h] declares. A cell is
-        # kCellSize = 2 m, so cells -> decimetres is x20.
-        blastDm = fixed(r, "blast_cells", 20, 0, 255)
+        # Заряд метательного — ПРОП (решение владельца 2026-08-21): урон и
+        # радиус выводятся из массы ВВ строки props.csv, оружейная строка
+        # лишь называет проп. Связь — конвенцией «prop id == item_id», как
+        # ranged_is_thrown выводится из ammo == self, а не объявляется.
         fuseDs = fixed(r, "fuse_s", 10, 0, 255)
         explosive = projTok == "grenade"
-        if explosive and (blastDm == 0 or fuseDs == 0):
-            die("%r: proj_type=grenade needs BOTH blast_cells and fuse_s "
-                "(got blast=%d dm, fuse=%d ds) — half an explosive is a dud that "
-                "fails silently" % (name, blastDm, fuseDs))
-        if not explosive and (blastDm or fuseDs):
-            die("%r: proj_type=%s carries blast=%d fuse=%d, which nothing reads — "
-                "projectile_step detonates on ProjType::Grenade only"
-                % (name, projTok, blastDm, fuseDs))
-        # 1.0 m is the floor because kProjHitRadius is 0.75: a blast smaller than the
-        # radius at which a bullet already connects is a grenade that is worse than
-        # being shot, which is never what a row means to say.
-        if explosive and blastDm < 10:
-            die("%r: blast_cells %s is under 1.0 m (%d dm) — below kProjHitRadius "
-                "the blast is narrower than a bullet's own hit sphere"
-                % (name, r.get("blast_cells"), blastDm))
+        thrownProp = 255
+        if explosive:
+            if fuseDs == 0:
+                die("%r: proj_type=grenade needs fuse_s — заряд без фитиля "
+                    "не взводится" % name)
+            if name not in prop_index:
+                die("%r: proj_type=grenade has no props.csv row with the same "
+                    "id — метательному нечем стать после броска" % name)
+            thrownProp = prop_index[name]
+            if int(prop_explosive[name]) <= 0:
+                die("%r: props.csv row %r carries explosive_g=0 — бросаемый "
+                    "проп без ВВ никогда не взорвётся" % (name, name))
+            if fixed(r, "dmg", 1, 0, 4000) != 0:
+                die("%r: proj_type=grenade must carry dmg=0 — урон выводится "
+                    "из массы ВВ пропа, вторая цифра в оружейной строке "
+                    "разошлась бы с первой" % name)
+        elif fuseDs:
+            die("%r: proj_type=%s carries fuse=%d, which nothing reads"
+                % (name, projTok, fuseDs))
 
         pellets = fixed(r, "pellets", 1, 1, 255)
         out.append(
             "    // [%2d] %-24s %s x%d%s\n"
             "    RangedDef{ %d, %d, %d, %d, %d, %d, %d, %d, 0, %d, %d, %d }," % (
                 i, name, ammo, pellets,
-                (" blast %.1f m fuse %.1f s" % (blastDm * 0.1, fuseDs * 0.1))
+                (" prop %s fuse %.1f s" % (name, fuseDs * 0.1))
                 if explosive else "",
-                fixed(r, "dmg", 1, 1, 4000),
+                fixed(r, "dmg", 1, 0 if explosive else 1, 4000),
                 fixed(r, "cooldown_s", 1000, 20, 20000),
                 fixed(r, "proj_speed_cells", 1000, 1000, 65000),
                 # 1e-4 rad, NOT milliradians: ptrs_liquidator is 0.0015 rad, which
@@ -168,7 +185,7 @@ def main():
                 pellets,
                 fixed(r, "magazine", 1, 1, 255),
                 projType,
-                blastDm,
+                thrownProp,
                 fuseDs))
 
     mapped = sum(1 for v in by_item if v)

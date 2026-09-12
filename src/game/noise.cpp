@@ -214,6 +214,23 @@ NoiseProfile container_open_noise() {
     return p;
 }
 
+// ---------------------------------------------------------------------------
+// АКУСТИКА НА СКЕЛЕТЕ ВЫРЕЗАНА (решение владельца 2026-09-06).
+// Шар путевых дистанций (BFS на шум, skeleton-anchor G) жил при допущении
+// «единицы шумов в секунду»; гарантированный сценарий игры — перестрелки
+// сотен участников по всему этажу, то есть сотни шумов в секунду. Замер
+// (suite_noise, коммит с тестом цены): 73 мкс/выстрел и 285 мкс/взрыв на
+// бейк в открытом мире — десятки миллисекунд бейков в секунду, и кольцо
+// из 64 слотов перемалывается быстрее ttl, убивая кэш «один бейк на жизнь
+// шума». Бюджет-кап был бы костылём; вырезано целиком. Слышимость снова
+// прямолинейная тороидальная с капом радиуса (состояние до 2026-08-29,
+// регресс «слышно сквозь стены» назван вслух). Замена СПРОЕКТИРОВАНА той
+// же датой (вторая сессия, решения владельца): стена = глухо, ГРАФ
+// КОМНАТ+КОРИДОРОВ (узлы = зоны rooms-object + нарезка kNoRoom, рёбра =
+// порталы), bounded-Дейкстра на publish + O(1) lookup слушателя — план
+// markoaudit/plans/sound-field.md (референс мерил именно регион-графом).
+// ---------------------------------------------------------------------------
+
 const char* noise_source_name(NoiseSource s) {
     switch (s) {
         case NoiseSource::None:       return "-";
@@ -232,12 +249,15 @@ const char* noise_source_name(NoiseSource s) {
 }
 
 float noise_distance(const Noise& n, const vec3& pos) {
-    // x/y wrap, z does NOT — the level stack is the 4th axis and a storey is not a
-    // torus. Using wrap_delta_f on z would make a sound 250 m overhead read as 6 m
-    // away, which on a 128-storey column is a real distance, not a corner case.
+    // All three axes wrap ([AGENTS.md]: x/y/z wrap; W does not). The storey
+    // stack is W, and W never enters this function — both points live on ONE
+    // floor's 256 m torus, where "250 m overhead" IS 6 m away through the
+    // seam. The earlier comment here argued the opposite from a "128-storey
+    // column" that this field does not model, and the raw z made a sound just
+    // across the z seam inaudible (markoaudit/systems/05-torus.md §1.4).
     const float dx = wrap_delta_f(pos.x, n.x, kWorldExtent);
     const float dy = wrap_delta_f(pos.y, n.y, kWorldExtent);
-    const float dz = n.z - pos.z;
+    const float dz = wrap_delta_f(pos.z, n.z, kWorldExtent);
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 

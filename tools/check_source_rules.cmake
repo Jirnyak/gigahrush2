@@ -442,6 +442,11 @@ _giga_csv_vs_header("data/props.csv" "src/game/prop_table.h"
 # would leave the enum short and every later ordinal misread.
 _giga_csv_vs_header("data/interactables.csv" "src/game/interact_table.h"
     "kInteractCount[ \t]*=[ \t]*([0-9]+)" "interactable")
+# Формы составных тел (ragdoll.md §9) — строки СЕГМЕНТОВ, а не форм: индекс
+# сегмента внутри формы это ссылка родителя, поэтому дрейф строк ломает
+# топологию тела молча. Гейт считает строки CSV против kFormSegCount.
+_giga_csv_vs_header("data/prop_forms.csv" "src/game/prop_form_table.h"
+    "kFormSegCount[ \t]*=[ \t]*([0-9]+)" "prop form segment")
 # Particles table — the unified GPU pool's type vocabulary. Same ordinal-ABI
 # law as interactables (ParticleBurst stores the row index), same drift hazard.
 _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
@@ -450,7 +455,282 @@ _giga_csv_vs_header("data/particles.csv" "src/game/particle_table.h"
 # table, so it drifts the moment a row is added to the CSV alone.
 _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
     "kMonsterTraitRows[ \t]*=[ \t]*([0-9]+)" "monster traits")
+# Verb vocabulary (CANON S12.2-S12.3, rooms-object gate A) — K = kVerbCount is
+# the length of EVERY verb-indexed vector (prop offer, item satisfy, room
+# declared/supply, agent demand, deed price); a row added without a re-run
+# would leave every one of them short.
+_giga_csv_vs_header("data/verbs.csv" "src/game/verb_table.h"
+    "kVerbCount[ \t]*=[ \t]*([0-9]+)" "verb")
 
+# ---- Rule: решёточная таксономия комнат МЕРТВА (rooms-object F) -------------
+# Комнаты — объекты модуля (game/room.h, roomAt-раскраска); хеш «вида» по
+# решётке, RoomBit и flow-поля по виду не воскресают ни под каким именем.
+# Проверять код, не комментарии-эпитафии: только строки с вызовом/типом.
+foreach(_dead_sym floor_room_mask floor_room_stride RoomBit bake_room_zones)
+    foreach(_f IN LISTS GIGA_ALL_FILES)
+        _giga_read_lines("${_f}" _dead_lines)
+        set(_ln 0)
+        foreach(_l IN LISTS _dead_lines)
+            math(EXPR _ln "${_ln} + 1")
+            _giga_restore_line(_l)
+            if(_l MATCHES "${_dead_sym}[ \t]*\\(" OR _l MATCHES "${_dead_sym}::")
+                list(APPEND GIGA_FAILURES
+                    "${_f}:${_ln}: '${_dead_sym}' воскрес — решёточная таксономия комнат умерла (rooms-object F, CANON S12.2); комнаты объявляет модуль в game/room.h.")
+            endif()
+        endforeach()
+    endforeach()
+endforeach()
+
+# ---- Rule 8: incomplete toroidal triple (AGENTS.md: x/y/z wrap) -------------
+# The world wraps on all three axes, and the failure mode this rule exists for
+# is PARTIAL wrapping: a distance computed with wrap_delta_f on two axes and a
+# bare subtraction on the third. Every such window is a seam bug — the entity
+# 2 m across the seam reads as ~254 m away on the unwrapped axis.
+# markoaudit/systems/05-torus.md §1.2 lists the live instances and their
+# symptoms (interaction/loot/possession blind at the y seam, hearing and 3D
+# audio deaf through the z seam, grenade and ricochet leaving the world).
+#
+# Mechanics: every src/ line mentioning wrap_delta opens a window of 4 lines
+# above to 7 below (the shape of one distance computation). The window's
+# wrapped axes are the first arguments of its wrap_delta_f calls; its raw axes
+# are same-axis bare subtractions (`a.y - b.y`). Wrapping SOME axes while
+# subtracting ANOTHER bare is the finding. A window that wraps nothing is NOT:
+# purely local math is allowed to be flat; the crime is mixing. Ported
+# 2026-08-18 from the audit's python scan, whose 11 hits were each verified by
+# hand with 0 false positives (05-torus.md §7.3-B).
+#
+# THE BASELINE BELOW IS A RATCHET, NOT AN ALLOWLIST. The known violations are
+# recorded as file|wrapped|raw signatures with a count. Anything new fails at
+# its line. Fixing one fails too — with a message telling you to shrink the
+# baseline in the same commit — so the number can only go down. Do not add
+# rows; wrap the missing axis instead (three wrap_delta_f calls today,
+# wrap_delta3 once src/core/wrap.h grows the vector form the audit proposes).
+file(GLOB_RECURSE GIGA_TRIPLE_FILES
+    "${GIGA_ROOT}/src/*.cpp" "${GIGA_ROOT}/src/*.h" "${GIGA_ROOT}/src/*.inl")
+
+# 2026-08-18: los.cpp / noise.cpp / spatial_audio.cpp rows deleted — their z
+# axes wrap now (owner's verdict; the "z does not wrap" comments cited AGENTS.md
+# for the opposite of what it says). The ratchet held: 11 -> 8.
+# 2026-08-19: BASELINE EMPTY. All 11 original windows rewritten on the wrap.h
+# vector forms (wrap_dist2) or wrapped honestly (los/noise/audio z). The
+# ratchet's whole arc: 11 -> 8 -> 7 -> 0 in two days. Keep the list empty —
+# rule 8 above now fails ANY new incomplete triple at its exact line.
+set(GIGA_TRIPLE_BASELINE "")
+
+set(GIGA_TRIPLE_HITS "")   # "<sig>@@@<relpath>:<line>" — sig plus the exact spot
+set(GIGA_TRIPLE_SIGS "")   # "<relpath>|wrapped=..|raw=.." — one entry per finding
+set(GIGA_TRIPLE_WINDOWS 0)
+
+foreach(_file IN LISTS GIGA_TRIPLE_FILES)
+    _giga_read_lines("${_file}" _lines)
+    # Candidate lines first, so the windowing below touches only the ~150
+    # wrap_delta sites instead of every line of every file.
+    set(_cands "")
+    set(_ix 0)
+    foreach(_ln IN LISTS _lines)
+        string(FIND "${_ln}" "wrap_delta" _wd)
+        if(_wd GREATER_EQUAL 0)
+            string(FIND "${_ln}" "giga-check: allow" _ex)
+            if(_ex LESS 0)
+                list(APPEND _cands ${_ix})
+            endif()
+        endif()
+        math(EXPR _ix "${_ix} + 1")
+    endforeach()
+    if(_cands STREQUAL "")
+        continue()
+    endif()
+    list(LENGTH _lines _n)
+    file(RELATIVE_PATH _rel "${GIGA_ROOT}" "${_file}")
+    set(_skip -1)
+    foreach(_i IN LISTS _cands)
+        # After a finding the scan jumps past its window (the python original
+        # did the same), so one mixed computation is one finding, not four
+        # overlapping ones.
+        if(_i LESS _skip)
+            continue()
+        endif()
+        math(EXPR _lo "${_i} - 4")
+        if(_lo LESS 0)
+            set(_lo 0)
+        endif()
+        math(EXPR _hi "${_i} + 8")
+        if(_hi GREATER _n)
+            set(_hi ${_n})
+        endif()
+        math(EXPR _wlen "${_hi} - ${_lo}")
+        list(SUBLIST _lines ${_lo} ${_wlen} _wl)
+        list(JOIN _wl "\n" _win)
+        _giga_restore_line(_win)
+        # `;` must not survive into the regex input: MATCHALL returns its
+        # matches AS A LIST, so a match containing a semicolon (`a.y - b.y;` —
+        # i.e. almost every statement-final subtraction) is split at it and the
+        # per-match recapture below sees a fragment with no boundary character
+        # and silently extracts nothing. Found by mutation on landing day: the
+        # scan saw 1 of the 11 known violations, and the 10 it missed were
+        # exactly the statement-final ones. `#` keeps the boundary property
+        # ([^A-Za-z0-9_]) and appears in no pattern here.
+        string(REPLACE ";" "#" _win "${_win}")
+        math(EXPR GIGA_TRIPLE_WINDOWS "${GIGA_TRIPLE_WINDOWS} + 1")
+
+        # Axes this window wraps: first argument of each wrap_delta_f call.
+        string(REGEX MATCHALL "wrap_delta_f[ \t\r\n]*\\([ \t\r\n]*[^,]*\\.([xyz])" _wm "${_win}")
+        set(_wrapped "")
+        foreach(_m IN LISTS _wm)
+            string(REGEX MATCH "[xyz]$" _ax "${_m}")
+            list(APPEND _wrapped "${_ax}")
+        endforeach()
+        if(_wrapped STREQUAL "")
+            continue()
+        endif()
+        list(REMOVE_DUPLICATES _wrapped)
+
+        # Axes this window subtracts bare: `<expr>.a - <expr>.a`, same axis on
+        # both sides. The trailing non-identifier class is the manual word
+        # boundary CMake regex lacks — without it `a.z - b.zoom` would read as
+        # a bare z. The window is padded with one space so a subtraction on the
+        # last line still has its boundary character.
+        set(_raws "")
+        string(REGEX MATCHALL "[A-Za-z0-9_.]*\\.([xyz])[ \t]*-[ \t]*[A-Za-z_][A-Za-z0-9_.]*\\.([xyz])[^A-Za-z0-9_]" _rm "${_win} ")
+        foreach(_m IN LISTS _rm)
+            string(REGEX MATCH "\\.([xyz])[ \t]*-[ \t]*[A-Za-z_][A-Za-z0-9_.]*\\.([xyz])[^A-Za-z0-9_]$" _mm "${_m}")
+            if(CMAKE_MATCH_1 STREQUAL CMAKE_MATCH_2)
+                list(APPEND _raws "${CMAKE_MATCH_1}")
+            endif()
+        endforeach()
+        if(_raws STREQUAL "")
+            continue()
+        endif()
+        list(REMOVE_DUPLICATES _raws)
+
+        set(_missing "")
+        foreach(_ax IN LISTS _raws)
+            list(FIND _wrapped "${_ax}" _inw)
+            if(_inw LESS 0)
+                list(APPEND _missing "${_ax}")
+            endif()
+        endforeach()
+        if(_missing STREQUAL "")
+            continue()
+        endif()
+        list(SORT _wrapped)
+        list(SORT _missing)
+        list(JOIN _wrapped "," _ws)
+        list(JOIN _missing "," _ms)
+        math(EXPR _lineno "${_i} + 1")
+        set(_sig "${_rel}|wrapped=${_ws}|raw=${_ms}")
+        list(APPEND GIGA_TRIPLE_HITS "${_sig}@@@${_rel}:${_lineno}")
+        list(APPEND GIGA_TRIPLE_SIGS "${_sig}")
+        set(_skip ${_hi})
+    endforeach()
+endforeach()
+
+# Blindness guard, same reasoning as files_scanned: the tree carries ~150+
+# wrap_delta call sites, so a window count below 50 means the glob or the
+# window logic broke and the rule is asserting nothing.
+if(GIGA_TRIPLE_WINDOWS LESS 50)
+    message(FATAL_ERROR
+        "check_source_rules rule 8: only ${GIGA_TRIPLE_WINDOWS} wrap_delta "
+        "windows scanned, the tree has ~150+. The scan went blind — fix the "
+        "scan, do not delete it. A check that silently sees nothing is worse "
+        "than no check.")
+endif()
+
+set(_uniq "${GIGA_TRIPLE_SIGS}")
+if(NOT _uniq STREQUAL "")
+    list(REMOVE_DUPLICATES _uniq)
+endif()
+
+set(_bsigs "")
+set(_bcounts "")
+foreach(_b IN LISTS GIGA_TRIPLE_BASELINE)
+    string(REGEX MATCH "^(.*)\\|([0-9]+)$" _dummy "${_b}")
+    list(APPEND _bsigs "${CMAKE_MATCH_1}")
+    list(APPEND _bcounts "${CMAKE_MATCH_2}")
+endforeach()
+
+foreach(_sig IN LISTS _uniq)
+    set(_cnt 0)
+    foreach(_s IN LISTS GIGA_TRIPLE_SIGS)
+        if(_s STREQUAL _sig)
+            math(EXPR _cnt "${_cnt} + 1")
+        endif()
+    endforeach()
+    list(FIND _bsigs "${_sig}" _bi)
+    set(_bcnt 0)
+    if(_bi GREATER_EQUAL 0)
+        list(GET _bcounts ${_bi} _bcnt)
+    endif()
+    if(_cnt GREATER _bcnt)
+        # Name every site of this signature: the developer's new line is among
+        # them, and the baseline count in the message says how many are old.
+        foreach(_h IN LISTS GIGA_TRIPLE_HITS)
+            string(FIND "${_h}" "${_sig}@@@" _pos)
+            if(_pos EQUAL 0)
+                string(REPLACE "${_sig}@@@" "" _at "${_h}")
+                list(APPEND GIGA_FAILURES
+                    "${_at}: incomplete toroidal triple — this window wraps [${_sig}] but subtracts another axis bare. ${_cnt} such windows in this file, baseline allows ${_bcnt}. Wrap the missing axis with wrap_delta_f (AGENTS.md: x/y/z wrap, symptoms in markoaudit/systems/05-torus.md §1.2). Never widen GIGA_TRIPLE_BASELINE.")
+            endif()
+        endforeach()
+    elseif(_cnt LESS _bcnt)
+        list(APPEND GIGA_FAILURES
+            "tools/check_source_rules.cmake:1: torus-triple ratchet — signature [${_sig}] now has ${_cnt} windows, baseline says ${_bcnt}. You fixed one: shrink that row of GIGA_TRIPLE_BASELINE in the SAME commit so the ratchet keeps holding at the new, lower number.")
+    endif()
+endforeach()
+
+foreach(_bsig IN LISTS _bsigs)
+    list(FIND _uniq "${_bsig}" _fi)
+    if(_fi LESS 0)
+        list(APPEND GIGA_FAILURES
+            "tools/check_source_rules.cmake:1: torus-triple ratchet — baseline row [${_bsig}] matches nothing in the tree any more. All its windows are fixed: delete the row in the SAME commit, so the baseline never outlives the defects it records.")
+    endif()
+endforeach()
+
+message("GIGA_TORUS_TRIPLE windows_scanned=${GIGA_TRIPLE_WINDOWS}")
+
+# ---- Rule 9: grid-size literals are banned in shaders ----------------------
+# CMakeLists.txt parses kMacroDim/kSubDim/kCellSize out of src/world/types.h
+# (and the light-grid shape out of src/render/gpu_light_grid.h) at configure
+# time and passes them to every glslc call as GIGA_* -D macros. That block is
+# the ONLY legal source of the world's shape in GLSL. Before it existed the
+# numbers were retyped per shader and drifted: prop.frag divided by a
+# hand-computed 76.8 where the C++ side passes 64, and shadow_march.glsl
+# carried a "lockstep" copy nothing enforced. The macroisation itself was
+# proven behaviour-preserving on landing day: all 25 .spv byte-identical
+# before/after.
+#
+# Banned spellings: 128 (any fraction), 127 (the wrap mask 128-1), float 256.x
+# (the world extent). Bare integer 256 stays legal — light_grid.comp's
+# sTile[256] is a workgroup tile, not the world. 0.25/2.0/64 are NOT banned:
+# they are common as colours, phases and workgroup sizes, and a rule that
+# cries wolf gets an allow-comment pasted on reflex, which is worse than no
+# rule. `#define GIGA_` is banned so an in-file define cannot shadow the -D.
+file(GLOB GIGA_SHADER_FILES
+    "${GIGA_ROOT}/shaders/*.vert" "${GIGA_ROOT}/shaders/*.frag"
+    "${GIGA_ROOT}/shaders/*.comp" "${GIGA_ROOT}/shaders/*.glsl")
+list(LENGTH GIGA_SHADER_FILES _giga_shader_count)
+if(_giga_shader_count LESS 10)
+    message(FATAL_ERROR
+        "check_source_rules rule 9: only ${_giga_shader_count} shader files "
+        "globbed — the tree has 25+. The glob went blind; fix it, do not "
+        "delete the rule.")
+endif()
+# A regex passed INTO _giga_scan is macro-substituted and therefore parsed
+# twice, so a `\\.` written here reaches the engine as a bare `.` (any char) —
+# measured on landing day: the 256 rule matched `sTile[256]` and `256u`.
+# Bracket classes `[.]` survive both parses; never use backslash escapes in
+# these arguments.
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]128([.][0-9]*)?[^A-Za-z0-9_]"
+    "grid literal 128 is banned in shaders — use GIGA_MACRO_DIM (passed via -D from CMakeLists, parsed out of src/world/types.h). Retyped copies of the grid are how prop.frag ended up dividing by 76.8 against the C++ side's 64.")
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]127[^A-Za-z0-9_.]"
+    "wrap-mask literal 127 is banned in shaders — spell it (GIGA_MACRO_DIM - 1) so the mask cannot outlive a grid resize.")
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]256[.][0-9]*[^A-Za-z0-9_]"
+    "world-extent literal 256.x is banned in shaders — derive it: float(GIGA_MACRO_DIM) * GIGA_CELL_SIZE.")
+# GIGA_-prefixed FEATURE switches (GIGA_ALBEDO_ARRAY, GIGA_SHADOW_SET,
+# GIGA_VOLUMETRIC_GRID_BINDINGS) are an existing in-shader convention and stay
+# legal; only the six grid macros owned by CMakeLists may not be shadowed.
+_giga_scan(GIGA_SHADER_FILES "#[ \t]*define[ \t]+GIGA_(MACRO_DIM|SUB_DIM|CELL_SIZE|LIGHT_GRID_DIM|LIGHT_GRID_CELL|LIGHT_CELL_BYTES)"
+    "defining this grid macro inside a shader is banned — it would silently shadow the -D value CMakeLists parsed out of the C++ headers. The build system is the only writer of the six GIGA_ grid macros.")
 
 # ---- Verdict ---------------------------------------------------------------
 # ---- Guard: every test suite must be compiled by somebody ------------------

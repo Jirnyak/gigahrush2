@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
+#include "core/prof.h"   // кольцо профиля кадра — математика строк [prof]
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -47,7 +48,8 @@
 #include "game/wander.h"
 #include "game/population.h"
 #include "game/encumbrance.h"
-#include "game/room_zone.h"
+#include "game/body_walk.h" // телесный оракул — выживший rooms-object F
+#include "game/role.h"      // RoleId/role_for (шёл транзитом через room_zone.h)
 #include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
@@ -55,6 +57,10 @@
 
 #include "sim/drag.h"    // drag_q — предсказание замкнутой формы в тесте трения
 #include "sim/physics.h"
+#include "sim/rigid.h"   // rigid_attach_sphere/rigid_body_step — граната = тело ядра
+#include "world/material_props.h" // kMatHardness — упругость заряда из материала
+#include "world/medium.h" // medium_level_at — гейт этапа «оживление сред»
+#include "game/prop_table.h"      // PropDef/prop_def — заряд читается со строки
 #include "world/lattice.h"
 #include "world/materials.h"
 #include "world/gravity.h"
@@ -86,10 +92,10 @@ int g_checks = 0;
 #include "suite_packs.inl"
 #include "suite_hunt.inl"
 #include "suite_samosbor.inl"
-#include "suite_doors.inl"
 #include "suite_antourage.inl"
 #include "suite_audio.inl"
 #include "suite_saveload.inl"
+#include "suite_persist.inl"
 #include "suite_macrosim.inl"
 #include "suite_behaviours.inl"
 #include "suite_samosborhud.inl"
@@ -107,12 +113,12 @@ int g_checks = 0;
 #include "suite_diffusion.inl"
 #include "suite_loottable.inl"
 #include "suite_utilai.inl"
-#include "suite_rooms.inl"
 // The first budget suite in the project (2026-08-12). Asserts bytes and
 // milliseconds rather than behaviour, and PRINTS every number whether it passes
 // or fails — see the banner in the file for why the printing half matters more
 // than the asserting half.
 #include "suite_budgets.inl"
+#include "suite_prof.inl"
 // Wired 2026-07-29. This suite existed for its whole life without being included by any
 // translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
 // and never touched this file, so 733 lines and 104 CHECK sites were dead text while
@@ -129,6 +135,7 @@ int g_checks = 0;
 #include "suite_economy.inl"
 #include "suite_monster.inl"
 #include "suite_playercmd.inl"
+#include "suite_gamepad.inl"
 
 #include "suite_status.inl"
 #include "suite_rpg.inl"
@@ -137,6 +144,17 @@ int g_checks = 0;
 #include "suite_keybind.inl"
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
+#include "suite_walkbits.inl"
+#include "suite_doors.inl"
+#include "suite_verbs.inl"
+#include "suite_shield.inl"
+#include "suite_goals.inl"
+#include "suite_rooms_object.inl"
+#include "suite_rebake.inl"
+#include "suite_prebuild.inl"
+#include "suite_lightvis.inl"
+#include "suite_shotsub.inl"
+#include "suite_watch.inl"
 static void test_inventory() {
     // Compile-time layout contract: a static_assert, not a CHECK. It is a fact
     // about the type, so it belongs to the build, not to a test run.
@@ -161,6 +179,46 @@ static void test_inventory() {
     // Full inventory has no free slot.
     for (auto& s : inv.slots) s.item = 99;
     CHECK(inv.first_free() == -1);
+}
+
+// §59.1: is_power_cut был квадратом «каждая лампа × скан всех щитков каждый
+// кадр». Теперь брод-фейз — бит на грубую клетку 4 м, узкая фаза — прежний
+// точный скан. Пин — ЭКВИВАЛЕНТНОСТЬ: на сетке проб вокруг щитка ответ
+// обязан совпасть со старой формулой (сфера R=12 м с wrap по всем осям),
+// включая шов тора с обеих сторон; бит не теряет обесточку и не выдумывает.
+static void test_power_cut_broadphase() {
+    PowerGridState pg{};
+    // Щиток у ВЕРХНЕГО шва (x=254 м): зона перелезает wrap вверх по x.
+    pg.destroy_shield(127, 32, 63);
+    // Щиток у НИЖНЕГО края (x=0, z=0): штамп уходит в отрицательные грубые
+    // координаты — маска заворачивания работает и снизу.
+    pg.destroy_shield(0, 96, 0);
+    CHECK(pg.count == 2);
+
+    const vec3 spA = PowerGridState::shield_pos(pg.destroyedShieldKeys[0]);
+    const vec3 spB = PowerGridState::shield_pos(pg.destroyedShieldKeys[1]);
+    // Референс — старый точный скан, в одну строку на щиток.
+    auto exact = [&](const vec3& p) {
+        return wrap_dist2(spA, p, kWorldExtent) <=
+                   kPowerCutRadius * kPowerCutRadius ||
+               wrap_dist2(spB, p, kWorldExtent) <=
+                   kPowerCutRadius * kPowerCutRadius;
+    };
+    // Сетка шагом 2 м до ±16 м вокруг каждого щитка: граница зоны (12 м) и
+    // консервативная кромка штампа (~15.5 м) обе внутри решётки проб.
+    for (const vec3& sp : {spA, spB})
+        for (int dz = -8; dz <= 8; ++dz)
+            for (int dy = -8; dy <= 8; ++dy)
+                for (int dx = -8; dx <= 8; ++dx) {
+                    const vec3 p{wrapf(sp.x + dx * 2.0f, kWorldExtent),
+                                 wrapf(sp.y + dy * 2.0f, kWorldExtent),
+                                 wrapf(sp.z + dz * 2.0f, kWorldExtent)};
+                    CHECK(pg.is_power_cut(p) == exact(p));
+                }
+    // Другой конец тора: бита нет — мгновенное «нет» без узкой фазы.
+    CHECK(!pg.is_power_cut(vec3{wrapf(spA.x + 128.0f, kWorldExtent),
+                                wrapf(spA.y + 128.0f, kWorldExtent),
+                                wrapf(spA.z + 128.0f, kWorldExtent)}));
 }
 
 static void test_pool_basics() {
@@ -359,10 +417,45 @@ static void test_embody_and_foldback() {
     // Move the live entity, then fold back: the record's cell follows, and it is
     // de-embodied. hp/inventory were never duplicated onto the entity.
     reg.get<Transform>(e).pos.x = 100.0f; // -> cell 50
-    fold_back(reg, pool, id, e);
+    fold_back(reg, pool, NpcRef{id, pool.generation(id)}, e);
     CHECK(!pool.embodied(id));
     CHECK(pool.cx(id) == 50);
     CHECK(!reg.valid(e));
+}
+
+// E-2 skeleton-anchor (S20.3): NpcRef — ГЕНЕРАЦИОННАЯ ссылка. Переработка
+// слотов взведена (main.cpp set_recycling), и прежняя защита была
+// аргументом «по графу вызовов» — хрупким по собственному признанию. Обе
+// полярности: стейл-ссылка на переработанный слот НЕ текущая и fold_back
+// с ней не пишет строку наследника; свежая ссылка — текущая и пишет.
+static void test_npc_ref_generation() {
+    NpcPool pool;
+    pool.init();
+    pool.set_recycling(true);
+    Registry reg;
+    const NpcId id = pool.spawn();
+    Entity e = embody(reg, pool, id, 0);
+    const NpcRef ref = reg.get<NpcRef>(e);
+    CHECK(npc_ref_current(pool, ref));
+    // Слот умер и переработан: тот же номер, другое поколение = другой
+    // житель.
+    pool.kill(id);
+    const NpcId heir = pool.spawn();
+    CHECK(heir == id);
+    CHECK(!npc_ref_current(pool, ref));
+    // fold_back со стейл-ссылкой: тело уничтожено, строка наследника цела.
+    pool.cx(heir) = 7;
+    reg.get<Transform>(e).pos.x = 100.0f; // клетка 50 — НЕ должна записаться
+    fold_back(reg, pool, ref, e);
+    CHECK(!reg.valid(e));
+    CHECK(pool.cx(heir) == 7);
+    // Свежая ссылка на наследника — текущая, fold_back пишет как всегда.
+    Entity e2 = embody(reg, pool, heir, 0);
+    const NpcRef ref2 = reg.get<NpcRef>(e2);
+    CHECK(npc_ref_current(pool, ref2));
+    reg.get<Transform>(e2).pos.x = 100.0f;
+    fold_back(reg, pool, ref2, e2);
+    CHECK(pool.cx(heir) == 50);
 }
 
 static void test_player_is_a_record() {
@@ -382,7 +475,7 @@ static void test_player_is_a_record() {
 
     // Switch bodies: fold the short one back, embody the tall one as player. The
     // camera eye height must jump to the taller stature (the body-swap rule).
-    fold_back(reg, pool, shortId, shortP);
+    fold_back(reg, pool, NpcRef{shortId, pool.generation(shortId)}, shortP);
     CHECK(!pool.is_player(shortId));
     Entity tallP = embody_as_player(reg, pool, tallId, 0);
     float tallEye = reg.get<CameraTag>(tallP).eyeOffset.z;
@@ -503,8 +596,9 @@ static void test_seed_from_spec() {
         CHECK(pool.age(id) >= 20 && pool.age(id) <= 40); // spec age window honored
         CHECK(pool.height_mm(id) > 0);
         CHECK(pool.faction(id) == 0);                    // mix {1,0,0,0}
-        // Never seeded inside the wall lattice (walls sit on local coord 0).
-        CHECK((pool.cx(id) % 16) != 0 && (pool.cy(id) % 16) != 0);
+        // Решётка посева умерла (rooms-object F): слепые хеш-координаты,
+        // воплощение решает place_body_safely.
+        CHECK(pool.cx(id) < kMacroDim && pool.cy(id) < kMacroDim);
     }
 
     // Density follows the catalog: residential seeds a bigger crowd than derelict,
@@ -682,21 +776,38 @@ static void test_floor_gen() {
     // through the FULL height (Z wraps, so this also links top -> 0), the ground
     // lobby is opened, and the diagonal corner posts are solid hub-pad columns
     // spanning the whole map. Node-to-node reachability is exercised by the nav
-    // no-seam test (#11).
+    // no-seam test (#11). ONE exception since elevators-2x2.md: the 4 LIFT
+    // columns carry a cabin floor cell under the entrance storey — the shaft
+    // stays air everywhere else.
     {
         auto& g = res.grid();
         for (int ny = 0; ny < kLatticeDim; ++ny)
             for (int nx = 0; nx < kLatticeDim; ++nx) {
                 const int cx = lattice_coord(nx);
                 const int cy = lattice_coord(ny);
-                for (int z = 0; z < kMacroDim; ++z)
-                    CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
-                CHECK(g.cell(cx + 2, cy, 1) == kCellAir);  // lobby opened
-                // Elevator column: diagonal corner posts are solid hub-pad type
-                // the FULL height (span the whole map; Z wraps into a loop).
-                CHECK(g.cell(cx + 2, cy + 2, 0) == kMatHubPad);
-                CHECK(g.cell(cx + 2, cy + 2, 1) == kMatHubPad);
-                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) == kMatHubPad);
+                const bool lift =
+                    lift_axis_of(nx) >= 0 && lift_axis_of(ny) >= 0;
+                const int cabinFloor =
+                    lift ? wrap_macro(
+                               lift_entrance(FloorKind::Residential, 0,
+                                             lift_axis_of(ny) * kLiftGridDim +
+                                                 lift_axis_of(nx),
+                                             3u)
+                                   .h -
+                               1)
+                         : -1;
+                for (int z = 0; z < kMacroDim; ++z) {
+                    if (z == cabinFloor)
+                        CHECK(g.cell(cx, cy, z) != kCellAir); // пол кабины
+                    else
+                        CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
+                }
+                // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27):
+                // лобби, hub-pad слои и синие угловые столбы больше НЕ
+                // штампуются — угловая колонна обязана быть тем, что построил
+                // сам модуль, а не kMatHubPad.
+                CHECK(g.cell(cx + 2, cy + 2, 0) != kMatHubPad);
+                CHECK(g.cell(cx + 2, cy + 2, kMacroDim - 1) != kMatHubPad);
             }
     }
 }
@@ -740,10 +851,10 @@ static void test_elevator() {
     CHECK(!reg.all_of<PlayerMelee>(p));
     {
         PlayerRanged pr{};
-        pr.cooldownMs = 0;
-        pr.reloadMs = 0;
-        pr.magCount = 12;
-        pr.weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
+        pr.hand[0].cooldownMs = 0;
+        pr.hand[0].reloadMs = 0;
+        pr.hand[0].magCount = 12;
+        pr.hand[0].weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
         pr.shots = 7;
         pr.hits = 3;
         reg.emplace<PlayerRanged>(p, pr);
@@ -793,8 +904,8 @@ static void test_elevator() {
     CHECK(approx(reg.get<CameraTag>(p).pitch, -0.321f));
     // Combat state must survive the body swap (FOR1 pin).
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
-    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].weapon == static_cast<ItemId>(7));
     CHECK(reg.get<PlayerRanged>(p).shots == 7);
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
@@ -820,7 +931,7 @@ static void test_elevator() {
     CHECK(reg.get<Transform>(p).layer == l1);
     // No-op must not strip combat components either.
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
     CHECK(reg.all_of<PlayerMelee>(p));
     CHECK(reg.get<PlayerMelee>(p).kills == 99);
 
@@ -835,8 +946,8 @@ static void test_elevator() {
     CHECK(reg.get<Transform>(p).layer == l0);
     CHECK(pool.is_player(id));
     CHECK(reg.all_of<PlayerRanged>(p));
-    CHECK(reg.get<PlayerRanged>(p).magCount == 12);
-    CHECK(reg.get<PlayerRanged>(p).weapon == static_cast<ItemId>(7));
+    CHECK(reg.get<PlayerRanged>(p).hand[0].magCount == 12);
+    CHECK(reg.get<PlayerRanged>(p).hand[0].weapon == static_cast<ItemId>(7));
     CHECK(reg.get<PlayerRanged>(p).shots == 7);
     CHECK(reg.get<PlayerRanged>(p).hits == 3);
     CHECK(reg.all_of<PlayerMelee>(p));
@@ -870,20 +981,24 @@ static void test_fast_travel() {
     ft.unlock(-9999);
     CHECK(!ft.unlocked(-9999));
 
-    // --- Hub cell geometry: hub = iy*4+ix, cell = (lattice_coord(ix),
-    // lattice_coord(iy)). Out-of-range is a no-op (cx/cy unchanged). ---
+    // --- Hub cell geometry (лифтовая сетка 2×2, elevators-2x2.md): hub =
+    // ly*kLiftGridDim+lx над ЧЁТНЫМИ латтис-индексами — кабины на {16, 80}².
+    // Out-of-range is a no-op (cx/cy unchanged). ---
     std::uint8_t hx = 1, hy = 1;
     fast_hub_cell(/*hub=*/0, hx, hy);
     CHECK(hx == static_cast<std::uint8_t>(lattice_coord(0)));
     CHECK(hy == static_cast<std::uint8_t>(lattice_coord(0)));
-    std::uint8_t hx15 = 1, hy15 = 1;
-    fast_hub_cell(/*hub=*/15, hx15, hy15);
-    CHECK(hx15 == static_cast<std::uint8_t>(lattice_coord(3)));
-    CHECK(hy15 == static_cast<std::uint8_t>(lattice_coord(3)));
+    std::uint8_t hx3 = 1, hy3 = 1;
+    fast_hub_cell(/*hub=*/3, hx3, hy3);
+    CHECK(hx3 == static_cast<std::uint8_t>(lattice_coord(2)));
+    CHECK(hy3 == static_cast<std::uint8_t>(lattice_coord(2)));
     std::uint8_t fbX = 40, fbY = 50;
     fast_hub_cell(/*hub=*/-1, fbX, fbY);
     CHECK(fbX == 40 && fbY == 50);
     fast_hub_cell(/*hub=*/99, fbX, fbY);
+    CHECK(fbX == 40 && fbY == 50);
+    // Прежний хаб 15 (решётка 4×4) мёртв вместе с сеткой — no-op, не кабина.
+    fast_hub_cell(/*hub=*/15, fbX, fbY);
     CHECK(fbX == 40 && fbY == 50);
 
     // --- Boarding: exact cabin centre cell only ---
@@ -891,6 +1006,13 @@ static void test_fast_travel() {
     CHECK(fast_hub_at(hx, hy) == 0);
     CHECK(!on_fast_hub(static_cast<int>(hx) + 1, hy));
     CHECK(!on_fast_hub(hx, static_cast<int>(hy) + 1));
+    // НЕЧЁТНЫЙ узел решётки — колонна без лифта: и центр, и вся шахта
+    // отказывают. Это и есть смерть 12 хабов из 16 (решение владельца).
+    CHECK(!on_fast_hub(lattice_coord(1), lattice_coord(1)));
+    CHECK(fast_hub_at(lattice_coord(1), lattice_coord(1)) < 0);
+    CHECK(fast_hub_near(lattice_coord(1), lattice_coord(1)) < 0);
+    CHECK(!on_fast_hub(lattice_coord(1), lattice_coord(0)));
+    CHECK(fast_hub_near(lattice_coord(3), lattice_coord(2)) < 0);
 
     // --- fast_hub_near: the SHAFT, not the centre cell ------------------------
     // Two different questions, and conflating them is why this needed a second
@@ -911,9 +1033,9 @@ static void test_fast_travel() {
     // ...and one cell further out is NOT the shaft, on either axis.
     CHECK(fast_hub_near(static_cast<int>(hx) + kFastShaftR + 1, hy) < 0);
     CHECK(fast_hub_near(hx, static_cast<int>(hy) + kFastShaftR + 1) < 0);
-    // Every one of the 16 shafts answers with its own index, and the answer agrees
-    // with `fast_hub_at` at the centre — the two functions must not disagree about
-    // WHICH shaft, only about how close you have to be.
+    // Every one of the 4 lift shafts answers with its own index, and the answer
+    // agrees with `fast_hub_at` at the centre — the two functions must not
+    // disagree about WHICH cabin, only about how close you have to be.
     for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
         std::uint8_t cx = 0, cy = 0;
         fast_hub_cell(hub, cx, cy);
@@ -926,37 +1048,135 @@ static void test_fast_travel() {
     CHECK(fast_hub_near(static_cast<int>(hx) + kMacroDim, hy) == 0);
     CHECK(fast_hub_near(static_cast<int>(hx) - kMacroDim, hy) == 0);
 
-    // --- AND THE SHAFT IS REALLY THERE ---------------------------------------
-    // The assertion that makes sharing `kFastShaftR` worth anything. Everything
-    // above is arithmetic about arithmetic; this asks the GENERATED GRID whether
-    // every cell `fast_hub_near` accepts is a cell a body can stand in. Without it,
-    // the constant could be shared and still wrong — both halves agreeing on a
-    // radius that does not match what was stamped.
+    // --- AND THE PILLAR IS REALLY THERE --------------------------------------
+    // Everything above is arithmetic about arithmetic; this asks the GENERATED
+    // GRID whether the closed pillar (elevators-2x2.md: кольцо стен 3×3 через
+    // весь тор, шахта 1 клетка, один проём со стороны из хеша, пол кабины под
+    // storey входа) was really stamped — the structure every consumer (ride,
+    // кнопка, панель) computes from.
     {
         World shaftWorld;
         generate_floor(shaftWorld, 0, floor_spec(FloorKind::Residential), 4242u);
-        const int gz = floor_ground_z();
-        int cellsProbed = 0;
-        bool allAir = true;
+        const MacroGrid& g = shaftWorld.grid();
         for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
             std::uint8_t cx = 0, cy = 0;
             fast_hub_cell(hub, cx, cy);
-            for (int dy = -kFastShaftR; dy <= kFastShaftR; ++dy)
-                for (int dx = -kFastShaftR; dx <= kFastShaftR; ++dx) {
-                    const int x = wrap_macro(static_cast<int>(cx) + dx);
-                    const int y = wrap_macro(static_cast<int>(cy) + dy);
-                    // The cell the menu is reachable from must be standable, and the
-                    // one above it too — the shaft is a column, not a hole.
-                    if (shaftWorld.grid().cell(x, y, gz) != kCellAir) allAir = false;
-                    if (shaftWorld.grid().cell(x, y, gz + 1) != kCellAir) allAir = false;
-                    ++cellsProbed;
+            const LiftEntrance e =
+                lift_entrance(FloorKind::Residential, 0, hub, 4242u);
+            // Кабина: шахта — воздух на storey входа, пол под ней — твердь.
+            CHECK(g.cell(cx, cy, e.h) == kCellAir);
+            CHECK(g.cell(cx, cy, e.h - 1) != kCellAir);
+            // Кольцо на storey входа: ровно один проём, остальные 7 — стены.
+            int airRing = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    if (g.cell(static_cast<int>(cx) + dx,
+                               static_cast<int>(cy) + dy, e.h) == kCellAir)
+                        ++airRing;
                 }
+            CHECK(airRing == 1);
+            // Столб замкнут по ВСЕМУ тору: вдали от входа — глухое кольцо
+            // вокруг открытой шахты.
+            const int zAway = wrap_macro(e.h + 40);
+            CHECK(g.cell(cx, cy, zAway) == kCellAir);
+            int solidAway = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if ((dx != 0 || dy != 0) &&
+                        g.cell(static_cast<int>(cx) + dx,
+                               static_cast<int>(cy) + dy,
+                               zAway) != kCellAir)
+                        ++solidAway;
+            CHECK(solidAway == 8);
         }
-        std::printf("[shaft] %d cells across %d shafts, all air: %s\n", cellsProbed,
-                    kFastHubsPerFloor, allAir ? "yes" : "NO");
-        CHECK(cellsProbed == kFastHubsPerFloor * (2 * kFastShaftR + 1) *
-                                 (2 * kFastShaftR + 1));
-        CHECK(allAir);
+        std::printf("[shaft] %d closed lift pillars probed: cabin+ring+torus\n",
+                    kFastHubsPerFloor);
+
+        // --- ЩИТ ([world/mask.h], решение владельца 2026-08-27; S18-группы
+        // и субвоксельность — 2026-08-28) ------------------------------------
+        // Лифт — ключевая механика: весь объём столба защищён областью, а не
+        // материалом. Карв мощью выше любой твёрдости обязан отскочить от
+        // стены столба и при этом честно прогрызть стену В ДВУХ КЛЕТКАХ от
+        // него — щит границей, не глобальным иммунитетом.
+        stamp_lift_protection(shaftWorld);
+        std::uint8_t pcx = 0, pcy = 0;
+        fast_hub_cell(0, pcx, pcy);
+        const LiftEntrance pe =
+            lift_entrance(FloorKind::Residential, 0, 0, 4242u);
+        const int wallX = static_cast<int>(pcx) + 1; // клетка кольца
+        const int wallY = static_cast<int>(pcy);
+        CHECK(shaftWorld.masks().shielded(
+            macro_index(wallX, wallY, wrap_macro(pe.h + 40)), 0));
+        {
+            CarveScratch scratch;
+            CarveResult res;
+            CarveOp op;
+            op.x = (wallX + 0.5f) * kCellSize;
+            op.y = (wallY + 0.5f) * kCellSize;
+            op.z = (wrap_macro(pe.h + 40) + 0.5f) * kCellSize;
+            op.radius = 1.5f;
+            op.power = 0xFFFF; // выше любой твёрдости — держит только щит
+            op.seed = 7u;
+            carve_sphere(shaftWorld, op, scratch, res);
+            CHECK(g.mask(wallX, wallY, wrap_macro(pe.h + 40)).full());
+        }
+        {
+            // Контроль: та же мощь в двух клетках от щита грызёт стену.
+            const int off = wallX + 3; // вне 3×3 футпринта столба
+            const int zc = wrap_macro(pe.h + 40);
+            if (g.cell(off, wallY, zc) != kCellAir) {
+                CarveScratch scratch;
+                CarveResult res;
+                CarveOp op;
+                op.x = (off + 0.5f) * kCellSize;
+                op.y = (wallY + 0.5f) * kCellSize;
+                op.z = (zc + 0.5f) * kCellSize;
+                op.radius = 1.5f;
+                op.power = 0xFFFF;
+                op.seed = 7u;
+                const std::int32_t removed =
+                    carve_sphere(shaftWorld, op, scratch, res);
+                CHECK(removed > 0);
+            }
+        }
+        {
+            // СУБВОКСЕЛЬНОСТЬ щита (решение владельца 2026-08-28): маска —
+            // «эти субвоксели мои», не «эта клетка моя». Частичный щит на
+            // нижней половине сплошной клетки: карв в упор сносит верхнюю
+            // половину и не трогает НИ ОДНОГО защищённого атома.
+            const int hx2 = wallX + 6, hy2 = wallY, hz2 = wrap_macro(pe.h + 44);
+            shaftWorld.grid().fill_cell(hx2, hy2, hz2, kMatConcrete);
+            SubMask lowHalf;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if ((b / (kSubDim * kSubDim)) < kSubDim / 2) lowHalf.set(b);
+            MaskGroup pg2;
+            pg2.props = kMaskShield;
+            pg2.cells.push_back(MaskCell{
+                static_cast<std::uint32_t>(macro_index(hx2, hy2, hz2)),
+                lowHalf});
+            shaftWorld.masks().groups.push_back(std::move(pg2));
+            shaftWorld.masks().rebuild_shield_cache();
+            CarveScratch scratch;
+            CarveResult res;
+            CarveOp op;
+            op.x = (hx2 + 0.5f) * kCellSize;
+            op.y = (hy2 + 0.5f) * kCellSize;
+            op.z = (hz2 + 0.5f) * kCellSize;
+            op.radius = 2.0f;
+            op.power = 0xFFFF;
+            op.seed = 11u;
+            carve_sphere(shaftWorld, op, scratch, res);
+            const SubMask& after = g.mask(hx2, hy2, hz2);
+            int lowStand = 0, highStand = 0;
+            for (int b = 0; b < kSubVoxels; ++b) {
+                if (!after.test(b)) continue;
+                if (lowHalf.test(b)) ++lowStand;
+                else ++highStand;
+            }
+            CHECK(lowStand == kSubVoxels / 2); // защищённая половина целиком
+            CHECK(highStand < kSubVoxels / 2); // незащищённая — карвится
+        }
     }
 
     // --- Gate: registered + unlocked + on hub ---
@@ -972,7 +1192,10 @@ static void test_fast_travel() {
     CHECK(fast_travel_gate(net, freg, /*from=*/0, /*to=*/0, hx, hy, &hub) ==
           FastTravelGate::SameFloor);
     CHECK(fast_travel_gate(net, freg, 0, 5, /*cx=*/1, /*cy=*/1, &hub) ==
-          FastTravelGate::NotOnHub);
+          FastTravelGate::NotInCabin);
+    // Нелифтовый узел решётки — тот же отказ: колонна есть, кабины нет.
+    CHECK(fast_travel_gate(net, freg, 0, 5, lattice_coord(1), lattice_coord(1),
+                           &hub) == FastTravelGate::NotInCabin);
     CHECK(fast_travel_gate(net, freg, 0, 12, hx, hy, &hub) ==
           FastTravelGate::Locked);
     CHECK(fast_travel_gate(net, freg, 0, 99, hx, hy, &hub) ==
@@ -1193,21 +1416,32 @@ static void test_nav_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    bake_coarse(res.grid(), kBodyClearanceSub, g);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j)
             CHECK(g.dist[i][j] != kUnreachable); // fully connected
 
     // Vertical neighbours share a shaft carved to air through every slab, so the
     // +/-z edge is the pure spacing (32): a straight open column, no detour.
+    // Exception (elevators-2x2.md): the 4 LIFT columns carry the cabin floor
+    // under the entrance storey, which severs exactly the WRAP crossing
+    // (iz0 -z / iz3 +z pass through it). The three in-shaft links stay 32; the
+    // severed pair is whatever detour the floor offers, and is NOT pinned.
+    auto liftCol = [](int i) {
+        return lift_axis_of(i & 3) >= 0 && lift_axis_of((i >> 2) & 3) >= 0;
+    };
+    auto severedDown = [&](int i) { return liftCol(i) && (i >> 4) == 0; };
+    auto severedUp = [&](int i) {
+        return liftCol(i) && (i >> 4) == kLatticeDim - 1;
+    };
     for (int i = 0; i < kNodes; ++i) {
-        CHECK(g.edge[i][4] == kLatticeSpacing); // -z
-        CHECK(g.edge[i][5] == kLatticeSpacing); // +z
+        if (!severedDown(i)) CHECK(g.edge[i][4] == kLatticeSpacing); // -z
+        if (!severedUp(i)) CHECK(g.edge[i][5] == kLatticeSpacing);   // +z
     }
 
     // Deterministic on real geometry too.
     CoarseGraph g2{};
-    bake_coarse(res.grid(), g2);
+    bake_coarse(res.grid(), kBodyClearanceSub, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 
     // Derelict randomly drops slab/wall cells, but the lattice is carved LAST and
@@ -1216,10 +1450,10 @@ static void test_nav_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    bake_coarse(der.grid(), kBodyClearanceSub, gd);
     for (int i = 0; i < kNodes; ++i) {
-        CHECK(gd.edge[i][4] == kLatticeSpacing);
-        CHECK(gd.edge[i][5] == kLatticeSpacing);
+        if (!severedDown(i)) CHECK(gd.edge[i][4] == kLatticeSpacing);
+        if (!severedUp(i)) CHECK(gd.edge[i][5] == kLatticeSpacing);
     }
 }
 
@@ -1232,7 +1466,7 @@ static void test_nav_fine_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     FineNav f;
-    bake_fine(res.grid(), f);
+    bake_fine(res.grid(), kBodyClearanceSub, f);
 
     // Descend `node`'s field from a start cell, asserting nothing it steps onto
     // is solid. Returns steps to arrive, -1 at a dead end (kFlowNone), -2 if it
@@ -1269,7 +1503,7 @@ static void test_nav_fine_realfloor() {
 
     // Deterministic on real geometry (schedule-invariant across the 64 threads).
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    bake_fine(res.grid(), kBodyClearanceSub, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
 }
@@ -1309,8 +1543,7 @@ static void test_mob_table() {
         CHECK(m.packSpread <= 10);
 
         // Every kind has a habitat: an empty mask would make it unspawnable
-        // everywhere, silently.
-        CHECK(m.roomMask != 0);
+        // everywhere, silently. (roomMask умер — rooms-object F.)
         CHECK(m.floorMask != 0);
 
         // Derived flags must agree with the fields they were derived from.
@@ -1409,6 +1642,9 @@ static void test_mob_spawn() {
     generate_floor(w, 4, spec, 11u);
 
     Registry reg;
+    // Комнаты геометрии (4, Derelict, 11u) в ctx — спавн селит паки по
+    // объявленным зонам (rooms-object E).
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     const std::uint8_t danger = danger_for_hostility(spec.hostility);
     const FloorTheme theme = theme_for_kind(FloorKind::Derelict);
     CHECK(danger == 5);                        // 0.90 hostility -> danger 5
@@ -1454,6 +1690,7 @@ static void test_mob_spawn() {
     // The cap bounds the spawn regardless of budget — this is what keeps a deep
     // floor from adding thousands of entities in one frame.
     Registry capped;
+    rooms_declare(capped.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     std::uint32_t c = spawn_floor_mobs(capped, w, 4, danger, theme, 0, 77u,
                                        /*cap=*/5);
     CHECK(c <= 5);
@@ -1461,6 +1698,7 @@ static void test_mob_spawn() {
     // Determinism: same (floor, seed) must reproduce the same roster in the same
     // places, or unloading and reloading a floor visibly rearranges it.
     Registry again;
+    rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
     std::uint32_t n2 = spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u);
     CHECK(n2 == n);
 
@@ -1477,9 +1715,14 @@ static void test_mob_spawn_v_shape_in_world() {
     generate_floor(hub, 0, floor_spec(FloorKind::Residential), 3u);
     generate_floor(deep, 40, floor_spec(FloorKind::Derelict), 3u);
 
+    // ctx несёт комнаты ОДНОГО этажа — как в игре: перед каждым спавном
+    // перештамповка под его геометрию (rooms-object E).
+    FloorRooms& vfr = reg.ctx().emplace<FloorRooms>();
+    rooms_declare(vfr, 0, floor_spec(FloorKind::Residential), 3u);
     std::uint32_t nHub = spawn_floor_mobs(
         reg, hub, 0, danger_for_hostility(floor_spec(FloorKind::Residential).hostility),
         theme_for_kind(FloorKind::Residential), 0, 5u, /*cap=*/4096);
+    rooms_declare(vfr, 40, floor_spec(FloorKind::Derelict), 3u);
     std::uint32_t nDeep = spawn_floor_mobs(
         reg, deep, 40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
         theme_for_kind(FloorKind::Derelict), 1, 5u, /*cap=*/4096);
@@ -1493,6 +1736,8 @@ static void test_mob_spawn_v_shape_in_world() {
     World roof;
     generate_floor(roof, -40, floor_spec(FloorKind::Derelict), 3u);
     Registry r2;
+    rooms_declare(r2.ctx().emplace<FloorRooms>(), -40,
+                  floor_spec(FloorKind::Derelict), 3u);
     std::uint32_t nRoof = spawn_floor_mobs(
         r2, roof, -40, danger_for_hostility(floor_spec(FloorKind::Derelict).hostility),
         theme_for_kind(FloorKind::Derelict), 0, 5u, /*cap=*/4096);
@@ -1631,8 +1876,8 @@ static void test_wander_moves_the_crowd() {
 
     nav::CoarseGraph coarse;
     nav::FineNav fine;
-    nav::bake_coarse(stack.layer(layer).grid(), coarse);
-    nav::bake_fine(stack.layer(layer).grid(), fine);
+    nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
+    nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
 
     const std::uint32_t wandering = wander_init(reg, layer, 4u);
     CHECK(wandering > 0);
@@ -1680,6 +1925,7 @@ static void test_wander_moves_the_crowd() {
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
     Registry mobReg;
+    rooms_declare(mobReg.ctx().emplace<FloorRooms>(), 0, spec, 21u);
     spawn_floor_mobs(mobReg, w, 0, danger_for_hostility(spec.hostility),
                      theme_for_kind(FloorKind::Residential), layer, 3u, 400);
     wander_init(mobReg, layer, 7u);
@@ -1927,8 +2173,8 @@ static void test_economy_bands_gate_by_depth() {
         if (d.spawnWeight > 0 && d.value > 5000) { pricey = id; break; }
     }
     CHECK(pricey != kInvalidItem);
-    const std::uint32_t shallow = item_weight_on_floor(pricey, 0, 0);
-    const std::uint32_t deep = item_weight_on_floor(pricey, 50, 0);
+    const std::uint32_t shallow = item_weight_on_floor(pricey, 0);
+    const std::uint32_t deep = item_weight_on_floor(pricey, 50);
     CHECK(deep > shallow);
     // Decay, not a cut: at its own band the weight is exactly the authored one.
     CHECK(deep == item_def(pricey).spawnWeight);
@@ -1943,16 +2189,16 @@ static void test_economy_bands_gate_by_depth() {
         }
     }
     CHECK(cheap != kInvalidItem);
-    CHECK(item_weight_on_floor(cheap, 0, 0) == item_def(cheap).spawnWeight);
-    CHECK(item_weight_on_floor(cheap, 50, 0) == item_def(cheap).spawnWeight);
+    CHECK(item_weight_on_floor(cheap, 0) == item_def(cheap).spawnWeight);
+    CHECK(item_weight_on_floor(cheap, 50) == item_def(cheap).spawnWeight);
 
     // Weight 0 means never random, whatever the floor.
     for (std::size_t i = 0; i < kItemCount; ++i) {
         const ItemId id = static_cast<ItemId>(i + 1);
         if (item_def(id).spawnWeight == 0)
-            CHECK(item_weight_on_floor(id, 30, 0) == 0);
+            CHECK(item_weight_on_floor(id, 30) == 0);
     }
-    CHECK(item_weight_on_floor(kInvalidItem, 0, 0) == 0);
+    CHECK(item_weight_on_floor(kInvalidItem, 0) == 0);
 }
 
 // CORP1: loot stages in the Dead window onto CorpseLootPending, then moves into
@@ -1992,8 +2238,14 @@ static void test_loot_drops_before_the_corpse_is_gone() {
 
     const std::uint32_t staged = loot_dead_mobs(reg, 0, /*floor=*/0, 1234u);
     CHECK(staged > 0);            // a boss always pays out
-    CHECK(reg.all_of<CorpseLootPending>(boss));
-    CHECK(reg.get<CorpseLootPending>(boss).slotCount == staged);
+    CHECK(reg.all_of<Container>(boss));
+    {
+        std::uint32_t filled = 0;
+        const Inventory& bi = reg.get<Container>(boss).inv;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(bi.slots[i].item) && bi.slots[i].count) ++filled;
+        CHECK(filled == staged);
+    }
     // Staging must not scatter floor Pickups (no double-drop).
     {
         std::uint32_t onFloor = 0;
@@ -2001,19 +2253,19 @@ static void test_loot_drops_before_the_corpse_is_gone() {
         CHECK(onFloor == 0);
     }
 
-    // finalize moves pending → Corpse.lootSlots and the body stays on the floor.
+    // C: лут уже в каноническом Container; finalize даёт трупу идентичность
+    // и физику RagdollRoll — перекладки pending→corpse больше нет.
     CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
     CHECK(reg.valid(boss));
     CHECK(reg.all_of<Corpse>(boss));
-    CHECK(!reg.all_of<CorpseLootPending>(boss));
-    const Corpse& corpse = reg.get<Corpse>(boss);
-    CHECK(corpse.slotCount > 0);
-    CHECK(corpse.slotCount == staged);
+    CHECK(reg.all_of<PropFallMode>(boss));
     std::uint32_t filled = 0;
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
-            ++filled;
+    {
+        const Inventory& bi = reg.get<Container>(boss).inv;
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(bi.slots[i].item) && bi.slots[i].count > 0) ++filled;
     }
+    CHECK(filled > 0);
     CHECK(filled == staged);
     {
         std::uint32_t onFloor = 0;
@@ -2032,15 +2284,7 @@ static void test_loot_drops_before_the_corpse_is_gone() {
     CHECK(inventory_value(pool.inventory(pid)) == lr.roublesGained);
     CHECK(lr.roublesGained > 0);
     // Slots cleared after a successful take.
-    {
-        std::uint32_t left = 0;
-        const Corpse& c = reg.get<Corpse>(boss);
-        for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-            if (item_valid(c.lootSlots[i].item) && c.lootSlots[i].count > 0)
-                ++left;
-        }
-        CHECK(left == 0);
-    }
+    CHECK(reg.get<Container>(boss).inv.empty());
 }
 
 
@@ -2296,6 +2540,21 @@ static void test_ranged_windup_and_deadzone() {
         projectile_step(reg, pool, bus, stack, layer, dt,
                         600u + static_cast<std::uint64_t>(i));
     CHECK(pool.hp(pid) < before);    // it connected
+    // ДЕЯНИЕ «удар» (S19, продюсер projectile_step 2026-09-05): нелетальная
+    // пуля в ЧЕЛОВЕКА (носитель камеры — обычный NpcRef) публикует
+    // Deed(strike) с жертвой-строкой пула; актёра-моба отсеет witness_step —
+    // продюсер бесстрастен по построению.
+    {
+        int strikes = 0;
+        for (std::size_t i = 0; i < bus.size(); ++i) {
+            const Event& ev = bus.events()[i];
+            if (ev.type == EventType::Deed &&
+                (ev.c >> 24) == static_cast<std::uint32_t>(kVerbStrike) &&
+                ev.b == static_cast<std::uint32_t>(pid))
+                ++strikes;
+        }
+        CHECK(strikes >= 1);
+    }
 
     // Nothing lives forever: every projectile is eventually gone.
     for (int i = 0; i < 1000; ++i)
@@ -2566,14 +2825,16 @@ static void test_extraction_reachable() {
         }
     CHECK(leaked == 0);
 
-    // The nav pads must still be there and must still NOT bank: they are a
-    // different material for a reason, and this pins the two apart.
+    // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27): hub-pad
+    // перекраска узловых слоёв снесена вместе с синими столбами — на узловом
+    // слое падика hub-pad клеток больше НЕТ, и это теперь пин. Материал жив
+    // (хрущи мостят им землю), различие «банк != пад» — тоже.
     static_assert(kMatExtract != kMatHubPad, "the bank and the nav pad must differ");
     int navPads = 0;
     for (int y = 0; y < kMacroDim; ++y)
         for (int x = 0; x < kMacroDim; ++x)
             if (hub.grid().cell(x, y, 16) == kMatHubPad) ++navPads;
-    CHECK(navPads > 0);
+    CHECK(navPads == 0);
 }
 
 
@@ -2744,7 +3005,16 @@ static void test_ranged_table() {
             CHECK(static_cast<ItemCategory>(item_def(d->ammo).category) ==
                   ItemCategory::Ammo);
         }
-        CHECK(d->dmg > 0 && d->pellets >= 1 && d->magazine >= 1);
+        // Метательное несёт dmg=0 намеренно: урон выводится из массы ВВ
+        // его пропа (charge_dmg), и генератор ОТКАЗЫВАЕТ гранатной строке
+        // с ненулевым dmg — вторая цифра разошлась бы с первой.
+        if (ranged_is_explosive(*d)) {
+            CHECK(d->dmg == 0);
+            CHECK(prop_def(static_cast<PropId>(d->thrownPropId)).explosiveG > 0);
+        } else {
+            CHECK(d->dmg > 0);
+        }
+        CHECK(d->pellets >= 1 && d->magazine >= 1);
         CHECK(d->cooldownMs > 0 && d->projSpeedMmps > 0);
     }
     // Exactly one today. Pinned so that a second thrown row has to arrive with its
@@ -3045,11 +3315,11 @@ static void test_player_shoots() {
 
     // First call with the trigger down must RELOAD, not fire: the magazine starts
     // empty and a gun that fired on an empty chamber would be free ammo.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt, 0) == 0);
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt, 0) == 0);
     const PlayerRanged* pr = reg.try_get<PlayerRanged>(shooter);
     CHECK(pr != nullptr);
-    CHECK(pr->magCount == def.magazine);       // a full magazine came out of the pack
-    CHECK(pr->reloadMs > 0);
+    CHECK(pr->hand[0].magCount == def.magazine);       // a full magazine came out of the pack
+    CHECK(pr->hand[0].reloadMs > 0);
     // ...and the rounds LEFT the inventory. A reload that duplicated ammo would be
     // invisible until someone counted.
     std::uint16_t left = 0;
@@ -3067,17 +3337,17 @@ static void test_player_shoots() {
     // 1000 ms reload therefore clears on step ceil(1000/8) = 125.
     const std::uint16_t stepMs = static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
     const int clearAt = (def.reloadMs + stepMs - 1) / stepMs;
-    const std::uint16_t magBefore = reg.get<PlayerRanged>(shooter).magCount;
+    const std::uint16_t magBefore = reg.get<PlayerRanged>(shooter).hand[0].magCount;
     for (int i = 1; i < clearAt; ++i)
-        CHECK(player_ranged_step(reg, pool, layer, true, dt,
+        CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                                  static_cast<std::uint64_t>(i)) == 0);
-    CHECK(reg.get<PlayerRanged>(shooter).reloadMs > 0);   // still not ready
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs > 0);   // still not ready
     // The step that clears the reload is the step that fires.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt,
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                              static_cast<std::uint64_t>(clearAt)) == 1);
-    CHECK(reg.get<PlayerRanged>(shooter).reloadMs == 0);
-    CHECK(reg.get<PlayerRanged>(shooter).magCount == magBefore - 1);
-    CHECK(reg.get<PlayerRanged>(shooter).cooldownMs == def.cooldownMs);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs == 0);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].magCount == magBefore - 1);
+    CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs == def.cooldownMs);
 
     // One pellet, tagged as the player's, flying flat.
     int inFlight = 0;
@@ -3090,7 +3360,7 @@ static void test_player_shoots() {
     CHECK(inFlight == def.pellets);
 
     // The cooldown gates the next shot rather than the trigger being polled.
-    CHECK(player_ranged_step(reg, pool, layer, true, dt, 501u) == 0);
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt, 501u) == 0);
 
     // Fly it. THE assertion: the monster loses HP and the SHOOTER does not.
     const std::int16_t mobHp0 = reg.get<MobRef>(mob).hp;
@@ -3443,7 +3713,7 @@ static void test_lob_isotropy() {
 // REVERSE POLARITY — the change it guards was broken on purpose and the named CHECK
 // was watched to fail — because a green assertion that cannot go red is a comment.
 static void test_grenade() {
-    // ---- 0. THE ROW, and the trap it sets for the gun picker ------------------
+    // ---- 0. THE ROW: оружие называет ПРОП, урон и радиус — вывод из ВВ --------
     ItemId gren = kInvalidItem;
     for (ItemId i = 1; i <= kItemCount; ++i)
         if (const RangedDef* d = ranged_for_item(i))
@@ -3452,26 +3722,31 @@ static void test_grenade() {
     const RangedDef& gdef = *ranged_for_item(gren);
     CHECK(static_cast<ProjType>(gdef.projType) == ProjType::Grenade);
     CHECK(ranged_is_thrown(gren));                 // it is its own ammunition
-    CHECK(gdef.blastDm == 50 && gdef.fuseDs == 30);  // 5.0 m, 3.0 s
-    CHECK(gdef.dmg == 90);   // data/items.csv: "Урон 90 по площади"
-    const float kBlastR = static_cast<float>(gdef.blastDm) * 0.1f;
+    CHECK(gdef.fuseDs == 30);                      // 3.0 s
+    // Урона в оружейной строке больше НЕТ: одна правда — масса ВВ пропа,
+    // gen_ranged_table отказывает гранатной строке с dmg != 0.
+    CHECK(gdef.dmg == 0);
+    CHECK(gdef.thrownPropId != 255);
+    const PropDef& gprop = prop_def(static_cast<PropId>(gdef.thrownPropId));
+    CHECK(gprop.explosiveG == 60);                 // Ф-1: 60 г ТНТ
+    CHECK(static_cast<PropFallMode>(gprop.fallMode) ==
+          PropFallMode::RagdollRoll);              // граната КАТАЕТСЯ (S3)
+    // Калибровка вывода держит старый баланс бит-в-бит: 90 в центре, 5.0 м.
+    CHECK(charge_dmg(gprop.explosiveG) == 90);
+    const float kBlastR = charge_radius_m(gprop.explosiveG);
+    CHECK(std::fabs(kBlastR - 5.0f) < 1e-3f);
 
     // The blast must not be narrower than the sphere in which a plain bullet already
-    // connects, or the radius is a lie at its own edge. The generator refuses such a
-    // row; this is the same rule asserted against the shipped table.
+    // connects, or the radius is a lie at its own edge.
     CHECK(kBlastR > kProjHitRadius);
 
-    // THE DPS TRAP. A grenade is 75 burst DPS and beats 26 of the 29 firearms, so a
-    // picker that ranks on DPS alone hands the player a grenade and player_ranged_step
-    // fires one down the camera ray per trigger pull. The two pickers must be
-    // complements: never both, never neither.
+    // Пикеры — комплементы: never both, never neither.
     {
         ItemId rifle = kInvalidItem;
         for (ItemId i = 1; i <= kItemCount; ++i)
             if (const RangedDef* d = ranged_for_item(i))
                 if (d->dmg == 170) rifle = i;      // ptrs_liquidator
         CHECK(rifle != kInvalidItem);
-        CHECK(ranged_dps(gdef) > ranged_dps(*ranged_for_item(rifle)));  // the trap is real
 
         Inventory bag;
         bag.slots[0] = ItemSlot{gren, 3};
@@ -3480,6 +3755,17 @@ static void test_grenade() {
         bag.slots[1] = ItemSlot{rifle, 1};
         CHECK(equipped_ranged(bag) == rifle);          // ...even beside a worse gun
         CHECK(equipped_throwable(bag) == gren);
+
+        // ГРАНАТА В РУКЕ (two-hands.md, закон владельца: «рука несёт и
+        // делает то, чем экипирована»): граната в руке НЕ делает её
+        // стволом — пикер огнестрела видит только настоящие стволы обеих
+        // рук; выбор метательного живёт в player_throw_step (рука бросает
+        // СВОЁ), приоритетов между руками нет по построению.
+        Equipped eq{};
+        CHECK(equip_hand(bag, eq, 0, /*right=*/true)); // ПКМ = граната
+        CHECK(equipped_ranged(bag, &eq) == kInvalidItem); // граната не ствол
+        CHECK(equip_item(bag, eq, 1)); // ЛКМ = ствол
+        CHECK(equipped_ranged(bag, &eq) == rifle);
     }
 
     // A hollow room to work in: floors are dense interiors, and a grenade in a solid
@@ -3500,22 +3786,31 @@ static void test_grenade() {
             stack.layer(layer).grid().fill_cell(x, y, 19, kMatConcrete);
     const float dt = kSimDt;
 
-    // Places a grenade by hand, stationary, with a fuse of `fuseMs`. Hand-built for
-    // the same reason the bullet suite hand-builds its point-blank shot: the test is
-    // about what a detonation DOES, and a thrown arc would make the position an
-    // outcome rather than an input. The throw itself is block 5.
-    auto plant = [&](Registry& r, const vec3& at, Entity src, std::uint16_t fuseMs) {
+    // Places an ARMED CHARGE PROP by hand, stationary, fuse at absolute sim
+    // tick `atTick`. Hand-built for the same reason the bullet suite
+    // hand-builds its point-blank shot: the test is about what a detonation
+    // DOES, and a thrown arc would make the position an outcome rather than
+    // an input. The throw itself is block 5. Тело — рагдолл-ядра, тем же
+    // законом, что spawn_grenade.
+    auto plant = [&](Registry& r, const vec3& at, Entity src,
+                     std::uint64_t atTick) {
         Entity g = r.create();
         Transform t;
         t.pos = at;
         t.layer = layer;
         r.emplace<Transform>(g, t);
         r.emplace<Velocity>(g, Velocity{vec3{0.0f, 0.0f, 0.0f}});
-        r.emplace<AABB>(g, AABB{vec3{0.1f, 0.1f, 0.1f}});
-        r.emplace<Projectile>(
-            g, Projectile{src, static_cast<std::int16_t>(gdef.dmg), fuseMs, 100,
-                          static_cast<std::uint8_t>(ProjType::Grenade), 0,
-                          gdef.blastDm});
+        const vec3 half{static_cast<float>(gprop.sizeXMm) * 0.0005f,
+                        static_cast<float>(gprop.sizeYMm) * 0.0005f,
+                        static_cast<float>(gprop.sizeZMm) * 0.0005f};
+        r.emplace<AABB>(g, AABB{half});
+        const float hard = static_cast<float>(kMatHardness[gprop.matId]);
+        rigid_attach_sphere(r, g, std::min({half.x, half.y, half.z}),
+                            static_cast<float>(gprop.massG) * 0.001f,
+                            restitution_from_hardness(hard),
+                            friction_from_hardness(hard));
+        r.emplace<Charge>(g, Charge{gprop.explosiveG, gprop.chargeTrigger, 0});
+        r.emplace<ChargeArmed>(g, ChargeArmed{atTick, src});
         return g;
     };
 
@@ -3542,21 +3837,22 @@ static void test_grenade() {
 
         // 2 m away — the distance a grenade you dropped ends up at.
         const vec3 at{mt.pos.x + 2.0f, mt.pos.y, mt.pos.z};
-        plant(reg, at, me, 1u);   // fuse expires on the first step
+        plant(reg, at, me, 1u);   // фитиль истёк к первому charge_step
 
         const std::int16_t hp0 = pool.hp(tid);
-        const std::uint32_t hits =
-            projectile_step(reg, pool, bus, stack, layer, dt, 10u);
-        CHECK(hits == 1);
+        const std::uint32_t booms = charge_step(reg, pool, stack, layer, 10u);
+        CHECK(booms == 1);
         CHECK(pool.hp(tid) < hp0);        // <<< осколки бьют и владельца
 
-        // And the number is the authored falloff, not "some damage": 90 x (1 - 2/5).
+        // And the number is the DERIVED falloff, not "some damage":
+        // charge_dmg(60 г) = 90, x (1 - 2/5).
         const std::int16_t expect =
             static_cast<std::int16_t>(90.0f * (1.0f - 2.0f / kBlastR) + 0.5f);
         CHECK(hp0 - pool.hp(tid) == expect);
         CHECK(expect == 54);
         // The grenade is spent. A fuse that fires twice would double every blast.
-        CHECK(reg.view<const Projectile>().empty());
+        CHECK(reg.view<const Charge>().empty());
+        (void)bus;
         std::fprintf(stderr,
                      "[grenade] own blast: thrower took %d at %.1f m of %.1f m\n",
                      hp0 - pool.hp(tid), 2.0f, kBlastR);
@@ -3585,7 +3881,8 @@ static void test_grenade() {
             reg.emplace<MobRef>(m[i], MobRef{0, 1, 4000, 4000});
         }
         plant(reg, c, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 20u);
+        charge_step(reg, pool, stack, layer, 20u);
+        (void)bus;
 
         std::int16_t took[4];
         for (int i = 0; i < 4; ++i)
@@ -3594,30 +3891,25 @@ static void test_grenade() {
         CHECK(took[1] > took[2]);
         CHECK(took[2] >= 1);      // inside the radius is never free
         CHECK(took[3] == 0);      // outside it is never charged
-        // Nearest is the authored 90 x (1 - 0.5/5.0) = 81, within the rounding the
-        // one-tick gravity drop can introduce.
-        CHECK(took[0] >= 80 && took[0] <= 82);
+        // Nearest is the derived 90 x (1 - 0.5/5.0) = 81 (заряд стоит на
+        // месте — гравитационного сдвига за тик больше нет).
+        CHECK(took[0] == 81);
         std::fprintf(stderr,
                      "[grenade] falloff over %.1f m: %d %d %d %d at %.1f/%.1f/%.1f/%.1f m\n",
                      kBlastR, took[0], took[1], took[2], took[3],
                      dist[0], dist[1], dist[2], dist[3]);
     }
 
-    // ---- 3. IT BOUNCES OFF A WALL, AND DOES NOT GO OFF ON IT ------------------
+    // ---- 3. ОТСКОК — РАГДОЛЛ-ЯДРОМ, И СТЕНА НЕ ДЕТОНИРУЕТ ЗАРЯД --------------
     //
-    // Run on all THREE axes with the same code and the same expectation, because the
-    // isotropy law ([problems.md] §34) is not "z is special-cased correctly", it is
-    // "no letter is special at all". The component normal to the face crossed must
-    // flip and lose energy; the other two must not flip.
-    //
-    // Reverse polarity: replace the swept-face search in `grenade_advance` with "the
-    // axis of the largest velocity component" and the diagonal case below (axis 2,
-    // thrown into a ceiling while drifting sideways) reverses the wrong component.
+    // Прежний grenade_advance (ВТОРОЙ интегратор отскока, макроклеточный —
+    // отскакивал от прокарванной насквозь клетки, улика закона двух масштабов
+    // S2) умер 2026-08-22: гранату катает rigid по субвокселям и материальным
+    // парам, у которого свои тесты изотропии. Здесь пинится ШОВ: тело
+    // отражается от построенной стены на всех трёх осях, остаётся зарядом со
+    // взведённым фитилём, и контакт со стеной НЕ детонирует его — фитиль
+    // единственная смерть заряда.
     {
-        // The wall is BUILT, not assumed. My first version picked cells just outside
-        // the hollowed room and trusted the generator to have filled them; two of the
-        // three were already air, so the grenade flew past the "wall" and the failure
-        // read as a broken bounce rather than as a missing wall.
         const int solid[3][3] = {{31, 20, 21}, {22, 25, 21}, {22, 20, 25}};
         for (int a = 0; a < 3; ++a) {
             for (int dx = -1; dx <= 1; ++dx)
@@ -3631,23 +3923,20 @@ static void test_grenade() {
             Registry reg;
             NpcPool pool;
             pool.init();
-            EventBus bus;
 
-            // Start one cell short of the wall, moving at it, with a small drift on
-            // the other two axes so "which face" is a real question rather than a
-            // one-dimensional certainty.
+            // Start one cell short of the wall, moving at it, with a small
+            // drift on the other two axes.
             vec3 start{static_cast<float>(solid[a][0]) * kCellSize + 1.0f,
                        static_cast<float>(solid[a][1]) * kCellSize + 1.0f,
                        static_cast<float>(solid[a][2]) * kCellSize + 1.0f};
             vec3 vel{0.6f, 0.6f, 0.6f};
-            // Step back along `a` into the open room and aim at the wall.
             (a == 0 ? start.x : a == 1 ? start.y : start.z) -= 2.0f * kCellSize;
             (a == 0 ? vel.x : a == 1 ? vel.y : vel.z) = 14.0f;
 
-            Entity g = plant(reg, start, entt::null, kProjTtlMs);
+            Entity g = plant(reg, start, entt::null, 1000000u); // фитиль далеко
             reg.get<Velocity>(g).v = vel;
-            // A body pressed against the wall: if the grenade detonated on contact,
-            // this is what would take the damage.
+            // A body pressed against the wall: if the charge detonated on
+            // contact, this is what would take the damage.
             Entity witness = reg.create();
             Transform wt;
             wt.pos = start;
@@ -3656,75 +3945,24 @@ static void test_grenade() {
             reg.emplace<Transform>(witness, wt);
             reg.emplace<MobRef>(witness, MobRef{0, 1, 4000, 4000});
 
-            const float v0 = (a == 0 ? vel.x : a == 1 ? vel.y : vel.z);
             bool flipped = false;
-            for (int i = 0; i < 60 && reg.valid(g) && !flipped; ++i) {
-                projectile_step(reg, pool, bus, stack, layer, dt,
-                                30u + static_cast<std::uint64_t>(i));
+            for (int i = 0; i < 120 && !flipped; ++i) {
+                rigid_body_step(reg, stack, dt);
+                charge_step(reg, pool, stack, layer,
+                            30u + static_cast<std::uint64_t>(i));
                 if (!reg.valid(g)) break;
                 const vec3& v = reg.get<Velocity>(g).v;
                 const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
                 if (vn < 0.0f) flipped = true;
             }
-            CHECK(flipped);                       // it came back off the face
-            CHECK(reg.valid(g));                  // and it is STILL A GRENADE
-            const vec3& v = reg.get<Velocity>(g).v;
-            const float vn = (a == 0 ? v.x : a == 1 ? v.y : v.z);
-            CHECK(std::fabs(vn) < v0);            // and it lost energy doing it
-            // The other two components kept their sign: nothing else was reflected.
-            for (int b = 0; b < 3; ++b) {
-                if (b == a) continue;
-                const float vb = (b == 0 ? v.x : b == 1 ? v.y : v.z);
-                CHECK(vb >= 0.0f);
-            }
-            // NOTHING DETONATED ON THE WALL. A bullet would be gone and the witness
-            // beside the impact would be hurt; the grenade is neither.
+            CHECK(flipped);                      // it came back off the wall
+            CHECK(reg.valid(g));                 // and it is STILL A CHARGE
+            CHECK(reg.all_of<ChargeArmed>(g));   // фитиль всё ещё горит
+            // NOTHING DETONATED ON THE WALL: contact is not a trigger.
             CHECK(reg.get<MobRef>(witness).hp == 4000);
-            CHECK(reg.get<Projectile>(g).ttlMs > 0);
         }
-
-        // THE GRAZING CASE, and it is the only one of the four that can tell a FACE
-        // from an AXIS LETTER.
-        //
-        // The three above cannot, and I only found that out by mutating the code:
-        // replacing the swept-face search with "reflect the largest velocity
-        // component" left all three of them GREEN, because in each the fast axis and
-        // the wall's axis are the same one. A test that cannot fail is a comment.
-        //
-        // So: fast along +x, slow along +z, and a ceiling 0.06 m overhead. The face
-        // crossed is the ceiling's; the biggest component is x. Face reflection turns
-        // z around and leaves x alone. Axis-letter reflection does the opposite, and
-        // both CHECKs below catch it.
-        {
-            for (int cx = 21; cx <= 24; ++cx)
-                for (int cy = 19; cy <= 21; ++cy)
-                    stack.layer(layer).grid().fill_cell(cx, cy, 24, kMatConcrete);
-
-            Registry reg;
-            NpcPool pool;
-            pool.init();
-            EventBus bus;
-            Entity g = plant(reg, vec3{45.0f, 41.0f, 47.94f}, entt::null, kProjTtlMs);
-            reg.get<Velocity>(g).v = vec3{14.0f, 0.0f, 6.0f};
-
-            bool hitCeiling = false;
-            for (int i = 0; i < 20 && reg.valid(g) && !hitCeiling; ++i) {
-                projectile_step(reg, pool, bus, stack, layer, dt,
-                                600u + static_cast<std::uint64_t>(i));
-                if (reg.valid(g) && reg.get<Velocity>(g).v.z < 0.0f) hitCeiling = true;
-            }
-            CHECK(hitCeiling);
-            CHECK(reg.valid(g));
-            const vec3& v = reg.get<Velocity>(g).v;
-            CHECK(v.z < 0.0f);   // the CEILING's face turned it back down
-            CHECK(v.x > 0.0f);   // ...and the fast axis was NOT the one reflected
-            CHECK(v.x < 14.0f);  // only damped, by the tangential friction
-            std::fprintf(stderr,
-                         "[grenade] grazing bounce: v=(%.2f, %.2f, %.2f) — the face "
-                         "reflected, not the biggest component\n",
-                         v.x, v.y, v.z);
-        }
-        std::fprintf(stderr, "[grenade] bounced off a face on all 3 axes, no early blast\n");
+        std::fprintf(stderr,
+                     "[grenade] rigid bounce on all 3 axes, no early blast\n");
     }
 
     // ---- 4. THE DETONATION DESTROYS GEOMETRY ----------------------------------
@@ -3747,14 +3985,14 @@ static void test_grenade() {
         // Right against the wall of the hollow room, so there is masonry to remove.
         const vec3 at{31.0f * kCellSize - 0.5f, 41.0f, 42.0f};
         plant(reg, at, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 40u, nullptr, entt::null,
-                        &carves, nullptr, &bursts);
+        charge_step(reg, pool, stack, layer, 40u, &carves, &bursts);
+        (void)bus;
 
         CHECK(carves.count == 1);
         CHECK(carves.droppedFull == 0 && carves.droppedDegenerate == 0);
         const CarveProposal& pr = carves.items[0];
         CHECK(std::fabs(pr.radius - kBlastR * kBlastCarveScale) < 1e-4f);
-        CHECK(pr.power == carve_power_from_dmg(static_cast<std::int16_t>(gdef.dmg)));
+        CHECK(pr.power == carve_power_from_dmg(charge_dmg(gprop.explosiveG)));
         CHECK(pr.power > 256);    // above concrete's hardness: it opens a real hole
         // Sparks AND debris, two rows of data/particles.csv with two lifetimes.
         CHECK(bursts.count == 2);
@@ -3805,7 +4043,7 @@ static void test_grenade() {
         cam.pitch = -1.5707f;
 
         Inventory& inv = pool.inventory(tid);
-        inv.slots[0] = ItemSlot{gren, 2};
+        inv.slots[0] = ItemSlot{gren, 3};
 
         // One idle melee pass, exactly as the app runs every tick, because that is
         // what attaches `PlayerMelee` lazily. The kill counter the HUD prints lives
@@ -3816,24 +4054,50 @@ static void test_grenade() {
         CHECK(reg.all_of<PlayerMelee>(me));
         CHECK(reg.get<PlayerMelee>(me).kills == 0);
 
-        // The trigger is gated on the SHARED cooldown, which player_ranged_step owns.
-        CHECK(player_throw_step(reg, pool, layer, /*wantThrow=*/false) == 0);
-        CHECK(player_throw_step(reg, pool, layer, true) == 1);
-        CHECK(player_throw_step(reg, pool, layer, true) == 0);   // cooldown holds
+        // РУКА НЕСЁТ И ДЕЛАЕТ ТО, ЧЕМ ЭКИПИРОВАНА (закон владельца
+        // 2026-08-31): спуск руки бросает предмет ЕЁ ячейки и платит
+        // кулдаун СВОЕЙ руки; вторая рука не задета. Сначала — ПКМ-рука с
+        // экипированной гранатой: wantL ничего не бросает (ЛКМ пуста),
+        // wantR бросает и занимает ПКМ.
+        {
+            Equipped& teq = reg.get_or_emplace<Equipped>(me);
+            CHECK(equip_hand(inv, teq, 0, /*right=*/true));
+            CHECK(player_throw_step(reg, pool, layer, /*L*/ true, false,
+                                    false, 40u) == 0); // ЛКМ пуста — тишина
+            CHECK(player_throw_step(reg, pool, layer, false, /*R*/ true,
+                                    false, 40u) == 1);
+            CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs ==
+                  gdef.cooldownMs); // темп ПКМ
+            CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs == 0);
+            reg.get<PlayerRanged>(me).hand[1].cooldownMs = 0; // стенд дальше
+            unequip_slot(teq, EquipSlot::Tool);
+            // Улетевший ПКМ-заряд рвётся вдали от стенда — дальнейшие пины
+            // (flying == 1 и т.д.) считают только следующий бросок.
+            for (auto e : reg.view<const Charge>()) reg.destroy(e);
+        }
+        // Путь без решателя (wantBag) — скан сумки, рука ЛКМ (консоль).
+        CHECK(player_throw_step(reg, pool, layer, false, false, false,
+                                49u) == 0);
+        CHECK(player_throw_step(reg, pool, layer, false, false, true,
+                                49u) == 1);
+        CHECK(player_throw_step(reg, pool, layer, false, false, true,
+                                49u) == 0); // рука ЛКМ занята
         // ONE grenade left the bag — the weapon IS the round.
         std::uint16_t left = 0;
         for (const ItemSlot& sl : inv.slots)
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
-        CHECK(reg.get<PlayerRanged>(me).cooldownMs == gdef.cooldownMs);
-        // It is in the air, it is a GRENADE, and its fuse is the authored one.
+        CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs ==
+              gdef.cooldownMs); // темп руки ЛКМ
+        CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs == 0); // ПКМ свободна
+        // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
+        // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;
-        for (auto e : reg.view<const Projectile>()) {
-            const Projectile& p = reg.get<const Projectile>(e);
-            CHECK(static_cast<ProjType>(p.proj) == ProjType::Grenade);
-            CHECK(p.ttlMs == gdef.fuseDs * 100u);
-            CHECK(p.blastDm == gdef.blastDm);
-            CHECK(p.source == me);
+        for (auto e : reg.view<const Charge, const ChargeArmed>()) {
+            const ChargeArmed& arm = reg.get<const ChargeArmed>(e);
+            CHECK(arm.atTick == 49u + 375u);
+            CHECK(arm.source == me);
+            CHECK(reg.all_of<RigidBody>(e)); // не снаряд — тело ядра
             ++flying;
         }
         CHECK(flying == 1);
@@ -3848,10 +4112,11 @@ static void test_grenade() {
 
         NoiseField noise;
         const std::int16_t myHp0 = pool.hp(tid);
-        for (int i = 0; i < 500 && !reg.view<const Projectile>().empty(); ++i)
-            projectile_step(reg, pool, bus, stack, layer, dt,
-                            50u + static_cast<std::uint64_t>(i), nullptr, me,
-                            nullptr, nullptr, nullptr, &noise);
+        for (std::uint64_t t = 50; t <= 500 &&
+                                   !reg.view<const ChargeArmed>().empty(); ++t) {
+            rigid_body_step(reg, stack, dt); // граната падает и катится честно
+            charge_step(reg, pool, stack, layer, t, nullptr, nullptr, &noise);
+        }
         CHECK(reg.all_of<Dead>(mob));
         CHECK(reg.get<Dead>(mob).killer == me);      // §40: it was the player's
         CHECK(pool.hp(tid) < myHp0);                 // ...and it cost him too
@@ -3912,7 +4177,8 @@ static void test_grenade() {
         reg.emplace<MobRef>(victim, MobRef{0, 1, 30, 30});
 
         plant(reg, vt.pos, gunner, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 700u);
+        charge_step(reg, pool, stack, layer, 700u);
+        (void)bus;
         CHECK(reg.all_of<Dead>(victim));
         CHECK(reg.get<Dead>(victim).killer == gunner);
         CHECK(reg.get<Dead>(victim).killer != me);   // §40: NOT the player's kill
@@ -3945,8 +4211,8 @@ static void test_grenade() {
         const std::uint16_t dropped0 = carves.droppedFull;
 
         plant(reg, vec3{44.0f, 41.0f, 42.0f}, entt::null, 1u);
-        projectile_step(reg, pool, bus, stack, layer, dt, 800u, nullptr, entt::null,
-                        &carves);
+        charge_step(reg, pool, stack, layer, 800u, &carves);
+        (void)bus;
         CHECK(carves.droppedFull == dropped0 + 1);   // visible as a number
         std::fprintf(stderr,
                      "[grenade] full carve queue: dropped_full=%u (counted, not silent)\n",
@@ -3973,7 +4239,7 @@ static void test_grenade() {
             static_cast<std::int16_t>(90.0f * (1.0f - 4.0f / kBlastR) + 0.5f);
         CHECK(expect == 18);
 
-        auto detonate = [&](bool withWall, std::int16_t& openTook,
+        auto boom = [&](bool withWall, std::int16_t& openTook,
                             std::int16_t& shieldedTook) {
             // A SLAB, not a single cell — and the first version of this test used
             // one cell and failed, which was the test being wrong rather than the
@@ -4006,18 +4272,19 @@ static void test_grenade() {
             Entity a = body(openSide);
             Entity b = body(wallSide);
             plant(reg, at, entt::null, 1u);
-            projectile_step(reg, pool, bus, stack, layer, dt, 900u);
+            charge_step(reg, pool, stack, layer, 900u);
+            (void)bus;
             openTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(a).hp);
             shieldedTook = static_cast<std::int16_t>(4000 - reg.get<MobRef>(b).hp);
         };
 
         std::int16_t openA = 0, wallB = 0;
-        detonate(/*withWall=*/true, openA, wallB);
+        boom(/*withWall=*/true, openA, wallB);
         CHECK(openA == expect);   // the one in the open pays in full
         CHECK(wallB == 0);        // <<< the one behind the wall pays NOTHING
 
         std::int16_t openA2 = 0, wallB2 = 0;
-        detonate(/*withWall=*/false, openA2, wallB2);
+        boom(/*withWall=*/false, openA2, wallB2);
         CHECK(openA2 == expect);  // unchanged, so the wall is what moved
         CHECK(wallB2 == expect);  // ...and the same body, same distance, now pays
 
@@ -4033,8 +4300,8 @@ static void test_grenade() {
             EventBus bus;
             CarveProposalQueue carves;
             plant(reg, at, entt::null, 1u);
-            projectile_step(reg, pool, bus, stack, layer, dt, 950u, nullptr,
-                            entt::null, &carves);
+            charge_step(reg, pool, stack, layer, 950u, &carves);
+            (void)bus;
             CHECK(carves.count == 1);
             for (int wy = 19; wy <= 21; ++wy)
                 for (int wz = 20; wz <= 22; ++wz)
@@ -4044,6 +4311,68 @@ static void test_grenade() {
                      "[grenade] wall shielded 1 of 2 bodies at %.1f m: %d vs %d "
                      "(same pair without the wall: %d vs %d)\n",
                      4.0f, openA, wallB, openA2, wallB2);
+    }
+
+    // ---- 8. ЗАРЯД ОТ УРОНА: выстрел по бочке взводит, charge_step рвёт --------
+    //
+    // ChargeTrigger::Damage — вторая строка данных той же системы: бочка
+    // приезжает из props.csv со своим потенциалом (spawn_prop_from_id
+    // цепляет Charge), пуля ВЗВОДИТ её вместо детача (atTick=0 — «уже
+    // пора»), рвёт тот же charge_step тем же detonate(). Ноль нового кода
+    // на вид взрывчатки — только строка CSV.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        EventBus bus;
+        bus.init();
+
+        SubVoxelAnchor anchor{};
+        anchor.cx = 22;
+        anchor.cy = 20;
+        anchor.cz = 19;   // бетонный пол полой комнаты, построенный выше
+        anchor.subX = 4;
+        anchor.subY = 4;
+        anchor.subZ = 7;
+        anchor.face = 0;
+        const vec3 bpos{45.0f, 41.0f, 40.5f};
+        const PropId barrelId = prop_id_by_string("fuel_barrel");
+        CHECK(prop_valid(barrelId));
+        Entity barrel = spawn_prop_from_id(reg, stack.layer(layer), bpos,
+                                           anchor, barrelId, layer);
+        CHECK(reg.valid(barrel));
+        CHECK(reg.all_of<Charge>(barrel));   // потенциал приехал со строки
+        CHECK(static_cast<ChargeTrigger>(reg.get<Charge>(barrel).trigger) ==
+              ChargeTrigger::Damage);
+
+        Entity shooter = reg.create();       // атрибуция — стрелявшему
+        Entity mob = reg.create();
+        Transform bt;
+        bt.pos = vec3{bpos.x + 2.0f, bpos.y, bpos.z};
+        bt.layer = layer;
+        reg.emplace<Transform>(mob, bt);
+        reg.emplace<MobRef>(mob, MobRef{0, 1, 4000, 4000});
+
+        // Пуля в бочку: заряд взводится, проп НЕ детачится и НЕ гибнет.
+        CHECK(check_projectile_prop_hits(reg, layer, bpos,
+                                         vec3{0.0f, 0.0f, -40.0f},
+                                         kProjHitRadius, bus, nullptr, 7u,
+                                         shooter));
+        CHECK(reg.valid(barrel));
+        CHECK(reg.all_of<StaticPropTag>(barrel));
+        CHECK(reg.all_of<ChargeArmed>(barrel));
+        CHECK(reg.get<ChargeArmed>(barrel).source == shooter);
+
+        // Тем же тиком фитиль «уже пора» — charge_step взрывает и убирает.
+        CHECK(charge_step(reg, pool, stack, layer, 960u) == 1);
+        CHECK(!reg.valid(barrel));
+        CHECK(reg.get<MobRef>(mob).hp < 4000);   // осколки достали
+        // Вывод из 150 г: 150 × 1.5 = 225 в центре.
+        CHECK(charge_dmg(150) == 225);
+        std::fprintf(stderr,
+                     "[grenade] barrel: shot arms, charge_step detonates "
+                     "(dmg %d, R %.1f m)\n",
+                     charge_dmg(150), charge_radius_m(150));
     }
 }
 
@@ -4080,7 +4409,7 @@ static void test_ricochet() {
         // gravityPct 0: тест про геометрию отражения, не про баллистику.
         r.emplace<Projectile>(
             b, Projectile{entt::null, dmg, 5000, 0,
-                          static_cast<std::uint8_t>(ProjType::Bullet), 0, 0});
+                          static_cast<std::uint8_t>(ProjType::Bullet), 0});
         return b;
     };
 
@@ -4223,9 +4552,9 @@ static void test_faction_gates_hunting() {
 static void test_containers() {
     auto worth = [](const Container& c) {
         std::int32_t v = 0;
-        for (int i = 0; i < kContainerSlots; ++i)
-            if (item_valid(c.item[i]))
-                v += item_def(c.item[i]).value * c.count[i];
+        for (int i = 0; i < kInvSlots; ++i)
+            if (item_valid(c.inv.slots[i].item))
+                v += item_def(c.inv.slots[i].item).value * c.inv.slots[i].count;
         return v;
     };
 
@@ -4259,11 +4588,11 @@ static void test_containers() {
             for (std::uint32_t s = 0; s < 120; ++s) {
                 const Container c =
                     roll_container(static_cast<ContainerKind>(k), fz, s * 40503u);
-                for (int i = 0; i < kContainerSlots; ++i)
-                    if (item_valid(c.item[i]))
+                for (int i = 0; i < kInvSlots; ++i)
+                    if (item_valid(c.inv.slots[i].item))
                         // Per ITEM, not per container: the cap gates what may appear,
                         // and a stack of cheap things is allowed to add up past it.
-                        CHECK(item_def(c.item[i]).value <= share);
+                        CHECK(item_def(c.inv.slots[i].item).value <= share);
             }
         }
     }
@@ -4274,14 +4603,14 @@ static void test_containers() {
     bool boxCash = false;
     for (std::uint32_t s = 0; s < 200; ++s) {
         const Container c = roll_container(ContainerKind::PublicBox, -50, s * 7919u);
-        for (int i = 0; i < kContainerSlots; ++i) {
-            if (!item_valid(c.item[i])) continue;
-            if (c.item[i] == kItemRuble) {
+        for (int i = 0; i < kInvSlots; ++i) {
+            if (!item_valid(c.inv.slots[i].item)) continue;
+            if (c.inv.slots[i].item == kItemRuble) {
                 boxCash = true;
-                CHECK(c.count[i] <= 120);   // flat at every depth, by design
+                CHECK(c.inv.slots[i].count <= 120);   // flat at every depth, by design
                 continue;
             }
-            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+            const auto cat = static_cast<ItemCategory>(item_def(c.inv.slots[i].item).category);
             CHECK(cat == ItemCategory::Food || cat == ItemCategory::Drink ||
                   cat == ItemCategory::Medicine || cat == ItemCategory::Ammo);
         }
@@ -4293,9 +4622,9 @@ static void test_containers() {
     int crateWeapons = 0;
     for (std::uint32_t s = 0; s < 200; ++s) {
         const Container c = roll_container(ContainerKind::WeaponCrate, -26, s * 104729u);
-        for (int i = 0; i < kContainerSlots; ++i) {
-            if (!item_valid(c.item[i])) continue;
-            const auto cat = static_cast<ItemCategory>(item_def(c.item[i]).category);
+        for (int i = 0; i < kInvSlots; ++i) {
+            if (!item_valid(c.inv.slots[i].item)) continue;
+            const auto cat = static_cast<ItemCategory>(item_def(c.inv.slots[i].item).category);
             CHECK(cat == ItemCategory::Weapon || cat == ItemCategory::Ammo);
             if (cat == ItemCategory::Weapon) ++crateWeapons;
         }
@@ -4309,6 +4638,8 @@ static void test_containers() {
     World w;
     generate_floor(w, -50, floor_spec(FloorKind::Derelict), 3u);
     Registry reg;
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), -50,
+                  floor_spec(FloorKind::Derelict), 3u);
     const std::uint32_t made = spawn_floor_containers(
         reg, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
     CHECK(made > 8);
@@ -4319,10 +4650,11 @@ static void test_containers() {
     // caught that before a capture did.
     for (FloorKind fk : {FloorKind::Residential, FloorKind::Commercial,
                          FloorKind::Industrial, FloorKind::Derelict}) {
-        CHECK(container_budget(fk) >= kContainerFloorMin);
+        CHECK(container_budget(/*roomCount=*/256) >= kContainerFloorMin);
         World fw;
         generate_floor(fw, -26, floor_spec(fk), 11u);
         Registry fr;
+        rooms_declare(fr.ctx().emplace<FloorRooms>(), -26, floor_spec(fk), 11u);
         const std::uint32_t n = spawn_floor_containers(
             fr, fw, -26, fk, 0, /*seed=*/5u, /*cap=*/64);
         CHECK(n >= 8);
@@ -4342,6 +4674,8 @@ static void test_containers() {
     // Deterministic: the same floor holds the same crates in the same places, which is
     // what makes the building a place rather than a slot machine.
     Registry r2;
+    rooms_declare(r2.ctx().emplace<FloorRooms>(), -50,
+                  floor_spec(FloorKind::Derelict), 3u);
     const std::uint32_t again = spawn_floor_containers(
         r2, w, -50, FloorKind::Derelict, 0, /*seed=*/99u, /*cap=*/64);
     CHECK(again == made);
@@ -4389,7 +4723,7 @@ static void test_contracts() {
                     ++fetches;
                     CHECK(item_valid(c.subject));
                     // Findable AT THIS DEPTH — this is the impossible-quest guard.
-                    CHECK(item_weight_on_floor(c.subject, fz, 0) > 0);
+                    CHECK(item_weight_on_floor(c.subject, fz) > 0);
                     break;
                 case ObjectiveKind::Hunt:
                     ++hunts;
@@ -4539,10 +4873,12 @@ static void test_full_loop() {
     generate_floor(stack.layer(layer), -26, floor_spec(FloorKind::Derelict), 11u);
 
     // --- seam 1: containers put value in rooms -------------------------------
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), -26,
+                  floor_spec(FloorKind::Derelict), 11u);
     const std::uint32_t crates =
         spawn_floor_containers(reg, stack.layer(layer), -26, FloorKind::Derelict,
                                layer, 4242u,
-                               container_budget(FloorKind::Derelict));
+                               container_budget(/*roomCount=*/1024));
     CHECK(crates > 0);
 
     // Find a crate holding something the BANK will take, and stand on it.
@@ -4563,8 +4899,8 @@ static void test_full_loop() {
     for (auto e : reg.view<const Container, const Transform>()) {
         const Container& c = reg.get<const Container>(e);
         bool anyBankable = false;
-        for (int i = 0; i < kContainerSlots; ++i) {
-            const ItemId id = c.item[i];
+        for (int i = 0; i < kInvSlots; ++i) {
+            const ItemId id = c.inv.slots[i].item;
             if (!item_valid(id)) continue;
             const ItemDef& idef = item_def(id);
             const auto cat = static_cast<ItemCategory>(idef.category);
@@ -4823,9 +5159,9 @@ static void test_route_realfloor() {
     World res;
     generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     CoarseGraph g{};
-    bake_coarse(res.grid(), g);
+    bake_coarse(res.grid(), kBodyClearanceSub, g);
     FineNav f;
-    bake_fine(res.grid(), f);
+    bake_fine(res.grid(), kBodyClearanceSub, f);
 
     // Each node's own cell is its own anchor (seeded at distance 0).
     for (int id = 0; id < kNodes; ++id) {
@@ -4837,7 +5173,7 @@ static void test_route_realfloor() {
 
     // Nearest-node field is deterministic on real geometry too.
     FineNav f2;
-    bake_fine(res.grid(), f2);
+    bake_fine(res.grid(), kBodyClearanceSub, f2);
     CHECK(f.nearest.size() == f2.nearest.size());
     CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
 
@@ -4847,9 +5183,9 @@ static void test_route_realfloor() {
     World der;
     generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
     CoarseGraph gd{};
-    bake_coarse(der.grid(), gd);
+    bake_coarse(der.grid(), kBodyClearanceSub, gd);
     FineNav fd;
-    bake_fine(der.grid(), fd);
+    bake_fine(der.grid(), kBodyClearanceSub, fd);
     for (int i = 0; i < kNodes; ++i)
         for (int j = 0; j < kNodes; ++j) {
             if (i == j) continue;
@@ -4895,9 +5231,9 @@ static void test_streamed_nav() {
     World ref;
     generate_floor(ref, /*number=*/0, floor_spec(FloorKind::Residential), seed);
     CoarseGraph gref{};
-    bake_coarse(ref.grid(), gref);
+    bake_coarse(ref.grid(), kBodyClearanceSub, gref);
     FineNav fref;
-    bake_fine(ref.grid(), fref);
+    bake_fine(ref.grid(), kBodyClearanceSub, fref);
     CHECK(std::memcmp(&fn->coarse, &gref, sizeof(CoarseGraph)) == 0);
     CHECK(fn->fine.flow.size() == fref.flow.size());
     CHECK(std::memcmp(fn->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
@@ -4935,9 +5271,9 @@ static void test_nav_cache_roundtrip() {
     World w;
     generate_floor(w, /*number=*/-3, floor_spec(FloorKind::Commercial), 77u);
     CoarseGraph g{};
-    bake_coarse(w.grid(), g);
+    bake_coarse(w.grid(), kBodyClearanceSub, g);
     FineNav f;
-    bake_fine(w.grid(), f);
+    bake_fine(w.grid(), kBodyClearanceSub, f);
 
     const std::string dir = "navcache_test_tmp";
     const std::string path = dir + "/" + nav_cache_name(-3, FloorKind::Commercial, 77u);
@@ -5261,12 +5597,121 @@ static void test_stream_migration_reembodies() {
 // surviving test_mob_table above is main version.
 
 
+static void repro_grate_hang() {
+    // ЛОКАЛЬНЫЙ РЕПРО (не коммитить): «решётка отвязана, но висит».
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    const SubField<CellType>* sm =
+        w.subfields().find<CellType>(kSubMaterialName);
+    CHECK(sm != nullptr);
+    // Найти клетки решётки (страница содержит kMatElectricGrate в слове 7).
+    int tried = 0, converted = 0, hung = 0, supported = 0;
+    {   // разведка: есть ли решётка вообще и в каком виде
+        int paged = 0, uniform = 0;
+        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+            if (w.grid().types()[ci] == kMatElectricGrate) ++uniform;
+            const CellType* pg = sm->page(ci);
+            if (!pg) continue;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (pg[b] == kMatElectricGrate) { ++paged; break; }
+        }
+        std::printf("[repro] grate presence: paged cells %d, uniform %d\n",
+                    paged, uniform);
+    }
+    for (std::uint32_t ci = 0; ci < kMacroCells && tried < 40; ++ci) {
+        if (w.grid().types()[ci] != kMatElectricGrate) continue; // однородная
+        const int cx = static_cast<int>(ci % kMacroDim);
+        const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+        // Полоса вдоль Y: режем два разреза по y-соседям (обрезаем нить с
+        // обеих сторон), середина остаётся сегментом в этой клетке.
+        CarveResult res;
+        auto cut = [&](float wx, float wy, float wz) {
+            CarveScratch scr; // СВОЙ scratch каждому разрезу — проверка
+                              // гипотезы «VisitedSet переживает свипы»
+            CarveOp op;
+            op.x = wx; op.y = wy; op.z = wz;
+            op.radius = 1.0f;
+            op.power = 512; // решётка мягкая (24? grate hardness?) — режет
+            op.seed = 99u + ci;
+            res = CarveResult{};
+            const std::int32_t rem = carve_sphere(w, op, scr, res);
+            if (tried < 3)
+                std::printf("[repro]   cut at (%.0f,%.0f,%.0f): removed %d, "
+                            "detached %zu, dirty %zu\n",
+                            wx, wy, wz, rem, res.detached.size(),
+                            res.dirtyCells.size());
+        };
+        const float zc = (cz + 0.9f) * kCellSize; // верхний слой клетки
+        cut((cx + 0.5f) * kCellSize, (cy - 0.5f) * kCellSize, zc);
+        cut((cx + 0.5f) * kCellSize, (cy + 1.5f) * kCellSize, zc);
+        ++tried;
+        // Что осталось в средней клетке?
+        const CellType* pg2 = sm->page(ci);
+        bool stillGrate = false, nowRubble = false;
+        for (int b = 0; b < kSubVoxels; ++b) {
+            if (!w.grid().masks()[ci].test(b)) continue;
+            const CellType m2 =
+                pg2 ? pg2[b] : w.grid().types()[ci];
+            if (m2 == kMatElectricGrate) stillGrate = true;
+            if (m2 == material_rubble_of(kMatElectricGrate)) nowRubble = true;
+        }
+        if (nowRubble && !stillGrate) ++converted;
+        else if (stillGrate) {
+            ++hung;
+            // Дифференциал: судья НАПРЯМУЮ на висящую клетку — если
+            // конвертирует, дефект в сидинге карва; если нет — в суде.
+            if (hung <= 3) {
+                CarveScratch scr2;
+                CarveResult res2;
+                std::uint32_t one = ci;
+                const std::int32_t conv =
+                    detach_judge_cells(w, &one, 1, scr2, res2);
+                std::printf("[repro]   direct judge on hung cell (%d,%d,%d): "
+                            "converted %d; atoms:",
+                            cx, cy, cz, conv);
+                for (std::size_t k = 0; k < res2.detached.size() && k < 24;
+                     ++k) {
+                    const auto& dv = res2.detached[k];
+                    const int sx = dv.bit & 7, sy = (dv.bit >> 3) & 7,
+                              sz = dv.bit >> 6;
+                    std::printf(" (%d,%d,%d|%d,%d,%d)",
+                                static_cast<int>(dv.cell % kMacroDim),
+                                static_cast<int>((dv.cell / kMacroDim) %
+                                                 kMacroDim),
+                                static_cast<int>(dv.cell /
+                                                 (kMacroDim * kMacroDim)),
+                                sx, sy, sz);
+                }
+                std::printf("\n");
+            }
+        }
+        else ++supported;
+    }
+    std::printf("[repro] grate cells tried %d: converted %d, HUNG %d, "
+                "emptied/other %d\n",
+                tried, converted, hung, supported);
+}
+
 int main() {
+    // СТЕНД охоты (владелец 2026-08-28, «решётки не падают»):
+    // GIGA_GRATE_REPRO=1 — только стенд и выход. ЧЕСТНАЯ ОГОВОРКА: его
+    // счётчик HUNG груб — считает «висящим» ЛЮБОЙ оставшийся атом решётки
+    // в клетке, а полосы решётки связны вдоль всего коридора, так что
+    // законно опёртые полосы попадают в тот же счётчик. Стенд полезен
+    // другим: он печатает вердикты свипа ([detach-dbg]) против прямого
+    // судьи на той же клетке — расхождение покрытия сидов видно глазами.
+    if (std::getenv("GIGA_GRATE_REPRO") != nullptr) {
+        setvbuf(stdout, nullptr, _IONBF, 0);
+        repro_grate_hang();
+        return 0;
+    }
     // Unbuffered stdio so redirected CI/agent runs show suite progress live
     // instead of looking hung at the first long suite (npcpool/samosbor2).
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
     test_inventory();
+    test_power_cut_broadphase();
     test_pool_basics();
     test_pool_death_keeps_slot();
     test_relationships();
@@ -5277,6 +5722,7 @@ int main() {
     test_attribute_block();
     test_height_maps_to_body();
     test_embody_and_foldback();
+    test_npc_ref_generation();
     test_player_is_a_record();
     test_population_seed();
     test_floor_spec();
@@ -5325,11 +5771,11 @@ int main() {
     test_lob_isotropy();
     test_grenade();
     test_ricochet();
+    test_shot_carves_updown();
     test_needs_all();
     test_noise_all();
     test_packs_all();
     test_samosbor_all();
-    test_doors_all();
     test_pipes_hug_and_branch();
     test_antourage_all();
     test_antourage_carve_drops_the_wire();
@@ -5339,6 +5785,7 @@ int main() {
     test_antourage_isotropy();
     test_audio_all();
     test_saveload_all();
+    test_persist_all();
     test_macrosim_all();
     test_behaviours_all();
     test_samosborhud_all();
@@ -5355,16 +5802,10 @@ int main() {
     test_diffusion_all();
     test_loottable_all();
     test_utilai_all();
-    // Room zones: leg (b)+(c) of §27 — where a need can be satisfied, and what
-    // standing there does. The descent block is the one that measures the property
-    // the complaint names.
-    rooms_taxonomy_is_read_the_same_way();
-    rooms_bake_follows_the_floor_mix();
-    rooms_descent_actually_arrives();
-    rooms_seat_is_the_micro_goal();
-    rooms_a_hungry_body_walks_to_a_kitchen();
-    rooms_furniture_makes_the_errand_visible();
-    rooms_recovery_closes_the_loop();
+    // suite_rooms УМЕР с эррандами по виду комнаты (rooms-object F):
+    // спуск/сиденья/кухня/мебель/регенерация жили на flow-полях и
+    // kRoomAffordance. Наследник — suite_rooms_object (зоны, supply) и
+    // agent-goals (хождение к целям по скором S13).
     test_budgets_all();
     test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
@@ -5376,6 +5817,7 @@ int main() {
     test_economy_all();
     test_monster_all();
     test_playercmd_all();
+    test_gamepad_all();
 
     test_status_all();
     test_rpg_all();
@@ -5384,6 +5826,15 @@ int main() {
     test_keybind_all();
     test_particles_all();
     test_gravity_regimes_all();
+    test_walkbits_all();
+    test_doors_all();
+    test_verbs_all();
+    test_shield_all();
+    test_goals_all();
+    test_rooms_object_all();
+    test_rebake_all();
+    test_prebuild_all();
+    test_lightvis_all();
     test_route_realfloor();
     test_streamed_nav();
     test_nav_cache_roundtrip();
@@ -5392,6 +5843,8 @@ int main() {
     test_stream_migration_reembodies();
     test_props_game_all();
     test_light_bake_clusters();
+    test_watch_all();
+    test_prof_ring_all();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 

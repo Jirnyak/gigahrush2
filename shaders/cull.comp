@@ -33,8 +33,8 @@ struct VkDrawIndexedIndirectCommand {
 layout(push_constant) uniform CullPush {
     mat4  viewProj;      // 64B: View-Projection matrix
     vec4  camPos;        // 16B: xyz = camera pos, w = fogEnd radius
-    vec4  boxMinExt;     // 16B: xyz = AABB min relative to origin, w = torusPeriod
-    vec4  boxMaxParams;  // 16B: xyz = AABB max relative to origin, w = float(vertexOffset)
+    vec4  params;        // 16B: x = torusPeriod, y = float(vertexOffset)
+                         // (AABB-лейны снесены К5-A5: границы по-инстансные)
     uint  objectCount;   //  4B: total input instances
     uint  indexCount;    //  4B: index count for mesh
     uint  firstIndex;    //  4B: first index offset
@@ -60,7 +60,7 @@ void main() {
     if (gID == 0) {
         outCmd.cmd.indexCount    = push.indexCount;
         outCmd.cmd.firstIndex    = push.firstIndex;
-        outCmd.cmd.vertexOffset  = int(push.boxMaxParams.w);
+        outCmd.cmd.vertexOffset  = int(push.params.y);
         outCmd.cmd.firstInstance = push.firstInstance;
     }
 
@@ -71,7 +71,7 @@ void main() {
     // 1. Toroidal position snap relative to camera
     vec3 camPos = push.camPos.xyz;
     vec3 relPos = inst.origin - camPos;
-    float period = push.boxMinExt.w;
+    float period = push.params.x;
     if (period > 0.0) {
         relPos.x -= period * floor(relPos.x / period + 0.5);
         relPos.y -= period * floor(relPos.y / period + 0.5);

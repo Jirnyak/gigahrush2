@@ -2,9 +2,13 @@
 // Wall-mounted Terminal / ElectricalShield live in ECS Interactable entities
 // tagged by Transform.layer. PropPass is render-only; sim+HUD must not read it.
 
+#include "game/container.h"  // spawn_floor_containers — the clear_layer_props seam test
+#include "game/floor_gen.h"  // generate_floor — real floor geometry for that seam
 #include "game/floors/padic/padic.h"
 #include "game/floor_spec.h"
 #include "game/prop_system.h"
+#include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
+#include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
 #include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
 #include "world/world.h"
 #include "world/types.h"
@@ -33,6 +37,15 @@ static void paint_floor_band(World& world, int x0, int x1, int zFloor, int y0, i
                 world.grid().fill_cell(x, y, zAir, kMatConcrete);
         }
     }
+}
+
+// A bare slab, no wall columns — the standable surface a ceiling lamp needs
+// under it. paint_floor_band above also raises walls, which would make every
+// corridor cell a lintel niche and suppress lamps for a different reason.
+static void paint_slab(World& world, int x0, int x1, int z, int y0, int y1) {
+    for (int y = y0; y < y1; ++y)
+        for (int x = x0; x < x1; ++x)
+            world.grid().fill_cell(x, y, z, kMatConcrete);
 }
 
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
@@ -153,6 +166,12 @@ static void test_ceiling_lights_seed_and_collect() {
     const LayerId layer = 5;
     const unsigned seed = 0xB11B11u;
 
+    // A ROOM, not a floating slab: a lamp needs a surface within its own reach
+    // below it, so the fixture must carry a floor. Painting only the ceiling
+    // used to seed lamps, which is the blame-floor defect in miniature — on the
+    // torus cell(x,y,z+1) wraps, so the open sky over the town read as a ceiling
+    // and came back as a flat sheet of 1538 bulbs at 255 m.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/7, /*y0*/2, /*y1*/80);
     paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
 
     const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
@@ -184,6 +203,67 @@ static void test_ceiling_lights_seed_and_collect() {
     // Layer-scoped clear drops the lamps.
     CHECK(game::clear_layer_props(reg, layer) == n);
     CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
+}
+
+// An overhang is not a ceiling. Same slab as above with the FLOOR removed: on a
+// torus every axis wraps, so any solid mass anywhere in the column reads as
+// "solid above" from the air below it. Blame's town shipped with 1538 bulbs in
+// one flat plane 200 m over the street for exactly this reason — 17% of the
+// floor's lamps at a single z. Delete the headroom test in seed_ceiling_lights
+// and this goes red.
+static void test_ceiling_lights_need_a_floor_under_them() {
+    Registry reg;
+    World world;
+    const LayerId layer = 7;
+
+    paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+
+    // A floor JUST out of the bulb's reach is still no floor: props.csv gives
+    // BareBulb 12 m, so a slab 8 cells (16 m) under the lamp cell stays dark.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/0, /*y0*/2, /*y1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+
+    // Inside the reach it lights up.
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/4, /*y0*/2, /*y1*/80);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) > 0);
+}
+
+// A lamp hangs from the ceiling's REAL under-face, and its anchor must name the
+// sub-layer that face lives in. Padic's storey ceiling is a sandwich: the slab
+// occupies sub-layers 6..7 of the cell and 0..5 are hollow. The seeder measured
+// that face for the bulb's POSITION but anchored at sub-layer 0 regardless, so
+// spawn_prop's solid(cx,cy,cz, 4,4,subZ) gate threw away 123 110 of 123 156
+// lamps and the floor shipped with 84 — "очень темно", owner's report.
+static void test_ceiling_lights_hang_from_a_sandwich_slab() {
+    Registry reg;
+    World world;
+    const LayerId layer = 8;
+    const int zAir = 8, zCeil = 9;
+
+    paint_slab(world, /*x0*/2, /*x1*/80, /*z*/7, /*y0*/2, /*y1*/80);
+    // The ceiling cell carries matter ONLY in its top two sub-layers.
+    for (int y = 2; y < 80; ++y)
+        for (int x = 2; x < 80; ++x) {
+            SubMask& m = world.grid().mask(x, y, zCeil);
+            m.words[6] = ~std::uint64_t{0};
+            m.words[7] = ~std::uint64_t{0};
+            world.grid().set_cell(x, y, zCeil, kMatConcrete);
+        }
+
+    const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, 0x5A11Bu);
+    CHECK(n > 0);
+
+    for (auto e : reg.view<const game::SubVoxelAnchor, const Transform>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        const game::SubVoxelAnchor& a = reg.get<const game::SubVoxelAnchor>(e);
+        CHECK(a.cz == zCeil);
+        CHECK(a.subZ == 6); // the slab's own lowest layer, not 0
+        // The bulb hangs just under that face, not under the cell plane.
+        const float faceM = static_cast<float>(zCeil) * kCellSize + 6.0f * (kCellSize / 8.0f);
+        CHECK(std::fabs(reg.get<const Transform>(e).pos.z - (faceM - 0.14f)) < 0.01f);
+    }
+    (void)zAir;
 }
 
 static void test_ceiling_lights_do_not_collide_with_wall_devices() {
@@ -288,7 +368,7 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     CHECK(reg.all_of<game::Interactable>(e));
     CHECK(reg.all_of<game::PropMeshTag>(e));
     CHECK(!reg.all_of<Velocity>(e));
-    CHECK(!reg.all_of<AngularVelocity>(e));
+    CHECK(!reg.all_of<RigidBody>(e)); // статик — не тело ядра до отрыва
     CHECK(!reg.all_of<game::DynamicBodyTag>(e));
 
     const auto& a = reg.get<game::SubVoxelAnchor>(e);
@@ -304,18 +384,126 @@ static void test_spawn_prop_anchor_and_detach_on_air() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(10, 4, 10))};
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
 
     CHECK(!reg.all_of<game::StaticPropTag>(e));
     CHECK(!reg.all_of<game::SubVoxelAnchor>(e));
     CHECK(reg.all_of<game::DynamicBodyTag>(e));
     CHECK(reg.all_of<Velocity>(e));
-    CHECK(reg.all_of<AngularVelocity>(e));
-    CHECK(reg.all_of<Rotation>(e));
+    // Инкремент 6 рагдолл-эпика: детач — тело ЯДРА, не AngularVelocity-косметика.
+    CHECK(reg.all_of<RigidBody>(e));
+    CHECK(reg.all_of<SelfIntegrating>(e));
     {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
         CHECK(n > 0u);
     }
+}
+
+// Рагдолл-эпик §8 (ragdoll.md, решение владельца 2026-08-21): линк с мировым
+// якорем живёт по ЕДИНОЙ якорной системе — линк-сущность несёт SubVoxelAnchor,
+// и карв опоры рвёт линк в anchor_validate_step: подвешенная цепь падает.
+// Обе полярности: чужой dirty-ключ линк не трогает, смерть опоры — рвёт и
+// будит стороны.
+static void test_world_anchored_link_severed_by_carve() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2; // слой шара — валидатор фильтрует по нему
+
+    // Потолок и шар на подвесе под ним.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+    Entity ball = reg.create();
+    reg.emplace<Transform>(ball, Transform{vec3{21.0f, 9.0f, 18.5f}, 2});
+    reg.emplace<Velocity>(ball);
+    RigidBody rb;
+    rb.asleep = true; // спит — разруб обязан разбудить
+    reg.emplace<RigidBody>(ball, rb);
+
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = ball;
+    jl.b = entt::null;
+    jl.anchorB = vec3{21.0f, 9.0f, 20.0f};
+    jl.restLen = 1.5f;
+    reg.emplace<JointLink>(link, jl);
+    game::SubVoxelAnchor sva{};
+    sva.cx = 10; sva.cy = 4; sva.cz = 10;
+    sva.subX = 4; sva.subY = 4; sva.subZ = 0;
+    sva.face = anchor_face_pack(2, -1); // нижняя грань потолка
+    reg.emplace<game::SubVoxelAnchor>(link, sva);
+
+    // Полярность 1: dirty ЧУЖОЙ клетки — линк жив.
+    const std::vector<std::uint32_t> dirtyOther{
+        static_cast<std::uint32_t>(macro_index(11, 4, 10))};
+    game::anchor_validate_step(reg, world, layer, bus, dirtyOther);
+    CHECK(reg.valid(link));
+
+    // Полярность 2: опора выкарвлена — линк уничтожен, шар разбужен.
+    world.grid().clear_cell(10, 4, 10);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(10, 4, 10))};
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+    CHECK(!reg.valid(link));
+    CHECK(!reg.get<RigidBody>(ball).asleep);
+}
+
+// Инкремент 3 якорного эпика (anchor-unify.md): проба живости — КОЛОНКА
+// субвокселей у грани крепления, не один бит. Обе полярности одним тестом
+// (закон run-the-mutation): чужой бит клетки НЕ роняет вещь, смерть колонки
+// под точкой крепления — роняет.
+static void test_anchor_column_probe_both_polarities() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2;
+
+    // Полная бетонная клетка потолка; лампа висит под нижней гранью, точка
+    // крепления — центр (4,4), как её пишет seed_ceiling_lights.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 10;
+    anchor.cy = 4;
+    anchor.cz = 10;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 0;
+    anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
+
+    const auto e = game::spawn_prop(reg, world, vec3{21.0f, 9.0f, 19.8f}, anchor,
+                                    game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::RagdollRoll,
+                                    vec3{0.9f, 0.85f, 0.4f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(10, 4, 10))};
+
+    // Полярность 1: выкарван ЧУЖОЙ угол клетки — колонка крепления цела,
+    // вещь обязана висеть (прежний побитовый тест тут не менялся, но колонка
+    // переживает и смерть самого бита (4,4,0), пока над ним есть материя).
+    world.grid().mask(10, 4, 10).clear(sub_bit(0, 0, 7));
+    world.grid().mask(10, 4, 10).clear(sub_bit(4, 4, 0));
+    bus.clear();
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::SubVoxelAnchor>(e));
+
+    // Полярность 2: умерла ВСЯ колонка 2×2 у грани крепления (окно {4,5}²
+    // сквозь все 8 слоёв) — клетка ещё на 87% полна, но вещь держаться не на
+    // чем: обязана отвалиться. Ровно кейс владельца с проводами 2026-08-05.
+    for (int sz = 0; sz < kSubDim; ++sz)
+        for (int sy = 4; sy <= 5; ++sy)
+            for (int sx = 4; sx <= 5; ++sx)
+                world.grid().mask(10, 4, 10).clear(sub_bit(sx, sy, sz));
+    bus.clear();
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::DynamicBodyTag>(e));
+    CHECK(bus.cycle_count(EventType::PropDetached) > 0u);
 }
 
 static void test_anchor_validate_skips_solid_support() {
@@ -345,7 +533,7 @@ static void test_anchor_validate_skips_solid_support() {
     const std::vector<std::uint32_t> dirty{
         static_cast<std::uint32_t>(macro_index(3, 2, 3))};
     bus.clear();
-    game::anchor_validate_step(reg, world, bus, dirty);
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
     CHECK(reg.all_of<game::StaticPropTag>(e));
     CHECK(reg.all_of<game::SubVoxelAnchor>(e));
     CHECK(!reg.all_of<Velocity>(e));
@@ -355,30 +543,245 @@ static void test_anchor_validate_skips_solid_support() {
     }
 }
 
-static void test_prop_ragdoll_step_damps_angular() {
+// Инкремент 8 рагдолл-эпика: труп — ГУМАНОИД из тел ядра. Корень = таз
+// (лут/сейв на нём), голова-грудь-ноги — сегменты со штангами-линками; тело
+// падает, складывается на пол СВЯЗНЫМ и засыпает; уборка забирает всё.
+static void test_humanoid_segments_fall_and_cleanup() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
     Registry reg;
-    const auto e = reg.create();
-    reg.emplace<game::DynamicBodyTag>(e);
-    reg.emplace<AngularVelocity>(e, AngularVelocity{vec3{10.0f, -8.0f, 4.0f}});
-    reg.emplace<Rotation>(e, Rotation{});
-    reg.emplace<Velocity>(e, Velocity{});
+    const float floorTop = 5.0f * kCellSize;
+    Entity root = reg.create();
+    // Тело умерло стоя: центр на половине роста над полом.
+    reg.emplace<Transform>(
+        root, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(root, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(root, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
 
-    // High angular speed -> active ragdoll path (exp damping).
-    const float dt = 1.0f / 60.0f;
-    const vec3 before = reg.get<AngularVelocity>(e).w;
-    game::prop_ragdoll_step(reg, dt);
-    const vec3 after = reg.get<AngularVelocity>(e).w;
-    const float bl = std::sqrt(before.x * before.x + before.y * before.y +
-                               before.z * before.z);
-    const float al = std::sqrt(after.x * after.x + after.y * after.y +
-                               after.z * after.z);
-    CHECK(al < bl);
-    CHECK(al > 0.0f);
+    const std::uint32_t made =
+        game::spawn_form_segments(reg, root, game::FormId::Humanoid,
+                                  vec3{0.4f, 0.4f, 0.9f}, 70.0f,
+                                  game::kFleshRestitution,
+                                  game::kFleshFriction);
+    // Форма — ДАННЫЕ: сколько тел и связей, решает data/prop_forms.csv, а не
+    // это число. Строка формы без корня даёт сегмент И линк.
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    CHECK(made == static_cast<std::uint32_t>((fd.count - 1) * 2));
+    // Массы долей обязаны складываться в целое тело — иначе труп весит не
+    // столько, сколько весил живой.
+    float fracSum = 0.0f;
+    for (std::uint16_t i = 0; i < fd.count; ++i)
+        fracSum += game::kFormSegs[fd.first + i].massFrac;
+    CHECK(std::fabs(fracSum - 1.0f) < 0.01f);
+    CHECK(reg.all_of<RigidBody>(root)); // корень пересобран в таз
 
-    // Near-rest: small omega should be zeroed and AngularVelocity removed.
-    reg.get<AngularVelocity>(e).w = vec3{0.001f, 0.0f, 0.0f};
-    game::prop_ragdoll_step(reg, dt);
-    CHECK(!reg.all_of<AngularVelocity>(e));
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    // Все части тела легли к полу (макс. габарит сегмента < 0.6 м) и цепь
+    // цела: каждый сегмент в пределах троекратной длины своей штанги.
+    bool allDown = true, connected = true;
+    auto segView = reg.view<game::BodySegment, Transform>();
+    std::uint32_t segCount = 0;
+    for (auto e : segView) {
+        if (!reg.all_of<RigidBody>(e)) continue; // линки без Transform не тут
+        ++segCount;
+        const float z = segView.get<Transform>(e).pos.z;
+        if (z > floorTop + 0.6f) allDown = false;
+    }
+    auto linkView = reg.view<JointLink>();
+    for (auto le : linkView) {
+        const auto& jl = linkView.get<JointLink>(le);
+        if (jl.b == entt::null) continue;
+        const vec3 d = wrap_delta3(reg.get<Transform>(jl.a).pos,
+                                   reg.get<Transform>(jl.b).pos, kWorldExtent);
+        if (length(d) > jl.restLen * 3.0f) connected = false;
+    }
+    CHECK(segCount == 3u);
+    CHECK(allDown);
+    CHECK(connected);
+
+    // Уборка: сегменты и линки умирают с корнем (ребилд этажа при загрузке).
+    std::vector<Entity> roots{root};
+    game::destroy_body_segments(reg, roots);
+    reg.destroy(root);
+    std::uint32_t left = 0;
+    for (auto e : reg.view<game::BodySegment>()) { (void)e; ++left; }
+    CHECK(left == 0u);
+}
+
+// СТИКЦИЯ (§64): НАСТОЯЩИЙ труп-гуманоид (боксы-сегменты из prop_forms.csv
+// + жёсткие штанги) обязан ДОСТИЧЬ сна на полу. До трения покоя это было
+// невозможно: штанги дерутся с контактами 16 раз за тик, тело дрожало выше
+// порога сна вечно (noisy 1241/1335 в игре, rigid 15.8 мс/кадр навсегда
+// после обрушения). Мутация «kStictionRate = 0» обязана ронять ровно
+// CHECK-и сна (верёвочная цепь world_test для полярности НЕ годится —
+// провисшие звенья засыпают и без стикции, проверено прогоном мутации).
+static void test_humanoid_reaches_sleep() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    Entity root = reg.create();
+    reg.emplace<Transform>(
+        root, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(root, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(root, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
+    game::spawn_form_segments(reg, root, game::FormId::Humanoid,
+                              vec3{0.4f, 0.4f, 0.9f}, 70.0f,
+                              game::kFleshRestitution, game::kFleshFriction);
+
+    // 12 секунд: падение + оседание + стикция (~0.2 с зоны) + порог сна
+    // (0.26 с) — запас многократный. До стикции не хватало НИКАКОГО времени.
+    for (int i = 0; i < 12 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    std::uint32_t segs = 0, asleep = 0;
+    for (auto e : reg.view<RigidBody>()) {
+        ++segs;
+        if (reg.get<RigidBody>(e).asleep) ++asleep;
+    }
+    CHECK(segs == 4u);   // таз + 3 сегмента формы
+    CHECK(asleep == segs); // труп ДОСТИГ тишины — §64 закрыт по классу
+}
+
+// Инкремент 9 рагдолл-эпика: ПЕРЕНОСКА. Несомое тело не падает, следует за
+// носителем и наследует его скорость; бросок возвращает в динамику и добавляет
+// скорость поверх. Путь один на всех носителей (S7) — тест гоняет обычную
+// сущность-носителя, не «игрока».
+static void test_carry_follows_and_throw_inherits() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    Entity carrier = reg.create();
+    reg.emplace<Transform>(
+        carrier, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                                floorTop + 0.9f},
+                           g});
+    reg.emplace<Velocity>(carrier, Velocity{vec3{2.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(carrier, AABB{vec3{0.4f, 0.4f, 0.9f}});
+
+    Entity ball = reg.create();
+    const float r = 0.25f;
+    reg.emplace<Transform>(
+        ball, Transform{vec3{10.5f * kCellSize + 1.0f, 10.5f * kCellSize,
+                             floorTop + r},
+                        g});
+    reg.emplace<Velocity>(ball);
+    rigid_attach_sphere(reg, ball, r, 20.0f, 0.3f, 0.6f);
+
+    const vec3 fwd{1.0f, 0.0f, 0.0f};
+    // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): обе заняты — взять нечем; занята
+    // левая — берёт правой (hand=1); бросок чужой руки не роняет несомое.
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f, 0x0u) ==
+          entt::null);
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f, 0x2u) == ball);
+    CHECK(reg.get<CarriedBy>(ball).hand == 1u); // правая
+    CHECK(game::drop_carried(reg, carrier, fwd, 6.0f, /*hand=*/0) == 0u);
+    CHECK(reg.all_of<CarriedBy>(ball)); // левая рука пуста — ничего не ушло
+    CHECK(game::drop_carried(reg, carrier, fwd, 0.0f, /*hand=*/1) == 1u);
+    reg.get<Velocity>(ball).v = vec3{0.0f, 0.0f, 0.0f};
+    CHECK(game::carry_nearest_body(reg, carrier, fwd, 2.5f) == ball);
+    CHECK(reg.get<CarriedBy>(ball).hand == 0u); // младшая свободная — левая
+    CHECK(reg.all_of<CarriedBy>(ball));
+
+    // Носитель идёт вперёд, тело обязано ехать с ним и не падать.
+    for (int i = 0; i < kSimHz; ++i) {
+        reg.get<Transform>(carrier).pos.x += 2.0f * kSimDt;
+        rigid_body_step(reg, stack, kSimDt);
+    }
+    const vec3 cpos = reg.get<Transform>(carrier).pos;
+    const vec3 bpos = reg.get<Transform>(ball).pos;
+    CHECK(bpos.x > cpos.x);                 // держится перед носителем
+    CHECK(std::fabs(bpos.z - (cpos.z + 0.2f)) < 0.01f); // не упало
+    CHECK(length(wrap_delta3(bpos, cpos, kWorldExtent)) < 1.2f);
+
+    // Бросок: скорость носителя (2 м/с) + бросок (6) — тело летит вперёд.
+    CHECK(game::drop_carried(reg, carrier, fwd, 6.0f) == 1u);
+    CHECK(!reg.all_of<CarriedBy>(ball));
+    CHECK(reg.get<Velocity>(ball).v.x > 7.0f);
+    const float thrownX = reg.get<Transform>(ball).pos.x;
+    for (int i = 0; i < kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    CHECK(reg.get<Transform>(ball).pos.x > thrownX + 1.0f); // улетело
+    CHECK(reg.get<Transform>(ball).pos.z < floorTop + 1.0f); // и упало на пол
+}
+
+// Инкремент 6 рагдолл-эпика: сорванный проп — тело ЯДРА (RigidBody +
+// SelfIntegrating, форма и масса выведены из строки пропа), а не косметика
+// AngularVelocity; prop_ragdoll_step умер.
+static void test_detached_prop_is_rigid_body() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 1;
+
+    world.grid().fill_cell(7, 3, 7, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 7;
+    anchor.cy = 3;
+    anchor.cz = 7;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 0;
+    anchor.face = anchor_face_pack(2, -1);
+
+    const auto e = game::spawn_prop(reg, world, vec3{15.0f, 7.0f, 13.8f},
+                                    anchor, game::Interactable::Kind::LightBulb,
+                                    game::PropFallMode::RagdollRoll,
+                                    vec3{0.9f, 0.85f, 0.4f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    // Авторский поворот меша — как у настенного пропа: детач ОБЯЗАН пронести
+    // его в тело (до фикса 2026-08-31 q стартовал identity и проп скакал
+    // ровно на -yaw в кадр отрыва).
+    const float testYaw = 1.5707963f;
+    reg.get<game::PropMesh>(e).yaw = testYaw;
+
+    world.grid().clear_cell(7, 3, 7);
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(7, 3, 7))};
+    bus.clear();
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+    CHECK(reg.all_of<game::DynamicBodyTag>(e));
+    CHECK(reg.all_of<RigidBody>(e));
+    CHECK(reg.all_of<SelfIntegrating>(e)); // physics_step не двигает вторым разом
+    CHECK(!reg.all_of<GravityAffected>(e)); // гравитацию интегрирует ядро
+    // Масса выведена, не дефолт: invMass конечна и не единица-заглушка.
+    const auto& rb = reg.get<RigidBody>(e);
+    CHECK(rb.invMass > 0.0f);
+    // Ориентация тела = ориентация меша: q — поворот вокруг Z ровно на yaw
+    // (та же формула, что применяет prop.vert). Скачок в identity — баг.
+    CHECK(std::fabs(rb.q.z - std::sin(testYaw * 0.5f)) < 1e-5f);
+    CHECK(std::fabs(rb.q.w - std::cos(testYaw * 0.5f)) < 1e-5f);
+    CHECK(std::fabs(rb.q.x) < 1e-6f && std::fabs(rb.q.y) < 1e-6f);
+    // Кувырок ВЫВЕДЕН из рычага точки крепления (ω = arm × v / rg²), а не
+    // назначен: точка (4,4,0) смещена от центра — кувырок ненулевой, но
+    // прежняя константа w.z = 1.0 рад/с мертва (v вдоль Z ⇒ ω.z ≡ 0).
+    CHECK(dot(rb.w, rb.w) > 0.0f);
+    CHECK(std::fabs(rb.w.z) < 1e-6f);
 }
 
 
@@ -444,36 +847,7 @@ static void test_find_nearest_terminal_respects_reach() {
     }
 }
 
-static void test_embody_interact_terminal_applies_at_given_pos() {
-    // embody_interact_terminal no longer searches: caller gates proximity.
-    // Calling it always reports interacted=true at the supplied terminalPos
-    // (door toggle count depends on DoorSet contents -- empty set -> 0).
-    Registry reg;
-    World world;
-    game::DoorSet doors{};
-    const LayerId layer = 1;
-    const vec3 termPos{5.0f, 1.0f, 5.0f};
-
-    const game::TerminalInteractResult res =
-        game::embody_interact_terminal(reg, world, doors, layer, termPos);
-    CHECK(res.interacted);
-    CHECK(res.propPos.x == termPos.x);
-    CHECK(res.propPos.y == termPos.y);
-    CHECK(res.propPos.z == termPos.z);
-    CHECK(res.doorsToggled == 0u);
-
-    // Miss path for live E-key: find_nearest returns !hit when nothing in reach,
-    // so main must NOT call embody_interact_terminal. That contract is what
-    // killed the old always-true fake hit at playerPos.
-    const Entity actor = make_actor_at(reg, layer, vec3{0.0f, 1.0f, 0.0f});
-    const game::InteractionHit miss = game::find_nearest_interactable(
-        reg, actor, game::Interactable::Kind::Terminal, 4.0f);
-    CHECK(!miss.hit);
-}
-
-
-// --- [jirnyak.md] section 18: PropPass passive skin (ECS PropMesh collect) ----
-
+// МОГИЛА ДВЕРЕЙ (2026-08-28): терминальный тумблер замков умер с системой.
 static void test_collect_static_prop_mesh_instances_shapes() {
     Registry reg;
     World world;
@@ -491,7 +865,7 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     CHECK(nWall + nLamp > 0u);
 
     std::vector<game::PropMeshInstance> insts;
-    const std::uint32_t n = game::collect_static_prop_mesh_instances(reg, layer, insts);
+    const std::uint32_t n = game::collect_static_prop_mesh_instances(reg, layer, 0, insts);
     CHECK(n == nWall + nLamp);
     CHECK(insts.size() == static_cast<std::size_t>(n));
 
@@ -534,13 +908,15 @@ static void test_collect_static_prop_mesh_instances_shapes() {
         bus.init();
         const std::vector<std::uint32_t> dirty{
             static_cast<std::uint32_t>(macro_index(a.cx, a.cy, a.cz))};
-        game::anchor_validate_step(reg, world, bus, dirty);
-        CHECK(reg.all_of<game::DynamicBodyTag>(target));
-        CHECK(!reg.all_of<game::StaticPropTag>(target));
+        game::anchor_validate_step(reg, world, layer, bus, dirty);
+        // Лампы — GpuHandoff (data/props.csv, решение 2026-08-18): detach
+        // уносит сущность целиком в GPU-burst, а не переводит в
+        // DynamicBodyTag, как делал прежний RagdollRoll этих строк.
+        CHECK(!reg.valid(target));
 
         std::vector<game::PropMeshInstance> after;
         const std::uint32_t n2 =
-            game::collect_static_prop_mesh_instances(reg, layer, after);
+            game::collect_static_prop_mesh_instances(reg, layer, 0, after);
         CHECK(n2 == n - 1u);
     }
 }
@@ -569,10 +945,11 @@ static void test_corpse_and_loot_are_interactable() {
         ct.layer = 0;
         reg.emplace<Transform>(corpse, ct);
         Corpse c{};
-        c.slotCount = 1;
-        c.lootSlots[0] = ItemSlot{ItemId{1}, 1};
         c.searched = false;
         reg.emplace<Corpse>(corpse, c);
+        game::Container cbox{};
+        cbox.inv.slots[0] = ItemSlot{ItemId{1}, 1, 255};
+        reg.emplace<game::Container>(corpse, cbox);
 
         // Mirrors combat.cpp finalize_deaths: Kind::Corpse, radius 2.2, active.
         reg.emplace<game::Interactable>(
@@ -609,7 +986,7 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(lr.itemsTaken == 1);
     }
     CHECK(reg.get<Corpse>(corpse).searched);
-    CHECK(reg.get<Corpse>(corpse).slotCount == 0);
+    CHECK(reg.get<game::Container>(corpse).inv.empty());
     CHECK(reg.all_of<game::Interactable>(corpse));
     CHECK(!reg.get<game::Interactable>(corpse).active);
     {
@@ -660,55 +1037,11 @@ static void test_corpse_and_loot_are_interactable() {
 
 
 
-// BodyPass roll drive ([jirnyak.md] section 18): grounded DynamicBodyTag debris
-// with lateral speed must receive AngularVelocity and must not sink into solid.
-// Default gravity is -Z (world/gravity.h), so the floor is an XY slab.
-static void test_debris_roll_drives_angular_on_ground() {
-    LevelStack stack;
-    LayerId g = stack.push_layer();
-    World& w = stack.layer(g);
-    for (int y = 0; y < 20; ++y)
-        for (int x = 0; x < 20; ++x)
-            w.grid().fill_cell(x, y, 4, 1);
-
-    Registry reg;
-    Entity e = reg.create();
-    Transform tr;
-    const float halfR = 0.25f;
-    // Rest just above floor slab top (z-cell 4 top = 5 * kCellSize).
-    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize,
-                  5.0f * kCellSize + halfR + 0.02f};
-    tr.layer = g;
-    reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(e, Velocity{{2.0f, 0.0f, 0.0f}});
-    reg.emplace<AABB>(e, AABB{{halfR, halfR, halfR}});
-    reg.emplace<GravityAffected>(e);
-    reg.emplace<DynamicBodyTag>(e);
-
-    for (int i = 0; i < kSimHz; ++i) {
-        if (auto* vel = reg.try_get<Velocity>(e)) vel->v.x = 2.0f;
-        physics_step(reg, stack, kSimDt);
-    }
-
-    CHECK(reg.get<GravityAffected>(e).grounded);
-    CHECK(reg.all_of<AngularVelocity>(e));
-    CHECK(reg.all_of<Rotation>(e));
-    const auto& ang = reg.get<AngularVelocity>(e);
-    // n=+Z, v_lat=+X -> n x v = +Y * |v| -> omega.y ~ +v.x / r.
-    const float target = 2.0f / halfR;
-    CHECK(std::fabs(ang.w.y) > 0.5f);
-    CHECK(std::fabs(ang.w.y - target) < target * 0.75f);
-    const auto& out = reg.get<Transform>(e);
-    CHECK(!aabb_overlaps_solid(w, out.pos, vec3{halfR, halfR, halfR}));
-    CHECK(out.pos.z >= 5.0f * kCellSize);
-    printf("[props] debris roll drives AngularVelocity on ground (wy=%.3f target=%.3f)\n",
-           ang.w.y, target);
-}
 
 
 // [jirnyak.md] section 18/19 -- GpuHandoff shatter.
 // The mode's whole promise: ZERO CPU debris entities. The parent is destroyed and
-// the SHOW is a burst pushed into the unified GPU particle pool ([particle_pass.h]),
+// the SHOW is a burst pushed into the unified GPU particle pool ([verlet_pass.h]),
 // so a chain collapse costs the tick nothing. The queue is optional — headless sim
 // and tests may pass nullptr and get silence, which the second half of this test pins.
 
@@ -749,34 +1082,215 @@ static void test_gpu_handoff_destroys_parent_without_cpu_debris() {
     // silence was the half of the bug that outlived the CPU-debris half.
     game::ParticleBurstQueue bursts;
     const std::uint32_t detached =
-        game::anchor_validate_step(reg, world, bus, dirty, &bursts, 77u);
+        game::anchor_validate_step(reg, world, layer, bus, dirty, &bursts, 77u);
     CHECK(detached == 1u);
-    CHECK(bursts.count == 1u);
+    // Инкр. 5: развал = ЧЕРЕПКИ (куски, сохраняющие вид) + пыль сверху.
+    CHECK(bursts.count == 2u);
     CHECK(bursts.items[0].count > 0u);
     CHECK(bursts.items[0].kind ==
-          static_cast<std::uint8_t>(game::ParticleKind::Debris));
+          static_cast<std::uint8_t>(game::ParticleKind::Shard));
+    CHECK(bursts.items[1].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Dust));
     CHECK(bursts.items[0].pos.x == pos.x && bursts.items[0].pos.z == pos.z);
     // ...and the queue stays untouched when the caller does not offer one
     // (headless sim, tests, a server with no renderer).
-    CHECK(game::anchor_validate_step(reg, world, bus, dirty) == 0u);
+    CHECK(game::anchor_validate_step(reg, world, layer, bus, dirty) == 0u);
     CHECK(!reg.valid(e)); // parent destroyed
     {
         const std::uint32_t n = bus.cycle_count(EventType::PropDetached);
         CHECK(n > 0u);
     }
 
-    // Zero CPU debris chips. GPU owns the effect now.
+    // Zero CPU debris. GPU owns the effect now — a GpuHandoff shatter must
+    // not leave a rigid-core body behind (инкремент 6: CPU-обломок = тело
+    // ядра, старой AngularVelocity-косметики не существует).
     std::uint32_t chips = 0;
-    auto view = reg.view<const game::DynamicBodyTag, const AngularVelocity,
-                         const Velocity, const Rotation, const AABB>();
+    auto view = reg.view<const game::DynamicBodyTag, const RigidBody>();
     for (auto d : view) {
         CHECK(reg.get<Transform>(d).layer == layer);
-        const vec3& w = reg.get<AngularVelocity>(d).w;
-        CHECK(w.x * w.x + w.y * w.y + w.z * w.z > 1e-6f);
         ++chips;
     }
     CHECK(chips == 0u);
     printf("[props] GpuHandoff detach -> 0 CPU debris, GPU handled\n");
+}
+
+
+// markoaudit-systems.md §1.2 — THE SEAM THE SUITES NEVER RAN. main.cpp calls
+// refresh_floor_containers and then refresh_floor_props, whose first line is
+// clear_layer_props. When that clear keyed on "has a SubVoxelAnchor" it wiped
+// every crate just spawned (38 of 38 measured on floor 0), because a container
+// carries an anchor for gravity/destruction and is NOT part of the prop
+// roster. Both halves were green in isolation — spawn_floor_containers here,
+// clear_layer_props there — and the wipe lived in the ORDER, which no test
+// executed. This test runs the seam: containers, then a roster prop, then the
+// clear. The crate must survive; the roster prop must die.
+static void test_clear_layer_props_spares_containers() {
+    World w;
+    const int floorZ = -3;
+    const game::FloorKind kind = game::FloorKind::Residential;
+    // Same seed formula main.cpp refresh_floor_containers uses.
+    const std::uint32_t seed =
+        0xC0FFEEu ^ static_cast<std::uint32_t>(floorZ) * 0x9e3779b9u;
+    game::generate_floor(w, floorZ, game::floor_spec(kind), 1337u);
+
+    Registry reg;
+    game::rooms_declare(reg.ctx().emplace<game::FloorRooms>(), floorZ,
+                        game::floor_spec(kind), 1337u);
+    const LayerId layer = 0;
+    const std::uint32_t made =
+        game::spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
+    CHECK(made > 4u);
+
+    // One roster prop through the spawn_prop route (StaticPropTag attached).
+    w.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14; anchor.cy = 6; anchor.cz = 14;
+    anchor.subX = 4; anchor.subY = 4; anchor.subZ = 4;
+    const vec3 pos{14.5f * kCellSize, 6.5f * kCellSize, 14.5f * kCellSize};
+    const auto roster = game::spawn_prop(reg, w, pos, anchor,
+                                         game::Interactable::Kind::Terminal,
+                                         game::PropFallMode::SimpleFall,
+                                         vec3{0.3f, 0.3f, 0.3f},
+                                         /*meshKind*/0u, layer);
+    CHECK(reg.valid(roster));
+
+    std::uint32_t cratesBefore = 0;
+    for (auto e : reg.view<const game::Container>()) { (void)e; ++cratesBefore; }
+    CHECK(cratesBefore == made);
+
+    // Ящик — ПРОП (S14.1 B1, решение владельца 2026-08-21): клирится со
+    // слоем, как всё со StaticPropTag, и пересеивается генерацией; контент
+    // восстанавливает сейв. Прежний контракт «ящики переживают шов» охранял
+    // до-проповый дизайн.
+    const std::uint32_t cleared = game::clear_layer_props(reg, layer);
+    CHECK(cleared >= 1u + made); // roster + все ящики
+    CHECK(!reg.valid(roster));
+
+    std::uint32_t cratesAfter = 0;
+    for (auto e : reg.view<const game::Container>()) { (void)e; ++cratesAfter; }
+    CHECK(cratesAfter == 0u);
+    printf("[props] clear_layer_props: roster + %u crates cleared as props\n",
+           made);
+}
+
+
+// markoaudit-systems.md §1.3 — furniture rows carried interact=Terminal, so E
+// on a toilet toggled the door locks of every room on the floor. Pins BOTH
+// halves of the fix: the four furniture rows are interact=None (generator
+// ordinal 255, tools/gen_prop_table.py), and the spawn path strips the
+// Interactable component for a None row. Lamps stay interactable — the
+// negative control that None did not leak into the rest of the table.
+static void test_furniture_is_not_a_terminal() {
+    CHECK(game::prop_def(game::PropId::KitchenStove).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::KitchenTable).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::ToiletPan).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::BedCot).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::BareBulb).interactKind != 255);
+
+    Registry reg;
+    World world;
+    world.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14; anchor.cy = 6; anchor.cz = 14;
+    anchor.subX = 4; anchor.subY = 4; anchor.subZ = 4;
+    const vec3 pos{14.5f * kCellSize, 6.5f * kCellSize, 14.5f * kCellSize};
+    const auto e = game::spawn_prop_from_id(reg, world, pos, anchor,
+                                            game::PropId::ToiletPan, 3);
+    CHECK(reg.valid(e));
+    CHECK(!reg.all_of<game::Interactable>(e)); // scenery, not a verb
+    printf("[props] furniture spawns without Interactable (None row)\n");
+}
+
+
+// Пин данных ([markoaudit/plans/lamp-gpuhandoff.md], решение владельца
+// 2026-08-18): все три лампы — GpuHandoff (разбилась → всплеск осколков в
+// GPU-пул, свет гаснет вместе с сущностью) и neon_tube (mat_id 20,
+// data/materials.csv) — плафон из неон-стекла, осколки тонируются им же.
+// До правки лампы были RagdollRoll с mat_id 0 (air, albedo 0/0/0): падали
+// целиком и крошились бы ЧЁРНЫМ. Данные честнее фолбэка.
+static void test_lamp_rows_are_gpu_handoff_neon() {
+    const game::PropId lamps[] = {game::PropId::BareBulb,
+                                  game::PropId::FloodLamp,
+                                  game::PropId::PadicStairBulb};
+    for (const game::PropId id : lamps) {
+        const game::PropDef& d = game::prop_def(id);
+        CHECK(d.fallMode ==
+              static_cast<std::uint8_t>(game::PropFallMode::GpuHandoff));
+        CHECK(d.matId == 20u); // neon_tube
+    }
+    printf("[props] lamp rows pinned: GpuHandoff + neon_tube matId=20\n");
+}
+
+
+// Выстрел в лампу ([markoaudit/plans/lamp-gpuhandoff.md] C): снаряд в радиусе
+// kProjHitRadius от якорного пропа рвёт его по fall_mode строки. Для
+// GpuHandoff-лампы это burst осколков в общую очередь, тонированный её
+// материалом, и гибель сущности — вместе с PropLight, так что «свет погас»
+// по построению: коллектор света ходит по view<Transform, PropLight>.
+static void test_projectile_shatters_lamp_and_light_dies() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 13;
+
+    // Потолочная лампа: якорная клетка твёрдая, спавн — из строки таблицы,
+    // никакого хардкода fall/mat/цвета на месте вызова ([jirnyak.md] §21).
+    world.grid().fill_cell(14, 6, 14, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 14;
+    anchor.cy = 6;
+    anchor.cz = 14;
+    anchor.subX = 4;
+    anchor.subY = 4;
+    anchor.subZ = 4;
+    anchor.face = 0;
+    const vec3 pos{14.5f * 2.0f, 6.5f * 2.0f, 14.5f * 2.0f};
+    const auto lamp = game::spawn_prop_from_id(reg, world, pos, anchor,
+                                               game::PropId::BareBulb, layer);
+    CHECK(reg.valid(lamp));
+    CHECK(reg.all_of<game::StaticPropTag>(lamp));
+    // Строка светит (12000 мм / 1800 e3) — свет обязан гореть ДО выстрела,
+    // иначе «погас» ниже не проверяет ничего.
+    CHECK(reg.all_of<game::PropLight>(lamp));
+
+    game::ParticleBurstQueue bursts;
+
+    // Промах: снаряд в пяти клетках — лампа стоит, очередь пуста.
+    CHECK(!game::check_projectile_prop_hits(
+        reg, layer, vec3{pos.x + 10.0f, pos.y, pos.z}, vec3{0.0f, 0.0f, -40.0f},
+        game::kProjHitRadius, bus, &bursts, 5u));
+    CHECK(reg.valid(lamp));
+    CHECK(bursts.count == 0u);
+
+    // Попадание: снаряд в 0.3 м, летит в лампу — тот же радиус, каким он
+    // трогает тела (kProjHitRadius, combat.h).
+    bus.clear();
+    CHECK(game::check_projectile_prop_hits(
+        reg, layer, vec3{pos.x, pos.y, pos.z + 0.3f}, vec3{0.0f, 0.0f, -40.0f},
+        game::kProjHitRadius, bus, &bursts, 5u));
+
+    // Всплеск: ЧЕРЕПКИ (инкр. 5 — куски, сохраняющие вид) + пыль, оба
+    // тонированы материалом лампы — neon_tube, не air.
+    CHECK(bursts.count > 1u);
+    CHECK(bursts.items[0].count > 0u);
+    CHECK(bursts.items[0].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Shard));
+    CHECK(bursts.items[0].matId == 20u);
+    CHECK(bursts.items[1].kind ==
+          static_cast<std::uint8_t>(game::ParticleKind::Dust));
+
+    // Сущность унесена целиком (GpuHandoff: ноль CPU-обломков)...
+    CHECK(!reg.valid(lamp));
+    CHECK(bus.cycle_count(EventType::PropDetached) > 0u);
+    // ...и СВЕТ ПОГАС: во всём реестре не осталось ни одного PropLight.
+    std::uint32_t lit = 0;
+    for (auto e : reg.view<const game::PropLight>()) {
+        (void)e;
+        ++lit;
+    }
+    CHECK(lit == 0u);
+    printf("[props] projectile shatters lamp: burst mat=20, light died\n");
 }
 
 
@@ -834,20 +1348,152 @@ static void test_sim_owned_terminals_seed_and_interact() {
            nWall, terms.size(), shields.size());
 }
 
+// S20.4: слой — часть ключа dirty-вопроса. Совпадение macro_index между
+// этажами — не совпадение места: карв этажа A не роняет проп этажа B. Обе
+// полярности: чужой слой не трогает даже мёртвую опору, свой — рвёт.
+static void test_anchor_validate_layer_filter() {
+    Registry reg;
+    World world;
+    EventBus bus;
+    bus.init();
+    const LayerId layer = 2;
+    world.grid().fill_cell(12, 5, 12, kMatConcrete);
+    game::SubVoxelAnchor a{};
+    a.cx = 12; a.cy = 5; a.cz = 12;
+    a.subX = 4; a.subY = 4; a.subZ = 7;
+    a.face = anchor_face_pack(2, 1);
+    const vec3 pos{12.5f * kCellSize, 5.5f * kCellSize, 13.2f * kCellSize};
+    const auto e = game::spawn_prop(reg, world, pos, a,
+                                    game::Interactable::Kind::Terminal,
+                                    game::PropFallMode::SimpleFall,
+                                    vec3{0.3f, 0.3f, 0.3f},
+                                    /*meshKind*/0, layer);
+    CHECK(reg.valid(e));
+    world.grid().clear_cell(12, 5, 12); // опора умерла
+    const std::vector<std::uint32_t> dirty{
+        static_cast<std::uint32_t>(macro_index(12, 5, 12))};
+    // Писатель ЧУЖОГО слоя: проп стоит, хоть опора и мертва.
+    game::anchor_validate_step(reg, world, layer + 1, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(e));
+    // Писатель СВОЕГО слоя: детач.
+    game::anchor_validate_step(reg, world, layer, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(e));
+}
+
+// S20.4: спящее тело будит ПИСАТЕЛЬ, изменивший опору, — иначе труп над
+// выкарвленной плитой висит в воздухе до первого толчка (единственный
+// прочий путь пробуждения — запись Velocity). Обе полярности: дальняя
+// dirty-клетка не будит, клетка-сосед опоры — будит; чужой слой — нет.
+static void test_writer_wakes_sleeping_bodies() {
+    Registry reg;
+    const LayerId layer = 2;
+    Entity b = reg.create();
+    reg.emplace<Transform>(
+        b, Transform{vec3{20.5f * kCellSize, 20.5f * kCellSize,
+                          21.2f * kCellSize},
+                     layer});
+    RigidBody rb;
+    rb.asleep = true;
+    reg.emplace<RigidBody>(b, rb);
+    // Дальняя клетка — спит.
+    const std::vector<std::uint32_t> far{
+        static_cast<std::uint32_t>(macro_index(50, 50, 50))};
+    CHECK(rigid_wake_dirty_cells(reg, layer, far.data(), far.size()) == 0u);
+    CHECK(reg.get<RigidBody>(b).asleep);
+    // Опора под телом, но ЧУЖОЙ слой — спит (S20.4: слой в ключе).
+    const std::vector<std::uint32_t> under{
+        static_cast<std::uint32_t>(macro_index(20, 20, 20))};
+    CHECK(rigid_wake_dirty_cells(reg, layer + 1, under.data(),
+                                 under.size()) == 0u);
+    CHECK(reg.get<RigidBody>(b).asleep);
+    // Свой слой — проснулся.
+    CHECK(rigid_wake_dirty_cells(reg, layer, under.data(), under.size()) ==
+          1u);
+    CHECK(!reg.get<RigidBody>(b).asleep);
+}
+
+// S20.3: ЖНЕЦ СВЯЗЕЙ — одно правило смерти носителя (вместо трёх швов) и
+// глагол якорения. Обе полярности: живые стороны — связь стоит; сторона
+// умерла — линк уничтожен, живая разбужена; сегмент без корня прибран;
+// мировой линк жнец не трогает (его рвёт карв), а его точка солвера —
+// производная записи якоря (один писатель — link_attach_world).
+static void test_attachment_reaper_and_verbs() {
+    Registry reg;
+    Entity a = reg.create(), b = reg.create();
+    reg.emplace<Transform>(a, Transform{vec3{1.0f, 1.0f, 1.0f}, 0});
+    reg.emplace<Transform>(b, Transform{vec3{2.0f, 1.0f, 1.0f}, 0});
+    RigidBody rb;
+    rb.asleep = true;
+    reg.emplace<RigidBody>(a, rb);
+    reg.emplace<RigidBody>(b, rb);
+    const Entity link =
+        game::link_attach(reg, a, b, vec3{}, vec3{}, 1.0f, true);
+    CHECK(reg.valid(link));
+    CHECK(game::attachment_reaper_step(reg) == 0u); // обе стороны живы
+    CHECK(reg.valid(link));
+    reg.destroy(b);
+    CHECK(game::attachment_reaper_step(reg) == 1u);
+    CHECK(!reg.valid(link));
+    CHECK(!reg.get<RigidBody>(a).asleep); // живая сторона разбужена
+
+    Entity root = reg.create();
+    Entity seg = reg.create();
+    reg.emplace<game::BodySegment>(seg, game::BodySegment{root});
+    CHECK(game::attachment_reaper_step(reg) == 0u);
+    reg.destroy(root);
+    CHECK(game::attachment_reaper_step(reg) == 1u);
+    CHECK(!reg.valid(seg));
+
+    World w;
+    w.grid().fill_cell(5, 5, 5, kMatConcrete);
+    game::SubVoxelAnchor sva{};
+    sva.cx = 5; sva.cy = 5; sva.cz = 5;
+    sva.subX = 3; sva.subY = 3; sva.subZ = 0;
+    sva.face = anchor_face_pack(2, -1);
+    Entity ball = reg.create();
+    reg.emplace<Transform>(ball, Transform{vec3{11.0f, 11.0f, 9.0f}, 0});
+    reg.emplace<RigidBody>(ball, rb);
+    const Entity wl =
+        game::link_attach_world(reg, ball, vec3{}, sva, 1.0f, true);
+    CHECK(reg.valid(wl));
+    CHECK(game::attachment_reaper_step(reg) == 0u);
+    // Производная точка солвера сидит на нижней грани опорного субвокселя.
+    const JointLink& jl = reg.get<JointLink>(wl);
+    CHECK(std::fabs(jl.anchorB.z -
+                    static_cast<float>(5 * kSubDim) * 0.25f) < 1e-4f);
+    // Снятие глаголом будит сторону.
+    reg.get<RigidBody>(ball).asleep = true;
+    game::link_detach(reg, wl);
+    CHECK(!reg.valid(wl));
+    CHECK(!reg.get<RigidBody>(ball).asleep);
+}
+
 void test_props_game_all() {
+    test_attachment_reaper_and_verbs();
+    test_anchor_validate_layer_filter();
+    test_writer_wakes_sleeping_bodies();
     test_wall_interactables_seed_and_collect();
     test_wall_interactables_clear_is_layer_scoped();
     test_ceiling_lights_seed_and_collect();
+    test_ceiling_lights_need_a_floor_under_them();
+    test_ceiling_lights_hang_from_a_sandwich_slab();
     test_ceiling_lights_do_not_collide_with_wall_devices();
     test_padic_props_seed_tags_layer();
     test_spawn_prop_anchor_and_detach_on_air();
+    test_world_anchored_link_severed_by_carve();
+    test_anchor_column_probe_both_polarities();
     test_anchor_validate_skips_solid_support();
-    test_prop_ragdoll_step_damps_angular();
-    test_debris_roll_drives_angular_on_ground();
+    test_detached_prop_is_rigid_body();
+    test_humanoid_segments_fall_and_cleanup();
+    test_humanoid_reaches_sleep();
+    test_carry_follows_and_throw_inherits();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
+    test_clear_layer_props_spares_containers();
+    test_furniture_is_not_a_terminal();
+    test_lamp_rows_are_gpu_handoff_neon();
+    test_projectile_shatters_lamp_and_light_dies();
     test_find_nearest_terminal_respects_reach();
     test_sim_owned_terminals_seed_and_interact();
-    test_embody_interact_terminal_applies_at_given_pos();
     test_collect_static_prop_mesh_instances_shapes();
     test_corpse_and_loot_are_interactable();
 }

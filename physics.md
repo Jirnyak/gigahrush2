@@ -1,5 +1,12 @@
 # Physics — Vector gravity, jump, swept-AABB collision
 
+> **Сверка 2026-08-23:** рычаги №1–№3 из профиля 2026-08-05 ВЗЯТЫ (клетка
+> поднята из цикла `physics.cpp:54`, строка вместо вокселя `rowBits`/`xyMask`
+> `:61-71`, скип пустой клетки `:55`) — «ни один ещё не взят» устарело; числа
+> 77% пересчитать при следующем профиле. Не описано: субсэмплирование свипа по
+> `kVoxelSize` (`:98-104`). Рядом теперь живёт импульсный твердотел рагдоллов —
+> `src/sim/rigid.cpp` (отдельная система, см. ragdoll-план).
+
 Integrates entities against the world they live on and resolves collisions
 **one axis at a time** (Quake-style sweep) against sub-voxel masks, so entities
 slide along walls and land flush on sub-voxel surfaces.

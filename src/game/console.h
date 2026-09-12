@@ -35,6 +35,7 @@ namespace giga::game {
 class FloorRegistry;
 class FloorCatalog;
 class NpcPool;
+class EventBus;
 struct FastTravelState;
 
 // One-shot actions a command may REQUEST of the app — the generic sibling of
@@ -56,6 +57,9 @@ enum class ConsoleRequest : std::uint32_t {
     Save,      // save the run
     Load,      // load the run
     Heal, Eat, Drink,        // survival one-shots
+    Relief,    // осознанное облегчение (клавиша P — решение владельца
+               // 2026-08-28: «оба канала + спец-клавиша»); невольный канал —
+               // автоматика давления в needs, не запрос
     Door, Possess, Interact, // world interaction one-shots
     Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
     // (Sell/Vendor/Resupply died with the pad shop — торговля стала сделкой
@@ -67,7 +71,6 @@ enum class ConsoleRequest : std::uint32_t {
     AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Inventory, // toggle the inventory grid ([inventory.md] — the ONE cell
                // widget; торговля уже сложилась в него deal-политикой)
-    VrToggle,  // toggle stereoscopic VR Side-by-Side rendering
     Count
 };
 
@@ -94,9 +97,35 @@ struct ConsoleContext {
     // this at it each frame via refresh_console_ctx.
     FastTravelState* fastTravel = nullptr;
 
+    // Шина событий — для cmd_prop (перевод RagdollRoll-строки в живое тело
+    // публикует PropDetached тем же швом, что честный отрыв).
+    EventBus* bus = nullptr;
+
+    // Намерение «я неуязвим» — тем же швом, что fastTravel: состоянием владеет
+    // приложение, консоль получает указатель каждый кадр.
+    //
+    // Почему НЕ просто компонент на теле (баг Б4, bugs.md): тело расходно —
+    // переход между этажами и смерть УНИЧТОЖАЮТ его и строят новое
+    // ([embody.cpp:106] «fold_back -> embody_as_player DESTROYS the player
+    // body»), и `GodMode` уезжал в небытие вместе со старой сущностью. При этом
+    // неуязвимость — свойство ЧЕЛОВЕКА за клавиатурой, а не конкретного мешка
+    // мяса: человек между этажами не меняется. Поэтому намерение живёт у
+    // приложения, а `GodMode` на теле — его проекция, которую приложение
+    // ставит заново на каждое новое тело. Второго источника правды нет:
+    // компонент читается ровно одним местом (`apply_damage`) и всегда
+    // производен от этого флага.
+    bool* godWanted = nullptr;
+
     // Out: a cross-floor move the APP must perform (see header note). Reset to
     // kNoRequest by the app once handled.
     int requestFloor = kNoRequest;
+
+    // Out: команда заспавнила ЯКОРНЫЙ проп (cmd_prop) — статичная шкура
+    // PropPass живёт по флагу propPassNeedsRebuild кадра, и без этого сигнала
+    // проп существует в симе, но невидим до чужого ребилда (пойман владельцем
+    // на fuel_barrel 2026-08-22). Тот же шов, что requestFloor: консоль
+    // просит, приложение исполняет в своей безопасной точке.
+    bool propsChanged = false;
 
     // Out: planar lattice hub (0..15) to land on when requestFloor is a fast
     // travel. -1 means keep mirrored x/y (debug `teleport` / ±1 ride). The app
@@ -105,10 +134,21 @@ struct ConsoleContext {
 
     // Out: a pending sphere carve ([world/destruct.h]) — the command proposes
     // size and power only; the app aims it from the camera and performs it on
-    // the sim clock, never while a nav bake owns the grid (it stays queued
-    // until the bake lands). radius in metres; <= 0 means none pending.
+    // the NEXT sim tick. Бейк-гейта НЕТ и очереди за воркером НЕТ: воркер
+    // читает снапшот, никогда грид, дыра режется тем же тиком (прежняя
+    // проза «stays queued until the bake lands» устарела вместе с гейтом и
+    // запутала владельца 2026-08-22). radius in metres; <= 0 = none pending.
     float carveRadius = 0.0f;
     std::uint32_t carvePower = 0;
+
+    // СПАВН МАТЕРИИ ШАРОМ (команды `neon` 2026-08-23 и `glass` 2026-08-24):
+    // родить шар материала впереди камеры — симметрия карва, тот же
+    // субвоксельный масштаб и тот же путь пересветки. Появился ради проверки
+    // стабильности слотов ламп (нужен способ РОЖДАТЬ и УБИВАТЬ лампы по
+    // команде); стекло — проверка прозрачности для света. Радиус в метрах,
+    // <= 0 = ничего не ждёт; материал — id строки materials.csv.
+    float paintRadius = 0.0f;
+    std::uint16_t paintMat = 0;
 
     // Out: one-shot action requests (ConsoleRequest bits). The app drains them
     // once per frame with take_requests() at its safe point.

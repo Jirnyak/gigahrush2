@@ -1,5 +1,10 @@
 # Меню — стартовый экран, пауза, настройки
 
+> Сверка 2026-08-23: Settings — не «зачаток», ПОСТРОЕНО (`settings_ui.cpp`);
+> вкладка Audio живая — слайдеры пишут в `AudioConfig` (`:92-100`), звук
+> построен (`src/audio/`, `data/sounds.csv`) — «заглушка до появления звука»
+> устарела.
+
 Каркас уже существует и работает ([src/app/main.cpp] `menuScreenPage`,
 `menu_start_playing`): страницы Main → Load / New Game / Settings, слоты
 1..8 как ДИРЕКТОРИИ (`gigahrush2_save/slot<N>/`, [save.h] — меню выбирает

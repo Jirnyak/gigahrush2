@@ -25,8 +25,9 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     if (dstLayer == kInvalidLayer) return r; // no such loaded floor -> no-op
 
     // Recover the alife record behind this body; refuse if it isn't embodied.
-    NpcId id = kInvalidNpc;
-    if (auto* ref = reg.try_get<NpcRef>(player)) id = ref->id;
+    NpcRef npcRef{};
+    if (auto* ref = reg.try_get<NpcRef>(player)) npcRef = *ref;
+    const NpcId id = npcRef.id;
     if (id == kInvalidNpc) return r;
 
     // Capture the view + movement mode: re-embodiment builds a fresh camera and
@@ -67,7 +68,7 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     // ALONG THE MODULE'S GRAVITY AXIS keeping the two tangent coordinates
     // ([floor_gen.h] frame — x/y/z are equal citizens, the regime picks which
     // one an elevator rides), and re-embody as player on the destination layer.
-    fold_back(reg, pool, id, player);
+    fold_back(reg, pool, npcRef, player);
     const CellStep down = regime_down(floor_gravity_regime());
     if (down.x != 0)
         pool.cx(id) = arrivalCoord;

@@ -1,6 +1,6 @@
 // The body renderer: draws every embodied entity as one lit, instanced box.
 //
-// Companion to CubePass. Where the cube pass draws the static voxel world, this
+// Companion to RaymarchPass (world) and MaterialTextures (shared material state);
 // pass draws the *population*: each ECS entity carrying a Transform + AABB +
 // Renderable becomes one box, centred on its Transform and sized to its AABB
 // half-extents (so a child record embodies short, an adult tall), tinted by the
@@ -12,7 +12,7 @@
 // the far side of the torus shows in front of the player, never at the seam.
 // Render is a read-only skin (sim -> render only): this pass mutates no ECS
 // state and reads only core components, never the game layer. It shares
-// CubePass's push-constant block and reuses cube.frag for shading.
+// the shared CubePush block ([material_textures.h]) and reuses cube.frag for shading.
 #pragma once
 
 #include <vulkan/vulkan.h>
@@ -21,7 +21,7 @@
 
 #include "core/math.h"
 #include "ecs/registry.h"
-#include "render/cube_pass.h"  // CubePush (shared push-constant block)
+#include "render/material_textures.h"  // CubePush (shared push-constant block)
 #include "render/vk_buffer.h"
 #include "render/vk_renderer.h"
 #include "world/level_stack.h" // LayerId
@@ -31,11 +31,15 @@ namespace giga::gpu {
 struct VulkanDevice;
 
 // Matches the per-instance attributes in body.vert: a box centred on `center`
-// spanning +/- `half` on each axis, tinted `color`.
+// spanning +/- `half` on each axis, tinted `color`, rotated by unit quaternion
+// `rot` (identity for agents/AABB bodies; a RigidBody's orientation for
+// tumbling props — without it rolling is indistinguishable from sliding,
+// [markoaudit/plans/ragdoll.md] increment 1).
 struct BodyInstance {
     vec3 center;
     vec3 half;
     vec3 color;
+    vec4 rot; // quat xyzw, identity = (0,0,0,1)
 };
 
 class BodyPass {
@@ -66,6 +70,11 @@ private:
 
     VulkanBuffer cubeVerts_;   // static per-vertex unit-cube mesh (pos + normal)
     std::uint32_t vertexCount_ = 0;
+    // Unit sphere sharing the [0,1]^3 contract: RigidBody bodies without a
+    // ContactForm ARE spheres (the engine's whole form vocabulary) and must
+    // read as spheres, not red cubes. Same pipeline, second mesh, second draw.
+    VulkanBuffer sphereVerts_;
+    std::uint32_t sphereVertexCount_ = 0;
 
     VulkanBuffer instances_[kMaxFramesInFlight]; // host-visible, per-frame
     std::uint32_t instanceCapacity_ = 0;

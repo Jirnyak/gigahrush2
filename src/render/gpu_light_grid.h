@@ -1,7 +1,7 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 #include "core/math.h"
@@ -24,16 +24,47 @@ static constexpr uint32_t kGridDimY = 64;
 static constexpr uint32_t kGridDimZ = 64;
 static constexpr float kGridCellMeters = 4.0f;
 static constexpr uint32_t kTotalGridCells = kGridDimX * kGridDimY * kGridDimZ; // 262144
-// «Сотен в кадре» хватает с запасом: на GPU едут БЛИЖАЙШИЕ kMaxPointLights из
-// отсортированного стейджинга. Стейджинг обязан вмещать ВСЕ источники этажа:
-// перелив здесь режет по порядку вставки (= порядку создания, z снизу вверх),
-// и это был живой баг — блейм несёт 9500 лампочек, в 2048 влезали только
-// нижние, «ближайшие 512» выбирались из произвольного подмножества, и целые
-// ярусы не светились никогда (замер GIGA_LIGHT_DBG 2026-08-17). 16384 = 9500
-// худшего этажа с запасом; вектора на куче, 1.5 MB. Перелив теперь считается
-// (overflow_dropped) и виден в GIGA_LIGHT_DBG — молча не режем.
-static constexpr uint32_t kMaxPointLights = 512;
-static constexpr uint32_t kStagingLights = 16384;
+// КОРНЕВОЙ кап системы света (S11: один корневой кап на систему, производные
+// считаются от него; решение владельца — markoaudit/plans/light-perf.md §капы,
+// CANON S9/S11: «свет 131072 стейджинг»). Таблица = [0..staticCount) статики
+// со СТАБИЛЬНЫМИ слот-id на поколение бейка (позиция/радиус неподвижны — их
+// видимость печёт light_vis_bake; в кадре обновляется только интенсивность:
+// мерцание/обесточка/поломка) + динамический хвост (мобы-эмиттеры, снаряды,
+// фонарик из рук — единицы-десятки, переписывается каждый кадр). Перелив
+// считается (overflow_dropped) и виден в GIGA_LIGHT_DBG — молча не режем.
+static constexpr uint32_t kRootLights = 131072;
+// Слот «не в статик-таблице»: проп, сорванный в RagdollRoll, или лампа,
+// рождённая после постройки таблицы, идут динамическим хвостом.
+static constexpr uint32_t kNoLightSlot = 0xFFFFFFFFu;
+
+// ГИБРИД СВЕТА (решение владельца 2026-08-24, после смерти кластеризации —
+// light-cluster.md §5): пиксель маршит ПОЛНОРЕЗНО только топ-K ламп своего
+// списка (список отсортирован по вкладу биннингом), ВЕСЬ хвост считает
+// полурезный световой полупасс (четверть фрагментов, билатеральный подъём).
+// Свет не теряется — хвост дешевеет, а не выбрасывается; деградация полуреза
+// (бамп/блики) заперта в слабом хвосте, доминанты честные.
+// K = 4 — ИЗ АРИФМЕТИКИ, не из вкуса (урок K=8, 2026-08-24: «нет разницы» у
+// владельца): выигрыш гибрида = (mean − K) маршей, ушедших на четверть
+// фрагментов; mean списка 10.6 ⇒ K=8 удешевлял 2.6 лампы (~25% минус
+// накладные полупасса ≈ ноль), K=4 удешевляет 6.6 (≈1.9×, почти полный
+// полурез при хрустящих топ-4 — исторически ближний бюджет и был 4).
+// В шейдеры едет дефайном GIGA_LIGHT_FULLRES_K (CMake парсит эту строку).
+static constexpr uint32_t kFullResLights = 4;
+
+// Надгробие: intensity ≤ порога = слот мёртв до ребейка (компакция на свапе).
+// Обязан совпадать с kTombstone в light_grid.comp.
+static constexpr float kTombstoneIntensity = 0.001f;
+
+// КЛАСТЕРЫ УДАЛЕНЫ 2026-08-23 (решение владельца): регион верхних слотов,
+// записи-агрегаты и покадровая сумма их интенсивностей. Механизм не работал
+// ни одного кадра — биннинг выбрасывал каждую кластерную ссылку (id 98304+
+// против порога staticCount ~12646), потребительская ветка шейдера была
+// мёртвым кодом. Цена: клетка жила максимум 8 честными лампами при среднем
+// 10.6, и свет рвался прямоугольниками по границам клеток 4 м.
+// kMaxPointLights = 512 и sort_lights_by_distance УМЕРЛИ (план
+// light-visibility-bake §5): камерный отбор — нарушение S7 («дальние комнаты
+// гаснут»), а сбор кандидатов клетки решает запечённая видимость (bakedGrid)
+// + дистанционный фолбэк грязных клеток. На GPU едет вся таблица.
 
 // Matches PointLight in shaders/light_grid.comp and shaders/volumetric_fog.glsl (std430)
 struct alignas(16) GpuPointLight {
@@ -45,20 +76,54 @@ struct alignas(16) GpuPointLight {
 static_assert(sizeof(GpuPointLight) == 48, "GpuPointLight std430 layout must be 48 bytes");
 
 // Matches LightGridCell in shaders/light_grid.comp and shaders/volumetric_fog.glsl (std430).
-// Клетка = ровно 32 слова = 128 байт (степень двойки): счётчик + 31 индекс.
-// Перелив вытесняется по вкладу в клетку (top-K, light_grid.comp), но МОЛЧА.
+// КОРНЕВАЯ константа раскладки клетки — БАЙТЫ, степень двойки (решение
+// владельца, markoaudit/plans/light-visibility-bake.md §ответы: «клетка 256 Б,
+// 64 МиБ сетки — гроши»; было 128 Б / 31 id, и плотные залы блейма теряли
+// хвост списка). Всё остальное ВЫВОДИТСЯ: слоты = байты/слово − счётчик;
+// в GLSL число едет как -DGIGA_LIGHT_CELL_BYTES (CMakeLists парсит kGridCellBytes
+// отсюда, правило 9 гейта запрещает литерал в шейдере). Перелив вытесняется по
+// вкладу в клетку (top-K по d²/r², light_grid.comp) и СЧИТАЕТСЯ: шейдер
+// атомарно копит переливы в заголовке светобуфера, update_and_dispatch читает
+// их и печатает раз в кадр при ненулевом — молча не режем (закон S11).
+static constexpr uint32_t kGridCellBytes = 256;
+static constexpr uint32_t kGridCellSlots =
+    kGridCellBytes / sizeof(uint32_t) - 1; // 63: счётчик + 63 индекса
 struct alignas(16) GpuGridCell {
     uint32_t count = 0;
-    uint32_t lightIndices[31]{};
+    uint32_t lightIndices[kGridCellSlots]{};
 };
-static_assert(sizeof(GpuGridCell) == 128, "GpuGridCell std430 layout must be 128 bytes");
+static_assert(sizeof(GpuGridCell) == kGridCellBytes,
+              "GpuGridCell std430 layout must equal kGridCellBytes");
+
+// Бакеты ДИНАМИЧЕСКОГО хвоста (проблема 59.14): раньше каждая из 262144
+// клеток сканировала весь хвост [staticCount..activeCount) каждый кадр —
+// перестрелка (каждый снаряд = лампа) дорожала линейно от интенсивности боя.
+// Теперь CPU сплатит динамики сферами в решётку 16³ (бакет = период/16 =
+// 16 м), клетка компьюта читает ТОЛЬКО свой бакет. Вывод ёмкости: динамиков
+// единицы-десятки, сфера снаряда ~5-10 м накрывает ≤8 бакетов — 15 слотов
+// держат ~2 плотных боя в одном бакете; переполнение НЕ роняет свет: бакет
+// помечается kDynBucketFallback и клетка честно сканирует весь хвост (ошибка
+// всегда «заплатить больше», не «потерять лампу» — S11 вслух строкой).
+static constexpr uint32_t kDynBucketDim = 16;
+static constexpr uint32_t kDynBucketCount =
+    kDynBucketDim * kDynBucketDim * kDynBucketDim; // 4096
+static constexpr uint32_t kDynBucketSlots = 15;    // 16 слов: счётчик + 15 id
+static constexpr uint32_t kDynBucketFallback = 0xFFFFFFFFu;
 
 // Matches GridPush in shaders/light_grid.comp
+// Камеры в пуше НЕТ (S7: биннинг камеронезависим). Блок ужат чисткой
+// 2026-08-23 (смерть грязной ветки 37e772d1): camPos-гейт, genBaked,
+// params.z (R_max) и params.w (флаг топологии) вырезаны С ОБЕИХ СТОРОН
+// синхронно — урок «0 света» 2026-08-22: пуш-блок шейдера и host-структура
+// суть ОДИН layout, поле умирает только с обеих сторон разом. Раскладка
+// обязана совпадать с light_grid.comp::GridPush.
 struct alignas(16) GridPush {
-    vec4 camPos;  // xyz = camera world position, w = max range (48.0m)
-    vec4 gridMin; // xyz = 3D grid min corner in world space, w = cell size x/z (2.0m)
-    vec4 gridExt; // x = gridDimX (32), y = gridDimY (16), z = gridDimZ (32), w = cell size y (2.0m)
-    vec4 params;  // x = uTime, y = maxLightsPerCell (15), z = activeLightCount, w = reserved
+    vec4 gridMin; // xyz = min-угол сетки в мире, w = размер клетки x/z (4.0 м)
+    vec4 gridExt; // xyz = размеры сетки (64,64,64), w = размер клетки y (4.0 м)
+    vec4 params;  // x = activeLightCount, y = wrap period (kWorldExtent); z/w свободны
+    uint32_t genStaticCount = 0; // граница секций: [0..S) статики, [S..N) динамики
+    uint32_t dynBucketDim = 0;   // решётка бакетов динамиков (= kDynBucketDim)
+    uint32_t dynBucketSlots = 0; // слотов на бакет (= kDynBucketSlots)
 };
 static_assert(sizeof(GridPush) == 64, "GridPush layout must be 64 bytes");
 #if defined(_MSC_VER)
@@ -83,25 +148,59 @@ public:
     bool init(VulkanDevice* dev, const char* shaderDir);
     void destroy() noexcept;
 
-    // Zero-allocation light collection. 4-арг = омни; перегрузка с dir/cosOuter =
-    // конус (фонарик, прожектор). Один структ, один цикл в шейдере — «универсальные
-    // источники живут вместе» по построению.
+    // Статик-таблица этажа: [0..n) занимают лампы со стабильными слот-id (те
+    // же id, которыми оперирует бейк видимости light_vis_bake). Зовётся при
+    // (пере)постройке этажа; intensity в base игнорируется — её каждый кадр
+    // пишет set_static_intensity (0 = надгробие: умершая лампа не светит, слот
+    // жив до ребейка). clear_lights обнуляет интенсивности статиков и
+    // динамический хвост; порядок кадра: clear -> интенсивности + динамики.
+    void set_static_table(const GpuPointLight* base, uint32_t n) noexcept;
+    void set_static_intensity(uint32_t slot, float intensity) noexcept;
+    float staged_intensity(uint32_t slot) const noexcept;
+    uint32_t static_count() const noexcept { return staticCount_; }
+
+    // Свап бейка видимости: залить bakedGrid (лейаут LightVisBake.cells ==
+    // GpuGridCell[kTotalGridCells] по построению — слоты приходят от нас же)
+    // и поднять bakedGen. memcpy в стейджинг здесь; vkCmdCopyBuffer — в
+    // update_and_dispatch, вне рендер-пасса, кадром заливки.
+    void upload_baked_grid(const uint32_t* cells, std::size_t words,
+                           uint32_t bakedGen) noexcept;
+    // Частичный свап (дельта-патч, carve-hitch.md §3): записать в стейджинг
+    // ТОЛЬКО изменённые клетки (отсортированный список индексов) и скопировать
+    // их диапазонами кадром заливки — полная копия 64 МиБ (42 мс замером) за
+    // дырку не платится. Полная заливка, запрошенная тем же кадром, главнее
+    // диапазонов. (Дренаж dirtyGen и кластерная топология грязного фоллбэка
+    // вырезаны чисткой 2026-08-23 — свет ДОГОНЯЕТ мир патчами, 37e772d1.)
+    void upload_baked_cells(const uint32_t* cells, std::size_t words,
+                            const uint32_t* changed, std::size_t nChanged,
+                            uint32_t bakedGen) noexcept;
+
+    // Zero-allocation light collection — ДИНАМИЧЕСКИЙ хвост [staticCount..).
+    // 4-арг = омни; перегрузка с dir/cosOuter = конус (фонарик, прожектор).
+    // Один структ, один цикл в шейдере — «универсальные источники живут
+    // вместе» по построению.
     void add_light(const vec3& pos, float radius, const vec3& color, float intensity) noexcept;
     void add_light(const vec3& pos, float radius, const vec3& color, float intensity,
                    const vec3& dir, float cosOuter) noexcept;
     void clear_lights() noexcept;
-    void sort_lights_by_distance(const vec3& camPos) noexcept;
 
     // Record compute dispatch (3D spatial grid binning) & pipeline memory barrier.
     // Must execute outside active render pass on current_cmd().
-    void update_and_dispatch(VkCommandBuffer cmd, float timeSec, const vec3& camPos) noexcept;
+    // (timeSec/camPos параметры умерли чисткой 2026-08-23: компьют не читал
+    // ни времени, ни камеры — биннинг камеронезависим, S7.)
+    void update_and_dispatch(VkCommandBuffer cmd) noexcept;
 
     VkDescriptorSetLayout descriptor_set_layout() const noexcept { return descriptorSetLayout_; }
     VkDescriptorSet descriptor_set() const noexcept { return descriptorSet_; }
     bool ready() const noexcept { return computePipeline_ != VK_NULL_HANDLE; }
 
-    uint32_t active_light_count() const noexcept { return stagingLightCount_; }
+    uint32_t active_light_count() const noexcept {
+        return staticCount_ + dynamicCount_;
+    }
     uint32_t overflow_dropped() const noexcept { return overflowDropped_; }
+    // Клетки, перелившиеся В ПРОШЛОМ снятом кадре (атомарный счёт в
+    // light_grid.comp, читается из заголовка светобуфера кадром позже).
+    uint32_t cell_overflow() const noexcept { return cellOverflow_; }
 
 private:
     bool create_buffers() noexcept;
@@ -112,8 +211,19 @@ private:
 
     VulkanBuffer lightBuf_{}; // HOST_VISIBLE persistent mapped storage for point lights
     VulkanBuffer gridSSBO_{}; // DEVICE_LOCAL storage for 3D grid cells
+    // Запечённая видимость (план light-visibility-bake §1.2): bakedGrid —
+    // device-local зеркало LightVisBake.cells (64 МиБ), bakedStaging_ —
+    // host-visible источник копии (каденция — секунды, полоса копейки).
+    // Буферы dirtyGen_/clusterBucketBuf_/clusterMembersBuf_ грязной ветки
+    // вырезаны чисткой 2026-08-23 (−1.25 МиБ host-visible).
+    VulkanBuffer bakedGrid_{};    // DEVICE_LOCAL, kTotalGridCells × kGridCellBytes
+    VulkanBuffer bakedStaging_{}; // HOST_VISIBLE persistent mapped, тот же размер
+    VulkanBuffer dynBuckets_{};   // HOST_VISIBLE, бакеты динамиков (59.14), 256 КиБ
 
     void* lightMapped_ = nullptr;
+    void* bakedMapped_ = nullptr;
+    uint32_t* dynBucketsMapped_ = nullptr;
+    uint32_t dynBucketOverflowFrames_ = 0; // троттлинг строки перелива
 
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
@@ -122,13 +232,20 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline computePipeline_ = VK_NULL_HANDLE;
 
-    // Вектора, не массивы: 16384 x 48 B x 2 — этому не место ни в объекте на
-    // стеке main(), ни тем более в кадре стека. Резервируются один раз в init().
+    // Вектор, не массив: kRootLights x 48 B — этому не место ни в объекте на
+    // стеке main(), ни тем более в кадре стека. Резервируется один раз в
+    // init(). stagingLights_ = [статик-таблица | динамический хвост]; статики
+    // НЕ переупорядочиваются никогда (слот-id стабильны).
     std::vector<GpuPointLight> stagingLights_;
-    std::vector<GpuPointLight> sortScratch_;
-    std::vector<std::pair<float, uint16_t>> sortKeys_; // distSq, index
-    uint32_t stagingLightCount_ = 0;
+    uint32_t staticCount_ = 0;
+    uint32_t dynamicCount_ = 0;
     uint32_t overflowDropped_ = 0;
+    uint32_t cellOverflow_ = 0;
+    uint32_t bakedGen_ = 0;
+    bool bakedUploadPending_ = false;
+    // Диапазоны частичного свапа (смежные клетки склеены); живут до копии в
+    // update_and_dispatch. Полная заливка их обнуляет — копия целиком кроет.
+    std::vector<VkBufferCopy> bakedRegions_;
 };
 #if defined(_MSC_VER)
 #pragma warning(pop)

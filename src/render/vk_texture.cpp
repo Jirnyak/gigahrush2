@@ -321,7 +321,7 @@ bool VulkanTextureArray::create_image() {
     // that nothing reports is an allocation nobody can reason about. 16 layers of
     // a 12-level 2048 chain is 85.33 MiB of VRAM even though only six layers
     // carry a photograph, and that trade is deliberate — see the layer-indexing
-    // note in cube_pass.cpp.
+    // note in material_textures.cpp.
     std::fprintf(stderr,
                  "[vk-mem] albedo array: %.2f MiB -> type %u heap %u (%.0f MiB) "
                  "%s %ux%u x%u layers x%u mips\n",
@@ -563,7 +563,7 @@ bool VulkanTextureArray::init(VulkanDevice& dev, std::uint32_t layers,
     if (!create_staging()) return false;
     // Every layer, including the ones no file will ever fill. Their contents stay
     // undefined, which is safe only because the caller's material mask stops the
-    // shader sampling them; see the mask contract in cube_pass.cpp. A compressed
+    // shader sampling them; see the mask contract in material_textures.cpp. A compressed
     // image cannot be cleared (vkCmdClearColorImage rejects block formats) and
     // hand-writing a constant-colour BC7 block to fake one would be exactly the
     // plausible-looking wrong texture this repository bans.

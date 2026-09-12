@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "ecs/registry.h" // Entity — JointLink ссылается на тела
 #include "world/level_stack.h"
 
 namespace giga {
@@ -39,9 +40,9 @@ struct AABB {
 // FILLED FROM ONE UNIT. Every content table spells mass as `mass_g`, whole GRAMS
 // in a uint32 — mobs.csv, props.csv and items.csv alike (2026-08-07; before that
 // props meant grams and mobs meant kg x10 in the same 16 bits, which capped a
-// prop at 65.5 kg while mob rows already carried 900). Debris comes from
-// materials.csv density via `material_subvoxel_mass_kg`, and an NPC body from its
-// stature via `body_mass_kg`.
+// prop at 65.5 kg while mob rows already carried 900). An NPC body comes from its
+// stature via `body_mass_kg`. (Массы обломков в коде НЕТ — закон «плотность
+// × 0.25³» вернётся с эпиком цельных кусков-пропов; аудит 2026-08-25.)
 //
 // A BODY'S MASS INCLUDES WHAT IT CARRIES. `encumbrance_step` ([encumbrance.h])
 // recomputes body + inventory, which is why a loaded fall hurts more and a loaded
@@ -124,21 +125,96 @@ struct Renderable {
     vec3 color{0.80f, 0.80f, 0.82f};
 };
 
-// Angular motion for ragdoll / tumbling props ([jirnyak.md] section 18).
+// AngularVelocity и Rotation (Euler-косметика вращения пропов) УМЕРЛИ
+// инкрементом 6 рагдолл-эпика 2026-08-21: вращение — кватернион RigidBody.q
+// ниже, интегрируемый rigid_body_step; писателей у пары не осталось, а
+// мёртвый API — дефект (S11).
+
+// Импульсный твердотел — универсальное ядро физики пропов
+// ([markoaudit/plans/ragdoll.md], решения владельца 2026-08-21: ОДНА модель на
+// RagdollRoll и SimpleFall; масштаб — тысячи тел на этаже, поэтому сон —
+// главный механизм: спящее тело интегратор пропускает целиком).
 //
-// Lives in the CORE — not the game layer — for the same reason as
-// SelfIntegrating / NoClip: `physics_step` (src/sim) must integrate them, and
-// src/sim may not include src/game. The game attaches these on RagdollRoll
-// detach; physics_step advances Rotation from AngularVelocity each substep.
+// Линейное состояние живёт в существующих Transform.pos / Velocity.v, чтобы
+// рендер-пути (BodyPass) и швы (Impact) работали без изменений; здесь —
+// ориентация, вращение и контактные параметры. Коллизия — СФЕРА против
+// субвокселей (S2: локальный вопрос спрашивает атомы); любая форма — набор
+// сфер, один шар — вырожденный случай (инкремент 1).
 //
-// Rotation is Euler (radians, XYZ) for now: core/math.h has no quat type yet.
-// A later pass can swap to quat without changing the attachment contract.
-struct AngularVelocity {
-    vec3 w{0.0f, 0.0f, 0.0f}; // rad/s
+// Носитель ОБЯЗАН также нести SelfIntegrating: rigid_body_step — его
+// интегратор, и без тега physics_step (свепт-AABB агентов) двигал бы тело
+// вторым разом — та же двойная скорость, что была у снарядов.
+//
+// Контактные константы (invMass/invInertia/restitution/friction) — ВЫВОДЯТСЯ
+// спавнером из материала и габарита (S11): масса = kMatDensity × объём,
+// инерция сферы = 0.4·m·r². Ядро таблиц не читает — ест готовые числа.
+struct RigidBody {
+    quat q{};                    // ориентация (единичный кватернион)
+    vec3 w{0.0f, 0.0f, 0.0f};    // угловая скорость, рад/с, мировой фрейм
+    float radius = 0.3f;         // коллизионная сфера БЕЗ ContactForm; с ней —
+                                 // радиус ограничивающей сферы (брод-фаза)
+    float invMass = 1.0f;        // 1/кг
+    float invInertia = 1.0f;     // 1/(кг·м²), скаляр (диагональный тензор —
+                                 // инкремент 7, если скаляр виден глазами)
+    float restitution = 0.3f;    // отскок 0..1 (порог в ядре гасит дребезг)
+    float friction = 0.5f;       // Кулон μ — он же раскручивает качение
+    std::uint8_t sleepTicks = 0; // подряд тихих тиков с контактом
+    bool asleep = false;         // спит: v=w=0, интегратор пропускает;
+                                 // будится записью Velocity извне и линком
+    bool touchedTick = false;    // ТРАНЗИТ: был контакт с миром в этом тике
+                                 // (пишет rigid_body_step, больше никто)
 };
 
-struct Rotation {
-    vec3 euler{0.0f, 0.0f, 0.0f}; // radians, XYZ
+// Форма тела для солвера ([markoaudit/plans/ragdoll.md] фундамент, решения
+// владельца 2026-08-21): словарь АВТОРА — сфера и бокс, словарь СОЛВЕРА —
+// ТОЛЬКО сфера. Бокс раскладывается при спавне в контактные сферы (8 углов +
+// 6 центров граней), жёстко сидящие в теле, — они дают честный момент и
+// кувырок, а контактная процедура в ядре остаётся одна.
+//
+// Компонент РАЗРЕЖЕННЫЙ: нет ContactForm — тело есть одна сфера
+// RigidBody.radius в центре (мяч, ноль лишней памяти на тысячах тел).
+// 14 = 8 углов + 6 граней бокса — самый жирный примитив словаря.
+inline constexpr int kMaxContactSpheres = 14;
+
+struct ContactForm {
+    std::uint8_t count = 0;
+    vec3 off[kMaxContactSpheres]{};  // офсеты в ФРЕЙМЕ ТЕЛА
+    float r[kMaxContactSpheres]{};   // радиусы контактных сфер
+};
+
+// ПЕРЕНОСКА ([markoaudit/plans/ragdoll.md] инкремент 9): тело кинематически
+// следует за носителем — игрок тащит ящик, НПЦ несёт проп, монстр волочит
+// труп (S7: путь один на всех). Физика несомого спит: интеграция, пары и
+// контакты пропускаются; позиция = носитель + offset (мировой сдвиг, его
+// целит game-слой от взгляда носителя), скорость зеркалит носителя — бросок
+// наследует разгон. Линки живут, несомая сторона в них кинематична
+// (обратная масса ноль): сегменты трупа волочатся за тащимым корнем.
+// Носитель умер/исчез — компонент снимается, тело падает.
+struct CarriedBy {
+    Entity carrier = entt::null;
+    vec3 offset{0.0f, 0.0f, 0.0f};
+    // РУКА носителя (two-hands.md, эмерджентность владельца: «проп можно
+    // брать, только если свободен один из слотов — и он занимает руку»):
+    // 0 = ЛКМ, 1 = ПКМ. Бросок — кнопкой этой руки.
+    std::uint8_t hand = 0;
+};
+
+// Связь двух твердотел — ОТДЕЛЬНАЯ ЛИНК-СУЩНОСТЬ, не свойство формы
+// ([markoaudit/plans/ragdoll.md] фундамент §8, решение владельца 2026-08-21):
+// разрубание = destroy линк-сущности, связывание (верёвка, трос, сцепка) =
+// create линка между ЛЮБЫМИ двумя телами. Ядро агностично: труп, люстра на
+// тросе, два ящика верёвкой — одна механика.
+//
+// b == entt::null — якорь В МИРЕ: anchorB тогда мировая точка (подвес на
+// крюк). rope — линк только ТЯНЕТ (dist > restLen), жёсткая штанга тянет и
+// толкает. Решается импульсами в том же солвере, что контакты.
+struct JointLink {
+    Entity a = entt::null;
+    Entity b = entt::null;            // entt::null = мировой якорь
+    vec3 anchorA{0.0f, 0.0f, 0.0f};   // фрейм тела a
+    vec3 anchorB{0.0f, 0.0f, 0.0f};   // фрейм тела b, либо мировая точка
+    float restLen = 0.0f;             // покойная длина, м
+    bool rope = false;                // true: только тянет
 };
 
 // Prop render-path filter tags ([jirnyak.md] section 18).

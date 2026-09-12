@@ -155,15 +155,19 @@ static void test_noise_hearing_geometry() {
     p.severity = 3;
     p.source = NoiseSource::WeaponFire;
 
-    // x/y wrap and z does NOT. A noise 2 m from the far seam is 4 m away across the
-    // wrap, not kWorldExtent - 4 away; the same offset in z is a real 250 m.
+    // All three axes wrap ([AGENTS.md]: x/y/z wrap; W does not). A noise 2 m
+    // from the far seam is 4 m away across the wrap on ANY axis — the previous
+    // version of this test pinned z as "a storey axis, not a torus", modelling
+    // the W stack inside a field that never sees W, and the pin kept the ear
+    // deaf through the z seam (markoaudit/systems/05-torus.md §1.4).
     CHECK(noise_publish(f, 0, vec3{2.0f, 10.0f, 4.0f}, p, 0) != 0);
     const Noise n = f.slot[0];
     CHECK(n.id != 0);
     const float across = noise_distance(n, vec3{kWorldExtent - 2.0f, 10.0f, 4.0f});
     CHECK(across > 3.9f && across < 4.1f);
-    const float upStack = noise_distance(n, vec3{2.0f, 10.0f, kWorldExtent - 2.0f});
-    CHECK(upStack > 249.0f);        // z is a storey axis, not a torus
+    // Source z=4, ear z=254: raw delta 250, through the seam 6 — same rule as x.
+    const float upSeam = noise_distance(n, vec3{2.0f, 10.0f, kWorldExtent - 2.0f});
+    CHECK(upSeam > 5.9f && upSeam < 6.1f);
 
     // hearingMult scales the radius — the reference's whole model of a sharp-eared
     // kind. At 11 m a radius-10 noise is inaudible flat and audible at 1.12x.
@@ -290,9 +294,9 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
     World w;
     generate_floor(w, /*number=*/0, floor_spec(FloorKind::Industrial), 4242u);
     nav::CoarseGraph coarse{};
-    nav::bake_coarse(w.grid(), coarse);
+    nav::bake_coarse(w.grid(), kBodyClearanceSub, coarse);
     nav::FineNav fine;
-    nav::bake_fine(w.grid(), fine);
+    nav::bake_fine(w.grid(), kBodyClearanceSub, fine);
 
     // Two identical worlds-in-miniature: same seeds, same positions, same ticks. The
     // ONLY difference is whether the gunshot is published.
@@ -433,7 +437,8 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
             // ONLY difference between the two runs is the noise record.
             if (t == 0) {
                 const std::uint32_t s = player_ranged_step(
-                    r->reg, r->pool, 0, /*wantFire=*/true, dt, t,
+                    r->reg, r->pool, 0, /*wantFireL=*/true,
+                    /*wantFireR=*/false, dt, t,
                     audible ? &r->noise : nullptr);
                 if (audible) shotsFired += s;
             }
@@ -644,6 +649,14 @@ static void test_noise_cost() {
     // (someone removing the quiet() early-out).
     CHECK(quietUs < 5.0);
 }
+
+// test_noise_walls_deafen И test_noise_bake_cost ВЫРЕЗАНЫ вместе с шарами
+// акустики (решение владельца 2026-09-06, problems.md §65): пер-шумовой BFS
+// не держит канонический масштаб (сотни выстрелов/сек по этажу; замер цены
+// перед вырезом — 73 мкс/выстрел, 285 мкс/взрыв worst-open — записан в §65).
+// Слышимость снова прямолинейная тором; регресс «слышно сквозь стены» —
+// назван, не спрятан. Честные стены вернёт эпик «звуковое поле этажа»
+// (бейк при генерации, как пути и свет) — стенд стены/щели вернётся с ним.
 
 static void test_noise_all() {
     test_noise_field_bounds();

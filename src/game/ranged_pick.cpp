@@ -1,4 +1,5 @@
 #include "game/ranged_table.h"
+#include "game/prop_table.h" // prop_def — сила метательного = масса ВВ пропа
 
 namespace giga::game {
 
@@ -9,9 +10,13 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
     // or a gun, and this reader answers only when it is a real firearm — thrown
     // stays excluded for the same load-bearing reason as the scan below.
     if (eq) {
-        const ItemId chosen = equipped_item(inv, *eq, EquipSlot::Weapon);
-        if (!ranged_for_item(chosen) || ranged_is_thrown(chosen)) return kInvalidItem;
-        return chosen;
+        // ДВЕ РУКИ (two-hands.md): огнестрел ищется в обеих, ЛКМ первой.
+        for (int r = 0; r < 2; ++r) {
+            const ItemId chosen = equipped_hand(inv, *eq, r == 1);
+            if (ranged_for_item(chosen) && !ranged_is_thrown(chosen))
+                return chosen;
+        }
+        return kInvalidItem;
     }
     ItemId best = kInvalidItem;
     float bestDps = 0.0f;
@@ -35,6 +40,10 @@ ItemId equipped_ranged(const Inventory& inv, const Equipped* eq) {
 }
 
 ItemId equipped_throwable(const Inventory& inv) {
+    // Чистый скан сумки — путь БЕЗ решателя (консольная `grenade`,
+    // фикстуры). Выбор руки живёт в player_throw_step: рука бросает СВОЁ,
+    // приоритетов между руками нет по построению (владелец 2026-08-31:
+    // «не надо никаких приоритетов»).
     ItemId best = kInvalidItem;
     float bestScore = 0.0f;
     for (const ItemSlot& sl : inv.slots) {
@@ -46,8 +55,11 @@ ItemId equipped_throwable(const Inventory& inv) {
         // throw a launcher. If these two predicates ever stop being complements, a
         // weapon becomes either unpickable or pickable twice.
         if (!ranged_is_thrown(sl.item)) continue;
-        const float score = static_cast<float>(d->dmg) *
-                            static_cast<float>(d->blastDm);
+        // Сила метательного — масса ВВ его пропа: урон и радиус оба
+        // монотонны по ней ([combat.h] charge_dmg/charge_radius_m), так что
+        // порядок «лучший заряд» тот же, что давал прежний dmg×blast.
+        const float score = static_cast<float>(
+            prop_def(static_cast<PropId>(d->thrownPropId)).explosiveG);
         if (score > bestScore) {
             bestScore = score;
             best = sl.item;

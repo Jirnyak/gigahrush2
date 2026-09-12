@@ -25,8 +25,12 @@
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
-#include "game/door.h"
 #include "game/npc_pool.h"
+#include "world/types.h" // kVoxelSize — вывод kBodyClearanceSub
+
+namespace giga {
+class MacroGrid; // world/macro_grid.h — body_wall_adjacent читает маски законом клиренса
+}
 
 namespace giga::game {
 
@@ -36,7 +40,21 @@ namespace giga::game {
 // player entity is just an NpcRef whose record has the NpcPlayer bit.
 struct NpcRef {
     NpcId id = kInvalidNpc;
+    // Поколение слота НА МОМЕНТ воплощения (E-2 skeleton-anchor, 2026-08-29;
+    // образец — Relationship::pad). Голый id — номер слота, а переработка
+    // слотов ВЗВЕДЕНА (main.cpp set_recycling): без поколения сущность,
+    // пережившая запись (труп, поздний читатель), молча указывала бы на
+    // новорождённого наследника слота. Прежняя защита была аргументом «по
+    // графу вызовов» — хрупким по собственному признанию.
+    std::uint16_t gen = 0;
 };
+
+// Жив ли за ссылкой ТОТ ЖЕ житель: слот валиден И поколение совпадает.
+// Единственная честная проверка ссылки через время (S20.3); сравнение
+// поколений вручную — дефект.
+inline bool npc_ref_current(const NpcPool& pool, const NpcRef& ref) {
+    return pool.valid(ref.id) && pool.generation(ref.id) == ref.gen;
+}
 
 // World units per macro cell (2 m cells; see worldgen). Kept here so embodiment
 // can place a record's macro cell into world-space without pulling in app code.
@@ -45,6 +63,34 @@ inline constexpr float kEmbodyCellSize = 2.0f;
 // A record shorter than this (mm) is treated as unset and embodied at a default
 // adult stature, so a zeroed reserve slot still produces a sane body.
 inline constexpr std::uint16_t kDefaultHeightMm = 1800; // 1.8 m
+
+// Полуширина коллайдера тела (embody ставит AABB{kBodyHalfWidth, ..., hh}) —
+// плечи взрослого ~0.8 м на полный габарит; в отличие от роста, ширина не
+// data-driven (одна на всех), поэтому константа живёт здесь, у шва воплощения.
+inline constexpr float kBodyHalfWidth = 0.4f;
+
+// Габарит тела для гранного клиренса ([world/clearance.h], эпик occupancy) —
+// ВЫВЕДЕН (S11): полная ширина 2·0.4 м / субвоксель kVoxelSize 0.25 м = 3.2,
+// потолок → 4 (тело не худеет от округления). Это `size` всех нав-бейков
+// этажа — решение владельца 2026-08-26 «один бейк s=4»: мелкие ходоки идут
+// по нему консервативно, крупные — по факту жалоб.
+inline constexpr float kBodyWidthSub = 2.0f * kBodyHalfWidth / kVoxelSize;
+inline constexpr int kBodyClearanceSub =
+    static_cast<int>(kBodyWidthSub) +
+    (static_cast<float>(static_cast<int>(kBodyWidthSub)) < kBodyWidthSub ? 1
+                                                                         : 0);
+static_assert(kBodyClearanceSub == 4, "derivation: ceil(0.8 m / 0.25 m) = 4");
+
+// «Стена рядом с телом»: хотя бы одна из четырёх боковых граней клетки тела
+// непроходима для габарита kBodyClearanceSub. ЕДИНСТВЕННАЯ проба стены для
+// поведения (WallBias-урон Арматуры в combat, прижимной шаг в wander) — была
+// двумя дословными дублями по grid.cell != kCellAir, то есть отвечала ТИПОМ
+// КЛЕТКИ на локальный вопрос (§60): лепленая стена в клетке «воздух» была
+// невидима, а колонна в дальнем углу клетки читалась как стена вплотную.
+// Теперь ответ — закон клиренса ([world/clearance.h]) с тем же габаритом,
+// которым тело ходит. Боковые оси x/y — как в прежних дублях (вопрос фрейма
+// гравитации у этой пробы прежний, не новый).
+bool body_wall_adjacent(const MacroGrid& grid, const vec3& pos);
 
 // Convert a record's stature to the collider half-height (world units). Half of
 // the height, since the AABB is expressed as half-extents around Transform::pos.
@@ -77,20 +123,13 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer);
 // Fold a live entity's transient state back into its record and de-embody it:
 // writes the macro cell (and clears NpcEmbodied / NpcPlayer), then destroys the
 // entity. Leaves the record otherwise intact and frozen in the cold pool.
-void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e);
+// Гейт поколения (E-2): ссылка не текущая (слот переработан, пока сущность
+// жила) → строка НЕ пишется — только уничтожение тела. Прежняя сигнатура с
+// голым id писала бы координаты в строку наследника слота.
+void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e);
 
-struct TerminalInteractResult {
-    bool interacted = false;
-    vec3 propPos{0.0f, 0.0f, 0.0f};
-    bool doorsLocked = false;
-    std::uint32_t doorsToggled = 0;
-};
-
-// Apply terminal door-lock toggle at a known Terminal world position.
-// Caller must already have verified proximity (prefer find_nearest_interactable /
-// interaction_step — zero heap). Returns interacted=true and toggles locks.
-// [jirnyak.md] §18 — no fake hit when no terminal is in reach.
-TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& terminalPos);
+// МОГИЛА ДВЕРЕЙ (приказ владельца 2026-08-28): система дверей вырезана
+// целиком — терминальный тумблер замков умер с ней. Новая дверь строится
+// с нуля («зарастание» субвокселями) обсуждением с владельцем.
 
 } // namespace giga::game

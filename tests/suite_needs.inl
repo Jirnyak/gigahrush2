@@ -16,7 +16,6 @@
 // bar can hold is in suite_needs2.inl.
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/needs.h"
-#include "game/room_zone.h" // RoomZones/room_bit_at — the ambient-recovery arm
 #include "game/elevator.h"
 #include "game/floor_registry.h"
 #include "game/population.h"
@@ -324,7 +323,9 @@ void attrition() {
     CHECK(approx(needs_hp_rate(n), 0.8f, 1e-6f));
     n.pee = kNeedMax;
     n.poo = kNeedMax;
-    CHECK(approx(needs_hp_rate(n), 1.0f, 1e-6f));   // all four = exactly 1.0 HP/s
+    // Давления к таблице урона больше не относятся (невольный слив,
+    // 2026-08-28): даже рукой поставленный кап не добавляет ни сотой.
+    CHECK(approx(needs_hp_rate(n), 0.8f, 1e-6f));
 
     // Sleep at zero adds NOTHING to that rate — the no-death-spiral rule.
     Needs sleepy = full_clock();
@@ -783,40 +784,52 @@ void pressure() {
     CHECK(approx(n.pee, 30.0f, 1e-3f));
     static_assert(kPooDigestPerSec < kPeeDigestPerSec, "food lingers, water does not");
 
-    // Overflow caps at 100 and costs kOverflowHpPerSec per failing pressure.
+    // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (закон владельца 2026-08-28): кап — не
+    // состояние, а событие. Давление, дошедшее до 100, клок сливает сам:
+    // бар пуст, слитое отдано наружу, урона от давлений НЕ СУЩЕСТВУЕТ.
     Needs over = full_clock();
     over.pee = 99.0f;
     over.pendingPee = 50.0f;
-    needs_advance(over, 100.0f);
-    CHECK(over.pee == kNeedMax);   // clamped; no backlog kept above 100
-    CHECK((needs_failed_mask(over) & NeedPee) != 0);
-    CHECK(approx(needs_hp_rate(over), kOverflowHpPerSec, 1e-6f));
+    ReliefResult voided;
+    needs_advance(over, 100.0f, &voided);
+    CHECK(approx(voided.pee, kNeedMax, 1e-3f)); // слило полный пузырь
+    CHECK(over.pee < kNeedMax);                  // и бар пошёл заново
+    CHECK((needs_failed_mask(over) & NeedPee) == 0);
+    CHECK(needs_hp_rate(over) == 0.0f);
 
     // Relief reports what actually came off, so "you did not need to" is
     // distinguishable from "that helped" — and it is partial by design.
+    over.pee = kNeedMax - 1.0f; // рукой: осознанный канал до слива
     const ReliefResult r = relieve_needs(over, kToiletPeeRelief, kToiletPooRelief);
     CHECK(approx(r.pee, kToiletPeeRelief, 1e-4f));
     CHECK(r.poo == 0.0f);          // there was nothing to relieve
-    CHECK(approx(over.pee, kNeedMax - kToiletPeeRelief, 1e-4f));
+    CHECK(approx(over.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f));
     CHECK(needs_hp_rate(over) == 0.0f && over.pee > 0.0f);
     const ReliefResult again = relieve_needs(over, 1000.0f, 0.0f);
-    CHECK(approx(again.pee, kNeedMax - kToiletPeeRelief, 1e-4f));   // clamped, honest
+    CHECK(approx(again.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f)); // clamped, honest
     CHECK(over.pee == 0.0f);
     CHECK(relieve_needs(over, 0.0f, 0.0f).pee == 0.0f);
 
-    // End to end: drinking enough water WILL eventually cost you HP. That is the
-    // pacing tax on chugging.
+    // End to end: чаггинг больше не стоит HP — он стоит ЛУЖ. Очередь дожита,
+    // всё, что перелилось за кап, слилось невольно, и МАТЕРИЯ СХОДИТСЯ:
+    // стартовое давление + вся очередь = слитое + оставшееся на баре.
     const ItemId water = first_with_effect(UseEffect::Drink);
     Needs chug = full_clock();
     chug.pee = kStartPeeHi;
+    float queuedChug = 0.0f;
     for (int i = 0; i < 8; ++i) {
         chug.water = 0.0f;   // pretend a long trip between bottles
-        apply_consumable(chug, water, 100);
+        queuedChug += apply_consumable(chug, water, 100).peeQueued;
     }
     CHECK(chug.pendingPee > 0.0f);
-    for (int i = 0; i < 4 * 3600; ++i) needs_advance(chug, kRefPeriod);
-    CHECK(chug.pee == kNeedMax);
-    CHECK((needs_failed_mask(chug) & NeedPee) != 0);
+    ReliefResult leaked;
+    for (int i = 0; i < 4 * 3600; ++i) needs_advance(chug, kRefPeriod, &leaked);
+    CHECK(chug.pendingPee == 0.0f);
+    CHECK(chug.pee < kNeedMax);
+    // Резервы за 4 часа честно иссякли (их урон — не предмет этого блока);
+    // ДАВЛЕНИЕ в маске отказов не появляется никогда.
+    CHECK((needs_failed_mask(chug) & (NeedPee | NeedPoo)) == 0);
+    CHECK(approx(leaked.pee + chug.pee, kStartPeeHi + queuedChug, 0.5f));
 }
 
 void survives_the_body_swap() {
@@ -946,115 +959,39 @@ void the_whole_floor_lives_on_one_clock() {
     std::printf("[needs] 25 min WITHOUT rooms: %d of 64 at zero HP\n", deadNoRooms);
     CHECK(deadNoRooms > 32); // most of the building
 
-    // ARM 2 — THE SAME 25 MINUTES, OBEYING THE SCORER. Not "parked in a kitchen":
-    // parking there for 25 minutes KILLS you, and correctly — the kitchen queues
-    // 2.1 pee/s and 1.225 poo/s of digestion ([room_zone.h] "the kitchen charges for
-    // itself"), so a body that eats forever and never leaves drowns in its own
-    // bladder at 0.2 HP/s. Measured that way first, and it is the loop working, not
-    // a bug. What this arm asserts is the CLOSED LOOP:
-    //
-    //   needs -> score_intents -> intent_room_mask -> the room -> room_recover -> needs
-    //
-    // Every link is the shipping one; the only thing the harness stands in for is
-    // the walking, which suite_rooms measures separately (64 of 64 arrive). So this
-    // is §27's whole pillar, end to end, headless, in one loop.
-    NpcPool pool2;
-    pool2.init();
-    Registry reg2;
-    const NpcId p2 = seed_floor_population(pool2, /*floor=*/0, /*n=*/64, /*seed=*/5u);
-    RoomZones zones;
-    zones.kind = FloorKind::Residential;
-    zones.number = 0;
+    // ARM 2 (комнатная регенерация) УМЕРЛА с rooms-object F: вида комнаты
+    // нет (S12.2), «стояние в кухне кормит» заменит РЕАЛЬНОЕ потребление
+    // (S12.5) — NPC возьмёт предмет из контейнера в agent-goals. До него
+    // морг без еды — честное состояние клока, и ARM 1 выше его меряет.
+}
 
-    // One cell of each room kind the affordance table names, plus a corridor for the
-    // bodies whose winning intent has no destination. `needs_step` reads only
-    // `kind`/`number` off the zones, so no bake is needed to ask what a cell is.
-    int cellX[kFloorRoomBits] = {}, cellY[kFloorRoomBits] = {};
-    int corridorX = 0, corridorY = 0;
-    for (int y = 1; y < kMacroDim; ++y) {
-        if (y % 4 == 0) continue;
-        for (int x = 1; x < kMacroDim; ++x) {
-            if (x % 4 == 0) continue;
-            const int bi = floor_room_bit_index(
-                room_bit_at(zones.kind, zones.number, x, y));
-            if (bi < 0) continue;
-            if (cellX[bi] == 0) { cellX[bi] = x; cellY[bi] = y; }
-            if (corridorX == 0 &&
-                room_bit_at(zones.kind, zones.number, x, y) ==
-                    static_cast<std::uint16_t>(RoomBit::Corridor)) {
-                corridorX = x;
-                corridorY = y;
-            }
-        }
+// ДЕЯНИЕ «невольный слив» (S19, шов needs_step 2026-09-05): лопнувшее
+// давление публикует Deed(toilet) с актором и местом — один шов закрывает
+// NPC и игрока; уместность туалета зануляет цену у witness_step, не здесь.
+// Обе полярности: кап публикует ровно одно деяние, спокойный бар — ноль.
+void involuntary_relief_is_a_deed() {
+    Rig rig;
+    rig.build(100);
+    rig.needs().pee = kNeedMax; // давление на капе — этот же тик сольёт
+    std::size_t before = rig.bus.size();
+    needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr, 0.0, &rig.bus, 777u);
+    int deeds = 0;
+    for (std::size_t i = before; i < rig.bus.size(); ++i) {
+        const Event& ev = rig.bus.events()[i];
+        if (ev.type != EventType::Deed) continue;
+        ++deeds;
+        CHECK(ev.a == static_cast<std::uint32_t>(entt::to_integral(rig.body)));
+        CHECK((ev.c >> 24) == static_cast<std::uint32_t>(kVerbToilet));
+        CHECK(ev.tick == 777u);
     }
-    CHECK(cellX[floor_room_bit_index(static_cast<std::uint16_t>(RoomBit::Kitchen))] != 0);
-    CHECK(cellX[floor_room_bit_index(static_cast<std::uint16_t>(RoomBit::Bathroom))] != 0);
-    CHECK(corridorX != 0);
-
-    std::vector<Entity> ents;
-    for (NpcId i = 0; i < pool2.count(); ++i) {
-        pool2.hp(i) = 100;
-        pool2.max_hp(i) = 100;
-        Entity e = (i == p2) ? embody_as_player(reg2, pool2, i, 0)
-                             : embody(reg2, pool2, i, 0);
-        CHECK(e != entt::null);
-        reg2.get<Transform>(e).layer = 0;
-        ents.push_back(e);
-    }
-
-    NeedsTick last{};
-    int visitedKitchen = 0, visitedBathroom = 0;
-    for (int t = 0; t < 25 * 60 * 4; ++t) {
-        for (NpcId i = 0; i < pool2.count(); ++i) {
-            // The REAL scorer on the REAL row, with every stubbed Perception input at
-            // its default — the same call `ai_step` makes on a re-plan.
-            Perception p;
-            p.idSeed = identity_seed(i);
-            p.faction = pool2.faction(i);
-            p.hp = static_cast<float>(pool2.hp(i));
-            p.maxHp = static_cast<float>(pool2.max_hp(i));
-            float scores[kIntentCount];
-            score_intents(p, pool2.needs(i), scores);
-            const std::uint16_t want = intent_room_mask(select_intent_raw(scores));
-            const int bi = want != 0 ? floor_room_bit_index(want) : -1;
-            const int gx = (bi >= 0 && cellX[bi] != 0) ? cellX[bi] : corridorX;
-            const int gy = (bi >= 0 && cellX[bi] != 0) ? cellY[bi] : corridorY;
-            if (bi >= 0 && want == static_cast<std::uint16_t>(RoomBit::Kitchen))
-                ++visitedKitchen;
-            if (bi >= 0 && want == static_cast<std::uint16_t>(RoomBit::Bathroom))
-                ++visitedBathroom;
-            Transform& tr = reg2.get<Transform>(ents[i]);
-            tr.pos = vec3{(static_cast<float>(gx) + 0.5f) * kCellSize,
-                          (static_cast<float>(gy) + 0.5f) * kCellSize, 8.0f};
-        }
-        last = needs_step(reg2, pool2, 0, kRefPeriod, &zones);
-    }
-
-    int hurt = 0, minHp = 100;
-    for (NpcId i = 0; i < pool2.count(); ++i) {
-        if (pool2.hp(i) < 100) ++hurt;
-        if (pool2.hp(i) < minHp) minHp = pool2.hp(i);
-    }
-    std::printf("[needs] 25 min OBEYING THE SCORER: %d of 64 lost HP (min %d), "
-                "%d kitchen-seconds, %d bathroom-seconds, %u recovering\n",
-                hurt, minHp, visitedKitchen / 4, visitedBathroom / 4,
-                last.recovering);
-    // NOBODY DIES, and the building is not merely alive — it is UNSCRATCHED. The
-    // same 25 minutes that takes all 64 bodies to zero HP with no rooms costs a
-    // crowd that goes where it wants exactly nothing.
-    CHECK(hurt == 0);
-    CHECK(minHp == 100);
-    // BOTH rooms are used, in both directions. A crowd that only ever ate would pass
-    // an "alive" check for a while and then die of the thing it never went to fix.
-    CHECK(visitedKitchen > 0);
-    CHECK(visitedBathroom > 0);
-
-    // Nothing embodied on a layer means no clock at all — an unloaded floor is not
-    // secretly running its own survival sim. A zero dt is a no-op, not a rewind.
-    const NeedsTick none = needs_step(reg, pool, 77, kRefPeriod);
-    CHECK(!none.ticked && none.hpLost == 0 && none.speedScale == 1.0f);
-    CHECK(none.bodies == 0u);
-    CHECK(!needs_step(reg, pool, 0, 0.0f).ticked);
+    CHECK(deeds == 1);
+    // Обратная полярность: без давления деяния нет.
+    before = rig.bus.size();
+    needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr, 0.0, &rig.bus, 778u);
+    deeds = 0;
+    for (std::size_t i = before; i < rig.bus.size(); ++i)
+        if (rig.bus.events()[i].type == EventType::Deed) ++deeds;
+    CHECK(deeds == 0);
 }
 
 } // namespace needs_test
@@ -1070,4 +1007,5 @@ static void test_needs_all() {
     needs_test::pressure();
     needs_test::survives_the_body_swap();
     needs_test::the_whole_floor_lives_on_one_clock();
+    needs_test::involuntary_relief_is_a_deed();
 }

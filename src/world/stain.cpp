@@ -1,6 +1,8 @@
 #include "core/rng.h"
 #include "world/stain.h"
 
+#include "world/los.h" // sub_march — единственный субвоксельный марш (S11)
+
 #include <cmath>
 
 #include "core/wrap.h"
@@ -49,7 +51,6 @@ std::int32_t stain_splat(World& w, vec3 origin, vec3 bias, float reach,
                          std::vector<std::uint32_t>& dirty) {
     if (rays <= 0 || reach <= 0.0f) return 0;
     std::int32_t painted = 0;
-    const int maxSteps = static_cast<int>(reach / kVoxelSize) + 1;
 
     for (int i = 0; i < rays; ++i) {
         // Uniform direction from two hashes, pulled toward `bias`.
@@ -63,31 +64,29 @@ std::int32_t stain_splat(World& w, vec3 origin, vec3 bias, float reach,
         if (len < 1e-4f) continue;
         dir = dir * (1.0f / len);
 
-        // Sub-voxel DDA to the first solid atom (the physics voxel walk).
-        float t = 0.0f;
-        const float step = kVoxelSize * 0.5f; // half-atom march cannot skip one
-        for (int s = 0; s < maxSteps * 2; ++s) {
-            t += step;
-            if (t > reach) break;
-            const vec3 p = origin + dir * t;
-            const int gx = static_cast<int>(std::floor(p.x / kVoxelSize));
-            const int gy = static_cast<int>(std::floor(p.y / kVoxelSize));
-            const int gz = static_cast<int>(std::floor(p.z / kVoxelSize));
-            // Falloff: full colour up close, fading toward the reach edge.
-            const float k = 1.0f - 0.75f * (t / reach);
-            const StainRGB scaled{
-                static_cast<std::uint8_t>(static_cast<float>(colour.r) * k),
-                static_cast<std::uint8_t>(static_cast<float>(colour.g) * k),
-                static_cast<std::uint8_t>(static_cast<float>(colour.b) * k)};
-            const std::uint32_t ci = stain_paint(w, gx, gy, gz, scaled);
-            if (ci != UINT32_MAX) {
-                ++painted;
-                bool seen = false;
-                for (std::uint32_t d : dirty)
-                    if (d == ci) { seen = true; break; }
-                if (!seen) dirty.push_back(ci);
-                break; // this ray is spent on its first surface
-            }
+        // ЕДИНСТВЕННЫЙ субвоксельный марш дерева ([los.h], S11): прежний
+        // полушаговый сэмплинг был вторым маршем и пропускал атом по
+        // диагонали — кровь садилась не туда, куда долетела бы пуля
+        // (аудит 2026-08-25). stain_splat — событие (попадание/смерть),
+        // не тиковый свип: O(клеток сегмента) здесь законно.
+        SubRayHit hit;
+        if (!sub_march(w.grid(), origin, origin + dir * reach, hit)) continue;
+        const float t = hit.t * reach;
+        // Falloff: full colour up close, fading toward the reach edge.
+        const float k = 1.0f - 0.75f * (t / reach);
+        const StainRGB scaled{
+            static_cast<std::uint8_t>(static_cast<float>(colour.r) * k),
+            static_cast<std::uint8_t>(static_cast<float>(colour.g) * k),
+            static_cast<std::uint8_t>(static_cast<float>(colour.b) * k)};
+        const std::uint32_t ci = stain_paint(
+            w, hit.cx * kSubDim + hit.sx, hit.cy * kSubDim + hit.sy,
+            hit.cz * kSubDim + hit.sz, scaled);
+        if (ci != UINT32_MAX) {
+            ++painted;
+            bool seen = false;
+            for (std::uint32_t d : dirty)
+                if (d == ci) { seen = true; break; }
+            if (!seen) dirty.push_back(ci);
         }
     }
     return painted;

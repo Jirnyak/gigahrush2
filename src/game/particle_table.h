@@ -22,10 +22,11 @@ enum class ParticleKind : std::uint8_t {
     Blood = 2,
     Spark = 3,
     Drip = 4,
+    Shard = 5,
     Count
 };
 
-inline constexpr std::uint8_t kParticleKindCount = 5u;
+inline constexpr std::uint8_t kParticleKindCount = 6u;
 
 struct ParticleDef {
     const char* id;         // CSV slug
@@ -46,6 +47,7 @@ inline constexpr ParticleDef kParticleTable[kParticleKindCount] = {
     {"blood", false, 0.42f, 0.03f, 0.03f, 0, 1.0f, 0.99f, 0.0f, 0.075f, 1.8f, 2.8f},
     {"spark", false, 1.0f, 0.72f, 0.28f, 235, 0.45f, 0.996f, 0.55f, 0.035f, 0.8f, 6.5f},
     {"drip", false, 0.32f, 0.36f, 0.40f, 0, 1.0f, 1.0f, 0.0f, 0.055f, 4.0f, 0.3f},
+    {"shard", true, 0.0f, 0.0f, 0.0f, 0, 1.0f, 0.997f, 0.2f, 0.15f, 12.0f, 2.2f},
 };
 
 inline const ParticleDef& particle_def(ParticleKind k) {

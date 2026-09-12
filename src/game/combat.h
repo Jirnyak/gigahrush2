@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio> // fprintf — переполнение капа щитков печатается вслух (S11)
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
@@ -53,6 +54,10 @@
 
 namespace giga::game {
 
+// Строка таблицы пропов ([prop_table.h]) — forward: заголовок минимален,
+// enum с явным подлежащим типом декларируется без включения таблицы.
+enum class PropId : std::uint16_t;
+
 inline std::uint64_t cell_key(int x, int y, int z) {
     return (static_cast<std::uint64_t>(x & 0xFFFF) << 32) |
            (static_cast<std::uint64_t>(y & 0xFFFF) << 16) |
@@ -61,19 +66,91 @@ inline std::uint64_t cell_key(int x, int y, int z) {
 
 inline constexpr std::size_t kMaxDestroyedShields = 128;
 
+// Радиус локальной обесточки вокруг разрушенного щитка, метры. Число
+// существующее (стояло литералом 12² внутри is_power_cut); вынесено, чтобы
+// точная проба и брод-фейз ниже читали один источник.
+inline constexpr float kPowerCutRadius = 12.0f;
+
+// Брод-фейз обесточки (§59.1): грубая клетка 4 м = 2 макроклетки, решётка
+// 64³, бит на клетку → 32 КиБ. Размер выведен: клетка обязана быть мельче
+// радиуса 12 м (иначе штамп раздувает зону) и степенью двойки от мира,
+// чтобы заворачивание было маской, а не делением.
+inline constexpr float kPowerCutCoarse = 2.0f * kCellSize; // 4 м
+inline constexpr int kPowerCutCoarseDim =
+    static_cast<int>(kWorldExtent / kPowerCutCoarse); // 64
+static_assert((kPowerCutCoarseDim & (kPowerCutCoarseDim - 1)) == 0,
+              "coarse power grid must stay a power of two: wrap is a mask");
+
 // Tracks destroyed electrical shields and localized power outages (Pure POD).
 struct PowerGridState {
     std::uint64_t destroyedShieldKeys[kMaxDestroyedShields] = {};
     std::uint32_t count = 0;
+    // §59.1: бит «рядом есть разрушенный щиток» на грубую клетку. Раньше
+    // КАЖДАЯ лампа платила линейный скан всех щитков каждый кадр (12646 ламп
+    // × кап 128 — квадрат, ~20-25 мс/кадр на капе, а саботаж щитков — штатный
+    // глагол игрока). Теперь is_power_cut — один бит-тест; точный скан
+    // остаётся узкой фазой и работает только у ламп под битом.
+    std::uint64_t cutBits[static_cast<std::size_t>(kPowerCutCoarseDim) *
+                          kPowerCutCoarseDim * kPowerCutCoarseDim / 64] = {};
+
+    static std::uint32_t coarse_bit(int gx, int gy, int gz) {
+        const int m = kPowerCutCoarseDim - 1;
+        return static_cast<std::uint32_t>(
+            ((gz & m) * kPowerCutCoarseDim + (gy & m)) * kPowerCutCoarseDim +
+            (gx & m));
+    }
+
+    static vec3 shield_pos(std::uint64_t k) {
+        const int sx = static_cast<int>((k >> 32) & 0xFFFF);
+        const int sy = static_cast<int>((k >> 16) & 0xFFFF);
+        const int sz = static_cast<int>(k & 0xFFFF);
+        // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
+        return vec3{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
+    }
+
+    // Консервативный штамп брод-фейза: бит получает каждая грубая клетка, чей
+    // ЦЕНТР лежит в R + полудиагональ клетки (4·√3/2 ≈ 3.46 м) от щитка —
+    // тогда любая точка клетки, попадающая в R, гарантированно под битом.
+    // Ложный бит стоит одну узкую пробу; пропавший бит стоил бы света.
+    void stamp_power_cut(const vec3& sp) {
+        const float halfDiag = kPowerCutCoarse * 0.8660254f; // √3/2
+        const float reach = kPowerCutRadius + halfDiag;
+        const int rc = static_cast<int>(reach / kPowerCutCoarse) + 1;
+        for (int dz = -rc; dz <= rc; ++dz)
+            for (int dy = -rc; dy <= rc; ++dy)
+                for (int dx = -rc; dx <= rc; ++dx) {
+                    const int gx =
+                        static_cast<int>(sp.x / kPowerCutCoarse) + dx;
+                    const int gy =
+                        static_cast<int>(sp.y / kPowerCutCoarse) + dy;
+                    const int gz =
+                        static_cast<int>(sp.z / kPowerCutCoarse) + dz;
+                    const vec3 centre{(gx + 0.5f) * kPowerCutCoarse,
+                                      (gy + 0.5f) * kPowerCutCoarse,
+                                      (gz + 0.5f) * kPowerCutCoarse};
+                    if (wrap_dist2(centre, sp, kWorldExtent) > reach * reach)
+                        continue;
+                    const std::uint32_t b = coarse_bit(gx, gy, gz);
+                    cutBits[b >> 6] |= (std::uint64_t{1} << (b & 63));
+                }
+    }
 
     void destroy_shield(int cx, int cy, int cz) {
         std::uint64_t k = cell_key(cx, cy, cz);
         for (std::uint32_t i = 0; i < count; ++i) {
             if (destroyedShieldKeys[i] == k) return;
         }
-        if (count < kMaxDestroyedShields) {
-            destroyedShieldKeys[count++] = k;
+        if (count >= kMaxDestroyedShields) {
+            // Кап корневой; молчаливое обрезание запрещено (S11): щиток не
+            // записан, его обесточки не будет — сказать вслух.
+            std::fprintf(stderr,
+                         "[powergrid] destroyed-shield cap %zu FULL, shield "
+                         "(%d,%d,%d) dropped\n",
+                         kMaxDestroyedShields, cx, cy, cz);
+            return;
         }
+        destroyedShieldKeys[count++] = k;
+        stamp_power_cut(shield_pos(k));
     }
 
     bool is_shield_destroyed(int cx, int cy, int cz) const {
@@ -85,19 +162,18 @@ struct PowerGridState {
     }
 
     bool is_power_cut(const vec3& pos) const {
+        // std::floor, не int-каст: позиция лампы может свеситься чуть ниже
+        // нуля (tr.pos.z − dropM), а обрезание к нулю сорвало бы wrap-маску.
+        const int gx = static_cast<int>(std::floor(pos.x / kPowerCutCoarse));
+        const int gy = static_cast<int>(std::floor(pos.y / kPowerCutCoarse));
+        const int gz = static_cast<int>(std::floor(pos.z / kPowerCutCoarse));
+        const std::uint32_t b = coarse_bit(gx, gy, gz);
+        if (((cutBits[b >> 6] >> (b & 63)) & 1u) == 0u) return false;
+        // Узкая фаза — прежний точный скан; под битом стоят единицы ламп.
         for (std::uint32_t i = 0; i < count; ++i) {
-            std::uint64_t k = destroyedShieldKeys[i];
-            int sx = static_cast<int>((k >> 32) & 0xFFFF);
-            int sy = static_cast<int>((k >> 16) & 0xFFFF);
-            int sz = static_cast<int>(k & 0xFFFF);
-            // Z-up: the 0.40 m mount offset rides the vertical (z) axis.
-            vec3 shieldPos{sx * kCellSize, sy * kCellSize, sz * kCellSize + 0.40f};
-            float dx = wrap_delta_f(pos.x, shieldPos.x, kWorldExtent);
-            float dy = wrap_delta_f(pos.y, shieldPos.y, kWorldExtent);
-            float dz = wrap_delta_f(pos.z, shieldPos.z, kWorldExtent);
-            if (dx * dx + dy * dy + dz * dz <= 12.0f * 12.0f) {
+            if (wrap_dist2(shield_pos(destroyedShieldKeys[i]), pos,
+                           kWorldExtent) <= kPowerCutRadius * kPowerCutRadius)
                 return true;
-            }
         }
         return false;
     }
@@ -177,23 +253,18 @@ inline constexpr std::size_t kMaxCorpseSlots = 8;
 // Staged mob loot on a Dead entity, filled by loot_dead_mobs in the Dead window
 // and consumed by finalize_deaths when the entity becomes a persistent Corpse.
 //
-// **Why a separate component and not Corpse early:** finalize is the only place
-// that may emplace Corpse (defect 2 — one death finalizer). Staging as data on
-// the still-Dead entity keeps the systems pure: loot writes data, finalize
-// moves data, interact reads data. No floor Pickup double-drop.
-struct CorpseLootPending {
-    ItemSlot slots[kMaxCorpseSlots] = {};
-    std::uint8_t slotCount = 0;
-};
-static_assert(std::is_trivially_copyable_v<CorpseLootPending>,
-              "CorpseLootPending must stay a pure POD struct");
-
-// Persistent corpse lying on the ground after death, available for tactical looting (Pure POD).
+// C (S14.1/S3, 2026-08-21): лут трупа живёт в КАНОНИЧЕСКОМ держателе —
+// Container-компоненте на той же сущности (kind=0). CorpseLootPending
+// (четвёртая копия носителя, жила один тик) умерла: Dead-окно кладёт
+// Container сразу — лут пишет данные, finalize по-прежнему единственный,
+// кто рождает Corpse. kMaxCorpseSlots — кап РОЛЛА (сколько накатывается),
+// не ёмкость: ёмкость каноническая, 64.
+//
+// Persistent corpse identity after death (Pure POD). Труп — RagdollRoll-проп
+// с контейнером (S14.1): физику даёт PropFallMode, лут — Container.
 struct Corpse {
-    ItemSlot lootSlots[kMaxCorpseSlots] = {};
     std::uint32_t deathTick = 0;
     std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
-    std::uint8_t slotCount = 0;
     bool searched = false;
 };
 static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");
@@ -311,21 +382,11 @@ struct Projectile {
     // shotgun there deals Kinetic too. The channel that is genuinely authored is Psi,
     // on the 18 rows of the reference's data/psi.ts.
     std::uint8_t channel = static_cast<std::uint8_t>(DamageChannel::Kinetic);
-    // Blast radius in DECIMETRES, 0 for anything that is not explosive.
-    //
-    // Carried here for the third time and for the third identical reason (`proj`
-    // and `channel` above): the thrower may be dead — indeed a grenade dropped at
-    // your own feet is *expected* to outlive you — and what a detonation does must
-    // not depend on whether whoever threw it survived the fuse.
-    //
-    // Decimetres and not metres, because a u8 of metres cannot say 4.5 m and the
-    // whole scale of interest is 1..10 m. 0.1 m of resolution over a 25.5 m ceiling.
-    //
-    // It is also the ONE field that decides a detonation happens at all: `ttlMs`
-    // reaching zero is the fuse, and a Bullet reaching the same zero is a spent shot
-    // that vanishes. Same timer, two meanings, told apart by `proj` — see
-    // `projectile_step`.
-    std::uint8_t blastDm = 0;
+    // Поля blastDm здесь больше НЕТ (2026-08-22): граната перестала быть
+    // снарядом. Метательный заряд — RagdollRoll-проп рагдолл-ядра со
+    // взведённым фитилём (Charge + ChargeArmed ниже), его отскок решает
+    // rigid по субвокселям и материальным парам, а не второй интегратор;
+    // ttlMs у снаряда снова означает ровно одно — предохранитель полёта.
 };
 
 // Fraction of gravity a player bullet obeys, in percent. The reference's NORMAL
@@ -371,11 +432,20 @@ inline constexpr float kMuzzleForward = 1.7f;
 //
 // `weapon` records which gun the magazine belongs to: swapping guns empties it, since
 // a magazine of shells is not a magazine of 9mm. Attached lazily, like PlayerMelee.
-struct PlayerRanged {
+// Ствольное состояние ОДНОЙ руки — руки АГНОСТИЧНЫ (закон владельца
+// 2026-08-31: «один слот не должен знать о втором»): свой магазин, свой
+// затвор, свой кулдаун, своё оружие. Смена ствола в руке очищает ЕЁ
+// магазин, не соседкин; два одинаковых ствола честно тянут патроны из
+// одного рюкзака по очереди перезарядок.
+struct GunHand {
     std::uint16_t cooldownMs = 0;
     std::uint16_t reloadMs = 0;
     std::uint16_t magCount = 0;
     ItemId weapon = 0;
+};
+
+struct PlayerRanged {
+    GunHand hand[2];            // [0] = ЛКМ, [1] = ПКМ
     std::uint32_t shots = 0;    // cumulative; survives possession like kills does
     std::uint32_t hits = 0;
 };
@@ -422,6 +492,47 @@ inline constexpr float kMeleeReachSlack = 0.9f;   // metres
 inline constexpr float kProjGravity = 6.0f;        // m/s^2
 inline constexpr std::uint16_t kProjTtlMs = 4000;
 inline constexpr float kProjHitRadius = 0.75f;     // metres
+
+// ---- ЗАРЯД: проп, который взрывается --------------------------------------
+//
+// Решение владельца 2026-08-21: «пропы в целом могут взрываться, расширяемо».
+// Потенциал заряда — строка props.csv (explosive_g, charge_trigger,
+// [prop_table.h] ChargeTrigger); Charge — копия потенциала на сущности,
+// ChargeArmed — догорающий фитиль. Новая взрывчатка = строка CSV, ноль кода.
+//
+// Урон и радиус ВЫВОДЯТСЯ из массы ВВ (S11), не назначаются. Калибровка —
+// Ф-1 (60 г ТНТ): 90 урона в центре и 5.0 м осколочного радиуса — числа
+// прежней оружейной таблицы, баланс сохранён. Урон ∝ m: энергия E = m·q
+// (q ≈ 4.6 МДж/кг) линейна по массе. Радиус ∝ √m: осколков ∝ m, их
+// плотность на сфере ∝ m/R², порог поражения на кромке — константа →
+// R = c·√m.
+inline constexpr float kChargeDmgPerGram = 90.0f / 60.0f;
+inline constexpr float kChargeRadiusMPerSqrtG = 5.0f / 7.7459667f; // 5 м/√60 г
+
+inline std::int16_t charge_dmg(std::uint16_t explosiveG) {
+    return static_cast<std::int16_t>(
+        static_cast<float>(explosiveG) * kChargeDmgPerGram + 0.5f);
+}
+inline float charge_radius_m(std::uint16_t explosiveG) {
+    return kChargeRadiusMPerSqrtG * std::sqrt(static_cast<float>(explosiveG));
+}
+
+// Потенциал заряда на сущности-пропе. POD-копия строки таблицы, как PropLight:
+// строка может смениться при перегенерации, сущность живёт со своей правдой.
+struct Charge {
+    std::uint16_t explosiveG = 0; // масса ВВ, граммы — единственный источник
+    std::uint8_t trigger = 0;     // ChargeTrigger ([prop_table.h])
+    std::uint8_t channel =
+        static_cast<std::uint8_t>(DamageChannel::Kinetic); // чем бьют осколки
+};
+
+// Взведён: фитиль догорает до сим-тика atTick, дальше detonate() и смерть
+// пропа. source — атрибуция килла, никогда не исключение (правило владельца
+// 2026-08-12: у вылетевшего заряда нет команды).
+struct ChargeArmed {
+    std::uint64_t atTick = 0;
+    Entity source = entt::null;
+};
 
 // РЕШЕНИЕ ВЛАДЕЛЬЦА 2026-08-16, не «чинить»: пуля летит честно весь TTL, и
 // быстрейшие стволы (сегодня 32..44 cells/s x 4000 мс = 256..352 м) перелетают
@@ -668,43 +779,41 @@ void spawn_projectile_dir(Registry& reg, LayerId layer, const vec3& from,
 // authored per weapon rather than the shared 4 s backstop, and it carries a blast
 // radius. Only the muzzle offset is shared.
 //
-// `fuseMs` becomes `Projectile::ttlMs` outright. There is deliberately no second
-// timer: the fuse IS the lifetime, and a grenade that has not detonated has not
-// expired. Anything else would be two clocks that can disagree — the defect
-// [combat.h]'s header note calls "one cooldown decrement".
-void spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
-                   const vec3& dir, std::int16_t dmg,
-                   std::uint16_t projSpeedMmps, Entity source,
-                   std::uint8_t blastDm, std::uint16_t fuseMs,
-                   std::uint8_t channel = 0);
+// 2026-08-22: бросок рождает НЕ снаряд, а RagdollRoll-проп рагдолл-ядра со
+// взведённым фитилём (Charge + ChargeArmed). Оружейная строка называет проп
+// (RangedDef::thrownPropId), проп несёт массу ВВ; урон и радиус выводятся
+// при детонации (charge_dmg/charge_radius_m). Второй интегратор отскока
+// (grenade_advance, макроклеточный — улика S2 «отскок от прокарванной дыры»)
+// умер: гранату катает rigid по субвокселям и материальным парам, и она
+// честно отскакивает от тел (решение владельца 2026-08-22 — прежний пролёт
+// сквозь плечо был костылём снарядного пути).
+// Возвращает сущность заряда (или entt::null при вырожденном dir).
+Entity spawn_grenade(Registry& reg, LayerId layer, const vec3& from,
+                     const vec3& dir, PropId prop,
+                     std::uint16_t projSpeedMmps, Entity source,
+                     std::uint16_t fuseMs, std::uint64_t tick,
+                     std::uint8_t channel = 0);
 
-// The camera holder throws the best explosive in its inventory. Sibling of
-// player_ranged_step, and NOT a branch inside it, because a throw and a shot agree
-// on almost nothing: there is no magazine (the weapon IS the ammunition, so it
-// leaves the inventory one item per throw), there is no reload, and the spread cone
-// belongs to a barrel rather than to an arm.
+// Бросок метательного. Sibling of player_ranged_step, and NOT a branch
+// inside it: у броска нет ни магазина (предмет — сам себе боеприпас), ни
+// перезарядки, ни конуса разлёта.
 //
-// It DOES share `PlayerRanged::cooldownMs`, and that is a decision rather than
-// reuse: a body has one pair of hands. Sharing the timer means you cannot throw a
-// grenade and empty a magazine in the same instant, which is what a second
-// independent cooldown would have quietly allowed.
+// ДВЕ РУКИ (закон владельца 2026-08-31): «рука несёт и делает то, чем
+// экипирована» — выбора верба НЕТ по построению: предмет в ячейке руки и
+// есть её действие. wantL/wantR — спуски рук; рука с метательным бросает
+// его и платит кулдаун СВОЕЙ руки (GunHand.cooldownMs = «рука занята
+// действием», отдельного throw-таймера нет — стреляющая рука бросить не
+// может физически, у неё ствол в пальцах). wantBag — путь без решателя
+// (консольная команда `grenade`, старые фикстуры): лучший заряд скана
+// сумки, темп руки ЛКМ.
 //
-// Because the cooldown is shared, the decrement must NOT be repeated here — it is
-// `player_ranged_step`'s, at the top, exactly once per tick (defect 3). Call this
-// AFTER player_ranged_step in the sim order, on the same tick, or the timer runs at
-// half speed on any tick a throw is wanted.
+// Таймеры стареют в player_ranged_step (ровно один декремент, дефект 3) —
+// звать ПОСЛЕ него тем же тиком. `tick` взводит фитиль (ChargeArmed).
 //
-// No `dt`, no `tick`, no `NoiseField` — the three parameters its siblings carry and
-// this one would not read. A throw ages no timer of its own, needs no random seed
-// (there is no spread cone: a thrown weight goes where you are looking), and is
-// nearly silent; what a floor hears is the detonation, published by `projectile_step`
-// three seconds later and somewhere else. An unread parameter is how a field becomes
-// write-only, which is the defect both `Projectile::proj` and `RangedDef::channel`
-// had to be dug out of.
-//
-// Returns 1 when a grenade actually left the hand.
+// Returns число покинувших руки зарядов.
 std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                bool wantThrow);
+                                bool wantL, bool wantR, bool wantBag,
+                                std::uint64_t tick);
 
 // Advance every shot in flight: integrate under gravity, stop on solid geometry,
 // damage what it touches on contact, expire on TTL. Destroys spent projectiles.
@@ -758,9 +867,11 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
 // Combat → geometry destruction seam ([world/destruct.h]).
 //
 // Combat NEVER mutates the grid. It proposes spheres (position, radius, power,
-// seed); the app drains them on the sim clock behind the same doors.frozen gate
+// seed); the app drains them on the sim clock through the same dispose path
 // the console `carve` row already uses. That is the whole design: one dispose
-// path, many proposers (console, bullet impact, melee wall swing).
+// path, many proposers (console, bullet impact, melee wall swing). Nothing is
+// dropped for a nav bake: the bake worker owns a snapshot, never the grid
+// ([game/rebake.h]) — the droppedBake counter died with doors.frozen.
 //
 // Bounded POD ring, no heap — a shotgun pellet fan can enqueue several impacts
 // in one step without allocating on the hot path.
@@ -781,20 +892,18 @@ struct CarveProposalQueue {
     CarveProposal items[kMaxCarveProposals] = {};
     std::uint8_t count = 0;
     // A refused proposal used to vanish silently — a shot that visibly hit a wall
-    // and carved nothing, with no way to tell "queue full" from "degenerate radius"
-    // from "bake in flight". Counted per reason so the drain site can PRINT what
+    // and carved nothing, with no way to tell "queue full" from "degenerate
+    // radius". Counted per reason so the drain site can PRINT what
     // was dropped instead of letting the miss read as a physics bug. Reset by
     // clear() together with the queue itself.
     std::uint16_t droppedFull = 0;
     std::uint16_t droppedDegenerate = 0;
-    std::uint16_t droppedBake = 0;
     std::uint16_t clampedRadius = 0;
 
     void clear() {
         count = 0;
         droppedFull = 0;
         droppedDegenerate = 0;
-        droppedBake = 0;
         clampedRadius = 0;
     }
 
@@ -834,6 +943,29 @@ inline std::uint16_t carve_power_from_dmg(std::int16_t dmg) {
 inline constexpr float kBulletCarveRadius = 0.35f;
 inline constexpr float kMeleeCarveRadius = 0.55f;
 
+// ДЕТОНАЦИЯ — один примитив взрыва на всё дерево (решение владельца
+// 2026-08-21: «пропы в целом могут взрываться»). Сбор тел в радиусе с
+// гейтом los_clear, линейный спад, carve-предложение, шум severity-5,
+// частицы. Зовут: гранатная ветка projectile_step и charge_step
+// проп-зарядов. `source` — атрибуция килла, не исключение; `seedSalt` —
+// соль детерминизма (энтити-виновник). Возвращает true, если взрыв
+// кого-то задел или карв принят.
+bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
+              const vec3& at, std::int16_t dmg, float radiusM, Entity source,
+              DamageChannel channel, std::uint64_t tick,
+              std::uint32_t seedSalt, CarveProposalQueue* carves = nullptr,
+              ParticleBurstQueue* particles = nullptr,
+              NoiseField* noise = nullptr);
+
+// Фитили: взведённый заряд (Charge + ChargeArmed), чей atTick наступил,
+// детонирует примитивом detonate() и умирает. Сбор — потом взрыв
+// (apply_damage перетряхивает пулы под view). Возвращает число детонаций.
+std::uint32_t charge_step(Registry& reg, NpcPool& pool, LevelStack& stack,
+                          LayerId layer, std::uint64_t tick,
+                          CarveProposalQueue* carves = nullptr,
+                          ParticleBurstQueue* particles = nullptr,
+                          NoiseField* noise = nullptr);
+
 std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                               LevelStack& stack, LayerId layer, float dt,
                               std::uint64_t tick,
@@ -871,8 +1003,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
 // nullptr and the shot is silent, which is the pre-noise behaviour exactly.
 // Optional `status`: when non-null, spread is scaled by status_aim_mult_e3
 // (SporeHaze widens the cone). Null keeps the pre-STATAIM path bit-for-bit.
+// wantFireL/R — спуски ДВУХ рук (two-hands.md): каждая рука стреляет своим
+// стволом со своим магазином/затвором; ствол ищется валидированным чтением
+// её ячейки Equipped, руки друг о друге не знают.
 std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
-                                 bool wantFire, float dt, std::uint64_t tick,
+                                 bool wantFireL, bool wantFireR, float dt,
+                                 std::uint64_t tick,
                                  NoiseField* noise = nullptr,
                                  const StatusSet* status = nullptr);
 

@@ -1,5 +1,12 @@
 # Performance — Resource model & the O(n) contract
 
+> **Сверка 2026-08-23:** «каждое cellular-поле идёт GPU async compute» — построен
+> ровно один (газ, `gpu_gas_pass`); fluid/diffusion остались CPU — S16 мир-автомат
+> забирает их целиком. `parallel_for` пользуют уже трое: nav-бейк, `RebakeScheduler`
+> (`rebake_threads()`), бейк видимости света. §Two regimes: вместо «дешёвого
+> локального патча» построен полный фоновый ребейк со свапом (S9). Числа §физика
+> (77%) устарели — рычаги 1-3 взяты (см. physics.md).
+
 The single most important framing for every design decision in gigahrush2. It is
 a **native C++/Vulkan desktop game** — not a web/wasm build, not a mobile port.
 That changes what "optimize" means, and the whole engine leans into it.

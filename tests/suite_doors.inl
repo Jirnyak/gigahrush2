@@ -1,640 +1,359 @@
-// Doors ([game/door.h]) — geometry agreement, the bake premise, and the monster
-// reaction measured against the mob table's own numbers.
+// suite_doors — НОВАЯ дверь: зарастание проёма настоящей материей
+// (редакция владельца 2026-08-28; прежняя система вырезана целиком).
 //
-// The two tests that matter most are not the obvious ones:
-//
-//   * `doors_leave_solidity_untouched` is the whole architectural argument in one
-//     assertion. `door_build` recolours cells but must not change a single
-//     sub-voxel bit, because the nav bake is 3.7 s / 128 MiB and reads only
-//     solidity. If that ever regresses, every floor's flow fields are baked from
-//     geometry the player is about to change and nothing else in the tree would
-//     say so.
-//   * `doorways_match_the_generated_grid` pins floor_doorways() against
-//     generate_floor()'s actual output. They share a walk and a hash today; this is
-//     what catches the day somebody re-introduces a private copy of either.
-//
-// A .inl and not a .cpp for the reason the other suites give: game_test.cpp owns
-// the CHECK macro, so the include has to land after it. It carries its own include
-// of the system under test so game_test.cpp's diff stays two lines.
-
-#include "core/tick.h"   // giga::kSimDt - never hardcode the tick, it has moved once
+// Пины — ровно три закона системы ([game/door.h]):
+//   1. Запись = ГДЕ и ЧЕМ (модуль объявляет; лифтовые створки — механизм).
+//   2. Состояния НЕТ: «закрыта» — производная от мира; тоггл штампует и
+//      снимает НАСТОЯЩИЕ субвоксели; тело в проёме — отказ закрытия.
+//   3. Полотно — материя: снимок этажа несёт закрытую дверь сам (сброса
+//      на входе не существует по построению).
 #include "game/door.h"
+#include "game/focus.h"
+#include "game/prop_system.h" // Interactable — тело смотрящего в гейте фокуса
+#include "game/floor_gen.h"
+#include "game/floor_spec.h"
+#include "game/save.h"
+#include "world/world.h"
 
-// SubMask has no operator==, so the solidity comparison is explicit. Word-wise and
-// not memcmp: the words ARE the occupancy, and a struct-padding difference would
-// make memcmp report a change that physics cannot see.
-static bool masks_identical(const std::vector<SubMask>& a,
-                            const std::vector<SubMask>& b) {
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i)
-        for (std::size_t w = 0; w < kSubMaskWords; ++w)
-            if (a[i].words[w] != b[i].words[w]) return false;
-    return true;
-}
+namespace doors_test {
 
-// A ground-storey door in an X-crossing wall, kept away from cell 0 on both axes.
-//
-// The "away from 0" part is not fussiness, it cost a red test: the first such door
-// on a Residential floor sits at cx == 0, so `leaf.x - 2 cells` is -3.0 m, physics
-// wraps the body to x = 253, and it was then correctly blocked at 255.6 — which no
-// plain `blockedX < leaf.x` comparison can recognise. Picking an interior door keeps
-// the arithmetic in one image so the assertions can stay readable; the toroidal
-// versions are below where they still matter.
-static std::uint32_t pick_ground_door(const DoorSet& doors, std::uint32_t skipA,
-                                      std::uint32_t skipB, std::uint32_t skipC) {
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i) {
-        const Door& d = doors.doors[i];
-        if (i == skipA || i == skipB || i == skipC) continue;
-        // The module's ground storey ([floor_gen.h] floor_ground_z), not a
-        // literal 1 — that was the purged generic lattice's shape.
-        if (d.cz != floor_ground_z() || d.axis != 0) continue;
-        if (d.cx < 4 || d.cx > 120 || d.cy < 4 || d.cy > 120) continue;
-        return i;
-    }
-    return kNoDoor;
-}
-
-// A doorway the generator reports must actually be an opening in the grid it
-// generated, and the count must be what the geometry profile predicts.
-static void test_doorways_match_the_generated_grid() {
+void declaration_and_toggle() {
     World w;
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, /*number=*/0, res, /*seed=*/909u);
-
-    std::vector<Doorway> ways;
-    const std::uint32_t n = floor_doorways(0, res, 909u, ways);
-    CHECK(n == ways.size());
-
-    // Geometry is the module's business — no per-kind count formula survives the
-    // generic lattice's purge. The floor must still ship a real door population.
-    CHECK(n > 0);
-
-    // Every reported cell is air in the grid the same arguments generated. The
-    // lattice lobbies carve through wall lines, so some openings are wider than the
-    // generator made them — air either way, which is what this checks.
-    std::uint32_t airOk = 0;
-    for (const Doorway& d : ways) {
-        bool allAir = true;
-        for (int z = d.cz; z < d.cz + d.h; ++z)
-            if (w.grid().cell(d.cx, d.cy, z) != kCellAir) allAir = false;
-        if (allAir) ++airOk;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    CHECK(!d.list.empty());
+    // Лифтовые створки: 4 механизм-портала, акторному промпту невидимы.
+    for (int hub = 0; hub < 4; ++hub) {
+        CHECK(d.lift[hub] != kNoPortal);
+        CHECK(d.list[d.lift[hub]].mechanism == 1);
     }
-    // >= 99%, not 100%: the module runs later passes over its own plan — the
-    // elevator lattice's corner posts and stair/water kerbs can land on a
-    // handful of planned openings (measured 84 of 15246). door_build is the
-    // validation gate that drops exactly those; a real seed mismatch fails this
-    // by a mile (the old two-seed bug kept ~5%).
-    CHECK(airOk * 100u >= n * 99u);
-
-    // Pure in (number, spec, seed), and the number is mixed in.
-    std::vector<Doorway> again, other;
-    floor_doorways(0, res, 909u, again);
-    floor_doorways(1, res, 909u, other);
-    CHECK(again.size() == ways.size());
-    bool identical = true;
-    for (std::size_t i = 0; i < ways.size(); ++i)
-        if (again[i].cx != ways[i].cx || again[i].cy != ways[i].cy ||
-            again[i].cz != ways[i].cz)
-            identical = false;
-    CHECK(identical);
-    bool differs = false;
-    for (std::size_t i = 0; i < ways.size() && i < other.size(); ++i)
-        if (other[i].cx != ways[i].cx || other[i].cy != ways[i].cy)
-            differs = true;
-    CHECK(differs);
-
-    // A pillar-mode kind has no wall segments to open, so it reports none.
-    // (Removed because Industrial is no longer a pillar-mode floor)
-}
-
-// door_build recolours and indexes; it must not move one sub-voxel bit.
-static void test_doors_leave_solidity_untouched() {
-    World w;
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, /*number=*/2, res, /*seed=*/31337u);
-    const std::vector<SubMask> before = w.grid().masks();
-    const std::vector<CellType> typesBefore = w.grid().types();
-
-    DoorSet doors;
-    const std::uint32_t n = door_build(w, doors, 2, res, 31337u);
-    CHECK(n > 0);
-    CHECK(doors.shut == 0);      // built OPEN: the geometry the nav bake must see
-    CHECK(doors.broken == 0);
-
-    // The invariant the bake depends on.
-    CHECK(masks_identical(w.grid().masks(), before));
-    // ...and the frames DID change something, or the material work is a no-op.
-    CHECK(w.grid().types() != typesBefore);
-
-    std::uint32_t frames = 0;
-    for (CellType t : w.grid().types())
-        if (t == kMatDoor) ++frames;
-    CHECK(frames >= n * 2u);     // at least two jambs per door
-
-    // Every door: leaf air, both jambs painted, state Open, full HP, indexed.
-    bool leafAir = true, jambsPainted = true, indexed = true, fresh = true;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i) {
-        const Door& d = doors.doors[i];
-        const int jx = d.axis == 0 ? 0 : 1;
-        const int jy = d.axis == 0 ? 1 : 0;
-        if (d.state != static_cast<std::uint8_t>(DoorState::Open)) fresh = false;
-        if (d.hp != kDoorHp) fresh = false;
-        for (int z = d.cz; z < d.cz + d.h; ++z) {
-            if (w.grid().cell(d.cx, d.cy, z) != kCellAir) leafAir = false;
-            if (w.grid().cell(d.cx - jx, d.cy - jy, z) != kMatDoor)
-                jambsPainted = false;
-            if (w.grid().cell(d.cx + jx, d.cy + jy, z) != kMatDoor)
-                jambsPainted = false;
-            if (doors.at(d.cx, d.cy, z) != i) indexed = false;
-        }
+    // Вердикт владельца 2026-08-29: жилой фонд падика — НЕ гермозоны, все
+    // квартирные двери сталь (ломаются упорным карвом). Гермополотна живут
+    // у настоящих гермозон (гермолобби blame) — обе полярности ниже.
+    bool sawSteel = false, sawHermetic = false;
+    for (const MaskGroup& p : d.list) {
+        if (p.mat == kMatDoorSteel) sawSteel = true;
+        if (p.mat == kMatDoorHermetic) sawHermetic = true;
     }
-    CHECK(leafAir);
-    CHECK(jambsPainted);
-    CHECK(indexed);
-    CHECK(fresh);
+    CHECK(sawSteel);
+    CHECK(!sawHermetic);
 
-    // Rebuilding over a used set must not inherit the old ids or counts.
-    DoorSet reused = DoorSet{};
-    door_build(w, reused, 2, res, 31337u);
-    reused.doors[0].state = static_cast<std::uint8_t>(DoorState::Broken);
-    const std::uint32_t n2 = door_build(w, reused, 2, res, 31337u);
-    CHECK(n2 == n);
-    CHECK(reused.doors[0].state == static_cast<std::uint8_t>(DoorState::Open));
-
-    // door_build is a GRID-VALIDATION gate: it may only keep doorways whose
-    // opening and jambs survive in the built geometry (lattice lobbies can eat
-    // a jamb), never invent one.
-    World dw;
-    DoorSet dd;
-    const FloorSpec& der = floor_spec(FloorKind::Derelict);
-    generate_floor(dw, 3, der, 31337u);
-    std::vector<Doorway> derWays;
-    const std::uint32_t derN = floor_doorways(3, der, 31337u, derWays);
-    const std::uint32_t derDoors = door_build(dw, dd, 3, der, 31337u);
-    CHECK(derDoors > 0);
-    CHECK(derDoors <= derN);
-}
-
-// Shut means SOLID TO MOVEMENT, tested through the physics the game actually uses.
-static void test_shut_door_blocks_a_body() {
-    LevelStack stack;
-    const LayerId layer = stack.push_layer();
-    World& w = stack.layer(layer);
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, 0, res, 5150u);
-    DoorSet doors;
-    CHECK(door_build(w, doors, 0, res, 5150u) > 0);
-
-    // A door on the ground storey, in a wall line crossed by moving along X.
-    const std::uint32_t pick = pick_ground_door(doors, kNoDoor, kNoDoor, kNoDoor);
-    CHECK(pick != kNoDoor);
-    const Door probe = doors.doors[pick];
-    const vec3 leaf{(static_cast<float>(probe.cx) + 0.5f) * kCellSize,
-                    (static_cast<float>(probe.cy) + 0.5f) * kCellSize,
-                    (static_cast<float>(probe.cz) + 0.5f) * kCellSize};
-    const vec3 half{0.4f, 0.4f, 0.4f};
-
+    // Первый акторный портал с чистым проёмом.
     Registry reg;
-    CHECK(!aabb_overlaps_solid(w, leaf, half));            // open: walkable
-    CHECK(doors.dirtyCells.empty());                       // nothing published yet
-    CHECK(door_set(w, doors, reg, layer, pick, true));
-    CHECK(doors.shut == 1);
-    CHECK(aabb_overlaps_solid(w, leaf, half));             // shut: solid
-    // The mask-edit handoff seam ([door.h] dirtyCells): shutting published one
-    // entry per leaf cell — the same contract carve keeps with its consumers.
-    CHECK(doors.dirtyCells.size() == static_cast<std::size_t>(probe.h));
-    CHECK(doors.dirtyCells[0] ==
-          macro_index(wrap_macro(probe.cx), wrap_macro(probe.cy),
-                      wrap_macro(probe.cz)));
-    doors.dirtyCells.clear();                              // the app's drain
-    CHECK(!door_set(w, doors, reg, layer, pick, true));    // already shut
-    CHECK(doors.dirtyCells.empty());                       // a refusal publishes nothing
+    std::vector<std::uint32_t> dirty;
+    std::uint32_t id = kNoPortal;
+    for (std::uint32_t i = 0; i < d.list.size(); ++i) {
+        if (d.list[i].mechanism) continue;
+        if (!door_closed(w, d.list[i])) { id = i; break; }
+    }
+    CHECK(id != kNoPortal);
+    const MaskGroup& p = d.list[id];
+    const vec3 at = p.centre;
 
-    // Walk a body at the shut leaf and let physics resolve it: it must not cross.
+    // Тоггл закрывает: настоящая материя в маске+странице, состояние —
+    // производная от мира.
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
+    CHECK(door_closed(w, p));
+    CHECK(!dirty.empty());
+    CHECK(!w.grid().masks()[p.cells.front().ci].empty());
+
+    // Тоггл открывает: свои биты сняты, проём снова воздух.
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
+    CHECK(!door_closed(w, p));
+    CHECK(!dirty.empty());
+
+    // Тело в проёме — отказ закрытия (не замуровываем).
     Entity body = reg.create();
-    const float startX = leaf.x - 2.0f * kCellSize;
-    reg.emplace<Transform>(body, Transform{vec3{startX, leaf.y, leaf.z}, layer});
-    reg.emplace<Velocity>(body, Velocity{vec3{4.0f, 0.0f, 0.0f}});
-    reg.emplace<AABB>(body, AABB{half});
-    for (int i = 0; i < 240; ++i) {
-        reg.get<Velocity>(body).v = vec3{4.0f, 0.0f, 0.0f};
-        physics_step(reg, stack, giga::kSimDt);
-    }
-    const float blockedX = reg.get<Transform>(body).pos.x;
-    CHECK(blockedX < leaf.x - 0.5f * kCellSize);   // stopped short of the leaf
+    reg.emplace<Transform>(body, Transform{at, 0});
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == kNoPortal);
+    CHECK(!door_closed(w, p));
 
-    // Open it and the same walk goes through.
-    CHECK(door_set(w, doors, reg, layer, pick, false));
-    CHECK(doors.shut == 0);
-    CHECK(doors.dirtyCells.size() == static_cast<std::size_t>(probe.h));
-    doors.dirtyCells.clear();
-    CHECK(!aabb_overlaps_solid(w, leaf, half));
-    for (int i = 0; i < 240; ++i) {
-        reg.get<Velocity>(body).v = vec3{4.0f, 0.0f, 0.0f};
-        physics_step(reg, stack, giga::kSimDt);
-    }
-    CHECK(reg.get<Transform>(body).pos.x > leaf.x + 0.25f * kCellSize);
-
-    // With a body standing in the doorway the shut is REFUSED. physics backs a
-    // sweep out of an overlap; a body already inside solid has nowhere to back to,
-    // so this is a soft-lock guard and not politeness.
-    reg.get<Transform>(body).pos = leaf;
-    CHECK(!door_set(w, doors, reg, layer, pick, true));
-    CHECK(doors.shut == 0);
-
-    // Frozen (a nav bake is reading the grid on a worker) refuses every mutator.
-    reg.get<Transform>(body).pos = vec3{startX, leaf.y, leaf.z};
-    doors.frozen = true;
-    CHECK(!door_set(w, doors, reg, layer, pick, true));
-    CHECK(door_toggle_near(w, doors, reg, layer, leaf) == kNoDoor);
-    doors.frozen = false;
-
-    // Toggle by proximity: standing in the doorway is in reach; a room away is not.
-    const std::uint32_t hit =
-        door_toggle_near(w, doors, reg, layer,
-                         vec3{leaf.x - kCellSize, leaf.y, leaf.z});
-    CHECK(hit == pick);
-    CHECK(doors.doors[pick].state == static_cast<std::uint8_t>(DoorState::Shut));
-    CHECK(door_toggle_near(w, doors, reg, layer,
-                          vec3{leaf.x + 6.0f * kCellSize, leaf.y, leaf.z}) ==
-          kNoDoor);
-    // ...and toggling again re-opens the same door.
-    CHECK(door_toggle_near(w, doors, reg, layer,
-                           vec3{leaf.x - kCellSize, leaf.y, leaf.z}) == pick);
-    CHECK(doors.doors[pick].state == static_cast<std::uint8_t>(DoorState::Open));
+    // Механизм-API: лифтовая створка закрывается/открывается машиной,
+    // акторный запрос её не видит.
+    const MaskGroup& lp = d.list[d.lift[0]];
+    const vec3 lat = lp.centre;
+    CHECK(door_query_near(d, lat) == kNoPortal || 
+          !d.list[door_query_near(d, lat)].mechanism);
+    dirty.clear();
+    CHECK(door_close(w, lp, reg, 0, dirty));
+    CHECK(door_closed(w, lp));
+    door_open(w, lp, dirty);
+    CHECK(!door_closed(w, lp));
 }
 
-// What a shut door does to a monster, and the numbers come off the mob table.
-static void test_shut_door_versus_monsters() {
-    LevelStack stack;
-    const LayerId layer = stack.push_layer();
-    World& w = stack.layer(layer);
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, 0, res, 4242u);
-    DoorSet doors;
-    CHECK(door_build(w, doors, 0, res, 4242u) > 0);
+void snapshot_carries_closed_door() {
+    World w;
+    generate_floor(w, 3, floor_spec(FloorKind::Residential), 777u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 3, floor_spec(FloorKind::Residential), 777u);
+    door_declare(d, fr, 3, floor_spec(FloorKind::Residential), 777u);
+    Registry reg;
+    std::vector<std::uint32_t> dirty;
+    std::uint32_t id = kNoPortal;
+    for (std::uint32_t i = 0; i < d.list.size(); ++i)
+        if (!d.list[i].mechanism && !door_closed(w, d.list[i])) { id = i; break; }
+    CHECK(id != kNoPortal);
+    const MaskGroup& p = d.list[id];
+    const vec3 at = p.centre;
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
+    CHECK(door_closed(w, p));
 
-    std::uint32_t pick = kNoDoor;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
-        if (doors.doors[i].cz == floor_ground_z() && doors.doors[i].axis == 0) {
-            pick = i;
-            break;
+    // Снимок -> свежий мир: закрытая при уходе дверь закрыта при возврате
+    // БЕЗ какого-либо дверного состояния — полотно едет материей мира.
+    std::vector<std::uint8_t> blob;
+    snapshot_floor(w, 3, blob);
+    World w2;
+    generate_floor(w2, 3, floor_spec(FloorKind::Residential), 777u);
+    CHECK(!door_closed(w2, p)); // свежая генерация — проём открыт
+    CHECK(apply_floor_snapshot(w2, blob.data(), blob.size()));
+    CHECK(door_closed(w2, p)); // материя вернулась — дверь закрыта
+}
+
+// ФОКУС ПРИЦЕЛА на РЕАЛЬНОМ этаже ([game/focus.h]). Гейт существует, потому
+// что первая версия молчала в игре по двум причинам сразу — своя формула
+// взгляда вместо camera_forward и марш, стартующий В МАТЕРИИ (заслонял всё).
+// Оба дефекта headless-ловимы, и этот тест их ловит.
+//
+// Третья причина немоты — СВОЁ ТЕЛО: каждое живое тело несёт Interactable,
+// включая тело смотрящего ([game/embody.cpp] «finders skip self»), и без
+// пропуска self оно, стоя в четверти метра от глаза, перебивало ЛЮБУЮ дверь
+// (замер GIGA_FOCUS_DBG 2026-08-28: what=Entity dist=0.22 при любом
+// взгляде). Тест возит тело смотрящего вместе с глазом.
+void focus_aims_at_a_real_door() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    Registry reg;
+    const Entity self = reg.create();
+    reg.emplace<Transform>(self, Transform{{0, 0, 0}, 0});
+    reg.emplace<Interactable>(
+        self, Interactable{InteractKind::Npc, 2.5f, true});
+
+    int seen = 0, promptOk = 0;
+    for (std::uint32_t i = 0; i < d.list.size() && seen < 8; ++i) {
+        const MaskGroup& p = d.list[i];
+        if (p.mechanism) continue;
+        const vec3 centre = p.centre;
+        // Глаз в полутора метрах по -X от проёма, смотрит на него: тот же
+        // вектор, что даёт camera_forward(yaw=0) — ось +X.
+        // Подход с ЧЕТЫРЁХ сторон, как в игре: проём стоит в стене вдоль
+        // одной оси, и с двух сторон к нему не подойти вовсе.
+        ++seen;
+        const int off[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        bool aimed = false;
+        for (int k = 0; k < 4 && !aimed; ++k) {
+            const vec3 eye{centre.x - off[k][0] * 1.5f,
+                           centre.y - off[k][1] * 1.5f, centre.z};
+            // Взгляд С НАКЛОНОМ ВНИЗ, как в живом замере (aim.z = −0.48):
+            // при горизонтальном взгляде своё тело даёт along=0 и мутация
+            // «пропуск self снят» не ловится — тело выигрывает только когда
+            // проекция на луч положительна, то есть почти всегда в игре.
+            const vec3 dir{0.877f * off[k][0], 0.877f * off[k][1], -0.48f};
+            // Тело смотрящего стоит под глазом, как в игре (глаз выше
+            // центра тела): без пропуска self оно ближайшая цель всегда.
+            reg.get<Transform>(self).pos = {eye.x, eye.y, eye.z - 0.7f};
+            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir, d, self);
+            CHECK(!(f.what == Focus::What::Entity && f.entity == self));
+            if (f.what == Focus::What::Portal && f.portal == i) {
+                aimed = true;
+                // Табличка приходит ИЗ СИСТЕМЫ, не из литерала у действия.
+                CHECK(focus_prompt(f, w, d) != nullptr);
+            }
         }
-    CHECK(pick != kNoDoor);
-    const Door probe = doors.doors[pick];
+        if (aimed) ++promptOk;
+    }
+    std::printf("[focus] doors probed %d, aimed %d\n", seen, promptOk);
+    CHECK(seen > 0);
+    // Хоть с одной из четырёх сторон обязан ловиться КАЖДЫЙ проём: иначе
+    // дверь в игре нема (жалоба владельца 2026-08-28).
+    CHECK(promptOk == seen);
+}
 
-    // One cell to the +X side of the leaf: room interior, cardinally adjacent.
-    const vec3 beside{(static_cast<float>(probe.cx) + 1.5f) * kCellSize,
-                      (static_cast<float>(probe.cy) + 0.5f) * kCellSize,
-                      (static_cast<float>(probe.cz) + 0.5f) * kCellSize};
+// ДВЕРЬ ЛЮБОЙ ФОРМЫ ([world/mask.h], владелец 2026-08-28: «проём, решётка
+// толщиной в один субвоксель, толстая гермодверь, створки ворот»). Форма —
+// биты allow: полотно в один субвоксель толщиной штампует РОВНО свои биты
+// и снимает ровно их — ни атомом больше.
+void arbitrary_shape_door() {
+    World w;
+    Doors d;
+    MaskGroup g;
+    g.props = kMaskDoor;
+    g.mat = kMatDoorSteel;
+    SubMask plate; // стенка sx==0: 8×8 = 64 атома, толщина 0.25 м
+    for (int sz = 0; sz < kSubDim; ++sz)
+        for (int sy = 0; sy < kSubDim; ++sy)
+            plate.set(sub_bit(0, sy, sz));
+    const std::uint32_t ci =
+        static_cast<std::uint32_t>(macro_index(10, 10, 10));
+    g.cells.push_back(MaskCell{ci, plate});
+    g.centre = vec3{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+    d.list.push_back(g);
 
     Registry reg;
-    const float dt = giga::kSimDt;
-
-    // --- a monster with an attack BREAKS it, in the time its row predicts -----
-    CHECK(door_set(w, doors, reg, layer, pick, true));
-    Entity mob = reg.create();
-    reg.emplace<Transform>(mob, Transform{beside, layer});
-    reg.emplace<Velocity>(mob, Velocity{});
-    const auto kind = MobKind::Nightmare;
-    const MobDef& md = mob_def(kind);
-    CHECK(md.dmg > 0 && md.attackCdMs > 0);
-    reg.emplace<MobRef>(mob, MobRef{static_cast<std::uint8_t>(kind), 1,
-                                    static_cast<std::int16_t>(md.hp),
-                                    static_cast<std::int16_t>(md.hp)});
-
-    const float dps =
-        static_cast<float>(md.dmg) * 1000.0f / static_cast<float>(md.attackCdMs);
-    const int expectTicks =
-        static_cast<int>(static_cast<float>(kDoorHp) / dps / dt);
-    int ticks = 0;
-    std::uint8_t breaker = 0xFF;
-    for (; ticks < expectTicks * 3 + 60; ++ticks) {
-        const DoorTick t = door_step(reg, w, doors, layer, dt,
-                                     static_cast<std::uint64_t>(ticks));
-        if (t.broken) { breaker = t.lastKind; break; }
-        CHECK(t.pressing == 1);
+    std::vector<std::uint32_t> dirty;
+    CHECK(!door_closed(w, d.list[0]));
+    CHECK(door_toggle_near(w, d, reg, 0, g.centre, dirty) == 0);
+    CHECK(door_closed(w, d.list[0]));
+    const SubMask& m = w.grid().masks()[ci];
+    int stamped = 0;
+    for (int b = 0; b < kSubVoxels; ++b) {
+        if (!m.test(b)) continue;
+        CHECK(plate.test(b)); // ни атома вне формы
+        ++stamped;
     }
-    CHECK(breaker == static_cast<std::uint8_t>(kind));
-    // Within 2% of the table's own dmg/cd, so this measures the rate rather than
-    // just that it eventually falls over.
-    CHECK(ticks > expectTicks - expectTicks / 50 - 2);
-    CHECK(ticks < expectTicks + expectTicks / 50 + 2);
-    CHECK(doors.broken == 1);
-    CHECK(doors.shut == 0);
-    CHECK(doors.doors[pick].state == static_cast<std::uint8_t>(DoorState::Broken));
-    // A broken door is air forever, and refuses to be shut again.
-    for (int z = probe.cz; z < probe.cz + probe.h; ++z)
-        CHECK(w.grid().cell(probe.cx, probe.cy, z) == kCellAir);
-    CHECK(!door_set(w, doors, reg, layer, pick, true));
-    reg.destroy(mob);
-
-    // --- a second door: the kind with dmg 0 PUSHES it open instead ------------
-    // This is the branch that makes a permanent jam impossible. Paupsina has dmg 0
-    // in data/mobs.csv, so no amount of chipping would ever get it through.
-    std::uint32_t pick2 = kNoDoor;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
-        if (i != pick && doors.doors[i].cz == floor_ground_z() &&
-            doors.doors[i].axis == 0) {
-            pick2 = i;
-            break;
-        }
-    CHECK(pick2 != kNoDoor);
-    const Door probe2 = doors.doors[pick2];
-    const vec3 beside2{(static_cast<float>(probe2.cx) + 1.5f) * kCellSize,
-                       (static_cast<float>(probe2.cy) + 0.5f) * kCellSize,
-                       (static_cast<float>(probe2.cz) + 0.5f) * kCellSize};
-    CHECK(door_set(w, doors, reg, layer, pick2, true));
-    CHECK(mob_def(MobKind::Paupsina).dmg == 0);
-    Entity harmless = reg.create();
-    reg.emplace<Transform>(harmless, Transform{beside2, layer});
-    reg.emplace<Velocity>(harmless, Velocity{});
-    reg.emplace<MobRef>(harmless,
-                        MobRef{static_cast<std::uint8_t>(MobKind::Paupsina), 1,
-                               10, 10});
-    int pushTicks = 0;
-    for (; pushTicks < 600; ++pushTicks) {
-        const DoorTick t = door_step(reg, w, doors, layer, dt,
-                                     static_cast<std::uint64_t>(pushTicks));
-        if (t.opened) break;
-    }
-    CHECK(pushTicks < 600);
-    CHECK(doors.doors[pick2].state == static_cast<std::uint8_t>(DoorState::Open));
-    CHECK(doors.doors[pick2].hp == kDoorHp);     // pushed, never damaged
-    CHECK(doors.broken == 1);                    // still just the one
-    // ~kDoorForceMs of contact, in ticks.
-    CHECK(pushTicks > static_cast<int>(kDoorForceMs) / 10 - 20);
-    CHECK(pushTicks < static_cast<int>(kDoorForceMs) / 10 + 40);
-    reg.destroy(harmless);
-
-    // --- a resident pushes it open too; the camera holder does not ------------
-    std::uint32_t pick3 = kNoDoor;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
-        if (i != pick && i != pick2 && doors.doors[i].cz == floor_ground_z() &&
-            doors.doors[i].axis == 0) {
-            pick3 = i;
-            break;
-        }
-    CHECK(pick3 != kNoDoor);
-    const Door probe3 = doors.doors[pick3];
-    const vec3 beside3{(static_cast<float>(probe3.cx) + 1.5f) * kCellSize,
-                       (static_cast<float>(probe3.cy) + 0.5f) * kCellSize,
-                       (static_cast<float>(probe3.cz) + 0.5f) * kCellSize};
-    CHECK(door_set(w, doors, reg, layer, pick3, true));
-
-    // The player leans on it for four seconds: nothing happens. Doors are worked
-    // with a keypress, so a shut door the player is standing next to stays shut.
-    Entity playerish = reg.create();
-    reg.emplace<Transform>(playerish, Transform{beside3, layer});
-    reg.emplace<Velocity>(playerish, Velocity{});
-    reg.emplace<CameraTag>(playerish, CameraTag{});
-    for (int i = 0; i < 480; ++i) {
-        const DoorTick t =
-            door_step(reg, w, doors, layer, dt, static_cast<std::uint64_t>(i));
-        CHECK(t.opened == 0 && t.broken == 0 && t.pressing == 0);
-    }
-    CHECK(doors.doors[pick3].state == static_cast<std::uint8_t>(DoorState::Shut));
-
-    // A resident standing beside the same door does get through.
-    Entity resident = reg.create();
-    reg.emplace<Transform>(resident, Transform{beside3, layer});
-    reg.emplace<Velocity>(resident, Velocity{});
-    int resTicks = 0;
-    for (; resTicks < 600; ++resTicks)
-        if (door_step(reg, w, doors, layer, dt,
-                      static_cast<std::uint64_t>(resTicks))
-                .opened)
-            break;
-    CHECK(resTicks < 600);
-    CHECK(doors.doors[pick3].state == static_cast<std::uint8_t>(DoorState::Open));
-
-    // Pressing must be CONTINUOUS: a gap of more than one tick resets the shove.
-    // Otherwise a corridor's foot traffic would pop every door it ever passed.
-    std::uint32_t pick4 = kNoDoor;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
-        if (i != pick && i != pick2 && i != pick3 &&
-            doors.doors[i].cz == floor_ground_z() &&
-            doors.doors[i].axis == 0) {
-            pick4 = i;
-            break;
-        }
-    CHECK(pick4 != kNoDoor);
-    const Door probe4 = doors.doors[pick4];
-    reg.get<Transform>(resident).pos =
-        vec3{(static_cast<float>(probe4.cx) + 1.5f) * kCellSize,
-             (static_cast<float>(probe4.cy) + 0.5f) * kCellSize,
-             (static_cast<float>(probe4.cz) + 0.5f) * kCellSize};
-    CHECK(door_set(w, doors, reg, layer, pick4, true));
-    for (int i = 0; i < 4000; i += 4)   // touched once every 4 ticks: never enough
-        CHECK(door_step(reg, w, doors, layer, dt,
-                        static_cast<std::uint64_t>(i))
-                  .opened == 0);
-    CHECK(doors.doors[pick4].state == static_cast<std::uint8_t>(DoorState::Shut));
-
-    // The no-shut-doors fast path really is free: with nothing shut, door_step
-    // reports nothing at all even with bodies standing in every doorway.
-    CHECK(door_set(w, doors, reg, layer, pick4, false));
-    CHECK(doors.shut == 0);
-    const DoorTick idle = door_step(reg, w, doors, layer, dt, 9999u);
-    CHECK(idle.pressing == 0 && idle.opened == 0 && idle.broken == 0);
-
-    // --- LEVEL SCALES THE CHIPPING, and nothing saw that until 2026-08-12 ------
-    // Every mob in every door case above is level 1, and `mob_hp_at_level` is the
-    // IDENTITY at level 1 — so this suite was structurally blind to whether door
-    // damage consulted the level at all. It did not: door.cpp read `md.dmg` straight
-    // off the table while `mob_attack_step` scaled the same number on the HP curve,
-    // so a level-11 monster hit a BODY for 2.2x and the DOOR beside that body for
-    // 1.0x. A suite that only ever exercises the identity case cannot fail on a
-    // missing multiplier, which is why this block picks a level far from 1.
-    //
-    // Placed last, and picking a door none of the cases above touched, so the
-    // narrative order of this test is unchanged — an earlier draft inserted it after
-    // the first break and silently stole the door the Paupsina case needs.
-    // Four doors are already spoken for and pick_ground_door only takes three
-    // skips, so the exclusion is spelled out here rather than by widening a helper
-    // the rest of the file is happy with.
-    std::uint32_t pickL = kNoDoor;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i)
-        if (i != pick && i != pick2 && i != pick3 && i != pick4 &&
-            doors.doors[i].cz == floor_ground_z() &&
-            doors.doors[i].axis == 0) {
-            pickL = i;
-            break;
-        }
-    CHECK(pickL != kNoDoor);
-    const Door probeL = doors.doors[pickL];
-    CHECK(probeL.state != static_cast<std::uint8_t>(DoorState::Broken));
-    Entity elite = reg.create();
-    reg.emplace<Transform>(
-        elite, Transform{vec3{(static_cast<float>(probeL.cx) + 1.5f) * kCellSize,
-                              (static_cast<float>(probeL.cy) + 0.5f) * kCellSize,
-                              (static_cast<float>(probeL.cz) + 0.5f) * kCellSize},
-                         layer});
-    reg.emplace<Velocity>(elite, Velocity{});
-    constexpr std::uint8_t kElite = 11;
-    reg.emplace<MobRef>(elite, MobRef{static_cast<std::uint8_t>(kind), kElite,
-                                      static_cast<std::int16_t>(md.hp),
-                                      static_cast<std::int16_t>(md.hp)});
-    CHECK(door_set(w, doors, reg, layer, pickL, true));
-    const float dpsL = static_cast<float>(mob_hp_at_level(md.dmg, kElite)) *
-                       1000.0f / static_cast<float>(md.attackCdMs);
-    const int expectL = static_cast<int>(static_cast<float>(kDoorHp) / dpsL / dt);
-    int ticksL = 0;
-    for (; ticksL < expectTicks * 3 + 60; ++ticksL)
-        if (door_step(reg, w, doors, layer, dt,
-                      static_cast<std::uint64_t>(ticksL))
-                .broken)
-            break;
-    // The RATE, in the same 2% band the level-1 case above is held to.
-    CHECK(ticksL > expectL - expectL / 50 - 2);
-    CHECK(ticksL < expectL + expectL / 50 + 2);
-    // And the property stated directly: an elite is STRICTLY faster than a level-1
-    // of the same kind. mob_hp_at_level(x, 11) = 2.2x, so this is a wide margin and
-    // not a coin flip on rounding.
-    CHECK(ticksL < ticks);
-    CHECK(static_cast<float>(ticks) / static_cast<float>(ticksL) > 2.0f);
-    reg.destroy(elite);
+    CHECK(stamped == kSubDim * kSubDim);
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, g.centre, dirty) == 0);
+    CHECK(!door_closed(w, d.list[0]));
+    CHECK(w.grid().masks()[ci].empty()); // сняла ровно свои — клетка чиста
 }
 
-// inventory_has_keycard: a keycard of the required tier (or better) grants
-// access; no tier required always grants; a wrong/missing tier never does.
-static void test_inventory_keycard() {
-    {   // ---- no tier required: always true
-        Inventory empty;
-        empty.clear();
-        CHECK(inventory_has_keycard(empty, 0));
-        CHECK(inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::None)));
-    }
-    {   // ---- tier 1 requested, empty inventory: denied
-        Inventory empty;
-        empty.clear();
-        CHECK(!inventory_has_keycard(empty, 1));
-        CHECK(!inventory_has_keycard(empty, static_cast<std::uint8_t>(KeycardTier::Red)));
-    }
-    // A card is any item whose row sits in the `Key` CATEGORY, and its tier is
-    // the `useA` column of that row (default 1) — data, not a hardcoded id
-    // ([problems.md] §10, closed: `inventory_has_keycard` compares it against
-    // the door's `requiredTier`, with `KeycardTier::Master` opening everything).
-    // These CHECKs pin the tier comparison both ways: grants at-or-below the
-    // card's tier, denies above it.
-    // The catalog is generated from data/items.csv, so resolve a real Key row by
-    // CATEGORY rather than hardcoding an id that a content edit would move.
-    ItemId keyId = kInvalidItem, plainId = kInvalidItem;
-    for (std::size_t i = 1; i <= kItemCount; ++i) {
-        const ItemId id = static_cast<ItemId>(i);
-        if (!item_valid(id)) continue;
-        const bool isKey = item_def(id).category ==
-                           static_cast<std::uint8_t>(ItemCategory::Key);
-        if (isKey && keyId == kInvalidItem) keyId = id;
-        if (!isKey && plainId == kInvalidItem) plainId = id;
-    }
-    CHECK(keyId != kInvalidItem);
-    CHECK(plainId != kInvalidItem);
-    {   // ---- one Key-category item satisfies tier 1 / Red, and no higher
-        Inventory inv;
-        inv.clear();
-        ItemSlot& s = inv.slots[0];
-        s.item = keyId;
-        s.count = 1;   // count 0 is an EMPTY slot, not a held item
-        CHECK(inventory_has_keycard(inv, 1));
-        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Red)));
-        CHECK(!inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Blue)));
-        CHECK(!inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Master)));
-    }
-    {   // ---- a card deep in the grid is still found; a non-key item is not one
-        Inventory inv;
-        inv.clear();
-        inv.slots[7].item = keyId;
-        inv.slots[7].count = 1;
-        CHECK(inventory_has_keycard(inv, static_cast<std::uint8_t>(KeycardTier::Red)));
-        Inventory bread;
-        bread.clear();
-        bread.slots[0].item = plainId;
-        bread.slots[0].count = 1;
-        CHECK(!inventory_has_keycard(bread, 1));
-    }
-}
-
-// door_query_near: nearest non-broken door within reach, or kNoDoor.
-static void test_door_query_near() {
-    LevelStack stack;
-    const LayerId layer = stack.push_layer();
-    World& w = stack.layer(layer);
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, /*number=*/0, res, /*seed=*/909u);
-
-    DoorSet doors;
-    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
-    CHECK(built > 0);
-
-    // Every built door lies on a wall segment; querying from far away yields none.
-    const std::uint32_t far = door_query_near(doors, vec3{999.0f, 999.0f, 0.0f});
-    CHECK(far == kNoDoor);
-
-    // Querying from a door's own cell finds that door (nearest, zero-distance).
-    bool foundSelf = false;
-    for (std::uint32_t i = 0; i < doors.doors.size(); ++i) {
-        const Door& d = doors.doors[i];
-        if (d.state == static_cast<std::uint8_t>(DoorState::Broken)) continue;
-        // CELLS ARE 2 m ([voxels.md] kCellSize): the probe must be built in
-        // metres, or it lands half a world away and the query rightly misses.
-        const vec3 at{(static_cast<float>(d.cx) + 0.5f) * kCellSize,
-                      (static_cast<float>(d.cy) + 0.5f) * kCellSize,
-                      (static_cast<float>(d.cz) +
-                       static_cast<float>(d.h) * 0.5f) * kCellSize};
-        const std::uint32_t hit = door_query_near(doors, at);
-        if (hit != kNoDoor) { CHECK(hit == i); foundSelf = true; }
-    }
-    CHECK(foundSelf);
-
-    // A door that breaks (hp -> 0) is no longer queryable.
-    if (built > 1) {
-        const std::uint32_t id0 = 0;
-        Door& d0 = doors.doors[id0];
-        d0.hp = 0;
-        const Door& d0r = doors.doors[id0];
-        const vec3 at{d0r.cx + 0.5f, d0r.cy + 0.5f, static_cast<float>(d0r.cz)};
-        CHECK(door_query_near(doors, at) != id0);
-    }
-}
-
-// door_shut_all + door_toggle_locks: shut every door, then toggle lock state.
-static void test_door_shut_all_and_locks() {
-    LevelStack stack;
-    const LayerId layer = stack.push_layer();
-    World& w = stack.layer(layer);
-    const FloorSpec& res = floor_spec(FloorKind::Residential);
-    generate_floor(w, /*number=*/0, res, /*seed=*/909u);
-
-    DoorSet doors;
-    const std::uint32_t built = door_build(w, doors, /*number=*/0, res, layer);
-    CHECK(built > 0);
-
+// ОБВЕС ЛИФТА + АКТИВАЦИЯ ССЫЛКОЙ (S18, решение 3): кнопка вызова несёт
+// DoorRef на створку СВОЕГО хаба; дверь сама ничего не слушает. Гейт
+// существует, потому что прежний обработчик ДЕРИВИРОВАЛ хаб из позиции
+// кнопки — угадывание, которое «кнопка снаружи не срабатывает» и дало.
+void lift_dressing_and_reference() {
+    World w;
+    // Номер 2 (не 0): хеш lift_entrance на сиде 1337 даёт этажу 2 стороны
+    // обеих осей (1 2 1 2) — проверка четверти оборота ниже не пуста; у
+    // этажа 0 все четыре входа одноосные.
+    generate_floor(w, 2, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 2, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 2, floor_spec(FloorKind::Residential), 1337u);
     Registry reg;
-    // With nothing shut, toggle_locks shuts every door.
-    CHECK(doors.shut == 0);
-    const std::uint32_t toggled = door_toggle_locks(w, doors, reg, layer);
-    CHECK(toggled > 0);
-    CHECK(doors.shut > 0);
-
-    // door_shut_all counts the doors it CHANGED, not the doors that are shut —
-    // so on an already-shut floor it is a no-op that reports zero.
-    const std::uint32_t shutNow = door_shut_all(w, doors, reg, layer);
-    CHECK(shutNow == 0);
-    CHECK(doors.shut > 0);
-
-    // Toggling again (some shut) opens them back to the idle state.
-    const std::uint32_t toggled2 = door_toggle_locks(w, doors, reg, layer);
-    CHECK(toggled2 > 0);
-    CHECK(doors.shut == 0);
+    std::vector<std::uint32_t> dirty;
+    dress_lift_portals(reg, w, d, 2, floor_spec(FloorKind::Residential),
+                       1337u, 0, dirty);
+    // Дефолт: все 4 створки закрыты («где дверь» больше не вопрос).
+    for (int hub = 0; hub < 4; ++hub)
+        CHECK(door_closed(w, d.list[d.lift[hub]]));
+    // Кнопки: 4 интерактора с DoorRef, каждый ссылается на створку лифта,
+    // и активация ссылкой открывает её.
+    int found = 0;
+    auto view = reg.view<const DoorRef>();
+    for (auto e : view) {
+        const std::uint32_t g = view.get<const DoorRef>(e).group;
+        CHECK(g < d.list.size());
+        bool isLift = false;
+        for (int hub = 0; hub < 4; ++hub)
+            if (d.lift[hub] == g) isLift = true;
+        CHECK(isLift);
+        dirty.clear();
+        door_open(w, d.list[g], dirty);
+        CHECK(!door_closed(w, d.list[g]));
+        ++found;
+    }
+    CHECK(found == 4);
+    // Ориентация ВЫВОДИТСЯ из грани якоря (плейтест 2026-08-29: кнопка
+    // стояла ребром — dress_lift_portals не передавал yaw). Каждый элемент
+    // обвеса: yaw == prop_wall_yaw(face); сид обязан покрыть обе оси стен,
+    // иначе проверка четверти оборота пуста.
+    bool axisX = false, axisY = false;
+    auto dressed =
+        reg.view<const PropOf, const PropMesh, const SubVoxelAnchor>();
+    for (auto e : dressed) {
+        const PropId pid = dressed.get<const PropOf>(e).id;
+        if (pid != PropId::LiftButton && pid != PropId::LiftPanel) continue;
+        const std::uint8_t face = dressed.get<const SubVoxelAnchor>(e).face;
+        CHECK(dressed.get<const PropMesh>(e).yaw == prop_wall_yaw(face));
+        (anchor_face_axis(face) == 0 ? axisX : axisY) = true;
+    }
+    CHECK(axisX && axisY);
 }
+
+// S20.4 «долг писателя один и полный»: дверь — писатель статики, как карв.
+// Проп, заякоренный к атомам ЗАКРЫТОГО полотна, обязан отвалиться при
+// открытии — та же anchor_validate_step на DoorSet::dirtyCells, которой
+// платит карв (в main дверной дренаж зовёт её теперь же). Обе полярности:
+// на закрытом полотне проп живёт, открытие — рвёт.
+void door_open_rips_anchored_prop() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    Registry reg;
+    EventBus bus;
+    bus.init();
+    std::vector<std::uint32_t> dirty;
+    std::uint32_t id = kNoPortal;
+    for (std::uint32_t i = 0; i < d.list.size(); ++i)
+        if (!d.list[i].mechanism && !door_closed(w, d.list[i])) {
+            id = i;
+            break;
+        }
+    CHECK(id != kNoPortal);
+    const MaskGroup& p = d.list[id];
+    // Клетка ЧИСТОГО проёма (маска пуста до закрытия): после открытия в
+    // ней гарантированно не останется несущей материи — проба якоря умрёт
+    // именно от снятия полотна, а не случайно выживет на коробке.
+    std::uint32_t ci = 0xFFFFFFFFu;
+    for (const MaskCell& mc : p.cells)
+        if (w.grid().masks()[mc.ci].empty()) {
+            ci = mc.ci;
+            break;
+        }
+    CHECK(ci != 0xFFFFFFFFu);
+    CHECK(door_toggle_near(w, d, reg, 0, p.centre, dirty) == id);
+    CHECK(door_closed(w, p));
+    game::SubVoxelAnchor a{};
+    a.cx = static_cast<int>(ci & 127u);
+    a.cy = static_cast<int>((ci >> 7) & 127u);
+    a.cz = static_cast<int>(ci >> 14);
+    a.subX = 4; a.subY = 4; a.subZ = 4;
+    bool anchored = false;
+    for (std::uint8_t f = 0; f < 6 && !anchored; ++f) {
+        const AnchorUV uv = anchor_face_uv(f, a.subX, a.subY, a.subZ);
+        if (anchor_alive(w, a.cx, a.cy, a.cz, f, uv.u, uv.v)) {
+            a.face = f;
+            anchored = true;
+        }
+    }
+    CHECK(anchored);
+    const vec3 pos{(static_cast<float>(a.cx) + 0.5f) * kCellSize,
+                   (static_cast<float>(a.cy) + 0.5f) * kCellSize,
+                   (static_cast<float>(a.cz) + 0.5f) * kCellSize};
+    const auto prop = game::spawn_prop(reg, w, pos, a,
+                                       game::Interactable::Kind::Terminal,
+                                       game::PropFallMode::SimpleFall,
+                                       vec3{0.3f, 0.3f, 0.3f},
+                                       /*meshKind*/0, /*layer*/0);
+    CHECK(reg.valid(prop));
+    CHECK(reg.all_of<game::StaticPropTag>(prop));
+
+    // Полярность «закрыто»: дренаж закрытия проп не трогает.
+    game::anchor_validate_step(reg, w, /*layer*/0, bus, dirty);
+    CHECK(reg.all_of<game::StaticPropTag>(prop));
+
+    // Открытие: свои биты сняты — проп на полотне отваливается тем же
+    // валидатором, что у карва.
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, p.centre, dirty) == id);
+    CHECK(!door_closed(w, p));
+    game::anchor_validate_step(reg, w, /*layer*/0, bus, dirty);
+    CHECK(!reg.all_of<game::StaticPropTag>(prop));
+}
+
+} // namespace doors_test
 
 static void test_doors_all() {
-    test_doorways_match_the_generated_grid();
-    test_doors_leave_solidity_untouched();
-    test_shut_door_blocks_a_body();
-    test_shut_door_versus_monsters();
-    test_inventory_keycard();
-    test_door_query_near();
-    test_door_shut_all_and_locks();
+    doors_test::declaration_and_toggle();
+    doors_test::door_open_rips_anchored_prop();
+    doors_test::snapshot_carries_closed_door();
+    doors_test::focus_aims_at_a_real_door();
+    doors_test::arbitrary_shape_door();
+    doors_test::lift_dressing_and_reference();
+    std::printf("doors suite done (материя, не состояние)\n");
 }

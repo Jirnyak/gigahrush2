@@ -308,34 +308,11 @@ struct RelationTick {
     std::uint8_t pad_ = 0;
 };
 
-// Read this cycle's `NpcDied` events and bend the matrix by who killed whom.
-//
-// This is what makes the matrix worth being mutable instead of a constant table:
-// kill ten citizens and the Citizens row crosses the hostility boundary, at which
-// point `bodies_hostile` starts returning true for every citizen in the building
-// and `faction_feud_step` turns the crowd on you. A rumour, a contract kill and a
-// panicked shot in a corridor all now cost something that outlives the corpse.
-//
-// Publishes one `RelationChanged` per shifted pair (`a` = row A, `b` = row B,
-// `c` = the new value, see event_relation), which is that enum value's first and
-// only producer.
-//
-// Only a PERSON's kill counts. `NpcDied` carries the killer as an ENTITY id, so the
-// killer's faction is resolved by looking up `NpcRef` on it: a monster carries none
-// and is skipped, which is correct — a monster eating a citizen is not diplomacy.
-//
-// Call it AFTER `finalize_deaths` and before `EventBus::clear()`. Snapshot-bounded:
-// it reads `size()` once up front, so the RelationChanged events it publishes do not
-// re-enter its own loop. The ring's data pointer is stable across publish
-// ([event_bus.h] events()), so publishing while reading is safe here.
-//
-// **Known imprecision, stated rather than hidden.** When the VICTIM was the player,
-// `NpcPool::kill` has already cleared its NpcPlayer bit (npc_pool.cpp does this on
-// purpose, to stop dead rows resolving to row 5 forever), so the victim resolves by
-// body faction and not to the player row. The direction that matters — the player as
-// KILLER, whose bit is still set because they are alive — is exact.
-RelationTick relations_drain_deaths(FactionRelations& rel, const Registry& reg,
-                                   const NpcPool& pool, EventBus& bus,
-                                   std::uint64_t tick);
+// relations_drain_deaths МЁРТВ (S19, 2026-08-29): он был ВСЕВИДЯЩ — убийство
+// гнуло матрицу без единого свидетеля. Его логика стала строкой цены глагола
+// «убить» (kVerbKill, rel_delta = прежний kKillRelationDelta), прогнанной
+// через воспринявших: [game/witness.h] witness_step — потребитель деяний,
+// он же теперь единственный продюсер RelationChanged. Незамеченное убийство
+// оставляет труп, но не дипломатию (расхождение S19.3 закрыто).
 
 } // namespace giga::game

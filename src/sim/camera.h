@@ -19,20 +19,41 @@ struct CameraMatrices {
     bool valid = false;
 };
 
+// aspect = drawable width / height. up = world up vector (defaults to +Z).
+CameraMatrices compute_camera(Registry& reg, float aspect,
+                              vec3 up = vec3{0.0f, 0.0f, 1.0f});
+
+// Пара глаз — левый и правый, разведённые на базу стерео.
 struct StereoCameraMatrices {
     CameraMatrices left;
     CameraMatrices right;
     bool valid = false;
 };
 
-// aspect = drawable width / height. up = world up vector (defaults to +Z).
-CameraMatrices compute_camera(Registry& reg, float aspect,
-                              vec3 up = vec3{0.0f, 0.0f, 1.0f});
+// Межзрачковое расстояние по умолчанию, метры.
+//
+// ВЫВОД: антропометрия, не вкус. Средний взрослый IPD — 63–65 мм по
+// измерениям (мужчины ~64, женщины ~62); 0.064 попадает в середину и совпадает
+// с дефолтом, который держат шлемы. Число живое: пользовательская настройка
+// правит его в пределах [0.030, 0.100] — детский и широкий край той же
+// выборки.
+inline constexpr float kDefaultIpd = 0.064f;
 
-// Stereoscopic camera pair (left and right eyes) with configurable IPD baseline in meters.
-// eyeAspect is the aspect ratio of each eye's viewport ((width * 0.5f) / height).
+// Стереопара от той же камеры, что и compute_camera: оба глаза смотрят ПО ОДНОЙ
+// оси (параллельная проекция, без свода на точку), разведённые на ipd вдоль
+// правого вектора взгляда. Свод (toe-in) сюда сознательно не заведён: он даёт
+// вертикальный параллакс по краям кадра и режет глаза — стереобазу разводят
+// сдвигом, а глубину набирает сам мозг.
+//
+// `eyeAspect` — соотношение сторон ОДНОГО глаза: при Side-by-Side это
+// (ширина/2)/высота, а не аспект окна.
+//
+// СЕЙЧАС ЭТО ЗАГОТОВКА: к пассам она не подключена (решение владельца
+// 2026-09-12 — стерео удваивает работу raymarch, который и есть 83% кадра,
+// [problems.md] §67.2). Математика лежит отдельно и под гейтом, чтобы
+// подключение было одним коммитом, а не повторным выводом.
 StereoCameraMatrices compute_stereo_camera(Registry& reg, float eyeAspect,
-                                           float ipd = 0.064f,
+                                           float ipd = kDefaultIpd,
                                            vec3 up = vec3{0.0f, 0.0f, 1.0f});
 
 // Forward direction from yaw/pitch, shared by camera + input so mouselook and

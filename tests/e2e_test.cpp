@@ -16,7 +16,6 @@
 #include "ecs/registry.h"
 #include "game/ai.h"
 #include "game/role.h"
-#include "game/room_zone.h"
 #include "game/extraction.h"
 #include "game/economy.h"
 #include "game/event_bus.h"
@@ -32,7 +31,6 @@
 #include "game/npc_pool.h"
 #include "game/needs.h"
 #include "game/combat.h"
-#include "game/door.h"
 #include "game/samosbor.h"
 #include "game/wander.h"
 #include "game/population.h"
@@ -76,8 +74,8 @@ struct NavFixture {
     void init() {
         if (!initialized) {
             generate_floor(world, 0, floor_spec(FloorKind::Residential), 42u);
-            nav::bake_coarse(world.grid(), cg);
-            nav::bake_fine(world.grid(), fn);
+            nav::bake_coarse(world.grid(), game::kBodyClearanceSub, cg);
+            nav::bake_fine(world.grid(), game::kBodyClearanceSub, fn);
             initialized = true;
         }
     }
@@ -97,8 +95,6 @@ static void test_t1_f1_01_resident_baseline_traits_and_scoring() {
     CHECK(approx_eq(t.sociability, 1.00f));
     CHECK(approx_eq(t.scavengeDrive, 0.10f));
     CHECK(approx_eq(t.careDrive, 0.05f));
-    CHECK(t.homeRooms == role_room_bit(RoomBit::Living));
-    CHECK(t.workRooms == role_room_bit(RoomBit::Common));
 }
 
 static void test_t1_f1_02_duty_traits_and_patrol_hq_preference() {
@@ -107,8 +103,6 @@ static void test_t1_f1_02_duty_traits_and_patrol_hq_preference() {
     CHECK(approx_eq(t.patrolDrive, 1.50f));
     CHECK(approx_eq(t.sociability, 0.60f));
     CHECK(approx_eq(t.careDrive, 0.20f));
-    CHECK(t.homeRooms == role_room_bit(RoomBit::Living));
-    CHECK(t.workRooms == role_room_bit(RoomBit::Hq));
 }
 
 static void test_t1_f1_03_medic_traits_and_care_drive_scoring() {
@@ -117,8 +111,6 @@ static void test_t1_f1_03_medic_traits_and_care_drive_scoring() {
     CHECK(approx_eq(t.patrolDrive, 0.20f));
     CHECK(approx_eq(t.sociability, 0.80f));
     CHECK(approx_eq(t.careDrive, 1.00f));
-    CHECK(t.homeRooms == role_room_bit(RoomBit::Living));
-    CHECK(t.workRooms == role_room_bit(RoomBit::Medical));
 }
 
 static void test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep() {
@@ -128,8 +120,6 @@ static void test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep() {
     CHECK(approx_eq(t.sociability, 0.40f));
     CHECK(approx_eq(t.scavengeDrive, 1.00f));
     CHECK(approx_eq(t.careDrive, 0.00f));
-    CHECK(t.homeRooms == 0u); // Sleeps anywhere
-    CHECK(t.workRooms == role_room_bit(RoomBit::Storage));
 }
 
 static void test_t1_f1_05_cultist_sociability_and_smoking_rooms() {
@@ -139,8 +129,6 @@ static void test_t1_f1_05_cultist_sociability_and_smoking_rooms() {
     CHECK(approx_eq(t.sociability, 1.20f));
     CHECK(approx_eq(t.scavengeDrive, 0.30f));
     CHECK(approx_eq(t.careDrive, 0.10f));
-    CHECK(t.homeRooms == role_room_bit(RoomBit::Living));
-    CHECK(t.workRooms == static_cast<std::uint16_t>(role_room_bit(RoomBit::Smoking) | role_room_bit(RoomBit::Hq)));
 }
 
 // --- F2: role_for Floor Distributions ---
@@ -330,16 +318,11 @@ static void test_t1_f4_05_medic_healing_stacks_with_medical_room() {
     patient.hpBank = 0.0f;
     float maxHp = 100.0f;
 
-    // Room recovery: 1000 hpBank / hr
-    const int idxMed = floor_room_bit_index(room_bit(RoomBit::Medical));
-    const RoomRecovery& roomRec = kRoomRecovery[idxMed];
+    // Комнатная регенерация умерла (rooms-object F): остался вклад медика.
+    (void)maxHp;
     float dt = 10.0f;
-
-    float roomCredit = roomRec.hpBank * (dt / 3600.0f) * (maxHp / 100.0f);
-    float medicCredit = kMedicHealPerSec * dt;
-    patient.hpBank += (roomCredit + medicCredit);
-
-    CHECK(patient.hpBank > 30.0f);
+    patient.hpBank += kMedicHealPerSec * dt;
+    CHECK(patient.hpBank >= 30.0f); // ровно вклад медика: 3 HP/с x 10 с
 }
 
 // --- F5: Liquidator & Guard Defense ---
@@ -419,18 +402,17 @@ static void test_t1_f6_01_looter_scavenge_drive_and_storage_rooms() {
     CHECK(approx_eq(lt.scavengeDrive, 1.00f));
     CHECK(approx_eq(lt.workDrive, 0.20f));
     CHECK(approx_eq(lt.careDrive, 0.00f));
-    CHECK(lt.workRooms == role_room_bit(RoomBit::Storage));
 }
 
 static void test_t1_f6_02_looter_homerooms_zero_anywhere_sleep() {
+    // homeRooms умер (rooms-object F) — якоря раздаст agent-goals.
     const RoleTraits& lt = role_traits(RoleId::Looter);
-    CHECK(lt.homeRooms == 0u);
+    CHECK(approx_eq(lt.scavengeDrive, 1.00f));
 }
 
 static void test_t1_f6_03_cultist_social_drive_and_smoking_rooms() {
     const RoleTraits& ct = role_traits(RoleId::Cultist);
     CHECK(approx_eq(ct.sociability, 1.20f));
-    CHECK(ct.workRooms == static_cast<std::uint16_t>(role_room_bit(RoomBit::Smoking) | role_room_bit(RoomBit::Hq)));
 }
 
 static void test_t1_f6_04_cultist_monster_non_aggression() {
@@ -1260,7 +1242,6 @@ static void test_t2_f5_05_liquidator_corrupted_faction_id_fallback() {
 
 static void test_t2_f6_01_looter_in_floor_with_no_storage_rooms() {
     const RoleTraits& lt = role_traits(RoleId::Looter);
-    CHECK(lt.workRooms == role_room_bit(RoomBit::Storage));
 }
 
 static void test_t2_f6_02_cultist_mob_aggression_with_invalid_npc() {
@@ -1428,10 +1409,11 @@ static void test_t2_f9_04_invalid_regime_enum_safety() {
     CHECK(f.axis == 2 && f.upSign == 1 && !f.pull);
 }
 
-static void test_t2_f9_05_gravity_field_null_region_callback() {
+static void test_t2_f9_05_gravity_field_at_returns_global() {
+    // Крюк RegionFn СНЕСЁН аудитом 2026-08-25 (решение владельца): at()
+    // возвращает global всегда; Custom зарезервирован, механизма нет.
     GravityField g{};
     g.global = vec3{1.0f, 2.0f, 3.0f};
-    g.region = nullptr;
     vec3 out = g.at(vec3{100.0f, 200.0f, 300.0f});
     CHECK(approx_eq(out.x, 1.0f) && approx_eq(out.y, 2.0f) && approx_eq(out.z, 3.0f));
 }
@@ -1777,9 +1759,7 @@ static void test_t3_01_medic_healing_and_hpbank_during_samosbor() {
     }
     CHECK(approx_eq(patient.hpBank, 6.0f));
 
-    const int idxMed = floor_room_bit_index(room_bit(RoomBit::Medical));
-    const RoomRecovery& medRoom = kRoomRecovery[idxMed];
-    patient.hpBank += medRoom.hpBank * (2.0f / 3600.0f) * (maxHp / 100.0f);
+    // Комнатная добавка умерла (rooms-object F); вклад медика уже проверен.
     CHECK(patient.hpBank >= 6.0f);
 }
 
@@ -1813,7 +1793,7 @@ static void test_t3_03_bank_debt_and_interest_across_floor_transit() {
 
     bank_step(acct, 7500u);
     CHECK(bank_debt(acct) >= initialDebt);
-    CHECK(wealth_tier(net_worth(led, acct)) == 0);
+    CHECK(net_worth(led, acct) <= 0);   // 400 borrowed, 400 owed + accrued interest
 }
 
 static void test_t3_04_prop_interaction_during_ai_navigation_single_writer() {
@@ -2418,7 +2398,7 @@ int main() {
     std::fprintf(stderr, "[e2e] test_t2_f9_04_invalid_regime_enum_safety\n");
     test_t2_f9_04_invalid_regime_enum_safety();
     std::fprintf(stderr, "[e2e] test_t2_f9_05_gravity_field_null_region_callback\n");
-    test_t2_f9_05_gravity_field_null_region_callback();
+    test_t2_f9_05_gravity_field_at_returns_global();
 
     // F10 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f10_01_exact_half_period_boundary\n");

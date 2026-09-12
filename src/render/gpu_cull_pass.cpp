@@ -89,25 +89,33 @@ bool GpuCullPass::create_descriptor_set_layout() noexcept {
 
     VK_TRY(vkCreateDescriptorSetLayout(d, &dslci, nullptr, &descSetLayout_));
 
+    // Кольцо сетов ВЫВЕДЕНО (К5-C7, аудит 2026-08-26; было «64» из
+    // воздуха): диспатчей кулла за кадр максимум kPropShapeCount, кадров в
+    // полёте kMaxFramesInFlight, x2 запас на повторный record кадра
+    // (ресайз/OUT_OF_DATE). Рост шейпов больше не сможет молча начать
+    // переиспользовать сет в полёте.
+    constexpr uint32_t kCullSetRing =
+        static_cast<uint32_t>(kPropShapeCount) * kMaxFramesInFlight * 2;
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 64 * 3;
+    poolSize.descriptorCount = kCullSetRing * 3;
 
     VkDescriptorPoolCreateInfo poolci{};
     poolci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolci.maxSets       = 64;
+    poolci.maxSets       = kCullSetRing;
     poolci.poolSizeCount = 1;
     poolci.pPoolSizes    = &poolSize;
 
     VK_TRY(vkCreateDescriptorPool(d, &poolci, nullptr, &descPool_));
 
-    std::vector<VkDescriptorSetLayout> layouts(64, descSetLayout_);
+    std::vector<VkDescriptorSetLayout> layouts(kCullSetRing, descSetLayout_);
     VkDescriptorSetAllocateInfo alloci{};
     alloci.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloci.descriptorPool     = descPool_;
-    alloci.descriptorSetCount = 64;
+    alloci.descriptorSetCount = kCullSetRing;
     alloci.pSetLayouts        = layouts.data();
 
+    descSets_.resize(kCullSetRing);
     VK_TRY(vkAllocateDescriptorSets(d, &alloci, descSets_.data()));
     return true;
 }
@@ -160,14 +168,14 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                               float fogEnd,
                               float torusPeriod,
                               VkBuffer srcInstanceBuf,
+                              VkDeviceSize srcOffsetBytes,
                               uint32_t instanceCount,
                               uint32_t indexCount,
                               uint32_t firstIndex,
                               int32_t vertexOffset,
                               uint32_t firstInstance,
-                              const vec3& boxMin,
-                              const vec3& boxMax,
                               VkBuffer outCulledInstanceBuf,
+                              VkDeviceSize dstOffsetBytes,
                               VkBuffer outIndirectBuf) noexcept {
     if (!pipeline_ || instanceCount == 0) return;
 
@@ -190,8 +198,14 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
     VkDescriptorSet set = descSets_[setHead_ % descSets_.size()];
     ++setHead_;
 
-    VkDescriptorBufferInfo b0{srcInstanceBuf, 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo b1{outCulledInstanceBuf, 0, VK_WHOLE_SIZE};
+    // Bind each shape's RANGE of the shared instance buffers via descriptor
+    // offsets — the shader indexes from 0 inside its range, so cull.comp
+    // needed no change. The culled write stays inside the range by
+    // construction: at most `instanceCount` survivors are appended.
+    const VkDeviceSize rangeBytes =
+        static_cast<VkDeviceSize>(instanceCount) * sizeof(PropInstance);
+    VkDescriptorBufferInfo b0{srcInstanceBuf, srcOffsetBytes, rangeBytes};
+    VkDescriptorBufferInfo b1{outCulledInstanceBuf, dstOffsetBytes, rangeBytes};
     VkDescriptorBufferInfo b2{outIndirectBuf, 0, VK_WHOLE_SIZE};
 
     VkWriteDescriptorSet writes[3]{};
@@ -213,8 +227,8 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
     CullPush push{};
     push.viewProj      = viewProj;
     push.camPos        = vec4{camPos.x, camPos.y, camPos.z, fogEnd};
-    push.boxMinExt     = vec4{boxMin.x, boxMin.y, boxMin.z, torusPeriod};
-    push.boxMaxParams  = vec4{boxMax.x, boxMax.y, boxMax.z, static_cast<float>(vertexOffset)};
+    push.params        = vec4{torusPeriod, static_cast<float>(vertexOffset),
+                              0.0f, 0.0f};
     push.objectCount   = instanceCount;
     push.indexCount    = indexCount;
     push.firstIndex    = firstIndex;
@@ -237,13 +251,5 @@ void GpuCullPass::record_cull(VkCommandBuffer cmd,
                          0, 1, &mb2, 0, nullptr, 0, nullptr);
 }
 
-void GpuCullPass::get_shape_aabb(PropShape shape, vec3& outMin, vec3& outMax) noexcept {
-    switch (shape) {
-    default:
-        outMin = {-1.00f, -1.00f, -1.00f};
-        outMax = { 1.00f,  2.00f,  1.00f};
-        break;
-    }
-}
 
 } // namespace giga::gpu

@@ -1,11 +1,13 @@
 # Navigation — Baked lattice, flow fields & routing
 
-> **Status: built, headless `ctest`-green** (2026-07-28). The bake lives in
-> `giga_core` (`src/world`), the disk cache + streaming glue in `giga_game`
-> (`src/game`). It is **wired into floor streaming** (each live floor bakes its
-> nav on load) but **no runtime consumer steers by it yet** — the utility-AI that
-> calls `route_step` is task #12 (`master_prompt.md` §7). So nothing in the
-> running game moves differently yet; the nav is *ready*, not *visible*.
+> **Status: built AND consumed** (сверка 2026-08-23; строки про «no runtime
+> consumer» были ложью с эпохи #12). Потребители ходят по nav каждый тик:
+> `src/game/wander.cpp:120,382` (`coarse_next` + `fine.at`) и
+> `src/game/ai.cpp:1103` `ai_patrol_step(reg, coarse, fine, …)`. Fast-travel
+> подключён (`src/game/fast_travel.cpp`). «Dirty local re-bake» построен другой
+> формой: полный фоновый ребейк со свапом — `RebakeScheduler`
+> (`src/game/rebake.h`, могила `nav::AsyncBake`). `master_prompt.md` удалён —
+> см. CANON.md + markoaudit/plans/.
 >
 > - **Code:** [src/world/lattice.h](src/world/lattice.h) (the fixed node set),
 >   [src/world/nav.h](src/world/nav.h) / [.cpp](src/world/nav.cpp) (the bake +
@@ -68,9 +70,15 @@ CoarseGraph { Dist edge[64][6];  Dist dist[64][64];  uint8 next[64][64]; }
 ```
 
 `Dist = uint16`, `kUnreachable = 0xFFFF`. Query `coarse_next(g, from, to)` → the
-next **node** to step to (O(1)). A few KB total. Walkable ≡ `!mask.full()` (a
-fully-solid macro cell blocks; anything partially carved is passable — the same
-rule diffusion and physics use).
+next **node** to step to (O(1)). A few KB total. Проходимость — ГРАННЫЙ
+КЛИРЕНС (эпик occupancy 2026-08-26, §60/К1-10): шаг между клетками разрешён,
+когда `face_clearance >= габарит` ([src/world/clearance.h] — макс. квадрат из
+AND воздушных полупроекций двух масок; габарит тела 4 субвокселя выведен в
+[src/game/embody.h]). Прежний закон `!mask.full()` (планка 1 атом из 512) вёл
+флоу-поля сквозь лепленые стены и СНЕСЁН; дисковый кэш нава поднят до v3 —
+v2-блобы отбраковываются и перепекаются. Диффузия гейтит поток тем же
+законом на пороге 1 ([diffusion.md](diffusion.md)); физика тел всегда была
+субвоксельно-точной и в этом законе не нуждается.
 
 ### L2 — fine flow fields + nearest-node (`bake_fine` → `FineNav`)
 `bake_fine(grid, out)` produces, in one parallel pass:

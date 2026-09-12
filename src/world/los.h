@@ -7,11 +7,17 @@
 // system here, so that test is dropped, and the behaviour degrades". That test now
 // has something to call.
 //
-// **Cell-level, not sub-voxel, and that is consistency rather than laziness.** A
-// bullet stops on the first solid CELL ([combat.cpp] projectile_step) and a grenade
-// bounces off a cell FACE — asking a finer question here would mean a fragment could
-// thread a half-carved cell that stops the bullet fired at it. One granularity for
-// everything that travels in a straight line.
+// КЛЕТОЧНЫЙ los_clear/los_blockers СНЕСЁН аудитом 2026-08-26 (§60): его
+// «клетка — честная единица заслона» была мимикрией — на лепленом этаже
+// полных клеток 0.4%, и предикат почти всегда отвечал «свободно»; все
+// потребители (осколки, звук) переведены на субвоксельные ответы, живых
+// вызовов не осталось. `sub_march` — субвоксельный:
+// он отвечает «где луч ВПЕРВЫЕ коснулся материи», и по канону ([CANON.md] S2 —
+// геометрия этажа состоит из субвокселей) на этот вопрос нельзя отвечать
+// клеткой: падик-сэндвич держит плиту в двух верхних подслоях, и макро-ответ
+// ставил точку попадания в 1.5 м от материи (плейтест 2026-08-19,
+// tests/suite_shotsub.inl). Пуля останавливается субвокселем; грената
+// по-прежнему скачет по клеточным граням ([combat.cpp] grenade_advance).
 //
 // **O(cells on the segment), and it must stay off the per-tick path.** [samosbor.h]
 // refuses "a raycast per mob per fog tick" by name, and that refusal stands: this is
@@ -26,28 +32,38 @@ namespace giga {
 
 class MacroGrid;
 
-// True when nothing solid stands between `a` and `b`.
-//
-// **The cells CONTAINING the endpoints do not block.** A grenade resting in a carved
-// pocket, or a body whose centre sits inside a doorway cell, would otherwise be
-// shielded by the geometry it is standing in — which reads as "the blast did
-// nothing" and is the wrong answer to the right question. Only what is genuinely
-// BETWEEN them counts.
-//
-// Toroidal on x/y: the segment is walked toward `b`'s nearest image, so a blast at
-// x = 1 and a body at x = 255 are two metres apart and see each other, exactly as
-// every other distance in the game already measures ([core/wrap.h] wrap_delta_f).
-// z does not wrap, matching the projectile integrator; a segment leaving the stack
-// vertically is BLOCKED rather than wrapped, because there is nothing above the top
-// layer to see through.
-//
-// Degenerate input (a and b in the same cell) is clear by definition: there is no
-// cell between them.
-bool los_clear(const MacroGrid& grid, const vec3& a, const vec3& b);
 
-// How many solid cells stand between `a` and `b`. `los_clear` is `== 0`, and this is
-// the form to use when a caller wants to attenuate rather than block outright — a
-// future pressure model, or a noise occlusion pass. Same endpoint rule.
-int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b);
+
+// Первый твёрдый СУБВОКСЕЛЬ на отрезке `a`→`b`, тем же Amanatides–Woo, что и
+// los_blockers, но по решётке 0.25 м ([world/types.h] kVoxelSize). ЕДИНСТВЕННЫЙ
+// субвоксельный марш в дереве ([CANON.md] S11) — потребитель, которому нужен
+// «луч до материи» (пуля, будущий hitscan-ствол), обязан звать его, а не
+// заводить второй.
+//
+// Правило концов ПРОТИВОПОЛОЖНО los_clear, и это не случайность: los спрашивает
+// «что стоит МЕЖДУ», марш — «где первое КАСАНИЕ». Стартовый субвоксель участвует:
+// пуля, рождённая в материи, останавливается ею (axis = -1 — грани входа нет),
+// а не проходит сквозь неё бесплатно.
+//
+// `b` берётся как дан, без поиска ближайшего образа: снарядный интегратор ходит
+// в непрерывных координатах prevPos → prevPos + v*dt и оборачивает только финал —
+// марш обязан пройти тот же отрезок; тор появляется на запросе к сетке
+// (MacroGrid оборачивает все три оси). Сегмент шага короток (v*dt), so is the
+// walk — O(субвокселей на отрезке).
+struct SubRayHit {
+    float t = 0.0f;             // параметр контакта вдоль [a,b], 0..1
+    int cx = 0, cy = 0, cz = 0; // макро-клетка попадания (обёрнута)
+    int sx = 0, sy = 0, sz = 0; // субвоксель в клетке, 0..kSubDim-1
+    int axis = -1;              // ось грани входа: 0=x 1=y 2=z; -1 = старт в тверди
+    float sign = 0.0f;          // нормаль грани входа = sign по axis (против хода)
+};
+bool sub_march(const MacroGrid& grid, const vec3& a, const vec3& b,
+               SubRayHit& out);
+
+// Толщина материи вдоль [a,b] в клетках-эквивалентах (солид-субвоксели пути
+// / kSubDim, потолок вверх) — градуированный субвоксельный ответ для
+// окклюзии звука; та же DDA, что sub_march. Для событий и малых наборов —
+// не для тиковых свипов (тот же закон, что у sub_march выше).
+int sub_thickness_cells(const MacroGrid& grid, const vec3& a, const vec3& b);
 
 } // namespace giga

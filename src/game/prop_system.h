@@ -9,7 +9,10 @@
 #include "game/event_bus.h"
 #include "game/interact_table.h"
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
+#include "game/prop_form_table.h" // FormId — форма составного тела
 #include "game/prop_table.h"
+#include "core/watch.h"   // watch_light_phase — фаза цикла для программы щитка (S15.4)
+#include "world/anchor.h" // SubVoxelAnchor — ЕДИНАЯ запись якоря (S20.2)
 #include "world/world.h"
 #include "world/level_stack.h"
 
@@ -22,11 +25,18 @@ enum class PropFallMode : std::uint8_t {
     GpuHandoff   // 3. Уничтожить сущность, осколки — всплеск в GPU-пул частиц
 };
 
-struct SubVoxelAnchor {
-    int cx = 0, cy = 0, cz = 0;                  // Координаты макро-ячейки (128³)
-    std::uint8_t subX = 0, subY = 0, subZ = 0;   // Локальный субоксель (0..7)
-    std::uint8_t face = 0;                       // Опора: 0=Floor, 1=WallNorth, 2=Ceiling...
-};
+// Запись якоря переехала в движок ([world/anchor.h], D.1): одна и та же
+// структура — ECS-компонент пропа, оба конца антуража, мировой линк цепи.
+using giga::SubVoxelAnchor;
+
+// Yaw настенного пропа ВЫВОДИТСЯ из грани якоря: размеры props.csv авторские
+// для yaw-0 панели лицом по ±Y (width=X, thickness=Y), X-стена — четверть
+// оборота. Z-грани (пол/потолок) поворота не диктуют — там yaw остаётся
+// размещению. Единственный словарь «грань → поворот»; вывод по месту спавна —
+// дефект (кнопка лифта стояла ребром: dress_lift_portals не передавал yaw).
+inline float prop_wall_yaw(std::uint8_t face) {
+    return anchor_face_axis(face) == 0 ? 1.5707963267948966f : 0.0f;
+}
 
 // The KIND is a row of data/interactables.csv ([interact_table.h] — generated
 // enum, so a new interactive is a CSV row, never an enum edit here). reachM
@@ -70,14 +80,68 @@ struct PropMesh {
 // prop.frag — плафон и свет синхронны по построению. Mains-профиль гаснет от
 // power cut; прибор со своим питанием — нет. dropM — подвес: свет у нижней
 // кромки арматуры (полвысоты меша), а не внутри неё.
+// «Не в статик-таблице света»: проп, рождённый после постройки таблицы этажа,
+// или сорванный в RagdollRoll — светит динамическим хвостом. Значение обязано
+// совпадать с gpu::kNoLightSlot (game не видит render — static_assert на шве
+// в app/main.cpp).
+inline constexpr std::uint32_t kNoLightSlot = 0xFFFFFFFFu;
+
 struct PropLight {
     vec3  color{1.0f, 1.0f, 1.0f};
     float radiusM   = 0.0f;
     float intensity = 0.0f;
     float dropM     = 0.0f;
+    // Слот в статик-таблице света этажа (= id для бейка видимости
+    // light_vis_bake); назначается при постройке таблицы в app.
+    std::uint32_t slot = kNoLightSlot;
     std::uint8_t coneDeg = 0; // полуугол, 0 = омни
     std::uint8_t flicker = 0; // FlickerProfile ordinal
+    // Кэш программы СВОЕГО щитка (ближайшего по тору; источник —
+    // ShieldProgram, единственный писатель кэша — assign_lamp_shields).
+    // Применяется только к mains — прибор со своим питанием фаз не знает,
+    // ровно как power cut. Дефолт круглосуточный: этаж без щитков светит
+    // как светил.
+    std::uint8_t phaseLevels[4] = {100, 100, 100, 100};
+    std::uint8_t phaseOffset = 0; // сдвиг в фазах 0..3
 };
+
+// ПРОГРАММА ЩИТКА (S15.4, посажена 2026-09-05): фаза цикла — параметр
+// щитка; время ламп не трогает (S15.3 «часы ничего не толкают»). Уровни —
+// проценты по четырём фазам watch_light_phase ([core/watch.h], сдвиг 17 =
+// две вахты). Дефолт — круглосуточный полный: движок политики не навязывает
+// (S10); фазы включаются ДАННЫМИ модуля — stamp_shield_programs выводит
+// программу из declared-глаголов комнаты щитка (решение владельца
+// 2026-09-05: «зависит от дизайна этажа в генераторе — могут быть щитки,
+// которые светят круглосуточно»). Перештамповка на КАЖДОМ прибытии
+// (generate И restore) — закон масок S18: декларация — чистая функция
+// модульных данных, в сейв не едет.
+struct ShieldProgram {
+    std::uint8_t levels[4]   = {100, 100, 100, 100}; // % по фазам цикла
+    std::uint8_t phaseOffset = 0;                    // сдвиг в фазах 0..3
+};
+
+// Уровень фазы на данном тике — ЧИСТАЯ функция (headless-тестируема).
+inline float shield_phase_level(const std::uint8_t levels[4],
+                                std::uint8_t phaseOffset,
+                                std::uint64_t tick) {
+    const int ph = (watch_light_phase(tick) + phaseOffset) & (kLightPhases - 1);
+    return static_cast<float>(levels[ph]) * 0.01f;
+}
+
+struct FloorRooms; // game/room.h — прямой include не нужен заголовку
+
+// Перештамповать программы всех щитков слоя из declared-глаголов их комнат:
+// комната, где модуль объявил «спать» (declared[kVerbSleep] > 0), живёт
+// жилым ритмом полный→рабочий→дежурный→тьма {100,60,25,0} (уровни —
+// решение владельца 2026-08-20); щиток вне таких зон — круглосуточный.
+// Возвращает число щитков. Зовётся на каждом прибытии ПОСЛЕ rooms_declare.
+std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
+                                    LayerId layer);
+
+// Привязать каждую mains-лампу слоя к ближайшему щитку (тороидально) и
+// скопировать его программу в кэш PropLight. Лампа без щитков на этаже
+// остаётся круглосуточной. Возвращает число привязанных ламп.
+std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer);
 
 // Headless POD mirror of gpu::PropInstance for tests / main upload.
 // Collect only StaticPropTag entities (detached props go to BodyPass).
@@ -121,12 +185,24 @@ struct InteractionHit {
 // ordinal stored on PropMesh (GPU skin). Optional `yaw`/`emissive`/`matId`/
 // `animPhase` fill the rest of the PropPass instance payload.
 // [jirnyak.md] §18.
+// `gateAnchor=false` — ЕДИНСТВЕННО для пути восстановления снимка (S20.6):
+// запись обязана родить сущность даже над мёртвым якорем, потому что судьбу
+// решает якорная проба restore (закон 3 — честный детач), а не молчаливая
+// потеря вещи. Любой другой писатель обязан оставить гейт: спавн и проба
+// живости задают ОДИН вопрос.
 Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
                   LayerId layer = 0, float yaw = 0.0f,
                   std::uint8_t emissive = 0, std::uint8_t matId = 0,
-                  std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+                  std::uint8_t animPhase = 0, std::uint8_t flags = 0,
+                  bool gateAnchor = true);
+
+// Какой строкой props.csv рождён проп. Ставится только табличным спавном —
+// проп без PropOf (тест-шар spawn_prop) не имеет строки и глаголов (S12.3).
+struct PropOf {
+    PropId id;
+};
 
 // Spawn from data/props.csv row (PropId). shape/fall/interact/color/emissive/
 // matId/reach come from the generated table — call sites must not hardcode
@@ -134,12 +210,24 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
 Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
                           const SubVoxelAnchor& anchor, PropId id,
                           LayerId layer = 0, float yaw = 0.0f,
-                          std::uint8_t animPhase = 0, std::uint8_t flags = 0);
+                          std::uint8_t animPhase = 0, std::uint8_t flags = 0,
+                          bool gateAnchor = true);
+
+// ГЛАГОЛ ДЕТАЧА для пути восстановления (S20.6 закон 3): тот же единственный
+// детач, которым платят валидатор якорей и попадание снаряда, — снимает якорь,
+// свапает StaticPropTag → DynamicBodyTag, собирает тело ядра по PropFallMode
+// (GpuHandoff — честная смерть всплеском). Импульса нет — вещь просто ложится
+// физикой, как труп при пересборке. `bursts` может быть null (headless).
+void prop_detach(Registry& reg, Entity prop, EventBus& bus,
+                 ParticleBurstQueue* bursts = nullptr, std::uint32_t seed = 0);
 
 
-// Destroy every SubVoxelAnchor prop on `layer` (terminals, shields, bulbs…).
+// Destroy every StaticPropTag prop on `layer` (terminals, shields, bulbs…).
 // Call before reseeding a recycled LayerId slot — same contract as
-// despawn_layer_mobs / refresh_floor_containers. [jirnyak.md] §18.
+// despawn_layer_mobs / refresh_floor_containers. NOT keyed on SubVoxelAnchor:
+// containers carry an anchor and their own refresh cycle, and keying on the
+// anchor wiped every crate at floor arrival (markoaudit-systems.md §1.2).
+// [jirnyak.md] §18.
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 
 // Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
@@ -167,24 +255,67 @@ std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
 // Collect StaticPropTag + PropMesh + Transform (+ optional Renderable) into a
 // flat instance list for PropPass upload. Detached DynamicBodyTag props are
 // excluded (BodyPass owns them). [jirnyak.md] §18 PropPass passive skin.
+// tick — для фазы щитка: плафон mains-лампы гаснет вместе со светом
+// (S15.4 шаг 4, «свет И emissive синхронно»). Пересборка редкая — граница
+// фазы раз в 17.5 мин поднимает propPassNeedsRebuild в app.
 std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::uint64_t tick,
                                                  std::vector<PropMeshInstance>& out);
 
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+// Немедленный перевод якорного пропа в живое тело рагдолл-ядра тем же
+// законом, что отрыв карвом. Для RagdollRoll-строк расстановки: канон S3 —
+// «катается, толкается», путь создания не меняет физику (владелец
+// 2026-08-22: prop ball ≡ spawn_ball).
+void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus);
+
+// ГЛАГОЛ ЯКОРЕНИЯ (CANON S20.3): поставить связь — одна операция, доступная
+// генерации И геймплею (крюк, сцепка, подвес, прицепить проп к пропу).
+// Связь — линк-сущность (разруб = destroy); мировая сторона несёт ЕДИНУЮ
+// запись якоря, и точка солвера ВЫВОДИТСЯ из неё здесь же — двум половинкам
+// («vec3 для солвера + запись для пробы») больше нечем разойтись: писатель
+// один. Снять — link_detach (будит стороны).
+Entity link_attach_world(Registry& reg, Entity body, const vec3& anchorA,
+                         const SubVoxelAnchor& a, float restLen, bool rope);
+Entity link_attach(Registry& reg, Entity a, Entity b, const vec3& anchorA,
+                   const vec3& anchorB, float restLen, bool rope);
+void link_detach(Registry& reg, Entity link);
+
+// ЖНЕЦ СВЯЗЕЙ — ОДНО правило смерти носителя (S20.3; раньше швов было три:
+// CarriedBy чистил rigid-степ, линки молча вырождались в солвере и ТЕКЛИ
+// при выгрузке этажа — у линк-сущности нет Transform, слоевые свипы её не
+// видели, — сегменты чистил только сейв). Раз в тик: линк с умершей
+// непустой стороной уничтожается (живая сторона разбужена), сегмент с
+// умершим корнем уничтожается. Выгрузка этажа закрыта ПО ПОСТРОЕНИЮ:
+// стороны несут Transform и умирают слоевым свипом — их связи умирают
+// следующим тиком здесь. CarriedBy остаётся в rigid-степе (кинематика
+// несомого решается там же тем же тиком). Возвращает число прибранного.
+std::uint32_t attachment_reaper_step(Registry& reg);
+
+// `source` — стрелявший, только для атрибуции килла заряда-от-урона
+// (бочка: выстрел взводит ChargeArmed вместо детача; [combat.h] Charge).
+bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
+                                const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
                                 ParticleBurstQueue* bursts = nullptr,
-                                std::uint32_t seed = 0);
+                                std::uint32_t seed = 0,
+                                Entity source = entt::null);
 
 // Validate SubVoxelAnchor props against MacroGrid after geometry mutation.
-// `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells — flat
-// macro_index keys (uint32), NOT a packed xyz64. Returns how many props
-// detached (StaticPropTag → DynamicBodyTag) so the caller can rebuild the
-// static PropPass skin. [jirnyak.md] §18.
+// `dirtyCells` is CarveResult::dirtyCells / DoorSet::dirtyCells /
+// судейские dirty — flat macro_index keys (uint32), NOT a packed xyz64.
+// Returns how many props detached (StaticPropTag → DynamicBodyTag) so the
+// caller can rebuild the static PropPass skin. [jirnyak.md] §18.
+// `layer` — СЛОЙ ПИСАТЕЛЯ (S20.4: слой — часть ключа dirty-вопроса):
+// пробы идут против `world` этого слоя, и якоря чужих резидентных этажей с
+// совпавшим macro_index не трогаются — прежний бесслойный проход ронял
+// проп этажа B карвом этажа A. Пропы идут через персистентные AnchorBins
+// (точные бакеты dirty-клеток), не полным view (§59.2-семья).
 // Optional `bursts`: the shared particle queue ([game/particles.h]). A
-// GpuHandoff prop shatters into it instead of vanishing silently — pass it and
-// the mode finally does what its name says.
-std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+// GpuHandoff prop shatters into it instead of vanishing silently — pass it
+// and the mode finally does what its name says.
+std::uint32_t anchor_validate_step(Registry& reg, const World& world,
+                                   LayerId layer, EventBus& bus,
                                    const std::vector<std::uint32_t>& dirtyCells,
                                    ParticleBurstQueue* bursts = nullptr,
                                    std::uint32_t seed = 0);
@@ -200,9 +331,57 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
 bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
                       EventBus& bus, InteractionHit* outHit = nullptr);
 
-// Advance ragdoll spin bookkeeping for DynamicBodyTag props. Angular integration
-// itself lives in physics_step; this is the game-side settle / impulse helper.
-void prop_ragdoll_step(Registry& reg, float dt);
+// prop_ragdoll_step УМЕР (инкремент 6 рагдолл-эпика, 2026-08-21): сорванный
+// проп — тело рагдолл-ядра (rigid_body_step в src/sim/rigid.cpp), гашение,
+// качение и сон живут там; отдельная косметика вращения не существует.
+
+// ── Многосегментное тело (инкременты 8 и 11 рагдолл-эпика) ──────────────────
+// Плоть — контактная пара живого тела: мяса упругости нет (звона не бывает),
+// хват высокий — это одежда и кожа. Живёт здесь, потому что и смерть
+// (combat.cpp), и загрузка сейва (save.cpp) собирают тело ОДНИМИ числами.
+inline constexpr float kFleshRestitution = 0.05f;
+inline constexpr float kFleshFriction = 0.8f;
+
+// Сегмент чужого корня: сущность-сегмент И сущность-линк несут этот маркер,
+// чтобы уборка корня (ребилд трупов при загрузке этажа) забирала всё тело.
+struct BodySegment {
+    Entity root = entt::null;
+};
+
+// Развернуть КОРЕНЬ в составное тело по строкам data/prop_forms.csv
+// ([prop_form_table.h] — форма это ДАННЫЕ, решение владельца 2026-08-21).
+// Первая строка формы пересобирает САМ корень (на нём остаются
+// Container/Interactable/Corpse и сейв-идентичность), остальные рождают
+// сегменты-сущности и связи. Ядро агностично: N тел + M линков, слово «труп»
+// знает только вызывающий. Габариты и массы — доли `bodyHalf` и `totalKg`
+// (S11: масштабируется телом, а не назначается). Сегменты наследуют скорость
+// и тинт корня. `restitution`/`friction` — контактная пара материала тела
+// (плоть у трупа). Возвращает число созданных сущностей (сегменты + линки).
+std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
+                                  vec3 bodyHalf, float totalKg,
+                                  float restitution, float friction);
+
+// Убрать сегменты и линки, чьи корни в списке (вызвать ДО destroy корней).
+void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);
+
+// ── Переноска (инкремент 9) ─────────────────────────────────────────────────
+// Один путь на всех носителей (S7: игрок = NPC): взять ближайшее тело в руки
+// (CarriedBy — кинематика в ядре) и бросить с наследованием скорости носителя.
+// `forward` — направление взгляда носителя (game знает камеру, ядро — нет).
+// carry_nearest_body возвращает взятое тело или entt::null.
+// ПРОП ЗАНИМАЕТ РУКУ (two-hands.md, эмерджентность владельца): freeHands —
+// битмаска свободных рук носителя (bit0 = ЛКМ, bit1 = ПКМ), выводит КАЛЛЕР
+// (свободна = ни экипировки, ни несомого; ядро Equipped не знает).
+// 0 = обе заняты, взять нечем — отказ. Берёт младшей свободной.
+Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
+                          float reachM, std::uint8_t freeHands = 0x3);
+
+// Бросить несомое: снять CarriedBy и добавить бросок `throwSpeed` вдоль
+// `forward` поверх унаследованной скорости носителя. hand: 0/1 — только
+// этой руки (кнопка руки бросает своё), -1 — всё (консольная команда).
+// Возвращает число брошенных тел.
+std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
+                           float throwSpeed, int hand = -1);
 
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus);

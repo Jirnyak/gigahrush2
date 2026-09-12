@@ -53,6 +53,10 @@ FAM = {
 # Rec. 709 luminance, matching tools/measure_materials.py.
 LUM = (0.2126, 0.7152, 0.0722)
 
+# Phase is a LABEL for gameplay predicates (passability, buoyancy, breathing);
+# matter MOVEMENT never reads it — only flow/diffusion/density (CANON S16.2).
+PHASE = {"solid": 0, "liquid": 1, "gas": 2}
+
 
 def die(msg):
     sys.stderr.write("gen_material_table: %s\n" % msg)
@@ -166,11 +170,81 @@ def main():
             "emissive_e3": int(fnum(r, "emissive_e3", i, 0, 4000)),
             "light_radius_mm": int(fnum(r, "light_radius_mm", i, 0, 65535)),
             "light_intensity_e3": int(fnum(r, "light_intensity_e3", i, 0, 65535)),
+            "phase": r["phase"].strip(),
+            "flow": fnum(r, "flow", i, 0, 1),
+            "diffusion": fnum(r, "diffusion", i, 0, 1),
+            "light_transparent": int(fnum(r, "light_transparent", i, 0, 1)),
             "note": r["note"],
         })
         if (mats[-1]["light_radius_mm"] == 0) != (mats[-1]["light_intensity_e3"] == 0):
             die("row %d (%s): light_radius_mm and light_intensity_e3 must be "
                 "both zero or both set" % (i, r["name"]))
+        # ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (решение владельца 2026-08-24, neon-topology):
+        # колонка light_transparent руками ставится только стеклу; воздух и
+        # эмиттеры прозрачны ПО ПОСТРОЕНИЮ (эмиттер не преграда своему свету,
+        # воздух не преграда ничему) — их значение ВЫВОДИТСЯ, не назначается.
+        mats[-1]["light_pass"] = 1 if (i == 0 or
+                                       mats[-1]["light_radius_mm"] != 0 or
+                                       mats[-1]["light_transparent"]) else 0
+        # Label and parameters must not be able to disagree (CANON S16.2): the
+        # gameplay label promises behaviour the movement parameters deliver.
+        m = mats[-1]
+        if m["phase"] not in PHASE:
+            die("row %d (%s): unknown phase %r (solid/liquid/gas)"
+                % (i, r["name"], m["phase"]))
+        if i == 0 and m["phase"] != "gas":
+            die("row 0 (air) must be phase=gas — it IS the default medium")
+        if m["phase"] == "liquid" and m["flow"] <= 0.0:
+            die("row %d (%s): a liquid that cannot flow — label/params disagree"
+                % (i, r["name"]))
+        if m["phase"] == "gas" and m["diffusion"] <= 0.0:
+            die("row %d (%s): a gas that cannot diffuse — label/params disagree"
+                % (i, r["name"]))
+    # --- РЫХЛЫЕ ДВОЙНИКИ СТРОК (решение владельца 2026-08-24; эстафета
+    # п.15: «rubble_* на исходный материал, никаких флажков»). Каждой
+    # РУШИМОЙ твёрдой строке (solid, бьётся, flow==0) порождается двойник
+    # rubble_<имя>: отвязанный детачем кусок меняет строку и падает
+    # автоматом, ВЫГЛЯДЯ исходником — альбедо чуть темнее (0.85, читаемость
+    # обвала), текстура/зерно наследуются. Всё выведено: плотность насыпная
+    # 0.75x (упаковка случайной засыпки), flow 1.0 (осыпь ЛАВИННА на
+    # масштабе подтика — решение владельца 2026-09-01: прежние 0.1
+    # кодировали угол откоса в ВЕРОЯТНОСТЬ, а угол держит сама геометрия
+    # ската Марголуса; вероятность лишь растягивала осадку в «плач»
+    # редкими каплями и не давала куче заснуть),
+    # твёрдость /8 (дробить дроблёное легче), света нет
+    # (обломок неона не запитан), прозрачности нет (щебень стекла не лист).
+    # Двойники — ВЫВЕДЕННЫЕ данные, в CSV НЕ пишутся: kMaterialCsvRows
+    # остаётся счётом CSV (гейт Rule 7), kMatCount покрывает всех; сейвы
+    # хранят id — двойники аппендятся ПОСЛЕ CSV-строк, порядок стабилен.
+    csvN = len(mats)
+    rubbleOf = {m["id"]: m["id"] for m in mats}  # дефолт: сам себя
+    derived = []
+    for m in list(mats):
+        if (m["phase"] != "solid" or m["hardness"] >= 65535 or
+                m["flow"] > 0.0 or m["id"] == 0):
+            continue
+        d = dict(m)
+        d["id"] = csvN + len(derived)
+        d["name"] = "rubble_" + m["name"]
+        d["cpp"] = ("Rubble" + m["cpp"]) if m["cpp"] else ""
+        d["hardness"] = max(8, m["hardness"] // 8)
+        d["albedo"] = tuple(a * 0.85 for a in m["albedo"])
+        d["density"] = m["density"] * 0.75
+        d["flow"] = 1.0
+        d["diffusion"] = 0.0
+        d["emissive_e3"] = 0
+        d["light_radius_mm"] = 0
+        d["light_intensity_e3"] = 0
+        d["light_transparent"] = 0
+        d["light_pass"] = 0
+        d["note"] = ("ВЫВЕДЕННЫЙ рыхлый двойник строки %s — детач меняет "
+                     "строку, автомат роняет; вид исходника" % m["name"])
+        rubbleOf[m["id"]] = d["id"]
+        derived.append(d)
+    for d in derived:
+        rubbleOf[d["id"]] = d["id"]  # двойник двойника — сам он
+    mats.extend(derived)
+
     n = len(mats)
     names = [m["name"] for m in mats]
 
@@ -210,8 +284,25 @@ namespace giga {
 // rather than rendering as an unremarkable default.
 inline constexpr CellType kMatCount = %d;
 
+// CSV-имена строк по id — словарь команд и логов (консоль `sphere <имя>`
+// говорит на языке таблицы, не констант). Указатели на литералы, без аллокаций.
+inline constexpr const char* kMatNames[kMatCount] = {
+%s};
+
+// id по CSV-имени (линейный скан таблицы — она мала, зов из консоли).
+// kMatCount = «нет такого материала».
+inline CellType material_id_by_name(const char* name) {
+    for (CellType i = 0; i < kMatCount; ++i) {
+        const char* a = kMatNames[i];
+        const char* b = name;
+        while (*a && *a == *b) { ++a; ++b; }
+        if (*a == 0 && *b == 0) return i;
+    }
+    return kMatCount;
+}
+
 } // namespace giga
-""" % n)
+""" % (n, elements(mats, ['"%s"' % m["name"] for m in mats], names)))
 
     # --- src/world/material_props.h ----------------------------------------
     with open(OUT_PROPS_H, "w", encoding="utf-8", newline="\n") as fh:
@@ -259,10 +350,69 @@ inline constexpr float kMatDensity[kMatCount] = {
         fh.write(elements(mats, vals, names))
         fh.write("""};
 
-// Mass of ONE sub-voxel (0.25 m cube) of this material, in kg.
-inline constexpr float kSubVoxelVolumeM3 = 0.25f * 0.25f * 0.25f;
-inline float material_subvoxel_mass_kg(CellType t) {
-    return (t < kMatCount ? kMatDensity[t] : 0.0f) * kSubVoxelVolumeM3;
+// (material_subvoxel_mass_kg СНЕСЁН аудитом 2026-08-25 решением владельца:
+// ноль вызывающих — детач/рыхлое массу атомов не считает. ЗАМЫСЕЛ записан
+// вердиктом владельца 2026-08-27: закон «масса = kMatDensity × 0.25³»
+// вернётся с эпиком цельных кусков-пропов — когда обломок мира из вокселей
+// конвертируется в ПРОП (S3/S16.3: тяжёлый кусок, обязанный бить больно,
+// = RagdollRoll) и его масса обязана быть Σ масс атомов, а не назначением;
+// без неё урон падения E = mv²/2 (impact.cpp) посчитать нечем. До того
+// эпика функции не существует намеренно — мёртвый API дороже надгробия.)
+
+// СРЕДЫ (CANON S16, мир-автомат). Движение материи читает ТОЛЬКО параметры:
+//   flow      — доля, перетекающая вбок за подтик автомата: 0 = твёрдое
+//               (лежит; падает, когда опоры нет — это и есть обломки),
+//               1 = вода (референс: вязкость 1 мПа·с; прочие жидкости =
+//               вязкость_воды/вязкость — вывод в note строки CSV);
+//   diffusion — расползание без гравитации (газы); 1 = воздух (референс:
+//               выравнивается за один подтик).
+// phase — МЕТКА для геймплейных предикатов (проходимость, плавучесть,
+// дыхание); физика движения её НЕ читает и ветки по ней не имеет (S16.2).
+// Метка и параметры не могут разойтись — генератор это гейтит (жидкость
+// обязана течь, газ обязан диффундировать; воздух обязан быть газом).
+enum class MatPhase : std::uint8_t { Solid = 0, Liquid = 1, Gas = 2 };
+
+inline constexpr std::uint8_t kMatPhase[kMatCount] = {
+%(phase)s};
+
+inline constexpr float kMatFlow[kMatCount] = {
+%(flow)s};
+
+inline constexpr float kMatDiffusion[kMatCount] = {
+%(diffusion)s};
+
+inline MatPhase material_phase(CellType t) {
+    return t < kMatCount ? static_cast<MatPhase>(kMatPhase[t]) : MatPhase::Solid;
+}
+
+// «Материя сред» — строка даёт движение (flow или diffusion > 0) и это не
+// воздух. ЕДИНСТВЕННАЯ выписка закона: класс-байт 3 зеркала
+// (render/voxel_mirror.cpp), агностичный карв (world/destruct.cpp) и
+// GPU-двойник (shaders/medium_sim.comp, mobile()) обязаны совпадать с ней.
+inline bool material_is_medium(CellType t) {
+    return t != 0 && t < kMatCount &&
+           (kMatFlow[t] > 0.0f || kMatDiffusion[t] > 0.0f);
+}
+
+// ОПОРА (CANON S20.5, «подвижное — не опора», решение владельца 2026-08-29):
+// атом ПОДВИЖНОГО материала — материи сред, включая рыхлых двойников — не
+// передаёт опору судье связности (world/destruct.cpp) и не держит якорь
+// (world/anchor.h). Куча рыхлого не несёт балкон; балка, держащаяся только
+// за кучу, конвертируется одним судом — петля «дебрис рождает дебрис»
+// разомкнута по построению. Выведено из параметров строки (S16.2), ни
+// флага, ни ветки по имени материала.
+inline bool material_bears_load(CellType t) {
+    return t != 0 && t < kMatCount && !material_is_medium(t);
+}
+
+// РЫХЛЫЙ ДВОЙНИК строки (решение владельца 2026-08-24): детач меняет строку
+// куска на двойника — тот выглядит исходником (альбедо/текстура
+// наследуются) и падает автоматом. Не-рушимое и среды — сами себя.
+inline constexpr CellType kMatRubbleOf[kMatCount] = {
+%(rubble_of)s};
+
+inline CellType material_rubble_of(CellType t) {
+    return t < kMatCount ? kMatRubbleOf[t] : t;
 }
 
 // СВЕТОМАТЕРИАЛЫ ([ddalight.md]): light_radius_mm != 0 — ячейки этого
@@ -289,13 +439,32 @@ inline bool material_emits_light(CellType t) {
     return t < kMatCount && kMatLightRadiusMm[t] != 0 && kMatLightIntensityE3[t] != 0;
 }
 
+// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (data/materials.csv light_transparent; решение
+// владельца 2026-08-24, neon-topology): теневой луч и бейк видимости прощают
+// субвоксель, если его материал ПРОЗРАЧЕН — а не если светится. Воздух и
+// эмиттеры прозрачны по построению (выведено кодогеном); стекло — строкой
+// CSV: свет проходит, материя стоит. Оба места одного закона читают эту
+// колонку: shaders/raymarch.frag shadow_cell_occluded (kMatLightPass) и
+// game/light_vis_bake.cpp light_ray_passes (material_passes_light).
+inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
+%(light_pass)s};
+
+inline bool material_passes_light(CellType t) {
+    return t < kMatCount && kMatLightPass[t] != 0;
+}
+
 } // namespace giga
 """ % {
+            "phase": elements(mats, ["%d" % PHASE[m["phase"]] for m in mats], names),
+            "flow": elements(mats, ["%.3ff" % m["flow"] for m in mats], names),
+            "diffusion": elements(mats, ["%.3ff" % m["diffusion"] for m in mats], names),
             "light_radius": elements(mats, ["%d" % m["light_radius_mm"] for m in mats], names),
             "light_intensity": elements(mats, ["%d" % m["light_intensity_e3"] for m in mats], names),
+            "light_pass": elements(mats, ["%d" % m["light_pass"] for m in mats], names),
             "albedo_r": elements(mats, ["%.3ff" % m["albedo"][0] for m in mats], names),
             "albedo_g": elements(mats, ["%.3ff" % m["albedo"][1] for m in mats], names),
             "albedo_b": elements(mats, ["%.3ff" % m["albedo"][2] for m in mats], names),
+            "rubble_of": elements(mats, ["%d" % rubbleOf[m["id"]] for m in mats], names),
         })
 
     # --- src/render/material_table.h ---------------------------------------
@@ -307,7 +476,7 @@ inline bool material_emits_light(CellType t) {
 // referred — the shading linearises once with pow(2.2)), and which KTX2 texture
 // set skins an id. Albedos bound to a texture are MEASURED off the real
 // photograph (data/textures.csv carries the linear mean and provenance);
-// unbound rows are authored. Consumed by render/cube_pass.cpp only.
+// unbound rows are authored. Consumed by render/material_textures.cpp only.
 #pragma once
 
 #include "core/math.h"
@@ -364,11 +533,12 @@ inline constexpr int kMaterialMapCount =
 // a material binds a texture and leaves `cv` blank; the seam/groove DEPTHS are
 // authored per family in cube.frag (the CSV measured colour, not depth).
 
-// Rows read from data/materials.csv — ONE PER CellType, so this IS the material
-// count. The `source_rules` ctest compares it against the CSV's data-row count.
+// Rows read from data/materials.csv. The `source_rules` ctest compares it
+// against the CSV's data-row count; derived rubble twins live PAST this count
+// (kMatCount covers all, see materials.h).
 const uint kMaterialCsvRows = %du;
 
-""" % n)
+""" % csvN)
         fh.write("// Family per material id — see the kFam* constants in cube.frag.\n")
         for m in mats:
             fh.write("//  %2d %-20s %-8s %-24s CV %.4f\n"
@@ -409,6 +579,61 @@ const uint kMaterialCsvRows = %du;
         fh.write(elements(mats,
                           ["%.3f" % (m["emissive_e3"] * 0.001) for m in mats],
                           names))
+        fh.write(");\n\n")
+
+        fh.write("// ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (light_transparent + выведенные\n"
+                 "// воздух/эмиттеры): теневой луч прощает субвоксель\n"
+                 "// прозрачного материала. Тот же закон на CPU —\n"
+                 "// material_passes_light ([world/material_props.h]).\n")
+        fh.write("const uint kMatLightPass[%d] = uint[%d](\n" % (n, n))
+        fh.write(elements(mats, ["%du" % m["light_pass"] for m in mats], names))
+        fh.write(");\n\n")
+
+        # ИСТАИВАНИЕ ОДИНОЧЕК (закон владельца 2026-08-25): подвижный атом
+        # без единого атома своего материала в блоке Марголуса тает роллом.
+        # Шанс обратен МАССЕ кванта (вывод, не назначение): масса = плотность
+        # × объём субвокселя 0.25³; калибровка — одинокий квант газа
+        # (3 кг/м³, 47 г) живёт ~секунду = 31.25 подтика (125 Гц / 4).
+        # p = C/масса  =>  p = 0.9375/плотность: одинокая капля воды живёт
+        # ~34 с, пылинка бетонного рубла ~45 с, квант газа ~0.1 с (решение
+        # владельца 2026-08-25: первая калибровка «газ-секунда» была на
+        # порядок вялее — брызги должны быть конечны ощутимо).
+        # Воздух (материал 0) — вытесняемая пустота, не истаивает.
+        kSubVolume = 0.25 ** 3
+        kGasRefDensity = 3.0
+        kLoneGasLifeSubsteps = 125.0 / 4.0 / 10.0
+        loneC = kGasRefDensity * kSubVolume / kLoneGasLifeSubsteps
+        def lone_fade(i, m):
+            mobile = m["flow"] > 0.0 or m["diffusion"] > 0.0
+            if i == 0 or not mobile or m["density"] <= 0.0:
+                return 0.0
+            # Кап снизу на время жизни: быстрее ~секунды (31.25 подтика)
+            # не тает ничто — глаз обязан успеть увидеть брызг; иначе газ
+            # (p=0.31/подтик) исчезал бы до первого кадра существования.
+            return min(loneC / (m["density"] * kSubVolume), 1.0 / 32.0)
+        fh.write("// СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),\n"
+                 "// y = diffusion (газы; 1 = воздух), z = шанс истаивания\n"
+                 "// ОДИНОЧКИ на подтик (закон 2026-08-25: атом без своего\n"
+                 "// материала в блоке — брызг, тает; шанс обратен массе\n"
+                 "// кванта, калибровка — одиночный квант газа живёт ~1 с).\n"
+                 "// Читатель — автомат материи; движение НЕ читает kMatPhase\n"
+                 "// (метка для геймплейных предикатов — S16.2).\n")
+        fh.write("const vec3 kMatMedium[%d] = vec3[%d](\n" % (n, n))
+        fh.write(elements(mats,
+                          ["vec3(%.3f, %.3f, %.6f)" %
+                           (m["flow"], m["diffusion"], lone_fade(i, m))
+                           for i, m in enumerate(mats)], names))
+        fh.write(");\n\n")
+        fh.write("const uint kMatPhase[%d] = uint[%d](\n" % (n, n))
+        fh.write(elements(mats, ["%du" % PHASE[m["phase"]] for m in mats], names))
+        fh.write(");\n\n")
+
+        fh.write("// Плотность кг/м³ — третий параметр движения материи\n"
+                 "// (CANON S16.2: тяжелее — тонет, легче — всплывает).\n"
+                 "// Зеркало kMatDensity [world/material_props.h].\n")
+        fh.write("const float kMatDensity[%d] = float[%d](\n" % (n, n))
+        fh.write(elements(mats,
+                          ["%.1f" % m["density"] for m in mats], names))
         fh.write(");\n")
 
     sys.stderr.write(

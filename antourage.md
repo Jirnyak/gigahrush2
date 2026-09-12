@@ -1,5 +1,12 @@
 # Антураж — запечённое убранство этажа
 
+> **Сверка 2026-08-23:** `wire_pass`/`cloth_pass`/`wire_sim.comp`/`cloth_sim.comp`
+> больше нет — один `verlet_pass.h`/`verlet_sim.comp` (цепь = решётка при H==1).
+> «Единой рагдолл-физики нет, три пути падения» — устарело: рагдолл-ядро
+> ПОСТРОЕНО (`src/sim/rigid.h/.cpp`, `RigidBody`/`ContactForm`), косметика
+> вращения удалена. Корневого капа антуража всё ещё нет (24 576 точек против
+> канона 2^20) — ждёт verlet-merge этап 2.
+
 > Code: `src/game/antourage/antourage.h/.cpp` ·
 > Render: `src/render/prop_pass.h` (инстансы), `src/render/wire_pass.h`,
 > `src/render/cloth_pass.h`, `shaders/wire_sim.comp`, `shaders/cloth_sim.comp` ·

@@ -1,5 +1,6 @@
 #include "core/rng.h"
 #include "game/loot.h"
+#include "game/container.h"
 
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "game/embody.h"
 #include "game/loot_table.h"  // roll_kind_drop — the per-kind identity half of a roll
 #include "game/mob_spawn.h"  // MobRef
+#include "game/room_supply.h" // живые хуки: упало += / подобрано −= (S12.5)
 #include "game/mob_table.h"
 #include "game/prop_system.h" // Interactable::Kind::Loot — §18 interaction tag
 #include "game/ranged_table.h"
@@ -22,7 +24,7 @@ namespace {
 
 
 // A dropped item is a small box on the ground. Bright warm gold: it must be
-// findable in a headlamp cone, and it must not collide with either the faction
+// findable in a lamp cone, and it must not collide with either the faction
 // palette (green-teal/blue/violet/cyan/amber) or the monster one (the red axis).
 // Gold sits between amber and white, brighter than any body.
 constexpr vec3 kPickupColor{1.00f, 0.86f, 0.42f};
@@ -112,7 +114,7 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
                 cum.reserve(64);
                 for (std::size_t i = 0; i < kItemCount; ++i) {
                     const ItemId cid = static_cast<ItemId>(i + 1);
-                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber);
                     if (w == 0) continue;
                     total += w;
                     pool.push_back(cid);
@@ -157,6 +159,33 @@ std::int32_t inventory_value(const Inventory& inv) {
     return total;
 }
 
+Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
+                    std::uint16_t count, std::uint8_t condition) {
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = pos;
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{kPickupHalf});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+    reg.emplace<Renderable>(e, Renderable{kPickupColor});
+    reg.emplace<Pickup>(e, Pickup{id, count, condition});
+    // Упавшее СТАНОВИТСЯ местом (живой хук supply, S12.5): место бойни
+    // само делается запасом и стягивает мародёров.
+    supply_item_at(reg, tr.pos, id, static_cast<int>(count));
+    // MASS: the bundle weighs its rounds, not one round — the same stack
+    // multiply `inventory_mass_g` does; a pile on the floor and the same pile
+    // in a pocket must not disagree about what they weigh.
+    reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) * 0.001f *
+                              static_cast<float>(count)});
+    // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
+    // can route through find_nearest_interactable. Backend remains pickup_step.
+    reg.emplace<Interactable>(
+        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+    return e;
+}
+
 std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                             std::uint8_t mobKind, std::uint8_t mobTier,
                             int floorNumber, std::uint32_t seed) {
@@ -197,7 +226,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
                 cum.reserve(64);
                 for (std::size_t i = 0; i < kItemCount; ++i) {
                     const ItemId cid = static_cast<ItemId>(i + 1);
-                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber, 0);
+                    const std::uint32_t w = item_weight_on_floor(cid, floorNumber);
                     if (w == 0) continue;
                     total += w;
                     pool.push_back(cid);
@@ -219,15 +248,6 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         const float ox = (static_cast<float>(j & 0xFFu) / 255.0f - 0.5f) * 1.2f;
         const float oy = (static_cast<float>((j >> 8) & 0xFFu) / 255.0f - 0.5f) * 1.2f;
 
-        Entity e = reg.create();
-        Transform tr;
-        tr.pos = vec3{pos.x + ox, pos.y + oy, pos.z};
-        tr.layer = layer;
-        reg.emplace<Transform>(e, tr);
-        reg.emplace<Velocity>(e);
-        reg.emplace<AABB>(e, AABB{kPickupHalf});
-        reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-        reg.emplace<Renderable>(e, Renderable{kPickupColor});
         // Never over the item's own stack cap: a single pickup carrying more than an
         // inventory slot may legally hold is silently truncated by pickup_step. The
         // authored counts are 1..2 and every count-bearing row stacks well past that, so
@@ -235,20 +255,8 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         const std::uint16_t cap = item_def(id).stackMax;
         if (kd.count < 1) kd.count = 1;
         if (cap && kd.count > cap) kd.count = cap;
-        reg.emplace<Pickup>(e, Pickup{id, kd.count});
-        // MASS, and its absence here was a real hole: a rifle lying on the floor is
-        // as much a concrete object as the mob that dropped it, yet loot was the ONE
-        // spawn path in the tree that emplaced no `Mass`. Mobs, props and embodied
-        // bodies all carry it, so `impact.cpp` charged E = m*v^2/2 to every falling
-        // thing in the game EXCEPT the loot. It could not be fixed before items had
-        // a weight at all ([item_table.h] massG) — which is what makes this the
-        // first line of the payoff rather than an afterthought.
-        reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) *
-                                  0.001f * static_cast<float>(kd.count)});
-        // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
-        // can route through find_nearest_interactable. Backend remains pickup_step.
-        reg.emplace<Interactable>(
-            e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+        spawn_pickup(reg, layer, vec3{pos.x + ox, pos.y + oy, pos.z}, id,
+                     kd.count);
         ++made;
 
         // A gun without bullets is a paperweight. Bundle its ammo at the moment it
@@ -261,7 +269,9 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         // none of the five appears in `kRangedTable`, so `ranged_for_item` answers nullptr
         // for all of them. One call site covers both halves of the roll; a guard would
         // only encode which half we are in.
-        made += drop_weapon_ammo(reg, layer, tr.pos, id, seed ^ (j * 0x2545F491u));
+        made += drop_weapon_ammo(reg, layer,
+                                 vec3{pos.x + ox, pos.y + oy, pos.z}, id,
+                                 seed ^ (j * 0x2545F491u));
     }
     return made;
 }
@@ -286,37 +296,21 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
     const std::uint16_t cap = item_def(def->ammo).stackMax;
     if (cap && count > cap) count = cap;
 
-    Entity e = reg.create();
-    Transform tr;
     // Beside the gun, not inside it: two pickups at the same point are one pickup you
     // can see.
-    tr.pos = vec3{pos.x + 0.45f, pos.y - 0.35f, pos.z};
-    tr.layer = layer;
-    reg.emplace<Transform>(e, tr);
-    reg.emplace<Velocity>(e);
-    reg.emplace<AABB>(e, AABB{kPickupHalf});
-    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-    reg.emplace<Renderable>(e, Renderable{kPickupColor});
-    const std::uint32_t bundled = count;   // already stack-capped above; u16 cell
-    reg.emplace<Pickup>(e, Pickup{def->ammo,
-                                  static_cast<std::uint16_t>(bundled)});
-    // The bundle weighs its ROUNDS, not one round — the same stack multiply
-    // `inventory_mass_g` does, because a pile of sixty on the floor and the same
-    // sixty in a pocket must not disagree about what they weigh.
-    reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(def->ammo).massG) *
-                              0.001f * static_cast<float>(bundled)});
-    // [jirnyak.md] §18: ammo bundles are floor Loot interactables too.
-    reg.emplace<Interactable>(
-        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+    spawn_pickup(reg, layer, vec3{pos.x + 0.45f, pos.y - 0.35f, pos.z},
+                 def->ammo, count);
     return 1;
 }
 
 
 std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
                              std::uint32_t seed) {
-    // CORP1: stage loot onto the Dead entity as POD CorpseLootPending.
-    // finalize_deaths moves it into Corpse.lootSlots. No floor Pickup spawn —
-    // that was the double-drop defect (empty corpse + gold boxes on the floor).
+    // CORP1 + C (2026-08-21): stage loot straight into the CANONICAL holder —
+    // a Container component on the Dead entity (finalize keeps sole right to
+    // birth Corpse identity/physics). CorpseLootPending — четвёртая копия
+    // носителя, жившая один тик, — умерла. No floor Pickup spawn — that was
+    // the double-drop defect (empty corpse + gold boxes on the floor).
     //
     // Snapshot entity ids first: emplace_or_replace can reallocate component
     // storage and invalidate a live view iterator.
@@ -324,7 +318,7 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
     for (auto e : reg.view<const Dead, const MobRef, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         // Already staged this death window — do not re-roll.
-        if (reg.all_of<CorpseLootPending>(e)) continue;
+        if (reg.all_of<Container>(e)) continue;
         dead.push_back(e);
     }
 
@@ -336,12 +330,11 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
         const std::uint32_t key =
             static_cast<std::uint32_t>(entt::to_integral(e));
 
-        CorpseLootPending pending{};
-        pending.slotCount = static_cast<std::uint8_t>(roll_mob_loot_slots(
-            m.kind, tier, floorNumber, seed ^ key, pending.slots,
+        Container box{};
+        staged += static_cast<std::uint32_t>(roll_mob_loot_slots(
+            m.kind, tier, floorNumber, seed ^ key, box.inv.slots,
             static_cast<std::uint8_t>(kMaxCorpseSlots)));
-        staged += pending.slotCount;
-        reg.emplace_or_replace<CorpseLootPending>(e, pending);
+        reg.emplace_or_replace<Container>(e, box);
     }
     return staged;
 }
@@ -390,6 +383,9 @@ std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId la
         const std::uint16_t placed =
             static_cast<std::uint16_t>(p.count - unplaced);
         if (placed == 0) continue;  // full: it stays where it is
+        // Подобранное покидает МЕСТО (живой хук supply, S12.5): носимое
+        // принадлежит агенту, а не комнате.
+        supply_item_at(reg, tr.pos, p.item, -static_cast<int>(placed));
         gained += def.value * static_cast<std::int32_t>(placed);
 
         // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
@@ -472,10 +468,10 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     for (auto e : reg.view<const Corpse, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
-        float dx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
-        float dy = playerPos.y - tr.pos.y;
-        float dz = wrap_delta_f(playerPos.z, tr.pos.z, kWorldExtent);
-        float distSq = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2 — все три оси завёрнуты одной формой ядра. Раньше y был
+        // голой разностью (труп в 2 м через y-шов «не виден» для обыска —
+        // базлайн гейта B, ужат этим коммитом).
+        const float distSq = wrap_dist2(playerPos, tr.pos, kWorldExtent);
         if (distSq < minDistSq) {
             minDistSq = distSq;
             targetCorpse = e;
@@ -504,68 +500,33 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
     // the inventory is full and nothing moves (they looked; loot stays for later).
     corpse.searched = true;
 
+    // C: сток трупа — канонический Container; ручной дрейн (ещё одна копия
+    // закона добавления, И терявшая condition — дюп-ремонт обыском) умер в
+    // пользу единственного примитива inventory_give.
     Inventory& inv = pool.inventory(selfId);
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        ItemSlot& slotItem = corpse.lootSlots[i];
-        if (!item_valid(slotItem.item) || slotItem.count == 0) continue;
-        const ItemDef& def = item_def(slotItem.item);
-
-        // Drain this corpse slot across as many inventory slots as needed.
-        // Remainder stays on the corpse when the pack is full or a stack caps —
-        // never clamp-and-discard (that was silent item loss).
-        while (slotItem.count > 0 && item_valid(slotItem.item)) {
-            int targetSlot = -1;
-            if (def.stackMax > 1) {
-                for (int s = 0; s < kInvSlots; ++s) {
-                    if (inv.slots[s].item == slotItem.item &&
-                        inv.slots[s].count < def.stackMax) {
-                        targetSlot = s;
-                        break;
-                    }
-                }
-            }
-            if (targetSlot < 0) targetSlot = inv.first_free();
-            if (targetSlot < 0) break;  // inventory full: leave remainder on corpse
-
-            std::uint16_t moved = 0;
-            if (inv.slots[targetSlot].item == slotItem.item) {
-                const std::uint16_t space = static_cast<std::uint16_t>(
-                    def.stackMax > inv.slots[targetSlot].count
-                        ? def.stackMax - inv.slots[targetSlot].count
-                        : 0);
-                if (space == 0) break;
-                moved = slotItem.count < space ? slotItem.count : space;
-                inv.slots[targetSlot].count = static_cast<std::uint16_t>(
-                    inv.slots[targetSlot].count + moved);
-            } else {
-                // Fresh slot: take up to stackMax, leave the rest on the corpse.
-                moved = slotItem.count;
-                if (def.stackMax && moved > def.stackMax)
-                    moved = def.stackMax;
-                inv.slots[targetSlot].item = slotItem.item;
-                inv.slots[targetSlot].count = moved;
-            }
-
-            slotItem.count = static_cast<std::uint16_t>(slotItem.count - moved);
-            res.roublesGained += def.value * static_cast<std::int32_t>(moved);
+    Container* box = reg.try_get<Container>(targetCorpse);
+    if (box) {
+        for (int i = 0; i < kInvSlots; ++i) {
+            ItemSlot& sl = box->inv.slots[i];
+            if (!item_valid(sl.item) || sl.count == 0) continue;
+            const std::uint16_t unplaced =
+                inventory_give(inv, sl.item, sl.count, sl.condition);
+            const std::uint16_t moved =
+                static_cast<std::uint16_t>(sl.count - unplaced);
+            if (moved == 0) break; // inventory full: remainder stays on corpse
+            res.roublesGained +=
+                item_def(sl.item).value * static_cast<std::int32_t>(moved);
             res.itemsTaken++;
             bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId,
-                        slotItem.item, tick);
-            if (slotItem.count == 0) slotItem = {};
+                        sl.item, tick);
+            sl.count = unplaced;
+            if (sl.count == 0) sl = ItemSlot{};
         }
     }
 
-    // Keep slotCount honest: count filled slots after the drain pass.
-    std::uint8_t filled = 0;
-    for (std::size_t i = 0; i < kMaxCorpseSlots; ++i) {
-        if (item_valid(corpse.lootSlots[i].item) && corpse.lootSlots[i].count > 0)
-            ++filled;
-    }
-    corpse.slotCount = filled;
-
     // [jirnyak.md] §18: empty searched corpse drops out of the interact set so
     // find_nearest_interactable / HUD stop advertising LOOT CORPSE.
-    if (corpse.searched && corpse.slotCount == 0) {
+    if (corpse.searched && (!box || box->inv.empty())) {
         if (Interactable* ia = reg.try_get<Interactable>(targetCorpse))
             ia->active = false;
     }

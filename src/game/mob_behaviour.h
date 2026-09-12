@@ -395,7 +395,7 @@ MoveMult behaviour_move_mult(MobBehaviour b, bool adjacentWall);
 
 // Outgoing melee multiplier, same shape and the same precedence over
 // `wall_bias_damage`. Not yet wired: combat.cpp already computes
-// `adjacent_wall(grid, tr.pos)` for Арматура (it is a WallBias carrier too), so the
+// `body_wall_adjacent(grid, tr.pos)` for Арматура (it is a WallBias carrier too), so the
 // hook is one line and no new query.
 float behaviour_damage_mult(MobBehaviour b, bool adjacentWall);
 
@@ -425,7 +425,7 @@ bool behaviour_claims_damage(MobBehaviour b);
 // adds the query for exactly one more kind.
 //
 // Wave 4 note for the COMBAT caller: this is the right gate there too, and it already
-// holds. combat.cpp runs `adjacent_wall` behind `has_flag(def.aiFlags, WallBias)`,
+// holds. combat.cpp runs `body_wall_adjacent` behind `has_flag(def.aiFlags, WallBias)`,
 // which is this predicate minus its behaviour half — so switching that branch to
 // `wall_query_needed(def.aiFlags, beh)` adds the query for Панельник alone and for no
 // other kind. That is what makes the two hooks below free rather than a new scan.
@@ -440,7 +440,7 @@ bool wall_query_needed(std::uint32_t aiFlags, MobBehaviour b);
 // Wave 2 filed the rest under "belong to combat, and `apply_damage` takes no
 // MacroGrid — adding one is a signature change across every caller". That reading was
 // of the wrong function: the mob-attack pass in combat.cpp already holds the grid and
-// already calls `adjacent_wall(grid, tr.pos)` one line above where these belong. No
+// already calls `body_wall_adjacent(grid, tr.pos)` one line above where these belong. No
 // signature changes, no new query, and 5 of 69 kinds pay for it.
 //
 //   braced reach    1.75 cells  PANELNIK_BRACE_REACH   (vs the row's 1.16)
@@ -820,7 +820,7 @@ bool behaviour_is_dispatched(MobBehaviour b);
 //     ALREADY runs on the line above where they belong. The wave-2 note said these
 //     "belong to combat, and `apply_damage` takes no MacroGrid" — true of
 //     `apply_damage`, but the mob-attack pass that CALLS it has the grid in hand and
-//     uses it (`wall_bias_damage(def.aiFlags, adjacent_wall(grid, tr.pos))`). The
+//     uses it (`wall_bias_damage(def.aiFlags, body_wall_adjacent(grid, tr.pos))`). The
 //     signature change that was thought to be needed is not.
 //   * **CrowdShove reads the mob's own health** (`behaviour_hurt_move_mult`). `MobRef`
 //     has carried `hp` and `maxHp` since it existed and no behaviour has ever looked at

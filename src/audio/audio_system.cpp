@@ -1,6 +1,5 @@
 // High-level engine audio coordinator and SDL3 hardware audio stream bridge implementation.
 #include "audio/audio_system.h"
-#include "game/door.h"
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <algorithm>
@@ -134,7 +133,6 @@ void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, f
                          const MacroGrid& grid, const Field<float>* dangerField,
                          const game::SamosborState& samosbor, const game::EventBus& bus,
                          const game::NoiseField& noiseField, float hudBrightness,
-                         const game::DoorSet* doors,
                          LayerId activeLayer) {
     (void)dt;
     (void)bus;

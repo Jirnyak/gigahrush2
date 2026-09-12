@@ -1,5 +1,11 @@
 # ECS — Entities, components, systems
 
+> **Сверка 2026-08-23:** таблица компонентов врёт в обе стороны —
+> `AngularVelocity`/`Rotation` МЕРТВЫ (`components.h:128`), живых
+> `RigidBody`(:151)/`ContactForm`(:179)/`CarriedBy`(:193)/`JointLink`(:207) в ней
+> нет. «Order per tick» — треть реального цикла (нет ai/wander/rigid/charge/
+> diffusion/rebake). Сверяться с `src/ecs/components.h` и `main.cpp`, не с этим доком.
+
 The engine uses **EnTT** directly, aliased to `giga::Registry` / `giga::Entity`
 so call sites don't leak the third-party type. Built with `ENTT_NOEXCEPTION` to
 match the core's `-fno-exceptions`.

@@ -12,6 +12,7 @@ layout(location = 6) flat in uint  vFlags;
 layout(location = 7) flat in float vAnimPhase;
 
 #include "material_surface.glsl"
+#include "surface_lib.glsl" // общие шум/ambient/spec (дедуп К5)
 
 #define GIGA_VOLUMETRIC_GRID_BINDINGS
 #include "volumetric_fog.glsl"
@@ -24,7 +25,6 @@ layout(location = 7) flat in float vAnimPhase;
 
 layout(push_constant) uniform Push {
     mat4 viewProj;
-    vec4 sunDir;
     vec4 camPos;
     vec4 fog;
     vec4 torus; // w = uTime (seconds)
@@ -33,35 +33,6 @@ layout(push_constant) uniform Push {
 layout(location = 0) out vec4 outColor;
 
 const float kGamma = 2.2;
-
-float hash21(vec2 p) {
-    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
-}
-
-float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float grain(vec2 uv) {
-    return vnoise(uv * 26.0) * 0.62 + vnoise(uv * 97.0) * 0.38;
-}
-
-float mottle(float sigma, float n) {
-    return exp(sigma * n - 0.5 * sigma * sigma);
-}
-
-float resolved(float px, float freq) {
-    return clamp(1.0 - px * freq * 2.2, 0.0, 1.0);
-}
 
 const uint kFamGeneric = 0u;
 const uint kFamPlaster = 1u;
@@ -149,7 +120,11 @@ float compute_prop_roughness(uint mat_id, float g_noise) {
     float sigma = kMatSurface[mid].x;
 
     float baseRoughness = 0.50;
-    if (fam == kFamSmooth || mat_id >= 3u) {
+    // Порог `|| mat_id >= 3u` ВЫРЕЗАН (аудит 2026-08-25, К1-3): остаток
+    // таблицы из четырёх материалов — он перехватывал ВСЕ материалы с
+    // id >= 3, и три семейства ниже были недостижимы (трубы/ржавчина/рубл
+    // считались формулой гладкой поверхности).
+    if (fam == kFamSmooth) {
         baseRoughness = 0.22 + sigma * 1.5;
     } else if (fam == kFamRibbed) {
         baseRoughness = 0.42 + sigma;
@@ -215,56 +190,49 @@ void main() {
     float specPow     = max(2.0 / (roughness * roughness * roughness * roughness + 1e-4) - 2.0, 1.0);
     float specIntensity = (1.0 - roughness) * 0.5;
 
-    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампочки, налобник (свет №0
+    // Прямой свет — ЕДИНЫЙ цикл по light grid: лампы этажа, фонарик в руке (свет
     // сетки), мобы, трассеры, конусы. [volumetric_fog.glsl]
     vec3 directDiffuse, directSpec;
     surface_light(vWorldPos, n_shading, V, specPow, specIntensity, pc.torus.x,
                   d, pc.fog.x, directDiffuse, directSpec);
 
     float spec = 0.0;
-    vec3 Lsun = normalize(pc.sunDir.xyz);
-    if (pc.sunDir.w > 0.0 && dot(n_shading, Lsun) > 0.0) {
-        vec3 Hsun = normalize(Lsun + V);
-        spec += pow(max(dot(n_shading, Hsun), 0.0), specPow) * specIntensity * pc.sunDir.w;
-    }
-    // Metallic Anisotropic Specular Highlight for Pipes & Industrial Metal.
-    // Масштаб — по ФАКТИЧЕСКИ пришедшему прямому свету (бывший множитель
-    // att*camPos.w знал только про налобник).
-    if (vMat == 4u || vMat == 3u) {
-        vec3 T = abs(n_shading.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-        vec3 anisotropicH = cross(n_shading, T);
-        float anisoDot = dot(anisotropicH, V);
-        float anisoSpec = pow(max(1.0 - anisoDot * anisoDot, 0.0), specPow * 0.5) * specIntensity * 1.2;
-        float directLum = dot(directDiffuse, vec3(0.2126, 0.7152, 0.0722));
-        spec += anisoSpec * directLum;
-    }
+    // Солнечный спекуляр и fill ВЫРЕЗАНЫ 2026-08-25 — солнца нет (S15).
+    // Анизотропный блик «для труб и металла» ВЫРЕЗАН (аудит 2026-08-25,
+    // К1-3): ветка держалась за id 3/4 СТАРОЙ таблицы материалов — после
+    // роста до 38 строк это ВОДА и бежевая плита; настоящие трубы
+    // (pipe_metal=19) блика не имели давно. Вернётся data-driven колонкой
+    // materials.csv, если нужен по вкусу владельца.
 
-    float fill = pc.sunDir.w * max(dot(n_shading, Lsun), 0.0);
 
-    float hemi = 0.5 + 0.5 * n_shading.z;
-    vec3 amb = pc.fog.w * mix(vec3(0.10, 0.11, 0.14), vec3(0.24, 0.23, 0.21), hemi);
+    // ЕДИНАЯ шкала ambient (К5, аудит 2026-08-25): прежние числа были в
+    // 4 РАЗА ярче стен без строки обоснования — дрейф копии, не решение.
+    // Пропы теперь живут в той же полусфере, что мир и тела.
+    vec3 amb = hemi_ambient(n_shading, pc.fog.w);
 
-    const float kAoFloor = 0.32;
     float ao = kAoFloor + (1.0 - kAoFloor) * vAo;
     float aoDirect = mix(1.0, ao, pc.torus.y);
 
-    vec3 lit = albedo * (amb * ao + (directDiffuse + vec3(fill)) * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
+    vec3 lit = albedo * (amb * ao + directDiffuse * aoDirect) + (directSpec + vec3(spec)) * aoDirect;
 
     float timeSec = pc.torus.w;
-    float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z : clamp((1.0 - pc.fog.x / (128.0 * 0.30 * 2.0)) / 0.66, 0.0, 1.0);
+    // torus.z IS the pulse: the CPU computes it every frame (main.cpp
+    // `push.torus = {kWorldExtent, kAoDirect, samosborPulse, time}`) and 0 is
+    // a legal value, not "unset". The old `> 0.0 ? : ` fallback re-derived the
+    // pulse from pc.fog.x against a hand-computed 76.8 where the CPU passes
+    // 64, so every prop pulsed at ~0.25 with no samosbor active — the bug
+    // cube.frag already had fixed ([problems.md] §20) and this file did not.
+    float samosborPulse = clamp(pc.torus.z, 0.0, 1.0);
 
     // Volumetric fog raymarching with world-aligned light grid & Samosbor pulse
-    vec4 fogVol = march_volumetric_fog(
+    float fogT = march_volumetric_fog(
         pc.camPos.xyz,
         normalize(vWorldPos - pc.camPos.xyz),
         min(d, pc.fog.y),
         gl_FragCoord.xy,
-        pc.sunDir.xyz,
-        pc.sunDir.w,
-        pc.torus.x,
         samosborPulse
     );
-    lit = lit * fogVol.a + fogVol.rgb;
+    lit = lit * fogT;
 
     // Emissive term with time-based animation and Samosbor pulse scaling
     float animEmissive = compute_animated_emissive(vEmissive, vFlags & 7u, vWorldPos, vAnimPhase, timeSec, samosborPulse);
@@ -280,7 +248,7 @@ void main() {
 
     vec3 srgb = pow(max(lit, vec3(0.0)), vec3(1.0 / kGamma));
 
-    float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    float ign = ign_jitter(gl_FragCoord.xy); // одна копия, volumetric_fog.glsl
     srgb += (ign - 0.5) / 255.0 * (1.0 - fog);
 
     outColor = vec4(srgb, 1.0);

@@ -19,32 +19,64 @@ inline int& axis(ivec3& v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); 
 
 } // namespace
 
-int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
-    // Walk toward b's NEAREST IMAGE on the wrapping axes. Working in a coordinate
-    // frame anchored at `a` means the traversal never has to think about the seam:
-    // it walks a straight segment in unwrapped space and wraps only when it asks the
-    // grid a question, which is what `MacroGrid::cell` already does for us.
-    const vec3 d{wrap_delta_f(a.x, b.x, kWorldExtent),
-                 wrap_delta_f(a.y, b.y, kWorldExtent),
-                 b.z - a.z};
 
-    // Amanatides–Woo: step cell by cell along the segment, always advancing the axis
-    // whose next boundary is nearest. Exact — it visits every cell the segment
-    // touches and no others.
-    ivec3 cell{static_cast<int>(std::floor(a.x / kCellSize)),
-               static_cast<int>(std::floor(a.y / kCellSize)),
-               static_cast<int>(std::floor(a.z / kCellSize))};
-    const ivec3 startCell = cell;
 
-    ivec3 endCell{static_cast<int>(std::floor((a.x + d.x) / kCellSize)),
-                  static_cast<int>(std::floor((a.y + d.y) / kCellSize)),
-                  static_cast<int>(std::floor((a.z + d.z) / kCellSize))};
-    if (cell.x == endCell.x && cell.y == endCell.y && cell.z == endCell.z) return 0;
+namespace {
+
+// Мировой субвоксельный индекс → (клетка, субвоксель). Честное деление с полом,
+// без битовых допущений о kSubDim ([world/types.h]: переключение на 16 обязано
+// остаться однострочником) и без UB на отрицательных.
+inline void split_sub(int v, int& c, int& s) {
+    c = v >= 0 ? v / kSubDim : (v - (kSubDim - 1)) / kSubDim;
+    s = v - c * kSubDim;
+}
+
+// Твёрдость субвокселя по мировому субвоксельному индексу; MacroGrid оборачивает
+// макро-координаты сам, обе оси и z тоже (тор по всем трём — [AGENTS.md]).
+inline bool sub_solid(const MacroGrid& grid, const ivec3& v) {
+    int cx, cy, cz, sx, sy, sz;
+    split_sub(v.x, cx, sx);
+    split_sub(v.y, cy, sy);
+    split_sub(v.z, cz, sz);
+    return grid.solid(cx, cy, cz, sx, sy, sz);
+}
+
+} // namespace
+
+bool sub_march(const MacroGrid& grid, const vec3& a, const vec3& b,
+               SubRayHit& out) {
+    const vec3 d{b.x - a.x, b.y - a.y, b.z - a.z};
+
+    ivec3 sv{static_cast<int>(std::floor(a.x / kVoxelSize)),
+             static_cast<int>(std::floor(a.y / kVoxelSize)),
+             static_cast<int>(std::floor(a.z / kVoxelSize))};
+
+    auto fill = [&](float t, int hitAxis, float hitSign) {
+        out.t = t;
+        int sx, sy, sz;
+        split_sub(sv.x, out.cx, sx);
+        split_sub(sv.y, out.cy, sy);
+        split_sub(sv.z, out.cz, sz);
+        out.cx = wrap_macro(out.cx);
+        out.cy = wrap_macro(out.cy);
+        out.cz = wrap_macro(out.cz);
+        out.sx = sx;
+        out.sy = sy;
+        out.sz = sz;
+        out.axis = hitAxis;
+        out.sign = hitSign;
+    };
+
+    // Старт в материи — контакт на месте, грани входа нет.
+    if (sub_solid(grid, sv)) {
+        fill(0.0f, -1, 0.0f);
+        return true;
+    }
 
     ivec3 stepDir{0, 0, 0};
     vec3 tMax{0.0f, 0.0f, 0.0f};
     vec3 tDelta{0.0f, 0.0f, 0.0f};
-    constexpr float kNever = 3.0e30f;   // "this axis never crosses a boundary"
+    constexpr float kNever = 3.0e30f;   // «эта ось границ не пересекает»
 
     for (int i = 0; i < 3; ++i) {
         const float di = axis(d, i);
@@ -56,22 +88,18 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
         }
         const int s = di > 0.0f ? 1 : -1;
         axis(stepDir, i) = s;
-        // Distance, in units of the whole segment, to the next boundary on this axis.
         const float origin = axis(a, i);
-        const int c = axis(cell, i);
+        const int c = axis(sv, i);
         const float boundary =
-            static_cast<float>(s > 0 ? c + 1 : c) * kCellSize;
+            static_cast<float>(s > 0 ? c + 1 : c) * kVoxelSize;
         axis(tMax, i) = (boundary - origin) / di;
-        axis(tDelta, i) = kCellSize / std::fabs(di);
+        axis(tDelta, i) = kVoxelSize / std::fabs(di);
     }
 
-    int blockers = 0;
-    // One cell per iteration; the bound is the Manhattan cell distance plus slack,
-    // so a degenerate segment cannot spin. `kWorldExtent / kCellSize` is the whole
-    // grid, and no minimal-image segment is longer than half of it per axis.
-    const int guard = 3 * kMacroDim + 3;
+    // Тот же страховочный потолок, что у los_blockers, в субвоксельном масштабе;
+    // реальный выход из цикла — `best > 1`, отрезок шага короток.
+    const int guard = 3 * kMacroDim * kSubDim + 3;
     for (int i = 0; i < guard; ++i) {
-        // Advance along whichever axis reaches its next boundary first.
         int stepAxis = 0;
         float best = axis(tMax, 0);
         for (int k = 1; k < 3; ++k) {
@@ -80,33 +108,71 @@ int los_blockers(const MacroGrid& grid, const vec3& a, const vec3& b) {
                 stepAxis = k;
             }
         }
-        if (best > 1.0f) break;            // past b: the segment is done
-        axis(cell, stepAxis) += axis(stepDir, stepAxis);
+        if (best > 1.0f) break;            // отрезок кончился в воздухе
+        axis(sv, stepAxis) += axis(stepDir, stepAxis);
+        const float tEnter = best;
         axis(tMax, stepAxis) += axis(tDelta, stepAxis);
 
-        const bool isEnd = cell.x == endCell.x && cell.y == endCell.y &&
-                           cell.z == endCell.z;
-        const bool isStart = cell.x == startCell.x && cell.y == startCell.y &&
-                            cell.z == startCell.z;
-        if (isStart || isEnd) {
-            if (isEnd) break;              // reached the far end; nothing beyond it
-            continue;                      // the cell we set out from never blocks
+        if (sub_solid(grid, sv)) {
+            fill(tEnter, stepAxis,
+                 axis(stepDir, stepAxis) > 0 ? -1.0f : 1.0f);
+            return true;
         }
-
-        // Off the top or the bottom of the stack: there is nothing there to see
-        // through, so it blocks. z does not wrap ([AGENTS.md]: W and the vertical
-        // extent of the stack are not toroidal the way x/y are).
-        if (cell.z < 0 || cell.z >= kMacroDim) {
-            ++blockers;
-            continue;
-        }
-        if (grid.cell(cell.x, cell.y, cell.z) != kCellAir) ++blockers;
     }
-    return blockers;
+    return false;
 }
 
-bool los_clear(const MacroGrid& grid, const vec3& a, const vec3& b) {
-    return los_blockers(grid, a, b) == 0;
+// Толщина материи вдоль отрезка В КЛЕТКАХ-ЭКВИВАЛЕНТАХ: счёт СОЛИДНЫХ
+// субвокселей на DDA-пути / kSubDim, с потолком вверх (тонкая лепленая
+// стена в 2 атома обязана дать 1, не 0). Заменяет клеточный los_blockers
+// у звука (аудит 2026-08-25, К1-9): клеточный предикат на лепленом этаже
+// (полных клеток 0.4%) почти никогда не видел заслона — окклюзия звука
+// была no-op. Та же DDA-шагалка, что sub_march — второго марша нет (S11),
+// отличие только в вопросе («сколько материи» против «первый контакт»).
+int sub_thickness_cells(const MacroGrid& grid, const vec3& a, const vec3& b) {
+    const vec3 d{b.x - a.x, b.y - a.y, b.z - a.z};
+    ivec3 sv{static_cast<int>(std::floor(a.x / kVoxelSize)),
+             static_cast<int>(std::floor(a.y / kVoxelSize)),
+             static_cast<int>(std::floor(a.z / kVoxelSize))};
+    int solidSteps = sub_solid(grid, sv) ? 1 : 0;
+
+    ivec3 stepDir{0, 0, 0};
+    vec3 tMax{0.0f, 0.0f, 0.0f};
+    vec3 tDelta{0.0f, 0.0f, 0.0f};
+    constexpr float kNever = 3.0e30f;
+    for (int i = 0; i < 3; ++i) {
+        const float di = axis(d, i);
+        if (di > -1e-9f && di < 1e-9f) {
+            axis(stepDir, i) = 0;
+            axis(tMax, i) = kNever;
+            axis(tDelta, i) = kNever;
+            continue;
+        }
+        const int s = di > 0.0f ? 1 : -1;
+        axis(stepDir, i) = s;
+        const float origin = axis(a, i);
+        const int c = axis(sv, i);
+        const float boundary =
+            static_cast<float>(s > 0 ? c + 1 : c) * kVoxelSize;
+        axis(tMax, i) = (boundary - origin) / di;
+        axis(tDelta, i) = kVoxelSize / std::fabs(di);
+    }
+    const int guard = 3 * kMacroDim * kSubDim + 3;
+    for (int i = 0; i < guard; ++i) {
+        int stepAxis = 0;
+        float best = axis(tMax, 0);
+        for (int k = 1; k < 3; ++k) {
+            if (axis(tMax, k) < best) {
+                best = axis(tMax, k);
+                stepAxis = k;
+            }
+        }
+        if (best > 1.0f) break;
+        axis(sv, stepAxis) += axis(stepDir, stepAxis);
+        axis(tMax, stepAxis) += axis(tDelta, stepAxis);
+        if (sub_solid(grid, sv)) ++solidSteps;
+    }
+    return (solidSteps + kSubDim - 1) / kSubDim; // потолок вверх
 }
 
 } // namespace giga

@@ -29,12 +29,32 @@ static void test_keybind_registry_rules() {
     CHECK(keybind_register_defaults(defaults));
     CHECK(defaults.find("fly") != nullptr);
     CHECK(defaults.find("menu") != nullptr);
-    CHECK(defaults.find("floor_up") != nullptr);
     CHECK(defaults.find("jump") != nullptr);
-    CHECK(defaults.find("attr_str") != nullptr);
-    CHECK(defaults.find("attr_agi") != nullptr);
-    CHECK(defaults.find("attr_int") != nullptr);
-    CHECK(defaults.find("attr_str")->scancode == scan::k1);
+    CHECK(defaults.find("interact") != nullptr);
+    // ОБЛЕГЧЕНИЕ на P (решение владельца 2026-08-28: «оба канала + спец
+    // клавиша» — явное исключение из закона чистки).
+    CHECK(defaults.find("relief") != nullptr &&
+          defaults.find("relief")->scancode == scan::kP);
+    // ЧИСТКА 2026-08-28 (вердикт владельца): дев-строки и разовые действия
+    // с предметами сняты с клавиатуры и живут консольными командами.
+    // Пин обратной полярности: они обязаны ОТСУТСТВОВАТЬ, иначе тихо
+    // вернутся вместе с чужой правкой.
+    CHECK(defaults.find("attr_str") == nullptr);
+    CHECK(defaults.find("attr_agi") == nullptr);
+    CHECK(defaults.find("attr_int") == nullptr);
+    CHECK(defaults.find("floor_up") == nullptr);
+    CHECK(defaults.find("floor_down") == nullptr);
+    CHECK(defaults.find("elevator") == nullptr);
+    CHECK(defaults.find("heal") == nullptr);
+    CHECK(defaults.find("eat") == nullptr);
+    CHECK(defaults.find("drink") == nullptr);
+    CHECK(defaults.find("possess") == nullptr);
+    CHECK(defaults.find("grenade") == nullptr);
+    CHECK(defaults.find("craft") == nullptr);
+    CHECK(defaults.find("scrap") == nullptr);
+    // ...и интеракция не делит клавишу ни с чем.
+    CHECK(defaults.find("fly_ascend") != nullptr); // ось полёта жива
+    CHECK(defaults.conflicts("interact") == 0);
 }
 
 static void test_keybind_defaults_resolve_in_console() {
@@ -62,21 +82,30 @@ static void test_keybind_defaults_resolve_in_console() {
 static void test_keybind_scancode_dispatch() {
     KeybindTable t;
     CHECK(keybind_register_defaults(t));
-    // Q is BOTH the fly-descend axis and the door command; dispatch must find
-    // the command row (axis rows are polled, not dispatched).
-    const KeyBind* q = t.find_scancode(scan::kQ);
-    CHECK(q != nullptr);
-    CHECK(std::strcmp(q->action, "door") == 0);
+    // ЕДИНАЯ ИНТЕРАКЦИЯ (решение владельца 2026-08-28): строка "door" (Q)
+    // умерла — двери слушают interact (E), как терминал/ящик. Q остаётся
+    // только полётной осью (axis rows are polled, not dispatched).
+    // ЧИСТКА 2026-08-28: интеракция на F; Q/E остаются ОСЯМИ полёта —
+    // осевые строки поллятся, а не диспатчатся, поэтому find_scancode их
+    // не возвращает.
+    CHECK(t.find_scancode(scan::kQ) == nullptr);
+    CHECK(t.find_scancode(scan::kE) == nullptr);
+    const KeyBind* fKey = t.find_scancode(scan::kF);
+    CHECK(fKey != nullptr);
+    CHECK(std::strcmp(fKey->action, "interact") == 0);
     // W is only an axis row — no command to dispatch.
     CHECK(t.find_scancode(scan::kW) == nullptr);
     // A key nothing is bound to.
     CHECK(t.find_scancode(200) == nullptr);
     // The dual use above is by design, not a conflict; two COMMAND rows on one
     // key would be.
-    CHECK(t.conflicts("door") == 0);
-    CHECK(t.rebind("heal", scan::kQ)); // heal onto Q too -> real ambiguity
-    CHECK(t.conflicts("door") == 1);
-    CHECK(t.conflicts("heal") == 1);
+    CHECK(t.conflicts("interact") == 0);
+    // Реальная неоднозначность: две КОМАНДНЫЕ строки на одной клавише
+    // (inventory поверх interact на E — heal-строки больше нет, чистка
+    // 2026-08-28).
+    CHECK(t.rebind("inventory", scan::kF));
+    CHECK(t.conflicts("interact") == 1);
+    CHECK(t.conflicts("inventory") == 1);
 }
 
 static void test_keybind_rebind_bounds() {

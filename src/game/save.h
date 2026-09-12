@@ -17,7 +17,7 @@
 //     floor 0 against 138 MB raw; disk is free at save points, [jirnyak.md] §6),
 //     stamped back verbatim on load. State beats history where it matters: the
 //     snapshot un-carves post-F5 holes, which no replay could. Doors still reset on
-//     load (door_build re-stamps its leaves AFTER the snapshot, keeping DoorSet and
+//     load (двери — МОГИЛА 2026-08-28, полотен нет; исторический контекст:
 //     cells agreed).
 //   * **Monsters.** They are destroyed on unload and re-rolled deterministically per
 //     (floor, seed) on entry ([monsters.md]). A monster has no macro existence to
@@ -64,6 +64,7 @@
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
 #include "game/samosbor.h"    // SamosborState (SAVCLOCK v10)
 #include "game/fast_travel.h" // FastTravelState (SAVCLOCK v10)
+#include "world/anchor.h"     // SubVoxelAnchor — якорь в записи пропа (v20/F)
 #include "world/destruct.h"   // CarveOp, CarveScratch, CarveResult, carve_sphere
 #include "world/level_stack.h"  // LayerId, and World via world/world.h
 
@@ -74,6 +75,7 @@ namespace giga::game {
 // `save.cpp` includes game/floor_stream.h, which defines both.
 class FloorRegistry;
 class FloorStreamer;
+class EventBus; // spawn_prop_records публикует PropDetached (закон 3)
 
 // On-disk bytes spell "GH2S". Written little-endian byte by byte, so the four
 // leading bytes of a save file are readable in a hex dump on any host.
@@ -127,7 +129,7 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // is built to prevent. [samosbor.h] [fast_travel.h] SAVCLOCK
 //
 // Version 11: Needs grows `hpBank` (+4 on the wire) — the crowd heal bank behind
-// the IntentHeal -> Medical affordance ([room_zone.h] TABLE 2). Version 10 saves
+// the IntentHeal heal bank (умершая комнатная регенерация). Version 10 saves
 // are rejected, same standing rule as above.
 //
 // Version 12: the crafting bank shrinks from nine axes to eight (-4 on the wire)
@@ -159,16 +161,34 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // both a floor re-entry and a save. The old mechanism is deleted, not wrapped:
 // two writers stamping the same crate is how they disagree. [barter increment A]
 // Version 16 / SAVBANK: the BANK ACCOUNT travels — deposit, loan principal +
-// accrued, lifetime interest counters, credit limit, band and the 24-entry op
-// ring ([economy.h] BankAccount, wired to the Duty clerk's counter and to the
-// sim tick this same day; problems.md §52's bank_step entry closes with it).
+// accrued, lifetime interest counters, credit limit and band ([economy.h]
+// BankAccount, wired to the Duty clerk's counter and to the sim tick this same
+// day; problems.md §52's bank_step entry closes with it). The 24-entry op ring
+// travelled v16..v18 and was cut in v19 (write-only history, no reader).
 // `lastInterestTick` deliberately does NOT travel: the sim clock restarts every
 // session, so a saved tick would be a lie in a new one — the loader re-arms the
 // clock at the current tick instead, costing at most one 60-second period of
-// interest per reload and making save-scumming interest impossible. Entry ticks
-// in the ring are session-relative history and ride as-is (cosmetic). v15 saves
+// interest per reload and making save-scumming interest impossible. v15 saves
 // are rejected, standing rule.
-inline constexpr std::uint32_t kSaveVersion = 16u;
+// v17 (2026-08-21): контейнер несёт канонический Inventory (64 слота, B3
+// one-container.md) — решение владельца: миграции нет, старые сейвы
+// отклоняются, ящики пересеются.
+// v19 (2026-08-27): кольцо BankEntry ledger[24] + entries СНЕСЕНЫ из
+// BankAccount (вердикт владельца: write-only история без единого читателя в
+// игре, §35-класс) — банк-блок ужат 289 → 45 Б. Стандартное правило: старые
+// сейвы отклоняются.
+// v20 (2026-08-29, CANON S20.6 инкремент F): секции сущностей —
+// ContainerRecord-ряды, трупы, обломки — ПЕРЕЕХАЛИ в floor_<N>.sav v3
+// (у состояния этажа ровно один дом: материя И сущности в одном снимке,
+// под одним ключом модуля). run.sav несёт только БЕГ: леджер, контракты,
+// игрок, прогрессия, часы, банк, квесты, макромир. OpenedContainerKey
+// (позиционный ключ, коллизия ~13% Residential) мёртв вместе с матчингом —
+// restore не матчит, он спавнит из самодостаточных записей. Header-поле
+// containerCount осталось в 64-байтовой шапке и обязано быть 0.
+// v22 (2026-08-31, две руки): PlayerRanged = GunHand[2] (свой магазин/
+// затвор/кулдаун на руку — акимбо-агностика владельца). Отдельного
+// throw-таймера НЕТ: кулдаун руки — «рука занята действием».
+inline constexpr std::uint32_t kSaveVersion = 22u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -224,6 +244,7 @@ enum class SaveError : std::uint8_t {
     LayoutMismatch,      // a serialized struct changed size in this build
     SizeMismatch,        // declared payload length disagrees with its own contents
     BadChecksum,         // payload corrupt
+    ModuleChanged,       // floor file v3: kind/seed/genVersion ≠ ключ модуля (S20.6 закон 4)
     Count
 };
 const char* save_error_text(SaveError e);
@@ -291,12 +312,15 @@ static_assert(kRpgWire == 12);
 // Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)
 // + presence flag + cumulative melee kills. Cooldowns ride so a mid-reload F5
 // does not free-fire on F9; hasRanged keeps lazy-attach honest (elevator rule).
+// v21 (две руки): GunHand поле-за-полем на КАЖДУЮ руку (cd, reload, mag,
+// weapon = 8 Б × 2) + shots/hits + throwCooldownMs (бросок — свой таймер,
+// руки независимы). 16 → 26.
 inline constexpr std::size_t kRangedWire =
-    2 + 2 + 2 + 2 + 4 + 4;  // cd, reload, mag, weapon, shots, hits = 16
-static_assert(kRangedWire == 16);
+    2 * (2 + 2 + 2 + 2) + 4 + 4;  // hand[2] + shots, hits = 24
+static_assert(kRangedWire == 24);
 inline constexpr std::size_t kCombatSaveWire =
-    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 21
-static_assert(kCombatSaveWire == 21);
+    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 29
+static_assert(kCombatSaveWire == 29);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
 // 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
 inline constexpr std::size_t kStatusWire =
@@ -313,19 +337,20 @@ static_assert(kSamosborWire == 17);
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
 // Version 16 / SAVBANK: BankAccount field by field (NOT sizeof — tail padding),
-// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + entries
-// + band + 24 entries x (amount 4 + tick 4 + op 1 + band 1).
-inline constexpr std::size_t kBankWire =
-    5 * 8 + 4 + 4 + 1 + kBankLedgerSlots * 10;  // 289
-static_assert(kBankWire == 289);
-// v15 records. A container row is its key + the whole component: 5 (key) + 1
-// (kind) + 1 (opened) + 4 slots x 5 B ([inventory] cell wire) = 27. A corpse row
-// is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) + 3 (mobKind /
-// slotCount / searched) + 8 slots x 5 B = 81. `deathTick` deliberately does NOT
-// travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
+// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + band.
+// v19: кольцо ledger[24] + entries умерли вместе со структурой (289 → 45).
+inline constexpr std::size_t kBankWire = 5 * 8 + 4 + 1;  // 45
+static_assert(kBankWire == 45);
+// Записи трупов/обломков живут в floor_<N>.sav v3 (v20); ширины прежние.
+// A corpse row is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) +
+// 2 (mobKind / searched) + 64 slots x 5 B = 360. `deathTick` deliberately does
+// NOT travel: nothing in src/ reads it back (grep 2026-08-17 — one write, zero
 // reads), and serializing a column with no consumer is [problems.md] §35's class.
-inline constexpr std::size_t kContainerRecWire = 5 + 1 + 1 + 4 * 5;   // 27
-inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 3 + 8 * 5;     // 81
+// B3 (v17): держатель канонический — 64 ItemSlot вместо 4 POD-троек.
+inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 2 + 64 * 5;    // 360
+// v18: сорванный проп — 2 (floor) + 3 × 12 (pos/half/colour) + 3 × 4 (масса и
+// контактная пара) + 1 (флаг сферы) = 51.
+inline constexpr std::size_t kDebrisRecWire = 2 + 36 + 12 + 1;        // 51
 inline constexpr std::size_t kSaveFixedWire =
     kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
     kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kBankWire +
@@ -379,104 +404,139 @@ inline constexpr std::size_t kFactionWire =
 // decodes every existing save into a subtly different floor.
 inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
-// Exact byte count `save_write` will produce for the given section sizes. The
-// bare `+ 4` is the corpse-count u32: corpses ride AFTER the container rows the
-// header already counts, so their count lives inline in the payload rather than
-// growing the 64-byte header.
-inline constexpr std::size_t save_bytes_for(std::size_t containerCount,
-                                            std::size_t corpseCount = 0,
-                                            std::size_t poolBytes = 0,
+// Exact byte count `save_write` will produce for the given section sizes.
+// v20: секций сущностей в run.sav больше нет — они в floor_<N>.sav v3.
+inline constexpr std::size_t save_bytes_for(std::size_t poolBytes = 0,
                                             std::size_t macroBytes = 0) {
-    return kSaveHeaderWire + kSaveFixedWire + kFactionWire +
-           containerCount * kContainerRecWire + 4 +
-           corpseCount * kCorpseRecWire + poolBytes + macroBytes;
+    return kSaveHeaderWire + kSaveFixedWire + kFactionWire + poolBytes +
+           macroBytes;
 }
 
 // ---------------------------------------------------------------------------
-// A crate, identified by something that survives a restart
+// Записи трупов и обломков (v15/v18; с v20 живут в floor_<N>.sav v3)
 // ---------------------------------------------------------------------------
-// (The key predates v15 and kept its name: renaming it would touch every test
-// that spells it for zero wire change. It stopped meaning "this crate was
-// opened" and now means "this crate", full stop — the v15 record it keys
-// carries the whole component, opened flag included.)
-// `Container` state lives in an ECS component ([container.h]), i.e. it is
-// per-ENTITY — and an entity id is the one thing that is guaranteed NOT to be stable.
-// The crates are destroyed and respawned on every floor entry
-// ([main.cpp] refresh_floor_containers), and EnTT recycles handles, so an `entt::entity`
-// written to disk names a different object on the next run, or nothing at all.
-//
-// So the key is what the GENERATOR is a function of: the floor number, plus the macro
-// cell the crate stands in. `spawn_floor_containers` is deterministic in
-// (floorNumber, seed) and places each crate at a wrapped macro cell, so the same crate
-// reappears in the same cell every visit and the pair (floor, cell) reproduces.
-//
-// **The honest limitation, with the number:** the generator's own spawn index `i` would
-// be a perfect key, and it is not recoverable — nothing stores it on the entity and
-// `Container` has no room for it. The cell is therefore a key that can collide. Worked
-// out for Residential, the densest case: stride 8 gives 16x16 = 256 rooms, each offering
-// a 5x5 block of interior offsets (`ox`/`oy` in [2, 7), [container.cpp]), so 6,400
-// candidate cells for `container_budget` = 256/6 = 42 draws. Expected colliding pairs
-// C(42,2)/6400 = 0.135, i.e. **one collision on about 13% of Residential floors**. When
-// it happens, ONE record stamps BOTH crates (v15): the second crate's own rolled
-// contents are shadowed by the first's — a crate's roll lost, never an item
-// duplicated, because refresh scans live entities and a scan cannot invent items. The strong fix is one `std::uint16_t spawnIndex` on `Container`, set
-// by `spawn_floor_containers`; that is an edit to `container.h`, which this lane does not
-// own, so the cell key ships and the collision is measured rather than hidden.
-//
-// The floor is the signed FLOOR NUMBER, never a `LayerId` (a recycled storage slot,
-// [floors.md]) and never `NpcPool::floor()`.
-//
-// **Corrected 2026-07-29:** the reason given here used to be that `NpcPool::floor()` is
-// a `std::uint16_t` storing floor -50 as 65486. That is no longer true — the column is
-// `std::int16_t` today ([npc_pool.h], widened with the demo stack's negative labels as
-// the stated reason), so a negative label round-trips through it fine. The live reason
-// is different and stronger: that column is written in exactly ONE place,
-// `seed_floor_from_spec` ([population.cpp]), and read in NONE. Nothing updates it when
-// the player travels — `ride_elevator` writes `pool.cz` and nothing else — so it names
-// the floor a record was SEEDED on, not the floor its body is standing on. For the
-// player those two diverge on the first elevator ride.
-struct OpenedContainerKey {
-    std::int16_t floor = 0;     // in-game floor number, [-127, 127]
-    std::uint8_t cx = 0;        // macro cell, already wrapped onto [0, 128)
-    std::uint8_t cy = 0;
-    std::uint8_t cz = 0;
-    std::uint8_t pad_ = 0;      // keeps the struct 6 B and trivially comparable
-};
-static_assert(sizeof(OpenedContainerKey) == 6);
-
-inline bool same_container(const OpenedContainerKey& a, const OpenedContainerKey& b) {
-    return a.floor == b.floor && a.cx == b.cx && a.cy == b.cy && a.cz == b.cz;
-}
-
-// The key a crate at `pos` on floor `floorNumber` would be saved under. Pure; exposed
-// so a test can key a crate without a registry.
-OpenedContainerKey container_key(int floorNumber, const vec3& pos);
-
-// ---------------------------------------------------------------------------
-// v15 records — the world's containers and corpses, whole
-// ---------------------------------------------------------------------------
-// One crate: its key plus the COMPONENT, verbatim. Carrying `Container` itself
-// rather than a projection is the point — the search screen mutates the
-// component ([inventory.md]), so any field it can touch is state, and a record
-// that picked fields would silently drop the next one the screen learns to edit.
-struct ContainerRecord {
-    OpenedContainerKey key{};
-    Container c{};
-};
+// OpenedContainerKey и ContainerRecord МЕРТВЫ (v20/F): позиционный ключ
+// (floor, клетка) коллидировал на ~13% Residential-этажей по собственной
+// честной оценке, а матчинг «пересеять и проштамповать» умер вместе с
+// пересевом — restore не сеет, ящик-проп едет PropRecord-ом с инвентарём
+// внутри ([FloorEntityState] выше).
 
 // One fallen body. Everything `finalize_deaths` derived from the live body at
 // the moment of death — the flattened AABB, the darkened tint, the exact resting
 // position — is recorded rather than re-derived, because the body it was derived
 // FROM no longer exists on a revisit. `deathTick` does not travel (no reader).
+// v18: СОРВАННЫЙ ПРОП — сбитая лампа, упавший щиток, брошенный стендовый мяч
+// (решение владельца 2026-08-21: «сейвить позицию» — обломок часть мира, а не
+// мусор кадра). Поза НЕ сейвится, как у трупа: тело пересобирается и ложится
+// заново физикой. Форма — сфера или бокс, как её вывел детач; контактные
+// параметры уже сведены из материала при отрыве, поэтому едут числами, а не
+// ссылкой на строку таблицы, которая может переехать ([save.h] о сдвиге ids).
+struct DebrisRecord {
+    std::int16_t floor = 0;
+    vec3 pos{};
+    vec3 half{};   // габарит бокса; у сферы — все три равны радиусу
+    vec3 colour{};
+    float massKg = 1.0f;
+    float restitution = 0.3f;
+    float friction = 0.5f;
+    std::uint8_t sphere = 0; // 1 — тело-сфера (нет ContactForm)
+};
+
 struct CorpseRecord {
     std::int16_t floor = 0;      // signed floor label, same convention as the key
     vec3 pos{};                  // exact resting position, not a cell
     vec3 colour{};               // the darkened body tint finalize computed
     vec3 half{};                 // the flattened silhouette
     std::uint8_t mobKind = 0xFF; // MobKind, or 0xFF for an NPC's body
-    std::uint8_t slotCount = 0;
     std::uint8_t searched = 0;
-    ItemSlot slots[kMaxCorpseSlots] = {};
+    // C (v17): лут трупа — канонический Inventory (Container-компонент);
+    // спилл сумки может занять больше восьми роллов, запись несёт все 64.
+    // half сохраняется как есть (труп больше не плющится: RagdollRoll).
+    Inventory inv{};
+};
+
+// ---------------------------------------------------------------------------
+// v20 / floor file v3 — СУЩНОСТИ ЭТАЖА В СНИМКЕ (CANON S20.6, инкремент F)
+// ---------------------------------------------------------------------------
+// Этаж помнит ВСЁ накопленное: материю И сущности. Записи самодостаточные
+// POD-ы — идентичность сущности снимка есть сама её запись; ни entt-хэндла
+// (переиспользуется), ни позиционного ключа (OpenedContainerKey коллидировал
+// на ~13% Residential-этажей и умер вместе с матчингом: restore не сеет и не
+// матчит, он СПАВНИТ из записей). Ссылок между записями нет по построению:
+// линки и CarriedBy транзиентны (жнец связей, E-1), антураж — чистая функция
+// грида (перебейк), DoorRef кнопки — индекс закона door_declare, валидный под
+// той же версией генерации модуля (закон 4 гейтит снимок целиком).
+
+// Один проп этажа — строка props.csv + якорь + изменяемое состояние.
+// Ящик — это проп (S14.1): его инвентарь едет флагом kPropRecHasContainer.
+// Сорванный проп (kPropRecDetached) сохраняет ИДЕНТИЧНОСТЬ — прежний
+// DebrisRecord возвращал сбитую лампу серым ящиком без строки и света;
+// теперь запись без якоря пересобирает проп и кладёт его физикой заново.
+inline constexpr std::uint8_t kPropRecDetached = 1u << 0;
+inline constexpr std::uint8_t kPropRecInactive = 1u << 1; // Interactable.active == false
+inline constexpr std::uint8_t kPropRecHasContainer = 1u << 2;
+
+struct PropRecord {
+    std::uint16_t propId = 0;   // строка props.csv (PropId)
+    std::uint8_t flags = 0;     // kPropRec*
+    vec3 pos{};
+    float yaw = 0.0f;
+    // Ориентация ТЕЛА лежащего пропа (v4, 2026-08-31): без неё загрузка
+    // ставила упавший проп «стоймя» в позу yaw — restore шёл через
+    // prop_detach, а тот сеет q из yaw. Осмыслена под kPropRecDetached;
+    // у якорной статики ориентация — сам yaw, как и была.
+    quat q{};
+    std::uint8_t animPhase = 0;
+    std::uint8_t meshFlags = 0; // PropMesh.flags как есть (мерцание и пр.)
+    SubVoxelAnchor anchor{};    // осмыслен только без kPropRecDetached
+    std::uint32_t doorGroup = 0xFFFFFFFFu; // DoorRef (kNoPortal = нет)
+    Container box{};            // осмыслен только под kPropRecHasContainer
+};
+
+// Лут на полу — раньше терялся целиком (unload подметал Pickup без записи).
+struct PickupRecord {
+    std::uint16_t item = 0;      // ItemId
+    std::uint16_t count = 0;
+    std::uint8_t condition = 255;
+    vec3 pos{};
+};
+
+// Все сущности одного этажа, как их несёт floor_<N>.sav v3. Собирается
+// gather_floor_entities на выходе с этажа, применяется spawn_*_records на
+// restore-ветке. Секции контейнеров/трупов/обломков в run.sav мертвы с v20 —
+// у состояния этажа ровно один дом.
+struct FloorEntityState {
+    std::vector<PropRecord> props;
+    std::vector<CorpseRecord> corpses;
+    std::vector<PickupRecord> pickups;
+    std::vector<DebrisRecord> debris; // тела БЕЗ PropOf (мяч стенда и т.п.)
+    // Обесточка: ключи разрушенных щитков ЭТОГО этажа ([combat.h] cell_key).
+    // PowerGridState чистится на каждом прибытии (бесэтажные ключи гасили те
+    // же клетки на всех этажах — межэтажный дефект умер этой же правкой) и
+    // восстанавливается отсюда на restore.
+    std::vector<std::uint64_t> powerKeys;
+    // Репутация комнат (S13.6, решение владельца 2026-09-05: «здесь
+    // убивали» переживает выгрузку этажа — S20.6 «этаж помнит всё»).
+    // НАКОПЛЕННОЕ, не декларация (закон масок S18): комнаты пересоздаются
+    // rooms_declare детерминированно, порядок объявления и есть ключ —
+    // секция пишется по индексу комнаты, без id.
+    std::vector<std::int16_t> roomReps;
+};
+
+// Проводные ширины записей. Якорь: клетка 3×u8 (макро-координаты — байты по
+// построению) + субвоксель 3×u8 + грань u8 = 7.
+inline constexpr std::size_t kPropRecWire =
+    2 + 1 + 12 + 4 + 16 + 1 + 1 + 7 + 4;                  // 48: +16 = q (v4)
+inline constexpr std::size_t kPropRecContainerWire = 1 + 1 + 64 * 5; // 322
+inline constexpr std::size_t kPickupRecWire = 2 + 2 + 1 + 12;        // 17
+
+// Ключ модуля, которому обязан отвечать снимок (закон 4): kind И seed И
+// версия генерации. Любое несовпадение = «модуль изменился» → снимок
+// инвалидируется целиком, этаж перегенерируется девственным.
+struct FloorModuleKey {
+    std::uint8_t kind = 0;        // FloorKind
+    std::uint32_t seed = 0;       // сид модуля (FloorModule.seed)
+    std::uint32_t genVersion = 0; // module_gen_version(kind)
 };
 
 // ---------------------------------------------------------------------------
@@ -496,18 +556,43 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // A page is 512 materials and almost never 512 distinct ones, so the raw form
 // spent 1024 B on what usually needs a dozen. Nothing about the material model
 // changed — a page may still hold any mix of atoms, it just encodes cheaply.
-inline constexpr std::uint32_t kFloorFileVersion = 2u;
+// v3 (2026-08-29, S20.6 инкремент F): снимок несёт СУЩНОСТИ (FloorEntityState
+// выше) и КЛЮЧ МОДУЛЯ (kind+seed+genVersion). Раскладка blob:
+//   i32 floor | u8 kind | u32 seed | u32 genVersion
+//   | u32 nProps; props | u32 nCorpses; corpses | u32 nPickups; pickups
+//   | u32 nDebris; debris | u32 nPowerKeys; u64 keys
+//   | геометрия (тот же кодек, что v2, до конца blob)
+// Сущности ПЕРЕД геометрией: их ширины — арифметика счётчиков, геометрия
+// самоограничена хвостом. v2-файлы отклоняются целиком (честная инвалидация
+// вместо миграции — стандартное правило).
+// v3 -> v4 (2026-08-31): PropRecord несёт q лежащего тела («в сейв пишем всё
+// честно — снимок этажа», решение владельца). Старые файлы отвергаются
+// целиком (S20.6 закон 4) — этаж перегенерируется.
+// v4 -> v5 (2026-09-05): секция roomReps — репутация комнат переживает
+// выгрузку этажа (S13.6 + S20.6, решение владельца). То же правило
+// инвалидации: старый файл отвергается целиком.
+inline constexpr std::uint32_t kFloorFileVersion = 5u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
-// Encode the World into a complete floor file (header + CRC + snapshot blob).
+// Encode the World + сущности этажа into a complete floor file
+// (header + CRC + blob). `ents` может быть null — пустые секции; `key` —
+// ключ модуля от вызывающего (он один знает сид модуля), null = нулевой
+// ключ (headless-тест, читается только с expect=null).
 void floor_file_write(const World& w, int floorNumber,
-                      std::vector<std::uint8_t>& out);
+                      std::vector<std::uint8_t>& out,
+                      const FloorEntityState* ents = nullptr,
+                      const FloorModuleKey* key = nullptr);
 
 // Validate a floor file and stamp it onto `w`. False on any rejection (magic,
 // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
 // where it can, says so out loud. `floorOut` reports the floor the blob claims.
+// `expect` — ключ модуля (закон 4): несовпадение kind/seed/genVersion =
+// SaveError::ModuleChanged, мир не тронут. null = не проверять (тестовый путь).
+// `entsOut` получает секции сущностей (очищается первым делом).
 bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
-                     std::int32_t* floorOut = nullptr, SaveError* err = nullptr);
+                     std::int32_t* floorOut = nullptr, SaveError* err = nullptr,
+                     const FloorModuleKey* expect = nullptr,
+                     FloorEntityState* entsOut = nullptr);
 
 // ---------------------------------------------------------------------------
 // What travels
@@ -580,12 +665,9 @@ struct SaveState {
     // it like the ledger), so F5/F9 stopped forgetting the deposit and the debt
     // — the gap economy.h stated in words since the day it was written.
     BankAccount bank{};
-    // v15: every crate and every corpse anywhere in the building, contents and
-    // all — not just the live floor's. Only the resident floor's are live
-    // entities, so the other floors' exist ONLY in these lists — see
-    // `refresh_floor_records`.
-    std::vector<ContainerRecord> containers;
-    std::vector<CorpseRecord> corpses;
+    // v20: списки контейнеров/трупов/обломков МЕРТВЫ — сущности этажа живут
+    // в его собственном floor_<N>.sav v3 под ключом модуля (S20.6): у
+    // состояния этажа ровно один дом, и полуслияние невозможно по построению.
     // Version 2: quest log persisted across F5/F9. Written last by
     // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
     QuestLog quests{};
@@ -614,8 +696,7 @@ std::size_t snapshot_floor(const World& w, int floorNumber,
 // wholesale. Returns false — leaving `w` in its pre-call state for the types/masks
 // it has not yet touched is NOT guaranteed on a malformed blob, so the caller should
 // treat false as "regenerate and fall back to the carve log". `floorOut` (optional)
-// receives the floor number the snapshot claims. Call BEFORE door_build, so the
-// fresh DoorSet re-stamps its leaves over whatever door state the snapshot froze.
+// receives the floor number the snapshot claims. (Двери — МОГИЛА 2026-08-28.)
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
                           std::int32_t* floorOut = nullptr);
 
@@ -632,37 +713,10 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
                SaveError* err = nullptr, SaveHeader* hdrOut = nullptr);
 
 // ---------------------------------------------------------------------------
-// Container / corpse state <-> registry (v15)
+// Corpse / debris records <-> registry (v15/v18; кормятся из floor-файла v20)
 // ---------------------------------------------------------------------------
-
-// Bring BOTH record lists up to date for ONE floor: drop every record already
-// held for `floorNumber`, then re-scan that floor's live entities — every crate
-// (not only the touched ones: recording all ~24..64 costs under 2 KB and needs
-// no diff against a re-roll) and every corpse. Returns records now contributed.
-//
-// This is the function a save AND a floor-leave call, and the reason is that
-// only ONE floor is ever resident ([floor_stream.h] keeps a single World live).
-// Every other floor's state exists nowhere but in these lists, so a plain
-// append would duplicate the live floor on every save, and a plain clear would
-// forget all nine other floors.
-std::size_t refresh_floor_records(Registry& reg, LayerId layer, int floorNumber,
-                                  std::vector<ContainerRecord>& boxes,
-                                  std::vector<CorpseRecord>& corpses);
-
-// Stamp recorded contents over the freshly generated floor's crates. Call it
-// AFTER `spawn_floor_containers` has built them; returns how many matched. The
-// whole component is stamped — contents, wear, opened — so a half-taken crate
-// comes back half-taken and a deposit is still there, which is the state the
-// search screen made real ([inventory.md]).
-//
-// `openedColour` is optional and exists because the "spent crate" tint is
-// `kOpenColour`, a file-static constant inside `container.cpp` — unreachable from
-// here and NOT worth copying, since a copied colour drifts silently the day the
-// original is retuned. Pass it from the call site, or pass nullptr and accept
-// that a restored spent crate looks unopened until `container.h` hoists it.
-std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumber,
-                                    const ContainerRecord* recs, std::size_t n,
-                                    const vec3* openedColour = nullptr);
+// refresh_floor_records и apply_container_records МЕРТВЫ (v20/F): сборщик —
+// gather_floor_entities ниже, применение — spawn_*_records; матчинга нет.
 
 // Rebuild the floor's corpses from records: DESTROYS every Corpse entity on
 // `layer` first (an F9 onto the same floor would otherwise duplicate every
@@ -672,6 +726,59 @@ std::size_t apply_container_records(Registry& reg, LayerId layer, int floorNumbe
 // corpse is at rest by definition. Returns how many were spawned.
 std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
                                  const CorpseRecord* recs, std::size_t n);
+
+// v18: пересоздать сорванные пропы этажа из записей. Сначала УНИЧТОЖАЕТ живые
+// обломки слоя (F9 на тот же этаж иначе удвоил бы их), потом собирает тела
+// ядра тем же rigid_attach_*, что детач; поза не восстанавливается — тело
+// ложится заново (решение владельца, как у трупа). Возвращает число созданных.
+std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
+                                 const DebrisRecord* recs, std::size_t n);
+
+// ---------------------------------------------------------------------------
+// Сущности этажа ↔ снимок (S20.6 инкремент F)
+// ---------------------------------------------------------------------------
+
+// Собрать ВСЕ сущности слоя в записи снимка (out очищается): пропы (статик и
+// сорванные, с якорями, инвентарём ящиков, DoorRef), трупы, лут на полу,
+// обломки без строки, ключи обесточки (`power` может быть null). Зовётся на
+// выходе с этажа — единственный писатель секций сущностей floor-файла.
+// НЕСОМЫЙ (CarriedBy) проп записывается ЭТИМ этажом в позиции рук — игрок
+// приезжает с пустыми руками, вещь ждёт на старом этаже (линки транзиентны
+// по решению владельца; лучше прежней немой потери, зафиксировано аудитом F).
+// Заряды в полёте (Charge/ChargeArmed вне пропа) — транзиент боя, не едут.
+struct FloorRooms; // game/room.h — репутация комнат едет секцией снимка
+std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
+                                  FloorEntityState& out,
+                                  const PowerGridState* power = nullptr,
+                                  const FloorRooms* rooms = nullptr);
+
+// Пересоздать пропы этажа из записей. Destroy-first по PropOf на слое
+// (идемпотентность F9). Каждая запись рождает проп ЧЕРЕЗ таблицу
+// (spawn_prop_from_id, гейт якоря выключен — судьбу решает проба ниже),
+// возвращает состояние (active, инвентарь, DoorRef) и завершается ЯКОРНОЙ
+// ПРОБОЙ (закон 3): запись detached ИЛИ якорь, мёртвый в восстановленной
+// материи, → честный prop_detach — несовместимость снимков невозможна как
+// состояние. Возвращает число созданных сущностей.
+std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
+                               const PropRecord* recs, std::size_t n,
+                               EventBus& bus);
+
+// Пересоздать лут на полу. Destroy-first по Pickup на слое.
+std::size_t spawn_pickup_records(Registry& reg, LayerId layer,
+                                 const PickupRecord* recs, std::size_t n);
+
+// Восстановить обесточку этажа из ключей снимка: чистый POD-штамп — сброс
+// внутри НЕ делается, вызывающий обязан начать с PowerGridState{} (правило
+// «чистить на каждом прибытии», см. FloorEntityState::powerKeys).
+void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
+                        std::size_t n);
+
+// Вернуть комнатам накопленную репутацию из снимка — по индексу объявления
+// (порядок rooms_declare детерминирован, S12.1). Зовётся ПОСЛЕ rooms_declare
+// текущего прибытия; лишний хвост секции (модуль перенарезал комнаты)
+// молча отбрасывается — декларация главнее накопленного.
+void restore_room_reps(FloorRooms& rooms, const std::int16_t* reps,
+                       std::size_t n);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood
@@ -691,17 +798,13 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 //   * PLACEMENT — `place_body_at_cell` puts the body in the saved cell, or in the
 //     nearest cell it actually fits in, or refuses. See the soft-lock note there.
 //
-// **THE ORDERING CONSTRAINT, because it is not optional.** `nav::AsyncBake` hands a raw
-// pointer to the live `MacroGrid` to a worker for a measured ~1.9 s + ~1.8 s and its
-// contract is "do not mutate or regenerate that World until ready()" ([nav_async.h]).
-// Travel regenerates floors, so the caller MUST NOT start a travelling load while a
-// bake is in flight — check `nav.baking()` and retry next frame. This is not
-// theoretical: `FloorStreamer::init(stack, keepRadius=0)` reserves exactly
-// `2*0 + 2 = 2` recyclable layers, so hop 1 generates into the free slot (safe, the
-// bake is reading the floor being left) and then frees the departed slot — which is
-// the slot hop 2 allocates and regenerates, the very grid the worker is still reading.
-// A single hop is safe; two are not. `AsyncBake::start()` joins, so re-arming the floor
-// AFTER arrival is always safe; it is the hops in between that have no guard.
+// **THE ORDERING CONSTRAINT IS DEAD.** The async bake worker used to hold a raw
+// pointer into the live `MacroGrid`, so a travelling load during a bake could free
+// the very grid the worker was reading, and this file demanded "check `nav.baking()`
+// and retry next frame". The RebakeScheduler's worker owns a snapshot of two 256 KiB
+// walkability bitsets and nothing else ([game/rebake.h]): a load or a multi-hop
+// travel during a bake simply CANCELS it (node-granular, tens of ms — inside
+// `start_fresh`) and proceeds. «По сути новая игра» — решение владельца.
 //
 // Then the arrival sequence, in this order and for these reasons:
 //   1. `refresh_floor_containers` — the destination floor has no crates until the app
@@ -710,10 +813,9 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
 //      record lists.
 //   3. `refresh_floor_mobs` — a streamed-in floor has no monsters either.
 //   4. `door_build` — AFTER generation, BEFORE the bake, because it leaves every door
-//      Open so the grid the worker reads is the all-open geometry the bake must assume
-//      ([door.h]). Note `door_build` clears `DoorSet::frozen` itself, so the freeze has
-//      to be re-applied after it, never before.
-//   5. `doors.frozen = true`, then `begin_floor_nav`.
+//      Open so the walkability bitsets built at the top of `begin_floor_nav` carry the
+//      all-open geometry the bake must assume ([door.h]).
+//   5. `begin_floor_nav` — snapshots those bitsets; no freeze to arm or disarm.
 //   6. placement — last, and independent of all of the above: it reads solidity and
 //      writes one `Transform`. Doing it before `door_build` would still be correct
 //      today (door frames are recolours, not solidity changes) but would silently stop

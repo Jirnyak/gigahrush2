@@ -14,6 +14,7 @@
 #pragma once
 
 #include "ecs/registry.h"
+#include "game/gamepad.h"
 #include "game/keybind.h"
 #include "game/player_command.h"
 
@@ -24,6 +25,8 @@ namespace giga {
 
 class InputState {
 public:
+    // Владеет SDL_Gamepad* — отсюда правило пяти: копия закрыта (две копии
+    // закрыли бы одно устройство дважды), перенос отдаёт владение.
     InputState();
     ~InputState();
     InputState(const InputState&) = delete;
@@ -36,10 +39,21 @@ public:
     void set_mouselook(bool on) { mouselook_ = on; }
     bool mouselook() const { return mouselook_; }
 
-    // Query if action/attack is held (via gamepad triggers or bumpers)
-    bool action_held() const { return gamepadAttackHeld_; }
+    // Есть ли подключённый геймпад (строка «поддерживаемые устройства» на
+    // странице Стима и ветка худа с подсказками кнопок).
     bool gamepad_connected() const { return gamepad_ != nullptr; }
-    void set_gamepad_look_speed(float s) { gamepadLookSpeed_ = s; }
+
+    // РУКИ с триггеров, раздельно ([two-hands.md]): левый триггер — левая рука
+    // (та же, что ЛКМ), правый — правая (ПКМ). Читается приложением и
+    // складывается по ИЛИ с мышью, поэтому мышь и геймпад работают вместе.
+    // Гейт по mouselook_ здесь тот же, что у осей: пока открыто окно, ввод до
+    // боя не доходит — иначе триггер бьёт сквозь инвентарь.
+    bool hand_left_held() const {
+        return mouselook_ && game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handL;
+    }
+    bool hand_right_held() const {
+        return mouselook_ && game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handR;
+    }
 
     // The held movement keys, from the keybinding table ([keybind.h]). The app
     // pushes a fresh set after any rebind; defaults are WASD + E/Q + Space.
@@ -50,13 +64,22 @@ public:
     // server seam as a PlayerCommand button instead of a component write.
     void queue_fly_toggle() { toggleFlyEdge_ = true; }
 
-    // Accumulate a single SDL event (mouse motion, mouse buttons, key edges, gamepad events).
+    // Accumulate a single SDL event (mouse motion, mouse buttons, key edges,
+    // подключение/отключение геймпада и его кнопочные эджи).
     void handle_event(const SDL_Event& e);
 
     // Build this tick's command from accumulated device state + the avatar's
     // current view/fly. Look angles are ABSOLUTE (current camera angle folded with
-    // this frame's mouse delta and gamepad stick delta), matching a Source usercmd.
-    game::PlayerCommand build_command(Registry& reg, Entity avatar) const;
+    // this frame's mouse delta), matching a Source usercmd; the server clamps
+    // pitch. Reads SDL keyboard state directly (client-side). Does NOT clear the
+    // per-frame accumulators — `apply` owns that. Public so the future GameClient
+    // (netcode.md increment #4) can gather → command → send with its own avatar.
+    //
+    // `dt` — шаг тика. Нужен потому, что взгляд с геймпада есть СКОРОСТЬ
+    // (рад/с), в отличие от мышиной дельты, уже накопленной за кадр. Раньше
+    // параметра не было, и перенесённый код кэшировал dt прошлого кадра —
+    // взгляд отставал на тик и врал на любой смене частоты.
+    game::PlayerCommand build_command(Registry& reg, Entity avatar, float dt) const;
 
     // Apply accumulated input to the active camera entity: select the avatar
     // (first CameraTag + Controller), build its command, apply it server-side,
@@ -73,13 +96,17 @@ private:
     bool toggleFlyEdge_ = false;
     game::MoveBinds binds_{}; // scancodes for the held keys, rebindable
 
-    // Gamepad / VR controller input state
+    // Геймпад. Устройство опрашивается РОВНО ОДИН раз за тик (в `apply`), а
+    // не из `build_command`: команда обязана строиться из снятого состояния, а
+    // не ходить в железо — иначе будущий GameClient, вызывая build_command
+    // сам, читал бы SDL из своего потока.
     SDL_Gamepad* gamepad_ = nullptr;
-    float gamepadLookSpeed_ = 2.5f; // rad/sec
-    float lastDt_ = 1.0f / 60.0f;
-    bool gamepadJumpEdge_ = false;
-    bool gamepadFlyToggleEdge_ = false;
-    bool gamepadAttackHeld_ = false;
+    game::GamepadAxes gamepadAxes_{};
+    float lookSpeed_ = game::kGamepadLookSpeed; // рад/с, вывод в [gamepad.h]
+
+    // Опросить подключённое устройство и нормировать оси. Пусто, если
+    // устройства нет — тогда весь слой геймпада даёт строго нулевое намерение.
+    game::GamepadAxes poll_gamepad() const;
 };
 
 } // namespace giga

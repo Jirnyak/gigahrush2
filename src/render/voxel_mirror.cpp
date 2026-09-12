@@ -6,8 +6,8 @@
 
 #include "render/vk_device.h"
 #include "world/destruct.h" // kSubMaterialName
-#include "world/field.h"    // the mirrored "fluid" macro field
 #include "world/macro_grid.h"
+#include "world/material_props.h" // kMatFlow/kMatDiffusion — класс 3 «среды»
 #include "world/stain.h"    // StainRGB — the paged stain mirror
 #include "world/subfield.h"
 #include "world/world.h"
@@ -39,10 +39,29 @@ void barrier_transfer_to_shader(VkCommandBuffer cmd) {
                          0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 
-// 0 empty / 1 full / 2 partial — the raymarcher's macro skip byte.
-std::uint8_t classify(const SubMask& m) {
-    if (m.empty()) return 0;
-    return m.full() ? 1 : 2;
+// 0 empty / 1 full / 2 partial / 3 partial С МАТЕРИЕЙ СРЕД — the raymarcher's
+// macro skip byte. Класс 3 (CANON S16, мост рендера): в клетке есть материя
+// без бита маски, чья строка движется — material_is_medium(), одна выписка
+// закона в [world/material_props.h]. Только такие клетки платят фетч
+// страницы на пустых битах маски в DDA; обычный мир (0/1/2) стоит ровно как
+// раньше. GPU-двойник закона — settle в [shaders/medium_sim.comp];
+// разъедутся — verify() покраснеет.
+std::uint8_t classify(const SubMask& m, CellType type, const CellType* page) {
+    if (m.full()) return 1;
+    if (page) {
+        for (int i = 0; i < kSubVoxels; ++i) {
+            const CellType mt = page[i];
+            if (mt != 0 && !m.test(i) && material_is_medium(mt)) return 3;
+        }
+    } else if (m.empty() && material_is_medium(type)) {
+        // Закон чтения безстраничной клетки (sub_material_at,
+        // [world/destruct.cpp]): ТОЛЬКО пустая маска означает «вся клетка
+        // своего типа» (вода после collapse). Частичная маска + тип-среда
+        // (rubble-завал генератора) — НЕ материя в дырах: класс 3 без этого
+        // гейта рождал полный куб «грязи» из ниоткуда.
+        return 3;
+    }
+    return m.empty() ? 0 : 2;
 }
 
 // CPU stain atoms are 3 B; the GPU page holds one u32 per atom.
@@ -77,9 +96,6 @@ bool VoxelMirror::init(VulkanDevice& dev) {
         return false;
     if (!classes_.create_device_local_empty(dev, kClassBytes, usage,
                                             "voxel-mirror class"))
-        return false;
-    if (!fluid_.create_device_local_empty(dev, kFluidBytes, usage,
-                                          "voxel-mirror fluid"))
         return false;
     if (!stainIdx_.create_device_local_empty(dev, kStainIdxBytes, usage,
                                              "voxel-mirror stain-index"))
@@ -174,6 +190,8 @@ bool VoxelMirror::init(VulkanDevice& dev) {
 
     dirtyBits_.assign((kMacroCells + 63u) / 64u, 0u);
     dirty_.reserve(4096);
+    markGen_.assign(kMacroCells, 0u);
+    uploadGen_.assign(kMacroCells, 0u);
     ready_ = true;
     return true;
 }
@@ -194,7 +212,6 @@ void VoxelMirror::destroy() {
     for (int i = 0; i < kMaxFramesInFlight; ++i) staging_[i].destroy(*dev_);
     stainPool_.destroy(*dev_);
     stainIdx_.destroy(*dev_);
-    fluid_.destroy(*dev_);
     classes_.destroy(*dev_);
     pagePool_.destroy(*dev_);
     pageIdx_.destroy(*dev_);
@@ -261,19 +278,11 @@ bool VoxelMirror::upload_all(const World& world) {
 
     classScratch_.resize(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
-        classScratch_[i] = classify(g.masks()[i]);
+        classScratch_[i] =
+            classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
     ok = ok && upload_via_staging(classes_, classScratch_.data(), kClassBytes);
 
-    // Fluid: the field's bytes when the layer has one, zeros otherwise — a
-    // recycled World must not tint the new floor with the old floor's puddles.
-    const Field<float>* fl = world.fields().find<float>("fluid");
-    if (fl) {
-        ok = ok && upload_via_staging(fluid_, fl->data().data(), kFluidBytes);
-    } else {
-        fluidZeros_.assign(kMacroCells, 0.0f);
-        ok = ok && upload_via_staging(fluid_, fluidZeros_.data(), kFluidBytes);
-    }
-    fluidDirty_ = false;
+    // Fluid-буфер умер (чистка 2026-08-24): воду возят страницы.
 
     // Page indices: verbatim CPU page table, with out-of-capacity slots
     // clamped to kNoPage so the GPU never dereferences past its pool.
@@ -321,6 +330,9 @@ void VoxelMirror::mark_dirty(const std::uint32_t* cells, std::size_t n) {
         if (ci >= kMacroCells) continue;
         std::uint64_t& w = dirtyBits_[ci >> 6];
         const std::uint64_t bit = std::uint64_t{1} << (ci & 63u);
+        // Поколение записи — ВСЕГДА (и для уже-стоящих в очереди: свежая
+        // запись той же клетки должна отодвинуть её «доставлено»).
+        markGen_[ci] = flushGen_;
         if (w & bit) continue;
         w |= bit;
         dirty_.push_back(ci);
@@ -331,8 +343,11 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                         const World& world) {
     lastFlushCells_ = 0;
     lastFlushBytes_ = 0;
+    // Клок кадров тикает КАЖДЫЙ флеш, включая пустые — поколения доставки
+    // сравнимы со счётчиком паков автомата (оба 1/кадр, флеш до пака).
+    const std::uint32_t thisFlush = flushGen_++;
     if (!ready_) return;
-    if (dirty_.empty() && !fluidDirty_) return;
+    if (dirty_.empty()) return;
 
     // Sorted, adjacent dirty cells collapse into single copy regions — carves
     // are spatially local, so runs are the common case, and the consumed
@@ -360,19 +375,30 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                : 0u;
 
     // How many sorted cells fit this frame's staging window.
+    //
+    // +3: ПОТОЛОК ВЫРАВНИВАНИЯ. Писатель ниже после класс-байтов ровняет off
+    // до 4 (`(off + 3) & ~3` — uint32-волны обязаны быть выровнены), т.е. до
+    // 3 неучтённых байт НА КАЖДЫЙ РАН. Ранов не больше, чем клеток, так что
+    // +3 на клетку — честная верхняя граница (~4% окна). Без неё лавина
+    // РАССЫПАННЫХ грязных клеток (десятки тысяч ранов — восстановленный этаж
+    // с проснувшимися средами) выгоняла off за staging-буфер: memmove бил
+    // SIGBUS либо молча портил кучу, и падали СЛУЧАЙНЫЕ жертвы — судья
+    // детача посреди cell_partition, деструктор зеркала на выходе. Три
+    // крашрепорта 2026-08-27, один корень.
     std::size_t take = 0;
     std::size_t need = 0;
     while (take < dirty_.size()) {
         const std::uint32_t ci = dirty_[take];
         std::size_t c = kMaskBytesPerCell + sizeof(CellType) +
-                        sizeof(std::uint32_t) * 2 + 1 /* class byte */;
+                        sizeof(std::uint32_t) * 2 + 1 /* class byte */ +
+                        3 /* потолок выравнивания рана — вывод выше */;
         if (pageTab && pageTab[ci] < poolCount) c += kPageBytes;
         if (stainTab && stainTab[ci] < stainPages) c += kStainPageBytes;
         if (need + c > kStagingBytes) break;
         need += c;
         ++take;
     }
-    if (take == 0 && !fluidDirty_) return;
+    if (take == 0) return;
 
     VulkanBuffer& st = staging_[frameIndex % kMaxFramesInFlight];
     std::uint8_t* base = static_cast<std::uint8_t*>(st.mapped);
@@ -405,7 +431,8 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         off += bytes;
 
         for (std::uint32_t k = 0; k < len; ++k)
-            base[off + k] = classify(g.masks()[c0 + k]);
+            base[off + k] = classify(g.masks()[c0 + k], g.types()[c0 + k],
+                                     sub ? sub->page(c0 + k) : nullptr);
         classCopies_.push_back({off, static_cast<VkDeviceSize>(c0),
                                 static_cast<VkDeviceSize>(len)});
         off += len;
@@ -457,6 +484,15 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
             }
         i = j;
     }
+    // Пояс к потолку выше: если оценщик и писатель когда-нибудь разойдутся
+    // снова, обрыв ЗДЕСЬ — с именем и числами — а не порча кучи с крашем в
+    // случайной жертве тремя минутами позже.
+    if (off > kStagingBytes) {
+        std::fprintf(stderr,
+                     "[mirror] FATAL: staging overrun %zu > %zu (take %zu)\n",
+                     off, static_cast<std::size_t>(kStagingBytes), take);
+        std::abort();
+    }
 
     if (!maskCopies_.empty())
         vkCmdCopyBuffer(cmd, st.buffer, masks_.buffer,
@@ -487,23 +523,12 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
                         stainPoolCopies_.data());
 
 
-    // The fluid image rides the same window, whole, after the cells; if this
-    // frame's cells left no room it simply waits one more frame.
-    if (fluidDirty_ && off + kFluidBytes <= kStagingBytes) {
-        const Field<float>* fl = world.fields().find<float>("fluid");
-        if (fl) {
-            std::memcpy(base + off, fl->data().data(), kFluidBytes);
-            VkBufferCopy region{off, 0, kFluidBytes};
-            vkCmdCopyBuffer(cmd, st.buffer, fluid_.buffer, 1, &region);
-            off += kFluidBytes;
-        }
-        fluidDirty_ = false;
-    }
     barrier_transfer_to_shader(cmd);
 
     for (std::size_t k = 0; k < take; ++k) {
         const std::uint32_t ci = dirty_[k];
         dirtyBits_[ci >> 6] &= ~(std::uint64_t{1} << (ci & 63u));
+        uploadGen_[ci] = thisFlush; // запись ДОСТАВЛЕНА этим флешем
     }
     if (take == dirty_.size()) {
         dirty_.clear();
@@ -583,14 +608,15 @@ bool VoxelMirror::verify(const World& world) {
             idxScratch_[i] = tab[i] < poolCount ? tab[i] : kNoPage;
     }
 
-    std::uint32_t m0 = 0, m1 = 0, m2 = 0, m3 = 0, m4 = 0, mFluid = 0;
+    std::uint32_t m0 = 0, m1 = 0, m2 = 0, m3 = 0, m4 = 0;
     bool ok = readback_compare(masks_, g.masks().data(), kMasksBytes, "masks", &m0);
     ok = readback_compare(types_, g.types().data(), kTypesBytes, "types", &m1) && ok;
     ok = readback_compare(pageIdx_, idxScratch_.data(), kPageIdxBytes,
                           "page-index", &m2) && ok;
     classScratch_.resize(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
-        classScratch_[i] = classify(g.masks()[i]);
+        classScratch_[i] =
+            classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
     ok = readback_compare(classes_, classScratch_.data(), kClassBytes, "class",
                           &m4) && ok;
     if (sub && poolCount > 0)
@@ -598,25 +624,7 @@ bool VoxelMirror::verify(const World& world) {
                               static_cast<std::size_t>(poolCount) * kPageBytes,
                               "page-pool", &m3) && ok;
 
-    // FLUID — was uploaded by upload_all and checked by nobody, which is exactly
-    // the divergence [problems.md] section 7 (Source C) cost months on: a buffer
-    // present in one path and absent from the other. It is 8 MiB bound at set 0
-    // binding 6 and dereferenced by EVERY hit pixel (raymarch.frag `uFluid[h.ci]`),
-    // so an unverified one is the loudest possible place for stale bytes to hide.
-    // Compared against the same source upload_all uses: the layer's field, or
-    // zeros when it has none.
-    {
-        const Field<float>* flv = world.fields().find<float>("fluid");
-        if (flv) {
-            ok = readback_compare(fluid_, flv->data().data(), kFluidBytes,
-                                  "fluid", &mFluid) && ok;
-        } else {
-            fluidZeros_.assign(kMacroCells, 0.0f);
-            ok = readback_compare(fluid_, fluidZeros_.data(), kFluidBytes,
-                                  "fluid", &mFluid) && ok;
-        }
-    }
-
+    // FLUID-буфер умер (чистка 2026-08-24) — сверять нечего.
     // Stain half — the same truth-vs-GPU contract as sub-material above.
     const SubField<StainRGB>* stainF =
         world.subfields().find<StainRGB>(kStainFieldName);
@@ -647,9 +655,9 @@ bool VoxelMirror::verify(const World& world) {
     }
     std::fprintf(stderr,
                  "[mirror] verify %s: %u dirty queued | masks %u types %u "
-                 "pageIdx %u pool %u class %u fluid %u stainIdx %u stainPool %u "
+                 "pageIdx %u pool %u class %u stainIdx %u stainPool %u "
                  "mismatching bytes\n",
-                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4, mFluid,
+                 ok ? "OK" : "FAIL", dirty_backlog(), m0, m1, m2, m3, m4,
                  m5, m6);
     return ok;
 }

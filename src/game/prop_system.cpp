@@ -1,12 +1,24 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "game/combat.h"          // Charge/ChargeArmed — проп-заряд от урона
+#include "game/flicker.h"         // FlickerProfile — фазы щитка только у mains
+#include "game/room.h"            // room_at/declared — программа щитка из данных модуля
+#include "game/room_supply.h"     // живые хуки: проп встал += / умер −= (S12.4)
+#include "game/verb_table.h"      // kVerbSleep — жилая зона = объявлено «спать»
+#include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
+#include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
+#include "world/anchor.h"
+#include "world/material_props.h" // kMatDensity/kMatHardness — масса и e/μ
+#include "world/surface.h"
 #include "world/macro_grid.h"
 #include "world/materials.h"
 #include "world/types.h"
 #include "world/world.h"
+#include <algorithm>
+#include <cmath>
 #include <vector>
 #include <unordered_set>
-#include <cmath>
+#include <cstdio>
 #include "core/wrap.h"
 #include "core/rng.h"
 
@@ -18,8 +30,71 @@ namespace giga::game {
 constexpr std::uint32_t kSaltWall = 0x33333333u;
 // Salt for ceiling-light placement rolls (same inheritance as kSaltWall above).
 constexpr std::uint32_t kSaltLight = 0x44444444u;
-// Chance a candidate ceiling cell hosts a bulb, percent.
-constexpr std::uint32_t kLightChancePct = 25u;
+
+// LAMP PITCH AND HEADROOM DERIVE FROM THE FIXTURE'S OWN REACH, not from taste.
+// props.csv gives BareBulb light_radius_mm; two numbers fall straight out of it:
+//
+//   pitch    — neighbouring pools must OVERLAP, so the spacing ceiling is two
+//              radii: 24 m = 12 cells. The pitch also has to TILE THE TORUS —
+//              128 is not divisible by 12, and a pitch that leaves a short last
+//              block puts a triple-density stripe of lamps down x = 126..127 and
+//              y = 126..127, running the whole wrap. That is precisely the seam
+//              this engine exists to not have. So: the largest power-of-two
+//              divisor of kMacroDim that still fits under two radii = 8 cells
+//              (16 m), every pool overlapping its neighbour by 8 m.
+//
+//              The old rule was a flat 25% per-cell coin flip, which is not a
+//              density at all — it is a density PER CEILING CELL, so a floor
+//              with half a million ceilings (padic: 43 storeys of
+//              full-footprint sandwich) asked for 123 000 lamps while a floor
+//              that is mostly void (blame: 48 000 ceilings) asked for 12 000.
+//              123 000 overflows kStagingLights (16384) seven times over — the
+//              exact silent-truncation class already documented in
+//              gpu_light_grid.h.
+//   headroom — a ceiling lamp lights a place a body STANDS. If no surface lies
+//              within the bulb's own reach below it, the "ceiling" is not a
+//              room's ceiling. On the torus every axis wraps, so cell(x,y,z+1)
+//              at z=127 reads cell z=0: on blame that is the underside of the
+//              town's platform mass, and the whole open sky over the town came
+//              back as one flat sheet of 1538 lamps at 255 m — 17% of the
+//              floor's lamps in a single plane, hanging over the abyss. The
+//              wrap is honest geometry; a light fixture 200 m over a street is
+//              not a light fixture.
+inline int lamp_light_radius_cells() {
+    const int r = static_cast<int>(prop_def(PropId::BareBulb).lightRadiusMm /
+                                   1000u / static_cast<unsigned>(kCellSize));
+    return r > 0 ? r : 1;
+}
+
+inline int lamp_pitch_cells() {
+    const int span = 2 * lamp_light_radius_cells(); // pools still overlap
+    int pitch = 1;
+    while (pitch * 2 <= span && (kMacroDim % (pitch * 2)) == 0) pitch *= 2;
+    return pitch;
+}
+
+// NO LAMP-SPECIFIC COUNT CAP LIVES HERE, deliberately (owner, 2026-08-18). A
+// lamp is a prop; the draw budget belongs to ALL props together, and capping one
+// prop kind by hand is the road to capping every kind by hand. The two real
+// ceilings both sit in render/ and are that layer's to enforce:
+//
+//   kMaxPropInstances = 4096 per SHAPE per frame (prop_pass.h) — the mesh. It
+//     already drops the overflow, but by INSERTION ORDER and silently, so a
+//     dense floor keeps the light and loses the fixture: measured on padic,
+//     6661 CylinderZ and 6240 Box wanted, ~4700 glows with no bulb anywhere.
+//     Same class as the light-staging bug gpu_light_grid.h already documents
+//     ("резалось порядком создания (z снизу)"); the cure is the same one that
+//     worked there — drop by distance/contribution, and say so out loud.
+//
+//   kStagingLights = 16384 (gpu_light_grid.h) — the light. Not the binding
+//     constraint today: 12 552 emitters fit under it, which is exactly why the
+//     glow was present while the bulb was not.
+//
+// And the frame cost is not the lamp count either: light collection culls at
+// kFogRadius = kWorldExtent * 0.5 = 128 m on a torus whose per-axis wrap
+// distance is also 128 m, so 66% of the WHOLE WORLD passes, and nothing tests
+// occlusion — a bulb five storeys up behind ten slabs is sorted and binned
+// every frame like one in your face.
 
 constexpr float kHalfPi = 1.5707963267948966f;
 
@@ -35,8 +110,14 @@ static PropFallMode fall_mode_from_u8(std::uint8_t v) {
 
 static Interactable::Kind interact_kind_from_u8(std::uint8_t v) {
     // The ordinal IS the generated table row ([interact_table.h], CSV order).
-    // Out-of-range (255 = "None" and any stale byte) clamps to row 0's
-    // behaviourless default at the call sites that check `interact != 255`.
+    // Out-of-range (255 = the generator's "None") still has to return SOME
+    // enum value because spawn_prop emplaces Interactable unconditionally;
+    // spawn_prop_from_id then REMOVES the component for 255. An earlier
+    // version of this comment claimed call sites "check interact != 255" —
+    // no such check ever existed, which is how a None-row prop would have
+    // shipped as a lootable (the E-on-a-toilet bug, §1.3 of the audit, was
+    // the same class: furniture rows carried Terminal because None had no
+    // working path).
     return v < kInteractCount ? static_cast<Interactable::Kind>(v)
                               : Interactable::Kind::Loot;
 }
@@ -50,8 +131,15 @@ static inline bool is_solid_cell(CellType type) {
 // Swap StaticPropTag -> DynamicBodyTag without destroying the entity
 // ([jirnyak.md] §18 — PropPass/BodyPass filter, no recreate).
 static void mark_dynamic(Registry& reg, Entity prop) {
-    if (reg.all_of<StaticPropTag>(prop))
+    if (reg.all_of<StaticPropTag>(prop)) {
         reg.remove<StaticPropTag>(prop);
+        // Сорванный проп перестаёт быть ОСНАЩЕНИЕМ комнаты (живой хук
+        // supply, S12.4): сожгли диван — предложение вернулось к
+        // объявленному, а не осталось врать.
+        if (const auto* po = reg.try_get<PropOf>(prop))
+            if (const auto* t = reg.try_get<Transform>(prop))
+                supply_prop_at(reg, t->pos, po->id, -1);
+    }
     reg.emplace_or_replace<DynamicBodyTag>(prop);
 }
 
@@ -96,25 +184,84 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
             const float iLen = length(impulse);
             const vec3 dir = iLen > 1e-6f ? impulse * (0.35f / iLen)
                                           : vec3{0.0f, 0.0f, 0.35f};
-            bursts->push(pos, dir, ParticleKind::Debris, 6,
+            // ПОЛНЫЙ ВИД GpuHandoff (S3, инкр. 5 verlet-merge): развал на
+            // ЧЕРЕПКИ — пары верле-точек с материалом пропа, кувыркаются и
+            // ложатся; пыль сверху — косметика раскола.
+            bursts->push(pos, dir, ParticleKind::Shard, 5,
                          matId, seed ^ 0xD3B15u);
+            bursts->push(pos, dir, ParticleKind::Dust, 3,
+                         matId, seed ^ 0xD157u);
         }
+        // Погибший GpuHandoff-проп покидает ОСНАЩЕНИЕ (живой хук supply,
+        // S12.4) — тем же законом, что детач ниже (mark_dynamic).
+        if (const auto* po = reg.try_get<PropOf>(prop))
+            supply_prop_at(reg, pos, po->id, -1);
         reg.destroy(prop);
         return;
+    }
+
+    // Рычаг отрыва — вектор от центра тела к ТОЧКЕ КРЕПЛЕНИЯ (запись якоря
+    // S20.2), снятый ДО смерти якоря. Тороидальная дельта поосно. Нет якоря
+    // (снаряд в свободный проп, restore) — рычага нет, кувырок будет нулевым.
+    vec3 detachArm{};
+    if (const auto* an = reg.try_get<SubVoxelAnchor>(prop)) {
+        const vec3 ap{
+            (static_cast<float>(an->cx) * 8.0f + an->subX + 0.5f) * 0.25f,
+            (static_cast<float>(an->cy) * 8.0f + an->subY + 0.5f) * 0.25f,
+            (static_cast<float>(an->cz) * 8.0f + an->subZ + 0.5f) * 0.25f};
+        detachArm = ap - pos;
+        detachArm.x -= kWorldExtent * std::floor(detachArm.x / kWorldExtent + 0.5f);
+        detachArm.y -= kWorldExtent * std::floor(detachArm.y / kWorldExtent + 0.5f);
+        detachArm.z -= kWorldExtent * std::floor(detachArm.z / kWorldExtent + 0.5f);
     }
 
     // Keep entity identity; drop anchor and flip the static/dynamic tag pair.
     if (reg.all_of<SubVoxelAnchor>(prop))
         reg.remove<SubVoxelAnchor>(prop);
     mark_dynamic(reg, prop);
-    reg.emplace_or_replace<GravityAffected>(prop);
+
+    // Сорванный проп — тело РАГДОЛЛ-ЯДРА ([markoaudit/plans/ragdoll.md]
+    // инкремент 6): интегратор — rigid_body_step (гравитация его; старые
+    // GravityAffected + AngularVelocity-косметика умерли). Габарит — из
+    // авторского размера строки props.csv (PropMesh.scale), масса — из
+    // плотности материала × объём (S11).
+    vec3 half{0.2f, 0.2f, 0.2f};
+    std::uint8_t matId = 0;
+    float meshYaw = 0.0f;
+    if (const auto* pm = reg.try_get<PropMesh>(prop)) {
+        half = pm->scale * 0.5f;
+        matId = pm->matId;
+        meshYaw = pm->yaw;
+    } else if (const auto* box = reg.try_get<AABB>(prop)) {
+        half = box->half;
+    }
+    // Пол плотности 200 кг/м³: бытовой предмет — не сплошной слиток
+    // материала своей поверхности (лампа — жесть и стекло вокруг воздуха);
+    // matId=0 (generic) дал бы ноль и бесконечную обратную массу.
+    const float density =
+        std::max(200.0f, matId < kMatCount ? kMatDensity[matId] : 200.0f);
+    const float hardness = static_cast<float>(
+        matId < kMatCount ? kMatHardness[matId] : 64);
+    const float e_ = restitution_from_hardness(hardness);
+    const float mu = friction_from_hardness(hardness);
 
     if (mode == PropFallMode::RagdollRoll) {
-        // Canonical Velocity{vec3} form (combat.cpp). AngularVelocity/Rotation
-        // (core components) are integrated by physics_step each substep.
+        // Roll: примерно равногабаритное тело (аспект ≤ 1.25 — мяч, ведро,
+        // лампа-плафон) честнее и дешевле сферой; вытянутое (стул) —
+        // боксом, иначе оно КАТИТСЯ, а должно кувыркаться.
+        const float hMin = std::min({half.x, half.y, half.z});
+        const float hMax = std::max({half.x, half.y, half.z});
         reg.emplace_or_replace<Velocity>(prop, Velocity{impulse});
-        reg.emplace_or_replace<AngularVelocity>(prop, AngularVelocity{vec3{impulse.z, impulse.x, 2.0f}});
-        reg.emplace_or_replace<Rotation>(prop);
+        if (hMax <= hMin * 1.25f) {
+            const float r = hMin;
+            const float mass =
+                density * (4.0f / 3.0f) * 3.14159265f * r * r * r;
+            rigid_attach_sphere(reg, prop, r, mass, e_, mu);
+        } else {
+            const float mass =
+                density * 8.0f * half.x * half.y * half.z;
+            rigid_attach_box(reg, prop, half, mass, e_, mu);
+        }
     } else {
         // SimpleFall: a small shove along the pull. Derived by negating the
         // caller's up-facing impulse instead of hardcoding -Z, for the same
@@ -123,53 +270,155 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
         const vec3 down =
             iLen > 1e-6f ? impulse * (-0.5f / iLen) : vec3{0.0f, 0.0f, -0.5f};
         reg.emplace_or_replace<Velocity>(prop, Velocity{down});
+        const float mass = density * 8.0f * half.x * half.y * half.z;
+        rigid_attach_box(reg, prop, half, mass, e_, mu);
+    }
+
+    // ОРИЕНТАЦИЯ ТЕЛА = ОРИЕНТАЦИЯ МЕША: тот же поворот вокруг Z на yaw, что
+    // prop.vert применяет к якорному пропу. rigid_attach_* создаёт RigidBody
+    // с identity-кватернионом, и до этой строки настенный проп (yaw = π/2)
+    // скакал ровно на -90° в кадр отрыва, а restore повторял скачок каждую
+    // загрузку (баг владельца 2026-08-31). Солвер и BodyPass вращают форму
+    // и меш кватернионом, поэтому half честно остаётся в авторском фрейме.
+    {
+        RigidBody& rb = reg.get<RigidBody>(prop);
+        rb.q = quat{0.0f, 0.0f, std::sin(meshYaw * 0.5f),
+                    std::cos(meshYaw * 0.5f)};
+        // КУВЫРОК ВЫВЕДЕН, НЕ НАЗНАЧЕН (S11; прежний w.z = 1.0 рад/с был
+        // константой из ниоткуда и крутил даже лежащий restore-проп).
+        // Скорость v приложена в точке крепления с рычагом arm от центра:
+        // ω = (arm × v) / rg², rg² = (hx²+hy²+hz²)/3 — радиус инерции
+        // бокса по трём осям. Симметричный подвес (arm ∥ v) даёт ноль —
+        // вещь падает плашмя, и это физика; смещённая точка крепления даёт
+        // честный кувырок. Нулевой импульс (restore) → ноль.
+        const float rg2 = std::max(
+            (half.x * half.x + half.y * half.y + half.z * half.z) / 3.0f,
+            1e-4f);
+        rb.w = cross(detachArm, impulse) * (1.0f / rg2);
     }
 
     // BodyPass needs AABB -- without it a detached prop is invisible.
-    if (!reg.all_of<AABB>(prop))
-        reg.emplace<AABB>(prop, AABB{vec3{0.2f, 0.2f, 0.2f}});
+    reg.emplace_or_replace<AABB>(prop, AABB{half});
 }
 
-bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& projVel,
+void prop_detach(Registry& reg, Entity prop, EventBus& bus,
+                 ParticleBurstQueue* bursts, std::uint32_t seed) {
+    if (!reg.valid(prop)) return;
+    const PropFallMode mode = reg.all_of<PropFallMode>(prop)
+                                  ? reg.get<PropFallMode>(prop)
+                                  : PropFallMode::SimpleFall;
+    const vec3 pos = reg.all_of<Transform>(prop)
+                         ? reg.get<Transform>(prop).pos
+                         : vec3{};
+    // Нулевой импульс: детач без удара (restore, закон 3) — тело просто
+    // ложится физикой; ветки внутри честно берут свой запасной вектор.
+    detach_single_prop(reg, prop, mode, vec3{}, pos, vec3{}, 0u, bus, bursts,
+                       seed);
+}
+
+// §59.2: снаряд платил полный проход по ВСЕМ якорным пропам каждый тик ради
+// брод-фейза «якорь в ±1 клетке» — 20 пуль × 12646 пропов × 125 Гц ≈ 32 млн
+// итераций/с, худшая per-tick находка каталога. Контейнер и закон ключа —
+// общий примитив [sim/cell_bins.h]; политика этого потребителя —
+// ПЕРСИСТЕНТНОСТЬ: якорь неподвижен по построению, множество меняется только
+// спавном/детачем/смертью. Живёт в reg.ctx(): состояние едет с реестром,
+// глобала нет, тесты получают индекс даром. Грязнится сигналами EnTT на
+// SubVoxelAnchor — emplace, remove и destroy сущности будят один флаг, и
+// любой БУДУЩИЙ мутатор якоря платит тот же долг автоматически, без списка
+// мест.
+namespace {
+
+struct AnchorBins {
+    CellBins bins;
+    bool dirty = true;
+};
+
+void mark_anchor_bins_dirty(Registry& reg, Entity) {
+    if (AnchorBins* b = reg.ctx().find<AnchorBins>()) b->dirty = true;
+}
+
+AnchorBins& anchor_bins(Registry& reg) {
+    if (AnchorBins* b = reg.ctx().find<AnchorBins>()) return *b;
+    AnchorBins& b = reg.ctx().emplace<AnchorBins>();
+    reg.on_construct<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
+    reg.on_destroy<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
+    return b;
+}
+
+void rebuild_anchor_bins(Registry& reg, AnchorBins& ab) {
+    ab.bins.clear();
+    auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
+    for (auto entity : view) {
+        const auto& a = view.get<SubVoxelAnchor>(entity);
+        const auto& tr = view.get<Transform>(entity);
+        ab.bins.add(cell_bin_key(tr.layer, a.cx, a.cy, a.cz), entity);
+    }
+    ab.bins.build();
+    ab.dirty = false;
+}
+
+} // namespace
+
+bool check_projectile_prop_hits(Registry& reg, LayerId layer, const vec3& projPos,
+                                const vec3& projVel,
                                 float projHitRadius, EventBus& bus,
-                                ParticleBurstQueue* bursts, std::uint32_t seed)
+                                ParticleBurstQueue* bursts, std::uint32_t seed,
+                                Entity source)
 {
+    // Соседство ±1 клетки покрывает радиус попадания только пока он не
+    // перерос клетку — контракт for_each_near ([sim/cell_bins.h]); заявлен
+    // static_assert-ом у владельца константы (kProjHitRadius, combat.cpp).
     const float radiusSq = projHitRadius * projHitRadius;
-    const int pcx = wrap_macro(static_cast<int>(projPos.x / kCellSize));
-    const int pcy = wrap_macro(static_cast<int>(projPos.y / kCellSize));
-    const int pcz = wrap_macro(static_cast<int>(projPos.z / kCellSize));
+    const int pcx = cell_coord(projPos.x);
+    const int pcy = cell_coord(projPos.y);
+    const int pcz = cell_coord(projPos.z);
+
+    AnchorBins& ab = anchor_bins(reg);
+    if (ab.dirty) rebuild_anchor_bins(reg, ab);
 
     Entity hitEntity = entt::null;
     PropFallMode hitMode = PropFallMode::SimpleFall;
     vec3 hitPos{0.0f, 0.0f, 0.0f};
     vec3 hitColor{0.8f, 0.8f, 0.8f};
 
+    // 27 соседних бакетов вместо полного view — то же множество кандидатов,
+    // что давал старый фильтр |wrap_delta(anchor, pc)| ≤ 1 по каждой оси;
+    // узкая фаза (точная wrap-дистанция по позиции) не менялась. Ключ
+    // слойный: проп чужого слоя больше не кандидат (латентный межслойный
+    // хит по совпавшим xyz умер вместе со старым бесслойным фильтром).
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
-    for (auto entity : view) {
-        const auto& anchor = view.get<SubVoxelAnchor>(entity);
-
-        if (std::abs(wrap_delta(anchor.cx, pcx, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cy, pcy, kMacroDim)) > 1 ||
-            std::abs(wrap_delta(anchor.cz, pcz, kMacroDim)) > 1)
-        {
-            continue;
-        }
+    ab.bins.for_each_near(layer, pcx, pcy, pcz, [&](Entity entity) {
+        if (hitEntity != entt::null) return; // первый найденный уже взят
+        // Потеря компонента-соседа (Transform/PropFallMode) не грязнит
+        // индекс якорей — страховка членством во view.
+        if (!view.contains(entity)) return;
 
         const auto& tr = view.get<Transform>(entity);
-        const float dx = wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
-        const float dy = wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
+        const float ddx = wrap_delta_f(projPos.x, tr.pos.x, kWorldExtent);
+        const float ddy = wrap_delta_f(projPos.y, tr.pos.y, kWorldExtent);
+        const float ddz = wrap_delta_f(projPos.z, tr.pos.z, kWorldExtent);
 
-        if (dx * dx + dy * dy + dz * dz <= radiusSq) {
+        if (ddx * ddx + ddy * ddy + ddz * ddz <= radiusSq) {
             hitEntity = entity;
             hitMode = view.get<PropFallMode>(entity);
             hitPos = tr.pos;
-            hitColor = reg.all_of<Renderable>(entity) ? reg.get<Renderable>(entity).color : vec3{0.8f, 0.8f, 0.8f};
-            break;
+            hitColor = reg.all_of<Renderable>(entity)
+                           ? reg.get<Renderable>(entity).color
+                           : vec3{0.8f, 0.8f, 0.8f};
         }
-    }
+    });
 
     if (hitEntity != entt::null) {
+        // Заряд с триггером «от урона»: выстрел ВЗВОДИТ, а не срывает —
+        // atTick=0 значит «уже пора», charge_step взорвёт этим же тиком.
+        // Атрибуция килла — стрелявшему (source), не бочке.
+        if (const Charge* c = reg.try_get<Charge>(hitEntity);
+            c && static_cast<ChargeTrigger>(c->trigger) ==
+                     ChargeTrigger::Damage &&
+            !reg.all_of<ChargeArmed>(hitEntity)) {
+            reg.emplace<ChargeArmed>(hitEntity, ChargeArmed{0u, source});
+            return true;
+        }
         vec3 impulse = normalize(projVel) * 3.0f + vec3{0.0f, 0.0f, 1.0f};
         detach_single_prop(reg, hitEntity, hitMode, impulse, hitPos, hitColor, 0,
                            bus, bursts, seed);
@@ -178,7 +427,114 @@ bool check_projectile_prop_hits(Registry& reg, const vec3& projPos, const vec3& 
     return false;
 }
 
-std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& bus,
+Entity link_attach_world(Registry& reg, Entity body, const vec3& anchorA,
+                         const SubVoxelAnchor& a, float restLen, bool rope) {
+    if (!reg.valid(body)) return entt::null;
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = body;
+    jl.b = entt::null; // мировой якорь
+    jl.anchorA = anchorA;
+    // Точка солвера — ПРОИЗВОДНАЯ записи якоря: центр субвокселя точки
+    // крепления, выдвинутый на полсубвокселя по нормали грани (подвес
+    // висит НА поверхности опоры, не в её толще). Единственный писатель
+    // пары — этот; запись остаётся источником правды для пробы живости.
+    {
+        const float sub = kCellSize / static_cast<float>(kSubDim); // 0.25 м
+        vec3 p{(static_cast<float>(wrap_macro(a.cx)) * kSubDim +
+                static_cast<float>(a.subX) + 0.5f) *
+                   sub,
+               (static_cast<float>(wrap_macro(a.cy)) * kSubDim +
+                static_cast<float>(a.subY) + 0.5f) *
+                   sub,
+               (static_cast<float>(wrap_macro(a.cz)) * kSubDim +
+                static_cast<float>(a.subZ) + 0.5f) *
+                   sub};
+        const int axis = anchor_face_axis(a.face);
+        const float dir = static_cast<float>(anchor_face_dir(a.face));
+        if (axis == 0) p.x += dir * 0.5f * sub;
+        else if (axis == 1) p.y += dir * 0.5f * sub;
+        else p.z += dir * 0.5f * sub;
+        jl.anchorB = p;
+    }
+    jl.restLen = restLen;
+    jl.rope = rope;
+    reg.emplace<JointLink>(link, jl);
+    reg.emplace<SubVoxelAnchor>(link, a); // карв рвёт подвес той же пробой
+    return link;
+}
+
+Entity link_attach(Registry& reg, Entity a, Entity b, const vec3& anchorA,
+                   const vec3& anchorB, float restLen, bool rope) {
+    if (!reg.valid(a) || !reg.valid(b)) return entt::null;
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = a;
+    jl.b = b;
+    jl.anchorA = anchorA;
+    jl.anchorB = anchorB;
+    jl.restLen = restLen;
+    jl.rope = rope;
+    reg.emplace<JointLink>(link, jl);
+    return link;
+}
+
+namespace {
+void wake_side(Registry& reg, Entity side) {
+    if (side != entt::null && reg.valid(side) && reg.all_of<RigidBody>(side)) {
+        auto& rb = reg.get<RigidBody>(side);
+        rb.asleep = false;
+        rb.sleepTicks = 0;
+    }
+}
+} // namespace
+
+void link_detach(Registry& reg, Entity link) {
+    if (!reg.valid(link) || !reg.all_of<JointLink>(link)) return;
+    const JointLink jl = reg.get<JointLink>(link);
+    wake_side(reg, jl.a);
+    wake_side(reg, jl.b);
+    reg.destroy(link);
+}
+
+std::uint32_t attachment_reaper_step(Registry& reg) {
+    static thread_local std::vector<Entity> doomed;
+    doomed.clear();
+    auto links = reg.view<JointLink>();
+    for (auto le : links) {
+        const JointLink& jl = links.get<JointLink>(le);
+        const bool aDead = jl.a != entt::null && !reg.valid(jl.a);
+        const bool bDead = jl.b != entt::null && !reg.valid(jl.b);
+        const bool empty = jl.a == entt::null && jl.b == entt::null;
+        if (aDead || bDead || empty) doomed.push_back(le);
+    }
+    for (Entity le : doomed) link_detach(reg, le);
+    const std::uint32_t linksReaped =
+        static_cast<std::uint32_t>(doomed.size());
+    doomed.clear();
+    auto segs = reg.view<BodySegment>();
+    for (auto se : segs) {
+        const Entity root = segs.get<BodySegment>(se).root;
+        if (root == entt::null || !reg.valid(root)) doomed.push_back(se);
+    }
+    for (Entity se : doomed) {
+        if (reg.valid(se)) reg.destroy(se);
+    }
+    return linksReaped + static_cast<std::uint32_t>(doomed.size());
+}
+
+void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus) {
+    if (!reg.valid(prop) || !reg.all_of<Transform, PropFallMode>(prop)) return;
+    const vec3 pos = reg.get<Transform>(prop).pos;
+    const vec3 color = reg.all_of<Renderable>(prop)
+                           ? reg.get<Renderable>(prop).color
+                           : vec3{0.8f, 0.8f, 0.8f};
+    detach_single_prop(reg, prop, reg.get<PropFallMode>(prop),
+                       vec3{0.0f, 0.0f, 0.1f}, pos, color, 0, bus, nullptr, 1u);
+}
+
+std::uint32_t anchor_validate_step(Registry& reg, const World& world,
+                                   LayerId layer, EventBus& bus,
                                    const std::vector<std::uint32_t>& dirtyCells,
                                    ParticleBurstQueue* bursts, std::uint32_t seed)
 {
@@ -192,38 +548,59 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
     static thread_local std::vector<PendingDetachedProp> detached;
     detached.clear();
 
+    // Пропы — через персистентные AnchorBins точными бакетами dirty-клеток
+    // (§59.2-семья: полный view на каждый карв — тот же класс, что чинили
+    // для снарядов). Ключ бина СЛОЙНЫЙ: якорь чужого резидентного этажа с
+    // совпавшим macro_index не кандидат — прежний бесслойный проход ронял
+    // проп этажа B карвом этажа A (S20.4: слой — часть ключа).
+    AnchorBins& ab = anchor_bins(reg);
+    if (ab.dirty) rebuild_anchor_bins(reg, ab);
     auto view = reg.view<Transform, SubVoxelAnchor, PropFallMode>();
-    for (auto entity : view) {
-        const auto& anchor = view.get<SubVoxelAnchor>(entity);
-
-        const int cx = wrap_macro(anchor.cx);
-        const int cy = wrap_macro(anchor.cy);
-        const int cz = wrap_macro(anchor.cz);
-        const std::uint32_t key =
-            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
-
-        if (!dirtySet.contains(key)) continue;
-
-        // Anchor support lost when the sub-voxel is no longer solid.
-        if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
-            const auto& tr = view.get<Transform>(entity);
-            vec3 col = reg.all_of<Renderable>(entity)
-                           ? reg.get<Renderable>(entity).color
-                           : vec3{0.8f, 0.8f, 0.8f};
-            std::uint32_t mk = 0;
-            if (reg.all_of<PropMesh>(entity))
-                mk = static_cast<std::uint32_t>(reg.get<PropMesh>(entity).shape);
-            // The detach kick is a nudge AWAY from the pull, so it is derived from
-            // the layer's gravity vector, not the literal +Z it used to be
-            // ([AGENTS.md]: never assume -Z). `world` is already in hand here, so
-            // there is no excuse for guessing which way is up.
-            const vec3 g = world.gravity().at(tr.pos);
-            const float gLen = length(g);
-            const vec3 up =
-                gLen > 1e-6f ? g * (-1.0f / gLen) : vec3{0.0f, 0.0f, 1.0f};
-            detached.push_back({entity, view.get<PropFallMode>(entity), tr.pos,
-                                up, col, mk});
-        }
+    for (const std::uint32_t key : dirtySet) {
+        if (key >= kMacroCells) continue;
+        const int cx = static_cast<int>(key & 127u);
+        const int cy = static_cast<int>((key >> 7) & 127u);
+        const int cz = static_cast<int>(key >> 14);
+        ab.bins.for_each_in(
+            cell_bin_key(layer, cx, cy, cz), [&](Entity entity) {
+                // Потеря компонента-соседа не грязнит индекс якорей —
+                // страховка членством во view.
+                if (!view.contains(entity)) return;
+                const auto& anchor = view.get<SubVoxelAnchor>(entity);
+                // Опора потеряна, когда умерла КОЛОНКА субвокселей у грани
+                // крепления ([world/anchor.h] anchor_alive, окно 2×2 в точке
+                // крепления) — тот же вопрос, что у антуража, второй пробы
+                // больше нет (S11). Прежний тест одного бита из 512 врал в
+                // обе стороны: потолок выкарвлен вокруг лампы, а её бит цел
+                // — висит на игле; и жизнь вещи была привязана к точке,
+                // которой игрок не видит (S2).
+                const AnchorUV uv = anchor_face_uv(anchor.face, anchor.subX,
+                                                   anchor.subY, anchor.subZ);
+                if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))
+                    return;
+                const auto& tr = view.get<Transform>(entity);
+                vec3 col = reg.all_of<Renderable>(entity)
+                               ? reg.get<Renderable>(entity).color
+                               : vec3{0.8f, 0.8f, 0.8f};
+                std::uint32_t mk = 0;
+                if (reg.all_of<PropMesh>(entity))
+                    mk = static_cast<std::uint32_t>(
+                        reg.get<PropMesh>(entity).shape);
+                // Направление отрыва = НОРМАЛЬ ГРАНИ крепления (от опоры к
+                // вещи) — face наконец читается, как S10 и требовал; провис
+                // дальше делает гравитация (S1: геометрия — фрейм, сила —
+                // провис). Так уже жил антураж. Прежний толчок «против
+                // гравитации» пинал потолочную лампу ВВЕРХ — в только что
+                // выкарванный потолок.
+                const int fAxis = anchor_face_axis(anchor.face);
+                const float fDir =
+                    static_cast<float>(anchor_face_dir(anchor.face));
+                const vec3 n{fAxis == 0 ? fDir : 0.0f,
+                             fAxis == 1 ? fDir : 0.0f,
+                             fAxis == 2 ? fDir : 0.0f};
+                detached.push_back({entity, view.get<PropFallMode>(entity),
+                                    tr.pos, n, col, mk});
+            });
     }
 
     for (std::size_t i = 0; i < detached.size(); ++i) {
@@ -232,6 +609,55 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world, EventBus& 
                            item.color, item.meshKind, bus, bursts,
                            seed ^ static_cast<std::uint32_t>(i) * 0x9E3779B9u);
     }
+
+    // ЛИНКИ С МИРОВЫМ ЯКОРЕМ ([markoaudit/plans/ragdoll.md] §8, решение
+    // владельца 2026-08-21: «линк к миру — через единую систему якорей»):
+    // линк-сущность несёт SubVoxelAnchor рядом с JointLink, живость — ТА ЖЕ
+    // проба anchor_alive, что у пропов выше и у антуража (S2: выкарвил
+    // субвоксель — вещь отвалилась; теперь и ПОДВЕС отваливается). Опора
+    // умерла → линк уничтожен, обе стороны разбужены — цепь/люстра падает.
+    // Счётчик detached не трогаем: это контракт перестройки проп-скина.
+    static thread_local std::vector<Entity> severedLinks;
+    severedLinks.clear();
+    auto linkView = reg.view<JointLink, SubVoxelAnchor>();
+    for (auto le : linkView) {
+        const auto& anchor = linkView.get<SubVoxelAnchor>(le);
+        const int cx = wrap_macro(anchor.cx);
+        const int cy = wrap_macro(anchor.cy);
+        const int cz = wrap_macro(anchor.cz);
+        const std::uint32_t key =
+            static_cast<std::uint32_t>(macro_index(cx, cy, cz));
+        if (!dirtySet.contains(key)) continue;
+        // Слой линка — от его тел: своего Transform у линк-сущности нет
+        // (долг S20.3 «линк со слоем»); до посадки E фильтруем по стороне.
+        {
+            const auto& jl0 = linkView.get<JointLink>(le);
+            LayerId linkLayer = layer;
+            for (Entity side : {jl0.a, jl0.b})
+                if (side != entt::null && reg.valid(side) &&
+                    reg.all_of<Transform>(side)) {
+                    linkLayer = reg.get<Transform>(side).layer;
+                    break;
+                }
+            if (linkLayer != layer) continue;
+        }
+        const AnchorUV uv =
+            anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
+        if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))
+            continue;
+        const auto& jl = linkView.get<JointLink>(le);
+        for (Entity side : {jl.a, jl.b}) {
+            if (side != entt::null && reg.valid(side) &&
+                reg.all_of<RigidBody>(side)) {
+                auto& rb = reg.get<RigidBody>(side);
+                rb.asleep = false;
+                rb.sleepTicks = 0;
+            }
+        }
+        severedLinks.push_back(le);
+    }
+    for (Entity le : severedLinks) reg.destroy(le);
+
     return static_cast<std::uint32_t>(detached.size());
 }
 
@@ -240,13 +666,22 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
                   const SubVoxelAnchor& anchor, Interactable::Kind kind,
                   PropFallMode fallMode, const vec3& color, std::uint32_t meshKind,
                   LayerId layer, float yaw, std::uint8_t emissive,
-                  std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags)
+                  std::uint8_t matId, std::uint8_t animPhase, std::uint8_t flags,
+                  bool gateAnchor)
 {
     int cx = wrap_macro(anchor.cx);
     int cy = wrap_macro(anchor.cy);
     int cz = wrap_macro(anchor.cz);
 
-    if (!world.grid().solid(cx, cy, cz, anchor.subX, anchor.subY, anchor.subZ)) {
+    // Гейт спавна и проба живости обязаны задавать ОДИН вопрос (иначе вещь
+    // спавнится и отваливается первым же карвом соседнего бита): колонка у
+    // грани крепления, как в anchor_validate_step выше. Строго шире прежнего
+    // побитового теста — всё, что спавнилось, спавнится. Обход гейта — только
+    // путь записи снимка, который платит якорной пробой сам (шапка в .h).
+    const AnchorUV uv =
+        anchor_face_uv(anchor.face, anchor.subX, anchor.subY, anchor.subZ);
+    if (gateAnchor &&
+        !anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v)) {
         return entt::null;
     }
 
@@ -278,7 +713,8 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
 Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPos,
                           const SubVoxelAnchor& anchor, PropId id,
                           LayerId layer, float yaw,
-                          std::uint8_t animPhase, std::uint8_t flags)
+                          std::uint8_t animPhase, std::uint8_t flags,
+                          bool gateAnchor)
 {
     if (!prop_valid(id)) return entt::null;
     const PropDef& d = prop_def(id);
@@ -287,16 +723,33 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                           fall_mode_from_u8(d.fallMode),
                           prop_color(d),
                           d.shape,
-                          layer, yaw, d.emissive, d.matId, animPhase, flags);
+                          layer, yaw, d.emissive, d.matId, animPhase, flags,
+                          gateAnchor);
     if (e == entt::null) return entt::null;
+    // Строка таблицы на сущности: язык глаголов (S12.3) и любой будущий
+    // потребитель словаря спрашивают, ЧЕМ проп является, — supply комнаты
+    // (room_supply) читает kPropVerbs[id] через этот компонент.
+    reg.emplace<PropOf>(e, PropOf{id});
+    // Поставленный проп — ОСНАЩЕНИЕ комнаты (живой хук supply, S12.4).
+    // На входе на этаж rebuild пересчитает с нуля — двойного счёта нет.
+    supply_prop_at(reg, worldPos, id, +1);
     // Universal mass from the table ([ecs/components.h] Mass): a falling or
     // thrown prop hits with E = m*v^2/2 like everything else in the game.
     reg.emplace_or_replace<Mass>(e, Mass{static_cast<float>(d.massG) * 0.001f});
+    // Строка-заряд ([combat.h] Charge): потенциал копируется на сущность.
+    // С триггером damage выстрел ВЗВОДИТ такой проп вместо детача
+    // (check_projectile_prop_hits ниже), детонацию решает charge_step.
+    if (prop_is_charge(d))
+        reg.emplace<Charge>(e, Charge{d.explosiveG, d.chargeTrigger, 0});
     // Authored size: the unit shape is scaled to the table's exact metres.
     if (auto* pm = reg.try_get<PropMesh>(e))
         pm->scale = vec3{static_cast<float>(d.sizeXMm) * 0.001f,
                          static_cast<float>(d.sizeYMm) * 0.001f,
                          static_cast<float>(d.sizeZMm) * 0.001f};
+    // interact=None in props.csv (generator ordinal 255): the prop is scenery,
+    // not a verb. spawn_prop emplaced a clamped Interactable above; take it off.
+    if (d.interactKind == 255)
+        reg.remove<Interactable>(e);
     // Table reachMm overrides the spawn_prop default (2.5 m).
     if (reg.all_of<Interactable>(e)) {
         auto& ia = reg.get<Interactable>(e);
@@ -325,10 +778,15 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
 
     std::vector<Entity> old_;
-    // SubVoxelAnchor marks every static prop (terminals, shields, padic bulbs).
-    // Detached ragdolls lose the anchor and are left alone — they belong to the
-    // live sim, not the floor roster.
-    auto view = reg.view<const SubVoxelAnchor, const Transform>();
+    // StaticPropTag marks the floor roster (terminals, shields, padic bulbs) —
+    // spawn_prop attaches it. The roster is NOT "whatever carries an anchor":
+    // containers hold a SubVoxelAnchor too ([container.cpp] spawn) and never
+    // the tag, and when this view keyed on the anchor it wiped every crate on
+    // every floor at arrival, refresh_floor_props being called right after
+    // refresh_floor_containers (markoaudit-systems.md §1.2 — 38 of 38 crates,
+    // including ones just restored from the save). Detached ragdolls lose the
+    // tag on detach and are left alone — they belong to the live sim.
+    auto view = reg.view<const StaticPropTag, const SubVoxelAnchor, const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer == layer)
             old_.push_back(e);
@@ -378,39 +836,55 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const PropDef& d = prop_def(pid);
                 const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 
-                // The wall it hangs on: normal direction + flush offset + yaw.
-                // Sizes are authored width(X) x thickness(Y) x height(Z) for a
-                // yaw-0 panel facing +-Y; X/Y walls rotate a quarter turn.
+                // The wall it hangs on: normal direction + flush offset.
+                // Yaw выводится из грани якоря ниже (prop_wall_yaw) — один
+                // словарь «грань → поворот» на всех настенных писателей.
                 int wxd = 0, wyd = 0;
-                float yawVal = 0.0f;
-                if (solidWest)       { wxd = -1; yawVal = kHalfPi; }
-                else if (solidEast)  { wxd = 1;  yawVal = kHalfPi; }
-                else if (solidSouth) { wyd = -1; yawVal = 0.0f; }
-                else                 { wyd = 1;  yawVal = 0.0f; }
+                if (solidWest)       { wxd = -1; }
+                else if (solidEast)  { wxd = 1;  }
+                else if (solidSouth) { wyd = -1; }
+                else                 { wyd = 1;  }
+
+                // ЗАПРОС ПОВЕРХНОСТЕЙ ([world/surface.h], S10): экспонирована
+                // ли грань стены и где её реальная поверхность. Стены лепленые
+                // — «заподлицо с границей клетки» вешало панель в воздухе
+                // (скрин владельца 2026-08-20: парящий щиток); позиция, якорь
+                // и проба живости выводятся из ОДНОЙ записи примитива.
+                const std::uint8_t wallFace = anchor_face_pack(
+                    wxd != 0 ? 0 : 1, wxd != 0 ? -wxd : -wyd);
+                const SurfaceFace sf =
+                    surface_face_at(grid, x + wxd, y + wyd, z, wallFace);
+                if (sf.columns == 0) continue; // грань не экспонирована
+                const float recess = static_cast<float>(
+                    anchor_face_dir(wallFace) > 0 ? kSubDim - 1 - sf.layer
+                                                  : sf.layer) * kVoxelSize;
 
                 // Flush: slide the panel centre from the cell centre to the
-                // wall face, leaving half its thickness plus a hair of gap.
+                // REAL wall surface (recess deep), half thickness + a hair.
                 const float slide = 1.0f - (0.5f * thick + 0.02f);
                 const float wx = (static_cast<float>(x) + 0.5f) * kCell +
-                                 static_cast<float>(wxd) * slide;
+                                 static_cast<float>(wxd) * (slide + recess);
                 const float wy = (static_cast<float>(y) + 0.5f) * kCell +
-                                 static_cast<float>(wyd) * slide;
+                                 static_cast<float>(wyd) * (slide + recess);
                 const float wz = (static_cast<float>(z) + 0.5f) * kCell;
 
                 // Anchor INTO the wall cell: the panel falls when its wall is
                 // carved, not when some unrelated floor is.
+                // Якорь — прямо из записи примитива: слой вдоль оси, (su,sv)
+                // по тангенсам (обратное отображение anchor_face_uv).
                 SubVoxelAnchor anchor;
-                anchor.cx   = static_cast<std::uint8_t>(wrap_macro(x + wxd));
-                anchor.cy   = static_cast<std::uint8_t>(wrap_macro(y + wyd));
-                anchor.cz   = static_cast<std::uint8_t>(z);
-                anchor.subX = static_cast<std::uint8_t>(wxd < 0 ? 7 : wxd > 0 ? 0 : 4);
-                anchor.subY = static_cast<std::uint8_t>(wyd < 0 ? 7 : wyd > 0 ? 0 : 4);
-                anchor.subZ = 4;
-                anchor.face = 1; // wall
+                anchor.cx   = static_cast<std::uint8_t>(sf.cx);
+                anchor.cy   = static_cast<std::uint8_t>(sf.cy);
+                anchor.cz   = static_cast<std::uint8_t>(sf.cz);
+                anchor.subX = static_cast<std::uint8_t>(wxd != 0 ? sf.layer : sf.su);
+                anchor.subY = static_cast<std::uint8_t>(wxd != 0 ? sf.su : sf.layer);
+                anchor.subZ = sf.sv;
+                anchor.face = wallFace;
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
-                                             pid, layer, yawVal, anim, /*flags*/0);
+                                             pid, layer, prop_wall_yaw(wallFace),
+                                             anim, /*flags*/0);
                 if (e != entt::null) ++count;
             }
         }
@@ -426,11 +900,22 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
 
-    // Mirror PropPlacer::populate light branch:
-    //   solidAbove && (rngLight % 100 < lightChancePct)
-    //   origin = {wx, wy, wz + 1.55f}
-    // Anchor into the solid ceiling cell (Z+1) so spawn_prop solid() and
-    // anchor_validate_step stay honest — lamp falls when ceiling is carved.
+    const int pitch = lamp_pitch_cells();               // 8 cells = 16 m
+    const int headroom = lamp_light_radius_cells();     // 6 cells = the bulb's own reach
+    const int blocks = kMacroDim / pitch;               // exact tiling, no seam stripe
+
+    // One lamp per (pitch x pitch x ceiling-level) block. The block's winner is
+    // the candidate with the lowest hash score, so the pattern is even in
+    // DENSITY but jittered in position — a raster "first valid cell wins" would
+    // park every bulb on its block's low corner and read as a visible grid.
+    struct Slot {
+        std::uint32_t score;
+        std::int16_t x, y;
+        std::int8_t su, sv, layer; // запись примитива поверхностей; layer<0 = пусто
+    };
+    std::vector<Slot> best(static_cast<std::size_t>(blocks) * blocks * kMacroDim,
+                           Slot{0xFFFFFFFFu, 0, 0, 0, 0, -1});
+
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
@@ -447,17 +932,48 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                    is_solid_cell(grid.cell(x, y + 1, z));
                 if (nichX || nichY) continue;
 
-                const std::uint32_t rngLight = giga::spatial_hash(x, y, z, seed ^ kSaltLight);
-                if ((rngLight % 100u) >= kLightChancePct) continue;
+                // Hang from the REAL ceiling under-face — ЗАПРОС ПОВЕРХНОСТЕЙ
+                // ([world/surface.h], S10): грань экспонирована? Ручной
+                // lowest_layer_centre + добор точного бита умерли; дырявый
+                // центр больше не отменяет лампу — представительная колонка
+                // просто съезжает к ближайшей экспонированной.
+                const SurfaceFace sfc = surface_face_at(
+                    grid, x, y, z + 1, anchor_face_pack(2, -1));
+                if (sfc.columns == 0) continue;
 
-                // Hang from the REAL ceiling under-face: the sandwich is
-                // partially carved from below, and the cell-plane form left
-                // bulbs floating mid-air. A holed centre column = no lamp.
-                const int faceSz =
-                    grid.mask(x, y, z + 1).lowest_layer_centre();
-                if (faceSz < 0) continue;
+                // HEADROOM: some surface within the bulb's own reach below, or
+                // this is not a room's ceiling — it is an overhang over a void
+                // (or, at z = 127, the torus wrap onto the floor's base mass).
+                bool standable = false;
+                for (int d = 1; d <= headroom && !standable; ++d)
+                    standable = !grid.mask(wrap_macro(x), wrap_macro(y),
+                                           wrap_macro(z - d)).empty();
+                if (!standable) continue;
+
+                const std::uint32_t score =
+                    giga::spatial_hash(x, y, z, seed ^ kSaltLight);
+                Slot& slot = best[(static_cast<std::size_t>(z) * blocks +
+                                   y / pitch) * blocks + x / pitch];
+                if (score >= slot.score) continue;
+                slot = Slot{score, static_cast<std::int16_t>(x),
+                            static_cast<std::int16_t>(y),
+                            static_cast<std::int8_t>(sfc.su),
+                            static_cast<std::int8_t>(sfc.sv),
+                            static_cast<std::int8_t>(sfc.layer)};
+            }
+        }
+    }
+
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int by = 0; by < blocks; ++by) {
+            for (int bx = 0; bx < blocks; ++bx) {
+                const Slot& slot =
+                    best[(static_cast<std::size_t>(z) * blocks + by) * blocks + bx];
+                if (slot.layer < 0) continue;
+                const int x = slot.x, y = slot.y;
+                const int cz = wrap_macro(z + 1);
                 const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
-                                    static_cast<float>(faceSz) * (kCell / 8.0f);
+                                    static_cast<float>(slot.layer) * (kCell / 8.0f);
 
                 // Cell CENTRE — the corner form hung bulbs on whatever wall
                 // shared the corner (the same bug the wall seeder had).
@@ -465,26 +981,29 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 const float wy = (static_cast<float>(y) + 0.5f) * kCell;
                 const float wz = faceM - 0.14f;
 
+                // Якорь — прямо из записи примитива: представительная
+                // экспонированная колонка (su,sv) + её слой. Прежний добор
+                // «точного солидного бита центра 2×2» умер вместе с побитовым
+                // гейтом (колонковая проба anchor_alive спрашивает то же окно).
                 SubVoxelAnchor anchor;
                 anchor.cx   = x;
                 anchor.cy   = y;
-                anchor.cz   = wrap_macro(z + 1);
-                anchor.subX = 4;
-                anchor.subY = 4;
-                anchor.subZ = 0; // bottom of ceiling cell
-                anchor.face = 2; // ceiling
+                anchor.cz   = cz;
+                anchor.subX = static_cast<std::uint8_t>(slot.su);
+                anchor.subY = static_cast<std::uint8_t>(slot.sv);
+                anchor.subZ = static_cast<std::uint8_t>(slot.layer);
+                anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
 
                 // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
                 const PropId pid =
-                    (rngLight & 1u) ? PropId::BareBulb : PropId::FloodLamp;
-                const float yaw = static_cast<float>(rngLight % 4u) * kHalfPi;
+                    (slot.score & 1u) ? PropId::BareBulb : PropId::FloodLamp;
+                const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
                 const std::uint8_t anim =
-                    static_cast<std::uint8_t>(rngLight & 0xFFu);
+                    static_cast<std::uint8_t>(slot.score & 0xFFu);
 
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
                                              pid, layer, yaw, anim, /*flags*/0);
                 if (e != entt::null) ++count;
-
             }
         }
     }
@@ -508,7 +1027,81 @@ std::uint32_t collect_interactable_positions(const Registry& reg, LayerId layer,
     return n;
 }
 
+std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
+                                    LayerId layer)
+{
+    // Жилой ритм — четыре фазы по две вахты: полный → рабочий → дежурный →
+    // тьма (уровни — решение владельца 2026-08-20, план time-watch шаг 2).
+    static constexpr std::uint8_t kDwellLevels[4] = {100, 60, 25, 0};
+    std::uint32_t n = 0;
+    auto view = reg.view<const Transform, const Interactable>();
+    for (auto e : view) {
+        if (view.get<const Interactable>(e).kind !=
+            Interactable::Kind::ElectricalShield)
+            continue;
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        ShieldProgram prog{}; // дефолт — круглосуточный полный (S10)
+        if (rooms != nullptr) {
+            const int cx = static_cast<int>(tr.pos.x / kCellSize);
+            const int cy = static_cast<int>(tr.pos.y / kCellSize);
+            const int cz = static_cast<int>(tr.pos.z / kCellSize);
+            const RoomId rid = room_at(*rooms, cx, cy, cz);
+            const Room* r = room_of(*rooms, rid);
+            // Программа — из ДАННЫХ модуля, не из ветки по виду (правило
+            // владельца 2026-08-23): объявил «спать» — район дышит жилым
+            // ритмом; коридор/цех/улица — круглосуточно.
+            if (r != nullptr && r->declared[kVerbSleep] > 0)
+                std::copy(std::begin(kDwellLevels), std::end(kDwellLevels),
+                          std::begin(prog.levels));
+        }
+        reg.emplace_or_replace<ShieldProgram>(e, prog);
+        ++n;
+    }
+    return n;
+}
+
+std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer)
+{
+    // Щитков на этаж — десятки (полоса ~0.35% настенных клеток), ламп —
+    // тысячи: разовый O(лампы × щитки) на прибытии, в кадре — ноль поиска
+    // (кэш в PropLight).
+    struct ShieldRef { vec3 pos; ShieldProgram prog; };
+    static std::vector<ShieldRef> shields;
+    shields.clear();
+    auto sview = reg.view<const Transform, const ShieldProgram>();
+    for (auto e : sview) {
+        const Transform& tr = sview.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        shields.push_back({tr.pos, sview.get<const ShieldProgram>(e)});
+    }
+
+    std::uint32_t n = 0;
+    auto lamps = reg.view<const Transform, PropLight>();
+    for (auto e : lamps) {
+        const Transform& tr = lamps.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        PropLight& pl = lamps.get<PropLight>(e);
+        // Фазы — только у общей сети, ровно как power cut (S15.4).
+        if (static_cast<FlickerProfile>(pl.flicker) != FlickerProfile::Mains)
+            continue;
+        const ShieldRef* best = nullptr;
+        float bestD2 = 0.0f;
+        for (const ShieldRef& s : shields) {
+            const float d2 = wrap_dist2(s.pos, tr.pos, kWorldExtent);
+            if (best == nullptr || d2 < bestD2) { best = &s; bestD2 = d2; }
+        }
+        if (best == nullptr) continue; // этаж без щитков — круглосуточно
+        std::copy(std::begin(best->prog.levels), std::end(best->prog.levels),
+                  std::begin(pl.phaseLevels));
+        pl.phaseOffset = best->prog.phaseOffset;
+        ++n;
+    }
+    return n;
+}
+
 std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId layer,
+                                                 std::uint64_t tick,
                                                  std::vector<PropMeshInstance>& out)
 {
     std::uint32_t n = 0;
@@ -527,6 +1120,17 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
         inst.emissive  = mesh.emissive;
         inst.flags     = mesh.flags;
         inst.animPhase = mesh.animPhase;
+        // Фаза щитка гасит ПЛАФОН вместе со светом (S15.4 шаг 4): иначе
+        // обесточенная фазой лампа светила бы арматурой. Мерцание остаётся
+        // в шейдере (чистая функция времени); фазовый уровень — данные
+        // программы, поэтому едет инстансом при редкой пересборке.
+        if (const auto* pl = reg.try_get<const PropLight>(e);
+            pl != nullptr &&
+            static_cast<FlickerProfile>(pl->flicker) == FlickerProfile::Mains) {
+            inst.emissive = static_cast<std::uint8_t>(
+                static_cast<float>(inst.emissive) *
+                shield_phase_level(pl->phaseLevels, pl->phaseOffset, tick));
+        }
         if (reg.all_of<Renderable>(e))
             inst.color = reg.get<Renderable>(e).color;
         out.push_back(inst);
@@ -558,10 +1162,10 @@ InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
         const auto& ia = view.get<const Interactable>(e);
         if (!ia.active || ia.kind != kind) continue;
 
-        const float dx = wrap_delta_f(ppos.x, tr.pos.x, kWorldExtent);
-        const float dy = ppos.y - tr.pos.y;
-        const float dz = wrap_delta_f(ppos.z, tr.pos.z, kWorldExtent);
-        const float d2 = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2 — все три оси. Голый y здесь ослеплял 12 вызывающих
+        // (двери/терминалы/щиты/NPC/контейнеры у y-шва) — последняя строка
+        // базлайна гейта B, обнулён этим коммитом.
+        const float d2 = wrap_dist2(ppos, tr.pos, kWorldExtent);
         if (d2 < best) {
             best = d2;
             hit.entity = e;
@@ -585,57 +1189,173 @@ bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
     return hit.hit;
 }
 
-void prop_ragdoll_step(Registry& reg, float dt)
-{
-    // Angular integration is owned by physics_step (core). This step damps
-    // spin on DynamicBodyTag props and drops AngularVelocity once settled
-    // ([jirnyak.md] §18 prop_ragdoll). In-air debris damps slowly; grounded
-    // debris damps hard so tumbled junk stops spinning after landing.
-    constexpr float kAirDamp = 1.5f;   // 1/s exponential rate while airborne
-    constexpr float kGroundMul = 0.85f; // per-step multiplier when grounded
-    constexpr float kRestW2 = 1e-4f;    // |w|^2 below this -> remove component
-
-    Entity settled[64];
-    int settledCount = 0;
-
-    auto view = reg.view<DynamicBodyTag, AngularVelocity>();
-    for (auto e : view) {
-        auto& ang = view.get<AngularVelocity>(e);
-
-        const bool grounded = reg.all_of<GravityAffected>(e) &&
-                              reg.get<GravityAffected>(e).grounded;
-        if (grounded) {
-            ang.w.x *= kGroundMul;
-            ang.w.y *= kGroundMul;
-            ang.w.z *= kGroundMul;
-        } else {
-            // exp(-k*dt) damping — always reduces |w| for dt > 0.
-            const float s = std::exp(-kAirDamp * dt);
-            ang.w.x *= s;
-            ang.w.y *= s;
-            ang.w.z *= s;
-        }
-
-        const float w2 = ang.w.x * ang.w.x + ang.w.y * ang.w.y + ang.w.z * ang.w.z;
-        if (w2 < kRestW2) {
-            settled[settledCount++] = e;
-            if (settledCount == 64) {
-                for (int i = 0; i < 64; ++i) {
-                    reg.remove<AngularVelocity>(settled[i]);
-                }
-                settledCount = 0;
-            }
-        }
-    }
-
-    for (int i = 0; i < settledCount; ++i) {
-        reg.remove<AngularVelocity>(settled[i]);
-    }
-}
 
 bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
                         EventBus& bus) {
     return interaction_step(reg, player, targetKind, bus, nullptr);
+}
+
+std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
+                                  vec3 bodyHalf, float totalKg,
+                                  float restitution, float friction) {
+    if (!reg.valid(root) || !reg.all_of<Transform>(root)) return 0;
+    const FormDef& def = form_def(form);
+    if (def.count == 0) return 0;
+
+    const Transform& rootTr = reg.get<Transform>(root);
+    const vec3 basePos = rootTr.pos;
+    const LayerId layer = rootTr.layer;
+    const vec3 vel0 = reg.all_of<Velocity>(root)
+                          ? reg.get<Velocity>(root).v
+                          : vec3{0.0f, 0.0f, 0.0f};
+    const vec3 tint = reg.all_of<Renderable>(root)
+                          ? reg.get<Renderable>(root).color
+                          : vec3{0.5f, 0.5f, 0.5f};
+
+    // Доли строк — от габарита ЭТОГО тела (S11): ширина W задаёт поперечник,
+    // рост H — вертикаль. Одна строка обслуживает ребёнка и громилу.
+    const float W = bodyHalf.x * 2.0f;
+    const float H = bodyHalf.z * 2.0f;
+    auto seg_pos = [&](const FormSegDef& sd) {
+        return basePos + vec3{sd.ox * W, sd.oy * W, sd.oz * H};
+    };
+
+    // Сегмент 0 — САМ корень: на нём лут, интеракция и сейв-идентичность.
+    Entity made[kMaxFormSegs];
+    const FormSegDef& rootSd = kFormSegs[def.first];
+    {
+        const vec3 half{rootSd.sx * W, rootSd.sy * W, rootSd.sz * H};
+        reg.emplace_or_replace<AABB>(root, AABB{half});
+        rigid_attach_box(reg, root, half, totalKg * rootSd.massFrac,
+                         restitution, friction);
+        made[0] = root;
+    }
+
+    std::uint32_t n = 0;
+    for (std::uint16_t i = 1; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        const vec3 pos = seg_pos(sd);
+        Entity seg = reg.create();
+        reg.emplace<Transform>(seg, Transform{pos, layer});
+        reg.emplace<Velocity>(seg, Velocity{vel0});
+        reg.emplace<Renderable>(seg, Renderable{tint});
+        reg.emplace<DynamicBodyTag>(seg);
+        reg.emplace<BodySegment>(seg, BodySegment{root});
+        const float kg = totalKg * sd.massFrac;
+        if (sd.prim == FormPrim::Sphere) {
+            const float r = sd.sx * H;
+            reg.emplace<AABB>(seg, AABB{vec3{r, r, r}});
+            rigid_attach_sphere(reg, seg, r, kg, restitution, friction);
+        } else {
+            const vec3 half{sd.sx * W, sd.sy * W, sd.sz * H};
+            reg.emplace<AABB>(seg, AABB{half});
+            rigid_attach_box(reg, seg, half, kg, restitution, friction);
+        }
+        made[i] = seg;
+        ++n;
+
+        // Связь с родителем: восстановленная длина — фактическое расстояние
+        // между центрами, так форма и есть покойная поза.
+        const Entity parent =
+            (sd.parent == kFormNoParent) ? root : made[sd.parent];
+        Entity link = reg.create();
+        JointLink jl;
+        jl.a = seg;
+        jl.b = parent;
+        jl.restLen = length(wrap_delta3(
+            pos, reg.get<Transform>(parent).pos, kWorldExtent));
+        jl.rope = sd.rope != 0;
+        reg.emplace<JointLink>(link, jl);
+        reg.emplace<BodySegment>(link, BodySegment{root});
+        ++n;
+    }
+    return n;
+}
+
+
+Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
+                          float reachM, std::uint8_t freeHands) {
+    if ((freeHands & 0x3u) == 0) return entt::null; // обе руки заняты
+    if (!reg.valid(carrier) || !reg.all_of<Transform>(carrier))
+        return entt::null;
+    const Transform& ctr = reg.get<Transform>(carrier);
+    const float reachSq = reachM * reachM;
+
+    Entity best = entt::null;
+    float bestD2 = reachSq;
+    auto view = reg.view<RigidBody, Transform>();
+    for (auto e : view) {
+        if (e == carrier) continue;
+        if (reg.all_of<CarriedBy>(e)) continue; // уже в чьих-то руках
+        // Сегмент чужого тела не берётся сам — берётся его КОРЕНЬ, иначе
+        // игрок таскал бы труп за голову, а таз оставался на полу.
+        if (reg.all_of<BodySegment>(e)) continue;
+        const Transform& tr = view.get<Transform>(e);
+        if (tr.layer != ctr.layer) continue;
+        const float d2 = wrap_dist2(ctr.pos, tr.pos, kWorldExtent);
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            best = e;
+        }
+    }
+    if (best == entt::null) return entt::null;
+
+    // Держим перед собой: вперёд на радиус тела плюс полшага, чуть выше
+    // центра носителя — вывод из габаритов, не подобранное число.
+    const float bodyR = reg.get<RigidBody>(best).radius;
+    const float carrierR = reg.all_of<AABB>(carrier)
+                               ? std::max(reg.get<AABB>(carrier).half.x,
+                                          reg.get<AABB>(carrier).half.y)
+                               : 0.4f;
+    const vec3 fwd = normalize(forward);
+    CarriedBy cb;
+    cb.carrier = carrier;
+    cb.offset = fwd * (carrierR + bodyR + 0.1f) + vec3{0.0f, 0.0f, 0.2f};
+    cb.hand = (freeHands & 0x1u) != 0 ? 0u : 1u; // младшая свободная рука
+    reg.emplace_or_replace<CarriedBy>(best, cb);
+    return best;
+}
+
+std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
+                           float throwSpeed, int hand) {
+    static thread_local std::vector<Entity> dropped;
+    dropped.clear();
+    auto view = reg.view<CarriedBy>();
+    for (auto e : view) {
+        const CarriedBy& cb = view.get<CarriedBy>(e);
+        if (cb.carrier != carrier) continue;
+        if (hand >= 0 && cb.hand != static_cast<std::uint8_t>(hand)) continue;
+        dropped.push_back(e);
+    }
+    const vec3 fwd = normalize(forward);
+    for (Entity e : dropped) {
+        reg.remove<CarriedBy>(e);
+        // Скорость носителя уже в теле (кинематический follow её зеркалит) —
+        // бросок добавляется поверх, поэтому на бегу летит дальше.
+        if (auto* vel = reg.try_get<Velocity>(e)) vel->v += fwd * throwSpeed;
+        if (auto* rb = reg.try_get<RigidBody>(e)) {
+            rb->asleep = false;
+            rb->sleepTicks = 0;
+        }
+    }
+    return static_cast<std::uint32_t>(dropped.size());
+}
+
+void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots) {
+    if (roots.empty()) return;
+    static thread_local std::vector<Entity> doomed;
+    doomed.clear();
+    auto view = reg.view<BodySegment>();
+    for (auto e : view) {
+        const Entity root = view.get<BodySegment>(e).root;
+        for (Entity r : roots) {
+            if (r == root) {
+                doomed.push_back(e);
+                break;
+            }
+        }
+    }
+    for (Entity e : doomed) reg.destroy(e);
 }
 
 } // namespace giga::game

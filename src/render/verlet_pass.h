@@ -1,0 +1,323 @@
+// verlet_pass.h — THE GPU-verlet pass for antourage: hanging wires (GHOST
+// chains) and 2D cloth sheets (curtains, tarps, membranes) in one class, one
+// compute shader (verlet_sim.comp), one push-body buffer. A chain is a W x 1
+// lattice — at H == 1 the sheet solver degenerates into the chain solver in
+// the same traversal order, so the two old passes (wire_pass/cloth_pass, 87 %
+// identical) collapsed into sections of this one.
+//
+// SoA POOL (stage 2 of the merge, 2026-08-31): ONE point pool + ONE element
+// table, banks of fixed geometry laid out back to back — wires [0..W*8), then
+// cloths. Bank membership is ARITHMETIC off the bank base carried in the push
+// block (plan §2.1: element sizes are compile-time constants, so an
+// indirection buffer would buy nothing). The per-kind caps kMaxWireChains =
+// 1024 / kMaxClothSheets = 512 died here — the ONLY cap is the canonical root
+// below, and a bank is limited by pool space alone.
+//
+// The render half of the owner's one-way law: the verlet sim lives ENTIRELY
+// on the GPU, bodies/the player push antourage and antourage pushes nothing
+// back, so the CPU tick pays zero. Points are pulled straight from the sim
+// SSBOs by wire.vert (line ribbons) and cloth.vert (two-sided quads) — no
+// vertex buffer, no per-frame upload beyond a handful of alive flags.
+//
+// LAYERING: render never includes game/ ([ARCHITECTURE.md]), so this pass
+// speaks POD element formats (GpuWireChain / GpuClothSheet below) as its
+// UPLOAD seam — the app packs them from game::AntourageBake at floor load and
+// the pass repacks into the pool. The upload PODs stayed byte-identical
+// through the relayout precisely so the app and the tests never moved.
+#pragma once
+
+#include <vulkan/vulkan.h>
+#include <cstdint>
+#include <vector>
+
+#include "core/math.h"
+#include "render/material_textures.h" // CubePush — the shared push-constant block
+#include "render/vk_buffer.h"
+
+namespace giga::gpu {
+
+// UPLOAD POD: one chain as the app seam speaks it. meta.x = segment rest
+// length, meta.y = alive flag, meta.z = massKg (the bake's honest derivation,
+// parked for the damping increment), cur[i].w = inverse mass (0 pins a point).
+inline constexpr int kWireChainPoints = 8;
+struct GpuWireChain {
+    vec4 meta;
+    vec4 cur[kWireChainPoints];
+    vec4 prev[kWireChainPoints];
+};
+static_assert(sizeof(GpuWireChain) == 272, "three-vec4-clean layout");
+
+// UPLOAD POD: one sheet. Grid is kClothGridW x kClothGridH = 8 x 4 points,
+// row-major from the TOP row. meta.x = horizontal rest, meta.y = alive,
+// meta.z = vertical rest; cur[i].w = inverse mass (0 pins — top row default).
+inline constexpr int kClothGridW = 8;
+inline constexpr int kClothGridH = 4;
+inline constexpr int kClothGridPoints = kClothGridW * kClothGridH;
+struct GpuClothSheet {
+    vec4 meta;
+    vec4 cur[kClothGridPoints];
+    vec4 prev[kClothGridPoints];
+};
+static_assert(sizeof(GpuClothSheet) == 1040, "vec4-clean layout");
+
+// 7 x 3 quads x 6 vertices — cloth.vert derives the grid cell from the index.
+inline constexpr std::uint32_t kClothVertsPerSheet =
+    (kClothGridW - 1) * (kClothGridH - 1) * 6;
+
+// THE root cap of the antourage system (CANON S9/S11: «антураж 2^20 =
+// 1 048 576 точек, цель — плотный фон»; каждый производный буфер обязан
+// считаться от корневого, не заводить своё число). Pool cost: 2^20 x 32 B =
+// 32 MiB host-visible — the price of the canonical density target, paid once.
+inline constexpr std::uint32_t kRootAntouragePoints = 1u << 20;
+
+// THE root cap of the particle system (CANON S9/S11: «частицы 32768-пул»,
+// recycling ring — the exemplary root). Particles are the pool's THIRD BANK
+// at a FIXED base right after the antourage span: the antourage repack can
+// never reach it by construction (it truncates at kRootAntouragePoints).
+// Must stay in LOCKSTEP with kParticleBase in verlet_sim.comp/particle.vert.
+inline constexpr std::uint32_t kRootParticles = 32768;
+inline constexpr std::uint32_t kParticlePointBase = kRootAntouragePoints;
+inline constexpr std::uint32_t kPoolPoints =
+    kRootAntouragePoints + kRootParticles;
+
+// ОСКОЛКИ GpuHandoff (инкр. 5, решение владельца «осколки-элементы»): кусок
+// = ПАРА верле-точек с констрейнтом — ориентированный черепок с материалом
+// пропа, кувыркается и ложится (полный замысел S3 вместо чистых искр).
+// Кап ПРОИЗВОДНЫЙ от корня частиц: кусков на расколе на порядок меньше,
+// чем искр — kRootParticles/32. Банк точек — фиксированно ПЕРЕД частицами
+// (репак антуража усечён до него), элементы — фиксированный ХВОСТ таблицы.
+inline constexpr std::uint32_t kRootShards = kRootParticles / 32; // 1024
+inline constexpr int kShardPoints = 2;
+inline constexpr std::uint32_t kShardPointBase =
+    kParticlePointBase - kRootShards * kShardPoints;
+inline constexpr std::uint32_t kShardElemBase =
+    kRootAntouragePoints / static_cast<std::uint32_t>(kWireChainPoints) -
+    kRootShards; // = kMaxAntourageElems − kRootShards (объявлен ниже)
+
+// DERIVED: the element table can never outgrow the pool divided by the
+// smallest element (a chain, 8 points). The GpuHandoff-shard increment adds a
+// smaller element (2–4 points) and MUST re-derive this divisor with it.
+inline constexpr std::uint32_t kMaxAntourageElems =
+    kRootAntouragePoints / static_cast<std::uint32_t>(kWireChainPoints);
+
+// POOL RECORDS. Must stay in LOCKSTEP with verlet_sim.comp, wire.vert and
+// cloth.vert. A point: cur.w = inverse mass (0 = pinned), prev.w spare (the
+// particle region will claim it for life at the particle-merge increment).
+struct VerletPoint {
+    vec4 cur;
+    vec4 prev;
+};
+static_assert(sizeof(VerletPoint) == 32, "two-vec4-clean layout");
+
+// An element: ONE vec4 — {restX, restY, alive, dragK}. Its first point and
+// its W x H are arithmetic off the bank bases (see file header), so the old
+// per-element meta shrank 272/1040 B → 16 B. dragK is the MEDIUM-drag
+// coefficient DERIVED in repack() from the bake's honest mass (½·C_d·A·v₀/m
+// per point — the parked-and-unread massKg finally got consumed): the sim's
+// γ = kStructuralDamp + dragK·ρ(медиа клетки точки) — провод в воде глохнет,
+// в воздухе качается (физика среды из materials.csv, решение владельца).
+struct VerletElem {
+    vec4 v;
+};
+static_assert(sizeof(VerletElem) == 16, "one-vec4-clean layout");
+
+// SPAWN POD of one particle — the app seam (writers/pack_particles speak it,
+// exactly as GpuWireChain is the wire upload seam). The pass converts it to
+// the pool form: cur = pos (w = invMass 1), prev = pos − vel·(1/60 reference
+// step, the pin dt), prev.w = life remaining; the rest goes to the aux bank.
+//   posLife  = xyz world metres, w = life remaining s (<= 0 -> dead)
+//   velTotal = xyz m/s,          w = life total s (the vert's fade base)
+//   colorSize= rgb tint,         w = billboard edge, metres
+//   phys     = x gravity mul, y drag (per 60 Hz step; the pass converts to
+//              γ = −ln(drag)·60 so the sim is dt-honest), z restitution
+//              (0 = a wall hit kills it), w = emissive 0..255
+struct GpuParticle {
+    vec4 posLife;
+    vec4 velTotal;
+    vec4 colorSize;
+    vec4 phys;
+};
+static_assert(sizeof(GpuParticle) == 64, "four-vec4-clean layout");
+
+// Per-particle aux bank (binding 4): what the pool point cannot carry.
+// Simplicity over bytes (48 B × 32768 = 1.5 MiB): {colorSize; phys with γ
+// in .y; meta.x = life total for the vert's fade}.
+struct VerletParticleAux {
+    vec4 colorSize;
+    vec4 phys;
+    vec4 meta;
+};
+static_assert(sizeof(VerletParticleAux) == 48, "three-vec4-clean layout");
+
+// Draw-stage extra push range at offset sizeof(CubePush): the two bank
+// numbers the instanced vertex shaders need to address the pool. Lives BESIDE
+// CubePush (vertex-only range), never inside it — CubePush is shared by the
+// whole pass family and its dead lanes stay dead.
+struct VerletDrawPush {
+    std::uint32_t clothPointBase;
+    std::uint32_t wireElemCount;
+    std::uint32_t pad0, pad1;
+};
+static_assert(sizeof(CubePush) + sizeof(VerletDrawPush) <= 128,
+              "must fit the 128-byte guaranteed push range");
+
+// GIGA_PARTICLE_PIN is set (main gates the nondeterministic burst writers
+// and injects one fixed-seed synthetic burst instead — pin protocol).
+bool particle_pin_active();
+
+// Push-body cap. Every body on the active layer brushes wires and cloth —
+// the player is just one of them (an NPC with a camera, owner's law). One
+// vec4 per body: xyz = world pos, w = push radius. ONE buffer for both banks.
+inline constexpr std::uint32_t kMaxPushBodies = 512;
+
+class VerletPass {
+public:
+    VerletPass() = default;
+    ~VerletPass() { destroy(); }
+    VerletPass(const VerletPass&) = delete;
+    VerletPass& operator=(const VerletPass&) = delete;
+
+    // `masksBuffer` is VoxelMirror's masks SSBO, exactly as ParticlePass takes
+    // it: the sim collides against the render-side copy of the grid, so a piece
+    // that lost its last pin falls and LANDS instead of sinking through the
+    // floor. The mirror outlives this pass, so the raw handle is safe to keep.
+    // `renderPass` may be VK_NULL_HANDLE: compute-only mode for headless tests
+    // (verlet_test) — the sim runs, the draws are never created.
+    // `typesBuffer` — VoxelMirror cell types (u16/cell): the CELL of a point
+    // names the medium it swings in (macro question, S16.4 law — density
+    // from the one materials table scales the drag).
+    bool init(VulkanDevice* dev, VkRenderPass renderPass, const char* shaderDir,
+              VkBuffer masksBuffer, VkBuffer typesBuffer,
+              VkDescriptorSetLayout lightGridSetLayout = VK_NULL_HANDLE);
+    void destroy();
+    bool ready() const {
+        return wireDrawPipeline_ != VK_NULL_HANDLE &&
+               clothDrawPipeline_ != VK_NULL_HANDLE;
+    }
+    bool sim_ready() const { return simPipeline_ != VK_NULL_HANDLE; }
+
+    // Replace a bank (floor load / prop rebuild). Uploads rest poses; the
+    // verlet state restarts from rest, which is invisible on a load. Each
+    // call repacks BOTH banks into the pool (a few hundred KiB memcpy).
+    void upload_wires(const GpuWireChain* chains, std::uint32_t count);
+    void upload_cloths(const GpuClothSheet* sheets, std::uint32_t count);
+
+    // CPU-side aliveness (the anchor probe against the live grid): flags[i]=0
+    // kills element i this frame — written into the element table.
+    void write_wire_alive(const std::uint8_t* flags, std::uint32_t count);
+    void write_cloth_alive(const std::uint8_t* flags, std::uint32_t count);
+
+    // Per-element pin mask (bit j pins point j) written into the pool's
+    // inverse mass slots: pinned = 0, free = 1. This is how a SEVERED end lets
+    // go without re-uploading — live verlet positions are kept, so the wire
+    // whips down from where it was instead of snapping back to rest.
+    void write_wire_pins(const std::uint8_t* masks, std::uint32_t count);
+    void write_cloth_pins(const std::uint32_t* masks, std::uint32_t count);
+
+    // This frame's push bodies (every Transform+AABB body on the layer, the
+    // camera holder among them — nobody special). vec4 = xyz pos, w radius.
+    void upload_bodies(const vec4* bodies, std::uint32_t count);
+
+    // Drop `count` fresh particles at the ring cursor (wraps, overwrites the
+    // oldest — cosmetics may drop, the frame must not stall). Converts the
+    // spawn POD to the pool verlet form; CPU-writes host-visible memory.
+    void spawn_particles(const GpuParticle* items, std::uint32_t count);
+
+    // Осколки: тот же спавн-POD (pos/vel/цвет/жизнь), каждый сид разворачи-
+    // вается в ПАРУ точек по детерминированной оси (хеш от seed+k) с
+    // кувырком; кольцевой курсор своего банка.
+    void spawn_shards(const GpuParticle* items, std::uint32_t count,
+                      std::uint32_t seed);
+    void gather_shard(std::uint32_t slot, VerletPoint out[kShardPoints]) const;
+
+    // Live-particle census off the mapped pool (HUD/diagnostic cadence).
+    std::uint32_t particle_alive_count() const;
+    std::uint32_t particle_spawned_total() const { return particleSpawned_; }
+
+    // The verlet step: ONE pipeline, TWO dispatches (plan §2.3) — points
+    // (integration + bodies + world landing, thread per point) then elements
+    // (constraint relaxation, thread per element), one barrier between.
+    // Record OUTSIDE the render pass, before draw. `gravity` is the layer's
+    // declared acceleration VECTOR (m/s^2) — never re-derive "down".
+    void record_sim(VkCommandBuffer cmd, float dt, vec3 gravity);
+
+    // The draws — INSTANCED now (one instance per element; the old
+    // vertex-index division died with the relayout). Record INSIDE the render
+    // pass, after the solid passes. lightSet — сет световой сетки (set 1).
+    void record_draw_wires(VkCommandBuffer cmd, const CubePush& push,
+                           VkDescriptorSet lightSet);
+    void record_draw_cloths(VkCommandBuffer cmd, const CubePush& push,
+                            VkDescriptorSet lightSet);
+    // Particle billboards: alpha-blended, depth-tested, NO depth write — the
+    // one draw of the family with its own fixed-function state.
+    void record_draw_particles(VkCommandBuffer cmd, const CubePush& push,
+                               VkDescriptorSet lightSet);
+    // Черепки: солидные ориентированные ленты-обломки (свой vert, wire-класс
+    // fixed-function) — рисуются с антуражем, до полупрозрачных частиц.
+    void record_draw_shards(VkCommandBuffer cmd, const CubePush& push,
+                            VkDescriptorSet lightSet);
+
+    std::uint32_t chain_count() const { return wireCount_; }
+    std::uint32_t sheet_count() const { return clothCount_; }
+
+    // Reassemble one element in the UPLOAD POD view — the read seam for
+    // verlet_test and the GIGA_VERLET_PIN dump (same bytes, same order as the
+    // pre-relayout hash walked, so pins stay comparable across the merge).
+    void gather_chain(std::uint32_t idx, GpuWireChain* out) const;
+    void gather_sheet(std::uint32_t idx, GpuClothSheet* out) const;
+    void gather_particle(std::uint32_t slot, VerletPoint* out) const;
+
+private:
+    // Pin bookkeeping per bank (sims since upload, upload ordinal, dump latch).
+    struct BankPin {
+        std::uint32_t simsSinceUpload = 0;
+        std::uint32_t uploadEpoch = 0;
+        bool pinDumped = false;
+    };
+
+    bool create_pipelines(VkRenderPass renderPass, const char* shaderDir);
+    void repack();                      // stage vectors -> pool + element table
+    void maybe_pin_dump(BankPin& s, const char* tag, std::uint32_t elemBase,
+                        std::uint32_t pointBase, std::uint32_t count,
+                        std::uint32_t pointsPer);
+    std::uint32_t cloth_point_base() const {
+        return wireCount_ * static_cast<std::uint32_t>(kWireChainPoints);
+    }
+
+    void maybe_particle_pin_dump(); // GIGA_PARTICLE_PIN, migrated intact
+
+    VulkanDevice* dev_ = nullptr;
+    VulkanBuffer points_; // persistent, host-visible: the ONE pool
+    VulkanBuffer elems_;  // persistent, host-visible: the element table
+    VulkanBuffer bodies_; // per-frame push bodies
+    VulkanBuffer aux_;    // persistent, host-visible: particle aux bank
+    std::uint32_t bodyCount_ = 0;
+    std::uint32_t wireCount_ = 0;
+    std::uint32_t clothCount_ = 0;
+    std::uint32_t particleCursor_ = 0;   // spawn ring over the particle bank
+    std::uint32_t shardCursor_ = 0;      // spawn ring over the shard bank
+    std::uint32_t particleSpawned_ = 0;  // HUD/diagnostic total
+    std::uint32_t particleSims_ = 0;     // GIGA_PARTICLE_PIN bookkeeping
+    bool particlePinDumped_ = false;
+    BankPin wirePin_;
+    BankPin clothPin_;
+
+    // Upload staging: kept so either bank can be replaced independently while
+    // the pool stays packed back to back (repack cost is a small memcpy).
+    std::vector<GpuWireChain> wireStage_;
+    std::vector<GpuClothSheet> clothStage_;
+
+    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool pool_ = VK_NULL_HANDLE;
+    VkDescriptorSet set_ = VK_NULL_HANDLE; // ONE set — banks share every binding
+    VkPipelineLayout simLayout_ = VK_NULL_HANDLE;
+    VkPipeline simPipeline_ = VK_NULL_HANDLE;
+    VkPipelineLayout drawLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
+    VkPipeline wireDrawPipeline_ = VK_NULL_HANDLE;
+    VkPipeline clothDrawPipeline_ = VK_NULL_HANDLE;
+    VkPipeline particleDrawPipeline_ = VK_NULL_HANDLE;
+    VkPipeline shardDrawPipeline_ = VK_NULL_HANDLE;
+};
+
+} // namespace giga::gpu

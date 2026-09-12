@@ -160,16 +160,17 @@ struct RunLedger;   // [extraction.h]; only ever taken by reference here
 // The generated table (data/economy.csv -> tools/gen_economy_table.py)
 // ---------------------------------------------------------------------------
 
-inline constexpr std::size_t kWealthTierCount = 5;
-
 // The row count the source_rules gate compares against data/economy.csv. A LITERAL on
 // purpose: the gate reads it with a regex, so a computed expression would make the
 // drift check silently blind (tools/check_source_rules.cmake Rule 7 fails loudly on a
 // missing declaration, but only if the pattern is the one it looks for).
-inline constexpr std::size_t kEconomyRows = 10;
-static_assert(kEconomyRows == kEconomyBands + kWealthTierCount,
-              "data/economy.csv holds both tables; kEconomyRows is their sum and the "
-              "gate reads it, so the two halves cannot drift apart unnoticed");
+// (WEALTH-половина таблицы — WealthTier/wealth_tier/wealth_tier_name — СНЕСЕНА
+// вердиктом владельца 2026-08-27: читатели были только в тестах; спрос «богатство»
+// для S13.1 будет считаться от net_worth напрямую, когда появится потребитель.)
+inline constexpr std::size_t kEconomyRows = 5;
+static_assert(kEconomyRows == kEconomyBands,
+              "data/economy.csv is the band table; kEconomyRows is its row count and "
+              "the gate reads it, so table and CSV cannot drift apart unnoticed");
 
 // One depth band's money contract. POD, 28 bytes, no interior padding: the whole table
 // is 140 B and is permanently cache-resident like the item and mob tables.
@@ -196,21 +197,8 @@ static_assert(sizeof(BankTerms) == 28, "BankTerms must stay a tight 28-byte row"
 static_assert(alignof(BankTerms) == 4);
 static_assert(std::is_trivially_copyable_v<BankTerms>);
 
-// A net-worth bracket, in roubles. `hi` is exclusive; the last tier's `hi` is the
-// reference's 5,000,000 wealth cap and is informational — `wealth_tier` returns the
-// last tier for anything above it, because this build's own floor -26 pays 3.5M for a
-// single clear ([loot.h]) and a player past the cap is still a millionaire.
-struct WealthTier {
-    std::int64_t lo;
-    std::int64_t hi;
-};
-static_assert(sizeof(WealthTier) == 16);
-static_assert(std::is_trivially_copyable_v<WealthTier>);
-
 extern const std::array<BankTerms, kEconomyBands> kBankTerms;
 extern const std::array<const char*, kEconomyBands> kBandNames;
-extern const std::array<WealthTier, kWealthTierCount> kWealthTiers;
-extern const std::array<const char*, kWealthTierCount> kWealthTierNames;
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -232,10 +220,12 @@ static_assert(kBankPeriodTicks == 7500ull);
 // That is the reference's behaviour too, and it is what keeps this O(1) on the tick.
 inline constexpr std::uint32_t kBankMaxCatchupPeriods = 24u;
 
-// Recent-operation ring. The reference's BANKING_LEDGER_CAPACITY, verbatim, as a fixed
-// array rather than a growing vector — this struct has to stay POD so a save can write
-// it field by field like every other run struct ([save.h]).
-inline constexpr std::size_t kBankLedgerSlots = 24;
+// (Кольцо BankEntry ledger[24] + BankOp + bank_last_entry/bank_op_name СНЕСЕНЫ
+// вердиктом владельца 2026-08-27: писались каждой операцией и сейвились, но не
+// имели НИ ОДНОГО читателя в игре — write-only история, §35-класс. Если банку
+// понадобится экран выписки — вернуть кольцо ВМЕСТЕ с потребителем в одной
+// правке; формат был: amount i32 / tick u32 / op u8 / band u8, слот =
+// entries % 24. Снос сопровождён бампом kSaveVersion 18→19.)
 
 // Per-branch credit-limit jitter, in basis points either way. +-20%.
 //
@@ -260,39 +250,9 @@ inline constexpr std::int64_t kBankMaxPrincipal = 1'000'000'000'000ll;
 // Account state
 // ---------------------------------------------------------------------------
 
-// What kind of movement a ledger entry records.
-enum class BankOp : std::uint8_t {
-    None = 0,
-    Deposit,          // banked -> deposit
-    Withdraw,         // deposit -> banked
-    TakeLoan,         // credit -> banked, principal up
-    RepayLoan,        // banked -> debt
-    DepositInterest,  // the bank paid you
-    LoanInterest,     // the bank charged you
-    Count
-};
-
-// 12 bytes, no interior padding. `band` is carried because which branch charged you is
-// the only thing about a debt that is not reconstructible from the amount.
-struct BankEntry {
-    std::int32_t amount = 0;   // 0  roubles, always positive
-    std::uint32_t tick = 0;    // 4  sim tick, truncated to 32 bits (~397 days at 125 Hz)
-    std::uint8_t op = 0;       // 8  BankOp
-    std::uint8_t band = 0;     // 9
-    std::uint8_t pad_[2]{};    // 10
-};
-static_assert(sizeof(BankEntry) == 12);
-static_assert(alignof(BankEntry) == 4);
-static_assert(std::is_trivially_copyable_v<BankEntry>);
-
 // The player's account. POD, fixed size, pointer-free — so the save can write it field
-// by field exactly like `RunLedger`, and so a test can digest it byte-meaningfully.
-//
-// **NOT in `SaveState` yet.** [save.h] is not this file's to edit and adding a struct
-// there is a `kSaveVersion` bump, which invalidates every existing save. So today F5/F9
-// preserve `banked` and forget the deposit and the debt. That is a real gap, it is
-// stated here rather than in a commit message, and this struct is shaped to make the
-// fix mechanical: no pointers, no vectors, one size assert.
+// by field exactly like `RunLedger` (SAVBANK, v16), and so a test can digest it
+// byte-meaningfully.
 struct BankAccount {
     std::int64_t deposit = 0;          //  0  locked principal; NOT spendable by the vendor
     std::int64_t loanPrincipal = 0;    //  8
@@ -302,12 +262,10 @@ struct BankAccount {
     std::uint64_t lastInterestTick = 0;// 40  sim tick the last period settled at
     std::int32_t creditLimit = 0;      // 48  this branch's, after the seed jitter. 0 until
                                        //     bank_open runs, so no branch means no loans.
-    std::uint32_t entries = 0;         // 52  total ops ever; ring slot = entries % slots
-    BankEntry ledger[kBankLedgerSlots]{};  // 56
-    std::uint8_t band = 0;             // 344 which BankTerms are in force
-    std::uint8_t pad_[7]{};            // 345
+    std::uint8_t band = 0;             // 52  which BankTerms are in force
+    std::uint8_t pad_[3]{};            // 53
 };
-static_assert(sizeof(BankAccount) == 352,
+static_assert(sizeof(BankAccount) == 56,
               "the save format will pin this size; grow it on purpose and bump "
               "kSaveVersion in the same edit");
 static_assert(alignof(BankAccount) == 8);
@@ -395,14 +353,6 @@ std::int64_t bank_credit_available(const BankAccount& acct);
 // every operation except `bank_step`.
 std::int64_t net_worth(const RunLedger& led, const BankAccount& acct);
 
-// Which wealth tier a net worth falls in. Clamps: below the first tier (a net worth
-// dragged negative by debt) reads as tier 0, above the last reads as the last.
-std::uint8_t wealth_tier(std::int64_t worth);
-const char* wealth_tier_name(std::uint8_t tier);
-
-// The most recent ledger entry, or nullptr when nothing has happened yet.
-const BankEntry* bank_last_entry(const BankAccount& acct);
-const char* bank_op_name(BankOp op);
 
 // ---------------------------------------------------------------------------
 // The teller — banked <-> coins ([conversation.md] «БАНК», инкремент C)

@@ -226,7 +226,9 @@
 #include <vector>
 
 #include "core/rng.h"          // hash_u32 / hash2 / rand01 — stateless identity hashing
+#include "ecs/components.h"    // CameraTag — половина ответа decider_of
 #include "ecs/registry.h"      // Registry, Entity
+#include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
 #include "game/faction.h"      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
 #include "world/level_stack.h" // LayerId
@@ -331,6 +333,38 @@ static_assert(sizeof(AiBrain) == 16, "the whole brain is 16 bytes per body");
 inline bool ai_owns_motion(const Registry& reg, Entity e) {
     const AiBrain* b = reg.try_get<AiBrain>(e);
     return b != nullptr && b->motion == static_cast<std::uint8_t>(MotionOwner::Ai);
+}
+
+// --- КТО РЕШАЕТ ЗА ЭТО ТЕЛО -------------------------------------------------
+//
+// Решение владельца 2026-09-12, после бага с фонариком (bugs.md Б1): у тела
+// есть ВИД РЕШАТЕЛЯ, и автоматные проходы ветвятся по нему. Не «это не игрок» в
+// десяти местах, а один вопрос с расширяемым ответом.
+//
+// Игрок здесь НЕ исключение из системы, а её полноправная ветка: он такая же
+// запись алайфа, как все (CANON S11 «синглтона игрока нет»), и через ИИ-проходы
+// идёт честно — просто ветка `Human` пуста, потому что за это тело решает
+// человек за клавиатурой. Так исчезает целый класс багов: раньше каждый новый
+// проход обязан был ВСПОМНИТЬ про носителя камеры, и `ai_equip_step` не
+// вспомнил — снимал фонарь из руки игрока раз в 2 секунды, потому что его
+// оружейный скорер фонарь оружием не считает.
+//
+// Ответов будет больше: у разных мобов и разных жителей будут разные мозги
+// (замысел владельца). Точка расширения — здесь, и только здесь.
+enum class Decider : std::uint8_t {
+    Human,    // носитель камеры: решает человек; автомату делать нечего
+    Resident, // житель: утилитарный мозг S13 — ai_step, ai_equip_step
+    Monster,  // моб: собственное поведение (wander/investigate/mob_behaviour)
+};
+
+// Вид решателя ВЫВОДИТСЯ из тождества тела, а не хранится флажком: держать
+// отдельный бит значило бы завести второй источник правды о том, кто такой
+// игрок, и рассинхронизировать его с CameraTag на первом же вселении (владелец
+// 2026-08-23: «никаких битов-флажков под механики»).
+inline Decider decider_of(const Registry& reg, Entity e) {
+    if (reg.all_of<CameraTag>(e)) return Decider::Human;
+    if (reg.all_of<MobRef>(e)) return Decider::Monster;
+    return Decider::Resident;
 }
 
 // --- Identity hashing -------------------------------------------------------
@@ -873,35 +907,8 @@ struct AiTick {
     std::uint32_t remembered = 0; // traces filed this tick
     std::uint32_t memoryFled = 0; // bodies steered by a REMEMBERED danger cell
                                   // because the live gradient carried no direction
-    // -- rooms ([room_zone.h], §27 legs (a)+(b)) --
-    std::uint32_t roomOwned = 0;  // bodies walking an ERRAND: a non-flee intent that
-                                  // found a destination and took the token
-    std::uint32_t settled = 0;    // of those, the ones already INSIDE the room they
-                                  // wanted (walking the last metres to their seat or
-                                  // already holding still on it)
-    // How the walkers are being steered, because "errand" alone cannot tell a body
-    // routing cleanly from a body shoving at a wall. `errandStep` took a horizontal
-    // flow step — the field answered. `errandColumn` fell back to the bearing toward
-    // the target room's column because the field's next step was VERTICAL and a
-    // walking body cannot climb; that path ignores geometry, so a large and steady
-    // errandColumn is the signature of a crowd pressed against walls rather than
-    // walking to kitchens. Split out for exactly that reason.
-    std::uint32_t errandStep = 0;
-    std::uint32_t errandColumn = 0;
-    std::uint32_t errandLost = 0; // wanted a room, none reachable -> delegated
-    // Summed toroidal distance, in macro cells, from each walking body to the room
-    // it is walking to. Divided by `errandStep + errandColumn` this is the crowd's
-    // mean remaining errand — and it is the ONE number that separates "walking" from
-    // "shoving at a wall", which no ownership counter can: a stuck crowd reports a
-    // perfectly healthy `errandStep` forever. Watch it FALL.
-    std::uint32_t errandDistCells = 0;
-    // Errand bodies that PHYSICS REFUSED TO MOVE last tick, detected with no stored
-    // state at all: `ai_step` runs before `physics_step`, so the Velocity it reads on
-    // entry is last tick's POST-collision value, and `physics_step` zeroes the axis a
-    // body collided on. A body we drove at kErrandSpeed that comes back at ~0 hit
-    // something. This is the counter that distinguishes "the field is wrong" from
-    // "the field is right and the geometry says no".
-    std::uint32_t errandStalled = 0;
+    // Эрранд-счётчики (roomOwned/settled/errandStep/...) умерли с flow-полями
+    // (rooms-object F); телеметрию хождения к целям вернёт agent-goals.
     // Committed intents, histogrammed. This is the number that says whether the
     // scorer is decoration: with the needs clock frozen the crowd's argmax is a pure
     // function of (faction, id) and this histogram is CONSTANT IN TIME — the exact
@@ -975,10 +982,6 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // Pure game layer over EnTT + NpcPool + a read-only field/grid, so it is
 // exercised headless by `game_test`.
 //
-// `doors` + `world` (optional, §23 follow-up): when both non-null, IntentFlee
-// prefers door_nearest_shelter over pure −∇danger so NPCs run to hermetic
-// apartments during Samosbor purple fog. Either null keeps bit-for-bit prior
-// behaviour (tests pass nullptr; main wires activeWorld + doors).
 //
 // `rooms` (optional, §27 leg (a)+(b)) is what ends "IntentFlee is the ONLY owning
 // intent". With it, an intent the affordance table gives a destination
@@ -993,14 +996,16 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // re-derived every tick. What changed is only the SET of intents that can earn it;
 // `wander_step` and `faction_feud_step` read the same `ai_owns_motion` guard and
 // neither had to learn anything about rooms.
-struct DoorSet;   // door.h — incomplete OK; full type only needed in ai.cpp
-struct RoomZones; // room_zone.h — likewise
+// bus+tick — ДЕЯНИЕ «лечить» (S19): медик кредитует hpBank пациента каждый
+// тик, а деяние публикуется раз в ТАКТ на пациента (stateless дебаунс
+// границей kTactTicks — ср. «одно взятие в час» S12.5).
+class EventBus; // game/event_bus.h — заголовку хватает указателя
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
-               const DoorSet* doors = nullptr,
-               const World* world = nullptr,
-               const RoomZones* rooms = nullptr);
+               const void* doorsDead = nullptr, // МОГИЛА ДВЕРЕЙ: слот пустует до новой системы
+               const World* world = nullptr, EventBus* bus = nullptr,
+               std::uint64_t tick = 0);
 
 } // namespace giga::game
 

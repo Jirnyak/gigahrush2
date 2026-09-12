@@ -4,89 +4,20 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
-#include "game/floors/padic/padic.h" // the module every kind dispatches to today
-#include "game/mob_table.h"          // RoomBit — rooms named in the shared taxonomy
+#include "game/floors/blame/blame.h"     // the megastructure module (kind Blame)
+#include "game/floors/khrushi/khrushi.h" // the open microdistrict (kind Khrushi)
+#include "game/floors/padic/padic.h"     // the module every OTHER kind dispatches to
+#include "game/fast_travel.h"        // лифтовая сетка 2×2 — узлы столбов
+#include "game/room.h"               // FloorRooms — комнаты объявляет модуль (S12.1)
+#include "world/destruct.h"          // kSubMaterialName — страницы под штампом
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
 #include "world/world.h"             // World — live gravity regime + grid
 
 namespace giga::game {
 
-namespace {
 
-
-// --- room taxonomy ----------------------------------------------------------
-// One weighted row per FloorKind: which RoomBits this kind's lattice produces and in
-// what proportion. The theming lives here, never as a branch in floor_room_mask.
-// GEOMETRY is a module's business ([floors.md] — the folder is the module); the
-// kind rows below are pure CONTENT theming, feeding the per-room item/mob filters.
-//
-// The weights are NOT free, and the constraint is measured rather than aesthetic. The
-// filter these bits drive returns weight 0 on a mismatch, so a room whose bit matches
-// little in a table generates little — and each bit's real pool is small. Measured on
-// data/mobs.csv against the six habitat anchors, average heads per pack by room bit at
-// anchor Z0: storage 4.72, common 4.21, corridor 3.74, production 1.42, bathroom 1.22,
-// smoking 1.00, against 3.84 for the unfiltered roster. So a Derelict mix leaning on
-// bathrooms would quietly shrink every pack on the floor by a third. Each row below
-// therefore leans on the bits its fiction shares with the content tables:
-//
-//   Residential  living/kitchen/bathroom/common/corridor/storage — an apartment
-//   Commercial   office/common/storage/hq/smoking/medical        — a ministry floor
-//   Industrial   production/storage/corridor/smoking             — a works
-//   Derelict     the residential warren gone to storage and rot
-struct RoomMix { RoomBit bit; std::uint8_t w; };
-
-constexpr RoomMix kRoomsResidential[] = {
-    {RoomBit::Living, 30},   {RoomBit::Kitchen, 16}, {RoomBit::Bathroom, 12},
-    {RoomBit::Common, 14},   {RoomBit::Corridor, 10}, {RoomBit::Storage, 18},
-};
-constexpr RoomMix kRoomsCommercial[] = {
-    {RoomBit::Office, 34},   {RoomBit::Common, 16},  {RoomBit::Storage, 16},
-    {RoomBit::Hq, 10},       {RoomBit::Smoking, 8},  {RoomBit::Medical, 16},
-};
-constexpr RoomMix kRoomsIndustrial[] = {
-    {RoomBit::Production, 44}, {RoomBit::Storage, 26}, {RoomBit::Corridor, 16},
-    {RoomBit::Smoking, 14},
-};
-constexpr RoomMix kRoomsDerelict[] = {
-    {RoomBit::Storage, 30},  {RoomBit::Corridor, 26}, {RoomBit::Common, 24},
-    {RoomBit::Production, 14}, {RoomBit::Bathroom, 6},
-};
-// Four bits, not two: the taxonomy invariant is that every kind's authored bits
-// all appear on a floor, with 4 as the floor — a kind narrower than that starves
-// the per-room item/mob filters of variety.
-constexpr RoomMix kRoomsPadic[] = {
-    {RoomBit::Corridor, 34}, {RoomBit::Storage, 30},
-    {RoomBit::Common, 20},   {RoomBit::Production, 16},
-};
-
-struct RoomMixRow { const RoomMix* tab; std::uint8_t n; };
-
-template <std::size_t N>
-constexpr RoomMixRow room_row(const RoomMix (&a)[N]) {
-    return {a, static_cast<std::uint8_t>(N)};
-}
-
-constexpr RoomMixRow kRoomMix[] = {
-    room_row(kRoomsResidential), room_row(kRoomsCommercial),
-    room_row(kRoomsIndustrial),  room_row(kRoomsDerelict),
-    room_row(kRoomsPadic),
-};
-static_assert(sizeof(kRoomMix) / sizeof(kRoomMix[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "room-mix table must have exactly one row per FloorKind");
-static_assert(static_cast<std::uint16_t>(RoomBit::Hq) == (1u << 10),
-              "kFloorRoomBits assumes Hq is the highest RoomBit");
-
-// The X/Y room-lattice pitch every consumer keys taxonomy lookups on. One value
-// for every kind because every kind currently builds the ONE registered module's
-// geometry (padic); when a second geometry module lands, this becomes that
-// module's own export.
-constexpr int kRoomStride = 4;
-
-} // namespace
-
-int floor_room_stride(FloorKind /*kind*/) { return kRoomStride; }
 
 GravityRegime floor_gravity_regime() { return kPadicGravity; }
 
@@ -128,37 +59,15 @@ int floor_ground_z() { return kPadicGroundCoord; }
 static_assert(kPadicGroundCoord == 3,
               "keep save.h kArrivalCoord in step with the module");
 
-int floor_room_bit_index(std::uint16_t mask) {
-    if (mask == 0) return -1;
-    const int i = std::countr_zero(mask);
-    return i < static_cast<int>(kFloorRoomBits) ? i : -1;
-}
 
-std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry) {
-    std::size_t k = static_cast<std::size_t>(kind);
-    if (k >= static_cast<std::size_t>(FloorKind::Count)) k = 0;
-    const RoomMixRow& row = kRoomMix[k];
-
-    // A pure hash of the room's identity, with each input on its own odd multiplier so
-    // a floor's rooms decorrelate from its neighbour's at the same (rx, ry).
-    const std::uint32_t h =
-        hash_u32(static_cast<std::uint32_t>(k) * 0x9E3779B9u ^
-              static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
-              static_cast<std::uint32_t>(rx) * 0x27220A95u ^
-              static_cast<std::uint32_t>(ry) * 0x165667B1u);
-
-    std::uint32_t total = 0;
-    for (std::uint8_t i = 0; i < row.n; ++i) total += row.tab[i].w;
-    std::uint32_t pick = total ? h % total : 0u;
-    for (std::uint8_t i = 0; i < row.n; ++i) {
-        if (pick < row.tab[i].w) return static_cast<std::uint16_t>(row.tab[i].bit);
-        pick -= row.tab[i].w;
-    }
-    return static_cast<std::uint16_t>(row.tab[0].bit);
-}
-
-std::uint32_t floor_doorways(int number, const FloorSpec& /*spec*/, unsigned seed,
+std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out) {
+    // Blame punches raw openings, never doorable ones — its labyrinth mouths
+    // onto the abyss have no jambs for a leaf, so it contributes zero rows.
+    // Khrushi contributes zero until its blocks grow doorable entrances
+    // (module increment: подъезды + квартирные двери).
+    if (spec.kind == FloorKind::Blame || spec.kind == FloorKind::Khrushi)
+        return 0;
     return padic_doorways(number, seed, out);
 }
 
@@ -178,45 +87,218 @@ constexpr FloorGeneratorFunc kGenerators[] = {
     generate_padic_floor,   // Industrial
     generate_padic_floor,   // Derelict
     generate_padic_floor,   // Padic
+    generate_blame_floor,   // Blame — the megastructure module's own geometry
+    generate_khrushi_floor, // Khrushi — the open microdistrict's own geometry
 };
 static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "generator table must have exactly one row per FloorKind");
 
 constexpr FloorGeneratorFunc kRuleDeclarers[] = {
-    padic_declare_rules, padic_declare_rules, padic_declare_rules,
-    padic_declare_rules, padic_declare_rules,
+    padic_declare_rules, padic_declare_rules,   padic_declare_rules,
+    padic_declare_rules, padic_declare_rules,   blame_declare_rules,
+    khrushi_declare_rules,
 };
 static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "rule-declarer table must have exactly one row per FloorKind");
 
 constexpr FloorGeneratorFunc kRuleAppliers[] = {
-    padic_apply_rules, padic_apply_rules, padic_apply_rules,
-    padic_apply_rules, padic_apply_rules,
+    padic_apply_rules, padic_apply_rules,   padic_apply_rules,
+    padic_apply_rules, padic_apply_rules,   blame_apply_rules,
+    khrushi_apply_rules,
 };
+
+// Объявители комнат (rooms-object C, S12.1: комнаты объявляет МОДУЛЬ) —
+// та же строка данных на kind, что генератор и законы. Чистые функции
+// (number, seed), перештамповка на каждом входе (закон масок S18).
+using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
+constexpr FloorRoomsFunc kRoomDeclarers[] = {
+    padic_rooms, padic_rooms,   padic_rooms,
+    padic_rooms, padic_rooms,   blame_rooms,
+    khrushi_rooms,
+};
+static_assert(sizeof(kRoomDeclarers) / sizeof(kRoomDeclarers[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "room-declarer table must have exactly one row per FloorKind");
 static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
                   static_cast<std::size_t>(FloorKind::Count),
               "rule-applier table must have exactly one row per FloorKind");
+
+// Module antourage rows: null = the kind adds nothing over the generic bake.
+using AntourageExtraFunc = void (*)(const World&, int, unsigned,
+                                    AntourageBake&);
+constexpr AntourageExtraFunc kAntourageExtras[] = {
+    nullptr, nullptr, nullptr,
+    nullptr, nullptr, nullptr,
+    khrushi_bake_antourage, // Khrushi — wires between the street poles
+};
+static_assert(sizeof(kAntourageExtras) / sizeof(kAntourageExtras[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "antourage-extra table must have exactly one row per FloorKind");
 
 std::size_t kind_row(const FloorSpec& spec) {
     const std::size_t k = static_cast<std::size_t>(spec.kind);
     return k >= static_cast<std::size_t>(FloorKind::Count) ? 0 : k;
 }
 
+// Версии генерации модулей (S20.6 закон 4) — строка данных на kind, как
+// генератор. ПОДНИМАТЬ РУКОЙ при любом изменении выхода generate_floor
+// этого kind; изменение общего каркаса (stamp_lift_pillars, сид-формулы)
+// поднимает ВСЕ строки. Стартуют с 1: 0 — «версии нет» у до-F снимков.
+constexpr std::uint32_t kModuleGenVersions[] = {
+    1, // Residential (padic геометрия)
+    1, // Commercial
+    1, // Industrial
+    1, // Derelict
+    1, // Padic
+    1, // Blame
+    1, // Khrushi
+};
+static_assert(sizeof(kModuleGenVersions) / sizeof(kModuleGenVersions[0]) ==
+                  static_cast<std::size_t>(FloorKind::Count),
+              "gen-version table must have exactly one row per FloorKind");
+
 void floor_declare_rules(World& world, int number, const FloorSpec& spec,
                          unsigned seed) {
     kRuleDeclarers[kind_row(spec)](world, number, spec, seed);
 }
 
+std::uint32_t module_gen_version(FloorKind kind) {
+    const std::size_t k = static_cast<std::size_t>(kind);
+    return kModuleGenVersions[k >= static_cast<std::size_t>(FloorKind::Count)
+                                  ? 0
+                                  : k];
+}
+
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
     kGenerators[kind_row(spec)](world, number, spec, seed);
+    // Лифтовые столбы — поверх любого модуля (вывод у stamp_lift_pillars).
+    stamp_lift_pillars(world, number, spec, seed);
+}
+
+void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
+                   unsigned seed) {
+    rooms_reset(rooms);
+    const std::uint32_t n = kRoomDeclarers[kind_row(spec)](number, seed, rooms);
+    std::size_t cells = 0;
+    for (const Room& r : rooms.list) cells += r.cells;
+    // Счёт всегда вслух (S11: молчаливого обрезания и молчаливого нуля нет);
+    // пересечение зон и отказы — дефект объявителя, кричим отдельно.
+    std::printf("[rooms] %s floor %d: %u rooms, %zu cells\n", spec.name, number,
+                n, cells);
+    if (rooms.overlapCells != 0 || rooms.refused != 0)
+        std::printf("[rooms] WARN floor %d: overlap=%u cells, refused=%u "
+                    "declarations — модуль объявил пересекающиеся или пустые "
+                    "зоны\n",
+                    number, rooms.overlapCells, rooms.refused);
+}
+
+LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed) {
+    // Storey входа называет МОДУЛЬ (S10). Сегодня у всех трёх модулей одна
+    // политика — ходовой ground (walkable-клетка прибытия, floor_ground_z);
+    // другая политика (случайный жилой storey, улица, машинное) = новая
+    // строка здесь при посадке лобби инкремента 6, не ветка у потребителей.
+    (void)kind;
+    LiftEntrance e;
+    e.h = floor_ground_z();
+    // Сторона проёма — чистый хеш идентичности столба: свой на каждом этаже,
+    // одинаковый в каждом прогоне (чистый хеш идентичности).
+    e.side = static_cast<int>(
+        hash_u32(static_cast<std::uint32_t>(seed) * 0x9E3779B9u ^
+                 static_cast<std::uint32_t>(number) * 0x85EBCA6Bu ^
+                 static_cast<std::uint32_t>(node) * 0x27220A95u) &
+        3u);
+    return e;
+}
+
+// side 0..3 -> направление проёма из центра столба.
+static constexpr int kLiftSideStep[4][2] = {
+    {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+void stamp_lift_protection(World& world) {
+    FloorMasks& fm = world.masks();
+    fm.clear_all(); // слот перерабатывается — чужие маски умирают с этажом
+    // Полноклеточная форма: у столба защищён весь объём. Частичные формы
+    // (гермостенка тоньше клетки) — то же поле allow с другими битами.
+    SubMask full;
+    for (std::size_t wd = 0; wd < kSubMaskWords; ++wd)
+        full.words[wd] = ~0ull;
+    for (int node = 0; node < kFastHubsPerFloor; ++node) {
+        std::uint8_t cx8 = 0, cy8 = 0;
+        fast_hub_cell(node, cx8, cy8);
+        MaskGroup g;
+        g.props = kMaskShield;
+        g.centre = vec3{(static_cast<float>(cx8) + 0.5f) * kCellSize,
+                        (static_cast<float>(cy8) + 0.5f) * kCellSize,
+                        0.5f * kWorldExtent}; // столб сквозь весь тор
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    g.cells.push_back(MaskCell{
+                        static_cast<std::uint32_t>(macro_index(
+                            wrap_macro(cx8 + dx), wrap_macro(cy8 + dy), z)),
+                        full});
+        fm.groups.push_back(std::move(g));
+    }
+    fm.rebuild_shield_cache();
+}
+
+void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
+                        unsigned seed) {
+    MacroGrid& g = world.grid();
+    SubField<CellType>& sm =
+        world.subfields().get_or_create<CellType>(kSubMaterialName);
+    // fill/clear правят тип+маску; страница суб-материалов, оставленная
+    // модулем под футпринтом столба (узорные стены и т.п.), обязана умереть
+    // вместе с узором — иначе тип говорит «бетон», а страница светит гипсом.
+    auto restamp_page = [&](int x, int y, int z, CellType t) {
+        const std::size_t ci =
+            macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+        if (CellType* pg = sm.page(ci))
+            for (int b = 0; b < kSubVoxels; ++b) pg[b] = t;
+    };
+    for (int node = 0; node < kFastHubsPerFloor; ++node) {
+        std::uint8_t cx8 = 0, cy8 = 0;
+        fast_hub_cell(node, cx8, cy8);
+        const int cx = cx8, cy = cy8;
+        // Кольцо стен + шахта — через ВСЕ z: столб замкнут на торе.
+        for (int z = 0; z < kMacroDim; ++z)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int x = wrap_macro(cx + dx);
+                    const int y = wrap_macro(cy + dy);
+                    if (dx == 0 && dy == 0) {
+                        g.clear_cell(x, y, z);
+                        restamp_page(x, y, z, kCellAir);
+                    } else {
+                        g.fill_cell(x, y, z, kMatConcrete);
+                        restamp_page(x, y, z, kMatConcrete);
+                    }
+                }
+        const LiftEntrance e = lift_entrance(spec.kind, number, node, seed);
+        // Проём — walkable клетка кольца на storey входа; пол кабины — под
+        // центром шахты, чтобы вошедший стоял, а не падал в колодец.
+        const int ex = wrap_macro(cx + kLiftSideStep[e.side][0]);
+        const int ey = wrap_macro(cy + kLiftSideStep[e.side][1]);
+        g.clear_cell(ex, ey, e.h);
+        restamp_page(ex, ey, e.h, kCellAir);
+        g.fill_cell(cx, cy, wrap_macro(e.h - 1), kMatConcrete);
+        restamp_page(cx, cy, e.h - 1, kMatConcrete);
+    }
 }
 
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed) {
     kRuleAppliers[kind_row(spec)](world, number, spec, seed);
+}
+
+void floor_antourage_extra(const World& world, int number,
+                           const FloorSpec& spec, unsigned seed,
+                           AntourageBake& out) {
+    if (AntourageExtraFunc fn = kAntourageExtras[kind_row(spec)])
+        fn(world, number, seed, out);
 }
 
 } // namespace giga::game

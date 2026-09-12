@@ -97,6 +97,18 @@ std::uint32_t KeybindTable::parse(const char* text) {
 // Defaults — the rows the hardcoded `if` chain used to be
 // ---------------------------------------------------------------------------
 
+// ЧИСТКА КЛАВИШ 2026-08-28 (вердикт владельца: «за всю историю проекта в
+// интерфейсах и клавишах насрано»). СНЯТЫ С КЛАВИАТУРЫ 14 строк:
+//   * дев-инструменты — attr_str/agi/int (прокачка с клавиатуры!), possess,
+//     scrap, floor_up/floor_down (телепорт), elevator (L — заменён панелью
+//     кабины); оси полёта E/Q ЖИВЫ — интеракция уехала на F, конфликта нет;
+//   * действия с ПРЕДМЕТАМИ — heal/eat/drink (место в инвентаре: использовать
+//     предмет), craft (верстак-интерактив), grenade (слот оружия).
+// Все они остаются КОНСОЛЬНЫМИ командами: механика жива, кнопки нет.
+// Закон, по которому чистили: клавиша существует для того, что делают
+// НЕПРЕРЫВНО (движение, взгляд, прыжок, интеракция) либо для мета-экранов
+// (меню, консоль, худ, инвентарь). Разовое действие с предметом — это
+// предмет, а не клавиша.
 bool keybind_register_defaults(KeybindTable& t) {
     bool ok = true;
     // Overlay toggles — live even while paused; menu/console also while typing,
@@ -116,33 +128,30 @@ bool keybind_register_defaults(KeybindTable& t) {
     // а не на F посреди боевой раскладки. Строка остаётся — ребинд в
     // настройках может вернуть клавишу тому, кому она нужна.
     ok &= t.add({"fly", "fly", 0, 0});
-    ok &= t.add({"floor_up", "ride up", scan::kRightBracket, 0});
-    ok &= t.add({"floor_down", "ride down", scan::kLeftBracket, 0});
     // L for lift. The shaft menu offers the SAME three transitions the two rows
     // above already are, plus fast travel — it adds a place to choose, not a
     // mechanism ([fast_travel.h]). `[` and `]` keep working from anywhere.
-    ok &= t.add({"elevator", "elevator", scan::kL, static_cast<std::uint8_t>(kBindTyping)});
     // Survival + interaction one-shots.
-    ok &= t.add({"heal", "heal", scan::kH, 0});
-    ok &= t.add({"eat", "eat", scan::kG, 0});
-    ok &= t.add({"drink", "drink", scan::kT, 0});
-    ok &= t.add({"door", "door", scan::kQ, 0});
-    ok &= t.add({"possess", "possess", scan::kP, 0});
-    ok &= t.add({"interact", "interact", scan::kE, 0});
+    // "door"-строка (Q) умерла 2026-08-28: единая интеракция — двери
+    // слушают interact, как все потребители (решение владельца). Клавиша —
+    // F (перевод 2026-08-28): E исторически делила себя с полётом noclip и
+    // с россыпью разовых действий; F свободна и ничем не занята.
+    ok &= t.add({"interact", "interact", scan::kF, 0});
+    // ОБЛЕГЧЕНИЕ на P (решение владельца 2026-08-28: «оба канала + спец
+    // клавиша»): осознанное — этой клавишей, невольное — автоматика
+    // давления ([needs.h]). Исключение из закона чистки «разовое действие —
+    // не клавиша» дано владельцем явно; P мнемонична и далеко от WASD —
+    // случайного нажатия в бою, из-за которого облегчение сняли с E/F,
+    // здесь не случится.
+    ok &= t.add({"relief", "relief", scan::kP, 0});
     // Z and not the genre's G, because G is `eat` and has been since before there
     // was anything to throw. Rebinding a shipped key to make room for a new one is
     // churn the table exists to avoid — that is what the rebind menu is for.
-    ok &= t.add({"grenade", "grenade", scan::kZ, 0});
     // Economy + crafting.
     // kBindTyping у оконных тумблеров: открытое окно глушит обычные бинды
     // ([main.cpp] typing-гейт), а СВОЯ клавиша обязана пробиться и закрыть
     // то, что открыла — тот же приём, что console и inventory.
-    ok &= t.add({"craft", "craft", scan::kC, static_cast<std::uint8_t>(kBindTyping)});
-    ok &= t.add({"scrap", "scrap", scan::kX, 0});
     // ATTR1: spend one unspent attribute point (console `attr str|agi|int`).
-    ok &= t.add({"attr_str", "attr str", scan::k1, 0});
-    ok &= t.add({"attr_agi", "attr agi", scan::k2, 0});
-    ok &= t.add({"attr_int", "attr int", scan::k3, 0});
     // Run persistence.
     ok &= t.add({"save", "save", scan::kF5, 0});
     ok &= t.add({"load", "load", scan::kF9, 0});
@@ -152,8 +161,11 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"move_back", "", scan::kS, 0});
     ok &= t.add({"move_left", "", scan::kA, 0});
     ok &= t.add({"move_right", "", scan::kD, 0});
+    // Оси полёта-noclip ЖИВУТ на E/Q: конфликта больше нет — интеракция
+    // уехала на F (я снял их зря, поправка владельца 2026-08-28).
     ok &= t.add({"fly_ascend", "", scan::kE, 0});
     ok &= t.add({"fly_descend", "", scan::kQ, 0});
+
     ok &= t.add({"fly_descend_alt", "", scan::kLCtrl, 0});
     ok &= t.add({"jump", "", scan::kSpace, 0});
     return ok;

@@ -46,6 +46,7 @@
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
 #include "sim/physics.h"
+#include "sim/rigid.h"
 #include "world/level_stack.h"
 #include "world/types.h"
 #include "world/world.h"
@@ -326,5 +327,96 @@ int main() {
     std::printf("\nReminder: this is crowd-vs-world collision only. No entity-entity\n"
                 "collision, no pathfinding/AI, no macro fields — those are not built\n"
                 "yet and will add to the per-tick cost on top of this baseline.\n");
+
+    // --- 4) Рагдолл-ядро ([markoaudit/plans/ragdoll.md]): сколько стоят
+    // тысячи твердотел на том же реальном этаже. Три состояния: бодрые
+    // (падают/катятся — пик после взрыва), спящие (установившийся мир) и
+    // цепи (линки × итерации). Спящие ОБЯЗАНЫ стоить ~ноль — сон и есть
+    // механизм масштаба «тысячи пропов».
+    {
+        std::printf("\n=== rigid-body core (ragdoll) ===\n");
+        constexpr int kBodies = 4096;
+        Registry rr;
+        std::vector<Entity> balls;
+        balls.reserve(kBodies);
+        const float radius = 0.2f;
+        const float mass = 7800.0f * (4.0f / 3.0f) * 3.14159265f *
+                           radius * radius * radius;
+        for (int i = 0; i < kBodies; ++i) {
+            const auto& c = cells[static_cast<std::size_t>(i) % cells.size()];
+            Entity e = rr.create();
+            vec3 p = cell_to_world(c);
+            p.z += 1.0f; // над полом — упадут и уснут
+            rr.emplace<Transform>(e, Transform{p, ground});
+            rr.emplace<Velocity>(
+                e, Velocity{vec3{(i & 1) ? 2.0f : -2.0f,
+                                 (i & 2) ? 2.0f : -2.0f, 0.0f}});
+            RigidBody rb;
+            rb.radius = radius;
+            rb.invMass = 1.0f / mass;
+            rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+            rb.restitution = 0.35f;
+            rb.friction = 0.6f;
+            rr.emplace<RigidBody>(e, rb);
+            balls.push_back(e);
+        }
+        // Бодрые: первые тики после «взрыва».
+        auto b0 = std::chrono::steady_clock::now();
+        for (int t = 0; t < 50; ++t) rigid_body_step(rr, stack, kDt);
+        auto b1 = std::chrono::steady_clock::now();
+        const double awakeMs = ms_per_tick(b1 - b0, 50);
+        // Дать осесть и уснуть (10 с сим-времени), пересчитать спящих.
+        for (int t = 0; t < 10 * kSimHz; ++t) rigid_body_step(rr, stack, kDt);
+        int asleep = 0;
+        for (Entity e : balls) asleep += rr.get<RigidBody>(e).asleep ? 1 : 0;
+        auto s0 = std::chrono::steady_clock::now();
+        for (int t = 0; t < 200; ++t) rigid_body_step(rr, stack, kDt);
+        auto s1 = std::chrono::steady_clock::now();
+        const double sleepMs = ms_per_tick(s1 - s0, 200);
+        // Цепи: 64 цепи по 8 звеньев = 512 тел + 512 линков, все бодрые.
+        Registry rc;
+        for (int ch = 0; ch < 64; ++ch) {
+            const auto& c = cells[static_cast<std::size_t>(ch * 7) % cells.size()];
+            Entity prev = entt::null;
+            for (int i = 0; i < 8; ++i) {
+                Entity e = rc.create();
+                vec3 p = cell_to_world(c);
+                p.z += 1.6f - 0.45f * static_cast<float>(i) * 0.25f;
+                p.x += 0.45f * static_cast<float>(i);
+                rc.emplace<Transform>(e, Transform{p, ground});
+                rc.emplace<Velocity>(e);
+                RigidBody rb;
+                rb.radius = 0.15f;
+                rb.invMass = 1.0f / 110.0f;
+                rb.invInertia = 1.0f / 1.0f;
+                rc.emplace<RigidBody>(e, rb);
+                if (i > 0) {
+                    Entity link = rc.create();
+                    JointLink jl;
+                    jl.a = e;
+                    jl.b = prev;
+                    jl.restLen = 0.45f;
+                    jl.rope = true;
+                    rc.emplace<JointLink>(link, jl);
+                }
+                prev = e;
+            }
+        }
+        auto c0 = std::chrono::steady_clock::now();
+        for (int t = 0; t < 50; ++t) rigid_body_step(rc, stack, kDt);
+        auto c1 = std::chrono::steady_clock::now();
+        const double chainMs = ms_per_tick(c1 - c0, 50);
+
+        std::printf("bodies=%d awake (post-blast):  %7.3f ms/tick (%5.1f%% of "
+                    "%.2f ms budget, %.0f ns/body)\n",
+                    kBodies, awakeMs, 100.0 * awakeMs / budget, budget,
+                    awakeMs * 1e6 / kBodies);
+        std::printf("bodies=%d, %d asleep:          %7.3f ms/tick (%5.1f%% "
+                    "budget) — сон и есть масштаб\n",
+                    kBodies, asleep, sleepMs, 100.0 * sleepMs / budget);
+        std::printf("chains 64x8 (512 bodies+links): %7.3f ms/tick (%5.1f%% "
+                    "budget)\n",
+                    chainMs, 100.0 * chainMs / budget);
+    }
     return 0;
 }

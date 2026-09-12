@@ -22,13 +22,18 @@
 #include <algorithm>
 #include <SDL3/SDL_vulkan.h>
 
+#include <chrono>
+#include <future>   // фоновая запись floor-файла (5a)   // покомпонентный замер [carve] — carve-hitch.md
 #include <cmath>
 #include <climits>  // INT_MIN — the gas reseed sentinel
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <mutex>    // канал восстановленных сущностей (v20/F): хук в воркере
+#include <unordered_map>
 #include <vector>
 
 #include "imgui.h"
@@ -43,8 +48,12 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
-#include "game/room_zone.h" // room affordance/recovery tables + the baked zone fields
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
+#include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
+#include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
+#include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
+#include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
+#include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
 #include "game/impact.h"
 #include "game/elevator.h"
@@ -64,44 +73,48 @@
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
+#include "game/body_walk.h"     // room_body_walkable — вердикт для щупа застревания
 #include "game/conversation.h"
 #include "game/dice.h"
 #include "game/economy.h"
 #include "game/craft.h"
 #include "game/quest.h"
 #include "game/container.h"
-#include "game/door.h"
 #include "game/combat.h"
 #include "game/status.h"
 #include "game/rpg.h"
 #include "game/extraction.h"
 #include "game/save.h"
 #include "game/faction_relations.h"
+#include "game/goals.h"        // S13.2: честный скорер (agent-goals A) — отладка рядом со старым
+#include "game/witness.h"      // S19: деяние/свидетель/цена — witness_step, deed_publish
 #include "game/loot.h"
 #include "game/weapon_table.h"
 #include "game/event_bus.h"
+#include "game/floors/khrushi/khrushi.h"
 #include "game/floors/padic/padic.h"
 #include "game/flicker.h"
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
-#include "sim/fluid.h"
+#include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
 #include "game/noise.h"
 #include "game/wander.h"
 #include "game/npc_pool.h"
 #include "game/macro_sim.h"
 #include "input/input.h"
 #include "render/body_pass.h"
-#include "render/cube_pass.h"
+#include "render/material_textures.h"
 #include "render/material_table.h" // kMaterial — generated albedo table
-#include "render/cloth_pass.h"
-#include "render/gpu_gas_pass.h"
-#include "render/particle_pass.h"
-#include "render/wire_pass.h"
+#include "render/gpu_medium_pass.h"
+#include "world/material_props.h" // material_phase — sphere не маскирует жидкость
+#include "world/medium.h" // агрегаты S16.4 — HUD/дыхание читают клетку тела
+#include "render/verlet_pass.h"
 #include "render/prop_pass.h"
 
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
+#include "core/prof.h"  // GIGA_PROF=1 — per-system свод кадра ([prof] ниже)
 
 #include "render/gpu_cull_pass.h"
 #include "app/ui_shell.h"
@@ -119,13 +132,13 @@
 #include "sim/camera.h"
 #include "sim/controller.h"
 #include "sim/diffusion.h"
-#include "sim/fluid.h"
 #include "sim/physics.h"
+#include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/stain.h"
 #include "world/level_stack.h"
 #include "world/nav.h"
-#include "world/nav_async.h"
+#include "game/rebake.h"
 
 using namespace giga;
 
@@ -148,19 +161,26 @@ constexpr int kWinH = 720;
 // See that header for why it is 125 and not 120.
 
 // Lighting tunables, packed into the dead lanes of CubePush (see cube.frag).
-// The floors are windowless interiors, so the headlamp the player carries is the
-// primary light and ambient is deliberately near-black; raise kAmbient and the
-// world flattens back into an evenly-lit mosaic.
-constexpr float kLampIntensity = 2.2f;  // camPos.w
-constexpr float kLampRadius = 14.0f;    // fog.z, metres (7 macro cells)
-constexpr float kFillStrength = 0.02f;  // sunDir.w, dark subterranean backstop
+// The floors are windowless interiors and ambient is deliberately near-black;
+// raise kAmbient and the world flattens back into an evenly-lit mosaic.
+//
+// НАЛОБНИКА БОЛЬШЕ НЕТ (владелец 2026-08-20, [CANON.md] S5 «света от камеры не
+// существует»). Он был вторым источником света мимо GpuLightGrid: интенсивность
+// ехала в `camPos.w`, радиус в `fog.z`, и три шейдера считали по ним обратный
+// квадрат. Обе лейны теперь МЁРТВЫ и пушатся нулями — намеренно, а не по
+// забывчивости: занять их нечем, а `CubePush` уже ровно 128 Б, то есть
+// гарантированный потолок пуш-констант ([material_textures.h]).
+// Свет в руке — предмет: `flashlight` в слоте Tool идёт через `add_light`
+// с конусом и параллаксом от руки (см. ниже по файлу), и NPC получат тот же
+// путь. Разбор — [markoaudit/plans/headlamp-death.md].
 constexpr float kAmbient = 0.06f;       // fog.w, scales the atmospheric hemispheric term
-// How much of the DIRECT light (headlamp + fill) baked AO is allowed to occlude.
+// How much of the DIRECT light (grid + fill) baked AO is allowed to occlude.
 // Ambient is always fully occluded; this is the share of the lamp, and it is a dial
 // because occluding a direct light is not physical — it is a legibility choice. At
 // 0 AO is nearly invisible in this scene, because ambient is only ~8% of the image
 // here (see cube.frag). 0.65 reads as contact shadow without making corridors feel
-// like caves.
+// like caves. «Доля лампы» здесь читается как доля СЕТОЧНОГО света: после смерти
+// налобника прямой свет — это лампы этажа и фонарик в руке.
 constexpr float kAoDirect = 0.65f;
 // How far the world closes in at the peak of a samosbor, as a fraction of the normal
 // fog end. The fog is the ONLY visual the hazard has right now, and it is deliberately
@@ -175,28 +195,470 @@ constexpr float kSamosborFogSqueeze = 0.34f;
 // печётся в refresh_floor_props, читается collect_scene_lights. Файловый
 // статик, как g_saveSlot — этаж один, владелец один.
 static std::vector<game::BakedLight> g_bakedFloorLights;
+// Поле светоячеек под этими эмиттерами: полный субвоксельный скан 128³ платится
+// один раз при постройке этажа; карв и спавн неона латают поле по своим
+// dirtyCells — фриз 284 мс на каждом разрушении неона убит этим разделением
+// ([markoaudit/plans/neon-topology.md] §4).
+static game::EmitterField g_emitterField;
+// Идентичность кластеров между бейками — из СВЯЗНОСТИ атомов (решение
+// владельца 2026-08-24): id компоненты переживает изменение формы, позиция —
+// производная для рендера. Сбрасывается постройкой этажа вместе с таблицей.
+static game::EmitterClusters g_emitterClusters;
 
-// Сфера carve задевает светоматериал? Проверка ДО carve (после — ячейки уже
-// воздух): бокс сферы мал (радиус carve — метры), скан копеечный. true велит
-// вызывающему перепечь эмиттеры этажа — выломал неон, свет погас тем же
-// кадром, ровно как дыра в стене впускает свет: одно событие «ячейка
-// изменилась», два честных следствия. [ddalight.md]
-static bool carve_touches_light_material(const World& w, const CarveOp& op) {
-    const MacroGrid& g = w.grid();
-    const int r = static_cast<int>(op.radius / kCellSize) + 1;
-    const int cx = static_cast<int>(std::floor(op.x / kCellSize));
-    const int cy = static_cast<int>(std::floor(op.y / kCellSize));
-    const int cz = static_cast<int>(std::floor(op.z / kCellSize));
-    for (int dz = -r; dz <= r; ++dz)
-        for (int dy = -r; dy <= r; ++dy)
-            for (int dx = -r; dx <= r; ++dx)
-                if (material_emits_light(g.cell(cx + dx, cy + dy, cz + dz)))
-                    return true;
-    return false;
+// ЛОГ СВЕТА В ФАЙЛ (GIGA_LIGHT_LOG=1 -> light_debug.log рядом с бинарём).
+// Просьба владельца 2026-08-23: он играет и даёт фидбек, а строки в stderr
+// ловить не может — диагностика обязана оседать в файл сама. Пишем сюда то,
+// по чему судят о жизни ламп: рождение неона, пересборку статик-таблицы,
+// надгробия и переработку слотов, свапы бейка видимости.
+static void light_log(const char* fmt, ...) {
+    static const bool on = [] {
+        const char* e = std::getenv("GIGA_LIGHT_LOG");
+        return e && std::atol(e) != 0;
+    }();
+    if (!on) return;
+    std::FILE* f = std::fopen("light_debug.log", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fclose(f);
 }
 
+// ЛОГ ЖИВОГО ПРОГОНА В ФАЙЛ (soak_log.txt рядом с бинарём; GIGA_SOAK=0 гасит).
+// Тот же мотив, что у light_log выше, и та же форма: владелец играет, а не
+// читает stderr. Отличие одно — ВКЛЮЧЁН ПО УМОЛЧАНИЮ, потому что цена прогона
+// живого человека выше цены файла на диске: забытая переменная окружения
+// означает потерянную сессию тестирования, а лишний файл не означает ничего.
+//
+// Пишет две вещи: периодический срез счётчиков (раз в kSoakPeriodSec) и
+// события, которые нельзя восстановить из среза (смерть, вход на этаж, кадр
+// длиннее kSoakBigFrameMs). Открывает файл на каждую строку намеренно: строк
+// ~12 в минуту, а незакрытый дескриптор при падении теряет хвост — то есть
+// ровно то, ради чего лог и заводится.
+static void soak_log(const char* fmt, ...) {
+    static const bool on = [] {
+        const char* e = std::getenv("GIGA_SOAK");
+        return e == nullptr || std::atol(e) != 0;
+    }();
+    if (!on) return;
+    std::FILE* f = std::fopen("soak_log.txt", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fclose(f);
+}
+
+// Срез — раз в 5 с: достаточно редко, чтобы час игры уложился в ~720 строк и
+// читался глазами, достаточно часто, чтобы утечка страниц и накопление трупов
+// были видны как НАКЛОН, а не как две точки.
+constexpr double kSoakPeriodSec = 5.0;
+// Порог «это заметил бы игрок». Детектор хитчей выше стоит на 50 мс (кадр
+// вдвое длиннее вертикальной синхронизации); здесь порог выше, потому что в
+// файл идёт то, что рвёт ощущение, а не то, что видно в профиле.
+constexpr float kSoakBigFrameMs = 120.0f;
+
+// Статик-таблица света этажа (план light-visibility-bake §1.1): пропы-света +
+// кластеры светоматериалов, СТАБИЛЬНЫЕ слот-id на поколение таблицы. Одна
+// нумерация на три потребителя: слот в GpuLightGrid (uPointLights[0..S)), id
+// в бейке видимости ([game/rebake.h] set_light_table) и PropLight.slot на
+// сущности. Перестраивается при постройке этажа и при карве светоматериала;
+// g_staticTableGen — сигнал collect_scene_lights перезалить таблицу в рендер.
+static std::vector<game::LightVisLamp> g_staticLamps;
+static std::vector<gpu::GpuPointLight> g_staticLightBase;
+static std::vector<std::uint32_t> g_bakedLightSlots; // слот на кластер бейка
+// id компоненты светоматериала -> её слот. СТАБИЛЬНОСТЬ СЛОТОВ
+// (баг найден и починен 2026-08-23): раньше таблица пересобиралась с нуля и
+// слоты раздавались по порядку обхода, поэтому гибель ОДНОЙ лампы сдвигала
+// id всех следующих — а запечённая видимость продолжала ссылаться на старые
+// номера, и до полного ребейка (до секунды) часть клеток светила ЧУЖИМИ
+// лампами. Теперь таблица в пределах этажа только РАСТЁТ: проп узнаёт свой
+// слот по PropLight.slot, кластер светоматериала — по id связной компоненты
+// атомов ([game/light_bake.h] EmitterClusters; матчить по позиции центроида —
+// хардкод и ошибка, решение владельца 2026-08-24: отломил кусок — центроид
+// уехал — система видела ДРУГУЮ лампу), а умершая лампа оставляет НАДГРОБИЕ
+// (радиус 0) вместо сдвига соседей. Заголовок gpu_light_grid.h обещал эту
+// стабильность с самого начала — теперь код ей соответствует.
+static std::vector<std::pair<std::uint32_t, std::uint32_t>> g_bakedSlotById;
+// Поколение таблицы, в котором слот умер (kAlive = живой). ПЕРЕРАБОТКА СЛОТОВ
+// (закон дома «пул с переработкой», CANON S11): новая лампа занимает мёртвый
+// слот, если он есть, и только иначе растит таблицу. Условие переработки —
+// слот обязан быть мёртв ДО последнего завершённого полного бейка видимости:
+// пока живы запечённые списки, ссылающиеся на этот номер, отдать его новой
+// лампе значит подсветить ею чужие клетки — тот самый баг, который здесь и
+// чинится. g_lightVisTableGen — поколение таблицы на момент последнего свапа
+// полного бейка.
+static constexpr std::uint32_t kSlotAlive = 0xFFFFFFFFu;
+static std::vector<std::uint32_t> g_slotDeadGen;
+static std::uint32_t g_lightVisTableGen = 0;
+static std::uint32_t g_staticTableGen = 0;
+static std::uint32_t g_lightTableUploadedGen = 0;
+
+// Швы game <-> render, которые обязаны совпадать (game render не видит):
+// сетка бейка видимости = светосетка рендера; «нет слота» — одно значение.
+static_assert(gpu::kGridDimX == game::kLightVisDim &&
+                  gpu::kGridDimY == game::kLightVisDim &&
+                  gpu::kGridDimZ == game::kLightVisDim,
+              "бейк видимости и светосетка рендера обязаны жить в одной сетке");
+static_assert(gpu::kGridCellMeters == game::kLightVisCellM,
+              "клетка светосетки: рендер и бейк разошлись");
+static_assert(game::kNoLightSlot == gpu::kNoLightSlot,
+              "сентинель «нет слота» обязан быть одним значением");
+
+// GIGA_SKIP=world,bodies,props,physdraw,lightgrid — ИЗМЕРИТЕЛЬНЫЕ тумблеры:
+// выключить пасс и прочитать дельту fps. Существуют потому, что на MoltenVK
+// по-пассовые GPU-таймстемпы внутри одного рендер-пасса схлопываются к нулю
+// (gpu_timer.h §PORTABILITY; замер владельца 2026-08-20: сумма пассов 1.8 мс
+// при frame 19.7 мс) — раскладку кадра на этом железе даёт только вычитание.
+// Не режим игры: активные скипы печатаются вслух при старте.
+static bool skip_pass(const char* name) {
+    static const std::string list = [] {
+        const char* e = std::getenv("GIGA_SKIP");
+        std::string s = e ? e : "";
+        if (!s.empty())
+            std::fprintf(stderr, "[skip] GIGA_SKIP=%s — measuring, not playing\n",
+                         s.c_str());
+        return s;
+    }();
+    return list.find(name) != std::string::npos;
+}
+
+// Перестройка статик-таблицы. Слоты пропов пишутся прямо в PropLight.slot;
+// пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
+// светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
+// пишет collect_scene_lights (мерцание/обесточка/поломка; 0 = надгробие).
+//
+// reset — постройка этажа: таблица начинается с нуля (за ней всё равно идёт
+// полный бейк видимости). Без reset (карв по светоматериалу) слоты СТАБИЛЬНЫ:
+// см. вывод у g_bakedSlotById.
+static void rebuild_static_light_table(Registry& reg, LayerId layer,
+                                       bool reset) {
+    // GIGA_LIGHT_BUDGET=N — A/B-ручка ТОЛЬКО ДЛЯ ЗАМЕРА (перф-кривая
+    // 2026-08-18: сколько мс кадра стоят марши к лампам). Режет статик-таблицу
+    // до первых N ламп — детерминированно и воспроизводимо; срезанные лампы не
+    // светят вовсе (слот kNoLightSlot, вслух ниже).
+    static const std::uint32_t kBudget = [] {
+        const char* e = std::getenv("GIGA_LIGHT_BUDGET");
+        const long v = e ? std::atol(e) : 0;
+        return (v > 0 && v < static_cast<long>(gpu::kRootLights))
+                   ? static_cast<std::uint32_t>(v)
+                   : gpu::kRootLights;
+    }();
+    if (reset) {
+        g_staticLamps.clear();
+        g_staticLightBase.clear();
+        g_bakedSlotById.clear();
+        g_slotDeadGen.clear();
+    }
+    g_slotDeadGen.resize(g_staticLamps.size(), kSlotAlive);
+    g_bakedLightSlots.clear();
+    // Подтверждённые этой пересборкой слоты; неподтверждённые станут
+    // надгробиями (лампа умерла) — но НЕ исчезнут, иначе поедут чужие id.
+    std::vector<std::uint8_t> confirmed(g_staticLamps.size(), 0);
+    std::uint32_t budgetDropped = 0;
+    // Записать лампу В КОНКРЕТНЫЙ слот (или в новый, если slot невалиден).
+    // Переработка: свободный мёртвый слот, безопасный по поколению (см. вывод
+    // у g_slotDeadGen). Курсор — чтобы не сканировать таблицу с нуля на каждую
+    // новую лампу: слоты слева от него уже разобраны этой пересборкой.
+    std::uint32_t recycleCursor = 0;
+    const auto take_dead_slot = [&]() -> std::uint32_t {
+        for (; recycleCursor < g_staticLamps.size(); ++recycleCursor) {
+            const std::uint32_t i = recycleCursor;
+            if (confirmed[i] || g_slotDeadGen[i] == kSlotAlive) continue;
+            if (g_slotDeadGen[i] >= g_lightVisTableGen) continue; // списки живы
+            ++recycleCursor;
+            return i;
+        }
+        return game::kNoLightSlot;
+    };
+    const auto put_lamp = [&](std::uint32_t slot, const vec3& pos,
+                              float radiusM, const vec3& color) -> std::uint32_t {
+        if (slot >= g_staticLamps.size()) slot = take_dead_slot();
+        if (slot >= g_staticLamps.size()) {
+            if (g_staticLamps.size() >= kBudget) {
+                ++budgetDropped;
+                return game::kNoLightSlot;
+            }
+            slot = static_cast<std::uint32_t>(g_staticLamps.size());
+            g_staticLamps.emplace_back();
+            g_staticLightBase.emplace_back();
+            g_slotDeadGen.push_back(kSlotAlive);
+            confirmed.push_back(0);
+        }
+        g_staticLamps[slot] = {pos, radiusM, color};
+        gpu::GpuPointLight& base = g_staticLightBase[slot];
+        base.posRadius = vec4{pos.x, pos.y, pos.z, radiusM};
+        base.colorIntensity = vec4{color.x, color.y, color.z, 0.0f};
+        // w = -2: сентинель «омни» (см. add_light). Конусные статики появятся
+        // вместе с первым конусным пропом — биннинг конус всё равно не режет.
+        base.dirCone = vec4{0.0f, 0.0f, 1.0f, -2.0f};
+        confirmed[slot] = 1;
+        g_slotDeadGen[slot] = kSlotAlive;
+        return slot;
+    };
+    auto lampView = reg.view<const Transform, game::PropLight>();
+    for (auto e : lampView) {
+        const Transform& tr = lampView.get<const Transform>(e);
+        game::PropLight& pl = lampView.get<game::PropLight>(e);
+        if (tr.layer != layer || !reg.all_of<game::StaticPropTag>(e)) {
+            pl.slot = game::kNoLightSlot;
+            continue;
+        }
+        // Проп помнит свой слот сам — он и есть стабильная идентичность.
+        pl.slot = put_lamp(pl.slot, tr.pos + vec3{0.0f, 0.0f, -pl.dropM},
+                           pl.radiusM, pl.color);
+    }
+    // Кластеры светоматериала узнают свой слот по id связной компоненты
+    // ([game/light_bake.h]): id переживает изменение формы, позиция кластера
+    // между пересборками может уехать сколько угодно — слот тот же.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> byId =
+        std::move(g_bakedSlotById);
+    std::sort(byId.begin(), byId.end());
+    g_bakedSlotById.clear();
+    for (const game::BakedLight& bl : g_bakedFloorLights) {
+        std::uint32_t slot = game::kNoLightSlot;
+        const auto it = std::lower_bound(
+            byId.begin(), byId.end(),
+            std::pair<std::uint32_t, std::uint32_t>{bl.id, 0u});
+        if (it != byId.end() && it->first == bl.id) slot = it->second;
+        slot = put_lamp(slot, bl.pos, bl.radiusM, bl.color);
+        g_bakedLightSlots.push_back(slot);
+        if (slot != game::kNoLightSlot) g_bakedSlotById.emplace_back(bl.id, slot);
+    }
+    // Неподтверждённые слоты — надгробия: лампа умерла, но её НОМЕР остаётся
+    // занятым, иначе запечённые списки начнут указывать на чужие лампы.
+    // Радиус 0 = бейк её не печёт, биннинг не биннит, кадр не светит.
+    std::uint32_t tombstoned = 0;
+    for (std::size_t i = 0; i < g_staticLamps.size(); ++i) {
+        if (confirmed[i]) continue;
+        if (g_staticLamps[i].radiusM == 0.0f) continue; // уже надгробие
+        g_staticLamps[i].radiusM = 0.0f;
+        g_staticLightBase[i].posRadius.w = 0.0f;
+        g_staticLightBase[i].colorIntensity.w = 0.0f;
+        g_slotDeadGen[i] = g_staticTableGen; // переработается после полного бейка
+        ++tombstoned;
+    }
+    if (tombstoned > 0)
+        light_log("[slots] %u lamps died -> tombstones; table %zu slots\n",
+                  tombstoned, g_staticLamps.size());
+    if (tombstoned > 0)
+        std::fprintf(stderr,
+                     "[light-grid] %u lamps died -> tombstones (slots stay, ids "
+                     "of the rest do not move; recycled after the next full "
+                     "light bake)\n",
+                     tombstoned);
+    if (budgetDropped > 0)
+        std::fprintf(stderr,
+                     "[light-grid] GIGA_LIGHT_BUDGET=%u: %u static lamps cut\n",
+                     kBudget, budgetDropped);
+    light_log("[slots] table rebuilt: %zu slots, %zu baked clusters, gen %u "
+              "(recycle allowed below gen %u)\n",
+              g_staticLamps.size(), g_bakedLightSlots.size(),
+              g_staticTableGen + 1, g_lightVisTableGen);
+    ++g_staticTableGen;
+}
+
+// Поколение мутаций мира активного этажа — асинк-ребейк
+// ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
+// и боевой); двери НЕ пишут — нав печётся по премисе all-open ([game/door.h])
+// и от тоггла не стареет. Читатель — RebakeScheduler ([game/rebake.h]):
+// bakedGen != worldGen ⇔ запечённое устарело, планировщик сам доводит фоновым
+// циклом. (dirtyGen-буфер светосетки вырезан чисткой 2026-08-23.) МОНОТОННО
+// через всю сессию, на этаже НЕ сбрасывается.
+static std::uint64_t g_worldGen = 0;
+
+// Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
+static const float* g_wallRing = nullptr;
+static unsigned g_wallSeen = 0;
+static float g_wallFirstMs = -1.0f;  // первый кадр (загрузка); в кольце его нет
+
+// Покомпонентный замер карв-пути ([markoaudit/plans/carve-hitch.md],
+// инкремент 1 — ТОЛЬКО замер, чинить до чисел запрещено). Компоненты копятся
+// за кадр (боевой дренаж даёт пачку карвов за подшаг), строка [carve]
+// печатается в хвосте кадра — после flush() зеркала, когда известны и
+// prop_skin, и цена стейджинга. Wall-clock, не сим-тики: это диагностика
+// хитча КАДРА, а не SLA планировщика (тот меряется тиками, [game/rebake.h]).
+struct CarveTiming {
+    bool carved = false;
+    std::size_t cells = 0;     // Σ dirtyCells за кадр
+    float sphereMs = 0.0f;     // carve_sphere
+    float lightMatMs = 0.0f;   // bake_material_lights + статик-таблица ламп
+    float mirrorMarkMs = 0.0f; // voxelMirror.mark_dirty (только метки)
+    float diffMs = 0.0f;       // mark_diffusion_dirty
+    float patchMs = 0.0f;      // nav.patch_carved_cells
+    float partMs = 0.0f;       // spawn_carve_particles
+    float anchorMs = 0.0f;     // anchor_validate_step
+    float antrMs = 0.0f;       // antourage_carve_step_here
+    float siteMs = 0.0f;       // весь карв-сайт скобкой (site−Σ = немеряное)
+    float propSkinMs = 0.0f;   // merge_ecs_prop_meshes в хвосте кадра
+    float lgridMs = 0.0f;      // collect_scene_lights + update_and_dispatch
+    float flushMs = 0.0f;      // voxelMirror.flush (CPU-сторона стейджинга)
+};
+static CarveTiming g_carveT;
+
+// СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH, баг «дыра заросла»): кольцо
+// выбитых атомов + скан «стал ли атом снова твёрдым» в CPU-каноне.
+// WATCH=1 — скан раз в 25 тиков в сим-секции; WATCH=2 — скан в ЧЕТЫРЁХ
+// точках кадра (после шва / после дверей / после сима / после рендера),
+// каждая печатает своё имя: виновник — система между двумя точками.
+struct RegrowAtom {
+    std::uint32_t key;
+    CellType was;
+};
+static int g_regrowWatch = 0; // 0 выкл / 1 редкий скан / 2 поточечный
+static std::vector<RegrowAtom> g_regrowRing;
+static std::size_t g_regrowHead = 0;
+static std::uint32_t g_regrowVerifies = 0;
+
+static void regrow_check(World& w, gpu::VoxelMirror& mirror,
+                         const char* where, std::uint64_t tick) {
+    if (g_regrowRing.empty()) return;
+    const SubField<CellType>* rf =
+        w.subfields().find<CellType>(kSubMaterialName);
+    for (auto& ca : g_regrowRing) {
+        if (ca.key == 0 && ca.was == 0) continue;
+        const std::size_t ci = ca.key >> 9;
+        const int bit = static_cast<int>(ca.key & 511u);
+        const CellType* pg = rf ? rf->page(ci) : nullptr;
+        CellType m = kCellAir;
+        if (pg) m = pg[bit];
+        else {
+            const CellType base = w.grid().types()[ci];
+            const SubMask& mk = w.grid().masks()[ci];
+            if (mk.test(bit)) m = base;
+            else if (mk.empty() && material_is_medium(base)) m = base;
+        }
+        if (m == kCellAir || material_is_medium(m)) continue;
+        std::fprintf(stderr,
+                     "[regrow] tick %llu ТОЧКА <%s> cell %zu bit %d: был %s, "
+                     "стал %s — ВОСКРЕС В CPU-КАНОНЕ\n",
+                     static_cast<unsigned long long>(tick), where, ci, bit,
+                     kMatNames[static_cast<int>(ca.was)],
+                     kMatNames[static_cast<int>(m)]);
+        if (g_regrowVerifies < 3) {
+            ++g_regrowVerifies;
+            const bool ok = mirror.verify(w);
+            std::fprintf(stderr, "[regrow] mirror verify: %s\n",
+                         ok ? "CPU==GPU" : "DIVERGED");
+        }
+        ca.key = 0;
+        ca.was = 0;
+    }
+}
+// CPU-цена мира-автомата в кадре (профиль по числам, закон дома): шов
+// назад (apply) и запись подтиков (record). Лейна poll УБИТА (К1-15,
+// аудит 2026-08-25): печатала вечный 0.00 — читалось «poll бесплатен»
+// вместо правды «poll не существует» (умер с CPU-протоколом).
+static float g_mediumApplyMs = 0.0f;
+static float g_mediumRecMs = 0.0f;
+static float carve_ms_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<float, std::milli>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+}
+
+// [prof] GIGA_PROF=1 — постоянная per-system разбивка CPU-кадра. Детектор
+// [hitch] ниже печатает разбор только дороже порога (50 мс) — кадр между
+// бюджетом и порогом был НЕМЫМ (слепая зона §59.25). Здесь каждая именованная
+// система копит мс в g_profFrameMs, топ следующего кадра толкает суммы в
+// кольца ([core/prof.h]) и раз в 256 кадров печатает свод: медиана/p90/пик
+// по каждой строке + счётчики live + GPU-пассы. Выключено (по умолчанию) —
+// ноль замеров: prof_now() не читает часы, prof_add() — одна ветка.
+enum ProfSlot : unsigned {
+    // внутри сим-тика (сумма по подшагам кадра)
+    kProfTick,        // весь while(simAccum) — «прочее тика» = tick − сумма имён
+    kProfNoise,       // noise_step — старение поля шума
+    kProfDiffusion,   // ai_panic_publish_step + diffusion_tick
+    kProfAi,          // ai_step + ai_equip_step
+    kProfController,  // controller_step
+    kProfWander,      // ai_patrol_step + wander_step (толпа)
+    kProfAcoustics,   // investigate_step (слух мобов; шары вырезаны — problems.md §65)
+    kProfCombat,      // player_melee..mob_attack..hazard..projectile..charge
+    kProfPhysics,     // slow_step + physics_step (агенты)
+    kProfRigid,       // rigid_body_step (твердотелы/рагдоллы)
+    kProfImpact,      // attachment_reaper_step + impact_damage_step
+    kProfNeeds,       // encumbrance_step + needs_step
+    // раз в кадр
+    kProfFocus,       // focus_pick — прицел интеракций
+    kProfWitness,     // witness_step (S19)
+    kProfNav,         // nav.step — амортизированный ребейк
+    kProfBigJudge,    // большой суд — порция флуда/конверсии (big-judge.md)
+    kProfCount
+};
+static const char* const kProfName[kProfCount] = {
+    "tick",   "noise",     "diffusion", "ai",     "controller",
+    "wander", "acoustics", "combat",    "physics", "rigid",
+    "impact", "needs",     "focus",     "witness", "nav",
+    "big_judge"};
+static const bool g_profOn = [] {
+    const char* e = std::getenv("GIGA_PROF");
+    return e != nullptr && e[0] != '\0' && e[0] != '0';
+}();
+static float g_profFrameMs[kProfCount] = {};
+static giga::prof::Ring g_profRing[kProfCount];
+// Накопительный счёт тел, разбуженных долгом писателя АВТОМАТА (шов
+// mediumMaskChanged → rigid_wake_dirty_cells) — печатается в rigid-stats.
+static std::uint64_t g_profMediumRigidWakes = 0;
+static std::chrono::steady_clock::time_point prof_now() {
+    return g_profOn ? std::chrono::steady_clock::now()
+                    : std::chrono::steady_clock::time_point{};
+}
+static void prof_add(unsigned slot, std::chrono::steady_clock::time_point t0) {
+    if (g_profOn) g_profFrameMs[slot] += carve_ms_since(t0);
+}
+
+// Метки кадра для детектора хитча (carve-hitch.md, инкремент 1б): что
+// происходило в кадре, который только что закончился. Пишутся по ходу кадра,
+// читаются в топе СЛЕДУЮЩЕГО — wall-clock кадра впервые известен там, — там
+// же сбрасываются. Детектор закрывает вопрос «CPU или GPU» наверняка: любой
+// ощутимый затык обязан оставить строку [hitch] с разбором.
+struct FrameMark {
+    float carveMs = 0.0f;     // [carve] total этого кадра
+    float lightSwapMs = 0.0f; // залив свапа бейка видимости на GPU
+    float propSkinMs = 0.0f;  // merge_ecs_prop_meshes
+    bool floorEntry = false;  // begin_floor_nav: Fresh-бейк (свет+rooms) синхронно
+    // ВЕРХНЕУРОВНЕВЫЕ СЕКЦИИ КАДРА (2026-08-22). Хитч-лог владельца принёс
+    // кадры ~1000 мс со ВСЕМИ нулевыми метками и малым GPU — слепая зона
+    // класса 59.25: точечные метки не покрывают кадр целиком. Две секции
+    // делят его без дыр: simMs — от верха кадра до начала записи рендера
+    // (события, весь сим, консоль); renderMs — запись+сабмит+презент.
+    // «other» в печати = wall − sim − render (ожидание vsync/своп/хвост).
+    float simMs = 0.0f;
+    float renderMs = 0.0f;
+};
+static FrameMark g_frameMark;
+// Верх кадра — точка отсчёта секций; ставится в блоке детектора хитча.
+static std::chrono::steady_clock::time_point g_frameT0;
+
+// Долг каждого запечённого слоя перед карвом — dirtyCells ([world/destruct.h]);
+// диффузия — единственный слой с ГОТОВЫМ поклеточным O(1)-приёмником, у
+// которого было НОЛЬ вызывающих: опасность текла сквозь закрытые двери и не
+// текла сквозь свежий пролом (markoaudit-systems.md §1.8). Гейт по слою —
+// битсет построен для driver.layer; чужой слой перестроит on_floor_built.
+static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
+                                 LayerId layer,
+                                 const std::vector<std::uint32_t>& dirtyCells) {
+    if (driver.layer != layer) return;
+    for (std::uint32_t idx : dirtyCells) {
+        const int x = static_cast<int>(idx % kMacroDim);
+        const int y = static_cast<int>((idx / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(idx / (kMacroDim * kMacroDim));
+        diffusion_mark_cell(grid, driver.scratch, x, y, z);
+    }
+}
+
+// «Задел ли карв светоматериал» отвечает patch_emitter_field по dirtyCells
+// ПОСЛЕ карва: поле помнит, что светило до, — сравнение честное и
+// субвоксельное. Прежняя проверка до карва спрашивала только тип ячейки и не
+// видела неон, нарисованный атомами ([markoaudit/plans/neon-topology.md] §4).
+
+float samosbor_fog_scale(const game::SamosborState& st); // определение ниже
+
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
-                                 float timeSec, const game::SamosborState& samosbor,
+                                 float timeSec, std::uint64_t simTick,
+                                 const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
                                  const game::NoiseField* noiseField = nullptr,
                                  const game::PowerGridState* powerGrid = nullptr,
@@ -204,6 +666,13 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  const vec3& camUp = vec3{0.0f, 0.0f, 1.0f},
                                  const game::NpcPool* pool = nullptr,
                                  Entity player = entt::null) {
+    // Перестроенная статик-таблица (вход этажа, карв светоматериала) — залить
+    // один раз; кадр дальше пишет только интенсивности и динамический хвост.
+    if (g_lightTableUploadedGen != g_staticTableGen) {
+        grid.set_static_table(g_staticLightBase.data(),
+                              static_cast<std::uint32_t>(g_staticLightBase.size()));
+        g_lightTableUploadedGen = g_staticTableGen;
+    }
     grid.clear_lights();
 
     // Свет от камеры ЗАПРЕЩЁН (решение владельца 2026-08-17): НПЦ = игрок,
@@ -214,9 +683,14 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // радиуса касается сферы видимости (радиус тумана) вокруг КАМЕРЫ. Общих
     // констант нет — лампы разные, решает радиус каждой. Иначе лампа
     // «загорается» при приближении (репорт владельца — каллы были 32-48 м при
-    // видимости 128). Бюджет держит сортировка: на GPU едут ближайшие
-    // kMaxPointLights. [gpu_light_grid.h] [ddalight.md]
-    const float kFogRadius = kWorldExtent * 0.5f; // = fog.y (push ниже по файлу)
+    // видимости 128). Камерный сорт и kMaxPointLights мертвы (V-A/V-C):
+    // отбор статикам даёт бейк видимости, динамиков — единицы. [ddalight.md]
+    // Радиус видимости — ТА ЖЕ формула, что fog.y пуша (kWorldExtent/2 ×
+    // множитель самосбора): ручная копия без fogScale разъехалась (К1-13,
+    // аудит 2026-08-25) — весь самосбор свет отбирался по полному радиусу,
+    // и параметр samosbor в сигнатуре висел неиспользуемым.
+    const float kFogRadius =
+        kWorldExtent * 0.5f * samosbor_fog_scale(samosbor);
     auto light_reaches_view = [&](const vec3& pos, float radius) {
         const float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
         const float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
@@ -225,22 +699,13 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         return dx * dx + dy * dy + dz * dz <= reach * reach;
     };
 
-    // 2. Samosbor Alarm Hazard Light
-    const game::SamosborAlarm alarm = game::samosbor_alarm(samosbor);
-    const float alarmPulse = alarm.pulse;
-    if (alarmPulse > 0.01f) {
-        vec3 alarmColor{0.95f, 0.20f, 0.85f}; // Purple default
-        switch (static_cast<game::SamosborVariant>(samosbor.variant)) {
-            case game::SamosborVariant::Wet:      alarmColor = vec3{0.15f, 0.85f, 0.95f}; break;
-            case game::SamosborVariant::Electric: alarmColor = vec3{0.95f, 0.15f, 0.95f}; break;
-            case game::SamosborVariant::Meat:     alarmColor = vec3{0.95f, 0.15f, 0.15f}; break;
-            case game::SamosborVariant::Maronary: alarmColor = vec3{0.95f, 0.55f, 0.15f}; break;
-            case game::SamosborVariant::Istotit:  alarmColor = vec3{0.95f, 0.95f, 0.45f}; break;
-            case game::SamosborVariant::Veretar:  alarmColor = vec3{0.85f, 0.85f, 0.95f}; break;
-            default: break;
-        }
-        grid.add_light(camPos + vec3{0.0f, 0.0f, 3.0f}, 48.0f, alarmColor, alarmPulse * 3.5f);
-    }
+    // 2. Тревога самосбора БОЛЬШЕ НЕ СВЕТИТ ОТ КАМЕРЫ. Здесь жил последний
+    // камерный источник (add_light(camPos+3м, 48 м) — прямое нарушение S5
+    // «света от камеры не существует», найден аудитом 2026-08-20 в тридцати
+    // строках под самим законом) — удалён. Тревогу несут сирена (аудио) и
+    // сжатие мглы (fogScale/samosborPulse); аварийное ЦВЕТНОЕ освещение по
+    // варианту самосбора — это программа ЩИТКА (S15.4: «аварийное освещение —
+    // другая программа щитка»), а не источник из воздуха.
 
     // 3. Mob Emitters (Lampovy & Lampoglaz)
     for (auto e : reg.view<const game::MobRef, const Transform>()) {
@@ -256,15 +721,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
         }
     }
 
-    // 4. Emissive Loot Containers & Supply Crates
-    for (auto e : reg.view<const game::Container, const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != activeLayer) continue;
-        const game::Container& cnt = reg.get<const game::Container>(e);
-        if (!cnt.opened && light_reaches_view(tr.pos, 6.0f)) {
-            grid.add_light(tr.pos + vec3{0.0f, 0.0f, 0.5f}, 6.0f, vec3{0.30f, 0.90f, 0.50f}, 1.2f);
-        }
-    }
+    // 4. Маячок неоткрытого ящика УДАЛЁН (решение владельца 2026-08-21,
+    // реализм: ящик не лампа; лут ищется глазами и фонарём). Ящик — проп
+    // (B1), светиться может только строкой props.csv, как любой проп.
 
     // 5. Flying Tracer & Plasma Projectile Light Emitters
     for (auto e : reg.view<const game::Projectile, const Transform>()) {
@@ -298,7 +757,7 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // (проп на общей сети, interact LightBulb); прибор со своим питанием живёт
     // при обесточке. [ddalight.md]
     std::uint32_t dbgTotal = 0, dbgLit = 0, dbgUnpowered = 0, dbgInactive = 0,
-                  dbgCulled = 0;
+                  dbgCulled = 0, dbgPhaseDark = 0;
     {
         auto lampView = reg.view<const Transform, const game::PropLight>();
         for (auto e : lampView) {
@@ -314,36 +773,59 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
 
             const vec3 pos = tr.pos + vec3{0.0f, 0.0f, -pl.dropM};
             const auto profile = static_cast<game::FlickerProfile>(pl.flicker);
-            // Только mains-профиль сидит на общей сети — power cut гасит его;
-            // прибор со своим питанием живёт при обесточке. (Сеть под
-            // пересмотром владельца — глубже не связываемся.)
-            if (profile == game::FlickerProfile::Mains && powerGrid &&
-                powerGrid->is_power_cut(pos)) {
-                ++dbgUnpowered;
-                continue;
-            }
-            if (!light_reaches_view(pos, pl.radiusM)) {
-                ++dbgCulled;
-                continue;
+            // Только mains-профиль сидит на общей сети — power cut и фаза
+            // щитка гасят его; прибор со своим питанием живёт при обесточке.
+            // (Сеть под пересмотром владельца — глубже не связываемся.)
+            float phaseMul = 1.0f;
+            if (profile == game::FlickerProfile::Mains) {
+                if (powerGrid && powerGrid->is_power_cut(pos)) {
+                    ++dbgUnpowered;
+                    continue;
+                }
+                // Программа щитка (S15.4): фаза «тьма» гасит лампу без
+                // отдельной ветки — нулевая интенсивность не рисуется.
+                phaseMul = game::shield_phase_level(pl.phaseLevels,
+                                                    pl.phaseOffset, simTick);
+                if (phaseMul <= 0.001f) {
+                    ++dbgPhaseDark;
+                    continue;
+                }
             }
 
             // ЕДИНАЯ функция мерцания ([game/flicker.h] == shaders/flicker.glsl):
             // та же математика красит emissive плафона в prop.frag — свет и
             // арматура пульсируют синхронно по построению.
-            const float intensity =
-                pl.intensity * game::flicker_factor(profile, pos, timeSec);
+            const float intensity = pl.intensity * phaseMul *
+                                    game::flicker_factor(profile, pos, timeSec);
 
-            grid.add_light(pos, pl.radiusM, pl.color, intensity);
+            // Заякоренный проп — статик-слот: в кадре пишется ТОЛЬКО
+            // интенсивность, позиция/радиус испечены таблицей, камерного калла
+            // нет (видимость — свойство геометрии, не камеры; S7). Слот
+            // kNoLightSlot у заякоренного = срез GIGA_LIGHT_BUDGET (no-op в
+            // set_static_intensity). Сорванный в RagdollRoll — динамический
+            // хвост со своей живой позицией (план §3.4).
+            if (reg.all_of<game::StaticPropTag>(e)) {
+                grid.set_static_intensity(pl.slot, intensity);
+            } else {
+                if (!light_reaches_view(pos, pl.radiusM)) {
+                    ++dbgCulled;
+                    continue;
+                }
+                grid.add_light(pos, pl.radiusM, pl.color, intensity);
+            }
             ++dbgLit;
         }
     }
 
     // 8. Светоматериалы — статические эмиттеры бейка этажа ([light_bake.h]):
     // нарисованная светом вывеска, неоновая полоса, вылепленная вокселями
-    // лампа — настоящие источники, с тенями и гало.
-    for (const game::BakedLight& bl : g_bakedFloorLights) {
-        if (light_reaches_view(bl.pos, bl.radiusM))
-            grid.add_light(bl.pos, bl.radiusM, bl.color, bl.intensity);
+    // лампа — настоящие источники, с тенями и гало. Слоты назначены
+    // rebuild_static_light_table; в кадре — только интенсивность (кластер не
+    // мерцает, но слот обязан переписываться после нуля clear_lights, и это
+    // же место умрёт клеточным мерцанием от щитка, S15.4).
+    for (std::size_t i = 0; i < g_bakedFloorLights.size(); ++i) {
+        grid.set_static_intensity(g_bakedLightSlots[i],
+                                  g_bakedFloorLights[i].intensity);
     }
 
     // 9. Свет из РУК: экипированный инструмент игрока ([equip.h] Tool), чья
@@ -356,10 +838,14 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     if (pool && reg.valid(player)) {
         const game::NpcRef* nr = reg.try_get<game::NpcRef>(player);
         const game::Equipped* eq = reg.try_get<game::Equipped>(player);
-        if (nr && eq && pool->valid(nr->id)) {
-            const game::ItemId tool = game::equipped_item(
-                pool->inventory(nr->id), *eq, game::EquipSlot::Tool);
-            if (tool != game::kInvalidItem) {
+        if (nr && eq && pool->valid(nr->id))
+            // ДВЕ РУКИ (two-hands.md, верб «светить»): светящий предмет
+            // светит из ТОЙ руки, где лежит — фонарик на ЛКМ или ПКМ, или
+            // по одному в каждой. Параллакс руки зеркален по стороне.
+            for (int hIdx = 0; hIdx < 2; ++hIdx) {
+                const game::ItemId tool = game::equipped_hand(
+                    pool->inventory(nr->id), *eq, hIdx == 1);
+                if (tool == game::kInvalidItem) continue;
                 const game::ItemDef& d = game::item_def(tool);
                 if (d.lightRadiusMm != 0 && d.lightIntensityE3 != 0) {
                     // Фонарик — В РУКЕ, не в глазу. Свет с нулевым параллаксом
@@ -371,10 +857,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                     // край луча; камера просто рендерит. NPC получат ту же
                     // руку от своего Transform/facing.
                     const vec3 right = normalize(cross(camForward, camUp));
+                    // ПКМ-рука справа (+0.28), ЛКМ — слева (−0.28).
+                    const float side = hIdx == 1 ? 0.28f : -0.28f;
                     const vec3 handPos = vec3{
-                        camPos.x + right.x * 0.28f - camUp.x * 0.30f + camForward.x * 0.10f,
-                        camPos.y + right.y * 0.28f - camUp.y * 0.30f + camForward.y * 0.10f,
-                        camPos.z + right.z * 0.28f - camUp.z * 0.30f + camForward.z * 0.10f};
+                        camPos.x + right.x * side - camUp.x * 0.30f + camForward.x * 0.10f,
+                        camPos.y + right.y * side - camUp.y * 0.30f + camForward.y * 0.10f,
+                        camPos.z + right.z * side - camUp.z * 0.30f + camForward.z * 0.10f};
                     const float radius =
                         static_cast<float>(d.lightRadiusMm) * 0.001f;
                     const float intensity =
@@ -394,23 +882,22 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                     }
                 }
             }
-        }
     }
 
     // GIGA_LIGHT_DBG=1: строка раз в ~2 с — кто из пропов-светов жив и куда
-    // делись остальные; хвост — сколько реально уедет на GPU. Диагностика
-    // «ниже не светятся» ([ddalight.md]).
+    // делись остальные. На GPU теперь едет вся таблица (кап-512 мёртв);
+    // static/dynamic — граница секций. Диагностика «ниже не светятся»
+    // ([ddalight.md]).
     static const bool kLightDbg = std::getenv("GIGA_LIGHT_DBG") != nullptr;
     if (kLightDbg) {
         static std::uint32_t frame = 0;
         if ((frame++ % 120u) == 0u) {
-            const std::uint32_t staged = grid.active_light_count();
             std::fprintf(stderr,
-                         "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u culled=%u"
-                         " | staged=%u dropped=%u upload=%u\n",
-                         dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgCulled,
-                         staged, grid.overflow_dropped(),
-                         staged < gpu::kMaxPointLights ? staged : gpu::kMaxPointLights);
+                         "[light-dbg] props total=%u lit=%u inactive=%u unpowered=%u phase-dark=%u culled=%u"
+                         " | static=%u total=%u dropped=%u\n",
+                         dbgTotal, dbgLit, dbgInactive, dbgUnpowered, dbgPhaseDark, dbgCulled,
+                         grid.static_count(), grid.active_light_count(),
+                         grid.overflow_dropped());
         }
     }
 }
@@ -969,28 +1456,131 @@ bool write_run(const game::SaveState& st, const char* path) {
     return write_bytes_file(bytes, path);
 }
 
-// Persist one floor's exact grid to its own file. A floor transition is a load
-// screen, so this is sanctioned I/O ([jirnyak.md] §6).
-bool write_floor_file(const World& w, int floor) {
+void flush_floor_write(); // 5a, определён ниже — синхронный писатель ждёт хвост
+
+// Persist one floor's exact grid + СУЩНОСТИ (v20/F) to its own file. A floor
+// transition is a load screen, so this is sanctioned I/O ([jirnyak.md] §6).
+// ЖДЁТ фоновый хвост (аудит F, жук №1): провалившаяся поездка (`[` на дне
+// стека) оставляет игрока НА этаже, чей async-кодек ещё летит; F5 в этом
+// окне писал ТОТ ЖЕ floor_<N>.sav.tmp вторым потоком — перемешанные байты,
+// rename битого поверх хорошего, CRC-отказ и «pristine» на следующем входе.
+// Этот же flush закрывает крэш-окно дюпа (№4): floor-файл покинутого этажа
+// долетает до диска РАНЬШЕ, чем save_run_now запишет run.sav с лутом.
+bool write_floor_file(const World& w, int floor,
+                      const game::FloorEntityState& ents,
+                      const game::FloorModuleKey& key) {
+    flush_floor_write();
     std::vector<std::uint8_t> bytes;
-    game::floor_file_write(w, floor, bytes);
+    game::floor_file_write(w, floor, bytes, &ents, &key);
     char path[128];
     floor_save_path(floor, path, sizeof path);
     return write_bytes_file(bytes, path);
 }
 
+// --- 5a (elevators-2x2.md, решение владельца): ДИСК — ФОНОМ ----------------
+// Кодек снимка бежит на main (слот World тут же перерабатывается под
+// целевой этаж — фоновому энкодеру не из чего читать), а вот запись байтов
+// на диск (~2 c из замеренных ~2.9 c кадра свапа) кадру не принадлежит.
+// Один полёт за раз: новый старт ждёт прежний (поездки разделены секундами),
+// а КАЖДЫЙ ЧИТАТЕЛЬ floor-файлов обязан сперва дождаться хвоста —
+// flush_floor_write зовут F9-загрузка, prebuild-старт (restore-ветка читает
+// файл воркером!) и выход.
+std::future<bool> g_floorWritePending;
+void flush_floor_write() {
+    if (g_floorWritePending.valid()) {
+        const bool ok = g_floorWritePending.get();
+        if (!ok)
+            std::fprintf(stderr, "[save] BACKGROUND floor write FAILED\n");
+    }
+}
+void write_floor_file_async(const World& w, int floor,
+                            game::FloorEntityState ents,
+                            game::FloorModuleKey key) {
+    flush_floor_write();
+    // Кадру принадлежит только КОПИЯ того, что читает кодек (грид + страницы
+    // суб-материалов, memcpy сотни мс) — сам RLE-кодек (замерен 2.7 с!) и
+    // диск уезжают в фон. Слот World перерабатывается сразу после свапа,
+    // поэтому фоновому кодеку не из чего читать, кроме копии; RAM транзиентно
+    // щедрая — закон владельца. Сущности (v20/F) собраны вызывающим на
+    // главном потоке (ECS воркеру не принадлежит) и едут значением.
+    const auto t0 = std::chrono::steady_clock::now();
+    auto types = std::make_shared<std::vector<CellType>>(w.grid().types());
+    auto masks = std::make_shared<std::vector<SubMask>>(w.grid().masks());
+    std::shared_ptr<SubField<CellType>> mats;
+    if (const SubField<CellType>* f =
+            w.subfields().find<CellType>(kSubMaterialName))
+        mats = std::make_shared<SubField<CellType>>(*f);
+    auto ep = std::make_shared<game::FloorEntityState>(std::move(ents));
+    char path[128];
+    floor_save_path(floor, path, sizeof path);
+    std::string p(path);
+    std::fprintf(stderr, "[lift] leave %d: copy %.0f ms, encode+disk in background\n",
+                 floor,
+                 std::chrono::duration<float, std::milli>(
+                     std::chrono::steady_clock::now() - t0)
+                     .count());
+    g_floorWritePending =
+        std::async(std::launch::async, [types, masks, mats, ep, key, floor, p]() {
+            World tmp;
+            tmp.grid().types_mut() = std::move(*types);
+            tmp.grid().masks_mut() = std::move(*masks);
+            if (mats)
+                tmp.subfields().get_or_create<CellType>(kSubMaterialName) =
+                    std::move(*mats);
+            std::vector<std::uint8_t> bytes;
+            game::floor_file_write(tmp, floor, bytes, ep.get(), &key);
+            return write_bytes_file(bytes, p.c_str());
+        });
+}
+
+// --- КАНАЛ ВОССТАНОВЛЕННЫХ СУЩНОСТЕЙ (v20/F, S20.6) ------------------------
+// Хук restore бежит и в prebuild-ВОРКЕРЕ (build_world_half), а спавн
+// сущностей — только на главном потоке в ECS-половине прибытия. Мост — карта
+// «этаж → секции сущностей» под мьютексом: хук кладёт, прибытие забирает.
+// Наличие записи == «этаж ВОССТАНОВЛЕН» (эта же запись — сигнал развилки
+// сидеров: restore не сеет). Пустые секции — законное состояние (всё
+// вынесено/сломано), поэтому сигнал — присутствие ключа, не размер.
+std::mutex g_restoreMx;
+std::unordered_map<int, game::FloorEntityState> g_pendingRestore;
+
+bool take_pending_restore(int floor, game::FloorEntityState& out) {
+    std::lock_guard<std::mutex> lk(g_restoreMx);
+    auto it = g_pendingRestore.find(floor);
+    if (it == g_pendingRestore.end()) return false;
+    out = std::move(it->second);
+    g_pendingRestore.erase(it);
+    return true;
+}
+
 // Stamp a floor's saved state over its freshly generated geometry, if a file
-// exists. Absent file = pristine floor; a REFUSED file is said out loud.
-bool apply_floor_file(World& w, int floor) {
+// exists. Absent file = pristine floor; a REFUSED file is said out loud —
+// в том числе ModuleChanged (S20.6 закон 4: модуль изменился → честная
+// перегенерация, полуслияние запрещено).
+bool apply_floor_file(World& w, int floor, const game::FloorModuleKey& key) {
+    // СТУХШАЯ запись умирает ДО чтения (аудит F, жук №3): отменённый prebuild
+    // или провал поездки оставляли запись в карте; если СЛЕДУЮЩЕЕ чтение
+    // файла откажет, прибытие взяло бы RAM-состояние на пристинной материи —
+    // сидеры молчат, якорная проба массово детачит. Стирание первым делом
+    // делает «запись есть == ЭТО построение восстановлено» инвариантом.
+    {
+        std::lock_guard<std::mutex> lk(g_restoreMx);
+        g_pendingRestore.erase(floor);
+    }
     char path[128];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
     if (!read_bytes_file(bytes, path)) return false;
     game::SaveError err = game::SaveError::None;
-    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err)) {
+    game::FloorEntityState ents;
+    if (!game::floor_file_read(bytes.data(), bytes.size(), w, nullptr, &err,
+                               &key, &ents)) {
         std::fprintf(stderr, "[save] %s refused: %s (floor regenerates pristine)\n",
                      path, game::save_error_text(err));
         return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_restoreMx);
+        g_pendingRestore[floor] = std::move(ents);
     }
     return true;
 }
@@ -1062,14 +1652,12 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
     return count;
 }
 
-// Floor interactive props: clear the recycled LayerId slot, seed Terminal +
-// ElectricalShield + LightBulb Interactables (with PropMesh for PropPass skin),
-// then padic-only corridor bulbs. [jirnyak.md] §18 — sim queries Registry;
-// PropPass is filled via merge_ecs_prop_meshes.
-std::uint32_t refresh_floor_props(Registry& reg, const World& world,
-                                  int floorNumber, LayerId layer,
-                                  unsigned padicSeed, game::EventBus& bus) {
-    game::clear_layer_props(reg, layer);
+// СИДЕР пропов этажа — ТОЛЬКО ветка generate (S20.6 закон 2: restore НЕ
+// сеет; на restore пропы приходят из записей снимка). Клир слота и световой
+// хвост живут отдельно (floor_light_rebuild) — их платят ОБЕ ветки.
+std::uint32_t seed_floor_props(Registry& reg, const World& world,
+                               int floorNumber, LayerId layer,
+                               unsigned padicSeed, game::EventBus& bus) {
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
@@ -1093,33 +1681,36 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
     count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
-    // FURNISH THE ROOMS ([room_zone.h] kRoomFurniture). Not decoration and not a
-    // debug overlay: until this landed a "kitchen" was a hash of the room's
-    // coordinates and NOTHING in the world said so, which meant the crowd's whole
-    // errand behaviour ([problems.md] §27) could only be checked by reading stderr.
-    // A stove you can see is what makes "he went to the kitchen" an observation
-    // instead of a claim — and the AI seats bodies AT these same pieces, off the
-    // same table, so the two cannot drift apart.
-    //
-    // Keyed on (kind, number) like every other room-taxonomy consumer, so it needs
-    // no seed of its own and agrees with the container and mob spawners by
-    // construction ([floor_gen.h]).
-    {
-        const std::uint32_t furniture = game::seed_room_furniture(
-            reg, world, layer, kind_for_floor(floorNumber), floorNumber);
-        count += furniture;
-        std::fprintf(stderr, "[rooms] floor %d: %u pieces of furniture placed\n",
-                     floorNumber, furniture);
-    }
+    if (kind_for_floor(floorNumber) == game::FloorKind::Khrushi)
+        count += game::seed_khrushi_props(reg, world, layer, floorNumber, padicSeed, bus);
+    // Общий мебельный сидер УМЕР (rooms-object F + S10: политика расстановки
+    // в общем коде — дефект). Мебель ставит МОДУЛЬ по своим комнатам, как
+    // свет и антураж; глагольный вектор пропа делает её видимой выбору цели.
+    return count;
+}
 
-    // Светоматериалы → статические эмиттеры ([game/light_bake.h]): скан +
-    // кластеризация при каждой постройке этажа, той же геометрии, что и всё.
-    g_bakedFloorLights = game::bake_material_lights(world);
+// СВЕТОВОЙ ХВОСТ постройки этажа — обе ветки развилки, ПОСЛЕ того как пропы
+// существуют (сидер или записи снимка): эмиттеры материалов, кластеры,
+// статик-таблица ламп. PropLight.slot не персистится — перештамповка здесь
+// и есть его законная идентичность на генерацию.
+void floor_light_rebuild(Registry& reg, const World& world, int floorNumber,
+                         LayerId layer) {
+    // Светоматериалы → статические эмиттеры ([game/light_bake.h]): полный
+    // скан поля + кластеризация при каждой постройке этажа, той же геометрии,
+    // что и всё. Единственное место полного скана — дальше поле только
+    // латается; идентичность компонент начинается с нуля вместе с таблицей.
+    game::rebuild_emitter_field(world, g_emitterField);
+    g_emitterClusters = {};
+    g_bakedFloorLights =
+        game::bake_material_lights(world, g_emitterField, g_emitterClusters);
     if (!g_bakedFloorLights.empty())
         std::fprintf(stderr, "[light-bake] floor %d: %zu emitter clusters\n",
                      floorNumber, g_bakedFloorLights.size());
 
-    return count;
+    // Статик-таблица света — из только что расставленных пропов и кластеров;
+    // begin_floor_nav (следом за нами у всех вызывающих) отдаст её бейку
+    // видимости ДО start_fresh.
+    rebuild_static_light_table(reg, layer, /*reset=*/true);
 }
 
 
@@ -1133,8 +1724,9 @@ std::uint32_t refresh_floor_props(Registry& reg, const World& world,
 // real shapes in the catalog a second merge would double every mesh.
 // Pack the game-side wire chains into the render pass's POD format (render
 // never includes game/, so the translation lives here in the app).
-static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab) {
-    if (!wirePass.ready()) return;
+static void upload_wires(gpu::VerletPass& verletPass,
+                         const game::AntourageBake* ab) {
+    if (!verletPass.ready()) return;
     static std::vector<gpu::GpuWireChain> packed;
     packed.clear();
     if (ab != nullptr) {
@@ -1150,7 +1742,8 @@ static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab)
             packed.push_back(g);
         }
     }
-    wirePass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
+    verletPass.upload_wires(packed.data(),
+                            static_cast<std::uint32_t>(packed.size()));
     if (std::getenv("GIGA_WIRE_DBG") != nullptr)
         for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
             std::fprintf(stderr, "[wire] %zu mid (%.1f %.1f %.1f)\n", i,
@@ -1160,9 +1753,9 @@ static void upload_wires(gpu::WirePass& wirePass, const game::AntourageBake* ab)
 
 // Pack the game-side cloth sheets into the render pass's POD format — the
 // third primitive's twin of upload_wires (render never includes game/).
-static void upload_cloths(gpu::ClothPass& clothPass,
+static void upload_cloths(gpu::VerletPass& verletPass,
                           const game::AntourageBake* ab) {
-    if (!clothPass.ready()) return;
+    if (!verletPass.ready()) return;
     static std::vector<gpu::GpuClothSheet> packed;
     packed.clear();
     static_assert(gpu::kClothGridPoints == game::kClothPoints,
@@ -1180,7 +1773,8 @@ static void upload_cloths(gpu::ClothPass& clothPass,
             packed.push_back(g);
         }
     }
-    clothPass.upload(packed.data(), static_cast<std::uint32_t>(packed.size()));
+    verletPass.upload_cloths(packed.data(),
+                             static_cast<std::uint32_t>(packed.size()));
     if (std::getenv("GIGA_WIRE_DBG") != nullptr)
         for (std::size_t i = 0; i < packed.size() && i < 20; ++i)
             std::fprintf(stderr, "[cloth] %zu top (%.1f %.1f %.1f)\n", i,
@@ -1226,7 +1820,7 @@ void pack_particles(std::vector<gpu::GpuParticle>& out, const vec3& pos,
     }
 }
 
-void drain_particle_bursts(gpu::ParticlePass& pass,
+void drain_particle_bursts(gpu::VerletPass& pass,
                            game::ParticleBurstQueue& q) {
     if (!pass.ready() || q.count == 0) {
         q.clear();
@@ -1240,9 +1834,21 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
         const vec3 tint = def.colorFromMaterial
                               ? kMaterial[b.matId < kMatCount ? b.matId : 0]
                               : vec3{def.r, def.g, def.b};
+        if (b.kind == static_cast<std::uint8_t>(game::ParticleKind::Shard)) {
+            // Черепки — свой банк пула: спавн-POD тот же, разворот в пары
+            // делает пасс (ось/кувырок из сида — bit-identical).
+            static std::vector<gpu::GpuParticle> shardTmp;
+            shardTmp.clear();
+            pack_particles(shardTmp, b.pos, b.dir, def, tint, b.count,
+                           b.seed);
+            pass.spawn_shards(shardTmp.data(),
+                              static_cast<std::uint32_t>(shardTmp.size()),
+                              b.seed);
+            continue;
+        }
         pack_particles(tmp, b.pos, b.dir, def, tint, b.count, b.seed);
     }
-    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+    pass.spawn_particles(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
     q.clear();
 }
 
@@ -1250,7 +1856,7 @@ void drain_particle_bursts(gpu::ParticlePass& pass,
 // WITH its material ([world/destruct.h] CarvedVoxel), so the puff is tinted by
 // the very wall it came from. Sampled with a stride — a blast stays a cloud,
 // not tens of thousands of sprites.
-void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
+void spawn_carve_particles(gpu::VerletPass& pass, const CarveResult& res,
                            std::uint32_t seed) {
     if (!pass.ready()) return;
     static std::vector<gpu::GpuParticle> tmp;
@@ -1285,22 +1891,59 @@ void spawn_carve_particles(gpu::ParticlePass& pass, const CarveResult& res,
                        tint, 1, seed ^ 0x5bd1e995u ^
                                     static_cast<std::uint32_t>(i));
     }
-    pass.spawn(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
+    pass.spawn_particles(tmp.data(), static_cast<std::uint32_t>(tmp.size()));
 }
 
 } // namespace
+
+// КЭШ СЛИТЫХ ИНСТАНСОВ (аудит 2026-08-25, К1-6): пока падают куски
+// антуража, кадр раньше пересобирал ВЕСЬ список (ECS-вью по пропам + проба
+// живости КАЖДОГО инстанса антуража об сетку) 8 секунд после любого
+// выстрела — кандидат в хитчи. Сбор (дорогой) и эмиссия (дешёвая) разъяты:
+// кэш строится только на реальную смену набора (propPassNeedsRebuild),
+// падающие кадры платят memcpy кэша + свои несколько кусков.
+static std::vector<std::pair<std::uint8_t, gpu::PropInstance>>
+    g_propMergeCache;
+
+static void emit_prop_instances(
+    gpu::PropPass& propPass,
+    const std::vector<game::DetachedPiece>* falling) {
+    propPass.clear_instances();
+    for (const auto& [shape, pi] : g_propMergeCache)
+        propPass.add_instance(static_cast<gpu::PropShape>(shape), pi);
+    // ОТРЕЗАННЫЕ куски в полёте ([antourage.h] DetachedPiece): те же шейпы,
+    // трансформ — от падающего тела; живут в списке ровно пока летят —
+    // рендеру не нужен второй путь и второй шейдер.
+    if (falling != nullptr) {
+        for (const game::DetachedPiece& d : *falling) {
+            gpu::PropInstance pi{};
+            pi.origin = d.pos;
+            pi.yaw = d.yaw;
+            pi.scale = d.scale;
+            pi.matId = d.matId;
+            pi.color = kMaterial[d.matId < kMatCount ? d.matId : 0];
+            if (d.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
+                propPass.add_instance(static_cast<gpu::PropShape>(d.shape),
+                                      pi);
+        }
+    }
+}
 
 static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   gpu::PropPass& propPass,
                                   const game::AntourageBake* ab,
                                   const World& world,
+                                  std::uint64_t simTick,
                                   std::vector<vec3>* dripEmitters = nullptr,
                                   const std::vector<game::DetachedPiece>* falling =
                                       nullptr) {
-    propPass.clear_instances();
+    g_propMergeCache.clear();
+    auto cache_instance = [](std::uint8_t shape, const gpu::PropInstance& pi) {
+        g_propMergeCache.emplace_back(shape, pi);
+    };
     static std::vector<game::PropMeshInstance> insts;
     insts.clear();
-    game::collect_static_prop_mesh_instances(reg, layer, insts);
+    game::collect_static_prop_mesh_instances(reg, layer, simTick, insts);
     for (const auto& m : insts) {
         if (m.shape >= static_cast<std::uint8_t>(gpu::kPropShapeCount)) continue;
         gpu::PropInstance pi{};
@@ -1312,19 +1955,21 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
         pi.emissive  = m.emissive;
         pi.flags     = m.flags;
         pi.animPhase = m.animPhase;
-        propPass.add_instance(static_cast<gpu::PropShape>(m.shape), pi);
+        cache_instance(m.shape, pi);
     }
-    if (ab == nullptr) return;
+    if (ab == nullptr) {
+        emit_prop_instances(propPass, falling);
+        return;
+    }
     // UNIVERSAL antourage instances ([game/antourage/antourage.h]): the core
     // renders whatever a module emitted — shape + transform + material +
     // anchors — with zero knowledge of what it depicts. Aliveness reads the
     // LIVE grid: carve an anchor away and the piece stops being drawn.
     static const bool antourageDebug =
         std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr;
-    const MacroGrid& g = world.grid();
     if (dripEmitters) dripEmitters->clear();
     for (const game::AntourageInstance& it : ab->instances) {
-        if (!game::antourage_alive(g, it)) {
+        if (!game::antourage_alive(world, it)) {
             // A severed pipe piece: its anchor was carved away, so the mesh
             // stops drawing — and the stump becomes a DRIP emitter for the
             // unified particle pool (owner's design: якорь мёртв → эмиттер).
@@ -1346,28 +1991,14 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
                                   : kMaterial[it.matId < kMatCount ? it.matId
                                                                    : 0];
         if (it.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
-            propPass.add_instance(static_cast<gpu::PropShape>(it.shape), pi);
+            cache_instance(it.shape, pi);
     }
 
-    // SEVERED pieces still in the air ([antourage.h] DetachedPiece): the same
-    // shapes, drawn from the falling body's own transform instead of the bake's.
-    // They live in the instance list exactly as long as they are falling, so the
-    // renderer needs no second path and no second shader.
-    if (falling != nullptr) {
-        for (const game::DetachedPiece& d : *falling) {
-            gpu::PropInstance pi{};
-            pi.origin = d.pos;
-            pi.yaw = d.yaw;
-            pi.scale = d.scale;
-            pi.matId = d.matId;
-            pi.color = kMaterial[d.matId < kMatCount ? d.matId : 0];
-            if (d.shape < static_cast<std::uint8_t>(gpu::kPropShapeCount))
-                propPass.add_instance(static_cast<gpu::PropShape>(d.shape), pi);
-        }
-    }
+    emit_prop_instances(propPass, falling);
 }
 
-// Kick off this floor's navigation bake on a worker thread.
+// Kick off this floor's navigation bake on a worker thread — the Fresh mode of
+// the RebakeScheduler ([game/rebake.h]).
 //
 // This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
 // froze the frame for ~3.7 s. The bake is not naive — it is already fanned across
@@ -1378,35 +2009,32 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // Now the player moves, looks, fights and loots immediately; the floor's crowd
 // stands still until the bake lands, because wander_step no-ops on an empty flow
 // field. That degradation is automatic rather than special-cased.
-void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
-                     game::RoomZones& rooms) {
-    bake.start(world.grid());
-    // The ROOM zones are baked here too, and synchronously, because they are three
-    // multi-source BFS against the async bake's 128 — measured below in the same
-    // line the nav timings print. Synchronous also means there is no second
-    // ownership story to get wrong: the fields are complete before the first tick
-    // that could read them, so `ai_step` never sees a half-built field.
+//
+// The worker owns oracle SNAPSHOTS by value (клиренс-поле нава 4 МиБ +
+// телесный битсет комнат 256 КиБ), never a pointer into the live grid — so
+// there is no ordering contract with door toggles or carves any more, and
+// floor changes cancel-join in tens of ms ([game/rebake.h]).
+void begin_floor_nav(const World& world, int floorNumber,
+                     game::RebakeScheduler& bake) {
+    // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается
+    // (бухгалтерия RebakeScheduler сверяет поколения между этажами).
+    // Fresh-снапшот просто отражает текущее поколение.
     const game::FloorKind kind = kind_for_floor(floorNumber);
-    // TIMED, and the timing is not decoration. An untimed synchronous bake once cost
-    // ~25 s of load without a single line saying so, and the only symptom anyone saw
-    // was the sim running 4140 ticks per 4000 frames one day and 600 the next
-    // ([room_zone.cpp] bake_walkable). A bake that does not print its own cost hides
-    // exactly the regression it is most likely to cause.
-    const auto roomT0 = std::chrono::steady_clock::now();
-    game::bake_room_zones(world.grid(), kind, floorNumber, rooms);
-    const double roomMs =
-        std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - roomT0).count();
-    std::fprintf(stderr,
-                 "[rooms] floor %d: kind=%d baked mask 0x%04X (%zu bytes resident) "
-                 "in %.0f ms\n",
-                 floorNumber, static_cast<int>(kind),
-                 static_cast<unsigned>(rooms.baked), rooms.resident_bytes(), roomMs);
+    // Кадр входа на этаж платит синхронный Fresh-бейк (свет 1144 мс по замеру
+    // 2026-08-21, rooms ~23 мс) — детектор хитча обязан назвать его по имени.
+    g_frameMark.floorEntry = true;
+    // Статик-таблица света (испечена refresh_floor_props) — бейку видимости
+    // ДО start_fresh: Fresh печёт свет синхронно из неё. Ёмкость клетки
+    // приходит от рендера — game лейаут-агностичен ([game/light_vis_bake.h]).
+    bake.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
+                         gpu::kGridCellSlots, g_staticTableGen);
+    // Секция rooms умерла (rooms-object F): комнаты — раскраска roomAt из
+    // rooms_declare, flow-полей по виду больше нет — на балансе −18 МиБ.
+    bake.start_fresh(world.grid(), kind, floorNumber, g_worldGen);
     // Nav memory AT THE START of the bake, which is the number no document carried
-    // and the only moment it can be wrong. The old `start()` cleared the live flow
-    // field without freeing it, so this read 130 MiB of dead bytes here while the
-    // worker allocated the next 130 beside them — a 260 MiB peak, half of it
-    // unreadable (`ready()` is false throughout). It now reads ~0.
+    // and the only moment it can be wrong. The scheduler frees the live flow field
+    // in start_fresh (the AsyncBake 260-MiB-peak lesson), so this reads ~1 MiB —
+    // the four resident/snapshot bitsets.
     // The matching post-swap figure is on the `[nav]` line from finish_floor_nav.
     std::fprintf(stderr, "[nav] bake begins: nav holds %.1f MiB\n",
                  static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0));
@@ -1415,7 +2043,7 @@ void begin_floor_nav(const World& world, int floorNumber, nav::AsyncBake& bake,
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
 // walk. Separate from begin_floor_nav because it can only run after the swap.
 std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
-                               const nav::AsyncBake& bake) {
+                               const game::RebakeScheduler& bake) {
     std::uint32_t n = game::wander_init(reg, layer, seed);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
@@ -1463,6 +2091,11 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
     std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
+    // Смерть игрока сегодня не имеет НИ ОДНОГО следа на экране (ни экрана, ни
+    // затемнения, ни строки) — тестирующий человек её попросту не заметит и не
+    // сможет сказать, когда она случилась. В файл она обязана попасть.
+    soak_log("[soak] EVENT death: вселение в запись %u (слой %u)\n", chosenId,
+             static_cast<unsigned>(layer));
     return chosen;
 }
 
@@ -1478,10 +2111,8 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
         if (!pool.valid(id) || !pool.alive(id)) continue;
 
         const vec3& pos = reg.get<const Transform>(e).pos;
-        float dx = wrap_delta_f(playerPos.x, pos.x, kWorldExtent);
-        float dy = playerPos.y - pos.y;
-        float dz = wrap_delta_f(playerPos.z, pos.z, kWorldExtent);
-        float d2 = dx * dx + dy * dy + dz * dz;
+        // wrap_dist2: все три оси (голый y = сосед в 2 м через шов невиден).
+        float d2 = wrap_dist2(playerPos, pos, kWorldExtent);
         if (d2 < bestD2) {
             bestD2 = d2;
             chosen = e;
@@ -1521,6 +2152,12 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 } // namespace
 
 int main(int argc, char** argv) {
+    // ОТМЕТКА СБОРКИ — первой строкой всякого запуска. Вопрос «тот ли билд
+    // я запустил» стоил владельцу целого круга тестирования 2026-08-28:
+    // рядом с рабочим деревом лежит старый бинарь (gigahrush2_backup), и
+    // отличить их в игре было нечем. Теперь любой лог сам себя датирует.
+    std::fprintf(stderr, "[build] gigahrush2 собран %s %s\n", __DATE__,
+                 __TIME__);
     // --shot FILE [--frames N] [--ride N]: render, capture, exit.
     //
     // Visual work has to be looked at, and grabbing the window through the compositor
@@ -1552,11 +2189,6 @@ int main(int argc, char** argv) {
     // --no-crt: сырой кадр без пост-обработки (диагностика, пиксель-точные
     // сравнения скриншотов). Сама трубка — vk_renderer.h.
     bool noCrt = false;
-    // --vr: стереоскопический рендеринг Side-by-Side (SBS) для Meta Quest 2
-    bool vrMode = false;
-    float vrIpd = 0.064f; // Базовый IPD (64 мм)
-    bool cliVrSet = false;
-    bool cliIpdSet = false;
     // --mirror-verify: after every wholesale upload and every ~300 frames, read
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
@@ -1574,11 +2206,6 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
-        else if (a == "--vr") { vrMode = true; cliVrSet = true; }
-        else if (a == "--ipd" && i + 1 < argc) {
-            vrIpd = static_cast<float>(std::atof(argv[++i]));
-            cliIpdSet = true;
-        }
         else if (a == "--mirror-verify") mirrorVerify = true;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
@@ -1600,6 +2227,9 @@ int main(int argc, char** argv) {
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
 
+    // SDL_INIT_GAMEPAD — без него подсистема не поднимается и ни одно
+    // устройство не видно: до 2026-09-12 в репозитории не было ни одного
+    // SDL_Gamepad вообще ([steam-readiness.md], трек D).
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
@@ -1637,7 +2267,6 @@ int main(int argc, char** argv) {
     }
 
     renderer.crtEnabled = !noCrt;
-    renderer.set_vr_mode(vrMode);
 
     gpu::GpuLightGrid lightGrid;
     if (!lightGrid.init(&device, GIGA_SHADER_DIR)) {
@@ -1658,8 +2287,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    gpu::CubePass cubePass;
-    if (!cubePass.init(device, lightGrid.descriptor_set_layout(),
+    gpu::MaterialTextures materialTex;
+    if (!materialTex.init(device, lightGrid.descriptor_set_layout(),
                        voxelMirror.shadow_set_layout())) {
         std::fprintf(stderr, "Cube pass init failed\n");
         voxelMirror.destroy();
@@ -1672,16 +2301,16 @@ int main(int argc, char** argv) {
     }
 
     // The world renderer: a fullscreen two-level DDA over the mirror
-    // ([render/raymarch_pass.h]). CubePass stays alive as the texture-array
+    // ([render/raymarch_pass.h]). MaterialTextures is the texture-array
     // owner and the body/prop pipeline-layout donor until the mesher deletion
     // lands; its record() is no longer called, so invalidate() is free.
     gpu::RaymarchPass raymarchPass;
     if (!raymarchPass.init(device, renderer.renderPass, GIGA_SHADER_DIR,
-                           voxelMirror, cubePass,
+                           voxelMirror, materialTex,
                            lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr, "Raymarch pass init failed\n");
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -1697,7 +2326,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Body pass init failed\n");
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         lightGrid.destroy();
         renderer.destroy();
         device.destroy();
@@ -1707,10 +2336,10 @@ int main(int argc, char** argv) {
     }
 
     // GPU-instanced arbitrary prop meshes (cylinders, arches, barrels, pipes).
-    // Shares CubePass's pipeline layout and cube.frag so props receive identical
+    // Shares MaterialTextures' pipeline layout and cube.frag so props receive identical
     // PBR lighting, fog, and material shading as the voxel world.
     gpu::PropPass propPass;
-    if (!propPass.init(&device, cubePass.pipeline_layout(),
+    if (!propPass.init(&device, materialTex.pipeline_layout(),
                        renderer.renderPass, GIGA_SHADER_DIR)) {
         std::fprintf(stderr, "[prop] pass init failed (continuing without props)\n");
         // Non-fatal: the game runs fine without props.
@@ -1721,38 +2350,38 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[cull] pass init failed (continuing without GPU culling)\n");
     }
 
-    // Hanging wires: GPU-verlet antourage chains ([render/wire_pass.h]).
-    gpu::WirePass wirePass;
-    if (!wirePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                       voxelMirror.masks_buffer())) {
-        std::fprintf(stderr, "[wire] pass init failed (continuing without wires)\n");
-    }
-
-    // Cloth sheets: GPU-verlet antourage curtains ([render/cloth_pass.h]).
-    gpu::ClothPass clothPass;
-    if (!clothPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                        voxelMirror.masks_buffer())) {
-        std::fprintf(stderr, "[cloth] pass init failed (continuing without cloth)\n");
-    }
-
-    // GPU gas/atmosphere: 4 канала (toxic/smoke/oxy/heat) над макро-решёткой,
-    // изотропный (regime_down через push) ([render/gpu_gas_pass.h]). Источник —
-    // засев шахт CPU-полем kGasField при входе на этаж; читатель — sample_cell
-    // в HUD. Живая петля с первого дня; туман/удушье подключатся к ЭТОМУ полю
-    // отдельными решениями владельца, не к статичной константе.
-    gpu::GpuGasPass gasPass;
-    if (!gasPass.init(&device, GIGA_SHADER_DIR, voxelMirror.class_buffer())) {
-        std::fprintf(stderr, "[gas] pass init failed (continuing without gas)\n");
-    }
-
-    // The unified particle pool: blood/dust/sparks/drips, one compute sim
-    // colliding against the voxel mirror ([render/particle_pass.h]).
-    gpu::ParticlePass particlePass;
-    if (!particlePass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
-                           voxelMirror.masks_buffer())) {
+    // GPU-verlet antourage: hanging wires AND cloth sheets, one pass, one
+    // compute shader — a chain is a lattice at H=1 ([render/verlet_pass.h]).
+    gpu::VerletPass verletPass;
+    if (!verletPass.init(&device, renderer.renderPass, GIGA_SHADER_DIR,
+                         voxelMirror.masks_buffer(), voxelMirror.types_buffer(),
+                         lightGrid.descriptor_set_layout())) {
         std::fprintf(stderr,
-                     "[particle] pass init failed (continuing without particles)\n");
+                     "[verlet] pass init failed (continuing without antourage "
+                     "verlet)\n");
     }
+
+    // GPU-газ 4 захардкоженных каналов УМЕР (инкремент 4, CANON S16.6:
+    // хардкод каналов газа запрещён — газ = строка таблицы): toxic_gas
+    // теперь МАТЕРИЯ мира-автомата (засев вырезан 2026-08-25), HUD
+    // читает агрегат клетки (S16.4). Химия горения потеряна осознанно
+    // (решение владельца 2026-08-23).
+
+    // МИР-АВТОМАТ (CANON S16): единственный двигатель материи — Margolus-
+    // правило прямо в каноническом pagePool зеркала ([render/gpu_medium_pass.h]).
+    // Такт — каждый 4-й сим-тик (решение владельца 2026-08-24): 125/4 =
+    // 31.25 Гц, падение 0.25 м x 31.25 = 7.8 м/с; пауза и детерминизм
+    // бесплатно — стоят сим-часы, стоит материя.
+    gpu::GpuMediumPass mediumPass;
+    if (!mediumPass.init(&device, GIGA_SHADER_DIR, voxelMirror)) {
+        std::fprintf(stderr,
+                     "[medium] pass init failed (continuing without automaton)\n");
+    }
+    std::uint64_t mediumSubstepsDone = 0;
+
+    // Частицы живут ТРЕТЬИМ БАНКОМ пула VerletPass (слияние 2026-09-01):
+    // отдельного пасса больше нет — кровь/пыль/искры/капли симулятся тем же
+    // verlet_sim.comp и коллизят о то же зеркало.
     // Severed pipe stumps ([merge_ecs_prop_meshes]) — each drips on a slow
     // clock while its floor stays loaded. Refilled at every prop merge.
     std::vector<vec3> dripEmitters;
@@ -1769,7 +2398,7 @@ int main(int argc, char** argv) {
         bodyPass.destroy();
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         renderer.destroy();
         device.destroy();
         SDL_DestroyWindow(window);
@@ -1786,15 +2415,10 @@ int main(int argc, char** argv) {
     // for the flow fields, which is affordable precisely because streaming keeps
     // a single floor resident (performance.md).
     // Baked asynchronously; owns both the live graph the tick reads and the
-    // pending one a worker fills (world/nav_async.h).
-    nav::AsyncBake nav;
-    // Room zones for the SAME one live floor ([room_zone.h]): which macro cells are
-    // a kitchen / a bathroom / a flat, and the dense field a body descends to reach
-    // one. ~6 MiB on a Residential floor, 0 on a floor whose room mix rolls none of
-    // them. Baked SYNCHRONOUSLY inside begin_floor_nav — three multi-source BFS
-    // against nav's 128, so it is a rounding error on a load the same function is
-    // already spending seconds on, and a synchronous bake needs no ownership story.
-    game::RoomZones roomZones;
+    // pending one a worker fills — plus the two live walkability bitsets and
+    // the background-rebake planner that keeps the bake current as the floor
+    // is carved (game/rebake.h).
+    game::RebakeScheduler nav;
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -1824,16 +2448,14 @@ int main(int argc, char** argv) {
     //                                  room for the 12-bit generation). A stale designate
     //                                  RE-DESIGNATES from the floor's live roster instead of
     //                                  handing the camera to whoever inherited the slot.
-    //   SAFE  NpcRef::id — the sixth store [npc_pool.h] names, and the ONE that needed no
-    //                      change. Its lifetime is COUPLED, not merely short: the macro
-    //                      demographic sweep skips `pool.embodied(id)` before it can reach
-    //                      either kill() (macro_sim.cpp), so a macro death can never touch
-    //                      an embodied body; and the only other pool.kill() caller anywhere
-    //                      in src/ is combat.cpp, which kills the record at :138 and
-    //                      destroys the entity at :148 in the same loop. So no entity can
-    //                      outlive the record its NpcRef names. That is an argument from
-    //                      the call graph rather than a generation check — if a third
-    //                      pool.kill() caller ever appears, this line is what it invalidates.
+    //   DONE  NpcRef::id — шестое хранилище закрыто ПОКОЛЕНИЕМ (E-2
+    //                      skeleton-anchor, 2026-08-29): NpcRef несёт gen слота
+    //                      на момент воплощения, npc_ref_current — единственная
+    //                      проверка, fold_back со стейл-ссылкой не пишет строку
+    //                      наследника. Прежний аргумент «по графу вызовов»
+    //                      (совместная смерть записи и тела в combat.cpp) был
+    //                      хрупким по собственному признанию — третий вызывающий
+    //                      pool.kill() больше ничего не инвалидирует.
     pool.set_recycling(true);
     //
     // The demo seeds ~1,930 records into 2^20, so the reserve is not the binding
@@ -1869,6 +2491,8 @@ int main(int argc, char** argv) {
     // bus is "this happened" and is wiped every tick, this is "this happened HERE and
     // is still fading". No init() — it is a 2 KB POD with no allocation anywhere.
     game::NoiseField noiseField;
+    // Акустика на скелете (G, S20.1): шары путевых дистанций живых шумов —
+    // ~7.5 МБ, на куче. Бейкается одним шагом перед потребителями слуха.
     game::FloorRegistry registry;
 
     // Streaming keeps only the ACTIVE floor's World + crowd live; every other
@@ -1880,23 +2504,91 @@ int main(int argc, char** argv) {
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
 
-    // Every door on the live floor. Rebuilt per arrival like mobs and containers,
-    // because a door belongs to the floor and not to the player — and because the
-    // dense cell->door index is sized for exactly ONE layer ([door.h]).
-    //
-    // Declared up here rather than beside the ledger because the FIRST floor is set
-    // up above the ledger, and a DoorSet declared later compiled as "undeclared
-    // identifier" at the very site that has to build the starting floor's doors.
-    game::DoorSet doors;
-    game::DoorTick doorTick{};      // last step's report, for the HUD
-    std::uint32_t doorsBuilt = 0;   // on this floor, so the HUD can say "0 doors"
-    bool doorWanted = false;        // Q, consumed by one sim step
+        game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
+    std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+    // Комнаты этажа: объявляет модуль (S12.1), перештамповка на каждом входе
+    // (rooms_declare). Живут в reg.ctx() (прецедент AnchorBins), чтобы живые
+    // хуки supply на швах предметов/пропов не тащили их через сигнатуры.
+    game::FloorRooms& floorRooms = reg.ctx().emplace<game::FloorRooms>();
+    game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
+        // 5c: обвес лифтовых порталов — game::dress_lift_portals
+    // ([game/door.h]): кнопка снаружи (DoorRef на створку хаба — активация
+    // ссылкой S18), панель в кабине, дефолт «закрыто». Перенесён в
+    // game-слой, чтобы быть headless-тестируемым (suite_doors).
+    auto dress_lift_portals = [&](LayerId nl) {
+        const game::FloorSpec* sp = spec_for_floor(currentFloor);
+        if (sp == nullptr) return;
+        game::dress_lift_portals(reg, stack.layer(nl), doors, currentFloor,
+                                 *sp,
+                                 streamer.floor_seed_of(registry, currentFloor),
+                                 nl, doorDirty);
+    };
+    bool doorWanted = false;        // E (единая интеракция), consumed once
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
     bool possessWanted = false;     // P, consumed by one sim step (Voluntary Mind Projection / Body Swap)
     bool throwWanted = false;       // Z, consumed by one sim step (player_throw_step)
     char elevDiagLine[160] = {};
     std::uint64_t elevDiagAt = 0;
     game::PowerGridState powerGrid{};
+    // Ключ модуля этажа (S20.6 закон 4) — kind И сид И версия генерации; им
+    // подписывается каждый floor-файл и им же он спрашивается на restore.
+    auto module_key_for = [&](int floorNo) {
+        const game::FloorKind k = kind_for_floor(floorNo);
+        return game::FloorModuleKey{
+            static_cast<std::uint8_t>(k),
+            streamer.floor_seed_of(registry, floorNo),
+            game::module_gen_version(k)};
+    };
+    // СУЩНОСТНАЯ ПОЛОВИНА прибытия — РАЗВИЛКА (S20.6 закон 2: restore НЕ
+    // сеет). Обе ветки: клир слота + обесточка с нуля (ключи PowerGridState
+    // бесэтажны — саботаж щитка на этаже 0 гасил те же клетки на всех этажах;
+    // чистка каждым прибытием убивает межэтажный дефект по построению).
+    // generate: сидеры ящиков и пропов — ПОСЛЕ клира (прежний порядок сеял
+    // ящики до clear_layer_props, и клир убивал их той же активацией — этаж
+    // прибытия жил без единого ящика с посадки «ящик-проп» 2026-08-21).
+    // restore: сущности из снимка + якорная проба (закон 3), сидеры молчат.
+    // Возвращает «этаж восстановлен» — обвес лифта (dress) сеют только на
+    // generate, состояние створок на restore несёт сама материя снимка.
+    auto floor_entity_half = [&](LayerId nl, int floorNo) -> bool {
+        game::FloorEntityState ents;
+        const bool restored = take_pending_restore(floorNo, ents);
+        powerGrid = game::PowerGridState{};
+        game::clear_layer_props(reg, nl);
+        if (restored) {
+            const std::size_t np = game::spawn_prop_records(
+                reg, stack.layer(nl), nl, ents.props.data(),
+                ents.props.size(), bus);
+            game::spawn_corpse_records(reg, nl, floorNo, ents.corpses.data(),
+                                       ents.corpses.size());
+            game::spawn_pickup_records(reg, nl, ents.pickups.data(),
+                                       ents.pickups.size());
+            game::spawn_debris_records(reg, nl, floorNo, ents.debris.data(),
+                                       ents.debris.size());
+            game::restore_power_keys(powerGrid, ents.powerKeys.data(),
+                                     ents.powerKeys.size());
+            // Репутация комнат (S13.6): rooms_declare этого прибытия уже
+            // отработал (комнаты РАНЬШЕ сидеров) — накопленное ложится
+            // поверх свежей декларации по индексу объявления.
+            game::restore_room_reps(floorRooms, ents.roomReps.data(),
+                                    ents.roomReps.size());
+            std::fprintf(stderr,
+                         "[persist] floor %d entities RESTORED: %zu props, "
+                         "%zu corpses, %zu pickups, %zu debris, %zu power "
+                         "keys, %zu room reps\n",
+                         floorNo, np, ents.corpses.size(),
+                         ents.pickups.size(), ents.debris.size(),
+                         ents.powerKeys.size(), ents.roomReps.size());
+        } else {
+            refresh_floor_containers(reg, stack.layer(nl), floorNo, nl);
+            seed_floor_props(reg, stack.layer(nl), floorNo, nl,
+                             streamer.floor_seed_of(registry, floorNo), bus);
+        }
+        floor_light_rebuild(reg, stack.layer(nl), floorNo, nl);
+        return restored;
+    };
+    // Флаг «текущее прибытие — restore»: пишет floor_entity_half на каждом
+    // прибытии, читает шаг дверей (dress только на generate).
+    bool arrivedRestored = false;
     // Doors derive from THE FLOOR'S OWN SEED — streamer.floor_seed_of(), the same
     // value its geometry was generated from. There used to be a separate
     // kDoorSeed constant here, and it was a bug factory, not a knob: door_build
@@ -1951,8 +2643,16 @@ int main(int argc, char** argv) {
         // back, and it restores immediately after generating — before the pipes
         // are routed and the lamps are hung, so nothing is ever anchored to
         // geometry that is about to change under it. [problems.md] §42
-        streamer.set_floor_restore([](World& w, int floorNumber) {
-            return apply_floor_file(w, floorNumber);
+        streamer.set_floor_restore([&streamer, &registry](World& w,
+                                                          int floorNumber) {
+            // Ключ строится здесь, а не module_key_for: хук бежит и в
+            // prebuild-воркере, капчер минимален и только-чтение.
+            const game::FloorKind k = kind_for_floor(floorNumber);
+            const game::FloorModuleKey key{
+                static_cast<std::uint8_t>(k),
+                streamer.floor_seed_of(registry, floorNumber),
+                game::module_gen_version(k)};
+            return apply_floor_file(w, floorNumber, key);
         });
 
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
@@ -1974,27 +2674,37 @@ int main(int argc, char** argv) {
                 cam.pitch = customPitch;
             }
             LayerId l0 = reg.get<Transform>(player).layer;
+            // Комнаты РАНЬШЕ сидеров: спавн паков селится в объявленных
+            // комнатах (mob_spawn читает их из reg.ctx), двери — по тегу.
+            game::rooms_declare(floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
-            refresh_floor_containers(reg, stack.layer(l0), 0, l0);
-            refresh_floor_props(reg, stack.layer(l0), 0, l0,
-                               streamer.floor_seed_of(registry, 0), bus);
-            // Doors BEFORE the bake, and frozen for its duration: door_build leaves
-            // every door open so the bake sees all-open geometry (an upper bound on
-            // connectivity), and AsyncBake holds a raw pointer to the live MacroGrid
-            // that must not be mutated until ready(). [door.h]
-            if (currentSpec)
-                doorsBuilt = game::door_build(stack.layer(l0), doors, 0,
-                                              *currentSpec,
-                                              streamer.floor_seed_of(registry, 0));
-            doors.frozen = true;
-            begin_floor_nav(stack.layer(l0), 0, nav, roomZones);
+            // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
+            arrivedRestored = floor_entity_half(l0, 0);
+            // Doors BEFORE the bake: door_build leaves every door open, so the
+            // walkability bitsets built at the top of begin_floor_nav carry the
+            // all-open geometry (an upper bound on connectivity) the bake must
+            // assume. No freeze: the worker owns a snapshot, never the grid,
+            // so doors may move mid-bake. [door.h, game/rebake.h]
+            game::rooms_supply_rebuild(floorRooms, reg, l0);
+            // Программы щитков + привязка ламп (S15.4): перештамповка на
+            // КАЖДОМ прибытии — декларация из данных модуля, не сейв (S18).
+            game::stamp_shield_programs(reg, &floorRooms, l0);
+            game::assign_lamp_shields(reg, l0);
+            game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
+            if (!arrivedRestored) dress_lift_portals(l0);
+            begin_floor_nav(stack.layer(l0), 0, nav);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
                                       streamer.antourage_at_layer(registry, l0),
-                                      stack.layer(l0), &dripEmitters);
-                upload_wires(wirePass, streamer.antourage_at_layer(registry, l0));
-                upload_cloths(clothPass, streamer.antourage_at_layer(registry, l0));
+                                      stack.layer(l0), /*simTick*/ 0,
+                                      &dripEmitters);
+                upload_wires(verletPass, streamer.antourage_at_layer(registry, l0));
+                upload_cloths(verletPass, streamer.antourage_at_layer(registry, l0));
             }
         }
     }
@@ -2005,7 +2715,7 @@ int main(int argc, char** argv) {
         bodyPass.destroy();
         raymarchPass.destroy();
         voxelMirror.destroy();
-        cubePass.destroy();
+        materialTex.destroy();
         renderer.destroy();
         device.destroy();
         SDL_DestroyWindow(window);
@@ -2032,13 +2742,12 @@ int main(int argc, char** argv) {
     bool running = true;
     float simAccum = 0.0f;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
-    // re-plan stagger ([ai.md] #12c) schedules each agent's next decision against
-    // an absolute deadline on this clock; it is frozen with the sim while paused.
-    // [[maybe_unused]]: its only consumer is the PARKED ai_step call below (ai.cpp
-    // is in tools/branch_port_pending/ pending adaptation to main's tables). Kept —
-    // it is advanced correctly every tick, ready for ai_step's return. MSVC did not
-    // warn; Clang -Wunused-but-set-variable does.
-    [[maybe_unused]] double simNow = 0.0;
+    // re-plan stagger ([ai.md] #12c) schedules each agent's next decision
+    // against an absolute deadline on this clock; frozen with the sim while
+    // paused. ЖИВАЯ: ai_step давно распаркован и читает её шестым аргументом
+    // — прежняя пометка «[[maybe_unused]]… PARKED» пережила эпоху и звала
+    // аудитора удалить живой узел (К1-15, аудит 2026-08-25).
+    double simNow = 0.0;
     std::uint64_t prevTicks = SDL_GetPerformanceCounter();
     const double freq = static_cast<double>(SDL_GetPerformanceFrequency());
 
@@ -2107,11 +2816,6 @@ int main(int argc, char** argv) {
     // second writer of anyone's movement.
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
-    // [[maybe_unused]]: superseded by PlayerRanged::shots (read straight from the
-    // component in the HUD) during the branch merge, but the `shots += ...` RHS is a
-    // side-effecting call (it fires the gun), so the accumulator is kept rather than
-    // rewriting the statement. MSVC did not warn; Clang -Wunused-but-set-variable does.
-    [[maybe_unused]] std::uint32_t shots = 0;   // rounds the player has fired
     game::RunLedger& ledger = runState.ledger;
     // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
     // вклад и долг ([economy.h], [save.h] SAVBANK).
@@ -2146,10 +2850,6 @@ int main(int argc, char** argv) {
     // player only finds out about by losing a run.
     char saveLine[96] = {};
     std::uint64_t saveLineAt = 0;
-    // [[maybe_unused]]: superseded by RunLedger::banked (the HUD reads ledger.banked)
-    // during the branch merge; the `banked += deposit_valuables(...)` RHS still must
-    // run, so the local is kept. MSVC did not warn; Clang does.
-    [[maybe_unused]] std::int32_t banked = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
     std::int32_t contractPaid = 0;    // roubles paid by finished jobs
     game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
@@ -2167,6 +2867,7 @@ int main(int argc, char** argv) {
     // record's own rolled build.
     game::RpgStats carriedRpg = game::fresh_rpg(1);
     bool attackHeld = false;
+    bool rmbHeld = false; // ПКМ-рука (two-hands.md)
     // Carve scratch + result, reused across ops so a carve allocates nothing
     // after warmup ([world/destruct.h]).
     CarveScratch carveScratch;
@@ -2175,7 +2876,7 @@ int main(int argc, char** argv) {
     // same debt CarveResult::dirtyCells carries, drained into the mirror below.
     std::vector<std::uint32_t> stainDirty;
     // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
-    // below behind the same doors.frozen gate as the console carve row.
+    // below on the sim clock, through the same path as the console carve row.
     game::CarveProposalQueue combatCarves;
     // Combat/impact → particle seam ([game/particles.h]): blood and sparks are
     // proposed as bursts during the sim step and drained into the GPU pool.
@@ -2183,6 +2884,7 @@ int main(int argc, char** argv) {
 
     bool healWanted = false;
     bool eatWanted = false;       // G, consumed by one sim step
+    bool reliefWanted = false;    // P, осознанное облегчение ([needs.h])
     bool drinkWanted = false;     // T, consumed by one sim step
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
@@ -2193,10 +2895,9 @@ int main(int argc, char** argv) {
     // This is the first reader the nine authored craft_* columns in data/items.csv have
     // ever had: 446 items carried them and item_table.h:17 said in as many words
     // "crafting is not implemented".
-    // The utility AI's config and last-tick report. `enabled` defaults FALSE ([ai.h]):
-    // the system is wired, tested and dormant, and flipping this one bool is the whole
-    // switch — but read the note at the ai_step call site first, because it also needs
-    // ai_init to attach AiBrain and ai_release to clear the token safely.
+    // Конфиг utility-AI. `enabled` ЖИВЁТ true с включения толпы — прежняя
+    // проза «defaults FALSE… dormant» пережила эпоху и врала читателю
+    // (аудит 2026-08-25, К1-15): флаг не конфиг, а исторический рубильник.
     game::AiConfig aiCfg;
     aiCfg.enabled = true;   // utility AI live; brains attached in finish_floor_nav
     aiCfg.memory = true;    // second axis: needs a real AiMemory* at ai_step
@@ -2218,11 +2919,6 @@ int main(int argc, char** argv) {
     game::CraftingState crafting{};
     game::craft_init(crafting);
     std::uint32_t crafted = 0, scrapped = 0, recipesLearned = 0;
-    // [[maybe_unused]]: the HUD prints `carried` (live inventory value), not this
-    // run-total, after the branch merge — but `loot += ...` wraps the container/pickup
-    // hooks that actually move the roubles, so the accumulator is kept. Clang warns,
-    // MSVC did not.
-    [[maybe_unused]] std::int32_t loot = 0;         // roubles swept up this run
     // Content-layer statuses (zhelemish / web / spore / govnyak). Slowed is the
     // velocity CAP in combat.h; this is the authored table that decides what
     // lands and for how long. Main-owned: Inventory is POD and status must not
@@ -2328,8 +3024,8 @@ int main(int argc, char** argv) {
         HudElement* els = hud_elements(hn);
         for (std::size_t i = 0; i < hn; ++i)
             std::fprintf(f, "hud %s %d\n", els[i].id, els[i].on ? 1 : 0);
-        std::fprintf(f, "crt %d\nfullscreen %d\nvr %d\nipd %.4f\n", renderer.crtEnabled ? 1 : 0,
-                     fullscreenState ? 1 : 0, vrMode ? 1 : 0, static_cast<double>(vrIpd));
+        std::fprintf(f, "crt %d\nfullscreen %d\n", renderer.crtEnabled ? 1 : 0,
+                     fullscreenState ? 1 : 0);
         const audio::AudioConfig& ac = audioSys.mixer().config();
         std::fprintf(f, "vol_master %.3f\nvol_sfx %.3f\nvol_ambient %.3f\n",
                      static_cast<double>(ac.masterGain),
@@ -2358,15 +3054,6 @@ int main(int argc, char** argv) {
                     // --no-crt — диагностический CLI-override и он сильнее
                     // сохранённого предпочтения: флаг просят на ОДИН запуск.
                     if (!noCrt) renderer.crtEnabled = iv != 0;
-                } else if (std::sscanf(line, "vr %d", &iv) == 1) {
-                    if (!cliVrSet) {
-                        vrMode = iv != 0;
-                        renderer.set_vr_mode(vrMode);
-                    }
-                } else if (std::sscanf(line, "ipd %f", &fv) == 1) {
-                    if (!cliIpdSet) {
-                        vrIpd = std::clamp(fv, 0.030f, 0.120f);
-                    }
                 } else if (std::sscanf(line, "fullscreen %d", &iv) == 1) {
                     fullscreenState = iv != 0;
                 } else if (std::sscanf(line, "vol_master %f", &fv) == 1) {
@@ -2389,8 +3076,6 @@ int main(int argc, char** argv) {
         sctx.binds = &binds;
         sctx.rebindCapture = &rebindCapture;
         sctx.crtEnabled = &renderer.crtEnabled;
-        sctx.vrMode = &vrMode;
-        sctx.vrIpd = &vrIpd;
         sctx.fullscreen = &fullscreenState;
         sctx.audio = &audioSys.mixer().config();
         const SettingsRequest sreq = settings_ui_draw(sctx);
@@ -2403,7 +3088,6 @@ int main(int argc, char** argv) {
         }
         if (sreq.uiChanged) {
             SDL_SetWindowFullscreen(window, fullscreenState);
-            renderer.set_vr_mode(vrMode);
             save_ui_cfg();
         }
     };
@@ -2418,15 +3102,28 @@ int main(int argc, char** argv) {
     };
     // The commands a key/menu row dispatches read the SAME context the typed
     // console does; player/floor move under it, so it is re-pointed each frame.
+    // Намерение «неуязвим» (консольный `god`). Живёт у приложения, а не на
+    // теле, потому что тело расходно — см. console.h::godWanted и bugs.md Б4.
+    bool godWanted = false;
     auto refresh_console_ctx = [&]() {
         consoleCtx.ecs = &reg;
         consoleCtx.pool = &pool;
+        consoleCtx.bus = &bus;
         consoleCtx.stack = &stack;
         consoleCtx.floors = &registry;
         consoleCtx.catalog = &floor_catalog();
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
         consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
+        consoleCtx.godWanted = &godWanted;   // Б4: неуязвимость переживает тело
+    };
+    // Проекция намерения на ТЕКУЩЕЕ тело (баг Б4, bugs.md). Ставится каждый
+    // кадр, потому что тело меняется без предупреждения: лифт, смерть,
+    // вселение — каждый раз это новая сущность, а человек за клавиатурой тот
+    // же. Снятие делает консоль, поэтому здесь только взвод.
+    auto project_god_onto_body = [&]() {
+        if (godWanted && reg.valid(player) && !reg.all_of<game::GodMode>(player))
+            reg.emplace<game::GodMode>(player);
     };
     auto exec_command = [&](const char* line) {
         char msg[256];
@@ -2492,16 +3189,20 @@ int main(int argc, char** argv) {
         // discovered ([problems.md] §43). [samosbor.h] [fast_travel.h]
         runState.samosbor = samosbor;
         runState.fastTravel = fastTravel;
-        // REFRESH, not append and not clear. v15: whole crates AND corpses,
-        // contents included — the search screen made both mutable stores. [save.h]
-        game::refresh_floor_records(reg, pl, currentFloor, runState.containers,
-                                    runState.corpses);
+        // v20/F: сущности резидентного этажа едут в ЕГО файл (материя И
+        // сущности одним снимком под ключом модуля), не в run.sav.
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
-        write_floor_file(stack.layer(pl), currentFloor);
+        {
+            game::FloorEntityState ents;
+            game::gather_floor_entities(reg, pl, currentFloor, ents,
+                                        &powerGrid, &floorRooms);
+            write_floor_file(stack.layer(pl), currentFloor, ents,
+                             module_key_for(currentFloor));
+        }
         char runPath[128];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
@@ -2527,48 +3228,48 @@ int main(int argc, char** argv) {
     // allocates before `unload` frees, so the id alternates on EVERY ride — the
     // corruption was guaranteed, not occasional. [problems.md] §24.
     LayerId activeLayer = reg.get<Transform>(player).layer;
-    auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
-        // Pass the player's durable record id so the destination crowd skips it
-        // instead of spawning a second player.
-        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
-                                            : game::kInvalidNpc;
-        // Opened crates are world state, not a free respawn. Capture the
-        // leaving floor BEFORE travel: the streamer may recycle the LayerId and
-        // refresh_floor_containers destroys every crate on the arrival slot.
-        // Without this, loot → leave → return refills every emptied box. [save.h]
+    // Половина «покинуть этаж» — общая для синхронной поездки (do_ride) и
+    // лифтовой машины (elevators-2x2.md): записи мира, файл этажа, AIMEM.
+    auto leave_current_floor = [&]() {
+        // Всё накопленное этажом — мир И сущности — уезжает в ЕГО файл ДО
+        // переработки слота (v20/F, S20.6: «этаж помнит ВСЁ»). Сбор — на
+        // главном потоке (ECS воркеру не принадлежит), кодек и диск — фоном.
+        const LayerId leaveLayer = reg.valid(player)
+                                       ? reg.get<Transform>(player).layer
+                                       : static_cast<LayerId>(0);
         {
-            const LayerId leaveLayer = reg.valid(player)
-                                           ? reg.get<Transform>(player).layer
-                                           : static_cast<LayerId>(0);
-            game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                         runState.containers, runState.corpses);
-            // The departing floor's exact grid goes to its own file — this is
-            // THE geometry persistence: the next visit (or the next run)
-            // stamps it back. A transition is a load screen; I/O is
-            // sanctioned here. [save.h]
-            write_floor_file(stack.layer(leaveLayer), currentFloor);
-            // AIMEM: clear MotionOwner::Ai on the leaving floor before the
-            // streamer recycles the layer. unload() also releases; this is the
-            // keyboard/--shot leave seam so a ride without an immediate unload
-            // still cannot strand tokens. Idempotent. [ai.h]
-            {
-                const std::uint32_t released =
-                    game::ai_release(reg, leaveLayer);
-                std::fprintf(stderr,
-                             "[aimem] LEAVE floor=%d layer=%u released=%u "
-                             "mem_rows=%u\n",
-                             currentFloor, static_cast<unsigned>(leaveLayer),
-                             released, aiMem.rows());
-            }
+            game::FloorEntityState ents;
+            game::gather_floor_entities(reg, leaveLayer, currentFloor, ents,
+                                        &powerGrid, &floorRooms);
+            write_floor_file_async(stack.layer(leaveLayer), currentFloor,
+                                   std::move(ents),
+                                   module_key_for(currentFloor));
         }
-        game::RideResult ride =
-            absolute ? streamer.teleport(stack, registry, reg, pool, player,
-                                         currentFloor, target, game::kArrivalCoord,
-                                         pid, landHub)
-                     : streamer.travel(stack, registry, reg, pool, player,
-                                       currentFloor, target, game::kArrivalCoord,
-                                       pid);
-        if (!ride.moved) return false;
+        // AIMEM: clear MotionOwner::Ai on the leaving floor before the
+        // streamer recycles the layer. unload() also releases; this is the
+        // keyboard/--shot leave seam so a ride without an immediate unload
+        // still cannot strand tokens. Idempotent. [ai.h]
+        {
+            const std::uint32_t released =
+                game::ai_release(reg, leaveLayer);
+            std::fprintf(stderr,
+                         "[aimem] LEAVE floor=%d layer=%u released=%u "
+                         "mem_rows=%u\n",
+                         currentFloor, static_cast<unsigned>(leaveLayer),
+                         released, aiMem.rows());
+        }
+    };
+    // Половина «прибыть» — общий хвост обеих поездок: всё, что делает свежий
+    // этаж домом (журналы, двери, Fresh-бейк, зеркала GPU, тело в безопасной
+    // клетке). Вынесено из do_ride ради лифтовой машины — у неё между leave
+    // и arrive лежит асинхронный Prebuild, а хвост обязан быть ТЕМ ЖЕ кодом.
+    // Прибытие разрезано на ШАГИ (5d, решение владельца: «фриз лечить по
+    // уму»): синхронный путь зовёт все подряд, лифтовая машина — ПО КАДРУ ЗА
+    // ШАГ за закрытой створкой, чтобы рендер дышал. Свет остаётся синхронным
+    // внутри своего шага (решение владельца) — его 1.3-2.9 с живут одним
+    // кадром, остальное больше не складывается с ним в один 10-секундный.
+    auto arrive_head = [&](game::RideResult ride, int landHub) -> LayerId {
+        if (!ride.moved) return kInvalidLayer;
         player = ride.player;
         currentFloor = ride.floor;
         // (vendorKind died with the window; barter prices by the partner's
@@ -2620,68 +3321,194 @@ int main(int argc, char** argv) {
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
         // a floor looks the same every visit).
-        LayerId nl = reg.get<Transform>(player).layer;
+        return reg.get<Transform>(player).layer;
+    };
+    auto arrive_refresh = [&](LayerId nl) {
+        // Комнаты РАНЬШЕ сидеров: спавн паков селится в объявленных комнатах
+        // (mob_spawn читает их из reg.ctx), двери потом — по тегу.
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-        refresh_floor_containers(reg, stack.layer(nl), currentFloor, nl);
-        refresh_floor_props(reg, stack.layer(nl), currentFloor, nl,
-                           streamer.floor_seed_of(registry, currentFloor), bus);
-        // Stamp recorded state over the deterministic respawn: a half-taken
-        // crate comes back half-taken, a deposit is still inside, and the
-        // floor's corpses lie where they fell. Same seam as F9 apply. [save.h]
-        game::apply_container_records(reg, nl, currentFloor,
-                                      runState.containers.data(),
-                                      runState.containers.size());
-        game::spawn_corpse_records(reg, nl, currentFloor,
-                                   runState.corpses.data(),
-                                   runState.corpses.size());
-        // (The floor's own file is restored INSIDE ensure_loaded now — before the
-        //  dressing bake and the props, not after them. [problems.md] §42)
-        // Doors before the bake, frozen for its duration. [door.h]
-        if (currentSpec)
-            doorsBuilt = game::door_build(
-                stack.layer(nl), doors, currentFloor, *currentSpec,
-                streamer.floor_seed_of(registry, currentFloor));
-        doors.frozen = true;
-        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
-        // Arrival geometry is final (floor file + doors stamped): re-snapshot
-        // the GPU voxel mirror for the recycled World object.
+        // РАЗВИЛКА S20.6 (закон 2): первый вход — сидеры, ревизит — записи
+        // снимка (клир слота, обесточка, свет — внутри, обеими ветками).
+        arrivedRestored = floor_entity_half(nl, currentFloor);
+        // Doors before the bake: all-open geometry into the bitsets. No
+        // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
+    };
+    auto arrive_doors_nav = [&](LayerId nl) {
+        game::rooms_supply_rebuild(floorRooms, reg, nl);
+        // Программы щитков + привязка ламп (S15.4): декларация модульных
+        // данных, перештамповка на каждом прибытии (S18).
+        game::stamp_shield_programs(reg, &floorRooms, nl);
+        game::assign_lamp_shields(reg, nl);
+        game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
+        // Обвес лифта — СИДЕР (кнопка/панель — сущности, дефолт «закрыто» —
+        // состояние): на restore кнопки приходят записями, створки — материей
+        // снимка; пересеивать их значило бы воскрешать сорванное (закон 2).
+        if (!arrivedRestored) dress_lift_portals(nl);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav);
+    };
+    auto arrive_upload = [&](LayerId nl) {
         voxelMirror.upload_all(stack.layer(nl));
         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
-                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
-                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
+                                  stack.layer(nl), simTick, &dripEmitters);
+                upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
         }
         // ride_elevator keeps x/y and plants z=kArrivalCoord. ~1-in-5 Residential
         // columns are solid at that z, so without this the body freezes in a
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
-        // Publish the new slot to the enclosing frame. ONE place, so a fifth
-        // travel site cannot forget it the way two of the first four did.
+        // Publish the new slot to the enclosing frame. ONE place.
         activeLayer = nl;
-        // AUTOSAVE: every floor transition checkpoints the run, so a crash
-        // costs at most the current floor's progress. The departed floor's
-        // file is already on disk (written above, before travel).
         save_run_now();
+    };
+    auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
+        const auto t0 = std::chrono::steady_clock::now();
+        const LayerId nl = arrive_head(ride, landHub);
+        if (nl == kInvalidLayer) return false;
+        arrive_refresh(nl);
+        arrive_doors_nav(nl);
+        arrive_upload(nl);
+        std::fprintf(stderr, "[lift] arrive %d: %.0f ms (sync, one frame)\n",
+                     currentFloor,
+                     std::chrono::duration<float, std::milli>(
+                         std::chrono::steady_clock::now() - t0)
+                         .count());
+        return true;
+    };
+    // ПОЛНАЯ пересборка резидентного этажа с диска/генерации — «Новая игра»
+    // (аудит F, жук №2): этаж 0 строится ДО меню и мог быть ВОССТАНОВЛЕН из
+    // файлов прежнего рана в слоте по умолчанию (материя — испокон, сущности
+    // — с v20). Свежий ран обязан начаться на девственном этаже: после вайпа
+    // слота файлов нет → ensure_loaded генерирует, развилка сущностей идёт
+    // generate-веткой и сеет всё свежим. Тот же F9-хребет: unload → build →
+    // сущностная половина → двери/нав/зеркала → тело.
+    auto rebuild_current_floor = [&]() {
+        flush_floor_write();
+        {
+            std::lock_guard<std::mutex> lk(g_restoreMx);
+            g_pendingRestore.clear(); // бут мог начитать чужой слот
+        }
+        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
+                                            : game::kInvalidNpc;
+        streamer.unload(stack, registry, reg, pool, currentFloor);
+        const game::LoadResult lr = streamer.ensure_loaded(
+            stack, registry, reg, pool, currentFloor, pid);
+        const LayerId nl = lr.layer;
+        activeLayer = nl;
+        player = pid != game::kInvalidNpc
+                     ? game::embody_as_player(reg, pool, pid, nl)
+                     : lr.player;
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        arrivedRestored = floor_entity_half(nl, currentFloor);
+        diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
+        arrive_doors_nav(nl);
+        voxelMirror.upload_all(stack.layer(nl));
+        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+        if (propPass.ready()) {
+            merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), simTick, &dripEmitters);
+            upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+            upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
+        }
+        if (reg.valid(player)) {
+            game::place_body_safely(reg, stack.layer(nl), player);
+            aim_player(reg, player);
+        }
+    };
+
+    auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
+        // Pass the player's durable record id so the destination crowd skips it
+        // instead of spawning a second player.
+        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
+                                            : game::kInvalidNpc;
+        leave_current_floor();
+        game::RideResult ride =
+            absolute ? streamer.teleport(stack, registry, reg, pool, player,
+                                         currentFloor, target, game::kArrivalCoord,
+                                         pid, landHub)
+                     : streamer.travel(stack, registry, reg, pool, player,
+                                       currentFloor, target, game::kArrivalCoord,
+                                       pid);
+        return arrive_after_ride(ride, landHub);
+    };
+
+    // --- Лифтовая машина (elevators-2x2.md; ЗАКОН ДВЕРЕЙ — один пекарь) -----
+    // Idle -> Prebuilding: воркер строит мир целевого этажа в свободный слот,
+    // игрок заперт в кабине столба; -> WaitFresh: мир свапнут, игрок уже в
+    // кабине НАЗНАЧЕНИЯ, Fresh-бейк печётся «за закрытыми дверьми»; -> Idle:
+    // nav.step() вернул true (Fresh-свап) — двери открылись. Лифт сам ничего
+    // не печёт и не ждёт констант: финал даёт существующий сигнал пекаря.
+    enum class LiftRide : std::uint8_t {
+        Idle,
+        Prebuilding,
+        SwapRefresh,   // 5d: шаги посадки — по кадру за шаг, за створкой
+        SwapDoorsNav,  // двери+нав (свет синхронный — толстый кадр один)
+        SwapUpload,    // зеркала GPU + автосейв
+        WaitFresh
+    };
+    LiftRide liftRide = LiftRide::Idle;
+    int liftDst = 0;
+    int liftHub = -1;
+    std::uint64_t liftT0 = 0; // сим-тик старта: строка [lift] ride + иллюзия
+    // Fresh-свап целевого этажа уже прошёл; двери ждут ещё и ПОЛНОГО
+    // пробуждения сред (mediumPass.wakes_pending — решение владельца:
+    // лавина будильника этажа целиком за закрытыми дверьми).
+    bool liftFreshDone = false;
+    LayerId liftSwapLayer = kInvalidLayer; // слой шагов посадки (5d)
+    auto start_lift_ride = [&](int dst, int hub) -> bool {
+        if (liftRide != LiftRide::Idle) return false;
+        std::function<void()> job;
+        if (!streamer.prebuild_begin(stack, registry, dst, job)) {
+            // Уже резидентен или нет слота — редкий дев-случай: честная
+            // синхронная поездка тем же законом прибытия.
+            return do_ride(/*absolute=*/true, dst, hub);
+        }
+        // Хвост фоновой записи — ДО старта воркера: restore-ветка Prebuild
+        // читает файл целевого этажа, а туда-обратно (0->4->0) целевой этаж
+        // и есть последний покинутый.
+        flush_floor_write();
+        // Створка посадки зарастает — игрок заперт в кабине (механизм-API
+        // новой двери; дренаж doorDirty — швом карва в топе кадра).
+        if (hub >= 0 && hub < 4 && doors.lift[hub] != game::kNoPortal)
+            game::door_close(stack.layer(activeLayer),
+                             doors.list[doors.lift[hub]], reg, activeLayer,
+                             doorDirty);
+        nav.start_prebuild(std::move(job));
+        liftRide = LiftRide::Prebuilding;
+        liftFreshDone = false;
+        liftDst = dst;
+        liftHub = hub;
+        liftT0 = simTick;
         return true;
     };
 
     while (running) {
         activeLayer = reg.get<Transform>(player).layer;
+        project_god_onto_body(); // Б4: тело могло смениться с прошлого кадра
         bool propPassNeedsRebuild = false;
-        // SEPARATE from the instance repack above, and the separation is the fix.
-        // Re-packing the prop instance list and re-uploading the verlet STATE are
-        // different events that shared one flag: `upload_wires`/`upload_cloths`
-        // rewrite both `cur` and `prev` from the BAKE pose, i.e. they reset every
-        // chain and sheet on the floor to rest with zero velocity. Since the flag
-        // is also raised every frame while any severed leg is still falling
-        // (kAntourageFallSec = 8 s), one shot at a wall froze all the dressing on
-        // the floor for eight seconds. Pin changes never needed it anyway —
-        // `write_pins` publishes those per frame. [problems.md] section 28.4
-        bool dressingSetChanged = false;
+        // dressingSetChanged МЁРТВ (2026-08-31, приказ владельца): смерть
+        // антуража больше НЕ триггерит upload_wires/upload_cloths. Аплоад
+        // пишет rest-позы бейка поверх ЖИВОГО GPU-сима всего этажа — провод,
+        // потерявший последний якорь, телепортировался в дефолт-катенарию и
+        // падал из неё; любая смерть жёсткой ноги сбрасывала ВСЕ провода и
+        // шторы этажа (вторая половина §28.4). Страховка §59.26 («GPU не
+        // симулирует убитые цепи») живёт в покадровом пути: wire_live_pins +
+        // FallClock → write_wire_alive/write_wire_pins — и заперта гейтом
+        // verlet_test «мёртвый элемент замирает». Аплоады верле — только
+        // вход на этаж и полный ребилд.
 
         // The dressing's half of every geometry mutation, next to the ECS-prop
         // half (anchor_validate_step): whatever emptied these cells — a blast,
@@ -2704,6 +3531,392 @@ int main(int argc, char** argv) {
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
         prevTicks = now;
+        // Wall-clock гистограмма кадра для [gpu-shot]-свода: GPU-таймер не
+        // видит CPU-кость (сим, толпа, сбор света, презент). Пишем последние
+        // 256 кадров кольцом; свод печатает медиану/пик на выходе --shot.
+        // Первый кадр в кольцо НЕ входит: он несёт загрузку/первые бейки
+        // (сотни мс) и в коротком прогоне маскирует настоящий пик стационара —
+        // свод печатает его отдельной строкой (вопрос «пик 621 мс = первый
+        // кадр?» из core-stabilization.md перестаёт быть вопросом: первый
+        // кадр назван по имени, пик кольца — всегда стационар).
+        {
+            static float wallRing[256];
+            static unsigned wallHead = 0;
+            if (g_wallFirstMs < 0.0f) {
+                g_wallFirstMs = frameDt * 1000.0f;
+            } else {
+                wallRing[wallHead & 255u] = frameDt * 1000.0f;
+                ++wallHead;
+            }
+            g_wallRing = wallRing;
+            g_wallSeen = wallHead;
+        }
+
+        // Детектор хитча ([markoaudit/plans/carve-hitch.md], инкремент 1б):
+        // «не знаю, может GPU» перестаёт быть ответом — любой ощутимый затык
+        // обязан оставить строку с разбором. Порог ВЫВЕДЕН, не выбран: глазу
+        // заметен кадр от ~3 vsync-периодов, 3×16.7 = 50 мс при 60 Гц
+        // (GIGA_HITCH_MS переопределяет — на 120 Гц панели порог вдвое ниже).
+        // frameDt меряет ПРЕДЫДУЩИЙ кадр — метки g_frameMark копились в нём же
+        // и сбрасываются здесь. CPU-виновник виден метками; GPU-виновник —
+        // длинным кадром при пустых метках, его проход называют пики окна
+        // GPU-таймера ([render/gpu_timer.h]: пик — 31 кадр, спайк может доехать
+        // строкой-двумя позже; dropped растёт = цифры несвежие).
+        {
+            static const float hitchMs = [] {
+                const char* e = std::getenv("GIGA_HITCH_MS");
+                return e != nullptr ? static_cast<float>(std::atof(e)) : 50.0f;
+            }();
+            const float wallMs = frameDt * 1000.0f;
+            if (wallMs > hitchMs && g_wallSeen > 1) {
+                const auto& gt = renderer.timer;
+                std::fprintf(
+                    stderr,
+                    "[hitch] frame %.0f ms | cpu sim %.1f render %.1f "
+                    "other %.1f | carve %.2f, light_swap %.2f, "
+                    "prop_skin %.2f, entry %d | gpu peak %.1f ms: lgrid %.1f, "
+                    "vflush %.1f, cull %.1f, simphys %.1f, world %.1f, "
+                    "bodies %.1f, props %.1f, drawphys %.1f, hud %.1f "
+                    "(dropped %u)\n",
+                    static_cast<double>(wallMs),
+                    static_cast<double>(g_frameMark.simMs),
+                    static_cast<double>(g_frameMark.renderMs),
+                    static_cast<double>(wallMs - g_frameMark.simMs -
+                                        g_frameMark.renderMs),
+                    static_cast<double>(g_frameMark.carveMs),
+                    static_cast<double>(g_frameMark.lightSwapMs),
+                    static_cast<double>(g_frameMark.propSkinMs),
+                    g_frameMark.floorEntry ? 1 : 0,
+                    static_cast<double>(gt.frame_ms_max()),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::LightGrid)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::VoxelFlush)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Cull)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::SimPhysics)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::World)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Bodies)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Props)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::DrawPhysics)),
+                    static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Hud)),
+                    gt.dropped());
+            }
+            // [prof] свод per-system: суммы прошлого кадра — в кольца, раз в
+            // 256 кадров (~4 с) — печать. Читается здесь же, где хитч-детектор,
+            // потому что это единственная точка, где wall-clock кадра уже
+            // известен, а метки ещё не сброшены.
+            if (g_profOn && g_wallSeen > 1) {
+                static giga::prof::Ring profWall, profSim, profRender,
+                    profCarve, profLightSwap, profPropSkin, profMedApply,
+                    profMedRec, profMedLoop, profMedFrontier;
+                profMedLoop.push(mediumPass.apply_loop_ms());
+                profMedFrontier.push(mediumPass.apply_frontier_ms());
+                profWall.push(wallMs);
+                profSim.push(g_frameMark.simMs);
+                profRender.push(g_frameMark.renderMs);
+                profCarve.push(g_frameMark.carveMs);
+                profLightSwap.push(g_frameMark.lightSwapMs);
+                profPropSkin.push(g_frameMark.propSkinMs);
+                profMedApply.push(g_mediumApplyMs);
+                profMedRec.push(g_mediumRecMs);
+                for (unsigned s = 0; s < kProfCount; ++s) {
+                    g_profRing[s].push(g_profFrameMs[s]);
+                    g_profFrameMs[s] = 0.0f;
+                }
+                static unsigned profFrames = 0;
+                if ((++profFrames & 255u) == 0u) {
+                    const giga::prof::Stats w = giga::prof::ring_stats(profWall);
+                    std::fprintf(stderr,
+                                 "[prof] ===== %u кадров | wall med %.2f p90 "
+                                 "%.2f peak %.2f мс | medium live %u quanta %u "
+                                 "| bodies %u =====\n",
+                                 profFrames, static_cast<double>(w.median),
+                                 static_cast<double>(w.p90),
+                                 static_cast<double>(w.peak),
+                                 mediumPass.live_count(),
+                                 mediumPass.live_quanta(),
+                                 bodyPass.last_instance_count());
+                    const auto line = [](const char* name,
+                                         const giga::prof::Ring& r) {
+                        const giga::prof::Stats st = giga::prof::ring_stats(r);
+                        std::fprintf(stderr,
+                                     "[prof] %-11s med %8.3f  p90 %8.3f  peak "
+                                     "%8.3f\n",
+                                     name, static_cast<double>(st.median),
+                                     static_cast<double>(st.p90),
+                                     static_cast<double>(st.peak));
+                    };
+                    line("sim", profSim);
+                    line("render", profRender);
+                    for (unsigned s = 0; s < kProfCount; ++s)
+                        line(kProfName[s], g_profRing[s]);
+                    line("carve", profCarve);
+                    line("light_swap", profLightSwap);
+                    line("prop_skin", profPropSkin);
+                    line("med_apply", profMedApply);
+                    line("med_record", profMedRec);
+                    line("med_loop", profMedLoop);
+                    line("med_frontier", profMedFrontier);
+                    // Состав окна последнего применения: cmp-only = чистая
+                    // цена memcmp неизменённых, copied = memcpy+recount.
+                    std::fprintf(stderr,
+                                 "[prof] med-apply-mix window %u cmp-only %u "
+                                 "copied %u lazy %u skip-fresh %u\n",
+                                 mediumPass.apply_window(),
+                                 mediumPass.apply_cmp_only(),
+                                 mediumPass.apply_copied(),
+                                 mediumPass.apply_lazy(),
+                                 mediumPass.apply_skip_fresh());
+                    // Большой суд (big-judge.md): очередь/фаза/вердикты.
+                    {
+                        const BigCourtStatus bj = big_judge_status();
+                        std::fprintf(stderr,
+                                     "[prof] big-judge pending %u phase %u "
+                                     "case %u conv-left %u | loose %u "
+                                     "supported %u retries %u\n",
+                                     bj.pending, bj.phase, bj.caseNodes,
+                                     bj.convertLeft, bj.verdictsLoose,
+                                     bj.verdictsSupported, bj.retries);
+                    }
+                    // Состав rigid-сцены последнего тика (§59.11): разводит
+                    // «спящие платят за бины» от «дорогая физика бодрых».
+                    if (const RigidStats* rs = reg.ctx().find<RigidStats>())
+                        std::fprintf(stderr,
+                                     "[prof] rigid-stats bodies %u awake %u "
+                                     "agents %u links %u | noisy %u "
+                                     "quiet-no-touch %u | bins %.3f ms "
+                                     "solve %.3f ms (последний тик) | "
+                                     "medium-wakes %llu (всего)\n",
+                                     rs->bodies, rs->awake, rs->agents,
+                                     rs->links, rs->noisyBodies,
+                                     rs->quietNoTouch,
+                                     static_cast<double>(rs->binsMs),
+                                     static_cast<double>(rs->solveMs),
+                                     static_cast<unsigned long long>(
+                                         g_profMediumRigidWakes));
+                    if (renderer.timer.supported()) {
+                        const auto& gt = renderer.timer;
+                        std::fprintf(
+                            stderr,
+                            "[prof] gpu lgrid %.2f vflush %.2f cull %.2f "
+                            "simphys %.2f world %.2f bodies %.2f props %.2f "
+                            "drawphys %.2f hud %.2f light %.2f raster %.2f | "
+                            "frame %.2f peak %.2f (dropped %u)\n",
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::LightGrid)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::VoxelFlush)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Cull)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::SimPhysics)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::World)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::Bodies)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Props)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::DrawPhysics)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Hud)),
+                            static_cast<double>(gt.pass_ms(gpu::GpuPass::Light)),
+                            static_cast<double>(
+                                gt.pass_ms(gpu::GpuPass::Raster)),
+                            static_cast<double>(gt.frame_ms()),
+                            static_cast<double>(gt.frame_ms_max()),
+                            gt.dropped());
+                    }
+                }
+            }
+            // СРЕЗ ЖИВОГО ПРОГОНА (soak_log.txt). Стоит здесь, а не в своём
+            // месте, по той же причине, что и хитч-детектор строкой выше: это
+            // единственная точка кадра, где wall-clock уже известен, а метки
+            // ещё не сброшены. Ничего не считает сам — только читает то, что
+            // системы уже посчитали для себя.
+            {
+                static auto soakT0 = std::chrono::steady_clock::now();
+                static auto soakLast = soakT0;
+                static giga::prof::Ring soakFrame;
+                static unsigned soakFrames = 0, soakHitches = 0;
+                static float soakWorst = 0.0f;
+                static bool soakHeader = false;
+
+                if (!soakHeader) {
+                    soakHeader = true;
+                    int sw = 0, sh = 0;
+                    SDL_GetWindowSizeInPixels(window, &sw, &sh);
+                    soak_log("\n[soak] ===== НОВЫЙ ПРОГОН | сборка %s %s (%s) "
+                             "| окно %dx%d =====\n",
+                             __DATE__, __TIME__, kBuildKind, sw, sh);
+                }
+
+                soakFrame.push(wallMs);
+                ++soakFrames;
+                if (wallMs > soakWorst) soakWorst = wallMs;
+
+                // ЩУП ЗАСТРЕВАНИЯ (bugs.md Б3.2: «невидимая стена в пустой
+                // комнате, и noclip не помог»). Ловит с поличным: игрок ХОЧЕТ
+                // идти (wishDir не ноль), а тело за секунду почти не сдвинулось.
+                //
+                // Печатает всё, что разводит кандидатов, потому что гадать по
+                // симптому здесь бессмысленно — «прижимает в сторону» одинаково
+                // выглядит при боковой гравитации, при отбрасывании от удара
+                // (combat.cpp:231) и при настоящей геометрии:
+                //   * флаги noclip/fly — работал ли аварийный выход ВООБЩЕ;
+                //   * вердикты проходимости клетки против того, что видно;
+                //   * вектор гравитации — «низ» мог оказаться вбок (тор, S-режимы);
+                //   * долг фикс-шага — при 0.2 fps ввод голодает, и это НЕ стена.
+                {
+                    static vec3 stuckLastPos{0, 0, 0};
+                    static double stuckSince = 0.0;
+                    static bool stuckArmed = false;
+                    static double stuckLastReport = -1e9;
+                    const double nowSec =
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - soakT0)
+                            .count();
+                    if (reg.valid(player)) {
+                        const vec3 p = reg.get<Transform>(player).pos;
+                        const Controller* ctl = reg.try_get<Controller>(player);
+                        const float wish =
+                            ctl != nullptr
+                                ? std::fabs(ctl->wishDir.x) +
+                                      std::fabs(ctl->wishDir.y) +
+                                      std::fabs(ctl->wishDir.z)
+                                : 0.0f;
+                        const vec3 d = p - stuckLastPos;
+                        const float moved =
+                            std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                        if (wish > 0.1f && moved < 0.05f) {
+                            if (!stuckArmed) { stuckArmed = true; stuckSince = nowSec; }
+                        } else {
+                            stuckArmed = false;
+                        }
+                        // Порог 1.0 с: короткая заминка об угол — не баг, а
+                        // геометрия. Репорт не чаще раза в 3 с, чтобы застрявший
+                        // игрок не залил файл.
+                        if (stuckArmed && nowSec - stuckSince > 1.0 &&
+                            nowSec - stuckLastReport > 3.0) {
+                            stuckLastReport = nowSec;
+                            const World& w = stack.layer(activeLayer);
+                            const int cx = static_cast<int>(p.x / kCellSize);
+                            const int cy = static_cast<int>(p.y / kCellSize);
+                            const int cz = static_cast<int>(p.z / kCellSize);
+                            const vec3 g = w.gravity().at(p);
+                            soak_log(
+                                "[soak] EVENT stuck: %.1f с | поз %.2f %.2f %.2f "
+                                "клетка %d %d %d | хочет %.2f сдвинулся %.3f м | "
+                                "noclip=%d fly=%d | standable=%d walkable=%d | "
+                                "грав %.2f %.2f %.2f | долг_шага %.1f мс | "
+                                "этаж=%d слой=%u\n",
+                                nowSec - stuckSince, static_cast<double>(p.x),
+                                static_cast<double>(p.y), static_cast<double>(p.z),
+                                cx, cy, cz, static_cast<double>(wish),
+                                static_cast<double>(moved),
+                                reg.all_of<NoClip>(player) ? 1 : 0,
+                                ctl != nullptr && ctl->fly ? 1 : 0,
+                                game::floor_standable(w, cx, cy, cz) ? 1 : 0,
+                                game::room_body_walkable(w.grid(), cx, cy, cz) ? 1 : 0,
+                                static_cast<double>(g.x), static_cast<double>(g.y),
+                                static_cast<double>(g.z),
+                                static_cast<double>(simAccum * 1000.0f),
+                                currentFloor, static_cast<unsigned>(activeLayer));
+                        }
+                        stuckLastPos = p;
+                    }
+                }
+
+                // Вход на этаж и одиночные длинные кадры — события, а не срез:
+                // из усреднённой строки раз в 5 с их не восстановить, а именно
+                // они и есть то, что чувствует человек за клавиатурой.
+                if (g_frameMark.floorEntry) {
+                    soak_log("[soak] EVENT floor-entry: кадр %.0f мс "
+                             "(sim %.1f render %.1f) слой %u\n",
+                             static_cast<double>(wallMs),
+                             static_cast<double>(g_frameMark.simMs),
+                             static_cast<double>(g_frameMark.renderMs),
+                             static_cast<unsigned>(activeLayer));
+                } else if (wallMs > kSoakBigFrameMs && soakFrames > 1) {
+                    ++soakHitches;
+                    soak_log("[soak] EVENT big-frame: %.0f мс (sim %.1f "
+                             "render %.1f carve %.2f light_swap %.2f)\n",
+                             static_cast<double>(wallMs),
+                             static_cast<double>(g_frameMark.simMs),
+                             static_cast<double>(g_frameMark.renderMs),
+                             static_cast<double>(g_frameMark.carveMs),
+                             static_cast<double>(g_frameMark.lightSwapMs));
+                }
+
+                const auto soakNow = std::chrono::steady_clock::now();
+                const double sinceLast =
+                    std::chrono::duration<double>(soakNow - soakLast).count();
+                if (sinceLast >= kSoakPeriodSec && soakFrames > 1) {
+                    const giga::prof::Stats fs =
+                        giga::prof::ring_stats(soakFrame);
+                    // Трупы и линки — носители §64 (накопление rigid). Страницы
+                    // пятен — носитель утечки stain. Обе величины интересны
+                    // ТОЛЬКО как наклон во времени, поэтому печатаются каждый
+                    // срез, даже когда не меняются.
+                    const RigidStats* rs = reg.ctx().find<RigidStats>();
+                    const auto corpses =
+                        reg.view<const game::Corpse>().size();
+                    // `find`, а НЕ `get_or_create`: щуп обязан отличать «поля
+                    // ещё нет» от «страниц ноль». В прогоне 2026-09-12 столбец
+                    // держался в нуле при 479 трупах, и по одному нулю нельзя
+                    // было сказать, утечки нет или измерение недействительно.
+                    // Отсутствие поля печатается как -1.
+                    long stainPages = -1, stainUsed = -1;
+                    if (const SubField<StainRGB>* sf =
+                            stack.layer(activeLayer)
+                                .subfields()
+                                .find<StainRGB>(kStainFieldName)) {
+                        stainPages = static_cast<long>(sf->page_count());
+                        stainUsed = static_cast<long>(sf->pages_in_use());
+                    }
+                    // Клок носителя камеры: вопрос «успевает ли человек
+                    // поесть» решается наклоном food/water, а не ощущением.
+                    float pFood = -1.0f, pWater = -1.0f, pSleep = -1.0f;
+                    int pHp = -1;
+                    if (reg.valid(player))
+                        if (const auto* nrs = reg.try_get<game::NpcRef>(player))
+                            if (pool.valid(nrs->id)) {
+                                const game::Needs& nd = pool.needs(nrs->id);
+                                pFood = nd.food;
+                                pWater = nd.water;
+                                pSleep = nd.sleep;
+                                pHp = pool.hp(nrs->id);
+                            }
+                    soak_log(
+                        "[soak] t=%.0fс этаж=%d слой=%u | fps=%.1f кадр "
+                        "med=%.1f p90=%.1f peak=%.1f мс | gpu=%.1f/%.1f | "
+                        "тела=%u rigid=%u/%u линки=%u трупы=%u | "
+                        "стр_зеркала=%u стр_пятен=%ld/%ld | среда=%u/%u | "
+                        "толпа_мертвых=%u макро_живых=%u | "
+                        "игрок hp=%d еда=%.1f вода=%.1f сон=%.1f | "
+                        "длинных_кадров=%u худший=%.0f мс\n",
+                        std::chrono::duration<double>(soakNow - soakT0).count(),
+                        currentFloor, static_cast<unsigned>(activeLayer),
+                        static_cast<double>(soakFrames) / sinceLast,
+                        static_cast<double>(fs.median),
+                        static_cast<double>(fs.p90),
+                        static_cast<double>(fs.peak),
+                        static_cast<double>(renderer.timer.frame_ms()),
+                        static_cast<double>(renderer.timer.frame_ms_max()),
+                        bodyPass.last_instance_count(),
+                        rs != nullptr ? rs->bodies : 0u,
+                        rs != nullptr ? rs->awake : 0u,
+                        rs != nullptr ? rs->links : 0u,
+                        static_cast<unsigned>(corpses),
+                        voxelMirror.pages_in_pool(), stainPages, stainUsed,
+                        mediumPass.live_count(), mediumPass.live_quanta(),
+                        crowdDead, macroStats.living, pHp,
+                        static_cast<double>(pFood), static_cast<double>(pWater),
+                        static_cast<double>(pSleep), soakHitches,
+                        static_cast<double>(soakWorst));
+                    soakLast = soakNow;
+                    soakFrames = 0;
+                    soakHitches = 0;
+                    soakWorst = 0.0f;
+                }
+            }
+            g_frameMark = FrameMark{};
+            g_frameT0 = std::chrono::steady_clock::now();
+        }
 
         // A console teleport is executed HERE, at the top of a frame, never in
         // the ImGui callback that requested it: mid-draw the frame's layer and
@@ -2714,7 +3927,17 @@ int main(int argc, char** argv) {
             const int hub = pendingLandHub;
             pendingTeleport = game::ConsoleContext::kNoRequest;
             pendingLandHub = -1;
-            do_ride(/*absolute=*/true, dst, hub);
+            // Дев-телепорт во время лифтовой поездки молча гасится: два
+            // одновременных перехода делят два физических слота и мир под
+            // закрытыми дверьми — гонка по построению.
+            if (liftRide == LiftRide::Idle) do_ride(/*absolute=*/true, dst, hub);
+        }
+        // Консоль заспавнила якорный проп (cmd_prop) — та же безопасная
+        // точка, что телепорт: шкура PropPass перестраивается этим кадром,
+        // иначе проп существует в симе, но невидим (fuel_barrel 2026-08-22).
+        if (consoleCtx.propsChanged) {
+            consoleCtx.propsChanged = false;
+            propPassNeedsRebuild = true;
         }
 
         // Events are transient by design ([events.md]): whatever was published
@@ -2768,25 +3991,193 @@ int main(int argc, char** argv) {
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
         // reason: one notion of death, not three. Deliberately here and NOT beside
         // `finalize_deaths` in the substep — a frame can run several substeps, each
-        // publishing NpcDied, and a per-substep drain would re-read the earlier
-        // substeps' events and bill those kills again. `relations_drain_deaths` is only
+        // publishing Deed, and a per-substep drain would re-read the earlier
+        // substeps' events and bill those deeds again. `witness_step` is only
         // snapshot-bounded WITHIN one call. Draining once per frame, immediately before
         // `bus.clear()`, is exactly the contract the header asks for and is
-        // double-count-free. [faction_relations.h]
-        relTick = game::relations_drain_deaths(factionRel, reg, pool, bus, simTick);
+        // double-count-free.
+        //
+        // S19 ЗАКРЫЛ ВСЕВИДЕНИЕ: relations_drain_deaths гнул матрицу без
+        // единого свидетеля; теперь убийство — деяние (Deed kill из
+        // finalize_deaths), и дипломатию двигает ТОЛЬКО воспринявший
+        // (sub_march-зрение / skeleton_audible-слух). Незамеченное убийство
+        // оставляет труп, но не дипломатию. [witness.h]
+        {
+            const auto profWitnessT0 = prof_now();
+            const game::WitnessTick wt = game::witness_step(
+                reg, pool, factionRel, bus, floorRooms,
+                stack.layer(activeLayer), activeLayer, simTick);
+            prof_add(kProfWitness, profWitnessT0);
+            relTick = {};
+            relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
+            relTick.changes = wt.changes;
+        }
+        // Сторож переполнения шины. event_bus.h обещает «OVERFLOW DROPS,
+        // LOUDLY», но до 2026-09-06 dropped() не читал никто — немое допущение
+        // о масштабе, класс §65. Дроп здесь = потерянные деяния/смерти, то
+        // есть дипломатия; печатается по факту роста, раз на изменение.
+        {
+            static std::uint64_t busDroppedSeen = 0;
+            if (bus.dropped() != busDroppedSeen) {
+                busDroppedSeen = bus.dropped();
+                std::fprintf(stderr,
+                             "[bus] %llu events dropped since init — ring "
+                             "%zu overflowed, deeds/deaths lost\n",
+                             static_cast<unsigned long long>(busDroppedSeen),
+                             game::EventBus::kCapacity);
+            }
+        }
         bus.clear();
 
-        // Hand over a finished nav bake. Cheap every frame; true only on the frame
-        // the swap happens, which is when the floor's crowd can start walking.
-        if (nav.poll()) {
+        // Планировщик допекания ([game/rebake.h]): раз в кадр, в топе кадра до
+        // сим-подшагов — летопись мутаций (часы — сим-тики), свап готовых
+        // секций фонового Rebake (rooms -> coarse -> fine, живые структуры
+        // пишутся только здесь, на главном потоке) и старт новых циклов по
+        // дебаунсу/дедлайну. true ровно на кадре Fresh-свапа — момент, когда
+        // толпе нового этажа пора ходить; Rebake-свапы пересева не требуют.
+        const auto profNavT0 = prof_now();
+        if (nav.step(simTick, g_worldGen)) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, 0xA11FEu, nav);
-            // The bake has released the grid, so doors may move again. Until this
-            // point every mutator refused, which is why a door cannot be worked
-            // during the ~3.7 s bake rather than corrupting it. [door.h]
-            doors.frozen = false;
+            // Лифт: Fresh-свап целевого этажа — первая половина «дверей»;
+            // вторая — пустая очередь пробуждений сред (ниже).
+            if (liftRide == LiftRide::WaitFresh) liftFreshDone = true;
+        }
+        prof_add(kProfNav, profNavT0);
+        // Лифтовая машина, фаза свапа: воркер отдал мир — ecs-половина,
+        // перенос тела в кабину назначения и ВЕСЬ обычный хвост прибытия
+        // (arrive_after_ride запускает Fresh-бейк через begin_floor_nav);
+        // дальше ждём Fresh-свапа выше. Тот же топ кадра, что у телепорта:
+        // мир не дёргается под закоммиченным кадром.
+        if (liftRide == LiftRide::Prebuilding && nav.take_prebuilt()) {
+            game::NpcId pid = reg.valid(player)
+                                  ? reg.get<game::NpcRef>(player).id
+                                  : game::kInvalidNpc;
+            leave_current_floor();
+            streamer.prebuild_finish(stack, registry, reg, pool, pid);
+            const game::FloorSpec* dspec = spec_for_floor(liftDst);
+            const int arriveH =
+                dspec ? game::lift_entrance(
+                            dspec->kind, liftDst, liftHub,
+                            streamer.floor_seed_of(registry, liftDst))
+                            .h
+                      : game::kArrivalCoord;
+            game::RideResult ride = streamer.teleport(
+                stack, registry, reg, pool, player, currentFloor, liftDst,
+                static_cast<std::uint8_t>(arriveH), pid, liftHub);
+            liftSwapLayer = arrive_head(ride, liftHub);
+            if (liftSwapLayer != kInvalidLayer) {
+                liftRide = LiftRide::SwapRefresh; // шаги — по кадру (5d)
+            } else {
+                streamer.prebuild_cancel();
+                liftRide = LiftRide::Idle;
+            }
+        } else if (liftRide == LiftRide::SwapRefresh) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_refresh(liftSwapLayer);
+            std::fprintf(stderr, "[lift] swap: refresh %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::SwapDoorsNav;
+        } else if (liftRide == LiftRide::SwapDoorsNav) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_doors_nav(liftSwapLayer);
+            // Кабина назначения зарастает до готовности (двери объявлены).
+            if (liftHub >= 0 && liftHub < 4 &&
+                doors.lift[liftHub] != game::kNoPortal)
+                game::door_close(stack.layer(liftSwapLayer),
+                                 doors.list[doors.lift[liftHub]], reg,
+                                 liftSwapLayer, doorDirty);
+            std::fprintf(stderr, "[lift] swap: doors+nav %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::SwapUpload;
+        } else if (liftRide == LiftRide::SwapUpload) {
+            const auto tS = std::chrono::steady_clock::now();
+            arrive_upload(liftSwapLayer);
+            std::fprintf(stderr, "[lift] swap: upload %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - tS)
+                             .count());
+            liftRide = LiftRide::WaitFresh;
+        }
+        // Двери открываются, когда запечено И допробужено: Fresh-свап
+        // прошёл, а очередь пробуждений будильника этажа выпита — вся вода
+        // этажа уже в живом списке автомата и падает физикой за закрытыми
+        // дверьми (решение владельца 2026-08-27). Замер — всегда.
+        if (liftRide == LiftRide::WaitFresh && liftFreshDone &&
+            !mediumPass.wakes_pending()) {
+            liftRide = LiftRide::Idle;
+            liftFreshDone = false;
+            // «Лифт приехал» — створка субвоксельно открывается.
+            if (liftHub >= 0 && liftHub < 4 &&
+                doors.lift[liftHub] != game::kNoPortal)
+                game::door_open(stack.layer(activeLayer),
+                                doors.list[doors.lift[liftHub]], doorDirty);
+            std::fprintf(stderr,
+                         "[lift] ride to %d: %llu ticks cabin-to-doors "
+                         "(baked+woken)\n",
+                         currentFloor,
+                         static_cast<unsigned long long>(simTick - liftT0));
+        }
+        // Кабина заперта на всю поездку: контроллер в бокс — тело держится в
+        // клетке шахты (стены столба держат остальное), взгляд свободен.
+        // Створки/анимация — инкремент 5.
+        if (liftRide != LiftRide::Idle && reg.valid(player) && liftHub >= 0) {
+            std::uint8_t ccx = 0, ccy = 0;
+            game::fast_hub_cell(liftHub, ccx, ccy);
+            auto& ltr = reg.get<Transform>(player);
+            ltr.pos.x = (static_cast<float>(ccx) + 0.5f) * kCellSize;
+            ltr.pos.y = (static_cast<float>(ccy) + 0.5f) * kCellSize;
+        }
+        // ФОКУС ПРИЦЕЛА — состояние КАДРА, не рисования ([game/focus.h]).
+        // Считался внутри HUD-ветки (под showHud/playing/valid), а
+        // потребитель — обработчик E — живёт в сим-ветке: цель зависела от
+        // того, рисуется ли табличка. Теперь одна точка, до всех читателей.
+        if (reg.valid(player) && activeLayer != kInvalidLayer) {
+            const auto& camF = reg.get<CameraTag>(player);
+            const vec3 aimF = camera_forward(camF.yaw, camF.pitch);
+            vec3 eyeF = reg.get<Transform>(player).pos;
+            if (const auto* nrF = reg.try_get<game::NpcRef>(player))
+                if (pool.valid(nrF->id))
+                    eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
+            const auto profFocusT0 = prof_now();
+            g_focus = game::focus_pick(reg, stack.layer(activeLayer),
+                                       activeLayer, eyeF, aimF, doors, player);
+            prof_add(kProfFocus, profFocusT0);
+            // ФАКТЫ ВМЕСТО ДОГАДОК (владелец: «таблички нет, смотрю в
+            // упор»): раз в игровую секунду — что видит прицел. GIGA_FOCUS_DBG.
+            static const bool kFocusDbg =
+                std::getenv("GIGA_FOCUS_DBG") != nullptr;
+            static std::uint64_t focusSaid = 0;
+            if (kFocusDbg && simTick - focusSaid > kSimHz) {
+                focusSaid = simTick;
+                game::FocusDebug fd{};
+                game::focus_pick_debug(reg, stack.layer(activeLayer),
+                                       activeLayer, eyeF, aimF, doors, fd,
+                                       player);
+                std::fprintf(stderr,
+                             "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,%.2f)"
+                             " | ents %u (в reach %u, в конусе %u, видимых %u)"
+                             " | portals %u (в reach %u, в конусе %u, видимых"
+                             " %u) -> what=%d dist=%.2f | ближ ent %.1f м"
+                             " (%.1f,%.1f,%.1f), ближ door %.1f м"
+                             " (%.1f,%.1f,%.1f)\n",
+                             eyeF.x, eyeF.y, eyeF.z, aimF.x, aimF.y, aimF.z,
+                             fd.entTotal, fd.entReach, fd.entCone, fd.entSeen,
+                             fd.portTotal, fd.portReach, fd.portCone,
+                             fd.portSeen, static_cast<int>(g_focus.what),
+                             g_focus.dist, fd.nearEntDist, fd.nearEntPos.x,
+                             fd.nearEntPos.y, fd.nearEntPos.z, fd.nearPortDist,
+                             fd.nearPortPos.x, fd.nearPortPos.y,
+                             fd.nearPortPos.z);
+            }
+        } else {
+            g_focus = game::Focus{};
         }
         if (frameDt > 0.1f) frameDt = 0.1f; // clamp after a stall
 
@@ -2876,16 +4267,19 @@ int main(int argc, char** argv) {
                            e.button.button == SDL_BUTTON_LEFT) {
                     attackHeld = false;
                 }
+                // ПКМ = вторая РУКА (two-hands.md): тот же гейт по окну,
+                // что у ЛКМ — клик по сетке до боя не доходит.
                 if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
-                    input.set_mouselook(true);
-                    SDL_SetWindowRelativeMouseMode(window, true);
+                    e.button.button == SDL_BUTTON_RIGHT &&
+                    shell.window == UiWindow::None) {
+                    rmbHeld = true;
+                } else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                           e.button.button == SDL_BUTTON_RIGHT) {
+                    rmbHeld = false;
                 }
-                if (e.type == SDL_EVENT_MOUSE_BUTTON_UP &&
-                    e.button.button == SDL_BUTTON_RIGHT) {
-                    input.set_mouselook(false);
-                    SDL_SetWindowRelativeMouseMode(window, false);
-                }
+                // МОГИЛА ЗАЖИМА-ВЗГЛЯДА НА ПКМ (приказ владельца 2026-08-31):
+                // ПКМ — вторая РУКА (эпик двух рук, план two-hands.md),
+                // взгляд остаётся тогглом Tab (mouselook-бинд).
                 // Feed movement/look events unless the HUD wants the cursor (only
                 // relevant when look is off — relative mode hides the cursor).
                 if (input.mouselook() || !ImGui::GetIO().WantCaptureMouse)
@@ -2957,9 +4351,13 @@ int main(int argc, char** argv) {
             // folds the departed floor's crowd back into the cold pool, so only
             // ONE floor is ever live. The whole depart/arrive sequence is shared
             // with the console teleport — see do_ride above the loop.
-            if (has(ConsoleRequest::FloorDown) && shell.playing())
+            // Гейт liftRide: дев-поездка поверх лифтовой машины = два
+            // перехода на двух слотах разом (та же причина, что у телепорта).
+            if (has(ConsoleRequest::FloorDown) && shell.playing() &&
+                liftRide == LiftRide::Idle)
                 do_ride(/*absolute=*/false, -1);
-            if (has(ConsoleRequest::FloorUp) && shell.playing())
+            if (has(ConsoleRequest::FloorUp) && shell.playing() &&
+                liftRide == LiftRide::Idle)
                 do_ride(/*absolute=*/false, +1);
             // Fly stays a PlayerCommand button: the bridge queues the edge and
             // the server flips the state ([netcode-seam]).
@@ -2971,8 +4369,8 @@ int main(int argc, char** argv) {
             // first tick after resume rather than vanishing.)
             if (has(ConsoleRequest::Heal)) healWanted = true;
             if (has(ConsoleRequest::Eat)) eatWanted = true;
+            if (has(ConsoleRequest::Relief)) reliefWanted = true;
             if (has(ConsoleRequest::Drink)) drinkWanted = true;
-            if (has(ConsoleRequest::Door)) doorWanted = true;
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
             if (has(ConsoleRequest::Load)) loadWanted = true;
@@ -2985,11 +4383,6 @@ int main(int argc, char** argv) {
                 craftWanted = true;
                 shell.toggle(UiWindow::Craft);
                 if (shell.window != UiWindow::None) input.set_mouselook(false);
-            }
-            if (has(ConsoleRequest::VrToggle)) {
-                vrMode = !vrMode;
-                renderer.set_vr_mode(vrMode);
-                save_ui_cfg();
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
             // STR immediately credits max-HP the same way award_xp does.
@@ -3032,6 +4425,9 @@ int main(int argc, char** argv) {
             // contract_accept refuses the same. [quest.h, contract.h]
             if (has(ConsoleRequest::Interact)) {
                 interactWanted = true;
+                // Единая интеракция: дверь — такой же потребитель E, как
+                // терминал/ящик (door_toggle_near no-op без проёма рядом).
+                doorWanted = true;
                 if (game::contract_accept(contracts, offer, ledger)) {
                     offer = game::Contract{};
                     offerLine[0] = 0;
@@ -3049,6 +4445,148 @@ int main(int argc, char** argv) {
 
         // The layer the player is currently on drives sim + render below.
         // activeLayer already defined at frame top
+
+        // МИР-АВТОМАТ, шов кадра (ДО сим-писателей — порядок закон):
+        // 1) apply_readback — страницы, что автомат вернул прошлым кадром,
+        //    ложатся в CPU-канон: карв этого кадра режет уже СВЕЖУЮ воду
+        //    (инкремент 3 — обратный поток байт-копией, отставание <= кадра);
+        // 2) poll_activity — пробуждение соседей/усыпление по ActOut.
+        // Смена слоя = live-набор указывает в старый мир — сброс.
+        if (mediumPass.ready() && activeLayer != kInvalidLayer) {
+            static LayerId mediumLayer = static_cast<LayerId>(~0u);
+            if (mediumLayer != activeLayer) {
+                mediumLayer = activeLayer;
+                mediumPass.clear_live();
+                big_judge_reset(); // очередь дел указывала в уехавший этаж
+                mediumSubstepsDone = simTick / 4;
+                // БУДИЛЬНИК ЭТАЖА (вердикт владельца 2026-08-27, «висячая
+                // вода»): генераторный налив (pour_level падика) СПИТ с
+                // рождения — не в списке автомата, и висячую воду в шахтах
+                // не будит ничто (пуля ищет твёрдый атом и пролетает воду
+                // насквозь — наблюдение владельца). При активации этажа
+                // будим ВСЕ клетки с материей сред. Универсально через
+                // агрегаты S16.4 (medium_level пишет сам генератор в
+                // medium_recount) — будильник модуля не знает; вода с
+                // опорой оседает в подтик и засыпает нутром, висячая —
+                // честно падает автоматом на глазах. Скан 128³ один раз на
+                // смену слоя, не на тик.
+                {
+                    World& mw = stack.layer(activeLayer);
+                    const std::uint32_t* lvl = medium_level_data(mw);
+                    static std::vector<std::uint32_t> wet;
+                    wet.clear();
+                    if (lvl)
+                        for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
+                            if (lvl[ci] != 0u) wet.push_back(ci);
+                    if (!wet.empty()) {
+                        mediumPass.wake_cells(wet.data(), wet.size(), mw,
+                                              voxelMirror);
+                        std::fprintf(stderr,
+                                     "[medium] floor alarm: %zu cells with "
+                                     "medium woken on layer switch\n",
+                                     wet.size());
+                    }
+                    // ВХОДНАЯ РАЗВЁРТКА СУДЬИ (S20.5): единственный момент,
+                    // когда судья бегает по среде. Автомат двигает только
+                    // подвижную материю, а подвижное — не опора, значит ход
+                    // автомата не может осиротить статику ПО ПОСТРОЕНИЮ —
+                    // покадровый судья на изменениях масок был выброшен как
+                    // избыточный (и дорогой: 27k бюджетных флудов за 2000
+                    // кадров на floor 0). Остаются легаси-висяки старых
+                    // миров «статик на куче» — их снимает один суд клеток с
+                    // подвижной материей и их соседей на активации этажа.
+                    {
+                        static std::vector<std::uint32_t> mobileCells;
+                        collect_mobile_support_cells(mw, mobileCells);
+                        if (!mobileCells.empty()) {
+                            static CarveScratch judgeScratch;
+                            static CarveResult judgeResult;
+                            const std::int32_t judged = detach_judge_cells(
+                                mw, mobileCells.data(), mobileCells.size(),
+                                judgeScratch, judgeResult);
+                            std::fprintf(stderr,
+                                         "[judge] entry sweep: %zu cells, "
+                                         "%d converted\n",
+                                         mobileCells.size(), judged);
+                            if (judged > 0) {
+                                voxelMirror.mark_dirty(
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size());
+                                mediumPass.wake_cells(
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size(), mw,
+                                    voxelMirror);
+                                // Конверсия — писатель (S20.4): маска стоит,
+                                // но МАТЕРИАЛ сменился на подвижный — якоря
+                                // на конвертированном мертвы World-пробой,
+                                // антураж и спящие тела платят тот же долг.
+                                // Нав не трогаем: проходимость — от масок,
+                                // они не менялись.
+                                if (game::anchor_validate_step(
+                                        reg, mw, activeLayer, bus,
+                                        judgeResult.dirtyCells,
+                                        &particleBursts, 0x5EEDBEEFu) > 0)
+                                    propPassNeedsRebuild = true;
+                                antourage_carve_step_here(
+                                    judgeResult.dirtyCells, 0x5EEDBEEFu);
+                                rigid_wake_dirty_cells(
+                                    reg, activeLayer,
+                                    judgeResult.dirtyCells.data(),
+                                    judgeResult.dirtyCells.size());
+                            }
+                        }
+                    }
+                }
+            }
+            static std::vector<std::uint32_t> mediumMaskChanged;
+            mediumMaskChanged.clear();
+            const auto ctMedA = std::chrono::steady_clock::now();
+            mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
+                                      &mediumMaskChanged);
+            if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+                regrow_check(stack.layer(activeLayer), voxelMirror, "шов",
+                             simTick);
+            g_mediumApplyMs = carve_ms_since(ctMedA);
+            // Маски обломков (инкремент 5) едут с материей: изменённые
+            // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
+            // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
+            if (!mediumMaskChanged.empty()) {
+                nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                       mediumMaskChanged.data(),
+                                       mediumMaskChanged.size());
+                // Из якорного долга автомату остаётся ТОЛЬКО пробуждение
+                // тел (S20.4-уточнение): подвижное — не опора (S20.5), так
+                // что ход автомата не рвёт ни якоря, ни антураж по
+                // построению; но ТЕЛО честно лежит и на куче — куча уехала,
+                // спящий труп обязан проснуться и упасть.
+                // Замер §59.11-пересмотра: сколько тел будит ИМЕННО автомат
+                // (кандидат «водопады держат rigid бодрым» против «тело на
+                // теле не касается мира и не спит»). Печать — rigid-stats.
+                g_profMediumRigidWakes += rigid_wake_dirty_cells(
+                    reg, activeLayer, mediumMaskChanged.data(),
+                    mediumMaskChanged.size());
+            }
+            // Покадрового судьи связности на изменениях масок БОЛЬШЕ НЕТ
+            // (S20.5, замер 2026-08-29): автомат двигает только подвижную
+            // материю, подвижное — не опора, значит ход автомата не может
+            // осиротить статику по построению. Легаси-висяки снимает
+            // входная развёртка на активации этажа (блок будильника выше);
+            // писатели статики (карв, дверь) судят своими развёртками.
+            // poll_activity МЁРТВ: живой список и пробуждение строит сам GPU
+            // (GPU-резидентная петля, решение владельца 2026-08-24).
+
+            // БОЛЬШОЙ СУД (big-judge.md): порция флуда опоры или конверсии
+            // кадром; конвертированные клетки качаются в зеркало и автомат
+            // тем же швом, что entry-sweep (маски НЕ меняются — нав/свет/
+            // якоря не должники конверсии; их долги придут mediumMaskChanged
+            // когда автомат реально сдвинет рыхлое).
+            // Порция суда переехала В СИМ-ЦИКЛ (2026-08-31, решение
+            // владельца): кадровый темп привязывал скорость обрушения к fps
+            // (60 порций/с на 60 fps, 30 на 30) — против закона каденса
+            // S16.3 «в игре ничего не должно зависеть от кадра». Теперь
+            // порция идёт на СИМ-ТИК (125 Гц) и стоит на паузе вместе с
+            // миром. Размер порции — крутить ПО ЗАМЕРУ [prof] big-judge.
+        }
 
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
@@ -3071,14 +4609,50 @@ int main(int argc, char** argv) {
             const Field<float>* danger = activeWorld.fields().find<float>("danger");
             const MacroGrid& activeGrid = activeWorld.grid();
             int guard = 0;
+            const auto profTickT0 = prof_now();
             while (simAccum >= kSimDt && guard++ < 8) {
                 // Age the noise field ONCE per tick, at the top ([noise.h]). Everything
                 // published later in this tick therefore gets a full tick of life before
                 // it can expire, and investigate_step below reads a field that nothing has yet
                 // mutated this tick — so a gunshot fired on tick N is investigated on
                 // tick N+1 rather than racing the pass that fired it.
+                const auto profNoiseT0 = prof_now();
                 game::noise_step(noiseField,
                                  static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f));
+                prof_add(kProfNoise, profNoiseT0);
+                // БОЛЬШОЙ СУД (big-judge.md): порция флуда опоры или
+                // конверсии НА СИМ-ТИК (не на кадр — закон каденса S16.3;
+                // переезд 2026-08-31). Конвертированные клетки качаются в
+                // зеркало и автомат тем же швом, что entry-sweep.
+                {
+                    const auto profBigT0 = prof_now();
+                    static std::vector<std::uint32_t> bigDirty;
+                    bigDirty.clear();
+                    big_judge_step(stack.layer(activeLayer), bigDirty);
+                    if (!bigDirty.empty()) {
+                        voxelMirror.mark_dirty(bigDirty.data(),
+                                               bigDirty.size());
+                        mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
+                                              stack.layer(activeLayer),
+                                              voxelMirror);
+                        // ДОЛГИ ПИСАТЕЛЯ — зеркально entry-sweep (плейтест
+                        // владельца 2026-08-31: лампы висели в пустоте после
+                        // обрушения — конверсия меняет МАТЕРИАЛ на подвижный,
+                        // якоря на нём мертвы World-пробой; антураж (провода/
+                        // тряпки) и спящие тела платят тот же долг. Нав не
+                        // трогаем: маски не менялись.
+                        if (game::anchor_validate_step(
+                                reg, stack.layer(activeLayer), activeLayer,
+                                bus, bigDirty, &particleBursts,
+                                0x5EEDBEEFu) > 0)
+                            propPassNeedsRebuild = true;
+                        antourage_carve_step_here(bigDirty, 0x5EEDBEEFu);
+                        rigid_wake_dirty_cells(reg, activeLayer,
+                                               bigDirty.data(),
+                                               bigDirty.size());
+                    }
+                    prof_add(kProfBigJudge, profBigT0);
+                }
                 // While the console is OPEN, WASD is text, not movement: skip
                 // the bridge and park the intent so the body does not glide on
                 // the last pre-console wishDir. The open inventory grid owns
@@ -3099,7 +4673,7 @@ int main(int argc, char** argv) {
                 if (shotPath &&
                     (shotAction == "wall" || shotAction == "rpgcmbt") &&
                     reg.valid(player) &&
-                    shotFramesSeen >= 30 && !doors.frozen) {
+                    shotFramesSeen >= 30 && nav.ready()) {
                     const Transform& ptr = reg.get<Transform>(player);
                     const MacroGrid& g = stack.layer(activeLayer).grid();
                     const float cx = ptr.pos.x;
@@ -3194,44 +4768,155 @@ int main(int argc, char** argv) {
                 // really hiding — a commented-out call is not a call, and nothing checks it.
                 // §23 hermetic flee: doors + activeWorld let IntentFlee steer toward
                 // door_nearest_shelter (sealed apartments) before −∇danger / memory.
-                // §27 legs (a)+(b): `roomZones` is what lets a winning eat/drink/
-                // toilet/sleep intent actually STEER a body — without it every
-                // non-flee intent hands motion straight back to wander_step and the
-                // scorer is decoration (measured: own_ai=0 of 419).
+                // Эрранды по виду комнаты умерли (rooms-object F) — комнатную
+                // наводку интентов возвращает agent-goals скором S13.
+                const auto profDiffT0 = prof_now();
                 game::ai_panic_publish_step(reg, pool, diffusionDriver,
                                             activeWorld, activeLayer, kSimDt);
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
+                prof_add(kProfDiffusion, profDiffT0);
                 danger = activeWorld.fields().find<float>("danger");
+                const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, &doors, &activeWorld,
-                                       &roomZones);
+                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
+                                       &bus, simTick);
+                // AGENT-GOALS ИНКРЕМЕНТ A: новый скорер S13.2 РЯДОМ со
+                // старым — печать argmax, на движение НЕ влияет (переключение
+                // — инкремент C). Секундный каданс, носитель камеры; замер
+                // против гейта «< 0.1 мс на агента» печатается тут же.
+                static const bool goalsDbg =
+                    std::getenv("GIGA_GOALS_DBG") != nullptr;
+                if (goalsDbg && simTick % kSimHz == 0 &&
+                    reg.valid(player)) {
+                    if (const auto* pref = reg.try_get<game::NpcRef>(player);
+                        pref != nullptr && pool.valid(pref->id)) {
+                        float demand[game::kVerbCount];
+                        game::goals_demand_from_needs(pool.needs(pref->id),
+                                                      demand);
+                        // Скретч дебаг-решателя живёт у этого каллера
+                        // (goals.h): решателей может быть много, состояние
+                        // не делится.
+                        static game::GoalsScratch goalsScratch;
+                        const vec3 apos = reg.get<Transform>(player).pos;
+                        const auto gT0 = std::chrono::steady_clock::now();
+                        // СБОРЩИК КАНДИДАТОВ-СУЩНОСТЕЙ (инкремент B;
+                        // решение владельца 2026-09-06: акустика + события).
+                        // Журнал шумов — готовые «заметил» со старением
+                        // (ttl); дистанция прямолинейная тором (шары
+                        // вырезаны — problems.md §65, честные стены вернёт
+                        // эпик «звуковое поле этажа»). Предложение
+                        // сущности = её контейнер: труп/ящик предлагает
+                        // Σ глаголов того, что в нём ЛЕЖИТ (S13.3 «труп →
+                        // обобрать» той же шкалой, что запас комнаты).
+                        // Пороги — те же, что у разделяемой ветки
+                        // расследования (investigate.h: severity ≥ 2,
+                        // слух 1.12) — второй константы слуха нет.
+                        game::GoalCandidate cands[game::kNoiseCap + 1];
+                        std::size_t candN = 0;
+                        for (const game::Noise& n : noiseField.slot) {
+                            if (n.id == 0 || n.layer != activeLayer) continue;
+                            if (n.severity < game::kInvestigateMinSeverity)
+                                continue;
+                            if (n.actor == static_cast<std::uint32_t>(
+                                               entt::to_integral(player)))
+                                continue; // свой шум — не цель
+                            if (!game::noise_audible(n, apos,
+                                                     game::kInvestigateHearing))
+                                continue;
+                            const auto ae = static_cast<entt::entity>(n.actor);
+                            if (!reg.valid(ae)) continue;
+                            const auto* cont =
+                                reg.try_get<game::Container>(ae);
+                            if (cont == nullptr) continue;
+                            game::GoalCandidate& c = cands[candN];
+                            c = {};
+                            bool any = false;
+                            for (const game::ItemSlot& s : cont->inv.slots) {
+                                if (s.item == 0 || s.count == 0 ||
+                                    !game::item_valid(s.item))
+                                    continue;
+                                const auto& vv = game::kItemVerbs[s.item - 1];
+                                for (std::size_t v = 0; v < game::kVerbCount;
+                                     ++v)
+                                    if (vv[v] != 0) {
+                                        c.offer[v] +=
+                                            static_cast<float>(vv[v]) *
+                                            static_cast<float>(s.count);
+                                        any = true;
+                                    }
+                            }
+                            if (!any) continue; // болтик = ноль, не влияет
+                            c.distCells =
+                                game::noise_distance(n, apos) / kCellSize;
+                            c.handle = n.actor;
+                            c.kind = game::GoalKind::Entity;
+                            ++candN;
+                        }
+                        // ПОЛЕВАЯ ЦЕЛЬ danger↓ → «укрыться» (S13.3,
+                        // обобщение паники): предложение из ЛОКАЛЬНОГО
+                        // значения поля, путь ноль. Слово «паника» в коде
+                        // не существует — нет опасности, нет предложения.
+                        // Вторая ось (medium_level) ждёт своего глагола в
+                        // verbs.csv — строка данных, не ветка.
+                        if (danger != nullptr) {
+                            const int fx = wrap_macro(static_cast<int>(
+                                std::floor(apos.x / kCellSize)));
+                            const int fy = wrap_macro(static_cast<int>(
+                                std::floor(apos.y / kCellSize)));
+                            const int fz = wrap_macro(static_cast<int>(
+                                std::floor(apos.z / kCellSize)));
+                            const float u =
+                                giga::clamp01(danger->at(fx, fy, fz));
+                            if (u > 0.0f) {
+                                game::GoalCandidate& c = cands[candN];
+                                c = {};
+                                c.offer[game::kVerbShelter] =
+                                    u * game::kFieldDangerOffer;
+                                c.kind = game::GoalKind::Field;
+                                c.handle = 0;
+                                ++candN;
+                            }
+                        }
+                        const game::GoalPick pick = game::goals_pick(
+                            demand, floorRooms, cands, candN, apos,
+                            goalsScratch);
+                        const float gMs =
+                            std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - gT0)
+                                .count();
+                        std::fprintf(stderr,
+                                     "[goals] kind=%u room=%u handle=%u "
+                                     "score=%.1f dist=%.1f verb=%s "
+                                     "rooms=%zu heard=%zu cand=%u "
+                                     "cost=%.3fms\n",
+                                     static_cast<unsigned>(pick.kind),
+                                     pick.room, pick.handle, pick.score,
+                                     pick.distCells,
+                                     game::kVerbIds[pick.topVerb],
+                                     floorRooms.list.size(), candN,
+                                     pick.scored, gMs);
+                    }
+                }
                 // Intent first, wardrobe second: the equip DECIDER re-scores
                 // each body's bag on its own staggered slot. [ai.h] [equip.h]
                 game::ai_equip_step(reg, pool, activeLayer, simTick);
+                prof_add(kProfAi, profAiT0);
                 // AIMEM proof trail: once nav has brains and AI is on, emit a
                 // compact stderr pulse so a --shot harness can assert the store
                 // is live (rows/writes/recalled) without parsing the HUD.
                 if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
                                      simTick - lastAimemLogTick >= 60ull)) {
                     lastAimemLogTick = simTick;
+                    // Эрранд-половина пульса умерла с flow-полями (rooms-object F).
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
-                                 "own_ai=%u own_wander=%u errand=%u settled=%u "
-                                 "step=%u column=%u lost=%u stalled=%u meandist=%.1f "
+                                 "own_ai=%u own_wander=%u "
                                  "recall=%u filed=%u fled=%u "
                                  "rows=%u writes=%u coal=%u evict=%u bytes=%zu\n",
                                  static_cast<unsigned long long>(simTick),
                                  static_cast<unsigned>(activeLayer),
                                  aiTick.considered, aiTick.replanned,
                                  aiTick.aiOwned, aiTick.wanderOwned,
-                                 aiTick.roomOwned, aiTick.settled,
-                                 aiTick.errandStep, aiTick.errandColumn,
-                                 aiTick.errandLost, aiTick.errandStalled,
-                                 (aiTick.errandStep + aiTick.errandColumn) != 0
-                                     ? static_cast<double>(aiTick.errandDistCells) /
-                                           static_cast<double>(aiTick.errandStep +
-                                                               aiTick.errandColumn)
-                                     : 0.0,
                                  aiTick.recalled, aiTick.remembered,
                                  aiTick.memoryFled, aiMem.rows(),
                                  aiMem.writes(), aiMem.coalesced(),
@@ -3255,7 +4940,9 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "[aimem] INTENT tick=%llu%s\n",
                                  static_cast<unsigned long long>(simTick), intents);
                 }
+                const auto profCtlT0 = prof_now();
                 controller_step(reg, kSimDt, &activeWorld.gravity());
+                prof_add(kProfController, profCtlT0);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
                 // Банк тикает ЗДЕСЬ же: bank_open идемпотентен по (этаж, сид)
@@ -3316,24 +5003,8 @@ int main(int argc, char** argv) {
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
                     // 4 — the correction that mattered most in the port.
                     if (tr_.sealed && reg.valid(player)) {
-                        const auto& meTr = reg.get<const Transform>(player);
-                        const int pcx = wrap_macro(static_cast<int>(std::floor(meTr.pos.x / kCellSize)));
-                        const int pcy = wrap_macro(static_cast<int>(std::floor(meTr.pos.y / kCellSize)));
-                        const int pcz = wrap_macro(static_cast<int>(std::floor(meTr.pos.z / kCellSize)));
                         bool playerSheltered = false;
-                        for (const auto& d : doors.doors) {
-                            if (d.hermetic && d.hp > 0 &&
-                                (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
-                                 d.state == static_cast<std::uint8_t>(game::DoorState::Locked))) {
-                                const int dx = wrap_delta(pcx, static_cast<int>(d.cx), kMacroDim);
-                                const int dy = wrap_delta(pcy, static_cast<int>(d.cy), kMacroDim);
-                                const int dz = wrap_delta(pcz, static_cast<int>(d.cz), kMacroDim);
-                                if (dx * dx + dy * dy + dz * dz <= 16) {
-                                    playerSheltered = true;
-                                    break;
-                                }
-                            }
-                        }
+                        // МОГИЛА ДВЕРЕЙ (2026-08-28). Гермо-укрытий нет — новая дверь вернёт их своим законом.
                         if (!playerSheltered) {
                             const game::SamosborPressure sp =
                                 game::samosbor_unsheltered_pressure(
@@ -3494,10 +5165,10 @@ int main(int argc, char** argv) {
                                     inv.slots[0] = game::ItemSlot{gun, 1};
                                     inv.slots[1] = game::ItemSlot{def.ammo, 30};
                                     game::PlayerRanged pr{};
-                                    pr.cooldownMs = 0;
-                                    pr.reloadMs = 0;
-                                    pr.magCount = magStamp;
-                                    pr.weapon = gun;
+                                    pr.hand[0].cooldownMs = 0;
+                                    pr.hand[0].reloadMs = 0;
+                                    pr.hand[0].magCount = magStamp;
+                                    pr.hand[0].weapon = gun;
                                     pr.shots = 42;
                                     pr.hits = 13;
                                     reg.emplace_or_replace<game::PlayerRanged>(
@@ -3509,7 +5180,7 @@ int main(int argc, char** argv) {
                                                  "mag=%u/%u shots=%u hits=%u\n",
                                                  static_cast<unsigned>(gun),
                                                  game::item_name(gun),
-                                                 static_cast<unsigned>(pr.magCount),
+                                                 static_cast<unsigned>(pr.hand[0].magCount),
                                                  static_cast<unsigned>(def.magazine),
                                                  pr.shots, pr.hits);
                                 }
@@ -3521,14 +5192,17 @@ int main(int argc, char** argv) {
                             const game::PlayerRanged* pr =
                                 reg.try_get<game::PlayerRanged>(player);
                             const unsigned mag =
-                                pr ? static_cast<unsigned>(pr->magCount) : 0u;
+                                pr ? static_cast<unsigned>(pr->hand[0].magCount)
+                                   : 0u;
                             const unsigned wpn =
-                                pr ? static_cast<unsigned>(pr->weapon) : 0u;
+                                pr ? static_cast<unsigned>(pr->hand[0].weapon)
+                                   : 0u;
                             const unsigned sh = pr ? pr->shots : 0u;
                             const unsigned hi = pr ? pr->hits : 0u;
                             const int ok =
-                                (pr && pr->magCount == magStamp &&
-                                 pr->weapon == magGun && pr->shots == 42u &&
+                                (pr && pr->hand[0].magCount == magStamp &&
+                                 pr->hand[0].weapon == magGun &&
+                                 pr->shots == 42u &&
                                  pr->hits == 13u)
                                     ? 1
                                     : 0;
@@ -3575,14 +5249,20 @@ int main(int argc, char** argv) {
                                     pool.inventory(nrg->id).slots[0] =
                                         game::ItemSlot{gid, 3};
                                     grenForced = true;
+                                    const game::PropDef& gp = game::prop_def(
+                                        static_cast<game::PropId>(
+                                            gd.thrownPropId));
                                     std::fprintf(
                                         stderr,
-                                        "[gren] FORCE item=%u name=%s dmg=%u "
-                                        "blast=%.1f m fuse=%.1f s\n",
+                                        "[gren] FORCE item=%u name=%s dmg=%d "
+                                        "blast=%.1f m fuse=%.1f s (ВВ %u г)\n",
                                         static_cast<unsigned>(gid),
                                         game::item_name(gid),
-                                        static_cast<unsigned>(gd.dmg),
-                                        gd.blastDm * 0.1f, gd.fuseDs * 0.1f);
+                                        static_cast<int>(
+                                            game::charge_dmg(gp.explosiveG)),
+                                        game::charge_radius_m(gp.explosiveG),
+                                        gd.fuseDs * 0.1f,
+                                        static_cast<unsigned>(gp.explosiveG));
                                 }
                             }
                         }
@@ -3629,12 +5309,8 @@ int main(int argc, char** argv) {
                                 continue;
                             const vec3& cpos =
                                 reg.get<const Transform>(cEnt).pos;
-                            const float dx =
-                                wrap_delta_f(ppos.x, cpos.x, kWorldExtent);
-                            const float dy = ppos.y - cpos.y;
-                            const float dz =
-                                wrap_delta_f(ppos.z, cpos.z, kWorldExtent);
-                            if (dx * dx + dy * dy + dz * dz < 2.2f * 2.2f) {
+                            if (wrap_dist2(ppos, cpos, kWorldExtent) <
+                                2.2f * 2.2f) {
                                 corpseNear = true;
                                 break;
                             }
@@ -3659,13 +5335,8 @@ int main(int argc, char** argv) {
                                 const Transform& tr =
                                     reg.get<const Transform>(me);
                                 if (tr.layer != activeLayer) continue;
-                                const float dx = wrap_delta_f(
-                                    ppos.x, tr.pos.x, kWorldExtent);
-                                const float dy = ppos.y - tr.pos.y;
-                                const float dz = wrap_delta_f(
-                                    ppos.z, tr.pos.z, kWorldExtent);
                                 const float d2 =
-                                    dx * dx + dy * dy + dz * dz;
+                                    wrap_dist2(ppos, tr.pos, kWorldExtent);
                                 if (d2 < bestD2) {
                                     bestD2 = d2;
                                     bestMob = me;
@@ -3708,7 +5379,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     } else if (shotAction == "wall" && reg.valid(player) &&
-                               shotFramesSeen >= 30 && !doors.frozen) {
+                               shotFramesSeen >= 30 && nav.ready()) {
                         // Face+walk owned by early block (post-input.apply,
                         // pre-controller_step). Here: hold melee + log only.
                         attackHeld = true;
@@ -3761,15 +5432,15 @@ int main(int argc, char** argv) {
                             std::fprintf(
                                 stderr,
                                 "[wall] melee toward solid d=%.2f "
-                                "floor=%d frozen=%d fly=%d\n",
+                                "floor=%d baking=%d fly=%d\n",
                                 bestD2 < 1.0e12f ? std::sqrt(bestD2)
                                                  : -1.0f,
                                 currentFloor,
-                                doors.frozen ? 1 : 0, fly ? 1 : 0);
+                                nav.baking() ? 1 : 0, fly ? 1 : 0);
                         }
                     } else if (!shotActionConsumed && shotAction == "carve" &&
 
-                               shotFramesSeen >= 30 && !doors.frozen) {
+                               shotFramesSeen >= 30 && nav.ready()) {
                         // One demolition charge ahead of the camera, once the
                         // nav bake has landed — the same request path the
                         // console `carve` row sets, so the screenshot
@@ -3804,11 +5475,12 @@ int main(int argc, char** argv) {
                                (shotAction == "save" || shotAction == "load") &&
                                shotRideDone >= shotRide &&
                                shotFramesSeen >= 30) {
-                        // Wait for async nav bake so loadWanted is not stuck
                         if (shotAction == "save") {
                             saveWanted = true;
                             shotActionConsumed = true;
-                        } else if (!nav.baking()) {
+                        } else {
+                            // F9 отменяет бейк сам ([game/rebake.h]) — ждать
+                            // нечего, loadWanted не застревает.
                             loadWanted = true;
                             shotActionConsumed = true;
                         }
@@ -3819,12 +5491,14 @@ int main(int argc, char** argv) {
                 // guard then skips them — one Velocity writer per body per tick.
                 // Runs on the same baked nav wander reads; while the bake is in
                 // flight the flow is empty and patrol bodies wander like everyone.
+                const auto profWanderT0 = prof_now();
                 game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
                                      kSimDt, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick,
                                   &activeWorld.gravity());
+                prof_add(kProfWander, profWanderT0);
 
                 // Шаги игрока БОЛЬШЕ НЕ ЗДЕСЬ. Их публикует encumbrance_step —
                 // один закон на все тела, камера включительно (игрок = NPC), с
@@ -3839,7 +5513,13 @@ int main(int argc, char** argv) {
                 // lattice node. Purely additive on top of wander_step and it returns
                 // before touching an entity when the field is quiet, which is almost
                 // every tick. [investigate.h]
-                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer, simTick);
+                // Шары акустики ВЫРЕЗАНЫ (решение владельца 2026-09-06,
+                // problems.md §65): слышимость прямолинейная тором до эпика
+                // «звуковое поле этажа» (печь при генерации, как пути/свет).
+                const auto profAcoustT0 = prof_now();
+                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
+                                                   simTick);
+                prof_add(kProfAcoustics, profAcoustT0);
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
                 for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
@@ -3851,8 +5531,9 @@ int main(int argc, char** argv) {
                     // 1. Wet Regeneration (Lotochnik, etc.)
                     const float regenRate = game::trait_wet_regen_hps(mr.kind);
                     if (regenRate > 0.0f && (simTick % 16 == 0)) {
-                        const float* fluidData = giga::fluid_data(stack.layer(activeLayer));
-                        if (game::pos_wet(fluidData, tr.pos)) {
+                        const std::uint32_t* mediumData =
+                            giga::medium_level_data(stack.layer(activeLayer));
+                        if (game::pos_wet(mediumData, tr.pos)) {
                             mr.hp = std::min<std::int16_t>(mr.maxHp, mr.hp + static_cast<std::int16_t>(regenRate * 0.13f + 0.5f));
 
                         }
@@ -3866,10 +5547,8 @@ int main(int argc, char** argv) {
                             game::noise_publish(noiseField, activeLayer, tr.pos, flashNoise, static_cast<std::uint32_t>(entt::to_integral(me_)));
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
-                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
-                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
-                                if (dx*dx + dy*dy + dz*dz < 14.0f * 14.0f) {
+                                if (wrap_dist2(tr.pos, ppos, kWorldExtent) <
+                                    14.0f * 14.0f) {
                                     game::apply_slow(reg, player, 0.40f, 1200);
                                 }
                             }
@@ -3882,10 +5561,8 @@ int main(int argc, char** argv) {
 
                             if (reg.valid(player)) {
                                 const vec3& ppos = reg.get<Transform>(player).pos;
-                                float dx = wrap_delta_f(tr.pos.x, ppos.x, kWorldExtent);
-                                float dy = tr.pos.y - ppos.y;
-                                float dz = wrap_delta_f(tr.pos.z, ppos.z, kWorldExtent);
-                                if (dx*dx + dy*dy + dz*dz < 2.15f * 2.15f) {
+                                if (wrap_dist2(tr.pos, ppos, kWorldExtent) <
+                                    2.15f * 2.15f) {
                                     game::apply_damage(reg, pool, player, 4, game::DamageChannel::Fire, me_, &activeGrid);
                                     // Content layer: SporeHaze. Gate = ip4_gasmask
                                     // present in inventory (alt column shortens).
@@ -3961,77 +5638,670 @@ int main(int argc, char** argv) {
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
+                const auto profPhysT0 = prof_now();
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
+                prof_add(kProfPhysics, profPhysT0);
+                // Рагдолл-ядро: импульсный твердотел (RigidBody +
+                // SelfIntegrating — physics_step такие тела пропускает).
+                // До impact_damage_step, чтобы его Impact-репорты попали в тот
+                // же универсальный закон урона. [markoaudit/plans/ragdoll.md]
+                const auto profRigidT0 = prof_now();
+                rigid_body_step(reg, stack, kSimDt);
+                prof_add(kProfRigid, profRigidT0);
+                // Жнец связей — одно правило смерти носителя (S20.3):
+                // линк с умершей стороной уничтожается (живая разбужена),
+                // сегмент без корня тоже; утечка линков при выгрузке этажа
+                // закрыта по построению — связи умирают тиком после сторон.
+                const auto profImpactT0 = prof_now();
+                game::attachment_reaper_step(reg);
                 // The universal impact law, straight after the sweep that wrote
                 // the reports: damage = k*m*v^2/2 over Mass — fall damage and
                 // prop crashes with no per-cause constants ([game/impact.h]).
                 game::impact_damage_step(reg, pool, &particleBursts);
-                // Prop ragdoll settle (AngularVelocity damping bookkeeping).
-                // Angular integration itself is in physics_step. [jirnyak.md] §18
-                game::prop_ragdoll_step(reg, kSimDt);
-                // Doors resolve AFTER physics for the same reason melee does: contact
-                // is tested by ADJACENCY against where bodies actually ended up this
-                // step, not where they intended to go. Costs nothing while no door is
-                // shut — door_step early-outs on doors.shut == 0. [door.h]
-                doorTick = game::door_step(reg, stack.layer(activeLayer), doors,
-                                           activeLayer, kSimDt, simTick);
-                // Door VFX: debris + noise on monster break / force-open.
-                // doorTick carries the world pos of the last event this tick.
-                if (doorTick.broken > 0) {
-                    // Loud crash — audible across a wide radius
-                    game::NoiseProfile np{18.0f, 3500, 4,
-                                           game::NoiseSource::Door};
-                    game::noise_publish(noiseField, activeLayer,
-                                        doorTick.lastBreakPos, np, 0);
-                }
-                if (doorTick.opened > 0) {
-                    game::NoiseProfile np{8.0f, 800, 2,
-                                           game::NoiseSource::Door};
-                    game::noise_publish(noiseField, activeLayer,
-                                        doorTick.lastOpenPos, np, 0);
-                }
-                // Q, consumed once. The player works a door with a keypress; leaning
-                // on one is how MONSTERS open it, and door_step skips the camera
-                // holder precisely so the two cannot be confused.
+                prof_add(kProfImpact, profImpactT0);
+                // prop_ragdoll_step умер (рагдолл-эпик, инкремент 6):
+                // сорванные пропы — тела rigid_body_step выше.
+                // НОВАЯ ДВЕРЬ: тоггл актором — единая интеракция E.
+                // door_step не существует: полотно — настоящая материя,
+                // физика/среды видят его без посредника.
                 if (doorWanted) {
                     doorWanted = false;
-                    if (reg.valid(player)) {
-                        const vec3 ppos = reg.get<Transform>(player).pos;
-                        const game::Inventory* pInv = nullptr;
-                        if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                            if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
-                        }
-                        std::uint32_t toggled = game::door_toggle_near(
-                            stack.layer(activeLayer), doors, reg,
-                            activeLayer, ppos, pInv);
-                        if (toggled != game::kNoDoor) {
-                            // Reconstruct door world position for particle/sound
-                            const game::Door& d = doors.doors[toggled];
-                            vec3 doorPos{
-                                (static_cast<float>(d.cx) + 0.5f) * kCellSize,
-                                (static_cast<float>(d.cy) + 0.5f) * kCellSize,
-                                (static_cast<float>(d.cz) +
-                                 static_cast<float>(d.h) * 0.5f) * kCellSize};
-
-                            // Slam noise so mobs hear it
+                    // E исполняет РОВНО ПОКАЗАННОЕ: дверь работает, только
+                    // если она и есть цель под прицелом ([game/focus.h]).
+                    if (reg.valid(player) &&
+                        g_focus.what == game::Focus::What::Portal &&
+                        g_focus.portal < doors.list.size()) {
+                        const vec3 dpos = reg.get<Transform>(player).pos;
+                        const MaskGroup& fp = doors.list[g_focus.portal];
+                        const bool wasClosed =
+                            game::door_closed(stack.layer(activeLayer), fp);
+                        if (wasClosed)
+                            game::door_open(stack.layer(activeLayer), fp,
+                                            doorDirty);
+                        else
+                            game::door_close(stack.layer(activeLayer), fp, reg,
+                                             activeLayer, doorDirty);
+                        {
                             game::NoiseProfile np{10.0f, 1200, 2,
-                                                   game::NoiseSource::Door};
-                            game::noise_publish(noiseField, activeLayer,
-                                                doorPos, np, 0);
+                                                  game::NoiseSource::Door};
+                            game::noise_publish(noiseField, activeLayer, dpos,
+                                                np, 0);
                         }
                     }
                 }
+
                 // Universal destruction ([world/destruct.h]): the console/tools
-                // PROPOSED a sphere; the sim disposes here, on its own clock,
-                // and never while a nav bake owns the grid — the same freeze
-                // doors honour, and the request stays queued (not dropped)
-                // until the bake lands. Collision is live off the mutated
-                // masks; every baked overlay's debt is exactly
-                // carveResult.dirtyCells, and nav stays stale until the next
-                // full bake — the accepted door.cpp debt, no new rule.
-                if (consoleCtx.carveRadius > 0.0f && !doors.frozen &&
-                    reg.valid(player)) {
+                // PROPOSED a sphere; the sim disposes here, on its own clock.
+                // No bake gate: the worker reads a snapshot, never the grid
+                // ([game/rebake.h]), so a carve is legal mid-bake. Collision is
+                // live off the mutated masks; every baked overlay's debt is
+                // exactly carveResult.dirtyCells, and nav stays stale only
+                // until the scheduler's next background swap.
+                // СПАВН МАТЕРИИ (`neon [r]` / `glass [r]`): рождает шар
+                // материала впереди камеры и гонит его тем же путём, что и
+                // карв — зеркало мира, бейк светоматериалов, статик-таблица,
+                // бейк видимости. `neon` существует ради проверки
+                // стабильности слотов (рождать и убивать лампы по команде),
+                // `glass` — прозрачности для света (light_transparent).
+                // РЕПРО-СТЕНД РАСТЕКАНИЯ (GIGA_POUR=1): автоналив воды под
+                // игроком на тике 200 и печать метрики изотропии по
+                // квадрантам на тиках 600/1200/1800 — сверка растекания
+                // числами между коммитами без участия владельца.
+                static const char* kPourEnv = std::getenv("GIGA_POUR");
+                if (kPourEnv) {
+                    if (simTick == 200 && reg.valid(player)) {
+                        const float pr =
+                            static_cast<float>(std::atof(kPourEnv));
+                        consoleCtx.paintRadius = pr > 0.0f ? pr : 1.0f;
+                        // GIGA_POUR_MAT=<имя строки materials.csv> — материал
+                        // стенда, дефолт water. Появился для замера ВОЗВРАТА
+                        // ГАЗА без сна сред (вердикт владельца 2026-08-27
+                        // «замер сначала»): GIGA_POUR=4 GIGA_POUR_MAT=toxic_gas
+                        // — тот же стенд, та же метрика [medium], ноль новых
+                        // механизмов.
+                        consoleCtx.paintMat = kMatWater;
+                        static const char* kPourMatEnv =
+                            std::getenv("GIGA_POUR_MAT");
+                        if (kPourMatEnv) {
+                            const CellType pm = material_id_by_name(kPourMatEnv);
+                            if (pm < kMatCount)
+                                consoleCtx.paintMat = pm;
+                            else
+                                std::fprintf(stderr,
+                                             "[pour-probe] unknown material "
+                                             "'%s', water used\n",
+                                             kPourMatEnv);
+                        }
+                        std::fprintf(stderr, "[pour-probe] pouring at tick 200\n");
+                    }
+                    if ((simTick == 600 || simTick == 1200 ||
+                         simTick == 1800) && reg.valid(player)) {
+                        // Скан CPU-канона по СУБВОКСЕЛЯМ относительно точки
+                        // налива: кванты и дальность фронта по знаку смещения
+                        // (тороидальная центрированная разность, 1024 суб/ось).
+                        constexpr float kSubSize = kCellSize / 8.0f;
+                        constexpr int kSubSpan = kMacroDim * 8;
+                        const vec3 pp = reg.get<Transform>(player).pos;
+                        const int psx = static_cast<int>(
+                            std::floor(pp.x / kSubSize));
+                        const int psy = static_cast<int>(
+                            std::floor(pp.y / kSubSize));
+                        const int pcx = wrap_macro(static_cast<int>(
+                            std::floor(pp.x / kCellSize)));
+                        const int pcy = wrap_macro(static_cast<int>(
+                            std::floor(pp.y / kCellSize)));
+                        const int pcz = wrap_macro(static_cast<int>(
+                            std::floor(pp.z / kCellSize)));
+                        World& pw = stack.layer(activeLayer);
+                        const SubField<CellType>* pf =
+                            pw.subfields().find<CellType>(kSubMaterialName);
+                        auto sdiff = [](int a, int b) {
+                            int d = (a - b) % kSubSpan;
+                            if (d > kSubSpan / 2) d -= kSubSpan;
+                            if (d < -kSubSpan / 2) d += kSubSpan;
+                            return d;
+                        };
+                        long qXp = 0, qXn = 0, qYp = 0, qYn = 0;
+                        int rXp = 0, rXn = 0, rYp = 0, rYn = 0;
+                        for (int dz = -3; dz <= 3; ++dz)
+                            for (int dy = -8; dy <= 8; ++dy)
+                                for (int dx = -8; dx <= 8; ++dx) {
+                                    const int cx = wrap_macro(pcx + dx);
+                                    const int cy = wrap_macro(pcy + dy);
+                                    const std::size_t ci = macro_index(
+                                        cx, cy, wrap_macro(pcz + dz));
+                                    const CellType* pg =
+                                        pf ? pf->page(ci) : nullptr;
+                                    if (!pg) continue;
+                                    for (int b = 0; b < kSubVoxels; ++b) {
+                                        if (pg[b] != kMatWater) continue;
+                                        const int sx = sdiff(
+                                            cx * 8 + (b & 7), psx);
+                                        const int sy = sdiff(
+                                            cy * 8 + ((b >> 3) & 7), psy);
+                                        if (sx > 0) { qXp++; rXp = std::max(rXp, sx); }
+                                        if (sx < 0) { qXn++; rXn = std::max(rXn, -sx); }
+                                        if (sy > 0) { qYp++; rYp = std::max(rYp, sy); }
+                                        if (sy < 0) { qYn++; rYn = std::max(rYn, -sy); }
+                                    }
+                                }
+                        std::fprintf(
+                            stderr,
+                            "[pour-probe] tick %llu: quanta +x %ld -x %ld "
+                            "+y %ld -y %ld | reach +x %d -x %d +y %d -y %d\n",
+                            static_cast<unsigned long long>(simTick), qXp, qXn,
+                            qYp, qYn, rXp, rXn, rYp, rYn);
+                        // ДИАГНОЗ СУХИХ КЛЕТОК: карта воды по клеткам слоя
+                        // налива + сигнатура каждой сухой клетки, граничащей
+                        // с мокрой (тип/маска/страница/состав/газ) — ответ
+                        // «кто запер клетку» без участия владельца.
+                        // Доминирующая z-плоскость лужи (вода падает от
+                        // точки налива вниз) — карта и диагноз строятся по ней.
+                        int zHist[9] = {};
+                        for (int dz = -5; dz <= 3; ++dz)
+                            for (int dy = -8; dy <= 8; ++dy)
+                                for (int dx = -8; dx <= 8; ++dx) {
+                                    const std::size_t ci = macro_index(
+                                        wrap_macro(pcx + dx),
+                                        wrap_macro(pcy + dy),
+                                        wrap_macro(pcz + dz));
+                                    const CellType* pg =
+                                        pf ? pf->page(ci) : nullptr;
+                                    if (!pg) continue;
+                                    for (int b = 0; b < kSubVoxels; ++b)
+                                        if (pg[b] == kMatWater)
+                                            ++zHist[dz + 5];
+                                }
+                        int poolDz = 0;
+                        for (int z = 0; z < 9; ++z)
+                            if (zHist[z] > zHist[poolDz + 5]) poolDz = z - 5;
+                        const int poolCz = wrap_macro(pcz + poolDz);
+                        std::fprintf(stderr, "[pour-map] pool plane dz %+d (%d quanta)\n",
+                                     poolDz, zHist[poolDz + 5]);
+                        int wq[17][17] = {};
+                        for (int dy = -8; dy <= 8; ++dy)
+                            for (int dx = -8; dx <= 8; ++dx) {
+                                const std::size_t ci = macro_index(
+                                    wrap_macro(pcx + dx),
+                                    wrap_macro(pcy + dy), poolCz);
+                                const CellType* pg =
+                                    pf ? pf->page(ci) : nullptr;
+                                if (!pg) continue;
+                                for (int b = 0; b < kSubVoxels; ++b)
+                                    if (pg[b] == kMatWater)
+                                        ++wq[dy + 8][dx + 8];
+                            }
+                        for (int dy = 8; dy >= -8; --dy) {
+                            char row[18];
+                            for (int dx = -8; dx <= 8; ++dx) {
+                                const int q = wq[dy + 8][dx + 8];
+                                row[dx + 8] = q == 0 ? '.'
+                                              : q < 10 ? char('0' + q)
+                                              : q < 100 ? 'x' : 'X';
+                            }
+                            row[17] = 0;
+                            std::fprintf(stderr, "[pour-map] %s\n", row);
+                        }
+                        int printed = 0;
+                        for (int dy = -8; dy <= 8 && printed < 10; ++dy)
+                            for (int dx = -8; dx <= 8 && printed < 10; ++dx) {
+                                if (wq[dy + 8][dx + 8] != 0) continue;
+                                bool frontier = false;
+                                for (int k = 0; k < 4; ++k) {
+                                    const int nx = dx + (k == 0) - (k == 1);
+                                    const int ny = dy + (k == 2) - (k == 3);
+                                    if (nx < -8 || nx > 8 || ny < -8 ||
+                                        ny > 8)
+                                        continue;
+                                    if (wq[ny + 8][nx + 8] >= 8)
+                                        frontier = true;
+                                }
+                                if (!frontier) continue;
+                                const int cx = wrap_macro(pcx + dx);
+                                const int cy = wrap_macro(pcy + dy);
+                                const std::size_t ci =
+                                    macro_index(cx, cy, poolCz);
+                                const CellType base =
+                                    pw.grid().cell(cx, cy, poolCz);
+                                const SubMask& mk = pw.grid().masks()[ci];
+                                int mbits = 0;
+                                for (int wI = 0; wI < int(kSubMaskWords); ++wI)
+                                    mbits += __builtin_popcountll(
+                                        mk.words[wI]);
+                                const CellType* pg =
+                                    pf ? pf->page(ci) : nullptr;
+                                int hist[4] = {};
+                                CellType top[4] = {};
+                                int nAtoms = 0;
+                                if (pg)
+                                    for (int b = 0; b < kSubVoxels; ++b) {
+                                        if (pg[b] == kCellAir) continue;
+                                        ++nAtoms;
+                                        for (int h = 0; h < 4; ++h) {
+                                            if (top[h] == pg[b]) {
+                                                ++hist[h];
+                                                break;
+                                            }
+                                            if (hist[h] == 0) {
+                                                top[h] = pg[b];
+                                                hist[h] = 1;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                // Граничная плоскость мокрого соседа в
+                                // сторону сухой: вода/твердь на ней различают
+                                // «замёрзший фронт» и легитимную стену.
+                                int fw = 0, fs = 0;
+                                {
+                                    int bdx = 0, bdy = 0;
+                                    for (int k = 0; k < 4; ++k) {
+                                        const int nx = dx + (k == 0) - (k == 1);
+                                        const int ny = dy + (k == 2) - (k == 3);
+                                        if (nx < -8 || nx > 8 || ny < -8 ||
+                                            ny > 8)
+                                            continue;
+                                        if (wq[ny + 8][nx + 8] >= 8) {
+                                            bdx = nx; bdy = ny; break;
+                                        }
+                                    }
+                                    const int wcx = wrap_macro(pcx + bdx);
+                                    const int wcy = wrap_macro(pcy + bdy);
+                                    const std::size_t wci =
+                                        macro_index(wcx, wcy, poolCz);
+                                    const CellType* wpg =
+                                        pf ? pf->page(wci) : nullptr;
+                                    const SubMask& wm =
+                                        pw.grid().masks()[wci];
+                                    // Плоскость соседа, обращённая К сухой.
+                                    // Плоскость соседа, ОБРАЩЁННАЯ к
+                                    // сухой: сосед в -x от сухой смотрит
+                                    // на неё своей x==7.
+                                    const int ax = bdx != dx ? 0 : 1;
+                                    const int plane =
+                                        (ax == 0 ? bdx < dx : bdy < dy)
+                                            ? 7 : 0;
+                                    for (int u = 0; u < 8; ++u)
+                                        for (int v = 0; v < 8; ++v) {
+                                            const int b2 =
+                                                ax == 0
+                                                    ? sub_bit(plane, u, v)
+                                                    : sub_bit(u, plane, v);
+                                            if (wpg &&
+                                                wpg[b2] == kMatWater)
+                                                ++fw;
+                                            if (wm.test(b2)) ++fs;
+                                        }
+                                }
+                                std::fprintf(
+                                    stderr,
+                                    "[pour-dry] d(%+d,%+d) base %s mask %d "
+                                    "page %s atoms %d top %s:%d %s:%d | "
+                                    "liq %.2f gas %.2f | seam seen %d lazy "
+                                    "%d | wet-face water %d solid %d\n",
+                                    dx, dy,
+                                    kMatNames[static_cast<int>(base)], mbits,
+                                    pg ? "yes" : "NO", nAtoms,
+                                    hist[0] ? kMatNames[static_cast<int>(
+                                                  top[0])]
+                                            : "-",
+                                    hist[0],
+                                    hist[1] ? kMatNames[static_cast<int>(
+                                                  top[1])]
+                                            : "-",
+                                    hist[1], liquid_frac_at(pw, ci),
+                                    gas_frac_at(pw, ci),
+                                    int(mediumPass.seam_seen(
+                                        static_cast<std::uint32_t>(ci))),
+                                    int(mediumPass.seam_lazy(
+                                        static_cast<std::uint32_t>(ci))),
+                                    fw, fs);
+                                ++printed;
+                            }
+                    }
+                }
+                if (consoleCtx.paintRadius > 0.0f && reg.valid(player)) {
+                    const float r = consoleCtx.paintRadius;
+                    const CellType paintMat = consoleCtx.paintMat;
+                    consoleCtx.paintRadius = 0.0f;
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+                    const auto& camTag = reg.get<CameraTag>(player);
+                    const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
+                    const float reach = 1.0f + r;
+                    const vec3 c{ppos.x + fwd.x * reach, ppos.y + fwd.y * reach,
+                                 ppos.z + fwd.z * reach};
+                    World& w = stack.layer(activeLayer);
+                    const float sv = kCellSize / kSubDim;
+                    std::vector<std::uint32_t> painted;
+                    const int span = static_cast<int>(std::ceil(r / sv));
+                    const int bx = static_cast<int>(std::floor(c.x / sv));
+                    const int by = static_cast<int>(std::floor(c.y / sv));
+                    const int bz = static_cast<int>(std::floor(c.z / sv));
+                    for (int dz = -span; dz <= span; ++dz)
+                      for (int dy = -span; dy <= span; ++dy)
+                        for (int dx = -span; dx <= span; ++dx) {
+                            const float ox = (bx + dx + 0.5f) * sv - c.x;
+                            const float oy = (by + dy + 0.5f) * sv - c.y;
+                            const float oz = (bz + dz + 0.5f) * sv - c.z;
+                            if (ox * ox + oy * oy + oz * oz > r * r) continue;
+                            const int gx = bx + dx, gy = by + dy, gz = bz + dz;
+                            const int cx = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gx) / kSubDim)));
+                            const int cy = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gy) / kSubDim)));
+                            const int cz = wrap_macro(
+                                static_cast<int>(std::floor(
+                                    static_cast<float>(gz) / kSubDim)));
+                            const int sx = ((gx % kSubDim) + kSubDim) % kSubDim;
+                            const int sy = ((gy % kSubDim) + kSubDim) % kSubDim;
+                            const int sz = ((gz % kSubDim) + kSubDim) % kSubDim;
+                            // УНИВЕРСАЛЬНЫЙ ПИСАТЕЛЬ (решение владельца
+                            // 2026-08-24): сфера честно ПИШЕТ материал в
+                            // истину — и точка. Бит SubMask — производный
+                            // кэш предиката «твёрдое» (S16.1): у твёрдого
+                            // ставится, у жидкости/газа СНИМАЕТСЯ. Отсюда
+                            // `sphere air` = детерминированный шар воздуха —
+                            // карв-кисть тем же законом, ноль особых путей.
+                            if (material_phase(paintMat) == MatPhase::Solid)
+                                w.grid().mask(cx, cy, cz).set(
+                                    sub_bit(sx, sy, sz));
+                            else
+                                w.grid().mask(cx, cy, cz).clear(
+                                    sub_bit(sx, sy, sz));
+                            set_sub_material(w, cx, cy, cz, sx, sy, sz,
+                                             paintMat);
+                            painted.push_back(static_cast<std::uint32_t>(
+                                macro_index(cx, cy, cz)));
+                        }
+                    // ОДИН ЗАКОН СВЯЗНОСТИ НА ВСЕХ ПИСАТЕЛЯХ (решение
+                    // владельца 2026-08-24): нарисованный в воздухе твёрдый
+                    // шар не висит — компонент записи проверяется от центра
+                    // тем же детач-свипом, несвязанное конвертируется в
+                    // рыхлого двойника и оседает автоматом. Лимит = атомы
+                    // записи + запас: шар, слившийся со стеной, превышает
+                    // его и стоит как записан.
+                    if (material_phase(paintMat) == MatPhase::Solid &&
+                        !painted.empty()) {
+                        const int dcx = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(bx) / kSubDim)));
+                        const int dcy = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(by) / kSubDim)));
+                        const int dcz = wrap_macro(static_cast<int>(
+                            std::floor(static_cast<float>(bz) / kSubDim)));
+                        static CarveResult paintDetach;
+                        if (detach_scan(w, dcx, dcy, dcz,
+                                        ((bx % kSubDim) + kSubDim) % kSubDim,
+                                        ((by % kSubDim) + kSubDim) % kSubDim,
+                                        ((bz % kSubDim) + kSubDim) % kSubDim,
+                                        carveScratch, paintDetach) > 0)
+                            painted.insert(painted.end(),
+                                           paintDetach.dirtyCells.begin(),
+                                           paintDetach.dirtyCells.end());
+                    }
+                    std::sort(painted.begin(), painted.end());
+                    painted.erase(std::unique(painted.begin(), painted.end()),
+                                  painted.end());
+                    if (!painted.empty()) {
+                        voxelMirror.mark_dirty(painted.data(), painted.size());
+                        // Писатель будит БЕЗУСЛОВНО (закон S16.1: писатели
+                        // будят, автомат двигает): налитая вода потечёт, в
+                        // шар воздуха стечёт материя соседей, лишние клетки
+                        // мгновенно заснут. wake_cells сам будит и грани.
+                        if (mediumPass.ready())
+                            mediumPass.wake_cells(painted.data(),
+                                                  painted.size(),
+                                                  w, voxelMirror);
+                        ++g_worldGen;
+                        nav.patch_carved_cells(w.grid(), painted.data(),
+                                               painted.size());
+                        // Патч поля по нарисованным ячейкам — тот же путь, что
+                        // у карва; полного скана этажа в кадре больше нет.
+                        if (game::patch_emitter_field(w, g_emitterField,
+                                                      painted.data(),
+                                                      painted.size())) {
+                            g_bakedFloorLights = game::bake_material_lights(
+                                w, g_emitterField, g_emitterClusters);
+                            rebuild_static_light_table(reg, activeLayer,
+                                                       /*reset=*/false);
+                            nav.set_light_table(g_staticLamps.data(),
+                                                g_staticLamps.size(),
+                                                gpu::kGridCellSlots,
+                                                g_staticTableGen);
+                        }
+                        light_log("[paint] mat %u: %zu cells at "
+                                  "(%.1f %.1f %.1f), table now %zu lamps\n",
+                                  static_cast<unsigned>(paintMat),
+                                  painted.size(), static_cast<double>(c.x),
+                                  static_cast<double>(c.y),
+                                  static_cast<double>(c.z),
+                                  g_staticLamps.size());
+                    }
+                }
+                // ЕДИНЫЙ ХВОСТ КАРВА (аудит 2026-08-25: жил ТРЕМЯ копиями —
+                // консоль/бой/двери, копии уже разъехались). Всё, что должен
+                // ЛЮБОЙ писатель геометрии после carve_sphere: свет-патч,
+                // зеркало, пробуждение автомата (S16.5), диффузия,
+                // нав-битсеты, частицы, якоря пропов, антураж. Вызывающий
+                // добавляет только своё (шум взрыва, боевой лог).
+                // СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH=1, баг владельца
+                // 2026-08-26): кольцо последних выбитых атомов; в сим-тике
+                // ниже проверяется «стал ли атом снова твёрдым» и КАКИМ
+                // материалом — rubble_* = легитимная осадка крошки,
+                // исходник = воскрешение; на первом воскрешении — полная
+                // сверка зеркала CPU==GPU. Логи читает аудит, не владелец.
+                {
+                    static bool once = false;
+                    if (!once) {
+                        once = true;
+                        const char* e = std::getenv("GIGA_REGROW_WATCH");
+                        g_regrowWatch = e ? std::atoi(e) : 0;
+                        if (g_regrowWatch < 0) g_regrowWatch = 0;
+                    }
+                }
+                auto carve_settle = [&](std::uint32_t seed) {
+                    auto ct0 = std::chrono::steady_clock::now();
+                    // Патч поля по dirtyCells — он же детектор «задет ли
+                    // свет» (субвоксельно честный). Кластеризация — только по
+                    // светоячейкам поля, микросекунды вместо скана 128³.
+                    const bool relight = game::patch_emitter_field(
+                        stack.layer(activeLayer), g_emitterField,
+                        carveResult.dirtyCells.data(),
+                        carveResult.dirtyCells.size());
+                    if (relight) {
+                        g_bakedFloorLights = game::bake_material_lights(
+                            stack.layer(activeLayer), g_emitterField,
+                            g_emitterClusters);
+                        // Кластеры пережиты с наследованием id — похудевший
+                        // неон сохраняет слот, умерший целиком — надгробие.
+                        rebuild_static_light_table(reg, activeLayer,
+                                                   /*reset=*/false);
+                        nav.set_light_table(g_staticLamps.data(),
+                                            g_staticLamps.size(),
+                                            gpu::kGridCellSlots,
+                                            g_staticTableGen);
+                    }
+                    g_carveT.lightMatMs += carve_ms_since(ct0);
+                    g_carveT.carved = true;
+                    g_carveT.cells += carveResult.dirtyCells.size();
+                    // Зеркало платит только dirty-клетки.
+                    ct0 = std::chrono::steady_clock::now();
+                    voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
+                    g_carveT.mirrorMarkMs += carve_ms_since(ct0);
+                    // Карв — писатель грида (S16.5): разбудить задетые
+                    // клетки — соседняя материя стечёт в свежую дыру.
+                    if (mediumPass.ready())
+                        mediumPass.wake_cells(carveResult.dirtyCells.data(),
+                                              carveResult.dirtyCells.size(),
+                                              stack.layer(activeLayer),
+                                              voxelMirror);
+                    ++g_worldGen; // поколение мутаций — планировщик доведёт
+                    ct0 = std::chrono::steady_clock::now();
+                    mark_diffusion_dirty(diffusionDriver,
+                                         stack.layer(activeLayer).grid(),
+                                         activeLayer, carveResult.dirtyCells);
+                    g_carveT.diffMs += carve_ms_since(ct0);
+                    // Долг живых битсетов проходимости — O(1) на клетку.
+                    ct0 = std::chrono::steady_clock::now();
+                    nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                           carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
+                    g_carveT.patchMs += carve_ms_since(ct0);
+                    // Пыль и обломки, тонированные срезанным материалом.
+                    ct0 = std::chrono::steady_clock::now();
+                    spawn_carve_particles(verletPass, carveResult, seed);
+                    g_carveT.partMs += carve_ms_since(ct0);
+                    // Пропы на срезанных якорях падают ([jirnyak.md] §18).
+                    ct0 = std::chrono::steady_clock::now();
+                    if (game::anchor_validate_step(
+                            reg, stack.layer(activeLayer), activeLayer, bus,
+                            carveResult.dirtyCells, &particleBursts,
+                            seed) > 0) {
+                        propPassNeedsRebuild = true;
+                    }
+                    // Спящие тела над срезанной опорой просыпаются — долг
+                    // писателя (S20.4): труп на плите падает вместе с ней,
+                    // а не висит до первого толчка.
+                    rigid_wake_dirty_cells(reg, activeLayer,
+                                           carveResult.dirtyCells.data(),
+                                           carveResult.dirtyCells.size());
+                    g_carveT.anchorMs += carve_ms_since(ct0);
+                    // Запечённое убранство отвечает тому же взрыву. Смерть
+                    // публикуется ПОКАДРОВО (write_alive/write_pins), а не
+                    // ре-аплоадом — тот телепортировал живой сим в rest (§28.4).
+                    ct0 = std::chrono::steady_clock::now();
+                    if (antourage_carve_step_here(carveResult.dirtyCells,
+                                                  seed))
+                        propPassNeedsRebuild = true;
+                    g_carveT.antrMs += carve_ms_since(ct0);
+                    if (g_regrowWatch > 0) {
+                        constexpr std::size_t kRegrowCap = 8192;
+                        if (g_regrowRing.size() < kRegrowCap)
+                            g_regrowRing.resize(kRegrowCap, RegrowAtom{0, 0});
+                        for (const CarvedVoxel& v : carveResult.destroyed) {
+                            g_regrowRing[g_regrowHead] = RegrowAtom{
+                                (v.cell << 9) | v.bit, v.mat};
+                            g_regrowHead = (g_regrowHead + 1) % kRegrowCap;
+                        }
+                    }
+                };
+                if (g_regrowWatch >= 1 &&
+                    (g_regrowWatch >= 2 || (simTick % 25u) == 0u) &&
+                    activeLayer != kInvalidLayer)
+                    regrow_check(stack.layer(activeLayer), voxelMirror,
+                                 "сим", simTick);
+                // РЕПРО-СТЕНД «дыра заросла» v2 — ПАРАМЕТРЫ ВЛАДЕЛЬЦА из
+                // его лога (power 64, r 0.55, «шагающие» удары по чуть
+                // сдвинутым точкам, этаж 0, z~137.9): GIGA_CARVE_PROBE=
+                // "x,y,z" бьёт серию из 8 ударов и после КАЖДОГО проверяет,
+                // не воскрес ли ЛЮБОЙ ранее выбитый атом (CPU) + сверка
+                // зеркала в конце.
+                static const char* kCarveProbeEnv =
+                    std::getenv("GIGA_CARVE_PROBE");
+                if (kCarveProbeEnv && activeLayer != kInvalidLayer) {
+                    static vec3 probeP{};
+                    static bool probeInit = false;
+                    static std::vector<std::pair<std::uint32_t, CellType>>
+                        holeAtoms;
+                    if (!probeInit && simTick >= 250) {
+                        probeInit = true;
+                        float px = 0, py = 0, pz = 0;
+                        if (std::sscanf(kCarveProbeEnv, "%f,%f,%f", &px, &py,
+                                        &pz) == 3)
+                            probeP = vec3{px, py, pz};
+                        else if (reg.valid(player)) {
+                            const vec3 pp = reg.get<Transform>(player).pos;
+                            probeP = vec3{pp.x, pp.y, pp.z - 1.0f};
+                        }
+                    }
+                    // Паттерн владельца: сдвиги ~0.3-0.9 м между ударами.
+                    static const float kOff[8][2] = {
+                        {0.0f, 0.0f},  {0.9f, 0.8f},  {0.8f, 0.5f},
+                        {1.4f, 0.9f},  {2.2f, 0.8f},  {1.0f, 0.0f},
+                        {0.3f, 0.4f},  {1.8f, 0.4f}};
+                    const bool hitNow = probeInit && simTick >= 300 &&
+                                        simTick < 300 + 8 * 60 &&
+                                        ((simTick - 300) % 60u) == 0u;
+                    if (hitNow) {
+                        const auto hi = (simTick - 300) / 60u;
+                        CarveOp op;
+                        op.x = probeP.x + kOff[hi][0];
+                        op.y = probeP.y + kOff[hi][1];
+                        op.z = probeP.z;
+                        op.radius = 0.55f;
+                        op.power = 64;
+                        op.seed = static_cast<std::uint32_t>(simTick);
+                        const std::int32_t rem = carve_sphere(
+                            stack.layer(activeLayer), op, carveScratch,
+                            carveResult);
+                        if (rem > 0) carve_settle(op.seed);
+                        for (const CarvedVoxel& v : carveResult.destroyed)
+                            holeAtoms.emplace_back((v.cell << 9) | v.bit,
+                                                   v.mat);
+                        std::fprintf(stderr,
+                                     "[carve-probe] hit %llu at "
+                                     "(%.1f,%.1f,%.1f) removed %d (det %zu, "
+                                     "tracked %zu)\n",
+                                     static_cast<unsigned long long>(hi),
+                                     op.x, op.y, op.z, rem,
+                                     carveResult.detached.size(),
+                                     holeAtoms.size());
+                    }
+                    // Проверка ПОСЛЕ каждого удара (через 30 тиков) и в конце.
+                    const bool checkNow = probeInit &&
+                        ((simTick >= 330 && simTick < 850 &&
+                          ((simTick - 330) % 60u) == 0u) ||
+                         simTick == 1000);
+                    if (checkNow && !holeAtoms.empty()) {
+                        World& pw = stack.layer(activeLayer);
+                        const SubField<CellType>* pf =
+                            pw.subfields().find<CellType>(kSubMaterialName);
+                        int solidAgain = 0, mobileNow = 0;
+                        CellType firstMat = 0;
+                        for (auto& [k, was] : holeAtoms) {
+                            const std::size_t ci = k >> 9;
+                            const int bit = static_cast<int>(k & 511u);
+                            const CellType* pg = pf ? pf->page(ci) : nullptr;
+                            CellType m = kCellAir;
+                            if (pg) m = pg[bit];
+                            else {
+                                const CellType base = pw.grid().types()[ci];
+                                const SubMask& mk = pw.grid().masks()[ci];
+                                if (mk.test(bit)) m = base;
+                                else if (mk.empty() &&
+                                         material_is_medium(base))
+                                    m = base;
+                            }
+                            if (m == kCellAir) continue;
+                            if (material_is_medium(m)) ++mobileNow;
+                            else {
+                                ++solidAgain;
+                                if (!firstMat) firstMat = m;
+                            }
+                        }
+                        std::fprintf(stderr,
+                                     "[carve-probe] tick %llu: %zu atoms -> "
+                                     "mobile %d, SOLID AGAIN %d%s%s\n",
+                                     static_cast<unsigned long long>(simTick),
+                                     holeAtoms.size(), mobileNow, solidAgain,
+                                     solidAgain ? " мат " : "",
+                                     solidAgain
+                                         ? kMatNames[static_cast<int>(
+                                               firstMat)]
+                                         : "");
+                        if (simTick == 1000) {
+                            const bool ok = voxelMirror.verify(
+                                stack.layer(activeLayer));
+                            std::fprintf(stderr,
+                                         "[carve-probe] mirror verify: %s\n",
+                                         ok ? "OK" : "DIVERGED");
+                        }
+                    }
+                }
+                if (consoleCtx.carveRadius > 0.0f && reg.valid(player)) {
                     const vec3 ppos = reg.get<Transform>(player).pos;
                     const auto& camTag = reg.get<CameraTag>(player);
                     const vec3 fwd = camera_forward(camTag.yaw, camTag.pitch);
@@ -4047,57 +6317,32 @@ int main(int argc, char** argv) {
                     // command stream, and the next swing is a fresh roll.
                     op.seed = static_cast<std::uint32_t>(simTick);
                     consoleCtx.carveRadius = 0.0f;
-                    const bool relight = carve_touches_light_material(
-                        stack.layer(activeLayer), op);
+                    const auto ctSite = std::chrono::steady_clock::now();
+                    const auto ct0 = std::chrono::steady_clock::now();
                     const std::int32_t removed =
                         carve_sphere(stack.layer(activeLayer), op,
                                      carveScratch, carveResult);
-                    if (removed > 0 && relight)
-                        g_bakedFloorLights =
-                            game::bake_material_lights(stack.layer(activeLayer));
+                    g_carveT.sphereMs += carve_ms_since(ct0);
                     if (removed > 0) {
-                        // No log, no bookkeeping: geometry persistence is the
-                        // floor's own file, written when the player leaves
-                        // ([save.h] modular layout) or on F5.
-                        // The GPU mirror pays only the dirty cells — the whole
-                        // point of the raymarch migration.
-                        voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
-                                               carveResult.dirtyCells.size());
-                        // Dust and debris off the blast, tinted by the carved
-                        // material ([particle_pass.h]).
-                        spawn_carve_particles(particlePass, carveResult,
-                                              op.seed);
-
-                        // A blast is the loudest thing after gunfire: let the
-                        // crowd hear it.
+                        carve_settle(op.seed);
+                        // Взрыв — самое громкое после стрельбы: толпа слышит.
                         game::NoiseProfile np{18.0f, 2200, 4,
                                               game::NoiseSource::WeaponFire};
                         game::noise_publish(noiseField, activeLayer,
                                             vec3{op.x, op.y, op.z}, np, 0);
-                        // Props anchored to carved cells fall / ragdoll
-                        // ([jirnyak.md] §18). dirtyCells = flat macro_index.
-                        // Rebuild PropPass static skin when any prop detached —
-                        // otherwise the GPU still draws the old furniture pose.
-                        if (game::anchor_validate_step(reg, stack.layer(activeLayer),
-                                                       bus, carveResult.dirtyCells,
-                                                       &particleBursts, op.seed) > 0) {
-                            propPassNeedsRebuild = true;
-                        }
-                        // ...and the BAKED dressing answers to the same blast
-                        // ([game/antourage] antourage_carve_step): severed
-                        // pipes shed debris and the instance list is re-packed
-                        // so the GPU stops drawing what no longer hangs.
-                        if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                      op.seed)) {
-                            propPassNeedsRebuild = true;
-                            dressingSetChanged = true;
-                        }
+                        g_carveT.siteMs += carve_ms_since(ctSite);
                     }
 
                 }
                 if (interactWanted) {
                     interactWanted = false;
-                    if (reg.valid(player)) {
+                    // ЦЕЛЬ РЕШАЕТ ФОКУС: если под прицелом дверь, её и
+                    // работаем — ветки ниже ищут по БЛИЗОСТИ и раньше
+                    // перехватывали E у самой двери (жалоба владельца).
+                    if (reg.valid(player) &&
+                        g_focus.what == game::Focus::What::Portal) {
+                        interactWanted = false;
+                    } else if (reg.valid(player)) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
 
@@ -4133,23 +6378,20 @@ int main(int argc, char** argv) {
                         // ящик больше не пылесос, он ХРАНИЛИЩЕ: можно и брать,
                         // и класть ([container.h] condition — износ едет).
                         if (!handled) {
-                            Entity bestBox = entt::null;
-                            float bestD2 =
-                                game::kContainerReach * game::kContainerReach;
-                            for (auto ce :
-                                 reg.view<game::Container, const Transform>()) {
-                                const Transform& bt =
-                                    reg.get<const Transform>(ce);
-                                if (bt.layer != activeLayer) continue;
-                                const float dx = wrap_delta_f(ppos.x, bt.pos.x,
-                                                              kWorldExtent);
-                                const float dy = wrap_delta_f(ppos.y, bt.pos.y,
-                                                              kWorldExtent);
-                                const float dz = wrap_delta_f(ppos.z, bt.pos.z,
-                                                              kWorldExtent);
-                                const float d2 = dx * dx + dy * dy + dz * dz;
-                                if (d2 < bestD2) { bestD2 = d2; bestBox = ce; }
-                            }
+                            // Ящик — обычный Interactable (S14.1 B2): кастомный
+                            // перебор по дистанции умер, ищет тот же
+                            // find_nearest_interactable, что трупы и терминалы;
+                            // reach — из interactables.csv.
+                            const game::InteractionHit crateHit =
+                                game::find_nearest_interactable(
+                                    reg, player, game::Interactable::Kind::Crate,
+                                    game::interact_def(game::InteractKind::Crate)
+                                        .reachM);
+                            Entity bestBox =
+                                crateHit.hit &&
+                                        reg.all_of<game::Container>(crateHit.entity)
+                                    ? crateHit.entity
+                                    : entt::null;
                             if (bestBox != entt::null) {
                                 handled = true;
                                 lootEntity = bestBox;
@@ -4201,28 +6443,56 @@ int main(int argc, char** argv) {
                         // ([jirnyak.md] §18 interaction_step). No vector collect,
                         // no fake hit when nothing is in reach.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            game::InteractionHit termHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM);
-                            if (termHit.hit) {
-                                game::TerminalInteractResult tres =
-                                    game::embody_interact_terminal(
-                                        reg, stack.layer(activeLayer), doors,
-                                        activeLayer, termHit.pos);
-                                if (tres.interacted) {
-                                    handled = true;
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "ELEVATOR DIAGNOSTIC: FLOOR %d TERMINAL LINKED | DOORS %s (%u TOGGLED)",
-                                                  currentFloor, tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled);
-                                    elevDiagAt = simTick;
-                                    std::fprintf(stderr, "[gameplay] Terminal/ControlPanel interact: doors %s (%u toggled) | ElecArc burst emitted at (%.1f, %.1f, %.1f)\n",
-                                                 tres.doorsLocked ? "LOCKED" : "UNLOCKED", tres.doorsToggled,
-                                                 tres.propPos.x, tres.propPos.y, tres.propPos.z);
-
-                                    game::NoiseProfile np{12.0f, 2000, 3, game::NoiseSource::Door};
-                                    game::noise_publish(noiseField, activeLayer, tres.propPos, np, 0);
-                                }
+                            // МОГИЛА ДВЕРЕЙ (2026-08-28): терминал больше не
+                            // тумблер замков; его скан по близости умер вместе
+                            // с ролью — окна ниже открывает ФОКУС (g_focus).
+                        // 5c: КНОПКА ВЫЗОВА снаружи столба — «лифт приехал»,
+                        // створка открывается (иллюзия приезда — следующий
+                        // инкремент); ПАНЕЛЬ в кабине — меню этажей (E, как
+                        // всё; клавиша L остаётся дев-дублёром).
+                        // АКТИВАЦИЯ ССЫЛКОЙ (S18): кнопка несёт DoorRef
+                        // на створку своего хаба — деривация хаба из
+                        // позиции кнопки (fast_hub_near) умерла. Кнопка
+                        // без ссылки — дефект обвеса, и он кричит.
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::LiftCall) {
+                            const auto* dr =
+                                reg.try_get<game::DoorRef>(g_focus.entity);
+                            if (dr && dr->group < doors.list.size()) {
+                                game::door_open(stack.layer(activeLayer),
+                                                doors.list[dr->group],
+                                                doorDirty);
+                                handled = true;
+                                std::fprintf(stderr,
+                                             "[lift] called — door group %u "
+                                             "opens\n", dr->group);
+                            } else {
+                                std::fprintf(stderr,
+                                             "[lift] LiftCall БЕЗ DoorRef — "
+                                             "дефект обвеса\n");
                             }
+                        }
+                        // КРАФТ — ОТ ВЕРСТАКА (вердикт владельца): клавиша C
+                        // снята, окно открывает интерактив терминала/верстака
+                        // под прицелом.
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::Terminal) {
+                            shell.window = UiWindow::Craft;
+                            input.set_mouselook(false);
+                            SDL_SetWindowRelativeMouseMode(window, false);
+                            handled = true;
+                        }
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            g_focus.kind == game::InteractKind::LiftPanel) {
+                            shell.toggle(UiWindow::Elevator);
+                            if (shell.window != UiWindow::None)
+                                input.set_mouselook(false);
+                            handled = true;
+                        }
+
                         }
 
                         // 3. ElectricalShield sabotage — zero-heap nearest.
@@ -4248,34 +6518,16 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // 3. Physiological relief fallback
-                        if (!handled) {
-                            if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
-                                if (pool.valid(nrg->id)) {
-                                    game::ReliefResult rr = game::relieve_needs(pool.needs(nrg->id), 100.0f, 100.0f);
-                                    if (rr.pee > 0.0f || rr.poo > 0.0f) {
-                                        // The puddle: urine through the same
-                                        // universal stain layer blood uses —
-                                        // mixing with anything already there
-                                        // is just channel addition.
-                                        if (rr.pee > 0.0f)
-                                            stain_splat(stack.layer(activeLayer),
-                                                        ppos, vec3{0, 0, -1.0f},
-                                                        1.4f, /*rays=*/14,
-                                                        kStainUrine,
-                                                        static_cast<std::uint32_t>(simTick),
-                                                        stainDirty);
-                                        std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                      "PHYSIOLOGICAL RELIEF: CLEARED BLADDER (%.0f) & BOWEL (%.0f) PRESSURE",
-                                                      rr.pee, rr.poo);
-                                        elevDiagAt = simTick;
+                        // ОБЛЕГЧЕНИЕ БОЛЬШЕ НЕ НА КЛАВИШЕ (вердикт
+                        // владельца 2026-08-28: «писать надо, но не кнопкой»).
+                        // Эта ветка стояла ПОСЛЕДНИМ fallback-ом клавиши E и
+                        // ловила любое нажатие, которому не досталось цели —
+                        // отсюда «жму E у двери, а персонаж мочится». Нужда
+                        // остаётся ([needs.h] relieve_needs — живой API,
+                        // потребитель придёт своим законом: туалет как
+                        // интерактив или автоматическое облегчение по
+                        // давлению).
 
-                                        game::NoiseProfile np{5.0f, 500, 1, game::NoiseSource::Door};
-                                        game::noise_publish(noiseField, activeLayer, ppos, np, 0);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
                 if (possessWanted) {
@@ -4322,36 +6574,104 @@ int main(int argc, char** argv) {
                 if (reg.valid(player))
                     game::entity_health(reg, pool, player, preHp, preMax);
 
-                bool haveGun = false;
+                // ДВЕ РУКИ (two-hands.md): верб каждой руки решает ТИП
+                // предмета в ней таблицами — ствол стреляет, метательное
+                // бросается, пустая/холодная рука бьёт. Руки НЕЗАВИСИМЫ
+                // (решение владельца: очередь с одной, граната с другой —
+                // ствольный cooldownMs и throwCooldownMs раздельны).
+                bool gunL = false, gunR = false;
+                bool thrownL = false, thrownR = false;
                 if (reg.valid(player))
                     if (const auto* nrg = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrg->id))
-                            haveGun = game::equipped_ranged(
-                                          pool.inventory(nrg->id),
-                                          reg.try_get<game::Equipped>(player)) !=
-                                      game::kInvalidItem;
+                        if (pool.valid(nrg->id)) {
+                            const game::Equipped* peq =
+                                reg.try_get<game::Equipped>(player);
+                            if (peq)
+                                for (int hr = 0; hr < 2; ++hr) {
+                                    const game::ItemId hi =
+                                        game::equipped_hand(
+                                            pool.inventory(nrg->id), *peq,
+                                            hr == 1);
+                                    const bool gun =
+                                        game::ranged_for_item(hi) != nullptr &&
+                                        !game::ranged_is_thrown(hi);
+                                    const bool thr =
+                                        game::ranged_for_item(hi) != nullptr &&
+                                        game::ranged_is_thrown(hi);
+                                    (hr ? gunR : gunL) = gun;
+                                    (hr ? thrownR : thrownL) = thr;
+                                }
+                        }
+                // ВТОРАЯ ПАРА РУК — ГЕЙМПАД. Триггеры складываются с мышью по
+                // ИЛИ, а не подменяют её: оба устройства живы одновременно,
+                // «режима геймпада» в игре нет и спрашивать игрока, чем он
+                // сейчас играет, не надо. Левый триггер — ЛЕВАЯ рука (та же,
+                // что ЛКМ), правый — ПРАВАЯ (ПКМ): одна кнопка на обе руки
+                // была бы откатом эпика двух рук ([two-hands.md]). Гейт по
+                // открытому окну держит сам InputState — тот же, что у осей.
+                const bool handL = attackHeld || input.hand_left_held();
+                const bool handR = rmbHeld || input.hand_right_held();
+                // Рука несёт и делает то, чем экипирована: спуск руки с
+                // метательным — бросок ЕЁ предмета (закон владельца,
+                // приоритетов нет по построению). throwWanted остаётся
+                // путём консоли/харнесса (скан сумки).
+                const bool throwHandL =
+                    thrownL && handL && shell.playing();
+                const bool throwHandR = thrownR && handR && shell.playing();
+                // ПРОП ЗАНИМАЕТ РУКУ (two-hands.md): верб занятой руки —
+                // «бросить несомое», по фронту нажатия её кнопки; та же
+                // скорость 6 м/с, что у консольной команды carry.
+                bool carriedL = false, carriedR = false;
+                for (auto ce : reg.view<CarriedBy>()) {
+                    const auto& cb = reg.get<CarriedBy>(ce);
+                    if (cb.carrier != player) continue;
+                    (cb.hand != 0 ? carriedR : carriedL) = true;
+                }
+                {
+                    static bool prevAtk = false, prevRmb = false;
+                    const bool atkEdge = handL && !prevAtk;
+                    const bool rmbEdge = handR && !prevRmb;
+                    prevAtk = handL;
+                    prevRmb = handR;
+                    if (shell.playing() && (carriedL || carriedR) &&
+                        reg.valid(player)) {
+                        const auto& pcam = reg.get<CameraTag>(player);
+                        const vec3 pfwd =
+                            camera_forward(pcam.yaw, pcam.pitch);
+                        if (carriedL && atkEdge)
+                            game::drop_carried(reg, player, pfwd, 6.0f, 0);
+                        if (carriedR && rmbEdge)
+                            game::drop_carried(reg, player, pfwd, 6.0f, 1);
+                    }
+                }
+                // Пустая (без верб-предмета и без пропа) рука бьёт.
+                const bool meleeWanted =
+                    (handL && !gunL && !thrownL && !carriedL) ||
+                    (handR && !gunR && !thrownR && !carriedR);
                 // Combat carves: clear, fill during melee/projectiles, dispose
-                // same step if !doors.frozen (v1 drops proposals during bake).
+                // same step. Nothing is dropped for a bake any more — the
+                // worker holds a snapshot, not the grid ([game/rebake.h]).
                 combatCarves.clear();
-                const bool isAttacking = (attackHeld || input.action_held()) && shell.playing();
-                shots += game::player_ranged_step(reg, pool, activeLayer,
-                                                  haveGun && isAttacking,
-                                                  kSimDt, simTick, &noiseField,
-                                                  &playerStatus);
+                // Счёт выстрелов живёт в PlayerRanged::shots — локальный
+                // накопитель убит (К1-15), вызов остаётся: он стреляет.
+                game::player_ranged_step(
+                    reg, pool, activeLayer, handL && shell.playing(),
+                    handR && shell.playing(), kSimDt, simTick, &noiseField,
+                    &playerStatus);
                 // IMMEDIATELY AFTER the firearm step and never before it: the two
                 // share `PlayerRanged::cooldownMs` (one pair of hands) and the step
                 // above owns its single decrement ([combat.h] player_throw_step).
                 // Consumed here rather than at the request site so the throw lands on
                 // a sim tick like every other action, not on a frame.
-                if (throwWanted) {
-                    throwWanted = false;
-                    if (shell.playing() && game::player_throw_step(reg, pool, activeLayer,
-                                                           true) > 0)
-                        ++shots;
-                }
+                game::player_throw_step(reg, pool, activeLayer, throwHandL,
+                                        throwHandR, throwWanted, simTick);
+                throwWanted = false;
+                const auto profCombatT0 = prof_now();
                 game::player_melee_step(
                     reg, pool, bus, activeLayer, kSimDt,
-                    !haveGun && isAttacking, simTick,
+                    // Бьёт рука без верб-предмета (two-hands.md): кнопка
+                    // руки с гранатой/стволом кулаком не машет.
+                    meleeWanted && shell.playing(), simTick,
                     &stack.layer(activeLayer).grid(), &combatCarves,
                     &playerStatus, &particleBursts,
                     &stack.layer(activeLayer).gravity());
@@ -4370,17 +6690,28 @@ int main(int argc, char** argv) {
                                   &stack.layer(activeLayer).gravity());
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
+                // Дельта PropDetached до/после: выстрел-в-проп внутри
+                // projectile_step сносит и GpuHandoff-лампы (reg.destroy), и
+                // якорные пропы целиком — без ребилда статичной шкуры PropPass
+                // плафон разбитой лампы рисовался бы до следующего карва.
+                const std::uint32_t propDetachedBeforeShots =
+                    bus.cycle_count(game::EventType::PropDetached);
                 meleeHits += game::projectile_step(
                     reg, pool, bus, stack, activeLayer, kSimDt, simTick,
                     &playerStatus, player, &combatCarves, &stainDirty,
                     &particleBursts, &noiseField);
+                // Фитили проп-зарядов: граната — RagdollRoll-проп, её
+                // детонацию решает charge_step тем же примитивом detonate()
+                // и в те же очереди (carve/частицы/шум), что и снаряды.
+                meleeHits += game::charge_step(reg, pool, stack, activeLayer,
+                                               simTick, &combatCarves,
+                                               &particleBursts, &noiseField);
+                prof_add(kProfCombat, profCombatT0);
+                if (bus.cycle_count(game::EventType::PropDetached) >
+                    propDetachedBeforeShots)
+                    propPassNeedsRebuild = true;
                 // Drain combat carve proposals through the same carve_sphere
-                // path the console uses. Frozen bake: drop (v1); console keeps
-                // pending via carveRadius until bake lands.
-                if (doors.frozen && combatCarves.count > 0) {
-                    combatCarves.droppedBake += combatCarves.count;
-                    combatCarves.count = 0;
-                }
+                // path the console uses.
                 // Gated like every other debug channel (GIGA_*_DBG): the counters
                 // are always kept, the line only prints when asked for.
                 static const bool carveDbg =
@@ -4388,61 +6719,38 @@ int main(int argc, char** argv) {
                 if (carveDbg &&
                     (combatCarves.count > 0 || combatCarves.droppedFull > 0 ||
                      combatCarves.droppedDegenerate > 0 ||
-                     combatCarves.droppedBake > 0 ||
                      combatCarves.clampedRadius > 0)) {
                     std::fprintf(stderr,
                                  "[carve] proposals=%u dropped_full=%u "
-                                 "dropped_degen=%u dropped_bake=%u clamped=%u\n",
+                                 "dropped_degen=%u clamped=%u\n",
                                  static_cast<unsigned>(combatCarves.count),
                                  static_cast<unsigned>(combatCarves.droppedFull),
                                  static_cast<unsigned>(combatCarves.droppedDegenerate),
-                                 static_cast<unsigned>(combatCarves.droppedBake),
                                  static_cast<unsigned>(combatCarves.clampedRadius));
                 }
-                if (!doors.frozen && combatCarves.count > 0) {
+                if (combatCarves.count > 0) {
                     for (std::uint8_t ci = 0; ci < combatCarves.count; ++ci) {
                         const game::CarveProposal& pr = combatCarves.items[ci];
                         CarveOp op;
-                        op.x = pr.x;
-                        op.y = pr.y;
-                        op.z = pr.z;
+                        op.x = pr.x; op.y = pr.y; op.z = pr.z;
                         op.radius = pr.radius;
                         op.power = pr.power;
                         op.seed = pr.seed;
-                        const bool relight = carve_touches_light_material(
-                            stack.layer(activeLayer), op);
+                        const auto ctSite = std::chrono::steady_clock::now();
+                        const auto ct0 = std::chrono::steady_clock::now();
                         const std::int32_t removed =
                             carve_sphere(stack.layer(activeLayer), op,
                                          carveScratch, carveResult);
-                        if (removed > 0 && relight)
-                            g_bakedFloorLights = game::bake_material_lights(
-                                stack.layer(activeLayer));
+                        g_carveT.sphereMs += carve_ms_since(ct0);
                         if (removed > 0) {
-                            voxelMirror.mark_dirty(
-                                carveResult.dirtyCells.data(),
-                                carveResult.dirtyCells.size());
-                            spawn_carve_particles(particlePass, carveResult,
-                                                  pr.seed);
+                            carve_settle(pr.seed);
                             std::fprintf(stderr,
                                          "[carve] COMBAT removed=%d power=%u "
                                          "r=%.2f at (%.1f,%.1f,%.1f)\n",
                                          removed,
                                          static_cast<unsigned>(pr.power),
                                          pr.radius, pr.x, pr.y, pr.z);
-
-                            // Detach props whose anchor cells were carved.
-                            // Rebuild PropPass static skin on any detach so the
-                            // GPU drops the old furniture pose. [jirnyak.md] §18
-                            if (game::anchor_validate_step(
-                                    reg, stack.layer(activeLayer), bus,
-                                    carveResult.dirtyCells, &particleBursts,
-                                    pr.seed) > 0) {
-                                propPassNeedsRebuild = true;
-                            }
-                            // Same duty for the baked dressing.
-                            if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                          pr.seed))
-                                propPassNeedsRebuild = true;
+                            g_carveT.siteMs += carve_ms_since(ctSite);
                         }
                     }
                     combatCarves.clear();
@@ -4452,7 +6760,7 @@ int main(int argc, char** argv) {
                 // → эмиттер" writer). Emitters are refilled at every prop
                 // merge, so a re-carved or reloaded floor stays honest.
                 if ((simTick % 50u) == 0u && !dripEmitters.empty() &&
-                    particlePass.ready()) {
+                    verletPass.sim_ready()) {
                     static std::vector<gpu::GpuParticle> dripTmp;
                     dripTmp.clear();
                     const game::ParticleDef& dripDef =
@@ -4463,7 +6771,7 @@ int main(int argc, char** argv) {
                                        vec3{dripDef.r, dripDef.g, dripDef.b}, 1,
                                        static_cast<std::uint32_t>(simTick) ^
                                            static_cast<std::uint32_t>(i));
-                    particlePass.spawn(dripTmp.data(),
+                    verletPass.spawn_particles(dripTmp.data(),
                                        static_cast<std::uint32_t>(
                                            dripTmp.size()));
                 }
@@ -4491,7 +6799,34 @@ int main(int argc, char** argv) {
                         static_cast<std::uint32_t>(simTick));
                 }
                 // Drain this tick's blood/spark proposals into the GPU pool.
-                drain_particle_bursts(particlePass, particleBursts);
+                // Under GIGA_PARTICLE_PIN the queue is dropped instead: the
+                // crowd bleeds nondeterministically and would poison the pin
+                // hash — the pin's only writer is the synthetic burst below.
+                if (gpu::particle_pin_active())
+                    particleBursts.clear();
+                else
+                    drain_particle_bursts(verletPass, particleBursts);
+                // GIGA_PARTICLE_PIN: one fixed-seed burst at the player spawn
+                // point, injected exactly once — the deterministic input the
+                // pin protocol hashes (markoaudit/plans/verlet-merge.md §6.1).
+                static bool particlePinInjected = false;
+                if (gpu::particle_pin_active() && !particlePinInjected &&
+                    reg.valid(player)) {
+                    particlePinInjected = true;
+                    static std::vector<gpu::GpuParticle> pinTmp;
+                    pinTmp.clear();
+                    const vec3 pp = reg.get<Transform>(player).pos;
+                    const auto& def = game::kParticleTable[static_cast<int>(
+                        game::ParticleKind::Debris)];
+                    pack_particles(pinTmp,
+                                   vec3{pp.x, pp.y, pp.z + 1.2f},
+                                   vec3{0.0f, 0.0f, 1.0f}, def,
+                                   kMaterial[kMatElectricGrate], 64,
+                                   0xC0FFEEu);
+                    verletPass.spawn_particles(pinTmp.data(),
+                                       static_cast<std::uint32_t>(
+                                           pinTmp.size()));
+                }
 
 
 
@@ -4566,19 +6901,33 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // §27 legs (c)+(d): the clock now runs for EVERY embodied body on
-                // the floor, and `roomZones` is the half that keeps that from being
-                // a morgue — a body in a kitchen fills, a body in a bathroom
-                // empties. Passing null here would reinstate the ~14-minute
-                // population wipe [needs.h] blocked the widening on.
+                // Амбиентная регенерация по виду комнаты умерла (rooms-object
+                // F; S12.5 — потребление реальное, вернёт agent-goals).
                 // ENCUMBRANCE before the needs clock, because it charges the same
                 // sleep bar the clock then reads for its exhaustion penalty — a
                 // load taxes you on the tick you carry it, not one tick later.
+                const auto profNeedsT0 = prof_now();
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
-                needs = game::needs_step(reg, pool, activeLayer, kSimDt, &roomZones,
-                                         &aiMem, simNow);
+                needs = game::needs_step(reg, pool, activeLayer, kSimDt,
+                                         &aiMem, simNow, &bus, simTick);
+                prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
+                // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
+                // слил его, где застало). Лужа — тот же стейн, что канал P.
+                // Социальная цена — деяние из needs_step (S19, 2026-09-05):
+                // один шов закрыл NPC и игрока, свидетели/уместность — у
+                // witness_step. Здесь остаётся только физика (стейн).
+                if (needs.voidedPee && reg.valid(player)) {
+                    const vec3 rp = reg.get<Transform>(player).pos;
+                    stain_splat(stack.layer(activeLayer), rp,
+                                vec3{0, 0, -1.0f}, 1.4f, /*rays=*/14,
+                                kStainUrine,
+                                static_cast<std::uint32_t>(simTick),
+                                stainDirty);
+                    std::fprintf(stderr,
+                                 "[relief] невольно: мочевой лопнул\n");
+                }
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually
                 // feeding people, and `crowdDead` is the number that would climb if
@@ -4626,7 +6975,7 @@ int main(int argc, char** argv) {
                 const std::int32_t got =
                     game::pickup_step(reg, pool, bus, activeLayer, simTick);
                 if (got != 0) {
-                    loot += got;
+                    (void)got; // ценность считает carried; got — для лога ниже
                     // Picking a vest up must actually protect you.
                     game::sync_armour(reg, pool, player);
                 }
@@ -4640,7 +6989,7 @@ int main(int argc, char** argv) {
                             stack.layer(activeLayer).grid(), ptr_.pos)) {
                         if (const auto* nrx = reg.try_get<game::NpcRef>(player))
                             if (pool.valid(nrx->id))
-                                banked += game::deposit_valuables(
+                                game::deposit_valuables(
                                     pool.inventory(nrx->id), ledger);
                     }
                 }
@@ -4652,11 +7001,9 @@ int main(int argc, char** argv) {
                     // run.sav + the resident floor's own file. [save.h]
                     if (save_run_now())
                         std::snprintf(saveLine, sizeof(saveLine),
-                                      "saved: floor %d, %u rub, %u crates",
+                                      "saved: floor %d, %u rub",
                                       currentFloor,
-                                      static_cast<unsigned>(ledger.banked),
-                                      static_cast<unsigned>(
-                                          runState.containers.size()));
+                                      static_cast<unsigned>(ledger.banked));
                     else {
                         char runPath[128];
                         run_save_path(runPath, sizeof runPath);
@@ -4672,12 +7019,37 @@ int main(int argc, char** argv) {
                 // this was the only call site that still did a partial field copy and
                 // admitted it would not restore position. [save.h]
                 if (loadWanted) {
-                    // Travel regenerates Worlds; AsyncBake holds a raw MacroGrid* for
-                    // ~seconds. Multi-hop while baking frees the slot the worker still
-                    // reads — refuse and retry next frame. [save.h, nav_async.h]
-                    if (nav.baking()) {
-                        // leave loadWanted set; quiet until the bake ends
-                    } else {
+                    // Загрузка = «по сути новая игра» (решение владельца): бейк
+                    // в полёте ОТМЕНЯЕТСЯ (узловая гранулярность, join внутри
+                    // begin_floor_nav мгновенный) — воркер владеет только
+                    // снапшотом битсетов, миру он не опасен. [game/rebake.h]
+                    nav.cancel();
+                    // Лифтовая поездка в полёте — особый случай: Prebuild-
+                    // задание неделимо (restore-чтение файла не опрашивает
+                    // отмену), а его слот нужен самой загрузке (keepRadius=0
+                    // => физических слоёв ровно два). Дождаться выхода
+                    // воркера и вернуть слот; худший случай — секунды
+                    // restore-чтения. «F9 во время бейка = отменить и
+                    // грузить» — решение владельца (async-rebake.md §9).
+                    if (liftRide != LiftRide::Idle) {
+                        while (nav.baking()) {
+                            nav.step(simTick, g_worldGen);
+                            SDL_Delay(2);
+                        }
+                        (void)nav.take_prebuilt(); // мусор по контракту
+                        streamer.prebuild_cancel();
+                        liftRide = LiftRide::Idle;
+                        // Запись воркера для отменённого этажа — сирота
+                        // (~6 МБ на 15k пропов): прибытия не будет, а
+                        // корректность держит erase-first в apply_floor_file
+                        // (аудит F, жук №3). Чистим гигиены ради.
+                        std::lock_guard<std::mutex> lk(g_restoreMx);
+                        g_pendingRestore.clear();
+                    }
+                    // Загрузка читает floor-файлы — фоновый хвост обязан
+                    // долететь до диска (5a).
+                    flush_floor_write();
+                    {
                         loadWanted = false;
                         char runPath[128];
                         run_save_path(runPath, sizeof runPath);
@@ -4818,40 +7190,40 @@ int main(int argc, char** argv) {
                             rumourLine[0] = 0;
                             rumourAt = 0;
                             game::noise_clear(noiseField);
-                            // Arrival order is load-path law: containers before
-                            // re-open, mobs, floor file, doors, freeze, bake,
-                            // then placement. [save.h]
-                            refresh_floor_containers(reg, stack.layer(nl),
-                                                     currentFloor, nl);
-                            const std::size_t reopened =
-                                game::apply_container_records(
-                                    reg, nl, currentFloor,
-                                    runState.containers.data(),
-                                    runState.containers.size());
-                            game::spawn_corpse_records(
-                                reg, nl, currentFloor,
-                                runState.corpses.data(),
-                                runState.corpses.size());
+                            // Тот же порядок прибытия, что у поездки (F9 —
+                            // третий сайт того же закона): комнаты РАНЬШЕ
+                            // сидеров (F9 объявлял их ПОСЛЕ сева ящиков —
+                            // ящики селились по комнатам покинутого этажа),
+                            // затем развилка сущностей (записи — из floor-
+                            // файла, прочитанного restore-веткой
+                            // ensure_loaded, НЕ из run.sav — v20).
+                            game::rooms_declare(
+                                floorRooms, currentFloor,
+                                *spec_for_floor(currentFloor),
+                                streamer.floor_seed_of(registry, currentFloor));
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl);
-                            refresh_floor_props(
-                                reg, stack.layer(nl), currentFloor, nl,
-                                streamer.floor_seed_of(registry, currentFloor),
-                                bus);
-                            if (currentSpec)
-                                doorsBuilt = game::door_build(
-                                    stack.layer(nl), doors, currentFloor,
-                                    *currentSpec,
-                                    streamer.floor_seed_of(registry,
-                                                           currentFloor));
-                            doors.frozen = true;
-                            begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                            arrivedRestored =
+                                floor_entity_half(nl, currentFloor);
+                            // Диффузия: F9 — единственный сайт прибытия, не
+                            // звавший контрактную чистку ([diffusion.h]) —
+                            // опасность покинутого этажа жила в клетках слота.
+                            diffusion_driver_on_floor_built(
+                                diffusionDriver, stack.layer(nl), nl);
+                            game::rooms_supply_rebuild(floorRooms, reg, nl);
+                            game::stamp_shield_programs(reg, &floorRooms, nl);
+                            game::assign_lamp_shields(reg, nl);
+                            game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
+                            if (!arrivedRestored) dress_lift_portals(nl);
+                            begin_floor_nav(stack.layer(nl), currentFloor, nav);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
-                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
-                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
+                                  stack.layer(nl), simTick, &dripEmitters);
+                upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
                             }
                             voxelMirror.upload_all(stack.layer(nl));
                             if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
@@ -4867,9 +7239,9 @@ int main(int argc, char** argv) {
                             if (!placed.ok) {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
-                                    "loaded %u rub floor %d; place refused, %u crates",
+                                    "loaded %u rub floor %d; place refused%s",
                                     static_cast<unsigned>(ledger.banked), currentFloor,
-                                    static_cast<unsigned>(reopened));
+                                    arrivedRestored ? " (floor restored)" : "");
                             } else {
                                 std::snprintf(
                                     saveLine, sizeof(saveLine),
@@ -5009,6 +7381,40 @@ int main(int argc, char** argv) {
                                                   simTick);
                     healWanted = false;
                 }
+                // ОСОЗНАННОЕ ОБЛЕГЧЕНИЕ (P): полное опорожнение обеих
+                // ёмкостей ([needs.h] relieve_needs), лужа — тем же
+                // универсальным стейном, что кровь. Невольный канал
+                // (давление на капе) — закон клока нужд, не клавиши.
+                if (reliefWanted) {
+                    reliefWanted = false;
+                    if (reg.valid(player)) {
+                        if (const auto* nrr = reg.try_get<game::NpcRef>(player);
+                            nrr && pool.valid(nrr->id)) {
+                            const game::ReliefResult rr = game::relieve_needs(
+                                pool.needs(nrr->id), 100.0f, 100.0f);
+                            if (rr.pee > 0.0f) {
+                                const vec3 rp = reg.get<Transform>(player).pos;
+                                stain_splat(stack.layer(activeLayer), rp,
+                                            vec3{0, 0, -1.0f}, 1.4f,
+                                            /*rays=*/14, kStainUrine,
+                                            static_cast<std::uint32_t>(simTick),
+                                            stainDirty);
+                            }
+                            if (rr.pee > 0.0f || rr.poo > 0.0f) {
+                                std::fprintf(stderr,
+                                             "[relief] осознанно: pee %.0f "
+                                             "poo %.0f\n", rr.pee, rr.poo);
+                                // ДЕЯНИЕ «сортир» (S19): облегчение — факт в
+                                // шину; в уместной комнате потребитель сам
+                                // занулит цену (S19.1.3), здесь ветки нет.
+                                game::deed_publish(
+                                    bus, game::kVerbToilet, player,
+                                    game::kInvalidNpc,
+                                    reg.get<Transform>(player).pos, simTick);
+                            }
+                        }
+                    }
+                }
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
@@ -5030,7 +7436,17 @@ int main(int argc, char** argv) {
                     // that helper: the old body is already gone, so this reads the
                     // value saved off at the top of the death path (carriedRpg).
                     player = possess_a_survivor(reg, pool, activeLayer);
-                    if (player == entt::null) { running = false; break; }
+                    if (player == entt::null) {
+                        // Живых на слое не осталось — приложение сейчас просто
+                        // закроется, без единого слова игроку. Для тестирующего
+                        // это неотличимо от краша, поэтому разница обязана
+                        // остаться хотя бы в файле.
+                        soak_log("[soak] EVENT run-over: выживших на слое %u "
+                                 "нет, выход (это НЕ краш)\n",
+                                 static_cast<unsigned>(activeLayer));
+                        running = false;
+                        break;
+                    }
                     aim_player(reg, player);
                     reg.emplace_or_replace<game::PlayerMelee>(
                         player, game::PlayerMelee{0, kills});
@@ -5043,6 +7459,11 @@ int main(int argc, char** argv) {
                     carriedRpg = *rsLive;
                 }
                 ++simTick;
+                // Граница фазы освещения (S15.4, раз в 17.5 мин): плафоны
+                // mains-ламп несут фазовый уровень в emissive инстанса —
+                // редкая пересборка пасса, ноль CPU между границами.
+                if (watch_light_phase_border(simTick - 1, simTick))
+                    propPassNeedsRebuild = true;
                 // THE MACRO CLOCK. kMacroPeriodTicks = kSimHz*2 = 250, which is
                 // exactly 2.000 s at 125 Hz — kSimStepMs is exactly 8 ms, so the
                 // period is lossless and cannot drift. Placed after ++simTick so the
@@ -5071,25 +7492,14 @@ int main(int argc, char** argv) {
                                  macroStats.departures, macroStats.arrivals,
                                  macroStats.inTransit, macroStats.reserveRemaining);
                 }
-                // Fluid: `fluid_step` ([sim/fluid.h]) is NOT run here, and the
-                // reason this comment used to give — "no floor module seeds the
-                // field yet" — is FALSE. `padic_gen.cpp` (kFluidField seeding)
-                // runs for every FloorKind via floor_gen.cpp's padic_apply_rules,
-                // so every floor in the game seeds standing water. The consumers
-                // are live and read it each tick (pos_wet below, plus wet-spawn
-                // suppression in mob_spawn.cpp and crate flotation in
-                // container.cpp) — they just read a field that never evolves.
-                // Water is painted and frozen.
-                //
-                // The precondition is met; what is missing is the decision on
-                // WHERE the step belongs. [master_prompt.md] and
-                // [performance.md] both put every cellular field (fluid/gas/heat/
-                // pressure/light) on the GPU as async compute, so wiring the CPU
-                // `fluid_step` into this tick would install the very thing the
-                // performance mandate forbids. Owner call, not a TODO to grab.
+                // Вода/газ: их двигает МИР-АВТОМАТ на GPU (S16, единственный
+                // двигатель материи); мёртвый CPU fluid_step и его поле
+                // вычищены 2026-08-24 — вода наливается генератором материей
+                // и живёт правилом.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
+            prof_add(kProfTick, profTickT0);
         }
 
         // --- render --------------------------------------------------------
@@ -5100,14 +7510,15 @@ int main(int argc, char** argv) {
             ? stack.layer(activeLayer).gravity().up_vector()
             : vec3{0.0f, 0.0f, 1.0f};
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
-        float eyeAspect = fbh > 0 ? (static_cast<float>(fbw) * 0.5f) / static_cast<float>(fbh) : 1.0f;
-        StereoCameraMatrices stereoCam = compute_stereo_camera(reg, eyeAspect, vrIpd, worldUp);
 
         hud.begin_frame();
         // Худ ИГРОКА ([hud_ui.h]) — таблица элементов по углам стекла. Только
         // в Playing: пауза показывает меню, заставка — ничего. Рисуется и при
         // открытом окне/консоли — стекло не гаснет от того, что поверх него
         // подняли аппаратуру.
+        // Табличка интеракции — элемент худа ([hud_ui.h]); буфер живёт кадр
+        // рендера, пока hud_ui_draw не отрисует строку.
+        char interactBuf[96];
         if (shell.screen == AppScreen::Playing) {
             HudContext hctx;
             hctx.reg = &reg;
@@ -5116,17 +7527,35 @@ int main(int argc, char** argv) {
             hctx.status = &playerStatus;
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
-            hctx.vrMode = vrMode;
-            if (gasPass.ready() && reg.valid(player)) {
+            hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
+            // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца 2026-08-28):
+            // под прицелом ровно одна цель, текст — из таблицы интерактивов
+            // (или состояния двери), клавиша — из биндов. Жила отдельным
+            // окном под showHud — флагом ДЕБАГ-панели: игрок с чистым худом
+            // не видел «F» никогда. Теперь это элемент стекла.
+            if (shell.playing() && reg.valid(player) &&
+                activeLayer != kInvalidLayer) {
+                if (const char* what = game::focus_prompt(
+                        g_focus, stack.layer(activeLayer), doors)) {
+                    std::snprintf(interactBuf, sizeof interactBuf, "[%s]  %s",
+                                  bind_key("interact"), what);
+                    hctx.interactPrompt = interactBuf;
+                }
+            }
+            // Среда клетки под телом — из АГРЕГАТА автомата (S16.4): один
+            // путь для HUD, дыхания и плавучести, спецсистем нет (S16.6).
+            if (reg.valid(player) && activeLayer != kInvalidLayer) {
                 const vec3& gp = reg.get<Transform>(player).pos;
-                const std::uint32_t cell = gasPass.sample_cell(
-                    static_cast<int>(std::floor(gp.x / kCellSize)),
-                    static_cast<int>(std::floor(gp.y / kCellSize)),
-                    static_cast<int>(std::floor(gp.z / kCellSize)));
-                hctx.gas.tox = static_cast<std::uint8_t>(cell & 0xFFu);
-                hctx.gas.smoke = static_cast<std::uint8_t>((cell >> 8) & 0xFFu);
-                hctx.gas.oxy = static_cast<std::uint8_t>((cell >> 16) & 0xFFu);
-                hctx.gas.heat = static_cast<std::uint8_t>((cell >> 24) & 0xFFu);
+                const std::uint32_t lvl = medium_level_at(
+                    stack.layer(activeLayer),
+                    macro_index(wrap_macro(static_cast<int>(
+                                    std::floor(gp.x / kCellSize))),
+                                wrap_macro(static_cast<int>(
+                                    std::floor(gp.y / kCellSize))),
+                                wrap_macro(static_cast<int>(
+                                    std::floor(gp.z / kCellSize)))));
+                hctx.gas.water = static_cast<std::uint16_t>(lvl & 0xFFFFu);
+                hctx.gas.gas = static_cast<std::uint16_t>(lvl >> 16);
                 hctx.gas.valid = true;
             }
             hud_ui_draw(hctx);
@@ -5139,8 +7568,13 @@ int main(int argc, char** argv) {
         {
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
             ImGui::Begin("gigahrush2");
-            ImGui::Text("%.1f FPS (%.2f ms)", frameDt > 0 ? 1.0f / frameDt : 0.0f,
-                        frameDt * 1000.0f);
+            // Разрешение — рядом с FPS: вся по-пиксельная работа света
+            // множится на эту площадь, и вопрос «в чём мы вообще рисуем» не
+            // должен решаться скриншотом (macOS снимает их всегда в нативных
+            // пикселях Retina, независимо от свапчейна).
+            ImGui::Text("%.1f FPS (%.2f ms) @ %dx%d (%.1f Mpx)",
+                        frameDt > 0 ? 1.0f / frameDt : 0.0f, frameDt * 1000.0f,
+                        fbw, fbh, static_cast<float>(fbw) * fbh * 1e-6f);
 #ifndef NDEBUG
             // A slow frame must never be mistaken for a code regression when it
             // is really an unoptimized tree (see the [build] line at launch).
@@ -5229,12 +7663,13 @@ int main(int argc, char** argv) {
                             "%zu cloths (gpu %u)",
                             hudAb ? hudAb->instances.size() : 0,
                             hudAb ? hudAb->wires.size() : 0,
-                            wirePass.chain_count(),
+                            verletPass.chain_count(),
                             hudAb ? hudAb->cloths.size() : 0,
-                            clothPass.sheet_count());
+                            verletPass.sheet_count());
                 ImGui::Text("particles: %u alive / %u spawned | %zu drip emitters",
-                            particlePass.alive_count(),
-                            particlePass.spawned_total(), dripEmitters.size());
+                            verletPass.particle_alive_count(),
+                            verletPass.particle_spawned_total(),
+                            dripEmitters.size());
             }
             std::int16_t php = 0, pmax = 0;
             if (game::entity_health(reg, pool, player, php, pmax))
@@ -5324,7 +7759,11 @@ int main(int argc, char** argv) {
                             ImGui::Text("gun: %s  %u x%u dmg  %u/%u mag  "
                                         "%u shots %u hits",
                                         game::item_name(g_), rd->dmg, rd->pellets,
-                                        prs ? prs->magCount : 0, rd->magazine,
+                                        prs ? (prs->hand[0].weapon == g_
+                                                   ? prs->hand[0].magCount
+                                                   : prs->hand[1].magCount)
+                                            : 0,
+                                        rd->magazine,
                                         prs ? prs->shots : 0, prs ? prs->hits : 0);
                     }
                     {
@@ -5395,9 +7834,6 @@ int main(int argc, char** argv) {
                 // is a save the player only finds out about by losing a run.
                 if (saveLine[0] && simTick - saveLineAt < 6u * kSimHz)
                     ImGui::TextUnformatted(saveLine);
-                ImGui::Text("doors %u built | %u shut | %u broken | %u pressing%s",
-                            doorsBuilt, doors.shut, doors.broken, doorTick.pressing,
-                            doors.frozen ? "  (frozen: nav baking)" : "");
                 ImGui::Text("loot %d rub (%d/%d slots) | healed %d | band E%u",
                             carried, slots, game::kInvSlots, healed,
                             game::economy_band(currentFloor));
@@ -5471,14 +7907,13 @@ int main(int argc, char** argv) {
                             macroSim.day(),
                             static_cast<unsigned long long>(macroStats.tick), feudHits,
                             relTick.kills, relTick.changes);
-                // The utility AI, and it reads ZERO on purpose while aiCfg.enabled is false
-                // — a dormant system that shows nothing is indistinguishable from a missing
-                // one, which is how the parked call rotted unnoticed for weeks. `ai/wander`
-                // is the single-writer split: those two must never both be non-zero for the
-                // same body on the same tick, and that is what suite_utilai measures. [ai.h]
-                ImGui::Text("ai %s | %u seen / %u replan / %u switch | own ai %u / wander %u"
+                // `ai/wander` — single-writer split: те двое не бывают
+                // ненулевыми на одном теле в один тик (suite_utilai). Ветка
+                // «off (dormant)» была недостижима (enabled константно true
+                // с включения толпы) — врущий тернарник убит (К1-15). [ai.h]
+                ImGui::Text("ai ON | %u seen / %u replan / %u switch | own ai %u / wander %u"
                             " | mem %u recall / %u filed / %u fled",
-                            aiCfg.enabled ? "ON" : "off (dormant)", aiTick.considered,
+                            aiTick.considered,
                             aiTick.replanned, aiTick.switches, aiTick.aiOwned,
                             aiTick.wanderOwned, aiTick.recalled, aiTick.remembered,
                             aiTick.memoryFled);
@@ -5574,18 +8009,20 @@ int main(int argc, char** argv) {
                             samosborCycles, fogScale, samosborDamage);
                 if (elevDiagLine[0] && simTick - elevDiagAt < 8u * kSimHz)
                     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s", elevDiagLine);
-                // Атмосфера клетки под камерой — ЧИТАТЕЛЬ газовой петли
-                // ([gpu_gas_pass.h] sample_cell): без этой строки петля была
-                // бы диспатчем в никуда.
-                if (gasPass.ready() && reg.valid(player)) {
+                // Среда клетки под камерой — читатель агрегата автомата
+                // ([world/medium.h], S16.4): кванты жидкости и газа.
+                if (reg.valid(player) && activeLayer != kInvalidLayer) {
                     const vec3& gp = reg.get<Transform>(player).pos;
-                    const std::uint32_t cell = gasPass.sample_cell(
-                        static_cast<int>(std::floor(gp.x / kCellSize)),
-                        static_cast<int>(std::floor(gp.y / kCellSize)),
-                        static_cast<int>(std::floor(gp.z / kCellSize)));
-                    ImGui::Text("gas: tox %u smoke %u oxy %u heat %u",
-                                cell & 0xFFu, (cell >> 8) & 0xFFu,
-                                (cell >> 16) & 0xFFu, (cell >> 24) & 0xFFu);
+                    const std::uint32_t lvl = medium_level_at(
+                        stack.layer(activeLayer),
+                        macro_index(wrap_macro(static_cast<int>(
+                                        std::floor(gp.x / kCellSize))),
+                                    wrap_macro(static_cast<int>(
+                                        std::floor(gp.y / kCellSize))),
+                                    wrap_macro(static_cast<int>(
+                                        std::floor(gp.z / kCellSize)))));
+                    ImGui::Text("medium: water %u gas %u (кванты клетки)",
+                                lvl & 0xFFFFu, lvl >> 16);
                 }
             }
             {
@@ -5745,13 +8182,12 @@ int main(int argc, char** argv) {
                 InvUiPolicy policy{};  // self-режим: см. [inventory.md]
                 policy.allowUse = false;  // послотовый Use придёт с примитивом
 
-                // Вторая сторона: живые слоты цели. Ящик хранит POD-тройки —
-                // зеркалим их во временные ItemSlot на кадр (виджет только
-                // читает); труп отдаёт свои ItemSlot как есть.
+                // Вторая сторона: живые слоты цели. Держатель канонический
+                // (B3): ящик отдаёт свои ItemSlot НАПРЯМУЮ, зеркало-копия
+                // умерла вместе с POD-тройками.
                 game::Container* boxC = nullptr;
                 game::Corpse* corpseC = nullptr;
                 game::Inventory* npcInv = nullptr;
-                game::ItemSlot boxView[game::kContainerSlots];
                 InvUiSide side{};
                 game::BarterPreview bpv{};
                 game::BarterTerms bterms{};
@@ -5803,20 +8239,19 @@ int main(int argc, char** argv) {
                     policy.dealOk = bpv.ok;
                 } else if (lootEntity != entt::null) {
                     if (lootIsCorpse) {
+                        // C: лут трупа — ТОТ ЖЕ Container, что у ящика; ветка
+                        // отличается титулом и флагом searched. take/give идут
+                        // общим box-путём — второго механизма нет (S11).
                         corpseC = reg.try_get<game::Corpse>(lootEntity);
-                        if (corpseC) {
+                        boxC = reg.try_get<game::Container>(lootEntity);
+                        if (boxC) {
                             side.title = "ТРУП";
-                            side.slots = corpseC->lootSlots;
-                            side.count =
-                                static_cast<int>(game::kMaxCorpseSlots);
+                            side.slots = boxC->inv.slots;
+                            side.count = game::kInvSlots;
                         }
                     } else {
                         boxC = reg.try_get<game::Container>(lootEntity);
                         if (boxC) {
-                            for (int i = 0; i < game::kContainerSlots; ++i)
-                                boxView[i] = game::ItemSlot{
-                                    boxC->item[i], boxC->count[i],
-                                    boxC->condition[i]};
                             switch (static_cast<game::ContainerKind>(
                                 boxC->kind)) {
                                 case game::ContainerKind::Safe:
@@ -5827,8 +8262,8 @@ int main(int argc, char** argv) {
                                     side.title = "ТАЙНИК"; break;
                                 default: side.title = "ЯЩИК"; break;
                             }
-                            side.slots = boxView;
-                            side.count = game::kContainerSlots;
+                            side.slots = boxC->inv.slots;
+                            side.count = game::kInvSlots;
                         }
                     }
                 }
@@ -5839,52 +8274,49 @@ int main(int argc, char** argv) {
                 // и Take, и TakeAll ходят сюда, третьей копии закона нет.
                 auto take_box_slot = [&](int i) {
                     if (!boxC) return;
-                    if (!game::item_valid(boxC->item[i]) || boxC->count[i] == 0)
-                        return;
+                    game::ItemSlot& sl = boxC->inv.slots[i];
+                    if (!game::item_valid(sl.item) || sl.count == 0) return;
                     const std::uint16_t unplaced = game::inventory_give(
-                        pinv, boxC->item[i], boxC->count[i],
-                        boxC->condition[i]);
-                    const std::uint16_t moved = static_cast<std::uint16_t>(
-                        boxC->count[i] - unplaced);
-                    if (moved == 0) return;  // сумка полна — остаток в ящике
-                    const std::int32_t v =
-                        game::item_def(boxC->item[i]).value * moved;
-                    loot += v;
-                    containerTake += v;
-                    boxC->count[i] = unplaced;
-                    if (boxC->count[i] == 0) boxC->item[i] = game::kInvalidItem;
-                };
-                auto take_corpse_slot = [&](int i) {
-                    if (!corpseC) return;
-                    game::ItemSlot& s = corpseC->lootSlots[i];
-                    if (!game::item_valid(s.item) || s.count == 0) return;
-                    const std::uint16_t unplaced = game::inventory_give(
-                        pinv, s.item, s.count, s.condition);
+                        pinv, sl.item, sl.count, sl.condition);
                     const std::uint16_t moved =
-                        static_cast<std::uint16_t>(s.count - unplaced);
-                    if (moved == 0) return;
-                    loot += game::item_def(s.item).value * moved;
-                    s.count = unplaced;
-                    if (s.count == 0) s = game::ItemSlot{};
+                        static_cast<std::uint16_t>(sl.count - unplaced);
+                    if (moved == 0) return;  // сумка полна — остаток в ящике
+                    // Ценность руками считает carried (живой инвентарь).
+                    containerTake += game::item_def(sl.item).value * moved;
+                    sl.count = unplaced;
+                    if (sl.count == 0) sl = game::ItemSlot{};
+                };
+                // ДЕЯНИЕ «обыск/кража» (S14.2 + S19): взятие из контейнера в
+                // комнате, владельцем которой стоит ЧУЖАЯ фракция, — rob; из
+                // ничьей — обыск, цены нет. Владельцы сегодня не назначаются
+                // (решение владельца 2026-09-05: owner == 0 до agent-goals) —
+                // шов спит и оживёт раздачей владельцев без правки здесь.
+                // Одно деяние на ДЕЙСТВИЕ (Take/TakeAll), не на слот.
+                auto publish_rob_if_owned = [&](std::int32_t takenBefore) {
+                    if (containerTake == takenBefore) return; // ничего не взято
+                    if (!reg.valid(player)) return;
+                    const vec3 pp = reg.get<Transform>(player).pos;
+                    const game::RoomId rid = game::room_at(
+                        floorRooms, static_cast<int>(pp.x / kCellSize),
+                        static_cast<int>(pp.y / kCellSize),
+                        static_cast<int>(pp.z / kCellSize));
+                    const game::Room* rm = game::room_of(floorRooms, rid);
+                    if (rm == nullptr || rm->owner == 0) return; // ничья
+                    // У своей фракции не воруют (кодировка S14.3: 1..count).
+                    if (const auto* pref = reg.try_get<game::NpcRef>(player);
+                        pref != nullptr && pool.valid(pref->id) &&
+                        rm->owner <= game::kFactionCount &&
+                        pool.faction(pref->id) + 1u == rm->owner)
+                        return;
+                    game::deed_publish(bus, game::kVerbRob, player,
+                                       game::kInvalidNpc, pp, simTick);
                 };
                 // Пустая цель помечается ПОСЛЕ мутаций: opened — память карты
                 // «здесь уже был» ([container.h]), searched — её труп-близнец.
                 auto mark_if_empty = [&]() {
-                    if (boxC) {
-                        bool empty = true;
-                        for (int i = 0; i < game::kContainerSlots; ++i)
-                            if (game::item_valid(boxC->item[i]) &&
-                                boxC->count[i])
-                                empty = false;
-                        if (empty) boxC->opened = true;
-                    }
-                    if (corpseC) {
-                        bool empty = true;
-                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
-                            if (game::item_valid(corpseC->lootSlots[i].item) &&
-                                corpseC->lootSlots[i].count)
-                                empty = false;
-                        if (empty) corpseC->searched = true;
+                    if (boxC && boxC->inv.empty()) {
+                        if (corpseC) corpseC->searched = true;
+                        else boxC->opened = true;
                     }
                 };
 
@@ -5925,19 +8357,19 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::Take: {
-                        if (boxC && r.slot < game::kContainerSlots)
+                        const std::int32_t before = containerTake;
+                        if (boxC && r.slot < game::kInvSlots)
                             take_box_slot(r.slot);
-                        else if (corpseC && r.slot < game::kMaxCorpseSlots)
-                            take_corpse_slot(r.slot);
+                        publish_rob_if_owned(before);
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
                     }
                     case InvUiRequest::Kind::TakeAll: {
-                        for (int i = 0; i < game::kContainerSlots; ++i)
+                        const std::int32_t before = containerTake;
+                        for (int i = 0; i < game::kInvSlots; ++i)
                             take_box_slot(i);
-                        for (std::size_t i = 0; i < game::kMaxCorpseSlots; ++i)
-                            take_corpse_slot(static_cast<int>(i));
+                        publish_rob_if_owned(before);
                         mark_if_empty();
                         game::sync_armour(reg, pool, player);
                         break;
@@ -5947,54 +8379,11 @@ int main(int argc, char** argv) {
                         if (!game::item_valid(s.item) || s.count == 0) break;
                         bool placed = false;
                         if (boxC) {
-                            // Сначала доложить в одноимённый стек ТОГО ЖЕ
-                            // износа (закон inventory_give: смешать байты —
-                            // заразить свежий стек), потом в пустую ячейку.
-                            const std::uint16_t stackMax =
-                                game::item_def(s.item).stackMax;
-                            for (int i = 0; i < game::kContainerSlots && !placed;
-                                 ++i)
-                                if (boxC->item[i] == s.item &&
-                                    boxC->condition[i] == s.condition &&
-                                    boxC->count[i] < stackMax) {
-                                    ++boxC->count[i];
-                                    placed = true;
-                                }
-                            for (int i = 0; i < game::kContainerSlots && !placed;
-                                 ++i)
-                                if (!game::item_valid(boxC->item[i]) ||
-                                    boxC->count[i] == 0) {
-                                    boxC->item[i] = s.item;
-                                    boxC->count[i] = 1;
-                                    boxC->condition[i] = s.condition;
-                                    placed = true;
-                                }
-                        } else if (corpseC) {
-                            const std::uint16_t stackMax =
-                                game::item_def(s.item).stackMax;
-                            for (std::size_t i = 0;
-                                 i < game::kMaxCorpseSlots && !placed; ++i) {
-                                game::ItemSlot& cs = corpseC->lootSlots[i];
-                                if (cs.item == s.item &&
-                                    cs.condition == s.condition &&
-                                    cs.count < stackMax) {
-                                    ++cs.count;
-                                    placed = true;
-                                }
-                            }
-                            for (std::size_t i = 0;
-                                 i < game::kMaxCorpseSlots && !placed; ++i) {
-                                game::ItemSlot& cs = corpseC->lootSlots[i];
-                                if (!game::item_valid(cs.item) ||
-                                    cs.count == 0) {
-                                    cs = game::ItemSlot{s.item, 1, s.condition};
-                                    if (static_cast<std::size_t>(
-                                            corpseC->slotCount) <= i)
-                                        corpseC->slotCount =
-                                            static_cast<std::uint8_t>(i + 1);
-                                    placed = true;
-                                }
-                            }
+                            // B3: ручная двухфазка умерла — ЕДИНСТВЕННЫЙ
+                            // примитив inventory_give (он же хранит закон
+                            // «не смешивать износ»).
+                            placed = game::inventory_give(boxC->inv, s.item, 1,
+                                                          s.condition) == 0;
                         }
                         if (placed) {
                             if (--s.count == 0) s = game::ItemSlot{};
@@ -6003,10 +8392,30 @@ int main(int argc, char** argv) {
                         }
                         break;
                     }
-                    case InvUiRequest::Kind::Equip:
-                        if (game::equip_item(pinv, peq, r.slot))
+                    case InvUiRequest::Kind::Equip: {
+                        // Адрес руки несёт заявка (two-hands.md): Weapon =
+                        // ЛКМ, Tool = ПКМ; броня — по def, как раньше.
+                        // Рука, занятая НЕСОМЫМ пропом, экипировку не берёт
+                        // (эмерджентность владельца: проп занимает руку).
+                        bool handBusy = false;
+                        if (game::hand_accepts(r.eqSlot)) {
+                            const std::uint8_t h =
+                                r.eqSlot == game::EquipSlot::Tool ? 1u : 0u;
+                            for (auto ce : reg.view<CarriedBy>()) {
+                                const auto& cb = reg.get<CarriedBy>(ce);
+                                if (cb.carrier == player && cb.hand == h)
+                                    handBusy = true;
+                            }
+                        }
+                        if (!handBusy &&
+                            (game::hand_accepts(r.eqSlot)
+                                 ? game::equip_hand(
+                                       pinv, peq, r.slot,
+                                       r.eqSlot == game::EquipSlot::Tool)
+                                 : game::equip_item(pinv, peq, r.slot)))
                             game::sync_armour(reg, pool, player);
                         break;
+                    }
                     case InvUiRequest::Kind::Unequip:
                         game::unequip_slot(peq, r.eqSlot);
                         game::sync_armour(reg, pool, player);
@@ -6138,12 +8547,14 @@ int main(int argc, char** argv) {
             }
         }
 
-        // --- THE SHAFT MENU -------------------------------------------------
+        // --- THE LIFT MENU --------------------------------------------------
         // The manifesto (p.4) asks for three KINDS of transition: a fixed
         // fast-travel grid, a procedural ride down, and a procedural ride up. It
         // spells that as three separate 4x4 sets of columns — 48 shafts. Owner's
-        // decision 2026-08-12: keep ONE set of 16 and let the column offer all three,
-        // which is what this window is.
+        // decision 2026-08-12: keep ONE set and let the column offer all three,
+        // which is what this window is. Owner's decision 2026-08-27
+        // (elevators-2x2.md): lifts sit on the 2×2 SUBSET of the lattice — 4
+        // cabins per floor; the other 12 columns stay geometry without a menu.
         //
         // That is not only cheaper to build, it is the only version that does not
         // move `kLatticeDim` — and `nav::kNodes == kLatticeCount == kLatticeDim^3`,
@@ -6166,21 +8577,49 @@ int main(int argc, char** argv) {
             if (ImGui::Begin("ЛИФТ / ELEVATOR", &elevOpen)) {
                 if (shaft < 0) {
                     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
-                                       "[NOT IN A SHAFT]");
+                                       "[NOT IN A LIFT]");
                     ImGui::TextWrapped(
-                        "Встаньте в колонну лифта — 16 шахт на решётке 4x4, "
-                        "одинаково на каждом этаже.");
+                        "Встаньте в кабину лифта — 4 лифта на узлах 2x2 "
+                        "(каждый второй узел решётки), одинаково на каждом "
+                        "этаже.");
                 } else {
-                    ImGui::Text("ШАХТА %d  |  ЭТАЖ %d", shaft, currentFloor);
+                    ImGui::Text("ЛИФТ %d  |  ЭТАЖ %d", shaft, currentFloor);
+                    const int cabin = game::fast_hub_at(ecx, ecy);
+                    if (cabin < 0)
+                        ImGui::TextDisabled(
+                            "встаньте в кабину (центр шахты) для поездки");
+                    // ПОСАДКА = ОТКРЫТИЕ (§24): встал в кабину с открытой
+                    // панелью — этаж в сети. Раньше открывала только
+                    // консольная ft, и свежая игра видела пустой список —
+                    // бутстрап сети был мёртв (лог владельца 2026-08-27:
+                    // ни одной поездки).
+                    if (cabin >= 0) fastTravel.unlock(currentFloor);
                     ImGui::Separator();
                     refresh_console_ctx();
-                    // 1 & 2 — the procedural halves. `ride` walks to the nearest
-                    // LABELLED floor on that side, which is why this says "next"
-                    // and not "-1": a sparse stack is legal.
-                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0)))
-                        exec_command("ride down");
-                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0)))
-                        exec_command("ride up");
+                    // 1 & 2 — соседние по номерам ДОСТУПНЫ ВСЕГДА (план,
+                    // решение 2). Из кабины — честная лифтовая поездка
+                    // (Prebuild + двери по закону); вне кабины — прежний
+                    // дев-телепорт консолью.
+                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0))) {
+                        const int dst =
+                            game::next_labelled_floor(registry, currentFloor, -1);
+                        if (cabin >= 0 && dst != currentFloor) {
+                            if (start_lift_ride(dst, cabin))
+                                shell.close_window();
+                        } else if (cabin < 0) {
+                            exec_command("ride down");
+                        }
+                    }
+                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0))) {
+                        const int dst =
+                            game::next_labelled_floor(registry, currentFloor, +1);
+                        if (cabin >= 0 && dst != currentFloor) {
+                            if (start_lift_ride(dst, cabin))
+                                shell.close_window();
+                        } else if (cabin < 0) {
+                            exec_command("ride up");
+                        }
+                    }
                     ImGui::Separator();
                     // 3 — fast travel, and the list IS the unlock set. A floor the
                     // player has never boarded from is simply not here, so the gate
@@ -6194,9 +8633,21 @@ int main(int argc, char** argv) {
                         char row[64];
                         std::snprintf(row, sizeof row, "ЭТАЖ %d##ft%d", f, f);
                         if (ImGui::Button(row, ImVec2(-FLT_MIN, 0))) {
-                            char cmd[32];
-                            std::snprintf(cmd, sizeof cmd, "ft %d", f);
-                            exec_command(cmd);
+                            // Диегетический путь один — кабина: поездка через
+                            // Prebuild, двери ждут Fresh-свапа (закон дверей,
+                            // elevators-2x2.md). Консольный `ft` остаётся
+                            // дев-инструментом с прежним синхронным хитчем.
+                            int hub = -1;
+                            if (game::fast_travel_gate(fastTravel, registry,
+                                                       currentFloor, f, ecx,
+                                                       ecy, &hub) ==
+                                game::FastTravelGate::Ok) {
+                                // Посадка = открытие ЭТОГО этажа (§24) — тот
+                                // же акт, что у консольной команды.
+                                fastTravel.unlock(currentFloor);
+                                if (start_lift_ride(f, hub))
+                                    shell.close_window();
+                            }
                         }
                         ++offered;
                     }
@@ -6410,152 +8861,6 @@ int main(int argc, char** argv) {
             }
         }
 
-        // ── Contextual interaction prompt ──────────────────────────────
-        // A centered bottom-screen hint that appears when the player is
-        // close enough to interact with a door or terminal. Rendered as a
-        // borderless auto-sized ImGui window so it floats cleanly.
-        if (showHud && shell.playing() && reg.valid(player)) {
-            const vec3 ppos = reg.get<Transform>(player).pos;
-            const char* promptText = nullptr;
-            // Prompts name the BOUND key, not a literal: rebind `door` in the
-            // menu and every hint follows.
-            char promptBuf[96];
-            auto set_prompt = [&](const char* action, const char* what) {
-                std::snprintf(promptBuf, sizeof promptBuf, "[%s]  %s",
-                              bind_key(action), what);
-                promptText = promptBuf;
-            };
-
-            // Door proximity (same indexed search door_toggle_near uses)
-            std::uint32_t nearDoor = game::door_query_near(doors, ppos);
-            if (nearDoor != game::kNoDoor) {
-                const game::Door& d = doors.doors[nearDoor];
-                const bool isShutOrLocked = (d.state == static_cast<std::uint8_t>(game::DoorState::Shut) ||
-                                             d.state == static_cast<std::uint8_t>(game::DoorState::Locked));
-
-                if (isShutOrLocked && d.keycardTier > 0) {
-                    const game::Inventory* pInv = nullptr;
-                    if (const auto* nr = reg.try_get<game::NpcRef>(player)) {
-                        if (pool.valid(nr->id)) pInv = &pool.inventory(nr->id);
-                    }
-                    const bool hasCard = pInv && game::inventory_has_keycard(*pInv, d.keycardTier);
-                    set_prompt("door", hasCard ? "UNLOCK DOOR" : "KEYCARD REQUIRED");
-                } else if (isShutOrLocked) {
-                    set_prompt("door", "OPEN DOOR");
-                } else {
-                    set_prompt("door", "CLOSE DOOR");
-                }
-            }
-
-            // Terminal proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit termHit = game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM);
-                if (termHit.hit) {
-                    set_prompt("interact", game::interact_def(game::InteractKind::Terminal).prompt);
-                }
-            }
-
-            // ElectricalShield proximity -- zero-heap find_nearest ([jirnyak.md] section 18).
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit shieldHit = game::find_nearest_interactable(
-                    reg, player,
-                    game::Interactable::Kind::ElectricalShield,
-                    game::interact_def(game::InteractKind::ElectricalShield).reachM);
-                if (shieldHit.hit) {
-                    const vec3& sp = shieldHit.pos;
-                    int scx = static_cast<int>(sp.x / kCellSize);
-                    int scy = static_cast<int>(sp.y / kCellSize);
-                    int scz = static_cast<int>(sp.z / kCellSize);
-                    if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
-                        set_prompt("interact",
-                                   game::interact_def(game::InteractKind::ElectricalShield).prompt);
-                    }
-                }
-            }
-
-            // Corpse proximity — §18 find_nearest Kind::Corpse. Empty searched
-            // corpses deactivate Interactable in loot_corpse_interact, so they
-            // drop out of the query without a manual Corpse view scan.
-            if (!promptText && activeLayer != kInvalidLayer) {
-                const game::InteractionHit corpseHit =
-                    game::find_nearest_interactable(
-                        reg, player, game::Interactable::Kind::Corpse,
-                        game::interact_def(game::InteractKind::Corpse).reachM);
-                if (corpseHit.hit && reg.valid(corpseHit.entity)) {
-                    if (const game::Corpse* corpse =
-                            reg.try_get<game::Corpse>(corpseHit.entity)) {
-                        set_prompt("interact",
-                                   corpse->searched
-                                       ? "LOOT CORPSE (REMAINDER)"
-                                       : game::interact_def(game::InteractKind::Corpse).prompt);
-                    } else {
-                        set_prompt("interact",
-                                   game::interact_def(game::InteractKind::Corpse).prompt);
-                    }
-                }
-            }
-
-            // Nearby resident for body possession (P key)
-            if (!promptText) {
-                for (auto npcEnt : reg.view<const game::NpcRef, const Transform>()) {
-                    if (reg.get<const Transform>(npcEnt).layer != activeLayer) continue;
-                    if (reg.all_of<CameraTag>(npcEnt)) continue; // skip self
-                    const game::NpcId id = reg.get<const game::NpcRef>(npcEnt).id;
-                    if (!pool.valid(id) || !pool.alive(id)) continue;
-                    const vec3& npos = reg.get<const Transform>(npcEnt).pos;
-                    const float dx = wrap_delta_f(ppos.x, npos.x, kWorldExtent);
-                    const float dy = ppos.y - npos.y;
-                    const float dz = wrap_delta_f(ppos.z, npos.z, kWorldExtent);
-                    if (dx * dx + dy * dy + dz * dz < 6.0f * 6.0f) {
-                        set_prompt("possess", "POSSESS SURVIVOR");
-                        break;
-                    }
-                }
-            }
-
-            // Standing in a shaft. Ranked BELOW doors and bodies on purpose: the
-            // shaft is 3x3 and never urgent, while a door you are pressed against
-            // or a survivor you can take over both are.
-            if (!promptText) {
-                const int pcx = wrap_macro(static_cast<int>(ppos.x / kCellSize));
-                const int pcy = wrap_macro(static_cast<int>(ppos.y / kCellSize));
-                if (game::fast_hub_near(pcx, pcy) >= 0)
-                    set_prompt("elevator", "ELEVATOR");
-            }
-
-            // Bladder/Bowel pressure relief fallback
-            if (!promptText) {
-                if (const auto* nrg = reg.try_get<game::NpcRef>(player)) {
-                    if (pool.valid(nrg->id)) {
-                        const auto& nd = pool.needs(nrg->id);
-                        if (nd.pee >= 30.0f || nd.poo >= 30.0f) {
-                            set_prompt("interact", "RELIEVE BLADDER/BOWEL");
-                        }
-                    }
-                }
-            }
-
-            if (promptText) {
-                ImGuiIO& io = ImGui::GetIO();
-                ImGui::SetNextWindowPos(
-                    ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.78f),
-                    ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                ImGui::SetNextWindowBgAlpha(0.55f);
-                ImGui::Begin("##interact_prompt", nullptr,
-                             ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_AlwaysAutoResize |
-                                 ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_NoFocusOnAppearing |
-                                 ImGuiWindowFlags_NoNav |
-                                 ImGuiWindowFlags_NoMove);
-                ImGui::TextColored(ImVec4(1.0f, 0.92f, 0.55f, 1.0f),
-                                   "%s", promptText);
-                ImGui::End();
-            }
-        }
-
         // MAIN MENU — the boot screen. Extensible BY DATA like the pause menu:
         // each entry is a row, each sub-screen a page. The character-creation
         // screen ([npcs.md]: the player IS an NPC row, so creation is an editor
@@ -6670,6 +8975,13 @@ int main(int argc, char** argv) {
                         slot_dir_path(dir, sizeof dir, s);
                         std::error_code ec;
                         std::filesystem::remove_all(dir, ec);
+                        // ...и ПЕРЕСТРОИТЬ уже построенный этаж (аудит F,
+                        // жук №2): бут восстановил этаж 0 из слота по
+                        // умолчанию до всякого меню — без пересборки свежий
+                        // ран начинался среди вылутанных ящиков, чужих
+                        // трупов и обесточки покойника, и первый же leave
+                        // вписал бы это в чистый слот.
+                        rebuild_current_floor();
                         menu_start_playing();
                     }
                 }
@@ -6747,9 +9059,139 @@ int main(int argc, char** argv) {
         hud.draw_crt_overlay();
 
         // Begin command recording & compute pass before graphics render pass
+        // Дренаж дверных dirtyCells — ДО рендер-ветки (аудит 2026-08-21 №1:
+        // блок жил внутри begin_frame_cmd, и при OUT_OF_DATE свапчейна —
+        // ресайз, сворачивание — отрыв пропов и диффузионная грязь просто не
+        // происходили: физика зависела от того, взялся ли кадр. Сим никогда
+        // не зависит от рендера — закон AGENTS.md; mark_dirty зеркала — лишь
+        // запись списка, командный буфер ей не нужен).
+        // Voxel-mirror upkeep, outside the render pass: doors publish
+        // their mask edits the same way carve does ([game/door.h]
+        // dirtyCells) — drain once per frame, then record this frame's
+        // dirty-cell copies.
+        if (!doorDirty.empty()) {
+            voxelMirror.mark_dirty(doorDirty.data(), doorDirty.size());
+            nav.patch_carved_cells(stack.layer(activeLayer).grid(),
+                                   doorDirty.data(), doorDirty.size());
+            if (mediumPass.ready())
+                mediumPass.wake_cells(doorDirty.data(), doorDirty.size(),
+                                      stack.layer(activeLayer), voxelMirror);
+            antourage_carve_step_here(doorDirty, 0xD00Du);
+            // ДОЛГ ПИСАТЕЛЯ ОДИН И ПОЛНЫЙ (S20.4): дверь — писатель статики,
+            // как карв. Раньше она рвала антураж, но НЕ пропы и не будила
+            // тела — проп на атомах полотна висел после открытия, вопреки
+            // контракту prop_system.h («whatever emptied these cells»).
+            if (game::anchor_validate_step(reg, stack.layer(activeLayer),
+                                           activeLayer, bus, doorDirty,
+                                           &particleBursts, 0xD00Du) > 0)
+                propPassNeedsRebuild = true;
+            rigid_wake_dirty_cells(reg, activeLayer, doorDirty.data(),
+                                   doorDirty.size());
+            doorDirty.clear();
+        }
+
+        if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+            regrow_check(stack.layer(activeLayer), voxelMirror, "двери",
+                         simTick);
+
+        // СИМ ВНЕ РЕНДЕР-СКОБКИ (аудит 2026-08-25, тот же класс, что дренаж
+        // дверей выше): интеграция падающих ног антуража и часы истаивания
+        // проводов/тканей обязаны идти и при OUT_OF_DATE свапчейна — иначе
+        // ресайз/сворачивание окна замораживает физику. Внутри скобки
+        // остаются только записи в GPU-буферы.
+        if (!antourageFalling.empty() && activeLayer != kInvalidLayer) {
+            game::antourage_detach_step(stack.layer(activeLayer),
+                                        antourageFalling, frameDt);
+            // propPassNeedsRebuild НЕ взводится: летящие куски эмитятся из
+            // кэша слитых инстансов (К1-6), полная пересборка — только на
+            // реальную смену набора.
+        }
+        static std::vector<std::uint8_t> wireAliveFrame;
+        static std::vector<std::uint8_t> wirePinsFrame;
+        static std::vector<std::uint8_t> clothAliveFrame;
+        static std::vector<std::uint32_t> clothPinsFrame;
+        wireAliveFrame.clear();
+        wirePinsFrame.clear();
+        clothAliveFrame.clear();
+        clothPinsFrame.clear();
+        if (verletPass.ready() && activeLayer != kInvalidLayer &&
+            (verletPass.chain_count() > 0 || verletPass.sheet_count() > 0)) {
+            if (const game::AntourageBake* ab =
+                    streamer.antourage_at_layer(registry, activeLayer)) {
+                const World& wg = stack.layer(activeLayer);
+                if (verletPass.chain_count() > 0) {
+                    // One probe, two answers: the live pin mask says which
+                    // ends still hold, and "no pin left" starts the FALL. The
+                    // chain keeps simulating unpinned for kAntourageFallSec,
+                    // so it drops, lands (world_land in verlet_sim.comp) and
+                    // only then stops being drawn ([antourage.md]).
+                    // Сброс по смене (этаж, слой): смена этажа с тем же
+                    // числом проводов наследовала чужие счётчики.
+                    static game::FallClock wireFall;
+                    static int wireFallFloor = INT_MIN;
+                    static LayerId wireFallLayer = static_cast<LayerId>(~0u);
+                    if (wireFallFloor != currentFloor ||
+                        wireFallLayer != activeLayer ||
+                        wireFall.left.size() != ab->wires.size()) {
+                        wireFall.clear();
+                        wireFallFloor = currentFloor;
+                        wireFallLayer = activeLayer;
+                    }
+                    for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
+                        const std::uint8_t m =
+                            game::wire_live_pins(wg, ab->wires[wi]);
+                        wirePinsFrame.push_back(m);
+                        wireAliveFrame.push_back(
+                            wireFall.step(wi, m != 0u, frameDt) ? 1u : 0u);
+                    }
+                }
+                if (verletPass.sheet_count() > 0) {
+                    // Cloth: same aliveness law, same clock.
+                    static game::FallClock clothFall;
+                    static int clothFallFloor = INT_MIN;
+                    static LayerId clothFallLayer = static_cast<LayerId>(~0u);
+                    if (clothFallFloor != currentFloor ||
+                        clothFallLayer != activeLayer ||
+                        clothFall.left.size() != ab->cloths.size()) {
+                        clothFall.clear();
+                        clothFallFloor = currentFloor;
+                        clothFallLayer = activeLayer;
+                    }
+                    for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
+                        const std::uint32_t m =
+                            game::cloth_live_pins(wg, ab->cloths[si]);
+                        clothPinsFrame.push_back(m);
+                        clothAliveFrame.push_back(
+                            clothFall.step(si, m != 0u, frameDt) ? 1u : 0u);
+                    }
+                }
+            }
+        }
+
+        if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
+            regrow_check(stack.layer(activeLayer), voxelMirror,
+                         "перед-рендером", simTick);
+        g_frameMark.simMs = std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - g_frameT0)
+                                .count();
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
-            float currentTimeSec = static_cast<float>(SDL_GetTicks()) / 1000.0f;
+            // ВРЕМЯ ВИЗУАЛА — СИМ-ВРЕМЯ, не настенное (владелец 2026-08-20,
+            // [CANON.md] S15, шаг 0 плана time-watch). Здесь стоял
+            // `SDL_GetTicks()/1000`, и это был ЕДИНСТВЕННЫЙ вход настенных часов
+            // в картинку: мерцание ламп на CPU ([game/flicker.h]), мерцание
+            // плафонов и CRT на GPU (`torus.w` → [shaders/prop.frag]), дрожь
+            // тумана самосбора. Три следствия того, что было:
+            //   * мерцание НЕ замирало на паузе, хотя мир замирал;
+            //   * два прогона с одинаковым `simTick` давали разную картинку,
+            //     то есть свет было невозможно ни запинить, ни проверить;
+            //   * фаза цикла (S15) выводится сдвигами из `simTick`, а свет жил
+            //     в другом часовом поясе — программа щитка разъехалась бы с
+            //     календарём, и это было бы видно как рассинхрон освещения.
+            // Точность: float держит миллисекунду примерно до 4.6 часов
+            // непрерывной игры — ровно столько же, сколько держал прежний
+            // `SDL_GetTicks()/1000`, так что хуже не стало.
+            float currentTimeSec = static_cast<float>(simTick) * kSimDt;
 
             // The timer bracket is OUTSIDE the ready() test on purpose, and so is
             // every other bracket this frame writes: collect() reads the whole
@@ -6758,87 +9200,123 @@ int main(int argc, char** argv) {
             // therefore still write its pair — an adjacent begin/end reads as a
             // truthful 0.0 ms, not as a dead readout.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::LightGrid);
-            if (lightGrid.ready()) {
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
-                lightGrid.update_and_dispatch(cmd, currentTimeSec, camMat.eye);
+            if (lightGrid.ready() && !skip_pass("lightgrid")) {
+                // Свап бейка видимости (Fresh на входе этажа, Rebake фоном):
+                // залить запечённые списки и поднять bakedGen — клетки,
+                // запачканные ПОСЛЕ снапшота, остаются грязными сами
+                // ([game/rebake.h] take_light_swap).
+                if (nav.take_light_swap() && nav.light_vis().valid()) {
+                    // Подозреваемый №2 хитча карва (carve-hitch.md): цена
+                    // самого GPU-свапа. Кадр свапа ≠ кадр карва (фон), поэтому
+                    // своя строка, не компонент [carve] total.
+                    const auto ctSw = std::chrono::steady_clock::now();
+                    lightGrid.upload_baked_grid(
+                        nav.light_vis().cells.data(),
+                        nav.light_vis().cells.size(),
+                        static_cast<std::uint32_t>(nav.light_gen()));
+                    // Полный бейк лёг — списки клеток больше не ссылаются на
+                    // лампы, умершие до поколения СНАПШОТА этого бейка: их
+                    // слоты можно отдавать новым лампам (см. вывод у
+                    // g_slotDeadGen). Тег — СНАПШОТНЫЙ, не текущий (находка
+                    // №2 аудита 2026-08-23): таблица могла смениться за время
+                    // полёта бейка, и текущий тег переработал бы слот лампы,
+                    // на которую легшие списки ещё ссылаются, — клетки
+                    // светили бы чужой лампой до следующего полного бейка.
+                    g_lightVisTableGen = nav.light_table_baked_tag();
+                    light_log("[slots] full light bake landed at gen %u — dead "
+                              "slots below it are now recyclable\n",
+                              g_lightVisTableGen);
+                    g_frameMark.lightSwapMs = carve_ms_since(ctSw);
+                    std::fprintf(stderr,
+                                 "[carve] light_swap upload %.2f ms (gen %llu)\n",
+                                 static_cast<double>(g_frameMark.lightSwapMs),
+                                 static_cast<unsigned long long>(nav.light_gen()));
+                }
+                // Свап дельта-патча (carve-hitch.md §3): на GPU едут ТОЛЬКО
+                // изменённые клетки; ген поднимается и при пустом списке —
+                // грязный шар обязан очиститься даже от карва в темноте.
+                {
+                    const std::vector<std::uint32_t>* patchCells = nullptr;
+                    if (nav.take_light_patch(&patchCells) &&
+                        nav.light_vis().valid()) {
+                        const auto ctPt = std::chrono::steady_clock::now();
+                        lightGrid.upload_baked_cells(
+                            nav.light_vis().cells.data(),
+                            nav.light_vis().cells.size(), patchCells->data(),
+                            patchCells->size(),
+                            static_cast<std::uint32_t>(nav.light_gen()));
+                        std::fprintf(
+                            stderr,
+                            "[carve] light_patch upload %zu cells %.2f ms "
+                            "(gen %llu)\n",
+                            patchCells->size(), carve_ms_since(ctPt),
+                            static_cast<unsigned long long>(nav.light_gen()));
+                    }
+                }
+                const auto ctLg = std::chrono::steady_clock::now();
+                // Полный пере-сбор ламп = 0.48-0.54 мс CPU (замер К5-E1,
+                // 2026-08-26) — dirty-редизайн отложен с числом: придёт
+                // естественно с программой щитка (S15.4), которая всё равно
+                // переустроит «кто пишет интенсивности».
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, simTick, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
+                lightGrid.update_and_dispatch(cmd);
+                if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::LightGrid);
 
 
 
-            // Voxel-mirror upkeep, outside the render pass: doors publish
-            // their mask edits the same way carve does ([game/door.h]
-            // dirtyCells) — drain once per frame, then record this frame's
-            // dirty-cell copies.
-            if (!doors.dirtyCells.empty()) {
-                voxelMirror.mark_dirty(doors.dirtyCells.data(),
-                                       doors.dirtyCells.size());
-                // Door mask edits free/occupy macro cells — detach props
-                // whose anchors no longer have solid support. [jirnyak.md] s18
-                // Rebuild PropPass when anything detaches so GPU drops stale skins.
-                if (game::anchor_validate_step(reg, stack.layer(activeLayer), bus,
-                                               doors.dirtyCells, &particleBursts,
-                                               static_cast<std::uint32_t>(simTick)) > 0) {
-                    propPassNeedsRebuild = true;
-                }
-                // A door leaf sliding away empties cells too — dressing that
-                // hung off them is just as severed as by a blast.
-                if (antourage_carve_step_here(doors.dirtyCells,
-                                              static_cast<std::uint32_t>(simTick))) {
-                    propPassNeedsRebuild = true;
-                    dressingSetChanged = true;
-                }
-                // Same field-rebake debt carve pays: doors mutate occupancy
-                // masks the nav flow fields sample.
-                doors.dirtyCells.clear();
-            }
 
-            // Falling legs are integrated on the SIM's own collision predicate
-            // and re-packed while any of them is still in the air — a handful of
-            // bodies for a few seconds, so the repack is cheaper than a second
-            // draw path would be.
-            if (!antourageFalling.empty()) {
-                game::antourage_detach_step(stack.layer(activeLayer),
-                                            antourageFalling, frameDt);
-                propPassNeedsRebuild = true;
+            // (Интеграция падающих ног ушла ИЗ скобки в сим-хвост выше —
+            // аудит 2026-08-25; здесь остался только репак скинов.)
+            // Полный сбор — ТОЛЬКО на смену набора; кадры с летящими
+            // кусками эмитят из кэша (К1-6: раньше 8 с после выстрела кадр
+            // пересобирал всё с пробами сетки). Хвостовой кадр после
+            // приземления последнего куска эмитит ещё раз — убрать его скин.
+            {
+                const bool fallingActive = !antourageFalling.empty();
+                static bool fallingWasActive = false;
+                if (propPassNeedsRebuild) {
+                    const auto ctPs = std::chrono::steady_clock::now();
+                    merge_ecs_prop_meshes(reg, activeLayer, propPass,
+                                          streamer.antourage_at_layer(registry, activeLayer),
+                                          stack.layer(activeLayer), simTick,
+                                          &dripEmitters, &antourageFalling);
+                    const float psMs = carve_ms_since(ctPs);
+                    g_carveT.propSkinMs += psMs;
+                    g_frameMark.propSkinMs += psMs;
+                } else if (fallingActive || fallingWasActive) {
+                    emit_prop_instances(propPass, &antourageFalling);
+                }
+                fallingWasActive = fallingActive;
             }
-            if (propPassNeedsRebuild) {
-                merge_ecs_prop_meshes(reg, activeLayer, propPass,
-                                      streamer.antourage_at_layer(registry, activeLayer),
-                                      stack.layer(activeLayer), &dripEmitters,
-                                      &antourageFalling);
-            }
-            // Only when the dressing SET actually changed — never merely because
-            // a rigid leg is mid-fall.
-            if (dressingSetChanged) {
-                upload_wires(wirePass, streamer.antourage_at_layer(registry, activeLayer));
-                upload_cloths(clothPass, streamer.antourage_at_layer(registry, activeLayer));
-            }
-
             // GIGA_NO_GPU_CULL=1 falls back to the CPU cull — the A/B switch
             // that separates "cull.comp corrupts instances" from every other
             // mesh-path suspect in one relaunch.
             static const bool noGpuCull = std::getenv("GIGA_NO_GPU_CULL") != nullptr;
-            static const bool noWireSim = std::getenv("GIGA_WIRE_NOSIM") != nullptr;
-            static const bool noParticleSim = std::getenv("GIGA_PARTICLE_NOSIM") != nullptr;
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
-            if (!noGpuCull && !vrMode && cullPass.ready() && propPass.ready()) {
+            if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
                 const mat4 vp = mat4_mul(camMat.proj, camMat.view);
                 const uint32_t fIdx = renderer.currentFrame;
                 const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
                 const float torusPeriod = kWorldExtent;
+                // ONE shared instance buffer, shapes as ranges
+                // ([prop_pass.h] kRootPropInstances): upload cuts the ranges,
+                // the culler gets each range by offset. GpuCullPass is the
+                // only thing deciding what is drawn — PropPass stores
+                // everything the floor submitted.
+                propPass.upload_instances(fIdx);
                 for (int s = 0; s < gpu::kPropShapeCount; ++s) {
-                    uint32_t count = propPass.instance_count(s);
+                    uint32_t count = propPass.range_count(s);
                     if (count == 0) continue;
-                    vec3 bMin{-1.0f, -1.0f, -1.0f}, bMax{1.0f, 2.0f, 1.0f};
-                    gpu::GpuCullPass::get_shape_aabb(static_cast<gpu::PropShape>(s), bMin, bMax);
                     cullPass.record_cull(
                         cmd, vp, camMat.eye, fogEnd, torusPeriod,
-                        propPass.instance_buffer(s, fIdx), count,
+                        propPass.instance_buffer(fIdx),
+                        propPass.range_offset_bytes(s), count,
                         propPass.mesh(s).indexCount, 0, 0, 0,
-                        bMin, bMax,
-                        propPass.culled_instance_buffer(s, fIdx),
+                        propPass.culled_instance_buffer(fIdx),
+                        propPass.range_offset_bytes(s),
                         propPass.indirect_cmd_buffer(s, fIdx));
                 }
             } else if (propPass.ready()) {
@@ -6846,28 +9324,11 @@ int main(int argc, char** argv) {
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Cull);
 
-            // Газ: один диспатч на кадр, изотропный (regime_down активного
-            // слоя через push). Фиксированный шаг 1/60 — поле ВИЗУАЛЬНОЕ/
-            // фоновое, не сим-детерминизм; боевая подключка (удушье) пойдёт
-            // через сим-тик отдельным решением. [gpu_gas_pass.h]
-            if (gasPass.ready()) {
-                // ЗАСЕВ — лениво, по смене (этаж, слой), у самого диспатча:
-                // один писатель на все пути входа (стартовый спавн, do_ride,
-                // fast travel) ПО ПОСТРОЕНИЮ — травел-сайтная версия этого
-                // кода снята именно потому, что стартовый путь шёл мимо неё.
-                static int gasSeedFloor = INT_MIN;
-                static LayerId gasSeedLayer = static_cast<LayerId>(~0u);
-                if (gasSeedFloor != currentFloor || gasSeedLayer != activeLayer) {
-                    gasSeedFloor = currentFloor;
-                    gasSeedLayer = activeLayer;
-                    const Field<float>* gSeed =
-                        stack.layer(activeLayer).fields().find<float>(kGasField);
-                    gasPass.upload_field(gSeed ? gSeed->data().data() : nullptr);
-                }
-                const CellStep gd =
-                    regime_down(stack.layer(activeLayer).gravity().regime);
-                gasPass.record_sim(cmd, gd, 1.0f / 60.0f);
-            }
+            // Засев газа ВЫРЕЗАН (решение владельца 2026-08-25, стабилизация):
+            // газ без фикспоинта держал 50k+ клеток вечно живыми — 8 мс GPU
+            // + 5 мс CPU-шва (замер core-stabilization.md). Материал
+            // toxic_gas жив строкой CSV (`sphere toxic_gas` руками); дизайн
+            // сна сред — решение владельца перед возвратом газа.
 
             // Push bodies for the verlet passes: EVERY body on the active
             // layer (the same set BodyPass draws, PLUS the camera holder —
@@ -6883,12 +9344,13 @@ int main(int argc, char** argv) {
                     if (tr.layer != activeLayer) continue;
                     pushBodies.push_back(
                         vec4{tr.pos.x, tr.pos.y, tr.pos.z, 0.9f});
-                    if (pushBodies.size() >= gpu::kMaxPushBodies) break;
+                    if (pushBodies.size() >= gpu::kMaxPushBodies) {
+                        // S11: переполнение вслух (кричит upload_bodies —
+                        // здесь только не собираем лишнего).
+                        break;
+                    }
                 }
-                wirePass.upload_bodies(
-                    pushBodies.data(),
-                    static_cast<std::uint32_t>(pushBodies.size()));
-                clothPass.upload_bodies(
+                verletPass.upload_bodies(
                     pushBodies.data(),
                     static_cast<std::uint32_t>(pushBodies.size()));
             }
@@ -6903,189 +9365,238 @@ int main(int argc, char** argv) {
             // record, unconditionally — see the LightGrid note on why every
             // bracket must write its pair each frame.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::SimPhysics);
-            if (wirePass.ready() && wirePass.chain_count() > 0 &&
-                activeLayer != kInvalidLayer) {
-                if (const game::AntourageBake* ab =
-                        streamer.antourage_at_layer(registry, activeLayer)) {
-                    static std::vector<std::uint8_t> wireAlive, wirePins;
-                    wireAlive.clear();
-                    wirePins.clear();
-                    const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    // One probe, two answers: the live pin mask says which ends
-                    // still hold, and "no pin left" starts the FALL. The chain
-                    // keeps simulating unpinned for kAntourageFallSec, so it
-                    // drops, lands on the floor (world_land in wire_sim.comp)
-                    // and only then stops being drawn ([antourage.md]).
-                    static game::FallClock wireFall;
-                    if (wireFall.left.size() != ab->wires.size()) wireFall.clear();
-                    for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
-                        const std::uint8_t m =
-                            game::wire_live_pins(wg, ab->wires[wi]);
-                        wirePins.push_back(m);
-                        wireAlive.push_back(
-                            wireFall.step(wi, m != 0u, frameDt) ? 1u : 0u);
-                    }
+            // Реальный кадровый dt для GPU-симов (провода/ткань/частицы).
+            // Раньше здесь стояло 1/60 ЗА КАДР: на 144 FPS антураж падал в
+            // 2.4 раза быстрее, при том что FallClock строкой ниже уже жил по
+            // frameDt — две метрики времени в одном блоке. Потолок — два
+            // эталонных шага 60 Гц: верле помнит прошлую позицию, и хитч,
+            // пропущенный в dt целиком, отдаётся взрывом констрейнтов. Газ
+            // остаётся на 1/60 намеренно (см. его комментарий: поле фоновое).
+            const float gpuSimDt = std::min(frameDt, 2.0f / 60.0f);
+            if (verletPass.ready() && activeLayer != kInvalidLayer &&
+                (verletPass.chain_count() > 0 || verletPass.sheet_count() > 0)) {
+                // Живость и часы посчитаны ДО скобки (сим не зависит от
+                // рендера) — здесь только запись в GPU-буферы.
+                if (verletPass.chain_count() > 0 && !wirePinsFrame.empty()) {
                     const auto wireN =
-                        static_cast<std::uint32_t>(wirePins.size());
-                    wirePass.write_alive(wireAlive.data(), wireN);
-                    wirePass.write_pins(wirePins.data(), wireN);
+                        static_cast<std::uint32_t>(wirePinsFrame.size());
+                    verletPass.write_wire_alive(wireAliveFrame.data(), wireN);
+                    verletPass.write_wire_pins(wirePinsFrame.data(), wireN);
                 }
-                if (!noWireSim)
-                    wirePass.record_sim(
-                        cmd, 1.0f / 60.0f,
-                        stack.layer(activeLayer).gravity().global);
-            }
-
-            // Cloth verlet: same aliveness law, same clock.
-            if (clothPass.ready() && clothPass.sheet_count() > 0 &&
-                activeLayer != kInvalidLayer) {
-                if (const game::AntourageBake* ab =
-                        streamer.antourage_at_layer(registry, activeLayer)) {
-                    static std::vector<std::uint8_t> clothAlive;
-                    static std::vector<std::uint32_t> clothPins;
-                    clothAlive.clear();
-                    clothPins.clear();
-                    const MacroGrid& wg = stack.layer(activeLayer).grid();
-                    static game::FallClock clothFall;
-                    if (clothFall.left.size() != ab->cloths.size())
-                        clothFall.clear();
-                    for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
-                        const std::uint32_t m =
-                            game::cloth_live_pins(wg, ab->cloths[si]);
-                        clothPins.push_back(m);
-                        clothAlive.push_back(
-                            clothFall.step(si, m != 0u, frameDt) ? 1u : 0u);
-                    }
+                if (verletPass.sheet_count() > 0 && !clothPinsFrame.empty()) {
                     const auto clothN =
-                        static_cast<std::uint32_t>(clothPins.size());
-                    clothPass.write_alive(clothAlive.data(), clothN);
-                    clothPass.write_pins(clothPins.data(), clothN);
+                        static_cast<std::uint32_t>(clothPinsFrame.size());
+                    verletPass.write_cloth_alive(clothAliveFrame.data(),
+                                                 clothN);
+                    verletPass.write_cloth_pins(clothPinsFrame.data(), clothN);
                 }
-                if (!noWireSim)
-                    clothPass.record_sim(
-                        cmd, 1.0f / 60.0f,
-                        stack.layer(activeLayer).gravity().global);
             }
 
             if (!stainDirty.empty()) {
+                // В7 (Автомат-2 инкр. 4): грязь — писатель, а запись
+                // будит; прежде страница откатывалась зеркалом БЕЗ
+                // пробуждения — GPU-состояние клетки затиралось молча.
+                mediumPass.wake_cells(stainDirty.data(), stainDirty.size(),
+                                      stack.layer(activeLayer), voxelMirror);
                 voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
                 stainDirty.clear();
             }
+            // МИР-АВТОМАТ: apply_readback и poll_activity ушли в НАЧАЛО
+            // кадра (до сим-писателей); здесь остался только диспатч
+            // подтиков после flush.
+            // Дренаж очереди пробуждений — ДО flush: страницы фронтира
+            // порции обязаны уехать на GPU этим же кадром, а инжект-буфер
+            // порции съест record_substeps ниже. Остаток очереди честно
+            // переносится (см. drain_wakes — прежний кап молча терял).
+            mediumPass.drain_wakes(stack.layer(activeLayer), voxelMirror);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
+            const auto ctVf = std::chrono::steady_clock::now();
             voxelMirror.flush(cmd, renderer.currentFrame,
                               stack.layer(activeLayer));
+            g_carveT.flushMs = carve_ms_since(ctVf);
             renderer.timer.pass_end(cmd, gpu::GpuPass::VoxelFlush);
+
+            // МИР-АВТОМАТ: подтики, назревшие по сим-часам (каждый 4-й
+            // сим-тик), СРАЗУ после flush — писатели CPU легли, барьеры
+            // внутри record_substeps упорядочат автомат до читателей кадра.
+            if (mediumPass.ready()) {
+                const std::uint64_t mediumTarget = simTick / 4;
+                std::uint64_t owed = mediumTarget > mediumSubstepsDone
+                                         ? mediumTarget - mediumSubstepsDone
+                                         : 0;
+                // Кап 8 подтиков/кадр: длинный фриз списывается вслух, а не
+                // раскручивает спираль догоняния (материя в лагах идёт чуть
+                // медленнее реального такта — честный компромисс).
+                constexpr std::uint64_t kMediumMaxPerFrame = 8;
+                if (owed > kMediumMaxPerFrame) {
+                    std::fprintf(stderr,
+                                 "[medium] dropping %llu substeps after a "
+                                 "stall (cap %llu/frame)\n",
+                                 static_cast<unsigned long long>(
+                                     owed - kMediumMaxPerFrame),
+                                 static_cast<unsigned long long>(
+                                     kMediumMaxPerFrame));
+                    mediumSubstepsDone = mediumTarget - kMediumMaxPerFrame;
+                    owed = kMediumMaxPerFrame;
+                }
+                // Звать и при owed == 0: обратный шов (ридбек страниц живых
+                // клеток) едет каждый кадр — хвост последнего подтика
+                // доезжает в CPU-канон спокойным кадром.
+                const CellStep md = regime_down(
+                    stack.layer(activeLayer).gravity().regime);
+                const auto ctMedR = std::chrono::steady_clock::now();
+                mediumPass.record_substeps(
+                    cmd, static_cast<std::uint32_t>(owed), md,
+                    mediumSubstepsDone, stack.layer(activeLayer),
+                    renderer.currentFrame, voxelMirror.flush_gen());
+                g_mediumRecMs = carve_ms_since(ctMedR);
+                mediumSubstepsDone += owed;
+                // Числа каждый прогон (S11): раз в игровую секунду, пока
+                // есть живая материя или переполнение.
+                static std::uint64_t mediumLastLog = 0;
+                static const bool kMediumDbg =
+                    std::getenv("GIGA_MEDIUM_DBG") != nullptr;
+                if (kMediumDbg &&
+                    (mediumPass.live_count() > 0 || mediumPass.overflowed()) &&
+                    simTick - mediumLastLog >= 125) {
+                    mediumLastLog = simTick;
+                    std::fprintf(
+                        stderr,
+                        "[medium] live %u cells (active %u), %u quanta (%.0f l), woken %u, "
+                        "slept %u, lazy %u, listTot %u, fade %u, skip %u, substeps %llu | cpu ms: apply "
+                        "%.2f rec %.2f%s\n",
+                        mediumPass.live_count(), mediumPass.active_count(),
+                        mediumPass.live_quanta(),
+                        static_cast<double>(mediumPass.live_quanta()) * 15.6,
+                        mediumPass.woken_total(), mediumPass.slept_total(),
+                        mediumPass.lazy_total(), mediumPass.list_total(),
+                        mediumPass.fade_total(), mediumPass.stale_skips(),
+                        static_cast<unsigned long long>(mediumSubstepsDone),
+                        static_cast<double>(g_mediumApplyMs),
+                        static_cast<double>(g_mediumRecMs),
+                        mediumPass.overflowed() ? " [WAKE CARRY]" : "");
+                }
+            }
+
+            // Покомпонентная строка хитча карва — каждый карв, числом, а не
+            // ощущением ([markoaudit/plans/carve-hitch.md] гейты). total =
+            // карв-сайт + хвост кадра; unmeasured = site − Σ компонентов сайта
+            // (если хитч там — меряли не то). lgrid/flush идут каждый кадр —
+            // на кадре карва интересен их всплеск над фоновым уровнем.
+            if (g_carveT.carved) {
+                const float compSum = g_carveT.sphereMs + g_carveT.lightMatMs +
+                                      g_carveT.mirrorMarkMs + g_carveT.diffMs +
+                                      g_carveT.patchMs +
+                                      g_carveT.partMs + g_carveT.anchorMs +
+                                      g_carveT.antrMs;
+                g_frameMark.carveMs = g_carveT.siteMs + g_carveT.propSkinMs +
+                                      g_carveT.lgridMs + g_carveT.flushMs;
+                std::fprintf(
+                    stderr,
+                    "[carve] total %.2f ms (%zu cells): light_mat %.2f, "
+                    "prop_skin %.2f, mirror_mark %.2f, "
+                    "mirror_flush %.2f, lgrid %.2f, sphere %.2f, diff %.2f, "
+                    "patch %.2f, anchor %.2f, antr %.2f, part %.2f, "
+                    "unmeasured %.2f\n",
+                    static_cast<double>(g_carveT.siteMs + g_carveT.propSkinMs +
+                                        g_carveT.lgridMs + g_carveT.flushMs),
+                    g_carveT.cells, static_cast<double>(g_carveT.lightMatMs),
+                    static_cast<double>(g_carveT.propSkinMs),
+                    static_cast<double>(g_carveT.mirrorMarkMs),
+                    static_cast<double>(g_carveT.flushMs),
+                    static_cast<double>(g_carveT.lgridMs),
+                    static_cast<double>(g_carveT.sphereMs),
+                    static_cast<double>(g_carveT.diffMs),
+                    static_cast<double>(g_carveT.patchMs),
+                    static_cast<double>(g_carveT.anchorMs),
+                    static_cast<double>(g_carveT.antrMs),
+                    static_cast<double>(g_carveT.partMs),
+                    static_cast<double>(g_carveT.siteMs - compSum));
+            }
+            g_carveT = CarveTiming{};
 
             // Particle sim AFTER the mirror flush: its barrier orders the
             // masks transfer before compute reads, so a particle collides
             // with THIS frame's carve holes, not last frame's walls.
             // Gravity is the layer's declared VECTOR — the flush above already
             // dereferences activeLayer, so it is valid here.
-            if (!noParticleSim)
-                particlePass.record_sim(
-                    cmd, 1.0f / 60.0f,
+            // ЕДИНЫЙ верле-сим (антураж + частицы) — ПОСЛЕ flush зеркала:
+            // теперь и антураж коллизит с дырами ЭТОГО кадра, не прошлого
+            // (частицы жили так всегда; слияние подарило закон обоим).
+            // GIGA_WIRE_NOSIM / GIGA_PARTICLE_NOSIM пасс читает сам.
+            if (activeLayer != kInvalidLayer)
+                verletPass.record_sim(
+                    cmd, gpuSimDt,
                     stack.layer(activeLayer).gravity().global);
             renderer.timer.pass_end(cmd, gpu::GpuPass::SimPhysics);
 
-            renderer.begin_pass(0.0f, 0.0f, 0.0f);
-
+            gpu::CubePush push{};
+            push.viewProj = mat4_mul(camMat.proj, camMat.view);
+            // Лейна sunDir СНЕСЕНА из CubePush (К5, 2026-08-25): солнце
+            // вырезано в ноль решением владельца, последний читатель
+            // (fill-inscatter тумана) стал тождественным нулём и удалён.
+            // w = 0: лейна мертва с гибели налобника (S5). Ноль, а не мусор —
+            // чтобы шейдер, случайно прочитавший её, не получил свет из воздуха.
+            push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z, 0.0f};
             const float fogScale = samosbor_fog_scale(samosbor);
             const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
+            // z = 0: бывший радиус налобника, мёртвая лейна (S5). Туман её
+            // никогда не читал — только x/y, — поэтому обнуление безопасно.
+            push.fog = vec4{kWorldExtent * 0.25f * fogScale,
+                            kWorldExtent * 0.50f * fogScale,
+                            0.0f, kAmbient};
+            // The wrap period, so cube.vert can place each cell at its nearest
+            // toroidal image itself. Instance origins are absolute, which is what
+            // makes the cube pass's instance cache possible.
+            push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
 
+            // ПОЛУРЕЗНЫЙ СВЕТОВОЙ ПОЛУПАСС — до главного рендер-пасса, тем же
+            // пушем: весь световой цикл (лампы + теневые DDA-лучи) на
+            // полразрешения, полный кадр возьмёт его билатерально
+            // ([render/raymarch_pass.h] record_light, ddalight.md).
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Light);
+            if (!skip_pass("world"))
+                raymarchPass.record_light(cmd, renderer.currentFrame, push,
+                                          lightGrid.descriptor_set(),
+                                          renderer.swap().extent);
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Light);
+
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Raster);
+            renderer.begin_pass(0.0f, 0.0f, 0.0f);
+            // Each pass is bracketed by GPU timestamps as well as by the CPU
+            // clock: the two answer different questions and need opposite fixes.
+            // The CPU figure is time spent building instance data on this thread;
+            // the GPU figure is what the hardware then spent rasterising it.
             std::uint64_t t0 = SDL_GetPerformanceCounter();
-            std::uint64_t t1 = t0;
-
-            if (vrMode && stereoCam.valid) {
-                // Stereoscopic Side-by-Side (SBS) rendering for Meta Quest 2
-                const uint32_t totalW = renderer.swap().extent.width;
-                const uint32_t totalH = renderer.swap().extent.height;
-                const uint32_t halfW = totalW / 2;
-                const CameraMatrices* eyeCams[2] = {&stereoCam.left, &stereoCam.right};
-
-                for (uint32_t eye = 0; eye < 2; ++eye) {
-                    const CameraMatrices& eyeCam = *eyeCams[eye];
-
-                    VkViewport vp{};
-                    vp.x = eye == 0 ? 0.0f : static_cast<float>(halfW);
-                    vp.y = 0.0f;
-                    vp.width = eye == 0 ? static_cast<float>(halfW) : static_cast<float>(totalW - halfW);
-                    vp.height = static_cast<float>(totalH);
-                    vp.minDepth = 0.0f;
-                    vp.maxDepth = 1.0f;
-                    vkCmdSetViewport(cmd, 0, 1, &vp);
-
-                    VkRect2D sc{};
-                    sc.offset = {eye == 0 ? 0 : static_cast<int32_t>(halfW), 0};
-                    sc.extent = {eye == 0 ? halfW : (totalW - halfW), totalH};
-                    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-                    gpu::CubePush push{};
-                    push.viewProj = mat4_mul(eyeCam.proj, eyeCam.view);
-                    push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
-                    push.camPos = vec4{eyeCam.eye.x, eyeCam.eye.y, eyeCam.eye.z, kLampIntensity};
-                    push.fog = vec4{kWorldExtent * 0.25f * fogScale,
-                                    kWorldExtent * 0.50f * fogScale,
-                                    kLampRadius, kAmbient};
-                    push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
-
-                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
-                    raymarchPass.record(cmd, renderer.currentFrame, push,
-                                        lightGrid.descriptor_set(), eye);
-                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::World);
-
-                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-                    bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push,
-                                    lightGrid.descriptor_set(), voxelMirror.shadow_set());
-                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
-
-                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
-                    if (propPass.ready())
-                        propPass.record(cmd, renderer.currentFrame, push,
-                                        lightGrid.descriptor_set(), voxelMirror.shadow_set());
-                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
-
-                    if (eye == 0) renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
-                    wirePass.record_draw(cmd, push);
-                    clothPass.record_draw(cmd, push);
-                    particlePass.record_draw(cmd, push);
-                    if (eye == 1) renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
-
-                    if (eye == 0) t1 = SDL_GetPerformanceCounter();
-                }
-            } else {
-                gpu::CubePush push{};
-                push.viewProj = mat4_mul(camMat.proj, camMat.view);
-                push.sunDir = vec4{0.4f, 0.3f, 0.85f, kFillStrength};
-                push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z,
-                                   kLampIntensity};
-                push.fog = vec4{kWorldExtent * 0.25f * fogScale,
-                                kWorldExtent * 0.50f * fogScale,
-                                kLampRadius, kAmbient};
-                push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
-
-                renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
+            if (!skip_pass("world"))
                 raymarchPass.record(cmd, renderer.currentFrame, push,
-                                    lightGrid.descriptor_set(), 0);
-                renderer.timer.pass_end(cmd, gpu::GpuPass::World);
-                t1 = SDL_GetPerformanceCounter();
+                                    lightGrid.descriptor_set());
+            renderer.timer.pass_end(cmd, gpu::GpuPass::World);
+            std::uint64_t t1 = SDL_GetPerformanceCounter();
+            // Draw the embodied population on the active layer (shared depth).
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
+            if (!skip_pass("bodies")) bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
+            // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
+            if (propPass.ready() && !skip_pass("props"))
+                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
-                renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-                bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push,
-                                lightGrid.descriptor_set(), voxelMirror.shadow_set());
-                renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
 
-                renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
-                if (propPass.ready())
-                    propPass.record(cmd, renderer.currentFrame, push,
-                                    lightGrid.descriptor_set(), voxelMirror.shadow_set());
-                renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
-
-                renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
-                wirePass.record_draw(cmd, push);
-                clothPass.record_draw(cmd, push);
-                particlePass.record_draw(cmd, push);
-                renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
+            renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
+            if (!skip_pass("physdraw")) {
+            verletPass.record_draw_wires(cmd, push, lightGrid.descriptor_set());
+            verletPass.record_draw_cloths(cmd, push, lightGrid.descriptor_set());
+            // Particles LAST among world passes: alpha-blended sprites need
+            // every opaque depth already written.
+            verletPass.record_draw_shards(cmd, push,
+                                          lightGrid.descriptor_set());
+            verletPass.record_draw_particles(cmd, push,
+                                             lightGrid.descriptor_set());
             }
+            renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 
 
             std::uint64_t t2 = SDL_GetPerformanceCounter();
@@ -7104,6 +9615,11 @@ int main(int argc, char** argv) {
             // яркости кадра, осознанной системой, не суммой дистанций.
             // Сцена закрыта; CRT-треугольник в свопчейн; ImGui — поверх, резкий.
             renderer.begin_post_pass();
+            // Скобка Raster закрывается ПОСЛЕ конца мирового пасса (он
+            // завершён внутри begin_post_pass) — тайлер обязан дорисовать
+            // его фрагменты до этого таймстемпа. Пост+CRT остаются в
+            // «frame − Σ скобок».
+            renderer.timer.pass_end(cmd, gpu::GpuPass::Raster);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
@@ -7117,10 +9633,15 @@ int main(int argc, char** argv) {
                 audioSys.update(frameDt, atr.pos, acam ? acam->yaw : 0.0f,
                                 acam ? acam->pitch : 0.0f,
                                 stack.layer(activeLayer).grid(), adanger,
-                                samosbor, bus, noiseField, 1.0f, &doors,
+                                samosbor, bus, noiseField, 1.0f,
                                 activeLayer);
             }
             renderer.end_frame(window);
+            g_frameMark.renderMs =
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - g_frameT0)
+                    .count() -
+                g_frameMark.simMs;
 
             // --mirror-verify heartbeat: prove the incremental dirty path (not
             // just the wholesale uploads) against the CPU truth, ~every 5 s.
@@ -7153,12 +9674,17 @@ int main(int argc, char** argv) {
                         const LayerId leaveLayer =
                             reg.valid(player) ? reg.get<Transform>(player).layer
                                               : static_cast<LayerId>(0);
-                        game::refresh_floor_records(reg, leaveLayer, currentFloor,
-                                                    runState.containers,
-                                                    runState.corpses);
                         // Same departure floor-file write as the keyboard
-                        // path — two travel sites, one law. [save.h]
-                        write_floor_file(stack.layer(leaveLayer), currentFloor);
+                        // path — two travel sites, one law (v20: сущности
+                        // едут в файл этажа). [save.h]
+                        game::FloorEntityState leaveEnts;
+                        game::gather_floor_entities(reg, leaveLayer,
+                                                    currentFloor, leaveEnts,
+                                                    &powerGrid, &floorRooms);
+                        write_floor_file_async(stack.layer(leaveLayer),
+                                               currentFloor,
+                                               std::move(leaveEnts),
+                                               module_key_for(currentFloor));
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
@@ -7205,32 +9731,26 @@ int main(int argc, char** argv) {
                         // recycled slot keeps the departed floor's danger.
                         diffusion_driver_on_floor_built(diffusionDriver,
                                                         stack.layer(nl), nl);
+                        // Комнаты РАНЬШЕ сидеров: спавн паков селится в
+                        // объявленных комнатах (mob_spawn читает reg.ctx).
+                        game::rooms_declare(
+                            floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
-                        refresh_floor_containers(reg, stack.layer(nl),
-                                                 currentFloor, nl);
-                        refresh_floor_props(
-                            reg, stack.layer(nl), currentFloor, nl,
-                            streamer.floor_seed_of(registry, currentFloor), bus);
-                        // Stamp recorded crate/corpse state over the respawn.
-                        // Same seam as keyboard ride + F9 apply. [save.h]
-                        game::apply_container_records(
-                            reg, nl, currentFloor, runState.containers.data(),
-                            runState.containers.size());
-                        game::spawn_corpse_records(
-                            reg, nl, currentFloor, runState.corpses.data(),
-                            runState.corpses.size());
-                        // Arrival floor file BEFORE doors, then doors before
-                        // the bake, frozen for its duration — the same law as
-                        // the keyboard ride path. This is the SECOND travel
-                        // site; a fix that touches only one path leaves --shot
-                        // proving nothing. [save.h, door.h]
-                        if (currentSpec)
-                            doorsBuilt = game::door_build(
-                                stack.layer(nl), doors, currentFloor,
-                                *currentSpec,
-                                streamer.floor_seed_of(registry, currentFloor));
-                        doors.frozen = true;
-                        begin_floor_nav(stack.layer(nl), currentFloor, nav, roomZones);
+                        // РАЗВИЛКА S20.6 — тот же закон, что у клавиатурной
+                        // поездки: сидеры ИЛИ записи снимка, не оба. Второй
+                        // travel-сайт; правка одного пути ничего не докажет
+                        // под --shot. [save.h]
+                        arrivedRestored = floor_entity_half(nl, currentFloor);
+                        game::rooms_supply_rebuild(floorRooms, reg, nl);
+                        game::stamp_shield_programs(reg, &floorRooms, nl);
+                        game::assign_lamp_shields(reg, nl);
+                        game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
+                        if (!arrivedRestored) dress_lift_portals(nl);
+                        begin_floor_nav(stack.layer(nl), currentFloor, nav);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.
@@ -7238,9 +9758,9 @@ int main(int argc, char** argv) {
                         if (propPass.ready()) {
                             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), &dripEmitters);
-                upload_wires(wirePass, streamer.antourage_at_layer(registry, nl));
-                upload_cloths(clothPass, streamer.antourage_at_layer(registry, nl));
+                                  stack.layer(nl), simTick, &dripEmitters);
+                upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+                upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
                         }
                         // Same clear as the keyboard ride path. There are TWO travel
                         // sites and the first fix only touched one, so a --shot
@@ -7274,6 +9794,67 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr, "shot: %s -> %s (floor %d, %d frames)\n",
                                  ok ? "saved" : "FAILED", shotPath, currentFloor,
                                  shotFramesSeen);
+                    // Полный пер-пассовый расклад GPU-кадра в stderr — HUD
+                    // печатает только 5 пассов из 9 и недоступен харнессу.
+                    // Медиана 31 кадра + пик, как в HUD ([gpu_timer.h]); это
+                    // ЕДИНСТВЕННЫЙ машинно-снимаемый замер кадра — wall-clock
+                    // FPS прибит FIFO-презентом и лжёт ниже всинка.
+                    if (renderer.timer.supported()) {
+                        static const char* kPassName[] = {
+                            "lightgrid", "voxelflush", "cull", "sim",
+                            "world",     "bodies",     "props", "drawphys",
+                            "hud",       "light",      "raster"};
+                        static_assert(sizeof(kPassName) / sizeof(kPassName[0]) ==
+                                          gpu::kGpuPassCount,
+                                      "имена пассов == enum");
+                        // Скобки ВНУТРИ рендер-пасса (world..hud) на тайловом
+                        // GPU меряют пустоту — фрагментная работа исполняется
+                        // вся на vkCmdEndRenderPass ([gpu_timer.h] GpuPass).
+                        // «world 0.002 мс при кадре 12.7» — не сломанный
+                        // таймер, а свойство архитектуры; честные строки там —
+                        // light/raster (целые пассы). Помечаем, чтобы свод
+                        // нельзя было прочитать как «марш бесплатен».
+                        const bool tiler =
+#ifdef __APPLE__
+                            true;
+#else
+                            false;
+#endif
+                        const bool inPass[gpu::kGpuPassCount] = {
+                            false, false, false, false,  // lightgrid..sim
+                            true,  true,  true,  true,   // world..drawphys
+                            true,                        // hud
+                            false, false};               // light, raster
+                        for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p)
+                            std::fprintf(
+                                stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f%s\n",
+                                kPassName[p],
+                                renderer.timer.pass_ms(
+                                    static_cast<gpu::GpuPass>(p)),
+                                renderer.timer.pass_ms_max(
+                                    static_cast<gpu::GpuPass>(p)),
+                                (tiler && inPass[p])
+                                    ? "  [in-pass: на тайлере работа в raster]"
+                                    : "");
+                        std::fprintf(stderr,
+                                     "[gpu-shot] frame      %8.3f ms  peak %8.3f"
+                                     "  drop %u\n",
+                                     renderer.timer.frame_ms(),
+                                     renderer.timer.frame_ms_max(),
+                                     renderer.timer.dropped());
+                    }
+                    if (g_wallRing && g_wallSeen >= 64) {
+                        float tmp[256];
+                        const unsigned n = g_wallSeen < 256u ? g_wallSeen : 256u;
+                        for (unsigned i = 0; i < n; ++i) tmp[i] = g_wallRing[i];
+                        std::sort(tmp, tmp + n);
+                        std::fprintf(stderr,
+                                     "[cpu-shot] wall frame median %.3f ms  p90 "
+                                     "%.3f  peak %.3f (over %u frames, "
+                                     "first frame %.1f ms excluded)\n",
+                                     tmp[n / 2], tmp[(n * 9) / 10], tmp[n - 1],
+                                     n, g_wallFirstMs);
+                    }
                     if (shotAction == "mag" && reg.valid(player)) {
                         const game::PlayerRanged* pr =
                             reg.try_get<game::PlayerRanged>(player);
@@ -7281,11 +9862,15 @@ int main(int argc, char** argv) {
                                      "[mag] FINAL has=%d mag=%u weapon=%u "
                                      "shots=%u hits=%u rideDone=%d\n",
                                      pr ? 1 : 0,
-                                     pr ? static_cast<unsigned>(pr->magCount) : 0u,
-                                     pr ? static_cast<unsigned>(pr->weapon) : 0u,
+                                     pr ? static_cast<unsigned>(
+                                              pr->hand[0].magCount)
+                                        : 0u,
+                                     pr ? static_cast<unsigned>(
+                                              pr->hand[0].weapon)
+                                        : 0u,
                                      pr ? pr->shots : 0u, pr ? pr->hits : 0u,
                                      shotRideDone);
-                        if (pr && pr->magCount == 7u && pr->shots == 42u &&
+                        if (pr && pr->hand[0].magCount == 7u && pr->shots == 42u &&
                             pr->hits == 13u)
                             std::fprintf(stderr, "[mag] PROOF=GREEN\n");
                         else
@@ -7330,15 +9915,14 @@ int main(int argc, char** argv) {
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
 
-    particlePass.destroy();
-    clothPass.destroy();
-    wirePass.destroy();
+    verletPass.destroy();
+    mediumPass.destroy();
     cullPass.destroy();
     propPass.destroy();
     bodyPass.destroy();
     raymarchPass.destroy();
     voxelMirror.destroy();
-    cubePass.destroy();
+    materialTex.destroy();
     lightGrid.destroy();
     renderer.destroy();
     device.destroy();

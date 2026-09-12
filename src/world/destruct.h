@@ -40,10 +40,13 @@
 // CarveResult::dirtyCells. The CALLER owes, per the existing contracts:
 //   * diffusion_mark_cell per dirty cell (O(1) patches);
 //   * cubePass.invalidate() once, if anything was removed;
-//   * nothing for nav — flow fields stay stale until the next full bake, the
-//     same accepted debt door.cpp already carries.
-// And like every grid mutator, DO NOT carve while a nav bake is in flight
-// (doors.frozen is the app's existing gate).
+//   * RebakeScheduler::patch_carved_cells — the O(1) walk-bit patches that
+//     keep the next background snapshot honest ([game/rebake.h]); the flow
+//     fields themselves stay stale only until that scheduler's next
+//     rebake-and-swap.
+// Carving WHILE a bake is in flight is LEGAL: the worker reads a 256 KiB
+// bitset snapshot, never these masks — doors.frozen and its gates are dead
+// ([game/rebake.h]).
 #pragma once
 #include <cstdint>
 #include <vector>
@@ -76,7 +79,10 @@ struct CarveOp {
     float radius = 0;          // metres; power falls off quadratically to 0 here
     std::uint16_t power = 0;   // applied power at the centre (hardness scale)
     std::uint32_t seed = 0;    // deterministic stream id — server's choice
-    std::int32_t detachLimit = kSubVoxels; // max component handed to render
+    // >0 — судья связности включён (бюджет ЕДИНЫЙ узловой kDetachNodeBudget,
+    // само значение размера больше не ограничивает — атомный лимит 512 вешал
+    // балки через шов, скриншот владельца 2026-08-25); <=0 — суд выключен.
+    std::int32_t detachLimit = kSubVoxels;
 };
 
 struct CarveResult {
@@ -98,9 +104,28 @@ struct CarveScratch {
     std::vector<std::uint32_t> slots; // open addressing, stores key+1, 0=empty
     std::vector<std::uint32_t> runs;  // run id per slot (valid where slots!=0)
     std::vector<std::uint32_t> used;  // occupied slot indices, for cheap wipe
-    std::vector<std::uint32_t> queue; // BFS worklist of packed keys
-    std::vector<std::uint32_t> comp;  // current component's packed keys
+
+    // --- кэш иерархического судьи (живёт одну развёртку: маски не меняются,
+    // конверсия трогает только материалы) --------------------------------
+    std::vector<std::uint32_t> cellSlotKey; // open addressing: cell+1
+    std::vector<std::uint32_t> cellSlotVal; // -> entry-индекс разбиения
+    std::vector<std::uint32_t> cellSlotUsed;
+    std::vector<std::uint32_t> partFirst;   // entry -> первый компонент
+    std::vector<std::uint16_t> partCount;   // entry -> число компонентов
+    std::vector<std::uint64_t> compWords;   // 8 слов маски на компонент
+    std::vector<std::uint32_t> nodeQueue;   // BFS узлов: (cell<<8)|comp
 };
+
+// Бюджет обхода судьи связности — в УЗЛАХ (узел = 6-связный компонент атомов
+// ОДНОЙ клетки). ВЫВОД: узел стоит ~десятки-сотни нс (полная клетка — один
+// компонент без флуда, частичная — бит-флуд 8 слов до неподвижной точки +
+// 6 гранных AND), целевой потолок суда — доли мс на карв при цене самого
+// карва ~0.5-1 мс → 512 узлов. Покрытие: узел ≤ 512 атомов → кусок до
+// ~260k атомов (512 клеток) судится ЧЕСТНО перечислением; больший — «сам
+// дом», опёрт по определению (в изотропном торе земли нет — держит размер;
+// решение владельца 2026-08-26, связность бинарна). Отсечка печатается
+// (первый раз и каждую 1024-ю), молчаливых капов нет (S11).
+inline constexpr std::int32_t kDetachNodeBudget = 512;
 
 // The deterministic per-sub-voxel roll hash. Public so tests and future
 // consumers (e.g. a client-side predictor) can reproduce the server's rolls.
@@ -116,6 +141,15 @@ bool carve_roll(std::uint32_t h, std::uint16_t power, std::uint16_t hardness);
 // the cell's uniform CellType.
 CellType sub_material_at(const World& w, int cx, int cy, int cz, int sx,
                          int sy, int sz);
+
+// Раскрыть страницу материалов клетки ЧЕСТНО по S16.1 (материал — истина):
+// под битом маски — CellType клетки, без бита — ВОЗДУХ (у однородной клетки
+// материи сред — её материал: вода остаётся водой). Старый ensure_page(base)
+// заливал базой и дыры: воздух у стен читался «бетоном» — вода не могла
+// втечь в клетку со стеной (пустые швы, фидбек владельца 2026-08-24), а
+// карв-дыры несли фантомную материю. Возвращает страницу (уже раскрытая
+// клетка не трогается).
+CellType* materialize_sub_page(World& w, std::size_t ci);
 
 // Paint one sub-voxel's material (generator/tool side of layering). Pages the
 // cell on first divergence from its CellType; folds back into a plain cell
@@ -135,5 +169,87 @@ std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
 bool carve_at(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
               std::uint16_t power, std::uint32_t seed, CarveScratch& scratch,
               CarveResult& out);
+
+// ОДИН ЗАКОН СВЯЗНОСТИ НА ВСЕХ ПИСАТЕЛЕЙ (решение владельца 2026-08-24):
+// проверка от ЗАПИСИ, не от разрушения — нарисованная в воздухе сфера
+// бетона обязана осесть. seed — любой атом свежей записи; если его
+// компонент (иерархический флуд, бюджет kDetachNodeBudget) не дотягивается
+// до опоры, ВЕСЬ компонент конвертируется в рыхлого двойника (kMatRubbleOf)
+// на месте — дальше его роняет автомат, как при детаче карва. Возвращает
+// число конвертированных атомов; dirtyCells — задетые клетки (маски не
+// меняются).
+std::int32_t detach_scan(World& w, int cx, int cy, int cz, int sx, int sy,
+                         int sz, CarveScratch& scratch, CarveResult& out);
+
+// СУДЬЯ СВЯЗНОСТИ ПО КЛЕТКАМ — судит ОПОРНЫЕ компоненты перечисленных
+// клеток (S20.5: атом подвижного материала опору не передаёт —
+// cell_partition строится по load_bearing_words) и конвертирует
+// отвязанное в рыхлых двойников. Возвращает число конвертированных
+// атомов.
+//
+// ЗОВЁТСЯ СОБЫТИЕМ, НЕ КАДРОМ. Следствие закона S20.5, доказанное
+// замером (floor 0: 27k бюджетных флудов за 2000 кадров у покадрового
+// судьи на XOR-сидах): автомат двигает ТОЛЬКО подвижную материю, а
+// подвижное — не опора, значит ход автомата не может осиротить статику
+// ПО ПОСТРОЕНИЮ. Осиротить её могут только писатели статики — карв
+// (detach_sweep внутри), дверь (долг писателя S20.4) — и ЛЕГАСИ-висяки
+// старых миров, которые снимает ОДНА входная развёртка по клеткам с
+// подвижной материей и их соседям (collect_mobile_support_cells) на
+// активации этажа.
+std::int32_t detach_judge_cells(World& w, const std::uint32_t* cells,
+                                std::size_t n, CarveScratch& scratch,
+                                CarveResult& out);
+
+// Клетки, где живёт ПОДВИЖНАЯ материя (рыхлые двойники под маской,
+// однородные клетки сред), плюс их 6 соседей — домен входной развёртки
+// судьи: компонент, державшийся за кучу, обязан проходить через такую
+// клетку или её соседа. Скан 128³ один раз на активацию этажа.
+void collect_mobile_support_cells(const World& w,
+                                  std::vector<std::uint32_t>& out);
+
+// ===== БОЛЬШОЙ СУД ([markoaudit/plans/big-judge.md] A–C) =====================
+// Отсечка малого судьи «> 512 узлов» перестала быть вердиктом: дело
+// передаётся сюда и судится ИНКРЕМЕНТАЛЬНО, порциями кадра, тем же узловым
+// флудом (cell_partition + гранные AND, S11 — одна суть, разные бюджеты).
+// ОПОРА большого масштаба = ТОР-ПЕРКОЛЯЦИЯ (аксиома владельца «очень
+// большое = сам дом», формализована): узел, достигнутый двумя путями с
+// РАЗНЫМИ развёрнутыми смещениями, значит цикл с ненулевой обмоткой —
+// компонент замыкается через шов и не падает никогда. Земля этажа
+// перколирует по x/y этим же законом — отдельного понятия «земля» нет.
+// Щит = земля (S20.5/D.3) действует и здесь. Вердикт «без опоры» =
+// конверсия ВСЕГО компонента в rubble-двойники порциями кадра — падение
+// анимирует автомат под бюджетным диспатчем (замедленная съёмка общим
+// законом, оркестровки волн нет).
+
+// Поколение ОПОРНОЙ материи: растят писатели статики (карв, sub-запись,
+// конверсия). Дело, за время которого поколение уехало, пересуживается
+// (один ретрай, потом в хвост очереди).
+std::uint64_t support_gen();
+
+// A: положить дело (клетка-очаг). Дедуп по клетке; оправданный при
+// текущем поколении очаг не кладётся повторно (кэш оправданий).
+void big_judge_enqueue(std::uint32_t cell);
+
+// Смена этажа: очередь и текущее дело гасятся (мир уехал).
+void big_judge_reset();
+
+// Один шаг суда: порция флуда ИЛИ порция конверсии (по фазе). dirtyOut —
+// клетки, конвертированные ЭТИМ шагом (каллер качает их в зеркало/автомат
+// тем же швом, что entry-sweep). Зовётся кадром на активном этаже.
+void big_judge_step(World& w, std::vector<std::uint32_t>& dirtyOut);
+
+// Бюджеты шага для тестов/A-B (0 = не менять). Дефолты выведены в .cpp.
+void big_judge_budgets(std::uint32_t floodNodes, std::uint32_t convertCells);
+
+struct BigCourtStatus {
+    std::uint32_t pending = 0;           // дел в очереди
+    std::uint32_t phase = 0;             // 0 idle / 1 флуд / 2 конверсия
+    std::uint32_t caseNodes = 0;         // узлов собрано текущим делом
+    std::uint32_t convertLeft = 0;       // узлов осталось конвертировать
+    std::uint32_t verdictsLoose = 0;     // вердиктов «без опоры»
+    std::uint32_t verdictsSupported = 0; // оправданий (перколяция/щит)
+    std::uint32_t retries = 0;           // пересуды по грязи
+};
+BigCourtStatus big_judge_status();
 
 } // namespace giga

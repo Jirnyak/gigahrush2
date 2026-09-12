@@ -22,21 +22,6 @@ std::int32_t as_amount(std::int64_t v) {
     return static_cast<std::int32_t>(v > kMax ? kMax : v);
 }
 
-// Append to the 24-slot ring. `entries` is the lifetime count and never wraps in
-// practice (uint32 at one op per keypress), so the newest entry is always
-// `(entries - 1) % kBankLedgerSlots` and the ring needs no separate head index.
-void push_entry(BankAccount& acct, BankOp op, std::int32_t amount, std::uint64_t tick) {
-    if (amount <= 0) return;   // a no-op movement is not history
-    BankEntry& e = acct.ledger[acct.entries % kBankLedgerSlots];
-    e.amount = amount;
-    e.tick = static_cast<std::uint32_t>(tick & 0xFFFFFFFFull);
-    e.op = static_cast<std::uint8_t>(op);
-    e.band = acct.band;
-    e.pad_[0] = 0;
-    e.pad_[1] = 0;
-    ++acct.entries;
-}
-
 } // namespace
 
 const BankTerms& bank_terms(std::uint8_t band) {
@@ -77,7 +62,6 @@ std::int32_t bank_deposit(BankAccount& acct, RunLedger& led, std::int32_t amount
     led.banked -= n;
     acct.deposit += n;
     const std::int32_t moved = static_cast<std::int32_t>(n);
-    push_entry(acct, BankOp::Deposit, moved, tick);
     // A deposit opened on a fresh account starts its interest clock HERE and not at
     // tick 0. Without this the first `bank_step` would settle every period since the
     // program began — the reference guards the same case (`if (bank.lastInterestAt <= 0)
@@ -96,7 +80,6 @@ std::int32_t bank_withdraw(BankAccount& acct, RunLedger& led, std::int32_t amoun
     acct.deposit -= n;
     led.banked += n;
     const std::int32_t moved = static_cast<std::int32_t>(n);
-    push_entry(acct, BankOp::Withdraw, moved, tick);
     return moved;
 }
 
@@ -114,7 +97,6 @@ std::int32_t bank_take_loan(BankAccount& acct, RunLedger& led, std::int32_t amou
     // cannot spend on kit is not leverage, it is a number.
     led.banked += n;
     const std::int32_t moved = static_cast<std::int32_t>(n);
-    push_entry(acct, BankOp::TakeLoan, moved, tick);
     if (acct.lastInterestTick == 0 && acct.deposit == 0) acct.lastInterestTick = tick;
     return moved;
 }
@@ -135,7 +117,6 @@ std::int32_t bank_repay(BankAccount& acct, RunLedger& led, std::int32_t amount,
     acct.loanAccrued -= onInterest;
     acct.loanPrincipal -= (n - onInterest);
     const std::int32_t paid = static_cast<std::int32_t>(n);
-    push_entry(acct, BankOp::RepayLoan, paid, tick);
     return paid;
 }
 
@@ -222,8 +203,6 @@ BankTick bank_step(BankAccount& acct, std::uint64_t tick) {
     out.earned = as_amount(earned);
     out.paid = as_amount(paid);
     out.periods = static_cast<std::uint32_t>(periods);
-    if (earned > 0) push_entry(acct, BankOp::DepositInterest, out.earned, tick);
-    if (paid > 0) push_entry(acct, BankOp::LoanInterest, out.paid, tick);
     return out;
 }
 
@@ -238,38 +217,6 @@ std::int64_t bank_credit_available(const BankAccount& acct) {
 
 std::int64_t net_worth(const RunLedger& led, const BankAccount& acct) {
     return led.banked + acct.deposit - bank_debt(acct);
-}
-
-std::uint8_t wealth_tier(std::int64_t worth) {
-    if (worth < kWealthTiers[0].lo) return 0;
-    std::uint8_t tier = 0;
-    for (std::size_t i = 0; i < kWealthTierCount; ++i)
-        if (worth >= kWealthTiers[i].lo) tier = static_cast<std::uint8_t>(i);
-    return tier;
-}
-
-const char* wealth_tier_name(std::uint8_t tier) {
-    const std::size_t i = static_cast<std::size_t>(tier);
-    return kWealthTierNames[i < kWealthTierCount ? i : kWealthTierCount - 1];
-}
-
-const BankEntry* bank_last_entry(const BankAccount& acct) {
-    if (acct.entries == 0) return nullptr;
-    return &acct.ledger[(acct.entries - 1u) % kBankLedgerSlots];
-}
-
-const char* bank_op_name(BankOp op) {
-    switch (op) {
-        case BankOp::Deposit:         return "deposit";
-        case BankOp::Withdraw:        return "withdraw";
-        case BankOp::TakeLoan:        return "loan";
-        case BankOp::RepayLoan:       return "repay";
-        case BankOp::DepositInterest: return "interest paid to you";
-        case BankOp::LoanInterest:    return "interest charged";
-        case BankOp::None:
-        case BankOp::Count:
-        default:                      return "none";
-    }
 }
 
 // --- the teller ([conversation.md] «БАНК») ---------------------------------

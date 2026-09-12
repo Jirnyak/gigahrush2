@@ -13,13 +13,17 @@
 //                                   CPU pool ([world/subfield.h]) so no
 //                                   remapping logic exists to go wrong.
 //
-// ONE-WAY FLOW, sim -> GPU ([render.md]): the mirror never writes back, and the
-// CPU grid stays the single source of truth for every gameplay question. It is
-// kept fresh by exactly the seams the sim already publishes:
+// ШОВ ДВУСТОРОННИЙ с 2026-08-24 (CANON S16.3; «ONE-WAY FLOW» умер, как канон
+// и обещал): CPU->GPU — писатели ниже; GPU->CPU — мир-автомат двигает материю
+// в pagePool, и страницы живых клеток каждый кадр текут НАЗАД байт-копией
+// ([render/gpu_medium_pass.h] record_readback/apply_readback, слот-в-слот).
+// CPU-вид остаётся каноном same-tick вопросов (коллизия, рейкасты, сейв);
+// материя В ПОЛЁТЕ видна ему с отставанием до кадра — допуск канона.
+// CPU->GPU released fresh by exactly the seams the sim already publishes:
 //
 //   * wholesale (floor build / arrival / F9 / teleport)  -> upload_all()
 //   * carve ([world/destruct.h] CarveResult::dirtyCells) -> mark_dirty()
-//   * doors  ([game/door.h] DoorSet::dirtyCells)         -> mark_dirty()
+//   * (двери — МОГИЛА 2026-08-28; новая система придёт со своим дренажом)
 //   * any future grid mutator owes the same debt the carve table in
 //     [destruct.md] already states. (The cellular sandpile module that used to
 //     be named here was deleted 2026-08-10: 1492 lines, zero reachable.)
@@ -108,10 +112,8 @@ public:
     // raymarcher's macro-skip: air costs one byte, full walls hit with no mask
     // read, only boundary cells pay the sub-DDA.
     static constexpr std::size_t kClassBytes = kMacroCells;
-    // The "fluid" macro field, mirrored whole (8 MiB) whenever a fluid step
-    // marks it — the marcher tints hit cells from it, which is what retired
-    // the last regular invalidate() storm (31/s in maze mode).
-    static constexpr std::size_t kFluidBytes = kMacroCells * sizeof(float);
+    // kFluidBytes/fluid_ УМЕРЛИ (чистка 2026-08-24): fluid-поле вычищено,
+    // воду двигает и рисует мир-автомат её собственными атомами.
     // The "stain" SubField ([world/stain.h]): same paged mirror as
     // sub_material. GPU pages are RGBA8 (512 x 4 B) so the shader indexes one
     // u32 per atom; the CPU's 3 B atoms are repacked during upload. Stains are
@@ -121,8 +123,13 @@ public:
     static constexpr std::size_t kStainPageBytes = kSubVoxels * 4;
     static constexpr std::size_t kStainIdxBytes = kMacroCells * sizeof(std::uint32_t);
     static constexpr std::size_t kStainPoolBytes = kStainPageCap * kStainPageBytes;
-    // Per-frame dirty staging window: cells plus one whole fluid image fit
-    // together; the queue carries any remainder to the next frame.
+    // Per-frame dirty staging window; остаток очередь довозит следующими
+    // кадрами. ВЫВОД ПЕРЕПИСАН (К5-C9, 2026-08-26): прежняя проза выводила
+    // 12 МиБ из «клетки + целый fluid-образ», а fluid вырезан 2026-08-24.
+    // Честный вывод: худший разовый потребитель — вход на этаж/массовый
+    // карв; окно = ~10k dirty-клеток за кадр (10240 x (1 КиБ страница +
+    // 64 Б маски + типы/классы) ~ 11.3 МиБ) — измеренный вход падика
+    // проходит за 2-3 кадра, что и наблюдалось при 12 МиБ до чистки.
     static constexpr std::size_t kStagingBytes = 12u * 1024u * 1024u;
 
     bool init(VulkanDevice& dev);
@@ -138,10 +145,6 @@ public:
     // Queue macro cells (flat macro_index values) for the next flush(). Dedup'd
     // against a bitset, so feeding the same cell twice a frame costs nothing.
     void mark_dirty(const std::uint32_t* cells, std::size_t n);
-
-    // The "fluid" field changed (a fluid step ran): re-mirror it whole at the
-    // next flush(). A flag, not a cell list — the field moves globally.
-    void mark_fluid_dirty() { fluidDirty_ = true; }
 
     // Record this frame's dirty-cell copies into `cmd` — call OUTSIDE the render
     // pass, before begin_pass. Reads the fresh bytes from `world`; consumed
@@ -159,6 +162,18 @@ public:
 
     // HUD stats.
     std::uint32_t last_flush_cells() const { return lastFlushCells_; }
+
+    // ПОКОЛЕНИЯ ЗАПИСИ/ДОСТАВКИ на клетку (баг «дыра заросла», 2026-08-26):
+    // окно стейджинга возит остаток следующими кадрами, и пак автомата,
+    // записанный между CPU-записью и её ДОСТАВКОЙ на GPU, несёт до-записи
+    // состояние — применять его назад нельзя. flush_gen — счётчик флешей
+    // (клок кадров); write_pending — запись ещё в очереди; upload_gen —
+    // флеш, доставивший последнюю запись.
+    std::uint32_t flush_gen() const { return flushGen_; }
+    bool write_pending(std::uint32_t ci) const {
+        return markGen_[ci] > uploadGen_[ci];
+    }
+    std::uint32_t upload_gen(std::uint32_t ci) const { return uploadGen_[ci]; }
     std::uint32_t last_flush_bytes() const { return lastFlushBytes_; }
     std::uint32_t dirty_backlog() const { return static_cast<std::uint32_t>(dirty_.size()); }
     std::uint32_t pages_in_pool() const { return poolPages_; }
@@ -170,7 +185,6 @@ public:
     VkBuffer page_index_buffer() const { return pageIdx_.buffer; }
     VkBuffer page_pool_buffer() const { return pagePool_.buffer; }
     VkBuffer class_buffer() const { return classes_.buffer; }
-    VkBuffer fluid_buffer() const { return fluid_.buffer; }
     VkBuffer stain_index_buffer() const { return stainIdx_.buffer; }
     VkBuffer stain_pool_buffer() const { return stainPool_.buffer; }
 
@@ -197,7 +211,6 @@ private:
     VulkanBuffer pageIdx_;
     VulkanBuffer pagePool_;
     VulkanBuffer classes_;
-    VulkanBuffer fluid_;
     VulkanBuffer stainIdx_;
     VulkanBuffer stainPool_;
     VulkanBuffer staging_[kMaxFramesInFlight];
@@ -226,10 +239,11 @@ private:
     std::vector<std::uint32_t> idxScratch_;
     std::vector<std::uint8_t> classScratch_;
     std::vector<std::uint8_t> stainRepack_;
-    std::vector<float> fluidZeros_;
-    bool fluidDirty_ = false;
 
     std::uint32_t lastFlushCells_ = 0;
+    std::uint32_t flushGen_ = 0;              // клок флешей (1/кадр)
+    std::vector<std::uint32_t> markGen_;      // flushGen_ на момент записи
+    std::vector<std::uint32_t> uploadGen_;    // flushGen_ доставившего флеша
     std::uint32_t lastFlushBytes_ = 0;
     std::uint32_t poolPages_ = 0;
     std::uint32_t overflowEvents_ = 0;

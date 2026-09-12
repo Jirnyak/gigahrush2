@@ -64,15 +64,53 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed);
 
-// The X/Y room-lattice pitch this kind builds on, in macro cells. A "room" is the
-// (stride-1)^2 interior between four wall lines; the wall lines themselves sit on
-// every cell whose x or y is a multiple of the stride.
-//
-// Exported rather than copied because the mob spawner places packs BY ROOM and has
-// to agree with the generator exactly. A duplicated stride table would keep
-// compiling and start placing "rooms" straddling wall lines the day the module's
-// geometry is retuned — a silent, seed-dependent drift.
-int floor_room_stride(FloorKind kind);
+// ВЕРСИЯ ГЕНЕРАЦИИ МОДУЛЯ (CANON S20.6 закон 4). Целое, поднимаемое РУКОЙ
+// при любом изменении, меняющем выход generate_floor для этого kind, — сам
+// генератор, общий каркас (лифтовые столбы), сид-формулы. Снимок этажа несёт
+// её; несовпадение = честная инвалидация снимка целиком (перегенерация,
+// накопленное теряется). Полуслияние старого снимка с новым модулем
+// запрещено — законы (двери, комнаты, DoorRef обвеса) перештамповываются
+// индексами ТОЙ ЖЕ генерации, и под чужой версией индекс молча врал бы.
+std::uint32_t module_gen_version(FloorKind kind);
+
+// Объявить комнаты этажа (rooms-object, канон S12.1): rooms_reset + диспетч
+// в объявитель модуля (строка данных, как генератор). Зовётся на КАЖДОМ входе
+// на этаж — generate и restore (закон масок S18: декларация — чистая функция
+// (kind, number, seed), в снимок не едет). Печатает счёт вслух; пересечение
+// зон или отказ объявления — WARN, гейт в suite_rooms_object.
+struct FloorRooms;
+void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
+                   unsigned seed);
+
+// --- Лифтовые столбы (elevators-2x2.md, решения владельца 2026-08-27) -------
+// Узел лифта = ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор (z
+// заворачивается — у столба нет ни начала, ни конца), шахта 1 клетка в
+// центре. Кабина НЕ движется: на этаже входа в шахте стоит пол (клетка под
+// storey входа), «приезд кабины» — иллюзия поездки. ВХОД — один проём в
+// кольце: storey называет МОДУЛЬ этажа (S10 — политика в модуле; сегодня все
+// три модуля называют свой ходовой ground), сторону — хеш (сид, этаж, узел).
+// От этой структуры считают ВСЕ потребители: посадка ride_elevator, кнопка
+// вызова, панель кабины — второй копии закона не существует.
+struct LiftEntrance {
+    int h;    // walkable storey клетки входа (и пола кабины под ней)
+    int side; // 0..3 = +x, -x, +y, -y — сторона проёма в кольце
+};
+// node — лифтовый хаб [0, kFastHubsPerFloor) из fast_travel.h.
+LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed);
+
+// Проштамповать 4 столба поверх ЛЮБОГО модуля — generate_floor зовёт это
+// сам после генератора. В снимок ревизита столбы входят обычными клетками,
+// restore-ветка ничего не перештамповывает.
+void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
+                        unsigned seed);
+
+// ЩИТ лифтов ([world/protect.h], решение владельца 2026-08-27): весь объём
+// каждого столба 3×3 через все z — защищённая область (кольцо, шахта, пол
+// кабины, проём — ни карв, ни детач, ни будущий самосбор их не меняют;
+// лифт — ключевая механика). Маска НЕ в снимке — чистая функция сетки, её
+// штампует ensure_loaded/Prebuild на КАЖДОМ входе, обеими ветками
+// (build_world_half). Чистит маску слота и кладёт свою.
+void stamp_lift_protection(World& world);
 
 // ---------------------------------------------------------------------------
 // Gravity frame — the module's declared regime, and axis-generic ground queries
@@ -108,41 +146,11 @@ void floor_ground_cell(const World& w, int u, int v, int& x, int& y, int& z);
 int floor_ground_z();
 
 // ---------------------------------------------------------------------------
-// Room taxonomy — what KIND of room a lattice cell is
+// РЕШЁТОЧНАЯ ТАКСОНОМИЯ КОМНАТ УМЕРЛА (rooms-object F, 2026-08-28): хеш
+// «вида» по (kind, number, rx, ry) заменён НАСТОЯЩИМИ комнатами модуля —
+// game/room.h (RoomId, roomAt, теги, глаголы). floor_room_mask/stride/
+// bit_index и RoomBit не существуют; грепный гейт в check_source_rules.
 // ---------------------------------------------------------------------------
-// `RoomBit` ([mob_table.h]) is authored on all 69 mob rows (`rooms`) and on 356 of the
-// 446 item rows (`spawn_rooms`) — and measured, those 356 are EXACTLY the rows with a
-// non-zero spawn weight, so a room filter can never drop a rollable item for want of
-// authoring. Until this existed **nothing read either column**: every caller of
-// `item_weight_on_floor` passed a mask of 0, and `MobDef::roomMask` had no reader at
-// all. The generator is the only thing that can close that, because it is the only
-// thing that knows a room's identity — it lays the lattice, so room (rx, ry) is a
-// place before anything is spawned into it.
-//
-// One BIT per room, not a set: a room is a kitchen or a store room, and a room that
-// is both filters like neither. Which bits a kind may produce is a per-FloorKind
-// weight table in the .cpp, so retuning a floor family's character is a row edit.
-//
-// Keyed on (kind, number, rx, ry) and deliberately NOT on the world seed. Every
-// consumer must agree about what room 5 is, and the two live consumers are handed
-// DIFFERENT seeds by main.cpp (0xC0FFEE-derived for containers, 0xB0B5EED-derived for
-// mobs) while neither is handed the worldgen seed. Keying on a seed would therefore
-// have made the container system and the mob system disagree about the same room —
-// the exact silent, per-consumer drift the note on floor_room_stride above warns
-// about. The cost is that a floor label's taxonomy repeats across runs; the layout it
-// is stamped onto does not.
-//
-// Returns a single-bit mask, never 0.
-std::uint16_t floor_room_mask(FloorKind kind, int number, int rx, int ry);
-
-// How many bits RoomBit defines (Corridor .. Hq). Lives here rather than in
-// mob_table.h so the generated-table header stays untouched; the static_assert in
-// floor_gen.cpp pins it against the enum.
-inline constexpr std::size_t kFloorRoomBits = 11;
-
-// Index of a single-bit room mask, 0..kFloorRoomBits-1, or -1 for 0 / out of range.
-// Consumers use it to key a per-room-kind lookup table without a switch.
-int floor_room_bit_index(std::uint16_t mask);
 
 // One opening this generator punches through an interior wall — the cell a DOOR
 // occupies ([door.h]). Positions are macro cells, so a byte each.
@@ -163,7 +171,7 @@ struct Doorway {
 // appending to `out`; returns how many were added. Empty for a pillar-mode kind
 // (an open plate has no wall segments to open).
 //
-// Exported for the same reason floor_room_stride is: a second consumer has to
+// Exported so a second consumer has to
 // agree with the generator EXACTLY. door.cpp needs the doorway cells at floor
 // load, and the two ways to get them are both traps —
 //
@@ -179,5 +187,17 @@ struct Doorway {
 // the same one. A hash has no order to get wrong.
 std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
                              std::vector<Doorway>& out);
+
+// MODULE antourage on top of the generic bake: after bake_antourage reads the
+// finished grid, the floor's own module may append instances/wires/cloths it
+// can only lay out from its plan (khrushi strings wires between its street
+// poles). Per-kind table row in floor_gen.cpp — a row, never a branch; kinds
+// without module dressing have a null row and this is a no-op. Deterministic
+// in (grid, number, seed) like the generic bake, and it obeys the same law:
+// READ the grid, never write it.
+struct AntourageBake;
+void floor_antourage_extra(const World& world, int number,
+                           const FloorSpec& spec, unsigned seed,
+                           AntourageBake& out);
 
 } // namespace giga::game

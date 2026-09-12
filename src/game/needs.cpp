@@ -6,7 +6,7 @@
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
-#include "game/room_zone.h"  // room_bit_at / room_restores / room_recover
+#include "game/witness.h"    // deed_publish — невольный слив = деяние (S19)
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 
 namespace giga::game {
@@ -178,13 +178,24 @@ Needs needs_roll_resident(std::uint32_t seed) {
     return n;
 }
 
-void needs_advance(Needs& n, float dt) {
+void needs_advance(Needs& n, float dt, ReliefResult* voided) {
     if (dt <= 0.0f) return;
     n.food  = clamp_need(n.food  - kFoodDrainPerSec  * dt);
     n.water = clamp_need(n.water - kWaterDrainPerSec * dt);
     n.sleep = clamp_need(n.sleep - kSleepDrainPerSec * dt);
     digest(n.pendingPee, n.pee, kPeeDigestPerSec * dt);
     digest(n.pendingPoo, n.poo, kPooDigestPerSec * dt);
+    // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ (владелец 2026-08-28): кап не состояние, а
+    // событие — давление слилось, бар пошёл заново, очередь продолжает
+    // метериться в пустое. Урона от давлений больше не существует.
+    if (n.pee >= kNeedMax) {
+        if (voided) voided->pee += n.pee;
+        n.pee = 0.0f;
+    }
+    if (n.poo >= kNeedMax) {
+        if (voided) voided->poo += n.poo;
+        n.poo = 0.0f;
+    }
 }
 
 std::uint8_t needs_failed_mask(const Needs& n) {
@@ -208,14 +219,13 @@ std::uint8_t needs_warn_mask(const Needs& n) {
 }
 
 float needs_hp_rate(const Needs& n) {
-    // Additive across every failed need, capped by nothing: four at once is
-    // 1.0 HP/s. Sleep is absent on purpose — see the header.
+    // Additive across every failed need, capped by nothing: both at once is
+    // 0.8 HP/s. Sleep is absent on purpose — see the header. Давления тоже:
+    // кап сливается клоком (невольное облегчение), урона не существует.
     const std::uint8_t f = needs_failed_mask(n);
     float rate = 0.0f;
     if (f & NeedFood)  rate += kHungerHpPerSec;
     if (f & NeedWater) rate += kDehydrationHpPerSec;
-    if (f & NeedPee)   rate += kOverflowHpPerSec;
-    if (f & NeedPoo)   rate += kOverflowHpPerSec;
     return rate;
 }
 
@@ -226,16 +236,8 @@ float needs_seconds_to_damage(const Needs& n) {
     const float water = n.water / kWaterDrainPerSec;
     if (water < soonest) soonest = water;
 
-    // A pressure only ticks toward overflow while its queue has something left,
-    // so an empty queue is not a clock at all.
-    if (n.pendingPee > 0.0f) {
-        const float t = (kNeedMax - n.pee) / kPeeDigestPerSec;
-        if (t < soonest) soonest = t;
-    }
-    if (n.pendingPoo > 0.0f) {
-        const float t = (kNeedMax - n.poo) / kPooDigestPerSec;
-        if (t < soonest) soonest = t;
-    }
+    // Давления к урону больше не ведут (кап сливается клоком) — часами
+    // повреждения они быть перестали; предупреждение живёт в warn_mask.
     return soonest;
 }
 
@@ -248,7 +250,8 @@ float needs_speed_scale(const Needs& n) {
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
-                     const RoomZones* rooms, AiMemory* mem, double now) {
+                     AiMemory* mem, double now, EventBus* bus,
+                     std::uint64_t tick) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -283,23 +286,22 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
             n = camera ? needs_roll(seed) : needs_roll_resident(seed);
         }
 
-        needs_advance(n, dt);
+        ReliefResult voided;
+        needs_advance(n, dt, &voided);
+        // ДЕЯНИЕ «невольный слив» (S19): позиция и тело в руках только
+        // здесь. Цена/уместность/свидетели — целиком у witness_step.
+        if (bus != nullptr && (voided.pee > 0.0f || voided.poo > 0.0f))
+            deed_publish(*bus, kVerbToilet, e, kInvalidNpc, tr.pos, tick);
+        if (camera) {
+            out.voidedPee = voided.pee > 0.0f ? 1 : 0;
+            out.voidedPoo = voided.poo > 0.0f ? 1 : 0;
+        }
         ++out.bodies;
 
-        // AMBIENT RECOVERY — the other half of the widened scope. Standing in a
-        // kitchen fills you and queues the digestion that later sends you to a
-        // bathroom; a corridor does nothing, at the cost of one table read.
-        if (rooms != nullptr) {
-            const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
-            const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
-            const std::uint16_t bit = room_bit_at(rooms->kind, rooms->number, cx, cy);
-            if (room_restores(bit)) {
-                const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
-                room_recover(n, bit, dt, mem, id, cx, cy, cz, now,
-                             pool.max_hp(id));
-                ++out.recovering;
-            }
-        }
+        // АМБИЕНТНАЯ РЕГЕНЕРАЦИЯ ПО ВИДУ КОМНАТЫ УМЕРЛА (rooms-object F,
+        // S12.2: вида нет; S12.5: потребление РЕАЛЬНОЕ — NPC берёт предмет и
+        // ест его). Возвращает agent-goals: цель «есть» ведёт к комнате с
+        // предложением, изъятие предмета из контейнера двигает нужду.
 
         // HEAL BANK SPILL — the mirror of the hpDebt drain below, and deliberately
         // NOT behind that section's `rate <= 0` early-out: a body healing in a

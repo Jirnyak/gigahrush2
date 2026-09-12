@@ -28,32 +28,10 @@ inline constexpr CellType kCellAir = 0;
 struct SubMask {
     std::uint64_t words[kSubMaskWords] = {};
 
-    // The 2x2 CENTRE column of one Z sub-layer — a POINT attachment needs matter
-    // straight along the pull, not somewhere at the cell's rim.
-    static constexpr std::uint64_t kCentreZ =
-        (std::uint64_t{3} << ((kSubDim / 2 - 1) + (kSubDim / 2 - 1) * kSubDim)) |
-        (std::uint64_t{3} << ((kSubDim / 2 - 1) + (kSubDim / 2) * kSubDim));
-
-    // Lowest occupied sub-layer (0..7), or -1 when empty. word i IS layer sz=i
-    // (sub_bit packs sx + sy*8 + sz*64). Anything that HANGS from a cell (a
-    // wire anchor, a lamp, a pipe hugging a ceiling) must ask for the REAL
-    // under-face — partially carved cells (the sandwich lintels) keep their
-    // matter in the top layers only, and hanging from the cell PLANE reads as
-    // hanging from air (owner's screenshots, 2026-08-03).
-    //
-    // These two are the Z-FRAME shorthands, kept as raw word loops because they
-    // are the hot ones: a -Z world asks them per prop, per frame. The general
-    // frame question is face_layer() below.
-    int lowest_layer() const {
-        for (int sz = 0; sz < kSubDim; ++sz)
-            if (words[sz] != 0) return sz;
-        return -1;
-    }
-    int lowest_layer_centre() const {
-        for (int sz = 0; sz < kSubDim; ++sz)
-            if (words[sz] & kCentreZ) return sz;
-        return -1;
-    }
+    // lowest_layer / lowest_layer_centre / kCentreZ УДАЛЕНЫ 2026-08-29
+    // (skeleton-anchor C): Z-привилегированные шорткаты остались без единого
+    // потребителя после anchor-unify (все мигрировали на face_layer_window /
+    // surface_face_at) — мёртвая тропа для рецидива, а не «горячий путь».
 
     // The first solid sub-layer met coming IN through one FACE of the cell:
     // layers perpendicular to `axis`, scanned from the low side (`dir` < 0) or
@@ -65,12 +43,43 @@ struct SubMask {
     // the packing axis and stays a single word test per layer; a tangent axis
     // pays a bit loop — at bake time only, never in a tick.
     int face_layer(int axis, int dir, bool centreOnly) const {
-        const std::uint64_t zMask = centreOnly ? kCentreZ : ~std::uint64_t{0};
+        if (centreOnly)
+            return face_layer_window(axis, dir, kSubDim / 2 - 1, kSubDim / 2 - 1);
         for (int i = 0; i < kSubDim; ++i) {
             const int s = dir > 0 ? kSubDim - 1 - i : i;
-            const bool solid = axis == 2 ? (words[s] & zMask) != 0
-                                         : tangent_layer_solid(axis, s, centreOnly);
+            const bool solid = axis == 2 ? words[s] != 0
+                                         : tangent_layer_solid(axis, s, false);
             if (solid) return s;
+        }
+        return -1;
+    }
+
+    // То же, но окно 2×2 в ТОЧКЕ КРЕПЛЕНИЯ (u,v) на тангенциальных осях грани
+    // (X-грань → (y,z), Y-грань → (x,z), Z-грань → (x,y); соответствие держит
+    // anchor_face_uv в [world/anchor.h], потребители его не дублируют). Окно
+    // прижимается к краю грани; центр (kSubDim/2-1)² воспроизводит бывший kCentreZ
+    // бит в бит — face_layer(centreOnly) делегирует сюда. Точка, а не центр
+    // (решение владельца 2026-08-20, S2): вещь, прибитая в углу 2-метровой
+    // грани, живёт и умирает по материи ПОД СОБОЙ, а не в полуметре от себя.
+    int face_layer_window(int axis, int dir, int u, int v) const {
+        const int u0 = u < 0 ? 0 : (u > kSubDim - 2 ? kSubDim - 2 : u);
+        const int v0 = v < 0 ? 0 : (v > kSubDim - 2 ? kSubDim - 2 : v);
+        if (axis == 2) {
+            const std::uint64_t m =
+                (std::uint64_t{3} << (u0 + v0 * kSubDim)) |
+                (std::uint64_t{3} << (u0 + (v0 + 1) * kSubDim));
+            for (int i = 0; i < kSubDim; ++i) {
+                const int s = dir > 0 ? kSubDim - 1 - i : i;
+                if (words[s] & m) return s;
+            }
+            return -1;
+        }
+        for (int i = 0; i < kSubDim; ++i) {
+            const int s = dir > 0 ? kSubDim - 1 - i : i;
+            for (int a = u0; a <= u0 + 1; ++a)
+                for (int b = v0; b <= v0 + 1; ++b)
+                    if (test(axis == 0 ? sub_bit(s, a, b) : sub_bit(a, s, b)))
+                        return s;
         }
         return -1;
     }

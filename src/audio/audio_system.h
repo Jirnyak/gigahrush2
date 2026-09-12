@@ -15,7 +15,6 @@
 struct SDL_AudioStream;
 
 namespace giga::game {
-struct DoorSet;
 }
 
 namespace giga::audio {
@@ -33,7 +32,6 @@ public:
                 const MacroGrid& grid, const Field<float>* dangerField,
                 const game::SamosborState& samosbor, const game::EventBus& bus,
                 const game::NoiseField& noiseField, float hudBrightness = 1.0f,
-                const game::DoorSet* doors = nullptr,
                 LayerId activeLayer = 0);
 
     // Direct sound triggers

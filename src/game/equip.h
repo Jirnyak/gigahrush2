@@ -30,18 +30,41 @@ inline constexpr std::uint8_t kEquipNone = 0xFFu;
 // На ТЕЛЕ (ECS), не на строке пула: решение — свойство воплощённого существа,
 // холодной толпе экипировка не нужна, а после воплощения первый же проход
 // ai_equip_step решает заново. 4 байта, POD.
+// ДВЕ РУКИ (эпик two-hands.md, замысел владельца 2026-08-31): активных
+// слота два — рука ЛКМ и рука ПКМ, класть можно любой hand-предмет
+// (Weapon И Tool категории — Tool-СЛОТ убит решением владельца, «теперь
+// руки»), верб решает тип предмета своей таблицей. Байты на прежних
+// местах (сейв-раскладка не менялась): weapon→handL, tool→handR — старое
+// решение «tool» честно оказывается в правой руке, а протухшее гасится
+// валидацией по def, как всегда.
 struct Equipped {
-    std::uint8_t weapon = kEquipNone; // индекс слота инвентаря, 0..63
-    std::uint8_t armor  = kEquipNone;
-    std::uint8_t tool   = kEquipNone;
-    std::uint8_t pad_   = 0;
+    std::uint8_t handL = kEquipNone; // рука ЛКМ: индекс слота 0..63
+    std::uint8_t armor = kEquipNone;
+    std::uint8_t handR = kEquipNone; // рука ПКМ (байт бывшего tool)
+    std::uint8_t pad_  = 0;
 };
 static_assert(sizeof(Equipped) == 4, "Equipped must stay 4 bytes POD");
 
+// Категория предмета принимается РУКОЙ? (адресация руки — выбор игрока,
+// не def: пистолет кладётся в любую из двух).
+inline bool hand_accepts(EquipSlot s) {
+    return s == EquipSlot::Weapon || s == EquipSlot::Tool;
+}
+
 // Записать решение: слот slotIdx инвентаря занимает соответствующую его
-// def.equipSlot ячейку Equipped. false — слот пуст, вне 0..63 или предмет
-// не экипируется (equip_slot=None в data/items.csv).
+// def.equipSlot ячейку Equipped: Armor → armor, hand-предмет — в руку ЛКМ
+// по умолчанию (адресный выбор руки — equip_hand ниже). false — слот
+// пуст, вне 0..63 или предмет не экипируется (equip_slot=None).
 bool equip_item(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx);
+
+// Положить hand-предмет в НАЗВАННУЮ руку (right=true — ПКМ). false —
+// предмет не hand-категории или слот пуст/протух.
+bool equip_hand(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx,
+                bool right);
+
+// Валидированное чтение руки: ItemId или kInvalidItem (решения нет /
+// индекс протух / предмет уже не hand-категории).
+ItemId equipped_hand(const Inventory& inv, const Equipped& eq, bool right);
 
 // Снять решение. false — slot None/Count.
 bool unequip_slot(Equipped& eq, EquipSlot slot);

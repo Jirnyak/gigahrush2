@@ -10,10 +10,11 @@
 #include <type_traits>
 
 #include "core/math.h"
+#include "game/verb_table.h"  // kVerbCount — вектор глаголов пропа (S12.3)
 
 namespace giga::game {
 
-inline constexpr std::size_t kPropCount = 9;
+inline constexpr std::size_t kPropCount = 15;
 
 // Row order is data/props.csv row order and is load-bearing: a PropId is an
 // index into the generated table. Append only — never reorder or insert.
@@ -27,6 +28,12 @@ enum class PropId : std::uint16_t {
     KitchenTable = 6,
     ToiletPan = 7,
     BedCot = 8,
+    SupplyCrate = 9,
+    Grenade = 10,
+    FuelBarrel = 11,
+    StreetLamp = 12,
+    LiftButton = 13,
+    LiftPanel = 14,
 };
 
 // POD row. shape is the PropShape ordinal (render/prop_mesh.h); game never
@@ -71,18 +78,38 @@ struct PropDef {
     std::uint16_t lightIntensityE3; // 26 интенсивность x1000
     std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
                                     //    свет И emissive носителя, синхронно
-    std::uint8_t  pad0_ = 0;        // 29
-    std::uint16_t pad1_ = 0;        // 30
+    // ЗАРЯД ([combat.h] Charge, решение владельца 2026-08-21: «пропы в целом
+    // могут взрываться»). explosiveG — масса ВВ в граммах, 0 = не заряд;
+    // урон и радиус детонации ВЫВОДЯТСЯ из неё (S11), не назначаются.
+    // Оба поля заняли бывшие pad0_/pad1_ — строка осталась 32 байта.
+    std::uint8_t  chargeTrigger;    // 29 ChargeTrigger ниже
+    std::uint16_t explosiveG;       // 30 масса ВВ, граммы
 };
 static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
+
+// Как заряд срабатывает. none — сам не детонирует (взводится извне: фитиль
+// гранаты взводит бросающий, [combat.h] spawn_grenade); damage — детонация
+// вместо детача, когда проп сбивают выстрелом (бочка, баллон).
+// Lockstep с CHARGE_TRIGGERS генератора.
+enum class ChargeTrigger : std::uint8_t { None = 0, Damage = 1 };
+
+// Строка — заряд? Выводится из массы ВВ, не объявляется отдельным флагом.
+inline bool prop_is_charge(const PropDef& d) { return d.explosiveG > 0; }
 
 
 // Generated from data/props.csv by tools/gen_prop_table.py.
 extern const std::array<PropDef, kPropCount> kPropTable;
 extern const std::array<const char*, kPropCount> kPropNames;
 extern const std::array<const char*, kPropCount> kPropIds;
+
+// Глаголы, которые проп ПРЕДОСТАВЛЯЕТ (CANON S12.3: возможность, не
+// тратится) — колонка verbs в props.csv, вектор длины K из data/verbs.csv.
+// Слагаемое ОСНАЩЕНИЕ предложения комнаты (S12.4). Живёт параллельной
+// таблицей, не полем POD: PropDef — ровно 32 байта по контракту.
+extern const std::array<std::array<std::int16_t, kVerbCount>, kPropCount>
+    kPropVerbs;
 
 inline bool prop_valid(PropId id) {
     return static_cast<std::size_t>(id) < kPropCount;

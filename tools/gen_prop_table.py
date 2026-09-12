@@ -53,6 +53,48 @@ INTERACTS = _load_interacts()
 # FlickerProfile ordinals — lockstep с src/game/flicker.h и shaders/flicker.glsl.
 FLICKER = {"none": 0, "mains": 1, "arc": 2, "pulse": 3, "crt": 4}
 
+# ChargeTrigger ordinals — lockstep с enum class ChargeTrigger в prop_table.h
+# (эмитится этим же генератором ниже). none = проп не детонирует сам (заряд
+# может быть взведён извне — фитиль гранаты взводит бросающий); damage =
+# детонация вместо детача, когда проп сбивают выстрелом/ударом (бочка).
+CHARGE_TRIGGERS = {"none": 0, "damage": 1}
+
+VERBS_CSV = os.path.join(REPO, "data", "verbs.csv")
+
+
+def load_verbs():
+    """Словарь глаголов (CANON S12.3): токен -> ординал, K = число строк.
+    Единственный источник — data/verbs.csv; опечатка в колонке verbs пропа
+    обязана быть жёсткой ошибкой, а не молчаливым нулём (решение владельца:
+    свободные хеш-теги отвергнуты именно за это)."""
+    with open(VERBS_CSV, encoding="utf-8", newline="") as fh:
+        return {r["id"].strip(): i for i, r in enumerate(csv.DictReader(fh))}
+
+
+def parse_verbs(sid, text, verbs):
+    """'sleep:17|eat:4' -> vector[K]. Что проп ПРЕДОСТАВЛЯЕТ (возможность,
+    не тратится) — слагаемое ОСНАЩЕНИЕ предложения комнаты (S12.4)."""
+    vec = [0] * len(verbs)
+    text = (text or "").strip()
+    if not text:
+        return vec
+    for pair in text.split("|"):
+        tok, _, val = pair.partition(":")
+        tok = tok.strip()
+        if tok not in verbs:
+            die("%r: unknown verb %r in verbs column (want one of %s)"
+                % (sid, tok, ", ".join(sorted(verbs))))
+        try:
+            v = int(val)
+        except ValueError:
+            die("%r: verb %s amount %r is not an integer" % (sid, tok, val))
+        if not (-32768 <= v <= 32767):
+            die("%r: verb %s amount %d out of i16" % (sid, tok, v))
+        if vec[verbs[tok]] != 0:
+            die("%r: verb %s listed twice" % (sid, tok))
+        vec[verbs[tok]] = v
+    return vec
+
 
 def die(msg):
     sys.stderr.write("gen_prop_table: %s\n" % msg)
@@ -97,6 +139,8 @@ def main():
     if not rows:
         die("props.csv has no data rows")
 
+    verbs = load_verbs()
+    verb_vecs = []
     seen = set()
     defs = []
     names = []
@@ -138,10 +182,20 @@ def main():
         if (light_radius == 0) != (light_intensity == 0):
             die("%r: light_radius_mm and light_intensity_e3 must be both zero "
                 "or both set" % sid)
+        explosive = num(r, "explosive_g", 0, 65535)
+        trigger = (r.get("charge_trigger") or "").strip()
+        if trigger not in CHARGE_TRIGGERS:
+            die("%r: unknown charge_trigger %r (want %s)"
+                % (sid, trigger, ", ".join(sorted(CHARGE_TRIGGERS))))
+        # Триггер без взрывчатки — заряд, который сработает нулём: молчаливый
+        # обман того же сорта, что blastDm без fuseDs у оружейной таблицы.
+        if CHARGE_TRIGGERS[trigger] != 0 and explosive == 0:
+            die("%r: charge_trigger %r requires explosive_g > 0" % (sid, trigger))
 
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
         names.append((sid, name))
+        verb_vecs.append(parse_verbs(sid, r.get("verbs"), verbs))
         # GRAMS, read as an integer and never scaled here. The column used to be
         # `mass_kg` and was multiplied on the way in, which put a unit conversion
         # between what the author wrote and what the engine stored — the same seam
@@ -164,10 +218,11 @@ def main():
         if not (0 < massG <= 4294967295):
             die("row %d: mass_g %r out of range (1..2^32-1, and a prop may not be "
                 "massless)" % (i, mass_raw))
-        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker + pads.
+        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker,
+        # chargeTrigger (бывший pad0_), explosiveG (бывший pad1_).
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, 0, 0 }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, sid,
                 massG,
                 shape,
@@ -180,7 +235,9 @@ def main():
                 reach,
                 sizes[0], sizes[1], sizes[2],
                 light_radius, light_intensity,
-                FLICKER[flicker]))
+                FLICKER[flicker],
+                CHARGE_TRIGGERS[trigger],
+                explosive))
 
     count = len(rows)
 
@@ -209,7 +266,22 @@ def main():
         for sid, _name in names:
             fh.write('    "%s",\n' % sid)
         fh.write("}};\n\n")
+        fh.write("// Глаголы пропа (S12.3, колонка verbs) — что предоставляет.\n")
+        fh.write("const std::array<std::array<std::int16_t, kVerbCount>, "
+                 "kPropCount> kPropVerbs = {{\n")
+        for (sid, _name), vec in zip(names, verb_vecs):
+            fh.write("    {{%s}},  // %s\n" % (", ".join(str(v) for v in vec), sid))
+        fh.write("}};\n\n")
         fh.write(FOOTER_CPP)
+
+    # Мёртвый глагол в пропах — не ошибка (его может нести предмет или
+    # объявление), но молчать нельзя (гейт B verbs-table): печатаем вслух.
+    provided = {tok for tok, k in verbs.items()
+                if any(vec[k] != 0 for vec in verb_vecs)}
+    dead = sorted(set(verbs) - provided)
+    if dead:
+        sys.stderr.write("gen_prop_table: verbs with no providing prop yet: %s\n"
+                         % ", ".join(dead))
 
     sys.stderr.write("gen_prop_table: wrote %d prop rows to %s + %s\n"
                      % (count, OUT_H, OUT_CPP))
@@ -227,6 +299,7 @@ HEADER_H = """// GENERATED by tools/gen_prop_table.py from data/props.csv — do
 #include <type_traits>
 
 #include "core/math.h"
+#include "game/verb_table.h"  // kVerbCount — вектор глаголов пропа (S12.3)
 
 namespace giga::game {
 
@@ -278,18 +351,38 @@ struct PropDef {
     std::uint16_t lightIntensityE3; // 26 интенсивность x1000
     std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
                                     //    свет И emissive носителя, синхронно
-    std::uint8_t  pad0_ = 0;        // 29
-    std::uint16_t pad1_ = 0;        // 30
+    // ЗАРЯД ([combat.h] Charge, решение владельца 2026-08-21: «пропы в целом
+    // могут взрываться»). explosiveG — масса ВВ в граммах, 0 = не заряд;
+    // урон и радиус детонации ВЫВОДЯТСЯ из неё (S11), не назначаются.
+    // Оба поля заняли бывшие pad0_/pad1_ — строка осталась 32 байта.
+    std::uint8_t  chargeTrigger;    // 29 ChargeTrigger ниже
+    std::uint16_t explosiveG;       // 30 масса ВВ, граммы
 };
 static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);
 static_assert(std::is_trivially_copyable_v<PropDef>);
+
+// Как заряд срабатывает. none — сам не детонирует (взводится извне: фитиль
+// гранаты взводит бросающий, [combat.h] spawn_grenade); damage — детонация
+// вместо детача, когда проп сбивают выстрелом (бочка, баллон).
+// Lockstep с CHARGE_TRIGGERS генератора.
+enum class ChargeTrigger : std::uint8_t { None = 0, Damage = 1 };
+
+// Строка — заряд? Выводится из массы ВВ, не объявляется отдельным флагом.
+inline bool prop_is_charge(const PropDef& d) { return d.explosiveG > 0; }
 
 
 // Generated from data/props.csv by tools/gen_prop_table.py.
 extern const std::array<PropDef, kPropCount> kPropTable;
 extern const std::array<const char*, kPropCount> kPropNames;
 extern const std::array<const char*, kPropCount> kPropIds;
+
+// Глаголы, которые проп ПРЕДОСТАВЛЯЕТ (CANON S12.3: возможность, не
+// тратится) — колонка verbs в props.csv, вектор длины K из data/verbs.csv.
+// Слагаемое ОСНАЩЕНИЕ предложения комнаты (S12.4). Живёт параллельной
+// таблицей, не полем POD: PropDef — ровно 32 байта по контракту.
+extern const std::array<std::array<std::int16_t, kVerbCount>, kPropCount>
+    kPropVerbs;
 
 inline bool prop_valid(PropId id) {
     return static_cast<std::size_t>(id) < kPropCount;

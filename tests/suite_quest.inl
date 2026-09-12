@@ -178,7 +178,7 @@ void catalog_is_reachable() {
                 // weight exponentially and can reach 0. So the target must be findable
                 // on EVERY floor the quest is offered on, not just on the deepest.
                 for (int fz = d.floorLo; fz <= d.floorHi; ++fz)
-                    CHECK(item_weight_on_floor(d.subject, fz, 0) > 0);
+                    CHECK(item_weight_on_floor(d.subject, fz) > 0);
                 break;
             }
             case ObjectiveKind::Hunt: {

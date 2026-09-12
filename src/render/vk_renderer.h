@@ -8,7 +8,7 @@
 //      (R16G16B16A16F). begin_pass() открывает его.
 //   2. Пост-пас: полноэкранный треугольник (post_pass.frag) семплит HDR-таргет
 //      в свопчейн — CRT-кривизна, скан-линии, хроматика, виньетка, фосфорный
-//      налёт, экспозиция тёмной адаптации. begin_post_pass() закрывает сцену и
+//      налёт, CRT-оверлей (экспозиция адаптации вырезана 2026-08-17). begin_post_pass() закрывает сцену и
 //      открывает его; ImGui пишет ПОСЛЕ треугольника, ПОВЕРХ обработки.
 //
 // Правка 1 — UI вне трубки: у форка ImGui жил в сценовом пасе, и весь
@@ -67,7 +67,6 @@ struct VulkanRenderer {
     // Характер трубки. crtEnabled=false (--no-crt) даёт сырой кадр.
     // Экспозиции здесь НЕТ: «тёмная адаптация» вырезана ([ddalight.md] №10).
     bool crtEnabled = true;
-    bool vrMode = false; // Stereoscopic SBS mode (disables full-screen CRT barrel distortion)
     float chromaticAberration = 0.003f;
     float crtCurvature = 0.035f;
     float scanlineIntensity = 0.35f;
@@ -126,7 +125,15 @@ struct VulkanRenderer {
     //
     // Recorded into the SAME command buffer as the draws, immediately after
     // vkCmdEndRenderPass, which is the only window in which the image is ours.
-    void request_capture(VkBuffer dst) { captureTo_ = dst; captureDone_ = false; }
+    // Захват несёт EXTENT своего запроса: буфер сайзился под него, а копия
+    // пишется кадром ПОЗЖЕ — свопчейн между ними может пересоздаться
+    // (ресайз/фуллскрин), и копия нового размера писала бы за буфер GPU-ом
+    // (аудит 2026-08-27). Несовпадение роняет захват громко, не память.
+    void request_capture(VkBuffer dst, VkExtent2D extent) {
+        captureTo_ = dst;
+        captureExtent_ = extent;
+        captureDone_ = false;
+    }
     bool capture_done() const { return captureDone_; }
     void clear_capture() { captureTo_ = VK_NULL_HANDLE; captureDone_ = false; }
 
@@ -134,12 +141,10 @@ struct VulkanRenderer {
     const VulkanSwapchain& swap() const { return *swapchain_; }
     bool recreate(SDL_Window* window);
 
-    void set_vr_mode(bool on) { vrMode = on; }
-    bool vr_mode() const { return vrMode; }
-
 private:
     VulkanSwapchain* swapchain_ = nullptr;
     VkBuffer captureTo_ = VK_NULL_HANDLE;
+    VkExtent2D captureExtent_{0, 0}; // extent, под который сайзился буфер
     bool captureDone_ = false;
     VkFramebuffer sceneFramebuffer_ = VK_NULL_HANDLE; // hdrView + depthView
     std::vector<VkFramebuffer> postFramebuffers_;     // по свопчейн-имиджу

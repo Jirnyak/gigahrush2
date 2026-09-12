@@ -1,29 +1,30 @@
 #include "input/input.h"
 
 #include <SDL3/SDL.h>
-#include <cmath>
+
+#include <algorithm>
 
 #include "ecs/components.h"
 #include "game/player_command.h"
 
 namespace giga {
 
-InputState::InputState() {
+// Открыть ПЕРВЫЙ подключённый геймпад. Первый, а не «все»: аватар один, и
+// второй контроллер, молча правящий тем же телом, — это не кооп, а баг.
+// Кооп придёт сессиями ([netcode.md]), у каждой своё устройство.
+static SDL_Gamepad* open_first_gamepad() {
     int count = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&count);
-    if (ids) {
-        if (count > 0) {
-            gamepad_ = SDL_OpenGamepad(ids[0]);
-        }
-        SDL_free(ids);
-    }
+    if (!ids) return nullptr;
+    SDL_Gamepad* pad = count > 0 ? SDL_OpenGamepad(ids[0]) : nullptr;
+    SDL_free(ids);
+    return pad;
 }
 
+InputState::InputState() : gamepad_(open_first_gamepad()) {}
+
 InputState::~InputState() {
-    if (gamepad_) {
-        SDL_CloseGamepad(gamepad_);
-        gamepad_ = nullptr;
-    }
+    if (gamepad_) SDL_CloseGamepad(gamepad_);
 }
 
 InputState::InputState(InputState&& o) noexcept
@@ -35,12 +36,9 @@ InputState::InputState(InputState&& o) noexcept
       toggleFlyEdge_(o.toggleFlyEdge_),
       binds_(o.binds_),
       gamepad_(o.gamepad_),
-      gamepadLookSpeed_(o.gamepadLookSpeed_),
-      lastDt_(o.lastDt_),
-      gamepadJumpEdge_(o.gamepadJumpEdge_),
-      gamepadFlyToggleEdge_(o.gamepadFlyToggleEdge_),
-      gamepadAttackHeld_(o.gamepadAttackHeld_) {
-    o.gamepad_ = nullptr;
+      gamepadAxes_(o.gamepadAxes_),
+      lookSpeed_(o.lookSpeed_) {
+    o.gamepad_ = nullptr; // владение ушло: чужой деструктор устройство не закроет
 }
 
 InputState& InputState::operator=(InputState&& o) noexcept {
@@ -54,11 +52,8 @@ InputState& InputState::operator=(InputState&& o) noexcept {
         toggleFlyEdge_ = o.toggleFlyEdge_;
         binds_ = o.binds_;
         gamepad_ = o.gamepad_;
-        gamepadLookSpeed_ = o.gamepadLookSpeed_;
-        lastDt_ = o.lastDt_;
-        gamepadJumpEdge_ = o.gamepadJumpEdge_;
-        gamepadFlyToggleEdge_ = o.gamepadFlyToggleEdge_;
-        gamepadAttackHeld_ = o.gamepadAttackHeld_;
+        gamepadAxes_ = o.gamepadAxes_;
+        lookSpeed_ = o.lookSpeed_;
         o.gamepad_ = nullptr;
     }
     return *this;
@@ -66,33 +61,26 @@ InputState& InputState::operator=(InputState&& o) noexcept {
 
 void InputState::handle_event(const SDL_Event& e) {
     switch (e.type) {
+    // Горячее подключение. SDL присылает ADDED и на уже воткнутые устройства
+    // сразу после SDL_Init, так что конструктор и эта ветка дублируют друг
+    // друга сознательно: порядок инициализации приложения на них не влияет.
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!gamepad_) {
-            gamepad_ = SDL_OpenGamepad(e.gdevice.which);
-        }
+        if (!gamepad_) gamepad_ = SDL_OpenGamepad(e.gdevice.which);
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (gamepad_ && SDL_GetGamepadID(gamepad_) == e.gdevice.which) {
             SDL_CloseGamepad(gamepad_);
             gamepad_ = nullptr;
+            gamepadAxes_ = game::GamepadAxes{}; // выдернутый шнур не держит ось
         }
         break;
+    // Прыжок — ЭДЖ, ровно как у клавиатуры: кнопка A складывается по ИЛИ с
+    // клавишей. Полёт кнопкой НЕ переключается: у клавиатуры его тоже нет
+    // (чистка 2026-08-28 сняла дев-строки с клавиш), и заводить на геймпаде
+    // то, чего нет на клавиатуре, значит молча отменить то решение.
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH ||
-            e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) {
-            gamepadJumpEdge_ = true;
-        } else if (e.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH ||
-                   e.gbutton.button == SDL_GAMEPAD_BUTTON_WEST ||
-                   e.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
-            gamepadFlyToggleEdge_ = true;
-        } else if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
-            gamepadAttackHeld_ = true;
-        }
-        break;
-    case SDL_EVENT_GAMEPAD_BUTTON_UP:
-        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
-            gamepadAttackHeld_ = false;
-        }
+        if (mouselook_ && e.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH)
+            jumpEdge_ = true;
         break;
     case SDL_EVENT_MOUSE_MOTION:
         if (mouselook_) {
@@ -114,88 +102,83 @@ void InputState::handle_event(const SDL_Event& e) {
     }
 }
 
-game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar) const {
+game::GamepadAxes InputState::poll_gamepad() const {
+    game::GamepadAxes ax{};
+    if (!gamepad_) return ax;
+
+    // Нормировка Sint16 -> [-1, 1]. Отрицательный предел у оси на единицу
+    // шире положительного, поэтому делители РАЗНЫЕ: иначе отклонение до упора
+    // влево даёт |v| > 1 и стик врёт ровно на краю, где это заметнее всего.
+    auto norm = [](Sint16 raw) {
+        return static_cast<float>(raw) / (raw < 0 ? 32768.0f : 32767.0f);
+    };
+    // Триггер отдаёт только неотрицательную половину диапазона.
+    auto trig = [](Sint16 raw) {
+        return raw > 0 ? static_cast<float>(raw) / 32767.0f : 0.0f;
+    };
+
+    ax.moveX = norm(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFTX));
+    ax.moveY = norm(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFTY));
+    ax.lookX = norm(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHTX));
+    ax.lookY = norm(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHTY));
+    ax.triggerL = trig(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
+    ax.triggerR = trig(SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
+    ax.ascend = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) ||
+                SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_DPAD_UP);
+    ax.descend = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) ||
+                 SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    return ax;
+}
+
+game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar,
+                                              float dt) const {
     game::PlayerCommand cmd{};
 
+    // Fly toggle is an edge; the button bit carries it and the server flips the
+    // state. But the movement up-axis below depends on the fly state AS OF THIS
+    // FRAME (the old code toggled fly first, then read it) — so predict the
+    // post-toggle state here for wishDir, exactly reproducing that ordering.
+    //
+    // БЕЗ гейта на mouselook_ — сознательно. Эдж ставит ровно один путь:
+    // консольный запрос `fly` (клавиши по умолчанию у полёта нет). Пока стоял
+    // `&& mouselook_`, команда была недостижима по построению: консоль
+    // открыта -> mouselook снят -> единственное место, где команду можно
+    // НАБРАТЬ, гарантировало, что её эдж будет молча стёрт в apply(). Явный
+    // запрос пользователя — не «утечка ввода», которую гейт ловит для осей.
     bool willFly = false;
     if (const auto* ctl = reg.try_get<Controller>(avatar)) willFly = ctl->fly;
-    if (toggleFlyEdge_ || gamepadFlyToggleEdge_) {
+    if (toggleFlyEdge_) {
         cmd.buttons |= game::bit(game::Button::FlyToggle);
         willFly = !willFly;
     }
 
+    // Absolute look angles: seed from the avatar's current camera, fold in this
+    // frame's mouse delta (only when mouselook is on — otherwise the view is
+    // frozen and we send it back unchanged). Screen-down = look down, so both
+    // subtract, matching the old bridge. Pitch clamping is the SERVER's job.
     if (const auto* cam = reg.try_get<CameraTag>(avatar)) {
         cmd.yaw = cam->yaw;
         cmd.pitch = cam->pitch;
     }
+    // Геймпад складывается с мышью и клавиатурой, а не подменяет их: держать
+    // оба устройства живыми одновременно — единственный способ не заводить
+    // «режим геймпада» и не спрашивать игрока, чем он сейчас играет.
+    // Считает намерение headless-слой ([game/gamepad.h]) — там же и гейт.
+    const game::GamepadIntent pad =
+        game::gamepad_fold(gamepadAxes_, willFly, lookSpeed_, dt);
 
-    float stickFwd = 0.0f;
-    float stickRight = 0.0f;
-    float stickUp = 0.0f;
-    float stickYawDelta = 0.0f;
-    float stickPitchDelta = 0.0f;
-
-    if (gamepad_) {
-        constexpr float kStickDeadzone = 0.15f;
-        constexpr float kTriggerThreshold = 0.25f;
-
-        auto filter_axis = [](Sint16 raw, float deadzone) -> float {
-            float v = static_cast<float>(raw) / (raw < 0 ? 32768.0f : 32767.0f);
-            if (std::fabs(v) <= deadzone) return 0.0f;
-            float sign = v > 0.0f ? 1.0f : -1.0f;
-            return sign * (std::fabs(v) - deadzone) / (1.0f - deadzone);
-        };
-
-        Sint16 rawLx = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFTX);
-        Sint16 rawLy = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFTY);
-        Sint16 rawRx = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHTX);
-        Sint16 rawRy = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHTY);
-        Sint16 rawLt = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
-        Sint16 rawRt = SDL_GetGamepadAxis(gamepad_, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
-
-        float lx = filter_axis(rawLx, kStickDeadzone);
-        float ly = filter_axis(rawLy, kStickDeadzone);
-        float rx = filter_axis(rawRx, kStickDeadzone);
-        float ry = filter_axis(rawRy, kStickDeadzone);
-        float lt = static_cast<float>(rawLt) / 32767.0f;
-        float rt = static_cast<float>(rawRt) / 32767.0f;
-
-        // Left stick: movement. SDL stick up is negative, so forward = -ly.
-        stickFwd = -ly;
-        stickRight = lx;
-
-        // Right stick: look (yaw and pitch).
-        // rx > 0 (stick right) turns view right (decreases yaw).
-        // ry < 0 (stick up in SDL) looks up (increases pitch).
-        float dt = lastDt_ > 0.0f ? lastDt_ : (1.0f / 60.0f);
-        stickYawDelta = rx * gamepadLookSpeed_ * dt;
-        stickPitchDelta = ry * gamepadLookSpeed_ * dt;
-
-        bool btnRB = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
-        bool btnLB = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-        bool btnDpadUp = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_DPAD_UP);
-        bool btnDpadDown = SDL_GetGamepadButton(gamepad_, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-
-        // Fly vertical movement
-        if (willFly) {
-            if (btnRB || btnDpadUp || (rt > kTriggerThreshold)) stickUp += 1.0f;
-            if (btnLB || btnDpadDown || (lt > kTriggerThreshold)) stickUp -= 1.0f;
-        }
-
-        // Action trigger
-        if ((rt > kTriggerThreshold) || btnRB) {
-            cmd.buttons |= game::bit(game::Button::Attack);
-        }
-    }
-
-    // Absolute look angles: seed from the avatar's current camera, fold in mouse delta
-    // and gamepad stick rotation (only when mouselook is active).
+    // Movement intent, camera-local. Scancodes are layout-independent and come
+    // from the keybinding table's axis rows ([keybind.h]), not from constants.
+    // When mouselook is disabled (e.g. modals, dialogue, trading, looting, crafting,
+    // or menus are open), movement intent is strictly zeroed to prevent input bleeding.
+    // Гейт один на все устройства: стик и триггер утекают сквозь открытое окно
+    // ровно так же, как утекала бы клавиша.
     if (mouselook_) {
-        cmd.yaw -= (mouseDx_ * sensitivity_ + stickYawDelta);
-        cmd.pitch -= (mouseDy_ * sensitivity_ + stickPitchDelta);
+        cmd.yaw -= mouseDx_ * sensitivity_ + pad.yawDelta;
+        cmd.pitch -= mouseDy_ * sensitivity_ + pad.pitchDelta;
 
         const bool* ks = SDL_GetKeyboardState(nullptr);
-        float fwd = stickFwd, right = stickRight, up = stickUp;
+        float fwd = pad.wishDir.x, right = pad.wishDir.y, up = pad.wishDir.z;
         if (ks[binds_.fwd]) fwd += 1.0f;
         if (ks[binds_.back]) fwd -= 1.0f;
         if (ks[binds_.right]) right += 1.0f;
@@ -204,35 +187,45 @@ game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar) cons
             if (ks[binds_.up] || ks[binds_.jump]) up += 1.0f;
             if (ks[binds_.down] || ks[binds_.downAlt]) up -= 1.0f;
         }
+        // Кламп нужен ровно из-за сложения устройств: W вместе со стиком
+        // вперёд иначе дают 2.0 и удваивают скорость. Контракт wishDir —
+        // каждая ось в [-1, 1] ([player_command.h]).
         cmd.wishDir = vec3{std::clamp(fwd, -1.0f, 1.0f),
                            std::clamp(right, -1.0f, 1.0f),
                            std::clamp(up, -1.0f, 1.0f)};
 
-        if (jumpEdge_ || gamepadJumpEdge_) cmd.buttons |= game::bit(game::Button::Jump);
-        if (gamepadAttackHeld_) cmd.buttons |= game::bit(game::Button::Attack);
+        // Jump edge (walk mode only; fly uses wishDir.z). The server re-checks the
+        // fly guard, so sending the bit unconditionally is safe and keeps the client
+        // dumb — it proposes, the server disposes.
+        if (jumpEdge_) cmd.buttons |= game::bit(game::Button::Jump);
     }
 
     return cmd;
 }
 
 void InputState::apply(Registry& reg, float dt) {
-    lastDt_ = dt;
+    // Устройство опрашивается РОВНО ЗДЕСЬ, один раз за тик: дальше по кадру
+    // и команда, и руки читают снятое состояние, а не железо.
+    gamepadAxes_ = poll_gamepad();
+
+    // Select the avatar: the first entity that owns both a camera and a
+    // controller. This is the "player is whoever holds CameraTag + Controller"
+    // rule; the future GameClient will instead pass its session's owned entity.
     Entity avatar = entt::null;
     auto view = reg.view<CameraTag, Controller>();
     for (auto ent : view) { avatar = ent; break; }
 
     if (avatar != entt::null) {
-        game::PlayerCommand cmd = build_command(reg, avatar);
+        game::PlayerCommand cmd = build_command(reg, avatar, dt);
         game::apply_player_command(reg, avatar, cmd, dt);
     }
 
-    // Clear per-frame edges + deltas
+    // Clear per-frame edges + deltas (owned here, not in build_command, so a
+    // GameClient can build a command per frame without consuming the edges twice).
     mouseDx_ = 0.0f;
     mouseDy_ = 0.0f;
     jumpEdge_ = false;
     toggleFlyEdge_ = false;
-    gamepadJumpEdge_ = false;
-    gamepadFlyToggleEdge_ = false;
 }
 
 } // namespace giga

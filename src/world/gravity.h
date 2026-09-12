@@ -125,13 +125,13 @@ struct GravityField {
     // in agreement (regime_from_vector) when changing either.
     GravityRegime regime = GravityRegime::NegZ;
 
-    // Games may install regional gravity by replacing this function pointer.
-    // Default returns the global vector everywhere. Kept as a plain function
-    // pointer (not std::function) to stay allocation- and exception-free.
-    using RegionFn = vec3 (*)(const GravityField&, vec3 pos);
-    RegionFn region = nullptr;
-
-    vec3 at(vec3 pos) const { return region ? region(*this, pos) : global; }
+    // Региональной гравитации-«по позиции» механизма НЕТ: крюк RegionFn
+    // снесён аудитом 2026-08-25 (никогда не подключался — мёртвая
+    // индирекция в горячем пути). Значение Custom ЗАРЕЗЕРВИРОВАНО решением
+    // владельца: потребители обязаны фолбэчить classify(global) — вернётся
+    // осознанным эпиком с реальным потребителем (скорее полем, чем
+    // колбэком: автомат S16 читает downStep пуш-константой на слой).
+    vec3 at(vec3) const { return global; }
 };
 
 // Every frame this field DECLARES, written into `out` (room for

@@ -1,6 +1,8 @@
 #include "game/embody.h"
 
 #include "game/equip.h"    // Equipped — the empty decision cells on embodiment
+#include "world/clearance.h"  // face_clearance_at — закон пробы стены
+#include "world/macro_grid.h"
 #include "game/faction.h"
 #include "game/prop_system.h" // Interactable — a living body is a menu ([conversation.md])
 #include "game/rpg.h"      // RpgStats, random_rpg
@@ -21,6 +23,19 @@ std::uint16_t resolved_height_mm(std::uint16_t stored) {
 
 } // namespace
 
+bool body_wall_adjacent(const MacroGrid& grid, const vec3& pos) {
+    const int cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
+    const int cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
+    const int cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    // Четыре боковые грани клетки тела; «стена» = грань, в которую тело не
+    // пролезает. Бит грани у младшей клетки оси: минус-грани спрашиваются у
+    // минус-соседа ([world/clearance.h]).
+    return face_clearance_at(grid, cx, cy, cz, 0) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx - 1, cy, cz, 0) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx, cy, cz, 1) < kBodyClearanceSub ||
+           face_clearance_at(grid, cx, cy - 1, cz, 1) < kBodyClearanceSub;
+}
+
 float body_half_height(std::uint16_t height_mm) {
     return resolved_height_mm(height_mm) * 0.001f * 0.5f;
 }
@@ -40,7 +55,7 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     if (!pool.valid(id)) return entt::null;
 
     Entity e = reg.create();
-    reg.emplace<NpcRef>(e, NpcRef{id});
+    reg.emplace<NpcRef>(e, NpcRef{id, pool.generation(id)});
 
     Transform tr;
     tr.pos = vec3{(static_cast<float>(pool.cx(id)) + 0.5f) * kEmbodyCellSize,
@@ -50,16 +65,22 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e);
 
-    // Stature drives the collider: ~0.4 m half-width, half-height from height.
+    // Stature drives the collider: half-width one for all (kBodyHalfWidth —
+    // из него же выведен клиренс-габарит), half-height from height.
     float hh = body_half_height(pool.height_mm(id));
-    reg.emplace<AABB>(e, AABB{vec3{0.4f, 0.4f, hh}});
+    reg.emplace<AABB>(e, AABB{vec3{kBodyHalfWidth, kBodyHalfWidth, hh}});
     // Universal mass from stature ([embody.h] body_mass_kg). Feeds E = m*v^2/2
     // (fall damage) and p = m*v everywhere. This is the BODY only; what it is
     // CARRYING is folded in by `encumbrance_step` ([encumbrance.h]), which is what
     // makes a loaded fall hurt more through the same law rather than a new one.
     reg.emplace<Mass>(e, Mass{body_mass_kg(pool.height_mm(id))});
     reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
-    reg.emplace<Jump>(e, Jump{6.5f, false});
+    // Default impulse (5.0, [ecs/components.h]) on purpose: impact.h derives
+    // kImpactFreeSpeed = 6.5 FROM a 5 m/s landing plus a step off a 2 m cell
+    // (~6.3), so the margin only exists if the jump actually is 5. The 6.5
+    // that used to sit here re-used the threshold as the impulse and zeroed
+    // the derived margin — a live player landed exactly on the bleed line.
+    reg.emplace<Jump>(e, Jump{});
 
     // Render skin: a faction-tinted box the size of the collider. Cosmetic only
     // (the body pass reads it; the sim never does), so the whole embodied crowd
@@ -122,8 +143,9 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     return e;
 }
 
-void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
-    if (pool.valid(id) && reg.valid(e)) {
+void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e) {
+    const NpcId id = ref.id;
+    if (npc_ref_current(pool, ref) && reg.valid(e)) {
         // Freeze the live state back into the cold record: position -> macro
         // cell (clamped into the 0..255 cell range), then de-embody.
         if (auto* tr = reg.try_get<Transform>(e)) {
@@ -143,16 +165,5 @@ void fold_back(Registry& reg, NpcPool& pool, NpcId id, Entity e) {
     if (reg.valid(e)) reg.destroy(e);
 }
 
-TerminalInteractResult embody_interact_terminal(Registry& reg, World& world, DoorSet& doors,
-                                                LayerId layer, const vec3& terminalPos) {
-    // Proximity is the caller's job (find_nearest_interactable / interaction_step).
-    // This only applies the terminal effect — never invent a hit at playerPos.
-    TerminalInteractResult res;
-    res.interacted = true;
-    res.propPos = terminalPos;
-    res.doorsToggled = door_toggle_locks(world, doors, reg, layer);
-    res.doorsLocked = (doors.shut > 0);
-    return res;
-}
 
 } // namespace giga::game

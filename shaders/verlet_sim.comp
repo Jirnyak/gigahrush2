@@ -1,0 +1,318 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "material_surface.glsl" // kMatDensity — плотность СРЕДЫ клетки
+// verlet_sim.comp — THE GPU verlet for antourage: wires AND cloth in one
+// shader over ONE SoA point pool (stage 2 of the merge, 2026-08-31). A chain
+// is just a W x 1 lattice: at H == 1 the vertical constraint loop never runs
+// and the horizontal loop degenerates into the old wire chain sweep in the
+// same traversal order — no chain-specific code exists at all.
+//
+// TWO PHASES, one pipeline, pc.dims.w switches (plan §2.3):
+//   phase 0 — POINTS: one invocation per point; verlet integrate, body push,
+//             axis-wise landing on the world. Fully parallel by construction
+//             (a point writes only itself), which is exactly why the pool
+//             relayout could go point-granular without changing one float.
+//   phase 1 — ELEMENTS: one invocation per element; the serial constraint
+//             relaxation, byte-identical math to the pre-SoA shader.
+//
+// BANKS, not indirection: wires occupy points [0 .. clothPointBase), cloths
+// the rest; element sizes are compile-time facts (8 and 8x4 = 32), so bank
+// membership and the point<->element map are ARITHMETIC off pc.dims.y —
+// plan §2.1's "no indirection buffer" carried into the merged layout.
+//
+// ONE-WAY by law ([game/antourage/antourage.h]): bodies push antourage,
+// antourage pushes nothing back — the whole sim lives on the render side and
+// the CPU tick pays zero.
+//
+// Layout must stay in LOCKSTEP with gpu::VerletPoint / gpu::VerletElem
+// (render/verlet_pass.h) and shaders/wire.vert / cloth.vert. A point is
+// {vec4 cur; vec4 prev}; cur.w = inverse mass (0 = pinned; the pass also
+// freezes nothing else — a dead ELEMENT is skipped whole via elems.alive).
+// An element is ONE vec4: {restX, restY, alive, massKg} — massKg is parked
+// for the medium-damping increment (materials.csv, owner 2026-08-31).
+
+layout(local_size_x = 64) in;
+
+struct Pt {
+    vec4 cur;
+    vec4 prev;
+};
+layout(std430, binding = 0) buffer Points { Pt p[]; } eb;
+layout(std430, binding = 1) readonly buffer Elems { vec4 e[]; } el;
+// This frame's push bodies: xyz = world pos, w = radius. EVERY body on the
+// layer is here — the player is one of them, an NPC with a camera, never a
+// special case (owner's law).
+layout(std430, binding = 2) readonly buffer Bodies { vec4 b[]; } bb;
+
+// VoxelMirror masks — what everything in the pool collides against: a piece
+// that lost its last pin FALLS AND LANDS instead of sinking through the
+// floor. One view of the truth, one collision rule (the third copy of
+// solid_at died with particle_sim.comp).
+layout(std430, binding = 3) readonly buffer MaskBuf { uint uMasks[]; };
+
+// Particle aux bank: [pid*3+0] colorSize (vert), [pid*3+1] phys
+// {gravMul, γ 1/с, bounce, emissive}, [pid*3+2] meta {lifeTotal}.
+layout(std430, binding = 4) readonly buffer Aux { vec4 a[]; } ax;
+
+// VoxelMirror cell types (u16, 2 клетки/uint — раскладка medium_sim.comp):
+// клетка точки называет СРЕДУ, в которой та качается (S16.4 — вопрос
+// макроскопический, клетка законна).
+layout(std430, binding = 5) readonly buffer TypeBuf { uint uTypes[]; };
+
+// ДЕМПФЕР ИЗ ФИЗИКИ СРЕДЫ (инкр. 4): γ = kStructuralDamp + dragK·ρ(клетки).
+// dragK выведен CPU (½·C_d·A·v₀/m — verlet_pass.cpp, вывод там); здесь
+// только плотность среды из ЕДИНОЙ таблицы материалов. kStructuralDamp —
+// внутреннее трение подвеса (вязкоупругость оболочки/ткани): лог-декремент
+// δ ≈ 0.3 на период T ≈ 2 с → δ/T ≈ 0.15 1/с. kRhoAir: воздух в таблице —
+// «вытесняемая пустота» с ρ=0, физический воздух 1.204 кг/м³ (15°C);
+// клетка легче воздуха читается воздухом.
+const float kStructuralDamp = 0.15;
+const float kRhoAir = 1.204;
+
+float medium_density(vec3 w) {
+    vec3 q = w * 0.5;
+    ivec3 c = ivec3(floor(q)) & (GIGA_MACRO_DIM - 1);
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint t = (uTypes[ci >> 1] >> ((ci & 1u) * 16u)) & 0xFFFFu;
+    // ЗАКОН ДВУХ МАСШТАБОВ (S2): тип клетки у геометрии — кэш СТЕН, а
+    // точка висит в её воздушных дырах. СРЕДОЙ считается только
+    // НЕ-ТВЁРДАЯ клетка (вода/газ целиком, фаза != solid); бетон потолка
+    // — не «вязкий кисель» вокруг провода. Первая посадка читала
+    // плотность любой клетки — ВЕСЬ антураж и частицы у стен вязли в
+    // ρ=2400 (плейтест владельца 2026-09-01, «всё падает как в киселе»).
+    if (kMatPhase[t] == 0u) return kRhoAir; // solid → точка в воздухе дыр
+    return max(kMatDensity[t], kRhoAir);
+}
+
+// LOCKSTEP with gpu::kParticlePointBase (render/verlet_pass.h): the particle
+// bank starts here; everything below is antourage.
+const uint kParticleBase = 1048576u;
+// LOCKSTEP with gpu::kShardPointBase / kShardElemBase: осколки GpuHandoff —
+// пары точек фикс-банком перед частицами, элементы хвостом таблицы.
+const uint kShardBase = 1048576u - 2048u;
+const uint kShardElem = 131072u - 1024u;
+
+// Solidity of the sub-voxel containing world point `w` (toroidal).
+// Cell = 2 m, sub-voxel = 0.25 m; kMacroDim = 128 so wrap is a power-of-two AND.
+bool solid_at(vec3 w) {
+    vec3 q = w * 0.5;
+    ivec3 c = ivec3(floor(q)) & (GIGA_MACRO_DIM - 1);
+    ivec3 sv = ivec3(floor(fract(q) * 8.0)) & 7;
+    uint ci = uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+    uint bit = uint(sv.x) | (uint(sv.y) << 3) | (uint(sv.z) << 6);
+    return ((uMasks[ci * 16u + (bit >> 5)] >> (bit & 31u)) & 1u) != 0u;
+}
+
+// Move a free point toward `np` without entering matter: each axis advances
+// alone and simply does not move when the sub-voxel it would enter is solid.
+// Axis-wise is what lets a point resting on a floor keep sliding along it.
+//
+// Verlet needs no extra bookkeeping for the stop: `prev` stays the pre-step
+// position, so a blocked axis ends with cur == prev — velocity zero on exactly
+// that axis, full speed on the others. (Writing prev by hand here is how the
+// first draft made points buzz inside walls.)
+vec3 world_land(vec3 cur, vec3 np) {
+    vec3 pos = cur;
+    for (int a = 0; a < 3; ++a) {
+        vec3 cand = pos;
+        cand[a] = np[a];
+        if (!solid_at(cand)) pos[a] = np[a];
+    }
+    return pos;
+}
+
+// One name, one meaning per field — mirrors gpu::VerletPush.
+layout(push_constant) uniform VerletPush {
+    vec4 dims; // x = point count (this dispatch), y = point base (offset),
+               //   z = cloth point base, w = phase
+    vec4 sim;  // x = dt, y = damping, z = wrap period (m), w = element count
+    vec4 grav; // xyz = gravity VECTOR (m/s^2), w = body count — NEVER assume -Z
+} pc;
+
+const int kWireW = 8;
+const int kClothW = 8;
+const int kClothH = 4;
+const int kClothP = kClothW * kClothH;
+
+// Body push shared by both banks: torus-wrapped delta to every pusher.
+vec3 body_push(vec3 np, float per) {
+    for (uint bi = 0u; bi < uint(pc.grav.w); ++bi) {
+        vec3 dp = np - bb.b[bi].xyz;
+        dp -= per * floor(dp / per + 0.5);
+        float r = bb.b[bi].w;
+        float d2 = dot(dp, dp);
+        if (d2 < r * r && d2 > 1e-6) {
+            float d = sqrt(d2);
+            np += dp / d * (r - d) * 0.35;
+        }
+    }
+    return np;
+}
+
+// The particle half of the points phase: VERLET now (owner's decision — one
+// integrator forever; the old Euler died with particle_sim.comp). Life rides
+// prev.w, damping is per-particle exp(−γ·dt) from the aux bank (dt-honest —
+// the hardwired 60 Hz pow died here), positions WRAP (bank property, plan
+// §2.5), a blocked axis reflects by mirroring prev with the bounce scale,
+// bounce <= 0 lets the contact bleed the life out — exactly the old rule.
+void particle_point(uint i) {
+    const uint pi = i - kParticleBase;
+    vec4 cur = eb.p[i].cur;
+    vec4 prev = eb.p[i].prev;
+    float life = prev.w;
+    if (life <= 0.0) return; // dead slot
+    const float dt = pc.sim.x;
+    const float per = pc.sim.z;
+    life -= dt;
+
+    // Драг частицы задан строкой CSV «в воздухе»; среда плотнее — трение
+    // пропорционально её плотности (γ ∝ ρ): искра в воде глохнет сразу.
+    vec4 phys = ax.a[pi * 3u + 1u];
+    const float rhoScale = medium_density(cur.xyz) / kRhoAir;
+    vec3 disp = (cur.xyz - prev.xyz) * exp(-phys.y * rhoScale * dt) +
+                pc.grav.xyz * phys.x * dt * dt;
+    vec3 target = body_push(cur.xyz + disp, per);
+    disp = target - cur.xyz;
+
+    // Axis-wise landing with reflection: pos advances where free; a blocked
+    // axis keeps pos and mirrors prev so the NEXT step's velocity is
+    // −disp·bounce on exactly that axis.
+    vec3 pos = cur.xyz;
+    vec3 newPrev = cur.xyz;
+    for (int a = 0; a < 3; ++a) {
+        vec3 cand = pos;
+        cand[a] = cur[a] + disp[a];
+        if (!solid_at(cand)) {
+            pos[a] = cur[a] + disp[a];
+        } else {
+            newPrev[a] = cur[a] + disp[a] * phys.z;
+            if (phys.z <= 0.0) life = min(life, 0.12);
+        }
+    }
+    // Wrap the pair TOGETHER — the implied velocity must survive the seam.
+    vec3 wrapped = mod(pos, vec3(per));
+    newPrev += wrapped - pos;
+    eb.p[i].cur = vec4(wrapped, cur.w);
+    eb.p[i].prev = vec4(newPrev, life);
+}
+
+// Точка ЧЕРЕПКА: жизнь как у частиц (prev.w), γ = γ_air строки CSV × ρ/ρ_air
+// (семантика els.w у шардов), посадка антуражным world_land — черепок
+// кувыркается констрейнтом пары и ЛОЖИТСЯ, без отскока.
+void shard_point(uint i) {
+    const uint e = kShardElem + (i - kShardBase) / 2u;
+    if (el.e[e].z < 0.5) return; // пустой слот кольца
+    vec4 cur = eb.p[i].cur;
+    vec4 prev = eb.p[i].prev;
+    float life = prev.w;
+    if (life <= 0.0) return;
+    const float dt = pc.sim.x;
+    life -= dt;
+    const float rhoScale = medium_density(cur.xyz) / kRhoAir;
+    vec3 disp = (cur.xyz - prev.xyz) * exp(-el.e[e].w * rhoScale * dt) +
+                pc.grav.xyz * dt * dt;
+    vec3 np = body_push(cur.xyz + disp, pc.sim.z);
+    eb.p[i].prev = vec4(cur.xyz, life);
+    eb.p[i].cur = vec4(world_land(cur.xyz, np), cur.w);
+}
+
+void phase_points(uint gid) {
+    if (gid >= uint(pc.dims.x)) return;
+    const uint i = uint(pc.dims.y) + gid; // dispatch span base (plan §2.3)
+    if (i >= kParticleBase) {
+        particle_point(i);
+        return;
+    }
+    if (i >= kShardBase) {
+        shard_point(i);
+        return;
+    }
+    const uint clothBase = uint(pc.dims.z);
+    const uint nWires = clothBase / uint(kWireW);
+
+    // Bank arithmetic: which element owns this point.
+    const uint e = i < clothBase
+                       ? i / uint(kWireW)
+                       : nWires + (i - clothBase) / uint(kClothP);
+    if (el.e[e].z < 0.5) return; // dead element: anchors carved away
+
+    vec4 cur = eb.p[i].cur;
+    if (cur.w == 0.0) return; // pinned point
+
+    const float dt = pc.sim.x;
+    const float per = pc.sim.z;
+    // γ точки = внутреннее трение подвеса + драг о СРЕДУ её клетки: конец
+    // провода в воде глохнет, середина в воздухе качается (инкр. 4).
+    const float gamma =
+        kStructuralDamp + el.e[e].w * medium_density(cur.xyz);
+    vec3 vel = (cur.xyz - eb.p[i].prev.xyz) * exp(-gamma * dt);
+    vec3 np = cur.xyz + vel + pc.grav.xyz * dt * dt;
+    np = body_push(np, per);
+    // Land on the world instead of sinking through it (see world_land:
+    // `prev` staying put IS the stop).
+    eb.p[i].prev = vec4(cur.xyz, eb.p[i].prev.w);
+    eb.p[i].cur = vec4(world_land(cur.xyz, np), cur.w);
+}
+
+void phase_elements(uint gid) {
+    if (gid >= uint(pc.sim.w)) return;
+    const uint k = uint(pc.dims.y) + gid; // в фазе 1 dims.y = база ЭЛЕМЕНТОВ
+    const uint clothBase = uint(pc.dims.z);
+    const uint nWires = clothBase / uint(kWireW);
+    if (el.e[k].z < 0.5) return; // dead element / пустой слот черепка
+
+    const bool isShard = k >= kShardElem;
+    const bool isWire = !isShard && k < nWires;
+    const int W = isShard ? 2 : (isWire ? kWireW : kClothW);
+    const int H = isShard || isWire ? 1 : kClothH;
+    const uint base = isShard
+                          ? kShardBase + (k - kShardElem) * 2u
+                          : (isWire ? k * uint(kWireW)
+                                    : clothBase + (k - nWires) * uint(kClothP));
+    if (isShard && eb.p[base].prev.w <= 0.0) return; // черепок дожил
+    const float restX = el.e[k].x;
+    const float restY = el.e[k].y;
+
+    // Distance constraints, a few relaxation sweeps. At H == 1 the horizontal
+    // sweep IS the old wire chain loop (r = 0, c = 0..W-2, same order) and the
+    // vertical sweep never executes.
+    for (int it = 0; it < 4; ++it) {
+        // Horizontal neighbours.
+        for (int r = 0; r < H; ++r)
+            for (int c = 0; c < W - 1; ++c) {
+                uint a = base + uint(r * W + c), e2 = a + 1u;
+                vec4 A = eb.p[a].cur;
+                vec4 B = eb.p[e2].cur;
+                vec3 d = B.xyz - A.xyz;
+                float len = length(d);
+                if (len < 1e-5) continue;
+                float ws = A.w + B.w;
+                if (ws <= 0.0) continue;
+                vec3 corr = d * ((len - restX) / len);
+                eb.p[a].cur.xyz += corr * (A.w / ws);
+                eb.p[e2].cur.xyz -= corr * (B.w / ws);
+            }
+        // Vertical neighbours.
+        for (int r = 0; r < H - 1; ++r)
+            for (int c = 0; c < W; ++c) {
+                uint a = base + uint(r * W + c), e2 = a + uint(W);
+                vec4 A = eb.p[a].cur;
+                vec4 B = eb.p[e2].cur;
+                vec3 d = B.xyz - A.xyz;
+                float len = length(d);
+                if (len < 1e-5) continue;
+                float ws = A.w + B.w;
+                if (ws <= 0.0) continue;
+                vec3 corr = d * ((len - restY) / len);
+                eb.p[a].cur.xyz += corr * (A.w / ws);
+                eb.p[e2].cur.xyz -= corr * (B.w / ws);
+            }
+    }
+}
+
+void main() {
+    if (pc.dims.w < 0.5)
+        phase_points(gl_GlobalInvocationID.x);
+    else
+        phase_elements(gl_GlobalInvocationID.x);
+}

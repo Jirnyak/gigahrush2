@@ -119,21 +119,8 @@ enum class MobPackMode : std::uint8_t { Loner = 0, Crowd, Territorial, Roamer, C
 // the day a monster row does author `grenade`, it costs a CSV cell and no code.
 enum class ProjType : std::uint8_t { Bullet = 0, Web, Grenade, Count };
 
-// Room kinds a monster may be placed in. 11 of the reference's RoomTypes are
-// actually referenced by ecology rows.
-enum class RoomBit : std::uint16_t {
-    Corridor   = 1u << 0,
-    Common     = 1u << 1,
-    Storage    = 1u << 2,
-    Kitchen    = 1u << 3,
-    Bathroom   = 1u << 4,
-    Living     = 1u << 5,
-    Office     = 1u << 6,
-    Medical    = 1u << 7,
-    Production = 1u << 8,
-    Smoking    = 1u << 9,
-    Hq         = 1u << 10,
-};
+// RoomBit УМЕР (rooms-object F, S12.2: вида комнаты не существует) — экология
+// «моб живёт в кухнях» вернётся глаголом «логово» и политикой модуля (S13.7).
 
 // The six signed floor anchors the reference's ecology rows key off. Kept as a
 // bitmask so a row's habitat is one AND, not a list walk. Note these are anchors
@@ -168,7 +155,6 @@ struct MobDef {
     // --- warm: read on spawn / on shot ------------------------------------
     std::uint16_t projSpeedMmps;   // 14  cells/s * 1000, 0 = melee only
     std::uint16_t spawnWeightX10;  // 16  ecology.spawnWeight * 10, 0..85
-    std::uint16_t roomMask;        // 18  RoomBit bitmask
     // --- ranged: 13 of 69 kinds; zero on the rest ------------------------
     std::uint16_t shotRangeMm;     // 20  cells * 1000, 0 = melee only
     std::uint16_t minRangeMm;      // 22  dead zone; inside it a ranged kind closes
@@ -184,17 +170,12 @@ struct MobDef {
     std::uint8_t packMin;          // 33  1..8
     std::uint8_t packMax;          // 34  1..16
     std::uint8_t packSpread;       // 35  cells, 0..10
-    // --- nav traversal profile, in SUB-VOXELS (0.25 m) ---------------------
-    // The universal articulation numbers the nav bake tags graph edges with:
-    // a rise <= navStepSub is a walk (stairs are 1-sub risers), a rise <=
-    // navClimbSub is a jump/climb (8 = one 2 m cell), a fall <= navDropSub is a
-    // drop. navFly != 0 ignores gravity entirely (and everyone flies under a
-    // Zero-g regime — [world/gravity.h]). Axis-generic on purpose: "rise" is
-    // against the floor module's declared gravity, never a named axis.
-    std::uint8_t navStepSub;       // 36  walkable riser, sub-voxels
-    std::uint8_t navClimbSub;      // 37  jump/climb height, sub-voxels
-    std::uint8_t navDropSub;       // 38  safe drop, sub-voxels
-    std::uint8_t navFly;           // 39  0 = walker, 1 = flyer
+    // (nav-профиль navStepSub/navClimbSub/navDropSub/navFly — 4×69 write-only
+    // с рождения — СНЕСЁН вердиктом владельца 2026-08-27, §35-класс: нав-бейк
+    // эти колонки не читал никогда. После эпика occupancy проходимость — один
+    // закон от РАЗМЕРА (world/clearance.h); если мобам разных габаритов
+    // понадобится свой клиренс-порог, он будет ВЫВОДОМ из габарита тела (S11),
+    // а не четырьмя назначенными колонками.)
     // --- universal mass ([ecs/components.h] Mass) --------------------------
     // GRAMS, and the unit is the same one [prop_table.h] uses — that is the whole
     // reason this field changed shape. It used to be kg x10 here and grams in a
@@ -204,14 +185,14 @@ struct MobDef {
     // 900 kg rows, so a kitchen stove had to be written down as 65 kg.
     //
     // The widening cost NOTHING: `massKgX10` plus the two pad bytes that followed
-    // it were already four contiguous bytes at a 4-aligned offset, so the row is
-    // still exactly 44. Range 1 g .. 4294 t covers a cartridge and a lift cabin.
+    // it were already four contiguous bytes at a 4-aligned offset. Range
+    // 1 g .. 4294 t covers a cartridge and a lift cabin.
     //
     // Feeds E = m*v^2/2 and p = m*v — fall damage, knockback, ragdoll swing —
     // never a per-system constant.
-    std::uint32_t massG;           // 40
+    std::uint32_t massG;           // 36
 };
-static_assert(sizeof(MobDef) == 44, "MobDef must stay a tight 44-byte row");
+static_assert(sizeof(MobDef) == 40, "MobDef must stay a tight 40-byte row");
 static_assert(alignof(MobDef) == 4);
 static_assert(std::is_trivially_copyable_v<MobDef>);
 static_assert(offsetof(MobDef, projSpeedMmps) == 14, "hot prefix boundary moved");

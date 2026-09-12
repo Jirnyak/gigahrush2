@@ -56,7 +56,7 @@ Contract contract_offer(const NpcPool& pool, NpcId giver, int floorZ,
         ItemId want = kInvalidItem;
         std::uint32_t total = 0;
         for (ItemId id = 1; id <= kItemCount; ++id) {
-            const std::uint32_t w = item_weight_on_floor(id, floorZ, 0);
+            const std::uint32_t w = item_weight_on_floor(id, floorZ);
             if (w == 0) continue;
             const ItemDef& d = item_def(id);
             // Something with a price, and cheap enough to be found more than once.

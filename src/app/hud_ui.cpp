@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "core/watch.h"       // watch_cycle / watch_*_digit — календарь S15
 #include "game/combat.h"      // PlayerRanged — магазин/перезарядка
 #include "game/embody.h"      // NpcRef — тело с флажком, не синглтон
 #include "game/equip.h"       // equipped_melee/ranged — РЕШЕНИЯ, не скан
@@ -38,23 +39,17 @@ const game::NpcRef* live_ref(const HudContext& c) {
 // --- элементы ---------------------------------------------------------------
 
 // Прицел: крест из четырёх штрихов с зазором, прямо в foreground-список —
-void draw_crosshair(const HudContext& ctx) {
+// прицелу не нужно окно, он живёт на самом стекле.
+void draw_crosshair(const HudContext&) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 c{ImGui::GetIO().DisplaySize.x * 0.5f,
+                   ImGui::GetIO().DisplaySize.y * 0.5f};
     const ImU32 col = ImGui::GetColorU32(ImVec4(0.349f, 0.949f, 0.400f, 0.85f));
     constexpr float kGap = 3.0f, kLen = 7.0f;
-    auto draw_cross = [&](float cx, float cy) {
-        dl->AddLine({cx - kGap - kLen, cy}, {cx - kGap, cy}, col, 1.0f);
-        dl->AddLine({cx + kGap, cy}, {cx + kGap + kLen, cy}, col, 1.0f);
-        dl->AddLine({cx, cy - kGap - kLen}, {cx, cy - kGap}, col, 1.0f);
-        dl->AddLine({cx, cy + kGap}, {cx, cy + kGap + kLen}, col, 1.0f);
-    };
-    float cy = ImGui::GetIO().DisplaySize.y * 0.5f;
-    if (ctx.vrMode) {
-        draw_cross(ImGui::GetIO().DisplaySize.x * 0.25f, cy);
-        draw_cross(ImGui::GetIO().DisplaySize.x * 0.75f, cy);
-    } else {
-        draw_cross(ImGui::GetIO().DisplaySize.x * 0.5f, cy);
-    }
+    dl->AddLine({c.x - kGap - kLen, c.y}, {c.x - kGap, c.y}, col, 1.0f);
+    dl->AddLine({c.x + kGap, c.y}, {c.x + kGap + kLen, c.y}, col, 1.0f);
+    dl->AddLine({c.x, c.y - kGap - kLen}, {c.x, c.y - kGap}, col, 1.0f);
+    dl->AddLine({c.x, c.y + kGap}, {c.x, c.y + kGap + kLen}, col, 1.0f);
 }
 
 void draw_health(const HudContext& c) {
@@ -93,6 +88,20 @@ void draw_needs(const HudContext& c) {
                        static_cast<double>(nd.sleep));
 }
 
+// Часы дома: цикл.вахта.такт, каждая цифра 0..7 ([core/watch.h], [CANON.md] S15).
+// В Гигахруще нет солнца, поэтому нет и «часов» — время читается лестницей
+// вахт, а не циферблатом. Цифры восьмеричные по построению: каждый уровень
+// ровно втрое-по-биту крупнее предыдущего, и та же тройка бит зажигает лампы
+// настенного табло — худ и табло показывают ОДНО число, просто разными телами.
+//
+// kDim, а не фосфор: время — это фон, а не тревога. Красный тут не появится
+// никогда, чем бы ни кончился цикл.
+void draw_time(const HudContext& c) {
+    ImGui::TextColored(kDim, "ВАХТА %llu.%d.%d",
+                       static_cast<unsigned long long>(watch_cycle(c.tick)),
+                       watch_watch_digit(c.tick), watch_tact_digit(c.tick));
+}
+
 void draw_psi(const HudContext& c) {
     if (!c.reg || c.player == entt::null || !c.reg->valid(c.player)) return;
     const auto* rs = c.reg->try_get<game::RpgStats>(c.player);
@@ -110,21 +119,29 @@ void draw_hands(const HudContext& c) {
     const auto* eq = c.reg->try_get<game::Equipped>(c.player);
     const auto* pr = c.reg->try_get<game::PlayerRanged>(c.player);
 
-    if (const game::ItemId gun = game::equipped_ranged(inv, eq)) {
-        if (const game::RangedDef* rd = game::ranged_for_item(gun)) {
-            if (pr && pr->reloadMs > 0)
-                ImGui::TextColored(kAmber, "%s  ПЕРЕЗАРЯДКА %.1fс",
-                                   game::item_name(gun),
-                                   pr->reloadMs * 0.001);
+    // ДВЕ РУКИ (two-hands.md): по строке на руку — худ отражает то, чем
+    // ударит ЕЁ кнопка. Магазин/затвор — свои у каждой (GunHand).
+    for (int h = 0; h < 2; ++h) {
+        const char* tag = h == 1 ? "ПКМ" : "ЛКМ";
+        const game::ItemId hi =
+            eq ? game::equipped_hand(inv, *eq, h == 1) : game::kInvalidItem;
+        const game::RangedDef* rd = game::ranged_for_item(hi);
+        if (rd && !game::ranged_is_thrown(hi)) {
+            const game::GunHand* gh = pr ? &pr->hand[h] : nullptr;
+            if (gh && gh->reloadMs > 0)
+                ImGui::TextColored(kAmber, "%s: %s  ПЕРЕЗАРЯДКА %.1fс", tag,
+                                   game::item_name(hi), gh->reloadMs * 0.001);
             else
-                ImGui::Text("%s  %u/%u", game::item_name(gun),
-                            pr ? pr->magCount : 0, rd->magazine);
+                ImGui::Text("%s: %s  %u/%u", tag, game::item_name(hi),
+                            gh ? gh->magCount : 0, rd->magazine);
+        } else if (rd) { // метательное — сам себе боеприпас
+            ImGui::Text("%s: %s", tag, game::item_name(hi));
+        } else {
+            ImGui::TextColored(kDim, "%s: %s", tag,
+                               hi == game::kInvalidItem ? "кулаки"
+                                                        : game::item_name(hi));
         }
     }
-    const game::ItemId wpn = game::equipped_melee(inv, eq);
-    ImGui::TextColored(kDim, "%s", wpn == game::kInvalidItem
-                                       ? "кулаки"
-                                       : game::item_name(wpn));
 }
 
 // Статусы + атмосфера клетки: всё, что прямо сейчас искажает тело или воздух.
@@ -133,8 +150,9 @@ bool status_live(const HudContext& c) {
     if (c.status)
         for (std::size_t i = 0; i < game::kStatusCount; ++i)
             if (c.status->remainMs[i] > 0) return true;
-    return c.gas.valid && (c.gas.tox > 0 || c.gas.smoke > 64 ||
-                           c.gas.oxy < 192 || c.gas.heat > 0);
+    // Газ опасен с первого кванта; вода — статус с полуметра (128 квантов =
+    // четверть клетки: по колено).
+    return c.gas.valid && (c.gas.gas > 0 || c.gas.water >= 128);
 }
 
 void draw_status(const HudContext& c) {
@@ -147,11 +165,20 @@ void draw_status(const HudContext& c) {
         }
     }
     if (c.gas.valid) {
-        if (c.gas.tox > 0) ImGui::TextColored(kDanger, "ГАЗ %u", c.gas.tox);
-        if (c.gas.smoke > 64) ImGui::TextColored(kAmber, "ДЫМ %u", c.gas.smoke);
-        if (c.gas.oxy < 192) ImGui::TextColored(kAmber, "О2 %u", c.gas.oxy);
-        if (c.gas.heat > 0) ImGui::TextColored(kDanger, "ЖАР %u", c.gas.heat);
+        if (c.gas.gas > 0) ImGui::TextColored(kDanger, "ГАЗ %u", c.gas.gas);
+        if (c.gas.water >= 128)
+            ImGui::TextColored(kAmber, "ВОДА %u", c.gas.water);
     }
+}
+
+// Табличка интеракции: цель под прицелом ([game/focus.h]). Строку собирает
+// приложение; тихий элемент — нет цели, нет строки. Жила отдельным окном под
+// showHud (флагом ДЕБАГ-панели, выключенной по умолчанию) — игрок с чистым
+// худом не видел «F» никогда; это и была половина бага «таблички нет».
+bool interact_live(const HudContext& c) { return c.interactPrompt != nullptr; }
+
+void draw_interact(const HudContext& c) {
+    ImGui::TextColored(kAmber, "%s", c.interactPrompt);
 }
 
 // Алерты: то, что требует реакции СЕЙЧАС. Пока два источника — самосбор
@@ -192,16 +219,20 @@ HudElement g_elements[] = {
     {"needs",     "Потребности", HudSlot::BottomLeft,  true, draw_needs},
     {"psi",       "PSI",         HudSlot::BottomLeft,  true, draw_psi},
     {"hands",     "Рука",        HudSlot::BottomRight, true, draw_hands},
+    // Время — постоянный житель верхнего левого угла: `status` под ним тихий
+    // (пока нет статусов и воздух чист, его окно не открывается вовсе), так что
+    // угол до сих пор пустовал.
+    {"time",      "Время",       HudSlot::TopLeft,     true, draw_time},
     {"status",    "Статусы",     HudSlot::TopLeft,     true, draw_status, status_live},
+    {"interact",  "Интеракция",  HudSlot::Center,      true, draw_interact, interact_live},
     {"alerts",    "Алерты",      HudSlot::Center,      true, draw_alerts, alerts_live},
 };
 
 // Одно угловое окно слота: прижато к своему углу, без ввода и декора, фон —
 // едва заметная подложка (0.35), чтобы фосфор читался поверх яркого дерева,
 // а мир просвечивал ([hud.md] Стиль).
-void begin_slot_window(HudSlot slot, bool vrMode) {
-    const ImVec2 fullDs = ImGui::GetIO().DisplaySize;
-    const ImVec2 ds = vrMode ? ImVec2{fullDs.x * 0.5f, fullDs.y} : fullDs;
+void begin_slot_window(HudSlot slot) {
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
     constexpr float kPad = 12.0f;
     ImVec2 pos, pivot;
     const char* id = "";
@@ -245,7 +276,7 @@ void hud_ui_draw(const HudContext& ctx) {
             if (el.slot != slot || !el.on) continue;
             if (el.live && !el.live(ctx)) continue;
             if (el.draw == draw_crosshair) { el.draw(ctx); continue; }
-            if (!opened) { begin_slot_window(slot, ctx.vrMode); opened = true; }
+            if (!opened) { begin_slot_window(slot); opened = true; }
             el.draw(ctx);
         }
         if (opened) ImGui::End();

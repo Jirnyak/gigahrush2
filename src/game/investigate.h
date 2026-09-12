@@ -24,8 +24,9 @@
 //
 // The honest cost of that shape: two passes over the mobs on the layer instead of
 // one. It is paid only when something is making a noise — `investigate_step` returns on
-// `NoiseField::quiet()`, which is true on almost every tick, before it looks at a
-// single entity. The stagger predicate is deliberately IDENTICAL to
+// `NoiseField::quiet()` before it looks at a single entity. В бою канона гейт
+// не срабатывает вовсе (сотни шумов/сек, §65) — тогда цена держится фазами
+// kWanderPeriod и O(kNoiseCap) на опрошенного, от частоты шумов не зависит. The stagger predicate is deliberately IDENTICAL to
 // `wander_step`'s, so a mob's hearing decision lands on the same tick as the
 // velocity it is overriding rather than one visit behind it.
 //

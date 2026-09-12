@@ -9,29 +9,23 @@ to a default, because silently defaulting is how a content table rots.
 
     python tools/gen_economy_table.py
 
-TWO ROW KINDS IN ONE CSV, and the reason is that the two tables are the two halves
-of one authored contract: the E0..E4 depth bands say what money means at a depth,
-and the wealth tiers say what a net worth means as a word. Splitting them into two
-files would let one drift past the other with nothing to notice.
-
-The discriminator is the `kind` column. Columns that belong to the other kind must
-be LEFT EMPTY, and a filled cell on the wrong kind is a hard error — an empty cell
-that silently reads as 0 is exactly how a band would ship with a zero credit limit
-and look authored.
+ONE ROW KIND today: the E0..E4 depth bands say what money means at a depth. The
+`kind` discriminator column stays — a second kind (the WEALTH net-worth tiers
+lived here until 2026-08-27, cut by owner verdict: test-only readers) would be
+new rows plus an array in economy.h, not a new file.
 
 Cross-checks this generator performs, all of them against numbers that live
 somewhere else in the tree (a generator that only validates itself validates
 nothing):
 
-  * exactly 5 BAND rows and 5 WEALTH rows, in that order and in ascending order;
+  * exactly 5 BAND rows, in order and in ascending order;
   * BAND `loot_cap` must equal `kLootValueCap[band]` in src/game/item_table.h,
     parsed out of that header — the two are the same authored number and the
     reference authors it once (economics.ts ECONOMY_MONEY_BANDS[].lootValueCap);
   * BAND `lo`/`hi` brackets must be contiguous, start at 0, end at 127, and match
     the `economy_band()` thresholds compiled into src/game/item_table.cpp;
   * `deposit_bp < loan_bp` on every band — a bank that pays more than it charges is
-    a money press, and integer roubles will not save it;
-  * WEALTH brackets contiguous and ascending from 0.
+    a money press, and integer roubles will not save it.
 """
 
 import csv
@@ -46,14 +40,8 @@ ITEM_HDR = os.path.join(REPO, "src", "game", "item_table.h")
 ITEM_SRC = os.path.join(REPO, "src", "game", "item_table.cpp")
 
 EXPECTED_BANDS = 5
-EXPECTED_TIERS = 5
 
 BAND_IDS = ["E0", "E1", "E2", "E3", "E4"]
-TIER_IDS = ["poor", "stable", "official", "rich", "millionaire"]
-
-# Columns only a BAND row may fill. A WEALTH row leaves every one of them empty.
-BAND_ONLY = ["loot_cap", "cash_cap", "quest_cap", "quest_rate",
-             "deposit_bp", "loan_bp", "credit_limit"]
 
 
 def die(msg):
@@ -127,34 +115,22 @@ def main():
         rows = list(csv.DictReader(fh))
 
     bands = [r for r in rows if cell(r, "kind") == "BAND"]
-    tiers = [r for r in rows if cell(r, "kind") == "WEALTH"]
-    unknown = [cell(r, "kind") for r in rows
-               if cell(r, "kind") not in ("BAND", "WEALTH")]
+    unknown = [cell(r, "kind") for r in rows if cell(r, "kind") != "BAND"]
     if unknown:
         die("unknown kind(s) %s — add the kind here AND an array for it in "
             "src/game/economy.h; a row nothing emits is a row that reads as "
             "authored and is not." % sorted(set(unknown)))
-    if len(bands) != EXPECTED_BANDS or len(tiers) != EXPECTED_TIERS:
-        die("expected %d BAND + %d WEALTH rows, got %d + %d — if the table really "
-            "changed, update EXPECTED_* here AND kEconomyRows in economy.h (the "
-            "source_rules gate reads that literal)"
-            % (EXPECTED_BANDS, EXPECTED_TIERS, len(bands), len(tiers)))
+    if len(bands) != EXPECTED_BANDS:
+        die("expected %d BAND rows, got %d — if the table really changed, update "
+            "EXPECTED_BANDS here AND kEconomyRows in economy.h (the source_rules "
+            "gate reads that literal)" % (EXPECTED_BANDS, len(bands)))
     if [cell(r, "id") for r in bands] != BAND_IDS:
         die("BAND ids must be exactly %s in order, got %s"
             % (BAND_IDS, [cell(r, "id") for r in bands]))
-    if [cell(r, "id") for r in tiers] != TIER_IDS:
-        die("WEALTH ids must be exactly %s in order, got %s"
-            % (TIER_IDS, [cell(r, "id") for r in tiers]))
 
     for i, r in enumerate(rows):
         if not cell(r, "name_ru"):
             die("row %d (%s) has no name_ru" % (i, r["id"]))
-        if cell(r, "kind") == "WEALTH":
-            for col in BAND_ONLY:
-                if cell(r, col):
-                    die("row %d (%s): %s = %r, but %s is a BAND-only column. Leave "
-                        "it empty on a WEALTH row." % (i, r["id"], col,
-                                                       cell(r, col), col))
 
     caps = loot_caps_from_item_table()
     hi_bounds = band_thresholds_from_item_table()
@@ -204,26 +180,8 @@ def main():
                dep, loan, lo, hi))
         band_names.append("    %s," % cpp_string(cell(r, "name_ru")))
 
-    tier_out, tier_names = [], []
-    prev_hi = 0
-    for i, r in enumerate(tiers):
-        lo = num(r, "lo", i, 0, 9000000000000000000)
-        hi = num(r, "hi", i, 0, 9000000000000000000)
-        if lo >= hi:
-            die("wealth tier %s: lo %d >= hi %d" % (r["id"], lo, hi))
-        if lo != prev_hi:
-            die("wealth tier %s starts at %d but the previous tier ended at %d — "
-                "the brackets must be contiguous or some net worth has no tier"
-                % (r["id"], lo, prev_hi))
-        prev_hi = hi
-        tier_out.append("    // [%d] %s\n    WealthTier{ %dll, %dll },"
-                        % (i, r["id"], lo, hi))
-        tier_names.append("    %s," % cpp_string(cell(r, "name_ru")))
-
     if [cell(r, "lo") for r in bands][0] != "0":
         die("the first band must start at |floor| 0")
-    if int(cell(tiers[0], "lo")) != 0:
-        die("the first wealth tier must start at 0 roubles")
 
     with open(OUT_PATH, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(HEADER)
@@ -233,17 +191,10 @@ def main():
         fh.write("const std::array<const char*, kEconomyBands> kBandNames = {{\n")
         fh.write("\n".join(band_names))
         fh.write("\n}};\n\n")
-        fh.write("const std::array<WealthTier, kWealthTierCount> kWealthTiers = {{\n")
-        fh.write("\n".join(tier_out))
-        fh.write("\n}};\n\n")
-        fh.write("const std::array<const char*, kWealthTierCount> "
-                 "kWealthTierNames = {{\n")
-        fh.write("\n".join(tier_names))
-        fh.write("\n}};\n\n")
         fh.write(FOOTER)
 
-    sys.stderr.write("gen_economy_table: wrote %d band + %d wealth rows to %s\n"
-                     % (len(bands), len(tiers), OUT_PATH))
+    sys.stderr.write("gen_economy_table: wrote %d band rows to %s\n"
+                     % (len(bands), OUT_PATH))
 
 
 HEADER = """// GENERATED by tools/gen_economy_table.py from data/economy.csv — do not hand-edit.

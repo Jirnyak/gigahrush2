@@ -16,13 +16,14 @@
 #include "sim/camera.h"
 #include "sim/diffusion.h"
 #include "sim/drag.h"
-#include "sim/fluid.h"
 #include "sim/physics.h"
+#include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/field.h"
 #include "world/level_stack.h"
 #include "world/los.h"
 #include "world/macro_grid.h"
+#include "world/medium.h" // агрегаты S16.4 — тест плавучести
 #include "world/nav.h"
 #include "world/stain.h"
 #include "world/subfield.h"
@@ -49,6 +50,8 @@ int g_checks = 0;
 
 #include "suite_props.inl"
 #include "suite_destruct.inl"
+#include "suite_surface.inl"
+#include "suite_clearance.inl"
 static void test_wrap() {
     CHECK(wrapi(0, 128) == 0);
     CHECK(wrapi(128, 128) == 0);
@@ -57,6 +60,21 @@ static void test_wrap() {
     CHECK(wrap_delta(0, 127, 128) == -1); // shortest path wraps backward
     CHECK(wrap_delta(127, 0, 128) == 1);
     CHECK(wrap_delta(0, 10, 128) == 10);
+
+    // Vector forms (audit wave 2): the level call sites actually need, added
+    // so "toroidal distance between two entities" is one call, not three
+    // hand-written lines with an axis to forget. Points 2 m apart across all
+    // three seams at once — the case every hand-rolled triple got wrong on
+    // exactly one axis.
+    const float p = 256.0f;
+    const vec3 a{255.0f, 255.0f, 255.0f};
+    const vec3 b{1.0f, 1.0f, 1.0f};
+    const vec3 d = wrap_delta3(a, b, p);
+    CHECK(d.x == 2.0f && d.y == 2.0f && d.z == 2.0f);
+    CHECK(wrap_dist2(a, b, p) == 12.0f);           // 3 * 2^2, not 3 * 254^2
+    CHECK(wrap_dist2(b, a, p) == 12.0f);           // symmetric
+    const vec3 w = wrap_pos(vec3{-1.0f, 256.0f, 300.0f}, p);
+    CHECK(w.x == 255.0f && w.y == 0.0f && w.z == 44.0f);
 }
 
 // The minimal-image rule the renderer draws by. This is a *contract test*: the
@@ -223,6 +241,510 @@ static void test_physics_lands_on_floor() {
     CHECK(!aabb_overlaps_solid(w, out.pos, vec3{0.2f, 0.2f, 0.4f}));
 }
 
+// ПЛАВУЧЕСТЬ (CANON S16.4, инкремент 4): тело читает агрегат СВОЕЙ клетки —
+// один член силы, толчок против гравитации фрейма x погружённость.
+// kBuoyancy = 1000/985 (человек с воздухом в лёгких) — в полной воде тело
+// ВСПЛЫВАЕТ медленно, а не тонет; вязкость гасит скорость. Рядом в сухой
+// клетке — падает как падало (test_physics_lands_on_floor выше).
+static void test_buoyancy() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    // Клетка (10,10,10) целиком «под водой» по агрегату — заполняем поле
+    // напрямую (в игре его пересчитывает обратный шов автомата).
+    medium_level_field(w).data()[macro_index(10, 10, 10)] = kSubVoxels;
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e);
+    reg.emplace<AABB>(e, AABB{{0.2f, 0.2f, 0.4f}});
+    reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+
+    for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);
+    // Секунда в воде: тело не утонуло (плавучесть чуть положительная) и не
+    // разогналось (вязкость): скорость около нуля, всплытие ползучее.
+    CHECK(reg.get<Transform>(e).pos.z >= tr.pos.z - 0.05f);
+    CHECK(std::fabs(reg.get<Velocity>(e).v.z) < 0.2f);
+}
+
+// Рагдолл-ядро ([markoaudit/plans/ragdoll.md] инкремент 1): шар на импульсном
+// твердотеле брошен вбок над плитой — падает, отскакивает (restitution),
+// РАСКРУЧИВАЕТСЯ трением через точку контакта (качение возникает из физики,
+// не из косметики), оседает на своём радиусе и засыпает; спящего будит только
+// внешняя запись Velocity.
+static void test_rigid_ball_settles_and_sleeps() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    // 1.15 м над плитой (верх z-клетки 4 = 10 м): удар ~4.8 м/с, пара
+    // отскоков — и в качение; высокий сброс держал бы фазу отскоков дольше
+    // самого теста.
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 5.75f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    // Вбок медленно (1 м/с): качение тормозит только трение качения, и его
+    // эффективное замедление с поправкой на инерцию сферы Crr·g/(1+2/5) ≈
+    // 0.21 м/с² — метр в секунду выкатывается почти пять секунд.
+    reg.emplace<Velocity>(e, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+
+    // Те же выводы, что у spawn_ball: сталь, сфера.
+    RigidBody rb;
+    rb.radius = 0.35f;
+    const float mass = 7800.0f * (4.0f / 3.0f) * 3.14159265f *
+                       rb.radius * rb.radius * rb.radius;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / (0.4f * mass * rb.radius * rb.radius);
+    rb.restitution = 0.35f;
+    rb.friction = 0.6f;
+    reg.emplace<RigidBody>(e, rb);
+
+    bool spun = false;
+    for (int i = 0; i < 10 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        const auto& b = reg.get<RigidBody>(e);
+        if (dot(b.w, b.w) > 0.01f) spun = true;
+    }
+
+    const auto& out = reg.get<Transform>(e);
+    const auto& b = reg.get<RigidBody>(e);
+    const float floorTop = 5.0f * kCellSize;
+    CHECK(spun);     // трение Кулона раскрутило качение
+    CHECK(b.asleep); // тихое тело с контактом заснуло
+    // Лежит на своём радиусе над плитой (позиционное выталкивание, не тонет).
+    CHECK(out.pos.z >= floorTop + rb.radius - 0.02f);
+    CHECK(out.pos.z <= floorTop + rb.radius + 0.05f);
+    // Кватернион остался единичным — интегратор не разъехался (NaN-страховка).
+    const float qn =
+        b.q.x * b.q.x + b.q.y * b.q.y + b.q.z * b.q.z + b.q.w * b.q.w;
+    CHECK(std::fabs(qn - 1.0f) < 1e-3f);
+    // Пробуждение: внешняя запись скорости (взрыв/толчок пишут Velocity).
+    reg.get<Velocity>(e).v = vec3{2.0f, 0.0f, 0.0f};
+    rigid_body_step(reg, stack, kSimDt);
+    CHECK(!reg.get<RigidBody>(e).asleep);
+}
+
+// Инкремент 2 ([markoaudit/plans/ragdoll.md]): форма из контактных сфер.
+// Бокс (солвер видит 14 сфер: 8 углов + 6 граней) сброшен с подкруткой —
+// кувыркается, гасится трением (у бокса Кулон останавливает, качения нет),
+// ложится ПЛАШМЯ на свою полувысоту и засыпает.
+static void test_rigid_box_lies_flat() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    Entity e = reg.create();
+    Transform tr;
+    tr.pos = vec3{10.5f * kCellSize, 10.5f * kCellSize, 5.75f * kCellSize};
+    tr.layer = g;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{vec3{1.5f, 0.0f, 0.0f}});
+
+    // Дерево (паркет 700 кг/м³), ящик 1.1×1.1×0.9 — как spawn_box.
+    const vec3 half{0.55f, 0.55f, 0.45f};
+    const float dx = 1.1f, dy = 1.1f, dz = 0.9f;
+    const float mass = 700.0f * dx * dy * dz;
+    ContactForm formSpheres;
+    const float bound = form_from_box(half, formSpheres);
+    CHECK(formSpheres.count == 14);
+
+    RigidBody rb;
+    rb.radius = bound;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 18.0f / (mass * (dx * dx + dy * dy + dz * dz));
+    rb.restitution = 0.09f;
+    rb.friction = 0.9f;
+    rb.w = vec3{0.0f, -3.0f, 0.0f}; // кувырок вперёд по X
+    reg.emplace<RigidBody>(e, rb);
+    reg.emplace<ContactForm>(e, formSpheres);
+
+    for (int i = 0; i < 10 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    const auto& out = reg.get<Transform>(e);
+    const auto& b = reg.get<RigidBody>(e);
+    const float floorTop = 5.0f * kCellSize;
+    CHECK(b.asleep);
+    // Плашмя = центр на одной из ПОЛУВЫСОТ бокса (0.45 или 0.55 — на какую
+    // грань лёг кувырок), а не на радиусе ограничивающей сферы (0.9).
+    const float rest = out.pos.z - floorTop;
+    CHECK(rest > 0.40f);
+    CHECK(rest < 0.60f);
+    const float qn =
+        b.q.x * b.q.x + b.q.y * b.q.y + b.q.z * b.q.z + b.q.w * b.q.w;
+    CHECK(std::fabs(qn - 1.0f) < 1e-3f);
+}
+
+// Инкремент 3 ([markoaudit/plans/ragdoll.md] §8): связи — линк-СУЩНОСТИ.
+// Цепь из 4 шаров на мировом якоре (JointLink с b=null) висит связно над
+// полом; разрубание (destroy линка подвеса + пробуждение) роняет её на пол,
+// и звенья остаются связанными между собой.
+static void test_rigid_chain_hangs_and_cuts() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize; // 10 м
+    const vec3 anchor{10.5f * kCellSize, 10.5f * kCellSize, floorTop + 3.0f};
+    constexpr int kN = 4;
+    const float radius = 0.15f;
+    const float restLen = 3.0f * radius; // шаг цепи — как в spawn_chain
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    Entity balls[kN];
+    Entity worldLink = entt::null;
+    Entity prev = entt::null;
+    for (int i = 0; i < kN; ++i) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f;
+        rb.friction = 0.6f;
+        Entity ball = reg.create();
+        // 2 см сдвига на звено: идеально вертикальная цепь после разруба
+        // складывается в устойчивую БАШНЮ из шаров (вырожденная симметрия,
+        // с шар-шар контактом это честно) — асимметрия её валит, как в жизни.
+        reg.emplace<Transform>(
+            ball, Transform{anchor - vec3{-0.02f * static_cast<float>(i), 0.0f,
+                                          restLen * static_cast<float>(i + 1)},
+                            g});
+        reg.emplace<Velocity>(ball);
+        reg.emplace<RigidBody>(ball, rb);
+        balls[i] = ball;
+
+        Entity link = reg.create();
+        JointLink jl;
+        jl.a = ball;
+        if (i == 0) {
+            jl.b = entt::null;
+            jl.anchorB = anchor;
+            worldLink = link;
+        } else {
+            jl.b = prev;
+        }
+        jl.restLen = restLen;
+        // Верёвочные звенья — как у spawn_chain по умолчанию: жёсткое звено
+        // толкает, и разрубленная цепь стояла бы колонной (честная физика
+        // стержней), а не падала.
+        jl.rope = true;
+        reg.emplace<JointLink>(link, jl);
+        prev = ball;
+    }
+
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    auto linkDist = [&](int i, int j) {
+        const vec3 d = reg.get<Transform>(balls[i]).pos -
+                       reg.get<Transform>(balls[j]).pos;
+        return length(d);
+    };
+    bool connected = true;
+    for (int i = 1; i < kN; ++i)
+        if (linkDist(i, i - 1) > restLen * 1.35f) connected = false;
+    CHECK(connected);
+    // Висит: нижний шар заметно выше пола (подвес 3 м − цепь 1.8 м).
+    CHECK(reg.get<Transform>(balls[kN - 1]).pos.z > floorTop + 0.5f);
+
+    // РАЗРУБ подвеса: destroy линк-сущности + пробуждение (как cut_link).
+    for (int i = 0; i < kN; ++i) {
+        auto& rb = reg.get<RigidBody>(balls[i]);
+        rb.asleep = false;
+        rb.sleepTicks = 0;
+    }
+    reg.destroy(worldLink);
+
+    for (int i = 0; i < 4 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    bool onFloor = true;
+    for (int i = 0; i < kN; ++i) {
+        const float z = reg.get<Transform>(balls[i]).pos.z;
+        if (z > floorTop + 0.5f) onFloor = false;
+    }
+    CHECK(onFloor);
+    bool stillConnected = true;
+    for (int i = 1; i < kN; ++i)
+        if (linkDist(i, i - 1) > restLen * 1.5f) stillConnected = false;
+    CHECK(stillConnected);
+}
+
+// СТИКЦИЯ (§64): линк-цепь, УПАВШАЯ на пол, обязана ДОСТИЧЬ сна. До
+// демпфера трения покоя это было невозможно по построению: суставы
+// впрыскивают микро-энергию 16 раз за тик, стока в контакте не было —
+// осевшая цепь (труп = та же механика: 4 тела + 3 линка) дрожала выше
+// порога сна вечно (noisy 1241/1335 в игре, rigid 15.8 мс/кадр навсегда
+// после обрушения). Мутация «kStictionRate = 0» роняет ровно CHECK-и
+// сна — гейт закрывает класс, а не симптом.
+static void test_rigid_chain_sleeps_on_floor() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    constexpr int kN = 4;
+    const float radius = 0.15f;
+    const float restLen = 3.0f * radius;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    Entity balls[kN];
+    Entity prev = entt::null;
+    for (int i = 0; i < kN; ++i) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f;
+        rb.friction = 0.6f;
+        Entity ball = reg.create();
+        // Лежит горизонтально чуть над полом, лёгкий сдвиг по y — падение
+        // несимметрично, как настоящий труп.
+        reg.emplace<Transform>(
+            ball,
+            Transform{vec3{(8.0f + 0.5f * static_cast<float>(i)) * kCellSize,
+                           10.0f * kCellSize +
+                               0.03f * static_cast<float>(i),
+                           floorTop + 0.6f},
+                      g});
+        reg.emplace<Velocity>(ball);
+        reg.emplace<RigidBody>(ball, rb);
+        balls[i] = ball;
+        if (i > 0) {
+            Entity link = reg.create();
+            JointLink jl;
+            jl.a = ball;
+            jl.b = prev;
+            jl.restLen = restLen;
+            jl.rope = true;
+            reg.emplace<JointLink>(link, jl);
+        }
+        prev = ball;
+    }
+
+    // 8 секунд: падение ~0.35 с + оседание; сон обязан наступить с большим
+    // запасом (стикция глушит зону за ~0.2 с, порог сна — ещё 0.26 с).
+    for (int i = 0; i < 8 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+    for (int i = 0; i < kN; ++i) {
+        const auto& rb = reg.get<RigidBody>(balls[i]);
+        CHECK(rb.asleep); // цепь ДОСТИГЛА тишины — §64 закрыт по классу
+        const float z = reg.get<Transform>(balls[i]).pos.z;
+        CHECK(z < floorTop + 0.5f); // уснула НА полу, а не зависнув
+    }
+}
+
+// Инкремент 4 ([markoaudit/plans/ragdoll.md]): шар-шар через клеточный
+// биннинг. Падающий шар БУДИТ спящего касанием (куча оживает), пара
+// разрешается импульсом (не проходят друг сквозь друга): идеально соосная
+// пара встаёт стопкой 2r, и стопка засыпает (touchedTick от пары — опора).
+static void test_rigid_ball_ball_wakes_and_stacks() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    const float radius = 0.35f;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+    auto make_ball = [&](vec3 pos) {
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.2f;
+        rb.friction = 0.6f;
+        Entity e = reg.create();
+        reg.emplace<Transform>(e, Transform{pos, g});
+        reg.emplace<Velocity>(e);
+        reg.emplace<RigidBody>(e, rb);
+        return e;
+    };
+
+    const float cx = 10.5f * kCellSize, cy = 10.5f * kCellSize;
+    Entity bottom = make_ball(vec3{cx, cy, floorTop + radius + 0.1f});
+    for (int i = 0; i < 3 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    CHECK(reg.get<RigidBody>(bottom).asleep);
+
+    // Второй шар точно сверху, с небольшой высоты: 0.6 м зазора — падение
+    // ~44 тика, к 60-му контакт гарантирован.
+    Entity top = make_ball(vec3{cx, cy, floorTop + 3.0f * radius + 0.6f});
+    for (int i = 0; i < 60; ++i) rigid_body_step(reg, stack, kSimDt);
+    // Касание разбудило спящего.
+    CHECK(!reg.get<RigidBody>(bottom).asleep);
+
+    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    const float zBot = reg.get<Transform>(bottom).pos.z;
+    const float zTop = reg.get<Transform>(top).pos.z;
+    // Не прошли друг сквозь друга: либо стопка 2r, либо скатился рядом на
+    // радиус — в обоих случаях верхний НЕ внутри нижнего.
+    const vec3 d = reg.get<Transform>(top).pos - reg.get<Transform>(bottom).pos;
+    CHECK(length(d) > 1.8f * radius);
+    CHECK(zBot < floorTop + radius + 0.05f); // нижний остался на полу
+    CHECK(zTop > zBot - 0.05f);              // верхний не провалился под него
+    CHECK(reg.get<RigidBody>(bottom).asleep); // стопка/пара уснула
+    CHECK(reg.get<RigidBody>(top).asleep);
+}
+
+// Инкремент 5 ([markoaudit/plans/ragdoll.md]): проп ↔ агент. S3: RagdollRoll
+// «задевает игрока, может убить»; S7: игрок = NPC. Быстрый шар в стоящего
+// агента — Impact на обоих (в закон урона E=mv²/2) и отскок; идущий агент
+// в спящий шар — шар просыпается и откатывается.
+static void test_rigid_prop_hits_agent_and_agent_kicks() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    for (int y = 0; y < 20; ++y)
+        for (int x = 0; x < 20; ++x)
+            w.grid().fill_cell(x, y, 4, 1);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    const float radius = 0.35f;
+    const float mass =
+        7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+
+    // Агент — тело игрока/NPC: AABB 0.4×0.4×0.9, стоит на плите.
+    Entity agent = reg.create();
+    reg.emplace<Transform>(
+        agent, Transform{vec3{12.0f * kCellSize, 10.5f * kCellSize,
+                              floorTop + 0.9f},
+                         g});
+    reg.emplace<Velocity>(agent);
+    reg.emplace<AABB>(agent, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<GravityAffected>(agent);
+
+    // Стальной шар летит в него на 10 м/с.
+    Entity ball = reg.create();
+    RigidBody rb;
+    rb.radius = radius;
+    rb.invMass = 1.0f / mass;
+    rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+    rb.restitution = 0.35f;
+    rb.friction = 0.6f;
+    reg.emplace<Transform>(
+        ball, Transform{vec3{12.0f * kCellSize - 3.0f, 10.5f * kCellSize,
+                             floorTop + 0.9f},
+                        g});
+    reg.emplace<Velocity>(ball, Velocity{vec3{10.0f, 0.0f, 0.0f}});
+    reg.emplace<RigidBody>(ball, rb);
+
+    for (int i = 0; i < kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    // Удар случился: Impact на агенте (урон посчитает impact_damage_step) и
+    // шар не пролетел сквозь — его X левее агента.
+    CHECK(reg.all_of<Impact>(agent));
+    CHECK(reg.get<Impact>(agent).speed > 4.0f);
+    CHECK(reg.get<Transform>(ball).pos.x <
+          reg.get<Transform>(agent).pos.x);
+
+    // Агент идёт в СПЯЩИЙ шар — тот просыпается и сдвигается.
+    Registry reg2;
+    Entity ball2 = reg2.create();
+    RigidBody rb2 = rb;
+    reg2.emplace<Transform>(
+        ball2, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                              floorTop + radius + 0.05f},
+                         g});
+    reg2.emplace<Velocity>(ball2);
+    reg2.emplace<RigidBody>(ball2, rb2);
+    for (int i = 0; i < 3 * kSimHz; ++i) rigid_body_step(reg2, stack, kSimDt);
+    CHECK(reg2.get<RigidBody>(ball2).asleep);
+
+    Entity walker = reg2.create();
+    reg2.emplace<Transform>(
+        walker, Transform{vec3{10.5f * kCellSize - 1.0f, 10.5f * kCellSize,
+                               floorTop + 0.9f},
+                          g});
+    // Контроллерная скорость ходьбы, пишется каждый тик — как в игре.
+    reg2.emplace<Velocity>(walker, Velocity{vec3{1.5f, 0.0f, 0.0f}});
+    reg2.emplace<AABB>(walker, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg2.emplace<GravityAffected>(walker);
+    const float ballX0 = reg2.get<Transform>(ball2).pos.x;
+    for (int i = 0; i < kSimHz; ++i) {
+        // Шаг агента двигает его сам (в игре — physics_step).
+        reg2.get<Transform>(walker).pos.x += 1.5f * kSimDt;
+        reg2.get<Velocity>(walker).v = vec3{1.5f, 0.0f, 0.0f};
+        rigid_body_step(reg2, stack, kSimDt);
+    }
+    CHECK(!reg2.get<RigidBody>(ball2).asleep);
+    CHECK(reg2.get<Transform>(ball2).pos.x > ballX0 + 0.1f);
+}
+
+// Инкремент 7 ([markoaudit/plans/ragdoll.md]): МАТЕРИАЛЬНАЯ ПАРА — отскок
+// свойство пары, не тела. Один и тот же стальной шар: на бетоне (256) звенит,
+// на щебне (24) глохнет — без ветки по виду поверхности.
+static void test_rigid_material_pair_bounce() {
+    auto rebound_apex = [](std::uint8_t mat) -> float {
+        LevelStack stack;
+        LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        for (int y = 0; y < 20; ++y)
+            for (int x = 0; x < 20; ++x)
+                w.grid().fill_cell(x, y, 4, mat);
+
+        Registry reg;
+        const float floorTop = 5.0f * kCellSize;
+        const float radius = 0.35f;
+        const float mass =
+            7800.0f * (4.0f / 3.0f) * 3.14159265f * radius * radius * radius;
+        RigidBody rb;
+        rb.radius = radius;
+        rb.invMass = 1.0f / mass;
+        rb.invInertia = 1.0f / (0.4f * mass * radius * radius);
+        rb.restitution = 0.35f; // сталь — свойство ТЕЛА, поверхность решит пара
+        rb.friction = 0.6f;
+        Entity e = reg.create();
+        // 0.8 м свободного падения: удар ~3.96 м/с — выше порога отскока.
+        reg.emplace<Transform>(
+            e, Transform{vec3{10.5f * kCellSize, 10.5f * kCellSize,
+                              floorTop + radius + 0.8f},
+                         g});
+        reg.emplace<Velocity>(e);
+        reg.emplace<RigidBody>(e, rb);
+
+        bool contacted = false;
+        float apex = 0.0f;
+        for (int i = 0; i < 2 * kSimHz; ++i) {
+            rigid_body_step(reg, stack, kSimDt);
+            const float z = reg.get<Transform>(e).pos.z;
+            if (!contacted && z < floorTop + radius + 0.02f) contacted = true;
+            if (contacted)
+                apex = std::max(apex, z - (floorTop + radius));
+        }
+        return apex;
+    };
+
+    const float onConcrete = rebound_apex(1);  // бетон, hardness 256
+    const float onRubble = rebound_apex(15);   // щебень, hardness 24
+    CHECK(onConcrete > 0.03f);                // на бетоне реально отскочил
+    CHECK(onConcrete > onRubble + 0.05f);     // на щебне заметно глуше
+}
+
 // Трение воздуха ([sim/drag.h]): падение в пустой шахте тора КАПИТСЯ на
 // терминальной скорости, а не разгоняется вечно. Полоса 50-60 м/с — приёмка
 // владельца для тела 70 кг; она же и есть проводка-детектор: без трения 20 с
@@ -363,28 +885,9 @@ static void test_stain_layer() {
                       dirty2) == a); // same seed, same bytes
 }
 
-static void test_fluid_conserves_mass() {
-    World w;
-    // Solid floor everywhere at z-cell 0 so fluid cannot drain off the bottom.
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x)
-            w.grid().fill_cell(x, y, 0, 1);
-
-    auto& f = w.fields().get_or_create<float>("fluid", 0.0f);
-    f.at(64, 64, 5) = 10.0f;
-
-    auto total = [&]() {
-        double s = 0;
-        for (float v : f.data()) s += v;
-        return s;
-    };
-    double before = total();
-    for (int i = 0; i < 50; ++i) fluid_step(w);
-    double after = total();
-    // Mass is conserved (no sources/sinks); allow tiny FP drift.
-    CHECK_NEAR(after, before, 1e-3);
-    CHECK(before > 9.9 && before < 10.1);
-}
+// (test_fluid_conserves_mass УМЕР с fluid.cpp — чистка 2026-08-24: воду
+// двигает мир-автомат, масс-инвариант живёт в medium_test на настоящем
+// SPIR-V.)
 
 // The diffusion danger/scent field (increment D): a source spreads to its open
 // neighbours, wraps across the torus seam, is blocked by walls (no flux), yields
@@ -437,6 +940,34 @@ static void test_diffusion() {
         diffusion_step(w);
         CHECK(f.at(65, 64, 64) == 0.0f); // wall holds nothing
         CHECK(f.at(63, 64, 64) > 0.0f);  // the open -x side still receives
+    }
+
+    // 3б) ЛЕПЛЕНАЯ стена глушит поток (§60/К1-10): стенка в ОДИН субвоксель
+    //     на грани (слой sx=7 соседа +x) — клетка на 7/8 воздух, прежний
+    //     клеточный предикат её не видел, и запах тёк сквозь. Гранный гейт
+    //     обязан держать: за стеной ноль, при этом сама клетка-стенка держит
+    //     поле с открытой стороны (ёмкость и поток — разные вопросы).
+    {
+        World w;
+        w.grid().set_cell(65, 64, 64, 1);
+        for (int sy = 0; sy < kSubDim; ++sy)
+            for (int sz = 0; sz < kSubDim; ++sz)
+                w.grid().mask(65, 64, 64).set(sub_bit(7, sy, sz));
+        auto& f = w.fields().get_or_create<float>("danger", 0.0f);
+        f.at(64, 64, 64) = 100.0f;
+        // РОВНО ДВА шага, и оба края вилки испытаны вживую: один шаг слеп
+        // (запах ещё не дошёл до стенки — прошёл бы и клеточный гейт), а с
+        // четырёх запах честно ОБТЕКАЕТ одиночную панель по открытым соседям
+        // (кратчайший обход 64→y±1→…→66 = 4 шага — стена не герметик, и это
+        // правильно). Утечка СКВОЗЬ гейт случилась бы на втором шаге.
+        for (int s = 0; s < 2; ++s) diffusion_step(w);
+        CHECK(f.at(65, 64, 64) > 0.0f);  // в клетку-стенку запах входит...
+        CHECK(f.at(66, 64, 64) == 0.0f); // ...но сквозь слой sx=7 не выходит
+        CHECK(f.at(63, 64, 64) > 0.0f);  // открытая сторона живёт
+        // И градиент через глухую грань не смотрит: на дальней стороне
+        // стены поле плоское — бежать «от запаха за стеной» не от чего.
+        const vec3 g2 = diffusion_gradient(f, w.grid(), 66, 64, 64);
+        CHECK(g2.x == 0.0f && g2.y == 0.0f && g2.z == 0.0f);
     }
 
     // 4) Flee gradient: after diffusing a spike, danger falls with distance, so at
@@ -503,6 +1034,64 @@ static void test_camera_component_is_movable() {
     CHECK_NEAR(m.eye.x, 1.0f, 1e-4f);
 }
 
+// Стереопара ([sim/camera.h]) — ЗАГОТОВКА: к пассам не подключена (решение
+// владельца 2026-09-12), но математика лежит под гейтом, иначе подключать
+// будет нечего и придётся выводить заново. Проверяется то, в чём стерео и
+// ломается: база разводится по ПРАВОМУ вектору взгляда, оси глаз ПАРАЛЛЕЛЬНЫ,
+// расстояние между зрачками равно ровно IPD, и оба глаза — это всё ещё та же
+// камера, что отдаёт compute_camera.
+static void test_stereo_camera_splits_by_ipd() {
+    Registry reg;
+    // Нет камеры — нет пары. Обратная полярность к «valid по умолчанию».
+    CHECK(!compute_stereo_camera(reg, 1.0f).valid);
+
+    Entity a = reg.create();
+    reg.emplace<Transform>(a, Transform{vec3{10, 20, 30}, 0});
+    CameraTag tag{};
+    tag.yaw = 0.0f; // взгляд вдоль +X; правый вектор при верхе +Z — это -Y
+    tag.pitch = 0.0f;
+    reg.emplace<CameraTag>(a, tag);
+
+    const float ipd = 0.064f;
+    StereoCameraMatrices s = compute_stereo_camera(reg, 0.888f, ipd);
+    CHECK(s.valid && s.left.valid && s.right.valid);
+
+    // Зрачки разведены ровно на IPD — ни на половину, ни на две.
+    const vec3 sep = s.right.eye - s.left.eye;
+    CHECK_NEAR(length(sep), ipd, 1e-5f);
+
+    // Разведены по ПРАВОМУ вектору: при взгляде вдоль +X и верхе +Z правый
+    // глаз стоит ниже по Y. Перепутанный знак меняет глаза местами — картинка
+    // «читается», но глубина выворачивается наизнанку, и заметить это можно
+    // только шлемом на голове. Поэтому знак пинится здесь.
+    CHECK_NEAR(sep.x, 0.0f, 1e-5f);
+    CHECK(sep.y < 0.0f);
+    CHECK_NEAR(sep.z, 0.0f, 1e-5f);
+
+    // Центр пары — ровно монокулярный глаз: стерео не уводит голову вбок.
+    CameraMatrices mono = compute_camera(reg, 0.888f);
+    const vec3 mid = (s.left.eye + s.right.eye) * 0.5f;
+    CHECK_NEAR(length(mid - mono.eye), 0.0f, 1e-5f);
+
+    // Оси ПАРАЛЛЕЛЬНЫ (никакого toe-in) и совпадают с монокулярной.
+    CHECK_NEAR(length(s.left.forward - s.right.forward), 0.0f, 1e-6f);
+    CHECK_NEAR(length(s.left.forward - mono.forward), 0.0f, 1e-6f);
+
+    // Нулевой IPD схлопывает пару в одну точку — монокуляр как предельный
+    // случай, а не отдельная ветка кода.
+    StereoCameraMatrices flat = compute_stereo_camera(reg, 0.888f, 0.0f);
+    CHECK_NEAR(length(flat.right.eye - flat.left.eye), 0.0f, 1e-6f);
+
+    // Взгляд В ЗЕНИТ: cross(fwd, up) вырождается, и наивная реализация
+    // разводит глаза в NaN. Ось обязана найтись, база — остаться равной IPD.
+    reg.get<CameraTag>(a).pitch = 1.5707963f;
+    StereoCameraMatrices up = compute_stereo_camera(reg, 0.888f, ipd);
+    CHECK(up.valid);
+    const vec3 upSep = up.right.eye - up.left.eye;
+    CHECK_NEAR(length(upSep), ipd, 1e-4f);
+    CHECK(upSep.x == upSep.x); // NaN != NaN — ловит вырождение напрямую
+}
+
 // The bake-time job system (src/core/jobs.h). Its whole contract is that a
 // parallel run over disjoint indices equals the serial run — deterministic, not
 // merely "eventually the same".
@@ -531,7 +1120,9 @@ static void test_nav_coarse() {
     using namespace nav;
     MacroGrid air;
     CoarseGraph g{};
-    bake_coarse(air, g);
+    // Габарит бейков в world-тестах — 4 субвокселя (тело NPC; вывод у
+    // потребителя, [game/embody.h] kBodyClearanceSub).
+    bake_coarse(air, 4, g);
 
     for (int i = 0; i < kNodes; ++i) {
         CHECK(g.dist[i][i] == 0);
@@ -560,7 +1151,7 @@ static void test_nav_coarse() {
 
     // Deterministic: a second bake is bit-identical (schedule-invariant).
     CoarseGraph g2{};
-    bake_coarse(air, g2);
+    bake_coarse(air, 4, g2);
     CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
 }
 
@@ -572,7 +1163,7 @@ static void test_nav_fine() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    bake_fine(air, 4, f);
 
     // The node cell itself is "arrived".
     CHECK(f.at(0, 16, 16, 16) == kFlowArrived);
@@ -619,11 +1210,52 @@ static void test_nav_fine() {
     // Deterministic: a second bake is bit-identical (schedule-invariant), for
     // both the flow fields and the (single-threaded) nearest-node field.
     FineNav f2;
-    bake_fine(air, f2);
+    bake_fine(air, 4, f2);
     CHECK(f.flow.size() == f2.flow.size());
     CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
     CHECK(f.nearest.size() == f2.nearest.size());
     CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
+}
+
+// ЛЕПЛЕНАЯ СТЕНА (§60/К1-10, эпик occupancy): плоскость x=32 из стенок
+// толщиной в ОДИН субвоксель (sx=3, середина младшей половины) — ни одна
+// клетка не полная, но переходы 31→32 глухие для любого габарита. Клеточный
+// закон `!full()` эту стену не видел вовсе и вёл толпу сквозь неё; гранный
+// клиренс обязан гнать маршрут в обход по завороту тора: 96 клеток, не 32.
+static void test_nav_subvoxel_wall() {
+    using namespace nav;
+    MacroGrid g;
+    for (int z = 0; z < kMacroDim; ++z)
+        for (int y = 0; y < kMacroDim; ++y) {
+            g.set_cell(32, y, z, kMatConcrete);
+            SubMask& m = g.mask(32, y, z);
+            for (int sz = 0; sz < kSubDim; ++sz)
+                for (int sy = 0; sy < kSubDim; ++sy)
+                    m.set(sub_bit(3, sy, sz));
+        }
+
+    CoarseGraph cg{};
+    bake_coarse(g, 4, cg);
+    // Ребро узла 0 (16,16,16) → сосед +x (48,16,16): геодезия обязана обойти
+    // стену через заворот (16→0→127→...→48 = 96), а не пройти сквозь неё.
+    CHECK(cg.edge[0][1] == 3 * kLatticeSpacing);
+
+    FineNav f;
+    bake_fine(g, 4, f);
+    // Флоу-поле узла 0 из клетки (33,16,16): шаг -x — это шаг в стену.
+    CHECK(f.at(0, 33, 16, 16) != 0);
+    // И спуск по полю обязан прийти в узел за длину обхода на восток:
+    // (128 − 33) + 16 = 111 клеток (на запад — упор в стену на переходе 32→31).
+    int cx = 33, cy = 16, cz = 16, steps = 0;
+    for (; steps <= 4 * kMacroDim; ++steps) {
+        const std::uint8_t d = f.at(0, cx, cy, cz);
+        if (d == kFlowArrived) break;
+        if (d == kFlowNone) { steps = -1; break; }
+        cx = wrap_macro(cx + kNavDir[d][0]);
+        cy = wrap_macro(cy + kNavDir[d][1]);
+        cz = wrap_macro(cz + kNavDir[d][2]);
+    }
+    CHECK(steps == 111);
 }
 
 // route_step (master_prompt #11 C.2): the O(1) tick query that composes the
@@ -633,9 +1265,9 @@ static void test_route_step() {
     using namespace nav;
     MacroGrid air;
     FineNav f;
-    bake_fine(air, f);
+    bake_fine(air, 4, f);
     CoarseGraph g{};
-    bake_coarse(air, g);
+    bake_coarse(air, 4, g);
 
     // Standing on the destination cell: arrived, no step.
     CHECK(route_step(g, f, ivec3{40, 40, 40}, ivec3{40, 40, 40}) == kFlowArrived);
@@ -661,26 +1293,35 @@ static void test_route_step() {
     MacroGrid walled;
     walled.fill_cell(0, 0, 0, 1);
     FineNav fw;
-    bake_fine(walled, fw);
+    bake_fine(walled, 4, fw);
     CoarseGraph gw{};
-    bake_coarse(walled, gw);
+    bake_coarse(walled, 4, gw);
     CHECK(fw.nearest_node(0, 0, 0) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{16, 16, 16}, ivec3{0, 0, 0}) == kFlowNone);
     CHECK(route_step(gw, fw, ivec3{0, 0, 0}, ivec3{16, 16, 16}) == kFlowNone);
 
-    // Coarse-unreachable branch: wall node 0's centre in on all 6 faces so its
-    // air pocket is a disconnected component. Its anchor still claims its own
-    // cell, but nothing reaches it, so routing to it returns kFlowNone via the
-    // O(1) coarse reachability guard — a different path than "target in solid".
+    // Coarse-unreachable branch: seal node 0's centre into a TWO-cell air
+    // pocket (its cell + eastern neighbour, walled all around). Под гранным
+    // законом одноклеточный карман — ИЗОЛЯТОР (ни одного проходимого ребра),
+    // якорь в нём не сеется; двухклеточный держит живое ребро, узел сеется и
+    // владеет карманом, но отрезан от мира — routing to it returns kFlowNone
+    // via the O(1) coarse reachability guard, a different path than "target
+    // in solid".
     MacroGrid isolated;
-    for (int d = 0; d < 6; ++d)
-        isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
-                           16 + kNavDir[d][2], 1);
+    for (int d = 0; d < 6; ++d) {
+        if (d != 1) // восточная грань узла — вход в карман, не стена
+            isolated.fill_cell(16 + kNavDir[d][0], 16 + kNavDir[d][1],
+                               16 + kNavDir[d][2], 1);
+        if (d != 0) // западная грань соседа смотрит назад в узел
+            isolated.fill_cell(17 + kNavDir[d][0], 16 + kNavDir[d][1],
+                               16 + kNavDir[d][2], 1);
+    }
     FineNav fi;
-    bake_fine(isolated, fi);
+    bake_fine(isolated, 4, fi);
     CoarseGraph gi{};
-    bake_coarse(isolated, gi);
-    CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its own cell
+    bake_coarse(isolated, 4, gi);
+    CHECK(fi.nearest_node(16, 16, 16) == 0);  // node 0 still owns its pocket
+    CHECK(fi.nearest_node(17, 16, 16) == 0);
     CHECK(gi.dist[1][0] == kUnreachable);     // but it is cut off from the rest
     CHECK(route_step(gi, fi, ivec3{48, 48, 48}, ivec3{16, 16, 16}) == kFlowNone);
 }
@@ -777,24 +1418,24 @@ static void test_mat4_lookAt() {
 // against "does it return true in a room": the endpoint cells, the toroidal seam,
 // the axes, and the diagonal that clips a corner.
 static void test_los() {
-    MacroGrid g;   // all air
-
+    // Клеточный los_clear/los_blockers СНЕСЁН (§60, 2026-08-26): свойства
+    // (изотропия, шов, старт-в-материи) переезжают на ЖИВОЙ примитив —
+    // sub_march / sub_thickness_cells; консумеры (осколки, звук) ходят ими.
+    MacroGrid g;
     const float c = kCellSize;   // 2 m
     auto mid = [&](int cx, int cy, int cz) {
         return vec3{(cx + 0.5f) * c, (cy + 0.5f) * c, (cz + 0.5f) * c};
     };
+    SubRayHit hit;
 
-    // Open air is clear, in both directions and at every separation.
-    CHECK(los_clear(g, mid(10, 10, 10), mid(20, 10, 10)));
-    CHECK(los_clear(g, mid(20, 10, 10), mid(10, 10, 10)));
-    CHECK(los_blockers(g, mid(10, 10, 10), mid(20, 10, 10)) == 0);
-    // Same cell: there is nothing BETWEEN, so it is clear by definition.
-    CHECK(los_clear(g, mid(10, 10, 10), mid(10, 10, 10)));
-    CHECK(los_clear(g, vec3{20.1f, 20.1f, 20.1f}, vec3{20.9f, 20.9f, 20.9f}));
+    // Открытый воздух чист в обе стороны; толщина материи нулевая.
+    CHECK(!sub_march(g, mid(10, 10, 10), mid(20, 10, 10), hit));
+    CHECK(!sub_march(g, mid(20, 10, 10), mid(10, 10, 10), hit));
+    CHECK(sub_thickness_cells(g, mid(10, 10, 10), mid(20, 10, 10)) == 0);
 
-    // ONE cell of wall blocks — on every axis, by the same code and the same
-    // expectation. Isotropy is not "z is special-cased correctly", it is "no letter
-    // is special at all" ([problems.md] §34).
+    // ОДНА клетка стены блокирует — на каждой оси одним и тем же кодом
+    // (изотропия: ни одна буква не особенная, [problems.md] §34); снятие
+    // стены возвращает простреливаемость; толщина полной клетки пути == 1.
     for (int a = 0; a < 3; ++a) {
         MacroGrid w;
         int lo[3] = {10, 10, 10};
@@ -806,59 +1447,64 @@ static void test_los() {
         w.fill_cell(wall[0], wall[1], wall[2], kMatConcrete);
         const vec3 A = mid(lo[0], lo[1], lo[2]);
         const vec3 B = mid(hi[0], hi[1], hi[2]);
-        CHECK(!los_clear(w, A, B));
-        CHECK(los_blockers(w, A, B) == 1);
-        CHECK(!los_clear(w, B, A));           // symmetric
-        // ...and removing it restores sight, which is what makes the CHECK above a
-        // statement about the wall rather than about the geometry of the test.
+        CHECK(sub_march(w, A, B, hit));
+        CHECK(sub_march(w, B, A, hit)); // symmetric
+        CHECK(sub_thickness_cells(w, A, B) == 1);
         w.clear_cell(wall[0], wall[1], wall[2]);
-        CHECK(los_clear(w, A, B));
+        CHECK(!sub_march(w, A, B, hit));
     }
 
-    // THE ENDPOINT RULE. A body standing INSIDE a solid cell (a doorway, a carved
-    // pocket, geometry that closed over it) must not be shielded by the cell it is
-    // standing in — otherwise a blast at its feet reads as "did nothing".
+    // СТАРТ В МАТЕРИИ: пуля, рождённая в тверди, стопится ею (t=0, грани
+    // входа нет) — противоположно правилу концов покойного los_clear, и
+    // это НЕ случайность (см. шапку los.h): марш отвечает «первое
+    // касание», не «что стоит между».
     {
         MacroGrid w;
-        w.fill_cell(10, 10, 10, kMatConcrete);   // the start cell itself
-        w.fill_cell(14, 10, 10, kMatConcrete);   // and the end cell itself
-        CHECK(los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
-        // But one cell BETWEEN them does block, so the exemption is exactly the two
-        // endpoints and not "solid cells are ignored".
-        w.fill_cell(12, 10, 10, kMatConcrete);
-        CHECK(!los_clear(w, mid(10, 10, 10), mid(14, 10, 10)));
+        w.fill_cell(10, 10, 10, kMatConcrete);
+        CHECK(sub_march(w, mid(10, 10, 10), mid(14, 10, 10), hit));
+        CHECK(hit.t == 0.0f);
+        CHECK(hit.axis == -1);
     }
 
-    // THE SEAM. x/y wrap, so a blast at cell 1 and a body at cell 126 are four cells
-    // apart the short way, not 125 the long way. The wall is placed on the SHORT
-    // path; a version that walked the long way round would report clear.
-    {
+    // ШОВ ТОРА: потребитель марширует к БЛИЖАЙШЕМУ образу (сегмент даётся
+    // как есть — так ходит снарядный интегратор): стена на КОРОТКОМ пути
+    // блокирует, на длинном — нет. Оси x и z одним кодом (z заворачивает,
+    // [AGENTS.md]).
+    for (int a = 0; a < 3; a += 2) {
+        int lo[3] = {10, 10, 10};
+        lo[a] = 1;
+        int hi[3] = {10, 10, 10};
+        hi[a] = kMacroDim - 2;
+        int wall[3] = {10, 10, 10};
+        wall[a] = kMacroDim - 1;
+        const vec3 A = mid(lo[0], lo[1], lo[2]);
+        const vec3 Bfar = mid(hi[0], hi[1], hi[2]);
+        vec3 Bnear = A; // ближайший образ B: короткая дорога через шов
+        // wrap_delta_f(a, b) = b - a обёрнутое (см. core/wrap.h).
+        Bnear.x += wrap_delta_f(A.x, Bfar.x, kWorldExtent);
+        Bnear.y += wrap_delta_f(A.y, Bfar.y, kWorldExtent);
+        Bnear.z += wrap_delta_f(A.z, Bfar.z, kWorldExtent);
         MacroGrid w;
-        const vec3 A = mid(1, 10, 10);
-        const vec3 B = mid(kMacroDim - 2, 10, 10);
-        CHECK(los_clear(w, A, B));
-        w.fill_cell(kMacroDim - 1, 10, 10, kMatConcrete);   // cell 127, between them
-        CHECK(!los_clear(w, A, B));
-        // And a wall on the LONG way round changes nothing.
+        CHECK(!sub_march(w, A, Bnear, hit));
+        w.fill_cell(wall[0], wall[1], wall[2], kMatConcrete);
+        CHECK(sub_march(w, A, Bnear, hit));
         MacroGrid w2;
-        w2.fill_cell(64, 10, 10, kMatConcrete);
-        CHECK(los_clear(w2, A, B));
+        int far3[3] = {10, 10, 10};
+        far3[a] = 64;
+        w2.fill_cell(far3[0], far3[1], far3[2], kMatConcrete);
+        CHECK(!sub_march(w2, A, Bnear, hit));
     }
 
-    // Off the top of the stack blocks: there is nothing up there to see through, and
-    // z does not wrap the way x/y do.
-    CHECK(!los_clear(g, mid(10, 10, 2), vec3{21.0f, 21.0f, -50.0f}));
-
-    // A DIAGONAL through a corner. The two cells forming the corner are solid and
-    // the segment passes exactly between them; an implementation that steps one axis
-    // at a time without visiting both boundary cells slips through the seam.
+    // ДИАГОНАЛЬ через угол: сегмент проходит ровно между двумя твёрдыми
+    // клетками — реализация, шагающая по одной оси и не посещающая обе
+    // граничные, проскользнула бы.
     {
         MacroGrid w;
         w.fill_cell(11, 10, 10, kMatConcrete);
         w.fill_cell(10, 11, 10, kMatConcrete);
-        CHECK(!los_clear(w, mid(10, 10, 10), mid(11, 11, 10)));
+        CHECK(sub_march(w, mid(10, 10, 10), mid(11, 11, 10), hit));
     }
-    std::printf("[los] blocked on 3 axes, endpoints exempt, seam honoured\n");
+    std::printf("[los] sub_march: 3 оси, старт-в-материи, шов, диагональ\n");
 }
 
 int main() {
@@ -872,19 +1518,30 @@ int main() {
     test_level_stack();
     test_aabb_overlap();
     test_physics_lands_on_floor();
+    test_buoyancy();
+    test_rigid_ball_settles_and_sleeps();
+    test_rigid_box_lies_flat();
+    test_rigid_chain_hangs_and_cuts();
+    test_rigid_chain_sleeps_on_floor();
+    test_rigid_ball_ball_wakes_and_stacks();
+    test_rigid_prop_hits_agent_and_agent_kicks();
+    test_rigid_material_pair_bounce();
     test_air_drag_terminal_velocity();
-    test_fluid_conserves_mass();
     test_diffusion();
     test_camera_component_is_movable();
+    test_stereo_camera_splits_by_ipd();
     test_parallel_for();
     test_nav_coarse();
     test_nav_fine();
+    test_nav_subvoxel_wall();
     test_route_step();
     test_destruct_all();
 
     test_step_up_one_atom();
     test_stain_layer();
     test_props_all();
+    test_surface_all();
+    test_clearance_all();
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {
         std::printf("FAILED (%d)\n", g_fails);

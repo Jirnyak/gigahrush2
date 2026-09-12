@@ -6,7 +6,7 @@
 // referred — the shading linearises once with pow(2.2)), and which KTX2 texture
 // set skins an id. Albedos bound to a texture are MEASURED off the real
 // photograph (data/textures.csv carries the linear mean and provenance);
-// unbound rows are authored. Consumed by render/cube_pass.cpp only.
+// unbound rows are authored. Consumed by render/material_textures.cpp only.
 #pragma once
 
 #include "core/math.h"
@@ -18,7 +18,7 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.00f, 0.00f, 0.00f},  //  0 air
     {0.30f, 0.30f, 0.28f},  //  1 concrete
     {0.24f, 0.36f, 0.18f},  //  2 soil
-    {0.18f, 0.28f, 0.55f},  //  3 water_mark
+    {0.18f, 0.28f, 0.55f},  //  3 water
     {0.36f, 0.30f, 0.22f},  //  4 slab_tan
     {0.10f, 0.85f, 0.42f},  //  5 extract
     {0.16f, 0.24f, 0.42f},  //  6 door
@@ -35,7 +35,29 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.15f, 0.75f, 0.12f},  // 17 acid_pool
     {0.85f, 0.25f, 0.04f},  // 18 fire_cell
     {0.13f, 0.16f, 0.14f},  // 19 pipe_metal
-    {0.25f, 0.95f, 0.85f}   // 20 neon_tube
+    {0.25f, 0.95f, 0.85f},  // 20 neon_tube
+    {0.62f, 0.70f, 0.72f},  // 21 glass
+    {0.35f, 0.55f, 0.25f},  // 22 toxic_gas
+    {0.09f, 0.09f, 0.10f},  // 23 asphalt
+    {0.34f, 0.36f, 0.38f},  // 24 door_steel
+    {0.30f, 0.33f, 0.31f},  // 25 door_hermetic
+    {0.26f, 0.26f, 0.24f},  // 26 rubble_concrete
+    {0.20f, 0.31f, 0.15f},  // 27 rubble_soil
+    {0.31f, 0.26f, 0.19f},  // 28 rubble_slab_tan
+    {0.41f, 0.37f, 0.32f},  // 29 rubble_plaster
+    {0.27f, 0.17f, 0.09f},  // 30 rubble_parquet
+    {0.32f, 0.34f, 0.36f},  // 31 rubble_shop_shutter
+    {0.22f, 0.14f, 0.10f},  // 32 rubble_lino
+    {0.19f, 0.26f, 0.19f},  // 33 rubble_factory_wall
+    {0.32f, 0.20f, 0.13f},  // 34 rubble_tread
+    {0.34f, 0.17f, 0.07f},  // 35 rubble_rust
+    {0.72f, 0.59f, 0.13f},  // 36 rubble_electric_grate
+    {0.72f, 0.21f, 0.03f},  // 37 rubble_fire_cell
+    {0.11f, 0.14f, 0.12f},  // 38 rubble_pipe_metal
+    {0.21f, 0.81f, 0.72f},  // 39 rubble_neon_tube
+    {0.53f, 0.59f, 0.61f},  // 40 rubble_glass
+    {0.08f, 0.08f, 0.09f},  // 41 rubble_asphalt
+    {0.29f, 0.31f, 0.32f}   // 42 rubble_door_steel
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id");
@@ -50,12 +72,17 @@ struct MaterialMap {
     float tileScale;        // world-space tiling multiplier
 };
 inline constexpr MaterialMap kMaterialMaps[] = {
-    {kMatShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f},  //  0 shop_shutter
-    {kMatLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                  ,  //  1 lino
-    {kMatFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                           ,  //  2 factory_wall
-    {kMatTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                  ,  //  3 tread
-    {kMatRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                            ,  //  4 rust
-    {kMatRubble, "rusty_corrugated_iron.ktx2", "rusty_corrugated_iron_normal.ktx2", "rusty_corrugated_iron_roughness.ktx2", 0.5f}        //  5 rubble
+    {kMatShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f}      ,  //  0 shop_shutter
+    {kMatLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                        ,  //  1 lino
+    {kMatFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                                 ,  //  2 factory_wall
+    {kMatTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                        ,  //  3 tread
+    {kMatRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                                  ,  //  4 rust
+    {kMatRubble, "rusty_corrugated_iron.ktx2", "rusty_corrugated_iron_normal.ktx2", "rusty_corrugated_iron_roughness.ktx2", 0.5f}           ,  //  5 rubble
+    {kMatRubbleShopShutter, "painted_metal_shutter.ktx2", "painted_metal_shutter_normal.ktx2", "painted_metal_shutter_roughness.ktx2", 0.5f},  //  6 rubble_shop_shutter
+    {kMatRubbleLino, "rubber_tiles.ktx2", "rubber_tiles_normal.ktx2", "rubber_tiles_roughness.ktx2", 0.5f}                                  ,  //  7 rubble_lino
+    {kMatRubbleFactoryWall, "factory_wall.ktx2", "factory_wall_normal.ktx2", "factory_wall_roughness.ktx2", 0.5f}                           ,  //  8 rubble_factory_wall
+    {kMatRubbleTread, "metal_grate_rusty.ktx2", "metal_grate_rusty_normal.ktx2", "metal_grate_rusty_roughness.ktx2", 0.5f}                  ,  //  9 rubble_tread
+    {kMatRubbleRust, "rusty_metal_03.ktx2", "rusty_metal_03_normal.ktx2", "rusty_metal_03_roughness.ktx2", 0.5f}                               // 10 rubble_rust
 };
 inline constexpr int kMaterialMapCount =
     static_cast<int>(sizeof(kMaterialMaps) / sizeof(kMaterialMaps[0]));

@@ -14,6 +14,25 @@ import csv
 import os
 import sys
 
+# Глаголы, которые предмет УТОЛЯЕТ (CANON S12.3: ресурс, тратится) — слагаемое
+# ЗАПАС предложения комнаты (S12.5). ВЫВОДЯТСЯ из существующих колонок (S11:
+# константа выводится, не назначается): нажива = value_rub (кап i16), а
+# есть/пить/лечиться/спать = use_a строки по её use_effect. Ручной колонки
+# глаголов у предметов НЕТ — 443 строки не размечаются руками.
+USE_VERB = {
+    "Feed": "eat", "FeedRisky": "eat",
+    "Drink": "drink",
+    "Heal": "heal", "HealPsi": "heal",
+    "SleepingPills": "sleep",
+}
+
+
+def load_verbs():
+    """Словарь глаголов: токен -> ординал, K = число строк verbs.csv."""
+    path = os.path.join(REPO, "data", "verbs.csv")
+    with open(path, encoding="utf-8", newline="") as fh:
+        return {r["id"].strip(): i for i, r in enumerate(csv.DictReader(fh))}
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(REPO, "data", "items.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "item_table.cpp")
@@ -37,12 +56,6 @@ USE = {
     "SleepingPills": "SleepingPills", "PsiSurge": "PsiSurge",
     "TechnicalSpirit": "TechnicalSpirit", "Unpack": "Unpack",
     "UnsealSample": "UnsealSample", "RedeemCoupon": "RedeemCoupon",
-}
-ROOM = {
-    "CORRIDOR": "Corridor", "COMMON": "Common", "STORAGE": "Storage",
-    "KITCHEN": "Kitchen", "BATHROOM": "Bathroom", "LIVING": "Living",
-    "OFFICE": "Office", "MEDICAL": "Medical", "PRODUCTION": "Production",
-    "SMOKING": "Smoking", "HQ": "Hq",
 }
 RESIST_COLS = ["resist_kinetic", "resist_buckshot", "resist_energy",
                "resist_fire", "resist_psi"]
@@ -90,21 +103,6 @@ def spawn_weight(row, i):
             "0.35 there is 350 here. Write the milli value, or 0 to mean never."
             % (i, row["id"], text))
     return v
-
-
-def room_mask(row, i):
-    text = (row.get("spawn_rooms") or "").strip()
-    if not text:
-        return "0"
-    bits = []
-    for tok in text.split("|"):
-        tok = tok.strip()
-        if not tok:
-            continue
-        if tok not in ROOM:
-            die("row %d (%s): unknown room %r" % (i, row["id"], tok))
-        bits.append("u16(RoomBit::%s)" % ROOM[tok])
-    return " | ".join(bits) if bits else "0"
 
 
 def cpp_string(s):
@@ -160,6 +158,8 @@ def main():
     seen, out, names, descs = set(), [], [], []
     used_cat, used_use = set(), set()
     resolved = []
+    verbs = load_verbs()
+    verb_vecs = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -190,14 +190,13 @@ def main():
 
         out.append(
             "    // [%d] id %d  %s  (%d g)\n"
-            "    ItemDef{ %d, %d, %d, static_cast<std::uint16_t>(%s), %d, %d,\n"
+            "    ItemDef{ %d, %d, %d, %d, %d,\n"
             "             u8(ItemCategory::%s), u8(EquipSlot::%s),\n"
             "             u8(UseEffect::%s), {%s}, %d, %d, %d, %d, %d },"
             % (i, i + 1, r["id"], massG,
                num(r, "value_rub", i, 0, 2000000000),
                massG,
                spawn_weight(r, i),
-               room_mask(r, i),
                num(r, "use_a", i, -32768, 32767),
                # stack_max is u16 since the ruble row (money stacks to the
                # honest u16 ceiling); field order follows ItemDef, where the
@@ -209,6 +208,12 @@ def main():
                # durability: USES until ruined; empty column = 0 = never wears.
                num(r, "durability", i, 0, 65535),
                light_radius, light_intensity, light_cone, FLICKER[flicker]))
+        vec = [0] * len(verbs)
+        vec[verbs["profit"]] = min(num(r, "value_rub", i, 0, 2000000000), 32767)
+        if ue in USE_VERB:
+            vec[verbs[USE_VERB[ue]]] = num(r, "use_a", i, -32768, 32767)
+        verb_vecs.append(vec)
+
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
         # Authored flavour text — all 442 rows carry one. The inventory card
         # ([inventory.md]) is its consumer; an empty cell would be a CSV defect.
@@ -275,6 +280,15 @@ def main():
         for iid in ids:
             fh.write('    "%s",\n' % iid)
         fh.write("}};\n\n")
+        fh.write("// Глаголы предмета (S12.3: что УТОЛЯЕТ; ресурс, тратится).\n"
+                 "// ВЫВЕДЕНЫ из value_rub (нажива) и use_effect/use_a\n"
+                 "// (есть/пить/лечиться/спать) — ручной разметки нет (S11).\n")
+        fh.write("const std::array<std::array<std::int16_t, kVerbCount>, "
+                 "kItemCount> kItemVerbs = {{\n")
+        for iid, vec in zip(ids, verb_vecs):
+            fh.write("    {{%s}},  // %s\n"
+                     % (", ".join(str(v) for v in vec), iid))
+        fh.write("}};\n\n")
         fh.write(FOOTER)
 
     sys.stderr.write("gen_item_table: wrote %d rows to %s\n" % (len(rows), OUT_PATH))
@@ -300,7 +314,6 @@ namespace {
 constexpr std::uint8_t u8(ItemCategory v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(EquipSlot v) { return static_cast<std::uint8_t>(v); }
 constexpr std::uint8_t u8(UseEffect v) { return static_cast<std::uint8_t>(v); }
-constexpr std::uint16_t u16(RoomBit v) { return static_cast<std::uint16_t>(v); }
 } // namespace
 
 """
@@ -318,11 +331,10 @@ std::uint8_t economy_band(int floorZ) {
     return 4;
 }
 
-std::uint32_t item_weight_on_floor(ItemId id, int floorZ, std::uint16_t roomMask) {
+std::uint32_t item_weight_on_floor(ItemId id, int floorZ) {
     if (!item_valid(id)) return 0;
     const ItemDef& d = item_def(id);
     if (d.spawnWeight == 0) return 0;                    // never spawns randomly
-    if (roomMask != 0 && (d.roomMask & roomMask) == 0) return 0;  // wrong room
 
     const std::int32_t cap = kLootValueCap[economy_band(floorZ)];
     if (d.value <= cap) return d.spawnWeight;

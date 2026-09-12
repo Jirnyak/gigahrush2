@@ -41,8 +41,9 @@
 #include "game/floors/padic/padic.h"
 
 #include "game/floor_gen.h"
+#include "game/room.h"          // room_declare — модуль объявляет свои комнаты (S12.1)
 #include "game/fast_travel.h"   // kFastShaftR / kFastLobbyR — the shaft footprint
-#include "sim/fluid.h"
+#include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
@@ -96,10 +97,32 @@ struct PlanWall {
 struct PlanStair {
     std::uint8_t x, y; // box cells [x, x+3] times rows {y (flight A), y+1 (flight B)}
 };
+// A rectangle of WALL LINES, in unwrapped coordinates (a block on the torus seam
+// runs past 127 and every emitted cell wraps). Interior cells are strictly
+// inside the lines.
+struct Rect {
+    int x0, x1, y0, y1;
+};
+// Роль BSP-листа в плане — знание, которое раньше умирало вместе с листом
+// (rooms-object C: модуль знает свои комнаты и обязан их объявить). НЕ вид
+// комнаты (S12.2) — внутренняя пометка планировщика, из которой модуль
+// выводит ОБЪЯВЛЕННОЕ предложение и материал пола.
+enum : std::uint8_t {
+    kLeafDwelling = 0, // жилая комната квартиры (паркет)
+    kLeafToilet = 1,   // самый малый лист квартиры — санузел (лино)
+    kLeafKitchen = 2,  // второй малый — кухонная ниша (лино)
+    kLeafStrip = 3,    // кладовки/концьержки лестничной полосы
+};
+struct PlanRoom {
+    Rect r;
+    std::uint8_t leaf; // kLeaf*
+};
+
 struct Plan {
     std::vector<PlanWall> walls;
     std::vector<Doorway> doors;      // z ignored here; stamped per storey
     std::vector<PlanStair> stairs;
+    std::vector<PlanRoom> rooms;     // все обитаемые листья — для объявления комнат
     std::vector<std::uint8_t> floorMat;  // per plan cell; 0 = open shaft column
     std::vector<std::uint8_t> grate;     // corridor grate strips
     std::vector<std::uint8_t> opening;   // doorway/entry-gap cells: no wall at z=b..b+1
@@ -111,13 +134,6 @@ inline std::uint8_t w8(int c) { return static_cast<std::uint8_t>(wrap_macro(c));
 inline std::size_t p2(int x, int y) {
     return static_cast<std::size_t>(wrap_macro(y)) * kMacroDim + wrap_macro(x);
 }
-
-// A rectangle of WALL LINES, in unwrapped coordinates (a block on the torus seam
-// runs past 127 and every emitted cell wraps). Interior cells are strictly
-// inside the lines.
-struct Rect {
-    int x0, x1, y0, y1;
-};
 
 void add_wall(Plan& p, int axis, int c, int a0, int a1) {
     p.walls.push_back({static_cast<std::uint8_t>(axis), w8(c), w8(a0),
@@ -171,6 +187,9 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
     std::vector<Rect> rooms;
     bsp(p, rng, apt, 5, /*doors=*/true, rooms);
     // Two smallest rooms go lino. Plain selection sort over a handful.
+    // Тот же выбор даёт листьям РОЛИ (rooms-object C): pass 0 — санузел,
+    // pass 1 — кухонная ниша, остаток — жилые. Роль рождается там же, где
+    // рождается материал пола, — план знает свои комнаты и объявляет их.
     for (int pass = 0; pass < 2 && pass < static_cast<int>(rooms.size()); ++pass) {
         std::size_t best = 0;
         long bestArea = 0x7FFFFFFF;
@@ -180,8 +199,11 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
             if (a < bestArea) { bestArea = a; best = i; }
         }
         fill_mat(p, rooms[best], kMatLino, /*interiorOnly=*/true);
+        p.rooms.push_back({rooms[best],
+                           pass == 0 ? kLeafToilet : kLeafKitchen});
         rooms.erase(rooms.begin() + static_cast<long>(best));
     }
+    for (const Rect& r : rooms) p.rooms.push_back({r, kLeafDwelling});
     // Entry: an edge lying on the block perimeter (every perimeter line faces a
     // corridor). Fallback — a landlocked apartment (rare) opens into its
     // neighbour instead: communal.
@@ -268,6 +290,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
                 for (const Rect& s : strip) {
                     const int at = rnd(rng, s.x0 + 1, s.x1 - 1);
                     add_door(p, at, by, 1); // each opens onto the corridor
+                    p.rooms.push_back({s, kLeafStrip});
                 }
                 main.y0 = by + 3;
             }
@@ -285,7 +308,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
 // OR `bits` into layer word `wz` of cell (x,y,z) as material `mat`. Pages are
 // created only when a second material genuinely lands in the cell, and a page's
 // content is fully deterministic — the render stretch relies on byte-identical
-// pages ([render/cube_pass.cpp]).
+// pages ([render/material_textures.cpp]).
 void put_bits(MacroGrid& g, SubField<CellType>& sm, int x, int y, int z, int wz,
               std::uint64_t bits, CellType mat) {
     if (bits == 0 || z < 0 || z >= kMacroDim) return;
@@ -298,7 +321,17 @@ void put_bits(MacroGrid& g, SubField<CellType>& sm, int x, int y, int z, int wz,
     if (!page && cur == kCellAir) {
         g.set_cell(x, y, z, mat);
     } else if (page || cur != mat) {
-        CellType* pg = page ? page : sm.ensure_page(ci, cur);
+        CellType* pg = page;
+        if (!pg) {
+            pg = sm.ensure_page(ci, cur);
+            // Закон чтения (S16.1, sub_material_at [world/destruct.h]):
+            // немаскированный атом страницы — ВОЗДУХ. Прежняя заливка базой
+            // клала «паркет» в пустую середину сэндвича — фантомные
+            // кубы-призраки, когда вода делала клетку классом 3 (скриншоты
+            // владельца 2026-08-24).
+            for (int i = 0; i < kSubVoxels; ++i)
+                if (!m.test(i)) pg[i] = kCellAir;
+        }
         for (int i = 0; i < 64; ++i)
             if ((bits >> i) & 1u) pg[wz * 64 + i] = mat;
     }
@@ -473,16 +506,21 @@ void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
     }
 }
 
-// The mandatory fast-travel lattice ([torus-nav-baking]): open shaft columns,
-// lobbies cleared per storey, hub pads and the four corner posts.
+// The mandatory lattice ([torus-nav-baking]): open shaft columns only.
+//
+// МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27, elevators-2x2.md):
+// лобби 7×7 на каждом ярусе, hub-pad перекраска узловых слоёв и четыре синих
+// угловых столба kMatHubPad во всю высоту умерли вместе с бескабинным
+// телепортом — единая система теперь = 4 закрытых лифтовых столба
+// (stamp_lift_pillars поверх модуля) + 12 открытых шахт-колодцев. Коридоры
+// и так бегут по линиям решётки (см. шапку файла), так что связность узлам
+// дают они, а не расчищенное лобби. Маркер эвакуации — отдельная система,
+// остаётся.
 void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
-    // The radii come from [game/fast_travel.h], not from locals here. They used to be
-    // locals, and that made the geometry and the "are you at a shaft" test two
-    // independent numbers that happened to agree — the same shape as
-    // padic_module.cpp's local `kLatticeDim`, which shadows the real one and would
-    // not follow a change to it.
+    // The radius comes from [game/fast_travel.h], not from locals here. It used
+    // to be a local, and that made the geometry and the "are you at a shaft"
+    // test two independent numbers that happened to agree.
     constexpr int kShaftR = kFastShaftR;
-    constexpr int kLobbyR = kFastLobbyR;
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             const int cx = lattice_coord(nx);
@@ -494,43 +532,11 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                         g.clear_cell(x, y, z);
                         sm.drop_page(macro_index(x, y, z));
                     }
-            for (int b = 0; b <= kLastBase; b += kStorey) {
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        for (int z = b; z < b + 2; ++z) {
-                            g.clear_cell(x, y, z);
-                            sm.drop_page(macro_index(x, y, z));
-                        }
-                        // b+2: strip wall lintels, keep the sandwich — the
-                        // lobby keeps its ceiling and the storey above keeps
-                        // its floor.
-                        SubMask& m = g.mask(x, y, b + 2);
-                        for (int wz = 0; wz < 6; ++wz) m.words[wz] = 0;
-                        if (m.empty()) {
-                            g.clear_cell(x, y, b + 2);
-                            sm.drop_page(macro_index(x, y, b + 2));
-                        }
-                    }
-            }
-            // Hub pads: recolour whatever is solid at the node layers. A paged
-            // cell recolours by dropping the page — the pad marker wins.
-            for (int nz = 0; nz < kLatticeDim; ++nz) {
-                const int z0 = lattice_coord(nz);
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        if (g.cell(x, y, z0) != kCellAir) {
-                            sm.drop_page(macro_index(x, y, z0));
-                            g.set_cell(x, y, z0, kMatHubPad);
-                        }
-                    }
-            }
             if (number == 0) {
                 // Extraction marker: the walking floor of storey 0 is the attic
                 // sandwich at z=127 — recolour it, plus whatever stands at z=0.
-                for (int dy = -kLobbyR; dy <= kLobbyR; ++dy)
-                    for (int dx = -kLobbyR; dx <= kLobbyR; ++dx) {
+                for (int dy = -kFastLobbyR; dy <= kFastLobbyR; ++dy)
+                    for (int dx = -kFastLobbyR; dx <= kFastLobbyR; ++dx) {
                         const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
                         for (const int z : {0, kMacroDim - 1})
                             if (g.cell(x, y, z) != kCellAir) {
@@ -539,14 +545,6 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                             }
                     }
             }
-            for (int sy = -1; sy <= 1; sy += 2)
-                for (int sx = -1; sx <= 1; sx += 2)
-                    for (int z = 0; z < kMacroDim; ++z) {
-                        const int x = wrap_macro(cx + sx * 2);
-                        const int y = wrap_macro(cy + sy * 2);
-                        sm.drop_page(macro_index(x, y, z));
-                        g.fill_cell(x, y, z, kMatHubPad);
-                    }
         }
     }
 }
@@ -590,46 +588,41 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
     Plan p;
     build_plan(p, seed, number);
 
-    // Seed water and gas fluids in staircases and elevator shafts
-    Field<float>* wet = world.fields().find<float>(kFluidField);
-    if (wet == nullptr) wet = &world.fields().get_or_create<float>(kFluidField, 0.0f);
-    else wet->fill(0.0f);
+    // ВОДА = МАТЕРИЯ автомата (fluid-поле УМЕРЛО, чистка 2026-08-24 «не
+    // щадя»): ямы наливаются water-атомами ПО УРОВНЮ снизу вверх — плоская
+    // вода в фикспоинте с рождения, автомат её не трогает, пока писатель
+    // (карв, тело) не потревожит. frac клетки = доля объёма водой.
+    auto pour_level = [&](int cx, int cy, int cz, float frac) {
+        const std::size_t ci =
+            macro_index(wrap_macro(cx), wrap_macro(cy), cz);
+        CellType* pg = materialize_sub_page(world, ci);
+        const SubMask& m = world.grid().masks()[ci];
+        int quanta = static_cast<int>(frac * kSubVoxels);
+        for (int b = 0; b < kSubVoxels && quanta > 0; ++b) {
+            // sub_bit растёт по z старшими битами — порядок b и есть
+            // «снизу вверх» послойно.
+            if (m.test(b) || pg[b] != kCellAir) continue;
+            pg[b] = kMatWater;
+            --quanta;
+        }
+        // Агрегат S16.4 сразу: спокойную генераторную воду шов не понесёт
+        // (она не в списке автомата), а спавн-гейт и слизни читают агрегат.
+        medium_recount(world, ci, pg);
+    };
 
-    Field<float>* gas = world.fields().find<float>(kGasField);
-    if (gas == nullptr) gas = &world.fields().get_or_create<float>(kGasField, 0.0f);
-    else gas->fill(0.0f);
 
-    // Seed water in lattice elevator pit (z=0..2) and stair landing sumps
+    // Water: lattice elevator pit (z=0..2) and stair landing sumps.
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             int cx = lattice_coord(nx);
             int cy = lattice_coord(ny);
-            for (int z = 0; z <= 2; ++z) {
-                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
-                wet->data()[idx] = 0.8f;
-            }
+            for (int z = 0; z <= 2; ++z) pour_level(cx, cy, z, 0.8f);
         }
     }
-    for (const PlanStair& st : p.stairs) {
-        for (int row = 0; row < 2; ++row) {
-            for (int dx = 0; dx < 4; ++dx) {
-                std::size_t idx = macro_index(wrap_macro(st.x + dx), wrap_macro(st.y + row), 1);
-                wet->data()[idx] = 0.5f;
-            }
-        }
-    }
-
-    // Seed buoyant gas in elevator shafts (z=3..15)
-    for (int ny = 0; ny < kLatticeDim; ++ny) {
-        for (int nx = 0; nx < kLatticeDim; ++nx) {
-            int cx = lattice_coord(nx);
-            int cy = lattice_coord(ny);
-            for (int z = 3; z <= 15; ++z) {
-                std::size_t idx = macro_index(wrap_macro(cx), wrap_macro(cy), z);
-                gas->data()[idx] = 0.6f;
-            }
-        }
-    }
+    for (const PlanStair& st : p.stairs)
+        for (int row = 0; row < 2; ++row)
+            for (int dx = 0; dx < 4; ++dx)
+                pour_level(st.x + dx, st.y + row, 1, 0.5f);
 
 }
 
@@ -693,6 +686,56 @@ std::uint32_t padic_doorways(int number, unsigned seed,
             w.h = 2;
             out.push_back(w);
             ++n;
+        }
+    return n;
+}
+
+std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
+    // Тот же приём, что padic_doorways: план — чистая функция (seed, number),
+    // объявление перештамповывается на каждом входе (generate И restore, закон
+    // масок S18), порядок обхода детерминирован — он и есть источник
+    // устойчивости RoomId между сессиями.
+    Plan p;
+    build_plan(p, seed, number);
+
+    // ОБЪЯВЛЕННОЕ предложение по роли листа (S12.4: неразрушимая часть —
+    // работает с генерации, до всякой расстановки). Шкала — референсная
+    // 8..40 ([rooms-object.md] §разведка): жилая спать 30 — канонический
+    // пример S13.3 («своя жилая комната: объявлено 30»); санузел сортир 20 и
+    // ниша есть 12 — вполсилы от полноценного оснащения (полное даёт проп,
+    // S12.3); кладовка хранить 15 — полка без ящика хранит хуже склада.
+    std::int16_t declared[4][kVerbCount] = {};
+    declared[kLeafDwelling][kVerbSleep] = 30;
+    declared[kLeafToilet][kVerbToilet] = 20;
+    declared[kLeafKitchen][kVerbEat] = 12;
+    declared[kLeafStrip][kVerbStore] = 15;
+    // Гермокласс — решение МОДУЛЯ (S12.1). ВЕРДИКТ ВЛАДЕЛЬЦА 2026-08-29
+    // (плейтест: «дверь не ломается — точно баг»): жилой фонд падика — НЕ
+    // гермозоны. Прежняя разметка (наследие таксономии Living) вешала
+    // door_hermetic (65535 = неразрушимо МАТЕРИАЛОМ, S17) на каждую из
+    // ~15k квартирных дверей — весь этаж стоял за неломаемыми полотнами.
+    // Квартирные двери теперь сталь 384: ломаются упорным карвом, дольше
+    // стены. Гермотег остаётся настоящим гермозонам (гермолобби blame).
+    const std::uint16_t tags[4] = {0, 0, 0, 0};
+
+    std::uint32_t n = 0;
+    // Один 2D-план на все ярусы (настоящий падик повторяет планировку), но
+    // РАЗНЫЕ ярусы — РАЗНЫЕ комнаты (S12.1): свой RoomId на каждый storey.
+    // Зона яруса — все его 3 клетки (b..b+2): сэндвич принадлежит комнате
+    // под ним, дыр между ярусами нет.
+    for (int b = 0; b <= kLastBase; b += kStorey)
+        for (const PlanRoom& pr : p.rooms) {
+            const int sx = pr.r.x1 - pr.r.x0 - 1; // интерьер строго внутри линий
+            const int sy = pr.r.y1 - pr.r.y0 - 1;
+            if (sx <= 0 || sy <= 0) continue;
+            const RoomBox box{w8(pr.r.x0 + 1), w8(pr.r.y0 + 1),
+                              static_cast<std::uint8_t>(b),
+                              static_cast<std::uint8_t>(sx),
+                              static_cast<std::uint8_t>(sy),
+                              static_cast<std::uint8_t>(kStorey)};
+            if (room_declare(out, &box, 1, tags[pr.leaf], /*owner=*/0,
+                             declared[pr.leaf]) != kNoRoom)
+                ++n;
         }
     return n;
 }

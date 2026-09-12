@@ -4,7 +4,7 @@
 // here, roughly that way". Nothing in game/ ever touches the GPU: the app
 // drains this queue each sim tick, resolves material tints, jitters the
 // velocities deterministically from `seed`, and feeds the pool
-// (render/particle_pass.h). Same one-dispose-path law as CarveProposalQueue
+// (render/verlet_pass.h, банк частиц). Same one-dispose-path law as CarveProposalQueue
 // ([combat.h]) — many proposers, one drain.
 //
 // Bounded POD ring, no heap: a shotgun fan plus a carve in the same tick must

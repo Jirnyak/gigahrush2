@@ -169,10 +169,14 @@ SaveState busy_run() {
     // Version 8 / SAVMAG: non-default chamber + kills so a dropped combat
     // section cannot hide behind zero defaults.
     st.hasRanged = 1;
-    st.ranged.cooldownMs = 120u;
-    st.ranged.reloadMs = 450u;
-    st.ranged.magCount = 7u;
-    st.ranged.weapon = 1;       // any non-zero ItemId; table drift is separate
+    st.ranged.hand[0].cooldownMs = 120u;   // v21: две руки, обе в раундтрипе
+    st.ranged.hand[0].reloadMs = 450u;
+    st.ranged.hand[0].magCount = 7u;
+    st.ranged.hand[0].weapon = 1; // any non-zero ItemId; table drift is separate
+    st.ranged.hand[1].cooldownMs = 60u;
+    st.ranged.hand[1].reloadMs = 90u;
+    st.ranged.hand[1].magCount = 3u;
+    st.ranged.hand[1].weapon = 2;
     st.ranged.shots = 42u;
     st.ranged.hits = 11u;
     st.kills = 99u;
@@ -183,42 +187,8 @@ SaveState busy_run() {
     st.status.intensityE3[3] = 1500u;
     st.status.alt[1] = 1u;
 
-    // Two floors' worth of crates, one of them below the hub — the negative
-    // floor is the case a `std::uint16_t` floor column could not express at all.
-    // v15: records carry CONTENTS, so give them some — a half-taken stack with
-    // wear, an emptied opened box, and a deposit — the exact states the search
-    // screen produces and the old opened-key list could not express.
-    {
-        ContainerRecord r1;
-        r1.key = OpenedContainerKey{-3, 18, 42, 1, 0};
-        r1.c.kind = 1;
-        r1.c.item[0] = 40;         // bandage, half-taken, worn
-        r1.c.count[0] = 3;
-        r1.c.condition[0] = 128;
-        r1.c.item[3] = kItemRuble; // the cash slot, partially spent
-        r1.c.count[3] = 12345;     // needs the u16 — the whole point of v14
-        st.containers.push_back(r1);
-        ContainerRecord r2;
-        r2.key = OpenedContainerKey{-3, 114, 6, 1, 0};
-        r2.c.opened = true;        // emptied: all slots zero, flag set
-        st.containers.push_back(r2);
-        ContainerRecord r3;
-        r3.key = OpenedContainerKey{2, 66, 66, 1, 0};
-        r3.c.item[1] = 121;        // a deposit the player made
-        r3.c.count[1] = 2;
-        st.containers.push_back(r3);
-        CorpseRecord cr;
-        cr.floor = -3;
-        cr.pos = vec3{81.3f, 43.7f, 2.45f};
-        cr.colour = vec3{0.2f, 0.1f, 0.1f};
-        cr.half = vec3{0.4f, 0.18f, 0.6f};
-        cr.mobKind = 7;
-        cr.slotCount = 2;
-        cr.searched = 0;
-        cr.slots[0] = ItemSlot{40, 2, 200};
-        cr.slots[1] = ItemSlot{kItemRuble, 650, 255};
-        st.corpses.push_back(cr);
-    }
+    // (v20: секции контейнеров/трупов/обломков живут в floor_<N>.sav v3 —
+    // их round-trip гоняет suite_persist на настоящих сущностях.)
 
     // Version 6: a matrix that has drifted from base — a grudge the save must
     // remember. (The pool/macro blobs stay empty here so the wire pins stay
@@ -234,10 +204,7 @@ SaveState busy_run() {
     st.bank.interestEarned = 210;
     st.bank.interestPaid = 96;
     st.bank.creditLimit = 2500;
-    st.bank.entries = 5;
     st.bank.band = 2;
-    st.bank.ledger[0] = BankEntry{111, 2222u, 1, 2};
-    st.bank.ledger[4] = BankEntry{333, 4444u, 3, 2};
 
     // Version 10 / SAVCLOCK. Every field gets a DISTINCT non-round value, which is
     // this file's own standing rule and the one §6a.1 of Docs/specs/10 accused it of
@@ -319,10 +286,12 @@ void same_run(const SaveState& a, const SaveState& b) {
 
     // Version 8 / SAVMAG: chambered firearm + kill tally.
     CHECK(a.hasRanged == b.hasRanged);
-    CHECK(a.ranged.cooldownMs == b.ranged.cooldownMs);
-    CHECK(a.ranged.reloadMs == b.ranged.reloadMs);
-    CHECK(a.ranged.magCount == b.ranged.magCount);
-    CHECK(a.ranged.weapon == b.ranged.weapon);
+    for (int h = 0; h < 2; ++h) {
+        CHECK(a.ranged.hand[h].cooldownMs == b.ranged.hand[h].cooldownMs);
+        CHECK(a.ranged.hand[h].reloadMs == b.ranged.hand[h].reloadMs);
+        CHECK(a.ranged.hand[h].magCount == b.ranged.hand[h].magCount);
+        CHECK(a.ranged.hand[h].weapon == b.ranged.hand[h].weapon);
+    }
     CHECK(a.ranged.shots == b.ranged.shots);
     CHECK(a.ranged.hits == b.ranged.hits);
     CHECK(a.kills == b.kills);
@@ -342,49 +311,9 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.bank.interestEarned == b.bank.interestEarned);
     CHECK(a.bank.interestPaid == b.bank.interestPaid);
     CHECK(a.bank.creditLimit == b.bank.creditLimit);
-    CHECK(a.bank.entries == b.bank.entries);
     CHECK(a.bank.band == b.bank.band);
-    for (std::size_t i = 0; i < kBankLedgerSlots; ++i) {
-        CHECK(a.bank.ledger[i].amount == b.bank.ledger[i].amount);
-        CHECK(a.bank.ledger[i].tick == b.bank.ledger[i].tick);
-        CHECK(a.bank.ledger[i].op == b.bank.ledger[i].op);
-        CHECK(a.bank.ledger[i].band == b.bank.ledger[i].band);
-    }
 
-    CHECK(a.containers.size() == b.containers.size());
-    const std::size_t nk = a.containers.size() < b.containers.size()
-                               ? a.containers.size()
-                               : b.containers.size();
-    for (std::size_t i = 0; i < nk; ++i) {
-        CHECK(same_container(a.containers[i].key, b.containers[i].key));
-        // memcmp is safe HERE: Container is 22 B with no interior or tail
-        // padding (2+2 arrays, then four u8-sized fields on align-2), asserted
-        // right below so a field addition cannot silently make this read junk.
-        static_assert(sizeof(Container) ==
-                      kContainerSlots * (2 + 2 + 1) + 1 + 1);
-        CHECK(std::memcmp(&a.containers[i].c, &b.containers[i].c,
-                          sizeof(Container)) == 0);
-    }
-    CHECK(a.corpses.size() == b.corpses.size());
-    // Field-by-field, NOT memcmp: CorpseRecord has 2 padding bytes after its
-    // i16 floor (vec3 wants 4-alignment), and padding is exactly what a byte
-    // compare is not entitled to read.
-    for (std::size_t i = 0; i < a.corpses.size() && i < b.corpses.size(); ++i) {
-        const CorpseRecord& x = a.corpses[i];
-        const CorpseRecord& y = b.corpses[i];
-        CHECK(x.floor == y.floor);
-        CHECK(x.pos.x == y.pos.x && x.pos.y == y.pos.y && x.pos.z == y.pos.z);
-        CHECK(x.colour.x == y.colour.x && x.colour.y == y.colour.y &&
-              x.colour.z == y.colour.z);
-        CHECK(x.half.x == y.half.x && x.half.y == y.half.y && x.half.z == y.half.z);
-        CHECK(x.mobKind == y.mobKind && x.slotCount == y.slotCount &&
-              x.searched == y.searched);
-        for (std::size_t j = 0; j < kMaxCorpseSlots; ++j) {
-            CHECK(x.slots[j].item == y.slots[j].item);
-            CHECK(x.slots[j].count == y.slots[j].count);
-            CHECK(x.slots[j].condition == y.slots[j].condition);
-        }
-    }
+    // (v20: секций контейнеров/трупов/обломков в run.sav нет — floor-файл.)
 
     // Version 6: the macro-world sections. The blobs travel verbatim; the matrix
     // is 36 POD bytes and must carry its runtime drift, not reset to base.
@@ -431,41 +360,33 @@ void wire_layout() {
     static_assert(kSaveHeaderWire == 64);
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 89);
-    static_assert(kRangedWire == 16);
-    static_assert(kCombatSaveWire == 21);
+    static_assert(kRangedWire == 24); // v22: две руки
+    static_assert(kCombatSaveWire == 29);
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1284);  // v16: +289 bank ([save.h] SAVBANK)
+    static_assert(kSaveFixedWire == 1048);  // v22
     static_assert(kFactionWire == 36);
-    // v16: 1284 fixed + 36 faction + 64 header + 4 inline corpse count = 1388
-    // empty; a container row is 27 B, a corpse row 81 B.
-    static_assert(save_bytes_for(0) == 1388);
-    static_assert(save_bytes_for(3) == 1388 + 3 * kContainerRecWire);
-    static_assert(save_bytes_for(3, 1, 100, 50) ==
-                  1388 + 3 * kContainerRecWire + kCorpseRecWire + 150);
+    // v20: 1040 fixed + 36 faction + 64 header = 1140 empty; инлайновые
+    // счётчики трупов/обломков ушли в floor-файл вместе с секциями.
+    static_assert(save_bytes_for() == 1148); // v22
+    static_assert(save_bytes_for(100, 50) == 1148 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
     save_write(empty, bytes);
-    CHECK(bytes.size() == save_bytes_for(0));
+    CHECK(bytes.size() == save_bytes_for());
 
     const SaveState st = busy_run();
     save_write(st, bytes);
-    CHECK(bytes.size() == save_bytes_for(3, 1));
-    // 1042 B for a full run with three emptied crates and no macro blobs (those are
-    // variable-size and pinned by macro_world_round_trips). GEOMETRY lives in the
-    // per-floor files ([save.h] modular layout), never here. v8 was 965; the
-    // legacy-content purge re-measured this from 1007; v9 was 993; v10 adds the
-    // samosbor clock (17) and the fast-travel unlock set (32); v11 adds the crowd
-    // heal bank `hpBank` (+4); v12 drops one craft axis (-4); v13 adds the
-    // player's Equipped cells (+4); v14 widens the slot count to u16 (+64);
-    // v15 swapped opened keys for whole-crate records (27 B a row, corpse rows
-    // 81 B, plus the inline corpse-count u32 in the base); v16 adds the 289 B
-    // bank block: busy_run's 3 crates and 1 body land on 1388 + 81 + 81 = 1550.
-    CHECK(bytes.size() == 1388 + 3 * kContainerRecWire + kCorpseRecWire);
+    // v8 was 965; the legacy-content purge re-measured this from 1007; v9 was
+    // 993; v10 adds the samosbor clock (17) and the fast-travel set (32); v11
+    // +hpBank (4); v12 -1 craft axis (4); v13 +Equipped (4); v14 u16 counts
+    // (+64); v16 +289 bank; v19 bank ring cut (-244) = 1148; v20 entity
+    // sections left for the floor files (-8) = 1140.
+    CHECK(bytes.size() == save_bytes_for());
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -496,11 +417,10 @@ void wire_layout() {
     CHECK(h.version == kSaveVersion);
     CHECK(h.itemCount == static_cast<std::uint32_t>(kItemCount));
     CHECK(h.mobKindCount == static_cast<std::uint32_t>(kMobKindCount));
-    CHECK(h.containerCount == 3u);
+    CHECK(h.containerCount == 0u); // v20: поле живо, секция мертва
     CHECK(h.poolBytes == 0u);
     CHECK(h.macroBytes == 0u);
-    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire +
-                                3u * kContainerRecWire + 4u + kCorpseRecWire);
+    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
     // than an oversight. Nothing currently in the payload is tick-derived — the clock is
@@ -557,24 +477,17 @@ void round_trip() {
     SaveState zback;
     CHECK(save_read(z.data(), z.size(), zback, &err));
     CHECK(err == SaveError::None);
-    CHECK(zback.containers.empty());
-    CHECK(zback.corpses.empty());
     same_run(fresh, zback);
 
     // The signed floor survives, which is the point of storing it at all. `NpcPool`'s
-    // own floor column is a std::uint16_t, so it reads floor -50 back as 65486 and
-    // cannot recover the label — that truncation is why PlayerSnapshot and
-    // OpenedContainerKey each carry their own signed number instead of borrowing it.
+    // own floor column reads floor -50 back as 65486 when treated unsigned and
+    // cannot recover the label — that truncation is why PlayerSnapshot carries
+    // its own signed number instead of borrowing it.
     static_assert(static_cast<int>(static_cast<std::uint16_t>(-50)) == 65486);
     CHECK(dst.player.floorNumber == -50);
     CHECK(dst.ledger.deepestFloor == -50);
-    CHECK(dst.containers[0].key.floor == -3);
-    CHECK(dst.corpses[0].floor == -3);
-    // The contents rode whole: the half-taken worn stack and the u16 cash wad.
-    CHECK(dst.containers[0].c.count[0] == 3 && dst.containers[0].c.condition[0] == 128);
-    CHECK(dst.containers[0].c.item[3] == kItemRuble &&
-          dst.containers[0].c.count[3] == 12345);
-    CHECK(dst.corpses[0].slots[1].count == 650);
+    // (v20: записи сущностей — floor-файл; их знаковые этажи и содержимое
+    // бит-в-бит гоняет suite_persist.)
 }
 
 // Version 6: the macro world is a flat table, so it saves flat. A small society
@@ -673,9 +586,12 @@ void macro_world_round_trips() {
 // written, layered sub-materials included. Garbage files are refused whole.
 void floor_file_round_trips() {
     auto genesis = [](giga::World& w) {
-        // An anchored 8x8x2-cell slab (8192 sub-voxels, far over any detach limit).
-        for (int x = 8; x < 16; ++x)
-            for (int y = 8; y < 16; ++y)
+        // An anchored 24x24x2-cell slab: 1152 клетки — больше узлового
+        // бюджета иерархического судьи (kDetachNodeBudget), «сам дом».
+        // Прежние 8x8x2 жили атомным лимитом; под новой аксиомой опоры такой
+        // остров в пустом торе честно рыхлый.
+        for (int x = 8; x < 32; ++x)
+            for (int y = 8; y < 32; ++y)
                 for (int z = 4; z < 6; ++z)
                     w.grid().fill_cell(x, y, z, giga::kMatConcrete);
         // A painted coat so the sub-material pages have something to prove.
@@ -683,6 +599,12 @@ void floor_file_round_trips() {
             for (int sy = 0; sy < 8; ++sy)
                 giga::set_sub_material(w, 10, 10, 5, 0, sy, sz,
                                        giga::kMatPlaster);
+        // Вода для этапа «оживление сред» (Автомат-2, 2026-09-02):
+        // страничная лужа 4 кванта + ОДНОРОДНАЯ клетка воды без маски
+        // (закон чтения S16.1: бесстраничная среда = 512 квантов).
+        for (int sx = 0; sx < 4; ++sx)
+            giga::set_sub_material(w, 11, 10, 5, sx, 0, 0, giga::kMatWater);
+        w.grid().set_cell(60, 60, 5, giga::kMatWater); // пустая округа
     };
     giga::World live;
     genesis(live);
@@ -718,10 +640,28 @@ void floor_file_round_trips() {
     // The painted coat survived at sub-voxel resolution.
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 0, 3, 3) == giga::kMatPlaster);
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 1, 3, 3) == giga::kMatConcrete);
+    // ЭТАП «ОЖИВЛЕНИЕ СРЕД» (Автомат-2, 2026-09-02): агрегат medium_level
+    // не в снапшоте — floor_file_read обязан пересчитать его отдельным
+    // этапом (иначе будильник этажа читает нули и стоячая вода спит
+    // мёртвым сном). Страничная лужа, однородная клетка, сухая клетка.
+    CHECK(giga::medium_level_at(twin, giga::macro_index(11, 10, 5)) == 4u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(60, 60, 5)) == 512u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(10, 10, 5)) == 0u);
     // And the twin does NOT contain the post-save hole: it matches the save
-    // moment, not the live world's later state.
-    CHECK(std::memcmp(live.grid().masks().data(), twin.grid().masks().data(),
-                      masksAtSave.size() * sizeof(giga::SubMask)) != 0);
+    // moment, not the live world's later state. С инкремента 5 карв не
+    // испаряет материю: вырезанный атом с опорой тут же принимает
+    // rubble-обломок, и МАСКИ могут совпасть бит-в-бит — расхождение живёт в
+    // МАТЕРИАЛЕ (rubble против исходного), его и сверяем.
+    {
+        const giga::CarvedVoxel& hole = res.destroyed.front();
+        const int hx = static_cast<int>(hole.cell & 127u);
+        const int hy = static_cast<int>((hole.cell >> 7) & 127u);
+        const int hz = static_cast<int>((hole.cell >> 14) & 127u);
+        const int hsx = hole.bit & 7, hsy = (hole.bit >> 3) & 7,
+                  hsz = (hole.bit >> 6) & 7;
+        CHECK(giga::sub_material_at(live, hx, hy, hz, hsx, hsy, hsz) !=
+              giga::sub_material_at(twin, hx, hy, hz, hsx, hsy, hsz));
+    }
 
     // Rejections, each by its own gate: magic, version, size, checksum, and a
     // header-short stub. A refused file must leave a pristine twin usable.
@@ -840,7 +780,7 @@ void rejects_the_rest() {
     SaveState keep;
     keep.ledger.deaths = 777u;
     keep.player.hp = 55;
-    keep.containers.push_back(ContainerRecord{OpenedContainerKey{9, 1, 2, 3, 0}, {}});
+    keep.kills = 31337u; // третий сторож взамен умершего списка контейнеров
     SaveError err = SaveError::None;
 
     auto refused = [&](std::vector<std::uint8_t>& buf, SaveError want) {
@@ -849,7 +789,7 @@ void rejects_the_rest() {
         CHECK(err == want);
         CHECK(keep.ledger.deaths == 777u);
         CHECK(keep.player.hp == 55);
-        CHECK(keep.containers.size() == 1u);
+        CHECK(keep.kills == 31337u);
     };
 
     // Nothing at all.
@@ -943,38 +883,16 @@ void rejects_the_rest() {
     same_run(src, ok);
 }
 
-void keys_not_entity_ids() {
-    // Two crates in the same macro cell get the same key. This is the documented
-    // limitation of keying on (floor, cell) rather than on the generator's spawn index,
-    // asserted here so it is a known property rather than a surprise: opening one would
-    // restore both as opened. It costs a crate, never duplicates an item.
-    const vec3 a{40.0f * kCellSize + 0.9f, 20.0f * kCellSize + 0.3f, 2.45f};
-    const vec3 b{40.0f * kCellSize + 1.7f, 20.0f * kCellSize + 1.1f, 2.45f};
-    CHECK(same_container(container_key(-3, a), container_key(-3, b)));
-    // ...and the floor is part of the identity, so the same cell on two floors is two
-    // crates. Without this, emptying a stash on floor -3 would empty its twin on -4.
-    CHECK(!same_container(container_key(-3, a), container_key(-4, a)));
-
-    // The cell the key names is the cell the generator placed the crate in. z is the
-    // tight axis: a crate's centre sits kContainerHalf.z (0.45 m) above the cell floor
-    // inside a 2 m cell, so the truncation has 1.55 m of headroom.
-    const OpenedContainerKey k = container_key(7, vec3{81.0f, 43.0f, 2.45f});
-    CHECK(k.floor == 7);
-    CHECK(k.cx == 40);   // 81.0 / 2.0
-    CHECK(k.cy == 21);   // 43.0 / 2.0
-    CHECK(k.cz == 1);    // 2.45 / 2.0 -> the ground storey the spawner uses
-    static_assert(kContainerHalf.z < kCellSize,
-                  "a crate taller than its cell would key into the cell above");
-}
+// (keys_not_entity_ids МЁРТВ с v20: позиционный ключ и его честная коллизия
+// не существуют — записи самодостаточны, матчинга нет по построению.)
 
 void floor_records_survive_a_restart() {
-    // The end-to-end claim, v15 edition: a floor destroyed and regenerated from
-    // the same seed comes back with the same crates — and each crate comes back
-    // with the CONTENTS it was left with, not its fresh roll. A half-taken box
-    // stays half-taken, a deposit is still inside, an emptied one is opened and
-    // empty, and a corpse lies where it fell with its loot — no entity id
-    // anywhere in the save. This is the "частичный забор/вклад переживает
-    // перезаход этажа" requirement, stated as a test.
+    // The end-to-end claim, v20 edition: этаж с настоящими ящиками уходит в
+    // floor-файл ЦЕЛИКОМ (материя И сущности), рвётся до основания и
+    // возвращается ИЗ ЗАПИСЕЙ — не пересевом: half-taken box stays half-taken,
+    // a deposit is still inside, an emptied one is opened and empty, and a
+    // corpse lies where it fell with its loot — no entity id anywhere. Это
+    // «restore не сеет» (S20.6 закон 2) на настоящем этаже.
     World w;
     const int floorZ = -3;
     const FloorKind kind = FloorKind::Residential;
@@ -982,6 +900,8 @@ void floor_records_survive_a_restart() {
     generate_floor(w, floorZ, floor_spec(kind), 1337u);
 
     Registry reg;
+    rooms_declare(reg.ctx().emplace<FloorRooms>(), floorZ, floor_spec(kind),
+                  1337u);
     const LayerId layer = 0;
     const std::uint32_t made =
         spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
@@ -998,16 +918,16 @@ void floor_records_survive_a_restart() {
         before.push_back(e);
         Container& c = reg.get<Container>(e);
         if ((i % 3) == 0) {
-            for (int sl = 0; sl < kContainerSlots; ++sl) {
-                c.item[sl] = kInvalidItem;
-                c.count[sl] = 0;
+            for (int sl = 0; sl < kInvSlots; ++sl) {
+                c.inv.slots[sl].item = kInvalidItem;
+                c.inv.slots[sl].count = 0;
             }
             c.opened = true;
             ++emptiedByHand;
         } else if ((i % 5) == 0) {
-            c.item[0] = 40;            // a worn bandage stack, deposited
-            c.count[0] = 3;
-            c.condition[0] = 77;
+            c.inv.slots[0].item = 40;            // a worn bandage stack, deposited
+            c.inv.slots[0].count = 3;
+            c.inv.slots[0].condition = 77;
             ++depositedInto;
         }
         ++i;
@@ -1028,91 +948,93 @@ void floor_records_survive_a_restart() {
         reg.emplace<Renderable>(ce, Renderable{vec3{0.2f, 0.1f, 0.1f}});
         Corpse c;
         c.mobKind = 7;
-        c.slotCount = 2;
-        c.lootSlots[0] = ItemSlot{40, 2, 200};
-        c.lootSlots[1] = ItemSlot{kItemRuble, 650, 255};
         reg.emplace<Corpse>(ce, c);
+        Container cb{};
+        cb.inv.slots[0] = ItemSlot{40, 2, 200};
+        cb.inv.slots[1] = ItemSlot{kItemRuble, 650, 255};
+        reg.emplace<Container>(ce, cb);
     }
 
-    // Save. Only the resident floor is scannable, so `refresh_floor_records` is
-    // what a real save calls; seed the lists with another floor's records first
-    // to prove they are not collateral damage, and with a stale record for THIS
-    // floor to prove refresh replaces rather than appends.
-    SaveState st;
-    st.containers.push_back(ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}});
-    st.containers.push_back(ContainerRecord{
-        OpenedContainerKey{static_cast<std::int16_t>(floorZ), 99, 99, 9, 0}, {}});
-    CorpseRecord staleCorpse;
-    staleCorpse.floor = static_cast<std::int16_t>(floorZ);
-    st.corpses.push_back(staleCorpse);
-    const std::size_t fromFloor =
-        refresh_floor_records(reg, layer, floorZ, st.containers, st.corpses);
-    // EVERY crate is recorded (not only the touched ones), plus the corpse.
-    CHECK(fromFloor == static_cast<std::size_t>(made) + 1u);
-    CHECK(st.containers.size() == 1u + made);
-    CHECK(st.containers[0].key.floor == 2);   // the other floor survived
-    CHECK(st.corpses.size() == 1u);           // the stale one was dropped
-    CHECK(st.corpses[0].mobKind == 7);
-    // Calling it twice must not double the lists — the bug a plain append would have.
-    const std::size_t again =
-        refresh_floor_records(reg, layer, floorZ, st.containers, st.corpses);
-    CHECK(again == fromFloor);
-    CHECK(st.containers.size() == 1u + made);
-
+    // Сбор + floor-файл v3 — то, что реальный выход с этажа и зовёт (v20).
+    game::FloorEntityState ents;
+    const std::size_t gathered =
+        gather_floor_entities(reg, layer, floorZ, ents, nullptr);
+    // Каждый ящик (все — пропы) + труп; сидер стенных устройств тут не бежал,
+    // так что пропы == ящики.
+    CHECK(ents.props.size() == static_cast<std::size_t>(made));
+    CHECK(ents.corpses.size() == 1u);
+    CHECK(gathered >= static_cast<std::size_t>(made) + 1u);
+    const FloorModuleKey key{static_cast<std::uint8_t>(kind), 1337u,
+                             module_gen_version(kind)};
     std::vector<std::uint8_t> bytes;
-    save_write(st, bytes);
+    floor_file_write(w, floorZ, bytes, &ents, &key);
 
-    // --- restart: the floor is torn down and rebuilt from the same numbers ---
+    // --- restart: the floor is torn down and rebuilt from the file ---
     std::vector<Entity> dead;
     for (auto e : reg.view<const Transform>())
         if (reg.get<const Transform>(e).layer == layer) dead.push_back(e);
     for (Entity e : dead) reg.destroy(e);
     for (Entity e : before) CHECK(!reg.valid(e));
 
-    SaveState loaded;
+    World w2;
+    game::FloorEntityState loaded;
     SaveError err = SaveError::None;
-    CHECK(save_read(bytes.data(), bytes.size(), loaded, &err));
+    CHECK(floor_file_read(bytes.data(), bytes.size(), w2, nullptr, &err, &key,
+                          &loaded));
     CHECK(err == SaveError::None);
-    CHECK(loaded.containers.size() == st.containers.size());
+    CHECK(loaded.props.size() == ents.props.size());
     CHECK(loaded.corpses.size() == 1u);
 
-    const std::uint32_t remade =
-        spawn_floor_containers(reg, w, floorZ, kind, layer, seed, /*cap=*/64u);
-    CHECK(remade == made);   // deterministic in (floor, kind, seed)
-
-    const std::size_t hits = apply_container_records(
-        reg, layer, floorZ, loaded.containers.data(), loaded.containers.size());
+    EventBus bus;
+    bus.init();
+    // ВОССТАНОВЛЕНИЕ ИЗ ЗАПИСЕЙ, НЕ ПЕРЕСЕВ (закон 2): счёт сущностей после
+    // ревизита равен счёту до — ничего не досеялось и не потерялось.
+    const std::size_t remade = spawn_prop_records(
+        reg, w2, layer, loaded.props.data(), loaded.props.size(), bus);
+    CHECK(remade == static_cast<std::size_t>(made));
     const std::size_t bodies = spawn_corpse_records(
         reg, layer, floorZ, loaded.corpses.data(), loaded.corpses.size());
     CHECK(bodies == 1u);
 
-    // The contract, stated exactly: every crate's component equals its record.
-    // (The (floor, cell) key can collide; when it does one record stamps both
-    // crates, so the comparison is record-driven, not count-driven.)
+    // The contract, stated exactly: каждый восстановленный ящик несёт ровно
+    // то, с чем его оставили — по позиции записи, матчинга по ключу нет.
     std::size_t openNow = 0, shutNow = 0, matched = 0, deposits = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
+        if (reg.all_of<Corpse>(e)) continue; // трупный лут едет CorpseRecord (C)
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         const Container& c = reg.get<const Container>(e);
-        const OpenedContainerKey k = container_key(floorZ, t.pos);
-        const ContainerRecord* rec = nullptr;
-        for (std::size_t j = 0; j < loaded.containers.size() && !rec; ++j)
-            if (same_container(loaded.containers[j].key, k))
-                rec = &loaded.containers[j];
-        CHECK(rec != nullptr);   // refresh recorded every crate, so all match
+        const PropRecord* rec = nullptr;
+        for (std::size_t j = 0; j < loaded.props.size() && !rec; ++j)
+            if (loaded.props[j].pos.x == t.pos.x &&
+                loaded.props[j].pos.y == t.pos.y &&
+                loaded.props[j].pos.z == t.pos.z)
+                rec = &loaded.props[j];
+        CHECK(rec != nullptr);
         if (!rec) continue;
+        CHECK((rec->flags & kPropRecHasContainer) != 0);
         ++matched;
-        CHECK(std::memcmp(&c, &rec->c, sizeof(Container)) == 0);
+        CHECK(c.kind == rec->box.kind);
+        CHECK(c.opened == rec->box.opened);
+        bool slotsEqual = true;
+        for (int sl = 0; sl < kInvSlots; ++sl) {
+            const ItemSlot& x = c.inv.slots[sl];
+            const ItemSlot& y = rec->box.inv.slots[sl];
+            if (x.item != y.item || x.count != y.count ||
+                x.condition != y.condition)
+                slotsEqual = false;
+        }
+        CHECK(slotsEqual);
         if (c.opened) {
             ++openNow;
-            for (int sl = 0; sl < kContainerSlots; ++sl)
-                CHECK(c.item[sl] == kInvalidItem);
+            for (int sl = 0; sl < kInvSlots; ++sl)
+                CHECK(c.inv.slots[sl].item == kInvalidItem);
         } else {
             ++shutNow;
         }
-        if (c.item[0] == 40 && c.count[0] == 3 && c.condition[0] == 77) ++deposits;
+        if (c.inv.slots[0].item == 40 && c.inv.slots[0].count == 3 && c.inv.slots[0].condition == 77) ++deposits;
     }
-    CHECK(hits == matched);
+    CHECK(matched == static_cast<std::size_t>(made));
     CHECK(openNow >= static_cast<std::size_t>(emptiedByHand));
     CHECK(shutNow > 0u);   // untouched crates still worth walking to
     CHECK(deposits >= static_cast<std::size_t>(depositedInto));  // вклад пережил
@@ -1128,37 +1050,38 @@ void floor_records_survive_a_restart() {
             const Corpse& c = reg.get<const Corpse>(e);
             CHECK(c.mobKind == 7);
             CHECK(!c.searched);
-            CHECK(c.lootSlots[0].item == 40 && c.lootSlots[0].count == 2 &&
-                  c.lootSlots[0].condition == 200);
-            CHECK(c.lootSlots[1].item == kItemRuble && c.lootSlots[1].count == 650);
+            const Inventory& ci = reg.get<const Container>(e).inv;
+            CHECK(ci.slots[0].item == 40 && ci.slots[0].count == 2 &&
+                  ci.slots[0].condition == 200);
+            CHECK(ci.slots[1].item == kItemRuble && ci.slots[1].count == 650);
             CHECK(t.pos.x == corpsePos.x && t.pos.y == corpsePos.y &&
                   t.pos.z == corpsePos.z);
         }
         CHECK(corpses == 1u);
     }
 
-    // Re-applying is idempotent: the records stamp the same state again, and the
-    // corpse rebuild replaces rather than duplicates — an autosave-on-entry
-    // cannot re-loot, re-fill or double a body.
-    CHECK(apply_container_records(reg, layer, floorZ, loaded.containers.data(),
-                                  loaded.containers.size()) == hits);
+    // Re-applying is idempotent: destroy-first у обоих спавнеров — автосейв
+    // на входе не может ни удвоить ящик, ни удвоить тело.
+    CHECK(spawn_prop_records(reg, w2, layer, loaded.props.data(),
+                             loaded.props.size(), bus) == remade);
     CHECK(spawn_corpse_records(reg, layer, floorZ, loaded.corpses.data(),
                                loaded.corpses.size()) == 1u);
     {
-        std::size_t corpses = 0;
+        std::size_t corpses = 0, crates = 0;
         for (auto e : reg.view<const Corpse>()) { (void)e; ++corpses; }
+        for (auto e : reg.view<const Container>())
+            if (!reg.all_of<Corpse>(e)) ++crates;
         CHECK(corpses == 1u);
+        CHECK(crates == static_cast<std::size_t>(made));
     }
-    // An empty set touches nothing, and a null one does not walk off a pointer.
-    CHECK(apply_container_records(reg, layer, floorZ, nullptr, 0) == 0u);
-    // Another floor's records never match this floor's crates.
-    const ContainerRecord elsewhere[1] = {
-        ContainerRecord{OpenedContainerKey{2, 66, 66, 1, 0}, {}}};
-    CHECK(apply_container_records(reg, layer, floorZ, elsewhere, 1u) == 0u);
-    // Nor does a layer that holds nothing.
-    CHECK(apply_container_records(reg, static_cast<LayerId>(42), floorZ,
-                                  loaded.containers.data(),
-                                  loaded.containers.size()) == 0u);
+    // Пустой набор records = чистый слой: destroy-first подметает, спавна нет.
+    CHECK(spawn_prop_records(reg, w2, layer, nullptr, 0, bus) == 0u);
+    {
+        std::size_t crates = 0;
+        for (auto e : reg.view<const Container>())
+            if (!reg.all_of<Corpse>(e)) ++crates;
+        CHECK(crates == 0u);
+    }
 }
 
 void ledger_is_pinned() {
@@ -1191,15 +1114,12 @@ void ledger_is_pinned() {
         SaveState st;
         st.ledger.deepestFloor = z;
         st.player.floorNumber = z;
-        st.containers.push_back(ContainerRecord{
-            OpenedContainerKey{static_cast<std::int16_t>(z), 1, 2, 3, 0}, {}});
         std::vector<std::uint8_t> bytes;
         save_write(st, bytes);
         SaveState back;
         CHECK(save_read(bytes.data(), bytes.size(), back, nullptr, nullptr));
         CHECK(back.ledger.deepestFloor == z);
         CHECK(back.player.floorNumber == z);
-        CHECK(back.containers[0].key.floor == static_cast<std::int16_t>(z));
     }
 }
 
@@ -1272,14 +1192,8 @@ void cell_conventions() {
     CHECK(c.y == (91.0f + 0.5f) * kEmbodyCellSize);
     CHECK(c.z == (static_cast<float>(kStandZ) + 0.5f) * kEmbodyCellSize);
 
-    // A crate's key uses the identical truncation, so the two cannot drift apart.
-    const vec3 crate{81.0f, 43.0f, 2.45f};
-    std::uint8_t kx = 0, ky = 0, kz = 0;
-    macro_cell_of(crate, kx, ky, kz);
-    const OpenedContainerKey k = container_key(7, crate);
-    CHECK(k.cx == kx);
-    CHECK(k.cy == ky);
-    CHECK(k.cz == kz);
+    // (v20: позиционного ключа ящика больше не существует — запись несёт
+    // позицию сама, truncation-конвенция осталась одна: macro_cell_of.)
 }
 
 void arrival_cell_is_often_a_wall() {
@@ -2038,7 +1952,6 @@ static void test_saveload_all() {
     saveload_test::floor_file_round_trips();
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
-    saveload_test::keys_not_entity_ids();
     saveload_test::floor_records_survive_a_restart();
     saveload_test::ledger_is_pinned();
     saveload_test::cell_conventions();

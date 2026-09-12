@@ -159,6 +159,14 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
 // max(10, magazine) + 0..19 rounds. So a Makarov (mag 8) yields 10..29 and an RPL-23
 // (mag 100) yields 100..119 — the magazine size decides the bundle, which keeps a
 // belt-fed LMG from being a paperweight.
+// ЕДИНСТВЕННЫЙ писатель сущности-пикапа: Transform/Velocity/AABB/гравитация/
+// скин/Pickup/Mass/Interactable + живой хук supply — одним глаголом. Роллеры
+// (drop_mob_loot, drop_weapon_ammo) считают ЧТО и СКОЛЬКО, этот глагол —
+// КАК вещь лежит; restore снимка (S20.6) пересоздаёт лут им же, поэтому
+// восстановленный пикап неотличим от живого дропа по построению.
+Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
+                    std::uint16_t count, std::uint8_t condition = 255);
+
 std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
                                ItemId weapon, std::uint32_t seed);
 

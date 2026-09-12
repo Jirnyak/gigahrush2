@@ -20,9 +20,9 @@ layout(set = GIGA_SHADOW_SET, binding = 1, std430) readonly buffer ShadowClassBu
     uint sClass[]; // 4 клетки на uint: 0 пусто, 1 цельно, 2 частично
 };
 
-const int   kSmMacroDim = 128; // lockstep с world/types.h kMacroDim
-const float kSmCell = 2.0;
-const float kSmVoxel = 0.25;
+const int   kSmMacroDim = GIGA_MACRO_DIM; // -D из CMakeLists <- world/types.h
+const float kSmCell = GIGA_CELL_SIZE;
+const float kSmVoxel = kSmCell / float(GIGA_SUB_DIM);
 
 uint sm_cell_index(ivec3 c) {
     c &= (kSmMacroDim - 1); // тор: врап на битовом И
@@ -82,7 +82,10 @@ float giga_shadow(vec3 ro, vec3 rd, float dist) {
         uint cls = sm_class(ci);
         if (cls == 1u) return 0.0; // цельная клетка — свет не пройдёт
         float tExit = min(min(tMax.x, tMax.y), tMax.z);
-        if (cls == 2u &&
+        // 2 = частичная, 3 = частичная С МАТЕРИЕЙ СРЕД (S16): тень считается
+        // по МАСКЕ в обеих — пол в клетке с лужей затеняет как затенял, сама
+        // вода (без бита) тень не бросает.
+        if (cls >= 2u &&
             sm_cell_blocked(ci, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
                             min(tExit, dist)))
             return 0.0;

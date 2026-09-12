@@ -16,6 +16,7 @@
 // one node's row, so the result is bit-identical regardless of scheduling.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -26,6 +27,7 @@
 
 namespace giga {
 class MacroGrid;
+struct ClearanceField; // world/clearance.h — гранный клиренс, оракул бейка
 
 namespace nav {
 
@@ -51,11 +53,44 @@ struct CoarseGraph {
     std::uint8_t next[kNodes][kNodes];
 };
 
-// Full bake: 64 wrapped BFS through the grid (one per node, parallel across
-// nodes) -> edge weights; then Floyd-Warshall -> all-pairs dist + next-hop.
-// A macro cell is coarse-walkable when it is not fully solid (mask not full);
-// each node is represented by its shaft-centre air cell. Bake-time only.
-void bake_coarse(const MacroGrid& grid, CoarseGraph& out);
+// --- The walkability oracle --------------------------------------------------
+//
+// Проходимость — вопрос о ПЕРЕХОДЕ между клетками, и закон один на всё дерево:
+// шаг из клетки в соседа разрешён, когда ГРАННЫЙ КЛИРЕНС перехода не меньше
+// габарита ходока ([world/clearance.h]; `size` в субвокселях — тело NPC 4,
+// вывод у потребителя из [game/embody.cpp]). Прежний поклеточный закон
+// `!mask.full()` СНЕСЁН эпиком occupancy 2026-08-26 (§60/К1-10 [problems.md]):
+// планка «1 атом из 512» на лепленом этаже (полных клеток 0.4%) вела флоу-поля
+// сквозь стены. Бейки берут оракулом сам ClearanceField вместо грида — это
+// держит бейк снапшоттируемым: асинхронный воркер владеет копией поля (4 МиБ),
+// не указателем в живой грид (async-rebake, phase B->C). BIT-IDENTICAL по
+// построению: клиренс посчитан один раз на грань, на одном состоянии грида,
+// и каждый BFS видит одни ответы в одном порядке (пин suite_walkbits.inl).
+
+// Full bake: 64 wrapped BFS through the clearance oracle (one per node,
+// parallel across nodes) -> edge weights; then Floyd-Warshall -> all-pairs
+// dist + next-hop. Each node is represented by its shaft-centre air cell.
+// Bake-time only. `open` must be built (ClearanceField::built()); `size` —
+// габарит в субвокселях, единый для всех рёбер бейка.
+//
+// `threads` is handed straight to parallel_for ([core/jobs.h]): 0 = all
+// hardware threads (Fresh entry bake), a positive budget for the background
+// rebake (hw/2 by the owner's decision, async-rebake plan §6). The result is
+// bit-identical at ANY thread count — each node owns a disjoint slice, the
+// jobs.h determinism contract.
+//
+// `cancel`, when non-null, is polled once per NODE BFS (~30 ms granularity):
+// a set flag makes the remaining nodes return immediately, so a floor change
+// joins a background worker in tens of ms instead of seconds. A cancelled
+// bake's output is GARBAGE by contract — the caller must discard it, never
+// swap it live.
+void bake_coarse(const ClearanceField& open, int size, CoarseGraph& out,
+                 int threads = 0, const std::atomic<bool>* cancel = nullptr);
+
+// Grid convenience: build the clearance field, delegate. Kept as THE entry
+// point for synchronous callers so none of them changes; the async scheduler
+// calls the oracle overload on its snapshot instead.
+void bake_coarse(const MacroGrid& grid, int size, CoarseGraph& out);
 
 // O(1) tick query: the next node to move to from `from` heading toward `to`.
 inline int coarse_next(const CoarseGraph& g, int from, int to) {
@@ -74,9 +109,29 @@ inline int coarse_next(const CoarseGraph& g, int from, int to) {
 // The 6 unit steps, in the SAME order the BFS and lattice neighbours use:
 // -x,+x,-y,+y,-z,+z. A flow byte in [0,6) indexes this table; note reverse(d)
 // == (d ^ 1), which the bake relies on to point a cell back toward its parent.
+//
+// ВНИМАНИЕ (S20.7, пин 2026-08-29): этот порядок ИНВЕРТИРОВАН ПО ЧЁТНОСТИ
+// против словаря граней якоря ([world/anchor.h] anchor_face_pack = axis*2 +
+// (dir<0)): одна и та же (ось, знак) даёт nav-индекс d = axis*2 + (dir>0),
+// то есть d == face ^ 1. Смешение индексов — тихо неверная грань. Пока
+// словари не слиты (миграция нава — отдельная цена), конвертор ОДИН и
+// именованный; голый `^ 1` на месте потребления — дефект.
 inline constexpr int kNavDir[6][3] = {
     {-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1},
 };
+
+// nav-направление ↔ грань якоря (единственный законный мост между
+// словарями). Пины ниже держат оба порядка: сломается любой — ошибка
+// компиляции здесь, у моста, а не тихая грань не с той стороны.
+inline constexpr std::uint8_t nav_dir_to_anchor_face(int d) {
+    return static_cast<std::uint8_t>(d ^ 1);
+}
+inline constexpr int anchor_face_to_nav_dir(std::uint8_t face) {
+    return face ^ 1;
+}
+static_assert(kNavDir[0][0] == -1 && kNavDir[1][0] == 1 &&
+                  kNavDir[4][2] == -1 && kNavDir[5][2] == 1,
+              "kNavDir order changed — nav_dir_to_anchor_face is now wrong");
 
 // Flow bytes that are not a step direction.
 inline constexpr std::uint8_t kFlowArrived = 6;   // this cell IS the node
@@ -114,12 +169,17 @@ struct FineNav {
     }
 };
 
-// Bake all 64 flow fields from the floor geometry: one wrapped BFS per node,
+// Bake all 64 flow fields from the clearance oracle: one wrapped BFS per node,
 // parallel ACROSS nodes — each owns a disjoint 2M-cell slice, so the run is
 // race-free and bit-identical regardless of scheduling. Allocates ~128 MiB into
 // out.flow; then a single deterministic multi-source BFS fills the 2 MiB
 // out.nearest. Bake-time only (floor load / post-samosbor), never on the tick.
-void bake_fine(const MacroGrid& grid, FineNav& out);
+// `size`/`threads`/`cancel`: same contract as bake_coarse above.
+void bake_fine(const ClearanceField& open, int size, FineNav& out,
+               int threads = 0, const std::atomic<bool>* cancel = nullptr);
+
+// Grid convenience, same shape as bake_coarse: one field build + delegate.
+void bake_fine(const MacroGrid& grid, int size, FineNav& out);
 
 // --- No partial rebake. Deleted 2026-08-06, with LazyFieldRebaker -----------
 // Four helpers used to live here so a per-frame rebaker could re-touch "only
@@ -132,7 +192,9 @@ void bake_fine(const MacroGrid& grid, FineNav& out);
 // carved geometry leaves the flow fields stale until the next full bake
 // (floor load / post-samosbor). [problems.md] §14, and the resolution of the
 // jirnyak.md §22 vs problems.md §2 conflict — the background thread is
-// legitimate and lives in `nav::AsyncBake`; the incremental BFS was not.
+// legitimate and lives in `game::RebakeScheduler`; the incremental BFS was
+// not. The debt itself is now repaid in the background: a carve leaves the
+// fields stale only until the scheduler's next full rebake-and-swap.
 
 // --- Routing: enter the baked nav from any cell -----------------------------
 //

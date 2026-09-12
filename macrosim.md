@@ -1,5 +1,11 @@
 # Macrosim — Macro population simulation
 
+> **Сверка 2026-08-23:** «дешёвый dirty local re-bake» построен ДРУГОЙ формой —
+> полный фоновый ребейк со свапом (`RebakeScheduler`, CANON S9: инкрементальный
+> патчинг полей — тупик); bench-таргет существует (`tests/macro_bench.cpp`).
+> Заметка `macro_sim.h:99` «recycling still unarmed» — ложь, взведён
+> (`main.cpp:2061`). Ссылки на master_prompt §7 — мертвы (файл удалён).
+
 > **Status: NPC pool built ([npcs.md](npcs.md)); macro tick built — demographic
 > core (aging + old-age mortality + reserve-drawn births), the budgeted-cursor
 > migration pass (#10c), the faction relation matrix (#10d-i) and the budgeted

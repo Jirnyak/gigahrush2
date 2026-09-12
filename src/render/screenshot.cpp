@@ -169,7 +169,7 @@ bool capture_request(VulkanDevice& dev, VulkanRenderer& ren, Capture& cap) {
         return false;
     }
     vkBindBufferMemory(dev.device, cap.buffer, cap.memory, 0);
-    ren.request_capture(cap.buffer);
+    ren.request_capture(cap.buffer, sc.extent);
     return true;
 }
 

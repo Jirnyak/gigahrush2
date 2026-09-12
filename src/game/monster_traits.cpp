@@ -7,7 +7,7 @@
 
 #include "core/wrap.h"        // wrap_macro — x/y/z all wrap, so no bare divide
 #include "game/combat.h"      // Armour, DamageChannel, kDamageChannels
-#include "sim/fluid.h"        // fluid_at, kFluidMinFlow — the wet threshold has ONE owner
+#include "world/medium.h"     // medium_level_data, kWetQuanta — порог мокрого один
 #include "world/types.h"      // kCellSize
 
 namespace giga::game {
@@ -62,12 +62,15 @@ std::size_t monster_trait_authored_count() {
 // Wet query
 // ---------------------------------------------------------------------------
 
-bool cell_wet(const float* fluid, int x, int y, int z) {
-    return fluid_at(fluid, x, y, z) >= kFluidMinFlow;
+bool cell_wet(const std::uint32_t* medium, int x, int y, int z) {
+    if (!medium) return false;
+    const std::size_t ci =
+        macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
+    return (medium[ci] & 0xFFFFu) >= kWetQuanta;
 }
 
-bool pos_wet(const float* fluid, const vec3& pos) {
-    if (!fluid) return false;
+bool pos_wet(const std::uint32_t* medium, const vec3& pos) {
+    if (!medium) return false;
     // floor(), not a truncating cast: a body standing at x = -0.4 sits in cell -1,
     // and `static_cast<int>` would put it in cell 0 on the far side of the wrap.
     // Positions are wrapped into [0, kWorldExtent) by physics, so this only bites on
@@ -76,7 +79,7 @@ bool pos_wet(const float* fluid, const vec3& pos) {
     const int cx = static_cast<int>(std::floor(pos.x * inv));
     const int cy = static_cast<int>(std::floor(pos.y * inv));
     const int cz = static_cast<int>(std::floor(pos.z * inv));
-    return cell_wet(fluid, cx, cy, cz);
+    return cell_wet(medium, cx, cy, cz);
 }
 
 // ---------------------------------------------------------------------------

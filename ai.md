@@ -1,5 +1,13 @@
 # AI — utility brain for embodied NPCs
 
+> **Сверка 2026-08-23:** `ai_patrol_step` уже ХОДИТ по nav (`ai.cpp:1103` —
+> coarse/fine каждый тик), «route_step once #13» устарело. ВАЖНЕЕ: CANON
+> S12–S13 объявляет описанную здесь room-модель ОТМЕНЁННОЙ — `kRoomAffordance`
+> (белые списки), `kRoomRecovery` (вид назначен), `localScore[]` (мёртвый API,
+> `ai.h:750`) заменяются вектором глаголов и одной суммой скора
+> (`markoaudit/plans/agent-goals.md`, ждёт rooms-object + verbs-table).
+> Механика needs/stagger/steering ниже — верна.
+
 > **Status: needs layer (#12a), the pure scorer + selection FSM (#12b), and the
 > stagger + steering + embody/loop driver (#12c) all BUILT — the visible crowd
 > now moves.** This is the

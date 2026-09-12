@@ -1,0 +1,119 @@
+// АГРЕГАТЫ МАТЕРИИ НА КЛЕТКУ 128³ (CANON S16.4, инкремент 4) — обратная
+// связь мира-автомата телам: уровень жидкости и концентрация газа клетки.
+//
+// НЕ отдельный редьюс-пасс и НЕ ридбек: обратный шов
+// ([render/gpu_medium_pass.h]) уже везёт страницы изменённых клеток в
+// CPU-канон — агрегат пересчитывается ТАМ ЖЕ, только по изменённым клеткам
+// (O(512) на клетку), и хранится прямым массивом kMacroCells (единый закон
+// ключа клетки = macro_index, [sim/cell_bins.h]). Спящая клетка держит
+// последнее верное значение — спящая материя бесплатна и здесь (S16.1).
+//
+// Потребители читают КЛЕТКУ тела (S16.4: тело 4×4×7 субвокселей само
+// размером с клетку — вопрос «в чём я» макроскопический): плавучесть и
+// вязкость воды ([sim/physics.cpp]), дыхание/газ — те же читатели единым
+// путём, спецсистем на газ не существует (S16.6).
+//
+// Колонка phase здесь ЗАКОННА (S16.2): агрегат — геймплейный предикат
+// («жидкость даёт плавучесть, газ дышится»), не правило движения.
+#pragma once
+
+#include <cstdint>
+
+#include "world/field.h"
+#include "world/material_props.h"
+#include "world/subfield.h" // SubField — этап «оживление сред» ходит по страницам
+#include "world/types.h"
+#include "world/world.h"
+
+namespace giga {
+
+inline constexpr const char* kMediumLevelField = "medium_level";
+
+// Имя поля-засева газа у генераторов (перенос из УМЕРШЕГО sim/fluid.h —
+// чистка 2026-08-24: fluid-сим и поле воды вычищены, вода = материя).
+
+// Порог «мокро» для поведения (спавн, слизни, звук): 8 квантов = 125 л на
+// клетку — заметная лужа, не плёнка. Вывод: меньше ведра — не мокро.
+inline constexpr std::uint32_t kWetQuanta = 8;
+
+// Нижние 16 бит — кванты жидкости клетки (0..512), верхние — кванты газа
+// (не воздуха). Один u32 — одно поле, одна запись на клетку.
+inline Field<std::uint32_t>& medium_level_field(World& w) {
+    return w.fields().get_or_create<std::uint32_t>(kMediumLevelField);
+}
+
+// Прямой массив уровней для горячих потребителей (спавн: до 98k кандидатов
+// на загрузке этажа) — nullptr, пока автомат ничего не вернул швом.
+inline const std::uint32_t* medium_level_data(const World& w) {
+    const Field<std::uint32_t>* f =
+        w.fields().find<std::uint32_t>(kMediumLevelField);
+    return f ? f->data().data() : nullptr;
+}
+
+inline std::uint32_t medium_level_at(const World& w, std::size_t ci) {
+    const Field<std::uint32_t>* f =
+        w.fields().find<std::uint32_t>(kMediumLevelField);
+    return f ? f->data()[ci] : 0u;
+}
+
+// Доля объёма клетки под жидкостью / газом, 0..1.
+inline float liquid_frac_at(const World& w, std::size_t ci) {
+    return static_cast<float>(medium_level_at(w, ci) & 0xFFFFu) /
+           static_cast<float>(kSubVoxels);
+}
+inline float gas_frac_at(const World& w, std::size_t ci) {
+    return static_cast<float>(medium_level_at(w, ci) >> 16) /
+           static_cast<float>(kSubVoxels);
+}
+
+// Пересчёт агрегата клетки по её странице материалов — зовёт обратный шов
+// после memcpy страницы.
+inline void medium_recount(World& w, std::size_t ci, const CellType* page) {
+    std::uint32_t liq = 0, gas = 0;
+    for (int b = 0; b < kSubVoxels; ++b) {
+        const CellType m = page[b];
+        if (m == kCellAir) continue;
+        const MatPhase ph = material_phase(m);
+        if (ph == MatPhase::Liquid) ++liq;
+        else if (ph == MatPhase::Gas) ++gas;
+    }
+    medium_level_field(w).data()[ci] = liq | (gas << 16);
+}
+
+// ОЖИВЛЕНИЕ СРЕД — полноценный ЭТАП конвейера загрузки этажа (закон
+// владельца 2026-09-02: загрузка = эмбриоразвитие, системы этапами —
+// сетка → геометрия/субвоксели → пропы → маски → комнаты → НПЦ; воды
+// оживают таким же отдельным предсказуемым этапом). Агрегат medium_level
+// — ВЫВОД из канона, не состояние: в снапшот этажа он не пишется, а
+// восстановленный мир до этого этапа держал нули — будильник этажа
+// (main.cpp, floor alarm) читал их и стоячая вода не просыпалась до
+// первого писателя. Один плотный DOD-проход по всем клеткам: страничная
+// клетка — пересчёт по странице; бесстраничная с пустой маской и
+// текучим/газовым типом — однородная среда (512 квантов по закону
+// чтения S16.1); остальное — ноль. Поле sub_material передаёт вызывающий
+// этап (имя живёт в world/destruct.h — модуль агрегатов не тянет модуль
+// разрушения целиком).
+inline void medium_revive(World& w, const SubField<CellType>& mats) {
+    auto& lvl = medium_level_field(w).data();
+    const auto& types = w.grid().types();
+    const auto& masks = w.grid().masks();
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const CellType* pg = mats.page(ci);
+        if (pg) {
+            medium_recount(w, ci, pg);
+            continue;
+        }
+        std::uint32_t v = 0;
+        const CellType t = types[ci];
+        if (t != kCellAir && masks[ci].empty()) {
+            const MatPhase ph = material_phase(t);
+            if (ph == MatPhase::Liquid)
+                v = static_cast<std::uint32_t>(kSubVoxels);
+            else if (ph == MatPhase::Gas)
+                v = static_cast<std::uint32_t>(kSubVoxels) << 16;
+        }
+        lvl[ci] = v;
+    }
+}
+
+} // namespace giga
