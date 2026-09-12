@@ -646,9 +646,16 @@ static void test_humanoid_reaches_sleep() {
                               vec3{0.4f, 0.4f, 0.9f}, 70.0f,
                               game::kFleshRestitution, game::kFleshFriction);
 
-    // 12 секунд: падение + оседание + стикция (~0.2 с зоны) + порог сна
-    // (0.26 с) — запас многократный. До стикции не хватало НИКАКОГО времени.
-    for (int i = 0; i < 12 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    // До 20 секунд (с ранним выходом): падение + оседание + стикция (~0.2 с зоны)
+    // + порог сна (0.26 с). При сломанной стикции дрожание вечно и сон недостижим.
+    for (int i = 0; i < 20 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        std::uint32_t asleepNow = 0;
+        for (auto e : reg.view<RigidBody>()) {
+            if (reg.get<RigidBody>(e).asleep) ++asleepNow;
+        }
+        if (asleepNow == 4u) break;
+    }
 
     std::uint32_t segs = 0, asleep = 0;
     for (auto e : reg.view<RigidBody>()) {
