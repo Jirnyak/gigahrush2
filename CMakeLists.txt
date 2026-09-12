@@ -814,7 +814,13 @@ if(GIGA_BUILD_TESTS)
         # «стикция = 0» этот тест НЕ роняет (провисшие верёвки засыпают и
         # без неё) — несущий гейт §64 живёт в game_test
         # (test_humanoid_reaches_sleep, настоящий труп) = 23617.
-        PASS_REGULAR_EXPRESSION "23617/23617 checks passed"
+        # 23617 + 13 on 2026-09-12: test_stereo_camera_splits_by_ipd —
+        # стереопара как ЗАГОТОВКА (к пассам не подключена, решение владельца).
+        # База ровно IPD и разведена по ПРАВОМУ вектору (перепутанный знак =
+        # вывернутая глубина, ловится только шлемом), центр пары = монокуляр,
+        # оси параллельны (toe-in нет), нулевой IPD схлопывает в монокуляр,
+        # взгляд в зенит не даёт NaN = 23630.
+        PASS_REGULAR_EXPRESSION "23630/23630 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

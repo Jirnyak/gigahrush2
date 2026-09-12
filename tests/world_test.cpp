@@ -1034,6 +1034,64 @@ static void test_camera_component_is_movable() {
     CHECK_NEAR(m.eye.x, 1.0f, 1e-4f);
 }
 
+// Стереопара ([sim/camera.h]) — ЗАГОТОВКА: к пассам не подключена (решение
+// владельца 2026-09-12), но математика лежит под гейтом, иначе подключать
+// будет нечего и придётся выводить заново. Проверяется то, в чём стерео и
+// ломается: база разводится по ПРАВОМУ вектору взгляда, оси глаз ПАРАЛЛЕЛЬНЫ,
+// расстояние между зрачками равно ровно IPD, и оба глаза — это всё ещё та же
+// камера, что отдаёт compute_camera.
+static void test_stereo_camera_splits_by_ipd() {
+    Registry reg;
+    // Нет камеры — нет пары. Обратная полярность к «valid по умолчанию».
+    CHECK(!compute_stereo_camera(reg, 1.0f).valid);
+
+    Entity a = reg.create();
+    reg.emplace<Transform>(a, Transform{vec3{10, 20, 30}, 0});
+    CameraTag tag{};
+    tag.yaw = 0.0f; // взгляд вдоль +X; правый вектор при верхе +Z — это -Y
+    tag.pitch = 0.0f;
+    reg.emplace<CameraTag>(a, tag);
+
+    const float ipd = 0.064f;
+    StereoCameraMatrices s = compute_stereo_camera(reg, 0.888f, ipd);
+    CHECK(s.valid && s.left.valid && s.right.valid);
+
+    // Зрачки разведены ровно на IPD — ни на половину, ни на две.
+    const vec3 sep = s.right.eye - s.left.eye;
+    CHECK_NEAR(length(sep), ipd, 1e-5f);
+
+    // Разведены по ПРАВОМУ вектору: при взгляде вдоль +X и верхе +Z правый
+    // глаз стоит ниже по Y. Перепутанный знак меняет глаза местами — картинка
+    // «читается», но глубина выворачивается наизнанку, и заметить это можно
+    // только шлемом на голове. Поэтому знак пинится здесь.
+    CHECK_NEAR(sep.x, 0.0f, 1e-5f);
+    CHECK(sep.y < 0.0f);
+    CHECK_NEAR(sep.z, 0.0f, 1e-5f);
+
+    // Центр пары — ровно монокулярный глаз: стерео не уводит голову вбок.
+    CameraMatrices mono = compute_camera(reg, 0.888f);
+    const vec3 mid = (s.left.eye + s.right.eye) * 0.5f;
+    CHECK_NEAR(length(mid - mono.eye), 0.0f, 1e-5f);
+
+    // Оси ПАРАЛЛЕЛЬНЫ (никакого toe-in) и совпадают с монокулярной.
+    CHECK_NEAR(length(s.left.forward - s.right.forward), 0.0f, 1e-6f);
+    CHECK_NEAR(length(s.left.forward - mono.forward), 0.0f, 1e-6f);
+
+    // Нулевой IPD схлопывает пару в одну точку — монокуляр как предельный
+    // случай, а не отдельная ветка кода.
+    StereoCameraMatrices flat = compute_stereo_camera(reg, 0.888f, 0.0f);
+    CHECK_NEAR(length(flat.right.eye - flat.left.eye), 0.0f, 1e-6f);
+
+    // Взгляд В ЗЕНИТ: cross(fwd, up) вырождается, и наивная реализация
+    // разводит глаза в NaN. Ось обязана найтись, база — остаться равной IPD.
+    reg.get<CameraTag>(a).pitch = 1.5707963f;
+    StereoCameraMatrices up = compute_stereo_camera(reg, 0.888f, ipd);
+    CHECK(up.valid);
+    const vec3 upSep = up.right.eye - up.left.eye;
+    CHECK_NEAR(length(upSep), ipd, 1e-4f);
+    CHECK(upSep.x == upSep.x); // NaN != NaN — ловит вырождение напрямую
+}
+
 // The bake-time job system (src/core/jobs.h). Its whole contract is that a
 // parallel run over disjoint indices equals the serial run — deterministic, not
 // merely "eventually the same".
@@ -1471,6 +1529,7 @@ int main() {
     test_air_drag_terminal_velocity();
     test_diffusion();
     test_camera_component_is_movable();
+    test_stereo_camera_splits_by_ipd();
     test_parallel_for();
     test_nav_coarse();
     test_nav_fine();
