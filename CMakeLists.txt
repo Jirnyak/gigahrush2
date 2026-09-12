@@ -185,7 +185,21 @@ set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(ktx
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.0 GIT_SHALLOW TRUE)
+# C++17 НА ВРЕМЯ ktx, и это не вкусовщина. CMAKE_CXX_STANDARD — директорная
+# переменная: она читается при создании КАЖДОЙ цели, включая чужие, поэтому
+# basisu внутри KTX собирался нашим C++23 (замерено: compile_commands.json
+# даёт -std=c++2b на basisu_kernels_sse.cpp). А в C++23 действует P2266
+# «simpler implicit move»: `return dst;` при параметре `vfloat&& dst` стал
+# xvalue и больше НЕ привязывается к возвращаемому `vfloat&` —
+# external/basisu/encoder/cppspmd_sse.h:496 и :508 делают ровно это.
+# MSVC правило реализовал и падает error C2440; AppleClang его не применяет,
+# поэтому macOS собирался зелёным и дефект был не виден с этой стороны.
+# Библиотеке 2019 года наш стандарт не нужен и не обещан — тот же принцип,
+# по которому ей не достаются ни LTO, ни /permissive-.
+set(_giga_cxx_std_save ${CMAKE_CXX_STANDARD})
+set(CMAKE_CXX_STANDARD 17)
 FetchContent_MakeAvailable(ktx)
+set(CMAKE_CXX_STANDARD ${_giga_cxx_std_save})
 
 # ---- System dependencies --------------------------------------------------
 # Vulkan is always a system dependency: MoltenVK via Homebrew on macOS, the
