@@ -1,0 +1,52 @@
+# macOS build — Clang + MoltenVK + SDL3 on a GitHub-hosted runner.
+#
+# Parallels win-build.yml: builds the native macOS (Apple Silicon arm64)
+# binary, compiles SPIR-V shaders via glslc, runs CPU test suites, and packages
+# the release distribution artifact (gigahrush2-macos).
+name: mac-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "torus" ]
+    paths-ignore:
+      - "**.md"
+      - "markoaudit/**"
+      - "Docs/**"
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies via Homebrew
+        run: |
+          brew install molten-vk vulkan-headers vulkan-loader shaderc sdl3 entt
+
+      - name: Configure and build (Release)
+        run: |
+          export VULKAN_SDK="$(brew --prefix molten-vk)"
+          export CMAKE_PREFIX_PATH="/opt/homebrew:$(brew --prefix molten-vk)"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+
+      - name: Test (CPU suites only)
+        run: |
+          ctest --test-dir build --output-on-failure -E "medium_test|verlet_test"
+
+      - name: Package
+        run: |
+          dist="dist/gigahrush2-macos"
+          mkdir -p "$dist"
+          cp build/gigahrush2 "$dist/"
+          cp -r build/shaders "$dist/shaders"
+          cp -r data "$dist/data"
+          tar -czvf dist/gigahrush2-macos.tar.gz -C dist gigahrush2-macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gigahrush2-macos
+          path: dist/gigahrush2-macos.tar.gz
+          if-no-files-found: error
