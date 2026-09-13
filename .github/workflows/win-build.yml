@@ -29,7 +29,7 @@ name: win-build
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "torus" ]
+    branches: [ "main" ]
     paths-ignore:
       - "**.md"
       - "markoaudit/**"
@@ -104,11 +104,16 @@ jobs:
           cmake --build build-win --parallel || exit /b 1
 
       # The CPU suites. See deviation 1 in the header for what is excluded and why.
-      # НЕ БЛОКИРУЕТ артефакт (continue-on-error) и это осознанный размен, а не
-      # ослабление: собранный exe нужен владельцу в руки независимо от того,
-      # сошёлся ли пин счётчика чеков под MSVC. Красный шаг в прогоне видно, и
-      # он остаётся сигналом — просто не запрещает выложить билд.
+      #
+      # Красный ctest НЕ мешает выложить артефакт — собранный exe нужен в руки
+      # независимо от того, сошёлся ли пин под MSVC. Но и ТИХИМ он больше не
+      # будет: `continue-on-error` пропускает шаг вперёд, а последний шаг job'а
+      # роняет ВЕСЬ прогон, если тут было красно. Прецедент, ради которого это
+      # переделано: пин game_test 243576 простоял красным месяц и был замечен
+      # только когда чужой коммит его поправил — потому что «красный шаг видно»
+      # означает «видно, если кто-то смотрит», а смотреть было некому.
       - name: Test (CPU suites only)
+        id: ctest
         continue-on-error: true
         shell: cmd
         run: ctest --test-dir build-win --output-on-failure -E "medium_test|verlet_test"
@@ -130,3 +135,14 @@ jobs:
           name: gigahrush2-win64
           path: dist/gigahrush2-win64
           if-no-files-found: error
+
+      # ПОСЛЕ выкладки — уронить прогон, если тесты были красными. Порядок тут
+      # и есть весь смысл: артефакт уже лежит, а крестик в списке прогонов
+      # честный. Зелёный прогон с красными тестами внутри — это ложный прибор,
+      # а мы такой уже держали месяц.
+      - name: Fail the run if the test step was red
+        if: steps.ctest.outcome == 'failure'
+        shell: cmd
+        run: |
+          echo ctest KRASNYJ — artefakt vylozhen, no progon krasnyj namerenno.
+          exit /b 1

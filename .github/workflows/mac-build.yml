@@ -8,7 +8,7 @@ name: mac-build
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "torus" ]
+    branches: [ "main" ]
     paths-ignore:
       - "**.md"
       - "markoaudit/**"
@@ -32,7 +32,12 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j
 
+      # Тот же размен, что в win-build.yml: красный ctest не мешает выложить
+      # артефакт, но роняет прогон последним шагом — крестик обязан быть
+      # виден, иначе пин тухнет молча (прецедент: game_test 243576, месяц).
       - name: Test (CPU suites only)
+        id: ctest
+        continue-on-error: true
         run: |
           ctest --test-dir build --output-on-failure -E "medium_test|verlet_test"
 
@@ -50,3 +55,9 @@ jobs:
           name: gigahrush2-macos
           path: dist/gigahrush2-macos.tar.gz
           if-no-files-found: error
+
+      - name: Fail the run if the test step was red
+        if: steps.ctest.outcome == 'failure'
+        run: |
+          echo "ctest КРАСНЫЙ — артефакт выложен, но прогон красный намеренно."
+          exit 1
