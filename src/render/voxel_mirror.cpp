@@ -118,6 +118,18 @@ bool VoxelMirror::init(VulkanDevice& dev) {
                      "raymarch pass must split the masks binding on this device\n",
                      dev.props.limits.maxStorageBufferRange, kMasksBytes);
 
+    // ТА ЖЕ ПРОВЕРКА ДЛЯ ПУЛА, которой не было — а именно пул и вылезал за
+    // лимит на КАЖДОМ десктопном драйвере (kPageCap, voxel_mirror.h: пул был
+    // ровно 2^32 при лимите 2^32-1). Сторож поставлен там, где дефект уже
+    // случился один раз: кап живёт в заголовке, лимит — у устройства, и
+    // разъехаться они могут снова.
+    if (dev.props.limits.maxStorageBufferRange < kPoolBytes)
+        std::fprintf(stderr,
+                     "[mirror] maxStorageBufferRange %u < page pool %zu — "
+                     "привязка пула ВНЕ СПЕКИ, чтение страниц из шейдера UB "
+                     "(пол будет прозрачным). Урежьте kPageCap.\n",
+                     dev.props.limits.maxStorageBufferRange, kPoolBytes);
+
     VkCommandPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |

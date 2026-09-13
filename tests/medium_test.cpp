@@ -16,7 +16,7 @@
 // над настоящим зеркалом — вода в бассейне падает, растекается, ЗАСЫПАЕТ;
 // масса (счёт квантов) сохраняется точно; осевшие кванты стоят на опоре.
 #include <algorithm>
-#include <bit>
+#include <bit>     // std::popcount — счёт атомов в маске клетки
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

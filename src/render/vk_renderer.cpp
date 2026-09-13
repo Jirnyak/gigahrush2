@@ -640,7 +640,7 @@ void VulkanRenderer::begin_post_pass() {
     PostPush push{};
     push.params0[0] = static_cast<float>(SDL_GetTicks()) / 1000.0f;
     push.params0[1] = 0.0f; // свободный слот (бывш. экспозиция, вырезана)
-    push.params0[2] = crtEnabled ? 1.0f : 0.0f;
+    push.params0[2] = (crtEnabled && !stereo3d) ? 1.0f : 0.0f;
     push.params0[3] = chromaticAberration;
     push.params1[0] = crtCurvature;
     push.params1[1] = scanlineIntensity;

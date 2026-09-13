@@ -213,16 +213,18 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
                                            &halfSetLayout_));
     }
 
+    // Мировых сетов теперь по одному НА ГЛАЗ (kStereoEyes), полурезный сет —
+    // по-прежнему один на кадр: цель у глаз общая, делится прямоугольниками.
     VkDescriptorPoolSize sizes[3]{};
     sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[0].descriptorCount = 8 * kMaxFramesInFlight;
+    sizes[0].descriptorCount = 8 * kMaxFramesInFlight * kStereoEyes;
     sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    sizes[1].descriptorCount = kMaxFramesInFlight;
+    sizes[1].descriptorCount = kMaxFramesInFlight * kStereoEyes;
     sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     sizes[2].descriptorCount = 2 * kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
     pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pi.maxSets = 2 * kMaxFramesInFlight;
+    pi.maxSets = (1 + kStereoEyes) * kMaxFramesInFlight;
     pi.poolSizeCount = 3;
     pi.pPoolSizes = sizes;
     VK_TRY(vkCreateDescriptorPool(dev_->device, &pi, nullptr, &descPool_));
@@ -241,11 +243,12 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
     const vec3* albedo = material_albedo_table(&matCount);
 
     for (int f = 0; f < kMaxFramesInFlight; ++f) {
-        if (!ubo_[f].create_host_visible(*dev_, sizeof(MarchUbo),
+      for (int eye = 0; eye < kStereoEyes; ++eye) {
+        if (!ubo_[f][eye].create_host_visible(*dev_, sizeof(MarchUbo),
                                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                          "raymarch ubo"))
             return false;
-        MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
+        MarchUbo* u = static_cast<MarchUbo*>(ubo_[f][eye].mapped);
         u->invViewProj = mat4_identity();
         // Маски карт статичны после загрузки — пишутся один раз здесь.
         write_tex_masks(u, texMask_, normalMask_, roughnessMask_);
@@ -272,7 +275,7 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         ai.descriptorPool = descPool_;
         ai.descriptorSetCount = 1;
         ai.pSetLayouts = &setLayout_;
-        VK_TRY(vkAllocateDescriptorSets(dev_->device, &ai, &sets_[f]));
+        VK_TRY(vkAllocateDescriptorSets(dev_->device, &ai, &sets_[f][eye]));
 
         const VkBuffer bufs[5] = {mirror.masks_buffer(), mirror.types_buffer(),
                                   mirror.page_index_buffer(),
@@ -288,16 +291,16 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
             bi[i].buffer = bufs[i];
             bi[i].range = sizesB[i];
             w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[i].dstSet = sets_[f];
+            w[i].dstSet = sets_[f][eye];
             w[i].dstBinding = i;
             w[i].descriptorCount = 1;
             w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[i].pBufferInfo = &bi[i];
         }
-        bi[5].buffer = ubo_[f].buffer;
+        bi[5].buffer = ubo_[f][eye].buffer;
         bi[5].range = sizeof(MarchUbo);
         w[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[5].dstSet = sets_[f];
+        w[5].dstSet = sets_[f][eye];
         w[5].dstBinding = 5;
         w[5].descriptorCount = 1;
         w[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -310,13 +313,14 @@ bool RaymarchPass::create_descriptors(const VoxelMirror& mirror) {
         // биндинги остаются 7 и 8.
         for (std::uint32_t k = 7; k <= 8; ++k) {
             w[k - 1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[k - 1].dstSet = sets_[f];
+            w[k - 1].dstSet = sets_[f][eye];
             w[k - 1].dstBinding = k;
             w[k - 1].descriptorCount = 1;
             w[k - 1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w[k - 1].pBufferInfo = &bi[k];
         }
         vkUpdateDescriptorSets(dev_->device, 8, w, 0, nullptr);
+      }
     }
     return true;
 }
@@ -636,10 +640,13 @@ bool RaymarchPass::create_half_targets(VkExtent2D he) {
 }
 
 void RaymarchPass::record_light(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                                const CubePush& push,
+                                const CubePush* pushes,
+                                const ScreenRect* eyeRects,
+                                std::uint32_t eyeCount,
                                 VkDescriptorSet lightGridSet,
                                 VkExtent2D fullExtent) {
     if (!ready() || halfPipeline_ == VK_NULL_HANDLE) return;
+    if (eyeCount == 0 || eyeCount > static_cast<std::uint32_t>(kStereoEyes)) return;
     // Полразрешения ВЫВОДИТСЯ из кадра (настройки графики меняют разрешение —
     // цели следуют за ним; смена редка, waitIdle честнее пула в полёте).
     const VkExtent2D he{(fullExtent.width + 1) / 2, (fullExtent.height + 1) / 2};
@@ -652,49 +659,64 @@ void RaymarchPass::record_light(VkCommandBuffer cmd, std::uint32_t frameIndex,
         }
     }
     const std::uint32_t f = frameIndex % kMaxFramesInFlight;
-    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
-    u->invViewProj = mat4_inverse(push.viewProj);
-    u->timeParams = vec4{push.torus.w, push.torus.z, 0.0f, 0.0f};
 
+    // Рендер-пасс открывается ОДИН раз на все глаза: у halfPass_ загрузка
+    // очисткой, и второй Begin стёр бы свет первого глаза начисто.
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rp.renderPass = halfPass_;
     rp.framebuffer = halfFb_[f];
     rp.renderArea.extent = he;
     vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
-    VkViewport vp{};
-    vp.width = static_cast<float>(he.width);
-    vp.height = static_cast<float>(he.height);
-    vp.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    VkRect2D sc{};
-    sc.extent = he;
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, halfPipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
-                            &sets_[f], 0, nullptr);
     if (lightGridSet != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_,
                                 1, 1, &lightGridSet, 0, nullptr);
-    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                       sizeof(CubePush), &push);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    for (std::uint32_t e = 0; e < eyeCount; ++e) {
+        MarchUbo* u = static_cast<MarchUbo*>(ubo_[f][e].mapped);
+        u->invViewProj = mat4_inverse(pushes[e].viewProj);
+        u->timeParams = vec4{pushes[e].torus.w, pushes[e].torus.z, 0.0f, 0.0f};
+
+        // Прямоугольник глаза в полурезной цели — вывод в [stereo_layout.h].
+        const ScreenRect h = half_res_rect(eyeRects[e]);
+        VkViewport vp{};
+        vp.x = static_cast<float>(h.x);
+        vp.y = static_cast<float>(h.y);
+        vp.width = static_cast<float>(h.w);
+        vp.height = static_cast<float>(h.h);
+        vp.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        VkRect2D sc{};
+        sc.offset = {h.x, h.y};
+        sc.extent = {static_cast<std::uint32_t>(h.w),
+                     static_cast<std::uint32_t>(h.h)};
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0,
+                                1, &sets_[f][e], 0, nullptr);
+        vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(CubePush), &pushes[e]);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
     vkCmdEndRenderPass(cmd);
 }
 
 void RaymarchPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                          const CubePush& push, VkDescriptorSet lightGridSet) {
+                          const CubePush& push, VkDescriptorSet lightGridSet,
+                          std::uint32_t eye) {
     if (!ready()) return;
     const std::uint32_t f = frameIndex % kMaxFramesInFlight;
+    const std::uint32_t e =
+        eye < static_cast<std::uint32_t>(kStereoEyes) ? eye : 0u;
 
-    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f].mapped);
+    MarchUbo* u = static_cast<MarchUbo*>(ubo_[f][e].mapped);
     u->invViewProj = mat4_inverse(push.viewProj);
     u->timeParams = vec4{push.torus.w, push.torus.z, 0.0f, 0.0f};
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
-                            &sets_[f], 0, nullptr);
+                            &sets_[f][e], 0, nullptr);
     if (lightGridSetLayout_ != VK_NULL_HANDLE && lightGridSet != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 1,
                                 1, &lightGridSet, 0, nullptr);
@@ -732,7 +754,8 @@ void RaymarchPass::destroy() {
     if (layout_) vkDestroyPipelineLayout(dev_->device, layout_, nullptr);
     if (descPool_) vkDestroyDescriptorPool(dev_->device, descPool_, nullptr);
     if (setLayout_) vkDestroyDescriptorSetLayout(dev_->device, setLayout_, nullptr);
-    for (int i = 0; i < kMaxFramesInFlight; ++i) ubo_[i].destroy(*dev_);
+    for (int i = 0; i < kMaxFramesInFlight; ++i)
+        for (int e = 0; e < kStereoEyes; ++e) ubo_[i][e].destroy(*dev_);
     pipeline_ = VK_NULL_HANDLE;
     layout_ = VK_NULL_HANDLE;
     descPool_ = VK_NULL_HANDLE;
