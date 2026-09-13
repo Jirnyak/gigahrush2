@@ -2233,6 +2233,16 @@ int main(int argc, char** argv) {
     // --no-crt: сырой кадр без пост-обработки (диагностика, пиксель-точные
     // сравнения скриншотов). Сама трубка — vk_renderer.h.
     bool noCrt = false;
+    // --vr: 3D-РЕЖИМ Side-by-Side. Это НЕ VR: трекинга головы нет, OpenXR нет,
+    // дисторсии линз нет, оба глаза делят одну матрицу проекции. Две картинки
+    // рядом для 3D-монитора или SBS-просмотрщика
+    // ([markoaudit/plans/marko-vr-pick.md] §3б).
+    bool vrMode = false;
+    float vrIpd = kDefaultIpd; // база стерео, метры ([sim/camera.h] — вывод там)
+    // CLI сильнее сохранённого предпочтения: флаг просят на ОДИН запуск —
+    // тот же закон, что у --no-crt.
+    bool cliVrSet = false;
+    bool cliIpdSet = false;
     // --mirror-verify: after every wholesale upload and every ~300 frames, read
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
@@ -2250,6 +2260,12 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
+        else if (a == "--vr" || a == "--sbs") { vrMode = true; cliVrSet = true; }
+        else if (a == "--ipd" && i + 1 < argc) {
+            vrIpd = std::clamp(static_cast<float>(std::atof(argv[++i])),
+                               kMinIpd, kMaxIpd);
+            cliIpdSet = true;
+        }
         else if (a == "--mirror-verify") mirrorVerify = true;
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
@@ -3075,6 +3091,8 @@ int main(int argc, char** argv) {
         HudElement* els = hud_elements(hn);
         for (std::size_t i = 0; i < hn; ++i)
             std::fprintf(f, "hud %s %d\n", els[i].id, els[i].on ? 1 : 0);
+        std::fprintf(f, "vr %d\nipd %.4f\n", vrMode ? 1 : 0,
+                     static_cast<double>(vrIpd));
         std::fprintf(f, "crt %d\nfullscreen %d\n", renderer.crtEnabled ? 1 : 0,
                      fullscreenState ? 1 : 0);
         const audio::AudioConfig& ac = audioSys.mixer().config();
@@ -3105,6 +3123,11 @@ int main(int argc, char** argv) {
                     // --no-crt — диагностический CLI-override и он сильнее
                     // сохранённого предпочтения: флаг просят на ОДИН запуск.
                     if (!noCrt) renderer.crtEnabled = iv != 0;
+                } else if (std::sscanf(line, "vr %d", &iv) == 1) {
+                    // --vr — разовый CLI-override, он сильнее файла.
+                    if (!cliVrSet) vrMode = iv != 0;
+                } else if (std::sscanf(line, "ipd %f", &fv) == 1) {
+                    if (!cliIpdSet) vrIpd = std::clamp(fv, kMinIpd, kMaxIpd);
                 } else if (std::sscanf(line, "fullscreen %d", &iv) == 1) {
                     fullscreenState = iv != 0;
                 } else if (std::sscanf(line, "vol_master %f", &fv) == 1) {
@@ -3127,6 +3150,8 @@ int main(int argc, char** argv) {
         sctx.binds = &binds;
         sctx.rebindCapture = &rebindCapture;
         sctx.crtEnabled = &renderer.crtEnabled;
+        sctx.vrMode = &vrMode;
+        sctx.vrIpd = &vrIpd;
         sctx.fullscreen = &fullscreenState;
         sctx.audio = &audioSys.mixer().config();
         const SettingsRequest sreq = settings_ui_draw(sctx);
@@ -4397,6 +4422,18 @@ int main(int argc, char** argv) {
                 const bool giveMouse = shell.window == UiWindow::None;
                 input.set_mouselook(giveMouse);
                 SDL_SetWindowRelativeMouseMode(window, giveMouse);
+            }
+            // 3D Side-by-Side. Тумблер консольный и в настройках — клавиши он
+            // не получает: чистка 2026-08-28 сняла разовые действия с
+            // клавиатуры, и режим просмотра под то правило подходит целиком.
+            if (has(ConsoleRequest::Stereo3d)) {
+                vrMode = !vrMode;
+                save_ui_cfg();
+                std::fprintf(stderr,
+                             "[3d] Side-by-Side %s (IPD %.3f м). Это НЕ VR: "
+                             "трекинга головы нет.\n",
+                             vrMode ? "включено" : "выключено",
+                             static_cast<double>(vrIpd));
             }
             // Floor travel (#8/#9): streams the destination in on demand and
             // folds the departed floor's crowd back into the cold pool, so only
@@ -7560,6 +7597,18 @@ int main(int argc, char** argv) {
             ? stack.layer(activeLayer).gravity().up_vector()
             : vec3{0.0f, 0.0f, 1.0f};
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
+        // Стереопара для 3D-режима. Аспект — у ОДНОГО глаза: при Side-by-Side
+        // глазу достаётся половина ширины, и взять сюда аспект окна значило бы
+        // растянуть обе картинки вдвое ([sim/camera.h]).
+        const float eyeAspect =
+            fbh > 0 ? (static_cast<float>(fbw) * 0.5f) / fbh : 1.0f;
+        StereoCameraMatrices stereoCam =
+            vrMode ? compute_stereo_camera(reg, eyeAspect, vrIpd, worldUp)
+                   : StereoCameraMatrices{};
+        // Если пара не собралась (нет камеры) — 3D нечем рисовать, кадр
+        // остаётся моно, а не чёрным.
+        const bool stereoFrame = vrMode && stereoCam.valid;
+        renderer.stereo3d = stereoFrame;
 
         hud.begin_frame();
         // Худ ИГРОКА ([hud_ui.h]) — таблица элементов по углам стекла. Только
@@ -7577,6 +7626,7 @@ int main(int argc, char** argv) {
             hctx.status = &playerStatus;
             hctx.samosbor = &samosbor;
             hctx.needsTick = &needs;
+            hctx.stereo3d = stereoFrame;
             hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
             // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца 2026-08-28):
             // под прицелом ровно одна цель, текст — из таблицы интерактивов
@@ -9347,7 +9397,25 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Cull);
             if (!noGpuCull && cullPass.ready() && propPass.ready()) {
                 propPass.set_use_gpu_culling(true);
-                const mat4 vp = mat4_mul(camMat.proj, camMat.view);
+                // ОТБОР В 3D: не выключается, а РАСШИРЯЕТСЯ. У глаз свои
+                // фрустумы, и отобрать по монокулярному значило бы терять
+                // пропы на краю у одного глаза — мигающая мебель по шву.
+                // Выключить отбор целиком (так делал перенесённый оригинал)
+                // дороже самого стерео: рисуются ВСЕ пропы обоим глазам.
+                // Вместо этого камера отбора отъезжает назад по взгляду ровно
+                // настолько, чтобы её фрустум накрыл оба глаза — вывод в
+                // [render/stereo_layout.h] stereo_cull_pullback. Одна матрица,
+                // один проход, ни одного лишнего пропа.
+                mat4 cullView = camMat.view;
+                if (stereoFrame) {
+                    const float back = gpu::stereo_cull_pullback(
+                        vrIpd, stereoCam.left.proj.m[0]);
+                    cullView = mat4_lookAt(camMat.eye - camMat.forward * back,
+                                           camMat.eye - camMat.forward * back +
+                                               camMat.forward,
+                                           worldUp);
+                }
+                const mat4 vp = mat4_mul(camMat.proj, cullView);
                 const uint32_t fIdx = renderer.currentFrame;
                 const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
                 const float torusPeriod = kWorldExtent;
@@ -9600,15 +9668,70 @@ int main(int argc, char** argv) {
             // makes the cube pass's instance cache possible.
             push.torus = vec4{kWorldExtent, kAoDirect, samosborPulse, currentTimeSec};
 
+            // --- РАСКЛАДКА ГЛАЗ -------------------------------------------
+            // 3D-режим Side-by-Side: кадр делится пополам, каждая половина —
+            // свой глаз. Моно — это один «глаз» во весь кадр, и тогда всё
+            // ниже сводится к прежнему единственному проходу.
+            //
+            // ПОРЯДОК ЦИКЛОВ: пасс снаружи, глаз ВНУТРИ. Глаза занимают
+            // непересекающиеся пиксели, так что порядок мир→тела→пропы→
+            // физика (он нужен для глубины и альфы) от этого не страдает, зато
+            // скобки GPU-таймера остаются ЧЕСТНЫМИ: каждая обнимает ровно свой
+            // пасс. Обратный порядок (глаз снаружи) заставил бы открывать
+            // скобку на первом глазу и закрывать на втором — замер превратился
+            // бы в «время от начала мира левого до конца мира правого», то
+            // есть включил бы в мировой пасс тела и пропы.
+            const std::uint32_t eyeCount =
+                stereoFrame ? static_cast<std::uint32_t>(gpu::kStereoEyes) : 1u;
+            const VkExtent2D frameExtent = renderer.swap().extent;
+            gpu::ScreenRect eyeRect[gpu::kStereoEyes];
+            gpu::CubePush eyePush[gpu::kStereoEyes];
+            for (std::uint32_t e = 0; e < eyeCount; ++e) {
+                eyeRect[e] = gpu::stereo_eye_rect(
+                    static_cast<int>(frameExtent.width),
+                    static_cast<int>(frameExtent.height), static_cast<int>(e),
+                    static_cast<int>(eyeCount));
+                eyePush[e] = push; // туман, торус, время — общие на кадр
+                if (eyeCount > 1) {
+                    const CameraMatrices& ec =
+                        e == 0 ? stereoCam.left : stereoCam.right;
+                    eyePush[e].viewProj = mat4_mul(ec.proj, ec.view);
+                    eyePush[e].camPos = vec4{ec.eye.x, ec.eye.y, ec.eye.z, 0.0f};
+                }
+            }
+            // Вьюпорт и ножницы под глаз. В моно не трогаем вовсе — их уже
+            // выставил begin_pass во весь кадр, и лишний вызов только добавил
+            // бы путь, которого в моно не было.
+            auto set_eye_viewport = [&](std::uint32_t e) {
+                if (eyeCount == 1) return;
+                const gpu::ScreenRect& r = eyeRect[e];
+                VkViewport vp{};
+                vp.x = static_cast<float>(r.x);
+                vp.y = static_cast<float>(r.y);
+                vp.width = static_cast<float>(r.w);
+                vp.height = static_cast<float>(r.h);
+                vp.minDepth = 0.0f;
+                vp.maxDepth = 1.0f;
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                VkRect2D sc{};
+                sc.offset = {r.x, r.y};
+                sc.extent = {static_cast<std::uint32_t>(r.w),
+                             static_cast<std::uint32_t>(r.h)};
+                vkCmdSetScissor(cmd, 0, 1, &sc);
+            };
+
             // ПОЛУРЕЗНЫЙ СВЕТОВОЙ ПОЛУПАСС — до главного рендер-пасса, тем же
             // пушем: весь световой цикл (лампы + теневые DDA-лучи) на
             // полразрешения, полный кадр возьмёт его билатерально
-            // ([render/raymarch_pass.h] record_light, ddalight.md).
+            // ([render/raymarch_pass.h] record_light, ddalight.md). В стерео
+            // цель остаётся полукадром на весь экран, глаза делят её
+            // прямоугольниками — потому шейдер не тронут.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Light);
             if (!skip_pass("world"))
-                raymarchPass.record_light(cmd, renderer.currentFrame, push,
+                raymarchPass.record_light(cmd, renderer.currentFrame, eyePush,
+                                          eyeRect, eyeCount,
                                           lightGrid.descriptor_set(),
-                                          renderer.swap().extent);
+                                          frameExtent);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Light);
 
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Raster);
@@ -9620,31 +9743,44 @@ int main(int argc, char** argv) {
             std::uint64_t t0 = SDL_GetPerformanceCounter();
             renderer.timer.pass_begin(cmd, gpu::GpuPass::World);
             if (!skip_pass("world"))
-                raymarchPass.record(cmd, renderer.currentFrame, push,
-                                    lightGrid.descriptor_set());
+                for (std::uint32_t e = 0; e < eyeCount; ++e) {
+                    set_eye_viewport(e);
+                    raymarchPass.record(cmd, renderer.currentFrame, eyePush[e],
+                                        lightGrid.descriptor_set(), e);
+                }
             renderer.timer.pass_end(cmd, gpu::GpuPass::World);
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            if (!skip_pass("bodies")) bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
+            if (!skip_pass("bodies"))
+                for (std::uint32_t e = 0; e < eyeCount; ++e) {
+                    set_eye_viewport(e);
+                    bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, eyePush[e], lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
             if (propPass.ready() && !skip_pass("props"))
-                propPass.record(cmd, renderer.currentFrame, push, lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                for (std::uint32_t e = 0; e < eyeCount; ++e) {
+                    set_eye_viewport(e);
+                    propPass.record(cmd, renderer.currentFrame, eyePush[e], lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Props);
 
 
             renderer.timer.pass_begin(cmd, gpu::GpuPass::DrawPhysics);
             if (!skip_pass("physdraw")) {
-            verletPass.record_draw_wires(cmd, push, lightGrid.descriptor_set());
-            verletPass.record_draw_cloths(cmd, push, lightGrid.descriptor_set());
+            for (std::uint32_t e = 0; e < eyeCount; ++e) {
+            set_eye_viewport(e);
+            verletPass.record_draw_wires(cmd, eyePush[e], lightGrid.descriptor_set());
+            verletPass.record_draw_cloths(cmd, eyePush[e], lightGrid.descriptor_set());
             // Particles LAST among world passes: alpha-blended sprites need
             // every opaque depth already written.
-            verletPass.record_draw_shards(cmd, push,
+            verletPass.record_draw_shards(cmd, eyePush[e],
                                           lightGrid.descriptor_set());
-            verletPass.record_draw_particles(cmd, push,
+            verletPass.record_draw_particles(cmd, eyePush[e],
                                              lightGrid.descriptor_set());
+            }
             }
             renderer.timer.pass_end(cmd, gpu::GpuPass::DrawPhysics);
 

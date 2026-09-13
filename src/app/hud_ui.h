@@ -48,6 +48,9 @@ struct HudContext {
     const game::SamosborState* samosbor = nullptr;
     const game::NeedsTick* needsTick = nullptr;
     HudGas gas;
+    // 3D-режим: плоское стекло худа рисуется ОДИН раз поверх обеих картинок и
+    // ломает стереопару — в 3D его снимают целиком ([main.cpp]).
+    bool stereo3d = false;
     // Сим-тик — единственный вход часов дома в худ ([core/watch.h], S15).
     // Не секунды и не кадры: календарь читается СДВИГАМИ, и делить тут нечего.
     std::uint64_t tick = 0;

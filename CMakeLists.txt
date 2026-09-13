@@ -845,7 +845,16 @@ if(GIGA_BUILD_TESTS)
         # вывернутая глубина, ловится только шлемом), центр пары = монокуляр,
         # оси параллельны (toe-in нет), нулевой IPD схлопывает в монокуляр,
         # взгляд в зенит не даёт NaN = 23630.
-        PASS_REGULAR_EXPRESSION "23630/23630 checks passed"
+        # 23630 + 99 on 2026-09-13: 3D-режим Side-by-Side
+        # ([render/stereo_layout.h]). test_stereo_frame_layout_tiles_exactly
+        # (76): половины кадра — РАЗБИЕНИЕ без зазора и нахлёста, включая
+        # нечётную ширину (лишний столбец ровно одному глазу), и образ
+        # фрагмента при floor(x/2) попадает в полурезный прямоугольник СВОЕГО
+        # глаза — иначе у одного глаза свет съезжает на пиксель.
+        # test_stereo_cull_frustum_covers_both_eyes (23): отодвинутая назад
+        # камера отбора накрывает оба глаза НА ЛЮБОЙ дистанции (свойство, не
+        # число), плюс обратная полярность — недостаточный отодвиг его рвёт.
+        PASS_REGULAR_EXPRESSION "23729/23729 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

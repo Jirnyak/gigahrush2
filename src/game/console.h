@@ -71,6 +71,8 @@ enum class ConsoleRequest : std::uint32_t {
     AttrStr, AttrAgi, AttrInt, // ATTR1: spend one unspent point on STR/AGI/INT
     Inventory, // toggle the inventory grid ([inventory.md] — the ONE cell
                // widget; торговля уже сложилась в него deal-политикой)
+    Stereo3d,  // 3D-режим Side-by-Side — две картинки рядом. НЕ VR: трекинга
+               // головы нет ([markoaudit/plans/marko-vr-pick.md] §3б)
     Count
 };
 

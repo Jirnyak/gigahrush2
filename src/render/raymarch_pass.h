@@ -24,6 +24,7 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "render/stereo_layout.h" // kStereoEyes, ScreenRect
 #include "render/vk_buffer.h"
 #include "render/vk_common.h" // kMaxFramesInFlight
 
@@ -51,16 +52,32 @@ public:
     // разрешении рендера (цели пересоздаются от свапчейна). Полный кадр
     // сэмплит результат билатерально (глубинный гейт по t луча). Зовётся
     // МЕЖДУ begin_frame_cmd и begin_pass — свой оффскрин-рендерпасс.
+    //
+    // СТЕРЕО: цель остаётся ПОЛУКАДРОМ на весь экран, а глаза пишут каждый в
+    // свою её половину ([render/stereo_layout.h] half_res_rect). Потому шейдер
+    // полного кадра не тронут вовсе — его `gl_FragCoord * 0.5` уже попадает
+    // туда, куда надо. Рендер-пасс открывается ОДИН раз на оба глаза: второй
+    // `vkCmdBeginRenderPass` затёр бы очисткой свет первого.
+    //
+    // `pushes[i]` и `eyeRects[i]` — матрицы и прямоугольник i-го глаза в ПОЛНОМ
+    // кадре. Моно — это `eyeCount == 1` с прямоугольником во весь кадр.
     void record_light(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                      const CubePush& push, VkDescriptorSet lightGridSet,
+                      const CubePush* pushes, const ScreenRect* eyeRects,
+                      std::uint32_t eyeCount, VkDescriptorSet lightGridSet,
                       VkExtent2D fullExtent);
 
     // Draw the world for this frame. Inverts push.viewProj on the CPU into the
     // frame's UBO slot; overwrites push.torus.z/.w with the texture masks,
     // exactly as the old cube pass did, so the shared shading sees the same
     // lanes it always saw.
+    //
+    // `eye` выбирает слот UBO/дескрипторов: у глаз РАЗНЫЕ матрицы, и один
+    // общий слот означал бы, что второй глаз затирает первому invViewProj
+    // до того, как GPU дочитает. Вьюпорт и ножницы ставит вызывающий — он же
+    // знает раскладку кадра.
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                const CubePush& push, VkDescriptorSet lightGridSet);
+                const CubePush& push, VkDescriptorSet lightGridSet,
+                std::uint32_t eye = 0);
 
 private:
     bool create_descriptors(const VoxelMirror& mirror);
@@ -75,8 +92,11 @@ private:
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet sets_[kMaxFramesInFlight] = {};
-    VulkanBuffer ubo_[kMaxFramesInFlight]; // persistently mapped, tiny
+    // ПО СЛОТУ НА ГЛАЗ: у глаз разные invViewProj, и общий UBO означал бы, что
+    // правый глаз затирает матрицу левому в том же кадре. Моно пользуется
+    // слотом 0 и платит за второй ровно 1136 байт впустую.
+    VkDescriptorSet sets_[kMaxFramesInFlight][kStereoEyes] = {};
+    VulkanBuffer ubo_[kMaxFramesInFlight][kStereoEyes]; // persistently mapped, tiny
 
     VkDescriptorSetLayout lightGridSetLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout texSetLayout_ = VK_NULL_HANDLE; // borrowed, not owned

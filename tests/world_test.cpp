@@ -13,6 +13,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "render/stereo_layout.h"
 #include "sim/camera.h"
 #include "sim/diffusion.h"
 #include "sim/drag.h"
@@ -1040,6 +1041,101 @@ static void test_camera_component_is_movable() {
 // ломается: база разводится по ПРАВОМУ вектору взгляда, оси глаз ПАРАЛЛЕЛЬНЫ,
 // расстояние между зрачками равно ровно IPD, и оба глаза — это всё ещё та же
 // камера, что отдаёт compute_camera.
+// Раскладка SBS-кадра ([render/stereo_layout.h]) — три места, где стерео
+// ломается целочисленной арифметикой, и ни одно не видно иначе как глазами на
+// живом кадре: полоса по шву, съехавший на пиксель свет у одного глаза,
+// пропавший объект из-за чужого фрустума отбора.
+static void test_stereo_frame_layout_tiles_exactly() {
+    using namespace giga::gpu;
+
+    // Один глаз — весь кадр: моно-путь обязан остаться нетронутым.
+    ScreenRect mono = stereo_eye_rect(1920, 1080, 0, 1);
+    CHECK(mono.x == 0 && mono.y == 0 && mono.w == 1920 && mono.h == 1080);
+
+    // ЧЁТНАЯ ширина: половины равны и стыкуются без зазора и нахлёста.
+    ScreenRect l = stereo_eye_rect(1920, 1080, 0, 2);
+    ScreenRect r = stereo_eye_rect(1920, 1080, 1, 2);
+    CHECK(l.x == 0 && l.w == 960);
+    CHECK(r.x == 960 && r.w == 960);
+    CHECK(l.x + l.w == r.x);          // без зазора
+    CHECK(r.x + r.w == 1920);         // без недокрытия
+    CHECK(l.h == 1080 && r.h == 1080);
+
+    // НЕЧЁТНАЯ ширина — тот случай, ради которого проверка и написана.
+    // Лишний столбец обязан достаться ровно одному глазу.
+    for (int w = 1279; w <= 1285; w += 2) {
+        ScreenRect a = stereo_eye_rect(w, 720, 0, 2);
+        ScreenRect b = stereo_eye_rect(w, 720, 1, 2);
+        CHECK(a.x == 0);
+        CHECK(a.x + a.w == b.x);      // стык
+        CHECK(b.x + b.w == w);        // покрытие
+        CHECK(a.w > 0 && b.w > 0);    // ни один глаз не схлопнут
+        CHECK(b.w - a.w == 1);        // лишний столбец — правому, и ровно один
+    }
+
+    // ПОЛУРЕЗНЫЙ СВЕТ. Цель размером (N+1)/2; прямоугольники глаз обязаны
+    // замостить её так же точно, иначе у одного глаза свет съезжает.
+    for (int w : {1920, 1921, 1280, 1281}) {
+        const int hw = (w + 1) / 2;
+        ScreenRect hl = half_res_rect(stereo_eye_rect(w, 1080, 0, 2));
+        ScreenRect hr = half_res_rect(stereo_eye_rect(w, 1080, 1, 2));
+        CHECK(hl.x == 0);
+        CHECK(hl.x + hl.w == hr.x);
+        CHECK(hr.x + hr.w == hw);
+    }
+
+    // И несущее свойство: фрагмент глаза попадает в прямоугольник СВОЕГО
+    // глаза при отображении floor(x/2), которым его читает шейдер. Проверяются
+    // КРАЯ (там и ломается) плюс редкая сетка внутри — перебор по каждому
+    // пикселю дал бы тысячи проверок в пине и ничего сверх этого.
+    for (int w : {1920, 1921}) {
+        for (int eye = 0; eye < 2; ++eye) {
+            ScreenRect full = stereo_eye_rect(w, 16, eye, 2);
+            ScreenRect half = half_res_rect(full);
+            const int last = full.x + full.w - 1;
+            for (int x : {full.x, full.x + 1, last - 1, last,
+                          full.x + full.w / 3, full.x + full.w / 2}) {
+                const int hx = x / 2; // floor: x неотрицателен
+                CHECK(hx >= half.x && hx < half.x + half.w);
+            }
+        }
+    }
+
+    // Моно-путь через half_res_rect — тот же полукадр, что и был.
+    ScreenRect hmono = half_res_rect(ScreenRect{0, 0, 1920, 1080});
+    CHECK(hmono.x == 0 && hmono.y == 0 && hmono.w == 960 && hmono.h == 540);
+}
+
+static void test_stereo_cull_frustum_covers_both_eyes() {
+    using namespace giga::gpu;
+
+    // Отбор без стерео ничего не отодвигает.
+    CHECK(stereo_cull_pullback(0.0f, 1.6f) == 0.0f);
+
+    // ВЫВОД d = ipd / (2·tg(fovX/2)), где projM0 = 1/tg(fovX/2).
+    const float fovY = 1.2f;      // дефолт CameraTag ([ecs/components.h])
+    const float aspect = 0.888f;  // полукадр 16:9
+    const float projM0 = (1.0f / std::tan(fovY * 0.5f)) / aspect;
+    const float ipd = 0.064f;
+    const float d = stereo_cull_pullback(ipd, projM0);
+    CHECK(d > 0.0f);
+
+    // НЕСУЩЕЕ СВОЙСТВО, а не совпадение числа: на ЛЮБОЙ дистанции отодвинутый
+    // фрустум обязан быть не уже, чем фрустум сдвинутого вбок глаза. Если
+    // формулу подменят «на глаз выбранным» числом меньше нужного — здесь
+    // покраснеет, и покраснеет первой же дистанцией.
+    const float t = 1.0f / projM0; // tg(fovX/2)
+    for (float z = 0.0f; z <= 200.0f; z += 6.25f) {
+        const float pulled = (z + d) * t; // полуширина отодвинутого
+        const float needed = z * t + ipd * 0.5f; // полуширина глаза
+        CHECK(pulled >= needed - 1e-5f);
+    }
+    // И обратная полярность: НЕДОСТАТОЧНЫЙ отодвиг свойство нарушает —
+    // значит проверка выше действительно что-то держит.
+    const float tooSmall = d * 0.5f;
+    CHECK((0.0f + tooSmall) * t < 0.0f * t + ipd * 0.5f);
+}
+
 static void test_stereo_camera_splits_by_ipd() {
     Registry reg;
     // Нет камеры — нет пары. Обратная полярность к «valid по умолчанию».
@@ -1530,6 +1626,8 @@ int main() {
     test_diffusion();
     test_camera_component_is_movable();
     test_stereo_camera_splits_by_ipd();
+    test_stereo_frame_layout_tiles_exactly();
+    test_stereo_cull_frustum_covers_both_eyes();
     test_parallel_for();
     test_nav_coarse();
     test_nav_fine();

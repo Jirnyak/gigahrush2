@@ -7,6 +7,7 @@
 
 #include "app/hud_ui.h"          // hud_elements — тумблеры из той же таблицы
 #include "audio/audio_types.h"   // AudioConfig — живые ручки микшера
+#include "sim/camera.h"          // kMinIpd/kMaxIpd — границы выведены там
 
 namespace giga {
 
@@ -84,6 +85,22 @@ void tab_video(SettingsCtx& c, SettingsRequest& req) {
         req.uiChanged = true;
     if (c.fullscreen && ImGui::Checkbox("Во весь экран", c.fullscreen))
         req.uiChanged = true;
+    // 3D-режим. Назван ровно тем, что он есть: две картинки рядом. Слово «VR»
+    // в ярлыке было бы обещанием трекинга головы, которого нет.
+    if (c.vrMode &&
+        ImGui::Checkbox("3D Side-by-Side (две картинки рядом)", c.vrMode))
+        req.uiChanged = true;
+    if (c.vrMode && *c.vrMode) {
+        ImGui::TextDisabled("Трекинга головы нет. CRT-трубка в 3D гаснет —");
+        ImGui::TextDisabled("бочка на весь кадр рвёт стереопару по шву.");
+        if (c.vrIpd) {
+            ImGui::PushItemWidth(260.0f);
+            if (ImGui::SliderFloat("Расстояние между зрачками", c.vrIpd, kMinIpd,
+                                   kMaxIpd, "%.3f м"))
+                req.uiChanged = true;
+            ImGui::PopItemWidth();
+        }
+    }
 }
 
 // --- Звук -------------------------------------------------------------------

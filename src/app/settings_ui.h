@@ -25,6 +25,10 @@ struct SettingsCtx {
     // event-loop app'а — виджет только просит его, выставляя индекс.
     int* rebindCapture = nullptr;
     bool* crtEnabled = nullptr;   // трубка ([vk_renderer.h] crtEnabled)
+    // 3D-режим Side-by-Side и база стерео ([sim/camera.h]). НЕ VR: трекинга
+    // головы нет — две картинки рядом для 3D-монитора или SBS-просмотрщика.
+    bool* vrMode = nullptr;
+    float* vrIpd = nullptr;       // метры, [kMinIpd, kMaxIpd]
     bool* fullscreen = nullptr;   // применяет app (SDL_SetWindowFullscreen)
     audio::AudioConfig* audio = nullptr;  // живой конфиг микшера
 };
