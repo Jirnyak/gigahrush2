@@ -182,6 +182,7 @@ set(KTX_FEATURE_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
 set(KTX_FEATURE_WRITE       OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_DOC         OFF CACHE BOOL "" FORCE)
 set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
+set(BASISU_SUPPORT_ENCODER  OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(ktx
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.0 GIT_SHALLOW TRUE)
@@ -200,6 +201,13 @@ set(_giga_cxx_std_save ${CMAKE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD 17)
 FetchContent_MakeAvailable(ktx)
 set(CMAKE_CXX_STANDARD ${_giga_cxx_std_save})
+# И ОТДЕЛЬНО /permissive (без минуса) той же ktx: наш /permissive- — тоже
+# директорный, и basisu 2019 года строгого режима не переживает. Два фикса про
+# одну библиотеку, но про РАЗНОЕ — стандарт и режим соответствия; ни один не
+# заменяет другой.
+if(MSVC AND TARGET ktx)
+    target_compile_options(ktx PRIVATE /permissive)
+endif()
 
 # ---- System dependencies --------------------------------------------------
 # Vulkan is always a system dependency: MoltenVK via Homebrew on macOS, the
