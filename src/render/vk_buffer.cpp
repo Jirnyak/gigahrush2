@@ -3,11 +3,26 @@
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 
 namespace giga::gpu {
 
 namespace {
+
+// Таблица учёта. 64 записи с запасом: сегодня аллокаций около двух десятков,
+// и переполнение не теряет байты — сумма считается отдельно от списка, так
+// что при переполнении врёт только «крупнейшие», а итог остаётся верным.
+// Мьютекс не из осторожности вообще, а потому что текстуры грузятся не
+// обязательно на главном потоке, и порванная запись в отчёте о памяти — это
+// прибор, который врёт, то есть худший вид отсутствия прибора.
+constexpr std::size_t kMemTallyCap = 64;
+std::mutex g_memTallyMx;
+MemTallyEntry g_memTally[kMemTallyCap];
+std::size_t g_memTallyN = 0;
+VkDeviceSize g_memTallyTotal = 0;
 
 // UINT32_MAX on failure, NOT 0.
 //
@@ -103,10 +118,54 @@ bool make_buffer(const VulkanDevice& dev, VkDeviceSize size,
     VK_TRY(vkAllocateMemory(dev.device, &ai, nullptr, mem));
     VK_TRY(vkBindBufferMemory(dev.device, *buf, *mem, 0));
     if (what) log_placement(mp, type, req.size, what);
+    // what == nullptr — это ВРЕМЕННЫЙ staging, созданный и уничтоженный внутри
+    // одного вызова (см. create_device_local ниже). В первом прогоне отчёта он
+    // дал строку «безымянный буфер» на 951 МиБ и завысил резидентную сумму на
+    // гигабайт — то есть прибор врал В ТУ ЖЕ СТОРОНУ, куда шло подозрение
+    // («не влезаем в VRAM»). Такое врут только один раз.
+    mem_tally(what, req.size);
     return true;
 }
 
 } // namespace
+
+void mem_tally(const char* label, VkDeviceSize bytes) {
+    if (label == nullptr) return;  // временный staging — см. make_buffer
+    std::lock_guard<std::mutex> lk(g_memTallyMx);
+    g_memTallyTotal += bytes;
+    for (std::size_t i = 0; i < g_memTallyN; ++i) {
+        // Слияние по имени, а не отдельная строка на каждый экземпляр: слоты
+        // кадра выделяют одно и то же по два-три раза, и отчёт из двадцати
+        // одинаковых строк читается хуже, чем одна с суммой.
+        if (std::strcmp(g_memTally[i].label, label) == 0) {
+            g_memTally[i].bytes += bytes;
+            return;
+        }
+    }
+    if (g_memTallyN < kMemTallyCap) {
+        MemTallyEntry& e = g_memTally[g_memTallyN++];
+        std::snprintf(e.label, sizeof(e.label), "%s", label);
+        e.bytes = bytes;
+    }
+}
+
+std::size_t mem_tally_snapshot(MemTallyEntry* out, std::size_t cap,
+                               VkDeviceSize* totalOut) {
+    std::lock_guard<std::mutex> lk(g_memTallyMx);
+    if (totalOut) *totalOut = g_memTallyTotal;
+    // Сортируется ПОЛНАЯ таблица, и только потом отрезаются первые cap:
+    // отсортировать усечённую голову значило бы выдать за «крупнейшие» те,
+    // что просто зарегистрировались раньше.
+    MemTallyEntry tmp[kMemTallyCap];
+    for (std::size_t i = 0; i < g_memTallyN; ++i) tmp[i] = g_memTally[i];
+    std::sort(tmp, tmp + g_memTallyN,
+              [](const MemTallyEntry& a, const MemTallyEntry& b) {
+                  return a.bytes > b.bytes;
+              });
+    const std::size_t n = g_memTallyN < cap ? g_memTallyN : cap;
+    for (std::size_t i = 0; i < n; ++i) out[i] = tmp[i];
+    return n;
+}
 
 bool VulkanBuffer::create_device_local(const VulkanDevice& dev,
                                        const void* data, VkDeviceSize bytes,

@@ -1,10 +1,12 @@
 #include "render/vk_device.h"
 
+#include "render/vk_buffer.h"  // mem_tally_snapshot — наша сумма для отчёта
 #include "render/vk_common.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -244,6 +246,14 @@ bool VulkanDevice::init(SDL_Window* window, bool enableValidation) {
     std::vector<const char*> devExts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     if (device_has_ext(physical, "VK_KHR_portability_subset"))
         devExts.push_back("VK_KHR_portability_subset");
+    // Чистая диагностика, ноль обязательств: расширение не меняет ни одного
+    // пути отрисовки, оно только разрешает СПРОСИТЬ у драйвера бюджет кучи.
+    // Включается, лишь если устройство его умеет, — MoltenVK на маке не умеет,
+    // и отчёт там честно печатает размеры куч без бюджета.
+    if (device_has_ext(physical, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME)) {
+        devExts.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        memoryBudget = true;
+    }
 
     VkPhysicalDeviceFeatures feats{};
     // The renderer indexes SSBOs from GPU-resident tables (page indices, stain
@@ -431,6 +441,94 @@ void VulkanDevice::destroy() {
         vkDestroyInstance(instance, nullptr);
         instance = VK_NULL_HANDLE;
     }
+}
+
+void write_device_report(const VulkanDevice& dev, const char* when) {
+    if (dev.physical == VK_NULL_HANDLE) return;
+    const VkPhysicalDeviceProperties& p = dev.props;
+    const char* kind = "неизвестно";
+    switch (p.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:   kind = "дискретная"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: kind = "встроенная"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:    kind = "виртуальная"; break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:            kind = "ЦП (software)"; break;
+        default: break;
+    }
+    std::fprintf(stderr, "[report] ===== машина (%s) =====\n", when);
+    // driverVersion кодируется КАЖДЫМ вендором по-своему (у NVIDIA это не
+    // VK_VERSION_*), поэтому рядом с разобранным печатается сырое: разобранное
+    // читается глазом, сырое — сравнивается с тем, что показывает панель
+    // драйвера, и именно оно не врёт.
+    std::fprintf(stderr,
+                 "[report] GPU: %s | тип %s | api %u.%u.%u | драйвер raw "
+                 "0x%08X | vendor 0x%04X\n",
+                 p.deviceName, kind, VK_VERSION_MAJOR(p.apiVersion),
+                 VK_VERSION_MINOR(p.apiVersion), VK_VERSION_PATCH(p.apiVersion),
+                 static_cast<unsigned>(p.driverVersion),
+                 static_cast<unsigned>(p.vendorID));
+
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    budget.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 mp2{};
+    mp2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    if (dev.memoryBudget) mp2.pNext = &budget;
+    vkGetPhysicalDeviceMemoryProperties2(dev.physical, &mp2);
+    const VkPhysicalDeviceMemoryProperties& mp = mp2.memoryProperties;
+
+    constexpr double kMiB = 1024.0 * 1024.0;
+    VkDeviceSize localHeapBytes = 0, localBudgetBytes = 0;
+    for (std::uint32_t h = 0; h < mp.memoryHeapCount; ++h) {
+        const bool local =
+            (mp.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+        if (local && mp.memoryHeaps[h].size > localHeapBytes) {
+            localHeapBytes = mp.memoryHeaps[h].size;
+            localBudgetBytes = dev.memoryBudget ? budget.heapBudget[h] : 0;
+        }
+        if (dev.memoryBudget)
+            std::fprintf(stderr,
+                         "[report] куча %u: %.0f МиБ%s | бюджет %.0f МиБ, "
+                         "занято всеми %.0f МиБ\n",
+                         h, static_cast<double>(mp.memoryHeaps[h].size) / kMiB,
+                         local ? " DEVICE_LOCAL" : "",
+                         static_cast<double>(budget.heapBudget[h]) / kMiB,
+                         static_cast<double>(budget.heapUsage[h]) / kMiB);
+        else
+            std::fprintf(stderr, "[report] куча %u: %.0f МиБ%s\n", h,
+                         static_cast<double>(mp.memoryHeaps[h].size) / kMiB,
+                         local ? " DEVICE_LOCAL" : "");
+    }
+    if (!dev.memoryBudget)
+        std::fprintf(stderr,
+                     "[report] VK_EXT_memory_budget нет — взгляда драйвера на "
+                     "занятость кучи не будет, только её полный размер\n");
+
+    MemTallyEntry top[16];
+    VkDeviceSize total = 0;
+    const std::size_t n = mem_tally_snapshot(top, 16, &total);
+    std::fprintf(stderr,
+                 "[report] наши аллокации: %.1f МиБ (сумма всех "
+                 "vkAllocateMemory), крупнейшие:\n",
+                 static_cast<double>(total) / kMiB);
+    for (std::size_t i = 0; i < n; ++i)
+        std::fprintf(stderr, "[report]   %8.1f МиБ  %s\n",
+                     static_cast<double>(top[i].bytes) / kMiB, top[i].label);
+
+    // Вывод, ради которого весь блок. Порог 0.8 — не из спеки, а из того, как
+    // ведут себя драйверы: сверх примерно четырёх пятых бюджета аллокации
+    // начинают переезжать в системную память, и кадр падает в разы без единой
+    // ошибки Vulkan. Печатается ТОЛЬКО когда сработало: ровная строка каждый
+    // запуск перестала бы читаться на второй день.
+    const VkDeviceSize limit = localBudgetBytes ? localBudgetBytes : localHeapBytes;
+    if (limit && total > (limit / 5) * 4)
+        std::fprintf(stderr,
+                     "[report] ВНИМАНИЕ: просим %.0f МиБ при пределе %.0f МиБ "
+                     "(%.0f%%) — дискретная карта начнёт возить это через "
+                     "PCIe, и кадр упадёт в разы без единой ошибки Vulkan\n",
+                     static_cast<double>(total) / kMiB,
+                     static_cast<double>(limit) / kMiB,
+                     100.0 * static_cast<double>(total)
+                         / static_cast<double>(limit));
 }
 
 } // namespace giga::gpu

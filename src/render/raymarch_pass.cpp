@@ -1,5 +1,7 @@
 #include "render/raymarch_pass.h"
 
+#include "render/vk_buffer.h"  // mem_tally — учёт видеопамяти образов
+
 #include <cstdlib>
 #include <cstring>
 
@@ -595,6 +597,7 @@ bool RaymarchPass::create_half_targets(VkExtent2D he) {
             ai.allocationSize = req.size;
             ai.memoryTypeIndex = type;
             VK_TRY(vkAllocateMemory(dev_->device, &ai, nullptr, &halfMem_[f][i]));
+            mem_tally("полурезный свет (raymarch half)", req.size);
             VK_TRY(vkBindImageMemory(dev_->device, halfImg_[f][i],
                                      halfMem_[f][i], 0));
             VkImageViewCreateInfo vi{};

@@ -1,5 +1,7 @@
 #include "render/vk_texture.h"
 
+#include "render/vk_buffer.h"  // mem_tally — учёт видеопамяти образов
+
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
@@ -314,6 +316,7 @@ bool VulkanTextureArray::create_image() {
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = type;
     VK_TRY(vkAllocateMemory(dev_->device, &ai, nullptr, &memory_));
+    mem_tally("текстуры материалов (KTX2)", req.size);
     VK_TRY(vkBindImageMemory(dev_->device, image_, memory_, 0));
     deviceBytes_ = req.size;
 
@@ -443,6 +446,7 @@ bool VulkanTextureArray::create_staging() {
     ai.allocationSize = req.size;
     ai.memoryTypeIndex = type;
     VK_TRY(vkAllocateMemory(dev_->device, &ai, nullptr, &stagingMem_));
+    mem_tally("staging текстур", req.size);
     VK_TRY(vkBindBufferMemory(dev_->device, staging_, stagingMem_, 0));
     VK_TRY(vkMapMemory(dev_->device, stagingMem_, 0, stagingBytes_, 0,
                        &stagingMap_));

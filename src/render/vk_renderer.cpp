@@ -1,5 +1,7 @@
 #include "render/vk_renderer.h"
 
+#include "render/vk_buffer.h"  // mem_tally — учёт видеопамяти образов
+
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "render/vk_swapchain.h"
@@ -220,6 +222,7 @@ bool VulkanRenderer::create_hdr_target() {
     ai.memoryTypeIndex = find_mem_type(*dev, req.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     VK_TRY(vkAllocateMemory(dev->device, &ai, nullptr, &hdrMemory));
+    mem_tally("кадр HDR (swapchain-sized)", req.size);
     VK_TRY(vkBindImageMemory(dev->device, hdrImage, hdrMemory, 0));
 
     VkImageViewCreateInfo vi{};
@@ -275,6 +278,7 @@ bool VulkanRenderer::create_depth() {
     ai.memoryTypeIndex = find_mem_type(*dev, req.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     VK_TRY(vkAllocateMemory(dev->device, &ai, nullptr, &depthMemory));
+    mem_tally("буфер глубины", req.size);
     VK_TRY(vkBindImageMemory(dev->device, depthImage, depthMemory, 0));
 
     VkImageViewCreateInfo vi{};
