@@ -127,6 +127,10 @@ jobs:
           Copy-Item build-win/*.dll $dist -ErrorAction SilentlyContinue
           Copy-Item -Recurse build-win/shaders "$dist/shaders"
           Copy-Item -Recurse data "$dist/data"
+          # Точка входа для игрока: profile.bat + инструкция. Лежат в репозитории
+          # (tools/win/dist), а не сочиняются здесь — файл, который увидит
+          # тестирующий, должен проходить ревью как код, а не как строка YAML.
+          Copy-Item tools/win/dist/* $dist
           Get-ChildItem -Recurse $dist | Measure-Object -Property Length -Sum |
             ForEach-Object { "packaged {0:N1} MiB" -f ($_.Sum / 1MB) } | Out-Host
 

@@ -593,7 +593,11 @@ static const char* const kProfName[kProfCount] = {
     "wander", "acoustics", "combat",    "physics", "rigid",
     "impact", "needs",     "focus",     "witness", "nav",
     "big_judge"};
-static const bool g_profOn = [] {
+// НЕ const: GIGA_PROF=1 — путь разработчика, а флаг --prof ниже включает
+// то же самое БЕЗ переменной окружения. Игроку, которого просят снять
+// профиль, нельзя выдавать инструкцию «выставь переменную среды и
+// перенаправь stderr» — он пришлёт пустой файл, и виноват будет прибор.
+static bool g_profOn = [] {
     const char* e = std::getenv("GIGA_PROF");
     return e != nullptr && e[0] != '\0' && e[0] != '0';
 }();
@@ -2247,6 +2251,14 @@ int main(int argc, char** argv) {
     // the GPU voxel mirror back and memcmp it against the CPU grid. Diagnostic
     // (queue-idles); the proof harness for the raymarch migration's stage 1.
     bool mirrorVerify = false;
+    // --prof [ФАЙЛ]: снять профиль в текстовый файл. Включает per-system
+    // разбор кадра ([prof] выше) и уводит ВЕСЬ stderr в файл — там уже
+    // лежат и [report] о машине, и gpu-ms по пассам, и [hitch], и
+    // предупреждения зеркала. Под виндой это единственный способ вообще
+    // что-то получить: у запущенного двойным кликом exe консоли нет и
+    // stderr уходит в никуда.
+    bool profWanted = false;
+    const char* profPath = nullptr;
     std::uint32_t mirrorFrame = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -2267,6 +2279,13 @@ int main(int argc, char** argv) {
             cliIpdSet = true;
         }
         else if (a == "--mirror-verify") mirrorVerify = true;
+        else if (a == "--prof") {
+            profWanted = true;
+            // Путь НЕОБЯЗАТЕЛЕН, и следующий аргумент берётся только
+            // если он не похож на флаг: иначе `--prof --no-crt` съел бы
+            // соседний флаг и писал профиль в файл с именем "--no-crt".
+            if (i + 1 < argc && argv[i + 1][0] != '-') profPath = argv[++i];
+        }
         else if (a == "--pos" && i + 3 < argc) {
             customPos.x = static_cast<float>(std::atof(argv[++i]));
             customPos.y = static_cast<float>(std::atof(argv[++i]));
@@ -2277,6 +2296,37 @@ int main(int argc, char** argv) {
         else if (a == "--pitch" && i + 1 < argc) { customPitch = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
         else if (a == "--orbit") { shotOrbit = true; }
         else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+    }
+
+    // --prof: ВЕСЬ stderr уезжает в файл, и это сделано перенаправлением, а не
+    // вторым каналом вывода. Причина простая: диагностика этого движка — тысяча
+    // с лишним std::fprintf(stderr, ...) по всему дереву, и любой «аккуратный»
+    // логгер означал бы переписать их все, то есть получить профиль, в котором
+    // не хватает ровно той строки, которая нужна. Перенаправление берёт ВСЁ
+    // разом: [report] о машине, [prof] по системам, gpu-ms по пассам, [hitch],
+    // [carve], предупреждения зеркала.
+    //
+    // Буферизация СТРОЧНАЯ, не полная: профиль снимают, когда игра тормозит, а
+    // такие сессии кончаются закрытием окна или Диспетчером задач. Полный
+    // буфер потерял бы последние килобайты — то есть ровно то место, ради
+    // которого файл и открывали.
+    if (profWanted) {
+        const char* path = profPath ? profPath : "gigahrush2_prof.txt";
+        std::printf("[prof] профиль пишется в %s\n", path);
+        std::fflush(stdout);
+        if (std::freopen(path, "w", stderr) == nullptr) {
+            std::printf("[prof] НЕ УДАЛОСЬ открыть %s — профиль остаётся в stderr\n",
+                        path);
+        } else {
+            std::setvbuf(stderr, nullptr, _IOLBF, 0);
+            g_profOn = true;
+            // Отметка сборки печаталась ДО перенаправления и в файл не попала.
+            // Повторяется здесь, потому что первый вопрос к любому присланному
+            // профилю — «а тот ли это билд», и он должен решаться первой
+            // строкой файла, а не перепиской.
+            std::fprintf(stderr, "[build] gigahrush2 собран %s %s\n", __DATE__,
+                         __TIME__);
+        }
     }
 
     // SAY WHICH BINARY THIS IS, every launch. An unoptimized tree is ~10x
@@ -2805,6 +2855,11 @@ int main(int argc, char** argv) {
     // engages look while held.
     input.set_mouselook(true);
     SDL_SetWindowRelativeMouseMode(window, true);
+
+    // ОТЧЁТ О МАШИНЕ — здесь, а не сразу после device.init(): выше поднялись
+    // все пассы, зеркало и текстуры, то есть сумма аллокаций наконец полная.
+    // Ниже по коду её меняет только карв.
+    gpu::write_device_report(device, "после подъёма пассов");
 
     bool running = true;
     float simAccum = 0.0f;
@@ -10097,6 +10152,11 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // Второй отчёт — ДО teardown, пока устройство живо. Разница с первым и
+    // есть ответ на вопрос «выросло ли за сессию»: карв рождает страницы, а
+    // они живут в том самом пуле, который упирается в видеопамять.
+    gpu::write_device_report(device, "на выходе");
 
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();
