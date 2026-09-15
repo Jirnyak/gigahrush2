@@ -79,6 +79,25 @@ struct VulkanBuffer {
                              VkBufferUsageFlags usage,
                              const char* label = "host-visible buffer");
 
+    // То же, но для буфера, который ЧИТАЕТ процессор: дополнительно просится
+    // HOST_CACHED, и это не микрооптимизация.
+    //
+    // HOST_COHERENT без HOST_CACHED на дискретной карте — память с
+    // объединением записи (write-combining): писать в неё процессору быстро,
+    // ЧИТАТЬ — катастрофа, каждое чтение идёт мимо кэша. Обратный шов
+    // мир-автомата читает до 8 МиБ страниц за кадр, и на винде это одна из
+    // двух половин замера «cpu sim 100 мс» ([problems.md] виндовый профиль
+    // 2026-09-14). На едином поле Apple разницы нет — там все типы памяти и
+    // так кэшируемые, поэтому дефект был невидим с мака.
+    //
+    // HOST_CACHED просится ВМЕСТЕ с HOST_COHERENT: тогда не нужны
+    // vkInvalidateMappedMemoryRanges, и дисциплина вызывающего не меняется.
+    // Если устройство такой пары не предлагает — тихий откат к обычному
+    // host-visible, потому что прибор не должен ронять игру на чужой карте.
+    bool create_host_readback(const VulkanDevice& dev, VkDeviceSize bytes,
+                              VkBufferUsageFlags usage,
+                              const char* label = "host-readback buffer");
+
     void destroy(const VulkanDevice& dev);
 };
 

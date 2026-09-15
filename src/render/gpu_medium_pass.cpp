@@ -162,6 +162,9 @@ void GpuMediumPass::destroy() noexcept {
     cellAct_.destroy(*dev_);
     shadowBits_.destroy(*dev_);
     for (auto& b : appendBuf_) b.destroy(*dev_);
+    pageDev_.destroy(*dev_);
+    maskDev_.destroy(*dev_);
+    listDev_.destroy(*dev_);
     pageBack_.destroy(*dev_);
     maskBack_.destroy(*dev_);
     listBack_.destroy(*dev_);
@@ -203,21 +206,39 @@ bool GpuMediumPass::create_buffers() noexcept {
                 *dev_, (1 + kAppendCap) * sizeof(std::uint32_t), st,
                 "medium-append"))
             return false;
-    if (!pageBack_.create_host_visible(
-            *dev_,
-            static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kPageBytesBack,
-            st, "medium-page-back"))
+    // ДВА ЭТАЖА ШВА (см. gpu_medium_pass.h): *Dev_ — цель pack-пасса, живёт в
+    // VRAM; *Back_ — приёмник копии, живёт на хосте и КЭШИРУЕМ, потому что его
+    // читает процессор. Размеры попарно равны — копия идёт регион в регион.
+    const VkDeviceSize pageBytes =
+        static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kPageBytesBack;
+    const VkDeviceSize maskBytes =
+        static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kMaskBytesBack;
+    if (!pageDev_.create_device_local_empty(
+            *dev_, pageBytes, st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            "medium-page-dev"))
         return false;
-    if (!maskBack_.create_host_visible(
-            *dev_,
-            static_cast<VkDeviceSize>(kRbRegions) * kRbSlotCap * kMaskBytesBack,
-            st, "medium-mask-back"))
+    if (!maskDev_.create_device_local_empty(
+            *dev_, maskBytes, st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            "medium-mask-dev"))
         return false;
-    if (!listBack_.create_host_visible(
-            *dev_,
-            static_cast<VkDeviceSize>(kRbRegions) * (kListHeader + kRbSlotCap) *
-                sizeof(std::uint32_t),
-            st, "medium-list-back"))
+    if (!pageBack_.create_host_readback(*dev_, pageBytes,
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        "medium-page-back"))
+        return false;
+    if (!maskBack_.create_host_readback(*dev_, maskBytes,
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        "medium-mask-back"))
+        return false;
+    const VkDeviceSize listBytes =
+        static_cast<VkDeviceSize>(kRbRegions) * (kListHeader + kRbSlotCap) *
+        sizeof(std::uint32_t);
+    if (!listDev_.create_device_local_empty(
+            *dev_, listBytes, st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            "medium-list-dev"))
+        return false;
+    if (!listBack_.create_host_readback(*dev_, listBytes,
+                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        "medium-list-back"))
         return false;
     return true;
 }
@@ -269,9 +290,11 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[6] = {cellAct_.buffer, 0, VK_WHOLE_SIZE};
         bufs[7] = {counters_.buffer, 0, VK_WHOLE_SIZE};
         bufs[8] = {appendBuf_[f].buffer, 0, VK_WHOLE_SIZE};
-        bufs[9] = {pageBack_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[10] = {maskBack_.buffer, 0, VK_WHOLE_SIZE};
-        bufs[11] = {listBack_.buffer, 0, VK_WHOLE_SIZE};
+        // Шейдеру видны ТОЛЬКО VRAM-этажи: хостовые ниже он больше не знает
+        // вовсе, туда их привозит vkCmdCopyBuffer в конце record_substeps.
+        bufs[9] = {pageDev_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[10] = {maskDev_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[11] = {listDev_.buffer, 0, VK_WHOLE_SIZE};
         bufs[12] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[kBindings]{};
         for (std::uint32_t b = 0; b < kBindings; ++b) {
@@ -759,16 +782,54 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     vkCmdDispatchIndirect(cmd, counters_.buffer, 0);
 
     // Выход: пул/классы/маски читают фрагменты и компьюты; регионы шва —
-    // хост (фенсовая дисциплина решает готовность).
+    // хост (фенсовая дисциплина решает готовность). TRANSFER здесь — потому
+    // что регион пака сейчас же поедет копией на хостовый этаж.
     VkMemoryBarrier outBar{};
     outBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     outBar.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    outBar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT;
+    outBar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_HOST_READ_BIT |
+                           VK_ACCESS_TRANSFER_READ_BIT;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                             VK_PIPELINE_STAGE_TRANSFER_BIT |
                              VK_PIPELINE_STAGE_HOST_BIT,
                          0, 1, &outBar, 0, nullptr, 0, nullptr);
+
+    // ПЕРЕВОЗ РЕГИОНА НА ХОСТ. Копируется РОВНО регион этого кадра, а не весь
+    // буфер: пак писал только его, остальные два региона кольца в это время
+    // читает процессор — трогать их значило бы гонку с самим собой.
+    //
+    // Три копии вместо тысяч разрозненных записей шейдера через шину. Цена на
+    // дискретной карте — одна DMA-пачка (8.5 МиБ при полном окне, ~1 мс на
+    // PCIe 3.0); на едином поле Apple это копия памяти в память на полной
+    // пропускной способности, то есть десятки микросекунд. Замер владельца,
+    // который это лечит: simphys 53.8 мс при рисовании мира в 1.2 мс.
+    const VkDeviceSize pageRegion =
+        static_cast<VkDeviceSize>(kRbSlotCap) * kPageBytesBack;
+    const VkDeviceSize maskRegion =
+        static_cast<VkDeviceSize>(kRbSlotCap) * kMaskBytesBack;
+    const VkDeviceSize listRegion =
+        static_cast<VkDeviceSize>(kListHeader + kRbSlotCap) *
+        sizeof(std::uint32_t);
+    const VkDeviceSize off = static_cast<VkDeviceSize>(region);
+    const VkBufferCopy pageCopy{off * pageRegion, off * pageRegion, pageRegion};
+    const VkBufferCopy maskCopy{off * maskRegion, off * maskRegion, maskRegion};
+    const VkBufferCopy listCopy{off * listRegion, off * listRegion, listRegion};
+    vkCmdCopyBuffer(cmd, pageDev_.buffer, pageBack_.buffer, 1, &pageCopy);
+    vkCmdCopyBuffer(cmd, maskDev_.buffer, maskBack_.buffer, 1, &maskCopy);
+    vkCmdCopyBuffer(cmd, listDev_.buffer, listBack_.buffer, 1, &listCopy);
+
+    // Доставка копии хосту. Без этого барьера чтение из .mapped — гонка,
+    // которую фенс НЕ закрывает: фенс говорит «команды исполнены», а видимость
+    // записи TRANSFER для хоста обязана быть объявлена отдельно.
+    VkMemoryBarrier hostBar{};
+    hostBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    hostBar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    hostBar.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hostBar, 0, nullptr,
+                         0, nullptr);
 }
 
 } // namespace giga::gpu

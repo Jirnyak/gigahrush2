@@ -272,6 +272,43 @@ bool VulkanBuffer::create_host_visible(const VulkanDevice& dev,
     return true;
 }
 
+bool VulkanBuffer::create_host_readback(const VulkanDevice& dev,
+                                        VkDeviceSize bytes,
+                                        VkBufferUsageFlags usage,
+                                        const char* label) {
+    size = bytes;
+    // Наличие пары проверяется ЗАРАНЕЕ, а не попыткой создать буфер: make_buffer
+    // на неудачном подборе типа печатает громкую строку об ошибке, и на карте
+    // без HOST_CACHED штатный откат выглядел бы в логе как поломка.
+    VkPhysicalDeviceMemoryProperties mp{};
+    vkGetPhysicalDeviceMemoryProperties(dev.physical, &mp);
+    constexpr VkMemoryPropertyFlags kCached =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+        | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    bool haveCached = false;
+    for (std::uint32_t i = 0; i < mp.memoryTypeCount; ++i)
+        if ((mp.memoryTypes[i].propertyFlags & kCached) == kCached)
+            haveCached = true;
+    const VkMemoryPropertyFlags want =
+        haveCached ? kCached
+                   : (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                      | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!haveCached)
+        std::fprintf(stderr,
+                     "[vk] %s: HOST_CACHED недоступен, чтение с хоста пойдёт "
+                     "мимо кэша\n",
+                     label);
+    if (!make_buffer(dev, bytes, usage, want, &buffer, &memory, label))
+        return false;
+    if (vkMapMemory(dev.device, memory, 0, bytes, 0, &mapped) != VK_SUCCESS) {
+        std::fprintf(stderr, "[vk] vkMapMemory failed for %s (%.2f MiB)\n", label,
+                     static_cast<double>(bytes) / (1024.0 * 1024.0));
+        return false;
+    }
+    return true;
+}
+
 void VulkanBuffer::destroy(const VulkanDevice& dev) {
     if (mapped) {
         vkUnmapMemory(dev.device, memory);
