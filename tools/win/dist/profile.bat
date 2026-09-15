@@ -20,6 +20,14 @@ echo.
 gigahrush2.exe --prof gigahrush2_prof.txt
 
 echo.
-echo Profil zapisan: %~dp0gigahrush2_prof.txt
+rem Razmer pechataetsya ryadom s putyom NAMERENNO: pervyy zapusk u vladel'ca dal
+rem PUSTOY fayl (buferizaciya stderr, pochineno v main.cpp), i po otkryvshemusya
+rem Bloknotu eto vyglyadelo kak "profil' ne rabotaet voobshe". Chislo bayt
+rem otvechaet na etot vopros do togo, kak ego zadadut.
+for %%F in ("%~dp0gigahrush2_prof.txt") do echo Profil: %%~zF bayt -^> %%~fF
 echo Prishlite etot fayl.
+
+rem ZAKRYVAT' NADO OKNO IGRY, a ne etu konsol': zakrytie konsoli ubivaet
+rem docherniy process. S _IONBF dannye uzhe na diske, no posledniy otchyot
+rem "na vyhode" pri takom ubiystve vsyo ravno ne napechataetsya.
 start "" notepad "%~dp0gigahrush2_prof.txt"
