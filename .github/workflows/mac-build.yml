@@ -50,7 +50,7 @@ jobs:
           cp -r data "$dist/data"
           tar -czvf dist/gigahrush2-macos.tar.gz -C dist gigahrush2-macos
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gigahrush2-macos
           path: dist/gigahrush2-macos.tar.gz
