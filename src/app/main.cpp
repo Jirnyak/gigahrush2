@@ -4643,19 +4643,38 @@ int main(int argc, char** argv) {
                 // смену слоя, не на тик.
                 {
                     World& mw = stack.layer(activeLayer);
-                    const std::uint32_t* lvl = medium_level_data(mw);
+                    // ВОПРОС БУДИЛЬНИКА — ПОДВИЖНОСТЬ, НЕ ФАЗА. Прежде здесь
+                    // стоял medium_level != 0, а он считается по фазе
+                    // (Liquid|Gas), тогда как автомат двигает по СТРОКЕ
+                    // материала (mobile(): flow>0 || diffusion>0). Все 16
+                    // строк rubble подвижны при фазе Solid — висящая куча из
+                    // сейва не просыпалась НИЧЕМ (корень В2). Агрегат
+                    // подвижности печёт обход рождения тем же разбором, что
+                    // зовёт шов ([world/medium.h] medium_digest_*).
+                    const std::uint8_t* mob = medium_mobile_data(mw);
                     static std::vector<std::uint32_t> wet;
                     wet.clear();
-                    if (lvl)
+                    const auto tAlarmScan = std::chrono::steady_clock::now();
+                    if (mob)
                         for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
-                            if (lvl[ci] != 0u) wet.push_back(ci);
+                            if (mob[ci] != 0u) wet.push_back(ci);
+                    const double alarmScanMs =
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - tAlarmScan)
+                            .count();
                     if (!wet.empty()) {
+                        const auto tWake = std::chrono::steady_clock::now();
                         mediumPass.wake_cells(wet.data(), wet.size(), mw,
                                               voxelMirror);
+                        const double wakeMs =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - tWake)
+                                .count();
                         std::fprintf(stderr,
                                      "[medium] floor alarm: %zu cells with "
-                                     "medium woken on layer switch\n",
-                                     wet.size());
+                                     "medium woken on layer switch "
+                                     "(скан %.1f ms, wake %.1f ms)\n",
+                                     wet.size(), alarmScanMs, wakeMs);
                     }
                     // ВХОДНАЯ РАЗВЁРТКА СУДЬИ (S20.5): единственный момент,
                     // когда судья бегает по среде. Автомат двигает только
@@ -4668,7 +4687,16 @@ int main(int argc, char** argv) {
                     // подвижной материей и их соседей на активации этажа.
                     {
                         static std::vector<std::uint32_t> mobileCells;
+                        const auto tJudge = std::chrono::steady_clock::now();
                         collect_mobile_support_cells(mw, mobileCells);
+                        const double judgeCollectMs =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - tJudge)
+                                .count();
+                        std::fprintf(stderr,
+                                     "[judge] collect_mobile_support_cells: "
+                                     "%zu клеток, %.1f ms\n",
+                                     mobileCells.size(), judgeCollectMs);
                         if (!mobileCells.empty()) {
                             static CarveScratch judgeScratch;
                             static CarveResult judgeResult;

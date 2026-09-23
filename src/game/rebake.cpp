@@ -146,14 +146,26 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // parallel_for). Двери к этому моменту все открыты (door_build зовётся до
     // begin_floor_nav и оставляет Open), так что премиса all-open впекается в
     // оракулы по построению — и patch_carved_cells её дальше хранит.
+    const auto tClear = std::chrono::steady_clock::now();
     navClear_.build(grid);
+    const double clearMs = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - tClear)
+                               .count();
     // Свету битсета мало — его лучи субвоксельные (S2): Fresh печёт прямо с
     // живой сетки (мы на главном потоке); фоновые циклы читают ТЕНЬ —
     // резидентную копию, которую sync_shadow дальше правит O(1) на карв
     // (59.21: копия мира на каждый цикл мертва). Единственная полная копия —
     // здесь, на входе этажа, где кадр и так платит генерацию/загрузку.
     liveGrid_ = &grid;
+    const auto tShadow = std::chrono::steady_clock::now();
     shadowGrid_ = std::make_unique<MacroGrid>(grid);
+    const double shadowMs = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - tShadow)
+                                .count();
+    // ПРИБОР ВХОДА: два полных обхода объёма подряд — клиренс и копия тени.
+    std::fprintf(stderr,
+                 "[entry] clearance build %.1f ms | shadow grid copy %.1f ms\n",
+                 clearMs, shadowMs);
 
     // Секция rooms УМЕРЛА (rooms-object F): комнаты — раскраска roomAt,
     // штампуется rooms_declare на входе; flow-полей по виду больше нет.

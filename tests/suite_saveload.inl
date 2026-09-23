@@ -44,7 +44,11 @@
 #include "game/rpg.h"     // fresh_rpg, RpgStats (SAVRPG pin)
 #include "game/combat.h"  // PlayerRanged (SAVMAG pin)
 #include "sim/physics.h"
+#include "world/destruct.h"     // materialize_sub_page, set_sub_material, kSubMaterialName
+#include "world/floor_awaken.h" // floor_awaken — обход рождения этажа (S16.9)
+#include "world/materials.h"    // kMatRubble, kMatConcrete, kMatWater
 #include "world/level_stack.h"
+#include "world/medium.h"       // medium_mobile_data — подвижность по СТРОКЕ
 #include "world/world.h"
 
 namespace saveload_test {
@@ -640,10 +644,13 @@ void floor_file_round_trips() {
     // The painted coat survived at sub-voxel resolution.
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 0, 3, 3) == giga::kMatPlaster);
     CHECK(giga::sub_material_at(twin, 10, 10, 5, 1, 3, 3) == giga::kMatConcrete);
-    // ЭТАП «ОЖИВЛЕНИЕ СРЕД» (Автомат-2, 2026-09-02): агрегат medium_level
-    // не в снапшоте — floor_file_read обязан пересчитать его отдельным
-    // этапом (иначе будильник этажа читает нули и стоячая вода спит
-    // мёртвым сном). Страничная лужа, однородная клетка, сухая клетка.
+    // АГРЕГАТЫ СРЕД — не в снапшоте, они ВЫВОД. Пересчитывает их обход
+    // рождения этажа ([world/floor_awaken.h]), а не сам floor_file_read:
+    // с 2026-09-23 это ОДИН проход на обе ветки (прежде restore считал сам, а
+    // generate — своими писателями, и на этом шве терялся закон). Здесь его
+    // зовём руками, потому что тест читает файл в обход build_world_half.
+    giga::floor_awaken(twin);
+    // Страничная лужа, однородная клетка, сухая клетка.
     CHECK(giga::medium_level_at(twin, giga::macro_index(11, 10, 5)) == 4u);
     CHECK(giga::medium_level_at(twin, giga::macro_index(60, 60, 5)) == 512u);
     CHECK(giga::medium_level_at(twin, giga::macro_index(10, 10, 5)) == 0u);
@@ -1943,9 +1950,70 @@ void candidate_slot_recycled() {
     }
 }
 
+// ОБХОД РОЖДЕНИЯ ЭТАЖА — закон CANON S16.9 и вопрос будильника.
+//
+// Пинит ровно то, чего до 2026-09-23 не пинило НИЧТО:
+//   1) подвижность спрашивается по СТРОКЕ материала, а не по фазе — монолит
+//      рыхлого (flow 1.0, фаза Solid) обязан числиться подвижным. Прежний
+//      будильник читал medium_level (фазовый) и такую клетку не видел вовсе:
+//      висящая куча из сейва не просыпалась ничем;
+//   2) однородная страница схлопывается в тип — инвариант «страница
+//      существует ⟺ клетка неоднородна». Страница чистого воздуха, рождённая
+//      фронтиром без изменения содержимого, уезжала в файл этажа навсегда
+//      (604 099 таких в живом сейве владельца, 39% всех страниц);
+//   3) неоднородная страница НЕ трогается, и агрегат уровня считается по фазе
+//      как раньше — схлопывание не смеет терять атомы.
+static void awaken_is_the_one_law() {
+    giga::World w;
+
+    // A: страница ЧИСТОГО ВОЗДУХА без единого изменения содержимого — ровно
+    // то, что делает фронтир, раскрывая округу впереди материи.
+    const std::size_t air = giga::macro_index(20, 20, 20);
+    CHECK(giga::materialize_sub_page(w, air) != nullptr);
+    // B: монолит рыхлого — полная маска, тип подвижной строки, страницы нет.
+    giga::MacroGrid& g = w.grid();
+    g.fill_cell(30, 20, 20, giga::kMatRubble);
+    const std::size_t rub = giga::macro_index(30, 20, 20);
+    // C: лужа в 4 кванта — страница РАЗНОРОДНАЯ, её трогать нельзя.
+    const std::size_t pool = giga::macro_index(40, 20, 20);
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(w, 40, 20, 20, sx, 0, 0, giga::kMatWater);
+    // D: бетон — неподвижен по построению (flow 0, diffusion 0).
+    g.fill_cell(50, 20, 20, giga::kMatConcrete);
+    const std::size_t rock = giga::macro_index(50, 20, 20);
+
+    giga::SubField<giga::CellType>& mats =
+        w.subfields().get_or_create<giga::CellType>(giga::kSubMaterialName);
+    CHECK(mats.paged(air));  // до обхода страница-призрак ЖИВА
+    CHECK(mats.paged(pool));
+
+    const giga::FloorAwakenStats st = giga::floor_awaken(w);
+
+    // (2) Призрак схлопнут, разнородная лужа — нет.
+    CHECK(!mats.paged(air));
+    CHECK(mats.paged(pool));
+    CHECK(st.settled >= 1);
+    // (1) Подвижность — по строке: рыхлое и вода да, бетон и воздух нет.
+    const std::uint8_t* mob = giga::medium_mobile_data(w);
+    CHECK(mob != nullptr);
+    CHECK(mob[rub] != 0u);   // <- упадёт, если спрашивать фазу
+    CHECK(mob[pool] != 0u);
+    CHECK(mob[rock] == 0u);
+    CHECK(mob[air] == 0u);
+    // (3) Уровень — по фазе, как и был: рыхлое не жидкость.
+    CHECK(giga::medium_level_at(w, pool) == 4u);
+    CHECK(giga::medium_level_at(w, rub) == 0u);
+    CHECK(giga::medium_level_at(w, air) == 0u);
+    // Схлопывание не потеряло материю: клетка-призрак читается воздухом.
+    CHECK(giga::sub_material_at(w, 20, 20, 20, 3, 3, 3) == giga::kCellAir);
+    // Монолит рыхлого читается рыхлым и БЕЗ страницы (он однороден типом).
+    CHECK(giga::sub_material_at(w, 30, 20, 20, 3, 3, 3) == giga::kMatRubble);
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
+    saveload_test::awaken_is_the_one_law();
     saveload_test::wire_layout();
     saveload_test::round_trip();
     saveload_test::macro_world_round_trips();

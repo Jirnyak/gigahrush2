@@ -136,6 +136,9 @@ public:
         rbWindowWarned_ = false;
         wakeCapWarned_ = false;
         actNeedsClear_ = true;
+        frontierMs_ = 0.0;
+        frontierPages_ = 0;
+        frontierProbes_ = 0;
         std::fill(frontierDone_.begin(), frontierDone_.end(), 0ull);
         lastCount_ = 0;
         lastQuanta_ = 0;
@@ -227,6 +230,12 @@ private:
     static constexpr std::uint32_t kAppendCap = 8192u;
     VulkanBuffer appendBuf_[kMaxFramesInFlight];
     std::vector<std::uint32_t> appendPending_;
+    // ПРИБОР ФРОНТИРА (перф-заход 2026-09-23): цена раскрытия округи за этаж
+    // — мс и страниц. Печатается, когда очередь будильника допита: «сколько
+    // стоил транзиент входа» одним числом, а не догадкой. Сброс — clear_live().
+    double frontierMs_ = 0.0;
+    std::uint64_t frontierPages_ = 0;
+    std::uint64_t frontierProbes_ = 0;
     // Очередь пробуждений с переносом + битсет «уже в очереди» (256 КиБ).
     std::vector<std::uint32_t> wakeQueue_;
     std::vector<std::uint64_t> wakeBits_ =

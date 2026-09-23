@@ -99,6 +99,7 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                                   const std::uint32_t* cells, std::size_t n) {
     SubField<CellType>& f =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
+    const auto tFrontier = std::chrono::steady_clock::now();
     std::vector<std::uint32_t> dirty;
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t lc = cells[i];
@@ -125,8 +126,14 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                     materialize_sub_page(world, ci2);
                     dirty.push_back(ci2);
                 }
+        frontierProbes_ += static_cast<std::uint64_t>(2 * kFrontierRadius + 1) *
+                           (2 * kFrontierRadius + 1) * (2 * kFrontierRadius + 1);
     }
     if (!dirty.empty()) mirror.mark_dirty(dirty.data(), dirty.size());
+    frontierPages_ += dirty.size();
+    frontierMs_ += std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - tFrontier)
+                       .count();
 }
 
 bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
@@ -413,6 +420,15 @@ void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
     open_frontier(world, mirror, wakeQueue_.data(), take);
     if (take == wakeQueue_.size()) {
         wakeQueue_.clear();
+        // ПРИБОР: очередь допита — печатаем, во что обошёлся транзиент входа
+        // целиком. Молчим, если фронтир ничего не раскрывал (ровный кадр).
+        if (frontierPages_ != 0)
+            std::fprintf(stderr,
+                         "[medium] фронтир за этаж: %.1f ms, %llu страниц "
+                         "раскрыто, %llu проб\n",
+                         frontierMs_,
+                         static_cast<unsigned long long>(frontierPages_),
+                         static_cast<unsigned long long>(frontierProbes_));
         overflow_ = false;
     } else {
         wakeQueue_.erase(wakeQueue_.begin(),

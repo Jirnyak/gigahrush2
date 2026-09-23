@@ -9,6 +9,7 @@
 #include "game/floor_gen.h"   // generate_floor
 #include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "world/clearance.h"  // ClearanceField — оракул нав-бейков (occupancy)
+#include "world/floor_awaken.h" // floor_awaken — единственный обход рождения
 #include "game/population.h"  // seed_floor_from_spec
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
 
@@ -279,6 +280,14 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
 
     floor_apply_rules(w, number, floor_spec(kind), seed);
     const auto t4 = std::chrono::steady_clock::now();
+
+    // ОБХОД РОЖДЕНИЯ — здесь, потому что содержимое этажа только что стало
+    // окончательным, и ОБЕИМИ ветками: вопрос «что в этой клетке» не зависит
+    // от того, пришла она с диска или из генератора ([world/floor_awaken.h]).
+    // Один проход отвечает разом за агрегаты сред и за инвариант страницы
+    // (CANON S16.9) — до него их было четыре, каждый со своим разрешением
+    // страницы.
+    const FloorAwakenStats awake = floor_awaken(w);
     {
         auto ms = [](auto a, auto b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
@@ -288,6 +297,10 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
                      number, ms(t0, t1),
                      restored ? "RESTORED" : "generated",
                      restored ? ms(t1, t2) : ms(t2, t3), ms(t3, t4));
+        std::fprintf(stderr,
+                     "[floor] %d: awaken %.1f ms | %zu страниц, %zu схлопнуто, "
+                     "%zu клеток с подвижной материей\n",
+                     number, awake.ms, awake.paged, awake.settled, awake.mobile);
     }
 
     // ЩИТ лифтов — ПОСЛЕ развилки, ОБЕИМИ ветками: маска не в снимке

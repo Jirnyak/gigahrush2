@@ -1,6 +1,7 @@
 #include "render/voxel_mirror.h"
 
 #include <algorithm>
+#include <chrono> // цена classify по всему объёму — прибор входа на этаж
 #include <cstdio>
 #include <cstring>
 
@@ -288,10 +289,17 @@ bool VoxelMirror::upload_all(const World& world) {
     bool ok = upload_via_staging(masks_, g.masks().data(), kMasksBytes);
     ok = ok && upload_via_staging(types_, g.types().data(), kTypesBytes);
 
+    // ПРИБОР ВХОДА: полный обход объёма, и он ЧИТАЕТ СТРАНИЦЫ — тот же вход,
+    // что у medium_revive (classify смотрит в страницу клетки).
+    const auto tClassify = std::chrono::steady_clock::now();
     classScratch_.resize(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
         classScratch_[i] =
             classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
+    std::fprintf(stderr, "[entry] mirror classify %.1f ms\n",
+                 std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - tClassify)
+                     .count());
     ok = ok && upload_via_staging(classes_, classScratch_.data(), kClassBytes);
 
     // Fluid-буфер умер (чистка 2026-08-24): воду возят страницы.

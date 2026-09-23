@@ -760,6 +760,18 @@ CellType* materialize_sub_page(World& w, std::size_t ci) {
     return pg;
 }
 
+bool settle_sub_page(World& w, std::size_t ci) {
+    SubField<CellType>* f = w.subfields().find<CellType>(kSubMaterialName);
+    if (!f) return false;
+    CellType uniform{};
+    if (!f->collapse_if_uniform(ci, &uniform)) return false;
+    // Тип несёт всю клетку целиком — закон чтения беcстраничной (см. выше,
+    // двойник sub_material_at). Маска не трогается: у однородной страницы она
+    // уже пуста либо полна по инварианту фазы (S16.9).
+    w.grid().types_mut()[ci] = uniform;
+    return true;
+}
+
 void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
                       CellType mat) {
     cx = wrap_macro(cx);
@@ -775,11 +787,9 @@ void set_sub_material(World& w, int cx, int cy, int cz, int sx, int sy, int sz,
     CellType* pg = materialize_sub_page(w, ci);
     pg[sub_bit(sx, sy, sz)] = mat;
     ++g_supportGen; // писатель статики — см. support_gen()
-    CellType uniform;
-    // If the write left the whole cell one material again, fold it back into
-    // the plain per-cell type and shed the page.
-    if (f.collapse_if_uniform(ci, &uniform))
-        w.grid().set_cell(cx, cy, cz, uniform);
+    // Запись закончена — представление обязано сойтись (S16.9). Своей копии
+    // свёртки у писателя больше нет: закон живёт в одном месте.
+    settle_sub_page(w, ci);
 }
 
 std::int32_t carve_sphere(World& w, const CarveOp& op, CarveScratch& scratch,
