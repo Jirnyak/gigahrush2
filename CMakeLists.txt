@@ -887,7 +887,13 @@ if(GIGA_BUILD_TESTS)
         # test_stereo_cull_frustum_covers_both_eyes (23): отодвинутая назад
         # камера отбора накрывает оба глаза НА ЛЮБОЙ дистанции (свойство, не
         # число), плюс обратная полярность — недостаточный отодвиг его рвёт.
-        PASS_REGULAR_EXPRESSION "23729/23729 checks passed"
+        # 23729 + 8 на 2026-09-23: test_judge_escalation_is_asked_once (§77) —
+        # репро жалобы владельца «на карве иногда фризит». Сид, попавший в
+        # компонент, УЖЕ отданный большому суду, обязан выходить за O(1), а не
+        # проходить свои 512 узлов заново: отсечка считает РАЗНЫЕ компоненты, а
+        # не сиды. Мутация «вернуть rollback_run вместо mark_escalated» роняет
+        # ровно CHECK(caps <= 2) — 33 сида дают 33 отсечки.
+        PASS_REGULAR_EXPRESSION "23737/23737 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

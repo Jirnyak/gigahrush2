@@ -153,7 +153,9 @@ public:
     }
 
     // 1 = newly inserted for `run`; 0 = already present with the SAME run;
-    // -1 = present from another run (an already-judged, supported region).
+    // -1 = present from another run (an already-judged, supported region);
+    // -2 = узел компонента, УЖЕ ОТДАННОГО большому суду (§77) — не вердикт
+    //      опоры, а «дело заведено»; малому суду тут делать нечего.
     int probe(std::uint32_t key, std::uint32_t run) {
         if ((s_.used.size() + 1) * 2 > s_.slots.size()) grow();
         const std::uint32_t v = key + 1;
@@ -166,25 +168,38 @@ public:
                 s_.used.push_back(i);
                 return 1;
             }
-            if (cur == v) return s_.runs[i] == run ? 0 : -1;
+            if (cur == v) {
+                if (s_.runs[i] == kEscalatedRun) return -2;
+                return s_.runs[i] == run ? 0 : -1;
+            }
             i = (i + 1) & mask_;
         }
     }
 
-    // ОТКАТ ПОМЕТОК ОБОРВАННОГО РАНА (охота 2026-08-28). Пометка значит
-    // «этот узел уже осуждён как ОПЁРТЫЙ»; ран, оборванный БЮДЖЕТОМ, такого
-    // не доказал — он просто сдался, а его пометки заражали всё, что он
-    // успел обойти: следующий сид на реально отвязанную нить видел чужую
-    // пометку и вешал кусок навсегда (баг владельца «решётки не падают»).
-    // Откатываем ровно слоты, добавленные этим раном (used растёт только
-    // на вставке — хвост от mark и есть его след).
-    void rollback_run(std::size_t usedMark) {
-        while (s_.used.size() > usedMark) {
-            const std::uint32_t i = s_.used.back();
-            s_.used.pop_back();
-            s_.slots[i] = 0;
-            s_.runs[i] = 0;
-        }
+    // ПЕРЕКЛЕЙКА ПОМЕТОК ОБОРВАННОГО РАНА (§77, 2026-09-23). Откат выше
+    // выбрасывал вместе с ложным выводом и ЧЕСТНО ДОБЫТЫЙ ФАКТ: «узлы этого
+    // компонента уже отданы большому суду». Факт не про опору — про событие,
+    // поэтому он безопасен там, где вывод об опоре был бы ложью.
+    //
+    // Зачем: снос хрущёвки сажал 4096 сидов в ОДИН компонент, каждый заново
+    // обходил свои 512 узлов и сдавался — 2.1 млн обходов за кадр, 595 мс,
+    // полезной работы ноль (замер владельца, problems.md §77). С пометкой
+    // следующий сид упирается в неё на ПЕРВОМ же probe и выходит за O(1).
+    //
+    // Корректность: если поздний сид дотянулся до узла, помеченного
+    // оборванным раном, то его сид и сид того рана СВЯЗНЫ — компонент один и
+    // тот же, и он уже в очереди большого суда. Тот судит БЕЗ бюджета, значит
+    // реально отвязанный кусок всё равно упадёт — просто его уронит большой
+    // суд, а не малый. Баг «решётки не падают» не возвращается: там поздний
+    // сид делал вывод «ОПЁРТ», здесь он делает «дело уже заведено».
+    //
+    // Пометка живёт ровно одну судебную сессию: конструктор VisitedSet
+    // затирает слоты прошлого использования, а мир между картами меняется —
+    // истории она не копит (CANON S16.9).
+    static constexpr std::uint32_t kEscalatedRun = 0xFFFFFFFFu;
+    void mark_escalated(std::size_t usedMark) {
+        for (std::size_t k = usedMark; k < s_.used.size(); ++k)
+            s_.runs[s_.used[k]] = kEscalatedRun;
     }
     std::size_t used_mark() const { return s_.used.size(); }
 
@@ -426,6 +441,8 @@ std::uint32_t node_of_atom(const World& w, const SubField<CellType>* mats,
 // Отсечки бюджета — вслух (S11), но с дросселем: удар в опёртую стену —
 // штатный путь, кричать каждым карвом нельзя.
 std::uint32_t g_detachCapEvents = 0;
+// Счётчик отсечек — ПРИБОР (§77): им гейт доказывает, что сид в уже заведённом
+// компоненте не платит свои 512 узлов заново.
 
 // Граневой слой компонента cw, сдвинутый в систему соседа по направлению
 // d (порядок kDir6: +x,-x,+y,-y,+z,-z), И маска соседа nm — атомные пары
@@ -473,7 +490,12 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
     set_why(0);
     s.nodeQueue.clear();
     const std::size_t usedMark = vis.used_mark();
-    if (vis.probe(seedNode, run) != 1) { set_why(1); return false; }
+    {
+        // -2 — сид уже внутри компонента, отданного большому суду (§77):
+        // повторный флуд тут добавить нечего, выходим за O(1).
+        const int seedR = vis.probe(seedNode, run);
+        if (seedR != 1) { set_why(seedR == -2 ? 5 : 1); return false; }
+    }
     s.nodeQueue.push_back(seedNode);
     std::size_t head = 0;
     while (head < s.nodeQueue.size()) {
@@ -529,7 +551,7 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
                     (static_cast<std::uint32_t>(nci) << 8) | j;
                 const int r = vis.probe(nk, run);
                 if (r == 0) continue;    // свой фронтир
-                if (r < 0) { set_why(2); return false; } // слился с осуждённым
+                if (r < 0) { set_why(r == -2 ? 5 : 2); return false; } // слился с осуждённым/заведённым
                 s.nodeQueue.push_back(nk);
             }
         }
@@ -546,8 +568,11 @@ bool flood_nodes(const World& w, const SubField<CellType>* mats,
             // Очаг уходит большому суду; тот судит без бюджета на суд
             // (порциями кадра) и с тор-перколяцией как опорой.
             big_judge_enqueue(s.nodeQueue[0] >> 8);
-            // Ничего не доказано — пометки этого рана снять (см. rollback_run).
-            vis.rollback_run(usedMark);
+            // Об ОПОРЕ не доказано ничего — но доказано, что дело заведено.
+            // Пометки не стираем, а переклеиваем (§77): следующий сид того же
+            // компонента выйдет на первом probe, а не пройдёт свои 512 узлов
+            // заново. Откат остался только для случаев, где и этого факта нет.
+            vis.mark_escalated(usedMark);
             return false;
         }
     }
@@ -634,6 +659,7 @@ void judge_atom_neighbours(World& w, SubField<CellType>* mats, VisitedSet& vis,
                       : (why == 1   ? "seen-seed"
                          : why == 2 ? "merged-judged"
                          : why == 3 ? "budget"
+                         : why == 5 ? "big-court-already"
                                     : "shield"));
         if (!loose) continue;
         convert_nodes(w, mats, s, out);
@@ -1137,6 +1163,8 @@ void big_judge_budgets(std::uint32_t floodNodes, std::uint32_t convertCells) {
     if (floodNodes) g_bigFloodBudget = floodNodes;
     if (convertCells) g_bigConvertBudget = convertCells;
 }
+
+std::uint32_t detach_cap_events() { return g_detachCapEvents; }
 
 void big_judge_enqueue(std::uint32_t cell) {
     BigCourt& c = g_bigCourt;

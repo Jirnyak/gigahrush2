@@ -705,6 +705,56 @@ static void test_judge_shield_is_ground() {
           material_rubble_of(kMatConcrete));
 }
 
+// §77: СИД В УЖЕ ЗАВЕДЁННОМ ДЕЛЕ НЕ ПЛАТИТ СВОИ 512 УЗЛОВ ЗАНОВО.
+//
+// Репро жалобы владельца «на карве иногда фризит»: снос хрущёвки сажал тысячи
+// сидов в ОДИН компонент, каждый обходил свои 512 узлов и сдавался — 82 944
+// отсечки за сессию, 595 мс на один карв из 232 клеток, полезной работы ноль.
+// Корень: ран, оборванный бюджетом, ОТКАТЫВАЛ свои пометки (правильно для
+// вывода об опоре, но вместе с ним выбрасывался и факт «дело заведено»).
+//
+// Сцена: плита заведомо больше бюджета и БЕЗ щита — значит любой флуд обязан
+// упереться в потолок. Сиды берутся вплотную к первому, чтобы гарантированно
+// попасть в те узлы, которые первый флуд успел обойти.
+static void test_judge_escalation_is_asked_once() {
+    static World w;
+    big_judge_reset();
+    // 16x16x8 = 2048 полных клеток = 2048 узлов против бюджета 512.
+    for (int z = 0; z < 8; ++z)
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 16; ++x)
+                w.grid().fill_cell(40 + x, 40 + y, 40 + z, kMatConcrete);
+    CHECK(kDetachNodeBudget < 2048); // сцена обязана быть больше бюджета
+
+    std::vector<std::uint32_t> seeds;
+    seeds.push_back(static_cast<std::uint32_t>(macro_index(48, 48, 44)));
+    for (int dz = 0; dz < 2; ++dz)
+        for (int dy = 0; dy < 4; ++dy)
+            for (int dx = 0; dx < 4; ++dx)
+                seeds.push_back(static_cast<std::uint32_t>(
+                    macro_index(46 + dx, 46 + dy, 43 + dz)));
+    CHECK(seeds.size() == 33);
+
+    CarveScratch scratch;
+    CarveResult res;
+    const std::uint32_t before = detach_cap_events();
+    // Ни один атом не смеет уехать: компонент больше бюджета, вердикт малого
+    // суда — «не мне», дело у большого.
+    CHECK(detach_judge_cells(w, seeds.data(), seeds.size(), scratch, res) == 0);
+    const std::uint32_t caps = detach_cap_events() - before;
+
+    // ВОТ ОН, ГЕЙТ: отсечка считает РАЗНЫЕ компоненты, а не сиды. До правки
+    // здесь было ровно seeds.size() — каждый сид платил свои 512 узлов.
+    CHECK(caps >= 1);              // дело обязано быть заведено
+    CHECK(caps < seeds.size());    // но не каждым сидом заново
+    CHECK(caps <= 2);              // на одном компоненте — один вопрос
+
+    // Мир не тронут: суд ничего не доказал про опору и ничего не конвертировал.
+    CHECK(sub_material_at(w, 48, 48, 44, 4, 4, 4) == kMatConcrete);
+    CHECK(sub_material_at(w, 46, 46, 43, 0, 0, 0) == kMatConcrete);
+    big_judge_reset();
+}
+
 // БОЛЬШОЙ СУД ([markoaudit/plans/big-judge.md] A-C). Что запинено:
 // (1) ТОР-ПЕРКОЛЯЦИЯ = ОПОРА — кольцо через весь тор оправдано, ни один
 //     атом не тронут (мутация «без проверки смещений» роняет ровно это);
@@ -822,5 +872,6 @@ static void test_destruct_all() {
     test_carve_shield_honesty();
     test_carve_clears_stain();
     test_judge_shield_is_ground();
+    test_judge_escalation_is_asked_once();
     test_big_judge();
 }
