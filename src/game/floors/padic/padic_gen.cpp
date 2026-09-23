@@ -358,8 +358,14 @@ void stamp_sandwich(MacroGrid& g, SubField<CellType>& sm, const Plan& p,
             if (mat == 0) continue; // stair shaft: open, landings stamped there
             if (p.grate[i2]) {
                 // Bars with nothing underneath: look straight down a storey.
-                put_bits(g, sm, x, y, zc, kFloorW, kGrateBars,
-                         kMatElectricGrate);
+                // Строка — `tread`, «walkway grate, 25 cm studs»: решётка тут
+                // ГЕОМЕТРИЯ (сквозные прутья, вид на этаж ниже), и строка
+                // материала описывает ровно её. Прежде стояла
+                // `electric_grate` — материал, существовавший только ради
+                // снесённого `get_cell_hazard`, который бил током независимо
+                // от щитка (разбор в [combat.h], снос 2026-09-23). Планировка
+                // не изменилась ни на клетку: `p.grate` — политика модуля.
+                put_bits(g, sm, x, y, zc, kFloorW, kGrateBars, kMatTread);
                 continue;
             }
             put_bits(g, sm, x, y, zc, kFloorW, kAllBits,

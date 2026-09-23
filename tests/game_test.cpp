@@ -5604,22 +5604,24 @@ static void repro_grate_hang() {
     const SubField<CellType>* sm =
         w.subfields().find<CellType>(kSubMaterialName);
     CHECK(sm != nullptr);
-    // Найти клетки решётки (страница содержит kMatElectricGrate в слове 7).
+    // Найти клетки решётки: строка `tread` («walkway grate»). Прежде
+    // тут стоял kMatElectricGrate — материал снесён вместе с системой
+    // хазарда 2026-09-23, решётчатый пол padic пишется tread.
     int tried = 0, converted = 0, hung = 0, supported = 0;
     {   // разведка: есть ли решётка вообще и в каком виде
         int paged = 0, uniform = 0;
         for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
-            if (w.grid().types()[ci] == kMatElectricGrate) ++uniform;
+            if (w.grid().types()[ci] == kMatTread) ++uniform;
             const CellType* pg = sm->page(ci);
             if (!pg) continue;
             for (int b = 0; b < kSubVoxels; ++b)
-                if (pg[b] == kMatElectricGrate) { ++paged; break; }
+                if (pg[b] == kMatTread) { ++paged; break; }
         }
         std::printf("[repro] grate presence: paged cells %d, uniform %d\n",
                     paged, uniform);
     }
     for (std::uint32_t ci = 0; ci < kMacroCells && tried < 40; ++ci) {
-        if (w.grid().types()[ci] != kMatElectricGrate) continue; // однородная
+        if (w.grid().types()[ci] != kMatTread) continue; // однородная
         const int cx = static_cast<int>(ci % kMacroDim);
         const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
         const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
@@ -5653,8 +5655,8 @@ static void repro_grate_hang() {
             if (!w.grid().masks()[ci].test(b)) continue;
             const CellType m2 =
                 pg2 ? pg2[b] : w.grid().types()[ci];
-            if (m2 == kMatElectricGrate) stillGrate = true;
-            if (m2 == material_rubble_of(kMatElectricGrate)) nowRubble = true;
+            if (m2 == kMatTread) stillGrate = true;
+            if (m2 == material_rubble_of(kMatTread)) nowRubble = true;
         }
         if (nowRubble && !stillGrate) ++converted;
         else if (stillGrate) {

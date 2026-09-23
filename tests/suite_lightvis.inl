@@ -222,7 +222,8 @@ void solidity_law() {
     for (int sx = 0; sx < 8; ++sx) g.mask(8, 5, 5).clear(sub_bit(sx, 0, 0));
     CHECK(giga::game::light_ray_passes(g, from, to));
     // Полный неон (материал светит) — эмиттер не окклюдер своего света.
-    const CellType neon = 20; // neon_tube ([world/materials.h])
+    // ИМЯ, А НЕ ЧИСЛО — см. разбор в suite_console.inl у `sphere`.
+    const CellType neon = kMatNeonTube;
     CHECK(material_emits_light(neon)); // предпосылка закона, не вера
     g.fill_cell(8, 5, 5, neon);
     CHECK(giga::game::light_ray_passes(g, from, to));
@@ -230,7 +231,7 @@ void solidity_law() {
     // материал НЕ светит, но ПРОЗРАЧЕН — свет проходит, материя стоит.
     // Прощение по прозрачности, а не по эмиссивности: неон выше прошёл бы и
     // по старому условию, стекло ловит именно новую колонку.
-    const CellType glass = 21; // glass ([world/materials.h])
+    const CellType glass = kMatGlass;
     CHECK(!material_emits_light(glass)); // предпосылка: не эмиттер
     CHECK(material_passes_light(glass)); // но прозрачен — из колонки
     g.fill_cell(8, 5, 5, glass);

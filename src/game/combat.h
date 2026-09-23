@@ -188,36 +188,31 @@ enum class DamageChannel : std::uint8_t {
 inline constexpr std::size_t kDamageChannels =
     static_cast<std::size_t>(DamageChannel::Count);
 
-// Environmental hazard query for cell materials.
-struct CellHazard {
-    std::int16_t damage = 0;
-    DamageChannel channel = DamageChannel::Kinetic;
-    bool active = false;
-};
-
-inline CellHazard get_cell_hazard(CellType t) {
-    CellHazard h;
-    switch (t) {
-        case kMatElectricGrate:
-            h.damage = 15;
-            h.channel = DamageChannel::Energy;
-            h.active = true;
-            break;
-        case kMatAcidPool:
-            h.damage = 10;
-            h.channel = DamageChannel::Kinetic;
-            h.active = true;
-            break;
-        case kMatFireCell:
-            h.damage = 20;
-            h.channel = DamageChannel::Fire;
-            h.active = true;
-            break;
-        default:
-            break;
-    }
-    return h;
-}
+// ХАЗАРД КЛЕТКИ СНЕСЁН ЦЕЛИКОМ 2026-09-23 (решение владельца). Здесь жили
+// `CellHazard`, `get_cell_hazard` и `hazard_step`, и это была не система, а
+// `switch` на три материала с тремя назначенными числами. Приговор — три
+// независимых факта, каждый проверен грепом:
+//
+//   1. МИМО ТАБЛИЦЫ. Урон и канал сидели в коде, тогда как `materials.csv`
+//      несёт колонками `flow`, `diffusion`, `density_kg_m3`, `hardness`,
+//      `emissive_e3` — колонки урона в ней нет ни одной. S16.2 требует
+//      обратного: «новая среда = строка CSV, ноль кода».
+//   2. ДВЕ ТРЕТИ МЕРТВЫ. `kMatAcidPool` и `kMatFireCell` не писал в мир
+//      НИКТО — ни генератор, ни консоль, ни карв. Кислотных луж и горящего
+//      пола в игре не существовало никогда.
+//   3. РЕШЁТКА НЕ ЗНАЛА ПРО ЭЛЕКТРИЧЕСТВО. `PowerGridState::is_power_cut`
+//      лежит в ЭТОМ ЖЕ файле на тридцать строк выше, а `get_cell_hazard`
+//      принимал только `CellType` — ни позиции, ни состояния мира. Щиток
+//      расстрелян, этаж погас, лампы умерли — решётка била те же 15.
+//
+// Плюс дубль: тот же закон вторым, худшим экземпляром жил в `wander.cpp`
+// (без стаггера — 1875 HP/с вместо 117, с жёстким `cz - 1` вместо
+// `regime_down`), и тест его ЗАПИРАЛ. Снят тем же днём.
+//
+// Когда опасные поверхности вернутся — они родятся колонками `materials.csv`
+// и спросят `is_power_cut(pos)` (позиция есть у каждого вызывающего), и тогда
+// «вырубить щиток, чтобы пройти коридор» получится ДАРОМ, из данных, как
+// требует закон владельца об эмерджентности. Заново — на чистом месте.
 
 // Flat percentage mitigation per channel, 0..100, clamped on use. Absent means no
 // armour at all, which is the common case — the reference authors only four.
@@ -723,36 +718,14 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                              const GravityField* gravity = nullptr,
                              bool samosborFrenzy = false);
 
-// Cell hazards for EMBODIED BODIES — the player and every resident.
-//
-// `get_cell_hazard` has always known that an electrified grate costs 15 Energy, an
-// acid pool 10 and a fire cell 20. Until now the only place that damage was ever
-// APPLIED was inside `mob_attack_step`'s `view<MobRef, Transform, MobCombat>`, so
-// monsters burned and **nothing else did**: the player and every resident could
-// stand in fire, in acid and on a live grate indefinitely and lose zero HP. That
-// broke two stated laws at once — "the player is not special" (here he was special
-// in his own favour) and the manifest's "100% symmetrical combat, damage, armour".
-// [problems.md] §41.
-//
-// Same law as the monsters, deliberately: the same cell-then-floor-below probe and
-// the same 1-in-16-tick cadence, so a body in fire pays 20 HP about 7.8 times a
-// second whoever it belongs to. That is fast — under a second to kill an unarmoured
-// 100 HP body — but it is the rate monsters have always paid, and making the two
-// differ is precisely the asymmetry this closes. Flying monsters are exempt in the
-// mob path; embodied bodies have no such flag and none is invented here.
-//
-// Two-phase, like every other damage sweep in this file: `apply_damage` can
-// `emplace<Dead>` and reallocate the storage the view is walking.
-//
-// Returns the number of bodies that took hazard damage this step.
-//
-// Optional `gravity`: decides which neighbouring cell counts as "the one the body
-// stands on". Null keeps the -Z probe, which is correct under the shipping NegZ
-// regime and wrong under every other one.
-std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
-                          LayerId layer, std::uint64_t tick,
-                          ParticleBurstQueue* particles = nullptr,
-                          const GravityField* gravity = nullptr);
+// `hazard_step` (хазард клетки для ВОПЛОЩЁННЫХ ТЕЛ) снесён вместе со всей
+// системой — разбор выше, у места, где стоял `get_cell_hazard`. Он закрывал
+// настоящую асимметрию (problems.md §41: мобы горели, а игрок и жители стояли
+// в огне бесплатно), и закрывал правильно — тем же законом и той же каденсой.
+// Но лечил он симметрию ФАЛЬШИВКИ: три назначенных числа мимо таблицы
+// материалов, две трети которых никогда не попадали в мир. Симметрия вернётся
+// вместе с системой, и вернётся даром — закон, выведенный из строки CSV,
+// симметричен по построению, потому что у него нет второй ветки.
 
 // Optional `gravity`: the field the LOB is solved in. A ballistic launch is one
 // vector equation, `v0 = delta/T - 0.5*a*T`, and the version of it that lived here

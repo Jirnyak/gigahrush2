@@ -598,13 +598,6 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     };
     std::vector<Swing> queued;
 
-    struct HazardHit {
-        Entity mob;
-        std::int16_t dmg;
-        DamageChannel ch;
-    };
-    std::vector<HazardHit> hazardHits;
-
     for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
         MobCombat& mc = reg.get<MobCombat>(e);
 
@@ -615,30 +608,10 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         if (static_cast<std::size_t>(mr.kind) >= kMobKindCount) continue;
         const MobDef& def = kMobTable[mr.kind];
 
-        // Environmental hazard check
-        if (!has_flag(def.aiFlags, AiFlag::Flying)) {
-            const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
-            const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
-            const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
-            CellType cellType = grid.cell(cx, cy, cz);
-            CellStep d{0, 0, -1};
-            if (gravity) {
-                GravityRegime r = gravity->regime;
-                if (r == GravityRegime::Custom) r = regime_from_vector(gravity->at(tr.pos));
-                d = regime_down(r);
-            }
-            CellType floorType = (d.x != 0 || d.y != 0 || d.z != 0)
-                ? grid.cell(wrap_macro(cx + d.x), wrap_macro(cy + d.y), wrap_macro(cz + d.z))
-                : kCellAir;
-            CellHazard hz = get_cell_hazard(cellType);
-            if (!hz.active) hz = get_cell_hazard(floorType);
-            if (hz.active) {
-                const std::uint32_t mobId = static_cast<std::uint32_t>(entt::to_integral(e));
-                if ((tick + mobId) % 16 == 0) {
-                    hazardHits.push_back(HazardHit{e, hz.damage, hz.channel});
-                }
-            }
-        }
+        // Проверка хазарда клетки стояла ЗДЕСЬ и снесена 2026-09-23 вместе со
+        // всей системой (приговор — в [combat.h], у места `get_cell_hazard`).
+        // Это был единственный канонический применитель; второй, худший, жил в
+        // `wander.cpp` и снят тем же днём.
 
         // THE single cooldown decrement. Every mob, every tick, exactly once —
         // whether or not it is in reach, whether or not there is a target.
@@ -829,77 +802,15 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         }
     }
 
-    for (const auto& hit : hazardHits) {
-        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid,
-                     particles);
-    }
-
     (void)bus;
     return swings;
 }
 
-std::uint32_t hazard_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
-                          LayerId layer, std::uint64_t tick,
-                          ParticleBurstQueue* particles,
-                          const GravityField* gravity) {
-    struct Hit {
-        Entity body;
-        std::int16_t dmg;
-        DamageChannel ch;
-    };
-    // Empty in the overwhelming common case (hazard cells are sparse), and an
-    // empty std::vector does not allocate — so this costs nothing on a tick where
-    // nobody is standing in fire.
-    std::vector<Hit> hits;
-
-    for (auto e : reg.view<const NpcRef, const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-
-        // The body's own cell, then the cell it stands ON — the same two probes
-        // the monster path makes, so a pool of acid burns whether you are in it
-        // or on its surface.
-        const int cx = wrap_macro(static_cast<int>(tr.pos.x / kCellSize));
-        const int cy = wrap_macro(static_cast<int>(tr.pos.y / kCellSize));
-        const int cz = wrap_macro(static_cast<int>(tr.pos.z / kCellSize));
-        CellHazard hz = get_cell_hazard(grid.cell(cx, cy, cz));
-        if (!hz.active) {
-            // "The cell it stands ON" is one step along GRAVITY, not one step
-            // down -Z. `regime_down` already spells that step for the six axis
-            // regimes; Custom is resolved to its nearest axis the same way
-            // gravity_frames does it, and Zero returns {0,0,0} — correctly, since
-            // a body in free fall stands on nothing and the probe is skipped.
-            //
-            // Under the shipping NegZ this is {0,0,-1} and therefore identical to
-            // the old `cz - 1`. It mattered everywhere else: under PosZ the probe
-            // read the CEILING, and under any lateral regime an unrelated WALL —
-            // so the acid you were standing in stopped burning while a wall you
-            // merely passed started to.
-            CellStep d{0, 0, -1};
-            if (gravity) {
-                GravityRegime r = gravity->regime;
-                if (r == GravityRegime::Custom)
-                    r = regime_from_vector(gravity->at(tr.pos));
-                d = regime_down(r);
-            }
-            if (d.x != 0 || d.y != 0 || d.z != 0)
-                hz = get_cell_hazard(grid.cell(wrap_macro(cx + d.x),
-                                               wrap_macro(cy + d.y),
-                                               wrap_macro(cz + d.z)));
-        }
-        if (!hz.active) continue;
-
-        // Identity stagger on the entity, matching the monster path exactly.
-        const std::uint64_t id = static_cast<std::uint64_t>(entt::to_integral(e));
-        if ((tick + id) % 16 != 0) continue;
-        hits.push_back(Hit{e, hz.damage, hz.channel});
-    }
-
-    for (const Hit& h : hits)
-        apply_damage(reg, pool, h.body, h.dmg, h.ch, entt::null, &grid, particles);
-
-    return static_cast<std::uint32_t>(hits.size());
-}
+// `hazard_step` СНЕСЁН 2026-09-23 вместе со всей системой хазарда клеток —
+// приговор и вывод в [combat.h], у места, где стоял `get_cell_hazard`. Он
+// закрывал настоящую асимметрию (problems.md §41), но закрывал её для
+// фальшивки: три назначенных числа мимо таблицы материалов, две трети
+// которых в мир никогда не попадали, и электричество, не знавшее про щиток.
 
 ItemId equipped_melee(const Inventory& inv, const Equipped* eq) {
     // A decider owns this body: only its recorded choice counts, and only if
@@ -1761,8 +1672,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                 // Сталь звонче бетона: шире окно угла, выше упругость,
                 // меньше съеденного урона. Мягкое (hardness < 180 и не из
                 // списков) не отражает вовсе — пуля вязнет, как раньше.
+                // `kMatElectricGrate` стоял здесь вторым и снят вместе со всей
+                // системой хазарда (2026-09-23). Поведение решёток НЕ
+                // изменилось ни на градус: решётчатый пол padic теперь пишется
+                // строкой `tread`, а она в этом списке первая.
                 const bool isSteel =
-                    mat == kMatTread || mat == kMatElectricGrate ||
+                    mat == kMatTread ||
                     mat == kMatPipeMetal || mat == kMatDoor ||
                     mat == kMatShopShutter;
                 const bool isConcrete = mat == kMatConcrete ||

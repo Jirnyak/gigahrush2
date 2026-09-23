@@ -118,10 +118,14 @@ static void test_console_requests() {
     // материи, neon-topology.md): имя строки узнаётся, мусор и пустота
     // отвергаются, радиус ложится в контекст.
     CHECK(con.exec(ctx, "sphere neon_tube", out, sizeof out));
-    CHECK(ctx.paintMat == 20 /* neon_tube */ && ctx.paintRadius > 0.0f);
+    // ИМЯ, А НЕ ЧИСЛО. Здесь стояли литералы `20` и `21` с комментарием
+    // «см. materials.h» — то есть ссылка на файл, где лежит имя, вместо
+    // самого имени. Снос трёх строк таблицы 2026-09-23 сдвинул id и
+    // повалил обе проверки; на именах этого класса поломок не бывает.
+    CHECK(ctx.paintMat == kMatNeonTube && ctx.paintRadius > 0.0f);
     ctx.paintRadius = 0.0f;
     CHECK(con.exec(ctx, "sphere glass 1.5", out, sizeof out));
-    CHECK(ctx.paintMat == 21 /* glass */);
+    CHECK(ctx.paintMat == kMatGlass);
     CHECK(ctx.paintRadius > 1.49f && ctx.paintRadius < 1.51f);
     ctx.paintRadius = 0.0f;
     CHECK(!con.exec(ctx, "sphere adamantium", out, sizeof out));

@@ -152,33 +152,23 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         break;
     }
 
-    struct HazardHit {
-        Entity mob;
-        std::int16_t dmg;
-        DamageChannel ch;
-    };
-    std::vector<HazardHit> hazardHits;
-
+    // ХАЗАРД КЛЕТКИ ЗДЕСЬ НЕ ПРИМЕНЯЕТСЯ — и это закон, а не упущение.
+    // Единственный применитель для мобов — `mob_attack_step`
+    // ([combat.h] «the only place that damage was ever APPLIED»). Здесь жил
+    // ВТОРОЙ, незамеченный экземпляр того же закона, и он был хуже по трём
+    // признакам сразу: без стаггера (пуш каждый тик против `(tick + mobId)
+    // % 16` — при 125 Гц это 1875 HP/с вместо 117, смерть за четыре тика),
+    // с жёстким `cz - 1` вместо `regime_down` (врал при любой гравитации,
+    // кроме -Z) и по подмножеству мобов (`WanderTarget` есть не у всех —
+    // туманный моб без него статуя, [mob_spawn.cpp]; `MobCombat` есть у
+    // КАЖДОГО, `emplace_mob`). Снят 2026-09-23 по замеру: два применителя
+    // в одном тике = двойной урон, и это S11 «второй реализации не бывает».
     auto view = reg.view<Transform, Velocity, WanderTarget>();
     for (auto e : view) {
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
 
         const MobRef* mr = reg.try_get<MobRef>(e);
-        if (mr) {
-            const MobDef& md = kMobTable[mr->kind];
-            if (!has_flag(md.aiFlags, AiFlag::Flying)) {
-                int cx, cy, cz;
-                agent_cell(tr.pos, cx, cy, cz);
-                CellType cellType = grid.cell(cx, cy, cz);
-                CellType floorType = grid.cell(cx, cy, wrap_macro(cz - 1));
-                CellHazard hz = get_cell_hazard(cellType);
-                if (!hz.active) hz = get_cell_hazard(floorType);
-                if (hz.active) {
-                    hazardHits.push_back(HazardHit{e, hz.damage, hz.channel});
-                }
-            }
-        }
 
         // THE SINGLE-WRITER GUARD ([ai.h]). Exactly one system may write a body's
         // horizontal Velocity on a tick, and the token that decides it is
@@ -445,9 +435,6 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // Gravity axis is left to physics_step
     }
 
-    for (const auto& hit : hazardHits) {
-        apply_damage(reg, pool, hit.mob, hit.dmg, hit.ch, entt::null, &grid);
-    }
 }
 
 } // namespace giga::game
