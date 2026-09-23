@@ -161,6 +161,24 @@ std::int32_t inventory_value(const Inventory& inv) {
 
 Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
                     std::uint16_t count, std::uint8_t condition) {
+    // ID ПРИХОДИТ ИЗ ФАЙЛА. Этот глагол — единственный писатель пикапа, и один
+    // из трёх его вызовов restore снимка этажа (save.cpp:1078), то есть `id`
+    // здесь может быть любым числом с диска. Ниже `item_def(id)` разыменует
+    // `kItemTable[id - 1]` ([item_table.h:165]) — при `id == 0` это индекс
+    // МИНУС ОДИН, при `id > kItemCount` — за концом таблицы. Проверка есть у
+    // соседей по файлу (`inventory_value`, `inventory_mass_g` гоняют
+    // `item_valid` перед каждым `item_def`), сюда её не донесли.
+    // Отказ громкий и ровно той формы, которую вызывающий уже ждёт: restore
+    // считает удачи по `!= entt::null` и печатает разницу. Молчаливое
+    // обрезание запрещено (S11), поэтому строка в stderr обязательна.
+    if (!item_valid(id)) {
+        std::fprintf(stderr,
+                     "[loot] spawn_pickup: предмет %u вне таблицы (1..%u) — "
+                     "пикап не создан; источник — запись снимка этажа\n",
+                     static_cast<unsigned>(id),
+                     static_cast<unsigned>(kItemCount));
+        return entt::null;
+    }
     Entity e = reg.create();
     Transform tr;
     tr.pos = pos;

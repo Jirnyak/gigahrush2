@@ -700,6 +700,13 @@ bool MacroSim::load_state(const std::uint8_t* bytes, std::size_t n) {
     if (!r.ok || trav > kNpcPoolSize) return false;
     std::vector<std::uint8_t> traveling(trav);
     for (std::uint32_t i = 0; i < trav; ++i) traveling[i] = r.u8();
+    // ДВА СТОЛБЦА — ОДНА ВЫСОТА. `ensure_rows` объявляет `ageDays_.size()`
+    // единственным авторитетом для обоих и растит их одним `resize(next)`.
+    // Файл, в котором высоты разошлись, заставит его СЖАТЬ `traveling_` до
+    // высоты `ageDays_` — и следующая же запись `traveling_[id]` уйдёт за
+    // буфер. Равенство держится у любого честного сейва по построению
+    // (писатель печатает обе `.size()` подряд, а меняются они только вместе).
+    if (trav != ages) return false;
     const std::uint32_t jn = r.u32();
     if (!r.ok || jn > kNpcPoolSize) return false;
     std::vector<Journey> journeys(jn);
@@ -708,6 +715,14 @@ bool MacroSim::load_state(const std::uint8_t* bytes, std::size_t n) {
         journeys[i].toFloor = static_cast<std::int16_t>(r.u16());
         journeys[i].gen = r.u16();
         journeys[i].etaTenths = r.u64();
+        // ID ПОЕЗДКИ — ЭТО ИНДЕКС, И ОН ПРИШЁЛ ИЗ ФАЙЛА. Дальше по тику
+        // `traveling_[j.id] = 0` (:457) пишет по нему БЕЗ проверки, а
+        // `ensure_rows` поднимает столбец только до `pool.count()` — то есть
+        // никакая работа рантайма этот индекс не покрывает. Проверенный здесь
+        // `id < trav` достаточен НАВСЕГДА: `traveling_` становится ровно этим
+        // вектором, а растёт он только вверх. Честный сейв условию отвечает по
+        // построению — на записи `traveling_[id] = 1` (:543) уже состоялась.
+        if (journeys[i].id >= trav) return false;
     }
     if (!r.ok || r.at != n) return false;
     tick_ = tick;

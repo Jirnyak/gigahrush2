@@ -2545,7 +2545,20 @@ int main(int argc, char** argv) {
     // pending one a worker fills — plus the two live walkability bitsets and
     // the background-rebake planner that keeps the bake current as the floor
     // is carved (game/rebake.h).
-    game::RebakeScheduler nav;
+    //
+    // ОБЪЯВЛЕН ПОСЛЕ `streamer` — И ЭТО НЕ СТИЛЬ, А ВРЕМЯ ЖИЗНИ. Поездка на
+    // лифте отдаёт планировщику задание, взятое у стримера
+    // (`streamer.prebuild_begin` -> `nav.start_prebuild`), и замыкание задания
+    // держит `this` СТРИМЕРА и пишет в его поля ([floor_stream.cpp:406-412]).
+    // Воркер prebuild `cancel_` НЕ ОПРАШИВАЕТ ([rebake.cpp:239] — тело потока
+    // это `job(); exited_.store(true);`), поэтому единственный, кто его
+    // дожидается, — деструктор `~RebakeScheduler`, он джойнит. Пока `nav`
+    // стоял ВЫШЕ стримера, деструкторы шли в обратном порядке: стример умирал
+    // ПЕРВЫМ, а воркер продолжал писать в его труп — выход из игры в окне
+    // поездки давал use-after-free (найдено аудитом 2026-09-23). Перестановка
+    // ставит join раньше смерти стримера. `nav` не используется ни одной
+    // строкой между прежним и новым местом — проверено, и компилятор
+    // проверяет это же за нас на каждой сборке.
     game::NpcPool pool;
     pool.init();
     // SLOT RECYCLING IS DELIBERATELY NOT ARMED HERE, and the line is left in place
@@ -2627,6 +2640,11 @@ int main(int argc, char** argv) {
     // what makes a deep 2^20-person building affordable: the sim tick is O(live
     // entities), so exactly one floor's worth is ever simulated.
     game::FloorStreamer streamer;
+
+    // Навигация ОДНОГО живого этажа — ровно здесь, СРАЗУ ПОСЛЕ стримера, по
+    // причине из длинного комментария у `pool`: деструктор джойнит воркер,
+    // который пишет в поля стримера, значит он обязан умереть первым.
+    game::RebakeScheduler nav;
 
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
@@ -6834,12 +6852,9 @@ int main(int argc, char** argv) {
                                                    &particleBursts,
                                    &stack.layer(activeLayer).gravity(),
                                    game::samosbor_active(samosbor));
-                // Fire, acid and live grates bill EVERY embodied body, not just
-                // monsters. Straight after the monster sweep so both pay on the
-                // same tick and the same 1-in-16 cadence. [problems.md] §41
-                game::hazard_step(reg, stack.layer(activeLayer).grid(), pool,
-                                  activeLayer, simTick, &particleBursts,
-                                  &stack.layer(activeLayer).gravity());
+                // Здесь стоял `hazard_step` — снесён 2026-09-23 вместе со всей
+                // системой хазарда клеток (приговор в [combat.h]). Пол больше
+                // не бьёт никого: ни мобов, ни игрока, ни жителей.
                 // Shots resolve AFTER the pass that launched them, so a
                 // projectile never lands on the frame it is fired.
                 // Дельта PropDetached до/после: выстрел-в-проп внутри
@@ -6947,7 +6962,11 @@ int main(int argc, char** argv) {
                              pp.z + 1.2f + fw.z * 3.0f},
                         vec3{0.0f, 0.0f, 1.0f},
                         static_cast<game::ParticleKind>(dk), 12,
-                        kMatElectricGrate, // debris/dust tint: loud yellow
+                        // Оттенок пыли/крошки. Был `kMatElectricGrate` —
+                        // материал снесён вместе с системой хазарда
+                        // (2026-09-23); `rust` ближе по смыслу для крошки и
+                        // честнее: это отладочный спавн из консоли.
+                        kMatRust,
                         static_cast<std::uint32_t>(simTick));
                 }
                 // Drain this tick's blood/spark proposals into the GPU pool.
@@ -6973,7 +6992,7 @@ int main(int argc, char** argv) {
                     pack_particles(pinTmp,
                                    vec3{pp.x, pp.y, pp.z + 1.2f},
                                    vec3{0.0f, 0.0f, 1.0f}, def,
-                                   kMaterial[kMatElectricGrate], 64,
+                                   kMaterial[kMatRust], 64,
                                    0xC0FFEEu);
                     verletPass.spawn_particles(pinTmp.data(),
                                        static_cast<std::uint32_t>(
