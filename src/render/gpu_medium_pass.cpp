@@ -597,6 +597,71 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     // «кто эти 8k клеток и почему 108 мокрых не осели в 108 спящих»).
     // Оконная выборка (rb-окно вращается по всему списку — за несколько
     // секунд покрывает всё). Классы — по агрегату сред: СУХАЯ живая клетка
+    // ДЕТЕКТОР ЗАСТРЕВАНИЯ (problems.md §72.5) — всегда включён, печатает
+    // только при аварии. Раз в 32 применения шва (амортизация: сам скан
+    // линеен по живым, а живых бывает десять тысяч).
+    //
+    // ЧТО СЧИТАЕТСЯ АВАРИЕЙ: колонна вдоль гравитации остаётся ЖИВОЙ, но её
+    // передний край не сдвинулся ни на клетку kStuckScans замеров подряд.
+    // Живая и неподвижная — это ровно жалоба владельца, и ровно то, чего не
+    // видит ни один существующий счётчик: live_count() считает клетки, а не
+    // их движение, поэтому зависшая куча выглядит в нём как здоровая работа.
+    //
+    // Порог 8 замеров = 256 применений шва. Вывод: honest fall у нас идёт не
+    // медленнее 1 субвокселя за подтик (Марголус), то есть клетку за 8
+    // подтиков; 256 применений — это сотни подтиков, за которые честно
+    // падающая материя обязана пройти десятки клеток. Всё, что не сдвинулось
+    // за такой срок, стоит, а не «медленно едет».
+    if (!liveCis.empty() && (++stuckScans_ % 32u) == 0u) {
+        const int depthAxis = lastDown_.x != 0   ? 0
+                              : lastDown_.y != 0 ? 1
+                                                 : 2;
+        const int crossA = (depthAxis + 1) % 3;
+        const int crossB = (depthAxis + 2) % 3;
+        const bool deeperIsLess =
+            (depthAxis == 0 ? lastDown_.x : depthAxis == 1 ? lastDown_.y
+                                                           : lastDown_.z) < 0;
+        auto coord_of = [](std::uint32_t ci, int axis) -> std::uint32_t {
+            const std::uint32_t d = kMacroDim;
+            return axis == 0 ? ci % d : axis == 1 ? (ci / d) % d : ci / (d * d);
+        };
+        // Передний край каждой колонны: самая глубокая её живая клетка.
+        static std::vector<std::uint8_t> edge(kMacroDim * kMacroDim);
+        static std::vector<std::uint8_t> seen(kMacroDim * kMacroDim);
+        std::fill(edge.begin(), edge.end(), 0);
+        std::fill(seen.begin(), seen.end(), 0);
+        for (std::uint32_t ci : liveCis) {
+            const std::uint32_t key =
+                coord_of(ci, crossA) + coord_of(ci, crossB) * kMacroDim;
+            const auto d = static_cast<std::uint8_t>(coord_of(ci, depthAxis));
+            if (!seen[key]) { seen[key] = 1; edge[key] = d; continue; }
+            if (deeperIsLess ? (d < edge[key]) : (d > edge[key])) edge[key] = d;
+        }
+        constexpr std::uint8_t kStuckScans = 8;
+        for (std::uint32_t key = 0; key < kMacroDim * kMacroDim; ++key) {
+            if (!seen[key]) { colStill_[key] = 0; continue; }
+            if (edge[key] == colEdge_[key]) {
+                if (colStill_[key] < 255) ++colStill_[key];
+            } else {
+                colEdge_[key] = edge[key];
+                colStill_[key] = 0;
+                continue;
+            }
+            if (colStill_[key] == kStuckScans) {
+                static const char kAxisName[3] = {'x', 'y', 'z'};
+                ++stuckReports_;
+                std::fprintf(
+                    stderr,
+                    "[medium-stuck] колонна %c=%u %c=%u ЖИВА и НЕ ДВИЖЕТСЯ "
+                    "%u замеров: край %c=%u | живых в окне %zu, активных %u, "
+                    "бюджет %u\n",
+                    kAxisName[crossA], key % kMacroDim, kAxisName[crossB],
+                    key / kMacroDim, static_cast<unsigned>(kStuckScans),
+                    kAxisName[depthAxis], static_cast<unsigned>(edge[key]),
+                    liveCis.size(), activeTotal_, budget_);
+            }
+        }
+    }
     // (level 0 — щебень/маски без материи сред) против жидкости/газа/смеси;
     // плюс топ z-этажей — водопады шахт видны столбами. Только под флагом.
     if (std::getenv("GIGA_MEDIUM_DBG") != nullptr && !liveCis.empty()) {

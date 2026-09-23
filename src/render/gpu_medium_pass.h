@@ -245,6 +245,28 @@ private:
     // прочих. Пишется в record_substeps, читается только печатью.
     CellStep lastDown_{0, 0, -1};
 
+    // ДЕТЕКТОР ЗАСТРЕВАНИЯ (problems.md §72.5). Ловит жалобу «материя живая,
+    // но никуда не едет»: по каждой КОЛОННЕ вдоль гравитации помнит
+    // координату переднего края и сколько замеров подряд она не менялась.
+    // Печатает ТОЛЬКО при аварии — поэтому включён всегда, а не под флагом:
+    // событие редкое, условное и разрушается наблюдением вблизи (владелец:
+    // «не могу подлететь — она сразу активизируется»), значит прибор обязан
+    // работать, пока игрока рядом НЕТ.
+    // Ключ колонны — пара ПОПЕРЕЧНЫХ осей фрейма, не xy: ось выводится из
+    // regime_down (§73, закон изотропии).
+    std::vector<std::uint8_t> colEdge_ =
+        std::vector<std::uint8_t>(kMacroDim * kMacroDim, 0);
+    std::vector<std::uint8_t> colStill_ =
+        std::vector<std::uint8_t>(kMacroDim * kMacroDim, 0);
+    std::uint32_t stuckScans_ = 0;
+    std::uint32_t stuckReports_ = 0;
+
+public:
+    // Сколько колонн детектор объявил застрявшими за прогон — для сводки.
+    std::uint32_t stuck_reports() const noexcept { return stuckReports_; }
+
+private:
+
     std::vector<std::uint64_t> frontierDone_ =
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
