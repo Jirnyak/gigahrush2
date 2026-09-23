@@ -2109,10 +2109,12 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     for (auto e : reg.view<const game::NpcRef, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         if (reg.all_of<CameraTag>(e)) continue;      // already the player
-        const game::NpcId id = reg.get<const game::NpcRef>(e).id;
-        if (!pool.valid(id) || !pool.alive(id)) continue;
+        // ОДИН предикат на оба вселения ([game/embody.h] possessable): ссылка
+        // жива ЧЕРЕЗ ВРЕМЯ и это не останки. Голый слот лгал — щуп владельца
+        // поймал вселение в труп с разъехавшимся поколением (bugs.md Б6.1).
+        if (!game::possessable(reg, pool, e)) continue;
         chosen = e;
-        chosenId = id;
+        chosenId = reg.get<const game::NpcRef>(e).id;
         break;
     }
     if (chosen == entt::null) return entt::null;
@@ -2156,8 +2158,8 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     for (auto e : reg.view<const game::NpcRef, const Transform>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
         if (reg.all_of<CameraTag>(e)) continue;      // already the player
+        if (!game::possessable(reg, pool, e)) continue; // тот же предикат
         const game::NpcId id = reg.get<const game::NpcRef>(e).id;
-        if (!pool.valid(id) || !pool.alive(id)) continue;
 
         const vec3& pos = reg.get<const Transform>(e).pos;
         // wrap_dist2: все три оси (голый y = сосед в 2 м через шов невиден).
@@ -2168,7 +2170,16 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
             chosenId = id;
         }
     }
-    if (chosen == entt::null) return entt::null;
+    if (chosen == entt::null) {
+        // МОЛЧАЛИВЫХ ОТКАЗОВ НЕ БЫВАЕТ (S11). Владелец набрал `possess` и
+        // решил, что команда не работает — а она честно не нашла никого в
+        // радиусе: сообщать было некому.
+        std::fprintf(stderr,
+                     "[gameplay] possess: никого подходящего в радиусе %.0f м "
+                     "(труп и чужое поколение не годятся)\n",
+                     static_cast<double>(reachM));
+        return entt::null;
+    }
 
     // Detach camera & controller from current player body. Keep the old entity
     // handle so POSRPG can move person-progression onto the new body — the old

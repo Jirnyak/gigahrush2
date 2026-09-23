@@ -6,6 +6,7 @@
 #include "game/faction.h"
 #include "game/prop_system.h" // Interactable — a living body is a menu ([conversation.md])
 #include "game/rpg.h"      // RpgStats, random_rpg
+#include "game/combat.h" // Corpse, Dead — метки останков в предикате вселения
 // NOTE: #include "game/ai.h" (AiBrain) goes back here when the utility AI is
 // adapted to main mob_table -- see tools/branch_port_pending/README.md
 
@@ -141,6 +142,21 @@ Entity embody_as_player(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
 
     pool.set_player(id, true);
     return e;
+}
+
+bool possessable(Registry& reg, const NpcPool& pool, Entity e) {
+    const NpcRef* ref = reg.try_get<const NpcRef>(e);
+    if (!ref) return false;
+    // Первая нога — ССЫЛКА ЖИВА ЧЕРЕЗ ВРЕМЯ (S20.3). Голый слот лгал: щуп
+    // владельца поймал gen ref=0 против pool=1, то есть слот уже переиспользован.
+    if (!npc_ref_current(pool, *ref)) return false;
+    if (!pool.alive(ref->id)) return false;
+    // Вторая нога — ЭТО НЕ ОСТАНКИ. Слот может совпасть, а тело всё равно быть
+    // трупом: Corpse/Dead — метки останков, RigidBody/BodySegment — тело,
+    // которым уже владеет солвер (physics_step такие пропускает, и вселившийся
+    // игрок просто не ходил бы).
+    if (reg.any_of<Corpse, Dead, RigidBody, BodySegment>(e)) return false;
+    return true;
 }
 
 void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e) {

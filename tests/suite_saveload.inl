@@ -2010,10 +2010,53 @@ static void awaken_is_the_one_law() {
     CHECK(giga::sub_material_at(w, 30, 20, 20, 3, 3, 3) == giga::kMatRubble);
 }
 
+// Б6.1: ВСЕЛЕНИЕ НЕ БЕРЁТ ОСТАНКИ И НЕ ВЕРИТ ГОЛОМУ СЛОТУ.
+//
+// Репро жалобы владельца «убил себя и навесило на рагдолл». Щуп в живой игре
+// напечатал приговор: `вселение в запись 1287 | gen ref=0 pool=1 | corpse=1
+// rigid=1` — отбор взял ТРУП, чей слот уже переиспользовали. Оба вселения
+// (смерть и добровольное) спрашивали `pool.valid(id) && pool.alive(id)`, то
+// есть голый номер слота, при ВЗВЕДЁННОЙ переработке слотов.
+//
+// Мутации поштучно: убрать проверку поколения — падает последняя строка;
+// убрать исключение останков — падают строки про Corpse и RigidBody.
+static void possession_refuses_remains_and_stale_slots() {
+    giga::Registry reg;
+    giga::game::NpcPool pool;
+    pool.init();
+
+    const giga::game::NpcId id = pool.spawn();
+    pool.hp(id) = 100;
+    pool.max_hp(id) = 100;
+    const giga::Entity body = giga::game::embody(reg, pool, id, 0);
+    CHECK(body != entt::null);
+    CHECK(giga::game::possessable(reg, pool, body)); // живой житель годен
+
+    // ОСТАНКИ. Метка трупа снимает годность и возвращает её при снятии —
+    // обе полярности, чтобы предикат не оказался всегда-ложным.
+    reg.emplace<giga::game::Corpse>(body, giga::game::Corpse{});
+    CHECK(!giga::game::possessable(reg, pool, body));
+    reg.remove<giga::game::Corpse>(body);
+    CHECK(giga::game::possessable(reg, pool, body));
+
+    // ТЕЛО ПОД СОЛВЕРОМ. physics_step такие пропускает, и вселившийся игрок
+    // просто не ходил бы — вторая половина симптома владельца.
+    reg.emplace<giga::RigidBody>(body, giga::RigidBody{});
+    CHECK(!giga::game::possessable(reg, pool, body));
+    reg.remove<giga::RigidBody>(body);
+    CHECK(giga::game::possessable(reg, pool, body));
+
+    // ПОКОЛЕНИЕ — ровно то, что напечатал щуп: слот жив, но ссылка чужая.
+    giga::game::NpcRef& ref = reg.get<giga::game::NpcRef>(body);
+    ref.gen = static_cast<std::uint16_t>(pool.generation(id) + 1);
+    CHECK(!giga::game::possessable(reg, pool, body));
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
     saveload_test::awaken_is_the_one_law();
+    saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();
     saveload_test::round_trip();
     saveload_test::macro_world_round_trips();
