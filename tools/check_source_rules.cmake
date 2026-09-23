@@ -720,11 +720,24 @@ endif()
 # measured on landing day: the 256 rule matched `sTile[256]` and `256u`.
 # Bracket classes `[.]` survive both parses; never use backslash escapes in
 # these arguments.
-_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]128([.][0-9]*)?[^A-Za-z0-9_]"
+# СУФФИКС ЛИТЕРАЛА — ДЫРА, ЧЕРЕЗ КОТОРУЮ ПРАВИЛО ПРОПУСКАЛО СВОЙ ЖЕ ДЕФЕКТ.
+# Хвостовой класс `[^A-Za-z0-9_...]` исключает БУКВЫ, а `u`/`U`/`f`/`F` — буквы:
+# `127)` ловилось, `127u` проходило насквозь. Замерено 2026-09-23 прогоном
+# регулярок через `cmake -P` на пробных строках, и дефект был НЕ гипотетический
+# — `shaders/medium_sim.comp:279` нёс декод сетки `ci & 127u` со сдвигами 7/14
+# при зелёном гейте, то есть ровно ту «маску, пережившую изменение размера
+# сетки», ради которой правило и написано. Суффикс теперь СЪЕДАЕТСЯ явной
+# группой перед хвостом, так что литерал опознаётся в любой записи.
+#
+# Почему не запрещён hex (`0x7F`, `0x80`): в дереве они законны и не про сетку
+# — `0x7Fu` это потолок семибитного счётчика тишины, `0x7FEB352Du` — константа
+# хеша, `0x80000000u` — бит-страж страницы. Запрет кричал бы волком на три
+# честные строки, а правило само предупреждает абзацем выше, чем это кончается.
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]128([.][0-9]*)?[uUfF]?[^A-Za-z0-9_]"
     "grid literal 128 is banned in shaders — use GIGA_MACRO_DIM (passed via -D from CMakeLists, parsed out of src/world/types.h). Retyped copies of the grid are how prop.frag ended up dividing by 76.8 against the C++ side's 64.")
-_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]127[^A-Za-z0-9_.]"
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]127[uU]?[^A-Za-z0-9_.]"
     "wrap-mask literal 127 is banned in shaders — spell it (GIGA_MACRO_DIM - 1) so the mask cannot outlive a grid resize.")
-_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]256[.][0-9]*[^A-Za-z0-9_]"
+_giga_scan(GIGA_SHADER_FILES "[^A-Za-z0-9_.]256[.][0-9]*[fF]?[^A-Za-z0-9_]"
     "world-extent literal 256.x is banned in shaders — derive it: float(GIGA_MACRO_DIM) * GIGA_CELL_SIZE.")
 # GIGA_-prefixed FEATURE switches (GIGA_ALBEDO_ARRAY, GIGA_SHADOW_SET,
 # GIGA_VOLUMETRIC_GRID_BINDINGS) are an existing in-shader convention and stay

@@ -97,6 +97,7 @@ layout(push_constant) uniform Push {
 #include "material_surface.glsl"
 
 const int kMacroDim = GIGA_MACRO_DIM;
+const uint kMacroDimU = uint(kMacroDim);
 const uint kCells = uint(kMacroDim * kMacroDim * kMacroDim);
 const uint kNoPage = 0xFFFFFFFFu;
 // Кап окна шва приезжает -D дефайном из gpu_medium_pass.h (CMake парсит
@@ -114,7 +115,13 @@ const uint kMaxGroupsX = 32768u;
 // bit 31 (kActInList) МЁРТВ инкрементом 2: членство = бит в uActiveBits.
 const uint kActChanged = 1u;
 const uint kActQuietShift = 1u;
-const uint kActQuietMask = 0x7Fu << 1;
+// Счётчик тишины — СЕМЬ бит, и потолок у него один. Он жил тремя копиями:
+// `0x7Fu` здесь и два `127u` по месту насыщения (строки ~474 и ~536). Это не
+// размер сетки — совпадение с маской 128-1 случайное, и именно оно заставило
+// бы починенное правило 9 кричать волком на законные строки. Имя разводит
+// два разных числа, у которых просто одинаковое значение.
+const uint kActQuietMax = 0x7Fu;
+const uint kActQuietMask = kActQuietMax << kActQuietShift;
 // Порог сна — -D мостом из gpu_medium_pass.h (инкр. 3: прежде жил ДВУМЯ
 // независимыми литералами 16 в хедере и здесь — разъехались бы молча).
 const uint kSleepSubsteps = GIGA_MEDIUM_SLEEP;
@@ -276,8 +283,15 @@ bool can_swap(Sub a, Sub b) {
 void run_move(uint slot, uint threadId) {
     uint ci = uListA[slot];
     if (!cell_budgeted(ci)) return; // заморожен локально — ждёт очереди
-    ivec3 cell = ivec3(int(ci & 127u), int((ci >> 7) & 127u),
-                       int((ci >> 14) & 127u));
+    // ОБРАТНАЯ К macro_index ([world/types.h]: x + y*D + z*D*D) — из одного
+    // knob'а kMacroDim, тем же действием, что и прямая. Здесь стояли литералы
+    // `127u` (маска D-1) и сдвиги `7`/`14` (log2 D и 2*log2 D), переписанные
+    // руками: ровно то, что запрещает правило 9, и оно их ПРОПУСКАЛО — хвост
+    // регулярки не переживал суффикс `u` (гейт починен 2026-09-23). D —
+    // степень двойки по инварианту мира, деление сворачивается в сдвиг.
+    ivec3 cell = ivec3(int(ci % kMacroDimU),
+                       int((ci / kMacroDimU) % kMacroDimU),
+                       int(ci / (kMacroDimU * kMacroDimU)));
     // Ось и знак гравитации фрейма — нужны РАНЬШЕ сдвига решётки.
     int downAxis = pc.downStep.x != 0 ? 0 : (pc.downStep.y != 0 ? 1 : 2);
     bool downPos = pc.downStep[downAxis] > 0;
@@ -471,7 +485,7 @@ void run_settle(uint slot, uint threadId) {
         // успел сходить (~7% фронта карва замерзало при p=0.3). До 8 —
         // часы только у исполненных.
         if (fq < 8u) return;
-        fq = min(fq + 1u, 127u);
+        fq = min(fq + 1u, kActQuietMax);
         atomicAnd(uCellAct[ci], ~kActQuietMask);
         atomicOr(uCellAct[ci], fq << kActQuietShift);
         if (fq >= kSleepSubsteps) sleep_cell(ci);
@@ -533,7 +547,7 @@ void run_settle(uint slot, uint threadId) {
     uint quiet = (act & kActChanged) != 0u
                      ? 0u
                      : min(((act & kActQuietMask) >> kActQuietShift) + 1u,
-                           127u);
+                           kActQuietMax);
     atomicAnd(uCellAct[ci], ~(kActChanged | kActQuietMask));
     atomicOr(uCellAct[ci], quiet << kActQuietShift);
     // Судьба битом — ТРИ исхода, и середина не вербует (урок первого
