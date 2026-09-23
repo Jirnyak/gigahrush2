@@ -1,3 +1,4 @@
+#include "core/jobs.h"   // parallel_for — развёртка судьи это бейк-тайм
 #include "world/destruct.h"
 
 #include <bit>     // std::countr_zero — перечисление атомов компонента
@@ -950,41 +951,76 @@ void collect_mobile_support_cells(const World& w,
             macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
         marked[ci >> 6] |= std::uint64_t{1} << (ci & 63u);
     };
-    for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
-        const SubMask& m = w.grid().masks()[ci];
-        bool mobile = false;
-        if (m.empty()) {
-            // Пустая маска = вся клетка типа только у материи сред (закон
-            // чтения) — это и есть однородная жидкость/газ.
-            mobile = material_is_medium(w.grid().types()[ci]);
-        } else if (mats && mats->paged(ci)) {
-            const CellType* pg = mats->page(ci);
-            for (int wi = 0; wi < 8 && !mobile; ++wi) {
-                std::uint64_t bits = m.words[wi];
-                while (bits != 0) {
-                    const int b = std::countr_zero(bits);
-                    bits &= bits - 1;
-                    const CellType mt = pg[wi * 64 + b];
-                    if (mt != kCellAir && !material_bears_load(mt)) {
-                        mobile = true;
-                        break;
+    // ДВЕ ФАЗЫ вместо одной (2026-09-23, §79): дорого здесь РАЗРЕШЕНИЕ СТРАНИЦЫ
+    // и обход её битов — 289-334 мс на входе на этаж. Предикат «в клетке есть
+    // атом, НЕ несущий нагрузку» — чистая функция клетки, значит считается на
+    // всех ядрах. Пометка соседей параллельной быть НЕ может: она пишет по
+    // чужим ci через грани среза, поэтому остаётся серийной — и она дешёвая,
+    // страниц не трогает вовсе.
+    //
+    // Контракт параллели тот же, что у [world/walk_bits.h] build: срез z это
+    // kMacroDim^2 = 16 384 клетки, кратно 64, ни одно слово битсета не делится
+    // между воркерами, результат бит-идентичен расписанию потоков.
+    // ДОКАЗАТЕЛЬСТВО ПАРАЛЛЕЛЬНОЙ БЕЗОПАСНОСТИ — на этапе компиляции, а не
+    // надеждой: воркер владеет срезом z, и его слова не делятся ни с кем ровно
+    // потому, что размер среза кратен 64. Runtime-тест такую гонку поймал бы
+    // лишь случайно (это и есть причина, по которой WalkBits проверяет то же
+    // самое static_assert'ом, а не CHECK'ом).
+    static_assert((kMacroDim * kMacroDim) % 64 == 0,
+                  "срез z обязан быть кратен слову битсета");
+    std::vector<std::uint64_t> mobileBits(kMacroCells / 64, 0);
+    {
+        std::uint64_t* mb = mobileBits.data();
+        const SubMask* masks = w.grid().masks().data();
+        const CellType* types = w.grid().types().data();
+        constexpr int kSlice = kMacroDim * kMacroDim;
+        parallel_for(kMacroDim, [mb, masks, types, mats](int z) {
+            const std::size_t lo = static_cast<std::size_t>(z) * kSlice;
+            for (std::size_t ci = lo; ci < lo + kSlice; ++ci) {
+                const SubMask& m = masks[ci];
+                bool mobile = false;
+                if (m.empty()) {
+                    // Пустая маска = вся клетка типа только у материи сред
+                    // (закон чтения) — это и есть однородная жидкость/газ.
+                    mobile = material_is_medium(types[ci]);
+                } else if (mats && mats->paged(ci)) {
+                    const CellType* pg = mats->page(ci);
+                    for (int wi = 0; wi < 8 && !mobile; ++wi) {
+                        std::uint64_t bits = m.words[wi];
+                        while (bits != 0) {
+                            const int b = std::countr_zero(bits);
+                            bits &= bits - 1;
+                            const CellType mt = pg[wi * 64 + b];
+                            if (mt != kCellAir && !material_bears_load(mt)) {
+                                mobile = true;
+                                break;
+                            }
+                        }
                     }
+                } else {
+                    mobile = !material_bears_load(types[ci]);
                 }
+                if (mobile) mb[ci >> 6] |= std::uint64_t{1} << (ci & 63u);
             }
-        } else {
-            mobile = !material_bears_load(w.grid().types()[ci]);
+        });
+    }
+    for (std::uint32_t wi = 0; wi < kMacroCells / 64; ++wi) {
+        std::uint64_t bits = mobileBits[wi];
+        while (bits != 0) {
+            const int b = std::countr_zero(bits);
+            bits &= bits - 1;
+            const std::uint32_t ci = wi * 64 + static_cast<std::uint32_t>(b);
+            const int x = static_cast<int>(ci & 127u);
+            const int y = static_cast<int>((ci >> 7) & 127u);
+            const int z = static_cast<int>(ci >> 14);
+            mark(x, y, z);
+            mark(x + 1, y, z);
+            mark(x - 1, y, z);
+            mark(x, y + 1, z);
+            mark(x, y - 1, z);
+            mark(x, y, z + 1);
+            mark(x, y, z - 1);
         }
-        if (!mobile) continue;
-        const int x = static_cast<int>(ci & 127u);
-        const int y = static_cast<int>((ci >> 7) & 127u);
-        const int z = static_cast<int>(ci >> 14);
-        mark(x, y, z);
-        mark(x + 1, y, z);
-        mark(x - 1, y, z);
-        mark(x, y + 1, z);
-        mark(x, y - 1, z);
-        mark(x, y, z + 1);
-        mark(x, y, z - 1);
     }
     for (std::uint32_t wi = 0; wi < kMacroCells / 64; ++wi) {
         std::uint64_t bits = marked[wi];

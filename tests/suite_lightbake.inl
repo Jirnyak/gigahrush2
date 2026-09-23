@@ -15,6 +15,7 @@
 #include "game/light_bake.h"
 #include "world/destruct.h"
 #include "world/material_props.h"
+#include <algorithm>   // is_sorted — порядок листа излучателей
 #include "world/materials.h"
 #include "world/world.h"
 
@@ -31,6 +32,14 @@ static void test_light_bake_clusters() {
     auto& g = w.grid();
     for (int i = 0; i < 5; ++i) g.fill_cell(10 + i, 20, 30, kMatNeonTube);
     game::rebuild_emitter_field(w, field);
+    // ПОРЯДОК ЛИСТА — свойство, на которое опирается кластеризация: скан стал
+    // двухфазным ради параллели (§78), и фаза сборки обязана остаться серийной
+    // по возрастанию индекса. Мутация «собирать лист прямо в параллельной
+    // фазе» роняет именно это, а не числа ниже.
+    CHECK(field.cells.size() == 5);
+    CHECK(std::is_sorted(field.cells.begin(), field.cells.end()));
+    CHECK(field.emitMask.size() == field.cells.size());
+    for (std::uint32_t c : field.cells) CHECK(field.mat[c] == kMatNeonTube);
     auto lights = game::bake_material_lights(w, field, clusters);
     CHECK(lights.size() == 1);
     const std::uint32_t stripId = lights[0].id;

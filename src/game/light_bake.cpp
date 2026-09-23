@@ -8,6 +8,7 @@
 #include <cstring>
 #include <vector>
 
+#include "core/jobs.h"       // parallel_for — скан излучателей это бейк-тайм
 #include "world/macro_grid.h"
 #include "world/destruct.h"  // kSubMaterialName, kSubGridDim
 #include "world/material_props.h"
@@ -108,12 +109,39 @@ void rebuild_emitter_field(const World& world, EmitterField& f) {
     f.mat.assign(kMacroCells, 0);
     f.cells.clear();
     f.emitMask.clear();
-    // Обход по возрастанию индекса ⇒ cells отсортирован по построению.
+    // ДВЕ ФАЗЫ вместо одной (2026-09-23, §78): дорого здесь РАЗРЕШЕНИЕ
+    // СТРАНИЦЫ и цикл по 512 атомам — 324-491 мс на этаже, каждый вход, обеими
+    // ветками. Это чистая функция клетки, значит её можно считать на всех
+    // ядрах; ЛИСТ — нет, он обязан остаться отсортированным по индексу.
+    //
+    // Фаза 1 — параллельная, пишет только ci-индексированный f.mat: контракт
+    // тот же, что у [world/walk_bits.h] build — срез z это kMacroDim^2 клеток,
+    // записи дизъюнктны по ci, результат бит-идентичен расписанию потоков.
+    //
+    // Цена при этом остаётся КОНСТАНТОЙ и от содержимого не зависит (S16.8,
+    // фикс-цена кадра): этаж с неоном и без неона стоят одинаково — делать
+    // цену пропорциональной находке значило бы отдать fps во власть контента
+    // (вердикт владельца 2026-09-23).
+    {
+        CellType* mat = f.mat.data();
+        // Здесь слов нет вовсе — запись идёт по СВОЕМУ ci в отдельный элемент
+        // массива, поэтому дизъюнктность выполняется по построению и делить
+        // объём можно как угодно.
+        constexpr int kSlice = kMacroDim * kMacroDim;
+        parallel_for(kMacroDim, [&sub, mat](int z) {
+            const std::size_t lo = static_cast<std::size_t>(z) * kSlice;
+            for (std::size_t i = lo; i < lo + kSlice; ++i)
+                mat[i] = sub.emitting_scan(static_cast<std::uint32_t>(i),
+                                           nullptr);
+        });
+    }
+    // Фаза 2 — СЕРИЙНАЯ и по возрастанию индекса, поэтому cells отсортирован
+    // по построению, как и был. Страницу трогает только у ИЗЛУЧАТЕЛЕЙ (их
+    // единицы против двух миллионов), значит второй разбор ничего не стоит.
     for (std::uint32_t idx = 0; idx < kMacroCells; ++idx) {
+        if (f.mat[idx] == 0) continue;
         SubMask m;
-        const CellType t = sub.emitting_scan(idx, &m);
-        if (t == 0) continue;
-        f.mat[idx] = t;
+        sub.emitting_scan(idx, &m);
         f.cells.push_back(idx);
         f.emitMask.push_back(m);
     }
