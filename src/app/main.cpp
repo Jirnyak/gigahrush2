@@ -2072,6 +2072,33 @@ std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
 //
 // Returns entt::null when the floor has nobody left to be, which is the honest
 // end state and the caller must handle it.
+// НАСЛЕДСТВО ЗАПИСИ НЕ ПЕРЕЖИВАЕТ ВСЕЛЕНИЯ (закон владельца 2026-09-23:
+// «игрок == НПЦ это по замыслу, но у записи игрока ИИ обязан быть ПУСТОЙ»).
+//
+// Вселение берёт НЕ новое тело, а ЖИВОГО жителя — и его решение приезжает
+// вместе с телом. Пока это стоило владельцу управления: `ai_patrol_step`
+// подхватывал унаследованный IntentPatrol и перетирал ввод человека
+// (bugs.md Б6.2). Гейт по decider_of там теперь есть, но наследство обязано
+// гаснуть и само — иначе любой проход, который судит по currentIntent (тот же
+// ai_panic_publish_step), получит от игрока чужой приказ.
+//
+// Гасим РАЗОВО, в момент вселения. Чистить это каждый тик в ai_step НЕЛЬЗЯ:
+// тело, побывшее игроком и отпущенное, теряло бы интент и переставало рулиться
+// (поймано существующим гейтом suite_utilai:696). Компонент не сносим —
+// ai_init возвращает мозг только на загрузке этажа.
+//
+// ОДИН ВЫЗОВ НА ОБА САЙТА: вселений два — смерть (possess_a_survivor) и
+// добровольное (possess_nearest_survivor, консольный `possess`). Закон,
+// списанный в два места, разъезжается первой же правкой — дерево про эту
+// ловушку предупреждает отдельно («two travel sites trap»).
+void clear_inherited_mind(Registry& reg, Entity body) {
+    if (game::AiBrain* brain = reg.try_get<game::AiBrain>(body)) {
+        brain->currentIntent = game::kIntentNone;
+        brain->motion = static_cast<std::uint8_t>(game::MotionOwner::Wander);
+    }
+    reg.remove<game::PatrolPlan>(body); // маршрут прежнего владельца записи
+}
+
 Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     // Choose first, mutate after: adding a component while a view is being
     // iterated can dangle that view if EnTT has to grow its pool container. The
@@ -2096,18 +2123,7 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
-    // НАСЛЕДСТВО ЗАПИСИ НЕ ПЕРЕЖИВАЕТ ВСЕЛЕНИЯ (закон владельца 2026-09-23:
-    // «игрок == НПЦ это по замыслу, но у записи игрока ИИ обязан быть ПУСТОЙ»).
-    // Смерть вселяет НЕ в новое тело, а в живого жителя — и его решение
-    // приезжает вместе с телом. Гасим здесь, РАЗОВО: чистить это каждый тик в
-    // ai_step нельзя — тело, побывшее игроком и отпущенное, теряло бы интент и
-    // переставало рулиться (поймано существующим гейтом suite_utilai:696).
-    // Компонент не сносим: ai_init возвращает мозг только на загрузке этажа.
-    if (game::AiBrain* brain = reg.try_get<game::AiBrain>(chosen)) {
-        brain->currentIntent = game::kIntentNone;
-        brain->motion = static_cast<std::uint8_t>(game::MotionOwner::Wander);
-    }
-    reg.remove<game::PatrolPlan>(chosen); // маршрут прежнего владельца
+    clear_inherited_mind(reg, chosen);
     std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
     // Смерть игрока сегодня не имеет НИ ОДНОГО следа на экране (ни экрана, ни
     // затемнения, ни строки) — тестирующий человек её попросту не заметит и не
@@ -2174,6 +2190,7 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
+    clear_inherited_mind(reg, chosen); // тот же закон, что и на пути смерти
     // POSRPG: RpgStats + kill tally + cumulative shots/hits follow the mind.
     // Chambered mag stays on oldPlayer (physical). [combat.h]
     if (oldPlayer != entt::null)
