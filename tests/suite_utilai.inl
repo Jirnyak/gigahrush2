@@ -1669,5 +1669,24 @@ static void test_utilai_all() {
         vel.v = vec3{0.0f, 7.0f, 0.0f};
         ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
         CHECK(vel.v.y == 7.0f);
+
+        // 5. РАЗВИЛКА МОЗГОВ (S13.7a) — Б6.2, потеря управления у владельца.
+        //    Смерть игрока вселяет его НЕ в новое тело, а в живого жителя
+        //    ([app/main.cpp] possess_a_survivor), и AiBrain прежнего владельца
+        //    записи достаётся игроку целиком. Если житель был патрульным,
+        //    currentIntent == IntentPatrol приезжает вместе с телом, а этот
+        //    шаг стоит в кадре ПОСЛЕ controller_step — и перетирал ввод
+        //    человека в том же тике. Проход обязан спрашивать ТЕЛО (decider_of),
+        //    как это делают ai_step/wander_step/ai_equip_step.
+        //
+        //    Мутация «снять гейт decider_of» роняет обе строки ниже.
+        reg.emplace<CameraTag>(e, CameraTag{});
+        brain.currentIntent = IntentPatrol;
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        vel.v = vec3{0.0f, 7.0f, 0.0f};
+        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        CHECK(vel.v.y == 7.0f);      // ввод человека не тронут
+        CHECK(!ai_owns_motion(reg, e)); // и тело не захвачено
+        reg.remove<CameraTag>(e);
     }
 }

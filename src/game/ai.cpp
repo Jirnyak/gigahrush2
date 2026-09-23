@@ -953,6 +953,18 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
+        // РАЗВИЛКА МОЗГОВ (S13.7a) — единственный автоматный проход движения,
+        // который её не имел, и это стоило владельцу потери управления
+        // (bugs.md Б6.2). Вид <AiBrain, NpcRef, Transform, Velocity> накрывает
+        // ТЕЛО ИГРОКА целиком: смерть вселяет не в новое тело, а в живого
+        // жителя, и его AiBrain с currentIntent = IntentPatrol достаётся
+        // игроку по наследству. А шаг стоит в кадре ПОСЛЕ controller_step
+        // ([app/main.cpp]), так что перетирал ввод человека в том же тике —
+        // ровно то, от чего предостерегает комментарий в ai_step выше
+        // («работало бы по счастливой случайности, пока ИИ не перетёр ввод»).
+        // Спрашиваем ТЕЛО, а не флаг: decider_of — тот же вопрос, которым
+        // закрыт Б1 ([game/ai.h]).
+        if (decider_of(reg, e) != Decider::Resident) continue;
         AiBrain& brain = view.get<AiBrain>(e);
         if (brain.currentIntent != IntentPatrol) continue;
         // ARBITRATION, not decoration: ai_step never owns IntentPatrol (patrol

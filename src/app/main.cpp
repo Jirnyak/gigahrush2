@@ -49,6 +49,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
+#include "game/role.h"     // PatrolPlan — маршрут прежнего владельца записи гасится при вселении
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
@@ -2095,12 +2096,39 @@ Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
     reg.emplace<CameraTag>(chosen, cam);
     reg.emplace<Controller>(chosen, Controller{7.0f, {0, 0, 0}, false});
     pool.set_player(chosenId, true);
+    // НАСЛЕДСТВО ЗАПИСИ НЕ ПЕРЕЖИВАЕТ ВСЕЛЕНИЯ (закон владельца 2026-09-23:
+    // «игрок == НПЦ это по замыслу, но у записи игрока ИИ обязан быть ПУСТОЙ»).
+    // Смерть вселяет НЕ в новое тело, а в живого жителя — и его решение
+    // приезжает вместе с телом. Гасим здесь, РАЗОВО: чистить это каждый тик в
+    // ai_step нельзя — тело, побывшее игроком и отпущенное, теряло бы интент и
+    // переставало рулиться (поймано существующим гейтом suite_utilai:696).
+    // Компонент не сносим: ai_init возвращает мозг только на загрузке этажа.
+    if (game::AiBrain* brain = reg.try_get<game::AiBrain>(chosen)) {
+        brain->currentIntent = game::kIntentNone;
+        brain->motion = static_cast<std::uint8_t>(game::MotionOwner::Wander);
+    }
+    reg.remove<game::PatrolPlan>(chosen); // маршрут прежнего владельца
     std::fprintf(stderr, "[death] possessed record %u\n", chosenId);
     // Смерть игрока сегодня не имеет НИ ОДНОГО следа на экране (ни экрана, ни
     // затемнения, ни строки) — тестирующий человек её попросту не заметит и не
     // сможет сказать, когда она случилась. В файл она обязана попасть.
-    soak_log("[soak] EVENT death: вселение в запись %u (слой %u)\n", chosenId,
-             static_cast<unsigned>(layer));
+    // ЩУП ПОД Б6.1 (рагдолл висит на игроке). Разводящая гипотеза: вселение
+    // могло достаться КОРНЮ ТРУПА — рециклинг слотов взведён, макросим достаёт
+    // слот из свободного списка, и у трупа valid&&alive снова истина, а отбор
+    // выше смотрит голый слот, не поколение, и не исключает Corpse/Dead/
+    // RigidBody. Если так — сегменты на JointLink остаются на новом теле по
+    // построению, а движением рулит солвер рагдолла. Одна строка сока решает
+    // вопрос вместо догадки; гипотеза из кода, приборами НЕ подтверждена.
+    const game::NpcRef& chosenRef = reg.get<const game::NpcRef>(chosen);
+    soak_log("[soak] EVENT death: вселение в запись %u (слой %u) | gen ref=%u "
+             "pool=%u | corpse=%d dead=%d rigid=%d segments=%d\n",
+             chosenId, static_cast<unsigned>(layer),
+             static_cast<unsigned>(chosenRef.gen),
+             static_cast<unsigned>(pool.generation(chosenId)),
+             reg.all_of<game::Corpse>(chosen) ? 1 : 0,
+             reg.all_of<game::Dead>(chosen) ? 1 : 0,
+             reg.all_of<RigidBody>(chosen) ? 1 : 0,
+             reg.all_of<game::BodySegment>(chosen) ? 1 : 0);
     return chosen;
 }
 
