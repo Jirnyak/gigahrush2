@@ -18,9 +18,11 @@
 #include <algorithm>
 #include <bit>     // std::popcount — счёт атомов в маске клетки
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "render/gpu_medium_pass.h"
@@ -980,6 +982,279 @@ void test_frontier_freeze(gpu::VulkanDevice& dev) {
 // Сцена: одеяло газа > kRbSlotCap клеток держит список толстым, потом
 // обрыв воды у безстраничного соседа — сосед обязан получить страницу
 // вращающимся окном пака и принять воду.
+// ДЛИННОЕ СВОБОДНОЕ ПАДЕНИЕ — репро жалобы владельца 2026-09-23: «раблы
+// падают долго в пустоте и просто ВСЕ застывают через несколько секунд;
+// если падают недалеко — не застывают».
+//
+// Почему этого не ловил test_frontier_freeze: там фронт проходит РОВНО ОДНУ
+// клетку вбок (W(80,80,5) -> D(81,80,5)), то есть проверяется первый шаг
+// раскрытия. Здесь материя идёт ДЕСЯТКИ клеток подряд вниз и обязана всю
+// дорогу получать страницы ВПЕРЁД себя. Гонится за ней единственный
+// потребитель — open_frontier(liveCis) ([gpu_medium_pass.cpp]), а узнаёт он
+// о летящем из обратного шва.
+//
+// Сцена: пустая колонна высотой kDrop клеток, дно снизу, рабл сверху.
+// Оракул не «долетело до дна» (это зависит от числа подтиков), а «НЕ ВСТАЛО
+// КОЛОМ»: фронт обязан спускаться, пока есть подтики. Меряем нижнюю занятую
+// клетку колонны на трёх отсечках — она обязана падать монотонно.
+void test_long_fall(gpu::VulkanDevice& dev) {
+    // ОСЬ ПАДЕНИЯ — ОТ ФРЕЙМА, НЕ ЛИТЕРАЛ. Закон изотропии: «вниз» это одно
+    // из восьми значений GravityRegime, ни одна ось не особенная, и этаж
+    // задаёт режим сам. Сцена ниже строится по Z только потому, что её
+    // выбрал ДЕФОЛТНЫЙ режим мира, и это здесь проверяется вслух: если
+    // дефолт однажды сменят, тест обязан покраснеть громко, а не молча
+    // мерить не ту ось.
+    {
+        const CellStep down = regime_down(World{}.gravity().regime);
+        CHECK(down.x == 0 && down.y == 0 && down.z == -1);
+    }
+    static World w;
+    constexpr int kX = 40, kY = 40;
+    constexpr int kTop = 100;   // клетка со стартовым раблом
+
+    // ДНА НЕТ ВООБЩЕ — мир пуст по всей колонне. Это и есть «падают долго в
+    // пустоте и через шов тора»: материя уходит вниз, заворачивается по z и
+    // идёт снова. Прошлая версия сцены клала плиту в 48 клетках ниже, рабл
+    // штатно долетал и ЛОЖИЛСЯ — жалоба не воспроизводилась.
+
+    // МАСШТАБ — вторая половина жалобы: падает КУСОК ДОМА, а не клетка.
+    // Одиночная колонна (прошлая версия) пролетала весь тор и не вставала.
+    // Плита kSlab x kSlab кладёт тысячи живых клеток разом — режим, в
+    // котором сосед по файлу test_seam_tail ловил «хвост списка за окном
+    // пака» (live > kRbSlotCap = 8192: пак покрывает первые 8192 слота, а
+    // не попавший в окно фронт не материализуется и материя в него не идёт).
+    constexpr int kSlab = 44; // 44^2 = 1936 клеток материи + их округа
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    std::vector<std::uint32_t> seeds;
+    int kPoured = 0;
+    for (int ox = 0; ox < kSlab; ++ox)
+        for (int oy = 0; oy < kSlab; ++oy) {
+            const auto ci = static_cast<std::uint32_t>(
+                macro_index(wrap_macro(kX + ox), wrap_macro(kY + oy), kTop));
+            CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+            for (int sx = 0; sx < 8; ++sx)
+                for (int sy = 0; sy < 8; ++sy)
+                    for (int sz = 0; sz < 2; ++sz) {
+                        pg[sub_bit(sx, sy, sz)] = kMatRubbleConcrete;
+                        ++kPoured;
+                    }
+            seeds.push_back(ci);
+        }
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(seeds.data(), seeds.size(), w, mirror);
+
+    // ОТПЕЧАТОК КОЛОННЫ: какие z заняты нашей материей и сколько квантов.
+    // На торе «ниже» не абсолютно (z заворачивается), поэтому оракул строим
+    // не на координате, а на ДВИЖЕНИИ: отпечаток обязан меняться, пока есть
+    // подтики. Замерший отпечаток = встала колом, ровно жалоба владельца.
+    auto column_print = [&]() {
+        std::string out;
+        for (int z = 0; z < kMacroDim; ++z) {
+            const auto ci = static_cast<std::uint32_t>(macro_index(kX, kY, z));
+            const CellType* p = f.page(ci);
+            if (!p) continue;
+            int q = 0;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (p[b] == kMatRubbleConcrete) ++q;
+            if (q) out += std::to_string(z) + ":" + std::to_string(q) + " ";
+        }
+        return out;
+    };
+
+    std::uint64_t substep = 0;
+    std::string mark[3];
+    // Игровой каденс, как в test_frontier_freeze: половина кадров без
+    // подтиков, слоты чередуются.
+    for (int b = 0; b < 600; ++b) {
+        const std::uint32_t n = (b & 1) ? 0u : 4u;
+        CHECK(run_batch(dev, mirror, medium, w, n, substep,
+                        static_cast<std::uint32_t>(b) %
+                            gpu::kMaxFramesInFlight));
+        substep += n;
+        medium.apply_readback(w, mirror);
+        if (b == 199) mark[0] = column_print();
+        if (b == 399) mark[1] = column_print();
+        if (b % 100 == 0) {
+            // СКОЛЬКО КОЛОНН ЕЩЁ СТОЯТ НА СТАРТЕ. Свободное падение без дна:
+            // через 1200 подтиков на исходной высоте не должно остаться
+            // НИЧЕГО. Всё, что там осталось, — встало колом.
+            int stuck = 0, stuckQ = 0;
+            for (std::uint32_t ci : seeds) {
+                const CellType* p = f.page(ci);
+                if (!p) continue;
+                int q = 0;
+                for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                    if (p[b2] == kMatRubbleConcrete) ++q;
+                if (q) { ++stuck; stuckQ += q; }
+            }
+            std::printf("[medium_test] long fall b=%d живых=%u квантов=%u | "
+                        "ЗАСТРЯЛО на старте: %d колонн из %zu (%d квантов)\n",
+                        b, medium.live_count(), medium.live_quanta(),
+                        stuck, seeds.size(), stuckQ);
+        }
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    mark[2] = column_print();
+
+    std::printf("[medium_test] long fall @200:  %s\n", mark[0].c_str());
+    std::printf("[medium_test] long fall @400:  %s\n", mark[1].c_str());
+    std::printf("[medium_test] long fall @600:  %s\n", mark[2].c_str());
+    std::printf("[medium_test] long fall: подтиков %llu, истаяло %u\n",
+                static_cast<unsigned long long>(substep), medium.fade_total());
+
+    // ОРАКУЛ ДВИЖЕНИЯ. Пока есть подтики и нет дна — материя обязана ехать.
+    // Совпавшие отпечатки = встала колом.
+    CHECK(!mark[0].empty());
+    CHECK(mark[1] != mark[0]);
+    CHECK(mark[2] != mark[1]);
+
+    // ОРАКУЛ СОГЛАСИЯ ДВУХ КОПИЙ МИРА — жалоба владельца 2026-09-23
+    // «твёрдые куски застывают в пустоте, а коснёшься — падают дальше».
+    //
+    // Картинку игрок видит из GPU-зеркала, а ТВЁРДЫЕ ТЕЛА сталкиваются по
+    // CPU-маскам ([sim/rigid.cpp] mask(), [sim/physics.cpp]). CPU-маски
+    // обновляет только обратный шов, слот за слотом, и окно у него
+    // kRbSlotCap = 8192. Что в окно не влезло — на CPU остаётся СТАРЫМ, то
+    // есть твёрдым. Тогда обломок упирается в призрачную клетку в визуально
+    // пустом месте, дрожит на ней (замер владельца: noisy 1292 из 1394
+    // бодрых при quiet-no-touch = 0, то есть контакт ЕСТЬ), а внешний
+    // импульс сдвигает его с призрака, и он падает дальше.
+    //
+    // Эта сцена держит live выше окна НАРОЧНО (плита 44x44 даёт ~10k живых
+    // против 8192 слотов) — то есть ровно тот режим, где расхождение
+    // обязано проявиться, если оно есть. verify() читает каждый буфер
+    // зеркала назад и сверяет с CPU-правдой побитово; в тестах его до
+    // сегодня не звал никто.
+    const bool mirrorAgrees = mirror.verify(w);
+    std::printf("[medium_test] long fall: зеркало против CPU — %s\n",
+                mirrorAgrees ? "СОГЛАСНЫ" : "РАСХОДЯТСЯ");
+    CHECK(mirrorAgrees);
+
+    medium.destroy();
+    mirror.destroy();
+}
+
+// РАБЛ СКВОЗЬ ПРОРЕЗАННУЮ ДЫРУ — самый близкий к жалобе владельца сценарий
+// 2026-09-23: «вырезал дырку в хруще, куски упали и на полпути застыли».
+//
+// Чем отличается от test_long_fall выше, и почему это важно: там материя
+// падала в ЧИСТОЙ пустоте и я будил её рукой. Здесь всё как в игре —
+// настоящее перекрытие, настоящий carve_sphere, пробуждение РЕЗУЛЬТАТОМ
+// КАРВА (`wake_cells(dirtyCells)`, ровно как main.cpp), падение сквозь
+// узкую апертуру в твёрдой геометрии и пустота под ней.
+//
+// Оракул тот же и единственный: без дна материя обязана ехать, пока есть
+// подтики. Всё, что осталось на стартовой высоте через 1200 подтиков, —
+// встало колом.
+void test_rubble_through_aperture(gpu::VulkanDevice& dev) {
+    // Та же оговорка про ось, что у test_long_fall выше: сцена по Z законна
+    // ровно пока дефолтный режим мира — NegZ, и это утверждается, а не
+    // подразумевается.
+    {
+        const CellStep down = regime_down(World{}.gravity().regime);
+        CHECK(down.x == 0 && down.y == 0 && down.z == -1);
+    }
+    static World w;
+    constexpr int kX = 40, kY = 40;
+    constexpr int kSlabZ = 100;  // перекрытие
+    constexpr int kPad = 6;      // сколько клеток перекрытия вокруг дыры
+
+    // Перекрытие: сплошной бетон. Под ним — НИЧЕГО до самого низа.
+    for (int ox = -kPad; ox <= kPad; ++ox)
+        for (int oy = -kPad; oy <= kPad; ++oy)
+            w.grid().fill_cell(wrap_macro(kX + ox), wrap_macro(kY + oy),
+                               kSlabZ, kMatConcrete);
+    // Слой рабла НА перекрытии — то, что посыплется в дыру.
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    int poured = 0;
+    for (int ox = -3; ox <= 3; ++ox)
+        for (int oy = -3; oy <= 3; ++oy) {
+            const auto ci = static_cast<std::uint32_t>(macro_index(
+                wrap_macro(kX + ox), wrap_macro(kY + oy), kSlabZ + 1));
+            CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+            for (int sx = 0; sx < 8; ++sx)
+                for (int sy = 0; sy < 8; ++sy)
+                    for (int sz = 0; sz < 4; ++sz) {
+                        pg[sub_bit(sx, sy, sz)] = kMatRubbleConcrete;
+                        ++poured;
+                    }
+        }
+
+    // КАРВ — настоящий, тем же глаголом, что игра. Дыра насквозь через
+    // перекрытие под самым центром завала.
+    static CarveScratch scratch;
+    static CarveResult res;
+    CarveOp op{};
+    op.x = (float(kX) + 0.5f) * kCellSize;
+    op.y = (float(kY) + 0.5f) * kCellSize;
+    op.z = (float(kSlabZ) + 0.5f) * kCellSize;
+    op.radius = 2.5f;
+    op.power = 65535;
+    op.seed = 0xBEEFu;
+    const std::int32_t removed = carve_sphere(w, op, scratch, res);
+    std::printf("[medium_test] апертура: карв снёс %d субвокселей, "
+                "грязных клеток %zu\n",
+                removed, res.dirtyCells.size());
+    CHECK(removed > 0);
+    CHECK(!res.dirtyCells.empty());
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    // Пробуждение РЕЗУЛЬТАТОМ КАРВА — как в main.cpp, не рукой.
+    medium.wake_cells(res.dirtyCells.data(), res.dirtyCells.size(), w, mirror);
+
+    auto stuck_on_slab = [&]() {
+        int cells = 0, q = 0;
+        for (int ox = -3; ox <= 3; ++ox)
+            for (int oy = -3; oy <= 3; ++oy) {
+                const auto ci = static_cast<std::uint32_t>(macro_index(
+                    wrap_macro(kX + ox), wrap_macro(kY + oy), kSlabZ + 1));
+                const CellType* p = f.page(ci);
+                if (!p) continue;
+                int n = 0;
+                for (int b = 0; b < kSubVoxels; ++b)
+                    if (p[b] == kMatRubbleConcrete) ++n;
+                if (n) { ++cells; q += n; }
+            }
+        return std::pair<int, int>{cells, q};
+    };
+
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 600; ++b) {
+        const std::uint32_t n = (b & 1) ? 0u : 4u;
+        CHECK(run_batch(dev, mirror, medium, w, n, substep,
+                        static_cast<std::uint32_t>(b) %
+                            gpu::kMaxFramesInFlight));
+        substep += n;
+        medium.apply_readback(w, mirror);
+        if (b % 150 == 0) {
+            const auto [c, q] = stuck_on_slab();
+            std::printf("[medium_test] апертура b=%d живых=%u | на перекрытии "
+                        "%d клеток / %d квантов из %d\n",
+                        b, medium.live_count(), c, q, poured);
+        }
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    const auto [cEnd, qEnd] = stuck_on_slab();
+    std::printf("[medium_test] апертура ИТОГ: на перекрытии %d клеток / "
+                "%d квантов из %d (истаяло %u)\n",
+                cEnd, qEnd, poured, medium.fade_total());
+    CHECK(mirror.verify(w));
+
+    medium.destroy();
+    mirror.destroy();
+}
+
 void test_seam_tail(gpu::VulkanDevice& dev) {
     static World w;
     // Газовое одеяло: 96x96 клеток одним слоем на дне из полнотвёрдых.
@@ -2312,6 +2587,8 @@ int main() {
         test_headless_roundtrip(dev);
         test_automaton_water(dev);
         test_frontier_freeze(dev);
+        test_long_fall(dev);
+        test_rubble_through_aperture(dev);
         test_seam_tail(dev);
         test_lone_fade(dev);
         test_carve_vs_seam(dev);

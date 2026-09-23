@@ -617,6 +617,80 @@ static void test_humanoid_segments_fall_and_cleanup() {
     CHECK(left == 0u);
 }
 
+// ТОЛПА ОБЛОМКОВ В СВОБОДНОМ ПАДЕНИИ — репро жалобы владельца 2026-09-23:
+// «твёрдые куски падают долго в пустоте и ВСЕ застывают; коснёшься — падают
+// дальше». Гипотеза владельца, которую этот тест и проверяет: когда падает
+// МНОГО кусков разом, часть уже сдвинулась, но след о старой позиции живёт
+// в широкой фазе, и соседи цепляются за призрак.
+//
+// Почему именно «много»: замер владельца под профилировщиком дал
+// `bodies 1400 awake 1394 | noisy 1292 quiet-no-touch 0`. Расшифровка:
+// тела НЕ спят (сон требует контакта и тишины) и при этом У ВСЕХ есть
+// контакт — то есть они упираются во что-то в визуально пустом месте.
+// Расхождение масок мира исключено отдельно: `mirror.verify()` в
+// medium_test после падения плиты 44x44 (live 10121 > окна 8192) дал
+// побитовое совпадение CPU и GPU.
+//
+// КОНТРОЛЬ В ТОЙ ЖЕ СЦЕНЕ: одно тело в тех же условиях. Если одиночка
+// долетает, а толпа встаёт — виновата не гравитация и не интегратор, а
+// взаимодействие тел (широкая фаза / контакты / линки). Если встают оба —
+// корень в падении как таковом, и это другой адрес.
+static void test_debris_crowd_free_fall() {
+    // Пустой слой: НИ ОДНОЙ твёрдой клетки. Падать некуда и не на что —
+    // любое торможение в такой сцене нефизично по построению.
+    auto drop_and_measure = [](int count, const char* label) {
+        LevelStack stack;
+        LayerId g = stack.push_layer();
+        Registry reg;
+
+        std::vector<Entity> bodies;
+        const float z0 = 100.0f * kCellSize;
+        // Кластер, как куски одной стены: плотно, но без пересечений.
+        const int side = static_cast<int>(std::ceil(std::sqrt(double(count))));
+        for (int i = 0; i < count; ++i) {
+            const int ix = i % side, iy = i / side;
+            Entity e = reg.create();
+            reg.emplace<Transform>(
+                e, Transform{vec3{(40.0f + float(ix) * 0.6f) * kCellSize,
+                                  (40.0f + float(iy) * 0.6f) * kCellSize, z0},
+                             g});
+            reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+            reg.emplace<AABB>(e, AABB{vec3{0.2f, 0.2f, 0.2f}});
+            reg.emplace<Renderable>(e, Renderable{vec3{0.4f, 0.4f, 0.4f}});
+            rigid_attach_box(reg, e, vec3{0.2f, 0.2f, 0.2f}, 40.0f,
+                             game::kFleshRestitution, game::kFleshFriction);
+            bodies.push_back(e);
+        }
+
+        // Десять секунд свободного падения.
+        for (int i = 0; i < 10 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+
+        // Сколько НЕ уехало вниз заметно (полметра за десять секунд — это
+        // стояние: свободное падение даёт сотни метров).
+        int stalled = 0, asleep = 0;
+        float minDrop = 1e9f, maxDrop = -1e9f;
+        for (Entity e : bodies) {
+            const float drop = z0 - reg.get<Transform>(e).pos.z;
+            if (drop < 0.5f) ++stalled;
+            if (reg.get<RigidBody>(e).asleep) ++asleep;
+            minDrop = std::min(minDrop, drop);
+            maxDrop = std::max(maxDrop, drop);
+        }
+        std::printf("[props] свободное падение %s: тел %d, застряло %d, "
+                    "спит %d, просадка от %.2f до %.2f м\n",
+                    label, count, stalled, asleep,
+                    static_cast<double>(minDrop), static_cast<double>(maxDrop));
+        return stalled;
+    };
+
+    const int loneStalled = drop_and_measure(1, "ОДИНОЧКА");
+    const int crowdStalled = drop_and_measure(256, "ТОЛПА");
+
+    // Оракул: в пустоте не за что зацепиться ни одному, ни двумстам.
+    CHECK(loneStalled == 0);
+    CHECK(crowdStalled == 0);
+}
+
 // СТИКЦИЯ (§64): НАСТОЯЩИЙ труп-гуманоид (боксы-сегменты из prop_forms.csv
 // + жёсткие штанги) обязан ДОСТИЧЬ сна на полу. До трения покоя это было
 // невозможно: штанги дерутся с контактами 16 раз за тик, тело дрожало выше
@@ -1492,6 +1566,7 @@ void test_props_game_all() {
     test_anchor_validate_skips_solid_support();
     test_detached_prop_is_rigid_body();
     test_humanoid_segments_fall_and_cleanup();
+    test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
     test_carry_follows_and_throw_inherits();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
