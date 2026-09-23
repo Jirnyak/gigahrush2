@@ -603,8 +603,25 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         static std::uint32_t applies = 0;
         if (++applies % 128u == 0u) {
             std::uint32_t dry = 0, liq = 0, gas = 0, mixed = 0;
-            static std::uint32_t zHist[kMacroDim];
-            std::memset(zHist, 0, sizeof zHist);
+            // ОСЬ ФРЕЙМА, НЕ Z. Закон изотропии (CANON: «x/y/z равноправны,
+            // геометрия — фрейм»): «глубина» — это координата вдоль
+            // regime_down, а «колонна» — пара оставшихся осей. Печать,
+            // прибитая к z и паре xy, верна ровно при NegZ и врёт при семи
+            // остальных режимах — а гравитацию этажа задаёт модуль.
+            // Найдено владельцем 2026-09-23 по этому самому выводу.
+            const int depthAxis = lastDown_.x != 0   ? 0
+                                  : lastDown_.y != 0 ? 1
+                                                     : 2;
+            const int crossA = (depthAxis + 1) % 3;
+            const int crossB = (depthAxis + 2) % 3;
+            auto coord_of = [](std::uint32_t ci, int axis) -> std::uint32_t {
+                const std::uint32_t d = kMacroDim;
+                return axis == 0 ? ci % d
+                       : axis == 1 ? (ci / d) % d
+                                   : ci / (d * d);
+            };
+            static std::uint32_t depthHist[kMacroDim];
+            std::memset(depthHist, 0, sizeof depthHist);
             for (std::uint32_t ci : liveCis) {
                 const std::uint32_t lvl = medium_level_at(world, ci);
                 const std::uint32_t l = lvl & 0xFFFFu, g = lvl >> 16;
@@ -612,36 +629,40 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                 else if (l > 0 && g > 0) ++mixed;
                 else if (l > 0) ++liq;
                 else ++gas;
-                ++zHist[(ci / (kMacroDim * kMacroDim)) & (kMacroDim - 1)];
+                ++depthHist[coord_of(ci, depthAxis)];
             }
+            static const char kAxisName[3] = {'x', 'y', 'z'};
             std::fprintf(stderr,
                          "[medium-dbg] live window %zu (list %u, active %u): "
                          "dry %u liq %u gas %u mixed %u | dry-votes %u\n",
                          liveCis.size(), lastCount_, activeTotal_, dry, liq,
                          gas, mixed, dryLiveTotal_);
             for (int pass = 0; pass < 5; ++pass) {
-                std::uint32_t bestZ = 0, bestN = 0;
-                for (std::uint32_t z = 0; z < kMacroDim; ++z)
-                    if (zHist[z] > bestN) { bestN = zHist[z]; bestZ = z; }
+                std::uint32_t bestD = 0, bestN = 0;
+                for (std::uint32_t d = 0; d < kMacroDim; ++d)
+                    if (depthHist[d] > bestN) { bestN = depthHist[d]; bestD = d; }
                 if (bestN == 0) break;
-                std::fprintf(stderr, "[medium-dbg]   z=%u: %u cells\n",
-                             bestZ, bestN);
-                zHist[bestZ] = 0;
+                std::fprintf(stderr, "[medium-dbg]   глубина %c=%u: %u cells\n",
+                             kAxisName[depthAxis], bestD, bestN);
+                depthHist[bestD] = 0;
             }
-            // Топ XY-колонок — водопады шахт видны адресами столбов.
-            static std::uint32_t xyHist[kMacroDim * kMacroDim];
-            std::memset(xyHist, 0, sizeof xyHist);
+            // Топ КОЛОНН вдоль гравитации — водопады видны адресами столбов.
+            // Ключ колонны = пара поперечных координат, тоже от фрейма.
+            static std::uint32_t colHist[kMacroDim * kMacroDim];
+            std::memset(colHist, 0, sizeof colHist);
             for (std::uint32_t ci : liveCis)
-                ++xyHist[ci % (kMacroDim * kMacroDim)];
+                ++colHist[coord_of(ci, crossA) +
+                          coord_of(ci, crossB) * kMacroDim];
             for (int pass = 0; pass < 4; ++pass) {
                 std::uint32_t bestI = 0, bestN = 0;
                 for (std::uint32_t i = 0; i < kMacroDim * kMacroDim; ++i)
-                    if (xyHist[i] > bestN) { bestN = xyHist[i]; bestI = i; }
+                    if (colHist[i] > bestN) { bestN = colHist[i]; bestI = i; }
                 if (bestN == 0) break;
                 std::fprintf(stderr,
-                             "[medium-dbg]   column x=%u y=%u: %u cells\n",
-                             bestI % kMacroDim, bestI / kMacroDim, bestN);
-                xyHist[bestI] = 0;
+                             "[medium-dbg]   колонна %c=%u %c=%u: %u cells\n",
+                             kAxisName[crossA], bestI % kMacroDim,
+                             kAxisName[crossB], bestI / kMacroDim, bestN);
+                colHist[bestI] = 0;
             }
         }
     }
@@ -712,6 +733,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     MediumPush push{};
     // downStep.w = бюджет диспатча (big-judge.md D): читают только
     // move/settle (cell_budgeted), остальным модам поле безразлично.
+    lastDown_ = downStep; // фрейм для диагностики — закон изотропии, см. .h
     push.downStep = ivec4{downStep.x, downStep.y, downStep.z,
                           static_cast<std::int32_t>(budget_)};
     auto dispatch_mode = [&](std::uint32_t mode, std::uint32_t sel,
