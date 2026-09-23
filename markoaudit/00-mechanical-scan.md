@@ -55,7 +55,7 @@
 | `net_worth`, `bank_deposit`, `bank_withdraw`, `bank_repay`, `bank_take_loan`, `wealth_tier` | `src/game/economy.h` | 19/23/8/9/14/13 | Банк, сданный 2026‑08‑17 как «банк целиком». Вся арифметика счёта вызывается только из `suite_economy.inl`. |
 | `needs_advance`, `apply_consumable`, `consumable_hp_cost`, `needs_hp_rate`, `needs_speed_scale`, `needs_warn_mask`, `needs_failed_mask` | `src/game/needs.h` | 17/17/18/12/5/8/8 | Потребности. |
 | `diffusion_step`, `diffusion_at`, `diffusion_add`, `diffusion_refresh_walkable` | `src/sim/diffusion.h` | 42/17/19/19 | 1043 строки (`.cpp`+`.h`). |
-| `carve_at`, `carve_roll`, `carve_hash`, `sub_material_at`, `set_sub_material` | `src/world/destruct.h` | 6/6/3/5/4 | Разрушение. |
+| `carve_at`, `carve_roll`, `carve_hash`, `sub_material_at`, `set_sub_material`, `materialize_sub_page`, `settle_sub_page` | `src/world/destruct.h` | 6/6/3/5/4/…/… | Разрушение + ПАРА примитивов владения страницей (CANON S16.9, 2026-09-23). |
 | `score_intents`, `select_intent`, `select_intent_raw` | `src/game/ai.h` | 36/9/11 | Ядро utility‑AI: подсчёт и выбор намерения. |
 | `speech_situation`, `speech_line_index`, `speech_text`, `speech_line_count` | `src/game/speech.h` | 37/9/3/5 | Речь NPC. |
 | `feed_line`, `feed_drain`, `feed_tick`, `event_line`, `event_floor`, `event_relation`, `publish_*` | `src/game/event_bus.h` | 18/17/12/6/10/4/1–3 | Шина событий: издателей и подписчиков в игре нет. |

@@ -41,7 +41,7 @@ With the `FloorStreamer` slot pool (`floor_stream.cpp:52`) that multiplies by th
 
 | Field | Allocated | Written by | READ by | Cost | Verdict |
 |---|---|---|---|---|---|
-| `"sub_material"` (`CellType`) | `destruct.cpp:270`, `save.cpp:1365`, `padic_gen.cpp:571`, `blame_gen.cpp:661,685` | generators via raw `ensure_page`; `remove_key` drops pages `destruct.cpp:74` | `sub_material_at` `destruct.cpp:252`; GPU mirror `voxel_mirror.cpp:257,344,572`; save `save.cpp:1258` | 8 MiB page table + 1 KiB/mixed cell | **LIVE** |
+| `"sub_material"` (`CellType`) | `destruct.cpp:270`, `save.cpp:1365`, `padic_gen.cpp:571`, `blame_gen.cpp:661,685` | `materialize_sub_page` — ЕДИНСТВЕННОЕ рождение, `settle_sub_page` — единственная смерть (пара, CANON S16.9, 2026-09-23); `floor_awaken` держит инвариант на рождении этажа; generators via raw `ensure_page` | `sub_material_at` `destruct.cpp:252`; GPU mirror `voxel_mirror.cpp:257,344,572`; save `save.cpp:1258` | 8 MiB page table + 1 KiB/mixed cell | **LIVE** |
 | `"stain"` (`StainRGB`) | `stain.cpp:37` lazily on first paint | `stain_paint`/`stain_splat` — 2 call sites: `main.cpp:4234` (urine), `combat.cpp:1956` (blood) | GPU mirror `voxel_mirror.cpp:309,354,622` → raymarch | 8 MiB page table + 1.5 KiB/stained cell | **LIVE** |
 
 `SubField<T>::at/page/ensure_page/drop_page/collapse_if_uniform/clear/reserve_pages/pages_in_use/bytes`
@@ -221,7 +221,7 @@ and is held out of the new hole, until the next floor entry. Same for `door.cpp`
 | Symbol | File:line | src | tests |
 |---|---|---|---|
 | `carve_at` | `destruct.h:135` | 0 | **0** |
-| `set_sub_material` | `destruct.h:123` | 0 | **0** |
+| `set_sub_material` | `destruct.h:179` | 1 (`main.cpp:6212`) | — ЖИВОЕ с 2026-09-23 |
 | `check_projectile_prop_hits` | `prop_system.h:174` | 0 | **0** |
 | `nav_cache_error_text` | `nav_cache.h:215` | 0 | **0** |
 | `samosbor_backoff` | `samosbor.cpp` | 0 | **0** |

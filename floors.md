@@ -265,7 +265,7 @@ the real-time engine runs: ~16k embodied **agents on the CPU**, every cellular
 > so the population is still steady per visit.
 
 
-### A floor entry is three steps, and the middle one is a fork
+### A floor entry is four steps, and the second one is a fork
 
 Generation and rules used to be fused inside the module's generator. Splitting
 them is what makes a floor an honest **sub-game with its own laws**, and what lets
@@ -277,6 +277,7 @@ a **visited floor be its snapshot** instead of being rebuilt
 | 1. `floor_declare_rules` | the module's **LAWS** — gravity frame, registries | **always**, before any geometry exists |
 | 2. `generate_floor` **or** a snapshot restore | the **GEOMETRY** | one or the other, never both |
 | 3. `floor_apply_rules` | the module's rules laid **on top** — fluids, seeded content | **always**, after geometry is final |
+| 4. `floor_awaken` | ОБХОД РОЖДЕНИЯ: агрегаты клетки (`medium_level` + `medium_mobile`) и инвариант страницы (CANON S16.9) — [world/floor_awaken.h](src/world/floor_awaken.h) | **always**, ОБЕИМИ ветками, после того как содержимое стало окончательным |
 
 The frame is a property of the **module**, not of the saved bytes, which is
 exactly why the snapshot does not carry it and why a restored floor still needs
@@ -289,7 +290,17 @@ change under it is the bug class this closes: pipes were routed and lamps hung
 against pristine geometry, and only then did the snapshot turn their anchors back
 into the holes the player had blown ([problems.md](problems.md) §42).
 
-**Measured** (floor 0, Release, printed by every run as `[floor] N: laws … | … | rules …`):
+**Шаг 4 не имеет ветки restore/generate сознательно.** До 2026-09-23 агрегаты
+сред печёл `medium_revive` только на restore, а генераторы считали их сами —
+и ровно на этом шве терялся закон (будильник этажа спрашивал фазу вместо
+строки материала, отчего висящая куча рыхлого из сейва не просыпалась ничем).
+Вопрос «что в этой клетке» не зависит от того, пришла она с диска или из
+генератора. Прежде обходов такого рода было ЧЕТЫРЕ независимых, и каждый
+разрешал ту же страницу: 2015 мс на этаже в 1.54 млн страниц (problems.md §76).
+
+**Measured** (floor 0, Release, printed by every run as TWO lines —
+`[floor] N: laws … | … | rules …` and `[floor] N: awaken … | … страниц, …
+схлопнуто, … клеток с подвижной материей`):
 
 ```
 laws 0.7 ms | generated  164.4 ms | rules 1.5 ms    first visit
