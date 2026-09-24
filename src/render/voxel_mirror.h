@@ -226,6 +226,22 @@ private:
     VulkanBuffer stainIdx_;
     VulkanBuffer stainPool_;
     VulkanBuffer staging_[kMaxFramesInFlight];
+    // ОПТОВЫЙ СТЕЙДЖИНГ — свой, не кадровый (§80, 2026-09-24). До этого
+    // upload_via_staging создавал буфер ПОЛНОГО размера на каждый вызов: для
+    // пула страниц обжитого этажа это аллокация host-visible на ~954 МБ,
+    // memcpy гигабайта, копия гигабайта и освобождение гигабайта — 3593 мс на
+    // входе и транзиентный пик в два гигабайта. Теперь возим кусками через
+    // постоянный буфер.
+    //
+    // РАЗМЕР — вывод, не выбор: крупнейшая заливка это пул страниц, у обжитого
+    // этажа ~1 ГБ, и цена складывается из memcpy (пропорционален объёму,
+    // куском не правится) плюс round-trip на кусок (submit + фенс, единицы мс
+    // на MoltenVK). 64 МиБ дают ≤16 round-trip'ов на такую заливку — их доля
+    // падает ниже memcpy, — а резидентная цена остаётся мелочью против одних
+    // только масок в 128 МиБ. Кадровый staging_ переиспользовать НЕЛЬЗЯ: его
+    // может читать ещё не завершённый flush кадра.
+    static constexpr std::size_t kBulkStagingBytes = 64u * 1024u * 1024u;
+    VulkanBuffer bulkStaging_;
 
     VkCommandPool oneShotPool_ = VK_NULL_HANDLE;
     VkCommandBuffer oneShotCmd_ = VK_NULL_HANDLE;

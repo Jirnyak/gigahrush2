@@ -109,6 +109,10 @@ bool VoxelMirror::init(VulkanDevice& dev) {
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                              "voxel-mirror staging"))
             return false;
+    if (!bulkStaging_.create_host_visible(dev, kBulkStagingBytes,
+                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                          "voxel-mirror bulk-staging"))
+        return false;
 
     // The masks SSBO sits exactly at the spec-guaranteed minimum
     // maxStorageBufferRange (2^27). Desktop drivers report far more; if one
@@ -223,6 +227,7 @@ void VoxelMirror::destroy() {
     oneShotPool_ = VK_NULL_HANDLE;
     oneShotCmd_ = VK_NULL_HANDLE;
     for (int i = 0; i < kMaxFramesInFlight; ++i) staging_[i].destroy(*dev_);
+    bulkStaging_.destroy(*dev_);
     stainPool_.destroy(*dev_);
     stainIdx_.destroy(*dev_);
     classes_.destroy(*dev_);
@@ -259,24 +264,40 @@ bool VoxelMirror::one_shot_submit() {
 bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
                                      std::size_t bytes) {
     if (bytes == 0) return true;
-    VulkanBuffer st;
-    if (!st.create_host_visible(*dev_, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                nullptr))
-        return false;
-    std::memcpy(st.mapped, src, bytes);
-    bool ok = one_shot_begin();
-    if (ok) {
-        VkBufferCopy region{0, 0, bytes};
-        vkCmdCopyBuffer(oneShotCmd_, st.buffer, dst.buffer, 1, &region);
+    // КУСКАМИ ЧЕРЕЗ ПОСТОЯННЫЙ БУФЕР (§80). Прежде здесь создавался стейджинг
+    // ПОЛНОГО размера на каждый вызов и тут же уничтожался: на пуле страниц
+    // обжитого этажа это ~954 МБ аллокации host-visible, memcpy гигабайта,
+    // копия гигабайта и освобождение гигабайта — замер владельца дал
+    // `[lift] swap: upload 3593 ms`, крупнейший стопор входа на этаж, при том
+    // что самого трафика там 150 МиБ плюс пул.
+    //
+    // Дисциплина синхронизации не меняется: one_shot_submit ЖДЁТ фенс, значит
+    // к моменту memcpy следующего куска GPU уже прочитал предыдущий, и один
+    // буфер переиспользуется без гонки.
+    const std::uint8_t* p = static_cast<const std::uint8_t*>(src);
+    std::size_t off = 0;
+    while (off < bytes) {
+        const std::size_t take =
+            bytes - off < kBulkStagingBytes ? bytes - off : kBulkStagingBytes;
+        std::memcpy(bulkStaging_.mapped, p + off, take);
+        if (!one_shot_begin()) return false;
+        VkBufferCopy region{0, off, take}; // srcOffset 0 — буфер один и тот же
+        vkCmdCopyBuffer(oneShotCmd_, bulkStaging_.buffer, dst.buffer, 1,
+                        &region);
         barrier_transfer_to_shader(oneShotCmd_);
-        ok = one_shot_submit();
+        if (!one_shot_submit()) return false;
+        off += take;
     }
-    st.destroy(*dev_);
-    return ok;
+    return true;
 }
 
 bool VoxelMirror::upload_all(const World& world) {
     if (!ready_) return false;
+    // ПРИБОР §80: оптовая заливка зеркала была КРУПНЕЙШИМ куском входа на этаж
+    // (3593 мс, замер владельца), и до 2026-09-24 её никто не мерил — цену
+    // видели только целиком, кадром лифта. Печатаем вслух, как и всё
+    // остальное на входе.
+    const auto tUpload = std::chrono::steady_clock::now();
 
     // Everything becomes fresh; the queue and its dedup bits reset with it.
     dirty_.clear();
@@ -340,6 +361,15 @@ bool VoxelMirror::upload_all(const World& world) {
         for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
             if (tab[ci] != kNoPage) mark_dirty(&ci, 1);
     }
+    std::fprintf(stderr,
+                 "[entry] mirror upload_all %.1f ms (%u страниц пула, %.0f МиБ)\n",
+                 std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - tUpload)
+                     .count(),
+                 poolPages_,
+                 static_cast<double>(static_cast<std::size_t>(poolPages_) *
+                                     kPageBytes) /
+                     (1024.0 * 1024.0));
     return ok;
 }
 
