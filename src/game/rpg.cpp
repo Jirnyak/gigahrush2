@@ -11,19 +11,13 @@ namespace {
 // against the reference is mechanical.
 constexpr float kStrHpPerPoint = 0.01f;
 constexpr float kStrMeleeDamagePerPoint = 0.01f;
-constexpr float kStrDurabilityWearPerPoint = 0.08f;
 constexpr float kStrHeavyWeaponSpeedPerPoint = 0.05f;
 constexpr float kAgiMoveSpeedPerPoint = 0.01f;
 constexpr float kAgiAttackCooldownPerPoint = 0.02f;
 constexpr float kAgiSpreadPerPoint = 0.12f;
 constexpr float kIntPsiPerPoint = 0.01f;
-constexpr float kIntPsiDurationSecPerPoint = 1.0f;
 constexpr float kIntXpBonusPerPoint = 0.08f;
 constexpr float kIntXpBonusAsymptote = 1.0f;
-constexpr float kIntContractRewardPerPoint = 0.04f;
-constexpr float kIntContractRewardAsymptote = 0.5f;
-constexpr float kIntDocumentRewardPerPoint = 0.06f;
-constexpr float kIntDocumentRewardAsymptote = 0.7f;
 constexpr float kIntPsiCostEfficiencyPerPoint = 0.035f;
 
 // Round-half-up to the x1000 fixed point, clamped into u16. The clamp matters:
@@ -147,23 +141,10 @@ std::uint8_t clamp_rpg_level(int level) {
     return static_cast<std::uint8_t>(level > kRpgLevelCap ? kRpgLevelCap : level);
 }
 
-std::uint8_t clamp_rpg_attribute(int points) {
-    if (points < 0) return 0;
-    return static_cast<std::uint8_t>(points > kRpgAttributeCap ? kRpgAttributeCap
-                                                              : points);
-}
-
 std::uint32_t xp_for_level(std::uint8_t level) {
     if (level <= 1) return 0;
     const std::uint32_t rank = static_cast<std::uint32_t>(level) - 1u;
     return 75u + 25u * rank + 10u * rank * (rank - 1u);
-}
-
-std::uint64_t total_xp_for_level(std::uint8_t level) {
-    std::uint64_t total = 0;
-    for (std::uint32_t i = 1; i <= static_cast<std::uint32_t>(level); ++i)
-        total += xp_for_level(static_cast<std::uint8_t>(i));
-    return total;
 }
 
 std::uint16_t level_hp(std::uint8_t level) {
@@ -213,10 +194,6 @@ std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r) {
     return to_e3(linear_mult(attr_of(r, Attr::Str), kStrMeleeDamagePerPoint));
 }
 
-std::uint16_t str_durability_wear_mult_e3(const RpgStats& r) {
-    return to_e3(inverse_mult(attr_of(r, Attr::Str), kStrDurabilityWearPerPoint));
-}
-
 std::uint16_t agi_move_speed_mult_e3(const RpgStats& r) {
     return to_e3(linear_mult(attr_of(r, Attr::Agi), kAgiMoveSpeedPerPoint));
 }
@@ -238,23 +215,6 @@ std::uint16_t int_xp_mult_e3(const RpgStats& r) {
 std::uint16_t int_psi_cost_mult_e3(const RpgStats& r) {
     return to_e3(inverse_mult(attr_of(r, Attr::Int),
                               kIntPsiCostEfficiencyPerPoint));
-}
-
-std::uint16_t int_contract_reward_mult_e3(const RpgStats& r) {
-    return to_e3(1.0f + asymptotic_bonus(attr_of(r, Attr::Int),
-                                         kIntContractRewardPerPoint,
-                                         kIntContractRewardAsymptote));
-}
-
-std::uint16_t int_document_reward_mult_e3(const RpgStats& r) {
-    return to_e3(1.0f + asymptotic_bonus(attr_of(r, Attr::Int),
-                                         kIntDocumentRewardPerPoint,
-                                         kIntDocumentRewardAsymptote));
-}
-
-std::uint16_t int_psi_duration_bonus_sec(const RpgStats& r) {
-    return static_cast<std::uint16_t>(static_cast<float>(attr_of(r, Attr::Int)) *
-                                      kIntPsiDurationSecPerPoint);
 }
 
 std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
@@ -279,14 +239,6 @@ std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
                          (static_cast<float>(str_melee_dmg_mult_e3(r)) / 1000.0f);
     const int out = static_cast<int>(scaled + 0.5f);
     return static_cast<std::int16_t>(out > 32767 ? 32767 : (out < 0 ? 0 : out));
-}
-
-std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r) {
-    if (baseCost == 0) return 0;
-    const float v = static_cast<float>(baseCost) *
-                    (static_cast<float>(int_psi_cost_mult_e3(r)) / 1000.0f);
-    const std::uint16_t out = round_u16(v);
-    return out < 1 ? 1 : out;  // the reference's max(1, ...)
 }
 
 std::uint32_t xp_for_monster_kill(MobKind kind, std::uint8_t monsterLevel) {

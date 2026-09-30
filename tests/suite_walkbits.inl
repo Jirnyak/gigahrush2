@@ -1,5 +1,12 @@
-// Оракулы тяжёлых бейков — клиренс нава и телесный битсет комнат — и два
-// утверждения, на которых стоит async-rebake phase C.
+// Оракул тяжёлых бейков — гранный клиренс нава — и два утверждения, на которых
+// стоит async-rebake phase C.
+//
+// ТЕЛЕСНАЯ ПОЛОВИНА СНЕСЕНА 2026-09-30 вместе со своим предметом:
+// `WalkBits` ([world/walk_bits.h]) и `game/body_walk.*` не имели в `src/` ни
+// одного читателя, кроме щупа застревания под `GIGA_SOAK`, а их объявленный
+// будущий потребитель — agent-goals — закрыт тем же решением владельца.
+// Блоки удалены, а не закомментированы: тест, переживший свой предмет, — это
+// будущая вторая реализация.
 //
 // Included into game_test.cpp, so it uses that file's CHECK macro and its
 // `using namespace giga` / `using namespace giga::game`. Everything except the
@@ -10,8 +17,8 @@
 // Подстановка законна тогда и только тогда, когда:
 //
 //   1. БИТ-ИДЕНТИЧНОСТЬ: бейк через оракул даёт байт-в-байт результат бейка
-//      через грид — для нава (edge/dist/next, flow, nearest) И для комнат
-//      (flow, nearRoom, baked). Эталонные оракулы построены ЗДЕСЬ, руками, из
+//      через грид — edge/dist/next, flow, nearest. Эталонный оракул построен
+//      ЗДЕСЬ, руками, из
 //      законов, переписанных в этом файле НЕЗАВИСИМО от продакшн-кода (для
 //      клиренса — наивные циклы по субвокселям, без бит-магии): дрейф закона
 //      ломает этот сьют, а не молча переопределяет, что такое стена.
@@ -33,12 +40,10 @@
 
 #include "game/floor_gen.h"   // generate_floor — a real carved floor, not a toy
 #include "game/floor_spec.h"  // FloorKind, floor_spec
-#include "game/body_walk.h"   // телесный оракул — выживший rooms-object F
 #include "world/clearance.h"  // ClearanceField — нав-оракул (occupancy)
 #include "world/macro_grid.h" // SubMask — the mutation test carves masks directly
 #include "world/nav.h"        // bake_coarse/bake_fine
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index
-#include "world/walk_bits.h"  // WalkBits — телесный битсет комнат
 #include "world/world.h"
 
 namespace walkbits_test {
@@ -89,13 +94,6 @@ inline int ref_face_clearance(const MacroGrid& g, int x, int y, int z,
     return best;
 }
 
-inline bool ref_body_open(const MacroGrid& g, int x, int y, int z) {
-    // The GRID form of the body law, i.e. the public contract predicate —
-    // deliberately the other spelling than build_body_walk_bits' mask form, so
-    // the two forms are also proven to be one law.
-    return room_body_walkable(g, x, y, z);
-}
-
 void nav_bake_through_field_is_bit_identical(const World& w) {
     // The grid path — the entry every synchronous caller still uses. Габарит
     // — тело NPC (kBodyClearanceSub, вывод в [game/embody.h]).
@@ -144,35 +142,17 @@ void nav_bake_through_field_is_bit_identical(const World& w) {
     CHECK(f1.nearest.size() == kMacroCells);
 }
 
-void body_oracle_is_bit_identical(const World& w) {
-    // Зонная половина умерла (rooms-object F: flow-полей нет); закон тела —
-    // выживший, и его две формы обязаны совпасть побитово.
-    WalkBits body;
-    body.words.assign(WalkBits::kWords, 0u);
-    for (int z = 0; z < kMacroDim; ++z)
-        for (int y = 0; y < kMacroDim; ++y)
-            for (int x = 0; x < kMacroDim; ++x)
-                body.set(macro_index(x, y, z), ref_body_open(w.grid(), x, y, z));
-
-    // The production builder (mask form) against the grid form: one law.
-    WalkBits built;
-    build_body_walk_bits(w.grid(), built);
-    CHECK(built.words == body.words);
-}
-
-// Mutate real cells in every direction the laws can flip, patch the resident
-// oracles per cell, and demand the patched state EQUALS a from-scratch rebuild.
+// Mutate real cells in every direction the law can flip, patch the resident
+// oracle per cell, and demand the patched state EQUALS a from-scratch rebuild.
 // This is the exact obligation of the dirtyCells drain: a patched oracle that
 // disagreed with a rebuild would steer a background bake by a world that never
 // existed.
 void patch_equals_rebuild(World& w) {
     MacroGrid& g = w.grid();
 
-    // Resident oracles, as the scheduler holds them.
+    // Resident oracle, as the scheduler holds it.
     ClearanceField navClear;
     navClear.build(g);
-    WalkBits bodyBits;
-    build_body_walk_bits(g, bodyBits);
 
     // Find one fully-solid cell and one air cell by deterministic scan, so the
     // test does not depend on floor-gen internals staying put.
@@ -206,45 +186,34 @@ void patch_equals_rebuild(World& w) {
     const std::size_t ai = static_cast<std::size_t>(airI);
     navClear.patch(g, ax, ay, az);
     navClear.patch(g, sx, sy, sz);
-    patch_body_walk_bit(bodyBits, ai, g.mask(ax, ay, az));
-    patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
 
     for (int d = 0; d < 6; ++d) {
         CHECK(navClear.at(ax, ay, az, d) == 0);
         CHECK(navClear.at(sx, sy, sz, d) < kBodyClearanceSub); // §60: не открылась
     }
-    CHECK(!bodyBits.at(ai));
-    CHECK(!bodyBits.at(si)); // no body fits through a 1-voxel hole either
 
     // Direction 3 — carve the solid cell down to a body-sized shaft: clear the
     // centred 4x4 footprint through ALL eight sub-layers. Its ±z faces open to
-    // body clearance as soon as the ±z neighbours can offer the matching half
-    // (проверяется финальной сверкой с ребилдом — соседи тут произвольные
-    // клетки настоящего этажа); телесный закон открывается уже сейчас.
+    // body clearance as soon as the ±z neighbours can offer the matching half —
+    // проверяется финальной сверкой с ребилдом, соседи тут произвольные клетки
+    // настоящего этажа.
     for (int lz = 0; lz < kSubDim; ++lz)
         for (int ly = 2; ly <= 5; ++ly)
             for (int lx = 2; lx <= 5; ++lx)
                 g.mask(sx, sy, sz).clear(sub_bit(lx, ly, lz));
     navClear.patch(g, sx, sy, sz);
-    patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
-    CHECK(bodyBits.at(si));
 
-    // Direction 4 — back to full: blocked again for both. Round-tripping the
-    // same cell is what a real battle does to a wall (carve, then samosbor
-    // re-fill), and a patch that only worked one way would pass 1-3.
+    // Direction 4 — back to full: blocked again. Round-tripping the same cell is
+    // what a real battle does to a wall (carve, then samosbor re-fill), and a
+    // patch that only worked one way would pass 1-3.
     g.fill_cell(sx, sy, sz, 1);
     navClear.patch(g, sx, sy, sz);
-    patch_body_walk_bit(bodyBits, si, g.mask(sx, sy, sz));
     for (int d = 0; d < 6; ++d) CHECK(navClear.at(sx, sy, sz, d) == 0);
-    CHECK(!bodyBits.at(si));
 
     // THE claim: after all of it, patched == rebuilt, word for word.
     ClearanceField navRef;
     navRef.build(g);
-    WalkBits bodyRef;
-    build_body_walk_bits(g, bodyRef);
     CHECK(navClear.vals == navRef.vals);
-    CHECK(bodyBits.words == bodyRef.words);
 }
 
 } // namespace walkbits_test
@@ -256,7 +225,6 @@ void test_walkbits_all() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
     walkbits_test::nav_bake_through_field_is_bit_identical(w);
-    walkbits_test::body_oracle_is_bit_identical(w);
     // Last: it carves the floor the identity tests just measured.
     walkbits_test::patch_equals_rebuild(w);
 }

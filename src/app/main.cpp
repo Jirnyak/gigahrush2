@@ -75,7 +75,6 @@
 #include "game/samosbor.h"
 #include "game/contract.h"
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
-#include "game/body_walk.h"     // room_body_walkable — вердикт для щупа застревания
 #include "game/conversation.h"
 #include "game/dice.h"
 #include "game/economy.h"
@@ -4022,7 +4021,7 @@ int main(int argc, char** argv) {
                             soak_log(
                                 "[soak] EVENT stuck: %.1f с | поз %.2f %.2f %.2f "
                                 "клетка %d %d %d | хочет %.2f сдвинулся %.3f м | "
-                                "noclip=%d fly=%d | standable=%d walkable=%d | "
+                                "noclip=%d fly=%d | standable=%d | "
                                 "грав %.2f %.2f %.2f | долг_шага %.1f мс | "
                                 "этаж=%d слой=%u\n",
                                 nowSec - stuckSince, static_cast<double>(p.x),
@@ -4032,7 +4031,6 @@ int main(int argc, char** argv) {
                                 reg.all_of<NoClip>(player) ? 1 : 0,
                                 ctl != nullptr && ctl->fly ? 1 : 0,
                                 game::floor_standable(w, cx, cy, cz) ? 1 : 0,
-                                game::room_body_walkable(w.grid(), cx, cy, cz) ? 1 : 0,
                                 static_cast<double>(g.x), static_cast<double>(g.y),
                                 static_cast<double>(g.z),
                                 static_cast<double>(simAccum * 1000.0f),

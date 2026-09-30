@@ -211,10 +211,16 @@
 // re-plan, which is the reference's "sample recent local facts on your own AI
 // tick"), and an HP DROP (checked every tick, because damage is an event and the
 // cell it happened in is the fact). `MemFood`/`MemWater`/`MemRest`/`MemToilet`/
-// `MemAlly`/`MemFoe` have NO producer in `src/` yet and that is stated rather
-// than faked — the read path is real and measured, so the day container/loot/
-// combat code calls `ai_remember_cell`/`ai_remember_actor` the term lights up
-// with no scorer edit. Same stubbed-input stance as `Perception` itself.
+// `MemAlly`/`MemFoe` have NO producer in `src/` and that is stated rather than
+// faked — the read path is real and measured, so the day container/loot/combat
+// code calls `ai_remember_cell` the term lights up with no scorer edit. Same
+// stubbed-input stance as `Perception` itself.
+//
+// ПОПРАВКА 2026-09-30: этот абзац ВРАЛ — он писал «combat code calls
+// ai_remember_cell/ai_remember_actor», и читатель понимал «зовёт». Не звал
+// никто и никогда; `ai_remember_actor` снесён, акторный след кладётся
+// примитивом `AiMemory::remember`. Шесть видов следа из восьми по-прежнему без
+// производителя — долг назван в problems.md §83, а не подразумевается.
 //
 // LOCALITY, not omniscience: a body only ever records the cell it is STANDING
 // in. There is no scan, no radius query, no event ring walk — which is both the
@@ -1064,12 +1070,16 @@ void ai_equip_step(Registry& reg, const NpcPool& pool, LayerId layer,
 //
 // Which kinds have a producer TODAY (stated, not implied): MemDanger and MemHurt
 // are filed by `ai_step` itself. MemFood / MemWater / MemRest / MemToilet /
-// MemFoe / MemAlly have NO caller in `src/` yet — the scorer reads them, so they
+// MemFoe / MemAlly have NO caller in `src/` — the scorer reads them, so they
 // light up the day a producer appears, and until then they contribute 0 exactly
 // like every other stubbed `Perception` input.
+//
+// Акторного собрата (`ai_remember_actor`) здесь больше нет: он был ЕДИНСТВЕННЫМ
+// писателем акторного следа, не имел ни одного вызывающего в `src/` и снесён
+// 2026-09-30. Кто захочет положить след «этот ЧЕЛОВЕК меня ударил» — кладёт его
+// примитивом `AiMemory::remember(id, MemFoe, who & kNpcIdMask, ...)`, то есть
+// ровно тем же телом; обёртки, которую никто не звал, между ними больше нет.
 bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy,
                       int cz, float strength01, double now);
-bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
-                       float strength01, double now);
 
 } // namespace giga::game

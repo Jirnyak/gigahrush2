@@ -419,13 +419,6 @@ bool ai_remember_cell(AiMemory& mem, NpcId id, std::uint8_t kind, int cx, int cy
         strength01, now);
 }
 
-bool ai_remember_actor(AiMemory& mem, NpcId id, std::uint8_t kind, NpcId who,
-                       float strength01, double now) {
-    if (!mem_kind_is_actor(kind)) return false;
-    if (who == kInvalidNpc) return false;
-    return mem.remember(id, kind, who & kNpcIdMask, strength01, now);
-}
-
 MemoryRecall ai_recall(const AiMemory& mem, NpcId id, int cx, int cy, int cz,
                        double now) {
     MemoryRecall out;

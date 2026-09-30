@@ -12,6 +12,15 @@
 //   * `NpcSpawned` / `NpcMigrated` / `FloorEntered` — no producer at all.
 //   * `EventBus::set_logging` / `log` / `clear_log` / `dropped` — zero call sites,
 //     so the overflow counter the header calls a tuning signal was unreadable.
+//
+// ПОПРАВКА 2026-09-30. Половина этого сьюта лечила первые две строки ФИДОМ —
+// и лечение оказалось той же болезнью этажом выше: `EventFeed` рендерил всё,
+// а самого фида не звал никто, кроме этих тестов. Решением владельца читающий
+// слой и слой «прибытие на этаж» снесены; блоки 1 и 2 ушли с ними, блок 4
+// сокращён до «производитель -> шина -> СЧЁТЧИК». `NpcSpawned` / `NpcMigrated` /
+// `FloorEntered` снова без производителя, и теперь это написано прямо
+// ([event_bus.h], problems.md §83), а не закрыто текстом на экране, которого
+// никто не показывает.
 //   * `MobDef::projType` — the enum, the field and 69 generated rows, and no
 //     reader anywhere in src/. 68 rows are blank (Bullet) and exactly one is WEB,
 //     so the one authored web-spitter fired the same projectile as everything else.
@@ -71,148 +80,30 @@ float flat_speed(Registry& reg, Entity e) {
 } // namespace eventsweb
 
 
-// [jirnyak.md] section 18 — PropDetached must render in event_line / EventFeed.
-// Producer: detach_single_prop (a/b/c = packed world pos). Without this case the
-// bus tally saw PropDetached but feed_drain dropped it as unrenderable (default).
-static void test_prop_detached_event_line_and_feed() {
+// [jirnyak.md] section 18 — PropDetached обязан быть ВИДЕН шине.
+// Producer: detach_single_prop (a/b/c = packed world pos). Проверка рендера в
+// строку ушла 2026-09-30 вместе с `event_line`/`EventFeed`; осталось то, что
+// по-прежнему истинно и по-прежнему живое — тип публикуется и попадает в тэлли.
+static void test_prop_detached_event() {
     EventBus bus;
     bus.init();
-    EventFeed feed{};
 
     CHECK(bus.publish(EventType::PropDetached, 10u, 20u, 30u, /*tick=*/42u));
     CHECK(bus.cycle_count(EventType::PropDetached) == 1u);
-
-    char buf[96] = {};
-    Event e{};
-    e.type = EventType::PropDetached;
-    e.a = 10u;
-    e.b = 20u;
-    e.c = 30u;
-    e.tick = 42u;
-    CHECK(event_line(e, buf, sizeof(buf)));
-    CHECK(std::strstr(buf, "prop detached") != nullptr);
-    CHECK(std::strstr(buf, "10") != nullptr);
-    CHECK(std::strstr(buf, "20") != nullptr);
-    CHECK(std::strstr(buf, "30") != nullptr);
-
-    CHECK(feed_drain(feed, bus) == 1u);
-    CHECK(feed.live == 1);
-    CHECK(std::strstr(feed_line(feed, 0), "prop detached") != nullptr);
-    CHECK(feed_tick(feed, 0) == 42u);
-    printf("[events] PropDetached event_line + feed: %s\n", feed_line(feed, 0));
+    CHECK(bus.events()[0].a == 10u && bus.events()[0].b == 20u &&
+          bus.events()[0].c == 30u);
+    CHECK(bus.events()[0].tick == 42u);
 }
 
 static void test_eventsweb_all() {
-    test_prop_detached_event_line_and_feed();
+    test_prop_detached_event();
     using namespace eventsweb;
 
-    // ---- 1. One arrival, the events it produces, and a drain that reads them --
-    {
-        EventBus bus;
-        bus.init();
-        EventFeed feed{};
-
-        // The FIRST load: a crowd was seeded and somebody entered. Not a ride, so
-        // NpcMigrated must be suppressed — otherwise the opening frame of every run
-        // claims the player migrated from floor 0 to floor 0.
-        CHECK(publish_floor_arrival(bus, /*before=*/0u, /*after=*/64u,
-                                    /*from=*/0, /*to=*/0, /*layer=*/0u,
-                                    /*npc=*/7u, /*tick=*/1u) == 2u);
-        CHECK(bus.total_count(EventType::NpcSpawned) == 1);
-        CHECK(bus.total_count(EventType::FloorEntered) == 1);
-        CHECK(bus.total_count(EventType::NpcMigrated) == 0);
-        // firstId is the OLD count, because the pool is a bump allocator.
-        CHECK(bus.events()[0].a == 0u && bus.events()[0].b == 64u);
-
-        // The drain. This is the assertion the whole first half exists for: the
-        // events do not merely get published, something reads them.
-        CHECK(feed_drain(feed, bus) == 2u);
-        CHECK(feed.live == 2);
-        CHECK(feed_line(feed, 0) != nullptr);
-        CHECK(std::strstr(feed_line(feed, 0), "entered floor 0") != nullptr);
-        CHECK(std::strstr(feed_line(feed, 1), "spawned 64 records") != nullptr);
-        CHECK(feed_tick(feed, 0) == 1u);
-
-        // And the lines SURVIVE clear(), which is the only reason a HUD can show
-        // them: the bus is wiped once per frame while the sim runs up to 8 steps.
-        bus.clear();
-        CHECK(bus.empty());
-        CHECK(feed.live == 2);
-        CHECK(std::strstr(feed_line(feed, 0), "entered floor 0") != nullptr);
-
-        // A RIDE to a deep floor, re-entering a module whose crowd already exists:
-        // count() is a high-water mark, so a re-entry leaves it equal and must
-        // publish no NpcSpawned at all — the same 420 people are not 420 new ones.
-        CHECK(publish_floor_arrival(bus, 64u, 64u, /*from=*/0, /*to=*/-50,
-                                    /*layer=*/3u, /*npc=*/7u, /*tick=*/9u) == 2u);
-        CHECK(bus.total_count(EventType::NpcSpawned) == 1);   // still 1
-        CHECK(bus.total_count(EventType::NpcMigrated) == 1);
-        CHECK(bus.total_count(EventType::FloorEntered) == 2);
-
-        // The signed floor survives the unsigned slot. Read the raw slot instead and
-        // a HUD prints 4294967246 for floor -50 and nobody questions it.
-        CHECK(event_floor(bus.events()[0].b) == 0);
-        CHECK(event_floor(bus.events()[0].c) == -50);
-        CHECK(event_floor(bus.events()[1].a) == -50);
-        CHECK(bus.events()[1].b == 3u);   // the storage SLOT, not the label
-        CHECK(feed_drain(feed, bus) == 2u);
-        CHECK(std::strstr(feed_line(feed, 1), "floor 0 -> -50") != nullptr);
-        CHECK(std::strstr(feed_line(feed, 0), "layer 3") != nullptr);
-        bus.clear();
-
-        // A load with no record to name still publishes the arrival, and still
-        // suppresses the ride — there is nobody to have migrated.
-        CHECK(publish_floor_arrival(bus, 64u, 64u, 0, 14, 2u, kInvalidNpc, 10u) == 1u);
-        CHECK(bus.size() == 1);
-        CHECK(bus.events()[0].type == EventType::FloorEntered);
-        bus.clear();
-    }
-
-    // ---- 2. Every type renders, including the three with no reader before -----
-    {
-        EventBus bus;
-        bus.init();
-        EventFeed feed{};
-
-        // ItemTransferred is the one this suite exists for: three producers, and
-        // before the feed nothing read a single one of them. Both ends may be
-        // kInvalidNpc for "the world", and printing 4294967295 as an owner is how
-        // that stops being legible.
-        bus.publish(EventType::ItemTransferred, kInvalidNpc, 4u, 55u, 20u);
-        bus.publish(EventType::ItemTransferred, 4u, kInvalidNpc, 66u, 20u);
-        bus.publish(EventType::ItemTransferred, 4u, 5u, 77u, 20u);
-        bus.publish(EventType::RelationChanged, 1u, 2u,
-                    pack_relation(std::int8_t{-50}), 20u);
-        bus.publish(EventType::NpcDied, 9u, 0xFFu, 3u, 20u);
-        bus.publish(EventType::NpcDied, kInvalidNpc, 7u, 3u, 20u);
-        CHECK(feed_drain(feed, bus) == 6u);
-        CHECK(feed.live == EventFeed::kLines);   // exactly full at 6
-
-        CHECK(std::strstr(feed_line(feed, 5), "picked up by 4") != nullptr);
-        CHECK(std::strstr(feed_line(feed, 4), "consumed by 4") != nullptr);
-        CHECK(std::strstr(feed_line(feed, 3), "item 77: 4 -> 5") != nullptr);
-        // The relation must read as -50 and not as 4294967246.
-        CHECK(std::strstr(feed_line(feed, 2), "now -50") != nullptr);
-        CHECK(std::strstr(feed_line(feed, 1), "record 9 died") != nullptr);
-        // b == 0xFF means "the dead thing was not a monster" — the one payload slot
-        // in the game that means not-applicable rather than a value.
-        CHECK(std::strstr(feed_line(feed, 0), "monster kind 7") != nullptr);
-
-        // The ring drops the OLDEST, never the newest: a feed that froze during a
-        // firefight would go quiet exactly when it has something to say.
-        bus.clear();
-        bus.publish(EventType::FloorEntered, pack_floor(-26), 1u, 8u, 21u);
-        CHECK(feed_drain(feed, bus) == 1u);
-        CHECK(feed.live == EventFeed::kLines);
-        CHECK(std::strstr(feed_line(feed, 0), "entered floor -26") != nullptr);
-        CHECK(feed_line(feed, EventFeed::kLines) == nullptr);   // past the end
-
-        // `None` renders as nothing rather than as a line saying nothing.
-        char buf[EventFeed::kLineLen];
-        Event blank{};
-        CHECK(!event_line(blank, buf, sizeof(buf)));
-        CHECK(!event_line(blank, nullptr, sizeof(buf)));
-    }
+    // ---- 1 и 2: СНЕСЕНЫ 2026-09-30 вместе с предметом ------------------------
+    // Блок 1 гонял `publish_floor_arrival` и читал результат фидом; блок 2
+    // проверял, что каждый тип события рендерится в строку. Оба предмета
+    // удалены (ноль вызывающих в `src/`), поэтому удалены и блоки: тест,
+    // переживший свой предмет, — будущая вторая реализация.
 
     // ---- 3. The optional log, which also had zero call sites ------------------
     {
@@ -229,18 +120,18 @@ static void test_eventsweb_all() {
         CHECK(bus.log().empty());
     }
 
-    // ---- 4. A REAL producer reaching a real drain -----------------------------
+    // ---- 4. A REAL producer reaching the bus ----------------------------------
     //
-    // Section 1 hand-publishes. This one kills a monster through `finalize_deaths`
-    // — the one death point in the tick — and reads the result off the feed, so the
-    // path under test is producer -> bus -> consumer with nothing synthetic in it.
+    // Убивает монстра через `finalize_deaths` — единственную точку смерти в тике —
+    // и читает результат ИЗ ШИНЫ: путь producer -> bus без синтетики. Раньше
+    // читалось фидом; фид снесён, а утверждение «настоящий производитель дошёл»
+    // от этого не изменилось.
     {
         NpcPool pool;
         pool.init();
         Registry reg;
         EventBus bus;
         bus.init();
-        EventFeed feed{};
 
         Entity mob = reg.create();
         reg.emplace<Transform>(mob, Transform{vec3{4.0f, 4.0f, 4.0f}, LayerId{0}});
@@ -251,9 +142,8 @@ static void test_eventsweb_all() {
         CHECK(r.lethal);
         CHECK(finalize_deaths(reg, pool, bus, 77u) == 1u);
         CHECK(bus.cycle_count(EventType::NpcDied) == 1);
-        CHECK(feed_drain(feed, bus) == 1u);
-        CHECK(std::strstr(feed_line(feed, 0), "monster kind 4") != nullptr);
-        CHECK(feed_tick(feed, 0) == 77u);
+        CHECK(bus.events()[0].b == static_cast<std::uint32_t>(MobKind::Zombie));
+        CHECK(bus.events()[0].tick == 77u);
     }
 
     // ---- 5. projType: exactly one WEB row, and it is the zero-damage one ------

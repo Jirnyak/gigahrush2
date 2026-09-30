@@ -74,13 +74,13 @@ inline constexpr std::size_t kAttrCount = static_cast<std::size_t>(Attr::Count);
 // checked: at the cap, rank = 254 gives 75 + 6350 + 10*254*253 = 649,045.
 std::uint32_t xp_for_level(std::uint8_t level);
 
-// Cumulative XP to reach `level` from scratch — the reference's `totalXpForLevel`,
-// which sums `xpForLevel(1..level)`. u64 because the sum to the cap is ~54.9M; it
-// fits u32, but the running sum is clearer unbounded and this is not a hot path.
-std::uint64_t total_xp_for_level(std::uint8_t level);
+// (`total_xp_for_level` и `clamp_rpg_attribute` СНЕСЕНЫ 2026-09-30 — ноль
+// вызывающих в `src/`. Кумулятивная лестница опыта не понадобилась никому: опыт
+// копится инкрементами через `award_xp`, а не пересчётом «сколько всего нужно».
+// Зажим атрибута дублировал `kRpgAttributeCap`, который обе живые точки роста
+// (`spend_attr_point`, `rpg.cpp:206`) сравнивают напрямую.)
 
 std::uint8_t clamp_rpg_level(int level);
-std::uint8_t clamp_rpg_attribute(int points);
 
 // ---------------------------------------------------------------------------
 // Live per-character state
@@ -166,18 +166,20 @@ RpgStats random_rpg(std::uint8_t level, std::uint32_t seed);
 //   ASYMPTOTIC  1 + A*(1-e^(-pk/A)) — saturates at a hard ceiling A (xp, contract
 //                                  and document rewards). INT's xp bonus can never
 //                                  exceed +100% no matter how many points go in.
+// ЧЕТЫРЕ МНОЖИТЕЛЯ СНЕСЕНЫ 2026-09-30, и они — недобранная половина ЖИВОГО
+// замысла, а не рудимент: `str_durability_wear_mult_e3` (износ оружия от СИЛЫ),
+// `int_contract_reward_mult_e3` и `int_document_reward_mult_e3` (награда от
+// ИНТЕЛЛЕКТА), `int_psi_duration_bonus_sec` (длительность пси). Их братья по
+// тем же трём формам ПОДКЛЮЧЕНЫ и работают, поэтому «атрибуты влияют на игру»
+// осталось истиной — просто на четыре канала уже, и это решение владельца
+// («убить»), а не недосмотр. День, когда износ или награда захотят множитель,
+// восстанавливает его из формы в три строки: shape + константа + to_e3.
 std::uint16_t str_melee_dmg_mult_e3(const RpgStats& r);
-std::uint16_t str_durability_wear_mult_e3(const RpgStats& r);
 std::uint16_t agi_move_speed_mult_e3(const RpgStats& r);
 std::uint16_t agi_attack_speed_mult_e3(const RpgStats& r);   // <1000 = faster
 std::uint16_t agi_ranged_spread_mult_e3(const RpgStats& r);  // <1000 = tighter
 std::uint16_t int_xp_mult_e3(const RpgStats& r);
 std::uint16_t int_psi_cost_mult_e3(const RpgStats& r);
-std::uint16_t int_contract_reward_mult_e3(const RpgStats& r);
-std::uint16_t int_document_reward_mult_e3(const RpgStats& r);
-
-// Flat seconds added to a PSI effect's duration, +1 s per INT point.
-std::uint16_t int_psi_duration_bonus_sec(const RpgStats& r);
 
 // A heavy weapon (base cooldown >= 0.65 s) is sped up by STR; a light one is not.
 // The threshold is the reference's `HEAVY_WEAPON_COOLDOWN` and the gate is why STR
@@ -194,9 +196,9 @@ std::uint16_t str_heavy_weapon_speed_mult_e3(const RpgStats& r,
 std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
                           std::int16_t weaponDamage);
 
-// PSI cost after INT efficiency, floored at 1. The reference rounds to one decimal
-// place; costs here are integers, so this rounds to the nearest whole point.
-std::uint16_t adjusted_psi_cost(std::uint16_t baseCost, const RpgStats& r);
+// (`adjusted_psi_cost` СНЕСЁН 2026-09-30: ноль вызывающих: ни одна трата пси в
+// игре не проходила через него. Множитель `int_psi_cost_mult_e3` жив и остаётся
+// единственным местом, где эффективность ИНТЕЛЛЕКТА выражена.)
 
 // ---------------------------------------------------------------------------
 // XP sources

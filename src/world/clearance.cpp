@@ -1,6 +1,6 @@
 #include "world/clearance.h"
 
-#include "core/jobs.h"       // parallel_for — бейк жмёт ядра, как walk_bits
+#include "core/jobs.h"       // parallel_for — бейк бейк-таймовый, жмёт ядра
 #include "world/macro_grid.h"
 
 namespace giga {

@@ -691,15 +691,12 @@ static void test_faction2_all() {
 
     // ---- 7. Event payloads: the signed slot, and the per-type tally ----------
     {
-        // A floor number is signed and the demo stack reaches -50, while the slots
-        // are u32. Reading a raw slot straight back gives 4294967246 for floor -50 —
-        // not a crash, just a number a HUD prints and nobody questions. C++20
-        // mandates two's complement, so the round trip is guaranteed, not merely
-        // usual.
-        CHECK(event_floor(pack_floor(-50)) == -50);
-        CHECK(event_floor(pack_floor(0)) == 0);
-        CHECK(event_floor(pack_floor(30)) == 30);
-        CHECK(pack_floor(-50) == 4294967246u);        // what the raw slot holds
+        // (Круг «знаковый номер этажа переживает u32-слот» проверялся здесь через
+        // `pack_floor`/`event_floor`. Обе снесены 2026-09-30 вместе со всем слоем
+        // прибытия — ноль вызывающих в `src/`, — а без них проверка выродилась бы
+        // в тест на static_cast. Живой круг знака остался один, и он настоящий:
+        // отношение int8 -> uint32 -> int8 через `pack_relation`, которую зовёт
+        // witness.cpp:195.)
         CHECK(event_relation(pack_relation(std::int8_t{-128})) == -128);
         CHECK(event_relation(pack_relation(kHostileRelation)) == kHostileRelation);
         CHECK(event_relation(pack_relation(std::int8_t{127})) == 127);
@@ -708,15 +705,16 @@ static void test_faction2_all() {
         bus.init();
         CHECK(bus.total_count(EventType::FloorEntered) == 0);
 
-        CHECK(publish_floor_entered(bus, -50, 7u, 1234u, 8u));
-        CHECK(publish_npc_migrated(bus, 1234u, 0, -50, 8u));
-        CHECK(publish_npc_spawned(bus, 900u, 40u, -50, 8u));
+        // Типизированные публикаторы этих трёх типов снесены (см. выше), поэтому
+        // тэлли проверяется через сам `publish` — то, чем шина и пользуется.
+        const std::uint32_t deep = static_cast<std::uint32_t>(-50);
+        CHECK(bus.publish(EventType::FloorEntered, deep, 7u, 1234u, 8u));
+        CHECK(bus.publish(EventType::NpcMigrated, 1234u, 0u, deep, 8u));
+        CHECK(bus.publish(EventType::NpcSpawned, 900u, 40u, deep, 8u));
         CHECK(bus.size() == 3);
-        CHECK(event_floor(bus.events()[0].a) == -50);
+        CHECK(static_cast<std::int32_t>(bus.events()[0].a) == -50);
         CHECK(bus.events()[0].b == 7u);               // the LayerId, NOT the label
         CHECK(bus.events()[0].c == 1234u);
-        CHECK(event_floor(bus.events()[1].b) == 0);
-        CHECK(event_floor(bus.events()[1].c) == -50);
         CHECK(bus.events()[2].a == 900u && bus.events()[2].b == 40u);
 
         // The tally is what gives a published event a reader at all. `cycle_` dies

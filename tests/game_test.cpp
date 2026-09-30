@@ -48,7 +48,6 @@
 #include "game/wander.h"
 #include "game/population.h"
 #include "game/encumbrance.h"
-#include "game/body_walk.h" // телесный оракул — выживший rooms-object F
 #include "game/role.h"      // RoleId/role_for (шёл транзитом через room_zone.h)
 #include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"

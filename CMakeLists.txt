@@ -1916,7 +1916,27 @@ if(GIGA_BUILD_TESTS)
         # `net_worth` счёта НЕ уронил: он мёртв в `src/`, но его 22 CHECK'а
         # стерегут закон сохранения ЖИВОГО банка, поэтому формула уехала в
         # `economy_detail`/e2e, а не в мусор. e2e_test поэтому же остался 2430.
-        PASS_REGULAR_EXPRESSION "game_test: 223232 checks, 0 failures")
+        # 223232 − 594 = 222638 на 2026-09-30: СНОС, кластер 2 — `body_walk` +
+        # `walk_bits`, `ai_remember_actor`, читающий слой `event_bus`, семь
+        # множителей `rpg`. Дельта из слагаемых, по сюите:
+        #   −530 suite_rpg. ВНИМАНИЕ на 510 из них: две проверки
+        #        (`int_contract_reward_mult_e3`, `int_document_reward_mult_e3`)
+        #        стояли ВНУТРИ цикла по 255 очкам атрибута, то есть две строки
+        #        кода это 510 CHECK'ов. Остальные 20 — по строке на проверку:
+        #        5 `total_xp_for_level`, 2 `clamp_rpg_attribute`, 4 «множитель
+        #        равен 1.000 при нуле очков», 1 `int_psi_duration_bonus_sec`,
+        #        1 `str_durability_wear_mult_e3`, 2 асимптоты, 6 `adjusted_psi_cost`;
+        #   −50  suite_eventsweb: блок 1 (`publish_floor_arrival` + фид, 28),
+        #        блок 2 (рендер каждого типа, 14), тест PropDetached (11 -> 4),
+        #        блок 4 (читал результат фидом, теперь шиной, 6 -> 5);
+        #   −6   suite_faction2: круг `pack_floor`/`event_floor` (4) и две
+        #        распаковки этажа в проверке тэлли;
+        #   −2   suite_utilai: две проверки отказов `ai_remember_actor`; закон
+        #        обиды («та же обида заставляет Ликвидатора драться, а Гражданина
+        #        бежать») СОХРАНЁН — след кладётся примитивом `AiMemory::remember`;
+        #   −6   suite_walkbits: телесная половина (1 бит-идентичность + 5 патчей
+        #        битсета). Клиренс нава в том же файле не тронут.
+        PASS_REGULAR_EXPRESSION "game_test: 222638 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

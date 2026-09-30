@@ -35,20 +35,10 @@ static void test_rpg_curve() {
     CHECK(xp_for_level(kRpgLevelCap) == 75u + 25u * 254u + 10u * 254u * 253u);
     CHECK(xp_for_level(kRpgLevelCap) == 649045u);
 
-    // Cumulative sums, including the reference's own first two steps.
-    CHECK(total_xp_for_level(1) == 0);
-    CHECK(total_xp_for_level(2) == 100);
-    CHECK(total_xp_for_level(3) == 245);
-    CHECK(total_xp_for_level(4) == 455);
-    // The whole ladder fits comfortably in u32 even though the API returns u64.
-    CHECK(total_xp_for_level(kRpgLevelCap) < 0xFFFFFFFFull);
-
     CHECK(clamp_rpg_level(0) == 1);
     CHECK(clamp_rpg_level(-9) == 1);
     CHECK(clamp_rpg_level(1) == 1);
     CHECK(clamp_rpg_level(300) == kRpgLevelCap);
-    CHECK(clamp_rpg_attribute(-1) == 0);
-    CHECK(clamp_rpg_attribute(999) == kRpgAttributeCap);
 }
 
 static void test_rpg_derived() {
@@ -73,15 +63,11 @@ static void test_rpg_derived() {
     // shape (e.g. an asymptotic stat coded as linear) most often survives, so it is
     // worth stating for all nine.
     CHECK(str_melee_dmg_mult_e3(r) == 1000);
-    CHECK(str_durability_wear_mult_e3(r) == 1000);
     CHECK(agi_move_speed_mult_e3(r) == 1000);
     CHECK(agi_attack_speed_mult_e3(r) == 1000);
     CHECK(agi_ranged_spread_mult_e3(r) == 1000);
     CHECK(int_xp_mult_e3(r) == 1000);
     CHECK(int_psi_cost_mult_e3(r) == 1000);
-    CHECK(int_contract_reward_mult_e3(r) == 1000);
-    CHECK(int_document_reward_mult_e3(r) == 1000);
-    CHECK(int_psi_duration_bonus_sec(r) == 0);
 
     // LINEAR: STR at +1%/point. 10 points = x1.10 HP and x1.10 melee.
     r = fresh_rpg(1);
@@ -101,7 +87,6 @@ static void test_rpg_derived() {
     r = fresh_rpg(1);
     r.attr[static_cast<std::size_t>(Attr::Int)] = 20;
     CHECK(max_psi(r) == 120);
-    CHECK(int_psi_duration_bonus_sec(r) == 20);   // +1 s per point, flat
 
     // INVERSE: 1/(1 + p*k). AGI attack cooldown at k=0.02 — 10 points gives
     // 1/1.2 = 0.8333 -> 833, and the value must always be BELOW 1000 (faster) and
@@ -116,11 +101,6 @@ static void test_rpg_derived() {
     CHECK(agi_attack_speed_mult_e3(r) < 1000);
     CHECK(agi_ranged_spread_mult_e3(r) > 0);
 
-    // INVERSE: STR durability wear at k=0.08 — 5 points gives 1/1.4 = 0.7143 -> 714.
-    r = fresh_rpg(1);
-    r.attr[static_cast<std::size_t>(Attr::Str)] = 5;
-    CHECK(str_durability_wear_mult_e3(r) == 714);
-
     // INVERSE: INT psi cost at k=0.035 — 10 points gives 1/1.35 = 0.7407 -> 741.
     r = fresh_rpg(1);
     r.attr[static_cast<std::size_t>(Attr::Int)] = 10;
@@ -131,14 +111,10 @@ static void test_rpg_derived() {
     for (int p = 1; p <= kRpgAttributeCap; ++p) {
         r.attr[static_cast<std::size_t>(Attr::Int)] = static_cast<std::uint8_t>(p);
         CHECK(int_xp_mult_e3(r) <= 2000);
-        CHECK(int_contract_reward_mult_e3(r) <= 1500);   // asymptote 0.5
-        CHECK(int_document_reward_mult_e3(r) <= 1700);   // asymptote 0.7
     }
-    // And it does approach the ceiling: at the cap all three are near their limit.
+    // And it does approach the ceiling: at the cap it is near its limit.
     r.attr[static_cast<std::size_t>(Attr::Int)] = kRpgAttributeCap;
     CHECK(int_xp_mult_e3(r) > 1990);
-    CHECK(int_contract_reward_mult_e3(r) > 1495);
-    CHECK(int_document_reward_mult_e3(r) > 1690);
     // Monotone rising, which distinguishes a saturating curve from a clamped one.
     std::uint16_t prevXp = 1000;
     for (int p = 1; p <= 40; ++p) {
@@ -179,16 +155,9 @@ static void test_rpg_melee_and_psi() {
     r = fresh_rpg(5);
     CHECK(melee_damage(r, 1, 0) == 4);
 
-    // PSI cost: INT makes it cheaper but the floor is 1, never 0 — a free spell is
-    // the reference's `max(1, ...)` and the only thing stopping infinite casting.
-    r = fresh_rpg(1);
-    CHECK(adjusted_psi_cost(0, r) == 0);      // a free effect stays free
-    CHECK(adjusted_psi_cost(10, r) == 10);    // no INT: unchanged
-    r.attr[static_cast<std::size_t>(Attr::Int)] = 10;
-    CHECK(adjusted_psi_cost(10, r) == 7);     // round(10 * 0.7407)
-    r.attr[static_cast<std::size_t>(Attr::Int)] = kRpgAttributeCap;
-    CHECK(adjusted_psi_cost(1, r) >= 1);      // the floor holds at max INT
-    CHECK(adjusted_psi_cost(100, r) >= 1);
+    // (Блок «цена пси после ИНТЕЛЛЕКТА» снесён 2026-09-30 вместе с
+    // `adjusted_psi_cost`: применителя у неё не было ни одного. Сам множитель
+    // `int_psi_cost_mult_e3` жив и проверяется выше.)
 }
 
 static void test_rpg_xp_sources() {

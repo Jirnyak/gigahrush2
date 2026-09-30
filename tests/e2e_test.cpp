@@ -720,7 +720,7 @@ static void test_t1_f11_05_net_worth_conservation() {
     CHECK(net_worth(led, acct) == nw0);
 }
 
-// --- F12: feed_tick & feed_drain Integration ---
+// --- F12: шина событий ---
 
 static void test_t1_f12_01_event_bus_publish_and_size() {
     EventBus bus;
@@ -733,50 +733,13 @@ static void test_t1_f12_01_event_bus_publish_and_size() {
     CHECK(!bus.empty());
 }
 
-static void test_t1_f12_02_feed_drain_transfers_events() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
+// F12: тесты ленты событий СНЕСЕНЫ 2026-09-30 вместе с самой лентой
+// (`EventFeed`/`feed_drain`/`feed_line`/`feed_tick`/`event_line` — ноль
+// вызывающих в `src/`). Шина осталась, и её проверяет t1_f12_01 ниже.
 
-    bus.publish(EventType::FloorEntered, 3u, 0u, 0u, 100u);
-    std::size_t drained = feed_drain(feed, bus);
-    CHECK(drained == 1);
-    CHECK(feed.live == 1);
-}
 
-static void test_t1_f12_03_feed_tick_returns_exact_timestamps() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
 
-    bus.publish(EventType::NpcSpawned, 1u, 10u, 0u, 500u);
-    feed_drain(feed, bus);
-    CHECK(feed_tick(feed, 0) == 500u);
-}
 
-static void test_t1_f12_04_feed_line_formatting_for_all_event_types() {
-    Event e{};
-    char buf[128];
-    for (std::size_t i = 1; i < kEventTypeCount; ++i) {
-        e.type = static_cast<EventType>(i);
-        bool ok = event_line(e, buf, sizeof(buf));
-        CHECK(ok);
-        CHECK(std::strlen(buf) > 0);
-    }
-}
-
-static void test_t1_f12_05_feed_circular_eviction_order() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
-
-    for (uint32_t i = 1; i <= 10; ++i) {
-        bus.publish(EventType::FloorEntered, i, 0u, 0u, 1000u + i);
-    }
-    feed_drain(feed, bus);
-    CHECK(feed.live == EventFeed::kLines);
-    CHECK(feed_tick(feed, 0) == 1010u);
-}
 
 // --- F13: prop_interact_step / interaction_step Wiring ---
 
@@ -887,15 +850,6 @@ static void test_t1_f14_01_bank_step_contract_and_signature() {
     static_assert(std::is_same_v<decltype(bank_step(acct, 0u)), BankTick>);
 }
 
-static void test_t1_f14_02_feed_tick_and_drain_contract() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
-    std::size_t drained = feed_drain(feed, bus);
-    uint64_t t = feed_tick(feed, 0);
-    CHECK(drained == 0);
-    CHECK(t == 0);
-}
 
 static void test_t1_f14_03_interaction_step_contract() {
     Registry reg;
@@ -1528,21 +1482,7 @@ static void test_t2_f11_05_fractional_interest_asymmetric_rounding() {
 
 // --- F12 Boundaries ---
 
-static void test_t2_f12_01_feed_tick_out_of_bounds() {
-    EventFeed feed{};
-    CHECK(feed_tick(feed, 0) == 0);
-    CHECK(feed_tick(feed, 10) == 0);
-    CHECK(feed_line(feed, 0) == nullptr);
-}
 
-static void test_t2_f12_02_feed_drain_empty_bus() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
-    std::size_t w = feed_drain(feed, bus);
-    CHECK(w == 0);
-    CHECK(feed.live == 0);
-}
 
 static void test_t2_f12_03_bus_ring_overflow_drop_counter() {
     EventBus bus;
@@ -1553,26 +1493,7 @@ static void test_t2_f12_03_bus_ring_overflow_drop_counter() {
     CHECK(bus.dropped() == 50);
 }
 
-static void test_t2_f12_04_signed_floor_payload_packing() {
-    std::int32_t f = -50;
-    std::uint32_t packed = pack_floor(f);
-    std::int32_t unpacked = event_floor(packed);
-    CHECK(unpacked == f);
-}
 
-static void test_t2_f12_05_feed_retention_across_bus_clear() {
-    EventBus bus;
-    bus.init();
-    EventFeed feed{};
-    bus.publish(EventType::ItemTransferred, 1u, 2u, 3u, 42u);
-    feed_drain(feed, bus);
-    CHECK(feed.live == 1);
-
-    bus.clear();
-    CHECK(bus.empty());
-    CHECK(feed.live == 1);
-    CHECK(feed_tick(feed, 0) == 42u);
-}
 
 // --- F13 Boundaries ---
 
@@ -1698,7 +1619,7 @@ static void test_t2_f14_04_entry_points_reentrant_concurrency_safety() {
 }
 
 static void test_t2_f14_05_static_gate_regex_compliance() {
-    const char* names[] = {"bank_step", "feed_tick", "interaction_step", "prop_interact_step", "route_step"};
+    const char* names[] = {"bank_step", "samosbor_step", "interaction_step", "prop_interact_step", "route_step"};
     for (const char* name : names) {
         CHECK(std::strstr(name, "_step") != nullptr || std::strstr(name, "_tick") != nullptr);
     }
@@ -1841,21 +1762,20 @@ static void test_t3_05_vector_gravity_with_duty_lattice_patrol() {
     CHECK(tangentVel.x == 0.0f);
 }
 
-static void test_t3_06_economy_events_wired_to_event_feed() {
+static void test_t3_06_economy_events_reach_the_bus() {
     BankAccount acct{};
     RunLedger led{};
     EventBus bus;
     bus.init();
-    EventFeed feed{};
 
     bank_open(acct, 0, 1u);
     led.banked = 1000;
     bank_deposit(acct, led, 500, 100u);
     bus.publish(EventType::ItemTransferred, 500u, 0u, 0u, 100u);
 
-    feed_drain(feed, bus);
-    CHECK(feed.live == 1);
-    CHECK(feed_tick(feed, 0) == 100u);
+    // Раньше читалось лентой; лента снесена 2026-09-30, шина — нет.
+    CHECK(bus.cycle_count(EventType::ItemTransferred) == 1);
+    CHECK(bus.events()[0].tick == 100u);
 }
 
 static void test_t3_07_toroidal_wrap_with_prop_interaction() {
@@ -1948,10 +1868,9 @@ static void test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane()
     CHECK(fy.tanA == 0 && fy.tanB == 2);
 }
 
-static void test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission() {
+static void test_t3_13_samosbor_alarm_and_event_bus_emission() {
     EventBus bus;
     bus.init();
-    EventFeed feed{};
     SamosborState st{};
     st.phase = static_cast<std::uint8_t>(SamosborPhase::Warning);
     st.phaseMs = 25000u;
@@ -1960,8 +1879,7 @@ static void test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission() {
     CHECK(alarm.on);
 
     bus.publish(EventType::FloorEntered, 0u, 0u, 0u, 100u);
-    feed_drain(feed, bus);
-    CHECK(feed.live == 1);
+    CHECK(bus.cycle_count(EventType::FloorEntered) == 1);
 }
 
 static void test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage() {
@@ -2078,7 +1996,6 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
     pool.init();
     EventBus bus;
     bus.init();
-    EventFeed feed{};
     BankAccount acct{};
     bank_open(acct, 0, 123u);
 
@@ -2098,7 +2015,6 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
             interaction_step(reg, player, Interactable::Kind::Terminal, bus);
             bus.publish(EventType::ItemTransferred, 1u, 0u, 0u, t);
         }
-        feed_drain(feed, bus);
         bus.clear();
         bank_step(acct, t);
     }
@@ -2251,14 +2167,6 @@ int main() {
     // F12
     std::fprintf(stderr, "[e2e] test_t1_f12_01_event_bus_publish_and_size\n");
     test_t1_f12_01_event_bus_publish_and_size();
-    std::fprintf(stderr, "[e2e] test_t1_f12_02_feed_drain_transfers_events\n");
-    test_t1_f12_02_feed_drain_transfers_events();
-    std::fprintf(stderr, "[e2e] test_t1_f12_03_feed_tick_returns_exact_timestamps\n");
-    test_t1_f12_03_feed_tick_returns_exact_timestamps();
-    std::fprintf(stderr, "[e2e] test_t1_f12_04_feed_line_formatting_for_all_event_types\n");
-    test_t1_f12_04_feed_line_formatting_for_all_event_types();
-    std::fprintf(stderr, "[e2e] test_t1_f12_05_feed_circular_eviction_order\n");
-    test_t1_f12_05_feed_circular_eviction_order();
 
     // F13
     std::fprintf(stderr, "[e2e] test_t1_f13_01_interaction_step_finds_nearest_within_reach\n");
@@ -2275,8 +2183,6 @@ int main() {
     // F14
     std::fprintf(stderr, "[e2e] test_t1_f14_01_bank_step_contract_and_signature\n");
     test_t1_f14_01_bank_step_contract_and_signature();
-    std::fprintf(stderr, "[e2e] test_t1_f14_02_feed_tick_and_drain_contract\n");
-    test_t1_f14_02_feed_tick_and_drain_contract();
     std::fprintf(stderr, "[e2e] test_t1_f14_03_interaction_step_contract\n");
     test_t1_f14_03_interaction_step_contract();
     std::fprintf(stderr, "[e2e] test_t1_f14_04_route_step_contract\n");
@@ -2432,16 +2338,8 @@ int main() {
     test_t2_f11_05_fractional_interest_asymmetric_rounding();
 
     // F12 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f12_01_feed_tick_out_of_bounds\n");
-    test_t2_f12_01_feed_tick_out_of_bounds();
-    std::fprintf(stderr, "[e2e] test_t2_f12_02_feed_drain_empty_bus\n");
-    test_t2_f12_02_feed_drain_empty_bus();
     std::fprintf(stderr, "[e2e] test_t2_f12_03_bus_ring_overflow_drop_counter\n");
     test_t2_f12_03_bus_ring_overflow_drop_counter();
-    std::fprintf(stderr, "[e2e] test_t2_f12_04_signed_floor_payload_packing\n");
-    test_t2_f12_04_signed_floor_payload_packing();
-    std::fprintf(stderr, "[e2e] test_t2_f12_05_feed_retention_across_bus_clear\n");
-    test_t2_f12_05_feed_retention_across_bus_clear();
 
     // F13 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f13_01_exact_reach_boundary_distance\n");
@@ -2492,8 +2390,8 @@ int main() {
     test_t3_04_prop_interaction_during_ai_navigation_single_writer();
     std::fprintf(stderr, "[e2e] test_t3_05_vector_gravity_with_duty_lattice_patrol\n");
     test_t3_05_vector_gravity_with_duty_lattice_patrol();
-    std::fprintf(stderr, "[e2e] test_t3_06_economy_events_wired_to_event_feed\n");
-    test_t3_06_economy_events_wired_to_event_feed();
+    std::fprintf(stderr, "[e2e] test_t3_06_economy_events_reach_the_bus\n");
+    test_t3_06_economy_events_reach_the_bus();
     std::fprintf(stderr, "[e2e] test_t3_07_toroidal_wrap_with_prop_interaction\n");
     test_t3_07_toroidal_wrap_with_prop_interaction();
     std::fprintf(stderr, "[e2e] test_t3_08_liquidator_defense_vs_civilian_panic_diffusion\n");
@@ -2506,8 +2404,8 @@ int main() {
     test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms();
     std::fprintf(stderr, "[e2e] test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane\n");
     test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane();
-    std::fprintf(stderr, "[e2e] test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission\n");
-    test_t3_13_samosbor_alarm_feed_logging_and_event_bus_emission();
+    std::fprintf(stderr, "[e2e] test_t3_13_samosbor_alarm_and_event_bus_emission\n");
+    test_t3_13_samosbor_alarm_and_event_bus_emission();
     std::fprintf(stderr, "[e2e] test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage\n");
     test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage();
     std::fprintf(stderr, "[e2e] test_t3_15_single_writer_token_arbitration_with_patrol_and_wander\n");

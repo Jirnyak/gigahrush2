@@ -875,11 +875,12 @@ static void test_utilai_all() {
         // --- Payload families cannot be crossed --------------------------
         AiMemory guard;
         CHECK(!ai_remember_cell(guard, 1u, MemFoe, 1, 2, 3, 1.0f, 0.0));
-        CHECK(!ai_remember_actor(guard, 1u, MemDanger, 42u, 1.0f, 0.0));
-        CHECK(!ai_remember_actor(guard, 1u, MemFoe, kInvalidNpc, 1.0f, 0.0));
         CHECK(!guard.remember(1u, MemNone, 0u, 1.0f, 0.0));
         CHECK(guard.rows() == 0u);   // every refusal allocated nothing
-        CHECK(ai_remember_actor(guard, 1u, MemFoe, 1234u, 1.0f, 0.0));
+        // Акторный след кладётся ПРИМИТИВОМ: `ai_remember_actor` снесён
+        // 2026-09-30 (ноль вызывающих в src/, при том что [ai.h] утверждал
+        // обратное). Путь ЧТЕНИЯ акторного следа жив и проверяется здесь же.
+        CHECK(guard.remember(1u, MemFoe, 1234u, 1.0f, 0.0));
         CHECK(ai_recall(guard, 1u, 0, 0, 0, 0.0).foe == 1234u);
 
         // forget() clears a row without shrinking the column.
@@ -1129,7 +1130,7 @@ static void test_utilai_all() {
 
                 // The same body, having been hurt by somebody it can still name.
                 mem.forget(id);
-                CHECK(ai_remember_actor(mem, id, MemFoe, id + 100000u, 1.0f, 0.0));
+                CHECK(mem.remember(id, MemFoe, (id + 100000u) & kNpcIdMask, 1.0f, 0.0));
                 const MemoryRecall r = ai_recall(mem, id, 0, 0, 0, 0.0);
                 CHECK(r.foe == id + 100000u);
                 CHECK(std::fabs(r.grudge - 1.0f) < 1e-6f);

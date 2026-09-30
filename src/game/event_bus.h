@@ -25,14 +25,16 @@
 //     producer's event is provably never read is worse than no bus — it looks
 //     wired. The tally is two increments per publish and turns "does anything read
 //     this" into a HUD line. It is a COUNT, not a substitute for a real consumer.
-//   * AND EVERY TYPE NOW HAS ONE. The tally answers "is this producer firing"; it
-//     does not answer "did anything act on it", and the bullet above says so.
-//     `EventFeed` at the bottom of this header is the missing half: it renders
-//     every event of every type to a line and KEEPS it across `clear()`, so the
-//     three `ItemTransferred` producers are read on the tick they publish instead
-//     of being wiped unread. It is deliberately the weakest possible consumer —
-//     text on a screen — because a bus's job is to carry, and inventing gameplay
-//     reactions to justify each enumerator would be the tail wagging the dog.
+//   * «И У КАЖДОГО ТИПА ТЕПЕРЬ ЕСТЬ ЧИТАТЕЛЬ» — ЭТО БЫЛО НЕПРАВДОЙ, и абзац,
+//     который так утверждал, снесён вместе со своим доказательством 2026-09-30.
+//     Читателем назывался `EventFeed` внизу этого заголовка: он рендерил каждое
+//     событие в строку и держал её через `clear()`. Но САМ ФИД никто не звал —
+//     ни худ, ни F1, ни консоль, 43 вызова в тестах и ноль в `src/`. То есть
+//     «слабейший возможный потребитель» оказался потребителем, которого не
+//     существует, и абзац читался как закрытый шов ровно потому, что был
+//     написан убедительно. Фид снесён; счётчик `cycle_count`/`total_count`
+//     остаётся тем, чем всегда и был, — ответом на «стреляет ли производитель»,
+//     и НЕ ответом на «подействовало ли это на что-нибудь».
 #pragma once
 
 #include <cstddef>
@@ -50,14 +52,14 @@ namespace giga::game {
 // events the engine could not emit. Adding a value without naming its producer
 // reintroduces exactly that lie.
 //
-// Three of the four are produced OUTSIDE this library — the arrival of a floor is
-// something only the app shell knows about — and all three go through the single
-// `publish_floor_arrival` below rather than through hand-written publishes at each
-// site. That is the audit handle: one definition, and its call sites ARE the
-// producer list for those three values. main.cpp has THREE arrival sites (the
-// first load, the keyboard ride, the `--shot` ride) and its own comments record
-// two separate bugs caused by fixing one of them and forgetting the others, which
-// is why the payload is assembled here and not there.
+// Три из четырёх (`NpcSpawned`, `NpcMigrated`, `FloorEntered`) так и не получили
+// производителя НИ РАЗУ. Заготовленная для них обёртка `publish_floor_arrival` и
+// три её типизированных публикатора снесены 2026-09-30: их единственным
+// вызывающим был тест, а три точки прибытия в `main.cpp`, ради которых обёртка и
+// писалась, публикуют по-прежнему ничего. Энумераторы оставлены — словарь шины и
+// фикстура её собственных тестов, — но утверждение «у каждого значения есть
+// производитель, которого можно грепнуть» ниже для них ЛОЖНО, и это записано
+// здесь, а не подразумевается (problems.md §83).
 //
 // The count itself is not guessed either: `NpcPool::count()` is documented as the
 // high-water mark of slots ever handed out and never decreases, so its delta
@@ -228,22 +230,18 @@ private:
 
 // --- signed payload in an unsigned slot -------------------------------------
 //
-// Floor numbers are SIGNED and the demo stack reaches -50, while the event slots
-// are `std::uint32_t`. The round trip is exact and these two helpers are the only
-// place it is spelled, because getting it wrong is silent: reading a raw slot
-// straight back gives 4294967246 for floor -50, which is not a crash, just a
-// number a HUD prints and nobody questions. Same class of trap as
-// `NpcPool::floor()` being uint16 (floor -50 stored as 65486).
+// СЛОЙ «ПРИБЫТИЕ НА ЭТАЖ» СНЕСЁН ЦЕЛИКОМ 2026-09-30 — `pack_floor`,
+// `event_floor`, `publish_npc_spawned`, `publish_npc_migrated`,
+// `publish_floor_entered` и обёртка `publish_floor_arrival` над ними. У всей
+// цепочки был РОВНО ОДИН потребитель — тест; `src/` не звал ни одной из них
+// никогда, хотя шапка `publish_floor_arrival` объясняла, что она существует
+// «потому что в main.cpp ТРИ точки прибытия и история чинить одну и забывать
+// остальные». Три точки прибытия так и не позвали ни одну.
 //
-// Guaranteed, not merely usual: C++20 mandates two's-complement integers, so
-// int32 -> uint32 -> int32 is value-preserving for the whole range.
-inline std::uint32_t pack_floor(std::int32_t floorNumber) {
-    return static_cast<std::uint32_t>(floorNumber);
-}
-inline std::int32_t event_floor(std::uint32_t slot) {
-    return static_cast<std::int32_t>(slot);
-}
-
+// Энумераторы `NpcSpawned`/`NpcMigrated`/`FloorEntered` ОСТАЛИСЬ: это словарь
+// живой шины, и на них же стоят её собственные тесты (кольцо, переполнение,
+// счётчики). Долг «три типа событий без производителя» назван в problems.md §83.
+//
 // A relation value travels the same way: int8 -> uint32 -> int8.
 inline std::uint32_t pack_relation(std::int8_t v) {
     return static_cast<std::uint32_t>(static_cast<std::int32_t>(v));
@@ -252,112 +250,16 @@ inline std::int8_t event_relation(std::uint32_t slot) {
     return static_cast<std::int8_t>(static_cast<std::int32_t>(slot));
 }
 
-// --- typed publish helpers --------------------------------------------------
+// --- ЧИТАЮЩИЙ СЛОЙ СНЕСЁН 2026-09-30 --------------------------------------
 //
-// Thin, inline, and worth existing for one reason only: they put the payload
-// contract in the same place as the enum comment, so a call site cannot quietly
-// disagree with it. `NpcDied` and `ItemTransferred` deliberately have no helper —
-// their producers predate this and already carry the contract in a comment.
-
-// One floor's crowd was seeded. `count` is the delta in NpcPool::count().
-inline bool publish_npc_spawned(EventBus& bus, std::uint32_t firstId,
-                                std::uint32_t count, std::int32_t floorNumber,
-                                std::uint64_t tick) {
-    return bus.publish(EventType::NpcSpawned, firstId, count,
-                       pack_floor(floorNumber), tick);
-}
-
-// A record rode from one floor to another.
-inline bool publish_npc_migrated(EventBus& bus, std::uint32_t npcId,
-                                 std::int32_t fromFloor, std::int32_t toFloor,
-                                 std::uint64_t tick) {
-    return bus.publish(EventType::NpcMigrated, npcId, pack_floor(fromFloor),
-                       pack_floor(toFloor), tick);
-}
-
-// A record arrived on a floor. `layer` is the storage slot, `floorNumber` the
-// logical label — pass both, they are not interchangeable ([floors.md]).
-inline bool publish_floor_entered(EventBus& bus, std::int32_t floorNumber,
-                                  std::uint32_t layer, std::uint32_t npcId,
-                                  std::uint64_t tick) {
-    return bus.publish(EventType::FloorEntered, pack_floor(floorNumber), layer,
-                       npcId, tick);
-}
-
-// --- one floor arrival, one call --------------------------------------------
+// Здесь жили `event_line` (рендер события строкой), `EventFeed` (кольцо из
+// шести строк, переживающее `clear()`) и `feed_drain`/`feed_line`/`feed_tick`.
+// Это был ЖУРНАЛ ИГРОКА — и он не был подключён ни к худу, ни к F1, ни к
+// консоли: 43 вызова в тестах, ноль в `src/`. Решение владельца 2026-09-30 —
+// убить. `feed_tick` заодно ушёл из аллоулиста [tools/check_wired.cmake].
 //
-// Everything an arrival publishes: the crowd it seeded (NpcSpawned, only if the
-// pool actually grew), the ride that got you here (NpcMigrated, only if you came
-// from a different floor), and the arrival itself (FloorEntered, always). Returns
-// how many events were published, 1..3.
-//
-// This exists as ONE function because `src/app/main.cpp` has THREE arrival sites
-// and a documented history of fixing one and forgetting the rest — the rumour
-// reset and the door build were each shipped broken at the `--shot` site for that
-// exact reason, and both are commented in place. Three publishes copied to three
-// sites is nine chances to drift; this is one.
-//
-// `countBefore`/`countAfter` are `NpcPool::count()` either side of the load. It is
-// a HIGH-WATER MARK that never decreases, so `after - before` is the number of
-// records seeded and is 0 on every re-entry. `firstId` is derived as
-// `countBefore`, which is exact because the pool is a bump allocator that never
-// reclaims a slot ([npcs.md]).
-//
-// Pass `fromFloor == toFloor` for a load that is not a ride (the first one).
-std::uint32_t publish_floor_arrival(EventBus& bus, std::uint32_t countBefore,
-                                   std::uint32_t countAfter,
-                                   std::int32_t fromFloor, std::int32_t toFloor,
-                                   std::uint32_t layer, std::uint32_t npcId,
-                                   std::uint64_t tick);
-
-// --- the consumer -----------------------------------------------------------
-//
-// Render one event as a line of text. Returns false for a type it cannot render
-// (only `None`) or for a null/zero-length buffer, leaving `out` untouched.
-//
-// A switch and not a table of format strings: the payload slots mean different
-// things per type and two of them need `event_floor`/`event_relation` to be read
-// at all, so a table would either print the raw u32 (4294967246 for floor -50) or
-// need a per-type decoder beside it anyway.
-bool event_line(const Event& e, char* out, std::size_t cap);
-
-// The last few events, as text, held across `clear()`.
-//
-// This is what makes the bus observable. Reading `EventBus::events()` from the
-// HUD cannot work: the bus is transient and cleared once per FRAME while the sim
-// runs up to 8 fixed steps per frame, so the render pass would see whatever the
-// last step happened to leave — almost always nothing. So the feed is drained on
-// the sim's clock and keeps its lines until they are pushed out by newer ones.
-//
-// Fixed storage, no allocation, POD: 6 x 96 B of text + 6 x 8 B of ticks + two
-// cursors = 640 B. Sized for a HUD block that stays readable, not for history —
-// that is what `set_logging` is for.
-struct EventFeed {
-    static constexpr std::size_t kLines = 6;
-    static constexpr std::size_t kLineLen = 96;
-
-    char line[kLines][kLineLen] = {};
-    std::uint64_t at[kLines] = {};   // the sim tick each line was published on
-    std::size_t next = 0;            // ring cursor: the slot to overwrite next
-    std::size_t live = 0;            // how many slots hold a line, <= kLines
-};
-
-// Render this cycle's batch into `feed`. Returns how many lines were written.
-//
-// Call it LAST — after every other consumer and before `clear()` — because a
-// consumer may itself publish: `relations_drain_deaths` reads NpcDied and emits
-// RelationChanged, and draining the feed first would render the batch without it.
-//
-// A cycle with more than kLines events loses the oldest of them, on purpose: a
-// feed that dropped the NEWEST would freeze on screen during a firefight, which
-// is exactly when it has something to say.
-std::size_t feed_drain(EventFeed& feed, const EventBus& bus);
-
-// Line `i`, NEWEST first (i = 0 is the most recent). nullptr past `live`.
-const char* feed_line(const EventFeed& feed, std::size_t i);
-
-// The sim tick line `i` was published on, for a HUD that wants to fade old lines.
-// 0 past `live`.
-std::uint64_t feed_tick(const EventFeed& feed, std::size_t i);
+// Шина от этого не пострадала и остаётся ОЧЕНЬ живой: её пишут бой, лут,
+// свидетель (S19), пропы, нужды и фракции, а читают `relations_drain_deaths`,
+// звук и щиток. Мёртв был ровно перевод событий В ТЕКСТ ДЛЯ ЧЕЛОВЕКА.
 
 } // namespace giga::game
