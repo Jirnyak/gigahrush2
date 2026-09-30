@@ -5341,7 +5341,10 @@ stale-байтами; флеш при этом пропускает пул сх�
 
 1. **Write-only колонки `data/monster_traits.csv`.** ВЗЯТО СЛЕДУЮЩЕЙ СЕССИЕЙ по
    выбору владельца — вход [dead-csv-columns](markoaudit/plans/dead-csv-columns.md),
-   парой с 14 мёртвыми столбцами `items.csv`. `wet_move`, `dry_move`,
+   промпт [csv-columns-prompt](markoaudit/plans/csv-columns-prompt.md), парой с 14
+   мёртвыми столбцами `items.csv`. **Лечение выбрано владельцем 2026-09-30: ГЕЙТ
+   С ХРАПОВИКОМ, не удаление** — столбец CSV не код, опасно не то, что он лежит,
+   а то, что он выглядит подключённым. `wet_move`, `dry_move`,
    `wet_dmg`, `dry_dmg`, `wet_incoming`, `bait`, `terrain` остались авторскими
    данными без единого читателя в `src/` — ровно тот класс, ради которого заведён
    гейт `wired` (история `MobDef::projType`). Данные не выброшены сознательно:
