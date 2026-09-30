@@ -3915,7 +3915,8 @@ int main(int argc, char** argv) {
                                      "(лин %u вращ %u maxV %.3f) "
                                      "quiet-no-touch %u | будят: линк %u "
                                      "пара %u агент %u извне %u | суставы вне "
-                                     "люфта %u maxC %.4f м | bins %.3f ms "
+                                     "люфта %u maxC %.4f м решений %u | "
+                                     "bins %.3f ms "
                                      "solve %.3f ms (последний тик) | "
                                      "medium-wakes %llu (всего)\n",
                                      rs->bodies, rs->awake, rs->agents,
@@ -3926,6 +3927,7 @@ int main(int argc, char** argv) {
                                      rs->wokePair, rs->wokeAgent,
                                      rs->wokeExtern, rs->linksBeyondSlop,
                                      static_cast<double>(rs->linkMaxAbsC),
+                                     rs->linksSolved,
                                      static_cast<double>(rs->binsMs),
                                      static_cast<double>(rs->solveMs),
                                      static_cast<unsigned long long>(

@@ -739,6 +739,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // 27 поисков НА ТЕЛО стоили 4.5 мс/тик на 4096 бодрых (замер 2026-08-21).
     static thread_local std::vector<std::pair<std::uint32_t, std::uint32_t>>
         runPairs;
+    static thread_local std::vector<Entity> liveLinks; // связи с бодрой стороной
     runPairs.clear();
     constexpr int kFwd[13][3] = {
         {1, 0, 0},  {-1, 1, 0}, {0, 1, 0},  {1, 1, 0},
@@ -1020,13 +1021,42 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                                   agBins.entries[g].e);
         }
 
-        // Фаза линков: kJointIters проходов sequential impulses по всем
-        // связям (цепь сходится итерациями, как контакты у бокса).
-        for (int it = 0; it < kJointIters; ++it) {
-            for (auto le : links) {
-                solve_link(links.get<JointLink>(le), it == 0);
+        // ФАЗА ЛИНКОВ — ТОЛЬКО ПО ЖИВЫМ СВЯЗЯМ. Тот же приём, которым фаза
+        // пар давно не платит за спящий мир («соседи ищутся раз на КЛЕТКУ С
+        // БОДРЫМИ телами, не раз на тело»), и та же причина: kJointIters × 2
+        // подшага = 16 проходов по ВСЕМ связям за тик, а `solve_link`
+        // выясняет, что обе стороны спят, только внутри — после четырёх
+        // ECS-проб. Замер 2026-09-30 на 1000 спящих трупов (4000 тел, 3000
+        // связей, один движущийся агент): **solve 1.467 → 0.088 мс**, в 17
+        // раз. До этого замера я объявил «спящий мир бесплатен» — он им не
+        // был: ранний выход «мир спит целиком» требует, чтобы агентов НЕ
+        // БЫЛО, а игрок в мире есть всегда, так что 48 000 вызовов на тик
+        // платились за неподвижную гору трупов каждый кадр.
+        //
+        // Список строится РАЗ НА ПОДШАГ, после фазы пар: разбуженный
+        // контактом уже виден здесь, а разбуженный самим `wakePass` войдёт
+        // со следующего подшага — та же задержка на подшаг, что у корзин.
+        liveLinks.clear();
+        for (auto le : links) {
+            const JointLink& jl = links.get<JointLink>(le);
+            if (jl.a == entt::null || !reg.valid(jl.a) ||
+                !reg.all_of<RigidBody>(jl.a))
+                continue;
+            const bool aAwake = !reg.get<RigidBody>(jl.a).asleep;
+            bool bAwake = false;
+            if (jl.b != entt::null) {
+                if (!reg.valid(jl.b) || !reg.all_of<RigidBody>(jl.b)) continue;
+                bAwake = !reg.get<RigidBody>(jl.b).asleep;
             }
+            // Спящий с МИРОВЫМ якорем тоже мёртв: якорь не движется, а
+            // проснуться телу даст разруб опоры (rigid_wake_dirty_cells).
+            if (aAwake || bAwake) liveLinks.push_back(le);
         }
+        for (int it = 0; it < kJointIters; ++it)
+            for (Entity le : liveLinks) {
+                solve_link(links.get<JointLink>(le), it == 0);
+                ++stats.linksSolved;
+            }
     }
 
     stats.solveMs = std::chrono::duration<float, std::milli>(

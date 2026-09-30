@@ -831,6 +831,22 @@ static void test_corpse_pile_reaches_sleep() {
                                   game::kFleshFriction);
     }
 
+    // АГЕНТ ОБЯЗАТЕЛЕН, И ЭТО НЕ ДЕКОРАЦИЯ. Ранний выход «мир спит целиком»
+    // (`rigid.cpp`: awakeCount == 0 && agents.empty()) требует, чтобы
+    // агентов-возмутителей НЕ БЫЛО. В игре игрок есть всегда и всегда
+    // движется — значит выход не срабатывает НИКОГДА. Без агента стенд
+    // печатал `solve 0.000 мс` и врал про цену спящих трупов: фаза связей
+    // крутилась по ВСЕМ суставам 16 раз за тик независимо от сна. Агент
+    // стоит далеко от кучи — он нужен как условие, не как возмущение.
+    Entity agent = reg.create();
+    reg.emplace<Transform>(
+        agent, Transform{vec3{2.0f * kCellSize, 2.0f * kCellSize,
+                              floorTop + 0.9f},
+                         g});
+    reg.emplace<Velocity>(agent, Velocity{vec3{1.0f, 0.0f, 0.0f}});
+    reg.emplace<AABB>(agent, AABB{vec3{0.4f, 0.4f, 0.9f}});
+    reg.emplace<GravityAffected>(agent);
+
     const std::uint32_t expectBodies = 4u * kCorpses;
     for (int i = 0; i < 20 * kSimHz; ++i) {
         rigid_body_step(reg, stack, kSimDt);
@@ -873,6 +889,20 @@ static void test_corpse_pile_reaches_sleep() {
     CHECK(bodies == expectBodies);       // 16 трупов × (таз + 3 сегмента)
     CHECK(linkCount == 3u * kCorpses);   // 3 сустава на труп
     CHECK(asleep == bodies);             // спят ВСЕ — §64, корень закрыт
+
+    // СПЯЩАЯ ГОРА ТРУПОВ НЕ ПЛАТИТ ЗА ФАЗУ СВЯЗЕЙ — производный оракул, и он
+    // абсолютный: ещё один тик по уснувшей сцене, и решений сустава должно
+    // быть РОВНО НОЛЬ. Число, а не миллисекунды: время в проверке ненадёжно.
+    // Замер, из которого это выросло (1000 трупов = 4000 тел, 3000 связей,
+    // один движущийся агент, ВСЁ спит): solve **1.467 → 0.088 мс**, в 17
+    // раз. Мутация «решать по всем связям, как было» → 48 связей × 8
+    // итераций × 2 подшага = 768 решений, красный.
+    rigid_body_step(reg, stack, kSimDt);
+    const RigidStats& rs = reg.ctx().get<RigidStats>();
+    if (rs.linksSolved != 0u)
+        std::printf("[§64] спящая куча решает суставы: %u решений при %u "
+                    "спящих телах\n", rs.linksSolved, asleep);
+    CHECK(rs.linksSolved == 0u);
 }
 
 // Инкремент 9 рагдолл-эпика: ПЕРЕНОСКА. Несомое тело не падает, следует за
