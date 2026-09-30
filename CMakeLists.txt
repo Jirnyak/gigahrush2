@@ -1974,7 +1974,20 @@ if(GIGA_BUILD_TESTS)
         # поведений выписан в suite_behaviours.inl рядом с замером, «строка kind
         # равна индексу» — в suite_monster.inl рядом с обходом, окно выживания —
         # локальным constexpr в suite_needs.inl, и оно по-прежнему валит СБОРКУ.
-        PASS_REGULAR_EXPRESSION "game_test: 218707 checks, 0 failures")
+        # 218707 + 3 = 218710 на 2026-09-30: §64 закрыт корнем, и корень
+        # получил гейт с НАСЕЛЕНИЕМ ИГРЫ — `test_corpse_pile_reaches_sleep`
+        # (куча 16 трупов лежит друг на друге, шаг 1.5 м при габарите
+        # лежащего ~1.8 м). Дельта из слагаемых, каждое — своя строка:
+        #   +1 `bodies == 64`     — структура населения стенда (16 × 4 сегмента);
+        #   +1 `linkCount == 48`  — 3 сустава на труп;
+        #   +1 `asleep == bodies` — ОРАКУЛ: спят ВСЕ, а не доля.
+        # Ни одного CHECK'а в цикле — три строки, три проверки, прогон это
+        # подтвердил (урок прошлой сессии: 510 проверок дали ДВЕ строки).
+        # Мутации в обе полярности: снять закон «тела одной суставной цепи не
+        # сталкиваются» (rigid.cpp, resolve_pair) -> красная `asleep ==
+        # bodies`, спит 25 из 64; вернуть -> зелёная. N и T выведены прогоном
+        # стенда tests/rigid_bench.cpp, а не назначены.
+        PASS_REGULAR_EXPRESSION "game_test: 218710 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
@@ -2155,6 +2168,13 @@ if(GIGA_BUILD_TESTS)
     add_executable(sim_bench tests/sim_bench.cpp)
     target_link_libraries(sim_bench PRIVATE giga_game Threads::Threads)
     giga_target_flags(sim_bench OFF)
+
+    # Стенд §64 «куча трупов»: населением ИГРЫ, а не одним трупом на статике.
+    # Не ctest по той же причине, что sim_bench — это прибор, из чисел которого
+    # выводятся пороги гейта, а не утверждение о них.
+    add_executable(rigid_bench tests/rigid_bench.cpp)
+    target_link_libraries(rigid_bench PRIVATE giga_game)
+    giga_target_flags(rigid_bench OFF)
 
     # Macro-society benchmark: advance the FULL 2^20 population one coarse tick at a
     # time and report ms/tick. Like sim_bench an executable, not a ctest -- it is a

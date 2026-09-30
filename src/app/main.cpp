@@ -3897,16 +3897,35 @@ int main(int argc, char** argv) {
                     }
                     // Состав rigid-сцены последнего тика (§59.11): разводит
                     // «спящие платят за бины» от «дорогая физика бодрых».
+                    //
+                    // РАЗЛОЖЕНИЕ АГРЕГАТА (§64, 2026-09-30): `noisy` — сумма,
+                    // и полтора месяца на ней строились версии. Теперь рядом
+                    // печатаются слагаемые: ЧЕМ шумит тело (линейно против
+                    // вращения — сустав трупа сцеплен центрами и момента не
+                    // даёт, так что перевес вращения снимает подозрение с
+                    // суставов без спора), ОТКУДА пробуждения (четыре точки
+                    // сброса сна; все четыре работают только на СПЯЩЕМ теле,
+                    // так что их нули означают «тела не засыпают», а не
+                    // «тела не будятся») и ОСТАТОК СУСТАВА, который подтяжка
+                    // Baumgarte превращает в 50·C м/с.
                     if (const RigidStats* rs = reg.ctx().find<RigidStats>())
                         std::fprintf(stderr,
                                      "[prof] rigid-stats bodies %u awake %u "
                                      "agents %u links %u | noisy %u "
-                                     "quiet-no-touch %u | bins %.3f ms "
+                                     "(лин %u вращ %u maxV %.3f) "
+                                     "quiet-no-touch %u | будят: линк %u "
+                                     "пара %u агент %u извне %u | суставы вне "
+                                     "люфта %u maxC %.4f м | bins %.3f ms "
                                      "solve %.3f ms (последний тик) | "
                                      "medium-wakes %llu (всего)\n",
                                      rs->bodies, rs->awake, rs->agents,
                                      rs->links, rs->noisyBodies,
-                                     rs->quietNoTouch,
+                                     rs->noisyLinear, rs->noisySpin,
+                                     static_cast<double>(rs->noisyMaxV),
+                                     rs->quietNoTouch, rs->wokeLink,
+                                     rs->wokePair, rs->wokeAgent,
+                                     rs->wokeExtern, rs->linksBeyondSlop,
+                                     static_cast<double>(rs->linkMaxAbsC),
                                      static_cast<double>(rs->binsMs),
                                      static_cast<double>(rs->solveMs),
                                      static_cast<unsigned long long>(

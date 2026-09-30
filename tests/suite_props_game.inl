@@ -691,13 +691,22 @@ static void test_debris_crowd_free_fall() {
     CHECK(crowdStalled == 0);
 }
 
-// СТИКЦИЯ (§64): НАСТОЯЩИЙ труп-гуманоид (боксы-сегменты из prop_forms.csv
-// + жёсткие штанги) обязан ДОСТИЧЬ сна на полу. До трения покоя это было
-// невозможно: штанги дерутся с контактами 16 раз за тик, тело дрожало выше
-// порога сна вечно (noisy 1241/1335 в игре, rigid 15.8 мс/кадр навсегда
-// после обрушения). Мутация «kStictionRate = 0» обязана ронять ровно
-// CHECK-и сна (верёвочная цепь world_test для полярности НЕ годится —
-// провисшие звенья засыпают и без стикции, проверено прогоном мутации).
+// ОДИН труп-гуманоид (боксы-сегменты из prop_forms.csv + жёсткие штанги)
+// обязан ДОСТИЧЬ сна на полу.
+//
+// ЗАЯВЛЕНИЕ О ПОЛЯРНОСТИ ИСПРАВЛЕНО 2026-09-30. Здесь стояло: «мутация
+// kStictionRate = 0 обязана ронять ровно CHECK-и сна». Прогон мутации после
+// закрытия корня §64 показал ЗЕЛЁНЫЙ — весь game_test, world_test,
+// verlet_test и e2e_test проходят при стикции ноль. То же и с люфтом
+// сустава (kJointSlop = 0). Значит две из трёх «несущих ног» лечения
+// 0cfd315f были несущими только потому, что лечили СИМПТОМ вечно
+// растянутого сустава; корень был в другом (самоколлизия сегментов одной
+// цепи, §64), и после его закрытия ни одна проверка дерева их не держит.
+// Это ДОЛГ, а не победа: физика без гейта — либо гейт, либо снос, решает
+// владелец (запись в problems.md §64).
+//
+// Этот же тест — красная проверка §69 под MSVC. При провале печатает, ЧЕМ
+// тело шумит: цикл отладки через мёртвый CI был 22 минуты за прогон.
 static void test_humanoid_reaches_sleep() {
     LevelStack stack;
     LayerId g = stack.push_layer();
@@ -736,8 +745,134 @@ static void test_humanoid_reaches_sleep() {
         ++segs;
         if (reg.get<RigidBody>(e).asleep) ++asleep;
     }
+    // ДИАГНОСТИКА §69: эта проверка красная под MSVC с 2026-09-13, а
+    // воспроизведения на маке по построению нет. Цикл отладки через CI был
+    // 22 минуты за прогон — и CI с 2026-09-28 мёртв по биллингу и не
+    // вернётся, значит первый прогон на виндовой машине владельца обязан
+    // сразу сказать, ЧЕМ тело шумит, а не только «asleep != segs». Печать
+    // только при провале: зелёный прогон не обязан шуметь в лог.
+    if (asleep != segs) {
+        const RigidStats& rs = reg.ctx().get<RigidStats>();
+        std::printf("[§69] труп НЕ уснул: спит %u из %u | шумных %u "
+                    "(лин %u вращ %u maxV %.4f) без-опоры %u | суставы вне "
+                    "люфта %u/%u maxC %.5f\n",
+                    asleep, segs, rs.noisyBodies, rs.noisyLinear,
+                    rs.noisySpin, static_cast<double>(rs.noisyMaxV),
+                    rs.quietNoTouch, rs.linksBeyondSlop, rs.links,
+                    static_cast<double>(rs.linkMaxAbsC));
+        for (auto e : reg.view<RigidBody, Velocity>()) {
+            const RigidBody& rb = reg.get<RigidBody>(e);
+            const vec3& v = reg.get<Velocity>(e).v;
+            std::printf("[§69]   тело r=%.3f спит=%d тиков=%u |v|=%.5f "
+                        "|w|r=%.5f контакт=%d\n",
+                        static_cast<double>(rb.radius), rb.asleep ? 1 : 0,
+                        rb.sleepTicks, static_cast<double>(length(v)),
+                        static_cast<double>(length(rb.w) * rb.radius),
+                        rb.touchedTick ? 1 : 0);
+        }
+    }
     CHECK(segs == 4u);   // таз + 3 сегмента формы
     CHECK(asleep == segs); // труп ДОСТИГ тишины — §64 закрыт по классу
+}
+
+// НАСЕЛЕНИЕ ИГРЫ, А НЕ НАСЕЛЕНИЕ НАДЕЖДЫ (§64, гейт заведён 2026-09-30).
+//
+// Предыдущий гейт — один труп на СТАТИКЕ — объявил §64 закрытым 2026-08-31 и
+// полтора месяца был зелёным при живом дефекте: в игре 1318 шумных тел из
+// 1340, `rigid` 93% сим-кадра (§67.1). Разница между стендом и игрой была
+// названа числом стендом `tests/rigid_bench.cpp`: труп в игре лежит рядом с
+// другими трупами, и ТОГДА не засыпает ни один.
+//
+// N и T ВЫВЕДЕНЫ прогоном, а не назначены (S11):
+//   N = 16 трупов = 64 тела + 48 суставов. Меньше не годится: дефект живёт на
+//       взаимодействии цепей, а 64 тела уже дают его в полную силу.
+//   Шаг решётки 1.5 м при габарите лежащего трупа ~1.8 м — трупы ЛЕЖАТ ДРУГ
+//       НА ДРУГЕ, как в игре, а не стоят рядком.
+//   T = 20 с с ранним выходом. Замер: с законом «цепь не сталкивается сама с
+//       собой» все 64 тела спят к 10.9 с; без него за 20 с спят 15 из 64 и
+//       дальше не сходятся (за 60 с — 29 из 64, ошибка сустава растёт
+//       0.024 → 0.029 м).
+//
+// Оракул АБСОЛЮТНЫЙ — «спят ВСЕ», а не доля: доля была бы назначенным
+// порогом. Мутации в обе полярности прогнаны до этой записи (см. §64).
+static void test_corpse_pile_reaches_sleep() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    World& w = stack.layer(g);
+    constexpr int kCorpses = 16;
+    constexpr int kSide = 4; // 4×4
+    constexpr float kStep = 1.5f; // м, меньше габарита лежащего трупа
+    // Пол шире решётки: крайний труп, упавший мимо, мерил бы свободное
+    // падение вместо сна (поймано прогоном стенда — maxV 38 м/с).
+    for (int y = 0; y < 14; ++y)
+        for (int x = 0; x < 14; ++x)
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+
+    Registry reg;
+    const float floorTop = 5.0f * kCellSize;
+    const vec3 half{0.4f, 0.4f, 0.9f};
+    for (int i = 0; i < kCorpses; ++i) {
+        const int ix = i % kSide, iy = i / kSide;
+        Entity root = reg.create();
+        reg.emplace<Transform>(
+            root, Transform{vec3{6.0f * kCellSize + float(ix) * kStep,
+                                 6.0f * kCellSize + float(iy) * kStep,
+                                 floorTop + 0.9f + float(i % 3) * 0.05f},
+                            g});
+        // Мёртвый падает не из стойки: остаток шага. Без него куча
+        // складывается идеально симметрично — стенд стал бы удобнее игры.
+        reg.emplace<Velocity>(
+            root, Velocity{vec3{0.3f * float((i % 5) - 2),
+                                0.3f * float((i % 3) - 1), 0.0f}});
+        reg.emplace<AABB>(root, AABB{half});
+        reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
+        game::spawn_form_segments(reg, root, game::FormId::Humanoid, half,
+                                  70.0f, game::kFleshRestitution,
+                                  game::kFleshFriction);
+    }
+
+    const std::uint32_t expectBodies = 4u * kCorpses;
+    for (int i = 0; i < 20 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        std::uint32_t asleepNow = 0;
+        for (auto e : reg.view<RigidBody>())
+            if (reg.get<RigidBody>(e).asleep) ++asleepNow;
+        if (asleepNow == expectBodies) break;
+    }
+
+    std::uint32_t bodies = 0, asleep = 0;
+    for (auto e : reg.view<RigidBody>()) {
+        ++bodies;
+        if (reg.get<RigidBody>(e).asleep) ++asleep;
+    }
+    // Остаточная ошибка суставов уснувшей кучи — ПЕЧАТАЕТСЯ, но не
+    // утверждается, и вот почему. Замер: 0.0115 м с законом против 0.0291 м
+    // без него — разрыв всего 2.5×, любой порог посередине был бы назначен, а
+    // не выведен. Сначала прибор показывал здесь 0.00000, и это было ЛОЖЬЮ
+    // МОЛЧАНИЯ: свип суставов стоял ниже раннего выхода «мир спит целиком» и
+    // при полном сне просто не выполнялся (починено в rigid.cpp тем же
+    // заходом). Утверждение остаётся одно и абсолютное — спят ВСЕ; оно и
+    // ловит накачку, потому что накачивающий сустав не даёт заснуть.
+    float maxAbsC = 0.0f;
+    std::uint32_t linkCount = 0;
+    for (auto le : reg.view<JointLink>()) {
+        const JointLink& jl = reg.get<JointLink>(le);
+        ++linkCount;
+        if (jl.a == entt::null || jl.b == entt::null) continue;
+        const vec3 pa = reg.get<Transform>(jl.a).pos;
+        const vec3 pb = reg.get<Transform>(jl.b).pos;
+        const float C =
+            length(wrap_delta3(pa, pb, kWorldExtent)) - jl.restLen;
+        maxAbsC = std::max(maxAbsC, std::fabs(C));
+    }
+    if (asleep != bodies)
+        std::printf("[§64] куча НЕ уснула: спит %u из %u, суставов %u, "
+                    "максимальная ошибка сустава %.5f м\n",
+                    asleep, bodies, linkCount,
+                    static_cast<double>(maxAbsC));
+    CHECK(bodies == expectBodies);       // 16 трупов × (таз + 3 сегмента)
+    CHECK(linkCount == 3u * kCorpses);   // 3 сустава на труп
+    CHECK(asleep == bodies);             // спят ВСЕ — §64, корень закрыт
 }
 
 // Инкремент 9 рагдолл-эпика: ПЕРЕНОСКА. Несомое тело не падает, следует за
@@ -1568,6 +1703,7 @@ void test_props_game_all() {
     test_humanoid_segments_fall_and_cleanup();
     test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
+    test_corpse_pile_reaches_sleep();
     test_carry_follows_and_throw_inherits();
     test_gpu_handoff_destroys_parent_without_cpu_debris();
     test_clear_layer_props_spares_containers();

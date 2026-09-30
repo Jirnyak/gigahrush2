@@ -221,6 +221,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     auto view = reg.view<RigidBody, Transform, Velocity>();
     auto links = reg.view<JointLink>();
 
+    // Объявлен ДО лямбд солвера: счётчики пробуждений по источнику стоят в
+    // самих точках сброса сна, а не считаются задним числом по сумме.
+    RigidStats stats; // замер §59.11 — пишется в reg.ctx() на каждом выходе
+
     // Решение одного линка импульсом (sequential impulses, тот же словарь,
     // что у контакта). wakePass — на первой итерации подшага спящая сторона
     // будится движущейся: цепь просыпается через связи, а не по волшебству.
@@ -259,6 +263,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 if (dot(mv, mv) >= kWakeV2 || mwr2 >= kWakeV2) {
                     if (aAsleep) { ra.asleep = false; ra.sleepTicks = 0; }
                     else if (rbB) { rbB->asleep = false; rbB->sleepTicks = 0; }
+                    ++stats.wokeLink;
                 }
             }
         }
@@ -336,6 +341,21 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     auto resolve_pair = [&](Entity ea, Entity eb) {
         auto& rbA = view.get<RigidBody>(ea);
         auto& rbB = view.get<RigidBody>(eb);
+        // ТЕЛА ОДНОЙ СУСТАВНОЙ ЦЕПИ ДРУГ С ДРУГОМ НЕ СТАЛКИВАЮТСЯ (§64,
+        // корень найден замером 2026-09-30). Про их взаимное положение уже
+        // есть закон — сустав; контакт был ВТОРЫМ законом о том же, и два
+        // закона не согласованы по единицам: контакт разводит ПОЗИЦИЕЙ на
+        // полную глубину каждый подшаг, сустав тянет обратно СКОРОСТЬЮ
+        // β·C/h = 50·C м/с. Равновесие этой войны — постоянная ошибка
+        // сустава, а значит постоянная скорость, а значит тело не затихает
+        // НИКОГДА. Замер стенда (куча 64 трупов, 90 с): ошибка сустава
+        // 0.1154 м и максимальная скорость 5.240 м/с, спит 19 тел из 256.
+        // Предсказание (0.1154 − люфт 0.01)·50 = 5.270 — расхождение 1%,
+        // то есть скорость трупа объяснялась подтяжкой сустава ЦЕЛИКОМ, без
+        // остатка на «настоящее движение». После закона: ошибка 0.0127 м,
+        // скорость 0.170 м/с, спит 147 из 256; а там, где трупы лежат не
+        // вдавленными друг в друга, — 256 из 256 и solve 0.000 мс.
+        if (rbA.chain != 0u && rbA.chain == rbB.chain) return;
         if (rbA.asleep && rbB.asleep) return;
         auto& trA = view.get<Transform>(ea);
         auto& trB = view.get<Transform>(eb);
@@ -371,8 +391,12 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 const vec3 n = d * (1.0f / dist); // A → B
                 const float depth = rSum - dist;
 
-                if (rbA.asleep) { rbA.asleep = false; rbA.sleepTicks = 0; }
-                if (rbB.asleep) { rbB.asleep = false; rbB.sleepTicks = 0; }
+                if (rbA.asleep) {
+                    rbA.asleep = false; rbA.sleepTicks = 0; ++stats.wokePair;
+                }
+                if (rbB.asleep) {
+                    rbB.asleep = false; rbB.sleepTicks = 0; ++stats.wokePair;
+                }
                 rbA.touchedTick = true;
                 rbB.touchedTick = true;
 
@@ -472,7 +496,9 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 const float dist = std::sqrt(d2);
                 const vec3 n = d * (1.0f / dist);
                 const float depth = rSum - dist;
-                if (rb.asleep) { rb.asleep = false; rb.sleepTicks = 0; }
+                if (rb.asleep) {
+                    rb.asleep = false; rb.sleepTicks = 0; ++stats.wokeAgent;
+                }
                 rb.touchedTick = true;
                 const float invSum = rb.invMass + invMassG;
                 trP.pos += n * (-depth * (rb.invMass / invSum));
@@ -504,18 +530,54 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
     };
 
+    // ОСТАТОЧНАЯ ОШИБКА СУСТАВА (§64) — прибор, названный числом. β·C/h при
+    // β=0.2 и подшаге 4 мс это 50·C м/с: остаток 1 мм ровно равен порогу сна
+    // kSleepV, а остаток 10 см даёт 4.9 м/с вечной дрожи. Свип зовётся на
+    // КАЖДОМ выходе, включая ранний «мир спит целиком»: прибор, который при
+    // спящем мире печатает ноль вместо факта, врёт молчанием — ровно та
+    // форма лжи, что в §82.1 показывала зелёные 8/8 на красном дереве.
+    auto link_error_sweep = [&]() {
+        for (auto le : links) {
+            const JointLink& jl = links.get<JointLink>(le);
+            if (jl.a == entt::null || !reg.valid(jl.a) ||
+                !reg.all_of<RigidBody, Transform>(jl.a))
+                continue;
+            const auto& ra = reg.get<RigidBody>(jl.a);
+            const vec3 pa =
+                reg.get<Transform>(jl.a).pos + quat_rotate(ra.q, jl.anchorA);
+            vec3 pb;
+            if (jl.b != entt::null) {
+                if (!reg.valid(jl.b) || !reg.all_of<RigidBody, Transform>(jl.b))
+                    continue;
+                const auto& rb2 = reg.get<RigidBody>(jl.b);
+                pb = reg.get<Transform>(jl.b).pos +
+                     quat_rotate(rb2.q, jl.anchorB);
+            } else {
+                pb = jl.anchorB;
+            }
+            const float C =
+                length(wrap_delta3(pa, pb, kWorldExtent)) - jl.restLen;
+            // Верёвка не толкает — провис не ошибка сустава.
+            if (jl.rope && C <= 0.0f) continue;
+            const float absC = std::fabs(C);
+            if (absC > kJointSlop) ++stats.linksBeyondSlop;
+            stats.linkMaxAbsC = std::max(stats.linkMaxAbsC, absC);
+        }
+    };
+
     // Пробуждение внешней записью Velocity (взрыв, толчок, пинок пишут её —
-    // естественный интерфейс) + сброс тик-аккумулятора касаний.
-    RigidStats stats; // замер §59.11 — пишется в reg.ctx() на каждом выходе
+    // естественный интерфейс) + сброс тик-аккумуляторов касания и цепи.
     std::uint32_t awakeCount = 0;
     for (auto e : view) {
         ++stats.bodies;
         auto& rb = view.get<RigidBody>(e);
         rb.touchedTick = false;
+        rb.chain = 0u; // метка цепи — транзит одного тика, см. ниже
         if (rb.asleep &&
             dot(view.get<Velocity>(e).v, view.get<Velocity>(e).v) >= kWakeV2) {
             rb.asleep = false;
             rb.sleepTicks = 0;
+            ++stats.wokeExtern;
         }
         if (!rb.asleep) ++awakeCount;
     }
@@ -575,9 +637,55 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // Мир спит целиком и агентов-возмутителей нет — решать нечего:
     // установившийся этаж с тысячами пропов стоит один проход пробуждения.
     if (awakeCount == 0 && agents.empty()) {
+        link_error_sweep();
         reg.ctx().insert_or_assign(stats);
         return;
     }
+
+    // ЦЕПИ: связные компоненты графа суставов, раз на тик. Union-find прямо
+    // по полю RigidBody.chain (хранит значение сущности-представителя + 1,
+    // ноль — «вне цепей»): отдельного словаря не нужно, а сравнение в
+    // resolve_pair стоит одно целое. Цена O(линков) — 1005 линков людного
+    // этажа против 9.4 мс фазы решения.
+    //
+    // Цепь — то, что СВЯЗАНО СУСТАВАМИ, а не «труп»: слова «труп» ядро не
+    // знает (S7). Люстра на тросе, сцепка ящиков и рагдолл — один закон.
+    auto chain_root = [&](Entity e) {
+        std::uint32_t v = static_cast<std::uint32_t>(e);
+        for (;;) {
+            const std::uint32_t p =
+                reg.get<RigidBody>(static_cast<Entity>(v)).chain - 1u;
+            if (p == v) return v;
+            v = p;
+        }
+    };
+    static thread_local std::vector<Entity> chainNodes;
+    chainNodes.clear();
+    for (auto le : links) {
+        const JointLink& jl = links.get<JointLink>(le);
+        if (jl.a == entt::null || jl.b == entt::null) continue; // мировой якорь
+        if (!reg.valid(jl.a) || !reg.valid(jl.b)) continue;
+        if (!reg.all_of<RigidBody>(jl.a) || !reg.all_of<RigidBody>(jl.b))
+            continue;
+        auto& ra = reg.get<RigidBody>(jl.a);
+        auto& rb = reg.get<RigidBody>(jl.b);
+        if (ra.chain == 0u) {
+            ra.chain = static_cast<std::uint32_t>(jl.a) + 1u;
+            chainNodes.push_back(jl.a);
+        }
+        if (rb.chain == 0u) {
+            rb.chain = static_cast<std::uint32_t>(jl.b) + 1u;
+            chainNodes.push_back(jl.b);
+        }
+        const std::uint32_t rootA = chain_root(jl.a);
+        const std::uint32_t rootB = chain_root(jl.b);
+        if (rootA != rootB)
+            reg.get<RigidBody>(static_cast<Entity>(rootA)).chain = rootB + 1u;
+    }
+    // Сжатие путей одним проходом: после него метка цепи у всех участников
+    // одинакова, и проверка пары — сравнение двух чисел.
+    for (Entity e : chainNodes)
+        reg.get<RigidBody>(e).chain = chain_root(e) + 1u;
 
     const auto statsBinsT0 = std::chrono::steady_clock::now();
 
@@ -934,8 +1042,13 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         if (rb.asleep) continue;
         auto& vel = view.get<Velocity>(e);
         const float wr2 = dot(rb.w, rb.w) * rb.radius * rb.radius;
-        const bool quiet =
-            dot(vel.v, vel.v) < kSleepV2 && wr2 < kSleepV2;
+        const float v2 = dot(vel.v, vel.v);
+        const bool quiet = v2 < kSleepV2 && wr2 < kSleepV2;
+        if (!quiet) {
+            if (v2 >= kSleepV2) ++stats.noisyLinear;
+            if (wr2 >= kSleepV2) ++stats.noisySpin;
+            stats.noisyMaxV = std::max(stats.noisyMaxV, std::sqrt(v2));
+        }
         if (quiet && rb.touchedTick) {
             if (++rb.sleepTicks >= kSleepAfter) {
                 rb.asleep = true;
@@ -948,6 +1061,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             rb.sleepTicks = 0;
         }
     }
+
+    link_error_sweep();
     reg.ctx().insert_or_assign(stats);
 }
 
