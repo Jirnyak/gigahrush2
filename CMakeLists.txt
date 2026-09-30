@@ -1897,7 +1897,26 @@ if(GIGA_BUILD_TESTS)
         # страница-призрак создаётся сценой, и строка
         # `CHECK(ghost.uniform_paged >= 1)` краснеет, если аудит начнёт
         # возвращать ноль всегда.
-        PASS_REGULAR_EXPRESSION "game_test: 223376 checks, 0 failures")
+        # 223376 − 144 = 223232 на 2026-09-30: СНОС МЁРТВОГО ГРУЗА, кластер 1 —
+        # `economy` и `monster_traits`. Падающий счёт здесь ЗАКОННЫЙ и это
+        # единственный случай, когда он таков: предмет проверки удалён вместе с
+        # проверкой. Дельта из слагаемых, по одному на снесённый символ:
+        #   −1   `band_name` — CHECK на зажим индекса (suite_economy);
+        #   −91  `monster_traits_unauthored_reason` — цикл «причина на каждый
+        #        неавторский вид»: 68 на `why != nullptr` + 21 на строку
+        #        «authored» + 2 итоговых (suite_monster блок 1);
+        #   −42  блок 2 suite_monster, 6 внедиапазонных видов × 7 CHECK'ов:
+        #        `trait_move_mult` ×2, `trait_damage_mult`, `trait_incoming_mult`,
+        #        `trait_has_vulnerability`, `trait_allows_wet_spawn`,
+        #        `trait_takes_bait_any`;
+        #   −1   блок 5: две проверки `trait_incoming_mult` слились в одну на
+        #        колонку `wetIncomingX100`;
+        #   −1   блок 6: `monster_traits_unauthored_reason` на Панельнике;
+        #   −8   блок 7 «BAIT» снесён целиком вместе с `trait_takes_bait`.
+        # `net_worth` счёта НЕ уронил: он мёртв в `src/`, но его 22 CHECK'а
+        # стерегут закон сохранения ЖИВОГО банка, поэтому формула уехала в
+        # `economy_detail`/e2e, а не в мусор. e2e_test поэтому же остался 2430.
+        PASS_REGULAR_EXPRESSION "game_test: 223232 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются

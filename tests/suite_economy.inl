@@ -110,6 +110,14 @@ inline Settled run_periods(BankAccount& acct, std::uint32_t periods,
     return s;
 }
 
+// Чистая сумма счёта, выписанная ЗДЕСЬ из живых примитивов [economy.h]. Раньше это был
+// публичный `net_worth`, снесённый 2026-09-30 как мёртвый груз: в `src/` его не звал
+// НИКТО (HUD показывает `banked`, а не сумму), жили только эти CHECK'и. Закон, который
+// они стерегут, при этом принадлежит живому банку, поэтому уехал в тест, а не в мусор.
+inline std::int64_t net_worth(const RunLedger& led, const BankAccount& acct) {
+    return led.banked + acct.deposit - bank_debt(acct);
+}
+
 } // namespace economy_detail
 
 static void test_economy_all() {
@@ -231,10 +239,9 @@ static void test_economy_all() {
         }
         CHECK(mismatches == 0);
 
-        // Out-of-range indices clamp instead of reading past the array. Both accessors
-        // are dereferenced immediately by their callers.
+        // An out-of-range index clamps instead of reading past the array: the return
+        // value is dereferenced immediately by its callers.
         CHECK(&bank_terms(200) == &kBankTerms[kEconomyBands - 1]);
-        CHECK(band_name(200) == kBandNames[kEconomyBands - 1]);
 
         std::fprintf(stderr,
                      "[economy] %zu bands resolve; bands E0..E4 "

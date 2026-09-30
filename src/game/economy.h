@@ -165,8 +165,9 @@ struct RunLedger;   // [extraction.h]; only ever taken by reference here
 // drift check silently blind (tools/check_source_rules.cmake Rule 7 fails loudly on a
 // missing declaration, but only if the pattern is the one it looks for).
 // (WEALTH-половина таблицы — WealthTier/wealth_tier/wealth_tier_name — СНЕСЕНА
-// вердиктом владельца 2026-08-27: читатели были только в тестах; спрос «богатство»
-// для S13.1 будет считаться от net_worth напрямую, когда появится потребитель.)
+// вердиктом владельца 2026-08-27: читатели были только в тестах. Тем же вердиктом
+// 2026-09-30 ушли `net_worth` и `band_name`: спрос «богатство» для S13.1 сложит
+// `banked + deposit - bank_debt` сам, когда у него появится потребитель.)
 inline constexpr std::size_t kEconomyRows = 5;
 static_assert(kEconomyRows == kEconomyBands,
               "data/economy.csv is the band table; kEconomyRows is its row count and "
@@ -289,7 +290,6 @@ struct BankTick {
 // Terms of band `band`. Total: an out-of-range index clamps to the last band rather
 // than reading past the array, because the return value is dereferenced immediately.
 const BankTerms& bank_terms(std::uint8_t band);
-const char* band_name(std::uint8_t band);
 
 // Open (or re-open) the branch on the floor you are standing on. Sets `band` from
 // `economy_band(floorZ)` and `creditLimit` from that band's authored limit with the
@@ -348,10 +348,6 @@ std::int64_t bank_debt(const BankAccount& acct);
 
 // How much more can be borrowed right now, never negative.
 std::int64_t bank_credit_available(const BankAccount& acct);
-
-// banked + deposit - debt. The number the HUD should show, and the one conserved by
-// every operation except `bank_step`.
-std::int64_t net_worth(const RunLedger& led, const BankAccount& acct);
 
 
 // ---------------------------------------------------------------------------

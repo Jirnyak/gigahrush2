@@ -35,15 +35,7 @@ const MonsterTraits kDefaultRow = {
     0u,
 };
 
-// x100 fixed point back to a float. One place, so a column that forgets to divide is
-// a compile error rather than a monster moving 100x too fast.
-constexpr float from_x100(std::uint16_t v) {
-    return static_cast<float>(v) * 0.01f;
-}
-
 } // namespace
-
-const MonsterTraits& monster_traits_default() { return kDefaultRow; }
 
 const MonsterTraits& monster_traits(std::uint8_t kind) {
     const std::size_t i = static_cast<std::size_t>(kind);
@@ -86,21 +78,6 @@ bool pos_wet(const std::uint32_t* medium, const vec3& pos) {
 // Terrain-keyed multipliers
 // ---------------------------------------------------------------------------
 
-float trait_move_mult(std::uint8_t kind, bool wet) {
-    const MonsterTraits& t = monster_traits(kind);
-    return from_x100(wet ? t.wetMoveX100 : t.dryMoveX100);
-}
-
-float trait_damage_mult(std::uint8_t kind, bool wet) {
-    const MonsterTraits& t = monster_traits(kind);
-    return from_x100(wet ? t.wetDmgX100 : t.dryDmgX100);
-}
-
-float trait_incoming_mult(std::uint8_t kind, bool wet) {
-    if (!wet) return 1.0f;   // drain armour exists only in the water
-    return from_x100(monster_traits(kind).wetIncomingX100);
-}
-
 float trait_wet_regen_hps(std::uint8_t kind) {
     return static_cast<float>(monster_traits(kind).wetRegenMilliHps) * 0.001f;
 }
@@ -108,11 +85,6 @@ float trait_wet_regen_hps(std::uint8_t kind) {
 // ---------------------------------------------------------------------------
 // Counterplay
 // ---------------------------------------------------------------------------
-
-bool trait_has_vulnerability(std::uint8_t kind) {
-    const MonsterTraits& t = monster_traits(kind);
-    return t.vulnChannel != kNoVulnChannel && t.vulnFloorPct > 0u;
-}
 
 std::int16_t trait_counterplay_damage(std::uint8_t kind, std::uint8_t channel,
                                       std::int16_t base, std::int16_t maxHp) {
@@ -133,27 +105,6 @@ std::int16_t trait_counterplay_damage(std::uint8_t kind, std::uint8_t channel,
     return base >= static_cast<std::int16_t>(floorDmg)
                ? base
                : static_cast<std::int16_t>(floorDmg);
-}
-
-// ---------------------------------------------------------------------------
-// Bait affinity
-// ---------------------------------------------------------------------------
-
-bool trait_takes_bait(std::uint8_t kind, BaitBit b) {
-    return has_bait(monster_traits(kind).baitMask, b);
-}
-
-bool trait_takes_bait_any(std::uint8_t kind) {
-    return monster_traits(kind).baitMask != 0u;
-}
-
-// ---------------------------------------------------------------------------
-// Spawn terrain
-// ---------------------------------------------------------------------------
-
-bool trait_allows_wet_spawn(std::uint8_t kind) {
-    return monster_traits(kind).terrain ==
-           static_cast<std::uint8_t>(TerrainPref::Wet);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,78 +133,6 @@ bool sync_monster_armour(Registry& reg, Entity e, std::uint8_t kind) {
     // Idempotent: emplace_or_replace, so a second call cannot stack or assert.
     reg.emplace_or_replace<Armour>(e, a);
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// Why each unauthored kind has no row
-// ---------------------------------------------------------------------------
-
-const char* monster_traits_unauthored_reason(std::uint8_t kind) {
-    if (monster_traits(kind).authored != 0u) return "authored";
-
-    // Answered in mob_behaviour.h instead — a radius, a pace, a reach or an incoming
-    // multiplier. A trait row for one of these would DOUBLE the mechanic, which is the
-    // specific mistake Панельник would have caused (0.58 x 0.58).
-    switch (static_cast<MobKind>(kind)) {
-        case MobKind::Panelnik:        // WallBrace: incoming 0.58 + reach 1.75 + pace
-        case MobKind::Rebar:           // DebrisLurker: pace 1.22/0.68, damage 1.25/0.75
-        case MobKind::Bezekhiy:        // DeadEcho: 7.5 m sight + facing damage 1.55/0.72
-        case MobKind::Nelyud:          // CloseReveal: 6 m sight
-        case MobKind::Treskotnik:      // FractureSprint: the whole burst cycle
-        case MobKind::Sculpture:       // WeepingAngel: frozen_by_gaze
-        case MobKind::Paupsina:        // WebSpitter: the strafing standoff
-        case MobKind::DikiyMertvyak:   // CrowdShove: hurt pace 0.96
-        case MobKind::SporeCarpet:     // LurkingFurniture: 2.15 m dormant radius
-        case MobKind::KantselyarskiyIdol:  // OfficeField: 23 m
-        case MobKind::Lishennyy:       // LightFollower: 30 m
-        case MobKind::Shovnik:         // WallBias flag: pace 1.18/0.92, damage 1.20
-        case MobKind::Betonoed:        // WallBias flag; WeakWallBreach is dead
-            return "mob_behaviour";
-
-        // Blocked on a per-cell LIGHT field. Nothing in this engine knows how bright a
-        // cell is, and all four mechanics are "brighter is stronger/weaker".
-        case MobKind::Lampovy:         // lampPowered
-        case MobKind::Lampoglaz:       // lightLock
-        case MobKind::Shadow:          // light 0.78 lit / 1.08 dark, pace AND damage
-        case MobKind::GlubinnayaTen:   // secondBeat needs a lit exit to break
-            return "needs light";
-
-        // Blocked on a per-cell FOG DENSITY field. samosbor.h has a global fog PHASE.
-        //
-        // Туманная акула is NOT here even though its `fogSwimmer` half is equally
-        // blocked (28 m sight in fog / 8 m dry, pace x0.34 dry): it IS authored, for its
-        // fire vulnerability, so it returns "authored" above and a case for it here would
-        // be dead code that reads as a gap. Its fog half is named in [mob_behaviour.h]'s
-        // roadmap, which is where an unported behaviour belongs.
-        case MobKind::Tumannik:        // fogOffset, and its visible half is a RENDER offset
-            return "needs fog";
-
-        // Blocked on per-monster state or on grid features this engine has no concept
-        // of (SCREEN, APPARATUS, furniture, doors as an ownable anchor).
-        case MobKind::ChervieAvatar:   // netPossessor: needs SCREEN/APPARATUS cells
-        case MobKind::Rzhavnik:        // scrapWake: needs a dormant state to wake from
-        case MobKind::TonkayaTen:      // baitLine: needs a flee steer + a nerve timer
-        case MobKind::Obzhivalshchik:  // roomBoundAberration: home anchor + anger meter
-        case MobKind::LozhnyyDukh:     // falsePhase: a door-keyed phase
-        case MobKind::HeadSlug:        // hostParasite: attach/detach to another entity
-        case MobKind::Sobrannyy:       // meatGrowth: grows wall organics
-        case MobKind::MukhozhukHost:   // parasiteLeader: spawns and commands
-        case MobKind::BlackLiquidator: // falsePatrol: needs a DISGUISED faction
-        case MobKind::Gnilushka:       // defensiveNeutral: hostile only once damaged
-        case MobKind::Slepoglaz:       // lastSoundBeam: needs "shoot at a POINT"
-        case MobKind::TrubnyyAvtomat:  // wetLineShot: a wet-line BFS gate on the SHOT,
-                                       // not a multiplier — a subsystem, not a trait
-        case MobKind::Matka:           // spawner boss
-        case MobKind::KhorovayaMatka:  // spawner boss with wave counting
-            return "needs state";
-
-        default:
-            break;
-    }
-    // Everything else is a stat block plus shared AI, which is what monsters.md says
-    // most monsters SHOULD be: "Большинство монстров должны выражаться этими полями
-    // плюс shared AI." An empty trait row for one of them is correct, not a gap.
-    return "no trait";
 }
 
 } // namespace giga::game

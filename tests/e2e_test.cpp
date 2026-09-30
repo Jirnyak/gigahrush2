@@ -696,6 +696,13 @@ static void test_t1_f11_04_bank_step_periodic_settlement() {
     CHECK(acct.lastInterestTick == 7500u);
 }
 
+// Чистая сумма счёта из живых примитивов [economy.h]. Публичный `net_worth` снесён
+// 2026-09-30 (ноль вызывающих в `src/`); закон сохранения, который он выражал, —
+// свойство живого банка, поэтому выписан здесь.
+static std::int64_t net_worth(const RunLedger& led, const BankAccount& acct) {
+    return led.banked + acct.deposit - bank_debt(acct);
+}
+
 static void test_t1_f11_05_net_worth_conservation() {
     BankAccount acct{};
     RunLedger led{};

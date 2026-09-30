@@ -74,10 +74,18 @@ inline bool wall_paced(std::size_t k) {
     return wall_query_needed(d.aiFlags, static_cast<MobBehaviour>(d.behaviour));
 }
 
-// Does this kind's pace depend on WATER, per the trait table?
+// Does this kind's pace depend on WATER, per the trait table? Читается ИЗ КОЛОНКИ:
+// `trait_move_mult` снесён 2026-09-30 (ноль вызывающих в src/), а колонка осталась.
 inline bool water_paced(std::size_t k) {
-    const std::uint8_t kk = static_cast<std::uint8_t>(k);
-    return trait_move_mult(kk, true) != 1.0f || trait_move_mult(kk, false) != 1.0f;
+    const MonsterTraits& t = kMonsterTraits[k];
+    return t.wetMoveX100 != kTraitUnit || t.dryMoveX100 != kTraitUnit;
+}
+
+// Есть ли у вида авторская уязвимость. Условие снесённого `trait_has_vulnerability`,
+// выписанное в одну строку там, где оно нужно.
+inline bool has_vuln(std::size_t k) {
+    const MonsterTraits& t = kMonsterTraits[k];
+    return t.vulnChannel != kNoVulnChannel && t.vulnFloorPct > 0u;
 }
 
 inline bool near_eq(float a, float b, float eps = 1e-4f) {
@@ -116,12 +124,11 @@ static void test_monster_all() {
             const MonsterTraits& t = kMonsterTraits[k];
             if (t.authored == 0u) continue;
             ++authored;
-            const std::uint8_t kk = static_cast<std::uint8_t>(k);
             const bool changesSomething =
                 t.resist[0] != 0 || t.resist[1] != 0 || t.resist[2] != 0 ||
                 t.resist[3] != 0 || t.resist[4] != 0 ||
                 t.terrain != static_cast<std::uint8_t>(TerrainPref::Any) ||
-                trait_has_vulnerability(kk) || t.baitMask != 0u ||
+                has_vuln(k) || t.baitMask != 0u ||
                 t.wetMoveX100 != kTraitUnit || t.dryMoveX100 != kTraitUnit ||
                 t.wetDmgX100 != kTraitUnit || t.dryDmgX100 != kTraitUnit ||
                 t.wetIncomingX100 != kTraitUnit || t.wetRegenMilliHps != 0u;
@@ -135,34 +142,11 @@ static void test_monster_all() {
         CHECK(inert == 0u);
         CHECK(authored == kMonsterTraitRows);
 
-        // Every unauthored kind must name WHY, and the reason has to be one of the five
-        // documented strings — a typo'd sixth would read as an explanation and mean
-        // nothing. Counted and printed so the split between "no trait to port" and
-        // "blocked on a named missing piece" is a number rather than a claim.
-        std::size_t noTrait = 0, viaBehaviour = 0, needLight = 0, needFog = 0,
-                    needState = 0, unknownReason = 0;
-        for (std::size_t k = 0; k < kMobKindCount; ++k) {
-            const char* why =
-                monster_traits_unauthored_reason(static_cast<std::uint8_t>(k));
-            CHECK(why != nullptr);
-            if (kMonsterTraits[k].authored != 0u) {
-                CHECK(std::strcmp(why, "authored") == 0);
-                continue;
-            }
-            if (std::strcmp(why, "no trait") == 0) ++noTrait;
-            else if (std::strcmp(why, "mob_behaviour") == 0) ++viaBehaviour;
-            else if (std::strcmp(why, "needs light") == 0) ++needLight;
-            else if (std::strcmp(why, "needs fog") == 0) ++needFog;
-            else if (std::strcmp(why, "needs state") == 0) ++needState;
-            else ++unknownReason;
-        }
-        std::fprintf(stderr,
-                     "[monster] unauthored 47 = %zu no-trait + %zu mob_behaviour + "
-                     "%zu light + %zu fog + %zu state\n",
-                     noTrait, viaBehaviour, needLight, needFog, needState);
-        CHECK(unknownReason == 0u);
-        CHECK(noTrait + viaBehaviour + needLight + needFog + needState ==
-              kMobKindCount - kMonsterTraitRows);
+        // (Блок «каждый неавторский вид обязан назвать ПРИЧИНУ» удалён 2026-09-30
+        // вместе с `monster_traits_unauthored_reason`: он проверял, что функция
+        // возвращает одну из пяти строк, которые она же и содержала. Предмет снесён —
+        // тест уходит с ним, а не остаётся будущей второй реализацией, по тому же
+        // правилу, что блок 8 ниже.)
     }
 
     // -----------------------------------------------------------------------
@@ -172,7 +156,10 @@ static void test_monster_all() {
     // files, the event bus payload). So 70..255 are all reachable values and every one
     // of them must resolve, not index.
     {
-        const MonsterTraits& def = monster_traits_default();
+        // Дефолтная строка БЕЗ отдельного аксессора: `monster_traits(255)` и ЕСТЬ она
+        // (`monster_traits_default` снесён 2026-09-30 как второй способ спросить одно
+        // и то же). Идентичность ниже — то, что делает эту подмену законной.
+        const MonsterTraits& def = monster_traits(static_cast<std::uint8_t>(255));
         CHECK(def.authored == 0u);
         CHECK(def.wetMoveX100 == kTraitUnit && def.dryMoveX100 == kTraitUnit);
         CHECK(def.vulnChannel == kNoVulnChannel);
@@ -184,17 +171,10 @@ static void test_monster_all() {
             // Identity, not equality: an out-of-range kind must get THE default row
             // object, so there is no second copy that could drift from it.
             CHECK(&monster_traits(k) == &def);
-            CHECK(near_eq(trait_move_mult(k, true), 1.0f));
-            CHECK(near_eq(trait_move_mult(k, false), 1.0f));
-            CHECK(near_eq(trait_damage_mult(k, true), 1.0f));
-            CHECK(near_eq(trait_incoming_mult(k, true), 1.0f));
             CHECK(near_eq(trait_wet_regen_hps(k), 0.0f));
-            CHECK(!trait_has_vulnerability(k));
-            CHECK(!trait_allows_wet_spawn(k));
             // A hit on an unknown kind is passed through untouched, at every channel.
             for (std::uint8_t ch = 0; ch < kDamageChannels; ++ch)
                 CHECK(trait_counterplay_damage(k, ch, 7, 100) == 7);
-            CHECK(!trait_takes_bait_any(k));
         }
         // And installing armour for an unknown kind attaches nothing rather than
         // reading past the table.
@@ -359,7 +339,7 @@ static void test_monster_all() {
         // Exactly four kinds are authored vulnerable, all of them on FIRE.
         std::size_t vulnKinds = 0, nonFire = 0;
         for (std::size_t k = 0; k < kMobKindCount; ++k) {
-            if (!trait_has_vulnerability(static_cast<std::uint8_t>(k))) continue;
+            if (!has_vuln(k)) continue;
             ++vulnKinds;
             if (kMonsterTraits[k].vulnChannel !=
                 static_cast<std::uint8_t>(DamageChannel::Fire)) ++nonFire;
@@ -397,8 +377,7 @@ static void test_monster_all() {
         // Лоточник is the only kind whose ARMOUR is conditional on terrain, which is
         // why it cannot ride the Armour component.
         const std::uint8_t lot = static_cast<std::uint8_t>(MobKind::Lotochnik);
-        CHECK(near_eq(trait_incoming_mult(lot, true), 0.58f));
-        CHECK(near_eq(trait_incoming_mult(lot, false), 1.0f));
+        CHECK(monster_traits(lot).wetIncomingX100 == 58u);
         CHECK(near_eq(trait_wet_regen_hps(lot), 1.35f));
         // Nobody else regenerates, and nobody else has wet armour.
         std::size_t wetArmour = 0, regen = 0;
@@ -412,7 +391,8 @@ static void test_monster_all() {
         // allowed to spawn in water. Derived, not ported — see TerrainPref.
         std::size_t wetSpawn = 0, wetSpawnWithoutPace = 0;
         for (std::size_t k = 0; k < kMobKindCount; ++k) {
-            if (!trait_allows_wet_spawn(static_cast<std::uint8_t>(k))) continue;
+            if (kMonsterTraits[k].terrain !=
+                static_cast<std::uint8_t>(TerrainPref::Wet)) continue;
             ++wetSpawn;
             if (!water_paced(k)) ++wetSpawnWithoutPace;
         }
@@ -484,9 +464,10 @@ static void test_monster_all() {
 
         // ...and the floor spawner still puts nothing in the water, which is what
         // tests/suite_fluidrooms.inl block 4 already asserts. Restated here because the
-        // trait table is what would change it: `trait_allows_wet_spawn` has NO caller in
-        // src/, so this number is unchanged by this lane and must stay unchanged until
-        // the sealed-basin trap is answered.
+        // trait table is what would change it: колонка `terrain` не имеет читателя в
+        // src/ вовсе (предикат над ней снесён 2026-09-30), так что это число не
+        // меняется этой полосой и обязано не меняться, пока не отвечена ловушка
+        // запечатанного бассейна.
         Registry reg;
         rooms_declare(reg.ctx().emplace<FloorRooms>(), -26,
                       floor_spec(FloorKind::Derelict), 4242u);
@@ -546,65 +527,22 @@ static void test_monster_all() {
         const MonsterTraits& pan =
             monster_traits(static_cast<std::uint8_t>(MobKind::Panelnik));
         CHECK(pan.authored == 0u);
-        CHECK(std::strcmp(monster_traits_unauthored_reason(
-                              static_cast<std::uint8_t>(MobKind::Panelnik)),
-                          "mob_behaviour") == 0);
         CHECK(near_eq(behaviour_incoming_mult(MobBehaviour::WallBrace, true), 0.58f));
     }
 
     // -----------------------------------------------------------------------
-    // 7. BAIT: the column is DATA, and it settles a 6-kind disagreement
+    // 7. BAIT — БЛОК СНЕСЁН 2026-09-30 вместе со своими читателями
     // -----------------------------------------------------------------------
-    // Stated as plainly here as in the header: `trait_takes_bait` has no reader in
-    // `src/` and the bait MARKER subsystem is a separate lane. What the column is worth
-    // TODAY is that it resolves a defect [mob_behaviour.h] recorded and could not
-    // measure — "`foodBait` ... is read by nothing in the reference either. Its bait
-    // attraction is gated by a hand-written kind list that DISAGREES with the flag for
-    // 6 kinds." That list is what this column is; the disagreement is now a number.
-    {
-        std::size_t flagKinds = 0, baitKinds = 0, flagOnly = 0, baitOnly = 0;
-        for (std::size_t k = 0; k < kMobKindCount; ++k) {
-            const bool flag = has_flag(kMobTable[k].aiFlags, AiFlag::FoodBait);
-            const bool bait = trait_takes_bait_any(static_cast<std::uint8_t>(k));
-            if (flag) ++flagKinds;
-            if (bait) ++baitKinds;
-            if (flag && !bait) ++flagOnly;
-            if (bait && !flag) ++baitOnly;
-        }
-        std::fprintf(stderr,
-                     "[monster] AiFlag::FoodBait %zu kinds vs authored bait list %zu; "
-                     "disagree on %zu (%zu flag-only, %zu list-only)\n",
-                     flagKinds, baitKinds, flagOnly + baitOnly, flagOnly, baitOnly);
-        // The reference's own numbers: 10 carry the flag, 14 are in
-        // BAIT_ATTRACTED_MONSTER_KINDS, and the symmetric difference is 6 — one flag
-        // carrier the list omits (Мухожук-носитель) and five list members with no flag
-        // (Печатеед, Конторщик, Протокольник, Слизневик, Трубный угорь). The three
-        // document-hunters are the interesting half: they are baited by PAPER, which is
-        // not food, so the flag was never the right predicate for them.
-        CHECK(flagKinds == 10u);
-        CHECK(baitKinds == 13);
-    
-        CHECK(baitOnly == 4);
-
-        // The class mapping is per-kind and not a blanket "food". A rat swarm takes
-        // meat; a Сборка takes starch and sugar and neither takes the other's.
-        const std::uint8_t rat = static_cast<std::uint8_t>(MobKind::Krysnozhka);
-        const std::uint8_t sbor = static_cast<std::uint8_t>(MobKind::Sborka);
-        CHECK(trait_takes_bait(rat, BaitBit::Meat));
-        CHECK(!trait_takes_bait(rat, BaitBit::Starch));
-        CHECK(trait_takes_bait(sbor, BaitBit::Starch));
-        CHECK(!trait_takes_bait(sbor, BaitBit::Meat));
-        // Govnyak is the universal bait: the reference's `baitMatchScore` opens with
-        // `matched = marker.kind === 'govnyak'`, so every baited kind answers it.
-        std::size_t baitedNotGovnyak = 0;
-        for (std::size_t k = 0; k < kMobKindCount; ++k) {
-            const std::uint8_t kk = static_cast<std::uint8_t>(k);
-            if (trait_takes_bait_any(kk) && !trait_takes_bait(kk, BaitBit::Govnyak) &&
-                !trait_takes_bait(kk, BaitBit::Document))
-                ++baitedNotGovnyak;
-        }
-        CHECK(baitedNotGovnyak == 0u);
-    }
+    // Здесь измерялось расхождение `AiFlag::FoodBait` (10 видов) с авторской
+    // колонкой `baitMask` (13). Расхождение — настоящее и записано в
+    // [mob_behaviour.h]; но измерялось оно через `trait_takes_bait` /
+    // `trait_takes_bait_any`, у которых не было НИ ОДНОГО вызывающего в `src/`, и
+    // собственная шапка это признавала. Читатели снесены, блок ушёл с ними.
+    //
+    // Колонка ОСТАЛАСЬ в `data/monster_traits.csv`. Долг «write-only колонки
+    // трейтов» назван в problems.md §83; день, когда появится система приманок,
+    // возвращает и это измерение — оно тогда будет про живой механизм, а не про
+    // согласие двух таблиц, которых никто не спрашивает.
 
     // -----------------------------------------------------------------------
     // 8. Хазарды клеток — БЛОК СНЕСЁН 2026-09-23 вместе с системой

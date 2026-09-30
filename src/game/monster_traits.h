@@ -172,10 +172,6 @@ enum class BaitBit : std::uint16_t {
     Risky    = 1u << 9,   // bait_risky / bad_batch
 };
 
-constexpr bool has_bait(std::uint16_t set, BaitBit bit) noexcept {
-    return (set & static_cast<std::uint16_t>(bit)) != 0u;
-}
-
 // `MonsterTraits::vulnChannel` when a kind has no authored vulnerability. Not 0,
 // because 0 is `DamageChannel::Kinetic` and would silently give all 69 kinds a
 // kinetic floor of 0% — a condition that is indistinguishable from "authored" by
@@ -237,13 +233,11 @@ static_assert(kMonsterTraitRows < kMobKindCount,
 // generated .cpp; edit the CSV and regenerate.
 extern const std::array<MonsterTraits, kMobKindCount> kMonsterTraits;
 
-// The default row, for a kind the CSV does not author and for an out-of-range id.
-// All multipliers kTraitUnit, no resist, no vulnerability, no bait, TerrainPref::Any.
-const MonsterTraits& monster_traits_default();
-
 // Read a kind's row. Bounds-tolerant: any kind >= kMobKindCount answers the default
 // row rather than indexing out of range, the same defensive shape as `mob_loot`
-// ([loot_table.h]) and `item_def`.
+// ([loot_table.h]) and `item_def`. The default row itself has no separate accessor —
+// `monster_traits(255)` IS it, by the identity the suite asserts (`monster_traits_default`
+// снесён 2026-09-30 как второй способ спросить одно и то же).
 const MonsterTraits& monster_traits(std::uint8_t kind);
 
 inline const MonsterTraits& monster_traits(MobKind k) {
@@ -295,35 +289,20 @@ bool pos_wet(const std::uint32_t* medium, const vec3& pos);
 // ---------------------------------------------------------------------------
 // Terrain-keyed multipliers
 // ---------------------------------------------------------------------------
-// Pure functions of (kind, wet), so each is testable without a world, a registry or a
-// tick — the same constraint [mob_behaviour.h] holds itself to, and for the same
-// reason: nothing here can desynchronise from anything.
+// ТРИ ЧИТАТЕЛЯ СНЕСЕНЫ 2026-09-30 — `trait_move_mult`, `trait_damage_mult`,
+// `trait_incoming_mult`. У каждого был ровно объявление, определение и тест: ни
+// один вызов из `src/` не существовал НИ РАЗУ, и три их шапки описывали
+// «precedence против mob_behaviour» для столкновения, которого не было.
 //
-// **Precedence against [mob_behaviour.h], because two pace multipliers now exist and
-// a caller that applied both would be wrong.** `behaviour_move_mult` and
-// `wall_bias_speed` are keyed on WALL ADJACENCY; these are keyed on WATER. They are
-// disjoint by construction over the shipped table and the suite asserts it: no kind
-// carries both a wall-keyed pace and a wet-keyed pace. So a caller may multiply both
-// in without a claim flag — but only because the data says so, not because the shapes
-// allow it, which is why the assertion exists rather than a comment.
+// **Колонки остались** (`wetMoveX100`, `dryMoveX100`, `wetDmgX100`, `dryDmgX100`,
+// `wetIncomingX100`, `baitMask`, `terrain`): это АВТОРСКИЕ данные из
+// `data/monster_traits.csv`, и снос кода их не обесценивает. Но с этого дня они
+// ПИШУТСЯ И НЕ ЧИТАЮТСЯ — ровно тот класс, ради которого заведён гейт `wired`
+// ([tools/check_wired.cmake], история про `MobDef::projType`). Долг записан в
+// problems.md §83; читатель, который их оживит, выводится из колонки в три строки.
 //
-// Returns exactly 1.0f for the 47 unauthored kinds and for the authored kinds whose
-// column is kTraitUnit, so a caller pays one array read and one multiply by one.
-float trait_move_mult(std::uint8_t kind, bool wet);
-
-// OUTGOING melee multiplier. Ползун is the only kind whose authored value is a wet
-// BONUS with no dry penalty (x1.35 in a doorway, bathroom or water — the reference's
-// `inPolzunKillCell`), and only the water third of that predicate is available here.
-float trait_damage_mult(std::uint8_t kind, bool wet);
-
-// INCOMING multiplier while standing in liquid — Лоточник's `drainArmor`, x0.58.
-//
-// This is the one mitigation in the file that CANNOT ride the `Armour` component,
-// because it is conditional on where the monster is standing and `Armour` is a static
-// vector installed at spawn. It therefore needs a caller inside the damage path; see
-// the handoff. Until it has one, Лоточник's wet armour is a query with no reader, and
-// that is stated rather than implied.
-float trait_incoming_mult(std::uint8_t kind, bool wet);
+// `trait_wet_regen_hps` и `trait_counterplay_damage` ЖИВЫЕ — их зовут
+// `main.cpp:5793` и `combat.cpp:161`.
 
 // HP per second regenerated while standing in liquid. 1.35 for Лоточник, 0 for
 // everything else.
@@ -362,54 +341,25 @@ float trait_wet_regen_hps(std::uint8_t kind);
 std::int16_t trait_counterplay_damage(std::uint8_t kind, std::uint8_t channel,
                                       std::int16_t base, std::int16_t maxHp);
 
-// True if this kind has an authored vulnerability at all. For the HUD and for a
-// caller that wants to skip the call; `trait_counterplay_damage` is already a
-// no-op for the rest, so this is a convenience and not a gate.
-bool trait_has_vulnerability(std::uint8_t kind);
+// (`trait_has_vulnerability` СНЕСЁН 2026-09-30: удобный предикат «у вида вообще есть
+// уязвимость», который сам себя называл «не гейтом, а удобством» — и не получил ни
+// одного вызывающего. Условие выписывается в одну строку:
+// `t.vulnChannel != kNoVulnChannel && t.vulnFloorPct > 0`.)
 
 // ---------------------------------------------------------------------------
-// Bait affinity — DATA, and a defect this table can finally measure
+// Bait affinity и Spawn terrain — КОЛОНКИ БЕЗ ЧИТАТЕЛЕЙ
 // ---------------------------------------------------------------------------
-// **Neither of these has a reader in `src/`, and that is stated rather than implied.**
-// The bait MECHANISM is a marker subsystem — a placed item becomes a scented marker with
-// a radius, a TTL, an attraction cap and a consumption event, and an attracted monster
-// has to be steered at it, which means a target this engine does not store (see the
-// REJECTED note at the bottom of this header). That is a separate lane, and authoring
-// the affinity data does not build it.
+// `trait_takes_bait`, `trait_takes_bait_any`, `has_bait` и `trait_allows_wet_spawn`
+// СНЕСЕНЫ 2026-09-30. Их собственные шапки честно писали «neither of these has a
+// reader in `src/`» и «NO CALLER IN `src/` YET» — и так было с того дня, как их
+// написали. Признаться в мёртвом коде комментарием дешевле, чем его удалить, и
+// поэтому признание живёт годами; снос — единственная форма признания, которая
+// не требует, чтобы следующий читатель поверил на слово.
 //
-// What the column is worth today is that it settles a defect [mob_behaviour.h] recorded
-// and could not measure: "`foodBait` — the flag carried by the most kinds (10) — is read
-// by nothing in the reference either. Its bait attraction is gated by a hand-written
-// kind list that DISAGREES with the flag for 6 kinds." This IS that list
-// (`BAIT_ATTRACTED_MONSTER_KINDS`, monster_ecology.ts:115) plus the per-kind trait
-// classes, so the disagreement is now a measured number instead of a remark — 10 flag
-// carriers against 14 authored kinds, one flag-only and five list-only, asserted in
-// tests/suite_monster.inl block 7. The five the flag misses include all three
-// document-hunters, which are baited by PAPER: `foodBait` was never the right predicate
-// for them, and a bait system built on the flag would have got them wrong.
-bool trait_takes_bait(std::uint8_t kind, BaitBit b);
-
-// True if this kind responds to ANY bait class. The authoritative 14, not the flag's 10.
-bool trait_takes_bait_any(std::uint8_t kind);
-
-// ---------------------------------------------------------------------------
-// Spawn terrain
-// ---------------------------------------------------------------------------
-// True when standing water is a LEGAL spawn cell for this kind. Six kinds of 69, all
-// of them carrying an authored wet pace bonus or dry penalty. See TerrainPref.
-//
-// NO CALLER IN `src/` YET, and unlike the bait column the blocker is not a missing
-// subsystem — it is a trap that has to be answered first. `mob_spawn.cpp`'s `placeable`
-// refuses liquid because a sump BASIN is sealed by its kerb, so anything placed there is
-// unreachable in both directions and counts against the floor budget forever. Letting an
-// aquatic kind in would put it in that box. Today the question is moot in the safe
-// direction: every wet cell `floor_gen` produces is half-solid, so the AIR test already
-// refuses it and the water test is redundant — measured in suite_monster.inl block 5,
-// which counts wet-AND-air cells on a Derelict floor and gets zero. The wire becomes
-// correct the day an OPEN pool exists, and `tests/suite_fluidrooms.inl` block 4 (which
-// asserts no mob stands in water) has to be narrowed to non-aquatic kinds in the same
-// change.
-bool trait_allows_wet_spawn(std::uint8_t kind);
+// `BaitBit` и `TerrainPref` ОСТАЮТСЯ: это словарь ГЕНЕРИРУЕМОЙ таблицы
+// (`monster_traits_table.cpp` строит `baitMask`/`terrain` из CSV через них).
+// Данные авторские, а механизма приманок — размещённый маркер с радиусом, TTL и
+// целью, которой у моба здесь нет, — не построено и это отдельная полоса.
 
 // ---------------------------------------------------------------------------
 // Armour installation
@@ -431,24 +381,12 @@ bool sync_monster_armour(Registry& reg, Entity e, std::uint8_t kind);
 // ---------------------------------------------------------------------------
 // What is NOT here, named so nobody specs it twice
 // ---------------------------------------------------------------------------
-// A short, checkable reason per unauthored kind, in the idiom
-// `behaviour_is_dead` / `behaviour_is_dispatched` use: a fact that is compiled,
-// greppable and testable rather than a paragraph that rots. Returns a static string,
-// never null.
-//
-// The five reasons, and their counts over the 47 unauthored kinds:
-//
-//   "no trait"        the reference authors nothing per-kind for it beyond its
-//                     mob_table row — it is a stat block plus shared AI, which is
-//                     what monsters.md says most monsters should be
-//   "mob_behaviour"   answered in [mob_behaviour.h] instead (a radius, a pace, a
-//                     reach, an incoming multiplier), so a row here would double it
-//   "needs light"     blocked on a per-cell light field this engine does not have
-//   "needs fog"       blocked on a per-cell fog density field ([samosbor.h] has a
-//                     global fog PHASE, not a field)
-//   "needs state"     blocked on per-monster state or a feature grid — a dormant
-//                     flag, a phase timer, an anger meter, SCREEN/APPARATUS cells
-const char* monster_traits_unauthored_reason(std::uint8_t kind);
+// `monster_traits_unauthored_reason` — 67 строк switch'а, возвращавших одну из пяти
+// строк-причин на каждый из 47 неавторских видов, — СНЕСЁН 2026-09-30. Идея «факт,
+// который компилируется и грепается, вместо абзаца, который гниёт» верна, но здесь
+// она дала ОБА: и абзац, и код, который его повторял, при нуле вызывающих. Пять
+// причин («no trait», «mob_behaviour», «needs light», «needs fog», «needs state»)
+// живут прозой в шапке `MonsterTraits` выше — там, где их и читают.
 
 // ---------------------------------------------------------------------------
 // REJECTED: `shareLocalTarget` (monster_pack.ts) is not portable here

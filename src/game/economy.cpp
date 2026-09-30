@@ -29,11 +29,6 @@ const BankTerms& bank_terms(std::uint8_t band) {
     return kBankTerms[i < kEconomyBands ? i : kEconomyBands - 1];
 }
 
-const char* band_name(std::uint8_t band) {
-    const std::size_t i = static_cast<std::size_t>(band);
-    return kBandNames[i < kEconomyBands ? i : kEconomyBands - 1];
-}
-
 void bank_open(BankAccount& acct, int floorZ, std::uint32_t seed) {
     acct.band = economy_band(floorZ);
     const BankTerms& t = bank_terms(acct.band);
@@ -213,10 +208,6 @@ std::int64_t bank_debt(const BankAccount& acct) {
 std::int64_t bank_credit_available(const BankAccount& acct) {
     const std::int64_t left = static_cast<std::int64_t>(acct.creditLimit) - bank_debt(acct);
     return left > 0 ? left : 0;
-}
-
-std::int64_t net_worth(const RunLedger& led, const BankAccount& acct) {
-    return led.banked + acct.deposit - bank_debt(acct);
 }
 
 // --- the teller ([conversation.md] «БАНК») ---------------------------------
