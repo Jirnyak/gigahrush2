@@ -43,13 +43,6 @@ const MonsterTraits& monster_traits(std::uint8_t kind) {
     return kMonsterTraits[i];
 }
 
-std::size_t monster_trait_authored_count() {
-    std::size_t n = 0;
-    for (std::size_t i = 0; i < kMobKindCount; ++i)
-        if (kMonsterTraits[i].authored != 0u) ++n;
-    return n;
-}
-
 // ---------------------------------------------------------------------------
 // Wet query
 // ---------------------------------------------------------------------------

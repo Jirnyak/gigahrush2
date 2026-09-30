@@ -315,18 +315,10 @@ const std::array<MonsterTraits, kMobKindCount> kMonsterTraits = {{
 // another monster's traits and nothing fails — the exact hazard kMobTable's own `kind`
 // column exists to catch.
 //
-// NOT a static_assert, and the reason is worth stating so nobody "fixes" it back:
-// `kMonsterTraits` is a runtime `const std::array` with external linkage, matching
-// `kMobTable` and `kItemTable`, so a constexpr function may not read it (MSVC C2131 —
-// measured, not guessed). Making the array `constexpr` to win the compile-time check
-// would push 1,656 B of table into every translation unit that includes the header, to
-// verify something the suite verifies in 69 comparisons at startup. So it is a runtime
-// predicate that tests/suite_monster.inl asserts, which makes it a ctest failure rather
-// than a compile failure — mechanical either way.
-bool monster_traits_rows_indexed() {
-    for (std::size_t i = 0; i < kMobKindCount; ++i)
-        if (kMonsterTraits[i].kind != static_cast<std::uint8_t>(i)) return false;
-    return true;
-}
+// (`monster_traits_rows_indexed` СНЕСЁН 2026-09-30 решением владельца: ноль
+// вызывающих в `src/`, единственным был сьют. Утверждение «строка `kind` равна
+// своему индексу» НЕ потеряно — оно выписано двумя строками прямо в
+// tests/suite_monster.inl, там же, где проверяется. Предикат в генерируемом файле
+// был третьим местом, где живёт один и тот же цикл.)
 
 } // namespace giga::game

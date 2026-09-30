@@ -609,13 +609,23 @@ float burst_damage_mult(BurstPhase p);
 // ---------------------------------------------------------------------------
 // Dead behaviours, named so nobody specs them twice
 // ---------------------------------------------------------------------------
-// True for the four confirmed to have no implementation to port. Kept as a function
-// rather than a comment so the fact is compiled, greppable, and testable.
-bool behaviour_is_dead(MobBehaviour b);
+// `behaviour_is_dead` и `behaviour_is_dispatched` СНЕСЕНЫ 2026-09-30, решением
+// владельца и ВОПРЕКИ моему доводу «это гейт, а не способность». Довод был: их
+// список написан руками и сверялся в сьюте с тем, что диспетчеры реально
+// возвращают, поэтому заявка, обогнавшая код, роняла тест. Владелец переголосовал:
+// «выжечь всё равно». Записано так, потому что довод остаётся на столе — если
+// «статус врёт про подключённость» вернётся сюда, вернуть придётся не комментарий,
+// а проверку.
+//
+// Четыре подтверждённо мёртвых поведения (Melee, WeakWallBreach, RangedClause,
+// SourceSwarm) названы ниже прозой, в блоке роадмапа — там же, где остальные 43.
 
-// True for every enumerator some function in THIS FILE answers for — i.e. the ones
-// a mob can be told apart from a `Plain` mob by. 20 of 47 after wave 4, up from 19
-// after wave 3, 15 after wave 2 and 5 after wave 1.
+// (Исторический абзац о том, что считал `behaviour_is_dispatched`. Сама функция
+// снесена; цифры оставлены, потому что они — замер, а не заявка.)
+//
+// «Отвечен» = какая-то функция ЭТОГО файла отвечает за энумератор, т.е. по нему моба
+// можно отличить от `Plain`. 20 из 47 после волны 4, 19 после волны 3, 15 после
+// волны 2 и 5 после волны 1.
 //
 // "Answered by this file" is NOT the same as "reaching the player", and wave 3 is
 // where the two came apart far enough to need saying. Of the 20, NINETEEN are live
@@ -639,19 +649,6 @@ bool behaviour_is_dead(MobBehaviour b);
 // in the running game — which is why the suite asserts the reachable/unreachable split
 // as a named set rather than as a count.
 //
-// This exists to WIRE `behaviour_is_dead`, which had no caller outside the tests and
-// therefore no way to be wrong out loud. The two lists are now checked against each
-// other and against the dispatchers themselves (`test_behaviours_all`): a dead
-// behaviour must be answered by nothing, a dispatched one by something, and the
-// declared list must match what the code actually returns. Declaring a behaviour
-// implemented without implementing it, or leaving it on the dead list after
-// implementing it, both fail — which is the only kind of documentation worth
-// compiling.
-//
-// Deliberately NOT consulted by the tick. It is a statement about the code, not a
-// decision inside it, and branching on it in `wander_step` would add a lookup to
-// every mob every visit to save a jump-table miss on four kinds.
-bool behaviour_is_dispatched(MobBehaviour b);
 
 // ---------------------------------------------------------------------------
 // The roadmap: what each remaining enumerator is blocked on
@@ -755,8 +752,8 @@ bool behaviour_is_dispatched(MobBehaviour b);
 //   FalsePatrol (Черный ликвидатор, 0.14) — needs a DISGUISED faction, i.e. a body
 //     that reads as friendly until it is not
 //
-// CONFIRMED DEAD (see `behaviour_is_dead`): Melee, WeakWallBreach, RangedClause,
-// SourceSwarm.
+// CONFIRMED DEAD (проверено, не предположено): Melee, WeakWallBreach,
+// RangedClause, SourceSwarm.
 //
 // And two blocked on nothing but the cross-system contract described at the top:
 //   DebrisLurker's 22 m / 12 m cover-split radius — needs `investigate_step` to

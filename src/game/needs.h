@@ -129,9 +129,11 @@ inline constexpr float kStartPooLo   =  0.0f, kStartPooHi   =  20.0f;
 // is a start of 57.6..86.4, not 70..100). The FLOORS it was reaching for do hold:
 // the unluckiest body still gets >= 8 min of water and >= 12 min of food.
 // `suite_needs.inl` asserts both, so drift in either direction goes red.
-constexpr float needs_survival_minutes(float startValue, float drainPerSec) {
-    return startValue / drainPerSec / 60.0f;
-}
+//
+// (Хелпер `needs_survival_minutes` СНЕСЁН 2026-09-30 решением владельца: ноль
+// вызывающих в `src/`, жил ровно в восьми `static_assert`'ах сьюта. Сами
+// утверждения на месте — `v / r / 60` выписано в сьюте локальным constexpr, то
+// есть окно выживания по-прежнему валит СБОРКУ при ретюне скоростей расхода.)
 
 // WARNING THRESHOLDS, DERIVED FROM THE RATE. "How long until this hurts" is
 // `value / rate`, so a threshold must be `rate * lead` or it silently drifts when a

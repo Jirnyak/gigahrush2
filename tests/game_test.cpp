@@ -2933,20 +2933,10 @@ static void test_mob_behaviour() {
     CHECK(wall_bias_damage(0u, true) == 1.0f);
 
     // --- the dead ones ----------------------------------------------------
-    // Compiled rather than commented, so the finding cannot rot: these four have no
-    // implementation in the reference to port. Naming them is worth more than
-    // specifying them, because it stops the next pass re-deriving the same dead end.
-    CHECK(behaviour_is_dead(MobBehaviour::Melee));
-    CHECK(behaviour_is_dead(MobBehaviour::WeakWallBreach));
-    CHECK(behaviour_is_dead(MobBehaviour::RangedClause));
-    CHECK(behaviour_is_dead(MobBehaviour::SourceSwarm));
-    CHECK(!behaviour_is_dead(MobBehaviour::Plain));
-    CHECK(!behaviour_is_dead(MobBehaviour::GarbageSurround));
-    // And the four implemented here must not be marked dead.
-    CHECK(!behaviour_is_dead(MobBehaviour::GreenDogPack));
-    CHECK(!behaviour_is_dead(MobBehaviour::WeepingAngel));
-    CHECK(!behaviour_is_dead(MobBehaviour::DeadEcho));
-    CHECK(!behaviour_is_dead(MobBehaviour::CloseReveal));
+    // (Здесь стоял предикат `behaviour_is_dead`, снесённый 2026-09-30 вместе с
+    // `behaviour_is_dispatched`: ноль вызывающих в `src/`. Утверждение «эти
+    // четыре ничем не отвечены» живёт в suite_behaviours.inl блок 2, где список
+    // выписан рядом с замером, а не в отдельной функции.)
 
     // Every kind that carries a behaviour this wave dispatches must actually exist
     // in the table — otherwise the code is dispatching on a value no row uses and

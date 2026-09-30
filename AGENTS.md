@@ -282,6 +282,17 @@ each one**. Correctness first; speed is a side effect of not backtracking.
 
 ## Build
 
+> **CI IS DOWN EVERYWHERE since ~2026-09-28 — BILLING, not code.** Both `Jirnyak`
+> and the `TENEVIKS` mirror answer every push with "recent account payments have
+> failed or your spending limit needs to be increased", so the run fails in 3 s
+> without starting. Consequence you must carry: **the Windows/MSVC leg verifies
+> nothing right now**, and a green `ctest` in a commit means exactly one machine
+> (macOS, Release). Anything platform-shaped — a new pinned count, a `size_t`
+> narrowing, `__builtin_*` — is unverified until billing is restored. Check
+> `gh run view <id>`, not `gh run list`: a billing stop is indistinguishable from
+> a red test in the list. Details and the checklist for the first green run:
+> [CONTINUE.md](CONTINUE.md) §Ветка и пуши.
+
 macOS / Homebrew (primary, and the mechanical enforcer of the no-throw rule) —
 see [README.md](README.md) for dependency install:
 

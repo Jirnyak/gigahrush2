@@ -106,8 +106,18 @@ static void test_monster_all() {
     // generator rejects that shape at author time; this rejects it in the shipped table,
     // which is the copy that matters.
     {
-        CHECK(monster_traits_rows_indexed());
-        CHECK(monster_trait_authored_count() == kMonsterTraitRows);
+        // Целостность ГЕНЕРИРУЕМОЙ таблицы — два утверждения, выписанные здесь,
+        // рядом с обходом, который их и считает. Раньше это были две функции
+        // (`monster_traits_rows_indexed` в генерируемом .cpp и
+        // `monster_trait_authored_count`), снесённые 2026-09-30: каждая была
+        // ТЕМ ЖЕ циклом по таблице, написанным во второй раз, и ни одну не звал
+        // никто кроме этого сьюта. Ниже блок и так обходит все 68 строк.
+        std::size_t misindexed = 0;
+        for (std::size_t k = 0; k < kMobKindCount; ++k)
+            if (kMonsterTraits[k].kind != static_cast<std::uint8_t>(k)) ++misindexed;
+        // Ложный ответ значил бы, что `monster_traits(k)` выдаёт черты ЧУЖОГО
+        // монстра — проверяется на данных КАК ПОСТАВЛЕНЫ, не как задуманы.
+        CHECK(misindexed == 0u);
         // Compile-time facts go through static_assert, not CHECK. Putting a constant in
         // `if (!(cond))` earns MSVC C4127 and the tree is built /W4 with warnings treated
         // as errors in review (AGENTS.md), so a CHECK on a sizeof is a build failure.

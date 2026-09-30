@@ -198,6 +198,15 @@ void roll() {
     CHECK(blank.seeded == 0 && blank.food == 0.0f);
 }
 
+// Окно выживания: `v / r` секунд, в минутах. Раньше это был публичный
+// `needs_survival_minutes` ([needs.h]), снесённый 2026-09-30 решением владельца —
+// ноль вызывающих в `src/`, жил ровно в восьми static_assert'ах ниже. Утверждения
+// остались СБОРОЧНЫМИ: ретюн скорости расхода, убивающий за две минуты, валит
+// компиляцию, а не прогон.
+constexpr float needs_survival_minutes(float startValue, float drainPerSec) {
+    return startValue / drainPerSec / 60.0f;
+}
+
 void survival_window() {
     // The arithmetic in needs.h's comment block, as static_asserts, so a retuned rate
     // fails to COMPILE rather than fails a run.

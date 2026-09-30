@@ -102,8 +102,8 @@ float behaviour_aggro_radius(MobBehaviour b, float defaultRadius) {
     // `SourceSwarm` is deliberately ABSENT even though the reference has a case for
     // it: `SWARM_DETECT_SQ` is 20*20 and the global `MONSTER_DETECT` is 20, so a case
     // here would return `defaultRadius` by a longer route and make a dead behaviour
-    // look dispatched. Measured, not assumed — it is why `behaviour_is_dead` still
-    // names it.
+    // look dispatched. Measured, not assumed — и это причина, по которой оно
+    // остаётся в списке мёртвых прозой ([mob_behaviour.h], роадмап).
     switch (b) {
         case MobBehaviour::LurkingFurniture: return 2.15f;  // dormant, not awake
         case MobBehaviour::CloseReveal:      return 6.0f;
@@ -265,77 +265,6 @@ float behaviour_hurt_move_mult(MobBehaviour b, std::int16_t hp, std::int16_t max
     return hp < maxHp ? kCrowdShoveHurtSpeed : 1.0f;
 }
 
-bool behaviour_is_dead(MobBehaviour b) {
-    switch (b) {
-        // No reader anywhere in the reference; identical to Plain.
-        case MobBehaviour::Melee:
-        // No AI implementation to port — only a scripted floor encounter. Also
-        // architecturally impossible: destructible geometry would invalidate the
-        // per-floor baked flow fields.
-        case MobBehaviour::WeakWallBreach:
-        // Read at exactly one line, to set a scan cooldown. Nothing to dispatch;
-        // the generic ranged path already covers this kind.
-        case MobBehaviour::RangedClause:
-        // The behaviour is a spawner subsystem keyed on monster stage, not on this
-        // flag. Wave 1 added "the flag itself is only a detect radius", which reads
-        // as though there were a radius to port; MEASURED, there is not —
-        // `SWARM_DETECT_SQ` is 20*20 and the global `MONSTER_DETECT` is 20, the same
-        // number, so the flag's only mechanical reader returns the default.
-        case MobBehaviour::SourceSwarm:
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool behaviour_is_dispatched(MobBehaviour b) {
-    // The declared inverse of `behaviour_is_dead`, and NOT its negation: 23
-    // enumerators are neither dead nor dispatched — authored, portable, and each
-    // waiting on one named piece (the roadmap block in [mob_behaviour.h]).
-    //
-    // Hand-listed rather than derived from the dispatchers, on purpose. Deriving it
-    // would make it true by construction and prove nothing; as a separate list,
-    // `test_behaviours_all` compares it against what the dispatchers actually return,
-    // so a claim that outran the code fails the suite.
-    switch (b) {
-        // Wave 1 — pursuit offset, gaze freeze, two short radii.
-        case MobBehaviour::GarbageSurround:
-        case MobBehaviour::GreenDogPack:
-        case MobBehaviour::WeepingAngel:
-        case MobBehaviour::DeadEcho:
-        case MobBehaviour::CloseReveal:
-        // Wave 2 — the wall-adjacency pace pair...
-        case MobBehaviour::DebrisLurker:
-        case MobBehaviour::WallBrace:
-        // ...and the eight authored sight radii. OfficeField, RootedPlant and
-        // RootHive sit on speed-0 kinds, so they are answered here and still
-        // unobservable in wander_step; see [mob_behaviour.h].
-        case MobBehaviour::LurkingFurniture:
-        case MobBehaviour::RootedPlant:
-        case MobBehaviour::RootHive:
-        case MobBehaviour::OfficeField:
-        case MobBehaviour::DocumentHunter:
-        case MobBehaviour::ProtocolPressure:
-        case MobBehaviour::DocumentScent:
-        case MobBehaviour::LightFollower:
-        // Wave 3 — the three radii that were never in `monsterDetectSq`...
-        case MobBehaviour::MeatWorm:
-        case MobBehaviour::FalsePhase:
-        // ...FractureSprint, which gets that treatment AND its burst cycle...
-        case MobBehaviour::FractureSprint:
-        // ...and the standoff, the first offset here with a negative radial term.
-        case MobBehaviour::WebSpitter:
-        // Wave 4 — the mob's own health as a pace input. THE ONE ENTRY on this list
-        // whose every answer comes from a function with no caller in src/, so it is
-        // answered here and still indistinguishable from Plain in the running game.
-        // WallBrace also gains two dimensions in wave 4 (reach, incoming damage) but
-        // was already on this list for its live pace, so the count moves by one.
-        case MobBehaviour::CrowdShove:
-            return true;
-        default:
-            return false;
-    }
-}
 
 // The fallback slot exists in the reference for when the ring position lands inside
 // a solid cell. It is referenced here so the constant is not dead weight: physics

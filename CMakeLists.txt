@@ -1959,7 +1959,22 @@ if(GIGA_BUILD_TESTS)
         # :393 и :394 (человек открыл дверь сам); снять предусловие
         # `door_closed` -> красная :413 (толпа захлопнула открытую). Вернуть —
         # зелёные.
-        PASS_REGULAR_EXPRESSION "game_test: 218768 checks, 0 failures")
+        # 218768 − 61 = 218707 на 2026-09-30: СНОС, кластер 4 — четыре символа,
+        # которые я оставил как гейты, а владелец велел выжечь всё равно
+        # («behaviour_is_dispatched», «behaviour_is_dead»,
+        # «monster_trait_authored_count», «monster_traits_rows_indexed»,
+        # «needs_survival_minutes»). Дельта из слагаемых:
+        #   −47 `CHECK(behaviour_is_dispatched(b) == any)` — ОДНА строка внутри
+        #       обхода всех 47 энумераторов поведения;
+        #   −3  два «Plain ни отвечен, ни мёртв» + `behaviour_is_dead(SourceSwarm)`;
+        #   −10 десять `behaviour_is_dead` в самом game_test.cpp;
+        #   −1  два предиката целостности таблицы слились в один CHECK над обходом,
+        #       который в том же блоке и так идёт по всем 68 строкам.
+        # Утверждения НЕ потеряны, потерялись функции: список четырёх мёртвых
+        # поведений выписан в suite_behaviours.inl рядом с замером, «строка kind
+        # равна индексу» — в suite_monster.inl рядом с обходом, окно выживания —
+        # локальным constexpr в suite_needs.inl, и оно по-прежнему валит СБОРКУ.
+        PASS_REGULAR_EXPRESSION "game_test: 218707 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

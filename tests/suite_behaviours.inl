@@ -287,11 +287,13 @@ static void test_behaviours_all() {
         CHECK(has_flag(mob_def(MobKind::BloodPlant).aiFlags, AiFlag::Immobile));
     }
 
-    // ---- 2. the dead list cannot disagree with the dispatchers --------------
-    // This is what "wire behaviour_is_dead" means here: it had no caller outside a
-    // test that compared it against a hand-written list of the same four names, so it
-    // could not be wrong out loud. Now the declared classification is checked against
-    // what the four dispatchers ACTUALLY return, for all 47 enumerators.
+    // ---- 2. сколько энумераторов вообще отвечены диспетчерами ---------------
+    // Здесь сверялись ДВА РУЧНЫХ СПИСКА (`behaviour_is_dispatched` /
+    // `behaviour_is_dead`) с тем, что диспетчеры реально возвращают. Оба списка
+    // снесены 2026-09-30 решением владельца — у них не было вызывающих в `src/`.
+    // Остаётся ЗАМЕР: сколько энумераторов отвечено, и держится ли разделение
+    // «отвечен» против «достижим игроком». Замер ничего не заявляет наперёд,
+    // поэтому пережить свой предмет не может.
     {
         std::size_t answered = 0, dead = 0, neither = 0;
         for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
@@ -327,12 +329,13 @@ static void test_behaviours_all() {
             const bool any = steers || sees || freezes || paces || hits || faces ||
                              bursts || reaches || soaks || hurts;
 
-            // The declared list must be exactly the measured one. This is the
-            // assertion that fails if someone adds a case to a dispatcher and forgets
-            // the roadmap, or edits the roadmap without adding the case.
-            CHECK(behaviour_is_dispatched(b) == any);
-            // ...and nothing on the dead list may be answered by anything.
-            if (behaviour_is_dead(b)) CHECK(!any);
+            // Четыре подтверждённо мёртвых поведения не смеет отвечать никто —
+            // список выписан ЗДЕСЬ, там, где он проверяется.
+            const bool declaredDead = b == MobBehaviour::Melee ||
+                                      b == MobBehaviour::WeakWallBreach ||
+                                      b == MobBehaviour::RangedClause ||
+                                      b == MobBehaviour::SourceSwarm;
+            if (declaredDead) CHECK(!any);
 
             // "Answered" is not "reaches the player", and this is the assertion that
             // keeps the two from drifting apart silently. Four of the ten hooks above
@@ -356,7 +359,7 @@ static void test_behaviours_all() {
             const bool unreachableOnly = any && !reachable;
             CHECK(unreachableOnly == (b == MobBehaviour::CrowdShove));
 
-            if (behaviour_is_dead(b)) ++dead;
+            if (declaredDead) ++dead;
             else if (any) ++answered;
             else ++neither;
         }
@@ -378,9 +381,6 @@ static void test_behaviours_all() {
         CHECK(answered == 20u);
         CHECK(dead == 4u);
         CHECK(neither == 23u);   // 22 blocked, plus Plain itself
-        // Plain is not "answered" by anything and is not dead: it IS the default.
-        CHECK(!behaviour_is_dispatched(MobBehaviour::Plain));
-        CHECK(!behaviour_is_dead(MobBehaviour::Plain));
 
         // SourceSwarm stays dead for a reason that can now be checked in one line:
         // the reference's only mechanical reader hands it SWARM_DETECT_SQ = 20*20,
@@ -388,7 +388,6 @@ static void test_behaviours_all() {
         // a longer route and make a dead behaviour look implemented.
         CHECK(behaviour_aggro_radius(MobBehaviour::SourceSwarm, kAggroRadius) ==
               kAggroRadius);
-        CHECK(behaviour_is_dead(MobBehaviour::SourceSwarm));
 
         // The eight new radii, exactly. Cheap to assert and the only place the ported
         // constants are compared against anything.

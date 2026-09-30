@@ -244,21 +244,12 @@ inline const MonsterTraits& monster_traits(MobKind k) {
     return monster_traits(static_cast<std::uint8_t>(k));
 }
 
-// How many rows the GENERATED table actually marks authored. Exists so the CSV row
-// count is checkable from C++ as well as from the gate: the suite asserts it equals
-// kMonsterTraitRows, which catches a regenerate that dropped a row and a header
-// constant that was bumped without one.
-std::size_t monster_trait_authored_count();
-
-// True when every row's `kind` equals its index. Defined in the GENERATED table, so it
-// checks the data as shipped rather than as intended; a false answer means
-// `monster_traits(k)` is handing out another monster's traits.
-//
-// A runtime predicate rather than a static_assert because `kMonsterTraits` is a runtime
-// `const std::array` with external linkage (matching `kMobTable` and `kItemTable`), and
-// a constexpr function may not read one — MSVC C2131, measured. The suite asserts it,
-// so it is a ctest failure instead of a compile failure.
-bool monster_traits_rows_indexed();
+// (`monster_trait_authored_count` и `monster_traits_rows_indexed` СНЕСЕНЫ
+// 2026-09-30 решением владельца — ноль вызывающих в `src/`, единственным был сьют.
+// Оба были ЦИКЛОМ ПО ТАБЛИЦЕ, написанным вторично: сьют и так обходит все 68 строк
+// в том же блоке. Оба утверждения — «авторских строк ровно kMonsterTraitRows» и
+// «строка `kind` равна своему индексу» — живут в tests/suite_monster.inl блок 1,
+// рядом с обходом, который их и считает.)
 
 // ---------------------------------------------------------------------------
 // The wet query — the hook five behaviours were blocked on
