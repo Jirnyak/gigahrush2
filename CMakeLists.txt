@@ -251,6 +251,33 @@ set(IMGUI_SOURCES
 # link the simulation core without pulling in SDL/Vulkan/ImGui.
 # src/core is header-only today (math.h, wrap.h, jobs.h) but is globbed anyway,
 # so the first .cpp added there is compiled instead of silently ignored.
+# ---- Кодоген таблиц: ГЕЙТ СЛЕДИТ, А НЕ ЧЕЛОВЕК -----------------------------
+# Закон владельца 2026-09-24: «надо гарантировать, чтобы все технические таблицы
+# компилировались автоматически, а то ещё за этим следить».
+#
+# Следит ctest `tables_fresh` (tools/check_tables_fresh.cmake): он гоняет все
+# tools/gen_*.py в копии дерева и сверяет выход с закоммиченным ПОБАЙТНО. Почему
+# гейт, а не add_custom_command на каждый генератор, и почему у гейта нет спеки
+# входов, которой можно соврать — написано в шапке самого гейта. Короткая
+# версия: выход генераторов коммитится по контракту «the generated header is
+# committed so the build needs no Python», и ломать этот контракт не за что —
+# сборка не должна ни мутировать дерево, ни требовать питона, ни гоняться с
+# glslc за shaders/material_surface.glsl. Помнить про перегенерацию не надо, но
+# помнит гейт, а не сборка.
+#
+# Питон здесь ТОЛЬКО ИНСТРУМЕНТ: он генерирует код и гоняет гейт. В рантайме и
+# в поставке его нет, игра собирается и запускается без него (разрешение
+# владельца 2026-09-30: «если чисто как тул, то я снимаю запрет»).
+#
+# Ищем БЕЗ REQUIRED — терять СБОРКУ на машине без питона незачем, таблицы
+# закоммичены. Но гейт при этом регистрируется ВСЕГДА и в его отсутствие
+# КРАСНЕЕТ, а не исчезает: тестов в ctest ровно девять на любой машине. Гейт,
+# который может молча не зарегистрироваться, — это тот же дефект, за который
+# дерево уже платило (enable_testing() стоял внутри if(GIGA_BUILD_TESTS), и
+# ctest печатал зелёные 8/8 на бинарниках прошлой сборки). Пропавший тест не
+# виден в отчёте; красный — виден.
+find_package(Python3 COMPONENTS Interpreter)
+
 file(GLOB_RECURSE GIGA_CORE_SOURCES CONFIGURE_DEPENDS
     src/core/*.cpp src/world/*.cpp src/sim/*.cpp src/ecs/*.cpp)
 
@@ -1845,7 +1872,32 @@ if(GIGA_BUILD_TESTS)
         # листа серийно по возрастанию индекса, — и кластеризация опирается
         # именно на этот порядок. Мутация «собирать лист прямо в параллельной
         # фазе» роняет is_sorted, а не числа центроидов.
-        PASS_REGULAR_EXPRESSION "game_test: 223362 checks, 0 failures")
+        #
+        # 223362 + 14 = 223376 на 2026-09-30: аудит инварианта страницы на ВСЁМ
+        # объёме — page_invariant_holds_over_the_whole_volume
+        # ([tests/suite_saveload.inl]). Ровно 14 CHECK'ов, дельта объяснена
+        # целиком: 5 на страницу-призрак до обхода рождения, 1 на карв,
+        # 5 на нулевые нарушения после, 3 на переиспользование слота.
+        #
+        # Зачем он при живом awaken_is_the_one_law: тот проверяет закон S16.9 на
+        # ЧЕТЫРЁХ клетках, собранных руками, этот — на всех 2 097 152 и на учёте
+        # пула, после проезда настоящих CPU-писателей (set_sub_material, fill,
+        # carve_sphere). Оракул ПРОИЗВОДНЫЙ, пина внутри нет: «страница ⟺
+        # клетка неоднородна» и «слотов занято == клеток со страницей» верны на
+        # любом содержимом любого этажа. Поэтому течь страниц §76.5 (~1000
+        # страниц/с в живой сессии) он бы поймал БЕЗ GPU — а она посажена
+        # CPU-кодом (open_frontier) и жила незамеченной именно потому, что
+        # GPU-сюиты в CI не гоняются нигде, а такого обхода не существовало.
+        #
+        # Мутация прогнана в обе полярности 2026-09-30: снять смерть страницы
+        # (settle_sub_page в [world/floor_awaken.cpp]) -> красные
+        # suite_saveload.inl:2078 `after.uniform_paged == 0` и :2080
+        # `after.violations() == 0`; вернуть -> зелёные. Положительная
+        # полярность на САМ аудит живёт внутри теста и подсадки не требует:
+        # страница-призрак создаётся сценой, и строка
+        # `CHECK(ghost.uniform_paged >= 1)` краснеет, если аудит начнёт
+        # возвращать ноль всегда.
+        PASS_REGULAR_EXPRESSION "game_test: 223376 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
@@ -1935,6 +1987,30 @@ if(GIGA_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wired.cmake)
     set_tests_properties(wired PROPERTIES
         PASS_REGULAR_EXPRESSION "GIGA_WIRED=PASS entry_points=[0-9][0-9]")
+
+    # Закоммиченная таблица обязана совпадать со своим генератором. Третий
+    # текстовый гейт той же формы — компилятора не требует, живёт на голом
+    # раннере рядом с source_rules. Разбор дефекта, ради которого он написан
+    # (item_table.cpp и prop_table.cpp отставали от verbs.csv 26 дней при
+    # зелёном дереве), и причина, по которой у гейта НЕТ спеки входов — в шапке
+    # tools/check_tables_fresh.cmake.
+    #
+    # Оба числа в PASS пиним ДИАПАЗОНОМ, по той же причине, что у source_rules и
+    # wired: точное число стало бы конфликтом слияния на каждый новый генератор
+    # и приучило бы его перепечатывать. Ловить пин обязан ослепший глоб —
+    # прогон, нашедший ноль генераторов или ноль файлов, иначе напечатал бы
+    # PASS. Внутренние сторожи (generators LESS 15, compared LESS 300) ловят то
+    # же самое строже и называют, ЧТО ослепло.
+    # Регистрируется БЕЗУСЛОВНО. Если питона нет, GIGA_PYTHON приедет пустым и
+    # гейт упадёт со внятной строкой — см. комментарий у find_package выше.
+    add_test(NAME tables_fresh
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -DGIGA_PYTHON=${Python3_EXECUTABLE}
+                -DGIGA_TMP=${CMAKE_CURRENT_BINARY_DIR}/tables_fresh_tmp
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tables_fresh.cmake)
+    set_tests_properties(tables_fresh PROPERTIES
+        PASS_REGULAR_EXPRESSION
+        "GIGA_TABLES_FRESH=PASS generators=[0-9][0-9] files_compared=[0-9][0-9][0-9]")
 
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the

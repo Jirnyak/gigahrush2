@@ -2947,6 +2947,12 @@ int main(int argc, char** argv) {
 
     bool running = true;
     float simAccum = 0.0f;
+    // Тиков, отброшенных срывом guard'а фиксированной петли (вывод — у самого
+    // сброса, ниже по кадру). Счётчик, а не молчание: по закону S11 упёршийся
+    // кап печатается вслух, а этот ещё и объясняет наблюдаемый рывок мира
+    // после входа на этаж. Если он растёт НЕ на входах — значит кадр перестал
+    // укладываться в бюджет там, где должен, и это уже дефект перфа.
+    unsigned long long stuckDroppedTicks = 0;
     // Monotonic sim-time (seconds), advanced one kSimDt per fixed step. The AI
     // re-plan stagger ([ai.md] #12c) schedules each agent's next decision
     // against an absolute deadline on this clock; frozen with the sim while
@@ -7753,6 +7759,39 @@ int main(int argc, char** argv) {
                 // и живёт правилом.
                 simNow += kSimDt;
                 simAccum -= kSimDt;
+            }
+            // ГОРБ ДОЛГА СБРАСЫВАЕМ, А НЕ ОТРАБАТЫВАЕМ УСКОРЕНИЕМ.
+            //
+            // Понятие написано двадцатью строками выше — для паузы: «drop
+            // accumulated time so resuming does not fast-forward the missed
+            // interval». Для СРЫВА GUARD'А его не написали, и это вторая
+            // половина того же закона.
+            //
+            // Что происходило без этой строки. Вход на этаж даёт кадры до
+            // 3593 мс (замер §80). Накопитель берёт весь кадр, а петля отдаёт
+            // не больше 8 тиков = 64 мс, поэтому долг 3.5 с остаётся и
+            // дренажится следующими кадрами по 64 мс сим против ~16 мс
+            // настоящих — то есть мир идёт ВЧЕТВЕРО быстрее реального примерно
+            // секунду после каждого входа. Игрок видит рывок, которого не
+            // просил, а кадровый HUD печатает 1/frameDt от уже зажатого
+            // значения и потому выглядит здоровым.
+            //
+            // Почему сброс, а не отработка: догонять нечего. Тики, не
+            // случившиеся, пока грузился этаж, НЕ несут ни ввода игрока, ни
+            // решений — мир в это время не бежал. Отработать их значит проиграть
+            // вперёд симуляцию, которой никто не заказывал, и это прямо против
+            // S16.3 «в игре ничего не должно зависеть от кадра».
+            if (guard >= 8 && simAccum >= kSimDt) {
+                const unsigned long long dropped =
+                    static_cast<unsigned long long>(simAccum / kSimDt);
+                stuckDroppedTicks += dropped;
+                simAccum = 0.0f;
+                std::fprintf(stderr,
+                             "[tick] кадр не уложился в бюджет: отброшено %llu "
+                             "тиков (%.0f мс сим-долга), всего за прогон %llu\n",
+                             dropped,
+                             static_cast<double>(dropped) * kSimDt * 1000.0,
+                             stuckDroppedTicks);
             }
             prof_add(kProfTick, profTickT0);
         }

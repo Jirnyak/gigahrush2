@@ -2010,6 +2010,91 @@ static void awaken_is_the_one_law() {
     CHECK(giga::sub_material_at(w, 30, 20, 20, 3, 3, 3) == giga::kMatRubble);
 }
 
+// ИНВАРИАНТ СТРАНИЦЫ — НА ВСЁМ ОБЪЁМЕ И НА ВСЕХ CPU-ПИСАТЕЛЯХ (S16.9).
+//
+// Чем отличается от awaken_is_the_one_law выше: тот проверяет закон на ЧЕТЫРЁХ
+// клетках, собранных руками, и только через floor_awaken. Этот спрашивает у
+// всех kMacroCells = 2 097 152 клеток и у самого пула, после того как по миру
+// проехали писатели, которые страницы РОЖДАЮТ: set_sub_material, карв, дверь,
+// генераторный fill. Оракул производный, пинов нет — см. вывод в шапке
+// [world/floor_awaken.h] audit_sub_pages.
+//
+// ОБЕ ПОЛЯРНОСТИ ЖИВУТ ВНУТРИ ТЕСТА, подсаживать дефект в исходник не надо:
+// страница-призрак (чистый воздух, как её рождает open_frontier) создаётся
+// здесь же, и аудит ОБЯЗАН её увидеть ДО обхода рождения и не увидеть после.
+// Если audit_sub_pages когда-нибудь начнёт возвращать ноль всегда, красной
+// станет строка CHECK(ghost.uniform_paged >= 1) — то есть гейт стережёт сам
+// себя от ослепления.
+//
+// Зачем этот гейт вообще: течь страниц §76.5 (~1000 страниц/с в живой сессии,
+// монотонно) посадил CPU-код — open_frontier раскрывал округу радиусом 6
+// впереди материи. Значит она ловилась БЕЗ GPU, и этот обход её бы поймал.
+// Обхода не было, и именно поэтому течь жила незамеченной: GPU-сюиты в CI не
+// гоняются нигде, а этот тест живёт в game_test, который гоняется на обеих
+// платформах.
+static void page_invariant_holds_over_the_whole_volume() {
+    giga::World w;
+    giga::MacroGrid& g = w.grid();
+
+    // Страница-призрак: чистый воздух, содержимое не менялось ни разу.
+    const std::size_t ghostCi = giga::macro_index(20, 20, 20);
+    CHECK(giga::materialize_sub_page(w, ghostCi) != nullptr);
+
+    const giga::PageAuditStats ghost = giga::audit_sub_pages(w);
+    // ПОЛОЖИТЕЛЬНАЯ ПОЛЯРНОСТЬ: аудит видит нарушение, которое есть.
+    CHECK(ghost.paged_cells >= 1);
+    CHECK(ghost.uniform_paged >= 1);
+    CHECK(ghost.violations() >= 1);
+    // И видит его КАК однородную страницу, а не как потерянный слот: слот
+    // честно числится за клеткой.
+    CHECK(ghost.orphan_slots == 0);
+
+    // Теперь по миру едут настоящие CPU-писатели, каждый из которых рождает
+    // страницы: разнородная лужа (set_sub_material), монолит рыхлого (fill),
+    // бетонная плита под карв, и сам карв.
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(w, 40, 20, 20, sx, 0, 0, giga::kMatWater);
+    g.fill_cell(30, 20, 20, giga::kMatRubble);
+    for (int x = 60; x < 68; ++x)
+        for (int y = 20; y < 28; ++y)
+            for (int z = 20; z < 24; ++z)
+                g.fill_cell(x, y, z, giga::kMatConcrete);
+    giga::CarveOp op;
+    op.x = 64.5f * giga::kCellSize;
+    op.y = 24.5f * giga::kCellSize;
+    op.z = 22.5f * giga::kCellSize;
+    op.radius = 1.5f;
+    op.power = 0xFFFF;
+    op.seed = 12345u;
+    giga::CarveScratch scratch;
+    giga::CarveResult res;
+    CHECK(giga::carve_sphere(w, op, scratch, res) > 0);
+
+    // Обход рождения этажа — единственное место, где призрак обязан умереть.
+    giga::floor_awaken(w);
+
+    // ОТРИЦАТЕЛЬНАЯ ПОЛЯРНОСТЬ: нарушений нет НИ ОДНОГО на всём объёме.
+    const giga::PageAuditStats after = giga::audit_sub_pages(w);
+    CHECK(after.uniform_paged == 0);   // <- упадёт, если settle_sub_page снять
+    CHECK(after.orphan_slots == 0);    // <- упадёт на потерянном слоте
+    CHECK(after.violations() == 0);
+
+    // Призрак схлопнут, а разнородная лужа и карв — НЕТ: схлопывание не смеет
+    // забирать страницы, которые несут материю. Без этой строки гейт был бы
+    // зелёным у аллокатора, который просто снёс все страницы подряд.
+    CHECK(after.paged_cells >= 2);
+    CHECK(after.pages_in_use == after.paged_cells);
+
+    // И течь второго рода: слот, отданный в свободный список, обязан быть
+    // ПЕРЕИСПОЛЬЗОВАН, а не потерян. Рождаем столько же призраков, сколько
+    // схлопнули, и учёт пула не должен вырасти.
+    const std::size_t inUse = after.pages_in_use;
+    CHECK(giga::materialize_sub_page(w, giga::macro_index(21, 20, 20)) != nullptr);
+    const giga::PageAuditStats reused = giga::audit_sub_pages(w);
+    CHECK(reused.pages_in_use == inUse + 1);
+    CHECK(reused.orphan_slots == 0);
+}
+
 // Б6.1: ВСЕЛЕНИЕ НЕ БЕРЁТ ОСТАНКИ И НЕ ВЕРИТ ГОЛОМУ СЛОТУ.
 //
 // Репро жалобы владельца «убил себя и навесило на рагдолл». Щуп в живой игре
@@ -2056,6 +2141,7 @@ static void possession_refuses_remains_and_stale_slots() {
 
 static void test_saveload_all() {
     saveload_test::awaken_is_the_one_law();
+    saveload_test::page_invariant_holds_over_the_whole_volume();
     saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();
     saveload_test::round_trip();

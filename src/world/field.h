@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>  // fprintf — вслух о промахе тега типа в get_or_create
+#include <cstdlib> // abort   — промах тега необратим, гасим немедленно
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -66,8 +68,25 @@ public:
     Field<T>& get_or_create(const std::string& name, const T& init = T{}) {
         auto it = fields_.find(name);
         if (it != fields_.end()) {
-            // Existing field: caller is responsible for matching T. We assert
-            // via the stored type tag in debug builds; in release we trust it.
+            // Тег типа СВЕРЯЕТСЯ, и в релизе тоже. До 2026-09-30 здесь стоял
+            // комментарий «We assert via the stored type tag in debug builds;
+            // in release we trust it» — и ассерта не было НИ В ОДНОЙ сборке.
+            // Цена промаха несоразмерна цене проверки: опечатка в имени поля
+            // возвращала ссылку на чужой Field<U>, и первая же запись клала
+            // 2-8 МБ мусора в чужое поле молча. Проверка — одно сравнение
+            // указателей на весь вызов (а вызовы эти не на пути кадра:
+            // get_or_create трогает реестр полей и зовётся на рождении этажа).
+            // Лечение уже было написано СТРОКОЙ НИЖЕ: find<T> тег сверяет и
+            // честно возвращает nullptr. Здесь nullptr вернуть нельзя — функция
+            // отдаёт ссылку, — поэтому промах гасится вслух и необратимо.
+            if (it->second->tag != type_tag<T>()) {
+                std::fprintf(stderr,
+                             "FieldRegistry: поле '%s' уже создано с ДРУГИМ "
+                             "типом элемента — get_or_create вернул бы ссылку "
+                             "на чужую память\n",
+                             name.c_str());
+                std::abort();
+            }
             return *static_cast<Field<T>*>(it->second->ptr);
         }
         auto holder = std::make_unique<Holder>();

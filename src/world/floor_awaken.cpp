@@ -80,4 +80,50 @@ FloorAwakenStats floor_awaken(World& w) {
     return st;
 }
 
+PageAuditStats audit_sub_pages(const World& w) {
+    PageAuditStats st;
+
+    const SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+    // Поля нет — страниц нет, инвариант держится тривиально. Это НЕ повод
+    // молчать в тесте: там проверяется ещё и paged_cells, и ноль страниц на
+    // сцене, где их ждут, виден по нему.
+    if (!mats) return st;
+
+    st.pages_in_use = mats->pages_in_use();
+
+    // Серийно и без parallel_for: обход читает только pageOf_ и по одному биту
+    // сравнения на страницу, стоит микросекунды на пустом этаже, а параллель
+    // здесь дала бы гонку на счётчиках ради выигрыша, которого нет. Аудит —
+    // путь гейта и диагностики, не кадра.
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const CellType* pg = mats->page(ci);
+        if (!pg) continue;
+        ++st.paged_cells;
+        bool uniform = true;
+        for (int b = 1; b < kSubVoxels; ++b)
+            if (!(pg[b] == pg[0])) {
+                uniform = false;
+                break;
+            }
+        if (uniform) ++st.uniform_paged;
+    }
+
+    // Слот занят пулом, но ни одна клетка на него не смотрит и в свободном
+    // списке его нет. pages_in_use() == pages_.size() - free_.size(), поэтому
+    // разность с числом ссылающихся клеток и есть потерянные слоты. Знак
+    // проверяем: обратное неравенство означало бы, что две клетки делят слот —
+    // это нарушение другого рода, и его надо увидеть, а не схлопнуть в ноль
+    // беззнаковым вычитанием.
+    if (st.pages_in_use > st.paged_cells)
+        st.orphan_slots = st.pages_in_use - st.paged_cells;
+    else if (st.paged_cells > st.pages_in_use)
+        // Клеток со страницей БОЛЬШЕ, чем занято слотов — значит слот
+        // переиспользован двумя клетками. Считаем нарушением того же счёта:
+        // тест обязан покраснеть, а не увидеть ноль.
+        st.orphan_slots = st.paged_cells - st.pages_in_use;
+
+    return st;
+}
+
 } // namespace giga
