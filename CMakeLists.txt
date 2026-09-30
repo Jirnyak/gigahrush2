@@ -2108,6 +2108,39 @@ if(GIGA_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION
         "GIGA_TABLES_FRESH=PASS generators=[0-9][0-9] files_compared=[0-9][0-9][0-9]")
 
+    # Столбец CSV без читателя — числом, а не догадкой. ЧЕТВЁРТЫЙ текстовый гейт
+    # той же формы, и последний недостающий: tables_fresh стережёт, что таблица
+    # соответствует своей CSV, а этот — что у столбца CSV есть кому её ЧИТАТЬ.
+    # Разбор (spec 17 §2.3 врал в семи местах из четырнадцати, семь столбцов
+    # monster_traits.csv стали write-only сносом 2026-09-30) — в шапке
+    # tools/check_csv_columns.cmake.
+    #
+    # ЗДЕСЬ ЧИСЛА ПИНЯТСЯ ТОЧНО, в отличие от трёх гейтов выше, и разница
+    # обоснована, а не случайна. У source_rules/wired/tables_fresh население —
+    # GLOB по src/, поэтому точное число было бы конфликтом слияния на каждый
+    # новый .cpp и приучило бы его перепечатывать. Здесь население — столбцы двух
+    # CSV: они не плодятся от нового кода, меняются редко и каждое изменение
+    # ОСМЫСЛЕННО. Поэтому:
+    #   * dead= выросло       — в CSV завели столбец под систему, которой нет;
+    #   * dead= упало         — столбец подключили, и пин обязан упасть ТЕМ ЖЕ
+    #                           коммитом (храповик: иначе ctest красный);
+    #   * writeonly= выросло  — читателя снесли, данные стали мёртвым грузом;
+    #   * writeonly= упало    — колонку оживили.
+    # Каждый из четырёх случаев — решение, которое обязано быть видно в дифе.
+    # НАБЛЮДЁННЫЙ ПРОГОН 2026-09-30: covered=2/18 columns=62 live=38 gen=5
+    # writeonly=7 dead=12.
+    #
+    # `covered=2/18` пинится тоже, и это главное число строки: оно говорит, что
+    # гейт смотрит ДВА файла данных из восемнадцати. PASS здесь НЕ означает «все
+    # столбцы проекта проверены» — граница названа числом, чтобы её нельзя было
+    # прочитать как отсутствие границы.
+    add_test(NAME csv_columns
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_csv_columns.cmake)
+    set_tests_properties(csv_columns PROPERTIES
+        PASS_REGULAR_EXPRESSION
+        "GIGA_CSV_COLUMNS=PASS covered=2/18 columns=62 live=38 gen=5 writeonly=7 dead=12")
+
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
     # global Release -O3 so the numbers reflect an optimized build. Threads come

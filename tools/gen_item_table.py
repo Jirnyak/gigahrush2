@@ -158,6 +158,7 @@ def main():
     seen, out, names, descs = set(), [], [], []
     used_cat, used_use = set(), set()
     resolved = []
+    declared_stacks = 0
     verbs = load_verbs()
     verb_vecs = []
     for i, r in enumerate(rows):
@@ -174,6 +175,32 @@ def main():
         used_use.add(ue)
 
         resists = [num(r, c, i, -128, 127) for c in RESIST_COLS]
+
+        # `stack_declared` — АВТОРСКАЯ СВЕРКА, не второе поле. Столбец
+        # существовал ровно для неё (spec 17 §5 выписал это критерием приёмки) и
+        # не выполнял её ни дня: до 2026-09-30 его не читал ни один генератор и
+        # ни одна строка src/, то есть расхождение было НЕОТЛИЧИМО от согласия.
+        #
+        # Замерено перед подключением, а не после: 161 строка из 443 несёт
+        # объявленный стак, и все 161 совпадают со `stack_max` — значит сверка
+        # включается на зелёном дереве и с первого дня стережёт правку, а не
+        # чинит долг. Пустая ячейка (282 строки) означает «автор стак не
+        # объявлял» и остаётся законной: требовать объявление на всех 443
+        # строках значило бы размечать каталог руками ради гейта.
+        #
+        # В ItemDef поле НЕ добавляется — пин на 32 байта верен, а сверка
+        # времени генерации и есть весь потребитель этого столбца.
+        decl = (r.get("stack_declared") or "").strip()
+        if decl:
+            declared_stacks += 1
+            stack_max = num(r, "stack_max", i, 1, 65535)
+            if int(decl) != stack_max:
+                die("row %d (%s): stack_declared = %s, а stack_max = %d — "
+                    "объявленный автором стак обязан совпадать с рабочим. "
+                    "Столбец stack_declared существует ровно для этой сверки "
+                    "(spec 17 §5): поправьте ту ячейку, которая устарела, или "
+                    "очистите stack_declared, если объявление снято."
+                    % (i, r["id"], decl, stack_max))
 
         massG = item_mass_g(r, i)
         resolved.append((r["id"], massG))
@@ -235,6 +262,11 @@ def main():
                      % ", ".join("%s %.1f kg" % (t[0], t[1] / 1000.0) for t in heavy))
     sys.stderr.write("    lightest: %s\n"
                      % ", ".join("%s %d g" % (t[0], t[1]) for t in light))
+    # Число, а не догадка: сколько строк несёт авторское объявление стака и
+    # прошло сверку. Ноль здесь означал бы, что столбец опустел и гейт стережёт
+    # пустоту — ровно то, чего нельзя увидеть по зелёному прогону без печати.
+    sys.stderr.write("    stack_declared: %d of %d rows carry one, all agree "
+                     "with stack_max\n" % (declared_stacks, len(rows)))
     zero = [t[0] for t in resolved if t[1] == 0]
     if zero:
         sys.stderr.write("    weightless (not physical objects): %d — %s\n"
