@@ -1962,14 +1962,33 @@ if(GIGA_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION "game_test: 218768 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
-    # сигнатуры). Счётчик НЕ пинится намеренно: сценарные тесты добавляются
-    # пачками, их дрейф ловит game_test-пин; здесь пин — ноль падений.
+    # сигнатуры).
+    #
+    # СЧЁТ ТЕПЕРЬ ПИНИТСЯ ЧИСЛОМ (2026-09-30, problems.md §82.7 лечение S). До
+    # сегодня здесь стояло `[0-9]+ checks`, а комментарий оправдывал это тем, что
+    # «дрейф сценарных тестов ловит game_test-пин». Это было НЕПРАВДОЙ и по самой
+    # простой причине: `e2e_test.cpp` — отдельная единица трансляции с
+    # собственным `main()`, и game_test о ней ничего не знает. Страж
+    # неподключённых сюит (check_source_rules.cmake:794-842) тоже мимо — он
+    # смотрит `tests/suite_*.inl`, а тесты e2e определены прямо в `.cpp`.
+    # Итог: удали вызов из диспетчера — регекс `[0-9]+` сматчится, ctest зелёный,
+    # покрытие ушло. Ровно тот дефект, который в этом же файле описан как причина
+    # пинить `game_test`.
+    #
+    # 2397 наблюдено прогоном 2026-09-30, дважды подряд, одно и то же число.
+    # До сессии сноса было 2430; −33 объясняются из слагаемых: −19 строк CHECK
+    # ушли с восемью тестами ленты событий (feed_*/event_line/EventFeed снесены,
+    # см. коммит «снос 2/N»), и ещё −14 дал цикл в
+    # test_t1_f12_04_feed_line_formatting_for_all_event_types, где две проверки
+    # стояли внутри обхода по kEventTypeCount (8 итераций).
+    # `net_worth` счёта НЕ уронил: формула переехала в локальный помощник рядом с
+    # тестами, все 5 проверок сохранения живого банка на месте.
     add_executable(e2e_test tests/e2e_test.cpp)
     target_link_libraries(e2e_test PRIVATE giga_game)
     giga_target_flags(e2e_test OFF)
     add_test(NAME e2e_test COMMAND e2e_test)
     set_tests_properties(e2e_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "e2e_test: [0-9]+ checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "e2e_test: 2397 checks, 0 failures")
 
 
 
