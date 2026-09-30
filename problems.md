@@ -5339,7 +5339,9 @@ stale-байтами; флеш при этом пропускает пул сх�
 
 ### §83.5. ЧЕТЫРЕ НОВЫХ ДОЛГА, НАЗВАННЫХ ЭТИМ СНОСОМ
 
-1. **Write-only колонки `data/monster_traits.csv`.** `wet_move`, `dry_move`,
+1. **Write-only колонки `data/monster_traits.csv`.** ВЗЯТО СЛЕДУЮЩЕЙ СЕССИЕЙ по
+   выбору владельца — вход [dead-csv-columns](markoaudit/plans/dead-csv-columns.md),
+   парой с 14 мёртвыми столбцами `items.csv`. `wet_move`, `dry_move`,
    `wet_dmg`, `dry_dmg`, `wet_incoming`, `bait`, `terrain` остались авторскими
    данными без единого читателя в `src/` — ровно тот класс, ради которого заведён
    гейт `wired` (история `MobDef::projType`). Данные не выброшены сознательно:
