@@ -5148,6 +5148,54 @@ int main(int argc, char** argv) {
                                      tr_.activeEnded ? "ENDED " : "",
                                      tr_.cycleEnded ? "CYCLE " : "");
                     }
+                    // ТУМАН САМОСБОРА — ВЖИВЛЁН 2026-09-30 (решение владельца
+                    // «подключить»). До этого дня `samosbor_fog_tick` был
+                    // построен, покрыт тестами, ОТЛОЖЕН строкой в аллоулисте
+                    // [tools/check_wired.cmake] — и не звался ниоткуда, из-за
+                    // чего bugs.md Л3 «самосбор наступает пустым» был не багом,
+                    // а точным описанием: кризис менял фазу, красил экран и не
+                    // приводил НИКОГО.
+                    //
+                    // Место вызова продиктовано контрактом [mob_spawn.h]: ОДИН
+                    // безусловный вызов из того же braced-блока, что и
+                    // `samosbor_step`, до `wander_step` и `physics_step` — свежая
+                    // голова обязана получить цель и осесть в том же тике, в
+                    // котором появилась. Всё остальное (фаза, каданс, перепись,
+                    // потолок, уборка при `activeEnded`) гейтится ВНУТРИ, поэтому
+                    // здесь нет ни одного `if`: своё `if` тут и было бы вторым
+                    // законом рядом с первым.
+                    //
+                    // Якорь — носитель камеры, и это не «игрок особенный»: давление
+                    // меряется вокруг сущности, а невалидный якорь или якорь на
+                    // другом слое функция считает тихим no-op'ом сама.
+                    {
+                        const game::FogTickReport fog = game::samosbor_fog_tick(
+                            reg, activeWorld, samosbor, tr_, activeLayer, player,
+                            currentFloor,
+                            game::danger_for_hostility(
+                                spec_for_floor(currentFloor)->hostility),
+                            simTick);
+                        // Печатаем ТОЛЬКО когда что-то произошло: каданс 2 с, а
+                        // переписи ещё реже, так что строка не может залить лог —
+                        // и без неё «пришёл ли кто-нибудь из тумана» снова стало
+                        // бы недоказуемым, ровно как было до сегодня.
+                        if (fog.spawned != 0 || fog.despawned != 0) {
+                            std::fprintf(stderr,
+                                         "[fog] tick=%llu floor=%d +%u -%u "
+                                         "wander=%u target=%u headroom=%u "
+                                         "wanted=%u roster=%u\n",
+                                         static_cast<unsigned long long>(simTick),
+                                         currentFloor,
+                                         static_cast<unsigned>(fog.spawned),
+                                         static_cast<unsigned>(fog.despawned),
+                                         static_cast<unsigned>(fog.wandering),
+                                         static_cast<unsigned>(fog.target),
+                                         static_cast<unsigned>(fog.headroom),
+                                         static_cast<unsigned>(fog.wanted),
+                                         static_cast<unsigned>(fog.rosterN));
+                        }
+                    }
+
                     // The seal is ONE SHOT, not a per-tick drain. Modelled as a DoT a
                     // 15-minute samosbor at |z|=50 would deal 3600 damage instead of
                     // 4 — the correction that mattered most in the port.
@@ -5648,6 +5696,21 @@ int main(int argc, char** argv) {
                                   nav.fine(), activeLayer, simTick,
                                   &activeWorld.gravity());
                 prof_add(kProfWander, profWanderT0);
+
+                // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ
+                // ходьбы: тело уже на своей тиковой позиции, поэтому «дошёл до
+                // проёма» спрашивается один раз и по свежему месту. Дренаж
+                // doorDirty — тот же шов карва в топе кадра, которым уходит
+                // тоггл игрока; второго пути у двери нет и быть не должно.
+                if (const std::uint32_t opened = game::door_crowd_step(
+                        stack.layer(activeLayer), doors, reg, activeLayer,
+                        simTick, doorDirty)) {
+                    std::fprintf(stderr,
+                                 "[door] толпа открыла %u | tick=%llu floor=%d\n",
+                                 static_cast<unsigned>(opened),
+                                 static_cast<unsigned long long>(simTick),
+                                 currentFloor);
+                }
 
                 // Шаги игрока БОЛЬШЕ НЕ ЗДЕСЬ. Их публикует encumbrance_step —
                 // один закон на все тела, камера включительно (игрок = NPC), с

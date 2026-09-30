@@ -4,6 +4,7 @@
 
 #include "ecs/components.h"    // Transform — «тело в проёме»
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
+#include "game/embody.h"       // NpcRef — житель, который сам открывает дверь
 #include "game/floor_gen.h"    // floor_doorways, lift_entrance
 #include "game/prop_system.h"  // spawn_prop_from_id — обвес кнопки/панели
 #include "world/anchor.h"      // anchor_face_pack — честная грань обвеса
@@ -249,6 +250,30 @@ std::uint32_t door_toggle_near(World& w, Doors& doors, const Registry& reg,
         stamp_group(w, g, dirty);
     }
     return id;
+}
+
+// Стаггер толпы: выведен в [door.h] — 16 тиков против 147-тикового окна
+// досягаемости, девятикратный запас.
+static constexpr std::uint64_t kDoorCrowdStagger = 16;
+
+std::uint32_t door_crowd_step(World& w, Doors& doors, Registry& reg,
+                              LayerId layer, std::uint64_t simTick,
+                              std::vector<std::uint32_t>& dirty) {
+    if (doors.list.empty()) return 0;
+    std::uint32_t opened = 0;
+    std::uint64_t seen = 0;
+    for (auto e : reg.view<const Transform, const NpcRef>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        if (reg.all_of<Controller>(e)) continue;  // человека ведёт кнопка E
+        if (((seen++) + simTick) % kDoorCrowdStagger != 0) continue;
+        const std::uint32_t id = door_query_near(doors, t.pos);
+        if (id == kNoPortal) continue;
+        if (!door_closed(w, doors.list[id])) continue;  // открыта — не хлопать
+        if (door_toggle_near(w, doors, reg, layer, t.pos, dirty) != kNoPortal)
+            ++opened;
+    }
+    return opened;
 }
 
 bool door_close(World& w, const MaskGroup& g, const Registry& reg,

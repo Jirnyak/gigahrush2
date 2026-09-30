@@ -346,6 +346,84 @@ void door_open_rips_anchored_prop() {
     CHECK(!reg.all_of<game::StaticPropTag>(prop));
 }
 
+// ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — гейт на проводку `door_crowd_step` (вживлена
+// 2026-09-30). До неё `door_toggle_near` был построен и покрыт восемью
+// проверками ВЫШЕ — и не звался из `src/` ни разу: способность существовала
+// ровно в этом файле. Поэтому гейт проверяет не тоггл (он давно зелёный), а
+// три свойства ДРАЙВЕРА, каждое из которых можно сломать одной строкой:
+//   * закрытая дверь у жителя ОТКРЫВАЕТСЯ в пределах периода стаггера;
+//   * открытую он НЕ ЗАКРЫВАЕТ (иначе толпа хлопает дверьми друг другу);
+//   * тело с `Controller` (человек за рулём) дверь не трогает — ему кнопка E.
+void crowd_opens_doors() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    Doors d;
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    door_declare(d, fr, 0, floor_spec(FloorKind::Residential), 1337u);
+
+    Registry reg;
+    std::vector<std::uint32_t> dirty;
+    std::uint32_t id = kNoPortal;
+    for (std::uint32_t i = 0; i < d.list.size(); ++i) {
+        if (d.list[i].mechanism) continue;
+        if (!door_closed(w, d.list[i])) { id = i; break; }
+    }
+    CHECK(id != kNoPortal);
+    const MaskGroup& p = d.list[id];
+    // Тело стоит В ДОСЯГАЕМОСТИ, но НЕ В ПРОЁМЕ: 2 м = ровно соседняя клетка
+    // при `kDoorReachM` 2.6 м. Стоять в проёме нельзя не из-за драйвера, а
+    // из-за закона «не замуровываем» — `door_close` отказал бы, и гейт проверял
+    // бы отказ вместо того, что он проверяет.
+    const vec3 stand = vec3{p.centre.x + 2.0f, p.centre.y, p.centre.z};
+
+    // Закрываем её механизм-API (не тогглом: тоггл — предмет проверки выше).
+    CHECK(door_close(w, p, reg, 0, dirty));
+    CHECK(door_closed(w, p));
+
+    // ЧЕЛОВЕК ЗА РУЛЁМ у того же проёма: полный период стаггера — и дверь
+    // по-прежнему закрыта. Это отрицательная полярность гейта.
+    Entity human = reg.create();
+    reg.emplace<Transform>(human, Transform{stand, 0});
+    reg.emplace<NpcRef>(human, NpcRef{1u});
+    reg.emplace<Controller>(human, Controller{});
+    std::uint32_t openedByHuman = 0;
+    for (std::uint64_t t = 0; t < 64; ++t)
+        openedByHuman += door_crowd_step(w, d, reg, 0, t, dirty);
+    CHECK(openedByHuman == 0);
+    CHECK(door_closed(w, p));
+    reg.destroy(human);
+
+    // ЖИТЕЛЬ: та же позиция, тот же период — открывает.
+    Entity npc = reg.create();
+    reg.emplace<Transform>(npc, Transform{stand, 0});
+    reg.emplace<NpcRef>(npc, NpcRef{2u});
+    dirty.clear();
+    std::uint32_t opened = 0;
+    for (std::uint64_t t = 0; t < 64 && door_closed(w, p); ++t)
+        opened += door_crowd_step(w, d, reg, 0, t, dirty);
+    CHECK(opened == 1);
+    CHECK(!door_closed(w, p));
+    CHECK(!dirty.empty());
+
+    // И НЕ ЗАКРЫВАЕТ обратно: ещё два периода у открытой двери — ноль работы.
+    std::uint32_t again = 0;
+    for (std::uint64_t t = 0; t < 64; ++t)
+        again += door_crowd_step(w, d, reg, 0, t, dirty);
+    CHECK(again == 0);
+    CHECK(!door_closed(w, p));
+
+    // Житель на ДРУГОМ слое не дотягивается: слой — часть вопроса.
+    CHECK(door_close(w, p, reg, 0, dirty));
+    CHECK(door_closed(w, p));
+    reg.get<Transform>(npc).layer = 7;
+    std::uint32_t other = 0;
+    for (std::uint64_t t = 0; t < 64; ++t)
+        other += door_crowd_step(w, d, reg, 0, t, dirty);
+    CHECK(other == 0);
+    CHECK(door_closed(w, p));
+}
+
 } // namespace doors_test
 
 static void test_doors_all() {
@@ -355,5 +433,6 @@ static void test_doors_all() {
     doors_test::focus_aims_at_a_real_door();
     doors_test::arbitrary_shape_door();
     doors_test::lift_dressing_and_reference();
+    doors_test::crowd_opens_doors();
     std::printf("doors suite done (материя, не состояние)\n");
 }
