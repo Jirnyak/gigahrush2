@@ -43,7 +43,6 @@
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include "game/mob_table.h"
-#include "game/nav_cache.h"
 #include "game/npc_pool.h"
 #include "game/wander.h"
 #include "game/population.h"
@@ -118,12 +117,6 @@ int g_checks = 0;
 // than the asserting half.
 #include "suite_budgets.inl"
 #include "suite_prof.inl"
-// Wired 2026-07-29. This suite existed for its whole life without being included by any
-// translation unit: commit 56c9c6a added src/game/nav_cache.{cpp,h} and tests/suite_navcache.inl
-// and never touched this file, so 733 lines and 104 CHECK sites were dead text while
-// src/game/floor_stream.cpp called nav_cache on every floor load. tools/check_source_rules.cmake
-// now fails on any suite_*.inl that no tests/*.cpp includes, so this cannot recur silently.
-#include "suite_navcache.inl"
 #include "suite_lightbake.inl"
 // Wave 6 — three ports from the TypeScript original. Same self-contained-includes
 // discipline as the wave-5 block above: each reaches for headers this file never needed
@@ -147,7 +140,6 @@ int g_checks = 0;
 #include "suite_doors.inl"
 #include "suite_verbs.inl"
 #include "suite_shield.inl"
-#include "suite_goals.inl"
 #include "suite_rooms_object.inl"
 #include "suite_rebake.inl"
 #include "suite_prebuild.inl"
@@ -5261,100 +5253,13 @@ static void test_streamed_nav() {
     CHECK(std::memcmp(fn2->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
 }
 
-// The optional on-disk nav cache (C.2b): save -> load must round-trip a baked nav
-// bit-identically, and a mismatched key or a missing file must be rejected so the
-// caller falls back to baking. Cleans up its ~130 MiB artifact.
-static void test_nav_cache_roundtrip() {
-    using namespace nav;
-
-    World w;
-    generate_floor(w, /*number=*/-3, floor_spec(FloorKind::Commercial), 77u);
-    CoarseGraph g{};
-    bake_coarse(w.grid(), kBodyClearanceSub, g);
-    FineNav f;
-    bake_fine(w.grid(), kBodyClearanceSub, f);
-
-    const std::string dir = "navcache_test_tmp";
-    const std::string path = dir + "/" + nav_cache_name(-3, FloorKind::Commercial, 77u);
-    std::remove(path.c_str());
-    CHECK(save_nav_cache(path, -3, FloorKind::Commercial, 77u, g, f));
-
-    // Reload into a fresh holder: every byte matches the original bake.
-    CoarseGraph g2{};
-    FineNav f2;
-    CHECK(load_nav_cache(path, -3, FloorKind::Commercial, 77u, g2, f2));
-    CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
-    CHECK(f.flow.size() == f2.flow.size());
-    CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
-    CHECK(f.nearest.size() == f2.nearest.size());
-    CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
-
-    // Wrong seed => header mismatch => rejected (caller must re-bake).
-    CoarseGraph g3{};
-    FineNav f3;
-    CHECK(!load_nav_cache(path, -3, FloorKind::Commercial, 78u, g3, f3));
-    // Wrong kind, and a missing file, are likewise rejected.
-    CHECK(!load_nav_cache(path, -3, FloorKind::Residential, 77u, g3, f3));
-    CHECK(!load_nav_cache(dir + "/nope.bin", -3, FloorKind::Commercial, 77u, g3, f3));
-
-    std::remove(path.c_str());
-}
-
-// The cache wired into streaming (C.2b): a cache dir makes ensure_loaded write a
-// file on the first (miss) load, and READ it on the next — proven by doctoring
-// the file with a sentinel a fresh bake could never produce and seeing it survive.
-static void test_streamed_nav_cache() {
-    using namespace nav;
-
-    Registry ecs;
-    NpcPool pool;
-    pool.init();
-    FloorRegistry reg;
-    LevelStack stack;
-    FloorStreamer stream;
-    stream.init(stack, /*keepRadius=*/0);
-
-    const std::string dir = "navcache_test_tmp";
-    const std::uint32_t seed = 9001u;
-    const std::string path = dir + "/" + nav_cache_name(0, FloorKind::Residential, seed);
-    std::remove(path.c_str()); // start from a guaranteed miss
-
-    stream.set_nav_cache_dir(dir);
-    stream.add_module(reg, /*number=*/0, FloorKind::Residential, seed);
-
-    // First load: cache miss -> bakes and writes the file. The written file
-    // reloads identically to the resident nav.
-    NpcId playerId = kInvalidNpc;
-    LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
-    CHECK(r.layer != kInvalidLayer);
-    const FloorNav* fn = stream.nav_at(reg, 0);
-    CHECK(fn != nullptr);
-    CoarseGraph gchk{};
-    FineNav fchk;
-    CHECK(load_nav_cache(path, 0, FloorKind::Residential, seed, gchk, fchk));
-    CHECK(std::memcmp(&fn->coarse, &gchk, sizeof(CoarseGraph)) == 0);
-
-    stream.unload(stack, reg, ecs, pool, 0);
-
-    // Doctor the on-disk cache with an impossible sentinel (adjacent connected
-    // nodes are a small multiple of 32 apart, never 0x0BAD) and save it back under
-    // the same key. If the next load reads the cache the sentinel survives; if it
-    // re-baked, dist[0][1] would be its true small value instead.
-    CoarseGraph gdoc = gchk;
-    FineNav fdoc = fchk;
-    const Dist sentinel = 0x0BAD;
-    gdoc.dist[0][1] = sentinel;
-    CHECK(save_nav_cache(path, 0, FloorKind::Residential, seed, gdoc, fdoc));
-
-    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
-    CHECK(r2.layer != kInvalidLayer);
-    const FloorNav* fn2 = stream.nav_at(reg, 0);
-    CHECK(fn2 != nullptr);
-    CHECK(fn2->coarse.dist[0][1] == sentinel); // came from disk, not a re-bake
-
-    std::remove(path.c_str());
-}
-
+// ДИСКОВЫЙ НАВ-КЭШ (C.2b) СНЕСЁН 2026-09-30. Здесь стояли два теста —
+// round-trip файла и «поток читает кэш, а не печёт» с подложенным в файл
+// сентинелом. Оба были ЕДИНСТВЕННЫМИ вызывающими всего модуля
+// (`src/game/nav_cache.*`, 1360 строк + `suite_navcache.inl` 1319): в игре
+// `set_nav_cache_dir` не звался никогда, и ветка чтения кэша не исполнялась в
+// живом прогоне ни разу. Решение владельца — убить. problems.md §83.
+//
 // The "#10 macro tick" section that stood here is gone: its tests moved into
 // tests/suite_macrosim.inl, which carries its own seeding helpers. Its `spawn_aged`
 // helper stayed behind with no caller and was a live C4505 — and its `floor`
@@ -5808,7 +5713,6 @@ int main() {
     // kRoomAffordance. Наследник — suite_rooms_object (зоны, supply) и
     // agent-goals (хождение к целям по скором S13).
     test_budgets_all();
-    test_navcache_all();
     // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
     // quests as a layer over contracts, and NPC speech.
     test_craft_all();
@@ -5831,15 +5735,12 @@ int main() {
     test_doors_all();
     test_verbs_all();
     test_shield_all();
-    test_goals_all();
     test_rooms_object_all();
     test_rebake_all();
     test_prebuild_all();
     test_lightvis_all();
     test_route_realfloor();
     test_streamed_nav();
-    test_nav_cache_roundtrip();
-    test_streamed_nav_cache();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
     test_props_game_all();

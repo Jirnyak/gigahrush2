@@ -94,8 +94,8 @@ struct FloorModule {
     // FREE on the wire, because there is no wire: nothing serializes this struct. [save.h]
     // excludes the NPC pool from the format outright (`seed_floor_population` reproduces
     // it) and the module table is rebuilt by main's `add_module` calls, not loaded. The
-    // only field of a FloorModule that reaches a file is `number`/`kind`/`seed` as the nav
-    // cache's key ([nav_cache.h]), and this is not one of them. So no `kXxxWire`
+    // only field of a FloorModule that reaches a file is `number`/`kind`/`seed` as the
+    // save's key, and this is not one of them. So no `kXxxWire`
     // static_assert or byte count moves — and it would not anyway, NpcHandle being the
     // same uint32 an `ar.u32(...)` already wrote.
     NpcHandle candidate = kInvalidHandle; // the seed's player-designate (gen-checked)
@@ -130,10 +130,9 @@ public:
     // exactly that many layers are pushed onto `stack`. Call once, before use.
     void init(LevelStack& stack, int keepRadius = 0);
 
-    // Opt in to on-disk nav memoization (C.2b): baked nav is read from / written
-    // to `dir` keyed on each floor's (number, kind, seed). Empty (the default)
-    // disables it — every load bakes from scratch. Set once, before loading.
-    void set_nav_cache_dir(const std::string& dir) { navCacheDir_ = dir; }
+    // (`set_nav_cache_dir` СНЕСЁН 2026-09-30 вместе с [game/nav_cache.*]:
+    // единственным вызывающим был тест, то есть в игре дисковая мемоизация нава
+    // не включалась НИ РАЗУ. Каждая загрузка печёт с нуля — как и пекла.)
 
     // How a VISITED floor gets its saved geometry back.
     //
@@ -162,13 +161,11 @@ public:
     // async bake that actually feeds the game. [problems.md] §26.
     //
     // Not deleted, because it is a real feature with real coverage: the resident
-    // FloorNav is what `suite_navcache` and `test_floor_streamer_nav` assert
-    // against, and it is the only thing that exercises the on-disk nav cache.
-    // Turning it off by default gives the app the seconds back while leaving the
-    // feature — and its tests — intact. Setting a cache dir implies it, because
-    // memoizing a bake you never make is meaningless.
+    // FloorNav is what `test_floor_streamer_nav` asserts against. Turning the bake
+    // off by default gives the app the seconds back while leaving the feature —
+    // and its test — intact.
     void set_nav_bake(bool on) { navBake_ = on; }
-    bool nav_bake() const { return navBake_ || !navCacheDir_.empty(); }
+    bool nav_bake() const { return navBake_; }
 
     // Register a floor module: assign `number -> module` in `reg` and record how
     // to build it. Does NOT load it. Returns the new ModuleId, or kInvalidModule
@@ -382,7 +379,6 @@ private:
     std::unique_ptr<AntourageBake> prebuildBake_;
     float prebuildWorldMs_ = 0.0f;
     int keepRadius_ = 0;
-    std::string navCacheDir_; // empty = on-disk nav cache disabled
     bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
     std::function<bool(World&, int)> restore_;  // see set_floor_restore
 };

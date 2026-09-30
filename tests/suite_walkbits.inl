@@ -48,6 +48,19 @@
 
 namespace walkbits_test {
 
+// memcmp над CoarseGraph законен ровно потому, что в структуре нет дырок: три
+// плотно упакованных массива 2- и 1-байтовых типов, 768 + 8192 + 4096 = 13056,
+// чётно, значит и хвостового выравнивания нет. Утверждение переехало сюда
+// 2026-09-30 из снесённого `nav_cache.cpp` — к своему единственному
+// оставшемуся потребителю. Появится ли четвёртый член или появится ли padding —
+// оба случая ловятся здесь, ДО того как сверка байтов начнёт врать.
+static_assert(sizeof(nav::CoarseGraph::edge) + sizeof(nav::CoarseGraph::dist) +
+                      sizeof(nav::CoarseGraph::next) == sizeof(nav::CoarseGraph),
+              "CoarseGraph обзавёлся членом или дыркой — memcmp ниже больше не "
+              "сравнивает то, что думает, что сравнивает");
+static_assert(sizeof(nav::CoarseGraph) == 13056u,
+              "768 + 8192 + 4096 при kNodes == 64");
+
 // Законы, переписанные НЕЗАВИСИМО от продакшн-хелперов (clearance.cpp,
 // room_zone.cpp). Сьют, строящий эталон вызовом кода под тестом, доказал бы
 // лишь согласие кода с самим собой; эти функции — контракт, записанный
@@ -127,8 +140,9 @@ void nav_bake_through_field_is_bit_identical(const World& w) {
     CHECK(checked >= 3 * static_cast<int>(kMacroCells / 37)); // выборка не съёжилась
 
     // And the oracle bakes must reproduce the grid bakes byte for byte.
-    // memcmp over CoarseGraph is safe here for the reason suite_navcache.inl
-    // states: nav_cache.cpp static_asserts the struct is padding-free.
+    // memcmp over CoarseGraph is safe because the struct is padding-free —
+    // это утверждал static_assert в снесённом nav_cache.cpp, поэтому он
+    // переехал сюда, к своему единственному оставшемуся потребителю.
     nav::CoarseGraph g2;
     nav::bake_coarse(field, kBodyClearanceSub, g2);
     CHECK(std::memcmp(&g1, &g2, sizeof(nav::CoarseGraph)) == 0);

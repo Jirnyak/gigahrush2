@@ -7,7 +7,6 @@
 #include "game/ai.h"          // ai_release on unload (MotionOwner token)
 #include "game/embody.h"      // embody, embody_as_player, fold_back, NpcRef
 #include "game/floor_gen.h"   // generate_floor
-#include "game/nav_cache.h"   // nav_cache_name, save/load_nav_cache
 #include "world/clearance.h"  // ClearanceField — оракул нав-бейков (occupancy)
 #include "world/floor_awaken.h" // floor_awaken — единственный обход рождения
 #include "game/population.h"  // seed_floor_from_spec
@@ -357,36 +356,30 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // while the floor is resident (performance.md "bake at load, tick in O(1)").
     // The geometry was just rebuilt deterministically above, so this is the
     // freeze -> bake -> resume seam: the coarse next-hop graph plus the 64 flow
-    // fields + nearest-node field, ~130 MiB, all freed again in unload. With a
-    // cache dir set (C.2b) we first try the memoized bake keyed on this floor's
-    // (number, kind, seed) — a pure fn of the geometry — and only bake + write
-    // the cache on a miss.
+    // fields + nearest-node field, ~130 MiB, all freed again in unload.
+    //
+    // ДИСКОВАЯ МЕМОИЗАЦИЯ (C.2b) СНЕСЕНА 2026-09-30 вместе с [game/nav_cache.*].
+    // Она включалась `set_nav_cache_dir`, и ЕДИНСТВЕННЫМ вызывающим был тест:
+    // в игре каталог всегда оставался пустым, то есть 2 282 строки кода и сьюта
+    // обслуживали ветку, которая в живом прогоне не исполнялась ни разу. Сверх
+    // того ключ не нёс `genVersion` (в отличие от ключа сейва), а шапка модуля
+    // стояла на ложной посылке «в дереве нет рантайм-мутации вокселей» при
+    // живых карве, двери и автомате — то есть подключать пришлось бы ПОЧИНИВ.
+    // Решение владельца: убить. problems.md §83.
     //
     // GATED, and OFF by default (`set_nav_bake`): the shipping app steers off its
     // own `nav::AsyncBake` and never reads `nav_at`, so doing this here bought a
     // multi-second blocking stall per floor entry and 130 MiB, then freed the
     // result unread. [problems.md] §26.
     if (nav_bake()) {
-    auto fn = std::make_unique<FloorNav>();
-    std::string cachePath;
-    bool haveNav = false;
-    if (!navCacheDir_.empty()) {
-        cachePath = navCacheDir_ + "/" + nav_cache_name(fm.number, fm.kind, fm.seed);
-        haveNav = load_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
-                                 fn->fine);
-    }
-    if (!haveNav) {
+        auto fn = std::make_unique<FloorNav>();
         // Один оракул на оба бейка (грид читается один раз на грань), габарит
         // — тело NPC ([game/embody.h] kBodyClearanceSub, вывод там).
         ClearanceField clear;
         clear.build(stack.layer(slot).grid());
         nav::bake_coarse(clear, kBodyClearanceSub, fn->coarse);
         nav::bake_fine(clear, kBodyClearanceSub, fn->fine);
-        if (!cachePath.empty())
-            save_nav_cache(cachePath, fm.number, fm.kind, fm.seed, fn->coarse,
-                           fn->fine);
-    }
-    nav_[m] = std::move(fn);
+        nav_[m] = std::move(fn);
     }
 
     fm.bodies.clear();
