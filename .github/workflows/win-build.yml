@@ -134,7 +134,7 @@ jobs:
           Get-ChildItem -Recurse $dist | Measure-Object -Property Length -Sum |
             ForEach-Object { "packaged {0:N1} MiB" -f ($_.Sum / 1MB) } | Out-Host
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gigahrush2-win64
           path: dist/gigahrush2-win64
