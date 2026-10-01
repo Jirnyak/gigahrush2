@@ -3914,8 +3914,8 @@ int main(int argc, char** argv) {
                                      "agents %u links %u | noisy %u "
                                      "(лин %u вращ %u maxV %.3f) "
                                      "quiet-no-touch %u | будят: линк %u "
-                                     "пара %u агент %u извне %u | суставы вне "
-                                     "люфта %u maxC %.4f м решений %u | "
+                                     "пара %u агент %u извне %u | суставы выше "
+                                     "порога %u maxC %.4f м решений %u | "
                                      "bins %.3f ms "
                                      "solve %.3f ms (последний тик) | "
                                      "medium-wakes %llu (всего)\n",
