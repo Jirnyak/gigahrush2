@@ -34,20 +34,47 @@ using namespace giga;
 // обязана делать по своей прозе: катящийся мяч и скользящий ящик обязаны
 // ОСТАНОВИТЬСЯ, а не ползти вечно ниже порога сна.
 static void bench_single_body_to_rest(int seconds) {
-    struct Case { const char* name; bool box; float v0; };
-    const Case cases[] = {
-        {"мяч  качение", false, 2.0f},
-        {"мяч  тихий",   false, 0.2f},
-        {"ящик скольжение", true, 2.0f},
-        {"ящик тихий",   true, 0.2f},
+    // МАТЕРИАЛ И НАКЛОН — не декорация: темп стикции множится на µ пары, а µ
+    // поверхности выведено из твёрдости (`friction_from_hardness`), так что
+    // разброс по таблице материалов РЕАЛЬНЫЙ — 0.9 у щебня против 0.2 у
+    // неразрушимого. Мерить стикцию на одном бетоне и делать вывод «она
+    // ничего не делает» было бы тем же, чем мерить сон на одном трупе.
+    // Наклон задаётся ГРАВИТАЦИЕЙ, а не лестницей вокселей: по S1 оси
+    // равноправны, наклонная тяга на ровном полу эквивалентна склону и не
+    // вносит ступенек субвокселя в замер.
+    struct Mat { const char* name; CellType mat; };
+    const Mat mats[] = {
+        {"щебень µ0.90", kMatRubbleSoil},
+        {"бетон   µ0.75", kMatConcrete},
+        {"сталь   µ0.63", kMatDoorSteel},
+        {"скольз. µ0.20", kMatHubPad},
     };
+    struct Case { const char* name; bool box; float v0; float tiltDeg; };
+    const Case cases[] = {
+        {"мяч  качение",    false, 2.0f, 0.0f},
+        {"мяч  тихий",      false, 0.2f, 0.0f},
+        {"ящик скольжение", true,  2.0f, 0.0f},
+        {"ящик тихий",      true,  0.2f, 0.0f},
+        {"ящик НАКЛОН 10°", true,  0.0f, 10.0f},
+        {"ящик НАКЛОН 15°", true,  0.0f, 15.0f},
+        {"ящик НАКЛОН 20°", true,  0.0f, 20.0f},
+        {"ящик НАКЛОН 25°", true,  0.0f, 25.0f},
+        {"ящик НАКЛОН 35°", true,  0.0f, 35.0f},
+        {"мяч  НАКЛОН 10°", false, 0.0f, 10.0f},
+    };
+    for (const Mat& m : mats)
     for (const Case& c : cases) {
         LevelStack stack;
         LayerId g = stack.push_layer();
         World& w = stack.layer(g);
+        if (c.tiltDeg > 0.0f) {
+            const float a = c.tiltDeg * 3.14159265f / 180.0f;
+            w.gravity().global =
+                vec3{9.81f * std::sin(a), 0.0f, -9.81f * std::cos(a)};
+        }
         for (int y = 0; y < 60; ++y)
             for (int x = 0; x < 60; ++x)
-                w.grid().fill_cell(x, y, 4, kMatConcrete);
+                w.grid().fill_cell(x, y, 4, m.mat);
         Registry reg;
         const float floorTop = 5.0f * kCellSize;
         Entity e = reg.create();
@@ -74,9 +101,9 @@ static void bench_single_body_to_rest(int seconds) {
         const RigidBody& rb = reg.get<RigidBody>(e);
         const vec3 d =
             wrap_delta3(reg.get<Transform>(e).pos, p0, kWorldExtent);
-        std::printf("[покой] %-16s v0=%.1f: %s, проехало %.3f м, |v|=%.4f "
-                    "|w|r=%.4f\n",
-                    c.name, static_cast<double>(c.v0),
+        std::printf("[покой] %-14s %-16s v0=%.1f: %s, проехало %.3f м, "
+                    "|v|=%.4f |w|r=%.4f\n",
+                    m.name, c.name, static_cast<double>(c.v0),
                     sleepTick >= 0
                         ? "УСНУЛО"
                         : "НЕ УСНУЛО за весь прогон",
@@ -84,8 +111,8 @@ static void bench_single_body_to_rest(int seconds) {
                     static_cast<double>(length(reg.get<Velocity>(e).v)),
                     static_cast<double>(length(rb.w) * rb.radius));
         if (sleepTick >= 0)
-            std::printf("[покой]   уснуло на тике %d (%.2f с)\n", sleepTick,
-                        double(sleepTick) / double(kSimHz));
+            std::printf("[покой]                уснуло на тике %d (%.2f с)\n",
+                        sleepTick, double(sleepTick) / double(kSimHz));
     }
 }
 
