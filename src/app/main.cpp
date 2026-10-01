@@ -627,14 +627,23 @@ enum ProfSlot : unsigned {
     // есть `tick` его уже включает. Лежит в этой группе только по месту в
     // перечислении. 2026-10-01 я поверил группе, а не вызову, и сложил его
     // дважды — разбор хитча выдал `tick 132.2` при `sim 82.3`.
-    kProfBigJudge,    // большой суд — порция флуда/конверсии (big-judge.md)
+    kProfBigJudge,    // ТОЛЬКО big_judge_step — порция флуда/конверсии
+    // ДОЛГ ПИСАТЕЛЯ отделён от суда 2026-10-01 и вот почему. До этого один слот
+    // накрывал И суд, И всё, что платится ПОСЛЕ конверсии: mark_dirty,
+    // wake_cells, anchor_validate_step, антураж, побудку тел. Я поделил время
+    // ВСЕГО слота на узлы ТОЛЬКО флуда и получил «1.26 мкс/узел, вывод
+    // константы опровергнут в 8 раз» — §87.7, и это было НЕВЕРНО: сэмплер
+    // (`/usr/bin/sample`) не нашёл `big_judge_step` в профиле вовсе, зато
+    // вывел наверх `medium_recount` и `anchor_alive`, то есть ДОЛГ. Слот,
+    // накрывающий две разные работы, даёт верное ЧИСЛО и неверную ПРИЧИНУ.
+    kProfBigDebt,
     kProfCount
 };
 static const char* const kProfName[kProfCount] = {
     "tick",   "noise",     "diffusion", "ai",     "controller",
     "wander", "acoustics", "combat",    "physics", "rigid",
     "impact", "needs",     "focus",     "witness", "nav",
-    "big_judge"};
+    "big_judge", "big_debt"};
 // НЕ const: GIGA_PROF=1 — путь разработчика, а флаг --prof ниже включает
 // то же самое БЕЗ переменной окружения. Игроку, которого просят снять
 // профиль, нельзя выдавать инструкцию «выставь переменную среды и
@@ -3977,7 +3986,8 @@ int main(int argc, char** argv) {
                     };
                     // `big_judge` живёт ВНУТРИ тика (см. его объявление), и
                     // потому считается ребёнком `tick`, а не слагаемым кадра.
-                    float inTick = g_profFrameMs[kProfBigJudge];
+                    float inTick = g_profFrameMs[kProfBigJudge] +
+                                   g_profFrameMs[kProfBigDebt];
                     for (unsigned s = kProfNoise; s <= kProfNeeds; ++s)
                         inTick += g_profFrameMs[s];
                     float perFrame = 0.0f;
@@ -4007,6 +4017,7 @@ int main(int argc, char** argv) {
                                  static_cast<double>(g_frameMark.simMs - named));
                     n = 0;
                     put("big_judge", g_profFrameMs[kProfBigJudge]);
+                    put("big_debt", g_profFrameMs[kProfBigDebt]);
                     for (unsigned s = kProfNoise; s <= kProfNeeds; ++s)
                         put(kProfName[s], g_profFrameMs[s]);
                     std::fprintf(stderr,
@@ -5157,6 +5168,9 @@ int main(int argc, char** argv) {
                     static std::vector<std::uint32_t> bigDirty;
                     bigDirty.clear();
                     big_judge_step(stack.layer(activeLayer), bigDirty);
+                    prof_add(kProfBigJudge, profBigT0);
+                    // Отсюда и ниже — ДОЛГ ПИСАТЕЛЯ, своя строка профиля.
+                    const auto profBigDebtT0 = prof_now();
                     if (!bigDirty.empty()) {
                         voxelMirror.mark_dirty(bigDirty.data(),
                                                bigDirty.size());
@@ -5179,7 +5193,7 @@ int main(int argc, char** argv) {
                                                bigDirty.data(),
                                                bigDirty.size());
                     }
-                    prof_add(kProfBigJudge, profBigT0);
+                    prof_add(kProfBigDebt, profBigDebtT0);
                 }
                 // While the console is OPEN, WASD is text, not movement: skip
                 // the bridge and park the intent so the body does not glide on
