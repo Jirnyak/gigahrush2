@@ -2351,6 +2351,15 @@ int main(int argc, char** argv) {
     // stderr уходит в никуда.
     bool profWanted = false;
     const char* profPath = nullptr;
+    // --window-front: вернуть окну прибора обычные манеры — фокус, захват
+    // курсора, место посреди экрана. По умолчанию `--shot` ставит окно В
+    // СТОРОНУ (ниже, у SDL_CreateWindow): прибор гоняется десятками прогонов на
+    // машине, за которой в это время РАБОТАЮТ, и окно, забирающее фокус,
+    // клавиатуру и курсор, делает замер физически несовместимым с работой
+    // владельца. Флаг существует затем, что «в стороне» — это ИЗМЕНЕНИЕ УСЛОВИЙ
+    // ЗАМЕРА, и сверять «в стороне» со «спереди» надо уметь одной командной
+    // строкой, а не пересборкой (§85.1: прибор уже один раз врал СЦЕНОЙ).
+    bool windowFront = false;
     std::uint32_t mirrorFrame = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -2364,6 +2373,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
+        else if (a == "--window-front") windowFront = true;
         else if (a == "--vr" || a == "--sbs") { vrMode = true; cliVrSet = true; }
         else if (a == "--ipd" && i + 1 < argc) {
             vrIpd = std::clamp(static_cast<float>(std::atof(argv[++i])),
@@ -2454,13 +2464,38 @@ int main(int argc, char** argv) {
     const std::string shaderDir = resolve_shader_dir();
     std::fprintf(stderr, "[build] шейдеры: %s\n", shaderDir.c_str());
 
-    SDL_Window* window = SDL_CreateWindow(
-        "gigahrush2 — voxel core", kWinW, kWinH,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    // ОКНО ПРИБОРА НЕ ТРОГАЕТ РАБОЧИЙ СТОЛ. `--shot` уже заколотил ввод до
+    // камеры ([input.h] set_pinned), но это закон ВНУТРИ игры: операционная
+    // система про него не знает и честно отдаёт окну фокус, нажатия и курсор —
+    // то есть замер воровал клавиатуру и мышь у человека, который в это время
+    // работает за той же машиной. SDL_WINDOW_NOT_FOCUSABLE — тот же самый
+    // запрет, сказанный платформе.
+    const bool windowAside = shotPath && !windowFront;
+    SDL_WindowFlags winFlags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+    if (windowAside) winFlags |= SDL_WINDOW_NOT_FOCUSABLE;
+    SDL_Window* window =
+        SDL_CreateWindow("gigahrush2 — voxel core", kWinW, kWinH, winFlags);
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
+    }
+
+    // В СТОРОНУ, А НЕ СПРЯТАТЬ — и это НЕ вкусовщина. Спрятать
+    // (SDL_WINDOW_HIDDEN) нельзя по устройству снимка: он читается ИЗ
+    // SWAPCHAIN'а, headless-пути в рендерере нет вообще ([screenshot.h]), а
+    // невидимое окно macOS снимает с композитора — и тогда под вопросом и
+    // present, и частота GPU, то есть ровно измеряемая величина (§86: прибор,
+    // МЕНЯЮЩИЙ измеряемое, выглядит исправным). Поэтому окно остаётся живым и
+    // видимым, но уезжает краем за правый-нижний угол экрана: видимая полоска
+    // держит occlusion state = visible, а размер swapchain'а и число пикселей
+    // не меняются ни на один — считает GPU столько же, сколько считал.
+    if (windowAside) {
+        SDL_Rect bounds{};
+        if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &bounds)) {
+            SDL_SetWindowPosition(window, bounds.x + bounds.w - 160,
+                                  bounds.y + bounds.h - 110);
+        }
     }
 
     gpu::VulkanDevice device;
@@ -2980,8 +3015,17 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
                      "[shot] ввод заколочен — мышь/стик/клавиши до камеры не "
                      "доходят\n");
+        std::fprintf(stderr,
+                     "[shot] окно %s\n",
+                     windowAside ? "В СТОРОНЕ — без фокуса, без курсора, краем "
+                                   "за угол (отменить: --window-front)"
+                                 : "СПЕРЕДИ (--window-front): фокус и курсор "
+                                   "забраны у рабочего стола");
     }
-    SDL_SetWindowRelativeMouseMode(window, true);
+    // Курсор НЕ ЗАБИРАЕМ в режиме прибора: relative mouse mode увозит курсор с
+    // рабочего стола и держит его у себя, а до камеры прибор всё равно ввод не
+    // пускает — значит захват не делает ничего, кроме вреда оператору.
+    SDL_SetWindowRelativeMouseMode(window, !windowAside);
 
     // ОТЧЁТ О МАШИНЕ — здесь, а не сразу после device.init(): выше поднялись
     // все пассы, зеркало и текстуры, то есть сумма аллокаций наконец полная.
@@ -3327,7 +3371,22 @@ int main(int argc, char** argv) {
                 }
             }
             std::fclose(f);
-            if (fullscreenState) SDL_SetWindowFullscreen(window, true);
+            // ПОД ПРИБОРОМ ФОРМА ОКНА БЕРЁТСЯ У ХАРНЕССА, А НЕ У ОПЕРАТОРА.
+            // Один тык в «полный экран» в меню — и дальше КАЖДЫЙ `--shot`
+            // считает другое число пикселей (не 1280x720, а разрешение
+            // дисплея), молча и навсегда: файл настроек — человека, а не рана,
+            // и его не сносит ни один `rm -rf gigahrush2_save`. Это ровно
+            // §85.1 — правильное число НЕ ТОЙ сцены, только спрятанное ещё
+            // дальше: не в виде камеры, а в постороннем файле. Заодно это и
+            // есть то самое окно, растянутое поверх чужой работы.
+            if (fullscreenState && shotPath) {
+                std::fprintf(stderr,
+                             "[shot] fullscreen из gigahrush2.ui ОТКЛОНЁН — "
+                             "замер держит окно %dx%d\n",
+                             kWinW, kWinH);
+            } else if (fullscreenState) {
+                SDL_SetWindowFullscreen(window, true);
+            }
         }
     }
     // Страница настроек — ОДНА ([settings_ui.h]), из главного меню и из
@@ -10302,10 +10361,15 @@ int main(int argc, char** argv) {
                         const CameraTag& pc = reg.get<CameraTag>(player);
                         std::fprintf(stderr,
                                      "[shot-scene] floor %d  pos %.2f %.2f %.2f"
-                                     "  yaw %.3f  pitch %.3f  ввод=%s\n",
+                                     "  yaw %.3f  pitch %.3f  ввод=%s"
+                                     "  пиксели %ux%u  vr=%d crt=%d\n",
                                      currentFloor, tr.pos.x, tr.pos.y, tr.pos.z,
                                      pc.yaw, pc.pitch,
-                                     input.pinned() ? "заколочен" : "ЖИВОЙ");
+                                     input.pinned() ? "заколочен" : "ЖИВОЙ",
+                                     renderer.swap().extent.width,
+                                     renderer.swap().extent.height,
+                                     vrMode ? 1 : 0,
+                                     renderer.crtEnabled ? 1 : 0);
                     }
                     if (g_wallRing && g_wallSeen >= 64) {
                         float tmp[256];
