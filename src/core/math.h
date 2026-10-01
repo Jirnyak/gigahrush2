@@ -35,6 +35,16 @@ inline vec3 normalize(vec3 v) {
 inline float clamp01(float v) { return std::clamp(v, 0.0f, 1.0f); }
 inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
+// Hermite ease over the clamped ramp [e0, e1] — GLSL `smoothstep`. Lived as a
+// file-local helper inside `ai.cpp` until 2026-10-01, when the SPROS vector
+// ([game/place.h]) needed the same curve: two copies of one curve is the §64
+// shape (two laws about one quantity) and the reason it is here, beside
+// `clamp01`, rather than duplicated in the game layer.
+inline float smoothstep01(float e0, float e1, float v) {
+    const float x = clamp01((v - e0) / (e1 - e0));
+    return x * x * (3.0f - 2.0f * x);
+}
+
 // Unit quaternion — rigid-body orientation ([markoaudit/plans/ragdoll.md]).
 // w is the scalar part; the default is identity. Euler angles cannot integrate
 // free tumbling (gimbal lock at ±90° pitch), which is why the ragdoll core uses

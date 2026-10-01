@@ -215,16 +215,23 @@ single-writer rule this file exists to protect):
   `door_nearest_shelter` (a sealed apartment during Samosbor, §23) is tried
   FIRST, then `−diffusion_gradient(danger)`, then the remembered away-vector.
   Since `danger` is null in the shipped game the gradient never contributes.
-- **AN ERRAND OWNS THE BODY TOO** — since 2026-08-06, and this is what ended
-  "`IntentFlee` is the only owning intent", the single sentence
-  [problems.md] §27 was really about. Ownership is not a list of intents, it is
-  the question *does this intent have somewhere to go*, and the answer is a
-  TABLE: `intent_room_mask` ([room_zone.h] `kRoomAffordance`) maps an intent to
-  the room kinds that satisfy it — eat/drink → Kitchen, toilet → Bathroom,
-  sleep → Living. An intent with an answer descends that room kind's baked 128³
-  field, walks to its own SEAT inside the room, and holds still there while the
-  room's ambient recovery works. work/social/patrol are one row away and
-  deliberately not taken yet, so one behaviour change stays measurable at a time.
+- **AN ERRAND OWNS THE BODY TOO — И ЭТО ТЕПЕРЬ ДРУГАЯ СИСТЕМА.** Всё, что
+  описано в двух следующих абзацах про `intent_room_mask` / `kRoomAffordance` /
+  SEAT, **УМЕРЛО** вместе с флоу-полями по виду комнаты (rooms-object F): ни
+  одного из этих символов в дереве нет, и перепись 2026-10-01 насчитала у
+  `intent_room_mask` ровно одно вхождение — сам комментарий. Абзацы оставлены
+  как история решения, читать их как описание кода НЕЛЬЗЯ.
+  **Что вместо них с 2026-10-01** ([game/place.h], CANON S12.3/S13.2): владение
+  даёт не таблица «интент → вид комнаты», а ОДНА СУММА —
+  `Σ спрос[глагол] · предложение[глагол] − путь`. Спрос собирается из `Needs`
+  теми же кривыми давления, которыми живёт скорер (`needs_low_pressure` и
+  соседи, [needs.h]); предложение — `declared + supply` комнаты; радиус
+  кандидатов ВЫВОДИТСЯ из храповика `maxOffer` и отсекается потолками бинов.
+  Ход — отдельный проход `place_errand_step`, он стоит между `ai_patrol_step` и
+  `wander_step` и ведёт тело через `route_step`. Вида комнаты в этом нет нигде
+  (S12.2), и новый глагол — строка `data/verbs.csv`, а не ряд таблицы в коде.
+  **Чего эта система НЕ делает, и это замерено:** тело ИДЁТ, но НЕ ДОХОДИТ —
+  см. «Deferred» ниже, там теперь стоит число.
   - **MACRO vs MICRO goal.** The macro goal is `currentIntent` — chosen by the
     scorer, sticky, and already interruptible, because `select_intent` lets an
     emergency survival intent preempt without the margin. The micro goal is the
@@ -255,7 +262,36 @@ single-writer rule this file exists to protect):
 *target cell*. The baked fine flow fields aim at the elevated lattice nodes
 (`z ∈ {16,48,80,112}`, [nav.md](nav.md)), but a gravity-bound walker at the ground
 storey can't climb a shaft to reach one, so following them now would steer bodies
-into walls. Real targets — a food item, a toilet cell, a monster — arrive with the
+into walls.
+
+> **ЭТОТ АБЗАЦ ПОЛУЧИЛ ЧИСЛО 2026-10-01, И ЧИСЛО МЕНЯЕТ ЕГО ВЕС.**
+> Проза выше была верна и стояла здесь месяцами; из неё читалось «мелкий долг,
+> ждём #13». Живой прогон (`--shot --frames 9000 --floor 6`, ~800 тыс. вызовов
+> `route_step`) говорит другое:
+>
+> | ответ потока | число | доля |
+> |---|---|---|
+> | `+z` (вверх) | 637 256 | **80%** |
+> | `−z` | 10 542 | 1% |
+> | четыре горизонтальных | 151 270 | 19% |
+>
+> Следствие в поведении: у хода по делам (`place_errand_step`, [game/place.h])
+> **ПРИБЫТИЙ НОЛЬ за 108 секунд сима** при 230 идущих телах на тик. То есть это
+> не «ждём целевых клеток», а **ни один гравитационно-связанный ходок в дереве не
+> доходит до цели**, и `ai_patrol_step` живёт с тем же свойством с 2026-08 —
+> просто его прибытие никто никогда не мерил.
+>
+> Корень глубже, чем «якоря подняты»: `bake_fine` flood'ит по
+> `ClearanceField` ([clearance.h]), который отвечает «тело ВЛЕЗАЕТ в клетку» и
+> понятия ОПОРЫ не имеет, поэтому кратчайший путь к якорю законно идёт ПО
+> ВОЗДУХУ. Лечение — либо вертикальное ребро только над гранью
+> (`surface_face_at`, [surface.h]), либо второе «ходячее» поле рядом с
+> клиренсом; оба стоят бейка и решения владельца. Наряд — [problems.md] §88.
+>
+> Что сделано немедленно, потому что это была порча состояния, а не долг:
+> последняя нога «прямо на цель» больше не идёт вслепую — перед шагом стоит
+> вопрос «знает ли нав эту клетку», иначе тело выходило за проходимое множество
+> и теряло маршрут (замер лечения: брошенных целей ~240 → 11). Real targets — a food item, a toilet cell, a monster — arrive with the
 #13 content tables ([items.md](items.md) / [monsters.md](monsters.md)); once an
 intent has a reachable goal cell, `route_step` becomes its steering with **no
 change to the scorer or the FSM** (the same stubbed-input seam as §2). Until then

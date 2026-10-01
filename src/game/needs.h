@@ -72,6 +72,7 @@
 
 #include <cstdint>
 
+#include "core/math.h"        // clamp01 / smoothstep01 — кривые давления ниже
 #include "ecs/registry.h"
 #include "game/combat.h"      // DamageChannel, kDamageChannels
 #include "game/event_bus.h"
@@ -217,6 +218,31 @@ inline constexpr float kResidentPhaseMaxSec =
 static_assert(kStartWaterLo - kWaterDrainPerSec * kResidentPhaseMaxSec > 0.0f,
               "a resident must never be born already dehydrating");
 
+// --- ДАВЛЕНИЕ НУЖДЫ: ОДНА КРИВАЯ НА ВСЕХ ЧИТАТЕЛЕЙ -------------------------
+//
+// Эти три жили файловыми хелперами в анонимном пространстве `ai.cpp` (кривые
+// референса `npc_utility.ts`, дословно) и переехали сюда 2026-10-01, когда у
+// них появился ВТОРОЙ читатель — вектор спроса агента ([game/place.h],
+// CANON S12.3 четвёртый стол словаря глаголов).
+//
+// Почему переезд, а не копия: интент-арбитр (`score_intents`) и выбор МЕСТА
+// обязаны понимать «насколько я голоден» ОДНИМ числом. Две кривые над одной
+// величиной — ровно форма §64 (два закона об одном взаимном положении,
+// различающиеся единицами = гарантированный предельный цикл): тело решало бы
+// «хочу есть» по одной кривой, а место под это «хочу» выбирало бы по другой.
+// Здесь они потому, что величина — это `Needs`, а не ИИ.
+//
+// Единицы: на входе шкала 0..100 самой колонки, на выходе ВСЕГДА 0..1.
+inline float needs_low_pressure(float v) { // резерв к нулю -> к единице
+    return smoothstep01(0.18f, 0.82f, clamp01((72.0f - v) / 72.0f));
+}
+inline float needs_high_pressure(float v) { // давление к капу -> к единице
+    return smoothstep01(0.35f, 0.90f, clamp01(v / kNeedMax));
+}
+inline float needs_health_pressure(float hp, float maxHp) { // 0 на полном HP
+    return maxHp > 0.0f ? clamp01(1.0f - hp / maxHp) : 0.0f;
+}
+
 // One byte answers the HUD, the warning line and the damage sum at once.
 enum NeedBit : std::uint8_t {
     NeedFood  = 1u << 0,
@@ -250,6 +276,20 @@ struct NeedsTick {
 // Deterministic in `seed`, so a record gets the same body across a save/load rather
 // than a fresh roll each session.
 Needs needs_roll(std::uint32_t seed);
+
+// Строка нужд, КОТОРУЮ СЛЕДУЕТ ЧИТАТЬ решателю, — и она одна на всех решателей.
+//
+// Непросеянная строка (`seeded == 0`) есть все нули, а нули кривые выше читают
+// как «голоден, обезвожен И не спал» — то есть вся толпа встала бы на еду. До
+// 2026-10-01 подстановка жила файловым хелпером `needs_for` в анонимном
+// пространстве `ai.cpp`; второй читатель (вектор спроса, [game/place.h])
+// обязан подставлять ТО ЖЕ, иначе интент «хочу есть» и выбор места под это
+// «хочу» считались бы по разным строкам одного тела.
+//
+// Подстановка ЛОКАЛЬНА: обратно в пул не пишется ничего, поэтому решатель
+// по-прежнему не мутирует общего состояния и невидим для сейва. Пул берётся
+// по изменяемой ссылке только потому, что у `NpcPool::needs` нет const-формы.
+Needs needs_row_for(NpcPool& pool, NpcId id);
 
 // The same roll, then advanced to a hashed point of that body's own day — see
 // `kResidentPhaseMaxSec`. Deterministic in `seed` like the roll it wraps, and built

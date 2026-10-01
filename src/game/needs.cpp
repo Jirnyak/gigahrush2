@@ -166,6 +166,18 @@ Needs needs_roll(std::uint32_t seed) {
     return n;
 }
 
+// Salt for the substitute needs roll. Distinct from every other hash stream so
+// the substituted values are uncorrelated with worldgen and the macro tick.
+// Приехал из анонимного пространства `ai.cpp` вместе с `needs_for` 2026-10-01 —
+// значение то же, поэтому ни одно решение ни одного тела не сдвинулось.
+inline constexpr std::uint32_t kSaltNeedsSubstitute = 0x0a1eed5u;
+
+Needs needs_row_for(NpcPool& pool, NpcId id) {
+    const Needs& row = pool.needs(id);
+    if (row.seeded != 0) return row;
+    return needs_roll(giga::hash2(id, kSaltNeedsSubstitute));
+}
+
 Needs needs_roll_resident(std::uint32_t seed) {
     Needs n = needs_roll(seed);
     // Built by RUNNING the real clock rather than by inventing a second set of

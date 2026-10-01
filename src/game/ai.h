@@ -46,6 +46,19 @@
 //                        so the overlap is a handful of bodies per tick — and because
 //                        it runs LAST the symptom is not vibration but a flee that is
 //                        silently cancelled: the AI's write is simply discarded.
+//   place_errand_step  src/game/place.cpp       view<AiBrain, NpcRef, Transform, Velocity>
+//                     -> ДОБАВЛЕН 2026-10-01. Ход по делам: Σ спрос·предложение
+//                        − путь выбирает КОМНАТУ, и этот проход ведёт тело к ней
+//                        ([game/place.h], CANON S13.2). Играет по тем же
+//                        правилам, что патруль: пропускает тело, уже взятое
+//                        токеном (бегство или наряд), и ЗАБИРАЕТ токен сам, так
+//                        что wander_step и faction_feud_step его пропускают.
+//                        Стоит между ai_patrol_step и wander_step, и цепочка
+//                        арбитража теперь читается так:
+//                            бегство -> патруль -> ДЕЛО -> прогулка.
+//                        Токен забирается ТОЛЬКО когда направление уже есть:
+//                        тело под токеном без записи скорости не ведётся никем,
+//                        то есть ЗАМИРАЕТ, и на этом я поймал себя при посадке.
 //   one-shot, not per-tick: embody.cpp / mob_spawn.cpp / loot.cpp emplace a
 //                        zeroed Velocity at creation; combat.cpp emplaces a
 //                        projectile's launch velocity; save.cpp zeroes on load.

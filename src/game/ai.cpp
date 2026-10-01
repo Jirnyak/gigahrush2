@@ -38,24 +38,10 @@ inline float clamp_score(float s) {
     return s < 0.0f ? 0.0f : (s > 100.0f ? 100.0f : s);
 }
 
-// smoothstep(e0, e1, v) — Hermite ease over the clamped ramp.
-inline float smoothstep01(float e0, float e1, float v) {
-    const float x = giga::clamp01((v - e0) / (e1 - e0));
-    return x * x * (3.0f - 2.0f * x);
-}
-
-// Reserve pressure: a low reserve (v -> 0) maps toward 1.
-inline float low_need_pressure(float v) {
-    return smoothstep01(0.18f, 0.82f, giga::clamp01((72.0f - v) / 72.0f));
-}
-// Bladder pressure: a full column (v -> 100) maps toward 1.
-inline float high_need_pressure(float v) {
-    return smoothstep01(0.35f, 0.90f, giga::clamp01(v / 100.0f));
-}
-// Health pressure: 0 at full HP, 1 at 0 HP.
-inline float health_pressure(float hp, float maxHp) {
-    return maxHp > 0.0f ? giga::clamp01(1.0f - hp / maxHp) : 0.0f;
-}
+// ТРИ КРИВЫЕ ДАВЛЕНИЯ ПЕРЕЕХАЛИ в [game/needs.h] 2026-10-01 (`smoothstep01` —
+// в [core/math.h]). Повод: у них появился второй читатель — вектор спроса
+// агента ([game/place.h]), а две кривые над одной величиной есть форма §64.
+// Здесь остаются только те хелперы, что принадлежат СКОРЕРУ, а не нужде.
 
 // Normalise a heterogeneous "unit-ish" input to [0,1] by magnitude band:
 // <=1 already unit, <=100 percent, else byte.
@@ -93,37 +79,17 @@ inline float compute_threat_pressure(const Perception& p) {
     return giga::clamp01(s);
 }
 
-// Salt for the substitute needs roll. Distinct from every other hash stream so
-// the substituted values are uncorrelated with worldgen and the macro tick.
-inline constexpr std::uint32_t kSaltNeedsSubstitute = 0x0a1eed5u;
-
-// The needs the scorer should read for `id`.
+// ПОДСТАНОВКА НЕПРОСЕЯННОЙ СТРОКИ ПЕРЕЕХАЛА в [game/needs.h] 2026-10-01 как
+// `needs_row_for` — тем же доводом, что и кривые давления: у неё появился второй
+// читатель (вектор спроса, [game/place.h]), а две подстановки над одной строкой
+// одного тела дали бы интент «хочу есть» от одной строки и выбор места от
+// другой. Соль и мешалка те же, поэтому ни одно решение не сдвинулось.
 //
-// A crowd record's row is almost always `seeded == 0`, i.e. all zeros — which the
-// pressure curves read as starving, parched AND exhausted, and would peg the
-// entire crowd on eat/drink/sleep forever. [needs.h] deliberately refuses to
-// advance the crowd's survival clock ("the honest slice is the clock belongs to
-// the body you are playing"), so the row will stay unseeded until that decision
-// is revisited.
-//
-// So an unseeded row is SUBSTITUTED by a deterministic roll from the record id —
-// giving each body a stable, plausible personality bias instead of a uniform
-// crisis — and the substitute is LOCAL. Nothing is written back: `ai_step`
-// mutates no shared state but its own AiBrain and Velocity, which is what keeps
-// it safe to run alongside `needs_step` (which owns that row for the camera
-// holder) and invisible to the save system.
-//
-// Divergence worth knowing: this roll is NOT byte-identical to `needs_step`'s
-// lazy seed, because that one uses needs.cpp's internal mixer. It does not need
-// to be — the two never apply to the same body at the same time (needs_step
-// seeds only the camera holder, which is out of this system's scope).
-// Takes a mutable pool only because `NpcPool::needs` has no const overload; the
-// row is READ and copied, never assigned to.
-inline Needs needs_for(NpcPool& pool, NpcId id) {
-    const Needs& row = pool.needs(id);
-    if (row.seeded != 0) return row;
-    return needs_roll(hash2(id, kSaltNeedsSubstitute));
-}
+// Расхождение, которое стоит знать и которое переезд НЕ лечит: этот ролл не
+// байт-в-байт `needs_step`-овский ленивый сев (тот берёт внутреннюю мешалку
+// needs.cpp). Это законно — подстановка работает только там, где строка
+// НЕ просеяна, а `needs_step` просеивает каждое воплощённое тело этажа, так
+// что на одном теле два пути не встречаются.
 
 // --- Remembered site -> the intent it affords -------------------------------
 // A table rather than a switch, so adding a MemoryKind is one row and no control
@@ -155,12 +121,12 @@ void score_intents(const Perception& p, const Needs& needs,
     const FactionTraits& tr = faction_traits(p.faction);
 
     const float threat = compute_threat_pressure(p);
-    const float hpP = health_pressure(p.hp, p.maxHp);
-    const float toiletP =
-        std::max(high_need_pressure(needs.pee), high_need_pressure(needs.poo));
-    const float drinkP = low_need_pressure(needs.water);
-    const float eatP = low_need_pressure(needs.food);
-    const float sleepP = low_need_pressure(needs.sleep);
+    const float hpP = needs_health_pressure(p.hp, p.maxHp);
+    const float toiletP = std::max(needs_high_pressure(needs.pee),
+                                   needs_high_pressure(needs.poo));
+    const float drinkP = needs_low_pressure(needs.water);
+    const float eatP = needs_low_pressure(needs.food);
+    const float sleepP = needs_low_pressure(needs.sleep);
     const float urgent = std::max(std::max(std::max(toiletP, drinkP), std::max(eatP, sleepP)), hpP);
 
     const float vhp = giga::clamp01(p.visibleHostiles / 4.0f);
@@ -630,13 +596,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // from the previous body; `haveRecall` is what gates every read.
     MemoryRecall recall;
 
-    // This tick's seat claims ([problems.md] §27): a transient list, no owner
-    // column, no handshake. Sized for the embodied window (~64 bodies on errands),
-    // not the pool; overflow degrades to the pre-claims shared seat, never UB.
-    constexpr int kSeatClaimCap = 128;
-    constexpr int kSeatClaimAttempts = 8;
-    std::uint32_t seatClaims[kSeatClaimCap];
-    int numSeatClaims = 0;
+    // ЗАЯВКИ НА МЕСТО СНЕСЕНЫ 2026-10-01. 512 Б стека на каждый вызов и три
+    // предупреждения сборки держались здесь с тех пор, как эрранд-ветка умерла
+    // вместе с flow-полями по виду комнаты (rooms-object F): массив не писался
+    // и не читался НИ ОДНОЙ строкой — перепись намерила 4 вхождения, все
+    // объявления (SKELETON.md VIII.6). Микроуровень (какой стул занять) вернёт
+    // S13.4 тем же скором на пропах комнаты, а не этим массивом.
 
     // One allocation-free sweep over the packed columns. Nothing here emplaces or
     // destroys a component, so the view cannot be invalidated mid-iteration —
@@ -781,7 +746,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // Every other Perception field stays at its stubbed default, so its
             // scorer term contributes 0 — the faithful-port invariant.
 
-            const Needs needs = needs_for(pool, id);
+            const Needs needs = needs_row_for(pool, id);
             float scores[kIntentCount];
             score_intents(p, needs, scores);
 

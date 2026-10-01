@@ -103,6 +103,7 @@ struct Room {
 // Ребро 4 давало бы ×8 бинов и мегабайты потолков ради разрешения
 // отсечки в 4 клетки — гейт B (< 0.1 мс) того не требует.
 inline constexpr int kRoomBinShift = 3;
+inline constexpr int kRoomBinEdge = 1 << kRoomBinShift;        // 8 клеток = 16 м
 inline constexpr int kRoomBinDim = kMacroDim >> kRoomBinShift; // 128 >> 3 = 16
 inline constexpr std::size_t kRoomBinCount =
     static_cast<std::size_t>(kRoomBinDim) * kRoomBinDim * kRoomBinDim;

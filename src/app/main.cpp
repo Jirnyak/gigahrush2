@@ -5348,13 +5348,20 @@ int main(int argc, char** argv) {
                     // ровно перебором всех 14742 комнат, и единственное, что
                     // отличает отсечку работающую от объявленной, — счёт.
                     std::fprintf(stderr,
-                                 "[place] STEP tick=%llu seen=%u pick=%u walk=%u "
-                                 "arrive=%u unreach=%u idle=%u judged=%u bins=%u\n",
+                                 // Тег `[errand]`, а НЕ `[place]`: последний уже
+                                 // занят отладкой расстановки тел в
+                                 // `src/game/save.cpp` («[place] MOVE body»), и
+                                 // живой прогон 2026-10-01 выдал 245 её строк —
+                                 // пульс дела утонул бы в них, а замер стал бы
+                                 // неоднозначным ровно тем способом, которым
+                                 // прибор врёт СЦЕНОЙ (§85).
+                                 "[errand] STEP tick=%llu seen=%u pick=%u walk=%u "
+                                 "arrive=%u unreach=%u offnav=%u idle=%u judged=%u bins=%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  placeTick.considered, placeTick.picked,
                                  placeTick.walking, placeTick.arrived,
-                                 placeTick.unreachable, placeTick.idle,
-                                 placeTick.judged, placeTick.bins);
+                                 placeTick.unreachable, placeTick.offnav,
+                                 placeTick.idle, placeTick.judged, placeTick.bins);
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u "
@@ -8486,11 +8493,11 @@ int main(int argc, char** argv) {
                 // `pick` считает выборы места суммой спрос·предложение, `walk`
                 // — тела, которые проход ведёт сам, `judged` — цену запроса.
                 ImGui::Text("дело | %u seen / %u pick / %u walk / %u arrive"
-                            " | %u unreach / %u idle | %u judged / %u bins",
+                            " | %u unreach / %u offnav / %u idle | %u judged",
                             placeTick.considered, placeTick.picked,
                             placeTick.walking, placeTick.arrived,
-                            placeTick.unreachable, placeTick.idle,
-                            placeTick.judged, placeTick.bins);
+                            placeTick.unreachable, placeTick.offnav,
+                            placeTick.idle, placeTick.judged);
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.

@@ -141,6 +141,7 @@ int g_checks = 0;
 #include "suite_verbs.inl"
 #include "suite_shield.inl"
 #include "suite_rooms_object.inl"
+#include "suite_place.inl"  // звено спрос·предложение (S12.3/S13.2)
 #include "suite_rebake.inl"
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
@@ -5726,6 +5727,7 @@ int main() {
     test_verbs_all();
     test_shield_all();
     test_rooms_object_all();
+    test_place_all();
     test_rebake_all();
     test_prebuild_all();
     test_lightvis_all();
