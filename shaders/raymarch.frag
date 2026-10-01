@@ -252,7 +252,7 @@ struct Hit {
 // видна ДО рендера сред (инкремент 6: прозрачность/поверхность). Обычные
 // клетки (класс 2) не платят этот фетч вовсе.
 bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
-                float t0, float t1, int axisIn, bool matter, inout Hit h) {
+                float t0, float t1, int axisIn, bool matter, out Hit h) {
     vec3 e = ro + rd * (t0 + 1e-5);
     ivec3 s = clamp(ivec3(floor((e - cellLo) / kVoxel)), ivec3(0), ivec3(7));
     vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kVoxel;
@@ -346,13 +346,14 @@ const float kMarchOpaque = 1.0;
 
 Hit march(vec3 ro, vec3 rd, float tCap) {
     const float measure = pc.fog.z;
+    // `h` НЕ ЗАПОЛНЯЕТСЯ ДО ЦИКЛА, и это не стиль, а цена кадра. Промах
+    // собирается ПОСЛЕ цикла (единственный выход, где он нужен), а `march_cell`
+    // объявлен `out`, а не `inout`, — он в `h` только пишет, ни одного чтения.
+    // Вместе это снимает девять полей попадания с удержания через все 224
+    // итерации: при `inout` компилятор обязан считать их живыми на каждом
+    // вызове. Почему это дорого — §86: одна лишняя живая `Hit` в этом цикле
+    // стоила +67% марша, и здесь та же форма жила в боевом коде.
     Hit h;
-    h.ok = false;
-    h.t = tCap;
-    h.n = vec3(0.0, 0.0, 1.0);
-    h.mat = 0u;
-    h.ci = 0u;
-    h.sub = ivec3(0);
 
     // Degenerate components poison 1/rd with NaNs at exact cell boundaries.
     rd.x = abs(rd.x) < 1e-6 ? (rd.x >= 0.0 ? 1e-6 : -1e-6) : rd.x;
@@ -422,6 +423,14 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
         c[axis] += stp[axis];
         tMax[axis] += tDelta[axis];
     }
+    // ПРОМАХ. Поля ровно те, что раньше стояли предзаполнением: вызывающий
+    // читает `t` для тумана фона, остальное — нули.
+    h.t = tCap;
+    h.n = vec3(0.0, 0.0, 1.0);
+    h.mat = 0u;
+    h.ci = 0u;
+    h.sub = ivec3(0);
+    h.ok = false;
     return h;
 }
 
