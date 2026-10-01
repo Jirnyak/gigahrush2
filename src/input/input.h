@@ -39,6 +39,20 @@ public:
     void set_mouselook(bool on) { mouselook_ = on; }
     bool mouselook() const { return mouselook_; }
 
+    // ЗАКОЛОЧЕННЫЙ ВВОД — только для `--shot`: харнесс ИЗМЕРЯЕТ, а не играет,
+    // и физический ввод в нём по определению шум. Поставлено 2026-10-01 при
+    // разложении `raster`: два прогона с одинаковой командной строкой дали
+    // 9.010 и 3.800 мс, потому что во втором камера УЕХАЛА ВНИЗ — мышь, стик
+    // или клавиша дотянулись до окна, пока прогоны шли подряд. Вид решает
+    // цену марша напрямую, так что без этого замка разностное разложение
+    // меряет не пассы, а то, куда смотрел никто.
+    //
+    // Гасится здесь, а не одним `set_mouselook(false)` в main: mouselook
+    // переключают два десятка мест (окна, диалоги, лифт), и любое из них
+    // вернуло бы ввод посреди замера.
+    void set_pinned(bool on) { pinned_ = on; }
+    bool pinned() const { return pinned_; }
+
     // Есть ли подключённый геймпад (строка «поддерживаемые устройства» на
     // странице Стима и ветка худа с подсказками кнопок).
     bool gamepad_connected() const { return gamepad_ != nullptr; }
@@ -49,10 +63,12 @@ public:
     // Гейт по mouselook_ здесь тот же, что у осей: пока открыто окно, ввод до
     // боя не доходит — иначе триггер бьёт сквозь инвентарь.
     bool hand_left_held() const {
-        return mouselook_ && game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handL;
+        return mouselook_ && !pinned_ &&
+               game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handL;
     }
     bool hand_right_held() const {
-        return mouselook_ && game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handR;
+        return mouselook_ && !pinned_ &&
+               game::gamepad_fold(gamepadAxes_, false, 0.0f, 0.0f).handR;
     }
 
     // The held movement keys, from the keybinding table ([keybind.h]). The app
@@ -89,6 +105,7 @@ public:
 
 private:
     bool mouselook_ = false;
+    bool pinned_ = false; // --shot: ввод заколочен, см. set_pinned
     float mouseDx_ = 0.0f;
     float mouseDy_ = 0.0f;
     float sensitivity_ = 0.0025f;

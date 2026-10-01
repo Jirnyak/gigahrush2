@@ -173,7 +173,7 @@ game::PlayerCommand InputState::build_command(Registry& reg, Entity avatar,
     // or menus are open), movement intent is strictly zeroed to prevent input bleeding.
     // Гейт один на все устройства: стик и триггер утекают сквозь открытое окно
     // ровно так же, как утекала бы клавиша.
-    if (mouselook_) {
+    if (mouselook_ && !pinned_) {
         cmd.yaw -= mouseDx_ * sensitivity_ + pad.yawDelta;
         cmd.pitch -= mouseDy_ * sensitivity_ + pad.pitchDelta;
 

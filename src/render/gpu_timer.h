@@ -91,6 +91,51 @@ enum class GpuPass : std::uint32_t {
 inline constexpr std::uint32_t kGpuPassCount =
     static_cast<std::uint32_t>(GpuPass::kCount);
 
+// ---- ЧТО ЭТА СКОБКА ВООБЩЕ МЕРИТ, И ЧЕМ ЕЁ РАЗЛОЖИТЬ -----------------------
+// Три таблицы стоят ЗДЕСЬ, рядом с enum, а не в месте печати: до 2026-10-01
+// они жили локальными массивами в `main.cpp`, и одна из них уже разъехалась с
+// правдой (ниже).
+//
+// kPassInsideRenderPass — скобка стоит ВНУТРИ рендер-пасса, то есть на тайловом
+// GPU (Apple/MoltenVK) она меряет ПУСТОТУ: фрагментная работа исполняется вся
+// на vkCmdEndRenderPass и падает в скобку целого пасса.
+//
+// kPassSkipName — имя тумблера `GIGA_SKIP`, которым пасс выключается. Для
+// скобки-пустышки это ЕДИНСТВЕННЫЙ способ узнать её цену: дельта целого пасса
+// при выключении. Нет тумблера — слагаемое не измеримо НИКАК, и агрегат
+// обязан остаться неразложенным; именно это и стоило §67.2 полутора месяцев
+// чтения строки «world 0.002 мс» как «марш бесплатен».
+//
+// ПОПРАВКА ТОЙ ЖЕ ДАТЫ, найдена замером: `Hud` помечался «работа в raster» и
+// это было НЕВЕРНО. Его скобка открывается ПОСЛЕ pass_end(Raster), внутри
+// пост-пасса, поэтому его работа падает не в raster, а в остаток
+// «frame − Σ скобок» — замеренный остаток на этаже 6 составил 0.03 мс при
+// кадре 11.49. То есть raster = world+bodies+props+drawphys, без hud.
+inline constexpr bool kPassInsideRenderPass[kGpuPassCount] = {
+    false, false, false, false, // lightgrid, voxelflush, cull, sim — компьют
+    true,  true,  true,  true,  // world, bodies, props, drawphys — в raster
+    false,                      // hud — в ПОСТ-пассе, см. поправку выше
+    false, false};              // light, raster — целые пассы, честны везде
+inline constexpr const char* kPassSkipName[kGpuPassCount] = {
+    "lightgrid", nullptr,  nullptr, nullptr,
+    "world",     "bodies", "props", "physdraw",
+    nullptr,
+    "world", // световой полупасс гасится ТЕМ ЖЕ тумблером, что марш: шейдер
+             // один, и раздельного выключения у него нет
+    nullptr};
+
+// ГЕЙТ, КОТОРЫЙ НЕВОЗМОЖНО СОБРАТЬ В НАРУШЕННОМ ВИДЕ. Новая скобка внутри
+// рендер-пасса без тумблера `GIGA_SKIP` — это новое слагаемое агрегата
+// `raster`, которое никто и ничем не сможет померить на маке. Раньше такое
+// добавление проходило молча; теперь оно не собирается.
+static_assert([] {
+    for (std::uint32_t p = 0; p < kGpuPassCount; ++p)
+        if (kPassInsideRenderPass[p] && kPassSkipName[p] == nullptr) return false;
+    return true;
+}(), "скобка внутри рендер-пасса обязана иметь тумблер GIGA_SKIP — иначе её "
+     "вклад в raster не измерим ни таймером (меряет пустоту на тайлере), ни "
+     "разностью (нечего выключить)");
+
 // Timestamps per frame slot: one at the top of the command buffer, one at the
 // bottom, and a begin/end pair per pass.
 inline constexpr std::uint32_t kGpuMarksPerFrame = 2 + 2 * kGpuPassCount;

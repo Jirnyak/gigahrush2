@@ -2936,6 +2936,13 @@ int main(int argc, char** argv) {
     // it (freeing the cursor for the HUD); holding the right mouse button also
     // engages look while held.
     input.set_mouselook(true);
+    // --shot — прибор: физический ввод заколочен целиком ([input.h] set_pinned).
+    if (shotPath) {
+        input.set_pinned(true);
+        std::fprintf(stderr,
+                     "[shot] ввод заколочен — мышь/стик/клавиши до камеры не "
+                     "доходят\n");
+    }
     SDL_SetWindowRelativeMouseMode(window, true);
 
     // ОТЧЁТ О МАШИНЕ — здесь, а не сразу после device.init(): выше поднялись
@@ -4170,6 +4177,21 @@ int main(int argc, char** argv) {
             // одновременных перехода делят два физических слота и мир под
             // закрытыми дверьми — гонка по построению.
             if (liftRide == LiftRide::Idle) do_ride(/*absolute=*/true, dst, hub);
+            // --shot --floor N --pos/--yaw/--pitch: КАМЕРА ПЕРЕСТАВЛЯЕТСЯ И
+            // ПОСЛЕ ПРЫЖКА. До 2026-10-01 ключи действовали только на старте
+            // (floor 0), а после телепорта камеру задавало место высадки плюс
+            // падение тела — и ДВА одинаковых прогона на этаже 6 дали raster
+            // 6.6 и 8.8 мс. Разброс вида больше любой разницы, которую здесь
+            // меряют: без закрепления вида разностное разложение `raster`
+            // (GIGA_SKIP) не имеет смысла по построению.
+            if (shotPath && reg.valid(player)) {
+                if (hasCustomPos) reg.get<Transform>(player).pos = customPos;
+                if (hasCustomAng) {
+                    auto& cam = reg.get<CameraTag>(player);
+                    cam.yaw = customYaw;
+                    cam.pitch = customPitch;
+                }
+            }
         }
         // Консоль заспавнила якорный проп (cmd_prop) — та же безопасная
         // точка, что телепорт: шкура PropPass перестраивается этим кадром,
@@ -4538,8 +4560,22 @@ int main(int argc, char** argv) {
                 return (reqs & game::request_bit(r)) != 0;
             };
             if (has(ConsoleRequest::Quit)) running = false;
-            if (has(ConsoleRequest::Menu) &&
-                (shell.screen == AppScreen::Playing || shell.screen == AppScreen::Pause)) {
+            // --shot — ПРИБОР, а не игра: пауза под ним ЗАПРЕЩЕНА и слышна.
+            // Поймано 2026-10-01 при разложении raster: в прогонах харнесса
+            // меню «ПАУЗА» всплывало САМО (стрэй-Escape при смене фокуса окна,
+            // прогоны идут подряд) — и замер молча снимался с замороженного
+            // мира под полупрозрачной панелью, то есть прибор печатал честное
+            // число НЕ ТОЙ СЦЕНЫ. Ровно класс «прибор врёт молчанием».
+            // Гасим здесь, а не в биндах: источник события неизвестен, а
+            // запрет обязан стоять на ЕДИНСТВЕННОЙ точке смены экрана.
+            if (shotPath && has(ConsoleRequest::Menu)) {
+                std::fprintf(stderr,
+                             "[shot] пауза ОТКЛОНЕНА — измеряем, а не играем "
+                             "(кадр %d)\n",
+                             shotFramesSeen);
+            } else if (has(ConsoleRequest::Menu) &&
+                       (shell.screen == AppScreen::Playing ||
+                        shell.screen == AppScreen::Pause)) {
                 // Esc: открытое окно закрывается ПЕРВЫМ, пауза — вторым; один
                 // источник истины делает порядок выразимым одной веткой.
                 // Pausing frees the cursor so the menu is clickable and the OS
@@ -10172,25 +10208,32 @@ int main(int argc, char** argv) {
                         static_assert(sizeof(kPassName) / sizeof(kPassName[0]) ==
                                           gpu::kGpuPassCount,
                                       "имена пассов == enum");
-                        // Скобки ВНУТРИ рендер-пасса (world..hud) на тайловом
-                        // GPU меряют пустоту — фрагментная работа исполняется
-                        // вся на vkCmdEndRenderPass ([gpu_timer.h] GpuPass).
+                        // Скобки ВНУТРИ рендер-пасса на тайловом GPU меряют
+                        // пустоту — фрагментная работа исполняется вся на
+                        // vkCmdEndRenderPass ([gpu_timer.h] GpuPass).
                         // «world 0.002 мс при кадре 12.7» — не сломанный
                         // таймер, а свойство архитектуры; честные строки там —
                         // light/raster (целые пассы). Помечаем, чтобы свод
-                        // нельзя было прочитать как «марш бесплатен».
+                        // нельзя было прочитать как «марш бесплатен», и ТУТ ЖЕ
+                        // называем тумблер, которым слагаемое меряется
+                        // разностью: иначе пометка говорит «не верь числу» и не
+                        // говорит, чем его добыть. Обе таблицы — общие
+                        // ([gpu_timer.h]), локальная копия здесь разъехалась с
+                        // правдой по `hud` и это нашлось только замером.
                         const bool tiler =
 #ifdef __APPLE__
                             true;
 #else
                             false;
 #endif
-                        const bool inPass[gpu::kGpuPassCount] = {
-                            false, false, false, false,  // lightgrid..sim
-                            true,  true,  true,  true,   // world..drawphys
-                            true,                        // hud
-                            false, false};               // light, raster
-                        for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p)
+                        for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p) {
+                            char mark[96] = "";
+                            if (tiler && gpu::kPassInsideRenderPass[p])
+                                std::snprintf(
+                                    mark, sizeof(mark),
+                                    "  [in-pass: цена = дельта raster при "
+                                    "GIGA_SKIP=%s]",
+                                    gpu::kPassSkipName[p]);
                             std::fprintf(
                                 stderr, "[gpu-shot] %-10s %8.3f ms  peak %8.3f%s\n",
                                 kPassName[p],
@@ -10198,15 +10241,32 @@ int main(int argc, char** argv) {
                                     static_cast<gpu::GpuPass>(p)),
                                 renderer.timer.pass_ms_max(
                                     static_cast<gpu::GpuPass>(p)),
-                                (tiler && inPass[p])
-                                    ? "  [in-pass: на тайлере работа в raster]"
-                                    : "");
+                                mark);
+                        }
                         std::fprintf(stderr,
                                      "[gpu-shot] frame      %8.3f ms  peak %8.3f"
                                      "  drop %u\n",
                                      renderer.timer.frame_ms(),
                                      renderer.timer.frame_ms_max(),
                                      renderer.timer.dropped());
+                    }
+                    // СЦЕНА, НА КОТОРОЙ СНЯТЫ ЭТИ ЧИСЛА. Печатается всегда и
+                    // рядом с ними, потому что цена кадра здесь определяется
+                    // ВИДОМ: марш — 84% растера, а длина луча задаётся тем,
+                    // куда смотрит камера. 2026-10-01 два прогона с ОДНОЙ
+                    // командной строкой дали raster 9.010 и 3.800 мс — во
+                    // втором камера уехала в пол. Числа были честные, сцена
+                    // разная, и отличить это по выводу было НЕЧЕМ.
+                    // Два прогона сравнимы, только если эта строка совпала.
+                    if (reg.valid(player)) {
+                        const Transform& tr = reg.get<Transform>(player);
+                        const CameraTag& pc = reg.get<CameraTag>(player);
+                        std::fprintf(stderr,
+                                     "[shot-scene] floor %d  pos %.2f %.2f %.2f"
+                                     "  yaw %.3f  pitch %.3f  ввод=%s\n",
+                                     currentFloor, tr.pos.x, tr.pos.y, tr.pos.z,
+                                     pc.yaw, pc.pitch,
+                                     input.pinned() ? "заколочен" : "ЖИВОЙ");
                     }
                     if (g_wallRing && g_wallSeen >= 64) {
                         float tmp[256];
