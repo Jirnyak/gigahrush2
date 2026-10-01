@@ -325,6 +325,44 @@ static bool skip_pass(const char* name) {
     return list.find(name) != std::string::npos;
 }
 
+// GIGA_MARCH=opaque — ИЗМЕРИТЕЛЬНЫЙ режим самого марша, брат GIGA_SKIP этажом
+// ниже: тот берёт разностью цену ПАССА, этот — цену субвоксельной работы
+// внутри мирового марша, который §85 оставил нераcложенным (7.62 мс = пиксели
+// × шагов × цена шага). Второй задуманный режим СНЯТ ЗАМЕРОМ — почему, и
+// почему это оказалось важнее его самого, написано у kMarch* в
+// [raymarch.frag]. Не режим игры: активный режим печатается вслух при старте.
+static float march_measure_mode() {
+    static const float mode = [] {
+        const char* e = std::getenv("GIGA_MARCH");
+        if (!e || !*e) return 0.0f;
+        const float m = std::strcmp(e, "opaque") == 0 ? 1.0f : 0.0f;
+        std::fprintf(stderr,
+                     m == 0.0f
+                         ? "[march] GIGA_MARCH=%s — ИМЯ НЕ ОПОЗНАНО, играем\n"
+                         : "[march] GIGA_MARCH=%s — measuring, not playing\n",
+                     e);
+        return m;
+    }();
+    return mode;
+}
+
+// GIGA_FOGMUL=<множитель> — ИЗМЕРИТЕЛЬНАЯ ручка дальности марша (tCap). Нужна
+// не ради «а если сократить видимость» (это решение владельца, и он его уже
+// принял — не сокращать), а потому, что цена ОДНОГО шага клетки берётся только
+// наклоном кривой «цена от дальности» в режиме GIGA_MARCH=nostop, где число
+// шагов известно. Поставлена 2026-10-01 вместе с режимами марша.
+static float march_fog_mul() {
+    static const float mul = [] {
+        const char* e = std::getenv("GIGA_FOGMUL");
+        if (!e || !*e) return 1.0f;
+        const float m = static_cast<float>(std::atof(e));
+        std::fprintf(stderr, "[march] GIGA_FOGMUL=%.3f — measuring, not playing\n",
+                     m);
+        return m > 0.0f ? m : 1.0f;
+    }();
+    return mul;
+}
+
 // Перестройка статик-таблицы. Слоты пропов пишутся прямо в PropLight.slot;
 // пропы чужого слоя и сорванные (без StaticPropTag) получают kNoLightSlot и
 // светят динамическим хвостом. Интенсивность в base всегда 0 — её каждый кадр
@@ -9873,11 +9911,12 @@ int main(int argc, char** argv) {
             push.camPos = vec4{camMat.eye.x, camMat.eye.y, camMat.eye.z, 0.0f};
             const float fogScale = samosbor_fog_scale(samosbor);
             const float samosborPulse = std::clamp((1.0f - fogScale) / (1.0f - kSamosborFogSqueeze), 0.0f, 1.0f);
-            // z = 0: бывший радиус налобника, мёртвая лейна (S5). Туман её
-            // никогда не читал — только x/y, — поэтому обнуление безопасно.
-            push.fog = vec4{kWorldExtent * 0.25f * fogScale,
-                            kWorldExtent * 0.50f * fogScale,
-                            0.0f, kAmbient};
+            // z: бывший радиус налобника, мёртвая лейна (S5) — ни один шейдер
+            // её не читал. С 2026-10-01 несёт ИЗМЕРИТЕЛЬНЫЙ РЕЖИМ МАРША
+            // ([raymarch.frag] kMarch*), в игре всегда 0.
+            push.fog = vec4{kWorldExtent * 0.25f * fogScale * march_fog_mul(),
+                            kWorldExtent * 0.50f * fogScale * march_fog_mul(),
+                            march_measure_mode(), kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what
             // makes the cube pass's instance cache possible.
