@@ -321,3 +321,16 @@ private:
 };
 
 } // namespace giga::gpu
+
+// ---- ЗАКОН СТЕПЕНИ ДВОЙКИ У КОРНЕВЫХ КАПОВ АНТУРАЖА И ЧАСТИЦ --------------
+// Третий и четвёртый корневые капы CANON S11: антураж 2^20 точек, частицы
+// 32768-пул. Канон про антураж записал прямо, что прежняя форма «кап по виду»
+// (`kMaxWireChains = 1024` + `kMaxClothSheets = 512`) была дефектом, а
+// корневого капа не было вовсе; `kRootAntouragePoints` его закрыл. То, что оба
+// числа — степени двойки, нигде не утверждалось, хотя банки SoA-пула
+// адресуются смещениями от них (`kParticlePointBase`, `kShardPointBase`).
+#include "core/po2.h"
+
+GIGA_PO2(giga::gpu::kRootAntouragePoints);
+GIGA_PO2(giga::gpu::kRootParticles);
+GIGA_PO2(giga::gpu::kRootShards);

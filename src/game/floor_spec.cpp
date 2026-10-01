@@ -1,5 +1,7 @@
 #include "game/floor_spec.h"
 
+#include "core/table_guard.h"
+
 #include <algorithm> // std::min/std::max
 #include <cmath>     // std::exp/std::pow/std::round/std::lround/std::abs
 #include <cstddef>
@@ -32,9 +34,16 @@ constexpr FloorSpec kCatalog[] = {
     {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70},
     {FloorKind::Khrushi,     "Khrushi",     380, {7, 1, 1, 0, 1}, 0.10f, 1, 90},
 };
-static_assert(sizeof(kCatalog) / sizeof(kCatalog[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "floor catalog must have exactly one row per FloorKind");
+// ПОРЯДОК СТРОК, А НЕ ТОЛЬКО ИХ ЧИСЛО (2026-10-01). Здесь стоял один
+// `static_assert` на длину, и он ловил вставку/удаление значения `FloorKind`, но
+// НЕ перестановку — а каталог читается строго по индексу
+// (`floor_spec(kind)` → `kCatalog[static_cast<std::size_t>(kind)]`). Переставь
+// два значения в энуме, и жилой этаж получит население и фракционный замес
+// промышленного, пройдя и сборку, и весь зелёный ctest.
+//
+// Строка каталога свой `FloorKind` УЖЕ несла первой колонкой, поэтому лечение
+// здесь — одно утверждение и ни одной правки данных.
+GIGA_TABLE_BY_ENUM(kCatalog, &FloorSpec::kind, FloorKind::Count);
 
 // population_profiles.ts monsterShareForRouteZ, via
 // baseMonsterPopulationAtDefaultSoftLimit — a stretched-exponential (Weibull-CDF)

@@ -2162,6 +2162,59 @@ if(GIGA_BUILD_TESTS)
         PASS_REGULAR_EXPRESSION
         "GIGA_CSV_COLUMNS=PASS covered=2/18 columns=62 live=38 gen=5 writeonly=7 dead=12")
 
+    # ПОЛНОТА КОНТУРА СТРОКИ МИРА. Разделение труда: ЗАКОН формы типа судит
+    # компилятор (`GIGA_ROW@src/core/row_law.h` — vector/string/map/unique_ptr/
+    # virtual внутри строки мира НЕ СОБИРАЮТСЯ, замерено мутацией), а этот гейт
+    # закрывает единственную дыру стены — новый тип можно завести, просто не
+    # позвав макрос.
+    #
+    # Оба числа в PASS пинятся ТОЧНО, и это законно: население не растёт от
+    # кода само — заголовки-строки перечислены в самом приборе положительным
+    # списком, и новая строка там есть запись решения владельца. Пин в обе
+    # стороны: завели строку мира без контура — красный; снесли структуру и
+    # оставили контур-сироту — тоже красный.
+    add_test(NAME row_law
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_row_law.cmake)
+    set_tests_properties(row_law PROPERTIES
+        PASS_REGULAR_EXPRESSION "GIGA_ROW_LAW=PASS structs=26 contours=26")
+
+    # АДРЕСА В КАРТЕ КОДА. Правило SKELETON.md — «утверждение без адреса не
+    # строка этого файла», и без прибора оно держится памятью агента, то есть не
+    # держится: номер строки гниёт МОЛЧА.
+    #
+    # Числа пинятся ДИАПАЗОНОМ, а не точно, и это другая причина, чем у
+    # csv_columns: население адресов РАСТЁТ от обычной работы — каждая снятая
+    # перепись добавляет строки с адресами, и точный пин превратил бы
+    # дописывание карты в правку пина. Диапазон держит то, что важно: разбор
+    # видит обе формы и не ослеп. Своего сторожа «адресов не меньше 20» прибор
+    # несёт внутри — он ловит случай, когда разметка съехала и прибор замолчал.
+    #
+    # ПОЧЕМУ `form2` ПИНИТСЯ ОТДЕЛЬНО ОТ `form1`: первый прогон на живой карте
+    # дал form1=127 при form2=0 — формы с отпечатком не распознавались вовсе, и
+    # прибор ЗЕЛЕНЕЛ. Одно общее число это бы скрыло.
+    add_test(NAME doc_refs
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_doc_refs.cmake)
+    set_tests_properties(doc_refs PROPERTIES
+        PASS_REGULAR_EXPRESSION
+        "GIGA_DOC_REFS=PASS form1=[0-9][0-9]+ form2=[0-9]+ plain=[0-9]+")
+
+    # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
+    # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
+    # `git status --short`, который стоит первым шагом каждой сессии.
+    #
+    # Правит ровно одно — съехавший номер у формы 2, когда отпечаток в файле
+    # один. Что не правит, называет вслух: молчание читалось бы как «больше
+    # проблем нет», а правит она один род отказа из семи.
+    add_custom_target(docs_sync
+        COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                -DGIGA_DOC_SYNC=ON
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_doc_refs.cmake
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "docs_sync: переписываю съехавшие номера строк в SKELETON.md по отпечаткам"
+        USES_TERMINAL)
+
     # Honest crowd benchmark: real floor + 16k wandering agents + real physics.
     # An executable, not a ctest (it measures, it doesn't pass/fail). Runs at the
     # global Release -O3 so the numbers reflect an optimized build. Threads come

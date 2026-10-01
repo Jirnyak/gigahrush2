@@ -252,3 +252,20 @@ private:
 #endif
 
 } // namespace giga::gpu
+
+// ---- ЗАКОН СТЕПЕНИ ДВОЙКИ У КОРНЕВОГО КАПА СВЕТА --------------------------
+// `kRootLights` — один из пяти корневых капов CANON S11, и он единственный,
+// чьё число канон и код уже сверили (131072 ✓). Сверили ЧИСЛО; то, что оно
+// степень двойки, не утверждало ничто.
+//
+// Кубичность световой сетки CMakeLists проверяет сам при конфигурации
+// (`kGridDimY`/`kGridDimZ` против X, иначе FATAL_ERROR) — и это правильное
+// место, потому что он же раздаёт число шейдерам через -DGIGA_LIGHT_GRID_DIM.
+// А вот степень двойки у стороны сетки он не проверяет, хотя адресация клетки
+// сетки в `light_grid.comp` на ней и стоит.
+#include "core/po2.h"
+
+GIGA_PO2(giga::gpu::kRootLights);
+GIGA_PO2(giga::gpu::kGridDimX);
+GIGA_PO2(giga::gpu::kGridCellBytes);
+GIGA_PO2(giga::gpu::kDynBucketDim);

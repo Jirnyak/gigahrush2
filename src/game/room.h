@@ -103,7 +103,7 @@ struct Room {
 // Ребро 4 давало бы ×8 бинов и мегабайты потолков ради разрешения
 // отсечки в 4 клетки — гейт B (< 0.1 мс) того не требует.
 inline constexpr int kRoomBinShift = 3;
-inline constexpr int kRoomBinDim = kMacroDim >> kRoomBinShift; // 32
+inline constexpr int kRoomBinDim = kMacroDim >> kRoomBinShift; // 128 >> 3 = 16
 inline constexpr std::size_t kRoomBinCount =
     static_cast<std::size_t>(kRoomBinDim) * kRoomBinDim * kRoomBinDim;
 
@@ -179,3 +179,44 @@ void room_alias(FloorRooms& fr, std::uint32_t aliasHash, RoomId id);
 RoomId room_find_alias(const FloorRooms& fr, std::uint32_t aliasHash);
 
 } // namespace giga::game
+
+// ---- ЗАКОН СТЕПЕНИ ДВОЙКИ У РЕШЁТКИ БИНОВ ---------------------------------
+// `room_bin_index` заворачивает бин МАСКОЙ (`bx & (kRoomBinDim - 1)`), и
+// комментарий там прямо говорит «dim — степень двойки, wrap маской». Держало
+// это утверждение ничто: до 2026-10-01 ни одного static_assert рядом не стояло,
+// а на не-степени маска даёт не медленный ответ, а МОЛЧА НЕВЕРНЫЙ — бины
+// начали бы накладываться, и отсечка радиусом отрезала бы честных кандидатов.
+//
+// Там же исправлена ложь комментария: `// 32` стояло у величины, равной 16
+// (замерено исполнением: kMacroDim 128 >> kRoomBinShift 3 = 16, и
+// kRoomBinCount = 16^3 = 4096, что прозе выше соответствует).
+#include "core/po2.h"
+
+// ---- ГВОЗДИ РАЗМЕРА СТРОК МИРА --------------------------------------------
+// Перепись 2026-10-01 нашла, что ни у `Room`, ни у `RoomBox` размер не прибит
+// ничем: `grep -rn 'sizeof(Room)\|sizeof(RoomBox)' src/ tests/` давал НОЛЬ, при
+// том что комната умножается на кап этажа (до 65534), а бокс — на их
+// композиции. Размеры сняты ИСПОЛНЕНИЕМ пробника, а не арифметикой по шапке:
+// 132 и 6 байт.
+//
+// ПОЧЕМУ ЭТОТ ЗАГОЛОВОК НЕ ВНЕСЁН В СПИСОК `check_row_law.cmake`, и это
+// названное решение, а не лазейка: тот прибор требует контур у КАЖДОЙ `struct`
+// на начале строки, а здесь их три — две строки мира и ВЛАДЕЛЕЦ `FloorRooms`,
+// который держит плоские массивы этажа (`roomAt` 4 МиБ, пул боксов, бины).
+// Контур на владельца запретил бы плоскую память ради буквы правила — ровно по
+// тому же доводу, по которому его нет на `MacroGrid`. Разница лишь в том, что
+// `MacroGrid` объявлен `class` и под `^struct` не попадает случайно, а
+// `FloorRooms` — `struct`, и случайность тут решать не должна.
+#include "core/row_law.h"
+
+GIGA_ROW_BYTES(giga::game::RoomBox, 6);
+GIGA_ROW_BYTES(giga::game::Room, 132);
+
+GIGA_PO2(giga::game::kRoomBinDim);
+GIGA_PO2(giga::game::kRoomBinCount);
+
+static_assert(giga::game::kRoomBinDim << giga::game::kRoomBinShift
+                  == giga::kMacroDim,
+              "решётка бинов покрывает тор РОВНО: сдвиг и сторона не "
+              "разъехались, иначе у крайнего бина другой размер — "
+              "привилегированное место, которого изотропия не допускает");

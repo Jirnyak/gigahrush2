@@ -1,6 +1,8 @@
 #include "core/rng.h"
 #include "game/floor_gen.h"
 
+#include "core/table_guard.h"
+
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -80,62 +82,94 @@ std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
 // to the one registered geometry module. A new floor look = a new module folder
 // under src/game/floors/<name>/ + its row here, never a branch.
 using FloorGeneratorFunc = void (*)(World&, int, const FloorSpec&, unsigned);
+using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
+using AntourageExtraFunc = void (*)(const World&, int, unsigned, AntourageBake&);
 
-constexpr FloorGeneratorFunc kGenerators[] = {
-    generate_padic_floor,   // Residential — themed by content tables, padic geometry
-    generate_padic_floor,   // Commercial
-    generate_padic_floor,   // Industrial
-    generate_padic_floor,   // Derelict
-    generate_padic_floor,   // Padic
-    generate_blame_floor,   // Blame — the megastructure module's own geometry
-    generate_khrushi_floor, // Khrushi — the open microdistrict's own geometry
-};
-static_assert(sizeof(kGenerators) / sizeof(kGenerators[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "generator table must have exactly one row per FloorKind");
+// ---- КОНВЕЙЕР МОДУЛЯ: ШЕСТЬ ТАБЛИЦ, И У КАЖДОЙ СТРОКИ ТЕПЕРЬ ЕСТЬ КЛЮЧ ----
+//
+// Здесь стояли шесть ГОЛЫХ массивов, индексируемых `FloorKind`, и каждый был
+// прикрыт `static_assert`'ом на ДЛИНУ. Длина ловит вставку и удаление значения
+// энума и НЕ ловит перестановку — а эти шесть таблиц раздают работу МОДУЛЯМ
+// ЭТАЖЕЙ. Переставь два значения в `FloorKind`, и падик начнёт генерировать
+// хрущи: геометрия, законы, комнаты и версия снимка разъедутся по чужим
+// модулям, пройдя все шесть утверждений на длину и весь зелёный `ctest`.
+// Прямое нарушение CANON S11 («этажи — изолированные модули»), которое в дифе
+// энума глазами не видно.
+//
+// Лечение структурное: строка несёт свой `FloorKind` колонкой, и
+// `GIGA_TABLE_BY_ENUM` утверждает И население, И ПОРЯДОК. Съехавшая таблица
+// перестаёт СОБИРАТЬСЯ. Цена — одна колонка на строку и `.fn` на точке вызова;
+// никакого рантайма (всё `constexpr`).
+//
+// Перепись 2026-10-01: в дереве было 14 таблиц с проверкой длины и НОЛЬ
+// проверок порядка. Эти шесть и каталог `floor_spec.cpp` — первые семь.
+struct FloorGenRow { FloorKind kind; FloorGeneratorFunc fn; };
+struct FloorRoomsRow { FloorKind kind; FloorRoomsFunc fn; };
+struct AntourageExtraRow { FloorKind kind; AntourageExtraFunc fn; };
+struct ModuleVersionRow { FloorKind kind; std::uint32_t version; };
 
-constexpr FloorGeneratorFunc kRuleDeclarers[] = {
-    padic_declare_rules, padic_declare_rules,   padic_declare_rules,
-    padic_declare_rules, padic_declare_rules,   blame_declare_rules,
-    khrushi_declare_rules,
+// There is no generic lattice builder any more: the old per-kind slab/wall
+// generator was purged (owner's mandate, 2026-08-02) and every kind dispatches
+// to the one registered geometry module. A new floor look = a new module folder
+// under src/game/floors/<name>/ + its row here, never a branch.
+constexpr FloorGenRow kGenerators[] = {
+    {FloorKind::Residential, generate_padic_floor},   // themed by content tables, padic geometry
+    {FloorKind::Commercial,  generate_padic_floor},
+    {FloorKind::Industrial,  generate_padic_floor},
+    {FloorKind::Derelict,    generate_padic_floor},
+    {FloorKind::Padic,       generate_padic_floor},
+    {FloorKind::Blame,       generate_blame_floor},   // the megastructure module's own geometry
+    {FloorKind::Khrushi,     generate_khrushi_floor}, // the open microdistrict's own geometry
 };
-static_assert(sizeof(kRuleDeclarers) / sizeof(kRuleDeclarers[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "rule-declarer table must have exactly one row per FloorKind");
+GIGA_TABLE_BY_ENUM(kGenerators, &FloorGenRow::kind, FloorKind::Count);
 
-constexpr FloorGeneratorFunc kRuleAppliers[] = {
-    padic_apply_rules, padic_apply_rules,   padic_apply_rules,
-    padic_apply_rules, padic_apply_rules,   blame_apply_rules,
-    khrushi_apply_rules,
+constexpr FloorGenRow kRuleDeclarers[] = {
+    {FloorKind::Residential, padic_declare_rules},
+    {FloorKind::Commercial,  padic_declare_rules},
+    {FloorKind::Industrial,  padic_declare_rules},
+    {FloorKind::Derelict,    padic_declare_rules},
+    {FloorKind::Padic,       padic_declare_rules},
+    {FloorKind::Blame,       blame_declare_rules},
+    {FloorKind::Khrushi,     khrushi_declare_rules},
 };
+GIGA_TABLE_BY_ENUM(kRuleDeclarers, &FloorGenRow::kind, FloorKind::Count);
+
+constexpr FloorGenRow kRuleAppliers[] = {
+    {FloorKind::Residential, padic_apply_rules},
+    {FloorKind::Commercial,  padic_apply_rules},
+    {FloorKind::Industrial,  padic_apply_rules},
+    {FloorKind::Derelict,    padic_apply_rules},
+    {FloorKind::Padic,       padic_apply_rules},
+    {FloorKind::Blame,       blame_apply_rules},
+    {FloorKind::Khrushi,     khrushi_apply_rules},
+};
+GIGA_TABLE_BY_ENUM(kRuleAppliers, &FloorGenRow::kind, FloorKind::Count);
 
 // Объявители комнат (rooms-object C, S12.1: комнаты объявляет МОДУЛЬ) —
 // та же строка данных на kind, что генератор и законы. Чистые функции
 // (number, seed), перештамповка на каждом входе (закон масок S18).
-using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
-constexpr FloorRoomsFunc kRoomDeclarers[] = {
-    padic_rooms, padic_rooms,   padic_rooms,
-    padic_rooms, padic_rooms,   blame_rooms,
-    khrushi_rooms,
+constexpr FloorRoomsRow kRoomDeclarers[] = {
+    {FloorKind::Residential, padic_rooms},
+    {FloorKind::Commercial,  padic_rooms},
+    {FloorKind::Industrial,  padic_rooms},
+    {FloorKind::Derelict,    padic_rooms},
+    {FloorKind::Padic,       padic_rooms},
+    {FloorKind::Blame,       blame_rooms},
+    {FloorKind::Khrushi,     khrushi_rooms},
 };
-static_assert(sizeof(kRoomDeclarers) / sizeof(kRoomDeclarers[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "room-declarer table must have exactly one row per FloorKind");
-static_assert(sizeof(kRuleAppliers) / sizeof(kRuleAppliers[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "rule-applier table must have exactly one row per FloorKind");
+GIGA_TABLE_BY_ENUM(kRoomDeclarers, &FloorRoomsRow::kind, FloorKind::Count);
 
 // Module antourage rows: null = the kind adds nothing over the generic bake.
-using AntourageExtraFunc = void (*)(const World&, int, unsigned,
-                                    AntourageBake&);
-constexpr AntourageExtraFunc kAntourageExtras[] = {
-    nullptr, nullptr, nullptr,
-    nullptr, nullptr, nullptr,
-    khrushi_bake_antourage, // Khrushi — wires between the street poles
+constexpr AntourageExtraRow kAntourageExtras[] = {
+    {FloorKind::Residential, nullptr},
+    {FloorKind::Commercial,  nullptr},
+    {FloorKind::Industrial,  nullptr},
+    {FloorKind::Derelict,    nullptr},
+    {FloorKind::Padic,       nullptr},
+    {FloorKind::Blame,       nullptr},
+    {FloorKind::Khrushi,     khrushi_bake_antourage}, // wires between the street poles
 };
-static_assert(sizeof(kAntourageExtras) / sizeof(kAntourageExtras[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "antourage-extra table must have exactly one row per FloorKind");
+GIGA_TABLE_BY_ENUM(kAntourageExtras, &AntourageExtraRow::kind, FloorKind::Count);
 
 std::size_t kind_row(const FloorSpec& spec) {
     const std::size_t k = static_cast<std::size_t>(spec.kind);
@@ -146,34 +180,33 @@ std::size_t kind_row(const FloorSpec& spec) {
 // генератор. ПОДНИМАТЬ РУКОЙ при любом изменении выхода generate_floor
 // этого kind; изменение общего каркаса (stamp_lift_pillars, сид-формулы)
 // поднимает ВСЕ строки. Стартуют с 1: 0 — «версии нет» у до-F снимков.
-constexpr std::uint32_t kModuleGenVersions[] = {
-    1, // Residential (padic геометрия)
-    1, // Commercial
-    1, // Industrial
-    1, // Derelict
-    1, // Padic
-    1, // Blame
-    1, // Khrushi
+constexpr ModuleVersionRow kModuleGenVersions[] = {
+    {FloorKind::Residential, 1}, // padic геометрия
+    {FloorKind::Commercial,  1},
+    {FloorKind::Industrial,  1},
+    {FloorKind::Derelict,    1},
+    {FloorKind::Padic,       1},
+    {FloorKind::Blame,       1},
+    {FloorKind::Khrushi,     1},
 };
-static_assert(sizeof(kModuleGenVersions) / sizeof(kModuleGenVersions[0]) ==
-                  static_cast<std::size_t>(FloorKind::Count),
-              "gen-version table must have exactly one row per FloorKind");
+GIGA_TABLE_BY_ENUM(kModuleGenVersions, &ModuleVersionRow::kind, FloorKind::Count);
 
 void floor_declare_rules(World& world, int number, const FloorSpec& spec,
                          unsigned seed) {
-    kRuleDeclarers[kind_row(spec)](world, number, spec, seed);
+    kRuleDeclarers[kind_row(spec)].fn(world, number, spec, seed);
 }
 
 std::uint32_t module_gen_version(FloorKind kind) {
     const std::size_t k = static_cast<std::size_t>(kind);
     return kModuleGenVersions[k >= static_cast<std::size_t>(FloorKind::Count)
                                   ? 0
-                                  : k];
+                                  : k]
+        .version;
 }
 
 void generate_floor(World& world, int number, const FloorSpec& spec,
                     unsigned seed) {
-    kGenerators[kind_row(spec)](world, number, spec, seed);
+    kGenerators[kind_row(spec)].fn(world, number, spec, seed);
     // Лифтовые столбы — поверх любого модуля (вывод у stamp_lift_pillars).
     stamp_lift_pillars(world, number, spec, seed);
 }
@@ -181,7 +214,7 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
 void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
                    unsigned seed) {
     rooms_reset(rooms);
-    const std::uint32_t n = kRoomDeclarers[kind_row(spec)](number, seed, rooms);
+    const std::uint32_t n = kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms);
     std::size_t cells = 0;
     for (const Room& r : rooms.list) cells += r.cells;
     // Счёт всегда вслух (S11: молчаливого обрезания и молчаливого нуля нет);
@@ -291,13 +324,13 @@ void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
 
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed) {
-    kRuleAppliers[kind_row(spec)](world, number, spec, seed);
+    kRuleAppliers[kind_row(spec)].fn(world, number, spec, seed);
 }
 
 void floor_antourage_extra(const World& world, int number,
                            const FloorSpec& spec, unsigned seed,
                            AntourageBake& out) {
-    if (AntourageExtraFunc fn = kAntourageExtras[kind_row(spec)])
+    if (AntourageExtraFunc fn = kAntourageExtras[kind_row(spec)].fn)
         fn(world, number, seed, out);
 }
 

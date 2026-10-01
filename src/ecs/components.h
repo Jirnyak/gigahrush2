@@ -234,3 +234,36 @@ struct DynamicBodyTag {};
 struct PropMeshTag {};
 
 } // namespace giga
+
+// ---- БЛОК КОНТУРА СТРОКИ МИРА ----------------------------------------------
+// Это ТОТ файл, про который AGENTS.md говорит «POD components (zero
+// behavior/virtual functions)». До 2026-10-01 это требование держалось прозой:
+// ни одна компонента не несла утверждения о своей форме, и новая компонента с
+// `std::vector` внутри встала бы молча — EnTT хранит её в пуле, пул умножает
+// её на число сущностей, и аллокация переехала бы в тик.
+//
+// Контур ставится ВСЕМ компонентам, включая пустые теги: тег — тоже строка
+// мира, и `view<Tag>` ходит по его пулу. Включение и блок стоят внизу, после
+// закрытия namespace: `<type_traits>` внутри `namespace giga` уехал бы в наше
+// пространство имён, а наверху файла сдвинул бы содержимое на строку.
+#include "core/row_law.h"
+
+GIGA_ROW(giga::Transform);
+GIGA_ROW(giga::Velocity);
+GIGA_ROW(giga::AABB);
+GIGA_ROW(giga::Mass);
+GIGA_ROW(giga::Impact);
+GIGA_ROW(giga::GravityAffected);
+GIGA_ROW(giga::Jump);
+GIGA_ROW(giga::CameraTag);
+GIGA_ROW(giga::Controller);
+GIGA_ROW(giga::SelfIntegrating);
+GIGA_ROW(giga::NoClip);
+GIGA_ROW(giga::Renderable);
+GIGA_ROW(giga::RigidBody);
+GIGA_ROW(giga::ContactForm);
+GIGA_ROW(giga::CarriedBy);
+GIGA_ROW(giga::JointLink);
+GIGA_ROW(giga::StaticPropTag);
+GIGA_ROW(giga::DynamicBodyTag);
+GIGA_ROW(giga::PropMeshTag);

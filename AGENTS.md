@@ -6,7 +6,13 @@
 > 2. [README.md](README.md) (Graf Irnyak / Klaus Schwab Architectural Manifesto & World Invariants)
 > 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
 > 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
-> 5. [ARCHITECTURE.md](ARCHITECTURE.md) (System architecture & pipeline specification)
+> 5. [SKELETON.md](SKELETON.md) (КАРТА КОДА КАК ОНА ЕСТЬ — что ИСПОЛНЯЕТСЯ, с
+>    адресом у каждой строки и пометкой ПРАВДА/РАСХОЖДЕНИЕ. Правило файла:
+>    утверждение без адреса — не строка этого файла; судит ctest `doc_refs`.
+>    Увидел в коде то, чего нет в карте — сперва впиши РАСХОЖДЕНИЕМ, потом
+>    трогай. Правил карту — позови `cmake --build build --target docs_sync`
+>    перед коммитом: номер строки руками не правится, он производное.
+>    `ARCHITECTURE.md` архивирован в `history/` 2026-10-01 — его роль здесь)
 > 6. [CANON.md](CANON.md) (Канон систем S1–S15 — эталон, относительно которого судятся
 >    расхождения; записан со слов владельца 2026-08-17/19; S12 комнаты, S13 решение
 >    агента, S14 контейнер, S15 время — 2026-08-20. Любой код сверяется с ним;

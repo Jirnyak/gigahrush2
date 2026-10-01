@@ -69,3 +69,35 @@ struct Inventory {
 };
 
 } // namespace giga::game
+
+// ---- БЛОК КОНТУРА И ЗАКОНА КАПА -------------------------------------------
+// Шапка файла обещает «No allocation, no special cases: the same 64-slot
+// rectangle everywhere, so it serializes verbatim with the world and an
+// embodied NPC's inventory is a byte-copy of its macro row». Два из трёх
+// обещаний — «serializes verbatim» и «byte-copy» — есть ровно
+// `is_trivially_copyable` плюс `is_standard_layout`, и до 2026-10-01 их не
+// утверждало ничто: `sizeof(ItemSlot) == 6` закрепляет РАЗМЕР, но structura с
+// `std::string` внутри и размером 6 невозможна, а вот с `std::uint8_t*` —
+// вполне, и байт-копия молча стала бы копией УКАЗАТЕЛЯ.
+//
+// Размер `ItemSlot` держит свой `static_assert` рядом со структурой (CANON S11
+// «вывод виден рядом с константой»), поэтому здесь берётся GIGA_ROW без BYTES —
+// второй ответ на один вопрос не заводим.
+#include "core/po2.h"
+#include "core/row_law.h"
+
+GIGA_ROW(giga::game::ItemSlot);
+GIGA_ROW_BYTES(giga::game::Inventory, 384);
+
+GIGA_PO2(giga::game::kInvCols);
+GIGA_PO2(giga::game::kInvRows);
+GIGA_PO2(giga::game::kInvSlots);
+
+// ВЫВОД РАЗМЕРА СЕТКИ, А НЕ НАБЛЮДЕНИЕ. «384 B» стоит в шапке `ItemSlot`
+// числом; здесь сказано, ОТКУДА оно: 6 Б ячейки × 64 слота. Раздулась ячейка
+// или сменился прямоугольник — красным станет это равенство, и оно назовёт,
+// какое из двух слагаемых уехало, а не просто «размер не тот».
+static_assert(sizeof(giga::game::Inventory)
+                  == sizeof(giga::game::ItemSlot) * giga::game::kInvSlots,
+              "инвентарь есть РОВНО сетка ячеек и ничего больше: выравнивание "
+              "не добавило дыры, и в прямоугольник не пришили служебного поля");

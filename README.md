@@ -11,7 +11,7 @@
 > **Universal 3D Voxel Core Engine & Emerging Society Simulation Engine**
 > Authored by **Graf Irnyak (Klaus Schwab)** & **Adolf Petushkov** (2026).
 
-[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [📖 Architecture Document](ARCHITECTURE.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
+[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [🦴 Карта кода (SKELETON)](SKELETON.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
 
 </div>
 
@@ -79,7 +79,7 @@
 ### 5. RPG & 8-Attribute System ($2^3$ Power-of-Two Storage)
 - **Baseline (Level 0):** 8 attribute points, 1 perk point. Base HP = 100, Base Psi = 100 (`kBaseHp`/`kBasePsi`, [src/game/rpg.h](src/game/rpg.h) — the pool is symmetric with HP).
 - **Leveling:** Each level grants +1 Attribute Point. Every 2nd level grants +1 Perk Point.
-- **8 Attributes** — *TARGET, not yet built.* Today `enum class Attr { Str, Agi, Int }` and `RpgStats.attr[3]` ([src/game/rpg.h](src/game/rpg.h)); the pool's generic block already reserves 8 slots, so slots 3..7 are free. See the conflict table at the end of [ARCHITECTURE.md](ARCHITECTURE.md).
+- **8 Attributes** — *TARGET, not yet built.* Today `enum class Attr { Str, Agi, Int }` and `RpgStats.attr[3]` ([src/game/rpg.h](src/game/rpg.h)); the pool's generic block already reserves 8 slots, so slots 3..7 are free. See the conflict table at the end of [history/ARCHITECTURE.md](history/ARCHITECTURE.md) (archived 2026-10-01).
   1. **Strength (Сила):** Melee damage multiplier (+1%).
   2. **Agility (Ловкость):** Weapon reload / attack speed (+1%).
   3. **Intelligence (Интеллект):** Psi damage (+1%).
@@ -104,12 +104,12 @@
 
 ## 📚 Documentation Map
 
-`AGENTS.md` and `ARCHITECTURE.md` both state that this README orchestrates the
+`AGENTS.md` states that this README orchestrates the
 per-system docs; until 2026-08-09 no such index existed here. This is it.
 
 **Authority, in order.** [AGENTS.md](AGENTS.md) (hard rules, working method) →
 [CANON.md](CANON.md) (**эталон замысла, S1–S16** — всё судится относительно него)
-→ [ARCHITECTURE.md](ARCHITECTURE.md) (layers + the owner's game manifesto) → the
+→ [SKELETON.md](SKELETON.md) (code as it IS, every line addressed) → the
 per-system files below. "What's next" lives in
 [markoaudit/plans/INDEX.md](markoaudit/plans/INDEX.md) and
 [CONTINUE.md](CONTINUE.md); [problems.md](problems.md) is the defect registry

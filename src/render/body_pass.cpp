@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "core/po2.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
 
@@ -24,6 +25,17 @@ namespace {
 // Память: 2^15 × 52 Б (BodyInstance c vec4 rot) × 2 кадра в полёте
 // = 3.25 МиБ host-visible. Переполнение кричит вслух ниже (S11).
 constexpr std::uint32_t kMaxBodies = 1u << 15;
+GIGA_PO2(kMaxBodies);
+// ВЫВОД ВЫШЕ — АРИФМЕТИКОЙ, А НЕ ПРОЗОЙ. Комментарий утверждает «4096 бодрых
+// × 8 спящих = 32768 = 2^15»; до 2026-10-01 это утверждала только проза, и
+// правка любого из трёх чисел оставила бы остальные два врать.
+static constexpr std::uint32_t kAwakeMeasured = 4096;  // замер: 0.96 мс/тик
+static constexpr std::uint32_t kSleepMultiplier = 8;   // «сотни активны, тысячи живут»
+static_assert(kAwakeMeasured * kSleepMultiplier == kMaxBodies,
+              "кап тел = ЗАМЕР бодрых × множитель сна. Разошлось — значит "
+              "правили одно число из трёх, и вывод в комментарии выше стал "
+              "ложью (CANON S11: константа обязана выводиться, и вывод виден "
+              "рядом с константой)");
 
 struct CubeVertex {
     vec3 pos;
