@@ -54,6 +54,7 @@
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
+#include "game/place.h"    // выбор места суммой S13.2 и ход к нему
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
@@ -622,6 +623,10 @@ enum ProfSlot : unsigned {
     kProfFocus,       // focus_pick — прицел интеракций
     kProfWitness,     // witness_step (S19)
     kProfNav,         // nav.step — амортизированный ребейк
+    // ВНИМАНИЕ: этот — НЕ «раз в кадр», он стоит ВНУТРИ while(simAccum), то
+    // есть `tick` его уже включает. Лежит в этой группе только по месту в
+    // перечислении. 2026-10-01 я поверил группе, а не вызову, и сложил его
+    // дважды — разбор хитча выдал `tick 132.2` при `sim 82.3`.
     kProfBigJudge,    // большой суд — порция флуда/конверсии (big-judge.md)
     kProfCount
 };
@@ -640,6 +645,16 @@ static bool g_profOn = [] {
 }();
 static float g_profFrameMs[kProfCount] = {};
 static giga::prof::Ring g_profRing[kProfCount];
+// Сколько СИМ-СЕКЦИЙ накопилось в g_profFrameMs с прошлого сброса. Обязан быть
+// 1: сброс стоит в блоке [prof] наверху кадра, а сим-секция — ниже по тому же
+// кадру. Если кадр уходит раньше блока (ранний continue петли), суммы ПЕРЕЖИВУТ
+// кадр и разбор хитча сложит два кадра в один — ровно так я 2026-10-01 получил
+// `tick 132.2` при `sim 82.3`. Прибор обязан такое СКАЗАТЬ, а не отдать
+// правдоподобную таблицу: §87.3 — честный и полный прибор, отвечающий не на
+// тот вопрос, уже стоил сессии.
+static unsigned g_profSpans = 0;
+// База монотонных счётчиков суда на начало кадра ([world/destruct.h]).
+static giga::BigJudgeCounters g_bjBase;
 // Накопительный счёт тел, разбуженных долгом писателя АВТОМАТА (шов
 // mediumMaskChanged → rigid_wake_dirty_cells) — печатается в rigid-stats.
 static std::uint64_t g_profMediumRigidWakes = 0;
@@ -3210,6 +3225,10 @@ int main(int argc, char** argv) {
     // that survives floor travel; the FIELD does not (on_floor_built re-parks it).
     DiffusionDriver diffusionDriver;
     game::AiTick aiTick{};
+    // Что сделал ход по делам ([game/place.h]) — живёт рядом с aiTick, потому
+    // что это вторая половина одного решения: ai_step отвечает «что я хочу»,
+    // place_errand_step — «куда за этим идти».
+    game::PlaceTick placeTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
     // Cumulative residents finished off by attrition since the run began. A running
     // total rather than a per-step count, because the failure it watches for is
@@ -3921,6 +3940,101 @@ int main(int argc, char** argv) {
                     static_cast<double>(gt.pass_ms_max(gpu::GpuPass::DrawPhysics)),
                     static_cast<double>(gt.pass_ms_max(gpu::GpuPass::Hud)),
                     gt.dropped());
+                // СОСТАВ ЭТОГО ЖЕ КАДРА, А НЕ ПИКИ КОЛЕЦ. §87.4: по сводке
+                // раз-в-256-кадров виновник хитча не определяется в принципе —
+                // максимумы там НЕЗАВИСИМЫ по кольцам, и ряд `sim` с пиком
+                // 659 мс соседствует с `tick` с пиком 164 мс без всякой
+                // гарантии, что это один и тот же кадр. Разбор по таким пикам
+                // есть гадание. Здесь метки ещё НЕ СБРОШЕНЫ (сброс ниже, в
+                // блоке [prof]) и wall уже известен — единственная точка
+                // кадра, где можно напечатать РОВНО тот кадр, что провалился.
+                //
+                // Двойного счёта нет: `tick` по построению ВКЛЮЧАЕТ свои
+                // подшаговые слагаемые (kProfNoise..kProfNeeds), поэтому они
+                // печатаются отдельной группой «в нём», а в сумму верхнего
+                // уровня входит только сам `tick`. Остаток «НЕ НАЗВАНО» —
+                // честная дыра покрытия: simMs меряет кадр от верха до начала
+                // записи рендера, и всё, что там не помечено, живёт здесь.
+                // БЕЗ GIGA_PROF РАЗБОРА НЕТ, И ОБ ЭТОМ НАДО СКАЗАТЬ. `prof_add`
+                // копит только при включённом профиле, поэтому иначе таблица
+                // напечатала бы нули по всем рядам и «НЕ НАЗВАНО» во весь
+                // кадр — то есть выглядела бы как найденная слепая зона. Это
+                // ровно §64а наоборот: не молчание прибора, а правдоподобный
+                // ноль. Одна строка честнее.
+                if (!g_profOn) {
+                    std::fprintf(stderr,
+                                 "[hitch-cpu] разбор недоступен — нужен "
+                                 "GIGA_PROF=1 (или --prof)\n");
+                } else {
+                    char cpu[768];
+                    int n = 0;
+                    const auto put = [&](const char* nm, float ms) {
+                        if (ms < 0.1f) return;
+                        const int left = static_cast<int>(sizeof cpu) - n;
+                        if (left > 48)
+                            n += std::snprintf(cpu + n, static_cast<size_t>(left),
+                                               " %s %.1f", nm, ms);
+                    };
+                    // `big_judge` живёт ВНУТРИ тика (см. его объявление), и
+                    // потому считается ребёнком `tick`, а не слагаемым кадра.
+                    float inTick = g_profFrameMs[kProfBigJudge];
+                    for (unsigned s = kProfNoise; s <= kProfNeeds; ++s)
+                        inTick += g_profFrameMs[s];
+                    float perFrame = 0.0f;
+                    for (unsigned s = kProfFocus; s <= kProfNav; ++s)
+                        perFrame += g_profFrameMs[s];
+                    const float named = g_profFrameMs[kProfTick] + perFrame +
+                                        g_mediumApplyMs + g_frameMark.carveMs +
+                                        g_frameMark.lightSwapMs +
+                                        g_frameMark.propSkinMs;
+                    put("tick", g_profFrameMs[kProfTick]);
+                    for (unsigned s = kProfFocus; s <= kProfNav; ++s)
+                        put(kProfName[s], g_profFrameMs[s]);
+                    put("med_apply", g_mediumApplyMs);
+                    put("carve", g_frameMark.carveMs);
+                    put("light_swap", g_frameMark.lightSwapMs);
+                    put("prop_skin", g_frameMark.propSkinMs);
+                    // «окон N>1» = суммы охватывают НЕ ОДИН кадр, и тогда
+                    // таблица ниже складывает разные кадры. Печатается ВСЕГДА,
+                    // а не только при расхождении: пропавшая оговорка хуже
+                    // громкой — §87.3.
+                    std::fprintf(stderr,
+                                 "[hitch-cpu] окон %u | sim %.1f =%s | НЕ "
+                                 "НАЗВАНО %.1f\n",
+                                 g_profSpans,
+                                 static_cast<double>(g_frameMark.simMs),
+                                 n > 0 ? cpu : " —",
+                                 static_cast<double>(g_frameMark.simMs - named));
+                    n = 0;
+                    put("big_judge", g_profFrameMs[kProfBigJudge]);
+                    for (unsigned s = kProfNoise; s <= kProfNeeds; ++s)
+                        put(kProfName[s], g_profFrameMs[s]);
+                    std::fprintf(stderr,
+                                 "[hitch-cpu]   в тике %.1f =%s | прочее тика "
+                                 "%.1f\n",
+                                 static_cast<double>(g_profFrameMs[kProfTick]),
+                                 n > 0 ? cpu : " —",
+                                 static_cast<double>(g_profFrameMs[kProfTick] -
+                                                     inTick));
+                    // ЧТО ИМЕННО ДЕЛАЛ СУД. Мс говорят «он», а эта строка —
+                    // «чем»: фаза 0 (дел взято) бюджета не имеет, фаза 1
+                    // (узлов флуда) имеет 4096 НА СИМ-ТИК, а тиков в кадре до
+                    // восьми — то есть бюджет тика кадра не гарантирует,
+                    // вопреки big-judge.md:100. Разность монотонных счётчиков,
+                    // база обновляется там же, где сбрасываются суммы.
+                    const giga::BigJudgeCounters bj = giga::big_judge_counters();
+                    std::fprintf(
+                        stderr,
+                        "[hitch-cpu]   суд: тиков %llu, дел взято %llu "
+                        "(открыто %llu), узлов флуда %llu при бюджете "
+                        "%u/тик\n",
+                        static_cast<unsigned long long>(bj.steps - g_bjBase.steps),
+                        static_cast<unsigned long long>(bj.cases - g_bjBase.cases),
+                        static_cast<unsigned long long>(bj.opens - g_bjBase.opens),
+                        static_cast<unsigned long long>(bj.floodNodes -
+                                                        g_bjBase.floodNodes),
+                        giga::big_judge_flood_budget());
+                }
             }
             // [prof] свод per-system: суммы прошлого кадра — в кольца, раз в
             // 256 кадров (~4 с) — печать. Читается здесь же, где хитч-детектор,
@@ -3944,6 +4058,8 @@ int main(int argc, char** argv) {
                     g_profRing[s].push(g_profFrameMs[s]);
                     g_profFrameMs[s] = 0.0f;
                 }
+                g_profSpans = 0;  // сторож однокадровости — рядом со сбросом сумм
+                g_bjBase = giga::big_judge_counters();  // база разности суда
                 static unsigned profFrames = 0;
                 if ((++profFrames & 255u) == 0u) {
                     const giga::prof::Stats w = giga::prof::ring_stats(profWall);
@@ -5210,7 +5326,21 @@ int main(int argc, char** argv) {
                 if (aiCfg.enabled && (lastAimemLogTick == ~0ull ||
                                      simTick - lastAimemLogTick >= 60ull)) {
                     lastAimemLogTick = simTick;
-                    // Эрранд-половина пульса умерла с flow-полями (rooms-object F).
+                    // ЭРРАНД-ПОЛОВИНА ПУЛЬСА ВЕРНУЛАСЬ 2026-10-01, и вернулась
+                    // другой: прежняя печатала поля по flow-полям вида комнаты
+                    // (умерли в rooms-object F), эта печатает выбор СУММОЙ.
+                    // `judged`/`bins` здесь не украшение — это ЦЕНА запроса
+                    // числом: гейт плана «< 0.1 мс» был нарушен в инкременте A
+                    // ровно перебором всех 14742 комнат, и единственное, что
+                    // отличает отсечку работающую от объявленной, — счёт.
+                    std::fprintf(stderr,
+                                 "[place] STEP tick=%llu seen=%u pick=%u walk=%u "
+                                 "arrive=%u unreach=%u idle=%u judged=%u bins=%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 placeTick.considered, placeTick.picked,
+                                 placeTick.walking, placeTick.arrived,
+                                 placeTick.unreachable, placeTick.idle,
+                                 placeTick.judged, placeTick.bins);
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u "
@@ -5845,6 +5975,15 @@ int main(int argc, char** argv) {
                 const auto profWanderT0 = prof_now();
                 game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
                                      kSimDt, &activeWorld.gravity());
+                // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — та же арбитражная
+                // цепочка: бегство (ai_step) → патруль → дело → прогулка.
+                // Каждый следующий пропускает тело, уже взятое предыдущим, по
+                // одному и тому же токену `ai_owns_motion`. Здесь ЗАМКНУЛОСЬ
+                // звено S12–S13: спрос из нужд × предложение комнаты − путь
+                // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
+                placeTick = game::place_errand_step(
+                    reg, pool, floorRooms, nav.coarse(), nav.fine(), activeLayer,
+                    simNow, &activeWorld.gravity());
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick,
@@ -8329,6 +8468,15 @@ int main(int argc, char** argv) {
                             aiTick.replanned, aiTick.switches, aiTick.aiOwned,
                             aiTick.wanderOwned, aiTick.recalled, aiTick.remembered,
                             aiTick.memoryFled);
+                // ДЕЛО — вторая половина того же решения ([game/place.h]):
+                // `pick` считает выборы места суммой спрос·предложение, `walk`
+                // — тела, которые проход ведёт сам, `judged` — цену запроса.
+                ImGui::Text("дело | %u seen / %u pick / %u walk / %u arrive"
+                            " | %u unreach / %u idle | %u judged / %u bins",
+                            placeTick.considered, placeTick.picked,
+                            placeTick.walking, placeTick.arrived,
+                            placeTick.unreachable, placeTick.idle,
+                            placeTick.judged, placeTick.bins);
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.
@@ -9586,6 +9734,7 @@ int main(int argc, char** argv) {
         g_frameMark.simMs = std::chrono::duration<float, std::milli>(
                                 std::chrono::steady_clock::now() - g_frameT0)
                                 .count();
+        ++g_profSpans;  // см. объявление: сторож однокадровости разбора
         if (renderer.begin_frame_cmd(window)) {
             VkCommandBuffer cmd = renderer.current_cmd();
             // ВРЕМЯ ВИЗУАЛА — СИМ-ВРЕМЯ, не настенное (владелец 2026-08-20,

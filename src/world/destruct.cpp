@@ -1049,6 +1049,8 @@ std::uint32_t g_bigConvertBudget = [] {
     const char* e = std::getenv("GIGA_BIGJUDGE_CONVERT");
     return e ? static_cast<std::uint32_t>(std::atol(e)) : 512u;
 }();
+// Счётчики работы суда, монотонные за прогон ([destruct.h] BigJudgeCounters).
+BigJudgeCounters g_bigCounters;
 
 struct BigCourt {
     // Очередь дел (A): кольцо на векторе + дедуп-битсет по клеткам.
@@ -1188,12 +1190,17 @@ bool big_open_case(const World& w, const SubField<CellType>* mats) {
     }
     if (c.queue.empty()) return false;
     c.phase = 1;
+    ++g_bigCounters.opens;
     return true;
 }
 
 } // namespace
 
 std::uint64_t support_gen() { return g_supportGen; }
+
+BigJudgeCounters big_judge_counters() { return g_bigCounters; }
+
+std::uint32_t big_judge_flood_budget() { return g_bigFloodBudget; }
 
 void big_judge_budgets(std::uint32_t floodNodes, std::uint32_t convertCells) {
     if (floodNodes) g_bigFloodBudget = floodNodes;
@@ -1248,10 +1255,12 @@ void big_judge_step(World& w, std::vector<std::uint32_t>& dirtyOut) {
     BigCourt& c = g_bigCourt;
     SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
+    ++g_bigCounters.steps;
 
     if (c.phase == 0) {
         // Взять следующее дело.
         while (c.pendingHead < c.pending.size()) {
+            ++g_bigCounters.cases;
             c.seedCell = c.pending[c.pendingHead++];
             c.pendingBits[c.seedCell >> 6] &=
                 ~(1ull << (c.seedCell & 63u));
@@ -1276,6 +1285,7 @@ void big_judge_step(World& w, std::vector<std::uint32_t>& dirtyOut) {
         // Порция флуда.
         std::uint32_t budget = g_bigFloodBudget;
         while (budget-- > 0 && c.head < c.queue.size()) {
+            ++g_bigCounters.floodNodes;
             const std::uint32_t node = c.queue[c.head];
             const std::int32_t ox = c.qOff[c.head * 3 + 0];
             const std::int32_t oy = c.qOff[c.head * 3 + 1];
