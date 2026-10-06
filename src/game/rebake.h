@@ -54,6 +54,7 @@
 #include <thread>
 
 #include "game/floor_spec.h" // FloorKind
+#include "game/zone_nav.h"   // ZoneNav — нав по зонам, секция этого планировщика
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
 #include "world/macro_grid.h" // MacroGrid — снапшот масок по значению (свет)
 #include "world/clearance.h"  // ClearanceField — гранный оракул нава (occupancy)
@@ -143,8 +144,13 @@ public:
     // nav-граф и запускает Fresh-воркер на всех ядрах. Секция rooms УМЕРЛА
     // (rooms-object F): комнаты — раскраска roomAt, штампуется rooms_declare
     // на входе, допекать нечего. `worldGen` — текущее поколение мутаций.
+    // `rooms`/`gravity` — вход НАВА ПО ЗОНАМ: объявленная раскраска и «куда
+    // вниз». `roomAt` копируется ПО ЗНАЧЕНИЮ (4 МиБ), потому что воркер не знает
+    // ни про World, ни про реестр — тот же контракт, по которому он владеет
+    // копией оракула. nullptr — зоны не печутся (прежнее поведение).
     void start_fresh(const MacroGrid& grid, FloorKind kind, int floorNumber,
-                     std::uint64_t worldGen);
+                     std::uint64_t worldGen, const FloorRooms* rooms = nullptr,
+                     GravityRegime gravity = GravityRegime::Zero);
 
     // Отменить бейк в полёте (флаг; воркер бросает узлы и выходит, step()
     // выбрасывает мусор). Дешёвая и идемпотентная; start_fresh делает это сам.
@@ -206,6 +212,11 @@ public:
     bool ready() const { return !fine_.flow.empty(); }
     const nav::CoarseGraph& coarse() const { return coarse_; }
     const nav::FineNav& fine() const { return fine_; }
+
+    // НАВ ПО ЗОНАМ — живой узел этажа (§88/F). Печётся ТЕМ ЖЕ пекарем и тем же
+    // снапшотом оракула, что и решётка: второго планировщика не появилось, и
+    // дренаж карва (`patch_carved_cells`) кормит зоны бесплатно.
+    const game::ZoneNav& zones() const { return zones_; }
 
     // --- секция света (LightVisibility) -------------------------------------
     // Живой запечённый грид видимости и поколение мира, которое он отражает.
@@ -331,6 +342,12 @@ private:
     nav::FineNav pendingFine_{};
     LightVisBake pendingLight_{};
     ClearanceField snapClear_; // снапшот по значению (4 МиБ, доли мс)
+    // НАВ ПО ЗОНАМ: живой + свежепечёный, и снапшот его входа по значению.
+    game::ZoneNav zones_;
+    game::ZoneNav zonesPending_;
+    FloorRooms snapRooms_;  // только `roomAt` и `list.size()` — остальное бейку не нужно
+    GravityRegime snapGravity_ = GravityRegime::Zero;
+    bool haveZones_ = false;
     // ТЕНЕВАЯ копия масок+типов для света (проблема 59.21): ~134 МиБ
     // РЕЗИДЕНТНО («памяти щедро» — решение владельца), копируется ОДИН раз на
     // входе этажа и дальше правится O(1) на карв (sync_shadow из копилки

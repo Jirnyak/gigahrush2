@@ -35,7 +35,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "game/room.h"   // RoomId, kNoRoom, FloorRooms — зоны и их раскраска
+#include "game/room.h"        // RoomId, kNoRoom, FloorRooms — зоны и их раскраска
+#include "world/clearance.h"  // ClearanceField — ОРАКУЛ: проходимость, касание, опора
 #include "world/gravity.h" // GravityRegime — «вниз» для ЦЕНЫ шага (§88)
 #include "world/nav.h"     // nav::kNavDir — ЕДИНСТВЕННЫЙ словарь направлений
 #include "world/types.h" // kMacroCells
@@ -104,7 +105,7 @@ struct ZonePartition {
 // знает `World::gravity()`, — а цена шага без «вниз» неотвечаема. Дефолт `NegZ`
 // был бы тихо верен на трёх сегодняшних модулях и тихо неверен на первом же
 // боковом, поэтому каждый зовущий назван КОМПИЛЯТОРОМ, а не ревью.
-void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
+void bake_zone_partition(const FloorRooms& fr, const ClearanceField& oracle, int size,
                          GravityRegime gravity, ZonePartition& out);
 
 // ГРАФ ЗОН в CSR: `offset` на зону, `nbr` подряд.
@@ -159,6 +160,12 @@ struct ZoneDist {
     std::size_t bytes() const { return d.size() * sizeof(std::uint16_t); }
 };
 
+// ОРАКУЛОМ, А НЕ ГРИДОМ, и это не вкус (§88/F). Воркеру фонового перепекания
+// достаётся снапшот ПО ЗНАЧЕНИЮ: `ClearanceField` — 4 МиБ, копия мира — 134, и
+// «копия мира на каждый цикл мертва» записано замером (59.21). Сверх того
+// дренаж карва уже держит оракул свежим (`patch_carved_cells`), поэтому зоны
+// получают перепекание на карв бесплатно, а не вторым механизмом.
+//
 // Бейк графа: один обход РАЗБИВКИ плюс гранный клиренс на каждую пару
 // касающихся клеток разных зон. Габарит — в субвокселях (тело NPC 4, вывод у
 // потребителя, [game/embody.h]).
@@ -166,8 +173,8 @@ struct ZoneDist {
 // Бейк-таймовый (вход на этаж / допекание, S9), не тик. Детерминирован: обход
 // по порядку клеток, пары сортируются, значит порядок соседок один при любом
 // расписании.
-void bake_zone_graph(const ZonePartition& part, const MacroGrid& grid, int size,
-                     ZoneGraph& out);
+void bake_zone_graph(const ZonePartition& part, const ClearanceField& oracle,
+                     int size, ZoneGraph& out);
 
 // Бейк таблицы: обход в ширину по графу из КАЖДОЙ зоны.
 //
@@ -246,7 +253,7 @@ struct ZoneFlow {
 // Ступеньки при этом бесплатны БУКВАЛЬНО: клетка лестницы опёрта своей ступенью,
 // её цена 1, и отдельного правила про ступеньки нет вовсе.
 void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
-                    const MacroGrid& grid, int size, GravityRegime gravity,
+                    const ClearanceField& oracle, int size, GravityRegime gravity,
                     ZoneFlow& out);
 
 // --- ОДИН УЗЕЛ НАВА ПО ЗОНАМ -------------------------------------------------
@@ -270,7 +277,7 @@ struct ZoneNav {
     }
 };
 
-void bake_zone_nav(const FloorRooms& fr, const MacroGrid& grid, int size,
+void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
                    GravityRegime gravity, ZoneNav& out, int threads = 0);
 
 // НАПРАВЛЕНИЕ ШАГА, КОТОРОЕ ХОДЬБА МОЖЕТ ПОТРАТИТЬ. Это и есть вся навигация в

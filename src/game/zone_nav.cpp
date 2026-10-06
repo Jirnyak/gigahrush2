@@ -3,8 +3,6 @@
 #include <algorithm>
 
 #include "core/jobs.h"        // parallel_for — бейк жмёт ядра
-#include "world/clearance.h"  // face_clearance_at — ЕДИНСТВЕННЫЙ закон проходимости
-#include "world/macro_grid.h"
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index, wrap_macro
 
 namespace giga::game {
@@ -24,7 +22,7 @@ RoomId ZonePartition::cell(int x, int y, int z) const {
     return at[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
 }
 
-void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
+void bake_zone_partition(const FloorRooms& fr, const ClearanceField& oracle, int size,
                          GravityRegime gravity, ZonePartition& out) {
     (void)gravity; // раздутие о гравитации не знает: касание её не спрашивает
     out = ZonePartition{};
@@ -50,7 +48,7 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
         const int x = static_cast<int>(i % kMacroDim);
         const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
         const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
-        if (!cell_touching(grid, x, y, z, size)) continue;
+        if (!oracle.touching(x, y, z, size)) continue;
         at[i] = fr.roomAt[i];
         q.push_back(static_cast<std::uint32_t>(i));
     }
@@ -71,22 +69,21 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
             if (at[ni] != kNoRoom) continue; // уже чья-то — ничья решена раньше
             // Грань берётся у МЛАДШЕЙ клетки перехода: плюс-направления
             // спрашивают себя, минус — соседа ([world/clearance.h]).
-            const int axis = d >> 1;
-            const std::uint8_t c = (d & 1) != 0
-                                       ? face_clearance_at(grid, cx, cy, cz, axis)
-                                       : face_clearance_at(grid, nx, ny, nz, axis);
-            if (c < size) continue;
+            // Нибл берётся ОДНОЙ дверью оракула: `at` сам решает, чья это грань
+            // (плюс-направление — своя, минус — соседа), и разводить это здесь
+            // значило бы списать закон во второй раз.
+            if (oracle.at(cx, cy, cz, d) < size) continue;
             // КАСАНИЕ: клетка без опоры И без стенки рядом не достаётся никому —
             // в ней не может быть ни человека, ни паука (§88). Разбивка есть
             // разбивка ПРОХОДИМОГО, а не объёма.
-            if (!cell_touching(grid, nx, ny, nz, size)) continue;
+            if (!oracle.touching(nx, ny, nz, size)) continue;
             at[ni] = owner;
             q.push_back(static_cast<std::uint32_t>(ni));
         }
     }
 }
 
-void bake_zone_graph(const ZonePartition& part, const MacroGrid& grid, int size,
+void bake_zone_graph(const ZonePartition& part, const ClearanceField& oracle, int size,
                      ZoneGraph& out) {
     out = ZoneGraph{};
     const std::size_t zones = part.zones;
@@ -119,7 +116,7 @@ void bake_zone_graph(const ZonePartition& part, const MacroGrid& grid, int size,
                     // СМЕЖНЫ ⟺ ТЕЛО ПРОЛЕЗАЕТ. Касание через глухую кладку
                     // ребром не является: ярус 2 повёл бы агента на границу,
                     // которую не перейти.
-                    if (face_clearance_at(grid, x, y, z, axis) < size) continue;
+                    if (oracle.at(x, y, z, 2 * axis + 1) < size) continue;
                     pairs.push_back(pack_pair(a, b));
                 }
             }
@@ -222,7 +219,7 @@ int zone_nbr_slot(const ZoneGraph& g, RoomId zone, RoomId nbr) {
 }
 
 void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
-                    const MacroGrid& grid, int size, GravityRegime gravity,
+                    const ClearanceField& oracle, int size, GravityRegime gravity,
                     ZoneFlow& out) {
     out = ZoneFlow{};
     if (!part.built() || !g.built()) return;
@@ -279,9 +276,8 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                     const std::size_t ni = macro_index(nx, ny, nz);
                     if (part.at[ni] != target) continue;
                     const int axis = d >> 1;
-                    const std::uint8_t cl =
-                        (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
-                                     : face_clearance_at(grid, nx, ny, nz, axis);
+                    const std::uint8_t cl = oracle.at(cx, cy, cz, d);
+                    (void)axis;
                     if (cl < size) continue;
                     // Направление ПЕРЕХОДА, а не отметка: из этой клетки шаг `d`
                     // уже выводит в целевую зону.
@@ -289,7 +285,7 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                     // Семя ложится в слой по СВОЕЙ цене: опёртое — в текущий,
                     // висящее — в следующий. Иначе лексикографический порядок
                     // сломался бы на первом же шаге.
-                    if (cell_supported(grid, cx, cy, cz, size, gravity))
+                    if (oracle.supported(cx, cy, cz, size, gravity))
                         q.push_back(c);
                     else
                         next.push_back(c);
@@ -313,11 +309,7 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                         const std::size_t ni = macro_index(nx, ny, nz);
                         if (part.at[ni] != mine) continue;       // ОБРЕЗКА ЗОНОЙ
                         if (plane[ni] != kZoneFlowNone) continue; // уже достигнута
-                        const int axis = d >> 1;
-                        const std::uint8_t cl =
-                            (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
-                                         : face_clearance_at(grid, nx, ny, nz, axis);
-                        if (cl < size) continue;
+                        if (oracle.at(cx, cy, cz, d) < size) continue;
                         // Шли c -> ni в направлении d, значит из ni обратно ведёт
                         // (d ^ 1) — тот же закон обратного шага, что у нава.
                         plane[ni] = static_cast<std::uint8_t>(d ^ 1);
@@ -325,7 +317,7 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                         // очередь (значит внутри слоя порядок по длине — FIFO), а
                         // висящая откладывается в следующий. Это и есть
                         // «лексикографически: сначала лазание, потом длина».
-                        if (cell_supported(grid, nx, ny, nz, size, gravity))
+                        if (oracle.supported(nx, ny, nz, size, gravity))
                             q.push_back(static_cast<std::uint32_t>(ni));
                         else
                             next.push_back(static_cast<std::uint32_t>(ni));
@@ -339,13 +331,13 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
     }
 }
 
-void bake_zone_nav(const FloorRooms& fr, const MacroGrid& grid, int size,
+void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
                    GravityRegime gravity, ZoneNav& out, int threads) {
     out = ZoneNav{};
-    bake_zone_partition(fr, grid, size, gravity, out.part);
-    bake_zone_graph(out.part, grid, size, out.graph);
+    bake_zone_partition(fr, oracle, size, gravity, out.part);
+    bake_zone_graph(out.part, oracle, size, out.graph);
     bake_zone_dist(out.graph, out.dist, threads);
-    bake_zone_flow(out.part, out.graph, grid, size, gravity, out.flow);
+    bake_zone_flow(out.part, out.graph, oracle, size, gravity, out.flow);
 }
 
 std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,

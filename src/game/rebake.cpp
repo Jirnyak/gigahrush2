@@ -126,7 +126,9 @@ void RebakeScheduler::cancel() {
 }
 
 void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
-                                  int floorNumber, std::uint64_t worldGen) {
+                                  int floorNumber, std::uint64_t worldGen,
+                                  const FloorRooms* rooms,
+                                  GravityRegime gravity) {
     // Любой бейк в полёте — отменить и джойнить. Отмена узловая, так что join
     // здесь — десятки мс, не секунды: это и есть «F9/травел отменяет и едет».
     cancel_.store(true, std::memory_order_relaxed);
@@ -208,6 +210,15 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
 
     // Снапшот по значению — воркер не знает про World вообще.
     snapClear_.vals = navClear_.vals;
+    // Вход нава по зонам — тем же снапшотом по значению. Копируется ТОЛЬКО
+    // раскраска: списка комнат, бинов и потолков бейку зон не нужно, а тащить их
+    // значило бы копировать 304 КиБ потолков на каждый вход впустую.
+    haveZones_ = rooms != nullptr && !rooms->roomAt.empty();
+    if (haveZones_) {
+        snapRooms_.roomAt = rooms->roomAt;
+        snapRooms_.list.assign(rooms->list.size(), Room{});
+        snapGravity_ = gravity;
+    }
     snapGen_ = worldGen;
     bakedGen_ = worldGen;
     lastSeenGen_ = worldGen;
@@ -226,6 +237,9 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_,
                        /*threads=*/0, &cancel_);
         const auto t2 = clock::now();
+        if (haveZones_)
+            game::bake_zone_nav(snapRooms_, snapClear_, kBodyClearanceSub,
+                                snapGravity_, zonesPending_, /*threads=*/0);
         if (!cancel_.load(std::memory_order_relaxed)) {
             coarseMs_ = ms_between(t0, t1);
             fineMs_ = ms_between(t1, t2);
@@ -346,6 +360,12 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         }
         nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_, threads,
                        &cancel_);
+        // Зоны — той же секцией и тем же снапшотом: карв протёк в оракул
+        // дренажом, значит зоны перепекутся вместе с решёткой, а не отдельным
+        // механизмом (§88/F, «единая система»).
+        if (haveZones_)
+            game::bake_zone_nav(snapRooms_, snapClear_, kBodyClearanceSub,
+                                snapGravity_, zonesPending_, threads);
         const auto t3 = clock::now();
         if (!cancel_.load(std::memory_order_relaxed)) {
             fineMs_ = ms_between(t2, t3);
@@ -393,6 +413,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 coarse_ = pendingCoarse_;
                 fine_.flow = std::move(pendingFine_.flow);
                 fine_.nearest = std::move(pendingFine_.nearest);
+                if (haveZones_) zones_ = std::move(zonesPending_);
                 bakedGen_ = snapGen_;
                 if (bakedGen_ == lastSeenGen_) {
                     haveDirty_ = false;
@@ -483,6 +504,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 join_worker();
                 fine_.flow = std::move(pendingFine_.flow);
                 fine_.nearest = std::move(pendingFine_.nearest);
+                if (haveZones_) zones_ = std::move(zonesPending_);
                 bakedGen_ = snapGen_;
                 lastRebakeDurTicks_ = simTick - lastStartTick_;
                 mode_ = Mode::Idle;

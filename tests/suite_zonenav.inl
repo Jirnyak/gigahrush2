@@ -42,7 +42,7 @@ namespace zonenav_test {
 // паре был бы Z², поэтому пары собираются и сортируются, но ЗАКОН переписан
 // здесь своими руками.
 std::vector<std::uint32_t> ref_pairs(const ZonePartition& part,
-                                     const MacroGrid& grid, int size,
+                                     const ClearanceField& oracle, int size,
                                      bool requireClearance) {
     std::vector<std::uint32_t> p;
     for (int z = 0; z < kMacroDim; ++z)
@@ -56,7 +56,7 @@ std::vector<std::uint32_t> ref_pairs(const ZonePartition& part,
                                                z + (axis == 2 ? 1 : 0));
                     if (b == kNoRoom || b == a) continue;
                     if (requireClearance &&
-                        face_clearance_at(grid, x, y, z, axis) < size)
+                        oracle.at(x, y, z, 2 * axis + 1) < size)
                         continue;
                     const RoomId lo = a < b ? a : b;
                     const RoomId hi = a < b ? b : a;
@@ -68,14 +68,15 @@ std::vector<std::uint32_t> ref_pairs(const ZonePartition& part,
     return p;
 }
 
-void graph_equals_independent_recount(const World& w, const ZonePartition& part) {
+void graph_equals_independent_recount(const World& w, const ZonePartition& part,
+                                      const ClearanceField& oracle) {
     ZoneGraph g;
-    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, oracle, kBodyClearanceSub, g);
     CHECK(g.built());
     CHECK(g.zones == part.zones);
 
     const std::vector<std::uint32_t> ref =
-        ref_pairs(part, w.grid(), kBodyClearanceSub, /*requireClearance=*/true);
+        ref_pairs(part, oracle, kBodyClearanceSub, /*requireClearance=*/true);
     CHECK(!ref.empty()); // этаж в самом деле дал смежные зоны
 
     // 1. Каждое ребро продакшна есть в эталоне, и наоборот — через счёт и
@@ -111,13 +112,14 @@ void graph_equals_independent_recount(const World& w, const ZonePartition& part)
     // пар СТРОГО больше: значит проверка в продакшне не декорация. Это мутация
     // закона, прогнанная самим гейтом, а не обещание в комментарии.
     const std::vector<std::uint32_t> refTouch =
-        ref_pairs(part, w.grid(), kBodyClearanceSub, /*requireClearance=*/false);
+        ref_pairs(part, oracle, kBodyClearanceSub, /*requireClearance=*/false);
     CHECK(refTouch.size() > ref.size());
 }
 
-void table_is_a_metric(const World& w, const ZonePartition& part) {
+void table_is_a_metric(const World& w, const ZonePartition& part,
+                       const ClearanceField& oracle) {
     ZoneGraph g;
-    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, oracle, kBodyClearanceSub, g);
     ZoneDist dist;
     bake_zone_dist(g, dist, /*threads=*/2);
     CHECK(dist.built());
@@ -189,9 +191,10 @@ void table_is_a_metric(const World& w, const ZonePartition& part) {
 
 // ПОЛЯ ВНУТРИ ЗОНЫ (инкремент C). Четыре утверждения, и каждое о своём законе.
 void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
-                                   const ZoneGraph& g) {
+                                   const ZoneGraph& g,
+                                   const ClearanceField& oracle) {
     ZoneFlow flow;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, flow);
+    bake_zone_flow(part, g, oracle, kBodyClearanceSub, w.gravity().regime, flow);
     CHECK(flow.built());
 
     // Плоскостей ровно столько, какова МАКСИМАЛЬНАЯ степень зоны: это не кап, а
@@ -248,8 +251,8 @@ void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
                     const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
                     const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
                     const std::uint8_t cl =
-                        (d & 1) != 0 ? face_clearance_at(w.grid(), cx, cy, cz, axis)
-                                     : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                        (d & 1) != 0 ? oracle.at(cx, cy, cz, 2 * axis + 1)
+                                     : oracle.at(nx, ny, nz, 2 * axis + 1);
                     if (cl < kBodyClearanceSub) { ++badArrive; bad = true; break; }
                     const std::size_t nn = macro_index(nx, ny, nz);
                     if (part.at[nn] == target) { crossed = true; break; }
@@ -274,7 +277,7 @@ void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
 // ВЕС И КАСАНИЕ (инкремент D). Три утверждения, и они о трёх разных законах.
 void weight_prefers_support_and_gravity_is_only_price(const World& w,
                                                       const ZonePartition& part,
-                                                      const ZoneGraph& g) {
+                                                      const ZoneGraph& g, const ClearanceField& oracle) {
     // A. КАСАНИЕ — ЗАКОННОСТЬ: в разбивке нет ни одной клетки, за которую не
     // держатся. Это и есть запрет полёта, выраженный отсутствием, а не правилом.
     std::size_t airborne = 0, inPart = 0;
@@ -284,15 +287,15 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
         const int x = static_cast<int>(c % kMacroDim);
         const int y = static_cast<int>((c / kMacroDim) % kMacroDim);
         const int z = static_cast<int>(c / (kMacroDim * kMacroDim));
-        if (!cell_touching(w.grid(), x, y, z, kBodyClearanceSub)) ++airborne;
+        if (!oracle.touching(x, y, z, kBodyClearanceSub)) ++airborne;
     }
     CHECK(inPart > 0);
     CHECK(airborne == 0);
 
     ZoneFlow fg;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, fg);
+    bake_zone_flow(part, g, oracle, kBodyClearanceSub, w.gravity().regime, fg);
     ZoneFlow f0;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, GravityRegime::Zero, f0);
+    bake_zone_flow(part, g, oracle, kBodyClearanceSub, GravityRegime::Zero, f0);
 
     // B. ГРАВИТАЦИЯ МЕНЯЕТ ЦЕНУ, А НЕ ЗАКОННОСТЬ. Множество покрытых клеток
     // обязано СОВПАСТЬ между осевой гравитацией и нулевой: лазать можно всюду,
@@ -339,12 +342,11 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
                 if (part.cell(nx, ny, nz) != target) continue;
                 const int axis = d >> 1;
                 const std::uint8_t cl =
-                    (d & 1) != 0 ? face_clearance_at(w.grid(), x, y, zz, axis)
-                                 : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                    (d & 1) != 0 ? oracle.at(x, y, zz, 2 * axis + 1)
+                                 : oracle.at(nx, ny, nz, 2 * axis + 1);
                 if (cl < kBodyClearanceSub) continue;
-                const int lvl = cell_supported(w.grid(), x, y, zz,
-                                               kBodyClearanceSub,
-                                               w.gravity().regime) ? 0 : 1;
+                const int lvl = oracle.supported(x, y, zz, kBodyClearanceSub,
+                                                 w.gravity().regime) ? 0 : 1;
                 push(c, lvl);
                 if (lvl == 0) cur.push_back(c); else nxt.push_back(c);
                 break;
@@ -369,10 +371,10 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
                     if (seen) continue;
                     const int axis = d >> 1;
                     const std::uint8_t cl =
-                        (d & 1) != 0 ? face_clearance_at(w.grid(), x, y, zz, axis)
-                                     : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                        (d & 1) != 0 ? oracle.at(x, y, zz, 2 * axis + 1)
+                                     : oracle.at(nx, ny, nz, 2 * axis + 1);
                     if (cl < kBodyClearanceSub) continue;
-                    const bool sup = cell_supported(w.grid(), nx, ny, nz,
+                    const bool sup = oracle.supported(nx, ny, nz,
                                                     kBodyClearanceSub,
                                                     w.gravity().regime);
                     refCost.push_back({ni, sup ? level : level + 1});
@@ -393,7 +395,7 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
             const int cx0 = static_cast<int>(cur2 % kMacroDim);
             const int cy0 = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
             const int cz0 = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
-            if (!cell_supported(w.grid(), cx0, cy0, cz0, kBodyClearanceSub,
+            if (!oracle.supported(cx0, cy0, cz0, kBodyClearanceSub,
                                 w.gravity().regime))
                 ++clings;
             int guard = 0;
@@ -412,7 +414,7 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
                 const int nx = static_cast<int>(cur2 % kMacroDim);
                 const int ny = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
                 const int nz = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
-                if (!cell_supported(w.grid(), nx, ny, nz, kBodyClearanceSub,
+                if (!oracle.supported(nx, ny, nz, kBodyClearanceSub,
                                     w.gravity().regime))
                     ++clings;
             }
@@ -425,15 +427,15 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
 }
 
 // Вырожденные входы — ответ, а не падение.
-void degenerate_inputs_answer(const World& w) {
+void degenerate_inputs_answer(const World& w, const ClearanceField& oracle) {
     FloorRooms empty;
     ZonePartition part;
-    bake_zone_partition(empty, w.grid(), kBodyClearanceSub, w.gravity().regime, part);
+    bake_zone_partition(empty, oracle, kBodyClearanceSub, w.gravity().regime, part);
     CHECK(!part.built()); // зон нет — разбивки нет
     ZoneGraph g;
-    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, oracle, kBodyClearanceSub, g);
     ZoneFlow flow;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, flow);
+    bake_zone_flow(part, g, oracle, kBodyClearanceSub, w.gravity().regime, flow);
     CHECK(!flow.built()); // нет графа — нет полей
     CHECK(!g.built()); // зон нет — графа нет
     ZoneDist dist;
@@ -453,6 +455,10 @@ void test_zonenav_all() {
     // иначе граф лёг бы на чужой этаж — и гейт мерил бы шум.
     FloorRooms fr;
     rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+    // ОРАКУЛ — вход всех четырёх бейков (§88/F): воркеру достаётся он копией по
+    // значению (4 МиБ), а не мир (134), и дренаж карва держит его свежим.
+    ClearanceField oracle;
+    oracle.build(w.grid());
     // ТЕХНИЧЕСКИЙ ШАГ, без которого графа зон не существует: объявленные зоны —
     // интерьеры, между ними ничейные линии плана, и смежности НЕТ. Гейт меряет
     // это ЧИСЛОМ РЁБЕР до и после — то есть проверяет не «шаг отработал», а
@@ -463,12 +469,12 @@ void test_zonenav_all() {
     raw.zones = static_cast<std::uint32_t>(fr.list.size());
     raw.at = fr.roomAt;
     ZoneGraph gBefore;
-    bake_zone_graph(raw, w.grid(), kBodyClearanceSub, gBefore);
+    bake_zone_graph(raw, oracle, kBodyClearanceSub, gBefore);
     const std::size_t edgesBefore = gBefore.nbr.size() / 2u;
 
     const std::vector<RoomId> declaredPaint = fr.roomAt;
     ZonePartition part;
-    bake_zone_partition(fr, w.grid(), kBodyClearanceSub, w.gravity().regime, part);
+    bake_zone_partition(fr, oracle, kBodyClearanceSub, w.gravity().regime, part);
     CHECK(part.built());
 
     // 1. `roomAt` НЕ ТРОНУТА. Это и есть то, ради чего разбивка живёт своим
@@ -494,7 +500,7 @@ void test_zonenav_all() {
         const int x = static_cast<int>(i % kMacroDim);
         const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
         const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
-        if (cell_touching(w.grid(), x, y, z, kBodyClearanceSub)) ++droppedWrong;
+        if (oracle.touching(x, y, z, kBodyClearanceSub)) ++droppedWrong;
         else ++droppedNoTouch;
     }
     CHECK(stolen == 0);
@@ -515,7 +521,7 @@ void test_zonenav_all() {
         const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
         bool anyOpen = false;
         for (int axis = 0; axis < 3 && !anyOpen; ++axis) {
-            if (face_clearance_at(w.grid(), x, y, z, axis) >= kBodyClearanceSub)
+            if (oracle.at(x, y, z, 2 * axis + 1) >= kBodyClearanceSub)
                 anyOpen = true;
             if (face_clearance_at(w.grid(), x - (axis == 0), y - (axis == 1),
                                   z - (axis == 2), axis) >= kBodyClearanceSub)
@@ -535,16 +541,16 @@ void test_zonenav_all() {
     // владелец называет «связность всего мира»), не может иметь меньше Z−1
     // рёбер — это необходимое условие связности, а не оценка.
     ZoneGraph gAfter;
-    bake_zone_graph(part, w.grid(), kBodyClearanceSub, gAfter);
+    bake_zone_graph(part, oracle, kBodyClearanceSub, gAfter);
     const std::size_t edgesAfter = gAfter.nbr.size() / 2u;
     std::fprintf(stderr, "[zone-nav] рёбер до раздутия %zu, после %zu\n",
                  edgesBefore, edgesAfter);
     CHECK(edgesBefore < gAfter.zones - 1u); // до раздутия связным быть НЕ МОГ
     CHECK(edgesAfter >= gAfter.zones - 1u); // после — может, и обязан
 
-    zonenav_test::graph_equals_independent_recount(w, part);
-    zonenav_test::table_is_a_metric(w, part);
-    zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter);
-    zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter);
-    zonenav_test::degenerate_inputs_answer(w);
+    zonenav_test::graph_equals_independent_recount(w, part, oracle);
+    zonenav_test::table_is_a_metric(w, part, oracle);
+    zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter, oracle);
+    zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter, oracle);
+    zonenav_test::degenerate_inputs_answer(w, oracle);
 }

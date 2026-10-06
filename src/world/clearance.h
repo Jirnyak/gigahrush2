@@ -100,27 +100,6 @@ std::uint8_t face_clearance_at(const MacroGrid& grid, int x, int y, int z,
 // ни одна строка здесь об этом не знает. Нулевая гравитация («no gravity: every
 // air cell is valid ground, agents fly» — [world/gravity.h]) даёт опору всюду,
 // то есть в ней вся весовая машинерия тождественна обычному обходу.
-inline bool cell_touching(const MacroGrid& g, int x, int y, int z, int size) {
-    for (int axis = 0; axis < 3; ++axis) {
-        if (face_clearance_at(g, x, y, z, axis) < size) return true; // +axis
-        if (face_clearance_at(g, x - (axis == 0 ? 1 : 0), y - (axis == 1 ? 1 : 0),
-                              z - (axis == 2 ? 1 : 0), axis) < size)
-            return true; // −axis: грань держит клетка со МЛАДШЕЙ стороны
-    }
-    return false;
-}
-
-inline bool cell_supported(const MacroGrid& g, int x, int y, int z, int size,
-                           GravityRegime r) {
-    const CellStep d = regime_down(r);
-    if (d.x == 0 && d.y == 0 && d.z == 0) return true; // Zero/Custom: опора всюду
-    const int axis = d.x != 0 ? 0 : (d.y != 0 ? 1 : 2);
-    // Грань перехода «клетка -> та, что ниже» принадлежит МЛАДШЕЙ из двух.
-    return (d.x + d.y + d.z > 0
-                ? face_clearance_at(g, x, y, z, axis)
-                : face_clearance_at(g, x + d.x, y + d.y, z + d.z, axis)) < size;
-}
-
 // Поле клиренса этажа: 3 нибла на клетку — её +x/+y/+z грани (минус-грань
 // клетки — это плюс-грань соседа, второй раз не хранится). u16 на клетку =
 // 4 МиБ на этаж; снапшот для фонового ребейка — копия вектора.
@@ -142,6 +121,31 @@ struct ClearanceField {
         const std::size_t i =
             macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z));
         return static_cast<std::uint8_t>((vals[i] >> (4 * axis)) & 0xFu);
+    }
+
+    // КАСАНИЕ — ЗАКОННОСТЬ (§88). Хоть одна из шести граней телу не открыта,
+    // значит есть за что держаться. Ни оси, ни гравитации в этом вопросе нет
+    // вовсе. В середине большого воздуха касания нет ни у кого — это и есть
+    // запрет полёта, и отдельного запрета для него не понадобилось.
+    bool touching(int x, int y, int z, int size) const {
+        for (int dir = 0; dir < 6; ++dir)
+            if (at(x, y, z, dir) < size) return true;
+        return false;
+    }
+
+    // ОПОРА — ЦЕНА (§88). Нижняя грань в ФРЕЙМЕ гравитации не отдаёт тело вниз,
+    // значит оно стоит, и шаг дёшев; нет опоры — тело висит, и шаг дорог во
+    // столько, каков его личный множитель веса.
+    //
+    // Приведение `GravityRegime` к номеру направления — ТОЖДЕСТВО, а не
+    // перевод: шесть осевых режимов перечислены ([world/gravity.h]) ровно тем
+    // порядком, которым `at()` читает `dir`. Таблицы здесь нет сознательно —
+    // второй словарь направлений в этом дереве уже стоил тихо неверной грани
+    // (S20.7); совпадение держат асёрты под структурой.
+    bool supported(int x, int y, int z, int size, GravityRegime g) const {
+        const CellStep d = regime_down(g);
+        if (d.x == 0 && d.y == 0 && d.z == 0) return true; // Zero/Custom
+        return at(x, y, z, static_cast<int>(g)) < size;
     }
 
     // Полный бейк с живого грида — при загрузке этажа и в фоновом ребейке
@@ -177,5 +181,34 @@ struct ClearanceField {
             (static_cast<std::uint16_t>(v & 0xFu) << (4 * axis)));
     }
 };
+
+// ПИН ТОЖДЕСТВА «режим гравитации == номер направления» (§88). `supported()`
+// приводит `GravityRegime` к `dir` даром, и даром это законно ровно до тех пор,
+// пока два порядка совпадают. Проверка идёт НЕ сверкой с таблицей (таблица и
+// была бы вторым словарём), а встречно: для каждого осевого режима шаг, который
+// объявляет `regime_down`, обязан совпасть с шагом, который из того же числа
+// вычитает декодер `at()`. Переставят перечисление или смысл `dir` — красный
+// КОМПИЛЯТОР, одинаково на Clang и MSVC.
+constexpr bool clearance_regime_is_nav_dir(GravityRegime r) {
+    const int d = static_cast<int>(r);
+    if (d < 0 || d > 5) return false;
+    const int axis = d >> 1;                // как в at()
+    const int sign = (d & 1) != 0 ? 1 : -1; // (dir&1)==0 — минус-сторона
+    const CellStep s = regime_down(r);
+    return s.x == (axis == 0 ? sign : 0) && s.y == (axis == 1 ? sign : 0) &&
+           s.z == (axis == 2 ? sign : 0);
+}
+static_assert(clearance_regime_is_nav_dir(GravityRegime::NegX) &&
+                  clearance_regime_is_nav_dir(GravityRegime::PosX) &&
+                  clearance_regime_is_nav_dir(GravityRegime::NegY) &&
+                  clearance_regime_is_nav_dir(GravityRegime::PosY) &&
+                  clearance_regime_is_nav_dir(GravityRegime::NegZ) &&
+                  clearance_regime_is_nav_dir(GravityRegime::PosZ),
+              "порядок GravityRegime разошёлся с порядком dir в "
+              "ClearanceField::at — supported() читает НЕ ТУ грань");
+static_assert(regime_down(GravityRegime::Zero).x == 0 &&
+                  regime_down(GravityRegime::Zero).z == 0 &&
+                  regime_down(GravityRegime::Custom).z == 0,
+              "Zero/Custom обзавелись направлением — ветка «опора везде» мертва");
 
 } // namespace giga
