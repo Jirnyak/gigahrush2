@@ -41,18 +41,19 @@ namespace zonenav_test {
 // CSR, никакого дедупа через сортировку — наивный set поверх вектора флагов по
 // паре был бы Z², поэтому пары собираются и сортируются, но ЗАКОН переписан
 // здесь своими руками.
-std::vector<std::uint32_t> ref_pairs(const FloorRooms& fr, const MacroGrid& grid,
-                                     int size, bool requireClearance) {
+std::vector<std::uint32_t> ref_pairs(const ZonePartition& part,
+                                     const MacroGrid& grid, int size,
+                                     bool requireClearance) {
     std::vector<std::uint32_t> p;
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y)
             for (int x = 0; x < kMacroDim; ++x) {
-                const RoomId a = room_at(fr, x, y, z);
+                const RoomId a = part.cell(x, y, z);
                 if (a == kNoRoom) continue;
                 for (int axis = 0; axis < 3; ++axis) {
-                    const RoomId b = room_at(fr, x + (axis == 0 ? 1 : 0),
-                                             y + (axis == 1 ? 1 : 0),
-                                             z + (axis == 2 ? 1 : 0));
+                    const RoomId b = part.cell(x + (axis == 0 ? 1 : 0),
+                                               y + (axis == 1 ? 1 : 0),
+                                               z + (axis == 2 ? 1 : 0));
                     if (b == kNoRoom || b == a) continue;
                     if (requireClearance &&
                         face_clearance_at(grid, x, y, z, axis) < size)
@@ -67,14 +68,14 @@ std::vector<std::uint32_t> ref_pairs(const FloorRooms& fr, const MacroGrid& grid
     return p;
 }
 
-void graph_equals_independent_recount(const World& w, const FloorRooms& fr) {
+void graph_equals_independent_recount(const World& w, const ZonePartition& part) {
     ZoneGraph g;
-    bake_zone_graph(fr, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
     CHECK(g.built());
-    CHECK(g.zones == static_cast<std::uint32_t>(fr.list.size()));
+    CHECK(g.zones == part.zones);
 
     const std::vector<std::uint32_t> ref =
-        ref_pairs(fr, w.grid(), kBodyClearanceSub, /*requireClearance=*/true);
+        ref_pairs(part, w.grid(), kBodyClearanceSub, /*requireClearance=*/true);
     CHECK(!ref.empty()); // этаж в самом деле дал смежные зоны
 
     // 1. Каждое ребро продакшна есть в эталоне, и наоборот — через счёт и
@@ -110,13 +111,13 @@ void graph_equals_independent_recount(const World& w, const FloorRooms& fr) {
     // пар СТРОГО больше: значит проверка в продакшне не декорация. Это мутация
     // закона, прогнанная самим гейтом, а не обещание в комментарии.
     const std::vector<std::uint32_t> refTouch =
-        ref_pairs(fr, w.grid(), kBodyClearanceSub, /*requireClearance=*/false);
+        ref_pairs(part, w.grid(), kBodyClearanceSub, /*requireClearance=*/false);
     CHECK(refTouch.size() > ref.size());
 }
 
-void table_is_a_metric(const World& w, const FloorRooms& fr) {
+void table_is_a_metric(const World& w, const ZonePartition& part) {
     ZoneGraph g;
-    bake_zone_graph(fr, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
     ZoneDist dist;
     bake_zone_dist(g, dist, /*threads=*/2);
     CHECK(dist.built());
@@ -189,8 +190,11 @@ void table_is_a_metric(const World& w, const FloorRooms& fr) {
 // Вырожденные входы — ответ, а не падение.
 void degenerate_inputs_answer(const World& w) {
     FloorRooms empty;
+    ZonePartition part;
+    bake_zone_partition(empty, w.grid(), kBodyClearanceSub, part);
+    CHECK(!part.built()); // зон нет — разбивки нет
     ZoneGraph g;
-    bake_zone_graph(empty, w.grid(), kBodyClearanceSub, g);
+    bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
     CHECK(!g.built()); // зон нет — графа нет
     ZoneDist dist;
     bake_zone_dist(g, dist);
@@ -213,31 +217,44 @@ void test_zonenav_all() {
     // интерьеры, между ними ничейные линии плана, и смежности НЕТ. Гейт меряет
     // это ЧИСЛОМ РЁБЕР до и после — то есть проверяет не «шаг отработал», а
     // «шаг сделал то, ради чего он есть».
-    const std::vector<RoomId> before = fr.roomAt;
+    //
+    // «До» — разбивка, равная ОБЪЯВЛЕНИЮ как есть, без раздутия.
+    ZonePartition raw;
+    raw.zones = static_cast<std::uint32_t>(fr.list.size());
+    raw.at = fr.roomAt;
     ZoneGraph gBefore;
-    bake_zone_graph(fr, w.grid(), kBodyClearanceSub, gBefore);
+    bake_zone_graph(raw, w.grid(), kBodyClearanceSub, gBefore);
     const std::size_t edgesBefore = gBefore.nbr.size() / 2u;
 
-    rooms_fill_walkable(fr, w.grid(), kBodyClearanceSub);
+    const std::vector<RoomId> declaredPaint = fr.roomAt;
+    ZonePartition part;
+    bake_zone_partition(fr, w.grid(), kBodyClearanceSub, part);
+    CHECK(part.built());
 
-    // 1. Ни одна ОБЪЯВЛЕННАЯ клетка не сменила хозяина: раздутие только
-    // добавляет, и первый объявивший остаётся владельцем (S12.1).
+    // 1. `roomAt` НЕ ТРОНУТА. Это и есть то, ради чего разбивка живёт своим
+    // массивом: объявление — чистая функция (kind, number, seed) по S18, а
+    // разбивка перепекается на карв. Если это утверждение падает, значит
+    // фоновый бейк начал писать в игровой шов.
+    CHECK(fr.roomAt == declaredPaint);
+
+    // 2. Ни одна объявленная клетка не сменила хозяина в самой разбивке:
+    // раздутие только ДОБАВЛЯЕТ, первый объявивший остаётся владельцем (S12.1).
     std::size_t stolen = 0, claimed = 0;
     for (std::size_t i = 0; i < kMacroCells; ++i) {
-        if (before[i] != kNoRoom && fr.roomAt[i] != before[i]) ++stolen;
-        if (before[i] == kNoRoom && fr.roomAt[i] != kNoRoom) ++claimed;
+        if (declaredPaint[i] != kNoRoom && part.at[i] != declaredPaint[i]) ++stolen;
+        if (declaredPaint[i] == kNoRoom && part.at[i] != kNoRoom) ++claimed;
     }
     CHECK(stolen == 0);
     CHECK(claimed > 0);           // раздутие в самом деле состоялось
-    CHECK(fr.overlapCells == 0);  // и не наплодило пересечений
+    CHECK(fr.overlapCells == 0);
 
-    // 2. ТОЛЩА ОСТАЛАСЬ НИЧЕЙНОЙ — прямое следствие «раздуваем по проходимому»:
+    // 3. ТОЛЩА ОСТАЛАСЬ НИЧЕЙНОЙ — прямое следствие «раздуваем по проходимому»:
     // у клетки внутри кладки нет ни одной грани, которую тело пролезает, и
-    // волна её не достигает. Если это утверждение падает, значит зона
-    // просочилась сквозь стену, и карта путей соврёт первым же ребром.
+    // волна её не достигает. Если это падает, значит зона просочилась сквозь
+    // стену, и карта путей соврёт первым же ребром.
     std::size_t solidClaimed = 0;
     for (std::size_t i = 0; i < kMacroCells; ++i) {
-        if (before[i] != kNoRoom || fr.roomAt[i] == kNoRoom) continue;
+        if (declaredPaint[i] != kNoRoom || part.at[i] == kNoRoom) continue;
         const int x = static_cast<int>(i % kMacroDim);
         const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
         const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
@@ -252,7 +269,8 @@ void test_zonenav_all() {
         if (!anyOpen) ++solidClaimed;
     }
     CHECK(solidClaimed == 0);
-    // 3. ГЛАВНОЕ УТВЕРЖДЕНИЕ ШАГА, И ПОРОГ У НЕГО ВЫВЕДЕН, А НЕ ВЫБРАН.
+
+    // 4. ГЛАВНОЕ УТВЕРЖДЕНИЕ ШАГА, И ПОРОГ У НЕГО ВЫВЕДЕН, А НЕ ВЫБРАН.
     //
     // Первая редакция требовала «рёбер больше в 100 раз» — число, взятое
     // глазом, и замер его тут же опроверг: 400 -> 17534, то есть 43.8×. Порог,
@@ -260,17 +278,16 @@ void test_zonenav_all() {
     //
     // Выведенный порог: граф, который ОБЯЗАН быть связным (ровно то, что
     // владелец называет «связность всего мира»), не может иметь меньше Z−1
-    // рёбер — это необходимое условие связности, а не оценка. Сама связность
-    // проверяется ниже таблицей, где она же и нужна.
+    // рёбер — это необходимое условие связности, а не оценка.
     ZoneGraph gAfter;
-    bake_zone_graph(fr, w.grid(), kBodyClearanceSub, gAfter);
+    bake_zone_graph(part, w.grid(), kBodyClearanceSub, gAfter);
     const std::size_t edgesAfter = gAfter.nbr.size() / 2u;
     std::fprintf(stderr, "[zone-nav] рёбер до раздутия %zu, после %zu\n",
                  edgesBefore, edgesAfter);
     CHECK(edgesBefore < gAfter.zones - 1u); // до раздутия связным быть НЕ МОГ
     CHECK(edgesAfter >= gAfter.zones - 1u); // после — может, и обязан
 
-    zonenav_test::graph_equals_independent_recount(w, fr);
-    zonenav_test::table_is_a_metric(w, fr);
+    zonenav_test::graph_equals_independent_recount(w, part);
+    zonenav_test::table_is_a_metric(w, part);
     zonenav_test::degenerate_inputs_answer(w);
 }

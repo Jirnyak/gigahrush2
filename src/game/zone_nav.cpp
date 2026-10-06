@@ -20,11 +20,60 @@ inline std::uint32_t pack_pair(RoomId a, RoomId b) {
 
 } // namespace
 
-void bake_zone_graph(const FloorRooms& fr, const MacroGrid& grid, int size,
+RoomId ZonePartition::cell(int x, int y, int z) const {
+    return at[macro_index(wrap_macro(x), wrap_macro(y), wrap_macro(z))];
+}
+
+void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
+                         ZonePartition& out) {
+    out = ZonePartition{};
+    if (fr.roomAt.empty() || fr.list.empty()) return;
+    out.zones = static_cast<std::uint32_t>(fr.list.size());
+    out.at = fr.roomAt; // семена — ОБЪЯВЛЕНИЕ, копией: `roomAt` неприкосновенна
+    RoomId* at = out.at.data();
+
+    // Шесть направлений, тот же порядок, что у нава ([world/nav.h] kNavDir).
+    // Порядок фиксирован не ради совместимости, а ради детерминизма ничьих — он
+    // и есть правило «кто пришёл раньше».
+    static constexpr int kDir[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0},
+                                       {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+    std::vector<std::uint32_t> q;
+    q.reserve(kMacroCells);
+    for (std::size_t i = 0; i < kMacroCells; ++i)
+        if (at[i] != kNoRoom) q.push_back(static_cast<std::uint32_t>(i));
+    if (q.empty()) return;
+
+    const int W = kMacroDim;
+    for (std::size_t head = 0; head < q.size(); ++head) {
+        const std::uint32_t ci = q[head];
+        const int cz = static_cast<int>(ci) / (W * W);
+        const int cy = (static_cast<int>(ci) / W) % W;
+        const int cx = static_cast<int>(ci) % W;
+        const RoomId owner = at[ci];
+        for (int d = 0; d < 6; ++d) {
+            const int nx = wrap_macro(cx + kDir[d][0]);
+            const int ny = wrap_macro(cy + kDir[d][1]);
+            const int nz = wrap_macro(cz + kDir[d][2]);
+            const std::size_t ni = macro_index(nx, ny, nz);
+            if (at[ni] != kNoRoom) continue; // уже чья-то — ничья решена раньше
+            // Грань берётся у МЛАДШЕЙ клетки перехода: плюс-направления
+            // спрашивают себя, минус — соседа ([world/clearance.h]).
+            const int axis = d >> 1;
+            const std::uint8_t c = (d & 1) != 0
+                                       ? face_clearance_at(grid, cx, cy, cz, axis)
+                                       : face_clearance_at(grid, nx, ny, nz, axis);
+            if (c < size) continue;
+            at[ni] = owner;
+            q.push_back(static_cast<std::uint32_t>(ni));
+        }
+    }
+}
+
+void bake_zone_graph(const ZonePartition& part, const MacroGrid& grid, int size,
                      ZoneGraph& out) {
     out = ZoneGraph{};
-    const std::size_t zones = fr.list.size();
-    if (zones == 0 || fr.roomAt.empty()) return;
+    const std::size_t zones = part.zones;
+    if (!part.built()) return;
     // Кап зон — тот же u16, что у `roomAt` и `RoomId`. Переполнение здесь
     // свернуло бы таблицу МОЛЧА (зона 65536 стала бы зоной 0 = kNoRoom),
     // поэтому оно обязано быть названо вслух, а не обнаружено по странной
@@ -38,7 +87,7 @@ void bake_zone_graph(const FloorRooms& fr, const MacroGrid& grid, int size,
     // Заворот держит `face_clearance_at` сам.
     std::vector<std::uint32_t> pairs;
     pairs.reserve(1u << 16);
-    const RoomId* zoneOf = fr.roomAt.data();
+    const RoomId* zoneOf = part.at.data();
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y)
             for (int x = 0; x < kMacroDim; ++x) {
