@@ -25,11 +25,12 @@ RoomId ZonePartition::cell(int x, int y, int z) const {
 }
 
 void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
-                         ZonePartition& out) {
+                         GravityRegime gravity, ZonePartition& out) {
+    (void)gravity; // раздутие о гравитации не знает: касание её не спрашивает
     out = ZonePartition{};
     if (fr.roomAt.empty() || fr.list.empty()) return;
     out.zones = static_cast<std::uint32_t>(fr.list.size());
-    out.at = fr.roomAt; // семена — ОБЪЯВЛЕНИЕ, копией: `roomAt` неприкосновенна
+    out.at.assign(kMacroCells, kNoRoom);
     RoomId* at = out.at.data();
 
     // Направления — ЕДИНСТВЕННЫЙ словарь дерева (`nav::kNavDir`), не свой.
@@ -37,8 +38,22 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
     // порядок важен отдельно: он и есть правило «кто пришёл раньше» при ничьей.
     std::vector<std::uint32_t> q;
     q.reserve(kMacroCells);
-    for (std::size_t i = 0; i < kMacroCells; ++i)
-        if (at[i] != kNoRoom) q.push_back(static_cast<std::uint32_t>(i));
+    // СЕМЕНА ТОЖЕ ПРОХОДЯТ ЗАКОН КАСАНИЯ, и это нашёл гейт, а не рассуждение:
+    // объявленная клетка посреди воздуха высокой комнаты касания не имеет — в
+    // ней нельзя БЫТЬ, тело из неё упадёт на пол той же комнаты. Пропустить её в
+    // разбивку значило бы объявить проходимой середину воздуха, то есть вернуть
+    // ровно тот дефект §88, из-за которого поля вели толпу по воздуху.
+    // `roomAt` при этом неприкосновенна: объявление остаётся объявлением, в
+    // разбивку просто не попадает то, по чему не ходят.
+    for (std::size_t i = 0; i < kMacroCells; ++i) {
+        if (fr.roomAt[i] == kNoRoom) continue;
+        const int x = static_cast<int>(i % kMacroDim);
+        const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
+        if (!cell_touching(grid, x, y, z, size)) continue;
+        at[i] = fr.roomAt[i];
+        q.push_back(static_cast<std::uint32_t>(i));
+    }
     if (q.empty()) return;
 
     const int W = kMacroDim;
@@ -61,6 +76,10 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
                                        ? face_clearance_at(grid, cx, cy, cz, axis)
                                        : face_clearance_at(grid, nx, ny, nz, axis);
             if (c < size) continue;
+            // КАСАНИЕ: клетка без опоры И без стенки рядом не достаётся никому —
+            // в ней не может быть ни человека, ни паука (§88). Разбивка есть
+            // разбивка ПРОХОДИМОГО, а не объёма.
+            if (!cell_touching(grid, nx, ny, nz, size)) continue;
             at[ni] = owner;
             q.push_back(static_cast<std::uint32_t>(ni));
         }
@@ -203,7 +222,8 @@ int zone_nbr_slot(const ZoneGraph& g, RoomId zone, RoomId nbr) {
 }
 
 void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
-                    const MacroGrid& grid, int size, ZoneFlow& out) {
+                    const MacroGrid& grid, int size, GravityRegime gravity,
+                    ZoneFlow& out) {
     out = ZoneFlow{};
     if (!part.built() || !g.built()) return;
     const std::uint32_t Z = g.zones;
@@ -233,8 +253,9 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
     }
 
     const int W = kMacroDim;
-    std::vector<std::uint32_t> q;
+    std::vector<std::uint32_t> q, next;
     q.reserve(1u << 12);
+    next.reserve(1u << 12);
     for (std::uint32_t z = 0; z < Z; ++z) {
         const RoomId mine = static_cast<RoomId>(z + 1);
         const std::uint32_t deg = g.degree(z);
@@ -242,6 +263,7 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
             const RoomId target = g.nbr[g.offset[z] + k];
             std::uint8_t* plane = out.dir.data() + static_cast<std::size_t>(k) * kMacroCells;
             q.clear();
+            next.clear();
             // СЕМЕНА — ВСЯ ГРАНИЦА: свои клетки, у которых есть проходимый
             // сосед из целевой зоны. Их много, и это не недостаток, а то самое
             // третье чтение прототипа, которого здесь нет.
@@ -262,34 +284,54 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                                      : face_clearance_at(grid, nx, ny, nz, axis);
                     if (cl < size) continue;
                     plane[c] = kZoneFlowArrived;
-                    q.push_back(c);
+                    // Семя ложится в слой по СВОЕЙ цене: опёртое — в текущий,
+                    // висящее — в следующий. Иначе лексикографический порядок
+                    // сломался бы на первом же шаге.
+                    if (cell_supported(grid, cx, cy, cz, size, gravity))
+                        q.push_back(c);
+                    else
+                        next.push_back(c);
                     break;
                 }
             }
-            // Залив ВНУТРЬ зоны. Обрезка — одна строка (`part.at[ni] != mine`),
-            // и она же есть причина, по которой поле стоит размер зоны.
-            for (std::size_t head = 0; head < q.size(); ++head) {
-                const std::uint32_t c = q[head];
-                const int cz = static_cast<int>(c) / (W * W);
-                const int cy = (static_cast<int>(c) / W) % W;
-                const int cx = static_cast<int>(c) % W;
-                for (int d = 0; d < 6; ++d) {
-                    const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-                    const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-                    const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
-                    const std::size_t ni = macro_index(nx, ny, nz);
-                    if (part.at[ni] != mine) continue;       // ОБРЕЗКА ЗОНОЙ
-                    if (plane[ni] != kZoneFlowNone) continue; // уже достигнута
-                    const int axis = d >> 1;
-                    const std::uint8_t cl =
-                        (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
-                                     : face_clearance_at(grid, nx, ny, nz, axis);
-                    if (cl < size) continue;
-                    // Шли c -> ni в направлении d, значит из ni обратно ведёт
-                    // (d ^ 1) — тот же закон обратного шага, что у нава.
-                    plane[ni] = static_cast<std::uint8_t>(d ^ 1);
-                    q.push_back(static_cast<std::uint32_t>(ni));
+            // Залив ВНУТРЬ зоны, СЛОЯМИ ПО ЛАЗАНИЮ (0-1 BFS). Обрезка — одна
+            // строка (`part.at[ni] != mine`), и она же есть причина, по которой
+            // поле стоит размер зоны. Касание проверять не надо: клетка, попавшая
+            // в разбивку, уже касается по построению.
+            for (;;) {
+                for (std::size_t head = 0; head < q.size(); ++head) {
+                    const std::uint32_t c = q[head];
+                    const int cz = static_cast<int>(c) / (W * W);
+                    const int cy = (static_cast<int>(c) / W) % W;
+                    const int cx = static_cast<int>(c) % W;
+                    for (int d = 0; d < 6; ++d) {
+                        const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+                        const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+                        const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+                        const std::size_t ni = macro_index(nx, ny, nz);
+                        if (part.at[ni] != mine) continue;       // ОБРЕЗКА ЗОНОЙ
+                        if (plane[ni] != kZoneFlowNone) continue; // уже достигнута
+                        const int axis = d >> 1;
+                        const std::uint8_t cl =
+                            (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
+                                         : face_clearance_at(grid, nx, ny, nz, axis);
+                        if (cl < size) continue;
+                        // Шли c -> ni в направлении d, значит из ni обратно ведёт
+                        // (d ^ 1) — тот же закон обратного шага, что у нава.
+                        plane[ni] = static_cast<std::uint8_t>(d ^ 1);
+                        // ЦЕНА РЕШАЕТ СЛОЙ: опёртая клетка дописывается в ТЕКУЩУЮ
+                        // очередь (значит внутри слоя порядок по длине — FIFO), а
+                        // висящая откладывается в следующий. Это и есть
+                        // «лексикографически: сначала лазание, потом длина».
+                        if (cell_supported(grid, nx, ny, nz, size, gravity))
+                            q.push_back(static_cast<std::uint32_t>(ni));
+                        else
+                            next.push_back(static_cast<std::uint32_t>(ni));
+                    }
                 }
+                if (next.empty()) break;
+                q.swap(next);
+                next.clear();
             }
         }
     }

@@ -191,7 +191,7 @@ void table_is_a_metric(const World& w, const ZonePartition& part) {
 void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
                                    const ZoneGraph& g) {
     ZoneFlow flow;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, flow);
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, flow);
     CHECK(flow.built());
 
     // Плоскостей ровно столько, какова МАКСИМАЛЬНАЯ степень зоны: это не кап, а
@@ -279,16 +279,167 @@ void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
     CHECK(badArrive == 0);  // граница — настоящий выход в целевую зону
 }
 
+// ВЕС И КАСАНИЕ (инкремент D). Три утверждения, и они о трёх разных законах.
+void weight_prefers_support_and_gravity_is_only_price(const World& w,
+                                                      const ZonePartition& part,
+                                                      const ZoneGraph& g) {
+    // A. КАСАНИЕ — ЗАКОННОСТЬ: в разбивке нет ни одной клетки, за которую не
+    // держатся. Это и есть запрет полёта, выраженный отсутствием, а не правилом.
+    std::size_t airborne = 0, inPart = 0;
+    for (std::size_t c = 0; c < kMacroCells; c += 11) {
+        if (part.at[c] == kNoRoom) continue;
+        ++inPart;
+        const int x = static_cast<int>(c % kMacroDim);
+        const int y = static_cast<int>((c / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(c / (kMacroDim * kMacroDim));
+        if (!cell_touching(w.grid(), x, y, z, kBodyClearanceSub)) ++airborne;
+    }
+    CHECK(inPart > 0);
+    CHECK(airborne == 0);
+
+    ZoneFlow fg;
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, fg);
+    ZoneFlow f0;
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, GravityRegime::Zero, f0);
+
+    // B. ГРАВИТАЦИЯ МЕНЯЕТ ЦЕНУ, А НЕ ЗАКОННОСТЬ. Множество покрытых клеток
+    // обязано СОВПАСТЬ между осевой гравитацией и нулевой: лазать можно всюду,
+    // и вес решает лишь КАК идти, а не КУДА можно. Если это утверждение падает,
+    // значит вес начал запрещать — ровно та ошибка, которой §88 стоил дня.
+    CHECK(fg.planes == f0.planes);
+    std::size_t coverDiff = 0, coverBoth = 0;
+    for (std::uint32_t k = 0; k < fg.planes; ++k)
+        for (std::size_t c = 0; c < kMacroCells; c += 5) {
+            const bool a = fg.at(static_cast<int>(k), c) != kZoneFlowNone;
+            const bool b = f0.at(static_cast<int>(k), c) != kZoneFlowNone;
+            if (a != b) ++coverDiff;
+            if (a) ++coverBoth;
+        }
+    CHECK(coverDiff == 0);
+    CHECK(coverBoth > 0); // покрытие непусто — иначе утверждение тождественно
+
+    // C. ПОЛЕ ЕСТЬ ЛЕКСИКОГРАФИЧЕСКИЙ ОПТИМУМ, и эталон считается ЗДЕСЬ,
+    // независимо: своя слоёная волна от границы, свой счёт лазаний. Спуск по
+    // продакшн-полю обязан дать РОВНО столько лазаний, сколько минимум.
+    int judged = 0, worse = 0;
+    for (std::uint32_t z = 0; z < g.zones && judged < 24; z += 503) {
+        const std::uint32_t deg = g.degree(z);
+        if (deg == 0) continue;
+        const RoomId mine = static_cast<RoomId>(z + 1);
+        const RoomId target = g.nbr[g.offset[z]];
+        // Эталон: минимум лазаний до границы, волна слоями, написана заново.
+        std::vector<std::pair<std::size_t, int>> refCost; // (клетка, лазаний)
+        std::vector<std::size_t> cur, nxt;
+        auto push = [&](std::size_t c, int lvl) {
+            for (const auto& e : refCost)
+                if (e.first == c) return;
+            refCost.push_back({c, lvl});
+        };
+        for (std::size_t c = 0; c < kMacroCells; ++c) {
+            if (part.at[c] != mine) continue;
+            const int x = static_cast<int>(c % kMacroDim);
+            const int y = static_cast<int>((c / kMacroDim) % kMacroDim);
+            const int zz = static_cast<int>(c / (kMacroDim * kMacroDim));
+            for (int d = 0; d < 6; ++d) {
+                const int nx = wrap_macro(x + nav::kNavDir[d][0]);
+                const int ny = wrap_macro(y + nav::kNavDir[d][1]);
+                const int nz = wrap_macro(zz + nav::kNavDir[d][2]);
+                if (part.cell(nx, ny, nz) != target) continue;
+                const int axis = d >> 1;
+                const std::uint8_t cl =
+                    (d & 1) != 0 ? face_clearance_at(w.grid(), x, y, zz, axis)
+                                 : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                if (cl < kBodyClearanceSub) continue;
+                const int lvl = cell_supported(w.grid(), x, y, zz,
+                                               kBodyClearanceSub,
+                                               w.gravity().regime) ? 0 : 1;
+                push(c, lvl);
+                if (lvl == 0) cur.push_back(c); else nxt.push_back(c);
+                break;
+            }
+        }
+        int level = 0;
+        for (;;) {
+            for (std::size_t h = 0; h < cur.size(); ++h) {
+                const std::size_t c = cur[h];
+                const int x = static_cast<int>(c % kMacroDim);
+                const int y = static_cast<int>((c / kMacroDim) % kMacroDim);
+                const int zz = static_cast<int>(c / (kMacroDim * kMacroDim));
+                for (int d = 0; d < 6; ++d) {
+                    const int nx = wrap_macro(x + nav::kNavDir[d][0]);
+                    const int ny = wrap_macro(y + nav::kNavDir[d][1]);
+                    const int nz = wrap_macro(zz + nav::kNavDir[d][2]);
+                    const std::size_t ni = macro_index(nx, ny, nz);
+                    if (part.at[ni] != mine) continue;
+                    bool seen = false;
+                    for (const auto& e : refCost)
+                        if (e.first == ni) seen = true;
+                    if (seen) continue;
+                    const int axis = d >> 1;
+                    const std::uint8_t cl =
+                        (d & 1) != 0 ? face_clearance_at(w.grid(), x, y, zz, axis)
+                                     : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                    if (cl < kBodyClearanceSub) continue;
+                    const bool sup = cell_supported(w.grid(), nx, ny, nz,
+                                                    kBodyClearanceSub,
+                                                    w.gravity().regime);
+                    refCost.push_back({ni, sup ? level : level + 1});
+                    if (sup) cur.push_back(ni); else nxt.push_back(ni);
+                }
+            }
+            if (nxt.empty()) break;
+            cur.swap(nxt);
+            nxt.clear();
+            ++level;
+        }
+        // Спуск по продакшн-полю и счёт лазаний на нём.
+        for (const auto& e : refCost) {
+            if (judged >= 24) break;
+            std::size_t cur2 = e.first;
+            std::uint8_t d = fg.at(0, cur2);
+            if (d == kZoneFlowNone) continue;
+            int clings = 0;
+            const int cx0 = static_cast<int>(cur2 % kMacroDim);
+            const int cy0 = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
+            const int cz0 = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
+            if (!cell_supported(w.grid(), cx0, cy0, cz0, kBodyClearanceSub,
+                                w.gravity().regime))
+                ++clings;
+            int guard = 0;
+            while (d != kZoneFlowArrived && guard++ < static_cast<int>(kMacroCells)) {
+                const int cx = static_cast<int>(cur2 % kMacroDim);
+                const int cy = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
+                const int cz = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
+                cur2 = macro_index(wrap_macro(cx + nav::kNavDir[d][0]),
+                                   wrap_macro(cy + nav::kNavDir[d][1]),
+                                   wrap_macro(cz + nav::kNavDir[d][2]));
+                const int nx = static_cast<int>(cur2 % kMacroDim);
+                const int ny = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
+                const int nz = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
+                if (!cell_supported(w.grid(), nx, ny, nz, kBodyClearanceSub,
+                                    w.gravity().regime))
+                    ++clings;
+                d = fg.at(0, cur2);
+                if (d == kZoneFlowNone) break;
+            }
+            if (clings > e.second) ++worse; // поле лезет больше, чем надо
+            ++judged;
+        }
+    }
+    CHECK(judged > 0);
+    CHECK(worse == 0);
+}
+
 // Вырожденные входы — ответ, а не падение.
 void degenerate_inputs_answer(const World& w) {
     FloorRooms empty;
     ZonePartition part;
-    bake_zone_partition(empty, w.grid(), kBodyClearanceSub, part);
+    bake_zone_partition(empty, w.grid(), kBodyClearanceSub, w.gravity().regime, part);
     CHECK(!part.built()); // зон нет — разбивки нет
     ZoneGraph g;
     bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
     ZoneFlow flow;
-    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, flow);
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, w.gravity().regime, flow);
     CHECK(!flow.built()); // нет графа — нет полей
     CHECK(!g.built()); // зон нет — графа нет
     ZoneDist dist;
@@ -323,7 +474,7 @@ void test_zonenav_all() {
 
     const std::vector<RoomId> declaredPaint = fr.roomAt;
     ZonePartition part;
-    bake_zone_partition(fr, w.grid(), kBodyClearanceSub, part);
+    bake_zone_partition(fr, w.grid(), kBodyClearanceSub, w.gravity().regime, part);
     CHECK(part.built());
 
     // 1. `roomAt` НЕ ТРОНУТА. Это и есть то, ради чего разбивка живёт своим
@@ -332,14 +483,29 @@ void test_zonenav_all() {
     // фоновый бейк начал писать в игровой шов.
     CHECK(fr.roomAt == declaredPaint);
 
-    // 2. Ни одна объявленная клетка не сменила хозяина в самой разбивке:
-    // раздутие только ДОБАВЛЯЕТ, первый объявивший остаётся владельцем (S12.1).
-    std::size_t stolen = 0, claimed = 0;
+    // 2. Ни одна объявленная клетка не сменила ХОЗЯИНА: раздутие только
+    // добавляет, первый объявивший остаётся владельцем (S12.1). Выпасть из
+    // разбивки объявленная клетка может — но ТОЛЬКО за отсутствие касания
+    // (середина воздуха высокой комнаты: в ней нельзя быть). Это утверждение
+    // нашёл гейт: первая редакция пускала такие клетки в разбивку, то есть
+    // возвращала дефект §88 с другого конца.
+    std::size_t stolen = 0, claimed = 0, droppedNoTouch = 0, droppedWrong = 0;
     for (std::size_t i = 0; i < kMacroCells; ++i) {
-        if (declaredPaint[i] != kNoRoom && part.at[i] != declaredPaint[i]) ++stolen;
-        if (declaredPaint[i] == kNoRoom && part.at[i] != kNoRoom) ++claimed;
+        if (declaredPaint[i] == kNoRoom) {
+            if (part.at[i] != kNoRoom) ++claimed;
+            continue;
+        }
+        if (part.at[i] == declaredPaint[i]) continue;
+        if (part.at[i] != kNoRoom) { ++stolen; continue; }
+        const int x = static_cast<int>(i % kMacroDim);
+        const int y = static_cast<int>((i / kMacroDim) % kMacroDim);
+        const int z = static_cast<int>(i / (kMacroDim * kMacroDim));
+        if (cell_touching(w.grid(), x, y, z, kBodyClearanceSub)) ++droppedWrong;
+        else ++droppedNoTouch;
     }
     CHECK(stolen == 0);
+    CHECK(droppedWrong == 0);    // выпало только то, за что не держатся
+    CHECK(droppedNoTouch > 0);   // и такие клетки на этаже В САМОМ ДЕЛЕ есть
     CHECK(claimed > 0);           // раздутие в самом деле состоялось
     CHECK(fr.overlapCells == 0);
 
@@ -385,5 +551,6 @@ void test_zonenav_all() {
     zonenav_test::graph_equals_independent_recount(w, part);
     zonenav_test::table_is_a_metric(w, part);
     zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter);
+    zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter);
     zonenav_test::degenerate_inputs_answer(w);
 }

@@ -45,7 +45,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "world/types.h" // kMacroDim, kMacroCells, macro_index, wrap_macro
+#include "world/gravity.h" // GravityRegime, regime_down — «куда вниз» для цены
+#include "world/types.h"   // kMacroDim, kMacroCells, macro_index, wrap_macro
 
 namespace giga {
 
@@ -71,6 +72,54 @@ std::uint8_t face_clearance(const SubMask& a, const SubMask& b, int axis);
 // [game/rebake.h] patch_carved_cells).
 std::uint8_t face_clearance_at(const MacroGrid& grid, int x, int y, int z,
                                int axis);
+
+// --- ЛАЗАТЬ МОЖНО ВСЮДУ, НО ГРАВИТАЦИЯ СТОИТ (§88, владелец 2026-10-06) ------
+//
+// Клиренс отвечает «ПРОЛЕЗЕТ ли тело». Ходоку нужны ещё два ответа, и оба
+// выводятся из тех же ниблов, без байта новой памяти и без прохода нового бейка.
+//
+// Закон владельца дословно: «опора агностична к координатам и даже к гравитации,
+// все лазают как пауки, НО есть множитель гравитации, который даёт вес; полезть
+// можно всюду, главное чтобы было КАСАНИЕ с вокселями мира, не важна ось».
+//
+//   1. КАСАНИЕ (`cell_touching`) — ЗАКОННОСТЬ. Клетка годна, если хоть одна из
+//      шести её граней телу НЕ открыта, то есть рядом есть за что держаться.
+//      Ни оси, ни гравитации в этом вопросе нет вовсе — он чистая геометрия.
+//      В середине большого воздуха касания нет ни у кого: это и есть запрет
+//      полёта, и отдельного запрета для него не понадобилось.
+//   2. ОПОРА (`cell_supported`) — ЦЕНА. Нижняя грань в фрейме гравитации не
+//      отдаёт тело вниз, значит оно СТОИТ, и шаг дёшев. Нет опоры — тело
+//      висит, и шаг дорог ровно во столько, каков его личный множитель веса.
+//
+// Почему именно нижняя грань и почему это тот же нибл: клиренс грани есть мера
+// того, сквозь что тело может ПРОВАЛИТЬСЯ. `клиренс(низ) < габарит` дословно
+// значит «вниз не уйдёт». Вопрос, на который оракул умел отвечать с 2026-08-26
+// и которого ему никто не задавал.
+//
+// Ось берётся у РЕЖИМА, а не у буквы Z: под боковой гравитацией «низ» — это x, и
+// ни одна строка здесь об этом не знает. Нулевая гравитация («no gravity: every
+// air cell is valid ground, agents fly» — [world/gravity.h]) даёт опору всюду,
+// то есть в ней вся весовая машинерия тождественна обычному обходу.
+inline bool cell_touching(const MacroGrid& g, int x, int y, int z, int size) {
+    for (int axis = 0; axis < 3; ++axis) {
+        if (face_clearance_at(g, x, y, z, axis) < size) return true; // +axis
+        if (face_clearance_at(g, x - (axis == 0 ? 1 : 0), y - (axis == 1 ? 1 : 0),
+                              z - (axis == 2 ? 1 : 0), axis) < size)
+            return true; // −axis: грань держит клетка со МЛАДШЕЙ стороны
+    }
+    return false;
+}
+
+inline bool cell_supported(const MacroGrid& g, int x, int y, int z, int size,
+                           GravityRegime r) {
+    const CellStep d = regime_down(r);
+    if (d.x == 0 && d.y == 0 && d.z == 0) return true; // Zero/Custom: опора всюду
+    const int axis = d.x != 0 ? 0 : (d.y != 0 ? 1 : 2);
+    // Грань перехода «клетка -> та, что ниже» принадлежит МЛАДШЕЙ из двух.
+    return (d.x + d.y + d.z > 0
+                ? face_clearance_at(g, x, y, z, axis)
+                : face_clearance_at(g, x + d.x, y + d.y, z + d.z, axis)) < size;
+}
 
 // Поле клиренса этажа: 3 нибла на клетку — её +x/+y/+z грани (минус-грань
 // клетки — это плюс-грань соседа, второй раз не хранится). u16 на клетку =
