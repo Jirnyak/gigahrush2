@@ -312,9 +312,8 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     running_ = true;
     mode_ = Mode::Rebake;
     const int threads = rebakeThreads_;
-    const FloorKind kind = kind_;
     const int number = floorNumber_;
-    worker_ = std::thread([this, threads, kind, number]() {
+    worker_ = std::thread([this, threads, number]() {
         using clock = std::chrono::steady_clock;
         // Порядок — решение владельца (light-visibility-bake.md §финал):
         // СВЕТ ПЕРВЫМ, перед путями и всем остальным — он заметнее всего, а
@@ -558,7 +557,6 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                          const std::uint32_t* cells,
                                          std::size_t n) {
     if (!navClear_.built()) return;
-    const std::vector<SubMask>& masks = grid.masks();
     const std::vector<CellType>& types = grid.types();
     // Клетка двери (по индексу, координатам). Премиса all-open ([game/door.h]):
     // оракулы построены на входе этажа при открытых дверях и обязаны её
@@ -570,7 +568,6 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
     auto door_at = [](int, int, int) { return false; };
     for (std::size_t i = 0; i < n; ++i) {
         const std::size_t idx = cells[i];
-        const SubMask& m = masks[idx];
         // Шесть граней карвнутой клетки: свои три плюс-нибла и плюс-ниблы
         // трёх минус-соседей ([world/clearance.h] patch — та же шестёрка,
         // здесь вручную ради дверного фильтра по граням).
