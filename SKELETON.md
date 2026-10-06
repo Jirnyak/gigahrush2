@@ -644,9 +644,9 @@ grep -c 'room_at\|FloorRooms\|declared\[\|supply\[' src/game/place.h   → 6
 | следствие | мера СЕГОДНЯ | статус |
 |---|---|---|
 | запрос «место, где можно Х» не задавался НИГДЕ | `place_pick@src/game/place.h`, и у него есть прод-вызывающий — `place_errand_step@src/game/place.h` | **ЗАКРЫТО** |
-| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:137 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
-| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:169 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
-| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:167 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
+| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:138 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
+| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:170 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
+| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:168 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
 | девять глаголов из 19 не названы в `src/` нигде | **семь**: не названы `kVerbWork`, `kVerbTrade`, `kVerbPatrol`, `kVerbNest`, `kVerbHunt`, `kVerbHaul`, `kVerbProfit`; `kVerbDrink` и `kVerbWander` назвал спрос | **ЧАСТИЧНО** (12 из 19 названы) |
 | 11 из 13 интентов дают ОДНО движение | по-прежнему так, НО движение по делам больше не зависит от интента: его определяет сумма. См. VIII.2 | **ПЕРЕФОРМУЛИРОВАНО, открыто** |
 | ось срочности S13.5 мертва | `kVerbPatienceE3@src/game/verb_table.h` — **0** читателей вне своей таблицы | **ОТКРЫТО**: решение владельца 2026-10-01 — издержка пока только путь |
@@ -866,7 +866,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 | что | мера | статус |
 |---|---|---|
 | объявленная дверь O(1)-запроса навигации | `route_step@src/world/nav.h`; шапка рядом: «the O(1)/tick query the movement AI (#12) calls» | **РАСХОЖДЕНИЕ** |
-| вызовов в проде | **1 и он УСЛОВНЫЙ** с 2026-10-06: `src/game/place.cpp:363 «            d = nav::route_step(coarse, fine, ivec3{cx, cy, cz},»` стоит в ветке «нав по зонам не построен». Основной путь — `zone_walk_dir@src/game/zone_nav.h`, два чтения без решётки. Решётка держится сознательно до инкремента F: пока новое не замерено, старое есть то, с чем сравнивать | — |
+| вызовов в проде | **1 и он УСЛОВНЫЙ** с 2026-10-06: `src/game/place.cpp:367 «            d = nav::route_step(coarse, fine, ivec3{cx, cy, cz},»` стоит в ветке «нав по зонам не построен». Основной путь — `zone_walk_dir@src/game/zone_nav.h`, два чтения без решётки. Решётка держится сознательно до инкремента F: пока новое не замерено, старое есть то, с чем сравнивать | — |
 | вызовов в тестах | **20** | — |
 | чем ходит остальной прод | ручная композиция двух запечённых ярусов: `fine.at` + `nearest_node` + `coarse.dist` — **6 строк** в `src/game/ai.cpp` (4) и `src/game/wander.cpp` (2) | **РАСХОЖДЕНИЕ** — вторая реализация того, что канон объявляет одной системой (CANON S11) |
 

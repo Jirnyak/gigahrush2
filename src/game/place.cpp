@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "core/math.h"        // vec3
@@ -280,7 +281,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             // последнюю ногу пришлось бы идти вслепую, ровно как с остатком
             // якоря у решётки.
             if (room_at(fr, cx, cy, cz) == plan.room ||
-                (byZones && zones->part.cell(cx, cy, cz) == plan.room) ||
+                (byZones && zone_of_body(*zones, cx, cy, cz) == plan.room) ||
                 (cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
                 plan.room = kNoRoom;
@@ -340,7 +341,10 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // Ступеньку разрешает сама дверь, поэтому ветки на вертикаль здесь нет.
         std::uint8_t d = nav::kFlowNone;
         if (byZones) {
-            const RoomId myZone = zones->part.cell(cx, cy, cz);
+            // Зона тела — через дверь с опорой на соседа: клетка центра тела
+            // бывает дыркой в разбивке (замер: 26 тел на тик), и это следствие
+            // названной неточности клиренса, а не дефект разбивки.
+            const RoomId myZone = zone_of_body(*zones, cx, cy, cz);
             if (myZone == kNoRoom) {
                 // Тело стоит там, где по карте путей стоять нельзя (нет
                 // касания): вести его некуда, отдаём вандеру.

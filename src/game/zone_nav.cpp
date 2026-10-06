@@ -340,6 +340,19 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
     bake_zone_flow(out.part, out.graph, oracle, size, gravity, out.flow);
 }
 
+RoomId zone_of_body(const ZoneNav& zn, int cx, int cy, int cz) {
+    if (!zn.part.built()) return kNoRoom;
+    const RoomId own = zn.part.cell(cx, cy, cz);
+    if (own != kNoRoom) return own;
+    for (int d = 0; d < 6; ++d) {
+        const RoomId n = zn.part.cell(cx + nav::kNavDir[d][0],
+                                      cy + nav::kNavDir[d][1],
+                                      cz + nav::kNavDir[d][2]);
+        if (n != kNoRoom) return n;
+    }
+    return kNoRoom;
+}
+
 std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,
                            int cx, int cy, int cz, int gravityAxis) {
     if (!zn.built() || myZone == kNoRoom || target == kNoRoom) return kZoneFlowNone;
