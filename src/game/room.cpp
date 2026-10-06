@@ -2,9 +2,63 @@
 
 #include "game/room.h"
 
-#include "world/types.h" // macro_index
+#include <vector>
+
+#include "world/clearance.h"  // face_clearance_at — ЕДИНСТВЕННЫЙ закон проходимости
+#include "world/macro_grid.h"
+
+#include "world/types.h" // macro_index, kMacroCells, wrap_macro
 
 namespace giga::game {
+
+void rooms_fill_walkable(FloorRooms& fr, const MacroGrid& grid, int size) {
+    // Законы — в room.h. Здесь только исполнение.
+    if (fr.roomAt.empty() || fr.list.empty()) return;
+    RoomId* at = fr.roomAt.data();
+
+    // Шесть направлений, тот же порядок, что у нава ([world/nav.h] kNavDir):
+    // −x,+x,−y,+y,−z,+z. Порядок фиксирован не ради совместимости, а ради
+    // детерминизма ничьих — он и есть правило «кто пришёл раньше».
+    static constexpr int kDir[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0},
+                                       {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+
+    std::vector<std::uint32_t> q;
+    q.reserve(kMacroCells);
+    // Семена — ВСЕ объявленные клетки, в порядке индекса: волны стартуют
+    // одновременно, поэтому раздутие равномерно и не зависит ни от порядка
+    // объявления зон, ни от их размера.
+    for (std::size_t i = 0; i < kMacroCells; ++i)
+        if (at[i] != kNoRoom) q.push_back(static_cast<std::uint32_t>(i));
+    if (q.empty()) return; // объявлять нечего — раздувать нечего
+
+    const int W = kMacroDim;
+    for (std::size_t head = 0; head < q.size(); ++head) {
+        const std::uint32_t ci = q[head];
+        const int cz = static_cast<int>(ci) / (W * W);
+        const int cy = (static_cast<int>(ci) / W) % W;
+        const int cx = static_cast<int>(ci) % W;
+        const RoomId owner = at[ci];
+        for (int d = 0; d < 6; ++d) {
+            const int nx = wrap_macro(cx + kDir[d][0]);
+            const int ny = wrap_macro(cy + kDir[d][1]);
+            const int nz = wrap_macro(cz + kDir[d][2]);
+            const std::size_t ni = macro_index(nx, ny, nz);
+            if (at[ni] != kNoRoom) continue; // уже чья-то — ничья решена раньше
+            // ПО ПРОХОДИМОСТИ, а не по геометрии: зона, просочившаяся сквозь
+            // кладку, объявила бы своей запертую пустоту за ней, и карта путей
+            // потеряла бы смысл — ребро графа появилось бы там, где хода нет.
+            // Грань берётся у МЛАДШЕЙ клетки перехода: плюс-направления
+            // спрашивают себя, минус — соседа ([world/clearance.h] face_clearance).
+            const bool plus = (d & 1) != 0;
+            const int axis = d >> 1;
+            const std::uint8_t c = plus ? face_clearance_at(grid, cx, cy, cz, axis)
+                                        : face_clearance_at(grid, nx, ny, nz, axis);
+            if (c < size) continue;
+            at[ni] = owner;
+            q.push_back(static_cast<std::uint32_t>(ni));
+        }
+    }
+}
 
 void rooms_reset(FloorRooms& fr) {
     fr.list.clear();

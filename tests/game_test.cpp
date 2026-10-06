@@ -137,6 +137,7 @@ int g_checks = 0;
 #include "suite_particles.inl"
 #include "suite_gravity_regimes.inl"
 #include "suite_walkbits.inl"
+#include "suite_zonenav.inl"
 #include "suite_doors.inl"
 #include "suite_verbs.inl"
 #include "suite_shield.inl"
@@ -5723,6 +5724,7 @@ int main() {
     test_particles_all();
     test_gravity_regimes_all();
     test_walkbits_all();
+    test_zonenav_all();
     test_doors_all();
     test_verbs_all();
     test_shield_all();
