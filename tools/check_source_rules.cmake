@@ -841,6 +841,45 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     endforeach()
 endforeach()
 
+# --- ДВА ПРОЕКТА НЕ ПЕРЕСЕКАЮТСЯ (решение владельца 2026-10-06) ---------------
+#
+# Браузерная ГИГАХРУЩ на TypeScript живёт в СВОЁМ репозитории
+# (`Jirnyak/gigahrush`). Этот — C++23-движок, и пересекаться они не должны «нигде
+# и никак».
+#
+# ПОВОД — НЕ ГИПОТЕЗА, А СЛУЧИВШЕЕСЯ. Ветка `backup/origin-main-2026-08-06`
+# держала 902 коммита браузерного проекта, влитых сюда мержами («merge: integrate
+# gitlab main», «Merge branch 'main' of marko1olo/gigahrush»): в её вершине лежало
+# 1342 файла `.ts` рядом с 206 C++. В main это НЕ попало (проверено
+# принадлежностью: ни один из мержей загрязнения не предок main), ветка снесена
+# 2026-10-06 в обоих remote. Но память о том, что так делать нельзя, — не защита:
+# защита — вот этот прибор.
+#
+# Почему именно такой список: он ловит не «похожее на веб», а ЯДРО чужого
+# проекта — его язык (`.ts`/`.tsx`) и его манифесты сборки. `index.html` НЕ
+# запрещён сознательно: это лендинг ЭТОГО проекта («GIGAHRUSH 2 sequel with C++23
+# 3D engine»), и запрет по расширению `.html` пинал бы его наравне с чужим кодом.
+# ЛОЖНОЕ СРАБАТЫВАНИЕ, НАЙДЕННОЕ ПРОГОНОМ ЭТОГО ЖЕ ГЕЙТА, А НЕ РЕВЬЮ: CMake зовёт
+# свои файлы штампов `compiler_depend.ts` — расширение то же, TypeScript ни при чём,
+# и первый прогон дал десятки отказов из `build/`. Поэтому артефакты сборки
+# исключены ПО ПУТИ, а не по содержимому: `build/` не репозиторий, он продукт.
+# Записано здесь, потому что «гейт, который ловит сам себя», — это ровно та
+# стоимость, которую обещает каждый новый прибор, и платить её дважды незачем.
+file(GLOB_RECURSE GIGA_FOREIGN_TS
+     RELATIVE "${GIGA_ROOT}"
+     "${GIGA_ROOT}/*.ts" "${GIGA_ROOT}/*.tsx")
+list(FILTER GIGA_FOREIGN_TS EXCLUDE REGEX "^build")
+foreach(_f IN LISTS GIGA_FOREIGN_TS)
+    list(APPEND GIGA_FAILURES
+        "${_f}:1: TypeScript в C++-репозитории — браузерная ГИГАХРУЩ живёт в Jirnyak/gigahrush, и два проекта не пересекаются (решение владельца 2026-10-06). Прецедент: 902 коммита чужого проекта, влитых мержем.")
+endforeach()
+foreach(_manifest package.json package-lock.json tsconfig.json wrangler.toml)
+    if(EXISTS "${GIGA_ROOT}/${_manifest}")
+        list(APPEND GIGA_FAILURES
+            "${_manifest}:1: манифест сборки чужого (браузерного) проекта в C++-репозитории — два проекта не пересекаются (решение владельца 2026-10-06).")
+    endif()
+endforeach()
+
 list(LENGTH GIGA_FAILURES GIGA_FAILURE_COUNT)
 if(GIGA_FAILURE_COUNT GREATER 0)
     message("GIGA_SOURCE_RULES=FAIL")
