@@ -2080,8 +2080,15 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // телесный битсет комнат 256 КиБ), never a pointer into the live grid — so
 // there is no ordering contract with door toggles or carves any more, and
 // floor changes cancel-join in tens of ms ([game/rebake.h]).
+// НАВ ПО ЗОНАМ — резидентный узел живого этажа (§88/E). Пока СИНХРОННО на входе
+// и глобалом рядом с остальным состоянием этажа: цена сначала ЗАМЕРЯЕТСЯ вслух,
+// и только потом решается, переселять ли бейк в `RebakeScheduler` секцией.
+// Мерить после переселения значило бы не узнать, что переселяли.
+game::ZoneNav g_zoneNav;
+
 void begin_floor_nav(const World& world, int floorNumber,
-                     game::RebakeScheduler& bake) {
+                     game::RebakeScheduler& bake,
+                     const game::FloorRooms* rooms = nullptr) {
     // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается
     // (бухгалтерия RebakeScheduler сверяет поколения между этажами).
     // Fresh-снапшот просто отражает текущее поколение.
@@ -2097,6 +2104,24 @@ void begin_floor_nav(const World& world, int floorNumber,
     // Секция rooms умерла (rooms-object F): комнаты — раскраска roomAt из
     // rooms_declare, flow-полей по виду больше нет — на балансе −18 МиБ.
     bake.start_fresh(world.grid(), kind, floorNumber, g_worldGen);
+    // НАВ ПО ЗОНАМ — здесь, потому что здесь впервые есть ОБА входа: геометрия
+    // (её проходимость) и объявленные зоны. Цена печатается ВСЛУХ: бейк без
+    // замера прячет свою регрессию, и именно по этому числу решается, переселять
+    // ли его в `RebakeScheduler` секцией.
+    if (rooms != nullptr) {
+        const auto tZone = std::chrono::steady_clock::now();
+        game::bake_zone_nav(*rooms, world.grid(), game::kBodyClearanceSub,
+                            world.gravity().regime, g_zoneNav, /*threads=*/0);
+        const double zoneMs = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - tZone)
+                                  .count();
+        std::fprintf(stderr,
+                     "[zone-nav] floor %d: зон %u | рёбер %zu | %.0f мс | "
+                     "резидентно %.1f МиБ\n",
+                     floorNumber, g_zoneNav.graph.zones,
+                     g_zoneNav.graph.nbr.size() / 2u, zoneMs,
+                     static_cast<double>(g_zoneNav.bytes()) / (1024.0 * 1024.0));
+    }
     // Nav memory AT THE START of the bake, which is the number no document carried
     // and the only moment it can be wrong. The scheduler frees the live flow field
     // in start_fresh (the AsyncBake 260-MiB-peak lesson), so this reads ~1 MiB —
@@ -2992,7 +3017,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
             if (!arrivedRestored) dress_lift_portals(l0);
-            begin_floor_nav(stack.layer(l0), 0, nav);
+            begin_floor_nav(stack.layer(l0), 0, nav, &floorRooms);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -3700,7 +3725,7 @@ int main(int argc, char** argv) {
         // состояние): на restore кнопки приходят записями, створки — материей
         // снимка; пересеивать их значило бы воскрешать сорванное (закон 2).
         if (!arrivedRestored) dress_lift_portals(nl);
-        begin_floor_nav(stack.layer(nl), currentFloor, nav);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
     };
     auto arrive_upload = [&](LayerId nl) {
         voxelMirror.upload_all(stack.layer(nl));
@@ -5356,12 +5381,14 @@ int main(int argc, char** argv) {
                                  // неоднозначным ровно тем способом, которым
                                  // прибор врёт СЦЕНОЙ (§85).
                                  "[errand] STEP tick=%llu seen=%u pick=%u walk=%u "
-                                 "arrive=%u unreach=%u offnav=%u idle=%u judged=%u bins=%u\n",
+                                 "arrive=%u unreach=%u offnav=%u idle=%u judged=%u bins=%u "
+                                 "zdist=%u/%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  placeTick.considered, placeTick.picked,
                                  placeTick.walking, placeTick.arrived,
                                  placeTick.unreachable, placeTick.offnav,
-                                 placeTick.idle, placeTick.judged, placeTick.bins);
+                                 placeTick.idle, placeTick.judged, placeTick.bins,
+                                 placeTick.zoneDistSum, placeTick.zoneDistBodies);
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u "
@@ -6004,7 +6031,7 @@ int main(int argc, char** argv) {
                 // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, nav.coarse(), nav.fine(), activeLayer,
-                    simNow, &activeWorld.gravity());
+                    simNow, &activeWorld.gravity(), &g_zoneNav);
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick,
@@ -7743,7 +7770,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
                             if (!arrivedRestored) dress_lift_portals(nl);
-                            begin_floor_nav(stack.layer(nl), currentFloor, nav);
+                            begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
                             if (propPass.ready()) {
                                 merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -10419,7 +10446,7 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
                         if (!arrivedRestored) dress_lift_portals(nl);
-                        begin_floor_nav(stack.layer(nl), currentFloor, nav);
+                        begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
                         // Same transition autosave as the keyboard path.

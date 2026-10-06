@@ -283,7 +283,9 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                         (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
                                      : face_clearance_at(grid, nx, ny, nz, axis);
                     if (cl < size) continue;
-                    plane[c] = kZoneFlowArrived;
+                    // Направление ПЕРЕХОДА, а не отметка: из этой клетки шаг `d`
+                    // уже выводит в целевую зону.
+                    plane[c] = static_cast<std::uint8_t>(d);
                     // Семя ложится в слой по СВОЕЙ цене: опёртое — в текущий,
                     // висящее — в следующий. Иначе лексикографический порядок
                     // сломался бы на первом же шаге.
@@ -335,6 +337,39 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
             }
         }
     }
+}
+
+void bake_zone_nav(const FloorRooms& fr, const MacroGrid& grid, int size,
+                   GravityRegime gravity, ZoneNav& out, int threads) {
+    out = ZoneNav{};
+    bake_zone_partition(fr, grid, size, gravity, out.part);
+    bake_zone_graph(out.part, grid, size, out.graph);
+    bake_zone_dist(out.graph, out.dist, threads);
+    bake_zone_flow(out.part, out.graph, grid, size, gravity, out.flow);
+}
+
+std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,
+                           int cx, int cy, int cz, int gravityAxis) {
+    if (!zn.built() || myZone == kNoRoom || target == kNoRoom) return kZoneFlowNone;
+    if (myZone == target) return kZoneFlowNone; // уже на месте — шага нет
+    const RoomId nextZone = zone_next(zn.graph, zn.dist, myZone, target);
+    if (nextZone == kNoRoom) return kZoneFlowNone; // другая компонента
+    const int slot = zone_nbr_slot(zn.graph, myZone, nextZone);
+    if (slot < 0) return kZoneFlowNone;
+
+    int x = wrap_macro(cx), y = wrap_macro(cy), z = wrap_macro(cz);
+    // Предел взгляда вперёд — kSubDim: подъём на целую клетку. Дальше ступенька
+    // перестаёт быть ступенькой, и честнее отказать, чем вести тело в уступ.
+    for (int guard = 0; guard <= kSubDim; ++guard) {
+        const std::uint8_t d = zn.flow.at(slot, macro_index(x, y, z));
+        if (d == kZoneFlowNone) return kZoneFlowNone;
+        if (gravityAxis < 0 || (d >> 1) != gravityAxis) return d; // ходьба тратит
+        x = wrap_macro(x + nav::kNavDir[d][0]);
+        y = wrap_macro(y + nav::kNavDir[d][1]);
+        z = wrap_macro(z + nav::kNavDir[d][2]);
+        if (zn.part.cell(x, y, z) != myZone) return d; // ступенька и есть выход
+    }
+    return kZoneFlowNone;
 }
 
 } // namespace giga::game

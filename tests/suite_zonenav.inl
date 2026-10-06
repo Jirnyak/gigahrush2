@@ -223,7 +223,7 @@ void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
 
     // 2+3. СПУСК ПРИХОДИТ НА ГРАНИЦУ, НЕ ВЫХОДЯ ИЗ ЗОНЫ, и граница — настоящий
     // выход: у клетки `kZoneFlowArrived` есть ПРОХОДИМЫЙ сосед из целевой зоны.
-    int walked = 0, badArrive = 0, leftZone = 0, noArrive = 0;
+    int walked = 0, badArrive = 0, wrongZone = 0, noArrive = 0;
     for (std::uint32_t z = 0; z < g.zones && walked < 64; z += 211) {
         const std::uint32_t deg = g.degree(z);
         for (std::uint32_t k = 0; k < deg && walked < 64; ++k) {
@@ -231,52 +231,44 @@ void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
             // Любая клетка этой зоны, покрытая полем.
             for (std::size_t c = 0; c < kMacroCells && walked < 64; c += 3) {
                 if (part.at[c] != static_cast<RoomId>(z + 1)) continue;
-                std::uint8_t d = flow.at(static_cast<int>(k), c);
-                if (d == kZoneFlowNone) continue;
+                if (flow.at(static_cast<int>(k), c) == kZoneFlowNone) continue;
                 std::size_t cur = c;
                 int steps = 0;
                 const int cap = static_cast<int>(kMacroCells);
-                while (d != kZoneFlowArrived && steps <= cap) {
+                bool crossed = false, bad = false;
+                while (steps++ <= cap) {
+                    const std::uint8_t d = flow.at(static_cast<int>(k), cur);
+                    if (d == kZoneFlowNone) { ++noArrive; bad = true; break; }
                     const int cx = static_cast<int>(cur % kMacroDim);
                     const int cy = static_cast<int>((cur / kMacroDim) % kMacroDim);
                     const int cz = static_cast<int>(cur / (kMacroDim * kMacroDim));
-                    cur = macro_index(wrap_macro(cx + nav::kNavDir[d][0]),
-                                      wrap_macro(cy + nav::kNavDir[d][1]),
-                                      wrap_macro(cz + nav::kNavDir[d][2]));
-                    if (part.at[cur] != static_cast<RoomId>(z + 1)) { ++leftZone; break; }
-                    d = flow.at(static_cast<int>(k), cur);
-                    if (d == kZoneFlowNone) { ++noArrive; break; }
-                    ++steps;
-                }
-                if (d != kZoneFlowArrived) { if (steps > cap) ++noArrive; }
-                else {
-                    // Граница обязана БЫТЬ выходом: проходимый сосед из target.
-                    const int cx = static_cast<int>(cur % kMacroDim);
-                    const int cy = static_cast<int>((cur / kMacroDim) % kMacroDim);
-                    const int cz = static_cast<int>(cur / (kMacroDim * kMacroDim));
-                    bool exit = false;
-                    for (int dd = 0; dd < 6 && !exit; ++dd) {
-                        const int nx = wrap_macro(cx + nav::kNavDir[dd][0]);
-                        const int ny = wrap_macro(cy + nav::kNavDir[dd][1]);
-                        const int nz = wrap_macro(cz + nav::kNavDir[dd][2]);
-                        if (part.cell(nx, ny, nz) != target) continue;
-                        const int axis = dd >> 1;
-                        const std::uint8_t cl =
-                            (dd & 1) != 0
-                                ? face_clearance_at(w.grid(), cx, cy, cz, axis)
-                                : face_clearance_at(w.grid(), nx, ny, nz, axis);
-                        if (cl >= kBodyClearanceSub) exit = true;
+                    // Шаг обязан быть ПРОХОДИМЫМ — поле не ведёт в стену.
+                    const int axis = d >> 1;
+                    const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+                    const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+                    const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+                    const std::uint8_t cl =
+                        (d & 1) != 0 ? face_clearance_at(w.grid(), cx, cy, cz, axis)
+                                     : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                    if (cl < kBodyClearanceSub) { ++badArrive; bad = true; break; }
+                    const std::size_t nn = macro_index(nx, ny, nz);
+                    if (part.at[nn] == target) { crossed = true; break; }
+                    if (part.at[nn] != static_cast<RoomId>(z + 1)) {
+                        ++wrongZone; // вышли, но НЕ в целевую зону
+                        bad = true;
+                        break;
                     }
-                    if (!exit) ++badArrive;
+                    cur = nn;
                 }
+                if (!bad && !crossed) ++noArrive; // повис в пределах зоны
                 ++walked;
             }
         }
     }
     CHECK(walked > 0);      // спуск в самом деле прогнан
-    CHECK(leftZone == 0);   // ни один шаг не вывел из зоны
+    CHECK(wrongZone == 0);  // спуск вывел ИМЕННО в целевую зону, не куда попало
     CHECK(noArrive == 0);   // ни один спуск не повис и не оборвался
-    CHECK(badArrive == 0);  // граница — настоящий выход в целевую зону
+    CHECK(badArrive == 0);  // ни один шаг поля не ведёт в стену
 }
 
 // ВЕС И КАСАНИЕ (инкремент D). Три утверждения, и они о трёх разных законах.
@@ -396,8 +388,7 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
         for (const auto& e : refCost) {
             if (judged >= 24) break;
             std::size_t cur2 = e.first;
-            std::uint8_t d = fg.at(0, cur2);
-            if (d == kZoneFlowNone) continue;
+            if (fg.at(0, e.first) == kZoneFlowNone) continue;
             int clings = 0;
             const int cx0 = static_cast<int>(cur2 % kMacroDim);
             const int cy0 = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
@@ -406,21 +397,24 @@ void weight_prefers_support_and_gravity_is_only_price(const World& w,
                                 w.gravity().regime))
                 ++clings;
             int guard = 0;
-            while (d != kZoneFlowArrived && guard++ < static_cast<int>(kMacroCells)) {
+            while (guard++ < static_cast<int>(kMacroCells)) {
+                const std::uint8_t d = fg.at(0, cur2);
+                if (d == kZoneFlowNone) break;
                 const int cx = static_cast<int>(cur2 % kMacroDim);
                 const int cy = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
                 const int cz = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
-                cur2 = macro_index(wrap_macro(cx + nav::kNavDir[d][0]),
-                                   wrap_macro(cy + nav::kNavDir[d][1]),
-                                   wrap_macro(cz + nav::kNavDir[d][2]));
+                const std::size_t nn =
+                    macro_index(wrap_macro(cx + nav::kNavDir[d][0]),
+                                wrap_macro(cy + nav::kNavDir[d][1]),
+                                wrap_macro(cz + nav::kNavDir[d][2]));
+                if (part.at[nn] != mine) break; // перешли границу — путь кончился
+                cur2 = nn;
                 const int nx = static_cast<int>(cur2 % kMacroDim);
                 const int ny = static_cast<int>((cur2 / kMacroDim) % kMacroDim);
                 const int nz = static_cast<int>(cur2 / (kMacroDim * kMacroDim));
                 if (!cell_supported(w.grid(), nx, ny, nz, kBodyClearanceSub,
                                     w.gravity().regime))
                     ++clings;
-                d = fg.at(0, cur2);
-                if (d == kZoneFlowNone) break;
             }
             if (clings > e.second) ++worse; // поле лезет больше, чем надо
             ++judged;

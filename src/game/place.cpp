@@ -201,7 +201,8 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
 PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
                             const nav::CoarseGraph& coarse,
                             const nav::FineNav& fine, LayerId layer, double now,
-                            const GravityField* gravity) {
+                            const GravityField* gravity, const ZoneNav* zones) {
+    const bool byZones = zones != nullptr && zones->built();
     PlaceTick out;
     // Пустой бейк — no-op, не UB: тот же контракт, которым живут `wander_step`
     // и `ai_patrol_step`. Пока бейк в полёте тела ходят вандером, как всегда.
@@ -270,7 +271,16 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         if (plan.room != kNoRoom && goal != nullptr) {
             int tx = 0, ty = 0, tz = 0;
             place_target_cell(fr, *goal, cx, cy, cz, tx, ty, tz);
+            // ТРЕТЬЕ УСЛОВИЕ — ЗОНА РАЗБИВКИ (§88/E). С навом по зонам цель
+            // ЕСТЬ зона, и дошёл тот, кто в ней стоит. Разбивка шире
+            // объявленного бокса (она впитала коридор между комнатами), и это
+            // не поблажка: предложение и глаголы живут НА ЗОНЕ, а тело внутри
+            // зоны их и получает. Без этого условия поле вело бы тело до
+            // границы зоны, а прибытие ждало бы объявленных клеток — то есть
+            // последнюю ногу пришлось бы идти вслепую, ровно как с остатком
+            // якоря у решётки.
             if (room_at(fr, cx, cy, cz) == plan.room ||
+                (byZones && zones->part.cell(cx, cy, cz) == plan.room) ||
                 (cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
                 plan.room = kNoRoom;
@@ -325,9 +335,35 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             ++out.idle;
             continue;
         }
-        const std::uint8_t d =
-            nav::route_step(coarse, fine, ivec3{cx, cy, cz}, ivec3{tx, ty, tz});
-        if (d == nav::kFlowNone) {
+        // НАВ ПО ЗОНАМ — ДВА ЧТЕНИЯ, и ни одной волны (§88/E). Цель — ЗОНА, а не
+        // клетка: таблица даёт соседку, плоскость соседки даёт направление.
+        // Ступеньку разрешает сама дверь, поэтому ветки на вертикаль здесь нет.
+        std::uint8_t d = nav::kFlowNone;
+        if (byZones) {
+            const RoomId myZone = zones->part.cell(cx, cy, cz);
+            if (myZone == kNoRoom) {
+                // Тело стоит там, где по карте путей стоять нельзя (нет
+                // касания): вести его некуда, отдаём вандеру.
+                ++out.offnav;
+                ++out.idle;
+                continue;
+            }
+            d = zone_walk_dir(*zones, myZone, plan.room, cx, cy, cz,
+                              gf.pull ? gf.axis : -1);
+            // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
+            // падает ⟺ ходок доходит.
+            const std::uint16_t zd = zones->dist.at(
+                static_cast<std::uint32_t>(myZone) - 1u,
+                static_cast<std::uint32_t>(plan.room) - 1u);
+            if (zd != kZoneUnreachable) {
+                out.zoneDistSum += zd;
+                ++out.zoneDistBodies;
+            }
+        } else {
+            d = nav::route_step(coarse, fine, ivec3{cx, cy, cz},
+                                ivec3{tx, ty, tz});
+        }
+        if (d == nav::kFlowNone || d == kZoneFlowNone) {
             // Маршрута нет (разные компоненты связности, или цель в толще).
             // Цель снимается со стаггером: пере-спрашивать каждый тик значило
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
@@ -344,6 +380,16 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // есть дефект (S13.2). Поймано на себе при посадке проверки
         // проходимости ниже: `continue` стоял после забора.
         vec3 dir{0.0f, 0.0f, 0.0f};
+        if (byZones && d < 6 && (d >> 1) == gf.axis) {
+            // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
+            // ступенька и есть выход из зоны. Тангенциального пеленга у него
+            // ровно ноль, то есть вести этим шагом нечем — тело отдаётся
+            // вандеру, а цель ОСТАЁТСЯ (токен не забран). Слепую прямую на цель
+            // здесь не берём сознательно: ровно она была остатком якоря у
+            // решётки и стоила §88 нуля прибытий.
+            ++out.idle;
+            continue;
+        }
         if (d < 6 && (d >> 1) != gf.axis) {
             // Шаг в плоскости ходьбы: целимся в ЦЕНТР следующей клетки — то же
             // самоисправляющееся правило, которым идёт патруль.

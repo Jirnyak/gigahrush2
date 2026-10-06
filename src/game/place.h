@@ -77,7 +77,8 @@
 #include "ecs/registry.h"
 #include "game/ai.h"       // AiBrain / MotionOwner / kRethinkBaseSec — один токен, один каданс
 #include "game/npc_pool.h" // NpcPool, Needs, NpcId
-#include "game/room.h"     // FloorRooms, RoomId, kVerbCount, бины и потолки
+#include "game/room.h"      // FloorRooms, RoomId, kVerbCount, бины и потолки
+#include "game/zone_nav.h"  // ZoneNav — нав по зонам, два чтения на шаг
 #include "world/level_stack.h"
 
 namespace giga {
@@ -156,7 +157,13 @@ struct PlacePick {
     std::int32_t score = 0;     // интерес − издержка
     std::int32_t cost = 0;      // издержка выбранного
     std::uint32_t judged = 0;   // СУЖДЕНИЙ комнат (комната в N бинах судится N раз)
-    std::uint32_t bins = 0;     // бинов осмотрено
+    std::uint32_t bins = 0;
+    // ПРИБЛИЖАЮТСЯ ЛИ ВООБЩЕ — прибора на это не было НИКОГДА, и ровно поэтому
+    // «прибытий ноль» три захода подряд нельзя было отличить от «идут, но
+    // медленно». Σ расстояния в ЗОНАХ от тела до его цели по ведомым телам:
+    // падает — ходок доходит, стоит — не доходит, и видно это одной строкой.
+    std::uint32_t zoneDistSum = 0;
+    std::uint32_t zoneDistBodies = 0;     // бинов осмотрено
 };
 
 // ОДНА ДВЕРЬ «найди место, где можно Х».
@@ -203,7 +210,13 @@ struct PlaceTick {
     std::uint32_t offnav = 0;
     std::uint32_t idle = 0;        // тел без цели (делегируют wander_step)
     std::uint32_t judged = 0;      // Σ суждений комнат — ЦЕНА запроса числом
-    std::uint32_t bins = 0;        // Σ осмотренных бинов
+    std::uint32_t bins = 0;
+    // ПРИБЛИЖАЮТСЯ ЛИ ВООБЩЕ — прибора на это не было НИКОГДА, и ровно поэтому
+    // «прибытий ноль» три захода подряд нельзя было отличить от «идут, но
+    // медленно». Σ расстояния в ЗОНАХ от тела до его цели по ведомым телам:
+    // падает — ходок доходит, стоит — не доходит, и видно это одной строкой.
+    std::uint32_t zoneDistSum = 0;
+    std::uint32_t zoneDistBodies = 0;        // Σ осмотренных бинов
 };
 
 // ОДИН проход «выбери место и иди туда» по воплощённым жителям слоя.
@@ -228,10 +241,15 @@ struct PlaceTick {
 //
 // Пустой бейк (`fine.flow` пуст, бейк в полёте) — no-op, не UB: тот же
 // контракт, которым живут `wander_step` и `ai_patrol_step`.
+// `zones` — НАВ ПО ЗОНАМ ([game/zone_nav.h]). Когда он построен, проход идёт по
+// нему: два чтения, без решётки и без слепого остатка якоря. nullptr или
+// непостроенный — старый путь через `route_step`, чтобы снос решётки был
+// отдельным инкрементом и было с чем сравнивать замером.
 PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
                             const nav::CoarseGraph& coarse,
                             const nav::FineNav& fine, LayerId layer, double now,
-                            const GravityField* gravity = nullptr);
+                            const GravityField* gravity = nullptr,
+                            const ZoneNav* zones = nullptr);
 
 } // namespace giga::game
 
