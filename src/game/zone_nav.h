@@ -35,7 +35,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "game/room.h" // RoomId, kNoRoom, FloorRooms — зоны и их раскраска
+#include "game/room.h"   // RoomId, kNoRoom, FloorRooms — зоны и их раскраска
+#include "world/nav.h"   // nav::kNavDir — ЕДИНСТВЕННЫЙ словарь направлений
+#include "world/types.h" // kMacroCells
 
 namespace giga {
 class MacroGrid;
@@ -175,6 +177,48 @@ void bake_zone_dist(const ZoneGraph& g, ZoneDist& out, int threads = 0,
 // из уже горячей строки.
 RoomId zone_next(const ZoneGraph& g, const ZoneDist& dist, RoomId from,
                  RoomId to);
+
+// Слот соседки в списке зоны (0..degree−1), или −1 если не соседка. Это и есть
+// номер ПЛОСКОСТИ, в которой лежит поле «как выйти к этой соседке». Поиск
+// двоичный: соседки отсортированы бейком графа, и ровно ради этого.
+int zone_nbr_slot(const ZoneGraph& g, RoomId zone, RoomId nbr);
+
+// --- ПОЛЯ ВНУТРИ ЗОНЫ: «куда шагнуть, чтобы выйти к соседке» ----------------
+//
+// Второе и последнее чтение шага агента. Поле — по клеткам ОДНОЙ зоны, на
+// КАЖДУЮ её соседку, и обрезано границей зоны: залив из соседки не растекается
+// по миру, поэтому поле стоит размер зоны, а не размер тора. Ровно это и есть
+// ответ на «полей нужно слишком много».
+//
+// ИСТОЧНИК ЗАЛИВА — ВСЯ ГРАНИЦА С СОСЕДКОЙ, а не клетка-дверь (решение
+// владельца 2026-10-06: «без дверей, обобщённые зоны»). Многоисточниковый обход
+// от всех своих клеток, у которых есть проходимый сосед из той зоны. Следствие,
+// которое достаётся даром: агент идёт к ТОЙ части границы, которая к нему
+// ближе. В прототипе с дверями это приходилось выбирать ТРЕТЬИМ чтением («через
+// какую дверь?»); здесь выбор исчез вместе с дверью.
+//
+// РАСКЛАДКА — ПЛОСКОСТЯМИ, и это не экономия, а следствие обрезки: поля разных
+// зон не пересекаются по клеткам, значит k-е поля ВСЕХ зон ложатся в одну
+// плоскость на весь тор без конфликта. Плоскостей ровно столько, какова
+// МАКСИМАЛЬНАЯ степень зоны, а не сколько всего рёбер в мире.
+inline constexpr std::uint8_t kZoneFlowArrived = 6;    // клетка НА границе: выходить
+inline constexpr std::uint8_t kZoneFlowNone = 0xFFu;   // не моя зона / не достигнута
+
+struct ZoneFlow {
+    std::uint32_t planes = 0;      // = макс. степень зоны
+    std::vector<std::uint8_t> dir; // planes × kMacroCells
+
+    bool built() const { return planes != 0 && !dir.empty(); }
+    std::uint8_t at(int slot, std::size_t cell) const {
+        return dir[static_cast<std::size_t>(slot) * kMacroCells + cell];
+    }
+    std::size_t bytes() const { return dir.size(); }
+};
+
+// Бейк полей. Бейк-таймовый; детерминирован (FIFO, фиксированный порядок
+// соседей, семена в порядке клеток).
+void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
+                    const MacroGrid& grid, int size, ZoneFlow& out);
 
 } // namespace game
 } // namespace giga

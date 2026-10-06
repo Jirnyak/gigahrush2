@@ -32,11 +32,9 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
     out.at = fr.roomAt; // семена — ОБЪЯВЛЕНИЕ, копией: `roomAt` неприкосновенна
     RoomId* at = out.at.data();
 
-    // Шесть направлений, тот же порядок, что у нава ([world/nav.h] kNavDir).
-    // Порядок фиксирован не ради совместимости, а ради детерминизма ничьих — он
-    // и есть правило «кто пришёл раньше».
-    static constexpr int kDir[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0},
-                                       {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+    // Направления — ЕДИНСТВЕННЫЙ словарь дерева (`nav::kNavDir`), не свой.
+    // Второй словарь направлений здесь уже стоил тихо неверной грани (S20.7), и
+    // порядок важен отдельно: он и есть правило «кто пришёл раньше» при ничьей.
     std::vector<std::uint32_t> q;
     q.reserve(kMacroCells);
     for (std::size_t i = 0; i < kMacroCells; ++i)
@@ -51,9 +49,9 @@ void bake_zone_partition(const FloorRooms& fr, const MacroGrid& grid, int size,
         const int cx = static_cast<int>(ci) % W;
         const RoomId owner = at[ci];
         for (int d = 0; d < 6; ++d) {
-            const int nx = wrap_macro(cx + kDir[d][0]);
-            const int ny = wrap_macro(cy + kDir[d][1]);
-            const int nz = wrap_macro(cz + kDir[d][2]);
+            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
             const std::size_t ni = macro_index(nx, ny, nz);
             if (at[ni] != kNoRoom) continue; // уже чья-то — ничья решена раньше
             // Грань берётся у МЛАДШЕЙ клетки перехода: плюс-направления
@@ -191,6 +189,110 @@ RoomId zone_next(const ZoneGraph& g, const ZoneDist& dist, RoomId from,
         }
     }
     return best;
+}
+
+int zone_nbr_slot(const ZoneGraph& g, RoomId zone, RoomId nbr) {
+    if (!g.built() || zone == kNoRoom || nbr == kNoRoom) return -1;
+    const std::uint32_t z = static_cast<std::uint32_t>(zone) - 1u;
+    if (z >= g.zones) return -1;
+    const RoomId* b = g.begin(z);
+    const RoomId* e = g.end(z);
+    const RoomId* it = std::lower_bound(b, e, nbr);
+    if (it == e || *it != nbr) return -1;
+    return static_cast<int>(it - b);
+}
+
+void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
+                    const MacroGrid& grid, int size, ZoneFlow& out) {
+    out = ZoneFlow{};
+    if (!part.built() || !g.built()) return;
+    const std::uint32_t Z = g.zones;
+
+    // Плоскостей — ровно максимальная степень зоны. Не кап и не вкус: k-е поля
+    // всех зон не пересекаются по клеткам (каждое обрезано своей зоной),
+    // поэтому плоскостей нужно столько, сколько соседок у самой связной зоны.
+    std::uint32_t planes = 0;
+    for (std::uint32_t z = 0; z < Z; ++z)
+        if (g.degree(z) > planes) planes = g.degree(z);
+    if (planes == 0) return; // граф без рёбер — вести некуда
+    out.planes = planes;
+    out.dir.assign(static_cast<std::size_t>(planes) * kMacroCells, kZoneFlowNone);
+
+    // Клетки по зонам, CSR: обход зоны обязан стоить размер ЗОНЫ, а не размер
+    // тора, — иначе бейк стал бы Z × 2M и съел бы весь смысл обрезки.
+    std::vector<std::uint32_t> cellOff(Z + 1, 0);
+    for (std::size_t i = 0; i < kMacroCells; ++i)
+        if (part.at[i] != kNoRoom) ++cellOff[part.at[i] - 1 + 1];
+    for (std::uint32_t z = 1; z <= Z; ++z) cellOff[z] += cellOff[z - 1];
+    std::vector<std::uint32_t> cellsOf(cellOff[Z]);
+    {
+        std::vector<std::uint32_t> cur(cellOff.begin(), cellOff.end() - 1);
+        for (std::size_t i = 0; i < kMacroCells; ++i)
+            if (part.at[i] != kNoRoom)
+                cellsOf[cur[part.at[i] - 1]++] = static_cast<std::uint32_t>(i);
+    }
+
+    const int W = kMacroDim;
+    std::vector<std::uint32_t> q;
+    q.reserve(1u << 12);
+    for (std::uint32_t z = 0; z < Z; ++z) {
+        const RoomId mine = static_cast<RoomId>(z + 1);
+        const std::uint32_t deg = g.degree(z);
+        for (std::uint32_t k = 0; k < deg; ++k) {
+            const RoomId target = g.nbr[g.offset[z] + k];
+            std::uint8_t* plane = out.dir.data() + static_cast<std::size_t>(k) * kMacroCells;
+            q.clear();
+            // СЕМЕНА — ВСЯ ГРАНИЦА: свои клетки, у которых есть проходимый
+            // сосед из целевой зоны. Их много, и это не недостаток, а то самое
+            // третье чтение прототипа, которого здесь нет.
+            for (std::uint32_t ci = cellOff[z]; ci < cellOff[z + 1]; ++ci) {
+                const std::uint32_t c = cellsOf[ci];
+                const int cz = static_cast<int>(c) / (W * W);
+                const int cy = (static_cast<int>(c) / W) % W;
+                const int cx = static_cast<int>(c) % W;
+                for (int d = 0; d < 6; ++d) {
+                    const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+                    const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+                    const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+                    const std::size_t ni = macro_index(nx, ny, nz);
+                    if (part.at[ni] != target) continue;
+                    const int axis = d >> 1;
+                    const std::uint8_t cl =
+                        (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
+                                     : face_clearance_at(grid, nx, ny, nz, axis);
+                    if (cl < size) continue;
+                    plane[c] = kZoneFlowArrived;
+                    q.push_back(c);
+                    break;
+                }
+            }
+            // Залив ВНУТРЬ зоны. Обрезка — одна строка (`part.at[ni] != mine`),
+            // и она же есть причина, по которой поле стоит размер зоны.
+            for (std::size_t head = 0; head < q.size(); ++head) {
+                const std::uint32_t c = q[head];
+                const int cz = static_cast<int>(c) / (W * W);
+                const int cy = (static_cast<int>(c) / W) % W;
+                const int cx = static_cast<int>(c) % W;
+                for (int d = 0; d < 6; ++d) {
+                    const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+                    const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+                    const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+                    const std::size_t ni = macro_index(nx, ny, nz);
+                    if (part.at[ni] != mine) continue;       // ОБРЕЗКА ЗОНОЙ
+                    if (plane[ni] != kZoneFlowNone) continue; // уже достигнута
+                    const int axis = d >> 1;
+                    const std::uint8_t cl =
+                        (d & 1) != 0 ? face_clearance_at(grid, cx, cy, cz, axis)
+                                     : face_clearance_at(grid, nx, ny, nz, axis);
+                    if (cl < size) continue;
+                    // Шли c -> ni в направлении d, значит из ni обратно ведёт
+                    // (d ^ 1) — тот же закон обратного шага, что у нава.
+                    plane[ni] = static_cast<std::uint8_t>(d ^ 1);
+                    q.push_back(static_cast<std::uint32_t>(ni));
+                }
+            }
+        }
+    }
 }
 
 } // namespace giga::game

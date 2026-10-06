@@ -187,6 +187,98 @@ void table_is_a_metric(const World& w, const ZonePartition& part) {
                  static_cast<double>(dist.bytes()) / (1024.0 * 1024.0));
 }
 
+// ПОЛЯ ВНУТРИ ЗОНЫ (инкремент C). Четыре утверждения, и каждое о своём законе.
+void flow_is_clipped_and_leads_out(const World& w, const ZonePartition& part,
+                                   const ZoneGraph& g) {
+    ZoneFlow flow;
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, flow);
+    CHECK(flow.built());
+
+    // Плоскостей ровно столько, какова МАКСИМАЛЬНАЯ степень зоны: это не кап, а
+    // следствие обрезки — k-е поля всех зон не пересекаются по клеткам.
+    std::uint32_t maxDeg = 0;
+    for (std::uint32_t z = 0; z < g.zones; ++z)
+        if (g.degree(z) > maxDeg) maxDeg = g.degree(z);
+    CHECK(flow.planes == maxDeg);
+    std::fprintf(stderr,
+                 "[zone-nav] плоскостей %u (макс. степень зоны) | поля %.1f МиБ\n",
+                 flow.planes,
+                 static_cast<double>(flow.bytes()) / (1024.0 * 1024.0));
+
+    // 1. ОБРЕЗКА ЗОНОЙ. Значение в плоскости k может стоять только у клетки,
+    // чья зона в самом деле имеет k-ю соседку. Залив, перетёкший в соседку,
+    // ломает это первым же номером — и это главный сторож всей раскладки
+    // плоскостями: без обрезки поля разных зон начали бы драться за клетку.
+    std::size_t leaked = 0, covered = 0;
+    for (std::uint32_t k = 0; k < flow.planes; ++k)
+        for (std::size_t c = 0; c < kMacroCells; c += 7) {
+            if (flow.at(static_cast<int>(k), c) == kZoneFlowNone) continue;
+            ++covered;
+            const RoomId z = part.at[c];
+            if (z == kNoRoom || g.degree(static_cast<std::uint32_t>(z) - 1u) <= k)
+                ++leaked;
+        }
+    CHECK(leaked == 0);
+    CHECK(covered > 0); // поля не пусты — иначе утверждение выше тождественно
+
+    // 2+3. СПУСК ПРИХОДИТ НА ГРАНИЦУ, НЕ ВЫХОДЯ ИЗ ЗОНЫ, и граница — настоящий
+    // выход: у клетки `kZoneFlowArrived` есть ПРОХОДИМЫЙ сосед из целевой зоны.
+    int walked = 0, badArrive = 0, leftZone = 0, noArrive = 0;
+    for (std::uint32_t z = 0; z < g.zones && walked < 64; z += 211) {
+        const std::uint32_t deg = g.degree(z);
+        for (std::uint32_t k = 0; k < deg && walked < 64; ++k) {
+            const RoomId target = g.nbr[g.offset[z] + k];
+            // Любая клетка этой зоны, покрытая полем.
+            for (std::size_t c = 0; c < kMacroCells && walked < 64; c += 3) {
+                if (part.at[c] != static_cast<RoomId>(z + 1)) continue;
+                std::uint8_t d = flow.at(static_cast<int>(k), c);
+                if (d == kZoneFlowNone) continue;
+                std::size_t cur = c;
+                int steps = 0;
+                const int cap = static_cast<int>(kMacroCells);
+                while (d != kZoneFlowArrived && steps <= cap) {
+                    const int cx = static_cast<int>(cur % kMacroDim);
+                    const int cy = static_cast<int>((cur / kMacroDim) % kMacroDim);
+                    const int cz = static_cast<int>(cur / (kMacroDim * kMacroDim));
+                    cur = macro_index(wrap_macro(cx + nav::kNavDir[d][0]),
+                                      wrap_macro(cy + nav::kNavDir[d][1]),
+                                      wrap_macro(cz + nav::kNavDir[d][2]));
+                    if (part.at[cur] != static_cast<RoomId>(z + 1)) { ++leftZone; break; }
+                    d = flow.at(static_cast<int>(k), cur);
+                    if (d == kZoneFlowNone) { ++noArrive; break; }
+                    ++steps;
+                }
+                if (d != kZoneFlowArrived) { if (steps > cap) ++noArrive; }
+                else {
+                    // Граница обязана БЫТЬ выходом: проходимый сосед из target.
+                    const int cx = static_cast<int>(cur % kMacroDim);
+                    const int cy = static_cast<int>((cur / kMacroDim) % kMacroDim);
+                    const int cz = static_cast<int>(cur / (kMacroDim * kMacroDim));
+                    bool exit = false;
+                    for (int dd = 0; dd < 6 && !exit; ++dd) {
+                        const int nx = wrap_macro(cx + nav::kNavDir[dd][0]);
+                        const int ny = wrap_macro(cy + nav::kNavDir[dd][1]);
+                        const int nz = wrap_macro(cz + nav::kNavDir[dd][2]);
+                        if (part.cell(nx, ny, nz) != target) continue;
+                        const int axis = dd >> 1;
+                        const std::uint8_t cl =
+                            (dd & 1) != 0
+                                ? face_clearance_at(w.grid(), cx, cy, cz, axis)
+                                : face_clearance_at(w.grid(), nx, ny, nz, axis);
+                        if (cl >= kBodyClearanceSub) exit = true;
+                    }
+                    if (!exit) ++badArrive;
+                }
+                ++walked;
+            }
+        }
+    }
+    CHECK(walked > 0);      // спуск в самом деле прогнан
+    CHECK(leftZone == 0);   // ни один шаг не вывел из зоны
+    CHECK(noArrive == 0);   // ни один спуск не повис и не оборвался
+    CHECK(badArrive == 0);  // граница — настоящий выход в целевую зону
+}
+
 // Вырожденные входы — ответ, а не падение.
 void degenerate_inputs_answer(const World& w) {
     FloorRooms empty;
@@ -195,6 +287,9 @@ void degenerate_inputs_answer(const World& w) {
     CHECK(!part.built()); // зон нет — разбивки нет
     ZoneGraph g;
     bake_zone_graph(part, w.grid(), kBodyClearanceSub, g);
+    ZoneFlow flow;
+    bake_zone_flow(part, g, w.grid(), kBodyClearanceSub, flow);
+    CHECK(!flow.built()); // нет графа — нет полей
     CHECK(!g.built()); // зон нет — графа нет
     ZoneDist dist;
     bake_zone_dist(g, dist);
@@ -289,5 +384,6 @@ void test_zonenav_all() {
 
     zonenav_test::graph_equals_independent_recount(w, part);
     zonenav_test::table_is_a_metric(w, part);
+    zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter);
     zonenav_test::degenerate_inputs_answer(w);
 }
