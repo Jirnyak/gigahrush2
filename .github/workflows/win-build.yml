@@ -49,7 +49,7 @@ jobs:
       # first run on a new SDK pays for it.
       - name: Cache Vulkan SDK
         id: vulkan-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: C:\VulkanSDK
           key: vulkan-sdk-${{ env.VULKAN_VERSION }}
@@ -86,7 +86,7 @@ jobs:
       # Keyed on CMakeLists.txt because that is where every GIT_TAG lives, so a
       # pin bump invalidates the cache by construction.
       - name: Cache FetchContent deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build-win/_deps
           key: win-deps-${{ hashFiles('CMakeLists.txt') }}
