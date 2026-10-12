@@ -26,6 +26,7 @@
 #include "core/rng.h"        // hash3, rand_below
 #include "game/floor_spec.h" // FloorKind
 #include "game/npc_pool.h"   // NpcId
+#include "game/room.h"       // RoomId/kNoRoom — цель наряда есть ЗОНА (§88/F.2)
 
 namespace giga::game {
 
@@ -116,11 +117,24 @@ inline const RoleTraits& role_traits(RoleId r) {
 // embodied window). Lazily attached by ai_patrol_step, the same rule as
 // PlayerMelee: no spawn path has to remember it. sizeof == 4: POD, no
 // allocation, cache-friendly.
+//
+// ЦЕЛЬ — ЗОНА, А НЕ УЗЕЛ РЕШЁТКИ (§88/F.2). Прежде здесь лежали два байта
+// решётки 4×4×4, `nodeFrom` и `nodeTo`. `nodeFrom` ТОЛЬКО ПИСАЛСЯ — читали его
+// одни тесты, — и ушёл вместе с предметом; его байт и оплатил расширение цели
+// до `RoomId`, поэтому пин 4 держится БЕЗ подкрутки, а не вопреки ей. Это
+// важнее арифметики: будь пин подкручен, он перестал бы быть утверждением.
 struct PatrolPlan {
-    std::uint8_t nodeFrom = 0xFF; // lattice node the current leg started at
-    std::uint8_t nodeTo = 0xFF;   // lattice node this leg walks to; 0xFF = no leg
-    std::uint8_t hops = 0;        // legs completed; feeds the next-node hash
-    std::uint8_t pad_ = 0;
+    RoomId zoneTo = kNoRoom; // зона, в которую идёт эта нога; kNoRoom = ноги нет
+    std::uint8_t hops = 0;   // legs completed; feeds the next-zone hash
+    // ТИКОВ ЖДАТЬ ПЕРЕД НОВЫМ ВЫБОРОМ, и этот байт — ЗАМЕР, а не запас.
+    // Первая редакция перевода на зоны его не имела, и замер 30000 кадров её
+    // опроверг: цель снималась КАЖДЫЙ тик (`unreach` 0 -> 3334), скан
+    // достижимости бежал по всем зонам этажа заново, тиков в прогоне стало на
+    // 40% меньше, и просел ДАЖЕ ход по делам — 3.83 -> 0.90 прибытий на 100
+    // замеров, потому что наряд забирал тела токеном и не доводил.
+    // `place_errand_step` ровно от этого и держит `nextPickAt`; у плана наряда
+    // места под double нет, и не нужно — лишний байт уже был паддингом.
+    std::uint8_t cooldown = 0;
 };
 static_assert(sizeof(PatrolPlan) == 4,
               "PatrolPlan must stay 4 bytes — sparse hot component");
@@ -128,6 +142,38 @@ static_assert(sizeof(PatrolPlan) == 4,
 // Patrol next-node salt. Distinct from kRoleSalt so a body's patrol route and
 // its role assignment cannot correlate by construction.
 inline constexpr std::uint32_t kPatrolSalt = 0x70617472u; // "patr"
+
+// Сколько зон попробовать на один выбор цели. ВЫВЕДЕНО, а не выбрано: цена
+// шага агента обязана быть константой, не зависящей от размера мира, — иначе
+// нав по зонам перестаёт быть тем, чем объявлен ([game/zone_nav.h] ЗАКОН).
+// Восемь — та же величина, что `kWanderPeriod`, и тем же доводом: порядок
+// одного кадрового бюджета на тело. Полный скан (5700 зон на этаже 6, 14742 на
+// нулевом) замерен и отвергнут: прогон 30000 кадров потерял 40% тиков.
+inline constexpr std::uint32_t kPatrolTries = 8;
+
+// ДАЛЬНОСТЬ НОГИ В ЗОНАХ, и это число ВЫВЕДЕНО ИЗ ЗАМЕРА, опровергнувшего его
+// отсутствие. Первые две редакции перевода брали цель РАВНОМЕРНО среди всех
+// зон этажа, и прибытий за прогон 30000 кадров было РОВНО НОЛЬ — дважды. Это
+// не дефект шага: арифметика сходится. Зона на этаже 6 — порядка 5 клеток, то
+// есть 10 м; равномерная цель среди 5700 зон лежит в 10–30 зонах пути, что при
+// 1.35 м/с даёт 100–300 с на ОДНУ ногу, а весь прогон несёт ~315 с сима.
+// Нога, которую нельзя закончить за прогон, непроверяема по построению.
+//
+// У решётки этой беды не было, и причина поучительна: 64 узла на весь тор
+// означали, что любая случайная цель лежит в пределах нескольких прыжков, то
+// есть КРУПНОСТЬ решётки работала ограничителем дальности. Переход на зоны
+// крупность убрал, а ограничитель надо было внести явно — его отсутствие и
+// есть то, что замер поймал.
+//
+// 6 зон ≈ 60 м ≈ 45 с хода: порядок одной смены патруля, и нога закрывается
+// внутри прогона, то есть становится ПРОВЕРЯЕМОЙ.
+inline constexpr std::uint16_t kPatrolLegZones = 6;
+
+// Тиков ждать, если за `kPatrolTries` достижимой зоны не нашлось или дверь
+// отказала. 64 тика при 125 Гц — полсекунды: достаточно редко, чтобы цена
+// отказа перестала быть видна в кадре, и достаточно часто, чтобы тело, у
+// которого мир переменился карвом, не стояло заметно для глаза.
+inline constexpr std::uint8_t kPatrolRepickCooldown = 64;
 
 // Medic constants. The heal credit lands in the PATIENT's Needs::hpBank — the
 // same bank (Needs::hpBank), so a medic in a ward

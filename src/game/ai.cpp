@@ -17,6 +17,7 @@
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
+#include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
 #include "world/field.h"      // Field<float>
@@ -881,16 +882,16 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     return out;
 }
 
-void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine, LayerId layer, float dt,
-                    const GravityField* gravity) {
+PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
+                          float dt, const GravityField* gravity) {
+    PatrolTick out;
     // Velocity is a rate and physics integrates it; dt would only matter if this
     // step accumulated anything, and its whole design is that it does not.
     (void)dt;
     // The same empty-bake rule wander_step lives by: while the async bake is in
-    // flight the vectors are empty, and indexing them would be UB, not a no-op.
-    // Patrol bodies simply wander until the floor's nav lands.
-    if (fine.flow.empty() || fine.nearest.empty()) return;
+    // flight the arrays are empty, and indexing them would be UB, not a no-op.
+    // Patrol bodies simply wander until the floor's zone nav lands.
+    if (!zones.built()) return out;
     // Same frame discipline as ai_step: the regime is a property of the world,
     // null keeps NegZ bit-for-bit (tests), Custom resolves through the vector.
     GravityRegime patrolRegime = GravityRegime::NegZ;
@@ -930,6 +931,10 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         // OTHER intent's steering from a stale read — leave it alone. The claim
         // below is what makes wander_step skip patrol bodies this tick.
         if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+        // Считается ПОСЛЕ отказа по токену, дословно как у `place_errand_step`:
+        // знаменатель обязан быть «тел, которых проход рассматривал», иначе
+        // доля прибытий поедет от чужого арбитража, а не от навигации.
+        ++out.considered;
 
         const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
         const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
@@ -941,35 +946,114 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         if (!reg.all_of<PatrolPlan>(e)) reg.emplace<PatrolPlan>(e);
         PatrolPlan& plan = reg.get<PatrolPlan>(e);
 
+        // ЗОНА ТЕЛА — через дверь с опорой на соседа, не `part.cell` напрямую:
+        // клетка центра тела бывает дыркой в разбивке (замер §88: 26 тел на
+        // тик), и это следствие названной неточности гранного клиренса, а не
+        // дефект. Дословно правило `place_errand_step`.
+        const RoomId myZone = zone_of_body(zones, cx, cy, cz);
+        if (myZone == kNoRoom) {
+            // Тело стоит там, где по карте путей стоять нельзя (нет касания):
+            // вести его некуда, отдаём вандеру.
+            ++out.offnav;
+            ++out.idle;
+            continue;
+        }
+
         // Leg bookkeeping: pick a new target when there is none, or on arrival.
-        if (plan.nodeTo >= nav::kNodes ||
-            fine.at(plan.nodeTo, cx, cy, cz) == nav::kFlowArrived) {
-            const std::uint8_t anchor = fine.nearest_node(cx, cy, cz);
-            if (anchor >= nav::kNodes) continue; // no anchor here: wander's problem
-            plan.nodeFrom = anchor;
+        //
+        // ПРИБЫЛ = СТОИТ В ЦЕЛЕВОЙ ЗОНЕ. Прежде прибытие спрашивалось у поля
+        // решётки (`kFlowArrived` на клетке узла), то есть у ТОЧКИ: нога
+        // кончалась в одной клетке из 2 097 152, и промах мимо неё на полметра
+        // читался как «ещё иду». Зона — это область, и попадание в неё есть
+        // тот же вопрос, на который отвечает прибытие дела (§88/E).
+        if (plan.cooldown > 0) --plan.cooldown;
+
+        const bool hadLeg = plan.zoneTo != kNoRoom;
+        if (!hadLeg || myZone == plan.zoneTo) {
+            // КАДАНС ПО СОБЫТИЮ, половина гейта (дословно `place_errand_step`):
+            // без цели и до истечения стаггера тело просто гуляет вандером.
+            // Без этой ветки выбор бежал каждый тик на каждом безнадёжном теле
+            // — замер назвал цену выше, в шапке `PatrolPlan::cooldown`.
+            if (plan.cooldown > 0) {
+                ++out.idle;
+                continue;
+            }
+            // Считается, только когда нога БЫЛА: первая нога заводится из
+            // `kNoRoom`, и засчитать её за прибытие значило бы получать
+            // «прибытие» на каждом рождении — прибор давал бы тем больше
+            // прибытий, чем хуже ходок.
+            if (hadLeg) ++out.arrived;
             ++plan.hops;
-            // The next node is HASHED from identity and leg count — the same
+            // The next ZONE is HASHED from identity and leg count — the same
             // stateless spread as seats and jitter — then scanned forward for
             // REACHABILITY. A sequential pick would march every Duty body on the
             // floor along one identical cycle.
+            //
+            // СКАН ОГРАНИЧЕН kPatrolTries, и это не кап «на всякий случай», а
+            // следствие замера. Первая редакция искала по ВСЕМ зонам этажа
+            // (5700 на шестом, 14742 на нулевом) и делала это заново каждый
+            // тик для каждого тела, которому не повезло, — прогон потерял 40%
+            // тиков. Восемь попыток выбраны тем же доводом, которым живёт
+            // `kWanderPeriod`: цена шага обязана быть КОНСТАНТОЙ, не зависящей
+            // от размера мира, иначе нав по зонам перестаёт быть тем, чем он
+            // объявлен. «Не нашёл за восемь» означает «подожди стаггер и
+            // спроси снова», а не «достижимых зон нет» — и разница записана
+            // счётчиком: такое тело идёт в `unreachable`, но цель не
+            // переспрашивается каждый тик.
+            const std::uint32_t zn = zones.dist.zones;
             const std::uint32_t h =
                 hash3(identity_seed(view.get<const NpcRef>(e).id),
                       plan.hops, kPatrolSalt);
-            std::uint8_t pick = 0xFF;
-            for (std::uint8_t k = 0; k < nav::kNodes; ++k) {
-                const std::uint8_t cand =
-                    static_cast<std::uint8_t>((h + k) % nav::kNodes);
-                if (cand == anchor) continue;
-                if (coarse.dist[anchor][cand] == nav::kUnreachable) continue;
-                pick = cand;
+            RoomId pick = kNoRoom;
+            for (std::uint32_t k = 0; k < kPatrolTries; ++k) {
+                const std::uint32_t cand = (h + k * 2654435761u) % zn;
+                if (cand + 1u == static_cast<std::uint32_t>(myZone)) continue;
+                const std::uint16_t zd =
+                    zones.dist.at(static_cast<std::uint32_t>(myZone) - 1u, cand);
+                // Достижима И БЛИЗКА: предел дальности выведен в
+                // [game/role.h] kPatrolLegZones из замера «ноль прибытий».
+                if (zd == kZoneUnreachable || zd > kPatrolLegZones) continue;
+                pick = static_cast<RoomId>(cand + 1u);
                 break;
             }
-            if (pick == 0xFF) continue; // isolated anchor: wander's problem
-            plan.nodeTo = pick;
+            if (pick == kNoRoom) {
+                ++out.unreachable;
+                ++out.idle;
+                plan.cooldown = kPatrolRepickCooldown;
+                continue; // not reachable in kPatrolTries: wander's problem
+            }
+            plan.zoneTo = pick;
         }
 
-        const std::uint8_t d = fine.at(plan.nodeTo, cx, cy, cz);
-        if (d == nav::kFlowNone) continue; // pocket: delegate, never freeze
+        // ДВА ЧТЕНИЯ, и ни одной волны: таблица даёт соседку, плоскость
+        // соседки даёт направление. Ступеньку разрешает САМА дверь, поэтому
+        // ветки на вертикаль у потребителя нет — была бы, значит дверь обошли.
+        const std::uint8_t d = zone_walk_dir(zones, myZone, plan.zoneTo, cx, cy, cz,
+                                             gf.pull ? gf.axis : -1);
+        if (d == kZoneFlowNone) {
+            // Маршрута нет (другая компонента связности, либо поле соседки не
+            // покрывает эту клетку). Цель снимается СО СТАГГЕРОМ: без него
+            // замер дал 3334 снятия за прогон против нуля у решётки, и платило
+            // за них всё остальное — см. шапку `PatrolPlan::cooldown`.
+            ++out.unreachable;
+            plan.zoneTo = kNoRoom;
+            plan.cooldown = kPatrolRepickCooldown;
+            ++out.idle;
+            continue;
+        }
+        ++out.walking;
+        {
+            // Прибор приближения — Σ по ВЕДОМЫМ телам, не по всем: тело без
+            // хода в знаменателе исказило бы среднее ровно в ту сторону,
+            // которая выглядит успехом.
+            const std::uint16_t zd = zones.dist.at(
+                static_cast<std::uint32_t>(myZone) - 1u,
+                static_cast<std::uint32_t>(plan.zoneTo) - 1u);
+            if (zd != kZoneUnreachable) {
+                out.zoneDistSum += zd;
+                ++out.zoneDistBodies;
+            }
+        }
         Velocity& vel = view.get<Velocity>(e);
         // CLAIM. From here this pass is the body's one writer this tick:
         // wander_step's ai_owns_motion guard is what turns the claim into the
@@ -977,10 +1061,20 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
 
         vec3 dir{0.0f, 0.0f, 0.0f};
-        if (d < 6 && (d >> 1) != gf.axis) {
+        if (d < 6 && (d >> 1) == gf.axis) {
+            // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
+            // ступенька и есть выход из зоны. Тангенциального пеленга у него
+            // ровно ноль, вести им нечем — тело отдаётся вандеру, а цель
+            // ОСТАЁТСЯ (токен не забран). Слепой прямой на цель здесь нет
+            // сознательно: ровно она была остатком якоря у решётки и стоила
+            // §88 нуля прибытий. Дословно правило `place_errand_step`.
+            ++out.idle;
+            continue;
+        }
+        if (d < 6) {
             // A step in the walking plane: aim at the next cell's CENTRE, the
             // same self-correcting rule (and the same measured reason) as the
-            // errand route step above.
+            // errand route step.
             const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
             const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
             const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
@@ -988,19 +1082,7 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
                 wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
                 wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
                 wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
-        } else if (d < 6) {
-            // The flow wants a step ALONG gravity, which walking cannot spend:
-            // walk toward the target node's column in the tangent plane instead
-            // — the same fallback the errand's vertical step takes, and for the
-            // same reason.
-            const LatticeNode n = lattice_unpack(plan.nodeTo);
-            dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(lattice_coord(n.ix)) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(lattice_coord(n.iy)) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(lattice_coord(n.iz)) + 0.5f) * kCellSize, kWorldExtent));
         }
-        // d == kFlowArrived: freshly advanced above and already standing on the
-        // new target's cell — hold still this tick, the next tick advances.
 
         const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
         if (d2 > kMinFleeGrad2) {
@@ -1016,6 +1098,7 @@ void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
         if (gf.axis != 1) vel.v.y = dir.y * kErrandSpeed;
         if (gf.axis != 2) vel.v.z = dir.z * kErrandSpeed;
     }
+    return out;
 }
 
 void ai_panic_publish_step(Registry& reg, const NpcPool& pool,

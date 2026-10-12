@@ -69,6 +69,11 @@ struct NavFixture {
     World world;
     nav::CoarseGraph cg{};
     nav::FineNav fn;
+    // НАВ ПО ЗОНАМ — синтетический, две зоны и одна плоскость поля (§88/F.2).
+    // Печь настоящий бейк зон здесь нельзя: он стоит сотни мс и 98 МиБ на
+    // этаж, а проверяется в этом файле ПОТРЕБИТЕЛЬ, не бейк. Синтетика
+    // подделывает ровно два чтения шага — таблицу и плоскость соседки.
+    game::ZoneNav zn;
     bool initialized = false;
 
     void init() {
@@ -76,6 +81,21 @@ struct NavFixture {
             generate_floor(world, 0, floor_spec(FloorKind::Residential), 42u);
             nav::bake_coarse(world.grid(), game::kBodyClearanceSub, cg);
             nav::bake_fine(world.grid(), game::kBodyClearanceSub, fn);
+            zn.part.zones = 2;
+            zn.part.at.assign(kMacroCells, static_cast<game::RoomId>(1));
+            for (int cz = 0; cz < kMacroDim; ++cz)
+                for (int cy = 0; cy < kMacroDim; ++cy)
+                    for (int cx = 48; cx < kMacroDim; ++cx)
+                        zn.part.at[macro_index(cx, cy, cz)] =
+                            static_cast<game::RoomId>(2);
+            zn.graph.zones = 2;
+            zn.graph.offset = {0u, 1u, 2u};
+            zn.graph.nbr = {static_cast<game::RoomId>(2),
+                            static_cast<game::RoomId>(1)};
+            zn.dist.zones = 2;
+            zn.dist.d = {0, 1, 1, 0};
+            zn.flow.planes = 1;
+            zn.flow.dir.assign(kMacroCells, 1); // слот 0, направление +x
             initialized = true;
         }
     }
@@ -198,8 +218,10 @@ static void test_t1_f2_05_multi_floor_demographic_seeding() {
 
 static void test_t1_f3_01_patrol_plan_component_pod_layout() {
     PatrolPlan plan{};
-    CHECK(plan.nodeFrom == 0xFF);
-    CHECK(plan.nodeTo == 0xFF);
+    // Цель наряда — ЗОНА (§88/F.2). `nodeFrom`/`nodeTo` решётки 4x4x4 умерли
+    // вместе с предметом; освободившийся байт оплатил расширение цели до
+    // RoomId, поэтому пин 4 держится БЕЗ подкрутки.
+    CHECK(plan.zoneTo == game::kNoRoom);
     CHECK(plan.hops == 0);
     static_assert(sizeof(PatrolPlan) == 4, "PatrolPlan must stay 4 bytes POD");
     static_assert(std::is_trivially_copyable_v<PatrolPlan>);
@@ -231,25 +253,41 @@ static void test_t1_f3_03_patrol_step_lazy_attachment() {
     brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
 
     g_nav.init();
-    ai_patrol_step(reg, g_nav.cg, g_nav.fn, 0u, 0.008f);
+    ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
     CHECK(reg.all_of<PatrolPlan>(e));
     CHECK(brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai));
 }
 
 static void test_t1_f3_04_patrol_leg_progression_and_hop_increment() {
-    PatrolPlan plan{};
-    plan.nodeFrom = 0;
-    plan.nodeTo = 1;
-    plan.hops = 0;
+    // ПЕРЕПИСАН НА ПРЕДМЕТ, А НЕ НА ЕГО КОПИЮ. Прежняя версия СИМУЛИРОВАЛА
+    // бухгалтерию ноги руками (`nodeFrom = nodeTo; nodeTo = lattice_neighbor`)
+    // и утверждала о своей же симуляции — то есть была второй реализацией
+    // закона и не могла покраснеть ни на какой правке `ai_patrol_step`.
+    // Теперь нога закрывается ПРОХОДОМ: тело переносится в целевую зону, и
+    // шаг обязан отчитаться о прибытии и завести новую ногу.
+    g_nav.init();
+    Registry reg;
+    Entity e = reg.create();
+    reg.emplace<Transform>(e, Transform{vec3{(32.0f + 0.5f) * kCellSize,
+                                             (32.0f + 0.5f) * kCellSize,
+                                             (1.0f + 0.5f) * kCellSize}, 0u});
+    reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+    reg.emplace<NpcRef>(e, NpcRef{1u});
+    AiBrain& brain = reg.emplace<AiBrain>(e);
+    brain.currentIntent = IntentPatrol;
+    brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
 
-    // Simulate completing leg
-    plan.nodeFrom = plan.nodeTo;
-    plan.nodeTo = static_cast<std::uint8_t>(lattice_neighbor(plan.nodeFrom, 1));
-    plan.hops++;
+    const PatrolTick first = ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
+    CHECK(first.arrived == 0u); // первая нога прибытием не считается
+    CHECK(reg.get<PatrolPlan>(e).hops == 1u);
+    CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<game::RoomId>(2));
 
-    CHECK(plan.nodeFrom == 1);
-    CHECK(plan.hops == 1);
-    CHECK(plan.nodeTo != 0xFF);
+    reg.get<Transform>(e).pos.x = (50.0f + 0.5f) * kCellSize;
+    brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+    const PatrolTick second = ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
+    CHECK(second.arrived == 1u);
+    CHECK(reg.get<PatrolPlan>(e).hops == 2u);
+    CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<game::RoomId>(1));
 }
 
 static void test_t1_f3_05_patrol_steering_in_walking_plane() {
@@ -266,7 +304,7 @@ static void test_t1_f3_05_patrol_steering_in_walking_plane() {
     g.global = vec3{0.0f, 0.0f, -9.81f};
 
     g_nav.init();
-    ai_patrol_step(reg, g_nav.cg, g_nav.fn, 0u, 0.008f, &g);
+    ai_patrol_step(reg, g_nav.zn, 0u, 0.008f, &g);
     // Vertical velocity is preserved
     CHECK(approx_eq(v.v.z, 5.0f));
 }
@@ -491,7 +529,7 @@ static void test_t1_f7_05_route_step_wiring_in_ai_patrol_step() {
     brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
 
     g_nav.init();
-    ai_patrol_step(reg, g_nav.cg, g_nav.fn, 0u, 0.008f);
+    ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
     CHECK(brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai));
 }
 
@@ -1052,17 +1090,15 @@ static void test_t2_f3_01_patrol_plan_unreachable_destination_fallback() {
     brain.currentIntent = IntentPatrol;
     brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
 
-    nav::CoarseGraph emptyCg{};
-    nav::FineNav emptyFn{};
-    ai_patrol_step(reg, emptyCg, emptyFn, 0u, 0.008f);
+    game::ZoneNav emptyZn{};
+    ai_patrol_step(reg, emptyZn, 0u, 0.008f);
     CHECK(brain.motion == static_cast<std::uint8_t>(MotionOwner::Wander));
 }
 
 static void test_t2_f3_02_patrol_plan_with_empty_nav_graphs() {
     Registry reg;
-    nav::CoarseGraph cg{};
-    nav::FineNav fn{};
-    ai_patrol_step(reg, cg, fn, 0u, 0.008f);
+    game::ZoneNav zn{};
+    ai_patrol_step(reg, zn, 0u, 0.008f);
 }
 
 static void test_t2_f3_03_patrol_hop_counter_overflow_wrap() {
@@ -1076,17 +1112,32 @@ static void test_t2_f3_04_patrol_plan_on_dead_or_despawned_entity() {
     Registry reg;
     Entity e = reg.create();
     reg.destroy(e);
-    nav::CoarseGraph cg{};
-    nav::FineNav fn{};
-    ai_patrol_step(reg, cg, fn, 0u, 0.008f);
+    game::ZoneNav unbaked{};
+    ai_patrol_step(reg, unbaked, 0u, 0.008f);
 }
 
 static void test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket() {
-    PatrolPlan plan{};
-    plan.nodeFrom = 5;
-    plan.nodeTo = 5;
-    plan.hops = 10;
-    CHECK(plan.nodeTo == 5);
+    // ПЕРЕПИСАН: прежде утверждал `plan.nodeTo == 5` сразу после `nodeTo = 5`,
+    // то есть проверял присваивание компилятора. Настоящая граница — ЗОНА В
+    // СВОЕЙ КОМПОНЕНТЕ СВЯЗНОСТИ: наряд обязан не выбрать цель вовсе, а не
+    // пойти наугад.
+    g_nav.init();
+    game::ZoneNav split = g_nav.zn;
+    split.dist.d = {0, game::kZoneUnreachable, game::kZoneUnreachable, 0};
+    Registry reg;
+    Entity e = reg.create();
+    reg.emplace<Transform>(e, Transform{vec3{(32.0f + 0.5f) * kCellSize,
+                                             (32.0f + 0.5f) * kCellSize,
+                                             (1.0f + 0.5f) * kCellSize}, 0u});
+    reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+    reg.emplace<NpcRef>(e, NpcRef{2u});
+    AiBrain& brain = reg.emplace<AiBrain>(e);
+    brain.currentIntent = IntentPatrol;
+    brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+    const PatrolTick t = ai_patrol_step(reg, split, 0u, 0.008f);
+    CHECK(t.unreachable == 1u);
+    CHECK(t.walking == 0u);
+    CHECK(reg.get<PatrolPlan>(e).zoneTo == game::kNoRoom);
 }
 
 // --- F4 Boundaries ---
@@ -1607,9 +1658,8 @@ static void test_t2_f14_02_entry_points_extreme_ticks() {
 
 static void test_t2_f14_03_entry_points_zero_delta_time() {
     Registry reg;
-    nav::CoarseGraph cg{};
-    nav::FineNav fn{};
-    ai_patrol_step(reg, cg, fn, 0u, 0.0f);
+    game::ZoneNav zn{};
+    ai_patrol_step(reg, zn, 0u, 0.0f);
 }
 
 static void test_t2_f14_04_entry_points_reentrant_concurrency_safety() {
@@ -1692,22 +1742,27 @@ static void test_t3_01_medic_healing_and_hpbank_during_samosbor() {
 }
 
 static void test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping() {
+    // ЗАВОРОТ ТОРА БОЛЬШЕ НЕ СВОЙСТВО РЕШЁТКИ: прежде тест вызывал
+    // `lattice_neighbor(3, 1)` и утверждал `== 0`, то есть пинил арифметику
+    // предмета, которого в навигации больше нет. Остаётся то, что в этом блоке
+    // было настоящим утверждением о НАРЯДЕ — арбитраж токеном: тело под
+    // `MotionOwner::Ai` проход не трогает.
+    g_nav.init();
     Registry reg;
     Entity guard = reg.create();
+    reg.emplace<Transform>(guard, Transform{vec3{(32.0f + 0.5f) * kCellSize,
+                                                 (32.0f + 0.5f) * kCellSize,
+                                                 (1.0f + 0.5f) * kCellSize}, 0u});
+    Velocity& vel = reg.emplace<Velocity>(guard, Velocity{vec3{0.0f, 7.0f, 0.0f}});
+    reg.emplace<NpcRef>(guard, NpcRef{3u});
     AiBrain& brain = reg.emplace<AiBrain>(guard);
-    PatrolPlan& plan = reg.emplace<PatrolPlan>(guard);
-
-    plan.nodeFrom = 0;
-    plan.nodeTo = 3;
+    brain.currentIntent = IntentPatrol;
     brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
 
     CHECK(ai_owns_motion(reg, guard));
-    CHECK(plan.nodeTo == 3);
-
-    plan.hops++;
-    plan.nodeFrom = 3;
-    plan.nodeTo = static_cast<std::uint8_t>(lattice_neighbor(3, 1));
-    CHECK(plan.nodeTo == 0);
+    const PatrolTick t = ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
+    CHECK(t.considered == 0u);   // отказ по токену в знаменатель не входит
+    CHECK(vel.v.y == 7.0f);      // и скорость чужого владельца не тронута
 }
 
 static void test_t3_03_bank_debt_and_interest_across_floor_transit() {
@@ -1907,7 +1962,7 @@ static void test_t3_15_single_writer_token_arbitration_with_patrol_and_wander() 
     // Promoted to Patrol: Ai owns
     brain.currentIntent = IntentPatrol;
     g_nav.init();
-    ai_patrol_step(reg, g_nav.cg, g_nav.fn, 0u, 0.008f);
+    ai_patrol_step(reg, g_nav.zn, 0u, 0.008f);
     CHECK(ai_owns_motion(reg, e));
 
     // Release back to Wander

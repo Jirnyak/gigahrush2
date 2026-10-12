@@ -3277,6 +3277,13 @@ int main(int argc, char** argv) {
     // что это вторая половина одного решения: ai_step отвечает «что я хочу»,
     // place_errand_step — «куда за этим идти».
     game::PlaceTick placeTick{};
+    // ПРИБОР НАРЯДА И ПРОГУЛКИ, заведён 2026-10-12 перед переводом обоих на нав
+    // по зонам. Без него «перевод помог» было бы впечатлением: у дела прибор
+    // появился только в §88/E, и именно он отличил «прибытий ноль» от «идут,
+    // но медленно» после ТРЁХ заходов вслепую. Повторять ту слепоту на
+    // оставшихся двух потребителях нечем оправдать.
+    game::PatrolTick patrolTick{};
+    game::WanderTick wanderTick{};
     std::uint64_t lastAimemLogTick = ~0ull;
     // Cumulative residents finished off by attrition since the run began. A running
     // total rather than a per-step count, because the failure it watches for is
@@ -5412,6 +5419,25 @@ int main(int argc, char** argv) {
                                  placeTick.unreachable, placeTick.offnav,
                                  placeTick.idle, placeTick.judged, placeTick.bins,
                                  placeTick.zoneDistSum, placeTick.zoneDistBodies);
+                    // ТЕ ЖЕ ИМЕНА, что у дела, и тот же такт печати: три
+                    // прохода ходьбы сравниваются построчно, а не на глаз.
+                    std::fprintf(stderr,
+                                 "[patrol] STEP tick=%llu seen=%u walk=%u "
+                                 "arrive=%u unreach=%u offnav=%u idle=%u "
+                                 "zdist=%u/%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 patrolTick.considered, patrolTick.walking,
+                                 patrolTick.arrived, patrolTick.unreachable,
+                                 patrolTick.offnav, patrolTick.idle,
+                                 patrolTick.zoneDistSum,
+                                 patrolTick.zoneDistBodies);
+                    std::fprintf(stderr,
+                                 "[wander] STEP tick=%llu seen=%u walk=%u "
+                                 "arrive=%u repick=%u stuck=%u chase=%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 wanderTick.considered, wanderTick.walking,
+                                 wanderTick.arrived, wanderTick.repicked,
+                                 wanderTick.stuck, wanderTick.chasing);
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u "
@@ -6044,8 +6070,9 @@ int main(int argc, char** argv) {
                 // Runs on the same baked nav wander reads; while the bake is in
                 // flight the flow is empty and patrol bodies wander like everyone.
                 const auto profPatrolT0 = prof_now();
-                game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
-                                     kSimDt, &activeWorld.gravity());
+                patrolTick = game::ai_patrol_step(
+                    reg, nav.zones(), activeLayer, kSimDt,
+                    &activeWorld.gravity());
                 prof_add(kProfPatrol, profPatrolT0);
                 // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — та же арбитражная
                 // цепочка: бегство (ai_step) → патруль → дело → прогулка.
@@ -6059,10 +6086,9 @@ int main(int argc, char** argv) {
                     simNow, &activeWorld.gravity(), &nav.zones());
                 prof_add(kProfPlace, profPlaceT0);
                 const auto profWanderT0 = prof_now();
-                game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
-                                  nav.coarse(),
-                                  nav.fine(), activeLayer, simTick,
-                                  &activeWorld.gravity());
+                wanderTick = game::wander_step(
+                    reg, stack.layer(activeLayer).grid(), pool, nav.coarse(),
+                    nav.fine(), activeLayer, simTick, &activeWorld.gravity());
                 prof_add(kProfWander, profWanderT0);
 
                 // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ

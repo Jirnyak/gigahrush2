@@ -769,7 +769,7 @@ grep -rn 'supply_prop_at' src/ | grep -v room_supply  → 3   (prop_system.cpp �
 
 | что | мера | следствие |
 |---|---|---|
-| `rhythm` в восьми формулах | `src/game/ai.cpp:153 «    const float rhythm = 0.0f;»`; `grep -rn minuteOfDay src/` → **2**, оба объявление и комментарий | суточный ритм не влияет ни на один интент. Шапка `src/game/ai.h` про это ЧЕСТНА — заглушка названа |
+| `rhythm` в восьми формулах | `src/game/ai.cpp:154 «    const float rhythm = 0.0f;»`; `grep -rn minuteOfDay src/` → **2**, оба объявление и комментарий | суточный ритм не влияет ни на один интент. Шапка `src/game/ai.h` про это ЧЕСТНА — заглушка названа |
 | `p.armed` | `grep -rn '\.armed' src/` → 3: два чтения в формулах + объявление `bool armed = false`. **Писателя нет** | `IntentCombat` стартует с **−16** для всей толпы, хотя `ai_equip_step@src/game/ai.h` выдаёт телам оружие. Поле не связано с `Equipped` ни одной строкой |
 | `p.factionAssaultTarget` | писателя нет | `IntentFactionAssault` не может выиграть argmax **никогда** |
 

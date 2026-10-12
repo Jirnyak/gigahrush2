@@ -127,9 +127,25 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed);
 // camera holder and — since monsters now pursue the crowd as well — to every
 // resident a hunting monster weighs up. The rate control that keeps this from
 // emptying a floor is [hunt.h]; read it before changing what a mob chases.
-void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
-                 const nav::CoarseGraph& coarse,
-                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
-                 const GravityField* gravity = nullptr);
+// ЧТО СДЕЛАЛ ОДИН `wander_step` — словарь `PlaceTick`/`PatrolTick`, чтобы три
+// прохода ходьбы были сравнимы одной строкой лога (см. довод у `PatrolTick`).
+//
+// `considered` считает ПОСЕЩЁННЫХ этим тиком, а не всех в слое: проход ходит
+// стаггером (`kWanderPeriod`), и знаменатель, не знающий про стаггер, занижал
+// бы долю прибытий ровно в восемь раз. Это тот же класс лжи прибора, за
+// который платили в §88 нормировкой на кадры вместо замеров.
+struct WanderTick {
+    std::uint32_t considered = 0;  // тел, ПОСЕЩЁННЫХ этим тиком (стаггер учтён)
+    std::uint32_t walking = 0;     // тел, которым выдана скорость хода
+    std::uint32_t arrived = 0;     // целей достигнуто этим тиком
+    std::uint32_t repicked = 0;    // новых целей выбрано
+    std::uint32_t stuck = 0;       // маршрута нет из этой клетки
+    std::uint32_t chasing = 0;     // тел на прямой погоне (нав не спрашивался)
+};
+
+WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
+                       const nav::CoarseGraph& coarse,
+                       const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
+                       const GravityField* gravity = nullptr);
 
 } // namespace giga::game

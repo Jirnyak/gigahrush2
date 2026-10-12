@@ -102,11 +102,12 @@ namespace {
 
 } // namespace
 
-void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
+WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                  const nav::CoarseGraph& coarse,
                  const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
                  const GravityField* gravity) {
-    if (fine.flow.empty()) return;  // nav not baked for this floor
+    WanderTick out;
+    if (fine.flow.empty()) return out;  // nav not baked for this floor
 
     GravityRegime steerRegime = GravityRegime::NegZ;
     if (gravity != nullptr) {
@@ -204,6 +205,10 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // the crowd spreads evenly across the period with no scheduling state.
         const std::uint32_t id = static_cast<std::uint32_t>(entt::to_integral(e));
         if (hash_u32(id) % kWanderPeriod != phase) continue;
+        // Знаменатель — ПОСЕЩЁННЫЕ, а не все в слое: стаггер пропускает семь
+        // тел из восьми, и знаменатель, его не знающий, занизил бы долю
+        // прибытий ровно в восемь раз.
+        ++out.considered;
 
         WanderTarget& wt = view.get<WanderTarget>(e);
         Velocity& vel = view.get<Velocity>(e);
@@ -340,6 +345,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                         if (gf.axis != 2) vel.v.z = (to.z / toLen) * sp;
                     }
                 }
+                ++out.chasing;
                 continue;  // no repath, no flow read — it has a target
             }
         }
@@ -364,6 +370,8 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
 
         const bool arrived = (flow == nav::kFlowArrived && hop == wt.node);
         const bool stuck = (flow == nav::kFlowNone);
+        if (arrived) ++out.arrived;
+        if (stuck) ++out.stuck;
         if (arrived || stuck) {
             // Pick a fresh destination, but not every pass — thrashing between
             // unreachable nodes would burn the whole stagger budget on repathing.
@@ -379,6 +387,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 std::uint32_t h = hash_u32(id ^ static_cast<std::uint32_t>(tick));
                 wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                 wt.cooldown = kRepathCooldown;
+                ++out.repicked;
             }
             if (gf.axis != 0) vel.v.x = 0.0f;
             if (gf.axis != 1) vel.v.y = 0.0f;
@@ -413,6 +422,7 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                         hash_u32(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
                     wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
                     wt.cooldown = kRepathCooldown;
+                    ++out.repicked;
                 }
                 if (gf.axis != 0) vel.v.x = 0.0f;
                 if (gf.axis != 1) vel.v.y = 0.0f;
@@ -429,12 +439,13 @@ void wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     kCellSize;
         }
 
+        ++out.walking;
         if (gf.axis != 0) vel.v.x = dir.x * speed;
         if (gf.axis != 1) vel.v.y = dir.y * speed;
         if (gf.axis != 2) vel.v.z = dir.z * speed;
         // Gravity axis is left to physics_step
     }
-
+    return out;
 }
 
 } // namespace giga::game

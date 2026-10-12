@@ -250,6 +250,7 @@
 #include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
 #include "game/faction.h"      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
+#include "game/zone_nav.h"     // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "world/level_stack.h" // LayerId
 #include "world/types.h"       // kCellSize — the seat radius is stated in cells
 
@@ -1049,9 +1050,37 @@ namespace giga::game {
 // arbitration every other steering system obeys. A body whose flow byte says
 // "unreachable from here" is left to wander (a pocket is wander's problem).
 // `gravity` names the walking plane, same convention as `faction_feud_step`.
-void ai_patrol_step(Registry& reg, const nav::CoarseGraph& coarse,
-                    const nav::FineNav& fine, LayerId layer, float dt,
-                    const GravityField* gravity = nullptr);
+// ЧТО СДЕЛАЛ ОДИН `ai_patrol_step` — тот же словарь, что у `PlaceTick`
+// ([game/place.h]), и это не стиль, а условие сравнимости: три прохода ходьбы
+// обязаны отвечать на вопрос «доходит ли ходок» ОДИНАКОВЫМИ именами, иначе
+// перевод одного из них на другой нав нечем сверить с остальными.
+//
+// Прибора у наряда не было ВООБЩЕ. Это ровно та слепота, которой §88 стоил
+// трёх заходов: «прибытий ноль» нельзя было отличить от «идут, но медленно»,
+// пока у дела не завели `zdist`. Здесь он заводится ДО перевода, чтобы у
+// перевода была база, а не впечатление.
+struct PatrolTick {
+    std::uint32_t considered = 0;  // тел с IntentPatrol в слое
+    std::uint32_t walking = 0;     // тел, которые проход ВЁЛ (забрал токен)
+    std::uint32_t arrived = 0;     // ног завершено этим тиком (цель достигнута)
+    std::uint32_t unreachable = 0; // целей брошено: маршрута нет
+    std::uint32_t offnav = 0;      // тело вне проходимого множества — вандеру
+    std::uint32_t idle = 0;        // тел без хода (делегируют wander_step)
+    // ПРИБЛИЖАЮТСЯ ЛИ ВООБЩЕ — тот же прибор, которым §88/E отличил «прибытий
+    // ноль» от «идут, но медленно», и ровно его отсутствие стоило наряду двух
+    // заходов вслепую. Σ расстояния в ЗОНАХ от тела до его цели по ведомым
+    // телам: падает — ходок доходит, стоит — не доходит.
+    std::uint32_t zoneDistSum = 0;
+    std::uint32_t zoneDistBodies = 0;
+};
+
+// НАВ ПО ЗОНАМ, И ТОЛЬКО ОН (§88/F.2). Решётка 4×4×4 из наряда ушла: цель
+// была одним из 64 ЯКОРЕЙ, то есть одной клеткой из 2 097 152, а прибытие
+// спрашивалось у поля этой точки. Теперь цель — ЗОНА, прибытие — «стою в ней»,
+// а шаг — два чтения ([game/zone_nav.h] `zone_walk_dir`). Непостроенный бейк —
+// no-op, как и прежде: тела ходят вандером, пока этаж печётся.
+PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
+                          float dt, const GravityField* gravity = nullptr);
 
 // The danger field's PRODUCER — the write half of the loop ai_step's threat
 // term has been waiting on ([diffusion.h], problems.md §52). Fleeing bodies

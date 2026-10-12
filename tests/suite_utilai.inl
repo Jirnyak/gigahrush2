@@ -1601,8 +1601,8 @@ static void test_utilai_all() {
     }
 
     // ======================================================================
-    // Patrol execution (ai_patrol_step) — a route, a claim, and a frame.
-    // Synthetic nav (the vectors are public), no floor bake needed.
+    // Patrol execution (ai_patrol_step) — ЗОНЫ, не решётка (§88/F.2).
+    // Синтетический нав по зонам: массивы публичные, бейк этажа не нужен.
     // ======================================================================
     {
         Registry reg;
@@ -1614,78 +1614,154 @@ static void test_utilai_all() {
         AiBrain& brain = reg.get<AiBrain>(e);
         brain.currentIntent = IntentPatrol;
 
-        // Uniform synthetic flow: every cell of every field says "step +x"
-        // (kNavDir[1]); every cell's anchor is node 0; every pair reachable
-        // (zeroed dist != kUnreachable).
-        nav::CoarseGraph coarse{};
-        nav::FineNav fine;
-        fine.nearest.assign(kMacroCells, 0);
-        fine.flow.assign(static_cast<std::size_t>(nav::kNodes) * kMacroCells, 1);
+        // ДВЕ ЗОНЫ, граница по x == 48, и ОДНА плоскость поля, говорящая «+x»
+        // в каждой клетке. Этого достаточно: шаг агента есть два чтения, и
+        // синтетика обязана подделать ровно их — таблицу (зона 1 → зона 2) и
+        // плоскость соседки (+x).
+        ZoneNav zn;
+        zn.part.zones = 2;
+        zn.part.at.assign(kMacroCells, static_cast<RoomId>(1));
+        for (int cz = 0; cz < kMacroDim; ++cz)
+            for (int cy = 0; cy < kMacroDim; ++cy)
+                for (int cx = 48; cx < kMacroDim; ++cx)
+                    zn.part.at[macro_index(cx, cy, cz)] = static_cast<RoomId>(2);
+        zn.graph.zones = 2;
+        zn.graph.offset = {0u, 1u, 2u};
+        zn.graph.nbr = {static_cast<RoomId>(2), static_cast<RoomId>(1)};
+        zn.dist.zones = 2;
+        zn.dist.d = {0, 1, 1, 0};
+        zn.flow.planes = 1;
+        zn.flow.dir.assign(kMacroCells, 1); // слот 0 = соседка, направление +x
+        CHECK(zn.built());
 
-        // 1. EMPTY BAKE IS A NO-OP, not UB — the wander_step rule. No plan may
-        //    be attached and no claim taken while the async bake is in flight.
-        nav::FineNav unbaked;
-        ai_patrol_step(reg, coarse, unbaked, kLayer, kSimDt);
+        // 1. НЕПОСТРОЕННЫЙ БЕЙК — NO-OP, НЕ UB (правило wander_step). Ни плана,
+        //    ни токена, пока бейк в полёте.
+        ZoneNav unbaked;
+        PatrolTick t0 = ai_patrol_step(reg, unbaked, kLayer, kSimDt);
         CHECK(!reg.all_of<PatrolPlan>(e));
         CHECK(!ai_owns_motion(reg, e));
+        CHECK(t0.considered == 0u);
 
-        // 2. THE STEP: lazily attaches the plan, picks a REACHABLE leg, steers
-        //    +x toward the next cell centre, and CLAIMS the body — wander's
-        //    ai_owns_motion guard is what makes that a single-writer fact.
-        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        // 2. ШАГ: лениво навешивает план, берёт ДОСТИЖИМУЮ зону, ведёт +x к
+        //    центру следующей клетки и ЗАБИРАЕТ токен.
+        PatrolTick t1 = ai_patrol_step(reg, zn, kLayer, kSimDt);
         CHECK(reg.all_of<PatrolPlan>(e));
-        CHECK(reg.get<PatrolPlan>(e).nodeTo < nav::kNodes);
+        CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<RoomId>(2));
         CHECK(ai_owns_motion(reg, e));
+        CHECK(t1.considered == 1u);
+        CHECK(t1.walking == 1u);
+        // ПЕРВАЯ нога прибытием НЕ СЧИТАЕТСЯ — иначе прибор давал бы тем
+        // больше прибытий, чем хуже ходок (обратная полярность: засчитать её,
+        // и эта строка краснеет).
+        CHECK(t1.arrived == 0u);
         Velocity& vel = reg.get<Velocity>(e);
-        CHECK(vel.v.x > 0.0f);  // along the flow...
-        CHECK(vel.v.y == 0.0f); // ...and only along it
-        CHECK(vel.v.z == 0.0f); // the gravity axis belongs to physics (NegZ)
+        CHECK(vel.v.x > 0.0f);  // вдоль поля...
+        CHECK(vel.v.y == 0.0f); // ...и только вдоль него
+        CHECK(vel.v.z == 0.0f); // ось гравитации принадлежит физике (NegZ)
 
-        // 3. THE FRAME: under PosX the flow's +x step is a step ALONG gravity —
-        //    walking cannot spend it, so the fallback walks toward the target
-        //    node's COLUMN in the (y, z) tangent plane and the x sentinel
-        //    survives. Mutation (write vel.v.z/x unconditionally, the marko
-        //    version) -> red here.
+        // 3. ПРИБЫЛ = СТОИТ В ЦЕЛЕВОЙ ЗОНЕ, а не на целевой КЛЕТКЕ. Переносим
+        //    тело в зону 2 — нога обязана закрыться прибытием и завестись
+        //    новая. Это и есть то, чего решётка дать не могла: там нога
+        //    кончалась в одной клетке из 2 097 152.
+        reg.get<Transform>(e).pos.x = (50.0f + 0.5f) * kCellSize;
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        PatrolTick t2 = ai_patrol_step(reg, zn, kLayer, kSimDt);
+        CHECK(t2.arrived == 1u);
+        CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<RoomId>(1));
+        CHECK(reg.get<PatrolPlan>(e).hops == 2u);
+
+        // 4. ФРЕЙМ: под PosX шаг «+x» есть шаг ВДОЛЬ гравитации, а ходьба его
+        //    тратить не умеет. Наряд обязан ОТКАЗАТЬСЯ и отдать тело вандеру —
+        //    НЕ подменять шаг слепой прямой на цель. Ровно эта подмена была
+        //    остатком якоря у решётки и стоила §88 нуля прибытий, поэтому
+        //    утверждение здесь положительное: сторож x цел И токен не взят.
+        //    Мутация «вернуть прямую на цель» роняет вторую строку.
         GravityField sideways;
         sideways.regime = GravityRegime::PosX;
         sideways.global = vec3{9.81f, 0.0f, 0.0f};
+        reg.get<Transform>(e).pos = vec3{(32.0f + 0.5f) * kCellSize,
+                                        (32.0f + 0.5f) * kCellSize,
+                                        (1.0f + 0.5f) * kCellSize};
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
         vel.v = vec3{0.25f, 0.0f, 0.0f};
-        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt, &sideways);
-        CHECK(ai_owns_motion(reg, e));
-        CHECK(vel.v.x == 0.25f); // gravity-axis sentinel untouched
-        // The tangent write happened (toward the node column) or is an owned
-        // zero if the body already stands on it — both are claims, not shoves;
-        // what may NOT happen is a write along x. Nudge the body off any column
-        // and the tangent speed must be real:
-        reg.get<Transform>(e).pos.y += 3.0f * kCellSize;
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt, &sideways);
-        CHECK(vel.v.x == 0.25f);
-        CHECK(vel.v.y != 0.0f || vel.v.z != 0.0f);
+        PatrolTick t3 = ai_patrol_step(reg, zn, kLayer, kSimDt, &sideways);
+        CHECK(vel.v.x == 0.25f); // сторож оси гравитации не тронут
+        CHECK(!ai_owns_motion(reg, e));
+        CHECK(t3.idle == 1u);
+        CHECK(t3.walking == 0u);
 
-        // 4. ARBITRATION: an Ai-owned body is NOT re-steered — the claim guard,
-        //    with the polarity run both ways (owned -> untouched).
+        // 5. ARBITRATION: тело под токеном НЕ переруливается — гейт claim'а,
+        //    полярность прогнана в обе стороны (owned -> не тронуто).
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
         vel.v = vec3{0.0f, 7.0f, 0.0f};
-        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        PatrolTick t4 = ai_patrol_step(reg, zn, kLayer, kSimDt);
         CHECK(vel.v.y == 7.0f);
+        CHECK(t4.considered == 0u); // отказ по токену в знаменатель не входит
 
-        // 5. РАЗВИЛКА МОЗГОВ (S13.7a) — Б6.2, потеря управления у владельца.
+        // 6. НЕДОСТИЖИМАЯ ЗОНА: таблица говорит «другая компонента», и наряд
+        //    обязан не выбрать цель вовсе, а не идти наугад.
+        //
+        //    `cooldown = 0` ставится РУКАМИ, и это не поблажка тесту: шаг 4
+        //    только что отказал дверью и законно взвёл стаггер, а здесь
+        //    проверяется ПРЕДИКАТ ДОСТИЖИМОСТИ. Без обнуления тест мерил бы
+        //    стаггер под именем достижимости — ровно тот класс лжи прибора,
+        //    когда верное число отвечает на НЕ ТОТ вопрос. Сам стаггер
+        //    проверяется отдельно, шагом ниже.
+        ZoneNav split = zn;
+        split.dist.d = {0, kZoneUnreachable, kZoneUnreachable, 0};
+        reg.get<PatrolPlan>(e).zoneTo = kNoRoom;
+        reg.get<PatrolPlan>(e).cooldown = 0;
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        PatrolTick t5 = ai_patrol_step(reg, split, kLayer, kSimDt);
+        CHECK(t5.unreachable == 1u);
+        CHECK(t5.walking == 0u);
+        CHECK(reg.get<PatrolPlan>(e).zoneTo == kNoRoom);
+
+        // 6b. СТАГГЕР — и это утверждение КУПЛЕНО ЗАМЕРОМ, а не вкусом.
+        //     Редакция без него снимала цель каждый тик: прогон 30000 кадров
+        //     дал `unreach` 3334 против нуля у решётки, потерял 40% тиков и
+        //     просадил ход по делам с 3.83 до 0.90 прибытий на 100 замеров.
+        //     Поэтому следующий тик после отказа обязан НЕ переспрашивать:
+        //     `unreachable` остаётся нулём, тело идёт в `idle`, а счётчик
+        //     стаггера убывает. Обратная полярность — снять `cooldown` из
+        //     `PatrolPlan` — роняет первые две строки.
+        CHECK(reg.get<PatrolPlan>(e).cooldown == kPatrolRepickCooldown);
+        PatrolTick t6 = ai_patrol_step(reg, split, kLayer, kSimDt);
+        CHECK(t6.unreachable == 0u);
+        CHECK(t6.idle == 1u);
+        CHECK(reg.get<PatrolPlan>(e).cooldown < kPatrolRepickCooldown);
+
+        // 6в. ПРЕДЕЛ ДАЛЬНОСТИ НОГИ — второе утверждение, купленное замером.
+        //     Равномерная цель среди 5700 зон этажа лежит в 10–30 зонах, то
+        //     есть 100–300 с хода при 315 с сима в прогоне: ноль прибытий был
+        //     АРИФМЕТИКОЙ, а не дефектом шага, и держался два захода. Нога
+        //     обязана укладываться в `kPatrolLegZones`.
+        //     Обратная полярность — снять предел — и эта строка краснеет на
+        //     таблице, где достижимая зона стоит дальше предела.
+        ZoneNav far = zn;
+        far.dist.d = {0, static_cast<std::uint16_t>(kPatrolLegZones + 1),
+                      static_cast<std::uint16_t>(kPatrolLegZones + 1), 0};
+        reg.get<PatrolPlan>(e).zoneTo = kNoRoom;
+        reg.get<PatrolPlan>(e).cooldown = 0;
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+        PatrolTick t7 = ai_patrol_step(reg, far, kLayer, kSimDt);
+        CHECK(t7.unreachable == 1u);
+        CHECK(reg.get<PatrolPlan>(e).zoneTo == kNoRoom);
+
+        // 7. РАЗВИЛКА МОЗГОВ (S13.7a) — Б6.2, потеря управления у владельца.
         //    Смерть игрока вселяет его НЕ в новое тело, а в живого жителя
         //    ([app/main.cpp] possess_a_survivor), и AiBrain прежнего владельца
         //    записи достаётся игроку целиком. Если житель был патрульным,
         //    currentIntent == IntentPatrol приезжает вместе с телом, а этот
         //    шаг стоит в кадре ПОСЛЕ controller_step — и перетирал ввод
-        //    человека в том же тике. Проход обязан спрашивать ТЕЛО (decider_of),
-        //    как это делают ai_step/wander_step/ai_equip_step.
+        //    человека в том же тике. Проход обязан спрашивать ТЕЛО (decider_of).
         //
         //    Мутация «снять гейт decider_of» роняет обе строки ниже.
         reg.emplace<CameraTag>(e, CameraTag{});
         brain.currentIntent = IntentPatrol;
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
         vel.v = vec3{0.0f, 7.0f, 0.0f};
-        ai_patrol_step(reg, coarse, fine, kLayer, kSimDt);
+        ai_patrol_step(reg, zn, kLayer, kSimDt);
         CHECK(vel.v.y == 7.0f);      // ввод человека не тронут
         CHECK(!ai_owns_motion(reg, e)); // и тело не захвачено
         reg.remove<CameraTag>(e);
