@@ -404,7 +404,12 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
                 inventory_give(inv, sl.item, sl.count, sl.condition);
             const std::uint16_t moved =
                 static_cast<std::uint16_t>(sl.count - unplaced);
-            if (moved == 0) break;  // full: the rest stays in the box
+            // Локально по слоту, как у живого экрана обыска ([main.cpp]
+            // `take_box_slot`): стек доливается только в начатый стек того же
+            // предмета и износа, поэтому отказ одному слоту ничего не говорит
+            // о следующем. `break` здесь терял всё, что лежало ПОСЛЕ первого
+            // не влезшего предмета.
+            if (moved == 0) continue;  // full for THIS item: the rest may fit
             // Взятое покидает МЕСТО (S12.4/S12.5, живой хук supply): запас
             // комнаты падает, следующий голодный видит меньшее «есть».
             supply_item_at(reg, t.pos, sl.item, -static_cast<int>(moved));
@@ -426,15 +431,30 @@ std::int32_t loot_containers_step(Registry& reg, NpcPool& pool, LayerId layer,
         for (int i = 0; i < kInvSlots; ++i)
             if (item_valid(c.inv.slots[i].item) && c.inv.slots[i].count)
                 empty = false;
-        if (empty) {
-            c.opened = true;
-            // Darkened in place rather than destroyed: a container that vanishes tells
-            // the player nothing about where they have already been, and remembering
-            // that yourself across 256 rooms is not reasonable.
-            if (Renderable* r = reg.try_get<Renderable>(e)) r->color = kOpenColour;
-        }
+        // Цвет здесь и так не доезжал до экрана: у этого обхода нет
+        // прод-вызывающего, а значит и некому было поднять
+        // `propPassNeedsRebuild`. Закон крышки переехал в примитив.
+        if (empty) (void)container_mark_opened(reg, e, c);
     }
     return took;
+}
+
+bool container_mark_opened(Registry& reg, Entity e, Container& c) {
+    c.opened = true;
+    Renderable* r = reg.try_get<Renderable>(e);
+    if (r == nullptr) return false;
+    // Затемняется НА МЕСТЕ, а не уничтожается: исчезнувший ящик не говорит
+    // игроку ничего о том, где он уже был, а помнить это самому на 256
+    // комнатах неразумно.
+    //
+    // Сверка перед записью — чтобы `true` значило «кадру есть что
+    // перестраивать»: обыск пустого ящика второй раз не должен заказывать
+    // перестройку всего прохода пропов.
+    if (r->color.x == kOpenColour.x && r->color.y == kOpenColour.y &&
+        r->color.z == kOpenColour.z)
+        return false;
+    r->color = kOpenColour;
+    return true;
 }
 
 } // namespace giga::game

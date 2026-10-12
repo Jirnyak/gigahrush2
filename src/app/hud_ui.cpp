@@ -184,28 +184,41 @@ void draw_interact(const HudContext& c) {
 // Алерты: то, что требует реакции СЕЙЧАС. Пока два источника — самосбор
 // (сирена этажа) и кровотечение нужд; лента одноразовых событий («поднял:
 // бинт») придёт строкой сюда же, когда у неё будет шов-источник.
+// Самосборную половину спрашивает `samosbor_beat` — ОДИН switch без snprintf,
+// поэтому предикат живости стоит ровно столько же, сколько прежняя ветка по
+// фазе, и не рисует строку дважды ([samosbor.h]: «cheap enough that
+// samosbor_beat_text and samosbor_beat_pulse01 each call it»).
 bool alerts_live(const HudContext& c) {
-    if (c.samosbor) {
-        const auto ph = static_cast<game::SamosborPhase>(c.samosbor->phase);
-        if (ph == game::SamosborPhase::Warning ||
-            ph == game::SamosborPhase::Active)
-            return true;
-    }
+    if (c.samosbor && game::samosbor_beat(*c.samosbor) != game::SamosborBeat::None)
+        return true;
     return c.needsTick && c.needsTick->failed != 0;
 }
 
 void draw_alerts(const HudContext& c) {
+    // ОДНА строка вместо своей копии закона. До этого здесь жила ТРЕТЬЯ запись
+    // баннера: ветка по фазе со своими русскими литералами и `phaseMs * 0.001`.
+    // Она врала трижды, и каждая ложь — следствие того, что считала сама:
+    //   * «САМОСБОР ЧЕРЕЗ 0 с» последние 999 мс окна решения (усечение вместо
+    //     округления ВВЕРХ — игрок читает «уже поздно», пока ещё может уйти);
+    //   * в Active печатала остаток фазы, тогда как на прибытии значимо
+    //     `phaseTotalMs` — на сколько ты подписался (30 с у z=0 против 15 мин
+    //     у |z|=50, та самая кривая глубины);
+    //   * про ПЕЧАТЬ и её цену в HP не говорила вовсе, то есть единственное
+    //     место, где игре положено назвать цену жизни снаружи укрытия,
+    //     молчало; `samosbor_alarm` берёт её из `samosbor_unsheltered_pressure`,
+    //     то есть из той же константы, которой биллится `apply_damage`.
+    // Плюс `Clear` («туман уходит») не существовал как бит вообще.
     if (c.samosbor) {
-        const auto ph = static_cast<game::SamosborPhase>(c.samosbor->phase);
-        if (ph == game::SamosborPhase::Warning)
-            ImGui::TextColored(kDanger, "САМОСБОР ЧЕРЕЗ %.0f с",
-                               c.samosbor->phaseMs * 0.001);
-        else if (ph == game::SamosborPhase::Active)
-            ImGui::TextColored(kDanger, "САМОСБОР  %s  %.0f с",
-                               game::samosbor_variant_name_ru(
-                                   static_cast<game::SamosborVariant>(
-                                       c.samosbor->variant)),
-                               c.samosbor->phaseMs * 0.001);
+        if (const game::SamosborAlarm a = game::samosbor_alarm(*c.samosbor); a.on) {
+            // Пульс — в АЛЬФУ, а не в сам цвет: красный обязан остаться красным
+            // (мандат палитры — красный только там, где угроза), а треугольная
+            // волна на отсчёте даёт лампу тревоги. Дно 0.55, не 0: на нуле
+            // пульса строка исчезала бы целиком дважды за период, то есть
+            // мигала бы в НЕЧИТАЕМОСТЬ ровно тогда, когда её читают.
+            ImVec4 col = kDanger;
+            col.w = 0.55f + 0.45f * a.pulse;
+            ImGui::TextColored(col, "%s", a.text);
+        }
     }
     if (c.needsTick && c.needsTick->failed != 0)
         ImGui::TextColored(kDanger, "ИСТОЩЕНИЕ: ТЕЛО ТЕРЯЕТ HP");

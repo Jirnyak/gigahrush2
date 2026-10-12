@@ -116,6 +116,7 @@
 #include "render/gpu_timer.h"
 #include "render/gpu_light_grid.h"
 #include "core/prof.h"  // GIGA_PROF=1 — per-system свод кадра ([prof] ниже)
+#include "core/table_guard.h"  // GIGA_TABLE_BY_ENUM — имена слотов профиля
 
 #include "render/gpu_cull_pass.h"
 #include "app/ui_shell.h"
@@ -612,7 +613,21 @@ enum ProfSlot : unsigned {
     kProfDiffusion,   // ai_panic_publish_step + diffusion_tick
     kProfAi,          // ai_step + ai_equip_step
     kProfController,  // controller_step
-    kProfWander,      // ai_patrol_step + wander_step (толпа)
+    // ТРИ СЛОТА ВМЕСТО ОДНОГО, и это та же болезнь, что лечил раздел
+    // big_judge/big_debt ниже: слот, накрывающий несколько разных работ, даёт
+    // верное ЧИСЛО и неверную ПРИЧИНУ. `wander` накрывал ai_patrol_step +
+    // place_errand_step + wander_step — три системы, у которых и стоимость, и
+    // судьба разные (две из трёх прямо сейчас переезжают на нав по зонам, и
+    // мерить переезд общим слотом нельзя).
+    kProfPatrol,      // ai_patrol_step — наряд
+    kProfPlace,       // place_errand_step — дело (S12–S13)
+    kProfWander,      // wander_step — прогулка
+    // ДВЕРИ. Сэмплер (`/usr/bin/sample`, §87.8) вывел `door_crowd_step` в
+    // КРУПНЕЙШУЮ собственную работу главного потока — 2798 отсчётов из 10 030
+    // не ожидающих, то есть 28%, — а в профиле её не было ПО ИМЕНИ вовсе: она
+    // стоит между `prof_add(kProfWander)` и `prof_add(kProfAcoustics)` и
+    // падала в «прочее тика». Первый шаг — слот, а не оптимизация.
+    kProfDoors,       // door_crowd_step — житель открывает дверь
     kProfAcoustics,   // investigate_step (слух мобов; шары вырезаны — problems.md §65)
     kProfCombat,      // player_melee..mob_attack..hazard..projectile..charge
     kProfPhysics,     // slow_step + physics_step (агенты)
@@ -639,11 +654,31 @@ enum ProfSlot : unsigned {
     kProfBigDebt,
     kProfCount
 };
-static const char* const kProfName[kProfCount] = {
-    "tick",   "noise",     "diffusion", "ai",     "controller",
-    "wander", "acoustics", "combat",    "physics", "rigid",
-    "impact", "needs",     "focus",     "witness", "nav",
-    "big_judge", "big_debt"};
+// Имя слота несёт СВОЙ ЭНУМ КОЛОНКОЙ ([core/table_guard.h]). Прежде это был
+// плоский список из семнадцати литералов на `[kProfCount]`, и он проваливал
+// оба закона порядка таблиц разом: вставка слота в середину энума молча
+// сдвигала все имена ниже (профиль печатал бы чужие числа под правильными
+// именами), а слот, добавленный БЕЗ имени, добирался нулями — то есть
+// `%s` получал nullptr. Ни компилятор, ни ctest этого не видели.
+// Закрывает одну из семи строк остатка «закон порядка таблиц» (SKELETON №15).
+struct ProfRow {
+    ProfSlot slot;
+    const char* name;
+};
+static constexpr ProfRow kProfRows[] = {
+    {kProfTick, "tick"},           {kProfNoise, "noise"},
+    {kProfDiffusion, "diffusion"}, {kProfAi, "ai"},
+    {kProfController, "controller"},
+    {kProfPatrol, "patrol"},       {kProfPlace, "place"},
+    {kProfWander, "wander"},       {kProfDoors, "doors"},
+    {kProfAcoustics, "acoustics"}, {kProfCombat, "combat"},
+    {kProfPhysics, "physics"},     {kProfRigid, "rigid"},
+    {kProfImpact, "impact"},       {kProfNeeds, "needs"},
+    {kProfFocus, "focus"},         {kProfWitness, "witness"},
+    {kProfNav, "nav"},             {kProfBigJudge, "big_judge"},
+    {kProfBigDebt, "big_debt"}};
+GIGA_TABLE_BY_ENUM(kProfRows, &ProfRow::slot, kProfCount);
+static const char* prof_name(unsigned s) { return kProfRows[s].name; }
 // НЕ const: GIGA_PROF=1 — путь разработчика, а флаг --prof ниже включает
 // то же самое БЕЗ переменной окружения. Игроку, которого просят снять
 // профиль, нельзя выдавать инструкцию «выставь переменную среды и
@@ -4003,7 +4038,7 @@ int main(int argc, char** argv) {
                                         g_frameMark.propSkinMs;
                     put("tick", g_profFrameMs[kProfTick]);
                     for (unsigned s = kProfFocus; s <= kProfNav; ++s)
-                        put(kProfName[s], g_profFrameMs[s]);
+                        put(prof_name(s), g_profFrameMs[s]);
                     put("med_apply", g_mediumApplyMs);
                     put("carve", g_frameMark.carveMs);
                     put("light_swap", g_frameMark.lightSwapMs);
@@ -4023,7 +4058,7 @@ int main(int argc, char** argv) {
                     put("big_judge", g_profFrameMs[kProfBigJudge]);
                     put("big_debt", g_profFrameMs[kProfBigDebt]);
                     for (unsigned s = kProfNoise; s <= kProfNeeds; ++s)
-                        put(kProfName[s], g_profFrameMs[s]);
+                        put(prof_name(s), g_profFrameMs[s]);
                     std::fprintf(stderr,
                                  "[hitch-cpu]   в тике %.1f =%s | прочее тика "
                                  "%.1f\n",
@@ -4101,7 +4136,7 @@ int main(int argc, char** argv) {
                     line("sim", profSim);
                     line("render", profRender);
                     for (unsigned s = 0; s < kProfCount; ++s)
-                        line(kProfName[s], g_profRing[s]);
+                        line(prof_name(s), g_profRing[s]);
                     line("carve", profCarve);
                     line("light_swap", profLightSwap);
                     line("prop_skin", profPropSkin);
@@ -5297,9 +5332,18 @@ int main(int argc, char** argv) {
                 // tick. That is now settled by a TOKEN rather than by hope: `AiBrain::motion`
                 // decides per body, and both foreign writers — wander_step and
                 // faction_feud_step — carry `if (ai_owns_motion(reg, e)) continue;`.
-                // MEASURED over 200 ticks x 24 bodies: ai_step wrote Velocity 2400 times,
-                // wander_step 300, and BOTH in one tick ZERO times; wander wrote 0 times
-                // while the token was held and 600 once delegated. [ai.h]
+                // ЗАМЕР СНЯТ КАК ПРОТУХШИЙ. Здесь стояло «MEASURED over 200
+                // ticks x 24 bodies: ai_step wrote Velocity 2400 times,
+                // wander_step 300» — снято 2026-10-12, потому что эти числа
+                // мерили дерево ДО сноса эрранд-ветки из `ai_step` (§83.5).
+                // Сегодня единственный владеющий интент — IntentFlee, а
+                // остальные двенадцать уходят в `MotionOwner::Wander`, то есть
+                // соотношение ОБРАТНОЕ. Арбитраж токеном от этого не слабее —
+                // «оба писателя в одном тике» по-прежнему невозможно по
+                // построению, и это держит `ai_owns_motion`, а не замер. Числа,
+                // которые не держат ни одного утверждения и при этом врут,
+                // хуже отсутствующих: следующий читатель будет планировать
+                // против них. [ai.h]
                 //
                 // `aiCfg.enabled` is TRUE and `aiMem` is passed every tick. Memory is the
                 // demand column owned above; null would disable recall/record bit-for-bit.
@@ -5999,18 +6043,22 @@ int main(int argc, char** argv) {
                 // guard then skips them — one Velocity writer per body per tick.
                 // Runs on the same baked nav wander reads; while the bake is in
                 // flight the flow is empty and patrol bodies wander like everyone.
-                const auto profWanderT0 = prof_now();
+                const auto profPatrolT0 = prof_now();
                 game::ai_patrol_step(reg, nav.coarse(), nav.fine(), activeLayer,
                                      kSimDt, &activeWorld.gravity());
+                prof_add(kProfPatrol, profPatrolT0);
                 // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — та же арбитражная
                 // цепочка: бегство (ai_step) → патруль → дело → прогулка.
                 // Каждый следующий пропускает тело, уже взятое предыдущим, по
                 // одному и тому же токену `ai_owns_motion`. Здесь ЗАМКНУЛОСЬ
                 // звено S12–S13: спрос из нужд × предложение комнаты − путь
                 // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
+                const auto profPlaceT0 = prof_now();
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, nav.coarse(), nav.fine(), activeLayer,
                     simNow, &activeWorld.gravity(), &nav.zones());
+                prof_add(kProfPlace, profPlaceT0);
+                const auto profWanderT0 = prof_now();
                 game::wander_step(reg, stack.layer(activeLayer).grid(), pool,
                                   nav.coarse(),
                                   nav.fine(), activeLayer, simTick,
@@ -6022,12 +6070,15 @@ int main(int argc, char** argv) {
                 // проёма» спрашивается один раз и по свежему месту. Дренаж
                 // doorDirty — тот же шов карва в топе кадра, которым уходит
                 // тоггл игрока; второго пути у двери нет и быть не должно.
-                if (const std::uint32_t opened = game::door_crowd_step(
-                        stack.layer(activeLayer), doors, reg, activeLayer,
-                        simTick, doorDirty)) {
+                const auto profDoorsT0 = prof_now();
+                const std::uint32_t openedDoors = game::door_crowd_step(
+                    stack.layer(activeLayer), doors, reg, activeLayer,
+                    simTick, doorDirty);
+                prof_add(kProfDoors, profDoorsT0);
+                if (openedDoors) {
                     std::fprintf(stderr,
                                  "[door] толпа открыла %u | tick=%llu floor=%d\n",
-                                 static_cast<unsigned>(opened),
+                                 static_cast<unsigned>(openedDoors),
                                  static_cast<unsigned long long>(simTick),
                                  currentFloor);
                 }
@@ -7414,7 +7465,13 @@ int main(int argc, char** argv) {
                         // be the expensive way round. [contract.h]
                         const game::Contract off = game::contract_offer(
                             pool, sp, currentFloor, 0x9E37u);
-                        if (off.giver != game::kInvalidNpc &&
+                        // `kInvalidHandle`, не `kInvalidNpc`: `Contract::giver`
+                        // — это NpcHandle (id + поколение), а не NpcId, и
+                        // сравнение работало ЧИСТО СЛУЧАЙНО — оба сентинела
+                        // сегодня 0xFFFFFFFF. Разойдутся они молча, и тогда
+                        // «предложения нет» перестанет отличаться от
+                        // предложения от нулевого тела.
+                        if (off.giver != game::kInvalidHandle &&
                             game::contract_text(off, offerLine, sizeof(offerLine))) {
                             offer = off;
                         }
@@ -8672,6 +8729,17 @@ int main(int argc, char** argv) {
                     ImGui::Separator();
                     ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
                     for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
+                        // Фильтр по СОСТОЯНИЮ, и он обязан стоять ЗДЕСЬ:
+                        // `quest_line` отказывает только на невалидном id и
+                        // малом буфере, то есть рисует и Unseen, и Expired, и
+                        // Orphaned — все девятнадцать строк под заголовком
+                        // «quests N active». Два `snprintf` на строку, 18 из
+                        // 19 выброшены каждым кадром, и у заголовка с телом
+                        // расходились числа: `quest_active_count` считает
+                        // Active, а список печатал всё.
+                        if (quests.row[qi - 1].state !=
+                            static_cast<std::uint8_t>(game::QuestState::Active))
+                            continue;
                         char qline[320];
                         const game::QuestId qid = static_cast<game::QuestId>(qi);
                         if (game::quest_line(quests, qid, qline, sizeof(qline)))
@@ -8903,7 +8971,15 @@ int main(int argc, char** argv) {
                 auto mark_if_empty = [&]() {
                     if (boxC && boxC->inv.empty()) {
                         if (corpseC) corpseC->searched = true;
-                        else boxC->opened = true;
+                        // Крышка — один примитив ([container.h]): он же ставит
+                        // `opened`, он же темнит. Прежде здесь стояло голое
+                        // `boxC->opened = true`, и обысканный ящик не темнел
+                        // в игре НИ РАЗУ: цвет писал только обход, у которого
+                        // прод-вызывающих нет. Флаг перестройки обязателен —
+                        // статические инстансы читают цвет лишь под ним.
+                        else if (game::container_mark_opened(reg, lootEntity,
+                                                             *boxC))
+                            propPassNeedsRebuild = true;
                     }
                 };
 
@@ -9660,6 +9736,17 @@ int main(int argc, char** argv) {
             voxelMirror.mark_dirty(doorDirty.data(), doorDirty.size());
             nav.patch_carved_cells(stack.layer(activeLayer).grid(),
                                    doorDirty.data(), doorDirty.size());
+            // ОПАСНОСТЬ ТЕКЛА СКВОЗЬ ЗАКРЫТУЮ ДВЕРЬ, и это ровно та половина
+            // дефекта, которой `mark_diffusion_dirty` и заведён: его шапка
+            // называет оба симптома («текла сквозь закрытые двери и не текла
+            // сквозь свежий пролом»), а вызывающий был ОДИН — карв-шов. Дверь
+            // — такой же писатель статики, как карв (S20.4), и долг писателя
+            // один и полный: её dirtyCells уже дренируются здесь для зеркала,
+            // нава, автомата, антуража, якорей и пробуждения тел — диффузия
+            // была единственным слоем, пропущенным в этом перечне.
+            mark_diffusion_dirty(diffusionDriver,
+                                 stack.layer(activeLayer).grid(),
+                                 activeLayer, doorDirty);
             if (mediumPass.ready())
                 mediumPass.wake_cells(doorDirty.data(), doorDirty.size(),
                                       stack.layer(activeLayer), voxelMirror);

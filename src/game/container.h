@@ -128,6 +128,22 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 std::int32_t loot_containers_step(Registry& reg, class NpcPool& pool, LayerId layer,
                                   NoiseField* noise = nullptr);
 
+// КРЫШКА — единственный писатель «этот ящик уже открыли». Ставит `opened` и
+// затемняет `Renderable`; возвращает true, когда цвет СМЕНИЛСЯ, и тогда
+// вызывающий обязан перестроить статические инстансы пропов.
+//
+// Заведена потому, что закон крышки был написан ДВАЖДЫ и ни разу целиком.
+// Прозой выше («не уничтожается, остаётся видимо-открытым, потому что
+// исчезнувший ящик не говорит игроку, где он уже был») он обосновывался, а
+// исполнялся только в `loot_containers_step` — у которой прод-вызывающих нет.
+// Живой путь игрока (экран обыска) ставил `opened` и цвет не трогал, поэтому
+// в САМОЙ ИГРЕ обысканный ящик не темнел никогда. Второй половиной того же
+// дефекта был сам цвет: статические инстансы читают `Renderable::color` только
+// под `propPassNeedsRebuild`, так что присваивание без флага невидимо до
+// следующей чужой перестройки — поэтому результат и возвращается, а не
+// проглатывается.
+bool container_mark_opened(Registry& reg, Entity e, Container& c);
+
 // Roll the contents of one container. Exposed for tests: the value cap is the whole
 // design and it needs to be checkable without generating a floor.
 Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed);

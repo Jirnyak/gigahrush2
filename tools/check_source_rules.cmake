@@ -481,6 +481,38 @@ foreach(_dead_sym floor_room_mask floor_room_stride RoomBit bake_room_zones)
     endforeach()
 endforeach()
 
+# ---- Rule: баннер самосбора живёт в ОДНОМ месте ----------------------------
+# `samosbor_alarm` ([game/samosbor.h]) — единственный автор строки тревоги, и
+# его шапка на двадцать строк объясняет, почему он отдаётся ОДНИМ значением:
+# «это разница между тем, что бит выйдет, и тем, что он будет лежать в этом
+# файле непрочитанным». Он и лежал непрочитанным, пока худ катал ТРЕТЬЮ копию
+# закона — ветку по фазе со своими литералами, которая усекала секунды вместо
+# округления вверх, печатала остаток фазы вместо длительности и ни разу не
+# называла цену жизни снаружи укрытия.
+#
+# Правило двустороннее и потому не вырождается ни в одну сторону:
+#   * вызов пропал  — худ отвязали, бит снова лежит непрочитанным;
+#   * `samosbor_variant_name_ru` вернулся в худ — баннер катают руками заново.
+# Проверяется БАЙТОВЫМ `string(FIND)` по `file(READ)`, а не `file(STRINGS)`:
+# последний рвёт UTF-8, а файл полон русских литералов.
+set(_giga_hud "${GIGA_ROOT}/src/app/hud_ui.cpp")
+if(NOT EXISTS "${_giga_hud}")
+    list(APPEND GIGA_FAILURES
+        "src/app/hud_ui.cpp:1: худа игрока нет на месте — правило баннера самосбора ослепло. Либо файл переехал и правило устарело, либо худ снесён: и то и другое решает человек, молчать нельзя.")
+else()
+    file(READ "${_giga_hud}" _giga_hud_text)
+    string(FIND "${_giga_hud_text}" "samosbor_alarm(" _giga_hud_alarm)
+    if(_giga_hud_alarm LESS 0)
+        list(APPEND GIGA_FAILURES
+            "src/app/hud_ui.cpp:1: худ больше не зовёт samosbor_alarm() — баннер тревоги отвязан, и бит снова лежит в game/samosbor.h непрочитанным. Рисовать его обязан худ, одной строкой (сниппет в шапке samosbor_alarm).")
+    endif()
+    string(FIND "${_giga_hud_text}" "samosbor_variant_name_ru(" _giga_hud_roll)
+    if(_giga_hud_roll GREATER_EQUAL 0)
+        list(APPEND GIGA_FAILURES
+            "src/app/hud_ui.cpp:1: худ снова катает строку самосбора руками (samosbor_variant_name_ru). Это была ТРЕТЬЯ запись закона и она врала трижды — секунды усечением, длительность остатком фазы, цена укрытия молчанием. Строку отдаёт samosbor_alarm(), и только он.")
+    endif()
+endif()
+
 # ---- Rule 8: incomplete toroidal triple (AGENTS.md: x/y/z wrap) -------------
 # The world wraps on all three axes, and the failure mode this rule exists for
 # is PARTIAL wrapping: a distance computed with wrap_delta_f on two axes and a

@@ -4,8 +4,6 @@
 #include <cmath>
 #include <cstdio>
 
-#include "game/faction_relations.h"
-
 namespace giga::game {
 
 namespace {

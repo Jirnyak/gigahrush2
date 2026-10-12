@@ -531,7 +531,20 @@ CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bu
                 inventory_give(inv, sl.item, sl.count, sl.condition);
             const std::uint16_t moved =
                 static_cast<std::uint16_t>(sl.count - unplaced);
-            if (moved == 0) break; // inventory full: remainder stays on corpse
+            // `continue`, НЕ `break`: отказ ПО СЛОТУ локален. `inventory_give`
+            // доливает частичный стек ТОГО ЖЕ предмета и ТОГО ЖЕ износа
+            // ([inventory_give.cpp] проход 1), поэтому «этому слоту места нет»
+            // не значит «места нет никому» — при забитых 64 слотах патроны не
+            // влезают, а бинты долились бы в начатый стек, и `break` не брал
+            // их никогда.
+            //
+            // ЭТО НЕ ЗАКРЫВАЕТ bugs.md Б2. Живой путь игрока — экран обыска
+            // (`take_box_slot`, [main.cpp]), и там закон УЖЕ верен: отказ это
+            // `return` из пер-слотовой лямбды, а TakeAll зовёт её в цикле. Эта
+            // функция прод-вызывающих не имеет (харнесс-бэкенд, сказано в
+            // [main.cpp] у шва обыска), так что правка лечит будущую вторую
+            // реализацию, а не жалобу владельца. Причина Б2 не найдена.
+            if (moved == 0) continue;
             res.roublesGained +=
                 item_def(sl.item).value * static_cast<std::int32_t>(moved);
             res.itemsTaken++;
