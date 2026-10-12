@@ -67,8 +67,6 @@ static bool approx_eq(float a, float b, float eps = 1e-4f) {
 // Shared Navigation Fixture for fast test execution
 struct NavFixture {
     World world;
-    nav::CoarseGraph cg{};
-    nav::FineNav fn;
     // НАВ ПО ЗОНАМ — синтетический, две зоны и одна плоскость поля (§88/F.2).
     // Печь настоящий бейк зон здесь нельзя: он стоит сотни мс и 98 МиБ на
     // этаж, а проверяется в этом файле ПОТРЕБИТЕЛЬ, не бейк. Синтетика
@@ -79,8 +77,6 @@ struct NavFixture {
     void init() {
         if (!initialized) {
             generate_floor(world, 0, floor_spec(FloorKind::Residential), 42u);
-            nav::bake_coarse(world.grid(), game::kBodyClearanceSub, cg);
-            nav::bake_fine(world.grid(), game::kBodyClearanceSub, fn);
             zn.part.zones = 2;
             zn.part.at.assign(kMacroCells, static_cast<game::RoomId>(1));
             for (int cz = 0; cz < kMacroDim; ++cz)
@@ -471,54 +467,15 @@ static void test_t1_f6_05_looter_memory_recall_scavenge_affordance() {
     CHECK(r.live == 1);
 }
 
-// --- F7: nav::route_step Direct Wiring ---
+// --- F7: ВЖИВЛЁННОСТЬ ШАГА В ПРОХОД НАРЯДА ---
+//
+// Четыре теста решётки (достижимость и симметрия coarse-графа, `kFlowArrived`
+// на якоре, `route_step` между соседними якорями и на одной клетке) СНЕСЕНЫ
+// 2026-10-12 вместе с предметом (§88/F.2 шаг 3). Пятый остался и впервые
+// говорит правду своим именем: он проверяет не маршрут решётки, а то, что
+// проход наряда ЗАБИРАЕТ ТЕЛО, получив шаг от нава по зонам.
 
-static void test_t1_f7_01_coarse_graph_reachability_and_symmetry() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-
-    for (int i = 0; i < nav::kNodes; ++i) {
-        CHECK(cg.dist[i][i] == 0);
-        CHECK(cg.next[i][i] == i);
-    }
-}
-
-static void test_t1_f7_02_fine_nav_anchor_arrived_flow() {
-    g_nav.init();
-    const nav::FineNav& fn = g_nav.fn;
-
-    LatticeNode n0 = lattice_unpack(0);
-    int ax = lattice_coord(n0.ix), ay = lattice_coord(n0.iy), az = lattice_coord(n0.iz);
-    std::uint8_t flowAtAnchor = fn.at(0, ax, ay, az);
-    CHECK(flowAtAnchor == nav::kFlowArrived);
-}
-
-static void test_t1_f7_03_route_step_adjacent_anchors() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-    const nav::FineNav& fn = g_nav.fn;
-
-    LatticeNode n0 = lattice_unpack(0);
-    LatticeNode n1 = lattice_unpack(1);
-    ivec3 from{lattice_coord(n0.ix), lattice_coord(n0.iy), lattice_coord(n0.iz)};
-    ivec3 to{lattice_coord(n1.ix), lattice_coord(n1.iy), lattice_coord(n1.iz)};
-
-    std::uint8_t step = nav::route_step(cg, fn, from, to);
-    CHECK(step != nav::kFlowNone);
-}
-
-static void test_t1_f7_04_route_step_identical_cells() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-    const nav::FineNav& fn = g_nav.fn;
-
-    LatticeNode n0 = lattice_unpack(0);
-    ivec3 pos{lattice_coord(n0.ix), lattice_coord(n0.iy), lattice_coord(n0.iz)};
-    std::uint8_t step = nav::route_step(cg, fn, pos, pos);
-    CHECK(step == nav::kFlowArrived);
-}
-
-static void test_t1_f7_05_route_step_wiring_in_ai_patrol_step() {
+static void test_t1_f7_05_zone_step_wiring_in_ai_patrol_step() {
     Registry reg;
     Entity e = reg.create();
     reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
@@ -895,13 +852,6 @@ static void test_t1_f14_03_interaction_step_contract() {
     bus.init();
     bool ok = interaction_step(reg, entt::null, Interactable::Kind::Terminal, bus);
     CHECK(!ok);
-}
-
-static void test_t1_f14_04_route_step_contract() {
-    nav::CoarseGraph cg{};
-    nav::FineNav fn{};
-    std::uint8_t step = nav::route_step(cg, fn, ivec3{0,0,0}, ivec3{10,10,10});
-    CHECK(step == nav::kFlowNone);
 }
 
 static void test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc() {
@@ -1292,60 +1242,12 @@ static void test_t2_f6_05_looter_memory_full_slot_eviction() {
 }
 
 // --- F7 Boundaries ---
-
-static void test_t2_f7_01_route_step_solid_wall_endpoint() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-    const nav::FineNav& fn = g_nav.fn;
-
-    ivec3 from{16, 16, 16};
-    ivec3 solidWall{0, 0, 0};
-    std::uint8_t step = nav::route_step(cg, fn, from, solidWall);
-    CHECK(step == nav::kFlowNone || step <= 6);
-}
-
-static void test_t2_f7_02_route_step_disconnected_subgraph() {
-    nav::CoarseGraph cg{};
-    for (int i = 0; i < nav::kNodes; ++i) {
-        for (int j = 0; j < nav::kNodes; ++j) {
-            cg.dist[i][j] = nav::kUnreachable;
-            cg.next[i][j] = static_cast<std::uint8_t>(i);
-        }
-    }
-    nav::FineNav fn{};
-    std::uint8_t step = nav::route_step(cg, fn, ivec3{10, 10, 10}, ivec3{50, 50, 50});
-    CHECK(step == nav::kFlowNone);
-}
-
-static void test_t2_f7_03_route_step_across_toroidal_boundary() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-    const nav::FineNav& fn = g_nav.fn;
-
-    ivec3 from{16, 16, 16};
-    ivec3 to{112, 112, 112};
-    std::uint8_t step = nav::route_step(cg, fn, from, to);
-    CHECK(step != nav::kFlowNone);
-}
-
-static void test_t2_f7_04_route_step_unbaked_empty_fine_nav() {
-    nav::CoarseGraph cg{};
-    nav::FineNav emptyFn{};
-    ivec3 a{10, 10, 10}, b{20, 20, 20};
-    std::uint8_t step = nav::route_step(cg, emptyFn, a, b);
-    CHECK(step == nav::kFlowNone);
-}
-
-static void test_t2_f7_05_route_step_out_of_bounds_coordinates() {
-    g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-    const nav::FineNav& fn = g_nav.fn;
-
-    ivec3 from{-50, 300, -100};
-    ivec3 to{500, -200, 1000};
-    std::uint8_t step = nav::route_step(cg, fn, from, to);
-    CHECK(step != nav::kFlowNone);
-}
+//
+// ПЯТЬ ГРАНИЧНЫХ ТЕСТОВ `route_step` СНЕСЕНЫ 2026-10-12 вместе с предметом
+// (§88/F.2 шаг 3): цель в толще, разорванный граф, заворот тора, непечёный нав,
+// координаты вне диапазона. Те же пять границ у нава по зонам держит его
+// собственный сьют — `degenerate_inputs_answer@suite_zonenav.inl`, и там они
+// спрашиваются у самой двери (`zone_walk_dir`), а не у снесённого потребителя.
 
 // --- F8 Boundaries ---
 
@@ -1669,7 +1571,10 @@ static void test_t2_f14_04_entry_points_reentrant_concurrency_safety() {
 }
 
 static void test_t2_f14_05_static_gate_regex_compliance() {
-    const char* names[] = {"bank_step", "samosbor_step", "interaction_step", "prop_interact_step", "route_step"};
+    // `route_step` ушёл из списка вместе с символом (§88/F.2 шаг 3); его место
+    // занял `zone_walk_dir` — дверь «куда шагнуть» у единственного нава ходьбы.
+    const char* names[] = {"bank_step", "samosbor_step", "interaction_step",
+                           "prop_interact_step", "wander_step"};
     for (const char* name : names) {
         CHECK(std::strstr(name, "_step") != nullptr || std::strstr(name, "_tick") != nullptr);
     }
@@ -1909,15 +1814,16 @@ static void test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms(
     CHECK(acct.creditLimit > 0);
 }
 
-static void test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane() {
+static void test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane() {
     g_nav.init();
-    LatticeNode n0 = lattice_unpack(0);
-    LatticeNode n1 = lattice_unpack(1);
-    ivec3 from{lattice_coord(n0.ix), lattice_coord(n0.iy), lattice_coord(n0.iz)};
-    ivec3 to{lattice_coord(n1.ix), lattice_coord(n1.iy), lattice_coord(n1.iz)};
-
-    std::uint8_t step = nav::route_step(g_nav.cg, g_nav.fn, from, to);
-    CHECK(step != nav::kFlowNone);
+    // Шаг по зонам из зоны 1 в зону 2 существует (синтетика фикстуры: граница
+    // по x==48, поле «+x»). Решёточная половина этого теста снесена вместе с
+    // `route_step`; гравитационная — ниже, и она здесь главная.
+    const std::uint8_t step =
+        game::zone_walk_dir(g_nav.zn, static_cast<game::RoomId>(1),
+                            static_cast<game::RoomId>(2), 16, 16, 16,
+                            /*gravityAxis=*/2);
+    CHECK(step != game::kZoneFlowNone);
 
     GravityFrame fy = regime_frame(GravityRegime::NegY);
     CHECK(fy.tanA == 0 && fy.tanB == 2);
@@ -2015,15 +1921,24 @@ static void test_t4_02_long_duration_economy_compound_interest_lifecycle() {
 
 static void test_t4_03_long_duration_specialist_patrol_and_errand_marathon() {
     g_nav.init();
-    const nav::CoarseGraph& cg = g_nav.cg;
-
+    // МАРАФОН ХОДА: двести шагов подряд, и каждый обязан быть ЗАКОННЫМ шагом
+    // по графу — то есть вести в зону, которая ближе к цели. Прежде это
+    // спрашивалось у `coarse_next` решётки (таблица 64×64); теперь у таблицы
+    // зон, и у этого вопроса появился смысл, которого у решёточного не было:
+    // граф зон почти ДЕРЕВО (средняя степень 2.0-2.1, замер 2026-10-12), и
+    // «шаг всегда ближе» на дереве — это и есть то, чем ходок доходит.
     for (int g = 0; g < 10; ++g) {
-        int currentNode = g % nav::kNodes;
+        game::RoomId cur = static_cast<game::RoomId>(1 + (g & 1));
+        const game::RoomId target = static_cast<game::RoomId>(2 - (g & 1));
         for (int hop = 0; hop < 20; ++hop) {
-            int targetNode = (currentNode + 17) % nav::kNodes;
-            int nextHop = nav::coarse_next(cg, currentNode, targetNode);
-            CHECK(nextHop >= 0 && nextHop < nav::kNodes);
-            currentNode = nextHop;
+            if (cur == target) { // дошёл — марафон продолжается с другого конца
+                cur = static_cast<game::RoomId>(3 - target);
+                continue;
+            }
+            const game::RoomId nxt =
+                game::zone_next(g_nav.zn.graph, g_nav.zn.dist, cur, target);
+            CHECK(nxt != game::kNoRoom);
+            cur = nxt;
         }
     }
 }
@@ -2160,16 +2075,8 @@ int main() {
     test_t1_f6_05_looter_memory_recall_scavenge_affordance();
 
     // F7
-    std::fprintf(stderr, "[e2e] test_t1_f7_01_coarse_graph_reachability_and_symmetry\n");
-    test_t1_f7_01_coarse_graph_reachability_and_symmetry();
-    std::fprintf(stderr, "[e2e] test_t1_f7_02_fine_nav_anchor_arrived_flow\n");
-    test_t1_f7_02_fine_nav_anchor_arrived_flow();
-    std::fprintf(stderr, "[e2e] test_t1_f7_03_route_step_adjacent_anchors\n");
-    test_t1_f7_03_route_step_adjacent_anchors();
-    std::fprintf(stderr, "[e2e] test_t1_f7_04_route_step_identical_cells\n");
-    test_t1_f7_04_route_step_identical_cells();
-    std::fprintf(stderr, "[e2e] test_t1_f7_05_route_step_wiring_in_ai_patrol_step\n");
-    test_t1_f7_05_route_step_wiring_in_ai_patrol_step();
+    std::fprintf(stderr, "[e2e] test_t1_f7_05_zone_step_wiring_in_ai_patrol_step\n");
+    test_t1_f7_05_zone_step_wiring_in_ai_patrol_step();
 
     // F8
     std::fprintf(stderr, "[e2e] test_t1_f8_01_motion_token_default_wander\n");
@@ -2240,8 +2147,6 @@ int main() {
     test_t1_f14_01_bank_step_contract_and_signature();
     std::fprintf(stderr, "[e2e] test_t1_f14_03_interaction_step_contract\n");
     test_t1_f14_03_interaction_step_contract();
-    std::fprintf(stderr, "[e2e] test_t1_f14_04_route_step_contract\n");
-    test_t1_f14_04_route_step_contract();
     std::fprintf(stderr, "[e2e] test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc\n");
     test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc();
 
@@ -2333,16 +2238,6 @@ int main() {
     test_t2_f6_05_looter_memory_full_slot_eviction();
 
     // F7 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f7_01_route_step_solid_wall_endpoint\n");
-    test_t2_f7_01_route_step_solid_wall_endpoint();
-    std::fprintf(stderr, "[e2e] test_t2_f7_02_route_step_disconnected_subgraph\n");
-    test_t2_f7_02_route_step_disconnected_subgraph();
-    std::fprintf(stderr, "[e2e] test_t2_f7_03_route_step_across_toroidal_boundary\n");
-    test_t2_f7_03_route_step_across_toroidal_boundary();
-    std::fprintf(stderr, "[e2e] test_t2_f7_04_route_step_unbaked_empty_fine_nav\n");
-    test_t2_f7_04_route_step_unbaked_empty_fine_nav();
-    std::fprintf(stderr, "[e2e] test_t2_f7_05_route_step_out_of_bounds_coordinates\n");
-    test_t2_f7_05_route_step_out_of_bounds_coordinates();
 
     // F8 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f8_01_null_entity_ai_owns_motion\n");
@@ -2457,8 +2352,8 @@ int main() {
     test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns();
     std::fprintf(stderr, "[e2e] test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms\n");
     test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms();
-    std::fprintf(stderr, "[e2e] test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane\n");
-    test_t3_12_route_step_navigation_with_vector_gravity_tangent_plane();
+    std::fprintf(stderr, "[e2e] test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane\n");
+    test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane();
     std::fprintf(stderr, "[e2e] test_t3_13_samosbor_alarm_and_event_bus_emission\n");
     test_t3_13_samosbor_alarm_and_event_bus_emission();
     std::fprintf(stderr, "[e2e] test_t3_14_medic_healing_interrupted_by_samosbor_unsheltered_damage\n");

@@ -139,7 +139,6 @@
 #include "world/destruct.h"
 #include "world/stain.h"
 #include "world/level_stack.h"
-#include "world/nav.h"
 #include "game/rebake.h"
 
 using namespace giga;
@@ -2102,14 +2101,14 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // the RebakeScheduler ([game/rebake.h]).
 //
 // This used to block: coarse ~1.9 s + fine ~1.8 s, measured, so every elevator ride
-// froze the frame for ~3.7 s. The bake is not naive — it is already fanned across
-// all 20 hardware threads by core/jobs.h — it is simply a lot of work (128 wrapped
-// BFS over a 128^3 grid). performance.md declares load time unbounded, so the
-// freeze was within contract and still the worst thing the player felt.
+// froze the frame for ~3.7 s. Then it moved off the main thread; and 2026-10-12 the
+// lattice bake DIED outright (§88/F.2 шаг 3) — the only navigation section left is
+// the zone graph, whose cost the `[zones]` line prints. Those two multi-second BFS
+// sweeps are not merely asynchronous now, they are not paid at all.
 //
-// Now the player moves, looks, fights and loots immediately; the floor's crowd
-// stands still until the bake lands, because wander_step no-ops on an empty flow
-// field. That degradation is automatic rather than special-cased.
+// The player moves, looks, fights and loots immediately; the floor's crowd stands
+// still until the bake lands, because every walking pass no-ops on an unbuilt zone
+// nav. That degradation is automatic rather than special-cased.
 //
 // The worker owns oracle SNAPSHOTS by value (клиренс-поле нава 4 МиБ +
 // телесный битсет комнат 256 КиБ), never a pointer into the live grid — so
@@ -2156,10 +2155,10 @@ std::uint32_t finish_floor_nav(Registry& reg, LayerId layer,
     std::uint32_t n = game::wander_init(reg, layer);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
-                 "[nav] bake coarse %.0f ms | fine %.0f ms | resident %.1f MiB | "
+                 "[nav] bake zones %.0f ms | resident %.1f MiB | "
                  "%u agents wandering | %u AI brains attached "
                  "(async, off the main thread)\n",
-                 bake.last_coarse_ms(), bake.last_fine_ms(),
+                 bake.last_zones_ms(),
                  static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0),
                  n, aiCount);
     return n;
@@ -4566,7 +4565,7 @@ int main(int argc, char** argv) {
 
         // Планировщик допекания ([game/rebake.h]): раз в кадр, в топе кадра до
         // сим-подшагов — летопись мутаций (часы — сим-тики), свап готовых
-        // секций фонового Rebake (rooms -> coarse -> fine, живые структуры
+        // секций фонового Rebake (свет -> зоны, живые структуры
         // пишутся только здесь, на главном потоке) и старт новых циклов по
         // дебаунсу/дедлайну. true ровно на кадре Fresh-свапа — момент, когда
         // толпе нового этажа пора ходить; Rebake-свапы пересева не требуют.
@@ -6102,7 +6101,7 @@ int main(int argc, char** argv) {
                 // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
                 const auto profPlaceT0 = prof_now();
                 placeTick = game::place_errand_step(
-                    reg, pool, floorRooms, nav.coarse(), nav.fine(), activeLayer,
+                    reg, pool, floorRooms, activeLayer,
                     simNow, &activeWorld.gravity(), &nav.zones());
                 prof_add(kProfPlace, profPlaceT0);
                 const auto profWanderT0 = prof_now();
@@ -8804,10 +8803,10 @@ int main(int argc, char** argv) {
             if (speechLine != nullptr)
                 ImGui::TextColored(ImVec4(0.80f, 0.80f, 0.67f, 1.0f), "[%s] %s",
                                    game::speech_situation_name(speechSit), speechLine);
-            ImGui::Text("nav: %s  (last bake %.0f + %.0f ms, async)",
+            ImGui::Text("nav: %s  (last zone bake %.0f ms, async)",
                         nav.baking() ? "BAKING - crowd idle"
                                      : (nav.ready() ? "ready" : "none"),
-                        nav.last_coarse_ms(), nav.last_fine_ms());
+                        nav.last_zones_ms());
             ImGui::Text("mobs: %u live on this floor",
                         game::count_layer_mobs(reg, activeLayer));
             // `alive`, not `count`: count() is the high-water mark of slots ever
@@ -9266,10 +9265,10 @@ int main(int argc, char** argv) {
         // cabins per floor; the other 12 columns stay geometry without a menu.
         //
         // That is not only cheaper to build, it is the only version that does not
-        // move `kLatticeDim` — and `nav::kNodes == kLatticeCount == kLatticeDim^3`,
-        // so 5 per axis would take the fine nav bake from 128 MiB to 250 MiB and
-        // break the nav-cache wire pin (`kNavCoarseWire == 13056`, sized at 64
-        // nodes). Three sets of columns would have needed a second lattice constant.
+        // move `kLatticeDim`. До 2026-10-12 у этого довода было второе плечо —
+        // поля потока нава (5 на ось подняли бы бейк с 128 до 250 МиБ); решётка
+        // в навигации снесена, и остался первый: третий набор столбов требовал
+        // бы второй решёточной константы.
         //
         // EVERY ROW IS A CONSOLE LINE, exactly like the pause menu: `ride down`,
         // `ride up`, `ft <N>` all existed before this window and are unchanged by it.

@@ -1033,10 +1033,6 @@ namespace giga {
 struct GravityField;
 struct DiffusionDriver;
 class World;
-namespace nav {
-struct CoarseGraph;
-struct FineNav;
-} // namespace nav
 } // namespace giga
 
 namespace giga::game {

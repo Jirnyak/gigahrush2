@@ -83,10 +83,6 @@
 
 namespace giga {
 struct GravityField;
-namespace nav {
-struct CoarseGraph;
-struct FineNav;
-} // namespace nav
 } // namespace giga
 
 namespace giga::game {
@@ -239,15 +235,13 @@ struct PlaceTick {
 // снимается и ставится стаггер. Пер-тик пересчёт был бы катастрофой по замеру
 // инкремента B: 0.07 мс × 1000 тел × 125 Гц = 8.75 ядра.
 //
-// Пустой бейк (`fine.flow` пуст, бейк в полёте) — no-op, не UB: тот же
-// контракт, которым живут `wander_step` и `ai_patrol_step`.
-// `zones` — НАВ ПО ЗОНАМ ([game/zone_nav.h]). Когда он построен, проход идёт по
-// нему: два чтения, без решётки и без слепого остатка якоря. nullptr или
-// непостроенный — старый путь через `route_step`, чтобы снос решётки был
-// отдельным инкрементом и было с чем сравнивать замером.
+// `zones` — НАВ ПО ЗОНАМ ([game/zone_nav.h]), и после сноса решётки
+// (2026-10-12, §88/F.2 шаг 3) это ЕДИНСТВЕННЫЙ нав ходьбы: два чтения, без
+// остатка якоря и без слепой прямой на цель. Непостроенный или nullptr — no-op,
+// не UB: тот же контракт, которым живут `wander_step` и `ai_patrol_step`, пока
+// бейк в полёте тела ходят вандером.
 PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
-                            const nav::CoarseGraph& coarse,
-                            const nav::FineNav& fine, LayerId layer, double now,
+                            LayerId layer, double now,
                             const GravityField* gravity = nullptr,
                             const ZoneNav* zones = nullptr);
 

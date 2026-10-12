@@ -1406,103 +1406,55 @@ static void test_floor_travel() {
 // must find full node-to-node connectivity on a dense floor, stay deterministic
 // on actual geometry, and keep the lattice intact on a decayed floor.
 static void test_nav_realfloor() {
-    using namespace nav;
-
-    // Dense residential: rooms tile the whole floor and the 7x7 lobbies punch
-    // through the wall lattice, so all 64 nodes join one connected component.
-    World res;
-    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
-    CoarseGraph g{};
-    bake_coarse(res.grid(), kBodyClearanceSub, g);
-    for (int i = 0; i < kNodes; ++i)
-        for (int j = 0; j < kNodes; ++j)
-            CHECK(g.dist[i][j] != kUnreachable); // fully connected
-
-    // Vertical neighbours share a shaft carved to air through every slab, so the
-    // +/-z edge is the pure spacing (32): a straight open column, no detour.
-    // Exception (elevators-2x2.md): the 4 LIFT columns carry the cabin floor
-    // under the entrance storey, which severs exactly the WRAP crossing
-    // (iz0 -z / iz3 +z pass through it). The three in-shaft links stay 32; the
-    // severed pair is whatever detour the floor offers, and is NOT pinned.
+    // ШАХТА ЛИФТА — ОТКРЫТАЯ ВЕРТИКАЛЬНАЯ КОЛОННА СКВОЗЬ КАЖДУЮ ПЛИТУ, и это
+    // пин ГЕОМЕТРИИ (elevators-2x2.md), переживший решётку.
+    //
+    // До 2026-10-12 он спрашивался через решёточный бейк: ребро узла по ±z
+    // обязано было равняться чистому шагу решётки (32), то есть «прямая
+    // открытая колонна, без объезда». Бейк снесён (§88/F.2 шаг 3), но закон
+    // остался геометрическим, и спрашивается он теперь прямо у оракула
+    // проходимости: КАЖДЫЙ вертикальный переход на оси шахты пролезаем телом.
+    // Проверка СИЛЬНЕЕ прежней — та допускала, чтобы одна плита была глухой, а
+    // геодезия случайно вернула 32 в объезд; эта требует все 32 перехода.
+    //
+    // Исключение то же (elevators-2x2.md): 4 ЛИФТОВЫЕ колонны несут пол кабины
+    // под входным этажом, и он рвёт ровно ЗАВОРОТ тора (iz0 −z / iz3 +z). Эта
+    // пара не пинится — она есть пол, а не дефект.
     auto liftCol = [](int i) {
         return lift_axis_of(i & 3) >= 0 && lift_axis_of((i >> 2) & 3) >= 0;
     };
-    auto severedDown = [&](int i) { return liftCol(i) && (i >> 4) == 0; };
     auto severedUp = [&](int i) {
         return liftCol(i) && (i >> 4) == kLatticeDim - 1;
     };
-    for (int i = 0; i < kNodes; ++i) {
-        if (!severedDown(i)) CHECK(g.edge[i][4] == kLatticeSpacing); // -z
-        if (!severedUp(i)) CHECK(g.edge[i][5] == kLatticeSpacing);   // +z
-    }
-
-    // Deterministic on real geometry too.
-    CoarseGraph g2{};
-    bake_coarse(res.grid(), kBodyClearanceSub, g2);
-    CHECK(std::memcmp(&g, &g2, sizeof(CoarseGraph)) == 0);
-
-    // Derelict randomly drops slab/wall cells, but the lattice is carved LAST and
-    // seed-independently, so every shaft stays open: the vertical links survive a
-    // half-collapsed floor even where the horizontal rooms may not.
-    World der;
-    generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
-    CoarseGraph gd{};
-    bake_coarse(der.grid(), kBodyClearanceSub, gd);
-    for (int i = 0; i < kNodes; ++i) {
-        if (!severedDown(i)) CHECK(gd.edge[i][4] == kLatticeSpacing);
-        if (!severedUp(i)) CHECK(gd.edge[i][5] == kLatticeSpacing);
-    }
-}
-
-// The L2 fine bake on a REAL carved floor (master_prompt #11, increment C). Each
-// node's flow field must carry an agent cell-by-cell home through the actual
-// rooms/shafts without ever crossing a wall, and re-bake bit-identically.
-static void test_nav_fine_realfloor() {
-    using namespace nav;
-
-    World res;
-    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
-    FineNav f;
-    bake_fine(res.grid(), kBodyClearanceSub, f);
-
-    // Descend `node`'s field from a start cell, asserting nothing it steps onto
-    // is solid. Returns steps to arrive, -1 at a dead end (kFlowNone), -2 if it
-    // ever lands in a wall, -3 if it fails to terminate (a cycle => a bug). A
-    // BFS parent chain strictly shortens, so a correct field always arrives.
-    auto follow = [&](int node, int x, int y, int z) -> int {
-        int cx = x, cy = y, cz = z;
-        for (std::size_t steps = 0; steps <= kMacroCells; ++steps) {
-            if (res.grid().mask(cx, cy, cz).full()) return -2;
-            const std::uint8_t d = f.at(node, cx, cy, cz);
-            if (d == kFlowArrived) return static_cast<int>(steps);
-            if (d == kFlowNone) return -1;
-            cx = wrap_macro(cx + kNavDir[d][0]);
-            cy = wrap_macro(cy + kNavDir[d][1]);
-            cz = wrap_macro(cz + kNavDir[d][2]);
+    // Колонна узла проходима телом НА ВСЮ высоту шага решётки. Один CHECK на
+    // узел, а не на клетку: счётчик внутри цикла из 2048 итераций сказал бы о
+    // пине ровно то же, но утопил бы пин world_test своим весом.
+    auto shaft_is_open = [&](const World& w, int id) {
+        ClearanceField c;
+        c.build(w.grid());
+        const LatticeNode n = lattice_unpack(id);
+        const int x = lattice_coord(n.ix), y = lattice_coord(n.iy);
+        bool ok = true;
+        for (int s = 0; s < kLatticeSpacing; ++s) {
+            const int z = wrap_macro(lattice_coord(n.iz) + s);
+            if (c.at(x, y, z, /*dir=+z*/ 5) < kBodyClearanceSub) ok = false;
         }
-        return -3;
+        return ok;
     };
 
-    // Every one of the 64 node cells routes home to node 0. Dense residential is
-    // fully connected (proven by the coarse test), so each must arrive.
-    for (int id = 0; id < kNodes; ++id) {
-        const LatticeNode n = lattice_unpack(id);
-        CHECK(follow(0, lattice_coord(n.ix), lattice_coord(n.iy),
-                     lattice_coord(n.iz)) >= 0);
-    }
-    // The target's own cell is "arrived".
-    CHECK(f.at(0, lattice_coord(0), lattice_coord(0), lattice_coord(0)) ==
-          kFlowArrived);
-    // A different target field routes too: node 0's cell to the antipode (2,2,2).
-    const int antipode = lattice_id(2, 2, 2);
-    CHECK(follow(antipode, lattice_coord(0), lattice_coord(0),
-                 lattice_coord(0)) >= 0);
+    // Плотный жилой: комнаты застилают этаж, шахты пробиты через все плиты.
+    World res;
+    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    for (int i = 0; i < kLatticeCount; ++i)
+        if (!severedUp(i)) CHECK(shaft_is_open(res, i));
 
-    // Deterministic on real geometry (schedule-invariant across the 64 threads).
-    FineNav f2;
-    bake_fine(res.grid(), kBodyClearanceSub, f2);
-    CHECK(f.flow.size() == f2.flow.size());
-    CHECK(std::memcmp(f.flow.data(), f2.flow.data(), f.flow.size()) == 0);
+    // Derelict роняет плиты и стены случайно, но решётка карвится ПОСЛЕДНЕЙ и
+    // независимо от сида, поэтому шахты открыты и на полуобвалившемся этаже —
+    // даже там, где горизонтальные комнаты уже нет.
+    World der;
+    generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
+    for (int i = 0; i < kLatticeCount; ++i)
+        if (!severedUp(i)) CHECK(shaft_is_open(der, i));
 }
 
 // ---- Global mob table -----------------------------------------------------
@@ -5165,141 +5117,6 @@ static void test_full_loop() {
     CHECK(led.lostToDeath == stillCarried);
     CHECK(led.banked == safe);                           // banked survives a death
 }
-// route_step on real carved floors (master_prompt #11, C.2). Ties the nearest-
-// node field + coarse reachability + flow fields together and asserts the whole
-// query is consistent with the coarse graph and never steps through a wall.
-static void test_route_realfloor() {
-    using namespace nav;
-
-    // Follow route_step from `from` to `to`, asserting it never lands in solid.
-    // Returns steps to arrive, -1 if route_step reports unreachable, -2 if it
-    // ever steps into a wall (a bug), -3 if it fails to terminate (a cycle bug).
-    auto route_follow = [](const MacroGrid& grid, const CoarseGraph& g,
-                           const FineNav& f, ivec3 from, ivec3 to) -> int {
-        int cx = from.x, cy = from.y, cz = from.z;
-        for (std::size_t steps = 0; steps <= kMacroCells; ++steps) {
-            if (grid.mask(cx, cy, cz).full()) return -2;
-            const std::uint8_t d = route_step(g, f, ivec3{cx, cy, cz}, to);
-            if (d == kFlowArrived) return static_cast<int>(steps);
-            if (d == kFlowNone) return -1;
-            cx = wrap_macro(cx + kNavDir[d][0]);
-            cy = wrap_macro(cy + kNavDir[d][1]);
-            cz = wrap_macro(cz + kNavDir[d][2]);
-        }
-        return -3;
-    };
-    auto node_cell = [](int id) {
-        const LatticeNode n = lattice_unpack(id);
-        return ivec3{lattice_coord(n.ix), lattice_coord(n.iy), lattice_coord(n.iz)};
-    };
-
-    // Dense residential is fully connected, so a route between any two anchors
-    // arrives without ever crossing solid.
-    World res;
-    generate_floor(res, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
-    CoarseGraph g{};
-    bake_coarse(res.grid(), kBodyClearanceSub, g);
-    FineNav f;
-    bake_fine(res.grid(), kBodyClearanceSub, f);
-
-    // Each node's own cell is its own anchor (seeded at distance 0).
-    for (int id = 0; id < kNodes; ++id) {
-        const ivec3 c = node_cell(id);
-        CHECK(f.nearest_node(c.x, c.y, c.z) == id);
-    }
-    CHECK(route_follow(res.grid(), g, f, node_cell(5), node_cell(58)) >= 0);
-    CHECK(route_follow(res.grid(), g, f, node_cell(60), node_cell(3)) >= 0);
-
-    // Nearest-node field is deterministic on real geometry too.
-    FineNav f2;
-    bake_fine(res.grid(), kBodyClearanceSub, f2);
-    CHECK(f.nearest.size() == f2.nearest.size());
-    CHECK(std::memcmp(f.nearest.data(), f2.nearest.data(), f.nearest.size()) == 0);
-
-    // Derelict may leave some anchors in disconnected pockets. Whatever the seed
-    // yields, route_step MUST agree with the coarse graph for every anchor pair:
-    // reachable => arrives, unreachable => reports kFlowNone (route_follow -1).
-    World der;
-    generate_floor(der, /*number=*/-3, floor_spec(FloorKind::Derelict), 42u);
-    CoarseGraph gd{};
-    bake_coarse(der.grid(), kBodyClearanceSub, gd);
-    FineNav fd;
-    bake_fine(der.grid(), kBodyClearanceSub, fd);
-    for (int i = 0; i < kNodes; ++i)
-        for (int j = 0; j < kNodes; ++j) {
-            if (i == j) continue;
-            const bool reachable = gd.dist[i][j] != kUnreachable;
-            const int r = route_follow(der.grid(), gd, fd, node_cell(i), node_cell(j));
-            if (reachable) CHECK(r >= 0);
-            else CHECK(r == -1);
-        }
-}
-
-// The nav bake wired into streaming (C.2b): ensure_loaded bakes the floor's nav
-// into a resident holder; unload frees it. The streamed bake must be identical to
-// a standalone bake of the same deterministic geometry, route through it, and
-// re-bake identically after an unload/reload round trip (freeze -> bake -> resume).
-static void test_streamed_nav() {
-    using namespace nav;
-
-    Registry ecs;
-    NpcPool pool;
-    pool.init();
-    FloorRegistry reg;
-    LevelStack stack;
-    FloorStreamer stream;
-    stream.init(stack, /*keepRadius=*/0);
-    // The streamer's own per-floor nav bake is OFF by default now — the app
-    // steers off nav::AsyncBake and never read this one, so baking it on every
-    // floor entry was a multi-second blocking stall for nothing ([problems.md]
-    // §26). This suite is the thing that tests the feature, so it opts in.
-    stream.set_nav_bake(true);
-
-    const std::uint32_t seed = 4242u;
-    stream.add_module(reg, /*number=*/0, FloorKind::Residential, seed);
-    CHECK(stream.nav_at(reg, 0) == nullptr); // cold: no nav yet
-
-    NpcId playerId = kInvalidNpc;
-    LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
-    CHECK(r.layer != kInvalidLayer);
-
-    // Loaded => nav is resident, and equals a standalone bake of the same
-    // (number, spec, seed) geometry (generate_floor is a pure fn of those).
-    const FloorNav* fn = stream.nav_at(reg, 0);
-    CHECK(fn != nullptr);
-    World ref;
-    generate_floor(ref, /*number=*/0, floor_spec(FloorKind::Residential), seed);
-    CoarseGraph gref{};
-    bake_coarse(ref.grid(), kBodyClearanceSub, gref);
-    FineNav fref;
-    bake_fine(ref.grid(), kBodyClearanceSub, fref);
-    CHECK(std::memcmp(&fn->coarse, &gref, sizeof(CoarseGraph)) == 0);
-    CHECK(fn->fine.flow.size() == fref.flow.size());
-    CHECK(std::memcmp(fn->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
-    CHECK(fn->fine.nearest.size() == fref.nearest.size());
-    CHECK(std::memcmp(fn->fine.nearest.data(), fref.nearest.data(),
-                      fref.nearest.size()) == 0);
-
-    // It actually routes: one anchor cell to another arrives on this dense floor.
-    const LatticeNode a = lattice_unpack(5), b = lattice_unpack(58);
-    CHECK(route_step(fn->coarse, fn->fine,
-                     ivec3{lattice_coord(a.ix), lattice_coord(a.iy), lattice_coord(a.iz)},
-                     ivec3{lattice_coord(b.ix), lattice_coord(b.iy), lattice_coord(b.iz)}) !=
-          kFlowNone);
-
-    // Unload frees the nav (resident only while live).
-    stream.unload(stack, reg, ecs, pool, 0);
-    CHECK(stream.nav_at(reg, 0) == nullptr);
-
-    // Reload rebakes it bit-identically across the freeze -> bake -> resume.
-    LoadResult r2 = stream.ensure_loaded(stack, reg, ecs, pool, 0, playerId);
-    CHECK(r2.layer != kInvalidLayer);
-    const FloorNav* fn2 = stream.nav_at(reg, 0);
-    CHECK(fn2 != nullptr);
-    CHECK(std::memcmp(&fn2->coarse, &gref, sizeof(CoarseGraph)) == 0);
-    CHECK(fn2->fine.flow.size() == fref.flow.size());
-    CHECK(std::memcmp(fn2->fine.flow.data(), fref.flow.data(), fref.flow.size()) == 0);
-}
 
 // ДИСКОВЫЙ НАВ-КЭШ (C.2b) СНЕСЁН 2026-09-30. Здесь стояли два теста —
 // round-trip файла и «поток читает кэш, а не печёт» с подложенным в файл
@@ -5690,7 +5507,6 @@ int main() {
 
     test_floor_travel();
     test_nav_realfloor();
-    test_nav_fine_realfloor();
     test_mob_table();
     test_mob_budget_v_shape();
     test_mob_spawn();
@@ -5789,8 +5605,6 @@ int main() {
     test_rebake_all();
     test_prebuild_all();
     test_lightvis_all();
-    test_route_realfloor();
-    test_streamed_nav();
     test_floor_bucket_index();
     test_stream_migration_reembodies();
     test_props_game_all();

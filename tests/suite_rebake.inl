@@ -30,7 +30,8 @@
 #include "game/floor_spec.h"  // FloorKind, floor_spec
 #include "game/rebake.h"      // RebakeScheduler — предмет теста
 #include "world/macro_grid.h" // clear_cell — «карв» пробивает стену
-#include "world/nav.h"        // route_step, kFlowNone
+#include "game/floor_gen.h"   // rooms_declare — зоны объявляет модуль
+#include "world/nav.h"        // nav::kNavDir — словарь направлений
 #include "world/types.h"      // kMacroDim, kMacroCells, wrap_macro
 #include "world/world.h"
 
@@ -55,6 +56,14 @@ void sla_holds_on_a_real_floor() {
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
 
+    // ЗОНЫ ОБЯЗАНЫ ПРИЕХАТЬ В БЕЙК. До сноса решётки (§88/F.2 шаг 3) этот тест
+    // звал `start_fresh` БЕЗ комнат, и ему хватало: готовность нава мерилась
+    // решёточными полями, которые печутся из одной геометрии. Нав ходьбы теперь
+    // ОДИН и это зоны, а их вход — объявление комнат; без него `ready()` не
+    // поднялся бы никогда, и тест мерил бы собственную недоснаряжённость.
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+
     RebakeScheduler s;
     s.set_rebake_threads(2);
 
@@ -66,7 +75,8 @@ void sla_holds_on_a_real_floor() {
     s.set_light_table(nullptr, 0, 63, 1);
 
     // --- Fresh: текущая семантика входа на этаж --------------------------
-    s.start_fresh(w.grid(), FloorKind::Residential, 0, gen);
+    s.start_fresh(w.grid(), FloorKind::Residential, 0, gen, &fr,
+                  w.gravity().regime);
     CHECK(s.baking());
     CHECK(!s.ready());    // живой граф освобождён — толпа стояла бы, не блуждала
 
@@ -85,9 +95,11 @@ void sla_holds_on_a_real_floor() {
     // мёртвых слотов обязана ждать списков, которые их забыли.
     CHECK(s.light_table_baked_tag() == 1);
 
-    // --- Выбрать стену: полностью солидная клетка с nav-открытым соседом,
-    // которого старое поле уже знает (иначе пролом вёл бы в закрытую пустоту
-    // и «поле знает пролом» было бы недоказуемо).
+    // --- Выбрать стену: полностью солидная клетка с соседом, КОТОРЫЙ УЖЕ
+    // лежит в разбивке зон (иначе пролом вёл бы в закрытую пустоту и «нав
+    // знает пролом» было бы недоказуемо). До 2026-10-12 «знает» спрашивалось у
+    // поля ближайшего узла решётки; теперь — у разбивки зон, и это тот же
+    // вопрос у единственного оставшегося нава.
     const auto& masks = w.grid().masks();
     int target = -1;
     int nbx = 0, nby = 0, nbz = 0;
@@ -100,7 +112,10 @@ void sla_holds_on_a_real_floor() {
             const int nx = wrap_macro(x + nav::kNavDir[d][0]);
             const int ny = wrap_macro(y + nav::kNavDir[d][1]);
             const int nz = wrap_macro(z + nav::kNavDir[d][2]);
-            if (s.fine().nearest_node(nx, ny, nz) != nav::kFlowNone) {
+            // РАЗБИВКА НАПРЯМУЮ, без `zone_of_body`: у того есть фолбэк на
+            // соседа, и сосед «в зоне через фолбэк» мог бы сам быть стеной —
+            // тогда сцена «пролом в стене рядом с живой зоной» была бы не той.
+            if (s.zones().part.cell(nx, ny, nz) != kNoRoom) {
                 target = static_cast<int>(i);
                 nbx = nx;
                 nby = ny;
@@ -113,8 +128,8 @@ void sla_holds_on_a_real_floor() {
     const int ty = (target / kMacroDim) % kMacroDim;
     const int tz = target / (kMacroDim * kMacroDim);
 
-    // Запечённое поле зовёт стену стеной — исходная истина.
-    CHECK(s.fine().nearest_node(tx, ty, tz) == nav::kFlowNone);
+    // Запечённая разбивка зовёт стену стеной — исходная истина.
+    CHECK(s.zones().part.cell(tx, ty, tz) == kNoRoom);
 
     // --- Карв пробивает стену: клетка в воздух + O(1)-патч битсетов +
     // поколение мутаций — ровно то, что делает дренаж dirtyCells в main.
@@ -129,10 +144,13 @@ void sla_holds_on_a_real_floor() {
     // по контракту, ничего не падает.
     s.step(clock.now(), gen);
     CHECK(s.baked_gen() == 0);
-    CHECK(s.fine().nearest_node(tx, ty, tz) == nav::kFlowNone);
-    const std::uint8_t staleStep = nav::route_step(
-        s.coarse(), s.fine(), ivec3{nbx, nby, nbz}, ivec3{tx, ty, tz});
-    CHECK(staleStep == nav::kFlowNone); // цель в (старой) стене — «нет пути»
+    CHECK(s.zones().part.cell(tx, ty, tz) == kNoRoom);
+    // Шаг из соседа В стену по старой разбивке: зоны у цели нет, значит и
+    // спрашивать «куда шагнуть» не о чем — отказ приходит ДО двери.
+    const RoomId staleFrom = s.zones().part.cell(nbx, nby, nbz);
+    CHECK(staleFrom != kNoRoom);
+    CHECK(zone_walk_dir(s.zones(), staleFrom, kNoRoom, nbx, nby, nbz, 2) ==
+          kZoneFlowNone);
 
     // --- Крутить планировщик тиками до свапа; потолок — SLA (план §7а).
     std::uint64_t swapTick = 0;
@@ -150,13 +168,15 @@ void sla_holds_on_a_real_floor() {
     CHECK(s.baked_gen() == gen); // свап случился
     CHECK(swapTick - carveTick <= RebakeScheduler::kRebakeCeilTicks);
 
-    // --- После свапа: поле ведёт в проём (план §7б).
-    const std::uint8_t node = s.fine().nearest_node(tx, ty, tz);
-    CHECK(node != nav::kFlowNone); // пролом присвоен якорю
-    CHECK(s.fine().at(node, tx, ty, tz) != nav::kFlowNone); // и покрыт полем
-    const std::uint8_t freshStep = nav::route_step(
-        s.coarse(), s.fine(), ivec3{nbx, nby, nbz}, ivec3{tx, ty, tz});
-    CHECK(freshStep != nav::kFlowNone); // маршрут в проём существует
+    // --- После свапа: нав ЗНАЕТ проём (план §7б). Пролом попал в разбивку, и
+    // из соседа в него есть достижимость по таблице зон.
+    const RoomId freshZone = s.zones().part.cell(tx, ty, tz);
+    CHECK(freshZone != kNoRoom); // пролом попал в разбивку
+    const RoomId freshFrom = s.zones().part.cell(nbx, nby, nbz);
+    CHECK(freshFrom != kNoRoom);
+    CHECK(s.zones().dist.at(static_cast<std::uint32_t>(freshFrom) - 1u,
+                            static_cast<std::uint32_t>(freshZone) - 1u) !=
+          kZoneUnreachable); // маршрут в проём существует
     // Секция rooms умерла (rooms-object F); свап нава проверен выше.
 
     // --- Дельта-патч света (carve-hitch.md §3): дешёвый цикл обгоняет

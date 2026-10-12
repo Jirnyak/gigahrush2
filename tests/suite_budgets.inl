@@ -34,7 +34,12 @@
 #include "game/floor_gen.h"
 #include "game/npc_pool.h"
 #include "game/combat.h"      // CarveProposalQueue
-#include "world/nav.h"
+#include "game/embody.h"      // kBodyClearanceSub — габарит тела для бейка зон
+#include "game/floor_spec.h"  // floor_spec, FloorKind
+#include "game/room.h"        // FloorRooms — вход бейка зон
+#include "game/zone_nav.h"    // ZoneNav — нав ходьбы после сноса решётки
+#include "world/clearance.h"  // ClearanceField — оракул бейка
+#include "world/world.h"
 
 #include <chrono>
 
@@ -52,33 +57,55 @@ static void check_budget(const char* name, double measured, double limit,
 
 // --- 1. Navigation: the largest bake in the game ---------------------------
 //
-// The footprint is ARITHMETIC, not a measurement, and pinning the arithmetic is
-// worth more than pinning a malloc: `flow` is node-major over the whole macro
-// grid, so it is exactly kNavNodes x kMacroCells bytes and it moves only when
-// somebody changes the node count or the grid size. Both are decisions, and this
-// is where a decision that costs 128 MiB announces itself.
+// ЭТО УЖЕ НЕ АРИФМЕТИКА, И ЭТО ГЛАВНОЕ, ЧТО ЗДЕСЬ ИЗМЕНИЛОСЬ 2026-10-12.
 //
-// The limit is 160 MiB against a design of ~130 MiB: room for one more per-cell
-// byte-plane (2 MiB) many times over, but not for a doubling of the node count.
-static void nav_footprint_is_what_the_header_claims() {
-    const std::size_t flowBytes =
-        static_cast<std::size_t>(nav::kNodes) * kMacroCells;
-    const std::size_t nearestBytes = kMacroCells;
-    const std::size_t total = flowBytes + nearestBytes;
+// До сноса решётки (§88/F.2 шаг 3) бюджет нава был чистой арифметикой: 64 поля
+// потока × 2 097 152 клетки = ровно 128 МиБ плюс 2 МиБ поля ближайшего узла, и
+// пинилась именно формула — она двигалась только решением о числе узлов или
+// размере мира. Решётки больше нет, и нав ходьбы — ГРАФ ЗОН, чей размер не
+// формула, а СВОЙСТВО ЭТАЖА: таблица расстояний растёт как ЧИСЛО ЗОН В
+// КВАДРАТЕ (два байта на пару), а зоны объявляет генератор модуля — «зоны могут
+// быть какие угодно на каких угодно этажах» (решение владельца 2026-10-12).
+//
+// Поэтому пин стал ЗАМЕРОМ на настоящем этаже. И первый же замер сказал то,
+// чего не знал ни один документ: НАВ ХОДЬБЫ СТАЛ ДОРОЖЕ ТОГО, ЧТО СНЕСЛИ.
+// Residential floor 0, 14742 зоны: таблица 414.5 МиБ + поля 12.0 + разбивка 4.0
+// = 430.6 МиБ против 130.01 МиБ решётки. Снос всё равно выигрыш — обе структуры
+// были резидентны ОДНОВРЕМЕННО, то есть этаж стоил 560 МиБ и стал стоить 430, а
+// транзиентный пик свапа упал на 260 — но называть это «−130 МиБ нава» было бы
+// ложью, и поэтому здесь стоит замер, а не формула.
+//
+// ПОТОЛОК ВЫВЕДЕН ИЗ КВАДРАТА. Таблица есть zones² × 2 Б, то есть УДВОЕНИЕ
+// числа зон стоит ЧЕТЫРЕХКРАТНО: 29484 зоны дали бы 1.6 ГиБ. 512 МиБ держит
+// замеренные 14742 зоны с запасом 19% и краснеет около 16 060 зон (+9%).
+// Поводок тугой СОЗНАТЕЛЬНО: «зоны у модуля любые» (решение владельца
+// 2026-10-12) означает, что число зон будет двигаться, и квадратичная цена
+// обязана спрашивать разрешения у замера, а не расти молча. Красный здесь — не
+// запрет, а требование принести новое число.
+static void nav_footprint_is_measured_on_a_real_floor() {
+    World w;
+    generate_floor(w, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    FloorRooms fr;
+    rooms_declare(fr, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
+    ClearanceField oracle;
+    oracle.build(w.grid());
+    ZoneNav zn;
+    bake_zone_nav(fr, oracle, kBodyClearanceSub, w.gravity().regime, zn,
+                  /*threads=*/0);
+    CHECK(zn.built());
 
-    check_budget("nav_flow_bytes", static_cast<double>(flowBytes),
-                 136.0 * 1024.0 * 1024.0, "B");
-    check_budget("nav_nearest_bytes", static_cast<double>(nearestBytes),
-                 4.0 * 1024.0 * 1024.0, "B");
-    check_budget("nav_total_bytes", static_cast<double>(total),
-                 160.0 * 1024.0 * 1024.0, "B");
-
-    // nav.h states "64 flow fields (128 MiB) plus a 2 MiB nearest-node field".
-    // Restating it as an assertion is the point: prose drifts silently, and this
-    // file has already been caught carrying three-version-old arithmetic in
-    // save.cpp's comments while the asserts beside them were right.
-    CHECK(flowBytes == 128u * 1024u * 1024u);
-    CHECK(nearestBytes == 2u * 1024u * 1024u);
+    check_budget("zone_nav_total_bytes", static_cast<double>(zn.bytes()),
+                 512.0 * 1024.0 * 1024.0, "B");
+    // Разбивка по клеткам — единственное слагаемое, которое ОСТАЛОСЬ
+    // арифметикой: один RoomId на макроклетку, 2 097 152 × 2 Б = 4 МиБ ровно.
+    // Его и пиним равенством, как пинилась формула полей потока.
+    CHECK(zn.part.at.size() == kMacroCells);
+    // И вслух — сколько зон дал этаж: без этого числа «таблица выросла» нельзя
+    // отличить от «этаж нарезан мельче» (§88 стоил трёх заходов ровно на этом).
+    std::fprintf(stderr, "[budget] zone_nav zones=%u table=%.1f MiB flow=%.1f MiB\n",
+                 zn.part.zones,
+                 static_cast<double>(zn.dist.bytes()) / (1024.0 * 1024.0),
+                 static_cast<double>(zn.flow.bytes()) / (1024.0 * 1024.0));
 }
 
 // --- 2. Room zones: the bake that just grew ---------------------------------
@@ -203,7 +230,7 @@ static void carve_queue_overflow_is_counted_not_silent() {
 
 static void test_budgets_all() {
     using namespace budgets_test;
-    nav_footprint_is_what_the_header_claims();
+    nav_footprint_is_measured_on_a_real_floor();
     pool_cost_per_head();
     carve_queue_overflow_is_counted_not_silent();
 }

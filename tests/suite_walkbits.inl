@@ -42,24 +42,11 @@
 #include "game/floor_spec.h"  // FloorKind, floor_spec
 #include "world/clearance.h"  // ClearanceField — нав-оракул (occupancy)
 #include "world/macro_grid.h" // SubMask — the mutation test carves masks directly
-#include "world/nav.h"        // bake_coarse/bake_fine
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index
 #include "world/world.h"
 
 namespace walkbits_test {
 
-// memcmp над CoarseGraph законен ровно потому, что в структуре нет дырок: три
-// плотно упакованных массива 2- и 1-байтовых типов, 768 + 8192 + 4096 = 13056,
-// чётно, значит и хвостового выравнивания нет. Утверждение переехало сюда
-// 2026-09-30 из снесённого `nav_cache.cpp` — к своему единственному
-// оставшемуся потребителю. Появится ли четвёртый член или появится ли padding —
-// оба случая ловятся здесь, ДО того как сверка байтов начнёт врать.
-static_assert(sizeof(nav::CoarseGraph::edge) + sizeof(nav::CoarseGraph::dist) +
-                      sizeof(nav::CoarseGraph::next) == sizeof(nav::CoarseGraph),
-              "CoarseGraph обзавёлся членом или дыркой — memcmp ниже больше не "
-              "сравнивает то, что думает, что сравнивает");
-static_assert(sizeof(nav::CoarseGraph) == 13056u,
-              "768 + 8192 + 4096 при kNodes == 64");
 
 // Законы, переписанные НЕЗАВИСИМО от продакшн-хелперов (clearance.cpp,
 // room_zone.cpp). Сьют, строящий эталон вызовом кода под тестом, доказал бы
@@ -107,14 +94,7 @@ inline int ref_face_clearance(const MacroGrid& g, int x, int y, int z,
     return best;
 }
 
-void nav_bake_through_field_is_bit_identical(const World& w) {
-    // The grid path — the entry every synchronous caller still uses. Габарит
-    // — тело NPC (kBodyClearanceSub, вывод в [game/embody.h]).
-    nav::CoarseGraph g1;
-    nav::bake_coarse(w.grid(), kBodyClearanceSub, g1);
-    nav::FineNav f1;
-    nav::bake_fine(w.grid(), kBodyClearanceSub, f1);
-
+void field_equals_independent_law(const World& w) {
     // Продакшн-поле против наивного эталона — на детерминированной выборке
     // клеток (полный этаж наивным законом — минуты; выборка держит и дрейф,
     // и все три оси). Шаг 037 взаимно прост с 128, так что выборка обходит
@@ -139,21 +119,15 @@ void nav_bake_through_field_is_bit_identical(const World& w) {
     CHECK(mismatched == 0);
     CHECK(checked >= 3 * static_cast<int>(kMacroCells / 37)); // выборка не съёжилась
 
-    // And the oracle bakes must reproduce the grid bakes byte for byte.
-    // memcmp over CoarseGraph is safe because the struct is padding-free —
-    // это утверждал static_assert в снесённом nav_cache.cpp, поэтому он
-    // переехал сюда, к своему единственному оставшемуся потребителю.
-    nav::CoarseGraph g2;
-    nav::bake_coarse(field, kBodyClearanceSub, g2);
-    CHECK(std::memcmp(&g1, &g2, sizeof(nav::CoarseGraph)) == 0);
-
-    nav::FineNav f2;
-    nav::bake_fine(field, kBodyClearanceSub, f2);
-    CHECK(f1.flow == f2.flow);
-    CHECK(f1.nearest == f2.nearest);
-    // Not an empty-vs-empty accident: the floor really produced fields.
-    CHECK(f1.flow.size() == static_cast<std::size_t>(nav::kNodes) * kMacroCells);
-    CHECK(f1.nearest.size() == kMacroCells);
+    // БИТ-ИДЕНТИЧНОСТЬ БЕЙКОВ СНЯТА 2026-10-12 вместе с предметом (§88/F.2 шаг
+    // 3): сверка «бейк с грида == бейк с оракула, байт в байт» (и пара
+    // static_assert о беспробельности `CoarseGraph`) проверяла решёточные
+    // `bake_coarse`/`bake_fine`, которых больше нет. Что осталось у этого
+    // сьюта — то, ради чего он и заводился: САМ ОРАКУЛ против независимо
+    // переписанного закона (выше) и его патч против ребилда (ниже). Бит-
+    // идентичность бейка ЗОН своего пина пока не имеет, и это названный долг,
+    // а не недосмотр: бейк зон однопоточно детерминирован по построению
+    // (одна заливка на зону), но ПАРАЛЛЕЛЬНАЯ его редакция — нет.
 }
 
 // Mutate real cells in every direction the law can flip, patch the resident
@@ -238,7 +212,7 @@ void test_walkbits_all() {
     // compares real fields, not eleven empty vectors against eleven others.
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
-    walkbits_test::nav_bake_through_field_is_bit_identical(w);
+    walkbits_test::field_equals_independent_law(w);
     // Last: it carves the floor the identity tests just measured.
     walkbits_test::patch_equals_rebuild(w);
 }

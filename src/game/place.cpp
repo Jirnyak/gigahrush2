@@ -14,7 +14,7 @@
 #include "game/embody.h"      // NpcRef
 #include "game/needs.h"       // needs_row_for — ОДНА строка нужд на всех решателей
 #include "world/gravity.h"    // GravityFrame / regime_frame — плоскость ходьбы
-#include "world/nav.h"        // route_step — ОБЪЯВЛЕННАЯ дверь «куда шагнуть»
+#include "world/nav.h"        // nav::kNavDir — словарь шести направлений шага
 #include "world/types.h"      // kCellSize, kMacroDim, wrap_macro
 
 namespace giga::game {
@@ -200,14 +200,15 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
 // ---------------------------------------------------------------------------
 
 PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
-                            const nav::CoarseGraph& coarse,
-                            const nav::FineNav& fine, LayerId layer, double now,
+                            LayerId layer, double now,
                             const GravityField* gravity, const ZoneNav* zones) {
-    const bool byZones = zones != nullptr && zones->built();
     PlaceTick out;
-    // Пустой бейк — no-op, не UB: тот же контракт, которым живут `wander_step`
-    // и `ai_patrol_step`. Пока бейк в полёте тела ходят вандером, как всегда.
-    if (fine.flow.empty() || fine.nearest.empty()) return out;
+    // Непостроенный нав — no-op, не UB: тот же контракт, которым живут
+    // `wander_step` и `ai_patrol_step`. Пока бейк в полёте тела ходят вандером,
+    // как всегда. До 2026-10-12 этой проверкой был `fine.flow.empty()` —
+    // решётка; теперь единственный нав ходьбы это зоны, и ветки «без зон»
+    // больше нет (§88/F.2 шаг 3).
+    if (zones == nullptr || !zones->built()) return out;
     if (fr.roomAt.empty() || fr.list.empty()) return out;
 
     // Фрейм гравитации — свойство мира, не тела; null держит NegZ побитово
@@ -281,7 +282,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             // последнюю ногу пришлось бы идти вслепую, ровно как с остатком
             // якоря у решётки.
             if (room_at(fr, cx, cy, cz) == plan.room ||
-                (byZones && zone_of_body(*zones, cx, cy, cz) == plan.room) ||
+                zone_of_body(*zones, cx, cy, cz) == plan.room ||
                 (cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
                 plan.room = kNoRoom;
@@ -325,49 +326,45 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             continue;
         }
 
-        // КУДА ШАГНУТЬ — ЧЕРЕЗ ОБЪЯВЛЕННУЮ ДВЕРЬ. `route_step` композирует оба
-        // запечённых яруса (ближайший якорь цели выбирает поле потока, таблица
-        // coarse отвечает о достижимости за O(1)). До 2026-10-01 у неё было
-        // НОЛЬ вызовов в проде при двадцати в тестах, а прод композировал те же
-        // два яруса руками в шести строках — расхождение №7 реестра.
-        int tx = 0, ty = 0, tz = 0;
-        if (place_target_cell(fr, *goal, cx, cy, cz, tx, ty, tz) < 0) {
-            plan.room = kNoRoom;
+        // КУДА ШАГНУТЬ — НАВ ПО ЗОНАМ, ДВА ЧТЕНИЯ, и ни одной волны (§88/E).
+        // Цель — ЗОНА, а не клетка: таблица даёт соседку, плоскость соседки
+        // даёт направление. Ступеньку разрешает сама дверь, поэтому ветки на
+        // вертикаль здесь нет.
+        //
+        // Клетки цели этот шаг БОЛЬШЕ НЕ СПРАШИВАЕТ, и это следствие сноса
+        // решётки: `route_step` композировал два запечённых яруса и отвечал
+        // «шаг к ближайшему ЯКОРЮ цели», поэтому ему нужна была клетка. У зон
+        // цель и есть узел графа. Клетку по-прежнему считает ПРИБЫТИЕ выше
+        // (третьим условием, на случай клетки, отданной перекрытию).
+        //
+        // Отказ «у комнаты нет клетки» тоже уехал сюда: его отдаёт сама
+        // таблица зон (`kZoneUnreachable` -> `kZoneFlowNone`), и это честнее —
+        // прежняя проверка `place_target_cell < 0` считала такое тело `idle`,
+        // то есть молча, а теперь оно считается `unreachable` и видно прибору.
+        //
+        // Зона тела — через дверь с опорой на соседа: клетка центра тела
+        // бывает дыркой в разбивке (замер: 26 тел на тик), и это следствие
+        // названной неточности клиренса, а не дефект разбивки.
+        const RoomId myZone = zone_of_body(*zones, cx, cy, cz);
+        if (myZone == kNoRoom) {
+            // Тело стоит там, где по карте путей стоять нельзя (нет
+            // касания): вести его некуда, отдаём вандеру.
+            ++out.offnav;
             ++out.idle;
             continue;
         }
-        // НАВ ПО ЗОНАМ — ДВА ЧТЕНИЯ, и ни одной волны (§88/E). Цель — ЗОНА, а не
-        // клетка: таблица даёт соседку, плоскость соседки даёт направление.
-        // Ступеньку разрешает сама дверь, поэтому ветки на вертикаль здесь нет.
-        std::uint8_t d = nav::kFlowNone;
-        if (byZones) {
-            // Зона тела — через дверь с опорой на соседа: клетка центра тела
-            // бывает дыркой в разбивке (замер: 26 тел на тик), и это следствие
-            // названной неточности клиренса, а не дефект разбивки.
-            const RoomId myZone = zone_of_body(*zones, cx, cy, cz);
-            if (myZone == kNoRoom) {
-                // Тело стоит там, где по карте путей стоять нельзя (нет
-                // касания): вести его некуда, отдаём вандеру.
-                ++out.offnav;
-                ++out.idle;
-                continue;
-            }
-            d = zone_walk_dir(*zones, myZone, plan.room, cx, cy, cz,
-                              gf.pull ? gf.axis : -1);
-            // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
-            // падает ⟺ ходок доходит.
-            const std::uint16_t zd = zones->dist.at(
-                static_cast<std::uint32_t>(myZone) - 1u,
-                static_cast<std::uint32_t>(plan.room) - 1u);
-            if (zd != kZoneUnreachable) {
-                out.zoneDistSum += zd;
-                ++out.zoneDistBodies;
-            }
-        } else {
-            d = nav::route_step(coarse, fine, ivec3{cx, cy, cz},
-                                ivec3{tx, ty, tz});
+        const std::uint8_t d = zone_walk_dir(*zones, myZone, plan.room, cx, cy,
+                                             cz, gf.pull ? gf.axis : -1);
+        // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
+        // падает ⟺ ходок доходит.
+        const std::uint16_t zd = zones->dist.at(
+            static_cast<std::uint32_t>(myZone) - 1u,
+            static_cast<std::uint32_t>(plan.room) - 1u);
+        if (zd != kZoneUnreachable) {
+            out.zoneDistSum += zd;
+            ++out.zoneDistBodies;
         }
-        if (d == nav::kFlowNone || d == kZoneFlowNone) {
+        if (d == kZoneFlowNone) {
             // Маршрута нет (разные компоненты связности, или цель в толще).
             // Цель снимается со стаггером: пере-спрашивать каждый тик значило
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
@@ -383,8 +380,11 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // `wander_step` и не ведётся никем — то есть ЗАМИРАЕТ, а замирающий NPC
         // есть дефект (S13.2). Поймано на себе при посадке проверки
         // проходимости ниже: `continue` стоял после забора.
+        // `zone_walk_dir` по контракту ([game/zone_nav.h]) отдаёт 0..5 либо
+        // `kZoneFlowNone`, а он снят условием выше — поэтому индекс словаря
+        // направлений законен по построению, и ветки «не шаг» здесь больше нет.
         vec3 dir{0.0f, 0.0f, 0.0f};
-        if (byZones && d < 6 && (d >> 1) == gf.axis) {
+        if ((d >> 1) == gf.axis) {
             // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
             // ступенька и есть выход из зоны. Тангенциального пеленга у него
             // ровно ноль, то есть вести этим шагом нечем — тело отдаётся
@@ -394,63 +394,27 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             ++out.idle;
             continue;
         }
-        if (d < 6 && (d >> 1) != gf.axis) {
-            // Шаг в плоскости ходьбы: целимся в ЦЕНТР следующей клетки — то же
-            // самоисправляющееся правило, которым идёт патруль.
-            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
-            dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
-        } else {
-            // ОСТАТОК ЯКОРЯ и шаг ВДОЛЬ гравитации — один и тот же случай:
-            // поля потока несут только 64 якоря, поэтому цель, не стоящая на
-            // якоре, достигается маршрутом лишь до своего якоря (≤ половины
-            // шага решётки), а последнюю ногу идёт сам вызывающий — ровно то,
-            // что обещает шапка `route_step`. Ходьба не умеет тратить шаг вдоль
-            // гравитации, и ответ у обоих случаев один: прямо на цель, в
-            // плоскости ходьбы.
-            //
-            // ЭТА ВЕТКА — НЕ РЕДКИЙ СЛУЧАЙ, А 85% ОТВЕТОВ, и это ЗАМЕР живого
-            // прогона 2026-10-01 (этаж 6, 800 тыс. вызовов маршрута): `+z`
-            // дал 637 256 ответов против 143 тыс. горизонтальных на все четыре
-            // стороны. Причина НЕ в этом файле и не в выборе цели: поля потока
-            // печены над оракулом «тело ВЛЕЗАЕТ в клетку»
-            // (`ClearanceField@src/world/clearance.h`), у которого нет понятия
-            // ОПОРЫ, поэтому кратчайший путь к якорю идёт ПО ВОЗДУХУ. Ходок за
-            // таким путём следовать не может по построению. Долг записан
-            // расхождением в [SKELETON.md] VIII.5.
-            dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(tx) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(ty) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(tz) + 0.5f) * kCellSize, kWorldExtent));
-            // И ПОТОМУ ЖЕ ЭТА ВЕТКА НЕ ИМЕЕТ ПРАВА ИДТИ ВСЛЕПУЮ. Прямая на цель
-            // не знает стен, и живой прогон показал, чем это кончается: тело
-            // прошло четыре клетки и `route_step` вернул `kFlowNone` — оно
-            // вышло за пределы ПРОХОДИМОГО МНОЖЕСТВА, где нав его больше не
-            // видит. Проверка стоит ОДНА и дешёвая: знает ли нав клетку, в
-            // которую тело собирается шагнуть. Не знает — тело отдаётся
-            // `wander_step`, который умеет ходить по этому этажу, а цель
-            // остаётся на месте и ждёт следующего тика.
-            //
-            // Почему именно `nearest_node`: это та же карта, по которой
-            // `route_step` решает «есть ли маршрут», поэтому проверка и маршрут
-            // не могут разойтись в понимании слова «проходимо».
-            const float adx = dir.x < 0.0f ? -dir.x : dir.x;
-            const float ady = dir.y < 0.0f ? -dir.y : dir.y;
-            const float adz = dir.z < 0.0f ? -dir.z : dir.z;
-            int nx = cx, ny = cy, nz = cz;
-            if (adx >= ady && adx >= adz) nx = wrap_macro(cx + (dir.x < 0.0f ? -1 : 1));
-            else if (ady >= adz) ny = wrap_macro(cy + (dir.y < 0.0f ? -1 : 1));
-            else nz = wrap_macro(cz + (dir.z < 0.0f ? -1 : 1));
-            if (fine.nearest_node(nx, ny, nz) == nav::kFlowNone) {
-                ++out.offnav;
-                ++out.idle;
-                continue; // токен НЕ забран: тело остаётся за вандером
-            }
-        }
+        // ШАГ В ПЛОСКОСТИ ХОДЬБЫ: целимся в ЦЕНТР следующей клетки — то же
+        // самоисправляющееся правило, которым идёт патруль.
+        //
+        // СЛЕПОЙ ПРЯМОЙ НА ЦЕЛЬ ЗДЕСЬ БОЛЬШЕ НЕТ, и это и есть выигрыш сноса.
+        // Она стояла второй ветвью и брала 85% ответов — ЗАМЕР живого прогона
+        // 2026-10-01 (этаж 6, 800 тыс. вызовов маршрута): `+z` дал 637 256
+        // ответов против 143 тыс. горизонтальных на все четыре стороны. Причина
+        // была не в выборе цели, а в оракуле: поля потока печены над «тело
+        // ВЛЕЗАЕТ в клетку» (`ClearanceField@src/world/clearance.h`), у которого
+        // нет понятия ОПОРЫ, поэтому кратчайший путь к якорю шёл ПО ВОЗДУХУ, и
+        // ходок за ним следовать не мог по построению. Остаток якоря приходилось
+        // идти прямой, прямая не знала стен, и её приходилось страховать
+        // проверкой `nearest_node`. Зоны отвечают шагом ПО ПРОХОДИМОЙ грани
+        // всегда — ни остатка, ни прямой, ни страховки.
+        const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+        const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+        const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+        dir = tangent(
+            wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
+            wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
+            wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
 
         const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
         if (d2 <= kMinFleeGrad2) {

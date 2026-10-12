@@ -99,13 +99,11 @@ void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
 }
 
 void RebakeScheduler::discard_pending() {
-    // ОСВОБОДИТЬ, не clear() — разница в 128 MiB, тот же довод, что был у
-    // AsyncBake::start(): clear() хранит capacity мёртвыми байтами ровно в
-    // самый голодный момент. swap-с-временным, а не shrink_to_fit: shrink —
-    // необязательная ПРОСЬБА стандарта, а гарантия памяти, от которой
-    // реализация вправе отказаться, — не гарантия.
-    std::vector<std::uint8_t>().swap(pendingFine_.flow);
-    std::vector<std::uint8_t>().swap(pendingFine_.nearest);
+    // ОСВОБОДИТЬ, не clear(): clear() хранит capacity мёртвыми байтами ровно в
+    // самый голодный момент. Решёточные 128 МиБ, ради которых это правило и
+    // писалось, умерли вместе с бейком (§88/F.2 шаг 3) — правило осталось, его
+    // предмет теперь зоны и свет.
+    zonesPending_ = ZoneNav{};
     pendingLight_ = LightVisBake{};
     pendingPatch_ = LightVisPatch{};
     // Карвы отменённого цикла — назад в живой список: выброс оставил бы их
@@ -115,10 +113,8 @@ void RebakeScheduler::discard_pending() {
     carvedSnap_.clear();
     // shadowGrid_ НЕ трогаем: тень — резидент этажа, воркер её только читал.
     lightDone_.store(false, std::memory_order_relaxed);
-    coarseDone_.store(false, std::memory_order_relaxed);
     exited_.store(false, std::memory_order_relaxed);
     lightSwapped_ = false;
-    coarseSwapped_ = false;
 }
 
 void RebakeScheduler::cancel() {
@@ -205,8 +201,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
 
     // Живой nav-граф освободить сразу: до свапа ready() == false и толпа
     // стоит, а не ходит по геометрии чужого этажа (семантика AsyncBake).
-    std::vector<std::uint8_t>().swap(fine_.flow);
-    std::vector<std::uint8_t>().swap(fine_.nearest);
+    zones_ = ZoneNav{};
 
     // Снапшот по значению — воркер не знает про World вообще.
     snapClear_.vals = navClear_.vals;
@@ -231,19 +226,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     worker_ = std::thread([this]() {
         using clock = std::chrono::steady_clock;
         const auto t0 = clock::now();
-        nav::bake_coarse(snapClear_, kBodyClearanceSub, pendingCoarse_,
-                         /*threads=*/0, &cancel_);
-        const auto t1 = clock::now();
-        nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_,
-                       /*threads=*/0, &cancel_);
-        const auto t2 = clock::now();
         if (haveZones_)
             game::bake_zone_nav(snapRooms_, snapClear_, kBodyClearanceSub,
                                 snapGravity_, zonesPending_, /*threads=*/0);
-        if (!cancel_.load(std::memory_order_relaxed)) {
-            coarseMs_ = ms_between(t0, t1);
-            fineMs_ = ms_between(t1, t2);
-        }
+        const auto t1 = clock::now();
+        if (!cancel_.load(std::memory_order_relaxed)) zonesMs_ = ms_between(t0, t1);
         // release: main прочтёт готовые pending_* после acquire в step().
         exited_.store(true, std::memory_order_release);
     });
@@ -318,8 +305,8 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
         // Порядок — решение владельца (light-visibility-bake.md §финал):
         // СВЕТ ПЕРВЫМ, перед путями и всем остальным — он заметнее всего, а
         // его свап ужимает раздутые карвами списки клеток и возвращает кадры
-        // сразу; затем приоритеты плана §3: rooms -> coarse -> fine.
-        const auto tL = clock::now();
+        // сразу; затем нав. После сноса решётки (§88/F.2 шаг 3) секций у
+        // цикла ДВЕ, а не четыре: свет и зоны.
         if (shadowGrid_ != nullptr && cycleLightFull_) {
             bake_light_visibility(*shadowGrid_, lampsSnap_.data(),
                                   lampsSnap_.size(), lightSlots_,
@@ -345,38 +332,28 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
             if (!cancel_.load(std::memory_order_relaxed))
                 lightDone_.store(true, std::memory_order_release);
         }
-        // Секция rooms умерла (rooms-object F) — фоновому циклу остались
-        // coarse/fine нава и свет.
+        // Секция rooms умерла (rooms-object F), секция решётки — 2026-10-12
+        // (§88/F.2 шаг 3). Фоновому циклу остались СВЕТ и ЗОНЫ, и зоны печёт
+        // тот же снапшот оракула: карв протёк в него дренажом, значит зоны
+        // перепекаются ровно тем же механизмом, а не вторым (§88/F, «единая
+        // система»).
         const auto t0 = clock::now();
-        const auto t1 = t0;
-        (void)tL;
-        nav::bake_coarse(snapClear_, kBodyClearanceSub, pendingCoarse_,
-                         threads, &cancel_);
-        const auto t2 = clock::now();
-        if (!cancel_.load(std::memory_order_relaxed)) {
-            coarseMs_ = ms_between(t1, t2);
-            coarseDone_.store(true, std::memory_order_release);
-        }
-        nav::bake_fine(snapClear_, kBodyClearanceSub, pendingFine_, threads,
-                       &cancel_);
-        // Зоны — той же секцией и тем же снапшотом: карв протёк в оракул
-        // дренажом, значит зоны перепекутся вместе с решёткой, а не отдельным
-        // механизмом (§88/F, «единая система»).
         if (haveZones_)
             game::bake_zone_nav(snapRooms_, snapClear_, kBodyClearanceSub,
                                 snapGravity_, zonesPending_, threads);
-        const auto t3 = clock::now();
+        const auto t1 = clock::now();
         if (!cancel_.load(std::memory_order_relaxed)) {
-            fineMs_ = ms_between(t2, t3);
+            zonesMs_ = ms_between(t0, t1);
             // Строка-замер: по ней уточняются kWorstBakeTicks и производные
             // SLA-константы на реальном железе (S11: вывод, не назначение).
+            // Числа решётки (coarse 1.9 + fine 1.8 с) отсюда УШЛИ вместе с
+            // бейком — и ровно их место в бюджете цикла теперь свободно.
             std::fprintf(stderr,
-                         "[rebake] floor %d gen %llu baked: coarse %.0f + "
-                         "fine %.0f ms = %.1f s @ %d threads | "
-                         "shadow sync %.2f ms MAIN\n",
+                         "[rebake] floor %d gen %llu baked: zones %.0f ms "
+                         "= %.1f s @ %d threads | shadow sync %.2f ms MAIN\n",
                          number, static_cast<unsigned long long>(snapGen_),
-                         coarseMs_, fineMs_,
-                         ms_between(t0, t3) / 1000.0f, threads, snapCopyMs_);
+                         zonesMs_, ms_between(t0, t1) / 1000.0f, threads,
+                         snapCopyMs_);
         }
         exited_.store(true, std::memory_order_release);
     });
@@ -409,9 +386,6 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
         } else if (mode_ == Mode::Fresh) {
             if (exited_.load(std::memory_order_acquire)) {
                 join_worker();
-                coarse_ = pendingCoarse_;
-                fine_.flow = std::move(pendingFine_.flow);
-                fine_.nearest = std::move(pendingFine_.nearest);
                 if (haveZones_) zones_ = std::move(zonesPending_);
                 bakedGen_ = snapGen_;
                 if (bakedGen_ == lastSeenGen_) {
@@ -460,7 +434,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 pendingPatch_ = LightVisPatch{};
                 mode_ = Mode::Idle;
             }
-        } else { // Mode::Rebake — посекционно: light -> rooms -> coarse -> fine
+        } else { // Mode::Rebake — посекционно: свет -> зоны
             if (!lightSwapped_ &&
                 lightDone_.load(std::memory_order_acquire)) {
                 if (cycleLightFull_) {
@@ -494,22 +468,16 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
                 lightSwapped_ = true;
                 carvedSnap_.clear(); // долг покрыт (полным или патчем)
             }
-            if (!coarseSwapped_ &&
-                coarseDone_.load(std::memory_order_acquire)) {
-                coarse_ = pendingCoarse_;
-                coarseSwapped_ = true;
-            }
             if (exited_.load(std::memory_order_acquire)) {
                 join_worker();
-                fine_.flow = std::move(pendingFine_.flow);
-                fine_.nearest = std::move(pendingFine_.nearest);
                 if (haveZones_) zones_ = std::move(zonesPending_);
                 bakedGen_ = snapGen_;
                 lastRebakeDurTicks_ = simTick - lastStartTick_;
                 mode_ = Mode::Idle;
-                // тень живёт дальше — транзиента цикла больше нет (59.21)
-                // Память на свапе: транзиентный пик (старый+новый fine ~260
-                // MiB) уже позади, но capacity — то, что держит аллокатор.
+                // тень живёт дальше — транзиента цикла больше нет (59.21).
+                // Транзиентного пика «старый + новый fine ~260 МиБ» тоже
+                // больше нет: решётка снесена (§88/F.2 шаг 3), и на свапе
+                // удваиваются только зоны (их замер печатает [zones]).
                 std::fprintf(
                     stderr,
                     "[rebake] swap: floor %d gen %llu live | %llu ticks "

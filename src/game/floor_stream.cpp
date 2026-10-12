@@ -367,20 +367,14 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // живых карве, двери и автомате — то есть подключать пришлось бы ПОЧИНИВ.
     // Решение владельца: убить. problems.md §83.
     //
-    // GATED, and OFF by default (`set_nav_bake`): the shipping app steers off its
-    // own `nav::AsyncBake` and never reads `nav_at`, so doing this here bought a
-    // multi-second blocking stall per floor entry and 130 MiB, then freed the
-    // result unread. [problems.md] §26.
-    if (nav_bake()) {
-        auto fn = std::make_unique<FloorNav>();
-        // Один оракул на оба бейка (грид читается один раз на грань), габарит
-        // — тело NPC ([game/embody.h] kBodyClearanceSub, вывод там).
-        ClearanceField clear;
-        clear.build(stack.layer(slot).grid());
-        nav::bake_coarse(clear, kBodyClearanceSub, fn->coarse);
-        nav::bake_fine(clear, kBodyClearanceSub, fn->fine);
-        nav_[m] = std::move(fn);
-    }
+    // РЕШЁТОЧНЫЙ БЕЙК ЭТАЖА СНЕСЁН 2026-10-12 (§88/F.2 шаг 3) вместе с
+    // `FloorNav`/`nav_at`/`set_nav_bake`. Он был выключен по умолчанию и имел
+    // РОВНО ОДНОГО вызывающего — свой собственный тест (`test_streamed_nav`), а
+    // продукт его не читал никто: приложение ходит по зонам, которые печёт
+    // `game::RebakeScheduler`. Это второй случай той же болезни в этом файле
+    // (первый — дисковая мемоизация выше): путь, живущий только собственным
+    // тестом, есть будущая вторая реализация, и тест умер вместе с предметом.
+    // [problems.md] §26 закрыт не выключателем, а сносом.
 
     fm.bodies.clear();
     embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
@@ -497,10 +491,6 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     }
     fm.bodies.clear();
 
-    // Free the floor's baked nav — resident only while the floor is live, so a
-    // cold floor costs no nav RAM (~130 MiB reclaimed here); a later reload rebakes
-    // it from the deterministically regenerated geometry.
-    nav_[m].reset();
     antourage_[m].reset();
 
     // Sweep whatever ELSE still lives on this layer.
@@ -539,12 +529,6 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     free_slot(layer);
     reg.evict(m);
     (void)stack;
-}
-
-const FloorNav* FloorStreamer::nav_at(const FloorRegistry& reg, int number) const {
-    ModuleId m = reg.module_at(number);
-    if (m == kInvalidModule) return nullptr;
-    return nav_[m].get();
 }
 
 const AntourageBake* FloorStreamer::antourage_at(const FloorRegistry& reg,

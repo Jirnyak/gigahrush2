@@ -38,7 +38,6 @@
 #include "game/prop_table.h"  // kPropVerbs — «койка 17» из живых данных
 #include "game/room.h"
 #include "game/room_supply.h" // supply_add_prop — ОСНАЩЕНИЕ настоящей дверью
-#include "world/nav.h"
 
 namespace place_suite {
 
@@ -95,16 +94,46 @@ inline void set_needs_satisfied(NpcPool& pool, NpcId id) {
     n.seeded = 1;
 }
 
-// Дешёвая арена нава (приём suite_utilai/suite_behaviours): настоящий
-// `bake_fine` — это 128 МиБ и секунды BFS, а `route_step` читает ровно один
-// байт потока плюс строку coarse. Один узел (0) и есть всё, что нужно:
-// `nearest` целиком нулевой делает узлом цели и узлом источника нуль, а
-// зануленный `CoarseGraph` даёт dist[0][0] = 0, то есть «достижимо».
-inline void arm_nav(nav::CoarseGraph& coarse, nav::FineNav& fine,
-                    std::uint8_t flowByte) {
-    coarse = nav::CoarseGraph{};
-    fine.flow.assign(kMacroCells, flowByte);
-    fine.nearest.assign(kMacroCells, static_cast<std::uint8_t>(0));
+// ДЕШЁВАЯ АРЕНА НАВА ПО ЗОНАМ — наследница `arm_nav`, которая подделывала
+// решётку (`fine.flow` + нулевой `CoarseGraph`). Общая фикстура
+// `zone_fixture::arm_zones_plus_x` здесь не годится: её граница стоит на x==48,
+// а сцена этого теста — тело на x==40 и спальня на x==48, то есть ОБЕ точки
+// обязаны лежать в РАЗНЫХ зонах с границей МЕЖДУ ними. Поэтому граница
+// параметризована, а всё остальное — тот же приём: два чтения, и подделать надо
+// ровно их ([game/zone_nav.h]).
+//
+// `homeZone` — зона цели, и она обязана численно равняться `RoomId` комнаты:
+// у нава по зонам цель ЕСТЬ зона, и проход индексирует таблицу номером комнаты
+// (`plan.room`). Фикстура, нарушившая это, мерила бы чужую строку таблицы.
+inline void arm_zones_errand(giga::game::ZoneNav& zn, int boundaryX,
+                             RoomId bodyZone, RoomId homeZone,
+                             std::uint8_t flowByte = 1) {
+    using namespace giga;
+    zn = game::ZoneNav{};
+    const std::uint32_t zones = bodyZone > homeZone ? bodyZone : homeZone;
+    zn.part.zones = zones;
+    zn.part.at.assign(kMacroCells, bodyZone);
+    zn.part.cells = static_cast<std::uint32_t>(kMacroCells);
+    for (int cz = 0; cz < kMacroDim; ++cz)
+        for (int cy = 0; cy < kMacroDim; ++cy)
+            for (int cx = boundaryX; cx < kMacroDim; ++cx)
+                zn.part.at[macro_index(cx, cy, cz)] = homeZone;
+    // Граф: каждая зона знает другую одной соседкой (слот 0).
+    zn.graph.zones = zones;
+    zn.graph.offset.assign(zones + 1u, 0u);
+    zn.graph.nbr.clear();
+    for (std::uint32_t z = 0; z < zones; ++z) {
+        zn.graph.offset[z] = z;
+        zn.graph.nbr.push_back(static_cast<RoomId>(z == 0 ? 2 : 1));
+    }
+    zn.graph.offset[zones] = zones;
+    // Таблица: расстояние 1 между любыми двумя, 0 до себя.
+    zn.dist.zones = zones;
+    zn.dist.d.assign(static_cast<std::size_t>(zones) * zones, 1);
+    for (std::uint32_t z = 0; z < zones; ++z)
+        zn.dist.d[static_cast<std::size_t>(z) * zones + z] = 0;
+    zn.flow.planes = 1;
+    zn.flow.dir.assign(kMacroCells, flowByte);
 }
 
 // Объявить одну кубическую комнату со спросом по одному глаголу.
@@ -519,35 +548,48 @@ static void test_place_errand_walks() {
     pool.init();
     FloorRooms fr;
     rooms_reset(fr);
-    nav::CoarseGraph coarse;
-    nav::FineNav fine;
+    ZoneNav zones;
 
     // Спальня в восьми клетках по +x от тела.
     const int bx = 40, by = 40, bz = 40;
     const RoomId home = declare_cube(fr, bx + 8, by, bz, 1, kVerbSleep, 30);
     CHECK(home != kNoRoom);
+    // Зона тела — ВТОРАЯ, зона цели совпадает с номером комнаты (см. довод у
+    // фикстуры). Граница между телом (x=40) и спальней (x=48).
+    const RoomId bodyZone = static_cast<RoomId>(2);
+    const int boundary = 44;
 
     NpcId id = 0;
     const Entity e = make_body(reg, pool, bx, by, bz, id);
     set_needs_sleepy(pool, id);
     CHECK(ai_init(reg, kLayer) == 1);
 
-    // ПУСТОЙ БЕЙК — NO-OP, НЕ UB (контракт wander_step/ai_patrol_step).
-    const PlaceTick none = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    // НЕПОСТРОЕННЫЙ НАВ — NO-OP, НЕ UB (контракт wander_step/ai_patrol_step).
+    // До 2026-10-12 этой сценой был «пустой решёточный бейк»; теперь — пустые
+    // зоны, и проверка та же: тело не тронуто, счётчики нули.
+    const PlaceTick none =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(none.considered == 0);
     CHECK(none.walking == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
 
-    // ОСТАТОК ЯКОРЯ: поток говорит «ты на якоре цели», последнюю ногу идёт сам
-    // вызывающий — и обязан идти К ЦЕЛИ. Это та ветка, где направление
-    // проверяемо: +x и ровно ноль по y.
-    arm_nav(coarse, fine, nav::kFlowArrived);
-    const PlaceTick walk = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    // ШАГ В ПЛОСКОСТИ ХОДЬБЫ — ЕДИНСТВЕННАЯ ветка хода после сноса решётки.
+    // Байт 1 = kNavDir[1] = +x, целимся в центр соседней клетки. Прежде здесь
+    // было ДВЕ ветки с одним ответом («остаток якоря» слепой прямой и шаг по
+    // потоку); остатка больше нет, и направление проверяемо ровно так же: +x и
+    // ровно ноль по y.
+    arm_zones_errand(zones, boundary, bodyZone, home);
+    const PlaceTick walk =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(walk.considered == 1);
     CHECK(walk.picked == 1);
     CHECK(walk.walking == 1);
     CHECK(walk.arrived == 0);
     CHECK(walk.unreachable == 0);
+    CHECK(walk.offnav == 0);
+    // Прибор прогресса: расстояние в ЗОНАХ посчитано по ведомому телу.
+    CHECK(walk.zoneDistBodies == 1);
+    CHECK(walk.zoneDistSum == 1);
     // Цена запроса — ЧИСЛО: суждения были, и их меньше, чем бинов тора.
     CHECK(walk.judged >= 1);
     CHECK(walk.bins >= 1);
@@ -562,47 +604,80 @@ static void test_place_errand_walks() {
     CHECK(std::fabs(v.v.y) < 1e-6f);
     CHECK(v.v.y != kSentY);
 
-    // ШАГ ПО ПОТОКУ: байт 1 = kNavDir[1] = +x, целимся в центр соседней клетки.
-    // Вторая из двух ветвей хода, и у неё тот же ответ по направлению.
+    // ВТОРОЙ ТИК ПО УЖЕ ВЫБРАННОЙ ЦЕЛИ — пере-выбора нет, ведёт тем же шагом.
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-    arm_nav(coarse, fine, 1);
-    const PlaceTick step = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick step =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(step.walking == 1);
     CHECK(step.picked == 0); // цель уже выбрана — пере-выбора не было
     CHECK(std::fabs(reg.get<Velocity>(e).v.x - kErrandSpeed) < 1e-4f);
 
-    // ПРЯМАЯ НА ЦЕЛЬ НЕ ИДЁТ ВСЛЕПУЮ. Эта ветка — 85% ответов маршрута на живом
-    // этаже (замер 2026-10-01), и без проверки она выводила тело ЗА ПРОХОДИМОЕ
-    // МНОЖЕСТВО, после чего нав его терял и цель умирала. Сцена: нав не знает
-    // клетку, в которую тело собирается шагнуть (+x) — тело НЕ забирается
-    // токеном и остаётся за вандером, а цель на месте.
-    arm_nav(coarse, fine, nav::kFlowArrived);
-    fine.nearest[macro_index(wrap_macro(bx + 1), wrap_macro(by), wrap_macro(bz))] =
-        nav::kFlowNone;
+    // СТУПЕНЬКА: дверь зон отдала шаг ВДОЛЬ гравитации. Тангенциального пеленга
+    // у него ровно ноль, вести им нечем — тело отдаётся вандеру, а цель
+    // ОСТАЁТСЯ (токен не забран). Слепой прямой на цель здесь нет СОЗНАТЕЛЬНО:
+    // ровно она была остатком якоря у решётки и стоила §88 нуля прибытий.
+    // Эта ветка решёточными тестами НЕ покрывалась вовсе — её не существовало.
+    arm_zones_errand(zones, boundary, bodyZone, home, /*flowByte=*/5); // +z
+    // Чтобы дверь зон ОТДАЛА вертикальный шаг, он обязан быть ВЫХОДОМ из зоны:
+    // `zone_walk_dir` щупает вперёд до kSubDim и отказывает, если шаг вдоль
+    // гравитации никуда не выводит (иначе он вёл бы тело в уступ). Поэтому
+    // клетка над телом принадлежит зоне ЦЕЛИ — это и есть ступенька.
+    zones.part.at[macro_index(wrap_macro(bx), wrap_macro(by), wrap_macro(bz + 1))] =
+        home;
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-    const PlaceTick off = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick stepup =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+    CHECK(stepup.walking == 0);
+    CHECK(stepup.idle == 1);
+    CHECK(stepup.unreachable == 0); // это не отказ маршрута, а отказ ВЕСТИ
+    CHECK(reg.get<ErrandPlan>(e).room == home); // цель НЕ потеряна
+    CHECK(reg.get<Velocity>(e).v.x == kSentX);  // и тело не тронуто
+    CHECK(!ai_owns_motion(reg, e));             // токен не забран — ведёт вандер
+
+    // ТЕЛО ВНЕ РАЗБИВКИ. Клетка центра тела бывает дыркой в разбивке (замер:
+    // 26 тел на тик) — вести его некуда, отдаём вандеру, цель на месте. Это
+    // наследник сцены «нав не знает клетку, в которую тело шагает»: прежде её
+    // ловила проверка `nearest_node` у слепой прямой, теперь — сама разбивка.
+    arm_zones_errand(zones, boundary, bodyZone, home);
+    // Дырка обязана быть и у шести соседей: `zone_of_body` опирается на соседа
+    // (клетка центра тела бывает дыркой при живой зоне вокруг), и фикстура,
+    // занулившая одну клетку, мерила бы ровно этот фолбэк, а не отказ.
+    zones.part.at[macro_index(wrap_macro(bx), wrap_macro(by), wrap_macro(bz))] =
+        kNoRoom;
+    for (int d = 0; d < 6; ++d)
+        zones.part.at[macro_index(wrap_macro(bx + nav::kNavDir[d][0]),
+                                  wrap_macro(by + nav::kNavDir[d][1]),
+                                  wrap_macro(bz + nav::kNavDir[d][2]))] = kNoRoom;
+    reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
+    reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+    const PlaceTick off =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(off.offnav == 1);
     CHECK(off.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == home); // цель НЕ потеряна
     CHECK(reg.get<Velocity>(e).v.x == kSentX);  // и тело не тронуто
     CHECK(!ai_owns_motion(reg, e));             // токен не забран — ведёт вандер
-    arm_nav(coarse, fine, nav::kFlowArrived);
 
     // БЕГСТВО СТАРШЕ ДЕЛА: тело под токеном `ai_step` не рассматривается вовсе.
+    arm_zones_errand(zones, boundary, bodyZone, home);
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Ai);
-    const PlaceTick owned = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick owned =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(owned.considered == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
 
     // МАРШРУТА НЕТ — цель снимается со стаггером, тело отдаётся вандеру.
+    // Сцена переведена с «ни у кого нет якоря» на «таблица зон говорит
+    // НЕДОСТИЖИМО», то есть на тот же отказ у того же места решения.
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-    fine.nearest.assign(kMacroCells, nav::kFlowNone); // якоря нет ни у кого
-    const PlaceTick lost = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    zones.flow.dir.assign(kMacroCells, kZoneFlowNone);
+    const PlaceTick lost =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(lost.unreachable == 1);
     CHECK(lost.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == kNoRoom);
@@ -610,13 +685,14 @@ static void test_place_errand_walks() {
     CHECK(!ai_owns_motion(reg, e));
 
     // ПРИБЫЛ: тело, стоящее в своей цели, отпускается и больше не ведётся.
-    arm_nav(coarse, fine, nav::kFlowArrived);
+    arm_zones_errand(zones, boundary, bodyZone, home);
     reg.get<ErrandPlan>(e).room = home;
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
     reg.get<Transform>(e).pos =
         vec3{cell_centre(bx + 8), cell_centre(by), cell_centre(bz)};
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-    const PlaceTick arrive = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick arrive =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(arrive.arrived == 1);
     CHECK(arrive.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == kNoRoom);
@@ -627,7 +703,8 @@ static void test_place_errand_walks() {
     // оно остаётся на месте, и это шкала, а не ветка «ничего не нашлось».
     set_needs_satisfied(pool, id);
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
-    const PlaceTick calm = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick calm =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(calm.considered == 1);
     CHECK(calm.picked == 0);
     CHECK(calm.walking == 0);
@@ -640,7 +717,8 @@ static void test_place_errand_walks() {
     reg.get<Transform>(e).pos = vec3{cell_centre(bx), cell_centre(by), cell_centre(bz)};
     reg.get<ErrandPlan>(e).room = kNoRoom;
     reg.get<ErrandPlan>(e).nextPickAt = 1000.0f;
-    const PlaceTick early = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick early =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(early.picked == 0);
     CHECK(early.judged == 0); // ни одной комнаты не суждено — запрос не звали
     CHECK(early.idle == 1);
@@ -651,7 +729,8 @@ static void test_place_errand_walks() {
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
     reg.emplace<CameraTag>(e);
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-    const PlaceTick human = place_errand_step(reg, pool, fr, coarse, fine, kLayer, 0.0);
+    const PlaceTick human =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
     CHECK(human.considered == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     reg.remove<CameraTag>(e);

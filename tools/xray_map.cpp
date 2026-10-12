@@ -50,7 +50,6 @@
 #include "world/lattice.h"
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
-#include "world/nav.h"
 #include "world/types.h"
 #include "world/world.h"
 

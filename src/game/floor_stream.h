@@ -38,22 +38,9 @@
 #include "game/floor_spec.h"     // giga::game::FloorKind
 #include "game/npc_pool.h"       // giga::game::NpcPool, NpcId
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
-#include "world/nav.h"           // giga::nav::CoarseGraph, FineNav
 #include "game/antourage/antourage.h" // AntourageBake — per-floor baked dressing
 
 namespace giga::game {
-
-// The baked navigation for one live floor: the coarse next-hop graph (L1) and
-// the 64 per-node flow fields + nearest-node field (L2). Baked once when a floor
-// is streamed in (ensure_loaded) from its freshly regenerated geometry, and
-// freed when it is evicted, so nav is resident ONLY for live floors (~130 MiB
-// each — performance.md "bake at load, tick in O(1)"; RAM is the generous
-// budget, the tick is the scarce one). The movement AI (#12) steers by querying
-// this with nav::route_step — no per-agent search on the tick.
-struct FloorNav {
-    nav::CoarseGraph coarse;
-    nav::FineNav fine;
-};
 
 // Per-module streaming content, one entry per ModuleId. The FloorRegistry holds
 // the (mutable) number label and the (streamed) residency; this holds the fixed
@@ -150,22 +137,13 @@ public:
         restore_ = std::move(fn);
     }
 
-    // Own a per-floor nav bake at all. **Default OFF, and that is the fix.**
-    //
-    // `ensure_loaded` used to bake `bake_coarse` + `bake_fine` unconditionally on
-    // every floor entry — the measured ~1.9 s + ~1.8 s and ~130 MiB that
-    // [game/rebake.h] calls "the worst thing the player feels" — and the app
-    // read the result NEVER: `nav_at` has no caller outside the tests, while the
-    // crowd steers off `main.cpp`'s own `game::RebakeScheduler`. So every ride paid a
-    // multi-second BLOCKING bake whose product was freed unread, on top of the
-    // async bake that actually feeds the game. [problems.md] §26.
-    //
-    // Not deleted, because it is a real feature with real coverage: the resident
-    // FloorNav is what `test_floor_streamer_nav` asserts against. Turning the bake
-    // off by default gives the app the seconds back while leaving the feature —
-    // and its test — intact.
-    void set_nav_bake(bool on) { navBake_ = on; }
-    bool nav_bake() const { return navBake_; }
+    // СВОЕГО NAV-БЕЙКА У СТРИМЕРА БОЛЬШЕ НЕТ (снесён 2026-10-12, §88/F.2 шаг
+    // 3). Он пёк решётку на каждом входе на этаж (~1.9 + ~1.8 с и 130 МиБ по
+    // замеру — то, что [game/rebake.h] называет «худшим, что чувствует
+    // игрок»), а продукт не читал НИКТО: толпа ходит по зонам от
+    // `game::RebakeScheduler`. 2026-09-30 путь был выключен по умолчанию
+    // (`set_nav_bake`), и выключенным у него остался ровно один вызывающий —
+    // собственный тест. [problems.md] §26 закрыт сносом, а не выключателем.
 
     // Register a floor module: assign `number -> module` in `reg` and record how
     // to build it. Does NOT load it. Returns the new ModuleId, or kInvalidModule
@@ -285,8 +263,8 @@ public:
     //     же этажу (двойная стройка одного модуля в два слота);
     //   * cancel возвращает слот — путь отмены поездки (F9 в кабине).
     //
-    // Тест-онли nav-путь (set_nav_bake) здесь НЕ воспроизводится: запекание —
-    // собственность RebakeScheduler, а путь умирает инкрементом 7 плана.
+    // Запекание нава — собственность RebakeScheduler, и здесь его нет вовсе
+    // (тест-онли путь решётки снесён, см. выше).
     //
     // begin: false = этаж не зарегистрирован / уже резидентен / слотов нет /
     // другой Prebuild в полёте. Задание НЕ исполняется здесь — только
@@ -310,11 +288,6 @@ public:
     bool loaded(const FloorRegistry& reg, int number) const {
         return reg.layer_at(number) != kInvalidLayer;
     }
-
-    // The baked navigation for floor `number`, or nullptr when that floor is not
-    // currently resident (nav lives only while the floor is loaded — ensure_loaded
-    // bakes it, unload frees it). The pointer stays valid until `number` unloads.
-    const FloorNav* nav_at(const FloorRegistry& reg, int number) const;
 
     // The resident floor's antourage bake (wire chains etc.), or null when the
     // floor is cold. Render-side consumers only.
@@ -360,11 +333,6 @@ private:
                       NpcId& playerId, Entity& outPlayer);
 
     FloorModule modules_[kMaxModules];
-    // Per-module baked nav, resident only while the module is loaded. Heap-held
-    // because each FineNav is ~130 MiB — keeping them out of line keeps the
-    // FloorStreamer object (a stack local in app + tests) tiny. ensure_loaded
-    // bakes into nav_[m]; unload resets it back to null.
-    std::unique_ptr<FloorNav> nav_[kMaxModules];
     // Per-module antourage bake (the GHOST half: wire chains for the render
     // backend; the solid half lives in the grid itself). Same lifetime as nav_.
     std::unique_ptr<AntourageBake> antourage_[kMaxModules];
@@ -379,7 +347,6 @@ private:
     std::unique_ptr<AntourageBake> prebuildBake_;
     float prebuildWorldMs_ = 0.0f;
     int keepRadius_ = 0;
-    bool navBake_ = false;    // see set_nav_bake: OFF for the app, on for tests
     std::function<bool(World&, int)> restore_;  // see set_floor_restore
 };
 

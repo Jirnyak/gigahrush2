@@ -58,7 +58,6 @@
 #include "game/light_vis_bake.h" // LightVisBake — секция света (строка №10)
 #include "world/macro_grid.h" // MacroGrid — снапшот масок по значению (свет)
 #include "world/clearance.h"  // ClearanceField — гранный оракул нава (occupancy)
-#include "world/nav.h"        // CoarseGraph, FineNav, bake_*
 
 namespace giga::game {
 
@@ -209,13 +208,16 @@ public:
     bool baking() const { return running_; }
     // Живой граф пригоден для чтения. false между start_fresh и его свапом —
     // ровно когда толпа стоит. Во время Rebake остаётся true: stale-граф жив.
-    bool ready() const { return !fine_.flow.empty(); }
-    const nav::CoarseGraph& coarse() const { return coarse_; }
-    const nav::FineNav& fine() const { return fine_; }
+    //
+    // СПРАШИВАЕТ ЗОНЫ, а не решётку: до 2026-10-12 это была проверка
+    // `!fine_.flow.empty()`, то есть готовность решёточных полей потока. Их
+    // больше нет (§88/F.2 шаг 3), и готовность нава ходьбы теперь ОДНА.
+    bool ready() const { return zones_.built(); }
 
-    // НАВ ПО ЗОНАМ — живой узел этажа (§88/F). Печётся ТЕМ ЖЕ пекарем и тем же
-    // снапшотом оракула, что и решётка: второго планировщика не появилось, и
-    // дренаж карва (`patch_carved_cells`) кормит зоны бесплатно.
+    // НАВ ПО ЗОНАМ — живой узел этажа (§88/F) и ЕДИНСТВЕННАЯ навигационная
+    // секция этого планировщика после сноса решётки. Печётся тем же снапшотом
+    // оракула, которым живёт свет, и дренаж карва (`patch_carved_cells`) кормит
+    // зоны бесплатно.
     const game::ZoneNav& zones() const { return zones_; }
 
     // --- секция света (LightVisibility) -------------------------------------
@@ -252,19 +254,21 @@ public:
     // актуальность держат патчи, полный бейк живёт по смене таблицы/дедлайну.
     std::uint32_t light_full_bakes() const { return lightFullBakes_; }
 
-    // Тайминги последнего завершённого бейка, для HUD и строк [rooms]/[nav] —
+    // Тайминг последнего завершённого бейка НАВА, для HUD и строки [nav] —
     // чтобы цена не превращалась в фольклор (тот же довод, что у AsyncBake).
-    float last_coarse_ms() const { return coarseMs_; }
-    float last_fine_ms() const { return fineMs_; }
+    // До 2026-10-12 здесь стояли ДВА числа решётки (`coarse` 1.9 с + `fine`
+    // 1.8 с по замеру); они умерли вместе с бейком, и единственный нав ходьбы
+    // теперь печатает своё собственное число.
+    float last_zones_ms() const { return zonesMs_; }
 
     // Всё, что объект держит СЕЙЧАС, по capacity (см. довод у AsyncBake:
-    // ёмкость — то, что реально удерживает аллокатор). Живой fine + pending
-    // fine — это и есть транзиентный пик ~+130 MiB во время Rebake, принятый
-    // владельцем (план §9, ответ 3); печатается строкой [rebake] на свапе.
+    // ёмкость — то, что реально удерживает аллокатор). Решёточных слагаемых
+    // здесь больше нет: `fine_` + `pendingFine_` и были тем транзиентным пиком
+    // ~+260 МиБ, который принимался решением владельца (план §9, ответ 3) — а
+    // теперь не платится вовсе. На балансе остались зоны (живые + свежепечёные,
+    // замер строкой [zones]), оракул клиренса и секция света.
     std::size_t resident_bytes() const {
-        return fine_.flow.capacity() + fine_.nearest.capacity() +
-               pendingFine_.flow.capacity() + pendingFine_.nearest.capacity() +
-               sizeof(nav::CoarseGraph) * 2 +
+        return zones_.bytes() + zonesPending_.bytes() +
                (navClear_.vals.capacity() + snapClear_.vals.capacity()) *
                    sizeof(std::uint16_t) +
                (shadowGrid_ ? shadowGrid_->masks().capacity() * sizeof(SubMask) +
@@ -291,8 +295,6 @@ private:
     void sync_shadow(); // O(1)-долив карвнутых клеток в теневую сетку
 
     // --- живая сторона: пишется только в step()/start_fresh на главном потоке
-    nav::CoarseGraph coarse_{};
-    nav::FineNav fine_{};
     // Живой оракул, патчится дренажом карвов: гранный клиренс (4 МиБ,
     // [world/clearance.h], эпик occupancy 2026-08-26 — прежний битсет
     // `!full()` вёл маршруты сквозь лепленые стены). Телесный битсет комнат
@@ -338,8 +340,6 @@ private:
     int floorNumber_ = 0;
 
     // --- сторона воркера: его собственность на время полёта -----------------
-    nav::CoarseGraph pendingCoarse_{};
-    nav::FineNav pendingFine_{};
     LightVisBake pendingLight_{};
     ClearanceField snapClear_; // снапшот по значению (4 МиБ, доли мс)
     // НАВ ПО ЗОНАМ: живой + свежепечёный, и снапшот его входа по значению.
@@ -366,13 +366,11 @@ private:
     std::atomic<bool> cancel_{false};
     // release-store воркера / acquire-load step() — посекционная передача.
     std::atomic<bool> lightDone_{false};
-    std::atomic<bool> coarseDone_{false};
     std::atomic<bool> exited_{false};
     bool running_ = false;
     Mode mode_ = Mode::Idle;
     bool prebuiltPending_ = false; // см. take_prebuilt
     bool lightSwapped_ = false;
-    bool coarseSwapped_ = false;
 
     // --- планировщик (все часы — сим-тики) ----------------------------------
     std::uint64_t bakedGen_ = 0;    // что отражает живой граф
@@ -385,8 +383,7 @@ private:
     std::uint64_t lastRebakeDurTicks_ = 0; // замер = мин-интервал
     int rebakeThreads_;
 
-    float coarseMs_ = 0.0f;
-    float fineMs_ = 0.0f;
+    float zonesMs_ = 0.0f;
     float snapCopyMs_ = 0.0f; // O(1)-долив тени на главном потоке (59.21)
 };
 

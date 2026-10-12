@@ -481,6 +481,41 @@ foreach(_dead_sym floor_room_mask floor_room_stride RoomBit bake_room_zones)
     endforeach()
 endforeach()
 
+# ---- Rule: РЕШЁТОЧНАЯ НАВИГАЦИЯ МЕРТВА (§88/F.2 шаг 3, 2026-10-12) --------
+# Нав ходьбы ОДИН — граф зон ([game/zone_nav.h]), и дверь «куда шагнуть» одна:
+# `zone_walk_dir`. Решётка 4×4×4 как ОСНОВА ХОДЬБЫ снесена: `CoarseGraph`,
+# `FineNav`, оба бейка, `route_step`, `coarse_next`, поле ближайшего узла.
+#
+# ПОЧЕМУ НАДГРОБИЕ, А НЕ ПАМЯТЬ РЕВЬЮЕРА: этот предмет уже возвращался. 85%
+# ответов старой двери были неисполнимы (замер 2026-10-01: `+z` 637 256 против
+# 143 тыс. горизонтальных), и три захода подряд лечили СЛЕДСТВИЕ — выбор цели,
+# предел дальности, стаггер, — пока причина лежала в оракуле без понятия ОПОРЫ.
+# Воскресшая `bake_fine` вернула бы ровно это, и вернула бы молча.
+#
+# Решётка САМА жива и законна в [world/lattice.h] и [game/fast_travel.h] —
+# хабы лифтов и быстрых перемещений; `kNavDir` жив словарём направлений. Здесь
+# запрещена только НАВИГАЦИОННАЯ роль.
+#
+# Проверять КОД, не эпитафии: вызов `sym(`, квалификатор `sym::`, либо тип в
+# объявлении (`CoarseGraph g`, `FineNav& f`). Строка с символом в бэктиках или
+# кавычках — текст о покойнике, и краснеть на нём значило бы запретить
+# надгробия.
+foreach(_dead_nav CoarseGraph FineNav bake_coarse bake_fine bake_nearest route_step coarse_next)
+    foreach(_f IN LISTS GIGA_ALL_FILES)
+        _giga_read_lines("${_f}" _dead_nav_lines)
+        set(_ln 0)
+        foreach(_l IN LISTS _dead_nav_lines)
+            math(EXPR _ln "${_ln} + 1")
+            _giga_restore_line(_l)
+            if(_l MATCHES "${_dead_nav}[ 	]*\\(" OR _l MATCHES "${_dead_nav}::"
+               OR _l MATCHES "${_dead_nav}[ 	]+[a-zA-Z_]" OR _l MATCHES "${_dead_nav}[ 	]*[&*][ 	]*[a-zA-Z_]")
+                list(APPEND GIGA_FAILURES
+                    "${_f}:${_ln}: '${_dead_nav}' воскрес — решёточная НАВИГАЦИЯ умерла (§88/F.2 шаг 3): поля потока печены над оракулом без понятия ОПОРЫ, 85% их ответов были неисполнимы. Нав ходьбы один: zone_walk_dir в game/zone_nav.h. Латтис лифтов в world/lattice.h это не затрагивает.")
+            endif()
+        endforeach()
+    endforeach()
+endforeach()
+
 # ---- Rule: баннер самосбора живёт в ОДНОМ месте ----------------------------
 # `samosbor_alarm` ([game/samosbor.h]) — единственный автор строки тревоги, и
 # его шапка на двадцать строк объясняет, почему он отдаётся ОДНИМ значением:
