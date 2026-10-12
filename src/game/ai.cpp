@@ -1029,6 +1029,7 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
                 continue; // изолированная зона — забота вандера
             }
             plan.zoneTo = pick;
+            ++out.repicked;
         }
 
         // ДВА ЧТЕНИЯ, и ни одной волны: таблица даёт соседку, плоскость

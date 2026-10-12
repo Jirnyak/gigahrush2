@@ -5427,11 +5427,12 @@ int main(int argc, char** argv) {
                     // прохода ходьбы сравниваются построчно, а не на глаз.
                     std::fprintf(stderr,
                                  "[patrol] STEP tick=%llu seen=%u walk=%u "
-                                 "arrive=%u unreach=%u offnav=%u idle=%u "
-                                 "zdist=%u/%u\n",
+                                 "arrive=%u repick=%u unreach=%u offnav=%u "
+                                 "idle=%u zdist=%u/%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  patrolTick.considered, patrolTick.walking,
-                                 patrolTick.arrived, patrolTick.unreachable,
+                                 patrolTick.arrived, patrolTick.repicked,
+                                 patrolTick.unreachable,
                                  patrolTick.offnav, patrolTick.idle,
                                  patrolTick.zoneDistSum,
                                  patrolTick.zoneDistBodies);
