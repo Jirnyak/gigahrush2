@@ -357,8 +357,15 @@ Re-verified today:
 - `relations()` — 1 caller: `macro_sim.cpp:124`, inside the social pass, **which is off**
   (§4.2). So the 128 B/row `rel_` column is allocated by nothing and read by nothing. **DEAD**
 - `NpcDesign` flag bit — `set_design`/`is_design` have 0 callers. **DEAD**
-- `attrs()` (8 B/row) — written at population.cpp:207-210, **read nowhere in src/**. **DEAD**
-  (rpg.h:56-62 says the sheet "leaves slots 3..7 free"; slots 0..7 are all unread.)
+- ~~`attrs()` (8 B/row) — written at population.cpp:207-210, **read nowhere in src/**. **DEAD**~~
+  **СНЕСЕНО 2026-10-12** решением владельца («перков пока нет и не будет до пострелиза,
+  пока они только планы и никакого кода, вес лишний вырезаем»). Колонка `attr_`,
+  константа `kAttrSlots`, аксессор и единственный писатель (посев) удалены; сейв
+  v23 → v24, провод строки пула 385 → 377 Б. Выигрыш 8 Б/строка = 8 МиБ при 2²⁰.
+  Наблюдение аудита подтвердилось буквально: `rpg.h:56-62` утверждал, что `Attr`
+  называет слоты 0..2 этого блока — но стор игрока живёт в собственном
+  `RpgStats::attr[3]`, а блок пула не читал НИКТО. Воскрешение ловит гейт
+  (`tools/check_source_rules.cmake`, «БЛОК ПЕРКОВ В ПУЛЕ МЁРТВ»).
 
 ### 3.10 `MacroStats` / `MacroParams` dead fields
 
@@ -563,7 +570,9 @@ one-line `switch`es. This would not matter except that **the prose is measurably
   `aiCfg.enabled = true;`. The AI has been live since that line landed.
 - `npc_pool.h:227` says `attr_/age_/sex_/level_` are "written by seed_floor_from_spec, read by
   nothing". `level_` **is** read — `embody.cpp:113` `random_rpg(pool.level(id), id)`. The other
-  three are indeed write-only.
+  three are indeed write-only. (2026-10-12: `attr_` СНЕСЕНА — список в шапке теперь
+  `age_/sex_/level_` 3 Б, а не 11; `level_` в нём по-прежнему оговорки не имеет, и
+  это та же ложная строка, просто короче.)
 
 That is eight load-bearing claims, all false, all in the files whose comment ratio is highest.
 Every one of them describes a system as *less* wired than it is, which is the dangerous
@@ -586,7 +595,7 @@ direction: a cleanup pass that trusted the prose would delete live code.
 | A7 | `ai_remember_actor`, `MemFoe`, `MemAlly`, `MemoryRecall::foe`, `MemoryRecall::grudge`, `Perception::grudge`, `apply_recall` grudge split, `mem_kind_is_actor` | ai.cpp:410-425, 457-468, 512-528; ai.h:419-432, 667, 741 | ~50 | ~90 |
 | A8 | `AiMemory::live_traces` | ai.cpp:390-401 | 12 | 14 |
 | A9 | `NpcPool::set_name`, `name()`, `surname()`, `name_`, `surname_` columns; `set_design`, `is_design`, `NpcDesign` | npc_pool.{h,cpp} | ~50 | ~70 |
-| A10 | `NpcPool::attrs()` + `attr_` column + `kAttrSlots` + its seeding loop | npc_pool.h:534-535,597; population.cpp:206-210 | ~15 | ~25 |
+| A10 | ~~`NpcPool::attrs()` + `attr_` column + `kAttrSlots` + its seeding loop~~ **ЗАКРЫТО 2026-10-12** (решение владельца, снесено с надгробием + гейтом; save v24, kPoolRowWire 377, −8 МиБ при 2²⁰) | npc_pool.h, population.cpp | ~15 | ~25 |
 | A11 | 6 dead rpg helpers (`str_durability_wear_mult_e3`, `int_contract_reward_mult_e3`, `int_document_reward_mult_e3`, `int_psi_duration_bonus_sec`, `adjusted_psi_cost`, `int_psi_cost_mult_e3`, `total_xp_for_level`) | rpg.{h,cpp} | ~70 | ~90 |
 | A12 | `samosbor_fog_tick_at`, `despawn_layer_fog_mobs`, `count_layer_fog_mobs` | mob_spawn.{h,cpp} | ~55 | ~80 |
 | A13 | `needs_survival_minutes` | needs.h:130 | 4 | 12 |

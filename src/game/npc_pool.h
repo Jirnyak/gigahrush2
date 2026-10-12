@@ -128,13 +128,29 @@ inline constexpr std::int16_t kNoFloorLabel = -32768;
 inline constexpr int kNameLen = 24;   // inline fixed-width, no heap strings
 inline constexpr int kRelSlots = 16;  // fixed relationship capacity per NPC
 
-// Character-sheet attributes. Deliberately GENERIC: a fixed block of byte-valued
-// slots addressed by index, NOT named str/agi/int columns. The game is a
-// prototype — attribute *names*, perks and traits are not finalized, so we bake
-// a stable-width skeleton and let a data table map slot->meaning later, instead
-// of hardcoding a schema we'd have to migrate. 8 slots for now; perks/traits get
-// their own extensible block when the character sheet is designed ([npcs.md]).
-inline constexpr int kAttrSlots = 8;
+// НАДГРОБИЕ: БЛОК ПЕРКОВ/АТРИБУТОВ СНЕСЁН 2026-10-12 (решение владельца)
+//
+// Жили здесь `kAttrSlots` = 8, колонка `attr_` и аксессор `attrs()` — «fixed
+// block of byte-valued slots addressed by index», плейсхолдер под характеристики
+// и перки, которые «не finalized». Решение владельца 2026-10-12: «перков пока
+// нет и не будет до пострелиза, пока они только планы и никакого кода, вес
+// лишний вырезаем».
+//
+// ЦЕНА, КОТОРУЮ ОН СНЯЛ, В ЧИСЛАХ: 8 Б × 1 048 576 строк = 8 МиБ таблицы при
+// проектной ёмкости, и 8 Б из КАЖДОЙ строки сейва ([npc_pool.cpp] kPoolRowWire
+// 385 -> 377 Б, 433 -> 425 с именами; save v23 -> v24, [save.h]). Писатель был
+// РОВНО ОДИН — посев `seed_floor_from_spec` ([population.cpp]), который катал
+// туда 3..15 из хеша; читателей в src/ было НОЛЬ (греп по аксессору давал
+// только сам посев и тесты). Восемь байт на голову, которые никто не спрашивал.
+//
+// НЕ ПУТАТЬ с `RpgStats::attr[3]` ([rpg.h]): это ДРУГОЙ, отдельный стор —
+// str/agi/int ИГРОКА, он жив, читается боёвкой и носимым весом и travels в
+// сейве. Снос касался только безымянного блока в пуле.
+//
+// Вернётся пострелизом вместе с перками — и тогда СРАЗУ с читателем в том же
+// коммите, иначе это снова 8 МиБ молчания. Против молчаливого воскрешения стоит
+// гейт-надгробие: правило «БЛОК ПЕРКОВ В ПУЛЕ МЁРТВ» в
+// tools/check_source_rules.cmake.
 
 // One relationship edge: who, and how the NPC feels about them. Fixed-size so
 // the whole per-NPC relation set is a flat 16-wide scan, O(1) to walk.
@@ -211,23 +227,28 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 // ---------------------------------------------------------------------------
 // Column allocation policy
 //
-// init() used to `assign(kNpcPoolSize, ...)` all 18 SoA columns. assign WRITES every
-// byte, so the table was not merely *committed*, it was fully RESIDENT — 493 B/row x
-// 2^20 = 493.0 MiB touched before the first floor is even generated. (Because the
+// init() used to `assign(kNpcPoolSize, ...)` every SoA column — all 17 of the ones
+// that remain (18 до 2026-10-12: колонка перков `attr_` 8 Б снесена, надгробие в
+// шапке файла). assign WRITES every
+// byte, so the table was not merely *committed*, it was fully RESIDENT — 485 B/row x
+// 2^20 = 485.0 MiB touched before the first floor is even generated. (Because the
 // capacity is exactly 2^20, 1 B/row == 1.0 MiB of table; every figure below is just
 // the row width.)
 //
 // Measured row widths: inv_ 384 (256 until v14 widened the slot count to u16,
-// [inventory.h]), rel_ 128, needs_ 36, name_ 24, surname_ 24, attr_ 8,
+// [inventory.h]), rel_ 128, needs_ 36, name_ 24, surname_ 24,
 // faction_/hp_/maxHp_/floor_/heightMm_ 2 each, flags_/cx_/cy_/cz_/age_/sex_/level_ 1
-// each = 493 B when this policy was written. Slot recycling added two more: gen_ 2 B
-// (LIVE) and nextFree_ 4 B (DEMAND, and only when recycling is actually on), for 499 B
+// each = 485 B when this policy was written (было 493 — минус 8 Б блока перков).
+// Slot recycling added two more: gen_ 2 B
+// (LIVE) and nextFree_ 4 B (DEMAND, and only when recycling is actually on), for 491 B
 // at the widest. NEITHER is EAGER, so the 306 B/row resident figure below is unchanged
-// and the whole comparison still holds. Of the original 493, 187 B/row = 187.0 MiB
+// and the whole comparison still holds. Of the original 485, 179 B/row = 179.0 MiB
 // belonged to columns with NO reader
 // anywhere in src/: rel_ 128 (no reader at all — Relationship is written nowhere),
-// name_ + surname_ 48 (set_name has no caller in src/), and attr_/age_/sex_/level_ 11
-// (written by seed_floor_from_spec, read by nothing).
+// name_ + surname_ 48 (set_name has no caller in src/), and age_/sex_/level_ 3
+// (written by seed_floor_from_spec, read by nothing). 187 -> 179 потому, что
+// восьмибайтовый читатель-ноль из этого списка просто УДАЛЁН, а не переведён в
+// DEMAND: ноль читателей плюс ноль байт лучше, чем ноль читателей.
 //
 // Three policies, chosen per column by who actually touches it:
 //
@@ -236,12 +257,18 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            they keep the old "sized once at init(), never resized" contract and a
 //            reference into them is stable for the pool's whole life. 434 B/row =
 //            434.0 MiB (306 before the v14 slot widening — the +128 is all inv_).
-//   LIVE   — age_, sex_, level_, attr_, gen_. The first four are written for every
+//   LIVE   — age_, sex_, level_, role_, gen_. The first four are written for every
 //            seeded record by seed_floor_from_spec; gen_ is written by kill(). All
-//            track count_ and are grown inside spawn(). 13 B/row: the demo stack's
-//            1,930 records need 25.1 KB of rows and allocate 52.0 KiB (13 B x the
-//            kNpcLazyChunk floor of 4096) instead of 13.0 MiB. They still reach
-//            13.0 MiB at the 950k target.
+//            track count_ and are grown inside spawn(). 6 B/row: the demo stack's
+//            1,930 records need 11.6 KB of rows and allocate 24.0 KiB (6 B x the
+//            kNpcLazyChunk floor of 4096) instead of 6.0 MiB. They reach 5.4 MiB at
+//            the 950k target.
+//            ДВЕ правки в одном числе, обе сверены с grow_live_columns(): было
+//            написано 13 Б и перечислено ЧЕТЫРЕ колонки плюс gen_, а колонка
+//            role_ (1 Б, LIVE с [role.h]) в списке не значилась вообще — то есть
+//            истинная ширина до сноса была 14 Б, а не 13. Минус 8 Б блока перков
+//            = 6 Б, и список теперь совпадает с телом grow_live_columns() строка
+//            в строку.
 //   DEMAND — rel_, name_, surname_, nextFree_. Zero cost until something actually
 //            calls relations() / set_name(), or until a recycling pool takes its first
 //            death; the shipping game does none of the three, so it pays 0 B for all
@@ -249,18 +276,20 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            materializes and then JOINS the LIVE set, so relations() itself never
 //            resizes afterwards.
 //
-// New resident footprint after init(): 434.0 MiB (was 493.0 before the demand split,
-// 306.0 before v14 widened the inventory slot), and the demo stack adds 52.0 KiB of
-// LIVE columns rather than 13.0 MiB. resident_bytes() reports the live figure so
+// New resident footprint after init(): 434.0 MiB (was 485.0 before the demand split,
+// 306.0 before v14 widened the inventory slot), and the demo stack adds 24.0 KiB of
+// LIVE columns rather than 6.0 MiB. resident_bytes() reports the live figure so
 // this is checkable at runtime, not only on paper. 384 of the resident 434 B/row is
 // inv_, which stays EAGER because loot / containers / vendor / needs all read it —
 // it is the obvious next 384.0 MiB, not this lane's.
 //
 // Reference-lifetime rule, unchanged in spirit but worth stating: a reference handed
-// out by attrs() / relations() / level() is invalidated by a later spawn(), because
+// out by relations() / level() / role() is invalidated by a later spawn(), because
 // spawn() is the ONLY place a LIVE column resizes. Nothing may hold one across a
-// spawn — the existing pattern (`auto& a = pool.attrs(id);` then write, per seeded
-// record) is safe because it never does.
+// spawn — the existing pattern (`pool.level(id) = ...` at the seeding site, one
+// record at a time, reference never named) is safe because it never does. Пример в
+// этом правиле раньше показывал аксессор блока перков (`auto& a = ...` с записью по
+// индексам); блок снесён 2026-10-12, правило — нет: оно про ЛЮБУЮ LIVE-колонку.
 //
 // Verbatim serialization ([npcs.md] "the tables serialize verbatim") is still not
 // implemented: [save.h] carries the player's ROW and states outright that the pool is
@@ -328,7 +357,7 @@ class NpcPool {
 public:
     // Allocate the EAGER backing arrays (one time): 434 B/row x 2^20 = 434.0 MiB.
     // The LIVE and DEMAND columns start empty and are grown by spawn() / first touch
-    // ("Column allocation policy" above), which is where the other 187.0 MiB went.
+    // ("Column allocation policy" above), which is where the other 179.0 MiB went.
     void init();
 
     // Take the next blank slot. Returns kInvalidNpc only when there is genuinely
@@ -521,7 +550,7 @@ public:
     const std::vector<NpcId>& floor_bucket(std::int16_t label) const;
 
     // Character-sheet fields (same struct the future creation screen writes to).
-    // age/sex/level/attrs are LIVE columns: sized by spawn(), so a reference from one
+    // age/sex/level/role are LIVE columns: sized by spawn(), so a reference from one
     // of them dies at the next spawn().
     std::uint8_t&  age(NpcId id)     { return age_[id]; }      // years, 1..100
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
@@ -532,9 +561,8 @@ public:
     // (the spec's Resident -> Looter after samosbor), so the COLUMN is the source
     // of truth at runtime, never the hash.
     std::uint8_t&  role(NpcId id)    { return role_[id]; }
-    // The 8-slot generic attribute block. Addressed by index; slot->name mapping
-    // lives in a data table, not here (see kAttrSlots).
-    std::array<std::uint8_t, kAttrSlots>& attrs(NpcId id) { return attr_[id]; }
+    // Здесь стоял аксессор восьмислотового блока перков. Снесён 2026-10-12 вместе
+    // с колонкой — надгробие с числами в шапке файла.
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
     // Const read side, same rule as faction() above: the equip decider scores
@@ -595,8 +623,8 @@ private:
     std::vector<std::uint16_t> heightMm_; // stature in mm; drives embodied AABB
     std::vector<std::uint8_t>  level_;  // LIVE
     std::vector<std::uint8_t>  role_;   // LIVE — RoleId ([role.h]), 1 B/row
-    // LIVE — generic sheet block, 8 B/row
-    std::vector<std::array<std::uint8_t, kAttrSlots>> attr_;
+    // Здесь стояла колонка блока перков (LIVE, 8 Б/строка = 8 МиБ при 2^20).
+    // Снесена 2026-10-12: один писатель, ноль читателей — надгробие в шапке файла.
     std::vector<std::array<char, kNameLen>> name_;      // DEMAND
     std::vector<std::array<char, kNameLen>> surname_;   // DEMAND
     std::vector<std::array<Relationship, kRelSlots>> rel_; // DEMAND — 128 B/row

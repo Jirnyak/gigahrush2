@@ -193,12 +193,13 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         pool.sex(id) = (r & 0x100u) ? SexFemale : SexMale;
         pool.height_mm(id) = height_for_age(age, hash_u32(r));
 
-        // Generic attribute block: byte-valued, seeded per slot. No named stats.
-        auto& attrs = pool.attrs(id);
-        for (int a = 0; a < kAttrSlots; ++a)
-            attrs[static_cast<std::size_t>(a)] =
-                static_cast<std::uint8_t>(3 + (hash_u32(r + a * 0x1000193u) % 13u)); // 3..15
-
+        // Здесь сеялся безымянный блок перков — восемь байт 3..15 из хеша на
+        // каждую голову. ЭТО БЫЛ ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ в src/, и читателей у него
+        // не было ни одного: 8 МиБ таблицы при 2^20 и 8 Б в каждой строке сейва
+        // уходили в никуда. Снесено 2026-10-12 решением владельца («перков пока
+        // нет и не будет до пострелиза») — надгробие с числами в шапке
+        // [npc_pool.h]. Демография выше (возраст/пол/рост) и уровень/фракция/роль
+        // ниже остаются: у них читатели есть.
         pool.level(id) = static_cast<std::uint8_t>(1 + (r % 10u));
         pool.faction(id) = sample_faction(spec.factionMix, hash_u32(r ^ 0x51ed270bu));
         // Role from the floor archetype's weight row ([role.h] TABLE 2). Seeded

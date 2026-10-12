@@ -515,7 +515,6 @@ void macro_world_round_trips() {
         pool.age(id) = static_cast<std::uint8_t>(20 + i);
         pool.sex(id) = static_cast<std::uint8_t>(1 + i % 2);
         pool.level(id) = static_cast<std::uint8_t>(i);
-        pool.attrs(id)[3] = static_cast<std::uint8_t>(7 + i);
         pool.needs(id).food = 10.0f * static_cast<float>(i) + 0.25f;
         pool.needs(id).seeded = 1;
         pool.inventory(id).slots[0] =
@@ -544,7 +543,9 @@ void macro_world_round_trips() {
         CHECK(back.age(id) == pool.age(id));
         CHECK(back.sex(id) == pool.sex(id));
         CHECK(back.level(id) == pool.level(id));
-        CHECK(back.attrs(id)[3] == pool.attrs(id)[3]);
+        // Слот 3 блока перков ездил здесь до v24; колонка снесена 2026-10-12
+        // ([npc_pool.h]), строка провода сузилась 385 -> 377 Б. Пять исполнений
+        // этой проверки (цикл по пяти записям) ушли вместе с предметом.
         CHECK(back.height_mm(id) == pool.height_mm(id));
         CHECK(back.generation(id) == pool.generation(id));
         CHECK(back.needs(id).food == pool.needs(id).food);

@@ -197,7 +197,21 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // отрисовал бы мир не теми материалами: стекло стало бы неоном, асфальт
 // стеклом. Молчаливая порча вместо честного отказа — ровно то, против чего
 // построен весь этот формат (раздел ниже). Этажи перегенерятся один раз.
-inline constexpr std::uint32_t kSaveVersion = 23u;
+// v24 (2026-10-12, снос блока перков в пуле): строка макро-таблицы СУЗИЛАСЬ на
+// 8 Б — `kPoolRowWire` 385 -> 377 (433 -> 425 с именами, [npc_pool.cpp]).
+// Безымянный восьмислотовый блок атрибутов/перков (`kAttrSlots`, колонка
+// `attr_`, аксессор `attrs()`) снесён по решению владельца: «перков пока нет и
+// не будет до пострелиза, пока они только планы и никакого кода, вес лишний
+// вырезаем». Писатель был один — посев, читателей ноль; 8 Б × 2^20 = 8 МиБ
+// таблицы и 8 Б в каждой строке сейва.
+// БАМП ЗДЕСЬ ОБЯЗАТЕЛЕН И ПО ОТКАЗУ, И ПО ПОРЯДКУ: `load_rows` сверяет длину
+// блоба РОВНО (`n != want` -> false), так что v23-сейв отвалился бы и так — но
+// отвалился бы НЕ ТАМ, где надо: не честным `BadVersion` на шапке, а «битым
+// пулом» после CRC, и диагноз читался бы как порча файла. А при совпадении
+// длины (пул на нуле строк) старый файл прочитался бы ЦЕЛИКОМ. Версия — тот
+// единственный ответ, который не зависит от того, сколько строк в таблице.
+// Макро-блок не миграционный: пул пересеется `seed_floor_population`.
+inline constexpr std::uint32_t kSaveVersion = 24u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -372,9 +386,10 @@ inline constexpr std::size_t kSaveFixedWire =
 // that accumulates 65k persistent bodies has a different problem than its save.
 inline constexpr std::uint32_t kMaxFloorRecords = 65536u;
 // Ceilings for the v6 blobs, again before the CRC has vouched: the pool's honest
-// worst case is 2^20 rows x 385 B wire (433 with names, [npc_pool.cpp]
-// kPoolRowWire — v14's 5 B slots put it there) ≈ 454 MB; macro state is a
-// fraction of that. 512 MB still clears it, with ~13% headroom instead of ~34%.
+// worst case is 2^20 rows x 377 B wire (425 with names, [npc_pool.cpp]
+// kPoolRowWire — v14's 5 B slots put it there, v24 took the 8 B perk block back
+// out) ≈ 446 MB; macro state is a fraction of that. 512 MB still clears it, with
+// ~15% headroom (было ~13% при 433-байтовой строке; до v14 — ~34%).
 inline constexpr std::uint32_t kMaxPoolBytes = 512u * 1024u * 1024u;
 inline constexpr std::uint32_t kMaxMacroBytes = 64u * 1024u * 1024u;
 // The faction matrix rides fixed-size: 36 signed bytes ([faction_relations.h]).

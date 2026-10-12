@@ -14,8 +14,10 @@
 //    that reader would have inherited the corruption. A wrap bug with no reader is
 //    still a wrap bug; this file gives it the reader.
 //
-// 2. THE ALLOCATION CHANGE MOVED NO BOOKKEEPING. init() no longer writes 187 B/row of
-//    columns nothing reads, so 7 of the 18 SoA columns are now grown lazily. The
+// 2. THE ALLOCATION CHANGE MOVED NO BOOKKEEPING. init() no longer writes 179 B/row of
+//    columns nothing reads, so 6 of the 17 SoA columns are now grown lazily (было
+//    187 Б и 7 из 18: восьмибайтовый блок перков не отложен, а СНЕСЁН 2026-10-12,
+//    надгробие в [npc_pool.h]). The
 //    failure mode that would follow is not a crash — it is a resize that silently
 //    drops or shifts rows while count()/alive() keep reporting the right totals. So
 //    the checks below deliberately measure the same quantities before and after the
@@ -148,7 +150,6 @@ static void test_npcpool_all() {
         pool.relations(ids[0])[0].affinity = -100;
         pool.set_name(ids[0], "Ivan", "Petrov");
         pool.level(ids[0]) = 7;
-        pool.attrs(ids[0])[0] = 11;
         CHECK(pool.count() == c);
         CHECK(pool.alive() == a);
         CHECK(pool.reserve_remaining() == kNpcPoolSize - c);
@@ -163,7 +164,8 @@ static void test_npcpool_all() {
         CHECK(std::strcmp(pool.surname(ids[0]).data(), "Petrov") == 0);
         CHECK(pool.name(ids[1])[0] == '\0');
         CHECK(pool.level(ids[0]) == 7 && pool.level(ids[1]) == 0);
-        CHECK(pool.attrs(ids[0])[0] == 11 && pool.attrs(ids[1])[0] == 0);
+        // Пятая колонка этого списка — блок перков — снесена 2026-10-12
+        // ([npc_pool.h]); её запись и сверка ушли вместе с ней.
     }
 
     { // ---- an untouched DEMAND column reads blank rather than out of bounds ----
@@ -193,9 +195,7 @@ static void test_npcpool_all() {
             pool.age(id) = static_cast<std::uint8_t>(1u + i % 90u);
             pool.sex(id) = (i & 1u) ? SexFemale : SexMale;
             pool.level(id) = static_cast<std::uint8_t>(1u + i % 100u);
-            pool.attrs(id)[0] = static_cast<std::uint8_t>(i % 251u);
-            pool.attrs(id)[static_cast<std::size_t>(kAttrSlots - 1)] =
-                static_cast<std::uint8_t>(i % 97u);
+            pool.role(id) = static_cast<std::uint8_t>(i % 7u);
         }
         CHECK(pool.count() == n);
         CHECK(pool.alive() == n);
@@ -207,11 +207,12 @@ static void test_npcpool_all() {
             if (pool.sex(id) != ((i & 1u) ? SexFemale : SexMale)) intact = false;
             if (pool.level(id) != static_cast<std::uint8_t>(1u + i % 100u))
                 intact = false;
-            if (pool.attrs(id)[0] != static_cast<std::uint8_t>(i % 251u))
-                intact = false;
-            if (pool.attrs(id)[static_cast<std::size_t>(kAttrSlots - 1)] !=
-                static_cast<std::uint8_t>(i % 97u))
-                intact = false;
+            // Блок перков был пятой — и самой широкой (8 Б) — LIVE-колонкой этого
+            // прохода; снесён 2026-10-12 ([npc_pool.h]). На его место встала
+            // role_: она LIVE с [role.h], растёт тем же grow_live_columns и до
+            // сегодня в этом блоке не проверялась вообще. Пин не двигается —
+            // проверка складывается в тот же один CHECK(intact) ниже.
+            if (pool.role(id) != static_cast<std::uint8_t>(i % 7u)) intact = false;
         }
         CHECK(intact);
     }
@@ -220,10 +221,13 @@ static void test_npcpool_all() {
         // The capacity is exactly 2^20, so 1 B of row width == 1.0 MiB of table and
         // every figure here is just a row width.
         constexpr std::size_t kRow = static_cast<std::size_t>(kNpcPoolSize);
-        // 621 = the same 18 columns at TODAY'S widths (inv_ went 256 -> 384 when
+        // 613 = the same 17 columns at TODAY'S widths (inv_ went 256 -> 384 when
         // v14 widened the slot count to u16, [inventory.h]) — the comparison is
         // against what eager-everything would cost NOW, not a 2026-07 memory.
-        constexpr std::size_t kOldTable = 621u * kRow;   // all 18 columns assign()ed
+        // БЫЛО 621 при 18 колонках: блок перков 8 Б/строка снесён 2026-10-12
+        // ([npc_pool.h]). Число обязано было поехать, иначе «было столько-то МиБ»
+        // считало бы колонку, которой нет, и реестр врал бы в тесте.
+        constexpr std::size_t kOldTable = 613u * kRow;   // all 17 columns assign()ed
         constexpr std::size_t kEagerTable = 434u * kRow; // what init() still writes
 
         NpcPool pool;
@@ -239,14 +243,15 @@ static void test_npcpool_all() {
         // allocator is entitled to round up and that is not what this test is about.
         CHECK(afterInit >= kEagerTable);
         CHECK(afterInit <= kEagerTable + 4u * kRow);
-        CHECK(kOldTable - afterInit >= 180u * kRow); // 187 B/row is the paper figure
+        CHECK(kOldTable - afterInit >= 172u * kRow); // 179 B/row is the paper figure
 
-        // The LIVE columns cost one chunk, not one capacity: 13 B/row x 4096 (11 B when
-        // this was written; gen_ added 2 B/row for slot recycling's generation counter).
+        // The LIVE columns cost one chunk, not one capacity: 6 B/row x 4096 (11 B when
+        // this was written; gen_ added 2 B/row for slot recycling's generation counter,
+        // role_ 1 B, and the 8 B perk block was СНЕСЁН 2026-10-12 — 14 -> 6 B/row).
         const NpcId id = pool.spawn();
         const std::size_t afterSpawn = pool.resident_bytes();
-        CHECK(afterSpawn - afterInit >= 32u * 1024u);
-        CHECK(afterSpawn - afterInit < 64u * 1024u); // 53,248 B
+        CHECK(afterSpawn - afterInit >= 16u * 1024u);
+        CHECK(afterSpawn - afterInit < 32u * 1024u); // 24,576 B = 6 B x 4096
 
         // rel_ is the widest column in the table — 128 B/row, 128.0 MiB at capacity —
         // and it holds nothing at all until someone calls relations(). This is the
@@ -277,9 +282,9 @@ static void test_npcpool_all() {
         CHECK(pool.alive() == 1930u);
         const std::size_t live = pool.resident_bytes() - base;
         std::printf("  npcpool: 1930-record demo stack adds %u B of LIVE columns "
-                    "(13 B/row eager would be 13.0 MiB)\n",
+                    "(6 B/row eager would be 6.0 MiB)\n",
                     static_cast<unsigned>(live));
-        CHECK(live < 128u * 1024u); // 53,248 B: still inside the first 4096-row chunk
+        CHECK(live < 128u * 1024u); // 24,576 B: still inside the first 4096-row chunk
         CHECK(pool.resident_bytes() < 448u * static_cast<std::size_t>(kNpcPoolSize));
     }
 
@@ -529,8 +534,7 @@ static void test_npcpool_all() {
         pool.age(a) = 61;
         pool.sex(a) = SexFemale;
         pool.level(a) = 12;
-        pool.attrs(a)[0] = 5;
-        pool.attrs(a)[static_cast<std::size_t>(kAttrSlots - 1)] = 6;
+        pool.role(a) = 5;
         pool.set_name(a, "Ivan", "Petrov");
         pool.set_design(a, true);
         pool.set_player(a, true);
@@ -578,8 +582,13 @@ static void test_npcpool_all() {
         CHECK(pool.age(reborn) == 0);
         CHECK(pool.sex(reborn) == SexUnset);
         CHECK(pool.level(reborn) == 0);
-        CHECK(pool.attrs(reborn)[0] == 0);
-        CHECK(pool.attrs(reborn)[static_cast<std::size_t>(kAttrSlots - 1)] == 0);
+        // Две проверки блока перков (слот 0 и слот 7) умерли вместе с колонкой
+        // 2026-10-12 ([npc_pool.h]). На их место встала ОДНА по role_: эта
+        // LIVE-колонка сбрасывается в reset_row ровно так же, а блок объявляет
+        // «every column the pool owns is written here and then checked blank» —
+        // и role_ в нём не проверялась НИ РАЗУ, хотя роль покойника, всплывшая в
+        // новорождённом, это тот же класс дефекта, под который блок и написан.
+        CHECK(pool.role(reborn) == 0);
         // DEMAND columns. rel_ is the trap: a blank edge is `target == kInvalidNpc`, so a
         // memset row would read as sixteen relationships with NPC 0.
         CHECK(pool.name(reborn)[0] == '\0');
@@ -795,8 +804,10 @@ static void test_npcpool_all() {
                 fold(p.age(id));
                 fold(p.sex(id));
                 fold(p.level(id));
-                for (int s = 0; s < kAttrSlots; ++s)
-                    fold(p.attrs(id)[static_cast<std::size_t>(s)]);
+                // Восемь байт блока перков уходили в дайджест до 2026-10-12;
+                // колонки нет — сворачивать нечего. Литерала дайджеста здесь
+                // никогда не было (сравниваются ДВА пула между собой), поэтому
+                // значение сдвинулось, а проверка осталась той же.
                 for (int s = 0; s < kInvSlots; ++s) {
                     fold(p.inventory(id).slots[static_cast<std::size_t>(s)].item);
                     fold(p.inventory(id).slots[static_cast<std::size_t>(s)].count);
@@ -824,7 +835,6 @@ static void test_npcpool_all() {
                 p.hp(id) = static_cast<std::int16_t>(id % 100u);
                 p.level(id) = static_cast<std::uint8_t>(id % 30u);
                 p.age(id) = static_cast<std::uint8_t>(1u + id % 90u);
-                p.attrs(id)[0] = static_cast<std::uint8_t>(id % 251u);
                 p.inventory(id).at(0, 0).item = static_cast<std::uint16_t>(id % 33u);
                 p.relations(id)[0].target = id ^ 1u;
                 p.set_floor(id, static_cast<std::int16_t>(id % 7u));

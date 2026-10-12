@@ -360,17 +360,15 @@ static void test_event_bus_log() {
     CHECK(bus.log().empty());
 }
 
-static void test_attribute_block() {
+// Имя было test_attribute_block, и после 2026-10-12 оно стало ЛОЖЬЮ: блока
+// перков в пуле нет (решение владельца, надгробие в [npc_pool.h]). Восемь
+// проверок round-trip блока ушли вместе с предметом — «тест, переживший свой
+// предмет, есть будущая вторая реализация». Остальные четыре колонки листа
+// персонажа живые, их пин остаётся — поэтому функция переименована, а не удалена.
+static void test_sheet_columns() {
     NpcPool pool;
     pool.init();
     NpcId id = pool.spawn();
-    // The 8-slot generic block round-trips; nothing is a named str/agi/int.
-    for (int i = 0; i < kAttrSlots; ++i)
-        pool.attrs(id)[static_cast<std::size_t>(i)] =
-            static_cast<std::uint8_t>(10 + i);
-    for (int i = 0; i < kAttrSlots; ++i)
-        CHECK(pool.attrs(id)[static_cast<std::size_t>(i)] == 10 + i);
-
     pool.age(id) = 30;
     pool.sex(id) = SexFemale;
     pool.height_mm(id) = 1720;
@@ -5490,7 +5488,7 @@ int main() {
     test_event_bus_transient();
     test_event_bus_overflow();
     test_event_bus_log();
-    test_attribute_block();
+    test_sheet_columns();
     test_height_maps_to_body();
     test_embody_and_foldback();
     test_npc_ref_generation();

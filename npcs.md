@@ -125,17 +125,28 @@ future creation screen writes into the **same struct** floor design later embodi
 - **`height_mm`** (`u16`) — stature in millimetres, derived from age at seeding
   (children scale up, adults settle ~1.75 m with variation). Stature is not
   flavour: it **drives the embodied body** (see below).
-- **`level`** (`u8`) and an **8-slot generic attribute block** (`kAttrSlots`,
-  byte-valued, addressed by index).
+- **`level`** (`u8`) and **`role`** (`u8`, RoleId — behavioural archetype).
 
-The attribute block is deliberately a **fixed-width skeleton, not named columns**.
-The game is a prototype: the count, names and meaning of attributes aren't final
-(likely more than 3 — think ~8+, plus perks and traits later). Rather than
-hardcode a `str/agi/int` schema we'd have to migrate, we bake a stable-width block
-now and let a data table map *slot → meaning*. **Perks and traits get their own
-extensible block when the character sheet is designed** — this is the crossbeam,
-not the finished sheet. Adding a real attribute later stays a data change, not a
-table reshape.
+### Блока перков в пуле НЕТ (решение владельца 2026-10-12)
+
+Здесь стоял **восьмислотовый generic attribute block** — безымянная колонка байтов,
+адресуемая индексом, «fixed-width skeleton, not named columns», под будущие
+атрибуты, перки и трейты. **Снесён 2026-10-12** решением владельца: «перков пока
+нет и не будет до пострелиза, пока они только планы и никакого кода, вес лишний
+вырезаем».
+
+Цена, которую снял снос: **8 Б × 1 048 576 строк = 8 МиБ** таблицы и **8 Б в
+каждой строке сейва** (провод строки пула 385 → 377 Б, сейв v23 → v24). Писатель
+был **один** — посев `seed_floor_from_spec`, катавший туда 3..15 из хеша;
+читателей в `src/` — **ноль**. Несущая балка, на которой ничего не стояло.
+
+Не путать: `RpgStats::attr[3]` (str/agi/int **игрока**,
+[src/game/rpg.h](src/game/rpg.h)) — другой, живой стор, он читается боёвкой и
+носимым весом и travels в сейве. Снос касался только безымянного блока в пуле.
+
+Вернётся **пострелизом вместе с перками** — и тогда сразу с читателем, иначе это
+снова 8 МиБ молчания. От молчаливого воскрешения стоит гейт-надгробие (правило
+«БЛОК ПЕРКОВ В ПУЛЕ МЁРТВ» в `tools/check_source_rules.cmake`).
 
 ## Embodiment — the alife↔ECS seam ([src/game/embody.h](src/game/embody.h))
 
@@ -197,7 +208,9 @@ invariant that keeps the 2²⁰ population from growing per visit.
   `Controller`. Re-plan cadence is an identity-hash stagger, so the crowd spreads
   across frames with no scheduling queue. **#12a ([src/game/ai.h](src/game/ai.h)):**
   the `Needs` SoA component + its one-pass `needs_step` decay — food/water/sleep
-  reserves fall (attribute-slowed by STR/AGI/INT), pee/poo pressures rise only by
+  reserves fall (attribute-slowed by STR/AGI/INT в ПЛАНЕ — коэффициента в
+  `src/game` нет и не было, см. [ai.md](ai.md); колонка, из которой его собирались
+  читать, снесена 2026-10-12), pee/poo pressures rise only by
   digesting a pending pool — materialised on embodiment and folded away with it,
   like every other transient. **#12b:** the pure `score_intents` ranking all 13
   intents 0..100 and the `select_intent` argmax + hysteresis, both ported verbatim.

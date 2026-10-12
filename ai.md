@@ -72,19 +72,26 @@ exception, keyed on the component and never on an identity: whoever holds
 `CameraTag` when their row is first seen is starting a trip.
 
 Nominally they decay/rise at
-data-driven rates, scaled by the character-sheet attribute block
-([npcs.md](npcs.md): generic 8-slot attributes, slot→meaning is a table):
+data-driven rates. The reference also scaled them by a character-sheet attribute
+block; **в этом дереве масштабирования НЕТ**, и с 2026-10-12 нет и блока — см.
+сноску под таблицей:
 
-| Need | Direction | Ref rate (per sec) | Attribute scale (`rate /= 1 + 0.1·stat`) |
+| Need | Direction | Ref rate (per sec) | Attribute scale, **НЕ ПОРТИРОВАНО** (`rate /= 1 + 0.1·stat`) |
 |------|-----------|--------------------|-----------------|
-| food | reserve, **falls** | 0.08 | STR (attr slot 0) |
-| water | reserve, **falls** | 0.12 | AGI (attr slot 1) |
-| sleep | reserve, **falls** | 0.05 | INT (attr slot 2) |
+| food | reserve, **falls** | 0.08 | STR (ref: attr slot 0) |
+| water | reserve, **falls** | 0.12 | AGI (ref: attr slot 1) |
+| sleep | reserve, **falls** | 0.05 | INT (ref: attr slot 2) |
 | pee | pressure, **rises only via digestion** | 0.10 (digest) | — |
 | poo | pressure, **rises only via digestion** | 0.06 (digest) | — |
 
-Rates are a **table**, not code; attribute scaling means a hardier NPC hungers
-slower. Restoring a need (eating, drinking, using a toilet, sleeping) is an
+Rates are a **table**, not code; attribute scaling would mean a hardier NPC
+hungers slower. **Колонка, из которой этот масштаб читался бы, СНЕСЕНА
+2026-10-12** решением владельца («перков пока нет и не будет до пострелиза»):
+восьмислотовый блок `attrs` в `NpcPool` имел одного писателя (посев) и ноль
+читателей, 8 Б × 2²⁰ = 8 МиБ. Правый столбец таблицы выше — ОПИСАНИЕ
+ЭТАЛОНА, а не этого кода, и был им всегда (абзац «REFERENCE ONLY» ниже говорил
+это ещё до сноса). Когда перки вернутся пострелизом, у них будет СВОЯ колонка и
+сразу читатель. Restoring a need (eating, drinking, using a toilet, sleeping) is an
 intent's *effect*, applied when the FSM reaches the target. Cold NPCs carry no
 fine needs — the macro tick models their lives abstractly; needs materialise only
 on embodiment and fold away on de-embodiment, like every other transient
@@ -106,10 +113,11 @@ also charges HP and speed:
   **REFERENCE ONLY — NOT PORTED**: `needs_advance(Needs&, float)` takes no
   record and no attribute block, and no `0.1` coefficient exists in `src/game`.
   For the record, the reference slows each by
-  `rate /= (1 + 0.1·stat)` — STR (attr slot 0) slows food, AGI (slot 1) water, INT
-  (slot 2) sleep, read from the record's generic 8-slot block (`pool.attrs(id)`);
-  clamped at 0. (Fixing slots 0/1/2 = STR/AGI/INT is the `slot→meaning` data
-  decision [npcs.md](npcs.md) defers, taken here to match the reference RPGStats.)
+  `rate /= (1 + 0.1·stat)` — STR slows food, AGI water, INT sleep, read from the
+  record's generic 8-slot block; clamped at 0. Этого блока в пуле БОЛЬШЕ НЕТ
+  (снесён 2026-10-12, один писатель / ноль читателей, надгробие в
+  [npc_pool.h](src/game/npc_pool.h)), так что строка стала чисто исторической:
+  вернуть масштаб = завести колонку И читателя одним коммитом.
 - **pressures rise only by digesting** their pool: `dp = min(pending, rate·dt);
   v += dp; pending -= dp`, clamped at 100. A **fresh gut (empty pool) holds pee/poo
   flat** — they do not climb on their own; the eat intent (#12b) fills the pool.
@@ -117,10 +125,11 @@ also charges HP and speed:
 `needs_roll(seed)` seeds a fresh body deterministically from its stable id (a
 stateless `hash3` per need over an independent salt; per-need bands food/water
 70–100, sleep 60–100, pee 0–30, poo 0–20; pending pools empty), so embodiment is
-reproducible with **zero stored RNG state**. Every rate, range, the digestion
-model, and the `0.1`-per-point attribute coefficient are **ported verbatim from
-the reference `needs.ts`** (same design-doc → exact-extraction → code flow as the
-[faction matrix](macrosim.md)). Restore-on-use — eating / drinking / toilet /
+reproducible with **zero stored RNG state**. Every rate, range and the digestion
+model are **ported verbatim from the reference `needs.ts`** (same design-doc →
+exact-extraction → code flow as the [faction matrix](macrosim.md)); the
+`0.1`-per-point attribute coefficient is the ONE thing that was **not**, and the
+column it would have read is gone since 2026-10-12 — see above. Restore-on-use — eating / drinking / toilet /
 sleep filling or draining a need — is an intent *effect*, so it lands with the
 scorer (#12b). Verified headless by `test_needs_all`.
 
