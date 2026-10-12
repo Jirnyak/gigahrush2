@@ -36,6 +36,11 @@ inline void arm_zones_one(giga::game::ZoneNav& zn) {
     zn = game::ZoneNav{};
     zn.part.zones = 1;
     zn.part.at.assign(kMacroCells, static_cast<RoomId>(1));
+    // `cells` обязателен: из него бейк выводит поперечник зоны, а из
+    // поперечника — перевод бюджета ноги из МЕТРОВ в прыжки
+    // ([game/zone_nav.h] `zone_hops_for_metres`). Фикстура, оставившая его
+    // нулём, молча получила бы бюджет в один прыжок и мерила бы не то.
+    zn.part.cells = static_cast<std::uint32_t>(kMacroCells);
     zn.graph.zones = 1;
     zn.graph.offset = {0u, 0u};  // степень ноль: соседок нет
     zn.graph.nbr.clear();
@@ -49,9 +54,9 @@ inline void arm_zones_one(giga::game::ZoneNav& zn) {
 // `fill_flow_plus_x@suite_utilai.inl`, дословно с той же целью: тело обязано
 // взять ОБЫЧНУЮ горизонтальную ветку и записать НЕнулевую скорость.
 //
-// Расстояние между зонами ровно 1, то есть внутри `kWanderLegZones` (2) — иначе
-// предел дальности отверг бы единственную чужую зону и фикстура мерила бы
-// предел под именем шага.
+// Расстояние между зонами ровно 1, то есть внутри ЛЮБОГО бюджета ноги (минимум
+// бюджета — один прыжок, [game/zone_nav.h] `zone_hops_for_metres`). Иначе
+// фикстура мерила бы предел дальности под именем шага.
 //
 // «+x» законно и для зоны 2: по тору шаг +x из x=100 доходит до 127 и
 // заворачивается в x=0, то есть в зону 1. Фикстура не врёт геометрией — она
@@ -61,6 +66,7 @@ inline void arm_zones_plus_x(giga::game::ZoneNav& zn) {
     zn = game::ZoneNav{};
     zn.part.zones = 2;
     zn.part.at.assign(kMacroCells, static_cast<RoomId>(1));
+    zn.part.cells = static_cast<std::uint32_t>(kMacroCells); // см. довод выше
     for (int cz = 0; cz < kMacroDim; ++cz)
         for (int cy = 0; cy < kMacroDim; ++cy)
             for (int cx = 48; cx < kMacroDim; ++cx)
