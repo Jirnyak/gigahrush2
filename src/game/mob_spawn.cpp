@@ -676,16 +676,20 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
     // load (main.cpp's finish_floor_nav), so a head created mid-samosbor would stand
     // exactly where it appeared until something killed it — and it would still
     // attack, so it would read as a turret rather than as a bug. Reusing wander_init
-    // rather than hand-rolling the node roll is deliberate: it already skips the
+    // rather than hand-rolling the roll is deliberate: it already skips the
     // camera holder, skips anything that has a target, and refuses Immobile kinds a
     // destination, and a second copy of that roll is how the two would drift.
+    //
+    // СЕМЯ ЗДЕСЬ БОЛЬШЕ НЕ ПОДМЕШИВАЕТСЯ (§88/F.2), и подмешивать его стало
+    // НЕЧЕМ: `wander_init` ноги не выдаёт вовсе — цель есть ЗОНА, а сколько их
+    // на этаже, знает только бейк. Ногу выбирает первый посещающий проход, и
+    // берёт её из `id ^ tick`, то есть разной у тел И у волн спавна — ровно то,
+    // за чем тик подмешивался к `kFogSalt` здесь.
     //
     // Cost: one O(entities on layer) pass plus one std::vector that holds only the
     // heads just added, on the ticks that actually spawned — at most once every
     // kFogSpawnPeriodTicks (2 s).
-    if (out.spawned != 0)
-        out.wandering =
-            wander_init(reg, layer, kFogSalt ^ static_cast<std::uint32_t>(simTick));
+    if (out.spawned != 0) out.wandering = wander_init(reg, layer);
     return out;
 }
 

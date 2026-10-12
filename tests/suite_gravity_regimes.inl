@@ -184,10 +184,15 @@ static void test_wander_isotropy_all_gravity_regimes() {
 
     giga::MacroGrid grid;
 
-    giga::nav::CoarseGraph coarse{};
-    giga::nav::FineNav fine;
-    fine.flow.assign(giga::nav::kNodes * giga::kMacroCells, 0xFF);
-    fine.nearest.assign(giga::kMacroCells, 0);
+    // НАВ ПО ЗОНАМ, ФИКСТУРА «+x» (§88/F.2) — и перевод УСИЛИЛ этот тест, а не
+    // перенёс. Прежде поле решётки было целиком `0xFF` = `kFlowNone`, то есть
+    // каждое тело падало в ветку «маршрута нет» и получало РОВНО НОЛЬ, а ноль
+    // ортогонален любому вектору — утверждение ниже проходило ТОЖДЕСТВЕННО, на
+    // любой реализации, включая пустую. Это тот самый класс лжи прибора, когда
+    // верное число отвечает на не заданный вопрос (§87). С «+x» в каждой клетке
+    // тело реально ведут, и ортогональность становится свойством ШАГА.
+    giga::game::ZoneNav zn;
+    zone_fixture::arm_zones_plus_x(zn);
 
     for (giga::GravityRegime r : regimes) {
         const giga::CellStep d = giga::regime_down(r);
@@ -208,18 +213,41 @@ static void test_wander_isotropy_all_gravity_regimes() {
         giga::Entity e = reg.create();
         reg.emplace<giga::Transform>(e, giga::vec3{16.0f, 16.0f, 16.0f}, giga::LayerId{0});
         reg.emplace<giga::Velocity>(e, giga::vec3{0.0f, 0.0f, 0.0f});
-        reg.emplace<giga::game::WanderTarget>(e, giga::game::WanderTarget{0, 0, 0});
+        reg.emplace<giga::game::WanderTarget>(
+            e, giga::game::WanderTarget{giga::game::kNoRoom, 0, 0});
 
         const giga::game::NpcId id = pool.spawn();
         reg.emplace<giga::game::NpcRef>(e, id);
 
-        // Step wander
-        giga::game::wander_step(reg, grid, pool, coarse, fine, 0, 0, &gf);
+        // ДВА ПЕРИОДА СТАГГЕРА, А НЕ ОДИН ТИК, и это необходимость, а не запас.
+        // Во-первых, слот тела есть функция его id (`hash_u32(id) %
+        // kWanderPeriod`), и одним тиком тело можно просто не посетить — тогда
+        // тест мерил бы нулевую скорость непосещённого тела. Во-вторых, ноги у
+        // тела при рождении НЕТ (§88/F.2: зону нельзя назвать до бейка), первый
+        // визит её ВЫБИРАЕТ и законно останавливает тело, и ведёт только
+        // второй. Прежняя редакция звала шаг один раз — и проходила бы на любой
+        // реализации, включая пустую, потому что ноль ортогонален чему угодно.
+        for (std::uint64_t t = 0; t < 2u * giga::game::kWanderPeriod; ++t)
+            giga::game::wander_step(reg, grid, pool, zn, 0, t, &gf);
 
         const giga::Velocity& v = reg.get<giga::Velocity>(e);
         // The dot product of velocity with the gravity vector must be strictly zero (orthogonal to gravity).
         const float dotWithG = v.v.x * gVec.x + v.v.y * gVec.y + v.v.z * gVec.z;
         CHECK(std::fabs(dotWithG) < 1e-4f);
+
+        // И УТВЕРЖДЕНИЕ ПЕРЕСТАЁТ БЫТЬ ПУСТЫМ. Поле говорит «+x» всюду, значит:
+        // при гравитации по Z или Y шаг ТАНГЕНЦИАЛЕН — тело обязано ехать, и
+        // ортогональность выше становится свойством ШАГА, а не нуля. При
+        // гравитации по X тот же «+x» есть шаг ВДОЛЬ гравитации; дверь зон
+        // смотрит вперёд через ступеньки, выхода из зоны в пределах взгляда не
+        // находит и честно отказывает — тело стоит. Ровно эти две ветки и есть
+        // изотропия: одно поле, шесть режимов, и ответ зависит ТОЛЬКО от того,
+        // лежит ли шаг в плоскости ходьбы.
+        const bool alongGravity = (r == giga::GravityRegime::NegX ||
+                                   r == giga::GravityRegime::PosX);
+        const float speed2 = v.v.x * v.v.x + v.v.y * v.v.y + v.v.z * v.v.z;
+        if (alongGravity) CHECK(speed2 == 0.0f);
+        else CHECK(speed2 > 0.01f);
 
         // Under NegZ/PosZ: vertical component v.z must be 0
         if (r == giga::GravityRegime::NegZ || r == giga::GravityRegime::PosZ) {

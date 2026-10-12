@@ -566,7 +566,7 @@ static void test_t1_f8_04_wander_step_skips_ai_owned() {
     g_nav.init();
     NpcPool pool;
     pool.init();
-    wander_step(reg, g_nav.world.grid(), pool, g_nav.cg, g_nav.fn, 0u, 0u);
+    wander_step(reg, g_nav.world.grid(), pool, g_nav.zn, 0u, 0u);
     Velocity& v = reg.get<Velocity>(e);
     CHECK(approx_eq(v.v.x, 2.5f)); // Preserved because wander skipped it
 }

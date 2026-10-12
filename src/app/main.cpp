@@ -2147,9 +2147,13 @@ void begin_floor_nav(const World& world, int floorNumber,
 
 // Called once the bake has landed: hand the new floor's inhabitants somewhere to
 // walk. Separate from begin_floor_nav because it can only run after the swap.
-std::uint32_t finish_floor_nav(Registry& reg, LayerId layer, std::uint32_t seed,
+// `seed` ушёл вместе с семенем `wander_init` (§88/F.2): начальный бросок узла
+// решётки был его единственным читателем, а ногу теперь выбирает первый
+// посещающий проход — зону цели нельзя назвать до того, как бейк скажет,
+// сколько их. Мёртвый параметр в этом дереве есть дефект, а не запас.
+std::uint32_t finish_floor_nav(Registry& reg, LayerId layer,
                                const game::RebakeScheduler& bake) {
-    std::uint32_t n = game::wander_init(reg, layer, seed);
+    std::uint32_t n = game::wander_init(reg, layer);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
                  "[nav] bake coarse %.0f ms | fine %.0f ms | resident %.1f MiB | "
@@ -4571,7 +4575,7 @@ int main(int argc, char** argv) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
-            finish_floor_nav(reg, l, 0xA11FEu, nav);
+            finish_floor_nav(reg, l, nav);
             // Лифт: Fresh-свап целевого этажа — первая половина «дверей»;
             // вторая — пустая очередь пробуждений сред (ниже).
             if (liftRide == LiftRide::WaitFresh) liftFreshDone = true;
@@ -5431,13 +5435,28 @@ int main(int argc, char** argv) {
                                  patrolTick.offnav, patrolTick.idle,
                                  patrolTick.zoneDistSum,
                                  patrolTick.zoneDistBodies);
+                    // ТЕ ЖЕ ИМЕНА И ТОТ ЖЕ ПОРЯДОК, что у дела и наряда
+                    // (§88/F.2): `stuck` стал `unreach`, появились `offnav` и
+                    // `zdist`. Три прохода ходьбы теперь читаются одним
+                    // `awk`-выражением, а не тремя — ровно это и делает перевод
+                    // третьего сверяемым с двумя переведёнными. `chase` и
+                    // `packed` остаются своими: первый считает тела, у которых
+                    // нав не спрашивался ВОВСЕ, второй — тела, у которых цель
+                    // пачковая и предела дальности не имеет по построению
+                    // ([game/wander.h] `pack_target_zone`), и без него
+                    // прибытия, делённые на всех ведомых, занижали бы работу
+                    // одиночного ходока.
                     std::fprintf(stderr,
                                  "[wander] STEP tick=%llu seen=%u walk=%u "
-                                 "arrive=%u repick=%u stuck=%u chase=%u\n",
+                                 "arrive=%u repick=%u unreach=%u offnav=%u "
+                                 "stepup=%u chase=%u packed=%u zdist=%u/%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  wanderTick.considered, wanderTick.walking,
                                  wanderTick.arrived, wanderTick.repicked,
-                                 wanderTick.stuck, wanderTick.chasing);
+                                 wanderTick.unreachable, wanderTick.offnav,
+                                 wanderTick.stepup, wanderTick.chasing,
+                                 wanderTick.packed, wanderTick.zoneDistSum,
+                                 wanderTick.zoneDistBodies);
                     std::fprintf(stderr,
                                  "[aimem] STEP tick=%llu layer=%u seen=%u replan=%u "
                                  "own_ai=%u own_wander=%u "
@@ -6087,8 +6106,8 @@ int main(int argc, char** argv) {
                 prof_add(kProfPlace, profPlaceT0);
                 const auto profWanderT0 = prof_now();
                 wanderTick = game::wander_step(
-                    reg, stack.layer(activeLayer).grid(), pool, nav.coarse(),
-                    nav.fine(), activeLayer, simTick, &activeWorld.gravity());
+                    reg, stack.layer(activeLayer).grid(), pool, nav.zones(),
+                    activeLayer, simTick, &activeWorld.gravity());
                 prof_add(kProfWander, profWanderT0);
 
                 // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ

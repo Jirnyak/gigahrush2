@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "core/jobs.h"        // parallel_for — бейк жмёт ядра
+#include "core/rng.h"         // hash3 — выбор соседки в блуждании `zone_pick_near`
 #include "world/types.h"      // kMacroDim, kMacroCells, macro_index, wrap_macro
 
 namespace giga::game {
@@ -351,6 +352,34 @@ RoomId zone_of_body(const ZoneNav& zn, int cx, int cy, int cz) {
         if (n != kNoRoom) return n;
     }
     return kNoRoom;
+}
+
+RoomId zone_pick_near(const ZoneNav& zn, RoomId from, std::uint32_t salt,
+                      std::uint16_t legZones) {
+    if (!zn.graph.built() || from == kNoRoom) return kNoRoom;
+    const std::uint32_t fromIdx = static_cast<std::uint32_t>(from) - 1u;
+    if (fromIdx >= zn.graph.zones) return kNoRoom;
+
+    // Соль отдельная от соли ролей и от соли наряда: маршрут тела и его
+    // назначение не должны коррелировать по построению (довод `kRoleSalt`).
+    constexpr std::uint32_t kZoneWalkSalt = 0x7A6F6E65u; // "zone"
+
+    RoomId at = from;
+    RoomId last = kNoRoom; // последняя зона, ОТЛИЧНАЯ от стартовой
+    for (std::uint16_t step = 0; step < legZones; ++step) {
+        const std::uint32_t idx = static_cast<std::uint32_t>(at) - 1u;
+        const std::uint32_t deg = zn.graph.degree(idx);
+        if (deg == 0) break; // тупик: дальше идти нечем
+        // Шаг зависит от НОМЕРА ШАГА, а не только от соли: иначе блуждание из
+        // одной зоны с одной солью топталось бы по одному ребру туда-обратно.
+        const std::uint32_t h = hash3(salt, step, kZoneWalkSalt);
+        at = zn.graph.begin(idx)[h % deg];
+        if (at != from) last = at;
+    }
+    // Вернулись в себя — отдаём последнюю чужую зону пути. Цель «сам в себе»
+    // была бы мгновенным прибытием и прибор врал бы прибытиями на ровном месте.
+    if (at == from) return last;
+    return at;
 }
 
 std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,

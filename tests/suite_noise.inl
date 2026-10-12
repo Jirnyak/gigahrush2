@@ -293,10 +293,17 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
     // live systems, not stubs — the point is to measure the game, not a harness.
     World w;
     generate_floor(w, /*number=*/0, floor_spec(FloorKind::Industrial), 4242u);
-    nav::CoarseGraph coarse{};
-    nav::bake_coarse(w.grid(), kBodyClearanceSub, coarse);
-    nav::FineNav fine;
-    nav::bake_fine(w.grid(), kBodyClearanceSub, fine);
+    // НАВ ПО ЗОНАМ ВЫРОЖДЕН СОЗНАТЕЛЬНО (§88/F.2), и это УСИЛИВАЕТ тест, а не
+    // ослабляет: прежде здесь стоял настоящий бейк решётки, и прогулка таскала
+    // моба своим шагом ОДНОВРЕМЕННО с шумом — то есть «приблизился к выстрелу»
+    // было суммой двух причин, а разница громкого и тихого прогона мерила их
+    // обе. Вырожденная фикстура (`zone_fixture.inl`: зона у тела есть, идти
+    // некуда) делает прогулку МОЛЧАЩЕЙ, и тогда всё, что движет моба, есть
+    // звук. Та же логика, которой живёт `suite_behaviours.inl`: контроль
+    // однозначен, только когда альтернативная причина выключена, а не усреднена.
+    ZoneNav zn;
+    zone_fixture::arm_zones_one(zn);
+    CHECK(zn.built());
 
     // Two identical worlds-in-miniature: same seeds, same positions, same ticks. The
     // ONLY difference is whether the gunshot is published.
@@ -396,7 +403,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         r.reg.emplace<MobRef>(
             r.mob, MobRef{static_cast<std::uint8_t>(MobKind::Zombie), 1, 40, 40});
         r.reg.emplace<MobCombat>(r.mob, MobCombat{});
-        CHECK(wander_init(r.reg, 0, 99u) > 0);
+        CHECK(wander_init(r.reg, 0) > 0);
         r.startD = std::sqrt(
             wrap_delta_f(mobPos.x, playerPos.x, kWorldExtent) *
                 wrap_delta_f(mobPos.x, playerPos.x, kWorldExtent) +
@@ -428,7 +435,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         for (Run* r : {&loud, &silent}) {
             const bool audible = (r == &loud);
             noise_step(r->noise, dtMs);
-            wander_step(r->reg, stack.layer(0).grid(), r->pool, coarse, fine, 0, t);
+            wander_step(r->reg, stack.layer(0).grid(), r->pool, zn, 0, t);
             const std::uint32_t heard = investigate_step(r->reg, r->noise, r->pool, 0, t);
             if (audible) soundSteers += heard;
             physics_step(r->reg, stack, dt);

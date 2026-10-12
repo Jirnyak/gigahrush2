@@ -124,16 +124,11 @@ inline Entity make_body(Registry& reg, NpcPool& pool, int cx, int cy, int cz,
     return e;
 }
 
-// A node-0 flow slice that says "+x" in every cell, so `wander_step` takes its
-// common horizontal-step branch and writes a NON-ZERO velocity. Only node 0 is
-// needed: a zeroed CoarseGraph makes `coarse_next` return 0 for every pair, so
-// the hop every body reads is always node 0 (the same trick suite_behaviours.inl
-// documents).
-inline void fill_flow_plus_x(nav::FineNav& fine) {
-    fine.flow.assign(kMacroCells, static_cast<std::uint8_t>(1)); // kNavDir[1] = +x
-    // Invariant of bake_fine: `nearest` exists whenever `flow` does ([nav.h]).
-    fine.nearest.assign(kMacroCells, nav::kFlowNone);
-}
+// Фикстура «тело идёт +x» переехала в `zone_fixture.inl` под именем
+// `arm_zones_plus_x` (§88/F.2): прогулка читает нав ПО ЗОНАМ, а не поле решётки,
+// и подделывать надо два её чтения, а не один байт потока. Здесь была
+// `fill_flow_plus_x`, и она ушла вместе с предметом — тест, переживший свой
+// предмет, есть будущая вторая реализация.
 
 // Snapshot every body's Velocity to the sentinel.
 inline void arm_sentinels(Registry& reg, const std::vector<Entity>& bodies) {
@@ -420,11 +415,12 @@ static void test_utilai_all() {
                 for (int z = 0; z < kMacroDim; ++z)
                     danger.at(x, y, z) = static_cast<float>((x - 63) * 4);
 
-        nav::CoarseGraph coarse{};   // next[i][j] == 0 for every pair -> hop 0
-        nav::FineNav fine;
-        fill_flow_plus_x(fine);
-        CHECK(!fine.flow.empty());              // or wander_step returns at once
-        CHECK(nav::coarse_next(coarse, 17, 42) == 0);
+        ZoneNav zn;
+        zone_fixture::arm_zones_plus_x(zn);
+        CHECK(zn.built());                      // or wander_step returns at once
+        // Два чтения шага подделаны, и оба проверены: таблица ведёт из зоны 1 в
+        // зону 2, плоскость соседки говорит «+x», и «+x» правда горизонтален.
+        CHECK(zone_walk_dir(zn, 1, 2, 20, 30, 1, 2) == 1);
         CHECK(nav::kNavDir[1][2] == 0);         // +x really is a horizontal step
 
         Registry reg;
@@ -452,7 +448,7 @@ static void test_utilai_all() {
         CHECK(gB.x * gB.x + gB.y * gB.y > kMinFleeGrad2);
         CHECK(gA.x * gA.x + gA.y * gA.y <= kMinFleeGrad2);
 
-        CHECK(wander_init(reg, kLayer, 0x51ee7u) ==
+        CHECK(wander_init(reg, kLayer) ==
               static_cast<std::uint32_t>(2 * kGroup));
         CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
 
@@ -484,7 +480,7 @@ static void test_utilai_all() {
             }
 
             arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, coarse, fine, kLayer,
+            wander_step(reg, grid, pool, zn, kLayer,
                         static_cast<std::uint64_t>(t));
 
             for (std::size_t i = 0; i < all.size(); ++i) {
@@ -547,7 +543,7 @@ static void test_utilai_all() {
         std::uint32_t wroteWhileAllAiOwned = 0;
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, coarse, fine, kLayer,
+            wander_step(reg, grid, pool, zn, kLayer,
                         static_cast<std::uint64_t>(t));
             for (Entity e : all)
                 if (!is_sentinel(reg.get<Velocity>(e))) ++wroteWhileAllAiOwned;
@@ -560,7 +556,7 @@ static void test_utilai_all() {
         std::uint32_t wroteWhileAllDelegated = 0;
         for (int t = 0; t < kTicks; ++t) {
             arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, coarse, fine, kLayer,
+            wander_step(reg, grid, pool, zn, kLayer,
                         static_cast<std::uint64_t>(t));
             for (Entity e : all)
                 if (!is_sentinel(reg.get<Velocity>(e))) ++wroteWhileAllDelegated;
@@ -1205,9 +1201,8 @@ static void test_utilai_all() {
                 for (int z = 0; z < kMacroDim; ++z)
                     danger.at(x, y, z) = static_cast<float>((x - 63) * 4);
 
-        nav::CoarseGraph coarse{};
-        nav::FineNav fine;
-        fill_flow_plus_x(fine);
+        ZoneNav zn;
+        zone_fixture::arm_zones_plus_x(zn);
 
         Registry reg;
         NpcPool pool;
@@ -1236,7 +1231,7 @@ static void test_utilai_all() {
         CHECK(gB.x * gB.x + gB.y * gB.y > kMinFleeGrad2);    // a live direction
         CHECK(gC.x * gC.x + gC.y * gC.y <= kMinFleeGrad2);   // no live direction
 
-        CHECK(wander_init(reg, kLayer, 0x51ee7u) ==
+        CHECK(wander_init(reg, kLayer) ==
               static_cast<std::uint32_t>(3 * kGroup));
         CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(3 * kGroup));
 
@@ -1313,7 +1308,7 @@ static void test_utilai_all() {
                 if (aiWrote[i] && !ai_owns_motion(reg, all[i])) ++aiWroteWanderOwned;
             }
             arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, coarse, fine, kLayer,
+            wander_step(reg, grid, pool, zn, kLayer,
                         static_cast<std::uint64_t>(t));
             for (std::size_t i = 0; i < all.size(); ++i) {
                 const bool w = !is_sentinel(reg.get<Velocity>(all[i]));

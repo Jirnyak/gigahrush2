@@ -84,6 +84,10 @@ int g_checks = 0;
         }                                                                      \
     } while (0)
 
+// Фикстура нава по зонам — ОДНА на семь сюит, которые обходят проход прогулки
+// (§88/F.2). Включается до них: `.inl` склеиваются в один TU по порядку.
+#include "zone_fixture.inl"
+
 #include "suite_props_game.inl"
 #include "suite_needs.inl"
 #include "suite_noise.inl"
@@ -1867,12 +1871,29 @@ static void test_wander_moves_the_crowd() {
             place_body_safely(reg, stack.layer(layer), e);
         }
 
-    nav::CoarseGraph coarse;
-    nav::FineNav fine;
-    nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
-    nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
+    // НАСТОЯЩИЙ БЕЙК ЗОН, а не синтетика (§88/F.2) — и это единственный тест
+    // прогулки, который его заслуживает. Синтетическая фикстура
+    // (`zone_fixture.inl`) подделывает два чтения шага и годится там, где
+    // проверяется РЕШЕНИЕ тела; здесь же проверяется ровно то, чего синтетика
+    // дать не может: что на НАСТОЯЩЕЙ геометрии этажа толпа действительно
+    // ходит. Это тот самый класс дефекта, которым §88 стоил трёх заходов —
+    // поля печены над оракулом без понятия ОПОРЫ, кратчайший путь шёл ПО
+    // ВОЗДУХУ, и ходок за ним следовать не мог по построению. Замер с
+    // синтетикой этого не поймал бы никогда.
+    //
+    // Зоны объявляются ОТДЕЛЬНО от геометрии и ТЕМ ЖЕ сидом: декларация есть
+    // чистая функция (kind, number, seed) по S18 и в снимок не едет. Сид 21u
+    // обязан совпадать с сидом `generate_floor` выше, иначе граф лёг бы на
+    // чужой этаж — и тест мерил бы шум (дословно правило `suite_zonenav.inl`).
+    FloorRooms zoneRooms;
+    rooms_declare(zoneRooms, 0, spec, 21u);
+    ClearanceField oracle;
+    oracle.build(stack.layer(layer).grid());
+    ZoneNav zn;
+    bake_zone_nav(zoneRooms, oracle, kBodyClearanceSub, w.gravity().regime, zn);
+    CHECK(zn.built());
 
-    const std::uint32_t wandering = wander_init(reg, layer, 4u);
+    const std::uint32_t wandering = wander_init(reg, layer);
     CHECK(wandering > 0);
 
     // Snapshot start positions.
@@ -1888,15 +1909,38 @@ static void test_wander_moves_the_crowd() {
     // real second if the rate moves. kWanderPeriod = 8, so every agent gets ~15
     // steering passes in this window.
     const float dt = kSimDt;
+    // ПРИБОР СУММОЙ, а не только геометрией. «Большинство не прошло» — это
+    // симптом, у которого четыре разных причины (нет зоны, нет цели, нет
+    // маршрута, ступенька), и без счётчиков тест сообщал бы симптом, заставляя
+    // искать причину заново. Ровно та слепота, которой §88 стоил трёх заходов.
+    WanderTick sum;
     for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
-        wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
+        const WanderTick w = wander_step(reg, stack.layer(layer).grid(), pool,
+                                         zn, layer, t);
+        sum.considered += w.considered;
+        sum.walking += w.walking;
+        sum.arrived += w.arrived;
+        sum.repicked += w.repicked;
+        sum.unreachable += w.unreachable;
+        sum.offnav += w.offnav;
+        sum.stepup += w.stepup;
+        sum.zoneDistSum += w.zoneDistSum;
+        sum.zoneDistBodies += w.zoneDistBodies;
         physics_step(reg, stack, dt);
     }
+    std::fprintf(stderr,
+                 "[wander] зон %u | замеров %u walk %u arrive %u repick %u "
+                 "unreach %u offnav %u stepup %u zdist %.2f\n",
+                 zn.dist.zones, sum.considered, sum.walking, sum.arrived,
+                 sum.repicked, sum.unreachable, sum.offnav, sum.stepup,
+                 sum.zoneDistBodies ? static_cast<double>(sum.zoneDistSum) /
+                                          static_cast<double>(sum.zoneDistBodies)
+                                    : 0.0);
 
-    // Count how many actually travelled. Not all will: an agent sealed into an
-    // apartment, or one whose flow byte is a vertical step, legitimately stays put
-    // (see wander.h — stairwell traversal is not wired). So this asserts a
-    // MAJORITY moved, not everyone.
+    // Count how many actually travelled. Not all will: тело, запертое в
+    // квартире, тело без зоны (дырка в разбивке — названная неточность гранного
+    // клиренса) и тело, которому дверь отдала ступеньку, законно стоят на месте.
+    // Поэтому утверждение про БОЛЬШИНСТВО, а не про всех.
     std::size_t moved = 0;
     float maxDist = 0.0f;
     for (std::size_t i = 0; i < agents.size(); ++i) {
@@ -1912,16 +1956,28 @@ static void test_wander_moves_the_crowd() {
 
     // Steering must be a pure read of the bake: it may not mutate the nav data,
     // or a second floor visit would behave differently from the first.
-    nav::CoarseGraph after = coarse;
-    wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, 999u);
-    CHECK(std::memcmp(&after, &coarse, sizeof(coarse)) == 0);
+    //
+    // СРАВНИВАЮТСЯ ТРИ МАССИВА ИЗ ЧЕТЫРЁХ, И ЧЕТВЁРТЫЙ НАЗВАН. `dist` — это Z²
+    // на u16, то есть 434 МиБ на жилом этаже (замер, [game/zone_nav.h]), и
+    // копировать их тестом значило бы заплатить 434 МиБ за утверждение,
+    // которое УЖЕ ДЕРЖИТ ТИП: шаг берёт `const ZoneNav&`, и запись в таблицу
+    // не собралась бы. Закон о том, что внутри структуры, держит компилятор, а
+    // не тест. Три дешёвых массива сверяются потому, что они дешёвые, и ловят
+    // целый класс «забыл const_cast убрать».
+    const std::vector<RoomId> partBefore = zn.part.at;
+    const std::vector<std::uint8_t> flowBefore = zn.flow.dir;
+    const std::vector<RoomId> nbrBefore = zn.graph.nbr;
+    wander_step(reg, stack.layer(layer).grid(), pool, zn, layer, 999u);
+    CHECK(zn.part.at == partBefore);
+    CHECK(zn.flow.dir == flowBefore);
+    CHECK(zn.graph.nbr == nbrBefore);
 
     // Immobile mobs are never given a target: a spore carpet must not walk.
     Registry mobReg;
     rooms_declare(mobReg.ctx().emplace<FloorRooms>(), 0, spec, 21u);
     spawn_floor_mobs(mobReg, w, 0, danger_for_hostility(spec.hostility),
                      theme_for_kind(FloorKind::Residential), layer, 3u, 400);
-    wander_init(mobReg, layer, 7u);
+    wander_init(mobReg, layer);
     for (auto e : mobReg.view<const MobRef>()) {
         const MobRef& m = mobReg.get<const MobRef>(e);
         if (has_flag(kMobTable[m.kind].aiFlags, AiFlag::Immobile))

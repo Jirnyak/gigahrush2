@@ -283,27 +283,48 @@ static void test_packs_all() {
     }
 
     { // ---- the destination is the PACK's, not the entity's ------------------
-        // Pure and shared: every member of a pack computes the same node from the
+        // Pure and shared: every member of a pack computes the same ZONE from the
         // same (pack, tick) without consulting anything, which is the property that
         // survives the stagger. Different packs disagree, or every pack would walk
-        // to one node.
+        // to one zone.
+        //
+        // ЧИСЛО ЗОН ЗДЕСЬ 64 СОЗНАТЕЛЬНО, и это не остаток решётки: §88/F.2
+        // поменял у этой функции МОДУЛЬ (число зон вместо `nav::kNodes`), а хеш
+        // оставил тем же. Взяв 64, тест сравнивает перевод с ТЕМ ЖЕ набором
+        // чисел, что до перевода, — то есть «разброс не испортился» становится
+        // утверждением, а не новым замером другого распределения. Настоящий
+        // порядок (5700 зон этажа 6) проверяется отдельной строкой ниже.
+        constexpr std::uint32_t kZ = 64;
         for (std::uint64_t t = 0; t < 4u * kPackEpochTicks; t += 137u) {
-            CHECK(pack_target_node(7, t) == pack_target_node(7, t));
-            CHECK(pack_target_node(7, t) < nav::kNodes);
+            CHECK(pack_target_zone(7, t, kZ) == pack_target_zone(7, t, kZ));
+            // Зона, а не индекс: `RoomId` нумерует с ЕДИНИЦЫ, ноль занят
+            // `kNoRoom`. Поправка на единицу — ровно та, которую обязан делать
+            // каждый, кто ходит из таблицы зон в `RoomId` и обратно.
+            CHECK(pack_target_zone(7, t, kZ) != kNoRoom);
+            CHECK(pack_target_zone(7, t, kZ) <= static_cast<RoomId>(kZ));
         }
         // Constant across an epoch, and it does move between epochs.
-        CHECK(pack_target_node(7, 0) == pack_target_node(7, kPackEpochTicks - 1));
+        CHECK(pack_target_zone(7, 0, kZ) ==
+              pack_target_zone(7, kPackEpochTicks - 1, kZ));
         std::size_t changed = 0;
         for (std::uint8_t p = 1; p < 60; ++p)
-            if (pack_target_node(p, 0) != pack_target_node(p, kPackEpochTicks))
+            if (pack_target_zone(p, 0, kZ) != pack_target_zone(p, kPackEpochTicks, kZ))
                 ++changed;
         CHECK(changed >= 40);   // 59 packs, 1/64 chance each of repeating by luck
-        // Packs spread over the lattice rather than piling onto one node.
-        std::vector<std::uint8_t> hit(nav::kNodes, 0u);
+        // Packs spread over the zones rather than piling onto one.
+        std::vector<std::uint8_t> hit(kZ + 1u, 0u);
         std::size_t distinct = 0;
         for (std::uint8_t p = 1; p < 200; ++p)
-            if (!hit[pack_target_node(p, 0)]++) ++distinct;
+            if (!hit[pack_target_zone(p, 0, kZ)]++) ++distinct;
         CHECK(distinct >= 40);
+        // НОЛЬ ЗОН — НЕ ДЕЛЕНИЕ НА НОЛЬ, А ОТВЕТ «ЦЕЛИ НЕТ». Бейк в полёте
+        // выглядит ровно так, и это единственный вход, на котором функция могла
+        // бы упасть.
+        CHECK(pack_target_zone(7, 1000, 0) == kNoRoom);
+        // И настоящий порядок числа зон (этаж 6 — 5700): модуль работает, а не
+        // только удобное 64.
+        CHECK(pack_target_zone(7, 1000, 5700) != kNoRoom);
+        CHECK(pack_target_zone(7, 1000, 5700) <= static_cast<RoomId>(5700));
     }
 
     { // ---- COHESION SURVIVES THE NAV BAKE -----------------------------------
@@ -336,13 +357,19 @@ static void test_packs_all() {
         // Baked HERE, synchronously, and complete before a single step runs. The
         // async bake in main.cpp is what creates the BAKING window a load-time
         // screenshot can be fooled by; there is no such window in this test.
-        nav::CoarseGraph coarse;
-        nav::FineNav fine;
-        nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
-        nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
-        CHECK(!fine.flow.empty());
+        // НАСТОЯЩИЙ БЕЙК ЗОН (§88/F.2), синхронно и до первого шага. Синтетика
+        // здесь была бы подменой предмета: когезия значит «пачка сходится к
+        // ОДНОЙ цели на настоящем графе», а фикстура с двумя зонами сделала бы
+        // утверждение пустым — сойтись в одну из двух не фокус. Сид зон
+        // совпадает с сидом `rooms_declare` выше (11u, этаж 12).
+        ClearanceField packOracle;
+        packOracle.build(stack.layer(layer).grid());
+        ZoneNav packZones;
+        bake_zone_nav(reg.ctx().get<FloorRooms>(), packOracle, kBodyClearanceSub,
+                      stack.layer(layer).gravity().regime, packZones);
+        CHECK(packZones.built());
 
-        const std::uint32_t wandering = wander_init(reg, layer, 4u);
+        const std::uint32_t wandering = wander_init(reg, layer);
         CHECK(wandering > 0);
 
         // wander_step resolves the camera holder's faction to decide whether monsters
@@ -386,7 +413,7 @@ static void test_packs_all() {
         const float dt = kSimDt;
         const std::uint64_t kTicks = 30u * static_cast<std::uint64_t>(kSimHz);
         for (std::uint64_t t = 0; t < kTicks; ++t) {
-            wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
+            wander_step(reg, stack.layer(layer).grid(), pool, packZones, layer, t);
             physics_step(reg, stack, dt);
         }
         const std::vector<std::vector<vec3>> after = snapshot();
@@ -537,22 +564,28 @@ static void test_packs_all() {
         // agents never repath on their own — both repath sites are gated on
         // `wt.pack == 0` — so nothing else can have written it.
         {
-            const std::uint64_t lastTick = 3599;
+            // ПОСЛЕДНИЙ ТИК ПРОГОНА ВЫЧИСЛЯЕТСЯ, А НЕ ВПИСАН. Литерал 3599 был
+            // верен против 120 Гц; цикл выше идёт `kTicks = 30 * kSimHz`, то
+            // есть при 125 Гц последний тик — 3749, и пин сверялся бы с ЧУЖОЙ
+            // эпохой. Ровно та же ловушка, которой `kPackEpochTicks` обязан
+            // своим выводом из `kSimHz` ([game/wander.h]).
+            const std::uint64_t lastTick = kTicks - 1u;
             std::vector<int> held(256, -1);
             std::size_t packedSeen = 0;
             for (auto e : reg.view<const MobRef, const WanderTarget>()) {
                 const std::uint8_t p = reg.get<const MobRef>(e).pack;
-                if (p == 0) continue;  // unpacked agents own private nodes by design
-                const int node = static_cast<int>(reg.get<const WanderTarget>(e).node);
+                if (p == 0) continue;  // unpacked agents own private zones by design
+                const int zone = static_cast<int>(reg.get<const WanderTarget>(e).zone);
                 ++packedSeen;
-                if (held[p] < 0) held[p] = node;
+                if (held[p] < 0) held[p] = zone;
                 // Members of the same pack agree with each other...
-                CHECK(held[p] == node);
+                CHECK(held[p] == zone);
                 // ...and with the epoch their pack key derives. This is the assertion
                 // that dies if the re-derivation is removed: the pack would still
-                // agree, but on epoch 0's node, and the pure-function block earlier in
+                // agree, but on epoch 0's zone, and the pure-function block earlier in
                 // this file already pins that epoch 0 and epoch 1 differ.
-                CHECK(node == static_cast<int>(pack_target_node(p, lastTick)));
+                CHECK(zone == static_cast<int>(pack_target_zone(
+                                  p, lastTick, packZones.dist.zones)));
             }
             // An empty view would make both CHECKs above vacuous, which is the other
             // way this block could quietly stop testing anything.

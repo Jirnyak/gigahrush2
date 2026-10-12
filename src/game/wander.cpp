@@ -16,7 +16,6 @@
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
 #include "world/gravity.h"
-#include "world/lattice.h"
 #include "world/types.h"
 
 namespace giga::game {
@@ -44,17 +43,23 @@ void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
 
 } // namespace
 
-std::uint8_t pack_target_node(std::uint8_t pack, std::uint64_t tick) {
+RoomId pack_target_zone(std::uint8_t pack, std::uint64_t tick,
+                        std::uint32_t zones) {
+    // Ноль зон — бейк не построен или этаж пуст. Делить на него нельзя, а
+    // «цели нет» уже имеет имя.
+    if (zones == 0) return kNoRoom;
     const std::uint32_t epoch = static_cast<std::uint32_t>(tick / kPackEpochTicks);
     // The epoch is mixed before it is combined, not after: raw epochs are 0,1,2...
     // and XORing a small counter into a small pack id would make neighbouring packs
     // and neighbouring epochs collide in blocks.
     const std::uint32_t h =
         hash_u32((static_cast<std::uint32_t>(pack) * 0x9e3779b9u) ^ hash_u32(epoch));
-    return static_cast<std::uint8_t>(h % nav::kNodes);
+    // `RoomId` нумерует с единицы (ноль занят `kNoRoom`), таблица зон — с нуля.
+    // Та же поправка на единицу, что у наряда ([game/ai.cpp] выбор зоны).
+    return static_cast<RoomId>(h % zones + 1u);
 }
 
-std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
+std::uint32_t wander_init(Registry& reg, LayerId layer) {
     // Two phases, and the split is the discipline combat.cpp documents at length,
     // not tidiness: `emplace<WanderTarget>` on the FIRST agent creates that
     // component's storage, which can reallocate the registry's pool container and
@@ -82,32 +87,58 @@ std::uint32_t wander_init(Registry& reg, LayerId layer, std::uint32_t seed) {
     }
 
     for (const Candidate& c : fresh) {
-        // A packed agent's very first destination is its PACK's, so the group is
-        // coherent on pass one. Anything without a pack — every embodied resident —
-        // keeps the original per-identity roll and is completely unaffected.
-        const std::uint8_t node =
-            c.pack != 0
-                ? pack_target_node(c.pack, 0)
-                : static_cast<std::uint8_t>(
-                      hash_u32(seed ^
-                          (static_cast<std::uint32_t>(entt::to_integral(c.e)) *
-                           0x9e3779b9u)) %
-                      nav::kNodes);
-        reg.emplace<WanderTarget>(c.e, WanderTarget{node, 0, c.pack});
+        // НОГИ ЗДЕСЬ НЕ ВЫДАЮТ — её выберет первый посещающий проход (довод в
+        // [game/wander.h]: число зон этажа известно только бейку, а бейк в
+        // полёте). Компонента всё равно навешивается, и это она делает тело
+        // ХОДЯЧИМ: `wander_step` обходит вид с `WanderTarget`, и моб без неё —
+        // статуя ([game/mob_spawn.cpp]).
+        //
+        // Пачка тоже ждёт первого прохода, и когезия от этого не страдает, а
+        // крепнет: цель пачки есть производная от (pack, эпоха), и все её члены
+        // вычисляют один и тот же ответ в свой слот стаггера, а не хранят
+        // каждый свою копию начального броска.
+        reg.emplace<WanderTarget>(c.e, WanderTarget{kNoRoom, 0, c.pack});
     }
     return static_cast<std::uint32_t>(fresh.size());
 }
 
 namespace {
 
+// ВЫБОР НОГИ — ОДНОЙ ДВЕРЬЮ `zone_pick_near` ([game/zone_nav.h]), и это
+// ЛЕЧЕНИЕ ЗАМЕРЕННОГО ДЕФЕКТА, а не оформление.
+//
+// Здесь стояла копия выбора наряда: `kWanderTries` РАВНОМЕРНЫХ кандидатов среди
+// всех зон этажа, отбраковка тех, что дальше предела. Замер 2026-10-12, этаж 0,
+// 13818 зон, одна секунда сима: 119 попыток, 952 кандидата, прибытий и даже
+// ВЫБОРОВ — ноль. Доля зон в пределах двух рёбер есть десятки из десятков
+// тысяч, то есть предел дальности работал не ограничителем, а отказом; `walk 0`
+// в приборе был не «не доходят», а «цели не выбрали ВООБЩЕ».
+//
+// Поэтому `kWanderTries` больше нет, и это не упрощение: попытки имели смысл
+// ровно потому, что выборка могла промахнуться. Обход графа не промахивается —
+// цель лежит в пределах предела по построению. Число без надобности есть число
+// без происхождения.
+RoomId pick_leg_zone(const ZoneNav& zones, RoomId myZone, std::uint32_t id,
+                     std::uint64_t tick, bool isMob) {
+    const std::uint16_t legMax = isMob ? kWanderLegZonesMob : kWanderLegZones;
+    // Соль — тот же `id ^ tick`, которым прогулка перевыбирала узел решётки:
+    // менять хеш вместе с предметом значило бы сменить ДВА правила за раз и
+    // лишить красный тест возможности сказать, которое.
+    return zone_pick_near(zones, myZone,
+                          hash_u32(id ^ static_cast<std::uint32_t>(tick)),
+                          legMax);
+}
+
 } // namespace
 
 WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
-                 const nav::CoarseGraph& coarse,
-                 const nav::FineNav& fine, LayerId layer, std::uint64_t tick,
+                 const ZoneNav& zones, LayerId layer, std::uint64_t tick,
                  const GravityField* gravity) {
     WanderTick out;
-    if (fine.flow.empty()) return out;  // nav not baked for this floor
+    // Непостроенный бейк — no-op, не UB: тот же контракт, которым живут
+    // `ai_patrol_step` и `place_errand_step`. Пока бейк зон в полёте, толпа
+    // стоит — ровно как стояла при пустом `fine.flow`.
+    if (!zones.built()) return out;
 
     GravityRegime steerRegime = GravityRegime::NegZ;
     if (gravity != nullptr) {
@@ -216,9 +247,12 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // A packed agent's destination is DERIVED from the pack every pass, never
         // remembered from whenever it last repathed. That is what makes cohesion
         // exact instead of statistical: two members in different stagger slots
-        // cannot come to hold different nodes, because neither of them is holding a
-        // decision of its own. One mix per visit, and `wt.node` degrades to a cache.
-        if (wt.pack != 0) wt.node = pack_target_node(wt.pack, tick);
+        // cannot come to hold different zones, because neither of them is holding a
+        // decision of its own. One mix per visit, and `wt.zone` degrades to a cache.
+        if (wt.pack != 0) {
+            wt.zone = pack_target_zone(wt.pack, tick, zones.dist.zones);
+            ++out.packed;
+        }
 
         // Aggro overrides navigation entirely: a monster that can see you does not
         // consult a flow field, it comes straight at you. Straight-line pursuit is
@@ -353,89 +387,139 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         int cx, cy, cz;
         agent_cell(tr.pos, cx, cy, cz);
 
-        // Steer toward the CURRENT lattice node on the coarse route, not the
-        // final destination: the flow fields route to a node, and the coarse
-        // next-hop table is what makes a multi-node journey a sequence of them.
-        // Spec 15 §2: query the baked geodesic nearest_node field (guarantees
-        // reachability), falling back to Voronoi partition if outside fine field.
-        const std::uint8_t nearAnchor = fine.nearest_node(cx, cy, cz);
-        const int here = (nearAnchor < nav::kNodes)
-                             ? static_cast<int>(nearAnchor)
-                             : lattice_id(lattice_axis_of(cx), lattice_axis_of(cy),
-                                          lattice_axis_of(cz));
-        const int hop = nav::coarse_next(coarse, here, wt.node);
-        std::uint8_t flow = fine.at(hop, cx, cy, cz);
-
         if (wt.cooldown > 0) --wt.cooldown;
 
-        const bool arrived = (flow == nav::kFlowArrived && hop == wt.node);
-        const bool stuck = (flow == nav::kFlowNone);
-        if (arrived) ++out.arrived;
-        if (stuck) ++out.stuck;
-        if (arrived || stuck) {
-            // Pick a fresh destination, but not every pass — thrashing between
-            // unreachable nodes would burn the whole stagger budget on repathing.
-            //
-            // A PACKED agent does not re-roll: its node is the pack's, and rolling a
-            // private one here is precisely the bug that would let a member peel off
-            // the first time it arrived or hit a dead end. It instead waits out the
-            // epoch, which reads as a pack that has arrived and is milling about.
-            // The honest cost: a pack aimed at a node it cannot reach stands still
-            // until the epoch turns (kPackEpochTicks, ~15 s) rather than retrying
-            // after ~1.1 s.
-            if (wt.pack == 0 && wt.cooldown == 0) {
-                std::uint32_t h = hash_u32(id ^ static_cast<std::uint32_t>(tick));
-                wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
-                wt.cooldown = kRepathCooldown;
-                ++out.repicked;
-            }
+        // ВАНДЕР — ПОСЛЕДНИЙ, И ОТСЮДА ВСЯ РАЗНИЦА С НАРЯДОМ И ДЕЛОМ. У тех на
+        // каждом отказе есть кому отдать тело («отдаём вандеру», токен не
+        // забран), а за вандером нет никого: тело, которое он пропустит, не
+        // ведётся НИКЕМ и дрейфует на прошлой скорости. Поэтому каждый отказ
+        // ниже кончается ВЛАДЕЕМЫМ НУЛЁМ — это остановка, а не толчок, и
+        // физика по оси гравитации продолжает работать как всегда.
+        const auto stop = [&] {
             if (gf.axis != 0) vel.v.x = 0.0f;
             if (gf.axis != 1) vel.v.y = 0.0f;
             if (gf.axis != 2) vel.v.z = 0.0f;
+        };
+
+        // ЗОНА ТЕЛА — через дверь с опорой на соседа, а не `part.cell` напрямую:
+        // клетка центра тела бывает ДЫРКОЙ в разбивке (замер §88: 26 тел на тик
+        // из 238 ведомых), и это следствие названной неточности гранного
+        // клиренса, а не дефект разбивки. Дословно правило `ai_patrol_step`.
+        const RoomId myZone = zone_of_body(zones, cx, cy, cz);
+        if (myZone == kNoRoom) {
+            ++out.offnav;
+            stop();
             continue;
         }
 
-        const bool inWalkingPlane =
-            (flow < 6) && ((flow >> 1) != gf.axis);
-
-        vec3 dir{0.0f, 0.0f, 0.0f};
-        if (inWalkingPlane) {
-            // The common, good case: the bake hands us the exact next step along a
-            // shortest wrapped path, obstacle avoidance included, for one byte.
-            dir.x = static_cast<float>(nav::kNavDir[flow][0]);
-            dir.y = static_cast<float>(nav::kNavDir[flow][1]);
-            dir.z = static_cast<float>(nav::kNavDir[flow][2]);
-        } else {
-            // Fall back to the bearing toward the hop node's column in the tangent plane:
-            const LatticeNode ln = lattice_unpack(hop);
-            const float tx = static_cast<float>(lattice_coord(ln.ix)) * kCellSize;
-            const float ty = static_cast<float>(lattice_coord(ln.iy)) * kCellSize;
-            const float tz = static_cast<float>(lattice_coord(ln.iz)) * kCellSize;
-            const vec3 delta = tangent(
-                wrap_delta_f(tr.pos.x, tx, kWorldExtent),
-                wrap_delta_f(tr.pos.y, ty, kWorldExtent),
-                wrap_delta_f(tr.pos.z, tz, kWorldExtent));
-            const float len = length(delta);
-            if (len < kCellSize) {
-                if (wt.pack == 0 && wt.cooldown == 0) {
-                    std::uint32_t h =
-                        hash_u32(id ^ static_cast<std::uint32_t>(tick) ^ 0x5bf03635u);
-                    wt.node = static_cast<std::uint8_t>(h % nav::kNodes);
-                    wt.cooldown = kRepathCooldown;
-                    ++out.repicked;
-                }
-                if (gf.axis != 0) vel.v.x = 0.0f;
-                if (gf.axis != 1) vel.v.y = 0.0f;
-                if (gf.axis != 2) vel.v.z = 0.0f;
-                continue;
+        // ПРИБЫЛ = СТОИТ В ЦЕЛЕВОЙ ЗОНЕ. Прежде прибытие спрашивалось у поля
+        // решётки (`kFlowArrived` на клетке узла) — то есть у ТОЧКИ: нога
+        // кончалась в одной клетке из 2 097 152, промах мимо неё на полметра
+        // читался как «ещё иду», и за прогон 30000 кадров прибытий было РОВНО
+        // НОЛЬ. Зона есть ОБЛАСТЬ, и попадание в неё — тот же вопрос, на
+        // который отвечает прибытие дела (§88/E).
+        const bool arrived = (wt.zone != kNoRoom && myZone == wt.zone);
+        if (arrived) ++out.arrived;
+        if (wt.zone == kNoRoom || arrived) {
+            // Pick a fresh destination, but not every pass — thrashing between
+            // unreachable zones would burn the whole stagger budget on repathing.
+            // Цена отсутствия этого стаггера ЗАМЕРЕНА на наряде: `unreach`
+            // 0 -> 3334, тиков в прогоне −40%, и просел даже соседний проход
+            // (ход по делам 3.83 -> 0.90 прибытий на 100 замеров).
+            //
+            // A PACKED agent does not re-roll: its zone is the pack's, and rolling a
+            // private one here is precisely the bug that would let a member peel off
+            // the first time it arrived or hit a dead end. It instead waits out the
+            // epoch, which reads as a pack that has arrived and is milling about.
+            if (wt.pack == 0 && wt.cooldown == 0) {
+                wt.zone = pick_leg_zone(zones, myZone, id, tick, mr != nullptr);
+                wt.cooldown = kRepathCooldown;
+                // РАЗНЫЕ ИМЕНА РАЗНЫМ ИСХОДАМ: «выбрал» и «за восемь попыток
+                // достижимой близкой зоны не нашлось» — это два разных ответа,
+                // и сложить их в один счётчик значило бы получить прибор,
+                // который не умеет сказать, что именно не работает.
+                if (wt.zone == kNoRoom) ++out.unreachable;
+                else ++out.repicked;
             }
-            dir = delta * (1.0f / len);
+            stop();
+            continue;
         }
 
+        // ДВА ЧТЕНИЯ, И НИ ОДНОЙ ВОЛНЫ (§88): таблица даёт соседку на пути к
+        // цели, плоскость соседки даёт направление. Ступеньку разрешает САМА
+        // дверь, поэтому ветки на вертикаль у потребителя нет — была бы, значит
+        // дверь обошли.
+        const std::uint8_t d = zone_walk_dir(zones, myZone, wt.zone, cx, cy, cz,
+                                             gf.pull ? gf.axis : -1);
+        if (d == kZoneFlowNone) {
+            // Маршрута нет: другая компонента связности, либо поле соседки не
+            // покрывает эту клетку. Цель снимается СО СТАГГЕРОМ.
+            ++out.unreachable;
+            if (wt.pack == 0) wt.zone = kNoRoom;
+            wt.cooldown = kRepathCooldown;
+            stop();
+            continue;
+        }
+        if (d < 6 && (d >> 1) == gf.axis) {
+            // СТУПЕНЬКА И ЕСТЬ ВЫХОД ИЗ ЗОНЫ — единственный случай, когда дверь
+            // отдаёт шаг вдоль гравитации (она смотрит вперёд через ступеньки и
+            // отказывает, только когда подъём и есть сам переход). Наряд и дело
+            // здесь отдают тело вандеру и ОСТАВЛЯЮТ цель; вандеру отдавать
+            // некому, а стоять под ступенькой до конца прогона — это та же
+            // непроверяемая по построению нога. Поэтому цель СНИМАЕТСЯ: у
+            // прогулки она произвольна, и сменить её дешевле, чем изобретать
+            // здесь подъём. Слепой прямой на цель нет сознательно — ровно она
+            // была остатком якоря у решётки и стоила §88 нуля прибытий.
+            ++out.stepup;
+            if (wt.pack == 0) wt.zone = kNoRoom;
+            wt.cooldown = kRepathCooldown;
+            stop();
+            continue;
+        }
+        {
+            // Прибор приближения — Σ по ВЕДОМЫМ телам (тело без хода в
+            // знаменателе исказило бы среднее ровно в ту сторону, которая
+            // выглядит успехом). Стоит ПОСЛЕ всех отказов и ДО записи скорости.
+            const std::uint16_t zd = zones.dist.at(
+                static_cast<std::uint32_t>(myZone) - 1u,
+                static_cast<std::uint32_t>(wt.zone) - 1u);
+            if (zd != kZoneUnreachable) {
+                out.zoneDistSum += zd;
+                ++out.zoneDistBodies;
+            }
+        }
+
+        // Шаг в плоскости ходьбы: целимся в ЦЕНТР следующей клетки — то же
+        // самоисправляющееся правило (и по тому же замеру), которым идут наряд и
+        // дело. Прежде здесь брался ГОЛЫЙ ОРТ `kNavDir`, и разница не
+        // косметическая: орт ведёт тело из любой точки клетки одинаково, поэтому
+        // тело, вошедшее в клетку по касательной, так и шло по её краю и
+        // цеплялось за углы, а центр следующей клетки сам стягивает его к
+        // середине коридора.
+        const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
+        const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
+        const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
+        vec3 dir = tangent(
+            wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize,
+                         kWorldExtent),
+            wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize,
+                         kWorldExtent),
+            wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize,
+                         kWorldExtent));
+        const float dlen2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+        if (dlen2 <= kMinFleeGrad2) {
+            // Направления нет: проекция на плоскость ходьбы опустошила вектор,
+            // или тело стоит точно в центре целевой клетки. Владеемый ноль, цель
+            // ОСТАЁТСЯ — следующий тик сдвинет тело физикой и пеленг появится.
+            stop();
+            continue;
+        }
+        dir = dir * (1.0f / std::sqrt(dlen2));
+
         float speed = kNpcWalkSpeed;
-        if (const MobRef* m = reg.try_get<MobRef>(e)) {
+        if (mr != nullptr) {
             // Table speed is cells/s in fixed point; a cell is kCellSize metres.
-            speed = static_cast<float>(kMobTable[m->kind].speedMmps) * 0.001f *
+            speed = static_cast<float>(kMobTable[mr->kind].speedMmps) * 0.001f *
                     kCellSize;
         }
 

@@ -12,14 +12,17 @@
 // ---------------------------------------------------------------------------
 // Why the nav bake is deliberately DEGENERATE here
 // ---------------------------------------------------------------------------
-// `coarse` is zero-initialised and every flow byte is `kFlowNone`, which is not
-// laziness about the 3.7 s bake — it is what makes the control unambiguous. With a
-// real bake, a mob that is NOT chasing still gets a flow step, so "did it chase?"
-// would have to be inferred from a direction and could be confused with a wander
-// step that happens to point at the player. With an unreachable field, a mob that is
-// not chasing takes `wander_step`'s `stuck` branch and is written EXACTLY zero. So
-// `|v| > 0` means "this mob chose to chase" and nothing else can produce it.
-// The real bake is exercised by test_packs_all, which is the right place for it.
+// Нав по зонам здесь ВЫРОЖДЕН: `arm_zones_one` даёт одну зону на весь тор и ни
+// одной соседки (§88/F.2 перевёл фикстуру вместе с её доводом). Это не лень
+// насчёт 3.7-секундного бейка — это то, что делает контроль однозначным. При
+// настоящем бейке моб, который НЕ гонится, всё равно получает шаг, так что
+// «гнался ли он?» пришлось бы выводить из направления, а оно случайно совпадает
+// с направлением на игрока. Здесь зона у тела ЕСТЬ (иначе проход свалился бы в
+// `offnav`, не дойдя до решения), но идти некуда, и непогонное тело получает
+// РОВНО НОЛЬ. Значит `|v| > 0` означает «этот моб решил гнаться» и больше
+// ничего не может это произвести.
+// Настоящий бейк гоняют `test_packs_all` и `test_wander_moves_the_crowd` — там
+// ему и место.
 //
 // Speeds are asserted as a RATIO to the kind's own table speed, never as an absolute
 // m/s. The kinds under test move at 0.82 to 3.15 cells/s, so an absolute assertion
@@ -135,14 +138,12 @@ static void test_behaviours_all() {
 
     test_wall_probe(grid); // прибирает за собой — арена блоков не задета
 
-    nav::CoarseGraph coarse{};                 // next[i][j] == 0 for every pair
-    nav::FineNav fine;
-    fine.flow.assign(kMacroCells, nav::kFlowNone);   // one node's worth; hop is always 0
-    // `nearest` is baked whenever `flow` is ([nav.h] bake_fine) — a hand-built
-    // fixture must honour the same invariant or nearest_node() indexes nothing.
-    fine.nearest.assign(kMacroCells, nav::kFlowNone);
-    CHECK(!fine.flow.empty());                       // or wander_step returns immediately
-    CHECK(nav::coarse_next(coarse, 17, 42) == 0);    // the hop every mob will read
+    ZoneNav zn;
+    zone_fixture::arm_zones_one(zn);
+    CHECK(zn.built());               // иначе wander_step вернётся на первой строке
+    // И идти ОТСЮДА некуда: таблица знает одну зону, соседок у неё ноль.
+    CHECK(zone_of_body(zn, 50, 55, 1) == static_cast<RoomId>(1));
+    CHECK(zone_walk_dir(zn, 1, 1, 50, 55, 1, 2) == kZoneFlowNone);
 
     NpcPool pool;
     pool.init();
@@ -484,12 +485,12 @@ static void test_behaviours_all() {
         const Entity openPan = spawn_at(reg, layer, MobKind::Panelnik, openAt);
         const Entity bracedPlain = spawn_at(reg, layer, MobKind::Sborka, bracedAt);
         const Entity openPlain = spawn_at(reg, layer, MobKind::Sborka, openAt);
-        CHECK(wander_init(reg, layer, 5u) == 4u);   // the viewer is skipped
+        CHECK(wander_init(reg, layer) == 4u);   // the viewer is skipped
 
         // Exactly kWanderPeriod ticks, so every mob is visited exactly once by the
         // identity-hash stagger and the velocity read below is that single visit.
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, coarse, fine, layer, t);
+            wander_step(reg, grid, pool, zn, layer, t);
 
         const float panSp = table_speed(MobKind::Panelnik);
         const float plainSp = table_speed(MobKind::Sborka);
@@ -528,10 +529,10 @@ static void test_behaviours_all() {
         // Тварь: Plain behaviour, WallBias flag. Same query, the flag's own numbers.
         const Entity coverTvar = spawn_at(reg, layer, MobKind::Tvar, bracedAt);
         const Entity openTvar = spawn_at(reg, layer, MobKind::Tvar, openAt);
-        CHECK(wander_init(reg, layer, 6u) == 4u);
+        CHECK(wander_init(reg, layer) == 4u);
 
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, coarse, fine, layer, t);
+            wander_step(reg, grid, pool, zn, layer, t);
 
         const float rSp = table_speed(MobKind::Rebar);
         const float tSp = table_speed(MobKind::Tvar);
@@ -580,10 +581,10 @@ static void test_behaviours_all() {
         const vec3 fiveM{105.0f, 100.0f, 3.0f};
         const Entity carpet = spawn_at(reg, layer, MobKind::SporeCarpet, fiveM);
         const Entity plain = spawn_at(reg, layer, MobKind::Sborka, fiveM);
-        CHECK(wander_init(reg, layer, 7u) == 2u);
+        CHECK(wander_init(reg, layer) == 2u);
 
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, coarse, fine, layer, t);
+            wander_step(reg, grid, pool, zn, layer, t);
 
         const float carpetV = flat_speed(reg.get<const Velocity>(carpet));
         const float plainV = flat_speed(reg.get<const Velocity>(plain));
@@ -601,7 +602,7 @@ static void test_behaviours_all() {
         reg.get<Transform>(carpet).pos = vec3{101.5f, 100.0f, 3.0f};
         reg.get<Velocity>(carpet).v = vec3{0, 0, 0};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, coarse, fine, layer, t);
+            wander_step(reg, grid, pool, zn, layer, t);
         const float wokenV = flat_speed(reg.get<const Velocity>(carpet));
         std::fprintf(stderr, "[behaviours] ...and at 1.5 m: |v| = %.4f m/s\n", wokenV);
         CHECK(wokenV > 0.0f);
@@ -639,7 +640,7 @@ static void test_behaviours_all() {
         const vec3 hunterAt{100.0f, 100.0f, 3.0f};
         const Entity carpet = spawn_at(reg, layer, MobKind::SporeCarpet, hunterAt);
         const Entity plain = spawn_at(reg, layer, MobKind::Sborka, hunterAt);
-        CHECK(wander_init(reg, layer, 8u) == 3u);   // the resident wanders too
+        CHECK(wander_init(reg, layer) == 3u);   // the resident wanders too
 
         const std::uint32_t carpetId =
             static_cast<std::uint32_t>(entt::to_integral(carpet));
@@ -658,12 +659,12 @@ static void test_behaviours_all() {
 
         reg.get<Velocity>(plain).v = vec3{0, 0, 0};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, crowd, coarse, fine, layer, plainWindow + t);
+            wander_step(reg, grid, crowd, zn, layer, plainWindow + t);
         const float plainV = flat_speed(reg.get<const Velocity>(plain));
 
         reg.get<Velocity>(carpet).v = vec3{0, 0, 0};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, crowd, coarse, fine, layer, carpetWindow + t);
+            wander_step(reg, grid, crowd, zn, layer, carpetWindow + t);
         const float carpetV = flat_speed(reg.get<const Velocity>(carpet));
 
         std::fprintf(stderr,
@@ -719,10 +720,10 @@ static void test_behaviours_all() {
             const vec3 at{viewerAt.x + c.dist, viewerAt.y, viewerAt.z};
             const Entity subject = spawn_at(reg, layer, c.kind, at);
             const Entity control = spawn_at(reg, layer, MobKind::Sborka, at);
-            CHECK(wander_init(reg, layer, 9u) == 2u);
+            CHECK(wander_init(reg, layer) == 2u);
 
             for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-                wander_step(reg, grid, pool, coarse, fine, layer, t);
+                wander_step(reg, grid, pool, zn, layer, t);
 
             const float sv = flat_speed(reg.get<const Velocity>(subject));
             const float cv = flat_speed(reg.get<const Velocity>(control));
@@ -756,10 +757,10 @@ static void test_behaviours_all() {
         const Entity farWeb = spawn_at(reg, layer, MobKind::Paupsina, farAt);
         const Entity nearPlain = spawn_at(reg, layer, MobKind::Sborka, nearAt);
         const Entity farPlain = spawn_at(reg, layer, MobKind::Sborka, farAt);
-        CHECK(wander_init(reg, layer, 11u) == 5u);
+        CHECK(wander_init(reg, layer) == 5u);
 
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, coarse, fine, layer, t);
+            wander_step(reg, grid, pool, zn, layer, t);
 
         const vec3 nv = reg.get<const Velocity>(nearWeb).v;
         const vec3 hv = reg.get<const Velocity>(holdWeb).v;

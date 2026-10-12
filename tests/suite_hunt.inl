@@ -350,11 +350,19 @@ static void test_hunt_all() {
             theme_for_kind(FloorKind::Residential), layer, 31u, 0,
             FloorKind::Residential);
 
-        nav::CoarseGraph coarse;
-        nav::FineNav fine;
-        nav::bake_coarse(stack.layer(layer).grid(), kBodyClearanceSub, coarse);
-        nav::bake_fine(stack.layer(layer).grid(), kBodyClearanceSub, fine);
-        wander_init(reg, layer, 5u);
+        // НАСТОЯЩИЙ БЕЙК ЗОН (§88/F.2) — синтетика здесь не годится и это не
+        // вкус: тест мерит ХИЩНИЧЕСТВО на настоящем этаже, то есть то, как
+        // монстры и жители ВСТРЕЧАЮТСЯ, а встреча есть следствие ходьбы по
+        // настоящей геометрии. Фикстура, гонящая всех в +x, дала бы верное
+        // число для не той картинки (§85). Сид зон совпадает с сидом комнат
+        // геометрии выше (4242u, этаж 15) — иначе граф лёг бы на чужой этаж.
+        ClearanceField huntOracle;
+        huntOracle.build(stack.layer(layer).grid());
+        ZoneNav huntZones;
+        bake_zone_nav(reg.ctx().get<FloorRooms>(), huntOracle, kBodyClearanceSub,
+                      stack.layer(layer).gravity().regime, huntZones);
+        CHECK(huntZones.built());
+        wander_init(reg, layer);
 
         // The scenario is pinned. If the floor stops being 420-vs-600 the survivor
         // number stops meaning what it says.
@@ -382,7 +390,7 @@ static void test_hunt_all() {
         std::uint32_t peakHunters = 0;
 
         for (std::uint64_t t = 0; t < kTenMinutes; ++t) {
-            wander_step(reg, stack.layer(layer).grid(), pool, coarse, fine, layer, t);
+            wander_step(reg, stack.layer(layer).grid(), pool, huntZones, layer, t);
             physics_step(reg, stack, dt);
             mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, t);
             projectile_step(reg, pool, bus, stack, layer, dt, t);

@@ -116,6 +116,79 @@ void graph_equals_independent_recount(const World& w, const ZonePartition& part,
     CHECK(refTouch.size() > ref.size());
 }
 
+// БЛИЗКАЯ ЦЕЛЬ БЕРЁТСЯ ОБХОДОМ, А НЕ ОТБОРОМ — и этот блок есть ГЕЙТ НА ЗАМЕР,
+// опровергнувший первую редакцию обоих ходоков (§88/F.2).
+//
+// Наряд и прогулка брали `kTries` РАВНОМЕРНЫХ кандидатов среди всех зон этажа и
+// отбрасывали тех, что дальше предела. Замер, этаж 0, 13818 зон, секунда сима:
+// 119 попыток, 952 кандидата, выборов НОЛЬ. Утверждение, купленное замером,
+// обязано иметь гейт — иначе следующая редакция купит его снова, и купит той же
+// ценой: прибор показывал бы «не доходят» там, где тела не выбирали цель вовсе.
+//
+// Поэтому гейт НЕ просто проверяет обход. Он считает ДОЛЮ УСПЕХА обоих способов
+// на одном и том же настоящем графе и печатает оба числа: отбор обязан быть
+// почти всегда пустым, обход — почти всегда полным. Это мутация закона,
+// прогнанная самим гейтом, а не обещание в комментарии.
+void near_pick_walks_the_graph(const ZonePartition& part,
+                               const ClearanceField& oracle) {
+    ZoneNav zn;
+    bake_zone_graph(part, oracle, kBodyClearanceSub, zn.graph);
+    bake_zone_dist(zn.graph, zn.dist, /*threads=*/2);
+    zn.part = part;
+    CHECK(zn.graph.built());
+    CHECK(zn.dist.built());
+
+    constexpr std::uint16_t kLeg = 2;     // предел прогулки ([game/wander.h])
+    constexpr std::uint32_t kTriesOld = 8; // сколько пробовала первая редакция
+    std::uint32_t sampled = 0, walkFound = 0, rejectFound = 0, overLimit = 0;
+    std::uint32_t isolated = 0, nondet = 0, selfPick = 0;
+    for (std::uint32_t z = 0; z < zn.graph.zones; z += 37) {
+        const RoomId from = static_cast<RoomId>(z + 1u);
+        ++sampled;
+        if (zn.graph.degree(z) == 0) ++isolated;
+
+        // СПОСОБ 1 — обход графа (живой).
+        const RoomId got = zone_pick_near(zn, from, 0x51ee7u ^ z, kLeg);
+        if (got != kNoRoom) {
+            ++walkFound;
+            if (got == from) ++selfPick;
+            // ПРЕДЕЛ СОБЛЮДЁН ПО ПОСТРОЕНИЮ, и таблица это подтверждает
+            // независимо от обхода: шаг двигает не больше чем на ребро.
+            const std::uint16_t d = zn.dist.at(z, static_cast<std::uint32_t>(got) - 1u);
+            if (d == kZoneUnreachable || d > kLeg) ++overLimit;
+        }
+        // Детерминизм: та же соль — тот же ответ. Иначе тело меняло бы цель на
+        // каждом визите и стаггер пере-выбора терял бы смысл.
+        if (zone_pick_near(zn, from, 0x51ee7u ^ z, kLeg) != got) ++nondet;
+
+        // СПОСОБ 2 — ОТБОР ИЗ РАВНОМЕРНОЙ ВЫБОРКИ, дословно первая редакция.
+        const std::uint32_t h = hash_u32(0x51ee7u ^ z);
+        for (std::uint32_t k = 0; k < kTriesOld; ++k) {
+            const std::uint32_t cand = (h + k * 2654435761u) % zn.graph.zones;
+            if (cand == z) continue;
+            const std::uint16_t d = zn.dist.at(z, cand);
+            if (d == kZoneUnreachable || d > kLeg) continue;
+            ++rejectFound;
+            break;
+        }
+    }
+    std::fprintf(stderr,
+                 "[zonenav] близкая цель на %u зонах: обход нашёл %u/%u, "
+                 "ОТБОР (8 равномерных кандидатов) нашёл %u/%u, изолированных %u\n",
+                 zn.graph.zones, walkFound, sampled, rejectFound, sampled,
+                 isolated);
+
+    CHECK(sampled > 100);          // выборка не вырождена
+    CHECK(nondet == 0);            // чистая функция от (граф, соль, предел)
+    CHECK(overLimit == 0);         // предел соблюдён, и это проверено ТАБЛИЦЕЙ
+    CHECK(selfPick == 0);          // цель «сам в себе» = мгновенное прибытие
+    // ОБХОД НАХОДИТ ПОЧТИ ВСЕГДА: неудача законна только у изолированной зоны.
+    CHECK(walkFound + isolated >= sampled);
+    // А ОТБОР — ПОЧТИ НИКОГДА, и вот это число и есть опровергнутая редакция.
+    // Доля зон в пределах двух рёбер есть десятки из десятков тысяч.
+    CHECK(rejectFound * 10u < walkFound);
+}
+
 void table_is_a_metric(const World& w, const ZonePartition& part,
                        const ClearanceField& oracle) {
     ZoneGraph g;
@@ -550,6 +623,7 @@ void test_zonenav_all() {
 
     zonenav_test::graph_equals_independent_recount(w, part, oracle);
     zonenav_test::table_is_a_metric(w, part, oracle);
+    zonenav_test::near_pick_walks_the_graph(part, oracle);
     zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter, oracle);
     zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter, oracle);
     zonenav_test::degenerate_inputs_answer(w, oracle);
