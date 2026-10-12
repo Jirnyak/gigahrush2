@@ -138,8 +138,15 @@ void near_pick_walks_the_graph(const ZonePartition& part,
     CHECK(zn.graph.built());
     CHECK(zn.dist.built());
 
-    constexpr std::uint16_t kLeg = 2;     // предел прогулки ([game/wander.h])
+    // Предел берётся ТОЙ ЖЕ дверью, которой его берёт прод: бюджет в метрах,
+    // прыжки считает бейк. Литерал здесь был бы вторым ответом на вопрос
+    // «сколько прыжков», и разошёлся бы с продом на первом же модуле с другими
+    // зонами — ровно тем, что решение владельца 2026-10-12 и называет нормой.
+    const std::uint16_t kLeg = zone_hops_for_metres(part, kWanderLegMetres);
     constexpr std::uint32_t kTriesOld = 8; // сколько пробовала первая редакция
+    CHECK(kLeg >= 1);                      // ноль прыжков = цель «сам в себе»
+    std::fprintf(stderr, "[zonenav] поперёк зоны %.1f м -> предел ноги %u прыжков\n",
+                 static_cast<double>(zone_span_m(part)), kLeg);
     std::uint32_t sampled = 0, walkFound = 0, rejectFound = 0, overLimit = 0;
     std::uint32_t isolated = 0, nondet = 0, selfPick = 0;
     for (std::uint32_t z = 0; z < zn.graph.zones; z += 37) {

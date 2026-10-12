@@ -120,7 +120,12 @@ namespace {
 // без происхождения.
 RoomId pick_leg_zone(const ZoneNav& zones, RoomId myZone, std::uint32_t id,
                      std::uint64_t tick, bool isMob) {
-    const std::uint16_t legMax = isMob ? kWanderLegZonesMob : kWanderLegZones;
+    // БЮДЖЕТ В МЕТРАХ, ПРЫЖКИ СЧИТАЕТ БЕЙК. Решение владельца 2026-10-12:
+    // зоны у модуля любые, значит число зон дальности не выражает (довод и
+    // замер — у `kWanderLegMetres`). Пересчёт дешёвый и на месте: одно деление
+    // на уже посчитанный бейком поперечник, а не поиск.
+    const std::uint16_t legMax = zone_hops_for_metres(
+        zones.part, isMob ? kWanderLegMetresMob : kWanderLegMetres);
     // Соль — тот же `id ^ tick`, которым прогулка перевыбирала узел решётки:
     // менять хеш вместе с предметом значило бы сменить ДВА правила за раз и
     // лишить красный тест возможности сказать, которое.

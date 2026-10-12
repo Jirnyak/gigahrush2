@@ -84,6 +84,10 @@ void bake_zone_partition(const FloorRooms& fr, const ClearanceField& oracle, int
             q.push_back(static_cast<std::uint32_t>(ni));
         }
     }
+    // Клеток в разбивке — это ровно длина очереди: каждая попавшая клетка
+    // входит в неё однажды и никогда не выходит. Считать вторым проходом по
+    // 2 млн клеток было бы той же работой заново.
+    out.cells = static_cast<std::uint32_t>(q.size());
 }
 
 void bake_zone_graph(const ZonePartition& part, const ClearanceField& oracle, int size,
@@ -352,9 +356,7 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
     //
     // Плюс ОЗУ по капу тем же тактом — «бейк без замера прячет свою регрессию».
     if (out.part.built()) {
-        std::size_t owned = 0;
-        for (RoomId z : out.part.at)
-            if (z != kNoRoom) ++owned;
+        const std::size_t owned = out.part.cells;
         const double perZone =
             out.part.zones ? static_cast<double>(owned) /
                                  static_cast<double>(out.part.zones)
@@ -366,7 +368,7 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
                      "(поперёк ~%.1f м) | рёбер %.0f, степень %.1f | "
                      "плоскостей %u | ОЗУ %.1f МиБ\n",
                      out.part.zones, owned, perZone,
-                     std::cbrt(perZone) * static_cast<double>(kCellSize),
+                     static_cast<double>(zone_span_m(out.part)),
                      edges,
                      out.part.zones ? 2.0 * edges / static_cast<double>(out.part.zones)
                                     : 0.0,
@@ -386,6 +388,29 @@ RoomId zone_of_body(const ZoneNav& zn, int cx, int cy, int cz) {
         if (n != kNoRoom) return n;
     }
     return kNoRoom;
+}
+
+float zone_span_m(const ZonePartition& part) {
+    if (!part.built() || part.zones == 0 || part.cells == 0) return 0.0f;
+    const double perZone = static_cast<double>(part.cells) /
+                           static_cast<double>(part.zones);
+    return static_cast<float>(std::cbrt(perZone) * static_cast<double>(kCellSize));
+}
+
+std::uint16_t zone_hops_for_metres(const ZonePartition& part, float metres) {
+    const float span = zone_span_m(part);
+    if (span <= 0.0f || metres <= 0.0f) return 1;
+    const double hops = static_cast<double>(metres) / static_cast<double>(span);
+    // Вверх, а не вниз: бюджет есть ПОТОЛОК времени, и нога чуть длиннее
+    // бюджета честнее ноги в ноль прыжков (та была бы «цель — своя зона»).
+    const double up = hops < 1.0 ? 1.0 : std::ceil(hops);
+    // Кап — не «на всякий случай»: блуждание стоит O(прыжков) чтений на ВЫБОР,
+    // и бюджет, поделённый на микроскопическую зону чужого модуля, превратил бы
+    // константу шага в функцию размера мира — то есть сломал бы ровно тот
+    // ЗАКОН, которым нав по зонам объявлен. 64 выведено как диаметр
+    // 6-связного тора по одной оси ([world/nav.h] kLatticeDim * 16 = 64):
+    // дальше любого осмысленного обхода внутри этажа.
+    return static_cast<std::uint16_t>(up > 64.0 ? 64.0 : up);
 }
 
 RoomId zone_pick_near(const ZoneNav& zn, RoomId from, std::uint32_t salt,
