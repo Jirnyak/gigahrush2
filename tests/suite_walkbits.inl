@@ -170,8 +170,6 @@ void patch_equals_rebuild(World& w) {
     // телу хода: одиночный атом — не проход 4×4.
     g.mask(sx, sy, sz).clear(sub_bit(0, 0, 0));
 
-    const std::size_t si = static_cast<std::size_t>(solidI);
-    const std::size_t ai = static_cast<std::size_t>(airI);
     navClear.patch(g, ax, ay, az);
     navClear.patch(g, sx, sy, sz);
 

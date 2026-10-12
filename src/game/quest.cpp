@@ -363,53 +363,15 @@ std::int32_t quest_step(QuestLog& log, const NpcPool& pool, Inventory& inv,
 
         // 3. THE OBJECTIVE. Measured by the same three systems contract_step measures
         // through — there is one notion of each objective in this engine.
-        switch (static_cast<ObjectiveKind>(d.kind)) {
-            case ObjectiveKind::Fetch: {
-                std::int32_t have = 0;
-                for (const ItemSlot& s : inv.slots)
-                    if (s.item == d.subject) have += static_cast<std::int32_t>(s.count);
-                p.progress = have;
-                if (have < d.target) continue;
-                // CONSUME. A courier job that let you keep the cargo would pay twice
-                // for the same loot — once as the reward and once as the haul.
-                std::int32_t need = d.target;
-                for (ItemSlot& s : inv.slots) {
-                    if (need <= 0) break;
-                    if (s.item != d.subject) continue;
-                    const std::int32_t take =
-                        static_cast<std::int32_t>(s.count) < need
-                            ? static_cast<std::int32_t>(s.count)
-                            : need;
-                    s.count = static_cast<std::uint16_t>(
-                        static_cast<std::int32_t>(s.count) - take);
-                    if (s.count == 0) s = ItemSlot{};
-                    need -= take;
-                }
-                break;
-            }
-            case ObjectiveKind::Hunt:
-                if (p.progress < d.target) continue;
-                break;
-            case ObjectiveKind::Descend: {
-                // |z|, because depth is bidirectional here and `RunLedger` keeps only
-                // ONE high-water mark. That is why data/quests.csv authors a Descend as
-                // a DEPTH rather than as a signed label: comparing the sign as well
-                // would make an up-quest permanently unsatisfiable for any run that
-                // went deeper down first, which is strictly worse than the ambiguity.
-                const int reached =
-                    led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
-                const int want = d.target < 0 ? -d.target : d.target;
-                if (reached < want) {
-                    p.progress = reached;
-                    continue;
-                }
-                if (want <= static_cast<int>(p.baseline)) continue;
-                p.progress = reached;
-                break;
-            }
-            default:
-                continue;
-        }
+        // ВЫПОЛНЕНА ЛИ ЦЕЛЬ — ТОТ ЖЕ предикат, которым судит наряд
+        // ([contract.h] `objective_met`). Здесь он к тому же собирает цель из
+        // ДВУХ строк: неизменной `QuestDef` (вид, предмет, количество) и
+        // состояния прогона `QuestProgress` (прогресс, базовая глубина) — и
+        // именно поэтому у предиката скаляры, а не структура: третья структура
+        // об одном и том же была бы той же болезнью в другом месте.
+        if (!objective_met(d.kind, d.subject, d.target, p.baseline, inv, led,
+                           p.progress))
+            continue;
 
         p.state = static_cast<std::uint8_t>(QuestState::Complete);
         // Paid straight into the banked total, for contract.h's reason: a job's reward

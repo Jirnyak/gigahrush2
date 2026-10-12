@@ -871,6 +871,34 @@ void descending() {
         CHECK(quest_accept(log, pool, q, giver, fz, led));
         CHECK(log.row[q - 1].baseline == static_cast<std::uint8_t>(d.target - 1));
     }
+
+    // **СТРАХОВКА ДЛЯ СТРОКИ, ПРИШЕДШЕЙ ИЗ СЕЙВА.** У проверки `want <=
+    // baseline` в `objective_met` ([contract.h]) до 2026-10-12 было НОЛЬ
+    // свидетелей — в ОБЕИХ копиях предиката, при двенадцати строках
+    // комментария о замеренной двойной выплате 900 рублей. Причина, почему её
+    // не покрывал никто: живой `quest_accept` отказывает, когда цель уже
+    // позади, то есть у принятой строки `baseline` всегда МЕНЬШЕ цели, и
+    // ветка недостижима через приём. Достижима она ИЗ ЗАГРУЗКИ: `baseline`
+    // едет в сейв (`suite_saveload.inl` его round-trip'ит), и строка со старым
+    // высоким базисом приходит в шаг готовой. Поэтому базис здесь ставится
+    // рукой — ровно так, как его ставит загрузчик, и это не «подкрутка теста»,
+    // а единственный существующий путь в эту ветку.
+    //
+    // Мутация «снять строку» платит награду за спуск, которого в ЭТОМ прогоне
+    // не было: reached (target+2) >= want, прогресс пишется, строка
+    // закрывается. Это и есть та самая двойная выплата.
+    {
+        QuestLog log{};
+        RunLedger led{};
+        led.deepestFloor = 0;
+        CHECK(quest_accept(log, pool, q, giver, fz, led));
+        log.row[q - 1].baseline = static_cast<std::uint8_t>(d.target);
+        led.deepestFloor = -(d.target + 2);
+        CHECK(quest_step(log, pool, inv, led,
+                         static_cast<std::uint32_t>(kSimStepMs)) == 0);
+        CHECK(quest_state(log, q) == QuestState::Active);
+        CHECK(led.banked == 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

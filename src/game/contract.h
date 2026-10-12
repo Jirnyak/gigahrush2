@@ -212,6 +212,35 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
 std::uint16_t objective_difficulty_e1(std::uint8_t kind, std::uint16_t subject,
                                       std::int32_t target, int depthAbsZ, bool timed);
 
+// ВЫПОЛНЕНА ЛИ ЦЕЛЬ — ОДИН ПРЕДИКАТ НА ВСЕ ДВИЖКИ ЦЕЛЕЙ. Заведён 2026-10-12
+// (наряд B1), и это не вынос ради красоты, а закрытие расхождения №5 реестра
+// [SKELETON.md]: switch по `ObjectiveKind` был ПОСТРОЧНО продублирован в
+// `contract.cpp` и `quest.cpp`, и `grep objective_met src/` давал НОЛЬ.
+//
+// ЧЕМ ЭТО БЫЛО ПЛОХО — НЕ ДУБЛИРОВАНИЕМ, А НЕСРАВНИМОСТЬЮ. Две копии одного
+// закона нельзя сличить: замер показал, что мутация любой ветки краснеет РОВНО
+// У ОДНОГО потребителя (шесть ветвей — шесть независимых свидетелей, ноль
+// перекрытия), то есть расхождение копий было бы зелёным. После свода «третий
+// движок» невозможен ПО ПОСТРОЕНИЮ, а `quest_inject` из роадмапа становится
+// новым ПРОИЗВОДИТЕЛЕМ той же цели, а не новой системой.
+//
+// ПОЧЕМУ СКАЛЯРЫ, А НЕ СТРУКТУРА. Образец рядом — `objective_difficulty_e1`,
+// который оба движка уже зовут своими полями. У наряда цель и прогресс лежат в
+// ОДНОЙ строке (`Contract`), у квеста разнесены по двум (`QuestDef` —
+// неизменная, генерируется; `QuestProgress` — состояние прогона). Общего
+// подмножества ровно пять скаляров, и адаптер под них был бы третьей
+// структурой о том же.
+//
+// `progress` — ПО ССЫЛКЕ, потому что предикат не только судит, но и ПУБЛИКУЕТ
+// измеренное: Fetch пишет найденное количество, Descend — достигнутую глубину,
+// Hunt читает свой счётчик (его ведёт `*_on_kill`) и не пишет ничего.
+// `inv` НЕ const: выполненный Fetch ПОТРЕБЛЯЕТ груз — курьерская работа,
+// позволившая оставить груз себе, платила бы дважды за один лут.
+// `true` = цель выполнена (и груз списан), `false` = ещё нет.
+bool objective_met(std::uint8_t kind, std::uint16_t subject, std::int32_t target,
+                   std::uint8_t baseline, Inventory& inv, const RunLedger& led,
+                   std::int32_t& progress);
+
 // A kill happened. Called from wherever the death is finalized, so Hunt progress is
 // driven by the same event the kill feed is.
 void contract_on_kill(ContractBook& book, std::uint8_t mobKind);

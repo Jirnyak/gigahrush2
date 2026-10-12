@@ -365,6 +365,68 @@ std::uint16_t objective_difficulty_e1(std::uint8_t kind, std::uint16_t subject,
     return static_cast<std::uint16_t>(d + 0.5f);
 }
 
+bool objective_met(std::uint8_t kind, std::uint16_t subject, std::int32_t target,
+                   std::uint8_t baseline, Inventory& inv, const RunLedger& led,
+                   std::int32_t& progress) {
+    switch (static_cast<ObjectiveKind>(kind)) {
+        case ObjectiveKind::Fetch: {
+            std::int32_t have = 0;
+            for (const ItemSlot& s : inv.slots)
+                if (s.item == subject) have += s.count;
+            progress = have;
+            if (have < target) return false;
+            // CONSUME. A courier job that let you keep the cargo would pay twice
+            // for the same loot — once as the reward and once as the haul — which
+            // is the difference between an errand and a bonus.
+            std::int32_t need = target;
+            for (ItemSlot& s : inv.slots) {
+                if (need <= 0) break;
+                if (s.item != subject) continue;
+                const std::int32_t take = s.count < need ? s.count : need;
+                s.count = static_cast<std::uint16_t>(s.count - take);
+                if (s.count == 0) s = ItemSlot{};
+                need -= take;
+            }
+            return true;
+        }
+        case ObjectiveKind::Hunt:
+            // Счётчик ведёт `*_on_kill` — тот же, которым живёт лента убийств.
+            // Предикат его только ЧИТАЕТ: цель «убить N» выполнена, когда
+            // событий пришло N, и второго места, где это решается, нет.
+            return progress >= target;
+        case ObjectiveKind::Descend: {
+            // |z|, because depth is bidirectional and a job to reach the roof is
+            // as real as one to reach the basement.
+            const int reached = led.deepestFloor < 0 ? -led.deepestFloor
+                                                     : led.deepestFloor;
+            const int want = target < 0 ? -target : target;
+            // **Against where you were WHEN YOU TOOK IT, not against the run's
+            // high-water mark.** `RunLedger::deepestFloor` never falls, so comparing
+            // to it paid instantly for a descent made before the job existed — and
+            // paid AGAIN on every re-accept. An audit measured 900 roubles on accept
+            // and 900 more on re-accept with the player never moving: an infinite
+            // press, limited only by how fast the accept key could be pressed.
+            //
+            // `baseline` is stamped at accept time ([contract.h]), so a Descend job
+            // now requires progress beyond that point. A job whose target is already
+            // behind you is refused at accept time and never reaches this predicate.
+            if (reached < want) { progress = reached; return false; }
+            // СТРОКА, У КОТОРОЙ ДО СВОДА БЫЛО НОЛЬ СВИДЕТЕЛЕЙ — в ОБЕИХ копиях.
+            // Проверено 2026-10-12: ни один тест дерева не стамповал ненулевой
+            // `baseline` и не шагал после этого, то есть удаление этой строки из
+            // любой копии (или из обеих) не красило НИЧЕГО — при двенадцати
+            // строках комментария, объясняющих замеренную двойную выплату 900
+            // рублей. Свод дал ей одно место; свидетеля ей дал
+            // `descend_pays_only_past_the_baseline@tests/suite_quest.inl`.
+            if (want <= static_cast<int>(baseline)) return false;
+            progress = reached;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& inv,
                           RunLedger& led, RpgStats* rpg) {
     std::int32_t paid = 0;
@@ -392,56 +454,13 @@ std::int32_t contract_step(ContractBook& book, const NpcPool& pool, Inventory& i
             continue;
         }
 
-        switch (static_cast<ObjectiveKind>(c.kind)) {
-            case ObjectiveKind::Fetch: {
-                std::int32_t have = 0;
-                for (const ItemSlot& s : inv.slots)
-                    if (s.item == c.subject) have += s.count;
-                c.progress = have;
-                if (have < c.target) continue;
-                // CONSUME. A courier job that let you keep the cargo would pay twice
-                // for the same loot — once as the reward and once as the haul — which
-                // is the difference between an errand and a bonus.
-                std::int32_t need = c.target;
-                for (ItemSlot& s : inv.slots) {
-                    if (need <= 0) break;
-                    if (s.item != c.subject) continue;
-                    const std::int32_t take = s.count < need ? s.count : need;
-                    s.count = static_cast<std::uint16_t>(s.count - take);
-                    if (s.count == 0) s = ItemSlot{};
-                    need -= take;
-                }
-                break;
-            }
-            case ObjectiveKind::Hunt:
-                if (c.progress < c.target) continue;
-                break;
-            case ObjectiveKind::Descend: {
-                // |z|, because depth is bidirectional and a job to reach the roof is
-                // as real as one to reach the basement.
-                const int reached = led.deepestFloor < 0 ? -led.deepestFloor
-                                                         : led.deepestFloor;
-                const int want = c.target < 0 ? -c.target : c.target;
-                // **Against where you were WHEN YOU TOOK IT, not against the run's
-                // high-water mark.** `RunLedger::deepestFloor` never falls, so comparing
-                // to it paid instantly for a descent made before the job existed — and
-                // paid AGAIN on every re-accept. An audit measured 900 roubles on accept
-                // and 900 more on re-accept with the player never moving: an infinite
-                // press, limited only by how fast the accept key could be pressed.
-                //
-                // `baseline` is stamped at accept time ([contract.h]), so a Descend job
-                // now requires progress beyond that point. A job whose target is already
-                // behind you is refused by contract_accept and never reaches this loop —
-                // that refusal is implemented now; this comment used to promise it while
-                // nothing did it, which left slots that could not be cleared by playing.
-                if (reached < want) { c.progress = reached; continue; }
-                if (want <= c.baseline) continue;   // nothing was actually descended
-                c.progress = reached;
-                break;
-            }
-            default:
-                continue;
-        }
+        // ВЫПОЛНЕНА ЛИ ЦЕЛЬ — через ЕДИНСТВЕННЫЙ предикат ([contract.h]
+        // `objective_met`). До 2026-10-12 здесь стоял switch, построчно
+        // совпадавший с таким же в `quest.cpp`, и мутация любой его ветки
+        // краснела ровно у одного из двух потребителей.
+        if (!objective_met(c.kind, c.subject, c.target, c.baseline, inv, led,
+                           c.progress))
+            continue;
 
         c.state = static_cast<std::uint8_t>(ContractState::Complete);
         // Paid straight into the banked total: a contract reward is not carried loot
