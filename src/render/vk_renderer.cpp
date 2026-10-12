@@ -527,7 +527,24 @@ void VulkanRenderer::destroy_present_semaphores() {
 }
 
 bool VulkanRenderer::acquire_frame(SDL_Window* window) {
-    vkWaitForFences(dev->device, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+    // Презентные ресурсы могли не родиться: `recreate` чистит семафоры и
+    // `imagesInFlight` ПЕРВЫМИ делом, а дальше любая из пяти его creation'ов
+    // вправе отказать — и тогда вектор остаётся ПУСТЫМ. Индексация по
+    // `currentImageIndex` ниже была бы чтением за концом, то есть падением
+    // вместо ещё одной попытки. Alt-tab и ресайз — самый частый путь сюда.
+    if (imagesInFlight.empty()) {
+        if (!recreate(window))
+            std::fprintf(stderr, "[vk] пересоздание свапчейна отказало — кадр "
+                                 "пропущен, попытка повторится\n");
+        return false;
+    }
+    // Код возврата ожидания обязателен: без него кадр едет по УТЕРЯННОМУ
+    // девайсу молча, и первым симптомом становится не строка в логе, а мусор
+    // на экране или зависание на следующем заборе. Соседний
+    // `voxel_mirror.cpp` то же ожидание уже оборачивает — это было
+    // исключением из собственной конвенции, а не стилем.
+    VK_TRY(vkWaitForFences(dev->device, 1, &inFlight[currentFrame], VK_TRUE,
+                           UINT64_MAX));
 
     // The fence just waited on belongs to this slot's submission from
     // kMaxFramesInFlight frames ago, so that frame's timestamps are now complete
@@ -541,7 +558,9 @@ bool VulkanRenderer::acquire_frame(SDL_Window* window) {
         dev->device, swapchain_->handle, UINT64_MAX,
         imageAvailable[currentFrame], VK_NULL_HANDLE, &currentImageIndex);
     if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreate(window);
+        if (!recreate(window))
+            std::fprintf(stderr, "[vk] пересоздание свапчейна отказало "
+                                 "(OUT_OF_DATE на acquire)\n");
         return false;
     }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
@@ -550,12 +569,21 @@ bool VulkanRenderer::acquire_frame(SDL_Window* window) {
     }
 
     if (imagesInFlight[currentImageIndex] != VK_NULL_HANDLE)
-        vkWaitForFences(dev->device, 1, &imagesInFlight[currentImageIndex],
-                        VK_TRUE, UINT64_MAX);
+        VK_TRY(vkWaitForFences(dev->device, 1,
+                               &imagesInFlight[currentImageIndex], VK_TRUE,
+                               UINT64_MAX));
     imagesInFlight[currentImageIndex] = inFlight[currentFrame];
 
-    vkResetFences(dev->device, 1, &inFlight[currentFrame]);
-
+    // ЗАБОР ЗДЕСЬ НЕ СБРАСЫВАЕТСЯ — он сбрасывается в `end_frame` ровно перед
+    // `vkQueueSubmit`, и это лечение вечного зависания, а не вкусовщина.
+    // Сброшенный здесь забор остаётся НЕСИГНАЛЬНЫМ, если кадр умрёт между
+    // этой точкой и сабмитом, а умереть он вправе дважды: отказом
+    // `vkBeginCommandBuffer` ниже и отказом `vkEndCommandBuffer` в `end_frame`.
+    // Оба пути возвращают false ДО сабмита, который единственный этот забор
+    // сигналит, — и следующий кадр садится на `vkWaitForFences(UINT64_MAX)`
+    // навсегда. Инвариант теперь один и проверяемый: забор НЕ СИГНАЛЕН только
+    // между своим сбросом и своим сабмитом, а между ними нет ни одного
+    // выхода.
     VkCommandBuffer c = cmd[currentFrame];
     vkResetCommandBuffer(c, 0);
     VkCommandBufferBeginInfo bi{};
@@ -727,6 +755,11 @@ bool VulkanRenderer::end_frame(SDL_Window* window) {
     si.pCommandBuffers = &c;
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores = &renderFinished[currentImageIndex];
+    // Сброс забора — последнее, что происходит до сабмита, который его и
+    // сигналит (см. длинный довод в `acquire_frame`). `vkQueueSubmit` требует
+    // забор НЕсигнальным, поэтому порядок этих двух строк обязателен, а
+    // отсутствие выходов между ними — и есть весь инвариант.
+    VK_TRY(vkResetFences(dev->device, 1, &inFlight[currentFrame]));
     VK_TRY(vkQueueSubmit(dev->graphicsQueue, 1, &si, inFlight[currentFrame]));
     // Only now are this slot's queries worth reading: before the submit the GPU
     // has written nothing and their contents are undefined.
@@ -746,7 +779,14 @@ bool VulkanRenderer::end_frame(SDL_Window* window) {
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR
         || framebufferResized) {
         framebufferResized = false;
-        recreate(window);
+        // Отказ пересоздания больше не проглатывается: он оставляет
+        // `imagesInFlight` пустым, и прежде это всплывало чтением за концом
+        // вектора в следующем `acquire_frame`, а не строкой в логе.
+        if (!recreate(window)) {
+            std::fprintf(stderr, "[vk] пересоздание свапчейна отказало "
+                                 "(%s на present)\n", vk_result_str(pr));
+            return false;
+        }
     } else if (pr != VK_SUCCESS) {
         std::fprintf(stderr, "[vk] present failed: %s\n", vk_result_str(pr));
         return false;
