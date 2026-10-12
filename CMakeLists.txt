@@ -397,11 +397,23 @@ set(_giga_shader_defs
     -DGIGA_LIGHT_CELL_BYTES=${_giga_lgrid_cell_bytes}
     -DGIGA_LAMP_DILATED_BIT=${_giga_lamp_dilated_bit}u
     -DGIGA_LIGHT_FULLRES_K=${_giga_fullres_k}u)
-# Editing types.h or gpu_light_grid.h must re-run configure, or the -D values
-# above go stale while the build stays green.
+# Editing ANY header parsed above must re-run configure, or the -D values go
+# stale while the build stays green.
+#
+# ЧЕТЫРЕ ХЕДЕРА, НЕ ДВА. Список отставал от собственных парсеров: выше
+# вычитываются ещё `kLampDilatedBit` из game/light_vis_bake.h и
+# `kRbSlotCap`/`kSleepSubsteps` из render/gpu_medium_pass.h, а здесь их не
+# было. Отсюда расхождение ровно того рода, против которого весь блок и
+# написан, только тише: правка `kSleepSubsteps = 16u` на `32u` пересобирает
+# C++ (ninja видит зависимость по хедеру), но НЕ переконфигурирует cmake —
+# `-DGIGA_MEDIUM_SLEEP` остаётся прежним, `.spv` не перекомпилируются, и
+# CPU считает 32 подтика сна там, где GPU считает 16. Молчит не код, а
+# система сборки.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${CMAKE_SOURCE_DIR}/src/world/types.h
-    ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h)
+    ${CMAKE_SOURCE_DIR}/src/render/gpu_light_grid.h
+    ${CMAKE_SOURCE_DIR}/src/render/gpu_medium_pass.h
+    ${CMAKE_SOURCE_DIR}/src/game/light_vis_bake.h)
 set(_giga_spv_dir ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${_giga_spv_dir})
 set(_giga_spv_files "")
@@ -2181,8 +2193,19 @@ if(GIGA_BUILD_TESTS)
     add_test(NAME wired
         COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wired.cmake)
+    #
+    # `deferred=` ПИНИТСЯ ТОЧНО, и это не симметрия с `entry_points`. Население
+    # отложек — не глоб, а список РЕШЕНИЙ: каждая строка аллоулиста заведена
+    # руками и названа причиной. Пока число не пинилось, у гейта была дыра
+    # ровно в его собственном смысле: нашёл непроведённую систему — допиши
+    # отложку, и `deferred=6` станет `7` при ЗЕЛЁНОМ ctest, то есть прибор,
+    # заведённый против «построено и не подключено», сам давал кнопку
+    # «подключать не надо». То же у `stale_rows`: храповик аллоулиста
+    # доказывался только кодом возврата, а он один бит. Тот же довод, которым
+    # `csv_columns` пинит все шесть своих чисел.
     set_tests_properties(wired PROPERTIES
-        PASS_REGULAR_EXPRESSION "GIGA_WIRED=PASS entry_points=[0-9][0-9]")
+        PASS_REGULAR_EXPRESSION
+        "GIGA_WIRED=PASS entry_points=[0-9][0-9] deferred=6 stale_rows=0")
 
     # Закоммиченная таблица обязана совпадать со своим генератором. Третий
     # текстовый гейт той же формы — компилятора не требует, живёт на голом
@@ -2275,9 +2298,17 @@ if(GIGA_BUILD_TESTS)
     add_test(NAME doc_refs
         COMMAND ${CMAKE_COMMAND} -DGIGA_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_doc_refs.cmake)
+    # ПОЛ ПОД КАЖДУЮ ФОРМУ, а не только под первую. `form2=[0-9]+` матчило
+    # НОЛЬ — то есть ровно тот отказ, против которого это разделение чисел и
+    # заведено: первый прогон на живой карте дал form1=127 при form2=0, формы
+    # с отпечатком не распознавались вовсе, и прибор ЗЕЛЕНЕЛ. Разбор ёлочек
+    # ломался трижды; сломайся он в четвёртый — выведется `form2=0`, регексп
+    # сматчится, ctest промолчит, и диагностика, написанная ровно про этот
+    # случай, его же и пропустит. В карте сегодня 26 адресов формы 2 и 124
+    # голых, поэтому двузначный пол законен и не требует правки на строку.
     set_tests_properties(doc_refs PROPERTIES
         PASS_REGULAR_EXPRESSION
-        "GIGA_DOC_REFS=PASS form1=[0-9][0-9]+ form2=[0-9]+ plain=[0-9]+")
+        "GIGA_DOC_REFS=PASS form1=[0-9][0-9]+ form2=[0-9][0-9]+ plain=[0-9][0-9]+")
 
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у

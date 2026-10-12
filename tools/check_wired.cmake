@@ -117,7 +117,7 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     # (сверять отложку с фактом проводки) здесь НЕТ, и оно названо долгом, а не
     # замазано — [SKELETON.md] XIV.
     "interaction_step:взаимодействие с пропами идёт мимо, main.cpp зовёт свои ветки — problems.md §52"
-    "prop_interact_step:обёртка над interaction_step, не зовёт НИКТО и не покрыта тестом — problems.md §52"
+    "prop_interact_step:обёртка над interaction_step, прод-вызывающего нет, но тестом ПОКРЫТА (e2e_test.cpp:767) — problems.md §52"
 )
 
 # Line splitting that survives `;` AND `[ ]`. Ported from check_source_rules.cmake,
