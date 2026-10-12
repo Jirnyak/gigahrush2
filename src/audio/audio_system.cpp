@@ -4,7 +4,8 @@
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
-#include <cstring>
+// (`<cstring>` снят 2026-10-12: его единственными потребителями были
+//  `std::strcmp`/`std::strchr` внутри снесённого парсера `data/sounds.csv`.)
 
 namespace giga::audio {
 
@@ -42,8 +43,9 @@ bool AudioSystem::init() {
 
     deviceOpen_ = true;
     std::fprintf(stderr, "[audio] AudioSystem initialized: 48 kHz stereo 32-bit float (SDL3 AudioStream)\n");
-    load_sample_overrides();
-    mixer_.set_sample_bank(&sampleBank_);
+    // (Здесь стояли `load_sample_overrides()` + `mixer_.set_sample_bank(...)`.
+    //  Снесены 2026-10-12: загружать было нечего — надгробие в [audio_types.h].
+    //  Микшер синтезирует из коробки, никакой подготовки init'у не нужно.)
     return true;
 }
 
@@ -57,13 +59,14 @@ void AudioSystem::shutdown() {
     mixer_.reset();
 }
 
-void AudioSystem::trigger_ui(UiSound sound) {
-    mixer_.ui().trigger(sound);
-}
-
-void AudioSystem::play_3d(SoundId sound, const vec3& pos, float gain, float refDist, float maxDist) {
-    mixer_.play_spatial_sound(sound, pos, gain, refDist, maxDist);
-}
+// НАДГРОБИЕ: `trigger_ui` и `play_3d` жили здесь и снесены 2026-10-12. Обе были
+// одной строкой проброса в микшер и обе имели НОЛЬ вызывающих во всём дереве —
+// публичный API «сыграй звук по id», то есть звук из ввода, а не из физики
+// ([sound-from-physics-rule]). Оправдывал их звуковой пак; пака не будет
+// (решение владельца 2026-10-12: композитора нет, демо без звука), поэтому
+// снесены СОЗНАТЕЛЬНО и вернутся ВМЕСТЕ С ПАКОМ, а не потерялись. Живой вход в
+// пространственные голоса — `process_noise_events` ниже, он зовёт
+// `mixer_.play_spatial_sound` напрямую.
 
 void AudioSystem::process_noise_events(const game::NoiseField& noiseField, LayerId activeLayer) {
     if (noiseField.quiet()) return;
@@ -131,11 +134,16 @@ void AudioSystem::process_noise_events(const game::NoiseField& noiseField, Layer
 
 void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, float listenerPitch,
                          const MacroGrid& grid, const Field<float>* dangerField,
-                         const game::SamosborState& samosbor, const game::EventBus& bus,
+                         const game::SamosborState& samosbor,
                          const game::NoiseField& noiseField, float hudBrightness,
                          LayerId activeLayer) {
+    // Кадровый `dt` синтезу не нужен и поэтому не используется: все четыре
+    // синта тикают ПО СЭМПЛАМ внутри `mix_frames` (48 кГц), а не по кадрам, —
+    // шаг времени у них свой и ровный, 1/kAudioSampleRate. Параметр оставлен
+    // сознательно: он часть контракта «система на кадр», и первый же эффект с
+    // кадровой огибающей (затухание шины при паузе) возьмёт его без правки
+    // вызывающего. `(void)bus;` рядом НЕ стоит — параметр снят, см. [.h].
     (void)dt;
-    (void)bus;
 
     // 1. Update Geiger counter danger and radiation dose level
     float dangerSample = 0.0f;
@@ -184,89 +192,32 @@ void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, f
 }
 
 
-namespace {
-// sound_id из CSV -> SoundId. Маленькая таблица, а не magic-числа: слаг в
-// data/sounds.csv читается человеком и не едет при перестановке enum'а.
-SoundId sound_id_by_name(const char* n) {
-    struct Row { const char* name; SoundId id; };
-    static constexpr Row kRows[] = {
-        {"gunshot", SoundId::Gunshot},     {"explosion", SoundId::Explosion},
-        {"melee_hit", SoundId::MeleeHit},  {"footstep", SoundId::Footstep},
-        {"door_move", SoundId::DoorMove},  {"container_open", SoundId::ContainerOpen},
-        {"body_fall", SoundId::BodyFall},  {"monster_growl", SoundId::MonsterGrowl},
-        {"electric_spark", SoundId::ElectricSpark}, {"item_pickup", SoundId::ItemPickup},
-    };
-    for (const Row& r : kRows)
-        if (std::strcmp(n, r.name) == 0) return r.id;
-    return SoundId::None;
-}
-} // namespace
-
-void AudioSystem::load_sample_overrides() {
-    // Политика ассетов — единая с текстурами: дефолт процедурный, файл
-    // художника побеждает, если существует и вписан в data/sounds.csv
-    // (`sound_id,file`; файл ищется в data/sounds/). Спец-слаг `music` —
-    // зацикленный канал музыки. Любой отказ здесь — строка в stderr и синтез,
-    // никогда не смерть: звук — не причина не бутиться.
-    std::FILE* f = std::fopen("data/sounds.csv", "rb");
-    if (!f) return;  // файла нет — всё процедурное, это дефолт, не ошибка
-    char line[512];
-    bool header = true;
-    while (std::fgets(line, sizeof line, f)) {
-        if (header) { header = false; continue; }
-        char* nl = std::strchr(line, '\n'); if (nl) *nl = 0;
-        char* cr = std::strchr(line, '\r'); if (cr) *cr = 0;
-        if (!line[0] || line[0] == '#') continue;
-        char* comma = std::strchr(line, ',');
-        if (!comma) continue;
-        *comma = 0;
-        const char* slug = line;
-        const char* file = comma + 1;
-        char path[512];
-        std::snprintf(path, sizeof path, "data/sounds/%s", file);
-
-        SDL_AudioSpec spec{};
-        std::uint8_t* wav = nullptr;
-        std::uint32_t wavLen = 0;
-        if (!SDL_LoadWAV(path, &spec, &wav, &wavLen)) {
-            std::fprintf(stderr, "[audio] %s: %s — синтез остаётся\n", path,
-                         SDL_GetError());
-            continue;
-        }
-        // Конверсия в наш формат (mono float kAudioSampleRate) силами SDL —
-        // мост и есть платформенный слой, DSP форматов не знает.
-        const SDL_AudioSpec want{SDL_AUDIO_F32, 1,
-                                 static_cast<int>(kAudioSampleRate)};
-        std::uint8_t* conv = nullptr;
-        int convLen = 0;
-        const bool ok = SDL_ConvertAudioSamples(&spec, wav, static_cast<int>(wavLen),
-                                                &want, &conv, &convLen);
-        SDL_free(wav);
-        if (!ok || convLen <= 0) {
-            std::fprintf(stderr, "[audio] convert %s: %s\n", path, SDL_GetError());
-            continue;
-        }
-        const std::size_t frames = static_cast<std::size_t>(convLen) / sizeof(float);
-        sampleStorage_.emplace_back(
-            reinterpret_cast<const float*>(conv),
-            reinterpret_cast<const float*>(conv) + frames);
-        SDL_free(conv);
-        SampleData sd{sampleStorage_.back().data(),
-                      static_cast<std::uint32_t>(frames)};
-        if (std::strcmp(slug, "music") == 0) {
-            sampleBank_.music = sd;
-        } else {
-            const SoundId id = sound_id_by_name(slug);
-            if (id == SoundId::None) {
-                std::fprintf(stderr, "[audio] unknown sound_id '%s'\n", slug);
-                continue;
-            }
-            sampleBank_.bySound[static_cast<int>(id)] = sd;
-        }
-        std::fprintf(stderr, "[audio] override %s <- %s (%zu frames)\n", slug,
-                     file, frames);
-    }
-    std::fclose(f);
-}
+// НАДГРОБИЕ: здесь жили `sound_id_by_name` (таблица слаг→SoundId) и
+// `load_sample_overrides()` — 66 строк, ЕДИНСТВЕННЫЙ рукописный парсер CSV в
+// движке и единственная куча во всём аудио-слое. Снесены 2026-10-12.
+//
+// Почему умерло, а не ждёт: путь не загрузил ни одного байта за всю свою жизнь
+// (`data/sounds.csv` — 14 байт, одна шапка и ноль строк; каталога
+// `data/sounds/` не существовало), а теперь у него нет и будущего — композитора
+// у студии нет, звукового пака не будет, предрелизное демо выходит БЕЗ ЗВУКА
+// (решение владельца 2026-10-12). Это РАМКА, а не недоделка: рамка записана в
+// markoaudit/plans/steam-readiness.md, секция «ЗВУК».
+//
+// Умерло вместе с ним и то, что оно одно держало: `SampleData`/`SampleBank`
+// ([audio_types.h]), `AudioMixer::set_sample_bank` + `bank_`/`musicPos_` и
+// музыкальный канал ([audio_mixer.cpp]), `data/sounds.csv` целиком и его строка
+// в `GIGA_CSV_UNCOVERED` (tools/check_csv_columns.cmake) — пин `covered=2/18`
+// поехал на `2/17` ТЕМ ЖЕ коммитом, иначе гейт сказал бы «ФАНТОМ CSV»
+// (проверено мутацией).
+//
+// Что ОСТАЛОСЬ и почему: синтез (geiger/siren/ambient/ui + 10 голосов в
+// `audio_mixer.cpp`) и сам микшер работают и соответствуют закону «звук из
+// физики, не из ввода» ([sound-from-physics-rule]) — их сносить незачем,
+// процедурный дефолт играет из коробки и без пака.
+//
+// Вернётся ВМЕСТЕ С ПАКОМ и тем же швом: мост (этот файл) грузит и владеет
+// памятью, DSP-слой видит указатели и форматов не знает. Второй раз писать
+// парсер руками не надо — к тому дню `data/sounds.csv` заводится кодогеном, как
+// остальные 17 таблиц (markoaudit/13-duplication.md §18).
 
 } // namespace giga::audio

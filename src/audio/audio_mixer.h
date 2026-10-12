@@ -31,9 +31,8 @@ public:
     UiSynth& ui() { return ui_; }
     AudioConfig& config() { return config_; }
 
-    // Артистские сэмплы поверх синтеза ([audio_types.h] SampleBank). Мост
-    // выставляет банк после загрузки; null = всё процедурное.
-    void set_sample_bank(const SampleBank* bank) { bank_ = bank; }
+    // (`set_sample_bank` снесён 2026-10-12: банка больше нет — надгробие и
+    //  довод в [audio_types.h]. Микшер с этого дня ТОЛЬКО синтезирует.)
     const AudioConfig& config() const { return config_; }
 
     // Spatial voice pool inspection
@@ -48,8 +47,8 @@ public:
 
 private:
     AudioConfig config_;
-    const SampleBank* bank_ = nullptr;
-    std::uint32_t musicPos_ = 0;
+    // (`bank_` и `musicPos_` снесены 2026-10-12 вместе с сэмплным путём: курсор
+    //  музыки вёл по буферу, которого не будет.)
     SpatialVoice voices_[kMaxSpatialVoices]{};
 
     GeigerSynth geiger_;

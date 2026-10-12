@@ -69,15 +69,9 @@ int AudioMixer::play_spatial_sound(SoundId sound, const vec3& pos, float gain,
     v.currentGainR = 1.0f;
     v.currentCutoff = 20000.0f;
 
-    // Артистский сэмпл диктует длительность сам ([audio_types.h] SampleBank);
-    // синтезу — авторские длительности ниже.
-    if (bank_) {
-        const SampleData& sd = bank_->bySound[static_cast<int>(sound)];
-        if (sd.data && sd.frames > 0) {
-            v.totalSamples = sd.frames;
-            return bestSlot;
-        }
-    }
+    // (Ветка «артистский сэмпл диктует длительность сам» снесена 2026-10-12:
+    //  длительность теперь ВСЕГДА авторская из таблицы ниже — надгробие и
+    //  довод в [audio_types.h].)
     // Total sample duration per sound type
     switch (sound) {
     case SoundId::Gunshot:
@@ -119,16 +113,8 @@ int AudioMixer::play_spatial_sound(SoundId sound, const vec3& pos, float gain,
 }
 
 void AudioMixer::synthesize_spatial_voice_sample(SpatialVoice& v, float& outMono) {
-    // Артистский сэмпл побеждает синтез — та же политика, что у текстур
-    // ([audio_types.h] SampleBank). Длину голосу выставил trigger.
-    if (bank_) {
-        const SampleData& sd = bank_->bySound[static_cast<int>(v.sound)];
-        if (sd.data) {
-            outMono = (v.ageSamples < sd.frames) ? sd.data[v.ageSamples]
-                                                 : 0.0f;
-            return;
-        }
-    }
+    // (Ветка «артистский сэмпл побеждает синтез» снесена 2026-10-12: пути файла
+    //  больше нет, синтез — единственный источник голоса. [audio_types.h].)
     float t = static_cast<float>(v.ageSamples) / kAudioSampleRate;
     float progress = static_cast<float>(v.ageSamples) / static_cast<float>(std::max(v.totalSamples, 1u));
     progress = std::clamp(progress, 0.0f, 1.0f);
@@ -313,14 +299,11 @@ void AudioMixer::mix_frames(float* outStereo, int numFrames,
             }
         }
 
-        // Музыкальный канал: зацикленный артистский сэмпл, моно в оба уха.
-        // Процедурного дефолта у музыки нет — нет файла, нет канала.
-        if (bank_ && bank_->music.data && bank_->music.frames > 0) {
-            const float m = bank_->music.data[musicPos_] * config_.musicGain;
-            sumL += m;
-            sumR += m;
-            if (++musicPos_ >= bank_->music.frames) musicPos_ = 0;
-        }
+        // (Музыкальный канал снесён 2026-10-12: он подмешивал зацикленный
+        //  артистский сэмпл и ничего больше, а процедурного дефолта у музыки нет
+        //  по построению — без пака это ветвление в самом горячем цикле движка
+        //  (48 000 раз в секунду) не срабатывало НИ РАЗУ за всю жизнь кода.
+        //  Надгробие и довод в [audio_types.h].)
 
         // Apply Master Bus Soft Limiter (tanh) to guarantee no digital clipping
         float limitedL = master_limiter(sumL * config_.masterGain);

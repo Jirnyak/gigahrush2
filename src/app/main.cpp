@@ -10437,10 +10437,13 @@ int main(int argc, char** argv) {
                 const CameraTag* acam = reg.try_get<CameraTag>(player);
                 const Field<float>* adanger =
                     stack.layer(activeLayer).fields().find<float>(kDangerField);
+                // `bus` здесь больше НЕ передаётся: параметр снят из сигнатуры
+                // 2026-10-12 — аудио его принимало и глушило `(void)bus;`,
+                // ни одной строки обращения в `src/audio/` не было.
                 audioSys.update(frameDt, atr.pos, acam ? acam->yaw : 0.0f,
                                 acam ? acam->pitch : 0.0f,
                                 stack.layer(activeLayer).grid(), adanger,
-                                samosbor, bus, noiseField, 1.0f,
+                                samosbor, noiseField, 1.0f,
                                 activeLayer);
             }
             renderer.end_frame(window);
