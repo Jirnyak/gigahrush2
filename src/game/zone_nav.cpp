@@ -1,6 +1,8 @@
 #include "game/zone_nav.h"
 
 #include <algorithm>
+#include <cmath>   // cbrt — поперечник зоны из её объёма
+#include <cstdio>  // размер зоны вслух: из него выводятся ОБА предела ноги
 
 #include "core/jobs.h"        // parallel_for — бейк жмёт ядра
 #include "core/rng.h"         // hash3 — выбор соседки в блуждании `zone_pick_near`
@@ -339,6 +341,38 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
     bake_zone_graph(out.part, oracle, size, out.graph);
     bake_zone_dist(out.graph, out.dist, threads);
     bake_zone_flow(out.part, out.graph, oracle, size, gravity, out.flow);
+
+    // РАЗМЕР ЗОНЫ ВСЛУХ, И ЭТО НЕ ОТЛАДКА. Из него выводятся ОБА предела
+    // дальности ноги — `kWanderLegZones` ([game/wander.h]) и `kPatrolLegZones`
+    // ([game/role.h]), — а до 2026-10-12 числа в дереве не было вовсе: оба
+    // предела опирались на ПРОЗУ «зона порядка 5 клеток, то есть 10 м». Прозу
+    // нельзя пересчитать на другом модуле, и первый же боковой этаж сделал бы
+    // оба предела тихо неверными. Печатается здесь, а не у потребителя, потому
+    // что здесь оно ИЗВЕСТНО: ровно один проход по готовой разбивке.
+    //
+    // Плюс ОЗУ по капу тем же тактом — «бейк без замера прячет свою регрессию».
+    if (out.part.built()) {
+        std::size_t owned = 0;
+        for (RoomId z : out.part.at)
+            if (z != kNoRoom) ++owned;
+        const double perZone =
+            out.part.zones ? static_cast<double>(owned) /
+                                 static_cast<double>(out.part.zones)
+                           : 0.0;
+        const double edges =
+            out.graph.built() ? static_cast<double>(out.graph.nbr.size()) / 2.0 : 0.0;
+        std::fprintf(stderr,
+                     "[zones] зон %u | клеток в разбивке %zu | на зону %.1f "
+                     "(поперёк ~%.1f м) | рёбер %.0f, степень %.1f | "
+                     "плоскостей %u | ОЗУ %.1f МиБ\n",
+                     out.part.zones, owned, perZone,
+                     std::cbrt(perZone) * static_cast<double>(kCellSize),
+                     edges,
+                     out.part.zones ? 2.0 * edges / static_cast<double>(out.part.zones)
+                                    : 0.0,
+                     out.flow.planes,
+                     static_cast<double>(out.bytes()) / (1024.0 * 1024.0));
+    }
 }
 
 RoomId zone_of_body(const ZoneNav& zn, int cx, int cy, int cz) {
