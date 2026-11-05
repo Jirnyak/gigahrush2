@@ -168,14 +168,29 @@ graphs would bloat it — the ~130 MiB fine field is heap either way). `unload`
 frees it; `nav_at(reg, number)` returns it (or `nullptr` if the floor isn't
 resident). Bake cost is a few hundred ms of all-core BFS off the hot path.
 
-**Opt-in disk cache** ([src/game/nav_cache.h](src/game/nav_cache.h)): call
+**ЭТОГО КОДА НЕ СУЩЕСТВУЕТ — ПРОВЕРЕНО ГРЕПОМ 2026-11-04.** `grep -rn
+"save_nav_cache\|load_nav_cache\|GHNAVBK1\|nav_cache" src tests tools` даёт **НОЛЬ
+попаданий**; файла `src/game/nav_cache.h` в дереве нет. Абзац ниже оставлен как
+надгробие: он описывает замысел, который никогда не был построен, и его уже один раз
+приняли за факт. Там же ниже этот файл называет восемь тестов (`test_nav_coarse`,
+`test_nav_fine`, `test_nav_fine_realfloor`, `test_nav_realfloor`,
+`test_route_realfloor`, `test_nav_cache_roundtrip`, `test_streamed_nav_cache`,
+`test_parallel_for`) — **ни одного из них в дереве тоже нет.**
+
+Сверх того предмет устарел: решётчатая навигация СНЕСЕНА 2026-10-12 (`9d557283`),
+бейк нава по зонам стоит **52 мс** на демо-этаже, то есть кешировать нечего.
+Дисковый кэш нужен не наву, а **бейку видимости света** — 1083–2302 мс на каждый
+вход на этаж, и это ход H в `matwej.md` §9.4. Разбор — `matwej.md` §13 (таблица
+врущих документов).
+
+~~**Opt-in disk cache** ([src/game/nav_cache.h](src/game/nav_cache.h)): call
 `FloorStreamer::set_nav_cache_dir(dir)` (empty = disabled, the default) and each
 cold load first tries `load_nav_cache`, baking + `save_nav_cache` only on a miss.
 The blob is a versioned binary (`nav_f%d_k%u_s%08x.bin`, magic `GHNAVBK1`) whose
 header validates `(number, kind, seed, nodes, section sizes)` — any mismatch is
 rejected and the floor re-bakes. This is memoization the browser reference could
 never do (sandbox); geometry is a pure function, so a floor need be baked **once
-ever**. It is `-fno-exceptions`-clean (C stdio + `std::filesystem` `ec`-overloads).
+ever**. It is `-fno-exceptions`-clean (C stdio + `std::filesystem` `ec`-overloads).~~
 
 ## Determinism
 
