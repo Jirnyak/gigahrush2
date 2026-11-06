@@ -44,10 +44,15 @@ bool read_spv(const char* path, std::vector<char>& out) {
 // Слоты обратного шва: страница 1 КиБ + маска 64 Б, зеркало шейдера.
 constexpr VkDeviceSize kPageBytesBack = kSubVoxels * sizeof(std::uint16_t);
 constexpr VkDeviceSize kMaskBytesBack = 64;
-// Регион списка: 12 u32 заголовка (count, quanta, woken, slept, честный
-// размер списка, флаг капа, start окна, истаявшие, ПОДПИСЬ ПАКА (ген),
-// 3 резервных) + слоты.
+// Регион списка: 12 u32 заголовка (count ОТСКАНИРОВАННЫХ, quanta, woken,
+// slept, честный размер списка, флаг капа, start окна, истаявшие, ПОДПИСЬ
+// ПАКА (ген), активные биты, CARRIED — слоты нагрузки хода A, сухие-живые)
+// + ДВЕ площадки по kRbSlotCap: окно сканирования (ci живых) и директория
+// нагрузки (ci на слот страницы/маски). Зеркало run_pack/run_pack_header —
+// там та же арифметика записана как `2u * kRbSlotCap + 12u`.
 constexpr std::uint32_t kListHeader = 12;
+constexpr std::uint32_t kListStride =
+    kListHeader + 2 * GpuMediumPass::kRbSlotCap;
 
 // Режимы шейдера ([shaders/medium_sim.comp] pc.params.y).
 constexpr std::uint32_t kModePrepare = 0;
@@ -55,8 +60,11 @@ constexpr std::uint32_t kModeMove = 1;
 constexpr std::uint32_t kModeSettle = 2;
 constexpr std::uint32_t kModeInject = 3;
 constexpr std::uint32_t kModePack = 4;
-// kModeRelease (5) МЁРТВ инкрементом 2 «Автомат-2»: ping-pong протокол
-// списка умер, членство = бит в uActiveBits.
+// Мода 5 была kModeRelease и умерла с ping-pong протоколом списка
+// (инкремент 2 «Автомат-2»: членство = бит в uActiveBits). Ход A занял её
+// заголовком пака: счёт увезённых килобайтов известен только ПОСЛЕ
+// компактации, то есть после пак-пасса.
+constexpr std::uint32_t kModePackHeader = 5;
 constexpr std::uint32_t kModeGate = 6;     // словный гейт битсета
 constexpr std::uint32_t kModeFinalize = 7; // счёт гейта -> 2D indirect
 
@@ -268,8 +276,13 @@ bool GpuMediumPass::create_buffers() noexcept {
                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             "medium-counters"))
         return false;
-    // ТЕНЕВОЙ БИТСЕТ (Автомат-2 инкр. 1): 1 бит/клетку = 256 КиБ, точное
-    // зеркало kActInList (см. medium_sim.comp shadow_or/shadow_and).
+    // БИТСЕТ АКТИВНОСТИ (Автомат-2 инкр. 2): 1 бит/клетку = 256 КиБ. Имя
+    // поля осталось от инкремента 1, где бит был ТЕНЬЮ слова активности
+    // (kActInList) и держался парой shadow_or/shadow_and в шейдере. Ни того
+    // бита, ни той пары больше нет: битсет САМ стал членством в исполнении
+    // (medium_sim.comp wake_next/sleep_cell), а словный гейт каждый подтик
+    // строит из него список-однодневку. Комментарий звал читателя к двум
+    // функциям, которых в шейдере не существует — поправлено 2026-11-06.
     if (!shadowBits_.create_device_local_empty(
             *dev_, kMacroCells / 8,
             st | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -308,9 +321,8 @@ bool GpuMediumPass::create_buffers() noexcept {
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                         "medium-mask-back"))
         return false;
-    const VkDeviceSize listBytes =
-        static_cast<VkDeviceSize>(kRbRegions) * (kListHeader + kRbSlotCap) *
-        sizeof(std::uint32_t);
+    const VkDeviceSize listBytes = static_cast<VkDeviceSize>(kRbRegions) *
+                                   kListStride * sizeof(std::uint32_t);
     if (!listDev_.create_device_local_empty(
             *dev_, listBytes, st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             "medium-list-dev"))
@@ -558,8 +570,7 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     const auto region = static_cast<std::uint32_t>(rbGen_ % kRbRegions);
 
     const auto* list = static_cast<const std::uint32_t*>(listBack_.mapped) +
-                       static_cast<std::size_t>(region) *
-                           (kListHeader + kRbSlotCap);
+                       static_cast<std::size_t>(region) * kListStride;
     const std::uint32_t count = std::min(list[0], kRbSlotCap);
     // ГЕЙТ ПОДПИСИ (корень «зарастаний», 2026-08-26): применяем регион,
     // только если GPU РЕАЛЬНО записал в него ожидаемый пак. Счёт кадров
@@ -609,11 +620,20 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     std::vector<std::uint32_t> liveCis;
     liveCis.reserve(count);
     const bool probeDiag = std::getenv("GIGA_POUR") != nullptr;
+    // ХОД A: СКОЛЬКО КИЛОБАЙТОВ ПРИЕХАЛО (слот 10 заголовка) против
+    // отсканированного окна. Директория нагрузки лежит за окном
+    // сканирования — ci на каждый слот страницы/маски.
+    const std::uint32_t carried = std::min(list[10], kRbSlotCap);
+    const std::uint32_t* dir = list + kListHeader + kRbSlotCap;
     // Состав med_apply (§63, добро владельца 2026-08-30): фазовый замер —
     // прежде чем трогать run_move, шов обязан назвать, кто ест его 11 мс.
     applyWindow_ = count;
+    applyCarried_ = carried;
     applyCmpOnly_ = applyCopied_ = applyLazy_ = applySkipFresh_ = 0;
     const auto applyLoopT0 = std::chrono::steady_clock::now();
+    // ПРОХОД 1 — ПО СПИСКУ (4 Б на клетку, читается целиком). Он даёт
+    // liveCis фронтиру и приборам и материализует безстраничных. Тяжёлого
+    // здесь нет и никогда не было: килобайты разбирает проход 2.
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t word = list[kListHeader + i];
         const std::uint32_t ci = word & 0x7FFFFFFFu;
@@ -623,62 +643,89 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             seamSeen_.insert(ci);
             if (word & 0x80000000u) seamLazy_.insert(ci);
         }
+        if ((word & 0x80000000u) == 0u) continue;
+        // ГЕЙТ СВЕЖЕСТИ ОТ ДОСТАВКИ (2026-08-26 v2: стейл-регион с меткой
+        // «бесстраничная» материализовал по маскам МИМО гейта —
+        // маскированные биты заливались базой; баг «дыра заросла»):
+        // CPU-запись честна на GPU только после её ФЛЕША, и окно стейджинга
+        // возит остаток кадрами.
+        if (mirror.write_pending(ci) ||
+            rec.flushCount <= mirror.upload_gen(ci)) {
+            ++applySkipFresh_;
+            continue;
+        }
+        // GPU видел клетку безстраничной: материализуем лениво — flush
+        // довезёт страницу, материя подождёт у границы кадр-два. ПОСЛЕ
+        // ХОДА A эта ветка стала почти мёртвой и это ВЫВОД, а не наблюдение:
+        // пометку kActDirty ставит только store_atom, а он пишет лишь в
+        // писуемые (paged) клетки, значит безстраничная клетка в нагрузку не
+        // попадает никогда. Живой остаток — клетка, помеченная меченой и
+        // потерявшая страницу от CPU-писателя до своего пака. Голодный фронт
+        // лечит не эта ветка, а канал запроса страницы (ход E).
+        if (!f->paged(ci)) {
+            materialize_sub_page(world, ci);
+            lazyDirty_.push_back(ci);
+            ++applyLazy_;
+        }
+    }
+    // ПРОХОД 2 — ПО НАГРУЗКЕ (1088 Б на клетку). Ровно изменённые с прошлого
+    // пака: два memcmp и memcpy с пересчётом агрегатов платятся только за
+    // них. Это и есть ход A §9.4 — прибор med-apply-mix мерил здесь 11-31%
+    // полезного, остальное окно разбиралось зря.
+    for (std::uint32_t j = 0; j < carried; ++j) {
+        const std::uint32_t ci = dir[j];
+        if (ci >= kMacroCells) continue;
         static const char* dbgEnv = std::getenv("GIGA_SEAM_DBG");
         static const std::uint32_t dbgCell =
             dbgEnv ? static_cast<std::uint32_t>(std::atoi(dbgEnv))
                    : 0xFFFFFFFFu;
         if (ci == dbgCell) {
             const auto* rpg = reinterpret_cast<const std::uint16_t*>(
-                src + static_cast<std::size_t>(i) * kPageBytesBack);
+                src + static_cast<std::size_t>(j) * kPageBytesBack);
             int packSolid = 0;
             for (int b2 = 0; b2 < static_cast<int>(kSubVoxels); ++b2)
                 if (rpg[b2] != 0) ++packSolid;
             int cpuSolid = 0;
-            if (SubField<CellType>* fdbg =
-                    world.subfields().find<CellType>(kSubMaterialName))
-                if (const CellType* cpg = fdbg->page(ci))
-                    for (int b2 = 0; b2 < static_cast<int>(kSubVoxels); ++b2)
-                        if (cpg[b2] != 0) ++cpuSolid;
+            if (const CellType* cpg = f->page(ci))
+                for (int b2 = 0; b2 < static_cast<int>(kSubVoxels); ++b2)
+                    if (cpg[b2] != 0) ++cpuSolid;
             std::fprintf(stderr,
-                         "[seam-dbg] slot %u top %d recFlush %u upload %u "
+                         "[seam-dbg] payload %u recFlush %u upload %u "
                          "mark-pend %d packAtoms %d cpuAtoms %d\n",
-                         i, (word & 0x80000000u) ? 1 : 0, rec.flushCount,
-                         mirror.upload_gen(ci),
+                         j, rec.flushCount, mirror.upload_gen(ci),
                          mirror.write_pending(ci) ? 1 : 0, packSolid,
                          cpuSolid);
         }
-        // ГЕЙТ СВЕЖЕСТИ ОТ ДОСТАВКИ — ДО ленивой ветки (2026-08-26 v2:
-        // стейл-регион с меткой «бесстраничная» материализовал по маскам
-        // МИМО гейта — маскированные биты заливались базой) (баг «дыра заросла», 2026-08-26):
-        // CPU-запись честна на GPU только после её ФЛЕША; окно стейджинга
-        // возит остаток кадрами, поэтому гейт «от момента записи» ломался:
-        // пак между записью и её доставкой нёс до-записное состояние и
-        // воскрешал выбитые карвом атомы. Скип, пока запись в очереди, и
-        // для паков, записанных не позже доставившего флеша.
+        // Тот же гейт свежести: пак между CPU-записью и её доставкой несёт
+        // до-записное состояние и воскресил бы выбитые карвом атомы.
+        //
+        // ХОД A ДОБАВЛЯЕТ ЗДЕСЬ НЕОЧЕВИДНЫЙ ИНВАРИАНТ, и он держится: GPU
+        // погасил бит, когда положил килобайт в регион, а мы этот килобайт
+        // сейчас ВЫБРАСЫВАЕМ — то есть повторной доставки не будет. Потери
+        // правды нет, потому что гейт срабатывает РОВНО когда свежее
+        // CPU-запись: канон уже держит истину, а зеркало получило её флешем,
+        // так что GPU и канон совпадают БЕЗ этой доставки. Если же автомат
+        // тронет клетку после записи — он поставит бит заново, и килобайт
+        // приедет снова. То же про ветку `!pg` ниже: страницу схлопнул
+        // CPU-писатель, зеркало об этом узнало тем же флешем.
         if (mirror.write_pending(ci) ||
             rec.flushCount <= mirror.upload_gen(ci)) {
             ++applySkipFresh_;
             continue;
         }
-        if (word & 0x80000000u) {
-            // GPU видел клетку безстраничной: материализуем лениво — flush
-            // довезёт страницу, материя подождёт у границы кадр-два.
-            if (!f->paged(ci)) {
-                materialize_sub_page(world, ci);
-                lazyDirty_.push_back(ci);
-                ++applyLazy_;
-            }
-            continue;
-        }
         CellType* pg = f->page(ci);
         if (!pg) continue; // CPU-писатель схлопнул — его решение свежее
-        const void* np = src + static_cast<std::size_t>(i) * kPageBytesBack;
+        const void* np = src + static_cast<std::size_t>(j) * kPageBytesBack;
         SubMask& m = world.grid().masks_mut()[ci];
-        const void* nm = msrc + static_cast<std::size_t>(i) * kMaskBytesBack;
-        // Пак возит ВЕСЬ живой список, но большинство слотов не менялись с
-        // прошлого applied-региона: сравнение дешевле копии с пересчётом
-        // агрегатов (замер 2026-08-25: apply 5-7 мс/кадр при полном окне,
-        // почти весь — memcpy+recount неизменённых страниц).
+        const void* nm = msrc + static_cast<std::size_t>(j) * kMaskBytesBack;
+        // Два memcmp ОСТАЮТСЯ и после хода A, и это не перестраховка:
+        // «изменилась с прошлого ПАКА» (бит GPU) и «отличается от того, что
+        // лежит в каноне» (memcmp) — разные утверждения. Расходятся они
+        // законно: применение региона отстаёт на кольцо, CPU-писатель мог
+        // положить ровно то же, а маска могла не измениться при изменившейся
+        // странице. Сравнение дешевле копии с пересчётом агрегатов (замер
+        // 2026-08-25: apply 5-7 мс/кадр при полном окне, почти весь —
+        // memcpy+recount неизменённых страниц).
         const bool pageSame = std::memcmp(pg, np, kPageBytesBack) == 0;
         const bool maskSame = std::memcmp(m.words, nm, kMaskBytesBack) == 0;
         if (pageSame && maskSame) {
@@ -887,18 +934,24 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         for (auto& r : rbRing_) r.valid = false;
     }
 
-    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E §10): счётчик живёт РОВНО КАДР — список
-    // накапливается по всем подтикам кадра и вычитывается CPU один раз
-    // (apply_readback), поэтому обнуление стоит здесь, а не в run_prepare
-    // (тот идёт КАЖДЫЙ подтик и стирал бы запросы раньше, чем их прочли).
-    // Четыре байта по месту слота: indirect-команда uCnt[0..2] не тронута.
-    // Барьер не нужен свой — входной inBar ниже несёт TRANSFER_WRITE в
-    // srcAccessMask. При fullClear слот уже обнулён полным клиром, и второй
-    // fill был бы перекрывающейся записью без синхронизации.
+    // ДВА КАДРОВЫХ СЧЁТЧИКА — ОДНИМ ФИЛЛОМ: uCnt[13] запросы страниц (ход E)
+    // и uCnt[14] выданные слоты нагрузки (ход A) лежат рядом СПЕЦИАЛЬНО,
+    // чтобы обнуление было одной командой на 8 байт. Оба живут РОВНО КАДР:
+    // запросы накапливаются по всем подтикам и вычитываются CPU один раз
+    // (apply_readback), слоты раздаёт пак в конце кадра. В run_prepare
+    // обнулять нельзя — он идёт КАЖДЫЙ подтик и стирал бы запросы раньше,
+    // чем их прочли, а на спокойном кадре не идёт вовсе, и счётчик слотов
+    // рос бы через кадры. Indirect-команда uCnt[0..2] не тронута. Свой
+    // барьер не нужен: входной inBar ниже несёт TRANSFER_WRITE в
+    // srcAccessMask. При fullClear слоты уже обнулены полным клиром, и
+    // второй fill был бы перекрывающейся записью без синхронизации.
+    static_assert(kCntPackSlots == kCntPageReq + 1,
+                  "кадровые счётчики обязаны быть соседями: их обнуляет один "
+                  "vkCmdFillBuffer на 8 байт");
     if (!fullClear)
         vkCmdFillBuffer(cmd, counters_.buffer,
                         kCntPageReq * sizeof(std::uint32_t),
-                        sizeof(std::uint32_t), 0u);
+                        2 * sizeof(std::uint32_t), 0u);
 
     // Вход: flush зеркала (трансфер) и прошлые читатели — до компьюта.
     VkMemoryBarrier inBar{};
@@ -1000,6 +1053,19 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                        sizeof(push), &push);
     vkCmdDispatchIndirect(cmd, counters_.buffer, 0);
+    // ЗАГОЛОВОК ПАКА — ОТДЕЛЬНЫМ ПАССОМ ПОСЛЕ (ход A): счёт увезённых
+    // килобайтов известен только когда компактация закончена. Один поток,
+    // и он диспатчится ВСЕГДА — пустой список обязан записать «счёт 0»
+    // (урок ЗОМБИ-НОЛЯ: иначе CPU вечно видит последний ненулевой live).
+    // Push-константы берутся КАК ЕСТЬ от пака: params[0] = поколение кольца
+    // (из него и подпись региона, и start окна — заголовок обязан назвать то
+    // же окно, которое пак только что обошёл), params[3] = регион. Через
+    // dispatch_mode звать нельзя: он кладёт в params[0] номер подтика.
+    barrier();
+    push.params[1] = kModePackHeader;
+    vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                       sizeof(push), &push);
+    vkCmdDispatch(cmd, 1, 1, 1);
 
     // Выход: пул/классы/маски читают фрагменты и компьюты; регионы шва —
     // хост (фенсовая дисциплина решает готовность). TRANSFER здесь — потому
@@ -1025,13 +1091,25 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     // PCIe 3.0); на едином поле Apple это копия памяти в память на полной
     // пропускной способности, то есть десятки микросекунд. Замер владельца,
     // который это лечит: simphys 53.8 мс при рисовании мира в 1.2 мс.
+    //
+    // ХОД A СОКРАТИЛ РАЗБОР, НО НЕ ЭТУ КОПИЮ, и это честный остаток, а не
+    // недоделка. Нагрузка лежит компактно в слотах [0, carried), и копировать
+    // надо было бы ровно их — но CARRIED ЗНАЕТ ТОЛЬКО GPU, а индирект-копии
+    // в Vulkan нет: размер vkCmdCopyBuffer пишется при записи команды, когда
+    // пак ещё не считал. Два законных выхода, оба — отдельное решение, не
+    // попутная правка: (1) CPU пушит БЮДЖЕТ слотов (params.z свободен), пак
+    // пишет только slot < бюджета, а остаток держит ЛИПКИЙ БИТ и доезжает
+    // следующим кадром — потерь нет по построению, появляется регулятор и
+    // его режим насыщения; (2) опустить kRbSlotCap до выведенного §10
+    // (p99 live 37 337 × доля изменений 0.31 = 11 574), после чего и окно, и
+    // копия станут вровень со спросом. Пока копия полная — на едином поле
+    // это десятки микросекунд, и доминанта §3.1 была не здесь, а в разборе.
     const VkDeviceSize pageRegion =
         static_cast<VkDeviceSize>(kRbSlotCap) * kPageBytesBack;
     const VkDeviceSize maskRegion =
         static_cast<VkDeviceSize>(kRbSlotCap) * kMaskBytesBack;
     const VkDeviceSize listRegion =
-        static_cast<VkDeviceSize>(kListHeader + kRbSlotCap) *
-        sizeof(std::uint32_t);
+        static_cast<VkDeviceSize>(kListStride) * sizeof(std::uint32_t);
     const VkDeviceSize off = static_cast<VkDeviceSize>(region);
     const VkBufferCopy pageCopy{off * pageRegion, off * pageRegion, pageRegion};
     const VkBufferCopy maskCopy{off * maskRegion, off * maskRegion, maskRegion};

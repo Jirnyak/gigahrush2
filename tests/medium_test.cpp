@@ -2432,6 +2432,113 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== ХОД A (matwej.md §9.4): ПАК ВОЗИТ ТОЛЬКО ИЗМЕНЁННОЕ ==================
+// ЧТО ПИНИТСЯ. Регион шва делится на СПИСОК (4 Б на живую клетку, едет
+// целиком — его читают фронтир и приборы) и ПОЛЕЗНУЮ НАГРУЗКУ (1088 Б =
+// страница + маска, едет только клеткам с липким битом kActDirty). Прибор
+// med-apply-mix мерил здесь долю полезного: 11% при окне 548-627 и 17-31%
+// при полном окне 8192 — остальные килобайты шли через шину и два memcmp,
+// чтобы быть выброшенными.
+//
+// СЦЕНА ВЫБРАНА ПОД ОДНО ОКНО ВРЕМЕНИ, которого у шва раньше не было видно:
+// башня рыхлого оседает за ~26 подтиков, а тишину дозревает ещё 16 (порог
+// сна). В этом промежутке клетки ЕЩЁ ЖИВЫ — список непустой, гало «+7»
+// исправно тянет соседей, — но НИ ОДИН БАЙТ в них не менялся. До хода A шов
+// возил в такие кадры полное окно килобайтов; после — ровно ноль. Это и есть
+// самый крупный оракул теста, и он не про проценты, а про НОЛЬ.
+//
+// ПОЛЯРНОСТИ (по одной мутации на утверждение):
+//   * снять гашение бита в run_pack (`atomicAnd(uCellAct[ci], ~kActDirty)`)
+//     — бит перестаёт быть одноразовым, пак снова возит ВСЁ окно: краснеют
+//     «тихий кадр без нагрузки» и «доля ниже половины», всё остальное
+//     зелено (канон при полном паке верен — он и был верен до хода A);
+//   * снять ПОСТАНОВКУ бита в run_move (`| kActDirty` на обеих записях) —
+//     нагрузка не едет никогда: краснеют «нагрузка хоть раз была»,
+//     согласие зеркала с каноном и масса;
+//   * снять фильтр `(uCellAct[ci] & kActDirty) == 0u` в run_pack — то же,
+//     что первая мутация, но без липкости: пак возит окно целиком.
+void test_pack_carries_changed_only(gpu::VulkanDevice& dev) {
+    static World w;
+    // Плита + БАШНЯ 2x2x8 (форма test_rubble_settles_fast, свой угол тора).
+    for (int x = 104; x < 110; ++x)
+        for (int y = 104; y < 110; ++y)
+            w.grid().fill_cell(x, y, 60, kMatConcrete);
+    const auto towerCell =
+        static_cast<std::uint32_t>(macro_index(106, 106, 62));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* pg = f.ensure_page(towerCell, w.grid().types()[towerCell]);
+    std::uint32_t poured = 0;
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 8; ++sz) {
+                pg[sub_bit(sx, sy, sz)] = kMatRubble;
+                ++poured;
+            }
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+    medium.wake_cells(&towerCell, 1, w, mirror);
+
+    std::uint64_t substep = 0;
+    std::uint32_t sumScan = 0, sumCarried = 0, maxCarried = 0, quietFrames = 0;
+    std::uint32_t peakScan = 0;
+    for (int b = 0; b < 12; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+        const std::uint32_t scan = medium.apply_window();
+        const std::uint32_t carried = medium.apply_carried();
+        // ИНВАРИАНТ, а не наблюдение: меченые — подмножество отсканированных,
+        // поэтому переполнение площадки нагрузки невозможно по построению, и
+        // никакого «кольца с отметкой потери» ходу A не нужно.
+        CHECK(carried <= scan);
+        sumScan += scan;
+        sumCarried += carried;
+        if (carried > maxCarried) maxCarried = carried;
+        if (scan > peakScan) peakScan = scan;
+        if (scan > 0 && carried == 0) ++quietFrames;
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    // Масса точна: осевшее в CPU-каноне + истаявшие == налитому. Этот чек
+    // ловит мутацию «бит не ставится» — тогда канон не получает НИЧЕГО.
+    std::uint32_t settled = 0;
+    for (int cz = 60; cz <= 63; ++cz)
+        for (int cx = 104; cx < 110; ++cx)
+            for (int cy = 104; cy < 110; ++cy) {
+                const CellType* p = f.page(static_cast<std::size_t>(
+                    macro_index(cx, cy, cz)));
+                if (!p) continue;
+                for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                    if (p[b2] == kMatRubble) ++settled;
+            }
+    // СОГЛАСИЕ ДВУХ КОПИЙ МИРА — тот же оракул, что у test_long_fall, и
+    // здесь он несёт главное: пак возит ПОДМНОЖЕСТВО, а канон обязан
+    // остаться бит-в-бит таким, каким был бы при полном паке. Зеркало —
+    // это GPU-правда (автомат пишет в него же), и verify сверяет её с
+    // каноном побитово.
+    const bool mirrorAgrees = mirror.verify(w);
+    std::printf("[medium_test] pack-dirty: окно %u (пик %u), нагрузка %u "
+                "(%.1f%% от окна, макс %u), тихих кадров без нагрузки %u, "
+                "осело %u + fade %u из %u, зеркало %s\n",
+                sumScan, peakScan, sumCarried,
+                sumScan ? 100.0 * double(sumCarried) / double(sumScan) : 0.0,
+                maxCarried, quietFrames, settled, medium.fade_total(), poured,
+                mirrorAgrees ? "СОГЛАСНО" : "РАСХОДИТСЯ");
+    CHECK(maxCarried > 0);        // пак вообще возит, когда материя едет
+    CHECK(quietFrames > 0);       // ЗАКОН: жива, но не менялась = НОЛЬ байт
+    CHECK(sumCarried * 2 < sumScan); // доля ниже половины (замер: 11-31%)
+    CHECK(mirrorAgrees);          // канон бит-в-бит как при полном паке
+    CHECK(settled + medium.fade_total() == poured);
+    CHECK(medium.live_count() == 0); // и лавина доспала (зомби-ноль)
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
 // ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
 // Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
 // Формы плотного гейта (shaders/bitmask_stand.comp):
@@ -2838,6 +2945,7 @@ int main() {
         test_sleep_under_budget(dev);
         test_full_rubble_wakes(dev);
         test_page_request_channel(dev);
+        test_pack_carries_changed_only(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

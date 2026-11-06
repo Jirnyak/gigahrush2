@@ -90,8 +90,11 @@ public:
     // «4096» в шейдере разъехалась бы с этой МОЛЧА (дефект К1-12). Та же
     // строка стоит в [shaders/medium_sim.comp] (kPageReqCap), источник один.
     static constexpr std::uint32_t kPageReqCap = kRbSlotCap / 2;
-    // Слот счётчика запросов в counters_ (свободны были 6, 7, 13, 14).
-    static constexpr std::uint32_t kCntPageReq = 13;
+    // Слоты КАДРОВЫХ счётчиков в counters_ (свободными остались 6 и 7).
+    // Соседство обязательно: обнуляются одним vkCmdFillBuffer на 8 байт, и
+    // в record_substeps это закреплено static_assert'ом.
+    static constexpr std::uint32_t kCntPageReq = 13;   // запросы страниц (E)
+    static constexpr std::uint32_t kCntPackSlots = 14; // слоты нагрузки (A)
 
     // Порог сна: 16 тихих подтиков = 0.51 с на 31.25 Гц. Сон — НАБЛЮДЕНИЕ
     // планировщика («ни одного свопа»), правило о нём не знает (чистый
@@ -141,7 +144,10 @@ public:
     // Применить готовый (по фенсовой дисциплине) регион шва в CPU-канон:
     // СПИСОК живых клеток пришёл ИЗ РЕГИОНА (его собрал pack-пасс GPU —
     // CPU-протокола диспетчеризации не существует, решение владельца
-    // 2026-08-24), страницы и маски memcpy слот-в-слот, агрегаты
+    // 2026-08-24). ДВА ПРОХОДА С ХОДА A (§9.4): по списку целиком —
+    // liveCis фронтиру, приборы и ленивая материализация (4 Б на клетку);
+    // по ДИРЕКТОРИИ НАГРУЗКИ — только изменившиеся с прошлого пака, им
+    // страницы и маски memcpy слот-в-слот, агрегаты
     // пересчитываются, клетки без GPU-страницы лениво материализуются
     // (mark_dirty довезёт, материя подождёт у границы кадр-два). Звать в
     // начале кадра, ДО сим-писателей. changedMasks — клетки с реально
@@ -356,7 +362,11 @@ private:
     VulkanBuffer listDev_;
     VulkanBuffer pageBack_; // приёмник копии: хост, кэшируемый
     VulkanBuffer maskBack_;
-    VulkanBuffer listBack_; // регион: 4 u32 заголовка + kRbSlotCap слотов
+    // Регион списка: 12 u32 заголовка + ОКНО СКАНИРОВАНИЯ (kRbSlotCap ci
+    // живых, 4 Б на клетку — их читает фронтир и приборы) + ДИРЕКТОРИЯ
+    // НАГРУЗКИ (kRbSlotCap ci, по слоту страницы/маски — ход A). Нагрузку
+    // возят только изменившиеся с прошлого пака, директория говорит кто где.
+    VulkanBuffer listBack_;
     // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E) — те же ДВА ЭТАЖА и по той же причине:
     // шейдер пишет в VRAM, на хост регион уезжает одной копией. Кольца
     // регионов у канала НЕТ и фенсовая дисциплина ему не нужна: гонка
@@ -401,6 +411,11 @@ public:
     float apply_loop_ms() const noexcept { return applyLoopMs_; }
     float apply_frontier_ms() const noexcept { return applyFrontierMs_; }
     std::uint32_t apply_window() const noexcept { return applyWindow_; }
+    // ХОД A (§9.4): сколько клеток окна реально привезли КИЛОБАЙТ. Отношение
+    // carried/window — та самая доля полезного, которую прибор
+    // med-apply-mix мерил снаружи по copied (11% при окне 548-627, 17-31%
+    // при полном окне 8192). Теперь её называет сам шов.
+    std::uint32_t apply_carried() const noexcept { return applyCarried_; }
     std::uint32_t apply_cmp_only() const noexcept { return applyCmpOnly_; }
     std::uint32_t apply_copied() const noexcept { return applyCopied_; }
     std::uint32_t apply_lazy() const noexcept { return applyLazy_; }
@@ -409,7 +424,8 @@ public:
 private:
     float applyLoopMs_ = 0.0f;      // цикл по окну: гейты+memcmp+копии
     float applyFrontierMs_ = 0.0f;  // open_frontier по liveCis в хвосте
-    std::uint32_t applyWindow_ = 0;    // клеток в применённом окне
+    std::uint32_t applyWindow_ = 0;    // клеток в применённом окне (скан)
+    std::uint32_t applyCarried_ = 0;   // из них с нагрузкой (ход A)
     std::uint32_t applyCmpOnly_ = 0;   // страница+маска НЕ менялись (чистый memcmp)
     std::uint32_t applyCopied_ = 0;    // страница менялась (memcpy+recount)
     std::uint32_t applyLazy_ = 0;      // ленивые материализации
