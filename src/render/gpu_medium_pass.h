@@ -66,6 +66,33 @@ public:
     static constexpr std::uint32_t kRbRegions = kMaxFramesInFlight + 1;
     static constexpr std::uint32_t kRbSlotCap = 8192;
 
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E, matwej.md §9.4/§10) — второй, НЕЗАВИСИМЫЙ
+    // от пака путь доставки страницы: GPU кладёт в список адрес клетки, в
+    // которую материя уже упёрлась, CPU раскрывает её в начале кадра МИМО
+    // вращающегося окна пака. Лечит живой баг «рабл застывает в пустоте»:
+    // при total > окна клетка попадает под фронтир раз в ceil(total/окна)
+    // кадров, а материя идёт 1 субвоксель/подтик и через kSleepSubsteps
+    // тихих подтиков УСЫПАЕТ — и больше её не будит никто.
+    //
+    // КАП — ВЫВОД: голодать может только ПОВЕРХНОСТЬ материи, не её объём
+    // (атом в глубине стоит на уже раскрытых страницах, упирается ровно
+    // передний слой). Замер §10: p99 live = 37 337 клеток, максимум
+    // 62 919 ≈ куб 40³, ОДНА его грань = 40² = 1600 клеток < 4096, запас
+    // 2.5× к ХУДШЕМУ замеренному фронту. Переполнение не теряет события:
+    // предикат отказа повторяется каждый подтик, пока страницы нет, а CPU
+    // читает канал каждый кадр ⇒ цена переполнения — ЛАТЕНТНОСТЬ, а не
+    // потеря (§10: «теряется только латентность» — поэтому ни кольца с
+    // отметкой потери, ни повтора на следующем кадре тут нет). Размер
+    // буферов: 4096 × 4 Б = 16 КиБ, 0.2% от 8.5 МиБ шва.
+    //
+    // ВЫРАЖЕНИЕМ ОТ kRbSlotCap, А НЕ ЛИТЕРАЛОМ: мост -D несёт в GLSL ровно
+    // те числа, которые CMakeLists парсит из этого хедера, и третья копия
+    // «4096» в шейдере разъехалась бы с этой МОЛЧА (дефект К1-12). Та же
+    // строка стоит в [shaders/medium_sim.comp] (kPageReqCap), источник один.
+    static constexpr std::uint32_t kPageReqCap = kRbSlotCap / 2;
+    // Слот счётчика запросов в counters_ (свободны были 6, 7, 13, 14).
+    static constexpr std::uint32_t kCntPageReq = 13;
+
     // Порог сна: 16 тихих подтиков = 0.51 с на 31.25 Гц. Сон — НАБЛЮДЕНИЕ
     // планировщика («ни одного свопа»), правило о нём не знает (чистый
     // Марков, закон владельца 2026-08-24). Спят: осевший щебень, запертая в
@@ -142,6 +169,17 @@ public:
         std::fill(frontierDone_.begin(), frontierDone_.end(), 0ull);
         lastCount_ = 0;
         lastQuanta_ = 0;
+        // Канал запроса страницы: счётчик GPU обнулит клир counters_ на
+        // ближайшем record, а ХОСТОВУЮ голову гасим здесь — иначе первый
+        // кадр нового этажа раскрыл бы округу клеток УЕХАВШЕГО мира. Копия
+        // прошлого этажа, застигнутая в полёте, безвредна: раскрытая не по
+        // делу страница стоит памяти, а не правды (клетку она не меняет).
+        if (pageReqBack_.mapped)
+            *static_cast<std::uint32_t*>(pageReqBack_.mapped) = 0u;
+        pageReqAsked_ = 0;
+        pageReqTaken_ = 0;
+        pageReqPages_ = 0;
+        pageReqFrames_ = 0;
         for (auto& r : rbRing_) r.valid = false;
         // Поколение шва — В НОЛЬ СИНХРОННО (гейт свежести живёт на клоке
         // ЗЕРКАЛА и смену слоя переживает сам — flushGen монотонен).
@@ -156,6 +194,16 @@ public:
                          const CellStep& downStep, std::uint64_t substepBase,
                          const World& world, std::uint32_t frameSlot,
                          std::uint32_t mirrorFlushGen);
+
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ — прибор (ход E §10). Числа за этаж: сколько
+    // запросов GPU подал (ПОЛНЫЙ счётчик, до капа), сколько CPU взял,
+    // сколько страниц этим раскрыл и сколько кадров канал был непуст. В
+    // норме все нули — список пуст, и цена кадра ровно ноль. Читают
+    // печать шва и пин test_page_request_channel.
+    std::uint64_t page_req_asked() const noexcept { return pageReqAsked_; }
+    std::uint64_t page_req_taken() const noexcept { return pageReqTaken_; }
+    std::uint64_t page_req_pages() const noexcept { return pageReqPages_; }
+    std::uint32_t page_req_frames() const noexcept { return pageReqFrames_; }
 
     // Очередь пробуждений ещё несёт остаток — «этаж не допробужен».
     // Читает лифт: двери кабины ждут пустой очереди (решение владельца
@@ -208,6 +256,11 @@ private:
     bool create_buffers() noexcept;
     bool create_descriptors(const VoxelMirror& mirror) noexcept;
     bool create_pipeline(const char* shaderDir) noexcept;
+    // Канал запроса страницы (ход E §10): вычитать список, раскрыть округу
+    // названных клеток МИМО окна пака. Зовётся первым делом в
+    // apply_readback — то есть в начале кадра, до сим-писателей. В норме
+    // список пуст и функция уходит на первой проверке.
+    void drain_page_requests(World& world, VoxelMirror& mirror);
 
     VulkanDevice* dev_ = nullptr;
 
@@ -279,6 +332,7 @@ private:
     std::vector<std::uint64_t> frontierDone_ =
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
+    std::vector<std::uint32_t> pageReqCells_; // канал: клетки этого кадра
     std::uint32_t budget_ = kBudgetDefault; // бюджет диспатча (см. set_budget)
 
     // Обратный шов (фенсовое кольцо kRbRegions): страницы/маски/СПИСОК
@@ -303,6 +357,14 @@ private:
     VulkanBuffer pageBack_; // приёмник копии: хост, кэшируемый
     VulkanBuffer maskBack_;
     VulkanBuffer listBack_; // регион: 4 u32 заголовка + kRbSlotCap слотов
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E) — те же ДВА ЭТАЖА и по той же причине:
+    // шейдер пишет в VRAM, на хост регион уезжает одной копией. Кольца
+    // регионов у канала НЕТ и фенсовая дисциплина ему не нужна: гонка
+    // чтения с копией в полёте стоит либо кадр латентности (запрос
+    // приедет следующим), либо дубль (CPU его отсеет по paged) — ровно
+    // поэтому канал не возит страниц, только адреса.
+    VulkanBuffer pageReqDev_;  // kPageReqCap слотов ci, цель шейдера
+    VulkanBuffer pageReqBack_; // [0] = счёт из uCnt[13], дальше слоты
     struct RbRecord {
         bool valid = false;
         // Счётчик ФЛЕШЕЙ ЗЕРКАЛА на момент записи пака (клок кадров зеркала,
@@ -326,6 +388,11 @@ private:
     // честный знаменатель p бюджета. Печать в [medium]/[medium-dbg].
     std::uint32_t activeTotal_ = 0;
     std::uint32_t dryLiveTotal_ = 0;
+    // Прибор канала запроса страниц (ход E), за этаж — сброс в clear_live().
+    std::uint64_t pageReqAsked_ = 0;  // полный счётчик GPU (до капа)
+    std::uint64_t pageReqTaken_ = 0;  // сколько адресов CPU реально взял
+    std::uint64_t pageReqPages_ = 0;  // страниц раскрыто по этим адресам
+    std::uint32_t pageReqFrames_ = 0; // кадров с непустым списком
 
 public:
     // СОСТАВ med_apply (замер по добру владельца 2026-08-30, §63: куда

@@ -2194,6 +2194,244 @@ void test_full_rubble_wakes(gpu::VulkanDevice& dev) {
     mirror.destroy();
 }
 
+// ==== ХОД E (matwej.md §9.4/§10): КАНАЛ ЗАПРОСА СТРАНИЦЫ ===================
+// РЕЖИМ, КОТОРОГО НЕ ПОКРЫВАЛ НИ ОДИН ТЕСТ (§10 п.9). Сцены пинов наливают
+// 128 клеток (cadence_build_scene) и держат список НИЖЕ окна пака, то есть
+// `chunks == 1` всегда. А живой баг владельца («раблы падают долго в пустоте
+// и ВСЕ застывают») живёт ровно при `chunks > 6`: пак крутит окно по списку
+// (`start = (rbGen % chunks) * kRbSlotCap`), фронтир кормится РОВНО окном,
+// значит клетка получает округу раз в `chunks` кадров; шар фронтира глубиной
+// kFrontierRadius = 6 клеток, а материя идёт клетку за кадр — при chunks > 6
+// фронт упирается в нераскрытую страницу, через kSleepSubsteps = 16 тихих
+// подтиков УСЫПАЕТ, и больше её не будит НИКТО (спящая клетка выходит из
+// списка ⇒ не пакуется ⇒ не материализуется). Соседний test_seam_tail
+// держит список выше ОДНОГО окна и ловит другое: что хвост вообще доезжает.
+//
+// ЧЕМ СЦЕНА ДЕРЖИТ СПИСОК ТОЛСТЫМ ДЁШЕВО: гейт исполняет «бит мой | 7
+// „+"-соседей», поэтому ОДНА активная клетка тянет в список свои восемь —
+// решётка «через клетку» по всем трём осям даёт ×8 слотов на страницу.
+// Балласт из 24x24x18 = 10368 активных клеток даёт ~82944 исполнимых =
+// chunks 11 при окне 8192. Каждая клетка балласта — ЗАПЕРТАЯ вода: полный
+// нижний слой субвокселей (блокомейты — закон истаивания одиночек не ест) и
+// полуслой над ним, который вечно тасуется латеральной диффузией (p = 0.25)
+// ⇒ kActChanged каждый подтик ⇒ клетка НЕ ЗАСЫПАЕТ до конца прогона. Вокруг
+// решётки бетон с запасом 6 клеток: шар фронтира не выходит за полнотвёрдое,
+// и сцена стоит 10368 страниц, а не сотни тысяч.
+//
+// ОБРАТНАЯ ПОЛЯРНОСТЬ — чем прогнать: в
+// `GpuMediumPass::drain_page_requests` ([render/gpu_medium_pass.cpp])
+// закомментировать ОДИН вызов `open_frontier(...)`, оставив счёт и чтение
+// головы. Мутация тогда снимает РОВНО лечение, а не прибор: GPU по-прежнему
+// просит страницы и CPU по-прежнему их считает (чеки «канал звучал»
+// остаются зелёными — иначе красный не отличить от «голода не было»), но
+// страницы не выделяются. Падающая материя упрётся в нераскрытую страницу,
+// через 16 тихих подтиков уснёт и встанет колом — красными станут РОВНО
+// «раскрыто страниц», «не замерла между отсечками» и «дальность».
+// (Снести весь вызов drain_page_requests из apply_readback — мутация
+// грубее: она гасит и прибор, тест краснеет, но уже не показывает, что
+// именно сломано.)
+void test_page_request_channel(gpu::VulkanDevice& dev) {
+    // Ось падения — ОТ ФРЕЙМА, не литерал (та же оговорка, что у
+    // test_long_fall): сцена по Z законна ровно пока дефолтный режим мира —
+    // NegZ, и это утверждается, а не подразумевается.
+    {
+        const CellStep down = regime_down(World{}.gravity().regime);
+        CHECK(down.x == 0 && down.y == 0 && down.z == -1);
+    }
+    static World w;
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+
+    // --- БАЛЛАСТ: список исполнимых выше ДВУХ окон пака, и не на миг ------
+    constexpr int kLatXY = 24;  // клеток решётки по x и y
+    constexpr int kLatZ = 18;   // и по z
+    constexpr int kOrg = 8;     // угол решётки
+    // Коробка бетона: запас 7 клеток (> kFrontierRadius = 6) — шар фронтира
+    // упирается в полнотвёрдое, которое страницы не получает.
+    constexpr int kBoxLo = kOrg - 7;
+    constexpr int kBoxHiXY = kOrg + 2 * (kLatXY - 1) + 7;
+    constexpr int kBoxHiZ = kOrg + 2 * (kLatZ - 1) + 7;
+    for (int z = kBoxLo; z <= kBoxHiZ; ++z)
+        for (int y = kBoxLo; y <= kBoxHiXY; ++y)
+            for (int x = kBoxLo; x <= kBoxHiXY; ++x)
+                w.grid().fill_cell(x, y, z, kMatConcrete);
+    std::vector<std::uint32_t> ballast;
+    ballast.reserve(static_cast<std::size_t>(kLatXY) * kLatXY * kLatZ);
+    for (int iz = 0; iz < kLatZ; ++iz)
+        for (int iy = 0; iy < kLatXY; ++iy)
+            for (int ix = 0; ix < kLatXY; ++ix) {
+                const int x = kOrg + 2 * ix, y = kOrg + 2 * iy,
+                          z = kOrg + 2 * iz;
+                w.grid().clear_cell(x, y, z); // снять бетон: вода безмасочна
+                const auto ci =
+                    static_cast<std::uint32_t>(macro_index(x, y, z));
+                CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+                for (int sy = 0; sy < 8; ++sy)
+                    for (int sx = 0; sx < 8; ++sx) {
+                        pg[sub_bit(sx, sy, 0)] = kMatWater;
+                        if (((sx ^ sy) & 1) == 0)
+                            pg[sub_bit(sx, sy, 1)] = kMatWater;
+                    }
+                ballast.push_back(ci);
+            }
+
+    // --- ПАДАЮЩАЯ МАТЕРИЯ, ВДАЛИ ОТ БАЛЛАСТА ------------------------------
+    // ДНА НЕТ (форма test_long_fall, и здесь это не стиль, а необходимость).
+    // Площадка-приёмник дала бы оракул «долетела», который МЕРИТ НЕ ТО:
+    // CPU-канон обновляется РОВНО окном пака, то есть клетку раз в chunks =
+    // 11 кадров, а осевшая куча засыпает через 16 подтиков (2 кадра) и
+    // выходит из списка — её финальное состояние попадает в канон с
+    // вероятностью ~5/11. Это отдельное живое следствие вращающегося окна
+    // (ровно «что в окно не влезло, на CPU остаётся старым» из
+    // test_long_fall), ход E его НЕ лечит, и строить на нём оракул значит
+    // бросать монетку. Падающая материя, наоборот, АКТИВНА всё время, её
+    // передние клетки в списке всегда, и канон их честно догоняет.
+    //
+    // Оракул поэтому ОДНОСТОРОННИЙ и устойчивый: самая глубокая клетка с
+    // раблом в каноне. Призраки (клетки, которые материя прошла, а окно не
+    // успело переписать) остаются ВЫШЕ фронта и глубину не подделывают, а
+    // канон не может показать материю глубже, чем она есть.
+    constexpr int kFx = 96, kFy = 96, kTop = 100;
+    // Полоса сканирования: 56 кадров по 8 подтиков двигают материю не больше
+    // чем на 56 клеток (1 субвоксель/подтик), от z=100 это z=44 — шов тора
+    // не задействован, «глубже» читается абсолютно.
+    constexpr int kBottom = 40;
+    // Ширина: столб 2x2 клетки, рыхлое с flow = 1.0 расползается скатом уже
+    // в полёте — берём 6 клеток запаса в каждую сторону.
+    constexpr int kScan = 6;
+    std::vector<std::uint32_t> fallSeeds;
+    std::uint32_t poured = 0;
+    for (int ox = 0; ox < 2; ++ox)
+        for (int oy = 0; oy < 2; ++oy) {
+            const auto ci = static_cast<std::uint32_t>(
+                macro_index(kFx + ox, kFy + oy, kTop));
+            CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+            for (int sz = 0; sz < 4; ++sz)
+                for (int sy = 0; sy < 8; ++sy)
+                    for (int sx = 0; sx < 8; ++sx) {
+                        pg[sub_bit(sx, sy, sz)] = kMatRubbleConcrete;
+                        ++poured;
+                    }
+            fallSeeds.push_back(ci);
+        }
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+    // Фронт падающей материи: самая глубокая клетка с её материалом (плюс
+    // кванты — ДИАГНОСТИКА, не оракул: канон отстаёт от окна, см. выше).
+    std::uint32_t fallQuanta = 0;
+    auto front_z = [&]() {
+        int minZ = kTop + 1;
+        fallQuanta = 0;
+        for (int z = kBottom; z <= kTop; ++z)
+            for (int y = kFy - kScan; y <= kFy + kScan + 1; ++y)
+                for (int x = kFx - kScan; x <= kFx + kScan + 1; ++x) {
+                    const CellType* p = f.page(static_cast<std::size_t>(
+                        macro_index(x, y, z)));
+                    if (!p) continue;
+                    for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                        if (p[b2] == kMatRubbleConcrete) {
+                            ++fallQuanta;
+                            if (z < minZ) minZ = z;
+                        }
+                }
+        return minZ;
+    };
+
+    // Будим балласт: очередь будильника режется бюджетом инжекта и честно
+    // ПЕРЕНОСИТСЯ, поэтому кадров ФИКСИРОВАННОЕ число (счёт чеков обязан
+    // быть константой прогона, а не функцией порции).
+    std::uint64_t substep = 0;
+    medium.wake_cells(ballast.data(), ballast.size(), w, mirror);
+    for (int b = 0; b < 12; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 1, substep));
+        substep += 1;
+        medium.apply_readback(w, mirror);
+    }
+    CHECK(!medium.wakes_pending()); // балласт разбужен целиком
+
+    // И только теперь — падение: материя идёт при УЖЕ толстом списке.
+    medium.wake_cells(fallSeeds.data(), fallSeeds.size(), w, mirror);
+    std::uint32_t peakList = 0;
+    std::uint32_t listAt[3] = {0, 0, 0};
+    int frontAt[3] = {0, 0, 0};
+    std::uint32_t quantaAt[3] = {0, 0, 0};
+    // Кадры по 8 подтиков (кап догона): материя идёт КЛЕТКУ ЗА КАДР — тот
+    // самый темп, против которого вращение окна и проигрывает. 56 кадров =
+    // двойной запас к 20 клеткам с хиккапом в кадр на каждый голодный рубеж.
+    for (int b = 0; b < 56; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+        if (medium.list_total() > peakList) peakList = medium.list_total();
+        const int mark = b == 11 ? 0 : (b == 23 ? 1 : (b == 55 ? 2 : -1));
+        if (mark >= 0) {
+            listAt[mark] = medium.list_total();
+            frontAt[mark] = front_z();
+            quantaAt[mark] = fallQuanta;
+        }
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+
+    std::uint32_t startQ = 0;
+    for (std::uint32_t ci : fallSeeds)
+        if (const CellType* p = f.page(ci))
+            for (int b2 = 0; b2 < kSubVoxels; ++b2)
+                if (p[b2] == kMatRubbleConcrete) ++startQ;
+
+    const std::uint32_t cap = gpu::GpuMediumPass::kRbSlotCap;
+    std::printf("[medium_test] page-req: список %u (пик %u, chunks %u), "
+                "фронт z %d/%d/%d (старт %d), квантов в каноне %u/%u/%u из "
+                "%u, на старте %u, fade %u\n",
+                medium.list_total(), peakList, (peakList + cap - 1) / cap,
+                frontAt[0], frontAt[1], frontAt[2], kTop, quantaAt[0],
+                quantaAt[1], quantaAt[2], poured, startQ,
+                medium.fade_total());
+    std::printf("[medium_test] page-req: канал — запрошено %llu, взято %llu "
+                "(кап %u), раскрыто %llu страниц за %u кадров\n",
+                static_cast<unsigned long long>(medium.page_req_asked()),
+                static_cast<unsigned long long>(medium.page_req_taken()),
+                gpu::GpuMediumPass::kPageReqCap,
+                static_cast<unsigned long long>(medium.page_req_pages()),
+                medium.page_req_frames());
+
+    // (а) РЕЖИМ ВОСПРОИЗВЕДЁН — и не мельком: список выше ДВУХ окон на
+    // каждой отсечке, то есть chunks > 2 всю дорогу падения.
+    CHECK(peakList > 2 * cap);
+    CHECK(listAt[0] > 2 * cap);
+    CHECK(listAt[1] > 2 * cap);
+    CHECK(listAt[2] > 2 * cap);
+    // ФРОНТ ДЕЙСТВИТЕЛЬНО ГОЛОДАЛ: канал звучал. Эти два чека про ПРИБОР и
+    // шейдерную половину — они остаются зелёными при мутации лечения
+    // (см. шапку), и именно поэтому они здесь: без них красная дальность
+    // неотличима от «голода не было, лечить было нечего».
+    CHECK(medium.page_req_asked() > 0);
+    CHECK(medium.page_req_taken() > 0);
+    // А ЭТОТ — про лечение: по адресам канала реально выделены страницы.
+    CHECK(medium.page_req_pages() > 0);
+    // (б) МАТЕРИЯ НЕ ВСТАЛА КОЛОМ.
+    CHECK(frontAt[0] < kTop);       // пошла
+    // Отсечки разнесены на 12 кадров > chunks = 11, то есть между ними
+    // ГАРАНТИРОВАННО есть применённое окно по этим клеткам — снимки разные,
+    // и при живом падении второй обязан быть глубже СТРОГО.
+    CHECK(frontAt[1] < frontAt[0]);
+    // ДАЛЬНОСТЬ. 56 кадров по 8 подтиков = 56 клеток свободного падения;
+    // канал отдаёт страницу за кадр, поэтому хиккап — кадр на каждые 6
+    // клеток шара ⇒ истинный путь ~48 клеток. Канон отстаёт не больше периода
+    // окна (11 кадров = 11 клеток) ⇒ видимый путь >= 37. Порог 20 клеток —
+    // почти двойной запас, и он ВНЕ досягаемости бага: без канала фронт
+    // стоит на глубине шара (6 клеток) и засыпает, а единственный его
+    // спасатель — ленивый путь шва, успевающий внутрь 16 подтиков с
+    // вероятностью ~2/11 на рубеж.
+    CHECK(frontAt[2] <= kTop - 20);
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
 // ==== СТЕНД ИНКРЕМЕНТА 0 «АВТОМАТ-2» (markoaudit/plans/medium-bitmask.md) ==
 // Цена битсетной «нервной системы» — замер ДО правок боевого medium_sim.
 // Формы плотного гейта (shaders/bitmask_stand.comp):
@@ -2599,6 +2837,7 @@ int main() {
         test_recarve_no_floating(dev);
         test_sleep_under_budget(dev);
         test_full_rubble_wakes(dev);
+        test_page_request_channel(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

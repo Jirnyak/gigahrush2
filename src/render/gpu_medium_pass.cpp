@@ -136,6 +136,76 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                        .count();
 }
 
+// КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E, matwej.md §10) — CPU-половина. GPU кладёт
+// в список адреса клеток, в которые материя УЖЕ упёрлась (отказ can_swap
+// ровно по writable, см. request_page в шейдере), здесь они раскрываются
+// МИМО вращающегося окна пака.
+//
+// Почему это лечит баг, а подъём kRbSlotCap нет: окно возит СТРАНИЦЫ (1 КиБ
+// на слот), и чтобы оно покрывало замеренный p99 live, слотов нужно 175 661
+// = 573 МиБ буферов; канал возит АДРЕС (4 Б) и ровно тех клеток, кому он
+// нужен сейчас. Окно остаётся как было — оно про шов, не про фронтир.
+//
+// ЦЕНА КАДРА В НОРМЕ — РОВНО НОЛЬ: одно чтение слова и выход. Работа есть
+// только когда материя голодает, то есть в режиме, где сегодня она
+// застывает насмерть.
+void GpuMediumPass::drain_page_requests(World& world, VoxelMirror& mirror) {
+    if (!pageReqBack_.mapped) return;
+    auto* req = static_cast<std::uint32_t*>(pageReqBack_.mapped);
+    const std::uint32_t asked = req[0];
+    if (asked == 0u) return; // НОРМА: канал молчит
+    // Голова ГАСИТСЯ ЗДЕСЬ, а не на GPU: счётчик uCnt[kCntPageReq] обнуляет
+    // трансфер в начале кадра (record_substeps), но между двумя чтениями CPU
+    // может не случиться ни одной копии — без этой строки тот же список
+    // обслуживался бы дважды. Потерять запрос из-за гонки с копией не
+    // страшно: предикат отказа повторяется каждый подтик, пока страницы
+    // нет, — это латентность кадра, а не потеря события.
+    req[0] = 0u;
+    const std::uint32_t taken = std::min(asked, kPageReqCap);
+    pageReqAsked_ += asked;
+    pageReqTaken_ += taken;
+    ++pageReqFrames_;
+    SubField<CellType>* f = world.subfields().find<CellType>(kSubMaterialName);
+    pageReqCells_.clear();
+    for (std::uint32_t i = 0; i < taken; ++i) {
+        const std::uint32_t ci = req[1 + i];
+        if (ci >= kMacroCells) continue;
+        // GPU отстаёт от CPU на кольцо шва: страницу могли уже выделить
+        // (фронтир, ленивый путь, писатель) — тогда работы нет совсем.
+        if (f && f->paged(ci)) continue;
+        // Бит «округа раскрыта» СНИМАЕТСЯ: без этого канал был бы бессилен
+        // ровно там, где он нужен — у клетки, чей шар однажды раскрывали, а
+        // страницу потом схлопнул CPU-писатель. Повторного скана не будет:
+        // после раскрытия клетка paged, и фильтр выше её отсечёт.
+        frontierDone_[ci >> 6] &= ~(1ull << (ci & 63u));
+        pageReqCells_.push_back(ci);
+    }
+    const std::uint64_t pagesBefore = frontierPages_;
+    // Дубли в списке законны (дедуп шейдера — на блок, не на клетку):
+    // open_frontier идемпотентен по frontierDone_, повтор стоит одну
+    // проверку бита. Цена худшего кадра: 4096 шаров × 2197 проб = 9 млн,
+    // то есть половина замеренного полного окна (18 млн = 4-8 мс, замер
+    // 2026-08-30) — и платится она только в режиме застывания.
+    if (!pageReqCells_.empty())
+        open_frontier(world, mirror, pageReqCells_.data(),
+                      pageReqCells_.size());
+    pageReqPages_ += frontierPages_ - pagesBefore;
+    // ПРИБОР: печатаем ПЕРВОЕ событие этажа и дальше раз в 64 непустых
+    // кадра (рейт-лимит как у wake carry). Молчащий канал не печатает ничего
+    // — в норме список пуст, и строка в логе означает «фронтир отстал».
+    if ((pageReqFrames_ % 64u) == 1u)
+        std::fprintf(stderr,
+                     "[medium] канал страниц: запрошено %llu, взято %llu "
+                     "(кап %u), раскрыто %llu страниц за %u кадров%s\n",
+                     static_cast<unsigned long long>(pageReqAsked_),
+                     static_cast<unsigned long long>(pageReqTaken_),
+                     kPageReqCap,
+                     static_cast<unsigned long long>(pageReqPages_),
+                     pageReqFrames_,
+                     asked > kPageReqCap ? "  [СПИСОК ПОЛОН — ЛАТЕНТНОСТЬ]"
+                                         : "");
+}
+
 bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
                          const VoxelMirror& mirror) {
     dev_ = dev;
@@ -175,6 +245,8 @@ void GpuMediumPass::destroy() noexcept {
     pageBack_.destroy(*dev_);
     maskBack_.destroy(*dev_);
     listBack_.destroy(*dev_);
+    pageReqDev_.destroy(*dev_);
+    pageReqBack_.destroy(*dev_);
     dev_ = nullptr;
 }
 
@@ -247,12 +319,35 @@ bool GpuMediumPass::create_buffers() noexcept {
                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                         "medium-list-back"))
         return false;
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E §10): 16 КиБ адресов, два этажа тем же
+    // законом, что и шов — шейдер пишет в VRAM (на дискретной карте прямая
+    // запись шейдера в host-visible и была половиной виндового замера, см.
+    // шапку полей *Dev_/*Back_ в хедере), на хост регион уезжает копией.
+    // Хостовая половина несёт ЛИШНЕЕ слово в голове — туда ложится счётчик
+    // uCnt[kCntPageReq] тем же трансфером: счёт и список обязаны приехать
+    // вместе, иначе CPU прочитал бы длину от одного кадра, а адреса от
+    // другого.
+    const VkDeviceSize reqSlotBytes =
+        static_cast<VkDeviceSize>(kPageReqCap) * sizeof(std::uint32_t);
+    if (!pageReqDev_.create_device_local_empty(
+            *dev_, reqSlotBytes, st | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            "medium-pagereq-dev"))
+        return false;
+    if (!pageReqBack_.create_host_readback(
+            *dev_, reqSlotBytes + sizeof(std::uint32_t),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-pagereq-back"))
+        return false;
+    if (pageReqBack_.mapped)
+        std::memset(pageReqBack_.mapped, 0,
+                    static_cast<std::size_t>(reqSlotBytes) +
+                        sizeof(std::uint32_t));
     return true;
 }
 
 bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
     VkDevice d = dev_->device;
-    constexpr std::uint32_t kBindings = 13;
+    // 14-й биндинг — канал запроса страницы (ход E), см. medium_sim.comp.
+    constexpr std::uint32_t kBindings = 14;
 
     VkDescriptorSetLayoutBinding bindings[kBindings]{};
     for (std::uint32_t b = 0; b < kBindings; ++b) {
@@ -303,6 +398,7 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[10] = {maskDev_.buffer, 0, VK_WHOLE_SIZE};
         bufs[11] = {listDev_.buffer, 0, VK_WHOLE_SIZE};
         bufs[12] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[13] = {pageReqDev_.buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[kBindings]{};
         for (std::uint32_t b = 0; b < kBindings; ++b) {
             writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -448,6 +544,13 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     if (!ready() || !pageBack_.mapped || !maskBack_.mapped ||
         !listBack_.mapped)
         return;
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E §10) — ПЕРВЫМ ДЕЛОМ и ДО всех выходов
+    // ниже: он не зависит ни от кольца регионов, ни от гейта подписи (он
+    // возит адреса, а не состояние — применять нечего, значит и стеречь
+    // свежесть нечего). Раньше шва он стоит ещё и по делу: страницы,
+    // раскрытые здесь, попадают в ту же очередь зеркала ПЕРЕД ленивыми
+    // материализациями шва, то есть уезжают первыми в окне стейджинга.
+    drain_page_requests(world, mirror);
     if (rbGen_ < kRbRegions) return;
     RbRecord& rec = rbRing_[rbGen_ % kRbRegions];
     if (!rec.valid) return;
@@ -767,6 +870,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     if (!ready()) return;
     const std::uint32_t slot = frameSlot % kMaxFramesInFlight;
 
+    const bool fullClear = actNeedsClear_;
     if (actNeedsClear_) {
         vkCmdFillBuffer(cmd, cellAct_.buffer, 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, counters_.buffer, 0, VK_WHOLE_SIZE, 0u);
@@ -782,6 +886,19 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         rbGen_ = 0;
         for (auto& r : rbRing_) r.valid = false;
     }
+
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E §10): счётчик живёт РОВНО КАДР — список
+    // накапливается по всем подтикам кадра и вычитывается CPU один раз
+    // (apply_readback), поэтому обнуление стоит здесь, а не в run_prepare
+    // (тот идёт КАЖДЫЙ подтик и стирал бы запросы раньше, чем их прочли).
+    // Четыре байта по месту слота: indirect-команда uCnt[0..2] не тронута.
+    // Барьер не нужен свой — входной inBar ниже несёт TRANSFER_WRITE в
+    // srcAccessMask. При fullClear слот уже обнулён полным клиром, и второй
+    // fill был бы перекрывающейся записью без синхронизации.
+    if (!fullClear)
+        vkCmdFillBuffer(cmd, counters_.buffer,
+                        kCntPageReq * sizeof(std::uint32_t),
+                        sizeof(std::uint32_t), 0u);
 
     // Вход: flush зеркала (трансфер) и прошлые читатели — до компьюта.
     VkMemoryBarrier inBar{};
@@ -922,6 +1039,22 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     vkCmdCopyBuffer(cmd, pageDev_.buffer, pageBack_.buffer, 1, &pageCopy);
     vkCmdCopyBuffer(cmd, maskDev_.buffer, maskBack_.buffer, 1, &maskCopy);
     vkCmdCopyBuffer(cmd, listDev_.buffer, listBack_.buffer, 1, &listCopy);
+    // КАНАЛ ЗАПРОСА СТРАНИЦЫ (ход E): СЧЁТ И СПИСОК ОДНИМ КАДРОМ. Счёт едет
+    // из counters_ в голову хостового буфера, слоты — из своей VRAM-копии
+    // сразу за ним: длина от одного кадра при адресах от другого дала бы
+    // чтение мусорных слотов. Регион возится целиком (16 КиБ = 0.2% от 8.5
+    // МиБ шва): длину CPU узнаёт только из этой же копии, выбирать объём
+    // переноса ему нечем, а экономить 16 КиБ ценой второго сабмита — обмен
+    // не в ту сторону.
+    const VkBufferCopy reqCntCopy{kCntPageReq * sizeof(std::uint32_t), 0,
+                                  sizeof(std::uint32_t)};
+    const VkBufferCopy reqListCopy{
+        0, sizeof(std::uint32_t),
+        static_cast<VkDeviceSize>(kPageReqCap) * sizeof(std::uint32_t)};
+    vkCmdCopyBuffer(cmd, counters_.buffer, pageReqBack_.buffer, 1,
+                    &reqCntCopy);
+    vkCmdCopyBuffer(cmd, pageReqDev_.buffer, pageReqBack_.buffer, 1,
+                    &reqListCopy);
 
     // Доставка копии хосту. Без этого барьера чтение из .mapped — гонка,
     // которую фенс НЕ закрывает: фенс говорит «команды исполнены», а видимость
