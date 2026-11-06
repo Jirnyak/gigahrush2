@@ -30,7 +30,16 @@
 //                        an axis on collision. The integrator, not a steerer.
 //   slow_step         src/game/combat.cpp      view<Slowed,Transform,Velocity>
 //                     -> CLAMPS magnitude, idempotent by construction. A
-//                        post-filter, not an owner. NOT wired in main.cpp today.
+//                        post-filter, not an owner. СТУХЛО / поправка
+//                        2026-11-06 (matwej.md §13): ~~NOT wired in main.cpp
+//                        today~~ — it IS wired. `main.cpp` calls it every sim
+//                        tick from the physics phase (the profiler slot is
+//                        named `kProfPhysics` = "slow_step + physics_step",
+//                        which is itself the standing proof of the wiring),
+//                        immediately BEFORE `physics_step`. Being a clamp it
+//                        takes no ownership token, so the single-writer claim
+//                        below is unaffected in shape — but do not reason from
+//                        "unwired" about live velocity magnitudes.
 //   faction_feud_step src/game/faction_relations.cpp view<Transform,Velocity,const NpcRef>
 //                     -> IS a second NPC writer, and it is LIVE: main.cpp calls it
 //                        every tick (main.cpp ~line 1022, after wander_step and
@@ -137,13 +146,28 @@
 // with the clock running for all of them ([problems.md] §27 — the reverted fix). A
 // decision to eat that cannot steer a body is not a decision.
 //
-// It is now a THIRD source, and it is a table rather than a second special case:
-// `intent_room_mask` ([room_zone.h]) answers "which room kind satisfies this
-// intent", and an intent with an answer descends that kind's baked 128^3 field,
-// walks to its own SEAT inside the room, and holds still there while the room's
-// ambient recovery does the work. eat/drink -> Kitchen, toilet -> Bathroom,
-// sleep -> Living today; work/social/patrol are a ROW away and deliberately not
-// taken yet, so one behaviour change is measurable at a time.
+// СТУХЛО / поправка 2026-11-06 (matwej.md §13). The paragraph below describes a
+// THIRD source that does not exist on HEAD. `room_zone.h` is NOT IN THE TREE at
+// all (demolished by rooms-object F together with the per-room-kind flow fields,
+// see the gravestone in `ai.cpp`'s steering loop), and with it went
+// `intent_room_mask`, `kRoomAffordance` and `room_recover` — all three are
+// comment-only ghosts today, zero declarations anywhere in `src`. Consequently
+// there are TWO sources, not three, and `IntentFlee` really is the only intent
+// that takes `MotionOwner::Ai` inside this file. What actually answers "WHERE do
+// I go for this" now lives one slab over, by a deliberate layering decision:
+// `place_pick` ([game/place.h]) scores DECLARED rooms by demand x supply, and
+// `ai_patrol_step` below is the one consumer that turns such a destination into
+// a route. `ai.*` owns "WHAT do I want"; `place.*` owns "WHERE to get it".
+// Read the rest of this paragraph as the ORIGINAL INTENT of the seat/errand
+// design, not as live machinery:
+//
+// ~~It is now a THIRD source, and it is a table rather than a second special
+// case: `intent_room_mask` ([room_zone.h]) answers "which room kind satisfies
+// this intent", and an intent with an answer descends that kind's baked 128^3
+// field, walks to its own SEAT inside the room, and holds still there while the
+// room's ambient recovery does the work. eat/drink -> Kitchen, toilet ->
+// Bathroom, sleep -> Living today; work/social/patrol are a ROW away and
+// deliberately not taken yet, so one behaviour change is measurable at a time.~~
 //
 // An intent with NO row, or a floor whose mix contains none of the rooms it names
 // (an Industrial floor has no kitchen at all), still delegates to `wander_step` —
@@ -844,7 +868,12 @@ inline constexpr float kFleeSpeed = 1.35f * 1.6f;
 inline constexpr float kErrandSpeed = 1.35f;
 
 // How close to its seat a body must be to count as SETTLED, in metres. Below this
-// it stops and the room's ambient recovery does the work ([room_zone.h] micro-goal).
+// it stops and the room's ambient recovery does the work. (~~[room_zone.h]
+// micro-goal~~ — СТУХЛО / поправка 2026-11-06, matwej.md §13: that header is not
+// in the tree, and the ambient-recovery half has no implementation today either;
+// the micro-goal "which seat exactly" is owed to S13.4 on room props. The
+// constant itself is LIVE and correctly derived — see the cell-fraction argument
+// below — it is only the cross-reference that rotted.)
 // One third of a cell: tight enough that bodies visibly spread across a room's nine
 // interior cells rather than piling on its centre, loose enough that swept-AABB
 // collision against furniture cannot leave a body shuffling forever.
@@ -1003,19 +1032,35 @@ std::uint32_t ai_release(Registry& reg, LayerId layer);
 // exercised headless by `game_test`.
 //
 //
-// `rooms` (optional, §27 leg (a)+(b)) is what ends "IntentFlee is the ONLY owning
-// intent". With it, an intent the affordance table gives a destination
+// СТУХЛО / поправка 2026-11-06 (matwej.md §13). THERE IS NO `rooms` PARAMETER.
+// Read the signature directly below this comment: `ai_step` takes registry, pool,
+// danger field, grid, layer, clock, dt, config, memory, the doors GRAVE (a dead
+// slot kept only to hold the position), world, bus and tick — and nothing named
+// `rooms`. The paragraph below also leans on `room_zone.h`/`kRoomAffordance`,
+// neither of which is in the tree (rooms-object F demolished them together with
+// the per-room-kind flow fields). So the pre-rooms pass it calls a fallback is
+// simply THE pass: every non-flee intent delegates to `wander_step`, and
+// `IntentFlee` is still the ONLY intent that takes `MotionOwner::Ai` here.
+// Room-aware destinations are reached through `place_pick` ([game/place.h]) and
+// executed by `ai_patrol_step`, which are separate entry points with their own
+// arguments — not through a parameter of this function. Kept as the design
+// intent that the widening was meant to follow:
+//
+// ~~`rooms` (optional, §27 leg (a)+(b)) is what ends "IntentFlee is the ONLY
+// owning intent". With it, an intent the affordance table gives a destination
 // ([room_zone.h] kRoomAffordance — eat/drink/toilet/sleep today) descends that
 // room kind's baked field, walks to its SEAT inside the room, and holds there
 // while the room restores it. Null, or a floor whose room mix contains none of
-// those kinds, is bit-for-bit the pre-rooms pass: the intent still wins, it simply
-// has nowhere to go and delegates to `wander_step` exactly as it always did.
+// those kinds, is bit-for-bit the pre-rooms pass: the intent still wins, it
+// simply has nowhere to go and delegates to `wander_step` exactly as it always
+// did.~~
 //
-// THE SINGLE-WRITER STORY IS UNCHANGED IN SHAPE, and that is the reason this is
-// safe to widen. Ownership is still one token, still decided in one place, still
-// re-derived every tick. What changed is only the SET of intents that can earn it;
-// `wander_step` and `faction_feud_step` read the same `ai_owns_motion` guard and
-// neither had to learn anything about rooms.
+// THE SINGLE-WRITER STORY IS UNCHANGED IN SHAPE, and that part still holds on
+// HEAD — it is why the widening stays safe to make. Ownership is still one token,
+// still decided in one place, still re-derived every tick. What a widening would
+// change is only the SET of intents that can earn it; `wander_step` and
+// `faction_feud_step` read the same `ai_owns_motion` guard and would not have to
+// learn anything about rooms.
 // bus+tick — ДЕЯНИЕ «лечить» (S19): медик кредитует hpBank пациента каждый
 // тик, а деяние публикуется раз в ТАКТ на пациента (stateless дебаунс
 // границей kTactTicks — ср. «одно взятие в час» S12.5).
@@ -1038,8 +1083,10 @@ class World;
 namespace giga::game {
 
 // Patrol execution — the FIRST consumer of the baked coarse graph + flow fields
-// as a ROUTE, which is the exact thing the `IntentPatrol -> Corridor` refusal in
-// [room_zone.h] was waiting for: a destination without a route is loitering
+// as a ROUTE, which is the exact thing the `IntentPatrol -> Corridor` refusal
+// was waiting for (~~[room_zone.h]~~ — СТУХЛО / поправка 2026-11-06, matwej.md
+// §13: that header is gone from the tree; the refusal it recorded survives only
+// as this sentence): a destination without a route is loitering
 // wearing patrol's name. Runs AFTER `ai_step` and BEFORE `wander_step`: it
 // steers only IntentPatrol bodies `ai_step` left to wander, and CLAIMS them
 // (MotionOwner::Ai) so wander skips them — one writer per body per tick, same

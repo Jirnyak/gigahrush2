@@ -32,12 +32,29 @@
 // neither. Widen it when the utility AI (#12) can walk an NPC to a kitchen, not
 // before."
 //
-// It can now. `intent_room_mask` gives a hungry body a kitchen to walk to and the
-// utility AI takes ownership of its motion to get there ([room_zone.h], [ai.h],
-// [problems.md] §27 legs (a)+(b)); `room_recover` is the reference's ambient
-// recovery, ported from the same `needs.ts` lines the paragraph above names. So the
-// argument is retired by having its condition satisfied, not by being overruled —
-// and the ROUND-ROBIN half is deliberately still not taken, because it is not
+// СТУХЛО / поправка 2026-11-06 (matwej.md §13). The paragraph below retires the
+// narrow-scope argument on a condition that is NOT met on HEAD. `room_zone.h`,
+// `intent_room_mask` and `room_recover` are all absent from the tree — demolished
+// with the per-room-kind flow fields by rooms-object F — so the utility AI does
+// NOT today walk a hungry body to a kitchen (every non-flee intent delegates to
+// `wander_step`, see [ai.h]), and there is no ambient-recovery pass at all. The
+// WIDE TICK SCOPE IS REAL AND STAYS: this file does tick every embodied body on
+// the live floor, and that is the measured fact. What is false is the stated
+// JUSTIFICATION — the morgue hazard the old argument named is therefore still
+// open, not answered, and it is exactly what matwej.md §21 move G ("arrived ->
+// consumed -> need goes back up") is for. Nearest live machinery to build on:
+// `place_pick` ([game/place.h]), which scores declared rooms by demand x supply.
+//
+// ~~It can now. `intent_room_mask` gives a hungry body a kitchen to walk to and
+// the utility AI takes ownership of its motion to get there ([room_zone.h],
+// [ai.h], [problems.md] §27 legs (a)+(b)); `room_recover` is the reference's
+// ambient recovery, ported from the same `needs.ts` lines the paragraph above
+// names. So the argument is retired by having its condition satisfied, not by
+// being overruled~~ — it was retired by being OVERRULED, which is a different
+// thing and leaves a debt.
+//
+// Still true, and independent of the above: the ROUND-ROBIN half is deliberately
+// still not taken, because it is not
 // needed: the scope is one floor's embodied bodies (419 on the demo stack, 16,000
 // at the design ceiling), which is O(n) in exactly the population the tick already
 // walks for physics. The cold 950k stay cold; the macro sim owns their clock
