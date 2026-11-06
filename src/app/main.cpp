@@ -135,6 +135,7 @@
 #include "sim/controller.h"
 #include "sim/diffusion.h"
 #include "sim/physics.h"
+#include "sim/presence.h" // пузырь вокруг наблюдателя — ОДИН на дерево (§23)
 #include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/stain.h"
@@ -754,11 +755,15 @@ static void mark_diffusion_dirty(DiffusionDriver& driver, const MacroGrid& grid,
 // субвоксельное. Прежняя проверка до карва спрашивала только тип ячейки и не
 // видела неон, нарисованный атомами ([markoaudit/plans/neon-topology.md] §4).
 
-float samosbor_fog_scale(const game::SamosborState& st); // определение ниже
+// Пред-объявление `samosbor_fog_scale` СНЕСЕНО 2026-11-06: его единственным
+// читателем выше определения был камерный радиус отбора ламп, а он переехал на
+// номинал системы присутствия (ниже, §23). Три живых вызова погодного
+// множителя — все в рендере и все ПОСЛЕ определения, поэтому пред-объявление
+// стало декларацией без потребителя, то есть мёртвым грузом с обещанием
+// «определение ниже», которое больше ничего не держит.
 
 static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                                  float timeSec, std::uint64_t simTick,
-                                 const game::SamosborState& samosbor,
                                  const Registry& reg, LayerId activeLayer,
                                  const game::NoiseField* noiseField = nullptr,
                                  const game::PowerGridState* powerGrid = nullptr,
@@ -780,23 +785,73 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
     // add_light с конусом, тем же, каким получат его и NPC. [ddalight.md]
     //
     // Единственный закон калла: источник существует, если его сфера СВОЕГО
-    // радиуса касается сферы видимости (радиус тумана) вокруг КАМЕРЫ. Общих
-    // констант нет — лампы разные, решает радиус каждой. Иначе лампа
-    // «загорается» при приближении (репорт владельца — каллы были 32-48 м при
-    // видимости 128). Камерный сорт и kMaxPointLights мертвы (V-A/V-C):
-    // отбор статикам даёт бейк видимости, динамиков — единицы. [ddalight.md]
-    // Радиус видимости — ТА ЖЕ формула, что fog.y пуша (kWorldExtent/2 ×
-    // множитель самосбора): ручная копия без fogScale разъехалась (К1-13,
-    // аудит 2026-08-25) — весь самосбор свет отбирался по полному радиусу,
-    // и параметр samosbor в сигнатуре висел неиспользуемым.
-    const float kFogRadius =
-        kWorldExtent * 0.5f * samosbor_fog_scale(samosbor);
+    // радиуса касается сферы видимости вокруг КАМЕРЫ. Общих констант нет —
+    // лампы разные, решает радиус каждой. Иначе лампа «загорается» при
+    // приближении (репорт владельца — каллы были 32-48 м при видимости 128).
+    // Камерный сорт и kMaxPointLights мертвы (V-A/V-C): отбор статикам даёт
+    // бейк видимости, динамиков — единицы. [ddalight.md]
+    //
+    // ПЕРЕЕЗД НА СИСТЕМУ ПРИСУТСТВИЯ, 2026-11-06 (F0, matwej.md §23.4).
+    // Это был ЕДИНСТВЕННЫЙ живой камерный радиус в дереве, написанный от руки,
+    // и система его ПОГЛОЩАЕТ, а не дублирует: радиус теперь приходит из
+    // уровня `kVisible` ([sim/presence.h]), то есть из той же доли периода
+    // тора `kFogEndFrac`, из которой рендер берёт свой `fog.y`. Отбраковка
+    // сообщается системе (`presence_note`), чтобы предикат не был немым.
+    //
+    // ЧТО ИЗМЕНИЛОСЬ В ПОВЕДЕНИИ, ВСЛУХ: было `kWorldExtent × 0.5 ×
+    // samosbor_fog_scale`, то есть радиус СЖИМАЛСЯ самосбором до ×0.34 (128 →
+    // 43.5 м). Стал НОМИНАЛ 128 м всегда. Вне самосбора — бит-в-бит то же
+    // число (множитель был 1.0); в самосборе отбор ДИНАМИЧЕСКОГО хвоста стал
+    // шире. Это решение владельца и оно идёт из §23.1: радиус, зависящий от
+    // состояния мира, не коммутирует — пузырь обязан быть одним и тем же
+    // независимо от погоды. Статиков это не касается вовсе (им интенсивность
+    // пишет `set_static_intensity`, каллов у них нет с рождения бейка
+    // видимости), и переливом это не грозит: корневой кап таблицы
+    // `kRootLights` = 131 072 против ~12.6 тыс. статиков этажа 0, а перелив
+    // сверх него считается и печатается (`overflow_dropped`).
+    //
+    // `samosbor` ушёл из сигнатуры ВМЕСТЕ с этим множителем: он был его
+    // единственным читателем здесь, а мёртвый параметр в этом дереве есть
+    // дефект, а не запас. (Аудит 2026-08-25, К1-13, ловил ОБРАТНОЕ: ручную
+    // копию БЕЗ `fogScale` при живом `fogScale` в пуше. Теперь расхождения нет
+    // по построению — радиус один и его выдаёт одна дверь.)
+    static const giga::PresenceId kLightPresence = giga::presence_register({
+        "light:dynamic-emitters",
+        giga::PresenceLevel::kVisible,
+        giga::PresenceClass::kCoarsen,
+        // БЮДЖЕТ — СЕГОДНЯШНЯЯ ЦЕНА ЭТОГО ПРОХОДА, не пожелание: полный
+        // пере-сбор ламп 0.48-0.54 мс CPU (замер К5-E1, 2026-08-26); берём
+        // худшее из вилки.
+        0.54f,
+        // ЦЕНА ШТУКИ — ЕДИНСТВЕННЫЙ ЗАМЕР ПО-ШТУЧНОЙ РАБОТЫ НА СВЕТОВОМ ПУТИ,
+        // который в этом дереве есть, и он ПРО ДРУГУЮ ШТУКУ: обход клеток, а
+        // не ламп. Сказано вслух, потому что число без происхождения — дефект,
+        // а число с чужим происхождением — дефект, выглядящий как решение.
+        // Верхняя граница взята сознательно: N от неё МЕНЬШЕ, то есть ошибка
+        // идёт в безопасную сторону.
+        0.234f,
+        "problems.md §78 (:4804-4806): rebuild_emitter_field, обход 2 097 152 "
+        "клеток, 324-491 мс на входе этажа => 0.155-0.234 мкс/клетка; берём "
+        "худшее 0.234. ТА ЖЕ работа после распараллеливания §78.1 (:4848) "
+        "стоит 31.0 мс => 0.0148 мкс, то есть 0.234 консервативна в 15.8 раза. "
+        "ШТУКА ЗДЕСЬ ДРУГАЯ (клетка, не лампа) — опровергается скобкой prof "
+        "вокруг самого предиката, и тогда N пересчитывается",
+    });
+    // РЕЖИМ ОТКАЗА НАЗВАН ВСЛУХ: если регистрация не прошла, радиус = 0 и
+    // динамические лампы гаснут — ГРОМКО, вместе с печатью причины отказа.
+    // Фолбэка «взять номинал самому» здесь нет СОЗНАТЕЛЬНО: это был бы второй
+    // источник радиуса, то есть ровно то, против чего вся система.
+    const float kFogRadius = giga::presence_radius(kLightPresence);
+    std::uint32_t lrvTested = 0, lrvPassed = 0;
     auto light_reaches_view = [&](const vec3& pos, float radius) {
+        ++lrvTested;
         const float dx = wrap_delta_f(camPos.x, pos.x, kWorldExtent);
         const float dy = wrap_delta_f(camPos.y, pos.y, kWorldExtent);
         const float dz = wrap_delta_f(camPos.z, pos.z, kWorldExtent);
         const float reach = kFogRadius + radius;
-        return dx * dx + dy * dy + dz * dz <= reach * reach;
+        const bool in = dx * dx + dy * dy + dz * dz <= reach * reach;
+        if (in) ++lrvPassed;
+        return in;
     };
 
     // 2. Тревога самосбора БОЛЬШЕ НЕ СВЕТИТ ОТ КАМЕРЫ. Здесь жил последний
@@ -983,6 +1038,12 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
                 }
             }
     }
+
+    // Отбраковка предиката — В СИСТЕМУ, а не только в эту функцию: предикат,
+    // не говорящий, сколько он выкинул, молча выкидывает из мира (§24.4 п.5).
+    // Счёт идёт по ВЫЗОВАМ предиката, то есть по всем трём видам кандидатов
+    // (мобы-лампы, снаряды, сорванные пропы-светы) — у статиков каллов нет.
+    giga::presence_note(kLightPresence, lrvTested, lrvPassed);
 
     // GIGA_LIGHT_DBG=1: строка раз в ~2 с — кто из пропов-светов жив и куда
     // делись остальные. На GPU теперь едет вся таблица (кап-512 мёртв);
@@ -9986,11 +10047,31 @@ int main(int argc, char** argv) {
                     }
                 }
                 const auto ctLg = std::chrono::steady_clock::now();
+                // ЦЕНТРЫ ПУЗЫРЯ — КАДРОМ, И ОТСЮДА, А НЕ ИЗНУТРИ СИСТЕМЫ:
+                // центр есть КАМЕРА (в консольном полёте тело стоит, а взгляд
+                // едет — §23.3 п.2), а камеру знает app. Список, не точка:
+                // [netcode.md] объявляет server-authoritative с первого дня, и
+                // две сессии дадут два центра без правки потребителей.
+                // Сегодня центр ровно один — `compute_camera` отдаёт первую
+                // найденную камеру, и `CameraTag` в дереве один.
+                const vec3 presenceCenters[] = {camMat.eye};
+                giga::presence_set_centers(presenceCenters, 1);
                 // Полный пере-сбор ламп = 0.48-0.54 мс CPU (замер К5-E1,
                 // 2026-08-26) — dirty-редизайн отложен с числом: придёт
                 // естественно с программой щитка (S15.4), которая всё равно
                 // переустроит «кто пишет интенсивности».
-                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, simTick, samosbor, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
+                collect_scene_lights(lightGrid, camMat.eye, currentTimeSec, simTick, reg, activeLayer, &noiseField, &powerGrid, camMat.forward, worldUp, &pool, player);
+                // GIGA_PRESENCE_DBG=1: белый список потребителей с их N,
+                // выводом N и отбраковкой — раз в ~2 с. Белый список печатает
+                // и сама регистрация, одной строкой на потребителя (§23.6);
+                // здесь — живые счётчики.
+                {
+                    static const bool kPresenceDbg =
+                        std::getenv("GIGA_PRESENCE_DBG") != nullptr;
+                    static std::uint32_t presenceDbgFrame = 0;
+                    if (kPresenceDbg && (presenceDbgFrame++ % 120u) == 0u)
+                        giga::presence_report();
+                }
                 lightGrid.update_and_dispatch(cmd);
                 if (g_carveT.carved) g_carveT.lgridMs = carve_ms_since(ctLg);
             }
@@ -10049,7 +10130,8 @@ int main(int argc, char** argv) {
                 }
                 const mat4 vp = mat4_mul(camMat.proj, cullView);
                 const uint32_t fIdx = renderer.currentFrame;
-                const float fogEnd = kWorldExtent * 0.50f * samosbor_fog_scale(samosbor);
+                const float fogEnd =
+                    kWorldExtent * kFogEndFrac * samosbor_fog_scale(samosbor);
                 const float torusPeriod = kWorldExtent;
                 // ONE shared instance buffer, shapes as ranges
                 // ([prop_pass.h] kRootPropInstances): upload cuts the ranges,
@@ -10293,8 +10375,13 @@ int main(int argc, char** argv) {
             // z: бывший радиус налобника, мёртвая лейна (S5) — ни один шейдер
             // её не читал. С 2026-10-01 несёт ИЗМЕРИТЕЛЬНЫЙ РЕЖИМ МАРША
             // ([raymarch.frag] kMarch*), в игре всегда 0.
-            push.fog = vec4{kWorldExtent * 0.25f * fogScale * march_fog_mul(),
-                            kWorldExtent * 0.50f * fogScale * march_fog_mul(),
+            // Доли — именованные ([world/types.h] kFogStartFrac/kFogEndFrac,
+            // там же их вывод из периода тора). `fogScale` и `march_fog_mul`
+            // ОСТАЮТСЯ здесь: погодное сжатие и измерительная ручка марша —
+            // дело рендера, и в номинал уровней присутствия они не входят
+            // (§23.1, шапка [sim/presence.h]).
+            push.fog = vec4{kWorldExtent * kFogStartFrac * fogScale * march_fog_mul(),
+                            kWorldExtent * kFogEndFrac * fogScale * march_fog_mul(),
                             march_measure_mode(), kAmbient};
             // The wrap period, so cube.vert can place each cell at its nearest
             // toroidal image itself. Instance origins are absolute, which is what

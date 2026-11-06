@@ -945,7 +945,14 @@ if(GIGA_BUILD_TESTS)
         # переспрошен у `ClearanceField` напрямую вместо решёточного бейка — это
         # не снос пина, а снятие посредника (стена толщиной в субвоксель, грань
         # поперёк закрыта, вдоль открыта).
-        PASS_REGULAR_EXPRESSION "14910/14910 checks passed"
+        # 14910 + 890 = 15800 на 2026-11-06 (F0 система присутствия, matwej.md
+        # §23): suite_presence.inl — вывод N из бюджета/цены с краями, номинал
+        # радиуса ТОЧНЫМ равенством kWorldExtent×доля (краснеет любой множитель
+        # — юнит-свидетель коммутации §23.1), объединение центров, число
+        # упаковки 8 в обе половины, kNN против независимого брутфорса (20 из
+        # 216 АРИФМЕТИКОЙ). 890 исполнений = 14+14+19+759+79+5 по шести тестам;
+        # дельта сведена по ИСПОЛНЕНИЯМ и сошлась с прогоном бинаря точно.
+        PASS_REGULAR_EXPRESSION "15800/15800 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

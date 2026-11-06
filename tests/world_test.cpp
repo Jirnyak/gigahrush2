@@ -18,6 +18,7 @@
 #include "sim/diffusion.h"
 #include "sim/drag.h"
 #include "sim/physics.h"
+#include "sim/presence.h" // пузырь вокруг наблюдателя — ОДИН на дерево (§23)
 #include "sim/rigid.h"
 #include "world/destruct.h"
 #include "world/field.h"
@@ -52,6 +53,7 @@ int g_checks = 0;
 #include "suite_destruct.inl"
 #include "suite_surface.inl"
 #include "suite_clearance.inl"
+#include "suite_presence.inl"
 static void test_wrap() {
     CHECK(wrapi(0, 128) == 0);
     CHECK(wrapi(128, 128) == 0);
@@ -1462,6 +1464,7 @@ int main() {
     test_props_all();
     test_surface_all();
     test_clearance_all();
+    test_presence_all();
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {
         std::printf("FAILED (%d)\n", g_fails);
