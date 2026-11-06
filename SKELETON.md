@@ -194,7 +194,7 @@ macOS/Clang и на MSVC, что важно отдельно, пока винд�
 | пропы (корневой) | 2^17 = 131072 | `src/render/prop_pass.h:46 «static constexpr uint32_t kRootPropInstances = 1u << 17; // 131072»` | **ПРАВДА** |
 | антураж (корневой) | 2^20 точек | `src/render/verlet_pass.h:71 «inline constexpr std::uint32_t kRootAntouragePoints = 1u << 20;»` | **ПРАВДА** |
 | частицы (корневой) | 32768 | `src/render/verlet_pass.h:78 «inline constexpr std::uint32_t kRootParticles = 32768;»` | **ПРАВДА** |
-| тела (корневой, от ЗАМЕРА) | 2^15 = 32768 | `src/render/body_pass.cpp:27 «constexpr std::uint32_t kMaxBodies = 1u << 15;»`, и вывод «4096 бодрых × 8 множитель сна» теперь держит арифметика, а не проза | **ПРАВДА**, но см. расхождение ниже |
+| тела (корневой, от ЗАМЕРА) | 2^15 = 32768 | `src/render/body_pass.cpp:23 «constexpr std::uint32_t kMaxBodies = 1u << 15;»`; ~~вывод «4096 бодрых × 8 множитель сна»~~ **ПЕРЕПИСАН 2026-11-06 (F1, matwej.md §17.2):** кап выводится из того, что РИСУЕТСЯ — 4096 акторов-контракт + 4×застывшие трупы (потолок 7168 ровно) + пропы, static_assert «сумма статей закрывает кап» | **ПРАВДА**, но см. расхождение ниже |
 | решётка лифтов / coarse-граф нава | 4³ = 64, шаг 32 | `src/world/lattice.h:26 «inline constexpr int kLatticeDim = 4;»`; плюс `kLatticeSpacing * kLatticeDim == kMacroDim` | **ПРАВДА** |
 | сторона световой сетки, байты клетки, дин-бакет | 64 / 256 / 16 | `GIGA_PO2` в блоке `src/render/gpu_light_grid.h`; кубичность сетки проверяет САМ CMakeLists при конфигурации (FATAL_ERROR), и это правильное место — он же раздаёт число шейдерам через `-DGIGA_LIGHT_GRID_DIM` | **ПРАВДА** |
 
@@ -202,7 +202,7 @@ macOS/Clang и на MSVC, что важно отдельно, пока винд�
 
 CANON S11 объявляет тела пятой корневой системой и единственной, чей кап выведен
 из ЗАМЕРА, а не из другого капа. Живёт это число в
-`src/render/body_pass.cpp:27 «constexpr std::uint32_t kMaxBodies = 1u << 15;»` —
+`src/render/body_pass.cpp:23 «constexpr std::uint32_t kMaxBodies = 1u << 15;»` —
 в анонимном пространстве имён **рендер-пасса**, то есть кап СИМУЛЯЦИИ объявлен
 в слое, который по AGENTS.md «pure shell; sim never depends on it». Симуляция
 своего капа тел не знает. Наряда нет.
