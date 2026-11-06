@@ -44,6 +44,7 @@ std::uint32_t g_centerCount = 0;
 std::uint64_t g_centersDropped = 0;
 
 bool g_forceInfinite = false;
+std::uint32_t g_generation = 0;
 
 const char* level_name(PresenceLevel l) {
     return l == PresenceLevel::kFull ? "full" : "visible";
@@ -147,6 +148,8 @@ float presence_radius(PresenceId id) {
 }
 
 std::uint32_t presence_consumer_count() { return g_consumerCount; }
+
+std::uint32_t presence_generation() { return g_generation; }
 
 std::uint32_t presence_query(PresenceId id, const CellBins& bins,
                              const Registry& reg, CellBins::Near* out,
@@ -258,6 +261,7 @@ void presence_reset() {
     g_centerCount = 0;
     g_centersDropped = 0;
     g_forceInfinite = false;
+    ++g_generation; // кэшированные id потребителей стали ложью — см. шапку
 }
 
 } // namespace giga

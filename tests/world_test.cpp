@@ -54,6 +54,7 @@ int g_checks = 0;
 #include "suite_surface.inl"
 #include "suite_clearance.inl"
 #include "suite_presence.inl"
+#include "suite_ragdoll_bubble.inl"
 static void test_wrap() {
     CHECK(wrapi(0, 128) == 0);
     CHECK(wrapi(128, 128) == 0);
@@ -1464,6 +1465,12 @@ int main() {
     test_props_all();
     test_surface_all();
     test_clearance_all();
+    // ПОРЯДОК ЗНАЧИМ: пузырь рагдоллов — ПЕРЕД сюитой присутствия, потому что
+    // та зовёт presence_reset(), а решатель рагдоллов кэширует свой id. Кэш
+    // теперь проверяется поколением таблицы ([sim/presence.h]
+    // presence_generation), так что порядок — страховка, а не единственная
+    // защита: обе половины держат это вместе.
+    test_ragdoll_bubble_all();
     test_presence_all();
     std::printf("%d/%d checks passed\n", g_checks - g_fails, g_checks);
     if (g_fails) {

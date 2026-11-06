@@ -964,7 +964,15 @@ if(GIGA_BUILD_TESTS)
         # упаковки 8 в обе половины, kNN против независимого брутфорса (20 из
         # 216 АРИФМЕТИКОЙ). 890 исполнений = 14+14+19+759+79+5 по шести тестам;
         # дельта сведена по ИСПОЛНЕНИЯМ и сошлась с прогоном бинаря точно.
-        PASS_REGULAR_EXPRESSION "15800/15800 checks passed"
+        # 15800 + 115 = 15915 на 2026-11-06 (F1 рагдоллы в пузыре, §17.2/§23.7):
+        # suite_ragdoll_bubble.inl — «нет наблюдателя — нет пузыря», поза
+        # застывшей цепи БИТ-В-БИТ (ctest-форма скриншотного гейта §23.6),
+        # коммутация с ВЫВЕДЕННОЙ границей (решение владельца 2026-11-06:
+        # трупы — класс 2, расхождение ≤ kSleepV×dt ниже разрешения движка;
+        # пин-монетка на квантовании хуже отсутствия пина), три долга
+        # коммутации (карв/агент/Velocity), гистерезис. 115 исполнений =
+        # 12+55+18+14+16; дельта по ИСПОЛНЕНИЯМ, сошлась с прогоном точно.
+        PASS_REGULAR_EXPRESSION "15915/15915 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

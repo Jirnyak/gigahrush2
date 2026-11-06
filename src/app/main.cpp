@@ -4269,7 +4269,11 @@ int main(int argc, char** argv) {
                                      "quiet-no-touch %u | будят: линк %u "
                                      "пара %u агент %u извне %u | суставы выше "
                                      "порога %u maxC %.4f м решений %u | "
-                                     "bins %.3f ms "
+                                     "ПУЗЫРЬ: цепей %u в пузыре %u застыло %u "
+                                     "| не застыло: шумных %u одиночек %u в "
+                                     "руках %u | ожило: пузырь %u извне %u "
+                                     "агент %u пара %u сустав %u руки %u | "
+                                     "bins %.3f ms presence %.3f ms "
                                      "solve %.3f ms (последний тик) | "
                                      "medium-wakes %llu (всего)\n",
                                      rs->bodies, rs->awake, rs->agents,
@@ -4281,7 +4285,15 @@ int main(int argc, char** argv) {
                                      rs->wokeExtern, rs->linksBeyondSlop,
                                      static_cast<double>(rs->linkMaxAbsC),
                                      rs->linksSolved,
+                                     rs->chains, rs->chainsInBubble,
+                                     rs->suspended, rs->notSuspendedNoisy,
+                                     rs->notSuspendedLoose,
+                                     rs->notSuspendedCarried,
+                                     rs->unsuspBubble, rs->unsuspExtern,
+                                     rs->unsuspAgent, rs->unsuspPair,
+                                     rs->unsuspLink, rs->unsuspCarry,
                                      static_cast<double>(rs->binsMs),
+                                     static_cast<double>(rs->presenceMs),
                                      static_cast<double>(rs->solveMs),
                                      static_cast<unsigned long long>(
                                          g_profMediumRigidWakes));
@@ -5269,6 +5281,24 @@ int main(int argc, char** argv) {
             // predates it.
             const Field<float>* danger = activeWorld.fields().find<float>("danger");
             const MacroGrid& activeGrid = activeWorld.grid();
+            // ЦЕНТРЫ ПУЗЫРЯ — РАЗ НА КАДР И ДО СИМ-ТИКОВ. Переехало сюда из
+            // секции рендера с F1 (2026-11-06): первым потребителем центров
+            // стал решатель рагдоллов внутри `rigid_body_step`, и он бежит
+            // ЗДЕСЬ, в сим-петле, а не там. Ставить центры в рендере значило
+            // бы кормить сим прошлым кадром — и, на первом кадре, пустым
+            // списком. Отбор ламп центров не читает вовсе: ему от присутствия
+            // нужен только радиус уровня (константа).
+            //
+            // ОТСЮДА, А НЕ ИЗ `compute_camera`: aspect свапчейна на этом месте
+            // кадра ещё неизвестен, а точка взгляда от него не зависит —
+            // `camera_eyes` ([sim/camera.h]) и есть та же дверь, суженная до
+            // «где глаза», с множественным числом от netcode.
+            {
+                vec3 eyes[giga::kMaxPresenceCenters];
+                const std::uint32_t nEyes =
+                    giga::camera_eyes(reg, eyes, giga::kMaxPresenceCenters);
+                giga::presence_set_centers(eyes, nEyes);
+            }
             int guard = 0;
             const auto profTickT0 = prof_now();
             while (simAccum >= kSimDt && guard++ < 8) {
@@ -10047,15 +10077,10 @@ int main(int argc, char** argv) {
                     }
                 }
                 const auto ctLg = std::chrono::steady_clock::now();
-                // ЦЕНТРЫ ПУЗЫРЯ — КАДРОМ, И ОТСЮДА, А НЕ ИЗНУТРИ СИСТЕМЫ:
-                // центр есть КАМЕРА (в консольном полёте тело стоит, а взгляд
-                // едет — §23.3 п.2), а камеру знает app. Список, не точка:
-                // [netcode.md] объявляет server-authoritative с первого дня, и
-                // две сессии дадут два центра без правки потребителей.
-                // Сегодня центр ровно один — `compute_camera` отдаёт первую
-                // найденную камеру, и `CameraTag` в дереве один.
-                const vec3 presenceCenters[] = {camMat.eye};
-                giga::presence_set_centers(presenceCenters, 1);
+                // Центры пузыря ставятся РАНЬШЕ, перед сим-петлёй (см. там же
+                // вывод): их первый потребитель — решатель рагдоллов внутри
+                // `rigid_body_step`. Отбору ламп центры не нужны — он берёт у
+                // присутствия только радиус уровня.
                 // Полный пере-сбор ламп = 0.48-0.54 мс CPU (замер К5-E1,
                 // 2026-08-26) — dirty-редизайн отложен с числом: придёт
                 // естественно с программой щитка (S15.4), которая всё равно

@@ -6,6 +6,8 @@
 // camera entity found, or a sane identity fallback if none exists.
 #pragma once
 
+#include <cstdint>
+
 #include "core/math.h"
 #include "ecs/registry.h"
 
@@ -22,6 +24,26 @@ struct CameraMatrices {
 // aspect = drawable width / height. up = world up vector (defaults to +Z).
 CameraMatrices compute_camera(Registry& reg, float aspect,
                               vec3 up = vec3{0.0f, 0.0f, 1.0f});
+
+// ТОЧКИ ВЗГЛЯДА — та же дверь, СУЖЕННАЯ, а не вторая (§24.1 п.5).
+//
+// Закон точки взгляда — `Transform.pos + CameraTag.eyeOffset` — был выписан
+// ДВАЖДЫ (`compute_camera` и `compute_stereo_camera`); теперь он живёт в одном
+// выражении, и обе матричные функции зовут его же. Отдельный вход нужен
+// потребителю, которому матрицы не нужны вовсе: система присутствия
+// ([sim/presence.h]) просит ЦЕНТРЫ ПУЗЫРЯ, и просит их в сим-секции кадра, где
+// aspect свапчейна ещё не существует. Подсовывать фальшивый aspect, чтобы
+// получить `eye` из `CameraMatrices`, значило бы считать проекцию в выброс и
+// врать параметром.
+//
+// МНОЖЕСТВЕННОЕ ЧИСЛО С ПЕРВОГО ДНЯ: [netcode.md] объявляет
+// server-authoritative с первого дня, сессия там несёт свой воплощённый аватар
+// с `CameraTag`, и два игрока дают две точки взгляда. Сегодня камера одна
+// (`compute_camera` берёт первую найденную), поэтому функция вернёт 1 — но
+// форма уже та, которая не потребует переписывать потребителей.
+//
+// Возвращает число записанных точек (≤ cap), порядок — порядок обхода вида.
+std::uint32_t camera_eyes(const Registry& reg, vec3* out, std::uint32_t cap);
 
 // Пара глаз — левый и правый, разведённые на базу стерео.
 struct StereoCameraMatrices {

@@ -13,6 +13,15 @@ vec3 camera_forward(float yaw, float pitch) {
 
 namespace {
 
+// ЗАКОН ТОЧКИ ВЗГЛЯДА — ОДНО ВЫРАЖЕНИЕ, И ТЕПЕРЬ ОНО ОДНО. До 2026-11-06
+// `tr.pos + cam.eyeOffset` стояло в двух функциях этого файла; третьим
+// потребителем стала система присутствия (центры пузыря), и копия номер три
+// была бы ровно тем, за что в этом дереве казнят — «одно правило, найденное
+// трижды» (matwej.md §24.4 п.4).
+vec3 camera_eye_of(const Transform& tr, const CameraTag& cam) {
+    return tr.pos + cam.eyeOffset;
+}
+
 // ОДИН закон матриц — для монокулярной камеры и для каждого глаза стерео.
 // Ближняя/дальняя плоскости и переворот Y живут здесь и только здесь: три
 // строки, скопированные во вторую функцию, расходятся ровно так, как расходятся
@@ -62,12 +71,24 @@ CameraMatrices compute_camera(Registry& reg, float aspect, vec3 up) {
     for (auto e : view) {
         auto& tr = view.get<Transform>(e);
         auto& cam = view.get<CameraTag>(e);
-        out = camera_matrices(tr.pos + cam.eyeOffset,
+        out = camera_matrices(camera_eye_of(tr, cam),
                               camera_forward(cam.yaw, cam.pitch), up, cam.fovY,
                               aspect);
         break; // first camera wins
     }
     return out;
+}
+
+std::uint32_t camera_eyes(const Registry& reg, vec3* out, std::uint32_t cap) {
+    if (out == nullptr || cap == 0) return 0;
+    std::uint32_t n = 0;
+    auto view = reg.view<const Transform, const CameraTag>();
+    for (auto e : view) {
+        if (n >= cap) break; // кап — у потребителя, он же и считает отброшенных
+        out[n++] = camera_eye_of(view.get<const Transform>(e),
+                                 view.get<const CameraTag>(e));
+    }
+    return n;
 }
 
 StereoCameraMatrices compute_stereo_camera(Registry& reg, float eyeAspect,
@@ -78,7 +99,7 @@ StereoCameraMatrices compute_stereo_camera(Registry& reg, float eyeAspect,
         auto& tr = view.get<Transform>(e);
         auto& cam = view.get<CameraTag>(e);
 
-        const vec3 eye = tr.pos + cam.eyeOffset;
+        const vec3 eye = camera_eye_of(tr, cam);
         const vec3 fwd = camera_forward(cam.yaw, cam.pitch);
         const vec3 right = camera_right(fwd, up);
         const vec3 half = right * (ipd * 0.5f);
