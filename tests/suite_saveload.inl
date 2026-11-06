@@ -28,7 +28,9 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <memory>   // make_shared — кража пула на выходе с этажа (§9.4 ход C)
 #include <type_traits>
+#include <utility>  // std::move — там же
 #include <vector>
 
 #include "core/tick.h"        // kSimDt — never a bare 1/120 ([core/tick.h])
@@ -2096,6 +2098,108 @@ static void page_invariant_holds_over_the_whole_volume() {
     CHECK(reused.orphan_slots == 0);
 }
 
+// ХОД C ([matwej.md] §9.4, решение владельца): ВЫХОД С ЭТАЖА КРАДЁТ ПУЛ.
+//
+// Что мерилось. Кадр поездки печатал `[lift] leave 0: copy 634 ms`: выход
+// КОПИРОВАЛ пул страниц суб-материалов (1.6 ГиБ) ради фонового кодека, тогда
+// как кодеку нужна не копия, а СОБСТВЕННОСТЬ. Лечение — перемещение, и
+// `write_floor_file_async` теперь берёт `World&` именно поэтому.
+//
+// ЗАЧЕМ ГЕЙТ, если «просто std::move». У SubField не было ОБЪЯВЛЕННОГО
+// перемещения, а неявное уносит `pageOf_` целиком и оставляет источник с
+// ПУСТОЙ таблицей. Крадут у ЖИВОГО World — слот покинутого этажа
+// перерабатывается позже, а на пути F5/--shot не перерабатывается вовсе, — и
+// paged()/at()/page() индексируют таблицу БЕЗ проверки размера: закон
+// структуры в том, что таблица всегда kMacroCells. То есть неявный move давал
+// чтение за концом вектора на КАЖДОМ чтении поля, и дефект был бы зелёным во
+// всём дереве: санитайзер в CI не бежит ни на одной платформе.
+//
+// Оракул не производный, пинов нет: спрашивается ВЕСЬ объём таблицы (2 097 152
+// клетки, включая последнюю — ту самую, чьё чтение и уходило за конец), и обе
+// полярности живут внутри теста — пул ЕСТЬ до кражи и его НЕТ после.
+//
+// Мутации поштучно: снять `o.revive_empty()` из move-конструктора — падает
+// блок (2); снять из move-присваивания — падает блок (4); снять
+// `pages_.shrink_to_fit()` из `clear()` — падает последняя строка, потому что
+// bytes() продолжает числить снятый пул вместимостью.
+static void leaving_a_floor_steals_the_pool() {
+    giga::World w;
+    giga::MacroGrid& g = w.grid();
+
+    // Материя, которая РОЖДАЕТ страницы: покрашенный слой на бетонной плите
+    // (слои материалов) и разнородная лужа (среда).
+    g.fill_cell(10, 10, 5, giga::kMatConcrete);
+    for (int sy = 0; sy < 8; ++sy)
+        giga::set_sub_material(w, 10, 10, 5, 0, sy, 0, giga::kMatPlaster);
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(w, 40, 20, 20, sx, 0, 0, giga::kMatWater);
+
+    giga::SubField<giga::CellType>& mats =
+        w.subfields().get_or_create<giga::CellType>(giga::kSubMaterialName);
+    const std::size_t coat = giga::macro_index(10, 10, 5);
+    const std::size_t pool = giga::macro_index(40, 20, 20);
+    const std::size_t table = giga::kMacroCells * sizeof(std::uint32_t);
+    const std::size_t onePage = sizeof(giga::CellType) * giga::kSubVoxels;
+    CHECK(mats.paged(coat));
+    CHECK(mats.paged(pool));
+    CHECK(mats.pages_in_use() == 2);
+    CHECK(mats.bytes() >= table + 2 * onePage); // пул ЕСТЬ — иначе гейт пуст
+
+    // (1) КРАЖА — ровно та, что делает write_floor_file_async: пул уезжает в
+    // shared_ptr фонового кодека, и уезжает ЦЕЛИКОМ.
+    auto stolen =
+        std::make_shared<giga::SubField<giga::CellType>>(std::move(mats));
+    CHECK(stolen->pages_in_use() == 2);
+    CHECK(stolen->paged(coat));
+    // Уехали СТРАНИЦЫ, а не одна таблица: красочный атом и базовый атом той
+    // же клетки читаются у вора по-разному.
+    CHECK(stolen->at(coat, giga::sub_bit(0, 3, 0), giga::kMatConcrete) ==
+          giga::kMatPlaster);
+    CHECK(stolen->at(coat, giga::sub_bit(7, 7, 7), giga::kMatConcrete) ==
+          giga::kMatConcrete);
+
+    // (2) ИСТОЧНИК ВАЛИДЕН, а не «пуст по-вектору»: таблица спрашивается на
+    // ВСЕХ клетках и ни одна не числится страничной.
+    std::size_t stillPaged = 0;
+    for (std::size_t ci = 0; ci < giga::kMacroCells; ++ci)
+        if (mats.paged(ci)) ++stillPaged;
+    CHECK(stillPaged == 0);
+    CHECK(!mats.paged(giga::kMacroCells - 1)); // последняя запись таблицы
+    CHECK(mats.pages_in_use() == 0);
+    CHECK(mats.page(coat) == nullptr);
+    // Закон бесстраничной клетки: читается база вызывающего, слово в слово.
+    CHECK(mats.at(pool, 0, giga::kMatConcrete) == giga::kMatConcrete);
+
+    // (3) И ПИШЕТСЯ: живой мир продолжает жить на обокраденном поле — тот же
+    // писатель рождает страницу заново в ТОМ ЖЕ поле (реестр не пересоздан).
+    giga::set_sub_material(w, 40, 20, 20, 0, 0, 0, giga::kMatWater);
+    CHECK(mats.paged(pool));
+    CHECK(mats.pages_in_use() == 1);
+    CHECK(giga::sub_material_at(w, 40, 20, 20, 0, 0, 0) == giga::kMatWater);
+    CHECK(giga::sub_material_at(w, 40, 20, 20, 7, 7, 7) == giga::kCellAir);
+
+    // (4) ВТОРАЯ ПОЛОВИНА ПУТИ — ПРИСВАИВАНИЕ. Фоновая лямбда вселяет пул в
+    // свой World ровно так (`get_or_create<CellType>(...) = std::move(*mats)`
+    // в [src/app/main.cpp]), и источник обязан остаться валидным и здесь:
+    // shared_ptr жив до конца лямбды, то есть ПОСЛЕ присваивания его ещё
+    // может прочитать кто угодно.
+    giga::World tmp;
+    tmp.subfields().get_or_create<giga::CellType>(giga::kSubMaterialName) =
+        std::move(*stolen);
+    CHECK(giga::sub_material_at(tmp, 10, 10, 5, 0, 3, 0) == giga::kMatPlaster);
+    CHECK(!stolen->paged(coat));
+    CHECK(!stolen->paged(giga::kMacroCells - 1));
+    CHECK(stolen->pages_in_use() == 0);
+
+    // (5) БЮДЖЕТ НЕ ВРЁТ: снятые страницы уходят из bytes(), а не числятся
+    // вместимостью вечно (§9.4, мелочь к clear()). Таблица остаётся — она и
+    // ЕСТЬ валидное пустое поле, её 8 МиБ законны.
+    CHECK(mats.bytes() - table >= onePage); // страница из (3) ещё жива
+    mats.clear();
+    CHECK(mats.bytes() >= table);
+    CHECK(mats.bytes() - table < onePage); // <- упадёт без shrink_to_fit
+}
+
 // Б6.1: ВСЕЛЕНИЕ НЕ БЕРЁТ ОСТАНКИ И НЕ ВЕРИТ ГОЛОМУ СЛОТУ.
 //
 // Репро жалобы владельца «убил себя и навесило на рагдолл». Щуп в живой игре
@@ -2143,6 +2247,7 @@ static void possession_refuses_remains_and_stale_slots() {
 static void test_saveload_all() {
     saveload_test::awaken_is_the_one_law();
     saveload_test::page_invariant_holds_over_the_whole_volume();
+    saveload_test::leaving_a_floor_steals_the_pool();
     saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();
     saveload_test::round_trip();

@@ -1541,6 +1541,11 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     SubField<CellType>& mats =
         w.subfields().get_or_create<CellType>(kSubMaterialName);
     mats.clear();
+    // clear() теперь честно отдаёт вместимость (shrink_to_fit, [world/subfield.h]),
+    // значит рост с нуля шёл бы удвоениями — лишний memcpy порядка размера пула
+    // на каждом входе. pageCount уже прочитан строкой выше: одна аллокация
+    // точного размера вместо лестницы реаллоков.
+    mats.reserve_pages(pageCount);
     for (std::uint32_t p = 0; p < pageCount && r.ok(); ++p) {
         std::uint32_t cell = 0;
         r.u32(cell);

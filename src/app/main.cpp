@@ -1593,23 +1593,35 @@ void flush_floor_write() {
             std::fprintf(stderr, "[save] BACKGROUND floor write FAILED\n");
     }
 }
-void write_floor_file_async(const World& w, int floor,
+void write_floor_file_async(World& w, int floor,
                             game::FloorEntityState ents,
                             game::FloorModuleKey key) {
     flush_floor_write();
-    // Кадру принадлежит только КОПИЯ того, что читает кодек (грид + страницы
-    // суб-материалов, memcpy сотни мс) — сам RLE-кодек (замерен 2.7 с!) и
-    // диск уезжают в фон. Слот World перерабатывается сразу после свапа,
-    // поэтому фоновому кодеку не из чего читать, кроме копии; RAM транзиентно
-    // щедрая — закон владельца. Сущности (v20/F) собраны вызывающим на
-    // главном потоке (ECS воркеру не принадлежит) и едут значением.
+    // Кадру принадлежит только то, что читает кодек (грид + страницы
+    // суб-материалов) — сам RLE-кодек (замерен 2.7 с!) и диск уезжают в фон.
+    // Слот World перерабатывается сразу после свапа, поэтому фоновому кодеку
+    // не из чего читать, кроме отданного здесь. Сущности (v20/F) собраны
+    // вызывающим на главном потоке (ECS воркеру не принадлежит) и едут
+    // значением.
+    //
+    // ПУЛ СУБ-МАТЕРИАЛОВ УКРАДЕН, А НЕ СКОПИРОВАН ([matwej.md] §9.4 ход C,
+    // решение владельца). Копия пула и была хитчем выхода: замер
+    // `[lift] leave 0: copy 634 ms`, из которых types+masks — 15-25 мс, а всё
+    // остальное — memcpy 1.6 ГиБ страниц. Покидаемому этажу пул больше не
+    // нужен (его состояние УЖЕ уезжает в файл, а restore-ветка входа всё
+    // равно начинает с mats.clear()), поэтому World отдаёт его перемещением и
+    // остаётся «этажом без страниц» — валидным, см. вывод у move-конструктора
+    // [world/subfield.h]: по полю ещё едут читатели этого кадра. Отсюда и
+    // неконстантная ссылка: украсть у `const World&` нельзя, а изображать
+    // кражу через const_cast значило бы спрятать то, что функция делает.
+    // Печать ниже оставлена как есть — это пин владельца, и теперь она мерит
+    // цену ПЕРЕМЕЩЕНИЯ (types+masks плюс 8 МиБ таблицы заново).
     const auto t0 = std::chrono::steady_clock::now();
     auto types = std::make_shared<std::vector<CellType>>(w.grid().types());
     auto masks = std::make_shared<std::vector<SubMask>>(w.grid().masks());
     std::shared_ptr<SubField<CellType>> mats;
-    if (const SubField<CellType>* f =
-            w.subfields().find<CellType>(kSubMaterialName))
-        mats = std::make_shared<SubField<CellType>>(*f);
+    if (SubField<CellType>* f = w.subfields().find<CellType>(kSubMaterialName))
+        mats = std::make_shared<SubField<CellType>>(std::move(*f));
     auto ep = std::make_shared<game::FloorEntityState>(std::move(ents));
     char path[128];
     floor_save_path(floor, path, sizeof path);
