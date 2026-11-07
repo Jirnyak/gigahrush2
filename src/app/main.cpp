@@ -1633,12 +1633,29 @@ void flush_floor_write(); // 5a, определён ниже — синхрон�
 bool write_floor_file(const World& w, int floor,
                       const game::FloorEntityState& ents,
                       const game::FloorModuleKey& key) {
+    // ПРИБОР ВХОДА (лифт-лимб): синхронный писатель платит ТРИ разные цены, и
+    // первая — чужая: flush ждёт фоновый кодек+диск ПОКИНУТОГО этажа, если тот
+    // ещё летит. Без разбивки все три сливались в безымянный хвост прибытия.
+    const auto t0 = std::chrono::steady_clock::now();
     flush_floor_write();
+    const auto t1 = std::chrono::steady_clock::now();
     std::vector<std::uint8_t> bytes;
     game::floor_file_write(w, floor, bytes, &ents, &key);
+    const auto t2 = std::chrono::steady_clock::now();
     char path[128];
     floor_save_path(floor, path, sizeof path);
-    return write_bytes_file(bytes, path);
+    const bool ok = write_bytes_file(bytes, path);
+    const auto t3 = std::chrono::steady_clock::now();
+    const auto ms = [](std::chrono::steady_clock::time_point a,
+                       std::chrono::steady_clock::time_point b) {
+        return std::chrono::duration<float, std::milli>(b - a).count();
+    };
+    std::fprintf(stderr,
+                 "[save] floor %d sync write: flush-wait %.0f | encode %.0f | "
+                 "disk %.0f ms (%.1f МиБ)\n",
+                 floor, ms(t0, t1), ms(t1, t2), ms(t2, t3),
+                 static_cast<double>(bytes.size()) / (1024.0 * 1024.0));
+    return ok;
 }
 
 // --- 5a (elevators-2x2.md, решение владельца): ДИСК — ФОНОМ ----------------
@@ -3024,7 +3041,14 @@ int main(int argc, char** argv) {
             seed_floor_props(reg, stack.layer(nl), floorNo, nl,
                              streamer.floor_seed_of(registry, floorNo), bus);
         }
+        const auto tL0 = std::chrono::steady_clock::now();
         floor_light_rebuild(reg, stack.layer(nl), floorNo, nl);
+        std::fprintf(stderr,
+                     "[entry] light rebuild %.0f ms (emitter field + material "
+                     "bake + static table)\n",
+                     std::chrono::duration<float, std::milli>(
+                         std::chrono::steady_clock::now() - tL0)
+                         .count());
         return restored;
     };
     // Флаг «текущее прибытие — restore»: пишет floor_entity_half на каждом
@@ -3696,13 +3720,24 @@ int main(int argc, char** argv) {
         // сущности одним снимком под ключом модуля), не в run.sav.
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
+        const auto tRows0 = std::chrono::steady_clock::now();
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
+        const auto tRows1 = std::chrono::steady_clock::now();
         {
             game::FloorEntityState ents;
             game::gather_floor_entities(reg, pl, currentFloor, ents,
                                         &powerGrid, &floorRooms);
+            const auto tGather = std::chrono::steady_clock::now();
+            std::fprintf(stderr,
+                         "[save] run: pool+macro %.0f | gather %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(tRows1 -
+                                                                  tRows0)
+                             .count(),
+                         std::chrono::duration<float, std::milli>(tGather -
+                                                                  tRows1)
+                             .count());
             write_floor_file(stack.layer(pl), currentFloor, ents,
                              module_key_for(currentFloor));
         }
@@ -3827,36 +3862,65 @@ int main(int argc, char** argv) {
         return reg.get<Transform>(player).layer;
     };
     auto arrive_refresh = [&](LayerId nl) {
+        const auto tR0 = std::chrono::steady_clock::now();
         // Комнаты РАНЬШЕ сидеров: спавн паков селится в объявленных комнатах
         // (mob_spawn читает их из reg.ctx), двери потом — по тегу.
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+        const auto tR1 = std::chrono::steady_clock::now();
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        const auto tR2 = std::chrono::steady_clock::now();
         // РАЗВИЛКА S20.6 (закон 2): первый вход — сидеры, ревизит — записи
         // снимка (клир слота, обесточка, свет — внутри, обеими ветками).
         arrivedRestored = floor_entity_half(nl, currentFloor);
+        const auto tR3 = std::chrono::steady_clock::now();
+        const auto ms = [](std::chrono::steady_clock::time_point a,
+                           std::chrono::steady_clock::time_point b) {
+            return std::chrono::duration<float, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[entry] refresh: rooms %.0f | mobs %.0f | "
+                     "entities+light %.0f ms\n",
+                     ms(tR0, tR1), ms(tR1, tR2), ms(tR2, tR3));
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
     };
     auto arrive_doors_nav = [&](LayerId nl) {
+        const auto tD0 = std::chrono::steady_clock::now();
         game::rooms_supply_rebuild(floorRooms, reg, nl);
+        const auto tD1 = std::chrono::steady_clock::now();
         // Программы щитков + привязка ламп (S15.4): декларация модульных
         // данных, перештамповка на каждом прибытии (S18).
         game::stamp_shield_programs(reg, &floorRooms, nl);
         game::assign_lamp_shields(reg, nl);
+        const auto tD2 = std::chrono::steady_clock::now();
         game::door_declare(doors, floorRooms, currentFloor,
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
+        const auto tD3 = std::chrono::steady_clock::now();
         // Обвес лифта — СИДЕР (кнопка/панель — сущности, дефолт «закрыто» —
         // состояние): на restore кнопки приходят записями, створки — материей
         // снимка; пересеивать их значило бы воскрешать сорванное (закон 2).
         if (!arrivedRestored) dress_lift_portals(nl);
+        const auto tD4 = std::chrono::steady_clock::now();
         begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
+        const auto tD5 = std::chrono::steady_clock::now();
+        const auto ms = [](std::chrono::steady_clock::time_point a,
+                           std::chrono::steady_clock::time_point b) {
+            return std::chrono::duration<float, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[entry] doors+nav: supply %.0f | shields %.0f | "
+                     "doors %.0f | dress %.0f | nav-begin %.0f ms\n",
+                     ms(tD0, tD1), ms(tD1, tD2), ms(tD2, tD3), ms(tD3, tD4),
+                     ms(tD4, tD5));
     };
     auto arrive_upload = [&](LayerId nl) {
+        const auto tU0 = std::chrono::steady_clock::now();
         voxelMirror.upload_all(stack.layer(nl));
         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+        const auto tU1 = std::chrono::steady_clock::now();
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -3864,27 +3928,46 @@ int main(int argc, char** argv) {
                 upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
         }
+        const auto tU2 = std::chrono::steady_clock::now();
         // ride_elevator keeps x/y and plants z=kArrivalCoord. ~1-in-5 Residential
         // columns are solid at that z, so without this the body freezes in a
         // wall forever (physics backs out every tick). F9 already calls
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
+        const auto tU3 = std::chrono::steady_clock::now();
         // Publish the new slot to the enclosing frame. ONE place.
         activeLayer = nl;
         save_run_now();
+        const auto tU4 = std::chrono::steady_clock::now();
+        const auto ms = [](std::chrono::steady_clock::time_point a,
+                           std::chrono::steady_clock::time_point b) {
+            return std::chrono::duration<float, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[entry] upload: mirror %.0f | props+wires %.0f | "
+                     "place %.0f | save %.0f ms\n",
+                     ms(tU0, tU1), ms(tU1, tU2), ms(tU2, tU3), ms(tU3, tU4));
     };
     auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
         const auto t0 = std::chrono::steady_clock::now();
         const LayerId nl = arrive_head(ride, landHub);
         if (nl == kInvalidLayer) return false;
+        const auto t1 = std::chrono::steady_clock::now();
         arrive_refresh(nl);
+        const auto t2 = std::chrono::steady_clock::now();
         arrive_doors_nav(nl);
+        const auto t3 = std::chrono::steady_clock::now();
         arrive_upload(nl);
-        std::fprintf(stderr, "[lift] arrive %d: %.0f ms (sync, one frame)\n",
-                     currentFloor,
-                     std::chrono::duration<float, std::milli>(
-                         std::chrono::steady_clock::now() - t0)
-                         .count());
+        const auto t4 = std::chrono::steady_clock::now();
+        const auto ms = [](std::chrono::steady_clock::time_point a,
+                           std::chrono::steady_clock::time_point b) {
+            return std::chrono::duration<float, std::milli>(b - a).count();
+        };
+        std::fprintf(stderr,
+                     "[lift] arrive %d: %.0f ms (sync, one frame) = head %.0f "
+                     "+ refresh %.0f + doors+nav %.0f + upload %.0f\n",
+                     currentFloor, ms(t0, t4), ms(t0, t1), ms(t1, t2),
+                     ms(t2, t3), ms(t3, t4));
         return true;
     };
     // ПОЛНАЯ пересборка резидентного этажа с диска/генерации — «Новая игра»

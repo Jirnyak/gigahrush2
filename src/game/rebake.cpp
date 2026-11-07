@@ -127,8 +127,13 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
                                   GravityRegime gravity) {
     // Любой бейк в полёте — отменить и джойнить. Отмена узловая, так что join
     // здесь — десятки мс, не секунды: это и есть «F9/травел отменяет и едет».
+    // Цена джойна — в приборе входа ниже: «десятки мс» — обещание, не замер.
+    const auto tJoin = std::chrono::steady_clock::now();
     cancel_.store(true, std::memory_order_relaxed);
     join_worker();
+    const double joinMs = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - tJoin)
+                              .count();
     cancel_.store(false, std::memory_order_relaxed);
     discard_pending();
     // Карв-долг света — прошлого этажа: Fresh печёт текущую геометрию с нуля.
@@ -160,10 +165,11 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     const double shadowMs = std::chrono::duration<double, std::milli>(
                                 std::chrono::steady_clock::now() - tShadow)
                                 .count();
-    // ПРИБОР ВХОДА: два полных обхода объёма подряд — клиренс и копия тени.
+    // ПРИБОР ВХОДА: джойн чужого бейка + два полных обхода объёма подряд.
     std::fprintf(stderr,
-                 "[entry] clearance build %.1f ms | shadow grid copy %.1f ms\n",
-                 clearMs, shadowMs);
+                 "[entry] prior bake join %.1f ms | clearance build %.1f ms | "
+                 "shadow grid copy %.1f ms\n",
+                 joinMs, clearMs, shadowMs);
 
     // Секция rooms УМЕРЛА (rooms-object F): комнаты — раскраска roomAt,
     // штампуется rooms_declare на входе; flow-полей по виду больше нет.
