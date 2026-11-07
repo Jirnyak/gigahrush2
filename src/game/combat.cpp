@@ -23,8 +23,12 @@
 #include "core/tick.h"        // kSimHz — фитиль мс → сим-тики
 
 
+#include "game/ai.h"       // AiBrain — смерть отбирает мозг (передача владения)
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
+#include "game/place.h"    // ErrandPlan — смерть отбирает наряд
+#include "game/role.h"     // PatrolPlan — смерть отбирает маршрут
+#include "game/wander.h"   // WanderTarget — смерть отбирает ноги
 #include "game/mob_table.h"
 #include "game/monster_traits.h"
 #include "game/ranged_table.h"
@@ -428,6 +432,19 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
             if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
             reg.remove<Dead>(e);
+            // СМЕРТЬ = ПЕРЕДАЧА ВЛАДЕНИЯ ДВИЖЕНИЕМ (2026-11-07). Ведение —
+            // мозг и цели — снимается ЗДЕСЬ ЖЕ, где боевые компоненты. До
+            // этого труп сохранял их, decider_of без MobRef отвечал
+            // «Resident», и ходоки возили рагдолл по маршруту до конца
+            // времён (корень живого «катка»: ~1200 тел на скоростях ходьбы,
+            // суставы растянуты тягой за корень). Первую линию держат гейты
+            // Decider::None в точках выдачи и ведения ([ai.h] decider_of,
+            // wander.cpp); снятие здесь — чтобы ни сейв, ни приборы не
+            // возили мёртвое ведение как живое.
+            if (reg.all_of<AiBrain>(e)) reg.remove<AiBrain>(e);
+            if (reg.all_of<WanderTarget>(e)) reg.remove<WanderTarget>(e);
+            if (reg.all_of<ErrandPlan>(e)) reg.remove<ErrandPlan>(e);
+            if (reg.all_of<PatrolPlan>(e)) reg.remove<PatrolPlan>(e);
 
             // C (S3/S14.1, 2026-08-21): труп — RagdollRoll-ПРОП с контейнером.
             // Ручная косметика умерла: плющение AABB и сдвиг pos.y −0.45

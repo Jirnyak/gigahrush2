@@ -74,7 +74,14 @@ std::uint32_t wander_init(Registry& reg, LayerId layer) {
     auto view = reg.view<const Transform>();
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
-        if (decider_of(reg, e) == Decider::Human) continue; // за человеком решает человек
+        {
+            const Decider dec = decider_of(reg, e);
+            if (dec == Decider::Human) continue; // за человеком решает человек
+            // Трупу ходячесть не выдаётся: телом владеет солвер. Без этого
+            // гейта каждый вход этажа заново делал мёртвых ходячими
+            // (2026-11-07, «мертвы, но едут по патфайндингу»).
+            if (dec == Decider::None) continue;
+        }
         if (reg.all_of<WanderTarget>(e)) continue;       // already wandering
         std::uint8_t pack = 0;
         if (const MobRef* m = reg.try_get<MobRef>(e)) {
@@ -235,7 +242,13 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // cannot be defeated by a future third way of becoming the player.
         // С 2026-09-12 вопрос задаётся общим примитивом ([ai.h] decider_of) —
         // «третий способ стать игроком» теперь обязан ответить в ОДНОМ месте.
-        if (decider_of(reg, e) == Decider::Human) continue;
+        // С 2026-11-07 тот же вопрос в той же точке ведения отвечает и за
+        // мёртвых: у трупа решателя нет (None) — скорость ему пишет только
+        // солвер. Это точка, где патфайндинг ВОЗИЛ рагдоллы по маршрутам.
+        {
+            const Decider dec = decider_of(reg, e);
+            if (dec == Decider::Human || dec == Decider::None) continue;
+        }
 
         // Identity-hash stagger: an agent's slot is a function of its own id, so
         // the crowd spreads evenly across the period with no scheduling state.

@@ -271,6 +271,7 @@
 #include "core/rng.h"          // hash_u32 / hash2 / rand01 — stateless identity hashing
 #include "ecs/components.h"    // CameraTag — половина ответа decider_of
 #include "ecs/registry.h"      // Registry, Entity
+#include "game/combat.h"       // Corpse — первая ветка decider_of: мёртвый без решателя
 #include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
 #include "game/faction.h"      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
@@ -399,6 +400,7 @@ enum class Decider : std::uint8_t {
     Human,    // носитель камеры: решает человек; автомату делать нечего
     Resident, // житель: утилитарный мозг S13 — ai_step, ai_equip_step
     Monster,  // моб: собственное поведение (wander/investigate/mob_behaviour)
+    None,     // труп: решателя НЕТ — телом владеет солвер, занятию тут нечего
 };
 
 // Вид решателя ВЫВОДИТСЯ из тождества тела, а не хранится флажком: держать
@@ -406,6 +408,15 @@ enum class Decider : std::uint8_t {
 // игрок, и рассинхронизировать его с CameraTag на первом же вселении (владелец
 // 2026-08-23: «никаких битов-флажков под механики»).
 inline Decider decider_of(const Registry& reg, Entity e) {
+    // МЁРТВЫЙ — ПЕРВАЯ ветка (2026-11-07, корень живого «катка»): смерть
+    // снимает MobRef, и без этой ветки труп проваливался в Resident —
+    // ai_init выдавал ему МОЗГ, wander_init НОГИ на каждом входе этажа, и
+    // патфайндинг возил рагдоллы по маршрутам (прогон владельца: на этаже 6
+    // own_wander=363 при 107 живых, ~1200 тел «шумят» на скоростях ходьбы,
+    // суставы растянуты до 0.24 м — цепь ТАЩАТ за корень; владелец увидел
+    // глазами: «мертвы, но едут»). Выводится из тождества (Corpse), не
+    // флажком — тот же закон, что у остальных веток.
+    if (reg.all_of<Corpse>(e)) return Decider::None;
     if (reg.all_of<CameraTag>(e)) return Decider::Human;
     if (reg.all_of<MobRef>(e)) return Decider::Monster;
     return Decider::Resident;
