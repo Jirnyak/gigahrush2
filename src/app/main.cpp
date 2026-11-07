@@ -2523,6 +2523,18 @@ int main(int argc, char** argv) {
     bool shotFloorWanted = false;
     int shotFramesSeen = 0;
     int shotRideDone = 0;
+    // --lift N: поездка туда-обратно ЧЕРЕЗ МАШИНУ (start_lift_ride: Prebuild-
+    // воркер + шаги свапа по кадру + створки по готовности) — диегетический
+    // путь кабины, в отличие от --floor/--ride, которые идут СИНХРОННЫМИ
+    // дев-швами. Нога 0 едет на N, нога 1 — обратно на этаж посадки; триггер
+    // на той же каденции 420 кадров, только из Idle и при готовом нав-бейке.
+    // До этого рычага у start_lift_ride было РОВНО три вызова — все три
+    // ImGui-кнопки кабины, то есть машину нельзя было дёрнуть без руки на
+    // мыши, и покадрово её не мерил никто (лифт-лимб 2).
+    int shotLift = 0;
+    bool shotLiftWanted = false;
+    int shotLiftLeg = 0; // 0: туда, 1: домой, 2: готово
+    int shotLiftHome = 0;
     gpu::Capture shotCap{};
     bool hasCustomPos = false;
     vec3 customPos{89.0f, 71.0f, 2.9f};
@@ -2578,6 +2590,10 @@ int main(int argc, char** argv) {
         else if (a == "--floor" && i + 1 < argc) {
             shotFloor = std::atoi(argv[++i]);
             shotFloorWanted = true;
+        }
+        else if (a == "--lift" && i + 1 < argc) {
+            shotLift = std::atoi(argv[++i]);
+            shotLiftWanted = true;
         }
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
@@ -4160,10 +4176,15 @@ int main(int argc, char** argv) {
     int liftDst = 0;
     int liftHub = -1;
     std::uint64_t liftT0 = 0; // сим-тик старта: строка [lift] ride + иллюзия
-    // Fresh-свап целевого этажа уже прошёл; двери ждут ещё и ПОЛНОГО
-    // пробуждения сред (mediumPass.wakes_pending — решение владельца:
-    // лавина будильника этажа целиком за закрытыми дверьми).
-    bool liftFreshDone = false;
+    // Готовность Fresh-свапа спрашивается УРОВНЕМ (nav.ready() в условии
+    // створок), не пойманным краем nav.step()==true. Флаг-край liftFreshDone
+    // здесь жил и ДЕДЛОЧИЛ створки: на тонком этаже бейк зон (59 мс)
+    // финиширует, пока машина ещё в SwapUpload, край ловился только в
+    // WaitFresh — сигнал падал в пол, и игрок оставался заперт в кабине
+    // НАВСЕГДА (первый покадровый прогон машины, лифт-лимб 2, 2026-11-07:
+    // нога 0->6 так и не напечатала [lift] ride). Уровень гонки не имеет:
+    // start_fresh обнуляет живой граф зон, свап кладёт его обратно — в
+    // WaitFresh ready()==true РАВНОСИЛЬНО «Fresh назначения лёг».
     LayerId liftSwapLayer = kInvalidLayer; // слой шагов посадки (5d)
     auto start_lift_ride = [&](int dst, int hub) -> bool {
         if (liftRide != LiftRide::Idle) return false;
@@ -4185,7 +4206,6 @@ int main(int argc, char** argv) {
                              doorDirty);
         nav.start_prebuild(std::move(job));
         liftRide = LiftRide::Prebuilding;
-        liftFreshDone = false;
         liftDst = dst;
         liftHub = hub;
         liftT0 = simTick;
@@ -4900,9 +4920,9 @@ int main(int argc, char** argv) {
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
             finish_floor_nav(reg, l, nav);
-            // Лифт: Fresh-свап целевого этажа — первая половина «дверей»;
-            // вторая — пустая очередь пробуждений сред (ниже).
-            if (liftRide == LiftRide::WaitFresh) liftFreshDone = true;
+            // Лифт готовность Fresh-свапа читает УРОВНЕМ (nav.ready() в
+            // условии створок) — здесь края больше нет, и гонка «бейк
+            // финишировал до WaitFresh» невозможна по построению.
         }
         prof_add(kProfNav, profNavT0);
         // Лифтовая машина, фаза свапа: воркер отдал мир — ecs-половина,
@@ -4968,10 +4988,9 @@ int main(int argc, char** argv) {
         // прошёл, а очередь пробуждений будильника этажа выпита — вся вода
         // этажа уже в живом списке автомата и падает физикой за закрытыми
         // дверьми (решение владельца 2026-08-27). Замер — всегда.
-        if (liftRide == LiftRide::WaitFresh && liftFreshDone &&
+        if (liftRide == LiftRide::WaitFresh && nav.ready() &&
             !mediumPass.wakes_pending()) {
             liftRide = LiftRide::Idle;
-            liftFreshDone = false;
             // «Лифт приехал» — створка субвоксельно открывается.
             if (liftHub >= 0 && liftHub < 4 &&
                 doors.lift[liftHub] != game::kNoPortal)
@@ -10930,6 +10949,52 @@ int main(int argc, char** argv) {
                 if (shotFloorWanted && shotFramesSeen % 420 == 0) {
                     shotFloorWanted = false;
                     pendingTeleport = shotFloor;
+                }
+                // --lift: та же каденция, но через МАШИНУ (start_lift_ride) —
+                // кнопка кабины руками харнесса. Триггер только из Idle и при
+                // готовом бейке (start_prebuild отменяет текущий бейк — дёрнуть
+                // машину ПОД бут-бейком значило бы убить Fresh этажа посадки);
+                // поездка длиннее каденции просто пропускает такт. Тело встаёт
+                // в центр кабины той же строкой закона, что держит его там всю
+                // поездку (пиннинг у цепочки машины). Фолбэк prebuild_begin ->
+                // do_ride печатается БРАКОМ: синхронный шов в прогоне машины —
+                // не замер, а авария прибора.
+                if (shotLiftWanted && shotLiftLeg < 2 &&
+                    liftRide == LiftRide::Idle && nav.ready() &&
+                    shotFramesSeen % 420 == 0 && reg.valid(player)) {
+                    if (shotLiftLeg == 0) shotLiftHome = currentFloor;
+                    const int src = currentFloor;
+                    const int dst = (shotLiftLeg == 0) ? shotLift : shotLiftHome;
+                    if (dst == src) {
+                        ++shotLiftLeg;
+                    } else {
+                        auto& htr = reg.get<Transform>(player);
+                        const int hcx = wrap_macro(
+                            static_cast<int>(htr.pos.x / kCellSize));
+                        const int hcy = wrap_macro(
+                            static_cast<int>(htr.pos.y / kCellSize));
+                        int hub = game::fast_hub_near(hcx, hcy);
+                        if (hub < 0) hub = 0;
+                        std::uint8_t ccx = 0, ccy = 0;
+                        game::fast_hub_cell(hub, ccx, ccy);
+                        htr.pos.x = (static_cast<float>(ccx) + 0.5f) * kCellSize;
+                        htr.pos.y = (static_cast<float>(ccy) + 0.5f) * kCellSize;
+                        start_lift_ride(dst, hub);
+                        if (liftRide == LiftRide::Prebuilding) {
+                            std::fprintf(stderr,
+                                         "[lift-harness] нога %d: машина "
+                                         "%d -> %d (hub %d, кадр %d)\n",
+                                         shotLiftLeg, src, dst, hub,
+                                         shotFramesSeen);
+                        } else {
+                            std::fprintf(stderr,
+                                         "[lift-harness] нога %d: %d -> %d "
+                                         "МАШИНА НЕ ПОЕХАЛА (prebuild отказал, "
+                                         "синхронный фолбэк) — прогон браком\n",
+                                         shotLiftLeg, src, dst);
+                        }
+                        ++shotLiftLeg;
+                    }
                 }
                 if (shotRideDone < shotRide && shotFramesSeen % 420 == 0) {
                     // One floor down every ~7 s: long enough for the async nav bake
