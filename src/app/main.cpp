@@ -5019,12 +5019,18 @@ int main(int argc, char** argv) {
             const auto& camF = reg.get<CameraTag>(player);
             const vec3 aimF = camera_forward(camF.yaw, camF.pitch);
             vec3 eyeF = reg.get<Transform>(player).pos;
+            // Глаз И досягаемость — из одной статы роста (решение владельца
+            // 2026-11-07: «расстояние из роста», [game/embody.h] body_reach).
+            float reachF = game::body_reach(0); // 0 → медианный рост
             if (const auto* nrF = reg.try_get<game::NpcRef>(player))
-                if (pool.valid(nrF->id))
+                if (pool.valid(nrF->id)) {
                     eyeF.z += game::body_eye_height(pool.height_mm(nrF->id));
+                    reachF = game::body_reach(pool.height_mm(nrF->id));
+                }
             const auto profFocusT0 = prof_now();
             g_focus = game::focus_pick(reg, stack.layer(activeLayer),
-                                       activeLayer, eyeF, aimF, doors, player);
+                                       activeLayer, eyeF, aimF, reachF, doors,
+                                       player);
             prof_add(kProfFocus, profFocusT0);
             // ФАКТЫ ВМЕСТО ДОГАДОК (владелец: «таблички нет, смотрю в
             // упор»): раз в игровую секунду — что видит прицел. GIGA_FOCUS_DBG.
@@ -5035,8 +5041,8 @@ int main(int argc, char** argv) {
                 focusSaid = simTick;
                 game::FocusDebug fd{};
                 game::focus_pick_debug(reg, stack.layer(activeLayer),
-                                       activeLayer, eyeF, aimF, doors, fd,
-                                       player);
+                                       activeLayer, eyeF, aimF, reachF, doors,
+                                       fd, player);
                 std::fprintf(stderr,
                              "[focus] eye(%.1f,%.1f,%.1f) aim(%.2f,%.2f,%.2f)"
                              " | ents %u (в reach %u, в конусе %u, видимых %u)"

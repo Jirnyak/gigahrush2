@@ -1927,8 +1927,8 @@ static void test_craft_hang_live_path() {
     const game::Doors noDoors;
     const vec3 eye{9.0f, 5.25f, 10.5f};
     const vec3 dir{1.0f, 0.0f, 0.0f};
-    const game::Focus f =
-        game::focus_pick(reg, world, layer, eye, dir, noDoors);
+    const game::Focus f = game::focus_pick(reg, world, layer, eye, dir,
+                                           game::body_reach(0), noDoors);
     CHECK(f.what == game::Focus::What::Entity);
     CHECK(f.entity == lathe);
     CHECK(f.kind == game::InteractKind::Lathe);
@@ -2038,21 +2038,69 @@ static void test_e_ladder_targets_by_aim() {
         if (t.kind == game::Interactable::Kind::Crate)
             reg.emplace<game::Container>(e, game::Container{});
     }
+    // Досягаемость — СМОТРЯЩЕГО, вывод из роста ([game/embody.h]
+    // body_reach): медианный рост достаёт 1.8 м (2.40), короткий (1200 мм →
+    // 1.64) — НЕТ. Вторая полярность доказывает, что вывод живой для
+    // каждого вида цели, а не константа, случайно большая 1.8.
     for (const Target& t : targets) {
         const vec3 eye{t.pos.x - 1.8f, t.pos.y, t.pos.z};
         // Под прицелом: фокус отдаёт РОВНО эту цель её строкой таблицы.
         const game::Focus hit = game::focus_pick(reg, world, layer, eye,
                                                  vec3{1.0f, 0.0f, 0.0f},
-                                                 noDoors);
+                                                 game::body_reach(0), noDoors);
         CHECK(hit.what == game::Focus::What::Entity);
         CHECK(hit.kind == t.kind);
-        CHECK(hit.dist > 0.0f && hit.dist <= t.reach);
-        // Взгляд МИМО с того же места: цель в reach (1.8 м), но не в конусе
-        // — дистанционный поиск здесь отвечал «hit», прицел обязан молчать.
+        CHECK(hit.dist > 0.0f && hit.dist <= game::body_reach(0));
+        // Взгляд МИМО с того же места: цель в досягаемости (1.8 м), но не в
+        // конусе — дистанционный поиск отвечал «hit», прицел обязан молчать.
         const game::Focus aside = game::focus_pick(reg, world, layer, eye,
                                                    vec3{0.0f, 1.0f, 0.0f},
+                                                   game::body_reach(0),
                                                    noDoors);
         CHECK(aside.what == game::Focus::What::None);
+        // Короткие руки: тот же взгляд, рост 1200 мм — цель за пределом.
+        const game::Focus shortArm = game::focus_pick(
+            reg, world, layer, eye, vec3{1.0f, 0.0f, 0.0f},
+            game::body_reach(1200), noDoors);
+        CHECK(shortArm.what == game::Focus::What::None);
+    }
+
+    // СИЛУЭТ ТЕЛА — ИЗ AABB (решение владельца 2026-11-07: труп под ногами
+    // наводим). Геометрия: цель на 1.0 вдоль луча и 0.8 ПОПЕРЁК — труп у
+    // ног при почти горизонтальном взгляде. Допуск литерала-страховки:
+    // 0.45 + 0.21 = 0.66 < 0.8 — молчит; допуск габарита тела (half.z 0.9):
+    // 0.9 + 0.21 = 1.11 >= 0.8 — ловится. Обе полярности на одной
+    // геометрии: тело С габаритом против тела БЕЗ.
+    {
+        Entity underfoot = reg.create();
+        Transform tr;
+        tr.pos = vec3{200.0f, 40.0f, 19.2f};
+        tr.layer = layer;
+        reg.emplace<Transform>(underfoot, tr);
+        reg.emplace<game::Interactable>(
+            underfoot, game::Interactable{game::Interactable::Kind::Corpse,
+                                          2.2f, true});
+        reg.emplace<game::Corpse>(underfoot, game::Corpse{});
+        reg.emplace<AABB>(underfoot, AABB{vec3{0.45f, 0.45f, 0.9f}});
+        const game::Focus hit = game::focus_pick(
+            reg, world, layer, vec3{199.0f, 40.0f, 20.0f},
+            vec3{1.0f, 0.0f, 0.0f}, game::body_reach(0), noDoors);
+        CHECK(hit.what == game::Focus::What::Entity);
+        CHECK(hit.entity == underfoot);
+
+        Entity bare = reg.create();
+        Transform tb;
+        tb.pos = vec3{220.0f, 60.0f, 19.2f};
+        tb.layer = layer;
+        reg.emplace<Transform>(bare, tb);
+        reg.emplace<game::Interactable>(
+            bare, game::Interactable{game::Interactable::Kind::Corpse, 2.2f,
+                                     true});
+        reg.emplace<game::Corpse>(bare, game::Corpse{});
+        const game::Focus miss = game::focus_pick(
+            reg, world, layer, vec3{219.0f, 60.0f, 20.0f},
+            vec3{1.0f, 0.0f, 0.0f}, game::body_reach(0), noDoors);
+        CHECK(miss.what == game::Focus::What::None);
     }
 }
 

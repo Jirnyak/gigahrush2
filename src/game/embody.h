@@ -109,6 +109,18 @@ float body_mass_kg(std::uint16_t height_mm);
 // Eyes sit a little below the crown; whoever holds the camera sees from here.
 float body_eye_height(std::uint16_t height_mm);
 
+// Досягаемость интеракции — ВЫВОД ИЗ РОСТА, как высота глаз (решение
+// владельца 2026-11-07: «расстояние из роста/размера»). Одно происхождение
+// вместо двух дрейфующих таблиц: props.csv reach_mm и interactables.csv
+// reachM уже разъехались (щиток 3.5 против 2.5, терминал 4.0 против 2.5),
+// и колонка кодировала «длину рук + размер цели» одним числом — размер
+// цели считает СИЛУЭТ фокуса, досягаемость — свойство АКТОРА. Мера — до
+// ЦЕНТРА цели вдоль луча (как фокус мерил всегда). Коэффициент выведен
+// калибровкой: полоса живших табличных значений 2.2–2.6 м у медианного
+// роста 1750 мм держится своей серединой, 2.4 / 1.75 = 1.37. Рослый
+// достаёт дальше — эмерджентно, по той же стате, что высота глаз.
+float body_reach(std::uint16_t height_mm);
+
 // Materialize one alife record into a live ECS entity at its macro cell.
 // Maps stature -> AABB; hp/inventory stay canonical in the pool row (the entity
 // carries an NpcRef back to it). Sets NpcEmbodied. Returns the created entity;

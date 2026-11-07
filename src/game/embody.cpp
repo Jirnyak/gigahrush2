@@ -52,6 +52,12 @@ float body_eye_height(std::uint16_t height_mm) {
     return h * 0.5f - h * 0.07f;
 }
 
+float body_reach(std::uint16_t height_mm) {
+    // Вывод коэффициента — в заголовке: середина табличной полосы 2.2-2.6 м
+    // у медианного роста, 2.4 / 1.75 = 1.37 (до центра цели вдоль луча).
+    return resolved_height_mm(height_mm) * 0.001f * 1.37f;
+}
+
 Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     if (!pool.valid(id)) return entt::null;
 

@@ -52,8 +52,22 @@ struct Focus {
 
 // Выбрать цель под прицелом. `eye` — позиция глаза, `dir` — единичный взгляд.
 // Кандидат проходит, если он: на этом слое, в пределах СВОЕГО reach (таблица
-// для сущностей, kDoorReachM для порталов), в конусе взгляда и виден
-// (los_clear). Побеждает ближайший по расстоянию вдоль луча.
+// — досягаемости СМОТРЯЩЕГО, в конусе взгляда и виден (los_clear).
+// Побеждает ближайший по расстоянию вдоль луча.
+//
+// `reachM` — досягаемость АКТОРА, вывод из роста ([game/embody.h]
+// body_reach; решение владельца 2026-11-07). Таблицы цели reach больше не
+// задают: колонка кодировала «длину рук + размер цели» одним числом и
+// дрейфовала в двух копиях (щиток 3.5/2.5); размер цели — дело силуэта
+// ниже, одна досягаемость на все виды целей, включая дверные порталы
+// (kDoorReachM умер тем же решением).
+//
+// СИЛУЭТ — из габарита самой цели: PropMesh::scale у пропа, AABB::half у
+// тела (embody и посев мобов объявляют его так же честно; труп — та же
+// сущность, что моб). Литерал 0.45 остаётся последней страховкой на
+// сущность вовсе без габарита — он был ВДВОЕ меньше тела и запрещал
+// прицел в упор (центр тела ~0.75 м ниже глаза: ближе 1.43 м труп и NPC
+// были ненаводимы).
 //
 // `self` — тело СМОТРЯЩЕГО, и оно не кандидат никогда: каждое живое тело
 // несёт Interactable, включая собственное ([game/embody.cpp]: «finders skip
@@ -61,8 +75,8 @@ struct Focus {
 // четверти метра от глаза и, как ближайшее, перебивает ВСЁ — замер
 // GIGA_FOCUS_DBG 2026-08-28: what=Entity dist=0.22 при любом взгляде.
 Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
-                 const vec3& eye, const vec3& dir, const Doors& doors,
-                 Entity self = entt::null);
+                 const vec3& eye, const vec3& dir, float reachM,
+                 const Doors& doors, Entity self = entt::null);
 
 // Счётчики отсева для диагностики в игре (GIGA_FOCUS_DBG): сколько
 // кандидатов прошло каждую ступень. Ответ «почему таблички нет» обязан
@@ -78,8 +92,9 @@ struct FocusDebug {
     float nearPortDist = 1e9f;
 };
 Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
-                       const vec3& eye, const vec3& dir, const Doors& doors,
-                       FocusDebug& dbg, Entity self = entt::null);
+                       const vec3& eye, const vec3& dir, float reachM,
+                       const Doors& doors, FocusDebug& dbg,
+                       Entity self = entt::null);
 
 // Текст таблички БЕЗ имени клавиши (её подставляет вызывающий из биндов —
 // промпт обязан называть бинд, а не литерал). Для двери — по состоянию мира.

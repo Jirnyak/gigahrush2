@@ -24,11 +24,6 @@ namespace {
 constexpr float kAimConeTan = 0.21f;
 constexpr float kAimFloorM = 0.20f;
 
-// Досягаемость дверного портала. Двери нет строки в interactables.csv (она
-// материя мира, а не сущность), поэтому её reach живёт здесь — рядом с
-// единственным потребителем.
-constexpr float kDoorReachM = 2.6f;
-
 struct Cand {
     float along = 0.0f; // расстояние вдоль луча
     float off = 0.0f;   // отклонение от оси
@@ -84,8 +79,8 @@ bool blocked(const World& w, const vec3& eye, const vec3& dir,
 } // namespace
 
 Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
-                       const vec3& eye, const vec3& dir, const Doors& doors,
-                       FocusDebug& dbg, Entity self) {
+                       const vec3& eye, const vec3& dir, float reachM,
+                       const Doors& doors, FocusDebug& dbg, Entity self) {
     Focus best;
     float bestAlong = 1e9f;
 
@@ -116,17 +111,27 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
             dbg.nearEntPos = tr.pos;
         }
         const Cand c = project(eye, dir, tr.pos);
-        float half = 0.45f; // тело NPC, если габарит не объявлен
+        // СИЛУЭТ — ИЗ ГАБАРИТА САМОЙ ЦЕЛИ; у тела он объявлен так же
+        // честно, как у пропа: AABB::half ставят И embody (стать →
+        // полуросты), И посев мобов; труп — ТА ЖЕ сущность, что моб.
+        // Литерал 0.45 был вдвое меньше тела (по z ~0.9) и запрещал прицел
+        // в упор: центр тела ~0.75 м ниже глаза, допуск сходился только
+        // дальше 1.43 м — труп под ногами и NPC вплотную были ненаводимы.
+        float half = 0.45f; // последняя страховка: габарита нет вовсе
         if (const auto* pm = reg.try_get<PropMesh>(e)) {
             const float mx =
                 pm->scale.x > pm->scale.y ? pm->scale.x : pm->scale.y;
             half = 0.5f * (mx > pm->scale.z ? mx : pm->scale.z);
+        } else if (const auto* bb = reg.try_get<AABB>(e)) {
+            const float mx =
+                bb->half.x > bb->half.y ? bb->half.x : bb->half.y;
+            half = mx > bb->half.z ? mx : bb->half.z;
         }
-        if (c.along > 0.0f && c.along <= it.reachM) ++dbg.entReach;
-        if (c.along > 0.0f && c.along <= it.reachM &&
+        if (c.along > 0.0f && c.along <= reachM) ++dbg.entReach;
+        if (c.along > 0.0f && c.along <= reachM &&
             c.off <= slack_for(c.along, half))
             ++dbg.entCone;
-        if (!consider(c.along, c.off, it.reachM, half)) continue;
+        if (!consider(c.along, c.off, reachM, half)) continue;
         if (blocked(w, eye, dir, tr.pos, c.along)) continue;
         ++dbg.entSeen;
         bestAlong = c.along;
@@ -153,11 +158,11 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
         }
         const Cand c = project(eye, dir, pp);
         const float halfDoor = kCellSize * 0.5f;
-        if (c.along > 0.0f && c.along <= kDoorReachM) ++dbg.portReach;
-        if (c.along > 0.0f && c.along <= kDoorReachM &&
+        if (c.along > 0.0f && c.along <= reachM) ++dbg.portReach;
+        if (c.along > 0.0f && c.along <= reachM &&
             c.off <= slack_for(c.along, halfDoor))
             ++dbg.portCone;
-        if (!consider(c.along, c.off, kDoorReachM, halfDoor)) continue;
+        if (!consider(c.along, c.off, reachM, halfDoor)) continue;
         if (blocked(w, eye, dir, pp, c.along)) continue;
         ++dbg.portSeen;
         bestAlong = c.along;
@@ -172,10 +177,11 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
 }
 
 Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
-                 const vec3& eye, const vec3& dir, const Doors& doors,
-                 Entity self) {
+                 const vec3& eye, const vec3& dir, float reachM,
+                 const Doors& doors, Entity self) {
     FocusDebug ignored;
-    return focus_pick_debug(reg, w, layer, eye, dir, doors, ignored, self);
+    return focus_pick_debug(reg, w, layer, eye, dir, reachM, doors, ignored,
+                            self);
 }
 
 const char* focus_prompt(const Focus& f, const World& w, const Doors& doors) {

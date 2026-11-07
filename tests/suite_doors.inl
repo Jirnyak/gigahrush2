@@ -161,7 +161,8 @@ void focus_aims_at_a_real_door() {
             // Тело смотрящего стоит под глазом, как в игре (глаз выше
             // центра тела): без пропуска self оно ближайшая цель всегда.
             reg.get<Transform>(self).pos = {eye.x, eye.y, eye.z - 0.7f};
-            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir, d, self);
+            const Focus f = focus_pick(reg, w, /*layer=*/0, eye, dir,
+                                       body_reach(0), d, self);
             CHECK(!(f.what == Focus::What::Entity && f.entity == self));
             if (f.what == Focus::What::Portal && f.portal == i) {
                 aimed = true;
