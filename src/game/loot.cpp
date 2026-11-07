@@ -197,10 +197,12 @@ Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
     // in a pocket must not disagree about what they weigh.
     reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) * 0.001f *
                               static_cast<float>(count)});
-    // [jirnyak.md] §18: floor loot is Interactable::Kind::Loot so HUD/E
-    // can route through find_nearest_interactable. Backend remains pickup_step.
-    reg.emplace<Interactable>(
-        e, Interactable{Interactable::Kind::Loot, kPickupReach, true});
+    // ПИКАП — НЕ ИНТЕРАКТИВ (чистка 2026-11-07): подбор автоматический
+    // (pickup_step по близости, каждый тик, без клавиши), а компонент
+    // Interactable здесь кормил ЛОЖЬ — фокус показывал «[E] PICK UP», и E
+    // не делал ничего (ветки Loot в лестнице E нет и не было). Закон
+    // focus.h «E исполняет ровно показанное» — промпта нет, потому что нет
+    // действия. Kind::Loot в interactables.csv — могила ординала.
     return e;
 }
 

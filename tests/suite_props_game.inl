@@ -59,6 +59,23 @@ constexpr game::WallDeviceBand kLegacyWallBands[] = {
 };
 constexpr std::size_t kLegacyWallBandCount = 2;
 
+// Лампы — сценография без Interactable (чистка 2026-11-07): считаем их по
+// СТРОКЕ ТАБЛИЦЫ (PropOf), не по свету — PropLight носит и светящийся
+// терминал (CRT-строка излучает, prop_emits_light), и смешал бы семейства.
+static bool is_lamp_row(game::PropId id) {
+    return id == game::PropId::BareBulb || id == game::PropId::FloodLamp ||
+           id == game::PropId::PadicStairBulb || id == game::PropId::StreetLamp;
+}
+static int count_lamps(const Registry& reg, LayerId layer) {
+    int n = 0;
+    auto view = reg.view<const game::PropOf, const Transform>();
+    for (auto e : view)
+        if (view.get<const Transform>(e).layer == layer &&
+            is_lamp_row(view.get<const game::PropOf>(e).id))
+            ++n;
+    return n;
+}
+
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
 
@@ -193,9 +210,9 @@ static void test_wall_interactables_clear_is_layer_scoped() {
 
 
 static void test_ceiling_lights_seed_and_collect() {
-    // [jirnyak.md] §18 — ceiling lamps are ECS LightBulb Interactables.
-    // Lighting / HUD must use collect_interactable_positions, never
-    // propPass.get_prop_positions(BareBulb|FloodLamp).
+    // [jirnyak.md] §18 — ceiling lamps are ECS entities; lighting / HUD read
+    // PropLight, never propPass.get_prop_positions(BareBulb|FloodLamp).
+    // Interactable лампы НЕ несут (чистка 2026-11-07: висячий промпт снят).
     Registry reg;
     World world;
     const LayerId layer = 5;
@@ -212,32 +229,26 @@ static void test_ceiling_lights_seed_and_collect() {
     const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
     CHECK(n > 0);
 
-    const int bulbs = count_kind(reg, layer, game::Interactable::Kind::LightBulb);
+    const int bulbs = count_lamps(reg, layer);
     CHECK(bulbs == static_cast<int>(n));
 
-    std::vector<vec3> lampPos;
-    game::collect_interactable_positions(reg, layer, game::Interactable::Kind::LightBulb, lampPos);
-    CHECK(static_cast<int>(lampPos.size()) == bulbs);
-
-    for (const vec3& p : lampPos) {
+    auto view = reg.view<const game::PropLight, const Transform>();
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer != layer) continue;
+        const vec3& p = view.get<const Transform>(e).pos;
         CHECK(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
         // PropPlacer origin y = yAir*kCell + 1.55; yAir=8, kCell=2 → 16+1.55=17.55
         CHECK(p.z > 16.0f && p.z < 19.0f);
-    }
-
-    auto view = reg.view<const game::Interactable, const Transform>();
-    for (auto e : view) {
-        if (view.get<const game::Interactable>(e).kind != game::Interactable::Kind::LightBulb)
-            continue;
-        CHECK(view.get<const Transform>(e).layer == layer);
         CHECK(reg.all_of<game::SubVoxelAnchor>(e));
         CHECK(reg.all_of<game::StaticPropTag>(e));
         CHECK(reg.all_of<game::PropMeshTag>(e));
+        // ВИСЯЧИЙ ПРОМПТ УБИТ: лампа не кандидат фокуса — компонента нет.
+        CHECK(!reg.all_of<game::Interactable>(e));
     }
 
     // Layer-scoped clear drops the lamps.
     CHECK(game::clear_layer_props(reg, layer) == n);
-    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
+    CHECK(count_lamps(reg, layer) == 0);
 }
 
 // An overhang is not a ceiling. Same slab as above with the FLOOR removed: on a
@@ -324,8 +335,7 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
     CHECK(count_kind(reg, layer, game::Interactable::Kind::Terminal) +
               count_kind(reg, layer, game::Interactable::Kind::ElectricalShield) ==
           static_cast<int>(nWall));
-    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) ==
-          static_cast<int>(nLamp));
+    CHECK(count_lamps(reg, layer) == static_cast<int>(nLamp));
 }
 
 static void test_padic_props_seed_tags_layer() {
@@ -346,15 +356,16 @@ static void test_padic_props_seed_tags_layer() {
         game::seed_padic_props(reg, world, layer, number, seed, bus);
     CHECK(n > 0u);
 
-    auto view = reg.view<const game::Interactable, const Transform,
+    auto view = reg.view<const game::PropLight, const Transform,
                          const game::SubVoxelAnchor>();
     int tagged = 0;
     int solidAnchors = 0;
     for (auto e : view) {
         if (view.get<const Transform>(e).layer != layer) continue;
         ++tagged;
-        CHECK(view.get<const game::Interactable>(e).kind ==
-              game::Interactable::Kind::LightBulb);
+        // Лампа падика — сценография: строка таблицы на сущности, промпта нет.
+        CHECK(reg.all_of<game::PropOf>(e) &&
+              reg.get<game::PropOf>(e).id == game::PropId::PadicStairBulb);
         CHECK(reg.all_of<game::StaticPropTag>(e));
         const auto& a = view.get<const game::SubVoxelAnchor>(e);
         if (world.grid().solid(a.cx, a.cy, a.cz, a.subX, a.subY, a.subZ))
@@ -366,7 +377,7 @@ static void test_padic_props_seed_tags_layer() {
     CHECK(tagged == static_cast<int>(n));
     CHECK(solidAnchors == static_cast<int>(n));
     CHECK(game::clear_layer_props(reg, layer) == n);
-    CHECK(count_kind(reg, layer, game::Interactable::Kind::LightBulb) == 0);
+    CHECK(count_lamps(reg, layer) == 0);
 }
 
 
@@ -1181,11 +1192,13 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     CHECK(nTerm + nShield == nWall);
     CHECK(nBulb + nFlood == nLamp);
 
-    // Detach drops StaticPropTag -> collect must shrink.
-    auto view = reg.view<game::SubVoxelAnchor, game::Interactable, Transform>();
+    // Detach drops StaticPropTag -> collect must shrink. Цель — лампа ПО
+    // СТРОКЕ ТАБЛИЦЫ (PropOf): интерактива у ламп нет с чистки 2026-11-07,
+    // а PropLight носит и светящийся терминал — он не годится.
+    auto view = reg.view<game::SubVoxelAnchor, game::PropOf, Transform>();
     Entity target = entt::null;
     for (auto e : view) {
-        if (view.get<game::Interactable>(e).kind == game::Interactable::Kind::LightBulb) {
+        if (is_lamp_row(view.get<game::PropOf>(e).id)) {
             target = e;
             break;
         }
@@ -1284,7 +1297,10 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(!hit.hit); // inactive drops out of the query
     }
 
-    // --- Floor loot path: drop_mob_loot → Kind::Loot -------------------------
+    // --- Floor loot: ПИКАП — НЕ ИНТЕРАКТИВ (чистка 2026-11-07) --------------
+    // Подбор автоматический (pickup_step по близости, без клавиши); компонент
+    // Interactable кормил ложь «[E] PICK UP» — его больше нет. Kind::Loot в
+    // interactables.csv — могила ординала.
     {
         const std::uint32_t n = drop_mob_loot(
             reg, /*layer=*/0, ppos,
@@ -1295,24 +1311,18 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(n > 0);
 
     }
-    std::uint32_t lootCount = 0;
-    for (auto e : reg.view<const Pickup, const game::Interactable>()) {
-        const game::Interactable& ia = reg.get<const game::Interactable>(e);
-        if (ia.kind == game::Interactable::Kind::Loot && ia.active) ++lootCount;
+    std::uint32_t pickups = 0, naked = 0;
+    for (auto e : reg.view<const Pickup>()) {
+        ++pickups;
+        if (!reg.all_of<game::Interactable>(e)) ++naked;
     }
-    CHECK(lootCount > 0);
+    CHECK(pickups > 0);
+    CHECK(naked == pickups); // ни один пикап не кандидат фокуса
     {
-        // drop_mob_loot can scatter several pickups; find_nearest returns the
-        // closest active Kind::Loot — not the first view iteration order.
+        // Запрос Loot обязан ПРОМАХНУТЬСЯ: носителей ординала больше нет.
         const game::InteractionHit hit = game::find_nearest_interactable(
             reg, player, game::Interactable::Kind::Loot, 3.0f);
-        CHECK(hit.hit);
-        CHECK(reg.valid(hit.entity));
-        CHECK(reg.all_of<Pickup>(hit.entity));
-        CHECK(reg.all_of<game::Interactable>(hit.entity));
-        CHECK(reg.get<game::Interactable>(hit.entity).kind ==
-              game::Interactable::Kind::Loot);
-        CHECK(reg.get<game::Interactable>(hit.entity).active);
+        CHECK(!hit.hit);
     }
 
     // Kind filter: Loot must not answer a Corpse query (corpse already inactive).
@@ -1474,7 +1484,14 @@ static void test_furniture_is_not_a_terminal() {
     CHECK(game::prop_def(game::PropId::KitchenTable).interactKind == 255);
     CHECK(game::prop_def(game::PropId::ToiletPan).interactKind == 255);
     CHECK(game::prop_def(game::PropId::BedCot).interactKind == 255);
-    CHECK(game::prop_def(game::PropId::BareBulb).interactKind != 255);
+    // ЛАМПЫ — ТОЖЕ СЦЕНОГРАФИЯ (чистка 2026-11-07): висячий промпт
+    // «LIGHT BULB» снят — ветки исполнения E не было никогда.
+    CHECK(game::prop_def(game::PropId::BareBulb).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::FloodLamp).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::PadicStairBulb).interactKind == 255);
+    CHECK(game::prop_def(game::PropId::StreetLamp).interactKind == 255);
+    // Контроль обратной полярности: у ящика интерактив ЕСТЬ (экран обыска).
+    CHECK(game::prop_def(game::PropId::SupplyCrate).interactKind != 255);
 
     Registry reg;
     World world;

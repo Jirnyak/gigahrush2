@@ -89,8 +89,14 @@ void full_round_trip() {
         top_anchor(9, 9, 10), PropId::BareBulb, layer, 1.5707964f,
         /*anim*/ 42, /*flags*/ 0);
     CHECK(lamp != entt::null);
-    // Выключенный интерактор (kPropRecInactive).
-    if (Interactable* ia = reg.try_get<Interactable>(lamp)) ia->active = false;
+    // Выключенный интерактор (kPropRecInactive) — ТЕРМИНАЛ: лампа с чистки
+    // 2026-11-07 сценография и компонента не носит, а экран терминала —
+    // живой будущий писатель active=false («выключили — погас»).
+    Entity offTerm = spawn_prop_from_id(
+        reg, w, vec3{8.5f * kCellSize, 9.5f * kCellSize, 11.0f * kCellSize},
+        top_anchor(8, 9, 10), PropId::Terminal, layer);
+    CHECK(offTerm != entt::null);
+    reg.get<Interactable>(offTerm).active = false;
 
     // Ящик-проп с НЕтривиальным инвентарём (бит-в-бит — главный гейт).
     Entity crate = spawn_prop_from_id(
@@ -189,7 +195,7 @@ void full_round_trip() {
     gather_floor_entities(reg, layer, floorNo, ents1, &power, &rooms1);
     CHECK(ents1.roomReps.size() == 2);
     CHECK(ents1.roomReps[0] == -120 && ents1.roomReps[1] == 45);
-    CHECK(ents1.props.size() == 4);
+    CHECK(ents1.props.size() == 5); // + выключенный терминал (чистка 2026-11-07)
     CHECK(ents1.corpses.size() == 1);
     CHECK(ents1.pickups.size() == 1);
     CHECK(ents1.debris.size() == 1);
@@ -287,7 +293,7 @@ void full_round_trip() {
         }
     }
     CHECK(crates == 1);
-    CHECK(inactive >= 1); // лампа; сорванная тоже может быть неактивной
+    CHECK(inactive >= 1); // выключенный терминал (лампы компонент не носят)
     CHECK(doorRefs == 1);
     CHECK(dynamicProps == 1);
 }

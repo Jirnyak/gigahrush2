@@ -920,6 +920,9 @@ static void collect_scene_lights(gpu::GpuLightGrid& grid, const vec3& camPos,
             if (tr.layer != activeLayer) continue;
             ++dbgTotal;
             const game::PropLight& pl = lampView.get<const game::PropLight>(e);
+            // С чистки 2026-11-07 лампы Interactable НЕ несут (сценография) —
+            // для них try_get даёт null и гейт прозрачен; он остаётся для
+            // СВЕТЯЩИХСЯ ИНТЕРАКТИВОВ (терминал: выключили — экран погас).
             if (const auto* ia = reg.try_get<const game::Interactable>(e);
                 ia && !ia->active) {
                 ++dbgInactive;
@@ -9300,10 +9303,9 @@ int main(int argc, char** argv) {
                                 Mass{static_cast<float>(
                                          game::item_def(s.item).massG) *
                                      0.001f});
-                            reg.emplace<game::Interactable>(
-                                pe, game::Interactable{
-                                        game::Interactable::Kind::Loot,
-                                        game::kPickupReach, true});
+                            // Пикап — не интерактив (чистка 2026-11-07):
+                            // подбор автоматический, промпт «PICK UP» лгал.
+                            // Та же правка, что в spawn_pickup ([loot.cpp]).
                             if (--s.count == 0) s = game::ItemSlot{};
                             // Решение могло протухнуть вместе со слотом —
                             // строгое чтение это увидит; броню пересинхронизи-

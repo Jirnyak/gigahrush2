@@ -244,10 +244,12 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       const WallDeviceBand* bands,
                                       std::size_t bandCount);
 
-// Seed LightBulb Interactables from MacroGrid ceiling-lamp rules matching
-// gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove). Positions match
-// BareBulb/FloodLamp cosmetics so lighting/HUD can query ECS instead of
-// propPass.get_prop_positions(). [jirnyak.md] §18 Sim→Render invariant.
+// Seed ceiling lamps (BareBulb/FloodLamp rows) from MacroGrid ceiling rules
+// matching gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove).
+// Лампа — СЦЕНОГРАФИЯ, не интерактив (чистка 2026-11-07: висячий промпт
+// «LIGHT BULB» снят — ветки исполнения E не было никогда): свет и HUD читают
+// PropLight/PropOf сущностей, выстрел — PropFallMode строки; propPass
+// по-прежнему render-only. [jirnyak.md] §18 Sim→Render invariant.
 std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                   LayerId layer, std::uint32_t seed);
 
