@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring> // memcpy — невыровненные u64-чтения хэша ключа кэша
 #include <thread>
 
 #include "core/jobs.h"
@@ -357,6 +358,210 @@ std::uint64_t light_vis_fnv(const LightVisBake& b) {
         h *= 1099511628211ull;
     }
     return h;
+}
+
+// --- Ход H: ключ и кодек кэша (контракт в заголовке) ------------------------
+
+namespace {
+
+// 8 независимых дорожек xor-mul поверх u64-слов. Последовательный FNV упёрся
+// бы в зависимость по данным (~1 слово на 4-5 тактов): маски — 134 МиБ, это
+// ~80 мс на ключ; восемь дорожек дают ILP и ~10 мс на тот же объём. Хвост
+// короче слова доливается нулями через memcpy (детерминизм длиной: len
+// вмешан в свёртку). Обе платформы little-endian — порядок байт слова общий.
+std::uint64_t mix_lanes(std::uint64_t seed, const void* data,
+                        std::size_t len) {
+    constexpr std::uint64_t kMul = 0x9E3779B97F4A7C15ull;
+    std::uint64_t lane[8];
+    for (int i = 0; i < 8; ++i)
+        lane[i] = seed ^ (0x517C'C1B7'2722'0A95ull * static_cast<std::uint64_t>(i + 1));
+    const std::uint8_t* p = static_cast<const std::uint8_t*>(data);
+    std::size_t n = len;
+    while (n >= 64) {
+        for (int i = 0; i < 8; ++i) {
+            std::uint64_t w;
+            std::memcpy(&w, p + 8 * i, 8);
+            lane[i] = (lane[i] ^ w) * kMul;
+        }
+        p += 64;
+        n -= 64;
+    }
+    int i = 0;
+    while (n >= 8) {
+        std::uint64_t w;
+        std::memcpy(&w, p, 8);
+        lane[i & 7] = (lane[i & 7] ^ w) * kMul;
+        p += 8;
+        n -= 8;
+        ++i;
+    }
+    if (n > 0) {
+        std::uint64_t w = 0;
+        std::memcpy(&w, p, n);
+        lane[i & 7] = (lane[i & 7] ^ w) * kMul;
+    }
+    std::uint64_t h = seed ^ (len * kMul);
+    for (int k = 0; k < 8; ++k) h = (h ^ lane[k]) * kMul;
+    h ^= h >> 32;
+    h *= kMul;
+    h ^= h >> 29;
+    return h;
+}
+
+// Версия формата кэша: менять при ЛЮБОЙ правке алгоритма бейка или кодека —
+// ключ включает её, значит старые файлы просто перестают находиться.
+constexpr std::uint32_t kLightVisCacheVersion = 2; // v2: + хэш нагрузки
+constexpr std::uint32_t kLightVisCacheMagic = 0x3143564Cu; // "LVC1" LE
+
+void put_u32(std::vector<std::uint8_t>& v, std::uint32_t x) {
+    const std::size_t at = v.size();
+    v.resize(at + 4);
+    std::memcpy(v.data() + at, &x, 4);
+}
+void put_u64(std::vector<std::uint8_t>& v, std::uint64_t x) {
+    const std::size_t at = v.size();
+    v.resize(at + 8);
+    std::memcpy(v.data() + at, &x, 8);
+}
+void put_f32(std::vector<std::uint8_t>& v, float x) {
+    const std::size_t at = v.size();
+    v.resize(at + 4);
+    std::memcpy(v.data() + at, &x, 4);
+}
+
+struct Reader {
+    const std::uint8_t* p;
+    std::size_t left;
+    bool ok = true;
+    std::uint32_t u32() {
+        std::uint32_t x = 0;
+        if (left < 4) { ok = false; return 0; }
+        std::memcpy(&x, p, 4);
+        p += 4;
+        left -= 4;
+        return x;
+    }
+    std::uint64_t u64() {
+        std::uint64_t x = 0;
+        if (left < 8) { ok = false; return 0; }
+        std::memcpy(&x, p, 8);
+        p += 8;
+        left -= 8;
+        return x;
+    }
+    float f32() {
+        float x = 0;
+        if (left < 4) { ok = false; return 0; }
+        std::memcpy(&x, p, 4);
+        p += 4;
+        left -= 4;
+        return x;
+    }
+};
+
+} // namespace
+
+std::uint64_t light_vis_cache_key(const MacroGrid& grid,
+                                  const LightVisLamp* lamps,
+                                  std::size_t lampCount, std::uint32_t slots) {
+    static_assert(sizeof(LightVisLamp) == 7 * sizeof(float),
+                  "LightVisLamp отрастил паддинг/поле — сырые байты таблицы "
+                  "ламп перестали быть детерминированным входом ключа");
+    std::uint64_t h = 0xC0FFEE ^ (static_cast<std::uint64_t>(
+                                      kLightVisCacheVersion)
+                                  << 32);
+    h = mix_lanes(h, grid.types().data(),
+                  grid.types().size() * sizeof(CellType));
+    h = mix_lanes(h, grid.masks().data(),
+                  grid.masks().size() * sizeof(SubMask));
+    if (lampCount > 0)
+        h = mix_lanes(h, lamps, lampCount * sizeof(LightVisLamp));
+    h = (h ^ slots) * 0x9E3779B97F4A7C15ull;
+    h = (h ^ lampCount) * 0x9E3779B97F4A7C15ull;
+    return h;
+}
+
+void light_vis_cache_encode(const LightVisBake& b, std::uint64_t key,
+                            std::vector<std::uint8_t>& out) {
+    out.clear();
+    const std::uint32_t stride = 1u + b.slots;
+    out.reserve(64 + static_cast<std::size_t>(b.litCells) *
+                         (2 + b.maxPerCell) * 4);
+    put_u32(out, kLightVisCacheMagic);
+    put_u64(out, key);
+    // Хэш всего, что ПОСЛЕ этого поля: имя файла (ключ) доказывает «тот ли
+    // это мир», хэш — «не побились ли байты». Молча скормить битый список
+    // ламп — нарушение «не потерять свет»; бэкпатч в конце encode.
+    const std::size_t hashAt = out.size();
+    put_u64(out, 0);
+    put_u32(out, b.slots);
+    put_u32(out, b.lampCount);
+    put_f32(out, b.rMaxM);
+    put_u32(out, b.litCells);
+    put_u32(out, b.overflowCells);
+    put_u32(out, b.maxPerCell);
+    put_f32(out, b.meanPerCell);
+    put_f32(out, b.packedMeanPerCell);
+    std::uint32_t entries = 0;
+    const std::size_t entriesAt = out.size();
+    put_u32(out, 0); // backpatch числом записанных клеток
+    for (std::size_t c = 0; c < kLightVisCells; ++c) {
+        const std::uint32_t* src = b.cells.data() + c * stride;
+        const std::uint32_t n = src[0];
+        if (n == 0) continue;
+        put_u32(out, static_cast<std::uint32_t>(c));
+        put_u32(out, n);
+        for (std::uint32_t k = 0; k < n; ++k) put_u32(out, src[1 + k]);
+        ++entries;
+    }
+    std::memcpy(out.data() + entriesAt, &entries, 4);
+    const std::uint64_t ph =
+        mix_lanes(key, out.data() + hashAt + 8, out.size() - hashAt - 8);
+    std::memcpy(out.data() + hashAt, &ph, 8);
+}
+
+bool light_vis_cache_decode(const std::uint8_t* bytes, std::size_t len,
+                            std::uint64_t key, LightVisBake& out) {
+    Reader r{bytes, len};
+    if (r.u32() != kLightVisCacheMagic) return false;
+    if (r.u64() != key) return false; // имя файла врёт о содержимом — мимо
+    const std::uint64_t ph = r.u64();
+    if (!r.ok || ph != mix_lanes(key, r.p, r.left))
+        return false; // байты побились — молча светить битым нельзя
+    const std::uint32_t slots = r.u32();
+    const std::uint32_t lampCount = r.u32();
+    const float rMaxM = r.f32();
+    const std::uint32_t litCells = r.u32();
+    const std::uint32_t overflowCells = r.u32();
+    const std::uint32_t maxPerCell = r.u32();
+    const float meanPerCell = r.f32();
+    const float packedMeanPerCell = r.f32();
+    const std::uint32_t entries = r.u32();
+    if (!r.ok || slots == 0 || slots > 1024 || entries > kLightVisCells)
+        return false;
+    const std::uint32_t stride = 1u + slots;
+    std::vector<std::uint32_t> cells(kLightVisCells * stride, 0);
+    for (std::uint32_t e = 0; e < entries; ++e) {
+        const std::uint32_t c = r.u32();
+        const std::uint32_t n = r.u32();
+        if (!r.ok || c >= kLightVisCells || n == 0 || n > slots)
+            return false;
+        std::uint32_t* dst = cells.data() + static_cast<std::size_t>(c) * stride;
+        dst[0] = n;
+        for (std::uint32_t k = 0; k < n; ++k) dst[1 + k] = r.u32();
+    }
+    if (!r.ok || r.left != 0) return false; // хвост — обрыв или мусор
+    out.cells = std::move(cells);
+    out.slots = slots;
+    out.lampCount = lampCount;
+    out.rMaxM = rMaxM;
+    out.litCells = litCells;
+    out.overflowCells = overflowCells;
+    out.maxPerCell = maxPerCell;
+    out.meanPerCell = meanPerCell;
+    out.packedMeanPerCell = packedMeanPerCell;
+    out.bakeMs = 0.0f; // это чтение, не бейк; цену печатает вызывающий
+    return true;
 }
 
 void bake_light_visibility_patch(const MacroGrid& grid,

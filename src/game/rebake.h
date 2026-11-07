@@ -125,6 +125,20 @@ public:
     void set_light_table(const LightVisLamp* lamps, std::size_t n,
                          std::uint32_t slots, std::uint32_t tableGen);
 
+    // Ход H: дисковый кэш Fresh-бейка видимости. Планировщик считает
+    // контент-адресный ключ ([light_vis_bake.h] light_vis_cache_key) и
+    // спрашивает хуки; сами байты гоняет app — giga_game файлов не трогает
+    // ([save.h]). Хуков нет (тесты, стенды) — кэша нет, печётся как пеклось.
+    // load возвращает true, если ключ найден и декод прошёл; store зовётся
+    // ТОЛЬКО на промахе, со свежеиспечённым состоянием (до патчей карва —
+    // они догоняют живой бейк позже и в кэш не едут по построению).
+    void set_light_cache(
+        std::function<bool(std::uint64_t, LightVisBake&)> load,
+        std::function<void(std::uint64_t, const LightVisBake&)> store) {
+        lightCacheLoad_ = std::move(load);
+        lightCacheStore_ = std::move(store);
+    }
+
     // Поколение состава таблицы (в номерах вызывающего), которое отражает
     // ПОСЛЕДНИЙ ЛЕГШИЙ полный бейк видимости (находка №2 аудита 2026-08-23:
     // на свапе брать ТЕКУЩЕЕ поколение — дыра: лампа, умершая за время
@@ -308,6 +322,9 @@ private:
     const MacroGrid* liveGrid_ = nullptr;
     LightVisBake lightVis_; // живой запечённый грид видимости
     std::vector<LightVisLamp> lampsLive_; // статик-таблица (индекс = слот id)
+    // Ход H: хуки дискового кэша Fresh-бейка (контракт у set_light_cache).
+    std::function<bool(std::uint64_t, LightVisBake&)> lightCacheLoad_;
+    std::function<void(std::uint64_t, const LightVisBake&)> lightCacheStore_;
     std::uint32_t lightSlots_ = 0;
     std::uint64_t lightGen_ = 0;
     bool lightSwapPending_ = false;

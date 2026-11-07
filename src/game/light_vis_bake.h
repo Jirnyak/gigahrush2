@@ -173,6 +173,27 @@ void bake_light_visibility(const MacroGrid& grid, const LightVisLamp* lamps,
 // образец GIGA_VERLET_PIN).
 std::uint64_t light_vis_fnv(const LightVisBake& b);
 
+// --- Ход H (matwej §13): дисковый кэш Fresh-бейка ----------------------------
+//
+// Кэш КОНТЕНТ-АДРЕСНЫЙ: ключ — хэш фактических входов бейка (маски+типы
+// грида, таблица ламп, slots, версия формата). Протухшей записи не существует
+// по построению — другой мир даёт другой ключ; бухгалтерия «модуль + CRC
+// файла» не нужна и не покрыла бы generate-ветку (у свежего этажа файла нет).
+// Хэш 8-дорожечный (маски — 134 МиБ, последовательный FNV жевал бы их ~80 мс
+// и съел бы выигрыш на тонких этажах). Кодек БЕЗ ПОТЕРЬ: бейк зануляет
+// незанятые слова (`cells.assign(..., 0)`), значит разреженная запись «только
+// освещённые клетки» восстанавливает вектор бит-в-бит и light_vis_fnv обязан
+// совпадать между MISS (бейк) и HIT (чтение) — это и есть гейт кэша.
+// Файлового I/O здесь НЕТ ([save.h]: giga_game файлов не трогает) — байты
+// гоняет app через хуки RebakeScheduler::set_light_cache.
+std::uint64_t light_vis_cache_key(const MacroGrid& grid,
+                                  const LightVisLamp* lamps,
+                                  std::size_t lampCount, std::uint32_t slots);
+void light_vis_cache_encode(const LightVisBake& b, std::uint64_t key,
+                            std::vector<std::uint8_t>& out);
+bool light_vis_cache_decode(const std::uint8_t* bytes, std::size_t len,
+                            std::uint64_t key, LightVisBake& out);
+
 // --- Частичное допекание: дельта-лампы (carve-hitch.md, инкремент 3) --------
 //
 // Два факта, на которых стоит частичность:

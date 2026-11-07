@@ -178,41 +178,69 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // клетками» стоила бы десятки мс КАЖДОГО кадра первые секунды, и этот
     // вывод в силе: синхронность здесь — не дефект.
     //
-    // СТУХЛО / поправка 2026-11-06 (matwej.md §13, §9.4 ход H). Прежняя
-    // посылка решения владельца — «хитч Fresh 0.1–0.3 с принят» — УСТАРЕЛА В
-    // 7–10 РАЗ. Замер 2026-11-04: 1083/1639 мс на этаже 0, 2302 мс на этаже 1,
-    // 514 мс на этаже 5, 199 мс на этаже 6. Это первое, что чувствует игрок на
-    // входе, и принятым оно НЕ является — не ссылаться на «0.1–0.3 с» как на
-    // действующее согласие.
-    //
-    // Лечение — НЕ асинхронность (она вернёт грязные клетки в кадр), а ХОД H:
-    // дисковый кэш бейка видимости, ключ = модуль + CRC floor-файла. Все три
-    // части уже лежат в дереве: ключ (`FloorModuleKey`, `crc32` блоба),
-    // валидатор (`light_vis_fnv`, он же пин ниже) и патч пост-рестор-карвов
-    // (`patch_carved_cells`). По печатаемым ниже числам (packed на клетку, max
-    // на клетку, число ламп против 65536) формат укладывается в единицы МиБ
-    // без потерь. Ожидание: 1.1–2.3 с → 10–30 мс на вход.
+    // ХОД H ПОСТРОЕН (matwej.md §13; замер 2026-11-04: 1083/2302 мс на этажах
+    // 0-1, 199 на 6 — «0.1-0.3 с принято» протухло в 7-10 раз). Лечение — НЕ
+    // асинхронность (она вернула бы грязные клетки в кадр), а дисковый кэш:
+    // ключ контент-адресный (маски+типы+лампы+slots, [light_vis_bake.h]) —
+    // протухших записей не существует по построению, generate-ветка покрыта
+    // без CRC-бухгалтерии. HIT заменяет бейк чтением; MISS печёт как пёк и
+    // отдаёт свежее состояние хуку store. Пост-рестор-карвы догоняют патчем
+    // (`patch_carved_cells`) ОБЕ ветки одинаково — в кэш едет только Fresh.
     //
     // Цена печатается вслух — правило «бейк без замера прячет свою регрессию».
     {
-        bake_light_visibility(grid, lampsLive_.data(), lampsLive_.size(),
-                              lightSlots_, lightVis_, /*threads=*/0, nullptr);
+        std::uint64_t cacheKey = 0;
+        double keyMs = 0.0;
+        bool cached = false;
+        if (lightCacheLoad_ || lightCacheStore_) {
+            const auto tKey = std::chrono::steady_clock::now();
+            cacheKey = light_vis_cache_key(grid, lampsLive_.data(),
+                                           lampsLive_.size(), lightSlots_);
+            keyMs = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - tKey)
+                        .count();
+        }
+        if (lightCacheLoad_) {
+            const auto tLoad = std::chrono::steady_clock::now();
+            cached = lightCacheLoad_(cacheKey, lightVis_);
+            if (cached)
+                std::fprintf(
+                    stderr,
+                    "[lightvis] floor %d CACHED: %u lamps -> %u lit cells "
+                    "(mean %.1f packed %.1f max %u/cell, overflow %u), "
+                    "R_max %.1f m, key %.1f + load %.1f ms (bake skipped)\n",
+                    floorNumber, lightVis_.lampCount, lightVis_.litCells,
+                    lightVis_.meanPerCell, lightVis_.packedMeanPerCell,
+                    lightVis_.maxPerCell, lightVis_.overflowCells,
+                    lightVis_.rMaxM, keyMs,
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - tLoad)
+                        .count());
+        }
+        if (!cached) {
+            bake_light_visibility(grid, lampsLive_.data(), lampsLive_.size(),
+                                  lightSlots_, lightVis_, /*threads=*/0,
+                                  nullptr);
+            ++lightFullBakes_;
+            if (lightCacheStore_) lightCacheStore_(cacheKey, lightVis_);
+            std::fprintf(stderr,
+                         "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
+                         "(mean %.1f packed %.1f max %u/cell, overflow %u), "
+                         "R_max %.1f m, "
+                         "%.0f ms sync (key %.1f ms)\n",
+                         floorNumber, lightVis_.lampCount, lightVis_.litCells,
+                         lightVis_.meanPerCell, lightVis_.packedMeanPerCell,
+                         lightVis_.maxPerCell, lightVis_.overflowCells,
+                         lightVis_.rMaxM, lightVis_.bakeMs, keyMs);
+        }
         lightGen_ = worldGen;
         lightSwapPending_ = true;
         lightTableBakedGen_ = lightTableGen_; // Fresh = полный бейк состава
         lightTableBakedTag_ = lightTableTag_; // синхронно с живой таблицы
-        ++lightFullBakes_;
-        std::fprintf(stderr,
-                     "[lightvis] floor %d FRESH: %u lamps -> %u lit cells "
-                     "(mean %.1f packed %.1f max %u/cell, overflow %u), R_max %.1f m, "
-                     "%.0f ms sync\n",
-                     floorNumber, lightVis_.lampCount, lightVis_.litCells,
-                     lightVis_.meanPerCell, lightVis_.packedMeanPerCell,
-                     lightVis_.maxPerCell,
-                     lightVis_.overflowCells, lightVis_.rMaxM,
-                     lightVis_.bakeMs);
         // Пин видимости (образец GIGA_VERLET_PIN): хэш содержимого клеток
-        // после Fresh-бейка; два прогона одного сида обязаны совпасть.
+        // после Fresh-бейка; два прогона одного сида обязаны совпасть — И
+        // между HIT/MISS кэша (кодек без потерь, бейк детерминирован): это
+        // гейт хода H в обе полярности.
         static const bool kPin = std::getenv("GIGA_LIGHT_VIS_PIN") != nullptr;
         if (kPin)
             std::fprintf(stderr, "[lightvis-pin] floor %d fnv=%016llx\n",

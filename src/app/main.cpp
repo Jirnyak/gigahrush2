@@ -1726,6 +1726,38 @@ void write_floor_file_async(World& w, int floor,
         });
 }
 
+// --- Ход H: дисковый кэш Fresh-бейка видимости света -----------------------
+// Контент-адресные файлы: имя = ключ, ключ = хэш входов бейка, значит файл
+// не может протухнуть — он может только перестать быть нужным. Поэтому
+// валидации «свежее ли» нет, есть вытеснение по числу файлов (mtime).
+// Кодек и ключ — в game ([light_vis_bake.h]); каждый fopen — ЗДЕСЬ ([save.h]).
+// Запись tmp+rename фоном, один полёт за раз (образец g_floorWritePending);
+// файлы — единицы МиБ, так что и хвост, и вытеснение — миллисекунды.
+std::future<void> g_lightVisStorePending;
+void light_vis_cache_path(std::uint64_t key, char* out, std::size_t cap) {
+    std::snprintf(out, cap, "gigahrush2_save/lightvis/%016llx.lvc",
+                  static_cast<unsigned long long>(key));
+}
+void flush_light_vis_store() {
+    if (g_lightVisStorePending.valid()) g_lightVisStorePending.get();
+}
+void prune_light_vis_cache(std::size_t keep) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    fs::directory_iterator it("gigahrush2_save/lightvis", ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        if (it->path().extension() != ".lvc") continue;
+        std::error_code tec;
+        files.emplace_back(fs::last_write_time(it->path(), tec), it->path());
+    }
+    if (files.size() <= keep) return;
+    std::sort(files.begin(), files.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (std::size_t i = 0; i + keep < files.size(); ++i)
+        fs::remove(files[i].second, ec);
+}
+
 // --- КАНАЛ ВОССТАНОВЛЕННЫХ СУЩНОСТЕЙ (v20/F, S20.6) ------------------------
 // Хук restore бежит и в prebuild-ВОРКЕРЕ (build_world_half), а спавн
 // сущностей — только на главном потоке в ECS-половине прибытия. Мост — карта
@@ -2944,6 +2976,35 @@ int main(int argc, char** argv) {
     // причине из длинного комментария у `pool`: деструктор джойнит воркер,
     // который пишет в поля стримера, значит он обязан умереть первым.
     game::RebakeScheduler nav;
+    // Ход H: кэш Fresh-бейка видимости. Байты — здесь ([save.h]: every fopen
+    // is HERE), ключ и кодек — в game. Чтение — в кадре входа (единицы МиБ);
+    // запись — кодек на главном (десятки мс, один раз на новый ключ), диск и
+    // вытеснение — фоном, один полёт за раз.
+    nav.set_light_cache(
+        [](std::uint64_t key, game::LightVisBake& out) -> bool {
+            char path[160];
+            light_vis_cache_path(key, path, sizeof path);
+            std::vector<std::uint8_t> bytes;
+            if (!read_bytes_file(bytes, path)) return false;
+            return game::light_vis_cache_decode(bytes.data(), bytes.size(),
+                                                key, out);
+        },
+        [](std::uint64_t key, const game::LightVisBake& b) {
+            auto bytes = std::make_shared<std::vector<std::uint8_t>>();
+            game::light_vis_cache_encode(b, key, *bytes);
+            char path[160];
+            light_vis_cache_path(key, path, sizeof path);
+            std::string p(path);
+            flush_light_vis_store(); // прежний полёт — этажи назад, хвост мал
+            g_lightVisStorePending = std::async(
+                std::launch::async, [bytes, p]() {
+                    if (!write_bytes_file(*bytes, p.c_str()))
+                        std::fprintf(stderr,
+                                     "[lightvis] cache store FAILED: %s\n",
+                                     p.c_str());
+                    prune_light_vis_cache(16);
+                });
+        });
 
     int currentFloor = 0;                         // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
