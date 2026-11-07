@@ -4176,9 +4176,20 @@ int main(int argc, char** argv) {
             if (g_profOn && g_wallSeen > 1) {
                 static giga::prof::Ring profWall, profSim, profRender,
                     profCarve, profLightSwap, profPropSkin, profMedApply,
-                    profMedRec, profMedLoop, profMedFrontier;
+                    profMedRec, profMedLoop, profMedFrontier, profMedCarried;
                 profMedLoop.push(mediumPass.apply_loop_ms());
                 profMedFrontier.push(mediumPass.apply_frontier_ms());
+                // МЕЧЕНЫЕ КЛЕТКИ ЗА ПАК (ход A) — по одному числу на пак,
+                // гейт по seq: кадры между паками не раздувают медиану.
+                // Это число решает кап окна (§10: params.z или kRbSlotCap).
+                {
+                    static std::uint32_t lastApplySeq = 0;
+                    if (mediumPass.apply_seq() != lastApplySeq) {
+                        lastApplySeq = mediumPass.apply_seq();
+                        profMedCarried.push(
+                            static_cast<float>(mediumPass.apply_carried()));
+                    }
+                }
                 profWall.push(wallMs);
                 profSim.push(g_frameMark.simMs);
                 profRender.push(g_frameMark.renderMs);
@@ -4227,12 +4238,17 @@ int main(int argc, char** argv) {
                     line("med_record", profMedRec);
                     line("med_loop", profMedLoop);
                     line("med_frontier", profMedFrontier);
+                    // Единица — КЛЕТКИ за пак, не мс: кольцо решает кап
+                    // окна пака (п.5 прогона владельца).
+                    line("med_carried", profMedCarried);
                     // Состав окна последнего применения: cmp-only = чистая
                     // цена memcmp неизменённых, copied = memcpy+recount.
                     std::fprintf(stderr,
-                                 "[prof] med-apply-mix window %u cmp-only %u "
-                                 "copied %u lazy %u skip-fresh %u\n",
+                                 "[prof] med-apply-mix window %u carried %u "
+                                 "cmp-only %u copied %u lazy %u skip-fresh "
+                                 "%u\n",
                                  mediumPass.apply_window(),
+                                 mediumPass.apply_carried(),
                                  mediumPass.apply_cmp_only(),
                                  mediumPass.apply_copied(),
                                  mediumPass.apply_lazy(),

@@ -416,6 +416,11 @@ public:
     // med-apply-mix мерил снаружи по copied (11% при окне 548-627, 17-31%
     // при полном окне 8192). Теперь её называет сам шов.
     std::uint32_t apply_carried() const noexcept { return applyCarried_; }
+    // Номер применённого пака: потребитель, которому нужно «по одному числу
+    // НА ПАК» (кольцо med_carried для решения о капе окна, §10), обязан
+    // сверять seq, а не читать каждый кадр — иначе один пак весит в
+    // статистике столько кадров, сколько он пролежал последним.
+    std::uint32_t apply_seq() const noexcept { return applySeq_; }
     std::uint32_t apply_cmp_only() const noexcept { return applyCmpOnly_; }
     std::uint32_t apply_copied() const noexcept { return applyCopied_; }
     std::uint32_t apply_lazy() const noexcept { return applyLazy_; }
@@ -426,6 +431,7 @@ private:
     float applyFrontierMs_ = 0.0f;  // open_frontier по liveCis в хвосте
     std::uint32_t applyWindow_ = 0;    // клеток в применённом окне (скан)
     std::uint32_t applyCarried_ = 0;   // из них с нагрузкой (ход A)
+    std::uint32_t applySeq_ = 0;       // паков применено (гейт выборки)
     std::uint32_t applyCmpOnly_ = 0;   // страница+маска НЕ менялись (чистый memcmp)
     std::uint32_t applyCopied_ = 0;    // страница менялась (memcpy+recount)
     std::uint32_t applyLazy_ = 0;      // ленивые материализации

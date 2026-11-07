@@ -629,6 +629,7 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     // прежде чем трогать run_move, шов обязан назвать, кто ест его 11 мс.
     applyWindow_ = count;
     applyCarried_ = carried;
+    ++applySeq_;
     applyCmpOnly_ = applyCopied_ = applyLazy_ = applySkipFresh_ = 0;
     const auto applyLoopT0 = std::chrono::steady_clock::now();
     // ПРОХОД 1 — ПО СПИСКУ (4 Б на клетку, читается целиком). Он даёт
