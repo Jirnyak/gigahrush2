@@ -11,7 +11,7 @@
 #include "game/prop_system.h"
 #include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
 #include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
-#include "game/embody.h"  // TerminalInteractResult / embody_interact_terminal
+#include "game/embody.h"  // embody_as_player — тело игрока для лут-пути
 #include "world/world.h"
 #include "world/types.h"
 #include "world/materials.h"
