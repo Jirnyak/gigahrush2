@@ -5686,6 +5686,82 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                // CORPSHOT locomotion — тот же закон, что у wall выше: ходьба
+                // и наводка живут ТОЛЬКО здесь (после input.apply, до
+                // controller_step; wishDir camera-local). Поздний corp-блок
+                // держит атаку и жмёт E — его записи cam/wishDir были мертвы
+                // ДВАЖДЫ (перетирались пином ввода И несли Y-up рудимент
+                // atan2(dx,dz) с вертикалью в wishDir.z — d=74 навсегда).
+                if (shotPath && shotAction == "corp" && reg.valid(player) &&
+                    shotFramesSeen >= 30) {
+                    const vec3 ppos = reg.get<Transform>(player).pos;
+                    Entity corpseEnt = entt::null;
+                    for (auto cEnt :
+                         reg.view<const game::Corpse, const Transform>()) {
+                        if (reg.get<const Transform>(cEnt).layer !=
+                            activeLayer)
+                            continue;
+                        if (wrap_dist2(ppos,
+                                       reg.get<const Transform>(cEnt).pos,
+                                       kWorldExtent) < 2.2f * 2.2f) {
+                            corpseEnt = cEnt;
+                            break;
+                        }
+                    }
+                    if (corpseEnt != entt::null) {
+                        // Труп рядом: НАВЕСТИСЬ (ветка E — по прицелу; Z-up:
+                        // yaw=atan2(dy,dx), pitch вниз к телу под ногами).
+                        auto& ccam = reg.get<CameraTag>(player);
+                        const vec3& cps =
+                            reg.get<const Transform>(corpseEnt).pos;
+                        const float cdx =
+                            wrap_delta_f(ppos.x, cps.x, kWorldExtent);
+                        const float cdy =
+                            wrap_delta_f(ppos.y, cps.y, kWorldExtent);
+                        const float cdz =
+                            wrap_delta_f(ppos.z, cps.z, kWorldExtent) -
+                            game::body_eye_height(pool.height_mm(
+                                reg.get<game::NpcRef>(player).id));
+                        ccam.yaw = std::atan2(cdy, cdx);
+                        ccam.pitch = std::atan2(
+                            cdz, std::sqrt(cdx * cdx + cdy * cdy));
+                        if (auto* ctl = reg.try_get<Controller>(player))
+                            ctl->wishDir = vec3{0.0f, 0.0f, 0.0f};
+                    } else {
+                        Entity bestMob = entt::null;
+                        float bestD2 = 1.0e12f;
+                        vec3 bestPos{};
+                        for (auto me : reg.view<const game::MobRef,
+                                                const Transform>()) {
+                            if (reg.all_of<game::Dead>(me)) continue;
+                            const Transform& tr =
+                                reg.get<const Transform>(me);
+                            if (tr.layer != activeLayer) continue;
+                            const float d2 =
+                                wrap_dist2(ppos, tr.pos, kWorldExtent);
+                            if (d2 < bestD2) {
+                                bestD2 = d2;
+                                bestMob = me;
+                                bestPos = tr.pos;
+                            }
+                        }
+                        if (bestMob != entt::null) {
+                            auto& cam = reg.get<CameraTag>(player);
+                            const float dx = wrap_delta_f(
+                                ppos.x, bestPos.x, kWorldExtent);
+                            const float dy = wrap_delta_f(
+                                ppos.y, bestPos.y, kWorldExtent);
+                            cam.yaw = std::atan2(dy, dx);
+                            cam.pitch = -0.15f;
+                            if (auto* ctl =
+                                    reg.try_get<Controller>(player)) {
+                                ctl->fly = false;
+                                if (bestD2 > 1.5f * 1.5f)
+                                    ctl->wishDir = {1.0f, 0.0f, 0.0f};
+                            }
+                        }
+                    }
+                }
                 // Embodied crowd (#12): needs decay, then the utility brain
 
                 // re-plans (identity-staggered) and steers each NON-player body's
@@ -6254,10 +6330,14 @@ int main(int argc, char** argv) {
                         }
                     } else if (shotAction == "corp" && reg.valid(player) &&
                                shotFramesSeen >= 30) {
-                        // CORPSHOT: face nearest live mob, hold attack
-                        // (real player_melee_step), then once a Corpse is in
-                        // loot reach press E (real loot_corpse_interact).
-                        // Automates facing/phase only — no fake loot path.
+                        // CORPSHOT: наводка и ходьба — у РАННЕГО блока (тот
+                        // же закон, что wall: после input.apply, до
+                        // controller_step). Здесь — держать атаку и один раз
+                        // нажать E, когда ФОКУС реально взял труп: ветка
+                        // трупа лестницы E переведена на прицел, и харнесс
+                        // обязан доказывать ровно этот путь. g_focus
+                        // считается на вершине кадра — «навёлся и сразу жму»
+                        // невозможно, E уходит кадром позже.
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool corpseNear = false;
                         for (auto cEnt :
@@ -6274,18 +6354,21 @@ int main(int argc, char** argv) {
                             }
                         }
                         // One real E press after the kill. Holding interact every
-                        // tick re-fires loot_corpse_interact on an empty searched
-                        // corpse and floods stderr with TAKEN 0 ITEMS.
+                        // tick re-fires the loot screen on an empty searched
+                        // corpse and floods stderr.
                         if (corpseNear && !shotActionConsumed) {
-                            interactWanted = true;
-                            std::fprintf(stderr,
-                                         "[corp] corpse in reach — "
-                                         "interact\n");
-                            shotActionConsumed = true;
+                            if (g_focus.what == game::Focus::What::Entity &&
+                                g_focus.kind == game::InteractKind::Corpse) {
+                                interactWanted = true;
+                                std::fprintf(stderr,
+                                             "[corp] corpse UNDER AIM "
+                                             "(d=%.2f) — interact\n",
+                                             g_focus.dist);
+                                shotActionConsumed = true;
+                            }
                         } else if (!corpseNear) {
                             Entity bestMob = entt::null;
                             float bestD2 = 1.0e12f;
-                            vec3 bestPos{};
                             for (auto me :
                                  reg.view<const game::MobRef,
                                           const Transform>()) {
@@ -6298,28 +6381,9 @@ int main(int argc, char** argv) {
                                 if (d2 < bestD2) {
                                     bestD2 = d2;
                                     bestMob = me;
-                                    bestPos = tr.pos;
                                 }
                             }
                             if (bestMob != entt::null) {
-                                auto& cam = reg.get<CameraTag>(player);
-                                const float dx = wrap_delta_f(
-                                    ppos.x, bestPos.x, kWorldExtent);
-                                const float dz = wrap_delta_f(
-                                    ppos.z, bestPos.z, kWorldExtent);
-                                cam.yaw = std::atan2(dx, dz);
-                                cam.pitch = -0.15f;
-                                if (bestD2 > 1.5f * 1.5f) {
-                                    if (auto* ctl =
-                                            reg.try_get<Controller>(player)) {
-                                        const float len =
-                                            std::sqrt(bestD2);
-                                        if (len > 1e-3f) {
-                                            ctl->wishDir = vec3{
-                                                dx / len, 0.0f, dz / len};
-                                        }
-                                    }
-                                }
                                 attackHeld = true;
                                 static int corpAtkLog = 0;
                                 if ((corpAtkLog++ % 120) == 0) {
@@ -7334,20 +7398,35 @@ int main(int argc, char** argv) {
                         const vec3 ppos = reg.get<Transform>(player).pos;
                         bool handled = false;
 
+                        // ЗАКОН ФОКУСА, ОДНОЙ СТРОКОЙ НА ВСЮ ЛЕСТНИЦУ: цель E
+                        // — РОВНО сущность под прицелом ([game/focus.h]),
+                        // второго способа выбрать её у клавиши больше нет
+                        // (чистка 2026-11-07: было 4 ветки по дистанции —
+                        // труп/ящик/NPC/щиток работали сквозь стены и за
+                        // спиной, табличка при этом показывала прицел).
+                        // reg.valid здесь не паранойя, а порядок кадра:
+                        // focus_pick стоит на ВЕРШИНЕ кадра, а между ним и
+                        // этим тиком работает samosbor_fog_tick — его
+                        // fog_phase_cleanup УНИЧТОЖАЕТ сущности слоя, и труп
+                        // под прицелом может не дожить до нажатия; try_get по
+                        // мёртвой сущности в EnTT не определён.
+                        const bool aimedEnt =
+                            g_focus.what == game::Focus::What::Entity &&
+                            reg.valid(g_focus.entity);
+                        const Entity aimed =
+                            aimedEnt ? g_focus.entity : entt::null;
+
                         // 1. Труп: E открывает ЭКРАН обыска (двухсторонняя
                         // сетка, [inventory_ui.h]) вместо старого авто-лута
                         // всем скопом — что взять, решают руки, а не reach.
                         // loot_corpse_interact остался бэкендом харнесса
                         // (--shot corp) и тестов; путь игрока — заявки Take.
                         {
-                            const game::InteractionHit corpseHit =
-                                game::find_nearest_interactable(
-                                    reg, player, game::Interactable::Kind::Corpse,
-                        game::interact_def(game::InteractKind::Corpse).reachM);
-                            if (corpseHit.hit &&
-                                reg.all_of<game::Corpse>(corpseHit.entity)) {
+                            if (aimedEnt &&
+                                g_focus.kind == game::InteractKind::Corpse &&
+                                reg.all_of<game::Corpse>(aimed)) {
                                 handled = true;
-                                lootEntity = corpseHit.entity;
+                                lootEntity = aimed;
                                 lootIsCorpse = true;
                                 lootIsBarter = false;
                                 shell.window = UiWindow::Inventory;
@@ -7366,19 +7445,14 @@ int main(int argc, char** argv) {
                         // ящик больше не пылесос, он ХРАНИЛИЩЕ: можно и брать,
                         // и класть ([container.h] condition — износ едет).
                         if (!handled) {
-                            // Ящик — обычный Interactable (S14.1 B2): кастомный
-                            // перебор по дистанции умер, ищет тот же
-                            // find_nearest_interactable, что трупы и терминалы;
-                            // reach — из interactables.csv.
-                            const game::InteractionHit crateHit =
-                                game::find_nearest_interactable(
-                                    reg, player, game::Interactable::Kind::Crate,
-                                    game::interact_def(game::InteractKind::Crate)
-                                        .reachM);
-                            Entity bestBox =
-                                crateHit.hit &&
-                                        reg.all_of<game::Container>(crateHit.entity)
-                                    ? crateHit.entity
+                            // Ящик — обычный Interactable (S14.1 B2), и цель
+                            // у него та же, что у всех: ПРИЦЕЛ. reach и конус
+                            // — внутри focus_pick, по компоненту строки пропа.
+                            const Entity bestBox =
+                                (aimedEnt &&
+                                 g_focus.kind == game::InteractKind::Crate &&
+                                 reg.all_of<game::Container>(aimed))
+                                    ? aimed
                                     : entt::null;
                             if (bestBox != entt::null) {
                                 handled = true;
@@ -7392,9 +7466,8 @@ int main(int argc, char** argv) {
                                 // TtlMs) — обыск по-прежнему не бесплатен.
                                 game::NoiseProfile np{7.0f, 2200, 1,
                                                       game::NoiseSource::Container};
-                                game::noise_publish(
-                                    noiseField, activeLayer,
-                                    reg.get<const Transform>(bestBox).pos, np, 0);
+                                game::noise_publish(noiseField, activeLayer,
+                                                    g_focus.pos, np, 0);
                             }
                         }
 
@@ -7404,18 +7477,14 @@ int main(int argc, char** argv) {
                         // приоритету: мёртвое и запертое не убегает, живой
                         // собеседник подождёт клавишу.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            const game::InteractionHit npcHit =
-                                game::find_nearest_interactable(
-                                    reg, player, game::Interactable::Kind::Npc,
-                                    game::interact_def(game::InteractKind::Npc)
-                                        .reachM);
-                            if (npcHit.hit &&
-                                reg.all_of<game::NpcRef>(npcHit.entity)) {
+                            if (aimedEnt &&
+                                g_focus.kind == game::InteractKind::Npc &&
+                                reg.all_of<game::NpcRef>(aimed)) {
                                 const game::NpcId cid =
-                                    reg.get<game::NpcRef>(npcHit.entity).id;
+                                    reg.get<game::NpcRef>(aimed).id;
                                 if (pool.valid(cid) && pool.alive(cid)) {
                                     handled = true;
-                                    convEntity = npcHit.entity;
+                                    convEntity = aimed;
                                     convNpc = cid;
                                     convLine[0] = 0;
                                     convUi.sel = 0;
@@ -7442,11 +7511,9 @@ int main(int argc, char** argv) {
                         // на створку своего хаба — деривация хаба из
                         // позиции кнопки (fast_hub_near) умерла. Кнопка
                         // без ссылки — дефект обвеса, и он кричит.
-                        if (!handled &&
-                            g_focus.what == game::Focus::What::Entity &&
+                        if (!handled && aimedEnt &&
                             g_focus.kind == game::InteractKind::LiftCall) {
-                            const auto* dr =
-                                reg.try_get<game::DoorRef>(g_focus.entity);
+                            const auto* dr = reg.try_get<game::DoorRef>(aimed);
                             if (dr && dr->group < doors.list.size()) {
                                 game::door_open(stack.layer(activeLayer),
                                                 doors.list[dr->group],
@@ -7468,10 +7535,8 @@ int main(int argc, char** argv) {
                         // `if (kind == Terminal)` снесён. Право открыть окно
                         // несёт станция навеса; женитьбу «глагол ⟺ станция»
                         // держит генератор, поэтому проба одна.
-                        if (!handled &&
-                            g_focus.what == game::Focus::What::Entity) {
-                            const auto* po =
-                                reg.try_get<game::PropOf>(g_focus.entity);
+                        if (!handled && aimedEnt) {
+                            const auto* po = reg.try_get<game::PropOf>(aimed);
                             if (po != nullptr &&
                                 game::prop_craft_station(po->id) !=
                                     game::CraftStation::Count) {
@@ -7481,8 +7546,7 @@ int main(int argc, char** argv) {
                                 handled = true;
                             }
                         }
-                        if (!handled &&
-                            g_focus.what == game::Focus::What::Entity &&
+                        if (!handled && aimedEnt &&
                             g_focus.kind == game::InteractKind::LiftPanel) {
                             shell.toggle(UiWindow::Elevator);
                             if (shell.window != UiWindow::None)
@@ -7493,16 +7557,15 @@ int main(int argc, char** argv) {
                         // E забирает РОВНО сфокусированный пикап; пылесос по
                         // близости умер. Полный инвентарь — остаток лежит,
                         // табличка честна (E попробовал и не соврал).
-                        if (!handled &&
-                            g_focus.what == game::Focus::What::Entity &&
-                            reg.all_of<game::Pickup>(g_focus.entity)) {
+                        if (!handled && aimedEnt &&
+                            reg.all_of<game::Pickup>(aimed)) {
                             if (const auto* nrk =
                                     reg.try_get<game::NpcRef>(player)) {
                                 if (pool.valid(nrk->id)) {
                                     const game::PickupTakeResult pr =
                                         game::pickup_take(reg, pool, bus,
-                                                          g_focus.entity,
-                                                          nrk->id, simTick);
+                                                          aimed, nrk->id,
+                                                          simTick);
                                     if (pr.placed > 0)
                                         // Подобранный бронежилет обязан
                                         // защищать ([combat.h] sync_armour).
@@ -7514,21 +7577,21 @@ int main(int argc, char** argv) {
 
                         }
 
-                        // 3. ElectricalShield sabotage — zero-heap nearest.
-                        // Reach — ИЗ ТАБЛИЦЫ (чистка 2026-11-07): литерал
-                        // 3.5f совпадал с interactables.csv случайно и был
-                        // единственной веткой E мимо табличного reach.
-                        // Сообщение — stderr по форме соседа (LiftCall выше):
-                        // старый snprintf писал в ЧУЖОЙ буфер elevDiagLine,
-                        // который рисует только дебаг-панель — игрок его не
-                        // видел никогда; лента игроку — отдельный шов.
+                        // 3. Саботаж щитка — тоже ПРИЦЕЛ: щиток в соседней
+                        // комнате через стену больше не выключается. Reach
+                        // теперь КОМПОНЕНТНЫЙ (props.csv reach_mm через
+                        // focus_pick), как у всех веток; interactables.csv
+                        // для щитка несёт 3.5 против 2.5 компонента — то же
+                        // расхождение таблиц, что у терминала, решается
+                        // данными, не веткой. Сообщение — stderr по форме
+                        // соседа (LiftCall выше): старый snprintf писал в
+                        // ЧУЖОЙ буфер elevDiagLine, который рисует только
+                        // дебаг-панель — игрок его не видел никогда.
                         if (!handled && activeLayer != kInvalidLayer) {
-                            game::InteractionHit shieldHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::ElectricalShield,
-                                game::interact_def(game::InteractKind::ElectricalShield)
-                                    .reachM);
-                            if (shieldHit.hit) {
-                                const vec3& sp = shieldHit.pos;
+                            if (aimedEnt &&
+                                g_focus.kind ==
+                                    game::InteractKind::ElectricalShield) {
+                                const vec3& sp = g_focus.pos;
                                 int scx = static_cast<int>(sp.x / kCellSize);
                                 int scy = static_cast<int>(sp.y / kCellSize);
                                 int scz = static_cast<int>(sp.z / kCellSize);

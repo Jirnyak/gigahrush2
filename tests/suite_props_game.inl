@@ -1994,6 +1994,68 @@ static void test_craft_hang_live_path() {
                           [game::kVerbCraft] == 2);
 }
 
+// ЛЕСТНИЦА E — ЗАКОН ФОКУСА ЦЕЛИКОМ (чистка 2026-11-07): последние 4 ветки
+// (труп/ящик/NPC/щиток) переведены с find_nearest_interactable на прицел.
+// Гейт держит ПРИМИТИВ, на который они встали: focus_pick отдаёт каждую
+// цель ПОД прицелом (kind = строка таблицы — ровно то, что лестница
+// сверяет) и НЕ отдаёт её же с того же места при взгляде МИМО — обратная
+// полярность, без которой тест шёл бы мёртвой веткой (дистанционный поиск
+// обе пробы прошёл бы «hit»). Стену/щель держат тесты focus (blocked).
+// Фикстуры зеркалят боевые компоненты: труп — finalize_deaths (Kind::Corpse
+// 2.2 active), ящик — ящик-проп (Container + Kind::Crate), NPC — embody
+// (Kind::Npc), щиток — строка пропа (Kind::ElectricalShield). Цели
+// разнесены по миру, чтобы пробы не светили друг в друга.
+static void test_e_ladder_targets_by_aim() {
+    Registry reg;
+    World world;
+    const LayerId layer = 3;
+    const game::Doors noDoors;
+
+    struct Target {
+        game::Interactable::Kind kind;
+        float reach;
+        vec3 pos;
+    };
+    const Target targets[] = {
+        {game::Interactable::Kind::Corpse, 2.2f, vec3{20.0f, 20.0f, 20.0f}},
+        {game::Interactable::Kind::Crate, 2.4f, vec3{60.0f, 60.0f, 20.0f}},
+        {game::Interactable::Kind::Npc, 2.2f, vec3{100.0f, 100.0f, 20.0f}},
+        {game::Interactable::Kind::ElectricalShield, 2.5f,
+         vec3{140.0f, 140.0f, 20.0f}},
+    };
+    for (const Target& t : targets) {
+        Entity e = reg.create();
+        Transform tr;
+        tr.pos = t.pos;
+        tr.layer = layer;
+        reg.emplace<Transform>(e, tr);
+        reg.emplace<game::Interactable>(
+            e, game::Interactable{t.kind, t.reach, true});
+        if (t.kind == game::Interactable::Kind::Corpse) {
+            game::Corpse c{};
+            reg.emplace<game::Corpse>(e, c);
+        }
+        if (t.kind == game::Interactable::Kind::Crate)
+            reg.emplace<game::Container>(e, game::Container{});
+    }
+    for (const Target& t : targets) {
+        const vec3 eye{t.pos.x - 1.8f, t.pos.y, t.pos.z};
+        // Под прицелом: фокус отдаёт РОВНО эту цель её строкой таблицы.
+        const game::Focus hit = game::focus_pick(reg, world, layer, eye,
+                                                 vec3{1.0f, 0.0f, 0.0f},
+                                                 noDoors);
+        CHECK(hit.what == game::Focus::What::Entity);
+        CHECK(hit.kind == t.kind);
+        CHECK(hit.dist > 0.0f && hit.dist <= t.reach);
+        // Взгляд МИМО с того же места: цель в reach (1.8 м), но не в конусе
+        // — дистанционный поиск здесь отвечал «hit», прицел обязан молчать.
+        const game::Focus aside = game::focus_pick(reg, world, layer, eye,
+                                                   vec3{0.0f, 1.0f, 0.0f},
+                                                   noDoors);
+        CHECK(aside.what == game::Focus::What::None);
+    }
+}
+
 // НАПОЛЬНЫЕ СТАНЦИИ (владелец 2026-11-07: «станки в мир сейчас»): станок
 // СТОИТ на полу спиной к стене — опора обязательна, якорь в ПОЛ, станция
 // достижима прицелом в мире, не только строкой таблицы. Обе полярности:
@@ -2047,6 +2109,7 @@ static void test_floor_stations_stand_on_floor() {
 
 void test_props_game_all() {
     test_craft_hang_live_path();
+    test_e_ladder_targets_by_aim();
     test_floor_stations_stand_on_floor();
     test_attachment_reaper_and_verbs();
     test_anchor_validate_layer_filter();
