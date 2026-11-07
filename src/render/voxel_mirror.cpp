@@ -4,6 +4,8 @@
 #include <chrono> // цена classify по всему объёму — прибор входа на этаж
 #include <cstdio>
 #include <cstring>
+#include <thread> // classify всего объёма — вразброс по нитям (см. upload_all)
+#include <vector>
 
 #include "render/vk_device.h"
 #include "world/destruct.h" // kSubMaterialName
@@ -314,9 +316,35 @@ bool VoxelMirror::upload_all(const World& world) {
     // что у medium_revive (classify смотрит в страницу клетки).
     const auto tClassify = std::chrono::steady_clock::now();
     classScratch_.resize(kMacroCells);
-    for (std::size_t i = 0; i < kMacroCells; ++i)
-        classScratch_[i] =
-            classify(g.masks()[i], g.types()[i], sub ? sub->page(i) : nullptr);
+    {
+        // Клетка от клетки не зависит, а цена — ЛАТЕНТНОСТЬ: обход
+        // разыменовывает страницу клетки вразброс по пулу (на обжитом этаже
+        // 904 МиБ), однопоточно это 484 мс кадра SwapUpload — крупнейший
+        // именованный кусок прибытия лифта (покадровый замер машины,
+        // лифт-лимб 2, 2026-11-07). Диапазоны пишут в непересекающиеся
+        // куски classScratch_; число нитей — тот же вывод max(2, hw/2),
+        // что у RebakeScheduler.
+        int hw = static_cast<int>(std::thread::hardware_concurrency());
+        if (hw < 1) hw = 1;
+        const int threads = hw / 2 < 2 ? 2 : hw / 2;
+        auto classify_range = [&](std::size_t b, std::size_t e) {
+            for (std::size_t i = b; i < e; ++i)
+                classScratch_[i] = classify(g.masks()[i], g.types()[i],
+                                            sub ? sub->page(i) : nullptr);
+        };
+        std::vector<std::thread> pool;
+        pool.reserve(static_cast<std::size_t>(threads - 1));
+        const std::size_t chunk =
+            kMacroCells / static_cast<std::size_t>(threads);
+        for (int t = 1; t < threads; ++t)
+            pool.emplace_back(classify_range,
+                              chunk * static_cast<std::size_t>(t),
+                              t + 1 == threads
+                                  ? static_cast<std::size_t>(kMacroCells)
+                                  : chunk * static_cast<std::size_t>(t + 1));
+        classify_range(0, chunk);
+        for (auto& th : pool) th.join();
+    }
     std::fprintf(stderr, "[entry] mirror classify %.1f ms\n",
                  std::chrono::duration<double, std::milli>(
                      std::chrono::steady_clock::now() - tClassify)
