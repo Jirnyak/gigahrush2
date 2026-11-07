@@ -41,7 +41,7 @@ struct InteractDef {
 };
 
 inline constexpr InteractDef kInteractTable[kInteractCount] = {
-    {"terminal", "TERMINAL (DOOR LOCKS)", 4.0f},
+    {"terminal", "NET TERMINAL", 4.0f},
     {"electrical_shield", "SABOTAGE ELECTRICAL SHIELD", 3.5f},
     {"light_bulb", "LIGHT BULB", 2.5f},
     {"corpse", "LOOT CORPSE", 2.2f},

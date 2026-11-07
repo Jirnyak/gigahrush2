@@ -1,5 +1,5 @@
 id,cpp_name,prompt,reach_m,note
-terminal,Terminal,TERMINAL (DOOR LOCKS),4.0,wall terminal: door-lock control menu (app subscribes)
+terminal,Terminal,NET TERMINAL,4.0,сетевой терминал: E открывает крафт-окно (станция net_terminal из props.csv); роль замков в могиле дверей 2026-08-28 — промпт перестал врать 2026-11-07 (решение владельца: «NET TERMINAL»)
 electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid node: sabotage kills the zone feed
 light_bulb,LightBulb,LIGHT BULB,2.5,ceiling light: shootable / future switch wiring
 corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
