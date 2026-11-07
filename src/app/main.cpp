@@ -2928,6 +2928,20 @@ int main(int argc, char** argv) {
     // хуки supply на швах предметов/пропов не тащили их через сигнатуры.
     game::FloorRooms& floorRooms = reg.ctx().emplace<game::FloorRooms>();
     game::Focus g_focus;            // цель под прицелом этого кадра ([focus.h])
+    // ОДНО ПРАВИЛО ЦЕЛИ СТАНЦИИ (чистка 2026-11-07): станция крафта — У
+    // ПРОПА ПОД ПРИЦЕЛОМ, ровно того, по которому E открывает крафт-окно;
+    // без навеса под прицелом — голые руки. Тройная копия «пад = верстак,
+    // терминал рядом = NetTerminal» умерла вместе с рассинхроном «окно
+    // открывает прицел, станцию ищет дистанция»: источник один — g_focus.
+    auto craft_station_under_aim = [&]() -> game::CraftStation {
+        if (g_focus.what == game::Focus::What::Entity) {
+            if (const auto* po = reg.try_get<game::PropOf>(g_focus.entity)) {
+                const game::CraftStation st = game::prop_craft_station(po->id);
+                if (st != game::CraftStation::Count) return st;
+            }
+        }
+        return game::CraftStation::Any;
+    };
         // 5c: обвес лифтовых порталов — game::dress_lift_portals
     // ([game/door.h]): кнопка снаружи (DoorRef на створку хаба — активация
     // ссылкой S18), панель в кабине, дефолт «закрыто». Перенесён в
@@ -8028,25 +8042,13 @@ int main(int argc, char** argv) {
                 }
                 // (The pad shop is gone — [conversation.md]: trade is a deal
                 // with a BODY, not a place. The pad keeps its one job, banking.)
-                // CRAFTING. The extraction pad is the only bench in the game today, and
-                // that is a measured limitation rather than a placeholder: 259 of the 446
-                // recipes (22 `Any` + 237 Workbench) are reachable there, and the other
-                // 187 (92 lathe / 77 lab / 18 net_terminal) wait on station placement in
-                // floor_gen. Off the pad the player has bare hands, which satisfies the
-                // 22 `Any` recipes and nothing else. Disassembly is workbench-only by the
-                // reference's rule, so it is pad-only too. [craft.h]
+                // CRAFTING (дев-канал ConsoleRequest::Craft/Scrap). Станции —
+                // СТРОКИ props.csv с навесом craft (верстак/станок/лабстол/
+                // терминал), пад перестал быть верстаком (чистка 2026-11-07,
+                // пад держит одну работу — банковать). Станция — у пропа под
+                // прицелом, то же правило, что у крафт-окна. [craft.h]
                 if ((craftWanted || scrapWanted) && reg.valid(player)) {
-                    const Transform& ct = reg.get<Transform>(player);
-                    // Zero-heap nearest Terminal (4 m = sqrt(16)). [jirnyak.md] §18
-                    const bool nearTerm =
-                        game::find_nearest_interactable(
-                            reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM)
-                            .hit;
-                    const game::CraftStation bench =
-                        game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
-                            ? game::CraftStation::Workbench
-                            : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
+                    const game::CraftStation bench = craft_station_under_aim();
                     bool invChanged = false;
                     if (const auto* nrk = reg.try_get<game::NpcRef>(player))
                         if (pool.valid(nrk->id)) {
@@ -9302,26 +9304,12 @@ int main(int argc, char** argv) {
                         break;
                     }
                     case InvUiRequest::Kind::Repair: {
-                        // Станция — та же тройка, что у крафт-окна: пад =
-                        // верстак, терминал рядом = NetTerminal, иначе голые
-                        // руки. Цену/станцию судит примитив; отказ — словами
-                        // в консоль-лог, как крафт и делает. [craft.h]
-                        const Transform& rct = reg.get<Transform>(player);
-                        const bool nearTermR =
-                            game::find_nearest_interactable(
-                                reg, player,
-                                game::Interactable::Kind::Terminal,
-                                game::interact_def(game::InteractKind::Terminal)
-                                    .reachM)
-                                .hit;
-                        const game::CraftStation benchR =
-                            game::on_extraction_pad(
-                                stack.layer(activeLayer).grid(), rct.pos)
-                                ? game::CraftStation::Workbench
-                                : (nearTermR ? game::CraftStation::NetTerminal
-                                             : game::CraftStation::Any);
+                        // Станция — ТО ЖЕ одно правило, что у крафт-окна:
+                        // проп под прицелом (чистка 2026-11-07; пад и скан
+                        // «терминал рядом» умерли). Цену/станцию судит
+                        // примитив; отказ — словами в консоль-лог. [craft.h]
                         const game::RepairResult rr = game::craft_repair_item(
-                            crafting, pinv, r.slot, benchR);
+                            crafting, pinv, r.slot, craft_station_under_aim());
                         char line[128];
                         if (rr.ok)
                             std::snprintf(line, sizeof line,
@@ -9366,17 +9354,11 @@ int main(int argc, char** argv) {
         }
 
         if ((shell.window == UiWindow::Craft) && reg.valid(player)) {
-            const Transform& ct = reg.get<Transform>(player);
-            // Zero-heap nearest Terminal ([jirnyak.md] section 18) -- same reach as craft hot path.
-            const bool nearTerm =
-                game::find_nearest_interactable(
-                    reg, player, game::Interactable::Kind::Terminal,
-                    game::interact_def(game::InteractKind::Terminal).reachM)
-                    .hit;
-            const game::CraftStation bench =
-                game::on_extraction_pad(stack.layer(activeLayer).grid(), ct.pos)
-                    ? game::CraftStation::Workbench
-                    : (nearTerm ? game::CraftStation::NetTerminal : game::CraftStation::Any);
+            // Станция — проп, по которому окно и открыто (прицел E): одно
+            // правило цели на вход, окно и ремонт (чистка 2026-11-07).
+            // Прицел при открытом окне заморожен вместе с камерой, так что
+            // окно судит рецепты РОВНО той станцией, с которой открылось.
+            const game::CraftStation bench = craft_station_under_aim();
 
             if (const auto* nrk = reg.try_get<game::NpcRef>(player)) {
                 if (pool.valid(nrk->id)) {
