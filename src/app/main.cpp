@@ -3658,15 +3658,24 @@ int main(int argc, char** argv) {
         if (showConsole && msg[0]) consoleLog.push_back(msg);
     };
 
-    // THE save, one law: run.sav (the run) + the resident floor's own file
-    // (its geometry). F5 calls it, and so does the autosave at the end of
-    // every ride — a transition is a load screen, where I/O belongs. [save.h]
-    auto save_run_now = [&]() -> bool {
+    // Отложенный автосейв поездки (лифт-лимб): снимок runState снят В КАДРЕ
+    // ПРИБЫТИЯ, run.sav уезжает на диск позже — когда фоновый кодек+диск
+    // ПОКИНУТОГО этажа сел. Закон дюпа «floor-файл покинутого РАНЬШЕ
+    // run.sav» держится порядком, а не блокировкой кадра (замер прибора
+    // входа: flush-wait 1769/2017 мс из arrive 2179/2442 — это и была
+    // доминанта). Дизарм: leave (садится там же, флуш всё равно неизбежен),
+    // F9/rebuild (садящийся позже снимок клоббернул бы загруженное), F5
+    // (пишет более свежее).
+    bool rideAutosaveArmed = false;
+    game::SaveState rideAutosaveSnap;
+    // Сбор ранового состояния в runState — дешёвая половина сейва (1-3 мс):
+    // поля игрока, часы рана, блобы пула/макро. Общая для F5 и автосейва
+    // поездки; диска не трогает.
+    auto fill_run_state = [&]() -> bool {
         const game::NpcRef* nr =
             reg.valid(player) ? reg.try_get<game::NpcRef>(player) : nullptr;
         if (!nr || !pool.valid(nr->id)) return false;
         const vec3& sp = reg.get<Transform>(player).pos;
-        const LayerId pl = reg.get<Transform>(player).layer;
         runState.player.clock = pool.needs(nr->id);
         runState.player.inv = pool.inventory(nr->id);
         runState.player.hp = pool.hp(nr->id);
@@ -3720,23 +3729,32 @@ int main(int argc, char** argv) {
         // сущности одним снимком под ключом модуля), не в run.sav.
         // v6: the macro world travels whole — pool table, macro clock, faction
         // matrix. The society you come back to is the one you left. [save.h]
-        const auto tRows0 = std::chrono::steady_clock::now();
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
-        const auto tRows1 = std::chrono::steady_clock::now();
+        return true;
+    };
+    // THE save, one law: run.sav (the run) + the resident floor's own file
+    // (its geometry). F5 calls it — a deliberate act, so it blocks honestly.
+    // Поездки больше НЕ зовут его (см. schedule_ride_autosave ниже). [save.h]
+    auto save_run_now = [&]() -> bool {
+        rideAutosaveArmed = false; // F5 пишет более свежее — снимок умер
+        const auto tFill0 = std::chrono::steady_clock::now();
+        if (!fill_run_state()) return false;
+        const LayerId pl = reg.get<Transform>(player).layer;
+        const auto tFill1 = std::chrono::steady_clock::now();
         {
             game::FloorEntityState ents;
             game::gather_floor_entities(reg, pl, currentFloor, ents,
                                         &powerGrid, &floorRooms);
             const auto tGather = std::chrono::steady_clock::now();
             std::fprintf(stderr,
-                         "[save] run: pool+macro %.0f | gather %.0f ms\n",
-                         std::chrono::duration<float, std::milli>(tRows1 -
-                                                                  tRows0)
+                         "[save] run: fill %.0f | gather %.0f ms\n",
+                         std::chrono::duration<float, std::milli>(tFill1 -
+                                                                  tFill0)
                              .count(),
                          std::chrono::duration<float, std::milli>(tGather -
-                                                                  tRows1)
+                                                                  tFill1)
                              .count());
             write_floor_file(stack.layer(pl), currentFloor, ents,
                              module_key_for(currentFloor));
@@ -3744,6 +3762,18 @@ int main(int argc, char** argv) {
         char runPath[128];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
+    };
+    // Автосейв ПОЕЗДКИ: прежде здесь стоял полный save_run_now, и его
+    // write_floor_file душил кадр прибытия чужим хвостом (flush-wait). Файл
+    // этажа ПРИБЫТИЯ не пишется вовсе: в кадре прибытия этаж воспроизводим
+    // точно (restore — его файл только что прочитан, generate — сид и те же
+    // сидеры), его напишет следующий leave или F5. Снимок обязан сниматься
+    // ЗДЕСЬ, в кадре прибытия: отложенный сбор видел бы уже разъехавшуюся
+    // игру (лут, поднятый за секунды ожидания хвоста, дюпнулся бы).
+    auto schedule_ride_autosave = [&]() {
+        if (!fill_run_state()) return;
+        rideAutosaveSnap = runState;
+        rideAutosaveArmed = true;
     };
 
     // One ride, either shape: the elevator keys ([ / ]) pass a DIRECTION, the
@@ -3769,6 +3799,19 @@ int main(int argc, char** argv) {
     // Половина «покинуть этаж» — общая для синхронной поездки (do_ride) и
     // лифтовой машины (elevators-2x2.md): записи мира, файл этажа, AIMEM.
     auto leave_current_floor = [&]() {
+        // Недолетевший отложенный автосейв ПРОШЛОЙ поездки садится здесь:
+        // флуш хвоста всё равно неизбежен (async-писатель один, строки ниже
+        // его ждут), а run.sav обязан лечь до старта следующего полёта —
+        // иначе точка автосейва теряется молча.
+        if (rideAutosaveArmed) {
+            rideAutosaveArmed = false;
+            flush_floor_write();
+            char runPath[128];
+            run_save_path(runPath, sizeof runPath);
+            if (!write_run(rideAutosaveSnap, runPath))
+                std::fprintf(stderr,
+                             "[save] ride autosave at leave FAILED\n");
+        }
         // Всё накопленное этажом — мир И сущности — уезжает в ЕГО файл ДО
         // переработки слота (v20/F, S20.6: «этаж помнит ВСЁ»). Сбор — на
         // главном потоке (ECS воркеру не принадлежит), кодек и диск — фоном.
@@ -3937,7 +3980,7 @@ int main(int argc, char** argv) {
         const auto tU3 = std::chrono::steady_clock::now();
         // Publish the new slot to the enclosing frame. ONE place.
         activeLayer = nl;
-        save_run_now();
+        schedule_ride_autosave();
         const auto tU4 = std::chrono::steady_clock::now();
         const auto ms = [](std::chrono::steady_clock::time_point a,
                            std::chrono::steady_clock::time_point b) {
@@ -3945,7 +3988,7 @@ int main(int argc, char** argv) {
         };
         std::fprintf(stderr,
                      "[entry] upload: mirror %.0f | props+wires %.0f | "
-                     "place %.0f | save %.0f ms\n",
+                     "place %.0f | save-snap %.0f ms\n",
                      ms(tU0, tU1), ms(tU1, tU2), ms(tU2, tU3), ms(tU3, tU4));
     };
     auto arrive_after_ride = [&](game::RideResult ride, int landHub) -> bool {
@@ -3978,6 +4021,9 @@ int main(int argc, char** argv) {
     // generate-веткой и сеет всё свежим. Тот же F9-хребет: unload → build →
     // сущностная половина → двери/нав/зеркала → тело.
     auto rebuild_current_floor = [&]() {
+        // F9/новая игра: снимок прошлой поездки, севший ПОСЛЕ загрузки,
+        // клоббернул бы только что прочитанный run.sav — дизарм без записи.
+        rideAutosaveArmed = false;
         flush_floor_write();
         {
             std::lock_guard<std::mutex> lk(g_restoreMx);
@@ -4871,6 +4917,24 @@ int main(int argc, char** argv) {
                          "(baked+woken)\n",
                          currentFloor,
                          static_cast<unsigned long long>(simTick - liftT0));
+        }
+        // Отложенный автосейв поездки: ждём НЕ блокируя — run.sav пишется в
+        // тот кадр, когда фоновый кодек+диск покинутого этажа доложил
+        // готовность (wait_for(0) = опрос). Порядок закона дюпа сохранён,
+        // кадр прибытия свободен от чужого хвоста.
+        if (rideAutosaveArmed &&
+            (!g_floorWritePending.valid() ||
+             g_floorWritePending.wait_for(std::chrono::seconds(0)) ==
+                 std::future_status::ready)) {
+            rideAutosaveArmed = false;
+            flush_floor_write(); // мгновенно: хвост сел; отказ печатается
+            char runPath[128];
+            run_save_path(runPath, sizeof runPath);
+            const bool ok = write_run(rideAutosaveSnap, runPath);
+            std::fprintf(stderr,
+                         "[save] ride autosave: run.sav %s (deferred, "
+                         "departed floor's tail landed)\n",
+                         ok ? "written" : "FAILED");
         }
         // Кабина заперта на всю поездку: контроллер в бокс — тело держится в
         // клетке шахты (стены столба держат остальное), взгляд свободен.
@@ -10825,8 +10889,9 @@ int main(int argc, char** argv) {
                         begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
                         voxelMirror.upload_all(stack.layer(nl));
                         if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
-                        // Same transition autosave as the keyboard path.
-                        save_run_now();
+                        // Same transition autosave as the keyboard path —
+                        // the deferred snapshot, not the blocking F5 save.
+                        schedule_ride_autosave();
                         if (propPass.ready()) {
                             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
