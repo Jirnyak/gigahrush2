@@ -579,7 +579,7 @@ static void test_seed_from_spec() {
     NpcPool pool;
     pool.init();
     FloorSpec mono{FloorKind::Residential, "mono", 100u,
-                   {1, 0, 0, 0}, 0.0f, 20, 40};
+                   {1, 0, 0, 0}, 0.0f, 20, 40, {}};
     NpcId cand = seed_floor_from_spec(pool, /*floor=*/3, mono, /*seed=*/9u);
     CHECK(cand != kInvalidNpc);
     CHECK(pool.count() == 100u); // seeded exactly spec.population records

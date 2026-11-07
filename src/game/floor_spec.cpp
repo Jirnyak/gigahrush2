@@ -24,16 +24,23 @@ namespace {
 // citizens, not hostile); Scientists belong to the civil bloc; Wild are hostile to
 // everyone and gather where nobody keeps order.
 //
+// Полосы настенных устройств — ПЕРЕЕХАЛИ сюда из литералов сеялки (wsel<7 —
+// щиток, <11 — терминал; решение владельца 2026-11-07 «полный перенос»).
+// Стартовые веса НАМЕРЕННО одинаковы на всех строках — перенос принимается
+// неизменностью расстановки (тот же сид → те же устройства), характер этажей
+// тюнится потом правкой чисел здесь, не ветками в сеялке.
+#define GIGA_WALL_LEGACY {{PropId::ElectricalShield, 7}, {PropId::Terminal, 4}}
 //   kind         name           pop  factionMix       hostility  age window
 constexpr FloorSpec kCatalog[] = {
-    {FloorKind::Residential, "Residential", 420, {7, 1, 1, 0, 1}, 0.05f, 1, 90},
-    {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80},
-    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65},
-    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70},
-    {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80},
-    {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70},
-    {FloorKind::Khrushi,     "Khrushi",     380, {7, 1, 1, 0, 1}, 0.10f, 1, 90},
+    {FloorKind::Residential, "Residential", 420, {7, 1, 1, 0, 1}, 0.05f, 1, 90, GIGA_WALL_LEGACY},
+    {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80, GIGA_WALL_LEGACY},
+    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65, GIGA_WALL_LEGACY},
+    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70, GIGA_WALL_LEGACY},
+    {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80, GIGA_WALL_LEGACY},
+    {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70, GIGA_WALL_LEGACY},
+    {FloorKind::Khrushi,     "Khrushi",     380, {7, 1, 1, 0, 1}, 0.10f, 1, 90, GIGA_WALL_LEGACY},
 };
+#undef GIGA_WALL_LEGACY
 // ПОРЯДОК СТРОК, А НЕ ТОЛЬКО ИХ ЧИСЛО (2026-10-01). Здесь стоял один
 // `static_assert` на длину, и он ловил вставку/удаление значения `FloorKind`, но
 // НЕ перестановку — а каталог читается строго по индексу

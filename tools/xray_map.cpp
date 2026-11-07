@@ -483,7 +483,8 @@ struct WorldContext {
 
         EventBus dummyBus;
         dummyBus.init();
-        seed_wall_interactables(ecs, stack.layer(loadedLayer), loadedLayer, fseed);
+        seed_wall_interactables(ecs, stack.layer(loadedLayer), loadedLayer, fseed,
+                                spec.wallDevices, kMaxWallDeviceBands);
         seed_ceiling_lights(ecs, stack.layer(loadedLayer), loadedLayer, fseed);
         // seed_room_furniture умер (rooms-object F, S10: мебель ставит модуль).
 

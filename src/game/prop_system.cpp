@@ -796,8 +796,11 @@ std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
 }
 
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
-                                      LayerId layer, std::uint32_t seed)
+                                      LayerId layer, std::uint32_t seed,
+                                      const WallDeviceBand* bands,
+                                      std::size_t bandCount)
 {
+    if (bands == nullptr) bandCount = 0;
     const MacroGrid& grid = world.grid();
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
@@ -822,17 +825,25 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
                 const std::uint32_t wsel = rngWall % 2000;
 
-                // Sparse bands: ~0.35% shields + ~0.2% terminals of eligible
-                // wall cells ≈ a dozen devices per storey (the legacy
-                // 10%+10% carpeted whole rooms with thousands).
-                PropId pid;
-                if (wsel < 7) {
-                    pid = PropId::ElectricalShield;
-                } else if (wsel < 11) {
-                    pid = PropId::Terminal;
-                } else {
-                    continue;
+                // Полосы — ИЗ СТРОКИ ЭТАЖА, не литералами здесь (решение
+                // владельца 2026-11-07). Первая полоса забирает младшие
+                // остатки хеша, дальше по накоплению — та же арифметика,
+                // что жила литералом (щиток <7, терминал <11), поэтому
+                // легаси-веса дают расстановку бит-в-бит. Разреженность
+                // по-прежнему на совести весов: ~дюжина устройств на этаж
+                // (легаси-ковёр 10%+10% устилал комнаты тысячами).
+                PropId pid{};
+                bool picked = false;
+                std::uint32_t acc = 0;
+                for (std::size_t b = 0; b < bandCount && !picked; ++b) {
+                    if (bands[b].per2000 == 0) continue; // пустой слот
+                    acc += bands[b].per2000;
+                    if (wsel < acc) {
+                        pid = bands[b].prop;
+                        picked = true;
+                    }
                 }
+                if (!picked) continue;
                 const PropDef& d = prop_def(pid);
                 const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 

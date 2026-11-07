@@ -1833,7 +1833,13 @@ std::uint32_t seed_floor_props(Registry& reg, const World& world,
                                unsigned padicSeed, game::EventBus& bus) {
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
-    std::uint32_t count = game::seed_wall_interactables(reg, world, layer, wallSeed);
+    // Полосы устройств — СТРОКА ЭТАЖА (FloorSpec::wallDevices), сеялка
+    // агностична: политика расстановки в общем коде — дефект (закон ниже у
+    // мебельного сидера; решение владельца 2026-11-07 — полный перенос).
+    const game::FloorSpec* spec = spec_for_floor(floorNumber);
+    std::uint32_t count = game::seed_wall_interactables(
+        reg, world, layer, wallSeed, spec->wallDevices,
+        game::kMaxWallDeviceBands);
     std::fprintf(stderr, "[props] wall devices seeded: %u\n", count);
     if (std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr) {
         int shown = 0;

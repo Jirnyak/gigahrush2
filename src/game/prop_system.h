@@ -7,6 +7,7 @@
 #include "ecs/registry.h"
 #include "ecs/components.h"
 #include "game/event_bus.h"
+#include "game/floor_spec.h" // WallDeviceBand — полосы устройств строки этажа
 #include "game/interact_table.h"
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
 #include "game/prop_form_table.h" // FormId — форма составного тела
@@ -230,12 +231,18 @@ void prop_detach(Registry& reg, Entity prop, EventBus& bus,
 // [jirnyak.md] §18.
 std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 
-// Seed Terminal + ElectricalShield Interactables by scanning MacroGrid with the
-// deterministic spatial_hash wall-device rules (kSaltWall branch in the .cpp).
-// Returns count successfully spawned.
+// Seed wall-mounted devices by scanning MacroGrid with the deterministic
+// spatial_hash wall rules (kSaltWall branch in the .cpp). АГНОСТИЧНЫЙ
+// ПРИМИТИВ: ЧТО ставить и С КАКОЙ плотностью — полосы `bands` из строки
+// этажа ([game/floor_spec.h] FloorSpec::wallDevices, решение владельца
+// 2026-11-07 «политика расстановки в общем коде — дефект»); здесь только
+// механика (кандидат у стены, заподлицо по surface, якорь в клетку стены).
+// Полоса с per2000 == 0 пропускается. Returns count successfully spawned.
 // [jirnyak.md] §18 — sim must not read propPass.get_terminal_positions().
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
-                                      LayerId layer, std::uint32_t seed);
+                                      LayerId layer, std::uint32_t seed,
+                                      const WallDeviceBand* bands,
+                                      std::size_t bandCount);
 
 // Seed LightBulb Interactables from MacroGrid ceiling-lamp rules matching
 // gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove). Positions match

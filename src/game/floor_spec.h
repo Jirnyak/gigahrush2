@@ -12,9 +12,11 @@
 // are separate identities per [floors.md] (LayerId != ModuleId != floor number).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "game/faction.h"
+#include "game/prop_table.h" // PropId — полосы настенных устройств этажа
 
 namespace giga::game {
 
@@ -32,6 +34,20 @@ enum class FloorKind : std::uint8_t {
     Count,
 };
 
+// ПОЛОСА НАСТЕННЫХ УСТРОЙСТВ — политика расстановки как ДАННЫЕ СТРОКИ ЭТАЖА
+// (решение владельца 2026-11-07: «политика расстановки в общем коде — дефект,
+// ставит МОДУЛЬ»; глобальная сеялка с литералами wsel<7/<11 была ровно таким
+// дефектом). Вес per2000 — доля кандидатных клеток у стены из 2000 (та же
+// арифметика spatial_hash % 2000, что жила литералом): щиток 7/2000 ≈ 0.35%.
+// per2000 == 0 — пустой слот полосы. Механика скана стен остаётся агностичным
+// примитивом ([game/prop_system.h] seed_wall_interactables) и читает ЭТУ
+// таблицу, не ветвится по этажам.
+struct WallDeviceBand {
+    PropId prop;            // что ставить — строка props.csv
+    std::uint16_t per2000;  // сколько из 2000 кандидатов достаётся этой полосе
+};
+inline constexpr std::size_t kMaxWallDeviceBands = 4;
+
 // A floor's rule-set. POD aggregate: field order matches the catalog rows in
 // floor_spec.cpp. Weights are relative/multiplier semantics, never absolutes
 // that shadow a global table.
@@ -45,6 +61,9 @@ struct FloorSpec {
     float hostility;             // 0..1 monster spawn-weight multiplier (used once mobs land)
     std::uint8_t minAge;         // demographic window: youngest resident...
     std::uint8_t maxAge;         // ...and oldest
+    // Настенные устройства ЭТОГО этажа — порядок полос значим (первая полоса
+    // забирает младшие остатки хеша; менять порядок = передвинуть устройства).
+    WallDeviceBand wallDevices[kMaxWallDeviceBands];
 };
 
 // Read a floor's rule-set by archetype. Returns a reference into a static

@@ -48,6 +48,15 @@ static void paint_slab(World& world, int x0, int x1, int z, int y0, int y1) {
             world.grid().fill_cell(x, y, z, kMatConcrete);
 }
 
+// Легаси-полосы сеялки (щиток wsel<7, терминал <11) — ровно то, что жило
+// литералами в prop_system.cpp до переноса политики в строку этажа
+// (FloorSpec::wallDevices). Тождество с каталогом проверяется ниже.
+constexpr game::WallDeviceBand kLegacyWallBands[] = {
+    {game::PropId::ElectricalShield, 7},
+    {game::PropId::Terminal, 4},
+};
+constexpr std::size_t kLegacyWallBandCount = 2;
+
 static int count_kind(const Registry& reg, LayerId layer, game::Interactable::Kind k) {
     int n = 0;
 
@@ -85,7 +94,29 @@ static void test_wall_interactables_seed_and_collect() {
     // produce at least one Terminal and one ElectricalShield under this seed.
     paint_floor_band(world, /*x0*/2, /*x1*/80, /*zFloor*/5, /*z0*/2, /*z1*/80);
 
-    const std::uint32_t n = game::seed_wall_interactables(reg, world, layer, seed);
+    // ГЕЙТ ПЕРЕНОСА ПОЛИТИКИ (обе полярности + тождество, 2026-11-07):
+    // пустая полоса обязана давать НОЛЬ устройств — сеялка без политики
+    // ничего не ставит...
+    CHECK(game::seed_wall_interactables(reg, world, layer, seed, nullptr, 0) == 0);
+    {
+        // ...полоса из одних нулевых весов — тоже ноль (слоты пропускаются)...
+        constexpr game::WallDeviceBand zero[] = {{game::PropId::Terminal, 0}};
+        CHECK(game::seed_wall_interactables(reg, world, layer, seed, zero, 1) == 0);
+    }
+    // ...а строка каталога этажа несёт РОВНО легаси-полосы: перенос принят
+    // неизменностью (тот же сид → та же расстановка), не переписыванием.
+    {
+        const game::FloorSpec& spec = game::floor_spec(game::FloorKind::Residential);
+        for (std::size_t b = 0; b < kLegacyWallBandCount; ++b) {
+            CHECK(spec.wallDevices[b].prop == kLegacyWallBands[b].prop);
+            CHECK(spec.wallDevices[b].per2000 == kLegacyWallBands[b].per2000);
+        }
+        for (std::size_t b = kLegacyWallBandCount; b < game::kMaxWallDeviceBands; ++b)
+            CHECK(spec.wallDevices[b].per2000 == 0);
+    }
+
+    const std::uint32_t n = game::seed_wall_interactables(
+        reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
     CHECK(n > 0);
 
     const int terms = count_kind(reg, layer, game::Interactable::Kind::Terminal);
@@ -132,8 +163,10 @@ static void test_wall_interactables_clear_is_layer_scoped() {
 
     paint_floor_band(world, 2, 60, 5, 2, 60);
 
-    const std::uint32_t nA = game::seed_wall_interactables(reg, world, layerA, seed);
-    const std::uint32_t nB = game::seed_wall_interactables(reg, world, layerB, seed ^ 1u);
+    const std::uint32_t nA = game::seed_wall_interactables(
+        reg, world, layerA, seed, kLegacyWallBands, kLegacyWallBandCount);
+    const std::uint32_t nB = game::seed_wall_interactables(
+        reg, world, layerB, seed ^ 1u, kLegacyWallBands, kLegacyWallBandCount);
     CHECK(nA > 0);
     CHECK(nB > 0);
 
@@ -280,7 +313,8 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
     // paint_floor_band already fills even-x wall columns at yAir=6; add ceiling.
     paint_ceiling_band(world, 2, 70, /*zAir*/6, 2, 70);
 
-    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    const std::uint32_t nWall = game::seed_wall_interactables(
+        reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
     const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
     CHECK(nWall > 0);
     CHECK(nLamp > 0);
@@ -1112,7 +1146,8 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     paint_floor_band(world, /*x0*/2, /*x1*/70, /*zFloor*/5, /*y0*/2, /*y1*/70);
     paint_ceiling_band(world, /*x0*/2, /*x1*/70, /*zAir*/6, /*y0*/2, /*y1*/70);
 
-    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    const std::uint32_t nWall = game::seed_wall_interactables(
+        reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
     const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
     CHECK(nWall + nLamp > 0u);
 
@@ -1561,7 +1596,8 @@ static void test_sim_owned_terminals_seed_and_interact() {
     // above solid floor + solid W/E/N/S. Tiny rooms under-seed for this salt.
     paint_floor_band(world, /*x0*/2, /*x1*/70, /*zFloor*/5, /*y0*/2, /*y1*/70);
 
-    const std::uint32_t nWall = game::seed_wall_interactables(reg, world, layer, seed);
+    const std::uint32_t nWall = game::seed_wall_interactables(
+        reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
     CHECK(nWall > 0u);
 
     std::vector<vec3> terms;
