@@ -1297,10 +1297,10 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(!hit.hit); // inactive drops out of the query
     }
 
-    // --- Floor loot: ПИКАП — НЕ ИНТЕРАКТИВ (чистка 2026-11-07) --------------
-    // Подбор автоматический (pickup_step по близости, без клавиши); компонент
-    // Interactable кормил ложь «[E] PICK UP» — его больше нет. Kind::Loot в
-    // interactables.csv — могила ординала.
+    // --- Floor loot: НАВЕС «ДАТЬ ПРЕДМЕТ» (владелец 2026-11-07) -------------
+    // Лут — тело с интерактором лута: «[E] PICK UP» исполняется pickup_take
+    // по прицелу, reach — из той же строки таблицы, что промпт. Авто-пылесос
+    // по близости умер тем же решением, что авто-лут трупов.
     {
         const std::uint32_t n = drop_mob_loot(
             reg, /*layer=*/0, ppos,
@@ -1311,18 +1311,71 @@ static void test_corpse_and_loot_are_interactable() {
         CHECK(n > 0);
 
     }
-    std::uint32_t pickups = 0, naked = 0;
+    std::uint32_t pickups = 0, hung = 0;
     for (auto e : reg.view<const Pickup>()) {
         ++pickups;
-        if (!reg.all_of<game::Interactable>(e)) ++naked;
+        if (const auto* ia = reg.try_get<game::Interactable>(e))
+            if (ia->kind == game::Interactable::Kind::Loot && ia->active &&
+                ia->reachM ==
+                    game::interact_def(game::InteractKind::Loot).reachM)
+                ++hung;
     }
     CHECK(pickups > 0);
-    CHECK(naked == pickups); // ни один пикап не кандидат фокуса
+    CHECK(hung == pickups); // навес на КАЖДОМ пикапе, reach из таблицы
     {
-        // Запрос Loot обязан ПРОМАХНУТЬСЯ: носителей ординала больше нет.
+        // E забирает РОВНО сфокусированный пикап: ближайший активный Loot.
         const game::InteractionHit hit = game::find_nearest_interactable(
             reg, player, game::Interactable::Kind::Loot, 3.0f);
-        CHECK(!hit.hit);
+        CHECK(hit.hit);
+        CHECK(reg.all_of<Pickup>(hit.entity));
+        const Pickup before = reg.get<Pickup>(hit.entity);
+        Inventory& pinv = pool.inventory(pid);
+        const int hadSlots = [&] {
+            int c = 0;
+            for (const ItemSlot& s : pinv.slots)
+                if (s.item != kInvalidItem && s.count > 0) ++c;
+            return c;
+        }();
+        const game::PickupTakeResult pr =
+            game::pickup_take(reg, pool, bus, hit.entity, pid, 7u);
+        CHECK(pr.placed == before.count);  // маленький стек влезает целиком
+        CHECK(pr.destroyed);               // забран — сущность умерла
+        CHECK(!reg.valid(hit.entity));
+        (void)hadSlots;
+    }
+    {
+        // ПОЛЯРНОСТЬ ПОЛНОГО ИНВЕНТАРЯ: некуда класть — пикап ЛЕЖИТ ДАЛЬШЕ,
+        // ничего не уничтожено и не списано (атомность как у craft_item).
+        const game::InteractionHit hit = game::find_nearest_interactable(
+            reg, player, game::Interactable::Kind::Loot, 3.0f);
+        std::printf("[props] loot full-inv polarity: hit=%d item=%u\n",
+                    hit.hit ? 1 : 0,
+                    hit.hit ? static_cast<unsigned>(
+                                  reg.get<Pickup>(hit.entity).item)
+                            : 0u);
+        if (hit.hit) {
+            Inventory& pinv = pool.inventory(pid);
+            const Inventory saved = pinv;
+            const std::uint16_t fillCap = static_cast<std::uint16_t>(
+                item_def(static_cast<ItemId>(1)).stackMax
+                    ? item_def(static_cast<ItemId>(1)).stackMax
+                    : 1);
+            for (ItemSlot& s : pinv.slots)
+                if (s.item == kInvalidItem || s.count == 0)
+                    s = ItemSlot{static_cast<ItemId>(1), fillCap};
+            const Pickup before = reg.get<Pickup>(hit.entity);
+            // Чужой предмет гарантирует «не достекуется»: айди пикапа ≠ 1 —
+            // иначе тест нем; Boss-лут Mancobus под сидом 99 это держит.
+            if (before.item != static_cast<ItemId>(1)) {
+                const game::PickupTakeResult pr =
+                    game::pickup_take(reg, pool, bus, hit.entity, pid, 8u);
+                CHECK(pr.placed == 0);
+                CHECK(!pr.destroyed);
+                CHECK(reg.valid(hit.entity));
+                CHECK(reg.get<Pickup>(hit.entity).count == before.count);
+            }
+            pinv = saved;
+        }
     }
 
     // Kind filter: Loot must not answer a Corpse query (corpse already inactive).

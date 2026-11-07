@@ -7277,6 +7277,28 @@ int main(int argc, char** argv) {
                                 input.set_mouselook(false);
                             handled = true;
                         }
+                        // ЛУТ — НАВЕС «ДАТЬ ПРЕДМЕТ» (владелец 2026-11-07):
+                        // E забирает РОВНО сфокусированный пикап; пылесос по
+                        // близости умер. Полный инвентарь — остаток лежит,
+                        // табличка честна (E попробовал и не соврал).
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::Entity &&
+                            reg.all_of<game::Pickup>(g_focus.entity)) {
+                            if (const auto* nrk =
+                                    reg.try_get<game::NpcRef>(player)) {
+                                if (pool.valid(nrk->id)) {
+                                    const game::PickupTakeResult pr =
+                                        game::pickup_take(reg, pool, bus,
+                                                          g_focus.entity,
+                                                          nrk->id, simTick);
+                                    if (pr.placed > 0)
+                                        // Подобранный бронежилет обязан
+                                        // защищать ([combat.h] sync_armour).
+                                        game::sync_armour(reg, pool, player);
+                                    handled = true;
+                                }
+                            }
+                        }
 
                         }
 
@@ -7773,13 +7795,9 @@ int main(int argc, char** argv) {
                 // обыска, забор — заявками Take ([inventory_ui.h]), и там же
                 // ведутся loot/containerTake. loot_containers_step остался
                 // тест-бэкендом ([container.h]) — из тика он выписан.
-                const std::int32_t got =
-                    game::pickup_step(reg, pool, bus, activeLayer, simTick);
-                if (got != 0) {
-                    (void)got; // ценность считает carried; got — для лога ниже
-                    // Picking a vest up must actually protect you.
-                    game::sync_armour(reg, pool, player);
-                }
+                // ПЫЛЕСОС ПИКАПОВ УМЕР ТЕМ ЖЕ РЕШЕНИЕМ (владелец 2026-11-07):
+                // подбор — глагол прицела, ветка Loot лестницы E
+                // (pickup_take); авто-забор по близости из тика выписан.
                 // Extraction. The pad is the bank: stand on it and the haul
                 // becomes permanently yours. Runs every tick, deposits nothing
                 // almost every tick, and that is fine — it is a handful of slot
@@ -8135,7 +8153,7 @@ int main(int argc, char** argv) {
                                 static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
                                 rsq);
                         }
-                // Eating and drinking sit beside healing and AFTER pickup_step, so a
+                // Eating and drinking sit beside healing (подбор теперь глагол прицела — pickup_take в лестнице E), so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
                 // full bar, so a mistimed press costs nothing; both also fill
                 // pendingPee / pendingPoo, which is the ONLY producer the pressure
@@ -9310,9 +9328,15 @@ int main(int argc, char** argv) {
                                 Mass{static_cast<float>(
                                          game::item_def(s.item).massG) *
                                      0.001f});
-                            // Пикап — не интерактив (чистка 2026-11-07):
-                            // подбор автоматический, промпт «PICK UP» лгал.
-                            // Та же правка, что в spawn_pickup ([loot.cpp]).
+                            // Навес интерактора «дать предмет» — та же
+                            // форма, что spawn_pickup ([loot.cpp]): reach
+                            // из строки таблицы, E исполняет показанное.
+                            reg.emplace<game::Interactable>(
+                                pe, game::Interactable{
+                                        game::Interactable::Kind::Loot,
+                                        game::interact_def(
+                                            game::InteractKind::Loot).reachM,
+                                        true});
                             if (--s.count == 0) s = game::ItemSlot{};
                             // Решение могло протухнуть вместе со слотом —
                             // строгое чтение это увидит; броню пересинхронизи-

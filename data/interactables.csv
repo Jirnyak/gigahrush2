@@ -3,7 +3,7 @@ terminal,Terminal,NET TERMINAL,4.0,сетевой терминал: E откры
 electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid node: sabotage kills the zone feed
 light_bulb,LightBulb,LIGHT BULB,2.5,МОГИЛА ОРДИНАЛА (2026-11-07): висячий промпт снят — ветки исполнения E не было никогда; лампы в props.csv стали None (сценография: свет = PropLight, выстрел = PropFallMode). Строка держит ординал 2 (append-only ABI); вернётся с проводкой выключателей
 corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
-loot,Loot,PICK UP,2.0,МОГИЛА ОРДИНАЛА (2026-11-07): «PICK UP» лгал — подбор автоматический (pickup_step по близости, без клавиши), E не делал ничего; компонент с пикапов снят. Строка держит ординал 4 (append-only ABI)
+loot,Loot,PICK UP,2.0,лут = навес «дать предмет» (владелец 2026-11-07): E забирает сфокусированный пикап (pickup_take); авто-пылесос по близости умер; reach отсюда — единственный источник
 npc,Npc,BARTER / TRADE,2.2,living body: two-sided barter deal on the search screen
 crate,Crate,SEARCH CRATE,2.4,supply crate: two-sided search screen (S14.1 B2)
 lift_call,LiftCall,CALL LIFT,2.6,кнопка вызова снаружи столба (5c): E открывает створку — «лифт приехал»

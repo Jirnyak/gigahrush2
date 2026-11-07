@@ -599,7 +599,7 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     // Phase 1 touches only components already in the view (safe) and records
     // intent. Phase 2 applies damage after the view is gone. This is the same
     // discipline finalize_deaths, despawn_layer_mobs, loot_dead_mobs and
-    // pickup_step already follow — this was the one place it was missed.
+    // pickup_take already follow — this was the one place it was missed.
     struct Swing {
         Entity mob;
         // Per-swing now, not one shared victim: a monster may be hunting a resident

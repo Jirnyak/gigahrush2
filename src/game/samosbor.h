@@ -549,7 +549,7 @@ void samosbor_arm(SamosborState& st, std::uint32_t untilActiveMs);
 //
 //     input.apply -> controller_step -> wander_step -> physics_step
 //       -> player_melee_step -> mob_attack_step -> projectile_step
-//       -> loot_dead_mobs -> finalize_deaths -> pickup_step
+//       -> loot_dead_mobs -> finalize_deaths -> pickup_take (E)
 //
 // and `samosbor_step` goes **after `controller_step`, before `wander_step`**.
 // Three reasons, in order of how expensive getting it wrong is:

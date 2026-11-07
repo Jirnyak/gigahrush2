@@ -366,7 +366,7 @@ float needs_speed_scale(const Needs& n);
 //
 //   input.apply -> controller_step -> wander_step -> physics_step ->
 //   player_melee_step -> mob_attack_step -> projectile_step ->
-//   >> needs_step << -> loot_dead_mobs -> finalize_deaths -> pickup_step
+//   >> needs_step << -> loot_dead_mobs -> finalize_deaths -> pickup_take (E)
 //
 // It MUST precede `finalize_deaths`, or a body that starves this tick dies on the
 // next one and the single-death-point contract breaks. Last among damage sources is
@@ -464,7 +464,7 @@ std::int16_t consumable_hp_cost(ItemId id);
 //
 // Consumes one unit, charges any HP cost through `apply_damage` on
 // `kAttritionChannel`, publishes `ItemTransferred`.
-// Call site: beside `use_best_heal`, after `pickup_step`, on an input edge.
+// Call site: beside `use_best_heal`, on an input edge (как pickup_take — глагол, не тик).
 ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, std::uint64_t tick);
 ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,

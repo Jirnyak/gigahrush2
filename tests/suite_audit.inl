@@ -854,16 +854,14 @@ static void hunt_is_findable() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. pickup_step can push a slot past its stack maximum
+// 7. подбор не смеет толкнуть слот за stackMax (теперь pickup_take)
 // ---------------------------------------------------------------------------
-// loot.cpp:227-241 finds the first slot holding this item with `count < stackMax` and
-// then adds the whole bundle to it without re-checking the cap. `drop_weapon_ammo`
-// clamps the PICKUP to stackMax (loot.cpp:151-152), so a single bundle is legal and a
-// second one merged on top is not.
-//
-// Low damage on its own — ItemSlot::count is 16 bits, so nothing wraps — but it breaks
-// the invariant every other consumer assumes, and loot.cpp:225 states the opposite
-// outright ("no silent discard, which is what makes 64 slots a real constraint").
+// Исторический дефект: пылесос находил первый слот с `count < stackMax` и
+// доливал ВЕСЬ пакет без переклампа. Лечение живёт в inventory_give
+// (clamp-before-store), а этот тест держит ПУТЬ ПОДБОРА на примитиве.
+// 2026-11-07: авто-пылесос pickup_step умер (лут — навес «дать предмет»,
+// решение владельца), путь = pickup_take по сфокусированной сущности —
+// закон клампа обязан пережить смену глагола.
 static void stack_max_respected() {
     LevelStack stack;
     LayerId layer = stack.push_layer();
@@ -903,12 +901,18 @@ static void stack_max_respected() {
     reg.emplace<Transform>(drop, dt);
     reg.emplace<Pickup>(drop, Pickup{stacky, cap});
 
-    const std::int32_t got = pickup_step(reg, pool, bus, layer, 1u);
-    std::fprintf(stderr, "[audit] stack: item=%u cap=%u got=%d slot0=%u/%u\n",
-                 static_cast<unsigned>(stacky), static_cast<unsigned>(cap), got,
+    const PickupTakeResult got = pickup_take(reg, pool, bus, drop, sid, 1u);
+    std::fprintf(stderr, "[audit] stack: item=%u cap=%u placed=%u slot0=%u/%u\n",
+                 static_cast<unsigned>(stacky), static_cast<unsigned>(cap),
+                 static_cast<unsigned>(got.placed),
                  static_cast<unsigned>(inv.slots[0].item),
                  static_cast<unsigned>(inv.slots[0].count));
     CHECK(inv.slots[0].count <= cap);
+    // Остаток НЕ выброшен молча: кламп долил слот до cap, хвост лёг СВЕЖИМ
+    // слотом (инвентарь пуст) — пакет забран целиком, сущность умерла.
+    CHECK(got.placed == cap);
+    CHECK(got.destroyed);
+    CHECK(!reg.valid(drop));
 }
 
 // ---------------------------------------------------------------------------

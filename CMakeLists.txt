@@ -1038,9 +1038,13 @@ if(GIGA_BUILD_TESTS)
     # 1374 -> 1371 on 2026-08-29 (v20/F): пин travel-шва переписан с
     # «пересев+штамп по ключу» на «спавн из записей» (restore не сеет) —
     # три чека матчинга по OpenedContainerKey умерли вместе с ключом.
+    # 1371 + 3 = 1374 на 2026-11-07 (подбор = pickup_take, пылесос умер):
+    # stack-clamp тест пути подбора получил три свидетеля честного забора
+    # (placed == cap, destroyed, сущность мертва) — кламп пережил смену
+    # глагола. Дельта = счётчик новых CHECK, прогон сошёлся точно.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 1371 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 1374 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -2301,7 +2305,15 @@ if(GIGA_BUILD_TESTS)
         # 3 × 293 станций жирной полосы фикстуры (стоит на полу 12–13.5 м,
         # якорь в клетку пола, навес craft жив). 888 = 9 + 879, прогон
         # бинаря (273109) сошёлся точно.
-        PASS_REGULAR_EXPRESSION "game_test: 273109 checks, 0 failures")
+        # 273109 + 8 = 273117 на 2026-11-07 (лут = навес «дать предмет»,
+        # поправка владельца на приёмке: авто-пылесос pickup_step умер,
+        # подбор — pickup_take по прицелу): лут-блок suite_props_game
+        # 4 → 12 CHECK (навес на каждом пикапе + reach из таблицы, забор
+        # сфокусированного с уничтожением, полярность полного инвентаря —
+        # печать [props] loot full-inv доказывает, что ветка живая:
+        # hit=1 item=54). suite_audit (stack clamp → pickup_take) живёт в
+        # ДРУГОМ бинаре и этого пина не трогает. Сошлось точно.
+        PASS_REGULAR_EXPRESSION "game_test: 273117 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

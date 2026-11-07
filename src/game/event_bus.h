@@ -106,7 +106,7 @@ enum class EventType : std::uint16_t {
     RelationChanged,
     // An item moved between two inventories. `a` = from, `b` = to (either may be
     // kInvalidNpc for "the world"), `c` = item id.
-    // Producers: loot.cpp `pickup_step` / `use_best_heal`, needs.cpp consumables.
+    // Producers: loot.cpp `pickup_take` / `use_best_heal`, needs.cpp consumables.
     ItemTransferred,
     // The player / an embodied NPC entered a floor. `a` = floor (signed-packed,
     // see event_floor), `b` = LayerId, `c` = the entering record id.

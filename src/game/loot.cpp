@@ -197,12 +197,13 @@ Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
     // in a pocket must not disagree about what they weigh.
     reg.emplace<Mass>(e, Mass{static_cast<float>(item_def(id).massG) * 0.001f *
                               static_cast<float>(count)});
-    // ПИКАП — НЕ ИНТЕРАКТИВ (чистка 2026-11-07): подбор автоматический
-    // (pickup_step по близости, каждый тик, без клавиши), а компонент
-    // Interactable здесь кормил ЛОЖЬ — фокус показывал «[E] PICK UP», и E
-    // не делал ничего (ветки Loot в лестнице E нет и не было). Закон
-    // focus.h «E исполняет ровно показанное» — промпта нет, потому что нет
-    // действия. Kind::Loot в interactables.csv — могила ординала.
+    // НАВЕС ИНТЕРАКТОРА (владелец 2026-11-07): лут — тело с интерактором,
+    // ДАЮЩИМ предмет: «[E] PICK UP» исполняется pickup_take по прицелу.
+    // Reach — из той же строки таблицы, что промпт (закон focus.h: одна
+    // строка — и табличка, и досягаемость). Авто-пылесос умер.
+    reg.emplace<Interactable>(
+        e, Interactable{Interactable::Kind::Loot,
+                        interact_def(InteractKind::Loot).reachM, true});
     return e;
 }
 
@@ -269,7 +270,7 @@ std::uint32_t drop_mob_loot(Registry& reg, LayerId layer, const vec3& pos,
         const float oy = (static_cast<float>((j >> 8) & 0xFFu) / 255.0f - 0.5f) * 1.2f;
 
         // Never over the item's own stack cap: a single pickup carrying more than an
-        // inventory slot may legally hold is silently truncated by pickup_step. The
+        // inventory slot may legally hold is silently truncated by the pickup path. The
         // authored counts are 1..2 and every count-bearing row stacks well past that, so
         // this is the rule stated rather than a bug fixed.
         const std::uint16_t cap = item_def(id).stackMax;
@@ -312,7 +313,7 @@ std::uint32_t drop_weapon_ammo(Registry& reg, LayerId layer, const vec3& pos,
         count = static_cast<std::uint16_t>(base + (h % 20u));         // base..base+19
     }
     // Never exceed the item's own stack cap, or a single pickup would carry more than
-    // an inventory slot can legally hold and pickup_step would silently drop the rest.
+    // an inventory slot can legally hold and the pickup path would silently drop the rest.
     const std::uint16_t cap = item_def(def->ammo).stackMax;
     if (cap && count > cap) count = cap;
 
@@ -360,64 +361,49 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
 }
 
 
-std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
-                         std::uint64_t tick) {
-    Entity self = entt::null;
-    vec3 me{0, 0, 0};
-    NpcId selfId = kInvalidNpc;
-    for (auto e : reg.view<const CameraTag, const Transform, const NpcRef>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        self = e;
-        me = tr.pos;
-        selfId = reg.get<const NpcRef>(e).id;
-        break;
+PickupTakeResult pickup_take(Registry& reg, NpcPool& pool, EventBus& bus,
+                             Entity pickup, NpcId to, std::uint64_t tick) {
+    PickupTakeResult r{};
+    if (!pool.valid(to)) return r;
+    if (!reg.valid(pickup) || !reg.all_of<Pickup>(pickup) ||
+        !reg.all_of<Transform>(pickup))
+        return r;
+
+    const Pickup p = reg.get<Pickup>(pickup);
+    const vec3 at = reg.get<Transform>(pickup).pos;
+    if (!item_valid(p.item)) {
+        // Мусорная запись — убрать молча (прежний пылесос делал то же).
+        reg.destroy(pickup);
+        r.destroyed = true;
+        return r;
     }
-    if (self == entt::null || !pool.valid(selfId)) return 0;
 
-    Inventory& inv = pool.inventory(selfId);
-    std::int32_t gained = 0;
+    // THE transfer primitive does the stacking ([item_table.h]
+    // inventory_give): same-condition top-up, explicit condition on fresh
+    // slots, clamp-before-store. The remainder STAYS ON THE FLOOR as a
+    // smaller Pickup — the old auto path once both destroyed the overflow
+    // of a clamped merge and paid `gained` for it, a silent discard that
+    // briefly made 64 slots a soft constraint.
+    Inventory& inv = pool.inventory(to);
+    const std::uint16_t unplaced = inventory_give(inv, p.item, p.count, p.condition);
+    const std::uint16_t placed = static_cast<std::uint16_t>(p.count - unplaced);
+    if (placed == 0) return r;  // full: it stays where it is, табличка честна
 
-    // Collect first, then destroy: mutating while iterating a view invalidates it.
-    std::vector<Entity> taken;
-    for (auto e : reg.view<const Pickup, const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        const float dx = wrap_delta_f(me.x, tr.pos.x, kWorldExtent);
-        const float dy = wrap_delta_f(me.y, tr.pos.y, kWorldExtent);
-        const float dz = wrap_delta_f(me.z, tr.pos.z, kWorldExtent);
-        if (dx * dx + dy * dy + dz * dz > kPickupReach * kPickupReach) continue;
+    // Подобранное покидает МЕСТО (живой хук supply, S12.5): носимое
+    // принадлежит агенту, а не комнате.
+    supply_item_at(reg, at, p.item, -static_cast<int>(placed));
+    r.placed = placed;
+    r.gained = item_def(p.item).value * static_cast<std::int32_t>(placed);
 
-        const Pickup& p = reg.get<const Pickup>(e);
-        if (!item_valid(p.item)) { taken.push_back(e); continue; }
-        const ItemDef& def = item_def(p.item);
-
-        // THE transfer primitive does the stacking ([item_table.h]
-        // inventory_give): same-condition top-up, explicit condition on fresh
-        // slots, clamp-before-store. The remainder STAYS ON THE FLOOR as a
-        // smaller Pickup — the old path both destroyed the overflow of a
-        // clamped merge and paid `gained` for it, a silent discard that
-        // briefly made 64 slots a soft constraint.
-        const std::uint16_t unplaced =
-            inventory_give(inv, p.item, p.count, p.condition);
-        const std::uint16_t placed =
-            static_cast<std::uint16_t>(p.count - unplaced);
-        if (placed == 0) continue;  // full: it stays where it is
-        // Подобранное покидает МЕСТО (живой хук supply, S12.5): носимое
-        // принадлежит агенту, а не комнате.
-        supply_item_at(reg, tr.pos, p.item, -static_cast<int>(placed));
-        gained += def.value * static_cast<std::int32_t>(placed);
-
-        // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
-        bus.publish(EventType::ItemTransferred, kInvalidNpc, selfId, p.item, tick);
-        if (unplaced == 0) {
-            taken.push_back(e);
-        } else {
-            reg.get<Pickup>(e).count = unplaced;
-        }
+    // `a` = from (the world, kInvalidNpc), `b` = to, `c` = item id.
+    bus.publish(EventType::ItemTransferred, kInvalidNpc, to, p.item, tick);
+    if (unplaced == 0) {
+        reg.destroy(pickup);
+        r.destroyed = true;
+    } else {
+        reg.get<Pickup>(pickup).count = unplaced;
     }
-    for (Entity e : taken) reg.destroy(e);
-    return gained;
+    return r;
 }
 
 std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,

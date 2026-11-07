@@ -286,7 +286,7 @@ FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
 // `emplace<Dead>`, EnTT creates that storage on the first one, and creating a
 // storage can reallocate the pool container the live view is holding. Phase 1
 // records intent, phase 2 applies it. Same discipline as mob_attack_step,
-// finalize_deaths and pickup_step.
+// finalize_deaths and pickup_take.
 //
 // Returns the number of feud hits that landed.
 // Optional `gravity` names the walking plane, same convention as knockback in

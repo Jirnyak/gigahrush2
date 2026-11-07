@@ -85,10 +85,11 @@ struct Pickup {
     std::uint8_t condition = 255;
 };
 
-// How close you must be to sweep something up, metres. Generous on purpose: a
-// pickup is a 30 cm box in a dark corridor and hunting for it with a cursor is not
-// the tension this game is going for.
-inline constexpr float kPickupReach = 1.8f;
+// Досягаемость подбора — СТРОКА ТАБЛИЦЫ (interactables.csv `loot`), не
+// литерал здесь: пикап несёт Interactable::Kind::Loot, и его reach судит
+// та же таблица, что судит промпт (закон focus.h). Бывший kPickupReach
+// 1.8f умер вместе с авто-пылесосом pickup_step (владелец 2026-11-07:
+// «лут — тело с навесом интерактора, дающего предмет»).
 
 // Stage the spoils of every mob that is tagged Dead but not yet finalized.
 //
@@ -129,13 +130,22 @@ std::uint32_t roll_mob_loot_slots(std::uint8_t mobKind, std::uint8_t mobTier,
                                   ItemSlot* outSlots, std::uint8_t outCap);
 
 
-// Sweep up every pickup within kPickupReach of the camera holder into its pool-row
-// inventory (canonical, folds back on floor exit — [npcs.md]). Stacks where the
-// item allows it. Publishes ItemTransferred per pickup.
-//
-// Returns the total roubles collected this pass, which is what the HUD counts.
-std::int32_t pickup_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId layer,
-                         std::uint64_t tick);
+// ПОДБОР — ГЛАГОЛ ПРИЦЕЛА (владелец 2026-11-07: «лут — тело с навесом
+// интерактора, дающего предмет; единая система»). E забирает РОВНО
+// сфокусированный пикап в pool-row инвентарь `to` (canonical, folds back
+// on floor exit — [npcs.md]); стыкует стеки через THE transfer primitive
+// (inventory_give — кламп прежде записи, без тихого сброса остатка).
+// Полный инвентарь — остаток ЛЕЖИТ меньшим пикапом, сущность жива и
+// табличка не врёт. Авто-пылесос по близости (pickup_step каждый тик)
+// умер — подбор решают руки, тем же решением, что сняло авто-лут трупов.
+// Publishes ItemTransferred on success.
+struct PickupTakeResult {
+    std::int32_t gained = 0;    // рубли ценности подобранного (HUD)
+    std::uint16_t placed = 0;   // сколько единиц легло в инвентарь
+    bool destroyed = false;     // пикап забран целиком и уничтожен
+};
+PickupTakeResult pickup_take(Registry& reg, NpcPool& pool, EventBus& bus,
+                             Entity pickup, NpcId to, std::uint64_t tick);
 
 // Consume the best healing item in the camera holder's inventory, if any and if it
 // would help. Returns the HP restored, 0 if nothing was used.

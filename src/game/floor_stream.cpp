@@ -502,7 +502,7 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     // physics_step kept paying a full swept-AABB step per orphan for the rest of the
     // session. Worse: with keepRadius 0 the free list holds two slots, so the second
     // ride handed this slot straight back, generate_floor rewrote the geometry around
-    // the orphans, and body_pass drew floor N's gold on floor N+2 where pickup_step
+    // the orphans, and body_pass drew floor N's gold on floor N+2 where the pickup sweep (now pickup_take)
     // would bank it — an economy bug, not only a tick-budget one. floors.md "nothing
     // is persisted floor-to-floor except the folded-back records themselves" and
     // main.cpp's "exactly one floor's worth is ever simulated" were both false in

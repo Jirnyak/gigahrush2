@@ -211,7 +211,7 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
     // first time, and creating a storage can reallocate the registry's pool
     // container — dangling the view being iterated. Phase 1 records intent while
     // touching only components already in the view; phase 2 applies it once the view
-    // is gone. Same discipline as mob_attack_step / finalize_deaths / pickup_step,
+    // is gone. Same discipline as mob_attack_step / finalize_deaths / pickup_take,
     // and the same reason: the crash only happens when the pool vector is at
     // capacity, so it survives several clean runs and then bites.
     struct Swing {
