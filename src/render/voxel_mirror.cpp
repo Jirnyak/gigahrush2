@@ -264,7 +264,7 @@ bool VoxelMirror::one_shot_submit() {
 }
 
 bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
-                                     std::size_t bytes) {
+                                     std::size_t bytes, std::size_t dstOff) {
     if (bytes == 0) return true;
     // КУСКАМИ ЧЕРЕЗ ПОСТОЯННЫЙ БУФЕР (§80). Прежде здесь создавался стейджинг
     // ПОЛНОГО размера на каждый вызов и тут же уничтожался: на пуле страниц
@@ -283,7 +283,9 @@ bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
             bytes - off < kBulkStagingBytes ? bytes - off : kBulkStagingBytes;
         std::memcpy(bulkStaging_.mapped, p + off, take);
         if (!one_shot_begin()) return false;
-        VkBufferCopy region{0, off, take}; // srcOffset 0 — буфер один и тот же
+        // srcOffset 0 — буфер один и тот же; dstOff — машинный вход льёт пул
+        // кусками по кадрам и продолжает с места прошлого шага.
+        VkBufferCopy region{0, dstOff + off, take};
         vkCmdCopyBuffer(oneShotCmd_, bulkStaging_.buffer, dst.buffer, 1,
                         &region);
         barrier_transfer_to_shader(oneShotCmd_);
@@ -293,13 +295,8 @@ bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
     return true;
 }
 
-bool VoxelMirror::upload_all(const World& world) {
+bool VoxelMirror::upload_wholesale_(const World& world, bool darkIdx) {
     if (!ready_) return false;
-    // ПРИБОР §80: оптовая заливка зеркала была КРУПНЕЙШИМ куском входа на этаж
-    // (3593 мс, замер владельца), и до 2026-09-24 её никто не мерил — цену
-    // видели только целиком, кадром лифта. Печатаем вслух, как и всё
-    // остальное на входе.
-    const auto tUpload = std::chrono::steady_clock::now();
 
     // Everything becomes fresh; the queue and its dedup bits reset with it.
     dirty_.clear();
@@ -365,16 +362,17 @@ bool VoxelMirror::upload_all(const World& world) {
                      "cells past the cap render their uniform CellType\n",
                      pageCount, kPageCap);
     idxScratch_.assign(kMacroCells, kNoPage);
-    if (sub) {
+    if (sub && !darkIdx) {
+        // darkIdx (машинный вход): индекс остаётся сплошь kNoPage, пока пул
+        // не долит upload_entry_step — частичная клетка до того рендерится
+        // своим однородным типом, за закрытыми створками.
         const std::uint32_t* tab = sub->page_table();
         for (std::size_t i = 0; i < kMacroCells; ++i)
             idxScratch_[i] = tab[i] < poolPages_ ? tab[i] : kNoPage;
     }
     ok = ok && upload_via_staging(pageIdx_, idxScratch_.data(), kPageIdxBytes);
-    if (sub && poolPages_ > 0)
-        ok = ok && upload_via_staging(
-                       pagePool_, sub->pages_data(),
-                       static_cast<std::size_t>(poolPages_) * kPageBytes);
+    // Пул страниц — ЗА вызывающим: upload_all одним куском тут же,
+    // машинный вход — кадрами (upload_entry_step).
 
     // Stain: the index must never stay raw VRAM — sub_stain() dereferences it
     // for every hit pixel, and a garbage slot is a wild read into the pool.
@@ -389,6 +387,27 @@ bool VoxelMirror::upload_all(const World& world) {
         for (std::uint32_t ci = 0; ci < kMacroCells; ++ci)
             if (tab[ci] != kNoPage) mark_dirty(&ci, 1);
     }
+    return ok;
+}
+
+bool VoxelMirror::upload_all(const World& world) {
+    if (!ready_) return false;
+    // ПРИБОР §80: оптовая заливка зеркала была КРУПНЕЙШИМ куском входа на этаж
+    // (3593 мс, замер владельца), и до 2026-09-24 её никто не мерил — цену
+    // видели только целиком, кадром лифта. Печатаем вслух, как и всё
+    // остальное на входе.
+    const auto tUpload = std::chrono::steady_clock::now();
+    // Опт свежее любого машинного хвоста: недолитый пул предыдущего входа
+    // перекрывается этим же вызовом целиком.
+    entryPending_ = false;
+    entryPoolOff_ = 0;
+    bool ok = upload_wholesale_(world, /*darkIdx=*/false);
+    const SubField<CellType>* sub =
+        world.subfields().find<CellType>(kSubMaterialName);
+    if (sub && poolPages_ > 0)
+        ok = ok && upload_via_staging(
+                       pagePool_, sub->pages_data(),
+                       static_cast<std::size_t>(poolPages_) * kPageBytes);
     std::fprintf(stderr,
                  "[entry] mirror upload_all %.1f ms (%u страниц пула, %.0f МиБ)\n",
                  std::chrono::duration<double, std::milli>(
@@ -399,6 +418,85 @@ bool VoxelMirror::upload_all(const World& world) {
                                      kPageBytes) /
                      (1024.0 * 1024.0));
     return ok;
+}
+
+bool VoxelMirror::upload_entry_begin(const World& world) {
+    if (!ready_) return false;
+    const auto t0 = std::chrono::steady_clock::now();
+    bool ok = upload_wholesale_(world, /*darkIdx=*/true);
+    const SubField<CellType>* sub =
+        world.subfields().find<CellType>(kSubMaterialName);
+    entryPending_ = ok && sub && poolPages_ > 0;
+    entryPoolOff_ = 0;
+    entryFrames_ = 0;
+    entryStepMs_ = 0.0;
+    std::fprintf(stderr,
+                 "[entry] mirror begin %.1f ms (индекс тёмный, пул %u страниц "
+                 "/ %.0f МиБ — кадрами следом)\n",
+                 std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - t0)
+                     .count(),
+                 poolPages_,
+                 static_cast<double>(static_cast<std::size_t>(poolPages_) *
+                                     kPageBytes) /
+                     (1024.0 * 1024.0));
+    return ok;
+}
+
+bool VoxelMirror::upload_entry_step(const World& world) {
+    if (!entryPending_) return false;
+    const auto t0 = std::chrono::steady_clock::now();
+    const SubField<CellType>* sub =
+        world.subfields().find<CellType>(kSubMaterialName);
+    if (!sub) { // этаж сменили под хвостом — опт нового входа всё перекроет
+        entryPending_ = false;
+        return false;
+    }
+    // Указатель и размер пула перечитываются КАЖДЫЙ шаг: ensure_page мог
+    // переаллоцировать вектор между кадрами. Содержимое уже уехавших слотов
+    // шаг не перечитывает — мутации после begin обязаны dirty (контракт
+    // шапки), их доставит первый flush после хвоста.
+    const std::size_t total =
+        std::min(static_cast<std::size_t>(poolPages_) * kPageBytes,
+                 sub->page_count() * kPageBytes);
+    if (entryPoolOff_ < total) {
+        const std::size_t take = std::min(kBulkStagingBytes,
+                                          total - entryPoolOff_);
+        const std::uint8_t* p =
+            reinterpret_cast<const std::uint8_t*>(sub->pages_data());
+        if (!upload_via_staging(pagePool_, p + entryPoolOff_, take,
+                                /*dstOff=*/entryPoolOff_)) {
+            entryPending_ = false;
+            return false;
+        }
+        entryPoolOff_ += take;
+        ++entryFrames_;
+    }
+    if (entryPoolOff_ >= total) {
+        // Пул долит — настоящий индекс поверх тёмного. Слоты, родившиеся
+        // ПОЗЖЕ begin (за пределами залитого куска), остаются тёмными до
+        // своего flush по dirty.
+        idxScratch_.assign(kMacroCells, kNoPage);
+        const std::uint32_t* tab = sub->page_table();
+        for (std::size_t i = 0; i < kMacroCells; ++i)
+            idxScratch_[i] = tab[i] < poolPages_ ? tab[i] : kNoPage;
+        const bool ok =
+            upload_via_staging(pageIdx_, idxScratch_.data(), kPageIdxBytes);
+        entryPending_ = false;
+        entryStepMs_ += std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+        std::fprintf(stderr,
+                     "[entry] mirror pool: %.0f МиБ за %u кадров, шаги "
+                     "суммарно %.1f ms, индекс лёг\n",
+                     static_cast<double>(total) / (1024.0 * 1024.0),
+                     entryFrames_, entryStepMs_);
+        return ok;
+    }
+    entryStepMs_ += std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    return true;
 }
 
 void VoxelMirror::mark_dirty(const std::uint32_t* cells, std::size_t n) {

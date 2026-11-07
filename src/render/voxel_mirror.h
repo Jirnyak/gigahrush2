@@ -179,6 +179,29 @@ public:
     // per-frame call. Clears the dirty queue: everything is fresh.
     bool upload_all(const World& world);
 
+    // МАШИННЫЙ вход (лифт, лифт-лимб 2 2026-11-07): begin льёт всё, КРОМЕ
+    // пула страниц, а индекс страниц кладёт ТЁМНЫМ (сплошь kNoPage —
+    // частичная клетка рендерится своим однородным типом; происходит это ЗА
+    // ЗАКРЫТЫМИ СТВОРКАМИ, видеть некому). Пул обжитого этажа (904 МиБ,
+    // 925600 страниц) прежде уезжал ОДНИМ куском кадра SwapUpload — теперь
+    // кусками kBulkStagingBytes, по одному вызову upload_entry_step() на
+    // кадр WaitFresh; последний шаг кладёт настоящий индекс. Страницы,
+    // родившиеся/мутировавшие ПОЗЖЕ begin, чинит обычный flush по dirty —
+    // контракт «любой мутатор сетки должен dirty» уже записан в шапке.
+    // Пока entry_upload_pending():
+    //   * drain_wakes НЕ зовётся (очередь честно несёт) — инжект сред не
+    //     смеет читать недолитые страницы; створки и так ждут пустую
+    //     очередь, так что цепочка «пул -> пробуждения -> створки» выходит
+    //     даром, закон дверей не тронут;
+    //   * flush и verify пропускаются (dirty-очередь несёт, гейты у
+    //     вызывающих).
+    // Дев-швы (console ft / --floor / F9) остаются на синхронном
+    // upload_all — это прибор; upload_all сам гасит pending (опт свежее
+    // любого хвоста).
+    bool upload_entry_begin(const World& world);
+    bool upload_entry_step(const World& world);
+    bool entry_upload_pending() const { return entryPending_; }
+
     // Queue macro cells (flat macro_index values) for the next flush(). Dedup'd
     // against a bitset, so feeding the same cell twice a frame costs nothing.
     void mark_dirty(const std::uint32_t* cells, std::size_t n);
@@ -233,7 +256,8 @@ public:
     VkDescriptorSet shadow_set() const { return shadowSet_; }
 
 private:
-    bool upload_via_staging(VulkanBuffer& dst, const void* src, std::size_t bytes);
+    bool upload_via_staging(VulkanBuffer& dst, const void* src,
+                            std::size_t bytes, std::size_t dstOff = 0);
     bool readback_compare(VulkanBuffer& src, const void* expected,
                           std::size_t bytes, const char* label,
                           std::uint32_t* mismatches);
@@ -288,6 +312,11 @@ private:
     std::vector<VkBufferCopy> classCopies_;
     std::vector<VkBufferCopy> stainIdxCopies_;
     std::vector<VkBufferCopy> stainPoolCopies_;
+    // Общая часть оптовой заливки (upload_all и машинный begin): маски,
+    // типы, classify+классы, индекс (тёмный или настоящий), сброс пятен.
+    // Пул страниц — ЗА вызывающим: upload_all льёт его тут же одним куском,
+    // машинный вход — кадрами через upload_entry_step.
+    bool upload_wholesale_(const World& world, bool darkIdx);
     // Reused expectation scratch for upload_all/verify's pageIdx image.
     std::vector<std::uint32_t> idxScratch_;
     std::vector<std::uint8_t> classScratch_;
@@ -301,6 +330,12 @@ private:
     std::uint32_t poolPages_ = 0;
     std::uint32_t overflowEvents_ = 0;
     bool pageOverflow_ = false;
+
+    // Машинный вход: пул в полёте (см. upload_entry_begin).
+    bool entryPending_ = false;
+    std::size_t entryPoolOff_ = 0;  // байт пула уже уехало
+    std::uint32_t entryFrames_ = 0; // кадров-шагов — для строки прибора
+    double entryStepMs_ = 0.0;      // суммарная цена шагов, мс
 };
 
 } // namespace giga::gpu

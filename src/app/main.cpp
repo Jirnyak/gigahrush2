@@ -4040,10 +4040,17 @@ int main(int argc, char** argv) {
                      ms(tD0, tD1), ms(tD1, tD2), ms(tD2, tD3), ms(tD3, tD4),
                      ms(tD4, tD5));
     };
-    auto arrive_upload = [&](LayerId nl) {
+    // chunked=true — МАШИННЫЙ вход: пул страниц уезжает кадрами WaitFresh
+    // (upload_entry_step в теле кадра ниже), дев-швы остаются на синхронном
+    // upload_all (прибор). verify при хвосте в полёте не зовётся — сверит
+    // heartbeat, когда индекс ляжет.
+    auto arrive_upload = [&](LayerId nl, bool chunked = false) {
         const auto tU0 = std::chrono::steady_clock::now();
-        voxelMirror.upload_all(stack.layer(nl));
-        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+        if (chunked)
+            voxelMirror.upload_entry_begin(stack.layer(nl));
+        else
+            voxelMirror.upload_all(stack.layer(nl));
+        if (mirrorVerify && !chunked) voxelMirror.verify(stack.layer(nl));
         const auto tU1 = std::chrono::steady_clock::now();
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
@@ -4977,7 +4984,7 @@ int main(int argc, char** argv) {
             liftRide = LiftRide::SwapUpload;
         } else if (liftRide == LiftRide::SwapUpload) {
             const auto tS = std::chrono::steady_clock::now();
-            arrive_upload(liftSwapLayer);
+            arrive_upload(liftSwapLayer, /*chunked=*/true);
             std::fprintf(stderr, "[lift] swap: upload %.0f ms\n",
                          std::chrono::duration<float, std::milli>(
                              std::chrono::steady_clock::now() - tS)
@@ -4988,8 +4995,14 @@ int main(int argc, char** argv) {
         // прошёл, а очередь пробуждений будильника этажа выпита — вся вода
         // этажа уже в живом списке автомата и падает физикой за закрытыми
         // дверьми (решение владельца 2026-08-27). Замер — всегда.
+        // Третье слагаемое — пул зеркала долит: на СУХОМ этаже (ноль мокрых
+        // клеток) очередь пробуждений пуста с рождения, и без этого условия
+        // створки открывались в ТЁМНЫЙ индекс страниц (поймано первым же
+        // прогоном кусочной заливки: [lift] ride to 6 печатался раньше
+        // «индекс лёг»). «Недостроенное» включает зеркало.
         if (liftRide == LiftRide::WaitFresh && nav.ready() &&
-            !mediumPass.wakes_pending()) {
+            !mediumPass.wakes_pending() &&
+            !voxelMirror.entry_upload_pending()) {
             liftRide = LiftRide::Idle;
             // «Лифт приехал» — створка субвоксельно открывается.
             if (liftHub >= 0 && liftHub < 4 &&
@@ -5002,6 +5015,14 @@ int main(int argc, char** argv) {
                          currentFloor,
                          static_cast<unsigned long long>(simTick - liftT0));
         }
+        // Хвост машинного входа: один кусок пула страниц за кадр (64 МиБ ~
+        // 13 мс на M2), после последнего — настоящий индекс страниц. Пока
+        // хвост в полёте, drain_wakes и flush зеркала пропускаются (очереди
+        // честно несут), а створки ждут пустую очередь пробуждений — так
+        // цепочка «пул -> пробуждения -> створки» держится законом дверей,
+        // без новых констант.
+        if (voxelMirror.entry_upload_pending())
+            voxelMirror.upload_entry_step(stack.layer(activeLayer));
         // Отложенный автосейв поездки: ждём НЕ блокируя — run.sav пишется в
         // тот кадр, когда фоновый кодек+диск покинутого этажа доложил
         // готовность (wait_for(0) = опрос). Порядок закона дюпа сохранён,
@@ -10620,11 +10641,16 @@ int main(int argc, char** argv) {
             // порции обязаны уехать на GPU этим же кадром, а инжект-буфер
             // порции съест record_substeps ниже. Остаток очереди честно
             // переносится (см. drain_wakes — прежний кап молча терял).
-            mediumPass.drain_wakes(stack.layer(activeLayer), voxelMirror);
+            // Пока пул машинного входа в полёте — ни инжекта, ни флеша:
+            // автомат сред не смеет читать недолитые страницы, а flush не
+            // смеет класть настоящий индекс раньше пула. Обе очереди несут.
+            if (!voxelMirror.entry_upload_pending())
+                mediumPass.drain_wakes(stack.layer(activeLayer), voxelMirror);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             const auto ctVf = std::chrono::steady_clock::now();
-            voxelMirror.flush(cmd, renderer.currentFrame,
-                              stack.layer(activeLayer));
+            if (!voxelMirror.entry_upload_pending())
+                voxelMirror.flush(cmd, renderer.currentFrame,
+                                  stack.layer(activeLayer));
             g_carveT.flushMs = carve_ms_since(ctVf);
             renderer.timer.pass_end(cmd, gpu::GpuPass::VoxelFlush);
 
@@ -10934,7 +10960,8 @@ int main(int argc, char** argv) {
 
             // --mirror-verify heartbeat: prove the incremental dirty path (not
             // just the wholesale uploads) against the CPU truth, ~every 5 s.
-            if (mirrorVerify && (++mirrorFrame % 300u) == 0u)
+            if (mirrorVerify && (++mirrorFrame % 300u) == 0u &&
+                !voxelMirror.entry_upload_pending())
                 voxelMirror.verify(stack.layer(activeLayer));
 
             // --shot: count presented frames, then capture and quit. Counted here
