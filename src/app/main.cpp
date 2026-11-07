@@ -7271,9 +7271,18 @@ int main(int argc, char** argv) {
                         }
 
                         // 3. ElectricalShield sabotage — zero-heap nearest.
+                        // Reach — ИЗ ТАБЛИЦЫ (чистка 2026-11-07): литерал
+                        // 3.5f совпадал с interactables.csv случайно и был
+                        // единственной веткой E мимо табличного reach.
+                        // Сообщение — stderr по форме соседа (LiftCall выше):
+                        // старый snprintf писал в ЧУЖОЙ буфер elevDiagLine,
+                        // который рисует только дебаг-панель — игрок его не
+                        // видел никогда; лента игроку — отдельный шов.
                         if (!handled && activeLayer != kInvalidLayer) {
                             game::InteractionHit shieldHit = game::find_nearest_interactable(
-                                reg, player, game::Interactable::Kind::ElectricalShield, 3.5f);
+                                reg, player, game::Interactable::Kind::ElectricalShield,
+                                game::interact_def(game::InteractKind::ElectricalShield)
+                                    .reachM);
                             if (shieldHit.hit) {
                                 const vec3& sp = shieldHit.pos;
                                 int scx = static_cast<int>(sp.x / kCellSize);
@@ -7282,10 +7291,10 @@ int main(int argc, char** argv) {
                                 if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
                                     handled = true;
                                     powerGrid.destroy_shield(scx, scy, scz);
-                                    std::snprintf(elevDiagLine, sizeof(elevDiagLine),
-                                                  "POWER GRID SABOTAGE: ELECTRICAL SHIELD DESTROYED AT (%.1f, %.1f)",
-                                                  sp.x, sp.z);
-                                    elevDiagAt = simTick;
+                                    std::fprintf(stderr,
+                                                 "[powergrid] shield sabotaged "
+                                                 "at (%.1f, %.1f, %.1f)\n",
+                                                 sp.x, sp.y, sp.z);
 
                                     game::NoiseProfile np{16.0f, 2500, 3, game::NoiseSource::Door};
                                     game::noise_publish(noiseField, activeLayer, sp, np, 0);
