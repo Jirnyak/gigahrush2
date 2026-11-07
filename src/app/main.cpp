@@ -1913,10 +1913,14 @@ std::uint32_t seed_floor_props(Registry& reg, const World& world,
         }
     }
 
-    // Ceiling BareBulb/FloodLamp cosmetics are still PropPlacer-driven, but
-    // LightBulb Interactables live in ECS so lighting/HUD never read propPass
-    // ([jirnyak.md] §18 — last get_prop_positions sim path).
-    count += game::seed_ceiling_lights(reg, world, layer, wallSeed);
+    // Потолочные плафоны — ТА ЖЕ СТРОКА ЭТАЖА (ceilingLights): монетка
+    // BareBulb/FloodLamp уехала в данные, сеялка — тупой исполнитель.
+    // Лампа сценография: Interactable нет, свет и HUD читают PropLight/PropOf.
+    const std::uint32_t nLamps = game::seed_ceiling_lights(
+        reg, world, layer, wallSeed, spec->ceilingLights,
+        game::kMaxDeviceBands);
+    count += nLamps;
+    std::fprintf(stderr, "[props] ceiling lamps seeded: %u\n", nLamps);
     if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
         count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
     if (kind_for_floor(floorNumber) == game::FloorKind::Khrushi)

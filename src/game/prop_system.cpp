@@ -1019,8 +1019,17 @@ std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
 
 
 std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
-                                  LayerId layer, std::uint32_t seed)
+                                  LayerId layer, std::uint32_t seed,
+                                  const DeviceBand* mix, std::size_t mixCount)
 {
+    if (mix == nullptr) mixCount = 0;
+    // Σ ВЕСОВ — знаменатель смеси (не 2000: плотность здесь решётка, см.
+    // шапку в заголовке). Пустая смесь = этаж без потолочных ламп, скан не
+    // нужен вовсе.
+    std::uint32_t mixTotal = 0;
+    for (std::size_t b = 0; b < mixCount; ++b) mixTotal += mix[b].per2000;
+    if (mixTotal == 0) return 0;
+
     const MacroGrid& grid = world.grid();
     std::uint32_t count = 0;
     constexpr float kCell = kCellSize;
@@ -1119,9 +1128,24 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 anchor.subZ = static_cast<std::uint8_t>(slot.layer);
                 anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
 
-                // BareBulb vs FloodLamp choice stays procedural; skin from props.csv.
-                const PropId pid =
-                    (slot.score & 1u) ? PropId::BareBulb : PropId::FloodLamp;
+                // ПЛАФОН — ИЗ СТРОКИ ЭТАЖА, не монеткой здесь. Та же
+                // арифметика накопления, что у сеялок стен и пола, но
+                // знаменатель — Σ весов: при {FloodLamp,1},{BareBulb,1}
+                // sel = score % 2 == (score & 1), и легаси-монетка «чёт —
+                // прожектор, нечет — лампочка» воспроизводится бит-в-бит.
+                const std::uint32_t sel = slot.score % mixTotal;
+                PropId pid{};
+                bool picked = false;
+                std::uint32_t acc = 0;
+                for (std::size_t b = 0; b < mixCount && !picked; ++b) {
+                    if (mix[b].per2000 == 0) continue;
+                    acc += mix[b].per2000;
+                    if (sel < acc) {
+                        pid = mix[b].prop;
+                        picked = true;
+                    }
+                }
+                if (!picked) continue; // недостижимо: sel < mixTotal == acc
                 const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
                 const std::uint8_t anim =
                     static_cast<std::uint8_t>(slot.score & 0xFFu);

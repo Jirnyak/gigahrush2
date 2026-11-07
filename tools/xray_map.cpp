@@ -487,7 +487,8 @@ struct WorldContext {
                                 spec.wallDevices, kMaxDeviceBands);
         seed_floor_standing_devices(ecs, stack.layer(loadedLayer), loadedLayer,
                                     fseed, spec.floorDevices, kMaxDeviceBands);
-        seed_ceiling_lights(ecs, stack.layer(loadedLayer), loadedLayer, fseed);
+        seed_ceiling_lights(ecs, stack.layer(loadedLayer), loadedLayer, fseed,
+                            spec.ceilingLights, kMaxDeviceBands);
         // seed_room_furniture умер (rooms-object F, S10: мебель ставит модуль).
 
         return true;

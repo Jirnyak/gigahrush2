@@ -2313,7 +2313,16 @@ if(GIGA_BUILD_TESTS)
         # печать [props] loot full-inv доказывает, что ветка живая:
         # hit=1 item=54). suite_audit (stack clamp → pickup_take) живёт в
         # ДРУГОМ бинаре и этого пина не трогает. Сошлось точно.
-        PASS_REGULAR_EXPRESSION "game_test: 273117 checks, 0 failures")
+        # 273117 + 11 = 273128 на 2026-11-07 (потолочная сеялка ламп → данные
+        # строки этажа, FloorSpec::ceilingLights — ПОСЛЕДНЯЯ политика
+        # расстановки ушла из общего кода): гейт в
+        # test_ceiling_lights_seed_and_collect — 2 полярности (nullptr-смесь
+        # и нулевые веса не сеют) + 6 тождества каталога с легаси-монеткой
+        # ({FloodLamp,1},{BareBulb,1} ⇒ sel = score & 1 бит-в-бит) + 3
+        # «смесь жива обеими полосами» (перетасовку плафонов прежде не ловил
+        # никто — считалась только сумма). Прогон бинаря (273128) сошёлся
+        # точно.
+        PASS_REGULAR_EXPRESSION "game_test: 273128 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

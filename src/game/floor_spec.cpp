@@ -40,21 +40,28 @@ namespace {
 #define GIGA_FLOOR_HOME  {{PropId::Workbench, 2}}
 #define GIGA_FLOOR_SHOP  {{PropId::LabBench, 3}, {PropId::Workbench, 2}}
 #define GIGA_FLOOR_WORKS {{PropId::Lathe, 3}, {PropId::Workbench, 3}}
+// Потолочные плафоны: СМЕСЬ 50/50, порядок значим — нулевой остаток берёт
+// первая полоса, значит {FloodLamp, BareBulb} ≡ легаси `(score & 1) ?
+// BareBulb : FloodLamp`. Веса намеренно одинаковы на всех строках: перенос
+// принимается НЕИЗМЕННОСТЬЮ (тот же сид → те же плафоны), характер этажей
+// тюнится потом числами здесь, не ветками в сеялке.
+#define GIGA_LAMPS_LEGACY {{PropId::FloodLamp, 1}, {PropId::BareBulb, 1}}
 //   kind         name           pop  factionMix       hostility  age window
 constexpr FloorSpec kCatalog[] = {
-    {FloorKind::Residential, "Residential", 420, {7, 1, 1, 0, 1}, 0.05f, 1, 90, GIGA_WALL_LEGACY, GIGA_FLOOR_HOME},
-    {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80, GIGA_WALL_LEGACY, GIGA_FLOOR_SHOP},
-    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65, GIGA_WALL_LEGACY, GIGA_FLOOR_WORKS},
-    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE},
-    {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE},
-    {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE},
-    {FloorKind::Khrushi,     "Khrushi",     380, {7, 1, 1, 0, 1}, 0.10f, 1, 90, GIGA_WALL_LEGACY, GIGA_FLOOR_HOME},
+    {FloorKind::Residential, "Residential", 420, {7, 1, 1, 0, 1}, 0.05f, 1, 90, GIGA_WALL_LEGACY, GIGA_FLOOR_HOME,  GIGA_LAMPS_LEGACY},
+    {FloorKind::Commercial,  "Commercial",  260, {3, 2, 1, 2, 2}, 0.20f, 14, 80, GIGA_WALL_LEGACY, GIGA_FLOOR_SHOP,  GIGA_LAMPS_LEGACY},
+    {FloorKind::Industrial,  "Industrial",  150, {2, 4, 0, 2, 1}, 0.35f, 18, 65, GIGA_WALL_LEGACY, GIGA_FLOOR_WORKS, GIGA_LAMPS_LEGACY},
+    {FloorKind::Derelict,    "Derelict",     40, {1, 0, 4, 0, 3}, 0.90f, 16, 70, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE,  GIGA_LAMPS_LEGACY},
+    {FloorKind::Padic,       "Padic",        10, {0, 0, 1, 0, 9}, 1.00f, 20, 80, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE,  GIGA_LAMPS_LEGACY},
+    {FloorKind::Blame,       "Blame",        24, {1, 1, 2, 1, 5}, 0.80f, 16, 70, GIGA_WALL_LEGACY, GIGA_FLOOR_NONE,  GIGA_LAMPS_LEGACY},
+    {FloorKind::Khrushi,     "Khrushi",     380, {7, 1, 1, 0, 1}, 0.10f, 1, 90, GIGA_WALL_LEGACY, GIGA_FLOOR_HOME,  GIGA_LAMPS_LEGACY},
 };
 #undef GIGA_WALL_LEGACY
 #undef GIGA_FLOOR_NONE
 #undef GIGA_FLOOR_HOME
 #undef GIGA_FLOOR_SHOP
 #undef GIGA_FLOOR_WORKS
+#undef GIGA_LAMPS_LEGACY
 // ПОРЯДОК СТРОК, А НЕ ТОЛЬКО ИХ ЧИСЛО (2026-10-01). Здесь стоял один
 // `static_assert` на длину, и он ловил вставку/удаление значения `FloorKind`, но
 // НЕ перестановку — а каталог читается строго по индексу

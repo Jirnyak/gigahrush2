@@ -69,6 +69,16 @@ struct FloorSpec {
     // стоят на полу спиной к стене — верстак/станок/лабстол, раскладка = вид
     // этажа (Industrial точит, Commercial лечит, жилые чинят по мелочи).
     DeviceBand floorDevices[kMaxDeviceBands];
+    // ПОТОЛОЧНЫЕ ПЛАФОНЫ — последняя политика, жившая в общем коде (монетка
+    // `(score & 1) ? BareBulb : FloodLamp` в seed_ceiling_lights).
+    // ДРУГОЙ ЗНАМЕНАТЕЛЬ, И ЭТО НАМЕРЕННО: плотность ламп задаёт решётка
+    // блоков pitch×pitch (pitch ВЫВЕДЕН из досягаемости эталонного плафона,
+    // lamp_pitch_cells), а эти веса — СМЕСЬ: доля полосы = per2000/Σ per2000,
+    // остатка «ничего не ставить» здесь нет по построению — блок-победитель
+    // получает лампу всегда. Σ = 2 при весах 1/1 даёт sel = score % 2 ==
+    // (score & 1), то есть легаси-монетку бит-в-бит, если первой полосой
+    // стоит плафон ЧЁТНОГО остатка.
+    DeviceBand ceilingLights[kMaxDeviceBands];
 };
 
 // Read a floor's rule-set by archetype. Returns a reference into a static

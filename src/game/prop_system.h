@@ -255,14 +255,22 @@ std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
                                           const DeviceBand* bands,
                                           std::size_t bandCount);
 
-// Seed ceiling lamps (BareBulb/FloodLamp rows) from MacroGrid ceiling rules
-// matching gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove).
+// Seed ceiling lamps from MacroGrid ceiling rules (kSaltLight, solidAbove,
+// одна лампа на блок pitch×pitch). АГНОСТИЧНЫЙ ПРИМИТИВ, как сеялки стен и
+// пола: КАКОЙ плафон — полосы `mix` из строки этажа ([game/floor_spec.h]
+// FloorSpec::ceilingLights). ВНИМАНИЕ: веса читаются как СМЕСЬ (знаменатель
+// Σ весов), а не как плотность из 2000 — плотность здесь задаёт решётка
+// блоков, выведенная из досягаемости плафона. Пустая смесь (nullptr / все
+// нули) = ни одной лампы. Шаг решётки и headroom по-прежнему выведены из
+// PropId::BareBulb как ЭТАЛОННОЙ фикстуры (не из полос: у FloodLamp радиус
+// вдвое больше, pitch стал бы 16 вместо 8 и ламп стало бы вчетверо меньше).
 // Лампа — СЦЕНОГРАФИЯ, не интерактив (чистка 2026-11-07: висячий промпт
 // «LIGHT BULB» снят — ветки исполнения E не было никогда): свет и HUD читают
 // PropLight/PropOf сущностей, выстрел — PropFallMode строки; propPass
 // по-прежнему render-only. [jirnyak.md] §18 Sim→Render invariant.
 std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
-                                  LayerId layer, std::uint32_t seed);
+                                  LayerId layer, std::uint32_t seed,
+                                  const DeviceBand* mix, std::size_t mixCount);
 
 // Collect world positions of active Interactables of `kind` on `layer`.
 // Replaces propPass.get_terminal_positions() / get_prop_positions for sim+HUD.

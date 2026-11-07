@@ -59,6 +59,17 @@ constexpr game::DeviceBand kLegacyWallBands[] = {
 };
 constexpr std::size_t kLegacyWallBandCount = 2;
 
+// Легаси-монетка потолочной сеялки `(score & 1) ? BareBulb : FloodLamp`,
+// выраженная СМЕСЬЮ: Σ = 2 ⇒ sel = score % 2 == (score & 1), нулевой остаток
+// берёт ПЕРВАЯ полоса — значит порядок {FloodLamp, BareBulb} воспроизводит
+// монетку бит-в-бит. Тождество с каталогом проверяется гейтом в
+// test_ceiling_lights_seed_and_collect.
+constexpr game::DeviceBand kLegacyLampMix[] = {
+    {game::PropId::FloodLamp, 1},
+    {game::PropId::BareBulb, 1},
+};
+constexpr std::size_t kLegacyLampMixCount = 2;
+
 // Лампы — сценография без Interactable (чистка 2026-11-07): считаем их по
 // СТРОКЕ ТАБЛИЦЫ (PropOf), не по свету — PropLight носит и светящийся
 // терминал (CRT-строка излучает, prop_emits_light), и смешал бы семейства.
@@ -226,11 +237,48 @@ static void test_ceiling_lights_seed_and_collect() {
     paint_slab(world, /*x0*/2, /*x1*/80, /*z*/7, /*y0*/2, /*y1*/80);
     paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
 
-    const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, seed);
+    // ГЕЙТ ПЕРЕНОСА (обе полярности): без смеси лампы не ставятся...
+    CHECK(game::seed_ceiling_lights(reg, world, layer, seed, nullptr, 0) == 0);
+    {
+        constexpr game::DeviceBand zero[] = {{game::PropId::BareBulb, 0}};
+        CHECK(game::seed_ceiling_lights(reg, world, layer, seed, zero, 1) ==
+              0);
+    }
+    // ...а строка каталога несёт РОВНО легаси-смесь (перенос = неизменность:
+    // тот же сид обязан дать те же плафоны, что монетка).
+    {
+        const game::FloorSpec& sp =
+            game::floor_spec(game::FloorKind::Residential);
+        for (std::size_t b = 0; b < kLegacyLampMixCount; ++b) {
+            CHECK(sp.ceilingLights[b].prop == kLegacyLampMix[b].prop);
+            CHECK(sp.ceilingLights[b].per2000 == kLegacyLampMix[b].per2000);
+        }
+        for (std::size_t b = kLegacyLampMixCount; b < game::kMaxDeviceBands;
+             ++b)
+            CHECK(sp.ceilingLights[b].per2000 == 0);
+    }
+
+    const std::uint32_t n = game::seed_ceiling_lights(
+        reg, world, layer, seed, kLegacyLampMix, kLegacyLampMixCount);
     CHECK(n > 0);
 
     const int bulbs = count_lamps(reg, layer);
     CHECK(bulbs == static_cast<int>(n));
+
+    // Смесь ЖИВАЯ обеими полосами — перетасовку плафонов не ловил ни один
+    // тест (считалась только сумма), а это ровно то, что переносится.
+    {
+        int nBulb = 0, nFlood = 0;
+        for (auto e2 : reg.view<const game::PropOf, const Transform>()) {
+            if (reg.get<const Transform>(e2).layer != layer) continue;
+            const game::PropId id = reg.get<const game::PropOf>(e2).id;
+            if (id == game::PropId::BareBulb) ++nBulb;
+            else if (id == game::PropId::FloodLamp) ++nFlood;
+        }
+        CHECK(nBulb > 0);
+        CHECK(nFlood > 0);
+        CHECK(nBulb + nFlood == static_cast<int>(n));
+    }
 
     auto view = reg.view<const game::PropLight, const Transform>();
     for (auto e : view) {
@@ -263,16 +311,19 @@ static void test_ceiling_lights_need_a_floor_under_them() {
     const LayerId layer = 7;
 
     paint_ceiling_band(world, /*x0*/2, /*x1*/80, /*zAir*/8, /*z0*/2, /*z1*/80);
-    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u,
+                                     kLegacyLampMix, kLegacyLampMixCount) == 0);
 
     // A floor JUST out of the bulb's reach is still no floor: props.csv gives
     // BareBulb 12 m, so a slab 8 cells (16 m) under the lamp cell stays dark.
     paint_slab(world, /*x0*/2, /*x1*/80, /*z*/0, /*y0*/2, /*y1*/80);
-    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) == 0);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u,
+                                     kLegacyLampMix, kLegacyLampMixCount) == 0);
 
     // Inside the reach it lights up.
     paint_slab(world, /*x0*/2, /*x1*/80, /*z*/4, /*y0*/2, /*y1*/80);
-    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u) > 0);
+    CHECK(game::seed_ceiling_lights(reg, world, layer, 0xB11B11u,
+                                     kLegacyLampMix, kLegacyLampMixCount) > 0);
 }
 
 // A lamp hangs from the ceiling's REAL under-face, and its anchor must name the
@@ -297,7 +348,8 @@ static void test_ceiling_lights_hang_from_a_sandwich_slab() {
             world.grid().set_cell(x, y, zCeil, kMatConcrete);
         }
 
-    const std::uint32_t n = game::seed_ceiling_lights(reg, world, layer, 0x5A11Bu);
+    const std::uint32_t n = game::seed_ceiling_lights(
+        reg, world, layer, 0x5A11Bu, kLegacyLampMix, kLegacyLampMixCount);
     CHECK(n > 0);
 
     for (auto e : reg.view<const game::SubVoxelAnchor, const Transform>()) {
@@ -328,7 +380,8 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
 
     const std::uint32_t nWall = game::seed_wall_interactables(
         reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
-    const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
+    const std::uint32_t nLamp = game::seed_ceiling_lights(
+        reg, world, layer, seed, kLegacyLampMix, kLegacyLampMixCount);
     CHECK(nWall > 0);
     CHECK(nLamp > 0);
 
@@ -1161,7 +1214,8 @@ static void test_collect_static_prop_mesh_instances_shapes() {
 
     const std::uint32_t nWall = game::seed_wall_interactables(
         reg, world, layer, seed, kLegacyWallBands, kLegacyWallBandCount);
-    const std::uint32_t nLamp = game::seed_ceiling_lights(reg, world, layer, seed);
+    const std::uint32_t nLamp = game::seed_ceiling_lights(
+        reg, world, layer, seed, kLegacyLampMix, kLegacyLampMixCount);
     CHECK(nWall + nLamp > 0u);
 
     std::vector<game::PropMeshInstance> insts;
