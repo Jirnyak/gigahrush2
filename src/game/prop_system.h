@@ -7,7 +7,7 @@
 #include "ecs/registry.h"
 #include "ecs/components.h"
 #include "game/event_bus.h"
-#include "game/floor_spec.h" // WallDeviceBand — полосы устройств строки этажа
+#include "game/floor_spec.h" // DeviceBand — полосы устройств строки этажа
 #include "game/interact_table.h"
 #include "game/particles.h" // the burst a GpuHandoff prop owes the world
 #include "game/prop_form_table.h" // FormId — форма составного тела
@@ -241,8 +241,19 @@ std::uint32_t clear_layer_props(Registry& reg, LayerId layer);
 // [jirnyak.md] §18 — sim must not read propPass.get_terminal_positions().
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       LayerId layer, std::uint32_t seed,
-                                      const WallDeviceBand* bands,
+                                      const DeviceBand* bands,
                                       std::size_t bandCount);
+
+// НАПОЛЬНЫЕ СТАНЦИИ (владелец 2026-11-07: «станки в мир»): тот же агностичный
+// примитив, что сеялка стен, но устройство СТОИТ НА ПОЛУ спиной к стене —
+// опора снизу обязательна, позиция прижата к реальной поверхности стены
+// (slide, как у панелей), якорь — в ПОЛ (вырезали пол — станок падает).
+// Полосы — FloorSpec::floorDevices строки этажа; соль своя (kSaltFloorDevice),
+// чтобы станок не коррелировал с панелью той же клетки. Returns count spawned.
+std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
+                                          LayerId layer, std::uint32_t seed,
+                                          const DeviceBand* bands,
+                                          std::size_t bandCount);
 
 // Seed ceiling lamps (BareBulb/FloodLamp rows) from MacroGrid ceiling rules
 // matching gpu::PropPlacer (kSaltLight, lightChancePct=25, solidAbove).

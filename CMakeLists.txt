@@ -2294,7 +2294,14 @@ if(GIGA_BUILD_TESTS)
         # прямой spawn_prop с Kind::Count обязан дать проп БЕЗ Interactable —
         # 2 CHECK в test_furniture_is_not_a_terminal; обратная полярность уже
         # пинилась spawn_prop(LightBulb) в anchor_and_detach. Сошлось точно.
-        PASS_REGULAR_EXPRESSION "game_test: 272221 checks, 0 failures")
+        # 272221 + 888 = 273109 на 2026-11-07 (напольные станции крафта,
+        # владелец: «станки в мир сейчас»): гейт
+        # test_floor_stations_stand_on_floor — 9 фиксированных (полярность
+        # «без полосы ноль», раскладка каталога Industrial/Derelict) +
+        # 3 × 293 станций жирной полосы фикстуры (стоит на полу 12–13.5 м,
+        # якорь в клетку пола, навес craft жив). 888 = 9 + 879, прогон
+        # бинаря (273109) сошёлся точно.
+        PASS_REGULAR_EXPRESSION "game_test: 273109 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

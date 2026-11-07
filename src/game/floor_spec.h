@@ -34,19 +34,20 @@ enum class FloorKind : std::uint8_t {
     Count,
 };
 
-// ПОЛОСА НАСТЕННЫХ УСТРОЙСТВ — политика расстановки как ДАННЫЕ СТРОКИ ЭТАЖА
-// (решение владельца 2026-11-07: «политика расстановки в общем коде — дефект,
-// ставит МОДУЛЬ»; глобальная сеялка с литералами wsel<7/<11 была ровно таким
-// дефектом). Вес per2000 — доля кандидатных клеток у стены из 2000 (та же
-// арифметика spatial_hash % 2000, что жила литералом): щиток 7/2000 ≈ 0.35%.
-// per2000 == 0 — пустой слот полосы. Механика скана стен остаётся агностичным
-// примитивом ([game/prop_system.h] seed_wall_interactables) и читает ЭТУ
+// ПОЛОСА УСТРОЙСТВ — политика расстановки как ДАННЫЕ СТРОКИ ЭТАЖА (решение
+// владельца 2026-11-07: «политика расстановки в общем коде — дефект, ставит
+// МОДУЛЬ»; глобальная сеялка с литералами wsel<7/<11 была ровно таким
+// дефектом). Вес per2000 — доля кандидатных клеток из 2000 (та же арифметика
+// spatial_hash % 2000, что жила литералом): щиток 7/2000 ≈ 0.35%.
+// per2000 == 0 — пустой слот полосы. Механика остаётся агностичными
+// примитивами ([game/prop_system.h] seed_wall_interactables — ВИСИТ на стене;
+// seed_floor_standing_devices — СТОИТ на полу спиной к стене) и читает ЭТУ
 // таблицу, не ветвится по этажам.
-struct WallDeviceBand {
+struct DeviceBand {
     PropId prop;            // что ставить — строка props.csv
     std::uint16_t per2000;  // сколько из 2000 кандидатов достаётся этой полосе
 };
-inline constexpr std::size_t kMaxWallDeviceBands = 4;
+inline constexpr std::size_t kMaxDeviceBands = 4;
 
 // A floor's rule-set. POD aggregate: field order matches the catalog rows in
 // floor_spec.cpp. Weights are relative/multiplier semantics, never absolutes
@@ -61,9 +62,13 @@ struct FloorSpec {
     float hostility;             // 0..1 monster spawn-weight multiplier (used once mobs land)
     std::uint8_t minAge;         // demographic window: youngest resident...
     std::uint8_t maxAge;         // ...and oldest
-    // Настенные устройства ЭТОГО этажа — порядок полос значим (первая полоса
-    // забирает младшие остатки хеша; менять порядок = передвинуть устройства).
-    WallDeviceBand wallDevices[kMaxWallDeviceBands];
+    // Устройства ЭТОГО этажа — порядок полос значим (первая полоса забирает
+    // младшие остатки хеша; менять порядок = передвинуть устройства).
+    DeviceBand wallDevices[kMaxDeviceBands];   // висят на стене (панели)
+    // Напольные станции (чистка 2026-11-07, владелец: «станки в мир сейчас»):
+    // стоят на полу спиной к стене — верстак/станок/лабстол, раскладка = вид
+    // этажа (Industrial точит, Commercial лечит, жилые чинят по мелочи).
+    DeviceBand floorDevices[kMaxDeviceBands];
 };
 
 // Read a floor's rule-set by archetype. Returns a reference into a static

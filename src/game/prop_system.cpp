@@ -30,6 +30,9 @@ namespace giga::game {
 constexpr std::uint32_t kSaltWall = 0x33333333u;
 // Salt for ceiling-light placement rolls (same inheritance as kSaltWall above).
 constexpr std::uint32_t kSaltLight = 0x44444444u;
+// Соль напольных станций (чистка 2026-11-07): свой поток бросков — станок
+// не коррелирует с панелью, висящей в той же клетке стены.
+constexpr std::uint32_t kSaltFloorDevice = 0x55555555u;
 
 // LAMP PITCH AND HEADROOM DERIVE FROM THE FIXTURE'S OWN REACH, not from taste.
 // props.csv gives BareBulb light_radius_mm; two numbers fall straight out of it:
@@ -797,7 +800,7 @@ std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
 
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       LayerId layer, std::uint32_t seed,
-                                      const WallDeviceBand* bands,
+                                      const DeviceBand* bands,
                                       std::size_t bandCount)
 {
     if (bands == nullptr) bandCount = 0;
@@ -896,6 +899,117 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
                                              pid, layer, prop_wall_yaw(wallFace),
                                              anim, /*flags*/0);
+                if (e != entt::null) ++count;
+            }
+        }
+    }
+    return count;
+}
+
+
+std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
+                                          LayerId layer, std::uint32_t seed,
+                                          const DeviceBand* bands,
+                                          std::size_t bandCount)
+{
+    if (bands == nullptr) bandCount = 0;
+    const MacroGrid& grid = world.grid();
+    std::uint32_t count = 0;
+    constexpr float kCell = kCellSize;
+    constexpr float kVoxel = kCell / static_cast<float>(kSubDim);
+
+    for (int z = 0; z < kMacroDim; ++z) {
+        for (int y = 0; y < kMacroDim; ++y) {
+            for (int x = 0; x < kMacroDim; ++x) {
+                if (grid.cell(x, y, z) != kCellAir) continue;
+
+                // СТОИТ НА ПОЛУ: сплошная клетка снизу — станция не панель,
+                // ей нужна опора, а не грань подвеса.
+                if (!is_solid_cell(grid.cell(x, y, z - 1))) continue;
+
+                // ...И СПИНОЙ К СТЕНЕ: тот же кандидатный вопрос, что у
+                // настенной сеялки, — станок посреди коридора это мебель
+                // на проходе, а не мастерская.
+                const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
+                const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
+                const bool solidNorth = is_solid_cell(grid.cell(x, y + 1, z));
+                const bool solidSouth = is_solid_cell(grid.cell(x, y - 1, z));
+                if (!(solidWest || solidEast || solidNorth || solidSouth))
+                    continue;
+
+                const std::uint32_t rngF =
+                    giga::spatial_hash(x, y, z, seed ^ kSaltFloorDevice);
+                const std::uint32_t wsel = rngF % 2000;
+
+                // Полосы — из строки этажа (FloorSpec::floorDevices), та же
+                // арифметика накопления, что у стен.
+                PropId pid{};
+                bool picked = false;
+                std::uint32_t acc = 0;
+                for (std::size_t b = 0; b < bandCount && !picked; ++b) {
+                    if (bands[b].per2000 == 0) continue;
+                    acc += bands[b].per2000;
+                    if (wsel < acc) {
+                        pid = bands[b].prop;
+                        picked = true;
+                    }
+                }
+                if (!picked) continue;
+                const PropDef& d = prop_def(pid);
+
+                // Стена за спиной: направление + её реальная поверхность
+                // (лепленые стены — ровно та же проба, что у панелей).
+                int wxd = 0, wyd = 0;
+                if (solidWest)       { wxd = -1; }
+                else if (solidEast)  { wxd = 1;  }
+                else if (solidSouth) { wyd = -1; }
+                else                 { wyd = 1;  }
+                const std::uint8_t wallFace = anchor_face_pack(
+                    wxd != 0 ? 0 : 1, wxd != 0 ? -wxd : -wyd);
+                const SurfaceFace sfw =
+                    surface_face_at(grid, x + wxd, y + wyd, z, wallFace);
+                if (sfw.columns == 0) continue; // грань стены не экспонирована
+                const float recess = static_cast<float>(
+                    anchor_face_dir(wallFace) > 0 ? kSubDim - 1 - sfw.layer
+                                                  : sfw.layer) * kVoxel;
+
+                // ПОЛ: реальная ВЕРХНЯЯ грань клетки опоры — на ней и стоит
+                // (решётчатый настил даёт просевшую поверхность честно).
+                const SurfaceFace sff = surface_face_at(
+                    grid, x, y, z - 1, anchor_face_pack(2, 1));
+                if (sff.columns == 0) continue;
+                const float floorTopM =
+                    static_cast<float>(z - 1) * kCell +
+                    (static_cast<float>(sff.layer) + 1.0f) * kVoxel;
+
+                // Спиной к стене: сдвиг от центра клетки к поверхности стены
+                // на полглубины корпуса (та же формула slide, что у панелей).
+                const float depth = static_cast<float>(d.sizeYMm) * 0.001f;
+                const float slide = 1.0f - (0.5f * depth + 0.02f);
+                const float wx = (static_cast<float>(x) + 0.5f) * kCell +
+                                 static_cast<float>(wxd) * (slide + recess);
+                const float wy = (static_cast<float>(y) + 0.5f) * kCell +
+                                 static_cast<float>(wyd) * (slide + recess);
+                const float wz = floorTopM +
+                                 0.5f * static_cast<float>(d.sizeZMm) * 0.001f +
+                                 0.01f;
+
+                // Якорь — В ПОЛ (не в стену): вырезали пол под станком —
+                // станок падает; стену рядом — стоит дальше.
+                SubVoxelAnchor anchor;
+                anchor.cx   = static_cast<std::uint8_t>(sff.cx);
+                anchor.cy   = static_cast<std::uint8_t>(sff.cy);
+                anchor.cz   = static_cast<std::uint8_t>(sff.cz);
+                anchor.subX = static_cast<std::uint8_t>(sff.su);
+                anchor.subY = static_cast<std::uint8_t>(sff.sv);
+                anchor.subZ = static_cast<std::uint8_t>(sff.layer);
+                anchor.face = anchor_face_pack(2, 1); // верхняя грань пола
+
+                const std::uint8_t anim = static_cast<std::uint8_t>(rngF & 0xFFu);
+                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz},
+                                              anchor, pid, layer,
+                                              prop_wall_yaw(wallFace), anim,
+                                              /*flags*/0);
                 if (e != entt::null) ++count;
             }
         }

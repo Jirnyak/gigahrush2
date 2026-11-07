@@ -53,7 +53,7 @@ static void paint_slab(World& world, int x0, int x1, int z, int y0, int y1) {
 // Легаси-полосы сеялки (щиток wsel<7, терминал <11) — ровно то, что жило
 // литералами в prop_system.cpp до переноса политики в строку этажа
 // (FloorSpec::wallDevices). Тождество с каталогом проверяется ниже.
-constexpr game::WallDeviceBand kLegacyWallBands[] = {
+constexpr game::DeviceBand kLegacyWallBands[] = {
     {game::PropId::ElectricalShield, 7},
     {game::PropId::Terminal, 4},
 };
@@ -119,7 +119,7 @@ static void test_wall_interactables_seed_and_collect() {
     CHECK(game::seed_wall_interactables(reg, world, layer, seed, nullptr, 0) == 0);
     {
         // ...полоса из одних нулевых весов — тоже ноль (слоты пропускаются)...
-        constexpr game::WallDeviceBand zero[] = {{game::PropId::Terminal, 0}};
+        constexpr game::DeviceBand zero[] = {{game::PropId::Terminal, 0}};
         CHECK(game::seed_wall_interactables(reg, world, layer, seed, zero, 1) == 0);
     }
     // ...а строка каталога этажа несёт РОВНО легаси-полосы: перенос принят
@@ -130,7 +130,7 @@ static void test_wall_interactables_seed_and_collect() {
             CHECK(spec.wallDevices[b].prop == kLegacyWallBands[b].prop);
             CHECK(spec.wallDevices[b].per2000 == kLegacyWallBands[b].per2000);
         }
-        for (std::size_t b = kLegacyWallBandCount; b < game::kMaxWallDeviceBands; ++b)
+        for (std::size_t b = kLegacyWallBandCount; b < game::kMaxDeviceBands; ++b)
             CHECK(spec.wallDevices[b].per2000 == 0);
     }
 
@@ -1887,8 +1887,60 @@ static void test_craft_hang_live_path() {
                           [game::kVerbCraft] == 2);
 }
 
+// НАПОЛЬНЫЕ СТАНЦИИ (владелец 2026-11-07: «станки в мир сейчас»): станок
+// СТОИТ на полу спиной к стене — опора обязательна, якорь в ПОЛ, станция
+// достижима прицелом в мире, не только строкой таблицы. Обе полярности:
+// без полосы — ноль; раскладка каталога — Industrial точит, Derelict пуст.
+static void test_floor_stations_stand_on_floor() {
+    Registry reg;
+    World world;
+    const LayerId layer = 4;
+    const unsigned seed = 0x57A710Au; // «станция»; соль у сеялки своя
+    paint_floor_band(world, /*x0*/2, /*x1*/80, /*zFloor*/5, /*y0*/2, /*y1*/80);
+
+    // Полярность: без полосы сеялка не ставит ничего.
+    CHECK(game::seed_floor_standing_devices(reg, world, layer, seed,
+                                            nullptr, 0) == 0);
+
+    constexpr game::DeviceBand fat[] = {{game::PropId::Lathe, 200}};
+    const std::uint32_t n = game::seed_floor_standing_devices(
+        reg, world, layer, seed, fat, 1);
+    CHECK(n > 0);
+
+    int stations = 0;
+    auto view = reg.view<const game::PropOf, const Transform,
+                         const game::SubVoxelAnchor>();
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer != layer) continue;
+        if (view.get<const game::PropOf>(e).id != game::PropId::Lathe) continue;
+        ++stations;
+        // СТОИТ, не висит: низ корпуса на верхней грани пола (клетка пола
+        // z=5 → верх 12 м; станок 1.3 м → центр ~12.66).
+        const vec3& p = view.get<const Transform>(e).pos;
+        CHECK(p.z > 12.0f && p.z < 13.5f);
+        // Якорь — В ПОЛ: вырезали пол — станок падает.
+        const auto& a = view.get<const game::SubVoxelAnchor>(e);
+        CHECK(a.cz == 5);
+        // Станция достижима живым путём: навес craft на строке.
+        CHECK(game::prop_craft_station(game::PropId::Lathe) ==
+              game::CraftStation::Lathe);
+    }
+    CHECK(stations == static_cast<int>(n));
+
+    // Раскладка каталога — данные строки этажа, не ветки сеялки.
+    const game::FloorSpec& works = game::floor_spec(game::FloorKind::Industrial);
+    CHECK(works.floorDevices[0].prop == game::PropId::Lathe &&
+          works.floorDevices[0].per2000 > 0);
+    CHECK(works.floorDevices[1].prop == game::PropId::Workbench &&
+          works.floorDevices[1].per2000 > 0);
+    const game::FloorSpec& ruins = game::floor_spec(game::FloorKind::Derelict);
+    for (std::size_t b = 0; b < game::kMaxDeviceBands; ++b)
+        CHECK(ruins.floorDevices[b].per2000 == 0);
+}
+
 void test_props_game_all() {
     test_craft_hang_live_path();
+    test_floor_stations_stand_on_floor();
     test_attachment_reaper_and_verbs();
     test_anchor_validate_layer_filter();
     test_writer_wakes_sleeping_bodies();

@@ -1842,8 +1842,15 @@ std::uint32_t seed_floor_props(Registry& reg, const World& world,
     const game::FloorSpec* spec = spec_for_floor(floorNumber);
     std::uint32_t count = game::seed_wall_interactables(
         reg, world, layer, wallSeed, spec->wallDevices,
-        game::kMaxWallDeviceBands);
+        game::kMaxDeviceBands);
     std::fprintf(stderr, "[props] wall devices seeded: %u\n", count);
+    // Напольные станции крафта — та же строка этажа (floorDevices): станок
+    // достижим прицелом, 167 рецептов живут в мире, не только в таблицах.
+    const std::uint32_t nStations = game::seed_floor_standing_devices(
+        reg, world, layer, wallSeed, spec->floorDevices,
+        game::kMaxDeviceBands);
+    count += nStations;
+    std::fprintf(stderr, "[props] floor stations seeded: %u\n", nStations);
     if (std::getenv("GIGA_ANTOURAGE_DEBUG") != nullptr) {
         int shown = 0;
         for (auto e : reg.view<const game::Interactable, const Transform>()) {
