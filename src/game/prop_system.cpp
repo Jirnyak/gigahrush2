@@ -110,16 +110,14 @@ static PropFallMode fall_mode_from_u8(std::uint8_t v) {
 
 static Interactable::Kind interact_kind_from_u8(std::uint8_t v) {
     // The ordinal IS the generated table row ([interact_table.h], CSV order).
-    // Out-of-range (255 = the generator's "None") still has to return SOME
-    // enum value because spawn_prop emplaces Interactable unconditionally;
-    // spawn_prop_from_id then REMOVES the component for 255. An earlier
-    // version of this comment claimed call sites "check interact != 255" —
-    // no such check ever existed, which is how a None-row prop would have
-    // shipped as a lootable (the E-on-a-toilet bug, §1.3 of the audit, was
-    // the same class: furniture rows carried Terminal because None had no
-    // working path).
+    // Out-of-range (255 = the generator's "None") maps to Kind::Count — the
+    // sanctioned "no interactive" sentinel: spawn_prop refuses to emplace the
+    // component for it. The old shape returned Kind::Loot here and relied on
+    // spawn_prop_from_id REMOVING the component afterwards — a latent mine:
+    // the first direct spawn_prop caller wanting "no interaction" would have
+    // shipped a lootable (the E-on-a-toilet class, §1.3 of the audit).
     return v < kInteractCount ? static_cast<Interactable::Kind>(v)
-                              : Interactable::Kind::Loot;
+                              : Interactable::Kind::Count;
 }
 
 
@@ -690,7 +688,10 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     reg.emplace<SubVoxelAnchor>(prop, SubVoxelAnchor{cx, cy, cz, anchor.subX,
                                                      anchor.subY, anchor.subZ,
                                                      anchor.face});
-    reg.emplace<Interactable>(prop, kind, 2.5f, true);
+    // Kind::Count — санкционированное «интерактива нет» (None-строка таблицы):
+    // компонент НЕ ставится вовсе, вместо старого «поставить лутом и снять».
+    if (kind != Interactable::Kind::Count)
+        reg.emplace<Interactable>(prop, kind, 2.5f, true);
     reg.emplace<PropFallMode>(prop, fallMode);
     reg.emplace<Renderable>(prop, color);
     // Static anchored + mesh-filter tags ([jirnyak.md] §18). Detach swaps
@@ -747,9 +748,8 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                          static_cast<float>(d.sizeYMm) * 0.001f,
                          static_cast<float>(d.sizeZMm) * 0.001f};
     // interact=None in props.csv (generator ordinal 255): the prop is scenery,
-    // not a verb. spawn_prop emplaced a clamped Interactable above; take it off.
-    if (d.interactKind == 255)
-        reg.remove<Interactable>(e);
+    // not a verb — interact_kind_from_u8 отдал Kind::Count, и spawn_prop
+    // компонент не ставил. Снимать больше нечего.
     // Table reachMm overrides the spawn_prop default (2.5 m).
     if (reg.all_of<Interactable>(e)) {
         auto& ia = reg.get<Interactable>(e);

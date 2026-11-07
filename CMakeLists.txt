@@ -2290,7 +2290,11 @@ if(GIGA_BUILD_TESTS)
         # сошёлся точно; три новых пропа и три строки интерактивов сами по
         # себе исполнений НЕ добавили (циклов по kPropCount/kInteractCount с
         # CHECK в game_test не было — теперь оракул у навеса есть).
-        PASS_REGULAR_EXPRESSION "game_test: 272219 checks, 0 failures")
+        # 272219 + 2 = 272221 на 2026-11-07 (опасный дефолт None→Loot убит):
+        # прямой spawn_prop с Kind::Count обязан дать проп БЕЗ Interactable —
+        # 2 CHECK в test_furniture_is_not_a_terminal; обратная полярность уже
+        # пинилась spawn_prop(LightBulb) в anchor_and_detach. Сошлось точно.
+        PASS_REGULAR_EXPRESSION "game_test: 272221 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

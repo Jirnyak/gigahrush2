@@ -1488,6 +1488,20 @@ static void test_furniture_is_not_a_terminal() {
     CHECK(reg.valid(e));
     CHECK(!reg.all_of<game::Interactable>(e)); // scenery, not a verb
     printf("[props] furniture spawns without Interactable (None row)\n");
+
+    // ОПАСНЫЙ ДЕФОЛТ УБИТ (чистка 2026-11-07): прямой spawn_prop с
+    // Kind::Count — санкционированное «интерактива нет» — обязан дать проп
+    // БЕЗ компонента. Старая форма клала Loot и надеялась, что from_id
+    // снимет; первый же прямой вызыватель получил бы «E на унитазе».
+    const auto bare = game::spawn_prop(reg, world, pos, anchor,
+                                       game::Interactable::Kind::Count,
+                                       game::PropFallMode::SimpleFall,
+                                       vec3{0.5f, 0.5f, 0.5f},
+                                       /*meshKind*/0, /*layer*/3);
+    CHECK(reg.valid(bare));
+    CHECK(!reg.all_of<game::Interactable>(bare)); // сентинел = нет компонента
+    // Обратная полярность (настоящий kind → компонент ставится) уже пинится
+    // прямым spawn_prop(LightBulb) в test_spawn_prop_anchor_and_detach_on_air.
 }
 
 
