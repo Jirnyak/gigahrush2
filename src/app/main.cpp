@@ -7225,16 +7225,25 @@ int main(int argc, char** argv) {
                                              "дефект обвеса\n");
                             }
                         }
-                        // КРАФТ — ОТ ВЕРСТАКА (вердикт владельца): клавиша C
-                        // снята, окно открывает интерактив терминала/верстака
-                        // под прицелом.
+                        // КРАФТ — НАВЕС НА СТРОКЕ ПРОПА (решение владельца
+                        // 2026-11-07): верстак/станок/лабстол/терминал
+                        // различаются ДАННЫМИ (props.csv: глагол craft +
+                        // craft_station), не ветками — захардкоженный
+                        // `if (kind == Terminal)` снесён. Право открыть окно
+                        // несёт станция навеса; женитьбу «глагол ⟺ станция»
+                        // держит генератор, поэтому проба одна.
                         if (!handled &&
-                            g_focus.what == game::Focus::What::Entity &&
-                            g_focus.kind == game::InteractKind::Terminal) {
-                            shell.window = UiWindow::Craft;
-                            input.set_mouselook(false);
-                            SDL_SetWindowRelativeMouseMode(window, false);
-                            handled = true;
+                            g_focus.what == game::Focus::What::Entity) {
+                            const auto* po =
+                                reg.try_get<game::PropOf>(g_focus.entity);
+                            if (po != nullptr &&
+                                game::prop_craft_station(po->id) !=
+                                    game::CraftStation::Count) {
+                                shell.window = UiWindow::Craft;
+                                input.set_mouselook(false);
+                                SDL_SetWindowRelativeMouseMode(window, false);
+                                handled = true;
+                            }
                         }
                         if (!handled &&
                             g_focus.what == game::Focus::What::Entity &&

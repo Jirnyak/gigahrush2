@@ -3,9 +3,11 @@
 // tagged by Transform.layer. PropPass is render-only; sim+HUD must not read it.
 
 #include "game/container.h"  // spawn_floor_containers — the clear_layer_props seam test
+#include "game/craft.h"      // prop_craft_station — станция как параметр навеса
 #include "game/floor_gen.h"  // generate_floor — real floor geometry for that seam
 #include "game/floors/padic/padic.h"
 #include "game/floor_spec.h"
+#include "game/focus.h"      // focus_pick — прицел живого пути E
 #include "game/prop_system.h"
 #include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
 #include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
@@ -1756,7 +1758,106 @@ static void test_attachment_reaper_and_verbs() {
     CHECK(!reg.get<RigidBody>(ball).asleep);
 }
 
+// ГЛАГОЛ CRAFT — ИНТЕРАКЦИЯ-НАВЕС (решение владельца 2026-11-07): «верстак —
+// НЕ вид пропа, а интеракция, навешенная на проп данными; с терминалом так
+// же». Гейт идёт ЖИВЫМ ПУТЁМ ИГРОКА, не мёртвой ветвью: прицел (focus_pick)
+// → проба входа E (prop_craft_station — ровно та, что стоит в main.cpp
+// вместо снесённого `if (kind == Terminal)`) → рецепт собирается на станции,
+// взятой С ПРОПА. Плюс закон женитьбы «глагол ⟺ станция» по ВСЕЙ таблице в
+// обе полярности и регресс-свидетель старых глаголов комнаты.
+static void test_craft_hang_live_path() {
+    Registry reg;
+    World world;
+    const LayerId layer = 2;
+
+    // Клетка якоря — сплошная: гейт спавна задаёт вопрос колонкой у грани.
+    world.grid().fill_cell(10, 4, 10, kMatConcrete);
+    game::SubVoxelAnchor anchor{};
+    anchor.cx = 10;
+    anchor.cy = 4;
+    anchor.cz = 10;
+
+    const vec3 pos{10.5f, 5.25f, 10.5f};
+    const Entity lathe = game::spawn_prop_from_id(reg, world, pos, anchor,
+                                                  game::PropId::Lathe, layer);
+    CHECK(reg.valid(lathe));
+    CHECK(reg.all_of<game::PropOf>(lathe));
+
+    // 1. ПРИЦЕЛ: глаз в полутора метрах, взгляд на станок — фокус отдаёт
+    // СТРОКУ ТАБЛИЦЫ (InteractKind::Lathe из interactables.csv), табличка
+    // приходит из системы, не из литерала у действия.
+    const game::Doors noDoors;
+    const vec3 eye{9.0f, 5.25f, 10.5f};
+    const vec3 dir{1.0f, 0.0f, 0.0f};
+    const game::Focus f =
+        game::focus_pick(reg, world, layer, eye, dir, noDoors);
+    CHECK(f.what == game::Focus::What::Entity);
+    CHECK(f.entity == lathe);
+    CHECK(f.kind == game::InteractKind::Lathe);
+    CHECK(game::focus_prompt(f, world, noDoors) != nullptr);
+
+    // 2. ВХОД E: та самая одна проба main.cpp — строка пропа под прицелом
+    // несёт станцию навеса.
+    const auto* po = reg.try_get<game::PropOf>(f.entity);
+    CHECK(po != nullptr);
+    CHECK(po->id == game::PropId::Lathe);
+    CHECK(game::prop_craft_station(po->id) == game::CraftStation::Lathe);
+
+    // 3. РЕЦЕПТ: первый Lathe-рецепт нулевого тира (26 штук на 2026-11-07)
+    // собирается на станции, взятой С ПРОПА. Знание кладётся битом, как его
+    // кладёт сейв, — учёба здесь не предмет проверки.
+    game::ItemId rid = game::kInvalidItem;
+    for (std::size_t i = 0; i < game::kCraftRecipeCount; ++i) {
+        const game::CraftRecipe& r = game::kCraftTable[i];
+        if (r.station == static_cast<std::uint8_t>(game::CraftStation::Lathe) &&
+            r.tier == 0) {
+            rid = static_cast<game::ItemId>(i + 1);
+            break;
+        }
+    }
+    CHECK(rid != game::kInvalidItem);
+    game::CraftingState st;
+    game::craft_init(st);
+    const std::size_t bit = static_cast<std::size_t>(rid) - 1;
+    st.known[bit >> 6] |= (1ull << (bit & 63));
+    for (std::size_t m = 0; m < game::kCraftMaterials; ++m)
+        st.mat[m] = game::craft_recipe(rid).comp[m];
+    game::Inventory inv{};
+    const game::CraftResult built =
+        game::craft_item(st, inv, rid, game::prop_craft_station(po->id));
+    CHECK(built.fail == game::CraftFail::None);
+    CHECK(built.item == rid);
+
+    // ОБРАТНАЯ ПОЛЯРНОСТЬ ВХОДА: у стола навеса нет — E окно не откроет...
+    CHECK(game::prop_craft_station(game::PropId::KitchenTable) ==
+          game::CraftStation::Count);
+    // ...и мимо станции рецепт отказывает СЛОВОМ про станцию.
+    st.mat[0] = 65535u; // банк не пуст — отказ обязан быть станцией, не нищетой
+    CHECK(game::craft_item(st, inv, rid, game::CraftStation::NetTerminal).fail ==
+          game::CraftFail::StationMismatch);
+
+    // ЗАКОН ЖЕНИТЬБЫ по всей таблице, обе полярности на каждой строке:
+    // глагол craft ⟺ станция задана (его же держит генератор — здесь
+    // свидетель против ручной правки сгенерированного файла).
+    for (std::size_t i = 0; i < game::kPropCount; ++i) {
+        const bool hasVerb = game::kPropVerbs[i][game::kVerbCraft] > 0;
+        const bool hasStation =
+            game::kPropCraftStations[i] != game::kPropNoCraftStation;
+        CHECK(hasVerb == hasStation);
+    }
+
+    // РЕГРЕСС-СВИДЕТЕЛЬ КОМНАТ: навес не тронул старые глаголы — терминал
+    // предлагает work:15, как до чистки; craft-вес терминала = 2 (вывод:
+    // ceil(рецептов станции / 12) — NetTerminal 18 → 2, как Lathe 90 → 8,
+    // Lab 77 → 7, Workbench 235 → 20).
+    CHECK(game::kPropVerbs[static_cast<std::size_t>(game::PropId::Terminal)]
+                          [game::kVerbWork] == 15);
+    CHECK(game::kPropVerbs[static_cast<std::size_t>(game::PropId::Terminal)]
+                          [game::kVerbCraft] == 2);
+}
+
 void test_props_game_all() {
+    test_craft_hang_live_path();
     test_attachment_reaper_and_verbs();
     test_anchor_validate_layer_filter();
     test_writer_wakes_sleeping_bodies();

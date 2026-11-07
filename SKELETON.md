@@ -703,7 +703,7 @@ grep -rn 'supply_prop_at' src/ | grep -v room_supply  → 3   (prop_system.cpp �
 
 | что | мера | наряд |
 |---|---|---|
-| `sizeof(Room)` = **132**, `sizeof(RoomBox)` = 6 — гвоздя НЕТ ни у одного | `grep -rn 'sizeof(Room)\|sizeof(RoomBox)' src/ tests/` → **0**. Замер исполнением | нет — кандидат на `GIGA_ROW_BYTES` |
+| `sizeof(Room)` = **132**, `sizeof(RoomBox)` = 6 — гвоздя НЕТ ни у одного | `grep -rn 'sizeof(Room)\|sizeof(RoomBox)' src/ tests/` → **0**. Замер исполнением | закрыт: оба прибиты `GIGA_ROW_BYTES@src/game/room.h`; Room **136** с 2026-11-07 (глагол `craft`, K 19→20 — гвоздь рост поймал) |
 | комментарий у `kRoomBinDim` говорил `// 32` при фактическом 16 | замер исполнением 2026-10-01; **ИСПРАВЛЕНО** в тот же час | закрыт |
 | `GoalsScratch` — тип, которого нет | `grep -rn GoalsScratch src/ tests/ tools/` → **1**, и это сам комментарий `src/game/room.h` | нет |
 | владельца комнаты не назначает НИКТО | все три модуля передают `/*owner=*/0`; непустое значение только в `tests/suite_rooms_object.inl` | признано вслух в `src/app/main.cpp` («шов спит до agent-goals») |

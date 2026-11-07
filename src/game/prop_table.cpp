@@ -35,6 +35,12 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     PropDef{ 800, 0, 0, 7, 1, 4, 0, 850, 300, 200, 2600, 180, 60, 260, 0, 0, 0, 0, 0 },
     // [14] lift_panel
     PropDef{ 2500, 0, 0, 8, 1, 4, 0, 880, 860, 700, 2600, 340, 50, 500, 0, 0, 0, 0, 0 },
+    // [15] workbench
+    PropDef{ 120000, 0, 0, 9, 0, 4, 0, 460, 440, 400, 2500, 1600, 700, 950, 0, 0, 0, 0, 0 },
+    // [16] lathe
+    PropDef{ 300000, 0, 0, 10, 0, 4, 0, 360, 380, 400, 2500, 1400, 800, 1300, 0, 0, 0, 0, 0 },
+    // [17] lab_bench
+    PropDef{ 90000, 0, 0, 11, 0, 3, 0, 780, 800, 820, 2500, 1600, 700, 950, 0, 0, 0, 0, 0 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.
@@ -54,6 +60,9 @@ const std::array<const char*, kPropCount> kPropNames = {{
     "Уличный фонарь",  // street_lamp
     "Кнопка лифта",  // lift_button
     "Панель лифта",  // lift_panel
+    "Верстак",  // workbench
+    "Станок",  // lathe
+    "Лабстол",  // lab_bench
 }};
 
 const std::array<const char*, kPropCount> kPropIds = {{
@@ -72,25 +81,54 @@ const std::array<const char*, kPropCount> kPropIds = {{
     "street_lamp",
     "lift_button",
     "lift_panel",
+    "workbench",
+    "lathe",
+    "lab_bench",
 }};
 
 // Глаголы пропа (S12.3, колонка verbs) — что предоставляет.
 const std::array<std::array<std::int16_t, kVerbCount>, kPropCount> kPropVerbs = {{
-    {{0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // terminal
-    {{0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // electrical_shield
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // bare_bulb
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // flood_lamp
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // padic_stair_bulb
-    {{0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // kitchen_stove
-    {{0, 4, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // kitchen_table
-    {{0, 0, 0, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // toilet_pan
-    {{17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // bed_cot
-    {{0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // supply_crate
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // grenade
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // fuel_barrel
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // street_lamp
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // lift_button
-    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // lift_panel
+    {{0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}},  // terminal
+    {{0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // electrical_shield
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // bare_bulb
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // flood_lamp
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // padic_stair_bulb
+    {{0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // kitchen_stove
+    {{0, 4, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // kitchen_table
+    {{0, 0, 0, 19, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // toilet_pan
+    {{17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // bed_cot
+    {{0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // supply_crate
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // grenade
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // fuel_barrel
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // street_lamp
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // lift_button
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // lift_panel
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20}},  // workbench
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8}},  // lathe
+    {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7}},  // lab_bench
+}};
+
+// Станция крафта строки (колонка craft_station) — параметр
+// навеса craft; kPropNoCraftStation = строка не станция.
+const std::array<std::uint8_t, kPropCount> kPropCraftStations = {{
+    4,  // terminal
+    255,  // electrical_shield
+    255,  // bare_bulb
+    255,  // flood_lamp
+    255,  // padic_stair_bulb
+    255,  // kitchen_stove
+    255,  // kitchen_table
+    255,  // toilet_pan
+    255,  // bed_cot
+    255,  // supply_crate
+    255,  // grenade
+    255,  // fuel_barrel
+    255,  // street_lamp
+    255,  // lift_button
+    255,  // lift_panel
+    1,  // workbench
+    2,  // lathe
+    3,  // lab_bench
 }};
 
 } // namespace giga::game

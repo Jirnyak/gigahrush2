@@ -215,10 +215,15 @@ RoomId room_find_alias(const FloorRooms& fr, std::uint32_t aliasHash);
 // тому же доводу, по которому его нет на `MacroGrid`. Разница лишь в том, что
 // `MacroGrid` объявлен `class` и под `^struct` не попадает случайно, а
 // `FloorRooms` — `struct`, и случайность тут решать не должна.
+//
+// 132 → 136 (2026-11-07): глагол `craft` дописан в verbs.csv (K 19 → 20,
+// интеракция-навес), `declared` вырос на 2 и съел бывшую дыру выравнивания
+// перед `supply`, `supply` вырос на 4 — арифметика: 16 + 20·2 = 56 (кратно 4,
+// паддинга больше нет) + 20·4 = 136. Гвоздь и поймал рост, как задуман.
 #include "core/row_law.h"
 
 GIGA_ROW_BYTES(giga::game::RoomBox, 6);
-GIGA_ROW_BYTES(giga::game::Room, 132);
+GIGA_ROW_BYTES(giga::game::Room, 136);
 
 GIGA_PO2(giga::game::kRoomBinDim);
 GIGA_PO2(giga::game::kRoomBinCount);

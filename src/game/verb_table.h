@@ -39,8 +39,9 @@ inline constexpr VerbId kVerbProfit = 15;  // ценность — глагол 
 inline constexpr VerbId kVerbStrike = 16;  // деяние S19; rel = kill/5 (пять ударов = цена убийства); patience не читается — деяние не хотят
 inline constexpr VerbId kVerbKill = 17;  // деяние S19; rel = прежний kKillRelationDelta — матрица гнётся как раньше но ТОЛЬКО при свидетеле
 inline constexpr VerbId kVerbRob = 18;  // деяние S19; rel = kill/2; продюсер — сделка без согласия (S14.2 при посадке)
+inline constexpr VerbId kVerbCraft = 19;  // интеракция-навес (2026-11-07): предоставляют станки/терминал; станция — craft_station пропа; плановое дело — терпение как у work
 
-inline constexpr std::size_t kVerbCount = 19;
+inline constexpr std::size_t kVerbCount = 20;
 
 // Patience x1000 (S13.5), CSV column patience_e3.
 inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {
@@ -63,6 +64,7 @@ inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {
     1000,  // strike
     1000,  // kill
     1000,  // rob
+    900,  // craft
 };
 
 // ЦЕНЫ ДЕЯНИЙ (CANON S19.2) — колонки CSV, кодоген как materials.csv:
@@ -91,6 +93,7 @@ inline constexpr std::int8_t kVerbRelDelta[kVerbCount] = {
     -2,  // strike
     -10,  // kill
     -5,  // rob
+    0,  // craft
 };
 
 inline constexpr std::int16_t kVerbRepDelta[kVerbCount] = {
@@ -113,6 +116,7 @@ inline constexpr std::int16_t kVerbRepDelta[kVerbCount] = {
     -5,  // strike
     -30,  // kill
     -12,  // rob
+    0,  // craft
 };
 
 inline constexpr std::uint16_t kVerbTurfMultE3[kVerbCount] = {
@@ -135,6 +139,7 @@ inline constexpr std::uint16_t kVerbTurfMultE3[kVerbCount] = {
     1500,  // strike
     1500,  // kill
     1500,  // rob
+    1000,  // craft
 };
 
 inline constexpr std::uint16_t kVerbVictimMultE3[kVerbCount] = {
@@ -157,6 +162,7 @@ inline constexpr std::uint16_t kVerbVictimMultE3[kVerbCount] = {
     1500,  // strike
     1500,  // kill
     1500,  // rob
+    1000,  // craft
 };
 
 inline constexpr std::uint8_t kVerbHearM[kVerbCount] = {
@@ -179,6 +185,7 @@ inline constexpr std::uint8_t kVerbHearM[kVerbCount] = {
     10,  // strike
     12,  // kill
     4,  // rob
+    0,  // craft
 };
 
 // CSV tokens — for sibling generators' column names and debug output.
@@ -202,6 +209,7 @@ inline constexpr const char* kVerbIds[kVerbCount] = {
     "strike",
     "kill",
     "rob",
+    "craft",
 };
 
 // Display names — text for the player, never a lookup key (S13.9).
@@ -225,6 +233,7 @@ inline constexpr const char* kVerbNames[kVerbCount] = {
     "ударить",
     "убить",
     "обобрать",
+    "мастерить",
 };
 
 } // namespace giga::game

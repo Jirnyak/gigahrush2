@@ -59,6 +59,13 @@ FLICKER = {"none": 0, "mains": 1, "arc": 2, "pulse": 3, "crt": 4}
 # детонация вместо детача, когда проп сбивают выстрелом/ударом (бочка).
 CHARGE_TRIGGERS = {"none": 0, "damage": 1}
 
+# СТАНЦИЯ КРАФТА — ПАРАМЕТР НАВЕСА (решение владельца 2026-11-07: «верстак —
+# не вид пропа, а интеракция, навешенная данными»). Ординалы lockstep с
+# enum class CraftStation в src/game/craft.h; пусто/none = 255 — строка не
+# станция. Генератор ЖЕНИТ колонку с глаголом craft в обе полярности ниже.
+CRAFT_STATIONS = {"": 255, "none": 255, "any": 0, "workbench": 1,
+                  "lathe": 2, "lab": 3, "net_terminal": 4}
+
 VERBS_CSV = os.path.join(REPO, "data", "verbs.csv")
 
 
@@ -141,6 +148,7 @@ def main():
 
     verbs = load_verbs()
     verb_vecs = []
+    craft_stations = []
     seen = set()
     defs = []
     names = []
@@ -195,7 +203,28 @@ def main():
         enum_name = camel(sid)
         enum_lines.append("    %s = %d," % (enum_name, i))
         names.append((sid, name))
-        verb_vecs.append(parse_verbs(sid, r.get("verbs"), verbs))
+        vec = parse_verbs(sid, r.get("verbs"), verbs)
+        verb_vecs.append(vec)
+
+        # ЗАКОН ЖЕНИТЬБЫ НАВЕСА (обе полярности, [csv-columns-gate]): глагол
+        # craft у строки ⟺ станция задана. Полустанция (вес без станции) —
+        # окно без цены; полуглагол (станция без веса) — цена без входа и
+        # невидимость комнате. Оба — молчаливые обманы, оба валят генерацию.
+        station_tok = (r.get("craft_station") or "").strip()
+        if station_tok not in CRAFT_STATIONS:
+            die("%r: unknown craft_station %r (want one of %s)"
+                % (sid, station_tok,
+                   ", ".join(sorted(t for t in CRAFT_STATIONS if t))))
+        station = CRAFT_STATIONS[station_tok]
+        craft_k = verbs.get("craft")
+        if craft_k is None:
+            die("verbs.csv lost the craft verb — the craft hang has no language")
+        craft_w = vec[craft_k]
+        if (craft_w > 0) != (station != 255):
+            die("%r: craft verb weight %d vs craft_station %r — the hang must "
+                "carry BOTH (verb for the room, station for the player) or "
+                "NEITHER" % (sid, craft_w, station_tok or "<empty>"))
+        craft_stations.append(station)
         # GRAMS, read as an integer and never scaled here. The column used to be
         # `mass_kg` and was multiplied on the way in, which put a unit conversion
         # between what the author wrote and what the engine stored — the same seam
@@ -271,6 +300,13 @@ def main():
                  "kPropCount> kPropVerbs = {{\n")
         for (sid, _name), vec in zip(names, verb_vecs):
             fh.write("    {{%s}},  // %s\n" % (", ".join(str(v) for v in vec), sid))
+        fh.write("}};\n\n")
+        fh.write("// Станция крафта строки (колонка craft_station) — параметр\n"
+                 "// навеса craft; kPropNoCraftStation = строка не станция.\n")
+        fh.write("const std::array<std::uint8_t, kPropCount> "
+                 "kPropCraftStations = {{\n")
+        for (sid, _name), st in zip(names, craft_stations):
+            fh.write("    %d,  // %s\n" % (st, sid))
         fh.write("}};\n\n")
         fh.write(FOOTER_CPP)
 
@@ -383,6 +419,14 @@ extern const std::array<const char*, kPropCount> kPropIds;
 // таблицей, не полем POD: PropDef — ровно 32 байта по контракту.
 extern const std::array<std::array<std::int16_t, kVerbCount>, kPropCount>
     kPropVerbs;
+
+// СТАНЦИЯ КРАФТА — ПАРАМЕТР НАВЕСА (решение владельца 2026-11-07): колонка
+// craft_station в props.csv, ординал CraftStation ([game/craft.h]);
+// kPropNoCraftStation — строка не станция. Генератор ЖЕНИТ колонку с глаголом
+// craft в обе полярности (вес > 0 ⟺ станция задана), поэтому в рантайме
+// достаточно одной пробы. Типизированный доступ — prop_craft_station (craft.h).
+inline constexpr std::uint8_t kPropNoCraftStation = 255;
+extern const std::array<std::uint8_t, kPropCount> kPropCraftStations;
 
 inline bool prop_valid(PropId id) {
     return static_cast<std::size_t>(id) < kPropCount;

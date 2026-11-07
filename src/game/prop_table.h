@@ -14,7 +14,7 @@
 
 namespace giga::game {
 
-inline constexpr std::size_t kPropCount = 15;
+inline constexpr std::size_t kPropCount = 18;
 
 // Row order is data/props.csv row order and is load-bearing: a PropId is an
 // index into the generated table. Append only — never reorder or insert.
@@ -34,6 +34,9 @@ enum class PropId : std::uint16_t {
     StreetLamp = 12,
     LiftButton = 13,
     LiftPanel = 14,
+    Workbench = 15,
+    Lathe = 16,
+    LabBench = 17,
 };
 
 // POD row. shape is the PropShape ordinal (render/prop_mesh.h); game never
@@ -110,6 +113,14 @@ extern const std::array<const char*, kPropCount> kPropIds;
 // таблицей, не полем POD: PropDef — ровно 32 байта по контракту.
 extern const std::array<std::array<std::int16_t, kVerbCount>, kPropCount>
     kPropVerbs;
+
+// СТАНЦИЯ КРАФТА — ПАРАМЕТР НАВЕСА (решение владельца 2026-11-07): колонка
+// craft_station в props.csv, ординал CraftStation ([game/craft.h]);
+// kPropNoCraftStation — строка не станция. Генератор ЖЕНИТ колонку с глаголом
+// craft в обе полярности (вес > 0 ⟺ станция задана), поэтому в рантайме
+// достаточно одной пробы. Типизированный доступ — prop_craft_station (craft.h).
+inline constexpr std::uint8_t kPropNoCraftStation = 255;
+extern const std::array<std::uint8_t, kPropCount> kPropCraftStations;
 
 inline bool prop_valid(PropId id) {
     return static_cast<std::size_t>(id) < kPropCount;

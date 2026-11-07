@@ -92,6 +92,7 @@
 
 #include "game/inventory.h"
 #include "game/item_table.h"
+#include "game/prop_table.h" // kPropCraftStations — станция как параметр навеса
 
 namespace giga::game {
 
@@ -143,6 +144,22 @@ enum class CraftStation : std::uint8_t {
 
 // Tiers run 0..4 (228 / 135 / 51 / 17 / 11 recipes). A fresh run is tier 0.
 inline constexpr std::uint8_t kCraftMaxTier = 4;
+
+// СТАНЦИЯ — ПАРАМЕТР НАВЕСА craft (решение владельца 2026-11-07: «верстак —
+// НЕ вид пропа, а интеракция, навешенная на проп данными; с терминалом так
+// же»). Какая станция у строки пропа — колонка craft_station в props.csv;
+// Count = строка не станция, навеса craft на ней нет. Женитьбу «глагол craft
+// ⟺ станция задана» держит генератор (gen_prop_table.py) в обе полярности,
+// поэтому ОДНА эта проба — всё правило входа игрока в крафт: никакого
+// `if (kind == Terminal)` по месту действия.
+inline CraftStation prop_craft_station(PropId id) {
+    const std::uint8_t v = prop_valid(id)
+        ? kPropCraftStations[static_cast<std::size_t>(id)]
+        : kPropNoCraftStation;
+    return v < static_cast<std::uint8_t>(CraftStation::Count)
+        ? static_cast<CraftStation>(v)
+        : CraftStation::Count;
+}
 
 // ---------------------------------------------------------------------------
 // The recipe table — one row per item, generated
