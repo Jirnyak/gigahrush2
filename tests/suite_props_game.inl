@@ -411,7 +411,7 @@ static void test_padic_props_seed_tags_layer() {
     game::FloorRooms noRooms;
     game::rooms_reset(noRooms);
     const std::uint32_t n = game::padic_place(game::FloorPlaceCtx{
-        reg, world, noRooms, spec, layer, number, seed});
+        reg, world, noRooms, spec, layer, number, seed, /*tick=*/0});
     CHECK(n > 0u);
 
     auto view = reg.view<const game::PropLight, const Transform,

@@ -8,8 +8,10 @@
 // room_stand_spots), и ни одна из них не знает слова «койка».
 #include "game/floors/khrushi/khrushi.h"
 
+#include "core/rng.h"   // hash_u32 — выбор строки моба и клетки на крыше
 #include "core/wrap.h"
 #include "game/floor_catalog.h"
+#include "game/mob_spawn.h"  // spawn_mob_at — ЕДИНАЯ дверь рождения моба
 #include "game/prop_system.h"
 #include "game/room.h"     // FloorRooms/Room — объявленные глаголы комнат
 #include "world/anchor.h"
@@ -39,8 +41,10 @@ constexpr int kFlats = 10;
 // выходит на сегодняшних данных (считано, не предположено):
 //
 //   спальня (sleep 30)            — койка (sleep 17)
-//   зал     (sleep 10, social 12) — стол (social 3); КОЙКИ НЕТ: зал глаголом
-//                                   «спать» не живёт, он его лишь допускает
+//   зал     (sleep 10, social 12) — ДИВАН (sleep 10 — ровно по объявлению) и
+//                                   стол (social 3); КОЙКИ НЕТ: зал глаголом
+//                                   «спать» живёт ВПОЛСИЛЫ, и ровно это
+//                                   вполсилы диван и даёт
 //   кухня   (eat 12)              — ГОДЯТСЯ плита (eat 12) и стол (eat 4),
 //                                   но ВСТАЁТ ОДНА ПЛИТА (см. ниже)
 //   санузел (toilet 20)           — унитаз (toilet 19)
@@ -70,11 +74,29 @@ constexpr PropId kKhrushiFurniture[] = {
     PropId::BedCot,       // койка — спальня
     PropId::ToiletPan,    // унитаз — санузел
     PropId::KitchenStove, // плита — кухня
+    PropId::Sofa,         // диван — зал (sleep 10 ровно по объявлению зала)
     PropId::KitchenTable, // стол — кухня и зал
 };
 static_assert(std::size(kKhrushiFurniture) <= kMaxStandSpots,
               "строк мебели больше, чем мест отдаёт room_stand_spots за один "
               "обход комнаты: либо режь список, либо поднимай kMaxStandSpots");
+
+// ---- МОБЫ НА КРЫШАХ — СТРОКИ МОДУЛЯ --------------------------------------
+// Условие расстановки — «по мобу на каждую крышу» — ЦЕЛИКОМ внутри модуля:
+// общий код про крыши не знает ни строки, а единственная дверь рождения —
+// `spawn_mob_at` ([mob_spawn.h]), та же, которой пользуются сеялка этажа и
+// консоль. Другой модуль напишет «по комнатам с тегом гнезда», «по лестничным
+// шахтам», «по любому своему условию» — и ему не понадобится ни одной правки
+// в системах.
+//
+// СПИСОК — КОНТЕНТ, как и мебель: чердачная нечисть панельного микрорайона.
+// Таблица мобов — чистая дата (68 строк), модуль берёт из неё что хочет.
+constexpr MobKind kKhrushiRoofMobs[] = {
+    MobKind::Krysnozhka, // крысоножка — чердачная
+    MobKind::PomoynyRoy, // помойный рой
+    MobKind::TonkayaTen, // тонкая тень
+    MobKind::Rzhavnik,   // ржавник — по жести кровли
+};
 
 } // namespace
 
@@ -196,9 +218,35 @@ std::uint32_t khrushi_place(const FloorPlaceCtx& ctx) {
             ++si;
         }
     }
+    // ---- ПО МОБУ НА КРЫШУ ------------------------------------------------
+    // Уровень берётся у ТАБЛИЦЫ, а не назначается: `floor_mob_tier` — та же
+    // V-образная кривая глубины, по которой живёт весь этажный спавн
+    // ([floor_spec.h]), так что крышная нечисть не выпадает из баланса этажа.
+    // Клетка — центр футпринта, смещённый хешем крыши: ровно по центру
+    // читалось бы решёткой, как «первая годная клетка» у мебели.
+    std::vector<KhrushiRoof> roofs;
+    khrushi_roofs(ctx.seed, ctx.number, roofs);
+    const std::uint8_t lvl =
+        static_cast<std::uint8_t>(floor_mob_tier(ctx.number));
+    std::uint32_t onRoof = 0;
+    for (std::size_t i = 0; i < roofs.size(); ++i) {
+        const KhrushiRoof& rf = roofs[i];
+        const std::uint32_t h = hash_u32(
+            ctx.seed ^ (static_cast<std::uint32_t>(i) * 0x9E3779B9u));
+        const MobKind kind =
+            kKhrushiRoofMobs[h % std::size(kKhrushiRoofMobs)];
+        const int cx = wrap_macro(rf.x0 + static_cast<int>((h >> 8) % rf.lenX));
+        const int cy = wrap_macro(rf.y0 + static_cast<int>((h >> 16) % rf.lenY));
+        if (spawn_mob_at(ctx.reg, ctx.layer, kind, lvl, cx, cy, rf.z,
+                         /*salt=*/h, ctx.tick) != entt::null)
+            ++onRoof;
+    }
+    std::printf("[khrushi] крыши: %u мобов на %zu крышах, уровень %u\n", onRoof,
+                roofs.size(), lvl);
+
     std::printf("[khrushi] мебель: %u вещей из %u заказанных, зон %zu, из них без места %u\n",
                 furnished, wanted, ctx.rooms.list.size(), noSpot);
-    return count;
+    return count + onRoof;
 }
 
 } // namespace giga::game

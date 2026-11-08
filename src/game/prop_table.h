@@ -14,7 +14,7 @@
 
 namespace giga::game {
 
-inline constexpr std::size_t kPropCount = 18;
+inline constexpr std::size_t kPropCount = 19;
 
 // Row order is data/props.csv row order and is load-bearing: a PropId is an
 // index into the generated table. Append only — never reorder or insert.
@@ -37,6 +37,7 @@ enum class PropId : std::uint16_t {
     Workbench = 15,
     Lathe = 16,
     LabBench = 17,
+    Sofa = 18,
 };
 
 // POD row. shape is the PropShape ordinal (render/prop_mesh.h); game never

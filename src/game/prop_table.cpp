@@ -41,6 +41,8 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     PropDef{ 300000, 0, 0, 10, 0, 4, 0, 360, 380, 400, 1400, 800, 1300, 0, 0, 0, 0, 0 },
     // [17] lab_bench
     PropDef{ 90000, 0, 0, 11, 0, 3, 0, 780, 800, 820, 1600, 700, 950, 0, 0, 0, 0, 0 },
+    // [18] sofa
+    PropDef{ 60000, 0, 0, 255, 0, 3, 0, 420, 380, 330, 1800, 800, 800, 0, 0, 0, 0, 0 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.
@@ -63,6 +65,7 @@ const std::array<const char*, kPropCount> kPropNames = {{
     "Верстак",  // workbench
     "Станок",  // lathe
     "Лабстол",  // lab_bench
+    "Диван",  // sofa
 }};
 
 const std::array<const char*, kPropCount> kPropIds = {{
@@ -84,6 +87,7 @@ const std::array<const char*, kPropCount> kPropIds = {{
     "workbench",
     "lathe",
     "lab_bench",
+    "sofa",
 }};
 
 // Глаголы пропа (S12.3, колонка verbs) — что предоставляет.
@@ -106,6 +110,7 @@ const std::array<std::array<std::int16_t, kVerbCount>, kPropCount> kPropVerbs = 
     {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20}},  // workbench
     {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8}},  // lathe
     {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7}},  // lab_bench
+    {{10, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // sofa
 }};
 
 // Станция крафта строки (колонка craft_station) — параметр
@@ -129,6 +134,7 @@ const std::array<std::uint8_t, kPropCount> kPropCraftStations = {{
     1,  // workbench
     2,  // lathe
     3,  // lab_bench
+    255,  // sofa
 }};
 
 } // namespace giga::game

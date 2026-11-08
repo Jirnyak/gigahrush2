@@ -437,7 +437,8 @@ static void test_module_furnishes_by_declared_verb() {
 
     const FloorSpec& spec = floor_spec(FloorKind::Khrushi);
     const std::uint32_t n = khrushi_place(FloorPlaceCtx{
-        reg, world, fr, spec, /*layer=*/7, /*number=*/6, /*seed=*/0x5EEDu});
+        reg, world, fr, spec, /*layer=*/7, /*number=*/6, /*seed=*/0x5EEDu,
+        /*tick=*/0});
     CHECK(n > 0u);
 
     // ОТБОР ПО КОМНАТЕ И СЛОЮ, а не по голой позиции: «вещь попала в
@@ -463,13 +464,24 @@ static void test_module_furnishes_by_declared_verb() {
     const std::vector<PropId> bath = props_in_room(ids[1]);
     const std::vector<PropId> closet = props_in_room(ids[2]);
 
-    CHECK(bedroom.size() == 1);
-    CHECK(!bedroom.empty() && bedroom[0] == PropId::BedCot);
-    CHECK(bath.size() == 1);
-    CHECK(!bath.empty() && bath[0] == PropId::ToiletPan);
-    // ЧУЛАН ПУСТ — вторая полярность порога на живом расстановщике: глагол
-    // объявлен, но слабее койки, и койки там нет.
-    CHECK(closet.empty());
+    auto has = [](const std::vector<PropId>& v, PropId id) {
+        for (PropId p : v) if (p == id) return true;
+        return false;
+    };
+    CHECK(has(bedroom, PropId::BedCot));
+    CHECK(has(bath, PropId::ToiletPan));
+    CHECK(!has(bath, PropId::BedCot)); // санузел «спать» не объявлял вовсе
+    // ВТОРАЯ ПОЛЯРНОСТЬ ПОРОГА НА ЖИВОМ РАССТАНОВЩИКЕ, и она СИЛЬНЕЕ, чем
+    // «чулан пуст»: чулан объявил тот же глагол `sleep`, что и спальня, но
+    // СЛАБЕЕ койки — и койки там нет, ЗАТО ЕСТЬ ДИВАН, который даёт меньше и
+    // потому проходит. Один глагол, две вещи, разный вердикт — значит порог
+    // считается ПО ВЕЩИ, а не по комнате, и никакой «вид комнаты» в решении
+    // не участвует. (Прежняя формулировка «чулан пуст» сломалась от первой же
+    // новой строки props.csv — и правильно сделала.)
+    CHECK(!has(closet, PropId::BedCot));
+    CHECK(has(closet, PropId::Sofa));
+    CHECK(kPropVerbs[static_cast<std::size_t>(PropId::Sofa)][kVerbSleep] <
+          kPropVerbs[static_cast<std::size_t>(PropId::BedCot)][kVerbSleep]);
 }
 
 // ---- 5: диспатч — строка, ноль приходит из модуля ------------------------
@@ -498,21 +510,82 @@ static void test_dispatch_is_a_row() {
         CHECK(sp.kind == static_cast<FloorKind>(k)); // строка каталога своя
         const LayerId lay = static_cast<LayerId>(20 + k);
         const std::uint32_t n = floor_place_content(
-            FloorPlaceCtx{reg, world, fr, sp, lay, 6, 7u});
-        CHECK(n == static_cast<std::uint32_t>(layer_props(reg, lay)));
+            FloorPlaceCtx{reg, world, fr, sp, lay, 6, 7u, 0});
+        // Счёт расстановщика покрывает ВСЁ, что он родил, — и вещи, и мобов
+        // (хрущи сажают по мобу на крышу). Сверка только с пропами молча
+        // разошлась бы в тот день, когда модуль добавит мобов, и прочиталась
+        // бы как дефект диспатча.
+        CHECK(n == static_cast<std::uint32_t>(layer_props(reg, lay)) +
+                       count_layer_mobs(reg, lay));
     }
 
     // И РАЗНИЦА МЕЖДУ МОДУЛЯМИ НА ОДНОЙ И ТОЙ ЖЕ ЗОНЕ: мегаструктура
     // отвечает нулём ИЗ СВОЕГО ФАЙЛА, хрущи обставляют.
     const FloorSpec& blameSpec = floor_spec(FloorKind::Blame);
     CHECK(floor_place_content(
-              FloorPlaceCtx{reg, world, fr, blameSpec, 8, -26, 7u}) == 0u);
+              FloorPlaceCtx{reg, world, fr, blameSpec, 8, -26, 7u, 0}) == 0u);
     CHECK(layer_props(reg, 8) == 0);
 
     const FloorSpec& khSpec = floor_spec(FloorKind::Khrushi);
     CHECK(floor_place_content(
-              FloorPlaceCtx{reg, world, fr, khSpec, 9, 6, 7u}) > 0u);
+              FloorPlaceCtx{reg, world, fr, khSpec, 9, 6, 7u, 0}) > 0u);
     CHECK(layer_props(reg, 9) > 0);
+}
+
+// ---- 6: МОБ — ТА ЖЕ ДВЕРЬ, И ТИК ДОЕЗЖАЕТ ДО ОКНА ------------------------
+// Поле `tick` завелось в контексте ВМЕСТЕ с этим читателем. Гейт судит две
+// вещи, и вторая важнее первой:
+//   * модуль ставит мобов по СВОЕМУ условию (у хрущей — по мобу на крышу), и
+//     счёт сходится с числом крыш, которое отдаёт план модуля;
+//   * ТИК ИЗ КОНТЕКСТА ДОЕЗЖАЕТ ДО ОКНА ДЕЙСТВИЯ (CANON S22): окно `maul`
+//     открыто в момент посева, и его `startTick` обязан прийти из `ctx.tick`,
+//     а не из нуля. Передай хук ноль вместо живого тика — моб родится с
+//     окном «из прошлого», и шахматный сдвиг первого темпа схлопнется.
+static void test_module_places_mobs_with_live_tick() {
+    Registry reg;
+    World world;
+    FloorRooms fr;
+    rooms_reset(fr);
+    const FloorSpec& spec = floor_spec(FloorKind::Khrushi);
+    const unsigned seed = 0x4242u;
+    const int number = kKhrushiFloorNumber;
+    generate_khrushi_floor(world, number, spec, seed);
+    khrushi_rooms(number, seed, fr);
+
+    std::vector<KhrushiRoof> roofs;
+    const std::uint32_t nRoofs = khrushi_roofs(seed, number, roofs);
+    CHECK(nRoofs > 0u);                              // план знает свои крыши
+    CHECK(roofs.size() == static_cast<std::size_t>(nRoofs)); // контракт append
+
+    const LayerId layer = 11;
+    const std::uint64_t tick = 777u;
+    khrushi_place(FloorPlaceCtx{reg, world, fr, spec, layer, number, seed,
+                                tick});
+
+    // По мобу на крышу — ровно столько, сколько крыш у плана.
+    CHECK(count_layer_mobs(reg, layer) == nRoofs);
+
+    // ...и КАЖДЫЙ несёт окно, открытое ЭТИМ тиком.
+    int withWindow = 0;
+    for (auto e : reg.view<const MobRef, const Transform, const Acting>()) {
+        if (reg.get<const Transform>(e).layer != layer) continue;
+        const ActWindow& w = act_slot(reg.get<const Acting>(e), ActSlot::Body);
+        CHECK(w.startTick == tick);
+        ++withWindow;
+    }
+    CHECK(withWindow == static_cast<int>(nRoofs));
+
+    // ...И КАЖДЫЙ СТОИТ НА СВОЕЙ КРЫШЕ, а не «где-то на этаже»: клетка z
+    // обязана совпасть с ходовой клеткой над плитой, которую назвал план.
+    int onRoofZ = 0;
+    for (auto e : reg.view<const MobRef, const Transform>()) {
+        const Transform& t = reg.get<const Transform>(e);
+        if (t.layer != layer) continue;
+        const int cz = static_cast<int>(std::floor(t.pos.z / kCellSize));
+        for (const KhrushiRoof& rf : roofs)
+            if (cz == rf.z) { ++onRoofZ; break; }
+    }
+    CHECK(onRoofZ == static_cast<int>(nRoofs));
 }
 
 } // namespace content_suite
@@ -525,4 +598,5 @@ static void test_content_all() {
     content_suite::test_spot_asks_atoms_not_cell_type();
     content_suite::test_module_furnishes_by_declared_verb();
     content_suite::test_dispatch_is_a_row();
+    content_suite::test_module_places_mobs_with_live_tick();
 }

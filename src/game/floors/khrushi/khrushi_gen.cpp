@@ -726,6 +726,21 @@ std::uint32_t khrushi_entrances(unsigned seed, int number,
     return static_cast<std::uint32_t>(p.doors.size());
 }
 
+// Replay of the plan's roof list: one roof per BUILDING (не на секцию — плита
+// кладётся на весь дом разом, `s == kStoreys` накрывает и лестничные колодцы).
+// Детерминизм — как у всего остального: чистая функция (seed, number).
+std::uint32_t khrushi_roofs(unsigned seed, int number,
+                            std::vector<KhrushiRoof>& out) {
+    CityPlan p;
+    build_city_plan(p, seed, number);
+    for (const Building& b : p.bldgs)
+        out.push_back(KhrushiRoof{
+            b.x0, b.y0, b.lenX, b.lenY,
+            static_cast<std::uint8_t>(kKhrushiGroundCoord +
+                                      kBldgTopH / kSubDim)});
+    return static_cast<std::uint32_t>(p.bldgs.size());
+}
+
 // Pole layout: every 8 cells (16 m — city lamp pitch) along both kerbs of
 // every avenue, phase 4 so no pole lands inside a hub square (pad cells are
 // node±3; t ≡ 4 (mod 8) keeps |t − node| ≥ 4 for nodes at 16 + 32k). The

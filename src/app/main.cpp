@@ -1891,7 +1891,8 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
 std::uint32_t seed_floor_props(Registry& reg, const World& world,
                                int floorNumber, LayerId layer,
                                unsigned padicSeed,
-                               const game::FloorRooms& rooms) {
+                               const game::FloorRooms& rooms,
+                               std::uint64_t tick) {
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     // Полосы устройств — СТРОКА ЭТАЖА (FloorSpec::wallDevices), сеялка
@@ -1942,7 +1943,7 @@ std::uint32_t seed_floor_props(Registry& reg, const World& world,
     // и обвес модуль ставит СВОИМИ координатами: глагольный вектор пропа
     // делает её видимой выбору цели (S12.3/S12.4).
     count += game::floor_place_content(game::FloorPlaceCtx{
-        reg, world, rooms, *spec, layer, floorNumber, padicSeed});
+        reg, world, rooms, *spec, layer, floorNumber, padicSeed, tick});
     return count;
 }
 
@@ -3117,7 +3118,8 @@ int main(int argc, char** argv) {
     // restore: сущности из снимка + якорная проба (закон 3), сидеры молчат.
     // Возвращает «этаж восстановлен» — обвес лифта (dress) сеют только на
     // generate, состояние створок на restore несёт сама материя снимка.
-    auto floor_entity_half = [&](LayerId nl, int floorNo) -> bool {
+    auto floor_entity_half = [&](LayerId nl, int floorNo,
+                                 std::uint64_t tick) -> bool {
         game::FloorEntityState ents;
         const bool restored = take_pending_restore(floorNo, ents);
         powerGrid = game::PowerGridState{};
@@ -3153,7 +3155,7 @@ int main(int argc, char** argv) {
             // («комнаты раньше сидеров»), и расстановщик модуля видит их.
             seed_floor_props(reg, stack.layer(nl), floorNo, nl,
                              streamer.floor_seed_of(registry, floorNo),
-                             floorRooms);
+                             floorRooms, tick);
         }
         const auto tL0 = std::chrono::steady_clock::now();
         floor_light_rebuild(reg, stack.layer(nl), floorNo, nl);
@@ -3260,7 +3262,7 @@ int main(int argc, char** argv) {
                                 streamer.floor_seed_of(registry, currentFloor));
             refresh_floor_mobs(reg, stack.layer(l0), 0, l0, /*tick*/ 0);
             // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
-            arrivedRestored = floor_entity_half(l0, 0);
+            arrivedRestored = floor_entity_half(l0, 0, /*tick*/ 0);
             // Doors BEFORE the bake: door_build leaves every door open, so the
             // walkability bitsets built at the top of begin_floor_nav carry the
             // all-open geometry (an upper bound on connectivity) the bake must
@@ -4026,7 +4028,7 @@ int main(int argc, char** argv) {
         const auto tR2 = std::chrono::steady_clock::now();
         // РАЗВИЛКА S20.6 (закон 2): первый вход — сидеры, ревизит — записи
         // снимка (клир слота, обесточка, свет — внутри, обеими ветками).
-        arrivedRestored = floor_entity_half(nl, currentFloor);
+        arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
         const auto tR3 = std::chrono::steady_clock::now();
         const auto ms = [](std::chrono::steady_clock::time_point a,
                            std::chrono::steady_clock::time_point b) {
@@ -4164,7 +4166,7 @@ int main(int argc, char** argv) {
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
-        arrivedRestored = floor_entity_half(nl, currentFloor);
+        arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
         diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
         arrive_doors_nav(nl);
         voxelMirror.upload_all(stack.layer(nl));
@@ -8449,7 +8451,7 @@ int main(int argc, char** argv) {
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
                                                nl, simTick);
                             arrivedRestored =
-                                floor_entity_half(nl, currentFloor);
+                                floor_entity_half(nl, currentFloor, simTick);
                             // Диффузия: F9 — единственный сайт прибытия, не
                             // звавший контрактную чистку ([diffusion.h]) —
                             // опасность покинутого этажа жила в клетках слота.
@@ -11175,7 +11177,7 @@ int main(int argc, char** argv) {
                         // поездки: сидеры ИЛИ записи снимка, не оба. Второй
                         // travel-сайт; правка одного пути ничего не докажет
                         // под --shot. [save.h]
-                        arrivedRestored = floor_entity_half(nl, currentFloor);
+                        arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
                         game::rooms_supply_rebuild(floorRooms, reg, nl);
                         game::stamp_shield_programs(reg, &floorRooms, nl);
                         game::assign_lamp_shields(reg, nl);

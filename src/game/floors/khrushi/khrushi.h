@@ -146,6 +146,22 @@ std::uint32_t khrushi_entrances(unsigned seed, int number,
 std::uint32_t khrushi_poles(unsigned seed, int number,
                             std::vector<KhrushiPole>& out);
 
+// КРЫША ДОМА — футпринт и ходовая клетка над плитой. Та же форма экспорта,
+// что у столбов и подъездов: план — один источник, локальных копий нет.
+//
+// `z` ВЫВЕДЕН, а не назначен: плита крыши лежит в субвысотах
+// [kBldgTopH − kSlabThick, kBldgTopH), её верх приходится ровно на
+// kBldgTopH, значит первая клетка НАД плитой — `kKhrushiGroundCoord +
+// kBldgTopH / kSubDim`. Парапет поднимается ещё на два субвокселя внутри
+// этой же клетки, то есть тело стоит в коробке с бортиком.
+struct KhrushiRoof {
+    std::uint8_t x0, y0;   // min-corner клетки футпринта
+    std::uint8_t lenX, lenY; // размеры футпринта в клетках
+    std::uint8_t z;        // ходовая клетка над плитой
+};
+std::uint32_t khrushi_roofs(unsigned seed, int number,
+                            std::vector<KhrushiRoof>& out);
+
 // Module antourage (dispatched by floor_antourage_extra's per-kind table):
 // wires strung hook to hook along every kerb line, sagging over the road.
 // READS the grid law: appends to the bake, never writes voxels.
