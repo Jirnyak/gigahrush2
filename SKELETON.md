@@ -1165,7 +1165,7 @@ BFS и проза про «посещённый этаж» как существ
 | что | адрес | статус |
 |---|---|---|
 | поездка = fold_back записи в холодный пул + re-embody на этаже назначения | `ride_elevator@src/game/elevator.h`, `RideResult@src/game/elevator.h` | **ПРАВДА** |
-| узел — ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор по z, шахта 1 клетка в центре; кабина НЕ движется | `src/game/floor_gen.h`; `LiftEntrance@src/game/floor_gen.h`, `lift_entrance@src/game/floor_gen.h` | **ПРАВДА** |
+| узел — ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор по z, шахта 1 клетка в центре; кабина НЕ движется; кабина — замкнутый КОРОБ (пол под storey входа + потолок над ним, 2026-11-08 — до того была дном открытого колодца), вода правил модуля в столб не льётся | `src/game/floor_gen.h`; `LiftEntrance@src/game/floor_gen.h`, `lift_entrance@src/game/floor_gen.h`, `stamp_lift_pillars@src/game/floor_gen.h` | **ПРАВДА** |
 | столбы штампуются поверх ЛЮБОГО модуля — политики этажа тут нет | `stamp_lift_pillars@src/game/floor_gen.h`, `stamp_lift_protection@src/game/floor_gen.h` | **ПРАВДА** — соответствует CANON S11 «ветка по виду этажа запрещена» |
 | хабы латтиса — 4³ = 64 узла, двойная роль с coarse-графом нава | `kLatticeCount@src/world/lattice.h` | **ПРАВДА** |
 | камера/контроллер строятся ЗАНОВО, а yaw/pitch/fov/fly переносятся вручную | `src/game/elevator.cpp` | **РАСХОЖДЕНИЕ по форме** — ручной перенос полей есть ровно тот рукописный список, который у соседа трижды терял поле МОЛЧА. Наряда нет |

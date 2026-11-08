@@ -771,9 +771,10 @@ static void test_floor_gen() {
     // through the FULL height (Z wraps, so this also links top -> 0), the ground
     // lobby is opened, and the diagonal corner posts are solid hub-pad columns
     // spanning the whole map. Node-to-node reachability is exercised by the nav
-    // no-seam test (#11). ONE exception since elevators-2x2.md: the 4 LIFT
-    // columns carry a cabin floor cell under the entrance storey — the shaft
-    // stays air everywhere else.
+    // no-seam test (#11). TWO exceptions since elevators-2x2.md: the 4 LIFT
+    // columns carry a cabin floor cell under the entrance storey AND a cabin
+    // ceiling slab above it (владелец 2026-11-08: кабина — замкнутая коробка,
+    // не дно колодца) — the shaft stays air everywhere else.
     {
         auto& g = res.grid();
         for (int ny = 0; ny < kLatticeDim; ++ny)
@@ -782,18 +783,18 @@ static void test_floor_gen() {
                 const int cy = lattice_coord(ny);
                 const bool lift =
                     lift_axis_of(nx) >= 0 && lift_axis_of(ny) >= 0;
-                const int cabinFloor =
-                    lift ? wrap_macro(
-                               lift_entrance(FloorKind::Residential, 0,
-                                             lift_axis_of(ny) * kLiftGridDim +
-                                                 lift_axis_of(nx),
-                                             3u)
-                                   .h -
-                               1)
+                const int entranceH =
+                    lift ? lift_entrance(FloorKind::Residential, 0,
+                                         lift_axis_of(ny) * kLiftGridDim +
+                                             lift_axis_of(nx),
+                                         3u)
+                               .h
                          : -1;
+                const int cabinFloor = lift ? wrap_macro(entranceH - 1) : -1;
+                const int cabinCeil = lift ? wrap_macro(entranceH + 1) : -1;
                 for (int z = 0; z < kMacroDim; ++z) {
-                    if (z == cabinFloor)
-                        CHECK(g.cell(cx, cy, z) != kCellAir); // пол кабины
+                    if (z == cabinFloor || z == cabinCeil)
+                        CHECK(g.cell(cx, cy, z) != kCellAir); // короб кабины
                     else
                         CHECK(g.cell(cx, cy, z) == kCellAir); // shaft is air
                 }
@@ -1061,6 +1062,10 @@ static void test_fast_travel() {
             // Кабина: шахта — воздух на storey входа, пол под ней — твердь.
             CHECK(g.cell(cx, cy, e.h) == kCellAir);
             CHECK(g.cell(cx, cy, e.h - 1) != kCellAir);
+            // И ПОТОЛОК (владелец 2026-11-08: «потолок кабины пропал» — а он
+            // никогда не строился, кабина была дном колодца в 256 м). Кабина
+            // — замкнутая коробка: плита над storey входа.
+            CHECK(g.cell(cx, cy, wrap_macro(e.h + 1)) != kCellAir);
             // Кольцо на storey входа: ровно один проём, остальные 7 — стены.
             int airRing = 0;
             for (int dy = -1; dy <= 1; ++dy)
@@ -1087,6 +1092,45 @@ static void test_fast_travel() {
         }
         std::printf("[shaft] %d closed lift pillars probed: cabin+ring+torus\n",
                     kFastHubsPerFloor);
+
+        // --- ШАХТА ИНВАРИАНТНА И ОТ ПРАВИЛ МОДУЛЯ (владелец 2026-11-08) ----
+        // padic_apply_rules наливает воду в ямы латтиса — лифтовые узлы он
+        // обязан пропускать: вода в колодце столба — чужой писатель в
+        // защищённом объёме, а щит штампуется ПОЗЖЕ apply_rules и этого
+        // писателя не видит. Обе полярности одним миром: у 4 лифтовых узлов
+        // воды НОЛЬ, у остальных узлов латтиса она ЕСТЬ (иначе гейт зелен на
+        // этаже, где вода не льётся вовсе).
+        floor_apply_rules(shaftWorld, 0, floor_spec(FloorKind::Residential),
+                          4242u);
+        const SubField<CellType>* shaftMats =
+            shaftWorld.subfields().find<CellType>(kSubMaterialName);
+        CHECK(shaftMats != nullptr);
+        int hubWater = 0, pitWater = 0;
+        for (int hub = 0; hub < kFastHubsPerFloor; ++hub) {
+            std::uint8_t wx = 0, wy = 0;
+            fast_hub_cell(hub, wx, wy);
+            for (int z = 0; z <= 2; ++z) {
+                if (g.cell(wx, wy, z) == kMatWater) ++hubWater;
+                const std::size_t ci = macro_index(wx, wy, z);
+                if (const CellType* pg = shaftMats->page(ci))
+                    for (int b = 0; b < kSubVoxels; ++b)
+                        if (pg[b] == kMatWater) { ++hubWater; break; }
+            }
+        }
+        CHECK(hubWater == 0);
+        for (int ny = 0; ny < kLatticeDim; ++ny)
+            for (int nx = 0; nx < kLatticeDim; ++nx) {
+                const int lx = lattice_coord(nx);
+                const int ly = lattice_coord(ny);
+                if (fast_hub_near(lx, ly) >= 0) continue; // столб — выше
+                for (int z = 0; z <= 2 && pitWater == 0; ++z) {
+                    const std::size_t ci = macro_index(lx, ly, z);
+                    if (const CellType* pg = shaftMats->page(ci))
+                        for (int b = 0; b < kSubVoxels; ++b)
+                            if (pg[b] == kMatWater) { ++pitWater; break; }
+                }
+            }
+        CHECK(pitWater > 0);
 
         // --- ЩИТ ([world/mask.h], решение владельца 2026-08-27; S18-группы
         // и субвоксельность — 2026-08-28) ------------------------------------

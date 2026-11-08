@@ -180,14 +180,17 @@ std::size_t kind_row(const FloorSpec& spec) {
 // генератор. ПОДНИМАТЬ РУКОЙ при любом изменении выхода generate_floor
 // этого kind; изменение общего каркаса (stamp_lift_pillars, сид-формулы)
 // поднимает ВСЕ строки. Стартуют с 1: 0 — «версии нет» у до-F снимков.
+// 1 -> 2 на 2026-11-08: потолок кабины в stamp_lift_pillars (общий каркас —
+// все строки разом); без поднятия фикс не доехал бы до обжитых сейвов —
+// столбы едут в снимок обычными клетками, restore не перештамповывает.
 constexpr ModuleVersionRow kModuleGenVersions[] = {
-    {FloorKind::Residential, 1}, // padic геометрия
-    {FloorKind::Commercial,  1},
-    {FloorKind::Industrial,  1},
-    {FloorKind::Derelict,    1},
-    {FloorKind::Padic,       1},
-    {FloorKind::Blame,       1},
-    {FloorKind::Khrushi,     1},
+    {FloorKind::Residential, 2}, // padic геометрия
+    {FloorKind::Commercial,  2},
+    {FloorKind::Industrial,  2},
+    {FloorKind::Derelict,    2},
+    {FloorKind::Padic,       2},
+    {FloorKind::Blame,       2},
+    {FloorKind::Khrushi,     2},
 };
 GIGA_TABLE_BY_ENUM(kModuleGenVersions, &ModuleVersionRow::kind, FloorKind::Count);
 
@@ -319,6 +322,15 @@ void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
         restamp_page(ex, ey, e.h, kCellAir);
         g.fill_cell(cx, cy, wrap_macro(e.h - 1), kMatConcrete);
         restamp_page(cx, cy, e.h - 1, kMatConcrete);
+        // ПОТОЛОК КАБИНЫ (владелец 2026-11-08: «потолок кабины пропал»).
+        // Пропадать было нечему — его не строил никто: центр столба чистился
+        // через все z, и кабина была ДНОМ открытого колодца в 256 м. Кабина —
+        // замкнутая клетка-инвариант (рамка владельца: шахты одинаковы и
+        // неразрушимы), значит коробка закрывается здесь же, где кладутся её
+        // пол и проём: одна плита над storey входа. Остальной колодец выше
+        // плиты остаётся полым — он запечатан и игроку не принадлежит.
+        g.fill_cell(cx, cy, wrap_macro(e.h + 1), kMatConcrete);
+        restamp_page(cx, cy, e.h + 1, kMatConcrete);
     }
 }
 

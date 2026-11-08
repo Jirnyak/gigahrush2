@@ -617,11 +617,17 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
     };
 
 
-    // Water: lattice elevator pit (z=0..2) and stair landing sumps.
+    // Water: lattice pit (z=0..2) and stair landing sumps. ЛИФТОВЫЕ узлы
+    // ПРОПУСКАЮТСЯ (владелец 2026-11-08, «шахта инвариантна»): их столб
+    // проштампован stamp_lift_pillars, и вода в колодце под полом кабины —
+    // чужой писатель в защищённом объёме. Щит ([floor_gen.h]
+    // stamp_lift_protection) ловит карв, но штампуется ПОСЛЕ apply_rules —
+    // этому писателю закон ставится предикатом самого столба.
     for (int ny = 0; ny < kLatticeDim; ++ny) {
         for (int nx = 0; nx < kLatticeDim; ++nx) {
             int cx = lattice_coord(nx);
             int cy = lattice_coord(ny);
+            if (fast_hub_near(cx, cy) >= 0) continue; // столб лифта
             for (int z = 0; z <= 2; ++z) pour_level(cx, cy, z, 0.8f);
         }
     }
