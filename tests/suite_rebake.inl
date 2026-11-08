@@ -311,6 +311,68 @@ void sla_holds_on_a_real_floor() {
     }
 }
 
+// СВЕТ МАШИННОГО FRESH — В ВОРКЕРЕ (лифт-лимб 3, рамка владельца
+// 2026-11-08: мир живёт, всё печётся фоном; за закрытыми створками грязного
+// света не видит никто). Гейт обеих полярностей:
+//   * lightAsync=true НЕ кладёт свет в кадре входа (take_light_swap молчит,
+//     ready() false) — иначе «в воркере» было бы вывеской над синхронным;
+//   * свет ложится РОВНО на кадре Fresh-свапа — тем же уровнем nav.ready(),
+//     которым створки ждут зоны: третьего сигнала готовности не появилось;
+//   * fnv бит-в-бит с синхронным дев-швом ТОЙ ЖЕ геометрии и таблицы — вход
+//     воркера (теневая копия + лампы по значению) обязан быть неотличим.
+void fresh_light_bakes_in_worker() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+    FloorRooms fr;
+    rooms_declare(fr, 0, floor_spec(FloorKind::Residential), 1337u);
+
+    // Две лампы в воздухе — пустая таблица дала бы fnv пустоты и гейт,
+    // зелёный на чём угодно.
+    const LightVisLamp lamps[2] = {
+        {vec3{33.0f, 33.0f, 3.0f}, 12.0f, vec3{1.0f, 1.0f, 1.0f}},
+        {vec3{97.0f, 97.0f, 3.0f}, 12.0f, vec3{1.0f, 1.0f, 1.0f}},
+    };
+
+    // Эталон — синхронный дев-шов.
+    std::uint64_t fnvSync = 0;
+    {
+        RebakeScheduler s;
+        s.set_rebake_threads(2);
+        s.set_light_table(lamps, 2, 63, 1);
+        s.start_fresh(w.grid(), FloorKind::Residential, 0, 0, &fr,
+                      w.gravity().regime, /*lightAsync=*/false);
+        CHECK(s.take_light_swap()); // свет лёг прямо в кадре входа
+        fnvSync = light_vis_fnv(s.light_vis());
+        CHECK(s.light_full_bakes() == 1);
+        s.cancel();
+    }
+
+    // Машинный путь.
+    {
+        RebakeScheduler s;
+        s.set_rebake_threads(2);
+        s.set_light_table(lamps, 2, 63, 1);
+        s.start_fresh(w.grid(), FloorKind::Residential, 0, 0, &fr,
+                      w.gravity().regime, /*lightAsync=*/true);
+        CHECK(!s.take_light_swap()); // кадр входа свету ничего не должен
+        CHECK(!s.ready());
+        TickClock clock;
+        bool freshSwap = false;
+        while (!freshSwap && clock.now() < 16384u) {
+            freshSwap = s.step(clock.now(), 0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(freshSwap);
+        CHECK(s.ready());            // створки ждут ровно этот уровень...
+        CHECK(s.take_light_swap());  // ...и свет лёг тем же кадром
+        CHECK(s.light_full_bakes() == 1);
+        CHECK(light_vis_fnv(s.light_vis()) == fnvSync); // бит-в-бит
+    }
+}
+
 } // namespace rebake_test
 
-void test_rebake_all() { rebake_test::sla_holds_on_a_real_floor(); }
+void test_rebake_all() {
+    rebake_test::sla_holds_on_a_real_floor();
+    rebake_test::fresh_light_bakes_in_worker();
+}

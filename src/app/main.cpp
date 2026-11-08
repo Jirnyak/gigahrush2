@@ -2256,9 +2256,13 @@ static void merge_ecs_prop_meshes(const Registry& reg, LayerId layer,
 // телесный битсет комнат 256 КиБ), never a pointer into the live grid — so
 // there is no ordering contract with door toggles or carves any more, and
 // floor changes cancel-join in tens of ms ([game/rebake.h]).
+// `lightAsync` — машинный вход лифта: свет уезжает первым шагом
+// Fresh-воркера, створки ждут его тем же nav.ready() ([game/rebake.h]).
+// Дев-швы зовут с false — синхронный свет остаётся прибором.
 void begin_floor_nav(const World& world, int floorNumber,
                      game::RebakeScheduler& bake,
-                     const game::FloorRooms* rooms = nullptr) {
+                     const game::FloorRooms* rooms = nullptr,
+                     bool lightAsync = false) {
     // Поколение мутаций МОНОТОННО через всю сессию, на этаже НЕ сбрасывается
     // (бухгалтерия RebakeScheduler сверяет поколения между этажами).
     // Fresh-снапшот просто отражает текущее поколение.
@@ -2276,7 +2280,7 @@ void begin_floor_nav(const World& world, int floorNumber,
     // Зоны — секцией ЭТОГО планировщика (§88/F): второго пекаря не появилось, и
     // дренаж карва кормит их тем же снапшотом оракула, что и решётку.
     bake.start_fresh(world.grid(), kind, floorNumber, g_worldGen, rooms,
-                     world.gravity().regime);
+                     world.gravity().regime, lightAsync);
     // Nav memory AT THE START of the bake, which is the number no document carried
     // and the only moment it can be wrong. The scheduler frees the live flow field
     // in start_fresh (the AsyncBake 260-MiB-peak lesson), so this reads ~1 MiB —
@@ -4014,7 +4018,10 @@ int main(int argc, char** argv) {
         // Doors before the bake: all-open geometry into the bitsets. No
         // freeze — the worker owns a snapshot. [door.h, game/rebake.h]
     };
-    auto arrive_doors_nav = [&](LayerId nl) {
+    // machine=true — лифтовая машина (та же развилка, что chunked у
+    // arrive_upload): свет Fresh уезжает в воркер, дев-швы остаются на
+    // синхронном приборе.
+    auto arrive_doors_nav = [&](LayerId nl, bool machine = false) {
         const auto tD0 = std::chrono::steady_clock::now();
         game::rooms_supply_rebuild(floorRooms, reg, nl);
         const auto tD1 = std::chrono::steady_clock::now();
@@ -4032,7 +4039,8 @@ int main(int argc, char** argv) {
         // снимка; пересеивать их значило бы воскрешать сорванное (закон 2).
         if (!arrivedRestored) dress_lift_portals(nl);
         const auto tD4 = std::chrono::steady_clock::now();
-        begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms,
+                        /*lightAsync=*/machine);
         const auto tD5 = std::chrono::steady_clock::now();
         const auto ms = [](std::chrono::steady_clock::time_point a,
                            std::chrono::steady_clock::time_point b) {
@@ -4991,7 +4999,7 @@ int main(int argc, char** argv) {
             liftRide = LiftRide::SwapDoorsNav;
         } else if (liftRide == LiftRide::SwapDoorsNav) {
             const auto tS = std::chrono::steady_clock::now();
-            arrive_doors_nav(liftSwapLayer);
+            arrive_doors_nav(liftSwapLayer, /*machine=*/true);
             // Кабина назначения зарастает до готовности (двери объявлены).
             if (liftHub >= 0 && liftHub < 4 &&
                 doors.lift[liftHub] != game::kNoPortal)

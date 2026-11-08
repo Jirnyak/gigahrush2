@@ -115,6 +115,8 @@ void RebakeScheduler::discard_pending() {
     lightDone_.store(false, std::memory_order_relaxed);
     exited_.store(false, std::memory_order_relaxed);
     lightSwapped_ = false;
+    freshLightAsync_ = false; // отменённый машинный Fresh свет не свапает
+    freshLightBaked_ = false;
 }
 
 void RebakeScheduler::cancel() {
@@ -124,7 +126,7 @@ void RebakeScheduler::cancel() {
 void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
                                   int floorNumber, std::uint64_t worldGen,
                                   const FloorRooms* rooms,
-                                  GravityRegime gravity) {
+                                  GravityRegime gravity, bool lightAsync) {
     // Любой бейк в полёте — отменить и джойнить. Отмена узловая, так что join
     // здесь — десятки мс, не секунды: это и есть «F9/травел отменяет и едет».
     // Цена джойна — в приборе входа ниже: «десятки мс» — обещание, не замер.
@@ -174,9 +176,13 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // Секция rooms УМЕРЛА (rooms-object F): комнаты — раскраска roomAt,
     // штампуется rooms_declare на входе; flow-полей по виду больше нет.
 
-    // Свет — СИНХРОННО на всех ядрах. Альтернатива «войти со всеми грязными
-    // клетками» стоила бы десятки мс КАЖДОГО кадра первые секунды, и этот
-    // вывод в силе: синхронность здесь — не дефект.
+    // Свет. Дев-швы (lightAsync=false) — СИНХРОННО на всех ядрах: видимый
+    // вход не терпит грязных клеток («войти со всеми грязными» стоило бы
+    // десятки мс КАЖДОГО кадра первые секунды), и для прибора этот вывод в
+    // силе. МАШИННЫЙ путь (lightAsync=true, рамка владельца 2026-11-08) — в
+    // воркере ниже, с теневой копии: за закрытыми створками грязного света
+    // не видит никто, а створки ждут Fresh-свапа уровнем nav.ready(), на
+    // котором свет и ложится вместе с зонами.
     //
     // ХОД H ПОСТРОЕН (matwej.md §13; замер 2026-11-04: 1083/2302 мс на этажах
     // 0-1, 199 на 6 — «0.1-0.3 с принято» протухло в 7-10 раз). Лечение — НЕ
@@ -186,9 +192,19 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     // без CRC-бухгалтерии. HIT заменяет бейк чтением; MISS печёт как пёк и
     // отдаёт свежее состояние хуку store. Пост-рестор-карвы догоняют патчем
     // (`patch_carved_cells`) ОБЕ ветки одинаково — в кэш едет только Fresh.
+    // Кэш жив и в воркерной ветке: промах там ЗАКОНЕН почти всегда (этаж
+    // мутирует за минуты жизни), но HIT после F9-круга остаётся HIT'ом.
     //
     // Цена печатается вслух — правило «бейк без замера прячет свою регрессию».
-    {
+    freshLightAsync_ = lightAsync;
+    freshLightBaked_ = false;
+    if (lightAsync) {
+        // Снапшоты для воркера — ровно те, которыми живёт Rebake-цикл:
+        // лампы по значению, теги состава на старте полёта.
+        lampsSnap_ = lampsLive_;
+        lightTableGenSnap_ = lightTableGen_;
+        lightTableTagSnap_ = lightTableTag_;
+    } else {
         std::uint64_t cacheKey = 0;
         double keyMs = 0.0;
         bool cached = false;
@@ -275,6 +291,64 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     mode_ = Mode::Fresh;
     worker_ = std::thread([this]() {
         using clock = std::chrono::steady_clock;
+        // СВЕТ ПЕРВЫМ (порядок — тот же, что у Rebake-цикла: заметнее всего),
+        // с теневой копии — она снята этим же входом строкой выше и
+        // бит-в-бит равна живой сетке (гейт: fnv async == fnv sync). Кэш
+        // хода H целиком здесь же: ключ (единицы мс), чтение HIT'а, запись
+        // MISS'а — кадру входа от света не остаётся ничего.
+        if (freshLightAsync_ && shadowGrid_ != nullptr) {
+            std::uint64_t cacheKey = 0;
+            double keyMs = 0.0;
+            bool cached = false;
+            if (lightCacheLoad_ || lightCacheStore_) {
+                const auto tKey = clock::now();
+                cacheKey = light_vis_cache_key(*shadowGrid_, lampsSnap_.data(),
+                                               lampsSnap_.size(), lightSlots_);
+                keyMs = ms_between(tKey, clock::now());
+            }
+            if (lightCacheLoad_) {
+                const auto tLoad = clock::now();
+                cached = lightCacheLoad_(cacheKey, pendingLight_);
+                if (cached)
+                    std::fprintf(
+                        stderr,
+                        "[lightvis] floor %d CACHED worker: %u lamps -> %u "
+                        "lit cells, R_max %.1f m, key %.1f + load %.1f ms "
+                        "(bake skipped)\n",
+                        floorNumber_, pendingLight_.lampCount,
+                        pendingLight_.litCells, pendingLight_.rMaxM, keyMs,
+                        ms_between(tLoad, clock::now()));
+            }
+            if (!cached) {
+                bake_light_visibility(*shadowGrid_, lampsSnap_.data(),
+                                      lampsSnap_.size(), lightSlots_,
+                                      pendingLight_, /*threads=*/0, &cancel_);
+                if (!cancel_.load(std::memory_order_relaxed)) {
+                    freshLightBaked_ = true;
+                    // Отменённый бейк — мусор по контракту, в кэш не едет.
+                    if (lightCacheStore_)
+                        lightCacheStore_(cacheKey, pendingLight_);
+                    std::fprintf(
+                        stderr,
+                        "[lightvis] floor %d FRESH worker: %u lamps -> %u lit "
+                        "cells (overflow %u), R_max %.1f m, %.0f ms async "
+                        "(key %.1f ms)\n",
+                        floorNumber_, pendingLight_.lampCount,
+                        pendingLight_.litCells, pendingLight_.overflowCells,
+                        pendingLight_.rMaxM, pendingLight_.bakeMs, keyMs);
+                }
+            }
+            // Пин видимости — тот же гейт хода H (HIT/MISS бит-в-бит), из
+            // воркера: вход бейка — копия, выход обязан совпасть с
+            // синхронным дев-швом той же геометрии.
+            static const bool kPinW =
+                std::getenv("GIGA_LIGHT_VIS_PIN") != nullptr;
+            if (kPinW && !cancel_.load(std::memory_order_relaxed))
+                std::fprintf(stderr, "[lightvis-pin] floor %d fnv=%016llx\n",
+                             floorNumber_,
+                             static_cast<unsigned long long>(
+                                 light_vis_fnv(pendingLight_)));
+        }
         const auto t0 = clock::now();
         if (haveZones_)
             game::bake_zone_nav(snapRooms_, snapClear_, kBodyClearanceSub,
@@ -436,6 +510,19 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
         } else if (mode_ == Mode::Fresh) {
             if (exited_.load(std::memory_order_acquire)) {
                 join_worker();
+                // Свет машинного Fresh ложится ЗДЕСЬ ЖЕ, где зоны, — створки
+                // читают один уровень nav.ready(), третьего сигнала нет
+                // (вывод у start_fresh).
+                if (freshLightAsync_) {
+                    lightVis_ = std::move(pendingLight_);
+                    pendingLight_ = LightVisBake{};
+                    lightGen_ = snapGen_;
+                    lightSwapPending_ = true; // вызывающий перезальёт GPU
+                    lightTableBakedGen_ = lightTableGenSnap_;
+                    lightTableBakedTag_ = lightTableTagSnap_;
+                    if (freshLightBaked_) ++lightFullBakes_;
+                    freshLightAsync_ = false;
+                }
                 if (haveZones_) zones_ = std::move(zonesPending_);
                 bakedGen_ = snapGen_;
                 if (bakedGen_ == lastSeenGen_) {
