@@ -485,7 +485,7 @@ static void test_monster_all() {
             danger_for_hostility(floor_spec(FloorKind::Derelict).hostility);
         const std::uint32_t heads = spawn_floor_mobs(
             reg, w, -26, danger, theme_for_kind(FloorKind::Derelict), /*layer=*/0,
-            /*seed=*/77u, /*cap=*/256, FloorKind::Derelict);
+            /*seed=*/77u, /*tick=*/0, /*cap=*/256, FloorKind::Derelict);
         CHECK(heads > 0);
         int inWater = 0;
         for (auto e : reg.view<const MobRef, const Transform>()) {

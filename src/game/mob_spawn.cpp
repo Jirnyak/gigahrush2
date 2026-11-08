@@ -159,7 +159,7 @@ vec3 mob_stand_pos(int cx, int cy, int cz, const vec3& half) {
 // That is not a stylistic preference here. main.cpp carried the same bug twice
 // because it has two floor-ride paths (the keyboard one and the --shot one) and the
 // first fix touched only one; the comment at its second site says so. A mob missing
-// MobCombat is invisible to `mob_attack_step`, and one missing GravityAffected hangs
+// `Acting` is invisible to `mob_attack_step`, and one missing GravityAffected hangs
 // in the air — both are silent, and both are what a second hand-rolled emplace block
 // eventually produces.
 //
@@ -168,7 +168,8 @@ vec3 mob_stand_pos(int cx, int cy, int cz, const vec3& half) {
 // room full of monsters swings in lockstep.
 Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def,
                    std::uint8_t level, int cx, int cy, int cz,
-                   std::uint32_t headHash, std::uint8_t packId) {
+                   std::uint32_t headHash, std::uint8_t packId,
+                   std::uint64_t tick) {
     const MobTier tier = static_cast<MobTier>(def.tier);
     const vec3 half = mob_half_extents(tier);
     const std::uint16_t hp = mob_hp_at_level(def.hp, level);
@@ -194,8 +195,17 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
                                   static_cast<std::int16_t>(hp), packId});
     // Staggered initial cooldown so a room full of mobs does not swing in lockstep
     // on the frame the player walks in.
-    reg.emplace<MobCombat>(
-        e, MobCombat{static_cast<std::uint16_t>(headHash % (def.attackCdMs + 1u))});
+    //
+    // S22: шахматный сдвиг стал ОКНОМ `maul`, начатым в прошлом — моб
+    // «только что ударил» на свою долю темпа. Семантика прежняя до тика (та же
+    // формула `headHash % (attackCdMs + 1)`), но выражена тем же способом, что
+    // и всякая другая занятость: ни одного второго поля со временем.
+    // `Acting` при этом и есть ответ на «это настоящий монстр, а не голый
+    // Transform» — роль, которую прежде играл `MobCombat` ([combat.h]).
+    Acting act{};
+    const std::uint32_t staggerMs = headHash % (def.attackCdMs + 1u);
+    acting_begin_ms(act, ActSlot::Body, kActMaul, staggerMs, 0, tick);
+    reg.emplace<Acting>(e, act);
     return e;
 }
 
@@ -203,7 +213,7 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
 
 Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
                     std::uint8_t level, int cx, int cy, int cz,
-                    std::uint32_t salt) {
+                    std::uint32_t salt, std::uint64_t tick) {
     if (static_cast<std::size_t>(kind) >= kMobKindCount) return entt::null;
     const MobDef& def = mob_def(kind);
     const std::uint8_t lv = level < 1 ? 1 : (level > 12 ? 12 : level);
@@ -212,7 +222,7 @@ Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
     const std::uint32_t headHash =
         (salt ^ 0x9e3779b9u) * 0x85ebca6bu + static_cast<std::uint32_t>(kind);
     return emplace_mob(reg, layer, kind, def, lv, cx, cy, cz, headHash,
-                       /*packId=*/0);
+                       /*packId=*/0, tick);
 }
 
 FloorTheme theme_for_kind(FloorKind kind) {
@@ -235,8 +245,8 @@ std::uint8_t danger_for_hostility(float hostility) {
 std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                int floorNumber, std::uint8_t danger,
                                FloorTheme theme, LayerId layer,
-                               std::uint32_t seed, std::uint32_t cap,
-                               FloorKind kind) {
+                               std::uint32_t seed, std::uint64_t tick,
+                               std::uint32_t cap, FloorKind kind) {
     const std::uint32_t* wet = medium_level_data(world); // resolved ONCE
 
     std::uint32_t want =
@@ -396,7 +406,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // it far more likely than independent placement ever did.
             const std::uint32_t rh = hash_u32(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
             emplace_mob(reg, layer, mobKind, def, level, cx, cy, packH, rh,
-                        packId);
+                        packId, tick);
             ++spawned;
         }
     }
@@ -659,7 +669,8 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         // property ([mob_spawn.h] header); fog arrivals trickle. pack = 0 is the
         // matching truth for wander: "walks alone".
         Entity e = emplace_mob(reg, layer, kind, def, level, cx, cy, acz,
-                               hash_u32(r ^ 0x51ed270bu), /*packId=*/0u);
+                               hash_u32(r ^ 0x51ed270bu), /*packId=*/0u,
+                               simTick);
         reg.emplace<FogSpawn>(e);
         ++out.spawned;
 

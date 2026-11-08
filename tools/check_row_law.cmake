@@ -64,7 +64,12 @@ set(GIGA_ROW_HEADERS
     # ОСТАЁТСЯ. Умножается на ёмкость кольца, ездит в run.sav байтами, обязан
     # переживать memcpy. Владелец `Chronicle` объявлен `class` по тому же
     # доводу, по которому им объявлен `EventBus`.
-    src/game/chronicle.h)
+    src/game/chronicle.h
+    # Занятость носителя (CANON S22) — окно умножается на три слота и на каждое
+    # тело этажа, снимок едет в run.sav байтами. Владелец `Acting` объявлен
+    # `struct` и строкой мира ЯВЛЯЕТСЯ (это компонент EnTT, а не держатель
+    # плоских массивов), поэтому контур стоит и на нём.
+    src/game/action.h)
 
 set(GIGA_ROW_FAILURES "")
 set(GIGA_ROW_STRUCTS 0)

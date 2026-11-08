@@ -444,7 +444,7 @@ static void test_samosbor2_all() {
             bool steered = true;
             for (Entity e : fogHeads) {
                 if (!reg.all_of<Transform, Velocity, AABB, Renderable, MobRef,
-                                MobCombat>(e))
+                                Acting>(e))
                     wholeMob = false;
                 const MobRef& m = reg.get<const MobRef>(e);
                 if (m.pack != 0) wholeMob = false;          // fog arrivals walk alone
@@ -517,7 +517,8 @@ static void test_samosbor2_all() {
         // it must NOT touch.
         const std::uint32_t floorHeads =
             spawn_floor_mobs(reg, w, -50, danger, theme_for_kind(FloorKind::Derelict),
-                             layer, /*seed=*/77u, /*cap=*/24u, FloorKind::Derelict);
+                             layer, /*seed=*/77u, /*tick=*/0, /*cap=*/24u,
+                             FloorKind::Derelict);
         CHECK(floorHeads > 0u);
         CHECK(count_layer_fog_mobs(reg, layer) == 0u);
 

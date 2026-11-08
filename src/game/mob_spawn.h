@@ -93,10 +93,15 @@ std::uint8_t danger_for_hostility(float hostility);
 //
 // Returns the number of heads actually spawned, which is lower than the budget only
 // when rooms have too few standable cells.
+// `tick` — ЖИВОЙ сим-тик посева, и он обязателен без умолчания (CANON S22):
+// шахматный сдвиг первого темпа — это ОКНО `maul`, открытое в момент посева, а
+// окно без «сейчас» выразить нечем. Ноль законен и означает ровно то, что
+// значит, — мир на нулевом тике (так его и передают стенды).
 std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                                int floorNumber, std::uint8_t danger,
                                FloorTheme theme, LayerId layer,
-                               std::uint32_t seed, std::uint32_t cap = 0,
+                               std::uint32_t seed, std::uint64_t tick,
+                               std::uint32_t cap = 0,
                                FloorKind kind = FloorKind::Residential);
 
 // Spawn ONE mob of `kind` at macro cell (cx, cy, cz) on `layer` — the console's
@@ -107,7 +112,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
 // Returns the entity (never null for a valid kind; entt::null otherwise).
 Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
                     std::uint8_t level, int cx, int cy, int cz,
-                    std::uint32_t salt);
+                    std::uint32_t salt, std::uint64_t tick);
 
 // Destroy every mob on `layer`. Called when a floor is unloaded — mobs do not
 // fold back into anything, they simply cease to exist ([monsters.md]).

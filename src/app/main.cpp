@@ -1862,7 +1862,7 @@ std::uint32_t refresh_floor_containers(Registry& reg, const World& world,
 }
 
 std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNumber,
-                                 LayerId layer) {
+                                 LayerId layer, std::uint64_t tick) {
     game::despawn_layer_mobs(reg, layer);
     const game::FloorKind kind = kind_for_floor(floorNumber);
     const game::FloorSpec& spec = game::floor_spec(kind);
@@ -1873,7 +1873,7 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
         reg, world, floorNumber, game::danger_for_hostility(spec.hostility),
         game::theme_for_kind(kind), layer,
         /*seed=*/0xB0B5EEDu ^ static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u,
-        kMobSpawnCap, kind);
+        tick, kMobSpawnCap, kind);
 
     // Sync Armour components for all spawned mobs according to monster_traits
     for (auto e : reg.view<const game::MobRef, const Transform>()) {
@@ -3247,7 +3247,7 @@ int main(int argc, char** argv) {
             game::rooms_declare(floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
-            refresh_floor_mobs(reg, stack.layer(l0), 0, l0);
+            refresh_floor_mobs(reg, stack.layer(l0), 0, l0, /*tick*/ 0);
             // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
             arrivedRestored = floor_entity_half(l0, 0);
             // Doors BEFORE the bake: door_build leaves every door open, so the
@@ -3734,6 +3734,7 @@ int main(int argc, char** argv) {
         consoleCtx.catalog = &floor_catalog();
         consoleCtx.player = player;
         consoleCtx.currentFloor = currentFloor;
+        consoleCtx.tick = simTick;           // S22: `spawn` рождает ОКНО темпа
         consoleCtx.fastTravel = &fastTravel; // §24 hub unlock bitset
         consoleCtx.godWanted = &godWanted;   // Б4: неуязвимость переживает тело
     };
@@ -4010,7 +4011,7 @@ int main(int argc, char** argv) {
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
         const auto tR1 = std::chrono::steady_clock::now();
-        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
         const auto tR2 = std::chrono::steady_clock::now();
         // РАЗВИЛКА S20.6 (закон 2): первый вход — сидеры, ревизит — записи
         // снимка (клир слота, обесточка, свет — внутри, обеими ветками).
@@ -4151,7 +4152,7 @@ int main(int argc, char** argv) {
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
-        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
         arrivedRestored = floor_entity_half(nl, currentFloor);
         diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
         arrive_doors_nav(nl);
@@ -6252,8 +6253,9 @@ int main(int argc, char** argv) {
                                     inv.slots[0] = game::ItemSlot{gun, 1};
                                     inv.slots[1] = game::ItemSlot{def.ammo, 30};
                                     game::PlayerRanged pr{};
-                                    pr.hand[0].cooldownMs = 0;
-                                    pr.hand[0].reloadMs = 0;
+                                    // S22: таймеров в руке нет — занятость
+                                    // живёт окном (`Acting`), и свежая рука
+                                    // свободна по построению.
                                     pr.hand[0].magCount = magStamp;
                                     pr.hand[0].weapon = gun;
                                     pr.shots = 42;
@@ -8376,7 +8378,7 @@ int main(int argc, char** argv) {
                                         player, runState.ranged);
                                 if (runState.kills != 0u)
                                     reg.emplace_or_replace<game::PlayerMelee>(
-                                        player, game::PlayerMelee{0, runState.kills});
+                                        player, game::PlayerMelee{runState.kills});
                             }
                             // Version 9 / SAVSTAT: restore live status effects so
                             // F9 mid-haze keeps the same move/aim/melee mults.
@@ -8434,7 +8436,7 @@ int main(int argc, char** argv) {
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
                             refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
-                                               nl);
+                                               nl, simTick);
                             arrivedRestored =
                                 floor_entity_half(nl, currentFloor);
                             // Диффузия: F9 — единственный сайт прибытия, не
@@ -8654,7 +8656,7 @@ int main(int argc, char** argv) {
                     }
                     aim_player(reg, player);
                     reg.emplace_or_replace<game::PlayerMelee>(
-                        player, game::PlayerMelee{0, kills});
+                        player, game::PlayerMelee{kills});
                     reg.emplace_or_replace<game::RpgStats>(player, carriedRpg);
                 } else if (const auto* rsLive = reg.try_get<game::RpgStats>(player)) {
                     // The body SURVIVED the tick. Refresh the snapshot, because
@@ -11130,7 +11132,7 @@ int main(int argc, char** argv) {
                             floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
-                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl);
+                        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
                         // РАЗВИЛКА S20.6 — тот же закон, что у клавиатурной
                         // поездки: сидеры ИЛИ записи снимка, не оба. Второй
                         // travel-сайт; правка одного пути ничего не докажет

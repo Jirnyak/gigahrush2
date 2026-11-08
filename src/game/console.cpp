@@ -205,7 +205,7 @@ bool cmd_spawn(ConsoleContext& ctx, int argc, const char* const* argv,
         const Entity e = spawn_mob_at(
             *ctx.ecs, tr.layer, kind, level, wrap_macro(cx + dx),
             wrap_macro(cy + dy), wrap_macro(cz),
-            static_cast<std::uint32_t>(i) * 0x9e3779b9u + 1u);
+            static_cast<std::uint32_t>(i) * 0x9e3779b9u + 1u, ctx.tick);
         if (e != entt::null) ++spawned;
     }
     if (out && cap)

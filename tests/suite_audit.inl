@@ -294,10 +294,16 @@ static void ms_timer_drift() {
         tr.layer = layer;
         reg.emplace<Transform>(m, tr);
         reg.emplace<MobRef>(m, MobRef{a_biting_kind(), 1, 100, 100});
-        reg.emplace<MobCombat>(m, MobCombat{1000, 0});   // exactly one second
+        {   // ровно секунда занятости — окно `maul` на 1000 мс (S22)
+            Acting a{};
+            CHECK(acting_begin_ms(a, ActSlot::Body, kActMaul, 1000, 0, 0));
+            reg.emplace<Acting>(m, a);
+        }
 
         int ticks = 0;
-        while (reg.get<MobCombat>(m).cooldownMs > 0 && ticks < 400) {
+        while (acting_busy(reg.get<Acting>(m), ActSlot::Body,
+                           static_cast<std::uint64_t>(ticks)) &&
+               ticks < 400) {
             mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, kDt,
                             static_cast<std::uint64_t>(ticks));
             ++ticks;
@@ -372,7 +378,7 @@ static void gun_kills_counted() {
     reg.emplace<Transform>(shooter, st);
     reg.emplace<NpcRef>(shooter, NpcRef{sid});
     reg.emplace<CameraTag>(shooter, CameraTag{});
-    reg.emplace<PlayerMelee>(shooter, PlayerMelee{0, 0});
+    reg.emplace<PlayerMelee>(shooter, PlayerMelee{0});
     reg.emplace<PlayerRanged>(shooter, PlayerRanged{});
 
     Entity mob = reg.create();

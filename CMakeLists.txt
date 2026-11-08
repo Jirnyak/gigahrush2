@@ -1051,7 +1051,7 @@ if(GIGA_BUILD_TESTS)
     # бинаря по правилу выше: `audit_test: 1332 checks, 0 failures`.
     add_test(NAME audit_findings COMMAND audit_test)
     set_tests_properties(audit_findings PROPERTIES
-        PASS_REGULAR_EXPRESSION "audit_test: 1332 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "audit_test: 1333 checks, 0 failures")
 
     # THE COUNT IS PINNED HERE TOO — the same mechanism as audit_findings above, now on
     # the target that carries 3,887 of the repo's 4,036 CHECK sites. Until this line
@@ -2423,7 +2423,17 @@ if(GIGA_BUILD_TESTS)
         #   (5 падений), доверие звену из файла — гейт пересборки цепей (3),
         #   цена мирному глаголу в verbs.csv — static_assert родов («6 == 5»).
         # Прогон бинаря (206484) сошёлся точно; 0 падений.
-        PASS_REGULAR_EXPRESSION "game_test: 206484 checks, 0 failures")
+        # 206484 + 174 = 206658 на 2026-11-08 (ЕДИНАЯ СИСТЕМА ДЕЙСТВИЙ, CANON
+        # S22): пять имён одной величины сведены в окно, и все их пины
+        # ПЕРЕПИСАНЫ с «сколько осталось в миллисекундах» на «чем носитель
+        # занят и какой длины окно». Плюс новый `tests/suite_action.inl`.
+        # ДВА ПИНА ПРИ ЭТОМ ИЗМЕНИЛИ СМЫСЛ, и это сказано вслух: прежние
+        # таймеры вычитались ПО ВЫЗОВУ прохода, то есть стенд старил их любым
+        # тиком, а два вызова в один тик старили ВДВОЕ. Окно живёт в тиках,
+        # поэтому `later`-пин мобьего темпа и пин ворот ствола теперь берут
+        # момент ИЗ ОКНА (начало + длина), а не из круглого числа.
+        # Прогон бинаря (206658) сошёлся точно; 0 падений.
+        PASS_REGULAR_EXPRESSION "game_test: 206658 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
@@ -2671,7 +2681,14 @@ if(GIGA_BUILD_TESTS)
         # же форма дельты, что у сноса `sounds.csv` 2026-10-12. Строки из
         # GIGA_CSV_UNCOVERED сняты ТОЙ ЖЕ правкой, иначе гейт падает по
         # правилу «ФАНТОМ CSV: файл объявлен в покрытии, а его нет».
-        "GIGA_CSV_COLUMNS=PASS covered=2/15 columns=62 live=38 gen=5 writeonly=7 dead=12")
+        # ЗНАМЕНАТЕЛЬ 15 -> 16 и ПОКРЫТИЕ 2 -> 3 на 2026-11-08: родилась
+        # `data/actions.csv` (CANON S22) и разобрана ритуалом ТЕМ ЖЕ коммитом —
+        # четыре столбца, два живых (`name` -> kActionNames читает худ,
+        # `break_mask` -> kActionBreakMask читает `break_action`) и два GEN
+        # (ключ и провенанс). Мёртвых она не принесла НИ ОДНОГО, и это решение
+        # гейта, а не удача: колонки длины и `occupy`/`move_mult_e3` были бы
+        # мёртвыми сегодня, поэтому их нет — приедут со своими читателями.
+        "GIGA_CSV_COLUMNS=PASS covered=3/16 columns=66 live=40 gen=7 writeonly=7 dead=12")
 
     # ПОЛНОТА КОНТУРА СТРОКИ МИРА. Разделение труда: ЗАКОН формы типа судит
     # компилятор (`GIGA_ROW@src/core/row_law.h` — vector/string/map/unique_ptr/
@@ -2689,10 +2706,14 @@ if(GIGA_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_row_law.cmake)
     # 26 -> 27 на 2026-11-08: в список заголовков-строк добавлен
     # `src/game/chronicle.h` (факт летописи, CANON S21) — одна `^struct` с
-    # одним контуром, владелец `Chronicle` объявлен `class`. Прогон прибора
-    # (structs=27 contours=27) сошёлся.
+    # одним контуром, владелец `Chronicle` объявлен `class`.
+    # 27 -> 32 там же: `src/game/action.h` (занятость, CANON S22) принёс ПЯТЬ
+    # структур — окно, носитель трёх окон, два снимка для провода и ответ
+    # обрыва. У четырёх контур с пином байтов, у ответа по значению —
+    # `GIGA_ROW` без пина: прибивать размер там нечего, а форму судить надо.
+    # Прогон прибора (structs=32 contours=32) сошёлся.
     set_tests_properties(row_law PROPERTIES
-        PASS_REGULAR_EXPRESSION "GIGA_ROW_LAW=PASS structs=27 contours=27")
+        PASS_REGULAR_EXPRESSION "GIGA_ROW_LAW=PASS structs=32 contours=32")
 
     # АДРЕСА В КАРТЕ КОДА. Правило SKELETON.md — «утверждение без адреса не
     # строка этого файла», и без прибора оно держится памятью агента, то есть не

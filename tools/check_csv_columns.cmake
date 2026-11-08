@@ -120,6 +120,14 @@ endif()
 set(GIGA_CSV_COVERED
     "items.csv"
     "monster_traits.csv"
+    # `actions.csv` (CANON S22) разобран ритуалом СРАЗУ, тем же коммитом, что
+    # родился, и это дешевле, чем потом: у таблицы четыре столбца, и каждый
+    # заведён под уже существующего читателя. Именно этот гейт и решил, какими
+    # столбцами таблица НЕ обзаводится: `occupy`, `move_mult_e3`, `dur_ticks` и
+    # `apply_ticks` были бы мёртвыми (у всех шести сегодняшних действий длину
+    # назначает строка носителя, а множитель движения был бы тождеством), и
+    # приедут вместе со своими читателями.
+    "actions.csv"
 )
 set(GIGA_CSV_UNCOVERED
     "craft_recipes.csv"
@@ -157,6 +165,11 @@ set(GIGA_CSV_UNCOVERED
 # как отдельный столбец. В `check_wired.cmake` эта ловушка найдена мутацией, а
 # не чтением, поэтому валидатор формы стоит здесь с первого дня.
 set(GIGA_CSV_COLUMNS
+    # --- data/actions.csv: 4 столбца (CANON S22) ---------------------------
+    "actions.csv:id:GEN:ключ действия — по нему кодоген делает kAct* и kActionIds"
+    "actions.csv:name:LIVE:kActionNames"
+    "actions.csv:break_mask:LIVE:kActionBreakMask"
+    "actions.csv:note:GEN:провенанс строки — комментарий у константы в заголовке"
     # --- data/items.csv: 44 столбца ---------------------------------------
     "items.csv:id:GEN:ключ каталога — по нему резолвят 14 генераторов, и item_by_string из консоли"
     "items.csv:name_ru:LIVE:item_name"

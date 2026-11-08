@@ -241,7 +241,22 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // Бамп обязателен и по длине (payload вырос), и по отказу: v26-файл отвалился
 // бы `SizeMismatch` после CRC, то есть диагноз читался бы как порча файла, а
 // не как «сейв от старой сборки».
-inline constexpr std::uint32_t kSaveVersion = 27u;
+// v28 (2026-11-08, ЕДИНАЯ СИСТЕМА ДЕЙСТВИЙ — CANON S22): пять имён одной
+// величины сведены в одно поле, и формат это видит дважды. Из руки ушли
+// `cooldownMs` и `reloadMs` (16 Б на две руки -> 8), и приехал СНИМОК
+// ЗАНЯТОСТИ — три окна по 8 Б (`kActingWire`): что носитель делает, сколько
+// осталось и упал ли уже контактный кадр.
+//
+// Остаток, а НЕ абсолютный тик начала, и это тот же вывод, которым v27
+// перебазирует летопись: `simTick` после перезапуска идёт с нуля, и окно,
+// начавшееся «на пятисоттысячном тике», осталось бы занятым навсегда — рука
+// игрока не стреляла бы до конца сессии.
+//
+// Бамп обязателен и по длине (610 -> 626 на фиксе), и по СМЫСЛУ: v27-сейв той
+// же длины не бывает, но даже совпади она — байты руки читались бы как магазин
+// и ствол, то есть игрок получил бы «успешную» загрузку с чужим патроном в
+// стволе. Версия — тот единственный ответ, который не зависит от длины.
+inline constexpr std::uint32_t kSaveVersion = 28u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -390,12 +405,14 @@ static_assert(kRpgWire == 12);
 // v21 (две руки): GunHand поле-за-полем на КАЖДУЮ руку (cd, reload, mag,
 // weapon = 8 Б × 2) + shots/hits + throwCooldownMs (бросок — свой таймер,
 // руки независимы). 16 → 26.
+// v28 (S22): из руки ушли `cooldownMs` и `reloadMs` — занятость руки едет
+// снимком окон (`kActingWire`), а не двумя таймерами в руке. 24 -> 16.
 inline constexpr std::size_t kRangedWire =
-    2 * (2 + 2 + 2 + 2) + 4 + 4;  // hand[2] + shots, hits = 24
-static_assert(kRangedWire == 24);
+    2 * (2 + 2) + 4 + 4;  // hand[2] = mag + weapon; + shots, hits = 16
+static_assert(kRangedWire == 16);
 inline constexpr std::size_t kCombatSaveWire =
-    1 + kRangedWire + 4;  // hasRanged + ranged + kills = 29
-static_assert(kCombatSaveWire == 29);
+    1 + kRangedWire + 4 + kActingWire;  // hasRanged + ranged + kills + занятость
+static_assert(kCombatSaveWire == 45);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
 // 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
 inline constexpr std::size_t kStatusWire =
@@ -430,7 +447,9 @@ inline constexpr std::size_t kSaveFixedWire =
 // ошиблись бы молча: 13 (кошелёк) + 376 (игрок: 37 нужд + 320 сумки + 19) + 12
 // (лист) + 89 (крафт) + 29 (бой) + 42 (статусы) + 17 (самосбор) + 32 (решётка
 // быстрого хода) = 610. v26 снял 418: книга 79 + квест-лог 294 + банк 45.
-static_assert(kSaveFixedWire == 610,
+// v28 (S22): бой 29 -> 45. Минус 8 из руки (два таймера × две руки), плюс 24 —
+// снимок занятости (три окна по 8 Б). Итого 610 + 16 = 626.
+static_assert(kSaveFixedWire == 626,
               "kSaveFixedWire поехал — сверь слагаемые выше и бампни "
               "kSaveVersion в той же правке");
 
@@ -740,6 +759,12 @@ struct SaveState {
     std::uint8_t hasRanged = 0;
     PlayerRanged ranged{};
     std::uint32_t kills = 0;
+    // v28 / S22: ЧЕМ ИГРОК ЗАНЯТ. Снимок трёх окон ОСТАТКОМ — абсолютный тик в
+    // файле врёт после перезапуска ([game/action.h] acting_snap). Прежде в
+    // сейве ехали `cooldownMs`/`reloadMs` обеих рук «чтобы F5 посреди
+    // перезарядки не стрелял даром на F9»; это обещание сохранено и РАСШИРЕНО:
+    // замах тела теперь тоже переживает загрузку, а он не переживал.
+    ActingSnap acting{};
     // Version 9 / SAVSTAT: live status effects. Local `playerStatus` in main —
     // not an ECS component — so capture/restore is a direct assignment.
     StatusSet status{};

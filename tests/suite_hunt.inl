@@ -107,7 +107,7 @@ static void test_hunt_all() {
         Entity mob = reg.create();
         reg.emplace<Transform>(mob, bt);            // same cell: unmissable
         reg.emplace<MobRef>(mob, MobRef{weakKind, 1, 100, 100});
-        reg.emplace<MobCombat>(mob, MobCombat{0, 0});
+        reg.emplace<Acting>(mob, Acting{});
 
         // Entity ids come from the registry, so the licensed and unlicensed ticks are
         // FOUND rather than chosen.
@@ -200,7 +200,7 @@ static void test_hunt_all() {
             Entity mob = reg.create();
             reg.emplace<Transform>(mob, bt);
             reg.emplace<MobRef>(mob, MobRef{weakKind, 1, 100, 100});
-            reg.emplace<MobCombat>(mob, MobCombat{0, 0});
+            reg.emplace<Acting>(mob, Acting{});
 
             const std::uint32_t key =
                 static_cast<std::uint32_t>(entt::to_integral(mob));
@@ -286,7 +286,7 @@ static void test_hunt_all() {
         Entity mob = reg.create();
         reg.emplace<Transform>(mob, at);
         reg.emplace<MobRef>(mob, MobRef{weakKind, 1, 100, 100});
-        reg.emplace<MobCombat>(mob, MobCombat{0, 0});
+        reg.emplace<Acting>(mob, Acting{});
 
         const std::uint32_t key = static_cast<std::uint32_t>(entt::to_integral(mob));
         std::uint64_t quiet = 0;
@@ -347,7 +347,7 @@ static void test_hunt_all() {
         rooms_declare(reg.ctx().emplace<FloorRooms>(), 15, spec, 4242u);
         const std::uint32_t mobs = spawn_floor_mobs(
             reg, stack.layer(layer), 15, danger_for_hostility(spec.hostility),
-            theme_for_kind(FloorKind::Residential), layer, 31u, 0,
+            theme_for_kind(FloorKind::Residential), layer, 31u, /*tick=*/0, 0,
             FloorKind::Residential);
 
         // НАСТОЯЩИЙ БЕЙК ЗОН (§88/F.2) — синтетика здесь не годится и это не

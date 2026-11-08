@@ -461,6 +461,10 @@ _giga_csv_vs_header("data/monster_traits.csv" "src/game/monster_traits.h"
 # would leave every one of them short.
 _giga_csv_vs_header("data/verbs.csv" "src/game/verb_table.h"
     "kVerbCount[ \t]*=[ \t]*([0-9]+)" "verb")
+# Словарь действий (CANON S22) — id действия едет в сейве внутри `Acting`, и
+# строка, дописанная без перегенерации, сдвинула бы смысл сохранённых окон.
+_giga_csv_vs_header("data/actions.csv" "src/game/action_table.h"
+    "kActionCount[ \t]*=[ \t]*([0-9]+)" "action")
 
 # ---- Rule: решёточная таксономия комнат МЕРТВА (rooms-object F) -------------
 # Комнаты — объекты модуля (game/room.h, roomAt-раскраска); хеш «вида» по

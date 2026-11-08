@@ -54,7 +54,7 @@ Entity place_mob(Registry& reg, LayerId layer, MobKind kind, const vec3& at,
     t.layer = layer;
     reg.emplace<Transform>(e, t);
     reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(kind), 1, 500, 500});
-    reg.emplace<MobCombat>(e, MobCombat{0, 0});
+    reg.emplace<Acting>(e, Acting{});
     return e;
 }
 

@@ -301,14 +301,34 @@ template <class Ar, class R>
 void visit_ranged(Ar& ar, R& r) {
     // v21: ДВЕ РУКИ — ствольное состояние поле-за-полем на каждую
     // ([combat.h] GunHand; акимбо-агностика владельца 2026-08-31).
+    // v28 (CANON S22): `cooldownMs`/`reloadMs` из руки СНЕСЕНЫ — занятость
+    // руки едет своей секцией (`visit_acting` ниже) остатком окна, а не
+    // двумя таймерами в миллисекундах. Рука несёт то, чем она является помимо
+    // времени: магазин и ствол.
     for (int h = 0; h < 2; ++h) {
-        ar.u16(r.hand[h].cooldownMs);
-        ar.u16(r.hand[h].reloadMs);
         ar.u16(r.hand[h].magCount);
         ar.u16(r.hand[h].weapon);
     }
     ar.u32(r.shots);
     ar.u32(r.hits);
+}
+
+// v28 / S22: ЗАНЯТОСТЬ НОСИТЕЛЯ — три окна, каждое ОСТАТКОМ.
+//
+// Абсолютный `startTick` на провод НЕ идёт, и это не экономия двух байт:
+// `simTick` после перезапуска начинается с нуля, и окно, начавшееся «на
+// пятисоттысячном тике», осталось бы занятым навсегда. Остаток же значит одно и
+// то же в любой сессии ([game/action.h] acting_snap/acting_restore — там и
+// перебазирование).
+template <class Ar, class A>
+void visit_acting(Ar& ar, A& a) {
+    for (std::size_t i = 0; i < kActSlotCount; ++i) {
+        ar.u16(a.slot[i].durTicks);
+        ar.u16(a.slot[i].remainTicks);
+        ar.u16(a.slot[i].applyTicks);
+        ar.u8(a.slot[i].action);
+        ar.u8(a.slot[i].applied);
+    }
 }
 
 // Version 9 / SAVSTAT: StatusSet field-by-field. Order is remainMs then
@@ -540,8 +560,9 @@ static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + conditi
 // ONLY in asserts and the prose only names the parts.
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 89);
-static_assert(kRangedWire == 24); // v22: две руки, throw-таймера нет
-static_assert(kCombatSaveWire == 29);
+static_assert(kRangedWire == 16); // v28: таймеры рук ушли в снимок занятости
+static_assert(kCombatSaveWire == 45); // + kActingWire 24 (три окна по 8 Б)
+static_assert(kActingWire == 24);
 static_assert(kStatusWire == 42);
 static_assert(kSamosborWire == 17);
 static_assert(kFastTravelWire == 32);
@@ -560,7 +581,7 @@ static_assert(kSaveFixedWire ==
               kLedgerWire + kPlayerWire + kRpgWire + kCraftingWire +
                   kCombatSaveWire + kStatusWire + kSamosborWire +
                   kFastTravelWire);
-static_assert(kSaveFixedWire == 610);  // v26: -79 книга, -294 квест-лог, -45 банк
+static_assert(kSaveFixedWire == 626);  // v28: -8 таймеры рук, +24 снимок занятости
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
@@ -568,8 +589,8 @@ static_assert(kFactionWire == 36);
 // sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
 // v26: шапка 64 + фикс 610 + фракции 36 = 710 (было 1128, снято 418).
 static_assert(save_bytes_for() == kSaveHeaderWire + kSaveFixedWire + kFactionWire);
-static_assert(save_bytes_for() == 710);
-static_assert(save_bytes_for(100, 50) == 710 + 150);
+static_assert(save_bytes_for() == 726);  // v28: 710 + 16
+static_assert(save_bytes_for(100, 50) == 726 + 150);
 
 // ЗДЕСЬ СТОЯЛ ЕДИНСТВЕННЫЙ В ДЕРЕВЕ ПИН `sizeof(ContractBook) == 88` — книга
 // контрактов была сериализуемой структурой, которую никто не пинил рядом с её
@@ -603,6 +624,10 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     bw.u8(st.hasRanged);
     visit_ranged(bw, st.ranged);
     bw.u32(st.kills);
+    // v28: занятость игрока — фиксированный блок, и он встаёт ЗДЕСЬ, рядом со
+    // своей роднёй (ствол, замах), а не в хвосте: закон раскладки — фиксы
+    // впереди переменных.
+    visit_acting(bw, st.acting);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(bw, st.status);
     // Version 10 / SAVCLOCK: the two run-scoped clocks. Placed HERE — after the last
@@ -743,6 +768,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     r.u8(tmp.hasRanged);
     visit_ranged(r, tmp.ranged);
     r.u32(tmp.kills);
+    visit_acting(r, tmp.acting);
     // Version 9 / SAVSTAT: live status effects.
     visit_status(r, tmp.status);
     // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.

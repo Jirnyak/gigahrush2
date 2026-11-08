@@ -128,9 +128,27 @@ void draw_hands(const HudContext& c) {
         const game::RangedDef* rd = game::ranged_for_item(hi);
         if (rd && !game::ranged_is_thrown(hi)) {
             const game::GunHand* gh = pr ? &pr->hand[h] : nullptr;
-            if (gh && gh->reloadMs > 0)
-                ImGui::TextColored(kAmber, "%s: %s  ПЕРЕЗАРЯДКА %.1fс", tag,
-                                   game::item_name(hi), gh->reloadMs * 0.001);
+            // S22: «сколько осталось перезаряжать» — ОСТАТОК ОКНА руки, а не
+            // поле в руке. Худ спрашивает то же, что и бой, и не может
+            // разойтись с ним: величина одна.
+            const game::ActSlot hs =
+                h == 1 ? game::ActSlot::HandR : game::ActSlot::HandL;
+            const auto* act = c.reg->try_get<game::Acting>(c.player);
+            const bool reloading =
+                act && game::acting_what(*act, hs, c.tick) == game::kActReload;
+            if (reloading)
+                // СЛОВО — ИЗ СТРОКИ ДЕЙСТВИЯ (`kActionNames`), а не литерал
+                // здесь: литерал «ПЕРЕЗАРЯДКА» был вторым написанием того, что
+                // уже названо в `data/actions.csv`, и расходился бы с ним
+                // молча.
+                ImGui::TextColored(
+                    kAmber, "%s: %s  %s %.1fс", tag,
+                    game::item_name(hi),
+                    game::kActionNames[game::kActReload],
+                    static_cast<double>(
+                        game::act_slot(*act, hs).durTicks -
+                        game::act_elapsed(game::act_slot(*act, hs), c.tick)) *
+                        static_cast<double>(giga::kSimStepMs) * 0.001);
             else
                 ImGui::Text("%s: %s  %u/%u", tag, game::item_name(hi),
                             gh ? gh->magCount : 0, rd->magazine);

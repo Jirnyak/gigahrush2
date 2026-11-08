@@ -108,6 +108,7 @@ int g_checks = 0;
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
 #include "suite_chronicle.inl"  // ЛЕТОПИСЬ (S21) — память мира
+#include "suite_action.inl"      // ДЕЙСТВИЯ (S22) — одна дверь занятости
 // Wave 5. Each of these carries its own #includes rather than leaning on the prelude
 // above, because they reach for headers this file never needed: sim/diffusion.h,
 // game/ai.h, game/loot_table.h, game/needs.h, world/field.h.
@@ -846,14 +847,12 @@ static void test_elevator() {
     CHECK(!reg.all_of<PlayerMelee>(p));
     {
         PlayerRanged pr{};
-        pr.hand[0].cooldownMs = 0;
-        pr.hand[0].reloadMs = 0;
         pr.hand[0].magCount = 12;
         pr.hand[0].weapon = static_cast<ItemId>(7); // sentinel gun id; not table-looked-up
         pr.shots = 7;
         pr.hits = 3;
         reg.emplace<PlayerRanged>(p, pr);
-        reg.emplace<PlayerMelee>(p, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
+        reg.emplace<PlayerMelee>(p, PlayerMelee{/*kills=*/99});
     }
 
     // RPG1: character sheet lives on the BODY. embody_as_player re-rolls via
@@ -1645,7 +1644,8 @@ static void test_mob_spawn() {
     CHECK(budget > 0);
 
     const std::uint32_t n =
-        spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u);
+        spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u,
+                         /*tick=*/0);
     CHECK(n > 0);
     CHECK(n <= budget);                        // never exceeds the budget
     CHECK(count_layer_mobs(reg, 0) == n);
@@ -1681,7 +1681,7 @@ static void test_mob_spawn() {
     // floor from adding thousands of entities in one frame.
     Registry capped;
     rooms_declare(capped.ctx().emplace<FloorRooms>(), 4, spec, 11u);
-    std::uint32_t c = spawn_floor_mobs(capped, w, 4, danger, theme, 0, 77u,
+    std::uint32_t c = spawn_floor_mobs(capped, w, 4, danger, theme, 0, 77u, /*tick=*/0,
                                        /*cap=*/5);
     CHECK(c <= 5);
 
@@ -1689,7 +1689,7 @@ static void test_mob_spawn() {
     // places, or unloading and reloading a floor visibly rearranges it.
     Registry again;
     rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
-    std::uint32_t n2 = spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u);
+    std::uint32_t n2 = spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, /*tick=*/0);
     CHECK(n2 == n);
 
     // Despawn is total and layer-scoped.
@@ -2107,10 +2107,22 @@ static void test_melee_cooldown_and_reach() {
     ft.layer = 0;
     reg.emplace<Transform>(far, ft);
     reg.emplace<MobRef>(far, MobRef{kind, 1, 100, 100});
-    reg.emplace<MobCombat>(far, MobCombat{500});
+    {
+        // S22: «моб занят темпом» — ОКНО, открытое на нулевом тике. Прежде
+        // здесь стояло `MobCombat{500}` и проверялось вычитание; вычитать
+        // больше нечего, поэтому проверяется то, что и спрашивает игра.
+        Acting a{};
+        CHECK(acting_begin_ms(a, ActSlot::Body, kActMaul, 500, 0, 0));
+        reg.emplace<Acting>(far, a);
+    }
 
     CHECK(mob_attack_step(reg, grid, pool, bus, 0, dt, 0) == 0);
-    CHECK(reg.get<MobCombat>(far).cooldownMs == 500 - step);
+    CHECK(acting_busy(reg.get<Acting>(far), ActSlot::Body, 1));
+    // Длина окна — авторские миллисекунды, переведённые ВВЕРХ ровно так, как
+    // их отсчитывал прежний декремент ([core/tick.h] ms_to_ticks).
+    CHECK(act_slot(reg.get<Acting>(far), ActSlot::Body).durTicks ==
+          ms_to_ticks(500));
+    CHECK(!acting_busy(reg.get<Acting>(far), ActSlot::Body, ms_to_ticks(500)));
     CHECK(pool.hp(pid) == 30000);
 
     // Adjacent mob with an expired cooldown hits on the first pass.
@@ -2120,14 +2132,16 @@ static void test_melee_cooldown_and_reach() {
     nt.layer = 0;
     reg.emplace<Transform>(adj, nt);
     reg.emplace<MobRef>(adj, MobRef{kind, 1, 100, 100});
-    reg.emplace<MobCombat>(adj, MobCombat{0});
+    reg.emplace<Acting>(adj, Acting{});
 
     CHECK(mob_attack_step(reg, grid, pool, bus, 0, dt, 1) == 1);
     const std::int16_t expect = static_cast<std::int16_t>(
         mob_hp_at_level(def.dmg, 1));
     CHECK(pool.hp(pid) == 30000 - expect);
-    // Reset to the AUTHORED rate — not to zero, and not through a max() floor.
-    CHECK(reg.get<MobCombat>(adj).cooldownMs == def.attackCdMs);
+    // Окно — АВТОРСКОГО темпа, не нуля и не через max()-пол.
+    CHECK(acting_what(reg.get<Acting>(adj), ActSlot::Body, 1) == kActMaul);
+    CHECK(act_slot(reg.get<Acting>(adj), ActSlot::Body).durTicks ==
+          ms_to_ticks(def.attackCdMs));
 
     // It may not swing again until the whole cooldown has elapsed. This is the
     // defect: run one pass short of it and assert no second hit.
@@ -2138,10 +2152,17 @@ static void test_melee_cooldown_and_reach() {
               == 0);
     CHECK(pool.hp(pid) == hpAfterFirst);
     // ...and then exactly one more, once it has.
+    //
+    // S22: ТИК, А НЕ ЧИСЛО ВЫЗОВОВ. Прежние таймеры вычитались ПО ВЫЗОВУ (на
+    // `dt`), поэтому стенд мог звать проход с любым тиком и всё равно
+    // «состарить» кулдаун; два вызова в один тик старили его ВДВОЕ. Окно живёт
+    // в тиках, и момент берётся из окна, а не назначается: начало + длина.
+    const std::uint64_t freeAt =
+        1u + act_slot(reg.get<Acting>(adj), ActSlot::Body).durTicks;
     std::uint32_t later = 0;
     for (int i = 0; i < 3; ++i)
         later += mob_attack_step(reg, grid, pool, bus, 0, dt,
-                                100u + static_cast<std::uint64_t>(i));
+                                 freeAt + static_cast<std::uint64_t>(i));
     CHECK(later == 1);
 }
 
@@ -2541,7 +2562,7 @@ static void test_ranged_windup_and_deadzone() {
         t.layer = layer;
         reg.emplace<Transform>(e, t);
         reg.emplace<MobRef>(e, MobRef{kind, 1, 500, 500});
-        reg.emplace<MobCombat>(e, MobCombat{0, 0});
+        reg.emplace<Acting>(e, Acting{});
         return e;
     };
 
@@ -2552,7 +2573,14 @@ static void test_ranged_windup_and_deadzone() {
     Entity shooter = place(12.0f);
     // The first pass starts the telegraph and fires NOTHING. That is the point.
     CHECK(mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, 0) == 0);
-    CHECK(reg.get<MobCombat>(shooter).windupMs == def.windupMs);
+    // S22: виндап и темп — ОДНО окно. Окно = виндап + кулдаун, контактный
+    // кадр = виндап; «замах идёт» это просто «слот занят выстрелом».
+    CHECK(acting_what(reg.get<Acting>(shooter), ActSlot::Body, 0) == kActShot);
+    CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::Body).applyTicks ==
+          ms_to_ticks(def.windupMs));
+    CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::Body).durTicks ==
+          ms_to_ticks(def.windupMs) + ms_to_ticks(def.attackCdMs));
+    CHECK(!acting_applied(reg.get<Acting>(shooter), ActSlot::Body));
     std::uint32_t inFlight = 0;
     for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
     CHECK(inFlight == 0);            // telegraphing, nothing launched yet
@@ -2567,10 +2595,15 @@ static void test_ranged_windup_and_deadzone() {
         for (auto e : reg.view<const Projectile>()) { (void)e; ++f; }
         CHECK(f == 0);
     }
-    CHECK(reg.get<MobCombat>(shooter).windupMs > 0);   // a remainder is still due
-    // The pass that finishes the windup is the pass that fires.
-    mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, 500u);
-    CHECK(reg.get<MobCombat>(shooter).windupMs == 0);
+    // Контактный кадр ещё не снят — замах не кончился.
+    CHECK(!acting_applied(reg.get<Acting>(shooter), ActSlot::Body));
+    // The pass that finishes the windup is the pass that fires — и это ТИК
+    // контактного кадра, взятый из самого окна, а не круглое число.
+    const std::uint64_t fireAt =
+        act_slot(reg.get<Acting>(shooter), ActSlot::Body).applyTicks;
+    mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt,
+                    fireAt);
+    CHECK(acting_applied(reg.get<Acting>(shooter), ActSlot::Body));
     inFlight = 0;
     for (auto e : reg.view<const Projectile>()) { (void)e; ++inFlight; }
     CHECK(inFlight >= 1);
@@ -2622,14 +2655,18 @@ static void test_ranged_windup_and_deadzone() {
     t2.layer = layer;
     r2.emplace<Transform>(s2, t2);
     r2.emplace<MobRef>(s2, MobRef{kind, 1, 500, 500});
-    r2.emplace<MobCombat>(s2, MobCombat{0, 0});
+    r2.emplace<Acting>(s2, Acting{});
 
     mob_attack_step(r2, stack.layer(layer).grid(), p2, bus, layer, dt, 0);
-    CHECK(r2.get<MobCombat>(s2).windupMs > 0);   // telegraphing
-    // Walk it far out of range; the next pass must clear the windup.
+    CHECK(acting_what(r2.get<Acting>(s2), ActSlot::Body, 0) == kActShot);
+    // Walk it far out of range; the next pass must BREAK the aim — и сорвать
+    // его ОДНОЙ ДВЕРЬЮ по причине `target`, законной строкой `shot`.
     r2.get<Transform>(s2).pos.x = pp2.x + 200.0f;
     mob_attack_step(r2, stack.layer(layer).grid(), p2, bus, layer, dt, 1);
-    CHECK(r2.get<MobCombat>(s2).windupMs == 0);
+    CHECK(!acting_busy(r2.get<Acting>(s2), ActSlot::Body, 1));
+    // Обрыв ДО контактного кадра = возврат: темпом моб не наказан и может
+    // целиться заново, как только цель вернётся (прежнее поведение `windupMs = 0`).
+    CHECK(!acting_applied(r2.get<Acting>(s2), ActSlot::Body));
     std::uint32_t shots = 0;
     for (auto e : r2.view<const Projectile>()) { (void)e; ++shots; }
     CHECK(shots == 0);                            // aborted, not banked
@@ -3226,7 +3263,8 @@ static void test_player_shoots() {
     const PlayerRanged* pr = reg.try_get<PlayerRanged>(shooter);
     CHECK(pr != nullptr);
     CHECK(pr->hand[0].magCount == def.magazine);       // a full magazine came out of the pack
-    CHECK(pr->hand[0].reloadMs > 0);
+    // S22: «рука перезаряжается» — ОКНО `reload` на её слоте.
+    CHECK(acting_what(reg.get<Acting>(shooter), ActSlot::HandL, 0) == kActReload);
     // ...and the rounds LEFT the inventory. A reload that duplicated ammo would be
     // invisible until someone counted.
     std::uint16_t left = 0;
@@ -3248,13 +3286,22 @@ static void test_player_shoots() {
     for (int i = 1; i < clearAt; ++i)
         CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                                  static_cast<std::uint64_t>(i)) == 0);
-    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs > 0);   // still not ready
-    // The step that clears the reload is the step that fires.
+    // S22: «ещё не готов» — окно `reload` на слоте руки всё ещё идёт.
+    CHECK(acting_what(reg.get<Acting>(shooter), ActSlot::HandL,
+                      static_cast<std::uint64_t>(clearAt - 1)) == kActReload);
+    // The step that clears the reload is the step that fires. Длина окна
+    // перезарядки — ровно те же ceil(reload/step) тиков, что отсчитывал
+    // прежний декремент: свод обязан быть бит-в-бит.
+    CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::HandL).durTicks ==
+          static_cast<std::uint16_t>(clearAt));
     CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
                              static_cast<std::uint64_t>(clearAt)) == 1);
-    CHECK(reg.get<PlayerRanged>(shooter).hand[0].reloadMs == 0);
     CHECK(reg.get<PlayerRanged>(shooter).hand[0].magCount == magBefore - 1);
-    CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs == def.cooldownMs);
+    // Окно сменилось на `shoot` — рука занята уже темпом, а не перезарядкой.
+    CHECK(acting_what(reg.get<Acting>(shooter), ActSlot::HandL,
+                      static_cast<std::uint64_t>(clearAt)) == kActShoot);
+    CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::HandL).durTicks ==
+          ms_to_ticks(def.cooldownMs));
 
     // One pellet, tagged as the player's, flying flat.
     int inFlight = 0;
@@ -3266,8 +3313,11 @@ static void test_player_shoots() {
     }
     CHECK(inFlight == def.pellets);
 
-    // The cooldown gates the next shot rather than the trigger being polled.
-    CHECK(player_ranged_step(reg, pool, layer, true, false, dt, 501u) == 0);
+    // The cooldown gates the next shot rather than the trigger being polled —
+    // и ворота ТЕПЕРЬ ВО ВРЕМЕНИ, а не в числе вызовов: спросить на том же
+    // тике, на котором стреляли, обязано дать отказ.
+    CHECK(player_ranged_step(reg, pool, layer, true, false, dt,
+                             static_cast<std::uint64_t>(clearAt)) == 0);
 
     // Fly it. THE assertion: the monster loses HP and the SHOOTER does not.
     const std::int16_t mobHp0 = reg.get<MobRef>(mob).hp;
@@ -3973,10 +4023,14 @@ static void test_grenade() {
                                     false, 40u) == 0); // ЛКМ пуста — тишина
             CHECK(player_throw_step(reg, pool, layer, false, /*R*/ true,
                                     false, 40u) == 1);
-            CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs ==
-                  gdef.cooldownMs); // темп ПКМ
-            CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs == 0);
-            reg.get<PlayerRanged>(me).hand[1].cooldownMs = 0; // стенд дальше
+            CHECK(act_slot(reg.get<Acting>(me), ActSlot::HandR).durTicks ==
+                  ms_to_ticks(gdef.cooldownMs)); // темп ПКМ
+            CHECK(!acting_busy(reg.get<Acting>(me), ActSlot::HandL, 40u));
+            // Стенд забирает предмет из ПКМ — та же ОДНА дверь обрыва, что у
+            // смены ствола (`kBreakHand` законен строкой `throw`), а не
+            // присваивание нуля в поле, которого больше нет.
+            CHECK(break_action(reg.get<Acting>(me), ActSlot::HandR,
+                               kBreakHand, 40u).broken);
             unequip_slot(teq, EquipSlot::Tool);
             // Улетевший ПКМ-заряд рвётся вдали от стенда — дальнейшие пины
             // (flying == 1 и т.д.) считают только следующий бросок.
@@ -3994,9 +4048,9 @@ static void test_grenade() {
         for (const ItemSlot& sl : inv.slots)
             if (sl.item == gren) left = sl.count;
         CHECK(left == 1);
-        CHECK(reg.get<PlayerRanged>(me).hand[0].cooldownMs ==
-              gdef.cooldownMs); // темп руки ЛКМ
-        CHECK(reg.get<PlayerRanged>(me).hand[1].cooldownMs == 0); // ПКМ свободна
+        CHECK(act_slot(reg.get<Acting>(me), ActSlot::HandL).durTicks ==
+              ms_to_ticks(gdef.cooldownMs)); // темп руки ЛКМ
+        CHECK(!acting_busy(reg.get<Acting>(me), ActSlot::HandR, 49u)); // ПКМ свободна
         // В воздухе — ЗАРЯД-ПРОП: тело рагдолл-ядра, авторский фитиль
         // (3000 мс × 125 Гц = 375 тиков от тика броска), атрибуция броска.
         int flying = 0;
@@ -4408,7 +4462,7 @@ static void test_faction_gates_hunting() {
         Transform mt = bt;                 // same cell: unmissable
         r.emplace<Transform>(mob, mt);
         r.emplace<MobRef>(mob, MobRef{kind, 1, 100, 100});
-        r.emplace<MobCombat>(mob, MobCombat{0, 0});
+        r.emplace<Acting>(mob, Acting{});
 
         for (int i = 0; i < 4; ++i)
             mob_attack_step(r, stack.layer(layer).grid(), p, bus, layer, dt,
@@ -5221,6 +5275,7 @@ int main() {
     test_samosbor2_all();
     test_faction2_all();
     test_chronicle_all();
+    test_action_all();
     // Wave 5: diffusion (was dead code on main), the reconciled loot table, and the
     // utility AI's Velocity-ownership arbitration.
     test_diffusion_all();

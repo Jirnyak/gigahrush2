@@ -534,7 +534,11 @@ static void test_rpg_combat_wire() {
                                 /*tick=*/1u) == true);
         CHECK(reg.get<MobRef>(mob).hp ==
               hp0 - static_cast<std::int16_t>(fist.dmg));
-        CHECK(reg.get<PlayerMelee>(self).cooldownMs == fist.cooldownMs);
+        // S22: темп замаха — ДЛИНА ОКНА `swing` на слоте тела, и число то же
+        // самое, только в тиках (перевод вверх, [core/tick.h] ms_to_ticks).
+        CHECK(acting_what(reg.get<Acting>(self), ActSlot::Body, 1u) == kActSwing);
+        CHECK(act_slot(reg.get<Acting>(self), ActSlot::Body).durTicks ==
+              ms_to_ticks(fist.cooldownMs));
     }
 
     // ---- 2. Melee bare fists, high STR/AGI/level → scaled dmg + scaled CD --
@@ -592,8 +596,8 @@ static void test_rpg_combat_wire() {
         CHECK(player_melee_step(reg, pool, bus, layer, dt, /*wantsAttack=*/true,
                                 /*tick=*/1u) == true);
         CHECK(reg.get<MobRef>(mob).hp == hp0 - expectDmg);
-        CHECK(reg.get<PlayerMelee>(self).cooldownMs ==
-              static_cast<std::uint16_t>(expectCd));
+        CHECK(act_slot(reg.get<Acting>(self), ActSlot::Body).durTicks ==
+              ms_to_ticks(static_cast<std::uint32_t>(expectCd)));
     }
 
     // ---- 3. Ranged, NO RpgStats → table cooldown (identity) ----------------
@@ -637,11 +641,12 @@ static void test_rpg_combat_wire() {
         reg.emplace<CameraTag>(shooter, cam);
         // Pre-armed: skip the gun-swap + reload branches so tick 0 fires.
         reg.emplace<PlayerRanged>(
-            shooter, PlayerRanged{0, 0, def->magazine, gun, 0, 0});
+            shooter, PlayerRanged{def->magazine, gun, 0, 0});
 
         CHECK(player_ranged_step(reg, pool, layer, /*wantFireL=*/true, false, dt,
                                  /*tick=*/1u) == 1u);
-        CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs == def->cooldownMs);
+        CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::HandL).durTicks ==
+              ms_to_ticks(def->cooldownMs));
     }
 
     // ---- 4. Ranged, high AGI → shortened cooldown --------------------------
@@ -688,7 +693,7 @@ static void test_rpg_combat_wire() {
         reg.emplace<RpgStats>(shooter, rs);
 
         reg.emplace<PlayerRanged>(
-            shooter, PlayerRanged{0, 0, def->magazine, gun, 0, 0});
+            shooter, PlayerRanged{def->magazine, gun, 0, 0});
 
         const std::uint32_t agiE3 = agi_attack_speed_mult_e3(rs);
         const std::uint32_t expectCd =
@@ -699,8 +704,8 @@ static void test_rpg_combat_wire() {
 
         CHECK(player_ranged_step(reg, pool, layer, /*wantFireL=*/true, false, dt,
                                  /*tick=*/1u) == 1u);
-        CHECK(reg.get<PlayerRanged>(shooter).hand[0].cooldownMs ==
-              static_cast<std::uint16_t>(expectCd));
+        CHECK(act_slot(reg.get<Acting>(shooter), ActSlot::HandL).durTicks ==
+              ms_to_ticks(static_cast<std::uint32_t>(expectCd)));
     }
 }
 
@@ -743,7 +748,7 @@ static void test_rpg_possess_transfer() {
         rs.attr[static_cast<std::size_t>(Attr::Agi)] = 9;
         rs.attr[static_cast<std::size_t>(Attr::Int)] = 7;
     }
-    reg.emplace<PlayerMelee>(from, PlayerMelee{/*cooldownMs=*/0, /*kills=*/99});
+    reg.emplace<PlayerMelee>(from, PlayerMelee{/*kills=*/99});
     {
         PlayerRanged pr{};
         pr.hand[0].magCount = 12;

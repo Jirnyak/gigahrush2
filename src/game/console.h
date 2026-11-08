@@ -93,6 +93,11 @@ struct ConsoleContext {
     const FloorCatalog* catalog = nullptr;
     Entity player = entt::null;
     int currentFloor = 0;
+    // ЖИВОЙ сим-тик. Нужен командам, которые рождают ВРЕМЯ: `spawn` сеет
+    // монстра, а у монстра шахматный сдвиг первого темпа есть окно действия
+    // (CANON S22), и окно без «сейчас» выразить нечем. Обновляется тем же
+    // refresh_console_ctx, что и этаж.
+    std::uint64_t tick = 0;
 
     // Fast-travel unlock bitset ([fast_travel.h] §24). Null in headless tests
     // that never touch `fasttravel`/`ft`. The app owns the state and points

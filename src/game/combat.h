@@ -35,6 +35,7 @@
 
 #include "ecs/components.h"
 #include "ecs/registry.h"
+#include "game/action.h"   // Acting — занятость носителя окном (CANON S22)
 #include "game/event_bus.h"
 #include "game/status.h"
 #include "game/equip.h"    // Equipped — the decision the strict helpers read
@@ -265,15 +266,21 @@ struct Corpse {
 static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");
 
 
-// Per-instance melee state. Separate from MobRef because MobRef is the spawn
-// record (what this monster IS) and this is combat state (what it is DOING).
-struct MobCombat {
-    std::uint16_t cooldownMs = 0;  // time until this mob may attack again
-    // >0 while a ranged shot is being telegraphed. The windup is the whole reason
-    // ranged monsters are fair: you get 0.48-1.25 s of warning, per kind, and
-    // breaking line of sight or leaving the cone during it aborts the shot.
-    std::uint16_t windupMs = 0;
-};
+// `MobCombat` СНЕСЁН 2026-11-08 (CANON S22, единая система действий).
+//
+// Он был «per-instance melee state» и несла его ровно пара таймеров:
+// `cooldownMs` (темп) и `windupMs` (телеграф выстрела). Обе величины — ЗАНЯТОСТЬ
+// НОСИТЕЛЯ, то есть то самое, что теперь выражено ОКНОМ: `Acting` на слоте
+// `Body`, строка `kActMaul` для контакта и `kActShot` для выстрела, у которого
+// окно = виндап + кулдаун, а контактный кадр = виндап ([game/action.h]).
+//
+// Вместе с полями умер флаг `windupDone`: он существовал потому, что НОЛЬ одного
+// u16 не различал «замаха не было» и «замах только что кончился», и без него моб
+// заводил телеграф вечно, ни разу не выстрелив. В окне различать нечего.
+//
+// «Это настоящий монстр, а не голый Transform» теперь отвечает `Acting` —
+// компонент, который сеет `mob_spawn` (там же и ШАХМАТНЫЙ сдвиг первого темпа,
+// чтобы пачка не ударила в унисон).
 
 // A temporary cap on how fast a body may move horizontally, in m/s.
 //
@@ -432,9 +439,13 @@ inline constexpr float kMuzzleForward = 1.7f;
 // затвор, свой кулдаун, своё оружие. Смена ствола в руке очищает ЕЁ
 // магазин, не соседкин; два одинаковых ствола честно тянут патроны из
 // одного рюкзака по очереди перезарядок.
+// v27 -> S22: `cooldownMs` и `reloadMs` СНЕСЕНЫ из руки. Обе были занятостью
+// ЭТОЙ руки — темп после выстрела и перезарядка, — то есть одна величина под
+// двумя именами в одном слоте. Теперь слот один: `ActSlot::HandL`/`HandR` в
+// `Acting`, а что именно рука делает, говорит строка (`kActShoot`,
+// `kActReload`, `kActHurl`). Рука осталась ровно тем, чем она и была помимо
+// времени: магазин и ствол.
 struct GunHand {
-    std::uint16_t cooldownMs = 0;
-    std::uint16_t reloadMs = 0;
     std::uint16_t magCount = 0;
     ItemId weapon = 0;
 };
@@ -447,8 +458,11 @@ struct PlayerRanged {
 
 // The camera holder's swing state. Attached lazily by player_melee_step, so
 // possessing a new body after death does not need to remember to add it.
+//
+// S22: `cooldownMs` снесён — замах есть занятость ТЕЛА, то есть окно
+// `kActSwing` на слоте `ActSlot::Body`. Осталось то, что временем не является:
+// пожизненный счёт убитых, переезжающий с сознанием при одержании.
 struct PlayerMelee {
-    std::uint16_t cooldownMs = 0;
     std::uint32_t kills = 0;       // cumulative, survives possession
 };
 

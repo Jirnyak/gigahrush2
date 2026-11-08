@@ -7,6 +7,8 @@
 // that pass while the game is wrong or fail while the game is right.
 #pragma once
 
+#include <cstdint>
+
 namespace giga {
 
 // **125 Hz, and the reason is arithmetic rather than preference.**
@@ -31,5 +33,21 @@ inline constexpr int kSimStepMs = 1000 / kSimHz;
 static_assert(kSimStepMs * kSimHz == 1000,
               "the tick must divide a second exactly, or every integer-millisecond "
               "timer in the game runs slow");
+
+// АВТОРСКИЕ МИЛЛИСЕКУНДЫ -> ТИКИ, ОДНА ДВЕРЬ (CANON S22: одна единица времени
+// на всё дерево — тик; миллисекунды остаются в строках данных, которые их
+// авторят).
+//
+// ОКРУГЛЕНИЕ ВВЕРХ, И ЭТО ЗАМЕР, А НЕ ВКУС. Декрементный счётчик, который эта
+// функция заменяет, вычитал ровно `kSimStepMs` за тик и считался занятым, пока
+// остаток больше нуля, — то есть занимал `ceil(ms / 8)` тиков. Любое другое
+// округление сдвинуло бы темп КАЖДОГО оружия и моба на полтика относительно
+// авторской строки: 340 мс (кулак) — 43 тика вверх против 42 к ближайшему, и
+// это 2.3 % скорости удара на пустом месте. Поэтому вверх: свод пяти таймеров в
+// одно поле обязан быть бит-в-бит, иначе он не свод, а балансная правка.
+inline constexpr std::uint32_t ms_to_ticks(std::uint32_t ms) {
+    return (ms + static_cast<std::uint32_t>(kSimStepMs) - 1u) /
+           static_cast<std::uint32_t>(kSimStepMs);
+}
 
 } // namespace giga

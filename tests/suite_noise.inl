@@ -391,7 +391,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         // which is what makes the loud and silent runs identical in every other way.
         if (def)
             r.reg.emplace_or_replace<PlayerRanged>(
-                r.player, PlayerRanged{0, 0, def->magazine, gun, 0, 0});
+                r.player, PlayerRanged{def->magazine, gun, 0, 0});
 
         // A Zombie: Plain behaviour, ordinary speed, nothing special to confound the
         // measurement.
@@ -402,7 +402,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         r.reg.emplace<GravityAffected>(r.mob, GravityAffected{});
         r.reg.emplace<MobRef>(
             r.mob, MobRef{static_cast<std::uint8_t>(MobKind::Zombie), 1, 40, 40});
-        r.reg.emplace<MobCombat>(r.mob, MobCombat{});
+        r.reg.emplace<Acting>(r.mob, Acting{});
         CHECK(wander_init(r.reg, 0) > 0);
         r.startD = std::sqrt(
             wrap_delta_f(mobPos.x, playerPos.x, kWorldExtent) *

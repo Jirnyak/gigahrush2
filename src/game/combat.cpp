@@ -430,7 +430,10 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
         if (reg.valid(e)) {
             // Pure NPC deaths carry NpcRef only — MobRef is optional.
             if (reg.all_of<MobRef>(e)) reg.remove<MobRef>(e);
-            if (reg.all_of<MobCombat>(e)) reg.remove<MobCombat>(e);
+            // S22: занятость снимается вместе с боевыми компонентами — труп
+            // ничем не занят, а `Acting` на нём пережил бы смерть и мешал бы
+            // ровно так же, как мешал мозг (каток 2026-11-07).
+            if (reg.all_of<Acting>(e)) reg.remove<Acting>(e);
             reg.remove<Dead>(e);
             // СМЕРТЬ = ПЕРЕДАЧА ВЛАДЕНИЯ ДВИЖЕНИЕМ (2026-11-07). Ведение —
             // мозг и цели — снимается ЗДЕСЬ ЖЕ, где боевые компоненты. До
@@ -615,8 +618,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     };
     std::vector<Swing> queued;
 
-    for (auto e : reg.view<const MobRef, const Transform, MobCombat>()) {
-        MobCombat& mc = reg.get<MobCombat>(e);
+    for (auto e : reg.view<const MobRef, const Transform, Acting>()) {
+        Acting& act = reg.get<Acting>(e);
 
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -630,27 +633,25 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // Это был единственный канонический применитель; второй, худший, жил в
         // `wander.cpp` и снят тем же днём.
 
-        // THE single cooldown decrement. Every mob, every tick, exactly once —
-        // whether or not it is in reach, whether or not there is a target.
-        if (mc.cooldownMs > elapsedMs) mc.cooldownMs =
-            static_cast<std::uint16_t>(mc.cooldownMs - elapsedMs);
-        else mc.cooldownMs = 0;
-        // The windup runs down in the SAME one place, for the same reason: two
-        // sites decrementing a timer is how a monster ends up firing twice as fast
-        // as it is authored to.
+        // ЗДЕСЬ СТОЯЛ ЕДИНСТВЕННЫЙ ДЕКРЕМЕНТ КУЛДАУНА И ВИНДАПА — и шапка над
+        // ним честно объясняла, почему он обязан быть единственным (у донора
+        // кулдауны вычитались в ~60 местах, и монстры стреляли вдвое быстрее
+        // авторского темпа). Прохода больше нет: занятость стала ВОПРОСОМ
+        // (`tick - startTick < durTicks`), а вопрос нельзя задать дважды
+        // неправильно (CANON S22, [game/action.h]).
         //
-        // The transition is captured BEFORE the decrement, and that is load-bearing.
-        // A single u16 cannot tell "no telegraph started" from "telegraph just
-        // finished" — both read 0 — so without this flag the ranged branch saw zero
-        // after the windup expired and started a *fresh* telegraph, forever. The mob
-        // would wind up on a loop and never actually fire. Caught by a test, not by
-        // playing: an infinite telegraph looks exactly like a monster idling.
-        const bool windupDone = mc.windupMs > 0 && mc.windupMs <= elapsedMs;
-        if (mc.windupMs > elapsedMs) mc.windupMs =
-            static_cast<std::uint16_t>(mc.windupMs - elapsedMs);
-        else mc.windupMs = 0;
-
-        if (mc.cooldownMs > 0) continue;
+        // Вместе с ним умер флаг `windupDone`: он существовал потому, что ноль
+        // одного u16 не различал «замаха не было» и «замах только что кончился»,
+        // и без него моб заводил телеграф вечно, ни разу не выстрелив. У окна
+        // есть РОД (`kActShot`) и контактный кадр, различать нечего.
+        // Моб, занятый НЕ выстрелом (темп после удара), в этом проходе не делает
+        // ничего. Занятый ВЫСТРЕЛОМ доходит до проверок полосы, и это не
+        // послабление, а два живых закона сразу: уход цели рвёт замах (причина
+        // `target` в строке `shot`), а наступивший контактный кадр выпускает
+        // снаряд — то есть именно то, чем прежде были `windupMs` и его флаг.
+        const ActionId doing = acting_what(act, ActSlot::Body, tick);
+        const bool aiming = doing == kActShot;
+        if (!aiming && acting_busy(act, ActSlot::Body, tick)) continue;
 
         // A CONTROL shooter is a monster whose whole attack is its projectile's
         // effect, so it has to get past a damage gate that was written as if damage
@@ -761,7 +762,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // re-queued on the next pass.
         const float reach = behaviour_melee_reach(beh, def.meleeReachMm, nearWall);
         if (raw > 0 && d2 <= reach * reach) {
-            mc.windupMs = 0;   // contact cancels a shot it was lining up
+            // Контакт отменяет выстрел, который моб выцеливал, — и отменяет
+            // ровно так же, как прежнее `mc.windupMs = 0`, но через ОДНУ дверь
+            // обрыва и по причине, законной СТРОКОЙ. Замах срывается до
+            // контактного кадра, то есть снаряда не было: возврат.
+            if (aiming) break_action(act, ActSlot::Body, kBreakTarget, tick);
             queued.push_back(Swing{e, victim, raw, def.attackCdMs, false, tr.pos,
                                    victimPos, 0, def.projType});
             continue;
@@ -772,7 +777,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         const float maxR = static_cast<float>(def.shotRangeMm) * 0.001f * kCellSize;
         const float minR = static_cast<float>(def.minRangeMm) * 0.001f * kCellSize;
         if (d2 > maxR * maxR || d2 < minR * minR) {
-            mc.windupMs = 0;   // out of the band: abort whatever it was aiming
+            // Вышла из полосы — замах рвётся той же одной дверью. Моб сможет
+            // начать новый, как только цель вернётся: обрыв ДО контакта
+            // освобождает слот целиком, темпом не наказывая (прежнее
+            // `mc.windupMs = 0` вело себя так же).
+            if (aiming) break_action(act, ActSlot::Body, kBreakTarget, tick);
             continue;
         }
 
@@ -780,15 +789,33 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // authored windup runs first, and leaving the band during it aborts (above).
         // This is the entire difference between a fair ranged monster and an unfair
         // one, so it is not optional and not tunable away.
-        if (mc.windupMs > 0) continue;              // mid-telegraph
-        if (!windupDone && def.windupMs > 0) {      // start one
-            mc.windupMs = def.windupMs;
+        //
+        // S22: ТЕЛЕГРАФ И ТЕМП — ОДНО ОКНО. Окно = виндап + кулдаун, контактный
+        // кадр = виндап. Поэтому «замах идёт» больше не отдельное состояние, а
+        // просто «слот занят выстрелом», и ждать нечего, кроме контакта.
+        if (aiming) {
+            if (!acting_take_apply(act, ActSlot::Body, tick)) continue; // ещё замах
+            // `cd` в заявке НОЛЬ: темп уже внутри окна, и второй раз его
+            // назначать нечем — ровно это и было двумя величинами раньше.
+            queued.push_back(Swing{e, victim, raw, 0, true, tr.pos,
+                                   victimPos, def.projSpeedMmps, def.projType});
             continue;
         }
-        // windupDone, or a kind with no authored windup: the shot leaves now.
-
-        queued.push_back(Swing{e, victim, raw, def.attackCdMs, true, tr.pos,
-                               victimPos, def.projSpeedMmps, def.projType});
+        // Слот свободен — НАЧАТЬ выстрел. У строки без авторского виндапа
+        // контактный кадр наступает в тот же тик, поэтому снаряд уходит сразу:
+        // `take_apply` сразу после `begin` и есть это «сразу», а не особый
+        // случай в ветке.
+        // ДВА ПЕРЕВОДА, А НЕ ОДИН ПО СУММЕ, и это бит-в-бит: прежде виндап
+        // отсчитывался до нуля, а ПОТОМ начинал отсчёт кулдаун — то есть
+        // ceil(w/8) + ceil(cd/8) тиков. Перевод суммы дал бы на тик меньше там,
+        // где оба остатка не делятся на шаг.
+        if (acting_begin(act, ActSlot::Body, kActShot,
+                         ms_to_ticks(def.windupMs) +
+                             ms_to_ticks(def.attackCdMs),
+                         ms_to_ticks(def.windupMs), tick) &&
+            acting_take_apply(act, ActSlot::Body, tick))
+            queued.push_back(Swing{e, victim, raw, 0, true, tr.pos,
+                                   victimPos, def.projSpeedMmps, def.projType});
     }
 
     std::uint32_t swings = 0;
@@ -799,8 +826,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             spawn_projectile(reg, layer, s.from, s.to, s.raw,
                              s.projSpeedMmps, s.mob, s.proj, gravity);
             ++swings;
-            if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
-                mc->cooldownMs = s.cd;
+            // Темпа здесь больше НЕ НАЗНАЧАЮТ: окно выстрела открылось на
+            // замахе и держит виндап + кулдаун целиком (`s.cd` у выстрела 0).
             continue;   // a shot in flight is not a hit yet
         }
         // No early `break` on a lethal hit any more, and its removal is required
@@ -814,8 +841,10 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                                       particles, gravity);
         if (r.hit) {
             ++swings;
-            if (MobCombat* mc = reg.try_get<MobCombat>(s.mob))
-                mc->cooldownMs = s.cd;
+            // ТЕМП НАЗНАЧАЕТСЯ ТОЛЬКО ПОПАДАНИЕМ — как и прежде: промах
+            // (мёртвая цель, отказ `apply_damage`) занятости не стоит.
+            if (Acting* ma = reg.try_get<Acting>(s.mob))
+                acting_begin_ms(*ma, ActSlot::Body, kActMaul, s.cd, 0, tick);
         }
     }
 
@@ -1956,18 +1985,11 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     // have to remember to add it.
     PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(shooter);
 
-    const std::uint16_t elapsedMs =
-        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
-
-    // Decremented EXACTLY ONCE, at the top, before any early-out. Defect 3: the
-    // reference decremented cooldowns at ~60 sites and some monsters out-attacked
-    // their own authored rate.
-    for (GunHand& gh : pr.hand) {
-        if (gh.cooldownMs > elapsedMs) gh.cooldownMs -= elapsedMs;
-        else gh.cooldownMs = 0;
-        if (gh.reloadMs > elapsedMs) gh.reloadMs -= elapsedMs;
-        else gh.reloadMs = 0;
-    }
+    // ЗДЕСЬ СТОЯЛ ДЕКРЕМЕНТ ОБЕИХ РУК («exactly once, at the top, before any
+    // early-out» — против шрама донора, у которого кулдауны вычитались в ~60
+    // местах). Прохода нет: занятость руки — вопрос к её окну (S22), и
+    // уменьшить то, чего нет, невозможно по построению.
+    Acting& act = reg.get_or_emplace<Acting>(shooter);
 
     const NpcRef* nr = reg.try_get<NpcRef>(shooter);
     if (!nr || !pool.valid(nr->id)) return 0;
@@ -1981,6 +2003,7 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
     std::uint32_t fired = 0;
     for (int hIdx = 0; hIdx < 2; ++hIdx) {
         GunHand& gh = pr.hand[hIdx];
+        const ActSlot hs = hIdx == 1 ? ActSlot::HandR : ActSlot::HandL;
         ItemId gun = kInvalidItem;
         if (eqp) {
             const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
@@ -1997,11 +2020,16 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
         if (gh.weapon != gun) {
             gh.weapon = gun;
             gh.magCount = 0;
-            gh.reloadMs = 0;
+            // Перезарядка СНЯТОГО ствола незаконна — и это единственная причина
+            // обрыва, которую строка `reload` признаёт (`kBreakHand`). Прежде
+            // здесь стояло голое `gh.reloadMs = 0`, то есть второй писатель
+            // нуля; теперь обрыв один и он спрашивает строку.
+            break_action(act, hs, kBreakHand, tick);
         }
         const RangedDef* def = ranged_for_item(gun);
         if (!def || gun == kInvalidItem) continue;
-        if (gh.reloadMs > 0) continue;
+        // Рука занята (перезаряжает, стреляла, бросала) — дальше нечего.
+        if (acting_busy(act, hs, tick)) continue;
 
         if (gh.magCount == 0) {
             // Reload: move up to a magazine's worth out of the inventory.
@@ -2021,12 +2049,15 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
             }
             if (got == 0) continue; // out of ammo entirely
             gh.magCount = got;
-            gh.reloadMs = def->reloadMs;
+            // Магазин набит В НАЧАЛЕ окна, эффекта в конце нет — поэтому
+            // контактный кадр ноль. Семантика та же, что была: патроны ушли из
+            // сумки сразу, окно держит руку занятой.
+            acting_begin_ms(act, hs, kActReload, def->reloadMs, 0, tick);
             continue;
         }
 
         const bool want = hIdx == 1 ? wantFireR : wantFireL;
-        if (!want || gh.cooldownMs > 0) continue;
+        if (!want) continue;
 
         const CameraTag& cam = reg.get<const CameraTag>(shooter);
         const Transform& tr = reg.get<const Transform>(shooter);
@@ -2099,7 +2130,10 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
             rcd = static_cast<std::uint16_t>(
                 cd > 65535u ? 65535u : (cd < 1u ? 1u : cd));
         }
-        gh.cooldownMs = rcd;
+        // Темп СВОЕЙ руки — окно `shoot`. Пуля ушла в начале окна, то есть
+        // контактного кадра у выстрела нет (ноль): «эффект» выстрела — сам
+        // снаряд, и он уже в воздухе.
+        acting_begin_ms(act, hs, kActShoot, rcd, 0, tick);
         ++pr.shots;
         ++fired;
     }
@@ -2118,8 +2152,12 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     if (thrower == entt::null) return 0;
     if (!wantL && !wantR && !wantBag) return 0;
 
-    // Таймеры стареют в player_ranged_step (дефект 3) — здесь только чтение.
+    // S22: стареть больше нечему — занятость руки это ВОПРОС к её окну, и
+    // спрашивают его оба прохода одинаково (прежняя оговорка «таймеры стареют в
+    // player_ranged_step, здесь только чтение» была признанием того, что
+    // величина одна, а писателей два).
     PlayerRanged& pr = reg.get_or_emplace<PlayerRanged>(thrower);
+    Acting& act = reg.get_or_emplace<Acting>(thrower);
     const NpcRef* nr = reg.try_get<NpcRef>(thrower);
     if (!nr || !pool.valid(nr->id)) return 0;
     Inventory& inv = pool.inventory(nr->id);
@@ -2132,8 +2170,8 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
         // решателя (консоль/фикстуры), скан сумки, руки ЛКМ.
         const bool want = hIdx == 1 ? wantR : (wantL || wantBag);
         if (!want) continue;
-        GunHand& gh = pr.hand[hIdx];
-        if (gh.cooldownMs > 0) continue; // рука занята действием
+        const ActSlot hs = hIdx == 1 ? ActSlot::HandR : ActSlot::HandL;
+        if (acting_busy(act, hs, tick)) continue; // рука занята действием
         ItemId item = kInvalidItem;
         if (eqp) {
             const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
@@ -2168,7 +2206,8 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
                       def->projSpeedMmps, thrower,
                       static_cast<std::uint16_t>(def->fuseDs) * 100u, tick,
                       def->channel);
-        gh.cooldownMs = def->cooldownMs; // темп СВОЕЙ руки
+        // Темп СВОЕЙ руки — окно `throw`; заряд ушёл в начале окна.
+        acting_begin_ms(act, hs, kActHurl, def->cooldownMs, 0, tick);
         ++pr.shots;
         ++thrown;
     }
@@ -2193,14 +2232,12 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     if (!reg.all_of<PlayerMelee>(self)) reg.emplace<PlayerMelee>(self);
     PlayerMelee& pm = reg.get<PlayerMelee>(self);
 
-    const std::uint16_t elapsedMs =
-        static_cast<std::uint16_t>(dt * 1000.0f + 0.5f);
-    if (pm.cooldownMs > elapsedMs)
-        pm.cooldownMs = static_cast<std::uint16_t>(pm.cooldownMs - elapsedMs);
-    else
-        pm.cooldownMs = 0;
-
-    if (!wantsAttack || pm.cooldownMs > 0) return false;
+    // ЗДЕСЬ СТОЯЛ ТРЕТИЙ ДЕКРЕМЕНТНЫЙ ПРОХОД. Его нет: замах есть ЗАНЯТОСТЬ
+    // ТЕЛА, то есть окно `swing` на слоте `Body` (S22). Тело — а не рука —
+    // потому что ровно так эти две величины и жили: махнуть можно было, пока
+    // ствол остывает, и наоборот.
+    Acting& act = reg.get_or_emplace<Acting>(self);
+    if (!wantsAttack || acting_busy(act, ActSlot::Body, tick)) return false;
 
     // Whatever is in hand. A found rebar hits eight times as hard as a fist and
     // reaches four times as far — which is the entire point of picking loot up.
@@ -2326,7 +2363,8 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
                 carves->push(hitAt.x, hitAt.y, hitAt.z, kMeleeCarveRadius,
                              carve_power_from_dmg(swingDmg),
                              static_cast<std::uint32_t>(tick));
-                pm.cooldownMs = swingCd;
+                acting_begin_ms(act, ActSlot::Body, kActSwing, swingCd, 0,
+                                tick);
                 // A swing into a wall is a USE — the same one wear counts on
                 // flesh. Sleeps until the weapon's CSV row carries durability.
                 if (selfEq && selfId != kInvalidNpc)
@@ -2347,7 +2385,7 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     DamageResult r = apply_damage(reg, pool, best, swingDmg,
                                   DamageChannel::Kinetic, self, grid, particles,
                                   gravity);
-    pm.cooldownMs = swingCd;
+    acting_begin_ms(act, ActSlot::Body, kActSwing, swingCd, 0, tick);
     if (r.lethal) ++pm.kills;
     // WEAR: one landed swing = one use of the decided weapon ([equip.h]).
     // Fists (no decision) and durability-0 rows are no-ops inside.
@@ -2383,7 +2421,7 @@ void transfer_player_progression(Registry& reg, Entity from, Entity to) {
     // component (so a zero-kill fighter still gets a clean PlayerMelee on the
     // new body rather than waiting for the first swing to lazy-attach).
     if (kills != 0 || reg.all_of<PlayerMelee>(from)) {
-        reg.emplace_or_replace<PlayerMelee>(to, PlayerMelee{/*cooldownMs=*/0, kills});
+        reg.emplace_or_replace<PlayerMelee>(to, PlayerMelee{kills});
     }
 
     if (PlayerRanged* pr = reg.try_get<PlayerRanged>(from)) {

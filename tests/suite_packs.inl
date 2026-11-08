@@ -100,6 +100,7 @@ static void test_packs_all() {
         rooms_declare(fr, 4, spec, 11u);
         const std::uint32_t n =
             spawn_floor_mobs(reg, w, 4, danger, theme, /*layer=*/0, /*seed=*/77u,
+                             /*tick=*/0,
                              /*cap=*/0, FloorKind::Derelict);
 
         // THE POPULATION IS UNCHANGED. Measured at 194 heads (the full budget)
@@ -275,8 +276,8 @@ static void test_packs_all() {
         // Determinism survives the restructure: same floor + seed, same result.
         Registry again;
         rooms_declare(again.ctx().emplace<FloorRooms>(), 4, spec, 11u);
-        CHECK(spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, 0,
-                               FloorKind::Derelict) == n);
+        CHECK(spawn_floor_mobs(again, w, 4, danger, theme, 0, 77u, /*tick=*/0,
+                               0, FloorKind::Derelict) == n);
 
         // Решётка умерла (rooms-object F): «шаг комнат» больше не существует,
         // зоны объявляет модуль и их пины живут в suite_rooms_object.
@@ -351,7 +352,7 @@ static void test_packs_all() {
                       floor_spec(FloorKind::Derelict), 11u);
         const std::uint32_t n = spawn_floor_mobs(
             reg, w, 12, /*danger=*/5, FloorTheme::Hell, layer, /*seed=*/31u,
-            /*cap=*/300, FloorKind::Residential);
+            /*tick=*/0, /*cap=*/300, FloorKind::Residential);
         CHECK(n == 300);
 
         // Baked HERE, synchronously, and complete before a single step runs. The

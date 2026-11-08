@@ -61,7 +61,7 @@ inline Entity spawn_at(Registry& reg, LayerId layer, MobKind k, const vec3& pos)
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e, Velocity{});
     reg.emplace<MobRef>(e, MobRef{static_cast<std::uint8_t>(k), 1, 100, 100});
-    reg.emplace<MobCombat>(e, MobCombat{0, 0});
+    reg.emplace<Acting>(e, Acting{});
     return e;
 }
 
