@@ -136,7 +136,7 @@ void focus_aims_at_a_real_door() {
     const Entity self = reg.create();
     reg.emplace<Transform>(self, Transform{{0, 0, 0}, 0});
     reg.emplace<Interactable>(
-        self, Interactable{InteractKind::Npc, 2.5f, true});
+        self, Interactable{InteractKind::Npc, true});
 
     int seen = 0, promptOk = 0;
     for (std::uint32_t i = 0; i < d.list.size() && seen < 8; ++i) {

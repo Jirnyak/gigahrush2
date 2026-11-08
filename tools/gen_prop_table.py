@@ -179,7 +179,6 @@ def main():
         cr = num(r, "color_r_e3", 0, 2000)
         cg = num(r, "color_g_e3", 0, 2000)
         cb = num(r, "color_b_e3", 0, 2000)
-        reach = num(r, "reach_mm", 0, 10000)
         light_radius = num(r, "light_radius_mm", 0, 65535)
         light_intensity = num(r, "light_intensity_e3", 0, 65535)
         light_cone = num(r, "light_cone_deg", 0, 89)
@@ -247,11 +246,13 @@ def main():
         if not (0 < massG <= 4294967295):
             die("row %d: mass_g %r out of range (1..2^32-1, and a prop may not be "
                 "massless)" % (i, mass_raw))
-        # Layout: massG (uint32), 6 uint8 (shape..cone), 9 uint16, flicker,
+        # Layout: massG (uint32), 6 uint8 (shape..cone), 8 uint16, flicker,
         # chargeTrigger (бывший pad0_), explosiveG (бывший pad1_).
+        # reach_mm снесён 2026-11-07: досягаемость — вывод из РОСТА смотрящего
+        # (body_reach), таблицы цели reach не задают.
         defs.append(
             "    // [%d] %s\n"
-            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d }," % (
+            "    PropDef{ %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d }," % (
                 i, sid,
                 massG,
                 shape,
@@ -261,7 +262,6 @@ def main():
                 mat_id,
                 light_cone,
                 cr, cg, cb,
-                reach,
                 sizes[0], sizes[1], sizes[2],
                 light_radius, light_intensity,
                 FLICKER[flicker],
@@ -348,7 +348,9 @@ inline constexpr std::size_t kPropCount = %d;
 BODY_H = """// POD row. shape is the PropShape ordinal (render/prop_mesh.h); game never
 // includes render headers. fallMode / interactKind are ordinals matching
 // PropFallMode and Interactable::Kind in prop_system.h (255 = no interact).
-// color*E3 are RGB x1000 (1000 = 1.0). reachMm is Interactable.reachM * 1000.
+// color*E3 are RGB x1000 (1000 = 1.0). reachMm СНЕСЁН 2026-11-07: досягаемость
+// выводится из РОСТА смотрящего (body_reach, [game/embody.h]) — таблицы цели
+// reach не задают (решение владельца, лифт-лимб 1).
 //
 // MASS IS GRAMS IN A uint32, AND IT IS THE SAME UNIT EVERYWHERE — MobDef carries
 // the identical field, and any future ItemDef weight will too. It used to be grams
@@ -364,10 +366,13 @@ BODY_H = """// POD row. shape is the PropShape ordinal (render/prop_mesh.h); gam
 //
 // СВЕТ — ИЗ ЭТОЙ ЖЕ СТРОКИ ([ddalight.md]): lightRadiusMm != 0 означает «проп
 // излучает», и коллектор света видит ЛЮБОЙ такой проп — спец-случаев
-// «лампочка» в коде нет. Радиус в мм, как reachMm — одна единица на таблицу.
+// «лампочка» в коде нет. Радиус в мм — одна единица на таблицу.
 // lightConeDeg — ПОЛУугол конуса, 0 = омни (занял бывший pad0_).
 //
-// Layout is explicit: 1 x uint32, 6 x uint8, 9 x uint16, 1 x uint32 pad = 32 bytes.
+// Layout is explicit: 1 x uint32, 6 x uint8, 8 x uint16, flicker + trigger +
+// explosiveG + 2 tail pad = 32 bytes (хвостовой паддинг родился сносом
+// reachMm; строка держит 32 ради alignof 4 — сжимать её дальше значило бы
+// перепаковывать поля, это отдельное решение).
 struct PropDef {
     std::uint32_t massG;            // 0  universal mass, GRAMS ([ecs] Mass)
     std::uint8_t  shape;            // 4  PropShape ordinal
@@ -379,20 +384,18 @@ struct PropDef {
     std::uint16_t colorRE3;         // 10 RGB x1000
     std::uint16_t colorGE3;         // 12
     std::uint16_t colorBE3;         // 14
-    std::uint16_t reachMm;          // 16 Interactable reach in millimetres
-    std::uint16_t sizeXMm;          // 18 authored mesh size, millimetres — the
-    std::uint16_t sizeYMm;          // 20 unit shape is scaled to exactly this,
-    std::uint16_t sizeZMm;          // 22 so a bulb is a bulb and not a 1 m drum
-    std::uint16_t lightRadiusMm;    // 24 0 = не светит
-    std::uint16_t lightIntensityE3; // 26 интенсивность x1000
-    std::uint8_t  flickerProfile;   // 28 FlickerProfile ([game/flicker.h]):
+    std::uint16_t sizeXMm;          // 16 authored mesh size, millimetres — the
+    std::uint16_t sizeYMm;          // 18 unit shape is scaled to exactly this,
+    std::uint16_t sizeZMm;          // 20 so a bulb is a bulb and not a 1 m drum
+    std::uint16_t lightRadiusMm;    // 22 0 = не светит
+    std::uint16_t lightIntensityE3; // 24 интенсивность x1000
+    std::uint8_t  flickerProfile;   // 26 FlickerProfile ([game/flicker.h]):
                                     //    свет И emissive носителя, синхронно
     // ЗАРЯД ([combat.h] Charge, решение владельца 2026-08-21: «пропы в целом
     // могут взрываться»). explosiveG — масса ВВ в граммах, 0 = не заряд;
     // урон и радиус детонации ВЫВОДЯТСЯ из неё (S11), не назначаются.
-    // Оба поля заняли бывшие pad0_/pad1_ — строка осталась 32 байта.
-    std::uint8_t  chargeTrigger;    // 29 ChargeTrigger ниже
-    std::uint16_t explosiveG;       // 30 масса ВВ, граммы
+    std::uint8_t  chargeTrigger;    // 27 ChargeTrigger ниже
+    std::uint16_t explosiveG;       // 28 масса ВВ, граммы; дальше 2 Б паддинга
 };
 static_assert(sizeof(PropDef) == 32, "PropDef must stay a tight 32-byte row");
 static_assert(alignof(PropDef) == 4);

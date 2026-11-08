@@ -694,7 +694,7 @@ Entity spawn_prop(Registry& reg, const World& world, const vec3& worldPos,
     // Kind::Count — санкционированное «интерактива нет» (None-строка таблицы):
     // компонент НЕ ставится вовсе, вместо старого «поставить лутом и снять».
     if (kind != Interactable::Kind::Count)
-        reg.emplace<Interactable>(prop, kind, 2.5f, true);
+        reg.emplace<Interactable>(prop, kind, true);
     reg.emplace<PropFallMode>(prop, fallMode);
     reg.emplace<Renderable>(prop, color);
     // Static anchored + mesh-filter tags ([jirnyak.md] §18). Detach swaps
@@ -752,12 +752,8 @@ Entity spawn_prop_from_id(Registry& reg, const World& world, const vec3& worldPo
                          static_cast<float>(d.sizeZMm) * 0.001f};
     // interact=None in props.csv (generator ordinal 255): the prop is scenery,
     // not a verb — interact_kind_from_u8 отдал Kind::Count, и spawn_prop
-    // компонент не ставил. Снимать больше нечего.
-    // Table reachMm overrides the spawn_prop default (2.5 m).
-    if (reg.all_of<Interactable>(e)) {
-        auto& ia = reg.get<Interactable>(e);
-        ia.reachM = static_cast<float>(d.reachMm) * 0.001f;
-    }
+    // компонент не ставил. Снимать больше нечего. (Табличный reach_mm снесён
+    // 2026-11-07 — досягаемость выводится из роста смотрящего, body_reach.)
     // Светящаяся строка таблицы = светящийся проп, кем бы он ни был. [ddalight.md]
     if (prop_emits_light(d)) {
         PropLight pl;
@@ -1289,60 +1285,9 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
 }
 
 
-InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
-                                         Interactable::Kind kind, float reachM)
-{
-    InteractionHit hit{};
-    if (!reg.valid(player) || !reg.all_of<Transform>(player)) return hit;
-
-    const auto& ptr = reg.get<Transform>(player);
-    const LayerId layer = ptr.layer;
-    const vec3 ppos = ptr.pos;
-    const float reachSq = reachM * reachM;
-    float best = reachSq;
-
-    auto view = reg.view<const Transform, const Interactable>();
-    for (auto e : view) {
-        // Never yourself: the player's own body is an Interactable too now
-        // (Kind::Npc, [conversation.md]) and stands at distance zero.
-        if (e == player) continue;
-        const auto& tr = view.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        const auto& ia = view.get<const Interactable>(e);
-        if (!ia.active || ia.kind != kind) continue;
-
-        // wrap_dist2 — все три оси. Голый y здесь ослеплял 12 вызывающих
-        // (двери/терминалы/щиты/NPC/контейнеры у y-шва) — последняя строка
-        // базлайна гейта B, обнулён этим коммитом.
-        const float d2 = wrap_dist2(ppos, tr.pos, kWorldExtent);
-        if (d2 < best) {
-            best = d2;
-            hit.entity = e;
-            hit.pos = tr.pos;
-            hit.distSq = d2;
-            hit.hit = true;
-        }
-    }
-    return hit;
-}
-
-bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
-                      EventBus& bus, InteractionHit* outHit)
-{
-    (void)bus;
-    const float reach = (reg.valid(player) && reg.all_of<Transform>(player))
-                            ? 3.0f
-                            : 0.0f;
-    InteractionHit hit = find_nearest_interactable(reg, player, kind, reach);
-    if (outHit) *outHit = hit;
-    return hit.hit;
-}
-
-
-bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
-                        EventBus& bus) {
-    return interaction_step(reg, player, targetKind, bus, nullptr);
-}
+// find_nearest_interactable / interaction_step / prop_interact_step СНЕСЕНЫ
+// 2026-11-07 — см. надгробие в prop_system.h: прод-вызовов ноль (отложки
+// wired §52), жили только тестами на сами символы; выбор цели — закон фокуса.
 
 std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
                                   vec3 bodyHalf, float totalKg,

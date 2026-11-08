@@ -736,85 +736,12 @@ static void test_t1_f12_01_event_bus_publish_and_size() {
 
 
 
-// --- F13: prop_interact_step / interaction_step Wiring ---
-
-static void test_t1_f13_01_interaction_step_finds_nearest_within_reach() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{10.0f, 10.0f, 2.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{11.0f, 10.0f, 2.0f}, 0u});
-    Interactable& act = reg.emplace<Interactable>(prop);
-    act.kind = Interactable::Kind::Terminal;
-    act.active = true;
-
-    InteractionHit hit{};
-    bool ok = interaction_step(reg, player, Interactable::Kind::Terminal, bus, &hit);
-    CHECK(ok);
-    CHECK(hit.hit);
-    CHECK(hit.entity == prop);
-}
-
-static void test_t1_f13_02_prop_interact_step_success() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{5.0f, 5.0f, 1.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{6.0f, 5.0f, 1.0f}, 0u});
-    Interactable& act = reg.emplace<Interactable>(prop);
-    act.kind = Interactable::Kind::ElectricalShield;
-    act.active = true;
-
-    bool ok = prop_interact_step(reg, player, Interactable::Kind::ElectricalShield, bus);
-    CHECK(ok);
-}
-
-static void test_t1_f13_03_interaction_kind_filtering() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{0.0f, 0.0f, 0.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{1.0f, 0.0f, 0.0f}, 0u});
-    Interactable& act = reg.emplace<Interactable>(prop);
-    act.kind = Interactable::Kind::Corpse;
-    act.active = true;
-
-    bool foundTerminal = interaction_step(reg, player, Interactable::Kind::Terminal, bus);
-    CHECK(!foundTerminal);
-
-    bool foundCorpse = interaction_step(reg, player, Interactable::Kind::Corpse, bus);
-    CHECK(foundCorpse);
-}
-
-static void test_t1_f13_04_layer_isolation_enforcement() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{10.0f, 10.0f, 2.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{10.5f, 10.0f, 2.0f}, 1u}); // Layer 1 vs 0
-    Interactable& act = reg.emplace<Interactable>(prop);
-    act.kind = Interactable::Kind::Terminal;
-    act.active = true;
-
-    bool ok = interaction_step(reg, player, Interactable::Kind::Terminal, bus);
-    CHECK(!ok);
-}
+// --- F13: Interactable wiring ---
+// Тесты t1_f13_01..04 и t1_f14_03 СНЕСЕНЫ 2026-11-07 вместе с парой
+// find_nearest_interactable/interaction_step/prop_interact_step (инкремент B
+// лифт-лимба): они проверяли сами символы (критерий [purge-2026-09-30]),
+// прод-вызовов у пары не было (бывшие отложки wired §52). Выбор цели
+// интеракции — закон фокуса ([game/focus.h]), прицел + body_reach.
 
 static void test_t1_f13_05_collect_interactable_positions() {
     Registry reg;
@@ -845,14 +772,6 @@ static void test_t1_f14_01_bank_step_contract_and_signature() {
     static_assert(std::is_same_v<decltype(bank_step(acct, 0u)), BankTick>);
 }
 
-
-static void test_t1_f14_03_interaction_step_contract() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-    bool ok = interaction_step(reg, entt::null, Interactable::Kind::Terminal, bus);
-    CHECK(!ok);
-}
 
 static void test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc() {
     BankAccount acct{};
@@ -1449,98 +1368,10 @@ static void test_t2_f12_03_bus_ring_overflow_drop_counter() {
 
 
 // --- F13 Boundaries ---
-
-static void test_t2_f13_01_exact_reach_boundary_distance() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{0.0f, 0.0f, 0.0f}, 0u});
-
-    Entity p1 = reg.create();
-    reg.emplace<Transform>(p1, Transform{vec3{2.99f, 0.0f, 0.0f}, 0u});
-    Interactable& a1 = reg.emplace<Interactable>(p1);
-    a1.kind = Interactable::Kind::Terminal;
-    a1.active = true;
-
-    InteractionHit h1{};
-    CHECK(interaction_step(reg, player, Interactable::Kind::Terminal, bus, &h1));
-    CHECK(h1.hit);
-
-    reg.get<Transform>(p1).pos = vec3{4.5f, 0.0f, 0.0f};
-    InteractionHit h2{};
-    CHECK(!interaction_step(reg, player, Interactable::Kind::Terminal, bus, &h2));
-    CHECK(!h2.hit);
-}
-
-static void test_t2_f13_02_null_or_invalid_player_entity() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-    InteractionHit hit{};
-    bool ok = interaction_step(reg, entt::null, Interactable::Kind::Terminal, bus, &hit);
-    CHECK(!ok);
-    CHECK(!hit.hit);
-}
-
-static void test_t2_f13_03_disabled_interactable_rejection() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{0.0f, 0.0f, 0.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{1.0f, 0.0f, 0.0f}, 0u});
-    Interactable& a = reg.emplace<Interactable>(prop);
-    a.kind = Interactable::Kind::Terminal;
-    a.active = false;
-
-    CHECK(!interaction_step(reg, player, Interactable::Kind::Terminal, bus));
-}
-
-static void test_t2_f13_04_zero_reach_query() {
-    Registry reg;
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{5.0f, 5.0f, 0.0f}, 0u});
-
-    Entity prop = reg.create();
-    reg.emplace<Transform>(prop, Transform{vec3{5.1f, 5.0f, 0.0f}, 0u});
-    Interactable& a = reg.emplace<Interactable>(prop);
-    a.kind = Interactable::Kind::Terminal;
-    a.active = true;
-
-    InteractionHit hit = find_nearest_interactable(reg, player, Interactable::Kind::Terminal, 0.0f);
-    CHECK(!hit.hit);
-}
-
-static void test_t2_f13_05_multiple_interactables_closest_selection() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-
-    Entity player = reg.create();
-    reg.emplace<Transform>(player, Transform{vec3{0.0f, 0.0f, 0.0f}, 0u});
-
-    Entity p1 = reg.create();
-    reg.emplace<Transform>(p1, Transform{vec3{3.0f, 0.0f, 0.0f}, 0u});
-    Interactable& a1 = reg.emplace<Interactable>(p1);
-    a1.kind = Interactable::Kind::Terminal;
-    a1.active = true;
-
-    Entity p2 = reg.create();
-    reg.emplace<Transform>(p2, Transform{vec3{1.0f, 0.0f, 0.0f}, 0u});
-    Interactable& a2 = reg.emplace<Interactable>(p2);
-    a2.kind = Interactable::Kind::Terminal;
-    a2.active = true;
-
-    InteractionHit hit{};
-    bool ok = interaction_step(reg, player, Interactable::Kind::Terminal, bus, &hit);
-    CHECK(ok);
-    CHECK(hit.entity == p2); // Closest chosen
-}
+// Тесты t2_f13_01..05 СНЕСЕНЫ 2026-11-07 вместе с парой
+// find_nearest_interactable/interaction_step — проверяли сами символы
+// (границы reach/kind/layer мёртвого запроса). Прицел границы досягаемости
+// держит законом фокуса: tests/suite_props_game.inl (фокус + body_reach).
 
 // --- F14 Boundaries ---
 
@@ -1573,8 +1404,9 @@ static void test_t2_f14_04_entry_points_reentrant_concurrency_safety() {
 static void test_t2_f14_05_static_gate_regex_compliance() {
     // `route_step` ушёл из списка вместе с символом (§88/F.2 шаг 3); его место
     // занял `zone_walk_dir` — дверь «куда шагнуть» у единственного нава ходьбы.
-    const char* names[] = {"bank_step", "samosbor_step", "interaction_step",
-                           "prop_interact_step", "wander_step"};
+    // interaction_step/prop_interact_step ушли так же — вместе с символами
+    // (снос 2026-11-07, инкремент B лифт-лимба).
+    const char* names[] = {"bank_step", "samosbor_step", "wander_step"};
     for (const char* name : names) {
         CHECK(std::strstr(name, "_step") != nullptr || std::strstr(name, "_tick") != nullptr);
     }
@@ -1704,8 +1536,9 @@ static void test_t3_04_prop_interaction_during_ai_navigation_single_writer() {
     act.kind = Interactable::Kind::Terminal;
     act.active = true;
 
-    bool playerInteracted = interaction_step(reg, player, Interactable::Kind::Terminal, bus);
-    CHECK(playerInteracted);
+    // interaction_step снесён 2026-11-07; предмет теста — арбитраж токеном
+    // (интеракция игрока не отнимает у AI владение движением), он остался.
+    CHECK(reg.get<Interactable>(terminal).active);
     CHECK(ai_owns_motion(reg, aiAgent));
 }
 
@@ -1982,13 +1815,15 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
 
     for (uint64_t t = 0; t < 200; ++t) {
         if (t % 50 == 0) {
-            interaction_step(reg, player, Interactable::Kind::Terminal, bus);
+            // interaction_step снесён 2026-11-07 — сценарий гоняет шину и
+            // банк, терминал остаётся свидетелем реестра.
             bus.publish(EventType::ItemTransferred, 1u, 0u, 0u, t);
         }
         bus.clear();
         bank_step(acct, t);
     }
     CHECK(reg.valid(player));
+    CHECK(reg.valid(term));
 }
 
 // ===========================================================================
@@ -2131,22 +1966,14 @@ int main() {
     test_t1_f12_01_event_bus_publish_and_size();
 
     // F13
-    std::fprintf(stderr, "[e2e] test_t1_f13_01_interaction_step_finds_nearest_within_reach\n");
-    test_t1_f13_01_interaction_step_finds_nearest_within_reach();
-    std::fprintf(stderr, "[e2e] test_t1_f13_02_prop_interact_step_success\n");
-    test_t1_f13_02_prop_interact_step_success();
-    std::fprintf(stderr, "[e2e] test_t1_f13_03_interaction_kind_filtering\n");
-    test_t1_f13_03_interaction_kind_filtering();
-    std::fprintf(stderr, "[e2e] test_t1_f13_04_layer_isolation_enforcement\n");
-    test_t1_f13_04_layer_isolation_enforcement();
+    // t1_f13_01..04 и t1_f14_03 сняты 2026-11-07 вместе с парой
+    // interaction_step/find_nearest_interactable (снос, инкремент B).
     std::fprintf(stderr, "[e2e] test_t1_f13_05_collect_interactable_positions\n");
     test_t1_f13_05_collect_interactable_positions();
 
     // F14
     std::fprintf(stderr, "[e2e] test_t1_f14_01_bank_step_contract_and_signature\n");
     test_t1_f14_01_bank_step_contract_and_signature();
-    std::fprintf(stderr, "[e2e] test_t1_f14_03_interaction_step_contract\n");
-    test_t1_f14_03_interaction_step_contract();
     std::fprintf(stderr, "[e2e] test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc\n");
     test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc();
 
@@ -2292,16 +2119,7 @@ int main() {
     test_t2_f12_03_bus_ring_overflow_drop_counter();
 
     // F13 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f13_01_exact_reach_boundary_distance\n");
-    test_t2_f13_01_exact_reach_boundary_distance();
-    std::fprintf(stderr, "[e2e] test_t2_f13_02_null_or_invalid_player_entity\n");
-    test_t2_f13_02_null_or_invalid_player_entity();
-    std::fprintf(stderr, "[e2e] test_t2_f13_03_disabled_interactable_rejection\n");
-    test_t2_f13_03_disabled_interactable_rejection();
-    std::fprintf(stderr, "[e2e] test_t2_f13_04_zero_reach_query\n");
-    test_t2_f13_04_zero_reach_query();
-    std::fprintf(stderr, "[e2e] test_t2_f13_05_multiple_interactables_closest_selection\n");
-    test_t2_f13_05_multiple_interactables_closest_selection();
+    // t2_f13_01..05 сняты 2026-11-07 — границы мёртвого запроса (снос пары).
 
     // F14 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f14_01_entry_points_null_input_safety\n");

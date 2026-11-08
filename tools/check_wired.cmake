@@ -119,8 +119,8 @@ set(GIGA_DEFERRED_ENTRY_POINTS
     # `stale_rows=0`. Снятие строки и есть лечение этого случая; общего лечения
     # (сверять отложку с фактом проводки) здесь НЕТ, и оно названо долгом, а не
     # замазано — [SKELETON.md] XIV.
-    "interaction_step:взаимодействие с пропами идёт мимо, main.cpp зовёт свои ветки — problems.md §52"
-    "prop_interact_step:обёртка над interaction_step, прод-вызывающего нет, но тестом ПОКРЫТА (e2e_test.cpp:767) — problems.md §52"
+    # interaction_step / prop_interact_step: отложки сняты 2026-11-07 — пара
+    # СНЕСЕНА (инкремент B лифт-лимба, критерий «тест проверяет сам символ»).
 )
 
 # Line splitting that survives `;` AND `[ ]`. Ported from check_source_rules.cmake,

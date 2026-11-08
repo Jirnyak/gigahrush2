@@ -536,10 +536,10 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
             reg.emplace<Corpse>(e, corpse);
             // [jirnyak.md] §18: corpses are Interactable::Kind::Corpse so the
-            // unified find_nearest_interactable path can see them. Backend loot
+            // unified focus path ([game/focus.h]) can see them. Backend loot
             // remains loot_corpse_interact (specialized Corpse view).
             reg.emplace_or_replace<Interactable>(
-                e, Interactable{Interactable::Kind::Corpse, 2.2f, true});
+                e, Interactable{Interactable::Kind::Corpse, true});
 
         }
 

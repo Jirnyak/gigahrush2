@@ -40,12 +40,15 @@ inline float prop_wall_yaw(std::uint8_t face) {
 }
 
 // The KIND is a row of data/interactables.csv ([interact_table.h] — generated
-// enum, so a new interactive is a CSV row, never an enum edit here). reachM
-// defaults from the table row; a prop's authored reach_mm overrides per spawn.
+// enum, so a new interactive is a CSV row, never an enum edit here). Поле
+// reachM СНЕСЕНО 2026-11-07 вместе с колонками props.csv reach_mm и
+// interactables.csv reach_m: оно стало write-only (шесть писателей, ноль
+// читателей в проде) — досягаемость выводится из РОСТА смотрящего
+// (body_reach, [game/embody.h]), цель reach не задаёт (решение владельца,
+// лифт-лимб 1).
 struct Interactable {
     using Kind = InteractKind;
     Kind kind;
-    float reachM = 2.5f;
     bool active = true;
 };
 
@@ -170,14 +173,12 @@ struct PendingDetachedProp {
     std::uint32_t meshKind;
 };
 
-// Nearest active Interactable of `kind` on the player's layer, if within reach.
-// Zero heap traffic — pure view scan. [jirnyak.md] §18 interaction_step.
-struct InteractionHit {
-    Entity entity = entt::null;
-    vec3 pos{0.0f, 0.0f, 0.0f};
-    float distSq = 0.0f;
-    bool hit = false;
-};
+// InteractionHit / find_nearest_interactable / interaction_step /
+// prop_interact_step СНЕСЕНЫ 2026-11-07 (инкремент B лифт-лимба): прод звал
+// их нулём мест (две отложки wired §52 это и фиксировали), жила пара только
+// тестами, проверявшими сами символы — критерий сноса [purge-2026-09-30].
+// Выбор цели интеракции — ЗАКОН ФОКУСА ([game/focus.h]): прицел + вывод
+// досягаемости из роста (body_reach), дистанционного пути больше нет.
 
 // ── Публичный API ───────────────────────────────────────────────────────────────
 
@@ -349,16 +350,6 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world,
                                    std::uint32_t seed = 0);
 
 
-// Zero-alloc nearest Interactable query for the interact key path.
-// Scans reg.view<Transform, Interactable> on the player's Transform.layer.
-InteractionHit find_nearest_interactable(const Registry& reg, Entity player,
-                                         Interactable::Kind kind, float reachM);
-
-// Convenience: find nearest of `kind` and return true if within reach.
-// No std::vector — call from the sim tick freely. [jirnyak.md] §18.
-bool interaction_step(Registry& reg, Entity player, Interactable::Kind kind,
-                      EventBus& bus, InteractionHit* outHit = nullptr);
-
 // prop_ragdoll_step УМЕР (инкремент 6 рагдолл-эпика, 2026-08-21): сорванный
 // проп — тело рагдолл-ядра (rigid_body_step в src/sim/rigid.cpp), гашение,
 // качение и сон живут там; отдельная косметика вращения не существует.
@@ -410,8 +401,5 @@ Entity carry_nearest_body(Registry& reg, Entity carrier, const vec3& forward,
 // Возвращает число брошенных тел.
 std::uint32_t drop_carried(Registry& reg, Entity carrier, const vec3& forward,
                            float throwSpeed, int hand = -1);
-
-bool prop_interact_step(Registry& reg, Entity player, Interactable::Kind targetKind,
-                        EventBus& bus);
 
 } // namespace giga::game

@@ -67,15 +67,15 @@ inline constexpr std::uint8_t kInteractCount = %du;
 struct InteractDef {
     const char* id;      // CSV slug
     const char* prompt;  // the [E] hint text
-    float reachM;        // interaction reach, metres
+    // reachM СНЕСЁН 2026-11-07: досягаемость — вывод из РОСТА смотрящего
+    // (body_reach, [game/embody.h]), таблицы цели reach не задают.
 };
 
 inline constexpr InteractDef kInteractTable[kInteractCount] = {
 """ % len(rows))
         for r in rows:
-            fh.write("    {\"%s\", \"%s\", %sf},\n"
-                     % (r["id"].strip(), r["prompt"].strip(),
-                        r["reach_m"].strip()))
+            fh.write("    {\"%s\", \"%s\"},\n"
+                     % (r["id"].strip(), r["prompt"].strip()))
         fh.write("""};
 
 inline const InteractDef& interact_def(InteractKind k) {

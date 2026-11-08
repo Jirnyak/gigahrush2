@@ -9650,13 +9650,12 @@ int main(int argc, char** argv) {
                                          game::item_def(s.item).massG) *
                                      0.001f});
                             // Навес интерактора «дать предмет» — та же
-                            // форма, что spawn_pickup ([loot.cpp]): reach
-                            // из строки таблицы, E исполняет показанное.
+                            // форма, что spawn_pickup ([loot.cpp]):
+                            // досягаемость из роста смотрящего (body_reach),
+                            // E исполняет показанное.
                             reg.emplace<game::Interactable>(
                                 pe, game::Interactable{
                                         game::Interactable::Kind::Loot,
-                                        game::interact_def(
-                                            game::InteractKind::Loot).reachM,
                                         true});
                             if (--s.count == 0) s = game::ItemSlot{};
                             // Решение могло протухнуть вместе со слотом —
@@ -9860,8 +9859,15 @@ int main(int argc, char** argv) {
                 const float dx = wrap_delta_f(pp.x, np.x, kWorldExtent);
                 const float dy = wrap_delta_f(pp.y, np.y, kWorldExtent);
                 const float dz = wrap_delta_f(pp.z, np.z, kWorldExtent);
+                // Поводок = досягаемость СМОТРЯЩЕГО из роста (body_reach —
+                // та же стата, что у прицела; табличный reachM снесён
+                // 2026-11-07) + 1 м гистерезиса, чтобы окно не мигало на
+                // границе. У медианного роста: 2.40 + 1.0 = 3.4 м (было
+                // 2.2 + 1.0 табличных).
+                const auto* convNr = reg.try_get<game::NpcRef>(player);
                 const float reach =
-                    game::interact_def(game::InteractKind::Npc).reachM + 1.0f;
+                    game::body_reach(convNr ? pool.height_mm(convNr->id) : 0) +
+                    1.0f;
                 convValid = dx * dx + dy * dy + dz * dz <= reach * reach;
             }
             if (!convValid) {

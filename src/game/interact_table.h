@@ -37,22 +37,23 @@ inline constexpr std::uint8_t kInteractCount = 12u;
 struct InteractDef {
     const char* id;      // CSV slug
     const char* prompt;  // the [E] hint text
-    float reachM;        // interaction reach, metres
+    // reachM СНЕСЁН 2026-11-07: досягаемость — вывод из РОСТА смотрящего
+    // (body_reach, [game/embody.h]), таблицы цели reach не задают.
 };
 
 inline constexpr InteractDef kInteractTable[kInteractCount] = {
-    {"terminal", "NET TERMINAL", 4.0f},
-    {"electrical_shield", "SABOTAGE ELECTRICAL SHIELD", 3.5f},
-    {"light_bulb", "LIGHT BULB", 2.5f},
-    {"corpse", "LOOT CORPSE", 2.2f},
-    {"loot", "PICK UP", 2.0f},
-    {"npc", "BARTER / TRADE", 2.2f},
-    {"crate", "SEARCH CRATE", 2.4f},
-    {"lift_call", "CALL LIFT", 2.6f},
-    {"lift_panel", "LIFT PANEL", 2.6f},
-    {"workbench", "WORKBENCH", 2.5f},
-    {"lathe", "LATHE", 2.5f},
-    {"lab_bench", "LAB BENCH", 2.5f},
+    {"terminal", "NET TERMINAL"},
+    {"electrical_shield", "SABOTAGE ELECTRICAL SHIELD"},
+    {"light_bulb", "LIGHT BULB"},
+    {"corpse", "LOOT CORPSE"},
+    {"loot", "PICK UP"},
+    {"npc", "BARTER / TRADE"},
+    {"crate", "SEARCH CRATE"},
+    {"lift_call", "CALL LIFT"},
+    {"lift_panel", "LIFT PANEL"},
+    {"workbench", "WORKBENCH"},
+    {"lathe", "LATHE"},
+    {"lab_bench", "LAB BENCH"},
 };
 
 inline const InteractDef& interact_def(InteractKind k) {

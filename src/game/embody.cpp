@@ -98,8 +98,7 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // the option menu — talk, quest, barter, the games to come. The player's
     // own body carries it too (no special case; the finders skip self).
     reg.emplace<Interactable>(
-        e, Interactable{Interactable::Kind::Npc,
-                        interact_def(InteractKind::Npc).reachM, true});
+        e, Interactable{Interactable::Kind::Npc, true});
 
     // Utility-AI transient state ([ai.md]): 0..100 needs seeded deterministically
     // from the stable id, and an empty hysteresis/stagger brain. Both materialise

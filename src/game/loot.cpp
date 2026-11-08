@@ -199,11 +199,10 @@ Entity spawn_pickup(Registry& reg, LayerId layer, const vec3& pos, ItemId id,
                               static_cast<float>(count)});
     // НАВЕС ИНТЕРАКТОРА (владелец 2026-11-07): лут — тело с интерактором,
     // ДАЮЩИМ предмет: «[E] PICK UP» исполняется pickup_take по прицелу.
-    // Reach — из той же строки таблицы, что промпт (закон focus.h: одна
-    // строка — и табличка, и досягаемость). Авто-пылесос умер.
+    // Досягаемость — из РОСТА смотрящего (body_reach), не из таблицы цели.
+    // Авто-пылесос умер.
     reg.emplace<Interactable>(
-        e, Interactable{Interactable::Kind::Loot,
-                        interact_def(InteractKind::Loot).reachM, true});
+        e, Interactable{Interactable::Kind::Loot, true});
     return e;
 }
 

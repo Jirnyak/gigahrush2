@@ -891,7 +891,7 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         for (int s = 0; s < kInvSlots && !hasLoot; ++s)
             hasLoot = rec.inv.slots[s].item != 0 && rec.inv.slots[s].count > 0;
         reg.emplace<Interactable>(
-            e, Interactable{Interactable::Kind::Corpse, 2.2f,
+            e, Interactable{Interactable::Kind::Corpse,
                             hasLoot || rec.searched == 0});
         ++made;
     }

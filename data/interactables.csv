@@ -1,13 +1,13 @@
-id,cpp_name,prompt,reach_m,note
-terminal,Terminal,NET TERMINAL,4.0,сетевой терминал: E открывает крафт-окно (станция net_terminal из props.csv); роль замков в могиле дверей 2026-08-28 — промпт перестал врать 2026-11-07 (решение владельца: «NET TERMINAL»)
-electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,3.5,power-grid node: sabotage kills the zone feed
-light_bulb,LightBulb,LIGHT BULB,2.5,МОГИЛА ОРДИНАЛА (2026-11-07): висячий промпт снят — ветки исполнения E не было никогда; лампы в props.csv стали None (сценография: свет = PropLight, выстрел = PropFallMode). Строка держит ординал 2 (append-only ABI); вернётся с проводкой выключателей
-corpse,Corpse,LOOT CORPSE,2.2,searchable body: loot transfer UI
-loot,Loot,PICK UP,2.0,лут = навес «дать предмет» (владелец 2026-11-07): E забирает сфокусированный пикап (pickup_take); авто-пылесос по близости умер; reach отсюда — единственный источник
-npc,Npc,BARTER / TRADE,2.2,living body: two-sided barter deal on the search screen
-crate,Crate,SEARCH CRATE,2.4,supply crate: two-sided search screen (S14.1 B2)
-lift_call,LiftCall,CALL LIFT,2.6,кнопка вызова снаружи столба (5c): E открывает створку — «лифт приехал»
-lift_panel,LiftPanel,LIFT PANEL,2.6,панель в кабине (5c): E открывает меню этажей (замена клавиши L)
-workbench,Workbench,WORKBENCH,2.5,верстак: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)
-lathe,Lathe,LATHE,2.5,станок: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)
-lab_bench,LabBench,LAB BENCH,2.5,лабстол: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)
+id,cpp_name,prompt,note
+terminal,Terminal,NET TERMINAL,сетевой терминал: E открывает крафт-окно (станция net_terminal из props.csv); роль замков в могиле дверей 2026-08-28 — промпт перестал врать 2026-11-07 (решение владельца: «NET TERMINAL»)
+electrical_shield,ElectricalShield,SABOTAGE ELECTRICAL SHIELD,power-grid node: sabotage kills the zone feed
+light_bulb,LightBulb,LIGHT BULB,МОГИЛА ОРДИНАЛА (2026-11-07): висячий промпт снят — ветки исполнения E не было никогда; лампы в props.csv стали None (сценография: свет = PropLight, выстрел = PropFallMode). Строка держит ординал 2 (append-only ABI); вернётся с проводкой выключателей
+corpse,Corpse,LOOT CORPSE,searchable body: loot transfer UI
+loot,Loot,PICK UP,лут = навес «дать предмет» (владелец 2026-11-07): E забирает сфокусированный пикап (pickup_take); авто-пылесос по близости умер; reach отсюда — единственный источник
+npc,Npc,BARTER / TRADE,living body: two-sided barter deal on the search screen
+crate,Crate,SEARCH CRATE,supply crate: two-sided search screen (S14.1 B2)
+lift_call,LiftCall,CALL LIFT,кнопка вызова снаружи столба (5c): E открывает створку — «лифт приехал»
+lift_panel,LiftPanel,LIFT PANEL,панель в кабине (5c): E открывает меню этажей (замена клавиши L)
+workbench,Workbench,WORKBENCH,верстак: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)
+lathe,Lathe,LATHE,станок: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)
+lab_bench,LabBench,LAB BENCH,лабстол: E открывает крафт-окно; станция из craft_station строки пропа (навес 2026-11-07)

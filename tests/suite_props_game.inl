@@ -1160,44 +1160,9 @@ static Entity make_terminal_at(Registry& reg, LayerId layer, const vec3& pos) {
     return e;
 }
 
-static void test_find_nearest_terminal_respects_reach() {
-    Registry reg;
-    EventBus bus;
-    bus.init();
-    const LayerId layer = 1;
-    const Entity actor = make_actor_at(reg, layer, vec3{10.0f, 2.0f, 10.0f});
-    make_terminal_at(reg, layer, vec3{20.0f, 2.0f, 10.0f}); // 10 m away
-
-    // Out of 4 m reach -> miss.
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, actor, game::Interactable::Kind::Terminal, 4.0f);
-        CHECK(!hit.hit);
-    }
-    // Within 12 m reach -> hit (caller-supplied reach).
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, actor, game::Interactable::Kind::Terminal, 12.0f);
-        CHECK(hit.hit);
-        CHECK(hit.pos.x == 20.0f);
-        CHECK(hit.pos.z == 10.0f);
-    }
-    // interaction_step hardcodes ~3 m reach (prop_system.cpp) — still a miss at 10 m.
-    {
-        game::InteractionHit out{};
-        CHECK(!game::interaction_step(reg, actor, game::Interactable::Kind::Terminal, bus, &out));
-        CHECK(!out.hit);
-    }
-    // Walk into the default step reach: 2 m from the terminal -> hit.
-    {
-        reg.get<Transform>(actor).pos = vec3{18.0f, 2.0f, 10.0f};
-        game::InteractionHit out{};
-        CHECK(game::interaction_step(reg, actor, game::Interactable::Kind::Terminal, bus, &out));
-        CHECK(out.hit);
-        CHECK(out.pos.x == 20.0f);
-        CHECK(out.pos.z == 10.0f);
-    }
-}
+// test_find_nearest_terminal_respects_reach СНЕСЁН 2026-11-07 вместе с парой
+// find_nearest_interactable/interaction_step: тест проверял сами символы
+// (критерий [purge-2026-09-30]), прод-вызовов у пары не было (wired §52).
 
 // МОГИЛА ДВЕРЕЙ (2026-08-28): терминальный тумблер замков умер с системой.
 static void test_collect_static_prop_mesh_instances_shapes() {
@@ -1277,9 +1242,9 @@ static void test_collect_static_prop_mesh_instances_shapes() {
     }
 }
 
-// [jirnyak.md] §18 — corpses and floor loot carry Interactable so HUD/E and
-// find_nearest_interactable share one query path. Kind filter must not leak
-// across Corpse vs Loot, and an empty searched corpse deactivates.
+// [jirnyak.md] §18 — corpses and floor loot carry Interactable; выбор цели —
+// закон фокуса ([game/focus.h], прицел + body_reach). An empty searched
+// corpse deactivates; pickup_take стоит на атомности в обе полярности.
 static void test_corpse_and_loot_are_interactable() {
     Registry reg;
     NpcPool pool;
@@ -1307,9 +1272,9 @@ static void test_corpse_and_loot_are_interactable() {
         cbox.inv.slots[0] = ItemSlot{ItemId{1}, 1, 255};
         reg.emplace<game::Container>(corpse, cbox);
 
-        // Mirrors combat.cpp finalize_deaths: Kind::Corpse, radius 2.2, active.
+        // Mirrors combat.cpp finalize_deaths: Kind::Corpse, active.
         reg.emplace<game::Interactable>(
-            corpse, game::Interactable{game::Interactable::Kind::Corpse, 2.2f, true});
+            corpse, game::Interactable{game::Interactable::Kind::Corpse, true});
     }
     // CHECK is a function-like macro: commas inside all_of<A,B> split args.
     CHECK(reg.all_of<Corpse>(corpse));
@@ -1318,21 +1283,11 @@ static void test_corpse_and_loot_are_interactable() {
         const game::Interactable& ia = reg.get<game::Interactable>(corpse);
         CHECK(ia.kind == game::Interactable::Kind::Corpse);
         CHECK(ia.active);
-        CHECK(ia.reachM >= 2.0f);
-
+        // reachM снесён 2026-11-07: досягаемость — вывод из роста смотрящего
+        // (body_reach), компонента цели она больше не касается.
     }
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Corpse, 2.2f);
-        CHECK(hit.hit);
-        CHECK(hit.entity == corpse);
-    }
-    // Kind filter: Corpse must not answer a Loot query.
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Loot, 2.2f);
-        CHECK(!hit.hit);
-    }
+    // Блоки find_nearest_interactable (hit/kind-filter) снесены вместе с
+    // самим запросом 2026-11-07 — они проверяли мёртвый символ.
 
     // Drain corpse loot → empty searched corpse deactivates Interactable.
     {
@@ -1345,16 +1300,34 @@ static void test_corpse_and_loot_are_interactable() {
     CHECK(reg.get<game::Container>(corpse).inv.empty());
     CHECK(reg.all_of<game::Interactable>(corpse));
     CHECK(!reg.get<game::Interactable>(corpse).active);
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Corpse, 2.2f);
-        CHECK(!hit.hit); // inactive drops out of the query
-    }
 
     // --- Floor loot: НАВЕС «ДАТЬ ПРЕДМЕТ» (владелец 2026-11-07) -------------
     // Лут — тело с интерактором лута: «[E] PICK UP» исполняется pickup_take
-    // по прицелу, reach — из той же строки таблицы, что промпт. Авто-пылесос
-    // по близости умер тем же решением, что авто-лут трупов.
+    // по прицелу; досягаемость — из роста смотрящего (body_reach), не из
+    // таблицы цели. Авто-пылесос по близости умер тем же решением, что
+    // авто-лут трупов. Поиск ближайшего лута ниже — рукой теста: прежний
+    // запрос find_nearest_interactable снесён, а предмет теста —
+    // pickup_take, не поиск.
+    const auto nearest_loot = [&reg](const vec3& from, float maxM) {
+        Entity best = entt::null;
+        float bestD2 = maxM * maxM;
+        auto v = reg.view<const Pickup, const Transform,
+                          const game::Interactable>();
+        for (auto e : v) {
+            const auto& ia = v.get<const game::Interactable>(e);
+            if (!ia.active || ia.kind != game::Interactable::Kind::Loot)
+                continue;
+            const vec3 tp = v.get<const Transform>(e).pos;
+            const float dx = tp.x - from.x, dy = tp.y - from.y,
+                        dz = tp.z - from.z;
+            const float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestD2) {
+                bestD2 = d2;
+                best = e;
+            }
+        }
+        return best;
+    };
     {
         const std::uint32_t n = drop_mob_loot(
             reg, /*layer=*/0, ppos,
@@ -1369,20 +1342,17 @@ static void test_corpse_and_loot_are_interactable() {
     for (auto e : reg.view<const Pickup>()) {
         ++pickups;
         if (const auto* ia = reg.try_get<game::Interactable>(e))
-            if (ia->kind == game::Interactable::Kind::Loot && ia->active &&
-                ia->reachM ==
-                    game::interact_def(game::InteractKind::Loot).reachM)
+            if (ia->kind == game::Interactable::Kind::Loot && ia->active)
                 ++hung;
     }
     CHECK(pickups > 0);
-    CHECK(hung == pickups); // навес на КАЖДОМ пикапе, reach из таблицы
+    CHECK(hung == pickups); // навес на КАЖДОМ пикапе
     {
         // E забирает РОВНО сфокусированный пикап: ближайший активный Loot.
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Loot, 3.0f);
-        CHECK(hit.hit);
-        CHECK(reg.all_of<Pickup>(hit.entity));
-        const Pickup before = reg.get<Pickup>(hit.entity);
+        const Entity hitE = nearest_loot(ppos, 3.0f);
+        CHECK(hitE != entt::null);
+        CHECK(reg.all_of<Pickup>(hitE));
+        const Pickup before = reg.get<Pickup>(hitE);
         Inventory& pinv = pool.inventory(pid);
         const int hadSlots = [&] {
             int c = 0;
@@ -1391,23 +1361,22 @@ static void test_corpse_and_loot_are_interactable() {
             return c;
         }();
         const game::PickupTakeResult pr =
-            game::pickup_take(reg, pool, bus, hit.entity, pid, 7u);
+            game::pickup_take(reg, pool, bus, hitE, pid, 7u);
         CHECK(pr.placed == before.count);  // маленький стек влезает целиком
         CHECK(pr.destroyed);               // забран — сущность умерла
-        CHECK(!reg.valid(hit.entity));
+        CHECK(!reg.valid(hitE));
         (void)hadSlots;
     }
     {
         // ПОЛЯРНОСТЬ ПОЛНОГО ИНВЕНТАРЯ: некуда класть — пикап ЛЕЖИТ ДАЛЬШЕ,
         // ничего не уничтожено и не списано (атомность как у craft_item).
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Loot, 3.0f);
+        const Entity hitE = nearest_loot(ppos, 3.0f);
         std::printf("[props] loot full-inv polarity: hit=%d item=%u\n",
-                    hit.hit ? 1 : 0,
-                    hit.hit ? static_cast<unsigned>(
-                                  reg.get<Pickup>(hit.entity).item)
-                            : 0u);
-        if (hit.hit) {
+                    hitE != entt::null ? 1 : 0,
+                    hitE != entt::null
+                        ? static_cast<unsigned>(reg.get<Pickup>(hitE).item)
+                        : 0u);
+        if (hitE != entt::null) {
             Inventory& pinv = pool.inventory(pid);
             const Inventory saved = pinv;
             const std::uint16_t fillCap = static_cast<std::uint16_t>(
@@ -1417,26 +1386,19 @@ static void test_corpse_and_loot_are_interactable() {
             for (ItemSlot& s : pinv.slots)
                 if (s.item == kInvalidItem || s.count == 0)
                     s = ItemSlot{static_cast<ItemId>(1), fillCap};
-            const Pickup before = reg.get<Pickup>(hit.entity);
+            const Pickup before = reg.get<Pickup>(hitE);
             // Чужой предмет гарантирует «не достекуется»: айди пикапа ≠ 1 —
             // иначе тест нем; Boss-лут Mancobus под сидом 99 это держит.
             if (before.item != static_cast<ItemId>(1)) {
                 const game::PickupTakeResult pr =
-                    game::pickup_take(reg, pool, bus, hit.entity, pid, 8u);
+                    game::pickup_take(reg, pool, bus, hitE, pid, 8u);
                 CHECK(pr.placed == 0);
                 CHECK(!pr.destroyed);
-                CHECK(reg.valid(hit.entity));
-                CHECK(reg.get<Pickup>(hit.entity).count == before.count);
+                CHECK(reg.valid(hitE));
+                CHECK(reg.get<Pickup>(hitE).count == before.count);
             }
             pinv = saved;
         }
-    }
-
-    // Kind filter: Loot must not answer a Corpse query (corpse already inactive).
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, player, game::Interactable::Kind::Corpse, 3.0f);
-        CHECK(!hit.hit);
     }
 }
 
@@ -1722,8 +1684,8 @@ static void test_projectile_shatters_lamp_and_light_dies() {
 
 
 // [jirnyak.md] section 18/20 -- terminals are sim-owned via seed_wall_interactables.
-// PropPass no longer exposes get_terminal_positions; interaction_step must resolve
-// ECS Interactable entities, not ghost GPU instances from env_detail.
+// PropPass no longer exposes get_terminal_positions; стена сеет НАСТОЯЩИЕ ECS
+// Interactable-сущности, not ghost GPU instances from env_detail.
 static void test_sim_owned_terminals_seed_and_interact() {
     Registry reg;
     World world;
@@ -1746,33 +1708,11 @@ static void test_sim_owned_terminals_seed_and_interact() {
     game::collect_interactable_positions(reg, layer, game::Interactable::Kind::ElectricalShield, shields);
     CHECK(terms.size() + shields.size() > 0u);
 
-    // Prefer Terminal if present; else ElectricalShield (both are wall devices).
-    const auto kind = !terms.empty() ? game::Interactable::Kind::Terminal
-                                     : game::Interactable::Kind::ElectricalShield;
-    const vec3 target = !terms.empty() ? terms[0] : shields[0];
+    // Блок «подойти и дёрнуть» снесён 2026-11-07 вместе с парой
+    // find_nearest_interactable/interaction_step (тест проверял сами
+    // символы); интеракция в проде идёт законом фокуса ([game/focus.h]).
 
-    // Actor 1.5 m from target -- inside interaction_step default reach (~3 m).
-    const Entity actor = make_actor_at(reg, layer,
-        vec3{target.x + 1.5f, target.y, target.z});
-
-    {
-        const game::InteractionHit hit = game::find_nearest_interactable(
-            reg, actor, kind, 4.0f);
-        CHECK(hit.hit);
-        CHECK(hit.entity != entt::null);
-        CHECK(reg.all_of<game::Interactable>(hit.entity));
-        CHECK(reg.get<game::Interactable>(hit.entity).kind == kind);
-    }
-
-    bus.clear();
-    game::InteractionHit out{};
-    CHECK(game::interaction_step(reg, actor, kind, bus, &out));
-    CHECK(out.hit);
-    CHECK(out.entity != entt::null);
-    CHECK(reg.valid(out.entity));
-    CHECK(reg.all_of<game::Interactable>(out.entity));
-
-    printf("[props] s20 sim-owned terminals: nWall=%u terms=%zu shields=%zu interact=ok\n",
+    printf("[props] s20 sim-owned terminals: nWall=%u terms=%zu shields=%zu seed=ok\n",
            nWall, terms.size(), shields.size());
 }
 
@@ -2030,7 +1970,7 @@ static void test_e_ladder_targets_by_aim() {
         tr.layer = layer;
         reg.emplace<Transform>(e, tr);
         reg.emplace<game::Interactable>(
-            e, game::Interactable{t.kind, t.reach, true});
+            e, game::Interactable{t.kind, true});
         if (t.kind == game::Interactable::Kind::Corpse) {
             game::Corpse c{};
             reg.emplace<game::Corpse>(e, c);
@@ -2078,8 +2018,8 @@ static void test_e_ladder_targets_by_aim() {
         tr.layer = layer;
         reg.emplace<Transform>(underfoot, tr);
         reg.emplace<game::Interactable>(
-            underfoot, game::Interactable{game::Interactable::Kind::Corpse,
-                                          2.2f, true});
+            underfoot,
+            game::Interactable{game::Interactable::Kind::Corpse, true});
         reg.emplace<game::Corpse>(underfoot, game::Corpse{});
         reg.emplace<AABB>(underfoot, AABB{vec3{0.45f, 0.45f, 0.9f}});
         const game::Focus hit = game::focus_pick(
@@ -2094,8 +2034,7 @@ static void test_e_ladder_targets_by_aim() {
         tb.layer = layer;
         reg.emplace<Transform>(bare, tb);
         reg.emplace<game::Interactable>(
-            bare, game::Interactable{game::Interactable::Kind::Corpse, 2.2f,
-                                     true});
+            bare, game::Interactable{game::Interactable::Kind::Corpse, true});
         reg.emplace<game::Corpse>(bare, game::Corpse{});
         const game::Focus miss = game::focus_pick(
             reg, world, layer, vec3{219.0f, 60.0f, 20.0f},
@@ -2184,7 +2123,6 @@ void test_props_game_all() {
     test_furniture_is_not_a_terminal();
     test_lamp_rows_are_gpu_handoff_neon();
     test_projectile_shatters_lamp_and_light_dies();
-    test_find_nearest_terminal_respects_reach();
     test_sim_owned_terminals_seed_and_interact();
     test_collect_static_prop_mesh_instances_shapes();
     test_corpse_and_loot_are_interactable();

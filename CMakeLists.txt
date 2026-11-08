@@ -2338,7 +2338,15 @@ if(GIGA_BUILD_TESTS)
         # виде цели) + 3 пробы силуэта (труп у ног с габаритом ловится,
         # без габарита та же геометрия молчит). Прогон бинаря (273151)
         # сошёлся точно.
-        PASS_REGULAR_EXPRESSION "game_test: 273151 checks, 0 failures")
+        # 273151 - 25 = 273126 на 2026-11-07 (инкремент B лифт-лимба: снос
+        # reach-колонок и пары find_nearest_interactable/interaction_step):
+        # -10 test_find_nearest_terminal_respects_reach (тест проверял сами
+        # символы — снесён целиком), -9 блок «подойти и дёрнуть» в
+        # test_sim_owned_terminals_seed_and_interact, -6 в
+        # test_corpse_and_loot_are_interactable (reachM-пробы и hit-блоки
+        # мёртвого запроса; pickup_take-пробы живы на поиске рукой теста).
+        # Прогон бинаря (273126) сошёлся точно.
+        PASS_REGULAR_EXPRESSION "game_test: 273126 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
@@ -2392,7 +2400,13 @@ if(GIGA_BUILD_TESTS)
     #         то, чем ходок доходит.
     #   t1_f7_05 и t3_12 СОХРАНЕНЫ и переименованы: оба уже проверяли зоны, а
     #   имена врали про `route_step`.
-        PASS_REGULAR_EXPRESSION "e2e_test: 2164 checks, 0 failures")
+    #   2164 - 19 = 2145 на 2026-11-07 (инкремент B лифт-лимба): сняты
+    #   t1_f13_01..04 (-7), t1_f14_03 (-1), t2_f13_01..05 (-10) — тесты
+    #   самой пары interaction_step/find_nearest_interactable; имена пары
+    #   ушли из массива t2_f14_05 (-2); t3_04 потерял вызов пары, но
+    #   приобрёл пробу активности терминала (+0); сценарий банка приобрёл
+    #   свидетеля реестра (+1). Прогон бинаря (2145) сошёлся точно.
+        PASS_REGULAR_EXPRESSION "e2e_test: 2145 checks, 0 failures")
 
 
 
@@ -2480,9 +2494,12 @@ if(GIGA_BUILD_TESTS)
     # «подключать не надо». То же у `stale_rows`: храповик аллоулиста
     # доказывался только кодом возврата, а он один бит. Тот же довод, которым
     # `csv_columns` пинит все шесть своих чисел.
+    # deferred 6 -> 4 (2026-11-07, инкремент B лифт-лимба): отложки
+    # interaction_step/prop_interact_step сняты ВМЕСТЕ с самими символами —
+    # пара снесена по критерию «тест проверяет сам символ».
     set_tests_properties(wired PROPERTIES
         PASS_REGULAR_EXPRESSION
-        "GIGA_WIRED=PASS entry_points=[0-9][0-9] deferred=6 stale_rows=0")
+        "GIGA_WIRED=PASS entry_points=[0-9][0-9] deferred=4 stale_rows=0")
 
     # Закоммиченная таблица обязана совпадать со своим генератором. Третий
     # текстовый гейт той же формы — компилятора не требует, живёт на голом
