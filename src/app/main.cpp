@@ -138,6 +138,7 @@
 #include "sim/presence.h" // пузырь вокруг наблюдателя — ОДИН на дерево (§23)
 #include "sim/rigid.h"
 #include "world/destruct.h"
+#include "world/floor_awaken.h" // settle_uniform_pages — нормализация выхода
 #include "world/stain.h"
 #include "world/level_stack.h"
 #include "game/rebake.h"
@@ -1720,6 +1721,16 @@ void write_floor_file_async(World& w, int floor,
             if (mats)
                 tmp.subfields().get_or_create<CellType>(kSubMaterialName) =
                     std::move(*mats);
+            // Схлопнуть раскрытое-без-записи ПЕРЕД кодеком (течь §76.5,
+            // [world/floor_awaken.h] settle_uniform_pages): tmp принадлежит
+            // этой нити целиком, живого мира и зеркала здесь нет. Файл и
+            // пул следующего рестора худеют на всю жизнь фронтира.
+            const std::size_t settled = settle_uniform_pages(tmp);
+            if (settled > 0)
+                std::fprintf(stderr,
+                             "[floor] %d: exit settle %zu uniform pages "
+                             "folded before codec\n",
+                             floor, settled);
             std::vector<std::uint8_t> bytes;
             game::floor_file_write(tmp, floor, bytes, ep.get(), &key);
             return write_bytes_file(bytes, p.c_str());

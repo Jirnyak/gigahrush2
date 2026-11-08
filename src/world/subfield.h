@@ -181,6 +181,38 @@ public:
 
     void reserve_pages(std::size_t n) { pages_.reserve(n); }
 
+    // КОМПАКТ ПУЛА: пересадить занятые страницы из хвоста в дыры свободного
+    // списка, отдать хвост аллокатору. Зачем он существует: потребители
+    // гонят пул ЦЕЛИКОМ по page_count() (зеркало: pages_data() как один
+    // плоский массив), то есть платят по ВЕРХНЕЙ ВОДЕ, а не по занятым —
+    // а рождение этажа схлопывает сотни тысяч страниц (floor_awaken, S16.9:
+    // floor 6 — 649k), и без компакта эти дыры ехали бы в каждую заливку и
+    // сидели в ОЗУ до смерти слота. Один проход по таблице (8 МиБ) + копия
+    // перемещённых страниц; рождение этажа, НЕ тик.
+    void compact() {
+        if (free_.empty()) return;
+        const std::size_t keep = pages_in_use();
+        // Дыры в префиксе [0, keep) — места для страниц из хвоста. Счёт
+        // сходится по построению: занятых за keep ровно столько, сколько
+        // дыр до keep.
+        std::vector<std::uint32_t> holes;
+        holes.reserve(free_.size());
+        for (std::uint32_t f : free_)
+            if (f < keep) holes.push_back(f);
+        std::size_t next = 0;
+        for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+            const std::uint32_t p = pageOf_[ci];
+            if (p == kNoPage || p < keep) continue;
+            const std::uint32_t t = holes[next++];
+            pages_[t] = pages_[p];
+            pageOf_[ci] = static_cast<std::uint32_t>(t);
+        }
+        pages_.resize(keep);
+        pages_.shrink_to_fit(); // вернуть хвост, не только скрыть его
+        free_.clear();
+        free_.shrink_to_fit();
+    }
+
     // Return EVERY cell to uniform and release the pages. For wholesale state
     // replacement (a floor snapshot stamping over a live world) — not a per-tick
     // operation.

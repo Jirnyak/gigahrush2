@@ -2087,6 +2087,12 @@ static void page_invariant_holds_over_the_whole_volume() {
     // зелёным у аллокатора, который просто снёс все страницы подряд.
     CHECK(after.paged_cells >= 2);
     CHECK(after.pages_in_use == after.paged_cells);
+    // КОМПАКТ (лифт-лимб 3): после рождения верхней воды НЕТ — пул плотный,
+    // page_count == pages_in_use. Обе полярности здесь же: строкой выше
+    // призрак ДАЛ дыру (settle отправил его слот во free-список), значит
+    // без compact() page_slots был бы СТРОГО больше — мутация «компакт
+    // снят» красит ровно эту строку.
+    CHECK(after.page_slots == after.pages_in_use);
 
     // И течь второго рода: слот, отданный в свободный список, обязан быть
     // ПЕРЕИСПОЛЬЗОВАН, а не потерян. Рождаем столько же призраков, сколько
@@ -2096,6 +2102,20 @@ static void page_invariant_holds_over_the_whole_volume() {
     const giga::PageAuditStats reused = giga::audit_sub_pages(w);
     CHECK(reused.pages_in_use == inUse + 1);
     CHECK(reused.orphan_slots == 0);
+
+    // НОРМАЛИЗАЦИЯ ВЫХОДА ([world/floor_awaken.h] settle_uniform_pages,
+    // течь §76.5): свежий призрак строкой выше — ровно «раскрытое без
+    // записи», которым фронтир раздувает файл этажа за минуты жизни.
+    // Выходной settle фонового кодека обязан его сложить (положительная
+    // полярность — settled >= 1 и нарушений ноль), а страницы с материей
+    // (лужа, карв) — НЕ трогать (paged_cells >= 2 после).
+    const std::size_t settledOut = giga::settle_uniform_pages(w);
+    CHECK(settledOut >= 1);
+    const giga::PageAuditStats outAudit = giga::audit_sub_pages(w);
+    CHECK(outAudit.uniform_paged == 0);
+    CHECK(outAudit.orphan_slots == 0);
+    CHECK(outAudit.paged_cells >= 2);
+    CHECK(outAudit.pages_in_use == inUse); // призрак сложен, материя цела
 }
 
 // ХОД C ([matwej.md] §9.4, решение владельца): ВЫХОД С ЭТАЖА КРАДЁТ ПУЛ.

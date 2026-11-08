@@ -73,11 +73,30 @@ FloorAwakenStats floor_awaken(World& w) {
                 ++st.settled;
         }
     }
+    // КОМПАКТ ПУЛА — сразу за схлопыванием, тем же серийным участком:
+    // потребители гонят пул по page_count() (верхняя вода), а не по занятым,
+    // и без компакта только что освобождённые сотни тысяч слотов (floor 6 —
+    // 649k) ехали бы в каждую заливку зеркала и сидели в ОЗУ до смерти
+    // слота. Дыры от живого settle душит та же точка: рождение —
+    // единственный массовый освободитель, и после него пул плотный
+    // (page_count == pages_in_use — гейт аудита страниц).
+    mats.compact();
 
     st.ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0)
                 .count();
     return st;
+}
+
+std::size_t settle_uniform_pages(World& w) {
+    SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    if (!mats) return 0;
+    std::size_t settled = 0;
+    // Серийно: путь фонового кодека, не кадра; settle_sub_page правит общий
+    // свободный список — тот же довод, что у серийного схлопывания рождения.
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci)
+        if (mats->paged(ci) && settle_sub_page(w, ci)) ++settled;
+    return settled;
 }
 
 PageAuditStats audit_sub_pages(const World& w) {
@@ -91,6 +110,7 @@ PageAuditStats audit_sub_pages(const World& w) {
     if (!mats) return st;
 
     st.pages_in_use = mats->pages_in_use();
+    st.page_slots = mats->page_count();
 
     // Серийно и без parallel_for: обход читает только pageOf_ и по одному биту
     // сравнения на страницу, стоит микросекунды на пустом этаже, а параллель
