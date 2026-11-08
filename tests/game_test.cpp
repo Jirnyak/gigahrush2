@@ -2802,7 +2802,7 @@ static void test_extraction_reachable() {
         for (int x = 0; x < kMacroDim; ++x) {
             if (hub.grid().cell(x, y, 0) != kCellAir) continue;   // must be standable
             const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
-            if (on_extraction_pad(hub.grid(), p)) ++reachable;
+            if (on_extraction_pad(hub.grid(), p, /*grounded=*/true)) ++reachable;
         }
     // 16 shafts x (7x7 lobby minus the 3x3 shaft hole) = 16 x 40 = 640 cells. Assert
     // a floor rather than the exact number: the lobby radius is the generator's to
@@ -2820,9 +2820,22 @@ static void test_extraction_reachable() {
         for (int x = 0; x < kMacroDim; ++x) {
             if (deep.grid().cell(x, y, 0) != kCellAir) continue;
             const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
-            if (on_extraction_pad(deep.grid(), p)) ++leaked;
+            if (on_extraction_pad(deep.grid(), p, /*grounded=*/true)) ++leaked;
         }
     CHECK(leaked == 0);
+
+    // БАНК — ГЛАГОЛ СТОЯНИЯ (владелец 2026-11-08: «инвентарь пустеет при
+    // подлёте к зоне лифта»): та же точка над краской, но без опоры — ноль.
+    // Обе полярности одним местом: grounded=true над кольцом выше дал сотни
+    // клеток, grounded=false обязан дать ноль на ВСЕХ тех же клетках.
+    int flying = 0;
+    for (int y = 0; y < kMacroDim; ++y)
+        for (int x = 0; x < kMacroDim; ++x) {
+            if (hub.grid().cell(x, y, 0) != kCellAir) continue;
+            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
+            if (on_extraction_pad(hub.grid(), p, /*grounded=*/false)) ++flying;
+        }
+    CHECK(flying == 0);
 
     // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27): hub-pad
     // перекраска узловых слоёв снесена вместе с синими столбами — на узловом
@@ -4959,7 +4972,8 @@ static void test_full_loop() {
 
     // Deep floors do NOT bank. If they did, the walk home would be pointless and the
     // whole risk half of the loop would evaporate.
-    CHECK(!on_extraction_pad(stack.layer(layer).grid(), cratePos));
+    CHECK(!on_extraction_pad(stack.layer(layer).grid(), cratePos,
+                             /*grounded=*/true));
 
     // --- seam 3: the hub banks ----------------------------------------------
     LayerId hub = stack.push_layer();
@@ -4975,9 +4989,13 @@ static void test_full_loop() {
             if (stack.layer(hub).grid().cell(x, y, 0) != kCellAir) continue;
             const vec3 c{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize,
                          0.5f * kCellSize};
-            if (on_extraction_pad(stack.layer(hub).grid(), c)) { padPos = c; found = true; }
+            if (on_extraction_pad(stack.layer(hub).grid(), c,
+                                  /*grounded=*/true)) { padPos = c; found = true; }
         }
     CHECK(found);
+    // Та же точка БЕЗ опоры — банк молчит (глагол стояния, [extraction.h]).
+    CHECK(!on_extraction_pad(stack.layer(hub).grid(), padPos,
+                             /*grounded=*/false));
 
     // Diagnostic: what did the crate actually give? The first run of this test banked
     // ZERO, which is the seam bug it exists to find.

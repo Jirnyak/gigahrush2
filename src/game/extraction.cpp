@@ -6,7 +6,10 @@
 
 namespace giga::game {
 
-bool on_extraction_pad(const MacroGrid& grid, const vec3& pos) {
+bool on_extraction_pad(const MacroGrid& grid, const vec3& pos, bool grounded) {
+    // Стояние — половина закона (вывод в [extraction.h]): полёт над краской
+    // не банкует, сколько бы клеток вниз ни совпало.
+    if (!grounded) return false;
     // Z WRAPS here on purpose. One World is ONE floor — other floors are other
     // Worlds in the stack — and the module's storey 0 stands on the attic
     // sandwich at z=127 (the torus's z-wrap), which is exactly where the

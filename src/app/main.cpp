@@ -3390,6 +3390,10 @@ int main(int argc, char** argv) {
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     game::RunLedger& ledger = runState.ledger;
+    // Вспышка банка для худа: последний депозит и его тик. Не сейв —
+    // одноразовое событие ленты алертов ([hud_ui.h]); гаснет сама по часам.
+    std::int32_t bankFlash = 0;
+    std::uint64_t bankFlashTick = 0;
     // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
     // вклад и долг ([economy.h], [save.h] SAVBANK).
     game::BankAccount& bankAcct = runState.bank;
@@ -4938,11 +4942,17 @@ int main(int argc, char** argv) {
         // дальше ждём Fresh-свапа выше. Тот же топ кадра, что у телепорта:
         // мир не дёргается под закоммиченным кадром.
         if (liftRide == LiftRide::Prebuilding && nav.take_prebuilt()) {
+            // Имена внутри кадра take_prebuilt (лифт-лимб 3): до сих пор из
+            // 91-168 мс именованной была только leave-копия (17-54), остальное
+            // шло немо — нож нельзя назвать, пока слагаемые не названы.
+            const auto tP0 = std::chrono::steady_clock::now();
             game::NpcId pid = reg.valid(player)
                                   ? reg.get<game::NpcRef>(player).id
                                   : game::kInvalidNpc;
             leave_current_floor();
+            const auto tP1 = std::chrono::steady_clock::now();
             streamer.prebuild_finish(stack, registry, reg, pool, pid);
+            const auto tP2 = std::chrono::steady_clock::now();
             const game::FloorSpec* dspec = spec_for_floor(liftDst);
             const int arriveH =
                 dspec ? game::lift_entrance(
@@ -4953,7 +4963,18 @@ int main(int argc, char** argv) {
             game::RideResult ride = streamer.teleport(
                 stack, registry, reg, pool, player, currentFloor, liftDst,
                 static_cast<std::uint8_t>(arriveH), pid, liftHub);
+            const auto tP3 = std::chrono::steady_clock::now();
             liftSwapLayer = arrive_head(ride, liftHub);
+            const auto tP4 = std::chrono::steady_clock::now();
+            const auto msP = [](std::chrono::steady_clock::time_point a,
+                                std::chrono::steady_clock::time_point b) {
+                return std::chrono::duration<float, std::milli>(b - a).count();
+            };
+            std::fprintf(stderr,
+                         "[lift] take_prebuilt: leave %.0f | finish %.0f | "
+                         "teleport %.0f | head %.0f ms\n",
+                         msP(tP0, tP1), msP(tP1, tP2), msP(tP2, tP3),
+                         msP(tP3, tP4));
             if (liftSwapLayer != kInvalidLayer) {
                 liftRide = LiftRide::SwapRefresh; // шаги — по кадру (5d)
             } else {
@@ -8123,14 +8144,34 @@ int main(int argc, char** argv) {
                 // becomes permanently yours. Runs every tick, deposits nothing
                 // almost every tick, and that is fine — it is a handful of slot
                 // reads. [extraction.h]
+                // СТОЯ, а не ПРОЛЕТАЯ (grounded — вторая половина закона,
+                // вывод в [extraction.h]); и ВСЛУХ — возврат deposit_valuables
+                // шёл в пол, игрок читал «инвентарь пропал насовсем» там, где
+                // система писала ему деньги (владелец, 2026-11-08). Невидимая
+                // цена — не цена, и невидимая выплата — не выплата.
                 if (reg.valid(player)) {
                     const Transform& ptr_ = reg.get<Transform>(player);
+                    const auto* pga = reg.try_get<GravityAffected>(player);
                     if (game::on_extraction_pad(
-                            stack.layer(activeLayer).grid(), ptr_.pos)) {
+                            stack.layer(activeLayer).grid(), ptr_.pos,
+                            pga != nullptr && pga->grounded)) {
                         if (const auto* nrx = reg.try_get<game::NpcRef>(player))
-                            if (pool.valid(nrx->id))
-                                game::deposit_valuables(
-                                    pool.inventory(nrx->id), ledger);
+                            if (pool.valid(nrx->id)) {
+                                const std::int32_t got =
+                                    game::deposit_valuables(
+                                        pool.inventory(nrx->id), ledger);
+                                if (got > 0) {
+                                    bankFlash = got;
+                                    bankFlashTick = simTick;
+                                    std::fprintf(
+                                        stderr,
+                                        "[extract] banked %d rub on pad "
+                                        "(deposit #%u, total %lld)\n",
+                                        got, ledger.deposits,
+                                        static_cast<long long>(
+                                            ledger.banked));
+                                }
+                            }
                     }
                 }
                 // Save and load. Both are world mutations, so they sit on the sim's
@@ -8702,6 +8743,8 @@ int main(int argc, char** argv) {
             hctx.needsTick = &needs;
             hctx.stereo3d = stereoFrame;
             hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
+            hctx.bankFlash = bankFlash;          // лента событий: депозит
+            hctx.bankFlashTick = bankFlashTick;  // пада ([hud_ui.h])
             // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца 2026-08-28):
             // под прицелом ровно одна цель, текст — из таблицы интерактивов
             // (или состояния двери), клавиша — из биндов. Жила отдельным
@@ -8986,8 +9029,11 @@ int main(int argc, char** argv) {
                 }
                 if (reg.valid(player)) {
                     const Transform& vt2 = reg.get<Transform>(player);
+                    const auto* vga = reg.try_get<GravityAffected>(player);
                     if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
-                                                vt2.pos))
+                                                vt2.pos,
+                                                vga != nullptr &&
+                                                    vga->grounded))
                         ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
                                            "PAD: banking");
                 }

@@ -188,9 +188,19 @@ void draw_interact(const HudContext& c) {
 // поэтому предикат живости стоит ровно столько же, сколько прежняя ветка по
 // фазе, и не рисует строку дважды ([samosbor.h]: «cheap enough that
 // samosbor_beat_text and samosbor_beat_pulse01 each call it»).
+// Вспышка банка: 3 секунды = 375 сим-тиков (125 Гц, S15 — часы худа и так
+// тики). Не константа вкуса, а порог чтения: короче секунды строку не успеть
+// прочитать, дольше пяти она притворяется статусом.
+constexpr std::uint64_t kBankFlashTicks = 375;
+
+bool bank_flash_live(const HudContext& c) {
+    return c.bankFlash > 0 && c.tick - c.bankFlashTick < kBankFlashTicks;
+}
+
 bool alerts_live(const HudContext& c) {
     if (c.samosbor && game::samosbor_beat(*c.samosbor) != game::SamosborBeat::None)
         return true;
+    if (bank_flash_live(c)) return true;
     return c.needsTick && c.needsTick->failed != 0;
 }
 
@@ -222,6 +232,11 @@ void draw_alerts(const HudContext& c) {
     }
     if (c.needsTick && c.needsTick->failed != 0)
         ImGui::TextColored(kDanger, "ИСТОЩЕНИЕ: ТЕЛО ТЕРЯЕТ HP");
+    // Первый жилец объявленной выше ленты одноразовых событий: депозит пада.
+    // Янтарь, не красный: событие — выплата, красный зарезервирован угрозе
+    // (мандат палитры у draw_alerts).
+    if (bank_flash_live(c))
+        ImGui::TextColored(kAmber, "В БАНК: +%d руб", c.bankFlash);
 }
 
 // --- таблица ----------------------------------------------------------------

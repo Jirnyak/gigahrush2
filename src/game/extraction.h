@@ -83,12 +83,21 @@ static_assert(alignof(RunLedger) == 8);
 // generated into the hub floor ([floor_gen.cpp]) as the nav/fast-travel pad, so the
 // extraction point is somewhere the player already recognises and already walks to.
 // No new geometry, no new art, no new interaction verb.
-inline constexpr float kExtractReachZ = 2.5f;   // metres above the pad that still count
-
-// Is this position standing on an extraction pad? Checks the cell under the feet and
-// one below it, because a body rests slightly above the surface it stands on and a
-// pad you can only bank on by clipping into it is a pad that looks broken.
-bool on_extraction_pad(const MacroGrid& grid, const vec3& pos);
+//
+// Is this position STANDING on an extraction pad? Geometry: the cell under the feet
+// and one below it, because a body rests slightly above the surface it stands on and
+// a pad you can only bank on by clipping into it is a pad that looks broken.
+//
+// `grounded` — физический факт опоры этого кадра (GravityAffected.grounded у
+// вызывающего). Банк — глагол СТОЯНИЯ, и это слово контракта выше, а не
+// обёртка: без него «клетка под ногами» срабатывала на ПРОЛЁТЕ до ~4 м над
+// краской (две клетки по 2 м), и инвентарь пустел при подлёте к лифтозоне —
+// поймано владельцем 2026-11-08 на этаже 0, где кольцо пада обнимает столб
+// лифта. Тот же закон, что убил пылесос пикапов (решение владельца
+// 2026-11-07): авто-действие над инвентарём по ОДНОЙ близости мертво.
+// Мёртвый kExtractReachZ = 2.5f (ноль читателей) снесён этой же правкой:
+// допуск по высоте и есть grounded, второй константе тут нечего выводить.
+bool on_extraction_pad(const MacroGrid& grid, const vec3& pos, bool grounded);
 
 // Should this slot be banked?
 //
