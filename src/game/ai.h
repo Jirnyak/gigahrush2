@@ -858,7 +858,8 @@ void apply_recall(const MemoryRecall& r, std::uint16_t faction, Perception& p);
 // The switch margin is the FSM override 7, NOT the npc_utility default 8; using
 // 8 diverges at the hysteresis boundary.
 inline constexpr float kSwitchMargin = 7.0f;
-inline constexpr float kEmergencyScore = 58.0f;
+// `kEmergencyScore` (58) СНЕСЁН 2026-11-08 вместе с классом «аварийных
+// интентов» — см. `intent_is_emergency` ниже.
 inline constexpr float kRethinkBaseSec = 1.5f;   // re-plan cadence lower bound
 inline constexpr float kRethinkSpreadSec = 2.5f; // + rand01*spread -> [1.5, 4.0]
 inline constexpr float kStickBase = 5.0f;        // stickiness at t=0
@@ -898,11 +899,23 @@ inline constexpr float kSeatArriveM = kCellSize * 0.35f;
 // strolling one.
 inline constexpr float kMinFleeGrad2 = 1e-10f;
 
-// The survival intents that may preempt the current one without the margin.
-inline bool intent_is_emergency(std::uint8_t intent) {
-    return intent == IntentSafety || intent == IntentFlee ||
-           intent == IntentCombat || intent == IntentHeal;
-}
+// КЛАСС «АВАРИЙНЫХ ИНТЕНТОВ» СНЕСЁН 2026-11-08 (решение владельца: канон
+// запрещает его буквально). Здесь жил предикат `intent_is_emergency` — список
+// из четырёх интентов, которым позволялось перебивать текущий БЕЗ порога, — и
+// порог `kEmergencyScore = 58`, то есть ВТОРАЯ дверь переключения с назначенным
+// числом и назначенным списком избранных.
+//
+// ПОЧЕМУ ЕГО МОЖНО СНЕСТИ, А НЕ ЧЕМ ЗАМЕНИТЬ: срочность и так в счёте. Угроза
+// входит в `flee`/`safety` со ЗНАКОМ ПЛЮС и в `work`/`social`/`sleep` со знаком
+// МИНУС (по 42 очка в каждую сторону у работы и бегства), поэтому настоящая
+// опасность разводит их на ~84 очка — на порядок больше порога 7. Класс
+// избранных закрывал лишь узкую полосу, в которой счёт почти равен, то есть
+// случай, когда решение и ДОЛЖНО залипать.
+//
+// А нелинейность, из-за которой нужда вообще способна перебить дело, живёт
+// теперь там, где ей место, — в КРИВОЙ ДАВЛЕНИЯ, чьё колено приходит из
+// терпения строки глагола (`verb_pressure@game/needs.h`, S13.5). Один порог на
+// всех, и он `kSwitchMargin`.
 
 // Stickiness bonus for the current intent: 5 + min(7, t*0.18) -> [5, 12].
 inline float stickiness_amount(float stateTimer) {
@@ -921,10 +934,10 @@ void score_intents(const Perception& p, const Needs& needs, float out[kIntentCou
 // measuring both arms.
 std::uint8_t select_intent_raw(const float scores[kIntentCount]);
 
-// Argmax + hysteresis. An emergency survival intent scoring >= kEmergencyScore
-// preempts immediately; otherwise a challenger must beat the incumbent (which
-// already carries its stickiness bonus) by kSwitchMargin. Pass kIntentNone for a
-// fresh body (returns the raw argmax).
+// Argmax + hysteresis. ОДНА ДВЕРЬ: претендент обязан обогнать действующий
+// (который уже несёт своё залипание из скорера) на `kSwitchMargin`. Класса
+// избранных, перебивающих без порога, больше нет (см. выше). Pass kIntentNone
+// for a fresh body (returns the raw argmax).
 std::uint8_t select_intent(const float scores[kIntentCount], std::uint8_t current);
 
 // ---------------------------------------------------------------------------

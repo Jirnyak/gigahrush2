@@ -120,11 +120,15 @@ void score_intents(const Perception& p, const Needs& needs,
 
     const float threat = compute_threat_pressure(p);
     const float hpP = needs_health_pressure(p.hp, p.maxHp);
-    const float toiletP = std::max(needs_high_pressure(needs.pee),
-                                   needs_high_pressure(needs.poo));
-    const float drinkP = needs_low_pressure(needs.water);
-    const float eatP = needs_low_pressure(needs.food);
-    const float sleepP = needs_low_pressure(needs.sleep);
+    // ОДНА КРИВАЯ НА ЧИТАТЕЛЕЙ, КОЛЕНО ИЗ СТРОКИ ГЛАГОЛА (S13.5): арбитр
+    // интентов и выбор МЕСТА судят одни и те же бары одним числом, и у каждого
+    // бара своё терпение из `verbs.csv`. Двух кривых над одной величиной здесь
+    // быть не может по построению — обе половины зовут одну функцию.
+    const float toiletP = std::max(needs_high_pressure(kVerbToilet, needs.pee),
+                                   needs_high_pressure(kVerbToilet, needs.poo));
+    const float drinkP = needs_low_pressure(kVerbDrink, needs.water);
+    const float eatP = needs_low_pressure(kVerbEat, needs.food);
+    const float sleepP = needs_low_pressure(kVerbSleep, needs.sleep);
     const float urgent = std::max(std::max(std::max(toiletP, drinkP), std::max(eatP, sleepP)), hpP);
 
     const float vhp = giga::clamp01(p.visibleHostiles / 4.0f);
@@ -259,10 +263,10 @@ std::uint8_t select_intent(const float scores[kIntentCount],
     const std::uint8_t best = select_intent_raw(scores);
     if (current >= kIntentCount) return best; // no valid current (kIntentNone)
     if (best == current) return current;
-    // Emergency survival intents preempt immediately, bypassing the margin.
-    if (intent_is_emergency(best) && scores[best] >= kEmergencyScore) return best;
-    // Otherwise a challenger must beat the incumbent (which already carries its
-    // stickiness bonus from the scorer) by the switch margin.
+    // ОДНА ДВЕРЬ. Здесь стоял обход порога для четырёх «аварийных» интентов —
+    // снесён вместе с классом (решение владельца: канон запрещает его
+    // буквально, [game/ai.h]). Претендент обязан обогнать действующий
+    // (который уже несёт своё залипание из скорера) на порог.
     if (scores[best] > scores[current] + kSwitchMargin) return best;
     return current;
 }

@@ -9202,6 +9202,33 @@ int main(int argc, char** argv) {
                             placeTick.walking, placeTick.arrived,
                             placeTick.unreachable, placeTick.offnav,
                             placeTick.idle, placeTick.judged);
+                // ЗАЧЕМ толпа идёт — ЯРЛЫК ВЫИГРАВШЕЙ ПАРЫ (S13, решение
+                // владельца 2026-11-08). Это та половина решения, которой
+                // раньше не было видно НИГДЕ: сумма считала глагол и
+                // выбрасывала, а худ показывал только «идут N». Три самых
+                // частых глагола — остальные хвост.
+                {
+                    std::uint8_t top[3] = {0, 0, 0};
+                    std::uint32_t cnt[3] = {0, 0, 0};
+                    for (std::uint8_t v = 0; v < game::kVerbCount; ++v) {
+                        const std::uint32_t n = placeTick.byVerb[v];
+                        if (n == 0) continue;
+                        for (int s_ = 0; s_ < 3; ++s_)
+                            if (n > cnt[s_]) {
+                                for (int t = 2; t > s_; --t) {
+                                    cnt[t] = cnt[t - 1];
+                                    top[t] = top[t - 1];
+                                }
+                                cnt[s_] = n;
+                                top[s_] = v;
+                                break;
+                            }
+                    }
+                    ImGui::Text("зачем | %s %u / %s %u / %s %u",
+                                game::kVerbNames[top[0]], cnt[0],
+                                game::kVerbNames[top[1]], cnt[1],
+                                game::kVerbNames[top[2]], cnt[2]);
+                }
             }
             // Nearest monster, by name. Doubles as the proof that the Cyrillic font
             // actually loaded: every one of the 69 names is Russian.

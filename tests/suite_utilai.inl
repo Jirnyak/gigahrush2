@@ -258,24 +258,48 @@ static void test_utilai_all() {
         s[IntentSocial] = 30.0f + kSwitchMargin + 0.5f;
         CHECK(select_intent(s, IntentWork) == IntentSocial);
 
-        // An emergency intent BELOW the emergency score still needs the margin.
+        // ОДНА ДВЕРЬ, И ОНА ОДНА ДЛЯ ВСЕХ (снос класса «аварийных интентов»
+        // 2026-11-08). Прежде здесь пинился обход порога: четырём избранным
+        // интентам со счётом >= 58 позволялось перебить действующий без
+        // порога, остальным — нет. Класса нет; бегство внутри порога держится
+        // ровно так же, как любое дело.
         for (int i = 0; i < kIntentCount; ++i) s[i] = 0.0f;
         s[IntentWork] = 55.0f;
-        s[IntentFlee] = kEmergencyScore - 1.0f;    // 57: highest, but not emergency
+        s[IntentFlee] = 57.0f;                       // выше, но внутри порога
         CHECK(s[IntentFlee] > s[IntentWork]);
         CHECK(s[IntentFlee] <= s[IntentWork] + kSwitchMargin);
         CHECK(select_intent(s, IntentWork) == IntentWork);
-        // At or above it, it preempts immediately, margin or no margin.
-        s[IntentFlee] = kEmergencyScore;
+        // За порогом — перебивает, и БЕЗ всякой принадлежности к классу: тот
+        // же ответ даёт мирное «общаться» с тем же счётом.
+        s[IntentFlee] = 55.0f + kSwitchMargin + 0.5f;
         CHECK(select_intent(s, IntentWork) == IntentFlee);
-        CHECK(intent_is_emergency(IntentFlee));
-        CHECK(!intent_is_emergency(IntentWork));
-
-        // A NON-emergency intent at the same score does not get the shortcut.
         for (int i = 0; i < kIntentCount; ++i) s[i] = 0.0f;
         s[IntentWork] = 55.0f;
-        s[IntentSocial] = kEmergencyScore;
-        CHECK(select_intent(s, IntentWork) == IntentWork);
+        s[IntentSocial] = 55.0f + kSwitchMargin + 0.5f;
+        CHECK(select_intent(s, IntentSocial) == IntentSocial);
+        CHECK(select_intent(s, IntentWork) == IntentSocial);
+
+        // ПОЧЕМУ КЛАСС НЕ НУЖЕН: угроза разводит бегство и дело САМА, на
+        // порядок больше порога. Это свойство скорера, а не совпадение — у
+        // работы угроза входит с минусом, у бегства с плюсом, по 42 очка.
+        {
+            Perception calm = calm_citizen(4242u);
+            Needs full{};
+            full.food = kNeedMax;
+            full.water = kNeedMax;
+            full.sleep = kNeedMax;
+            full.seeded = 1;
+            float quiet[kIntentCount];
+            score_intents(calm, full, quiet);
+            Perception scared = calm;
+            scared.danger = 1.0f;          // поле опасности на капе
+            scared.visibleHostiles = 2;
+            float alarmed[kIntentCount];
+            score_intents(scared, full, alarmed);
+            CHECK(alarmed[IntentFlee] - alarmed[IntentWork] >
+                  quiet[IntentFlee] - quiet[IntentWork] + 10.0f * kSwitchMargin);
+            CHECK(select_intent(alarmed, IntentWork) == IntentFlee);
+        }
 
         // Ties favour the lower index, which is why the enum order is frozen.
         for (int i = 0; i < kIntentCount; ++i) s[i] = 42.0f;

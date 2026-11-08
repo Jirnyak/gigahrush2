@@ -218,18 +218,35 @@ static void test_place_demand_from_needs() {
     // рассуждением: `clamp01` внутри перевода в тысячные режет и 1.0, и 2.0 в
     // одну тысячу, поэтому при двух полных давлениях сумма и максимум дают
     // ОДИН ответ. Прежняя редакция этого комментария утверждала обратное и
-    // была неверна. Различает их только ЧАСТИЧНОЕ давление: 62.5 — ровно
-    // середина рампы `needs_high_pressure` (0.625 = (0.35+0.90)/2), то есть
-    // каждое давление даёт 0.5; максимум — 500, сумма — 1000.
+    // была неверна. Различает их только ЧАСТИЧНОЕ давление — ровно СЕРЕДИНА
+    // рампы, где каждое давление даёт 0.5: максимум 500, сумма 1000.
+    //
+    // СЕРЕДИНА ВЫВОДИТСЯ ИЗ СТРОКИ, А НЕ НАЗНАЧЕНА (S13.5): рампа идёт от
+    // терпения глагола до единицы, поэтому её середина есть (p + 1) / 2.
+    // Прежде здесь стояло 62.5 — середина общего колена (0.35 + 0.90) / 2,
+    // которого больше нет: у сортира своё терпение 200, и число следует за
+    // ним без правки теста.
+    const float toiletPatience =
+        static_cast<float>(kVerbPatienceE3[kVerbToilet]) * 0.001f;
     Needs half{};
     half.food = kNeedMax;
     half.water = kNeedMax;
     half.sleep = kNeedMax;
-    half.pee = 62.5f;
-    half.poo = 62.5f;
+    half.pee = kNeedMax * (toiletPatience + 1.0f) * 0.5f;
+    half.poo = half.pee;
     half.seeded = 1;
     demand_from_needs(half, d);
     CHECK(d[kVerbToilet] == 500);
+    // И та же середина ПО ДАННЫМ: давление ниже терпения спроса не создаёт
+    // вовсе — «стерпит» значит стерпит.
+    Needs tolerated{};
+    tolerated.food = kNeedMax;
+    tolerated.water = kNeedMax;
+    tolerated.sleep = kNeedMax;
+    tolerated.pee = kNeedMax * toiletPatience * 0.5f;
+    tolerated.seeded = 1;
+    demand_from_needs(tolerated, d);
+    CHECK(d[kVerbToilet] == 0);
 
     Needs pee{};
     pee.food = kNeedMax;
@@ -294,6 +311,85 @@ static void test_place_interest_is_a_dot_product() {
     DemandE3 other[kVerbCount] = {};
     other[kVerbTrade] = kDemandFull;
     CHECK(place_interest(r, other) == 0);
+
+    // ЯРЛЫК ПАРЫ — ИЗ ТОЙ ЖЕ СУММЫ (решение владельца 2026-11-08: «интент =
+    // ярлык выигравшей пары»). Побочным выходом, а не вторым проходом: иначе
+    // счёт и ярлык могли бы разойтись, и это ровно болезнь двух решателей.
+    VerbId top = static_cast<VerbId>(kVerbCount);
+    d[kVerbSleep] = kDemandFull;
+    d[kVerbEat] = kDemandFull;
+    CHECK(place_interest(r, d, &top) == 42);
+    CHECK(top == kVerbSleep);          // 30 против 12 — спать весомее
+    // СПРОС РЕШАЕТ, А НЕ ПРЕДЛОЖЕНИЕ: та же комната, перевес спроса на еду.
+    d[kVerbSleep] = 100;
+    d[kVerbEat] = kDemandFull;
+    CHECK(place_interest(r, d, &top) == 15); // (100*30 + 1000*12)/1000
+    CHECK(top == kVerbEat);
+    // Пустой спрос — ярлыка нет, а не «нулевой глагол» (0 это `спать`,
+    // законная строка: сентинелом служит kVerbCount, не ноль).
+    CHECK(place_interest(r, zero, &top) == 0);
+    CHECK(top == static_cast<VerbId>(kVerbCount));
+}
+
+// --- 2b. ОДНО РЕШЕНИЕ: ПАРА «КОМНАТА × ГЛАГОЛ» ------------------------------
+//
+// Прежде решателей было ДВА и они не знали друг о друге: сумма выбирала
+// комнату и ВЫБРАСЫВАЛА глагол, а `score_intents` в том же тике заново судил те
+// же нужды, чтобы назвать то же самое другим словарём. Гейт на то, что ответ
+// теперь ОДИН и обе его половины приходят вместе.
+
+static void test_place_pick_names_its_verb() {
+    using namespace place_suite;
+    FloorRooms fr;
+    rooms_reset(fr);
+    // Две комнаты рядом: столовая (еда 40) и спальня (сон 40).
+    std::int16_t kitchen[kVerbCount] = {};
+    kitchen[kVerbEat] = 40;
+    std::int16_t bedroom[kVerbCount] = {};
+    bedroom[kVerbSleep] = 40;
+    const RoomBox kb{20, 20, 20, 2, 2, 2};
+    const RoomBox bb{26, 20, 20, 2, 2, 2};
+    const RoomId kid = room_declare(fr, &kb, 1, 0, 0, kitchen);
+    const RoomId bid = room_declare(fr, &bb, 1, 0, 0, bedroom);
+    CHECK(kid != kNoRoom && bid != kNoRoom);
+
+    // ГОЛОДНОЕ тело: выигрывает столовая, и ярлык — «есть».
+    Needs hungry{};
+    hungry.food = 0.0f;
+    hungry.water = kNeedMax;
+    hungry.sleep = kNeedMax;
+    hungry.seeded = 1;
+    DemandE3 d[kVerbCount];
+    demand_from_needs(hungry, d);
+    // Тело стоит В КОРИДОРЕ между ними: место под ногами ничего не предлагает,
+    // поэтому обе комнаты — честные кандидаты (стоя В столовой, тело уже на
+    // месте, и ответ «никуда не идти» был бы верным, но проверял бы не то).
+    PlacePick pick = place_pick(fr, d, 23, 21, 21);
+    CHECK(pick.room == kid);
+    CHECK(pick.verb == kVerbEat);
+
+    // СОННОЕ тело из той же точки: другая комната И другой ярлык, одной
+    // суммой. Второго решателя для этого не понадобилось.
+    Needs sleepy{};
+    sleepy.food = kNeedMax;
+    sleepy.water = kNeedMax;
+    sleepy.sleep = 0.0f;
+    sleepy.seeded = 1;
+    demand_from_needs(sleepy, d);
+    pick = place_pick(fr, d, 23, 21, 21);
+    CHECK(pick.room == bid);
+    CHECK(pick.verb == kVerbSleep);
+
+    // Сытое и выспавшееся тело никуда не идёт — и ярлыка у него нет.
+    Needs full{};
+    full.food = kNeedMax;
+    full.water = kNeedMax;
+    full.sleep = kNeedMax;
+    full.seeded = 1;
+    demand_from_needs(full, d);
+    pick = place_pick(fr, d, 23, 21, 21);
+    CHECK(pick.room == kNoRoom);
+    CHECK(pick.verb == static_cast<VerbId>(kVerbCount));
 }
 
 // --- 3. ПРИМЕР КАНОНА S13.3, ЦЕЛИКОМ И НА ЖИВЫХ ДАННЫХ ----------------------
@@ -739,6 +835,7 @@ static void test_place_errand_walks() {
 static void test_place_all() {
     test_place_demand_from_needs();
     test_place_interest_is_a_dot_product();
+    test_place_pick_names_its_verb();
     test_place_canon_s13_3_example();
     test_place_incumbent_is_always_a_candidate();
     test_place_bins_match_brute_force();

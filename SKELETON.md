@@ -644,9 +644,9 @@ grep -c 'room_at\|FloorRooms\|declared\[\|supply\[' src/game/place.h   → 6
 | следствие | мера СЕГОДНЯ | статус |
 |---|---|---|
 | запрос «место, где можно Х» не задавался НИГДЕ | `place_pick@src/game/place.h`, и у него есть прод-вызывающий — `place_errand_step@src/game/place.h` | **ЗАКРЫТО** |
-| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:138 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
-| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:170 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
-| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:168 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
+| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:154 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
+| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:186 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
+| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:184 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
 | девять глаголов из 19 не названы в `src/` нигде | **семь**: не названы `kVerbWork`, `kVerbTrade`, `kVerbPatrol`, `kVerbNest`, `kVerbHunt`, `kVerbHaul`, `kVerbProfit`; `kVerbDrink` и `kVerbWander` назвал спрос | **ЧАСТИЧНО** (12 из 19 названы) |
 | 11 из 13 интентов дают ОДНО движение | по-прежнему так, НО движение по делам больше не зависит от интента: его определяет сумма. См. VIII.2 | **ПЕРЕФОРМУЛИРОВАНО, открыто** |
 | ось срочности S13.5 мертва | `kVerbPatienceE3@src/game/verb_table.h` — **0** читателей вне своей таблицы | **ОТКРЫТО**: решение владельца 2026-10-01 — издержка пока только путь |
@@ -769,7 +769,7 @@ grep -rn 'supply_prop_at' src/ | grep -v room_supply  → 3   (prop_system.cpp �
 
 | что | мера | следствие |
 |---|---|---|
-| `rhythm` в восьми формулах | `src/game/ai.cpp:151 «    const float rhythm = 0.0f;»`; `grep -rn minuteOfDay src/` → **2**, оба объявление и комментарий | суточный ритм не влияет ни на один интент. Шапка `src/game/ai.h` про это ЧЕСТНА — заглушка названа |
+| `rhythm` в восьми формулах | `src/game/ai.cpp:155 «    const float rhythm = 0.0f;»`; `grep -rn minuteOfDay src/` → **2**, оба объявление и комментарий | суточный ритм не влияет ни на один интент. Шапка `src/game/ai.h` про это ЧЕСТНА — заглушка названа |
 | `p.armed` | `grep -rn '\.armed' src/` → 3: два чтения в формулах + объявление `bool armed = false`. **Писателя нет** | `IntentCombat` стартует с **−16** для всей толпы, хотя `ai_equip_step@src/game/ai.h` выдаёт телам оружие. Поле не связано с `Equipped` ни одной строкой |
 | `p.factionAssaultTarget` | писателя нет | `IntentFactionAssault` не может выиграть argmax **никогда** |
 

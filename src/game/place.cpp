@@ -50,17 +50,19 @@ void demand_from_needs(const Needs& n, DemandE3 out[kVerbCount]) {
     for (std::size_t v = 0; v < kVerbCount; ++v) out[v] = 0;
     // Кривые — `needs_low_pressure`/`needs_high_pressure` из [game/needs.h], то
     // есть РОВНО те, которыми интент-арбитр судит те же самые бары. Одна
-    // величина — одна кривая (см. довод о §64 в шапке needs.h).
+    // величина — одна кривая (см. довод о §64 в шапке needs.h), и КОЛЕНО у
+    // каждой приходит из терпения СВОЕЙ строки (S13.5): спрос по глаголу
+    // спрашивает именно тот глагол.
     const auto e3 = [](float p) {
         return static_cast<DemandE3>(giga::clamp01(p) * static_cast<float>(kDemandFull));
     };
-    out[kVerbSleep] = e3(needs_low_pressure(n.sleep));
-    out[kVerbEat] = e3(needs_low_pressure(n.food));
-    out[kVerbDrink] = e3(needs_low_pressure(n.water));
+    out[kVerbSleep] = e3(needs_low_pressure(kVerbSleep, n.sleep));
+    out[kVerbEat] = e3(needs_low_pressure(kVerbEat, n.food));
+    out[kVerbDrink] = e3(needs_low_pressure(kVerbDrink, n.water));
     // Сортир — МАКСИМУМ двух давлений, а не сумма: одного полного мочевого
     // достаточно, и складывать их значило бы требовать обоих сразу.
-    out[kVerbToilet] = e3(std::max(needs_high_pressure(n.pee),
-                                   needs_high_pressure(n.poo)));
+    out[kVerbToilet] = e3(std::max(needs_high_pressure(kVerbToilet, n.pee),
+                                   needs_high_pressure(kVerbToilet, n.poo)));
     out[kVerbWander] = kDemandWanderFloor; // S13.2: малый, но никогда не ноль
 }
 
@@ -76,15 +78,28 @@ void demand_add_health(float hp, float maxHp, DemandE3 out[kVerbCount]) {
 // ОДНА СУММА
 // ---------------------------------------------------------------------------
 
-std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount]) {
+std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
+                            VerbId* topVerb) {
     std::int64_t acc = 0;
+    std::int64_t top = 0;
+    VerbId topV = static_cast<VerbId>(kVerbCount);
     for (std::size_t v = 0; v < kVerbCount; ++v) {
         // ПРЕДЛОЖЕНИЕ = объявлено + оснащение/запас, одним вектором (S12.4:
         // «K чисел на комнату — всё предложение целиком»).
         const std::int64_t offer =
             static_cast<std::int64_t>(r.declared[v]) + static_cast<std::int64_t>(r.supply[v]);
-        acc += static_cast<std::int64_t>(demand[v]) * offer;
+        const std::int64_t term = static_cast<std::int64_t>(demand[v]) * offer;
+        acc += term;
+        // ЯРЛЫК ПАРЫ — наибольшее слагаемое ЭТОЙ ЖЕ суммы. Строгое `>` отдаёт
+        // ничью младшему глаголу, тем же законом, которым ничья комнат уходит
+        // младшему id: детерминизм выбора важнее того, какой именно глагол
+        // назван, и оба конца ничьи одинаково законны.
+        if (term > top) {
+            top = term;
+            topV = static_cast<VerbId>(v);
+        }
     }
+    if (topVerb != nullptr) *topVerb = topV;
     return static_cast<std::int32_t>(acc / kDemandFull);
 }
 
@@ -129,8 +144,9 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
     // то, через что идут, не предлагает ничего (S12.1).
     std::int32_t best = 0;
     std::int32_t bestCost = 0;
+    VerbId bestVerb = static_cast<VerbId>(kVerbCount);
     if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz)))
-        best = place_interest(*here, demand);
+        best = place_interest(*here, demand, &bestVerb);
 
     // РАДИУС ВЫВОДИТСЯ: глобальная верхняя грань интереса — храповик `maxOffer`
     // (max по комнатам, только растёт), значит ни одна комната тора не даст
@@ -172,7 +188,9 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
                         if (cand == nullptr) continue;
                         ++out.judged;
                         const std::int32_t cost = place_cost(fr, *cand, cx, cy, cz);
-                        const std::int32_t score = place_interest(*cand, demand) - cost;
+                        VerbId candVerb = static_cast<VerbId>(kVerbCount);
+                        const std::int32_t score =
+                            place_interest(*cand, demand, &candVerb) - cost;
                         // НИЧЬЮ РЕШАЕТ ФИЗИКА (S13.2): интерес → расстояние →
                         // номер. Строгое `>` по счёту плюс сравнение издержки
                         // значит, что равный счёт забирает БЛИЖАЙШИЙ, а не
@@ -186,12 +204,16 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
                         if (!better) continue;
                         best = score;
                         bestCost = cost;
+                        bestVerb = candVerb;
                         out.room = id;
                     }
                 }
     }
     out.score = best;
     out.cost = out.room == kNoRoom ? 0 : bestCost;
+    // Ярлык осмыслен ровно тогда, когда есть пара: без комнаты не выиграл
+    // никто, и называть глагол места под ногами было бы ложью о решении.
+    out.verb = out.room == kNoRoom ? static_cast<VerbId>(kVerbCount) : bestVerb;
     return out;
 }
 
@@ -264,7 +286,10 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // Цель могла исчезнуть вместе с этажом: комнаты пересоздаются на каждом
         // входе (закон 2 room.h), а компонента живёт с телом.
         const Room* goal = room_of(fr, plan.room);
-        if (plan.room != kNoRoom && goal == nullptr) plan.room = kNoRoom;
+        if (plan.room != kNoRoom && goal == nullptr) {
+            plan.room = kNoRoom;
+            plan.verb = static_cast<VerbId>(kVerbCount);
+        }
 
         // ПРИБЫЛ = ВНУТРИ БОКСА (S13.3). Второе условие — на случай клетки,
         // отданной перекрытием соседней комнате (`overlapCells` считается
@@ -286,6 +311,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
                 (cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
                 plan.room = kNoRoom;
+                plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
                 // Дошёл — отпускаем тело. Держать его здесь силой нельзя:
                 // замирающий NPC есть дефект (S13.2), а деяние на месте
@@ -317,6 +343,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
                 continue;
             }
             plan.room = pick.room;
+            plan.verb = pick.verb;  // ярлык пары — ЗАЧЕМ тело идёт
             ++plan.picks;
             ++out.picked;
             goal = room_of(fr, plan.room);
@@ -325,6 +352,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
             ++out.idle;
             continue;
         }
+        if (plan.verb < kVerbCount) ++out.byVerb[plan.verb];
 
         // КУДА ШАГНУТЬ — НАВ ПО ЗОНАМ, ДВА ЧТЕНИЯ, и ни одной волны (§88/E).
         // Цель — ЗОНА, а не клетка: таблица даёт соседку, плоскость соседки
