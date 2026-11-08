@@ -1626,6 +1626,27 @@ void floor_file_write(const World& w, int floorNumber,
         bw.u32(k.genVersion);
         static const FloorEntityState kEmpty{};
         const FloorEntityState& e = ents ? *ents : kEmpty;
+        // ПОТОЛОК ЗАПИСЕЙ — ГЕЙТ В ОБЕ СТОРОНЫ. `kMaxFloorRecords` стоял
+        // ТОЛЬКО на чтении («файл не из нашей вселенной — отказ до CRC»), а
+        // писатель лил сколько есть: перебор родил бы файл, который сам же
+        // прочитать и откажется (`SizeMismatch`), то есть этаж молча потерял
+        // бы ВСЁ накопленное при следующем визите. Кричим ЗДЕСЬ, где счёт
+        // ещё известен (S11: молчаливого обрезания нет).
+        //
+        // Почему это стало важно 2026-11-08: расстановка модулей (CANON S23)
+        // подняла число пропов жилого этажа с ~15 200 до ~31 900 — с 23 % до
+        // 49 % потолка. Ручка одна, двигать по замеру; удвоение плотности
+        // мебели в строках модуля упрётся в неё.
+        if (e.props.size() > kMaxFloorRecords ||
+            e.corpses.size() > kMaxFloorRecords ||
+            e.pickups.size() > kMaxFloorRecords ||
+            e.debris.size() > kMaxFloorRecords)
+            std::fprintf(stderr,
+                         "[persist] WARN floor %d: записей больше потолка "
+                         "%u (props %zu, corpses %zu, pickups %zu, debris "
+                         "%zu) — файл этажа не прочитается обратно\n",
+                         floorNumber, kMaxFloorRecords, e.props.size(),
+                         e.corpses.size(), e.pickups.size(), e.debris.size());
         bw.u32(static_cast<std::uint32_t>(e.props.size()));
         for (const PropRecord& rec : e.props) {
             PropRecord tmp = rec; // визитёр read/write; write-сторона копирует

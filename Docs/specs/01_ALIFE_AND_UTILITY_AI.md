@@ -24,7 +24,7 @@
 | Память фактов `AiMemory`, 8 слотов, 64 Б/строка | [ai.h:579-631](../../src/game/ai.h) | ЖИВАЯ, demand-колонка |
 | Зональные поля комнат, 3 бита × 2 МиБ | [room_zone.h:331-345](../../src/game/room_zone.h) | ЖИВЫЕ |
 | Восстановление нужд в комнате | [room_zone.h:192-204](../../src/game/room_zone.h) | ЖИВОЕ |
-| Мебель как контент (стол, плита, унитаз, койка) | [room_zone.h:251-263](../../src/game/room_zone.h) | ЖИВАЯ |
+| Мебель как контент (стол, плита, унитаз, койка) | ~~room_zone.h:251-263~~ → [prop_system.h](../../src/game/prop_system.h) `prop_fits_room`/`room_stand_spots` + `kKhrushiFurniture`/`kPadicFurniture` | **ЖИВАЯ с 2026-11-08** (до этого дня адрес был мёртв, а мебели в игре не существовало) |
 | Матрица фракций 6×6 + `rel_` рёбра | [faction.h](../../src/game/faction.h), `macro_sim.cpp` | ЖИВАЯ |
 | Диффузионное поле опасности + градиент бегства | [diffusion.md](../../diffusion.md) | ЖИВОЕ |
 

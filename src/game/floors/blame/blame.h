@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "game/floor_gen.h"  // FloorPlaceCtx — контекст хука расстановки
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "world/gravity.h"   // GravityRegime — the module declares its frame
 
@@ -101,5 +102,10 @@ std::uint32_t blame_doorways(int number, unsigned seed,
 // вызывающий делает rooms_reset. Возвращает число объявленных комнат.
 struct FloorRooms;
 std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out);
+
+// РАССТАНОВКА СОДЕРЖИМОГО МОДУЛЯ — строка `kContentPlacers` в floor_gen.cpp.
+// У блейма она сегодня НОЛЬ, и это ответ модуля со своей причиной (та же
+// форма, что у `blame_doorways` выше) — довод в .cpp.
+std::uint32_t blame_place(const FloorPlaceCtx& ctx);
 
 } // namespace giga::game

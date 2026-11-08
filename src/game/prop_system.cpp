@@ -57,8 +57,11 @@ constexpr std::uint32_t kSaltFloorDevice = 0x55555555u;
 //              gpu_light_grid.h.
 //   headroom — a ceiling lamp lights a place a body STANDS. If no surface lies
 //              within the bulb's own reach below it, the "ceiling" is not a
-//              room's ceiling. On the torus every axis wraps, so cell(x,y,z+1)
-//              at z=127 reads cell z=0: on blame that is the underside of the
+//              room's ceiling. On the torus every axis wraps, so the cell one
+//              step along the frame's UP axis at the seam reads the far side
+//              (the literal `cell(x,y,z+1)` this line used to name died with
+//              the frame rewrite — no row below writes `z + 1`): on blame that
+//              step lands on the underside of the
 //              town's platform mass, and the whole open sky over the town came
 //              back as one flat sheet of 1538 lamps at 255 m — 17% of the
 //              floor's lamps in a single plane, hanging over the abyss. The
@@ -928,7 +931,7 @@ static inline float surface_plane_m(const SurfaceFace& sf, int cellAxisCoord) {
 // слой поверхности едет по ОСИ грани, представительная колонка (su,sv) — по её
 // тангенсам. Три сеялки писали это руками, каждая со своей буквой оси, — и
 // Z-вариант у них был просто ДРУГИМ кодом, а не тем же законом.
-static SubVoxelAnchor anchor_of_surface(const SurfaceFace& sf) {
+SubVoxelAnchor anchor_from_surface(const SurfaceFace& sf) {
     const GravityFrame t = seed_axis_frame(anchor_face_axis(sf.face));
     std::uint8_t sub[3] = {0, 0, 0};
     sub[t.axis] = sf.layer;
@@ -943,6 +946,239 @@ static SubVoxelAnchor anchor_of_surface(const SurfaceFace& sf) {
     a.subZ = sub[2];
     a.face = sf.face;
     return a;
+}
+
+// ---- ТРИ ГЛАГОЛА ПОСТАНОВКИ (контракт — в шапке [prop_system.h]) ----------
+// Арифметика ниже — ТА САМАЯ, что жила внутри трёх сеялок; теперь она здесь
+// одна, а сеялки стали вызывающими. Половина кельи, от которой зависит
+// бит-в-бит воспроизводимость прежней расстановки: сдвиг «заподлицо» считается
+// от ПОЛУКЛЕТКИ (`0.5 * kCellSize` — там стоял литерал 1.0, число без
+// происхождения при kCellSize == 2), а шаг к опоре берётся из грани
+// (`anchor_face_dir`), а не из локальной переменной знака.
+
+// Шаг ОТ опоры К вещи: нормаль грани. Клетка вещи = клетка опоры + этот шаг.
+static inline SeedCell face_step_from(int cx, int cy, int cz,
+                                      std::uint8_t face) {
+    return seed_step(cx, cy, cz, anchor_face_axis(face), anchor_face_dir(face));
+}
+
+Entity place_prop_on_wall(Registry& reg, const World& world, LayerId layer,
+                          int wallCx, int wallCy, int wallCz,
+                          std::uint8_t wallFace, PropId id,
+                          std::uint8_t animPhase) {
+    const MacroGrid& grid = world.grid();
+    const SurfaceFace sf =
+        surface_face_at(grid, wallCx, wallCy, wallCz, wallFace);
+    if (sf.columns == 0) return entt::null; // грань не экспонирована — отказ
+    const int axis = anchor_face_axis(wallFace);
+    const int dir = anchor_face_dir(wallFace);
+    // Клетка вещи — соседняя по нормали; её центр и есть база позиции.
+    const SeedCell at = face_step_from(wallCx, wallCy, wallCz, wallFace);
+    const PropDef& d = prop_def(id);
+    const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
+    // Заподлицо: от центра клетки НАЗАД к реальной поверхности стены
+    // (утопленность — `surface_recess_m`), на полтолщины корпуса + волос.
+    const float slide = 0.5f * kCellSize - (0.5f * thick + 0.02f);
+    vec3 pos = seed_cell_centre(at.x, at.y, at.z);
+    seed_vec_add(pos, axis,
+                 static_cast<float>(-dir) * (slide + surface_recess_m(sf)));
+    return spawn_prop_from_id(reg, world, pos, anchor_from_surface(sf), id, layer,
+                              prop_wall_yaw(wallFace), animPhase, /*flags*/ 0);
+}
+
+Entity place_prop_standing(Registry& reg, const World& world, LayerId layer,
+                           int floorCx, int floorCy, int floorCz,
+                           std::uint8_t floorFace, std::uint8_t backFace,
+                           PropId id, std::uint8_t animPhase) {
+    const MacroGrid& grid = world.grid();
+    // ПОЛ: реальная грань опоры, смотрящая «вверх» фрейма.
+    const SurfaceFace sff =
+        surface_face_at(grid, floorCx, floorCy, floorCz, floorFace);
+    if (sff.columns == 0) return entt::null;
+    const int upAxis = anchor_face_axis(floorFace);
+    const int upSign = anchor_face_dir(floorFace);
+    const SeedCell at = face_step_from(floorCx, floorCy, floorCz, floorFace);
+
+    // СТЕНА ЗА СПИНОЙ: её клетка — шаг ПРОТИВ нормали `backFace` из клетки
+    // вещи (нормаль смотрит на вещь, значит стена с другой стороны).
+    const int backAxis = anchor_face_axis(backFace);
+    const int backDir = anchor_face_dir(backFace);
+    const SeedCell wc = seed_step(at.x, at.y, at.z, backAxis, -backDir);
+    const SurfaceFace sfw = surface_face_at(grid, wc.x, wc.y, wc.z, backFace);
+    if (sfw.columns == 0) return entt::null;
+
+    const PropDef& d = prop_def(id);
+    const float depth = static_cast<float>(d.sizeYMm) * 0.001f;
+    const float slide = 0.5f * kCellSize - (0.5f * depth + 0.02f);
+    const float standM = surface_plane_m(sff, seed_cell_axis(
+                                                  SeedCell{floorCx, floorCy,
+                                                           floorCz},
+                                                  upAxis));
+    vec3 pos = seed_cell_centre(at.x, at.y, at.z);
+    seed_vec_add(pos, backAxis,
+                 static_cast<float>(-backDir) * (slide + surface_recess_m(sfw)));
+    // Высота корпуса — авторский размер Z строки: меш крутится ТОЛЬКО по yaw,
+    // второй «высоты» у него нет (см. prop_wall_yaw).
+    seed_vec_set(pos, upAxis,
+                 standM + static_cast<float>(upSign) *
+                              (0.5f * static_cast<float>(d.sizeZMm) * 0.001f +
+                               0.01f));
+    // Якорь — В ПОЛ, не в стену (вырезали пол — вещь падает).
+    return spawn_prop_from_id(reg, world, pos, anchor_from_surface(sff), id,
+                              layer, prop_wall_yaw(backFace), animPhase,
+                              /*flags*/ 0);
+}
+
+Entity place_prop_hanging(Registry& reg, const World& world, LayerId layer,
+                          int supCx, int supCy, int supCz,
+                          std::uint8_t hangFace, PropId id, float dropM,
+                          float yaw, std::uint8_t animPhase) {
+    const MacroGrid& grid = world.grid();
+    const SurfaceFace sf = surface_face_at(grid, supCx, supCy, supCz, hangFace);
+    if (sf.columns == 0) return entt::null; // нет честной опоры — не вешаем
+    const int axis = anchor_face_axis(hangFace);
+    const int dir = anchor_face_dir(hangFace);
+    const float faceM =
+        surface_plane_m(sf, seed_cell_axis(SeedCell{supCx, supCy, supCz}, axis));
+    // Центр клетки ОПОРЫ по касательным осям (клетка вещи совпала бы с ней по
+    // тангенсам — подвес смещён только по оси грани, поэтому разницы нет).
+    vec3 pos = seed_cell_centre(supCx, supCy, supCz);
+    seed_vec_set(pos, axis, faceM + static_cast<float>(dir) * dropM);
+    return spawn_prop_from_id(reg, world, pos, anchor_from_surface(sf), id, layer,
+                              yaw, animPhase, /*flags*/ 0);
+}
+
+bool prop_fits_room(PropId id, const Room& r) {
+    if (!prop_valid(id)) return false;
+    const std::array<std::int16_t, kVerbCount>& pv =
+        kPropVerbs[static_cast<std::size_t>(id)];
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        if (pv[v] > 0 && r.declared[v] >= pv[v]) return true;
+    return false;
+}
+
+int room_stand_spots(const World& world, const FloorRooms& rooms,
+                     std::uint16_t id, std::uint32_t salt, StandSpot* out,
+                     int max) {
+    if (out == nullptr || max <= 0) return 0;
+    const Room* room = room_of(rooms, id);
+    if (room == nullptr) return 0;
+    const MacroGrid& grid = world.grid();
+    const SeedFaces faces = seed_faces(world.gravity());
+
+    // Кандидаты с лучшим (наименьшим) хешем — вставка в отсортированный хвост
+    // длины max; комнат на этаже тысячи, аллокатору тут делать нечего.
+    std::uint32_t score[kMaxStandSpots];
+    const int cap = max > kMaxStandSpots ? kMaxStandSpots : max;
+    int n = 0;
+
+    for (std::uint32_t bi = 0; bi < room->boxCount; ++bi) {
+        const RoomBox& b = rooms.boxes[room->boxFirst + bi];
+        for (int dz = 0; dz < b.sz; ++dz)
+            for (int dy = 0; dy < b.sy; ++dy)
+                for (int dx = 0; dx < b.sx; ++dx) {
+                    // НЕврапнутые координаты уходят наружу (метры обязаны
+                    // остаться смежными); врап — только для вопросов к сетке.
+                    const int x = b.x + dx, y = b.y + dy, z = b.z + dz;
+                    if (room_at(rooms, x, y, z) != id) continue; // чужая клетка
+                    // МЕСТО ДЛЯ ВЕЩИ — ВОПРОС К АТОМАМ, А НЕ К ТИПУ КЛЕТКИ.
+                    // Здесь стояло `grid.cell(...) != kCellAir -> continue`, и
+                    // ЗАМЕР назвал цену: на этаже хрущей 17 100 клеток из
+                    // 18 810 отлетали ровно этим тестом и НИ ОДНА — отсутствием
+                    // пола или стены. Причина архитектурная: перегородки
+                    // квартиры — субвоксельные ПОЛОСЫ ВНУТРИ своей же клетки
+                    // (`put_hlayer`, khrushi_gen.cpp), поэтому почти каждая
+                    // клетка квартиры типизирована «не воздух», оставаясь на
+                    // 90% воздухом. Тип клетки — кэш «тут есть материя» (S2), и
+                    // как предикат «сюда нельзя встать» он врёт в ОБЕ стороны.
+                    // Честный вопрос — «клетка не забита целиком».
+                    if (grid.mask(x, y, z).full()) continue;
+
+                    // ВЕС КЛЕТКИ — ОТ ВРАПНУТОЙ КООРДИНАТЫ, и это не
+                    // косметика: `spatial_hash` сам не врапает, а бокс
+                    // комнаты на шве тора законно даёт x = 128..130. Без
+                    // врапа одна и та же физическая клетка получала бы
+                    // РАЗНЫЙ вес в зависимости от того, какой бокс её накрыл,
+                    // — второй ответ на вопрос «вес этой клетки». Все три
+                    // сеялки хешируют врапнутые 0..127.
+                    const std::uint32_t sc = giga::spatial_hash(
+                        wrap_macro(x), wrap_macro(y), wrap_macro(z), salt);
+                    // ОТСЕЧКА ПО ХЕШУ ИДЁТ ПЕРЕД ГЕОМЕТРИЕЙ, и выход от этого
+                    // бит-в-бит тот же: годность — ЧИСТЫЙ предикат клетки, а
+                    // для кандидата, который и так не попадёт в выдачу,
+                    // вставка есть no-op. Цена вопроса измерена: запрос
+                    // поверхностей — 64 колонки, и на падике их 1.18 млн
+                    // клеток × до пяти запросов.
+                    int at = n;
+                    while (at > 0 && score[at - 1] > sc) --at;
+                    if (at >= cap) continue; // хуже всех, кого уже держим
+
+                    // Опора снизу — «пол» СЛОВО ФРЕЙМА (не z-1), и вопрос
+                    // задаётся АТОМАМ (S2: «вопрос локальный, отвечают
+                    // атомы»), а не типу клетки. Дешёвая НЕОБХОДИМАЯ отсечка
+                    // впереди — в клетке опоры обязана быть материя
+                    // (`cell != kCellAir` и есть S2-кэш «маска непуста»).
+                    int di = -1;
+                    for (int i = 0; i < faces.nDown && di < 0; ++i) {
+                        const SeedCell s = seed_step(x, y, z, faces.down[i].axis,
+                                                     faces.down[i].sign);
+                        if (grid.cell(s.x, s.y, s.z) == kCellAir) continue;
+                        const SurfaceFace f = surface_face_at(
+                            grid, s.x, s.y, s.z,
+                            anchor_face_pack(faces.down[i].axis,
+                                             -faces.down[i].sign));
+                        // ТРЕТИЙ ВОПРОС — ТОТ ЖЕ, ЧТО У ГЕЙТА СПАВНА (S20.5):
+                        // грань может быть экспонирована, а материя под ней
+                        // не держать нагрузки (рубл, среда), и тогда
+                        // `spawn_prop_from_id` откажет уже ПОСЛЕ того, как
+                        // искатель назвал место. Спрашиваем здесь — и
+                        // «искатель = глагол» становится тождеством.
+                        if (f.columns > 0 &&
+                            anchor_alive(world, anchor_from_surface(f)))
+                            di = i;
+                    }
+                    if (di < 0) continue;
+                    const int upAxis = faces.down[di].axis;
+                    const int upSign = -faces.down[di].sign;
+
+                    // ...и стена сбоку — касательная плоскость ЭТОЙ опоры,
+                    // тем же вопросом к атомам.
+                    bool haveWall = false;
+                    SeedFace wall{0, 0};
+                    for (int a = 0; a < 3 && !haveWall; ++a) {
+                        if (a == upAxis || !faces.tangent[a]) continue;
+                        for (int sg = -1; sg <= 1 && !haveWall; sg += 2) {
+                            const SeedCell nb = seed_step(x, y, z, a, sg);
+                            if (grid.cell(nb.x, nb.y, nb.z) == kCellAir)
+                                continue;
+                            if (surface_face_at(grid, nb.x, nb.y, nb.z,
+                                                anchor_face_pack(a, -sg))
+                                    .columns == 0)
+                                continue;
+                            haveWall = true;
+                            wall = SeedFace{a, sg};
+                        }
+                    }
+                    if (!haveWall) continue;
+
+                    for (int k = (n < cap ? n : cap - 1); k > at; --k) {
+                        score[k] = score[k - 1];
+                        out[k] = out[k - 1];
+                    }
+                    score[at] = sc;
+                    // Наружу уходит клетка ОПОРЫ (её и берёт глагол
+                    // постановки), а не воздушная клетка вещи.
+                    const SeedCell sup = seed_step(x, y, z, upAxis, -upSign);
+                    out[at] = StandSpot{
+                        static_cast<std::int16_t>(sup.x),
+                        static_cast<std::int16_t>(sup.y),
+                        static_cast<std::int16_t>(sup.z),
+                        anchor_face_pack(upAxis, upSign),
+                        anchor_face_pack(wall.axis, -wall.sign)};
+                    if (n < cap) ++n;
+                }
+    }
+    return n;
 }
 
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
@@ -1012,42 +1248,22 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                     }
                 }
                 if (!picked) continue;
-                const PropDef& d = prop_def(pid);
-                const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 
                 // Грань СТЕНЫ: её нормаль смотрит от стены к воздуху, т.е.
                 // шаг, обратный шагу от клетки к стене.
-                // Yaw выводится из грани якоря ниже (prop_wall_yaw) — один
-                // словарь «грань → поворот» на всех настенных писателей.
                 const std::uint8_t wallFace =
                     anchor_face_pack(wall.axis, -wall.sign);
 
-                // ЗАПРОС ПОВЕРХНОСТЕЙ ([world/surface.h], S10): экспонирована
-                // ли грань стены и где её реальная поверхность. Позиция, якорь
-                // и проба живости выводятся из ОДНОЙ записи примитива.
+                // ПОСТАНОВКА — ОБЩИЙ ГЛАГОЛ: запрос поверхностей, якорь,
+                // позиция заподлицо и поворот из грани живут в
+                // `place_prop_on_wall`. Здесь осталась только полоса весов,
+                // то есть УДОБСТВО («кто и с какой плотностью»), а не второй
+                // путь рождения. Отказ (грань не экспонирована) приходит
+                // значением — `entt::null`.
                 const SeedCell wc = seed_step(x, y, z, wall.axis, wall.sign);
-                const SurfaceFace sf =
-                    surface_face_at(grid, wc.x, wc.y, wc.z, wallFace);
-                if (sf.columns == 0) continue; // грань не экспонирована
-                const float recess = surface_recess_m(sf);
-
-                // Flush: slide the panel centre from the cell centre to the
-                // REAL wall surface (recess deep), half thickness + a hair.
-                // Сдвиг — ТОЛЬКО по оси стены; две другие координаты остаются
-                // центром клетки, какая из них «вертикаль» — неважно.
-                const float slide = 1.0f - (0.5f * thick + 0.02f);
-                vec3 pos = seed_cell_centre(x, y, z);
-                seed_vec_add(pos, wall.axis,
-                             static_cast<float>(wall.sign) * (slide + recess));
-
-                // Anchor INTO the wall cell: the panel falls when its wall is
-                // carved, not when some unrelated floor is.
-                const SubVoxelAnchor anchor = anchor_of_surface(sf);
-
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                Entity e = spawn_prop_from_id(reg, world, pos, anchor,
-                                             pid, layer, prop_wall_yaw(wallFace),
-                                             anim, /*flags*/0);
+                Entity e = place_prop_on_wall(reg, world, layer, wc.x, wc.y,
+                                              wc.z, wallFace, pid, anim);
                 if (e != entt::null) ++count;
             }
         }
@@ -1129,62 +1345,24 @@ std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
                     }
                 }
                 if (!picked) continue;
-                const PropDef& d = prop_def(pid);
 
-                // Стена за спиной: её реальная поверхность (лепленые стены —
-                // ровно та же проба, что у панелей).
-                const std::uint8_t wallFace =
-                    anchor_face_pack(wall.axis, -wall.sign);
-                const SeedCell wc = seed_step(x, y, z, wall.axis, wall.sign);
-                const SurfaceFace sfw =
-                    surface_face_at(grid, wc.x, wc.y, wc.z, wallFace);
-                if (sfw.columns == 0) continue; // грань стены не экспонирована
-                const float recess = surface_recess_m(sfw);
-
-                // ПОЛ: реальная грань клетки опоры, смотрящая «ВВЕРХ» ФРЕЙМА,
-                // — на ней и стоит (решётчатый настил даёт просевшую
-                // поверхность честно).
+                // ПОСТАНОВКА — ОБЩИЙ ГЛАГОЛ `place_prop_standing`: проба пола
+                // и стены, высота от реальной поверхности опоры, сдвиг спиной
+                // к стене, якорь В ПОЛ и поворот из грани — всё там, одной
+                // копией на дерево. Здесь остался кандидатный скан + полоса
+                // весов строки этажа.
                 const std::uint8_t floorFace = anchor_face_pack(upAxis, upSign);
                 const SeedCell fc = seed_step(x, y, z, upAxis, -upSign);
-                const SurfaceFace sff =
-                    surface_face_at(grid, fc.x, fc.y, fc.z, floorFace);
-                if (sff.columns == 0) continue;
-                const float standM =
-                    surface_plane_m(sff, seed_cell_axis(fc, upAxis));
-
-                // Спиной к стене: сдвиг от центра клетки к поверхности стены
-                // на полглубины корпуса (та же формула slide, что у панелей).
-                // Высота корпуса — авторский размер Z строки props.csv: меш
-                // крутится ТОЛЬКО по yaw, второй «высоты» у него нет, так что
-                // при боковом фрейме корпус остаётся стоящим на своей опоре —
-                // чего нельзя выразить одним скаляром, см. prop_wall_yaw.
-                const float depth = static_cast<float>(d.sizeYMm) * 0.001f;
-                const float slide = 1.0f - (0.5f * depth + 0.02f);
-                vec3 pos = seed_cell_centre(x, y, z);
-                seed_vec_add(pos, wall.axis,
-                             static_cast<float>(wall.sign) * (slide + recess));
-                seed_vec_set(pos, upAxis,
-                             standM + static_cast<float>(upSign) *
-                                          (0.5f * static_cast<float>(d.sizeZMm) *
-                                               0.001f +
-                                           0.01f));
-
-                // Якорь — В ПОЛ (не в стену): вырезали пол под станком —
-                // станок падает; стену рядом — стоит дальше.
-                const SubVoxelAnchor anchor = anchor_of_surface(sff);
-
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngF & 0xFFu);
-                Entity e = spawn_prop_from_id(reg, world, pos,
-                                              anchor, pid, layer,
-                                              prop_wall_yaw(wallFace), anim,
-                                              /*flags*/0);
+                Entity e = place_prop_standing(
+                    reg, world, layer, fc.x, fc.y, fc.z, floorFace,
+                    anchor_face_pack(wall.axis, -wall.sign), pid, anim);
                 if (e != entt::null) ++count;
             }
         }
     }
     return count;
 }
-
 
 std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                                   LayerId layer, std::uint32_t seed,
@@ -1234,15 +1412,20 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
     // hash score, so the pattern is even in DENSITY but jittered in position —
     // a raster "first valid cell wins" would park every bulb on its block's low
     // corner and read as a visible grid.
+    // ЗАПИСЬ ПОВЕРХНОСТИ В СЛОТЕ БОЛЬШЕ НЕ ЕДЕТ (2026-11-08): su/sv/layer
+    // лежали здесь, чтобы второй проход не спрашивал грань заново, и платили
+    // за это фальшивым `columns = 1` в воссозданной записи да сентинелом
+    // «layer < 0» вместо честного флага. Грань спрашивает `place_prop_hanging`
+    // — сетка между проходами не меняется, ответ тот же.
     struct Slot {
         std::uint32_t score;
-        std::int16_t x, y, z;      // клетка-кандидат (воздух под потолком)
-        std::uint8_t face;         // ЗАНЯТАЯ грань опоры (anchor_face_pack)
-        std::int8_t su, sv, layer; // запись примитива поверхностей; layer<0 = пусто
+        std::int16_t x, y, z; // клетка-кандидат (воздух под потолком)
+        std::uint8_t face;    // ЗАНЯТАЯ грань опоры (anchor_face_pack)
+        bool used;            // слот занят победителем блока
     };
     std::vector<Slot> best(
         static_cast<std::size_t>(dim[0]) * dim[1] * dim[2],
-        Slot{0xFFFFFFFFu, 0, 0, 0, 0, 0, 0, -1});
+        Slot{0xFFFFFFFFu, 0, 0, 0, 0, false});
 
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
@@ -1302,17 +1485,14 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
                 if (score >= slot.score) continue;
                 slot = Slot{score, static_cast<std::int16_t>(x),
                             static_cast<std::int16_t>(y),
-                            static_cast<std::int16_t>(z), hangFace,
-                            static_cast<std::int8_t>(sfc.su),
-                            static_cast<std::int8_t>(sfc.sv),
-                            static_cast<std::int8_t>(sfc.layer)};
+                            static_cast<std::int16_t>(z), hangFace, true};
             }
         }
     }
 
     for (std::size_t bi = 0; bi < best.size(); ++bi) {
         const Slot& slot = best[bi];
-        if (slot.layer < 0) continue;
+        if (!slot.used) continue;
         // Локальный фрейм плафона — из ЗАНЯТОЙ грани: её нормаль смотрит от
         // потолка к лампе, т.е. «вниз», значит «вверх» — обратный знак.
         const int upAxis = anchor_face_axis(slot.face);
@@ -1320,31 +1500,6 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
         // Клетка потолка. НЕврапнутая — она едет в МЕТРЫ (врап здесь дал бы
         // призрак через шов на четверть мира); байты якоря врапает примитив.
         const SeedCell cc = seed_step(slot.x, slot.y, slot.z, upAxis, upSign);
-        // Запись примитива восстанавливается из слота: площадь (columns) была
-        // вопросом КАНДИДАТНОСТИ и ниже не читается — в слот её не тащим.
-        SurfaceFace sfc;
-        sfc.cx = wrap_macro(cc.x);
-        sfc.cy = wrap_macro(cc.y);
-        sfc.cz = wrap_macro(cc.z);
-        sfc.face = slot.face;
-        sfc.su = static_cast<std::uint8_t>(slot.su);
-        sfc.sv = static_cast<std::uint8_t>(slot.sv);
-        sfc.layer = static_cast<std::uint8_t>(slot.layer);
-        sfc.columns = 1;
-        const float faceM = surface_plane_m(sfc, seed_cell_axis(cc, upAxis));
-
-        // Cell CENTRE по касательным осям — the corner form hung bulbs on
-        // whatever wall shared the corner (the same bug the wall seeder had).
-        // Подвес — на 14 см ВНИЗ ПО ФРЕЙМУ от реальной грани потолка.
-        vec3 pos = seed_cell_centre(slot.x, slot.y, slot.z);
-        seed_vec_set(pos, upAxis,
-                     faceM - static_cast<float>(upSign) * 0.14f);
-
-        // Якорь — прямо из записи примитива: представительная экспонированная
-        // колонка (su,sv) + её слой. Прежний добор «точного солидного бита
-        // центра 2×2» умер вместе с побитовым гейтом (колонковая проба
-        // anchor_alive спрашивает то же окно).
-        const SubVoxelAnchor anchor = anchor_of_surface(sfc);
 
         // ПЛАФОН — ИЗ СТРОКИ ЭТАЖА, не монеткой здесь. Та же арифметика
         // накопления, что у сеялок стен и пола, но знаменатель — Σ весов:
@@ -1367,8 +1522,19 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
         const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
         const std::uint8_t anim = static_cast<std::uint8_t>(slot.score & 0xFFu);
 
-        Entity e = spawn_prop_from_id(reg, world, pos, anchor, pid, layer, yaw,
-                                      anim, /*flags*/0);
+        // ПОДВЕС — ОБЩИЙ ГЛАГОЛ `place_prop_hanging`: 14 см шнура вниз по
+        // фрейму от РЕАЛЬНОЙ грани потолка, центр клетки опоры по касательным
+        // (форма «по представительной колонке» вешала плафон на стену, с
+        // которой колонка делила угол), якорь — в потолок.
+        //
+        // Запись примитива здесь НЕ восстанавливается из слота, как было:
+        // глагол спрашивает грань заново. Сетка между проходами не менялась
+        // (оба идут внутри этого вызова), значит ответ тот же; su/sv/layer
+        // уехали из слота, и у «площади грани» (columns) больше нет фальшивого
+        // `= 1`, которым приходилось затыкать воссозданную запись.
+        Entity e = place_prop_hanging(reg, world, layer, cc.x, cc.y, cc.z,
+                                      slot.face, pid, /*dropM=*/0.14f, yaw,
+                                      anim);
         if (e != entt::null) ++count;
     }
     return count;

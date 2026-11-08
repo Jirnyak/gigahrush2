@@ -396,7 +396,7 @@ float samosborPulse = pc.torus.z > 0.0 ? pc.torus.z
 | `src/game/floor_gen.cpp:135-136` | `static_assert(kPadicGroundCoord == 3, "keep save.h kArrivalCoord in step")` | ХАРДКОД, межмодульный пин |
 | `src/game/floors/padic/padic_gen.cpp:529` | `if (number == 0) { … extraction marker … }` внутри `stamp_lattice()` | **Фактически диспетчерская ветка** — `generate_padic_floor` работает для **5 из 6 видов** (`floor_gen.cpp:186-190`), т.е. модуль, заявивший номер **4** (`padic.h:46`), решает игровой факт про этаж **0** |
 | `src/game/floors/padic/padic_gen.cpp:535` | `for (const int z : {0, kMacroDim - 1})` | ХАРДКОД, внутримодульный |
-| `src/app/main.cpp:1094` | `if (kind_for_floor(floorNumber) == game::FloorKind::Padic) count += game::seed_padic_props(…)` | **Нарушение: ветка по виду в общем app-слое** |
+| ~~`src/app/main.cpp:1094`~~ | ~~`if (kind_for_floor(...) == FloorKind::Padic) seed_padic_props(…)`~~ | **ЗАКРЫТО 2026-11-08**: обе ветки (Padic и Khrushi) снесены, диспатч стал строкой `kContentPlacers` → `padic_place`/`khrushi_place`/`blame_place` (CANON S23) |
 | `src/app/main.cpp:83` | `#include "game/floors/padic/padic.h"` | утечка модуля за пределы `floors/` |
 | `src/game/save.h:727` | `kArrivalCoord = 3` | ХАРДКОД вне модуля, дубль `kPadicGroundCoord` |
 | `src/game/mob_spawn.cpp:214-220` | `switch (kind)` в общем спавнере; Padic и Blame молча падают в `Ministry` | ветка по виду в общем коде |

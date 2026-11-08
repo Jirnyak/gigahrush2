@@ -344,7 +344,7 @@ Class: **DEAD-DATA by construction.** This is the single highest-value finding i
 
 ### **4.0.2 Beds, toilets, stoves and tables are door-lock terminals.**
 
-`data/props.csv` rows 7-10 author `kitchen_stove`, `kitchen_table`, `toilet_pan`, `bed_cot` with **`interact=Terminal`** (I read the CSV directly). `spawn_prop_from_id` emplaces that kind unconditionally (`prop_system.cpp:287` → `:258`). Downstream:
+~~`data/props.csv` rows 7-10 author `kitchen_stove`, `kitchen_table`, `toilet_pan`, `bed_cot` with **`interact=Terminal`**~~ — **ИСПРАВЛЕНО В CSV**: все четыре строки сегодня несут `interact=None`, так что «E на унитазе щёлкает все замки этажа» невозможно. `spawn_prop_from_id` emplaces that kind unconditionally (`prop_system.cpp:287` → `:258`). Downstream:
 * `main.cpp:6420-6425` → prompt **"TERMINAL (DOOR LOCKS)"** on a bed;
 * `main.cpp:4176-4183` → E on a toilet calls `embody_interact_terminal` → `embody.cpp:153` `door_toggle_locks(...)` — **toggles every lock on the floor**;
 * `main.cpp:6028-6032` → standing at a stove makes `CraftStation::NetTerminal` true for repair.
@@ -547,7 +547,7 @@ Derived and fine: `kSaltWall`/`kSaltLight` (documented as inherited to preserve 
 
 ### Rows: **9/9 SPAWNED**
 
-`terminal` `prop_system.cpp:374→412` · `electrical_shield` `:372→412` · `bare_bulb`/`flood_lamp` `:479→484` · `padic_stair_bulb` `floors/padic/padic_module.cpp:79-81` · `kitchen_stove`/`kitchen_table`/`toilet_pan`/`bed_cot` `room_zone.h:320-328 → room_zone.cpp:522`.
+`terminal` `prop_system.cpp:374→412` · `electrical_shield` `:372→412` · `bare_bulb`/`flood_lamp` `:479→484` · `padic_stair_bulb` `floors/padic/padic_module.cpp:79-81` · `kitchen_stove`/`kitchen_table`/`toilet_pan`/`bed_cot` ~~`room_zone.h:320-328 → room_zone.cpp:522`~~ → `kKhrushiFurniture` (`khrushi_module.cpp`) / `kPadicFurniture` (`padic_module.cpp`) через `place_prop_standing` (2026-11-08).
 
 Measured on floor −3: 517 wall devices, 93 ceiling lights, 843 furniture, 285 `PropLight`.
 

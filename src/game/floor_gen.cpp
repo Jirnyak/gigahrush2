@@ -4,6 +4,7 @@
 #include "core/table_guard.h"
 
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -71,12 +72,15 @@ using FloorGeneratorFunc = void (*)(World&, int, const FloorSpec&, unsigned);
 using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
 using FloorDoorwaysFunc = std::uint32_t (*)(int, unsigned, std::vector<Doorway>&);
 using AntourageExtraFunc = void (*)(const World&, int, unsigned, AntourageBake&);
+using FloorPlaceFunc = std::uint32_t (*)(const FloorPlaceCtx&);
 
-// ---- КОНВЕЙЕР МОДУЛЯ: ВОСЕМЬ ТАБЛИЦ, И У КАЖДОЙ СТРОКИ ЕСТЬ КЛЮЧ ----------
+// ---- КОНВЕЙЕР МОДУЛЯ: ДЕВЯТЬ ТАБЛИЦ, И У КАЖДОЙ СТРОКИ ЕСТЬ КЛЮЧ ----------
 //
-// Шесть из восьми: 2026-11-08 к шести конвейерным добавились гравитационный
-// фрейм и перечисление проёмов — два вопроса, на которые общий код отвечал
-// САМ (`return kPadicGravity;` и `if (kind == Blame || kind == Khrushi)`).
+// Шесть из девяти: 2026-11-08 к шести конвейерным добавились гравитационный
+// фрейм, перечисление проёмов и РАССТАНОВКА СОДЕРЖИМОГО — три вопроса, на
+// которые общий код отвечал САМ (`return kPadicGravity;`,
+// `if (kind == Blame || kind == Khrushi)` и — в app, а не даже здесь —
+// `if (kind == Padic) seed_padic_props(...)`).
 //
 // Здесь стояли шесть ГОЛЫХ массивов, индексируемых `FloorKind`, и каждый был
 // прикрыт `static_assert`'ом на ДЛИНУ. Длина ловит вставку и удаление значения
@@ -100,6 +104,7 @@ struct FloorDoorwaysRow { FloorKind kind; FloorDoorwaysFunc fn; };
 struct GravityFrameRow { FloorKind kind; GravityRegime regime; };
 struct ModuleVersionRow { FloorKind kind; std::uint32_t version; };
 struct AntourageExtraRow { FloorKind kind; AntourageExtraFunc fn; };
+struct FloorPlaceRow { FloorKind kind; FloorPlaceFunc fn; };
 
 // There is no generic lattice builder any more: the old per-kind slab/wall
 // generator was purged (owner's mandate, 2026-08-02) and every kind dispatches
@@ -229,6 +234,34 @@ constexpr FloorDoorwaysRow kDoorwayEnumerators[] = {
 };
 GIGA_TABLE_BY_ENUM(kDoorwayEnumerators, &FloorDoorwaysRow::kind,
                    FloorKind::Count);
+
+// РАССТАНОВЩИКИ СОДЕРЖИМОГО (контракт — в шапке floor_gen.h): проп,
+// интерактор и — когда появится первый вызывающий — моб ПО КООРДИНАТАМ
+// МОДУЛЯ, после объявления комнат и с ними на руках.
+//
+// Здесь родилась не таблица, а ЗАМЕНА ДВУМ ВЕТКАМ: в `seed_floor_props`
+// (app/main.cpp) стояло
+//     if (kind_for_floor(floorNumber) == FloorKind::Padic)   seed_padic_props(…);
+//     if (kind_for_floor(floorNumber) == FloorKind::Khrushi) seed_khrushi_props(…);
+// — знание о двух конкретных модулях в общем коде, прямо запрещённое CANON
+// S11, и вдобавок единственная дверь модуля к рождению вещей была ею же и
+// закрыта для третьего модуля: блейму пришлось бы дописывать ТРЕТЬЮ ветку в
+// app.
+//
+// Строк `nullptr` здесь намеренно нет (как у kDoorwayEnumerators и в отличие
+// от kAntourageExtras): «я ничего не ставлю» — это ОТВЕТ модуля, который он
+// даёт из своего файла и со своей причиной, а не отсутствие ответа у
+// движка. Блейм отвечает нулём в blame_module.cpp.
+constexpr FloorPlaceRow kContentPlacers[] = {
+    {FloorKind::Residential, padic_place},   // padic геометрия — её расстановка
+    {FloorKind::Commercial,  padic_place},
+    {FloorKind::Industrial,  padic_place},
+    {FloorKind::Derelict,    padic_place},
+    {FloorKind::Padic,       padic_place},
+    {FloorKind::Blame,       blame_place},
+    {FloorKind::Khrushi,     khrushi_place},
+};
+GIGA_TABLE_BY_ENUM(kContentPlacers, &FloorPlaceRow::kind, FloorKind::Count);
 
 // Module antourage rows: null = the kind adds nothing over the generic bake.
 constexpr AntourageExtraRow kAntourageExtras[] = {
@@ -419,6 +452,27 @@ void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
 void floor_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed) {
     kRuleAppliers[kind_row(spec)].fn(world, number, spec, seed);
+}
+
+std::uint32_t floor_place_content(const FloorPlaceCtx& ctx) {
+    // Вид берётся ИЗ КОНТЕКСТА, а не выводится здесь из номера: номер этажа
+    // модуль может ЗАЯВИТЬ (`FloorCatalog::claim` — падик держит 4, хрущи 6),
+    // и `floor_spec_for(4)` отдал бы Industrial по шаблонной цепочке, то есть
+    // расстановка уехала бы в чужой модуль на обоих заявленных этажах.
+    // ВРЕМЯ — ЧАСТЬ ОТВЕТА, а не украшение: плотность расстановки это политика
+    // модуля (владелец: «сколько и где хочет»), и единственный способ судить о
+    // ней — видеть цену рядом со счётом. Прибытие на этаж печатает так весь
+    // свой конвейер ([entry] light rebuild / mirror classify / …).
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::uint32_t n = kContentPlacers[kind_row(ctx.spec)].fn(ctx);
+    const float ms = std::chrono::duration<float, std::milli>(
+                         std::chrono::steady_clock::now() - t0)
+                         .count();
+    // Счёт вслух (S11: молчаливого нуля нет) — и ноль тоже ответ: он означает
+    // «модуль ничего не ставит» или «назвал клетки, где нет опоры».
+    std::printf("[content] %s floor %d: %u вещей поставил модуль, %.0f ms\n",
+                ctx.spec.name, ctx.number, n, ms);
+    return n;
 }
 
 void floor_antourage_extra(const World& world, int number,

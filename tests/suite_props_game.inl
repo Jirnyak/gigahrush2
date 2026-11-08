@@ -394,10 +394,13 @@ static void test_ceiling_lights_do_not_collide_with_wall_devices() {
 static void test_padic_props_seed_tags_layer() {
     // [jirnyak.md] section 24 -- padic stair lamps on PlanStair lattice after
     // generate_padic_floor; solid SubVoxelAnchor (no floating bulbs).
+    //
+    // Сеялка модуля стала РАССТАНОВЩИКОМ (`padic_place`, строка
+    // kContentPlacers): тот же обход лестничной решётки + мебель. Комнаты
+    // здесь ПУСТЫЕ намеренно — проверяются именно лампы, и пустое объявление
+    // даёт мебели ноль мест, то есть сцена остаётся той же, что была.
     Registry reg;
     World world;
-    EventBus bus;
-    bus.init();
     const LayerId layer = 4;
     const int number = 4;
     const unsigned seed = 0x0BAD1Cu;
@@ -405,8 +408,10 @@ static void test_padic_props_seed_tags_layer() {
     FloorSpec spec{};
     generate_padic_floor(world, number, spec, seed);
 
-    const std::uint32_t n =
-        game::seed_padic_props(reg, world, layer, number, seed, bus);
+    game::FloorRooms noRooms;
+    game::rooms_reset(noRooms);
+    const std::uint32_t n = game::padic_place(game::FloorPlaceCtx{
+        reg, world, noRooms, spec, layer, number, seed});
     CHECK(n > 0u);
 
     auto view = reg.view<const game::PropLight, const Transform,

@@ -1890,12 +1890,16 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
 // хвост живут отдельно (floor_light_rebuild) — их платят ОБЕ ветки.
 std::uint32_t seed_floor_props(Registry& reg, const World& world,
                                int floorNumber, LayerId layer,
-                               unsigned padicSeed, game::EventBus& bus) {
+                               unsigned padicSeed,
+                               const game::FloorRooms& rooms) {
     const std::uint32_t wallSeed =
         1337u ^ (static_cast<std::uint32_t>(floorNumber) * 0x9e3779b9u);
     // Полосы устройств — СТРОКА ЭТАЖА (FloorSpec::wallDevices), сеялка
-    // агностична: политика расстановки в общем коде — дефект (закон ниже у
-    // мебельного сидера; решение владельца 2026-11-07 — полный перенос).
+    // агностична: политика расстановки в общем коде — дефект (решение
+    // владельца 2026-11-07 — полный перенос). Поимённая расстановка по
+    // координатам модуля живёт ниже, у floor_place_content (CANON S23);
+    // «мебельный сидер ниже», на который ссылались эти строки, не существует
+    // с rooms-object F.
     const game::FloorSpec* spec = spec_for_floor(floorNumber);
     std::uint32_t count = game::seed_wall_interactables(
         reg, world, layer, wallSeed, spec->wallDevices,
@@ -1929,13 +1933,16 @@ std::uint32_t seed_floor_props(Registry& reg, const World& world,
         game::kMaxDeviceBands);
     count += nLamps;
     std::fprintf(stderr, "[props] ceiling lamps seeded: %u\n", nLamps);
-    if (kind_for_floor(floorNumber) == game::FloorKind::Padic)
-        count += game::seed_padic_props(reg, world, layer, floorNumber, padicSeed, bus);
-    if (kind_for_floor(floorNumber) == game::FloorKind::Khrushi)
-        count += game::seed_khrushi_props(reg, world, layer, floorNumber, padicSeed, bus);
-    // Общий мебельный сидер УМЕР (rooms-object F + S10: политика расстановки
-    // в общем коде — дефект). Мебель ставит МОДУЛЬ по своим комнатам, как
-    // свет и антураж; глагольный вектор пропа делает её видимой выбору цели.
+    // РАССТАНОВКА МОДУЛЯ — ОДНА СТРОКА ДИСПАТЧА ([floor_gen.h]
+    // floor_place_content), после объявления комнат и с ними на руках.
+    // Здесь стояли ДВЕ ВЕТКИ ПО ВИДУ ЭТАЖА (`if (kind == Padic)` /
+    // `if (kind == Khrushi)`) — знание о двух конкретных модулях в общем коде
+    // (запрещено CANON S11), и третьему модулю пришлось бы дописывать ТРЕТЬЮ
+    // ветку прямо в app. Теперь это строка `kContentPlacers`, а мебель, свет
+    // и обвес модуль ставит СВОИМИ координатами: глагольный вектор пропа
+    // делает её видимой выбору цели (S12.3/S12.4).
+    count += game::floor_place_content(game::FloorPlaceCtx{
+        reg, world, rooms, *spec, layer, floorNumber, padicSeed});
     return count;
 }
 
@@ -3141,8 +3148,12 @@ int main(int argc, char** argv) {
                          ents.powerKeys.size(), ents.roomReps.size());
         } else {
             refresh_floor_containers(reg, stack.layer(nl), floorNo, nl);
+            // `floorRooms` — объявление ЭТОГО прибытия: каждый путь входа
+            // зовёт rooms_declare для floorNo прямо перед этой развилкой
+            // («комнаты раньше сидеров»), и расстановщик модуля видит их.
             seed_floor_props(reg, stack.layer(nl), floorNo, nl,
-                             streamer.floor_seed_of(registry, floorNo), bus);
+                             streamer.floor_seed_of(registry, floorNo),
+                             floorRooms);
         }
         const auto tL0 = std::chrono::steady_clock::now();
         floor_light_rebuild(reg, stack.layer(nl), floorNo, nl);

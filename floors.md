@@ -7,7 +7,9 @@
 > МЁРТВ (двойной бейк §26 закрыт — `RebakeScheduler`, `rebake.h:3`); сериализация
 > number→module и холодного пула СДЕЛАНА (`save.h` v18). Раздел room_zone
 > описывает код верно, но CANON S12.2/S13.9 его отменяют (вида комнаты не
-> существует) — судьба у rooms-object.
+> существует) — судьба у rooms-object. С 2026-11-08 таблиц диспатча ДЕВЯТЬ —
+> добавилась `kContentPlacers` (`floor_place_content`, хук расстановки
+> содержимого модулем, CANON S23).
 
 > **Status: built** (game layer, `src/game` / `giga_game`). The engine provides
 > the substrate ([world.md](world.md)); the module system, floor-number
@@ -95,7 +97,11 @@ balance centralized while letting each floor feel distinct.
 this" — a pure hash of the room's identity on the X/Y lattice at
 `floor_room_stride` (4 cells today), keyed deliberately NOT on the world seed so
 the mob spawner, the container spawner and everything else agree about room 5.
-[room_zone.h](src/game/room_zone.h) is what finally made that answer *usable*:
+~~[room_zone.h](src/game/room_zone.h) is what finally made that answer
+*usable*~~ — **ФАЙЛА В ДЕРЕВЕ НЕТ** (снесён с rooms-object F); весь раздел
+ниже — история. Живое: `Room`/`FloorRooms` ([src/game/room.h](src/game/room.h)),
+комнаты объявляет МОДУЛЬ, предложение — вектор глаголов (CANON S12), мебель —
+CANON S23.
 
 - **`kRoomAffordance`** — intent → the RoomBit mask that satisfies it
   (eat/drink → Kitchen, toilet → Bathroom, sleep → Living). This is the table
@@ -104,7 +110,11 @@ the mob spawner, the container spawner and everything else agree about room 5.
   ported from the reference's `needs.ts:253-280`. The kitchen CHARGES for itself:
   it queues the digestion that later wins `IntentToilet`, so kitchen → bathroom
   is a loop produced by two data rows and no state machine.
-- **`kRoomFurniture`** — RoomBit → the props that stand in it ([props.md]).
+- ~~**`kRoomFurniture`** — RoomBit → the props that stand in it~~ — **УМЕРЛО**
+  вместе с `room_zone.h` (rooms-object F); «вид комнаты» отменён CANON S12.2.
+  С 2026-11-08 мебель ставят СТРОКИ МОДУЛЯ (`kKhrushiFurniture`/`kPadicFurniture`)
+  через хук `floor_place_content`, а годность ищется ПО ГЛАГОЛУ —
+  `prop_fits_room` ([props.md], CANON S23).
 - **One dense 128³ flow field per affordance bit**, baked by the same
   multi-source BFS as `nav::bake_fine` and seeded from every walkable cell of
   that room kind at once. ~2 MiB per bit, 6.0 MiB and 44 ms on a Residential
@@ -200,10 +210,13 @@ floors --ride's descent-only hops cannot).
 **Modularity beats DRY here, deliberately.** A floor folder spells its content
 out in full even where it repeats another folder's pattern, so modules stay
 independently editable, deletable, and copy-pasteable as templates — no shared
-"floor utils" layer to tangle them. A module touches exactly two things outside
-its folder, both data rows: one registration call in
+"floor utils" layer to tangle them. A module touches exactly two PLACES outside
+its folder, all of it data rows: one registration call in
 `build_default_floor_catalog` ([floor_catalog.cpp](src/game/floor_catalog.cpp))
-and one generator row in `floor_gen.cpp`'s per-kind dispatch table. Delete the
+and its rows in `floor_gen.cpp`'s per-kind dispatch tables — **nine of them as
+of 2026-11-08**: `kGenerators`, `kRuleDeclarers`, `kRuleAppliers`,
+`kGravityFrames`, `kRoomDeclarers`, `kDoorwayEnumerators`, `kContentPlacers`,
+`kAntourageExtras`, `kModuleGenVersions`. Delete the
 folder + those two rows and the floor is gone cleanly. CMake globs
 `src/game/*.cpp` recursively, so a new folder needs no build edit.
 

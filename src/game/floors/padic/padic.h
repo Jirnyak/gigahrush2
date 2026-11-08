@@ -9,13 +9,18 @@
 //   padic_module.cpp — the registration + everything non-geometry the floor
 //                      ships (special loot, carvers, story NPCs, quests, events,
 //                      interactive objects — added HERE as the module grows).
+//                      Его `padic_place` — строка `kContentPlacers` и
+//                      ИМЕНОВАННАЯ ДВЕРЬ модуля к вещам (CANON S23):
+//                      лампочки лестниц + мебель BSP-листьев.
 //
 // Modularity beats DRY on purpose: a floor folder spells its content out in
 // full even where it repeats another folder's pattern, so modules stay
 // independently editable, deletable, and copy-pasteable as templates. The only
 // things a module touches outside its folder are (a) one registration call from
-// build_default_floor_catalog and (b) one generator row in floor_gen.cpp's
-// per-kind dispatch — both data rows, not branches.
+// build_default_floor_catalog and (b) ITS ROWS in floor_gen.cpp's per-kind
+// dispatch tables — nine of them as of 2026-11-08 (geometry, rules, gravity
+// frame, rooms, doorways, CONTENT PLACER, antourage, gen version) — all data
+// rows, never branches.
 //
 // The module CLAIMS floor number 4 explicitly. The default pattern chain would
 // make 4 Industrial (4 % 5 == 4), so this claim is the standing proof that an
@@ -26,11 +31,11 @@
 #pragma once
 
 #include <vector>
+#include "game/floor_gen.h"  // FloorPlaceCtx — контекст хука расстановки
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "ecs/registry.h"
 #include "world/gravity.h"   // GravityRegime — the module declares its frame
 #include "world/level_stack.h"
-#include "game/event_bus.h"
 
 namespace giga {
 class World;
@@ -119,10 +124,15 @@ std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& ou
 struct FloorRooms;
 std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out);
 
-// Seed props and test-balls for the Padic floor (ceiling lightbulbs & rolling/anchored
-// test-balls). layer tags Transform so a recycled LayerId slot can be cleared on the
-// next arrival ([prop_system.h]).
-std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
-                               int number, unsigned seed, EventBus& bus);
+// РАССТАНОВКА СОДЕРЖИМОГО МОДУЛЯ — строка `kContentPlacers` в floor_gen.cpp,
+// хук после объявления комнат ([floor_gen.h] FloorPlaceCtx). Две части, и
+// обе — политика ЭТОГО этажа:
+//   * лампочки лестничных шахт на каждом ярусе (подвес к сэндвичу или к
+//     лепке внутри «воздушной» клетки — вопрос к примитиву поверхностей);
+//   * МЕБЕЛЬ BSP-листьев по строкам `kPadicFurniture` — по объявленным
+//     глаголам комнат, см. .cpp.
+// Общие сеялки (плафоны, панели, станции) работают по полосам строки этажа
+// отдельно и этого хука не касаются.
+std::uint32_t padic_place(const FloorPlaceCtx& ctx);
 
 } // namespace giga::game

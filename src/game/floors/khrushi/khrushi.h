@@ -41,7 +41,7 @@
 #include <vector>
 
 #include "ecs/registry.h"
-#include "game/event_bus.h"
+#include "game/floor_gen.h"  // FloorPlaceCtx — контекст хука расстановки
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "world/gravity.h"   // GravityRegime — the module declares its frame
 #include "world/level_stack.h"
@@ -153,12 +153,15 @@ struct AntourageBake;
 void khrushi_bake_antourage(const World& world, int number, unsigned seed,
                             AntourageBake& out);
 
-// Module dressing: street lamps hung from the pole hooks, подъезд bulbs on
-// every stairwell landing, a bulb over every entrance. The generic seeders
-// (ceiling lights, wall interactables, furniture) run separately and cover
-// the flats; this is only the layout the module owns.
-std::uint32_t seed_khrushi_props(Registry& reg, const World& world,
-                                 LayerId layer, int number, unsigned seed,
-                                 EventBus& bus);
+// РАССТАНОВКА СОДЕРЖИМОГО МОДУЛЯ — строка `kContentPlacers` в floor_gen.cpp,
+// хук после объявления комнат ([floor_gen.h] FloorPlaceCtx). Две части, и
+// обе — политика ЭТОГО этажа:
+//   * обвес города: уличные фонари под крюками столбов, лампочка на каждой
+//     площадке подъезда и над каждым входом;
+//   * МЕБЕЛЬ КВАРТИР по строкам `kKhrushiFurniture` (koйka, плита, стол,
+//     унитаз) — по объявленным глаголам комнат, см. .cpp.
+// Общие сеялки (плафоны, настенные панели, напольные станции) работают по
+// полосам строки этажа отдельно и этого хука не касаются.
+std::uint32_t khrushi_place(const FloorPlaceCtx& ctx);
 
 } // namespace giga::game
