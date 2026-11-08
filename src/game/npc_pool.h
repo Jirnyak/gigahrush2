@@ -187,7 +187,7 @@ struct Needs {
     float hpDebt = 0.0f;      // sub-1-HP attrition carried between ticks
     // Fractional heal bank — the MIRROR of hpDebt: HP is an integer on the crowd
     // body, so a fractional per-second heal cannot land directly. Medical recovery
-    // accumulates here (percent-of-max; кормит медик, [role.h]) and `needs_step`
+    // accumulates here (percent-of-max) and `needs_step`
     // spills the whole part into `pool.hp()`. Unpaid healing is still owed across
     // a reload for the same reason unpaid damage is.
     float hpBank = 0.0f;
@@ -257,18 +257,19 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            they keep the old "sized once at init(), never resized" contract and a
 //            reference into them is stable for the pool's whole life. 434 B/row =
 //            434.0 MiB (306 before the v14 slot widening — the +128 is all inv_).
-//   LIVE   — age_, sex_, level_, role_, gen_. The first four are written for every
+//   LIVE   — age_, sex_, level_, gen_. The first three are written for every
 //            seeded record by seed_floor_from_spec; gen_ is written by kill(). All
-//            track count_ and are grown inside spawn(). 6 B/row: the demo stack's
-//            1,930 records need 11.6 KB of rows and allocate 24.0 KiB (6 B x the
-//            kNpcLazyChunk floor of 4096) instead of 6.0 MiB. They reach 5.4 MiB at
+//            track count_ and are grown inside spawn(). 5 B/row: the demo stack's
+//            1,930 records need 9.65 KB of rows and allocate 20.0 KiB (5 B x the
+//            kNpcLazyChunk floor of 4096) instead of 5.0 MiB. They reach 4.53 MiB at
 //            the 950k target.
-//            ДВЕ правки в одном числе, обе сверены с grow_live_columns(): было
+//            ТРИ правки в одном числе, все сверены с grow_live_columns(): было
 //            написано 13 Б и перечислено ЧЕТЫРЕ колонки плюс gen_, а колонка
-//            role_ (1 Б, LIVE с [role.h]) в списке не значилась вообще — то есть
-//            истинная ширина до сноса была 14 Б, а не 13. Минус 8 Б блока перков
-//            = 6 Б, и список теперь совпадает с телом grow_live_columns() строка
-//            в строку.
+//            role_ (1 Б) в списке не значилась вообще — то есть истинная ширина
+//            до сносов была 14 Б, а не 13. Минус 8 Б блока перков (2026-10-12)
+//            = 6 Б, минус 1 Б колонки role_ вместе с системой ролей
+//            (2026-11-08) = 5 Б, и список теперь совпадает с телом
+//            grow_live_columns() строка в строку.
 //   DEMAND — rel_, name_, surname_, nextFree_. Zero cost until something actually
 //            calls relations() / set_name(), or until a recycling pool takes its first
 //            death; the shipping game does none of the three, so it pays 0 B for all
@@ -277,14 +278,14 @@ enum NpcSex : std::uint8_t { SexUnset = 0, SexMale = 1, SexFemale = 2 };
 //            resizes afterwards.
 //
 // New resident footprint after init(): 434.0 MiB (was 485.0 before the demand split,
-// 306.0 before v14 widened the inventory slot), and the demo stack adds 24.0 KiB of
-// LIVE columns rather than 6.0 MiB. resident_bytes() reports the live figure so
+// 306.0 before v14 widened the inventory slot), and the demo stack adds 20.0 KiB of
+// LIVE columns rather than 5.0 MiB. resident_bytes() reports the live figure so
 // this is checkable at runtime, not only on paper. 384 of the resident 434 B/row is
 // inv_, which stays EAGER because loot / containers / vendor / needs all read it —
 // it is the obvious next 384.0 MiB, not this lane's.
 //
 // Reference-lifetime rule, unchanged in spirit but worth stating: a reference handed
-// out by relations() / level() / role() is invalidated by a later spawn(), because
+// out by relations() / level() / age() is invalidated by a later spawn(), because
 // spawn() is the ONLY place a LIVE column resizes. Nothing may hold one across a
 // spawn — the existing pattern (`pool.level(id) = ...` at the seeding site, one
 // record at a time, reference never named) is safe because it never does. Пример в
@@ -550,19 +551,18 @@ public:
     const std::vector<NpcId>& floor_bucket(std::int16_t label) const;
 
     // Character-sheet fields (same struct the future creation screen writes to).
-    // age/sex/level/role are LIVE columns: sized by spawn(), so a reference from one
+    // age/sex/level are LIVE columns: sized by spawn(), so a reference from one
     // of them dies at the next spawn().
     std::uint8_t&  age(NpcId id)     { return age_[id]; }      // years, 1..100
     std::uint8_t&  sex(NpcId id)     { return sex_[id]; }      // NpcSex code
     std::uint16_t& height_mm(NpcId id) { return heightMm_[id]; } // stature, mm
     std::uint8_t&  level(NpcId id)   { return level_[id]; }
-    // Behavioural archetype (RoleId as uint8, [role.h]). LIVE column: initialised
-    // from role_for(id, floorKind) at floor seeding, writable for story overrides
-    // (the spec's Resident -> Looter after samosbor), so the COLUMN is the source
-    // of truth at runtime, never the hash.
-    std::uint8_t&  role(NpcId id)    { return role_[id]; }
-    // Здесь стоял аксессор восьмислотового блока перков. Снесён 2026-10-12 вместе
-    // с колонкой — надгробие с числами в шапке файла.
+    // Здесь стоял аксессор `role()` поведенческого архетипа. Снесён 2026-11-08
+    // вместе с системой ролей (решение владельца: пять архетипов с 60 числами в
+    // C++ при законе «вся политика в данных»; мандата в CANON.md не было).
+    // Различие тел осталось на ФРАКЦИЯХ и НУЖДАХ — у обеих читатели настоящие.
+    // Здесь же стоял аксессор восьмислотового блока перков. Снесён 2026-10-12
+    // вместе с колонкой — надгробие с числами в шапке файла.
 
     Inventory&     inventory(NpcId id) { return inv_[id]; }
     // Const read side, same rule as faction() above: the equip decider scores
@@ -622,7 +622,9 @@ private:
     std::vector<std::uint8_t>  sex_;    // LIVE — NpcSex code (0 = unset)
     std::vector<std::uint16_t> heightMm_; // stature in mm; drives embodied AABB
     std::vector<std::uint8_t>  level_;  // LIVE
-    std::vector<std::uint8_t>  role_;   // LIVE — RoleId ([role.h]), 1 B/row
+    // Здесь стояла колонка `role_` (LIVE, 1 Б/строка = 1 МиБ при 2^20) — ролевой
+    // архетип. Снесена 2026-11-08 вместе с [role.h]: LIVE 6 -> 5 Б/строка, строка
+    // сейва 377 -> 376 Б.
     // Здесь стояла колонка блока перков (LIVE, 8 Б/строка = 8 МиБ при 2^20).
     // Снесена 2026-10-12: один писатель, ноль читателей — надгробие в шапке файла.
     std::vector<std::array<char, kNameLen>> name_;      // DEMAND

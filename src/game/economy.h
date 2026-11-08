@@ -1,168 +1,77 @@
-// The bank — the one thing money could not yet do.
+// Кошелёк рана: деньги как ЧИСЛО и как МОНЕТА, плюс пройденная глубина.
 //
 // ---------------------------------------------------------------------------
-// What was already here, and what the reference adds
+// Что здесь осталось после сноса банка (решение владельца 2026-11-08)
 // ---------------------------------------------------------------------------
-// Read [barter.h] before this file. Between them the build already
-// ships a working two-sided economy: `deposit_valuables` turns carried loot into
-// `RunLedger::banked` at the pad, and the barter deal turns goods into ruble ITEMS
-// and back at the reference's 26% round-trip spread ([conversation.md] — this
-// replaced vendor_sell_all/vendor_resupply on 2026-08-17), with `item_table.h`
-// pricing the catalog under a depth-gated value cap. That is a complete loop and
-// this file does not rebuild any of it.
+// Ядром объявлены деньги как ЦЕНА В ОБМЕНЕ: сделка ([barter.h], спред
+// туда-обратно закрывает круговой пресс) и цена каталога под кап по глубине
+// ([item_table.h]). Это полный и живой контур, и он здесь не переписывается.
 //
-// The reference (`../gigahrush/src/systems/{banking,economy,stock_market,trade,
-// production,caravans,gambling,ration_coupons,permits}.ts`, ~215 KB, plus
-// `economics.md` and `balance.md`, 1,140 lines, all read) adds nine more systems. What
-// is ported HERE is the one with no analogue on this side at all: an account with a
-// **term deposit that pays interest** and a **loan that charges it**.
+// БАНК КАК НАДСТРОЙКА СНЕСЁН ЦЕЛИКОМ. Мандата на него не было ни в
+// `CANON.md`, ни в манифесте владельца (`history/ARCHITECTURE.md`), а сами
+// константы ставок несли на себе пометку «VERBATIM from the reference» —
+// дословный порт `banking.ts` из чужого прототипа (`../gigahrush`), то есть
+// импорт, а не заказ. Снесённое перечислено ПО ИМЕНАМ, чтобы следующий агент
+// не отпортировал его обратно «по умолчанию»:
 //
-// Everything else was examined and deliberately left out. The reasons are recorded
-// because a future agent will otherwise port them by default:
+//   BankAccount        вклад, принципал кредита, накопленный процент,
+//                      пожизненные счётчики процентов, лимит ветки, банда
+//   BankTerms          строка банды и генерируемая таблица
+//                      (`data/economy.csv` -> `economy_table.cpp`,
+//                      `tools/gen_economy_table.py`, `kBankTerms`,
+//                      `kBandNames`, `bank_terms`)
+//   BankTick           отчёт о начислении за тик
+//   глаголы            bank_open / bank_step / bank_deposit / bank_withdraw /
+//                      bank_take_loan / bank_repay и их one-keypress формы
+//                      (deposit_all / withdraw_all / borrow_max / repay_all),
+//                      bank_debt, bank_credit_available
+//   числа              базисные пункты ставок вклада и кредита, период
+//                      начисления в тиках, кап догона периодов, кредитные
+//                      лимиты и их пер-ветковый джиттер, кап принципала
+//   проводка           срочный стол: четыре кнопки вклада и кредита в панели
+//                      стойки ([conversation_ui.h]). Сама стойка ЖИВА — она
+//                      переименована в КАССУ (`ConvActionKind::Teller`,
+//                      `teller_ui_draw`) и носит ровно две операции, внести и
+//                      снять, то есть два глагола этого файла
 //
-//   scarcity pricing   The reference's largest economy system: 17 per-floor resource
-//     (economy.ts)     stocks, `scarcity x demand x tariff` folded into every quote,
-//                      capped at 5x. It is genuinely missing here — every floor prices
-//                      water at exactly `int(2 * 1.15) = 2` forever. It is NOT ported
-//                      because the only consumer that could pay a moved price is
-//                      the barter terms ([barter.h]), and a price function no deal
-//                      reads is decoration. It needs a hook there plus the
-//                      item->resource mapping, which wants the interned string ids
-//                      [item_table.h] already defers. Recorded as a future
-//                      increment rather than half-built here.
-//   stock market       Its own balance doc lists it as a P0 exploit: a 5.5% random
-//     (stock_market.ts) move every 45 s, so "no reliable doubling in under 30 real
-//                      minutes" already fails in the reference. Nothing in this build
-//                      drives quotes — no NPC traders, no production, no caravans — so
-//                      a port would be a random walk the player clicks. Refused.
-//   production,        Each needs multi-tick per-floor state and a resource flow that
-//   caravans           does not exist yet (12 factories / 42 recipes / 6 lanes). They
-//                      are downstream of scarcity, not beside it.
-//   trade liquidity    Closed better than the reference asks: barter's partners pay
-//                      with the rubles physically in their pockets ([barter.h] закон
-//                      2), which IS the liquidity cap its balance doc lists as a
-//                      missing P0. (kSellPerVisitCap, the old stand-in, died with
-//                      the vendor window.) Porting `trade.ts` would give it two homes.
-//   gambling, coupons, Content, not economy structure. `UseEffect::RedeemCoupon`
-//   permits            already exists in the item table with no handler, so coupons
-//                      are a use-verb increment, not a banking one.
+// Вместе с банком ушёл и список «рассмотрено и отказано» на девять систем
+// референса (scarcity pricing, stock market, production, caravans, trade
+// liquidity, gambling, coupons, permits): обосновывать отказ больше нечему —
+// банка, рядом с которым они стояли, нет. Если scarcity-ценник когда-нибудь
+// понадобится, его дом — условия сделки ([barter.h]), а не этот файл.
 //
 // ---------------------------------------------------------------------------
-// The premise correction: `banked` is ALREADY safe
+// Что осталось живым и почему
 // ---------------------------------------------------------------------------
-// "A place to put roubles so death does not take everything" describes a gap this
-// build does not have: смерть и так оставляет вещи в мёртвой строке пула и
-// никогда не трогала `banked` (скоровый учёт потерь умер со сносом пада,
-// 2026-11-08). SINCE THE RUBLE ITEM LANDED (v14) the cash/account split is real:
-// pocket rubles are inventory, AT RISK like any loot, and `banked` is the safe
-// account the Duty clerk's teller verbs below move them into and out of. Death
-// with a wad in the pocket now loses the wad — the risk is not manufactured, it
-// is the same risk every carried valuable already ran.
+//   RunLedger::banked   безопасный рублёвый СЧЁТ игрока — деньги как число.
+//                       Двигает его только ЯВНЫЙ глагол: касса ниже
+//                       (наличка <-> счёт). Авто-движений по близости не
+//                       осталось ни одного.
+//   deepestFloor/Band   пройденная глубина. Пишет `record_floor` на прибытии,
+//                       читают ХУД и сейв; поле подписанное, потому что
+//                       глубина двунаправленная.
+//   касса (teller)      наличка в кармане — это РУБЛЁВЫЙ ПРЕДМЕТ, и она в
+//                       риске, как любой лут; счёт — нет. Переход между ними
+//                       есть взаимодействие с ТЕЛОМ (закон владельца
+//                       2026-08-17), а не магия пада.
 //
-// What this bank therefore adds is not safety, it is **cost and yield**:
-//
-//   * a **term deposit** is strictly LESS liquid than `banked` — spending money
-//     means withdrawing COINS through the teller first, and the deposit is a step
-//     further away even than that — and it pays interest for the distance. So the
-//     decision is "how much can I afford to make unspendable before the next run",
-//     which is a real one against a survival clock.
-//   * a **loan** is the first way to spend roubles that have not been earned yet, and
-//     the first liability in the game. Debt is bank state, not body state, so it
-//     survives death by construction — a death with a loan outstanding loses the
-//     carried inventory AND still owes. That is the new loss channel, and it is the
-//     honest one rather than an invented cash pile.
-//
-// ---------------------------------------------------------------------------
-// Numbers: what is verbatim, what is corrected, what is authored
-// ---------------------------------------------------------------------------
-// VERBATIM from the reference (`data/banking.ts`, `data/economics.ts`):
-//   ledger ring 24 entries        BANKING_LEDGER_CAPACITY
-//   interest catch-up cap 24      BANKING_MAX_INTEREST_PERIODS
-//   E0 credit limit 500           BANKING_DEFAULT_CREDIT_LIMIT
-//   E0 loan:deposit rate 1.5      0.015 / 0.010; here 9 bp / 6 bp, the same ratio
-//   the E0..E4 columns            ECONOMY_MONEY_BANDS: lootValueCap 90/450/4000/
-//                                 80000/250000, maxLiquidCash 250/2000/25000/250000/
-//                                 5000000, ordinaryQuestCap 250/800/8000/45000/250000,
-//                                 baseQuestCashRate 35/70/160/420/1200
-//   the 5 wealth tiers            economics.md SS7: 0..100 / 100..2000 / 2000..50000 /
-//                                 50000..1000000 / 1000000+, cap 5000000
-//
-// CORRECTED, using the reference's own balance doc against its own code: the shipped
-// deposit rate is `1% per 60 game minutes`, and `balance.md` SS11 lists that as a
-// **P0** — "Passive finance обгоняет вылазки" — recommending `0.1..0.3% per game day`
-// instead. Applying that correction to the shipped 100 bp lands near 1..4 bp per
-// period. E0 is authored at **6 bp**, slightly above the window, because integer
-// roubles need headroom: at 4 bp a deposit under 2,500 rub earns literally nothing per
-// period, and 6 bp puts that dead zone at 1,667 rub — the floor of the reference's own
-// E1 band, so "100₽ must remain meaningful at start" holds exactly.
-//
-// AUTHORED here, and flagged as such because they are not in the reference: the
-// per-band gradient. Deposit rates FALL with depth (6/5/4/2/1 bp) and loan rates RISE
-// (9/12/18/30/45 bp). The shape is ported — `balance.md` SS3 gives the reference's own
-// per-floor bank multipliers, `bank floor 6.5, Ministry 2.4, Maintenance 1.25, Hell
-// 0.45`, i.e. the hub bank is the good one and the depths are not — but the five pairs
-// of numbers are chosen here. Credit limits likewise: 500 is the reference's, and
-// 1,600 keeps its 2x-ordinary-quest-cap relation, after which the multiple is cut
-// deliberately (1x, 0.5x, 0.2x) because `balance.md` P0 #4 says a loan must fund one
-// sortie and not leverage.
-//
-// MEASURED consequences, all of them reproduced by `suite_economy` running the real
-// integer path rather than a formula, so a retune argues with numbers rather than taste:
-//   * E0 deposit doubling time: **1,157 periods = 19.3 real hours** on a 1,000,000
-//     principal (integer truncation makes it one period slower than the float
-//     `ln 2 / ln(1.0006)` = 1,156). The balance doc's bar is "no reliable doubling in
-//     under 30 real minutes" — cleared by 38x. At 1 bp (E4) it is 6,957 periods = 116 h.
-//   * E0 compounded yield is 3.65%/hour. On 250,000 rub (the E3 liquid-cash ceiling)
-//     that is **9,131 rub/hour** — and this build's measured floor-0 whole-floor income
-//     is 7,364 rub ([loot.h]: 5,647 from kills + 1,717 from 24 crates), so clearing the
-//     HUB even once every 48 minutes out-earns a quarter-million on deposit, and floor
-//     -13's 462,171 out-earns it by 50x per clear. Deposits cannot replace descending.
-//     This is the number to move if that ever stops holding.
-//   * a 600-rub resupply basket (the old shop's unit) is the scale a loan is
-//     measured in, so E0's 500 funds most of one kit and E4's 50,000 about 83.
-//
-// ---------------------------------------------------------------------------
-// Integer roubles, and the one asymmetry that matters
-// ---------------------------------------------------------------------------
-// There is no float currency and there will not be one: a float balance drifts across
-// a save/load boundary and the whole ledger is integer (RunLedger выше: `banked` is
-// `int64_t`). Rates are **basis points** and interest is `principal * bp / 10000`.
-//
-// Deposit interest rounds DOWN, loan interest rounds UP. That is not a rounding
-// preference, it closes a hole: at 9 bp a 500-rouble loan accrues `0.45` roubles per
-// period, which truncates to **zero** — a permanently interest-free debt, the exact
-// money press the deposit/loan spread exists to prevent. Rounding the charge up means
-// any outstanding principal costs at least 1 rouble per period. Measured: a 500-rouble
-// E0 loan therefore costs 1 rub/period = 60 rub/hour, which is 12%/hour on the
-// principal and is punitive on purpose ("Keep loan rate punitive and social",
-// balance.md SS5). Small loans are the expensive ones, and that is stated rather than
-// hidden.
-//
-// Deposit interest COMPOUNDS (the reference loops per period and re-reads the grown
-// principal); loan interest is SIMPLE (the reference multiplies `principal * rate *
-// periods` once). Both ported as-is, which is why `bank_step` is a bounded loop for
-// one and a single multiply for the other.
+// Целого числа достаточно и будет достаточно: float-баланс дрейфует через
+// границу сейв/лоад, а весь учёт целый.
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
 
-#include "core/tick.h"        // kSimHz — the interest period is expressed in sim ticks
-#include "game/item_table.h"  // kEconomyBands, kLootValueCap, economy_band
+#include "game/item_table.h"  // Inventory/kItemRuble для кассы, economy_band
 
 namespace giga::game {
 
 // КОШЕЛЁК И ГЛУБИНА РАНА. Жил в extraction.h как счёт «Спуска и Экстракции»
-// — весь экстракшн-пад (кольцо-банк вокруг лифта, авто-депозит по позиции,
+// — весь экстракшн-пад (кольцо вокруг лифта, авто-депозит по позиции,
 // at_risk/risk_share-кривая жадности) СНЕСЁН решением владельца 2026-11-08
-// («легаси, ядро должно быть чистым»). Выжили ровно два поля, на которых
-// стоят ЖИВЫЕ системы:
-//   banked      — безопасный рублёвый счёт: его двигают теллер-глаголы банка
-//                 ниже, в него платят квесты ([quest.h] reward) и контракты;
-//   deepestFloor/deepestBand — пройденная глубина: Descend-цели квестов и
-//                 контрактов меряются ею (quest_check/contract_check).
+// («легаси, ядро должно быть чистым»). Выжили ровно два поля:
+//   banked      — безопасный рублёвый счёт, его двигает касса ниже;
+//   deepestFloor/deepestBand — пройденная глубина, её пишет `record_floor`
+//                 на прибытии и читают ХУД и сейв.
 // Скоровая половина (lostToDeath/bestHaul/deposits/deaths) умерла с падом:
 // цену смерти несёт сам мир (possess_a_survivor — вещи остаются в мёртвой
 // записи пула), счётчик поверх неё был витриной снесённого лупа.
@@ -185,220 +94,29 @@ static_assert(alignof(RunLedger) == 8);
 void record_floor(RunLedger& led, int floorZ);
 
 // ---------------------------------------------------------------------------
-// The generated table (data/economy.csv -> tools/gen_economy_table.py)
+// КАССА — наличка <-> счёт (строка стойки в [conversation.md])
 // ---------------------------------------------------------------------------
-
-// The row count the source_rules gate compares against data/economy.csv. A LITERAL on
-// purpose: the gate reads it with a regex, so a computed expression would make the
-// drift check silently blind (tools/check_source_rules.cmake Rule 7 fails loudly on a
-// missing declaration, but only if the pattern is the one it looks for).
-// (WEALTH-половина таблицы — WealthTier/wealth_tier/wealth_tier_name — СНЕСЕНА
-// вердиктом владельца 2026-08-27: читатели были только в тестах. Тем же вердиктом
-// 2026-09-30 ушли `net_worth` и `band_name`: спрос «богатство» для S13.1 сложит
-// `banked + deposit - bank_debt` сам, когда у него появится потребитель.)
-inline constexpr std::size_t kEconomyRows = 5;
-static_assert(kEconomyRows == kEconomyBands,
-              "data/economy.csv is the band table; kEconomyRows is its row count and "
-              "the gate reads it, so table and CSV cannot drift apart unnoticed");
-
-// One depth band's money contract. POD, 28 bytes, no interior padding: the whole table
-// is 140 B and is permanently cache-resident like the item and mob tables.
+// Закон владельца (2026-08-17): `banked` — это СЧЁТ, наличка — рублёвый
+// ПРЕДМЕТ в кармане, и переход между ними есть взаимодействие с телом, а не
+// магия пада. Эти два глагола и есть то взаимодействие, и они нарочно
+// ТУПЫЕ: ни процента, ни комиссии, ни лимита кроме физики. (Срочный вклад и
+// кредит, которые раньше стояли рядом отдельным «глубоким столом», снесены
+// вместе с банком — см. шапку файла.)
 //
-// The first four columns are the reference's `EconomyMoneyBandDef` verbatim; only
-// `lootCap` currently has a second consumer (`kLootValueCap`, which the generator
-// cross-checks). `cashCap` / `questCap` / `questRate` are carried because they are the
-// authored contract for the quest and container systems that will price against them
-// ([contract.h] pays flat numbers today), and because a band table missing three of
-// its five reference columns is a table someone will re-derive by guess.
-struct BankTerms {
-    std::int32_t lootCap;      //  0  == kLootValueCap[band]
-    std::int32_t cashCap;      //  4  reference maxLiquidCash: liquid cash this band expects
-    std::int32_t questCap;     //  8  reference ordinaryQuestCap
-    std::int32_t questRate;    // 12  reference baseQuestCashRate
-    std::int32_t creditLimit;  // 16  before the per-branch seed jitter
-    std::uint16_t depositBp;   // 20  basis points per interest period, paid
-    std::uint16_t loanBp;      // 22  basis points per interest period, charged
-    std::uint8_t floorLo;      // 24  |floor| bracket, inclusive
-    std::uint8_t floorHi;      // 25
-    std::uint8_t pad_[2];      // 26
-};
-static_assert(sizeof(BankTerms) == 28, "BankTerms must stay a tight 28-byte row");
-static_assert(alignof(BankTerms) == 4);
-static_assert(std::is_trivially_copyable_v<BankTerms>);
-
-extern const std::array<BankTerms, kEconomyBands> kBankTerms;
-extern const std::array<const char*, kEconomyBands> kBandNames;
-
-// ---------------------------------------------------------------------------
-// Tunables
-// ---------------------------------------------------------------------------
-
-// One interest period, in sim ticks. 60 s of real play at kSimHz — expressed in TICKS
-// and not seconds because the sim clock is the only monotonic integer clock the bank
-// can be deterministic against ([tick.h]: 125 Hz, kSimStepMs exactly 8). The macro
-// clock was the other candidate and is wrong for this: it models 7 days per 2 s of
-// wall time, so any per-game-day rate would be a 300,000x money press.
-inline constexpr std::uint64_t kBankPeriodTicks =
-    60ull * static_cast<std::uint64_t>(kSimHz);
-static_assert(kBankPeriodTicks == 7500ull);
-
-// Interest periods one `bank_step` may settle. The reference's
-// BANKING_MAX_INTEREST_PERIODS, verbatim. It bounds the WORK of a single call (the
-// deposit loop compounds per period), not the total interest: `lastInterestTick`
-// advances only by what was settled, so a long gap is paid off across several calls.
-// That is the reference's behaviour too, and it is what keeps this O(1) on the tick.
-inline constexpr std::uint32_t kBankMaxCatchupPeriods = 24u;
-
-// (Кольцо BankEntry ledger[24] + BankOp + bank_last_entry/bank_op_name СНЕСЕНЫ
-// вердиктом владельца 2026-08-27: писались каждой операцией и сейвились, но не
-// имели НИ ОДНОГО читателя в игре — write-only история, §35-класс. Если банку
-// понадобится экран выписки — вернуть кольцо ВМЕСТЕ с потребителем в одной
-// правке; формат был: amount i32 / tick u32 / op u8 / band u8, слот =
-// entries % 24. Снос сопровождён бампом kSaveVersion 18→19.)
-
-// Per-branch credit-limit jitter, in basis points either way. +-20%.
+// Внести — забирает КАЖДУЮ монету из сумки: решение у стойки это «кладу ли я
+// наличку на счёт», а не бухгалтерия по слотам. Снять — отчеканивает монеты
+// назад и клампится ДВАЖДЫ: счётом и тем, что сумка физически ПРИМЕТ —
+// остаток `inventory_give` остаётся на счету, а не падает на пол, поэтому
+// полная сумка недовыдаёт и ни один рубль не уничтожается.
 //
-// This is what the `seed` argument to `bank_open` is FOR, and it is the one place the
-// bank is a function of the seed rather than only of the tick. The reference varies a
-// branch's capacity by floor (balance.md SS3: bank floor 6.5, Ministry 2.4, Maintenance
-// 1.25, Hell 0.45); this is that idea with the machinery this engine has. It is a pure
-// function of (seed, floor), so it never moves per tick — which is deliberate, because
-// a limit that wobbles on a timer is a limit the player farms by waiting instead of a
-// fact they can learn about a floor.
-inline constexpr std::int32_t kBankCreditJitterBp = 2000;
+// Каждый глагол возвращает то, что РЕАЛЬНО сдвинулось, а не bool: частичная
+// выдача — честный исход, и вызывающий, который не видит разницы, напечатает
+// неверное число.
 
-// Ceiling on the deposit principal, in roubles. NOT a balance rule — an overflow
-// guard, and it is here rather than as a comment because the alternative is undefined
-// behaviour in a multiply. `bank_step` computes `principal * loanBp` in int64; at this
-// ceiling and the highest authored rate (45 bp) that is 4.5e13, four orders of
-// magnitude below INT64_MAX. A deposit is accepted up to the ceiling and the remainder
-// is refused, reported as a partial — the house rule: report what LANDED.
-inline constexpr std::int64_t kBankMaxPrincipal = 1'000'000'000'000ll;
-
-// ---------------------------------------------------------------------------
-// Account state
-// ---------------------------------------------------------------------------
-
-// The player's account. POD, fixed size, pointer-free — so the save can write it field
-// by field exactly like `RunLedger` (SAVBANK, v16), and so a test can digest it
-// byte-meaningfully.
-struct BankAccount {
-    std::int64_t deposit = 0;          //  0  locked principal; NOT spendable by the vendor
-    std::int64_t loanPrincipal = 0;    //  8
-    std::int64_t loanAccrued = 0;      // 16  interest owed on top of the principal
-    std::int64_t interestEarned = 0;   // 24  lifetime, for the HUD
-    std::int64_t interestPaid = 0;     // 32  lifetime
-    std::uint64_t lastInterestTick = 0;// 40  sim tick the last period settled at
-    std::int32_t creditLimit = 0;      // 48  this branch's, after the seed jitter. 0 until
-                                       //     bank_open runs, so no branch means no loans.
-    std::uint8_t band = 0;             // 52  which BankTerms are in force
-    std::uint8_t pad_[3]{};            // 53
-};
-static_assert(sizeof(BankAccount) == 56,
-              "the save format will pin this size; grow it on purpose and bump "
-              "kSaveVersion in the same edit");
-static_assert(alignof(BankAccount) == 8);
-static_assert(std::is_trivially_copyable_v<BankAccount>);
-
-// What one `bank_step` settled. Zero on almost every tick, which is the common case.
-struct BankTick {
-    std::int32_t earned = 0;    // deposit interest credited
-    std::int32_t paid = 0;      // loan interest charged
-    std::uint32_t periods = 0;  // how many periods this call settled
-};
-
-// ---------------------------------------------------------------------------
-// API — every amount is roubles, every return is what ACTUALLY moved
-// ---------------------------------------------------------------------------
-// Amounts are `int32_t` because one operation is bounded; balances are `int64_t`
-// because `RunLedger::banked` is. Every mutator reports what landed rather than a
-// bool, following `use_best_heal`: a partial deposit is a real
-// outcome and a caller that cannot see the difference will print the wrong number.
-
-// Terms of band `band`. Total: an out-of-range index clamps to the last band rather
-// than reading past the array, because the return value is dereferenced immediately.
-const BankTerms& bank_terms(std::uint8_t band);
-
-// Open (or re-open) the branch on the floor you are standing on. Sets `band` from
-// `economy_band(floorZ)` and `creditLimit` from that band's authored limit with the
-// per-(seed, floor) jitter above. Touches nothing else — not the balances, not
-// `lastInterestTick`.
-//
-// One hash and two multiplies, and **idempotent for a fixed (floorZ, seed)**, so
-// calling it every sim tick is exactly equivalent to calling it on arrival and is the
-// recommended wiring. That is not laziness: `src/app/main.cpp` has TWO floor-travel
-// sites (the keyboard ride and the `--shot` capture ride) and its own comments record
-// what it cost the last time a per-arrival fix patched only one of them.
-//
-// Re-opening on a worse floor can leave existing debt above the new limit;
-// `bank_credit_available` clamps at 0 rather than reporting negative headroom, so the
-// player can still repay but cannot borrow more. That is the intended behaviour: you
-// took the loan at the good branch, you still owe it at the bad one.
-void bank_open(BankAccount& acct, int floorZ, std::uint32_t seed);
-
-// banked -> deposit. Refuses more than `led.banked` holds and more than
-// `kBankMaxPrincipal` leaves room for; returns what moved.
-std::int32_t bank_deposit(BankAccount& acct, RunLedger& led, std::int32_t amount,
-                          std::uint64_t tick);
-
-// deposit -> banked. Returns what moved.
-std::int32_t bank_withdraw(BankAccount& acct, RunLedger& led, std::int32_t amount,
-                           std::uint64_t tick);
-
-// Borrow against `creditLimit`. The proceeds land in `led.banked`, which is what the
-// vendor spends, so a loan is immediately usable as kit. Returns what was lent, capped
-// by the remaining credit.
-std::int32_t bank_take_loan(BankAccount& acct, RunLedger& led, std::int32_t amount,
-                            std::uint64_t tick);
-
-// Pay down the debt from `led.banked`. Accrued interest is cleared before principal —
-// the reference's order, and the one that matters, because principal is what accrues.
-// Returns what was paid.
-std::int32_t bank_repay(BankAccount& acct, RunLedger& led, std::int32_t amount,
-                        std::uint64_t tick);
-
-// One-keypress forms, so the app's wiring is one call per key rather than a UI.
-std::int32_t bank_deposit_all(BankAccount& acct, RunLedger& led, std::uint64_t tick);
-std::int32_t bank_withdraw_all(BankAccount& acct, RunLedger& led, std::uint64_t tick);
-std::int32_t bank_borrow_max(BankAccount& acct, RunLedger& led, std::uint64_t tick);
-std::int32_t bank_repay_all(BankAccount& acct, RunLedger& led, std::uint64_t tick);
-
-// Settle whatever interest periods have elapsed. Safe and O(1) to call every sim tick:
-// it returns immediately unless a full period has passed, and the loop it can enter is
-// bounded by `kBankMaxCatchupPeriods`. No allocation, no floating point.
-//
-// **This is the only function in the file that changes net worth.** Every other
-// operation is a transfer. That is the invariant `suite_economy` asserts.
-BankTick bank_step(BankAccount& acct, std::uint64_t tick);
-
-// Principal + accrued interest.
-std::int64_t bank_debt(const BankAccount& acct);
-
-// How much more can be borrowed right now, never negative.
-std::int64_t bank_credit_available(const BankAccount& acct);
-
-
-// ---------------------------------------------------------------------------
-// The teller — banked <-> coins ([conversation.md] «БАНК», инкремент C)
-// ---------------------------------------------------------------------------
-// The owner's law (2026-08-17): `banked` is an ACCOUNT, cash is the ruble ITEM
-// in the pocket, and moving between them is an interaction with a body — the
-// Duty clerk's «БАНК» option — never pad magic. These two verbs are that
-// interaction, and they are deliberately dumb: no fee, no interest, no limit
-// but physics. The term-deposit/loan machinery above stays a separate, deeper
-// desk (still unwired — check_wired's bank_step entry stands until it earns a
-// consumer).
-//
-// Deposit takes EVERY coin in the bag — the decision at the counter is "do I
-// bank my cash", not slot bookkeeping. Withdraw mints coins back and is
-// clamped twice: by the account, and by what the bag physically ACCEPTS —
-// `inventory_give`'s remainder stays in the account rather than on the floor,
-// so a full bag under-withdraws and never destroys a ruble.
-
-// All pocket rubles -> banked. Returns the amount moved.
+// Вся наличка из карманов -> banked. Возвращает сдвинутую сумму.
 std::int32_t teller_deposit_cash(Inventory& inv, RunLedger& led);
 
-// banked -> coins in the bag, up to `amount`. Returns what actually landed.
+// banked -> монеты в сумку, не больше `amount`. Возвращает то, что легло.
 std::int32_t teller_withdraw_cash(Inventory& inv, RunLedger& led,
                                   std::int32_t amount);
 

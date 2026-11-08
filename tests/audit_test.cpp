@@ -40,7 +40,6 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
-#include "game/contract.h"
 #include "game/vendor.h"
 #include "game/container.h"
 #include "game/save.h"

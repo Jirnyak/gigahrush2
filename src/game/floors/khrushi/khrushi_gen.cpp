@@ -750,6 +750,18 @@ std::uint32_t khrushi_poles(unsigned /*seed*/, int /*number*/,
     return n;
 }
 
+// ПРОЁМЫ МОДУЛЯ — НОЛЬ ДО СЛЕДУЮЩЕГО ИНКРЕМЕНТА ([khrushi.h]).
+//
+// Квартирные планы и подъездные проходы уже стоят в геометрии, но дверных
+// отверстий с двумя наличниками, между которыми вешается полотно
+// ([door.h]), модуль ещё не объявляет. Клетки подъездов план уже знает
+// (`khrushi_entrances`) — значит инкремент «подъезды + квартирные двери»
+// наполняет ТЕЛО этой функции и не трогает ни общий код, ни таблицу.
+std::uint32_t khrushi_doorways(int /*number*/, unsigned /*seed*/,
+                               std::vector<Doorway>& /*out*/) {
+    return 0;
+}
+
 void khrushi_declare_rules(World& world, int /*number*/,
                            const FloorSpec& /*spec*/, unsigned /*seed*/) {
     // The sub-material registry has to exist before either geometry writer —

@@ -646,6 +646,18 @@ void stamp_lattice_markers(MacroGrid& g, SubField<CellType>& sm) {
 
 } // namespace
 
+// ПРОЁМЫ МОДУЛЯ — НОЛЬ, И ЭТО ОТВЕТ, А НЕ МОЛЧАНИЕ ([blame.h]).
+//
+// Отверстия блейма — сырые: `carve_labyrinth` выгрызает ходы, пасти открывают
+// их прямо в бездну, и ни у одного нет двух наличников, между которыми можно
+// повесить полотно ([door.h] — дверь живёт в проёме, а не в дыре). Пробьёт
+// модуль гермошлюз на спуске в город — наполнится ТЕЛО этой функции, и больше
+// ничего во всём дереве.
+std::uint32_t blame_doorways(int /*number*/, unsigned /*seed*/,
+                             std::vector<Doorway>& /*out*/) {
+    return 0;
+}
+
 // THE MODULE'S LAWS — same split as padic ([floor_gen.h], three-step entry).
 void blame_declare_rules(World& world, int /*number*/, const FloorSpec& /*spec*/,
                          unsigned /*seed*/) {

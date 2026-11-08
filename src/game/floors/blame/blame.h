@@ -32,6 +32,9 @@
 // Pure game-layer + core: no SDL/Vulkan/ImGui, headless-testable in game_test.
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include "game/floor_spec.h" // FloorKind, FloorSpec
 #include "world/gravity.h"   // GravityRegime — the module declares its frame
 
@@ -54,11 +57,13 @@ inline constexpr int kBlameFloorNumber = 5;
 // asymmetry, and it is this module's choice ([world/gravity.h]).
 inline constexpr GravityRegime kBlameGravity = GravityRegime::NegZ;
 
-// The arrival/standing coordinate along the gravity axis. Deliberately EQUAL to
-// the padic module's ground storey: save.h pins kArrivalCoord = 3 for every
-// inter-floor ride, and the global frame helpers ([floor_gen.h]) still export
-// one module's constants. The generator guarantees standable lobbies at z = 3
-// on every lattice node (blame_gen.cpp, lobby bands).
+// The arrival/standing coordinate along the gravity axis. Равна она не
+// падику, как тут было написано, а ОБЩЕЙ координате прибытия лифта
+// ([floor_gen.h] kFloorArrivalCoord): поездка планирует её заранее, одной на
+// весь столб, и модуль, чтобы быть достижимым лифтом, обязан держать там
+// ходовую клетку. Вывод модуля: генератор гарантирует ходовые лобби на z = 3
+// у каждого узла решётки (blame_gen.cpp, lobby bands). Равенство контракту
+// утверждает floor_gen.cpp.
 inline constexpr int kBlameGroundCoord = 3;
 
 // Register the module's catalog rows (currently: the claim on number 5).
@@ -80,6 +85,15 @@ void blame_apply_rules(World& world, int number, const FloorSpec& spec,
 // contract ([floor_gen.h]). Pure function of (number, seed).
 void generate_blame_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed);
+
+// ПРОЁМЫ МОДУЛЯ (строка в kDoorwayEnumerators, [floor_gen.h] floor_doorways).
+// Их у блейма НОЛЬ, и это ответ модуля, а не отсутствие ответа: лабиринт
+// пробивает СЫРЫЕ отверстия, пасти выходят прямо в бездну, наличников под
+// полотно у них нет. Жил этот ноль веткой `if (kind == Blame)` в общем коде —
+// вместе с причиной, которая является свойством ЭТОГО модуля.
+struct Doorway;
+std::uint32_t blame_doorways(int number, unsigned seed,
+                             std::vector<Doorway>& out);
 
 // Объявить комнаты модуля (rooms-object C, S12.1): лобби решётки — 16 узлов
 // x 16 бэндов, гарантированное воздушное ядро 5x5x2, тег hermetic

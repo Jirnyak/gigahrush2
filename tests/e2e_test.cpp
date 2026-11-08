@@ -15,7 +15,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"
-#include "game/role.h"
+#include "game/patrol.h"
 #include "game/economy.h"
 #include "game/event_bus.h"
 #include "game/prop_system.h"
@@ -101,115 +101,16 @@ static NavFixture g_nav;
 // TIER 1: FEATURE COVERAGE (>=5 tests per feature F1-F15 = 75 tests)
 // ===========================================================================
 
-// --- F1: RoleId & kRoleTraits Multipliers ---
+// --- F1 и F2 СНЕСЕНЫ 2026-11-08 вместе с системой ролей ---
+// F1 была «RoleId & kRoleTraits Multipliers» (5 тестов, 23 исполнения), F2 —
+// «role_for Floor Distributions» (5 тестов, 563 исполнения). Обе проверяли
+// ТАБЛИЦУ из `role.h`: 60 захардкоженных множителей и весов в C++ при законе
+// проекта «вся политика в данных». Файл снесён решением владельца, и вместе с
+// ним — оба блока; различие тел на этаже несут ФРАКЦИИ (F5, F6 и suite_faction*)
+// и НУЖДЫ. Номера F3..F15 НЕ сдвинуты сознательно: они адреса, по которым на
+// этот файл ссылаются CMakeLists и markoaudit, а не порядковые номера.
 
-static void test_t1_f1_01_resident_baseline_traits_and_scoring() {
-    const RoleTraits& t = role_traits(RoleId::Resident);
-    CHECK(approx_eq(t.workDrive, 1.00f));
-    CHECK(approx_eq(t.patrolDrive, 1.00f));
-    CHECK(approx_eq(t.sociability, 1.00f));
-    CHECK(approx_eq(t.scavengeDrive, 0.10f));
-    CHECK(approx_eq(t.careDrive, 0.05f));
-}
-
-static void test_t1_f1_02_duty_traits_and_patrol_hq_preference() {
-    const RoleTraits& t = role_traits(RoleId::Duty);
-    CHECK(approx_eq(t.workDrive, 1.00f));
-    CHECK(approx_eq(t.patrolDrive, 1.50f));
-    CHECK(approx_eq(t.sociability, 0.60f));
-    CHECK(approx_eq(t.careDrive, 0.20f));
-}
-
-static void test_t1_f1_03_medic_traits_and_care_drive_scoring() {
-    const RoleTraits& t = role_traits(RoleId::Medic);
-    CHECK(approx_eq(t.workDrive, 1.00f));
-    CHECK(approx_eq(t.patrolDrive, 0.20f));
-    CHECK(approx_eq(t.sociability, 0.80f));
-    CHECK(approx_eq(t.careDrive, 1.00f));
-}
-
-static void test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep() {
-    const RoleTraits& t = role_traits(RoleId::Looter);
-    CHECK(approx_eq(t.workDrive, 0.20f));
-    CHECK(approx_eq(t.patrolDrive, 0.10f));
-    CHECK(approx_eq(t.sociability, 0.40f));
-    CHECK(approx_eq(t.scavengeDrive, 1.00f));
-    CHECK(approx_eq(t.careDrive, 0.00f));
-}
-
-static void test_t1_f1_05_cultist_sociability_and_smoking_rooms() {
-    const RoleTraits& t = role_traits(RoleId::Cultist);
-    CHECK(approx_eq(t.workDrive, 0.60f));
-    CHECK(approx_eq(t.patrolDrive, 0.40f));
-    CHECK(approx_eq(t.sociability, 1.20f));
-    CHECK(approx_eq(t.scavengeDrive, 0.30f));
-    CHECK(approx_eq(t.careDrive, 0.10f));
-}
-
-// --- F2: role_for Floor Distributions ---
-
-static void test_t1_f2_01_residential_distribution_prohibition_of_cultists() {
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Residential)][static_cast<std::size_t>(RoleId::Resident)] == 70);
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Residential)][static_cast<std::size_t>(RoleId::Duty)] == 5);
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Residential)][static_cast<std::size_t>(RoleId::Medic)] == 3);
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Residential)][static_cast<std::size_t>(RoleId::Looter)] == 3);
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Residential)][static_cast<std::size_t>(RoleId::Cultist)] == 0);
-
-    for (NpcId id = 0; id < 500; ++id) {
-        RoleId r = role_for(id, FloorKind::Residential);
-        CHECK(r != RoleId::Cultist);
-    }
-}
-
-static void test_t1_f2_02_derelict_cultist_looter_dominance() {
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Derelict)][static_cast<std::size_t>(RoleId::Cultist)] == 40);
-    CHECK(kRoleWeights[static_cast<std::size_t>(FloorKind::Derelict)][static_cast<std::size_t>(RoleId::Looter)] == 20);
-
-    int cultists = 0, looters = 0;
-    for (NpcId id = 0; id < 100; ++id) {
-        RoleId r = role_for(id, FloorKind::Derelict);
-        if (r == RoleId::Cultist) cultists++;
-        if (r == RoleId::Looter) looters++;
-    }
-    CHECK(cultists > 0 && looters > 0);
-}
-
-static void test_t1_f2_03_deterministic_reproducibility() {
-    for (NpcId id = 0; id < 50; ++id) {
-        RoleId r1 = role_for(id, FloorKind::Commercial);
-        RoleId r2 = role_for(id, FloorKind::Commercial);
-        CHECK(r1 == r2);
-    }
-}
-
-static void test_t1_f2_04_pool_column_persistence_and_override() {
-    NpcPool pool;
-    pool.init();
-    NpcId id = pool.spawn();
-    pool.role(id) = static_cast<std::uint8_t>(RoleId::Medic);
-    CHECK(pool.role(id) == static_cast<std::uint8_t>(RoleId::Medic));
-
-    pool.role(id) = static_cast<std::uint8_t>(RoleId::Duty);
-    CHECK(pool.role(id) == static_cast<std::uint8_t>(RoleId::Duty));
-}
-
-static void test_t1_f2_05_multi_floor_demographic_seeding() {
-    NpcPool pool;
-    pool.init();
-    seed_floor_from_spec(pool, 0, floor_spec(FloorKind::Industrial), 777u);
-    CHECK(pool.count() > 0);
-
-    bool hasDuty = false, hasMedic = false;
-    for (NpcId id = 0; id < pool.count(); ++id) {
-        RoleId r = role_for(id, FloorKind::Industrial);
-        if (r == RoleId::Duty) hasDuty = true;
-        if (r == RoleId::Medic) hasMedic = true;
-    }
-    CHECK(hasDuty);
-    CHECK(hasMedic);
-}
-
-// --- F3: Duty / Guard Patrol Routing ---
+// --- F3: Patrol Routing ---
 
 static void test_t1_f3_01_patrol_plan_component_pod_layout() {
     PatrolPlan plan{};
@@ -222,9 +123,12 @@ static void test_t1_f3_01_patrol_plan_component_pod_layout() {
     static_assert(std::is_trivially_copyable_v<PatrolPlan>);
 }
 
-static void test_t1_f3_02_duty_patrol_intent_activation() {
+// ПЕРЕИМЕНОВАН 2026-11-08: прежде `..._duty_patrol_...` и ставил роль Duty
+// (множитель 1.5 на счёт патруля). Роли снесены; утверждение осталось тем же и
+// по-прежнему бьётся — счёт патруля растёт из ФРАКЦИОННЫХ `patrolDrive`/`duty`,
+// а ролевой множитель не мог сделать положительное из нуля.
+static void test_t1_f3_02_patrol_intent_activation() {
     Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Duty);
     p.hp = 100.0f;
     p.maxHp = 100.0f;
     Needs n = needs_roll(101u);
@@ -304,59 +208,14 @@ static void test_t1_f3_05_patrol_steering_in_walking_plane() {
     CHECK(approx_eq(v.v.z, 5.0f));
 }
 
-// --- F4: Medic Healing Mechanic ---
-
-static void test_t1_f4_01_medic_constants_verification() {
-    CHECK(approx_eq(kMedicReachM, 2.0f));
-    CHECK(approx_eq(kMedicThreshold, 0.60f));
-    CHECK(approx_eq(kMedicHealPerSec, 3.0f));
-    CHECK(approx_eq(kMedicFatiguePerSec, 0.50f));
-}
-
-static void test_t1_f4_02_medic_healing_wounded_ally_rate() {
-    Needs patient = needs_roll(55u);
-    patient.hpBank = 0.0f;
-    float patientHp = 30.0f;
-    float maxHp = 100.0f;
-
-    if (patientHp / maxHp < kMedicThreshold) {
-        float dt = 2.0f; // 2 seconds of healing
-        patient.hpBank += kMedicHealPerSec * dt;
-    }
-    CHECK(approx_eq(patient.hpBank, 6.0f));
-}
-
-static void test_t1_f4_03_medic_fatigue_accumulation() {
-    Needs medicNeeds = needs_roll(66u);
-    medicNeeds.sleep = 10.0f;
-    float dt = 4.0f;
-    medicNeeds.sleep += kMedicFatiguePerSec * dt;
-    CHECK(approx_eq(medicNeeds.sleep, 12.0f));
-}
-
-static void test_t1_f4_04_medic_reach_boundary_within_2m() {
-    vec3 medicPos{10.0f, 10.0f, 0.0f};
-    vec3 patient1Pos{11.5f, 10.0f, 0.0f}; // dist 1.5m <= 2.0m
-    vec3 patient2Pos{13.0f, 10.0f, 0.0f}; // dist 3.0m > 2.0m
-
-    float d1 = length(patient1Pos - medicPos);
-    float d2 = length(patient2Pos - medicPos);
-
-    CHECK(d1 <= kMedicReachM);
-    CHECK(d2 > kMedicReachM);
-}
-
-static void test_t1_f4_05_medic_healing_stacks_with_medical_room() {
-    Needs patient = needs_roll(77u);
-    patient.hpBank = 0.0f;
-    float maxHp = 100.0f;
-
-    // Комнатная регенерация умерла (rooms-object F): остался вклад медика.
-    (void)maxHp;
-    float dt = 10.0f;
-    patient.hpBank += kMedicHealPerSec * dt;
-    CHECK(patient.hpBank >= 30.0f); // ровно вклад медика: 3 HP/с x 10 с
-}
+// --- F4 «Medic Healing Mechanic» СНЕСЕНА 2026-11-08 ---
+// Санитар был одним из пяти архетипов `role.h`; роли снесены целиком, и его
+// четыре константы (`kMedicReachM/Threshold/HealPerSec/FatiguePerSec`) уехали
+// вместе с файлом. Пять тестов, 9 исполнений. Три из пяти были к тому же
+// ВТОРОЙ РЕАЛИЗАЦИЕЙ: они складывали `hpBank += kMedicHealPerSec * dt` руками
+// и утверждали о своей же арифметике, не о `ai_step`, — то есть не могли
+// покраснеть ни на какой правке аурной петли. Поток самого банка
+// (`Needs::hpBank` -> целые HP) жив и пинится в `suite_rooms`/`needs`.
 
 // --- F5: Liquidator & Guard Defense ---
 
@@ -428,25 +287,10 @@ static void test_t1_f5_05_liquidator_fireline_samosbor_stance() {
     CHECK(scores[IntentCombat] > 0.0f || scores[IntentPatrol] > 0.0f);
 }
 
-// --- F6: Looter & Cultist Routines ---
-
-static void test_t1_f6_01_looter_scavenge_drive_and_storage_rooms() {
-    const RoleTraits& lt = role_traits(RoleId::Looter);
-    CHECK(approx_eq(lt.scavengeDrive, 1.00f));
-    CHECK(approx_eq(lt.workDrive, 0.20f));
-    CHECK(approx_eq(lt.careDrive, 0.00f));
-}
-
-static void test_t1_f6_02_looter_homerooms_zero_anywhere_sleep() {
-    // homeRooms умер (rooms-object F) — якоря раздаст agent-goals.
-    const RoleTraits& lt = role_traits(RoleId::Looter);
-    CHECK(approx_eq(lt.scavengeDrive, 1.00f));
-}
-
-static void test_t1_f6_03_cultist_social_drive_and_smoking_rooms() {
-    const RoleTraits& ct = role_traits(RoleId::Cultist);
-    CHECK(approx_eq(ct.sociability, 1.20f));
-}
+// --- F6: Cultist Faction Routines ---
+// Три ролевых теста блока (t1_f6_01..03, 5 исполнений) снесены 2026-11-08: они
+// читали строки `kRoleTraits` напрямую. Выжившие держатся на ФРАКЦИИ
+// `Faction::Cultists` и на памяти агента — на предметах, которые остались.
 
 static void test_t1_f6_04_cultist_monster_non_aggression() {
     NpcPool pool;
@@ -636,83 +480,25 @@ static void test_t1_f10_05_multi_period_coordinate_invariance() {
     CHECK(approx_eq(d0, d1));
 }
 
-// --- F11: bank_step Loop Integration ---
-
-static void test_t1_f11_01_bank_open_and_terms_assignment() {
-    BankAccount acct{};
-    bank_open(acct, 0, 12345u);
-    CHECK(acct.band == 0);
-    CHECK(acct.creditLimit > 0);
-}
-
-static void test_t1_f11_02_bank_deposit_and_withdraw_cycle() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 101u);
-    led.banked = 1000;
-
-    std::int32_t dep = bank_deposit(acct, led, 400, 10u);
-    CHECK(dep == 400);
-    CHECK(led.banked == 600);
-    CHECK(acct.deposit == 400);
-
-    std::int32_t with = bank_withdraw(acct, led, 150, 20u);
-    CHECK(with == 150);
-    CHECK(led.banked == 750);
-    CHECK(acct.deposit == 250);
-}
-
-static void test_t1_f11_03_bank_loan_and_repay_lifecycle() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 101u);
-
-    std::int32_t loan = bank_take_loan(acct, led, 300, 10u);
-    CHECK(loan == 300);
-    CHECK(led.banked == 300);
-    CHECK(acct.loanPrincipal == 300);
-
-    std::int32_t rep = bank_repay(acct, led, 300, 20u);
-    CHECK(rep == 300);
-    CHECK(acct.loanPrincipal == 0);
-}
-
-static void test_t1_f11_04_bank_step_periodic_settlement() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 101u);
-    led.banked = 10000;
-    bank_deposit(acct, led, 10000, 0u);
-
-    BankTick bt = bank_step(acct, 7500u);
-    CHECK(bt.periods == 1);
-    CHECK(bt.earned > 0);
-    CHECK(acct.lastInterestTick == 7500u);
-}
-
-// Чистая сумма счёта из живых примитивов [economy.h]. Публичный `net_worth` снесён
-// 2026-09-30 (ноль вызывающих в `src/`); закон сохранения, который он выражал, —
-// свойство живого банка, поэтому выписан здесь.
-static std::int64_t net_worth(const RunLedger& led, const BankAccount& acct) {
-    return led.banked + acct.deposit - bank_debt(acct);
-}
-
-static void test_t1_f11_05_net_worth_conservation() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 101u);
-    led.banked = 5000;
-
-    std::int64_t nw0 = net_worth(led, acct);
-    bank_deposit(acct, led, 2000, 1u);
-    CHECK(net_worth(led, acct) == nw0);
-
-    bank_take_loan(acct, led, 300, 2u);
-    CHECK(net_worth(led, acct) == nw0);
-
-    bank_repay(acct, led, 300, 3u);
-    CHECK(net_worth(led, acct) == nw0);
-}
+// --- F11: БЛОК БАНКА СНЕСЁН ЦЕЛИКОМ (2026-11-08) ---
+//
+// Здесь стояли десять тел (t1_f11_01..05 и t2_f11_01..05) и приватный хелпер
+// `net_worth`: открытие счёта по банде, цикл вклад/снятие, жизненный цикл
+// кредита, периодическое начисление, СОХРАНЕНИЕ ЧИСТОЙ СУММЫ через все
+// операции, нули и отрицательные суммы, потолок принципала, лимит кредита,
+// кап догона на 24 периода и асимметричное округление процента.
+//
+// Снесены вместе с системой (пад-банк, решение владельца «легаси, ядро должно
+// быть чистым»), а не оставлены красными: пин с ненулевым числом падений в
+// этом проекте запрещён, а тест системы, которой нет, — не тест.
+//
+// ДВА СВОЙСТВА, которые эти тела проверяли, стоит унести к следующей денежной
+// системе, потому что оба ловили настоящие дефекты: (1) ИНВАРИАНТ СУММЫ — любая
+// операция обязана сохранять `banked + вклад - долг`, и это ловит перенос,
+// который теряет или печатает рубль, чего не ловит ни одна проверка поля; (2)
+// НОЛЬ И ОТРИЦАТЕЛЬНОЕ как законные входы — глагол обязан отказывать числом 0,
+// а не клампить молча. Живая касса (`teller_deposit_cash`/`teller_withdraw_cash`)
+// покрыта в suite_economy.
 
 // --- F12: шина событий ---
 
@@ -764,22 +550,9 @@ static void test_t1_f13_05_collect_interactable_positions() {
 
 // --- F14: check_wired.cmake Static Gate & Entry Points Contract ---
 
-static void test_t1_f14_01_bank_step_contract_and_signature() {
-    BankAccount acct{};
-    BankTick bt = bank_step(acct, 0u);
-    CHECK(bt.periods == 0);
-    static_assert(std::is_same_v<decltype(bank_step(acct, 0u)), BankTick>);
-}
-
-
-static void test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc() {
-    BankAccount acct{};
-    bank_open(acct, 0, 1u);
-    BankTick b1 = bank_step(acct, 100u);
-    BankTick b2 = bank_step(acct, 100u);
-    CHECK(b1.periods == 0 && b2.periods == 0);
-}
-
+// t1_f14_01 (контракт и подпись `bank_step`) и t1_f14_05 (идемпотентность
+// точки входа, нулевая аллокация) СНЕСЕНЫ 2026-11-08 вместе с банком. Оба
+// проверяли САМ СИМВОЛ — критерий сноса [purge-2026-09-30].
 // --- F15: Samosbor & Multi-Floor AI Integration ---
 
 static void test_t1_f15_01_samosbor_four_phase_cycle() {
@@ -856,71 +629,18 @@ static void test_t1_f15_05_samosbor_floor_transit_preserves_cycle_count() {
 // TIER 2: BOUNDARY & CORNER CASES (>=5 tests per feature F1-F15 = 75 tests)
 // ===========================================================================
 
-// --- F1 Boundaries ---
-
-static void test_t2_f1_01_invalid_role_enum_fallback() {
-    const RoleTraits& fallback = role_traits(static_cast<RoleId>(99));
-    const RoleTraits& res = role_traits(RoleId::Resident);
-    CHECK(std::memcmp(&fallback, &res, sizeof(RoleTraits)) == 0);
-}
-
-static void test_t2_f1_02_zero_needs_with_extreme_trait_multipliers() {
-    Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Duty);
-    Needs n{};
-    float scores[kIntentCount];
-    score_intents(p, n, scores);
-    for (int i = 0; i < kIntentCount; ++i) {
-        CHECK(!std::isnan(scores[i]));
-        CHECK(scores[i] >= 0.0f);
-    }
-}
-
-static void test_t2_f1_03_max_needs_with_zero_drive_traits() {
-    Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Looter); // careDrive = 0.0f
-    Needs n{};
-    n.hpBank = 0.0f;
-    float scores[kIntentCount];
-    score_intents(p, n, scores);
-    CHECK(scores[IntentHeal] <= 1.0f);
-}
-
-static void test_t2_f1_04_role_trait_matrix_constness_and_determinism() {
-    const RoleTraits& t1 = role_traits(RoleId::Medic);
-    const RoleTraits& t2 = role_traits(RoleId::Medic);
-    CHECK(&t1 == &t2);
-}
-
-static void test_t2_f1_05_role_transition_mid_simulation() {
-    NpcPool pool;
-    pool.init();
-    NpcId id = pool.spawn();
-    pool.role(id) = static_cast<std::uint8_t>(RoleId::Resident);
-    Perception p{};
-    p.role = pool.role(id);
-    Needs n = needs_roll(55u);
-    float s1[kIntentCount], s2[kIntentCount];
-
-    score_intents(p, n, s1);
-    pool.role(id) = static_cast<std::uint8_t>(RoleId::Duty);
-    p.role = pool.role(id);
-    score_intents(p, n, s2);
-    CHECK(s2[IntentPatrol] > s1[IntentPatrol]);
-}
+// --- F1 Boundaries СНЕСЕНЫ 2026-11-08 (5 тестов, 30 исполнений) ---
+// Все пять были границами ролевой таблицы: битый enum, матрица как constexpr,
+// переход роли в прогоне. Одна проверка стоит отдельного надгробия —
+// `test_t2_f1_02` гоняла «ни один счёт не NaN и не отрицателен» по всем 13
+// интентам (26 исполнений) и была единственным местом в e2e, где это
+// утверждалось. Предмет у неё, однако, был ролевой (`p.role = Duty`), а
+// нан-безопасность счёта пинится в `suite_utilai.inl` на живом `ai_step`.
 
 // --- F2 Boundaries ---
-
-static void test_t2_f2_01_invalid_floorkind_fallback() {
-    RoleId r = role_for(10u, static_cast<FloorKind>(99));
-    CHECK(r == RoleId::Resident || static_cast<std::size_t>(r) < kRoleCount);
-}
-
-static void test_t2_f2_02_extreme_npcid_hash_safety() {
-    RoleId r = role_for(kNpcPoolSize - 1, FloorKind::Residential);
-    CHECK(static_cast<std::size_t>(r) < kRoleCount);
-    CHECK(r != RoleId::Cultist);
-}
+// Границы `role_for` (t2_f2_01/02 — битый FloorKind, предельный NpcId) и
+// `t2_f2_04` (нулевая инициализация колонки `role_`) снесены 2026-11-08
+// вместе с функцией и колонкой: 4 исполнения.
 
 static void test_t2_f2_03_single_npc_monoculture_spec() {
     NpcPool pool;
@@ -931,13 +651,6 @@ static void test_t2_f2_03_single_npc_monoculture_spec() {
     for (NpcId id = 0; id < 50; ++id) {
         CHECK(pool.faction(id) == 0);
     }
-}
-
-static void test_t2_f2_04_role_column_zero_initialization() {
-    NpcPool pool;
-    pool.init();
-    NpcId id = pool.spawn();
-    CHECK(pool.role(id) == 0);
 }
 
 static void test_t2_f2_05_floor_boundary_numbers() {
@@ -1009,28 +722,10 @@ static void test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket() {
 }
 
 // --- F4 Boundaries ---
-
-static void test_t2_f4_01_medic_ignores_dead_corpses() {
-    Needs patientNeeds = needs_roll(100u);
-    patientNeeds.hpBank = 0.0f;
-    float deadHp = 0.0f;
-
-    if (deadHp > 0.0f && deadHp / 100.0f < kMedicThreshold) {
-        patientNeeds.hpBank += kMedicHealPerSec;
-    }
-    CHECK(approx_eq(patientNeeds.hpBank, 0.0f));
-}
-
-static void test_t2_f4_02_medic_ignores_healthy_allies() {
-    Needs patientNeeds = needs_roll(100u);
-    patientNeeds.hpBank = 0.0f;
-    float fullHp = 100.0f;
-
-    if (fullHp / 100.0f < kMedicThreshold) {
-        patientNeeds.hpBank += kMedicHealPerSec;
-    }
-    CHECK(approx_eq(patientNeeds.hpBank, 0.0f));
-}
+// Четыре из пяти (t2_f4_01/02/04/05, 4 исполнения) снесены 2026-11-08 вместе с
+// медицинскими константами: все четыре были `if`-ом теста о своей же
+// арифметике. Выжил t2_f4_03 — он про ВРАЖДЕБНОСТЬ ФРАКЦИЙ и ни одного
+// ролевого символа не называл; имя оставлено как адрес в нумерации F4.
 
 static void test_t2_f4_03_medic_refuses_hostile_enemies() {
     FactionRelations rel{};
@@ -1038,20 +733,6 @@ static void test_t2_f4_03_medic_refuses_hostile_enemies() {
     Faction fMedic = Faction::Citizens;
     Faction fEnemy = Faction::Wild;
     CHECK(rel.hostile(static_cast<std::uint8_t>(fMedic), static_cast<std::uint8_t>(fEnemy)));
-}
-
-static void test_t2_f4_04_medic_at_maximum_fatigue() {
-    Needs n{};
-    n.sleep = 100.0f;
-    n.sleep += kMedicFatiguePerSec * 1.0f;
-    CHECK(n.sleep >= 100.0f);
-}
-
-static void test_t2_f4_05_medic_patient_with_zero_max_hp() {
-    float maxHp = 0.0f;
-    float currentHp = 0.0f;
-    bool shouldHeal = (maxHp > 0.0f) && (currentHp / maxHp < kMedicThreshold);
-    CHECK(!shouldHeal);
 }
 
 // --- F5 Boundaries ---
@@ -1120,9 +801,9 @@ static void test_t2_f5_05_liquidator_corrupted_faction_id_fallback() {
 
 // --- F6 Boundaries ---
 
-static void test_t2_f6_01_looter_in_floor_with_no_storage_rooms() {
-    const RoleTraits& lt = role_traits(RoleId::Looter);
-}
+// t2_f6_01 снесён 2026-11-08: он брал `role_traits(RoleId::Looter)` в
+// неиспользуемую ссылку и не содержал НИ ОДНОГО CHECK — то есть и до сноса
+// ролей ничего не утверждал (0 исполнений в пине).
 
 static void test_t2_f6_02_cultist_mob_aggression_with_invalid_npc() {
     NpcPool pool;
@@ -1130,9 +811,10 @@ static void test_t2_f6_02_cultist_mob_aggression_with_invalid_npc() {
     CHECK(mob_hostile_to(pool, kInvalidNpc));
 }
 
-static void test_t2_f6_03_looter_sleep_intent_with_empty_world() {
+// ПЕРЕИМЕНОВАН 2026-11-08 (роли снесены): сон никогда не был ролевым термом —
+// ни один множитель `kRoleTraits` его не касался, — так что утверждение то же.
+static void test_t2_f6_03_sleep_intent_with_empty_world() {
     Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Looter);
     Needs n{};
     n.sleep = 95.0f;
     float scores[kIntentCount];
@@ -1140,9 +822,10 @@ static void test_t2_f6_03_looter_sleep_intent_with_empty_world() {
     CHECK(scores[IntentSleep] > 0.0f);
 }
 
-static void test_t2_f6_04_cultist_rally_with_zero_allies() {
+// ПЕРЕИМЕНОВАН 2026-11-08 (роли снесены). Утверждение `IntentSocial >= 0`
+// держится на клампе счёта, а не на множителе `sociability`.
+static void test_t2_f6_04_rally_with_zero_allies() {
     Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Cultist);
     p.allyPower = 0.0f;
     Needs n = needs_roll(22u);
     float scores[kIntentCount];
@@ -1290,66 +973,8 @@ static void test_t2_f10_05_floating_point_epsilon_near_seams() {
     CHECK(approx_eq(delta, 2e-6f, 1e-5f));
 }
 
-// --- F11 Boundaries ---
-
-static void test_t2_f11_01_zero_and_negative_operation_amounts() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 10u);
-    led.banked = 500;
-
-    CHECK(bank_deposit(acct, led, 0, 1u) == 0);
-    CHECK(bank_deposit(acct, led, -100, 2u) == 0);
-    CHECK(bank_withdraw(acct, led, 0, 3u) == 0);
-    CHECK(bank_withdraw(acct, led, -50, 4u) == 0);
-    CHECK(bank_take_loan(acct, led, 0, 5u) == 0);
-    CHECK(bank_take_loan(acct, led, -200, 6u) == 0);
-    CHECK(bank_repay(acct, led, 0, 7u) == 0);
-    CHECK(bank_repay(acct, led, -100, 8u) == 0);
-    CHECK(led.banked == 500);
-}
-
-static void test_t2_f11_02_bank_max_principal_ceiling() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 10u);
-    led.banked = 2000000000;
-
-    std::int32_t dep = bank_deposit(acct, led, 1000000000, 1u);
-    CHECK(dep == 1000000000);
-    CHECK(acct.deposit == 1000000000);
-}
-
-static void test_t2_f11_03_loan_exceeding_credit_limit() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 10u);
-    std::int32_t borrowed = bank_take_loan(acct, led, 999999, 1u);
-    CHECK(borrowed == acct.creditLimit);
-    CHECK(acct.loanPrincipal == acct.creditLimit);
-    CHECK(bank_credit_available(acct) == 0);
-}
-
-static void test_t2_f11_04_bank_catchup_clamped_at_24_periods() {
-    BankAccount acct{};
-    bank_open(acct, 0, 10u);
-    acct.deposit = 10000;
-    acct.lastInterestTick = 0;
-
-    BankTick bt = bank_step(acct, 750000u);
-    CHECK(bt.periods == 24);
-}
-
-static void test_t2_f11_05_fractional_interest_asymmetric_rounding() {
-    BankAccount acct{};
-    bank_open(acct, 0, 10u);
-    acct.deposit = 100;
-    acct.loanPrincipal = 10;
-
-    BankTick bt = bank_step(acct, 7500u);
-    CHECK(bt.earned == 0);
-    CHECK(bt.paid == 1);
-}
+// --- F11 Boundaries: СНЕСЕНЫ вместе с банком (2026-11-08) ---
+// Пять тел (t2_f11_01..05) перечислены в надгробии блока F11 выше.
 
 // --- F12 Boundaries ---
 
@@ -1374,38 +999,28 @@ static void test_t2_f12_03_bus_ring_overflow_drop_counter() {
 
 // --- F14 Boundaries ---
 
-static void test_t2_f14_01_entry_points_null_input_safety() {
-    BankAccount acct{};
-    BankTick bt = bank_step(acct, 0u);
-    CHECK(bt.periods == 0);
-}
-
-static void test_t2_f14_02_entry_points_extreme_ticks() {
-    BankAccount acct{};
-    bank_open(acct, 0, 1u);
-    acct.lastInterestTick = UINT64_MAX - 1000u;
-    BankTick bt = bank_step(acct, UINT64_MAX);
-    CHECK(bt.periods == 0);
-}
-
+// t2_f14_01 (безопасность нулевого входа) и t2_f14_02 (экстремальные тики)
+// СНЕСЕНЫ 2026-11-08 вместе с банком — оба звали `bank_step`.
 static void test_t2_f14_03_entry_points_zero_delta_time() {
     Registry reg;
     game::ZoneNav zn{};
     ai_patrol_step(reg, zn, 0u, 0.0f);
 }
 
-static void test_t2_f14_04_entry_points_reentrant_concurrency_safety() {
-    const RoleTraits& r1 = role_traits(RoleId::Duty);
-    const RoleTraits& r2 = role_traits(RoleId::Medic);
-    CHECK(&r1 != &r2);
-}
+// t2_f14_04 снесён 2026-11-08 вместе с ролями: он утверждал, что две разные
+// строки `kRoleTraits` лежат по разным адресам, то есть арифметику индекса
+// массива компилятором (1 исполнение).
 
 static void test_t2_f14_05_static_gate_regex_compliance() {
     // `route_step` ушёл из списка вместе с символом (§88/F.2 шаг 3); его место
     // занял `zone_walk_dir` — дверь «куда шагнуть» у единственного нава ходьбы.
     // interaction_step/prop_interact_step ушли так же — вместе с символами
     // (снос 2026-11-07, инкремент B лифт-лимба).
-    const char* names[] = {"bank_step", "samosbor_step", "wander_step"};
+    // `bank_step` ушёл из списка вместе с символом (снос банка 2026-11-08) —
+    // тем же порядком, что `route_step` и `interaction_step` до него: имя
+    // покидает гейт В ТОЙ ЖЕ правке, что и сам символ, иначе гейт утверждает
+    // соглашение об именах для того, чего нет.
+    const char* names[] = {"samosbor_step", "wander_step"};
     for (const char* name : names) {
         CHECK(std::strstr(name, "_step") != nullptr || std::strstr(name, "_tick") != nullptr);
     }
@@ -1459,23 +1074,10 @@ static void test_t2_f15_05_samosbor_zero_dt_step() {
 // TIER 3: CROSS-FEATURE COMBINATIONS (15 Pairwise Interactions)
 // ===========================================================================
 
-static void test_t3_01_medic_healing_and_hpbank_during_samosbor() {
-    Needs patient = needs_roll(123u);
-    patient.hpBank = 0.0f;
-    float hp = 30.0f;
-    float maxHp = 100.0f;
-
-    SamosborState samosbor{};
-    samosbor.phase = static_cast<std::uint8_t>(SamosborPhase::Active);
-
-    if (hp / maxHp < kMedicThreshold) {
-        patient.hpBank += kMedicHealPerSec * 2.0f;
-    }
-    CHECK(approx_eq(patient.hpBank, 6.0f));
-
-    // Комнатная добавка умерла (rooms-object F); вклад медика уже проверен.
-    CHECK(patient.hpBank >= 6.0f);
-}
+// t3_01 снесён 2026-11-08 вместе с ролями (2 исполнения). Сценарное имя
+// обещало «медик лечит ВО ВРЕМЯ самосбора», а тело заводило `SamosborState`,
+// НИ РАЗУ его не читало и складывало `hpBank += kMedicHealPerSec * 2` руками:
+// тест о своей же арифметике, к самосбору отношения не имевший.
 
 static void test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping() {
     // ЗАВОРОТ ТОРА БОЛЬШЕ НЕ СВОЙСТВО РЕШЁТКИ: прежде тест вызывал
@@ -1501,20 +1103,7 @@ static void test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping() {
     CHECK(vel.v.y == 7.0f);      // и скорость чужого владельца не тронута
 }
 
-static void test_t3_03_bank_debt_and_interest_across_floor_transit() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 555u);
-    bank_take_loan(acct, led, 400, 0u);
-
-    std::int64_t initialDebt = bank_debt(acct);
-    CHECK(initialDebt == 400);
-
-    bank_step(acct, 7500u);
-    CHECK(bank_debt(acct) >= initialDebt);
-    CHECK(net_worth(led, acct) <= 0);   // 400 borrowed, 400 owed + accrued interest
-}
-
+// t3_03 (долг и процент через переход этажа) СНЕСЁН 2026-11-08 вместе с банком.
 static void test_t3_04_prop_interaction_during_ai_navigation_single_writer() {
     Registry reg;
     EventBus bus;
@@ -1555,14 +1144,21 @@ static void test_t3_05_vector_gravity_with_duty_lattice_patrol() {
 }
 
 static void test_t3_06_economy_events_reach_the_bus() {
-    BankAccount acct{};
+    // ПОДОПЫТНЫЙ ЗДЕСЬ — ШИНА, а не деньги: банк был декорацией, и когда его
+    // снесли (2026-11-08), тест не потерял ни одного утверждения. Декорация
+    // заменена на ЖИВОЙ денежный глагол ([economy.h] касса), чтобы сценарий
+    // по-прежнему был экономическим, а не пустой публикацией.
+    NpcPool pool;
+    pool.init();
+    const NpcId who = pool.spawn();
     RunLedger led{};
     EventBus bus;
     bus.init();
 
-    bank_open(acct, 0, 1u);
-    led.banked = 1000;
-    bank_deposit(acct, led, 500, 100u);
+    Inventory& inv = pool.inventory(who);
+    CHECK(inventory_give(inv, kItemRuble, 500) == 0);
+    CHECK(teller_deposit_cash(inv, led) == 500);
+    CHECK(led.banked == 500);
     bus.publish(EventType::ItemTransferred, 500u, 0u, 0u, 100u);
 
     // Раньше читалось лентой; лента снесена 2026-09-30, шина — нет.
@@ -1608,13 +1204,14 @@ static void test_t3_08_liquidator_defense_vs_civilian_panic_diffusion() {
     CHECK(liqScores[IntentCombat] >= civScores[IntentCombat]);
 }
 
-static void test_t3_09_looter_scavenging_via_memory_during_samosbor_aftermath() {
+// ПЕРЕИМЕНОВАН 2026-11-08 (роли снесены): утверждение — что ПАМЯТЬ агента
+// поднимает местный счёт еды, и `apply_recall` ролей никогда не читал.
+static void test_t3_09_scavenging_via_memory_during_samosbor_aftermath() {
     AiMemory mem;
     NpcId looterId = 88u;
     ai_remember_cell(mem, looterId, MemFood, 20, 20, 20, 0.95f, 100.0);
 
     Perception p{};
-    p.role = static_cast<std::uint8_t>(RoleId::Looter);
     p.samosborActive = false;
     MemoryRecall r = ai_recall(mem, looterId, 20, 20, 20, 150.0);
     apply_recall(r, static_cast<std::uint16_t>(Faction::Citizens), p);
@@ -1635,15 +1232,15 @@ static void test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns() {
     CHECK(mob_hostile_to(pool, citizenId));
 }
 
-static void test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms() {
+// Был `..._role_distribution_seeding_with_floor_spec_and_bank_terms`, и оба
+// предмета из имени снесены 2026-11-08: разбивка по ролям и условия банка.
+// Утверждение, которое выжило, — ПОСЕВ ПО АНКЕТЕ ЭТАЖА заселяет пул; оно
+// единственное и здесь, а имя приведено к нему.
+static void test_t3_11_floor_spec_seeding_populates_the_pool() {
     NpcPool pool;
     pool.init();
     seed_floor_from_spec(pool, 0, floor_spec(FloorKind::Commercial), 333u);
-
-    BankAccount acct{};
-    bank_open(acct, 0, 333u);
     CHECK(pool.count() > 0);
-    CHECK(acct.creditLimit > 0);
 }
 
 static void test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane() {
@@ -1712,7 +1309,10 @@ static void test_t3_15_single_writer_token_arbitration_with_patrol_and_wander() 
 // TIER 4: REAL-WORLD WORKLOAD SCENARIOS (5 Integrated Scenarios)
 // ===========================================================================
 
-static void test_t4_01_multi_floor_alife_demographics_and_roles_simulation() {
+// ПЕРЕИМЕНОВАН 2026-11-08: «and_roles» ушло из имени вместе с посевом роли
+// (`p.role = role_for(id, kinds[k])`). Марафон остался тем, чем был настоящим:
+// заселение пяти видов этажей и ОБЯЗАТЕЛЬНЫЙ выбор интента на каждом теле.
+static void test_t4_01_multi_floor_alife_demographics_simulation() {
     FloorKind kinds[5] = {FloorKind::Residential, FloorKind::Commercial, FloorKind::Industrial, FloorKind::Derelict, FloorKind::Padic};
 
     for (int k = 0; k < 5; ++k) {
@@ -1724,7 +1324,6 @@ static void test_t4_01_multi_floor_alife_demographics_and_roles_simulation() {
         for (NpcId id = 0; id < std::min(pool.count(), 25u); ++id) {
             Needs n = needs_roll(id);
             Perception p{};
-            p.role = static_cast<std::uint8_t>(role_for(id, kinds[k]));
             p.hp = 100.0f;
             p.maxHp = 100.0f;
             float scores[kIntentCount];
@@ -1735,21 +1334,9 @@ static void test_t4_01_multi_floor_alife_demographics_and_roles_simulation() {
     }
 }
 
-static void test_t4_02_long_duration_economy_compound_interest_lifecycle() {
-    BankAccount acct{};
-    RunLedger led{};
-    bank_open(acct, 0, 777u);
-    led.banked = 10000;
-    bank_deposit(acct, led, 5000, 0u);
-    bank_take_loan(acct, led, 400, 0u);
-
-    for (uint64_t t = 7500; t <= 75000; t += 7500) {
-        BankTick bt = bank_step(acct, t);
-        CHECK(bt.periods == 1);
-    }
-    CHECK(acct.deposit > 5000);
-    CHECK(acct.loanAccrued > 0);
-}
+// t4_02 (сложный процент на длинной дистанции: десять периодов подряд, вклад
+// растёт, долг накапливается) СНЕСЁН 2026-11-08. Подопытным был сам процент,
+// а не долгий прогон, — заменять тут нечего.
 
 static void test_t4_03_long_duration_specialist_patrol_and_errand_marathon() {
     g_nav.init();
@@ -1798,8 +1385,6 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
     pool.init();
     EventBus bus;
     bus.init();
-    BankAccount acct{};
-    bank_open(acct, 0, 123u);
 
     NpcId pid = pool.spawn();
     pool.hp(pid) = 100;
@@ -1814,12 +1399,11 @@ static void test_t4_05_headless_integrated_engine_game_loop() {
 
     for (uint64_t t = 0; t < 200; ++t) {
         if (t % 50 == 0) {
-            // interaction_step снесён 2026-11-07 — сценарий гоняет шину и
-            // банк, терминал остаётся свидетелем реестра.
+            // interaction_step снесён 2026-11-07, банк — 2026-11-08; сценарий
+            // гоняет ШИНУ двести тиков, терминал остаётся свидетелем реестра.
             bus.publish(EventType::ItemTransferred, 1u, 0u, 0u, t);
         }
         bus.clear();
-        bank_step(acct, t);
     }
     CHECK(reg.valid(player));
     CHECK(reg.valid(term));
@@ -1836,35 +1420,13 @@ int main() {
     // =======================================================================
     // Tier 1: Feature Coverage (75 tests)
     // =======================================================================
-    // F1
-    std::fprintf(stderr, "[e2e] test_t1_f1_01_resident_baseline_traits_and_scoring\n");
-    test_t1_f1_01_resident_baseline_traits_and_scoring();
-    std::fprintf(stderr, "[e2e] test_t1_f1_02_duty_traits_and_patrol_hq_preference\n");
-    test_t1_f1_02_duty_traits_and_patrol_hq_preference();
-    std::fprintf(stderr, "[e2e] test_t1_f1_03_medic_traits_and_care_drive_scoring\n");
-    test_t1_f1_03_medic_traits_and_care_drive_scoring();
-    std::fprintf(stderr, "[e2e] test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep\n");
-    test_t1_f1_04_looter_traits_scavenge_and_anywhere_sleep();
-    std::fprintf(stderr, "[e2e] test_t1_f1_05_cultist_sociability_and_smoking_rooms\n");
-    test_t1_f1_05_cultist_sociability_and_smoking_rooms();
-
-    // F2
-    std::fprintf(stderr, "[e2e] test_t1_f2_01_residential_distribution_prohibition_of_cultists\n");
-    test_t1_f2_01_residential_distribution_prohibition_of_cultists();
-    std::fprintf(stderr, "[e2e] test_t1_f2_02_derelict_cultist_looter_dominance\n");
-    test_t1_f2_02_derelict_cultist_looter_dominance();
-    std::fprintf(stderr, "[e2e] test_t1_f2_03_deterministic_reproducibility\n");
-    test_t1_f2_03_deterministic_reproducibility();
-    std::fprintf(stderr, "[e2e] test_t1_f2_04_pool_column_persistence_and_override\n");
-    test_t1_f2_04_pool_column_persistence_and_override();
-    std::fprintf(stderr, "[e2e] test_t1_f2_05_multi_floor_demographic_seeding\n");
-    test_t1_f2_05_multi_floor_demographic_seeding();
+    // F1 и F2 — ролевые, снесены 2026-11-08 вместе с `role.h` (10 тестов).
 
     // F3
     std::fprintf(stderr, "[e2e] test_t1_f3_01_patrol_plan_component_pod_layout\n");
     test_t1_f3_01_patrol_plan_component_pod_layout();
-    std::fprintf(stderr, "[e2e] test_t1_f3_02_duty_patrol_intent_activation\n");
-    test_t1_f3_02_duty_patrol_intent_activation();
+    std::fprintf(stderr, "[e2e] test_t1_f3_02_patrol_intent_activation\n");
+    test_t1_f3_02_patrol_intent_activation();
     std::fprintf(stderr, "[e2e] test_t1_f3_03_patrol_step_lazy_attachment\n");
     test_t1_f3_03_patrol_step_lazy_attachment();
     std::fprintf(stderr, "[e2e] test_t1_f3_04_patrol_leg_progression_and_hop_increment\n");
@@ -1872,17 +1434,7 @@ int main() {
     std::fprintf(stderr, "[e2e] test_t1_f3_05_patrol_steering_in_walking_plane\n");
     test_t1_f3_05_patrol_steering_in_walking_plane();
 
-    // F4
-    std::fprintf(stderr, "[e2e] test_t1_f4_01_medic_constants_verification\n");
-    test_t1_f4_01_medic_constants_verification();
-    std::fprintf(stderr, "[e2e] test_t1_f4_02_medic_healing_wounded_ally_rate\n");
-    test_t1_f4_02_medic_healing_wounded_ally_rate();
-    std::fprintf(stderr, "[e2e] test_t1_f4_03_medic_fatigue_accumulation\n");
-    test_t1_f4_03_medic_fatigue_accumulation();
-    std::fprintf(stderr, "[e2e] test_t1_f4_04_medic_reach_boundary_within_2m\n");
-    test_t1_f4_04_medic_reach_boundary_within_2m();
-    std::fprintf(stderr, "[e2e] test_t1_f4_05_medic_healing_stacks_with_medical_room\n");
-    test_t1_f4_05_medic_healing_stacks_with_medical_room();
+    // F4 — медик был ролью, блок снесён 2026-11-08 (5 тестов).
 
     // F5
     std::fprintf(stderr, "[e2e] test_t1_f5_01_liquidator_faction_traits\n");
@@ -1897,12 +1449,7 @@ int main() {
     test_t1_f5_05_liquidator_fireline_samosbor_stance();
 
     // F6
-    std::fprintf(stderr, "[e2e] test_t1_f6_01_looter_scavenge_drive_and_storage_rooms\n");
-    test_t1_f6_01_looter_scavenge_drive_and_storage_rooms();
-    std::fprintf(stderr, "[e2e] test_t1_f6_02_looter_homerooms_zero_anywhere_sleep\n");
-    test_t1_f6_02_looter_homerooms_zero_anywhere_sleep();
-    std::fprintf(stderr, "[e2e] test_t1_f6_03_cultist_social_drive_and_smoking_rooms\n");
-    test_t1_f6_03_cultist_social_drive_and_smoking_rooms();
+    // t1_f6_01..03 — ролевые строки, снесены 2026-11-08.
     std::fprintf(stderr, "[e2e] test_t1_f6_04_cultist_monster_non_aggression\n");
     test_t1_f6_04_cultist_monster_non_aggression();
     std::fprintf(stderr, "[e2e] test_t1_f6_05_looter_memory_recall_scavenge_affordance\n");
@@ -1949,16 +1496,6 @@ int main() {
     test_t1_f10_05_multi_period_coordinate_invariance();
 
     // F11
-    std::fprintf(stderr, "[e2e] test_t1_f11_01_bank_open_and_terms_assignment\n");
-    test_t1_f11_01_bank_open_and_terms_assignment();
-    std::fprintf(stderr, "[e2e] test_t1_f11_02_bank_deposit_and_withdraw_cycle\n");
-    test_t1_f11_02_bank_deposit_and_withdraw_cycle();
-    std::fprintf(stderr, "[e2e] test_t1_f11_03_bank_loan_and_repay_lifecycle\n");
-    test_t1_f11_03_bank_loan_and_repay_lifecycle();
-    std::fprintf(stderr, "[e2e] test_t1_f11_04_bank_step_periodic_settlement\n");
-    test_t1_f11_04_bank_step_periodic_settlement();
-    std::fprintf(stderr, "[e2e] test_t1_f11_05_net_worth_conservation\n");
-    test_t1_f11_05_net_worth_conservation();
 
     // F12
     std::fprintf(stderr, "[e2e] test_t1_f12_01_event_bus_publish_and_size\n");
@@ -1971,10 +1508,6 @@ int main() {
     test_t1_f13_05_collect_interactable_positions();
 
     // F14
-    std::fprintf(stderr, "[e2e] test_t1_f14_01_bank_step_contract_and_signature\n");
-    test_t1_f14_01_bank_step_contract_and_signature();
-    std::fprintf(stderr, "[e2e] test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc\n");
-    test_t1_f14_05_entry_point_idempotency_and_no_heap_alloc();
 
     // F15
     std::fprintf(stderr, "[e2e] test_t1_f15_01_samosbor_four_phase_cycle\n");
@@ -1991,27 +1524,11 @@ int main() {
     // =======================================================================
     // Tier 2: Boundary & Corner Cases (75 tests)
     // =======================================================================
-    // F1 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f1_01_invalid_role_enum_fallback\n");
-    test_t2_f1_01_invalid_role_enum_fallback();
-    std::fprintf(stderr, "[e2e] test_t2_f1_02_zero_needs_with_extreme_trait_multipliers\n");
-    test_t2_f1_02_zero_needs_with_extreme_trait_multipliers();
-    std::fprintf(stderr, "[e2e] test_t2_f1_03_max_needs_with_zero_drive_traits\n");
-    test_t2_f1_03_max_needs_with_zero_drive_traits();
-    std::fprintf(stderr, "[e2e] test_t2_f1_04_role_trait_matrix_constness_and_determinism\n");
-    test_t2_f1_04_role_trait_matrix_constness_and_determinism();
-    std::fprintf(stderr, "[e2e] test_t2_f1_05_role_transition_mid_simulation\n");
-    test_t2_f1_05_role_transition_mid_simulation();
+    // F1 Boundaries — ролевые, снесены 2026-11-08 (5 тестов).
 
-    // F2 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f2_01_invalid_floorkind_fallback\n");
-    test_t2_f2_01_invalid_floorkind_fallback();
-    std::fprintf(stderr, "[e2e] test_t2_f2_02_extreme_npcid_hash_safety\n");
-    test_t2_f2_02_extreme_npcid_hash_safety();
+    // F2 Boundaries (t2_f2_01/02/04 — границы `role_for` и колонки, снесены)
     std::fprintf(stderr, "[e2e] test_t2_f2_03_single_npc_monoculture_spec\n");
     test_t2_f2_03_single_npc_monoculture_spec();
-    std::fprintf(stderr, "[e2e] test_t2_f2_04_role_column_zero_initialization\n");
-    test_t2_f2_04_role_column_zero_initialization();
     std::fprintf(stderr, "[e2e] test_t2_f2_05_floor_boundary_numbers\n");
     test_t2_f2_05_floor_boundary_numbers();
 
@@ -2028,16 +1545,9 @@ int main() {
     test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket();
 
     // F4 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f4_01_medic_ignores_dead_corpses\n");
-    test_t2_f4_01_medic_ignores_dead_corpses();
-    std::fprintf(stderr, "[e2e] test_t2_f4_02_medic_ignores_healthy_allies\n");
-    test_t2_f4_02_medic_ignores_healthy_allies();
+    // t2_f4_01/02/04/05 снесены 2026-11-08 с медицинскими константами.
     std::fprintf(stderr, "[e2e] test_t2_f4_03_medic_refuses_hostile_enemies\n");
     test_t2_f4_03_medic_refuses_hostile_enemies();
-    std::fprintf(stderr, "[e2e] test_t2_f4_04_medic_at_maximum_fatigue\n");
-    test_t2_f4_04_medic_at_maximum_fatigue();
-    std::fprintf(stderr, "[e2e] test_t2_f4_05_medic_patient_with_zero_max_hp\n");
-    test_t2_f4_05_medic_patient_with_zero_max_hp();
 
     // F5 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f5_01_liquidator_critical_low_hp_flee_threshold\n");
@@ -2052,14 +1562,13 @@ int main() {
     test_t2_f5_05_liquidator_corrupted_faction_id_fallback();
 
     // F6 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f6_01_looter_in_floor_with_no_storage_rooms\n");
-    test_t2_f6_01_looter_in_floor_with_no_storage_rooms();
+    // t2_f6_01 снесён 2026-11-08 (ноль CHECK, одна ролевая ссылка).
     std::fprintf(stderr, "[e2e] test_t2_f6_02_cultist_mob_aggression_with_invalid_npc\n");
     test_t2_f6_02_cultist_mob_aggression_with_invalid_npc();
-    std::fprintf(stderr, "[e2e] test_t2_f6_03_looter_sleep_intent_with_empty_world\n");
-    test_t2_f6_03_looter_sleep_intent_with_empty_world();
-    std::fprintf(stderr, "[e2e] test_t2_f6_04_cultist_rally_with_zero_allies\n");
-    test_t2_f6_04_cultist_rally_with_zero_allies();
+    std::fprintf(stderr, "[e2e] test_t2_f6_03_sleep_intent_with_empty_world\n");
+    test_t2_f6_03_sleep_intent_with_empty_world();
+    std::fprintf(stderr, "[e2e] test_t2_f6_04_rally_with_zero_allies\n");
+    test_t2_f6_04_rally_with_zero_allies();
     std::fprintf(stderr, "[e2e] test_t2_f6_05_looter_memory_full_slot_eviction\n");
     test_t2_f6_05_looter_memory_full_slot_eviction();
 
@@ -2102,16 +1611,6 @@ int main() {
     test_t2_f10_05_floating_point_epsilon_near_seams();
 
     // F11 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f11_01_zero_and_negative_operation_amounts\n");
-    test_t2_f11_01_zero_and_negative_operation_amounts();
-    std::fprintf(stderr, "[e2e] test_t2_f11_02_bank_max_principal_ceiling\n");
-    test_t2_f11_02_bank_max_principal_ceiling();
-    std::fprintf(stderr, "[e2e] test_t2_f11_03_loan_exceeding_credit_limit\n");
-    test_t2_f11_03_loan_exceeding_credit_limit();
-    std::fprintf(stderr, "[e2e] test_t2_f11_04_bank_catchup_clamped_at_24_periods\n");
-    test_t2_f11_04_bank_catchup_clamped_at_24_periods();
-    std::fprintf(stderr, "[e2e] test_t2_f11_05_fractional_interest_asymmetric_rounding\n");
-    test_t2_f11_05_fractional_interest_asymmetric_rounding();
 
     // F12 Boundaries
     std::fprintf(stderr, "[e2e] test_t2_f12_03_bus_ring_overflow_drop_counter\n");
@@ -2121,14 +1620,9 @@ int main() {
     // t2_f13_01..05 сняты 2026-11-07 — границы мёртвого запроса (снос пары).
 
     // F14 Boundaries
-    std::fprintf(stderr, "[e2e] test_t2_f14_01_entry_points_null_input_safety\n");
-    test_t2_f14_01_entry_points_null_input_safety();
-    std::fprintf(stderr, "[e2e] test_t2_f14_02_entry_points_extreme_ticks\n");
-    test_t2_f14_02_entry_points_extreme_ticks();
     std::fprintf(stderr, "[e2e] test_t2_f14_03_entry_points_zero_delta_time\n");
     test_t2_f14_03_entry_points_zero_delta_time();
-    std::fprintf(stderr, "[e2e] test_t2_f14_04_entry_points_reentrant_concurrency_safety\n");
-    test_t2_f14_04_entry_points_reentrant_concurrency_safety();
+    // t2_f14_04 снесён 2026-11-08 (ролевая таблица).
     std::fprintf(stderr, "[e2e] test_t2_f14_05_static_gate_regex_compliance\n");
     test_t2_f14_05_static_gate_regex_compliance();
 
@@ -2147,12 +1641,10 @@ int main() {
     // =======================================================================
     // Tier 3: Cross-Feature Combinations (15 tests)
     // =======================================================================
-    std::fprintf(stderr, "[e2e] test_t3_01_medic_healing_and_hpbank_during_samosbor\n");
-    test_t3_01_medic_healing_and_hpbank_during_samosbor();
+    // t3_01 снесён 2026-11-08 (медицинские константы + самосбор, который он
+    // заводил и ни разу не читал).
     std::fprintf(stderr, "[e2e] test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping\n");
     test_t3_02_duty_guard_patrol_plan_with_toroidal_wrapping();
-    std::fprintf(stderr, "[e2e] test_t3_03_bank_debt_and_interest_across_floor_transit\n");
-    test_t3_03_bank_debt_and_interest_across_floor_transit();
     std::fprintf(stderr, "[e2e] test_t3_04_prop_interaction_during_ai_navigation_single_writer\n");
     test_t3_04_prop_interaction_during_ai_navigation_single_writer();
     std::fprintf(stderr, "[e2e] test_t3_05_vector_gravity_with_duty_lattice_patrol\n");
@@ -2163,12 +1655,12 @@ int main() {
     test_t3_07_toroidal_wrap_with_prop_interaction();
     std::fprintf(stderr, "[e2e] test_t3_08_liquidator_defense_vs_civilian_panic_diffusion\n");
     test_t3_08_liquidator_defense_vs_civilian_panic_diffusion();
-    std::fprintf(stderr, "[e2e] test_t3_09_looter_scavenging_via_memory_during_samosbor_aftermath\n");
-    test_t3_09_looter_scavenging_via_memory_during_samosbor_aftermath();
+    std::fprintf(stderr, "[e2e] test_t3_09_scavenging_via_memory_during_samosbor_aftermath\n");
+    test_t3_09_scavenging_via_memory_during_samosbor_aftermath();
     std::fprintf(stderr, "[e2e] test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns\n");
     test_t3_10_cultist_monster_immunity_during_samosbor_fog_spawns();
-    std::fprintf(stderr, "[e2e] test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms\n");
-    test_t3_11_role_distribution_seeding_with_floor_spec_and_bank_terms();
+    std::fprintf(stderr, "[e2e] test_t3_11_floor_spec_seeding_populates_the_pool\n");
+    test_t3_11_floor_spec_seeding_populates_the_pool();
     std::fprintf(stderr, "[e2e] test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane\n");
     test_t3_12_zone_step_navigation_with_vector_gravity_tangent_plane();
     std::fprintf(stderr, "[e2e] test_t3_13_samosbor_alarm_and_event_bus_emission\n");
@@ -2181,10 +1673,8 @@ int main() {
     // =======================================================================
     // Tier 4: Real-World Workload Scenarios (5 tests)
     // =======================================================================
-    std::fprintf(stderr, "[e2e] test_t4_01_multi_floor_alife_demographics_and_roles_simulation\n");
-    test_t4_01_multi_floor_alife_demographics_and_roles_simulation();
-    std::fprintf(stderr, "[e2e] test_t4_02_long_duration_economy_compound_interest_lifecycle\n");
-    test_t4_02_long_duration_economy_compound_interest_lifecycle();
+    std::fprintf(stderr, "[e2e] test_t4_01_multi_floor_alife_demographics_simulation\n");
+    test_t4_01_multi_floor_alife_demographics_simulation();
     std::fprintf(stderr, "[e2e] test_t4_03_long_duration_specialist_patrol_and_errand_marathon\n");
     test_t4_03_long_duration_specialist_patrol_and_errand_marathon();
     std::fprintf(stderr, "[e2e] test_t4_04_full_samosbor_disaster_and_specialist_response_cycle\n");

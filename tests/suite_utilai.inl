@@ -1530,70 +1530,15 @@ static void test_utilai_all() {
     }
 
     // ======================================================================
-    // Roles ([role.h]): the archetype row moves the scorer, and only through
-    // the terms it names.
+    // ЗДЕСЬ СТОЯЛ БЛОК РОЛЕЙ, и он снесён 2026-11-08 вместе с `role.h`
+    // (решение владельца): пять архетипов с шестью десятками чисел в заголовке
+    // при законе проекта «вся политика в данных», мандата в CANON.md нет.
+    // Блок стоил 4165 исполнений — две property-петли (детерминизм хеша 64 и
+    // «нулевой вес есть ЗАПРЕТ» 4096) плюс распределение, дельта-отклик и
+    // ролевая слепота: ровно то число, которым CMakeLists его и завёл
+    // 2026-08-13. Различие тел осталось на ФРАКЦИЯХ (`suite_faction*`) и на
+    // НУЖДАХ, у обеих свои свидетели.
     // ======================================================================
-    {
-        // role_for is a pure hash: same (id, kind) -> same role, forever.
-        for (NpcId id = 0; id < 64; ++id)
-            CHECK(role_for(id, FloorKind::Derelict) ==
-                  role_for(id, FloorKind::Derelict));
-        // A zero weight is a PROHIBITION, not a low chance: Residential floors
-        // roll no Cultists, whatever the id. 4096 draws would catch a leak of
-        // 1/256 with near certainty.
-        for (NpcId id = 0; id < 4096; ++id)
-            CHECK(role_for(id, FloorKind::Residential) != RoleId::Cultist);
-        // Derelict actually uses its 40% Cultist row — the distribution is a
-        // property, not a hope. 4096 draws at true p=0.63 (weights 40/63) cannot
-        // plausibly land below 1024.
-        int cultists = 0;
-        for (NpcId id = 0; id < 4096; ++id)
-            if (role_for(id, FloorKind::Derelict) == RoleId::Cultist) ++cultists;
-        CHECK(cultists > 1024);
-
-        // Additive trait terms, on a scorer that is otherwise identical input.
-        // Resident is the all-ones/near-zero row, so it is the control arm.
-        Needs fresh = needs_roll(999u);
-        Perception p;
-        p.idSeed = identity_seed(7u);
-        p.faction = static_cast<std::uint16_t>(Faction::Citizens);
-        p.hp = 100.0f;
-        p.maxHp = 100.0f;
-        p.localScore[IntentWork] = 1.0f; // a remembered workplace nearby
-        p.nearbyWounded01 = 1.0f;        // everyone around is bleeding
-
-        float asResident[kIntentCount];
-        p.role = static_cast<std::uint8_t>(RoleId::Resident);
-        score_intents(p, fresh, asResident);
-        float asLooter[kIntentCount];
-        p.role = static_cast<std::uint8_t>(RoleId::Looter);
-        score_intents(p, fresh, asLooter);
-        float asMedic[kIntentCount];
-        p.role = static_cast<std::uint8_t>(RoleId::Medic);
-        score_intents(p, fresh, asMedic);
-
-        // (patrol execution is tested in its own block below)
-        // scavengeDrive is a RESPONSE gain, not an absolute boost: the Looter's
-        // 0.2 workDrive suppresses ordinary work harder than one recall adds
-        // (the first draft of this check asserted the absolute and was wrong).
-        // So measure the DELTA a remembered workplace makes, per role.
-        Perception p0 = p;
-        p0.localScore[IntentWork] = 0.0f;
-        float resBase[kIntentCount];
-        p0.role = static_cast<std::uint8_t>(RoleId::Resident);
-        score_intents(p0, fresh, resBase);
-        float lootBase[kIntentCount];
-        p0.role = static_cast<std::uint8_t>(RoleId::Looter);
-        score_intents(p0, fresh, lootBase);
-        CHECK(asLooter[IntentWork] - lootBase[IntentWork] >
-              asResident[IntentWork] - resBase[IntentWork]);
-        // careDrive: Medic 1.0 vs Resident 0.05 on the same wounded ward.
-        CHECK(asMedic[IntentHeal] > asResident[IntentHeal]);
-        // And the role must not leak into terms its row does not name: eating is
-        // role-blind, so all three arms agree bit-for-bit.
-        CHECK(asLooter[IntentEat] == asResident[IntentEat]);
-        CHECK(asMedic[IntentEat] == asResident[IntentEat]);
-    }
 
     // ======================================================================
     // Patrol execution (ai_patrol_step) — ЗОНЫ, не решётка (§88/F.2).

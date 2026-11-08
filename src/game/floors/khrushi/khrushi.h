@@ -64,10 +64,12 @@ inline constexpr int kKhrushiFloorNumber = 6;
 // the city is the same torus that puts the slab's underside overhead.
 inline constexpr GravityRegime kKhrushiGravity = GravityRegime::NegZ;
 
-// The arrival/standing coordinate along the gravity axis. Deliberately EQUAL
-// to padic's ground storey: save.h pins kArrivalCoord = 3 for every
-// inter-floor ride. Derivation: the street slab is the full cell z = 2, so the
-// first air cell a body can stand in is z = 3 — the street surface.
+// The arrival/standing coordinate along the gravity axis. Равна она не
+// падику, как тут было написано, а ОБЩЕЙ координате прибытия лифта
+// ([floor_gen.h] kFloorArrivalCoord): поездка планирует её заранее, одной на
+// весь столб. Вывод модуля: плита улицы — полная клетка z = 2, значит первая
+// воздушная клетка, в которой тело стоит, — z = 3, поверхность улицы.
+// Равенство контракту утверждает floor_gen.cpp.
 inline constexpr int kKhrushiGroundCoord = 3;
 
 // The street slab cell (one FULL cell of concrete, both faces real surfaces —
@@ -92,6 +94,17 @@ void khrushi_apply_rules(World& world, int number, const FloorSpec& spec,
 // contract ([floor_gen.h]). Pure function of (number, seed).
 void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
                             unsigned seed);
+
+// ПРОЁМЫ МОДУЛЯ (строка в kDoorwayEnumerators, [floor_gen.h] floor_doorways).
+// Сегодня НОЛЬ — и это ответ модуля, а не отсутствие ответа: квартирные планы
+// уже построены, но дверных отверстий с наличниками под полотно в них пока
+// нет. Подъезды (`khrushi_entrances` выше уже знает их клетки) и квартирные
+// двери — следующий инкремент модуля, и наполнится ТЕЛО этой функции, а
+// таблица в общем коде не шевельнётся. Жил этот ноль веткой
+// `if (kind == Khrushi)` в общем коде, вместе с причиной.
+struct Doorway;
+std::uint32_t khrushi_doorways(int number, unsigned seed,
+                               std::vector<Doorway>& out);
 
 // Объявить комнаты модуля (rooms-object C, S12.1): спальня/зал/кухня/санузел/
 // кладовка на секцию-сторону-ярус по фиксированной раскладке квартиры;

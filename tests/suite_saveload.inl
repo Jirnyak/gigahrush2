@@ -17,8 +17,9 @@
 //     `kItemCount` cannot see — is rejected.
 //
 // A note on "byte-for-byte", because the phrase is easy to get wrong here. The
-// assertions compare the SERIALIZED BYTES, not the structs. `Contract` carries two bytes
-// of implicit padding between `subject` and `target` and `RunLedger` seven at its tail,
+// assertions compare the SERIALIZED BYTES, not the structs. `RunLedger` carries implicit
+// padding at its tail (а `Contract` нёс две байты между `subject` и `target`, пока
+// система контрактов была жива — снесена 2026-11-08),
 // and the standard says nothing about what aggregate initialization puts in them — so a
 // `memcmp` of two of those structs is a test that could fail for a reason that is not a
 // bug. The wire has no padding at all (every field is written individually), so a
@@ -108,20 +109,9 @@ SaveState busy_run() {
     st.ledger.deepestFloor = -50;             // THE reason the field is signed
     st.ledger.deepestBand = economy_band(-50);
 
-    st.book.completed = 11u;
-    st.book.failed = 3u;
-    st.book.earned = 4'294'967'296LL;         // 2^32: catches a 32-bit truncation
-    for (int i = 0; i < kMaxContracts; ++i) {
-        Contract& c = st.book.slot[i];
-        c.giver = static_cast<NpcId>(1000 + i);
-        c.subject = static_cast<std::uint16_t>(400 + i);
-        c.target = 7 + i;
-        c.progress = 2 + i;
-        c.reward = 900 * (i + 1);
-        c.kind = static_cast<std::uint8_t>(i % static_cast<int>(ObjectiveKind::Count));
-        c.state = static_cast<std::uint8_t>(ContractState::Active);
-        c.baseline = static_cast<std::uint8_t>(20 + i);
-    }
+    // `st.book` (ContractBook: три слота + completed/failed/earned) заполнялся
+    // здесь разными числами. СНЕСЁН 2026-11-08 вместе с системой контрактов —
+    // поля в `SaveState` нет, секции на проводе нет.
 
     // Eight distinct floats, none of them a round number, so a swapped pair of fields
     // shows up as a mismatch rather than as two equal values.
@@ -197,16 +187,11 @@ SaveState busy_run() {
     // arithmetic; macro_world_round_trips covers them with real objects.)
     st.factions.add_mutual(0, 4, +30);
 
-    // Version 16 / SAVBANK: distinct non-round values in every serialized
-    // field, per this file's standing rule — a zero field cannot prove its
-    // codec. lastInterestTick stays 0 on purpose: it does NOT travel.
-    st.bank.deposit = 4321;
-    st.bank.loanPrincipal = 1500;
-    st.bank.loanAccrued = 37;
-    st.bank.interestEarned = 210;
-    st.bank.interestPaid = 96;
-    st.bank.creditLimit = 2500;
-    st.bank.band = 2;
+    // Блок банка (SAVBANK v16) заполнялся здесь семью различимыми неокруглыми
+    // числами и снесён 2026-11-08 вместе с системой. ПРАВИЛО ЭТОГО ФАЙЛА, из-за
+    // которого числа были неокруглыми и РАЗНЫМИ, действует для всех блоков ниже:
+    // поле, оставленное в нуле, не доказывает свой кодек — memcmp пройдёт и
+    // тогда, когда байты не едут вовсе.
 
     // Version 10 / SAVCLOCK. Every field gets a DISTINCT non-round value, which is
     // this file's own standing rule and the one §6a.1 of Docs/specs/10 accused it of
@@ -238,21 +223,8 @@ void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.ledger.deepestFloor == b.ledger.deepestFloor);
     CHECK(a.ledger.deepestBand == b.ledger.deepestBand);
 
-    CHECK(a.book.completed == b.book.completed);
-    CHECK(a.book.failed == b.book.failed);
-    CHECK(a.book.earned == b.book.earned);
-    for (int i = 0; i < kMaxContracts; ++i) {
-        const Contract& x = a.book.slot[i];
-        const Contract& y = b.book.slot[i];
-        CHECK(x.giver == y.giver);
-        CHECK(x.subject == y.subject);
-        CHECK(x.target == y.target);
-        CHECK(x.progress == y.progress);
-        CHECK(x.reward == y.reward);
-        CHECK(x.kind == y.kind);
-        CHECK(x.state == y.state);
-        CHECK(x.baseline == y.baseline);
-    }
+    // Сличение `book` (три контракта поле-за-полем + три счётчика) СНЕСЕНО
+    // 2026-11-08: системы контрактов нет, поля в `SaveState` нет.
 
     // Padding-free structs, so a raw byte compare is exact rather than optimistic.
     static_assert(sizeof(Needs) == 9 * 4 + 1 + 3, "Needs has no implicit padding");
@@ -301,15 +273,8 @@ void same_run(const SaveState& a, const SaveState& b) {
         CHECK(a.status.alt[i] == b.status.alt[i]);
     }
 
-    // v16: the account, field by field (lastInterestTick excluded — it does
-    // not travel and the reader arms it to zero).
-    CHECK(a.bank.deposit == b.bank.deposit);
-    CHECK(a.bank.loanPrincipal == b.bank.loanPrincipal);
-    CHECK(a.bank.loanAccrued == b.bank.loanAccrued);
-    CHECK(a.bank.interestEarned == b.bank.interestEarned);
-    CHECK(a.bank.interestPaid == b.bank.interestPaid);
-    CHECK(a.bank.creditLimit == b.bank.creditLimit);
-    CHECK(a.bank.band == b.bank.band);
+    // v26: сличение счёта банка поле-за-полем снесено вместе с блоком.
+    // Кошелёк (`ledger.banked`) сличается выше и никуда не уходил.
 
     // (v20: секций контейнеров/трупов/обломков в run.sav нет — floor-файл.)
 
@@ -344,11 +309,14 @@ void same_run(const SaveState& a, const SaveState& b) {
 void wire_layout() {
     // The format's footprint is arithmetic, not a measurement — a save whose length
     // depends on the compiler is a save that cannot cross hosts.
-    // Derived from the serializers, not measured from a run: 33 ledger + 79 book
-    // (3 x 21 + 16) + 304 player (33 needs + 256 inventory + 12 + 3) + 12 rpg +
-    // 89 craft + 21 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
-    // 32 fast-travel + 294 quest log, plus the fixed 36-byte faction matrix and the
-    // 64-byte header.
+    // Derived from the serializers, not measured from a run: 13 ledger +
+    // 376 player (37 needs + 320 inventory + 19) + 12 rpg + 89 craft +
+    // 29 combat (hasRanged+ranged+kills) + 42 status + 17 samosbor +
+    // 32 fast-travel = 610, plus the fixed 36-byte faction matrix and the
+    // 64-byte header = 710.
+    // v26 (2026-11-08): СНЕСЕНЫ ТРИ СЕКЦИИ — книга контрактов (79 = 3×21+16),
+    // квест-лог (294 = 19×14+28) и счёт банка (45). Итого -418: 1028 -> 610 на
+    // фиксе, 1128 -> 710 на пустом сейве.
     //
     // The three numbers this comment used to carry — "= 892", "308 quest log", and
     // the "992" downstream — were WRONG and had been since v9: the asserts below said
@@ -365,12 +333,13 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1028);  // v25: ledger 13 (снос пада)
+    static_assert(kSaveFixedWire == 610);  // v26: -79 книга, -294 квест-лог, -45 банк
     static_assert(kFactionWire == 36);
     // v20: инлайновые счётчики трупов/обломков ушли в floor-файл; v25 ужал
-    // леджер на 20 Б (кошелёк+глубина вместо скоровой витрины пада).
-    static_assert(save_bytes_for() == 1128); // v25
-    static_assert(save_bytes_for(100, 50) == 1128 + 150);
+    // леджер на 20 Б (кошелёк+глубина вместо скоровой витрины пада); v26 снял
+    // три секции целиком.
+    static_assert(save_bytes_for() == 710); // v26
+    static_assert(save_bytes_for(100, 50) == 710 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -383,7 +352,8 @@ void wire_layout() {
     // 993; v10 adds the samosbor clock (17) and the fast-travel set (32); v11
     // +hpBank (4); v12 -1 craft axis (4); v13 +Equipped (4); v14 u16 counts
     // (+64); v16 +289 bank; v19 bank ring cut (-244) = 1148; v20 entity
-    // sections left for the floor files (-8) = 1140.
+    // sections left for the floor files (-8) = 1140; v26 -418 (книга, квест-лог,
+    // банк) = 710.
     CHECK(bytes.size() == save_bytes_for());
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
@@ -750,9 +720,9 @@ void weak_check_vs_strong_check() {
     CHECK(err == SaveError::ItemTableChanged);
     CHECK(untouched.ledger.banked == 424242);   // and it did not
 
-    // The mob table has the identical exposure, through `Contract::subject` — the same
-    // std::uint16_t is an ItemId for a Fetch job and a MobKind for a Hunt job, so one
-    // field can be invalidated by either CSV.
+    // Та же экспозиция у таблицы монстров: сейв несёт MobKind в записях этажа и
+    // в пуле. (`Contract::subject` — одно u16 под ItemId и под MobKind — был
+    // самым острым её примером; снесён 2026-11-08 вместе с контрактами.)
     save_write(src, bytes);
     poke_u32(bytes, kOffMobFp, mob_table_fingerprint() ^ 0x5A5A5A5Au);
     CHECK(!save_read(bytes.data(), bytes.size(), untouched, &err));

@@ -46,17 +46,33 @@ class FloorCatalog;
 inline constexpr int kPadicFloorNumber = 4;
 
 // This module's declared gravity frame ([world/gravity.h] GravityRegime): the
-// dormitory tower stacks its storeys against -Z. The ENGINE is isotropic — a
-// sister module could build against -X and every consumer keyed on the regime
-// would follow it; the asymmetry is the module's emergent choice, never the
-// engine's.
+// dormitory tower stacks its storeys against -Z. The ENGINE is isotropic; the
+// asymmetry is the module's emergent choice, never the engine's.
+//
+// ЭТА КОНСТАНТА — ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ПАДИК НАЗЫВАЕТ СВОЙ ФРЕЙМ, и её
+// читают оба канала объявления ([floor_gen.h] §Gravity frame): живой
+// `world.gravity().regime` пишет `padic_declare_rules` ниже, заявленный
+// отдаёт строка таблицы `kGravityFrames` в floor_gen.cpp. Поменять фрейм
+// модуля = поправить ЭТУ строку, и больше ничего.
+//
+// ЧЕСТНАЯ ОГОВОРКА (здесь стояло «сестринский модуль мог бы строить против -X,
+// и каждый потребитель, завязанный на режим, пошёл бы за ним» — это неправда):
+// лифтовый столб кладётся общим каркасом по оси Z у ЛЮБОГО модуля
+// (`stamp_lift_pillars`), поэтому не-Z фрейм сегодня НЕ СОБЕРЁТСЯ — гейт
+// `all_frames_lift_compatible` в floor_gen.cpp. Это и есть разница между
+// «изотропно по замыслу» и «изотропно по факту», сказанная утверждением.
 inline constexpr GravityRegime kPadicGravity = GravityRegime::NegZ;
 
 // The ground-storey STANDING coordinate along the gravity axis: storeys are
 // 3-cell (air at b, b+1; two-slab sandwich at b+2), so the first standing cell
 // (air with a solid floor one step toward -g) sits at coordinate 3 — storey 1's
-// air over storey 0's ceiling sandwich. Content placement (crates, mob packs)
-// keys on this through the floor_gen frame helpers, never on a literal.
+// air over storey 0's ceiling sandwich.
+//
+// Это ВЫВОД МОДУЛЯ из его собственной геометрии, и он обязан совпасть с общей
+// координатой прибытия лифта ([floor_gen.h] kFloorArrivalCoord — контракт на
+// весь столб, не свойство падика, хотя исторически его отсюда и списали).
+// Равенство утверждает floor_gen.cpp — единственное место, включающее все три
+// манифеста. Съедет вывод — не соберётся.
 inline constexpr int kPadicGroundCoord = 3;
 
 // Register the module's catalog rows (currently: the claim on number 4).

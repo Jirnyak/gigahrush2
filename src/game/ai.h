@@ -839,9 +839,11 @@ struct Perception {
     float localScore[kIntentCount] = {};
     float targetPenalty[kIntentCount] = {};
 
-    // -- role ([role.h]), zero == Resident == the all-ones multiplier row --
-    std::uint8_t role = 0;        // RoleId; the pool column, sampled at re-plan
-    float nearbyWounded01 = 0.0f; // wounded fraction of allies in medic reach
+    // ЗДЕСЬ СТОЯЛИ `role` и `nearbyWounded01` — снесены 2026-11-08 вместе с
+    // системой ролей и медик-аурой. Роль давала множитель на счёт интента, аура
+    // — долю раненых союзников в досягаемости медика; читателей у обоих полей не
+    // осталось ни одного, а восприятие с полем, которое никто не спрашивает, —
+    // это приглашение его заполнить.
 };
 
 // Fold a recall into a Perception. Pure, and separate from `ai_recall` so the

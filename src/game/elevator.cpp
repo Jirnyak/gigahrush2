@@ -4,7 +4,6 @@
 #include "game/combat.h"    // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
 #include "game/fast_travel.h" // fast_hub_cell — optional lattice landing
-#include "game/floor_gen.h" // floor_gravity_regime — arrival rides the module's axis
 #include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
 
 namespace giga::game {
@@ -65,30 +64,37 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
 
     // Fold back on the departed floor (writes the record's macro cell from the
     // live transform, then destroys the entity), relocate to the arrival storey
-    // ALONG THE MODULE'S GRAVITY AXIS keeping the two tangent coordinates
-    // ([floor_gen.h] frame — x/y/z are equal citizens, the regime picks which
-    // one an elevator rides), and re-embody as player on the destination layer.
+    // and re-embody as player on the destination layer.
+    //
+    // ОСЬ ПРИБЫТИЯ — ЛИФТОВАЯ, А НЕ ГРАВИТАЦИОННАЯ, и это выбор, а не недосмотр.
+    // Прежде здесь стоял `regime_down(floor_gravity_regime())` и прибытие
+    // раскладывалось по той оси, вдоль которой у модуля падают тела. Это был
+    // ВТОРОЙ ЗАКОН ОБ ОДНОЙ ОСИ: шахту кладёт ОБЩИЙ каркас стопки
+    // ([level_stack.h] — этажи сложены по Z у любого модуля, иначе лифт не свёл
+    // бы два соседних этажа с разной гравитацией), а здесь её ось выводилась
+    // заново из гравитации этажа. Пока оба закона давали Z, расхождения не было
+    // видно; у модуля с боковой гравитацией кабина уехала бы по X, а шахта
+    // осталась по Z — тело прибыло бы в камень.
+    //
+    // ДВА ЗАКОНА ОБ ОДНОМ ПОЛОЖЕНИИ В РАЗНЫХ ЕДИНИЦАХ — зафиксированный в этом
+    // проекте класс дефекта (§64: рагдолл сталкивался сам с собой ровно потому,
+    // что положение сустава считали дважды и в разных единицах; получался
+    // предельный цикл). Лечение то же: оставить ОДИН источник правды. Правда об
+    // оси шахты принадлежит каркасу стопки, и `arrivalCoord` приходит сюда уже
+    // в его единицах (`kFloorArrivalCoord`), поэтому присваивание прямое.
+    //
+    // Гравитация модуля при этом НЕ игнорируется — она просто не про эту ось:
+    // ею распоряжаются падение, проходимость и сеялки пропов ([prop_system.cpp]
+    // переведены на гравитационный фрейм в той же волне). Лифт едет по дому, а
+    // не по вектору тяжести.
     fold_back(reg, pool, npcRef, player);
-    const CellStep down = regime_down(floor_gravity_regime());
-    if (down.x != 0)
-        pool.cx(id) = arrivalCoord;
-    else if (down.y != 0)
-        pool.cy(id) = arrivalCoord;
-    else if (down.z != 0)
-        pool.cz(id) = arrivalCoord;
-    // Zero-g: any air cell is ground — the record keeps the cell it left from.
+    pool.cz(id) = arrivalCoord;
     // Fast-travel landing: same hub index on the destination floor so the ride
-    // is positionally stable across the stack ([elevators.md] 4×4 cabins). The
-    // cabin lives in the two coordinates TANGENT to the module's gravity axis,
-    // so the lattice is named by the frame the floor declared, not by x/y.
-    if (landHub >= 0 && landHub < kFastHubsPerFloor) {
-        if (down.x != 0)
-            fast_hub_cell(landHub, pool.cy(id), pool.cz(id));
-        else if (down.y != 0)
-            fast_hub_cell(landHub, pool.cx(id), pool.cz(id));
-        else // z-down and zero-g: the lattice is the xy plane
-            fast_hub_cell(landHub, pool.cx(id), pool.cy(id));
-    }
+    // is positionally stable across the stack ([elevators.md] 4×4 cabins). Решётка
+    // кабин — ПЛАНАРНАЯ в xy по тому же доводу: она тангенциальна оси ШАХТЫ,
+    // которая теперь одна и равна Z.
+    if (landHub >= 0 && landHub < kFastHubsPerFloor)
+        fast_hub_cell(landHub, pool.cx(id), pool.cy(id));
 
 
     Entity ne = embody_as_player(reg, pool, id, dstLayer);

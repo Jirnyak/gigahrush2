@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate src/game/status_table.cpp from data/status.csv.
 
-Sibling of gen_economy_table.py / gen_item_table.py, same contract: the CSV is the
+Sibling of gen_item_table.py / gen_craft_table.py, same contract: the CSV is the
 truth, the generated .cpp is committed so the build needs no Python, and an unknown
 token is a hard error rather than a silent default.
 

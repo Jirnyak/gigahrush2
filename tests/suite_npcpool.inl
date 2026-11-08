@@ -195,7 +195,6 @@ static void test_npcpool_all() {
             pool.age(id) = static_cast<std::uint8_t>(1u + i % 90u);
             pool.sex(id) = (i & 1u) ? SexFemale : SexMale;
             pool.level(id) = static_cast<std::uint8_t>(1u + i % 100u);
-            pool.role(id) = static_cast<std::uint8_t>(i % 7u);
         }
         CHECK(pool.count() == n);
         CHECK(pool.alive() == n);
@@ -209,10 +208,11 @@ static void test_npcpool_all() {
                 intact = false;
             // Блок перков был пятой — и самой широкой (8 Б) — LIVE-колонкой этого
             // прохода; снесён 2026-10-12 ([npc_pool.h]). На его место встала
-            // role_: она LIVE с [role.h], растёт тем же grow_live_columns и до
-            // сегодня в этом блоке не проверялась вообще. Пин не двигается —
-            // проверка складывается в тот же один CHECK(intact) ниже.
-            if (pool.role(id) != static_cast<std::uint8_t>(i % 7u)) intact = false;
+            // колонка role_, и снесена она же 2026-11-08 вместе с системой
+            // ролей. Пин НЕ двигается в обе эти даты: проверка складывалась в
+            // тот же один `CHECK(intact)` ниже, а не в свой CHECK.
+            // Переживших LIVE-колонок три (age_/sex_/level_) плюс gen_, который
+            // этот проход не трогает по построению: его пишет kill(), не spawn().
         }
         CHECK(intact);
     }
@@ -221,13 +221,15 @@ static void test_npcpool_all() {
         // The capacity is exactly 2^20, so 1 B of row width == 1.0 MiB of table and
         // every figure here is just a row width.
         constexpr std::size_t kRow = static_cast<std::size_t>(kNpcPoolSize);
-        // 613 = the same 17 columns at TODAY'S widths (inv_ went 256 -> 384 when
+        // 612 = the same 16 columns at TODAY'S widths (inv_ went 256 -> 384 when
         // v14 widened the slot count to u16, [inventory.h]) — the comparison is
         // against what eager-everything would cost NOW, not a 2026-07 memory.
-        // БЫЛО 621 при 18 колонках: блок перков 8 Б/строка снесён 2026-10-12
-        // ([npc_pool.h]). Число обязано было поехать, иначе «было столько-то МиБ»
-        // считало бы колонку, которой нет, и реестр врал бы в тесте.
-        constexpr std::size_t kOldTable = 613u * kRow;   // all 17 columns assign()ed
+        // БЫЛО 621 при 18 колонках: блок перков 8 Б/строка снесён 2026-10-12,
+        // 613 при 17 — колонка role_ 1 Б/строка снесена 2026-11-08 вместе с
+        // системой ролей ([npc_pool.h]). Число обязано ехать каждый раз, иначе
+        // «было столько-то МиБ» считало бы колонку, которой нет, и реестр врал
+        // бы в тесте.
+        constexpr std::size_t kOldTable = 612u * kRow;   // all 16 columns assign()ed
         constexpr std::size_t kEagerTable = 434u * kRow; // what init() still writes
 
         NpcPool pool;
@@ -245,13 +247,14 @@ static void test_npcpool_all() {
         CHECK(afterInit <= kEagerTable + 4u * kRow);
         CHECK(kOldTable - afterInit >= 172u * kRow); // 179 B/row is the paper figure
 
-        // The LIVE columns cost one chunk, not one capacity: 6 B/row x 4096 (11 B when
+        // The LIVE columns cost one chunk, not one capacity: 5 B/row x 4096 (11 B when
         // this was written; gen_ added 2 B/row for slot recycling's generation counter,
-        // role_ 1 B, and the 8 B perk block was СНЕСЁН 2026-10-12 — 14 -> 6 B/row).
+        // the 8 B perk block was СНЕСЁН 2026-10-12 — 14 -> 6 B/row, и колонка role_
+        // 1 Б снесена 2026-11-08 — 6 -> 5 Б/строка).
         const NpcId id = pool.spawn();
         const std::size_t afterSpawn = pool.resident_bytes();
         CHECK(afterSpawn - afterInit >= 16u * 1024u);
-        CHECK(afterSpawn - afterInit < 32u * 1024u); // 24,576 B = 6 B x 4096
+        CHECK(afterSpawn - afterInit < 32u * 1024u); // 20,480 B = 5 B x 4096
 
         // rel_ is the widest column in the table — 128 B/row, 128.0 MiB at capacity —
         // and it holds nothing at all until someone calls relations(). This is the
@@ -534,7 +537,6 @@ static void test_npcpool_all() {
         pool.age(a) = 61;
         pool.sex(a) = SexFemale;
         pool.level(a) = 12;
-        pool.role(a) = 5;
         pool.set_name(a, "Ivan", "Petrov");
         pool.set_design(a, true);
         pool.set_player(a, true);
@@ -583,12 +585,12 @@ static void test_npcpool_all() {
         CHECK(pool.sex(reborn) == SexUnset);
         CHECK(pool.level(reborn) == 0);
         // Две проверки блока перков (слот 0 и слот 7) умерли вместе с колонкой
-        // 2026-10-12 ([npc_pool.h]). На их место встала ОДНА по role_: эта
-        // LIVE-колонка сбрасывается в reset_row ровно так же, а блок объявляет
-        // «every column the pool owns is written here and then checked blank» —
-        // и role_ в нём не проверялась НИ РАЗУ, хотя роль покойника, всплывшая в
-        // новорождённом, это тот же класс дефекта, под который блок и написан.
-        CHECK(pool.role(reborn) == 0);
+        // 2026-10-12 ([npc_pool.h]); на их место встала ОДНА по role_, и она
+        // умерла вместе со СВОЕЙ колонкой 2026-11-08 (система ролей снесена
+        // целиком). Блок по-прежнему объявляет «every column the pool owns is
+        // written here and then checked blank», и список выше теперь совпадает
+        // с телом `reset_row` строка в строку: age_/sex_/level_ и ни одной
+        // колонки сверх.
         // DEMAND columns. rel_ is the trap: a blank edge is `target == kInvalidNpc`, so a
         // memset row would read as sixteen relationships with NPC 0.
         CHECK(pool.name(reborn)[0] == '\0');

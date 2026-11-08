@@ -21,10 +21,6 @@ namespace giga::game {
 
 
 
-GravityRegime floor_gravity_regime() { return kPadicGravity; }
-
-int floor_ground_coord() { return kPadicGroundCoord; }
-
 bool floor_standable(const World& w, int x, int y, int z) {
     const MacroGrid& g = w.grid();
     if (g.cell(x, y, z) != kCellAir) return false;
@@ -33,45 +29,35 @@ bool floor_standable(const World& w, int x, int y, int z) {
     return g.cell(x + d.x, y + d.y, z + d.z) != kCellAir;
 }
 
-void floor_cell(const World& w, int u, int v, int h, int& x, int& y, int& z) {
-    const CellStep d = regime_down(w.gravity().regime);
-    if (d.x != 0) {
-        x = h;
-        y = u;
-        z = v;
-    } else if (d.y != 0) {
-        x = u;
-        y = h;
-        z = v;
-    } else { // +-Z, and the Zero fallback where h is just a third coordinate
-        x = u;
-        y = v;
-        z = h;
-    }
-}
+int floor_ground_z() { return kFloorArrivalCoord; }
 
-void floor_ground_cell(const World& w, int u, int v, int& x, int& y, int& z) {
-    floor_cell(w, u, v, floor_ground_coord(), x, y, z);
-}
-
-int floor_ground_z() { return kPadicGroundCoord; }
-// The elevator/load arrival coordinate must BE the module's ground storey, or
-// every ride lands inside the ceiling sandwich and leans on the placement
-// resolver. save.h cannot include the module, so the pin lives here.
-static_assert(kPadicGroundCoord == 3,
-              "keep save.h kArrivalCoord in step with the module");
-
-
-std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
-                             std::vector<Doorway>& out) {
-    // Blame punches raw openings, never doorable ones — its labyrinth mouths
-    // onto the abyss have no jambs for a leaf, so it contributes zero rows.
-    // Khrushi contributes zero until its blocks grow doorable entrances
-    // (module increment: подъезды + квартирные двери).
-    if (spec.kind == FloorKind::Blame || spec.kind == FloorKind::Khrushi)
-        return 0;
-    return padic_doorways(number, seed, out);
-}
+// ---- КОНТРАКТ ПРИБЫТИЯ: ОДНО ЧИСЛО, И КАЖДЫЙ МОДУЛЬ ЕМУ ОБЯЗАН -------------
+// Поездка (ride_elevator) и загрузка сейва планируют координату прибытия
+// ЗАРАНЕЕ, одной на весь столб — `save.h kArrivalCoord` летит параметром, — а
+// значит модуль, который хочет быть достижимым лифтом, обязан держать ходовую
+// клетку (воздух, твердь на шаг вниз) ровно там. Промахнётся — каждая поездка
+// высаживает игрока внутрь потолочного сэндвича и перекладывает спасение на
+// разрешитель размещения.
+//
+// Здесь стоял ОДИН пин, `kPadicGroundCoord == 3`, то есть общий код проверял
+// соблюдение контракта у ОДНОГО модуля из трёх. Теперь утверждение на каждый
+// зарегистрированный модуль: `floor_gen.cpp` — единственное место, которое
+// включает все три манифеста, значит это и есть место для контракта. Модуль,
+// перестроивший геометрию и уехавший ground'ом, перестаёт СОБИРАТЬСЯ.
+// `save.h` по-прежнему повторён литералом: включить его отсюда нельзя
+// (save.h → container.h → floor_gen.h — цикл).
+static_assert(kFloorArrivalCoord == 3,
+              "keep save.h kArrivalCoord in step with the lift contract");
+static_assert(kPadicGroundCoord == kFloorArrivalCoord,
+              "padic: ходовой ground модуля разъехался с координатой прибытия "
+              "лифта — либо верни геометрию, либо подними контракт и save.h");
+static_assert(kBlameGroundCoord == kFloorArrivalCoord,
+              "blame: ходовой ground модуля разъехался с координатой прибытия "
+              "лифта — либо верни геометрию, либо подними контракт и save.h");
+static_assert(kKhrushiGroundCoord == kFloorArrivalCoord,
+              "khrushi: ходовой ground модуля разъехался с координатой "
+              "прибытия лифта — либо верни геометрию, либо подними контракт "
+              "и save.h");
 
 // ---------------------------------------------------------------------------
 // Floor Generator Dispatch
@@ -83,9 +69,14 @@ std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
 // under src/game/floors/<name>/ + its row here, never a branch.
 using FloorGeneratorFunc = void (*)(World&, int, const FloorSpec&, unsigned);
 using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
+using FloorDoorwaysFunc = std::uint32_t (*)(int, unsigned, std::vector<Doorway>&);
 using AntourageExtraFunc = void (*)(const World&, int, unsigned, AntourageBake&);
 
-// ---- КОНВЕЙЕР МОДУЛЯ: ШЕСТЬ ТАБЛИЦ, И У КАЖДОЙ СТРОКИ ТЕПЕРЬ ЕСТЬ КЛЮЧ ----
+// ---- КОНВЕЙЕР МОДУЛЯ: ВОСЕМЬ ТАБЛИЦ, И У КАЖДОЙ СТРОКИ ЕСТЬ КЛЮЧ ----------
+//
+// Шесть из восьми: 2026-11-08 к шести конвейерным добавились гравитационный
+// фрейм и перечисление проёмов — два вопроса, на которые общий код отвечал
+// САМ (`return kPadicGravity;` и `if (kind == Blame || kind == Khrushi)`).
 //
 // Здесь стояли шесть ГОЛЫХ массивов, индексируемых `FloorKind`, и каждый был
 // прикрыт `static_assert`'ом на ДЛИНУ. Длина ловит вставку и удаление значения
@@ -105,8 +96,10 @@ using AntourageExtraFunc = void (*)(const World&, int, unsigned, AntourageBake&)
 // проверок порядка. Эти шесть и каталог `floor_spec.cpp` — первые семь.
 struct FloorGenRow { FloorKind kind; FloorGeneratorFunc fn; };
 struct FloorRoomsRow { FloorKind kind; FloorRoomsFunc fn; };
-struct AntourageExtraRow { FloorKind kind; AntourageExtraFunc fn; };
+struct FloorDoorwaysRow { FloorKind kind; FloorDoorwaysFunc fn; };
+struct GravityFrameRow { FloorKind kind; GravityRegime regime; };
 struct ModuleVersionRow { FloorKind kind; std::uint32_t version; };
+struct AntourageExtraRow { FloorKind kind; AntourageExtraFunc fn; };
 
 // There is no generic lattice builder any more: the old per-kind slab/wall
 // generator was purged (owner's mandate, 2026-08-02) and every kind dispatches
@@ -134,6 +127,59 @@ constexpr FloorGenRow kRuleDeclarers[] = {
 };
 GIGA_TABLE_BY_ENUM(kRuleDeclarers, &FloorGenRow::kind, FloorKind::Count);
 
+// ГРАВИТАЦИОННЫЙ ФРЕЙМ МОДУЛЯ (CANON S11: «Модуль обязан уметь объявить свой
+// гравитационный фрейм»). Строка НАЗЫВАЕТ константу модуля, а не повторяет её
+// значение: `kPadicGravity`/`kBlameGravity`/`kKhrushiGravity` объявлены каждая
+// в своём манифесте, рядом с выводом («башня складывает ярусы против -Z»), и
+// тот же `kXGravity` модуль пишет в живой `world.gravity().regime` в своём
+// `*_declare_rules`. Поменять фрейм модуля = поправить ОДНУ константу в ОДНОМ
+// файле модуля; таблицу при этом трогать не надо.
+//
+// Жил здесь `GravityRegime floor_gravity_regime() { return kPadicGravity; }` —
+// движковый вопрос «какой фрейм у ЭТОГО этажа» с ответом фреймом ОДНОГО
+// модуля.
+constexpr GravityFrameRow kGravityFrames[] = {
+    {FloorKind::Residential, kPadicGravity},   // padic геометрия — её фрейм
+    {FloorKind::Commercial,  kPadicGravity},
+    {FloorKind::Industrial,  kPadicGravity},
+    {FloorKind::Derelict,    kPadicGravity},
+    {FloorKind::Padic,       kPadicGravity},
+    {FloorKind::Blame,       kBlameGravity},
+    {FloorKind::Khrushi,     kKhrushiGravity},
+};
+GIGA_TABLE_BY_ENUM(kGravityFrames, &GravityFrameRow::kind, FloorKind::Count);
+
+// ---- ГЕЙТ: «ШАХТА ИНВАРИАНТНА» СИЛЬНЕЕ, ЧЕМ ИЗОТРОПИЯ ФРЕЙМА --------------
+// Сегодня латентный долг не виден: все три модуля объявляют NegZ. Но ровно в
+// тот день, когда модуль объявит -X, мина сработает молча — потому что
+// ЛИФТ У НАС Z-ОСЕВОЙ, и это не фрейм модуля, а общий каркас:
+// `stamp_lift_pillars` кладёт кольцо 3×3 в плоскости XY вокруг ПЛАНАРНОГО
+// узла латтиса (`fast_hub_cell` отдаёт только cx/cy) и гонит шахту через все
+// z; `LiftEntrance::h` и `kFloorArrivalCoord` — Z-координаты; кабина, её пол
+// и её потолок кладутся как `e.h - 1`/`e.h`/`e.h + 1` по z. Модуль с -X
+// получил бы ГОРИЗОНТАЛЬНУЮ трубу вместо шахты и «пол» кабины на стене.
+//
+// Поэтому фрейм модуля не свободен, пока у лифта одна ось, и это сказано
+// утверждением, а не надеждой. Zero законен — там падать некуда. Custom
+// отказан намеренно: он требует фолбэка на векторное поле, которого у таблицы
+// в compile-time нет. Снять этот гейт = сперва научить столб ложиться по
+// объявленной оси.
+constexpr bool lift_axis_ok(GravityRegime r) {
+    return r == GravityRegime::NegZ || r == GravityRegime::PosZ ||
+           r == GravityRegime::Zero;
+}
+constexpr bool all_frames_lift_compatible() {
+    for (const GravityFrameRow& r : kGravityFrames)
+        if (!lift_axis_ok(r.regime)) return false;
+    return true;
+}
+static_assert(all_frames_lift_compatible(),
+              "модуль объявил не-Z гравитационный фрейм, а лифтовый столб "
+              "кладётся по Z у ЛЮБОГО модуля (stamp_lift_pillars: кольцо в "
+              "XY вокруг планарного узла, шахта через все z; прибытие — "
+              "kFloorArrivalCoord по z). Сперва научи столб ложиться по "
+              "объявленной оси, потом меняй фрейм.");
+
 constexpr FloorGenRow kRuleAppliers[] = {
     {FloorKind::Residential, padic_apply_rules},
     {FloorKind::Commercial,  padic_apply_rules},
@@ -159,6 +205,31 @@ constexpr FloorRoomsRow kRoomDeclarers[] = {
 };
 GIGA_TABLE_BY_ENUM(kRoomDeclarers, &FloorRoomsRow::kind, FloorKind::Count);
 
+// ПРОЁМЫ МОДУЛЯ — та же строка данных, что комнаты: чистая функция
+// (number, seed), перечисляющая клетки, в которые модуль пробил дверные
+// отверстия ([door.h] — полотно навешивает door_declare).
+//
+// НОЛЬ ТОЖЕ ОБЪЯВЛЯЕТ МОДУЛЬ. Здесь стояла ветка
+// `if (spec.kind == Blame || spec.kind == Khrushi) return 0;` — знание о двух
+// конкретных модулях в общем коде, с их причинами, записанными здесь. Причина
+// — свойство модуля, значит и ноль, и причина уехали в его файл
+// (`blame_doorways`, `khrushi_doorways`); когда у хрущей появятся подъездные и
+// квартирные двери, наполнится ТЕЛО функции модуля, а эта таблица не
+// шевельнётся. Строк `nullptr` здесь намеренно нет (в отличие от
+// kAntourageExtras, где null = «обвеса сверх общего бейка нет»): «проёмов
+// нет» — ответ модуля, а не отсутствие ответа.
+constexpr FloorDoorwaysRow kDoorwayEnumerators[] = {
+    {FloorKind::Residential, padic_doorways},
+    {FloorKind::Commercial,  padic_doorways},
+    {FloorKind::Industrial,  padic_doorways},
+    {FloorKind::Derelict,    padic_doorways},
+    {FloorKind::Padic,       padic_doorways},
+    {FloorKind::Blame,       blame_doorways},
+    {FloorKind::Khrushi,     khrushi_doorways},
+};
+GIGA_TABLE_BY_ENUM(kDoorwayEnumerators, &FloorDoorwaysRow::kind,
+                   FloorKind::Count);
+
 // Module antourage rows: null = the kind adds nothing over the generic bake.
 constexpr AntourageExtraRow kAntourageExtras[] = {
     {FloorKind::Residential, nullptr},
@@ -171,10 +242,12 @@ constexpr AntourageExtraRow kAntourageExtras[] = {
 };
 GIGA_TABLE_BY_ENUM(kAntourageExtras, &AntourageExtraRow::kind, FloorKind::Count);
 
-std::size_t kind_row(const FloorSpec& spec) {
-    const std::size_t k = static_cast<std::size_t>(spec.kind);
+std::size_t kind_row(FloorKind kind) {
+    const std::size_t k = static_cast<std::size_t>(kind);
     return k >= static_cast<std::size_t>(FloorKind::Count) ? 0 : k;
 }
+
+std::size_t kind_row(const FloorSpec& spec) { return kind_row(spec.kind); }
 
 // Версии генерации модулей (S20.6 закон 4) — строка данных на kind, как
 // генератор. ПОДНИМАТЬ РУКОЙ при любом изменении выхода generate_floor
@@ -199,12 +272,17 @@ void floor_declare_rules(World& world, int number, const FloorSpec& spec,
     kRuleDeclarers[kind_row(spec)].fn(world, number, spec, seed);
 }
 
+GravityRegime floor_gravity_regime(FloorKind kind) {
+    return kGravityFrames[kind_row(kind)].regime;
+}
+
+std::uint32_t floor_doorways(int number, const FloorSpec& spec, unsigned seed,
+                             std::vector<Doorway>& out) {
+    return kDoorwayEnumerators[kind_row(spec)].fn(number, seed, out);
+}
+
 std::uint32_t module_gen_version(FloorKind kind) {
-    const std::size_t k = static_cast<std::size_t>(kind);
-    return kModuleGenVersions[k >= static_cast<std::size_t>(FloorKind::Count)
-                                  ? 0
-                                  : k]
-        .version;
+    return kModuleGenVersions[kind_row(kind)].version;
 }
 
 void generate_floor(World& world, int number, const FloorSpec& spec,
@@ -232,10 +310,14 @@ void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
 }
 
 LiftEntrance lift_entrance(FloorKind kind, int number, int node, unsigned seed) {
-    // Storey входа называет МОДУЛЬ (S10). Сегодня у всех трёх модулей одна
-    // политика — ходовой ground (walkable-клетка прибытия, floor_ground_z);
-    // другая политика (случайный жилой storey, улица, машинное) = новая
-    // строка здесь при посадке лобби инкремента 6, не ветка у потребителей.
+    // Storey входа — ОБЩИЙ КОНТРАКТ СТОЛБА (kFloorArrivalCoord), и это не
+    // «политика модуля», как тут было написано: поездка планирует координату
+    // прибытия ДО того, как узнаёт модуль назначения (`save.h kArrivalCoord`
+    // летит параметром в ride_elevator), а каждый модуль утверждением в шапке
+    // этого файла обязан держать там ходовую клетку. Чтобы storey называл
+    // МОДУЛЬ (случайный жилой ярус, улица, машинное), поездку надо сперва
+    // научить спрашивать этаж назначения — тогда здесь встанет таблица, как у
+    // гравитационного фрейма. `kind` ждёт ровно этого дня.
     (void)kind;
     LiftEntrance e;
     e.h = floor_ground_z();

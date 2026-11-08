@@ -347,8 +347,8 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
     bake_zone_flow(out.part, out.graph, oracle, size, gravity, out.flow);
 
     // РАЗМЕР ЗОНЫ ВСЛУХ, И ЭТО НЕ ОТЛАДКА. Из него выводятся ОБА предела
-    // дальности ноги — `kWanderLegZones` ([game/wander.h]) и `kPatrolLegZones`
-    // ([game/role.h]), — а до 2026-10-12 числа в дереве не было вовсе: оба
+    // дальности ноги — `kWanderLegMetres` ([game/wander.h]) и `kPatrolLegMetres`
+    // ([game/patrol.h]), — а до 2026-10-12 числа в дереве не было вовсе: оба
     // предела опирались на ПРОЗУ «зона порядка 5 клеток, то есть 10 м». Прозу
     // нельзя пересчитать на другом модуле, и первый же боковой этаж сделал бы
     // оба предела тихо неверными. Печатается здесь, а не у потребителя, потому
@@ -419,8 +419,10 @@ RoomId zone_pick_near(const ZoneNav& zn, RoomId from, std::uint32_t salt,
     const std::uint32_t fromIdx = static_cast<std::uint32_t>(from) - 1u;
     if (fromIdx >= zn.graph.zones) return kNoRoom;
 
-    // Соль отдельная от соли ролей и от соли наряда: маршрут тела и его
-    // назначение не должны коррелировать по построению (довод `kRoleSalt`).
+    // Соль отдельная от соли наряда (`kPatrolSalt`, [game/patrol.h]): два
+    // разных решения об одном теле не должны коррелировать по построению.
+    // (Прежде этот довод ссылался на соль ролей; роли снесены 2026-11-08,
+    // довод — нет, он про НЕЗАВИСИМОСТЬ хешей, а не про архетипы.)
     constexpr std::uint32_t kZoneWalkSalt = 0x7A6F6E65u; // "zone"
 
     RoomId at = from;

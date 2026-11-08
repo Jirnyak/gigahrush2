@@ -87,10 +87,31 @@ void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
 // заворачивается — у столба нет ни начала, ни конца), шахта 1 клетка в
 // центре. Кабина НЕ движется: на этаже входа в шахте стоит пол (клетка под
 // storey входа), «приезд кабины» — иллюзия поездки. ВХОД — один проём в
-// кольце: storey называет МОДУЛЬ этажа (S10 — политика в модуле; сегодня все
-// три модуля называют свой ходовой ground), сторону — хеш (сид, этаж, узел).
+// кольце: storey — ОБЩАЯ координата прибытия столба (kFloorArrivalCoord ниже:
+// поездка планирует её до того, как узнает модуль назначения), сторону — хеш
+// (сид, этаж, узел).
 // От этой структуры считают ВСЕ потребители: посадка ride_elevator, кнопка
 // вызова, панель кабины — второй копии закона не существует.
+
+// КООРДИНАТА ПРИБЫТИЯ — КОНТРАКТ ВСЕГО СТОЛБА, А НЕ ПОЛИТИКА ОДНОГО МОДУЛЯ.
+//
+// Это число ОБЩЕЕ для всех модулей этажей, и так и надо говорить вслух. Оно
+// жило здесь как `kPadicGroundCoord` — константа ОДНОГО модуля в общем ответе,
+// — и три модуля независимо писали в своих заголовках «намеренно равно
+// падиковскому». Равны они не падику: поездка между этажами планирует
+// координату прибытия ЗАРАНЕЕ, одной на весь столб (`save.h kArrivalCoord`
+// летит параметром в `ride_elevator`), значит модуль, чтобы быть достижимым
+// лифтом, ОБЯЗАН гарантировать ходовую клетку ровно здесь. Это требование
+// лифта к модулю, а не наблюдение о падике.
+//
+// Пин живёт тут, а не в `save.h`: `save.h` → `game/container.h` →
+// `game/floor_gen.h`, то есть включить `save.h` отсюда нельзя — цикл. Поэтому
+// число повторено литералом, а `floor_gen.cpp` утверждает равенство и ему, и
+// собственной координате КАЖДОГО зарегистрированного модуля
+// (`kPadicGroundCoord`/`kBlameGroundCoord`/`kKhrushiGroundCoord`): модуль,
+// перестроивший свою геометрию и забывший про лифт, перестаёт СОБИРАТЬСЯ.
+inline constexpr int kFloorArrivalCoord = 3;
+
 struct LiftEntrance {
     int h;    // walkable storey клетки входа (и пола кабины под ней)
     int side; // 0..3 = +x, -x, +y, -y — сторона проёма в кольце
@@ -113,17 +134,35 @@ void stamp_lift_pillars(World& world, int number, const FloorSpec& spec,
 void stamp_lift_protection(World& world);
 
 // ---------------------------------------------------------------------------
-// Gravity frame — the module's declared regime, and axis-generic ground queries
+// Gravity frame — МОДУЛЬ ОБЪЯВЛЯЕТ, ОБЩИЙ КОД ТОЛЬКО СПРАШИВАЕТ
 // ---------------------------------------------------------------------------
 // The engine is ISOTROPIC (x/y/z equal citizens on the torus); gravity is the
 // one emergent asymmetry, and it is the MODULE's to declare ([world/gravity.h]
-// GravityRegime — 8 values, one of which is Zero). Every consumer that puts a
-// body or a crate "on the ground" goes through these instead of naming an axis.
-GravityRegime floor_gravity_regime();
-
-// The standing coordinate along the gravity axis (the module's ground storey).
-// Meaningless under Zero (any air cell is ground) — callers branch on regime.
-int floor_ground_coord();
+// GravityRegime — 8 values, one of which is Zero). Канон S11: «Модуль обязан
+// уметь объявить свой гравитационный фрейм».
+//
+// ДВА КАНАЛА, И ЭТО НЕ ДУБЛИКАТЫ — У НИХ РАЗНОЕ ВРЕМЯ ЖИЗНИ:
+//
+//   * ЖИВОЙ фрейм этажа — `world.gravity().regime`. Его пишет сам модуль в
+//     своём `*_declare_rules` (шаг 1 входа на этаж), и это РАНТАЙМ-состояние:
+//     игра вправе его перевернуть посреди прогона, потребители обязаны
+//     перечитывать, а не кэшировать. Все, кто держит World, спрашивают ЕГО —
+//     так и работает `floor_standable` ниже.
+//
+//   * ЗАЯВЛЕННЫЙ фрейм МОДУЛЯ — `floor_gravity_regime(kind)`. Отвечает, когда
+//     World'а ещё нет: фрейм обязан быть известен ДО геометрии (шаг 1 из трёх
+//     наверху файла), и посадка лифта выбирает ось прибытия на этаже, который
+//     в этот момент может быть не резидентным. Берётся СТРОКОЙ таблицы
+//     модулей в floor_gen.cpp, и каждая строка называет собственную константу
+//     своего модуля — kPadicGravity / kBlameGravity / kKhrushiGravity, каждая
+//     в своём заголовке.
+//
+// На этом месте до 2026-11-08 стояло `return kPadicGravity;`: общий код
+// отвечал фреймом ОДНОГО модуля на вопрос обо ВСЕХ. Формально это не `if` по
+// виду этажа, а по существу — та же запрещённая каноном ветка, просто
+// схлопнутая в константу. Долг был ЛАТЕНТНЫМ (все три модуля объявляют NegZ),
+// то есть ровно той миной, про которую канон и написан.
+GravityRegime floor_gravity_regime(FloorKind kind);
 
 // A standing cell: air, with solid one cell toward -g. Under Zero every air
 // cell qualifies. Wraps on all axes. Reads the WORLD's live regime
@@ -131,18 +170,20 @@ int floor_ground_coord();
 // module's generation-time constant.
 bool floor_standable(const World& w, int x, int y, int z);
 
-// Compose a cell from two TANGENT coordinates (the two non-gravity axes in
-// x,y,z order) and a HEIGHT coordinate `h` along the gravity axis. No storey is
-// special: spawn draws h over the whole axis and filters with floor_standable —
-// the torus has no privileged coordinate.
-void floor_cell(const World& w, int u, int v, int h, int& x, int& y, int& z);
-
-// floor_cell at the module's default ground coordinate — the ARRIVAL storey
-// (elevator pads), not a spawn privilege.
-void floor_ground_cell(const World& w, int u, int v, int& x, int& y, int& z);
-
-// Legacy projection: the ground coordinate, valid while the registered module's
-// regime is +-Z. Prefer the frame helpers above in new code.
+// Координата прибытия, названная как Z — то есть `kFloorArrivalCoord` выше.
+// Z, а не «ось фрейма», и это ЧЕСТНО: лифтовый столб кладётся общим каркасом
+// по оси Z у ЛЮБОГО модуля (stamp_lift_pillars: кольцо в плоскости XY вокруг
+// планарного узла латтиса, шахта через все z), поэтому ходовая клетка
+// прибытия — Z-координата по построению. Гейт в floor_gen.cpp держит это
+// утверждение: модуль, объявивший не-Z фрейм, не соберётся, пока у лифта не
+// появится поперечная шахта.
+//
+// РЕШЁТОЧНЫЙ КЛАСТЕР floor_ground_coord/floor_cell/floor_ground_cell УМЕР
+// (2026-11-08): три осе-generic функции, у которых НЕ БЫЛО ни одного
+// потребителя ни в src/, ни в tests/, а `floor_ground_coord` вдобавок был
+// дубликатом этой функции. Осе-generic композиция клетки вернётся с реальным
+// потребителем — модулем, который объявит не-Z фрейм, — и вместе с ним
+// вернётся через `world.gravity()`, а не через константу одного модуля.
 int floor_ground_z();
 
 // ---------------------------------------------------------------------------
@@ -168,8 +209,15 @@ struct Doorway {
 };
 
 // Enumerate every doorway `generate_floor(world, number, spec, seed)` punches,
-// appending to `out`; returns how many were added. Empty for a pillar-mode kind
-// (an open plate has no wall segments to open).
+// appending to `out`; returns how many were added.
+//
+// ПЕРЕЧИСЛЯЕТ МОДУЛЬ, НЕ ЭТА ФУНКЦИЯ — строка данных в таблице
+// `kDoorwayEnumerators` (floor_gen.cpp), как генератор и как объявитель
+// комнат. Здесь стояла ветка `if (kind == Blame || kind == Khrushi) return 0;`
+// — знание о ДВУХ конкретных модулях в общем коде, прямо запрещённое каноном
+// S11. Теперь ноль возвращает сам модуль, из своего файла и со своей
+// причиной: у блейма пасти лабиринта выходят в бездну и у них нет наличников
+// под полотно, у хрущей подъездные и квартирные двери — следующий инкремент.
 //
 // Exported so a second consumer has to
 // agree with the generator EXACTLY. door.cpp needs the doorway cells at floor

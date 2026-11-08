@@ -77,7 +77,6 @@ void NpcPool::init() {
     drop_column(age_);
     drop_column(sex_);
     drop_column(level_);
-    drop_column(role_);
     drop_column(name_);
     drop_column(surname_);
     drop_column(rel_);
@@ -112,7 +111,6 @@ void NpcPool::grow_live_columns(std::uint32_t rows) {
     grow_column(age_, rows);
     grow_column(sex_, rows);
     grow_column(level_, rows);
-    grow_column(role_, rows);
     grow_column(gen_, rows);
     // A DEMAND column joins the per-spawn growth set once something has materialized
     // it. That is what keeps relations() / set_name() from resizing after their first
@@ -232,9 +230,9 @@ void NpcPool::reset_row(NpcId id) {
     if (id < age_.size()) age_[id] = 0;
     if (id < sex_.size()) sex_[id] = SexUnset;
     if (id < level_.size()) level_[id] = 0;
-    if (id < role_.size()) role_[id] = 0;
-    // Строка обнуления блока перков ушла вместе с колонкой (2026-10-12): нечего
-    // воскрешать в новорождённом, когда столбца нет.
+    // Строка обнуления блока перков ушла вместе с колонкой (2026-10-12), строка
+    // обнуления role_ — вместе с системой ролей (2026-11-08): нечего воскрешать
+    // в новорождённом, когда столбца нет.
     // gen_ is deliberately NOT reset — it is the whole point of the generation counter.
 
     // DEMAND columns: only if something materialized them.
@@ -394,7 +392,7 @@ std::size_t NpcPool::resident_bytes() const {
            column_bytes(maxHp_) + column_bytes(floor_) + column_bytes(cx_) +
            column_bytes(cy_) + column_bytes(cz_) + column_bytes(heightMm_) +
            column_bytes(inv_) + column_bytes(needs_) + column_bytes(age_) +
-           column_bytes(sex_) + column_bytes(level_) + column_bytes(role_) +
+           column_bytes(sex_) + column_bytes(level_) +
            column_bytes(name_) + column_bytes(surname_) + column_bytes(rel_) +
            column_bytes(gen_) + column_bytes(nextFree_);
 }
@@ -452,8 +450,8 @@ struct ByteReader {
     }
 };
 
-// Fixed per-row wire width: 20 B of demographic columns (flags 1 + faction 2 +
-// hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level/role 4 + gen 2)
+// Fixed per-row wire width: 19 B of demographic columns (flags 1 + faction 2 +
+// hp/maxHp/floor 6 + cell 3 + height 2 + age/sex/level 3 + gen 2)
 // + 37 B needs (v11: +hpBank, [save.h]) + 320 B inventory (v14: u16 count makes
 // the slot 5 B on the wire); names add 2 x kNameLen when present.
 //
@@ -462,7 +460,11 @@ struct ByteReader {
 // выше обязано ехать вместе с числом — иначе сумма права, а слагаемые врут, и
 // следующий, кто сверит строку с файлом, найдёт расхождение в 8 Б там, где
 // формат целиком сдвинут. Сейв бампнут до v24, старые отклоняются.
-inline constexpr std::size_t kPoolRowWire = 20 + 37 + 320;
+//
+// 20 -> 19 и 377 -> 376 (424 с именами) на 2026-11-08: ушёл байт колонки role_
+// вместе со СНЕСЁННОЙ системой ролей ([npc_pool.h] надгробие). То же правило о
+// слагаемых: подвинуто и число, и его разложение.
+inline constexpr std::size_t kPoolRowWire = 19 + 37 + 320;
 inline constexpr std::size_t kPoolHeadWire = 4 + 4 + 1 + 1;
 
 } // namespace
@@ -491,9 +493,9 @@ void NpcPool::save_rows(std::vector<std::uint8_t>& out) const {
         put_u8(out, id < age_.size() ? age_[id] : 0);
         put_u8(out, id < sex_.size() ? sex_[id] : SexUnset);
         put_u8(out, id < level_.size() ? level_[id] : 0);
-        // The role column travels: it is a writable OVERRIDE ([role.h]), and a
-        // reload that re-derived it from role_for() would undo every story event.
-        put_u8(out, id < role_.size() ? role_[id] : 0);
+        // Байт колонки role_ ездил здесь до 2026-11-08 («роль есть writable
+        // OVERRIDE, перевывод из хеша отменил бы сюжетные события»). Система
+        // ролей снесена целиком, формат сузился ровно на этот байт.
         // Восемь байт блока перков писались здесь до v24; колонка снесена
         // 2026-10-12, и формат сузился ровно на них (kPoolRowWire выше).
         put_u16(out, id < gen_.size() ? gen_[id] : 0);
@@ -562,7 +564,6 @@ bool NpcPool::load_rows(const std::uint8_t* bytes, std::size_t n) {
         age_[id] = r.u8();
         sex_[id] = r.u8();
         level_[id] = r.u8();
-        role_[id] = r.u8();
         gen_[id] = r.u16();
         Needs& nd = needs_[id];
         nd.food = r.f32();

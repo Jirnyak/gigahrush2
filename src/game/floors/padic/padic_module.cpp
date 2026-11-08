@@ -10,6 +10,7 @@
 #include "ecs/components.h"
 #include "core/wrap.h"
 #include "world/anchor.h"
+#include "world/lattice.h" // kLatticeDim/kLatticeSpacing/kLatticeHalf — НАСТОЯЩИЕ
 #include "world/surface.h"
 #include "world/types.h"
 
@@ -36,11 +37,20 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
     //   stamp_stair puts an entry-strip slab at (sx, sy / sy+1, b+2).
     // Corridor mouth is (sx, by=sy-1) with opening — use a normal ceiling
     // neighbor when solid, else hang from the entry strip solid bits.
+    //
+    // ТЕНЕВЫЕ КОПИИ КОНСТАНТ РЕШЁТКИ СНЕСЕНЫ (2026-11-08). Здесь стояли
+    // `kCorr0 = 16 /* kLatticeHalf */`, `kLatticeSpacing = 32` и
+    // `kLatticeDim = 4` — три локальных числа вместо инклюда
+    // [world/lattice.h], и именно на этот случай указывает предупреждение в
+    // [game/fast_travel.h] («a second copy is how padic_module.cpp ended up
+    // shadowing kLatticeDim with its own local 4»). Копия тем и опасна, что
+    // сходится с настоящей решёткой ровно сегодня: правка kLatticeDim
+    // развела бы сеялку лампочек с геометрией лестниц молча, без единой
+    // красной строки. Теперь обе читают одни константы — `kCorr0` живёт в
+    // padic_gen.cpp как `kLatticeHalf`, и колонка ниже считается тем же
+    // `kLatticeHalf + bi * kLatticeSpacing`.
     constexpr int kStorey = 3;
     constexpr int kLastBase = 123;
-    constexpr int kCorr0 = 16;          // kLatticeHalf
-    constexpr int kLatticeSpacing = 32;
-    constexpr int kLatticeDim = 4;
 
     auto try_spawn_bulb = [&](int cx, int cy, int airZ) -> bool {
         SubVoxelAnchor anchor{};
@@ -98,8 +108,8 @@ std::uint32_t seed_padic_props(Registry& reg, const World& world, LayerId layer,
         for (int bj = 0; bj < kLatticeDim; ++bj) {
             for (int bi = 0; bi < kLatticeDim; ++bi) {
                 if (((bi + bj) & 1) != 0) continue;
-                const int bx = kCorr0 + bi * kLatticeSpacing + 2;
-                const int by = kCorr0 + bj * kLatticeSpacing + 2;
+                const int bx = kLatticeHalf + bi * kLatticeSpacing + 2;
+                const int by = kLatticeHalf + bj * kLatticeSpacing + 2;
                 const int sx = bx + 13;
                 const int sy = by + 1; // PlanStair.y — flight A row
 

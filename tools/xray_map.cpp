@@ -42,7 +42,6 @@
 #include "game/needs.h"
 #include "game/npc_pool.h"
 #include "game/prop_system.h"
-#include "game/role.h"
 #include "game/room.h"      // НАСТОЯЩИЕ комнаты: roomAt = раскраска клеток
 #include "game/samosbor.h"
 #include "world/destruct.h"
@@ -631,13 +630,17 @@ void render_mode_struct(Image& img, WorldContext& ctx, const ToolOptions& opt) {
             int px = static_cast<int>((static_cast<std::int64_t>(cx) * img.width) / kMacroDim);
             int py = static_cast<int>((static_cast<std::int64_t>(cy) * img.height) / kMacroDim);
 
-            // Magenta for wanderers, cyan for settled residents
-            std::uint8_t roleId = ctx.pool.role(id);
-            if (roleId == static_cast<std::uint8_t>(RoleId::Resident)) {
-                img.fill_circle(px, py, 3, 0, 229, 255, 0.9f); // #00E5FF
-            } else {
-                img.fill_circle(px, py, 3, 255, 23, 68, 0.9f); // #FF1744
-            }
+            // ПО ФРАКЦИИ, А НЕ ПО РОЛИ. Прежде маркер делил толпу на
+            // «оседлых» (RoleId::Resident, циан) и «бродяг» (всё остальное,
+            // красный); колонка ролей снесена 2026-11-08. Фракция — тот же
+            // вопрос «кто это», но с живым источником правды и с палитрой,
+            // которую уже видно в игре ([faction.h] kFactionHue), так что
+            // карта и тело окрашены ОДНИМ законом, а не двумя.
+            const vec3 fc = faction_color(ctx.pool.faction(id), 0u);
+            img.fill_circle(px, py, 3,
+                            static_cast<std::uint8_t>(fc.x * 255.0f + 0.5f),
+                            static_cast<std::uint8_t>(fc.y * 255.0f + 0.5f),
+                            static_cast<std::uint8_t>(fc.z * 255.0f + 0.5f), 0.9f);
         }
     }
 
@@ -803,7 +806,7 @@ void render_mode_pop(Image& img, WorldContext& ctx, const ToolOptions& opt) {
         }
     }
 
-    // 3. Discrete NPC markers colored by Role / Intent
+    // 3. Discrete NPC markers colored by FACTION ([faction.h] kFactionHue)
     for (NpcId id : crowd) {
         if (!ctx.pool.valid(id) || !ctx.pool.alive(id)) continue;
         int ncx = ctx.pool.cx(id);
@@ -811,19 +814,14 @@ void render_mode_pop(Image& img, WorldContext& ctx, const ToolOptions& opt) {
         int px = static_cast<int>((static_cast<std::int64_t>(ncx) * img.width) / kMacroDim);
         int py = static_cast<int>((static_cast<std::int64_t>(ncy) * img.height) / kMacroDim);
 
-        std::uint8_t rId = ctx.pool.role(id);
-        std::uint8_t nr = 0, ng = 229, nb = 255;
-        if (rId == static_cast<std::uint8_t>(RoleId::Duty)) {
-            nr = 255; ng = 234; nb = 0; // Patrol Yellow #FFEA00
-        } else if (rId == static_cast<std::uint8_t>(RoleId::Medic)) {
-            nr = 0; ng = 229; nb = 255; // Medic Cyan #00E5FF
-        } else if (rId == static_cast<std::uint8_t>(RoleId::Looter)) {
-            nr = 255; ng = 145; nb = 0; // Looter Orange #FF9100
-        } else if (rId == static_cast<std::uint8_t>(RoleId::Cultist)) {
-            nr = 213; ng = 0; nb = 249; // Cultist Violet #D500F9
-        } else {
-            nr = 74; ng = 190; nb = 145; // Citizen Green-Teal #4ABE91
-        }
+        // Пять ролей -> пять ФРАКЦИЙ: палитра берётся из игры, а не заводится
+        // здесь второй раз. `jitterKey` = 0 нарочно — на карте дрожание оттенка
+        // мешало бы читать принадлежность, а в теле оно для того, чтобы толпа не
+        // выглядела клонами.
+        const vec3 fc = faction_color(ctx.pool.faction(id), 0u);
+        const std::uint8_t nr = static_cast<std::uint8_t>(fc.x * 255.0f + 0.5f);
+        const std::uint8_t ng = static_cast<std::uint8_t>(fc.y * 255.0f + 0.5f);
+        const std::uint8_t nb = static_cast<std::uint8_t>(fc.z * 255.0f + 0.5f);
 
         img.fill_circle(px, py, 4, nr, ng, nb, 1.0f);
         img.draw_circle(px, py, 4, 255, 255, 255, 0.8f);
@@ -833,18 +831,28 @@ void render_mode_pop(Image& img, WorldContext& ctx, const ToolOptions& opt) {
     int legX = 14, legY = static_cast<int>(img.height) - 90;
     img.fill_rect(legX, legY, 320, 80, 3, 7, 10, 0.85f);
     img.draw_rect(legX, legY, 320, 80, 44, 122, 158);
-    img.draw_string(legX + 8, legY + 6, "DEMOGRAPHIC ROLES (AI INTENTS):", 92, 214, 255, 1);
+    img.draw_string(legX + 8, legY + 6, "DEMOGRAPHICS BY FACTION:", 92, 214, 255, 1);
 
     auto draw_dot = [&](int kx, int ky, const char* name, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
         img.fill_circle(kx + 4, ky + 4, 3, r, g, b);
         img.draw_string(kx + 12, ky + 1, name, 220, 220, 220, 1);
     };
 
-    draw_dot(legX + 8, legY + 22, "Resident (Wander/Rest)", 74, 190, 145);
-    draw_dot(legX + 160, legY + 22, "Duty (Patrol)", 255, 234, 0);
-    draw_dot(legX + 8, legY + 38, "Medic (Care)", 0, 229, 255);
-    draw_dot(legX + 160, legY + 38, "Looter (Scavenge)", 255, 145, 0);
-    draw_dot(legX + 8, legY + 54, "Cultist (Social)", 213, 0, 249);
+    // Легенда строится ИЗ ТОЙ ЖЕ функции, что и маркеры: легенда, в которой
+    // цвета выписаны литералами, рано или поздно начинает врать о картинке.
+    {
+        static const char* kNames[kFactionCount] = {
+            "Citizens", "Liquidators", "Cultists", "Scientists", "Wild"};
+        for (std::size_t fi = 0; fi < kFactionCount; ++fi) {
+            const vec3 lc = faction_color(static_cast<std::uint16_t>(fi), 0u);
+            const int col = (fi % 2 == 0) ? legX + 8 : legX + 160;
+            const int row = legY + 22 + static_cast<int>(fi / 2) * 16;
+            draw_dot(col, row, kNames[fi],
+                     static_cast<std::uint8_t>(lc.x * 255.0f + 0.5f),
+                     static_cast<std::uint8_t>(lc.y * 255.0f + 0.5f),
+                     static_cast<std::uint8_t>(lc.z * 255.0f + 0.5f));
+        }
+    }
 
     draw_hud_header(img, ctx.loadedFloor, "DEMOGRAPHICS & POPULATION HEATMAP",
                     ctx.catalog.resolve(ctx.loadedFloor).kind,

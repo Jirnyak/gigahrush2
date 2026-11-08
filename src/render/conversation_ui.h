@@ -49,20 +49,18 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header);
 
 // Касса ([economy.h] teller) — тоже вместо меню, пока стойка открыта. Панель
 // читает два числа и возвращает нажатия; глаголы зовёт app.
-struct BankUiRequest {
+//
+// Стойка — РОВНО касса: наличка <-> счёт. Срочный вклад под процент, кредит
+// по лимиту ветки и четыре их клавиши (D/W/L/R) снесены вместе с банком
+// (решение владельца 2026-11-08, см. шапку [economy.h]): банк был
+// надстройкой без мандата, а наличка/счёт — ядро, деньги как цена в обмене.
+struct TellerUiRequest {
     bool depositAll = false;   // Enter — вся наличка на счёт
     bool withdraw = false;     // T — снять до 1000 монетами
-    bool toDeposit = false;    // D — весь счёт на срочный вклад
-    bool fromDeposit = false;  // W — весь вклад назад на счёт
-    bool borrow = false;       // L — кредит до лимита ветки
-    bool repay = false;        // R — погасить долг со счёта
     bool close = false;        // Esc — от стойки
 };
 
-// Стойка теперь полный стол ([economy.h]): счёт/наличка + срочный вклад под
-// процент и кредит под процент. Числа читает, глаголы зовёт app.
-BankUiRequest bank_ui_draw(std::int64_t banked, std::int64_t cash,
-                           std::int64_t deposit, std::int64_t debt,
-                           std::int64_t creditFree, const char* header);
+TellerUiRequest teller_ui_draw(std::int64_t banked, std::int64_t cash,
+                               const char* header);
 
 } // namespace giga

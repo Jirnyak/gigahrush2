@@ -1,6 +1,5 @@
 #include "game/ai.h"
 #include "world/nav.h"     // flee-маршруты (шёл транзитом через room_zone.h)
-#include "world/lattice.h" // LatticeNode — укрытия у решётки
 #include <algorithm>
 
 #include <cmath>
@@ -11,12 +10,10 @@
 #include "ecs/components.h"   // Transform, Velocity, CameraTag
 #include "game/embody.h"      // NpcRef
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
-#include "core/watch.h"       // kTactTicks — дебаунс деяния «лечить» (S19)
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
-#include "game/witness.h"     // deed_publish — лечение другого = деяние (S19)
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
-#include "game/role.h"        // RoleTraits, role_traits — archetype multipliers
+#include "game/patrol.h"      // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
 #include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
@@ -230,16 +227,11 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentWander) + stick(IntentWander) - urgent * 12.0f -
         threat * 22.0f - tpen(IntentWander));
 
-    // Role traits ([role.h] TABLE 1) — multipliers BEFORE identity jitter, so the
-    // jitter still breaks ties AFTER a role has stated its preference. Resident is
-    // the all-ones row: a roleless build scores bit-for-bit what it scored before.
-    const RoleTraits& rt = role_traits(static_cast<RoleId>(p.role));
-    out[IntentWork]   *= rt.workDrive;
-    out[IntentPatrol] *= rt.patrolDrive;
-    out[IntentSocial] *= rt.sociability;
-    out[IntentWork]   += rt.scavengeDrive * p.localScore[IntentWork] * (1.0f - threat);
-    out[IntentHeal]   += rt.careDrive * p.nearbyWounded01 * (1.0f - threat);
-
+    // РОЛЕВЫХ МНОЖИТЕЛЕЙ ЗДЕСЬ БОЛЬШЕ НЕТ (снос 2026-11-08, решение владельца).
+    // Пять архетипов с 60 числами в C++ были портом агента (`role.h`, «Ported from
+    // marko1olo»), мандата в каноне у них не было, а медик-аура лечила соседей без
+    // предмета, без решения и без согласия. Различие тел идёт от фракции и нужд —
+    // то есть от систем, у которых мандат есть.
     // addIdentityJitter: each intent gets a per-body signed nudge on its own
     // "score:<name>" channel (amp 2.5), then a final clamp. This breaks ties
     // per-body so a uniform crowd does not act in lockstep.
@@ -663,51 +655,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         }
         brain.lastHp = hpNow;
 
-        // --- Medic: heal nearby wounded, and measure the ward ----------------
-        // Every tick, not on the re-plan cadence: the credit is dt-scaled, and
-        // running it 1/8th of the time would silently divide kMedicHealPerSec by
-        // the stagger. Cost: medics are 1-3% of the embodied window, and the scan
-        // is over that window, not the pool. The credit lands in the PATIENT's
-        // hpBank — the same bank the Medical room feeds — and the medic pays for
-        // the shift in sleep, so care is work, not a free aura.
-        const std::uint8_t roleId = pool.role(id);
-        float nearbyWounded01 = 0.0f;
-        if (roleId == static_cast<std::uint8_t>(RoleId::Medic)) {
-            float woundedCount = 0.0f;
-            float totalCount = 0.0f;
-            auto trView = reg.view<const Transform, const NpcRef>();
-            for (auto te : trView) {
-                if (te == e) continue;
-                if (reg.all_of<Dead>(te)) continue;
-                const Transform& ot = trView.get<const Transform>(te);
-                if (ot.layer != layer) continue;
-                const float dx = wrap_delta_f(tr.pos.x, ot.pos.x, kWorldExtent);
-                const float dy = wrap_delta_f(tr.pos.y, ot.pos.y, kWorldExtent);
-                const float dz = wrap_delta_f(tr.pos.z, ot.pos.z, kWorldExtent);
-                if (dx * dx + dy * dy + dz * dz > kMedicReachM * kMedicReachM)
-                    continue;
-                const NpcId oid = trView.get<const NpcRef>(te).id;
-                if (!pool.valid(oid) || !pool.alive(oid)) continue;
-                totalCount += 1.0f;
-                const float hpFrac = static_cast<float>(pool.hp(oid)) /
-                                     static_cast<float>(pool.max_hp(oid));
-                if (hpFrac < kMedicThreshold) {
-                    woundedCount += 1.0f;
-                    pool.needs(oid).hpBank += kMedicHealPerSec * dt;
-                    Needs& own = pool.needs(id);
-                    own.sleep -= kMedicFatiguePerSec * dt;
-                    if (own.sleep < 0.0f) own.sleep = 0.0f;
-                    // ДЕЯНИЕ «лечить» (S19): кредит идёт каждый тик —
-                    // публиковать каждый нельзя. Stateless дебаунс: одно
-                    // деяние на пациента в ТАКТ (граница kTactTicks; ср.
-                    // «одно взятие на агента в час», S12.5).
-                    if (bus != nullptr && (tick & (kTactTicks - 1)) == 0)
-                        deed_publish(*bus, kVerbHeal, e, oid, ot.pos, tick);
-                }
-            }
-            if (totalCount > 0.0f) nearbyWounded01 = woundedCount / totalCount;
-        }
-
         // --- RECALL, and only when somebody is going to read it --------------
         // Two consumers, so two conditions: the scorer (a re-plan) and the flee
         // steering direction (already fleeing). Everything else pays zero. At the
@@ -730,8 +677,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             Perception p;
             p.idSeed = idSeed;
             p.faction = pool.faction(id);
-            p.role = roleId;
-            p.nearbyWounded01 = nearbyWounded01;
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;

@@ -13,7 +13,6 @@
 #include "game/item_table.h"  // kItemNames, kItemCount
 #include "world/medium.h"     // kSubMaterialName-соседи: агрегаты сред в снимке НЕ живут
 #include "game/mob_table.h"   // kMobNames, kMobKindCount
-#include "game/quest.h"       // QuestLog, quest_log_write, quest_log_read, kQuestLogWire
 #include "game/room.h"        // FloorRooms — репутация комнат в снимке (S13.6)
 #include "game/craft.h"       // craft_write, craft_read, kCraftingWire
 #include "game/rpg.h"         // RpgStats (visit_rpg)
@@ -199,14 +198,16 @@ void visit_header(Ar& ar, H& h) {
     ar.u32(h.mobFingerprint);
     ar.u32(h.containerCount);
     ar.u16(h.ledgerBytes);
-    ar.u16(h.bookBytes);
+    // v26: на месте `bookBytes` и двух квестовых проверок — РЕЗЕРВ. Байты
+    // по-прежнему пишутся и читаются, потому что смещения шапки — договор:
+    // `poolBytes` обязан лежать на 56 ([save.h] о раскладке).
+    ar.u16(h.reserved34_);
     ar.u16(h.needsBytes);
     ar.u16(h.invBytes);
     ar.u32(h.payloadBytes);
     ar.u32(h.payloadCrc);
-    // Version 2 fields: quest table weak + strong check.
-    ar.u32(h.questCount);
-    ar.u32(h.questFingerprint);
+    ar.u32(h.reserved48_);
+    ar.u32(h.reserved52_);
     // Version 6 fields: macro-world blob lengths.
     ar.u32(h.poolBytes);
     ar.u32(h.macroBytes);
@@ -222,29 +223,10 @@ void visit_ledger(Ar& ar, L& led) {
     ar.u8(led.deepestBand);
 }
 
-// `pad_` is not written. It carries no meaning — `baseline` already claimed one of the
-// two spare bytes ([contract.h]) — and a padding byte on the wire is a byte a future
-// field would have to fight for.
-template <class Ar, class C>
-void visit_contract(Ar& ar, C& c) {
-    ar.u32(c.giver);
-    ar.u16(c.subject);
-    ar.i32(c.target);
-    ar.i32(c.progress);
-    ar.i32(c.reward);
-    ar.u8(c.kind);
-    ar.u8(c.state);
-    ar.u8(c.baseline);
-}
-
-template <class Ar, class B>
-void visit_book(Ar& ar, B& b) {
-    for (int i = 0; i < kMaxContracts; ++i)
-        visit_contract(ar, b.slot[i]);
-    ar.u32(b.completed);
-    ar.u32(b.failed);
-    ar.i64(b.earned);
-}
+// v26: `visit_contract` и `visit_book` снесены вместе с системой контрактов
+// (79 Б с провода). Правило, которое они собой показывали, живо и действует для
+// всех визиторов ниже: `pad_` НЕ ПИШЕТСЯ — байт выравнивания на проводе есть
+// байт, за который будущему полю пришлось бы воевать.
 
 // All nine floats, including the two "pending" queues, `hpDebt` and `hpBank`. Dropping
 // the pending queues would silently forgive a bladder you had already filled, dropping
@@ -442,19 +424,8 @@ void visit_pickup_rec(Ar& ar, R& rec) {
     visit_vec3(ar, rec.pos);
 }
 
-// v16 / SAVBANK: the account, field by field. lastInterestTick is skipped by
-// design ([save.h] version note) — the READER arms it to zero and the load site
-// re-bases it to the current sim tick.
-template <class Ar, class B>
-void visit_bank(Ar& ar, B& b) {
-    ar.i64(b.deposit);
-    ar.i64(b.loanPrincipal);
-    ar.i64(b.loanAccrued);
-    ar.i64(b.interestEarned);
-    ar.i64(b.interestPaid);
-    ar.i32(b.creditLimit);
-    ar.u8(b.band);
-}
+// v26: `visit_bank` снесён вместе со счётом пад-банка (45 Б с провода).
+// Кошелёк едет в `visit_ledger` выше и никуда не уходил.
 
 // CRC-32 (reflected 0xEDB88320), computed bit-serially rather than from a table.
 // 8 shifts per byte over a ~3.6 KB save is a few microseconds — a lookup table would be
@@ -533,11 +504,11 @@ static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
               "still 64 and only this assert needs relaxing");
 static_assert(kLedgerWire == 8 + 4 + 1); // v25: banked + deepestFloor + band
-static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + condition u8
-// kSaveFixedWire: ledger+book+player + v7 rpg(12)+craft(89) + v8 combat(21)
-// + v9 status(42) + v10 samosbor(17)+fastTravel(32) + quest log.
+// kSaveFixedWire: ledger+player + v7 rpg(12)+craft(89) + v8 combat(29)
+// + v9 status(42) + v10 samosbor(17)+fastTravel(32). v26 снял книгу (79),
+// квест-лог (294) и банк (45).
 //
 // The running prose here USED TO SAY "was 850 in v8; +42 = 892 in v9" and "header 64
 // + fixed 892 + faction 36 = 992", while the asserts one line below said 878 and 978.
@@ -558,26 +529,32 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // 927 is ALSO the number v10 asserted before hpBank existed. Same integer, two
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
+//
+// СУММА ПРОВЕРЯЕТСЯ ДВАЖДЫ И ПО-РАЗНОМУ, и это не дублирование: первое
+// утверждение складывает ИМЕНОВАННЫЕ слагаемые (поедет ширина любой секции —
+// упадёт здесь), второе пинит ИТОГ числом (поедет сам состав секций — упадёт
+// там). Гейт в обе стороны, тот же приём, что у гейта столбцов CSV.
 static_assert(kSaveFixedWire ==
-              934 + kSamosborWire + kFastTravelWire + kBankWire); // v25: леджер -20
-static_assert(kSaveFixedWire == 1028);  // v25: ledger 13 (скор пада снесён)
+              kLedgerWire + kPlayerWire + kRpgWire + kCraftingWire +
+                  kCombatSaveWire + kStatusWire + kSamosborWire +
+                  kFastTravelWire);
+static_assert(kSaveFixedWire == 610);  // v26: -79 книга, -294 квест-лог, -45 банк
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
 // cut the bank ring (-244) = 1148; v20 cut both inline counts with their
 // sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
-static_assert(save_bytes_for() == 1128); // v25: леджер -20 (снос пада)
-static_assert(save_bytes_for(100, 50) == 1128 + 150);
+// v26: шапка 64 + фикс 610 + фракции 36 = 710 (было 1128, снято 418).
+static_assert(save_bytes_for() == kSaveHeaderWire + kSaveFixedWire + kFactionWire);
+static_assert(save_bytes_for() == 710);
+static_assert(save_bytes_for(100, 50) == 710 + 150);
 
-// `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
-// `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two
-// counters and an int64 total, had no size assert anywhere in the tree. 3x24 + 4 + 4
-// (+4 alignment gap) + 8 = 88. Pinned from here because this file is the one that has to
-// care; the assert belongs next to the struct, and moving it there is a one-line edit to
-// `contract.h` that this lane does not own.
-static_assert(sizeof(ContractBook) == 88,
-              "ContractBook is serialized; grow it and bump kSaveVersion in the same "
-              "edit");
+// ЗДЕСЬ СТОЯЛ ЕДИНСТВЕННЫЙ В ДЕРЕВЕ ПИН `sizeof(ContractBook) == 88` — книга
+// контрактов была сериализуемой структурой, которую никто не пинил рядом с её
+// объявлением, и этот файл закрывал дыру за `contract.h`. Снесён в v26 вместе с
+// самой книгой. Урок, за который он был поставлен, адресуется сюда: структура,
+// которая едет в сейв, обязана иметь пин размера, и дом пина — рядом с
+// объявлением, а не у сериализатора.
 static_assert(sizeof(Inventory) == 384, "the 8x8 grid is 64 x 6 B ([inventory.h])");
 
 void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
@@ -591,7 +568,6 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
                  kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
-    visit_book(bw, st.book);
     visit_player(bw, st.player);
     // Version 7: character sheet + crafting bank (fixed-size, in kSaveFixedWire).
     visit_rpg(bw, st.rpg);
@@ -612,21 +588,18 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // would make the reader's offset depend on a count.
     visit_samosbor(bw, st.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) bw.u8(st.fastTravel.raw()[i]);
-    // Version 16 / SAVBANK: the account, after the clocks, before the records —
-    // fixed blocks stay ahead of the variable ones, same law as v7..v10.
-    {
-        BankAccount tmpBank = st.bank;   // the visitor is read/write
-        visit_bank(bw, tmpBank);
-    }
+    // v26: здесь стоял блок банка (SAVBANK v16). Закон, по которому он стоял
+    // ИМЕННО здесь, жив: фиксированные блоки идут впереди переменных, иначе
+    // смещение читателя начинает зависеть от счётчика.
     // v20: секций сущностей нет — они в floor_<N>.sav v3 ([save.h]).
     // Version 6: the macro world — pool table, macro-sim state, faction matrix.
     body.insert(body.end(), st.poolBlob.begin(), st.poolBlob.end());
     body.insert(body.end(), st.macroBlob.begin(), st.macroBlob.end());
     for (std::size_t i = 0; i < kFactionWire; ++i)
         bw.u8(static_cast<std::uint8_t>(st.factions.v[i]));
-    // Version 2: quest log appended last. Geometry never rides in run.sav — it
-    // lives in the per-floor files ([save.h] modular layout).
-    quest_log_write(st.quests, body);
+    // v26: квест-лог дописывался последним и был последней секцией run.sav;
+    // теперь последняя — матрица фракций. Геометрия в run.sav не едет никогда —
+    // она в пер-этажных файлах ([save.h] modular layout).
 
     SaveHeader h{};
     h.magic = kSaveMagic;
@@ -640,11 +613,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.poolBytes = static_cast<std::uint32_t>(st.poolBlob.size());
     h.macroBytes = static_cast<std::uint32_t>(st.macroBlob.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
-    h.bookBytes = static_cast<std::uint16_t>(sizeof(ContractBook));
     h.needsBytes = static_cast<std::uint16_t>(sizeof(Needs));
     h.invBytes = static_cast<std::uint16_t>(sizeof(Inventory));
-    h.questCount = static_cast<std::uint32_t>(kQuestCount);
-    h.questFingerprint = quest_table_fingerprint();
     h.payloadBytes = static_cast<std::uint32_t>(body.size());
     h.payloadCrc = crc32(body.data(), body.size());
 
@@ -689,7 +659,6 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
         return fail(SaveError::MobTableChanged);
 
     if (static_cast<std::size_t>(h.ledgerBytes) != sizeof(RunLedger) ||
-        static_cast<std::size_t>(h.bookBytes) != sizeof(ContractBook) ||
         static_cast<std::size_t>(h.needsBytes) != sizeof(Needs) ||
         static_cast<std::size_t>(h.invBytes) != sizeof(Inventory))
         return fail(SaveError::LayoutMismatch);
@@ -701,7 +670,7 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     if (h.poolBytes > kMaxPoolBytes) return fail(SaveError::SizeMismatch);
     if (h.macroBytes > kMaxMacroBytes) return fail(SaveError::SizeMismatch);
     // v20: переменных секций сущностей нет — payload обязан сойтись с
-    // арифметикой шапки РОВНО (квест-лог — фикс-ширина внутри kSaveFixedWire).
+    // арифметикой шапки РОВНО.
     const std::size_t wantFixed =
         kSaveFixedWire + kFactionWire +
         static_cast<std::size_t>(h.poolBytes) +
@@ -713,11 +682,9 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     if (crc32(bytes + kSaveHeaderWire, h.payloadBytes) != h.payloadCrc)
         return fail(SaveError::BadChecksum);
 
-    // Version 2 quest table checks (after CRC, before parsing).
-    if (h.questCount != static_cast<std::uint32_t>(kQuestCount))
-        return fail(SaveError::SizeMismatch);  // closest existing error for table drift
-    if (h.questFingerprint != quest_table_fingerprint())
-        return fail(SaveError::SizeMismatch);
+    // v26: здесь стояли две проверки квестовой таблицы (слабая по числу строк,
+    // сильная по хэшу заголовков) — снесены вместе с системой. Таблицы предметов
+    // и мобов проверяются выше тем же приёмом и остаются живыми.
 
     // Parse into a scratch copy and commit only on success: a half-applied load would
     // leave the game in a state no run has ever reached, which is harder to recover from
@@ -725,7 +692,6 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     SaveState tmp;
     Reader r(bytes + kSaveHeaderWire, h.payloadBytes);
     visit_ledger(r, tmp.ledger);
-    visit_book(r, tmp.book);
     visit_player(r, tmp.player);
     // Version 7: character sheet + crafting bank.
     visit_rpg(r, tmp.rpg);
@@ -746,8 +712,8 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     // Version 10 / SAVCLOCK: mirrors the writer exactly, same order, same position.
     visit_samosbor(r, tmp.samosbor);
     for (std::size_t i = 0; i < kFastTravelWire; ++i) r.u8(tmp.fastTravel.raw()[i]);
-    visit_bank(r, tmp.bank);
-    tmp.bank.lastInterestTick = 0;   // re-armed by the load site ([save.h])
+    // v26: здесь читался блок банка — снесён. Порядок читателя обязан совпадать
+    // с порядком писателя байт в байт, и бэкстоп в конце это проверяет.
     // v20: секций сущностей нет — они в floor_<N>.sav v3.
     // Version 6: the macro blobs, verbatim (decoded by their owners against live
     // objects, which a parse must not require), then the faction matrix.
@@ -766,19 +732,17 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
         }
     }
     if (!r.ok()) return fail(SaveError::TooShort);
-    // Version 2: parse quest log from the remaining bytes (exactly kQuestLogWire).
-    {
-        const std::size_t pos = r.at();
-        if (!quest_log_read(bytes + kSaveHeaderWire + pos,
-                            static_cast<std::size_t>(h.payloadBytes) - pos,
-                            tmp.quests))
-            return fail(SaveError::TooShort);
-    }
     // Every declared byte consumed and no more. A surviving remainder would mean the
     // wire constants and the visitors disagree, which the static_asserts above already
     // forbid — this is the runtime backstop for the case where they are edited together
     // and both are wrong.
-    if (r.at() + kQuestLogWire != static_cast<std::size_t>(h.payloadBytes))
+    //
+    // v26: слагаемое `+ kQuestLogWire` убрано. Оно стояло здесь потому, что
+    // квест-лог дописывался ПОСЛЕ матрицы фракций, а разбирался не читателем `r`,
+    // а прямым вызовом по смещению — то есть курсор читателя до его байтов не
+    // доходил, и бэкстоп обязан был доложить разницу руками. Секции нет, курсор
+    // доходит до конца сам, и проверка стала тем, чем выглядит.
+    if (r.at() != static_cast<std::size_t>(h.payloadBytes))
         return fail(SaveError::SizeMismatch);
 
     st = std::move(tmp);

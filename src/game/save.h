@@ -49,15 +49,13 @@
 
 #include "core/math.h"
 #include "ecs/registry.h"
-#include "game/contract.h"    // ContractBook, Contract
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
 #include "game/equip.h"       // Equipped — the player's recorded decisions
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
-#include "game/quest.h"       // QuestLog, kQuestLogWire, quest_table_fingerprint
 #include "game/rpg.h"         // RpgStats
 #include "game/craft.h"       // CraftingState, kCraftingWire, craft_write/read
-#include "game/economy.h"     // BankAccount (SAVBANK v16)
+#include "game/economy.h"     // RunLedger — кошелёк и пройденная глубина
 #include "game/combat.h"      // PlayerRanged (SAVMAG v8); Corpse (v15 records)
 #include "game/container.h"   // Container — the v15 record carries it whole
 #include "game/status.h"      // StatusSet (SAVSTAT v9)
@@ -159,16 +157,15 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // the state is what is IN them, and a partial take or a deposit now survives
 // both a floor re-entry and a save. The old mechanism is deleted, not wrapped:
 // two writers stamping the same crate is how they disagree. [barter increment A]
-// Version 16 / SAVBANK: the BANK ACCOUNT travels — deposit, loan principal +
-// accrued, lifetime interest counters, credit limit and band ([economy.h]
-// BankAccount, wired to the Duty clerk's counter and to the sim tick this same
-// day; problems.md §52's bank_step entry closes with it). The 24-entry op ring
-// travelled v16..v18 and was cut in v19 (write-only history, no reader).
-// `lastInterestTick` deliberately does NOT travel: the sim clock restarts every
-// session, so a saved tick would be a lie in a new one — the loader re-arms the
-// clock at the current tick instead, costing at most one 60-second period of
-// interest per reload and making save-scumming interest impossible. v15 saves
-// are rejected, standing rule.
+// Version 16 / SAVBANK вёз СЧЁТ ПАД-БАНКА — вклад, принципал и накопленный
+// процент, пожизненные счётчики, лимит и банду. СНЕСЁН В v26 вместе с банком
+// (решение владельца 2026-11-08). Абзац оставлен надгробием, потому что он
+// содержал решение, которое легко отпортировать обратно «по умолчанию»:
+// `lastInterestTick` НЕ ЕХАЛ сознательно — часы сима стартуют заново каждую
+// сессию, и сохранённый тик был бы ложью в новой; загрузчик перезаряжал часы
+// текущим тиком, что стоило максимум одного 60-секундного периода процентов за
+// перезагрузку и делало save-scumming процентов невозможным. Если проценты
+// когда-нибудь вернутся, это решение возвращается с ними.
 // v17 (2026-08-21): контейнер несёт канонический Inventory (64 слота, B3
 // one-container.md) — решение владельца: миграции нет, старые сейвы
 // отклоняются, ящики пересеются.
@@ -213,7 +210,20 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // v25 (2026-11-08): экстракшн-пад снесён («легаси, ядро чистое» — владелец);
 // RunLedger ужался до кошелька+глубины (33 -> 13 Б на проводе). Старый
 // run.sav отвергается честным BadVersion; «сейвы не щадим».
-inline constexpr std::uint32_t kSaveVersion = 25u;
+// v26 (2026-11-08, та же волна, вторая половина): СНЕСЕНЫ ТРИ СЕКЦИИ СРАЗУ —
+// книга контрактов (`kBookWire` 79), квест-лог (`kQuestLogWire` 294) и счёт
+// пад-банка (`kBankWire` 45). Итого -418 Б: `kSaveFixedWire` 1028 -> 610,
+// `save_bytes_for()` 1128 -> 710. Из шапки ушли три поля-алармa — `bookBytes`,
+// `questCount`, `questFingerprint`; шапка осталась 64 Б (их места теперь
+// резерв, см. `SaveHeader`).
+//
+// БАМП ЗДЕСЬ ОБЯЗАТЕЛЕН, И ПРИЧИНА НЕ В ДЛИНЕ. Длину v25-сейва этот ридер и
+// так отверг бы `SizeMismatch`. Но отказ пришёл бы НЕ ТУДА: `main.cpp` на пути
+// загрузки ПРОГЛАТЫВАЕТ отказ `load_rows` и продолжает с пустой таблицей, то
+// есть игрок получил бы «успешную» загрузку с пропавшим населением вместо
+// честного «сейв от старой сборки». Версия — тот единственный ответ, который
+// не зависит ни от длины, ни от того, кто проверяет её выше по стеку.
+inline constexpr std::uint32_t kSaveVersion = 26u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -296,17 +306,23 @@ struct SaveHeader {
     std::uint32_t mobFingerprint = 0;     // 24  mob name hash     (strong)
     std::uint32_t containerCount = 0;     // 28  ContainerRecord rows that follow (v15)
     std::uint16_t ledgerBytes = 0;        // 32  sizeof(RunLedger) in the writing build
-    std::uint16_t bookBytes = 0;          // 34  sizeof(ContractBook)
+    // v26: `bookBytes` (sizeof(ContractBook)) снесён вместе с книгой контрактов.
+    std::uint16_t reserved34_ = 0;        // 34  (был bookBytes)
     std::uint16_t needsBytes = 0;         // 36  sizeof(Needs)
     std::uint16_t invBytes = 0;           // 38  sizeof(Inventory)
     std::uint32_t payloadBytes = 0;       // 40
     std::uint32_t payloadCrc = 0;         // 44  CRC-32 of every byte after the header
-    // Version 2 additions (bytes 48-55). Placed at the end so a version-1 reader that
-    // stops at byte 48 never tries to parse them. (Versions 3/4 briefly appended
-    // carveCount/snapBytes here; version 5 moved geometry into per-floor files and
-    // the fields left with it.)
-    std::uint32_t questCount = 0;         // 48  kQuestCount       (weak)
-    std::uint32_t questFingerprint = 0;   // 52  quest title hash  (strong)
+    // Байты 48-55: здесь стояли `questCount` (слабая проверка) и
+    // `questFingerprint` (сильная) — оба снесены в v26 вместе с системой
+    // квестов. ПОЛЯ ОСТАВЛЕНЫ РЕЗЕРВОМ, А НЕ ВЫЧЕРКНУТЫ, и это сознательно:
+    // `kSaveHeaderWire` = 64 — это ДОГОВОР о смещениях, и `poolBytes` обязан
+    // лежать на 56, а `macroBytes` на 60. Сдвинуть их на 48/52 означало бы
+    // поменять раскладку шапки там, где ни одна секция того не просила, —
+    // вторая правка формата внутри одной версии, за которую потом никто не
+    // ответит. Резерв пишется нулями и читается в никуда; первая же новая
+    // слабая/сильная проверка займёт это место без бампа шапки.
+    std::uint32_t reserved48_ = 0;        // 48  (был questCount)
+    std::uint32_t reserved52_ = 0;        // 52  (был questFingerprint)
     // Version 6 additions: byte lengths of the pool and macro-sim blobs that ride
     // between the opened-container list and the faction matrix.
     std::uint32_t poolBytes = 0;          // 56
@@ -320,9 +336,8 @@ struct SaveHeader {
 // `*Bytes` header fields above are a drift ALARM rather than a layout description.
 inline constexpr std::size_t kSaveHeaderWire = 64;   // 48 v1; +8 v2 quests; +8 v6 pool/macro
 inline constexpr std::size_t kLedgerWire = 13;       // v25: 8 + 4 + 1 (банк+глубина; скор пада снесён)
-inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
-inline constexpr std::size_t kBookWire =
-    static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;
+// v26: `kContractWire` (21) и `kBookWire` (3 x 21 + 16 = 79) снесены вместе с
+// системой контрактов.
 inline constexpr std::size_t kNeedsWire = 37;        // 9 floats + seeded (v11: +hpBank)
 // v14: item u16 + count u16 + condition u8 = 5 B per slot; the pad byte stays home.
 inline constexpr std::size_t kInventoryWire = static_cast<std::size_t>(kInvSlots) * 5;
@@ -333,7 +348,8 @@ inline constexpr std::size_t kPlayerWire =
 inline constexpr std::size_t kRpgWire = 4 + 2 + 1 + 1 + 3 + 1;  // 12
 static_assert(kRpgWire == 12);
 // kCraftingWire (89) is defined in craft.h next to craft_write/craft_read.
-// kQuestLogWire is defined in quest.h.
+// v26: `kQuestLogWire` жил в quest.h и стоил 19 строк x 14 Б + 8 + 5 x 4 = 294 Б;
+// снесён вместе с файлом.
 // Version 8 / SAVMAG: PlayerRanged field-by-field (NOT sizeof — host padding)
 // + presence flag + cumulative melee kills. Cooldowns ride so a mid-reload F5
 // does not free-fire on F9; hasRanged keeps lazy-attach honest (elevator rule).
@@ -361,11 +377,8 @@ static_assert(kSamosborWire == 17);
 // multi-byte field, so the field-by-field rule has nothing to protect here — see the
 // note beside FastTravelState::raw() in [fast_travel.h].
 inline constexpr std::size_t kFastTravelWire = 32;
-// Version 16 / SAVBANK: BankAccount field by field (NOT sizeof — tail padding),
-// minus lastInterestTick (see the version note): 5 x i64 + creditLimit + band.
-// v19: кольцо ledger[24] + entries умерли вместе со структурой (289 → 45).
-inline constexpr std::size_t kBankWire = 5 * 8 + 4 + 1;  // 45
-static_assert(kBankWire == 45);
+// v26: `kBankWire` (5 x i64 + creditLimit + band = 45) снесён вместе со счётом
+// пад-банка. Кошелёк жив и едет в `kLedgerWire`.
 // Записи трупов/обломков живут в floor_<N>.sav v3 (v20); ширины прежние.
 // A corpse row is 2 (floor) + 3 x 12 (pos / colour / half-extents, f32) +
 // 2 (mobKind / searched) + 64 slots x 5 B = 360. `deathTick` deliberately does
@@ -377,9 +390,15 @@ inline constexpr std::size_t kCorpseRecWire = 2 + 36 + 2 + 64 * 5;    // 360
 // контактная пара) + 1 (флаг сферы) = 51.
 inline constexpr std::size_t kDebrisRecWire = 2 + 36 + 12 + 1;        // 51
 inline constexpr std::size_t kSaveFixedWire =
-    kLedgerWire + kBookWire + kPlayerWire + kRpgWire + kCraftingWire +
-    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire + kBankWire +
-    kQuestLogWire;
+    kLedgerWire + kPlayerWire + kRpgWire + kCraftingWire +
+    kCombatSaveWire + kStatusWire + kSamosborWire + kFastTravelWire;
+// Слагаемые НАЗВАНЫ ЧИСЛАМИ, потому что эту сумму пересчитывали руками и
+// ошиблись бы молча: 13 (кошелёк) + 376 (игрок: 37 нужд + 320 сумки + 19) + 12
+// (лист) + 89 (крафт) + 29 (бой) + 42 (статусы) + 17 (самосбор) + 32 (решётка
+// быстрого хода) = 610. v26 снял 418: книга 79 + квест-лог 294 + банк 45.
+static_assert(kSaveFixedWire == 610,
+              "kSaveFixedWire поехал — сверь слагаемые выше и бампни "
+              "kSaveVersion в той же правке");
 
 // Sanity ceiling on the container/corpse record lists, so a corrupt header cannot
 // ask for a huge allocation before the checksum has had a chance to reject it. 64
@@ -670,7 +689,7 @@ struct PlayerSnapshot {
 // special" ([AGENTS.md]) means there is no player global to hunt for.
 struct SaveState {
     RunLedger ledger{};
-    ContractBook book{};
+    // v26: `ContractBook book` снесена вместе с системой контрактов.
     PlayerSnapshot player{};
     // Version 7: character sheet. Lives on the player entity at runtime
     // ([rpg.h]); captured into the run on F5 and stamped back on F9. Default is
@@ -695,16 +714,12 @@ struct SaveState {
     // discovered", so a SaveState built by hand still means something sane.
     SamosborState samosbor{};
     FastTravelState fastTravel{};
-    // Version 16 / SAVBANK: the account. Lives in the run state (main aliases
-    // it like the ledger), so F5/F9 stopped forgetting the deposit and the debt
-    // — the gap economy.h stated in words since the day it was written.
-    BankAccount bank{};
+    // v26: `BankAccount bank` и `QuestLog quests` снесены вместе со своими
+    // системами. Кошелёк (`banked`) по-прежнему едет в `ledger` — он и был тем,
+    // что владелец объявил ядром; квест-лог источника правды не имел вовсе.
     // v20: списки контейнеров/трупов/обломков МЕРТВЫ — сущности этажа живут
     // в его собственном floor_<N>.sav v3 под ключом модуля (S20.6): у
     // состояния этажа ровно один дом, и полуслияние невозможно по построению.
-    // Version 2: quest log persisted across F5/F9. Written last by
-    // quest_log_write; read back by quest_log_read. Exactly kQuestLogWire bytes.
-    QuestLog quests{};
     // Version 6: the macro world. poolBlob is NpcPool::save_rows' verbatim table,
     // macroBlob is MacroSim::save_state, and factions is the LIVE relations
     // matrix (36 POD bytes). Restored at the earliest possible point — from the

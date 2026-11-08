@@ -1,7 +1,7 @@
 // Conversation — universal NPC interaction, as a table of options.
 //
 // The owner's law ([conversation.md], 2026-08-17): pressing E on a living NPC
-// opens a MENU, not an action. Talk, quest, barter, and every future game of
+// opens a MENU, not an action. Talk, teller, barter, and every future game of
 // dice or checkers are OPTIONS in one extensible system — one row of
 // `kConvOptions` each — never a per-feature keybind or a per-feature window.
 // The idea (not the code) comes from the reference's npc_interaction_options:
@@ -25,18 +25,19 @@
 
 namespace giga::game {
 
-struct ContractBook;
-
 // Everything an option's predicate or activation may read. Assembled by the
 // app at menu-open; the pool row is the partner's identity (the body is only
 // where they stand).
+//
+// ПОЛЯ `book` (`const ContractBook*`) здесь больше нет — система контрактов
+// снесена 2026-11-08. Ряд `quest` остался заглушкой, и контексту для отказа
+// ничего не нужно.
 struct ConvContext {
     Registry* reg = nullptr;
     NpcPool* pool = nullptr;
     Entity player = entt::null;
     Entity npcBody = entt::null;
     NpcId npc = kInvalidNpc;
-    const ContractBook* book = nullptr;  // quest option: is this NPC a giver
     SpeechMemory* speech = nullptr;      // talk option: no-repeat memory
     std::uint32_t seed = 0;              // deterministic line pick
 };
@@ -47,7 +48,7 @@ enum class ConvActionKind : std::uint8_t {
     Line,       // show `line` in the conversation panel, stay open
     Barter,     // switch to the barter-mode search screen ([barter.h])
     Dice,       // put the dice on the table ([dice.h]) — the app starts the game
-    Bank,       // open the teller counter ([economy.h] teller verbs)
+    Teller,     // открыть КАССУ ([economy.h] teller_deposit_cash/withdraw_cash)
     Close,      // close the conversation
 };
 

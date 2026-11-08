@@ -193,14 +193,26 @@ static void dice_option_gates_on_the_item() {
     CHECK(conv_activate(c, "dice").kind == ConvActionKind::None);
 
     // The dice land in MY pocket: the row appears — one set is enough,
-    // whoever brought it — between trade and leave.
+    // whoever brought it — в ИГРОВОЙ ПОЛОСЕ, то есть после служб и прямо перед
+    // «УЙТИ».
+    //
+    // ПРЕЖДЕ ЗДЕСЬ СТОЯЛО `opts[i - 1].id == "trade"`, и это утверждение
+    // сломалось 2026-11-08 — не от дефекта, а от того, что ряд кассы перестал
+    // гейтиться (снос колонки ролей) и встал между торгом и костями. Предок по
+    // имени — СЛУЧАЙНЫЙ факт: полоса служб (0..99) нарочно разрежена, чтобы в
+    // неё добавляли ряды без перенумерации, и всякий новый ряд службы ронял бы
+    // этот пин. Утверждается то, что полоса ОБЕЩАЕТ: кости — в игровой полосе
+    // (order >= 100), сразу за ними «УЙТИ» (9000), и позади них есть хотя бы
+    // один ряд службы.
     CHECK(inventory_give(f.pool.inventory(f.playerId), kItemDiceBone, 1) == 0);
     n = conv_options(c, opts, kConvMaxOptions);
     seen = false;
     for (std::size_t i = 0; i < n; ++i)
         if (std::strcmp(opts[i].id, "dice") == 0) {
             seen = true;
-            CHECK(i >= 1 && std::strcmp(opts[i - 1].id, "trade") == 0);
+            CHECK(opts[i].order >= 100);
+            CHECK(i >= 1 && opts[i - 1].order < 100);
+            CHECK(i + 1 < n && std::strcmp(opts[i + 1].id, "leave") == 0);
         }
     CHECK(seen);
 

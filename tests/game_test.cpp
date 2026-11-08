@@ -11,7 +11,6 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "ecs/registry.h"
-#include "game/contract.h"
 #include "game/barter.h"
 #include "game/conversation.h"
 #include "game/dice.h"
@@ -46,7 +45,7 @@
 #include "game/wander.h"
 #include "game/population.h"
 #include "game/encumbrance.h"
-#include "game/role.h"      // RoleId/role_for (шёл транзитом через room_zone.h)
+#include "game/patrol.h"    // PatrolPlan/kPatrolLegMetres — блок наряда в suite_utilai
 #include "game/noise.h"    // blast_noise — a detonation is a severity-5 source
 #include "game/rpg.h"
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
@@ -121,11 +120,11 @@ int g_checks = 0;
 #include "suite_budgets.inl"
 #include "suite_prof.inl"
 #include "suite_lightbake.inl"
-// Wave 6 — three ports from the TypeScript original. Same self-contained-includes
+// Wave 6 — ports from the TypeScript original. Same self-contained-includes
 // discipline as the wave-5 block above: each reaches for headers this file never needed
-// (game/craft.h, game/quest.h, game/speech.h and the generated tables behind them).
+// (game/craft.h, game/speech.h and the generated tables behind them).
+// `suite_quest.inl` УМЕР вместе с квестами/контрактами (2026-11-08).
 #include "suite_craft.inl"
-#include "suite_quest.inl"
 #include "suite_speech.inl"
 #include "suite_economy.inl"
 #include "suite_monster.inl"
@@ -4589,144 +4588,11 @@ static void test_containers() {
 }
 
 
-// Contracts. The two assertions that matter are that a job is always POSSIBLE and that
-// the reward lands where it cannot be lost — everything else is bookkeeping.
-// A run that has not descended: the strict baseline for a Descend job.
-static const RunLedger kNoDescentYet{};
-static void test_contracts() {
-    static_assert(sizeof(Contract) == 24);
-
-    NpcPool pool;
-    pool.init();
-    NpcId giver = pool.spawn();
-
-    // Offers are deterministic in (giver, floor): the same person always offers the
-    // same job, so walking away and returning cannot reroll it into something better.
-    const Contract a = contract_offer(pool, giver, -26, 0x9E37u);
-    const Contract b = contract_offer(pool, giver, -26, 0x9E37u);
-    CHECK(a.kind == b.kind && a.subject == b.subject && a.target == b.target &&
-          a.reward == b.reward);
-
-    // Most bodies are not hiring. A floor where everyone has a job is a job board.
-    int hiring = 0;
-    for (std::uint32_t i = 0; i < 400; ++i) {
-        NpcId n = pool.spawn();
-        if (contract_offer(pool, n, -26, 0x9E37u).giver != kInvalidNpc) ++hiring;
-    }
-    CHECK(hiring > 20 && hiring < 160);   // ~18% of 400, generously bounded
-
-    // **Every offer must be POSSIBLE.** The reference ships a VISIT quest that can never
-    // complete; that is the failure to design out. A Fetch must name something that can
-    // actually appear at that depth, and a Hunt must name something that can fight back.
-    int fetches = 0, hunts = 0, descends = 0;
-    for (int fz : {0, -8, -26, -50, 14, 30}) {
-        for (std::uint32_t i = 0; i < 300; ++i) {
-            const Contract c = contract_offer(pool, static_cast<NpcId>(i + 1), fz, 7u);
-            if (c.giver == kInvalidNpc) continue;
-            CHECK(c.reward > 0);
-            CHECK(c.target != 0);
-            switch (static_cast<ObjectiveKind>(c.kind)) {
-                case ObjectiveKind::Fetch:
-                    ++fetches;
-                    CHECK(item_valid(c.subject));
-                    // Findable AT THIS DEPTH — this is the impossible-quest guard.
-                    CHECK(item_weight_on_floor(c.subject, fz) > 0);
-                    break;
-                case ObjectiveKind::Hunt:
-                    ++hunts;
-                    CHECK(c.subject < kMobKindCount);
-                    // Never send anyone to hunt scenery.
-                    CHECK(kMobTable[c.subject].dmg > 0);
-                    break;
-                default:
-                    ++descends;
-                    // Strictly deeper than where it was offered, in |z|.
-                    CHECK((c.target < 0 ? -c.target : c.target) >
-                          (fz < 0 ? -fz : fz));
-                    break;
-            }
-        }
-    }
-    CHECK(fetches > 0 && hunts > 0 && descends > 0);
-
-    // The book: three slots, no duplicates from the same person, and a full book
-    // REFUSES rather than overwriting.
-    ContractBook book;
-    Contract job = a;
-    if (job.giver == kInvalidNpc) {           // this giver happened not to be hiring
-        for (std::uint32_t i = 1; i < 500; ++i) {
-            job = contract_offer(pool, static_cast<NpcId>(i), -26, 7u);
-            if (job.giver != kInvalidNpc) break;
-        }
-    }
-    CHECK(job.giver != kInvalidNpc);
-    CHECK(contract_accept(book, job, kNoDescentYet));
-    CHECK(!contract_accept(book, job, kNoDescentYet));       // the same job twice is one job
-
-    // Hunt progress rides the same NpcDied event the kill feed does.
-    ContractBook hb;
-    Contract hunt{};
-    hunt.giver = giver;
-    hunt.kind = static_cast<std::uint8_t>(ObjectiveKind::Hunt);
-    hunt.subject = 3;
-    hunt.target = 2;
-    hunt.reward = 500;
-    CHECK(contract_accept(hb, hunt, kNoDescentYet));
-    contract_on_kill(hb, 9);                  // wrong kind: no credit
-    CHECK(hb.slot[0].progress == 0);
-    contract_on_kill(hb, 3);
-    contract_on_kill(hb, 3);
-    CHECK(hb.slot[0].progress == 2);
-
-    RunLedger led;
-    Inventory inv;
-    const std::int32_t paid = contract_step(hb, pool, inv, led);
-    CHECK(paid == 500);
-    // **Paid into BANKED, not into the inventory.** A contract reward is not carried
-    // loot and must not be at risk on the walk home — that is what being paid means,
-    // and it is the one thing that makes a contract safer than looting the same value.
-    CHECK(led.banked == 500);
-    CHECK(hb.completed == 1);
-    CHECK(contract_step(hb, pool, inv, led) == 0);   // paid once, not every tick
-
-    // Fetch CONSUMES the cargo. Letting you keep it would pay twice for the same loot.
-    ContractBook fb;
-    ItemId thing = 0;
-    for (ItemId i = 1; i <= kItemCount; ++i)
-        if (item_def(i).value > 0 && item_def(i).stackMax >= 3) { thing = i; break; }
-    CHECK(thing != 0);
-    Contract fetch{};
-    fetch.giver = giver;
-    fetch.kind = static_cast<std::uint8_t>(ObjectiveKind::Fetch);
-    fetch.subject = thing;
-    fetch.target = 3;
-    fetch.reward = 400;
-    CHECK(contract_accept(fb, fetch, kNoDescentYet));
-    Inventory fi;
-    fi.slots[0] = ItemSlot{thing, 2};
-    RunLedger fl;
-    CHECK(contract_step(fb, pool, fi, fl) == 0);     // two of three: not yet
-    fi.slots[1] = ItemSlot{thing, 1};
-    CHECK(contract_step(fb, pool, fi, fl) == 400);
-    std::int32_t left = 0;
-    for (const ItemSlot& sl : fi.slots) if (sl.item == thing) left += sl.count;
-    CHECK(left == 0);                                // the cargo is gone
-
-    // A dead giver fails the job. Quietly paying anyway would make the person
-    // decorative, and a stable NpcId exists precisely so the person is real.
-    ContractBook db;
-    NpcId doomed = pool.spawn();
-    Contract dj = hunt;
-    dj.giver = doomed;
-    dj.progress = 0;
-    CHECK(contract_accept(db, dj, kNoDescentYet));
-    pool.kill(doomed);
-    RunLedger dl;
-    CHECK(contract_step(db, pool, inv, dl) == 0);
-    CHECK(db.slot[0].state == static_cast<std::uint8_t>(ContractState::Failed));
-    CHECK(db.failed == 1);
-    CHECK(dl.banked == 0);
-}
+// ТЕСТ `test_contracts` СНЕСЁН 2026-11-08 вместе с системой контрактов/квестов
+// (решение владельца: надстройка без мандата в CANON.md, единственный законный
+// путь решения агента — спрос/предложение в place.cpp). Здесь стояли 4 блока:
+// детерминизм оффера, «каждый оффер ВЫПОЛНИМ», Hunt-выплата в banked,
+// Fetch-потребление груза и провал по смерти заказчика.
 
 
 // Barter terms — what survived the vendor window ([conversation.md]).
@@ -4892,36 +4758,17 @@ static void test_full_loop() {
               worth0 + item_def(goods).value * 10 + 5000);
     }
 
-    // --- seam 5: a job, and it pays into the bank ---------------------------
-    // Find somebody who is hiring, on a floor where their job is possible.
-    ContractBook book;
-    Contract job{};
-    for (std::uint32_t i = 1; i < 600; ++i) {
-        NpcId g = pool.spawn();
-        const Contract c = contract_offer(pool, g, -26, 0x51EDu);
-        if (c.giver == kInvalidNpc) continue;
-        if (static_cast<ObjectiveKind>(c.kind) != ObjectiveKind::Hunt) continue;
-        job = c;
-        break;
-    }
-    CHECK(job.giver != kInvalidNpc);
-    CHECK(contract_accept(book, job, kNoDescentYet));
-
-    // Kills arrive as the same NpcDied event the kill feed reads — the seam between
-    // combat and the job board is one event, not a second counter.
-    for (std::uint16_t k = 0; k < job.target; ++k)
-        contract_on_kill(book, static_cast<std::uint8_t>(job.subject));
-    const std::int64_t beforePay = led.banked;
-    const std::int32_t paid = contract_step(book, pool, inv, led);
-    CHECK(paid == job.reward);
-    CHECK(led.banked == beforePay + paid);               // paid into BANKED, not carried
-    CHECK(book.completed == 1);
-    CHECK(contract_step(book, pool, inv, led) == 0);      // and paid exactly once
+    // --- seam 5 СНЕСЁН 2026-11-08 -------------------------------------------
+    // Здесь стоял шов «работа платит в банк»: найти заказчика, взять Hunt,
+    // набить убийства, получить выплату в `led.banked`. Система контрактов и
+    // квестов снесена целиком (надстройка без мандата в CANON.md), и вместе с
+    // ней умер ПОСЛЕДНИЙ источник рублей в этом тесте — пад-банк снесён днём
+    // ранее. Шов «рубли двигает явный глагол» вернётся, когда законный путь
+    // (спрос/предложение в place.cpp) научится платить.
 
     // --- seam 6: the run is now readable ------------------------------------
     // Everything the HUD prints about this run has to agree with what happened.
     CHECK(led.deepestFloor == -26);
-    CHECK(led.banked > 0); // единственный источник — выплата контракта выше
 }
 
 // ДИСКОВЫЙ НАВ-КЭШ (C.2b) СНЕСЁН 2026-09-30. Здесь стояли два теста —
@@ -5334,7 +5181,7 @@ int main() {
     test_faction_gates_hunting();
     test_run_depth();
     test_containers();
-    test_contracts();
+//  test_contracts(); СНЕСЁН 2026-11-08 вместе с contract.{h,cpp}
     test_barter_terms();
     test_hunt_all();
     test_full_loop();
@@ -5382,10 +5229,9 @@ int main() {
     // kRoomAffordance. Наследник — suite_rooms_object (зоны, supply) и
     // agent-goals (хождение к целям по скором S13).
     test_budgets_all();
-    // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system),
-    // quests as a layer over contracts, and NPC speech.
+    // Wave 6: crafting (446 items carried 11 authored craft_* columns and no system)
+    // and NPC speech. `test_quest_all()` СНЕСЁН 2026-11-08 со своим сьютом.
     test_craft_all();
-    test_quest_all();
     test_speech_all();
     // Wave 8: economy & banking and per-kind monster traits.
     test_economy_all();

@@ -8,6 +8,7 @@
 #include "sim/cell_bins.h"        // общий примитив клеточных бинов (§59.2)
 #include "sim/rigid.h"            // rigid_attach_* — детач на рагдолл-ядро
 #include "world/anchor.h"
+#include "world/gravity.h"        // GravityFrame/gravity_frames — «пол» и «потолок» СЛОВА ФРЕЙМА
 #include "world/material_props.h" // kMatDensity/kMatHardness — масса и e/μ
 #include "world/surface.h"
 #include "world/macro_grid.h"
@@ -794,6 +795,156 @@ std::uint32_t clear_layer_props(Registry& reg, LayerId layer) {
     return static_cast<std::uint32_t>(old_.size());
 }
 
+// ── «ПОЛ», «ПОТОЛОК» И «СТЕНА» — СЛОВА ФРЕЙМА, А НЕ БУКВЫ ОСИ ──────────────
+// Закон проекта (CANON §«Гравитация — это ФРЕЙМ, а не буква оси… „вверх“ —
+// производная от фрейма в данной точке, а не +Z») плюс закон изотропии
+// ([isotropy-law]: x/y/z равноправны, ни одна ось не привилегирована). До
+// 2026-11-08 три сеялки ниже писали «пол» как `cell(x, y, z - 1)`, «потолок»
+// как `cell(x, y, z + 1)`, а «стену» как соседей по x/y, — и шапка первой из
+// них при этом ОБЕЩАЛА «isotropically». При боковом режиме щиток искал стену в
+// плоскости, перпендикулярной настоящей тяге, а лампы вешались в стену.
+//
+// ИДИОМА ВЗЯТА ЦЕЛИКОМ У АНТУРАЖА: bake_antourage@antourage.cpp:712 спрашивает
+// у поля мира `gravity_frames()` ([world/gravity.h]) и при режиме Zero одевает
+// ВСЕ ШЕСТЬ граней, потому что без тяги «потолок» и «пол» — одно слово. Здесь
+// тот же словарь: вертикаль — `f.axis`, «вверх» — `f.upSign`, две «горизонтали»
+// — `f.tanA`/`f.tanB`, и ни одна строка ниже не пишет `z + 1`.
+//
+// РАЗНИЦА С АНТУРАЖЕМ — В СЧЁТЧИКЕ, И ЭТО РЕШЕНИЕ, А НЕ ДЕТАЛЬ (мой выбор для
+// Zero, названный вслух). Антураж тратит БЮДЖЕТ ходоков на фрейм и потому
+// делит его на число фреймов — так велит doc-comment `gravity_frames`.
+// Сеялки пропов бюджета на фрейм не тратят: они бросают ОДИН жребий НА КЛЕТКУ
+// (per2000 из строки этажа) или держат ОДНУ лампу на блок решётки. Поэтому
+// шесть граней Zero входят сюда не шестью проходами, а РАСШИРЕНИЕМ НАБОРА
+// КАНДИДАТНЫХ ГРАНЕЙ при ОДНОМ проходе:
+//   • жребий остаётся один на клетку — плотность, заказанная строкой этажа,
+//     означает одно и то же число устройств при любом режиме. Шесть проходов
+//     дали бы до шести щитков в одной клетке и шестикратный ковёр — ровно та
+//     ошибка «бюджет умножился на фреймы», от которой предупреждает
+//     [world/gravity.h];
+//   • какую из граней вещь займёт, решает ДЕТЕРМИНИРОВАННЫЙ приоритет (порядок
+//     `gravity_frames`, т.е. ось по возрастанию): первая подходящая забирает.
+//     Перебора «на этой не вышло — пробуем следующую» нет: он сделал бы
+//     плотность функцией порядка фреймов;
+//   • занятая грань задаёт вещи её ЛОКАЛЬНЫЙ фрейм: станок, выбравший опору по
+//     −X, ищет стену за спиной в плоскости, перпендикулярной −X. При ОСЕВОМ
+//     режиме выбора нет (грань одна), локальный фрейм тождественно равен
+//     объявленному — расстановка NegZ остаётся бит-в-бит той же, что была.
+
+// Грань-кандидат: ось + знак шага ОТ клетки вещи К опоре (та же полярность,
+// что `dir` у якоря, только с противоположного конца — см. anchor_face_pack).
+struct SeedFace {
+    int axis = 2;
+    int sign = -1;
+};
+
+// Что объявленные фреймы РАЗРЕШАЮТ сеялкам этого слоя. Один осевой режим даёт
+// по одной грани «пол»/«потолок» и две касательные оси; Zero — шесть и три.
+struct SeedFaces {
+    SeedFace down[kMaxGravityFrames]; // «пол» — грань ПРОТИВ направления «вверх»
+    SeedFace up[kMaxGravityFrames];   // «потолок» — грань ПО направлению «вверх»
+    int nDown = 0;
+    int nUp = 0;
+    bool tangent[3] = {false, false, false}; // оси касательных плоскостей
+};
+
+static SeedFaces seed_faces(const GravityField& g) {
+    GravityFrame frames[kMaxGravityFrames];
+    const int n = gravity_frames(g, frames);
+    SeedFaces s;
+    for (int i = 0; i < n; ++i) {
+        const GravityFrame& f = frames[i];
+        s.down[s.nDown++] = SeedFace{f.axis, -f.upSign};
+        s.up[s.nUp++] = SeedFace{f.axis, f.upSign};
+        // Касательная плоскость — «горизонталь» фрейма; словарь тангенсов
+        // живёт в движке (axis_frame), второй реализации раскладки здесь нет.
+        s.tangent[f.tanA] = true;
+        s.tangent[f.tanB] = true;
+    }
+    return s;
+}
+
+// Касательные оси ОДНОЙ грани — тот же единственный словарь: ось 0 → (1,2),
+// 1 → (0,2), 2 → (0,1). Нужен сеялкам, чей локальный фрейм выведен из занятой
+// грани, а не из объявленного (режим Zero).
+static inline GravityFrame seed_axis_frame(int axis) {
+    return axis_frame(axis, 1, /*pull*/false);
+}
+
+// Шаг от клетки по ОСИ. Без врапа: `grid.cell()`/`grid.mask()` врапают сами
+// (тор), а врап нужен ровно там, где координата едет в МЕТРЫ или в байты
+// якоря, — иначе шов рождает призрак на четверть мира (разделение
+// offset()/wrap_all() в антураже ровно про это).
+struct SeedCell {
+    int x, y, z;
+};
+static inline SeedCell seed_step(int x, int y, int z, int axis, int d) {
+    SeedCell c{x, y, z};
+    if (axis == 0) c.x += d;
+    else if (axis == 1) c.y += d;
+    else c.z += d;
+    return c;
+}
+static inline int seed_cell_axis(const SeedCell& c, int axis) {
+    return axis == 0 ? c.x : axis == 1 ? c.y : c.z;
+}
+static inline void seed_vec_set(vec3& v, int axis, float s) {
+    if (axis == 0) v.x = s;
+    else if (axis == 1) v.y = s;
+    else v.z = s;
+}
+static inline void seed_vec_add(vec3& v, int axis, float s) {
+    seed_vec_set(v, axis, axis == 0 ? v.x + s : axis == 1 ? v.y + s : v.z + s);
+}
+// Центр клетки в метрах — ось-агностично (все три равноправны).
+static inline vec3 seed_cell_centre(int x, int y, int z) {
+    return vec3{(static_cast<float>(x) + 0.5f) * kCellSize,
+                (static_cast<float>(y) + 0.5f) * kCellSize,
+                (static_cast<float>(z) + 0.5f) * kCellSize};
+}
+
+// Насколько реальная поверхность грани УТОПЛЕНА внутрь клетки, в метрах.
+// Лепленые стены не кончаются на границе клетки: «заподлицо с границей» вешало
+// панель в воздухе (скрин владельца 2026-08-20, парящий щиток).
+static inline float surface_recess_m(const SurfaceFace& sf) {
+    return static_cast<float>(anchor_face_dir(sf.face) > 0
+                                  ? kSubDim - 1 - sf.layer
+                                  : sf.layer) *
+           kVoxelSize;
+}
+
+// Плоскость реальной поверхности грани в МЕТРАХ по оси грани. `cellAxisCoord`
+// — НЕврапнутая координата опорной клетки (метры обязаны остаться смежными с
+// клеткой вещи). Правило кромки — то же, что у антуража (`ceiling_face`):
+// воздушная сторона слоя, а она зависит от знака грани, не от буквы оси.
+static inline float surface_plane_m(const SurfaceFace& sf, int cellAxisCoord) {
+    const int edge = anchor_face_dir(sf.face) > 0 ? sf.layer + 1 : sf.layer;
+    return static_cast<float>(cellAxisCoord) * kCellSize +
+           static_cast<float>(edge) * kVoxelSize;
+}
+
+// Запись якоря ИЗ записи примитива поверхностей — обратное отображение
+// `anchor_face_uv` ([world/anchor.h]: X-грань → (y,z), Y → (x,z), Z → (x,y)):
+// слой поверхности едет по ОСИ грани, представительная колонка (su,sv) — по её
+// тангенсам. Три сеялки писали это руками, каждая со своей буквой оси, — и
+// Z-вариант у них был просто ДРУГИМ кодом, а не тем же законом.
+static SubVoxelAnchor anchor_of_surface(const SurfaceFace& sf) {
+    const GravityFrame t = seed_axis_frame(anchor_face_axis(sf.face));
+    std::uint8_t sub[3] = {0, 0, 0};
+    sub[t.axis] = sf.layer;
+    sub[t.tanA] = sf.su;
+    sub[t.tanB] = sf.sv;
+    SubVoxelAnchor a;
+    a.cx = sf.cx;
+    a.cy = sf.cy;
+    a.cz = sf.cz;
+    a.subX = sub[0];
+    a.subY = sub[1];
+    a.subZ = sub[2];
+    a.face = sf.face;
+    return a;
+}
+
 std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                                       LayerId layer, std::uint32_t seed,
                                       const DeviceBand* bands,
@@ -802,24 +953,42 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
     if (bands == nullptr) bandCount = 0;
     const MacroGrid& grid = world.grid();
     std::uint32_t count = 0;
-    constexpr float kCell = kCellSize;
 
-    // WALL-MOUNTED devices, isotropically ([isotropy-law]): a candidate is ANY
-    // air cell beside a wall — no floor-support requirement (the old PropPlacer
-    // port demanded solid-below, which on the module geometry confined every
-    // shield to one ankle-height row per storey). The device anchors INTO the
-    // wall cell it hangs on and sits FLUSH against the wall face, centred in
-    // the cell, at panel height.
+    // WALL-MOUNTED devices, isotropically ([isotropy-law]) — и теперь это
+    // ПРАВДА, а не обещание: «стена» = сосед по оси КАСАТЕЛЬНОЙ ПЛОСКОСТИ
+    // объявленного фрейма, а не фиксированно x/y. Под осевым режимом это две
+    // оси (пол и потолок стеной не считаются — так и значит слово «стена»),
+    // под Zero — все три, т.е. все шесть граней, по образцу антуража.
+    // Кандидат — ЛЮБАЯ воздушная клетка у стены, опора снизу не требуется
+    // (старый порт PropPlacer требовал solid-below и запирал каждый щиток в
+    // один приземный ряд на этаж). Устройство якорится В клетку стены и сидит
+    // ЗАПОДЛИЦО с её реальной поверхностью, по центру клетки, на высоте панели.
+    const SeedFaces faces = seed_faces(world.gravity());
+    SeedFace walls[2 * 3];
+    int nWalls = 0;
+    for (int a = 0; a < 3; ++a) {
+        if (!faces.tangent[a]) continue;
+        walls[nWalls++] = SeedFace{a, -1};
+        walls[nWalls++] = SeedFace{a, +1};
+    }
+    if (nWalls == 0) return 0; // недостижимо: любой фрейм объявляет две оси
+
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
-                const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
-                const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
-                const bool solidNorth = is_solid_cell(grid.cell(x, y + 1, z));
-                const bool solidSouth = is_solid_cell(grid.cell(x, y - 1, z));
-                if (!(solidWest || solidEast || solidNorth || solidSouth)) continue;
+                // Первая твёрдая грань по приоритету забирает устройство. При
+                // одном фрейме порядок тот же, что был литералами (X−, X+,
+                // Y−, Y+), — расстановка NegZ бит-в-бит.
+                int wi = -1;
+                for (int i = 0; i < nWalls && wi < 0; ++i) {
+                    const SeedCell nb =
+                        seed_step(x, y, z, walls[i].axis, walls[i].sign);
+                    if (is_solid_cell(grid.cell(nb.x, nb.y, nb.z))) wi = i;
+                }
+                if (wi < 0) continue;
+                const SeedFace wall = walls[wi];
 
                 const std::uint32_t rngWall = giga::spatial_hash(x, y, z, seed ^ kSaltWall);
                 const std::uint32_t wsel = rngWall % 2000;
@@ -846,53 +1015,37 @@ std::uint32_t seed_wall_interactables(Registry& reg, const World& world,
                 const PropDef& d = prop_def(pid);
                 const float thick = static_cast<float>(d.sizeYMm) * 0.001f;
 
-                // The wall it hangs on: normal direction + flush offset.
+                // Грань СТЕНЫ: её нормаль смотрит от стены к воздуху, т.е.
+                // шаг, обратный шагу от клетки к стене.
                 // Yaw выводится из грани якоря ниже (prop_wall_yaw) — один
                 // словарь «грань → поворот» на всех настенных писателей.
-                int wxd = 0, wyd = 0;
-                if (solidWest)       { wxd = -1; }
-                else if (solidEast)  { wxd = 1;  }
-                else if (solidSouth) { wyd = -1; }
-                else                 { wyd = 1;  }
+                const std::uint8_t wallFace =
+                    anchor_face_pack(wall.axis, -wall.sign);
 
                 // ЗАПРОС ПОВЕРХНОСТЕЙ ([world/surface.h], S10): экспонирована
-                // ли грань стены и где её реальная поверхность. Стены лепленые
-                // — «заподлицо с границей клетки» вешало панель в воздухе
-                // (скрин владельца 2026-08-20: парящий щиток); позиция, якорь
+                // ли грань стены и где её реальная поверхность. Позиция, якорь
                 // и проба живости выводятся из ОДНОЙ записи примитива.
-                const std::uint8_t wallFace = anchor_face_pack(
-                    wxd != 0 ? 0 : 1, wxd != 0 ? -wxd : -wyd);
+                const SeedCell wc = seed_step(x, y, z, wall.axis, wall.sign);
                 const SurfaceFace sf =
-                    surface_face_at(grid, x + wxd, y + wyd, z, wallFace);
+                    surface_face_at(grid, wc.x, wc.y, wc.z, wallFace);
                 if (sf.columns == 0) continue; // грань не экспонирована
-                const float recess = static_cast<float>(
-                    anchor_face_dir(wallFace) > 0 ? kSubDim - 1 - sf.layer
-                                                  : sf.layer) * kVoxelSize;
+                const float recess = surface_recess_m(sf);
 
                 // Flush: slide the panel centre from the cell centre to the
                 // REAL wall surface (recess deep), half thickness + a hair.
+                // Сдвиг — ТОЛЬКО по оси стены; две другие координаты остаются
+                // центром клетки, какая из них «вертикаль» — неважно.
                 const float slide = 1.0f - (0.5f * thick + 0.02f);
-                const float wx = (static_cast<float>(x) + 0.5f) * kCell +
-                                 static_cast<float>(wxd) * (slide + recess);
-                const float wy = (static_cast<float>(y) + 0.5f) * kCell +
-                                 static_cast<float>(wyd) * (slide + recess);
-                const float wz = (static_cast<float>(z) + 0.5f) * kCell;
+                vec3 pos = seed_cell_centre(x, y, z);
+                seed_vec_add(pos, wall.axis,
+                             static_cast<float>(wall.sign) * (slide + recess));
 
                 // Anchor INTO the wall cell: the panel falls when its wall is
                 // carved, not when some unrelated floor is.
-                // Якорь — прямо из записи примитива: слой вдоль оси, (su,sv)
-                // по тангенсам (обратное отображение anchor_face_uv).
-                SubVoxelAnchor anchor;
-                anchor.cx   = static_cast<std::uint8_t>(sf.cx);
-                anchor.cy   = static_cast<std::uint8_t>(sf.cy);
-                anchor.cz   = static_cast<std::uint8_t>(sf.cz);
-                anchor.subX = static_cast<std::uint8_t>(wxd != 0 ? sf.layer : sf.su);
-                anchor.subY = static_cast<std::uint8_t>(wxd != 0 ? sf.su : sf.layer);
-                anchor.subZ = sf.sv;
-                anchor.face = wallFace;
+                const SubVoxelAnchor anchor = anchor_of_surface(sf);
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngWall & 0xFFu);
-                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
+                Entity e = spawn_prop_from_id(reg, world, pos, anchor,
                                              pid, layer, prop_wall_yaw(wallFace),
                                              anim, /*flags*/0);
                 if (e != entt::null) ++count;
@@ -911,27 +1064,52 @@ std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
     if (bands == nullptr) bandCount = 0;
     const MacroGrid& grid = world.grid();
     std::uint32_t count = 0;
-    constexpr float kCell = kCellSize;
-    constexpr float kVoxel = kCell / static_cast<float>(kSubDim);
+
+    // «ПОЛ» — ГРАНЬ, ПРОТИВОПОЛОЖНАЯ НАПРАВЛЕНИЮ ТЯГИ в этой точке, а не
+    // `z - 1`. Осевой режим объявляет её одну; Zero — все шесть (без тяги «пол»
+    // и «потолок» одно слово, образец — bake_antourage), и станок встаёт на ту
+    // грань, что первой окажется твёрдой.
+    const SeedFaces faces = seed_faces(world.gravity());
 
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
-                // СТОИТ НА ПОЛУ: сплошная клетка снизу — станция не панель,
-                // ей нужна опора, а не грань подвеса.
-                if (!is_solid_cell(grid.cell(x, y, z - 1))) continue;
+                // СТОИТ НА ПОЛУ: сплошная клетка под ногами — станция не
+                // панель, ей нужна ОПОРА, а не грань подвеса.
+                int di = -1;
+                for (int i = 0; i < faces.nDown && di < 0; ++i) {
+                    const SeedCell s =
+                        seed_step(x, y, z, faces.down[i].axis, faces.down[i].sign);
+                    if (is_solid_cell(grid.cell(s.x, s.y, s.z))) di = i;
+                }
+                if (di < 0) continue;
+                // ЛОКАЛЬНЫЙ ФРЕЙМ СТАНКА задан занятой опорой: её ось —
+                // «вертикаль», «вверх» — от опоры в клетку. При осевом режиме
+                // это и есть объявленный фрейм (опора одна).
+                const int upAxis = faces.down[di].axis;
+                const int upSign = -faces.down[di].sign;
 
                 // ...И СПИНОЙ К СТЕНЕ: тот же кандидатный вопрос, что у
                 // настенной сеялки, — станок посреди коридора это мебель
-                // на проходе, а не мастерская.
-                const bool solidWest  = is_solid_cell(grid.cell(x - 1, y, z));
-                const bool solidEast  = is_solid_cell(grid.cell(x + 1, y, z));
-                const bool solidNorth = is_solid_cell(grid.cell(x, y + 1, z));
-                const bool solidSouth = is_solid_cell(grid.cell(x, y - 1, z));
-                if (!(solidWest || solidEast || solidNorth || solidSouth))
-                    continue;
+                // на проходе, а не мастерская. «Стена» здесь — касательная
+                // плоскость ЭТОЙ опоры: ось стены ≠ ось вертикали.
+                SeedFace walls[2 * 3];
+                int nWalls = 0;
+                for (int a = 0; a < 3; ++a) {
+                    if (a == upAxis || !faces.tangent[a]) continue;
+                    walls[nWalls++] = SeedFace{a, -1};
+                    walls[nWalls++] = SeedFace{a, +1};
+                }
+                int wi = -1;
+                for (int i = 0; i < nWalls && wi < 0; ++i) {
+                    const SeedCell nb =
+                        seed_step(x, y, z, walls[i].axis, walls[i].sign);
+                    if (is_solid_cell(grid.cell(nb.x, nb.y, nb.z))) wi = i;
+                }
+                if (wi < 0) continue;
+                const SeedFace wall = walls[wi];
 
                 const std::uint32_t rngF =
                     giga::spatial_hash(x, y, z, seed ^ kSaltFloorDevice);
@@ -953,56 +1131,50 @@ std::uint32_t seed_floor_standing_devices(Registry& reg, const World& world,
                 if (!picked) continue;
                 const PropDef& d = prop_def(pid);
 
-                // Стена за спиной: направление + её реальная поверхность
-                // (лепленые стены — ровно та же проба, что у панелей).
-                int wxd = 0, wyd = 0;
-                if (solidWest)       { wxd = -1; }
-                else if (solidEast)  { wxd = 1;  }
-                else if (solidSouth) { wyd = -1; }
-                else                 { wyd = 1;  }
-                const std::uint8_t wallFace = anchor_face_pack(
-                    wxd != 0 ? 0 : 1, wxd != 0 ? -wxd : -wyd);
+                // Стена за спиной: её реальная поверхность (лепленые стены —
+                // ровно та же проба, что у панелей).
+                const std::uint8_t wallFace =
+                    anchor_face_pack(wall.axis, -wall.sign);
+                const SeedCell wc = seed_step(x, y, z, wall.axis, wall.sign);
                 const SurfaceFace sfw =
-                    surface_face_at(grid, x + wxd, y + wyd, z, wallFace);
+                    surface_face_at(grid, wc.x, wc.y, wc.z, wallFace);
                 if (sfw.columns == 0) continue; // грань стены не экспонирована
-                const float recess = static_cast<float>(
-                    anchor_face_dir(wallFace) > 0 ? kSubDim - 1 - sfw.layer
-                                                  : sfw.layer) * kVoxel;
+                const float recess = surface_recess_m(sfw);
 
-                // ПОЛ: реальная ВЕРХНЯЯ грань клетки опоры — на ней и стоит
-                // (решётчатый настил даёт просевшую поверхность честно).
-                const SurfaceFace sff = surface_face_at(
-                    grid, x, y, z - 1, anchor_face_pack(2, 1));
+                // ПОЛ: реальная грань клетки опоры, смотрящая «ВВЕРХ» ФРЕЙМА,
+                // — на ней и стоит (решётчатый настил даёт просевшую
+                // поверхность честно).
+                const std::uint8_t floorFace = anchor_face_pack(upAxis, upSign);
+                const SeedCell fc = seed_step(x, y, z, upAxis, -upSign);
+                const SurfaceFace sff =
+                    surface_face_at(grid, fc.x, fc.y, fc.z, floorFace);
                 if (sff.columns == 0) continue;
-                const float floorTopM =
-                    static_cast<float>(z - 1) * kCell +
-                    (static_cast<float>(sff.layer) + 1.0f) * kVoxel;
+                const float standM =
+                    surface_plane_m(sff, seed_cell_axis(fc, upAxis));
 
                 // Спиной к стене: сдвиг от центра клетки к поверхности стены
                 // на полглубины корпуса (та же формула slide, что у панелей).
+                // Высота корпуса — авторский размер Z строки props.csv: меш
+                // крутится ТОЛЬКО по yaw, второй «высоты» у него нет, так что
+                // при боковом фрейме корпус остаётся стоящим на своей опоре —
+                // чего нельзя выразить одним скаляром, см. prop_wall_yaw.
                 const float depth = static_cast<float>(d.sizeYMm) * 0.001f;
                 const float slide = 1.0f - (0.5f * depth + 0.02f);
-                const float wx = (static_cast<float>(x) + 0.5f) * kCell +
-                                 static_cast<float>(wxd) * (slide + recess);
-                const float wy = (static_cast<float>(y) + 0.5f) * kCell +
-                                 static_cast<float>(wyd) * (slide + recess);
-                const float wz = floorTopM +
-                                 0.5f * static_cast<float>(d.sizeZMm) * 0.001f +
-                                 0.01f;
+                vec3 pos = seed_cell_centre(x, y, z);
+                seed_vec_add(pos, wall.axis,
+                             static_cast<float>(wall.sign) * (slide + recess));
+                seed_vec_set(pos, upAxis,
+                             standM + static_cast<float>(upSign) *
+                                          (0.5f * static_cast<float>(d.sizeZMm) *
+                                               0.001f +
+                                           0.01f));
 
                 // Якорь — В ПОЛ (не в стену): вырезали пол под станком —
                 // станок падает; стену рядом — стоит дальше.
-                SubVoxelAnchor anchor;
-                anchor.cx   = static_cast<std::uint8_t>(sff.cx);
-                anchor.cy   = static_cast<std::uint8_t>(sff.cy);
-                anchor.cz   = static_cast<std::uint8_t>(sff.cz);
-                anchor.subX = static_cast<std::uint8_t>(sff.su);
-                anchor.subY = static_cast<std::uint8_t>(sff.sv);
-                anchor.subZ = static_cast<std::uint8_t>(sff.layer);
-                anchor.face = anchor_face_pack(2, 1); // верхняя грань пола
+                const SubVoxelAnchor anchor = anchor_of_surface(sff);
 
                 const std::uint8_t anim = static_cast<std::uint8_t>(rngF & 0xFFu);
-                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz},
+                Entity e = spawn_prop_from_id(reg, world, pos,
                                               anchor, pid, layer,
                                               prop_wall_yaw(wallFace), anim,
                                               /*flags*/0);
@@ -1028,65 +1200,109 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
 
     const MacroGrid& grid = world.grid();
     std::uint32_t count = 0;
-    constexpr float kCell = kCellSize;
 
     const int pitch = lamp_pitch_cells();               // 8 cells = 16 m
     const int headroom = lamp_light_radius_cells();     // 6 cells = the bulb's own reach
-    const int blocks = kMacroDim / pitch;               // exact tiling, no seam stripe
 
-    // One lamp per (pitch x pitch x ceiling-level) block. The block's winner is
-    // the candidate with the lowest hash score, so the pattern is even in
-    // DENSITY but jittered in position — a raster "first valid cell wins" would
-    // park every bulb on its block's low corner and read as a visible grid.
+    // «ПОТОЛОК» — ГРАНЬ ПО НАПРАВЛЕНИЮ «ВВЕРХ» ФРЕЙМА, а не `z + 1`: лампа
+    // висит там, где гравитация говорит «потолок». Осевой режим объявляет одну
+    // такую грань; Zero — все шесть (образец — bake_antourage), и плафон
+    // занимает ту, что первой окажется твёрдой.
+    const SeedFaces faces = seed_faces(world.gravity());
+
+    // РЕШЁТКА БЛОКОВ — ТОЖЕ ПО ФРЕЙМУ: шаг pitch по осям КАСАТЕЛЬНОЙ
+    // ПЛОСКОСТИ (лампы раскладываются вширь именно там), ОДИН слой по
+    // ВЕРТИКАЛЬНОЙ (каждый этаж освещается сам). Осевой режим даёт
+    // (pitch, pitch, 1) в своих осях — для NegZ это ровно легаси-ключ
+    // (x/pitch, y/pitch, z) и ровно тот же размер массива. Zero: касательны
+    // ВСЕ ТРИ оси, и решётка становится изотропной pitch³ — «этажей», которые
+    // надо освещать по одному, в невесомости нет. Делитель бюджета, которого
+    // требует doc-comment gravity_frames, здесь ВЫВЕДЕН из фрейма, а не
+    // назначен рукой.
+    int div[3], dim[3];
+    for (int a = 0; a < 3; ++a) {
+        div[a] = faces.tangent[a] ? pitch : 1; // pitch делит kMacroDim по построению
+        dim[a] = kMacroDim / div[a];
+    }
+    const auto block_index = [&](int x, int y, int z) {
+        return (static_cast<std::size_t>(z / div[2]) * dim[1] + y / div[1]) *
+                   dim[0] +
+               x / div[0];
+    };
+
+    // One lamp per block. The block's winner is the candidate with the lowest
+    // hash score, so the pattern is even in DENSITY but jittered in position —
+    // a raster "first valid cell wins" would park every bulb on its block's low
+    // corner and read as a visible grid.
     struct Slot {
         std::uint32_t score;
-        std::int16_t x, y;
+        std::int16_t x, y, z;      // клетка-кандидат (воздух под потолком)
+        std::uint8_t face;         // ЗАНЯТАЯ грань опоры (anchor_face_pack)
         std::int8_t su, sv, layer; // запись примитива поверхностей; layer<0 = пусто
     };
-    std::vector<Slot> best(static_cast<std::size_t>(blocks) * blocks * kMacroDim,
-                           Slot{0xFFFFFFFFu, 0, 0, 0, 0, -1});
+    std::vector<Slot> best(
+        static_cast<std::size_t>(dim[0]) * dim[1] * dim[2],
+        Slot{0xFFFFFFFFu, 0, 0, 0, 0, 0, 0, -1});
 
     for (int z = 0; z < kMacroDim; ++z) {
         for (int y = 0; y < kMacroDim; ++y) {
             for (int x = 0; x < kMacroDim; ++x) {
                 if (grid.cell(x, y, z) != kCellAir) continue;
 
-                const CellType above = grid.cell(x, y, z + 1);
-                if (!is_solid_cell(above)) continue;
+                // Первая твёрдая грань «вверх» по приоритету = потолок этой
+                // лампы, и она же задаёт плафону ЛОКАЛЬНЫЙ фрейм.
+                int ui = -1;
+                for (int i = 0; i < faces.nUp && ui < 0; ++i) {
+                    const SeedCell c =
+                        seed_step(x, y, z, faces.up[i].axis, faces.up[i].sign);
+                    if (is_solid_cell(grid.cell(c.x, c.y, c.z))) ui = i;
+                }
+                if (ui < 0) continue;
+                const int upAxis = faces.up[ui].axis;
+                const int upSign = faces.up[ui].sign;
 
                 // No lamps in doorway/niche cells: walls on BOTH opposite sides
                 // means a lintel slot, and a bulb there floats in the opening.
-                const bool nichX = is_solid_cell(grid.cell(x - 1, y, z)) &&
-                                   is_solid_cell(grid.cell(x + 1, y, z));
-                const bool nichY = is_solid_cell(grid.cell(x, y - 1, z)) &&
-                                   is_solid_cell(grid.cell(x, y + 1, z));
-                if (nichX || nichY) continue;
+                // «Обе стороны» — по осям, КАСАТЕЛЬНЫМ к занятому потолку.
+                bool niche = false;
+                for (int a = 0; a < 3 && !niche; ++a) {
+                    if (a == upAxis) continue;
+                    const SeedCell lo = seed_step(x, y, z, a, -1);
+                    const SeedCell hi = seed_step(x, y, z, a, +1);
+                    niche = is_solid_cell(grid.cell(lo.x, lo.y, lo.z)) &&
+                            is_solid_cell(grid.cell(hi.x, hi.y, hi.z));
+                }
+                if (niche) continue;
 
-                // Hang from the REAL ceiling under-face — ЗАПРОС ПОВЕРХНОСТЕЙ
-                // ([world/surface.h], S10): грань экспонирована? Ручной
-                // lowest_layer_centre + добор точного бита умерли; дырявый
-                // центр больше не отменяет лампу — представительная колонка
-                // просто съезжает к ближайшей экспонированной.
-                const SurfaceFace sfc = surface_face_at(
-                    grid, x, y, z + 1, anchor_face_pack(2, -1));
+                // Hang from the REAL ceiling face on the AIR side — ЗАПРОС
+                // ПОВЕРХНОСТЕЙ ([world/surface.h], S10): грань экспонирована?
+                // Ручной lowest_layer_centre + добор точного бита умерли;
+                // дырявый центр больше не отменяет лампу — представительная
+                // колонка просто съезжает к ближайшей экспонированной.
+                const std::uint8_t hangFace = anchor_face_pack(upAxis, -upSign);
+                const SeedCell cc = seed_step(x, y, z, upAxis, upSign);
+                const SurfaceFace sfc =
+                    surface_face_at(grid, cc.x, cc.y, cc.z, hangFace);
                 if (sfc.columns == 0) continue;
 
                 // HEADROOM: some surface within the bulb's own reach below, or
                 // this is not a room's ceiling — it is an overhang over a void
-                // (or, at z = 127, the torus wrap onto the floor's base mass).
+                // (or, at the wrap, the torus seam onto the floor's base mass).
+                // «Ниже» — ПРОТИВ «вверх» фрейма.
                 bool standable = false;
-                for (int d = 1; d <= headroom && !standable; ++d)
-                    standable = !grid.mask(wrap_macro(x), wrap_macro(y),
-                                           wrap_macro(z - d)).empty();
+                for (int dd = 1; dd <= headroom && !standable; ++dd) {
+                    const SeedCell s = seed_step(x, y, z, upAxis, -upSign * dd);
+                    standable = !grid.mask(s.x, s.y, s.z).empty();
+                }
                 if (!standable) continue;
 
                 const std::uint32_t score =
                     giga::spatial_hash(x, y, z, seed ^ kSaltLight);
-                Slot& slot = best[(static_cast<std::size_t>(z) * blocks +
-                                   y / pitch) * blocks + x / pitch];
+                Slot& slot = best[block_index(x, y, z)];
                 if (score >= slot.score) continue;
                 slot = Slot{score, static_cast<std::int16_t>(x),
                             static_cast<std::int16_t>(y),
+                            static_cast<std::int16_t>(z), hangFace,
                             static_cast<std::int8_t>(sfc.su),
                             static_cast<std::int8_t>(sfc.sv),
                             static_cast<std::int8_t>(sfc.layer)};
@@ -1094,63 +1310,66 @@ std::uint32_t seed_ceiling_lights(Registry& reg, const World& world,
         }
     }
 
-    for (int z = 0; z < kMacroDim; ++z) {
-        for (int by = 0; by < blocks; ++by) {
-            for (int bx = 0; bx < blocks; ++bx) {
-                const Slot& slot =
-                    best[(static_cast<std::size_t>(z) * blocks + by) * blocks + bx];
-                if (slot.layer < 0) continue;
-                const int x = slot.x, y = slot.y;
-                const int cz = wrap_macro(z + 1);
-                const float faceM = (static_cast<float>(z) + 1.0f) * kCell +
-                                    static_cast<float>(slot.layer) * (kCell / 8.0f);
+    for (std::size_t bi = 0; bi < best.size(); ++bi) {
+        const Slot& slot = best[bi];
+        if (slot.layer < 0) continue;
+        // Локальный фрейм плафона — из ЗАНЯТОЙ грани: её нормаль смотрит от
+        // потолка к лампе, т.е. «вниз», значит «вверх» — обратный знак.
+        const int upAxis = anchor_face_axis(slot.face);
+        const int upSign = -anchor_face_dir(slot.face);
+        // Клетка потолка. НЕврапнутая — она едет в МЕТРЫ (врап здесь дал бы
+        // призрак через шов на четверть мира); байты якоря врапает примитив.
+        const SeedCell cc = seed_step(slot.x, slot.y, slot.z, upAxis, upSign);
+        // Запись примитива восстанавливается из слота: площадь (columns) была
+        // вопросом КАНДИДАТНОСТИ и ниже не читается — в слот её не тащим.
+        SurfaceFace sfc;
+        sfc.cx = wrap_macro(cc.x);
+        sfc.cy = wrap_macro(cc.y);
+        sfc.cz = wrap_macro(cc.z);
+        sfc.face = slot.face;
+        sfc.su = static_cast<std::uint8_t>(slot.su);
+        sfc.sv = static_cast<std::uint8_t>(slot.sv);
+        sfc.layer = static_cast<std::uint8_t>(slot.layer);
+        sfc.columns = 1;
+        const float faceM = surface_plane_m(sfc, seed_cell_axis(cc, upAxis));
 
-                // Cell CENTRE — the corner form hung bulbs on whatever wall
-                // shared the corner (the same bug the wall seeder had).
-                const float wx = (static_cast<float>(x) + 0.5f) * kCell;
-                const float wy = (static_cast<float>(y) + 0.5f) * kCell;
-                const float wz = faceM - 0.14f;
+        // Cell CENTRE по касательным осям — the corner form hung bulbs on
+        // whatever wall shared the corner (the same bug the wall seeder had).
+        // Подвес — на 14 см ВНИЗ ПО ФРЕЙМУ от реальной грани потолка.
+        vec3 pos = seed_cell_centre(slot.x, slot.y, slot.z);
+        seed_vec_set(pos, upAxis,
+                     faceM - static_cast<float>(upSign) * 0.14f);
 
-                // Якорь — прямо из записи примитива: представительная
-                // экспонированная колонка (su,sv) + её слой. Прежний добор
-                // «точного солидного бита центра 2×2» умер вместе с побитовым
-                // гейтом (колонковая проба anchor_alive спрашивает то же окно).
-                SubVoxelAnchor anchor;
-                anchor.cx   = x;
-                anchor.cy   = y;
-                anchor.cz   = cz;
-                anchor.subX = static_cast<std::uint8_t>(slot.su);
-                anchor.subY = static_cast<std::uint8_t>(slot.sv);
-                anchor.subZ = static_cast<std::uint8_t>(slot.layer);
-                anchor.face = anchor_face_pack(2, -1); // нижняя грань потолка
+        // Якорь — прямо из записи примитива: представительная экспонированная
+        // колонка (su,sv) + её слой. Прежний добор «точного солидного бита
+        // центра 2×2» умер вместе с побитовым гейтом (колонковая проба
+        // anchor_alive спрашивает то же окно).
+        const SubVoxelAnchor anchor = anchor_of_surface(sfc);
 
-                // ПЛАФОН — ИЗ СТРОКИ ЭТАЖА, не монеткой здесь. Та же
-                // арифметика накопления, что у сеялок стен и пола, но
-                // знаменатель — Σ весов: при {FloodLamp,1},{BareBulb,1}
-                // sel = score % 2 == (score & 1), и легаси-монетка «чёт —
-                // прожектор, нечет — лампочка» воспроизводится бит-в-бит.
-                const std::uint32_t sel = slot.score % mixTotal;
-                PropId pid{};
-                bool picked = false;
-                std::uint32_t acc = 0;
-                for (std::size_t b = 0; b < mixCount && !picked; ++b) {
-                    if (mix[b].per2000 == 0) continue;
-                    acc += mix[b].per2000;
-                    if (sel < acc) {
-                        pid = mix[b].prop;
-                        picked = true;
-                    }
-                }
-                if (!picked) continue; // недостижимо: sel < mixTotal == acc
-                const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
-                const std::uint8_t anim =
-                    static_cast<std::uint8_t>(slot.score & 0xFFu);
-
-                Entity e = spawn_prop_from_id(reg, world, vec3{wx, wy, wz}, anchor,
-                                             pid, layer, yaw, anim, /*flags*/0);
-                if (e != entt::null) ++count;
+        // ПЛАФОН — ИЗ СТРОКИ ЭТАЖА, не монеткой здесь. Та же арифметика
+        // накопления, что у сеялок стен и пола, но знаменатель — Σ весов:
+        // при {FloodLamp,1},{BareBulb,1} sel = score % 2 == (score & 1), и
+        // легаси-монетка «чёт — прожектор, нечет — лампочка»
+        // воспроизводится бит-в-бит.
+        const std::uint32_t sel = slot.score % mixTotal;
+        PropId pid{};
+        bool picked = false;
+        std::uint32_t acc = 0;
+        for (std::size_t b = 0; b < mixCount && !picked; ++b) {
+            if (mix[b].per2000 == 0) continue;
+            acc += mix[b].per2000;
+            if (sel < acc) {
+                pid = mix[b].prop;
+                picked = true;
             }
         }
+        if (!picked) continue; // недостижимо: sel < mixTotal == acc
+        const float yaw = static_cast<float>(slot.score % 4u) * kHalfPi;
+        const std::uint8_t anim = static_cast<std::uint8_t>(slot.score & 0xFFu);
+
+        Entity e = spawn_prop_from_id(reg, world, pos, anchor, pid, layer, yaw,
+                                      anim, /*flags*/0);
+        if (e != entt::null) ++count;
     }
     return count;
 }

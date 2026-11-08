@@ -36,62 +36,13 @@
 //                          (vendor.cpp:251-255). All 17 AMMO rows still carry
 //                          spawn_w_milli 0, which is exactly why the crate has to force
 //                          the slot instead of rolling for it.
-//   5. descend_not_free    CLOSED, and the TEST is what had to change. The game side had
-//                          already landed twice over: `Contract::baseline` is stamped
-//                          inside contract_accept so the caller cannot forget it, and a
-//                          Descend offer whose target is already behind the run is
-//                          refused outright (contract.cpp:209-211). What kept this red
-//                          was the test itself, and not for a reason a number could fix:
-//                          it stamped the baseline from `kNoDescentYet` (deepestFloor 0)
-//                          and then stepped against a ledger saying -50, which reads as
-//                          "descended from 0 to -50 AFTER accepting" — so paying 900 was
-//                          CORRECT and `first == 0` asserted a state real play cannot
-//                          produce. Worse, the line after it wanted the re-accept to
-//                          SUCCEED, which only happens while the slot is not Active, i.e.
-//                          only if the first step DID pay. No implementation satisfies
-//                          both halves. Rewritten to drive the guard that was never
-//                          witnessed: contract_accept now gets the REAL ledger, and the
-//                          assertion is that it REFUSES (:209-211 was untested — nothing
-//                          in the tree passed it a ledger that had already passed the
-//                          target, so deleting that guard again would have gone
-//                          unnoticed). Branch (b) is the tripwire that stops (a) from
-//                          passing vacuously: the same job taken by a run that has NOT
-//                          been there is accepted, pays nothing until the descent, pays
-//                          exactly 900 once, and is then refused on re-accept by the same
-//                          guard — which is the repeat exploit, closed and pinned.
-//   6. hunt_is_findable    CLOSED. contract_offer picked a Hunt kind uniformly over all
-//                          69 rows with no spawn-weight filter, so 7 of 318 live offers
-//                          named a monster that can never appear. Now guarded on the
-//                          same two row fields the spawn roster reads
-//                          (contract.cpp Hunt branch, mob_spawn.cpp:271).
-//                          The count was 11 until 2026-07-29 and is 7 now, RE-MEASURED
-//                          by linking this same test object against a contract.cpp with
-//                          only that filter removed: `hunts=318 impossible=7
-//                          survive=311`. The old figure was right for the CSV it was
-//                          taken on — SCULPTURE's authored weight then went 0.05 -> 0.1
-//                          (commit bd4db77, "a quantization bug that had silently
-//                          deleted a monster"), so it rounds to 1 and is spawnable, and
-//                          only CREATOR and PSEUDOLIFT still round to 0. The figures
-//                          below and in contract.{h,cpp} are the re-measured ones.
+//   5. descend_not_free    СНЕСЁН 2026-11-08 вместе с системой контрактов.
+//   6. hunt_is_findable    СНЕСЁН 2026-11-08 вместе с системой контрактов.
 //   7. stack_max_respected CLOSED. loot.cpp:243-244 clamps a merged slot to stackMax.
-//   8. giver_slot_recycled CLOSED by this lane, and it is the reason the lane exists.
-//                          `Contract::giver` was a bare `NpcId` resting on "the pool
-//                          never reclaims a slot", which stopped being true when the
-//                          intrusive free list landed ([npc_pool.h] "Slot recycling").
-//                          Armed, a giver killed by the MACRO sweep publishes no NpcDied
-//                          event, so `contract_on_giver_died` never fires; the slot goes
-//                          to a newborn; and `contract_step`'s liveness poll — then
-//                          `valid(id) && alive(id)` — saw a living record at that index
-//                          and PAID the job out to somebody who never offered it. `giver`
-//                          is now an `NpcHandle` and the poll is `handle_valid`, so a
-//                          bumped generation fails the job. This test is the witness: it
-//                          arms recycling, proves the ABA actually happened (the newborn
-//                          gets the giver's exact id and reads as alive), and requires the
-//                          job to FAIL rather than transfer. MEASURED against the bare-id
-//                          body (same test object, one function reverted): 62 checks /
-//                          FIVE failures — paid 700 not 0, banked 700 not 0, state 2
-//                          (Complete) not 3 (Failed), failed 0 not 1, completed 1 not 0.
-//                          Against the handle body, 62 checks / 0 failures.
+//   8. giver_slot_recycled СНЕСЁН 2026-11-08 вместе с системой контрактов. Это
+//                          был ЕДИНСТВЕННЫЙ свидетель генерационного хэндла для
+//                          `pool.set_recycling(true)`; список гейта recycling в
+//                          [src/app/main.cpp] осиротел по пункту Contract::giver.
 //
 //   9. travel_keeps_opened_crates
 //                          CLOSED. refresh_floor_containers destroys every crate on
@@ -470,8 +421,8 @@ static void gun_kills_counted() {
 //
 // So outside of trade the only ammunition is `drop_weapon_ammo`'s bundle and the
 // weapon crate's reserved slot; a gun without either is a gun you cannot load.
-// A run that has not descended: the strict baseline for a Descend job.
-static const RunLedger kNoDescentYet{};
+// (`kNoDescentYet` стоял здесь — базовая линия для Descend-контракта; умер
+// вместе с системой контрактов 2026-11-08.)
 static void ammo_has_a_source() {
     // The premise, from the data rather than from prose.
     int ammoRows = 0, ammoSpawnable = 0;
@@ -507,351 +458,28 @@ static void ammo_has_a_source() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. A Descend contract pays for a descent that happened before it existed
+// 5, 5b, 6, 8 — ЧЕТЫРЕ КОНТРАКТНЫХ НАХОДКИ СНЕСЕНЫ 2026-11-08
 // ---------------------------------------------------------------------------
-// What it caught: `contract_step` reads `led.deepestFloor` (contract.cpp:320), which is
-// the deepest point of the whole SESSION, and `contract_accept` recorded no baseline. So
-// a job to reach -20, taken after any trip past -20, was already complete on the tick it
-// was accepted. `Contract::baseline` closes that (contract.cpp:227, compared at :336),
-// and a Descend whose target is already behind the run is now REFUSED at accept
-// (contract.cpp:209-211).
+// Вместе с системой контрактов/квестов целиком (решение владельца: надстройка
+// без мандата в CANON.md, обходила единственный законный путь решения агента —
+// спрос/предложение в place.cpp — и платила прямо в кошелёк).
 //
-// The repeat was the expensive half. `contract_accept` refuses a duplicate only while
-// the existing copy is ACTIVE (contract.cpp:217); once it is Complete the slot is
-// reusable, and `contract_offer` is deterministic in (giver, floor) — so the same body
-// re-offers the identical job every `kOverhearCooldownTicks` (2 s) and every E press
-// paid again, forever, without moving. Descend is 20% of all offers (contract.cpp:58-143
-// splits Fetch 45 / Hunt 35 / Descend 20 on `pick`), and the reward is paid straight
-// into `banked`, which is the one number the whole extraction loop is scored on.
-//
-// **What this test measures now, and why the old version could not.** It used to accept
-// with `kNoDescentYet` and step against a ledger at -50, which is not a state play can
-// reach: that reads as a descent made AFTER accepting, so paying was right and
-// `first == 0` was asserting against the implementation of a job that works. The real
-// hole was one line up and had no witness at all — nothing in the tree drove
-// `contract_accept` with a ledger that had already passed the target, so the guard at
-// :209-211 could have been deleted and every test would still have passed. So (a) drives
-// exactly that and requires a REFUSAL, and (b) is the tripwire that keeps (a) from being
-// satisfied by a Descend job that simply never works.
-static void descend_not_free() {
-    NpcPool pool;
-    pool.init();
-    const NpcId giver = pool.spawn();
-    CHECK(pool.alive(giver));
-
-    Contract job{};
-    job.giver = pool.handle(giver);
-    job.kind = static_cast<std::uint8_t>(ObjectiveKind::Descend);
-    job.target = -20;
-    job.reward = 900;
-    job.state = static_cast<std::uint8_t>(ContractState::Offered);
-
-    Inventory inv{};
-
-    // (a) THE REFUSAL. A run already at -50 cannot take a job to reach -20: the target is
-    //     behind it, so there is no descent left to make and no way for the slot to ever
-    //     complete. Refused at accept, and therefore never occupying one of three slots.
-    {
-        RunLedger led{};
-        led.deepestFloor = -50;      // already been deeper, earlier in the run
-        led.deepestBand = economy_band(-50);
-        ContractBook book{};
-        CHECK(!contract_accept(book, job, led));
-        // Refused means NOT WRITTEN. A guard that returned false after stamping the slot
-        // would still brick the book, which is the failure mode this finding is about.
-        CHECK(book.slot[0].state != static_cast<std::uint8_t>(ContractState::Active));
-        const std::int32_t paid = contract_step(book, pool, inv, led);
-        std::fprintf(stderr,
-                     "[audit] contracts: Descend(-20) offered to a run already at -50 "
-                     "was refused at accept; the book paid %d rub and holds %u done / "
-                     "%u failed\n",
-                     paid, book.completed, book.failed);
-        CHECK(paid == 0);
-        CHECK(led.banked == 0);
-        // Not a FAILURE either. An unclearable slot that eventually fails still charges
-        // the player a failure for work they were never able to do.
-        CHECK(book.completed == 0 && book.failed == 0);
-    }
-
-    // (b) THE TRIPWIRE, and the reason (a) is not vacuous. The identical job taken by a
-    //     run that has NOT been there is accepted, pays NOTHING until the descent is
-    //     actually made, pays exactly once when it is — and is then refused on re-accept
-    //     by the same guard as (a), which is the infinite-press exploit closed at the
-    //     accept seam instead of at the payout.
-    {
-        RunLedger led{};             // deepestFloor 0: a run still at the top
-        ContractBook book{};
-        CHECK(contract_accept(book, job, led));
-        CHECK(book.slot[0].baseline == 0);                 // stamped from the ledger
-        CHECK(contract_step(book, pool, inv, led) == 0);   // taken, not yet earned
-        led.deepestFloor = -20;                            // NOW the descent happens
-        CHECK(contract_step(book, pool, inv, led) == 900);
-        CHECK(led.banked == 900);                          // and into banked, not carried
-        CHECK(contract_step(book, pool, inv, led) == 0);   // paid once, not every tick
-        // The repeat, priced by the guard rather than by the payout: the run is at -20
-        // now, so `want <= baseline` and the same offer is dead to this player.
-        CHECK(!contract_accept(book, job, led));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 5b. Two Descend jobs to the same |target| must not both sit Active — CLOSED
-// ---------------------------------------------------------------------------
-// contract_accept used to dedupe only on (giver, kind, subject). Descend stores its
-// depth in `target` and pays against |target|, so two Active slots aimed at the same
-// absolute depth — different givers, opposite signs, or a second baseline stamp —
-// both Complete on one walk and double-pay. Three slots, three givers, one descent:
-// that is the brick. The accept seam now refuses any second Descend whose |target|
-// collides with an Active one, regardless of giver or sign.
-static void descend_same_target_once() {
-    NpcPool pool;
-    pool.init();
-    const NpcId a = pool.spawn();
-    const NpcId b = pool.spawn();
-    CHECK(pool.alive(a) && pool.alive(b));
-
-    RunLedger led{};             // deepestFloor 0
-    ContractBook book{};
-    Inventory inv{};
-
-    Contract jobA{};
-    jobA.giver = pool.handle(a);
-    jobA.kind = static_cast<std::uint8_t>(ObjectiveKind::Descend);
-    jobA.target = -20;
-    jobA.reward = 900;
-    jobA.state = static_cast<std::uint8_t>(ContractState::Offered);
-
-    Contract jobB = jobA;
-    jobB.giver = pool.handle(b);
-    jobB.target = -20;           // same absolute depth, other person
-    jobB.reward = 1100;          // different purse so a double-pay is visible as 2000
-
-    Contract jobRoof = jobA;
-    jobRoof.giver = pool.handle(b);
-    jobRoof.target = 20;         // opposite sign, same |target|
-
-    // (a) first accept lands; second same-|target| from another giver is refused.
-    CHECK(contract_accept(book, jobA, led));
-    CHECK(book.slot[0].state == static_cast<std::uint8_t>(ContractState::Active));
-    CHECK(!contract_accept(book, jobB, led));
-    CHECK(book.slot[1].state != static_cast<std::uint8_t>(ContractState::Active));
-
-    // (b) opposite-sign same |target| is also refused — payout is absolute.
-    CHECK(!contract_accept(book, jobRoof, led));
-
-    // (c) one descent pays exactly once, from the single Active slot.
-    led.deepestFloor = -20;
-    const std::int32_t paid = contract_step(book, pool, inv, led);
-    std::fprintf(stderr,
-                 "[audit] contracts: two givers offered Descend(|20|); book held one "
-                 "Active slot and paid %d rub (want 900, not 2000)\n",
-                 paid);
-    CHECK(paid == 900);
-    CHECK(led.banked == 900);
-    CHECK(book.completed == 1);
-    CHECK(book.failed == 0);
-
-    // (d) a DIFFERENT depth still accepts into a free slot — the guard is per-|target|,
-    //     not a blanket "one Descend ever".
-    Contract jobDeep = jobA;
-    jobDeep.giver = pool.handle(b);
-    jobDeep.target = -40;
-    jobDeep.reward = 1800;
-    // After (c) slot 0 is Complete, so the book has a free (non-Active) slot again —
-    // accept reuses it, so slot 0 becomes Active with the deeper job. The pin is that
-    // accept returns true and exactly one Active Descend(|40|) sits in the book.
-    CHECK(contract_accept(book, jobDeep, led));
-    int activeDeep = 0;
-    for (int i = 0; i < kMaxContracts; ++i)
-        if (book.slot[i].state == static_cast<std::uint8_t>(ContractState::Active) &&
-            book.slot[i].kind == static_cast<std::uint8_t>(ObjectiveKind::Descend) &&
-            (book.slot[i].target == -40 || book.slot[i].target == 40))
-            ++activeDeep;
-    CHECK(activeDeep == 1);
-}
-
-// ---------------------------------------------------------------------------
-// 8. A recycled slot silently transferred a contract to a stranger — CLOSED
-// ---------------------------------------------------------------------------
-
-// `Contract::giver` was a bare `NpcId`, and contract.h justified that with "NpcPool never
-// reclaims a slot and id == slot forever". That was true when it was written and stopped
-// being true when the intrusive free list landed ([npc_pool.h] "Slot recycling"): armed,
-// `kill()` queues the slot and `spawn()` hands it to the next newborn, so an id names one
-// record AT A TIME rather than forever.
-//
-// The failure that opens is silent, and the silence is the whole problem:
-//
-//   * `contract_on_giver_died` is called from ONE place — the frame-top NpcDied drain in
-//     src/app/main.cpp — so it covers combat deaths and nothing else. A death in the macro
-//     sweep publishes no event ([macro_sim.h]).
-//   * `contract_step`'s liveness poll was therefore the only guard for those, and it asked
-//     `valid(id) && alive(id)`: "is somebody alive at that index", not "is my giver alive".
-//   * So: giver dies in the sweep, slot goes to a newborn, poll passes, and the job runs
-//     to completion against a person who never offered it — paying out of a stranger's
-//     pocket. Nothing logs it and nothing fails.
-//
-// `giver` is an `NpcHandle` now and the poll is `pool.handle_valid`, which fails on a
-// bumped generation whether or not the slot was reused. This test is the witness AND the
-// reason src/app/main.cpp can arm recycling: it proves the ABA actually happens (the
-// newborn takes the giver's exact id and reads as alive) and then requires the job to FAIL
-// instead of transfer.
-//
-// **Measured on both sides, not reasoned about.** This same translation unit was linked
-// once against the handle body and once against a copy of contract.cpp with only the
-// liveness poll reverted to `valid(id) && alive(id)`: handle 62 checks / 0 failures,
-// bare id 62 checks / FIVE failures, all five below — paid 700 not 0, banked 700 not 0,
-// state 2 (Complete) not 3 (Failed), `failed` 0 not 1, `completed` 1 not 0. So the test
-// cannot pass by accident on either side, and the payout it prevents is a real 700
-// roubles rather than a lingering slot.
-//
-// Armed HERE and not in the shipping pool, deliberately: a test is exactly where an
-// unshipped policy belongs, and the guard has to be proven against the policy before
-// main.cpp turns it on.
-static void giver_slot_recycled() {
-    NpcPool pool;
-    pool.init();
-    pool.set_recycling(true);
-    CHECK(pool.recycling());
-
-    // A Hunt already at its target, so the bare-id version does not merely keep the job
-    // alive — it PAYS. The finding is a payout, not a lingering slot, and the assertion
-    // should read as one.
-    const NpcId giver = pool.spawn();
-    Contract job{};
-    job.giver = pool.handle(giver);
-    job.kind = static_cast<std::uint8_t>(ObjectiveKind::Hunt);
-    job.subject = a_biting_kind();
-    job.target = 1;
-    job.reward = 700;
-    job.state = static_cast<std::uint8_t>(ContractState::Offered);
-
-    ContractBook book{};
-    CHECK(contract_accept(book, job, kNoDescentYet));
-    contract_on_kill(book, static_cast<std::uint8_t>(job.subject));
-    CHECK(book.slot[0].progress == 1);      // one contract_step away from 700 roubles
-
-    // The giver dies the way NOTHING reports: in the macro sweep. No NpcDied event is
-    // published, so `contract_on_giver_died` is deliberately NOT called here — that is
-    // precisely the gap contract_step's poll has to cover on its own.
-    pool.kill(giver);
-    const NpcId newborn = pool.spawn();
-    CHECK(newborn == giver);                // the ABA actually happened, not hypothetically
-    CHECK(pool.recycled() == 1);            // ...out of the free list, not off the tail
-    CHECK(pool.alive(newborn));             // and the stored id reads as LIVING again
-    // The one bit of state a bare id could not see.
-    CHECK(pool.generation(newborn) != npc_handle_gen(job.giver));
-
-    RunLedger led{};
-    Inventory inv{};
-    const std::int32_t paid = contract_step(book, pool, inv, led);
-    std::fprintf(stderr,
-                 "[audit] contracts: giver id %u recycled into a newborn (gen %u -> %u); "
-                 "the job paid %d rub and ended in state %u (3 = Failed)\n",
-                 static_cast<unsigned>(giver),
-                 static_cast<unsigned>(npc_handle_gen(job.giver)),
-                 static_cast<unsigned>(pool.generation(newborn)), paid,
-                 static_cast<unsigned>(book.slot[0].state));
-    CHECK(paid == 0);
-    CHECK(led.banked == 0);
-    CHECK(book.slot[0].state == static_cast<std::uint8_t>(ContractState::Failed));
-    CHECK(book.failed == 1);
-    CHECK(book.completed == 0);
-
-    // And the guard DISCRIMINATES rather than refusing everything: a handle minted from
-    // the newborn — the same slot, the current generation — is valid. Without this the
-    // test above would also pass against a handle_valid that always returned false.
-    CHECK(pool.handle_valid(pool.handle(newborn)));
-}
-
-// ---------------------------------------------------------------------------
-// 6. A Hunt contract could name a monster that cannot spawn — CLOSED
-// ---------------------------------------------------------------------------
-// contract.cpp's Hunt branch comments "a kind that lives at this depth, so the job is
-// findable" and then picked uniformly over all `kMobKindCount` rows with no
-// spawn-weight and no floorMask filter. `spawn_floor_mobs` skips any row with
-// `spawnWeightX10 == 0` (mob_spawn.cpp:271), and data/mobs.csv has TWO such rows today —
-// CREATOR (idx 13) and PSEUDOLIFT (idx 31), both authored as a literal 0 — each with
-// dmg > 0 (44 and 24), so the `md.dmg == 0` guard let both through. Neither can appear on
-// any floor by any path, so a Hunt naming one was exactly the "quest that can never
-// complete" the same comment claims to avoid.
-//
-// MEASURED before the fix rather than remembered — same test object, linked against a
-// contract.cpp with only the spawnability filter removed: 318 Hunt offers, 7 impossible
-// (CREATOR 3, PSEUDOLIFT 4), 311 surviving. The older "11 of 318 / SCULPTURE 4" reading
-// was taken on an earlier CSV: SCULPTURE's weight went 0.05 -> 0.1 in commit bd4db77, so
-// it rounds to 1 now and is spawnable. `floorMask == 0` is still vacuous against the data
-// (0 of 69 rows, re-measured the same way) and is kept for the reason contract.cpp gives.
-//
-// The habitat half is checked here as `floorMask != 0` — a row naming no anchor at all
-// matches no floor — and deliberately NOT as "must live at THIS floor's anchor", because
-// that overshoot costs more than the bug: measured, it drops Hunt offers on -50 from 32
-// to 5, since only 15 of 69 rows carry the ZMinus50 bit. A Hunt has no floor gate
-// (`contract_on_kill`, src/app/main.cpp:593) and the shipped stack covers all six
-// anchors, so a weight-bearing kind is already meetable somewhere in the run.
-//
-// So the test guards both directions. `impossible == 0` is the finding; `leanestKinds` is
-// the overshoot, because a filter that passed the first assertion by naming the same
-// three monsters on every floor would be a worse contract system than the broken one.
-static void hunt_is_findable() {
-    NpcPool pool;
-    pool.init();
-    for (int i = 0; i < 512; ++i) pool.spawn();
-
-    // Floor-major, so per-floor variety can be counted without a second pass.
-    // `contract_offer` is a pure function of (giver, floorZ, seed), so the order the
-    // pairs are visited in cannot change a single answer.
-    const int floors[] = {0, 1, 2, -8, -14, -26, -36, -50, 14, 30};
-    int hunts = 0;
-    int impossible = 0;
-    int leanestFloor = 0;
-    int leanestKinds = static_cast<int>(kMobKindCount) + 1;
-    for (int z : floors) {
-        bool named[kMobKindCount] = {};
-        int distinct = 0;
-        for (NpcId g = 0; g < 512; ++g) {
-            // 0x9E37u is the seed src/app/main.cpp:844-845 actually passes, so this is
-            // the live offer stream and not a synthetic one.
-            const Contract c = contract_offer(pool, g, z, 0x9E37u);
-            // kInvalidHandle, not kInvalidNpc: `giver` is an NpcHandle now (finding 8).
-            // The two constants are the same 0xFFFFFFFF — deliberately, so that no live
-            // handle can collide with either ([npc_pool.h] reserves generation 0xFFF) —
-            // so this is a naming fix and not a behaviour change; the offer counts below
-            // are unchanged by it.
-            if (c.giver == kInvalidHandle) continue;
-            if (c.kind != static_cast<std::uint8_t>(ObjectiveKind::Hunt)) continue;
-            ++hunts;
-            if (c.subject >= kMobKindCount ||
-                kMobTable[c.subject].spawnWeightX10 == 0 ||
-                kMobTable[c.subject].floorMask == 0) {
-                ++impossible;
-                continue;
-            }
-            if (!named[c.subject]) {
-                named[c.subject] = true;
-                ++distinct;
-            }
-        }
-        if (distinct < leanestKinds) {
-            leanestKinds = distinct;
-            leanestFloor = z;
-        }
-    }
-    std::fprintf(stderr,
-                 "[audit] contracts: %d Hunt offers scanned, %d name an unspawnable "
-                 "kind; leanest floor %d offers %d distinct targets\n",
-                 hunts, impossible, leanestFloor, leanestKinds);
-    CHECK(hunts > 0);          // the scan actually exercised the Hunt branch
-    CHECK(impossible == 0);    // no offer may name a kind the roster cannot roll
-    // 311 of the 318 pre-fix offers survive the guard. A guard that has started eating
-    // most of the stream is a bug in the guard, not a stricter contract system. The
-    // threshold sits well under the measurement so a CSV edit is not a false alarm.
-    CHECK(hunts >= 240);
-    // Measured 19-30 distinct kinds per floor after the fix (leanest: -36 with 19).
-    // 8 is the line between "this floor has its own bestiary" and "everyone here wants
-    // the same thing killed".
-    CHECK(leanestKinds >= 8);
-}
+// Здесь стояли, и все четыре были ЗАКРЫТЫМИ ПИНАМИ, а не живыми находками:
+//   5.  descend_not_free          — Descend платил за спуск, случившийся ДО
+//                                   взятия работы; лечение — `Contract::baseline`
+//                                   плюс отказ на accept.
+//   5b. descend_same_target_once  — две Descend-работы на один |target| не смели
+//                                   сидеть Active одновременно (двойная выплата).
+//   6.  hunt_is_findable          — Hunt называл вид, который роутер спавна не
+//                                   может выкатить (7 офферов из 318).
+//   8.  giver_slot_recycled       — переиспользованный слот пула молча передавал
+//                                   работу новорождённому. ЭТО БЫЛ ЕДИНСТВЕННЫЙ
+//                                   СВИДЕТЕЛЬ генерационного хэндла для
+//                                   `pool.set_recycling(true)`: закон «хэндл
+//                                   чернеет на kill()» теперь держит только
+//                                   suite_npcpool (`handle_valid`), и в списке
+//                                   гейта recycling в [src/app/main.cpp] у
+//                                   пункта `Contract::giver` больше нет файла.
 
 // ---------------------------------------------------------------------------
 // 7. подбор не смеет толкнуть слот за stackMax (теперь pickup_take)
@@ -1152,10 +780,8 @@ static void test_audit_all() {
     audit_test::ms_timer_drift();
     audit_test::gun_kills_counted();
     audit_test::ammo_has_a_source();
-    audit_test::descend_not_free();
-    audit_test::descend_same_target_once();
-    audit_test::giver_slot_recycled();
-    audit_test::hunt_is_findable();
+    // descend_not_free / descend_same_target_once / giver_slot_recycled /
+    // hunt_is_findable СНЕСЕНЫ 2026-11-08 с системой контрактов.
     audit_test::stack_max_respected();
     audit_test::budget_vs_demo_cap();
     audit_test::travel_keeps_crate_records();

@@ -49,7 +49,7 @@
 #include "ecs/components.h"
 #include "ecs/registry.h"
 #include "game/ai.h"       // the utility AI — adapted, wired, and dormant by default
-#include "game/role.h"     // PatrolPlan — маршрут прежнего владельца записи гасится при вселении
+#include "game/patrol.h"   // PatrolPlan — маршрут прежнего владельца записи гасится при вселении
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
@@ -74,13 +74,11 @@
 #include "game/rumour.h"
 #include "game/speech.h"
 #include "game/samosbor.h"
-#include "game/contract.h"
 #include "game/barter.h"        // сделка ([conversation.md]); vendor.h — термы
 #include "game/conversation.h"
 #include "game/dice.h"
 #include "game/economy.h"
 #include "game/craft.h"
-#include "game/quest.h"
 #include "game/container.h"
 #include "game/combat.h"
 #include "game/status.h"
@@ -2938,12 +2936,14 @@ int main(int argc, char** argv) {
     // written out because "fix one and declare victory" is how this would have shipped
     // broken — I made that mistake twice and was corrected twice:
     //   DONE  MacroSim::Journey::id  — stamps the departing generation, compares on landing.
-    //   DONE  Contract::giver        — an NpcHandle; contract_step polls handle_valid().
-    //                                  Measured A/B: with a bare id the job paid 700 rub to
-    //                                  a newborn who never offered it and read Complete;
-    //                                  with the handle it pays 0 and Fails.
-    //   DONE  QuestProgress::giver   — the identical defect, same fix, quest.cpp now polls
-    //                                  handle_valid(p.giver).
+    //   GONE  Contract::giver / QuestProgress::giver — оба держали NpcHandle и
+    //                                  опрашивали handle_valid(); системы снесены
+    //                                  2026-11-08. ЗАМЕР, за который они здесь
+    //                                  стояли, остаётся в силе и адресуется всякому
+    //                                  новому держателю NpcId во времени: с голым
+    //                                  id работа платила 700 руб новорождённому,
+    //                                  который её не предлагал, и читалась Complete;
+    //                                  с хэндлом платит 0 и Fails.
     //   DONE  Relationship::target   — the generation went into the dead `pad` field, so
     //                                  rel_ (128 B/row, 128.0 MiB at capacity) gained
     //                                  nothing. social_edge_target() returns kInvalidNpc for
@@ -3371,17 +3371,9 @@ int main(int argc, char** argv) {
     // authoritative at save time" question — the answer that bug always gives is "the
     // stale one". A load is then `runState = in;` and both references see it. [save.h]
     game::SaveState runState;
-    game::ContractBook& contracts = runState.book;
-    game::Contract offer{};
-    char offerLine[200] = {};
-    // Quest offer from the same proximity sweep that feeds contract_offer. One
-    // body can carry both a procedural contract AND an authored quest, and both
-    // are displayed side-by-side — E takes whichever is pending. Contract is
-    // preferred when both land simultaneously (walk-in economy vs authored story);
-    // in practice the 8% quest share keeps collisions rare. [quest.h]
-    game::QuestId questOffer = game::kInvalidQuest;
-    game::NpcId questOfferGiver = game::kInvalidNpc;
-    char questOfferLine[320] = {};
+    // Книга контрактов, процедурное предложение работы и авторский квест-оффер
+    // жили здесь и снесены 2026-11-08 вместе со своими системами. Слух остался:
+    // он кормится ТЕМ ЖЕ свипом близости и единственный в нём выжил.
     char rumourLine[160] = {};
     std::uint64_t rumourAt = 0;
     // The murmur, next to the rumour and deliberately separate from it: a rumour is a
@@ -3404,9 +3396,8 @@ int main(int argc, char** argv) {
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     game::RunLedger& ledger = runState.ledger;
-    // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
-    // вклад и долг ([economy.h], [save.h] SAVBANK).
-    game::BankAccount& bankAcct = runState.bank;
+    // `BankAccount& bankAcct` снесён вместе с пад-банком (2026-11-08). Кошелёк
+    // (`ledger.banked`) и был тем, что владелец объявил ядром, и он здесь.
     // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
     // shape sellWanted/buyWanted use: a load rewrites world state and belongs on the
     // sim's clock, not the window's.
@@ -3438,9 +3429,8 @@ int main(int argc, char** argv) {
     char saveLine[96] = {};
     std::uint64_t saveLineAt = 0;
     std::int32_t containerTake = 0;   // roubles pulled out of crates
-    std::int32_t contractPaid = 0;    // roubles paid by finished jobs
-    game::QuestLog& quests = runState.quests;  // lives in SaveState; F5/F9 persists it
-    std::int32_t questPaid = 0;       // roubles paid by finished quests
+    // `contractPaid`, `questPaid` и `QuestLog& quests` снесены 2026-11-08: платить
+    // стало нечему. Рубли из ящиков — живой счётчик, и он остался.
     // (sold/spent/vendorKind died with the Vendor window: trade is a barter
     // DEAL against the partner's own bag now — [conversation.md]. The faction
     // matrix keeps its live consumer: barter_terms_for prices by the PARTNER's
@@ -4877,19 +4867,11 @@ int main(int argc, char** argv) {
                 // XP already worked this way — `finalize_deaths` credits `d.killer`
                 // — which is exactly why the two disagreed and only this one paid out
                 // for a death across the room.
-                if (ev.b != 0xFFu &&
-                    ev.c == static_cast<std::uint32_t>(entt::to_integral(player))) {
-                    game::contract_on_kill(contracts, static_cast<std::uint8_t>(ev.b));
-                    game::quest_on_kill(quests, static_cast<std::uint8_t>(ev.b));
-                }
-                // `a` is the pool id, kInvalidNpc when the dead thing had no record.
-                // Giver death fails Active contracts AND Active quests the same way.
-                if (ev.a != game::kInvalidNpc) {
-                    game::contract_on_giver_died(contracts, ev.a);
-                    game::quest_on_giver_died(quests, ev.a);
-                }
-
-
+                // Подписчиков на это событие было двое — `contract_on_kill` и
+                // `quest_on_kill`, плюс `*_on_giver_died` на смерть заказчика по
+                // `ev.a`; обе системы снесены 2026-11-08. Само событие ЖИВО и
+                // кормит XP (`finalize_deaths` кредитует `d.killer`) — именно
+                // поэтому кольцо и его дренаж на верху кадра остаются на месте.
             }
         }
         // Diplomacy reads the same ring, in the same frame-top drain, and for the same
@@ -5403,27 +5385,14 @@ int main(int argc, char** argv) {
             // Z: pull the pin. One-shot like Interact — a held key would empty the
             // bag at the weapon's own cooldown, and a grenade is not an automatic.
             if (has(ConsoleRequest::Throw)) throwWanted = true;
-            // Interact takes the job on offer — contract first, then quest if
-            // no contract is pending. Both clear on take so a second press is
-            // harmless. Quest accept refuses a dead giver or a chain gate;
-            // contract_accept refuses the same. [quest.h, contract.h]
+            // E брало работу на предложении — контракт, иначе квест; обе ветки
+            // снесены 2026-11-08. Остальные потребители E не тронуты: единая
+            // интеракция — дверь такой же потребитель, как терминал или ящик.
             if (has(ConsoleRequest::Interact)) {
                 interactWanted = true;
                 // Единая интеракция: дверь — такой же потребитель E, как
                 // терминал/ящик (door_toggle_near no-op без проёма рядом).
                 doorWanted = true;
-                if (game::contract_accept(contracts, offer, ledger)) {
-                    offer = game::Contract{};
-                    offerLine[0] = 0;
-                } else if (game::quest_valid(questOffer) &&
-                           questOfferGiver != game::kInvalidNpc &&
-                           game::quest_accept(quests, pool, questOffer,
-                                              questOfferGiver, currentFloor,
-                                              ledger)) {
-                    questOffer = game::kInvalidQuest;
-                    questOfferGiver = game::kInvalidNpc;
-                    questOfferLine[0] = 0;
-                }
             }
         }
 
@@ -6012,24 +5981,13 @@ int main(int argc, char** argv) {
                 prof_add(kProfController, profCtlT0);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
-                // Банк тикает ЗДЕСЬ же: bank_open идемпотентен по (этаж, сид)
-                // и потому зовётся каждый тик — у travel-сайтов главного цикла
-                // уже дважды ловили «починили один из двух» ([economy.h] сама
-                // рекомендует эту проводку); bank_step O(1) и почти всегда
-                // выходит сразу. Закрывает запись §52 в check_wired.
-                game::bank_open(bankAcct, currentFloor, 0xBA4B5EEDu);
-                {
-                    const game::BankTick bt = game::bank_step(bankAcct, simTick);
-                    if (bt.earned || bt.paid)
-                        std::fprintf(stderr,
-                                     "[bank] period: +%d earned, -%d paid, "
-                                     "deposit %lld, debt %lld\n",
-                                     bt.earned, bt.paid,
-                                     static_cast<long long>(bankAcct.deposit),
-                                     static_cast<long long>(
-                                         game::bank_debt(bankAcct)));
-                }
-
+                //
+                // ЗДЕСЬ ТИКАЛ БАНК (`bank_open` + `bank_step`), и проводка стояла
+                // именно в сим-цикле, а не у travel-сайтов, потому что «починили
+                // один из двух» на них ловили дважды. Система снесена 2026-11-08;
+                // правило, которым она была оправдана, остаётся: пер-тиковую
+                // работу вешать на ОДИН шов кадра, а не на каждое место, где
+                // меняется этаж.
                 // Samosbor advances HERE — after controller_step, before
                 // wander_step — for the three reasons in [samosbor.h]: the seal can
                 // kill and must precede finalize_deaths by a whole tick; behaviour
@@ -8049,35 +8007,19 @@ int main(int argc, char** argv) {
                             reg, pool, sp, activeLayer, currentFloor, samosbor);
                         if (game::rumour_text(ru, rumourLine, sizeof(rumourLine)))
                             rumourAt = simTick;
-                        // The same body may also be hiring. One proximity sweep, two
-                        // payloads — a contract is a thing you walk into, because there
-                        // is no talk verb and building one to deliver a sentence would
-                        // be the expensive way round. [contract.h]
-                        const game::Contract off = game::contract_offer(
-                            pool, sp, currentFloor, 0x9E37u);
-                        // `kInvalidHandle`, не `kInvalidNpc`: `Contract::giver`
-                        // — это NpcHandle (id + поколение), а не NpcId, и
-                        // сравнение работало ЧИСТО СЛУЧАЙНО — оба сентинела
-                        // сегодня 0xFFFFFFFF. Разойдутся они молча, и тогда
-                        // «предложения нет» перестанет отличаться от
-                        // предложения от нулевого тела.
-                        if (off.giver != game::kInvalidHandle &&
-                            game::contract_text(off, offerLine, sizeof(offerLine))) {
-                            offer = off;
-                        }
-                        // The same body may also carry an authored quest. Seed
-                        // 0xB4C3 is distinct from the contract seed (0x9E37) so the
-                        // two hashes land in different equivalence classes and a body
-                        // hired for a contract does not automatically offer a quest
-                        // with the same random-chain outcome. [quest.h]
-                        const game::QuestId qid = game::quest_offer(
-                            pool, quests, sp, currentFloor, 0xB4C3u);
-                        if (game::quest_valid(qid) &&
-                            game::quest_offer_text(qid, questOfferLine,
-                                                   sizeof(questOfferLine))) {
-                            questOffer = qid;
-                            questOfferGiver = sp;
-                        }
+                        // ЭТОТ СВИП НЁС ТРИ ПОЛЕЗНЫХ ГРУЗА, остался один — слух.
+                        // Контракт (`contract_offer`, сид 0x9E37) и авторский
+                        // квест (`quest_offer`, сид 0xB4C3) снесены 2026-11-08.
+                        // Два решения, которые они собой показывали, записаны
+                        // здесь, потому что оба легко повторить неверно:
+                        //   * РАЗНЫЕ СИДЫ на два вопроса об одном теле — чтобы
+                        //     хэши падали в разные классы и тело, нанятое на
+                        //     работу, не предлагало заодно квест с тем же
+                        //     исходом случайной цепочки;
+                        //   * сравнение с ПРАВИЛЬНЫМ сентинелом: `Contract::giver`
+                        //     был NpcHandle, а не NpcId, и сверка с `kInvalidNpc`
+                        //     работала ЧИСТО СЛУЧАЙНО — оба сентинела сегодня
+                        //     0xFFFFFFFF. Разойдутся молча.
                     }
                 }
                 // Амбиентная регенерация по виду комнаты умерла (rooms-object
@@ -8342,10 +8284,10 @@ int main(int argc, char** argv) {
                             // discovery is progress, not per-floor channel state.
                             samosbor = runState.samosbor;
                             fastTravel = runState.fastTravel;
-                            // SAVBANK: часы процентов перезаводятся на ЖИВОЙ
-                            // тик — сим-клок каждой сессии свой, а сохранённый
-                            // тик в новой сессии — ложь ([save.h] v16).
-                            bankAcct.lastInterestTick = simTick;
+                            // Здесь перезаводились часы процентов банка на ЖИВОЙ
+                            // тик (сохранённый тик в новой сессии — ложь). Банк
+                            // снесён 2026-11-08; правило про часы живо и ждёт
+                            // первого пер-тикового поля, которое поедет в сейв.
                             // Per-floor channels reset, same as any arrival — these
                             // ARE floor-scoped, unlike the two clocks above.
                             rumourLine[0] = 0;
@@ -8477,24 +8419,12 @@ int main(int argc, char** argv) {
                 // job completes at the pad — the same moment the loop's own payoff
                 // lands, which is what makes the errand feel like part of the trip
                 // rather than a parallel accounting system. [contract.h]
-                if (reg.valid(player))
-                    if (const auto* nrc = reg.try_get<game::NpcRef>(player))
-                        if (pool.valid(nrc->id)) {
-                            // The character sheet rides in so a completed job can pay
-                            // XP as well as roubles (manifest p.5). It is the LIVE
-                            // component, not `carriedRpg`: `award_xp` may level the
-                            // body up, and the refresh a few hundred lines below
-                            // (`carriedRpg = *rsLive`) then carries that forward, so
-                            // the order here is load-bearing rather than incidental.
-                            // Absent sheet -> nullptr -> money only, exactly as before.
-                            game::RpgStats* rsq = reg.try_get<game::RpgStats>(player);
-                            contractPaid += game::contract_step(
-                                contracts, pool, pool.inventory(nrc->id), ledger, rsq);
-                            questPaid += game::quest_step(
-                                quests, pool, pool.inventory(nrc->id), ledger,
-                                static_cast<std::uint32_t>(kSimDt * 1000.0f + 0.5f),
-                                rsq);
-                        }
+                // Здесь стоял пер-тиковый шаг работ (`contract_step`/`quest_step`),
+                // и ЖИВОЙ лист персонажа заезжал в них нарочно, а не
+                // `carriedRpg`: `award_xp` мог поднять уровень, и обновление
+                // несколькими сотнями строк ниже (`carriedRpg = *rsLive`) уносило
+                // это вперёд — порядок был несущим. Системы снесены 2026-11-08;
+                // правило «живой компонент, а не его копия» остаётся.
                 // Eating and drinking sit beside healing (подбор теперь глагол прицела — pickup_take в лестнице E), so a
                 // ration picked up this tick can be eaten this tick. Both refuse a
                 // full bar, so a mistimed press costs nothing; both also fill
@@ -9246,54 +9176,13 @@ int main(int argc, char** argv) {
                             ateFood, drankWater, nd.pendingPee, nd.pendingPoo,
                             consumeHpCost);
             }
-            {
-                int active = 0;
-                for (int i = 0; i < game::kMaxContracts; ++i) {
-                    const game::Contract& c = contracts.slot[i];
-                    if (c.state != static_cast<std::uint8_t>(
-                                      game::ContractState::Active))
-                        continue;
-                    ++active;
-                    char line[200];
-                    if (game::contract_text(c, line, sizeof(line)))
-                        ImGui::Text("  job: %s  [%d/%d]", line,
-                                    static_cast<int>(c.progress),
-                                    static_cast<int>(c.target));
-                }
-                if (offerLine[0])
-                    ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.35f, 1.0f),
-                                       "OFFER (E to take): %s", offerLine);
-                if (questOfferLine[0])
-                    ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
-                                       "QUEST (E to take): %s", questOfferLine);
-                ImGui::Text("jobs %d active | %u done | %u failed | paid %d rub",
-                            active, contracts.completed, contracts.failed,
-                            contractPaid);
-                // Active quests — each row reports title + progress + time left.
-                const int qActive = game::quest_active_count(quests);
-                if (qActive > 0) {
-                    ImGui::Separator();
-                    ImGui::Text("quests %d active | paid %d rub", qActive, questPaid);
-                    for (int qi = 1; qi <= static_cast<int>(game::kQuestCount); ++qi) {
-                        // Фильтр по СОСТОЯНИЮ, и он обязан стоять ЗДЕСЬ:
-                        // `quest_line` отказывает только на невалидном id и
-                        // малом буфере, то есть рисует и Unseen, и Expired, и
-                        // Orphaned — все девятнадцать строк под заголовком
-                        // «quests N active». Два `snprintf` на строку, 18 из
-                        // 19 выброшены каждым кадром, и у заголовка с телом
-                        // расходились числа: `quest_active_count` считает
-                        // Active, а список печатал всё.
-                        if (quests.row[qi - 1].state !=
-                            static_cast<std::uint8_t>(game::QuestState::Active))
-                            continue;
-                        char qline[320];
-                        const game::QuestId qid = static_cast<game::QuestId>(qi);
-                        if (game::quest_line(quests, qid, qline, sizeof(qline)))
-                            ImGui::TextColored(ImVec4(0.70f, 0.98f, 0.60f, 1.0f),
-                                               "  quest: %s", qline);
-                    }
-                }
-            }
+            // БЛОК РАБОТ СНЕСЁН ЦЕЛИКОМ (2026-11-08): строки «job», «OFFER (E to
+            // take)», «QUEST (E to take)», «jobs N active | done | failed | paid»
+            // и список активных квестов. Один урок отсюда стоит унести: фильтр по
+            // СОСТОЯНИЮ обязан стоять в самом цикле рисования, а не только в
+            // заголовке — `quest_line` отказывал лишь на неверном id, печатал и
+            // Unseen, и Expired, и Orphaned, и у заголовка с телом РАСХОДИЛИСЬ
+            // ЧИСЛА: счётчик считал Active, а список печатал все девятнадцать.
             if (rumourLine[0])
                 ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
                                    rumourLine);
@@ -9896,10 +9785,8 @@ int main(int argc, char** argv) {
                     std::snprintf(header, sizeof header, "%s",
                                   game::faction_name(static_cast<game::Faction>(
                                       pool.faction(convNpc))));
-                    const BankUiRequest br = bank_ui_draw(
-                        ledger.banked, cash, bankAcct.deposit,
-                        game::bank_debt(bankAcct),
-                        game::bank_credit_available(bankAcct), header);
+                    const TellerUiRequest br =
+                        teller_ui_draw(ledger.banked, cash, header);
                     if (br.depositAll) {
                         const std::int32_t in =
                             game::teller_deposit_cash(binv, ledger);
@@ -9917,40 +9804,9 @@ int main(int argc, char** argv) {
                             std::snprintf(convLine, sizeof convLine,
                                           "Выдавать нечего либо некуда.");
                     }
-                    // Срочный стол ([economy.h]): one-keypress формы, суммы
-                    // судят сами глаголы (клампы по счёту/лимиту/принципалу).
-                    if (br.toDeposit) {
-                        const std::int32_t v =
-                            game::bank_deposit_all(bankAcct, ledger, simTick);
-                        std::snprintf(convLine, sizeof convLine,
-                                      v > 0 ? "На вклад: %d руб."
-                                            : "Вкладывать нечего.",
-                                      v);
-                    }
-                    if (br.fromDeposit) {
-                        const std::int32_t v =
-                            game::bank_withdraw_all(bankAcct, ledger, simTick);
-                        std::snprintf(convLine, sizeof convLine,
-                                      v > 0 ? "Вклад закрыт: %d руб на счёт."
-                                            : "Вклада нет.",
-                                      v);
-                    }
-                    if (br.borrow) {
-                        const std::int32_t v =
-                            game::bank_borrow_max(bankAcct, ledger, simTick);
-                        std::snprintf(convLine, sizeof convLine,
-                                      v > 0 ? "Кредит выдан: %d руб на счёт."
-                                            : "Лимит исчерпан.",
-                                      v);
-                    }
-                    if (br.repay) {
-                        const std::int32_t v =
-                            game::bank_repay_all(bankAcct, ledger, simTick);
-                        std::snprintf(convLine, sizeof convLine,
-                                      v > 0 ? "Погашено: %d руб."
-                                            : "Долга нет либо счёт пуст.",
-                                      v);
-                    }
+                    // Срочный стол (вклад D/W, кредит L/R) снесён вместе с
+                    // банком 2026-11-08. Касса — ровно два глагола, и оба
+                    // клампят сами: сумкой и счётом.
                     if (br.close) bankCounterOpen = false;
                 } else {
                     bankCounterOpen = false;
@@ -9992,7 +9848,6 @@ int main(int argc, char** argv) {
                 cctx.player = player;
                 cctx.npcBody = convEntity;
                 cctx.npc = convNpc;
-                cctx.book = &contracts;
                 cctx.speech = &speechMem;
                 cctx.seed = giga::hash2(convNpc, static_cast<std::uint32_t>(
                                                      simTick / kSimHz));
@@ -10014,7 +9869,7 @@ int main(int argc, char** argv) {
                             std::snprintf(convLine, sizeof convLine, "%s",
                                           act.line ? act.line : "");
                             break;
-                        case game::ConvActionKind::Bank:
+                        case game::ConvActionKind::Teller:
                             bankCounterOpen = true;
                             break;
                         case game::ConvActionKind::Dice: {

@@ -27,7 +27,7 @@
 #include "game/faction_relations.h"
 #include "game/mob_behaviour.h"
 #include "game/place.h"    // ErrandPlan — смерть отбирает наряд
-#include "game/role.h"     // PatrolPlan — смерть отбирает маршрут
+#include "game/patrol.h"   // PatrolPlan — смерть отбирает маршрут
 #include "game/wander.h"   // WanderTarget — смерть отбирает ноги
 #include "game/mob_table.h"
 #include "game/monster_traits.h"
