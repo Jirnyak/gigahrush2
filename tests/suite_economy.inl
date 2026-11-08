@@ -11,7 +11,7 @@
 //
 // **Claim 2: a deposit survives death.** It does — and so does `banked`, which is the
 // correction this suite is built to make visible rather than to paper over.
-// `record_death` ([extraction.h]) charges `at_risk_value(lost)`, the value of the dead
+// Смерть сама по себе счёт не двигает (учёт потерь умер со сносом пада), the dead
 // row's INVENTORY, and touches no rouble field. So block 4 asserts what is actually
 // true: the carried ITEMS are what a death takes, the deposit and `banked` both survive
 // intact, and the genuinely new loss channel is the **debt**, which survives death as
@@ -50,7 +50,6 @@
 #include "core/rng.h"
 #include "core/tick.h"
 #include "game/economy.h"
-#include "game/extraction.h"
 #include "game/item_table.h"
 #include "game/loot.h"
 
@@ -395,8 +394,11 @@ static void test_economy_all() {
     }
 
     { // ---- 4. DEATH: what it takes and what it does not ------------------------
-        // The honest version of "a deposit survives death". It does; so does `banked`;
-        // the carried ITEMS do not; and the debt outlives the body.
+        // Смерть НЕ двигает счёт: `banked` перманентен, депозит доходен, долг
+        // переживает тело. Учёт потерь инвентаря (record_death/at_risk) умер
+        // со сносом экстракшн-лупа (2026-11-08) — цена смерти и так реальна:
+        // вещи остаются в мёртвой строке пула. Здесь остаётся банковская
+        // половина закона: тело умерло, а счёт этого не заметил.
         BankAccount acct{};
         RunLedger led{};
         bank_open(acct, 0, 4242u);
@@ -405,34 +407,8 @@ static void test_economy_all() {
         const std::int32_t lent = bank_take_loan(acct, led, 400, 100u);
         CHECK(lent > 0);
 
-        // A bag with real loot in it, priced from the shipped table.
-        Inventory bag{};
-        const ItemId cheap = item_priced_near(20);
-        const ItemId dear = item_priced_near(3000);
-        CHECK(item_valid(cheap));
-        CHECK(item_valid(dear));
-        bag.slots[0] = ItemSlot{cheap, 5};
-        bag.slots[1] = ItemSlot{dear, 1};
-        const std::int32_t carried = at_risk_value(bag);
-        CHECK(carried > 0);
-        CHECK(carried == inventory_value(bag));
-
-        const std::int64_t bankedBefore = led.banked;
         const std::int64_t depositBefore = acct.deposit;
-        const std::int64_t debtBefore = bank_debt(acct);
-        const std::int64_t worthBefore = net_worth(led, acct);
-
-        record_death(led, bag);
-
-        CHECK(led.deaths == 1u);
-        CHECK(led.lostToDeath == carried);
-        // Nothing monetary moved. This is the correction: `banked` is already permanent,
-        // so the deposit's advantage over it is YIELD, not safety.
-        CHECK(led.banked == bankedBefore);
-        CHECK(acct.deposit == depositBefore);
-        CHECK(bank_debt(acct) == debtBefore);
-        CHECK(net_worth(led, acct) == worthBefore);
-        // And the debt is still owed by the next body, which is the new loss channel.
+        // И долг всё ещё должен следующему телу — канал потерь банка.
         CHECK(bank_debt(acct) > 0);
         CHECK(bank_credit_available(acct) < acct.creditLimit);
 
@@ -446,10 +422,9 @@ static void test_economy_all() {
         CHECK(through.earned > 0);
         CHECK(acct.deposit > depositBefore);
         std::fprintf(stderr,
-                     "[economy] death took %d rub of carried items (%u slots); banked "
-                     "%lld and deposit %lld both survived; debt %lld -> %lld over 10 "
-                     "periods\n",
-                     carried, 2u, static_cast<long long>(led.banked),
+                     "[economy] banked %lld and deposit %lld survive the body; "
+                     "debt %lld -> %lld over 10 periods\n",
+                     static_cast<long long>(led.banked),
                      static_cast<long long>(acct.deposit),
                      static_cast<long long>(debtAtDeath),
                      static_cast<long long>(bank_debt(acct)));
@@ -460,12 +435,13 @@ static void test_economy_all() {
         // `depositBefore` — the first version of this assertion read the deposit as
         // frozen at the moment of death and failed by exactly the 70 roubles it had
         // earned in the meantime.
+        const std::int64_t bankedBeforeBack = led.banked;
         const std::int64_t depositNow = acct.deposit;
         const std::int32_t back = bank_withdraw_all(acct, led, 200u);
         CHECK(back == depositNow);
         CHECK(back > depositBefore);
         CHECK(acct.deposit == 0);
-        CHECK(led.banked == bankedBefore + depositNow);
+        CHECK(led.banked == bankedBeforeBack + depositNow);
     }
 
     { // ---- 5. DETERMINISM: the same inputs give a bit-identical account ---------

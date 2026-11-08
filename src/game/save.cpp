@@ -212,13 +212,12 @@ void visit_header(Ar& ar, H& h) {
     ar.u32(h.macroBytes);
 }
 
+// v25: скоровые поля экстракшн-лупа (lostToDeath/bestHaul/deposits/deaths)
+// умерли со сносом пада (2026-11-08) — кошелёк и глубина, живые читатели.
+// Старый run.sav отвергается ЧЕСТНО дважды: kSaveVersion и ledgerBytes.
 template <class Ar, class L>
 void visit_ledger(Ar& ar, L& led) {
     ar.i64(led.banked);
-    ar.i64(led.lostToDeath);
-    ar.i32(led.bestHaul);
-    ar.u32(led.deposits);
-    ar.u32(led.deaths);
     ar.i32(led.deepestFloor);
     ar.u8(led.deepestBand);
 }
@@ -533,7 +532,7 @@ const char* save_error_text(SaveError e) {
 static_assert(sizeof(SaveHeader) == kSaveHeaderWire,
               "SaveHeader happens to have no padding; if that changes, the wire size is "
               "still 64 and only this assert needs relaxing");
-static_assert(kLedgerWire == 8 + 8 + 4 + 4 + 4 + 4 + 1);
+static_assert(kLedgerWire == 8 + 4 + 1); // v25: banked + deepestFloor + band
 static_assert(kContractWire == 4 + 2 + 4 + 4 + 4 + 1 + 1 + 1);
 static_assert(kNeedsWire == 9 * 4 + 1);
 static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + condition u8
@@ -560,15 +559,15 @@ static_assert(FastTravelState::wire_bytes() == kFastTravelWire);
 // different formats (v10: nine craft axes, no hpBank; v12: eight axes, hpBank) —
 // the version field is what tells them apart, not this sum.
 static_assert(kSaveFixedWire ==
-              954 + kSamosborWire + kFastTravelWire + kBankWire); // v21 +10
-static_assert(kSaveFixedWire == 1048);  // v22: ranged 24 (две руки)
+              934 + kSamosborWire + kFastTravelWire + kBankWire); // v25: леджер -20
+static_assert(kSaveFixedWire == 1028);  // v25: ledger 13 (скор пада снесён)
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
 // cut the bank ring (-244) = 1148; v20 cut both inline counts with their
 // sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
-static_assert(save_bytes_for() == 1148); // v22
-static_assert(save_bytes_for(100, 50) == 1148 + 150);
+static_assert(save_bytes_for() == 1128); // v25: леджер -20 (снос пада)
+static_assert(save_bytes_for(100, 50) == 1128 + 150);
 
 // `ContractBook` is the OTHER run struct nobody had pinned. `contract.h:82` asserts
 // `sizeof(Contract) == 24` and then stops — the book that holds three of them, plus two

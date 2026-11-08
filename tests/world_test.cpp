@@ -742,8 +742,11 @@ static void test_rigid_material_pair_bounce() {
         return apex;
     };
 
-    const float onConcrete = rebound_apex(1);  // бетон, hardness 256
-    const float onRubble = rebound_apex(15);   // щебень, hardness 24
+    // КОНСТАНТАМИ, не сырыми id: перенумерация словаря (снос extract,
+    // 2026-11-08) сдвинула хвост на единицу и голое 15 стало НЕ щебнем —
+    // ровно класс мины, от которого существуют kMat*-имена.
+    const float onConcrete = rebound_apex(kMatConcrete); // hardness 256
+    const float onRubble = rebound_apex(kMatRubble);     // щебень, hardness 24
     CHECK(onConcrete > 0.03f);                // на бетоне реально отскочил
     CHECK(onConcrete > onRubble + 0.05f);     // на щебне заметно глуше
 }

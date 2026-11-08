@@ -43,7 +43,7 @@
 
 #include <cstdint>
 
-#include "game/extraction.h"
+#include "game/economy.h" // RunLedger (дом кошелька после сноса пада 2026-11-08)
 #include "game/inventory.h"
 #include "game/item_table.h"
 #include "game/mob_table.h"

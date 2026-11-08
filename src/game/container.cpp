@@ -306,10 +306,8 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
             spotFound = floor_standable(world, cx, cy, cz);
         }
         if (!spotFound) continue;
-        // Never on the extraction pad: the bank is a landmark, and a crate sitting on
-        // it makes the one cell the player needs to find harder to read.
+        // Фильтр «не на экстракшн-паде» умер с самим падом (снос 2026-11-08).
         const CellStep dn = regime_down(world.gravity().regime);
-        if (g.cell(cx + dn.x, cy + dn.y, cz + dn.z) == kMatExtract) continue;
         // Never in standing water. Today's basins are half-solid cells, so `standable`
         // above already refuses them on TYPE — this states the rule rather than the
         // accident, and it is the half that survives a floor kind seeding an open pool,

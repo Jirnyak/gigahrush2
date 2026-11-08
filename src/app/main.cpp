@@ -85,7 +85,6 @@
 #include "game/combat.h"
 #include "game/status.h"
 #include "game/rpg.h"
-#include "game/extraction.h"
 #include "game/save.h"
 #include "game/faction_relations.h"
 #include "game/witness.h"      // S19: деяние/свидетель/цена — witness_step, deed_publish
@@ -3405,10 +3404,6 @@ int main(int argc, char** argv) {
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     game::RunLedger& ledger = runState.ledger;
-    // Вспышка банка для худа: последний депозит и его тик. Не сейв —
-    // одноразовое событие ленты алертов ([hud_ui.h]); гаснет сама по часам.
-    std::int32_t bankFlash = 0;
-    std::uint64_t bankFlashTick = 0;
     // v16: счёт живёт в ран-стейте, как леджер — F5/F9 больше не забывают
     // вклад и долг ([economy.h], [save.h] SAVBANK).
     game::BankAccount& bankAcct = runState.bank;
@@ -3961,7 +3956,7 @@ int main(int argc, char** argv) {
             fastTravel.unlock(currentFloor);
         // Deepest point reached, for the run score. |z|, because depth is
         // bidirectional: the roof is as far from safety as the basement.
-        // [extraction.h]
+        // [economy.h] record_floor
         game::record_floor(ledger, currentFloor);
         // A new floor gets its own clock at its own depth. Not carried over:
         // the cooldown is a function of |z|, so inheriting a 30-minute surface
@@ -8131,13 +8126,8 @@ int main(int argc, char** argv) {
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling
                 // an entity before its loot hook ran.
-                // Remember which pool row is the player BEFORE the death point,
-                // because after it the entity is gone and the row is the only way
-                // back to what was being carried.
-                game::NpcId deadRow = game::kInvalidNpc;
-                if (reg.valid(player))
-                    if (const auto* nr0 = reg.try_get<game::NpcRef>(player))
-                        deadRow = nr0->id;
+                // deadRow-снимок умер с record_death (снос пада 2026-11-08):
+                // мёртвая строка пула и так хранит всё вечно, читателя нет.
                 // The character sheet, for the same reason and at the same point:
                 // after the death point there is no component left to read, and a
                 // fresh body would otherwise arrive at level 1. `finalize_deaths`
@@ -8159,40 +8149,11 @@ int main(int argc, char** argv) {
                 // ПЫЛЕСОС ПИКАПОВ УМЕР ТЕМ ЖЕ РЕШЕНИЕМ (владелец 2026-11-07):
                 // подбор — глагол прицела, ветка Loot лестницы E
                 // (pickup_take); авто-забор по близости из тика выписан.
-                // Extraction. The pad is the bank: stand on it and the haul
-                // becomes permanently yours. Runs every tick, deposits nothing
-                // almost every tick, and that is fine — it is a handful of slot
-                // reads. [extraction.h]
-                // СТОЯ, а не ПРОЛЕТАЯ (grounded — вторая половина закона,
-                // вывод в [extraction.h]); и ВСЛУХ — возврат deposit_valuables
-                // шёл в пол, игрок читал «инвентарь пропал насовсем» там, где
-                // система писала ему деньги (владелец, 2026-11-08). Невидимая
-                // цена — не цена, и невидимая выплата — не выплата.
-                if (reg.valid(player)) {
-                    const Transform& ptr_ = reg.get<Transform>(player);
-                    const auto* pga = reg.try_get<GravityAffected>(player);
-                    if (game::on_extraction_pad(
-                            stack.layer(activeLayer).grid(), ptr_.pos,
-                            pga != nullptr && pga->grounded)) {
-                        if (const auto* nrx = reg.try_get<game::NpcRef>(player))
-                            if (pool.valid(nrx->id)) {
-                                const std::int32_t got =
-                                    game::deposit_valuables(
-                                        pool.inventory(nrx->id), ledger);
-                                if (got > 0) {
-                                    bankFlash = got;
-                                    bankFlashTick = simTick;
-                                    std::fprintf(
-                                        stderr,
-                                        "[extract] banked %d rub on pad "
-                                        "(deposit #%u, total %lld)\n",
-                                        got, ledger.deposits,
-                                        static_cast<long long>(
-                                            ledger.banked));
-                                }
-                            }
-                    }
-                }
+                // ЭКСТРАКШН-ПАД УМЕР СЛЕДОМ (владелец 2026-11-08, «легаси,
+                // ядро должно быть чистым»): авто-депозит инвентаря по позиции
+                // был последним авто-действием близости в тике. Рубли в
+                // `ledger.banked` теперь двигают только явные глаголы: теллер
+                // банка, квесты, контракты.
                 // Save and load. Both are world mutations, so they sit on the sim's
                 // clock beside the other intent flags rather than in the event loop.
                 if (saveWanted) {
@@ -8606,13 +8567,10 @@ int main(int argc, char** argv) {
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
-                    // Bill the death before taking a new body. The dead pool row
-                    // keeps its inventory forever (the pool never reclaims a slot),
-                    // so those items are already gone in the only sense that
-                    // matters — no living body can reach them. All that was missing
-                    // was counting it. [extraction.h]
-                    if (pool.valid(deadRow))
-                        game::record_death(ledger, pool.inventory(deadRow));
+                    // Цену смерти несёт сам мир: мёртвая строка пула хранит
+                    // инвентарь вечно, и ни одно живое тело до него не
+                    // дотянется. Счётчик поверх этого факта (record_death)
+                    // был витриной экстракшн-лупа и снесён с ним (2026-11-08).
                     // The PlayerMelee component dies with the body; the tally of
                     // what that person killed does not.
                     //
@@ -8762,8 +8720,6 @@ int main(int argc, char** argv) {
             hctx.needsTick = &needs;
             hctx.stereo3d = stereoFrame;
             hctx.tick = simTick;  // часы дома ([core/watch.h], S15)
-            hctx.bankFlash = bankFlash;          // лента событий: депозит
-            hctx.bankFlashTick = bankFlashTick;  // пада ([hud_ui.h])
             // ЕДИНАЯ ТАБЛИЧКА ([game/focus.h], решение владельца 2026-08-28):
             // под прицелом ровно одна цель, текст — из таблицы интерактивов
             // (или состояния двери), клавиша — из биндов. Жила отдельным
@@ -9022,16 +8978,12 @@ int main(int argc, char** argv) {
                                                           : game::item_name(arm));
                     }
                 }
-                {
-                    const float share = game::risk_share(ledger, carried);
-                    ImGui::Text("BANKED %lld rub | at risk %d (%.0f%% of the run)",
-                                static_cast<long long>(ledger.banked), carried,
-                                share * 100.0f);
-                    ImGui::Text("lost to death %lld | best haul %d | deepest %d (E%u)",
-                                static_cast<long long>(ledger.lostToDeath),
-                                ledger.bestHaul, ledger.deepestFloor,
-                                ledger.deepestBand);
-                }
+                // Кошелёк и глубина — живые читатели леджера (банк, квесты,
+                // контракты). Скоровая витрина экстракшн-лупа (at risk / lost
+                // to death / best haul) снесена вместе с падом (2026-11-08).
+                ImGui::Text("BANKED %lld rub | deepest %d (E%u)",
+                            static_cast<long long>(ledger.banked),
+                            ledger.deepestFloor, ledger.deepestBand);
                 // Which body you are wearing, and whether the floor wants to eat
                 // it. Printed because the mechanic is invisible otherwise: a cultist
                 // simply is not attacked, and with no readout that looks like the
@@ -9045,16 +8997,6 @@ int main(int argc, char** argv) {
                         ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
                                            "body: %s  (monsters ignore you)",
                                            game::faction_name(f));
-                }
-                if (reg.valid(player)) {
-                    const Transform& vt2 = reg.get<Transform>(player);
-                    const auto* vga = reg.try_get<GravityAffected>(player);
-                    if (game::on_extraction_pad(stack.layer(activeLayer).grid(),
-                                                vt2.pos,
-                                                vga != nullptr &&
-                                                    vga->grounded))
-                        ImGui::TextColored(ImVec4(0.29f, 0.75f, 0.57f, 1.0f),
-                                           "PAD: banking");
                 }
                 {
                     int shut = 0, open = 0;

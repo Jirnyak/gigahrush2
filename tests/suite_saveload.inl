@@ -105,10 +105,6 @@ SaveState busy_run() {
     SaveState st;
 
     st.ledger.banked = 9'876'543'210LL;       // past int32, on purpose
-    st.ledger.lostToDeath = -1;               // signed, and it is allowed to be odd
-    st.ledger.bestHaul = 250'000;             // the E4 single-item cap
-    st.ledger.deposits = 37u;
-    st.ledger.deaths = 5u;
     st.ledger.deepestFloor = -50;             // THE reason the field is signed
     st.ledger.deepestBand = economy_band(-50);
 
@@ -239,10 +235,6 @@ SaveState busy_run() {
 
 void same_run(const SaveState& a, const SaveState& b) {
     CHECK(a.ledger.banked == b.ledger.banked);
-    CHECK(a.ledger.lostToDeath == b.ledger.lostToDeath);
-    CHECK(a.ledger.bestHaul == b.ledger.bestHaul);
-    CHECK(a.ledger.deposits == b.ledger.deposits);
-    CHECK(a.ledger.deaths == b.ledger.deaths);
     CHECK(a.ledger.deepestFloor == b.ledger.deepestFloor);
     CHECK(a.ledger.deepestBand == b.ledger.deepestBand);
 
@@ -373,12 +365,12 @@ void wire_layout() {
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 1048);  // v22
+    static_assert(kSaveFixedWire == 1028);  // v25: ledger 13 (снос пада)
     static_assert(kFactionWire == 36);
-    // v20: 1040 fixed + 36 faction + 64 header = 1140 empty; инлайновые
-    // счётчики трупов/обломков ушли в floor-файл вместе с секциями.
-    static_assert(save_bytes_for() == 1148); // v22
-    static_assert(save_bytes_for(100, 50) == 1148 + 150);
+    // v20: инлайновые счётчики трупов/обломков ушли в floor-файл; v25 ужал
+    // леджер на 20 Б (кошелёк+глубина вместо скоровой витрины пада).
+    static_assert(save_bytes_for() == 1128); // v25
+    static_assert(save_bytes_for(100, 50) == 1128 + 150);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -788,7 +780,7 @@ void rejects_the_rest() {
     // re-checks the sentinel, because "returns false but half-applied" is the one
     // failure that would be worse than not loading at all.
     SaveState keep;
-    keep.ledger.deaths = 777u;
+    keep.ledger.deepestFloor = 777; // сторож вместо умершего счётчика смертей
     keep.player.hp = 55;
     keep.kills = 31337u; // третий сторож взамен умершего списка контейнеров
     SaveError err = SaveError::None;
@@ -797,7 +789,7 @@ void rejects_the_rest() {
         err = SaveError::None;
         CHECK(!save_read(buf.data(), buf.size(), keep, &err));
         CHECK(err == want);
-        CHECK(keep.ledger.deaths == 777u);
+        CHECK(keep.ledger.deepestFloor == 777);
         CHECK(keep.player.hp == 55);
         CHECK(keep.kills == 31337u);
     };
@@ -1095,10 +1087,11 @@ void floor_records_survive_a_restart() {
 }
 
 void ledger_is_pinned() {
-    // The size assert lives in extraction.h, where a field would be added; restated here
-    // as the arithmetic, so the 40 is a derivation rather than a magic number.
-    static_assert(sizeof(RunLedger) == 8 + 8 + 4 + 4 + 4 + 4 + 1 + 7);
-    static_assert(sizeof(RunLedger) == 40);
+    // The size assert lives in economy.h (дом леджера после сноса пада,
+    // 2026-11-08), where a field would be added; restated here as the
+    // arithmetic, so the 16 is a derivation rather than a magic number.
+    static_assert(sizeof(RunLedger) == 8 + 4 + 1 + 3);
+    static_assert(sizeof(RunLedger) == 16);
     static_assert(alignof(RunLedger) == 8);
     // Signed and exactly 32 bits wide, which is what makes the wire format unambiguous.
     // A bare `int` would satisfy both of these on every host this game builds on — the
@@ -1110,7 +1103,7 @@ void ledger_is_pinned() {
                   "the deepest point of a run is normally BELOW the hub");
 
     // The whole reason it is signed: the deepest point of a run is normally below the
-    // hub, and the existing high-water logic compares |z| ([extraction.cpp]).
+    // hub, and the existing high-water logic compares |z| ([economy.cpp]).
     RunLedger led;
     record_floor(led, -50);
     CHECK(led.deepestFloor == -50);

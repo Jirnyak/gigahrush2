@@ -4,8 +4,8 @@
 // contract book, the survival clock, the inventory, and which crates you already
 // emptied. Close the window and all of it is gone. That is not a missing feature in
 // the same sense a HUD panel is missing — a descent-and-extraction loop whose whole
-// design is "value is not yours until it is banked" ([extraction.h]) has no meaning at
-// all if the bank empties itself on exit.
+// state is the run itself — кошелёк, глубина, контракты ([economy.h]) не имеют
+// смысла, если счёт пустеет на выходе из окна.
 //
 // **What is deliberately NOT in here, and why each one is free:**
 //
@@ -50,7 +50,6 @@
 #include "core/math.h"
 #include "ecs/registry.h"
 #include "game/contract.h"    // ContractBook, Contract
-#include "game/extraction.h"  // RunLedger
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
 #include "game/equip.h"       // Equipped — the player's recorded decisions
 #include "game/inventory.h"   // Inventory
@@ -211,7 +210,10 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // длины (пул на нуле строк) старый файл прочитался бы ЦЕЛИКОМ. Версия — тот
 // единственный ответ, который не зависит от того, сколько строк в таблице.
 // Макро-блок не миграционный: пул пересеется `seed_floor_population`.
-inline constexpr std::uint32_t kSaveVersion = 24u;
+// v25 (2026-11-08): экстракшн-пад снесён («легаси, ядро чистое» — владелец);
+// RunLedger ужался до кошелька+глубины (33 -> 13 Б на проводе). Старый
+// run.sav отвергается честным BadVersion; «сейвы не щадим».
+inline constexpr std::uint32_t kSaveVersion = 25u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -317,7 +319,7 @@ struct SaveHeader {
 // by the MSVC build readable by the Clang build and vice versa, and it is why the
 // `*Bytes` header fields above are a drift ALARM rather than a layout description.
 inline constexpr std::size_t kSaveHeaderWire = 64;   // 48 v1; +8 v2 quests; +8 v6 pool/macro
-inline constexpr std::size_t kLedgerWire = 33;       // 2x8 + 4x4 + 1
+inline constexpr std::size_t kLedgerWire = 13;       // v25: 8 + 4 + 1 (банк+глубина; скор пада снесён)
 inline constexpr std::size_t kContractWire = 21;     // 4 + 2 + 3x4 + 3   (pad_ dropped)
 inline constexpr std::size_t kBookWire =
     static_cast<std::size_t>(kMaxContracts) * kContractWire + 4 + 4 + 8;

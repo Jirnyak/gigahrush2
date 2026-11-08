@@ -26,7 +26,6 @@
 #include "game/faction.h"
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
-#include "game/extraction.h"
 #include "game/faction.h"
 #include "game/faction_relations.h"
 #include "game/floor_spec.h"
@@ -2738,76 +2737,11 @@ static void test_faction_relations() {
 //   1. banking must never take your equipped kit (if it did, never banking would be
 //      optimal and the whole system would be dead on arrival), and
 //   2. a death must be recorded as a LOSS, because an invisible cost is not a cost.
-static void test_extraction() {
-    // Find one real item of each shape we care about, from the live table rather
-    // than by hardcoding an id — 446 rows generated from CSV will renumber.
-    ItemId misc = 0, food = 0, wpn = 0, key = 0;
-    for (ItemId i = 1; i <= kItemCount; ++i) {
-        const ItemDef& d = item_def(i);
-        if (d.value <= 0) continue;
-        const ItemCategory c = static_cast<ItemCategory>(d.category);
-        if (!misc && c == ItemCategory::Misc) misc = i;
-        if (!food && c == ItemCategory::Food) food = i;
-        // Must be a weapon `equipped_melee` will actually SELECT, which means one of
-        // the 23 rows in the melee table — not merely any Weapon-category item. My
-        // first attempt picked the latter and the test failed for the right reason.
-        if (!wpn && melee_for_item(i) != nullptr) wpn = i;
-        if (!key && c == ItemCategory::Key) key = i;
-    }
-    CHECK(misc && food && wpn);   // Key may legitimately be valueless; the rest are not
-
-    CHECK(bankable_category(ItemCategory::Misc));
-    CHECK(bankable_category(ItemCategory::Weapon));
-    CHECK(bankable_category(ItemCategory::Tool));
-    CHECK(!bankable_category(ItemCategory::Food));
-    CHECK(!bankable_category(ItemCategory::Drink));
-    CHECK(!bankable_category(ItemCategory::Medicine));
-    CHECK(!bankable_category(ItemCategory::Ammo));
-    CHECK(!bankable_category(ItemCategory::Key));   // a route key is progress, not money
-
-    RunLedger led;
-    Inventory inv;
-    inv.slots[0] = ItemSlot{misc, 1};
-    inv.slots[1] = ItemSlot{food, 2};
-    inv.slots[2] = ItemSlot{wpn, 1};
-
-    const std::int32_t before = at_risk_value(inv);
-    const std::int32_t mv = item_def(misc).value;
-    const std::int32_t fv = item_def(food).value * 2;
-    const std::int32_t wv = item_def(wpn).value;
-    CHECK(before == mv + fv + wv);
-
-    // The weapon is equipped, so it must survive the deposit; the misc item must not.
-    CHECK(equipped_melee(inv) == wpn);
-    const std::int32_t got = deposit_valuables(inv, led);
-    CHECK(got == mv);                       // ONLY the haul
-    CHECK(led.banked == mv);
-    CHECK(led.bestHaul == mv);
-    CHECK(led.deposits == 1);
-    CHECK(equipped_melee(inv) == wpn);      // still armed — the load-bearing assertion
-    CHECK(at_risk_value(inv) == fv + wv);   // food and the weapon stayed
-
-    // Banking again with nothing bankable left is a no-op, not a phantom deposit.
-    // This runs every tick you stand on the pad, so a false deposit would inflate
-    // the count without limit.
-    CHECK(deposit_valuables(inv, led) == 0);
-    CHECK(led.deposits == 1);
-
-    // A death takes everything still carried, kit included.
-    record_death(led, inv);
-    CHECK(led.deaths == 1);
-    CHECK(led.lostToDeath == fv + wv);
-    CHECK(led.banked == mv);                // banked value survives the death
-
-    // Greed reading. Carrying nothing is safe, not maximally endangered.
-    CHECK(risk_share(led, 0) == 0.0f);
-    RunLedger fresh;
-    CHECK(risk_share(fresh, 500) > 0.99f);  // nothing banked: a death costs everything
-    fresh.banked = 9500;
-    const float half = risk_share(fresh, 500);
-    CHECK(half > 0.04f && half < 0.06f);    // 500 / 10000
-
-    // Depth tracking is on |z| — the roof is as far from safety as the basement.
+// Выжившая половина снесённого экстракшн-лупа (владелец 2026-11-08):
+// глубина рана. Кошелёк и deepestFloor живут в [economy.h] — их читают
+// квесты (Descend), контракты и банк; сам пад-банк, bankable-фильтр,
+// авто-депозит и скоровая витрина умерли целиком.
+static void test_run_depth() {
     RunLedger d;
     record_floor(d, -3);
     CHECK(d.deepestFloor == -3);
@@ -2818,79 +2752,6 @@ static void test_extraction() {
     CHECK(d.deepestBand == economy_band(9));
     record_floor(d, -9);
     CHECK(d.deepestFloor == 9);             // equal magnitude does not overwrite
-}
-
-
-// Can the player ever actually stand on an extraction pad?
-//
-// This test exists because the answer was NO for the first version, and nothing
-// caught it: the mechanic was pointed at kMatHubPad, which the generator stamps onto
-// the slab at the four lattice z-levels {16,48,80,112}, while a body walks at cell
-// z=1. The pad was permanently 30 m above the player's feet. No crash, no warning,
-// no failing test — banking would simply never have fired, and the only symptom
-// would have been a player wondering why the number never went up.
-//
-// So the assertion is deliberately about REACHABILITY, at the height a body really
-// occupies, against the real generator. A unit test of deposit_valuables cannot
-// catch this class of bug and neither can the compiler.
-static void test_extraction_reachable() {
-    World hub;
-    generate_floor(hub, 0, floor_spec(FloorKind::Residential), 1u);
-
-    // Walkable ground of the module's storey 0 is cell z=0: its floor is the
-    // attic sandwich at z=127 (Z wraps), which is what the extraction pass
-    // paints. A body there occupies z=0.
-    const float standZ = 0.5f * kCellSize;
-    int reachable = 0;
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x) {
-            if (hub.grid().cell(x, y, 0) != kCellAir) continue;   // must be standable
-            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
-            if (on_extraction_pad(hub.grid(), p, /*grounded=*/true)) ++reachable;
-        }
-    // 16 shafts x (7x7 lobby minus the 3x3 shaft hole) = 16 x 40 = 640 cells. Assert
-    // a floor rather than the exact number: the lobby radius is the generator's to
-    // tune, but "hundreds of cells, spread over all 16 lobbies" is the contract.
-    if (reachable <= 400)
-        std::printf("  extraction ring reachable cells: %d (want >400)\n", reachable);
-    CHECK(reachable > 400);
-
-    // And the ring is ONLY on the hub. A looting floor that banked would delete the
-    // entire risk half of the loop, so this is as load-bearing as the line above.
-    World deep;
-    generate_floor(deep, -7, floor_spec(FloorKind::Derelict), 3u);
-    int leaked = 0;
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x) {
-            if (deep.grid().cell(x, y, 0) != kCellAir) continue;
-            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
-            if (on_extraction_pad(deep.grid(), p, /*grounded=*/true)) ++leaked;
-        }
-    CHECK(leaked == 0);
-
-    // БАНК — ГЛАГОЛ СТОЯНИЯ (владелец 2026-11-08: «инвентарь пустеет при
-    // подлёте к зоне лифта»): та же точка над краской, но без опоры — ноль.
-    // Обе полярности одним местом: grounded=true над кольцом выше дал сотни
-    // клеток, grounded=false обязан дать ноль на ВСЕХ тех же клетках.
-    int flying = 0;
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x) {
-            if (hub.grid().cell(x, y, 0) != kCellAir) continue;
-            const vec3 p{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize, standZ};
-            if (on_extraction_pad(hub.grid(), p, /*grounded=*/false)) ++flying;
-        }
-    CHECK(flying == 0);
-
-    // МОГИЛА ТЕЛЕПОРТ-ОБВЕСА (решение владельца 2026-08-27): hub-pad
-    // перекраска узловых слоёв снесена вместе с синими столбами — на узловом
-    // слое падика hub-pad клеток больше НЕТ, и это теперь пин. Материал жив
-    // (хрущи мостят им землю), различие «банк != пад» — тоже.
-    static_assert(kMatExtract != kMatHubPad, "the bank and the nav pad must differ");
-    int navPads = 0;
-    for (int y = 0; y < kMacroDim; ++y)
-        for (int x = 0; x < kMacroDim; ++x)
-            if (hub.grid().cell(x, y, 16) == kMatHubPad) ++navPads;
-    CHECK(navPads == 0);
 }
 
 
@@ -4927,60 +4788,31 @@ static void test_full_loop() {
                                container_budget(/*roomCount=*/1024));
     CHECK(crates > 0);
 
-    // Find a crate holding something the BANK will take, and stand on it.
-    //
-    // Not simply the first crate — and that distinction is the first thing this test
-    // found. My first version grabbed whichever container the view yielded, got a
-    // PublicBox, and banked zero. Both systems were right on their own: a public box is
-    // consumables-only by design ([container.cpp]), and `bankable_slot` refuses
-    // consumables by design ([extraction.h]). Jointly they are confusing — the HUD says
-    // "40 crates unopened", the player empties them, and the banked total does not move.
-    //
-    // So the assertion that matters is not "a crate banks" but **"a deep floor offers at\n// least one crate whose contents the bank accepts"**. If it did not, the entire
-    // container system would feed nothing to the entire extraction system, and each
-    // would still pass its own tests.
+    // Find a crate with priced loot and stand on it. Прежний фильтр «что
+    // возьмёт банк» (bankable_category + equipSlot) умер со сносом
+    // экстракшн-пада (2026-11-08); шов, который обязан жить, — «контейнеры
+    // кладут ЦЕННОСТЬ в комнаты»: хотя бы один ящик глубокого этажа несёт
+    // предмет с ненулевой ценой.
     Entity crate = entt::null;
     vec3 cratePos{0, 0, 0};
-    int bankableCrates = 0, consumableOnlyCrates = 0;
+    int valuedCrates = 0;
     for (auto e : reg.view<const Container, const Transform>()) {
         const Container& c = reg.get<const Container>(e);
-        bool anyBankable = false;
+        bool anyValued = false;
         for (int i = 0; i < kInvSlots; ++i) {
             const ItemId id = c.inv.slots[i].item;
             if (!item_valid(id)) continue;
-            const ItemDef& idef = item_def(id);
-            const auto cat = static_cast<ItemCategory>(idef.category);
-            // Bankable BY CATEGORY *and* non-equippable BY SLOT. Both halves are needed.
-            //
-            // Category alone is not enough: `bankable_slot` never takes what you are
-            // holding, so anything that equips itself on pickup deposits nothing. That is
-            // correct behaviour — banking must not disarm you — but it is useless as
-            // evidence that the bank accepts crate loot.
-            //
-            // Filtering to Misc/Note was the WRONG way to express "cannot be equipped",
-            // and it is why this test failed on correct code. There is no
-            // ItemCategory::Armour: all five armour rows in data/items.csv are category
-            // MISC carrying equip_slot=Armor. So "Misc only" admitted `armor_medium`
-            // (item id 35, 1200 rub), pickup made it the worn armour, and the deposit was
-            // correctly refused. `equipSlot` is the data's own declaration of what equips
-            // — ask it, instead of inferring equippability from a category that does not
-            // encode it.
-            if (idef.equipSlot != static_cast<std::uint8_t>(EquipSlot::None)) continue;
-            if (bankable_category(cat) && idef.value > 0) anyBankable = true;
+            if (item_def(id).value > 0) anyValued = true;
         }
-        if (anyBankable) {
-            ++bankableCrates;
-            if (crate == entt::null) {
-                crate = e;
-                cratePos = reg.get<const Transform>(e).pos;
-            }
-        } else {
-            ++consumableOnlyCrates;
+        if (!anyValued) continue;
+        ++valuedCrates;
+        if (crate == entt::null) {
+            crate = e;
+            cratePos = reg.get<const Transform>(e).pos;
         }
     }
-    std::printf("  crates: %d bankable, %d consumable-only\n",
-                bankableCrates, consumableOnlyCrates);
-    CHECK(bankableCrates > 0);   // the seam: containers must feed the bank at all
+    std::printf("  crates with priced loot: %d\n", valuedCrates);
+    CHECK(valuedCrates > 0);
     CHECK(crate != entt::null);
 
     NpcId me = pool.spawn();
@@ -5004,84 +4836,13 @@ static void test_full_loop() {
     // an infinite money press, and it would be invisible — the number would just rise.
     CHECK(loot_containers_step(reg, pool, layer) == 0);
 
-    // --- seam 2: carried value is AT RISK, not banked ------------------------
+    // --- seam 2: глубина рана пишется леджером -------------------------------
+    // Швы «AT RISK / пад-банк» умерли со сносом экстракшн-лупа (владелец
+    // 2026-11-08): рубли двигают явные глаголы — контракты ниже и платят.
     RunLedger led;
     record_floor(led, -26);
     CHECK(led.deepestFloor == -26);
     CHECK(led.deepestBand == economy_band(-26));
-    const std::int32_t carried = at_risk_value(inv);
-    CHECK(carried > 0);
-    CHECK(led.banked == 0);                              // nothing is yours yet
-    CHECK(risk_share(led, carried) > 0.99f);             // a death costs everything
-
-    // Deep floors do NOT bank. If they did, the walk home would be pointless and the
-    // whole risk half of the loop would evaporate.
-    CHECK(!on_extraction_pad(stack.layer(layer).grid(), cratePos,
-                             /*grounded=*/true));
-
-    // --- seam 3: the hub banks ----------------------------------------------
-    LayerId hub = stack.push_layer();
-    generate_floor(stack.layer(hub), 0, floor_spec(FloorKind::Residential), 1u);
-
-    // Stand on the extraction ring. Walkable ground of storey 0 is cell z=0 and
-    // the pad is the attic sandwich at z=127 (Z wraps) — the pairing the pad
-    // check relies on in the module's geometry.
-    vec3 padPos{0, 0, 0};
-    bool found = false;
-    for (int y = 0; y < kMacroDim && !found; ++y)
-        for (int x = 0; x < kMacroDim && !found; ++x) {
-            if (stack.layer(hub).grid().cell(x, y, 0) != kCellAir) continue;
-            const vec3 c{(x + 0.5f) * kCellSize, (y + 0.5f) * kCellSize,
-                         0.5f * kCellSize};
-            if (on_extraction_pad(stack.layer(hub).grid(), c,
-                                  /*grounded=*/true)) { padPos = c; found = true; }
-        }
-    CHECK(found);
-    // Та же точка БЕЗ опоры — банк молчит (глагол стояния, [extraction.h]).
-    CHECK(!on_extraction_pad(stack.layer(hub).grid(), padPos,
-                             /*grounded=*/false));
-
-    // Diagnostic: what did the crate actually give? The first run of this test banked
-    // ZERO, which is the seam bug it exists to find.
-    if (at_risk_value(inv) > 0) {
-        int byCat[static_cast<std::size_t>(ItemCategory::Count)] = {};
-        for (const ItemSlot& sl : inv.slots) {
-            if (!item_valid(sl.item)) continue;
-            byCat[item_def(sl.item).category] += sl.count;
-        }
-        std::printf("  crate loot by category:");
-        for (int c = 0; c < static_cast<int>(ItemCategory::Count); ++c)
-            if (byCat[c]) std::printf(" cat%d=%d", c, byCat[c]);
-        std::printf("  (total value=%d)\n", at_risk_value(inv));
-    }
-    {
-        std::printf("  at deposit:");
-        for (int i = 0; i < kInvSlots; ++i) {
-            const ItemSlot& sl = inv.slots[i];
-            if (!item_valid(sl.item)) continue;
-            std::printf(" [id%u c%u cat%u v%d bank%d]",
-                        static_cast<unsigned>(sl.item),
-                        static_cast<unsigned>(sl.count),
-                        static_cast<unsigned>(item_def(sl.item).category),
-                        static_cast<int>(item_def(sl.item).value),
-                        bankable_slot(inv, i) ? 1 : 0);
-        }
-        std::printf(" | melee=%u armour=%u\n",
-                    static_cast<unsigned>(equipped_melee(inv)),
-                    static_cast<unsigned>(equipped_armour(inv)));
-    }
-    const std::int32_t banked = deposit_valuables(inv, led);
-    CHECK(banked > 0);
-    CHECK(led.banked == banked);
-    CHECK(led.bestHaul == banked);
-    // The haul left the inventory but the KIT did not — banking must never disarm you,
-    // or never banking becomes the optimal play.
-    // The haul left, the kit stayed. Asserted as "value fell OR there was nothing
-    // bankable to begin with" rather than a strict drop: which items a seeded crate
-    // yields is the generator's business, and a test that pins it is a test that breaks
-    // every time the loot tables move. What must hold is that banking never ADDS to what
-    // you carry.
-    CHECK(at_risk_value(inv) <= carried);
 
     // --- seam 4: barter turns the haul into survival -------------------------
     // The vendor window died with the barter increment ([conversation.md]):
@@ -5160,22 +4921,7 @@ static void test_full_loop() {
     // --- seam 6: the run is now readable ------------------------------------
     // Everything the HUD prints about this run has to agree with what happened.
     CHECK(led.deepestFloor == -26);
-    // One deposit, or none if the crate held nothing the bank takes. What must never
-    // happen is a phantom deposit — a count that rises while the total stays flat would
-    // make the run summary lie.
-    CHECK(led.deposits <= 1);
-    CHECK((led.deposits == 1) == (banked > 0));
-    CHECK(led.deaths == 0);
-    CHECK(led.lostToDeath == 0);
-    CHECK(led.banked > 0);
-
-    // And a death still costs what is carried, after all of that.
-    const std::int32_t stillCarried = at_risk_value(inv);
-    const std::int64_t safe = led.banked;
-    record_death(led, inv);
-    CHECK(led.deaths == 1);
-    CHECK(led.lostToDeath == stillCarried);
-    CHECK(led.banked == safe);                           // banked survives a death
+    CHECK(led.banked > 0); // единственный источник — выплата контракта выше
 }
 
 // ДИСКОВЫЙ НАВ-КЭШ (C.2b) СНЕСЁН 2026-09-30. Здесь стояли два теста —
@@ -5586,13 +5332,12 @@ int main() {
     test_ranged_windup_and_deadzone();
     test_faction_relations();
     test_faction_gates_hunting();
-    test_extraction();
+    test_run_depth();
     test_containers();
     test_contracts();
     test_barter_terms();
     test_hunt_all();
     test_full_loop();
-    test_extraction_reachable();
     test_mob_behaviour();
     test_ranged_table();
     test_footsteps_from_physics();

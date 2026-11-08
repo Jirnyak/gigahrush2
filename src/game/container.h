@@ -1,6 +1,6 @@
 // Containers — the reason a room is worth entering.
 //
-// [loot.h] made monsters drop things and [extraction.h] made banking them the point.
+// [loot.h] made monsters drop things worth carrying out.
 // What was missing is the other 99% of the building: 256 rooms per floor, every one of
 // them empty. The only way to earn anything was to kill something, which makes a
 // survival game about combat by omission rather than by design.
@@ -116,7 +116,7 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
 
 // Empty every container within reach of the camera holder into its pool-row inventory.
 // Returns the total rouble value taken, which is what the HUD counts and what
-// `extraction.h` will later let you bank.
+// (экстракшн-банк снесён 2026-11-08 — ценность реализуют бартер и контракты).
 //
 // An emptied container is NOT destroyed. It stays as a visibly-open box, because a
 // container that vanishes when looted tells the player nothing about where they have

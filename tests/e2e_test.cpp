@@ -16,7 +16,6 @@
 #include "ecs/registry.h"
 #include "game/ai.h"
 #include "game/role.h"
-#include "game/extraction.h"
 #include "game/economy.h"
 #include "game/event_bus.h"
 #include "game/prop_system.h"

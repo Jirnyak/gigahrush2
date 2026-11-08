@@ -14,7 +14,7 @@
 // Rows read from data/materials.csv. The `source_rules` ctest compares it
 // against the CSV's data-row count; derived rubble twins live PAST this count
 // (kMatCount covers all, see materials.h).
-const uint kMaterialCsvRows = 23u;
+const uint kMaterialCsvRows = 22u;
 
 // Family per material id — see the kFam* constants in cube.frag.
 //   0 air                  generic  authored                 CV 0.0000
@@ -34,327 +34,320 @@ const uint kMaterialCsvRows = 23u;
 //     diffusion = flow*0.5
 //   4 slab_tan             smooth   authored                 CV 0.0600
 //     muted tan concrete slab
-//   5 extract              smooth   authored                 CV 0.0300
-//     the bank pad: signage, not surface — unbreakable infrastructure
-//   6 door                 generic  authored                 CV 0.0000
+//   5 door                 generic  authored                 CV 0.0000
 //     door leaf + frame; carve-immune, owned by the door state machine
-//   7 hub_pad              smooth   authored                 CV 0.0300
+//   6 hub_pad              smooth   authored                 CV 0.0300
 //     nav / fast-travel pad: lattice ground truth, unbreakable
-//   8 plaster              plaster  authored                 CV 0.1300
+//   7 plaster              plaster  authored                 CV 0.1300
 //     AUTHORED: dirty whitewash over precast panel; broad stains ~2.9 m
-//   9 parquet              plank    authored                 CV 0.1100
+//   8 parquet              plank    authored                 CV 0.1100
 //     AUTHORED: varnished oak, board-to-board tone; 10 cm boards
-//  10 shop_shutter         ribbed   painted_metal_shutter    CV 0.1519
+//   9 shop_shutter         ribbed   painted_metal_shutter    CV 0.1519
 //     roller-shutter slats, 7 cm
-//  11 lino                 tile     rubber_tiles             CV 0.0724
+//  10 lino                 tile     rubber_tiles             CV 0.0724
 //     dark rubber with seams; 50 cm tiles
-//  12 factory_wall         ribbed   factory_wall             CV 0.2231
+//  11 factory_wall         ribbed   factory_wall             CV 0.2231
 //     green corrugated factory metal, 15 cm corrugation
-//  13 tread                tread    metal_grate_rusty        CV 0.1940
+//  12 tread                tread    metal_grate_rusty        CV 0.1940
 //     walkway grate, 25 cm studs
-//  14 rust                 rust     rusty_metal_03           CV 0.4411
+//  13 rust                 rust     rusty_metal_03           CV 0.4411
 //     thresholded low-frequency patches ~1.5 m; corroded, weaker than
 //     fresh steel
-//  15 rubble               rubble   rusty_corrugated_iron    CV 0.4437
+//  14 rubble               rubble   rusty_corrugated_iron    CV 0.4437
 //     chunk plateaus at 33 cm; already broken once; рыхлое: flow 1.0 —
 //     осыпь лавинна на масштабе подтика (владелец 2026-09-01); угол откоса
 //     держит геометрия ската Марголуса а не вероятность
-//  16 pipe_metal           ribbed   authored                 CV 0.1000
+//  15 pipe_metal           ribbed   authored                 CV 0.1000
 //     AUTHORED: baked wall-pipe runs (antourage) — painted steel conduit,
 //     dents and joint rings
-//  17 neon_tube            smooth   authored                 CV 0.0400
+//  16 neon_tube            smooth   authored                 CV 0.0400
 //     неоновая трубка — светоматериал: лепи вывески/лампы вокселями, бейк
 //     кластеризует в эмиттеры (ddalight.md)
-//  18 glass                smooth   authored                 CV 0.0300
+//  17 glass                smooth   authored                 CV 0.0300
 //     стекло — первый потребитель колонки прозрачности: свет проходит
 //     (light_transparent), материя стоит; решение владельца 2026-08-24
 //     (neon-topology.md)
-//  19 toxic_gas            generic  authored                 CV 0.0000
+//  18 toxic_gas            generic  authored                 CV 0.0000
 //     удушливый газ шахт — МАТЕРИЯ автомата (S16): плотность хлора ~3
 //     кг/м³ при табличном воздухе 0 — тонет и стелется по полу; diffusion
 //     0.5 = тяжёлый газ ползёт вдвое медленней воздуха-референса;
 //     твёрдость 0 — рассеивается любым касанием карва; свету не преграда
-//  20 asphalt              smooth   authored                 CV 0.1000
+//  19 asphalt              smooth   authored                 CV 0.1000
 //     AUTHORED: дорожное полотно хрущей — тёмный асфальт с широкими
 //     латками; твёрдость 224 между slab_tan 192 и concrete 256: битум
 //     мягче чистого бетона, полотно уплотнено катком; плотность
 //     асфальтобетона ~2300
-//  21 door_steel           smooth   authored                 CV 0.0600
+//  20 door_steel           smooth   authored                 CV 0.0600
 //     НОВАЯ ДВЕРЬ 2026-08-28: стальное полотно квартирной двери —
 //     настоящая материя мира (дверь = зарастание проёма субвокселями);
 //     твёрдость 384 между бетоном 256 и unbreakable: полотно ломается
 //     упорным карвом, но дольше стены; плотность стали листовой с рёбрами
 //     ~2900
-//  22 door_hermetic        smooth   authored                 CV 0.0500
+//  21 door_hermetic        smooth   authored                 CV 0.0500
 //     НОВАЯ ДВЕРЬ 2026-08-28: гермополотно — неразрушимый материал
 //     (hardness 65535 = kHardnessUnbreakable, тот же закон, что
 //     extract/hub_pad): гермодверь неразрушима ЕСТЕСТВЕННО, свойством
 //     материи, без спец-флагов; модуль сам решает, какой комнате гермо
-//  23 rubble_concrete      smooth   authored                 CV 0.0800
+//  22 rubble_concrete      smooth   authored                 CV 0.0800
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки concrete — детач меняет строку,
 //     автомат роняет; вид исходника
-//  24 rubble_soil          smooth   authored                 CV 0.2200
+//  23 rubble_soil          smooth   authored                 CV 0.2200
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки soil — детач меняет строку, автомат
 //     роняет; вид исходника
-//  25 rubble_slab_tan      smooth   authored                 CV 0.0600
+//  24 rubble_slab_tan      smooth   authored                 CV 0.0600
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки slab_tan — детач меняет строку,
 //     автомат роняет; вид исходника
-//  26 rubble_plaster       plaster  authored                 CV 0.1300
+//  25 rubble_plaster       plaster  authored                 CV 0.1300
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки plaster — детач меняет строку,
 //     автомат роняет; вид исходника
-//  27 rubble_parquet       plank    authored                 CV 0.1100
+//  26 rubble_parquet       plank    authored                 CV 0.1100
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки parquet — детач меняет строку,
 //     автомат роняет; вид исходника
-//  28 rubble_shop_shutter  ribbed   painted_metal_shutter    CV 0.1519
+//  27 rubble_shop_shutter  ribbed   painted_metal_shutter    CV 0.1519
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки shop_shutter — детач меняет строку,
 //     автомат роняет; вид исходника
-//  29 rubble_lino          tile     rubber_tiles             CV 0.0724
+//  28 rubble_lino          tile     rubber_tiles             CV 0.0724
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки lino — детач меняет строку, автомат
 //     роняет; вид исходника
-//  30 rubble_factory_wall  ribbed   factory_wall             CV 0.2231
+//  29 rubble_factory_wall  ribbed   factory_wall             CV 0.2231
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки factory_wall — детач меняет строку,
 //     автомат роняет; вид исходника
-//  31 rubble_tread         tread    metal_grate_rusty        CV 0.1940
+//  30 rubble_tread         tread    metal_grate_rusty        CV 0.1940
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки tread — детач меняет строку,
 //     автомат роняет; вид исходника
-//  32 rubble_rust          rust     rusty_metal_03           CV 0.4411
+//  31 rubble_rust          rust     rusty_metal_03           CV 0.4411
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки rust — детач меняет строку, автомат
 //     роняет; вид исходника
-//  33 rubble_pipe_metal    ribbed   authored                 CV 0.1000
+//  32 rubble_pipe_metal    ribbed   authored                 CV 0.1000
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки pipe_metal — детач меняет строку,
 //     автомат роняет; вид исходника
-//  34 rubble_neon_tube     smooth   authored                 CV 0.0400
+//  33 rubble_neon_tube     smooth   authored                 CV 0.0400
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки neon_tube — детач меняет строку,
 //     автомат роняет; вид исходника
-//  35 rubble_glass         smooth   authored                 CV 0.0300
+//  34 rubble_glass         smooth   authored                 CV 0.0300
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки glass — детач меняет строку,
 //     автомат роняет; вид исходника
-//  36 rubble_asphalt       smooth   authored                 CV 0.1000
+//  35 rubble_asphalt       smooth   authored                 CV 0.1000
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки asphalt — детач меняет строку,
 //     автомат роняет; вид исходника
-//  37 rubble_door_steel    smooth   authored                 CV 0.0600
+//  36 rubble_door_steel    smooth   authored                 CV 0.0600
 //     ВЫВЕДЕННЫЙ рыхлый двойник строки door_steel — детач меняет строку,
 //     автомат роняет; вид исходника
 // Table length. cube.frag clamps the incoming material id against
 // this, so an id the CPU should never emit cannot index past the
 // arrays — an out-of-range const-array read is undefined in GLSL.
-const uint kMatSurfaceCount = 38u;
+const uint kMatSurfaceCount = 37u;
 
-const uint kMatFamily[38] = uint[38](
+const uint kMatFamily[37] = uint[37](
     0u,  //  0 air
     8u,  //  1 concrete
     8u,  //  2 soil
     0u,  //  3 water
     8u,  //  4 slab_tan
-    8u,  //  5 extract
-    0u,  //  6 door
-    8u,  //  7 hub_pad
-    1u,  //  8 plaster
-    2u,  //  9 parquet
-    4u,  // 10 shop_shutter
-    3u,  // 11 lino
-    4u,  // 12 factory_wall
-    5u,  // 13 tread
-    6u,  // 14 rust
-    7u,  // 15 rubble
-    4u,  // 16 pipe_metal
-    8u,  // 17 neon_tube
-    8u,  // 18 glass
-    0u,  // 19 toxic_gas
-    8u,  // 20 asphalt
-    8u,  // 21 door_steel
-    8u,  // 22 door_hermetic
-    8u,  // 23 rubble_concrete
-    8u,  // 24 rubble_soil
-    8u,  // 25 rubble_slab_tan
-    1u,  // 26 rubble_plaster
-    2u,  // 27 rubble_parquet
-    4u,  // 28 rubble_shop_shutter
-    3u,  // 29 rubble_lino
-    4u,  // 30 rubble_factory_wall
-    5u,  // 31 rubble_tread
-    6u,  // 32 rubble_rust
-    4u,  // 33 rubble_pipe_metal
-    8u,  // 34 rubble_neon_tube
-    8u,  // 35 rubble_glass
-    8u,  // 36 rubble_asphalt
-    8u   // 37 rubble_door_steel
+    0u,  //  5 door
+    8u,  //  6 hub_pad
+    1u,  //  7 plaster
+    2u,  //  8 parquet
+    4u,  //  9 shop_shutter
+    3u,  // 10 lino
+    4u,  // 11 factory_wall
+    5u,  // 12 tread
+    6u,  // 13 rust
+    7u,  // 14 rubble
+    4u,  // 15 pipe_metal
+    8u,  // 16 neon_tube
+    8u,  // 17 glass
+    0u,  // 18 toxic_gas
+    8u,  // 19 asphalt
+    8u,  // 20 door_steel
+    8u,  // 21 door_hermetic
+    8u,  // 22 rubble_concrete
+    8u,  // 23 rubble_soil
+    8u,  // 24 rubble_slab_tan
+    1u,  // 25 rubble_plaster
+    2u,  // 26 rubble_parquet
+    4u,  // 27 rubble_shop_shutter
+    3u,  // 28 rubble_lino
+    4u,  // 29 rubble_factory_wall
+    5u,  // 30 rubble_tread
+    6u,  // 31 rubble_rust
+    4u,  // 32 rubble_pipe_metal
+    8u,  // 33 rubble_neon_tube
+    8u,  // 34 rubble_glass
+    8u,  // 35 rubble_asphalt
+    8u   // 36 rubble_door_steel
 );
 
 // x = lognormal sigma reproducing measured luminance CV,
 // y = structural pitch in cycles per 2 m cell,
 // z = chroma_sigma (lognormal chroma width),
 // w = bump_scale (normal perturbation scale).
-const vec4 kMatSurface[38] = vec4[38](
+const vec4 kMatSurface[37] = vec4[37](
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  0 air
     vec4(0.07987,   1.00, 0.03000, 0.04000),  //  1 concrete
     vec4(0.21741,   0.80, 0.12000, 0.10000),  //  2 soil
     vec4(0.00000,   0.00, 0.00000, 0.00000),  //  3 water
     vec4(0.05995,   1.00, 0.04000, 0.03000),  //  4 slab_tan
-    vec4(0.02999,   0.00, 0.00000, 0.02000),  //  5 extract
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  6 door
-    vec4(0.02999,   0.00, 0.00000, 0.02000),  //  7 hub_pad
-    vec4(0.12946,   0.70, 0.08000, 0.12000),  //  8 plaster
-    vec4(0.10967,  20.00, 0.07000, 0.18000),  //  9 parquet
-    vec4(0.15105,  28.00, 0.05000, 0.40000),  // 10 shop_shutter
-    vec4(0.07232,   4.00, 0.04000, 0.20000),  // 11 lino
-    vec4(0.22041,  13.00, 0.08000, 0.35000),  // 12 factory_wall
-    vec4(0.19217,   8.00, 0.09000, 0.30000),  // 13 tread
-    vec4(0.42165,   1.30, 0.18000, 0.25000),  // 14 rust
-    vec4(0.42390,   6.00, 0.15000, 0.35000),  // 15 rubble
-    vec4(0.09975,  10.00, 0.06000, 0.30000),  // 16 pipe_metal
-    vec4(0.03998,   0.00, 0.00000, 0.00000),  // 17 neon_tube
-    vec4(0.02999,   1.00, 0.02000, 0.02000),  // 18 glass
-    vec4(0.00000,   0.00, 0.00000, 0.00000),  // 19 toxic_gas
-    vec4(0.09975,   1.10, 0.03000, 0.06000),  // 20 asphalt
-    vec4(0.05995,   1.00, 0.02000, 0.05000),  // 21 door_steel
-    vec4(0.04997,   1.00, 0.02000, 0.04000),  // 22 door_hermetic
-    vec4(0.07987,   1.00, 0.03000, 0.04000),  // 23 rubble_concrete
-    vec4(0.21741,   0.80, 0.12000, 0.10000),  // 24 rubble_soil
-    vec4(0.05995,   1.00, 0.04000, 0.03000),  // 25 rubble_slab_tan
-    vec4(0.12946,   0.70, 0.08000, 0.12000),  // 26 rubble_plaster
-    vec4(0.10967,  20.00, 0.07000, 0.18000),  // 27 rubble_parquet
-    vec4(0.15105,  28.00, 0.05000, 0.40000),  // 28 rubble_shop_shutter
-    vec4(0.07232,   4.00, 0.04000, 0.20000),  // 29 rubble_lino
-    vec4(0.22041,  13.00, 0.08000, 0.35000),  // 30 rubble_factory_wall
-    vec4(0.19217,   8.00, 0.09000, 0.30000),  // 31 rubble_tread
-    vec4(0.42165,   1.30, 0.18000, 0.25000),  // 32 rubble_rust
-    vec4(0.09975,  10.00, 0.06000, 0.30000),  // 33 rubble_pipe_metal
-    vec4(0.03998,   0.00, 0.00000, 0.00000),  // 34 rubble_neon_tube
-    vec4(0.02999,   1.00, 0.02000, 0.02000),  // 35 rubble_glass
-    vec4(0.09975,   1.10, 0.03000, 0.06000),  // 36 rubble_asphalt
-    vec4(0.05995,   1.00, 0.02000, 0.05000)   // 37 rubble_door_steel
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  //  5 door
+    vec4(0.02999,   0.00, 0.00000, 0.02000),  //  6 hub_pad
+    vec4(0.12946,   0.70, 0.08000, 0.12000),  //  7 plaster
+    vec4(0.10967,  20.00, 0.07000, 0.18000),  //  8 parquet
+    vec4(0.15105,  28.00, 0.05000, 0.40000),  //  9 shop_shutter
+    vec4(0.07232,   4.00, 0.04000, 0.20000),  // 10 lino
+    vec4(0.22041,  13.00, 0.08000, 0.35000),  // 11 factory_wall
+    vec4(0.19217,   8.00, 0.09000, 0.30000),  // 12 tread
+    vec4(0.42165,   1.30, 0.18000, 0.25000),  // 13 rust
+    vec4(0.42390,   6.00, 0.15000, 0.35000),  // 14 rubble
+    vec4(0.09975,  10.00, 0.06000, 0.30000),  // 15 pipe_metal
+    vec4(0.03998,   0.00, 0.00000, 0.00000),  // 16 neon_tube
+    vec4(0.02999,   1.00, 0.02000, 0.02000),  // 17 glass
+    vec4(0.00000,   0.00, 0.00000, 0.00000),  // 18 toxic_gas
+    vec4(0.09975,   1.10, 0.03000, 0.06000),  // 19 asphalt
+    vec4(0.05995,   1.00, 0.02000, 0.05000),  // 20 door_steel
+    vec4(0.04997,   1.00, 0.02000, 0.04000),  // 21 door_hermetic
+    vec4(0.07987,   1.00, 0.03000, 0.04000),  // 22 rubble_concrete
+    vec4(0.21741,   0.80, 0.12000, 0.10000),  // 23 rubble_soil
+    vec4(0.05995,   1.00, 0.04000, 0.03000),  // 24 rubble_slab_tan
+    vec4(0.12946,   0.70, 0.08000, 0.12000),  // 25 rubble_plaster
+    vec4(0.10967,  20.00, 0.07000, 0.18000),  // 26 rubble_parquet
+    vec4(0.15105,  28.00, 0.05000, 0.40000),  // 27 rubble_shop_shutter
+    vec4(0.07232,   4.00, 0.04000, 0.20000),  // 28 rubble_lino
+    vec4(0.22041,  13.00, 0.08000, 0.35000),  // 29 rubble_factory_wall
+    vec4(0.19217,   8.00, 0.09000, 0.30000),  // 30 rubble_tread
+    vec4(0.42165,   1.30, 0.18000, 0.25000),  // 31 rubble_rust
+    vec4(0.09975,  10.00, 0.06000, 0.30000),  // 32 rubble_pipe_metal
+    vec4(0.03998,   0.00, 0.00000, 0.00000),  // 33 rubble_neon_tube
+    vec4(0.02999,   1.00, 0.02000, 0.02000),  // 34 rubble_glass
+    vec4(0.09975,   1.10, 0.03000, 0.06000),  // 35 rubble_asphalt
+    vec4(0.05995,   1.00, 0.02000, 0.05000)   // 36 rubble_door_steel
 );
 
 // RGB chroma tint axis per material id.
-const vec3 kMatChromaAxis[38] = vec3[38](
+const vec3 kMatChromaAxis[37] = vec3[37](
     vec3(1.00000, 1.00000, 1.00000),  //  0 air
     vec3(1.00000, 1.00000, 1.00000),  //  1 concrete
     vec3(1.15000, 0.90000, 0.65000),  //  2 soil
     vec3(1.00000, 1.00000, 1.00000),  //  3 water
     vec3(1.05000, 0.95000, 0.85000),  //  4 slab_tan
-    vec3(1.00000, 1.00000, 1.00000),  //  5 extract
-    vec3(1.00000, 1.00000, 1.00000),  //  6 door
-    vec3(1.00000, 1.00000, 1.00000),  //  7 hub_pad
-    vec3(1.10000, 1.00000, 0.70000),  //  8 plaster
-    vec3(1.15000, 0.95000, 0.75000),  //  9 parquet
-    vec3(0.90000, 0.95000, 1.10000),  // 10 shop_shutter
-    vec3(0.95000, 1.05000, 0.90000),  // 11 lino
-    vec3(0.85000, 1.15000, 0.80000),  // 12 factory_wall
-    vec3(1.15000, 0.85000, 0.65000),  // 13 tread
-    vec3(1.25000, 0.60000, 0.20000),  // 14 rust
-    vec3(1.10000, 0.90000, 0.70000),  // 15 rubble
-    vec3(0.95000, 1.00000, 1.05000),  // 16 pipe_metal
-    vec3(1.00000, 1.00000, 1.00000),  // 17 neon_tube
-    vec3(1.00000, 1.00000, 1.00000),  // 18 glass
-    vec3(1.00000, 1.00000, 1.00000),  // 19 toxic_gas
-    vec3(1.00000, 1.00000, 1.00000),  // 20 asphalt
-    vec3(1.00000, 1.00000, 1.00000),  // 21 door_steel
-    vec3(1.00000, 1.00000, 1.00000),  // 22 door_hermetic
-    vec3(1.00000, 1.00000, 1.00000),  // 23 rubble_concrete
-    vec3(1.15000, 0.90000, 0.65000),  // 24 rubble_soil
-    vec3(1.05000, 0.95000, 0.85000),  // 25 rubble_slab_tan
-    vec3(1.10000, 1.00000, 0.70000),  // 26 rubble_plaster
-    vec3(1.15000, 0.95000, 0.75000),  // 27 rubble_parquet
-    vec3(0.90000, 0.95000, 1.10000),  // 28 rubble_shop_shutter
-    vec3(0.95000, 1.05000, 0.90000),  // 29 rubble_lino
-    vec3(0.85000, 1.15000, 0.80000),  // 30 rubble_factory_wall
-    vec3(1.15000, 0.85000, 0.65000),  // 31 rubble_tread
-    vec3(1.25000, 0.60000, 0.20000),  // 32 rubble_rust
-    vec3(0.95000, 1.00000, 1.05000),  // 33 rubble_pipe_metal
-    vec3(1.00000, 1.00000, 1.00000),  // 34 rubble_neon_tube
-    vec3(1.00000, 1.00000, 1.00000),  // 35 rubble_glass
-    vec3(1.00000, 1.00000, 1.00000),  // 36 rubble_asphalt
-    vec3(1.00000, 1.00000, 1.00000)   // 37 rubble_door_steel
+    vec3(1.00000, 1.00000, 1.00000),  //  5 door
+    vec3(1.00000, 1.00000, 1.00000),  //  6 hub_pad
+    vec3(1.10000, 1.00000, 0.70000),  //  7 plaster
+    vec3(1.15000, 0.95000, 0.75000),  //  8 parquet
+    vec3(0.90000, 0.95000, 1.10000),  //  9 shop_shutter
+    vec3(0.95000, 1.05000, 0.90000),  // 10 lino
+    vec3(0.85000, 1.15000, 0.80000),  // 11 factory_wall
+    vec3(1.15000, 0.85000, 0.65000),  // 12 tread
+    vec3(1.25000, 0.60000, 0.20000),  // 13 rust
+    vec3(1.10000, 0.90000, 0.70000),  // 14 rubble
+    vec3(0.95000, 1.00000, 1.05000),  // 15 pipe_metal
+    vec3(1.00000, 1.00000, 1.00000),  // 16 neon_tube
+    vec3(1.00000, 1.00000, 1.00000),  // 17 glass
+    vec3(1.00000, 1.00000, 1.00000),  // 18 toxic_gas
+    vec3(1.00000, 1.00000, 1.00000),  // 19 asphalt
+    vec3(1.00000, 1.00000, 1.00000),  // 20 door_steel
+    vec3(1.00000, 1.00000, 1.00000),  // 21 door_hermetic
+    vec3(1.00000, 1.00000, 1.00000),  // 22 rubble_concrete
+    vec3(1.15000, 0.90000, 0.65000),  // 23 rubble_soil
+    vec3(1.05000, 0.95000, 0.85000),  // 24 rubble_slab_tan
+    vec3(1.10000, 1.00000, 0.70000),  // 25 rubble_plaster
+    vec3(1.15000, 0.95000, 0.75000),  // 26 rubble_parquet
+    vec3(0.90000, 0.95000, 1.10000),  // 27 rubble_shop_shutter
+    vec3(0.95000, 1.05000, 0.90000),  // 28 rubble_lino
+    vec3(0.85000, 1.15000, 0.80000),  // 29 rubble_factory_wall
+    vec3(1.15000, 0.85000, 0.65000),  // 30 rubble_tread
+    vec3(1.25000, 0.60000, 0.20000),  // 31 rubble_rust
+    vec3(0.95000, 1.00000, 1.05000),  // 32 rubble_pipe_metal
+    vec3(1.00000, 1.00000, 1.00000),  // 33 rubble_neon_tube
+    vec3(1.00000, 1.00000, 1.00000),  // 34 rubble_glass
+    vec3(1.00000, 1.00000, 1.00000),  // 35 rubble_asphalt
+    vec3(1.00000, 1.00000, 1.00000)   // 36 rubble_door_steel
 );
 
 // Самосвечение поверхности (albedo * kMatEmissive): нарисованный
 // светоматериал читается источником даже в полной тьме; сам СВЕТ
 // от него в сетку кладёт бейк этажа ([ddalight.md]).
-const float kMatEmissive[38] = float[38](
+const float kMatEmissive[37] = float[37](
     0.000,  //  0 air
     0.000,  //  1 concrete
     0.000,  //  2 soil
     0.000,  //  3 water
     0.000,  //  4 slab_tan
-    0.000,  //  5 extract
-    0.000,  //  6 door
-    0.000,  //  7 hub_pad
-    0.000,  //  8 plaster
-    0.000,  //  9 parquet
-    0.000,  // 10 shop_shutter
-    0.000,  // 11 lino
-    0.000,  // 12 factory_wall
-    0.000,  // 13 tread
-    0.000,  // 14 rust
-    0.000,  // 15 rubble
-    0.000,  // 16 pipe_metal
-    1.600,  // 17 neon_tube
-    0.000,  // 18 glass
-    0.000,  // 19 toxic_gas
-    0.000,  // 20 asphalt
-    0.000,  // 21 door_steel
-    0.000,  // 22 door_hermetic
-    0.000,  // 23 rubble_concrete
-    0.000,  // 24 rubble_soil
-    0.000,  // 25 rubble_slab_tan
-    0.000,  // 26 rubble_plaster
-    0.000,  // 27 rubble_parquet
-    0.000,  // 28 rubble_shop_shutter
-    0.000,  // 29 rubble_lino
-    0.000,  // 30 rubble_factory_wall
-    0.000,  // 31 rubble_tread
-    0.000,  // 32 rubble_rust
-    0.000,  // 33 rubble_pipe_metal
-    0.000,  // 34 rubble_neon_tube
-    0.000,  // 35 rubble_glass
-    0.000,  // 36 rubble_asphalt
-    0.000   // 37 rubble_door_steel
+    0.000,  //  5 door
+    0.000,  //  6 hub_pad
+    0.000,  //  7 plaster
+    0.000,  //  8 parquet
+    0.000,  //  9 shop_shutter
+    0.000,  // 10 lino
+    0.000,  // 11 factory_wall
+    0.000,  // 12 tread
+    0.000,  // 13 rust
+    0.000,  // 14 rubble
+    0.000,  // 15 pipe_metal
+    1.600,  // 16 neon_tube
+    0.000,  // 17 glass
+    0.000,  // 18 toxic_gas
+    0.000,  // 19 asphalt
+    0.000,  // 20 door_steel
+    0.000,  // 21 door_hermetic
+    0.000,  // 22 rubble_concrete
+    0.000,  // 23 rubble_soil
+    0.000,  // 24 rubble_slab_tan
+    0.000,  // 25 rubble_plaster
+    0.000,  // 26 rubble_parquet
+    0.000,  // 27 rubble_shop_shutter
+    0.000,  // 28 rubble_lino
+    0.000,  // 29 rubble_factory_wall
+    0.000,  // 30 rubble_tread
+    0.000,  // 31 rubble_rust
+    0.000,  // 32 rubble_pipe_metal
+    0.000,  // 33 rubble_neon_tube
+    0.000,  // 34 rubble_glass
+    0.000,  // 35 rubble_asphalt
+    0.000   // 36 rubble_door_steel
 );
 
 // ПРОЗРАЧНОСТЬ ДЛЯ СВЕТА (light_transparent + выведенные
 // воздух/эмиттеры): теневой луч прощает субвоксель
 // прозрачного материала. Тот же закон на CPU —
 // material_passes_light ([world/material_props.h]).
-const uint kMatLightPass[38] = uint[38](
+const uint kMatLightPass[37] = uint[37](
     1u,  //  0 air
     0u,  //  1 concrete
     0u,  //  2 soil
     0u,  //  3 water
     0u,  //  4 slab_tan
-    0u,  //  5 extract
-    0u,  //  6 door
-    0u,  //  7 hub_pad
-    0u,  //  8 plaster
-    0u,  //  9 parquet
-    0u,  // 10 shop_shutter
-    0u,  // 11 lino
-    0u,  // 12 factory_wall
-    0u,  // 13 tread
-    0u,  // 14 rust
-    0u,  // 15 rubble
-    0u,  // 16 pipe_metal
-    1u,  // 17 neon_tube
-    1u,  // 18 glass
-    1u,  // 19 toxic_gas
-    0u,  // 20 asphalt
-    0u,  // 21 door_steel
-    0u,  // 22 door_hermetic
-    0u,  // 23 rubble_concrete
-    0u,  // 24 rubble_soil
-    0u,  // 25 rubble_slab_tan
-    0u,  // 26 rubble_plaster
-    0u,  // 27 rubble_parquet
-    0u,  // 28 rubble_shop_shutter
-    0u,  // 29 rubble_lino
-    0u,  // 30 rubble_factory_wall
-    0u,  // 31 rubble_tread
-    0u,  // 32 rubble_rust
-    0u,  // 33 rubble_pipe_metal
-    0u,  // 34 rubble_neon_tube
-    0u,  // 35 rubble_glass
-    0u,  // 36 rubble_asphalt
-    0u   // 37 rubble_door_steel
+    0u,  //  5 door
+    0u,  //  6 hub_pad
+    0u,  //  7 plaster
+    0u,  //  8 parquet
+    0u,  //  9 shop_shutter
+    0u,  // 10 lino
+    0u,  // 11 factory_wall
+    0u,  // 12 tread
+    0u,  // 13 rust
+    0u,  // 14 rubble
+    0u,  // 15 pipe_metal
+    1u,  // 16 neon_tube
+    1u,  // 17 glass
+    1u,  // 18 toxic_gas
+    0u,  // 19 asphalt
+    0u,  // 20 door_steel
+    0u,  // 21 door_hermetic
+    0u,  // 22 rubble_concrete
+    0u,  // 23 rubble_soil
+    0u,  // 24 rubble_slab_tan
+    0u,  // 25 rubble_plaster
+    0u,  // 26 rubble_parquet
+    0u,  // 27 rubble_shop_shutter
+    0u,  // 28 rubble_lino
+    0u,  // 29 rubble_factory_wall
+    0u,  // 30 rubble_tread
+    0u,  // 31 rubble_rust
+    0u,  // 32 rubble_pipe_metal
+    0u,  // 33 rubble_neon_tube
+    0u,  // 34 rubble_glass
+    0u,  // 35 rubble_asphalt
+    0u   // 36 rubble_door_steel
 );
 
 // СРЕДЫ (CANON S16): x = flow (0 = твёрдое, 1 = вода),
@@ -364,128 +357,125 @@ const uint kMatLightPass[38] = uint[38](
 // кванта, калибровка — одиночный квант газа живёт ~1 с).
 // Читатель — автомат материи; движение НЕ читает kMatPhase
 // (метка для геймплейных предикатов — S16.2).
-const vec3 kMatMedium[38] = vec3[38](
+const vec3 kMatMedium[37] = vec3[37](
     vec3(1.000, 1.000, 0.000000),  //  0 air
     vec3(0.000, 0.000, 0.000000),  //  1 concrete
     vec3(0.000, 0.000, 0.000000),  //  2 soil
     vec3(1.000, 0.500, 0.000960),  //  3 water
     vec3(0.000, 0.000, 0.000000),  //  4 slab_tan
-    vec3(0.000, 0.000, 0.000000),  //  5 extract
-    vec3(0.000, 0.000, 0.000000),  //  6 door
-    vec3(0.000, 0.000, 0.000000),  //  7 hub_pad
-    vec3(0.000, 0.000, 0.000000),  //  8 plaster
-    vec3(0.000, 0.000, 0.000000),  //  9 parquet
-    vec3(0.000, 0.000, 0.000000),  // 10 shop_shutter
-    vec3(0.000, 0.000, 0.000000),  // 11 lino
-    vec3(0.000, 0.000, 0.000000),  // 12 factory_wall
-    vec3(0.000, 0.000, 0.000000),  // 13 tread
-    vec3(0.000, 0.000, 0.000000),  // 14 rust
-    vec3(1.000, 0.000, 0.000533),  // 15 rubble
-    vec3(0.000, 0.000, 0.000000),  // 16 pipe_metal
-    vec3(0.000, 0.000, 0.000000),  // 17 neon_tube
-    vec3(0.000, 0.000, 0.000000),  // 18 glass
-    vec3(0.000, 0.500, 0.031250),  // 19 toxic_gas
-    vec3(0.000, 0.000, 0.000000),  // 20 asphalt
-    vec3(0.000, 0.000, 0.000000),  // 21 door_steel
-    vec3(0.000, 0.000, 0.000000),  // 22 door_hermetic
-    vec3(1.000, 0.000, 0.000533),  // 23 rubble_concrete
-    vec3(1.000, 0.000, 0.000800),  // 24 rubble_soil
-    vec3(1.000, 0.000, 0.000582),  // 25 rubble_slab_tan
-    vec3(1.000, 0.000, 0.001600),  // 26 rubble_plaster
-    vec3(1.000, 0.000, 0.001829),  // 27 rubble_parquet
-    vec3(1.000, 0.000, 0.000164),  // 28 rubble_shop_shutter
-    vec3(1.000, 0.000, 0.001067),  // 29 rubble_lino
-    vec3(1.000, 0.000, 0.000164),  // 30 rubble_factory_wall
-    vec3(1.000, 0.000, 0.000164),  // 31 rubble_tread
-    vec3(1.000, 0.000, 0.000246),  // 32 rubble_rust
-    vec3(1.000, 0.000, 0.000164),  // 33 rubble_pipe_metal
-    vec3(1.000, 0.000, 0.000914),  // 34 rubble_neon_tube
-    vec3(1.000, 0.000, 0.000512),  // 35 rubble_glass
-    vec3(1.000, 0.000, 0.000557),  // 36 rubble_asphalt
-    vec3(1.000, 0.000, 0.000441)   // 37 rubble_door_steel
+    vec3(0.000, 0.000, 0.000000),  //  5 door
+    vec3(0.000, 0.000, 0.000000),  //  6 hub_pad
+    vec3(0.000, 0.000, 0.000000),  //  7 plaster
+    vec3(0.000, 0.000, 0.000000),  //  8 parquet
+    vec3(0.000, 0.000, 0.000000),  //  9 shop_shutter
+    vec3(0.000, 0.000, 0.000000),  // 10 lino
+    vec3(0.000, 0.000, 0.000000),  // 11 factory_wall
+    vec3(0.000, 0.000, 0.000000),  // 12 tread
+    vec3(0.000, 0.000, 0.000000),  // 13 rust
+    vec3(1.000, 0.000, 0.000533),  // 14 rubble
+    vec3(0.000, 0.000, 0.000000),  // 15 pipe_metal
+    vec3(0.000, 0.000, 0.000000),  // 16 neon_tube
+    vec3(0.000, 0.000, 0.000000),  // 17 glass
+    vec3(0.000, 0.500, 0.031250),  // 18 toxic_gas
+    vec3(0.000, 0.000, 0.000000),  // 19 asphalt
+    vec3(0.000, 0.000, 0.000000),  // 20 door_steel
+    vec3(0.000, 0.000, 0.000000),  // 21 door_hermetic
+    vec3(1.000, 0.000, 0.000533),  // 22 rubble_concrete
+    vec3(1.000, 0.000, 0.000800),  // 23 rubble_soil
+    vec3(1.000, 0.000, 0.000582),  // 24 rubble_slab_tan
+    vec3(1.000, 0.000, 0.001600),  // 25 rubble_plaster
+    vec3(1.000, 0.000, 0.001829),  // 26 rubble_parquet
+    vec3(1.000, 0.000, 0.000164),  // 27 rubble_shop_shutter
+    vec3(1.000, 0.000, 0.001067),  // 28 rubble_lino
+    vec3(1.000, 0.000, 0.000164),  // 29 rubble_factory_wall
+    vec3(1.000, 0.000, 0.000164),  // 30 rubble_tread
+    vec3(1.000, 0.000, 0.000246),  // 31 rubble_rust
+    vec3(1.000, 0.000, 0.000164),  // 32 rubble_pipe_metal
+    vec3(1.000, 0.000, 0.000914),  // 33 rubble_neon_tube
+    vec3(1.000, 0.000, 0.000512),  // 34 rubble_glass
+    vec3(1.000, 0.000, 0.000557),  // 35 rubble_asphalt
+    vec3(1.000, 0.000, 0.000441)   // 36 rubble_door_steel
 );
 
-const uint kMatPhase[38] = uint[38](
+const uint kMatPhase[37] = uint[37](
     2u,  //  0 air
     0u,  //  1 concrete
     0u,  //  2 soil
     1u,  //  3 water
     0u,  //  4 slab_tan
-    0u,  //  5 extract
-    0u,  //  6 door
-    0u,  //  7 hub_pad
-    0u,  //  8 plaster
-    0u,  //  9 parquet
-    0u,  // 10 shop_shutter
-    0u,  // 11 lino
-    0u,  // 12 factory_wall
-    0u,  // 13 tread
-    0u,  // 14 rust
-    0u,  // 15 rubble
-    0u,  // 16 pipe_metal
-    0u,  // 17 neon_tube
-    0u,  // 18 glass
-    2u,  // 19 toxic_gas
-    0u,  // 20 asphalt
-    0u,  // 21 door_steel
-    0u,  // 22 door_hermetic
-    0u,  // 23 rubble_concrete
-    0u,  // 24 rubble_soil
-    0u,  // 25 rubble_slab_tan
-    0u,  // 26 rubble_plaster
-    0u,  // 27 rubble_parquet
-    0u,  // 28 rubble_shop_shutter
-    0u,  // 29 rubble_lino
-    0u,  // 30 rubble_factory_wall
-    0u,  // 31 rubble_tread
-    0u,  // 32 rubble_rust
-    0u,  // 33 rubble_pipe_metal
-    0u,  // 34 rubble_neon_tube
-    0u,  // 35 rubble_glass
-    0u,  // 36 rubble_asphalt
-    0u   // 37 rubble_door_steel
+    0u,  //  5 door
+    0u,  //  6 hub_pad
+    0u,  //  7 plaster
+    0u,  //  8 parquet
+    0u,  //  9 shop_shutter
+    0u,  // 10 lino
+    0u,  // 11 factory_wall
+    0u,  // 12 tread
+    0u,  // 13 rust
+    0u,  // 14 rubble
+    0u,  // 15 pipe_metal
+    0u,  // 16 neon_tube
+    0u,  // 17 glass
+    2u,  // 18 toxic_gas
+    0u,  // 19 asphalt
+    0u,  // 20 door_steel
+    0u,  // 21 door_hermetic
+    0u,  // 22 rubble_concrete
+    0u,  // 23 rubble_soil
+    0u,  // 24 rubble_slab_tan
+    0u,  // 25 rubble_plaster
+    0u,  // 26 rubble_parquet
+    0u,  // 27 rubble_shop_shutter
+    0u,  // 28 rubble_lino
+    0u,  // 29 rubble_factory_wall
+    0u,  // 30 rubble_tread
+    0u,  // 31 rubble_rust
+    0u,  // 32 rubble_pipe_metal
+    0u,  // 33 rubble_neon_tube
+    0u,  // 34 rubble_glass
+    0u,  // 35 rubble_asphalt
+    0u   // 36 rubble_door_steel
 );
 
 // Плотность кг/м³ — третий параметр движения материи
 // (CANON S16.2: тяжелее — тонет, легче — всплывает).
 // Зеркало kMatDensity [world/material_props.h].
-const float kMatDensity[38] = float[38](
+const float kMatDensity[37] = float[37](
     0.0   ,  //  0 air
     2400.0,  //  1 concrete
     1600.0,  //  2 soil
     1000.0,  //  3 water
     2200.0,  //  4 slab_tan
-    2400.0,  //  5 extract
-    7800.0,  //  6 door
-    2400.0,  //  7 hub_pad
-    800.0 ,  //  8 plaster
-    700.0 ,  //  9 parquet
-    7800.0,  // 10 shop_shutter
-    1200.0,  // 11 lino
-    7800.0,  // 12 factory_wall
-    7800.0,  // 13 tread
-    5200.0,  // 14 rust
-    1800.0,  // 15 rubble
-    7800.0,  // 16 pipe_metal
-    1400.0,  // 17 neon_tube
-    2500.0,  // 18 glass
-    3.0   ,  // 19 toxic_gas
-    2300.0,  // 20 asphalt
-    2900.0,  // 21 door_steel
-    7800.0,  // 22 door_hermetic
-    1800.0,  // 23 rubble_concrete
-    1200.0,  // 24 rubble_soil
-    1650.0,  // 25 rubble_slab_tan
-    600.0 ,  // 26 rubble_plaster
-    525.0 ,  // 27 rubble_parquet
-    5850.0,  // 28 rubble_shop_shutter
-    900.0 ,  // 29 rubble_lino
-    5850.0,  // 30 rubble_factory_wall
-    5850.0,  // 31 rubble_tread
-    3900.0,  // 32 rubble_rust
-    5850.0,  // 33 rubble_pipe_metal
-    1050.0,  // 34 rubble_neon_tube
-    1875.0,  // 35 rubble_glass
-    1725.0,  // 36 rubble_asphalt
-    2175.0   // 37 rubble_door_steel
+    7800.0,  //  5 door
+    2400.0,  //  6 hub_pad
+    800.0 ,  //  7 plaster
+    700.0 ,  //  8 parquet
+    7800.0,  //  9 shop_shutter
+    1200.0,  // 10 lino
+    7800.0,  // 11 factory_wall
+    7800.0,  // 12 tread
+    5200.0,  // 13 rust
+    1800.0,  // 14 rubble
+    7800.0,  // 15 pipe_metal
+    1400.0,  // 16 neon_tube
+    2500.0,  // 17 glass
+    3.0   ,  // 18 toxic_gas
+    2300.0,  // 19 asphalt
+    2900.0,  // 20 door_steel
+    7800.0,  // 21 door_hermetic
+    1800.0,  // 22 rubble_concrete
+    1200.0,  // 23 rubble_soil
+    1650.0,  // 24 rubble_slab_tan
+    600.0 ,  // 25 rubble_plaster
+    525.0 ,  // 26 rubble_parquet
+    5850.0,  // 27 rubble_shop_shutter
+    900.0 ,  // 28 rubble_lino
+    5850.0,  // 29 rubble_factory_wall
+    5850.0,  // 30 rubble_tread
+    3900.0,  // 31 rubble_rust
+    5850.0,  // 32 rubble_pipe_metal
+    1050.0,  // 33 rubble_neon_tube
+    1875.0,  // 34 rubble_glass
+    1725.0,  // 35 rubble_asphalt
+    2175.0   // 36 rubble_door_steel
 );

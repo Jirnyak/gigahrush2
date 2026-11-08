@@ -1,7 +1,8 @@
 #include "game/economy.h"
 
 #include "core/rng.h"          // hash2 — the per-branch credit jitter
-#include "game/extraction.h"   // RunLedger: `banked` is the account this bank moves
+// RunLedger живёт в своём же заголовке ([economy.h]) — экстракшн-пад снесён
+// 2026-11-08, кошелёк и глубина переехали домой к банку.
 #include "game/item_table.h"   // kItemRuble + inventory_give — the teller mints coins
 
 namespace giga::game {
@@ -241,6 +242,15 @@ std::int32_t teller_withdraw_cash(Inventory& inv, RunLedger& led,
     }
     led.banked -= landed;
     return landed;
+}
+
+void record_floor(RunLedger& led, int floorZ) {
+    const int a = floorZ < 0 ? -floorZ : floorZ;
+    const int best = led.deepestFloor < 0 ? -led.deepestFloor : led.deepestFloor;
+    if (a > best) {
+        led.deepestFloor = floorZ;
+        led.deepestBand = economy_band(floorZ);
+    }
 }
 
 } // namespace giga::game

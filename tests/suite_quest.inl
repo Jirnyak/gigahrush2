@@ -44,7 +44,6 @@
 #include <vector>
 
 #include "core/tick.h"        // kSimHz / kSimStepMs — never a bare literal
-#include "game/extraction.h"
 #include "game/item_table.h"
 #include "game/mob_spawn.h"   // samosbor_fog_roster — the real habitat filter
 #include "game/mob_table.h"

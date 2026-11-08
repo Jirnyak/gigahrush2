@@ -538,19 +538,9 @@ void stamp_lattice(MacroGrid& g, SubField<CellType>& sm, int number) {
                         g.clear_cell(x, y, z);
                         sm.drop_page(macro_index(x, y, z));
                     }
-            if (number == 0) {
-                // Extraction marker: the walking floor of storey 0 is the attic
-                // sandwich at z=127 — recolour it, plus whatever stands at z=0.
-                for (int dy = -kFastLobbyR; dy <= kFastLobbyR; ++dy)
-                    for (int dx = -kFastLobbyR; dx <= kFastLobbyR; ++dx) {
-                        const int x = wrap_macro(cx + dx), y = wrap_macro(cy + dy);
-                        for (const int z : {0, kMacroDim - 1})
-                            if (g.cell(x, y, z) != kCellAir) {
-                                sm.drop_page(macro_index(x, y, z));
-                                g.set_cell(x, y, z, kMatExtract);
-                            }
-                    }
-            }
+            // Краска экстракшн-лобби (kMatExtract кольцом на этаже 0) снесена
+            // вместе со всем падом-банком (владелец 2026-11-08): легаси-луп,
+            // ядру не принадлежал.
         }
     }
 }

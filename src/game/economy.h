@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // What was already here, and what the reference adds
 // ---------------------------------------------------------------------------
-// Read [barter.h] and [extraction.h] before this file. Between them the build already
+// Read [barter.h] before this file. Between them the build already
 // ships a working two-sided economy: `deposit_valuables` turns carried loot into
 // `RunLedger::banked` at the pad, and the barter deal turns goods into ruble ITEMS
 // and back at the reference's 26% round-trip spread ([conversation.md] — this
@@ -51,9 +51,9 @@
 // The premise correction: `banked` is ALREADY safe
 // ---------------------------------------------------------------------------
 // "A place to put roubles so death does not take everything" describes a gap this
-// build does not have. `record_death` ([extraction.h]) adds `at_risk_value(lost)` —
-// the value of the dead row's INVENTORY — to `lostToDeath` and never touches
-// `banked`. SINCE THE RUBLE ITEM LANDED (v14) the cash/account split is real:
+// build does not have: смерть и так оставляет вещи в мёртвой строке пула и
+// никогда не трогала `banked` (скоровый учёт потерь умер со сносом пада,
+// 2026-11-08). SINCE THE RUBLE ITEM LANDED (v14) the cash/account split is real:
 // pocket rubles are inventory, AT RISK like any loot, and `banked` is the safe
 // account the Duty clerk's teller verbs below move them into and out of. Death
 // with a wad in the pocket now loses the wad — the risk is not manufactured, it
@@ -125,7 +125,7 @@
 // Integer roubles, and the one asymmetry that matters
 // ---------------------------------------------------------------------------
 // There is no float currency and there will not be one: a float balance drifts across
-// a save/load boundary and the whole ledger is integer ([extraction.h] `banked` is
+// a save/load boundary and the whole ledger is integer (RunLedger выше: `banked` is
 // `int64_t`). Rates are **basis points** and interest is `principal * bp / 10000`.
 //
 // Deposit interest rounds DOWN, loan interest rounds UP. That is not a rounding
@@ -154,7 +154,35 @@
 
 namespace giga::game {
 
-struct RunLedger;   // [extraction.h]; only ever taken by reference here
+// КОШЕЛЁК И ГЛУБИНА РАНА. Жил в extraction.h как счёт «Спуска и Экстракции»
+// — весь экстракшн-пад (кольцо-банк вокруг лифта, авто-депозит по позиции,
+// at_risk/risk_share-кривая жадности) СНЕСЁН решением владельца 2026-11-08
+// («легаси, ядро должно быть чистым»). Выжили ровно два поля, на которых
+// стоят ЖИВЫЕ системы:
+//   banked      — безопасный рублёвый счёт: его двигают теллер-глаголы банка
+//                 ниже, в него платят квесты ([quest.h] reward) и контракты;
+//   deepestFloor/deepestBand — пройденная глубина: Descend-цели квестов и
+//                 контрактов меряются ею (quest_check/contract_check).
+// Скоровая половина (lostToDeath/bestHaul/deposits/deaths) умерла с падом:
+// цену смерти несёт сам мир (possess_a_survivor — вещи остаются в мёртвой
+// записи пула), счётчик поверх неё был витриной снесённого лупа.
+//
+// 64-bit `banked` на месте: кап E4 = 250 000 руб за предмет, длинная сессия
+// уводит сумму за int32. Сериализуется полями ([save.h] visit_ledger);
+// размер пинится — рост только руками вместе с kSaveVersion.
+struct RunLedger {
+    std::int64_t banked = 0;
+    std::int32_t deepestFloor = 0; // подписанный: подвал [-127, +127] — та половина, что важна
+    std::uint8_t deepestBand = 0;  // economy_band(deepestFloor)
+};
+static_assert(sizeof(RunLedger) == 16,
+              "RunLedger — счёт рана, сейв пинит его размер; рост — руками "
+              "вместе с kSaveVersion в той же правке");
+static_assert(alignof(RunLedger) == 8);
+
+// Отметить достигнутую глубину. |z|: глубина двунаправленная — крыша на +50
+// так же далека от безопасности, как подвал на -50.
+void record_floor(RunLedger& led, int floorZ);
 
 // ---------------------------------------------------------------------------
 // The generated table (data/economy.csv -> tools/gen_economy_table.py)

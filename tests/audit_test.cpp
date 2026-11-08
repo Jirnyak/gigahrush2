@@ -50,7 +50,6 @@
 #include "game/event_bus.h"
 #include "game/floor_gen.h"
 #include "game/floor_registry.h"
-#include "game/extraction.h"
 #include "game/faction.h"
 #include "game/faction_relations.h"
 #include "game/floor_spec.h"

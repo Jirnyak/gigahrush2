@@ -84,7 +84,7 @@ static void test_carve_roll() {
     CHECK(kMatHardness[kCellAir] == 0);
     CHECK(kMatHardness[kMatDoor] == kHardnessUnbreakable);
     CHECK(kMatHardness[kMatHubPad] == kHardnessUnbreakable);
-    CHECK(kMatHardness[kMatExtract] == kHardnessUnbreakable);
+    CHECK(kMatHardness[kMatHubPad] == kHardnessUnbreakable);
     CHECK(material_hardness(kMatCount) == kHardnessUnbreakable);
     CHECK(material_hardness(kMatConcrete) == 256);
 }
