@@ -218,7 +218,7 @@ invariant that keeps the 2²⁰ population from growing per visit.
   attached on embodiment (the player carries them too; the driver just skips
   camera-holders). All exercised headless. Goal-directed `route_step` steering
   toward a specific target cell ([nav.md](nav.md)) waits on the #13 content tables
-  to give intents reachable goals.
+  to give intents reachable goals. **ОБНОВЛЕНО 2026-11-08 (CANON S24):** цикл «захотеть → прийти → СДЕЛАТЬ» замкнут, и замкнут он НЕ через целеуказание: деяние нужды висит на СОСТОЯНИИ «стою там, где предлагают» (`src/game/serve.{h,cpp}`), потому что замер назвал цену альтернативы — прибытие обслуживало бы 4 тела из 379. Нужды у NPC больше не только убывают: `needs_satisfy(Needs&, VerbId, amount)` — одна дверь на возможность места и на лежащий предмет, и очередь пищеварения заполняется ОБА пути.
 
 ## Baked, not searched
 

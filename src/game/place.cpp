@@ -13,6 +13,7 @@
 #include "ecs/components.h"   // Transform, Velocity
 #include "game/embody.h"      // NpcRef
 #include "game/needs.h"       // needs_row_for — ОДНА строка нужд на всех решателей
+#include "game/serve.h"       // деяние нужды на месте (S24) — политика там
 #include "world/gravity.h"    // GravityFrame / regime_frame — плоскость ходьбы
 #include "world/nav.h"        // nav::kNavDir — словарь шести направлений шага
 #include "world/types.h"      // kCellSize, kMacroDim, wrap_macro
@@ -221,10 +222,15 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
 // ХОД К ВЫБРАННОМУ МЕСТУ
 // ---------------------------------------------------------------------------
 
-PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
-                            LayerId layer, double now,
-                            const GravityField* gravity, const ZoneNav* zones) {
+PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
+                            LayerId layer, double now, std::uint64_t tick,
+                            const GravityField* gravity, const ZoneNav* zones,
+                            ServeTick* serve, EventBus* bus) {
     PlaceTick out;
+    // Телеметрия деяния опциональна у вызывающего, но не внутри: ветки «если
+    // счётчик дали» размножили бы условия по всему проходу.
+    ServeTick serveSink;
+    ServeTick& srv = serve != nullptr ? *serve : serveSink;
     // Непостроенный нав — no-op, не UB: тот же контракт, которым живут
     // `wander_step` и `ai_patrol_step`. Пока бейк в полёте тела ходят вандером,
     // как всегда. До 2026-10-12 этой проверкой был `fine.flow.empty()` —
@@ -232,6 +238,22 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
     // больше нет (§88/F.2 шаг 3).
     if (zones == nullptr || !zones->built()) return out;
     if (fr.roomAt.empty() || fr.list.empty()) return out;
+
+    // ПУЛЫ ПРОГРЕТЫ ДО ОТКРЫТИЯ ВИДА, и это не оптимизация, а снятие класса
+    // UB. Внутри обхода проход СОЗДАЁТ компоненты (`ErrandPlan` лениво,
+    // `Acting` — деяние) и может позвать `apply_damage` (цена сомнительной
+    // еды), а тот крепит `Dead`. РОЖДЕНИЕ НОВОГО ПУЛА растит контейнер пулов
+    // реестра и дангл'ит указатели, которые держит ЖИВОЙ вид, — дословно тот
+    // дефект, ради которого `mob_attack_step` разрезан на две фазы
+    // ([game/combat.cpp]). Существующий пул от вставки элемента не переезжает,
+    // поэтому достаточно, чтобы к моменту открытия вида все три пула уже БЫЛИ.
+    //
+    // Шапка ниже утверждала обратное («эмплейс компоненты, которой вид не
+    // обходит, итерацию не ломает») — утверждение верно для ЭЛЕМЕНТА и неверно
+    // для ПЕРВОГО элемента нового рода; аудит это и нашёл.
+    (void)reg.storage<ErrandPlan>();
+    (void)reg.storage<Acting>();
+    (void)reg.storage<Dead>();
 
     // Фрейм гравитации — свойство мира, не тела; null держит NegZ побитово
     // (тесты), Custom разрешается вектором. Дословно правило `ai_patrol_step`.
@@ -247,6 +269,18 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         else z = 0.0f;
         return vec3{x, y, z};
     };
+    // ДЕРЖАТЬ НА МЕСТЕ (S24): забрать токен и обнулить скорость В ПЛОСКОСТИ
+    // ХОДЬБЫ — ось гравитации не трогаем, её владелец физика. Владеемый ноль
+    // здесь законен и необходим: «замирающий NPC есть дефект» (S13.2) сказано
+    // про тело БЕЗ решения, а это тело решение как раз ИСПОЛНЯЕТ. Не обнулить
+    // — и `wander_step`, пропустив тело по токену, оставит ему прежнюю
+    // скорость, то есть деяние свершится на ходу.
+    const auto hold_still = [&gf](AiBrain& b, Velocity& vel) {
+        b.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
+        if (gf.axis != 0) vel.v.x = 0.0f;
+        if (gf.axis != 1) vel.v.y = 0.0f;
+        if (gf.axis != 2) vel.v.z = 0.0f;
+    };
 
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
     for (auto e : view) {
@@ -258,9 +292,20 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // (`ai_equip_step` снимал фонарь из руки игрока, bugs.md Б1).
         if (decider_of(reg, e) != Decider::Resident) continue;
         AiBrain& brain = view.get<AiBrain>(e);
-        // Тело уже под токеном — им владеет либо бегство (`ai_step`), либо
+        // Тело под ЧУЖИМ токеном — им владеет либо бегство (`ai_step`), либо
         // патруль. Угроза и наряд старше дела; не вмешиваемся.
-        if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+        //
+        // Сравнение именно с `Ai`, а не «не Wander»: `Errand` — СВОЙ токен
+        // этого прохода (ведение или деяние), и принять его за угрозу значило
+        // бы рвать собственное деяние каждый тик (S24, довод у enum'а).
+        if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
+            // ...но открытое ДЕЯНИЕ при этом рвётся (S24, закон 5): иначе
+            // тело доело бы на бегу — окно закрылось бы само и уронило
+            // эффект, пока тело спасается. Боевое окно эта причина не рвёт:
+            // `kBreakThreat` в маске боевых строк не стоит.
+            serve_break_threat(reg, e, tick, srv);
+            continue;
+        }
 
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!pool.valid(id)) continue;
@@ -271,9 +316,13 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         if (!reg.all_of<ErrandPlan>(e)) reg.emplace<ErrandPlan>(e);
         ErrandPlan& plan = reg.get<ErrandPlan>(e);
 
-        const int cx = wrap_macro(static_cast<int>(std::floor(tr.pos.x / kCellSize)));
-        const int cy = wrap_macro(static_cast<int>(std::floor(tr.pos.y / kCellSize)));
-        const int cz = wrap_macro(static_cast<int>(std::floor(tr.pos.z / kCellSize)));
+        // ОДНА ДВЕРЬ «метры → клетка тора» (`cell_of_metres@world/types.h`):
+        // здесь эта свёртка была выписана в строку трижды, а у комнаты предмета
+        // (`room_at_pos`) — ЧЕТВЁРТЫЙ раз и с усечением к нулю вместо `floor`,
+        // то есть решение и мир расходились на шве тора.
+        const int cx = cell_of_metres(tr.pos.x);
+        const int cy = cell_of_metres(tr.pos.y);
+        const int cz = cell_of_metres(tr.pos.z);
 
         const std::uint32_t idSeed = identity_seed(id);
         const auto stagger = [&]() {
@@ -313,40 +362,62 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
                 plan.room = kNoRoom;
                 plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
-                // Дошёл — отпускаем тело. Держать его здесь силой нельзя:
-                // замирающий NPC есть дефект (S13.2), а деяние на месте
-                // (съесть, лечь) придёт расходом запаса (S12.5), не стоянием.
-                ++out.idle;
-                continue;
+                // Дошёл — цель снята, и тело падает в ветку «сумма сказала
+                // оставайся» НИЖЕ, то есть прибытие и есть вход в деяние
+                // (S24). Своей ветки у прибытия нет СОЗНАТЕЛЬНО: деяние
+                // вешается на СОСТОЯНИЕ «стою там, где предлагают», а не на
+                // событие прихода, — замер показал, что 375 тел из 379 стоят
+                // в коридорах и никуда не идут, то есть событие прихода
+                // обслуживало бы четыре тела из трёхсот семидесяти девяти.
             }
         }
 
         // ВЫБОР — ПО СОБЫТИЮ: только когда цели нет и стаггер истёк.
         if (plan.room == kNoRoom) {
-            if (now < static_cast<double>(plan.nextPickAt)) {
+            // (1) ЗАНЯТ ДЕЯНИЕМ — сумму не спрашиваем вовсе. Порядок не
+            // вкусовой: занятость монотонна (S22.1), и если спросить сумму
+            // раньше, легшее спать тело получило бы на ближайшем кадансе
+            // новую цель и ушло бы досыпать НА ХОДУ, а окно закрылось бы само
+            // и уронило эффект по дороге.
+            if (serve_busy(ServeCtx{reg, pool, fr, bus, tick}, e, id, tr.pos,
+                           layer, srv)) {
+                hold_still(brain, view.get<Velocity>(e));
+                ++out.serving;
+                continue;
+            }
+            if (now >= static_cast<double>(plan.nextPickAt)) {
+                const Needs row = needs_row_for(pool, id);
+                DemandE3 demand[kVerbCount];
+                demand_from_needs(row, demand);
+                demand_add_health(static_cast<float>(pool.hp(id)),
+                                  static_cast<float>(pool.max_hp(id)), demand);
+                const PlacePick pick = place_pick(fr, demand, cx, cy, cz);
+                out.judged += pick.judged;
+                out.bins += pick.bins;
+                plan.nextPickAt = stagger();
+                if (pick.room != kNoRoom) {
+                    plan.room = pick.room;
+                    plan.verb = pick.verb;  // ярлык пары — ЗАЧЕМ тело идёт
+                    ++plan.picks;
+                    ++out.picked;
+                    goal = room_of(fr, plan.room);
+                }
+                // Иначе «ничто не обгоняет место под ногами» — законный
+                // ответ, а не неудача, и дальше его обслуживает деяние.
+            }
+            // (3) ДЕЯНИЕ НА МЕСТЕ — ТОЛЬКО ПО ОТВЕТУ СУММЫ (S24, закон 1).
+            // Цели нет ⟺ последний ответ суммы был «оставайся», поэтому
+            // деяние ей не противоречит; тело с целью сюда не попадает и идёт.
+            if (plan.room == kNoRoom) {
+                if (serve_begin(ServeCtx{reg, pool, fr, bus, tick}, e, id,
+                                tr.pos, srv)) {
+                    hold_still(brain, view.get<Velocity>(e));
+                    ++out.serving;
+                    continue;
+                }
                 ++out.idle;
                 continue;
             }
-            const Needs row = needs_row_for(pool, id);
-            DemandE3 demand[kVerbCount];
-            demand_from_needs(row, demand);
-            demand_add_health(static_cast<float>(pool.hp(id)),
-                              static_cast<float>(pool.max_hp(id)), demand);
-            const PlacePick pick = place_pick(fr, demand, cx, cy, cz);
-            out.judged += pick.judged;
-            out.bins += pick.bins;
-            plan.nextPickAt = stagger();
-            if (pick.room == kNoRoom) {
-                // Ничто не обгоняет место под ногами — законный ответ, а не
-                // неудача: тело гуляет вандером до следующего вопроса.
-                ++out.idle;
-                continue;
-            }
-            plan.room = pick.room;
-            plan.verb = pick.verb;  // ярлык пары — ЗАЧЕМ тело идёт
-            ++plan.picks;
-            ++out.picked;
-            goal = room_of(fr, plan.room);
         }
         if (goal == nullptr) {
             ++out.idle;
@@ -457,7 +528,12 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, const FloorRooms& fr,
         // ЗАБОР ТОКЕНА — только теперь, когда направление ЕСТЬ. Отсюда и до
         // конца тика этот проход — единственный писатель горизонтальной
         // `Velocity` этого тела.
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+        //
+        // Токен СВОЙ (`Errand`), а не занятый у бегства: дело — это ходьба, а
+        // не паника (S24). Для `wander_step` и `faction_feud_step` разницы
+        // нет — их guard спрашивает «не Wander»; разница есть у этого прохода,
+        // который по `Ai` узнаёт УГРОЗУ.
+        brain.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
         ++out.walking;
         Velocity& vel = view.get<Velocity>(e);
         // ДЕЛО — ЭТО ХОДЬБА, а не бегство: `kErrandSpeed` в точности равен

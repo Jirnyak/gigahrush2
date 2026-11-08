@@ -32,9 +32,11 @@
 //
 // Включается из game_test.cpp, пользуется его CHECK.
 
+#include "game/action.h"      // Acting/acting_busy — занятость деянием (S22)
 #include "game/ai.h"          // ai_init — проход требует AiBrain
 #include "game/embody.h"      // embody
 #include "game/place.h"
+#include "game/serve.h"       // ServeTick/kVerbAction — деяние нужды (S24)
 #include "game/prop_table.h"  // kPropVerbs — «койка 17» из живых данных
 #include "game/room.h"
 #include "game/room_supply.h" // supply_add_prop — ОСНАЩЕНИЕ настоящей дверью
@@ -664,7 +666,7 @@ static void test_place_errand_walks() {
     // До 2026-10-12 этой сценой был «пустой решёточный бейк»; теперь — пустые
     // зоны, и проверка та же: тело не тронуто, счётчики нули.
     const PlaceTick none =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(none.considered == 0);
     CHECK(none.walking == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
@@ -676,7 +678,7 @@ static void test_place_errand_walks() {
     // ровно ноль по y.
     arm_zones_errand(zones, boundary, bodyZone, home);
     const PlaceTick walk =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(walk.considered == 1);
     CHECK(walk.picked == 1);
     CHECK(walk.walking == 1);
@@ -704,7 +706,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
     const PlaceTick step =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(step.walking == 1);
     CHECK(step.picked == 0); // цель уже выбрана — пере-выбора не было
     CHECK(std::fabs(reg.get<Velocity>(e).v.x - kErrandSpeed) < 1e-4f);
@@ -724,7 +726,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
     const PlaceTick stepup =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(stepup.walking == 0);
     CHECK(stepup.idle == 1);
     CHECK(stepup.unreachable == 0); // это не отказ маршрута, а отказ ВЕСТИ
@@ -749,7 +751,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
     const PlaceTick off =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(off.offnav == 1);
     CHECK(off.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == home); // цель НЕ потеряна
@@ -761,7 +763,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Ai);
     const PlaceTick owned =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(owned.considered == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
@@ -773,51 +775,151 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     zones.flow.dir.assign(kMacroCells, kZoneFlowNone);
     const PlaceTick lost =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones);
     CHECK(lost.unreachable == 1);
     CHECK(lost.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == kNoRoom);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     CHECK(!ai_owns_motion(reg, e));
 
-    // ПРИБЫЛ: тело, стоящее в своей цели, отпускается и больше не ведётся.
+    // ПРИБЫЛ — И ТУТ ЖЕ ДЕЛАЕТ ДЕЛО (S24). ЗАКОН СМЕНИЛСЯ 2026-11-08: прежде
+    // прибывшее тело отпускалось тем же тиком («деяние придёт расходом запаса,
+    // не стоянием»), и это и была разомкнутая половина цикла нужд. Теперь
+    // цель снимается, а тело падает в деяние над предложением места, то есть
+    // ДЕРЖИТСЯ: токен забран, скорость в плоскости ходьбы обнулена.
+    //
+    // Сентинель здесь проверяет РОВНО ОБРАТНОЕ прежнему: он обязан ИСЧЕЗНУТЬ
+    // по обеим тангенциальным осям (x и y), потому что держать — значит писать
+    // ноль, а не «не трогать».
     arm_zones_errand(zones, boundary, bodyZone, home);
     reg.get<ErrandPlan>(e).room = home;
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
     reg.get<Transform>(e).pos =
         vec3{cell_centre(bx + 8), cell_centre(by), cell_centre(bz)};
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
+    ServeTick arriveServe{};
     const PlaceTick arrive =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/0, nullptr, &zones,
+                          &arriveServe);
     CHECK(arrive.arrived == 1);
     CHECK(arrive.walking == 0);
+    CHECK(arrive.serving == 1);
     CHECK(reg.get<ErrandPlan>(e).room == kNoRoom);
-    CHECK(reg.get<Velocity>(e).v.x == kSentX); // отпущен, а не заморожен
-    CHECK(!ai_owns_motion(reg, e));
+    CHECK(reg.get<Velocity>(e).v.x == 0.0f); // держат, а не отпускают
+    CHECK(reg.get<Velocity>(e).v.y == 0.0f);
+    CHECK(ai_owns_motion(reg, e));
+    CHECK(reg.get<AiBrain>(e).motion ==
+          static_cast<std::uint8_t>(MotionOwner::Errand));
+    // ...и это именно СОН, а не «что-нибудь»: строка действия берётся из
+    // обратного индекса таблицы, а не из головы теста.
+    CHECK(arriveServe.began == 1);
+    CHECK(arriveServe.byVerb[kVerbSleep] == 1);
+    CHECK(acting_what(reg.get<Acting>(e), ActSlot::Body, 0) ==
+          kVerbAction[kVerbSleep]);
+    CHECK(kActionDurMs[kVerbAction[kVerbSleep]] > 0u); // посылка стенда
 
-    // СЫТОЕ ТЕЛО НЕ ИДЁТ НИКУДА — стоя в собственной спальне с полным барахлом
-    // оно остаётся на месте, и это шкала, а не ветка «ничего не нашлось».
+    // СВОЁ ДЕЯНИЕ СЕБЯ НЕ РВЁТ — и это та мутация, которая нашла третьего
+    // владельца токена. Второй тик по тому же телу: токен уже `Errand`,
+    // окно обязано остаться открытым, а не быть сорванным «угрозой».
+    ServeTick secondServe{};
+    const PlaceTick second =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/1, nullptr, &zones,
+                          &secondServe);
+    CHECK(second.serving == 1);
+    CHECK(secondServe.holding == 1);
+    CHECK(secondServe.broke == 0);
+    CHECK(secondServe.began == 0); // окно монотонно: второго начала нет
+    CHECK(acting_busy(reg.get<Acting>(e), ActSlot::Body, 1));
+
+    // УГРОЗА СТАРШЕ ДЕЛА: токен забрало бегство — окно рвётся, и рвётся ДО
+    // контактного кадра, значит эффекта не было.
+    reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+    ServeTick threatServe{};
+    place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/2, nullptr, &zones,
+                      &threatServe);
+    CHECK(threatServe.broke == 1);
+    CHECK(!acting_busy(reg.get<Acting>(e), ActSlot::Body, 2));
+    CHECK(pool.needs(id).sleep == 0.0f); // сорванное деяние НЕ кормит
+    reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+
+    // УГРОЗА, ПРИШЕДШАЯ НА ПОСЛЕДНЕМ ТИКЕ ОКНА, ТОЖЕ НЕ КОРМИТ — и этот гейт
+    // поставлен на НАЙДЕННЫЙ АУДИТОМ дефект, а не на подтверждённое поведение.
+    // Контактный кадр деяния нужды стоит РОВНО в конце окна, а `break_action`
+    // по построению отказывает на окне, которое уже кончилось, — поэтому
+    // угроза в этот тик оставляла бит `applied` нулём, и эффект падал ПОЗЖЕ, в
+    // той комнате, где тело окажется после бегства. Прежняя проверка на этом
+    // месте (`threatServe.applied == 0` сразу после обрыва) была ТАВТОЛОГИЕЙ:
+    // в ветке угрозы эффект не падает ни в одной реализации.
+    reg.get<ErrandPlan>(e).room = kNoRoom;
+    reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
+    ServeTick lateBegin{};
+    place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10, nullptr, &zones,
+                      &lateBegin);
+    CHECK(lateBegin.began == 1);
+    const std::uint16_t dur =
+        act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
+    CHECK(dur > 1);
+    // Тик конца окна: эффект ещё НЕ снят (опроса не было), и в этот самый тик
+    // тело забирает угроза.
+    reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+    ServeTick lateThreat{};
+    place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10 + dur, nullptr,
+                      &zones, &lateThreat);
+    CHECK(lateThreat.broke == 1);
+    reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+    // ...и дальше его не кормит НИКОГДА: сколько ни опрашивай, бар не поехал.
+    ServeTick afterThreat{};
+    place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10 + dur * 2, nullptr,
+                      &zones, &afterThreat);
+    CHECK(afterThreat.applied == 0);
+    CHECK(pool.needs(id).sleep == 0.0f);
+    // ...зато НОВОЕ деяние начинается тем же тиком, и это не побочный эффект, а
+    // сам цикл: угроза ушла, тело по-прежнему не спало, место по-прежнему
+    // предлагает — значит делать.
+    CHECK(afterThreat.began == 1);
+
+    // СЫТОЕ ТЕЛО НЕ ИДЁТ НИКУДА И НИЧЕГО НЕ ДЕЛАЕТ — стоя в собственной
+    // спальне с полным барахлом оно остаётся на месте, и это шкала, а не
+    // ветка «ничего не нашлось». Вторая полярность деяния: предложение есть,
+    // спроса нет — значит `nothing`, а не `began`.
+    // ЧАСЫ ИДУТ ТОЛЬКО ВПЕРЁД, и сцена мерит НАЧАЛО, а не удержание: открытое
+    // окно прошлой сцены снимается явно. Поймано на себе — тик из прошлого
+    // `act_elapsed` читает как нуль ([game/action.h]), поэтому «сытое тело»
+    // мерило бы удержание чужого деяния.
+    reg.remove<Acting>(e);
     set_needs_satisfied(pool, id);
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
+    reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
+    ServeTick calmServe{};
     const PlaceTick calm =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10 + dur * 3,
+                          nullptr, &zones, &calmServe);
     CHECK(calm.considered == 1);
     CHECK(calm.picked == 0);
     CHECK(calm.walking == 0);
+    CHECK(calm.serving == 0);
     CHECK(calm.idle == 1);
+    CHECK(calmServe.began == 0);
+    CHECK(calmServe.nothing == 1);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
 
     // КАДАНС ПО СОБЫТИЮ: до истечения стаггера выбор НЕ пересчитывается — это
     // половина гейта цены (0.07 мс × 1000 тел × 125 Гц = 8.75 ядра).
+    // Тело при этом стоит в КОРИДОРЕ (x = bx, спальня в bx+8), поэтому и
+    // деяние ему недоступно — по МЕСТУ, и прибор называет это вслух.
     set_needs_sleepy(pool, id);
     reg.get<Transform>(e).pos = vec3{cell_centre(bx), cell_centre(by), cell_centre(bz)};
     reg.get<ErrandPlan>(e).room = kNoRoom;
     reg.get<ErrandPlan>(e).nextPickAt = 1000.0f;
+    ServeTick earlyServe{};
     const PlaceTick early =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10 + dur * 4,
+                          nullptr, &zones, &earlyServe);
     CHECK(early.picked == 0);
     CHECK(early.judged == 0); // ни одной комнаты не суждено — запрос не звали
     CHECK(early.idle == 1);
+    CHECK(earlyServe.began == 0);
+    CHECK(earlyServe.corridor == 1);
 
     // РАЗВИЛКА МОЗГОВ (S13.7a): за носителя камеры решает человек, проход его
     // не обслуживает. Мутация «убрать decider_of» красит эту проверку — и это
@@ -826,7 +928,8 @@ static void test_place_errand_walks() {
     reg.emplace<CameraTag>(e);
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     const PlaceTick human =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, nullptr, &zones);
+        place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10 + dur * 5,
+                          nullptr, &zones);
     CHECK(human.considered == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     reg.remove<CameraTag>(e);

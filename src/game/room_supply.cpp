@@ -10,11 +10,14 @@
 namespace giga::game {
 
 RoomId room_at_pos(const FloorRooms& fr, const vec3& pos) {
-    // Клетка 2 м: pos 83.0 -> клетка 41 (та же свёртка, что у всех
-    // потребителей сетки). wrap делает room_at.
-    return room_at(fr, static_cast<int>(pos.x * 0.5f),
-                   static_cast<int>(pos.y * 0.5f),
-                   static_cast<int>(pos.z * 0.5f));
+    // ОДНА ДВЕРЬ ПЕРЕВОДА (`cell_of_metres@world/types.h`), и это ИСПРАВЛЕНИЕ
+    // названного дефекта, а не косметика: здесь стояло `static_cast<int>(pos.x
+    // * 0.5f)`, то есть усечение К НУЛЮ, и −0.1 м давало клетку 0 вместо 127 —
+    // на шве тора вещь и тело молча попадали в чужую комнату. Решатель
+    // (`place_errand_step`) всё это время считал клетку через `floor` + wrap,
+    // так что расхождение было ещё и МЕЖДУ решением и миром.
+    return room_at(fr, cell_of_metres(pos.x), cell_of_metres(pos.y),
+                   cell_of_metres(pos.z));
 }
 
 void supply_add_item(FloorRooms& fr, RoomId room, std::uint16_t item,

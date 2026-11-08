@@ -505,4 +505,47 @@ ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {
     return out;
 }
 
+SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount) {
+    SatisfyResult out;
+    if (amount <= 0.0f) return out;
+    // Запас: бар РАСТЁТ, и сколько реально легло, отвечает `top_up` — тот же
+    // файловый хелпер, которым кладёт в бар `apply_consumable`. Своя копия
+    // клампа здесь была написана и СНЕСЕНА тем же часом: «что ЛАНДЕД, а не
+    // число на жестянке» — правило в три строки, и вторая его реализация
+    // рядом с первой есть ровно тот дефект, от которого правило и существует.
+    const auto fill = [&](float& bar) {
+        out.gained = top_up(bar, amount);
+        out.served = true;
+    };
+    switch (verb) {
+        case kVerbSleep:
+            fill(n.sleep);
+            break;
+        case kVerbEat:
+            fill(n.food);
+            // Что входит — то выходит: доли те же, что у предмета, и от
+            // ЗАЯВЛЕННОЙ величины (см. шапку в [needs.h]).
+            n.pendingPoo += amount * kFeedPooShare;
+            n.pendingPee += amount * kFeedPeeShare;
+            out.pooQueued = amount * kFeedPooShare;
+            out.peeQueued = amount * kFeedPeeShare;
+            break;
+        case kVerbDrink:
+            fill(n.water);
+            n.pendingPee += amount * kDrinkPeeShare;
+            out.peeQueued = amount * kDrinkPeeShare;
+            break;
+        case kVerbToilet: {
+            // Давление, а не запас: одна дверь с клавишей P.
+            const ReliefResult r = relieve_needs(n, amount, amount);
+            out.gained = r.pee + r.poo;
+            out.served = true;
+            break;
+        }
+        default:
+            break; // глагол не про клок нужд — served остаётся false
+    }
+    return out;
+}
+
 } // namespace giga::game

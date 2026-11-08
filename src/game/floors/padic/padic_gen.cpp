@@ -711,6 +711,13 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
     declared[kLeafToilet][kVerbToilet] = 20;
     declared[kLeafKitchen][kVerbEat] = 12;
     declared[kLeafStrip][kVerbStore] = 15;
+    // ВОДА — ОБЪЯВЛЕННОЕ (водопровод есть архитектура, S12.4), и те же числа,
+    // что у хрущей: кухонный кран 14, сортирный 10. Замер `--action nuzhdy`
+    // на этаже 0 дал жажде 17 комнат из 14742 — и те ОСНАЩЕНИЕМ, то есть
+    // бутылками в ящиках, а не водопроводом; 162 тела из 419 при этом хотели
+    // пить. Жажда падает первой по построению ([game/needs.h]).
+    declared[kLeafKitchen][kVerbDrink] = 14;
+    declared[kLeafToilet][kVerbDrink] = 10;
     // Гермокласс — решение МОДУЛЯ (S12.1). ВЕРДИКТ ВЛАДЕЛЬЦА 2026-08-29
     // (плейтест: «дверь не ломается — точно баг»): жилой фонд падика — НЕ
     // гермозоны. Прежняя разметка (наследие таксономии Living) вешала

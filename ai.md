@@ -240,7 +240,7 @@ single-writer rule this file exists to protect):
   `wander_step` и ведёт тело через `route_step`. Вида комнаты в этом нет нигде
   (S12.2), и новый глагол — строка `data/verbs.csv`, а не ряд таблицы в коде.
   **Чего эта система НЕ делает, и это замерено:** тело ИДЁТ, но НЕ ДОХОДИТ —
-  см. «Deferred» ниже, там теперь стоит число.
+  см. «Deferred» ниже, там теперь стоит число. **ПОПРАВКА 2026-11-08 (CANON S24):** «не доходит» перестало означать «ничего не делает». Деяние нужды вешается на СОСТОЯНИЕ «стою там, где предлагают», а не на прибытие (`src/game/serve.{h,cpp}`), поэтому цикл спрос → утоление замкнут и БЕЗ §88: 136–143 тела заняты деянием одновременно, Σ 2179 очков бара за 1800 тиков, умерших ноль. Сам проход ведения теперь ещё и ДЕРЖИТ тело на месте нулевой скоростью, пока идёт деяние.
   - **MACRO vs MICRO goal.** The macro goal is `currentIntent` — chosen by the
     scorer, sticky, and already interruptible, because `select_intent` lets an
     emergency survival intent preempt without the margin. The micro goal is the
@@ -255,6 +255,7 @@ single-writer rule this file exists to protect):
     is measured, not stylistic: the clearance the field guarantees is a CENTRED
     footprint, so an off-centre body clips the jamb of the very doorway the field
     routed it through — 23 of 64 arrivals against 64 of 64.
+- **ТОКЕН СТАЛ ТРЁХЗНАЧНЫМ (2026-11-08, CANON S24.5):** владельцев три — `Wander`, `Ai` (бегство/наряд, то есть «тело забрал кто-то другой») и `Errand` (дело и деяние нужды, `place_errand_step`). Страж `ai_owns_motion` спрашивает `motion_owned(token)` — ЯВНЫЙ список владельцев, а не сравнение с одним значением и не «не Wander»: неизвестный байт обязан читаться как «никто не владеет», иначе порча токена даёт замершую толпу (это свойство держит гейт `e2e_test` f8_03). Третье значение заведено не для красоты — пока дело занимало `Ai`, проход рвал своё же деяние каждый кадр, и поймал это гейт `suite_place`, а не чтение.
 - **Every other intent DELEGATES** — the token goes to `MotionOwner::Wander` and
   `wander_step` steers that body exactly as it does for a brainless NPC (its own
   file-local `kNpcWalkSpeed`, 1.35 m/s; the player's `Controller` runs faster).

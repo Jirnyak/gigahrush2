@@ -109,7 +109,7 @@ CANON S23.
 - **`kRoomRecovery`** — RoomBit → what one second inside does to a `Needs` row,
   ported from the reference's `needs.ts:253-280`. The kitchen CHARGES for itself:
   it queues the digestion that later wins `IntentToilet`, so kitchen → bathroom
-  is a loop produced by two data rows and no state machine.
+  is a loop produced by two data rows and no state machine. **ЭТА ПЕТЛЯ ВЕРНУЛАСЬ ЖИВОЙ 2026-11-08 (CANON S24.3), но без `kRoomRecovery`:** очередь пищеварения заполняет само деяние нужды теми же долями (`kFeedPooShare` в `needs_satisfy`), ОБА пути — и «съел предмет из ящика», и «поел у плиты», — иначе у одного деяния было бы два исхода. Живой прогон: 14 сортирных деяний из 327.
 - ~~**`kRoomFurniture`** — RoomBit → the props that stand in it~~ — **УМЕРЛО**
   вместе с `room_zone.h` (rooms-object F); «вид комнаты» отменён CANON S12.2.
   С 2026-11-08 мебель ставят СТРОКИ МОДУЛЯ (`kKhrushiFurniture`/`kPadicFurniture`)

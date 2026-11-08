@@ -339,6 +339,19 @@ inline constexpr const char* kIntentScoreChannel[kIntentCount] = {
 enum class MotionOwner : std::uint8_t {
     Wander = 0, // wander_step writes this body's horizontal Velocity
     Ai = 1,     // ai_step writes it; wander_step must skip the body
+    // ДЕЛО (2026-11-08, S24): владелец — `place_errand_step`, и он пишет
+    // скорость тела В ДВУХ случаях: ведёт к выбранному месту ИЛИ держит на
+    // месте нулём, пока идёт деяние нужды.
+    //
+    // ЗАЧЕМ ТРЕТЬЕ ЗНАЧЕНИЕ, А НЕ ПОВТОРНОЕ `Ai`. Дело занимало `Ai` и было
+    // неотличимо от бегства — а деяние обязано рваться УГРОЗОЙ и НЕ рваться
+    // самим собой. С одним значением проход, увидев свой же токен прошлого
+    // тика, рвал собственное деяние каждый кадр: поймано гейтом
+    // `suite_place` (прибывшее тело теряло окно на следующем же тике), а не
+    // чтением. Теперь `Ai` означает РОВНО «тело забрал кто-то другой»
+    // (бегство `ai_step` или наряд), и причина обрыва `kBreakThreat`
+    // выражается одним сравнением.
+    Errand = 2,
 };
 
 // ---------------------------------------------------------------------------
@@ -375,9 +388,25 @@ static_assert(sizeof(AiBrain) == 16, "the whole brain is 16 bytes per body");
 //
 // A body with no AiBrain returns false, which is what makes this additive: with
 // `ai_init` never called, every existing steerer is bit-for-bit unchanged.
+//
+// ВЛАДЕЛЬЦЫ ПЕРЕЧИСЛЕНЫ, А НЕ ВЫЧТЕНЫ ИЗ WANDER (2026-11-08): владельцев токена
+// стало три, и сравнение с одним значением пропустило бы тело, занятое ДЕЛОМ
+// (`MotionOwner::Errand`) — `wander_step` повёл бы его, пока оно ест, то есть
+// деяние совершалось бы на ходу.
+//
+// Но и «не Wander» здесь НЕВЕРНО, и это поймал гейт `e2e_test` f8_03
+// (испорченный байт токена): неизвестное значение обязано читаться как
+// «никто не владеет», потому что отказ должен падать в сторону «ведёт
+// прогулка, как сегодня», а НЕ в сторону замершей толпы — ровно то свойство,
+// которым шапка этого enum'а обосновывает `Wander = 0`. Поэтому список
+// владельцев явный, и четвёртый владелец обязан будет вписать себя сюда.
+inline bool motion_owned(std::uint8_t token) {
+    return token == static_cast<std::uint8_t>(MotionOwner::Ai) ||
+           token == static_cast<std::uint8_t>(MotionOwner::Errand);
+}
 inline bool ai_owns_motion(const Registry& reg, Entity e) {
     const AiBrain* b = reg.try_get<AiBrain>(e);
-    return b != nullptr && b->motion == static_cast<std::uint8_t>(MotionOwner::Ai);
+    return b != nullptr && motion_owned(b->motion);
 }
 
 // --- КТО РЕШАЕТ ЗА ЭТО ТЕЛО -------------------------------------------------

@@ -207,6 +207,6 @@ grows toward the reference's ~444 items.
 
 ## Connections
 
-Consumed by the embodied [ai.md](ai.md) (eat/drink/heal intents); dropped by
+Consumed by the embodied [ai.md](ai.md) (eat/drink/heal intents) and, since 2026-11-08, by the crowd's **need deed** (CANON S24: `serve_busy` -> `apply_consumable`; the item vanishes, the room's `supply` falls, and the verb — not an intent — picks it by two keys: HP cost first, then ARGMAX over `kItemVerbs`, because «first found» would make storage order a law of the world). Долг оттуда же: предмет с глаголом, но без своего `UseEffect` (`kulich`, `siren_energy` — ровно два на 446) деянием НЕ берётся, падаем на возможность места; dropped by
 [monsters.md](monsters.md); weighted by [floors.md](floors.md); carried via
 [inventory.h](src/game/inventory.h) on [ecs.md](ecs.md) entities.

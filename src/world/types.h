@@ -6,6 +6,7 @@
 // them. Flipping kSubDim to 16 (512-voxel blocks) is a one-line change here,
 // though it grows the per-cell mask (see macro_grid.h).
 #pragma once
+#include <cmath>   // std::floor — свёртка метров в клетку ниже
 #include <cstddef>
 #include <cstdint>
 
@@ -89,6 +90,24 @@ inline std::size_t macro_index(int x, int y, int z) {
 
 // Wrap a macro coordinate onto the torus.
 inline int wrap_macro(int c) { return wrapi(c, kMacroDim); }
+
+// МЕТРЫ → КЛЕТКА ТОРА. ОДНА дверь, и она ЗДЕСЬ, рядом с `kCellSize` и
+// `wrap_macro`, из которых и состоит (CANON S11: константа обязана выводиться —
+// здесь выводится ПЕРЕВОД).
+//
+// ЗАЧЕМ ИМЯ ТОМУ, ЧТО ПИСАЛОСЬ В СТРОКУ. Правильная свёртка — `floor`, а не
+// усечение приведением: `static_cast<int>` округляет К НУЛЮ, поэтому −0.1 м
+// давало клетку 0 вместо 127, то есть на шве тора вещь и тело молча оказывались
+// в чужой комнате. Дефект был назван вслух (`room_at_pos@game/room_supply.cpp`)
+// и жил ровно потому, что НЕПРАВИЛЬНОЕ написание было КОРОЧЕ правильного: один
+// каст против `wrap_macro(static_cast<int>(std::floor(p / kCellSize)))`. Теперь
+// короче правильное, и это единственная защита, которая работает без ревьюера.
+//
+// Отрицательные метры ЗАКОННЫ: тор не имеет края, и тело, вышедшее за ноль,
+// обязано оказаться на другой стороне, а не на ближайшей стенке.
+inline int cell_of_metres(float m) {
+    return wrap_macro(static_cast<int>(std::floor(m / kCellSize)));
+}
 
 // Flat bit index of a sub-voxel within a macro cell's 8^3 block.
 inline int sub_bit(int sx, int sy, int sz) {

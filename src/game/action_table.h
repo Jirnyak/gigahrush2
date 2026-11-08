@@ -4,8 +4,12 @@
 //
 // СЛОВАРЬ ДЕЙСТВИЙ (CANON S22). Любое действие над миром или над собой
 // занимает ВРЕМЯ (частный случай 0) и агностично: игрок = моб = NPC.
-// Длину сегодня назначает СТРОКА НОСИТЕЛЯ (оружие, моб) — см. шапку
-// генератора о том, почему колонок длины здесь нет.
+//
+// ДВА ХОЗЯИНА ДЛИНЫ, И ОНИ НЕ ПЕРЕСЕКАЮТСЯ (генератор женит колонки в
+// обе полярности): у боевой строки длину назначает СТРОКА НОСИТЕЛЯ
+// (оружие, моб) и `kActionDurMs` = 0; у деяния нужды носителя нет, и
+// длина авторская ЗДЕСЬ. Глагол строки (`kActionVerb`) есть ЗАЧЕМ
+// деяния, обратный индекс `kVerbAction` эмитится отсюда же.
 //
 // Id — порядок строк CSV, СТАБИЛЕН ПО КОНТРАКТУ: он едет в сейве внутри
 // `Acting`, поэтому строку ДОПИСЫВАЮТ, а не вставляют.
@@ -13,6 +17,8 @@
 
 #include <cstddef>
 #include <cstdint>
+
+#include "game/verb_table.h" // VerbId / kVerbCount — словарь S12.3, не литерал
 
 namespace giga::game {
 
@@ -22,19 +28,25 @@ namespace giga::game {
 using ActionId = std::uint8_t;
 
 inline constexpr ActionId kActShoot = 0;  // темп СВОЕЙ руки из weapons_ranged.csv × анкета (AGI); контакт в начале окна — пуля уходит сразу
-inline constexpr ActionId kActReload = 1;  // длина из reload_s строки оружия; магазин набит в начале окна
-inline constexpr ActionId kActHurl = 2;  // темп руки из cooldown_s строки метательного; заряд уходит сразу. Id НЕ `throw`: строковый литерал id попадает в сгенерированный заголовок
+inline constexpr ActionId kActReload = 1;  // длина из reload_s строки оружия; магазин набит в начале окна, эффекта в конце нет
+inline constexpr ActionId kActHurl = 2;  // темп руки из cooldown_s строки метательного; заряд уходит сразу. Id НЕ `throw`: строковый литерал id попадает в сгенерированный заголовок, а текстовый гейт source_rules справедливо видит там запрещённое ключевое слово
 inline constexpr ActionId kActSwing = 3;  // рукопашная игрока — длина из cooldown_s weapons_melee.csv × анкета (AGI/STR)
 inline constexpr ActionId kActMaul = 4;  // мобий контакт — длина из attack_cd_s строки моба
-inline constexpr ActionId kActShot = 5;  // мобий выстрел — ОКНО = виндап+кулдаун
+inline constexpr ActionId kActShot = 5;  // мобий выстрел — ОКНО = виндап+кулдаун, КОНТАКТНЫЙ КАДР = виндап (windup_s); уход цели из полосы рвёт замах до контакта
+inline constexpr ActionId kActRest = 6;  // деяние нужды над предложением места (S24) — длина АВТОРСКАЯ здесь: носителя-оружия у неё нет. Порядок четырёх длин — из прозы: сон длиннее трапезы, трапеза длиннее питья
+inline constexpr ActionId kActMeal = 7;
+inline constexpr ActionId kActSip = 8;  // самое короткое деяние нужды — им и мерят живой цикл на прогоне в 700 кадров (окно обязано закрыться внутри 6 с сима)
+inline constexpr ActionId kActRelief = 9;  // осознанное опорожнение У ПРЕДЛОЖЕНИЯ места; невольный слив на капе остаётся у клока (needs_advance) и деянием НЕ является
 
-inline constexpr std::size_t kActionCount = 6;
+inline constexpr std::size_t kActionCount = 10;
 
 // ПРИЧИНЫ ОБРЫВА — словарь из генератора, не вторая копия в C++.
 // hand: смена предмета в руке — ствол сменили, перезарядка этой руки незаконна
 inline constexpr std::uint8_t kBreakHand = 1u << 0;
 // target: цель ушла из полосы досягаемости — замах срывается ДО контактного кадра
 inline constexpr std::uint8_t kBreakTarget = 1u << 1;
+// threat: тело забрала угроза — бегство старше дела, деяние нужды срывается
+inline constexpr std::uint8_t kBreakThreat = 1u << 2;
 
 // Маска законных причин обрыва по строке. Причина ВНЕ маски действие НЕ
 // рвёт — это и есть «одна дверь обрыва, и она по данным».
@@ -45,6 +57,68 @@ inline constexpr std::uint8_t kActionBreakMask[kActionCount] = {
     0x00,  // swing
     0x00,  // maul
     0x02,  // shot
+    0x04,  // rest
+    0x04,  // meal
+    0x04,  // sip
+    0x04,  // relief
+};
+
+// ЗАЧЕМ ЭТО ДЕЛАЮТ — глагол строки (S12.3). kVerbCount = «ни за чем»:
+// боевое действие не утоляет нужды, и это ЗНАЧЕНИЕ, а не дыра.
+inline constexpr VerbId kActionVerb[kActionCount] = {
+    20,  // shoot: —
+    20,  // reload: —
+    20,  // hurl: —
+    20,  // swing: —
+    20,  // maul: —
+    20,  // shot: —
+    0,  // rest: sleep
+    1,  // meal: eat
+    2,  // sip: drink
+    3,  // relief: toilet
+};
+
+// ОБРАТНЫЙ ИНДЕКС: какое действие утоляет глагол. kActionCount =
+// «утолить этот глагол деянием нельзя» — именно так сегодня отвечают
+// шестнадцать глаголов из двадцати, и это данные, а не недоделка.
+// Эмитится генератором из той же колонки, поэтому прямой и обратный
+// ответ разъехаться не могут.
+inline constexpr ActionId kVerbAction[kVerbCount] = {
+    6,  // sleep: rest
+    7,  // eat: meal
+    8,  // drink: sip
+    9,  // toilet: relief
+    10,  // work: —
+    10,  // heal: —
+    10,  // trade: —
+    10,  // store: —
+    10,  // social: —
+    10,  // shelter: —
+    10,  // patrol: —
+    10,  // wander: —
+    10,  // nest: —
+    10,  // hunt: —
+    10,  // haul: —
+    10,  // profit: —
+    10,  // strike: —
+    10,  // kill: —
+    10,  // rob: —
+    10,  // craft: —
+};
+
+// ДЛИНА ОКНА В АВТОРСКИХ МС. 0 = «длину назначает строка носителя»
+// (оружие, моб) — см. шапку. Перевод в тики один, ВВЕРХ: ms_to_ticks.
+inline constexpr std::uint32_t kActionDurMs[kActionCount] = {
+    0,  // shoot
+    0,  // reload
+    0,  // hurl
+    0,  // swing
+    0,  // maul
+    0,  // shot
+    90000,  // rest
+    20000,  // meal
+    5000,  // sip
+    25000,  // relief
 };
 
 // CSV tokens — для отладочного вывода и сверок соседних генераторов.
@@ -55,6 +129,10 @@ inline constexpr const char* kActionIds[kActionCount] = {
     "swing",
     "maul",
     "shot",
+    "rest",
+    "meal",
+    "sip",
+    "relief",
 };
 
 // Display names — текст для человека, никогда не ключ поиска (S13.9).
@@ -65,6 +143,10 @@ inline constexpr const char* kActionNames[kActionCount] = {
     "замах",
     "удар",
     "выстрел издали",
+    "сон",
+    "трапеза",
+    "питьё",
+    "облегчение",
 };
 
 } // namespace giga::game

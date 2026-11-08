@@ -879,7 +879,12 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         // has no affordance row on purpose), so an Ai-owned body here means some
         // OTHER intent's steering from a stale read — leave it alone. The claim
         // below is what makes wander_step skip patrol bodies this tick.
-        if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) continue;
+        //
+        // ВЛАДЕЛЬЦЫ ПЕРЕЧИСЛЕНЫ одной дверью `motion_owned` (2026-11-08): их
+        // три, и тело, занятое ДЕЛОМ или деянием нужды
+        // (`MotionOwner::Errand`), наряд обязан пропускать по той же причине,
+        // по которой пропускает бегство.
+        if (motion_owned(brain.motion)) continue;
         // Считается ПОСЛЕ отказа по токену, дословно как у `place_errand_step`:
         // знаменатель обязан быть «тел, которых проход рассматривал», иначе
         // доля прибытий поедет от чужого арбитража, а не от навигации.

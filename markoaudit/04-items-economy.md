@@ -285,7 +285,7 @@ forget the deposit and the debt."* — **FALSE today**: `save.cpp:389-405 visit_
 
 → **`InvUiRequest::Kind::Use` is a never-constructed enum value; inventory_ui.cpp:383-388 is
 dead code; `allowUse` is a dead field.** Consumption happens only via
-`use_best_food/drink/heal` on their own keys (main.cpp:4962-4979).
+`use_best_food/drink/heal` on their own keys (main.cpp:4962-4979). **CORRECTION 2026-11-08 (CANON S24):** the crowd consumes too — `serve_busy` (`src/game/serve.cpp`) takes an item lying in a room container straight through `apply_consumable`, the item vanishes, the room's `supply` falls through the same `supply_add_item` hook that grew it, and `ItemTransferred` is published. The player keys are no longer the only consumption path.
 
 ### 4.5 DEAD in production: `loot_containers_step`
 

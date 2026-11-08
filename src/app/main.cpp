@@ -55,6 +55,7 @@
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
 #include "game/place.h"    // выбор места суммой S13.2 и ход к нему
+#include "game/serve.h"    // деяние нужды на месте (S24) — замыкание цикла
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
@@ -3513,6 +3514,17 @@ int main(int argc, char** argv) {
     // что это вторая половина одного решения: ai_step отвечает «что я хочу»,
     // place_errand_step — «куда за этим идти».
     game::PlaceTick placeTick{};
+    // Что сделало ДЕЯНИЕ НУЖДЫ (S24, [game/serve.h]) — своя структура, а не
+    // поле в `PlaceTick`: это другая система, и сливать её счётчики со
+    // ходьбой значило бы повторить `byIntent` — счётчик, который говорил про
+    // другое решение. Обнуляется перед каждым вызовом: он ТИКОВЫЙ, как и
+    // `placeTick`, и накопление сделало бы «деяний начато» монотонным.
+    game::ServeTick serveTick{};
+    // Накопители деяний на весь прогон — пара к `crowdDead` ниже: «замкнут ли
+    // цикл» есть вопрос про ОТНОШЕНИЕ этих чисел, а не про любое из них.
+    std::uint64_t serveBeganTotal = 0, serveAppliedTotal = 0;
+    std::int64_t serveReliefTotal = 0;
+    std::uint64_t serveByVerbTotal[game::kVerbCount] = {};
     // ПРИБОР НАРЯДА И ПРОГУЛКИ, заведён 2026-10-12 перед переводом обоих на нав
     // по зонам. Без него «перевод помог» было бы впечатлением: у дела прибор
     // появился только в §88/E, и именно он отличил «прибытий ноль» от «идут,
@@ -5929,14 +5941,34 @@ int main(int argc, char** argv) {
                                  // неоднозначным ровно тем способом, которым
                                  // прибор врёт СЦЕНОЙ (§85).
                                  "[errand] STEP tick=%llu seen=%u pick=%u walk=%u "
-                                 "arrive=%u unreach=%u offnav=%u idle=%u judged=%u bins=%u "
-                                 "zdist=%u/%u\n",
+                                 "arrive=%u serve=%u unreach=%u offnav=%u idle=%u "
+                                 "judged=%u bins=%u zdist=%u/%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  placeTick.considered, placeTick.picked,
                                  placeTick.walking, placeTick.arrived,
+                                 placeTick.serving,
                                  placeTick.unreachable, placeTick.offnav,
                                  placeTick.idle, placeTick.judged, placeTick.bins,
                                  placeTick.zoneDistSum, placeTick.zoneDistBodies);
+                    // ДЕЯНИЕ НУЖДЫ (S24) — СВОЯ СТРОКА, и в ней ПРИЧИНЫ
+                    // недобора, а не только успехи: `corridor` (стоит вне
+                    // комнат) и `nothing` (комнате нечего дать) — ровно те две
+                    // причины, которые перепись назвала главными, и без них
+                    // «деяний ноль» опять было бы неотличимо от «толпа сыта».
+                    std::fprintf(stderr,
+                                 "[serve] STEP tick=%llu hold=%u began=%u "
+                                 "applied=%u consumed=%u broke=%u corridor=%u "
+                                 "nothing=%u relief=%d | сон=%u еда=%u "
+                                 "питьё=%u сортир=%u\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 serveTick.holding, serveTick.began,
+                                 serveTick.applied, serveTick.consumed,
+                                 serveTick.broke, serveTick.corridor,
+                                 serveTick.nothing, serveTick.reliefSum,
+                                 serveTick.byVerb[game::kVerbSleep],
+                                 serveTick.byVerb[game::kVerbEat],
+                                 serveTick.byVerb[game::kVerbDrink],
+                                 serveTick.byVerb[game::kVerbToilet]);
                     // ТЕ ЖЕ ИМЕНА, что у дела, и тот же такт печати: три
                     // прохода ходьбы сравниваются построчно, а не на глаз.
                     std::fprintf(stderr,
@@ -6561,6 +6593,166 @@ int main(int argc, char** argv) {
                             playerStatus.remainMs[static_cast<std::size_t>(
                                 game::StatusId::PaupsinaWeb)]);
                         shotActionConsumed = true;
+                    } else if (!shotActionConsumed && shotAction == "nuzhdy" &&
+                               shotFramesSeen >= 450) {
+                        // Порог 450, а не 30: `--floor K` срабатывает на кадре
+                        // 420, и перепись обязана мерить ТОТ этаж, который
+                        // просили, иначе прибор честно отвечает про другой мир.
+                        // ПЕРЕПИСЬ ЦИКЛА НУЖД НА ЖИВОЙ МАШИНЕ. Образец — ветка
+                        // `status` выше: настоящие примитивы, а не мок, и ответ
+                        // ПЕЧАТАЕТСЯ, потому что дебаг-портянка худа скрыта.
+                        //
+                        // Зачем прибор ДО лечения: «толпа умирает по
+                        // построению» — утверждение о ПРИЧИНЕ, а причин у
+                        // недобора три (нечего хотеть / некуда идти / нечем
+                        // утолить), и в счётчиках `[errand]` они неразличимы.
+                        // Этот заход обязан поставить счётчик ПРИЧИН прежде,
+                        // чем объяснять недобор (урок 2026-11-08).
+                        //
+                        // Список глаголов НЕ зашит: обход идёт по kVerbCount и
+                        // печатает строку, у которой ненулевое хоть что-то, —
+                        // новый глагол в verbs.csv попадает в перепись сам.
+                        std::uint32_t roomsWith[game::kVerbCount] = {};
+                        std::int64_t sumDecl[game::kVerbCount] = {};
+                        std::int64_t sumSup[game::kVerbCount] = {};
+                        std::int32_t maxOff[game::kVerbCount] = {};
+                        for (const game::Room& r : floorRooms.list)
+                            for (std::size_t v = 0; v < game::kVerbCount; ++v) {
+                                const std::int32_t off =
+                                    static_cast<std::int32_t>(r.declared[v]) +
+                                    r.supply[v];
+                                if (off <= 0) continue;
+                                ++roomsWith[v];
+                                sumDecl[v] += r.declared[v];
+                                sumSup[v] += r.supply[v];
+                                if (off > maxOff[v]) maxOff[v] = off;
+                            }
+                        std::uint32_t wanters[game::kVerbCount] = {};
+                        std::int64_t sumDem[game::kVerbCount] = {};
+                        std::uint32_t topHere[game::kVerbCount] = {};
+                        std::uint32_t crowd = 0, hereBest = 0, remote = 0;
+                        std::uint32_t inCorridor = 0, wantsNothing = 0;
+                        double barFood = 0.0, barWater = 0.0, barSleep = 0.0;
+                        double barPee = 0.0, barPoo = 0.0;
+                        for (auto [e, nr, tr] :
+                             reg.view<const game::NpcRef, const Transform>()
+                                 .each()) {
+                            if (tr.layer != activeLayer) continue;
+                            if (game::decider_of(reg, e) !=
+                                game::Decider::Resident)
+                                continue;
+                            if (!pool.valid(nr.id)) continue;
+                            ++crowd;
+                            const game::Needs row =
+                                game::needs_row_for(pool, nr.id);
+                            barFood += row.food;
+                            barWater += row.water;
+                            barSleep += row.sleep;
+                            barPee += row.pee;
+                            barPoo += row.poo;
+                            game::DemandE3 demand[game::kVerbCount];
+                            game::demand_from_needs(row, demand);
+                            game::demand_add_health(
+                                static_cast<float>(pool.hp(nr.id)),
+                                static_cast<float>(pool.max_hp(nr.id)), demand);
+                            bool any = false;
+                            for (std::size_t v = 0; v < game::kVerbCount; ++v) {
+                                if (demand[v] <= 0) continue;
+                                // Глагол «шататься» спрос имеет ВСЕГДА
+                                // (kDemandWanderFloor), поэтому «хочет
+                                // хоть что-то» считается без него — иначе
+                                // счётчик был бы тождеством.
+                                if (v != game::kVerbWander) any = true;
+                                ++wanters[v];
+                                sumDem[v] += demand[v];
+                            }
+                            if (!any) ++wantsNothing;
+                            const int cx = giga::wrap_macro(static_cast<int>(
+                                std::floor(tr.pos.x / giga::kCellSize)));
+                            const int cy = giga::wrap_macro(static_cast<int>(
+                                std::floor(tr.pos.y / giga::kCellSize)));
+                            const int cz = giga::wrap_macro(static_cast<int>(
+                                std::floor(tr.pos.z / giga::kCellSize)));
+                            const game::Room* hr = game::room_of(
+                                floorRooms, game::room_at(floorRooms, cx, cy, cz));
+                            if (hr == nullptr) {
+                                ++inCorridor;
+                            } else {
+                                game::VerbId hv =
+                                    static_cast<game::VerbId>(game::kVerbCount);
+                                game::place_interest(*hr, demand, &hv);
+                                if (hv < game::kVerbCount) ++topHere[hv];
+                            }
+                            if (game::place_pick(floorRooms, demand, cx, cy, cz)
+                                    .room == game::kNoRoom)
+                                ++hereBest;
+                            else
+                                ++remote;
+                        }
+                        const double inv =
+                            crowd > 0 ? 1.0 / static_cast<double>(crowd) : 0.0;
+                        std::fprintf(stderr,
+                                     "[nuzhdy] floor=%d crowd=%u bars food=%.1f "
+                                     "water=%.1f sleep=%.1f pee=%.1f poo=%.1f | "
+                                     "underfoot_best=%u remote_better=%u "
+                                     "corridor=%u wants_nothing=%u\n",
+                                     currentFloor, crowd, barFood * inv,
+                                     barWater * inv, barSleep * inv,
+                                     barPee * inv, barPoo * inv, hereBest,
+                                     remote, inCorridor, wantsNothing);
+                        for (std::size_t v = 0; v < game::kVerbCount; ++v) {
+                            if (roomsWith[v] == 0 && wanters[v] == 0) continue;
+                            std::fprintf(
+                                stderr,
+                                "[nuzhdy] %-12s предл: комнат=%u Σобъявл=%lld "
+                                "Σоснащ=%lld max=%d | спрос: тел=%u Σ=%lld | "
+                                "под ногами лучший глагол у %u тел\n",
+                                game::kVerbIds[v], roomsWith[v],
+                                static_cast<long long>(sumDecl[v]),
+                                static_cast<long long>(sumSup[v]), maxOff[v],
+                                wanters[v],
+                                static_cast<long long>(sumDem[v]), topHere[v]);
+                        }
+                        // ФАЗА 2 ТОЙ ЖЕ ВЕТКИ: СТАРИМ ТОЛПУ. Без этого прибор
+                        // мерит СЫТУЮ толпу — а сытая толпа законно не делает
+                        // ничего, и «деяний ноль» неотличимо от «деяние не
+                        // работает». Терпение строки глагола (S13.5) держит
+                        // спрос на нуле, пока недостаток мал, и дойти до
+                        // настоящего недостатка стоит минут СИМ-ВРЕМЕНИ,
+                        // которых у прогона в 700 кадров нет (замер: 780 тиков
+                        // = 6.2 с сима).
+                        //
+                        // Старение идёт НАСТОЯЩИМ КЛОКОМ (`needs_advance` одним
+                        // большим dt) — дословно тот же приём, которым
+                        // `needs_roll_resident` разводит толпу по её суткам:
+                        // состояние тела всегда такое, какое обычный клок мог
+                        // бы произвести, и ретюн расхода везёт прибор за собой.
+                        //
+                        // 300 с, а не «побольше»: на этом числе жажда уходит
+                        // далеко за своё терпение (вода ≈ 21 из 100 при начале
+                        // рампы на 50), а до ОТКАЗА бара (ноль, минус HP) ещё
+                        // 170 с — то есть прибор мерит ГОЛОДНУЮ толпу, а не
+                        // умирающую, и деяние успевает случиться прежде, чем
+                        // кто-нибудь умрёт.
+                        std::uint32_t aged = 0;
+                        for (auto [e, nr, tr] :
+                             reg.view<const game::NpcRef, const Transform>()
+                                 .each()) {
+                            if (tr.layer != activeLayer) continue;
+                            if (game::decider_of(reg, e) !=
+                                game::Decider::Resident)
+                                continue;
+                            if (!pool.valid(nr.id)) continue;
+                            game::Needs& row = pool.needs(nr.id);
+                            if (row.seeded == 0) continue;
+                            game::needs_advance(row, 300.0f);
+                            ++aged;
+                        }
+                        std::fprintf(stderr,
+                                     "[nuzhdy] состарено тел: %u на 300 с "
+                                     "настоящего клока\n",
+                                     aged);
+                        shotActionConsumed = true;
                     } else if (shotAction == "letopis" && reg.valid(player)) {
                         // ЛЕТОПИСЬ (S21) НА ЖИВОЙ МАШИНЕ, а не в стенде.
                         // Образец — ветка `status` выше: настоящий путь, не
@@ -6690,10 +6882,16 @@ int main(int argc, char** argv) {
                 // одному и тому же токену `ai_owns_motion`. Здесь ЗАМКНУЛОСЬ
                 // звено S12–S13: спрос из нужд × предложение комнаты − путь
                 // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
+                // ...и ЗАМКНУЛОСЬ оно здесь же (S24): тело, которому сумма
+                // ответила «ничего не обгоняет место под ногами», СОВЕРШАЕТ
+                // деяние над предложением этого места — окном `Acting`, с
+                // контактным кадром в конце ([game/serve.h]).
                 const auto profPlaceT0 = prof_now();
+                serveTick = game::ServeTick{};
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, activeLayer,
-                    simNow, &activeWorld.gravity(), &nav.zones());
+                    simNow, simTick, &activeWorld.gravity(), &nav.zones(),
+                    &serveTick, &bus);
                 prof_add(kProfPlace, profPlaceT0);
                 const auto profWanderT0 = prof_now();
                 wanderTick = game::wander_step(
@@ -8185,12 +8383,40 @@ int main(int argc, char** argv) {
                 // which set `lastAimemLogTick` to `simTick` earlier in THIS tick, so
                 // the two lines always describe the same frame.
                 crowdDead += needs.crowdKilled;
+                // ИТОГИ ДЕЯНИЙ — НАКОПИТЕЛЬНЫЕ, и стоят рядом со смертями
+                // ОСОЗНАННО: это две половины одного вопроса «замкнут ли
+                // цикл». Тиковые счётчики деяния (`[serve] STEP`) показывают
+                // мгновение, а замыкание видно только парой «деяний всего
+                // против смертей всего» на длинном прогоне.
+                serveBeganTotal += serveTick.began;
+                serveAppliedTotal += serveTick.applied;
+                serveReliefTotal += serveTick.reliefSum;
+                // ЧЕМ ИМЕННО утолялись — НАКОПИТЕЛЬНО, и это не дубль тиковой
+                // строки: деяние начинается в один тик и держится тысячи, так
+                // что тиковый `byVerb` почти всегда нули, и «что толпа делает»
+                // по нему не прочитать (поймано на первом же прогоне: 64
+                // деяния начались, а в тиковых ярлыках видно одно).
+                for (std::size_t v = 0; v < game::kVerbCount; ++v)
+                    serveByVerbTotal[v] += serveTick.byVerb[v];
                 if (aiCfg.enabled && lastAimemLogTick == simTick)
                     std::fprintf(stderr,
                                  "[needs] tick=%llu bodies=%u recovering=%u "
-                                 "crowd_dead_total=%u\n",
+                                 "crowd_dead_total=%u | деяний=%llu эффектов=%llu "
+                                 "Σутолено=%lld | сон=%llu еда=%llu питьё=%llu "
+                                 "сортир=%llu\n",
                                  static_cast<unsigned long long>(simTick),
-                                 needs.bodies, needs.recovering, crowdDead);
+                                 needs.bodies, needs.recovering, crowdDead,
+                                 static_cast<unsigned long long>(serveBeganTotal),
+                                 static_cast<unsigned long long>(serveAppliedTotal),
+                                 static_cast<long long>(serveReliefTotal),
+                                 static_cast<unsigned long long>(
+                                     serveByVerbTotal[game::kVerbSleep]),
+                                 static_cast<unsigned long long>(
+                                     serveByVerbTotal[game::kVerbEat]),
+                                 static_cast<unsigned long long>(
+                                     serveByVerbTotal[game::kVerbDrink]),
+                                 static_cast<unsigned long long>(
+                                     serveByVerbTotal[game::kVerbToilet]));
                 // Corpses pay out BEFORE they are destroyed. The gap between
                 // "hp hit zero" and "gone" is precisely what the Dead tag exists
                 // to create (combat.h defect 2) — the reference's P0 was culling

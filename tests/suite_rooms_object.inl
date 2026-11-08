@@ -296,6 +296,40 @@ static void test_rooms_supply_oracle() {
     supply_add_item(fr, kNoRoom, bread, 5);
 }
 
+// ШОВ ТОРА: «метры → клетка» ОДНОЙ дверью, и она считает floor, а не усечение.
+//
+// Дефект был назван вслух 2026-11-08 и исправлен в тот же день: `room_at_pos`
+// усекала К НУЛЮ (`static_cast<int>(pos.x * 0.5f)`), поэтому −0.1 м давало
+// клетку 0 вместо 127 — вещь и тело на шве тора молча попадали в чужую
+// комнату, а решатель (`place_errand_step`) всё это время считал ту же клетку
+// через floor+wrap. Гейт проверяет ОБА конца шва и совпадение с примитивом.
+static void test_rooms_seam_metres_to_cell() {
+    using namespace giga::game;
+    // Клетка 127 — последняя по каждой оси; объявляем её целиком.
+    FloorRooms fr;
+    rooms_reset(fr);
+    const RoomBox last{127, 127, 127, 1, 1, 1};
+    const RoomId edge = room_declare(fr, &last, 1, 0, 0);
+    CHECK(edge != kNoRoom);
+    // −0.1 м лежит В клетке 127 по закону тора (мир не имеет края).
+    const float neg = -0.1f;
+    CHECK(giga::cell_of_metres(neg) == 127);
+    CHECK(room_at_pos(fr, vec3{neg, neg, neg}) == edge);
+    // ...а усечение к нулю дало бы клетку 0 — то есть НЕ эту комнату. Вторая
+    // полярность: клетка 0 действительно другая комната, а не та же.
+    const RoomBox first{0, 0, 0, 1, 1, 1};
+    const RoomId home = room_declare(fr, &first, 1, 0, 0);
+    CHECK(home != kNoRoom && home != edge);
+    CHECK(room_at_pos(fr, vec3{0.1f, 0.1f, 0.1f}) == home);
+    CHECK(static_cast<int>(neg * 0.5f) == 0); // то самое неправильное написание
+    // Ровно на границе клетки: 254.0 м = клетка 127 начинается, 256.0 м = 0
+    // (полный оборот тора), и обе точки обязаны лечь в СВОИ комнаты.
+    CHECK(giga::cell_of_metres(254.0f) == 127);
+    CHECK(giga::cell_of_metres(256.0f) == 0);
+    CHECK(room_at_pos(fr, vec3{254.5f, 254.5f, 254.5f}) == edge);
+    CHECK(room_at_pos(fr, vec3{256.5f, 256.5f, 256.5f}) == home);
+}
+
 static void test_rooms_object_all() {
     test_rooms_isotropy();
     test_rooms_no_overlap_no_empty();
@@ -303,4 +337,5 @@ static void test_rooms_object_all() {
     test_rooms_deterministic_ids_and_alias();
     test_rooms_modules_declare();
     test_rooms_supply_oracle();
+    test_rooms_seam_metres_to_cell();
 }

@@ -222,7 +222,7 @@ one-line check before deletion.
 | `--pos X Y Z` | 1573-1578 | set player pos after first embodiment | yes | no |
 | `--yaw R` / `--pitch R` | 1579-1580 | radians | yes | no |
 | `--orbit` | 1581 | `cam.yaw += 0.015f` **per sim tick** (`:3394`) — 125 Hz, not per frame | yes but framerate-independent in a way nobody documented | no |
-| `--action STR` | 1582 | one of `wall rpgcmbt mag attack interact grenade corp carve status save load` | yes | no |
+| `--action STR` | 1582 | one of `wall rpgcmbt mag attack interact grenade corp carve status save load letopis nuzhdy` (`letopis` added 2026-11-08 with CANON S21, `nuzhdy` the same day with S24 — the latter only fires from frame 450, so it needs `--frames 520+`) | yes | no |
 
 No `else` branch: an unknown flag, or a flag missing its argument, is silently
 ignored. `problems.md:707-709` files this; still true at `:1561-1583`.
