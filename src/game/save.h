@@ -50,6 +50,7 @@
 #include "core/math.h"
 #include "ecs/registry.h"
 #include "game/faction_relations.h" // FactionRelations, kRelFactionCount
+#include "game/chronicle.h"   // Fact, kFactWire — память мира (v27, S21)
 #include "game/equip.h"       // Equipped — the player's recorded decisions
 #include "game/inventory.h"   // Inventory
 #include "game/npc_pool.h"    // Needs
@@ -223,7 +224,24 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // есть игрок получил бы «успешную» загрузку с пропавшим населением вместо
 // честного «сейв от старой сборки». Версия — тот единственный ответ, который
 // не зависит ни от длины, ни от того, кто проверяет её выше по стеку.
-inline constexpr std::uint32_t kSaveVersion = 26u;
+// v27 (2026-11-08, ЛЕТОПИСЬ — CANON S21): в run.sav приехала ПАМЯТЬ МИРА —
+// переменная секция фактов (`Fact` × factCount, 25 Б с провода каждый,
+// [game/chronicle.h]). Это первая секция за историю формата, которая едет
+// ПОТОМУ ЧТО БЕЗ НЕЁ СНОСЯТ ДРУГИЕ: у квеста и контракта были свои счётчики
+// прогресса с капами в сейве ровно потому, что помнить прошлое ядру было
+// нечем, и оба снесены в v26 вместе с багом «инвентарь пустеет».
+//
+// ЕДУТ ТОЛЬКО ФАКТЫ, СВЯЗИ — НЕТ (решение владельца): `Fact::nextInRoom` есть
+// хранимая производная, а хранимая производная есть вторая правда — разъехавшись
+// с кольцом, она отвечала бы уверенно и неверно. Цепи пересобираются на
+// загрузке тем же проходом, которым строились (`Chronicle::load_facts`).
+//
+// Счётчик занял РЕЗЕРВ шапки на 48 (бывший `questCount`), как и обещал абзац
+// при его освобождении в v26: шапка осталась 64 Б, `poolBytes` остался на 56.
+// Бамп обязателен и по длине (payload вырос), и по отказу: v26-файл отвалился
+// бы `SizeMismatch` после CRC, то есть диагноз читался бы как порча файла, а
+// не как «сейв от старой сборки».
+inline constexpr std::uint32_t kSaveVersion = 27u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -296,6 +314,17 @@ const char* save_error_text(SaveError e);
 // that does not affect it. The moment a tick count, a cooldown in milliseconds, or a
 // samosbor phase enters this format, this field becomes load-bearing and the caller
 // must start comparing it — which it can, because it is written down.
+//
+// v27 ЭТОТ МОМЕНТ НАСТУПИЛ НАПОЛОВИНУ, и половина названа вслух, а не
+// подразумевается: `Fact::tick` — СЧЁТ ТИКОВ. Отказом `tickHz` всё равно НЕ
+// становится, и вот по какому доводу: летопись отвечает только на
+// ОТНОСИТЕЛЬНЫЕ вопросы, а пачку фактов `Chronicle::load_facts`
+// ПЕРЕБАЗИРУЕТ на живые часы при каждой загрузке — абсолютный тик из файла не
+// доживает до первого запроса. Остаётся перекос ТЕМПА: сейв от 120-герцовой
+// сборки отдаёт возрасты на 4.17 % короче в реальном времени. Это тот же
+// порядок погрешности, с которым уже едут миллисекундные таймеры статусов и
+// самосбора, и он не портит ни один ответ — он слегка меняет, сколько секунд
+// мир помнит удар.
 struct SaveHeader {
     std::uint32_t magic = 0;              //  0
     std::uint32_t version = 0;            //  4
@@ -321,7 +350,12 @@ struct SaveHeader {
     // вторая правка формата внутри одной версии, за которую потом никто не
     // ответит. Резерв пишется нулями и читается в никуда; первая же новая
     // слабая/сильная проверка займёт это место без бампа шапки.
-    std::uint32_t reserved48_ = 0;        // 48  (был questCount)
+    //
+    // v27: место на 48 ЗАНЯТО, ровно как обещано — `factCount`, сколько фактов
+    // летописи несёт хвостовая секция ([game/chronicle.h]). Счётчик в шапке, а
+    // не внутри секции, потому что арифметика payload обязана сходиться РОВНО
+    // ДО чтения тела: длина, выведенная из самого тела, не защищает ни от чего.
+    std::uint32_t factCount = 0;          // 48  (был questCount)
     std::uint32_t reserved52_ = 0;        // 52  (был questFingerprint)
     // Version 6 additions: byte lengths of the pool and macro-sim blobs that ride
     // between the opened-container list and the faction matrix.
@@ -451,10 +485,12 @@ inline constexpr std::uint32_t kMaxSnapBytes = 1024u * 1024u * 1024u;
 
 // Exact byte count `save_write` will produce for the given section sizes.
 // v20: секций сущностей в run.sav больше нет — они в floor_<N>.sav v3.
+// v27: + летопись, factCount × kFactWire ([game/chronicle.h]).
 inline constexpr std::size_t save_bytes_for(std::size_t poolBytes = 0,
-                                            std::size_t macroBytes = 0) {
+                                            std::size_t macroBytes = 0,
+                                            std::size_t factCount = 0) {
     return kSaveHeaderWire + kSaveFixedWire + kFactionWire + poolBytes +
-           macroBytes;
+           macroBytes + factCount * kFactWire;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,6 +763,11 @@ struct SaveState {
     std::vector<std::uint8_t> poolBlob;
     std::vector<std::uint8_t> macroBlob;
     FactionRelations factions = kBaseFactionMatrix;
+    // v27: ПАМЯТЬ МИРА (CANON S21). Живые факты летописи от СТАРОГО к
+    // СВЕЖЕМУ — `Chronicle::save_facts` отдаёт их именно в этом порядке, и
+    // `load_facts` на него опирается, пересобирая цепи. Связи (`nextInRoom`)
+    // на провод не идут: пересборка дешевле второй правды.
+    std::vector<Fact> facts;
 };
 
 // ---------------------------------------------------------------------------

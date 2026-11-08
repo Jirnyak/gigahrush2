@@ -419,6 +419,8 @@ static void test_faction2_all() {
         bus.init();
         World w;              // голый воздух: зрение свидетеля ничем не заперто
         FloorRooms rooms;     // комнат нет: ни уместности, ни репутации места
+        Chronicle chron;      // память мира (S21): замеченное деяние = факт
+        chron.init();
 
         FactionRelations rel{};
         rel.reset();
@@ -447,7 +449,7 @@ static void test_faction2_all() {
             pool.kill(victim);
             deed_publish(bus, kVerbKill, player, victim, home, 1u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 1u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 1u);
             CHECK(wt.deeds == 1);
             CHECK(wt.witnessed == 1);
             CHECK(wt.changes == 1);
@@ -457,6 +459,13 @@ static void test_faction2_all() {
             CHECK(last.type == EventType::RelationChanged);
             CHECK(last.a == kPly && last.b == kCit);
             CHECK(event_relation(last.c) == 35);
+            // ПАМЯТЬ МИРА (S21): замеченное деяние ПОДШИТО, и подшито ровно
+            // тем же условием, которым заплачена цена.
+            CHECK(wt.filed == 1);
+            CHECK(chron.live() == 1);
+            CHECK(chron.nth(0)->kind == kVerbKill);
+            CHECK(chron.nth(0)->subject == pid);
+            CHECK(chron.nth(0)->object == victim);
             bus.clear();
         }
 
@@ -472,11 +481,17 @@ static void test_faction2_all() {
             deed_publish(bus, kVerbKill, player, victim,
                          vec3{home.x + 60.0f, home.y, home.z}, 2u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 2u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 2u);
             CHECK(wt.deeds == 1);
             CHECK(wt.witnessed == 0);
             CHECK(wt.changes == 0);
             CHECK(rel.at(kPly, kCit) == before);
+            // ИДЕАЛЬНОЕ ПРЕСТУПЛЕНИЕ НЕ ТОЛЬКО БЕСЦЕННО, НО И НЕИЗВЕСТНО
+            // (S21, закон 3): незамеченное деяние не подшивается, то есть
+            // его не найдёт ни один запрос летописи. У донора летопись
+            // всеведуща — у нас память стоит на восприятии.
+            CHECK(wt.filed == 0);
+            CHECK(chron.live() == 1);  // только прежнее, замеченное
             bus.clear();
         }
 
@@ -498,7 +513,7 @@ static void test_faction2_all() {
             const vec3 far{20.0f, home.y, home.z};
             deed_publish(bus, kVerbKill, player, victim, far, 3u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 3u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 3u);
             CHECK(wt.witnessed == 0);
             CHECK(rel.at(kPly, kCit) == before);
             bus.clear();
@@ -517,7 +532,7 @@ static void test_faction2_all() {
             pool.kill(victim);
             deed_publish(bus, kVerbKill, mob, victim, home, 4u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 4u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 4u);
             CHECK(wt.changes == 0);
             CHECK(rel.at(kPly, kCit) == before);
             bus.clear();
@@ -536,13 +551,35 @@ static void test_faction2_all() {
             pool.kill(sameRow);
             deed_publish(bus, kVerbKill, player, sameRow, home, 5u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 5u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 5u);
             // Горожанин-свидетель судит: жертва НЕ его фракции — базовая
             // цена −10 без множителя жертвы.
             CHECK(wt.changes == 1);
             CHECK(rel.at(kLiq, kCit) == before - 10);
             CHECK(rel.at(kLiq, kLiq) == 100); // диагональ не тронута
             pool.set_player(pid, true);
+            bus.clear();
+        }
+
+        // ВРЕМЯ ФАКТА — ШТАМП ПРОДЮСЕРА, А НЕ ТИК ДРЕНАЖА (S21). Кадр делает
+        // до восьми сим-подшагов: деяние случилось в своём, дренаж идёт
+        // позже. Эти два числа РАЗВЕДЕНЫ здесь нарочно — везде выше они
+        // совпадали, и совпадение проверяло бы само себя.
+        {
+            const std::uint32_t before = chron.live();
+            NpcId hurt = 0;
+            make_body(reg, pool, Faction::Citizens, home, 100, hurt);
+            deed_publish(bus, kVerbStrike, player, hurt, home, /*штамп*/ 7u);
+            const WitnessTick wt = witness_step(reg, pool, rel, bus, rooms,
+                                                chron, w, kLayer, 0,
+                                                /*дренаж*/ 50u);
+            CHECK(wt.filed == 1);
+            CHECK(chron.live() == before + 1u);
+            const Fact* f = chron.nth(chron.live() - 1u);
+            CHECK(f != nullptr);
+            CHECK(f->kind == kVerbStrike);
+            CHECK(f->tick == 7u);   // штамп деяния
+            CHECK(f->tick != 50u);  // а НЕ момент дренажа
             bus.clear();
         }
 
@@ -572,6 +609,8 @@ static void test_faction2_all() {
         bus.init();
         World w;              // воздух: каждый луч честно доходит до деяния
         FloorRooms rooms;
+        Chronicle chron;      // память мира (S21)
+        chron.init();
         FactionRelations rel{};
         rel.reset();
 
@@ -604,7 +643,7 @@ static void test_faction2_all() {
             pool.kill(victim);
             deed_publish(bus, kVerbKill, actor, victim, deed0, 1u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 1u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 1u);
             CHECK(wt.deeds == 1);
             CHECK(wt.witnessed == 1);
             CHECK(wt.changes == 1);
@@ -624,7 +663,7 @@ static void test_faction2_all() {
             for (int r = 0; r < kReps; ++r) {
                 deed_publish(bus, kVerbKill, actor, victim, deed0,
                              2u + static_cast<std::uint64_t>(r));
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer,
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0,
                              2u + static_cast<std::uint64_t>(r));
                 bus.clear();
             }
@@ -655,7 +694,7 @@ static void test_faction2_all() {
             const std::int8_t before = rel.at(kLiq, kCit);
             deed_publish(bus, kVerbKill, actor, victim, deed1, 40u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 40u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 40u);
             CHECK(wt.witnessed == 1);
             CHECK(wt.changes == 0);
             CHECK(rel.at(kLiq, kCit) == before);
@@ -682,7 +721,7 @@ static void test_faction2_all() {
             pool.kill(victim);
             deed_publish(bus, kVerbKill, actor, victim, deed2, 41u);
             const WitnessTick wt =
-                witness_step(reg, pool, rel, bus, rooms, w, kLayer, 41u);
+                witness_step(reg, pool, rel, bus, rooms, chron, w, kLayer, 0, 41u);
             CHECK(wt.witnessed == 1);
             CHECK(wt.changes == 1);
             bus.clear();

@@ -43,6 +43,32 @@ is **dropped and counted** (`dropped()`), never grown. A bounded ring must stay
 bounded; the drop counter surfaces a tuning problem instead of hiding it behind
 a silent reallocation.
 
+## Что шина НЕ делает: помнить (летопись, CANON S21)
+
+Transient — это закон, а не ограничение, и у него есть цена: у ядра **есть
+деяние** (`EventType::Deed`), **есть его цена** по `verbs.csv` и **есть
+свидетель** (`witness_step`) — и **нет памяти**. Поэтому всякая надстройка,
+которой нужно было помнить прошлое, заводила свой счётчик: у квеста прогресс с
+капом в сейве, у контракта книга. Обе снесены 2026-11-08 вместе с багом
+«инвентарь пустеет», который из такого счётчика и вырос.
+
+Память мира — **вторая половина того же шва**, а не второй канал:
+
+| | шина (`event_bus.h`) | летопись ([src/game/chronicle.h](src/game/chronicle.h)) |
+|---|---|---|
+| вопрос | «это случилось СЕЙЧАС» | «это случилось» |
+| жизнь | один цикл дренажа | окно рода (такт × разрядность цены, S15) |
+| кто пишет | любой производитель | ТОЛЬКО `witness_step` — увиденное |
+| запись | `Event` 24 Б | `Fact` 32 Б, без строки текста |
+| в сейве | нет | да, `run.sav` v27 (связи не едут, пересобираются) |
+
+Три запроса и только три: `chronicle_near` (рядом), `chronicle_recent`
+(недавно), `chronicle_near_kind` (рядом этого рода). Слова выводит
+`fact_line` в момент показа — журнал есть ВИД на память, а не её второй
+носитель (прежний `EventFeed`, хранивший отрендеренные строки, снесён
+2026-09-30 за отсутствием потребителя). Тесты —
+[tests/suite_chronicle.inl](tests/suite_chronicle.inl).
+
 ## Optional replay log
 
 Debug and replay want the history the transient ring throws away, so the bus can

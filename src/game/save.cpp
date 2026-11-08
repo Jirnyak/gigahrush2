@@ -206,7 +206,9 @@ void visit_header(Ar& ar, H& h) {
     ar.u16(h.invBytes);
     ar.u32(h.payloadBytes);
     ar.u32(h.payloadCrc);
-    ar.u32(h.reserved48_);
+    // v27: резерв на 48 занят счётчиком фактов летописи (S21) — ровно так, как
+    // обещал абзац при его освобождении в v26. Смещения 52/56/60 не поехали.
+    ar.u32(h.factCount);
     ar.u32(h.reserved52_);
     // Version 6 fields: macro-world blob lengths.
     ar.u32(h.poolBytes);
@@ -336,6 +338,26 @@ void visit_samosbor(Ar& ar, S& s) {
 
 // visit_key/visit_container_rec МЕРТВЫ (v20/F): ящик — PropRecord с
 // инвентарём внутри floor-файла, позиционного ключа не существует.
+
+// v27: ОДИН ФАКТ ЛЕТОПИСИ (S21, [game/chronicle.h]). 25 Б с провода.
+//
+// `nextInRoom` НЕ ПИШЕТСЯ, и это не экономия четырёх байт, а закон: звено цепи
+// есть производная кольца, а хранимая производная — вторая правда. Разъехавшись
+// с кольцом (а разъехаться она может только молча), она отвечала бы на «что
+// помнит эта комната» уверенно и неверно. Цепи пересобирает `load_facts`.
+//
+// `pad_` не пишется по общему правилу визиторов этого файла: байт выравнивания
+// на проводе есть байт, за который будущему полю пришлось бы воевать.
+template <class Ar, class F>
+void visit_fact(Ar& ar, F& f) {
+    ar.u64(f.tick);
+    ar.u32(f.seq);
+    ar.u32(f.subject);
+    ar.u32(f.object);
+    ar.i16(f.floor);
+    ar.u16(f.room);
+    ar.u8(f.kind);
+}
 
 template <class Ar>
 void visit_vec3(Ar& ar, vec3& v) {
@@ -564,7 +586,8 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     // The same size the writer will actually produce, minus the header this
     // buffer does not carry — `save_bytes_for` is the one place that arithmetic
     // lives, so the reserve cannot drift from the wire format.
-    body.reserve(save_bytes_for(st.poolBlob.size(), st.macroBlob.size()) -
+    body.reserve(save_bytes_for(st.poolBlob.size(), st.macroBlob.size(),
+                                st.facts.size()) -
                  kSaveHeaderWire);
     Writer bw(body);
     visit_ledger(bw, st.ledger);
@@ -597,8 +620,14 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     body.insert(body.end(), st.macroBlob.begin(), st.macroBlob.end());
     for (std::size_t i = 0; i < kFactionWire; ++i)
         bw.u8(static_cast<std::uint8_t>(st.factions.v[i]));
+    // v27: ЛЕТОПИСЬ — последняя секция, потому что она единственная
+    // переменная из оставшихся, а переменное идёт после фиксированного (тот же
+    // закон, по которому здесь когда-то стоял банк). Порядок фактов — от
+    // СТАРОГО к СВЕЖЕМУ, как их отдаёт `Chronicle::save_facts`: на этом
+    // порядке стоит пересборка цепей на загрузке.
+    for (const Fact& f : st.facts) visit_fact(bw, f);
     // v26: квест-лог дописывался последним и был последней секцией run.sav;
-    // теперь последняя — матрица фракций. Геометрия в run.sav не едет никогда —
+    // v27: последняя — летопись. Геометрия в run.sav не едет никогда —
     // она в пер-этажных файлах ([save.h] modular layout).
 
     SaveHeader h{};
@@ -610,6 +639,7 @@ void save_write(const SaveState& st, std::vector<std::uint8_t>& out) {
     h.itemFingerprint = item_table_fingerprint();
     h.mobFingerprint = mob_table_fingerprint();
     h.containerCount = 0; // v20: поле шапки осталось, секция мертва
+    h.factCount = static_cast<std::uint32_t>(st.facts.size()); // v27
     h.poolBytes = static_cast<std::uint32_t>(st.poolBlob.size());
     h.macroBytes = static_cast<std::uint32_t>(st.macroBlob.size());
     h.ledgerBytes = static_cast<std::uint16_t>(sizeof(RunLedger));
@@ -669,12 +699,18 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
     if (h.containerCount != 0) return fail(SaveError::SizeMismatch); // v20
     if (h.poolBytes > kMaxPoolBytes) return fail(SaveError::SizeMismatch);
     if (h.macroBytes > kMaxMacroBytes) return fail(SaveError::SizeMismatch);
+    // v27: ПОТОЛОК ФАКТОВ — ёмкость кольца летописи, и он не «на всякий
+    // случай»: сейв, объявивший больше фактов, чем летопись способна помнить,
+    // либо порча, либо файл от сборки с другим кольцом. Проверяется ДО того,
+    // как число пойдёт в арифметику длины.
+    if (h.factCount > Chronicle::kCapacity) return fail(SaveError::SizeMismatch);
     // v20: переменных секций сущностей нет — payload обязан сойтись с
-    // арифметикой шапки РОВНО.
+    // арифметикой шапки РОВНО. v27: + летопись, factCount × kFactWire.
     const std::size_t wantFixed =
         kSaveFixedWire + kFactionWire +
         static_cast<std::size_t>(h.poolBytes) +
-        static_cast<std::size_t>(h.macroBytes);
+        static_cast<std::size_t>(h.macroBytes) +
+        static_cast<std::size_t>(h.factCount) * kFactWire;
     if (static_cast<std::size_t>(h.payloadBytes) != wantFixed)
         return fail(SaveError::SizeMismatch);
     if (n - kSaveHeaderWire < static_cast<std::size_t>(h.payloadBytes))
@@ -731,6 +767,10 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st, SaveErro
             tmp.factions.v[i] = static_cast<std::int8_t>(b);
         }
     }
+    // v27: ЛЕТОПИСЬ. Читается тем же визитором и в том же порядке — от
+    // старого к свежему; связи не читаются, потому что не писались.
+    tmp.facts.resize(h.factCount);
+    for (std::uint32_t i = 0; i < h.factCount; ++i) visit_fact(r, tmp.facts[i]);
     if (!r.ok()) return fail(SaveError::TooShort);
     // Every declared byte consumed and no more. A surviving remainder would mean the
     // wire constants and the visitors disagree, which the static_asserts above already

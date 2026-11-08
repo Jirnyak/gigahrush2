@@ -2555,6 +2555,7 @@ int main(int argc, char** argv) {
     bool shotOrbit = false;
     std::string shotAction;
     bool shotActionConsumed = false; // one-shot save/load; attack stays held
+    bool shotLetopisPrinted = false; // --action letopis: ответ печатается раз
     // Дебаг-портянка по умолчанию СКРЫТА (плейтест владельца 2026-08-17):
     // игрок стартует с чистым худом ([hud_ui.h]); F1 / `hud` открывает её.
     bool showHud = false;
@@ -2992,6 +2993,13 @@ int main(int argc, char** argv) {
     // the opt-in log.
     game::EventBus bus;
     bus.init();
+    // ЛЕТОПИСЬ (S21, [game/chronicle.h]) — вторая половина того же разделения
+    // труда: шина отвечает «это случилось СЕЙЧАС» и стирается каждый кадр,
+    // летопись отвечает «это случилось» и помнит окнами лестницы S15. Стоит
+    // рядом с шиной намеренно: читать их будут вместе, а дыра была ровно между
+    // ними — деяние, цена и свидетель были, памяти не было.
+    game::Chronicle chron;
+    chron.init();
     // Recent noises, fading ([noise.h]). A sibling of the bus, not a part of it: the
     // bus is "this happened" and is wiped every tick, this is "this happened HERE and
     // is still fading". No init() — it is a 2 KB POD with no allocation anywhere.
@@ -3817,6 +3825,11 @@ int main(int argc, char** argv) {
         pool.save_rows(runState.poolBlob);
         macroSim.save_state(runState.macroBlob);
         runState.factions = factionRel;
+        // v27: ПАМЯТЬ МИРА (S21). Едет в run.sav, а не в файл этажа, по тому
+        // же доводу, по которому там едет матрица фракций: факт несёт МЕТКУ
+        // этажа и переживает уход с него — память межэтажная по построению,
+        // и у неё, как у общества, ровно один дом.
+        chron.save_facts(runState.facts);
         return true;
     };
     // THE save, one law: run.sav (the run) + the resident floor's own file
@@ -4891,8 +4904,9 @@ int main(int argc, char** argv) {
         {
             const auto profWitnessT0 = prof_now();
             const game::WitnessTick wt = game::witness_step(
-                reg, pool, factionRel, bus, floorRooms,
-                stack.layer(activeLayer), activeLayer, simTick);
+                reg, pool, factionRel, bus, floorRooms, chron,
+                stack.layer(activeLayer), activeLayer,
+                static_cast<std::int16_t>(currentFloor), simTick);
             prof_add(kProfWitness, profWitnessT0);
             relTick = {};
             relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
@@ -6532,6 +6546,104 @@ int main(int argc, char** argv) {
                             playerStatus.remainMs[static_cast<std::size_t>(
                                 game::StatusId::PaupsinaWeb)]);
                         shotActionConsumed = true;
+                    } else if (shotAction == "letopis" && reg.valid(player)) {
+                        // ЛЕТОПИСЬ (S21) НА ЖИВОЙ МАШИНЕ, а не в стенде.
+                        // Образец — ветка `status` выше: настоящий путь, не
+                        // мок, и ответ ПЕЧАТАЕТСЯ, потому что дебаг-портянка
+                        // по умолчанию скрыта и скриншотом худ не проверить.
+                        //
+                        // Деяние публикует СОСЕД, а свидетелем становится
+                        // игрок: он такая же запись пула («игрок не
+                        // особенный»), и это ровно тот шов, которым память
+                        // стоит на восприятии. Удар выбран за слышимость
+                        // (hear_m = 10 м из verbs.csv) — луч зрения в
+                        // коридоре мог бы и не дойти, и прибор мерил бы
+                        // геометрию вместо летописи.
+                        const vec3 me = reg.get<Transform>(player).pos;
+                        if (!shotActionConsumed && shotFramesSeen >= 30) {
+                            // Нужна ПАРА в пределах слышимости удара: деяние
+                            // без воспринявшего законно и ничего не оставляет
+                            // (в этом и закон), поэтому прибор ищет соседей, а
+                            // не ближайшее тело к камере — иначе он мерил бы
+                            // расстановку толпы.
+                            Entity actor = entt::null;
+                            game::NpcId victim = game::kInvalidNpc;
+                            float best = 1e30f;
+                            auto view = reg.view<const game::NpcRef,
+                                                 const Transform>();
+                            for (auto a : view) {
+                                const Transform& ta =
+                                    view.get<const Transform>(a);
+                                if (ta.layer != activeLayer) continue;
+                                for (auto b : view) {
+                                    if (b == a) continue;
+                                    const Transform& tb =
+                                        view.get<const Transform>(b);
+                                    if (tb.layer != activeLayer) continue;
+                                    const float d2 = wrap_dist2(ta.pos, tb.pos,
+                                                                kWorldExtent);
+                                    if (d2 < best) {
+                                        best = d2;
+                                        actor = a;
+                                        victim = view.get<const game::NpcRef>(b)
+                                                     .id;
+                                    }
+                                }
+                            }
+                            if (actor != entt::null && best <= 100.0f) {
+                                game::deed_publish(
+                                    bus, game::kVerbStrike, actor, victim,
+                                    reg.get<Transform>(actor).pos, simTick);
+                                std::fprintf(stderr,
+                                             "[letopis] deed strike published; "
+                                             "nearest witness %.1f m away\n",
+                                             std::sqrt(best));
+                                shotActionConsumed = true;
+                            } else {
+                                std::fprintf(stderr,
+                                             "[letopis] НЕТ ПАРЫ в слышимости "
+                                             "(ближайшая %.1f м) — прибор "
+                                             "молчит честно\n",
+                                             std::sqrt(best));
+                                shotActionConsumed = true;
+                            }
+                        } else if (shotActionConsumed && !shotLetopisPrinted &&
+                                   shotFramesSeen >= 45) {
+                            shotLetopisPrinted = true;
+                            const game::RoomId rid = game::room_at(
+                                floorRooms, static_cast<int>(me.x / kCellSize),
+                                static_cast<int>(me.y / kCellSize),
+                                static_cast<int>(me.z / kCellSize));
+                            // Печатаются ВСЕ ТРИ запроса: «рядом» и «рядом
+                            // этого рода» спрашиваются про комнату КАМЕРЫ
+                            // (деяние случилось в комнате соседей, поэтому
+                            // ноль здесь — правильный ответ, а не промах), а
+                            // «недавно» — про мир, и вот оно находит факт.
+                            // Строка — `fact_line`: слова выводятся сейчас, в
+                            // кольце их нет.
+                            const game::Fact* newest = nullptr;
+                            const std::uint32_t world = game::chronicle_recent(
+                                chron, game::kVerbStrike, simTick, &newest);
+                            char line[160] = "—";
+                            if (newest != nullptr)
+                                game::fact_line(*newest, pool, simTick, line,
+                                                sizeof(line));
+                            std::fprintf(
+                                stderr,
+                                "[letopis] live=%u forgotten=%u cam_room=%u "
+                                "near=%u near_strike=%u world_strike=%u | %s\n",
+                                chron.live(), chron.forgotten(),
+                                static_cast<unsigned>(rid),
+                                game::chronicle_near(
+                                    chron,
+                                    static_cast<std::int16_t>(currentFloor),
+                                    rid, simTick),
+                                game::chronicle_near_kind(
+                                    chron,
+                                    static_cast<std::int16_t>(currentFloor),
+                                    rid, game::kVerbStrike, simTick),
+                                world, line);
+                        }
                     } else if (!shotActionConsumed &&
                                (shotAction == "save" || shotAction == "load") &&
                                shotRideDone >= shotRide &&
@@ -8284,6 +8396,23 @@ int main(int argc, char** argv) {
                             // discovery is progress, not per-floor channel state.
                             samosbor = runState.samosbor;
                             fastTravel = runState.fastTravel;
+                            // v27: ПАМЯТЬ МИРА (S21) — по тому же доводу, по
+                            // которому восстанавливаются часы самосбора:
+                            // загрузка есть ВОЗОБНОВЛЕНИЕ, а не прибытие, и
+                            // мир, забывший все деяния на F9, был бы миром, в
+                            // котором убийство стоит одну кнопку. Цепи
+                            // ПЕРЕСОБИРАЮТСЯ здесь же (связи не ехали).
+                            if (!chron.load_facts(runState.facts.data(),
+                                                  runState.facts.size(),
+                                                  simTick)) {
+                                std::fprintf(stderr,
+                                             "[load] летопись отвергнута "
+                                             "(%zu фактов, порядок seq не "
+                                             "возрастает) — мир начинает "
+                                             "помнить заново\n",
+                                             runState.facts.size());
+                                chron.init();
+                            }
                             // Здесь перезаводились часы процентов банка на ЖИВОЙ
                             // тик (сохранённый тик в новой сессии — ложь). Банк
                             // снесён 2026-11-08; правило про часы живо и ждёт
@@ -9018,6 +9147,40 @@ int main(int argc, char** argv) {
                             macroSim.day(),
                             static_cast<unsigned long long>(macroStats.tick), feudHits,
                             relTick.kills, relTick.changes);
+                // ЛЕТОПИСЬ (S21) — ЖУРНАЛ ЕСТЬ ВИД НА ПАМЯТЬ, а не второй её
+                // носитель: в кольце нет ни одной строки текста, слова
+                // выводятся ЗДЕСЬ (`fact_line` — глагол из verbs.csv,
+                // подлежащее из пула). Три числа — это три запроса летописи,
+                // и других запросов у неё нет: «рядом» (эта комната),
+                // «рядом этого рода» (здесь убивали), «недавно» (мир).
+                {
+                    game::RoomId prid = game::kNoRoom;
+                    if (reg.valid(player)) {
+                        const vec3 pp = reg.get<Transform>(player).pos;
+                        prid = game::room_at(
+                            floorRooms, static_cast<int>(pp.x / kCellSize),
+                            static_cast<int>(pp.y / kCellSize),
+                            static_cast<int>(pp.z / kCellSize));
+                    }
+                    const game::Fact* newest = nullptr;
+                    const std::uint32_t near_ = game::chronicle_near(
+                        chron, static_cast<std::int16_t>(currentFloor), prid,
+                        simTick, &newest);
+                    const std::uint32_t nearKill = game::chronicle_near_kind(
+                        chron, static_cast<std::int16_t>(currentFloor), prid,
+                        game::kVerbKill, simTick);
+                    const std::uint32_t worldKill = game::chronicle_recent(
+                        chron, game::kVerbKill, simTick);
+                    char line[160] = {};
+                    if (newest != nullptr)
+                        game::fact_line(*newest, pool, simTick, line,
+                                        sizeof(line));
+                    ImGui::Text("летопись | %u фактов / %u забыто | здесь %u "
+                                "(убийств %u) | в мире %u | %s",
+                                chron.live(), chron.forgotten(), near_,
+                                nearKill, worldKill,
+                                newest != nullptr ? line : "мир пока ничего не помнит");
+                }
                 // `ai/wander` — single-writer split: те двое не бывают
                 // ненулевыми на одном теле в один тик (suite_utilai). Ветка
                 // «off (dormant)» была недостижима (enabled константно true

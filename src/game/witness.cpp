@@ -63,8 +63,9 @@ void deed_publish(EventBus& bus, VerbId verb, Entity actor, NpcId victim,
 }
 
 WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
-                         EventBus& bus, FloorRooms& rooms, const World& world,
-                         LayerId layer, std::uint64_t tick) {
+                         EventBus& bus, FloorRooms& rooms, Chronicle& chron,
+                         const World& world, LayerId layer, std::int16_t floor,
+                         std::uint64_t tick) {
     WitnessTick out;
 
     // Выцветание — секундный каданс, независимо от деяний.
@@ -204,6 +205,33 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
                 room->rep = static_cast<std::int16_t>(
                     nr < -32000 ? -32000 : (nr > 32000 ? 32000 : nr));
             }
+            // ПАМЯТЬ МИРА (S21): замеченное деяние становится фактом. Ровно
+            // здесь, под тем же `anyWitness`, под которым платится репутация:
+            // у цены и у памяти ОДНО условие — «это кто-то видел», и второго
+            // ответа на вопрос «попало ли в мир» быть не должно.
+            //
+            // Комната может быть kNoRoom (коридор, шахта, толща) — факт всё
+            // равно подшивается: место коридора есть место, а «рядом» по
+            // kNoRoom просто соберёт все коридорные факты этажа. Отсев по
+            // комнате был бы молчаливой потерей половины памяти этажа.
+            // ВРЕМЯ ФАКТА — ШТАМП ПРОДЮСЕРА (`ev.tick`), а не тик дренажа:
+            // кадр делает до восьми сим-подшагов, деяние случилось в СВОЁМ, и
+            // «что раньше» внутри кадра есть ровно та разница, за которой
+            // летопись и держит seq. Заодно это ПЕРВЫЙ ЧИТАТЕЛЬ `Event::tick`
+            // — поле штамповалось каждой публикацией и не читалось никем
+            // (перепись SKELETON.md IX.2: «событие штампуется временем,
+            // которое не читает никто» — вот почему в дереве не было ни одного
+            // временного предиката над прошлым).
+            //
+            // Ноль — документированное «штампа нет» у удобной перегрузки
+            // `publish` ([event_bus.h]), а не момент времени; такому деянию
+            // временем становится тик дренажа, иначе факт родился бы
+            // просроченным на всю историю мира и забылся бы тем же тиком.
+            const std::uint64_t at = ev.tick != 0 ? ev.tick : tick;
+            if (chron.file(at, verb, actorId,
+                           hasVictim ? victim : kInvalidNpc, floor,
+                           room != nullptr ? rid : kNoRoom))
+                ++out.filed;
         }
     }
     return out;

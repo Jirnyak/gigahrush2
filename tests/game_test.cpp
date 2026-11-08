@@ -107,6 +107,7 @@ int g_checks = 0;
 #include "suite_npcpool.inl"
 #include "suite_samosbor2.inl"
 #include "suite_faction2.inl"
+#include "suite_chronicle.inl"  // ЛЕТОПИСЬ (S21) — память мира
 // Wave 5. Each of these carries its own #includes rather than leaning on the prelude
 // above, because they reach for headers this file never needed: sim/diffusion.h,
 // game/ai.h, game/loot_table.h, game/needs.h, world/field.h.
@@ -5219,6 +5220,7 @@ int main() {
     test_npcpool_all();
     test_samosbor2_all();
     test_faction2_all();
+    test_chronicle_all();
     // Wave 5: diffusion (was dead code on main), the reconciled loot table, and the
     // utility AI's Velocity-ownership arbitration.
     test_diffusion_all();

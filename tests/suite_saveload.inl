@@ -206,6 +206,18 @@ SaveState busy_run() {
     st.samosbor.variant = 5u;
     st.samosbor.sealed = true;
 
+    // v27 / ЛЕТОПИСЬ (S21): три факта с РАЗНЫМИ числами во всех полях, включая
+    // отрицательный этаж и отсутствующее дополнение (kInvalidNpc), и с seq,
+    // который ВОЗРАСТАЕТ — на этом порядке стоит пересборка цепей. Два факта в
+    // ОДНОМ тике стоят здесь нарочно: это тот самый случай «взял и сдал в одну
+    // единицу времени», который без seq неразличим.
+    st.facts.push_back(Fact{100u, 7u, kFactNone, 11u, 12u, -50, 1234u,
+                            kVerbKill, {}});
+    st.facts.push_back(Fact{100u, 8u, kFactNone, 13u, kInvalidNpc, 3, 1u,
+                            kVerbRob, {}});
+    st.facts.push_back(Fact{9999u, 9u, kFactNone, 14u, 15u, 0, 65534u,
+                            kVerbHeal, {}});
+
     // A discovery set that is neither empty nor full, spanning both signs and both
     // ends of the label range — the negative floors are the half a naive
     // floor-as-index bitset gets wrong.
@@ -304,6 +316,21 @@ void same_run(const SaveState& a, const SaveState& b) {
             CHECK(a.fastTravel.unlocked(f) == b.fastTravel.unlocked(f));
             break;   // one report, not 255
         }
+
+    // v27 / ЛЕТОПИСЬ (S21). Поле-за-полем, а не memcmp строки: `nextInRoom` на
+    // провод НЕ ЕДЕТ (связь — производная кольца), поэтому struct-сравнение
+    // утверждало бы ровно обратное тому, что формат обещает. `pad_` тоже не
+    // едет, и это вторая причина не сравнивать байтами.
+    CHECK(a.facts.size() == b.facts.size());
+    for (std::size_t i = 0; i < a.facts.size() && i < b.facts.size(); ++i) {
+        CHECK(a.facts[i].tick == b.facts[i].tick);
+        CHECK(a.facts[i].seq == b.facts[i].seq);
+        CHECK(a.facts[i].subject == b.facts[i].subject);
+        CHECK(a.facts[i].object == b.facts[i].object);
+        CHECK(a.facts[i].floor == b.facts[i].floor);
+        CHECK(a.facts[i].room == b.facts[i].room);
+        CHECK(a.facts[i].kind == b.facts[i].kind);
+    }
 }
 
 void wire_layout() {
@@ -340,6 +367,12 @@ void wire_layout() {
     // три секции целиком.
     static_assert(save_bytes_for() == 710); // v26
     static_assert(save_bytes_for(100, 50) == 710 + 150);
+    // v27: летопись — третье слагаемое. 25 Б на факт, и это НЕ sizeof(Fact)
+    // (32): связь и паддинг на провод не едут, то есть ширина строки и ширина
+    // записи здесь РАЗНЫЕ числа, и путать их нельзя.
+    static_assert(kFactWire == 25);
+    static_assert(kFactWire != sizeof(Fact));
+    static_assert(save_bytes_for(0, 0, 3) == 710 + 75);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -353,8 +386,9 @@ void wire_layout() {
     // +hpBank (4); v12 -1 craft axis (4); v13 +Equipped (4); v14 u16 counts
     // (+64); v16 +289 bank; v19 bank ring cut (-244) = 1148; v20 entity
     // sections left for the floor files (-8) = 1140; v26 -418 (книга, квест-лог,
-    // банк) = 710.
-    CHECK(bytes.size() == save_bytes_for());
+    // банк) = 710; v27 +75 (три факта летописи × 25) = 785.
+    CHECK(bytes.size() == save_bytes_for(0, 0, st.facts.size()));
+    CHECK(bytes.size() == 785u);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');
@@ -388,11 +422,17 @@ void wire_layout() {
     CHECK(h.containerCount == 0u); // v20: поле живо, секция мертва
     CHECK(h.poolBytes == 0u);
     CHECK(h.macroBytes == 0u);
-    CHECK(h.payloadBytes == kSaveFixedWire + kFactionWire);
+    // v27: + секция летописи. Счётчик фактов живёт В ШАПКЕ (бывший резерв на
+    // 48), поэтому арифметика payload по-прежнему сходится ДО чтения тела.
+    CHECK(h.factCount == static_cast<std::uint32_t>(st.facts.size()));
+    CHECK(h.payloadBytes ==
+          kSaveFixedWire + kFactionWire + st.facts.size() * kFactWire);
 
     // A save written by the 120 Hz build STILL LOADS, and this is deliberate rather
-    // than an oversight. Nothing currently in the payload is tick-derived — the clock is
-    // per-second floats, contract progress is a count, the ledger is roubles — so
+    // than an oversight. The payload's one tick-derived field is `Fact::tick` (v27),
+    // и его абсолютное значение до первого запроса не доживает:
+    // `Chronicle::load_facts` перебазирует пачку на живые часы ([save.h] о
+    // `tickHz`). Остальное — секундные floats, счётчики и рубли. So
     // refusing would discard a good save over a number that does not affect it. What
     // the format owes the caller is the ability to KNOW: the header reports 120, so a
     // caller that later stores a tick count or a millisecond timer can start rejecting
