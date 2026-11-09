@@ -8,7 +8,8 @@
 
 #include <cstdint>
 
-#include "game/room.h" // RoomId/kNoRoom — цель наряда есть ЗОНА (§88/F.2)
+#include "game/guide.h" // kWalkSpeedMps — бюджет ноги ВЫВОДИТСЯ из шага
+#include "game/room.h"  // RoomId/kNoRoom — цель наряда есть ЗОНА (§88/F.2)
 
 namespace giga::game {
 
@@ -83,7 +84,7 @@ inline constexpr std::uint32_t kPatrolSalt = 0x70617472u; // "patr"
 // радиусом обхода вокруг поста. (Прежде этот абзац ссылался на надгробие
 // `RoleTraits::homeRooms/workRooms`; роли снесены 2026-11-08, вопрос про якоря —
 // нет, он по-прежнему открыт и по-прежнему за agent-goals.)
-inline constexpr float kPatrolLegMetres = 45.0f * 1.35f; // 60.75 м
+inline constexpr float kPatrolLegMetres = 45.0f * kWalkSpeedMps; // 60.75 м
 
 // Тиков ждать, если зона изолирована или дверь
 // отказала. 64 тика при 125 Гц — полсекунды: достаточно редко, чтобы цена

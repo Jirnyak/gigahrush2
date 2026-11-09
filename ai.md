@@ -1,12 +1,20 @@
 # AI — utility brain for embodied NPCs
 
-> **Сверка 2026-08-23:** `ai_patrol_step` уже ХОДИТ по nav (`ai.cpp:1103` —
-> coarse/fine каждый тик), «route_step once #13» устарело. ВАЖНЕЕ: CANON
-> S12–S13 объявляет описанную здесь room-модель ОТМЕНЁННОЙ — `kRoomAffordance`
-> (белые списки), `kRoomRecovery` (вид назначен), `localScore[]` (мёртвый API,
-> `ai.h:750`) заменяются вектором глаголов и одной суммой скора
-> (`markoaudit/plans/agent-goals.md`, ждёт rooms-object + verbs-table).
-> Механика needs/stagger/steering ниже — верна.
+> **Сверка 2026-11-09 (CANON S25). ГЛАВНОЕ, ЧТО НАДО ПРОЧИТАТЬ ПЕРВЫМ:**
+> перемещение — ОДНА система, и описанные ниже «пути движения по интенту» и
+> «токен владения движением» в дереве СНЕСЕНЫ. Писатель горизонтальной
+> `Velocity` агентов один — `guide_step` ([src/game/guide.h](src/game/guide.h));
+> все прочие проходы ЗАЯВЛЯЮТ ЦЕЛЬ рангом. Раздел §4 переписан, остальные
+> разделы читать с этой поправкой.
+>
+> **Сверка 2026-08-23 (сохранена как история, но её собственное содержание
+> устарело).** Она утверждала: «`ai_patrol_step` уже ХОДИТ по nav — coarse/fine
+> каждый тик». Решёточного нава в дереве нет с 2026-10-12: наряд ходит по ГРАФУ
+> ЗОН, цель у него `RoomId`, а не узел решётки. ВАЖНЕЕ и по-прежнему верно:
+> CANON S12–S13 объявляет описанную здесь room-модель ОТМЕНЁННОЙ —
+> `kRoomAffordance` (белые списки), `kRoomRecovery` (вид назначен), `localScore[]`
+> заменяются вектором глаголов и одной суммой скора; ни одного из первых двух
+> символов в дереве нет.
 
 > **Status: needs layer (#12a), the pure scorer + selection FSM (#12b), and the
 > stagger + steering + embody/loop driver (#12c) all BUILT — the visible crowd
@@ -29,11 +37,15 @@
 >   ([tests/suite_utilai.inl](tests/suite_utilai.inl))
 > - **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md) §L4
 > - Upstream of [physics.md](physics.md): a plain NPC has **no `Controller`/`CameraTag`**
->   (those are the *player's* input seam), so the brain writes its horizontal
->   `Velocity` directly and [physics.md](physics.md) integrates it — gravity still
->   owns `v.z`. The player body carries the same `Needs`/`AiBrain` but `ai_step`
->   **skips any camera-holder**, so player input drives the identical locomotion
->   path with no privileged branch ([npcs.md](npcs.md): the player is not special).
+>   (those are the *player's* input seam). С 2026-11-09 мозг горизонтальную
+>   `Velocity` **НЕ пишет** — он заявляет цель, а пишет её единственный проход
+>   ведения `guide_step` ([src/game/guide.h](src/game/guide.h)); дальше
+>   [physics.md](physics.md) интегрирует, и ось гравитации по-прежнему её. The
+>   player body carries the same `Needs`/`AiBrain` but `ai_step` **skips any
+>   camera-holder** — и тот же вопрос стоит ВТОРЫМ РУБЕЖОМ у писателя
+>   (`decider_of`), потому что вселение отдаёт `CameraTag` живому жителю
+>   ПОСЕРЕДИНЕ кадра, и заявка, поданная до вселения, иначе перетёрла бы ввод
+>   человека ([npcs.md](npcs.md): the player is not special).
 
 This is the system that finally makes the **visible crowd move** — wander, queue
 for a toilet, flee a threat, seek food, patrol, fight. It runs only on the
@@ -181,8 +193,16 @@ intent, its start time, its committed path):
 - **Switch margin 7** — a new intent must beat the current by this margin to win,
   so near-ties stick. (The FSM override 7, *not* the `npc_utility` default 8 —
   using 8 diverges at the hysteresis boundary.)
-- **Emergency override 58** — `safety / flee / combat / heal` at or above this
-  score preempt immediately, bypassing the margin (survival never waits).
+- > **НАДГРОБИЕ КЛАССА «АВАРИЙНЫХ ИНТЕНТОВ» (снесён 2026-11-08, решение
+  > владельца).** Здесь стояло: «Emergency override 58 — `safety / flee /
+  > combat / heal` при счёте ≥ 58 перебивают текущий интент БЕЗ порога». Ни
+  > `kEmergencyScore`, ни предиката `intent_is_emergency` в дереве нет; дверь
+  > переключения ОДНА — `kSwitchMargin` (7). Довод сноса записан в
+  > [ai.h](src/game/ai.h): срочность и так в счёте — угроза входит в
+  > `flee`/`safety` с плюсом и в `work`/`social`/`sleep` с минусом, так что
+  > настоящая опасность разводит их на ~84 очка против порога 7, а класс
+  > избранных закрывал лишь полосу, где счёт почти равен, то есть случай, когда
+  > решение и ДОЛЖНО залипать.
 - **Stickiness +5 → +12** — the current intent gets a bonus `5 + min(7, t·0.18)`
   that grows the longer it's held, so a chosen task runs to a sensible end instead
   of churning. Applied *inside* the scorer (via `Perception.stickinessAmount`), so
@@ -194,90 +214,177 @@ intent, its start time, its committed path):
 
 **Built (#12b — [src/game/ai.cpp](src/game/ai.cpp) `select_intent`).** The
 argmax + hysteresis itself: `select_intent(scores[13], current)` takes the raw
-argmax (ties → lower index), keeps `current` unless a challenger clears the switch
-margin, and lets an emergency intent ≥ 58 preempt regardless. The frozen
-thresholds live as named constants in [ai.h](src/game/ai.h) (`kSwitchMargin`,
-`kEmergencyScore`, and the `stickiness_amount` curve / re-plan bounds the #12c
-driver consumes). The **AiBrain** component (current intent + `stateTimer` +
+argmax (ties → lower index) и keeps `current` unless a challenger clears the
+switch margin. ~~«lets an emergency intent ≥ 58 preempt regardless»~~ — второй
+двери больше нет (надгробие выше). The frozen thresholds live as named constants
+in [ai.h](src/game/ai.h) (`kSwitchMargin`, and the `stickiness_amount` curve /
+re-plan bounds the #12c driver consumes). The **AiBrain** component (current intent + `stateTimer` +
 `nextDecisionAt` + a `decisions` re-plan counter) is defined here and folds with
 embodiment like `Needs`. Verified headless by `test_utilai_all` (margin
 stick/switch, emergency preempt, emergency-below-score fallback, tie-break); the
 re-plan **cadence** and the identity **stagger** are the driver's job — see §5.
 
-### 4. Steering — read baked fields, don't search
+### 4. Движение — ОДНА система, и решение интента выдаёт только ЦЕЛЬ
 
-Once an intent picks a target, movement is a **read of baked data**, never a
-per-agent A\* in the hot path ([performance.md](performance.md): baked, not
-searched). The reference used an HPA\* region graph + subcell BFS + `followPath`
-lookahead string-pulling + a flow-field `next[]` gradient. gigahrush2 already has
-the better-afforded version baked ([nav.md](nav.md)): **`route_step(coarse, fine,
-from, to)`** = coarse next-hop → descend that node's flow field, an O(1) read per
-step. Flee steering reads **`diffusion_gradient`** ([diffusion.md](diffusion.md),
-the flee intent's input, distinct from nav).
+> **ПЕРЕПИСАНО 2026-11-09 (CANON S25).** Всё, что этот раздел говорил раньше —
+> «движение решает интент», «арбитраж держит токен `AiBrain::motion`», «ведёт
+> через `route_step`», — описывало ДВА снесённых механизма. Ниже — код. Доводы,
+> знак ранга и замеры не пересказываются: они в CANON S25 и в шапке
+> [src/game/guide.h](src/game/guide.h).
 
-**Built (#12c — [src/game/ai.cpp](src/game/ai.cpp) `ai_step`).** The driver
-resolves each agent's macro cell from its `Transform` and then hands motion to
-exactly ONE writer per body, through the `AiBrain::motion` token ([ai.h] — the
-single-writer rule this file exists to protect):
+Закон владельца: **перемещение в пространстве — одна универсальная агностичная
+система; занятие ею ПОЛЬЗУЕТСЯ, но никогда не имеет своей.** Поэтому:
 
-- **Flee OWNS the body.** Three direction sources in PRIORITY ORDER:
-  `door_nearest_shelter` (a sealed apartment during Samosbor, §23) is tried
-  FIRST, then `−diffusion_gradient(danger)`, then the remembered away-vector.
-  Since `danger` is null in the shipped game the gradient never contributes.
-- **AN ERRAND OWNS THE BODY TOO — И ЭТО ТЕПЕРЬ ДРУГАЯ СИСТЕМА.** Всё, что
-  описано в двух следующих абзацах про `intent_room_mask` / `kRoomAffordance` /
-  SEAT, **УМЕРЛО** вместе с флоу-полями по виду комнаты (rooms-object F): ни
-  одного из этих символов в дереве нет, и перепись 2026-10-01 насчитала у
-  `intent_room_mask` ровно одно вхождение — сам комментарий. Абзацы оставлены
-  как история решения, читать их как описание кода НЕЛЬЗЯ.
-  **Что вместо них с 2026-10-01** ([game/place.h], CANON S12.3/S13.2): владение
-  даёт не таблица «интент → вид комнаты», а ОДНА СУММА —
-  `Σ спрос[глагол] · предложение[глагол] − путь`. Спрос собирается из `Needs`
-  теми же кривыми давления, которыми живёт скорер (`needs_low_pressure` и
-  соседи, [needs.h]); предложение — `declared + supply` комнаты; радиус
-  кандидатов ВЫВОДИТСЯ из храповика `maxOffer` и отсекается потолками бинов.
-  Ход — отдельный проход `place_errand_step`, он стоит между `ai_patrol_step` и
-  `wander_step` и ведёт тело через `route_step`. Вида комнаты в этом нет нигде
-  (S12.2), и новый глагол — строка `data/verbs.csv`, а не ряд таблицы в коде.
-  **Чего эта система НЕ делает, и это замерено:** тело ИДЁТ, но НЕ ДОХОДИТ —
-  см. «Deferred» ниже, там теперь стоит число. **ПОПРАВКА 2026-11-08 (CANON S24):** «не доходит» перестало означать «ничего не делает». Деяние нужды вешается на СОСТОЯНИЕ «стою там, где предлагают», а не на прибытие (`src/game/serve.{h,cpp}`), поэтому цикл спрос → утоление замкнут и БЕЗ §88: 136–143 тела заняты деянием одновременно, Σ 2179 очков бара за 1800 тиков, умерших ноль. Сам проход ведения теперь ещё и ДЕРЖИТ тело на месте нулевой скоростью, пока идёт деяние.
-  - **MACRO vs MICRO goal.** The macro goal is `currentIntent` — chosen by the
-    scorer, sticky, and already interruptible, because `select_intent` lets an
-    emergency survival intent preempt without the margin. The micro goal is the
-    SEAT: one interior cell, hashed from (identity, room), so a hungry crowd
-    spreads across a kitchen instead of converging on one voxel. It is a pure
-    function and not stored state — which is the whole reason `AiBrain` is still
-    16 bytes and nothing has to invalidate it.
-  - Errand pace is `kErrandSpeed` = wander's 1.35 m/s exactly. Panic reads as
-    panic only while the ordinary pace is ordinary; `kFleeSpeed`'s ×1.6 is what
-    carries that, and it only works against an unremarkable baseline.
-  - The step is aimed at the NEXT CELL'S CENTRE, never along the raw axis. That
-    is measured, not stylistic: the clearance the field guarantees is a CENTRED
-    footprint, so an off-centre body clips the jamb of the very doorway the field
-    routed it through — 23 of 64 arrivals against 64 of 64.
-- **ТОКЕН СТАЛ ТРЁХЗНАЧНЫМ (2026-11-08, CANON S24.5):** владельцев три — `Wander`, `Ai` (бегство/наряд, то есть «тело забрал кто-то другой») и `Errand` (дело и деяние нужды, `place_errand_step`). Страж `ai_owns_motion` спрашивает `motion_owned(token)` — ЯВНЫЙ список владельцев, а не сравнение с одним значением и не «не Wander»: неизвестный байт обязан читаться как «никто не владеет», иначе порча токена даёт замершую толпу (это свойство держит гейт `e2e_test` f8_03). Третье значение заведено не для красоты — пока дело занимало `Ai`, проход рвал своё же деяние каждый кадр, и поймал это гейт `suite_place`, а не чтение.
-- **Every other intent DELEGATES** — the token goes to `MotionOwner::Wander` and
-  `wander_step` steers that body exactly as it does for a brainless NPC (its own
-  file-local `kNpcWalkSpeed`, 1.35 m/s; the player's `Controller` runs faster).
-  An intent with no affordance row, and any intent at all on a floor whose room
-  mix contains none of the rooms it names (an Industrial floor has no kitchen),
-  lands here. Nothing in `ai_step` writes velocity for those bodies, so there is
-  never a second writer to reconcile.
-- `v.z` is **never touched** — gravity ([gravity.md](gravity.md)) owns the vertical
-  axis, so walkers stay grounded. (Both writers still spell that axis `z`: the
-  locomotion path is the ±Z debt the isotropy law names — [gravity.md] frame,
-  `floor_cell` and the antourage walkers are the pattern to follow when it moves.)
+- **Писатель горизонтальной `Velocity` агентов ОДИН** — `guide_step`
+  ([src/game/guide.h](src/game/guide.h) / [.cpp](src/game/guide.cpp)), в кадре
+  после `wander_step` и перед `slow_step` (слот профайлера `kProfGuide`).
+- **Остальные проходы ЗАЯВЛЯЮТ ЦЕЛЬ** компонентой `Steer` (28 байт, живёт РОВНО
+  ОДИН тик, помечена тиком): `TargetKind` = `Hold` / `Zone` / `Dir`, ранг
+  `SteerRank` = `None < Walk < Chase < Feud < Errand < Patrol < Flee`.
+  Сильный ранг перебивает слабый одним сравнением, и **порядок вызовов в кадре
+  на исход не влияет** — это и есть главное отличие от токена.
+- **Нуль есть «заявки нет».** Любое непонятное значение байта читается как
+  «заявки нет», и тело едет на прошлой скорости — то же, что сегодня при
+  стаггере. Обратный знак дал бы заявку БЕГСТВА на всю толпу от зануленной
+  компоненты.
+- **Нав ходьбы — граф зон**, а не решётка: `zone_walk_dir`
+  ([src/game/zone_nav.h](src/game/zone_nav.h)) за одной дверью `steer_to_zone`
+  ([src/game/guide.h](src/game/guide.h)) — два чтения, ни одной волны (§88/F.2).
+  Flee steering reads **`diffusion_gradient`** ([diffusion.md](diffusion.md),
+  the flee intent's input, distinct from nav).
 
-**Deferred (needs #13):** full `route_step` path-following toward an intent's
-*target cell*. The baked fine flow fields aim at the elevated lattice nodes
-(`z ∈ {16,48,80,112}`, [nav.md](nav.md)), but a gravity-bound walker at the ground
-storey can't climb a shaft to reach one, so following them now would steer bodies
-into walls.
+> **НАДГРОБИЕ `route_step` (снесён 2026-10-12, §88/F.2 шаг 3).** Этот раздел
+> месяцами объявлял решёточный `route_step(coarse, fine, from, to)` «уже
+> запечённой лучшей версией» HPA\*-навигации референса. Его больше нет, и это не
+> отложка: `CoarseGraph`, `FineNav`, `bake_coarse`, `bake_fine`, `bake_nearest`,
+> `route_step`, `coarse_next` **запрещены машиной** —
+> [tools/check_source_rules.cmake](tools/check_source_rules.cmake) краснеет на
+> вызове, квалификаторе и объявлении типа (надгробия в бэктиках разрешены
+> намеренно). Довод сноса — замер: 80% ответов старой двери были «шаг вверх»,
+> потому что поля печены над оракулом «тело ВЛЕЗАЕТ в клетку», у которого нет
+> понятия ОПОРЫ. Решётка `lattice.h` сама жива и законна — хабы лифтов и
+> быстрых перемещений, — запрещена только её НАВИГАЦИОННАЯ роль.
+
+**Built (#12c — [src/game/ai.cpp](src/game/ai.cpp) `ai_step`).** Драйвер
+разрешает макро-клетку тела из `Transform` и — если решение того требует —
+подаёт ОДНУ заявку:
+
+- **Бегство заявляет `Dir` рангом `Flee`.** Источников пеленга **ДВА**, в
+  порядке приоритета: живой `−diffusion_gradient(danger)`, затем запомненный
+  away-вектор (`MemDanger`/`MemHurt`). `IntentFlee` — единственный интент этого
+  прохода, который заявляет что-либо; у всех прочих `ai_step` скорости не
+  касается и заявки не подаёт.
+  > **НАДГРОБИЕ ГЕРМОУКРЫТИЙ (2026-08-28).** Третьим — и ПЕРВЫМ по приоритету —
+  > источником здесь стоял `door_nearest_shelter` (запечатанная квартира во
+  > время самосбора, §23). Гермоукрытий в дереве нет, функции нет, типа
+  > `DoorSet` нет; слот в подписи `ai_step` занят `const void* doorsDead` и
+  > назван могилой на месте. Новая дверь вернёт укрытия своим законом — см.
+  > [Docs/specs/06_SAMOSBOR_AND_CRISIS.md](Docs/specs/06_SAMOSBOR_AND_CRISIS.md) §4.
+- **ДЕЛО ЗАЯВЛЯЕТ `Zone` ИЛИ `Hold` РАНГОМ `Errand`,** и решает его не интент, а
+  ОДНА СУММА `Σ спрос[глагол] · предложение[глагол] − путь`
+  ([game/place.h](src/game/place.h), CANON S12.3/S13.2). Спрос собирается из
+  `Needs` теми же кривыми давления, которыми живёт скорер (`needs_low_pressure`
+  и соседи, [needs.h](src/game/needs.h)); предложение — `declared + supply`
+  комнаты; радиус кандидатов ВЫВОДИТСЯ из храповика `maxOffer` и отсекается
+  потолками бинов. Ход — отдельный проход `place_errand_step`, он стоит между
+  `ai_patrol_step` и `wander_step`. Вида комнаты в этом нет нигде (S12.2), и
+  новый глагол — строка `data/verbs.csv`, а не ряд таблицы в коде.
+  > **НАДГРОБИЕ ТАБЛИЦЫ «ИНТЕНТ → ВИД КОМНАТЫ» (rooms-object F, 2026-10-01).**
+  > Здесь стояли `intent_room_mask`, `kRoomAffordance` и флоу-поля по виду
+  > комнаты; ни одного из этих символов в дереве нет (перепись 2026-10-01
+  > насчитала у `intent_room_mask` одно вхождение — сам комментарий).
+  > **И ТАМ ЖЕ СТОЯЛ SEAT**, микроцель «одна внутренняя клетка, хешированная от
+  > (identity, room)». Его тоже нет: `room_seat_offset` и ротация `attempt` в
+  > дереве отсутствуют, а `kSeatArriveM` ([ai.h](src/game/ai.h)) остался
+  > ОБЪЯВЛЕНИЕМ с одним вхождением на всё дерево и без читателя. **Это и была
+  > главная ложь этого файла о себе:** до правки 2026-11-09 SEAT в ОДНОМ разделе
+  > был объявлен и умершим (в абзаце про rooms-object F), и живым («micro goal is
+  > the SEAT… a pure function and not stored state» — двумя пунктами ниже), и
+  > ещё третий раз живым в §«Roles, seat claims…» как «seat claims (§27)».
+  > Вопрос «какой именно стул» вернёт S13.4 скором на пропах комнаты, а не хеш
+  > клетки.
+  **ПОПРАВКА 2026-11-08 (CANON S24):** «не доходит» перестало означать «ничего
+  не делает». Деяние нужды вешается на СОСТОЯНИЕ «стою там, где предлагают», а
+  не на прибытие (`src/game/serve.h` / [.cpp](src/game/serve.cpp)), поэтому цикл
+  спрос → утоление замкнут и БЕЗ §88: 136–143 тела заняты деянием одновременно,
+  Σ 2179 очков бара за 1800 тиков, умерших ноль. Деяние на месте выражается
+  заявкой `Hold` того же ранга `Errand` — то есть «стоять» есть ЦЕЛЬ движения, а
+  не отсутствие цели, и держит тело владеемым нулём единственный писатель.
+  - **MACRO goal** — всё ещё `currentIntent`: выбран скорером, липкий и
+    прерываемый. Микроцели в коде сегодня нет (см. надгробие SEAT выше).
+  - Темп дела — `kErrandSpeed` ([ai.h](src/game/ai.h)), и он равен обычному шагу
+    `kWalkSpeedMps` ([guide.h](src/game/guide.h)). Паника читается паникой
+    только пока обычный темп обычен: `kFleeSpeed` есть `kWalkSpeedMps ×
+    kPanicPace`, и это равенство прибито гейтом в `tests/suite_utilai.inl`, а не
+    памятью. **Оговорка честности:** литерал 1.35 всё ещё выписан в
+    `kErrandSpeed`/`kFleeSpeed` ([ai.h](src/game/ai.h)),
+    `kFeudWalkSpeed` ([faction_relations.cpp](src/game/faction_relations.cpp)),
+    `kWanderLegMetres` ([wander.h](src/game/wander.h)) и
+    `kPatrolLegMetres` ([patrol.h](src/game/patrol.h)) — «один дом» объявлен в
+    `guide.h`, но переезд числа не закончен.
+  - Шаг нацелен в ЦЕНТР СЛЕДУЮЩЕЙ КЛЕТКИ, никогда по голому орту. Это замер, а
+    не стиль: орт ведёт тело из любой точки клетки одинаково, поэтому тело,
+    вошедшее по касательной, цеплялось за углы — 23 прибытия из 64 против 64 из
+    64. Сегодня это свойство живёт в ОДНОМ месте, `steer_to_zone`
+    ([guide.h](src/game/guide.h)), а не в трёх копиях.
+- **НАРЯД ЗАЯВЛЯЕТ `Zone` РАНГОМ `Patrol`** — отдельный проход
+  `ai_patrol_step` ([ai.h](src/game/ai.h)), подпись
+  `(reg, zones, layer, const GravityField*, tick)`. Цель — ЗОНА (`PatrolPlan`,
+  [patrol.h](src/game/patrol.h)), и это НОГА маршрута, а не разовая точка:
+  закрыв ногу, тело выбирает следующую зону от своей identity и `hops`.
+- **ПРОГУЛКА — СЛАБЕЙШИЙ ЗАЯВИТЕЛЬ, РАНГ `Walk`,** и за ней никого:
+  `wander_step` ([wander.h](src/game/wander.h)) заявляет `Zone` жителю, `Dir`
+  или `Hold` погоне моба (ранг `Chase`) и `Hold` замороженному взглядом телу.
+  Тело, у которого НИ ОДИН заявитель не подал заявки, не получает записи вовсе
+  и едет на прошлой скорости.
+- **НАДГРОБИЕ ТОКЕНА (2026-11-09, CANON S25).** Здесь стояло: «драйвер передаёт
+  движение ровно одному писателю через токен `AiBrain::motion`», «владельцев
+  три — `Wander`/`Ai`/`Errand`», «страж `ai_owns_motion` спрашивает
+  `motion_owned()`», «остальные интенты ДЕЛЕГИРУЮТ, токен уходит в
+  `MotionOwner::Wander`», «`wander_step` ведёт тело своим file-local
+  `kNpcWalkSpeed`». **Ни один из этих символов в дереве больше НЕ ОБЪЯВЛЕН** —
+  снесены `MotionOwner`, `motion_owned`, `ai_owns_motion`, байт
+  `AiBrain::motion` (ушёл в паддинг, пин 16 байт держится без подкрутки),
+  `ai_release` вместе с тремя его вызывающими (выгрузка этажа и два шва
+  поездки) и `kNpcWalkSpeed`; в бэктиках они встречаются только в надгробиях.
+  Довод сноса — ЗАМЕР, а не
+  вкус: прибор-часовой (`--action vedenie`, [steer_probe.h](src/game/steer_probe.h))
+  нашёл на этаже 6 **45 двойных записей за 250 тиков**, и перебивал ВСЕГДА
+  `investigate_step` — пятый рулевой, который токена не читал вовсе. То есть
+  закон «писатель один» токеном НЕ ДЕРЖАЛСЯ; он держался тем, что два звена
+  цепочки почти всегда молчат. Проверяемая форма одна: писатель физически один,
+  а второй невыразим, потому что у заявителя нет `Velocity` в виде.
+  Что пережило снос — знак нуля (`SteerRank::None`, гейт `e2e_test` f8_03 на
+  испорченном байте), «деяние рвётся угрозой и не рвётся самим собой» (ранги
+  вместо списка владельцев) и «отдаём вандеру на отказе» (заявитель, у которого
+  цель не прошла `steer_to_zone`, заявку не подаёт).
+- **ОСТАЛОСЬ ДВА РУЛЕВЫХ, И ЭТО НАЗВАНО ВСЛУХ (CANON S25.6).**
+  `investigate_step` ([investigate.h](src/game/investigate.h), слух мобов) и
+  `faction_feud_step` ([faction_relations.h](src/game/faction_relations.h),
+  вражда) пишут скорость САМИ и стоят в кадре НИЖЕ прохода ведения. Разница
+  между ними есть, и она важна: вражда ЧИТАЕТ заявку сильнее своего ранга
+  (`steer_claimed_by_stronger(..., SteerRank::Feud, ...)`), а слух не читает
+  ничего. Прибор показывает **48 двойных записей за 250 тиков на этаже 6, все от
+  слуха**. Их переезд в заявки — второй шаг, и он же задаёт владельцу вопрос,
+  который сегодня решён порядком вызовов: **слух БЕЗУСЛОВНО перебивает погоню**
+  (моб, вцепившийся в жителя, бросает его на любой выстрел).
+- **Ось гравитации не трогается НИКОГДА** — её владелец `physics_step`
+  ([gravity.md](gravity.md)), какой бы осью она ни была. Это выражено
+  единственной формой записи, `steer_write`/`steer_stop`
+  ([guide.h](src/game/guide.h)), а плоскость ходьбы — одной дверью
+  `steer_frame_of` ([world/gravity.h](src/world/gravity.h)). Прежняя оговорка
+  «оба писателя всё ещё пишут букву `z`» устарела дважды: писателей ведения
+  один, и ось он берёт из фрейма.
+
+**ДОЛГ, КОТОРЫЙ ПЕРЕЖИЛ СНОС НАВА: ТЕЛО ИДЁТ И НЕ ДОХОДИТ.** Абзац ниже —
+история трёх заходов, и `route_step` в нём назван как ПОКОЙНИК (надгробие в
+§4 выше), а не как отложка.
 
 > **ЭТОТ АБЗАЦ ПОЛУЧИЛ ЧИСЛО 2026-10-01, И ЧИСЛО МЕНЯЕТ ЕГО ВЕС.**
-> Проза выше была верна и стояла здесь месяцами; из неё читалось «мелкий долг,
-> ждём #13». Живой прогон (`--shot --frames 9000 --floor 6`, ~800 тыс. вызовов
-> `route_step`) говорит другое:
+> Проза, стоявшая здесь месяцами («целевых клеток ждём к #13, следование за
+> полями сейчас вело бы тела в стены»), была верна и читалась как мелкий долг.
+> Живой прогон (`--shot --frames 9000 --floor 6`, ~800 тыс. вызовов
+> снесённого с тех пор `route_step`) говорит другое:
 >
 > | ответ потока | число | доля |
 > |---|---|---|
@@ -301,20 +408,33 @@ into walls.
 > Что сделано немедленно, потому что это была порча состояния, а не долг:
 > последняя нога «прямо на цель» больше не идёт вслепую — перед шагом стоит
 > вопрос «знает ли нав эту клетку», иначе тело выходило за проходимое множество
-> и теряло маршрут (замер лечения: брошенных целей ~240 → 11). Real targets — a food item, a toilet cell, a monster — arrive with the
-#13 content tables ([items.md](items.md) / [monsters.md](monsters.md)); once an
-intent has a reachable goal cell, `route_step` becomes its steering with **no
-change to the scorer or the FSM** (the same stubbed-input seam as §2). Until then
-flee-gradient + wander give the whole crowd honest, deterministic motion.
+> и теряло маршрут (замер лечения: брошенных целей ~240 → 11).
+>
+> **ЧЕМ ЭТО КОНЧИЛОСЬ (2026-10-12, §88/F.2 шаг 3):** предмет СНЕСЁН, а не
+> вылечен. Решёточный нав ходьбы удалён целиком, все проходы пошли по графу
+> зон, и прогулка впервые начала ДОХОДИТЬ (0.00 → 15.52 прибытий на 100
+> замеров). Нога НАРЯДА при этом не закрылась (1.04 при полосе 0.49–1.21 до
+> правки) — это остаток долга, и круг причин сужен замером; одно из трёх
+> подозрений, «арбитраж токена», потеряло предмет 2026-11-09 вместе с токеном.
+
+Real targets — a food item, a toilet cell, a monster — arrive with the
+#13 content tables ([items.md](items.md) / [monsters.md](monsters.md)); цель при
+этом не станет новым видом движения: заявитель отдаёт либо ЗОНУ, либо ПЕЛЕНГ, и
+«точка» отдельным видом НЕ ЗАВЕДЕНА сознательно — она была бы `Dir` с чужим
+прибытием, то есть столбцом без читателя (CANON S25.3). Скорер и FSM при этом не
+правятся — тот же заглушечный шов, что в §2.
 
 ### 5. Driver + scheduling — identity-hash stagger, no queue
 
-`ai_step(reg, pool, danger, grid, layer, now, dt, cfg, mem, doors, world)` is the
-per-frame driver (the six-argument form below is the OLD signature and would not
-compile); the sweep is layer-scoped, so it iterates
+`ai_step(reg, pool, danger, grid, layer, now, dt, cfg, mem, doorsDead, world, bus,
+tick)` is the per-frame driver (сверено с подписью в
+[ai.h](src/game/ai.h) 2026-11-09; `doorsDead` — `const void*`, могила дверей, см.
+надгробие в §4; `tick` появился потому, что заявка ведения помечается тиком);
+the sweep is layer-scoped, so it iterates
 **all** live AI entities every frame (no persistent stripe buffers, no scheduling
 wheel or queue), skips camera-holders, decays nothing (that's `needs_step`), and
-for each agent either **re-plans or coasts**, then applies §4 steering. Whether an
+for each agent either **re-plans or coasts**, then подаёт заявку §4 (скорости не
+пишет). Whether an
 agent re-plans *this* frame is a compare against its own `AiBrain.nextDecisionAt`
 deadline; when it fires, the driver re-scores, re-selects, bumps the `decisions`
 counter, and sets the next deadline to
@@ -342,53 +462,65 @@ selects flee and drives `−x`; the deadline gates re-planning).
 - **FSM state = the minimum** — current intent + commit time + path handle, a tiny
   per-entity record, not a class hierarchy. The reference parks it in module
   WeakMaps; the port puts it in an ECS component so it folds with embodiment.
-- **Steering = baked reads** — `diffusion_gradient` now, `route_step` once #13
-  gives reachable goals, O(1), no search on the tick.
+- **Steering = ОДНА система и запечённые чтения** — `diffusion_gradient` для
+  бегства, граф зон (`zone_walk_dir`, два чтения, ни одной волны) для хода; O(1)
+  на шаг, поиска в тике нет. ~~«`route_step` once #13 gives reachable goals»~~ —
+  предмет снесён 2026-10-12 и запрещён машиной, надгробие в §4.
+  **Занятие НЕ ИМЕЕТ своего движения:** оно выдаёт цель (`Hold`/`Zone`/`Dir`) и
+  ранг, несёт её `guide_step` ([guide.h](src/game/guide.h)).
 - **Universal** — the player is just an embodied record too; it carries the same
   `Needs`/`AiBrain`, and the driver simply **skips camera-holders** so player input
-  drives the identical `Velocity`→physics path an NPC brain writes to
-  ([npcs.md](npcs.md)). Combat is isotropic: an NPC that shoots spawns an honest
-  projectile that can hit anyone, the firer included.
+  drives the identical `Velocity`→physics path. Combat is isotropic: an NPC that
+  shoots spawns an honest projectile that can hit anyone, the firer included.
 
 ## Roles, seat claims and the steering frame (landed 2026-08-14)
 
-Three increments on top of the shape above, ported from the marko1olo batch
-after rework ([problems.md] §54):
+Три инкремента, вставшие сюда из батча marko1olo после переработки
+([problems.md] §54). **Двух из трёх в дереве больше нет**, и это надгробия, а не
+описание кода:
 
-- **Roles** ([role.h]): five archetypes as a MULTIPLIER ROW on the scorer
-  (work/patrol/social) plus two additive response gains (scavenge on local
-  recall, care on nearby wounded), applied BEFORE identity jitter. Resident is
-  the all-ones row, so a roleless floor scores bit-for-bit what it scored
-  before. The role is a writable pool column seeded from `role_for(id,
-  floorKind)` — the column, not the hash, is the runtime truth (story
-  overrides survive a reload; it travels in the pool blob). A role REPLACES
-  the sleep/work destination (`homeRooms`/`workRooms`), never ANDs it, and the
-  role rooms join `kRoomFieldMask` so every stated destination has a baked
-  field. The Medic is the one role that acts on ANOTHER body's `Needs::hpBank`
-  — the same bank the Medical room feeds, so a medic in a ward stacks with the
-  ward instead of inventing a second heal path.
-- **Seat claims** (§27): a transient per-tick claim list in `ai_step` plus an
-  `attempt` rotation in `room_seat_offset` — a contested seat rotates to the
-  next furniture spot instead of stacking two bodies on one stove. No owner
-  column, no handshake: stable view order makes the same body win the same
-  contest every tick. The seat key packs ALL THREE axes.
-- **Steering frame**: every steering vector (flee-to-shelter, danger gradient,
-  memory away, seat, route step, room column, faction feud) is built in the
-  tangent plane of the gravity frame — `regime_frame`, hoisted per sweep — and
-  the Velocity write is per-axis, leaving the gravity axis to physics whatever
-  axis that is. Under NegZ everything reduces to the old literals bit-for-bit
-  (240k checks unmoved); the side-regime property is pinned by suite_faction2
-  §4b with a run mutation. Stated caveat: seat targets, room columns and
-  memory away-vectors are still (x, y) data, so under a side regime the
-  projection honestly loses their along-Z half until the bakes grow a third
-  axis (roadmap: nav connectivity classes).
+- > **НАДГРОБИЕ РОЛЕЙ (снесены 2026-11-08, решение владельца).** Здесь лежало
+  > описание пяти архетипов как МУЛЬТИПЛИКАТИВНОЙ СТРОКИ скорера (`role.h`,
+  > `RoleId`, `RoleTraits`, `role_for`, колонка `role_` пула, `homeRooms`/
+  > `workRooms`, `kRoomFieldMask`, Медик над `Needs::hpBank`). Файла
+  > `src/game/role.h` в дереве нет; `RoleId` и `role_for` встречаются только в
+  > надгробиях `conversation.cpp`, `population.cpp` и `patrol.h`. Важное
+  > следствие, которое пережило снос: **наряд никогда не был ролевой
+  > политикой** — `ai_patrol_step` не читал ни одного ролевого числа, он читает
+  > разбивку зон, соль и два предела, поэтому при сносе ролей он просто
+  > переехал в [patrol.h](src/game/patrol.h) целиком.
+- > **НАДГРОБИЕ SEAT-ЗАЯВОК (§27; список снесён 2026-10-01, механизм — вместе с
+  > эрранд-веткой).** Здесь лежал транзиентный список заявок на место внутри
+  > `ai_step` плюс ротация `attempt` в `room_seat_offset`. Ни того, ни другого в
+  > дереве нет: список был 512 Б стека на каждый вызов и три предупреждения
+  > сборки за массив, который не писался и не читался; `room_seat_offset`
+  > отсутствует, `kSeatArriveM` ([ai.h](src/game/ai.h)) — объявление с одним
+  > вхождением на всё дерево и без читателя. Вопрос «какой именно стул» вернёт
+  > S13.4 скором на пропах комнаты.
+- **Steering frame — ЖИВОЙ, и с 2026-11-09 он ОДИН на всё ведение.** Плоскость
+  ходьбы берётся одной дверью `steer_frame_of`
+  ([world/gravity.h](src/world/gravity.h)) — она же `regime_frame` под капотом, —
+  поднимается ОДИН раз на проход, а запись скорости идёт по осям, оставляя ось
+  гравитации физике, какой бы осью она ни была (`steer_write`/`steer_stop`,
+  [guide.h](src/game/guide.h)). Под NegZ всё сводится к прежним литералам
+  бит-в-бит; свойство бокового режима прибито `suite_faction2` §4b с прогонной
+  мутацией. **Что здесь ПОЧИНИЛОСЬ сносом копий:** проекция на плоскость жила
+  дословной лямбдой в четырёх проходах, и ДВЕ из них писали `vel.v.x`/`vel.v.y`
+  напрямую, то есть врали при любой гравитации, кроме −Z (погоня в `wander.cpp`
+  и `investigate.cpp`). Первая починена переводом в заявку; `investigate_step`
+  ещё нет — он в остатке CANON S25.6. **Оговорка, которая ЖИВА:** away-векторы
+  памяти — всё ещё (x, y)-данные, поэтому под боковым режимом проекция честно
+  теряет их Z-половину.
 
 ## Connections
 
-Consumes needs (this doc), the baked nav ([nav.md](nav.md)) and flee field
-([diffusion.md](diffusion.md)), and the [faction matrix](macrosim.md) (#10d).
-Produces walking-plane `Velocity` straight into [physics.md](physics.md) — the same
-integrator the player reaches through [controller.md](controller.md). Runs on the embodied slice the
+Consumes needs (this doc), граф зон (`zone_nav.h`; решёточный бейк из
+[nav.md](nav.md) снесён 2026-10-12) и flee field
+([diffusion.md](diffusion.md)), и the [faction matrix](macrosim.md) (#10d).
+**Производит ЗАЯВКУ ЦЕЛИ, а не скорость:** walking-plane `Velocity` пишет
+`guide_step` ([src/game/guide.h](src/game/guide.h)) и отдаёт её
+[physics.md](physics.md) — тому же интегратору, к которому игрок приходит через
+[controller.md](controller.md). Runs on the embodied slice the
 [macrosim.md](macrosim.md) macro tick hands to [floors.md](floors.md) streaming.
 Content it acts on (food/drink items, weapons, monster targets) comes from the
 #13 tables ([items.md](items.md) / [monsters.md](monsters.md)). Room stocks and

@@ -273,7 +273,8 @@
 #include "ecs/registry.h"      // Registry, Entity
 #include "game/combat.h"       // Corpse — первая ветка decider_of: мёртвый без решателя
 #include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
-#include "game/faction.h"      // Faction / kFactionCount — the trait table's index
+#include "game/faction.h"
+#include "game/guide.h"      // kWalkSpeedMps/kPanicPace — ОДИН дом скорости ходьбы      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
 #include "game/zone_nav.h"     // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "world/level_stack.h" // LayerId
@@ -892,16 +893,19 @@ inline constexpr float kStickPerSec = 0.18f;     // growth per second held
 // jitter, so cadence phase is uncorrelated with the score nudges.
 inline constexpr const char* kRethinkChannel = "utility_rethink";
 
-// Flee pace, m/s. Matched to `wander.cpp`'s kNpcWalkSpeed (1.35) times a panic
-// factor: a body running from a danger gradient should visibly outpace a body
-// strolling to a lattice node, or the intent is invisible. DATA, retune freely.
-inline constexpr float kFleeSpeed = 1.35f * 1.6f;
+// Шаг паники — ВЫВЕДЕН, а не назначен (2026-11-09): дом скорости ходьбы один
+// (`kWalkSpeedMps@game/guide.h`), паника есть МНОЖИТЕЛЬ от него
+// (`kPanicPace`). Прежде здесь стоял литерал `1.35f * 1.6f`, и комментарий
+// сам признавался, что число «matched to wander.cpp's kNpcWalkSpeed» — то
+// есть ОДНО число жило в четырёх файлах, и три копии объясняли, почему они
+// равны четвёртой.
+inline constexpr float kFleeSpeed = kWalkSpeedMps * kPanicPace;
 
-// Errand pace, m/s — walking to the kitchen is not fleeing. Deliberately EQUAL to
-// `wander.cpp`'s kNpcWalkSpeed so a body that switches from roaming to an errand
-// changes DIRECTION and not gait; the flee multiplier above is what makes panic
-// legible, and it only reads as panic while the ordinary pace is the ordinary one.
-inline constexpr float kErrandSpeed = 1.35f;
+// Шаг дела и наряда — ТОТ ЖЕ шаг ходьбы, и теперь это ТОЖДЕСТВО, а не
+// совпадение литералов: тело, перешедшее с прогулки на дело, меняет
+// НАПРАВЛЕНИЕ, а не походку, и множитель паники читается как паника ровно
+// потому, что обычный шаг обычен.
+inline constexpr float kErrandSpeed = kWalkSpeedMps;
 
 // How close to its seat a body must be to count as SETTLED, in metres. Below this
 // it stops and the room's ambient recovery does the work. (~~[room_zone.h]

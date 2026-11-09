@@ -37,11 +37,12 @@ std::int8_t clamp8(int v) {
 }
 
 #include "core/rng.h"
-// Advance speed for a body walking at an enemy, m/s. The same 1.35 an ordinary
-// resident walks at (wander.cpp kNpcWalkSpeed, which is file-local there): closing
-// on somebody you dislike is walking, not sprinting, and giving a brawler a speed
-// bonus would let it outrun the flow-field crowd for no authored reason.
-constexpr float kFeudWalkSpeed = 1.35f;
+// Сближение с врагом — ЭТО ХОДЬБА, и число ВЫВЕДЕНО из дома скорости
+// (`kWalkSpeedMps@game/guide.h`), а не повторено литералом: драчун с
+// авторской надбавкой обгонял бы толпу без названной причины. Прежде здесь
+// стоял четвёртый экземпляр числа 1.35 с комментарием «то же, что в
+// wander.cpp, где оно file-local».
+constexpr float kFeudWalkSpeed = kWalkSpeedMps;
 
 // Below this squared horizontal separation the direction is meaningless and
 // normalising it would divide by ~zero. 5 cm.

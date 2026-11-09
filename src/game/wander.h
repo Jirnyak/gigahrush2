@@ -25,6 +25,7 @@
 #include "core/tick.h"
 #include "ecs/registry.h"
 #include "game/npc_pool.h"
+#include "game/guide.h"     // kWalkSpeedMps — бюджет ноги ВЫВОДИТСЯ из шага
 #include "game/zone_nav.h"  // ZoneNav — ОДНА дверь «куда шагнуть» (§88/F.2)
 #include "world/level_stack.h"
 #include "world/macro_grid.h"
@@ -158,7 +159,7 @@ inline constexpr float kWanderLegMetres =
 //
 // Версия в зонах эту грань ПРОВАЛИЛА, и провал нашёл замер: 4 зоны на этаже 6
 // есть 19.2 м, то есть меньше радиуса взгляда. Довод был верен, единицы — нет.
-inline constexpr float kWanderLegMetresMob = 15.0f * 2.70f; // 40.5 м
+inline constexpr float kWanderLegMetresMob = 15.0f * 2.0f * kWalkSpeedMps; // 40.5 м
 //
 // ВЫБРАН ЗАМЕРОМ 2026-10-12, и это исполнение решения владельца №2 «решить
 // замером, а не вкусом». Четыре прогона по 30000 кадров, этаж 6, нормировка НА
