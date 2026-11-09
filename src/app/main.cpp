@@ -57,6 +57,7 @@
 #include "game/place.h"    // выбор места суммой S13.2 и ход к нему
 #include "game/serve.h"    // деяние нужды на месте (S24) — замыкание цикла
 #include "game/guide.h"     // ОДИН проход ведения: единственный писатель Velocity
+#include "game/sight_probe.h"  // ПРИБОР ВОСПРИЯТИЯ: кто кого видит и сквозь что (--action zrenie)
 #include "game/steer_probe.h"  // ПРИБОР ВЕДЕНИЯ: кто написал скорость тела (--action vedenie)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
@@ -98,6 +99,8 @@
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+#include "game/look.h"      // Look, look_step — ВЗГЛЯД любого тела (S25.7)
+#include "game/perceive.h"  // perceive_step — ОДИН проход восприятия (S25.8)
 #include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
 #include "game/noise.h"
 #include "game/wander.h"
@@ -3385,6 +3388,14 @@ int main(int argc, char** argv) {
     // point of the readout is "is anything investigating right now", and a running
     // total would answer a different question badly.
     std::uint32_t heardMobs = 0;
+    game::PerceiveTick perceiveTick{};
+    struct PerceiveSum {
+        std::uint64_t bodies = 0, blind = 0, pairsNear = 0, pairsCone = 0;
+        std::uint64_t rays = 0, occluded = 0, sawFoe = 0, heard = 0;
+        std::uint64_t claimSight = 0, claimNoise = 0;
+    } perceiveSum{};
+    std::uint64_t perceiveSumTicks = 0;
+    game::LookTick lookTick{};
     // The samosbor clock. One per live floor; the demo keeps one floor live, so one
     // clock, re-armed on arrival ([samosbor.h]).
     game::SamosborRng sbRng{0x5A303B0Du};
@@ -3547,6 +3558,10 @@ int main(int argc, char** argv) {
     // врал тиковый `byVerb` цикла нужд: запись случается в один тик стаггера.
     game::SteerProbe steerProbe{};
     std::uint64_t steerProbeLastPrint = 0;
+    // ПРИБОР ВОСПРИЯТИЯ (--action zrenie). Тут же и по той же причине: векторы
+    // кандидатов и слушателей переживают проходы.
+    game::SightProbe sightProbe{};
+    std::uint64_t sightProbeLastPrint = 0;
     std::uint64_t lastAimemLogTick = ~0ull;
     // Cumulative residents finished off by attrition since the run began. A running
     // total rather than a per-step count, because the failure it watches for is
@@ -5916,10 +5931,204 @@ int main(int argc, char** argv) {
                 // 420-м, и замер обязан мерить ТОТ этаж, который просили.
                 const bool steerProbeOn =
                     (shotAction == "vedenie" && shotFramesSeen >= 450);
+                // ПРИБОР ВОСПРИЯТИЯ — ЧИТАЕТ, НЕ ПИШЕТ, поэтому стоит рядом и
+                // ничем не мешает цепочке. Проход раз в `kWanderPeriod` тиков,
+                // тем же стаггером, каким ходят заявители: вопрос «кто кого
+                // видит» между тиками почти не меняется, а цена у него O(n²).
+                if (shotAction == "zrenie" && shotFramesSeen >= 450 &&
+                    (simTick % game::kWanderPeriod) == 0) {
+                    game::sight_probe_pass(reg, activeGrid, noiseField, activeLayer,
+                                           steer_frame_of(&activeWorld.gravity()),
+                                           sightProbe);
+                    if (sightProbe.passes - sightProbeLastPrint >= 32) {
+                        sightProbeLastPrint = sightProbe.passes;
+                        const double pz = static_cast<double>(sightProbe.passes);
+                        for (std::size_t i = 0; i < game::kSightWhoCount; ++i) {
+                            if (sightProbe.observers[i] == 0) continue;
+                            const double seen =
+                                static_cast<double>(sightProbe.seen[i]);
+                            std::fprintf(
+                                stderr,
+                                "[zrenie] floor=%d %s: тел/проход=%.1f (стоят=%.1f) "
+                                "ЗАМЕЧЕНО пар/проход=%.1f | в конусе=%.1f%% "
+                                "ЛУЧ ЧИСТ=%.1f%% СКВОЗЬ СТЕНУ=%.1f%% "
+                                "конус И луч=%.1f%%\n",
+                                currentFloor, game::kSightWhoRows[i].name,
+                                static_cast<double>(sightProbe.observers[i]) / pz,
+                                static_cast<double>(sightProbe.standing[i]) / pz,
+                                seen / pz,
+                                seen != 0.0 ? 100.0 * static_cast<double>(
+                                                          sightProbe.inCone[i]) / seen
+                                            : 0.0,
+                                seen != 0.0 ? 100.0 * static_cast<double>(
+                                                          sightProbe.clear[i]) / seen
+                                            : 0.0,
+                                seen != 0.0 ? 100.0 * static_cast<double>(
+                                                          sightProbe.thruWall[i]) / seen
+                                            : 0.0,
+                                seen != 0.0 ? 100.0 * static_cast<double>(
+                                                          sightProbe.coneClear[i]) / seen
+                                            : 0.0);
+                        }
+                        std::fprintf(
+                            stderr,
+                            "[zrenie] ЦЕНА: отсечек=%.0f/проход (%.3f мс), "
+                            "маршей=%.1f/проход (%.3f мс, %.0f нс/марш) | "
+                            "человека видят пар=%.2f/проход, сквозь стену=%.2f\n",
+                            static_cast<double>(sightProbe.distTests) / pz,
+                            static_cast<double>(sightProbe.cheapNanos) / pz / 1e6,
+                            static_cast<double>(sightProbe.rays) / pz,
+                            static_cast<double>(sightProbe.rayNanos) / pz / 1e6,
+                            sightProbe.rays != 0
+                                ? static_cast<double>(sightProbe.rayNanos) /
+                                      static_cast<double>(sightProbe.rays)
+                                : 0.0,
+                            static_cast<double>(sightProbe.humanSeen) / pz,
+                            static_cast<double>(sightProbe.humanThruWall) / pz);
+                        char bins[256];
+                        {
+                            int at = 0;
+                            std::uint64_t all = 0;
+                            for (std::size_t i = 0;
+                                 i < game::SightProbe::kSightBins; ++i)
+                                all += sightProbe.distHist[i];
+                            for (std::size_t i = 0;
+                                 i < game::SightProbe::kSightBins; ++i) {
+                                if (sightProbe.distHist[i] == 0) continue;
+                                at += std::snprintf(
+                                    bins + at,
+                                    sizeof(bins) - static_cast<std::size_t>(at),
+                                    " %zum=%.0f%%", i * 4,
+                                    all != 0 ? 100.0 * static_cast<double>(
+                                                           sightProbe.distHist[i]) /
+                                                   static_cast<double>(all)
+                                             : 0.0);
+                                if (at >= static_cast<int>(sizeof(bins)) - 1) break;
+                            }
+                            if (at == 0) std::snprintf(bins, sizeof(bins), " нет");
+                        }
+                        std::fprintf(
+                            stderr,
+                            "[zrenie] ОКНО ПОЛЯ: решётка 4м клеток=%llu "
+                            "(твёрдых=%.1f%% пустых=%.1f%% СМЕШАННЫХ=%.1f%%) "
+                            "ТЕЛОПРИГОДНЫХ=%llu (%.1f%%) | "
+                            "дальность контактов:%s\n",
+                            static_cast<unsigned long long>(sightProbe.cellsTotal),
+                            sightProbe.cellsTotal != 0
+                                ? 100.0 * static_cast<double>(sightProbe.cellsSolid) /
+                                      static_cast<double>(sightProbe.cellsTotal)
+                                : 0.0,
+                            sightProbe.cellsTotal != 0
+                                ? 100.0 * static_cast<double>(sightProbe.cellsAir) /
+                                      static_cast<double>(sightProbe.cellsTotal)
+                                : 0.0,
+                            sightProbe.cellsTotal != 0
+                                ? 100.0 * static_cast<double>(sightProbe.cellsMixed) /
+                                      static_cast<double>(sightProbe.cellsTotal)
+                                : 0.0,
+                            static_cast<unsigned long long>(
+                                sightProbe.cellsStandable),
+                            sightProbe.cellsTotal != 0
+                                ? 100.0 *
+                                      static_cast<double>(sightProbe.cellsStandable) /
+                                      static_cast<double>(sightProbe.cellsTotal)
+                                : 0.0,
+                            bins);
+                        std::fprintf(
+                            stderr,
+                            "[zrenie] СЛУХ: спросили=%.1f/проход, услышали=%.1f "
+                            "(%.1f%%), СКВОЗЬ МАТЕРИЮ=%.1f (%.1f%% услышанного), "
+                            "клеток кладки на путь=%.2f, толщина=%.3f мс\n",
+                            static_cast<double>(sightProbe.earsTotal) / pz,
+                            static_cast<double>(sightProbe.heard) / pz,
+                            sightProbe.earsTotal != 0
+                                ? 100.0 * static_cast<double>(sightProbe.heard) /
+                                      static_cast<double>(sightProbe.earsTotal)
+                                : 0.0,
+                            static_cast<double>(sightProbe.heardThruWall) / pz,
+                            sightProbe.heard != 0
+                                ? 100.0 *
+                                      static_cast<double>(sightProbe.heardThruWall) /
+                                      static_cast<double>(sightProbe.heard)
+                                : 0.0,
+                            sightProbe.heardThruWall != 0
+                                ? static_cast<double>(sightProbe.blockersSum) /
+                                      static_cast<double>(sightProbe.heardThruWall)
+                                : 0.0,
+                            static_cast<double>(sightProbe.thickNanos) / pz / 1e6);
+                    }
+                }
                 if (steerProbeOn)
                     game::steer_probe_begin(reg, activeLayer,
                                             steer_frame_of(&activeWorld.gravity()),
                                             steerProbe);
+                // ОДИН ПРОХОД ВОСПРИЯТИЯ — зрение и слух одной системой
+                // (S25.8). Стоит ПОСЛЕ старения шума (`noise_step`, верх тика)
+                // и диффузии, но ДО всех заявителей: бегство — первый и
+                // сильнейший, и оно обязано видеть воспринятое В ЭТОМ тике.
+                // Прибор ведения взводится ПОСЛЕ него, потому что восприятие
+                // скорости не пишет вовсе — у него нет `Velocity` в виде, и
+                // его заявку исполнит `guide_step` ниже.
+                const auto profPerceiveT0 = prof_now();
+                perceiveTick = game::perceive_step(
+                    reg, activeGrid, noiseField, pool, factionRel, activeLayer,
+                    simTick, &activeWorld.gravity());
+                prof_add(kProfAcoustics, profPerceiveT0);
+                heardMobs = perceiveTick.heard;
+                // ЗАМЕР ВОСПРИЯТИЯ — накопительный, той же формы, что у
+                // ведения: тиковая строка соврала бы, потому что тело
+                // посещается раз в `kPerceivePeriod`.
+                if (shotAction == "zrenie" && shotFramesSeen >= 450) {
+                    perceiveSum.bodies += perceiveTick.bodies;
+                    perceiveSum.blind += perceiveTick.blind;
+                    perceiveSum.pairsNear += perceiveTick.pairsNear;
+                    perceiveSum.pairsCone += perceiveTick.pairsCone;
+                    perceiveSum.rays += perceiveTick.rays;
+                    perceiveSum.occluded += perceiveTick.occluded;
+                    perceiveSum.sawFoe += perceiveTick.sawFoe;
+                    perceiveSum.heard += perceiveTick.heard;
+                    perceiveSum.claimSight += perceiveTick.claimSight;
+                    perceiveSum.claimNoise += perceiveTick.claimNoise;
+                    if (++perceiveSumTicks % 250 == 0)
+                        std::fprintf(
+                            stderr,
+                            "[vospriyatie] floor=%d окно=%llu тиков: посещено "
+                            "%.1f тел/тик (слепых %.2f) | пар в радиусе=%.1f "
+                            "из них в конусе=%.1f (%.1f%%) | маршей=%.1f "
+                            "ЗАСЛОНЕНО=%.1f (%.1f%% маршей ОТКЛОНЕНО) | "
+                            "увидели врага=%.2f, услышали=%.2f, заявок "
+                            "зрения=%.2f слуха=%.2f\n",
+                            currentFloor,
+                            static_cast<unsigned long long>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.bodies) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.blind) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.pairsNear) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.pairsCone) /
+                                static_cast<double>(perceiveSumTicks),
+                            perceiveSum.pairsNear != 0
+                                ? 100.0 * static_cast<double>(perceiveSum.pairsCone) /
+                                      static_cast<double>(perceiveSum.pairsNear)
+                                : 0.0,
+                            static_cast<double>(perceiveSum.rays) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.occluded) /
+                                static_cast<double>(perceiveSumTicks),
+                            perceiveSum.rays != 0
+                                ? 100.0 * static_cast<double>(perceiveSum.occluded) /
+                                      static_cast<double>(perceiveSum.rays)
+                                : 0.0,
+                            static_cast<double>(perceiveSum.sawFoe) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.heard) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.claimSight) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.claimNoise) /
+                                static_cast<double>(perceiveSumTicks));
+                }
                 const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
@@ -6945,6 +7154,13 @@ int main(int argc, char** argv) {
                 prof_add(kProfGuide, profGuideT0);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Guide, steerProbe);
+                // ВЗГЛЯД — ПОСЛЕ ведения, и это единственное законное место:
+                // скорость этого тика уже написана единственным писателем,
+                // значит направление хода известно. Восприятие следующего тика
+                // читает взгляд, отставший на один тик, — величина выводится
+                // из СОСТОЯНИЯ, а не из истории (CANON S16.9, марковость).
+                lookTick = game::look_step(reg, activeLayer,
+                                           steer_frame_of(&activeWorld.gravity()));
 
                 // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ
                 // ходьбы: тело уже на своей тиковой позиции, поэтому «дошёл до
@@ -6980,10 +7196,14 @@ int main(int argc, char** argv) {
                 // Шары акустики ВЫРЕЗАНЫ (решение владельца 2026-09-06,
                 // problems.md §65): слышимость прямолинейная тором до эпика
                 // «звуковое поле этажа» (печь при генерации, как пути/свет).
-                const auto profAcoustT0 = prof_now();
-                heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
-                                                   simTick);
-                prof_add(kProfAcoustics, profAcoustT0);
+                // СЛУХ ПЕРЕЕХАЛ В ВОСПРИЯТИЕ (S25.8, 2026-11-09). Здесь стоял
+                // `investigate_step` — ПЯТЫЙ писатель скорости, который токена
+                // не читал вовсе и перебивал погоню на любой выстрел (замер
+                // прибора ведения: 45 двойных записей за 250 тиков, ВСЕ его).
+                // Теперь слух — канал одного прохода восприятия, и он слабее
+                // зрения РАНГОМ (`SteerRank::Noise < Chase`), а не порядком
+                // вызовов. Звено прибора `Noise` осталось: оно обязано
+                // показывать НОЛЬ записей — писателя здесь больше нет.
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Noise, steerProbe);
 

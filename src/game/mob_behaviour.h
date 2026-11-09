@@ -289,7 +289,8 @@ inline constexpr float kGazeCosHalfAngle = 0.7071068f;   // cos(45 deg)
 
 // True when the monster must hold perfectly still. `fwdX/fwdY` is the viewer's
 // normalized forward; `dx/dy` the toroidal delta from viewer to monster.
-bool frozen_by_gaze(MobBehaviour b, float fwdX, float fwdY, float dx, float dy);
+bool frozen_by_gaze(MobBehaviour b, const vec3& gazerFwd, float dx, float dy,
+                    float dz);
 
 // ---------------------------------------------------------------------------
 // DeadEcho — the same two vectors, read for the opposite reason
@@ -323,7 +324,8 @@ inline constexpr float kDeadEchoBackDot = -0.18f;      // BEZEKHIY_BACK_DOT
 inline constexpr float kDeadEchoBackDamage = 1.55f;
 inline constexpr float kDeadEchoFacedDamage = 0.72f;
 
-float facing_damage_mult(MobBehaviour b, float fwdX, float fwdY, float dx, float dy);
+float facing_damage_mult(MobBehaviour b, const vec3& victimFwd, float dx,
+                         float dy, float dz);
 
 // ---------------------------------------------------------------------------
 // Wall bias — 4 kinds, one world query, no state

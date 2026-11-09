@@ -80,35 +80,22 @@ inline constexpr float kBeamHearing = 1.45f;   // Slepoglaz, LastSoundBeam
 inline constexpr float kDogHearing = 1.25f;    // Green Dog, the noiseFear half
 inline constexpr float kDogFearRadius = 18.0f; // ...and its fear radius, metres
 
-// What a mob heard, or `heard == false`. Pure: no registry, no world, no state, so
-// a test can pin the decision without building a floor.
-struct InvestigateHeard {
-    bool heard = false;
-    float dx = 0.0f;             // toroidal delta from the mob TO the noise, metres
-    float dy = 0.0f;
-    float dist = 0.0f;           // full 3D distance, metres
-    std::uint32_t noiseId = 0;   // monotonic; what a one-shot behaviour remembers
-    std::uint8_t severity = 0;
-};
-
-// Should this mob go and look at something? Answers no for a behaviour that is
-// authored deaf, and no when nothing audible passes the severity gate.
-//
-// `mobId` is the mob's own `entt::to_integral`, so it cannot investigate a noise it
-// made itself (13 of the 69 kinds shoot).
-InvestigateHeard investigate_hear(const NoiseField& field, MobBehaviour beh, LayerId layer,
-                    const vec3& mobPos, std::uint32_t mobId);
-
-// One staggered investigation pass. Overwrites horizontal velocity for every mob on
-// `layer` that heard something and is not in sight-aggro; leaves every other mob
-// exactly as `wander_step` left it. Returns the number of mobs steered by sound.
-//
-// Belongs immediately AFTER `wander_step` and BEFORE `physics_step`: after, because
-// it overrides; before, because physics is what turns the velocity into movement.
-//
-// `pool` is read only to resolve the camera holder's faction, for the same reason
-// `wander_step` reads it — the sight test must be the same test.
-std::uint32_t investigate_step(Registry& reg, const NoiseField& field, NpcPool& pool,
-                        LayerId layer, std::uint64_t tick);
+// МОГИЛА ПРОХОДА СЛУХА (2026-11-09, CANON S25.8). Здесь жили
+// `investigate_step`, `investigate_hear` и `InvestigateHeard`. Предмет переехал
+// ЦЕЛИКОМ в один проход восприятия ([game/perceive.h]): слух стал каналом той
+// же системы, что зрение, и слабее его РАНГОМ (`SteerRank::Noise < Chase`), а
+// не порядком вызовов. Снесены, а не оставлены «на всякий случай», по трём
+// причинам, каждая измерена:
+//   * `investigate_step` был ПЯТЫМ писателем горизонтальной `Velocity` и
+//     перебивал погоню — 45 двойных записей за 250 тиков на этаже 6 (прибор
+//     `--action vedenie`), все его;
+//   * писал жёсткие `v.x/v.y` без фрейма гравитации, то есть при любом режиме,
+//     кроме −Z, вёл тело НЕ в плоскости ходьбы;
+//   * глухота Безэхого была ВЕТКОЙ В КОДЕ (`if (beh == DeadEcho) return out;`),
+//     а владелец потребовал строку таблицы — теперь это ноль множителя слуха
+//     (`sense_hearing_mult`).
+// Константы выше ОСТАЛИСЬ: у них есть живой читатель — проход восприятия.
+// `kBeamHearing`/`kDogHearing`/`kDogFearRadius` читателя не имеют и названы
+// вслух долгом, а не выданы за живые.
 
 } // namespace giga::game

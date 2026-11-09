@@ -30,6 +30,12 @@
 // and the row edited. The ratio is the multiplier, which is the thing being claimed.
 
 #include "game/hunt.h"
+// Look / look_step / kLookMovingFrac — ВЗГЛЯД ЛЮБОГО ТЕЛА (CANON S25.7). Конус
+// больше не принадлежит носителю камеры, поэтому и заморозка, и удар в спину
+// спрашиваются через компоненту, которую пишет ОДИН проход. Отсюда же
+// приезжает `camera_forward` (look.h тянет [sim/camera.h]) — единственная
+// формула взгляда камеры, и блоки ниже не пишут своих `cos/sin(yaw)`.
+#include "game/look.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_spawn.h"
 #include "game/wander.h"
@@ -67,6 +73,14 @@ inline Entity spawn_at(Registry& reg, LayerId layer, MobKind k, const vec3& pos)
 
 // Whoever holds the camera. No NpcRef, so wander_step's faction gate is never
 // consulted and the mob's decision is purely about distance.
+//
+// ВЗГЛЯДА ЗДЕСЬ НЕ СТАВЯТ, И ЭТО НАМЕРЕННО (CANON S25.7). `Look` у носителя
+// камеры — ПРОИЗВОДНАЯ от `CameraTag::yaw/pitch`, и выводит её единственный
+// писатель `look_step` ([game/look.h]). Эмплейс взгляда здесь был бы ВТОРЫМ
+// писателем и притом врущим: блок 8b крутит `yaw` между фазами, и приклеенный
+// при рождении вектор пережил бы поворот камеры — заморозка читалась бы по
+// направлению, в которое смотрящий больше не смотрит. Поэтому взгляд пишет
+// проход: `steer_tick` ниже зовёт его сам, а два боевых блока — явной строкой.
 inline Entity spawn_viewer(Registry& reg, LayerId layer, const vec3& pos) {
     const Entity e = reg.create();
     Transform tr;
@@ -78,7 +92,44 @@ inline Entity spawn_viewer(Registry& reg, LayerId layer, const vec3& pos) {
     return e;
 }
 
-// ОДИН ТИК ХОДЬБЫ ЦЕЛИКОМ — ЗАЯВКА ПЛЮС ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ (2026-11-09).
+// ЖИТЕЛЬ, КОТОРЫЙ СМОТРИТ, И НИ ОДНОЙ КАМЕРЫ.
+//
+// ПОЧЕМУ НЕ ХВАТИЛО `spawn_viewer`. До S25.7 «смотрящий» в этом файле был
+// РОВНО ОДИН, и это был носитель камеры: оба потребителя конуса спрашивали
+// `cos/sin(cam.yaw)`, поэтому тело без `CameraTag` смотреть НЕ УМЕЛО — вопрос
+// был невыразим, а не «не проверен». Теперь направление взгляда есть у любого
+// тела с тождеством, и два закона можно измерить только на теле, у которого
+// камеры нет: удар в спину между двумя жителями ([combat.cpp] снял гейт
+// `victim == player`) и заморозка Скульптуры взглядом ЖИТЕЛЯ ([wander.cpp]
+// спрашивает взгляд того, к кому моб идёт).
+//
+// `Look` ставится ЗДЕСЬ, а не выводится из скорости, и это не второй писатель,
+// а ВХОДНЫЕ ДАННЫЕ стенда: блоки ниже судят ЧИТАТЕЛЕЙ взгляда (урон, погоня),
+// и направление для них — задача, а не предмет проверки. Сам писатель
+// (`look_step`: идёшь — взгляд по ходу, встал — держишь прежний) измеряется
+// отдельным блоком, и там его никто не подменяет.
+//
+// Тождество `NpcId` приходит ПАРАМЕТРОМ: hp/макс/фракция живут в строке пула, а
+// пул — у вызывающего (ровно как в блоке 6), и жертва обязана быть хозяину
+// добычей (`mob_hostile_to`), иначе блок прошёл бы впустую.
+inline Entity spawn_looker(Registry& reg, LayerId layer, const vec3& pos,
+                           NpcId id, const vec3& lookDir) {
+    const Entity e = reg.create();
+    Transform tr;
+    tr.pos = pos;
+    tr.layer = layer;
+    reg.emplace<Transform>(e, tr);
+    reg.emplace<Velocity>(e, Velocity{});
+    reg.emplace<NpcRef>(e, NpcRef{id});
+    reg.emplace<Look>(e, Look{lookDir});
+    return e;
+}
+
+inline float vec_len(const vec3& v) {
+    return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+// ОДИН ТИК ХОДЬБЫ ЦЕЛИКОМ — ВЗГЛЯД, ЗАЯВКА, ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ (2026-11-09).
 //
 // С переводом ведения на заявки `wander_step` СКОРОСТЬ НЕ ПИШЕТ: он заявляет
 // цель (погоня — пеленгом рангом `Chase`, прогулка — зоной рангом `Walk`,
@@ -87,11 +138,12 @@ inline Entity spawn_viewer(Registry& reg, LayerId layer, const vec3& pos) {
 // мерит СКОРОСТЬ, которую записал проход ведения, значит каждый обязан позвать
 // оба — и в том же тике, с тем же слоем и той же гравитацией.
 //
-// ПАРА, А НЕ ДВА ВЫЗОВА, И ЭТО ТО ЖЕ ЛЕЧЕНИЕ, КОТОРОЕ СДЕЛАЛИ В ПРОДЕ. Восемь
-// блоков этого файла несли бы восемь дословных копий двухстрочной
+// ТРОЙКА, А НЕ ТРИ ВЫЗОВА, И ЭТО ТО ЖЕ ЛЕЧЕНИЕ, КОТОРОЕ СДЕЛАЛИ В ПРОДЕ. Восемь
+// блоков этого файла несли бы восемь дословных копий трёхстрочной
 // последовательности, а копия и есть дефект, который канон запрещает (S11):
-// достаточно одной копии, забывшей второй вызов, и блок снова начнёт судить
-// скорость, записанную ДО вызова — зелёным. Здесь забыть нечего.
+// достаточно одной копии, забывшей один из вызовов, и блок снова начнёт судить
+// скорость, записанную ДО вызова, — либо, с обобщением конуса, мир без взгляда,
+// в котором заморозки нет вовсе. Здесь забыть нечего.
 //
 // `nullptr` гравитацией — НЕ умолчание «как-нибудь»: вся арена этого файла
 // стоит под NegZ (один этаж, одна стена), и `steer_frame_of(nullptr)` даёт
@@ -99,6 +151,27 @@ inline Entity spawn_viewer(Registry& reg, LayerId layer, const vec3& pos) {
 // сам и этой дверью не пользуется.
 inline void steer_tick(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                        const ZoneNav& zn, LayerId layer, std::uint64_t t) {
+    // ВЗГЛЯД — ТРЕТИЙ ПРОХОД ТОГО ЖЕ ТИКА (S25.7), и он здесь не для красоты:
+    // с обобщением конуса `wander.cpp` спрашивает `Look` ТОГО ТЕЛА, к которому
+    // моб идёт, поэтому стенд без писателя взгляда мерил бы не заморозку, а
+    // ПОЛНУЮ СЛЕПОТУ мира (компоненты нет → `frozen_by_gaze` не зовётся вовсе).
+    //
+    // ПОРЯДОК. В кадре прода `look_step` стоит ПОСЛЕ `guide_step` — взгляд
+    // выводится из скорости, уже написанной этим тиком, и отстаёт на тик
+    // ([game/look.h]). В ЦЕПИ ТИКОВ «ведение → взгляд → ведение → взгляд» и
+    // «взгляд → ведение → взгляд → ведение» — одна и та же последовательность,
+    // отличающаяся РОВНО одним прогревом перед первым тиком; прогрев
+    // обязателен, потому что тело, только что рождённое стендом, взгляда ещё
+    // не имеет, и первый тик судил бы отсутствие компоненты.
+    const LookTick lt = look_step(reg, layer, steer_frame_of(nullptr));
+    // САМОПРОВЕРКА ПИСАТЕЛЯ, НА КАЖДОМ ТИКЕ. Тело с тождеством обязано уйти
+    // РОВНО В ОДИН из трёх исходов — взгляд из камеры, сдвинут ходом, держит
+    // прежний. Остаток означал бы тело, которое проход посчитал и не написал,
+    // то есть слепое по построению. `born` в эту сумму НЕ входит намеренно: он
+    // пересекается с остальными (новорождённый тут же получает ход или держит),
+    // и сложить его значило бы получить ложное равенство.
+    CHECK(lt.moved + lt.held + lt.human == lt.bodies);
+    CHECK(lt.born <= lt.bodies);
     wander_step(reg, grid, pool, zn, layer, t);
     const GuideTick gt = guide_step(reg, zn, layer, t, nullptr);
     // Самопроверка писателя, на каждом тике: непонятный байт ранга/вида и
@@ -229,8 +302,11 @@ static void test_behaviours_all() {
         CHECK(!has_flag(panelnik.aiFlags, AiFlag::WallBias));
         // Its authored reach is the reference's PANELNIK_OPEN_REACH (1.16 cells), not
         // the generic 1.2 that 66 of 69 kinds carry — i.e. the generated row is
-        // specifically the UNBRACED state, and the braced 1.75 has nowhere to live
-        // until combat can see the grid. Pinned so that finding cannot be lost.
+        // specifically the UNBRACED state. The braced 1.75 used to have "nowhere to
+        // live until combat can see the grid"; combat SEES the grid now
+        // (`mob_attack_step` passes it to `behaviour_melee_reach` and to
+        // `apply_damage`), so the 1.75 lives in [mob_behaviour.h] and §11/§14/§18
+        // measure it. Pinned so that finding cannot be lost.
         CHECK(panelnik.meleeReachMm == 1160);
         CHECK(mob_def(MobKind::Sborka).meleeReachMm == 1200);
 
@@ -343,7 +419,11 @@ static void test_behaviours_all() {
             const PursuitOffset off = pursuit_offset(b, 42u, 7u, 1.0f, 0.0f);
             const bool steers = (off.x != 0.0f || off.y != 0.0f);
             const bool sees = (behaviour_aggro_radius(b, kAggroRadius) != kAggroRadius);
-            const bool freezes = frozen_by_gaze(b, 1.0f, 0.0f, 1.0f, 0.0f);
+            // Взгляд — `vec3`, и пеленг трёхмерный (S25.7). Третья дельта ноль:
+            // проба спрашивает «отвечает ли вообще», а не вертикаль, и предмет
+            // пробы от обобщения не изменился.
+            const bool freezes =
+                frozen_by_gaze(b, vec3{1.0f, 0.0f, 0.0f}, 1.0f, 0.0f, 0.0f);
             const bool paces = behaviour_move_mult(b, true).claimed ||
                                behaviour_move_mult(b, false).claimed;
             const bool hits = behaviour_damage_mult(b, true) != 1.0f ||
@@ -352,8 +432,10 @@ static void test_behaviours_all() {
             // both differ from 1.0, so either alone would be enough and neither alone
             // would catch a branch that stopped varying.
             const bool faces =
-                facing_damage_mult(b, 1.0f, 0.0f, -1.0f, 0.0f) != 1.0f ||
-                facing_damage_mult(b, 1.0f, 0.0f, 1.0f, 0.0f) != 1.0f;
+                facing_damage_mult(b, vec3{1.0f, 0.0f, 0.0f}, -1.0f, 0.0f,
+                                   0.0f) != 1.0f ||
+                facing_damage_mult(b, vec3{1.0f, 0.0f, 0.0f}, 1.0f, 0.0f,
+                                   0.0f) != 1.0f;
             const bool bursts = burst_phase(b, 42u, 0u, 1.0f) != BurstPhase::Idle;
             // Wave 4's three. `reaches` is probed against a base the override must
             // differ from, so it cannot be satisfied by the pass-through branch;
@@ -376,27 +458,41 @@ static void test_behaviours_all() {
                                       b == MobBehaviour::SourceSwarm;
             if (declaredDead) CHECK(!any);
 
-            // "Answered" is not "reaches the player", and this is the assertion that
-            // keeps the two from drifting apart silently. Four of the ten hooks above
-            // have a caller in src/ today: `behaviour_aggro_radius` (wander_step AND
-            // investigate_step), `pursuit_offset`, `frozen_by_gaze` and
-            // `behaviour_move_mult` (all wander_step). SIX DO NOT —
-            // `behaviour_damage_mult` has had zero callers since wave 2, wave 3's
-            // `facing_damage_mult` / `burst_damage_mult` / `burst_speed_mult` join it,
-            // and so do wave 4's `behaviour_melee_reach` / `behaviour_incoming_mult` /
-            // `behaviour_hurt_move_mult`. combat.cpp applies `wall_bias_damage` and
-            // nothing else; wander_step applies the pace pair and nothing else.
+            // «ОТВЕЧЕН» НЕ ЗНАЧИТ «ВИДЕН ПО СКОРОСТИ», и это утверждение держит
+            // два списка от расхождения. ЗДЕСЬ СТОЯЛ УСТАРЕВШИЙ КОММЕНТАРИЙ, и
+            // он врал по всем десяти крючкам: он объявлял шесть из них «без
+            // вызывающего», причём последний («combat.cpp applies
+            // `wall_bias_damage` and nothing else; wander_step applies the pace
+            // pair and nothing else») опровергается грепом по `src/` на дату
+            // правки. ЗАМЕР 2026-11-09, по одному вызывающему на крючок:
             //
-            // Wave 3 asserted this as "no behaviour is answered ONLY by an unwired
-            // function", which held because every answered enumerator also had a live
-            // radius or pace. CrowdShove breaks that: `behaviour_hurt_move_mult` is its
-            // only answer. So the assertion becomes a NAMED SET rather than a blanket
-            // ban — the honest form, because it still fails the moment a SECOND
-            // behaviour lands with no reachable half, and it fails again (loudly, here)
-            // the day CrowdShove is wired and stops belonging in the set.
-            const bool reachable = steers || sees || freezes || paces;
+            //   behaviour_aggro_radius    wander.cpp + investigate.cpp
+            //   pursuit_offset            wander.cpp
+            //   frozen_by_gaze            wander.cpp (взгляд ЛЮБОГО тела, S25.7)
+            //   behaviour_move_mult       wander.cpp
+            //   burst_phase               wander.cpp + combat.cpp
+            //   burst_speed_mult          wander.cpp
+            //   behaviour_hurt_move_mult  wander.cpp
+            //   behaviour_damage_mult     combat.cpp (mob_attack_step)
+            //   facing_damage_mult        combat.cpp (mob_attack_step, S25.7)
+            //   burst_damage_mult         combat.cpp (mob_attack_step)
+            //   behaviour_melee_reach     combat.cpp (mob_attack_step)
+            //   behaviour_incoming_mult   combat.cpp (apply_damage)
+            //
+            // То есть НЕПОДКЛЮЧЁННЫХ КРЮЧКОВ БОЛЬШЕ НЕТ ВОВСЕ, и названный набор
+            // с единственным исключением `CrowdShove` умер вместе со своим
+            // предметом: его единственный ответ, `behaviour_hurt_move_mult`,
+            // читает `wander.cpp` в ветке погони. Поэтому утверждение снова
+            // БЛАНКЕТНОЕ, но о другом разрезе — не «подключён ли крючок», а
+            // «виден ли энумератор ПО СКОРОСТИ»: шесть крючков ведения против
+            // четырёх боевых. Невакуумно: `hits`/`faces`/`reaches`/`soaks` в
+            // `reachable` НЕ входят, поэтому поведение, отвечающее только
+            // уроном, упадёт здесь — и упадёт по делу, потому что ни один
+            // блок-скорость такое поведение не увидит.
+            const bool reachable = steers || sees || freezes || paces || bursts ||
+                                   hurts;
             const bool unreachableOnly = any && !reachable;
-            CHECK(unreachableOnly == (b == MobBehaviour::CrowdShove));
+            CHECK(!unreachableOnly);
 
             if (declaredDead) ++dead;
             else if (any) ++answered;
@@ -925,15 +1021,27 @@ static void test_behaviours_all() {
         // Камера по умолчанию глядит в +x (yaw = 0), то есть ПРЯМО на тело; а
         // пеленг заморозки идёт ОТ смотрящего К монстру, и это противоположное
         // соглашение к вектору погони. Пинится здесь, потому что перепутанная
-        // полярность компилируется и выглядит правдоподобно.
+        // полярность компилируется и выглядит правдоподобно. Третья дельта ноль:
+        // тела стоят на одной высоте, и этот блок мерит ГОРИЗОНТАЛЬНЫЙ конус —
+        // вертикаль у него своя, блок 8г.
         CHECK(reg.get<const CameraTag>(viewer).yaw == 0.0f);
-        CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 0.0f));
+        CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f, 0.0f, 0.0f},
+                             10.0f, 0.0f, 0.0f));
 
         // СЕНТИНЕЛЬ, иначе «погасили» не отличить от «не тронули»: именно так
         // этот блок прошёл бы при писателе, который заморозку вообще не знает.
         reg.get<Velocity>(watched).v = vec3{4.0f, -4.0f, 0.0f};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
             steer_tick(reg, grid, pool, zn, layer, t);
+        // ЗВЕНО ЦЕПИ, КОТОРОГО ПРЕЖДЕ НЕ БЫЛО (S25.7). Заморозка больше не
+        // читает `cam.yaw` — она читает `Look`, а его у носителя камеры пишет
+        // `look_step` из той же единственной формулы, что и камера
+        // (`camera_forward`). Пинится здесь, потому что обрыв ровно этого звена
+        // (взгляда нет → `frozen_by_gaze` не зовётся вовсе) даёт НЕ красный
+        // тест, а молча расконсервированную Скульптуру.
+        CHECK(reg.get<const Look>(viewer).dir.x == 1.0f);
+        CHECK(reg.get<const Look>(viewer).dir.y == 0.0f);
+        CHECK(reg.get<const Look>(viewer).dir.z == 0.0f);
         CHECK(flat_speed(reg.get<const Velocity>(watched)) == 0.0f);
         CHECK(reg.get<const Velocity>(watched).v.x == 0.0f);
         CHECK(reg.get<const Velocity>(watched).v.y == 0.0f);
@@ -952,6 +1060,10 @@ static void test_behaviours_all() {
         // класс существует только в стендах — и стенд обязан его уважать.
         for (std::uint64_t t = kWanderPeriod; t < 2u * kWanderPeriod; ++t)
             steer_tick(reg, grid, pool, zn, layer, t);
+        // Поворот камеры ПЕРЕЕХАЛ во взгляд — иначе «отвернулся» было бы
+        // свойством стенда, а не писателя: приклеенный при рождении вектор
+        // прошёл бы первую фазу и провалил бы вторую (или наоборот).
+        CHECK(reg.get<const Look>(viewer).dir.x < 0.0f);
         const float freeV = flat_speed(reg.get<const Velocity>(watched));
         std::fprintf(stderr,
                      "[behaviours] WeepingAngel: под взглядом |v| = 0, "
@@ -974,7 +1086,15 @@ static void test_behaviours_all() {
     //
     // Та же пара клеток, что в 8b (свои, ничьи больше), режим подаётся полем —
     // поэтому `steer_tick` здесь не годится: он пинит NegZ нулевым указателем,
-    // и это его контракт, а не упущение.
+    // и это его контракт, а не упущение. Писателя взгляда блок зовёт сам, тем же
+    // полем, и порядок тот же.
+    //
+    // ВЗГЛЯД КАМЕРЫ В ПЛОСКОСТЬ ХОДЬБЫ НЕ ПРОЕЦИРУЕТСЯ, и под PosX это видно:
+    // `camera_forward(0, 0)` даёт (1,0,0), то есть вектор ВДОЛЬ оси гравитации.
+    // Это не дефект стенда и не случайность — у носителя камеры направление
+    // взгляда есть СВОЙ источник, который старше хода ([game/look.h]), и
+    // проекция стирала бы человеку взгляд в зенит. Заморозка от этого работает:
+    // пеленг (10,0,0) и взгляд (1,0,0) соосны, конус закрыт.
     {
         Registry reg;
         const vec3 gazeViewerAt{60.0f, 60.0f, 3.0f};
@@ -993,6 +1113,8 @@ static void test_behaviours_all() {
         // ходьбы (их заморозка обязана погасить).
         reg.get<Velocity>(watched).v = vec3{0.125f, 3.0f, 4.0f};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t) {
+            const LookTick lt = look_step(reg, layer, steer_frame_of(&sideways));
+            CHECK(lt.moved + lt.held + lt.human == lt.bodies);
             wander_step(reg, grid, pool, zn, layer, t, &sideways);
             const GuideTick gt = guide_step(reg, zn, layer, t, &sideways);
             CHECK(gt.bogus == 0u);
@@ -1009,12 +1131,471 @@ static void test_behaviours_all() {
         CHECK(fv.z == 0.0f);
     }
 
+    // ---- 8г. ВЕРТИКАЛЬ ТЕПЕРЬ СЧИТАЕТСЯ -------------------------------------
+    //
+    // МУТАЦИЯ, КОТОРУЮ ЛОВИТ ЭТОТ БЛОК: вернуть в `frozen_by_gaze` отбрасывание
+    // `dz` — то есть прежнюю двумерную формулу, где конус строился по (dx, dy),
+    // а разница высот молча исчезала. Она была не «упрощением», а ЛОЖЬЮ в
+    // пользу монстра: взгляд в зенит морозил Скульптуру, стоящую под ногами, а
+    // Скульптура этажом ниже считалась рассматриваемой в упор.
+    //
+    // ПОЧЕМУ ЭТОГО БЛОКА НЕ МОГЛО БЫТЬ РАНЬШЕ. Вертикаль была НЕВЫРАЗИМА: у
+    // функции не было третьей дельты вовсе, и единственный источник взгляда
+    // (`cos/sin(cam.yaw)`) не нёс `pitch`. Пинить было нечего — не «забыли».
+    {
+        const MobBehaviour wa = MobBehaviour::WeepingAngel;
+        const vec3 up{0.0f, 0.0f, 1.0f};
+        const vec3 down{0.0f, 0.0f, -1.0f};
+        const vec3 ahead{1.0f, 0.0f, 0.0f};
+
+        // ВЗГЛЯД В ЗЕНИТ, СКУЛЬПТУРА ПОД НОГАМИ. Пеленг (0,0,-10) взгляду
+        // ПРОТИВОПОЛОЖЕН, конус закрыт — и 10 м это внутри kGazeRange, то есть
+        // отказ приходит именно от конуса, а не от дальности. Двумерная формула
+        // получила бы пеленг (0,0), сработала бы веткой «стою внутри» и
+        // ЗАМОРОЗИЛА БЫ.
+        CHECK(!frozen_by_gaze(wa, up, 0.0f, 0.0f, -10.0f));
+        // ...и это НЕ «вертикаль всегда отказ»: тот же пеленг со взглядом вниз
+        // морозит. Без этой половины блок прошёл бы для функции, которая `dz`
+        // читает и отвечает «не смотрю» на любую вертикаль.
+        CHECK(frozen_by_gaze(wa, down, 0.0f, 0.0f, -10.0f));
+
+        // ТОТ ЖЕ ЗАКОН ТАМ, ГДЕ ГОРИЗОНТАЛЬ НЕ ПУСТА, и это строже первой пары:
+        // здесь нет вырожденного пеленга, на который можно списать исход.
+        // 10 м вперёд и 15 м вниз — 18.0 м до тела (внутри 25), cos = 0.55 при
+        // пороге cos45° = 0.707. Двумерная формула видела бы (10,0) и cos = 1.
+        CHECK(!frozen_by_gaze(wa, ahead, 10.0f, 0.0f, -15.0f));
+        // ...а умеренный уклон конуса не закрывает: 10 вперёд, 5 вниз — cos 0.89.
+        CHECK(frozen_by_gaze(wa, ahead, 10.0f, 0.0f, -5.0f));
+
+        // ДАЛЬНОСТЬ ТОЖЕ ТРЁХМЕРНА, и это вторая половина того же `dz`: тело
+        // ровно под взглядом, но в 26 м по вертикали — дальше kGazeRange.
+        // Двумерный квадрат дал бы ноль, то есть «в упор».
+        CHECK(!frozen_by_gaze(wa, down, 0.0f, 0.0f, -26.0f));
+        CHECK(frozen_by_gaze(wa, down, 0.0f, 0.0f, -24.0f));
+        std::printf("[behaviours] конус трёхмерен: зенит не морозит пол, "
+                    "26 м по вертикали вне дальности\n");
+    }
+
+    // ---- 8д. ВЗГЛЯДА НЕТ — ЗНАЧИТ НЕ СМОТРИТ --------------------------------
+    //
+    // МУТАЦИЯ, КОТОРУЮ ЛОВИТ ЭТОТ БЛОК: сделать нулевой взгляд «смотрящим» —
+    // убрать из `looking_at` отказ по `f2 < 1e-6` (тогда `dot` делится на ноль
+    // и даёт NaN либо inf, а сравнение с порогом становится гаданием) или
+    // отдать нулевому взгляду жертвы БОНУС спины вместо осторожного множителя.
+    //
+    // ПОЧЕМУ ЭТО ЗАКОН, А НЕ ЗАЩИТА ОТ ДУРАКА. Нулевой взгляд — РЕАЛЬНОЕ
+    // состояние мира: тело, рождённое в этом тике, писатель ещё не посетил
+    // ([game/look.h] — и именно поэтому новорождённый получает румб из
+    // тождества, а не ноль). Два потребителя обязаны прочитать его в
+    // ПРОТИВОПОЛОЖНЫЕ стороны, и оба раза — в пользу игрока: слепой не морозит
+    // Скульптуру (иначе весь мир морозил бы её по построению), и удар по слепой
+    // жертве не превращается в 1.55 (иначе забытый писатель взгляда давал бы
+    // всей толпе +55% входящего урона — ровно та тихая поломка, которую никто
+    // не увидит в логе).
+    {
+        const vec3 blind{0.0f, 0.0f, 0.0f};
+        const vec3 seeing{1.0f, 0.0f, 0.0f};
+
+        CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, blind, 10.0f, 0.0f,
+                              0.0f));
+        CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, blind, 0.0f, 0.0f,
+                              1.0f));
+        // ...и отказ принадлежит ВЗГЛЯДУ, а не пеленгу: тот же пеленг с
+        // ненулевым взглядом морозит.
+        CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, seeing, 10.0f, 0.0f,
+                             0.0f));
+
+        // Урон: слепая жертва получает ОСТОРОЖНЫЙ множитель, тот же, что при
+        // вырожденном пеленге («стою внутри» = «смотрю на него»), и никогда
+        // бонус.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, blind, -1.0f, 0.0f,
+                                 0.0f) == kDeadEchoFacedDamage);
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, blind, 1.0f, 0.0f,
+                                 0.0f) == kDeadEchoFacedDamage);
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, blind, 0.0f, 0.0f,
+                                 -40.0f) == kDeadEchoFacedDamage);
+        // ...и ветка спины ЖИВА при том же пеленге со зрячей жертвой — иначе
+        // блок прошёл бы для функции, вернувшей 0.72 на все углы сразу.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, seeing, -1.0f, 0.0f,
+                                 0.0f) == kDeadEchoBackDamage);
+        // ЦЕНА МУТАЦИИ ОДНИМ ОТНОШЕНИЕМ: 1.55 против 0.72 — это 2.15x
+        // входящего урона, то есть разница между «Безэхий не может тебя убить»
+        // и «Безэхий убивает за половину времени».
+        static_assert(kDeadEchoBackDamage / kDeadEchoFacedDamage > 2.0f,
+                      "слепота жертвы не смеет стоить двух с лишним крат урона");
+    }
+
+    // ---- 8е. УДАР В СПИНУ РАБОТАЕТ МЕЖДУ ДВУМЯ ЖИТЕЛЯМИ --------------------
+    //
+    // ЧТО ЗДЕСЬ УМЕРЛО ПО РЕШЕНИЮ ВЛАДЕЛЬЦА. В `combat.cpp` стоял гейт
+    // `victim == player`: множитель спины существовал ТОЛЬКО против носителя
+    // камеры, и Безэхий, бьющий жителя, получал ровно 1.0 с любого румба.
+    // Формулировка владельца дословна — «игрок ничем не особен» (CANON S25.7),
+    // — поэтому предмет того гейта мёртв, а блок 15 (та же механика на носителе
+    // камеры) из ВСЕЙ проверки стал ОДНИМ ИЗ ДВУХ тел.
+    //
+    // БЕЗ НОСИТЕЛЯ КАМЕРЫ ВОВСЕ, и это условие опыта, а не стиль: `mob_attack_step`
+    // отдаёт носителя камеры первым, и жертву из толпы берёт только моб С
+    // ЛИЦЕНЗИЕЙ ОХОТЫ этой эпохи ([hunt.h]). Поэтому тик приезжает из
+    // `licensed_epoch_start`, ровно как в блоке 6.
+    //
+    // СВОЯ КЛЕТКА (70,70,1): до единственной стены арены 20 клеток, и Безэхий
+    // по стене всё равно не спрашивается (`wall_query_needed` его не знает) —
+    // значит ни один множитель, кроме лицевого, в число ниже не попадает.
+    {
+        const vec3 residentAt{140.0f, 140.0f, 3.0f};   // клетка 70,70,1
+        const vec3 mobAt{141.5f, 140.0f, 3.0f};        // 1.5 м по +x
+        CHECK(grid.cell(70, 70, 1) == kCellAir);
+
+        const MobDef& bez = mob_def(MobKind::Bezekhiy);
+        CHECK(bez.behaviour == static_cast<std::uint8_t>(MobBehaviour::DeadEcho));
+        const float baseDmg = static_cast<float>(mob_hp_at_level(bez.dmg, 1));
+        CHECK(baseDmg > 0.0f);
+        // 1.5 м — внутри досягаемости, посчитанной ТЕМ ЖЕ примитивом, которым
+        // её считает прод: иначе блок мерил бы промах и прошёл бы нулями.
+        CHECK(1.5f < behaviour_melee_reach(MobBehaviour::DeadEcho,
+                                           bez.meleeReachMm, false));
+        const std::int16_t expectBack =
+            static_cast<std::int16_t>(baseDmg * kDeadEchoBackDamage);
+        const std::int16_t expectFaced =
+            static_cast<std::int16_t>(baseDmg * kDeadEchoFacedDamage);
+        const std::int16_t expectBlind = static_cast<std::int16_t>(baseDmg);
+
+        // ПУЛ ОДИН НА ТРИ ПРОГОНА, РЕЕСТР — СВОЙ КАЖДОМУ. Разделение не
+        // косметическое: изоляция нужна СЦЕНЕ (тождества сущностей обязаны
+        // совпадать, иначе эпоха охоты поедет вместе с id моба), а `NpcPool::init`
+        // выкатывает 434 МиБ нулей на каждый вызов — три копии стоили бы секунду
+        // прогона ни за что. Жертва каждого прогона — СВОЯ строка пула, поэтому
+        // hp предыдущего удара в следующий не протекает.
+        NpcPool crowd;
+        crowd.init();
+
+        // ОДНА СЦЕНА, ТРИ ВЗГЛЯДА — лямбдой, а не тремя дословными копиями
+        // сцены: копия и есть тот дефект, который канон запрещает (S11), и
+        // забыть в одной из них `look` значило бы получить зелёный блок,
+        // мерящий чужой множитель.
+        //
+        // `nullptr` румбом — ЖИТЕЛЬ БЕЗ ВЗГЛЯДА. Это не искусственный случай:
+        // ровно так выглядит тело до первого `look_step`, и урон ему обязан
+        // приехать ТАБЛИЧНЫМ, потому что `combat.cpp` спрашивает компоненту
+        // (`try_get<Look>`), а не выдумывает направление.
+        auto applied_on_resident = [&](const vec3* lookDir) -> std::int16_t {
+            Registry reg;
+            EventBus bus;
+            const NpcId local = crowd.spawn();
+            crowd.hp(local) = 100;
+            crowd.max_hp(local) = 100;
+            crowd.faction(local) = static_cast<std::uint16_t>(Faction::Citizens);
+            CHECK(mob_hostile_to(crowd, local));
+
+            const Entity resident = spawn_looker(
+                reg, layer, residentAt, local,
+                lookDir != nullptr ? *lookDir : vec3{1.0f, 0.0f, 0.0f});
+            if (lookDir == nullptr) reg.remove<Look>(resident);
+            CHECK(reg.all_of<Look>(resident) == (lookDir != nullptr));
+            // Жертва — ЖИТЕЛЬ: ни камеры, ни строки монстра. Оба отрицания
+            // проверены, потому что любое из них вернуло бы блок к прежнему
+            // предмету («множитель против игрока»).
+            CHECK(!reg.all_of<CameraTag>(resident));
+            CHECK(!reg.all_of<MobRef>(resident));
+
+            const Entity mob = spawn_at(reg, layer, MobKind::Bezekhiy, mobAt);
+            const std::uint32_t mobId =
+                static_cast<std::uint32_t>(entt::to_integral(mob));
+            const std::uint64_t window = licensed_epoch_start(mobId);
+            CHECK(window != 0u);
+            CHECK(mob_hunts_npcs(mobId, window));
+            // Носителя камеры в сцене НЕТ — проверка, а не допущение: один
+            // забытый `spawn_viewer` вернул бы блок к измерению игрока.
+            std::size_t cameras = 0;
+            for (auto ce : reg.view<const CameraTag>()) {
+                (void)ce;
+                ++cameras;
+            }
+            CHECK(cameras == 0u);
+
+            const std::uint32_t swings = mob_attack_step(
+                reg, grid, crowd, bus, layer, 0.008f, window);
+            CHECK(swings == 1u);   // удар состоялся, а не «цель не найдена»
+            return static_cast<std::int16_t>(100 - crowd.hp(local));
+        };
+
+        // МОНСТР НА +x (`mobAt` выше, 1.5 м по +x), поэтому взгляд в +x есть
+        // взгляд НА него, а в −x — ОТ него. Первая редакция блока держала эти
+        // две метки наоборот, и прогон показал ровно обмен ожиданий местами.
+        const vec3 away{-1.0f, 0.0f, 0.0f};     // смотрит ОТ монстра — в спину
+        const vec3 toward{1.0f, 0.0f, 0.0f};    // смотрит НА монстра — в лицо
+        const std::int16_t gotBack = applied_on_resident(&away);
+        const std::int16_t gotFaced = applied_on_resident(&toward);
+        const std::int16_t gotBlind = applied_on_resident(nullptr);
+        std::fprintf(stderr,
+                     "[behaviours] DeadEcho против ЖИТЕЛЯ: спина %d (ждём %d), "
+                     "лицом %d (ждём %d), без взгляда %d (таблица %d)\n",
+                     static_cast<int>(gotBack), static_cast<int>(expectBack),
+                     static_cast<int>(gotFaced), static_cast<int>(expectFaced),
+                     static_cast<int>(gotBlind), static_cast<int>(expectBlind));
+        CHECK(gotBack == expectBack);
+        CHECK(gotFaced == expectFaced);
+        CHECK(gotBlind == expectBlind);
+        // ТРИ РАЗНЫХ ЧИСЛА, А НЕ ТРИ РАВНЫХ: именно это отделяет «множитель
+        // применён» от «множитель не применён» — снятый гейт `victim == player`
+        // дал бы здесь три одинаковых табличных значения.
+        CHECK(gotBack > gotBlind);
+        CHECK(gotFaced < gotBlind);
+    }
+
+    // ---- 8ж. ...И СКУЛЬПТУРУ МОРОЗИТ ВЗГЛЯД ЖИТЕЛЯ --------------------------
+    //
+    // ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ РЕШЕНИЯ, и мерится она скоростью, а не функцией.
+    // `wander.cpp` спрашивает взгляд ТОГО ТЕЛА, к которому моб идёт, кем бы оно
+    // ни было; прежде вопрос стоял только к носителю камеры, поэтому пара
+    // «Скульптура и житель» была невыразима — Скульптура неслась на жителя
+    // ЧЕРЕЗ его взгляд, и единственная контрмера кинда существовала ровно для
+    // одного тела в мире.
+    //
+    // МУТАЦИЯ, КОТОРУЮ ЛОВИТ ЭТОТ БЛОК: вернуть в `wander.cpp` вопрос к
+    // носителю камеры (`gazer = victimE` вместо `chaseE`). Блок 8b её НЕ ловит
+    // — там цель погони и есть носитель камеры, и оба прочтения совпадают.
+    //
+    // БЕЗ КАМЕРЫ ВОВСЕ и с ЛИЦЕНЗИЕЙ ОХОТЫ, по той же причине, что в блоке 8е:
+    // цель из толпы берёт только лицензированный моб ([hunt.h]). Своя пара
+    // клеток (80,80,1)/(82,80,1).
+    {
+        Registry reg;
+        NpcPool crowd;
+        crowd.init();
+        const NpcId local = crowd.spawn();
+        crowd.hp(local) = 100;
+        crowd.max_hp(local) = 100;
+        crowd.faction(local) = static_cast<std::uint16_t>(Faction::Citizens);
+        CHECK(mob_hostile_to(crowd, local));
+
+        const vec3 residentAt{160.0f, 160.0f, 3.0f};
+        const vec3 angelAt{164.0f, 160.0f, 3.0f};   // 4 м по +x: внутри kHuntRadius
+        CHECK(grid.cell(80, 80, 1) == kCellAir);
+        CHECK(grid.cell(82, 80, 1) == kCellAir);
+        // Житель смотрит НА Скульптуру (она на +x от него).
+        const Entity resident =
+            spawn_looker(reg, layer, residentAt, local, vec3{1.0f, 0.0f, 0.0f});
+        const Entity angel = spawn_at(reg, layer, MobKind::Sculpture, angelAt);
+        CHECK(wander_init(reg, layer) == 2u);   // моб и житель, камеры нет
+        const std::uint32_t angelId =
+            static_cast<std::uint32_t>(entt::to_integral(angel));
+        const std::uint64_t window = licensed_epoch_start(angelId);
+        CHECK(window != 0u);
+        // Лицензия обязана держаться ОБЕ фазы, иначе вторая половина измерила
+        // бы «охота кончилась» и назвала бы это «отвернулся».
+        CHECK(mob_hunts_npcs(angelId, window + 2u * kWanderPeriod - 1u));
+
+        // СЕНТИНЕЛЬ, та же дисциплина, что в 8b: ноль обязан быть ВЛАДЕЕМЫМ.
+        reg.get<Velocity>(angel).v = vec3{4.0f, -4.0f, 0.0f};
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
+            steer_tick(reg, grid, crowd, zn, layer, window + t);
+        // Взгляд жителя стенд поставил РУКАМИ, и писатель его не отнял: житель
+        // стоит (прогулка на вырожденном наве кончается `Hold`), а стоящее тело
+        // держит прежнее направление ([game/look.h]). Пинится, потому что
+        // писатель, выводящий взгляд из скорости БЕЗ памяти, обнулил бы его —
+        // и весь блок прошёл бы по слепоте, а не по закону.
+        CHECK(reg.get<const Look>(resident).dir.x == 1.0f);
+        CHECK(flat_speed(reg.get<const Velocity>(resident)) == 0.0f);
+        CHECK(flat_speed(reg.get<const Velocity>(angel)) == 0.0f);
+        CHECK(reg.get<const Velocity>(angel).v.x == 0.0f);
+        CHECK(reg.get<const Velocity>(angel).v.y == 0.0f);
+
+        // ...и отвернувшийся житель отпускает её на полной табличной скорости.
+        // ТИКИ РАСТУТ — заявка живёт один тик и опознаётся штампом (довод
+        // дословно в блоке 8b: на тех же номерах вторая фаза прочитала бы
+        // заявку первой как живую, и ловилось это красным).
+        reg.get<Look>(resident).dir = vec3{-1.0f, 0.0f, 0.0f};
+        for (std::uint64_t t = kWanderPeriod; t < 2u * kWanderPeriod; ++t)
+            steer_tick(reg, grid, crowd, zn, layer, window + t);
+        const float freeV = flat_speed(reg.get<const Velocity>(angel));
+        std::fprintf(stderr,
+                     "[behaviours] WeepingAngel и ЖИТЕЛЬ: под взглядом |v| = 0, "
+                     "отвернулся |v| = %.4f м/с (таблица %.4f)\n",
+                     freeV, table_speed(MobKind::Sculpture));
+        CHECK(freeV > 0.0f);
+        CHECK(near_eq(freeV / table_speed(MobKind::Sculpture), 1.0f));
+        // Идёт НА жителя (−x), а не от него: заморозка снята, а не перевёрнута.
+        CHECK(reg.get<const Velocity>(angel).v.x < 0.0f);
+    }
+
+    // ---- 8з. look_step: ПИСАТЕЛЬ ВЗГЛЯДА, И У НЕГО ТРИ ИСТОЧНИКА ------------
+    //
+    // ПОЧЕМУ БЛОК СУЩЕСТВУЕТ ОТДЕЛЬНО. Блоки 8b/8е/8ж судят ЧИТАТЕЛЕЙ взгляда
+    // и берут направление готовым. Но вся механика конуса висит на том, что
+    // направление вообще КТО-ТО пишет, и пишет правильно: нулевой взгляд — это
+    // слепота (блок 8д), а 88 % жителей на этаже 6 СТОЯТ, то есть писатель,
+    // выводящий взгляд из текущей скорости без памяти, ослепил бы почти всю
+    // толпу и ни один блок выше этого бы не заметил.
+    //
+    // МУТАЦИИ, КОТОРЫЕ ЛОВИТ ЭТОТ БЛОК, по одной на проверку ниже:
+    //   * «стоящему писать ноль» (память направления убрана);
+    //   * «носителю камеры выводить взгляд из хода» (своя ветка решателя снята);
+    //   * «в camera_forward подать ноль вместо cam.pitch» — взгляд в пол стал
+    //     бы взглядом в горизонт, то есть конус снова стал бы двумерным;
+    //   * «нормировать сырую скорость» (проекции на плоскость ходьбы нет);
+    //   * «проецировать и взгляд камеры» — под боковой гравитацией человек,
+    //     смотрящий вдоль оси гравитации, ослеп бы полностью;
+    //   * «порог сдвига прочитать наоборот» (ползущее тело вертит головой,
+    //     идущее — нет);
+    //   * «дать взгляд всякому, у кого есть Transform» (проп смотрит).
+    {
+        Registry reg;
+        CHECK(grid.cell(90, 90, 1) == kCellAir);
+
+        // Житель БЕЗ взгляда — состояние, в котором тело рождается: компоненты
+        // ещё нет, и первый проход обязан её завести сам.
+        //
+        // СТРОКИ ПУЛА ЗДЕСЬ НЕТ ВОВСЕ, и это утверждение о писателе, а не
+        // экономия: `look_step` спрашивает ТОЖДЕСТВО ПРИСУТСТВИЕМ компоненты
+        // (`NpcRef`/`MobRef`/`CameraTag`) и в `NpcPool` не ходит ни за чем.
+        // Завести здесь пул на 434 МиБ значило бы поставить столбец без
+        // читателя — ровно то, что канон зовёт дефектом.
+        auto spawn_bare = [&](const vec3& at, const vec3& v) -> Entity {
+            const Entity e = reg.create();
+            Transform tr;
+            tr.pos = at;
+            tr.layer = layer;
+            reg.emplace<Transform>(e, tr);
+            reg.emplace<Velocity>(e, Velocity{v});
+            reg.emplace<NpcRef>(e, NpcRef{static_cast<NpcId>(
+                                    entt::to_integral(e))});
+            return e;
+        };
+
+        const Entity walker =
+            spawn_bare(vec3{180.0f, 180.0f, 3.0f}, vec3{kWalkSpeedMps, 0.0f, 0.0f});
+        const Entity stander =
+            spawn_bare(vec3{184.0f, 180.0f, 3.0f}, vec3{0.0f, 0.0f, 0.0f});
+        // Носитель камеры, и ХОД У НЕГО ЕСТЬ: без хода проверка «взгляд из
+        // камеры» прошла бы и для писателя, который просто не знает ветки
+        // решателя, — у стоящего человека оба правила совпадают.
+        const Entity human = spawn_viewer(reg, layer, vec3{188.0f, 180.0f, 3.0f});
+        reg.get<CameraTag>(human).yaw = 1.5707963f;   // +y
+        reg.get<CameraTag>(human).pitch = 0.0f;
+        reg.get<Velocity>(human).v = vec3{5.0f, 0.0f, 0.0f};   // идёт в +x
+        // ПРОП: `Transform` есть, тождества нет. Взгляда он не получает, и это
+        // закон, а не экономия — обломок и снаряд не смотрят.
+        const Entity prop = reg.create();
+        {
+            Transform tr;
+            tr.pos = vec3{192.0f, 180.0f, 3.0f};
+            tr.layer = layer;
+            reg.emplace<Transform>(prop, tr);
+            reg.emplace<Velocity>(prop, Velocity{vec3{3.0f, 0.0f, 0.0f}});
+        }
+
+        const LookTick born = look_step(reg, layer, steer_frame_of(nullptr));
+        std::fprintf(stderr,
+                     "[behaviours] look_step: тел %u, рождены %u, ход %u, "
+                     "держат %u, камера %u\n",
+                     born.bodies, born.born, born.moved, born.held, born.human);
+        CHECK(born.bodies == 3u);    // проп не тело
+        CHECK(born.born == 3u);
+        CHECK(born.moved == 1u);
+        CHECK(born.held == 1u);
+        CHECK(born.human == 1u);
+        CHECK(!reg.all_of<Look>(prop));
+
+        // ИДЁТ — ВЗГЛЯД ПО ХОДУ.
+        CHECK(near_eq(reg.get<const Look>(walker).dir.x, 1.0f));
+        CHECK(reg.get<const Look>(walker).dir.y == 0.0f);
+        CHECK(reg.get<const Look>(walker).dir.z == 0.0f);
+        // РОДИЛСЯ СТОЯ — РУМБ ИЗ ТОЖДЕСТВА, а не ноль и не общий +x: единичный
+        // и в плоскости ходьбы. Конкретный угол не пинится (он хеш), пинится
+        // то, что это НЕ слепота.
+        const vec3 standDir = reg.get<const Look>(stander).dir;
+        CHECK(near_eq(vec_len(standDir), 1.0f));
+        CHECK(standDir.z == 0.0f);
+        // НОСИТЕЛЬ КАМЕРЫ — из камеры, ТОЙ ЖЕ единственной формулой, и ход
+        // (5,0,0) его взгляд не сдвинул ни на столько.
+        const vec3 camWant = camera_forward(1.5707963f, 0.0f);
+        CHECK(reg.get<const Look>(human).dir.x == camWant.x);
+        CHECK(reg.get<const Look>(human).dir.y == camWant.y);
+        CHECK(reg.get<const Look>(human).dir.z == camWant.z);
+        CHECK(near_eq(reg.get<const Look>(human).dir.y, 1.0f));
+        CHECK(std::fabs(reg.get<const Look>(human).dir.x) < 1e-3f);
+        // PITCH ЕДЕТ ТОЖЕ, и это не придирка: мутация «подать в
+        // `camera_forward` ноль вместо `cam.pitch`» прошла бы все проверки
+        // выше (там pitch и есть ноль) — и ровно она вернула бы конусу
+        // двумерность, которую блок 8г только что похоронил: взгляд в пол
+        // стал бы взглядом в горизонт.
+        reg.get<CameraTag>(human).pitch = -0.6f;   // смотрит ВНИЗ
+        const LookTick pitched = look_step(reg, layer, steer_frame_of(nullptr));
+        CHECK(pitched.human == 1u);
+        const vec3 wantDown = camera_forward(1.5707963f, -0.6f);
+        CHECK(reg.get<const Look>(human).dir.z == wantDown.z);
+        CHECK(reg.get<const Look>(human).dir.z < 0.0f);
+
+        // ВСТАЛ — ДЕРЖИТ ПРЕЖНИЙ. Главное слово здесь «прежний», а не «нулевой»:
+        // ноль был бы слепотой, а слепой житель не морозит Скульптуру и не
+        // ловит удар в спину.
+        reg.get<Velocity>(walker).v = vec3{0.0f, 0.0f, 0.0f};
+        const LookTick stopped = look_step(reg, layer, steer_frame_of(nullptr));
+        CHECK(stopped.born == 0u);   // второй раз никто не рождается
+        CHECK(stopped.moved == 0u);
+        CHECK(stopped.held == 2u);
+        CHECK(stopped.human == 1u);
+        CHECK(near_eq(reg.get<const Look>(walker).dir.x, 1.0f));
+        CHECK(near_eq(vec_len(reg.get<const Look>(walker).dir), 1.0f));
+
+        // ПОРОГ — ВЫРАЖЕНИЕ ОТ ПЕШЕЙ СКОРОСТИ, и испытаны ОБЕ его стороны:
+        // половина порога не вертит головой, двойной порог вертит. Одна сторона
+        // прошла бы и для писателя, читающего неравенство наоборот.
+        reg.get<Velocity>(walker).v =
+            vec3{0.0f, kWalkSpeedMps * kLookMovingFrac * 0.5f, 0.0f};
+        const LookTick creep = look_step(reg, layer, steer_frame_of(nullptr));
+        CHECK(creep.moved == 0u);
+        CHECK(creep.held == 2u);
+        CHECK(near_eq(reg.get<const Look>(walker).dir.x, 1.0f));
+        reg.get<Velocity>(walker).v =
+            vec3{0.0f, kWalkSpeedMps * kLookMovingFrac * 2.0f, 0.0f};
+        const LookTick crawl = look_step(reg, layer, steer_frame_of(nullptr));
+        CHECK(crawl.moved == 1u);
+        CHECK(near_eq(reg.get<const Look>(walker).dir.y, 1.0f));
+
+        // ПЛОСКОСТЬ ХОДЬБЫ: ось гравитации во взгляд не попадает. Под PosX
+        // скорость (5, 1.35, 0) — это 5 м/с ВДОЛЬ гравитации (падение) и 1.35
+        // ходьбы; взгляд обязан стать (0,1,0), а не нормировкой всего вектора
+        // (0.96, 0.26, 0).
+        GravityField sideways;
+        sideways.regime = GravityRegime::PosX;
+        sideways.global = vec3{9.81f, 0.0f, 0.0f};
+        reg.get<Velocity>(walker).v = vec3{5.0f, kWalkSpeedMps, 0.0f};
+        const LookTick side = look_step(reg, layer, steer_frame_of(&sideways));
+        CHECK(side.moved == 1u);
+        const vec3 sideDir = reg.get<const Look>(walker).dir;
+        CHECK(sideDir.x == 0.0f);
+        CHECK(near_eq(sideDir.y, 1.0f));
+        CHECK(near_eq(vec_len(sideDir), 1.0f));
+
+        // ...А ВЗГЛЯД КАМЕРЫ НЕ ПРОЕЦИРУЕТСЯ, и под боковой гравитацией это
+        // уже не вкус: человек, смотрящий ВДОЛЬ оси гравитации (yaw 0 под
+        // PosX), после проекции получил бы РОВНО НОЛЬ — полную слепоту тела,
+        // которым играют. Поэтому у решателя `Human` своя ветка, и она старше
+        // плоскости ходьбы.
+        reg.get<CameraTag>(human).yaw = 0.0f;
+        reg.get<CameraTag>(human).pitch = 0.0f;   // ровно вдоль оси гравитации
+        const LookTick sideHuman =
+            look_step(reg, layer, steer_frame_of(&sideways));
+        CHECK(sideHuman.human == 1u);
+        CHECK(reg.get<const Look>(human).dir.x == 1.0f);
+        CHECK(near_eq(vec_len(reg.get<const Look>(human).dir), 1.0f));
+    }
+
     // ---- 9. FractureSprint: a three-timer cycle with no timer ----------------
-    // Pure-function block, and the reason is stated rather than assumed: nothing in
-    // src/ calls `burst_phase` yet, so there is no velocity to measure. What CAN be
-    // proven without a caller is that the cycle is the authored one, that it is
-    // deterministic, that carriers are off lockstep, and that it costs a Трескотник
-    // ground rather than giving it a free 3.25x.
+    // Pure-function block, and the reason has CHANGED rather than lapsed. It used to
+    // read "nothing in src/ calls `burst_phase` yet, so there is no velocity to
+    // measure"; that is false since the wiring landed — `wander.cpp` multiplies the
+    // chase speed by `burst_speed_mult(burst_phase(...))` and `combat.cpp` multiplies
+    // the swing by `burst_damage_mult`. What is still only provable as a FUNCTION is
+    // the SHAPE of the cycle: a velocity test sees one tick of one phase per mob and
+    // would have to copy the phase arithmetic to know which tick to look at, i.e. it
+    // would assert its own copy. The wired halves are measured where they are
+    // applied — block 16 for the damage. Here: the cycle is the authored one, it is
+    // deterministic, carriers are off lockstep, and it costs a Трескотник ground
+    // rather than giving it a free 3.25x.
     {
         CHECK(burst_phase(MobBehaviour::Plain, 7u, 0u, 1.0f) == BurstPhase::Idle);
         // The range gate: at the boundary it winds up, one millimetre past it does not.
@@ -1132,44 +1713,62 @@ static void test_behaviours_all() {
     }
 
     // ---- 10. DeadEcho: a facing turned into a stat ---------------------------
-    // Pure-function block for the same stated reason as block 9 — combat.cpp applies
-    // neither this nor `behaviour_damage_mult`, so there is no damage number to
-    // measure. The invariant against `frozen_by_gaze` is the part that could not be
-    // written as a comment.
+    // Pure-function block, and its old justification — "combat.cpp applies neither
+    // this nor `behaviour_damage_mult`, so there is no damage number to measure" — is
+    // now FALSE TWICE OVER and was replaced rather than relaxed: `combat.cpp` applies
+    // `behaviour_damage_mult` and `facing_damage_mult` in the same ten lines of
+    // `mob_attack_step`, and since S25.7 it applies the facing one to ANY victim that
+    // carries a `Look`, not only to the camera holder. The applied damage is measured
+    // in two integration blocks instead — block 15 on the camera holder, block 8е
+    // between two residents.
+    //
+    // What stays here is what a damage number CANNOT show: the exact threshold, its
+    // inclusiveness, the degenerate-delta edge, and the invariant against
+    // `frozen_by_gaze` — one swing lands on one bearing, so pinning the band through
+    // combat would need 360 arenas.
+    //
+    // ВЗГЛЯД ПЕРВЫМ АРГУМЕНТОМ — `vec3`, И ПЕЛЕНГ ТРЁХМЕРНЫЙ. Прежде оба
+    // соглашения были двумерны (`fwdX/fwdY`, `dx/dy`), и вертикаль молча
+    // пропадала; третья дельта в проверках ниже стоит нулём ТАМ, ГДЕ ПРЕДМЕТ
+    // ПРОВЕРКИ ГОРИЗОНТАЛЕН (порог, вырожденный пеленг, дальность пеленга), и
+    // это сохранение предмета, а не упрощение: вертикаль разобрана блоком 8г и
+    // вторым, вертикальным обметанием в конце этого блока.
     {
+        const vec3 fwdX{1.0f, 0.0f, 0.0f};
         // Behind the viewer: the delta from viewer to monster opposes the forward.
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, -1.0f, 0.0f) ==
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX, -1.0f, 0.0f, 0.0f) ==
               kDeadEchoBackDamage);
         // In front of it: the weak branch.
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, 1.0f, 0.0f) ==
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX, 1.0f, 0.0f, 0.0f) ==
               kDeadEchoFacedDamage);
         // The threshold is -0.18 and it is inclusive, matching the reference's `<=`.
         // Both sides of it, because an off-by-one-comparison here is invisible at any
         // other angle.
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, kDeadEchoBackDot,
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX, kDeadEchoBackDot,
                                  -std::sqrt(1.0f - kDeadEchoBackDot *
-                                                       kDeadEchoBackDot)) ==
-              kDeadEchoBackDamage);
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f,
+                                                       kDeadEchoBackDot),
+                                 0.0f) == kDeadEchoBackDamage);
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX,
                                  kDeadEchoBackDot + 0.01f,
                                  -std::sqrt(1.0f - kDeadEchoBackDot *
-                                                       kDeadEchoBackDot)) ==
-              kDeadEchoFacedDamage);
+                                                       kDeadEchoBackDot),
+                                 0.0f) == kDeadEchoFacedDamage);
         // Standing on top of it counts as FACING it, so being caught never also hands
-        // out the bonus. The reference's facingDotTo returns 1 below 0.001 m.
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, 0.0f, 0.0f) ==
+        // out the bonus. The reference's facingDotTo returns 1 below 0.001 m. Все три
+        // дельты нулевые — вырожденный пеленг теперь выродился и по вертикали.
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX, 0.0f, 0.0f, 0.0f) ==
               kDeadEchoFacedDamage);
         // Distance is deliberately NOT a term: the multiplier is about facing only, and
         // the 7.5 m radius is what bounds it. A long delta with the same bearing gives
         // the same answer, which is what makes it safe to call from a combat pass that
         // has already decided the monster is in reach.
-        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, -40.0f, 0.0f) ==
+        CHECK(facing_damage_mult(MobBehaviour::DeadEcho, fwdX, -40.0f, 0.0f, 0.0f) ==
               kDeadEchoBackDamage);
         // Every other behaviour is untouched, all 47 checked rather than a sample.
         for (std::size_t i = 0; i < static_cast<std::size_t>(MobBehaviour::Count); ++i) {
             const MobBehaviour b = static_cast<MobBehaviour>(i);
             if (b == MobBehaviour::DeadEcho) continue;
-            CHECK(facing_damage_mult(b, 1.0f, 0.0f, -1.0f, 0.0f) == 1.0f);
+            CHECK(facing_damage_mult(b, fwdX, -1.0f, 0.0f, 0.0f) == 1.0f);
         }
         // The straddle that makes it the kind's whole design rather than a bonus: one
         // branch above 1.0 and one below, so looking at Безэхий is a real defence and
@@ -1188,7 +1787,7 @@ static void test_behaviours_all() {
                       "facing it must be a real defence, not merely no bonus");
 
         // THE cross-check. `frozen_by_gaze` and `facing_damage_mult` read the identical
-        // two vectors, so a caller that got one convention backwards would still
+        // vectors, so a caller that got one convention backwards would still
         // compile and still look plausible. Swept over the full circle: a monster the
         // viewer is looking at (the freeze cone) can NEVER be in the back-turned band,
         // and the two bands cannot overlap for any bearing.
@@ -1197,10 +1796,10 @@ static void test_behaviours_all() {
             const float a = static_cast<float>(deg) * 3.14159265f / 180.0f;
             const float dx = std::cos(a) * 10.0f;   // 10 m out, inside kGazeRange
             const float dy = std::sin(a) * 10.0f;
-            const bool frozen = frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f,
-                                               dx, dy);
-            const bool back = facing_damage_mult(MobBehaviour::DeadEcho, 1.0f, 0.0f, dx,
-                                                dy) == kDeadEchoBackDamage;
+            const bool frozen =
+                frozen_by_gaze(MobBehaviour::WeepingAngel, fwdX, dx, dy, 0.0f);
+            const bool back = facing_damage_mult(MobBehaviour::DeadEcho, fwdX, dx, dy,
+                                                 0.0f) == kDeadEchoBackDamage;
             CHECK(!(frozen && back));
             if (frozen) ++frozenCount;
             if (back) ++backCount;
@@ -1215,14 +1814,47 @@ static void test_behaviours_all() {
         // without being copied.
         CHECK(frozenCount > 80u && frozenCount < 100u);
         CHECK(backCount > 140u && backCount < 180u);
+
+        // ТО ЖЕ ОБМЕТАНИЕ В ВЕРТИКАЛЬНОЙ ПЛОСКОСТИ (x–z), и оно НЕ копия: пеленг
+        // стал трёхмерным, и обе функции обязаны читать `dz` ОДИНАКОВО. Углы те
+        // же, взгляд тот же (1,0,0) — значит и полосы обязаны выйти теми же, с
+        // точностью до перестановки осей; изотропия по кругу есть утверждение,
+        // которое ловит мутацию «отбросить `dz`» В ЛЮБОЙ из двух функций:
+        // отброшенная вертикаль склеивает верхнюю и нижнюю половины круга и
+        // мгновенно ломает и счётчики, и непересечение полос.
+        std::size_t frozenV = 0, backV = 0;
+        for (int deg = 0; deg < 360; ++deg) {
+            const float a = static_cast<float>(deg) * 3.14159265f / 180.0f;
+            const float dx = std::cos(a) * 10.0f;
+            const float dz = std::sin(a) * 10.0f;
+            const bool frozen =
+                frozen_by_gaze(MobBehaviour::WeepingAngel, fwdX, dx, 0.0f, dz);
+            const bool back = facing_damage_mult(MobBehaviour::DeadEcho, fwdX, dx, 0.0f,
+                                                 dz) == kDeadEchoBackDamage;
+            CHECK(!(frozen && back));
+            if (frozen) ++frozenV;
+            if (back) ++backV;
+        }
+        std::fprintf(stderr,
+                     "[behaviours] ...и в вертикальной плоскости: заморозка %zu, "
+                     "спина %zu (горизонталь: %zu / %zu)\n",
+                     frozenV, backV, frozenCount, backCount);
+        CHECK(frozenV == frozenCount);
+        CHECK(backV == backCount);
     }
 
     // ---- 11. WallBrace reach: the half of the kind the CSV column is missing --
-    // Pure-function block, same stated reason as 9 and 10: combat.cpp computes `reach`
-    // from `def.meleeReachMm` directly, so there is no swing to measure until the
-    // handoff lands. What CAN be proven is the part a caller cannot get wrong by
-    // accident — that the unbraced branch is bit-for-bit the arithmetic combat.cpp
-    // already does, and that the braced branch is outside the table's whole range.
+    // Pure-function block. Its old reason — "combat.cpp computes `reach` from
+    // `def.meleeReachMm` directly, so there is no swing to measure until the handoff
+    // lands" — is stale: the handoff LANDED, `mob_attack_step` computes
+    // `behaviour_melee_reach(beh, def.meleeReachMm, nearWall)`, and §14/§18 measure
+    // the armour half of the same braced state through live damage. The reach itself
+    // still has no velocity or damage number of its own (a swing either lands or does
+    // not, and a reach test through combat would be a bisection on position), so the
+    // claims below stay at the function. What CAN be proven is the part a caller
+    // cannot get wrong by accident — that the unbraced branch is bit-for-bit the
+    // arithmetic combat.cpp already does, and that the braced branch is outside the
+    // table's whole range.
     {
         const MobDef& pan = mob_def(MobKind::Panelnik);
         const MobBehaviour wb = MobBehaviour::WallBrace;
@@ -1469,6 +2101,19 @@ static void test_behaviours_all() {
     }
 
     // ---- 15. Combat Integration: DeadEcho facing damage multiplier ----------
+    // ПРЕДМЕТ БЛОКА СУЗИЛСЯ, И ЭТО РЕШЕНИЕ ВЛАДЕЛЬЦА (CANON S25.7). Блок писался
+    // как «множитель против ИГРОКА», потому что гейт `victim == player` в
+    // `combat.cpp` делал его единственным возможным прочтением. Гейт снят, и
+    // носитель камеры стал ОДНИМ ИЗ ТЕЛ: тот же множитель между двумя жителями
+    // мерит блок 8е. Здесь остаётся ровно то, что принадлежит камере — что
+    // взгляд человека приезжает ИЗ `CameraTag` через `look_step`, а не из хода
+    // тела, и что `yaw` при этом читается с правильной полярностью.
+    //
+    // ПИСАТЕЛЬ ВЗГЛЯДА ЗВАН ЯВНОЙ СТРОКОЙ, А НЕ ПРИКЛЕЕН К `spawn_viewer`: это
+    // прод-цепь (камера → `look_step` → `Look` → множитель), и обрыв любого её
+    // звена обязан быть красным ЗДЕСЬ. Без него `combat.cpp` не нашёл бы
+    // компоненты и применил бы ровно 1.0 — то есть блок мерил бы отсутствие
+    // механики и называл бы это механикой.
     {
         const vec3 playerPos{100.0f, 100.0f, 3.0f};
 
@@ -1490,6 +2135,10 @@ static void test_behaviours_all() {
             const vec3 behindPos{98.5f, 100.0f, 3.0f};
             spawn_at(regBehind, layer, MobKind::Bezekhiy, behindPos);
 
+            // Взгляд человека пишет проход, из камеры; (1,0,0) при yaw = 0 —
+            // монстр за спиной, пеленг жертва→монстр равен (−1.5, 0, 0).
+            (void)look_step(regBehind, layer, steer_frame_of(nullptr));
+            CHECK(regBehind.get<const Look>(pEnt).dir.x == 1.0f);
             std::uint32_t swings = mob_attack_step(regBehind, grid, poolBehind, busBehind, layer, 0.008f, 0);
             CHECK(swings == 1u);
             const MobRef& pMob = regBehind.get<MobRef>(pEnt);
@@ -1509,6 +2158,9 @@ static void test_behaviours_all() {
             const vec3 facingPos{101.5f, 100.0f, 3.0f};
             spawn_at(regFacing, layer, MobKind::Bezekhiy, facingPos);
 
+            // Та же камера, тот же писатель — монстр теперь ПЕРЕД лицом.
+            (void)look_step(regFacing, layer, steer_frame_of(nullptr));
+            CHECK(regFacing.get<const Look>(pEnt).dir.x == 1.0f);
             std::uint32_t swings = mob_attack_step(regFacing, grid, poolFacing, busFacing, layer, 0.008f, 0);
             CHECK(swings == 1u);
             const MobRef& pMob = regFacing.get<MobRef>(pEnt);

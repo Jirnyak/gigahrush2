@@ -1,4 +1,5 @@
 #include "core/rng.h"
+#include "game/look.h"  // looking_at — ОДИН примитив «тело A смотрит на B»
 #include "game/mob_behaviour.h"
 
 #include <cmath>
@@ -123,26 +124,39 @@ float behaviour_aggro_radius(MobBehaviour b, float defaultRadius) {
     }
 }
 
-bool frozen_by_gaze(MobBehaviour b, float fwdX, float fwdY, float dx, float dy) {
+// КОНУС ОБОБЩЁН НА ЛЮБОЕ ТЕЛО (CANON S25.7, 2026-11-09). Прежде обе функции
+// принимали `fwdX/fwdY` = `cos/sin(cam.yaw)` НОСИТЕЛЯ КАМЕРЫ двумя дословными
+// копиями (`wander.cpp`, `combat.cpp`), и вопрос «смотрит ли ЭТО тело» был
+// невыразим для тела без камеры — ровно то, что владелец назвал «игрок ничем
+// не особен». Теперь обе берут направление взгляда ([game/look.h] `Look`),
+// которое есть у КАЖДОГО тела, и обе зовут ОДИН примитив `looking_at`:
+// заморозка Скульптуры читается как «на меня кто-то смотрит», а удар в спину
+// работает между двумя жителями. Пеленг трёхмерный: вертикаль больше не
+// отбрасывается молча (взгляд в зенит морозил Скульптуру под ногами).
+bool frozen_by_gaze(MobBehaviour b, const vec3& gazerFwd, float dx, float dy,
+                    float dz) {
     if (b != MobBehaviour::WeepingAngel) return false;
-    const float d2 = dx * dx + dy * dy;
-    if (d2 > kGazeRange * kGazeRange) return false;
-    if (d2 < 1e-6f) return true;   // standing inside it counts as looking at it
-    const float inv = 1.0f / std::sqrt(d2);
-    const float dot = (dx * inv) * fwdX + (dy * inv) * fwdY;
-    return dot >= kGazeCosHalfAngle;
+    if (dx * dx + dy * dy + dz * dz > kGazeRange * kGazeRange) return false;
+    return looking_at(gazerFwd, dx, dy, dz, kGazeCosHalfAngle);
 }
 
-float facing_damage_mult(MobBehaviour b, float fwdX, float fwdY, float dx, float dy) {
+float facing_damage_mult(MobBehaviour b, const vec3& victimFwd, float dx,
+                         float dy, float dz) {
     if (b != MobBehaviour::DeadEcho) return 1.0f;
-    const float d2 = dx * dx + dy * dy;
+    const float d2 = dx * dx + dy * dy + dz * dz;
     // The reference's `facingDotTo` returns 1 below a 0.001 m separation — standing on
     // top of a monster counts as facing it — so a degenerate delta must NOT award the
     // 1.55. Getting this edge backwards would hand the bonus to exactly the case where
     // the player has already been caught.
     if (d2 < 1e-6f) return kDeadEchoFacedDamage;
-    const float inv = 1.0f / std::sqrt(d2);
-    const float dot = (dx * inv) * fwdX + (dy * inv) * fwdY;
+    const float f2 = victimFwd.x * victimFwd.x + victimFwd.y * victimFwd.y +
+                     victimFwd.z * victimFwd.z;
+    // Взгляда нет — удар не в спину и не в лицо: лицевой множитель есть
+    // ОСТОРОЖНЫЙ ответ (бонуса не даём), та же полярность, что у вырожденного
+    // пеленга строкой выше.
+    if (f2 < 1e-6f) return kDeadEchoFacedDamage;
+    const float dot = (dx * victimFwd.x + dy * victimFwd.y + dz * victimFwd.z) /
+                      (std::sqrt(d2) * std::sqrt(f2));
     return dot <= kDeadEchoBackDot ? kDeadEchoBackDamage : kDeadEchoFacedDamage;
 }
 

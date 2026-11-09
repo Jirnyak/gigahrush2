@@ -13,6 +13,7 @@
 #include "game/faction_relations.h"
 #include "game/guide.h"    // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись, стоп
 #include "game/hunt.h"
+#include "game/look.h"  // Look — взгляд цели погони (S25.7)
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
 #include "game/mob_spawn.h"
@@ -167,10 +168,10 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     bool haveVictim = false;
     vec3 victimPos{0, 0, 0};
     std::uint32_t victimId = 0;
-    // The viewer's forward, for WeepingAngel. Computed ONCE per pass, not per
-    // monster: the whole reason the gaze test compares cosines is that no monster
-    // then needs any trig of its own.
-    float fwdX = 1.0f, fwdY = 0.0f;
+    // ВЗГЛЯД ЖЕРТВЫ — больше НЕ `cos/sin(cam.yaw)`. Направление взгляда есть
+    // у КАЖДОГО тела ([game/look.h]), поэтому тригонометрии здесь нет вовсе, а
+    // «смотрит ли на меня тот, к кому я иду» спрашивается одним примитивом.
+    Entity victimE = entt::null;
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
@@ -182,9 +183,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             if (!mob_hostile_to(pool, nr->id)) continue;
         victimPos = t.pos;
         victimId = static_cast<std::uint32_t>(entt::to_integral(e));
-        const CameraTag& cam = reg.get<const CameraTag>(e);
-        fwdX = std::cos(cam.yaw);
-        fwdY = std::sin(cam.yaw);
+        victimE = e;
         haveVictim = true;
         break;
     }
@@ -294,6 +293,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             bool chasing = false;
             float ax = 0.0f, ay = 0.0f;
             std::uint32_t chaseId = victimId;
+            Entity chaseE = victimE;  // ТЕЛО цели погони — у него и спросим взгляд
             if (haveVictim) {
                 ax = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
                 ay = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
@@ -317,6 +317,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);
                     chaseId = static_cast<std::uint32_t>(entt::to_integral(pr.e));
+                    chaseE = pr.e;
                     chasing = true;
                 }
             }
@@ -330,12 +331,24 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 // now two different things: a Sculpture stalking a resident must still
                 // freeze while you are watching it, or the one behaviour that gives it
                 // counterplay would switch itself off the moment it found other prey.
-                if (haveVictim) {
-                    const float gx =
-                        wrap_delta_f(victimPos.x, tr.pos.x, kWorldExtent);
-                    const float gy =
-                        wrap_delta_f(victimPos.y, tr.pos.y, kWorldExtent);
-                    if (frozen_by_gaze(beh, fwdX, fwdY, gx, gy)) {
+                // ЗАМИРАЕТ ОТ ВЗГЛЯДА ТОГО, К КОМУ ИДЁТ, кем бы тот ни был:
+                // прежде вопрос стоял только к носителю камеры, и для пары
+                // «Скульптура и житель» был невыразим (CANON S25.7 — «игрок
+                // ничем не особен»). Перебора всех смотрящих здесь нет
+                // намеренно: он был бы O(n²) на тик, а конус погони и есть то
+                // отношение, в котором механика имеет смысл.
+                const Entity gazer = chaseE;
+                if (gazer != entt::null) {
+                    const Look* gl = reg.try_get<Look>(gazer);
+                    const Transform* gt = reg.try_get<Transform>(gazer);
+                    const float gx = gt != nullptr
+                        ? wrap_delta_f(gt->pos.x, tr.pos.x, kWorldExtent) : 0.0f;
+                    const float gy = gt != nullptr
+                        ? wrap_delta_f(gt->pos.y, tr.pos.y, kWorldExtent) : 0.0f;
+                    const float gz = gt != nullptr
+                        ? wrap_delta_f(gt->pos.z, tr.pos.z, kWorldExtent) : 0.0f;
+                    if (gl != nullptr && gt != nullptr &&
+                        frozen_by_gaze(beh, gl->dir, gx, gy, gz)) {
                         // ЗАСТЫТЬ — ЭТО ЦЕЛЬ `Hold`, а не отсутствие цели:
                         // гейзнутая Скульптура обязана стоять ИДЕАЛЬНО, а не
                         // катиться на прошлой скорости. Прежде здесь гасились

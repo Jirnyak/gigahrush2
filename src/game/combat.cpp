@@ -12,6 +12,7 @@
 #include "game/embody.h"   // NpcRef
 #include "game/hunt.h"
 #include "game/inventory.h" // Inventory — spill NPC bag into Corpse / cell containers
+#include "game/look.h"  // Look — взгляд жертвы для удара в спину (S25.7)
 #include "game/loot.h"      // Pickup — floor overflow when corpse + cell containers full
 #include "game/mob_spawn.h"
 #include "game/prop_system.h" // Interactable::Kind::Corpse — §18 interaction tag
@@ -564,8 +565,10 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
     // per-monster and cannot be hoisted the same way ([hunt.h]).
     Entity player = entt::null;
     vec3 playerPos{0, 0, 0};
-    float playerFwdX = 1.0f, playerFwdY = 0.0f;
-    bool havePlayer = false;
+    // ВЗГЛЯД НОСИТЕЛЯ КАМЕРЫ ЗДЕСЬ БОЛЬШЕ НЕ СЧИТАЕТСЯ (S25.7): он есть
+    // компонента `Look` ЛЮБОГО тела, и удар в спину спрашивает взгляд ТОЙ
+    // ЖЕРТВЫ, которую бьют. Копия `cos/sin(cam.yaw)` была одной из двух в
+    // дереве и держала множитель только против игрока.
     for (auto e : reg.view<const CameraTag, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -573,10 +576,6 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
             if (!mob_hostile_to(pool, nr->id)) continue;
         player = e;
         playerPos = tr.pos;
-        const CameraTag& cam = reg.get<const CameraTag>(e);
-        playerFwdX = std::cos(cam.yaw);
-        playerFwdY = std::sin(cam.yaw);
-        havePlayer = true;
         break;
     }
 
@@ -738,10 +737,18 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         }
 
         // Directional damage multiplier for DeadEcho (viewer facing)
-        if (victim == player && havePlayer) {
-            const float pdx = wrap_delta_f(playerPos.x, tr.pos.x, kWorldExtent);
-            const float pdy = wrap_delta_f(playerPos.y, tr.pos.y, kWorldExtent);
-            dmg *= facing_damage_mult(beh, playerFwdX, playerFwdY, pdx, pdy);
+        // УДАР В СПИНУ — МЕЖДУ ЛЮБЫМИ ДВУМЯ ТЕЛАМИ (CANON S25.7). Прежде
+        // стоял гейт `victim == player`, то есть множитель существовал только
+        // против носителя камеры, а Безэхий, бьющий жителя, всегда получал 1.0.
+        // Взгляд есть у каждого тела ([game/look.h]), поэтому гейт снят, и
+        // спрашивается взгляд ТОЙ ЖЕРТВЫ, которую бьют.
+        if (const Look* vl = reg.try_get<Look>(victim)) {
+            if (const Transform* vt = reg.try_get<Transform>(victim)) {
+                const float pdx = wrap_delta_f(vt->pos.x, tr.pos.x, kWorldExtent);
+                const float pdy = wrap_delta_f(vt->pos.y, tr.pos.y, kWorldExtent);
+                const float pdz = wrap_delta_f(vt->pos.z, tr.pos.z, kWorldExtent);
+                dmg *= facing_damage_mult(beh, vl->dir, pdx, pdy, pdz);
+            }
         }
 
         // Burst damage multiplier for FractureSprint (sprint phase)

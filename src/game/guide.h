@@ -220,7 +220,8 @@ enum class TargetKind : std::uint8_t {
 enum class SteerRank : std::uint8_t {
     None = 0,  // заявки нет
     Walk,      // прогулка: слабейший заявитель, за ним никого
-    Chase,     // погоня моба за жертвой
+    Noise,     // СЛУХ: идти на услышанное — слабее зрения ПО ПОСТРОЕНИЮ
+    Chase,     // погоня моба за жертвой (зрение)
     Feud,      // вражда фракций
     Errand,    // дело: ход к выбранному месту ИЛИ деяние на месте (S24)
     Patrol,    // наряд
@@ -236,9 +237,9 @@ struct SteerRankRow {
 };
 inline constexpr SteerRankRow kSteerRankRows[] = {
     {SteerRank::None, "нет"},     {SteerRank::Walk, "прогулка"},
-    {SteerRank::Chase, "погоня"}, {SteerRank::Feud, "вражда"},
-    {SteerRank::Errand, "дело"},  {SteerRank::Patrol, "наряд"},
-    {SteerRank::Flee, "бегство"}};
+    {SteerRank::Noise, "слух"},   {SteerRank::Chase, "погоня"},
+    {SteerRank::Feud, "вражда"},  {SteerRank::Errand, "дело"},
+    {SteerRank::Patrol, "наряд"}, {SteerRank::Flee, "бегство"}};
 GIGA_TABLE_BY_ENUM(kSteerRankRows, &SteerRankRow::rank, kSteerRankCount);
 
 // ЦЕЛЬ — то, что заявитель знает, а движение исполняет. Скорость ЗДЕСЬ, а не

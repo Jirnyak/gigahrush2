@@ -105,6 +105,7 @@ int g_checks = 0;
 #include "suite_persist.inl"
 #include "suite_macrosim.inl"
 #include "suite_behaviours.inl"
+#include "suite_perceive.inl"  // ОДИН ПРОХОД ВОСПРИЯТИЯ: конус, заслонение, взгляд (S25.8)
 #include "suite_samosborhud.inl"
 #include "suite_eventsweb.inl"
 #include "suite_needs2.inl"
@@ -2948,19 +2949,20 @@ static void test_mob_behaviour() {
     // Looking straight at it, in range: frozen. This is the assertion that matters,
     // because Sculpture's row is 8.5 cells/s and 1000 damage — with the behaviour
     // unimplemented it sprinted in and one-shot the player with no counterplay.
-    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 0.0f));
+    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f,0.0f,0.0f}, 10.0f, 0.0f, 0.0f));
     // Just inside the 45-degree cone edge, and just outside it.
-    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 9.0f));
-    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 11.0f));
+    CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f,0.0f,0.0f}, 10.0f, 9.0f, 0.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f,0.0f,0.0f}, 10.0f, 11.0f, 0.0f));
     // Behind you: free to move. That is the entire mechanic.
-    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, -10.0f, 0.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f,0.0f,0.0f}, -10.0f, 0.0f, 0.0f));
     // Beyond 25 m it does not care whether you are looking.
-    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 30.0f, 0.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, vec3{1.0f,0.0f,0.0f}, 30.0f, 0.0f, 0.0f));
     // Range is a circle, not a square: 20,20 is 28.3 m away and must NOT freeze.
-    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel, 0.7071068f, 0.7071068f,
-                          20.0f, 20.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::WeepingAngel,
+                          vec3{0.7071068f, 0.7071068f, 0.0f}, 20.0f, 20.0f,
+                          0.0f));
     // No other kind is affected.
-    CHECK(!frozen_by_gaze(MobBehaviour::Plain, 1.0f, 0.0f, 1.0f, 0.0f));
+    CHECK(!frozen_by_gaze(MobBehaviour::Plain, vec3{1.0f,0.0f,0.0f}, 1.0f, 0.0f, 0.0f));
 
     // --- wall bias --------------------------------------------------------
     const std::uint32_t wb = static_cast<std::uint32_t>(AiFlag::WallBias);
@@ -5341,6 +5343,7 @@ int main() {
     test_persist_all();
     test_macrosim_all();
     test_behaviours_all();
+    test_perceive_all();
     test_samosborhud_all();
     test_eventsweb_all();
     test_needs2_all();

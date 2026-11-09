@@ -2478,7 +2478,7 @@ if(GIGA_BUILD_TESTS)
         # Все четыре гейта пересобраны на ЗАЖАТОЙ геометрии (утопленные
         # поверхности, шов двух твёрдых клеток — то, что производят скульпт-
         # модули) и на числах ИЗ ЖИВОЙ ТАБЛИЦЫ; теперь красят.
-        PASS_REGULAR_EXPRESSION "game_test: 208867 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 219341 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
