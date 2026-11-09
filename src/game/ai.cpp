@@ -9,6 +9,7 @@
 #include "core/wrap.h"        // wrap_delta — toroidal cell distance for recall
 #include "ecs/components.h"   // Transform, Velocity, CameraTag
 #include "game/embody.h"      // NpcRef
+#include "game/guide.h"       // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
@@ -569,23 +570,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // frame — under NegZ that reduces to the old {dx, dy, 0} literals bit-for-bit.
     // Null world (tests) keeps the NegZ frame, same rule as controller_step.
     // Custom resolves through regime_from_vector, as gravity_frames does.
-    GravityRegime steerRegime = GravityRegime::NegZ;
-    if (world != nullptr) {
-        steerRegime = world->gravity().regime;
-        if (steerRegime == GravityRegime::Custom)
-            steerRegime = regime_from_vector(world->gravity().global);
-    }
-    const GravityFrame gf = regime_frame(steerRegime);
+    // ОДНОЙ ДВЕРЬЮ ([world/gravity.h] `steer_frame_of`): это разрешение режима
+    // стояло дословной копией в четырёх проходах ведения.
+    const GravityFrame gf =
+        steer_frame_of(world != nullptr ? &world->gravity() : nullptr);
     // Project a delta onto the walking plane: zero the component along gravity.
     // KNOWN 2D-DATA CAVEAT, stated rather than hidden: seat targets, room columns
     // and memory away-vectors are (x, y) data today, so under a SIDE regime the
     // projected goal loses its along-Z half until the bakes grow a third axis
     // (roadmap: nav connectivity classes). The frame is honest; the data lags.
     const auto tangent = [&gf](float x, float y, float z) {
-        if (gf.axis == 0) x = 0.0f;
-        else if (gf.axis == 1) y = 0.0f;
-        else z = 0.0f;
-        return vec3{x, y, z};
+        return steer_tangent(gf, x, y, z);
     };
     // Hoisted out of the loop so a body that neither re-plans nor flees pays
     // NOTHING for memory — not even zeroing a MemoryRecall. `ai_recall` returns a
@@ -822,11 +817,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                                 : kErrandSpeed;
         // The component ALONG gravity is intentionally untouched — physics_step
         // owns it (pull and jump), whatever axis it happens to be. Same rule as
-        // wander_step: this is locomotion, not flight. Under NegZ this writes
-        // exactly the old two lines.
-        if (gf.axis != 0) vel.v.x = dir.x * speed;
-        if (gf.axis != 1) vel.v.y = dir.y * speed;
-        if (gf.axis != 2) vel.v.z = dir.z * speed;
+        // wander_step: this is locomotion, not flight. Одна форма записи на всё
+        // ведение — [game/guide.h] `steer_write`.
+        steer_write(gf, vel, dir, speed);
     }
     return out;
 }
@@ -841,21 +834,11 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
     // flight the arrays are empty, and indexing them would be UB, not a no-op.
     // Patrol bodies simply wander until the floor's zone nav lands.
     if (!zones.built()) return out;
-    // Same frame discipline as ai_step: the regime is a property of the world,
-    // null keeps NegZ bit-for-bit (tests), Custom resolves through the vector.
-    GravityRegime patrolRegime = GravityRegime::NegZ;
-    if (gravity != nullptr) {
-        patrolRegime = gravity->regime;
-        if (patrolRegime == GravityRegime::Custom)
-            patrolRegime = regime_from_vector(gravity->global);
-    }
-    const GravityFrame gf = regime_frame(patrolRegime);
-    const auto tangent = [&gf](float x, float y, float z) {
-        if (gf.axis == 0) x = 0.0f;
-        else if (gf.axis == 1) y = 0.0f;
-        else z = 0.0f;
-        return vec3{x, y, z};
-    };
+    // Same frame discipline as ai_step, и теперь ОДНОЙ ДВЕРЬЮ
+    // ([world/gravity.h] `steer_frame_of`): the regime is a property of the
+    // world, null keeps NegZ bit-for-bit (tests), Custom resolves through the
+    // vector.
+    const GravityFrame gf = steer_frame_of(gravity);
 
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
     for (auto e : view) {
@@ -986,12 +969,12 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
             ++out.repicked;
         }
 
-        // ДВА ЧТЕНИЯ, и ни одной волны: таблица даёт соседку, плоскость
-        // соседки даёт направление. Ступеньку разрешает САМА дверь, поэтому
-        // ветки на вертикаль у потребителя нет — была бы, значит дверь обошли.
-        const std::uint8_t d = zone_walk_dir(zones, myZone, plan.zoneTo, cx, cy, cz,
-                                             gf.pull ? gf.axis : -1);
-        if (d == kZoneFlowNone) {
+        // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`): два
+        // чтения нава и ни одной волны, прицел в центр следующей клетки.
+        // Третья побайтовая копия этих тридцати строк жила здесь.
+        const SteerStep st =
+            steer_to_zone(zones, gf, tr.pos, cx, cy, cz, myZone, plan.zoneTo);
+        if (st.fail == SteerFail::NoRoute) {
             // Маршрута нет (другая компонента связности, либо поле соседки не
             // покрывает эту клетку). Цель снимается СО СТАГГЕРОМ: без него
             // замер дал 3334 снятия за прогон против нуля у решётки, и платило
@@ -1019,45 +1002,32 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         // CLAIM. From here this pass is the body's one writer this tick:
         // wander_step's ai_owns_motion guard is what turns the claim into the
         // single-writer rule instead of a comment.
+        //
+        // ДЕФЕКТ ПОРЯДКА, НАЗВАННЫЙ ВСЛУХ И ОСТАВЛЕННЫЙ БИТ-В-БИТ (2026-11-09):
+        // токен забирается ЗДЕСЬ, а ступенька отказывает НИЖЕ с `continue` без
+        // записи скорости — то есть тело под токеном не ведётся никем и
+        // ДРЕЙФУЕТ на прошлой скорости, ровно тот дефект, от которого
+        // `place_errand_step` держит правило «направление считается ДО забора»
+        // ([game/place.cpp]). Комментарий ниже утверждал обратное («токен не
+        // забран») и врал на десять строк. Не правлю здесь: эта правка меняет
+        // поведение, а токен умирает следующим шагом ЦЕЛИКОМ — тогда дефект
+        // исчезнет по построению, а не точечной заплатой.
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
 
-        vec3 dir{0.0f, 0.0f, 0.0f};
-        if (d < 6 && (d >> 1) == gf.axis) {
+        if (st.fail == SteerFail::StepUp) {
             // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
             // ступенька и есть выход из зоны. Тангенциального пеленга у него
-            // ровно ноль, вести им нечем — тело отдаётся вандеру, а цель
-            // ОСТАЁТСЯ (токен не забран). Слепой прямой на цель здесь нет
+            // ровно ноль, вести им нечем. Слепой прямой на цель здесь нет
             // сознательно: ровно она была остатком якоря у решётки и стоила
             // §88 нуля прибытий. Дословно правило `place_errand_step`.
             ++out.idle;
             continue;
         }
-        if (d < 6) {
-            // A step in the walking plane: aim at the next cell's CENTRE, the
-            // same self-correcting rule (and the same measured reason) as the
-            // errand route step.
-            const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-            const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-            const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
-            dir = tangent(
-                wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
-                wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
-        }
-
-        const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        if (d2 > kMinFleeGrad2) {
-            const float inv = 1.0f / std::sqrt(d2);
-            dir = dir * inv;
-        } else {
-            dir = vec3{0.0f, 0.0f, 0.0f}; // owned zero: a stop, not a shove
-        }
         // Patrol WALKS: kErrandSpeed, not a bonus — the kFeudWalkSpeed argument
         // verbatim (an authored speed edge would let duty outrun the crowd for
-        // no stated reason). Per-axis: the gravity axis belongs to physics.
-        if (gf.axis != 0) vel.v.x = dir.x * kErrandSpeed;
-        if (gf.axis != 1) vel.v.y = dir.y * kErrandSpeed;
-        if (gf.axis != 2) vel.v.z = dir.z * kErrandSpeed;
+        // no stated reason). При `NoBearing` направление ровно ноль, то есть
+        // это ВЛАДЕЕМЫЙ НОЛЬ — остановка, а не толчок.
+        steer_write(gf, vel, st.dir, kErrandSpeed);
     }
     return out;
 }

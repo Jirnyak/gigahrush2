@@ -12,10 +12,10 @@
 #include "core/wrap.h"        // wrap_delta / wrap_macro — тор по всем трём осям
 #include "ecs/components.h"   // Transform, Velocity
 #include "game/embody.h"      // NpcRef
+#include "game/guide.h"       // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись, стоп
 #include "game/needs.h"       // needs_row_for — ОДНА строка нужд на всех решателей
 #include "game/serve.h"       // деяние нужды на месте (S24) — политика там
-#include "world/gravity.h"    // GravityFrame / regime_frame — плоскость ходьбы
-#include "world/nav.h"        // nav::kNavDir — словарь шести направлений шага
+#include "world/gravity.h"    // GravityFrame / steer_frame_of — плоскость ходьбы
 #include "world/types.h"      // kCellSize, kMacroDim, wrap_macro
 
 namespace giga::game {
@@ -255,20 +255,12 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     (void)reg.storage<Acting>();
     (void)reg.storage<Dead>();
 
-    // Фрейм гравитации — свойство мира, не тела; null держит NegZ побитово
-    // (тесты), Custom разрешается вектором. Дословно правило `ai_patrol_step`.
-    GravityRegime regime = GravityRegime::NegZ;
-    if (gravity != nullptr) {
-        regime = gravity->regime;
-        if (regime == GravityRegime::Custom) regime = regime_from_vector(gravity->global);
-    }
-    const GravityFrame gf = regime_frame(regime);
-    const auto tangent = [&gf](float x, float y, float z) {
-        if (gf.axis == 0) x = 0.0f;
-        else if (gf.axis == 1) y = 0.0f;
-        else z = 0.0f;
-        return vec3{x, y, z};
-    };
+    // Фрейм гравитации — свойство мира, не тела, и спрашивается ОДНОЙ ДВЕРЬЮ
+    // ([world/gravity.h] `steer_frame_of`): здесь стояла дословная копия того
+    // же разрешения режима и та же лямбда `tangent`, что в трёх других
+    // проходах ведения. null держит NegZ побитово (тесты), Custom разрешается
+    // вектором.
+    const GravityFrame gf = steer_frame_of(gravity);
     // ДЕРЖАТЬ НА МЕСТЕ (S24): забрать токен и обнулить скорость В ПЛОСКОСТИ
     // ХОДЬБЫ — ось гравитации не трогаем, её владелец физика. Владеемый ноль
     // здесь законен и необходим: «замирающий NPC есть дефект» (S13.2) сказано
@@ -277,9 +269,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     // скорость, то есть деяние свершится на ходу.
     const auto hold_still = [&gf](AiBrain& b, Velocity& vel) {
         b.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
-        if (gf.axis != 0) vel.v.x = 0.0f;
-        if (gf.axis != 1) vel.v.y = 0.0f;
-        if (gf.axis != 2) vel.v.z = 0.0f;
+        steer_stop(gf, vel);
     };
 
     auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
@@ -452,8 +442,12 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             ++out.idle;
             continue;
         }
-        const std::uint8_t d = zone_walk_dir(*zones, myZone, plan.room, cx, cy,
-                                             cz, gf.pull ? gf.axis : -1);
+        // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`): два
+        // чтения нава, прицел в ЦЕНТР следующей клетки, нормировка. Эти
+        // тридцать строк стояли побайтово одинаково здесь, в `wander.cpp` и в
+        // `ai.cpp`.
+        const SteerStep st =
+            steer_to_zone(*zones, gf, tr.pos, cx, cy, cz, myZone, plan.room);
         // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
         // падает ⟺ ходок доходит.
         const std::uint16_t zd = zones->dist.at(
@@ -463,7 +457,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             out.zoneDistSum += zd;
             ++out.zoneDistBodies;
         }
-        if (d == kZoneFlowNone) {
+        if (st.fail == SteerFail::NoRoute) {
             // Маршрута нет (разные компоненты связности, или цель в толще).
             // Цель снимается со стаггером: пере-спрашивать каждый тик значило
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
@@ -479,11 +473,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         // `wander_step` и не ведётся никем — то есть ЗАМИРАЕТ, а замирающий NPC
         // есть дефект (S13.2). Поймано на себе при посадке проверки
         // проходимости ниже: `continue` стоял после забора.
-        // `zone_walk_dir` по контракту ([game/zone_nav.h]) отдаёт 0..5 либо
-        // `kZoneFlowNone`, а он снят условием выше — поэтому индекс словаря
-        // направлений законен по построению, и ветки «не шаг» здесь больше нет.
-        vec3 dir{0.0f, 0.0f, 0.0f};
-        if ((d >> 1) == gf.axis) {
+        if (st.fail == SteerFail::StepUp) {
             // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
             // ступенька и есть выход из зоны. Тангенциального пеленга у него
             // ровно ноль, то есть вести этим шагом нечем — тело отдаётся
@@ -493,56 +483,30 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             ++out.idle;
             continue;
         }
-        // ШАГ В ПЛОСКОСТИ ХОДЬБЫ: целимся в ЦЕНТР следующей клетки — то же
-        // самоисправляющееся правило, которым идёт патруль.
-        //
-        // СЛЕПОЙ ПРЯМОЙ НА ЦЕЛЬ ЗДЕСЬ БОЛЬШЕ НЕТ, и это и есть выигрыш сноса.
-        // Она стояла второй ветвью и брала 85% ответов — ЗАМЕР живого прогона
-        // 2026-10-01 (этаж 6, 800 тыс. вызовов маршрута): `+z` дал 637 256
-        // ответов против 143 тыс. горизонтальных на все четыре стороны. Причина
-        // была не в выборе цели, а в оракуле: поля потока печены над «тело
-        // ВЛЕЗАЕТ в клетку» (`ClearanceField@src/world/clearance.h`), у которого
-        // нет понятия ОПОРЫ, поэтому кратчайший путь к якорю шёл ПО ВОЗДУХУ, и
-        // ходок за ним следовать не мог по построению. Остаток якоря приходилось
-        // идти прямой, прямая не знала стен, и её приходилось страховать
-        // проверкой `nearest_node`. Зоны отвечают шагом ПО ПРОХОДИМОЙ грани
-        // всегда — ни остатка, ни прямой, ни страховки.
-        const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-        const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-        const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
-        dir = tangent(
-            wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize, kWorldExtent),
-            wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize, kWorldExtent),
-            wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize, kWorldExtent));
-
-        const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        if (d2 <= kMinFleeGrad2) {
+        if (st.fail == SteerFail::NoBearing) {
             // Направления нет (проекция опустошила вектор, или тело стоит в
             // целевой клетке). Владеемый ноль здесь был бы остановкой на ровном
             // месте, поэтому тело отдаётся вандеру, а цель остаётся.
             ++out.idle;
             continue;
         }
-        dir = dir * (1.0f / std::sqrt(d2));
 
         // ЗАБОР ТОКЕНА — только теперь, когда направление ЕСТЬ. Отсюда и до
         // конца тика этот проход — единственный писатель горизонтальной
         // `Velocity` этого тела.
         //
         // Токен СВОЙ (`Errand`), а не занятый у бегства: дело — это ходьба, а
-        // не паника (S24). Для `wander_step` и `faction_feud_step` разницы
-        // нет — их guard спрашивает «не Wander»; разница есть у этого прохода,
-        // который по `Ai` узнаёт УГРОЗУ.
+        // не паника (S24). Разница есть у этого прохода, который по `Ai`
+        // узнаёт УГРОЗУ; у прогулки и вражды guard спрашивает ЯВНЫЙ СПИСОК
+        // владельцев (`motion_owned`), и `Errand` в нём стоит.
         brain.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
         ++out.walking;
-        Velocity& vel = view.get<Velocity>(e);
-        // ДЕЛО — ЭТО ХОДЬБА, а не бегство: `kErrandSpeed` в точности равен
-        // шагу вандера, поэтому тело, перешедшее с прогулки на дело, меняет
-        // НАПРАВЛЕНИЕ, а не походку. Множитель паники остаётся читаемым ровно
-        // потому, что обычный шаг обычен.
-        if (gf.axis != 0) vel.v.x = dir.x * kErrandSpeed;
-        if (gf.axis != 1) vel.v.y = dir.y * kErrandSpeed;
-        if (gf.axis != 2) vel.v.z = dir.z * kErrandSpeed;
+        // ДЕЛО — ЭТО ХОДЬБА, а не бегство: шаг в точности равен шагу вандера
+        // (один дом числа — `kWalkSpeedMps@game/guide.h`), поэтому тело,
+        // перешедшее с прогулки на дело, меняет НАПРАВЛЕНИЕ, а не походку.
+        // Множитель паники остаётся читаемым ровно потому, что обычный шаг
+        // обычен.
+        steer_write(gf, view.get<Velocity>(e), st.dir, kErrandSpeed);
     }
     return out;
 }

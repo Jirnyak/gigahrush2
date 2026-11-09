@@ -134,6 +134,23 @@ struct GravityField {
     vec3 at(vec3) const { return global; }
 };
 
+// ФРЕЙМ ВЕДЕНИЯ ОДНОЙ ДВЕРЬЮ. Плоскость ходьбы — свойство МИРА, а не тела, и
+// спрашивается она один раз на проход. Эти пять строк стояли ДОСЛОВНОЙ копией
+// в четырёх проходах ведения (`ai_step`, `ai_patrol_step`,
+// `place_errand_step`, `wander_step`) — то есть ровно то, что CANON S11
+// называет дефектом: «вторая реализация того, что канон объявляет одной
+// системой». `nullptr` держит NegZ ПОБИТОВО (стенды передают null и обязаны
+// остаться бит-в-бит), `Custom` разрешается вектором, как велит его собственный
+// doc-комментарий выше.
+inline GravityFrame steer_frame_of(const GravityField* g) {
+    GravityRegime r = GravityRegime::NegZ;
+    if (g != nullptr) {
+        r = g->regime;
+        if (r == GravityRegime::Custom) r = regime_from_vector(g->global);
+    }
+    return regime_frame(r);
+}
+
 // Every frame this field DECLARES, written into `out` (room for
 // kMaxGravityFrames); returns how many. Allocation-free, so a baker can ask on
 // the stack.

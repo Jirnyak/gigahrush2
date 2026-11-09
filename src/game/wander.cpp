@@ -11,6 +11,7 @@
 #include "game/combat.h"
 #include "game/embody.h"   // NpcRef
 #include "game/faction_relations.h"
+#include "game/guide.h"    // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись, стоп
 #include "game/hunt.h"
 #include "game/mob_behaviour.h"
 #include "game/mob_table.h"
@@ -23,9 +24,10 @@ namespace giga::game {
 namespace {
 
 
-// Walking speed for an ordinary resident, m/s. Mobs override this from their
-// table row (speed is authored in cells/s, and a cell is kCellSize metres).
-constexpr float kNpcWalkSpeed = 1.35f;
+// Скорость ходьбы ВЫСЕЛЕНА в [game/guide.h] (`kWalkSpeedMps`) 2026-11-09: она
+// была здесь file-local, а остальные три прохода ведения носили её копию с
+// комментарием «то же 1.35, что в wander.cpp». Мобы по-прежнему перебивают её
+// своей строкой таблицы (скорость авторская, в клетках/с).
 
 // Visits to wait before choosing a new destination after arriving or failing.
 // Staggered visits, not ticks: with kWanderPeriod = 8 at 120 Hz this is ~1.1 s.
@@ -152,19 +154,10 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     // стоит — ровно как стояла при пустом `fine.flow`.
     if (!zones.built()) return out;
 
-    GravityRegime steerRegime = GravityRegime::NegZ;
-    if (gravity != nullptr) {
-        steerRegime = gravity->regime;
-        if (steerRegime == GravityRegime::Custom)
-            steerRegime = regime_from_vector(gravity->global);
-    }
-    const GravityFrame gf = regime_frame(steerRegime);
-    const auto tangent = [&gf](float x, float y, float z) {
-        if (gf.axis == 0) x = 0.0f;
-        else if (gf.axis == 1) y = 0.0f;
-        else z = 0.0f;
-        return vec3{x, y, z};
-    };
+    // Плоскость ходьбы — ОДНОЙ ДВЕРЬЮ ([world/gravity.h] `steer_frame_of`):
+    // эти пять строк и лямбда `tangent` стояли дословной копией в четырёх
+    // проходах ведения.
+    const GravityFrame gf = steer_frame_of(gravity);
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
@@ -345,8 +338,12 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const float gy =
                         wrap_delta_f(victimPos.y, tr.pos.y, kWorldExtent);
                     if (frozen_by_gaze(beh, fwdX, fwdY, gx, gy)) {
-                        vel.v.x = 0.0f;
-                        vel.v.y = 0.0f;
+                        // ВЛАДЕЕМЫЙ НОЛЬ ПО ПЛОСКОСТИ ХОДЬБЫ, а не по x/y:
+                        // здесь стояли две жёсткие оси, то есть при любой
+                        // гравитации, кроме -Z, заморозка взглядом гасила
+                        // ПАДЕНИЕ и не гасила ход. Изотропия — закон, а не
+                        // пожелание ([world/gravity.h]).
+                        steer_stop(gf, vel);
                         continue;
                     }
                 }
@@ -389,13 +386,13 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
                     sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
-                    const vec3 to = tangent(tx, ty, 0.0f);
+                    const vec3 to = steer_tangent(gf, tx, ty, 0.0f);
                     const float toLen = length(to);
-                    if (toLen > 0.001f) {
-                        if (gf.axis != 0) vel.v.x = (to.x / toLen) * sp;
-                        if (gf.axis != 1) vel.v.y = (to.y / toLen) * sp;
-                        if (gf.axis != 2) vel.v.z = (to.z / toLen) * sp;
-                    }
+                    if (toLen > 0.001f)
+                        steer_write(gf, vel,
+                                    vec3{to.x / toLen, to.y / toLen,
+                                         to.z / toLen},
+                                    sp);
                 }
                 ++out.chasing;
                 continue;  // no repath, no flow read — it has a target
@@ -413,11 +410,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // ведётся НИКЕМ и дрейфует на прошлой скорости. Поэтому каждый отказ
         // ниже кончается ВЛАДЕЕМЫМ НУЛЁМ — это остановка, а не толчок, и
         // физика по оси гравитации продолжает работать как всегда.
-        const auto stop = [&] {
-            if (gf.axis != 0) vel.v.x = 0.0f;
-            if (gf.axis != 1) vel.v.y = 0.0f;
-            if (gf.axis != 2) vel.v.z = 0.0f;
-        };
+        const auto stop = [&] { steer_stop(gf, vel); };
 
         // ЗОНА ТЕЛА — через дверь с опорой на соседа, а не `part.cell` напрямую:
         // клетка центра тела бывает ДЫРКОЙ в разбивке (замер §88: 26 тел на тик
@@ -463,32 +456,21 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             continue;
         }
 
-        // ДВА ЧТЕНИЯ, И НИ ОДНОЙ ВОЛНЫ (§88): таблица даёт соседку на пути к
-        // цели, плоскость соседки даёт направление. Ступеньку разрешает САМА
-        // дверь, поэтому ветки на вертикаль у потребителя нет — была бы, значит
-        // дверь обошли.
-        const std::uint8_t d = zone_walk_dir(zones, myZone, wt.zone, cx, cy, cz,
-                                             gf.pull ? gf.axis : -1);
-        if (d == kZoneFlowNone) {
-            // Маршрута нет: другая компонента связности, либо поле соседки не
-            // покрывает эту клетку. Цель снимается СО СТАГГЕРОМ.
-            ++out.unreachable;
-            if (wt.pack == 0) wt.zone = kNoRoom;
-            wt.cooldown = kRepathCooldown;
-            stop();
-            continue;
-        }
-        if (d < 6 && (d >> 1) == gf.axis) {
-            // СТУПЕНЬКА И ЕСТЬ ВЫХОД ИЗ ЗОНЫ — единственный случай, когда дверь
-            // отдаёт шаг вдоль гравитации (она смотрит вперёд через ступеньки и
-            // отказывает, только когда подъём и есть сам переход). Наряд и дело
-            // здесь отдают тело вандеру и ОСТАВЛЯЮТ цель; вандеру отдавать
-            // некому, а стоять под ступенькой до конца прогона — это та же
-            // непроверяемая по построению нога. Поэтому цель СНИМАЕТСЯ: у
-            // прогулки она произвольна, и сменить её дешевле, чем изобретать
-            // здесь подъём. Слепой прямой на цель нет сознательно — ровно она
-            // была остатком якоря у решётки и стоила §88 нуля прибытий.
-            ++out.stepup;
+        // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`). Эти
+        // тридцать строк (два чтения нава, прицел в центр следующей клетки,
+        // нормировка) стояли ПОБАЙТОВО одинаково здесь, в `place.cpp` и в
+        // `ai.cpp` — три копии одного шага.
+        const SteerStep st =
+            steer_to_zone(zones, gf, tr.pos, cx, cy, cz, myZone, wt.zone);
+        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::StepUp) {
+            // МАРШРУТА НЕТ — другая компонента связности либо поле соседки не
+            // покрывает клетку. СТУПЕНЬКА И ЕСТЬ ВЫХОД ИЗ ЗОНЫ: наряд и дело
+            // здесь отдают тело вандеру и ОСТАВЛЯЮТ цель, а вандеру отдавать
+            // некому, и стоять под ступенькой до конца прогона — та же
+            // непроверяемая по построению нога. Поэтому у прогулки оба отказа
+            // кончаются одинаково: цель снимается СО СТАГГЕРОМ, тело стоит.
+            if (st.fail == SteerFail::NoRoute) ++out.unreachable;
+            else ++out.stepup;
             if (wt.pack == 0) wt.zone = kNoRoom;
             wt.cooldown = kRepathCooldown;
             stop();
@@ -518,34 +500,15 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             }
         }
 
-        // Шаг в плоскости ходьбы: целимся в ЦЕНТР следующей клетки — то же
-        // самоисправляющееся правило (и по тому же замеру), которым идут наряд и
-        // дело. Прежде здесь брался ГОЛЫЙ ОРТ `kNavDir`, и разница не
-        // косметическая: орт ведёт тело из любой точки клетки одинаково, поэтому
-        // тело, вошедшее в клетку по касательной, так и шло по её краю и
-        // цеплялось за углы, а центр следующей клетки сам стягивает его к
-        // середине коридора.
-        const int nx = wrap_macro(cx + nav::kNavDir[d][0]);
-        const int ny = wrap_macro(cy + nav::kNavDir[d][1]);
-        const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
-        vec3 dir = tangent(
-            wrap_delta_f(tr.pos.x, (static_cast<float>(nx) + 0.5f) * kCellSize,
-                         kWorldExtent),
-            wrap_delta_f(tr.pos.y, (static_cast<float>(ny) + 0.5f) * kCellSize,
-                         kWorldExtent),
-            wrap_delta_f(tr.pos.z, (static_cast<float>(nz) + 0.5f) * kCellSize,
-                         kWorldExtent));
-        const float dlen2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-        if (dlen2 <= kMinFleeGrad2) {
+        if (st.fail == SteerFail::NoBearing) {
             // Направления нет: проекция на плоскость ходьбы опустошила вектор,
             // или тело стоит точно в центре целевой клетки. Владеемый ноль, цель
             // ОСТАЁТСЯ — следующий тик сдвинет тело физикой и пеленг появится.
             stop();
             continue;
         }
-        dir = dir * (1.0f / std::sqrt(dlen2));
 
-        float speed = kNpcWalkSpeed;
+        float speed = kWalkSpeedMps;
         if (mr != nullptr) {
             // Table speed is cells/s in fixed point; a cell is kCellSize metres.
             speed = static_cast<float>(kMobTable[mr->kind].speedMmps) * 0.001f *
@@ -553,10 +516,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         }
 
         ++out.walking;
-        if (gf.axis != 0) vel.v.x = dir.x * speed;
-        if (gf.axis != 1) vel.v.y = dir.y * speed;
-        if (gf.axis != 2) vel.v.z = dir.z * speed;
-        // Gravity axis is left to physics_step
+        steer_write(gf, vel, st.dir, speed);
     }
     return out;
 }

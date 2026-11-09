@@ -56,6 +56,7 @@
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
 #include "game/place.h"    // выбор места суммой S13.2 и ход к нему
 #include "game/serve.h"    // деяние нужды на месте (S24) — замыкание цикла
+#include "game/steer_probe.h"  // ПРИБОР ВЕДЕНИЯ: кто написал скорость тела (--action vedenie)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
 #include "game/embody.h"
@@ -3532,6 +3533,12 @@ int main(int argc, char** argv) {
     // оставшихся двух потребителях нечем оправдать.
     game::PatrolTick patrolTick{};
     game::WanderTick wanderTick{};
+    // ПРИБОР ВЕДЕНИЯ (--action vedenie). Живёт вне кадра: вектор строк
+    // переиспользуется, иначе замер платил бы аллокацией за каждый тик.
+    // Счётчики накопительные — тиковые тут врут по той же причине, по которой
+    // врал тиковый `byVerb` цикла нужд: запись случается в один тик стаггера.
+    game::SteerProbe steerProbe{};
+    std::uint64_t steerProbeLastPrint = 0;
     std::uint64_t lastAimemLogTick = ~0ull;
     // Cumulative residents finished off by attrition since the run began. A running
     // total rather than a per-step count, because the failure it watches for is
@@ -5903,10 +5910,22 @@ int main(int argc, char** argv) {
                 diffusion_tick(diffusionDriver, activeWorld, activeLayer, simTick);
                 prof_add(kProfDiffusion, profDiffT0);
                 danger = activeWorld.fields().find<float>("danger");
+                // ПРИБОР ВЕДЕНИЯ — ЧАСОВОЙ ВЗВОДИТСЯ ЗДЕСЬ, перед первым
+                // звеном цепочки, и снимается перед `slow_step`. Порог кадра
+                // 450 тот же, что у переписи нужд: `--floor K` срабатывает на
+                // 420-м, и замер обязан мерить ТОТ этаж, который просили.
+                const bool steerProbeOn =
+                    (shotAction == "vedenie" && shotFramesSeen >= 450);
+                if (steerProbeOn)
+                    game::steer_probe_begin(reg, activeLayer,
+                                            steer_frame_of(&activeWorld.gravity()),
+                                            steerProbe);
                 const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
                                        kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
                                        &bus, simTick);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Flee, steerProbe);
                 // (AGENT-GOALS ИНКРЕМЕНТ A СНЕСЁН 2026-09-30 вместе с
                 // game/goals.*: скорер S13.2 печатал argmax под
                 // GIGA_GOALS_DBG и на движение не влиял НИКОГДА. Решение
@@ -6039,6 +6058,8 @@ int main(int argc, char** argv) {
                 const auto profCtlT0 = prof_now();
                 controller_step(reg, kSimDt, &activeWorld.gravity());
                 prof_add(kProfController, profCtlT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Player, steerProbe);
                 // Steer the crowd BEFORE physics: wander writes horizontal
                 // velocity, physics integrates it and resolves collision.
                 //
@@ -6876,6 +6897,8 @@ int main(int argc, char** argv) {
                     reg, nav.zones(), activeLayer, kSimDt,
                     &activeWorld.gravity());
                 prof_add(kProfPatrol, profPatrolT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Patrol, steerProbe);
                 // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — та же арбитражная
                 // цепочка: бегство (ai_step) → патруль → дело → прогулка.
                 // Каждый следующий пропускает тело, уже взятое предыдущим, по
@@ -6893,11 +6916,15 @@ int main(int argc, char** argv) {
                     simNow, simTick, &activeWorld.gravity(), &nav.zones(),
                     &serveTick, &bus);
                 prof_add(kProfPlace, profPlaceT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Errand, steerProbe);
                 const auto profWanderT0 = prof_now();
                 wanderTick = game::wander_step(
                     reg, stack.layer(activeLayer).grid(), pool, nav.zones(),
                     activeLayer, simTick, &activeWorld.gravity());
                 prof_add(kProfWander, profWanderT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Walk, steerProbe);
 
                 // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ
                 // ходьбы: тело уже на своей тиковой позиции, поэтому «дошёл до
@@ -6937,6 +6964,8 @@ int main(int argc, char** argv) {
                 heardMobs = game::investigate_step(reg, noiseField, pool, activeLayer,
                                                    simTick);
                 prof_add(kProfAcoustics, profAcoustT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Noise, steerProbe);
 
                 // --- PER-TICK SPECIAL MONSTER TRAITS & ABILITIES ---
                 for (auto me_ : reg.view<game::MobRef, Transform, Velocity>()) {
@@ -7052,6 +7081,83 @@ int main(int argc, char** argv) {
                 // healing, resupply and possession-on-death. [faction_relations.h]
                 feudHits += game::faction_feud_step(reg, pool, factionRel, activeLayer,
                                                     simTick, &activeWorld.gravity());
+                if (steerProbeOn) {
+                    game::steer_probe_after(reg, game::SteerLink::Feud, steerProbe);
+                    game::steer_probe_end(reg, steerProbe);
+                    // ПЕЧАТЬ НАКОПИТЕЛЬНАЯ, раз в 250 тиков. Тиковая строка
+                    // здесь соврала бы так же, как соврал тиковый `byVerb`
+                    // цикла нужд: запись скорости случается в СВОЙ слот
+                    // стаггера (1 тик из 8 у прогулки), и «кто ведёт толпу»
+                    // читается только по сумме.
+                    if (steerProbe.ticks - steerProbeLastPrint >= 250) {
+                        steerProbeLastPrint = steerProbe.ticks;
+                        const double t = static_cast<double>(steerProbe.ticks);
+                        char links[512];
+                        int at = 0;
+                        for (std::size_t i = 0; i < game::kSteerLinkCount; ++i) {
+                            at += std::snprintf(
+                                links + at, sizeof(links) - static_cast<std::size_t>(at),
+                                " %s=%.1f", game::kSteerLinkRows[i].name,
+                                static_cast<double>(steerProbe.wrote[i]) / t);
+                            if (at >= static_cast<int>(sizeof(links)) - 1) break;
+                        }
+                        std::fprintf(stderr,
+                                     "[vedenie] floor=%d окно=%llu тиков тел/тик=%.1f "
+                                     "(из них с тождеством=%.1f) записей/тик:%s\n",
+                                     currentFloor,
+                                     static_cast<unsigned long long>(steerProbe.ticks),
+                                     static_cast<double>(steerProbe.bodies) / t,
+                                     static_cast<double>(steerProbe.agents) / t, links);
+                        char stolen[512];
+                        at = 0;
+                        for (std::size_t i = 0; i < game::kSteerLinkCount; ++i) {
+                            if (steerProbe.stole[i] == 0) continue;
+                            at += std::snprintf(
+                                stolen + at, sizeof(stolen) - static_cast<std::size_t>(at),
+                                " %s=%llu", game::kSteerLinkRows[i].name,
+                                static_cast<unsigned long long>(steerProbe.stole[i]));
+                            if (at >= static_cast<int>(sizeof(stolen)) - 1) break;
+                        }
+                        if (at == 0) std::snprintf(stolen, sizeof(stolen), " нет");
+                        std::fprintf(
+                            stderr,
+                            "[vedenie] ДВОЙНЫХ ЗАПИСЕЙ тел=%llu (%.2f/тик, %.3f%% тел) "
+                            "| перебил чужую запись:%s | рулевой написал проп=%llu\n",
+                            static_cast<unsigned long long>(steerProbe.twice),
+                            static_cast<double>(steerProbe.twice) / t,
+                            steerProbe.agents != 0
+                                ? 100.0 * static_cast<double>(steerProbe.twice) /
+                                      static_cast<double>(steerProbe.agents)
+                                : 0.0,
+                            stolen,
+                            static_cast<unsigned long long>(steerProbe.otherWritten));
+                        std::fprintf(
+                            stderr,
+                            "[vedenie] БЕЗ ПИСАТЕЛЯ тел=%llu (%.1f%% тождеств) по "
+                            "решателю: человек=%llu житель=%llu монстр=%llu труп=%llu\n",
+                            static_cast<unsigned long long>(steerProbe.never),
+                            steerProbe.agents != 0
+                                ? 100.0 * static_cast<double>(steerProbe.never) /
+                                      static_cast<double>(steerProbe.agents)
+                                : 0.0,
+                            static_cast<unsigned long long>(steerProbe.neverByDec[0]),
+                            static_cast<unsigned long long>(steerProbe.neverByDec[1]),
+                            static_cast<unsigned long long>(steerProbe.neverByDec[2]),
+                            static_cast<unsigned long long>(steerProbe.neverByDec[3]));
+                        char hist[256];
+                        at = 0;
+                        for (std::size_t i = 0; i <= game::kSteerLinkCount; ++i) {
+                            if (steerProbe.writersHist[i] == 0) continue;
+                            at += std::snprintf(
+                                hist + at, sizeof(hist) - static_cast<std::size_t>(at),
+                                " %zu=%llu", i,
+                                static_cast<unsigned long long>(
+                                    steerProbe.writersHist[i]));
+                            if (at >= static_cast<int>(sizeof(hist)) - 1) break;
+                        }
+                        std::fprintf(stderr, "[vedenie] писателей на тело:%s\n", hist);
+                    }
+                }
                 // Slowed CAP enforcement: after every velocity writer
                 // (controller / wander / investigate / feud), before integrate.
                 // Was defined in combat.cpp and never called — dead path until now.
