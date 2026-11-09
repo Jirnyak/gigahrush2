@@ -56,6 +56,7 @@
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
 #include "game/place.h"    // выбор места суммой S13.2 и ход к нему
 #include "game/serve.h"    // деяние нужды на месте (S24) — замыкание цикла
+#include "game/guide.h"     // ОДИН проход ведения: единственный писатель Velocity
 #include "game/steer_probe.h"  // ПРИБОР ВЕДЕНИЯ: кто написал скорость тела (--action vedenie)
 #include "game/focus.h"  // ФОКУС: одна цель под прицелом (2026-08-28)
 #include "sim/camera.h"   // camera_forward — единственная формула взгляда
@@ -622,6 +623,7 @@ enum ProfSlot : unsigned {
     kProfPatrol,      // ai_patrol_step — наряд
     kProfPlace,       // place_errand_step — дело (S12–S13)
     kProfWander,      // wander_step — прогулка
+    kProfGuide,       // guide_step — ОДИН проход ведения (единственный писатель)
     // ДВЕРИ. Сэмплер (`/usr/bin/sample`, §87.8) вывел `door_crowd_step` в
     // КРУПНЕЙШУЮ собственную работу главного потока — 2798 отсчётов из 10 030
     // не ожидающих, то есть 28%, — а в профиле её не было ПО ИМЕНИ вовсе: она
@@ -670,7 +672,8 @@ static constexpr ProfRow kProfRows[] = {
     {kProfDiffusion, "diffusion"}, {kProfAi, "ai"},
     {kProfController, "controller"},
     {kProfPatrol, "patrol"},       {kProfPlace, "place"},
-    {kProfWander, "wander"},       {kProfDoors, "doors"},
+    {kProfWander, "wander"},       {kProfGuide, "guide"},
+    {kProfDoors, "doors"},
     {kProfAcoustics, "acoustics"}, {kProfCombat, "combat"},
     {kProfPhysics, "physics"},     {kProfRigid, "rigid"},
     {kProfImpact, "impact"},       {kProfNeeds, "needs"},
@@ -2358,11 +2361,15 @@ std::uint32_t finish_floor_nav(Registry& reg, LayerId layer,
 // списанный в два места, разъезжается первой же правкой — дерево про эту
 // ловушку предупреждает отдельно («two travel sites trap»).
 void clear_inherited_mind(Registry& reg, Entity body) {
-    if (game::AiBrain* brain = reg.try_get<game::AiBrain>(body)) {
+    if (game::AiBrain* brain = reg.try_get<game::AiBrain>(body))
         brain->currentIntent = game::kIntentNone;
-        brain->motion = static_cast<std::uint8_t>(game::MotionOwner::Wander);
-    }
     reg.remove<game::PatrolPlan>(body); // маршрут прежнего владельца записи
+    // ЗАЯВКА ВЕДЕНИЯ СНИМАЕТСЯ ТУТ ЖЕ, и это не перестраховка: вселение
+    // случается ПОСЕРЕДИНЕ кадра, а заявка, поданная до него, иначе
+    // исполнилась бы на теле человека и перетёрла ввод (дефект Б6.2, которым
+    // наряд однажды уже стоил владельцу управления). Второй рубеж —
+    // `guide_step`, который в тело человека не пишет вовсе.
+    reg.remove<game::Steer>(body);
 }
 
 Entity possess_a_survivor(Registry& reg, game::NpcPool& pool, LayerId layer) {
@@ -3533,6 +3540,7 @@ int main(int argc, char** argv) {
     // оставшихся двух потребителях нечем оправдать.
     game::PatrolTick patrolTick{};
     game::WanderTick wanderTick{};
+    game::GuideTick guideTick{};
     // ПРИБОР ВЕДЕНИЯ (--action vedenie). Живёт вне кадра: вектор строк
     // переиспользуется, иначе замер платил бы аллокацией за каждый тик.
     // Счётчики накопительные — тиковые тут врут по той же причине, по которой
@@ -3957,19 +3965,11 @@ int main(int argc, char** argv) {
                                    std::move(ents),
                                    module_key_for(currentFloor));
         }
-        // AIMEM: clear MotionOwner::Ai on the leaving floor before the
-        // streamer recycles the layer. unload() also releases; this is the
-        // keyboard/--shot leave seam so a ride without an immediate unload
-        // still cannot strand tokens. Idempotent. [ai.h]
-        {
-            const std::uint32_t released =
-                game::ai_release(reg, leaveLayer);
-            std::fprintf(stderr,
-                         "[aimem] LEAVE floor=%d layer=%u released=%u "
-                         "mem_rows=%u\n",
-                         currentFloor, static_cast<unsigned>(leaveLayer),
-                         released, aiMem.rows());
-        }
+        // ЗДЕСЬ СТОЯЛ `ai_release` — снятие токена на покидаемом этаже, и это
+        // был ОДИН ИЗ ДВУХ ШВОВ ПОЕЗДКИ, на которых «починили один из двух»
+        // ловили дважды. Оба снятия умерли вместе с токеном 2026-11-09:
+        // заявка ведения живёт один тик ([game/guide.h]), застрять в ней
+        // нечему.
     };
     // Половина «прибыть» — общий хвост обеих поездок: всё, что делает свежий
     // этаж домом (журналы, двери, Fresh-бейк, зеркала GPU, тело в безопасной
@@ -6887,22 +6887,25 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Patrol BEFORE wander, and the order is the arbitration: patrol
-                // claims its bodies (MotionOwner::Ai) and wander's ai_owns_motion
-                // guard then skips them — one Velocity writer per body per tick.
-                // Runs on the same baked nav wander reads; while the bake is in
-                // flight the flow is empty and patrol bodies wander like everyone.
+                // ПОРЯДОК БОЛЬШЕ НЕ АРБИТРАЖ, И ЭТО ГЛАВНАЯ ПЕРЕМЕНА. Прежде
+                // наряд стоял перед прогулкой ПОТОМУ, что забирал токен, а
+                // прогулка его читала; `investigate_step` этого порядка не
+                // знал и перебивал прогулку — 45 двойных записей за 250 тиков
+                // по прибору. Теперь каждый проход ЗАЯВЛЯЕТ цель со своим
+                // РАНГОМ ([game/guide.h]), сильный перебивает слабого одним
+                // сравнением, а порядок вызовов влияет только на то, кто
+                // раньше ОТКАЖЕТСЯ от работы по чужой сильной заявке.
                 const auto profPatrolT0 = prof_now();
                 patrolTick = game::ai_patrol_step(
-                    reg, nav.zones(), activeLayer, kSimDt,
-                    &activeWorld.gravity());
+                    reg, nav.zones(), activeLayer, &activeWorld.gravity(),
+                    simTick);
                 prof_add(kProfPatrol, profPatrolT0);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Patrol, steerProbe);
-                // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — та же арбитражная
-                // цепочка: бегство (ai_step) → патруль → дело → прогулка.
-                // Каждый следующий пропускает тело, уже взятое предыдущим, по
-                // одному и тому же токену `ai_owns_motion`. Здесь ЗАМКНУЛОСЬ
+                // ДЕЛО ПОСЛЕ НАРЯДА И ПЕРЕД ПРОГУЛКОЙ — тот же порядок
+                // рангов: бегство → наряд → ДЕЛО → прогулка. Каждый следующий
+                // отказывается от работы по телу, уже заявленному сильнейшим
+                // (`steer_claimed_by_stronger`). Здесь ЗАМКНУЛОСЬ
                 // звено S12–S13: спрос из нужд × предложение комнаты − путь
                 // выбирает МЕСТО, и тело туда идёт ([game/place.h]).
                 // ...и ЗАМКНУЛОСЬ оно здесь же (S24): тело, которому сумма
@@ -6925,6 +6928,23 @@ int main(int argc, char** argv) {
                 prof_add(kProfWander, profWanderT0);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Walk, steerProbe);
+
+                // ОДИН ПРОХОД ВЕДЕНИЯ — ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ ГОРИЗОНТАЛЬНОЙ
+                // `Velocity` ЖИТЕЛЕЙ И МОБОВ. Стоит после всех заявителей
+                // ходьбы и ПЕРЕД `slow_step` (тот клампит, а не ведёт).
+                //
+                // ДВА ПИСАТЕЛЯ ЕЩЁ ЖИВЫ, и это названо, а не спрятано:
+                // `investigate_step` (слух мобов) и `faction_feud_step`
+                // (вражда) пишут скорость сами и стоят НИЖЕ, поэтому их
+                // приоритет над ходьбой сохраняется ровно таким, каким был по
+                // порядку вызовов. Их переезд в заявки — второй шаг пункта 2,
+                // и до него прибор продолжает показывать двойные записи.
+                const auto profGuideT0 = prof_now();
+                guideTick = game::guide_step(reg, nav.zones(), activeLayer,
+                                             simTick, &activeWorld.gravity());
+                prof_add(kProfGuide, profGuideT0);
+                if (steerProbeOn)
+                    game::steer_probe_after(reg, game::SteerLink::Guide, steerProbe);
 
                 // ЖИТЕЛЬ ОТКРЫВАЕТ ДВЕРЬ — вживлено 2026-09-30. Сразу ПОСЛЕ
                 // ходьбы: тело уже на своей тиковой позиции, поэтому «дошёл до
@@ -11455,16 +11475,8 @@ int main(int argc, char** argv) {
                         // Same AIMEM leave release as do_ride. Two travel
                         // sites; a fix that touches only one proves nothing
                         // under --shot --ride. [ai.h]
-                        {
-                            const std::uint32_t released =
-                                game::ai_release(reg, leaveLayer);
-                            std::fprintf(stderr,
-                                         "[aimem] LEAVE floor=%d layer=%u "
-                                         "released=%u mem_rows=%u\n",
-                                         currentFloor,
-                                         static_cast<unsigned>(leaveLayer),
-                                         released, aiMem.rows());
-                        }
+                        // (`ai_release` снят 2026-11-09: второй шов поездки
+                        // умер вместе с первым и вместе с токеном.)
                     }
                     game::RideResult r = streamer.travel(
                         stack, registry, reg, pool, player, currentFloor, -1,

@@ -1,20 +1,38 @@
 // Utility AI — the arbitration suite.
 //
 // This suite exists for ONE reason, and it is not "does the scorer add up". It is
-// that main already has systems which write `Velocity`, so switching a utility AI
-// on without settling ownership makes two systems fight over the same body every
-// tick and the crowd jitters — a bug that reads as broken physics and is not.
-// The parked branch driver (`tools/branch_port_pending/ai.cpp`) was exactly that
-// second writer. So the load-bearing blocks here are:
+// that main already has systems which steer, so switching a utility AI on without
+// settling who moves the body makes two systems fight over the same `Velocity`
+// every tick and the crowd jitters — a bug that reads as broken physics and is
+// not. The parked branch driver (`tools/branch_port_pending/ai.cpp`) was exactly
+// that second writer.
 //
-//   Block 4 — SINGLE WRITER. A per-tick sentinel probe measures, per body,
-//             whether `ai_step` wrote it and whether `wander_step` wrote it, and
-//             asserts the two sets never intersect. Both counts are also asserted
-//             NON-ZERO, because "no double write" is vacuous if one of the two
-//             systems never wrote anything.
-//   Block 5 — THE GUARD, from both sides. Force every body Ai-owned and prove
-//             wander writes none; force every body Wander-owned and prove wander
-//             writes them. This is what pins the one-line guard in wander.cpp.
+// ЧТО СУДИТСЯ ЗДЕСЬ ТЕПЕРЬ (2026-11-09, пункт 2 шаг 2). Токен `MotionOwner` и
+// обе двери к нему (`ai_owns_motion`/`motion_owned`) УМЕРЛИ, и вместе с ними
+// умер предмет половины утверждений этого файла: арбитрировать запись нечем,
+// когда писатель физически один. Вместо шести рулевых проходов, каждый из
+// которых писал скорость сам, стоит ЗАЯВКА ЦЕЛИ (`Steer`, ранг + тик) и ОДИН
+// писатель `guide_step` ([game/guide.h]). Поэтому несущие блоки читаются так:
+//
+//   Block 4 — ОДИН ПИСАТЕЛЬ, и это ЗАМЕР, а не построение. Сентинель взводится
+//             каждый тик, затем прогоняется ВСЯ ЦЕПОЧКА ЗАЯВИТЕЛЕЙ в
+//             прод-порядке (`ai_step` -> `ai_patrol_step` -> `wander_step`) и
+//             ОДИН `guide_step`. Утверждается тройка: ни один заявитель скорость
+//             НЕ ПИШЕТ (сентинель цел после всей цепочки), тело с заявкой
+//             написано РОВНО ОДИН РАЗ («написанных тел» == `led + held`), тело
+//             без ЖИВОЙ заявки не написано ВОВСЕ. Непустота проверяется ПО
+//             РАНГАМ (`byRank[Flee] > 0`, `byRank[Walk] > 0`): ноль двойных
+//             записей, купленный молчанием заявителей, — фальшивый гейт.
+//   Block 5 — ГЕЙТ ЗАЯВКИ, ПОЛЯРНОСТЬ В ОБЕ СТОРОНЫ, и он СИЛЬНЕЕ прежнего
+//             гейта токена. Сильная заявка руками -> прогулка обязана отказаться
+//             ОТ РАБОТЫ (`WanderTick::considered == 0`, вопрос стоит ДО
+//             счётчика), а не «просто не записать скорость»: отказ после
+//             побочных эффектов был бы стрельбой на бегу. Нет заявки -> прогулка
+//             обязана ВЗЯТЬ тело, заявить `Walk` и быть исполненной. Плюс
+//             ИСПОРЧЕННЫЙ БАЙТ РАНГА: нераспознанное значение читается как
+//             «заявки нет», тело НЕ пишется (`bogus`), и ведёт его слабейший
+//             заявитель — отказ падает в сторону ведения, НИКОГДА в сторону
+//             замершей толпы (гейт `e2e_test` f8_03, перенесённый с токена).
 //   Block 3 — HYSTERESIS, measured. Intent switches per 100 re-plans with the
 //             hysteresis on and off, printed as real numbers. A utility AI
 //             without hysteresis thrashes, and a thrash you cannot count is not a
@@ -40,9 +58,9 @@
 //              committed-intent counts over 512 identities, all four printed.
 //   Block 12 — MEMORY CHANGES THE MOTION, and the single-writer rule survives it.
 //              A flat (gradient-free) danger field gives flee no live direction;
-//              with memory the body steers away from the remembered cell and takes
-//              the token, without memory it delegates. Then block 4's double-write
-//              probe re-run with memory ON.
+//              with memory the body ЗАЯВЛЯЕТ пеленг от запомненной клетки рангом
+//              `Flee`, without memory it files nothing at all. Then block 4's
+//              single-writer probe re-run with memory ON.
 //   Block 13 — the TTL and the freshness curve are real: the age at which the
 //              memory stops changing the decision is measured and printed, and the
 //              trace is invisible at its TTL.
@@ -52,30 +70,36 @@
 //              back, re-embody it (what an elevator ride does) and the recall is
 //              unchanged while the AiBrain is fresh.
 //
-// !! Block 5 (and therefore Block 4) FAILS UNTIL the guard lands in
-// !! src/game/wander.cpp:
-// !!     if (ai_owns_motion(reg, e)) continue;   // [ai.h] single-writer rule
-// !! placed with the other per-entity exclusions in `wander_step` — immediately
-// !! after its `if (reg.all_of<CameraTag>(e)) continue;` line, and wander.cpp also
-// !! needs `#include "game/ai.h"`. Measured on this tree: without the guard this
-// !! suite is 1005 checks / 3 fails and reports 300 double-writes over 200 ticks;
-// !! with it, 1005 / 0 and 0 double-writes. That failure is the point: the guard IS
-// !! the mechanism, so a suite that passed without it would be measuring nothing.
+// МОГИЛА ПРЕДУПРЕЖДЕНИЯ. Здесь стояло «!! Block 5 (and therefore Block 4) FAILS
+// UNTIL the guard lands in src/game/wander.cpp: if (ai_owns_motion(reg, e))
+// continue;» — девять строк о ОДНОЙ недостающей строке прода. Предмет умер
+// дважды: гейт в `wander.cpp` сперва приехал (2026-10), а затем перестал быть
+// гейтом токена вовсе — сегодня там `steer_claimed_by_stronger(reg, e,
+// SteerRank::Walk, tick)`, то есть ОДИН вопрос вместо четырёх его формулировок.
+// Довод предупреждения при этом ЖИВ и перенесён в блок 5: гейт ЕСТЬ механизм,
+// поэтому полярность гоняется в обе стороны, а не утверждается.
 //
 // WHAT THIS SUITE DOES **NOT** PROVE, so nobody reads the pass as broader than it
-// is. The disjointness above covers `ai_step` and `wander_step` only.
-// `investigate_step` is out of scope by TYPE (it views `const MobRef`, and this
-// system refuses MobRef bodies) — a static argument, not a measurement.
-// `faction_feud_step` is a DIFFERENT matter: it is wired in main.cpp, it views
-// <Transform, Velocity, const NpcRef> and writes Velocity, and it has no guard. It
-// is not driven here, so this suite is silent about it. See [ai.h] "STATE OF THAT
-// RULE" — that is a second one-line guard, still owed.
+// is. Цепочка здесь — `ai_step`, `ai_patrol_step`, `wander_step` и `guide_step`.
+//
+//   * `place_errand_step` (ранг `Errand`, [game/place.h]) стоит в проде МЕЖДУ
+//     нарядом и прогулкой, и в этой оснастке его НЕТ: ему нужны объявленные
+//     комнаты этажа и шина событий. Его заявку судит `suite_place`, и это
+//     названо, а не подразумевается.
+//   * `investigate_step` (слух мобов) и `faction_feud_step` (вражда) ПИШУТ
+//     скорость сами и стоят в кадре НИЖЕ `guide_step` ([app/main.cpp]). Вражда
+//     заявку уже спрашивает (`steer_claimed_by_stronger` в
+//     `faction_relations.cpp`), но запись у неё своя; слух не спрашивает вовсе —
+//     именно он дал прибору 45 двойных записей за 250 тиков ([game/guide.h],
+//     шапка). Их переезд в заявки — второй долг пункта 2, и этот файл о них
+//     МОЛЧИТ: оба здесь не вызываются.
 //
 // A .inl and not a .cpp for the reason suite_samosbor.inl states: game_test owns
 // the CHECK macro, so the include has to land after it, and the suite carries its
 // own #include of the system under test to keep that diff two lines.
 
 #include "game/ai.h"
+#include "game/guide.h"   // Steer/SteerRank/guide_step — ЗАЯВКА и ЕДИНСТВЕННЫЙ писатель
 #include "game/needs.h"   // needs_roll — NOT reachable from game_test.cpp's prelude
 #include "game/wander.h"  // wander_init / wander_step / kWanderPeriod
 #include "sim/diffusion.h"
@@ -94,15 +118,32 @@ namespace utilai {
 // wall test. Everything below shares ONE arena.
 // ---------------------------------------------------------------------------
 
-// The sentinel. Neither steerer can produce it: `wander_step` writes 0 or
-// dir*speed, `ai_step` writes dir*kFleeSpeed. So "x still equals kSentX" is an
-// exact, not statistical, answer to "did anybody write this body".
+// The sentinel. Писатель один, и он не умеет произвести эту пару: `guide_step`
+// пишет либо `dir*speed` по нормированному пеленгу, либо владеемый ноль. Значит
+// «x всё ещё kSentX» есть ТОЧНЫЙ, а не статистический ответ на вопрос «писал ли
+// в это тело хоть кто-нибудь» — и теперь этот вопрос задаётся дважды: после
+// цепочки ЗАЯВИТЕЛЕЙ (обязан быть «нет») и после ВЕДЕНИЯ.
 constexpr float kSentX = 777.0f;
 constexpr float kSentY = -777.0f;
 
 inline bool is_sentinel(const Velocity& v) {
     return v.v.x == kSentX && v.v.y == kSentY;
 }
+
+// ЗАЯВКА ЭТОГО ТЕЛА НА ЭТОТ ТИК — ОДИН ВОПРОС, И РОВНО ТОТ, КОТОРЫЙ ЗАДАЁТ ПРОД.
+// `SteerRank::None` возвращается для всех трёх исходов — компоненты нет, заявка
+// прошлого тика, байт ранга непонятен, — потому что мир читает их ОДИНАКОВО
+// («заявки нет», [game/guide.h] `steer_claim_live`). Тест, различающий их,
+// утверждал бы о механизме, которого у прода нет, и был бы вторым ответом.
+inline SteerRank claim_rank(const Registry& reg, Entity e, std::uint64_t tick) {
+    const Steer* s = reg.try_get<Steer>(e);
+    if (s == nullptr || !steer_claim_live(*s, tick)) return SteerRank::None;
+    return s->rank;
+}
+inline bool claimed(const Registry& reg, Entity e, std::uint64_t tick) {
+    return claim_rank(reg, e, tick) != SteerRank::None;
+}
+inline std::size_t rank_slot(SteerRank r) { return static_cast<std::size_t>(r); }
 
 // Layer under test. A bare id: nothing here pushes a LevelStack layer, because
 // neither system reads the stack — `Transform::layer` is only ever compared.
@@ -325,7 +366,7 @@ static void test_utilai_all() {
     //    with fresh needs (crossover at threat ~= 0.101; the two values sit at
     //    0.02 and 0.25, so the raw ranking flips by a margin that clears the
     //    +/-2.5 identity jitter on every id). The field is flat, so its GRADIENT
-    //    is zero and nobody takes motion ownership — this block measures the
+    //    is zero и ЗАЯВКИ НА ВЕДЕНИЕ НЕ ПОДАЁТ НИКТО — this block measures the
     //    brain's mind, not its steering.
     // ======================================================================
     std::uint32_t switchesOn = 0;
@@ -380,12 +421,18 @@ static void test_utilai_all() {
             for (Entity e : bodies) total += reg.get<AiBrain>(e).switches;
             if (hyst) switchesOn = total; else switchesOff = total;
 
-            // Nobody owns motion: the field is flat, so there is no gradient to
-            // flee down and every body delegates. Proven here so block 4's
-            // non-zero ai-write count cannot be explained by this block.
-            for (Entity e : bodies)
-                CHECK(reg.get<AiBrain>(e).motion ==
-                      static_cast<std::uint8_t>(MotionOwner::Wander));
+            // ЗАЯВКИ НЕТ НИ У ОДНОГО ТЕЛА, и это теперь ОТСУТСТВИЕ ЗАПИСИ, а не
+            // её особое значение: поле плоское, градиента нет, бегству вести
+            // нечем — значит `ai_step` не заявляет ничего, и компонента `Steer`
+            // на этих телах не рождается ВООБЩЕ (пул прогрет, рядов ноль).
+            // Прежде здесь проверялся БАЙТ ТОКЕНА (`motion == Wander`); байта
+            // нет, но утверждение то же и СИЛЬНЕЕ — забыть выставить нечего.
+            //
+            // Мутация, которую это ловит: «бегство без пеленга заявляет
+            // `target_hold()` вместо молчания». Она выглядит безобиднее
+            // (владеемый ноль!), а означает замершую толпу на плоском поле —
+            // ровно тот отказ в сторону неподвижности, который канон запрещает.
+            for (Entity e : bodies) CHECK(!reg.all_of<Steer>(e));
         }
 
         std::fprintf(stdout,
@@ -410,23 +457,34 @@ static void test_utilai_all() {
     }
 
     // ======================================================================
-    // 4 + 5. SINGLE WRITER, and the guard that makes it true.
+    // 4 + 5. ОДИН ПИСАТЕЛЬ — ЗАМЕР, А НЕ ПОСТРОЕНИЕ.
     //
     // Arena: danger is FLAT ZERO for x < 64 (no threat, no gradient -> work wins
-    // -> wander owns) and a RAMP for x >= 64 (real threat AND a real gradient ->
-    // flee wins -> ai owns). Group A stands in the calm half, group B in the
-    // ramp, so both ownerships are exercised in the same tick by the same call.
+    // -> заявляет прогулка) and a RAMP for x >= 64 (real threat AND a real
+    // gradient -> flee wins -> заявляет бегство). Group A stands in the calm
+    // half, group B in the ramp, so ОБА РАНГА живут в одном тике.
     //
-    // The probe, each tick, in the SHIPPING order (ai_step before wander_step,
-    // which is a contract and not a preference — see ai.h):
-    //     arm sentinels -> ai_step   -> record who moved  (aiWrote)
-    //     arm sentinels -> wander_step -> record who moved (wanderWrote)
-    //     assert no body is in both sets
-    // Re-arming between the two calls is sound because NEITHER system reads
-    // Velocity to decide anything: wander reads Transform/WanderTarget/the flow
-    // byte, ai reads AiBrain/the pool row/the danger field. Overwriting the
-    // component between them cannot change either decision, and it makes each
-    // system's write individually observable instead of hidden behind the other's.
+    // ПРОБА, каждый тик, в ПРОД-ПОРЯДКЕ ([app/main.cpp]):
+    //     взвести сентинель
+    //     -> ai_step          (заявка `Flee`, пеленг против градиента)
+    //     -> ai_patrol_step   (заявка `Patrol`, если интент патрульный)
+    //     -> wander_step      (заявка `Walk`, цель-зона или владеемый ноль)
+    //     -> СЕНТИНЕЛЬ ОБЯЗАН БЫТЬ ЦЕЛ: заявитель скорость не пишет
+    //     -> guide_step       (ОДИН писатель)
+    //     -> «написанных тел» == `led + held`, и ни одного тела без ЖИВОЙ заявки
+    //
+    // ПОЧЕМУ ЭТО СИЛЬНЕЕ ПРЕЖНЕЙ ПРОБЫ, а не просто другая. Прежняя взводила
+    // сентинель ДВА РАЗА за тик и сравнивала два множества «кто подвинулся»;
+    // она ловила только пересечение двух ИЗВЕСТНЫХ ей писателей, а пятый
+    // (`investigate_step`) в её модель не входил — и дал в проде 45 двойных
+    // записей за 250 тиков. Теперь утверждается не «эти двое не пересеклись», а
+    // «НИ ОДИН заявитель не тронул скорость» (сентинель цел после всей цепочки)
+    // и «ведение написало ровно по разу» (счётчик прохода сверен с ЗАМЕРОМ по
+    // телам: если бы `guide_step` написал одно тело дважды, а другое ни разу,
+    // `led + held` сошлось бы, а «написанных тел» — нет).
+    //
+    // `place_errand_step` в цепочке НЕТ — ему нужны объявленные комнаты этажа;
+    // его ранг `Errand` судит `suite_place`. Названо, а не подразумевается.
     // ======================================================================
     {
         constexpr int kGroup = 12;   // bodies per group
@@ -479,119 +537,289 @@ static void test_utilai_all() {
         AiConfig cfg;
         cfg.enabled = true;   // hysteresis left ON: this is the shipping config
 
-        std::uint32_t aiWrites = 0, wanderWrites = 0, doubleWrites = 0;
-        std::uint32_t wanderWroteAiOwned = 0;   // the guard violation counter
-        std::uint32_t aiWroteWanderOwned = 0;
-        std::uint32_t aOwnedByAi = 0, bOwnedByWander = 0;
+        // ТЕМП ПАНИКИ — ПРОИЗВЕДЕНИЕ, А НЕ ВТОРОЕ ЧИСЛО. `kWalkSpeedMps` и
+        // `kPanicPace` живут в [game/guide.h] одним домом; `kFleeSpeed@ai.h`
+        // обязан быть их произведением, иначе «быстрее обычного» перестанет
+        // выражаться через обычное и ретюн паники молча разойдётся с бегством
+        // (замер шапки guide.h: это число было выписано ЧЕТЫРЕ раза).
+        // Мутация «подкрутить kPanicPace и забыть kFleeSpeed» роняет строку.
+        CHECK(kFleeSpeed == kWalkSpeedMps * kPanicPace);
+        CHECK(kErrandSpeed == kWalkSpeedMps);
 
-        std::vector<bool> aiWrote(all.size(), false);
+        // --- счётчики пробы ------------------------------------------------
+        std::uint32_t selfWriters = 0;    // заявитель тронул скорость САМ
+        std::uint32_t wroteNoClaim = 0;   // писатель написал тело без ЖИВОЙ заявки
+        std::uint32_t claimedNotLed = 0;  // заявка подана, а ведения не случилось
+        std::uint32_t ledMismatch = 0;    // «написанных тел» != `led + held`
+        std::uint32_t movedTotal = 0, ledTotal = 0, heldTotal = 0;
+        std::uint32_t byRank[kSteerRankCount] = {};
+        std::uint32_t staleTotal = 0, bogusTotal = 0;
+        std::uint32_t unresolvedTotal = 0, foreignTotal = 0;
+        std::uint32_t fleeOnCalm = 0;     // спокойная половина заявила БЕГСТВО
+        std::uint32_t calmOnRamp = 0;     // половина с градиентом НЕ заявила бегство
+
         double now = 0.0;
         for (int t = 0; t < kTicks; ++t) {
+            const std::uint64_t tk = static_cast<std::uint64_t>(t);
             arm_sentinels(reg, all);
+
+            // ВСЯ ЦЕПОЧКА ЗАЯВИТЕЛЕЙ, В ПРОД-ПОРЯДКЕ. Тик передаётся ЯВНО
+            // (последний аргумент `ai_step`), потому что им помечается заявка:
+            // с тиком по умолчанию проба мерила бы заявки одного тика 200 раз.
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg,
+                        nullptr, nullptr, nullptr, nullptr, tk);
             CHECK(tick.considered == static_cast<std::uint32_t>(2 * kGroup));
+            // ИМЕНА СЧЁТЧИКОВ ПЕРЕЖИЛИ ТОКЕН, И ЧИТАТЬ ИХ НАДО ПО СМЫСЛУ
+            // ([game/ai.h], переименование за лидом): `aiOwned` означает
+            // «бегство ЗАЯВИЛО ведение», `wanderOwned` — «передало дальше по
+            // слабости». Их сумма обязана быть знаменателем: тело либо
+            // заявлено бегством, либо отдано, третьего исхода нет.
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
+            ai_patrol_step(reg, zn, kLayer, nullptr, tk);
+            wander_step(reg, grid, pool, zn, kLayer, tk);
 
-            for (std::size_t i = 0; i < all.size(); ++i) {
-                aiWrote[i] = !is_sentinel(reg.get<Velocity>(all[i]));
-                if (aiWrote[i]) ++aiWrites;
-                // A write must match the token the same call published. Checked
-                // both ways, because "ai wrote a body it said wander owned" is
-                // just as much a broken contract as the reverse.
-                const bool owned = ai_owns_motion(reg, all[i]);
-                if (aiWrote[i] && !owned) ++aiWroteWanderOwned;
-            }
+            // НИ ОДИН ЗАЯВИТЕЛЬ НЕ ПИШЕТ СКОРОСТЬ. Это главная строка пробы:
+            // мутация «вернуть `steer_write` в любой из трёх проходов» —
+            // ровно тот дефект, из-за которого прибор намерил 45 двойных
+            // записей, — роняет её и НЕ роняет ничего больше.
+            for (Entity e : all)
+                if (!is_sentinel(reg.get<Velocity>(e))) ++selfWriters;
 
-            arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, zn, kLayer,
-                        static_cast<std::uint64_t>(t));
-
-            for (std::size_t i = 0; i < all.size(); ++i) {
-                const bool w = !is_sentinel(reg.get<Velocity>(all[i]));
-                if (w) ++wanderWrites;
-                if (w && aiWrote[i]) ++doubleWrites;
-                if (w && ai_owns_motion(reg, all[i])) ++wanderWroteAiOwned;
-            }
-
-            // Ownership must be stable per group across the whole run: the danger
-            // field never changes, so a body that flips group is a bug in the
-            // arbitration, not noise.
+            // АРБИТРАЖ ПО РАНГУ, устойчиво по группам: поле опасности не
+            // меняется, значит тело, перескочившее группу, есть дефект
+            // арбитража, а не шум. Проверяется НАЛИЧИЕ/ОТСУТСТВИЕ `Flee`, а не
+            // «ровно Walk»: наряд вправе заявить своё тело, и это не ошибка.
             for (Entity e : groupA)
-                if (ai_owns_motion(reg, e)) ++aOwnedByAi;
+                if (claim_rank(reg, e, tk) == SteerRank::Flee) ++fleeOnCalm;
             for (Entity e : groupB)
-                if (!ai_owns_motion(reg, e)) ++bOwnedByWander;
+                if (claim_rank(reg, e, tk) != SteerRank::Flee) ++calmOnRamp;
+
+            // ОДИН ПРОХОД ВЕДЕНИЯ.
+            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr);
+            std::uint32_t moved = 0;
+            for (Entity e : all) {
+                const bool w = !is_sentinel(reg.get<Velocity>(e));
+                const bool c = claimed(reg, e, tk);
+                if (w) ++moved;
+                if (w && !c) ++wroteNoClaim;
+                if (!w && c) ++claimedNotLed;
+            }
+            // РОВНО ОДНА ЗАПИСЬ НА ТЕЛО. Счётчик прохода («сколько записей») и
+            // замер по телам («сколько тел написано») обязаны СОВПАСТЬ: напиши
+            // проход одно тело дважды, а другое ни разу — сумма сойдётся, а эта
+            // строка покраснеет.
+            if (moved != g.led + g.held) ++ledMismatch;
+            movedTotal += moved;
+            ledTotal += g.led;
+            heldTotal += g.held;
+            for (std::size_t r = 0; r < kSteerRankCount; ++r)
+                byRank[r] += g.byRank[r];
+            staleTotal += g.stale;
+            bogusTotal += g.bogus;
+            unresolvedTotal += g.unresolved;
+            foreignTotal += g.foreign;
 
             now += static_cast<double>(kSimDt);
         }
 
         std::fprintf(stdout,
-                     "[utilai] %d ticks x %d bodies: ai_step wrote Velocity %u "
-                     "times, wander_step %u times, BOTH in one tick %u times\n",
-                     kTicks, 2 * kGroup, aiWrites, wanderWrites, doubleWrites);
+                     "[utilai] %d тиков x %d тел: заявители написали скорость %u "
+                     "раз (обязан ноль), ведение написало %u тел (%u по цели + %u "
+                     "владеемым нулём); по рангам бегство %u, наряд %u, прогулка "
+                     "%u; заявок прошлого тика %u\n",
+                     kTicks, 2 * kGroup, selfWriters, movedTotal, ledTotal,
+                     heldTotal, byRank[rank_slot(SteerRank::Flee)],
+                     byRank[rank_slot(SteerRank::Patrol)],
+                     byRank[rank_slot(SteerRank::Walk)], staleTotal);
 
-        // THE assertion this whole lane exists for.
-        CHECK(doubleWrites == 0);
-        // ...and it is not vacuous: both systems really did steer.
-        CHECK(aiWrites > 0);
-        CHECK(wanderWrites > 0);
-        // Neither system wrote a body the token did not assign it. The first of
-        // these is what the one-line wander.cpp guard buys; if it is non-zero,
-        // the guard is missing (see the file header).
-        CHECK(wanderWroteAiOwned == 0);
-        CHECK(aiWroteWanderOwned == 0);
-        // Group membership held for the whole run.
-        CHECK(aOwnedByAi == 0);
-        CHECK(bOwnedByWander == 0);
+        // THE assertions this whole lane exists for.
+        CHECK(selfWriters == 0);     // писатель ОДИН, и он не здесь
+        CHECK(wroteNoClaim == 0);    // без живой заявки тело не пишется ВООБЩЕ
+        CHECK(claimedNotLed == 0);   // заявлено -> проведено (заявка исполнима)
+        CHECK(ledMismatch == 0);     // ровно одна запись на тело
+        CHECK(movedTotal == ledTotal + heldTotal);
+        // ...И ЭТО НЕ ПУСТОТА: оба ранга правда заявляли и правда ведены. Ноль
+        // двойных записей, купленный молчанием заявителей, — фальшивый гейт
+        // (именно так держался токен: два звена цепочки почти всегда молчали).
+        CHECK(ledTotal > 0);
+        CHECK(byRank[rank_slot(SteerRank::Flee)] > 0);
+        CHECK(byRank[rank_slot(SteerRank::Walk)] > 0);
+        // НОЛЬ ЕСТЬ «ЗАЯВКИ НЕТ», и по нему писать нельзя никогда: слот ранга
+        // `None` обязан остаться пустым, иначе зануленная компонента или свежий
+        // эмплейс читались бы как заявка.
+        CHECK(byRank[rank_slot(SteerRank::None)] == 0);
+        // САМОПРОВЕРКИ ПРОХОДА. Непонятный байт, недостижимая ЗАЯВЛЕННАЯ цель и
+        // заявка на чужом теле обязаны быть нулём — это не статистика.
+        CHECK(bogusTotal == 0);
+        CHECK(unresolvedTotal == 0);
+        CHECK(foreignTotal == 0);
+        // ...А ВОТ `stale` НУЛЁМ НЕ ОБЯЗАН, и шапка [game/guide.h] здесь
+        // ошибается (назвал в отчёте). Прогулка посещает тело раз в
+        // `kWanderPeriod` тиков, поэтому семь тиков из восьми тело несёт заявку
+        // ПРОШЛОГО тика. Положительный ноль здесь и был бы ложью; гейт в том,
+        // что устаревшая заявка НЕ ИСПОЛНЯЕТСЯ (`wroteNoClaim == 0` выше), а
+        // эта строка делает тот гейт непустым: мутация «читать заявку без
+        // сверки тика» роняет `wroteNoClaim`, и роняет её только потому, что
+        // устаревшие заявки правда есть.
+        CHECK(staleTotal > 0);
+        CHECK(fleeOnCalm == 0);
+        CHECK(calmOnRamp == 0);
 
         // Steering direction: group B flees UP-field, i.e. down the danger
         // gradient. The ramp rises with +x, so a fleeing body must move in -x.
+        // И ПОРЯДОК ЗДЕСЬ — УТВЕРЖДЕНИЕ: после `ai_step` скорости НЕТ НИ У
+        // КОГО, она появляется только от `guide_step`. Заявка — не движение.
+        const std::uint64_t kDirTick = static_cast<std::uint64_t>(kTicks);
         arm_sentinels(reg, all);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, nullptr,
+                nullptr, nullptr, nullptr, kDirTick);
+        std::uint32_t steeredBeforeGuide = 0;
+        for (Entity e : all)
+            if (!is_sentinel(reg.get<Velocity>(e))) ++steeredBeforeGuide;
+        CHECK(steeredBeforeGuide == 0);
+        const GuideTick gDir = guide_step(reg, zn, kLayer, kDirTick, nullptr);
+        CHECK(gDir.led == static_cast<std::uint32_t>(kGroup));   // только B
+        CHECK(gDir.held == 0u);
+        CHECK(gDir.byRank[rank_slot(SteerRank::Flee)] ==
+              static_cast<std::uint32_t>(kGroup));
         for (Entity e : groupB) {
             const Velocity& v = reg.get<Velocity>(e);
             CHECK(v.v.x < 0.0f);
-            CHECK(v.v.z == 0.0f);   // z is gravity's, never the steerer's
+            CHECK(v.v.z == 0.0f);   // z is gravity's, never the writer's
             const float sp = std::sqrt(v.v.x * v.v.x + v.v.y * v.v.y);
             CHECK(std::fabs(sp - kFleeSpeed) < 1e-3f);
         }
+        // Спокойная половина заявки не подавала (прогулку в этом тике не
+        // звали), значит ведение её НЕ ПИСАЛО: тело без заявки едет на прошлой
+        // скорости — ровно как при стаггере, когда проход тело не посетил.
         for (Entity e : groupA) CHECK(is_sentinel(reg.get<Velocity>(e)));
 
-        // ---- Block 5: the guard, forced from both sides --------------------
-        // Independent of what the brain chose above: set the token by hand and
-        // check `wander_step` honours it. This is the guard's contract test, and
-        // it is the one that fails loudly if the one-line edit in wander.cpp is
-        // missing.
+        // ---- Block 5: ГЕЙТ ЗАЯВКИ, ПОЛЯРНОСТЬ В ОБЕ СТОРОНЫ ----------------
+        // Независимо от того, что решил мозг выше: заявка ставится РУКАМИ, и
+        // проверяется, что прогулка её чтит. Прежде здесь ставился БАЙТ ТОКЕНА
+        // и утверждалось «прогулка не записала скорость»; сегодня это было бы
+        // ВТОРЫМ ОТВЕТОМ — скорость она не пишет вовсе. Утверждение переехало
+        // туда, где механизм и живёт: прогулка обязана ОТКАЗАТЬСЯ ОТ РАБОТЫ,
+        // и вопрос она задаёт ДО счётчика посещённых и до всякой работы
+        // ([game/wander.cpp], `steer_claimed_by_stronger` стоит перед
+        // `++out.considered`). Мутация «снять гейт у прогулки» роняет первые
+        // две строки: тело попадает в знаменатель и получает цель.
+        const std::uint64_t kStrongTick = 1000;
+        std::uint32_t handClaims = 0;
         for (Entity e : all)
-            reg.get<AiBrain>(e).motion = static_cast<std::uint8_t>(MotionOwner::Ai);
-        std::uint32_t wroteWhileAllAiOwned = 0;
-        for (int t = 0; t < kTicks; ++t) {
-            arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, zn, kLayer,
-                        static_cast<std::uint64_t>(t));
-            for (Entity e : all)
-                if (!is_sentinel(reg.get<Velocity>(e))) ++wroteWhileAllAiOwned;
+            if (steer_claim(reg, e, kStrongTick, SteerRank::Flee,
+                            target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)))
+                ++handClaims;
+        CHECK(handClaims == static_cast<std::uint32_t>(2 * kGroup));
+        arm_sentinels(reg, all);
+        const WanderTick wStrong =
+            wander_step(reg, grid, pool, zn, kLayer, kStrongTick);
+        CHECK(wStrong.considered == 0u);
+        CHECK(wStrong.walking == 0u);
+        // И ЗАЯВКА ЦЕЛА — не только ранг, но и ЦЕЛЬ: слабая поверх сильной не
+        // ложится ([game/guide.h] `steer_claim`). Это второй рубеж того же
+        // закона, и проверять его отдельно ОБЯЗАТЕЛЬНО: сними гейт у прогулки —
+        // ранг устоит сам, и тест, судивший только ранг, остался бы зелёным.
+        std::uint32_t overwritten = 0, touched = 0;
+        for (Entity e : all) {
+            const Steer& s = reg.get<Steer>(e);
+            if (s.rank != SteerRank::Flee || s.target.kind != TargetKind::Dir ||
+                s.target.dir.x != -1.0f)
+                ++overwritten;
+            if (!is_sentinel(reg.get<Velocity>(e))) ++touched;
         }
-        CHECK(wroteWhileAllAiOwned == 0);
+        CHECK(overwritten == 0u);
+        CHECK(touched == 0u);
+        // ...и ведёт тело именно СИЛЬНАЯ заявка: -x на темпе паники.
+        const GuideTick gStrong =
+            guide_step(reg, zn, kLayer, kStrongTick, nullptr);
+        CHECK(gStrong.led == static_cast<std::uint32_t>(2 * kGroup));
+        CHECK(gStrong.byRank[rank_slot(SteerRank::Flee)] ==
+              static_cast<std::uint32_t>(2 * kGroup));
+        std::uint32_t wrongDir = 0;
+        for (Entity e : all) {
+            const Velocity& v = reg.get<Velocity>(e);
+            if (v.v.x >= 0.0f || std::fabs(v.v.y) > 1e-6f ||
+                std::fabs(std::sqrt(v.v.x * v.v.x + v.v.y * v.v.y) - kFleeSpeed) >
+                    1e-3f)
+                ++wrongDir;
+        }
+        CHECK(wrongDir == 0u);
 
-        for (Entity e : all)
-            reg.get<AiBrain>(e).motion =
-                static_cast<std::uint8_t>(MotionOwner::Wander);
-        std::uint32_t wroteWhileAllDelegated = 0;
-        for (int t = 0; t < kTicks; ++t) {
+        // ОБРАТНАЯ ПОЛЯРНОСТЬ: ЗАЯВКИ НЕТ — прогулка обязана ВЗЯТЬ тело. Без
+        // этой половины гейт читался бы как «занято всегда», и отказ падал бы в
+        // сторону замершей толпы — ровно то, что канон запрещает поимённо.
+        for (Entity e : all) reg.get<Steer>(e).rank = SteerRank::None;
+        std::uint32_t visited = 0, walkClaims = 0, walkLed = 0;
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t) {
+            const std::uint64_t tk = kStrongTick + 1 + t;
             arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, zn, kLayer,
-                        static_cast<std::uint64_t>(t));
-            for (Entity e : all)
-                if (!is_sentinel(reg.get<Velocity>(e))) ++wroteWhileAllDelegated;
+            visited += wander_step(reg, grid, pool, zn, kLayer, tk).considered;
+            guide_step(reg, zn, kLayer, tk, nullptr);
+            for (Entity e : all) {
+                if (claim_rank(reg, e, tk) == SteerRank::Walk) ++walkClaims;
+                if (!is_sentinel(reg.get<Velocity>(e))) ++walkLed;
+            }
         }
-        // Every body, once per kWanderPeriod: the counts below bound the stagger
-        // rather than pin it, so a period change does not break the test.
-        CHECK(wroteWhileAllDelegated >= static_cast<std::uint32_t>(2 * kGroup));
+        // Стаггер посещает КАЖДОЕ тело РОВНО РАЗ за период (слот есть функция
+        // тождества), поэтому здесь равенство, а не оценка снизу: прежняя
+        // редакция ограничивала счёт `>= 2*kGroup` и пропустила бы проход,
+        // посетивший одно тело восемь раз.
+        CHECK(visited == static_cast<std::uint32_t>(2 * kGroup));
+        CHECK(walkClaims == static_cast<std::uint32_t>(2 * kGroup));
+        CHECK(walkLed == static_cast<std::uint32_t>(2 * kGroup));
         std::fprintf(stdout,
-                     "[utilai] guard: wander_step wrote %u times with the token "
-                     "held by ai, %u times with it delegated\n",
-                     wroteWhileAllAiOwned, wroteWhileAllDelegated);
+                     "[utilai] гейт заявки: при сильной заявке прогулка "
+                     "рассмотрела %u тел и написала %u; без заявки за период "
+                     "стаггера рассмотрела %u, заявила %u, ведение написало %u\n",
+                     wStrong.considered, touched, visited, walkClaims, walkLed);
+
+        // ---- ИСПОРЧЕННЫЙ БАЙТ РАНГА: ОТКАЗ ПАДАЕТ В СТОРОНУ ВЕДЕНИЯ --------
+        // Это гейт `e2e_test` f8_03, перенесённый с токена на заявку ДОСЛОВНО.
+        // У токена он звучал «`Wander == 0`, поэтому забытый байт читается как
+        // „ведёт как сегодня“»; у заявки — «`SteerRank::None == 0`, поэтому
+        // любое непонятное значение байта читается как „заявки нет“». Обратная
+        // формулировка («не прогулка значит занято») однажды уже прошла бы
+        // ревью, и цена её — замершая толпа на любом мусоре в компоненте.
+        //
+        // Мутации, которые это ловит, и каждая роняет РАЗНУЮ строку:
+        //   * `steer_claim_live` без проверки `rank < Count` -> первая строка;
+        //   * `guide_step` исполняет непонятный ранг -> тело написано (третья);
+        //   * `steer_claimed_by_stronger` считает мусор заявкой -> прогулка
+        //     тело не берёт, и последние две строки краснеют (толпа замерла).
+        const std::uint64_t kBadTick = kStrongTick + 100;
+        const Entity victim = groupA[0];
+        CHECK(steer_claim(reg, victim, kBadTick, SteerRank::Walk,
+                          target_dir(vec3{1.0f, 0.0f, 0.0f}, kWalkSpeedMps)));
+        CHECK(steer_claim_live(reg.get<Steer>(victim), kBadTick));
+        reg.get<Steer>(victim).rank = static_cast<SteerRank>(42);
+        CHECK(!steer_claim_live(reg.get<Steer>(victim), kBadTick));
+        CHECK(!steer_claimed_by_stronger(reg, victim, SteerRank::Walk, kBadTick));
+        arm_sentinels(reg, all);
+        const GuideTick gBad = guide_step(reg, zn, kLayer, kBadTick, nullptr);
+        CHECK(gBad.bogus == 1u);
+        CHECK(gBad.led + gBad.held == 0u);   // ни это тело, ни чужие просрочки
+        CHECK(is_sentinel(reg.get<Velocity>(victim)));
+        // ...И СЛАБЕЙШИЙ ЗАЯВИТЕЛЬ ВЕДЁТ ЕГО ДАЛЬШЕ: за один период стаггера
+        // прогулка приходит ровно раз, перебивает мусор своей заявкой и тело
+        // едет. Это и есть «худшее, что может случиться».
+        std::uint32_t victimWalk = 0, victimLed = 0;
+        for (std::uint64_t t = 1; t <= kWanderPeriod; ++t) {
+            const std::uint64_t tk = kBadTick + t;
+            arm_sentinels(reg, all);
+            wander_step(reg, grid, pool, zn, kLayer, tk);
+            guide_step(reg, zn, kLayer, tk, nullptr);
+            if (claim_rank(reg, victim, tk) == SteerRank::Walk) ++victimWalk;
+            if (!is_sentinel(reg.get<Velocity>(victim))) ++victimLed;
+        }
+        CHECK(victimWalk == 1u);
+        CHECK(victimLed == 1u);
+        std::fprintf(stdout,
+                     "[utilai] испорченный байт ранга (42): заявка не жива, "
+                     "ведение не написало тело (bogus %u), прогулка подхватила "
+                     "его за %u тиков стаггера\n",
+                     gBad.bogus, kWanderPeriod);
     }
 
     // ======================================================================
@@ -626,26 +854,36 @@ static void test_utilai_all() {
             CHECK(tick.aiOwned == 0);
             now += static_cast<double>(kSimDt);
         }
-        // Nothing steered, nothing decided, and the token never left wander.
+        // Nothing steered, nothing decided, и ЗАЯВКИ НЕ ПОЯВИЛОСЬ ВОВСЕ.
         CHECK(is_sentinel(reg.get<Velocity>(e)));
         const AiBrain& b = reg.get<AiBrain>(e);
         CHECK(b.currentIntent == kIntentNone);
         CHECK(b.decisions == 0);
-        CHECK(b.motion == static_cast<std::uint8_t>(MotionOwner::Wander));
-        CHECK(!ai_owns_motion(reg, e));
+        // Здесь проверялся БАЙТ ТОКЕНА («motion == Wander», «!ai_owns_motion»).
+        // Байта нет; утверждение то же и выражено прямо: выключенный ИИ не
+        // кладёт на тело ни одной заявки за 50 тиков, и компонента `Steer` на
+        // нём не рождается — выключить ИИ на живом этаже безопасно САМО, без
+        // явного снятия (могила `ai_release`, [game/ai.h]).
+        CHECK(!reg.all_of<Steer>(e));
 
-        // A body with NO brain at all is invisible to the guard, which is what
-        // makes the wander.cpp edit additive: with ai_init never called, every
-        // existing steerer behaves exactly as before.
+        // Тело БЕЗ МОЗГА невидимо для арбитража, и это то, что делает посадку
+        // ИИ аддитивной: пока `ai_init` не позван, прогулка ведёт его в точности
+        // как прежде. Выражено тем же вопросом, которым спрашивает прод: «меня
+        // уже перебил кто-то сильнее?» — и ответ обязан быть «нет».
         NpcId bare = 0;
         const Entity naked = make_body(reg, pool, 10, 40, 1, Faction::Wild, bare);
         CHECK(!reg.all_of<AiBrain>(naked));
-        CHECK(!ai_owns_motion(reg, naked));
+        CHECK(!reg.all_of<Steer>(naked));
+        CHECK(!steer_claimed_by_stronger(reg, naked, SteerRank::Walk, 0));
     }
 
     // ======================================================================
-    // 7. Ownership is re-derived every tick, so a dying gradient hands the body
-    //    back, and possession hands it back too.
+    // 7. ЗАЯВКА ВЫВОДИТСЯ КАЖДЫЙ ТИК, поэтому умерший градиент отдаёт тело
+    //    молча, а вселение отдаёт его ДВАЖДЫ — у заявителя и у писателя.
+    //
+    //    Тик здесь передаётся ЯВНО и растёт, потому что заявка живёт РОВНО
+    //    ОДИН ТИК: без этого «заявка снята» было бы неотличимо от «заявка той
+    //    же метки осталась», то есть тест судил бы о механизме, которого нет.
     // ======================================================================
     {
         MacroGrid grid;
@@ -661,62 +899,118 @@ static void test_utilai_all() {
         NpcId id = 0;
         const Entity e = make_body(reg, pool, 80, 40, 1, Faction::Citizens, id);
         CHECK(ai_init(reg, kLayer) == 1u);
+        ZoneNav zn;   // непостроенный: цель-ПЕЛЕНГ нава не спрашивает вовсе
 
         AiConfig cfg;
         cfg.enabled = true;
 
         double now = 0.0;
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, nullptr,
+                nullptr, nullptr, nullptr, 1);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
-        CHECK(ai_owns_motion(reg, e));
+        CHECK(claim_rank(reg, e, 1) == SteerRank::Flee);
 
         // Flatten the field. The intent is STICKY (still flee), but the gradient
-        // it needs is gone, so ownership goes back to wander on the same call —
-        // which is why ai_step must run before wander_step: the handback is
-        // honoured on the tick it happens, not one tick later.
+        // it needs is gone, so ЗАЯВКА НЕ ПОДАЁТСЯ на этом же вызове — и тело
+        // достаётся следующему по слабости. Прежде это требовало вернуть токен;
+        // теперь возвращать нечего, и это проверяется ТРЕМЯ способами: заявки
+        // на новый тик нет, прошлая заявка видна проходу как УСТАРЕВШАЯ, и
+        // скорость по ней НЕ ПИШЕТСЯ.
         danger.fill(90.0f);
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t2 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+        const AiTick t2 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt,
+                                  cfg, nullptr, nullptr, nullptr, nullptr, 2);
         CHECK(reg.get<AiBrain>(e).currentIntent == IntentFlee);
-        CHECK(!ai_owns_motion(reg, e));
+        CHECK(claim_rank(reg, e, 2) == SteerRank::None);
         CHECK(t2.wanderOwned == 1);
         CHECK(t2.aiOwned == 0);
-        CHECK(is_sentinel(reg.get<Velocity>(e)));   // ai wrote nothing
+        CHECK(is_sentinel(reg.get<Velocity>(e)));   // заявитель не пишет никогда
+        // МЕТКА ТИКА — НЕСУЩАЯ, А НЕ УКРАШЕНИЕ. Компонента на теле ОСТАЛАСЬ с
+        // прошлого тика и всё ещё несёт пеленг бегства; проход обязан прочитать
+        // её как «заявки нет» и НЕ ВЕСТИ тело. Мутация «сверять только ранг»
+        // (убрать `s.tick == tick` из `steer_claim_live`) роняет обе строки
+        // ниже: тело бежало бы от испарившегося поля вечно.
+        CHECK(reg.all_of<Steer>(e));
+        const GuideTick gStale = guide_step(reg, zn, kLayer, 2, nullptr);
+        CHECK(gStale.stale == 1u);
+        CHECK(gStale.led + gStale.held == 0u);
+        CHECK(is_sentinel(reg.get<Velocity>(e)));
 
-        // Restore the gradient, take ownership back, then POSSESS the body. A
-        // camera holder is driven by controller_step, so the brain must release
-        // it — otherwise the body would be skipped by wander AND written by both
-        // the controller and the AI, which is the same double-write bug wearing a
-        // player's clothes.
+        // Restore the gradient, заявка возвращается, then POSSESS the body. A
+        // camera holder is driven by controller_step, so ни заявитель не вправе
+        // заявить его, ни писатель — написать: иначе ввод человека был бы
+        // перетёрт в том же тике (Б6.2, потеря управления у владельца).
         for (int x = 0; x < kMacroDim; ++x)
             for (int y = 0; y < kMacroDim; ++y)
                 for (int z = 0; z < kMacroDim; ++z)
                     danger.at(x, y, z) = static_cast<float>(x * 2);
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
-        CHECK(ai_owns_motion(reg, e));
+        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, nullptr,
+                nullptr, nullptr, nullptr, 3);
+        CHECK(claim_rank(reg, e, 3) == SteerRank::Flee);
 
         reg.emplace<CameraTag>(e, CameraTag{});
         reg.emplace<Controller>(e, Controller{7.0f, {0, 0, 0}, false});
         now += static_cast<double>(kSimDt);
         reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
-        const AiTick t3 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
-        CHECK(!ai_owns_motion(reg, e));
+        const AiTick t3 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt,
+                                  cfg, nullptr, nullptr, nullptr, nullptr, 4);
+        CHECK(claim_rank(reg, e, 4) == SteerRank::None);
         CHECK(t3.considered == 0);   // out of scope entirely once possessed
         CHECK(is_sentinel(reg.get<Velocity>(e)));
 
-        // ai_release is the answer to "enabled was cleared mid-run": without it a
-        // body left holding the token would be skipped by wander forever and
-        // stand still. Re-check it on a body the AI does own.
+        // ВТОРОЙ РУБЕЖ, И ОН НОВЫЙ: даже если заявка на теле человека ПОЯВИТСЯ
+        // (вселение случается ПОСЕРЕДИНЕ кадра — заявка подана до того, как
+        // тело стало игроком), писатель обязан отказаться сам. Ставим заявку
+        // руками и спрашиваем писателя.
+        //
+        // Мутация «снять `decider_of` из `guide_step`» роняет обе строки; снять
+        // её ТОЛЬКО у заявителей — не роняет ни одной, и в этом весь смысл
+        // второго рубежа.
+        CHECK(steer_claim(reg, e, 5, SteerRank::Flee,
+                          target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)));
+        const GuideTick gHuman = guide_step(reg, zn, kLayer, 5, nullptr);
+        CHECK(gHuman.foreign == 1u);
+        CHECK(is_sentinel(reg.get<Velocity>(e)));
+
+        // ТРУП — ТА ЖЕ ВЕТКА, и это не щедрость теста: смерть снимает MobRef, и
+        // без ветки `Decider::None` патфайндинг ВОЗИЛ рагдоллы по маршрутам
+        // (прогон владельца 2026-11-07: «мертвы, но едут»). Телом мёртвого
+        // владеет солвер, занятию тут нечего.
         reg.remove<CameraTag>(e);
         reg.remove<Controller>(e);
+        reg.emplace<Corpse>(e, Corpse{});
+        CHECK(steer_claim(reg, e, 6, SteerRank::Flee,
+                          target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)));
+        const GuideTick gDead = guide_step(reg, zn, kLayer, 6, nullptr);
+        CHECK(gDead.foreign == 1u);
+        CHECK(is_sentinel(reg.get<Velocity>(e)));
+        reg.remove<Corpse>(e);
+
+        // МОГИЛА `ai_release`. Функция гасила токен у всех тел слоя, и нужна
+        // была ровно потому, что токен был ПЕРСИСТЕНТНЫМ: тело, оставшееся с
+        // `Ai` при выключении ИИ, пропускалось прогулкой НАВСЕГДА и стояло.
+        // Класс снят ПО ПОСТРОЕНИЮ, и вот утверждение на это — то же самое,
+        // которое держал `ai_release`, только без второго снятия: ИИ забрал
+        // тело на тике 7, на тике 8 его выключили, и этого ДОСТАТОЧНО, чтобы
+        // тело перестало считаться занятым.
         now += static_cast<double>(kSimDt);
-        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
-        CHECK(ai_owns_motion(reg, e));
-        CHECK(ai_release(reg, kLayer) == 1u);
-        CHECK(!ai_owns_motion(reg, e));
-        CHECK(ai_release(reg, kLayer) == 0u);   // idempotent
+        ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, nullptr,
+                nullptr, nullptr, nullptr, 7);
+        CHECK(claim_rank(reg, e, 7) == SteerRank::Flee);
+        CHECK(steer_claimed_by_stronger(reg, e, SteerRank::Walk, 7));
+        AiConfig off;              // отгрузочная конфигурация: ИИ выключен
+        CHECK(!off.enabled);
+        now += static_cast<double>(kSimDt);
+        const AiTick t4 = ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt,
+                                  off, nullptr, nullptr, nullptr, nullptr, 8);
+        CHECK(t4.considered == 0u);
+        CHECK(claim_rank(reg, e, 8) == SteerRank::None);
+        // ВОТ ОНО: следующий тик — и слабейший заявитель волен взять тело.
+        // Мутация «заявка персистентна» (не сверять тик) роняет эту строку, и
+        // роняет её именно как «тело замерло навсегда».
+        CHECK(!steer_claimed_by_stronger(reg, e, SteerRank::Walk, 8));
     }
 
     // ======================================================================
@@ -751,17 +1045,32 @@ static void test_utilai_all() {
 
             AiConfig cfg;
             cfg.enabled = true;
+            // ВЕДЕНИЕ В ПЕТЛЕ, И БЕЗ НЕГО ЭТОТ БЛОК СТАЛ БЫ ПУСТЫМ. `ai_step`
+            // скорости больше не пишет, поэтому сравнение `vx` без `guide_step`
+            // сверяло бы ноль с нулём — то есть измеряло бы, что `embody`
+            // кладёт нулевую скорость. Нав не нужен: заявка бегства есть ПЕЛЕНГ.
+            ZoneNav zn;
             double now = 0.0;
             for (int t = 0; t < 600; ++t) {   // ~4.8 s: several full re-plan cycles
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg);
+                const std::uint64_t tk = static_cast<std::uint64_t>(t);
+                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg,
+                        nullptr, nullptr, nullptr, nullptr, tk);
+                guide_step(reg, zn, kLayer, tk, nullptr);
                 now += static_cast<double>(kSimDt);
             }
+            std::uint32_t steered = 0;
             for (Entity e : bodies) {
                 const AiBrain& b = reg.get<AiBrain>(e);
                 intents[run].push_back(b.currentIntent);
                 decisions[run].push_back(b.decisions);
-                vx[run].push_back(reg.get<Velocity>(e).v.x);
+                const float x = reg.get<Velocity>(e).v.x;
+                if (x != 0.0f) ++steered;
+                vx[run].push_back(x);
             }
+            // ...и сравнение НЕПУСТО: хотя бы одно тело правда ведено. Без этой
+            // строки «детерминизм скоростей» был бы зелёным на любой правке,
+            // которая ведение вовсе отключила.
+            CHECK(steered > 0u);
             // The staggered cadence really did fire several times per body, so
             // the comparison covers re-planning and not just the first commit.
             for (std::uint32_t d : decisions[run]) CHECK(d >= 2u);
@@ -1210,9 +1519,9 @@ static void test_utilai_all() {
     //     danger cell it now runs away from that cell instead. Three groups in one
     //     arena exercise all three arbitration paths in the SAME tick:
     //
-    //       A  calm half, no memory      -> wander owns  (work wins, not flee)
-    //       B  ramp half, live gradient  -> ai owns via the FIELD
-    //       C  calm half, one memory     -> ai owns via MEMORY
+    //       A  calm half, no memory      -> заявки нет (work wins, not flee)
+    //       B  ramp half, live gradient  -> заявка `Flee` по ПОЛЮ
+    //       C  calm half, one memory     -> заявка `Flee` по ПАМЯТИ
     // ======================================================================
     {
         constexpr int kGroup = 8;
@@ -1264,30 +1573,53 @@ static void test_utilai_all() {
 
         // ---- one tick, the whole arbitration table ------------------------
         arm_sentinels(reg, all);
-        const AiTick t1 = ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, &mem);
+        const AiTick t1 = ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt,
+                                  cfg, &mem, nullptr, nullptr, nullptr, 1);
         CHECK(t1.considered == static_cast<std::uint32_t>(3 * kGroup));
         CHECK(t1.aiOwned + t1.wanderOwned == t1.considered);
         CHECK(t1.wanderOwned == static_cast<std::uint32_t>(kGroup));     // A
         CHECK(t1.aiOwned == static_cast<std::uint32_t>(2 * kGroup));     // B + C
         CHECK(t1.memoryFled == static_cast<std::uint32_t>(kGroup));      // C only
-        for (Entity e : groupA) CHECK(!ai_owns_motion(reg, e));
-        for (Entity e : groupB) CHECK(ai_owns_motion(reg, e));
-        for (Entity e : groupC) CHECK(ai_owns_motion(reg, e));
-        // Group C runs in -x, away from the cell it remembers, at flee pace.
+        // ЗАЯВКА ВМЕСТО ТОКЕНА, и группа A проверяется СИЛЬНЕЕ, чем прежде:
+        // «токена нет» означало байт `Wander`, а «заявки нет» означает, что
+        // компоненты на теле не появилось вовсе — забыть выставить нечего.
+        for (Entity e : groupA) CHECK(!reg.all_of<Steer>(e));
+        for (Entity e : groupB) CHECK(claim_rank(reg, e, 1) == SteerRank::Flee);
+        for (Entity e : groupC) CHECK(claim_rank(reg, e, 1) == SteerRank::Flee);
+        // ...И ПАМЯТЬ ЗАЯВЛЯЕТ ПЕЛЕНГ, А НЕ ЗОНУ: у бегства нет конечной точки
+        // (CANON S13.3, цель-ПОЛЕ), поэтому вид цели здесь `Dir` — иначе проход
+        // пошёл бы спрашивать нав о зоне, которой заявитель не выбирал.
+        for (Entity e : groupC)
+            CHECK(reg.get<Steer>(e).target.kind == TargetKind::Dir);
+        // Пока ведение не позвано, не написано НИ ОДНО тело.
+        std::uint32_t beforeGuide = 0;
+        for (Entity e : all)
+            if (!is_sentinel(reg.get<Velocity>(e))) ++beforeGuide;
+        CHECK(beforeGuide == 0u);
+        // Group C runs in -x, away from the cell it remembers, at flee pace —
+        // и пишет это ЕДИНСТВЕННЫЙ писатель.
+        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr);
+        CHECK(g1.led == static_cast<std::uint32_t>(2 * kGroup));   // B + C
+        CHECK(g1.held == 0u);
+        CHECK(g1.byRank[rank_slot(SteerRank::Flee)] ==
+              static_cast<std::uint32_t>(2 * kGroup));
+        CHECK(g1.foreign == 0u);
+        CHECK(g1.unresolved == 0u);
         for (Entity e : groupC) {
             const Velocity& v = reg.get<Velocity>(e);
             CHECK(v.v.x < 0.0f);
             CHECK(std::fabs(v.v.y) < 1e-4f);
-            CHECK(v.v.z == 0.0f);   // z is gravity's, never a steerer's
+            CHECK(v.v.z == 0.0f);   // z is gravity's, never the writer's
             CHECK(std::fabs(std::sqrt(v.v.x * v.v.x + v.v.y * v.v.y) - kFleeSpeed) <
                   1e-3f);
         }
         for (Entity e : groupA) CHECK(is_sentinel(reg.get<Velocity>(e)));
         std::fprintf(stdout,
-                     "[utilai] one tick, 3 groups x %d: wander owns %u, ai owns %u "
-                     "(of which %u steered by a REMEMBERED cell with a flat live "
-                     "field), group C |v| = %.2f m/s in -x\n",
-                     kGroup, t1.wanderOwned, t1.aiOwned, t1.memoryFled,
+                     "[utilai] one tick, 3 groups x %d: заявок нет у %u, бегство "
+                     "заявило %u (из них %u по ЗАПОМНЕННОЙ клетке при плоском "
+                     "живом поле), ведение написало %u, group C |v| = %.2f m/s "
+                     "in -x\n",
+                     kGroup, t1.wanderOwned, t1.aiOwned, t1.memoryFled, g1.led,
                      static_cast<double>(kFleeSpeed));
 
         // ---- the same group C with NO memory delegates instead ------------
@@ -1306,57 +1638,110 @@ static void test_utilai_all() {
             CHECK(ai_init(reg2, kLayer) == static_cast<std::uint32_t>(kGroup));
             arm_sentinels(reg2, cOnly);
             const AiTick t0 =
-                ai_step(reg2, pool2, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr);
+                ai_step(reg2, pool2, &danger, grid, kLayer, 0.0, kSimDt, cfg,
+                        nullptr, nullptr, nullptr, nullptr, 1);
             CHECK(t0.aiOwned == 0u);
             CHECK(t0.wanderOwned == static_cast<std::uint32_t>(kGroup));
             CHECK(t0.memoryFled == 0u);
             CHECK(t0.recalled == 0u);
+            // БЕЗ ПАМЯТИ ЗАЯВКИ НЕТ ВОВСЕ, и ведению нечего исполнять: ни одной
+            // записи, ни одного владеемого нуля. Прежде это было «токен у
+            // вандера»; разница в том, что теперь тело волен взять ЛЮБОЙ более
+            // слабый заявитель, а не только тот, чьё имя стояло в байте.
+            for (Entity e : cOnly) CHECK(!reg2.all_of<Steer>(e));
+            const GuideTick g0 = guide_step(reg2, zn, kLayer, 1, nullptr);
+            CHECK(g0.led + g0.held == 0u);
             for (Entity e : cOnly) CHECK(is_sentinel(reg2.get<Velocity>(e)));
         }
 
-        // ---- SINGLE WRITER, re-proven with memory ON ---------------------
-        // Block 4 proved it before memory existed. Memory adds a second way to
-        // acquire the token, so the probe has to be re-run or the proof is stale.
-        std::uint32_t aiWrites = 0, wanderWrites = 0, doubleWrites = 0;
-        std::uint32_t wanderWroteAiOwned = 0, aiWroteWanderOwned = 0;
-        std::vector<bool> aiWrote(all.size(), false);
+        // ---- ОДИН ПИСАТЕЛЬ, ПЕРЕДОКАЗАНО С ПАМЯТЬЮ ------------------------
+        // Block 4 proved it before memory existed. Память — ВТОРОЙ источник
+        // пеленга бегства, значит проба обязана прогнаться ещё раз, иначе
+        // доказательство относится к прошлой редакции кода.
+        std::uint32_t selfWriters = 0, wroteNoClaim = 0, claimedNotLed = 0;
+        std::uint32_t ledMismatch = 0, movedTotal = 0, ledTotal = 0, heldTotal = 0;
+        std::uint32_t byRank[kSteerRankCount] = {};
         double now = 0.0;
         for (int t = 0; t < kTicks; ++t) {
+            const std::uint64_t tk = static_cast<std::uint64_t>(t);
             arm_sentinels(reg, all);
             const AiTick tick =
-                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem,
+                        nullptr, nullptr, nullptr, tk);
             CHECK(tick.aiOwned + tick.wanderOwned == tick.considered);
-            for (std::size_t i = 0; i < all.size(); ++i) {
-                aiWrote[i] = !is_sentinel(reg.get<Velocity>(all[i]));
-                if (aiWrote[i]) ++aiWrites;
-                if (aiWrote[i] && !ai_owns_motion(reg, all[i])) ++aiWroteWanderOwned;
+            ai_patrol_step(reg, zn, kLayer, nullptr, tk);
+            wander_step(reg, grid, pool, zn, kLayer, tk);
+            for (Entity e : all)
+                if (!is_sentinel(reg.get<Velocity>(e))) ++selfWriters;
+            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr);
+            std::uint32_t moved = 0;
+            for (Entity e : all) {
+                const bool w = !is_sentinel(reg.get<Velocity>(e));
+                const bool c = claimed(reg, e, tk);
+                if (w) ++moved;
+                if (w && !c) ++wroteNoClaim;
+                if (!w && c) ++claimedNotLed;
             }
-            arm_sentinels(reg, all);
-            wander_step(reg, grid, pool, zn, kLayer,
-                        static_cast<std::uint64_t>(t));
-            for (std::size_t i = 0; i < all.size(); ++i) {
-                const bool w = !is_sentinel(reg.get<Velocity>(all[i]));
-                if (w) ++wanderWrites;
-                if (w && aiWrote[i]) ++doubleWrites;
-                if (w && ai_owns_motion(reg, all[i])) ++wanderWroteAiOwned;
-            }
+            if (moved != g.led + g.held) ++ledMismatch;
+            movedTotal += moved;
+            ledTotal += g.led;
+            heldTotal += g.held;
+            for (std::size_t r = 0; r < kSteerRankCount; ++r)
+                byRank[r] += g.byRank[r];
             now += static_cast<double>(kSimDt);
         }
         std::fprintf(stdout,
-                     "[utilai] memory ON, %d ticks x %d bodies: ai_step wrote "
-                     "Velocity %u times, wander_step %u times, BOTH in one tick %u "
-                     "times\n",
-                     kTicks, 3 * kGroup, aiWrites, wanderWrites, doubleWrites);
-        CHECK(doubleWrites == 0);
-        CHECK(aiWrites > 0);
-        CHECK(wanderWrites > 0);
-        CHECK(wanderWroteAiOwned == 0);
-        CHECK(aiWroteWanderOwned == 0);
+                     "[utilai] память ВКЛ, %d тиков x %d тел: заявители написали "
+                     "скорость %u раз (обязан ноль), ведение написало %u тел "
+                     "(бегство %u, прогулка %u)\n",
+                     kTicks, 3 * kGroup, selfWriters, movedTotal,
+                     byRank[rank_slot(SteerRank::Flee)],
+                     byRank[rank_slot(SteerRank::Walk)]);
+        CHECK(selfWriters == 0);
+        CHECK(wroteNoClaim == 0);
+        CHECK(claimedNotLed == 0);
+        CHECK(ledMismatch == 0);
+        CHECK(movedTotal == ledTotal + heldTotal);
+        CHECK(byRank[rank_slot(SteerRank::Flee)] > 0);
+        CHECK(byRank[rank_slot(SteerRank::Walk)] > 0);
 
-        // ai_release still hands every token back with memory live, so clearing
-        // `enabled` cannot leave a body frozen ([ai.h]).
-        CHECK(ai_release(reg, kLayer) == static_cast<std::uint32_t>(2 * kGroup));
-        CHECK(ai_release(reg, kLayer) == 0u);
+        // МОГИЛА `ai_release` (вторая; первая — в блоке 7). Здесь утверждалось,
+        // что при живой памяти снятие токена возвращает ровно 2*kGroup тел, то
+        // есть «выключить ИИ не оставит тело замороженным». Предмет снят ПО
+        // ПОСТРОЕНИЮ — заявка живёт один тик, — и утверждение переписано на то,
+        // что раньше проверить было НЕЧЕМ: тело, бежавшее на прошлом тике,
+        // подхватывает ПРОГУЛКА, и делает это СЛЕДУЮЩИМ ЖЕ ТИКОМ.
+        //
+        // Это строго сильнее снесённой пары: прежняя считала ТОКЕНЫ, новая
+        // ведёт ТЕЛА. Мутация «заявка персистентна» роняет её как «толпа
+        // замерла», мутация «прогулка игнорирует ранг» — как двойную запись.
+        const std::uint64_t kOffTick = static_cast<std::uint64_t>(kTicks) + 1;
+        std::uint32_t fleeingBefore = 0;
+        for (Entity e : all)
+            if (claim_rank(reg, e, static_cast<std::uint64_t>(kTicks) - 1) ==
+                SteerRank::Flee)
+                ++fleeingBefore;
+        CHECK(fleeingBefore == static_cast<std::uint32_t>(2 * kGroup));
+        AiConfig off;
+        CHECK(!off.enabled);
+        std::uint32_t pickedUp = 0, ledAfter = 0;
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t) {
+            const std::uint64_t tk = kOffTick + t;
+            arm_sentinels(reg, all);
+            const AiTick dead = ai_step(reg, pool, &danger, grid, kLayer, now,
+                                        kSimDt, off, &mem, nullptr, nullptr,
+                                        nullptr, tk);
+            CHECK(dead.considered == 0u);
+            wander_step(reg, grid, pool, zn, kLayer, tk);
+            guide_step(reg, zn, kLayer, tk, nullptr);
+            for (Entity e : all) {
+                if (claim_rank(reg, e, tk) == SteerRank::Walk) ++pickedUp;
+                if (!is_sentinel(reg.get<Velocity>(e))) ++ledAfter;
+            }
+            now += static_cast<double>(kSimDt);
+        }
+        CHECK(pickedUp == static_cast<std::uint32_t>(3 * kGroup));
+        CHECK(ledAfter == static_cast<std::uint32_t>(3 * kGroup));
     }
 
     // ======================================================================
@@ -1445,6 +1830,10 @@ static void test_utilai_all() {
 
             AiConfig cfg;
             cfg.enabled = true;
+            // ВЕДЕНИЕ В ПЕТЛЕ — по тому же доводу, что в блоке 8: `vx` без
+            // единственного писателя сверял бы ноль с нулём. Нав не нужен,
+            // заявка бегства есть ПЕЛЕНГ.
+            ZoneNav zn;
             double now = 0.0;
             std::uint32_t recalls = 0, replans = 0;
             for (int t = 0; t < 600; ++t) {   // ~4.8 s: several full re-plan cycles
@@ -1454,23 +1843,30 @@ static void test_utilai_all() {
                     std::int16_t& hp = pool.hp(ids[3]);
                     hp = static_cast<std::int16_t>(hp - 25);
                 }
+                const std::uint64_t tk = static_cast<std::uint64_t>(t);
                 const AiTick tick =
-                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg, &mem);
+                    ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg,
+                            &mem, nullptr, nullptr, nullptr, tk);
+                guide_step(reg, zn, kLayer, tk, nullptr);
                 recalls += tick.recalled;
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
             }
             std::uint32_t h = 2166136261u;
+            std::uint32_t steered = 0;
             for (std::size_t i = 0; i < bodies.size(); ++i) {
                 const AiBrain& b = reg.get<AiBrain>(bodies[i]);
                 intents[run].push_back(b.currentIntent);
-                vx[run].push_back(reg.get<Velocity>(bodies[i]).v.x);
+                const float x = reg.get<Velocity>(bodies[i]).v.x;
+                if (x != 0.0f) ++steered;
+                vx[run].push_back(x);
                 traces[run].push_back(mem.live_traces(ids[i], now));
                 h = digest_memory(mem, ids[i], h);
                 fold_u32(h, b.currentIntent);
                 fold_u32(h, b.decisions);
             }
             digest[run] = h;
+            CHECK(steered > 0u);   // сверка скоростей НЕПУСТА
 
             if (run == 0) {
                 // The HP-drop recorder really fired, so the digest covers it.
@@ -1603,46 +1999,71 @@ static void test_utilai_all() {
         CHECK(zone_hops_for_metres(zn.part, kPatrolLegMetres) >= 1u);
 
         // 1. НЕПОСТРОЕННЫЙ БЕЙК — NO-OP, НЕ UB (правило wander_step). Ни плана,
-        //    ни токена, пока бейк в полёте.
+        //    ни ЗАЯВКИ, пока бейк в полёте.
         ZoneNav unbaked;
-        PatrolTick t0 = ai_patrol_step(reg, unbaked, kLayer, kSimDt);
+        PatrolTick t0 = ai_patrol_step(reg, unbaked, kLayer, nullptr, 1);
         CHECK(!reg.all_of<PatrolPlan>(e));
-        CHECK(!ai_owns_motion(reg, e));
+        CHECK(!reg.all_of<Steer>(e));   // компоненты не появилось ВООБЩЕ
         CHECK(t0.considered == 0u);
 
-        // 2. ШАГ: лениво навешивает план, берёт ДОСТИЖИМУЮ зону, ведёт +x к
-        //    центру следующей клетки и ЗАБИРАЕТ токен.
-        PatrolTick t1 = ai_patrol_step(reg, zn, kLayer, kSimDt);
+        // 2. ШАГ: лениво навешивает план, берёт ДОСТИЖИМУЮ зону и ЗАЯВЛЯЕТ её
+        //    рангом наряда. Скорость НЕ ПИШЕТ: её напишет единственный
+        //    писатель, и порядок двух этих фактов — утверждение, а не
+        //    оформление (сентинель взведён ДО шага и обязан выжить).
+        Velocity& vel = reg.get<Velocity>(e);
+        vel.v = vec3{kSentX, kSentY, 0.0f};
+        PatrolTick t1 = ai_patrol_step(reg, zn, kLayer, nullptr, 1);
         CHECK(reg.all_of<PatrolPlan>(e));
         CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<RoomId>(2));
-        CHECK(ai_owns_motion(reg, e));
+        CHECK(claim_rank(reg, e, 1) == SteerRank::Patrol);
         CHECK(t1.considered == 1u);
         CHECK(t1.walking == 1u);
         // ПЕРВАЯ нога прибытием НЕ СЧИТАЕТСЯ — иначе прибор давал бы тем
         // больше прибытий, чем хуже ходок (обратная полярность: засчитать её,
         // и эта строка краснеет).
         CHECK(t1.arrived == 0u);
-        Velocity& vel = reg.get<Velocity>(e);
+        // ЦЕЛЬ — ЗОНА, И ТЕМП ЛЕЖИТ В ЗАЯВКЕ, а не в проходе ведения. Это
+        // новое утверждение, и оно несущее: проход, выбирающий темп сам, завёл
+        // бы ветку по заявителю, то есть вернул бы каждому занятию своё
+        // движение ([game/guide.h], довод у `Target`). Мутация «наряд заявляет
+        // kFleeSpeed» роняет третью строку, «заявляет пеленг вместо зоны» —
+        // первую.
+        CHECK(reg.get<Steer>(e).target.kind == TargetKind::Zone);
+        CHECK(reg.get<Steer>(e).target.zone == static_cast<RoomId>(2));
+        CHECK(reg.get<Steer>(e).target.speed == kErrandSpeed);
+        CHECK(is_sentinel(vel));   // заявитель скорость не тронул
+        // ...И ТЕПЕРЬ ВЕДЁТ ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ: +x к центру следующей
+        // клетки, темпом ИЗ ЗАЯВКИ. Прежде эту тройку писал сам наряд, и
+        // проверить «тот ли темп» было нечем — скорость и направление приходили
+        // одной записью.
+        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr);
+        CHECK(g1.led == 1u);
+        CHECK(g1.byRank[rank_slot(SteerRank::Patrol)] == 1u);
         CHECK(vel.v.x > 0.0f);  // вдоль поля...
         CHECK(vel.v.y == 0.0f); // ...и только вдоль него
         CHECK(vel.v.z == 0.0f); // ось гравитации принадлежит физике (NegZ)
+        CHECK(std::fabs(vel.v.x - kErrandSpeed) < 1e-5f);
 
         // 3. ПРИБЫЛ = СТОИТ В ЦЕЛЕВОЙ ЗОНЕ, а не на целевой КЛЕТКЕ. Переносим
         //    тело в зону 2 — нога обязана закрыться прибытием и завестись
         //    новая. Это и есть то, чего решётка дать не могла: там нога
         //    кончалась в одной клетке из 2 097 152.
+        //
+        //    РУЧНОГО СБРОСА ЗДЕСЬ БОЛЬШЕ НЕТ, и это следствие, а не стиль:
+        //    прежде строкой выше стояло `brain.motion = Wander`, потому что
+        //    токен был ПЕРСИСТЕНТНЫМ и тест обязан был снять его сам. Заявка
+        //    живёт один тик — достаточно позвать проход на СЛЕДУЮЩЕМ.
         reg.get<Transform>(e).pos.x = (50.0f + 0.5f) * kCellSize;
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-        PatrolTick t2 = ai_patrol_step(reg, zn, kLayer, kSimDt);
+        PatrolTick t2 = ai_patrol_step(reg, zn, kLayer, nullptr, 2);
         CHECK(t2.arrived == 1u);
         CHECK(reg.get<PatrolPlan>(e).zoneTo == static_cast<RoomId>(1));
         CHECK(reg.get<PatrolPlan>(e).hops == 2u);
 
         // 4. ФРЕЙМ: под PosX шаг «+x» есть шаг ВДОЛЬ гравитации, а ходьба его
-        //    тратить не умеет. Наряд обязан ОТКАЗАТЬСЯ и отдать тело вандеру —
+        //    тратить не умеет. Наряд обязан ОТКАЗАТЬСЯ и отдать тело прогулке —
         //    НЕ подменять шаг слепой прямой на цель. Ровно эта подмена была
         //    остатком якоря у решётки и стоила §88 нуля прибытий, поэтому
-        //    утверждение здесь положительное: сторож x цел И токен не взят.
+        //    утверждение здесь положительное: сторож x цел И ЗАЯВКИ НЕТ.
         //    Мутация «вернуть прямую на цель» роняет вторую строку.
         GravityField sideways;
         sideways.regime = GravityRegime::PosX;
@@ -1650,21 +2071,58 @@ static void test_utilai_all() {
         reg.get<Transform>(e).pos = vec3{(32.0f + 0.5f) * kCellSize,
                                         (32.0f + 0.5f) * kCellSize,
                                         (1.0f + 0.5f) * kCellSize};
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
         vel.v = vec3{0.25f, 0.0f, 0.0f};
-        PatrolTick t3 = ai_patrol_step(reg, zn, kLayer, kSimDt, &sideways);
+        PatrolTick t3 = ai_patrol_step(reg, zn, kLayer, &sideways, 3);
         CHECK(vel.v.x == 0.25f); // сторож оси гравитации не тронут
-        CHECK(!ai_owns_motion(reg, e));
+        CHECK(claim_rank(reg, e, 3) == SteerRank::None);
         CHECK(t3.idle == 1u);
         CHECK(t3.walking == 0u);
+        // И ПИСАТЕЛЮ НЕЧЕГО ИСПОЛНЯТЬ. Заявка ПРОШЛОГО тика на теле ещё лежит
+        // (нога на зону 1), и это ровно тот случай, в котором токен ДРЕЙФОВАЛ:
+        // тело под токеном без записи скорости не ведётся никем. Проход обязан
+        // прочитать её как устаревшую, тело оставить телу физики, а сторож оси
+        // гравитации не тронуть вовсе.
+        const GuideTick g3 = guide_step(reg, zn, kLayer, 3, &sideways);
+        CHECK(g3.stale == 1u);
+        CHECK(g3.led + g3.held == 0u);
+        CHECK(vel.v.x == 0.25f);
 
-        // 5. ARBITRATION: тело под токеном НЕ переруливается — гейт claim'а,
-        //    полярность прогнана в обе стороны (owned -> не тронуто).
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
+        // 5. АРБИТРАЖ: ЗАЯВЛЕННОЕ СИЛЬНЕЕ ТЕЛО НАРЯД НЕ ТРОГАЕТ, и полярность
+        //    прогнана В ОБЕ СТОРОНЫ — без второй половины гейт читался бы как
+        //    «занято всегда».
+        //
+        //    Утверждение переехало с «скорость не тронута» на «тело не вошло в
+        //    знаменатель», и это не придирка: скорость наряд не пишет вовсе,
+        //    поэтому прежняя форма стала бы ВТОРЫМ ОТВЕТОМ — зелёным при снятом
+        //    гейте. Вопрос стоит ДО всей работы прохода ([game/ai.cpp]:
+        //    `steer_claimed_by_stronger` перед `++out.considered`), потому что у
+        //    заявителей есть побочные эффекты, и проигравший по рангу ПОСЛЕ них
+        //    стрелял бы на бегу.
+        CHECK(steer_claim(reg, e, 4, SteerRank::Flee,
+                          target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)));
         vel.v = vec3{0.0f, 7.0f, 0.0f};
-        PatrolTick t4 = ai_patrol_step(reg, zn, kLayer, kSimDt);
+        PatrolTick t4 = ai_patrol_step(reg, zn, kLayer, nullptr, 4);
+        CHECK(t4.considered == 0u); // отказ по рангу в знаменатель не входит
         CHECK(vel.v.y == 7.0f);
-        CHECK(t4.considered == 0u); // отказ по токену в знаменатель не входит
+        // Заявка цела ЦЕЛИКОМ — и ранг, и цель: слабая поверх сильной не
+        // ложится, а наряд её даже не пытался подать.
+        CHECK(claim_rank(reg, e, 4) == SteerRank::Flee);
+        CHECK(reg.get<Steer>(e).target.kind == TargetKind::Dir);
+
+        // 5b. ОБРАТНАЯ ПОЛЯРНОСТЬ: заявка СЛАБЕЕ наряда его не останавливает —
+        //     он обязан перебить её своей. Мутация «считать любую живую заявку
+        //     чужой» (`>=` вместо `>` в `steer_claimed_by_stronger`) роняет обе
+        //     строки: наряд перестал бы водить тела, которые ведёт прогулка, то
+        //     есть наряд не работал бы ВООБЩЕ.
+        //
+        //     `cooldown = 0` руками — по тому же доводу, что в шаге 6: шаг 4
+        //     законно взвёл стаггер дверью, а здесь проверяется АРБИТРАЖ.
+        reg.get<PatrolPlan>(e).cooldown = 0;
+        CHECK(steer_claim(reg, e, 5, SteerRank::Walk,
+                          target_zone(static_cast<RoomId>(1), kWalkSpeedMps)));
+        PatrolTick t4b = ai_patrol_step(reg, zn, kLayer, nullptr, 5);
+        CHECK(t4b.considered == 1u);
+        CHECK(claim_rank(reg, e, 5) == SteerRank::Patrol);
 
         // 6. НЕДОСТИЖИМАЯ ЗОНА: таблица говорит «другая компонента», и наряд
         //    обязан не выбрать цель вовсе, а не идти наугад.
@@ -1679,11 +2137,16 @@ static void test_utilai_all() {
         split.dist.d = {0, kZoneUnreachable, kZoneUnreachable, 0};
         reg.get<PatrolPlan>(e).zoneTo = kNoRoom;
         reg.get<PatrolPlan>(e).cooldown = 0;
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-        PatrolTick t5 = ai_patrol_step(reg, split, kLayer, kSimDt);
+        PatrolTick t5 = ai_patrol_step(reg, split, kLayer, nullptr, 6);
         CHECK(t5.unreachable == 1u);
         CHECK(t5.walking == 0u);
         CHECK(reg.get<PatrolPlan>(e).zoneTo == kNoRoom);
+        // ...И ЗАЯВКИ НЕТ: цель не выбрана, значит заявлять нечего. Это та же
+        // строка, что стояла здесь про незабранный токен, но теперь она ещё и
+        // ЗАКРЫВАЕТ НАЗВАННЫЙ ДЕФЕКТ: токен забирался ДО проверки шага, поэтому
+        // тело под ним не вели ни наряд (ушёл по `continue`), ни прогулка
+        // (пропускала по токену) — оно ДРЕЙФОВАЛО на прошлой скорости.
+        CHECK(claim_rank(reg, e, 6) == SteerRank::None);
 
         // 6b. СТАГГЕР — и это утверждение КУПЛЕНО ЗАМЕРОМ, а не вкусом.
         //     Редакция без него снимала цель каждый тик: прогон 30000 кадров
@@ -1694,7 +2157,7 @@ static void test_utilai_all() {
         //     стаггера убывает. Обратная полярность — снять `cooldown` из
         //     `PatrolPlan` — роняет первые две строки.
         CHECK(reg.get<PatrolPlan>(e).cooldown == kPatrolRepickCooldown);
-        PatrolTick t6 = ai_patrol_step(reg, split, kLayer, kSimDt);
+        PatrolTick t6 = ai_patrol_step(reg, split, kLayer, nullptr, 7);
         CHECK(t6.unreachable == 0u);
         CHECK(t6.idle == 1u);
         CHECK(reg.get<PatrolPlan>(e).cooldown < kPatrolRepickCooldown);
@@ -1735,11 +2198,10 @@ static void test_utilai_all() {
         CHECK(lone.built());
         reg.get<PatrolPlan>(e).zoneTo = kNoRoom;
         reg.get<PatrolPlan>(e).cooldown = 0;
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-        PatrolTick t7 = ai_patrol_step(reg, lone, kLayer, kSimDt);
+        PatrolTick t7 = ai_patrol_step(reg, lone, kLayer, nullptr, 8);
         CHECK(t7.unreachable == 1u);
         CHECK(reg.get<PatrolPlan>(e).zoneTo == kNoRoom);
-        CHECK(!ai_owns_motion(reg, e)); // токен не забран — тело идёт вандеру
+        CHECK(claim_rank(reg, e, 8) == SteerRank::None); // заявки нет — ведёт прогулка
 
         // 7. РАЗВИЛКА МОЗГОВ (S13.7a) — Б6.2, потеря управления у владельца.
         //    Смерть игрока вселяет его НЕ в новое тело, а в живого жителя
@@ -1749,14 +2211,18 @@ static void test_utilai_all() {
         //    шаг стоит в кадре ПОСЛЕ controller_step — и перетирал ввод
         //    человека в том же тике. Проход обязан спрашивать ТЕЛО (decider_of).
         //
-        //    Мутация «снять гейт decider_of» роняет обе строки ниже.
+        //    Мутация «снять гейт decider_of» роняет все три строки ниже. Третья
+        //    добавлена сегодня и она сильнее первых двух: скорость наряд не
+        //    пишет вовсе, поэтому «ввод человека не тронут» прошло бы и при
+        //    снятом гейте — покраснело бы только на следующем `guide_step`,
+        //    то есть в другом месте. Знаменатель и заявка — здесь.
         reg.emplace<CameraTag>(e, CameraTag{});
         brain.currentIntent = IntentPatrol;
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
         vel.v = vec3{0.0f, 7.0f, 0.0f};
-        ai_patrol_step(reg, zn, kLayer, kSimDt);
+        const PatrolTick t8 = ai_patrol_step(reg, zn, kLayer, nullptr, 9);
         CHECK(vel.v.y == 7.0f);      // ввод человека не тронут
-        CHECK(!ai_owns_motion(reg, e)); // и тело не захвачено
+        CHECK(t8.considered == 0u);  // тело человека в знаменатель не входит
+        CHECK(claim_rank(reg, e, 9) == SteerRank::None); // и заявки на него нет
         reg.remove<CameraTag>(e);
     }
 }

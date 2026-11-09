@@ -78,6 +78,44 @@ inline Entity spawn_viewer(Registry& reg, LayerId layer, const vec3& pos) {
     return e;
 }
 
+// ОДИН ТИК ХОДЬБЫ ЦЕЛИКОМ — ЗАЯВКА ПЛЮС ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ (2026-11-09).
+//
+// С переводом ведения на заявки `wander_step` СКОРОСТЬ НЕ ПИШЕТ: он заявляет
+// цель (погоня — пеленгом рангом `Chase`, прогулка — зоной рангом `Walk`,
+// отказы и заморозка взглядом — `target_hold()`), а горизонтальную `Velocity`
+// пишет ровно один проход, `guide_step` ([game/guide.h]). Каждый блок ниже
+// мерит СКОРОСТЬ, которую записал проход ведения, значит каждый обязан позвать
+// оба — и в том же тике, с тем же слоем и той же гравитацией.
+//
+// ПАРА, А НЕ ДВА ВЫЗОВА, И ЭТО ТО ЖЕ ЛЕЧЕНИЕ, КОТОРОЕ СДЕЛАЛИ В ПРОДЕ. Восемь
+// блоков этого файла несли бы восемь дословных копий двухстрочной
+// последовательности, а копия и есть дефект, который канон запрещает (S11):
+// достаточно одной копии, забывшей второй вызов, и блок снова начнёт судить
+// скорость, записанную ДО вызова — зелёным. Здесь забыть нечего.
+//
+// `nullptr` гравитацией — НЕ умолчание «как-нибудь»: вся арена этого файла
+// стоит под NegZ (один этаж, одна стена), и `steer_frame_of(nullptr)` даёт
+// ровно NegZ побитово ([world/gravity.h]). Блок с боковым режимом подаёт поле
+// сам и этой дверью не пользуется.
+inline void steer_tick(Registry& reg, const MacroGrid& grid, NpcPool& pool,
+                       const ZoneNav& zn, LayerId layer, std::uint64_t t) {
+    wander_step(reg, grid, pool, zn, layer, t);
+    const GuideTick gt = guide_step(reg, zn, layer, t, nullptr);
+    // Самопроверка писателя, на каждом тике: непонятный байт ранга/вида и
+    // «заявитель объявил цель исполнимой, а писатель её не исполнил» обязаны
+    // быть нулём по построению. Вырожденный нав этой арены (`arm_zones_one`:
+    // зона есть, идти некуда) кончает КАЖДЫЙ отказ прогулки заявкой `Hold`,
+    // поэтому `unresolved` здесь особенно показателен — ненулевой он означал
+    // бы заявку зоны, до которой шага нет.
+    CHECK(gt.bogus == 0u);
+    CHECK(gt.unresolved == 0u);
+    // Тело с `CameraTag` в этих блоках либо одно, либо (блок 6) ни одного, и
+    // ноги ему `wander_init` не выдаёт — значит заявки на него нет и писатель
+    // его не видит вовсе. Ненулевой `foreign` означал бы заявку на теле
+    // человека, то есть дефект Б6.2, стоивший владельцу управления.
+    CHECK(gt.foreign == 0u);
+}
+
 // The first tick of a licensed hunting epoch for `mobId`.
 //
 // Both edges are required, not just `mob_hunts_npcs == true`: the licence is constant
@@ -489,8 +527,13 @@ static void test_behaviours_all() {
 
         // Exactly kWanderPeriod ticks, so every mob is visited exactly once by the
         // identity-hash stagger and the velocity read below is that single visit.
+        // ЗАЯВКА + ПИСАТЕЛЬ ОДНОЙ ДВЕРЬЮ (`steer_tick`): множитель темпа
+        // приезжает В ЗАЯВКЕ (`Target::speed`), а норму пеленга и запись делает
+        // `guide_step`. Мутация, которую ловят ратио ниже: писатель,
+        // подставляющий свою скорость вместо заявленной (например
+        // `kWalkSpeedMps`), — тогда braced/open стали бы РАВНЫ и равны не 1.02.
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, zn, layer, t);
+            steer_tick(reg, grid, pool, zn, layer, t);
 
         const float panSp = table_speed(MobKind::Panelnik);
         const float plainSp = table_speed(MobKind::Sborka);
@@ -531,8 +574,10 @@ static void test_behaviours_all() {
         const Entity openTvar = spawn_at(reg, layer, MobKind::Tvar, openAt);
         CHECK(wander_init(reg, layer) == 4u);
 
+        // Та же пара: приоритет поведения над флагом решается в ЗАЯВКЕ, и
+        // ратио ниже видят её только через единственного писателя.
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, zn, layer, t);
+            steer_tick(reg, grid, pool, zn, layer, t);
 
         const float rSp = table_speed(MobKind::Rebar);
         const float tSp = table_speed(MobKind::Tvar);
@@ -584,7 +629,7 @@ static void test_behaviours_all() {
         CHECK(wander_init(reg, layer) == 2u);
 
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, zn, layer, t);
+            steer_tick(reg, grid, pool, zn, layer, t);
 
         const float carpetV = flat_speed(reg.get<const Velocity>(carpet));
         const float plainV = flat_speed(reg.get<const Velocity>(plain));
@@ -594,15 +639,24 @@ static void test_behaviours_all() {
                      carpetV, plainV);
         // The whole mechanic, in two lines: same arena, same cell, same distance.
         CHECK(plainV > 0.0f);
+        // НОЛЬ ЗДЕСЬ — ВЛАДЕЕМЫЙ, А НЕ НЕТРОНУТЫЙ, и это утверждение стало
+        // СИЛЬНЕЕ, а не слабее: ковёр, не увидевший игрока, уходит в ветку
+        // прогулки, та на вырожденном наве заявляет `Hold`, и единственный
+        // писатель гасит плоскость ходьбы. Сентинель ниже (блок «ковёр
+        // проснулся») отделяет «погасили» от «не трогали».
         CHECK(carpetV == 0.0f);
         CHECK(near_eq(plainV / table_speed(MobKind::Sborka), 1.0f));
 
         // It is a trap, not a statue: step inside 2.15 m and it comes for you. Without
         // this the block would also pass for a carpet that never moves at all.
         reg.get<Transform>(carpet).pos = vec3{101.5f, 100.0f, 3.0f};
-        reg.get<Velocity>(carpet).v = vec3{0, 0, 0};
+        // СЕНТИНЕЛЬ, А НЕ НОЛЬ: прежде здесь обнулялось, и тогда «ковёр
+        // проснулся» нельзя было отличить от «его никто не тронул». Ненулевое
+        // начальное значение делает оба исхода различимыми — и ловит мутацию
+        // «писатель не нормирует пеленг, а прибавляет к прошлой скорости».
+        reg.get<Velocity>(carpet).v = vec3{-3.0f, 5.0f, 0.0f};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, zn, layer, t);
+            steer_tick(reg, grid, pool, zn, layer, t);
         const float wokenV = flat_speed(reg.get<const Velocity>(carpet));
         std::fprintf(stderr, "[behaviours] ...and at 1.5 m: |v| = %.4f m/s\n", wokenV);
         CHECK(wokenV > 0.0f);
@@ -659,12 +713,12 @@ static void test_behaviours_all() {
 
         reg.get<Velocity>(plain).v = vec3{0, 0, 0};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, crowd, zn, layer, plainWindow + t);
+            steer_tick(reg, grid, crowd, zn, layer, plainWindow + t);
         const float plainV = flat_speed(reg.get<const Velocity>(plain));
 
         reg.get<Velocity>(carpet).v = vec3{0, 0, 0};
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, crowd, zn, layer, carpetWindow + t);
+            steer_tick(reg, grid, crowd, zn, layer, carpetWindow + t);
         const float carpetV = flat_speed(reg.get<const Velocity>(carpet));
 
         std::fprintf(stderr,
@@ -723,7 +777,7 @@ static void test_behaviours_all() {
             CHECK(wander_init(reg, layer) == 2u);
 
             for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-                wander_step(reg, grid, pool, zn, layer, t);
+                steer_tick(reg, grid, pool, zn, layer, t);
 
             const float sv = flat_speed(reg.get<const Velocity>(subject));
             const float cv = flat_speed(reg.get<const Velocity>(control));
@@ -759,8 +813,14 @@ static void test_behaviours_all() {
         const Entity farPlain = spawn_at(reg, layer, MobKind::Sborka, farAt);
         CHECK(wander_init(reg, layer) == 5u);
 
+        // ЗНАК РАДИАЛЬНОЙ СОСТАВЛЯЮЩЕЙ — СВОЙСТВО ЗАЯВЛЕННОГО ПЕЛЕНГА, и
+        // нормирует его единственный писатель. Мутация, которую ловит пара
+        // `hv.y == 0` + `|hv.x| == webSp` ниже: писатель, нормирующий ПОЛНЫЙ
+        // трёхмерный вектор вместо проекции на плоскость ходьбы, — тогда
+        // стоящая ровно на standoff Паупсина потеряла бы часть бюджета
+        // скорости в ось гравитации и орбита стала бы медленнее табличной.
         for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
-            wander_step(reg, grid, pool, zn, layer, t);
+            steer_tick(reg, grid, pool, zn, layer, t);
 
         const vec3 nv = reg.get<const Velocity>(nearWeb).v;
         const vec3 hv = reg.get<const Velocity>(holdWeb).v;
@@ -817,6 +877,136 @@ static void test_behaviours_all() {
         const PursuitOffset zero = pursuit_offset(MobBehaviour::WebSpitter, 4u, 0u,
                                                   0.0f, 0.0f);
         CHECK(zero.x == 0.0f && zero.y == 0.0f);
+    }
+
+    // ---- 8b. WeepingAngel: ЗАМОРОЗКА ВЗГЛЯДОМ ЕСТЬ ВЛАДЕЕМЫЙ НОЛЬ -----------
+    //
+    // ПОЧЕМУ ЭТОГО БЛОКА НЕ БЫЛО И ПОЧЕМУ ОН НУЖЕН СЕЙЧАС. `frozen_by_gaze`
+    // проверялся ТОЛЬКО как чистая функция (здесь блок 10 и `test_mob_behaviour`
+    // в game_test.cpp — семь углов и пределы конуса). Это доказывало ПРАВИЛО и
+    // ничего не говорило о ПРОВОДКЕ: механика ведь не в том, что функция вернула
+    // `true`, а в том, что гейзнутая Скульптура СТОИТ — при её 8.5 клетки/с и
+    // 1000 урона это единственная контрмера, которая у игрока есть.
+    //
+    // Проводка к тому же ИЗМЕНИЛАСЬ 2026-11-09: заморозка перестала быть
+    // «обнулить x/y на месте» и стала ЦЕЛЬЮ `Hold` рангом `Chase` — то есть
+    // плоскость ходьбы теперь знает единственный писатель ([game/guide.h]).
+    // Поэтому блок мерит ровно две вещи, которых чистая функция не даёт:
+    // (1) ноль ВЛАДЕЕМЫЙ, а не унаследованный, и (2) гасится ПЛОСКОСТЬ ХОДЬБЫ,
+    // а не жёсткие x/y.
+    //
+    // СВОИ ДВЕ КЛЕТКИ, И ЭТО ДИСЦИПЛИНА АРЕНЫ, А НЕ ВКУС (шапка файла: «блоки
+    // разложены так, что никакие два не делят ни клетку, ни соседа»). Пара
+    // (30,30,1)/(35,30,1) в этом файле не занята никем, и до единственной стены
+    // арены (56,50,1) отсюда 40 клеток — значит проба «стена рядом» не может
+    // подмешаться в скорость, даже если кто-нибудь однажды пропишет Скульптуру
+    // в `wall_query_needed`.
+    {
+        Registry reg;
+        const vec3 gazeViewerAt{60.0f, 60.0f, 3.0f};   // клетка 30,30,1
+        const Entity viewer = spawn_viewer(reg, layer, gazeViewerAt);
+        // 10 м по +x: внутри и радиуса взгляда (Плейн 20 м — у WeepingAngel
+        // своего нет, блок 2 это пинит), и дальности заморозки (kGazeRange 25).
+        // Ось выбрана так, чтобы `yaw = 0` давал пеленг (1,0) ТОЧНО, без
+        // тригонометрического остатка: равенства с нулём ниже должны быть
+        // свойством заморозки, а не удачей округления.
+        const vec3 aheadAt{gazeViewerAt.x + 10.0f, gazeViewerAt.y,
+                           gazeViewerAt.z};
+        const Entity watched = spawn_at(reg, layer, MobKind::Sculpture, aheadAt);
+        CHECK(grid.cell(30, 30, 1) == kCellAir);
+        CHECK(grid.cell(35, 30, 1) == kCellAir);
+        // Блок называет КИНД, а судит ПОВЕДЕНИЕ — та же дисциплина, что в
+        // блоке 1: уехала бы строка CSV, и всё ниже мерило бы не то.
+        CHECK(mob_def(MobKind::Sculpture).behaviour ==
+              static_cast<std::uint8_t>(MobBehaviour::WeepingAngel));
+        CHECK(behaviour_aggro_radius(MobBehaviour::WeepingAngel, kAggroRadius) ==
+              kAggroRadius);
+        CHECK(wander_init(reg, layer) == 1u);   // смотрящий пропущен
+        // Камера по умолчанию глядит в +x (yaw = 0), то есть ПРЯМО на тело; а
+        // пеленг заморозки идёт ОТ смотрящего К монстру, и это противоположное
+        // соглашение к вектору погони. Пинится здесь, потому что перепутанная
+        // полярность компилируется и выглядит правдоподобно.
+        CHECK(reg.get<const CameraTag>(viewer).yaw == 0.0f);
+        CHECK(frozen_by_gaze(MobBehaviour::WeepingAngel, 1.0f, 0.0f, 10.0f, 0.0f));
+
+        // СЕНТИНЕЛЬ, иначе «погасили» не отличить от «не тронули»: именно так
+        // этот блок прошёл бы при писателе, который заморозку вообще не знает.
+        reg.get<Velocity>(watched).v = vec3{4.0f, -4.0f, 0.0f};
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
+            steer_tick(reg, grid, pool, zn, layer, t);
+        CHECK(flat_speed(reg.get<const Velocity>(watched)) == 0.0f);
+        CHECK(reg.get<const Velocity>(watched).v.x == 0.0f);
+        CHECK(reg.get<const Velocity>(watched).v.y == 0.0f);
+
+        // ...и ТО ЖЕ ТЕЛО В ТОЙ ЖЕ КЛЕТКЕ едет на полной табличной скорости,
+        // стоит смотрящему отвернуться. Без этой половины блок прошёл бы для
+        // Скульптуры, которая не двигается вообще (ровно контроль ковра в
+        // блоке 5).
+        reg.get<CameraTag>(viewer).yaw = 3.14159265f;   // смотрит в −x
+        // ТИКИ РАСТУТ, И ЭТО ЧАСТЬ КОНТРАКТА ЗАЯВКИ, а не вкус оснастки:
+        // заявка живёт РОВНО ОДИН ТИК и опознаётся штампом тика, поэтому
+        // вторая фаза на ТЕХ ЖЕ номерах читала бы заявку первой фазы как
+        // живую — прогулка пропускала бы тело по чужому сильному рангу, а
+        // писатель вечно применял бы `Hold` заморозки. Поймано красным: три
+        // проверки ниже упали ровно на этом. В проде тик монотонен, поэтому
+        // класс существует только в стендах — и стенд обязан его уважать.
+        for (std::uint64_t t = kWanderPeriod; t < 2u * kWanderPeriod; ++t)
+            steer_tick(reg, grid, pool, zn, layer, t);
+        const float freeV = flat_speed(reg.get<const Velocity>(watched));
+        std::fprintf(stderr,
+                     "[behaviours] WeepingAngel: под взглядом |v| = 0, "
+                     "отвернулся |v| = %.4f м/с (таблица %.4f)\n",
+                     freeV, table_speed(MobKind::Sculpture));
+        CHECK(freeV > 0.0f);
+        CHECK(near_eq(freeV / table_speed(MobKind::Sculpture), 1.0f));
+        // Тело идёт НА смотрящего (−x), а не от него: заморозка снята, а не
+        // перевёрнута в бегство.
+        CHECK(reg.get<const Velocity>(watched).v.x < 0.0f);
+    }
+
+    // ---- 8в. ...и гасится ПЛОСКОСТЬ ХОДЬБЫ, а не оси x/y --------------------
+    //
+    // МУТАЦИЯ, КОТОРУЮ ЛОВИТ ТОЛЬКО ЭТОТ БЛОК: вернуть на место заморозки две
+    // жёсткие строки `vel.v.x = 0; vel.v.y = 0;` (ровно то, что стояло в
+    // `wander.cpp` до 2026-11-09). Под NegZ она неотличима от правильной, а под
+    // боковым режимом делает ДВЕ ошибки сразу и обе невидимы блоку 8b: гасит
+    // ПАДЕНИЕ (ось гравитации — x) и НЕ гасит ход (ось z остаётся).
+    //
+    // Та же пара клеток, что в 8b (свои, ничьи больше), режим подаётся полем —
+    // поэтому `steer_tick` здесь не годится: он пинит NegZ нулевым указателем,
+    // и это его контракт, а не упущение.
+    {
+        Registry reg;
+        const vec3 gazeViewerAt{60.0f, 60.0f, 3.0f};
+        const Entity viewer = spawn_viewer(reg, layer, gazeViewerAt);
+        const vec3 aheadAt{gazeViewerAt.x + 10.0f, gazeViewerAt.y,
+                           gazeViewerAt.z};
+        const Entity watched = spawn_at(reg, layer, MobKind::Sculpture, aheadAt);
+        CHECK(wander_init(reg, layer) == 1u);
+        CHECK(reg.get<const CameraTag>(viewer).yaw == 0.0f);
+
+        GravityField sideways;
+        sideways.regime = GravityRegime::PosX;
+        sideways.global = vec3{9.81f, 0.0f, 0.0f};
+        // Сентинель во ВСЕХ ТРЁХ осях: x — ось гравитации (её владелец
+        // physics_step, и заморозка её не касается НИКОГДА), y и z — плоскость
+        // ходьбы (их заморозка обязана погасить).
+        reg.get<Velocity>(watched).v = vec3{0.125f, 3.0f, 4.0f};
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t) {
+            wander_step(reg, grid, pool, zn, layer, t, &sideways);
+            const GuideTick gt = guide_step(reg, zn, layer, t, &sideways);
+            CHECK(gt.bogus == 0u);
+            CHECK(gt.unresolved == 0u);
+            CHECK(gt.foreign == 0u);
+        }
+        const vec3 fv = reg.get<const Velocity>(watched).v;
+        std::fprintf(stderr,
+                     "[behaviours] WeepingAngel под PosX: v = (%+.3f, %+.3f, "
+                     "%+.3f) — ось гравитации x нетронута, плоскость y/z в нуле\n",
+                     fv.x, fv.y, fv.z);
+        CHECK(fv.x == 0.125f);   // падение принадлежит физике, а не взгляду
+        CHECK(fv.y == 0.0f);
+        CHECK(fv.z == 0.0f);
     }
 
     // ---- 9. FractureSprint: a three-timer cycle with no timer ----------------

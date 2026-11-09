@@ -331,28 +331,31 @@ inline constexpr const char* kIntentScoreChannel[kIntentCount] = {
 };
 
 // ---------------------------------------------------------------------------
-// MotionOwner — the arbitration token. See the file header.
+// МОГИЛА ТОКЕНА (2026-11-09, пункт 2 очереди). Здесь жил `MotionOwner` —
+// байт арбитража «кто пишет горизонтальную `Velocity` этого тела в этом тике»,
+// и жил он потому, что писателей было ШЕСТЬ. Снесён вместе с ними: писатель
+// теперь ОДИН физически (`guide_step@game/guide.h`), а арбитрировать запись,
+// которая случается в одном месте, нечем и незачем.
 //
-// `Wander` is 0 so a zero-initialised `AiBrain` delegates: the failure mode of
-// forgetting to set the token is "behaves like today", never "frozen crowd".
-// ---------------------------------------------------------------------------
-enum class MotionOwner : std::uint8_t {
-    Wander = 0, // wander_step writes this body's horizontal Velocity
-    Ai = 1,     // ai_step writes it; wander_step must skip the body
-    // ДЕЛО (2026-11-08, S24): владелец — `place_errand_step`, и он пишет
-    // скорость тела В ДВУХ случаях: ведёт к выбранному месту ИЛИ держит на
-    // месте нулём, пока идёт деяние нужды.
-    //
-    // ЗАЧЕМ ТРЕТЬЕ ЗНАЧЕНИЕ, А НЕ ПОВТОРНОЕ `Ai`. Дело занимало `Ai` и было
-    // неотличимо от бегства — а деяние обязано рваться УГРОЗОЙ и НЕ рваться
-    // самим собой. С одним значением проход, увидев свой же токен прошлого
-    // тика, рвал собственное деяние каждый кадр: поймано гейтом
-    // `suite_place` (прибывшее тело теряло окно на следующем же тике), а не
-    // чтением. Теперь `Ai` означает РОВНО «тело забрал кто-то другой»
-    // (бегство `ai_step` или наряд), и причина обрыва `kBreakThreat`
-    // выражается одним сравнением.
-    Errand = 2,
-};
+// ПОЧЕМУ ТОКЕН БЫЛ НЕ ЗАКОНОМ, А МОДЕЛЬЮ — ЗАМЕР, А НЕ ЧТЕНИЕ. Прибор-часовой
+// (`--action vedenie`, [game/steer_probe.h]) на этаже 6: **45 двойных записей
+// за 250 тиков**, и перебивал всегда `investigate_step` — пятый рулевой, что
+// токена не читал вовсе. Токен читали четыре прохода в ЧЕТЫРЁХ разных
+// формулировках (`motion_owned`, «ровно `Ai`», два `ai_owns_motion`), то есть
+// один вопрос имел четыре ответа — ровно тот дефект, который CANON S11
+// называет дефектом.
+//
+// ЧТО ИЗ НЕГО ВЫЖИЛО, И ЭТО ВАЖНЕЕ СНОСА:
+//   * ЗНАК. `Wander == 0` держал закон «забыли выставить — ведёт как сегодня,
+//     НИКОГДА замершая толпа» (гейт `e2e_test` f8_03 на испорченном байте).
+//     `SteerRank::None == 0` держит его дословно: любое непонятное значение
+//     байта читается как «заявки нет».
+//   * ТРЕТЬЕ ЗНАЧЕНИЕ `Errand`. Оно появилось потому, что деяние обязано
+//     рваться УГРОЗОЙ и не рваться самим собой: с одним значением проход,
+//     увидев свой же токен прошлого тика, рвал собственное деяние каждый кадр
+//     (поймал гейт `suite_place`, а не чтение). Теперь это РАЗНЫЕ РАНГИ
+//     заявителей, и «кто-то сильнее меня» выражается одним сравнением, а не
+//     списком владельцев, в который дело приходилось вписывать руками.
 
 // ---------------------------------------------------------------------------
 // AiBrain — the whole per-body brain state, and it is deliberately tiny.
@@ -365,7 +368,10 @@ enum class MotionOwner : std::uint8_t {
 // ---------------------------------------------------------------------------
 struct AiBrain {
     std::uint8_t currentIntent = kIntentNone;
-    std::uint8_t motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+    // ЗДЕСЬ БЫЛ БАЙТ ТОКЕНА (`motion`). Он ушёл в паддинг, и пин 16 байт
+    // ОСТАЛСЯ ТЕМ ЖЕ без подкрутки — как и при реклейме `pad_` под `lastHp`,
+    // только в обратную сторону. Следующее узкое поле пакуется СЮДА, а не в
+    // хвост: одинокий u8 рядом с float не экономит ничего ([core/row_law.h]).
     std::uint16_t decisions = 0; // re-plan count
     std::uint16_t switches = 0;  // times currentIntent actually CHANGED
     // The HP this body had when `ai_step` last visited it, so a DROP is
@@ -383,31 +389,18 @@ struct AiBrain {
 };
 static_assert(sizeof(AiBrain) == 16, "the whole brain is 16 bytes per body");
 
-// THE GUARD other steering systems call. One line at the top of their per-entity
-// body: `if (ai_owns_motion(reg, e)) continue;`.
+// МОГИЛА ГЕЙТА (2026-11-09). Здесь жили `motion_owned` и `ai_owns_motion` —
+// две двери к одному вопросу «тело уже забрали?», и ещё две его формулировки
+// стояли руками: «ровно `Ai`» в `place.cpp` и `motion_owned` на готовой ссылке
+// в `ai.cpp`. Один вопрос с четырьмя ответами есть дефект S11, и именно
+// ЧЕТВЁРТЫЙ ответ — его отсутствие у `investigate_step` — дал замеренные 45
+// двойных записей за 250 тиков.
 //
-// A body with no AiBrain returns false, which is what makes this additive: with
-// `ai_init` never called, every existing steerer is bit-for-bit unchanged.
-//
-// ВЛАДЕЛЬЦЫ ПЕРЕЧИСЛЕНЫ, А НЕ ВЫЧТЕНЫ ИЗ WANDER (2026-11-08): владельцев токена
-// стало три, и сравнение с одним значением пропустило бы тело, занятое ДЕЛОМ
-// (`MotionOwner::Errand`) — `wander_step` повёл бы его, пока оно ест, то есть
-// деяние совершалось бы на ходу.
-//
-// Но и «не Wander» здесь НЕВЕРНО, и это поймал гейт `e2e_test` f8_03
-// (испорченный байт токена): неизвестное значение обязано читаться как
-// «никто не владеет», потому что отказ должен падать в сторону «ведёт
-// прогулка, как сегодня», а НЕ в сторону замершей толпы — ровно то свойство,
-// которым шапка этого enum'а обосновывает `Wander = 0`. Поэтому список
-// владельцев явный, и четвёртый владелец обязан будет вписать себя сюда.
-inline bool motion_owned(std::uint8_t token) {
-    return token == static_cast<std::uint8_t>(MotionOwner::Ai) ||
-           token == static_cast<std::uint8_t>(MotionOwner::Errand);
-}
-inline bool ai_owns_motion(const Registry& reg, Entity e) {
-    const AiBrain* b = reg.try_get<AiBrain>(e);
-    return b != nullptr && motion_owned(b->motion);
-}
+// Вопрос теперь один: `steer_claimed_by_stronger@game/guide.h`. Задаётся он ТАМ
+// ЖЕ, где стоял гейт токена — ДО всей работы заявителя, а не перед записью
+// скорости: у вражды и дела есть побочные эффекты (выстрел, замах, изъятие
+// предмета из ящика, открытие окна деяния), и заявитель, проигравший по рангу
+// уже ПОСЛЕ них, стрелял бы на бегу и ел бы на ходу.
 
 // --- КТО РЕШАЕТ ЗА ЭТО ТЕЛО -------------------------------------------------
 //
@@ -1036,14 +1029,13 @@ struct AiTick {
 // deliberately excluded — see the file header.
 std::uint32_t ai_init(Registry& reg, LayerId layer);
 
-// Hand every AiBrain on `layer` back to `MotionOwner::Wander` and return how
-// many were released.
-//
-// This exists because disabling `ai_step` mid-run is otherwise a trap: the token
-// is persistent state, so a body left holding `MotionOwner::Ai` would be skipped
-// by `wander_step` forever and stand still. Call this when clearing
-// `AiConfig::enabled`, or on unload.
-std::uint32_t ai_release(Registry& reg, LayerId layer);
+// МОГИЛА `ai_release` (2026-11-09). Функция гасила токен у всех тел слоя, и
+// нужна была ровно потому, что токен был ПЕРСИСТЕНТНЫМ СОСТОЯНИЕМ: тело,
+// оставшееся с `Ai` при выключении ИИ или при переработке слоя, пропускалось
+// прогулкой НАВСЕГДА и стояло. Заявка живёт ОДИН ТИК, поэтому класс снят по
+// построению, а не ещё одним явным снятием — вместе с функцией умерли три её
+// вызывающих (выгрузка этажа и ДВА шва поездки в `main.cpp`, где «починили
+// один из двух» ловили дважды).
 
 // One arbitration + steering pass over the embodied NPC bodies on `layer`.
 //
@@ -1186,7 +1178,7 @@ struct PatrolTick {
 // а шаг — два чтения ([game/zone_nav.h] `zone_walk_dir`). Непостроенный бейк —
 // no-op, как и прежде: тела ходят вандером, пока этаж печётся.
 PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
-                          float dt, const GravityField* gravity = nullptr);
+                          const GravityField* gravity, std::uint64_t tick);
 
 // The danger field's PRODUCER — the write half of the loop ai_step's threat
 // term has been waiting on ([diffusion.h], problems.md §52). Fleeing bodies

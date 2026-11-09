@@ -2478,7 +2478,7 @@ if(GIGA_BUILD_TESTS)
         # Все четыре гейта пересобраны на ЗАЖАТОЙ геометрии (утопленные
         # поверхности, шов двух твёрдых клеток — то, что производят скульпт-
         # модули) и на числах ИЗ ЖИВОЙ ТАБЛИЦЫ; теперь красят.
-        PASS_REGULAR_EXPRESSION "game_test: 206973 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "game_test: 208867 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
@@ -2559,7 +2559,7 @@ if(GIGA_BUILD_TESTS)
     #     floor_spec_and_bank_terms` утверждал ровно одно живое: посев по
     #     анкете этажа заселяет пул. Имя приведено к утверждению.
     #   Прогон бинаря (1450) сошёлся точно; 0 падений.
-        PASS_REGULAR_EXPRESSION "e2e_test: 1450 checks, 0 failures")
+        PASS_REGULAR_EXPRESSION "e2e_test: 1551 checks, 0 failures")
 
 
 

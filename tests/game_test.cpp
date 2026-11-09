@@ -43,6 +43,13 @@
 #include "game/mob_table.h"
 #include "game/npc_pool.h"
 #include "game/wander.h"
+// ВЕДЕНИЕ — ЕДИНСТВЕННЫЙ ПИСАТЕЛЬ ГОРИЗОНТАЛЬНОЙ `Velocity` (2026-11-09).
+// Включается ЗДЕСЬ, в преамбуле, а не в каждой сюите: семь `.inl`, обходящих
+// проход прогулки, склеиваются в этот TU ПОСЛЕ преамбулы, и `wander.h` про
+// `guide_step` ничего не знает. Любая из них, утверждающая что-либо о скорости
+// после `wander_step`, обязана позвать проход ведения — иначе она судит
+// значение, записанное ДО вызова.
+#include "game/guide.h"
 #include "game/population.h"
 #include "game/encumbrance.h"
 #include "game/patrol.h"    // PatrolPlan/kPatrolLegMetres — блок наряда в suite_utilai
@@ -1909,9 +1916,35 @@ static void test_wander_moves_the_crowd() {
     // маршрута, ступенька), и без счётчиков тест сообщал бы симптом, заставляя
     // искать причину заново. Ровно та слепота, которой §88 стоил трёх заходов.
     WanderTick sum;
+    // ВЕДЕНИЕ СУММОЙ ТОЖЕ, и это НЕ украшение: с 2026-11-09 прогулка только
+    // ЗАЯВЛЯЕТ цель, а горизонтальную скорость пишет единственный проход
+    // `guide_step` ([game/guide.h]). Без него «большинство прошло» ниже судило
+    // бы скорость, записанную ДО этого цикла, то есть ноль у всех — ровно тот
+    // класс дефекта, на котором дерево уже горело.
+    //
+    // САМОПРОВЕРКА ПРОХОДА СУДИТСЯ ЗДЕСЬ, а не только геометрией. Нулём
+    // обязаны быть ДВА счётчика из четырёх, и это поправка к комментарию
+    // `GuideTick@game/guide.h`, который называет нулём ТРИ: `bogus`
+    // (непонятный байт ранга или вида) и `unresolved` (цель, которую заявитель
+    // объявил исполнимой, а писатель исполнить не смог) — да; `stale` — НЕТ, и
+    // не может быть, пока заявители ходят стаггером. Семь тел из восьми каждый
+    // тик несут заявку прошлого визита, писатель их законно пропускает, и
+    // счётчик это ПОКАЗЫВАЕТ (`Steer@guide.h`: «устаревшая заявка не
+    // исполняется и видна прибору»). Ниже он судится полосой СНИЗУ, а не
+    // нулём.
+    GuideTick guided;
     for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
         const WanderTick w = wander_step(reg, stack.layer(layer).grid(), pool,
                                          zn, layer, t);
+        const GuideTick g = guide_step(reg, zn, layer, t, nullptr);
+        guided.led += g.led;
+        guided.held += g.held;
+        guided.stale += g.stale;
+        guided.bogus += g.bogus;
+        guided.unresolved += g.unresolved;
+        guided.foreign += g.foreign;
+        guided.byRank[static_cast<std::size_t>(SteerRank::Walk)] +=
+            g.byRank[static_cast<std::size_t>(SteerRank::Walk)];
         sum.considered += w.considered;
         sum.walking += w.walking;
         sum.arrived += w.arrived;
@@ -1931,6 +1964,42 @@ static void test_wander_moves_the_crowd() {
                  sum.zoneDistBodies ? static_cast<double>(sum.zoneDistSum) /
                                           static_cast<double>(sum.zoneDistBodies)
                                     : 0.0);
+    std::fprintf(stderr,
+                 "[guide] led %u held %u прогулкой %u | stale %u bogus %u "
+                 "unresolved %u foreign %u\n",
+                 guided.led, guided.held,
+                 guided.byRank[static_cast<std::size_t>(SteerRank::Walk)],
+                 guided.stale, guided.bogus, guided.unresolved, guided.foreign);
+    // ЗАЯВКА ОДНОГО ПРОХОДА — РОВНО ОДНА ЗАПИСЬ. Ведено столько же тел,
+    // сколько прогулка объявила ходячими (`walking`), и держано столько же,
+    // сколько она остановила владеемым нулём; сумма ведений и остановок равна
+    // числу ПОСЕЩЁННЫХ тел, потому что каждый отказ прогулки кончается
+    // заявкой `Hold`, а каждый успех — заявкой `Zone`.
+    //
+    // ЛОВИТ ДВЕ МУТАЦИИ ПРОДА СРАЗУ: (1) прогулка подаёт заявку ДО того, как
+    // шаг найден (`unresolved` перестаёт быть нулём, а `led` разъезжается с
+    // `walking`) — это ровно тот дефект, из-за которого наряд забирал токен и
+    // не вёл, оставляя тело дрейфовать; (2) непонятный байт ранга или вида
+    // читается как заявка (`bogus`).
+    CHECK(guided.bogus == 0u);
+    CHECK(guided.unresolved == 0u);
+    CHECK(guided.foreign == 0u);   // в толпе ни камеры, ни трупов
+    CHECK(guided.led == sum.walking);
+    CHECK(guided.led + guided.held == sum.considered);
+    // ...и ведёт ТОЛЬКО прогулка: сильнее её в этом тесте никого нет, поэтому
+    // любая запись чужим рангом означала бы заявителя, которого здесь не
+    // звали.
+    CHECK(guided.byRank[static_cast<std::size_t>(SteerRank::Walk)] ==
+          guided.led + guided.held);
+    CHECK(guided.led > 0u);        // и проход действительно вёл, а не стоял
+    // УСТАРЕВШАЯ ЗАЯВКА ВИДНА И НЕ ИСПОЛНЕНА, и это СВОЙСТВО, а не шум:
+    // прогулка ходит стаггером (`kWanderPeriod` = 8), значит семь тел из
+    // восьми каждый тик несут заявку прошлого визита, и единственный писатель
+    // обязан их ПРОПУСТИТЬ — тело едет на прошлой скорости, ровно как при
+    // токене, когда проход его не посетил. Ноль здесь означал бы снятый гейт
+    // `s.tick != tick` ([game/guide.h]), то есть толпу, которую везёт решение,
+    // принятое до восьми тиков назад.
+    CHECK(guided.stale > 0u);
 
     // Count how many actually travelled. Not all will: тело, запертое в
     // квартире, тело без зоны (дырка в разбивке — названная неточность гранного
@@ -1963,6 +2032,11 @@ static void test_wander_moves_the_crowd() {
     const std::vector<std::uint8_t> flowBefore = zn.flow.dir;
     const std::vector<RoomId> nbrBefore = zn.graph.nbr;
     wander_step(reg, stack.layer(layer).grid(), pool, zn, layer, 999u);
+    // ВЕДЕНИЕ ТОЖЕ ЧИТАЕТ БЕЙК, И ТЕПЕРЬ ИМЕННО ОНО ЧИТАЕТ ЕГО ДЛЯ ЗАПИСИ.
+    // `steer_to_zone` зовут оба: прогулка — чтобы проверить исполнимость цели,
+    // `guide_step` — чтобы её исполнить. Проверять неизменность только у
+    // заявителя значило бы оставить единственного писателя вне утверждения.
+    guide_step(reg, zn, layer, 999u, nullptr);
     CHECK(zn.part.at == partBefore);
     CHECK(zn.flow.dir == flowBefore);
     CHECK(zn.graph.nbr == nbrBefore);

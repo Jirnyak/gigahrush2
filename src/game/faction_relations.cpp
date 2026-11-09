@@ -5,7 +5,8 @@
 
 #include "core/wrap.h"
 #include "ecs/components.h"
-#include "game/ai.h"            // ai_owns_motion — the single-writer guard for Velocity
+#include "game/ai.h"            // decider_of — чьё это тело (S13.7a)
+#include "game/guide.h"         // заявка ведения: ранг вместо токена
 #include "game/combat.h"        // Dead, apply_damage, entity_health, kMeleeReachSlack
 #include "game/embody.h"        // NpcRef
 #include "game/weapon_table.h"  // MeleeDef, melee_for_item, unarmed_melee
@@ -242,9 +243,12 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         // holder above does — the matrix still turns the crowd on it, so diplomacy is
         // unaffected and only the steering is arbitrated.
         //
-        // Additive today: no AiBrain means false, ai_init has no caller yet, so this is a
-        // null try_get and this pass is bit-for-bit what it was.
-        if (ai_owns_motion(reg, e)) continue;
+        // ЗАЯВЛЕНО КЕМ-ТО СИЛЬНЕЕ ([game/guide.h]) — бегством, нарядом или
+        // делом; прежде это был один из четырёх гейтов токена. Вопрос стоит ДО
+        // лицензии, скана врага, выстрела и замаха СОЗНАТЕЛЬНО: проигравший по
+        // рангу уже после них стрелял бы на бегу, а лицензия (единственный
+        // регулятор темпа вражды) сгорала бы на телах, которые не дерутся.
+        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;
 
         // Identity-hash stagger: a body's slot is a function of its own id, so the
         // crowd spreads evenly across the period with no scheduling state.

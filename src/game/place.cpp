@@ -254,6 +254,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     (void)reg.storage<ErrandPlan>();
     (void)reg.storage<Acting>();
     (void)reg.storage<Dead>();
+    steer_pool_warm(reg);  // четвёртый пул — заявка ведения ([game/guide.h])
 
     // Фрейм гравитации — свойство мира, не тела, и спрашивается ОДНОЙ ДВЕРЬЮ
     // ([world/gravity.h] `steer_frame_of`): здесь стояла дословная копия того
@@ -267,12 +268,15 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     // про тело БЕЗ решения, а это тело решение как раз ИСПОЛНЯЕТ. Не обнулить
     // — и `wander_step`, пропустив тело по токену, оставит ему прежнюю
     // скорость, то есть деяние свершится на ходу.
-    const auto hold_still = [&gf](AiBrain& b, Velocity& vel) {
-        b.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
-        steer_stop(gf, vel);
+    // ДЕРЖАТЬ НА МЕСТЕ — ЭТО ЦЕЛЬ `Hold`, а не отсутствие цели. Прежде это
+    // был забор СВОЕГО токена плюс обнуление скорости своей рукой; довод
+    // остался тот же (S13.2 «замирающий NPC есть дефект» сказано про тело БЕЗ
+    // решения, а это тело решение ИСПОЛНЯЕТ), а второго писателя больше нет.
+    const auto hold_still = [&reg, tick](Entity e) {
+        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());
     };
 
-    auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    auto view = reg.view<const AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -281,14 +285,15 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         // рассыпается при добавлении прохода, и однажды рассыпалась
         // (`ai_equip_step` снимал фонарь из руки игрока, bugs.md Б1).
         if (decider_of(reg, e) != Decider::Resident) continue;
-        AiBrain& brain = view.get<AiBrain>(e);
-        // Тело под ЧУЖИМ токеном — им владеет либо бегство (`ai_step`), либо
-        // патруль. Угроза и наряд старше дела; не вмешиваемся.
+        // ТЕЛО ЗАЯВЛЕНО КЕМ-ТО СИЛЬНЕЕ — это бегство (`Flee`) или наряд
+        // (`Patrol`), ровно те двое, что были токеном `Ai`. Угроза и наряд
+        // старше дела; не вмешиваемся.
         //
-        // Сравнение именно с `Ai`, а не «не Wander»: `Errand` — СВОЙ токен
-        // этого прохода (ведение или деяние), и принять его за угрозу значило
-        // бы рвать собственное деяние каждый тик (S24, довод у enum'а).
-        if (brain.motion == static_cast<std::uint8_t>(MotionOwner::Ai)) {
+        // ВОПРОС ЗАДАЁТСЯ ДО ВСЕЙ РАБОТЫ, а не перед записью скорости, и это
+        // не вкус: ниже проход ОТКРЫВАЕТ ОКНО ДЕЯНИЯ и ИЗЫМАЕТ предмет из
+        // ящика. Заявитель, проигравший по рангу уже после этого, ел бы на
+        // ходу — тот самый дефект, под который и построен `hold_still`.
+        if (steer_claimed_by_stronger(reg, e, SteerRank::Errand, tick)) {
             // ...но открытое ДЕЯНИЕ при этом рвётся (S24, закон 5): иначе
             // тело доело бы на бегу — окно закрылось бы само и уронило
             // эффект, пока тело спасается. Боевое окно эта причина не рвёт:
@@ -371,7 +376,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             // и уронило эффект по дороге.
             if (serve_busy(ServeCtx{reg, pool, fr, bus, tick}, e, id, tr.pos,
                            layer, srv)) {
-                hold_still(brain, view.get<Velocity>(e));
+                hold_still(e);
                 ++out.serving;
                 continue;
             }
@@ -401,7 +406,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             if (plan.room == kNoRoom) {
                 if (serve_begin(ServeCtx{reg, pool, fr, bus, tick}, e, id,
                                 tr.pos, srv)) {
-                    hold_still(brain, view.get<Velocity>(e));
+                    hold_still(e);
                     ++out.serving;
                     continue;
                 }
@@ -495,18 +500,20 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         // конца тика этот проход — единственный писатель горизонтальной
         // `Velocity` этого тела.
         //
-        // Токен СВОЙ (`Errand`), а не занятый у бегства: дело — это ходьба, а
-        // не паника (S24). Разница есть у этого прохода, который по `Ai`
-        // узнаёт УГРОЗУ; у прогулки и вражды guard спрашивает ЯВНЫЙ СПИСОК
-        // владельцев (`motion_owned`), и `Errand` в нём стоит.
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Errand);
+        // Заявка подаётся ТОЛЬКО когда шаг найден, и порядок здесь не
+        // вкусовой: заявка на недостижимую цель отняла бы тело у прогулки,
+        // которая его ещё провела бы, — то есть тело ЗАМЕРЛО БЫ, а замирающий
+        // NPC есть дефект (S13.2). Поймано на себе при посадке проверки
+        // проходимости: `continue` стоял после забора токена.
         ++out.walking;
         // ДЕЛО — ЭТО ХОДЬБА, а не бегство: шаг в точности равен шагу вандера
         // (один дом числа — `kWalkSpeedMps@game/guide.h`), поэтому тело,
         // перешедшее с прогулки на дело, меняет НАПРАВЛЕНИЕ, а не походку.
         // Множитель паники остаётся читаемым ровно потому, что обычный шаг
-        // обычен.
-        steer_write(gf, view.get<Velocity>(e), st.dir, kErrandSpeed);
+        // обычен. Цель — ЗОНА: шаг по ней найдёт единственный писатель той же
+        // дверью, которой проход только что проверил исполнимость.
+        steer_claim(reg, e, tick, SteerRank::Errand,
+                    target_zone(plan.room, kErrandSpeed));
     }
     return out;
 }

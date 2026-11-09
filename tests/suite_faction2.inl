@@ -340,6 +340,91 @@ static void test_faction2_all() {
         CHECK(reg.get<Velocity>(wld).v.z == 0.0f);   // player is straight ahead
     }
 
+    // ---- 4в. АРБИТРАЖ: ТЕЛО, ЗАЯВЛЕННОЕ СИЛЬНЕЕ, НЕ СТАНОВИТСЯ АГРЕССОРОМ --
+    //
+    // ПОЧЕМУ ЭТОГО БЛОКА НЕ БЫЛО И ПОЧЕМУ ОН ОБЯЗАН БЫТЬ. `faction_feud_step`
+    // пишет `Velocity` сам и потому является ПИРОМ ходьбы под общим правилом
+    // одного писателя; гейт у него стоял с 2026-07-29 (`ai_owns_motion`), и
+    // `ai.h` называл его «ОДНИМ живым писателем вне токена». Судил этот гейт —
+    // НИКТО: `faction_feud_step` зовётся из тестов ровно здесь, а здесь токен
+    // не ставился ни разу. То есть свойство существовало в коде и в прозе и не
+    // существовало в дереве утверждений.
+    //
+    // 2026-11-09 предмет гейта сменился: токена больше нет, вопрос задаёт
+    // `steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)`
+    // ([game/guide.h]). Байт умер — СВОЙСТВО осталось, и теперь оно судимо:
+    // заявка РАНГОМ ВЫШЕ `Feud` (дело, наряд, бегство) отнимает тело у вражды
+    // ЦЕЛИКОМ, а заявка рангом ниже (прогулка, погоня) — не отнимает ничего.
+    //
+    // СУДЯТСЯ ОБЕ ПОЛОВИНЫ ОТКАЗА, и это важнее одной: вопрос стоит ДО
+    // лицензии, скана врага, выстрела и замаха, поэтому проигравший по рангу не
+    // только не идёт — он и не бьёт, и не жжёт лицензию. Тело поставлено В
+    // ПРЕДЕЛ ЗАМАХА (1 м < 1.9 м), чтобы «не ударил» было настоящим
+    // утверждением, а не следствием дистанции.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        const FactionRelations base = kBaseFactionMatrix;
+
+        const vec3 home{40.0f, 40.0f, 4.0f};
+        const NpcId plyId = pool.spawn();
+        pool.faction(plyId) = static_cast<std::uint16_t>(Faction::Citizens);
+        pool.hp(plyId) = 100;
+        pool.max_hp(plyId) = 100;
+        Entity player = embody_as_player(reg, pool, plyId, kLayer);
+        reg.get<Transform>(player).pos = home;
+        CHECK(base.hostile(kWld, kPly));
+
+        NpcId wldId = 0;
+        Entity wld = make_body(reg, pool, Faction::Wild,
+                               vec3{home.x + 1.0f, home.y, home.z}, 100, wldId);
+        const std::uint32_t key = static_cast<std::uint32_t>(entt::to_integral(wld));
+        const std::uint64_t open = first_licensed_window(key);
+        CHECK(open != 0);
+        // Прогрев пула заявок ДО первого обхода вида — снятие УБ, а не
+        // удобство: рождение первого элемента нового рода растит контейнер
+        // пулов реестра ([game/guide.h] `steer_pool_warm`).
+        steer_pool_warm(reg);
+        // РАНГИ СРАВНИМЫ В НУЖНУЮ СТОРОНУ — пин на словарь, а не на вкус: если
+        // порядок перечисления когда-нибудь переставят, ниже поедет смысл обеих
+        // половин блока, и поедет молча.
+        static_assert(SteerRank::Errand > SteerRank::Feud,
+                      "дело сильнее вражды — иначе половина (a) судит не то");
+        static_assert(SteerRank::Chase < SteerRank::Feud,
+                      "погоня слабее вражды — иначе контроль (b) судит не то");
+
+        // (a) ЗАЯВКА СИЛЬНЕЕ: ни удара, ни единой записи скорости. Сентинель
+        // ненулевой, чтобы «вражда не писала» отличалось от «написала ноль» —
+        // в пределе замаха она как раз и пишет ноль, и без сентинеля обе
+        // ветки выглядели бы одинаково.
+        reg.get<Velocity>(wld).v = vec3{0.25f, 0.0f, 0.0f};
+        std::uint32_t blockedHits = 0;
+        for (std::uint64_t t = open; t < open + 400u; ++t) {
+            CHECK(steer_claim(reg, wld, t, SteerRank::Errand, target_hold()));
+            blockedHits += faction_feud_step(reg, pool, base, kLayer, t);
+        }
+        CHECK(blockedHits == 0u);
+        CHECK(pool.hp(plyId) == 100);
+        CHECK(reg.get<Velocity>(wld).v.x == 0.25f);
+
+        // (b) КОНТРОЛЬ ТОЙ ЖЕ ФОРМЫ, что и везде в этом файле: заявка СЛАБЕЕ
+        // вражды тело не отнимает, и то же самое тело в том же месте за те же
+        // 400 тиков дерётся. Без этой половины блок (a) прошёл бы и для вражды,
+        // выключенной целиком.
+        std::uint32_t freeHits = 0;
+        for (std::uint64_t t = open; t < open + 400u; ++t) {
+            CHECK(steer_claim(reg, wld, t, SteerRank::Chase, target_hold()));
+            freeHits += faction_feud_step(reg, pool, base, kLayer, t);
+        }
+        CHECK(freeHits > 0u);
+        CHECK(pool.hp(plyId) < 100);
+        // Стоит и бьёт, а не толкает: в пределе замаха скорость обнуляется —
+        // то есть вражда до записи ДОШЛА, и отказ в (a) был отказом, а не
+        // отсутствием повода.
+        CHECK(reg.get<Velocity>(wld).v.x == 0.0f);
+    }
+
     // ---- 5. ...but a feud can never kill a CROWD body ------------------------
     //
     // This is the rule that makes the feature safe to switch on at all: nothing in

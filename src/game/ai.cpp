@@ -503,7 +503,8 @@ void apply_recall(const MemoryRecall& r, std::uint16_t faction, Perception& p) {
 }
 
 // --------------------------------------------------------------------------
-// ai_init / ai_release — attaching and releasing the arbitration token.
+// ai_init — attaching the brain. (`ai_release` умер вместе с токеном:
+// заявка ведения живёт один тик, гасить нечего — [game/ai.h].)
 // --------------------------------------------------------------------------
 std::uint32_t ai_init(Registry& reg, LayerId layer) {
     // Two phases, and it is a crash fix rather than a style choice, the same one
@@ -528,19 +529,6 @@ std::uint32_t ai_init(Registry& reg, LayerId layer) {
     return static_cast<std::uint32_t>(fresh.size());
 }
 
-std::uint32_t ai_release(Registry& reg, LayerId layer) {
-    std::uint32_t n = 0;
-    auto view = reg.view<AiBrain, const Transform>();
-    for (auto e : view) {
-        if (view.get<const Transform>(e).layer != layer) continue;
-        AiBrain& b = view.get<AiBrain>(e);
-        if (b.motion == static_cast<std::uint8_t>(MotionOwner::Wander)) continue;
-        b.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-        ++n;
-    }
-    return n;
-}
-
 // --------------------------------------------------------------------------
 // ai_step — arbitration first, steering second. See ai.h for the contract, and
 // the file header for the ownership rule this enforces.
@@ -552,9 +540,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                std::uint64_t tick) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
-    // one branch, and it means nothing can be left half-arbitrated: the token is
-    // only ever written below. Clearing `enabled` on a running floor needs
-    // `ai_release` — see ai.h.
+    // one branch, and выключить ИИ на живом этаже теперь безопасно само:
+    // заявка живёт один тик, поэтому невыставленная заявка есть «ведёт
+    // прогулка», а не «тело стоит навсегда» (прежде это требовало
+    // `ai_release` — [game/ai.h], могила).
     if (!cfg.enabled) return out;
 
     // Null store OR the config axis off => bit-for-bit the pre-memory pass: no
@@ -598,7 +587,10 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // One allocation-free sweep over the packed columns. Nothing here emplaces or
     // destroys a component, so the view cannot be invalidated mid-iteration —
     // that hazard lives in `ai_init`, by construction rather than by comment.
-    auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    // Пул заявок прогрет ДО открытия вида (снятие УБ, [game/guide.h]).
+    steer_pool_warm(reg);
+    // СКОРОСТИ В ВИДЕ НЕТ: бегство заявляет ПЕЛЕНГ, пишет `guide_step`.
+    auto view = reg.view<AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -608,15 +600,12 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // Scope re-checked every tick, not just at attach time. `ai_init` refuses
         // to give the camera holder a brain, but possession hands CameraTag to a
         // resident that has been running this brain for minutes — the exact shape
-        // of the bug wander.cpp documents at its own CameraTag check. Handing the
-        // token back is not optional: a possessed body left holding
-        // MotionOwner::Ai would be skipped by wander_step AND steered by
-        // controller_step, so it would work by luck until the AI wrote over the
-        // player's input.
-        if (decider_of(reg, e) != Decider::Resident) {
-            brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
-            continue;
-        }
+        // of the bug wander.cpp documents at its own CameraTag check. Отдавать
+        // токен назад больше НЕ НУЖНО (его нет), и это тот самый класс,
+        // который заявка-на-тик снимает по построению: вселённое тело просто
+        // не получает заявки, а `guide_step` вторым рубежом отказывается
+        // писать в тело человека вовсе.
+        if (decider_of(reg, e) != Decider::Resident) continue;
 
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!pool.valid(id)) continue;
@@ -769,8 +758,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             // Memory is the last FALLBACK — a field reading is now, a trace is
             // then. This branch is what stops the body handing itself back to
             // wander the instant the diffusion field evaporates, and it is the only
-            // new way a body can take MotionOwner::Ai. `IntentFlee` is still the
-            // ONLY owning intent, so the single-writer story in [ai.h] is unchanged.
+            // new way a body can be claimed. `IntentFlee` is still the ONLY
+            // claiming intent of this pass.
             if (!owned && haveRecall && recall.haveAway) {
                 // Unit length from ai_recall, but the projection can shorten it
                 // (the trace is (x, y) data — the caveat above), so re-normalize
@@ -796,16 +785,17 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                            : static_cast<std::uint8_t>(IntentWander)];
 
         if (!owned) {
-            // Delegate. wander_step steers this body, exactly as it does today.
-            brain.motion = static_cast<std::uint8_t>(MotionOwner::Wander);
+            // ЗАЯВКИ НЕТ — тело достаётся следующему по слабости заявителю
+            // (наряд, дело, прогулка), ровно как доставалось при токене
+            // `Wander`. Разница в том, что теперь «не заявил» есть ОТСУТСТВИЕ
+            // записи, а не её особое значение: байт, который можно забыть
+            // выставить, умер вместе с токеном.
             ++out.wanderOwned;
             continue;
         }
 
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
         ++out.aiOwned;
         if (viaMemory) ++out.memoryFled;
-        Velocity& vel = view.get<Velocity>(e);
         // Panic reads as panic only while the ordinary pace is ordinary: a body
         // running from a gradient outpaces one walking to the kitchen by 60%.
         // A SETTLED body has `dir` at zero, so this writes a real stop — owning the
@@ -815,21 +805,23 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                              brain.currentIntent == IntentSafety)
                                 ? kFleeSpeed
                                 : kErrandSpeed;
-        // The component ALONG gravity is intentionally untouched — physics_step
-        // owns it (pull and jump), whatever axis it happens to be. Same rule as
-        // wander_step: this is locomotion, not flight. Одна форма записи на всё
-        // ведение — [game/guide.h] `steer_write`.
-        steer_write(gf, vel, dir, speed);
+        // БЕГСТВО — ЕДИНСТВЕННАЯ ЦЕЛЬ-ПОЛЕ (CANON S13.3): у неё нет конечной
+        // точки, она работает, пока значение не уйдёт за порог. Для движения
+        // это ПЕЛЕНГ (`Dir`), и ось гравитации останется нетронутой у
+        // единственного писателя — это локомоция, а не полёт.
+        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));
     }
     return out;
 }
 
 PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
-                          float dt, const GravityField* gravity) {
+                          const GravityField* gravity, std::uint64_t tick) {
     PatrolTick out;
-    // Velocity is a rate and physics integrates it; dt would only matter if this
-    // step accumulated anything, and its whole design is that it does not.
-    (void)dt;
+    // `dt` СНЯТ С ПОДПИСИ 2026-11-09: он был `(void)dt` с доводом «скорость
+    // есть темп, интегрирует физика» — то есть параметр без читателя. На его
+    // место встал `tick`, у которого читатель есть: заявка ведения помечается
+    // тиком ([game/guide.h]). Подпись поменяла ТИП, а не только имя, поэтому
+    // ни один вызывающий не мог переехать молча.
     // The same empty-bake rule wander_step lives by: while the async bake is in
     // flight the arrays are empty, and indexing them would be UB, not a no-op.
     // Patrol bodies simply wander until the floor's zone nav lands.
@@ -840,7 +832,8 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
     // vector.
     const GravityFrame gf = steer_frame_of(gravity);
 
-    auto view = reg.view<AiBrain, const NpcRef, const Transform, Velocity>();
+    steer_pool_warm(reg);
+    auto view = reg.view<AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
@@ -863,11 +856,11 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         // OTHER intent's steering from a stale read — leave it alone. The claim
         // below is what makes wander_step skip patrol bodies this tick.
         //
-        // ВЛАДЕЛЬЦЫ ПЕРЕЧИСЛЕНЫ одной дверью `motion_owned` (2026-11-08): их
-        // три, и тело, занятое ДЕЛОМ или деянием нужды
-        // (`MotionOwner::Errand`), наряд обязан пропускать по той же причине,
-        // по которой пропускает бегство.
-        if (motion_owned(brain.motion)) continue;
+        // ЗАЯВЛЕНО КЕМ-ТО СИЛЬНЕЕ — то есть бегством: больше наряда нет
+        // никого. Прежде здесь стоял ЯВНЫЙ СПИСОК ВЛАДЕЛЬЦЕВ ТОКЕНА
+        // (`motion_owned`), в который тело, занятое ДЕЛОМ, приходилось
+        // вписывать руками; ранг выражает это порядком, а не списком.
+        if (steer_claimed_by_stronger(reg, e, SteerRank::Patrol, tick)) continue;
         // Считается ПОСЛЕ отказа по токену, дословно как у `place_errand_step`:
         // знаменатель обязан быть «тел, которых проход рассматривал», иначе
         // доля прибытий поедет от чужого арбитража, а не от навигации.
@@ -998,36 +991,31 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
                 ++out.zoneDistBodies;
             }
         }
-        Velocity& vel = view.get<Velocity>(e);
-        // CLAIM. From here this pass is the body's one writer this tick:
-        // wander_step's ai_owns_motion guard is what turns the claim into the
-        // single-writer rule instead of a comment.
-        //
-        // ДЕФЕКТ ПОРЯДКА, НАЗВАННЫЙ ВСЛУХ И ОСТАВЛЕННЫЙ БИТ-В-БИТ (2026-11-09):
-        // токен забирается ЗДЕСЬ, а ступенька отказывает НИЖЕ с `continue` без
-        // записи скорости — то есть тело под токеном не ведётся никем и
-        // ДРЕЙФУЕТ на прошлой скорости, ровно тот дефект, от которого
-        // `place_errand_step` держит правило «направление считается ДО забора»
-        // ([game/place.cpp]). Комментарий ниже утверждал обратное («токен не
-        // забран») и врал на десять строк. Не правлю здесь: эта правка меняет
-        // поведение, а токен умирает следующим шагом ЦЕЛИКОМ — тогда дефект
-        // исчезнет по построению, а не точечной заплатой.
-        brain.motion = static_cast<std::uint8_t>(MotionOwner::Ai);
-
         if (st.fail == SteerFail::StepUp) {
             // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
             // ступенька и есть выход из зоны. Тангенциального пеленга у него
-            // ровно ноль, вести им нечем. Слепой прямой на цель здесь нет
+            // ровно ноль, вести им нечем — ЗАЯВКИ НЕТ, тело достаётся
+            // прогулке, а цель ОСТАЁТСЯ. Слепой прямой на цель здесь нет
             // сознательно: ровно она была остатком якоря у решётки и стоила
             // §88 нуля прибытий. Дословно правило `place_errand_step`.
+            //
+            // ЗДЕСЬ ЖИЛ ДЕФЕКТ, И ОН ИСЧЕЗ ПО ПОСТРОЕНИЮ: токен забирался
+            // ДЕСЯТЬЮ СТРОКАМИ ВЫШЕ, то есть тело под токеном не получало
+            // скорости ни от кого и ДРЕЙФОВАЛО на прошлой, а комментарий
+            // утверждал «токен не забран». Заявка подаётся только после того,
+            // как шаг найден, поэтому заявить и не повести теперь нельзя.
             ++out.idle;
             continue;
         }
         // Patrol WALKS: kErrandSpeed, not a bonus — the kFeudWalkSpeed argument
         // verbatim (an authored speed edge would let duty outrun the crowd for
-        // no stated reason). При `NoBearing` направление ровно ноль, то есть
-        // это ВЛАДЕЕМЫЙ НОЛЬ — остановка, а не толчок.
-        steer_write(gf, vel, st.dir, kErrandSpeed);
+        // no stated reason). При `NoBearing` пеленг ровно ноль, и ВЛАДЕЕМЫЙ
+        // НОЛЬ (остановка, а не толчок) напишет единственный писатель: цель
+        // `Dir` с нулевым вектором он читает как `Hold`.
+        steer_claim(reg, e, tick, SteerRank::Patrol,
+                    st.fail == SteerFail::NoBearing
+                        ? target_hold()
+                        : target_zone(plan.zoneTo, kErrandSpeed));
     }
     return out;
 }

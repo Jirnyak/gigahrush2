@@ -56,6 +56,7 @@ enum class SteerLink : std::uint8_t {
     Patrol,    // ai_patrol_step
     Errand,    // place_errand_step (ход по делам + «держать на месте»)
     Walk,      // wander_step (прогулка + погоня + заморозка взглядом)
+    Guide,     // guide_step — ОДИН проход ведения (единственный писатель)
     Noise,     // investigate_step
     Feud,      // faction_feud_step
     Count
@@ -72,8 +73,8 @@ struct SteerLinkRow {
 inline constexpr SteerLinkRow kSteerLinkRows[] = {
     {SteerLink::Flee, "бегство"},  {SteerLink::Player, "игрок"},
     {SteerLink::Patrol, "наряд"},  {SteerLink::Errand, "дело"},
-    {SteerLink::Walk, "прогулка"}, {SteerLink::Noise, "слух"},
-    {SteerLink::Feud, "вражда"}};
+    {SteerLink::Walk, "прогулка"}, {SteerLink::Guide, "ВЕДЕНИЕ"},
+    {SteerLink::Noise, "слух"},    {SteerLink::Feud, "вражда"}};
 GIGA_TABLE_BY_ENUM(kSteerLinkRows, &SteerLinkRow::link, kSteerLinkCount);
 
 // Часовой — пара несовместимых со скоростью чисел, уникальная на звено.

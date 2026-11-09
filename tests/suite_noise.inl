@@ -244,6 +244,30 @@ static void test_noise_weapon_profiles() {
 // different slots, a mob is claimed by both systems on alternating ticks and vibrates
 // between a target and a sound. Asserted rather than trusted because the hash is
 // duplicated across the two files on purpose ([hunt.cpp]).
+//
+// ЧТО ЗДЕСЬ БЫЛО НЕ ТАК ДО 2026-11-09, дословно. Тест назывался «общий стаггер
+// прогулки и слуха», а проверял `visits == 1` НА ОДНОМ ТЕЛЕ — то есть что слух
+// ходит стаггером с периодом `kWanderPeriod`. Это половина утверждения, и
+// ровно НЕ та половина: про прогулку он не спрашивал НИЧЕГО, поэтому соль хеша
+// в `investigate.cpp` можно было сменить на любую (`hash_u32(id ^ k)`,
+// `hash_u32(id + 1)`, да просто `id % kWanderPeriod`) — слоты разъехались бы,
+// моб стал бы вибрировать между целью и шумом, а тест остался бы ЗЕЛЁНЫМ:
+// посещение всё так же одно в периоде, просто в другом тике. Утверждение
+// доказывало ПРАВИЛО и не доказывало ПРОВОДКУ.
+//
+// ТЕПЕРЬ СУДИТСЯ ТОЖДЕСТВО МНОЖЕСТВ, ТИК ЗА ТИКОМ: множество тел, которых в
+// тике посетил `investigate_step`, обязано совпадать с множеством, которых в
+// том же тике посетил `wander_step` — на всём периоде и на 24 телах (втрое
+// больше, чем слотов, чтобы пустой слот был неожиданностью, а не нормой).
+// Наблюдаются оба множества ПРЯМО, а не через счётчики: прогулка оставляет
+// ЗАЯВКУ `Steer` этого тика ([game/guide.h]) — это и есть «я тебя посетил», —
+// а слух пишет скорость сам, поэтому его посещение видно сентинелем.
+//
+// ПОЧЕМУ `guide_step` ЗДЕСЬ НЕ ЗВАН, и это не упущение: предмет блока — ЧЕЙ
+// СЛОТ, а не какая скорость. Писатель скорости погасил бы плоскость ходьбы
+// владеемым нулём и СТЁР БЫ сентинель, то есть уничтожил бы наблюдение слуха.
+// Скорость как таковую судят `test_hunt_precedence_and_deaf_kinds` и
+// гунсхот-прогон ниже — оба зовут проход ведения.
 static void test_hunt_shares_the_wander_stagger() {
     Registry reg;
     NoiseField f;
@@ -271,6 +295,143 @@ static void test_hunt_shares_the_wander_stagger() {
     for (std::uint64_t t = 0; t < kWanderPeriod; ++t)
         if (investigate_step(reg, f, pool, 0, t) == 1) ++visits;
     CHECK(visits == 1);
+
+    // ---- ТОЖДЕСТВО СЛОТОВ: тело за телом, тик за тиком ---------------------
+    {
+        // 24 тела — ВТРОЕ БОЛЬШЕ, ЧЕМ СЛОТОВ. Шестнадцати хватило бы, но при
+        // троекратном запасе пустой слот становится неожиданностью, а пустой
+        // слот делает тождество множеств в своём тике ТРИВИАЛЬНЫМ (∅ == ∅) —
+        // то есть оставляет дыру той же формы, что и прежний `visits == 1`.
+        // Число выведено из периода, а не выбрано: период переедет — переедет и
+        // оно (static_assert ниже рухнет первым, если переедет только одно).
+        constexpr int kHerd = 24;
+        static_assert(kHerd >= 16, "задание: не меньше 16 тел");
+        static_assert(kHerd >= 3 * static_cast<int>(kWanderPeriod),
+                      "втрое больше, чем слотов — чтобы пустой слот был "
+                      "неожиданностью, а не нормой");
+
+        Registry herd;
+        NoiseField hf;
+
+        // ОДИН ШУМ, ГРОМКИЙ И ДАЛЁКИЙ. Радиус в кап (48 м × 1.12 = 53.8 м
+        // слышимости) — слышат ВСЕ, иначе «не посещён» слилось бы с «не
+        // услышал». И ни одно тело не стоит внутри радиуса прибытия (1.5 м):
+        // прибывший слух пишет НОЛЬ, а ноль — законное значение скорости,
+        // которое от сентинеля отличается, но от «погасили» нет.
+        NoiseProfile hprof;
+        hprof.radius = kNoiseRadiusCap;
+        hprof.ttlMs = 600000;      // длиннее прогона: свип тут ничего не решает
+        hprof.severity = 4;
+        hprof.source = NoiseSource::WeaponFire;
+        CHECK(noise_publish(hf, 0, vec3{20.0f, 40.0f, 2.0f}, hprof, 0) != 0);
+
+        std::vector<Entity> bodies;
+        for (int i = 0; i < kHerd; ++i) {
+            Entity e = herd.create();
+            // Кучка вдоль +x: от шума 20..31.5 м — внутри слышимости и вне
+            // радиуса прибытия у КАЖДОГО.
+            herd.emplace<Transform>(
+                e, Transform{vec3{40.0f + 0.5f * static_cast<float>(i), 40.0f,
+                                  2.0f},
+                             0});
+            herd.emplace<Velocity>(e, Velocity{});
+            herd.emplace<MobRef>(
+                e, MobRef{static_cast<std::uint8_t>(MobKind::Zombie), 1, 40, 40});
+            bodies.push_back(e);
+        }
+        // Ни камеры, ни жителей: зрение не перебивает слух (`haveVictim` ложь у
+        // обоих проходов), а добычи для погони нет вовсе (`nearest_prey` ходит
+        // по `NpcRef`, которого тут ни у кого нет). Значит каждое ПОСЕЩЁННОЕ
+        // прогулкой тело уходит в ветку ходьбы и оставляет заявку, а каждое
+        // посещённое слухом — слышит.
+        //
+        // Нав ВЫРОЖДЕН (`arm_zones_one`: зона есть, идти некуда) — тот же
+        // довод, что в `suite_behaviours.inl`: тело не проваливается в `offnav`,
+        // доходит до решения и кончает владеемым нулём, то есть заявку
+        // оставляет ВСЕГДА.
+        ZoneNav hzn;
+        zone_fixture::arm_zones_one(hzn);
+        CHECK(hzn.built());
+        // Сетка нужна прогулке ровно под пробу «стена рядом», а она закрыта
+        // гейтом `wall_query_needed` для 5 кинд из 69 — Zombie не из них, так
+        // что ни одного чтения клетки здесь не будет. Своя, а не чужая: 130 МиБ
+        // живут ровно внутри этого блока и освобождаются на выходе — ценой
+        // в пике они не складываются ни с `World` гунсхот-прогона, ни друг с
+        // другом.
+        MacroGrid hgrid;
+        CHECK(!wall_query_needed(mob_def(MobKind::Zombie).aiFlags,
+                                 static_cast<MobBehaviour>(
+                                     mob_def(MobKind::Zombie).behaviour)));
+        CHECK(wander_init(herd, 0) == static_cast<std::uint32_t>(kHerd));
+
+        // Сентинель, который слух не может записать: его скорость есть
+        // табличная (клетки/с × 2 м — единицы метров в секунду), нормированная
+        // на единицу длины, так что 97 м/с ни по одной оси не получается.
+        constexpr float kSentinel = 97.0f;
+        std::vector<int> walkVisits(kHerd, 0), hearVisits(kHerd, 0);
+        std::size_t occupiedSlots = 0;
+        for (std::uint64_t t = 0; t < kWanderPeriod; ++t) {
+            for (Entity e : bodies)
+                herd.get<Velocity>(e).v = vec3{kSentinel, kSentinel, 0.0f};
+
+            // ПОРЯДОК КАДРА: прогулка заявляет, слух пишет. Тот же, что в
+            // `main.cpp`; на тождество слотов он не влияет, и именно поэтому
+            // стоит дословно как в игре, а не «как удобнее наблюдать».
+            wander_step(herd, hgrid, pool, hzn, 0, t);
+            std::vector<std::uint8_t> walked(kHerd, 0u);
+            std::size_t nWalk = 0;
+            for (int i = 0; i < kHerd; ++i) {
+                const Steer* s = herd.try_get<Steer>(bodies[static_cast<std::size_t>(i)]);
+                // ЗАЯВКА ЭТОГО ТИКА — и есть «прогулка меня посетила».
+                // `steer_claim_live` отбрасывает заявку прошлого визита, то
+                // есть ровно то, что отбрасывает единственный писатель.
+                if (s != nullptr && steer_claim_live(*s, t)) {
+                    walked[static_cast<std::size_t>(i)] = 1u;
+                    ++nWalk;
+                    ++walkVisits[static_cast<std::size_t>(i)];
+                }
+            }
+
+            const std::uint32_t heardNow = investigate_step(herd, hf, pool, 0, t);
+            std::vector<std::uint8_t> heard(kHerd, 0u);
+            std::size_t nHeard = 0;
+            for (int i = 0; i < kHerd; ++i) {
+                const vec3& v =
+                    herd.get<const Velocity>(bodies[static_cast<std::size_t>(i)]).v;
+                if (v.x != kSentinel || v.y != kSentinel) {
+                    heard[static_cast<std::size_t>(i)] = 1u;
+                    ++nHeard;
+                    ++hearVisits[static_cast<std::size_t>(i)];
+                }
+            }
+            // Счётчик прохода и наблюдение по телам обязаны сойтись — иначе
+            // сентинель лжёт и всё ниже измеряет не то.
+            CHECK(nHeard == static_cast<std::size_t>(heardNow));
+            // ТО САМОЕ УТВЕРЖДЕНИЕ. Сменишь соль слуха — множества разойдутся
+            // в ПЕРВОМ ЖЕ непустом слоте.
+            CHECK(walked == heard);
+            if (nWalk != 0) ++occupiedSlots;
+        }
+        // Каждое тело посещено РОВНО ОДИН раз за период каждым из двух
+        // проходов: это стаггер как таковой, и без него тождество множеств
+        // прошло бы для двух проходов, посещающих всех каждый тик.
+        for (int i = 0; i < kHerd; ++i) {
+            CHECK(walkVisits[static_cast<std::size_t>(i)] == 1);
+            CHECK(hearVisits[static_cast<std::size_t>(i)] == 1);
+        }
+        std::printf("noise: стаггер — %d тел, занятых слотов %zu из %u, "
+                    "множества слуха и прогулки совпали во всех\n",
+                    kHerd, occupiedSlots,
+                    static_cast<unsigned>(kWanderPeriod));
+        // СТАГГЕР ВООБЩЕ РАЗНОСИТ ТОЛПУ. Это НЕ то же, что тождество выше:
+        // хеш, выродившийся в константу (или `% 1`), посетил бы все 24 тела в
+        // ОДНОМ тике, каждое по-прежнему ровно раз, оба прохода согласно — и
+        // всё выше прошло бы, пока цена прохода выросла бы в восемь раз. Полоса
+        // здесь нижняя и грубая (вырождение, а не распределение), потому что
+        // распределение хеша — не предмет этого теста; само число печатается
+        // строкой выше и читается глазом.
+        CHECK(occupiedSlots > 1u);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +596,21 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         for (Run* r : {&loud, &silent}) {
             const bool audible = (r == &loud);
             noise_step(r->noise, dtMs);
+            // ПОРЯДОК КАДРА ДОСЛОВНО КАК В `main.cpp`: прогулка ЗАЯВЛЯЕТ цель,
+            // `guide_step` пишет скорость, и ТОЛЬКО ПОТОМ слух перебивает её
+            // своей (2026-11-09). `investigate_step` на заявки не переведён —
+            // он пишет `Velocity` сам и стоит НИЖЕ писателя, поэтому его
+            // приоритет над ходьбой держится порядком вызовов ровно так, как
+            // держался до перевода ([app/main.cpp], блок ведения).
+            //
+            // Без `guide_step` этот прогон остался бы зелёным и измерил бы не
+            // то: на вырожденном наве прогулка заявляет `Hold`, то есть ГАСИТ
+            // прошлую скорость моба на каждом его стаггер-визите — ровно то, что
+            // делает «всё, что движет моба, есть звук» истинным. Без писателя
+            // моб катился бы на скорости прошлого шума между визитами слуха, и
+            // пройденный путь перестал бы быть путём К ВЫСТРЕЛУ.
             wander_step(r->reg, stack.layer(0).grid(), r->pool, zn, 0, t);
+            guide_step(r->reg, zn, 0, t, nullptr);
             const std::uint32_t heard = investigate_step(r->reg, r->noise, r->pool, 0, t);
             if (audible) soundSteers += heard;
             physics_step(r->reg, stack, dt);

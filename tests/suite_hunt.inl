@@ -384,13 +384,47 @@ static void test_hunt_all() {
         const std::uint64_t kTenMinutes = 10u * kMinute;
         const std::uint32_t startAlive = pool.alive();
         std::uint32_t deaths = 0;
+        // Σ по проходу ведения — прибор «толпа правда ходила», а не «цикл
+        // отработал». `bogus`/`unresolved` обязаны быть нулём: первый — байт
+        // ранга/вида, которого нет в словаре, второй — заявленная зона без шага
+        // (заявитель обязан был проверить исполнимость той же дверью).
+        std::uint64_t guideLed = 0;
+        std::uint32_t guideBogus = 0, guideUnresolved = 0;
+        // СТАРТОВЫЕ МЕСТА ТЕЛ — чтобы «встреча» была ПРОВЕРЕНА, а не принята на
+        // слово. Снимаются до прогона и по тем же телам, по которым считаются
+        // смерти.
+        std::vector<Entity> walkers;
+        std::vector<vec3> walkStart;
+        for (auto e : reg.view<const WanderTarget, const Transform>()) {
+            if (reg.get<const Transform>(e).layer != layer) continue;
+            walkers.push_back(e);
+            walkStart.push_back(reg.get<const Transform>(e).pos);
+        }
+        CHECK(!walkers.empty());
         std::uint32_t perMinute[10] = {};
         std::uint64_t hunterSum = 0;
         std::uint32_t hunterSamples = 0;
         std::uint32_t peakHunters = 0;
 
+        // ВЕДЕНИЕ В ТОМ ЖЕ ТИКЕ, И БЕЗ НЕГО ЭТОТ ЗАМЕР — ПУСТОЙ (2026-11-09).
+        // Прогулка только ЗАЯВЛЯЕТ цель; горизонтальную скорость пишет один
+        // проход `guide_step` ([game/guide.h]). Предмет этого блока —
+        // ХИЩНИЧЕСТВО, то есть то, как монстры и жители ВСТРЕЧАЮТСЯ, а встреча
+        // есть следствие ходьбы. Без писателя за десять минут не сдвинулось бы
+        // НИ ОДНО тело, и полоса «трупы вообще есть» (`deaths >= 1`) сошлась бы
+        // на падениях сквозь проломы — то есть блок остался бы зелёным, мерив
+        // неподвижный этаж. Это и есть мутация, которую ловит `walkMoved` ниже:
+        // он отличает «толпа ходит» от «толпа стоит, а трупы падают».
+        //
+        // `nullptr` гравитацией — ровно то, с чем зовётся `wander_step` строкой
+        // выше: `steer_frame_of(nullptr)` даёт NegZ побитово, и этаж 15 под ним.
+        // Два разных режима у заявителя и писателя дали бы погашенную не ту ось.
         for (std::uint64_t t = 0; t < kTenMinutes; ++t) {
             wander_step(reg, stack.layer(layer).grid(), pool, huntZones, layer, t);
+            const GuideTick g = guide_step(reg, huntZones, layer, t, nullptr);
+            guideLed += g.led;
+            guideBogus += g.bogus;
+            guideUnresolved += g.unresolved;
             physics_step(reg, stack, dt);
             mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, t);
             projectile_step(reg, pool, bus, stack, layer, dt, t);
@@ -434,6 +468,51 @@ static void test_hunt_all() {
                     "prey pair-tests/tick ~%.0f\n",
                     meanHunters, peakHunters, mobs, kHuntShare,
                     meanHunters * static_cast<double>(survivors));
+
+        // ТОЛПА ПРАВДА ХОДИЛА. Это утверждение НОВОЕ, и оно здесь потому, что
+        // предмет блока (встреча хищника и жителя) от него зависит целиком, а
+        // прежде ничто его не проверяло: все полосы ниже — про трупы, а трупы
+        // производит и падение сквозь пролом. Снятый писатель скорости
+        // (`guide_step`) оставил бы их в силе на неподвижном этаже.
+        //
+        // `reg.valid` обязателен: `finalize_deaths` сносит тела, и спросить
+        // позицию у снесённого значило бы читать мусор — поэтому знаменатель
+        // здесь ВЫЖИВШИЕ из снимка, а не его длина.
+        std::size_t walkSeen = 0, walkMoved = 0;
+        float walkMax = 0.0f;
+        for (std::size_t i = 0; i < walkers.size(); ++i) {
+            if (!reg.valid(walkers[i]) || !reg.all_of<Transform>(walkers[i]))
+                continue;
+            ++walkSeen;
+            const vec3& p = reg.get<const Transform>(walkers[i]).pos;
+            const float dx = wrap_delta_f(walkStart[i].x, p.x, kWorldExtent);
+            const float dy = wrap_delta_f(walkStart[i].y, p.y, kWorldExtent);
+            const float d = std::sqrt(dx * dx + dy * dy);
+            if (d > 1.0f) ++walkMoved;
+            if (d > walkMax) walkMax = d;
+        }
+        std::printf("  hunt: ведение — %llu записей скорости за прогон; "
+                    "сдвинулось %zu из %zu тел, дальше всех %.1f м\n",
+                    static_cast<unsigned long long>(guideLed), walkMoved,
+                    walkSeen, static_cast<double>(walkMax));
+        CHECK(guideBogus == 0u);
+        CHECK(guideUnresolved == 0u);
+        CHECK(guideLed > 0u);
+        CHECK(walkSeen > 0u);
+        // ПОЛОСЫ НИЖНИЕ И ГРУБЫЕ, И ЭТО ЗАПИСАНО, А НЕ СПРЯТАНО. Доля
+        // сдвинувшихся на жилом этаже 15 НЕ ЗАМЕРЕНА — этот заход правил тесты
+        // без права запускать сборку, — а полоса, выставленная по ожиданию,
+        // краснеет от разбивки конкретного этажа, а не от дефекта. Поэтому оба
+        // числа ПЕЧАТАЮТСЯ строкой выше, а гейтом стоит то, что не может быть
+        // ложным при исправном писателе: кто-то прошёл метр, и кто-то прошёл
+        // заметное расстояние (4 м — та же полоса, которой живёт `suite_packs`,
+        // и она же тут отделяет «шёл» от «качнулся коллизией»).
+        //
+        // ПЕРЕМЕРИВШЕМУ: наблюдённые значения стоит поднять сюда — у этого
+        // блока появится полоса сверху и снизу, как у `survivors`, и «толпа
+        // перестала ходить вдвое» станет красным, а не печатным.
+        CHECK(walkMoved > 0u);
+        CHECK(walkMax > 4.0f);
 
         // Every resident death went through the finalizer — a record removed by
         // any other route would leave `deaths` short of the pool arithmetic.

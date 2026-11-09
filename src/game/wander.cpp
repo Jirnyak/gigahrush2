@@ -7,7 +7,7 @@
 #include "core/math.h"
 #include "core/wrap.h"
 #include "ecs/components.h"
-#include "game/ai.h"       // ai_owns_motion — the single-writer guard for Velocity
+#include "game/ai.h"       // decider_of — чьё это тело (S13.7a)
 #include "game/combat.h"
 #include "game/embody.h"   // NpcRef
 #include "game/faction_relations.h"
@@ -200,26 +200,25 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     // туманный моб без него статуя, [mob_spawn.cpp]; `MobCombat` есть у
     // КАЖДОГО, `emplace_mob`). Снят 2026-09-23 по замеру: два применителя
     // в одном тике = двойной урон, и это S11 «второй реализации не бывает».
-    auto view = reg.view<Transform, Velocity, WanderTarget>();
+    // ПУЛ ЗАЯВОК ПРОГРЕТ ДО ОТКРЫТИЯ ВИДА. Не удобство, а снятие УБ: рождение
+    // ПЕРВОГО элемента нового рода растит контейнер пулов реестра и дангл'ит
+    // указатели живого вида ([game/guide.h] `steer_pool_warm`).
+    steer_pool_warm(reg);
+    // СКОРОСТИ В ВИДЕ БОЛЬШЕ НЕТ: прогулка заявляет цель, а пишет
+    // `guide_step`. Вид сузился до того, что проход читает и правит сам.
+    auto view = reg.view<Transform, WanderTarget>();
     for (auto e : view) {
         Transform& tr = view.get<Transform>(e);
         if (tr.layer != layer) continue;
 
         const MobRef* mr = reg.try_get<MobRef>(e);
 
-        // THE SINGLE-WRITER GUARD ([ai.h]). Exactly one system may write a body's
-        // horizontal Velocity on a tick, and the token that decides it is
-        // AiBrain::motion: ai_step runs before this loop, claims the bodies it will
-        // steer, and this skips them. Without it, ai_step and this loop both write the
-        // same component every tick and the creature vibrates — a bug that reads as
-        // broken physics and is not.
-        //
-        // ADDITIVE TODAY, on purpose. A body with no AiBrain returns false, AiBrain is
-        // attached only by ai_init, and ai_init has no caller yet — so this is a null
-        // try_get and nothing else changes. That is what makes the AI's default-off real
-        // rather than aspirational, and it is why the guard lands BEFORE the AI is
-        // switched on instead of in the same commit.
-        if (ai_owns_motion(reg, e)) continue;
+        // ТЕЛО УЖЕ ЗАЯВЛЕНО КЕМ-ТО СИЛЬНЕЕ ([game/guide.h]). Прогулка —
+        // слабейший заявитель, за ней никого, поэтому вопрос задаётся один
+        // раз и на самый слабый ранг. Здесь стоял ГЕЙТ ТОКЕНА
+        // (`ai_owns_motion`), и он был одной из ЧЕТЫРЁХ формулировок одного
+        // вопроса; ранг выражает его явно и не зависит от порядка вызовов.
+        if (steer_claimed_by_stronger(reg, e, SteerRank::Walk, tick)) continue;
 
         // The player is steered by input, never by the flow field. wander_init
         // already refuses to GIVE the camera holder a target (see the CameraTag
@@ -253,7 +252,6 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         ++out.considered;
 
         WanderTarget& wt = view.get<WanderTarget>(e);
-        Velocity& vel = view.get<Velocity>(e);
 
         // A packed agent's destination is DERIVED from the pack every pass, never
         // remembered from whenever it last repathed. That is what makes cohesion
@@ -338,12 +336,14 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const float gy =
                         wrap_delta_f(victimPos.y, tr.pos.y, kWorldExtent);
                     if (frozen_by_gaze(beh, fwdX, fwdY, gx, gy)) {
-                        // ВЛАДЕЕМЫЙ НОЛЬ ПО ПЛОСКОСТИ ХОДЬБЫ, а не по x/y:
-                        // здесь стояли две жёсткие оси, то есть при любой
-                        // гравитации, кроме -Z, заморозка взглядом гасила
-                        // ПАДЕНИЕ и не гасила ход. Изотропия — закон, а не
-                        // пожелание ([world/gravity.h]).
-                        steer_stop(gf, vel);
+                        // ЗАСТЫТЬ — ЭТО ЦЕЛЬ `Hold`, а не отсутствие цели:
+                        // гейзнутая Скульптура обязана стоять ИДЕАЛЬНО, а не
+                        // катиться на прошлой скорости. Прежде здесь гасились
+                        // ЖЁСТКИЕ x/y, то есть при любой гравитации, кроме -Z,
+                        // взгляд гасил ПАДЕНИЕ и не гасил ход; плоскость
+                        // ходьбы знает теперь единственный писатель.
+                        steer_claim(reg, e, tick, SteerRank::Chase,
+                                    target_hold());
                         continue;
                     }
                 }
@@ -386,13 +386,15 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                     const game::BurstPhase bp = game::burst_phase(beh, id, tick, len);
                     sp *= game::burst_speed_mult(bp);
                     sp *= game::behaviour_hurt_move_mult(beh, mr->hp, mr->maxHp);
-                    const vec3 to = steer_tangent(gf, tx, ty, 0.0f);
-                    const float toLen = length(to);
-                    if (toLen > 0.001f)
-                        steer_write(gf, vel,
-                                    vec3{to.x / toLen, to.y / toLen,
-                                         to.z / toLen},
-                                    sp);
+                    // ЦЕЛЬ ПОГОНИ — ПЕЛЕНГ (`Dir`), и нормирует его
+                    // единственный писатель: сущность-жертва отличается от
+                    // точки и от поля только ПРИБЫТИЕМ, а прибытие здесь же —
+                    // порог `len > 0.05f` выше. Проверку «вектор не пуст»
+                    // (`toLen > 0.001f`) тоже держит писатель
+                    // (`kSteerMinBearing2`), поэтому третьего эпсилона здесь
+                    // больше нет.
+                    steer_claim(reg, e, tick, SteerRank::Chase,
+                                target_dir(steer_tangent(gf, tx, ty, 0.0f), sp));
                 }
                 ++out.chasing;
                 continue;  // no repath, no flow read — it has a target
@@ -410,7 +412,9 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // ведётся НИКЕМ и дрейфует на прошлой скорости. Поэтому каждый отказ
         // ниже кончается ВЛАДЕЕМЫМ НУЛЁМ — это остановка, а не толчок, и
         // физика по оси гравитации продолжает работать как всегда.
-        const auto stop = [&] { steer_stop(gf, vel); };
+        const auto stop = [&] {
+            steer_claim(reg, e, tick, SteerRank::Walk, target_hold());
+        };
 
         // ЗОНА ТЕЛА — через дверь с опорой на соседа, а не `part.cell` напрямую:
         // клетка центра тела бывает ДЫРКОЙ в разбивке (замер §88: 26 тел на тик
@@ -516,7 +520,13 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         }
 
         ++out.walking;
-        steer_write(gf, vel, st.dir, speed);
+        // ЗАЯВКА ПОДАЁТСЯ ТОЛЬКО ПОСЛЕ ТОГО, КАК ШАГ НАЙДЕН (`st.fail ==
+        // None` выше): цель заявляется ИСПОЛНИМОЙ, иначе прогулка отняла бы
+        // тело у того, кто его ещё мог провести. Это дословно правило «отдаём
+        // вандеру», которым жили наряд и дело, — только теперь оно выражено
+        // рангом, а не незабранным токеном.
+        steer_claim(reg, e, tick, SteerRank::Walk,
+                    target_zone(wt.zone, speed));
     }
     return out;
 }

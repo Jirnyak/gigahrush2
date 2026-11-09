@@ -3,8 +3,9 @@
 #include <cmath>
 
 #include "core/wrap.h"
+#include "game/ai.h"      // decider_of — ЧЬЁ это тело (S13.7a)
 #include "world/nav.h"    // nav::kNavDir — словарь направлений шага
-#include "world/types.h"  // kCellSize/kWorldExtent
+#include "world/types.h"  // kCellSize/kWorldExtent/cell_of_metres
 
 namespace giga::game {
 
@@ -47,6 +48,103 @@ SteerStep steer_to_zone(const ZoneNav& zones, const GravityFrame& gf,
         return out;
     }
     out.dir = dir * (1.0f / std::sqrt(d2));
+    return out;
+}
+
+GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
+                     std::uint64_t tick, const GravityField* gravity) {
+    GuideTick out;
+    // Плоскость ходьбы — одна на проход: она свойство мира, не тела.
+    const GravityFrame gf = steer_frame_of(gravity);
+    // Непостроенный бейк НЕ останавливает проход, и это отличие от прежних
+    // ходоков: заявка вида `Dir` (бегство, погоня, шум) нава не спрашивает
+    // вовсе, а `Hold` — тем более. Отказывает только разрешение зоны, и
+    // отказывает оно у `zone_walk_dir`, который сам проверяет построенность
+    // ([game/zone_nav.h]).
+    auto view = reg.view<const Steer, const Transform, Velocity>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const Steer& s = view.get<const Steer>(e);
+        if (s.rank == SteerRank::None || s.rank >= SteerRank::Count ||
+            s.target.kind == TargetKind::None ||
+            s.target.kind >= TargetKind::Count) {
+            // Непонятный байт читается как «заявки нет»: тело едет на прошлой
+            // скорости. Счётчик обязан быть НУЛЁМ — это самопроверка, а не
+            // статистика.
+            if (s.rank != SteerRank::None) ++out.bogus;
+            continue;
+        }
+        if (s.tick != static_cast<std::uint32_t>(tick)) {
+            ++out.stale;
+            continue;
+        }
+        // РАЗВИЛКА МОЗГОВ (S13.7a) У ЕДИНСТВЕННОГО ПИСАТЕЛЯ. Заявители её и
+        // так спрашивают (каждый про себя), но вопрос «можно ли писать в это
+        // тело» принадлежит писателю: вселение отдаёт `CameraTag` живому
+        // жителю ПОСЕРЕДИНЕ кадра, и заявка, поданная до вселения, иначе
+        // перетёрла бы ввод человека — ровно дефект Б6.2, которым наряд
+        // однажды уже стоил владельцу управления.
+        const Decider dec = decider_of(reg, e);
+        if (dec == Decider::Human || dec == Decider::None) {
+            ++out.foreign;
+            continue;
+        }
+        Velocity& vel = view.get<Velocity>(e);
+        const std::size_t rank = static_cast<std::size_t>(s.rank);
+        if (s.target.kind == TargetKind::Hold) {
+            steer_stop(gf, vel);
+            ++out.held;
+            ++out.byRank[rank];
+            continue;
+        }
+        if (s.target.kind == TargetKind::Dir) {
+            // Пеленг заявителя: нормируем ЗДЕСЬ, потому что это половина
+            // «как дойти». Пустой вектор — остановка, а не толчок: вести
+            // нечем, а оставить прошлую скорость значило бы везти тело
+            // решением, которого уже нет.
+            const vec3 d = steer_tangent(gf, s.target.dir.x, s.target.dir.y,
+                                         s.target.dir.z);
+            const float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
+            if (d2 <= kSteerMinBearing2) {
+                steer_stop(gf, vel);
+                ++out.held;
+                ++out.byRank[rank];
+                continue;
+            }
+            steer_write(gf, vel, d * (1.0f / std::sqrt(d2)), s.target.speed);
+            ++out.led;
+            ++out.byRank[rank];
+            continue;
+        }
+        // Zone: нав по зонам. Зона тела — через дверь с опорой на соседа
+        // (клетка центра тела бывает ДЫРКОЙ в разбивке — замер §88: 26 тел на
+        // тик из 238 ведомых), «метры → клетка» — одной дверью
+        // `cell_of_metres` ([world/types.h]).
+        const int cx = cell_of_metres(tr.pos.x);
+        const int cy = cell_of_metres(tr.pos.y);
+        const int cz = cell_of_metres(tr.pos.z);
+        const RoomId from = zone_of_body(zones, cx, cy, cz);
+        const SteerStep st =
+            from == kNoRoom
+                ? SteerStep{vec3{0.0f, 0.0f, 0.0f}, SteerFail::NoRoute}
+                : steer_to_zone(zones, gf, tr.pos, cx, cy, cz, from,
+                                s.target.zone);
+        if (st.fail != SteerFail::None) {
+            // ЗАЯВИТЕЛЬ ОБЯЗАН БЫЛ ПРОВЕРИТЬ ИСПОЛНИМОСТЬ той же дверью и на
+            // тех же входах, поэтому этот счётчик — НОЛЬ по построению, и
+            // держать его ненулевым значит иметь заявителя, который заявляет
+            // недостижимое (и отнимает тело у того, кто его провёл бы).
+            // Скорость при этом НЕ ПИШЕТСЯ: тело едет на прошлой — тот же
+            // исход, что у тела без заявки, и он не зависит от того, успел ли
+            // слабый заявитель подать свою.
+            ++out.unresolved;
+            continue;
+        }
+        steer_write(gf, vel, st.dir, s.target.speed);
+        ++out.led;
+        ++out.byRank[rank];
+    }
     return out;
 }
 

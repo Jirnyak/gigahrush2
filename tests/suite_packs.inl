@@ -413,23 +413,63 @@ static void test_packs_all() {
         // shipping 125 Hz — one epoch short of what the comment claimed.
         const float dt = kSimDt;
         const std::uint64_t kTicks = 30u * static_cast<std::uint64_t>(kSimHz);
+        // ВЕДЕНИЕ В ТОМ ЖЕ ТИКЕ (2026-11-09). Прогулка ЗАЯВЛЯЕТ зону пачки, а
+        // горизонтальную скорость пишет единственный проход `guide_step`
+        // ([game/guide.h]) — поэтому «кто-то правда шёл» (`travelled > 4 м`
+        // ниже) без него судило бы нулевую скорость, с которой тела родились.
+        // И это РОВНО тот способ, которым утверждение «всё ещё вместе» уже
+        // однажды проходило вхолостую: замершая пачка читается как БОЛЕЕ
+        // когезивная, а не как менее (довод дословно — в блоке согласия ниже).
+        std::uint64_t packLed = 0;
+        std::uint32_t packBogus = 0, packUnresolved = 0;
         for (std::uint64_t t = 0; t < kTicks; ++t) {
             wander_step(reg, stack.layer(layer).grid(), pool, packZones, layer, t);
+            const GuideTick g = guide_step(reg, packZones, layer, t, nullptr);
+            packLed += g.led;
+            packBogus += g.bogus;
+            packUnresolved += g.unresolved;
             physics_step(reg, stack, dt);
         }
+        // Самопроверка писателя за весь прогон: непонятный байт ранга/вида и
+        // «заявленная зона без шага» обязаны быть нулём. Второй ловит мутацию
+        // «прогулка заявляет цель ПАЧКИ не проверив исполнимость» — цель пачки
+        // равномерна среди 5700 зон и предела дальности у неё нет по
+        // построению ([game/wander.h] `pack_target_zone`), так что заявить
+        // недостижимое ей проще всех.
+        CHECK(packBogus == 0u);
+        CHECK(packUnresolved == 0u);
+        CHECK(packLed > 0u);
         const std::vector<std::vector<vec3>> after = snapshot();
 
         // Somebody actually walked. Cohesion is worthless if the whole floor is
         // standing still, which is exactly how a broken steering path would pass a
         // "still together" assertion.
+        //
+        // ДАЛЬШЕ ВСЕХ — МАКСИМУМ, и одного ходока ему довольно, поэтому рядом
+        // считается и СКОЛЬКО голов сдвинулось: максимум отвечает на вопрос
+        // «ведёт ли писатель вообще», а доля — на вопрос «ведёт ли он толпу».
+        // Печатаются оба; гейтом остаётся максимум, потому что пачковое тело
+        // без достижимой цели законно стоит (предела дальности у пачки нет по
+        // построению, [game/wander.h] `pack_target_zone`), и доля зависела бы
+        // от разбивки конкретного этажа.
         float travelled = 0.0f;
+        std::size_t packHeads = 0, packMoved = 0;
         for (std::size_t p = 1; p < 256; ++p) {
             if (before[p].empty() || before[p].size() != after[p].size()) continue;
             for (std::size_t i = 0; i < before[p].size(); ++i) {
                 const float d = flat_dist(before[p][i], after[p][i]);
+                ++packHeads;
+                if (d > 1.0f) ++packMoved;
                 if (d > travelled) travelled = d;
             }
         }
+        std::fprintf(stderr,
+                     "[packs] ведение: %llu записей скорости, сдвинулось %zu из "
+                     "%zu голов, дальше всех %.1f м\n",
+                     static_cast<unsigned long long>(packLed), packMoved,
+                     packHeads, static_cast<double>(travelled));
+        CHECK(packHeads > 0u);
+        CHECK(packMoved > 0u);
         CHECK(travelled > 4.0f);
 
         // Pack diameter after the run, against a CONTROL of the same size drawn
