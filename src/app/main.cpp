@@ -2622,6 +2622,17 @@ int main(int argc, char** argv) {
     // ЗАМЕРА, и сверять «в стороне» со «спереди» надо уметь одной командной
     // строкой, а не пересборкой (§85.1: прибор уже один раз врал СЦЕНОЙ).
     bool windowFront = false;
+    // --sound / --no-sound: звуковое устройство. По умолчанию `--shot` его НЕ
+    // ОТКРЫВАЕТ — тот же довод, что у окна в стороне: смоки и приборы гоняются
+    // десятками прогонов на машине, за которой работают, и каждый орал сиреной
+    // и эмбиентом в колонки (жалоба владельца 2026-11-12). Тишина идёт ровно тем
+    // путём, что и отказ устройства ([audio_system.h] is_device_open() == false
+    // — микшер не синтезирует, поток не качается), второго пути нет. Флаги —
+    // разовый CLI-override в обе стороны: `--sound` для прибора про звук,
+    // `--no-sound` для ручного запуска без `--shot`. Настройки игрока — отдельно
+    // (громкости в gigahrush2.ui), здесь только «открывать ли устройство».
+    bool cliSoundSet = false;
+    bool cliSound = false;
     std::uint32_t mirrorFrame = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -2640,6 +2651,8 @@ int main(int argc, char** argv) {
         else if (a == "--no-hud" || a == "--nohud") showHud = false;
         else if (a == "--no-crt" || a == "--nocrt") noCrt = true;
         else if (a == "--window-front") windowFront = true;
+        else if (a == "--sound") { cliSound = true; cliSoundSet = true; }
+        else if (a == "--no-sound" || a == "--nosound") { cliSound = false; cliSoundSet = true; }
         else if (a == "--vr" || a == "--sbs") { vrMode = true; cliVrSet = true; }
         else if (a == "--ipd" && i + 1 < argc) {
             vrIpd = std::clamp(static_cast<float>(std::atof(argv[++i])),
@@ -2718,7 +2731,10 @@ int main(int argc, char** argv) {
     // SDL_INIT_GAMEPAD — без него подсистема не поднимается и ни одно
     // устройство не видно: до 2026-09-12 в репозитории не было ни одного
     // SDL_Gamepad вообще ([steam-readiness.md], трек D).
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
+    // SDL_INIT_AUDIO здесь НЕТ: подсистему поднимает сама AudioSystem::init()
+    // (SDL_InitSubSystem), и только когда звук включён — тихий прогон прибора
+    // не трогает аудиодрайвер вовсе (--sound/--no-sound ниже, у audioSys).
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -3609,7 +3625,12 @@ int main(int argc, char** argv) {
     // Аудио: процедурный DSP + артистские override'ы ([audio.md], политика
     // текстур). Микс на главном потоке; отказ устройства — тишина, не смерть.
     audio::AudioSystem audioSys;
-    audioSys.init();
+    const bool soundOn = cliSoundSet ? cliSound : shotPath == nullptr;
+    if (soundOn)
+        audioSys.init();
+    else
+        std::fprintf(stderr, "[audio] звук ВЫКЛЮЧЕН (%s) — устройство не открыто\n",
+                     cliSoundSet ? "--no-sound" : "--shot; вернуть: --sound");
 
     game::ConsoleContext consoleCtx;
     bool showConsole = false;
@@ -11917,14 +11938,17 @@ int main(int argc, char** argv) {
                         std::fprintf(stderr,
                                      "[shot-scene] floor %d  pos %.2f %.2f %.2f"
                                      "  yaw %.3f  pitch %.3f  ввод=%s"
-                                     "  пиксели %ux%u  vr=%d crt=%d\n",
+                                     "  пиксели %ux%u  vr=%d crt=%d звук=%d\n",
                                      currentFloor, tr.pos.x, tr.pos.y, tr.pos.z,
                                      pc.yaw, pc.pitch,
                                      input.pinned() ? "заколочен" : "ЖИВОЙ",
                                      renderer.swap().extent.width,
                                      renderer.swap().extent.height,
                                      vrMode ? 1 : 0,
-                                     renderer.crtEnabled ? 1 : 0);
+                                     renderer.crtEnabled ? 1 : 0,
+                                     // Микшер синтезирует на главном потоке:
+                                     // открытое устройство — тоже условие замера.
+                                     audioSys.is_device_open() ? 1 : 0);
                     }
                     if (g_wallRing && g_wallSeen >= 64) {
                         float tmp[256];
