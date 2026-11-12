@@ -12,6 +12,7 @@
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
 #include "world/destruct.h" // kSubMaterialName, materialize_sub_page
+#include "world/floor_awaken.h" // kFrontierRadius, cell_full_static, open_frontier_cube
 #include "world/macro_grid.h"
 #include "world/material_props.h" // material_is_medium — фильтр будильников
 #include "world/medium.h"   // medium_recount — агрегаты S16.4 на шве
@@ -69,33 +70,14 @@ constexpr std::uint32_t kModePackHeader = 5;
 constexpr std::uint32_t kModeGate = 6;     // словный гейт битсета
 constexpr std::uint32_t kModeFinalize = 7; // счёт гейта -> 2D indirect
 
-// РАДИУС ФРОНТИРА — вывод (S11), от полного круга доставки страницы:
-// GPU-факт «клетка жива» едет в CPU kRbRegions+1 кадра (кольцо шва),
-// материализованная страница едет назад флешем ещё кадр — kRbRegions+2 = 5
-// кадров; кадр несёт до kMediumMaxPerFrame = 8 подтиков (кап догона; стенд
-// batch-8 живёт на этом же потолке), Марголус двигает не быстрее
-// 1 субвокселя/подтик => клетка пересекается не быстрее kSubDim = 8
-// подтиков. R = (kRbRegions+2)*8/8 = 5, плюс 1 запаса: равенство на
-// потолке — не запас. Закон владельца 2026-08-27: «в игре ничего не должно
-// зависеть от кадра» — страницы обязаны существовать ДО прихода материи,
-// чтобы гейт «нераскрытая клетка» не срабатывал и физика оставалась чистой
-// функцией номера подтика (пин: test_cadence_equivalence).
-constexpr int kFrontierRadius = 6;
-
-// Полномасочная клетка СТАТИЧНОЙ материи: будить нечего и страница не
-// нужна — входа материи нет. Прежний фильтр «full() = статика» писался ДО
-// подвижного рабла: полномасочный рыхлый двойник (rubble, flow 1.0)
-// подвижен ЦЕЛИКОМ, и фильтр делал такие клетки невидимыми всем
-// будильникам (корень В2 висяков, medium-stability.md — «Автомат-2»
-// инкр. 4). Предикат — ТОЛЬКО маска + тип (канон CPU): чтение paged()
-// здесь дивергировало каденс (страницы материализуются по таймингам
-// КАДРА — пин test_cadence_equivalence поймал с первого прогона).
-// Хвост: полный СМЕШАННЫЙ пейдж со статичным фоном фильтруется зря —
-// умирает вместе с CPU-страницами подвижного (инкр. 5).
-bool cell_full_static(const World& world, std::uint32_t ci) {
-    return world.grid().masks()[ci].full() &&
-           !material_is_medium(world.grid().types()[ci]);
-}
+// РАДИУС ФРОНТИРА и предикат «полная статика» живут в ядре
+// ([world/floor_awaken.h]): фронтир рождения этажа раскрывает страницы в
+// воркере пребилда тем же законом, что писатель и шов здесь. Вывод радиуса
+// стоит на kRbRegions, которого ядро не видит, — равенство стережётся тут.
+static_assert(kFrontierRadius ==
+                  static_cast<int>(GpuMediumPass::kRbRegions) + 2 + 1,
+              "радиус фронтира выведен из круга доставки страницы: "
+              "(kRbRegions + 2) кадров * 8 подтиков / 8 субвокселей + 1 запаса");
 
 } // namespace
 
@@ -106,8 +88,6 @@ bool cell_full_static(const World& world, std::uint32_t ci) {
 // отсеивается первой проверкой; полнотвёрдые не трогаем — входа материи нет.
 void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                                   const std::uint32_t* cells, std::size_t n) {
-    SubField<CellType>& f =
-        world.subfields().get_or_create<CellType>(kSubMaterialName);
     const auto tFrontier = std::chrono::steady_clock::now();
     std::vector<std::uint32_t> dirty;
     for (std::size_t i = 0; i < n; ++i) {
@@ -117,24 +97,7 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
         // идемпотентен, повторы на живом окне были 85-100% цены фронтира.
         if ((frontierDone_[lc >> 6] >> (lc & 63u)) & 1ull) continue;
         frontierDone_[lc >> 6] |= 1ull << (lc & 63u);
-        const int cx = static_cast<int>(lc % kMacroDim);
-        const int cy = static_cast<int>((lc / kMacroDim) % kMacroDim);
-        const int cz = static_cast<int>(lc / (kMacroDim * kMacroDim));
-        for (int dz = -kFrontierRadius; dz <= kFrontierRadius; ++dz)
-            for (int dy = -kFrontierRadius; dy <= kFrontierRadius; ++dy)
-                for (int dx = -kFrontierRadius; dx <= kFrontierRadius; ++dx) {
-                    const auto ci2 = static_cast<std::uint32_t>(macro_index(
-                        wrap_macro(cx + dx), wrap_macro(cy + dy),
-                        wrap_macro(cz + dz)));
-                    if (f.paged(ci2)) continue;
-                    // Полная СТАТИКА страницы не получает (входа материи
-                    // нет); полный РЫХЛЫЙ — получает: он поедет целиком.
-                    if (world.grid().masks()[ci2].full() &&
-                        !material_is_medium(world.grid().types()[ci2]))
-                        continue;
-                    materialize_sub_page(world, ci2);
-                    dirty.push_back(ci2);
-                }
+        open_frontier_cube(world, lc, &dirty);
         frontierProbes_ += static_cast<std::uint64_t>(2 * kFrontierRadius + 1) *
                            (2 * kFrontierRadius + 1) * (2 * kFrontierRadius + 1);
     }
@@ -530,8 +493,11 @@ void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
     if (take == wakeQueue_.size()) {
         wakeQueue_.clear();
         // ПРИБОР: очередь допита — печатаем, во что обошёлся транзиент входа
-        // целиком. Молчим, если фронтир ничего не раскрывал (ровный кадр).
-        if (frontierPages_ != 0)
+        // целиком. Молчим, если фронтир ничего не пробовал (ровный кадр).
+        // Условие — ПРОБЫ, не страницы: с фронтиром рождения этажа
+        // ([world/floor_awaken.h]) честный ответ входа — «0 страниц», и
+        // молчание вместо него прятало бы саму приёмку шага.
+        if (frontierProbes_ != 0)
             std::fprintf(stderr,
                          "[medium] фронтир за этаж: %.1f ms, %llu страниц "
                          "раскрыто, %llu проб\n",

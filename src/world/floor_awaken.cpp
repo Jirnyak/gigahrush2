@@ -99,6 +99,55 @@ std::size_t settle_uniform_pages(World& w) {
     return settled;
 }
 
+bool cell_full_static(const World& w, std::uint32_t ci) {
+    return w.grid().masks()[ci].full() &&
+           !material_is_medium(w.grid().types()[ci]);
+}
+
+std::size_t open_frontier_cube(World& w, std::uint32_t ci,
+                               std::vector<std::uint32_t>* opened) {
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    const int cx = static_cast<int>(ci % kMacroDim);
+    const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+    const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+    std::size_t pages = 0;
+    for (int dz = -kFrontierRadius; dz <= kFrontierRadius; ++dz)
+        for (int dy = -kFrontierRadius; dy <= kFrontierRadius; ++dy)
+            for (int dx = -kFrontierRadius; dx <= kFrontierRadius; ++dx) {
+                const auto ci2 = static_cast<std::uint32_t>(macro_index(
+                    wrap_macro(cx + dx), wrap_macro(cy + dy),
+                    wrap_macro(cz + dz)));
+                if (f.paged(ci2)) continue;
+                // Полная СТАТИКА страницы не получает (входа материи нет);
+                // полный РЫХЛЫЙ — получает: он поедет целиком.
+                if (cell_full_static(w, ci2)) continue;
+                materialize_sub_page(w, ci2);
+                if (opened) opened->push_back(ci2);
+                ++pages;
+            }
+    return pages;
+}
+
+FloorFrontierStats floor_open_frontier(World& w) {
+    const auto t0 = std::chrono::steady_clock::now();
+    FloorFrontierStats st;
+    // Источники — ровно те, кого разбудит будильник этажа ([app] блок смены
+    // слоя: клетки с подвижной материей, кроме полной статики), и в том же
+    // порядке. Серийно: материализация растит общий пул страниц.
+    const std::uint8_t* mob = medium_mobile_data(w);
+    if (!mob) return st;
+    for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
+        if (mob[ci] == 0u || cell_full_static(w, ci)) continue;
+        ++st.sources;
+        st.pages += open_frontier_cube(w, ci, nullptr);
+    }
+    st.ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+    return st;
+}
+
 PageAuditStats audit_sub_pages(const World& w) {
     PageAuditStats st;
 

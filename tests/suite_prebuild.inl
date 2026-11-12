@@ -137,6 +137,17 @@ PathResult run_path(bool viaPrebuild, int number, std::uint32_t seed,
         out.antCloths = ab->cloths.size();
         out.pipeCells = ab->pipeCells;
     }
+    // ФРОНТИР РОЖДЁН ВМЕСТЕ С ЭТАЖОМ (лифт-лимб, шаг 2) — и синхронным путём,
+    // и воркером: повторное раскрытие на готовом мире не находит ни одной
+    // страницы, то есть главному потоку в кадре входа остаются одни пробы.
+    // Источники обязаны быть: на этаже без подвижной материи чек был бы
+    // зелёным и там, где фронтир не раскрывали вовсе. ПОСЛЕ снимка — чтобы
+    // красный прогон не подправил сравниваемый мир. ПОЛЯРНОСТЬ: снять вызов
+    // floor_open_frontier в build_world_half [game/floor_stream.cpp].
+    const giga::FloorFrontierStats again =
+        giga::floor_open_frontier(stack.layer(r.layer));
+    CHECK(again.sources > 0);
+    CHECK(again.pages == 0);
     return out;
 }
 

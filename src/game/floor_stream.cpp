@@ -363,6 +363,11 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
     // (CANON S16.9) — до него их было четыре, каждый со своим разрешением
     // страницы.
     const FloorAwakenStats awake = floor_awaken(w);
+    // ФРОНТИР РОЖДЕНИЯ — сразу за обходом (тот схлопнул бы раскрытое) и тоже
+    // обеими ветками: страницы вокруг подвижной материи раскрывает тот, кто
+    // владеет миром этажа до свопа, а не главный поток в кадре входа
+    // (лифт-лимб, шаг 2; [world/floor_awaken.h]).
+    const FloorFrontierStats frontier = floor_open_frontier(w);
     {
         auto ms = [](auto a, auto b) {
             return std::chrono::duration<double, std::milli>(b - a).count();
@@ -376,6 +381,10 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
                      "[floor] %d: awaken %.1f ms | %zu страниц, %zu схлопнуто, "
                      "%zu клеток с подвижной материей\n",
                      number, awake.ms, awake.paged, awake.settled, awake.mobile);
+        std::fprintf(stderr,
+                     "[floor] %d: фронтир рождения %.1f ms | %zu страниц | "
+                     "%zu источников\n",
+                     number, frontier.ms, frontier.pages, frontier.sources);
     }
 
     // ЩИТ лифтов — ПОСЛЕ развилки, ОБЕИМИ ветками: маска не в снимке

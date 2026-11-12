@@ -2272,6 +2272,85 @@ static void unlaid_rubble_page_survives_collapse() {
     CHECK(rubble_atoms() == giga::kSubVoxels);
 }
 
+// ФРОНТИР РОЖДЕНИЯ ЭТАЖА (лифт-лимб, шаг 2; [world/floor_awaken.h]).
+// Страницы вокруг подвижной материи раскрывал писатель на главном потоке в
+// кадре входа (78 893 страницы за 118.5 мс); теперь их раскрывает рождение
+// этажа — тем же законом и по тем же источникам. Тест без GPU держит сам
+// закон; что рождение его ЗОВЁТ — стережёт suite_prebuild (оба пути).
+//
+// ПОЛЯРНОСТИ [world/floor_awaken.cpp]: фильтр источников без
+// `cell_full_static` — краснеет счёт источников (монолит бетона с меткой
+// подвижности); `cell_full_static` без `!material_is_medium` — краснеют
+// «рыхлый монолит — источник» и его страница; куб без заворота тора —
+// краснеет клетка за швом; радиус на единицу больше — краснеет «за радиусом
+// страницы нет».
+static void frontier_is_born_with_the_floor() {
+    giga::World w;
+    giga::MacroGrid& g = w.grid();
+    const giga::SubField<giga::CellType>& f =
+        w.subfields().get_or_create<giga::CellType>(giga::kSubMaterialName);
+    const int R = giga::kFrontierRadius;
+
+    // Лужа посреди пустоты; рядом — бетонная глыба (полная статика).
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(w, 40, 40, 40, sx, 0, 0, giga::kMatWater);
+    for (int x = 42; x < 45; ++x) g.fill_cell(x, 40, 40, giga::kMatConcrete);
+    // Лужа в углу тора: куб обязан завернуться через шов по всем осям.
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(w, 0, 0, 0, sx, 0, 0, giga::kMatWater);
+    // Монолит рыхлого: полная маска, но материя подвижна — источник.
+    g.fill_cell(90, 90, 90, giga::kMatRubble);
+
+    giga::floor_awaken(w);
+    CHECK(giga::audit_sub_pages(w).uniform_paged == 0); // до фронтира — чисто
+    // Метка подвижности на полной СТАТИКЕ (такой её оставляет устаревший
+    // агрегат): будильник её не будит, и источником она быть не должна.
+    giga::medium_mobile_field(w).data()[giga::macro_index(43, 40, 40)] = 1u;
+
+    const std::size_t before = giga::audit_sub_pages(w).paged_cells;
+    const giga::FloorFrontierStats born = giga::floor_open_frontier(w);
+    CHECK(born.sources == 3); // две лужи и рыхлый монолит; бетон — нет
+    CHECK(born.pages > 0);
+    CHECK(giga::audit_sub_pages(w).paged_cells == before + born.pages);
+
+    // Закон куба: вокруг источника страницу имеет всё, кроме полной статики.
+    int holes = 0, pagedStatic = 0;
+    for (int dz = -R; dz <= R; ++dz)
+        for (int dy = -R; dy <= R; ++dy)
+            for (int dx = -R; dx <= R; ++dx) {
+                const auto ci = static_cast<std::uint32_t>(giga::macro_index(
+                    40 + dx, 40 + dy, 40 + dz));
+                const bool stat = giga::cell_full_static(w, ci);
+                if (stat && f.paged(ci)) ++pagedStatic;
+                if (!stat && !f.paged(ci)) ++holes;
+            }
+    CHECK(holes == 0);
+    CHECK(pagedStatic == 0);
+    // За радиусом страницы нет: фронтир — куб, а не весь этаж.
+    CHECK(!f.paged(giga::macro_index(40 + R + 1, 40, 40)));
+    CHECK(f.paged(giga::macro_index(40 + R, 40, 40)));
+    // Шов тора: сосед угловой лужи по ту сторону всех трёх осей.
+    CHECK(f.paged(giga::macro_index(giga::kMacroDim - R, giga::kMacroDim - R,
+                                    giga::kMacroDim - R)));
+    // Рыхлый монолит получил страницу сам: он поедет целиком.
+    CHECK(f.paged(giga::macro_index(90, 90, 90)));
+
+    // ГЛАВНОЕ: повторное раскрытие — ноль страниц. Это то, что остаётся
+    // главному потоку в кадре входа.
+    const giga::FloorFrontierStats again = giga::floor_open_frontier(w);
+    CHECK(again.sources == born.sources);
+    CHECK(again.pages == 0);
+
+    // Раскрытые страницы воздуха однородны — названная оговорка S16.9, и
+    // живут они до выхода с этажа: нормализация складывает их все, а материя
+    // цела (лужи остаются страницами, рыхлый монолит — своим типом).
+    CHECK(giga::audit_sub_pages(w).uniform_paged > 0);
+    CHECK(giga::settle_uniform_pages(w) >= born.pages - 1);
+    CHECK(giga::audit_sub_pages(w).uniform_paged == 0);
+    CHECK(giga::sub_material_at(w, 40, 40, 40, 0, 0, 0) == giga::kMatWater);
+    CHECK(giga::sub_material_at(w, 90, 90, 90, 3, 3, 3) == giga::kMatRubble);
+}
+
 // ХОД C ([matwej.md] §9.4, решение владельца): ВЫХОД С ЭТАЖА КРАДЁТ ПУЛ.
 //
 // Что мерилось. Кадр поездки печатал `[lift] leave 0: copy 634 ms`: выход
@@ -2422,6 +2501,7 @@ static void test_saveload_all() {
     saveload_test::awaken_is_the_one_law();
     saveload_test::page_invariant_holds_over_the_whole_volume();
     saveload_test::unlaid_rubble_page_survives_collapse();
+    saveload_test::frontier_is_born_with_the_floor();
     saveload_test::leaving_a_floor_steals_the_pool();
     saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();
