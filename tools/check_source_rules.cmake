@@ -711,6 +711,70 @@ else()
     endif()
 endif()
 
+# ---- Rule: ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ ПЛАТИТСЯ В ОДНОМ МЕСТЕ (CANON S20.4) ------
+# Всякая запись в мир — карв, дверь, автомат среды, кисть, оба суда, грязь —
+# платит долг перед производными мира ОДНОЙ дверью: `geometry_changed` в
+# `src/app/main.cpp`, а что именно она должна, выводится из трёх фактов строки
+# писателя ([game/geom_writer.h]).
+#
+# До 2026-11-12 хвостов писателя было СЕМЬ, каждый перечислял долг руками, и
+# перечни разъехались: поколение мира, будящее фоновое допекание, поднимали
+# двое из семи (свет не узнавал о двери до ближайшего взрыва); дверь не чинила
+# поле излучателей; кисть не будила тела; автомат не сообщал диффузии о
+# завале. Комментарий дренажа двери сам записал класс дефекта: диффузия была
+# «единственным слоем, пропущенным в этом перечне».
+#
+# Исполнитель живёт в приложении и headless не собирается, поэтому его сторожит
+# ТЕКСТ: вызов каждого слагаемого долга обязан встречаться в main.cpp ровно
+# столько раз, сколько записано ниже. Правило двустороннее:
+#   * вызовов БОЛЬШЕ — появился второй хвост, и перечни снова разъедутся;
+#   * вызовов МЕНЬШЕ — дверь перестала платить слагаемое.
+# Два счёта не равны единице, и оба названы: `mark_diffusion_dirty(` — это
+# определение функции плюс вызов; `mediumPass.wake_cells(` — дверь плюс
+# будильник входа на этаж (он будит ВСЕ клетки со средой при смене слоя и
+# писателем геометрии не является).
+#
+# Счёт идёт БАЙТАМИ по `file(READ)` (разность длин текста до и после вырезания
+# иголки): `file(STRINGS)` рвёт UTF-8, а REGEX MATCHALL рассыпается на `;`.
+# Комментарий с иголкой внутри тоже считается — это сознательно: упомянуть
+# вызов со скобкой в комментарии значит оставить заготовку второго хвоста.
+set(_giga_app_main "${GIGA_ROOT}/src/app/main.cpp")
+if(NOT EXISTS "${_giga_app_main}")
+    list(APPEND GIGA_FAILURES
+        "src/app/main.cpp:1: файла приложения нет на месте — правило единой двери писателя геометрии ослепло. Либо файл переехал и правило устарело, либо дверь снесена: решает человек, молчать нельзя.")
+else()
+    file(READ "${_giga_app_main}" _giga_main_text)
+    string(LENGTH "${_giga_main_text}" _giga_main_len)
+    set(_giga_debt_calls
+        "nav.patch_carved_cells(|1"
+        "rigid_wake_dirty_cells(|1"
+        "game::anchor_validate_step(|1"
+        "antourage_carve_step_here(|1"
+        "game::patch_emitter_field(|1"
+        "voxelMirror.mark_dirty(|1"
+        "mark_diffusion_dirty(|2"
+        "mediumPass.wake_cells(|2")
+    foreach(_giga_pair IN LISTS _giga_debt_calls)
+        string(REPLACE "|" ";" _giga_pair_list "${_giga_pair}")
+        list(GET _giga_pair_list 0 _giga_needle)
+        list(GET _giga_pair_list 1 _giga_want)
+        string(REPLACE "${_giga_needle}" "" _giga_main_cut "${_giga_main_text}")
+        string(LENGTH "${_giga_main_cut}" _giga_cut_len)
+        string(LENGTH "${_giga_needle}" _giga_needle_len)
+        math(EXPR _giga_have
+             "(${_giga_main_len} - ${_giga_cut_len}) / ${_giga_needle_len}")
+        if(NOT _giga_have EQUAL _giga_want)
+            list(APPEND GIGA_FAILURES
+                "src/app/main.cpp:1: `${_giga_needle}` встречается ${_giga_have} раз(а) при законных ${_giga_want}. Долг писателя геометрии платится ОДНОЙ дверью `geometry_changed` (CANON S20.4, game/geom_writer.h): больше — появился второй хвост писателя, меньше — дверь перестала платить слагаемое.")
+        endif()
+    endforeach()
+    string(FIND "${_giga_main_text}" "const auto geometry_changed =" _giga_door_at)
+    if(_giga_door_at LESS 0)
+        list(APPEND GIGA_FAILURES
+            "src/app/main.cpp:1: двери `geometry_changed` нет — долг писателя геометрии некому платить (CANON S20.4).")
+    endif()
+endif()
+
 # ---- Rule 8: incomplete toroidal triple (AGENTS.md: x/y/z wrap) -------------
 # The world wraps on all three axes, and the failure mode this rule exists for
 # is PARTIAL wrapping: a distance computed with wrap_delta_f on two axes and a

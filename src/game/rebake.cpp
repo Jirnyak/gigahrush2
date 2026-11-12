@@ -663,7 +663,15 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                          const std::uint32_t* cells,
                                          std::size_t n) {
     if (!navClear_.built()) return;
+    // ЧУЖОЙ ГРИД — НЕ МОЙ МИР. Оракул построен для грида, принятого
+    // `start_fresh`; патч с другого грида записал бы в него клиренс чужого
+    // этажа. Не гипотеза: в кадры пересадки лифта допекание уже принимало этаж
+    // прибытия, а автомат и дверь этажа отправления ещё сдавали сюда свои
+    // клетки вместе со СВОИМ гридом (найдено 2026-11-12).
+    if (&grid != liveGrid_) return;
     const std::vector<CellType>& types = grid.types();
+    const std::vector<SubMask>& masks = grid.masks();
+    std::size_t aged = 0;  // клеток, РАЗОШЕДШИХСЯ с тем, что видел бейк
     // Клетка двери (по индексу, координатам). Премиса all-open ([game/door.h]):
     // оракулы построены на входе этажа при открытых дверях и обязаны её
     // хранить — честный патч по маске закрытой двери впёк бы дверь в фоновый
@@ -695,16 +703,35 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
                                    face_clearance_at(grid, mx, my, mz, axis));
         }
     }
-    // Долг света — вход дельта-патча (carve-hitch.md §3): карвнутые клетки
-    // копятся до ближайшего цикла (патч или полный — кто раньше). ВСЕ клетки,
-    // включая дверные: свет живёт по реальной геометрии, премиса all-open —
-    // навигационная, не световая. Дедуп — на старте цикла, не здесь.
-    carvedSinceLight_.insert(carvedSinceLight_.end(), cells, cells + n);
-    // МИР ИЗМЕНИЛСЯ — поколение поднимает сам сток (довод в заголовке).
-    // Пустой список поколения не двигает: запись, не задевшая ни одной
-    // клетки, ничего не состарила.
-    if (n != 0) ++worldGen_;
-    (void)types;
+    // Долг света — вход дельта-патча (carve-hitch.md §3): клетки копятся до
+    // ближайшего цикла (патч или полный — кто раньше). ВСЕ клетки, включая
+    // дверные: свет живёт по реальной геометрии. Дедуп — на старте цикла.
+    //
+    // «МИР ИЗМЕНИЛСЯ» СУДИТ МИР, А НЕ ВЫЗЫВАЮЩИЙ. Клетка состарила запечённое,
+    // только если она РАЗОШЛАСЬ с теневой копией — тем, что видел последний
+    // бейк. Запись, вернувшая клетку к запечённому виду (или вовсе её не
+    // тронувшая: повторный штамп закрытой створки, одевание порталов до
+    // `start_fresh`), ни долга, ни поколения не создаёт — иначе каждый вход на
+    // этаж кончался бы холостым циклом. Клиренс выше патчится ВСЕГДА: он живой
+    // оракул и обязан идти за миром, а не за тенью.
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t idx = cells[i];
+        if (shadowGrid_ != nullptr) {
+            const int x = static_cast<int>(idx % kMacroDim);
+            const int y = static_cast<int>((idx / kMacroDim) % kMacroDim);
+            const int z = static_cast<int>(idx / (kMacroDim * kMacroDim));
+            const SubMask& was = shadowGrid_->mask(x, y, z);
+            bool same = shadowGrid_->cell(x, y, z) == types[idx];
+            for (std::size_t wd = 0; same && wd < kSubMaskWords; ++wd)
+                same = was.words[wd] == masks[idx].words[wd];
+            if (same) continue;
+        }
+        carvedSinceLight_.push_back(idx);
+        ++aged;
+    }
+    // Поколение поднимает сам сток (довод в заголовке) — и только если хоть
+    // одна клетка действительно состарила запечённое.
+    if (aged != 0) ++worldGen_;
 }
 
 } // namespace giga::game

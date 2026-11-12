@@ -99,6 +99,7 @@
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
+#include "game/geom_writer.h"  // ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ — таблица и вывод (S20.4)
 #include "game/look.h"      // Look, look_step — ВЗГЛЯД любого тела (S25.7)
 #include "game/perceive.h"  // perceive_step — ОДИН проход восприятия (S25.8)
 #include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
@@ -539,6 +540,10 @@ struct CarveTiming {
     float flushMs = 0.0f;      // voxelMirror.flush (CPU-сторона стейджинга)
 };
 static CarveTiming g_carveT;
+
+// Кто и сколько пишет в мир — счёт единственной двери писателя геометрии
+// (`geometry_changed`, ниже). Печатается на выходе строкой `[geom]`.
+static game::GeomWriteStats g_geomStats;
 
 // СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH, баг «дыра заросла»): кольцо
 // выбитых атомов + скан «стал ли атом снова твёрдым» в CPU-каноне.
@@ -3070,7 +3075,11 @@ int main(int argc, char** argv) {
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
-    std::vector<std::uint32_t> doorDirty; // клетки тогглов — дренаж швом карва
+    std::vector<std::uint32_t> doorDirty; // клетки тогглов активного слоя
+    // Клетки, записанные одеванием порталов на входе этажа, и слой, в который
+    // они записаны (он может быть ещё не активен — машинный путь лифта).
+    std::vector<std::uint32_t> doorDirtyBuilt;
+    LayerId doorDirtyBuiltLayer = kInvalidLayer;
     // Комнаты этажа: объявляет модуль (S12.1), перештамповка на каждом входе
     // (rooms_declare). Живут в reg.ctx() (прецедент AnchorBins), чтобы живые
     // хуки supply на швах предметов/пропов не тащили их через сигнатуры.
@@ -3097,10 +3106,14 @@ int main(int argc, char** argv) {
     auto dress_lift_portals = [&](LayerId nl) {
         const game::FloorSpec* sp = spec_for_floor(currentFloor);
         if (sp == nullptr) return;
+        // Слой одевания НАЗВАН, а не подразумеван: на машинном пути лифта
+        // `nl` в этот кадр ещё не активен, и общий `doorDirty` отдал бы эти
+        // клетки этажу отправления.
+        doorDirtyBuiltLayer = nl;
         game::dress_lift_portals(reg, stack.layer(nl), doors, currentFloor,
                                  *sp,
                                  streamer.floor_seed_of(registry, currentFloor),
-                                 nl, doorDirty);
+                                 nl, doorDirtyBuilt);
     };
     bool doorWanted = false;        // E (единая интеракция), consumed once
     bool interactWanted = false;    // E, consumed by one sim step (Terminal / ControlPanel / Relief interact)
@@ -4318,6 +4331,102 @@ int main(int argc, char** argv) {
                                               &antourageFalling) > 0;
         };
 
+        // ===================================================================
+        // ОДНА ДВЕРЬ ПИСАТЕЛЯ ГЕОМЕТРИИ (CANON S20.4, [game/geom_writer.h])
+        // ===================================================================
+        // Всякая запись в мир — карв, дверь, автомат среды, кисть, оба суда,
+        // грязь — платит долг ЗДЕСЬ и только здесь. До 2026-11-12 хвостов было
+        // СЕМЬ, каждый перечислял долг руками, и перечни разъехались (шапка
+        // заголовка). Что именно должен писатель, решает не он и не этот
+        // лямбда-список, а ТРИ ФАКТА его строки (`geom_debt`).
+        //
+        // СЛОЙ — ЧАСТЬ ЗАПИСИ. Долг делится на две половины по тому, кому он
+        // адресован:
+        //   * ЖИВЫМ производным активного слоя (зеркало, автомат, излучатели,
+        //     якоря, тела, антураж): запись в НЕактивный слой им ничего не
+        //     должна — активация слоя строит их заново с мира как он есть;
+        //   * ЗАПЕЧЁННЫМ производным (допекание, диффузия): каждая знает СВОЙ
+        //     слой и чужую запись отвергает сама — планировщик по тождеству
+        //     грида, диффузия по `driver.layer`. Поэтому запись в слой, который
+        //     допекание уже приняло, а камера ещё нет (створка прибытия лифта),
+        //     доходит до него честно, а запись автомата СТАРОГО этажа в те же
+        //     кадры его не портит.
+        //
+        // Возвращает число разбуженных тел: шов автомата ведёт им свой счётчик
+        // (rigid-stats, «сколько тел будит ИМЕННО автомат»).
+        // `t` — разбивка по слагаемым для хитч-профиля карва; у прочих
+        // писателей её не просят.
+        const auto geometry_changed =
+            [&](game::GeomWriter who, LayerId layer,
+                const std::vector<std::uint32_t>& cells, std::uint32_t seed,
+                CarveTiming* t = nullptr) -> std::uint32_t {
+            const std::size_t wi = static_cast<std::size_t>(who);
+            ++g_geomStats.calls[wi];
+            g_geomStats.cells[wi] += cells.size();
+            if (cells.empty() || layer == kInvalidLayer) return 0;
+            const bool live = layer == activeLayer;
+            if (!live) ++g_geomStats.foreign[wi];
+            const std::uint16_t debt = game::geom_debt(who);
+            World& w = stack.layer(layer);
+            std::uint32_t woken = 0;
+            auto ct0 = std::chrono::steady_clock::now();
+            const auto lap = [&](float CarveTiming::*slot) {
+                if (t != nullptr) t->*slot += carve_ms_since(ct0);
+                ct0 = std::chrono::steady_clock::now();
+            };
+            // Поле излучателей помнит, что светило до, — сравнение честное и
+            // субвоксельное; таблица ламп перестраивается только если задето.
+            if (live && (debt & game::kDebtEmitters) != 0 &&
+                game::patch_emitter_field(w, g_emitterField, cells.data(),
+                                          cells.size())) {
+                g_bakedFloorLights = game::bake_material_lights(
+                    w, g_emitterField, g_emitterClusters);
+                // Кластеры пережиты с наследованием id — похудевший неон
+                // сохраняет слот, умерший целиком — надгробие.
+                rebuild_static_light_table(reg, layer, /*reset=*/false);
+                nav.set_light_table(g_staticLamps.data(), g_staticLamps.size(),
+                                    gpu::kGridCellSlots, g_staticTableGen);
+            }
+            lap(&CarveTiming::lightMatMs);
+            // Зеркало платит только названные клетки.
+            if (live && (debt & game::kDebtMirror) != 0)
+                voxelMirror.mark_dirty(cells.data(), cells.size());
+            lap(&CarveTiming::mirrorMarkMs);
+            // Писатель будит (S16.1: писатели будят, автомат двигает) —
+            // соседняя материя стечёт в свежую дыру, лишнее уснёт само.
+            if (live && (debt & game::kDebtMedium) != 0 && mediumPass.ready())
+                mediumPass.wake_cells(cells.data(), cells.size(), w,
+                                      voxelMirror);
+            ct0 = std::chrono::steady_clock::now();  // будильник в разбивку не входит
+            if ((debt & game::kDebtDiffusion) != 0)
+                mark_diffusion_dirty(diffusionDriver, w.grid(), layer, cells);
+            lap(&CarveTiming::diffMs);
+            // Сток допекания: O(1) на клетку патч клиренса, долг света и
+            // поколение мира — всё внутри, снаружи поднимать нечего.
+            if ((debt & game::kDebtRebake) != 0)
+                nav.patch_carved_cells(w.grid(), cells.data(), cells.size());
+            lap(&CarveTiming::patchMs);
+            // Пропы на срезанных якорях падают ([jirnyak.md] §18).
+            if (live && (debt & game::kDebtAnchors) != 0 &&
+                game::anchor_validate_step(reg, w, layer, bus, cells,
+                                           &particleBursts, seed) > 0)
+                propPassNeedsRebuild = true;
+            // Спящие тела над ушедшей опорой просыпаются: труп на плите
+            // падает вместе с ней, а не висит до первого толчка.
+            if (live && (debt & game::kDebtBodies) != 0)
+                woken = rigid_wake_dirty_cells(reg, layer, cells.data(),
+                                               cells.size());
+            lap(&CarveTiming::anchorMs);
+            // Запечённое убранство отвечает той же записи. Смерть публикуется
+            // ПОКАДРОВО (write_alive/write_pins), а не ре-аплоадом — тот
+            // телепортировал живой сим в rest (§28.4).
+            if (live && (debt & game::kDebtAntourage) != 0 &&
+                antourage_carve_step_here(cells, seed))
+                propPassNeedsRebuild = true;
+            lap(&CarveTiming::antrMs);
+            return woken;
+        };
+
         // §22: amortize nav field rebake under frame budget.
         std::uint64_t now = SDL_GetPerformanceCounter();
         float frameDt = static_cast<float>((now - prevTicks) / freq);
@@ -5051,9 +5160,21 @@ int main(int argc, char** argv) {
             // Кабина назначения зарастает до готовности (двери объявлены).
             if (liftHub >= 0 && liftHub < 4 &&
                 doors.lift[liftHub] != game::kNoPortal)
+            {
+                // ЗАПИСЬ В СЛОЙ ПРИБЫТИЯ, а он ещё не активен: общий
+                // `doorDirty` дренируется в конце кадра против АКТИВНОГО слоя,
+                // то есть эти клетки платили бы долг этажу отправления.
+                // Поэтому свой список и дверь сразу — она сама разведёт, что
+                // из долга адресовано живому слою, а что допеканию, уже
+                // принявшему этаж прибытия.
+                static std::vector<std::uint32_t> arrivalDirt;
+                arrivalDirt.clear();
                 game::door_close(stack.layer(liftSwapLayer),
                                  doors.list[doors.lift[liftHub]], reg,
-                                 liftSwapLayer, doorDirty);
+                                 liftSwapLayer, arrivalDirt);
+                geometry_changed(game::GeomWriter::Door, liftSwapLayer,
+                                 arrivalDirt, 0xD00Du);
+            }
             std::fprintf(stderr, "[lift] swap: doors+nav %.0f ms\n",
                          std::chrono::duration<float, std::milli>(
                              std::chrono::steady_clock::now() - tS)
@@ -5550,30 +5671,13 @@ int main(int argc, char** argv) {
                                          "%d converted\n",
                                          mobileCells.size(), judged);
                             if (judged > 0) {
-                                voxelMirror.mark_dirty(
-                                    judgeResult.dirtyCells.data(),
-                                    judgeResult.dirtyCells.size());
-                                mediumPass.wake_cells(
-                                    judgeResult.dirtyCells.data(),
-                                    judgeResult.dirtyCells.size(), mw,
-                                    voxelMirror);
                                 // Конверсия — писатель (S20.4): маска стоит,
-                                // но МАТЕРИАЛ сменился на подвижный — якоря
-                                // на конвертированном мертвы World-пробой,
-                                // антураж и спящие тела платят тот же долг.
-                                // Нав не трогаем: проходимость — от масок,
-                                // они не менялись.
-                                if (game::anchor_validate_step(
-                                        reg, mw, activeLayer, bus,
-                                        judgeResult.dirtyCells,
-                                        &particleBursts, 0x5EEDBEEFu) > 0)
-                                    propPassNeedsRebuild = true;
-                                antourage_carve_step_here(
-                                    judgeResult.dirtyCells, 0x5EEDBEEFu);
-                                rigid_wake_dirty_cells(
-                                    reg, activeLayer,
-                                    judgeResult.dirtyCells.data(),
-                                    judgeResult.dirtyCells.size());
+                                // а МАТЕРИАЛ стал подвижным. Что из этого
+                                // следует, решает строка `JudgeEntry`.
+                                geometry_changed(game::GeomWriter::JudgeEntry,
+                                                 activeLayer,
+                                                 judgeResult.dirtyCells,
+                                                 0x5EEDBEEFu);
                             }
                         }
                     }
@@ -5592,20 +5696,16 @@ int main(int argc, char** argv) {
             // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
             // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
             if (!mediumMaskChanged.empty()) {
-                nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                       mediumMaskChanged.data(),
-                                       mediumMaskChanged.size());
-                // Из якорного долга автомату остаётся ТОЛЬКО пробуждение
-                // тел (S20.4-уточнение): подвижное — не опора (S20.5), так
-                // что ход автомата не рвёт ни якоря, ни антураж по
-                // построению; но ТЕЛО честно лежит и на куче — куча уехала,
-                // спящий труп обязан проснуться и упасть.
+                // Строка `Medium`: изменение пришло с GPU и двигает только
+                // подвижное — значит ни зеркалу, ни якорям, ни антуражу оно
+                // ничего не должно (S20.5), а допеканию, диффузии и спящим
+                // телам — должно: по осевшему завалу ходят, дыра от уехавшей
+                // кучи проходима, труп на уехавшей куче обязан проснуться.
                 // Замер §59.11-пересмотра: сколько тел будит ИМЕННО автомат
-                // (кандидат «водопады держат rigid бодрым» против «тело на
-                // теле не касается мира и не спит»). Печать — rigid-stats.
-                g_profMediumRigidWakes += rigid_wake_dirty_cells(
-                    reg, activeLayer, mediumMaskChanged.data(),
-                    mediumMaskChanged.size());
+                // (печать — rigid-stats).
+                g_profMediumRigidWakes += geometry_changed(
+                    game::GeomWriter::Medium, activeLayer, mediumMaskChanged,
+                    0x3ED1A000u);
             }
             // Покадрового судьи связности на изменениях масок БОЛЬШЕ НЕТ
             // (S20.5, замер 2026-08-29): автомат двигает только подвижную
@@ -5692,26 +5792,11 @@ int main(int argc, char** argv) {
                     // Отсюда и ниже — ДОЛГ ПИСАТЕЛЯ, своя строка профиля.
                     const auto profBigDebtT0 = prof_now();
                     if (!bigDirty.empty()) {
-                        voxelMirror.mark_dirty(bigDirty.data(),
-                                               bigDirty.size());
-                        mediumPass.wake_cells(bigDirty.data(), bigDirty.size(),
-                                              stack.layer(activeLayer),
-                                              voxelMirror);
-                        // ДОЛГИ ПИСАТЕЛЯ — зеркально entry-sweep (плейтест
-                        // владельца 2026-08-31: лампы висели в пустоте после
-                        // обрушения — конверсия меняет МАТЕРИАЛ на подвижный,
-                        // якоря на нём мертвы World-пробой; антураж (провода/
-                        // тряпки) и спящие тела платят тот же долг. Нав не
-                        // трогаем: маски не менялись.
-                        if (game::anchor_validate_step(
-                                reg, stack.layer(activeLayer), activeLayer,
-                                bus, bigDirty, &particleBursts,
-                                0x5EEDBEEFu) > 0)
-                            propPassNeedsRebuild = true;
-                        antourage_carve_step_here(bigDirty, 0x5EEDBEEFu);
-                        rigid_wake_dirty_cells(reg, activeLayer,
-                                               bigDirty.data(),
-                                               bigDirty.size());
+                        // Строка `JudgeBig` — тот же вывод, что у суда входа
+                        // (плейтест владельца 2026-08-31: лампы висели в
+                        // пустоте после обрушения).
+                        geometry_changed(game::GeomWriter::JudgeBig,
+                                         activeLayer, bigDirty, 0x5EEDBEEFu);
                     }
                     prof_add(kProfBigDebt, profBigDebtT0);
                 }
@@ -7848,31 +7933,10 @@ int main(int argc, char** argv) {
                     painted.erase(std::unique(painted.begin(), painted.end()),
                                   painted.end());
                     if (!painted.empty()) {
-                        voxelMirror.mark_dirty(painted.data(), painted.size());
-                        // Писатель будит БЕЗУСЛОВНО (закон S16.1: писатели
-                        // будят, автомат двигает): налитая вода потечёт, в
-                        // шар воздуха стечёт материя соседей, лишние клетки
-                        // мгновенно заснут. wake_cells сам будит и грани.
-                        if (mediumPass.ready())
-                            mediumPass.wake_cells(painted.data(),
-                                                  painted.size(),
-                                                  w, voxelMirror);
-                        nav.patch_carved_cells(w.grid(), painted.data(),
-                                               painted.size());
-                        // Патч поля по нарисованным ячейкам — тот же путь, что
-                        // у карва; полного скана этажа в кадре больше нет.
-                        if (game::patch_emitter_field(w, g_emitterField,
-                                                      painted.data(),
-                                                      painted.size())) {
-                            g_bakedFloorLights = game::bake_material_lights(
-                                w, g_emitterField, g_emitterClusters);
-                            rebuild_static_light_table(reg, activeLayer,
-                                                       /*reset=*/false);
-                            nav.set_light_table(g_staticLamps.data(),
-                                                g_staticLamps.size(),
-                                                gpu::kGridCellSlots,
-                                                g_staticTableGen);
-                        }
+                        // Кисть пишет и твёрдое, и текучее — строка `Brush`
+                        // платит полный долг, как карв.
+                        geometry_changed(game::GeomWriter::Brush, activeLayer,
+                                         painted, 0xB7054000u);
                         light_log("[paint] mat %u: %zu cells at "
                                   "(%.1f %.1f %.1f), table now %zu lamps\n",
                                   static_cast<unsigned>(paintMat),
@@ -7904,80 +7968,15 @@ int main(int argc, char** argv) {
                     }
                 }
                 auto carve_settle = [&](std::uint32_t seed) {
-                    auto ct0 = std::chrono::steady_clock::now();
-                    // Патч поля по dirtyCells — он же детектор «задет ли
-                    // свет» (субвоксельно честный). Кластеризация — только по
-                    // светоячейкам поля, микросекунды вместо скана 128³.
-                    const bool relight = game::patch_emitter_field(
-                        stack.layer(activeLayer), g_emitterField,
-                        carveResult.dirtyCells.data(),
-                        carveResult.dirtyCells.size());
-                    if (relight) {
-                        g_bakedFloorLights = game::bake_material_lights(
-                            stack.layer(activeLayer), g_emitterField,
-                            g_emitterClusters);
-                        // Кластеры пережиты с наследованием id — похудевший
-                        // неон сохраняет слот, умерший целиком — надгробие.
-                        rebuild_static_light_table(reg, activeLayer,
-                                                   /*reset=*/false);
-                        nav.set_light_table(g_staticLamps.data(),
-                                            g_staticLamps.size(),
-                                            gpu::kGridCellSlots,
-                                            g_staticTableGen);
-                    }
-                    g_carveT.lightMatMs += carve_ms_since(ct0);
                     g_carveT.carved = true;
                     g_carveT.cells += carveResult.dirtyCells.size();
-                    // Зеркало платит только dirty-клетки.
-                    ct0 = std::chrono::steady_clock::now();
-                    voxelMirror.mark_dirty(carveResult.dirtyCells.data(),
-                                           carveResult.dirtyCells.size());
-                    g_carveT.mirrorMarkMs += carve_ms_since(ct0);
-                    // Карв — писатель грида (S16.5): разбудить задетые
-                    // клетки — соседняя материя стечёт в свежую дыру.
-                    if (mediumPass.ready())
-                        mediumPass.wake_cells(carveResult.dirtyCells.data(),
-                                              carveResult.dirtyCells.size(),
-                                              stack.layer(activeLayer),
-                                              voxelMirror);
-                    ct0 = std::chrono::steady_clock::now();
-                    mark_diffusion_dirty(diffusionDriver,
-                                         stack.layer(activeLayer).grid(),
-                                         activeLayer, carveResult.dirtyCells);
-                    g_carveT.diffMs += carve_ms_since(ct0);
-                    // Долг живых битсетов проходимости — O(1) на клетку.
-                    ct0 = std::chrono::steady_clock::now();
-                    nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                           carveResult.dirtyCells.data(),
-                                           carveResult.dirtyCells.size());
-                    g_carveT.patchMs += carve_ms_since(ct0);
-                    // Пыль и обломки, тонированные срезанным материалом.
-                    ct0 = std::chrono::steady_clock::now();
+                    // Пыль и обломки, тонированные срезанным материалом, —
+                    // СВОЁ у карва, а не долг перед производными мира.
+                    const auto ct0 = std::chrono::steady_clock::now();
                     spawn_carve_particles(verletPass, carveResult, seed);
                     g_carveT.partMs += carve_ms_since(ct0);
-                    // Пропы на срезанных якорях падают ([jirnyak.md] §18).
-                    ct0 = std::chrono::steady_clock::now();
-                    if (game::anchor_validate_step(
-                            reg, stack.layer(activeLayer), activeLayer, bus,
-                            carveResult.dirtyCells, &particleBursts,
-                            seed) > 0) {
-                        propPassNeedsRebuild = true;
-                    }
-                    // Спящие тела над срезанной опорой просыпаются — долг
-                    // писателя (S20.4): труп на плите падает вместе с ней,
-                    // а не висит до первого толчка.
-                    rigid_wake_dirty_cells(reg, activeLayer,
-                                           carveResult.dirtyCells.data(),
-                                           carveResult.dirtyCells.size());
-                    g_carveT.anchorMs += carve_ms_since(ct0);
-                    // Запечённое убранство отвечает тому же взрыву. Смерть
-                    // публикуется ПОКАДРОВО (write_alive/write_pins), а не
-                    // ре-аплоадом — тот телепортировал живой сим в rest (§28.4).
-                    ct0 = std::chrono::steady_clock::now();
-                    if (antourage_carve_step_here(carveResult.dirtyCells,
-                                                  seed))
-                        propPassNeedsRebuild = true;
-                    g_carveT.antrMs += carve_ms_since(ct0);
+                    geometry_changed(game::GeomWriter::Carve, activeLayer,
+                                     carveResult.dirtyCells, seed, &g_carveT);
                     if (g_regrowWatch > 0) {
                         constexpr std::size_t kRegrowCap = 8192;
                         if (g_regrowRing.size() < kRegrowCap)
@@ -10940,36 +10939,20 @@ int main(int argc, char** argv) {
         // their mask edits the same way carve does ([game/door.h]
         // dirtyCells) — drain once per frame, then record this frame's
         // dirty-cell copies.
+        // ДВЕРЬ — ПИСАТЕЛЬ СТАТИКИ, КАК КАРВ (S17, S20.4): долг один и
+        // полный, и платится он той же дверью `geometry_changed`. Здесь стоял
+        // СВОЙ перечень, и он расходился с карвом дважды: диффузию в него
+        // дописали позже («опасность текла сквозь закрытую дверь»), а поле
+        // излучателей и поколение мира не дописали вовсе.
         if (!doorDirty.empty()) {
-            voxelMirror.mark_dirty(doorDirty.data(), doorDirty.size());
-            nav.patch_carved_cells(stack.layer(activeLayer).grid(),
-                                   doorDirty.data(), doorDirty.size());
-            // ОПАСНОСТЬ ТЕКЛА СКВОЗЬ ЗАКРЫТУЮ ДВЕРЬ, и это ровно та половина
-            // дефекта, которой `mark_diffusion_dirty` и заведён: его шапка
-            // называет оба симптома («текла сквозь закрытые двери и не текла
-            // сквозь свежий пролом»), а вызывающий был ОДИН — карв-шов. Дверь
-            // — такой же писатель статики, как карв (S20.4), и долг писателя
-            // один и полный: её dirtyCells уже дренируются здесь для зеркала,
-            // нава, автомата, антуража, якорей и пробуждения тел — диффузия
-            // была единственным слоем, пропущенным в этом перечне.
-            mark_diffusion_dirty(diffusionDriver,
-                                 stack.layer(activeLayer).grid(),
-                                 activeLayer, doorDirty);
-            if (mediumPass.ready())
-                mediumPass.wake_cells(doorDirty.data(), doorDirty.size(),
-                                      stack.layer(activeLayer), voxelMirror);
-            antourage_carve_step_here(doorDirty, 0xD00Du);
-            // ДОЛГ ПИСАТЕЛЯ ОДИН И ПОЛНЫЙ (S20.4): дверь — писатель статики,
-            // как карв. Раньше она рвала антураж, но НЕ пропы и не будила
-            // тела — проп на атомах полотна висел после открытия, вопреки
-            // контракту prop_system.h («whatever emptied these cells»).
-            if (game::anchor_validate_step(reg, stack.layer(activeLayer),
-                                           activeLayer, bus, doorDirty,
-                                           &particleBursts, 0xD00Du) > 0)
-                propPassNeedsRebuild = true;
-            rigid_wake_dirty_cells(reg, activeLayer, doorDirty.data(),
-                                   doorDirty.size());
+            geometry_changed(game::GeomWriter::Door, activeLayer, doorDirty,
+                             0xD00Du);
             doorDirty.clear();
+        }
+        if (!doorDirtyBuilt.empty()) {
+            geometry_changed(game::GeomWriter::Door, doorDirtyBuiltLayer,
+                             doorDirtyBuilt, 0xD00Du);
+            doorDirtyBuilt.clear();
         }
 
         if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
@@ -11310,12 +11293,12 @@ int main(int argc, char** argv) {
             }
 
             if (!stainDirty.empty()) {
-                // В7 (Автомат-2 инкр. 4): грязь — писатель, а запись
-                // будит; прежде страница откатывалась зеркалом БЕЗ
-                // пробуждения — GPU-состояние клетки затиралось молча.
-                mediumPass.wake_cells(stainDirty.data(), stainDirty.size(),
-                                      stack.layer(activeLayer), voxelMirror);
-                voxelMirror.mark_dirty(stainDirty.data(), stainDirty.size());
+                // В7 (Автомат-2 инкр. 4): грязь — писатель, а запись будит;
+                // прежде страница откатывалась зеркалом БЕЗ пробуждения —
+                // GPU-состояние клетки затиралось молча. Строка `Stain`: ни
+                // маска, ни статика не менялись, долг — зеркало и будильник.
+                geometry_changed(game::GeomWriter::Stain, activeLayer,
+                                 stainDirty, 0u);
                 stainDirty.clear();
             }
             // МИР-АВТОМАТ: apply_readback и poll_activity ушли в НАЧАЛО
@@ -11983,6 +11966,17 @@ int main(int argc, char** argv) {
     // Второй отчёт — ДО teardown, пока устройство живо. Разница с первым и
     // есть ответ на вопрос «выросло ли за сессию»: карв рождает страницы, а
     // они живут в том самом пуле, который упирается в видеопамять.
+    // КТО И СКОЛЬКО ПИСАЛ В МИР — счёт единственной двери писателя геометрии.
+    for (std::size_t i = 0; i < game::kGeomWriterCount; ++i)
+        if (g_geomStats.calls[i] != 0)
+            std::fprintf(stderr,
+                         "[geom] %s: записей %llu, клеток %llu, в неактивный "
+                         "слой %llu\n",
+                         game::kGeomWriterRows[i].name,
+                         static_cast<unsigned long long>(g_geomStats.calls[i]),
+                         static_cast<unsigned long long>(g_geomStats.cells[i]),
+                         static_cast<unsigned long long>(
+                             g_geomStats.foreign[i]));
     gpu::write_device_report(device, "на выходе");
 
     // --- teardown (reverse order) -----------------------------------------
