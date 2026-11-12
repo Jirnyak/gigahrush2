@@ -424,7 +424,7 @@ static void test_packs_all() {
         std::uint32_t packBogus = 0, packUnresolved = 0;
         for (std::uint64_t t = 0; t < kTicks; ++t) {
             wander_step(reg, stack.layer(layer).grid(), pool, packZones, layer, t);
-            const GuideTick g = guide_step(reg, packZones, layer, t, nullptr);
+            const GuideTick g = guide_step(reg, packZones, layer, t, nullptr, nullptr);
             packLed += g.led;
             packBogus += g.bogus;
             packUnresolved += g.unresolved;

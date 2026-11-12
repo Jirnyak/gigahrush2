@@ -162,6 +162,7 @@ int g_checks = 0;
 #include "suite_geomwriter.inl"  // долг писателя геометрии — таблица (S20.4)
 #include "suite_deathcause.inl"  // от чего гибнет толпа — счёт двери смерти
 #include "suite_settle.inl"      // доселение — тело рождается стоящим (CANON S26)
+#include "suite_kray.inl"        // сторож края — тело само не шагает с обрыва
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
 #include "suite_shotsub.inl"
@@ -1948,7 +1949,7 @@ static void test_wander_moves_the_crowd() {
     for (std::uint64_t t = 0; t < static_cast<std::uint64_t>(kSimHz); ++t) {
         const WanderTick w = wander_step(reg, stack.layer(layer).grid(), pool,
                                          zn, layer, t);
-        const GuideTick g = guide_step(reg, zn, layer, t, nullptr);
+        const GuideTick g = guide_step(reg, zn, layer, t, nullptr, nullptr);
         guided.led += g.led;
         guided.held += g.held;
         guided.stale += g.stale;
@@ -2048,7 +2049,7 @@ static void test_wander_moves_the_crowd() {
     // `steer_to_zone` зовут оба: прогулка — чтобы проверить исполнимость цели,
     // `guide_step` — чтобы её исполнить. Проверять неизменность только у
     // заявителя значило бы оставить единственного писателя вне утверждения.
-    guide_step(reg, zn, layer, 999u, nullptr);
+    guide_step(reg, zn, layer, 999u, nullptr, nullptr);
     CHECK(zn.part.at == partBefore);
     CHECK(zn.flow.dir == flowBefore);
     CHECK(zn.graph.nbr == nbrBefore);
@@ -5406,6 +5407,7 @@ int main() {
     test_geomwriter_all();
     test_deathcause_all();
     test_settle_all();
+    test_kray_all();
     test_prebuild_all();
     test_lightvis_all();
     test_floor_bucket_index();

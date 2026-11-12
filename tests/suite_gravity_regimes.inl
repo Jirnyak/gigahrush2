@@ -182,8 +182,6 @@ static void test_wander_isotropy_all_gravity_regimes() {
         giga::GravityRegime::NegX, giga::GravityRegime::PosX,
     };
 
-    giga::MacroGrid grid;
-
     // НАВ ПО ЗОНАМ, ФИКСТУРА «+x» (§88/F.2) — и перевод УСИЛИЛ этот тест, а не
     // перенёс. Прежде поле решётки было целиком `0xFF` = `kFlowNone`, то есть
     // каждое тело падало в ветку «маршрута нет» и получало РОВНО НОЛЬ, а ноль
@@ -205,6 +203,26 @@ static void test_wander_isotropy_all_gravity_regimes() {
         giga::GravityField gf;
         gf.regime = r;
         gf.global = gVec;
+
+        // ЗЕМЛЯ ПОД ТЕЛОМ — В СИСТЕМЕ ЭТОГО РЕЖИМА. До сторожа края
+        // ([game/guide.h]) тело шагало по пустому гриду, то есть по воздуху,
+        // и тест этого не замечал; теперь шаг в пустоту отвергается у самой
+        // двери «куда шагнуть», и ходок обязан на чём-то стоять. Плита —
+        // пятно 5×5 клеток перпендикулярно оси низа, в 1.6 м под подошвой
+        // (ближе безвредной высоты падения ~2.15 м).
+        giga::MacroGrid grid;
+        {
+            const int ax = d.x != 0 ? 0 : d.y != 0 ? 1 : 2;
+            const int sign = d.x + d.y + d.z;
+            const int slab = sign < 0 ? 6 : 9; // клетки [12,14) м либо [18,20) м
+            for (int a = 6; a <= 10; ++a)
+                for (int b = 6; b <= 10; ++b) {
+                    const int cx = ax == 0 ? slab : a;
+                    const int cy = ax == 1 ? slab : (ax == 0 ? a : b);
+                    const int cz = ax == 2 ? slab : b;
+                    grid.fill_cell(cx, cy, cz, giga::kMatConcrete);
+                }
+        }
 
         giga::Registry reg;
         giga::game::NpcPool pool;
@@ -241,7 +259,7 @@ static void test_wander_isotropy_all_gravity_regimes() {
         for (std::uint64_t t = 0; t < 2u * giga::game::kWanderPeriod; ++t) {
             giga::game::wander_step(reg, grid, pool, zn, 0, t, &gf);
             const giga::game::GuideTick gt =
-                giga::game::guide_step(reg, zn, 0, t, &gf);
+                giga::game::guide_step(reg, zn, 0, t, &gf, &grid);
             // Самопроверка прохода, на КАЖДОМ тике, а не в среднем: непонятный
             // байт ранга/вида и «заявитель объявил цель исполнимой, а писатель
             // её не исполнил» обязаны быть нулём по построению.

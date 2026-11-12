@@ -224,6 +224,7 @@ struct PlaceTick {
     std::uint32_t walking = 0;     // тел, которые проход ВЁЛ (забрал токен)
     std::uint32_t arrived = 0;     // дошедших этим тиком
     std::uint32_t unreachable = 0; // целей брошено: маршрута нет
+    std::uint32_t edge = 0;        // из них — у края (сторож ведения)
     // Тел, которых прямая на цель вывела бы ЗА ПРОХОДИМОЕ МНОЖЕСТВО, и потому
     // не поведённых. Счётчик обязателен, а не желателен: без него подавляющая
     // доля отказов хода выглядела бы как «тела просто не хотят идти».
@@ -297,7 +298,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                             const GravityField* gravity = nullptr,
                             const ZoneNav* zones = nullptr,
                             ServeTick* serve = nullptr,
-                            EventBus* bus = nullptr);
+                            EventBus* bus = nullptr,
+                            const MacroGrid* grid = nullptr);
 
 } // namespace giga::game
 

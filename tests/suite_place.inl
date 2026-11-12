@@ -727,7 +727,7 @@ static void test_place_errand_walks() {
     CHECK(none.considered == 0);
     CHECK(none.walking == 0);
     CHECK(live_claim(reg, e, 0) == nullptr);
-    const GuideTick noneGuide = guide_step(reg, zones, kLayer, /*tick=*/0, nullptr);
+    const GuideTick noneGuide = guide_step(reg, zones, kLayer, /*tick=*/0, nullptr, nullptr);
     CHECK(guide_writes(noneGuide) == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
@@ -785,7 +785,7 @@ static void test_place_errand_walks() {
     CHECK(!steer_claim_live(*claim, kWalkTick + 1));
 
     // СКОРОСТЬ ПОЯВЛЯЕТСЯ ТОЛЬКО ПОСЛЕ ЕДИНСТВЕННОГО ПИСАТЕЛЯ, И РОВНО ОДНА.
-    const GuideTick walkGuide = guide_step(reg, zones, kLayer, kWalkTick, nullptr);
+    const GuideTick walkGuide = guide_step(reg, zones, kLayer, kWalkTick, nullptr, nullptr);
     CHECK(walkGuide.led == 1);
     CHECK(walkGuide.held == 0);
     CHECK(rank_writes(walkGuide, SteerRank::Errand) == 1);
@@ -810,7 +810,7 @@ static void test_place_errand_walks() {
     CHECK(step.walking == 1);
     CHECK(step.picked == 0); // цель уже выбрана — пере-выбора не было
     CHECK(reg.get<Velocity>(e).v.x == kSentX); // и снова: заявитель не пишет
-    const GuideTick stepGuide = guide_step(reg, zones, kLayer, kStepTick, nullptr);
+    const GuideTick stepGuide = guide_step(reg, zones, kLayer, kStepTick, nullptr, nullptr);
     CHECK(rank_writes(stepGuide, SteerRank::Errand) == 1);
     CHECK(guide_writes(stepGuide) == 1);
     CHECK(stepGuide.stale == 0); // заявка ЭТОГО тика, а не прошлого
@@ -850,7 +850,7 @@ static void test_place_errand_walks() {
     // сравнивает тик» красит эту тройку строк — отказ вести молча превратился
     // бы в езду по снятому решению.
     const GuideTick stepupGuide =
-        guide_step(reg, zones, kLayer, kStepUpTick, nullptr);
+        guide_step(reg, zones, kLayer, kStepUpTick, nullptr, nullptr);
     CHECK(guide_writes(stepupGuide) == 0);
     CHECK(stepupGuide.stale == 1);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);  // и тело не тронуто
@@ -879,7 +879,7 @@ static void test_place_errand_walks() {
     CHECK(reg.get<ErrandPlan>(e).room == home); // цель НЕ потеряна
     CHECK(live_claim(reg, e, kOffnavTick) == nullptr); // заявки нет — ведёт вандер
     CHECK(!steer_claimed_by_stronger(reg, e, SteerRank::Walk, kOffnavTick));
-    const GuideTick offGuide = guide_step(reg, zones, kLayer, kOffnavTick, nullptr);
+    const GuideTick offGuide = guide_step(reg, zones, kLayer, kOffnavTick, nullptr, nullptr);
     CHECK(guide_writes(offGuide) == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);  // и тело не тронуто
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
@@ -912,7 +912,7 @@ static void test_place_errand_walks() {
     CHECK(fleeClaim != nullptr);
     CHECK(fleeClaim->rank == SteerRank::Flee);
     CHECK(fleeClaim->target.kind == TargetKind::Dir);
-    const GuideTick fleeGuide = guide_step(reg, zones, kLayer, kFleeTick, nullptr);
+    const GuideTick fleeGuide = guide_step(reg, zones, kLayer, kFleeTick, nullptr, nullptr);
     CHECK(rank_writes(fleeGuide, SteerRank::Flee) == 1);
     CHECK(rank_writes(fleeGuide, SteerRank::Errand) == 0);
     CHECK(guide_writes(fleeGuide) == 1);
@@ -931,7 +931,7 @@ static void test_place_errand_walks() {
     CHECK(lost.walking == 0);
     CHECK(reg.get<ErrandPlan>(e).room == kNoRoom);
     CHECK(live_claim(reg, e, kLostTick) == nullptr);
-    const GuideTick lostGuide = guide_step(reg, zones, kLayer, kLostTick, nullptr);
+    const GuideTick lostGuide = guide_step(reg, zones, kLayer, kLostTick, nullptr, nullptr);
     CHECK(guide_writes(lostGuide) == 0);
     // НЕДОСТИЖИМОЕ НЕ ЗАЯВЛЕНО — а не «заявлено и провалено»: счётчик
     // `unresolved` обязан быть НУЛЁМ по построению, он и есть прибор на
@@ -975,7 +975,7 @@ static void test_place_errand_walks() {
     CHECK(holdClaim->target.kind == TargetKind::Hold);
     CHECK(reg.get<Velocity>(e).v.x == kSentX); // сам проход скорости не трогал
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
-    const GuideTick holdGuide = guide_step(reg, zones, kLayer, kArriveTick, nullptr);
+    const GuideTick holdGuide = guide_step(reg, zones, kLayer, kArriveTick, nullptr, nullptr);
     CHECK(holdGuide.held == 1);
     CHECK(holdGuide.led == 0);
     CHECK(rank_writes(holdGuide, SteerRank::Errand) == 1);
@@ -1032,7 +1032,7 @@ static void test_place_errand_walks() {
     CHECK(holdAgain != nullptr);
     CHECK(holdAgain->target.kind == TargetKind::Hold);
     const GuideTick secondGuide =
-        guide_step(reg, zones, kLayer, kSecondTick, nullptr);
+        guide_step(reg, zones, kLayer, kSecondTick, nullptr, nullptr);
     CHECK(secondGuide.held == 1);
     CHECK(rank_writes(secondGuide, SteerRank::Errand) == 1);
     CHECK(reg.get<Velocity>(e).v.x == 0.0f);
@@ -1052,7 +1052,7 @@ static void test_place_errand_walks() {
     CHECK(!acting_busy(reg.get<Acting>(e), ActSlot::Body, kThreatTick));
     CHECK(pool.needs(id).sleep == 0.0f); // сорванное деяние НЕ кормит
     const GuideTick threatGuide =
-        guide_step(reg, zones, kLayer, kThreatTick, nullptr);
+        guide_step(reg, zones, kLayer, kThreatTick, nullptr, nullptr);
     CHECK(rank_writes(threatGuide, SteerRank::Flee) == 1);
     CHECK(rank_writes(threatGuide, SteerRank::Errand) == 0);
     CHECK(guide_writes(threatGuide) == 1);
@@ -1127,7 +1127,7 @@ static void test_place_errand_walks() {
     // остановкой на ровном месте, то есть замиранием (S13.2), и мутация
     // «на `idle` заявлять `target_hold`» красит обе строки ниже.
     CHECK(live_claim(reg, e, kCalmTick) == nullptr);
-    const GuideTick calmGuide = guide_step(reg, zones, kLayer, kCalmTick, nullptr);
+    const GuideTick calmGuide = guide_step(reg, zones, kLayer, kCalmTick, nullptr, nullptr);
     CHECK(guide_writes(calmGuide) == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
@@ -1153,7 +1153,7 @@ static void test_place_errand_walks() {
     CHECK(earlyServe.corridor == 1);
     // Тело без цели и без деяния — снова ничьё: ни заявки, ни записи.
     CHECK(live_claim(reg, e, kEarlyTick) == nullptr);
-    const GuideTick earlyGuide = guide_step(reg, zones, kLayer, kEarlyTick, nullptr);
+    const GuideTick earlyGuide = guide_step(reg, zones, kLayer, kEarlyTick, nullptr, nullptr);
     CHECK(guide_writes(earlyGuide) == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX);
 
@@ -1183,7 +1183,7 @@ static void test_place_errand_walks() {
     // тот же проход тело ЖИТЕЛЯ ведёт.
     CHECK(steer_claim(reg, e, kHumanTick, SteerRank::Errand,
                       target_zone(home, kErrandSpeed)));
-    const GuideTick humanGuide = guide_step(reg, zones, kLayer, kHumanTick, nullptr);
+    const GuideTick humanGuide = guide_step(reg, zones, kLayer, kHumanTick, nullptr, nullptr);
     CHECK(humanGuide.foreign == 1);
     CHECK(guide_writes(humanGuide) == 0);
     CHECK(reg.get<Velocity>(e).v.x == kSentX); // ввод человека не тронут
@@ -1272,7 +1272,7 @@ static void test_place_one_velocity_write_per_tick() {
     CHECK(reg.get<Velocity>(e).v.y == kSentY);
 
     // (б) ПИСАТЕЛЬ ПИШЕТ РОВНО РАЗ, И ПИШЕТ ЗАЯВКУ ДЕЛА.
-    const GuideTick g = guide_step(reg, zones, kLayer, kTick, nullptr);
+    const GuideTick g = guide_step(reg, zones, kLayer, kTick, nullptr, nullptr);
     CHECK(guide_writes(g) == 1);
     CHECK(rank_writes(g, SteerRank::Errand) == 1);
     CHECK(rank_writes(g, SteerRank::Walk) == 0);
@@ -1305,7 +1305,7 @@ static void test_place_one_velocity_write_per_tick() {
         // Заявители по-прежнему не пишут — ни один, ни на одном тике.
         CHECK(reg.get<Velocity>(e).v.x == kSentX);
         CHECK(reg.get<Velocity>(e).v.y == kSentY);
-        const GuideTick gk = guide_step(reg, zones, kLayer, tk, nullptr);
+        const GuideTick gk = guide_step(reg, zones, kLayer, tk, nullptr, nullptr);
         CHECK(guide_writes(gk) <= 1); // одна запись на тик, КАЖДЫЙ тик
         walkWrites += rank_writes(gk, SteerRank::Walk);
         errandWrites += rank_writes(gk, SteerRank::Errand);

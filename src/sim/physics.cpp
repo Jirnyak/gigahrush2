@@ -23,6 +23,10 @@ int floor_div(float v, float s) {
 } // namespace
 
 bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
+    return aabb_overlaps_solid(world.grid(), pos, half);
+}
+
+bool aabb_overlaps_solid(const MacroGrid& grid, vec3 pos, vec3 half) {
     // Voxel range the box covers on each axis.
     const int x0 = floor_div(pos.x - half.x, kVoxelSize);
     const int x1 = floor_div(pos.x + half.x, kVoxelSize);
@@ -37,8 +41,6 @@ bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
     const int cy1 = floor_div(static_cast<float>(y1), static_cast<float>(kSubDim));
     const int cz0 = floor_div(static_cast<float>(z0), static_cast<float>(kSubDim));
     const int cz1 = floor_div(static_cast<float>(z1), static_cast<float>(kSubDim));
-
-    const MacroGrid& grid = world.grid();
 
     for (int cz = cz0; cz <= cz1; ++cz) {
         const int mcz = wrap_macro(cz);
@@ -82,7 +84,7 @@ namespace {
 // Плита подошвы — один субвоксель толщиной, шириной в тело, на `layer` слоёв
 // ниже подошвы вдоль низа фрейма `d`. Общая для `stand_probe` и
 // `support_gap_sub`: «стоит» и «просвет ноль» обязаны быть ОДНИМ вопросом.
-bool foot_slab_solid(const World& world, vec3 centre, vec3 half, CellStep d,
+bool foot_slab_solid(const MacroGrid& grid, vec3 centre, vec3 half, CellStep d,
                      int layer) {
     const vec3 down{static_cast<float>(d.x), static_cast<float>(d.y),
                     static_cast<float>(d.z)};
@@ -92,7 +94,7 @@ bool foot_slab_solid(const World& world, vec3 centre, vec3 half, CellStep d,
                         d.z != 0 ? thin : half.z};
     const vec3 slab = centre + down * (along + thin +
                                        static_cast<float>(layer) * kVoxelSize);
-    return aabb_overlaps_solid(world, slab, slabHalf);
+    return aabb_overlaps_solid(grid, slab, slabHalf);
 }
 
 bool frame_has_down(CellStep d) { return d.x != 0 || d.y != 0 || d.z != 0; }
@@ -105,7 +107,7 @@ StandProbe stand_probe(const World& world, vec3 centre, vec3 half) {
     if (!out.fits) return out;
     const CellStep d = regime_down(world.gravity().regime);
     out.supported =
-        !frame_has_down(d) || foot_slab_solid(world, centre, half, d, 0);
+        !frame_has_down(d) || foot_slab_solid(world.grid(), centre, half, d, 0);
     return out;
 }
 
@@ -118,13 +120,18 @@ vec3 stand_centre(const World& world, vec3 foot, vec3 half) {
     return foot + up * (along + kContactSkin);
 }
 
-int support_gap_sub(const World& world, vec3 centre, vec3 half) {
-    const CellStep d = regime_down(world.gravity().regime);
-    if (!frame_has_down(d)) return 0; // падать некуда
-    constexpr int kAxisSub = kMacroDim * kSubDim; // вся ось тора в субвокселях
-    for (int gap = 0; gap < kAxisSub; ++gap)
-        if (foot_slab_solid(world, centre, half, d, gap)) return gap;
+int support_gap_sub(const MacroGrid& grid, CellStep down, vec3 centre,
+                    vec3 half, int maxLayers) {
+    if (!frame_has_down(down)) return 0; // падать некуда
+    for (int gap = 0; gap <= maxLayers; ++gap)
+        if (foot_slab_solid(grid, centre, half, down, gap)) return gap;
     return kNoSupportSub;
+}
+
+int support_gap_sub(const World& world, vec3 centre, vec3 half) {
+    constexpr int kAxisSub = kMacroDim * kSubDim; // вся ось тора в субвокселях
+    return support_gap_sub(world.grid(), regime_down(world.gravity().regime),
+                           centre, half, kAxisSub - 1);
 }
 
 namespace {

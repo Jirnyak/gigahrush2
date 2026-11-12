@@ -551,6 +551,12 @@ static game::GeomWriteStats g_geomStats;
 static game::DeathCauses g_deathCauses;
 static std::uint32_t g_deathCausesPrinted = 0;
 
+// Сторож края — счёт единственного писателя скорости и заявителей, печать
+// `[kray]`. Копится за весь прогон, как счёт причин смерти.
+static std::uint64_t g_edgeHeld = 0;
+static std::uint64_t g_edgeLegs = 0;
+static std::uint64_t g_edgePrinted = 0;
+
 // СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH, баг «дыра заросла»): кольцо
 // выбитых атомов + скан «стал ли атом снова твёрдым» в CPU-каноне.
 // WATCH=1 — скан раз в 25 тиков в сим-секции; WATCH=2 — скан в ЧЕТЫРЁХ
@@ -7260,7 +7266,7 @@ int main(int argc, char** argv) {
                 const auto profPatrolT0 = prof_now();
                 patrolTick = game::ai_patrol_step(
                     reg, nav.zones(), activeLayer, &activeWorld.gravity(),
-                    simTick);
+                    simTick, &activeWorld.grid());
                 prof_add(kProfPatrol, profPatrolT0);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Patrol, steerProbe);
@@ -7279,7 +7285,7 @@ int main(int argc, char** argv) {
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, activeLayer,
                     simNow, simTick, &activeWorld.gravity(), &nav.zones(),
-                    &serveTick, &bus);
+                    &serveTick, &bus, &activeWorld.grid());
                 prof_add(kProfPlace, profPlaceT0);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Errand, steerProbe);
@@ -7303,8 +7309,26 @@ int main(int argc, char** argv) {
                 // и до него прибор продолжает показывать двойные записи.
                 const auto profGuideT0 = prof_now();
                 guideTick = game::guide_step(reg, nav.zones(), activeLayer,
-                                             simTick, &activeWorld.gravity());
+                                             simTick, &activeWorld.gravity(),
+                                             &activeWorld.grid());
                 prof_add(kProfGuide, profGuideT0);
+                // СТОРОЖ КРАЯ — накопительно, той же формой, что `[smert]`:
+                // раз в 250 тиков и только когда счёт сдвинулся. «Тел у края»
+                // — тело-тики: одно тело, простоявшее у обрыва секунду, даёт
+                // 125. «Ног брошено» — цели, снятые заявителями у края.
+                g_edgeHeld += guideTick.edge;
+                g_edgeLegs += wanderTick.edge + placeTick.edge;
+                if (simTick % 250u == 0u &&
+                    g_edgeHeld + g_edgeLegs != g_edgePrinted) {
+                    g_edgePrinted = g_edgeHeld + g_edgeLegs;
+                    std::fprintf(stderr,
+                                 "[kray] tick=%llu этаж=%d | остановлено у края "
+                                 "%llu тело-тиков, ног брошено у края %llu\n",
+                                 static_cast<unsigned long long>(simTick),
+                                 currentFloor,
+                                 static_cast<unsigned long long>(g_edgeHeld),
+                                 static_cast<unsigned long long>(g_edgeLegs));
+                }
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Guide, steerProbe);
                 // ВЗГЛЯД — ПОСЛЕ ведения, и это единственное законное место:

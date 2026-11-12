@@ -596,7 +596,7 @@ static void test_utilai_all() {
                 if (claim_rank(reg, e, tk) != SteerRank::Flee) ++calmOnRamp;
 
             // ОДИН ПРОХОД ВЕДЕНИЯ.
-            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr);
+            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
             std::uint32_t moved = 0;
             for (Entity e : all) {
                 const bool w = !is_sentinel(reg.get<Velocity>(e));
@@ -678,7 +678,7 @@ static void test_utilai_all() {
         for (Entity e : all)
             if (!is_sentinel(reg.get<Velocity>(e))) ++steeredBeforeGuide;
         CHECK(steeredBeforeGuide == 0);
-        const GuideTick gDir = guide_step(reg, zn, kLayer, kDirTick, nullptr);
+        const GuideTick gDir = guide_step(reg, zn, kLayer, kDirTick, nullptr, nullptr);
         CHECK(gDir.led == static_cast<std::uint32_t>(kGroup));   // только B
         CHECK(gDir.held == 0u);
         CHECK(gDir.byRank[rank_slot(SteerRank::Flee)] ==
@@ -733,7 +733,7 @@ static void test_utilai_all() {
         CHECK(touched == 0u);
         // ...и ведёт тело именно СИЛЬНАЯ заявка: -x на темпе паники.
         const GuideTick gStrong =
-            guide_step(reg, zn, kLayer, kStrongTick, nullptr);
+            guide_step(reg, zn, kLayer, kStrongTick, nullptr, nullptr);
         CHECK(gStrong.led == static_cast<std::uint32_t>(2 * kGroup));
         CHECK(gStrong.byRank[rank_slot(SteerRank::Flee)] ==
               static_cast<std::uint32_t>(2 * kGroup));
@@ -756,7 +756,7 @@ static void test_utilai_all() {
             const std::uint64_t tk = kStrongTick + 1 + t;
             arm_sentinels(reg, all);
             visited += wander_step(reg, grid, pool, zn, kLayer, tk).considered;
-            guide_step(reg, zn, kLayer, tk, nullptr);
+            guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
             for (Entity e : all) {
                 if (claim_rank(reg, e, tk) == SteerRank::Walk) ++walkClaims;
                 if (!is_sentinel(reg.get<Velocity>(e))) ++walkLed;
@@ -797,7 +797,7 @@ static void test_utilai_all() {
         CHECK(!steer_claim_live(reg.get<Steer>(victim), kBadTick));
         CHECK(!steer_claimed_by_stronger(reg, victim, SteerRank::Walk, kBadTick));
         arm_sentinels(reg, all);
-        const GuideTick gBad = guide_step(reg, zn, kLayer, kBadTick, nullptr);
+        const GuideTick gBad = guide_step(reg, zn, kLayer, kBadTick, nullptr, nullptr);
         CHECK(gBad.bogus == 1u);
         CHECK(gBad.led + gBad.held == 0u);   // ни это тело, ни чужие просрочки
         CHECK(is_sentinel(reg.get<Velocity>(victim)));
@@ -809,7 +809,7 @@ static void test_utilai_all() {
             const std::uint64_t tk = kBadTick + t;
             arm_sentinels(reg, all);
             wander_step(reg, grid, pool, zn, kLayer, tk);
-            guide_step(reg, zn, kLayer, tk, nullptr);
+            guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
             if (claim_rank(reg, victim, tk) == SteerRank::Walk) ++victimWalk;
             if (!is_sentinel(reg.get<Velocity>(victim))) ++victimLed;
         }
@@ -932,7 +932,7 @@ static void test_utilai_all() {
         // (убрать `s.tick == tick` из `steer_claim_live`) роняет обе строки
         // ниже: тело бежало бы от испарившегося поля вечно.
         CHECK(reg.all_of<Steer>(e));
-        const GuideTick gStale = guide_step(reg, zn, kLayer, 2, nullptr);
+        const GuideTick gStale = guide_step(reg, zn, kLayer, 2, nullptr, nullptr);
         CHECK(gStale.stale == 1u);
         CHECK(gStale.led + gStale.held == 0u);
         CHECK(is_sentinel(reg.get<Velocity>(e)));
@@ -970,7 +970,7 @@ static void test_utilai_all() {
         // второго рубежа.
         CHECK(steer_claim(reg, e, 5, SteerRank::Flee,
                           target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)));
-        const GuideTick gHuman = guide_step(reg, zn, kLayer, 5, nullptr);
+        const GuideTick gHuman = guide_step(reg, zn, kLayer, 5, nullptr, nullptr);
         CHECK(gHuman.foreign == 1u);
         CHECK(is_sentinel(reg.get<Velocity>(e)));
 
@@ -983,7 +983,7 @@ static void test_utilai_all() {
         reg.emplace<Corpse>(e, Corpse{});
         CHECK(steer_claim(reg, e, 6, SteerRank::Flee,
                           target_dir(vec3{-1.0f, 0.0f, 0.0f}, kFleeSpeed)));
-        const GuideTick gDead = guide_step(reg, zn, kLayer, 6, nullptr);
+        const GuideTick gDead = guide_step(reg, zn, kLayer, 6, nullptr, nullptr);
         CHECK(gDead.foreign == 1u);
         CHECK(is_sentinel(reg.get<Velocity>(e)));
         reg.remove<Corpse>(e);
@@ -1055,7 +1055,7 @@ static void test_utilai_all() {
                 const std::uint64_t tk = static_cast<std::uint64_t>(t);
                 ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg,
                         nullptr, nullptr, nullptr, nullptr, tk);
-                guide_step(reg, zn, kLayer, tk, nullptr);
+                guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
                 now += static_cast<double>(kSimDt);
             }
             std::uint32_t steered = 0;
@@ -1598,7 +1598,7 @@ static void test_utilai_all() {
         CHECK(beforeGuide == 0u);
         // Group C runs in -x, away from the cell it remembers, at flee pace —
         // и пишет это ЕДИНСТВЕННЫЙ писатель.
-        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr);
+        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr, nullptr);
         CHECK(g1.led == static_cast<std::uint32_t>(2 * kGroup));   // B + C
         CHECK(g1.held == 0u);
         CHECK(g1.byRank[rank_slot(SteerRank::Flee)] ==
@@ -1649,7 +1649,7 @@ static void test_utilai_all() {
             // вандера»; разница в том, что теперь тело волен взять ЛЮБОЙ более
             // слабый заявитель, а не только тот, чьё имя стояло в байте.
             for (Entity e : cOnly) CHECK(!reg2.all_of<Steer>(e));
-            const GuideTick g0 = guide_step(reg2, zn, kLayer, 1, nullptr);
+            const GuideTick g0 = guide_step(reg2, zn, kLayer, 1, nullptr, nullptr);
             CHECK(g0.led + g0.held == 0u);
             for (Entity e : cOnly) CHECK(is_sentinel(reg2.get<Velocity>(e)));
         }
@@ -1673,7 +1673,7 @@ static void test_utilai_all() {
             wander_step(reg, grid, pool, zn, kLayer, tk);
             for (Entity e : all)
                 if (!is_sentinel(reg.get<Velocity>(e))) ++selfWriters;
-            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr);
+            const GuideTick g = guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
             std::uint32_t moved = 0;
             for (Entity e : all) {
                 const bool w = !is_sentinel(reg.get<Velocity>(e));
@@ -1733,7 +1733,7 @@ static void test_utilai_all() {
                                         nullptr, tk);
             CHECK(dead.considered == 0u);
             wander_step(reg, grid, pool, zn, kLayer, tk);
-            guide_step(reg, zn, kLayer, tk, nullptr);
+            guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
             for (Entity e : all) {
                 if (claim_rank(reg, e, tk) == SteerRank::Walk) ++pickedUp;
                 if (!is_sentinel(reg.get<Velocity>(e))) ++ledAfter;
@@ -1847,7 +1847,7 @@ static void test_utilai_all() {
                 const AiTick tick =
                     ai_step(reg, pool, &danger, grid, kLayer, now, kSimDt, cfg,
                             &mem, nullptr, nullptr, nullptr, tk);
-                guide_step(reg, zn, kLayer, tk, nullptr);
+                guide_step(reg, zn, kLayer, tk, nullptr, nullptr);
                 recalls += tick.recalled;
                 replans += tick.replanned;
                 now += static_cast<double>(kSimDt);
@@ -2036,7 +2036,7 @@ static void test_utilai_all() {
         // клетки, темпом ИЗ ЗАЯВКИ. Прежде эту тройку писал сам наряд, и
         // проверить «тот ли темп» было нечем — скорость и направление приходили
         // одной записью.
-        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr);
+        const GuideTick g1 = guide_step(reg, zn, kLayer, 1, nullptr, nullptr);
         CHECK(g1.led == 1u);
         CHECK(g1.byRank[rank_slot(SteerRank::Patrol)] == 1u);
         CHECK(vel.v.x > 0.0f);  // вдоль поля...
@@ -2082,7 +2082,7 @@ static void test_utilai_all() {
         // тело под токеном без записи скорости не ведётся никем. Проход обязан
         // прочитать её как устаревшую, тело оставить телу физики, а сторож оси
         // гравитации не тронуть вовсе.
-        const GuideTick g3 = guide_step(reg, zn, kLayer, 3, &sideways);
+        const GuideTick g3 = guide_step(reg, zn, kLayer, 3, &sideways, nullptr);
         CHECK(g3.stale == 1u);
         CHECK(g3.led + g3.held == 0u);
         CHECK(vel.v.x == 0.25f);

@@ -173,7 +173,7 @@ inline void steer_tick(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     CHECK(lt.moved + lt.held + lt.human == lt.bodies);
     CHECK(lt.born <= lt.bodies);
     wander_step(reg, grid, pool, zn, layer, t);
-    const GuideTick gt = guide_step(reg, zn, layer, t, nullptr);
+    const GuideTick gt = guide_step(reg, zn, layer, t, nullptr, nullptr);
     // Самопроверка писателя, на каждом тике: непонятный байт ранга/вида и
     // «заявитель объявил цель исполнимой, а писатель её не исполнил» обязаны
     // быть нулём по построению. Вырожденный нав этой арены (`arm_zones_one`:
@@ -1116,7 +1116,7 @@ static void test_behaviours_all() {
             const LookTick lt = look_step(reg, layer, steer_frame_of(&sideways));
             CHECK(lt.moved + lt.held + lt.human == lt.bodies);
             wander_step(reg, grid, pool, zn, layer, t, &sideways);
-            const GuideTick gt = guide_step(reg, zn, layer, t, &sideways);
+            const GuideTick gt = guide_step(reg, zn, layer, t, &sideways, nullptr);
             CHECK(gt.bogus == 0u);
             CHECK(gt.unresolved == 0u);
             CHECK(gt.foreign == 0u);

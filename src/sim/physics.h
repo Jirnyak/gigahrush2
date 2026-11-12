@@ -11,6 +11,7 @@
 
 #include "ecs/registry.h"
 #include "core/tick.h" // kSimDt — кап подшага выведен, не назначен
+#include "world/gravity.h" // CellStep — низ фрейма у ограниченного просвета
 #include "world/level_stack.h"
 
 namespace giga {
@@ -33,6 +34,10 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
 // True if the AABB centered at `pos` overlaps any solid sub-voxel in `world`.
 // Exposed for tests and for gameplay queries (line-of-fire, placement checks).
 bool aabb_overlaps_solid(const class World& world, vec3 pos, vec3 half);
+// То же по одному гриду — для проходов, которым мир даётся гридом и фреймом
+// порознь (ведение: [game/guide.h]). Второго закона здесь нет: версия по
+// `World` зовёт эту.
+bool aabb_overlaps_solid(const class MacroGrid& grid, vec3 pos, vec3 half);
 
 // ---------------------------------------------------------------------------
 // СТОИТ ЛИ ТЕЛО ЗДЕСЬ — ОДИН ОТВЕТ, НА АТОМАХ, В СИСТЕМЕ ГРАВИТАЦИИ ЭТАЖА
@@ -81,5 +86,11 @@ vec3 stand_centre(const class World& world, vec3 foot, vec3 half);
 // родилось в воздухе» обязано быть числом, а не впечатлением от игры.
 inline constexpr int kNoSupportSub = -1;
 int support_gap_sub(const class World& world, vec3 centre, vec3 half);
+// Тот же просвет с явными грид/низ и ПРЕДЕЛОМ глубины: ответ в `[0, maxLayers]`
+// либо `kNoSupportSub`, если тверди нет ближе. Это вопрос сторожа края («не
+// глубже ли здесь, чем можно упасть без вреда») — ему незачем маршировать
+// всю ось тора. Низ без направления — ноль, как и выше.
+int support_gap_sub(const class MacroGrid& grid, CellStep down, vec3 centre,
+                    vec3 half, int maxLayers);
 
 } // namespace giga

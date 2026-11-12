@@ -272,6 +272,7 @@
 #include "ecs/components.h"    // CameraTag — половина ответа decider_of
 #include "ecs/registry.h"      // Registry, Entity
 #include "game/combat.h"       // Corpse — первая ветка decider_of: мёртвый без решателя
+#include "game/embody.h"       // NpcRef — тождество жителя: третья ветка decider_of
 #include "game/mob_spawn.h"    // MobRef — вторая половина ответа decider_of
 #include "game/faction.h"
 #include "game/guide.h"      // kWalkSpeedMps/kPanicPace — ОДИН дом скорости ходьбы      // Faction / kFactionCount — the trait table's index
@@ -423,7 +424,7 @@ enum class Decider : std::uint8_t {
     Human,    // носитель камеры: решает человек; автомату делать нечего
     Resident, // житель: утилитарный мозг S13 — ai_step, ai_equip_step
     Monster,  // моб: собственное поведение (wander/investigate/mob_behaviour)
-    None,     // труп: решателя НЕТ — телом владеет солвер, занятию тут нечего
+    None,     // труп ИЛИ ВЕЩЬ: решателя НЕТ — занятию тут нечего
 };
 
 // Вид решателя ВЫВОДИТСЯ из тождества тела, а не хранится флажком: держать
@@ -442,7 +443,17 @@ inline Decider decider_of(const Registry& reg, Entity e) {
     if (reg.all_of<Corpse>(e)) return Decider::None;
     if (reg.all_of<CameraTag>(e)) return Decider::Human;
     if (reg.all_of<MobRef>(e)) return Decider::Monster;
-    return Decider::Resident;
+    // ЖИТЕЛЬ — ЭТО ТОЖДЕСТВО (`NpcRef`), А НЕ «ВСЁ ОСТАЛЬНОЕ». До 2026-11-12
+    // здесь стояло голое `return Decider::Resident`, и «жителем» выходила
+    // любая сущность с `Transform`: проп, подбор, ящик, лампа. `wander_init`
+    // выдавал им всем `WanderTarget`, а проход прогулки на каждом визите
+    // выбирал им ногу, спрашивал нав и подавал заявку ведения — тысячи раз в
+    // секунду, годами, и это пряталось в счётчике `walk`. Вскрыл сторож края:
+    // лампа на стене честно получила отказ «за шагом обрыв». Тот же класс
+    // дефекта, что регрессия восприятия («проход обходил все Transform, а не
+    // тела») — и лечится тем же: тело определяется тождеством.
+    if (reg.all_of<NpcRef>(e)) return Decider::Resident;
+    return Decider::None;
 }
 
 // --- Identity hashing -------------------------------------------------------
@@ -1182,7 +1193,8 @@ struct PatrolTick {
 // а шаг — два чтения ([game/zone_nav.h] `zone_walk_dir`). Непостроенный бейк —
 // no-op, как и прежде: тела ходят вандером, пока этаж печётся.
 PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
-                          const GravityField* gravity, std::uint64_t tick);
+                          const GravityField* gravity, std::uint64_t tick,
+                          const MacroGrid* grid = nullptr);
 
 // The danger field's PRODUCER — the write half of the loop ai_step's threat
 // term has been waiting on ([diffusion.h], problems.md §52). Fleeing bodies

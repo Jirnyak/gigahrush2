@@ -815,7 +815,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
 }
 
 PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
-                          const GravityField* gravity, std::uint64_t tick) {
+                          const GravityField* gravity, std::uint64_t tick,
+                          const MacroGrid* grid) {
     PatrolTick out;
     // `dt` СНЯТ С ПОДПИСИ 2026-11-09: он был `(void)dt` с доводом «скорость
     // есть темп, интегрирует физика» — то есть параметр без читателя. На его
@@ -831,6 +832,8 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
     // world, null keeps NegZ bit-for-bit (tests), Custom resolves through the
     // vector.
     const GravityFrame gf = steer_frame_of(gravity);
+    // Земля под сторожа края — та же, что возьмёт писатель ([game/guide.h]).
+    const SteerGround ground = steer_ground_of(grid, gravity);
 
     steer_pool_warm(reg);
     auto view = reg.view<AiBrain, const NpcRef, const Transform>();
@@ -965,9 +968,12 @@ PatrolTick ai_patrol_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`): два
         // чтения нава и ни одной волны, прицел в центр следующей клетки.
         // Третья побайтовая копия этих тридцати строк жила здесь.
-        const SteerStep st =
-            steer_to_zone(zones, gf, tr.pos, cx, cy, cz, myZone, plan.zoneTo);
-        if (st.fail == SteerFail::NoRoute) {
+        const AABB* box = reg.try_get<AABB>(e);
+        const SteerStep st = steer_to_zone(
+            zones, gf, ground, tr.pos,
+            box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f}, cx, cy, cz,
+            myZone, plan.zoneTo);
+        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::Edge) {
             // Маршрута нет (другая компонента связности, либо поле соседки не
             // покрывает эту клетку). Цель снимается СО СТАГГЕРОМ: без него
             // замер дал 3334 снятия за прогон против нуля у решётки, и платило

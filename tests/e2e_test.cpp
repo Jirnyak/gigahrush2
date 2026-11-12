@@ -77,6 +77,14 @@ struct NavFixture {
     void init() {
         if (!initialized) {
             generate_floor(world, 0, floor_spec(FloorKind::Residential), 42u);
+            // ЗЕМЛЯ ПОД ИСПЫТАТЕЛЬНЫМ ПЯТНОМ. Тела сценариев стоят в точке
+            // (16, 16, 16) м — в воздухе настоящего этажа, в 4 м над его
+            // перекрытием, и до сторожа края ([game/guide.h]) ходили по
+            // воздуху незамеченными. Плита 9×9 клеток на [12, 14) м даёт им
+            // опору в 1.6 м под подошвой — ближе безвредной высоты падения.
+            for (int cy = 4; cy <= 12; ++cy)
+                for (int cx = 4; cx <= 12; ++cx)
+                    world.grid().fill_cell(cx, cy, 6, kMatConcrete);
             zn.part.zones = 2;
             zn.part.at.assign(kMacroCells, static_cast<game::RoomId>(1));
             for (int cz = 0; cz < kMacroDim; ++cz)
@@ -263,7 +271,7 @@ static void test_t1_f3_05_patrol_steering_in_walking_plane() {
         ai_patrol_step(reg, g_nav.zn, 0u, &g, tick);
         CHECK(approx_eq(reg.get<Velocity>(e).v.x, kSteerSentinel)); // не писал
         CHECK(approx_eq(reg.get<Velocity>(e).v.y, kSteerSentinel));
-        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, &g);
+        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, &g, nullptr);
         CHECK(gt.led == 1u);
         const Velocity& v = reg.get<Velocity>(e);
         CHECK(approx_eq(v.v.z, 5.0f)); // ось гравитации не тронута
@@ -279,6 +287,9 @@ static void test_t1_f3_05_patrol_steering_in_walking_plane() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(
             e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -289,7 +300,7 @@ static void test_t1_f3_05_patrol_steering_in_walking_plane() {
 
         CHECK(steer_claim(reg, e, tick, SteerRank::Patrol,
                           target_dir(vec3{0.0f, 1.0f, 0.0f}, kErrandSpeed)));
-        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, &g);
+        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, &g, nullptr);
         CHECK(gt.led == 1u);
         const Velocity& v = reg.get<Velocity>(e);
         CHECK(approx_eq(v.v.x, kSteerSentinel)); // ось гравитации не тронута
@@ -493,11 +504,14 @@ static void test_t1_f8_03_no_claim_means_zero_writes() {
     g_nav.init();
     Registry reg;
     Entity e = reg.create();
+    // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+    // сущность есть ВЕЩЬ, и ведение её не касается.
+    reg.emplace<NpcRef>(e, NpcRef{1u});
     reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
     reg.emplace<Velocity>(
         e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
     CHECK(!steer_claimed_by_stronger(reg, e, SteerRank::Walk, 0u));
-    const GuideTick gt = guide_step(reg, g_nav.zn, 0u, 0u, nullptr);
+    const GuideTick gt = guide_step(reg, g_nav.zn, 0u, 0u, nullptr, nullptr);
     CHECK(gt.led == 0u && gt.held == 0u);
     CHECK(gt.bogus == 0u && gt.stale == 0u); // «нет заявки» — не отказ, а тишина
     CHECK(approx_eq(reg.get<Velocity>(e).v.x, kSteerSentinel));
@@ -525,6 +539,9 @@ static void test_t1_f8_04_weak_claim_never_lands_on_a_strong_one() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
         reg.emplace<WanderTarget>(e, WanderTarget{});
@@ -546,6 +563,9 @@ static void test_t1_f8_04_weak_claim_never_lands_on_a_strong_one() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(e, Velocity{vec3{0.0f, 0.0f, 0.0f}});
         reg.emplace<WanderTarget>(e, WanderTarget{});
@@ -572,19 +592,22 @@ static void test_t1_f8_05_claim_expires_with_its_own_tick() {
     g_nav.init();
     Registry reg;
     Entity e = reg.create();
+    // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+    // сущность есть ВЕЩЬ, и ведение её не касается.
+    reg.emplace<NpcRef>(e, NpcRef{1u});
     reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
     reg.emplace<Velocity>(
         e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
     CHECK(steer_claim(reg, e, 11u, SteerRank::Patrol,
                       target_dir(vec3{1.0f, 0.0f, 0.0f}, kErrandSpeed)));
 
-    const GuideTick now = guide_step(reg, g_nav.zn, 0u, 11u, nullptr);
+    const GuideTick now = guide_step(reg, g_nav.zn, 0u, 11u, nullptr, nullptr);
     CHECK(now.led == 1u);
     CHECK(now.stale == 0u);
     CHECK(approx_eq(reg.get<Velocity>(e).v.x, kErrandSpeed));
 
     reg.get<Velocity>(e).v.x = kSteerSentinel;
-    const GuideTick later = guide_step(reg, g_nav.zn, 0u, 12u, nullptr);
+    const GuideTick later = guide_step(reg, g_nav.zn, 0u, 12u, nullptr, nullptr);
     CHECK(later.stale == 1u);
     CHECK(later.led == 0u && later.held == 0u);
     CHECK(approx_eq(reg.get<Velocity>(e).v.x, kSteerSentinel));
@@ -1116,6 +1139,9 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(
             e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -1128,7 +1154,7 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
         // ...и слабейший от такого тела НЕ ОТКАЗЫВАЕТСЯ — вот сторона отказа.
         CHECK(!steer_claimed_by_stronger(reg, e, SteerRank::Walk, tick));
 
-        const GuideTick bad = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick bad = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(bad.bogus == 1u);
         CHECK(bad.led == 0u && bad.held == 0u);
         CHECK(approx_eq(reg.get<Velocity>(e).v.x, kSteerSentinel));
@@ -1138,7 +1164,7 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
         // что гейт охраняет: первое — исправный отказ, второе — замершая толпа.
         CHECK(steer_claim(reg, e, tick, SteerRank::Walk,
                           target_dir(vec3{1.0f, 0.0f, 0.0f}, kWalkSpeedMps)));
-        const GuideTick led = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick led = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(led.bogus == 0u);
         CHECK(led.led == 1u);
         CHECK(led.byRank[static_cast<std::size_t>(SteerRank::Walk)] == 1u);
@@ -1151,6 +1177,9 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(
             e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -1161,7 +1190,7 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
 
         CHECK(steer_claim_live(reg.get<Steer>(e), tick));
         CHECK(steer_claimed_by_stronger(reg, e, SteerRank::Walk, tick));
-        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick gt = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(gt.bogus == 0u);
         CHECK(gt.led == 1u);
         CHECK(gt.byRank[static_cast<std::size_t>(SteerRank::Errand)] == 1u);
@@ -1182,6 +1211,9 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
     {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(
             e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -1193,7 +1225,7 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
         st.rank = SteerRank::Flee;
         reg.emplace<Steer>(e, st);
 
-        const GuideTick bad = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick bad = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(bad.bogus == 1u);
         CHECK(bad.led == 0u && bad.held == 0u);
         CHECK(approx_eq(reg.get<Velocity>(e).v.x, kSteerSentinel));
@@ -1202,7 +1234,7 @@ static void test_t2_f8_03_corrupted_claim_byte_reads_as_unowned() {
         // и пишется ВЛАДЕЕМЫЙ НОЛЬ (остановка, а не толчок), причём только в
         // плоскости ходьбы.
         reg.get<Steer>(e).target = target_hold();
-        const GuideTick held = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick held = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(held.bogus == 0u);
         CHECK(held.held == 1u);
         CHECK(held.byRank[static_cast<std::size_t>(SteerRank::Flee)] == 1u);
@@ -1241,6 +1273,10 @@ static void test_t2_f8_05_guide_writes_only_its_own_layer() {
     Registry reg;
     Entity e0 = reg.create();
     Entity e1 = reg.create();
+    // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+    // сущность есть ВЕЩЬ, и ведение её не касается.
+    reg.emplace<NpcRef>(e0, NpcRef{1u});
+    reg.emplace<NpcRef>(e1, NpcRef{2u});
     reg.emplace<Transform>(e0, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
     reg.emplace<Transform>(e1, Transform{vec3{16.0f, 16.0f, 16.0f}, 1u});
     reg.emplace<Velocity>(
@@ -1251,12 +1287,12 @@ static void test_t2_f8_05_guide_writes_only_its_own_layer() {
     CHECK(steer_claim(reg, e0, 2u, SteerRank::Walk, go));
     CHECK(steer_claim(reg, e1, 2u, SteerRank::Walk, go));
 
-    const GuideTick zero = guide_step(reg, g_nav.zn, 0u, 2u, nullptr);
+    const GuideTick zero = guide_step(reg, g_nav.zn, 0u, 2u, nullptr, nullptr);
     CHECK(zero.led == 1u);
     CHECK(approx_eq(reg.get<Velocity>(e0).v.x, kWalkSpeedMps));
     CHECK(approx_eq(reg.get<Velocity>(e1).v.x, kSteerSentinel));
 
-    const GuideTick one = guide_step(reg, g_nav.zn, 1u, 2u, nullptr);
+    const GuideTick one = guide_step(reg, g_nav.zn, 1u, 2u, nullptr, nullptr);
     CHECK(one.led == 1u);
     CHECK(approx_eq(reg.get<Velocity>(e1).v.x, kWalkSpeedMps));
 }
@@ -1674,6 +1710,9 @@ static void test_t3_15_one_writer_for_patrol_and_wander_in_one_tick() {
     // проход выбрал бы цель и встал владеемым нулём, то есть мерился бы `held`
     // вместо хода).
     Entity walker = reg.create();
+    // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+    // сущность есть ВЕЩЬ, и ведение её не касается.
+    reg.emplace<NpcRef>(walker, NpcRef{1u});
     reg.emplace<Transform>(walker, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
     reg.emplace<Velocity>(
         walker, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -1697,7 +1736,7 @@ static void test_t3_15_one_writer_for_patrol_and_wander_in_one_tick() {
     CHECK(reg.get<Steer>(patrolman).rank == SteerRank::Patrol);
     CHECK(reg.get<Steer>(walker).rank == SteerRank::Walk);
 
-    const GuideTick g = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+    const GuideTick g = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
 
     // РОВНО ПО ОДНОЙ ЗАПИСИ НА ТЕЛО, двумя независимыми суммами.
     std::uint32_t byRankSum = 0;
@@ -1751,6 +1790,9 @@ static void test_t3_16_rank_beats_the_order_of_submission() {
     for (int order = 0; order < 2; ++order) {
         Registry reg;
         Entity e = reg.create();
+        // Тело — это тождество ([game/ai.h] decider_of): без `NpcRef`
+        // сущность есть ВЕЩЬ, и ведение её не касается.
+        reg.emplace<NpcRef>(e, NpcRef{1u});
         reg.emplace<Transform>(e, Transform{vec3{16.0f, 16.0f, 16.0f}, 0u});
         reg.emplace<Velocity>(
             e, Velocity{vec3{kSteerSentinel, kSteerSentinel, kSteerSentinel}});
@@ -1766,7 +1808,7 @@ static void test_t3_16_rank_beats_the_order_of_submission() {
         }
 
         CHECK(reg.get<Steer>(e).rank == SteerRank::Flee);
-        const GuideTick g = guide_step(reg, g_nav.zn, 0u, tick, nullptr);
+        const GuideTick g = guide_step(reg, g_nav.zn, 0u, tick, nullptr, nullptr);
         CHECK(g.led == 1u);
         CHECK(g.byRank[static_cast<std::size_t>(SteerRank::Flee)] == 1u);
         CHECK(g.byRank[static_cast<std::size_t>(SteerRank::Walk)] == 0u);

@@ -425,7 +425,7 @@ static void test_hunt_all() {
         // Два разных режима у заявителя и писателя дали бы погашенную не ту ось.
         for (std::uint64_t t = 0; t < kTenMinutes; ++t) {
             wander_step(reg, stack.layer(layer).grid(), pool, huntZones, layer, t);
-            const GuideTick g = guide_step(reg, huntZones, layer, t, nullptr);
+            const GuideTick g = guide_step(reg, huntZones, layer, t, nullptr, nullptr);
             guideLed += g.led;
             guideBogus += g.bogus;
             guideUnresolved += g.unresolved;

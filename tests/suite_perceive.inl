@@ -315,7 +315,7 @@ struct Stand {
     Watched window_led(const MacroGrid& grid, Entity watch, std::uint64_t from) {
         GuideTick acc{};
         Watched out = window(grid, watch, from, [&](std::uint64_t t) {
-            guide_add(acc, guide_step(reg, zn, layer, t, gravity));
+            guide_add(acc, guide_step(reg, zn, layer, t, gravity, nullptr));
         });
         out.guide = acc;
         return out;

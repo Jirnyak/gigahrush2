@@ -225,7 +225,8 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
 PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                             LayerId layer, double now, std::uint64_t tick,
                             const GravityField* gravity, const ZoneNav* zones,
-                            ServeTick* serve, EventBus* bus) {
+                            ServeTick* serve, EventBus* bus,
+                            const MacroGrid* grid) {
     PlaceTick out;
     // Телеметрия деяния опциональна у вызывающего, но не внутри: ветки «если
     // счётчик дали» размножили бы условия по всему проходу.
@@ -262,6 +263,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     // проходах ведения. null держит NegZ побитово (тесты), Custom разрешается
     // вектором.
     const GravityFrame gf = steer_frame_of(gravity);
+    // Земля под сторожа края — та же, что возьмёт писатель ([game/guide.h]).
+    const SteerGround ground = steer_ground_of(grid, gravity);
     // ДЕРЖАТЬ НА МЕСТЕ (S24): забрать токен и обнулить скорость В ПЛОСКОСТИ
     // ХОДЬБЫ — ось гравитации не трогаем, её владелец физика. Владеемый ноль
     // здесь законен и необходим: «замирающий NPC есть дефект» (S13.2) сказано
@@ -451,8 +454,11 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         // чтения нава, прицел в ЦЕНТР следующей клетки, нормировка. Эти
         // тридцать строк стояли побайтово одинаково здесь, в `wander.cpp` и в
         // `ai.cpp`.
-        const SteerStep st =
-            steer_to_zone(*zones, gf, tr.pos, cx, cy, cz, myZone, plan.room);
+        const AABB* box = reg.try_get<AABB>(e);
+        const SteerStep st = steer_to_zone(
+            *zones, gf, ground, tr.pos,
+            box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f}, cx, cy, cz,
+            myZone, plan.room);
         // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
         // падает ⟺ ходок доходит.
         const std::uint16_t zd = zones->dist.at(
@@ -462,10 +468,12 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             out.zoneDistSum += zd;
             ++out.zoneDistBodies;
         }
-        if (st.fail == SteerFail::NoRoute) {
-            // Маршрута нет (разные компоненты связности, или цель в толще).
+        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::Edge) {
+            // Маршрута нет (разные компоненты связности, или цель в толще) —
+            // либо за шагом обрыв, падение с которого ранит (сторож ведения).
             // Цель снимается со стаггером: пере-спрашивать каждый тик значило
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
+            if (st.fail == SteerFail::Edge) ++out.edge;
             ++out.unreachable;
             plan.room = kNoRoom;
             plan.nextPickAt = stagger();

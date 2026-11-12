@@ -377,7 +377,7 @@ inline PerceiveTick sense_tick(Registry& reg, const MacroGrid& grid,
     const PerceiveTick pt =
         perceive_step(reg, grid, noise, pool, rel, layer, t, nullptr);
     check_cutoff_order(pt);
-    const GuideTick gt = guide_step(reg, zn, layer, t, nullptr);
+    const GuideTick gt = guide_step(reg, zn, layer, t, nullptr, nullptr);
     // Самопроверка писателя на каждом тике: непонятный байт ранга/вида,
     // недостижимая заявленная цель и заявка на теле человека обязаны быть
     // нулём ПО ПОСТРОЕНИЮ. Восприятие заявляет только `Dir` и `Hold`, поэтому
@@ -1097,7 +1097,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
             r->claimSight += pt.claimSight;
             r->heard += pt.heard;
             wander_step(r->reg, stack.layer(0).grid(), r->pool, zn, 0, t);
-            const GuideTick gt = guide_step(r->reg, zn, 0, t, nullptr);
+            const GuideTick gt = guide_step(r->reg, zn, 0, t, nullptr, nullptr);
             CHECK(gt.bogus == 0u);
             CHECK(gt.unresolved == 0u);
             CHECK(gt.foreign == 0u);

@@ -159,6 +159,8 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     // эти пять строк и лямбда `tangent` стояли дословной копией в четырёх
     // проходах ведения.
     const GravityFrame gf = steer_frame_of(gravity);
+    // Земля под сторожа края — та же, что возьмёт писатель ([game/guide.h]).
+    const SteerGround ground = steer_ground_of(&grid, gravity);
 
     const std::uint32_t phase = static_cast<std::uint32_t>(tick % kWanderPeriod);
 
@@ -477,8 +479,22 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         // тридцать строк (два чтения нава, прицел в центр следующей клетки,
         // нормировка) стояли ПОБАЙТОВО одинаково здесь, в `place.cpp` и в
         // `ai.cpp` — три копии одного шага.
-        const SteerStep st =
-            steer_to_zone(zones, gf, tr.pos, cx, cy, cz, myZone, wt.zone);
+        const AABB* box = reg.try_get<AABB>(e);
+        const SteerStep st = steer_to_zone(
+            zones, gf, ground, tr.pos,
+            box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f}, cx, cy, cz,
+            myZone, wt.zone);
+        if (st.fail == SteerFail::Edge) {
+            // ЗА ШАГОМ ОБРЫВ, падение с которого ранит. Нав по зонам цену
+            // обрыва знает только внутри зоны; сюда его привёл слепой к
+            // гравитации первый ярус. Исход тот же, что у «маршрута нет»: цель
+            // снимается со стаггером, тело стоит у края и выберет другую ногу.
+            ++out.edge;
+            if (wt.pack == 0) wt.zone = kNoRoom;
+            wt.cooldown = kRepathCooldown;
+            stop();
+            continue;
+        }
         if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::StepUp) {
             // МАРШРУТА НЕТ — другая компонента связности либо поле соседки не
             // покрывает клетку. СТУПЕНЬКА И ЕСТЬ ВЫХОД ИЗ ЗОНЫ: наряд и дело
