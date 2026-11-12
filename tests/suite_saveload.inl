@@ -1475,7 +1475,7 @@ void placement_writes_the_body_or_nothing() {
     CHECK(!place_body_safely(reg, w, entt::null).ok);
 }
 
-// ПРИБОР ШВА ВОПЛОЩЕНИЯ ([save.h] support_gap_sub) — «тело родилось в воздухе»
+// ОДИН ПРЕДИКАТ СТОЯНИЯ ([sim/physics.h] stand_probe / support_gap_sub) — «тело родилось в воздухе»
 // числом. Судится в ШЕСТИ направлениях гравитации разом: одна зашитая буква
 // оси проходит ровно одно из шести (тот же довод, что у suite_gravity_regimes).
 void support_gap_follows_the_gravity_frame() {
@@ -1504,12 +1504,12 @@ void support_gap_follows_the_gravity_frame() {
         constexpr float kGapM = 0.05f;
         const vec3 resting =
             centre + down * (kCellSize * 0.5f - cube.x - kGapM);
-        CHECK(support_gap_sub(w, cube, resting) == 0);
+        CHECK(support_gap_sub(w, resting, cube) == 0);
         // Поднят на k субвокселей — просвет ровно k.
         for (int k = 1; k <= 5; ++k) {
             const vec3 lifted =
                 resting + down * (-static_cast<float>(k) * kVoxelSize);
-            CHECK(support_gap_sub(w, cube, lifted) == k);
+            CHECK(support_gap_sub(w, lifted, cube) == k);
         }
         // ТОТ ЖЕ мир под ПРОТИВОПОЛОЖНЫМ низом: плита теперь «над головой», и
         // до неё почти вся ось тора. Зашитая ось дала бы здесь тот же ноль.
@@ -1519,7 +1519,7 @@ void support_gap_follows_the_gravity_frame() {
             if (od.x == -d.x && od.y == -d.y && od.z == -d.z) opposite = o;
         }
         w.gravity().regime = opposite;
-        const int far = support_gap_sub(w, cube, resting);
+        const int far = support_gap_sub(w, resting, cube);
         CHECK(far > (kMacroDim - 3) * kSubDim);
         CHECK(far < kMacroDim * kSubDim);
         // Поперечный низ: под кубом вдоль чужой оси тверди нет вовсе.
@@ -1527,16 +1527,35 @@ void support_gap_follows_the_gravity_frame() {
             const CellStep od = regime_down(o);
             if (od.x * d.x + od.y * d.y + od.z * d.z != 0) continue;
             w.gravity().regime = o;
-            CHECK(support_gap_sub(w, cube, resting) == kNoSupportSub);
+            CHECK(support_gap_sub(w, resting, cube) == kNoSupportSub);
         }
-        // Невесомость: низа нет, вопрос не задаётся.
+        // Невесомость: низа нет, падать некуда — «стоит» где угодно, и
+        // предикат стояния говорит то же самое.
         w.gravity().regime = GravityRegime::Zero;
-        CHECK(support_gap_sub(w, cube, resting) == kNoSupportSub);
+        CHECK(support_gap_sub(w, resting, cube) == 0);
+        CHECK(stand_probe(w, resting, cube).supported);
+        // ОДИН вопрос двумя словами: «опора есть» ⟺ «просвет ноль», под
+        // родным низом — стоя и поднятым на атом.
+        w.gravity().regime = r;
+        CHECK(stand_probe(w, resting, cube).fits);
+        CHECK(stand_probe(w, resting, cube).supported);
+        const vec3 up1 = resting + down * (-kVoxelSize);
+        CHECK(stand_probe(w, up1, cube).fits);
+        CHECK(!stand_probe(w, up1, cube).supported);
+        // Тело, поставленное подошвой в точку поверхности, СТОИТ: центр из
+        // `stand_centre` свободен и опёрт. Точка — верх плиты под клеткой kC.
+        const vec3 foot = centre + down * (kCellSize * 0.5f);
+        const vec3 stood = stand_centre(w, foot, cube);
+        CHECK(stand_probe(w, stood, cube).fits);
+        CHECK(stand_probe(w, stood, cube).supported);
+        CHECK(support_gap_sub(w, stood, cube) == 0);
     }
     // Пустой мир: падать можно вечно (тор), и прибор говорит это, а не 0.
     World empty;
-    CHECK(support_gap_sub(empty, cube, macro_cell_centre(kC, kC, kC)) ==
+    CHECK(support_gap_sub(empty, macro_cell_centre(kC, kC, kC), cube) ==
           kNoSupportSub);
+    CHECK(stand_probe(empty, macro_cell_centre(kC, kC, kC), cube).fits);
+    CHECK(!stand_probe(empty, macro_cell_centre(kC, kC, kC), cube).supported);
 }
 
 void snapshot_restores_the_row_not_the_body() {

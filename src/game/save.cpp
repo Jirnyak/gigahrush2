@@ -1221,16 +1221,13 @@ void probe_cell(const World& world, const vec3& half, int cx, int cy, int cz,
     const vec3 c = macro_cell_centre(static_cast<std::uint8_t>(wrap_macro(cx)),
                                      static_cast<std::uint8_t>(wrap_macro(cy)),
                                      static_cast<std::uint8_t>(wrap_macro(cz)));
-    fits = !aabb_overlaps_solid(world, c, half);
-    supported = false;
-    if (!fits) return;
-    // One sub-voxel (0.25 m) thick, the width of the body, directly under the feet: deep
-    // enough to find a slab, shallow enough not to see through a Derelict floor's
-    // collapsed hole to the storey below. The same predicate as above, so "supported"
-    // cannot disagree with "fits" about what solid means.
-    const vec3 footHalf{half.x, half.y, kVoxelSize * 0.5f};
-    const vec3 foot{c.x, c.y, c.z - half.z - kVoxelSize * 0.5f};
-    supported = aabb_overlaps_solid(world, foot, footHalf);
+    // ОДИН ПРЕДИКАТ ([sim/physics.h] stand_probe): плита в субвоксель под
+    // подошвой вдоль низа ФРЕЙМА. Здесь стояла своя копия с осью, зашитой
+    // буквой (`c.z - half.z`), — верная ровно для одного из шести направлений
+    // гравитации.
+    const StandProbe p = stand_probe(world, c, half);
+    fits = p.fits;
+    supported = p.supported;
 }
 
 // The wire carries hp as std::int32_t and the pool row is std::int16_t, so the load side
@@ -1243,26 +1240,6 @@ std::int16_t clamp_i16(std::int32_t v) {
 }
 
 } // namespace
-
-int support_gap_sub(const World& world, const vec3& half, const vec3& pos) {
-    const CellStep d = regime_down(world.gravity().regime);
-    if (d.x == 0 && d.y == 0 && d.z == 0) return kNoSupportSub;
-    const vec3 down{static_cast<float>(d.x), static_cast<float>(d.y),
-                    static_cast<float>(d.z)};
-    // Плита в один субвоксель под подошвой, шириной в тело: та же форма, что у
-    // `probe_cell`, но ось — из фрейма.
-    const float along = d.x != 0 ? half.x : d.y != 0 ? half.y : half.z;
-    const float thin = kVoxelSize * 0.5f;
-    const vec3 footHalf{d.x != 0 ? thin : half.x, d.y != 0 ? thin : half.y,
-                        d.z != 0 ? thin : half.z};
-    vec3 foot = pos + down * (along + thin);
-    constexpr int kAxisSub = kMacroDim * kSubDim; // вся ось тора в субвокселях
-    for (int gap = 0; gap < kAxisSub; ++gap) {
-        if (aabb_overlaps_solid(world, foot, footHalf)) return gap;
-        foot += down * kVoxelSize;
-    }
-    return kNoSupportSub;
-}
 
 PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_t cx,
                                std::uint8_t cy, std::uint8_t cz, int radius) {

@@ -79,6 +79,56 @@ bool aabb_overlaps_solid(const World& world, vec3 pos, vec3 half) {
 
 namespace {
 
+// Плита подошвы — один субвоксель толщиной, шириной в тело, на `layer` слоёв
+// ниже подошвы вдоль низа фрейма `d`. Общая для `stand_probe` и
+// `support_gap_sub`: «стоит» и «просвет ноль» обязаны быть ОДНИМ вопросом.
+bool foot_slab_solid(const World& world, vec3 centre, vec3 half, CellStep d,
+                     int layer) {
+    const vec3 down{static_cast<float>(d.x), static_cast<float>(d.y),
+                    static_cast<float>(d.z)};
+    const float along = d.x != 0 ? half.x : d.y != 0 ? half.y : half.z;
+    const float thin = kVoxelSize * 0.5f;
+    const vec3 slabHalf{d.x != 0 ? thin : half.x, d.y != 0 ? thin : half.y,
+                        d.z != 0 ? thin : half.z};
+    const vec3 slab = centre + down * (along + thin +
+                                       static_cast<float>(layer) * kVoxelSize);
+    return aabb_overlaps_solid(world, slab, slabHalf);
+}
+
+bool frame_has_down(CellStep d) { return d.x != 0 || d.y != 0 || d.z != 0; }
+
+} // namespace
+
+StandProbe stand_probe(const World& world, vec3 centre, vec3 half) {
+    StandProbe out;
+    out.fits = !aabb_overlaps_solid(world, centre, half);
+    if (!out.fits) return out;
+    const CellStep d = regime_down(world.gravity().regime);
+    out.supported =
+        !frame_has_down(d) || foot_slab_solid(world, centre, half, d, 0);
+    return out;
+}
+
+vec3 stand_centre(const World& world, vec3 foot, vec3 half) {
+    const CellStep d = regime_down(world.gravity().regime);
+    if (!frame_has_down(d)) return foot;
+    const float along = d.x != 0 ? half.x : d.y != 0 ? half.y : half.z;
+    const vec3 up{static_cast<float>(-d.x), static_cast<float>(-d.y),
+                  static_cast<float>(-d.z)};
+    return foot + up * (along + kContactSkin);
+}
+
+int support_gap_sub(const World& world, vec3 centre, vec3 half) {
+    const CellStep d = regime_down(world.gravity().regime);
+    if (!frame_has_down(d)) return 0; // падать некуда
+    constexpr int kAxisSub = kMacroDim * kSubDim; // вся ось тора в субвокселях
+    for (int gap = 0; gap < kAxisSub; ++gap)
+        if (foot_slab_solid(world, centre, half, d, gap)) return gap;
+    return kNoSupportSub;
+}
+
+namespace {
+
 // Move `pos` along one axis by `delta`, backing out of any solid overlap. The
 // axis is selected by `comp` (0=x,1=y,2=z). Returns true if a collision on this
 // axis stopped the motion (used to zero the matching velocity component).
@@ -128,7 +178,7 @@ float axis_of(const vec3& v, int comp) {
 // One sub-voxel atom of smooth step-up, plus the skin that lets the retried
 // sweep clear the step's top surface exactly. The manifest's rule: a single
 // 0.25 m atom is walkable without a jump; two atoms are a wall.
-constexpr float kStepRise = kVoxelSize + 0.01f;
+constexpr float kStepRise = kVoxelSize + kContactSkin;
 constexpr float kStepGainEps = 1e-4f;
 
 // Sweep one axis with auto-step. A grounded walker blocked on a non-up axis

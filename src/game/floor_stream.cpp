@@ -10,6 +10,7 @@
 #include "world/floor_awaken.h" // floor_awaken — единственный обход рождения
 #include "game/population.h"  // seed_floor_from_spec
 #include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
+#include "sim/physics.h"      // support_gap_sub — прибор шва воплощения
 
 namespace giga::game {
 
@@ -207,7 +208,7 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
 
     // ПЕРЕПИСЬ ШВА ВОПЛОЩЕНИЯ (`[voploshenie]`, печать ниже): сколько тел толпы
     // родилось БЕЗ ОПОРЫ и с какой высоты им падать. Корзины — в метрах до
-    // первой тверди вдоль низа фрейма ([save.h] support_gap_sub).
+    // первой тверди вдоль низа фрейма ([sim/physics.h] support_gap_sub).
     std::uint32_t censusBodies = 0, censusStanding = 0, censusRefused = 0;
     std::uint32_t censusMoved = 0, censusVoid = 0;
     std::uint32_t censusDrop[4] = {0, 0, 0, 0}; // ≤1 м, ≤3 м, ≤10 м, выше
@@ -255,8 +256,8 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
         if (placed.moved) ++censusMoved;
         const AABB* box = ecs.try_get<AABB>(e);
         const int gap = support_gap_sub(
-            world, box ? box->half : vec3{0.4f, 0.4f, 0.4f},
-            ecs.get<Transform>(e).pos);
+            world, ecs.get<Transform>(e).pos,
+            box ? box->half : vec3{0.4f, 0.4f, 0.4f});
         if (gap == 0) {
             ++censusStanding;
         } else if (gap == kNoSupportSub) {
