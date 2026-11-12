@@ -1078,6 +1078,19 @@ PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_
                                std::uint8_t cy, std::uint8_t cz,
                                int radius = kPlaceRadius);
 
+// ПРОСВЕТ ПОД ПОДОШВОЙ — сколько субвоксельных слоёв воздуха лежит между телом
+// габарита `half` в точке `pos` и первой твердью вдоль «НИЗА» ФРЕЙМА этажа
+// (`regime_down`, а не −Z: изотропия). Ноль — тело стоит. `kNoSupportSub` —
+// тверди под телом нет на всей оси тора, либо у фрейма нет низа (Zero/Custom:
+// падать некуда, и вопрос не задаётся).
+//
+// Это ПРИБОР шва воплощения (`[voploshenie]`, floor_stream.cpp): «тело родилось
+// в воздухе» обязано быть числом, а не впечатлением от игры. Тот же предикат
+// тверди, что у `physics_step`, поэтому ответ не может разойтись с тем, что
+// сделает с телом солвер на первом же тике.
+inline constexpr int kNoSupportSub = -1;
+int support_gap_sub(const World& world, const vec3& half, const vec3& pos);
+
 // Move `body` to (cx, cy, cz) or to the nearest cell it fits in, and stop it dead.
 //
 // On failure (`!ok`) the body is NOT moved at all — the caller keeps a body wherever it

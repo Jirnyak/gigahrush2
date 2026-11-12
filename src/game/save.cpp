@@ -1244,6 +1244,26 @@ std::int16_t clamp_i16(std::int32_t v) {
 
 } // namespace
 
+int support_gap_sub(const World& world, const vec3& half, const vec3& pos) {
+    const CellStep d = regime_down(world.gravity().regime);
+    if (d.x == 0 && d.y == 0 && d.z == 0) return kNoSupportSub;
+    const vec3 down{static_cast<float>(d.x), static_cast<float>(d.y),
+                    static_cast<float>(d.z)};
+    // Плита в один субвоксель под подошвой, шириной в тело: та же форма, что у
+    // `probe_cell`, но ось — из фрейма.
+    const float along = d.x != 0 ? half.x : d.y != 0 ? half.y : half.z;
+    const float thin = kVoxelSize * 0.5f;
+    const vec3 footHalf{d.x != 0 ? thin : half.x, d.y != 0 ? thin : half.y,
+                        d.z != 0 ? thin : half.z};
+    vec3 foot = pos + down * (along + thin);
+    constexpr int kAxisSub = kMacroDim * kSubDim; // вся ось тора в субвокселях
+    for (int gap = 0; gap < kAxisSub; ++gap) {
+        if (aabb_overlaps_solid(world, foot, footHalf)) return gap;
+        foot += down * kVoxelSize;
+    }
+    return kNoSupportSub;
+}
+
 PlacedCell find_standable_cell(const World& world, const vec3& half, std::uint8_t cx,
                                std::uint8_t cy, std::uint8_t cz, int radius) {
     PlacedCell out;

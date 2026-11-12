@@ -1475,6 +1475,70 @@ void placement_writes_the_body_or_nothing() {
     CHECK(!place_body_safely(reg, w, entt::null).ok);
 }
 
+// ПРИБОР ШВА ВОПЛОЩЕНИЯ ([save.h] support_gap_sub) — «тело родилось в воздухе»
+// числом. Судится в ШЕСТИ направлениях гравитации разом: одна зашитая буква
+// оси проходит ровно одно из шести (тот же довод, что у suite_gravity_regimes).
+void support_gap_follows_the_gravity_frame() {
+    // Куб, а не тело: у куба полуразмер вдоль любой оси один, и проверка
+    // судит ОСЬ ФРЕЙМА, а не то, что рост лежит по Z.
+    const vec3 cube{0.4f, 0.4f, 0.4f};
+    constexpr int kC = 40;
+    const GravityRegime regimes[] = {
+        GravityRegime::NegX, GravityRegime::PosX, GravityRegime::NegY,
+        GravityRegime::PosY, GravityRegime::NegZ, GravityRegime::PosZ};
+    for (GravityRegime r : regimes) {
+        World w;
+        w.gravity().regime = r;
+        const CellStep d = regime_down(r);
+        // Единственная твердь мира — клетка на шаг «ниже» клетки kC.
+        w.grid().fill_cell(kC + d.x, kC + d.y, kC + d.z, kMatConcrete);
+        const vec3 down{static_cast<float>(d.x), static_cast<float>(d.y),
+                        static_cast<float>(d.z)};
+        const vec3 centre = macro_cell_centre(kC, kC, kC);
+        // Куб над плитой с зазором в 5 см — как настоящее тело, у которого
+        // подошва висит на 6–12 см над полом клетки ([save.h] «6.5 cm to
+        // spare»). РОВНО НА ГРАНИЦЕ ставить нельзя: `aabb_overlaps_solid`
+        // на точной границе клетки отвечает по-разному для «+» и «−»
+        // направлений (интервал полуоткрыт), и тест судил бы эту асимметрию,
+        // а не ось фрейма.
+        constexpr float kGapM = 0.05f;
+        const vec3 resting =
+            centre + down * (kCellSize * 0.5f - cube.x - kGapM);
+        CHECK(support_gap_sub(w, cube, resting) == 0);
+        // Поднят на k субвокселей — просвет ровно k.
+        for (int k = 1; k <= 5; ++k) {
+            const vec3 lifted =
+                resting + down * (-static_cast<float>(k) * kVoxelSize);
+            CHECK(support_gap_sub(w, cube, lifted) == k);
+        }
+        // ТОТ ЖЕ мир под ПРОТИВОПОЛОЖНЫМ низом: плита теперь «над головой», и
+        // до неё почти вся ось тора. Зашитая ось дала бы здесь тот же ноль.
+        GravityRegime opposite = GravityRegime::Zero;
+        for (GravityRegime o : regimes) {
+            const CellStep od = regime_down(o);
+            if (od.x == -d.x && od.y == -d.y && od.z == -d.z) opposite = o;
+        }
+        w.gravity().regime = opposite;
+        const int far = support_gap_sub(w, cube, resting);
+        CHECK(far > (kMacroDim - 3) * kSubDim);
+        CHECK(far < kMacroDim * kSubDim);
+        // Поперечный низ: под кубом вдоль чужой оси тверди нет вовсе.
+        for (GravityRegime o : regimes) {
+            const CellStep od = regime_down(o);
+            if (od.x * d.x + od.y * d.y + od.z * d.z != 0) continue;
+            w.gravity().regime = o;
+            CHECK(support_gap_sub(w, cube, resting) == kNoSupportSub);
+        }
+        // Невесомость: низа нет, вопрос не задаётся.
+        w.gravity().regime = GravityRegime::Zero;
+        CHECK(support_gap_sub(w, cube, resting) == kNoSupportSub);
+    }
+    // Пустой мир: падать можно вечно (тор), и прибор говорит это, а не 0.
+    World empty;
+    CHECK(support_gap_sub(empty, cube, macro_cell_centre(kC, kC, kC)) ==
+          kNoSupportSub);
+}
+
 void snapshot_restores_the_row_not_the_body() {
     NpcPool pool;
     pool.init();
@@ -2298,6 +2362,7 @@ static void test_saveload_all() {
     saveload_test::fully_solid_neighbourhood_fails_loudly();
     saveload_test::a_body_in_solid_never_moves_again();
     saveload_test::placement_writes_the_body_or_nothing();
+    saveload_test::support_gap_follows_the_gravity_frame();
     saveload_test::snapshot_restores_the_row_not_the_body();
     saveload_test::travel_drives_the_existing_elevator();
     saveload_test::candidate_slot_recycled();
