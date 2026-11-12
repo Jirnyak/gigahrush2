@@ -2331,6 +2331,32 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
             fallSeeds.push_back(ci);
         }
 
+    // --- ПЛОЩАДКИ: УЛЁГШЕЕСЯ ДОЕЗЖАЕТ ДО КАНОНА И ПРИ ТОЛСТОМ СПИСКЕ -------
+    // Тот самый оракул «долетела и легла», от которого выше отказались как от
+    // монетки: окно пака обходит клетку раз в chunks = 11 кадров, а осевшая
+    // куча засыпала через два и выпадала из списка. С законом S16.10
+    // («падающее — не геометрия») недоставленная маска — это куча, которую
+    // видно и сквозь которую ходят, поэтому монетка стала законом: клетка с
+    // недоставленным изменением (kActDirty) НЕ ЗАСЫПАЕТ. Площадок шесть, по z
+    // они перемежают слои балласта — их места в списке попадают в разные окна.
+    // ПОЛЯРНОСТЬ: снять `(act & kActDirty) == 0u` у сна в run_settle
+    // [shaders/medium_sim.comp] — краснеют оба чека площадок.
+    constexpr int kPads = 6, kPadX = 100, kPadY = 20;
+    constexpr std::uint32_t kPadTower = 2 * 2 * 8;
+    std::vector<std::uint32_t> padSeeds;
+    for (int k = 0; k < kPads; ++k) {
+        const int z = kOrg + 2 + 6 * k;
+        w.grid().fill_cell(kPadX, kPadY, z, kMatConcrete);
+        const auto ci = static_cast<std::uint32_t>(
+            macro_index(kPadX, kPadY, z + 2));
+        CellType* pg = f.ensure_page(ci, w.grid().types()[ci]);
+        for (int sx = 3; sx < 5; ++sx)
+            for (int sy = 3; sy < 5; ++sy)
+                for (int sz = 0; sz < 8; ++sz)
+                    pg[sub_bit(sx, sy, sz)] = kMatRubble;
+        padSeeds.push_back(ci);
+    }
+
     static gpu::VoxelMirror mirror;
     CHECK(mirror.init(dev));
     CHECK(mirror.upload_all(w));
@@ -2372,6 +2398,7 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
 
     // И только теперь — падение: материя идёт при УЖЕ толстом списке.
     medium.wake_cells(fallSeeds.data(), fallSeeds.size(), w, mirror);
+    medium.wake_cells(padSeeds.data(), padSeeds.size(), w, mirror);
     std::uint32_t peakList = 0;
     std::uint32_t listAt[3] = {0, 0, 0};
     int frontAt[3] = {0, 0, 0};
@@ -2384,7 +2411,13 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
         substep += 8;
         medium.apply_readback(w, mirror);
         if (medium.list_total() > peakList) peakList = medium.list_total();
-        const int mark = b == 11 ? 0 : (b == 23 ? 1 : (b == 55 ? 2 : -1));
+        // Первая отсечка — когда канон ОБЯЗАН показать сдвиг, а не «может»:
+        // оборот окна (chunks = 11 кадров) + возраст применения региона
+        // (kRbRegions = 3) + кадр на голодный рубеж у самого старта. Прежняя
+        // отсечка на 11-м кадре была монеткой по фазе окна: шесть клеток,
+        // добавленных в список (площадки), сдвинули место падающих клеток
+        // через границу окна — и она перевернулась. Вторая — через 12 > chunks.
+        const int mark = b == 15 ? 0 : (b == 27 ? 1 : (b == 55 ? 2 : -1));
         if (mark >= 0) {
             listAt[mark] = medium.list_total();
             frontAt[mark] = front_z();
@@ -2414,6 +2447,33 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
                 gpu::GpuMediumPass::kPageReqCap,
                 static_cast<unsigned long long>(medium.page_req_pages()),
                 medium.page_req_frames());
+
+    // Площадки: в каноне каждая куча лежит целиком и несёт биты (закон маски
+    // в округе приёмника: бит ⟺ твёрдая фаза).
+    int padLaid = 0, padLawBreak = 0;
+    for (int k = 0; k < kPads; ++k) {
+        const int z = kOrg + 2 + 6 * k;
+        for (int dz = 1; dz <= 2; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const std::size_t ci = static_cast<std::size_t>(
+                        macro_index(kPadX + dx, kPadY + dy, z + dz));
+                    const CellType* p = f.page(ci);
+                    if (!p) continue;
+                    const SubMask& m = w.grid().masks()[ci];
+                    for (int b2 = 0; b2 < kSubVoxels; ++b2) {
+                        const bool solid = p[b2] != kCellAir &&
+                            material_phase(p[b2]) == MatPhase::Solid;
+                        if (m.test(b2) != solid) ++padLawBreak;
+                        if (p[b2] == kMatRubble) ++padLaid;
+                    }
+                }
+    }
+    std::printf("[medium_test] page-req: площадки — в каноне легло %d из %u, "
+                "нарушений закона маски %d\n",
+                padLaid, kPads * kPadTower, padLawBreak);
+    CHECK(padLaid == static_cast<int>(kPads * kPadTower));
+    CHECK(padLawBreak == 0);
 
     // (а) РЕЖИМ ВОСПРОИЗВЕДЁН — и не мельком: список выше ДВУХ окон на
     // каждой отсечке, то есть chunks > 2 всю дорогу падения.
@@ -2580,8 +2640,17 @@ void test_pack_carries_changed_only(gpu::VulkanDevice& dev) {
 //     краснеют закон маски в каноне и согласие зеркала;
 //   * снять в run_settle сам блок `if (lay)` — улёгшееся не геометрия нигде:
 //     краснеет закон маски;
-//   * поставить там `kActChanged` вместо `kActDirty` — тишина обнуляется, и
-//     клетка не засыпает: краснеет «округа спит».
+//   * поставить там `kActChanged` вместо `kActDirty` — пак маску не везёт, а
+//     тишина обнуляется: краснеют закон маски в каноне, согласие зеркала и
+//     скорость сна в test_rubble_settles_fast (`liveEarly == 0`);
+//   * `kMatureSubsteps = 16` (ставить бит в подтик СНА, как форма была названа
+//     владельцу) — уснувшая клетка выпадает из списка гейта, и маска не
+//     доезжает: краснеют закон маски в каноне и согласие зеркала. Это и есть
+//     замер причины, по которой порог — зрелость, а не сон;
+//   * `kMatureSubsteps = 2` — бит встаёт посреди полёта и гаснет следующим
+//     ходом: записи клеток между кадрами шва сходятся в ноль, и ловит это
+//     только ЗНАК («ушло» больше битов истока, «легло» больше атомов кучи).
+// Все шесть прогнаны 2026-11-12 после коммита — красные ровно названным.
 void test_falling_is_not_geometry(gpu::VulkanDevice& dev) {
     static World w;
     for (int x = 68; x < 77; ++x)
