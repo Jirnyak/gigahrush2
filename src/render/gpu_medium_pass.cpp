@@ -1,5 +1,6 @@
 #include "render/gpu_medium_pass.h"
 
+#include <bit>    // std::popcount — знак изменения маски (S16.10)
 #include <chrono> // состав med_apply — фазовый замер §63
 #include <cstdio>
 #include <cstdlib>
@@ -631,6 +632,7 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     applyCarried_ = carried;
     ++applySeq_;
     applyCmpOnly_ = applyCopied_ = applyLazy_ = applySkipFresh_ = 0;
+    applyBitsLaid_ = applyBitsGone_ = 0;
     const auto applyLoopT0 = std::chrono::steady_clock::now();
     // ПРОХОД 1 — ПО СПИСКУ (4 Б на клетку, читается целиком). Он даёт
     // liveCis фронтиру и приборам и материализует безстраничных. Тяжёлого
@@ -658,9 +660,9 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
         // GPU видел клетку безстраничной: материализуем лениво — flush
         // довезёт страницу, материя подождёт у границы кадр-два. ПОСЛЕ
         // ХОДА A эта ветка стала почти мёртвой и это ВЫВОД, а не наблюдение:
-        // пометку kActDirty ставит только store_atom, а он пишет лишь в
-        // писуемые (paged) клетки, значит безстраничная клетка в нагрузку не
-        // попадает никогда. Живой остаток — клетка, помеченная меченой и
+        // пометку kActDirty ставят store_atom и зрелость тишины в settle
+        // (S16.10), и оба пишут лишь в писуемые (paged) клетки, значит
+        // безстраничная клетка в нагрузку не попадает никогда. Живой остаток — клетка, помеченная меченой и
         // потерявшая страницу от CPU-писателя до своего пака. Голодный фронт
         // лечит не эта ветка, а канал запроса страницы (ход E).
         if (!f->paged(ci)) {
@@ -739,7 +741,17 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
             medium_recount(world, ci, pg);
         }
         if (!maskSame) {
-            std::memcpy(m.words, nm, kMaskBytesBack);
+            // Знак записи (S16.10): бит встал — рыхлое улеглось, бит погас —
+            // рыхлое ушло с места. Третьего события у маски от автомата нет.
+            SubMask incoming;
+            std::memcpy(incoming.words, nm, kMaskBytesBack);
+            for (std::size_t k = 0; k < kSubMaskWords; ++k) {
+                applyBitsLaid_ += static_cast<std::uint32_t>(
+                    std::popcount(incoming.words[k] & ~m.words[k]));
+                applyBitsGone_ += static_cast<std::uint32_t>(
+                    std::popcount(m.words[k] & ~incoming.words[k]));
+            }
+            m = incoming;
             if (changedMasks) changedMasks->push_back(ci);
         }
     }

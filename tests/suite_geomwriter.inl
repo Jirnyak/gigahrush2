@@ -86,6 +86,24 @@ static void test_mask_churn() {
         CHECK(s.cells == 1u);
         CHECK(s.through == 0u);
     }
+    { // ЗНАК (S16.10): куча стекает — «ушло» убывает, «легло» один раз
+        MaskChurn c;
+        const std::uint32_t ci = cell(4, 5, 6);
+        for (int w = 0; w < 4; ++w) {
+            const std::uint64_t t =
+                static_cast<std::uint64_t>(w) * kChurnWindowTicks;
+            mask_churn_add(c, &ci, 1, 2, t);
+            mask_churn_bits(c, w == 0 ? 32u : 0u,
+                            static_cast<std::uint32_t>(40 - 10 * w), t);
+        }
+        mask_churn_bits(c, 0u, 0u, 99u * kChurnWindowTicks); // пусто — не окно
+        const MaskChurnSummary s = mask_churn_summary(c);
+        CHECK(s.laidFirst == 32u);            // окна 0 и 1
+        CHECK(s.laidLast == 0u);              // окна 2 и 3
+        CHECK(s.goneFirst == 40u + 30u);
+        CHECK(s.goneLast == 20u + 10u);
+        CHECK(s.flowFirst == 2u && s.flowLast == 2u); // те же половины
+    }
     // Пустая перепись — нули, а не мусор.
     CHECK(mask_churn_summary(MaskChurn{}).records == 0u);
     CHECK(mask_churn_summary(MaskChurn{}).columns == 0u);

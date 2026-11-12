@@ -145,7 +145,7 @@
 | маска клетки — ровно свои слова, без флага и счётчика | `SubMask@src/world/macro_grid.h`; закреплено `GIGA_ROW_BYTES(giga::SubMask, 64)` плюс равенство `sizeof == sizeof(uint64_t) * kSubMaskWords` | **ПРАВДА** (контур поставлен 2026-10-01) |
 | полная и полувыкарвленная клетка стоят ОДИНАКОВО в пробе | побитовые операции `SubMask@src/world/macro_grid.h` | **ПРАВДА** |
 | вопрос «какая грань несёт» задаётся ОСЬЮ И ЗНАКОМ, а не «нижним z» | `face_layer@src/world/macro_grid.h`, `face_layer_window@src/world/macro_grid.h` | **ПРАВДА** — Z-привилегированные шорткаты (`lowest_layer`, `kCentreZ`) снесены 2026-08-29 |
-| истина о материи — МАТЕРИАЛ субвокселя, а маска — кэш предиката «твёрдое» над ним | поле `sub_material` (см. II.0); маска — производная | **ПРАВДА по замыслу S16**; ◻ перепись потребителей не снята |
+| истина о материи — МАТЕРИАЛ субвокселя, а маска — кэш предиката «твёрдое и улеглось» над ним: ход атома бит гасит, ставит его зрелая тишина клетки (S16.10, «падающее — не геометрия») | поле `sub_material` (см. II.0); `store_atom@shaders/medium_sim.comp`, `run_settle@shaders/medium_sim.comp`; свёртка страницы — по паре (материал, бит): `uniform_mask@src/world/destruct.h` | **ПРАВДА** (2026-11-12, гейты `test_falling_is_not_geometry@tests/medium_test.cpp`, `unlaid_rubble_page_survives_collapse@tests/suite_saveload.inl`); ◻ перепись потребителей не снята |
 | смена `kSubDim` на 16 — НЕ одна строка | `src/world/destruct.cpp:21 «static_assert(kSubDim == 8,»` — упаковка ключа карва прибита к 8 | **РАСХОЖДЕНИЕ с шапкой** `src/world/types.h`, которая обещает one-line change. Сам пин честен и объясняет себя; неполна проза шапки. Наряда нет |
 
 ## I.2 — ИЗОТРОПИЯ XYZ
@@ -356,7 +356,7 @@ Never run BFS/A* or worse-than-O(n) work in the hot path.»
 | агрегаты на клетку (уточнение S4) | `src/world/medium.h` | **ПРАВДА** |
 | будильник этажа | `src/world/floor_awaken.cpp` | **ПРАВДА**; В2 починен 2026-09-23 (спрашивал фазу вместо строки, rubble не просыпался) |
 | один интегратор верле на весь GPU-мир | `src/render/verlet_pass.cpp`; wire_sim.comp, cloth_sim.comp и particle_sim.comp МЕРТВЫ — слиты в `shaders/verlet_sim.comp`. Снесённое адреса не имеет: разрешаться нечему, и четвёртой формы «ссылка на снесённое» не заводится | **ПРАВДА** — исполнено целиком (этап 2, 2026-09-01) |
-| свидетель автомата гоняет РЕАЛЬНЫЙ SPIR-V, не эмуляцию | `tests/medium_test.cpp`, пин `2314/2314 checks passed` | **ПРАВДА**; GPU обязателен — «headless = без окна, а не без GPU» (CANON S16.3) |
+| свидетель автомата гоняет РЕАЛЬНЫЙ SPIR-V, не эмуляцию | `tests/medium_test.cpp`, пин `2561/2561 checks passed` | **ПРАВДА**; GPU обязателен — «headless = без окна, а не без GPU» (CANON S16.3) |
 | литералы размера сетки в шейдерах ЗАПРЕЩЕНЫ: единственный источник формы мира в GLSL — `-DGIGA_*` из CMake | Rule 9 в `check_source_rules@tools/check_source_rules.cmake` | **ПРАВДА** — повод: `shaders/prop.frag` делил на вручную посчитанные 76.8 там, где C++ передаёт 64 |
 
 ◻ **ПЕРЕПИСЬ НЕ СНЯТА:** графа фаз, матрицы доступа и паспорта памяти

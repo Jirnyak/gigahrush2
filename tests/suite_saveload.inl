@@ -2216,6 +2216,62 @@ static void page_invariant_holds_over_the_whole_volume() {
     CHECK(outAudit.pages_in_use == inUse); // призрак сложен, материя цела
 }
 
+// ОДНОРОДНА КЛЕТКА ПО ПАРЕ (МАТЕРИАЛ, БИТ) — CANON S16.10 «падающее — не
+// геометрия». Бит маски рыхлого ставит зрелая тишина клетки, а не ход атома,
+// поэтому страница ЦЕЛИКОМ из рыхлого бывает с частичной маской: низ улёгся и
+// несёт бит, верх въехал и ещё нет. Свёртка такой страницы в тип стёрла бы
+// безмасочные атомы в воздух (закон чтения бесстраничной клетки) — и стирала
+// бы на каждом выходе с этажа и на каждом его рождении, то есть как раз там,
+// где обвал застигнут посреди падения.
+//
+// ПОЛЯРНОСТИ: снять `uniform_mask` в settle_sub_page [world/destruct.cpp] —
+// краснеют «страница цела» и счёт атомов (512 -> 256); снять его же в
+// audit_sub_pages [world/floor_awaken.cpp] — краснеет «аудит не считает
+// нарушением». Пустая и полная маски обязаны сворачиваться по-прежнему —
+// иначе гейт был бы зелёным у свёртки, которая просто перестала работать.
+static void unlaid_rubble_page_survives_collapse() {
+    giga::World w;
+    giga::MacroGrid& g = w.grid();
+    const int cx = 50, cy = 50, cz = 50;
+    const std::size_t ci = giga::macro_index(cx, cy, cz);
+    auto rubble_atoms = [&] {
+        int n = 0;
+        for (int sx = 0; sx < 8; ++sx)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sz = 0; sz < 8; ++sz)
+                    if (giga::sub_material_at(w, cx, cy, cz, sx, sy, sz) ==
+                        giga::kMatRubble)
+                        ++n;
+        return n;
+    };
+    auto fill_page = [&] {
+        giga::CellType* pg = giga::materialize_sub_page(w, ci);
+        for (int b = 0; b < giga::kSubVoxels; ++b) pg[b] = giga::kMatRubble;
+    };
+
+    // Частичная маска: нижние четыре слоя улеглись, верхние ещё летят.
+    fill_page();
+    for (int b = 0; b < giga::kSubVoxels / 2; ++b) g.mask(cx, cy, cz).set(b);
+    CHECK(!giga::settle_sub_page(w, ci));            // страница цела
+    CHECK(giga::audit_sub_pages(w).uniform_paged == 0); // и это не нарушение
+    giga::floor_awaken(w);                           // рождение этажа
+    CHECK(giga::settle_uniform_pages(w) == 0);       // и выход с него
+    CHECK(rubble_atoms() == giga::kSubVoxels);       // ни один атом не пропал
+
+    // Маска дозрела до полной — клетка однородна и сворачивается в тип.
+    for (int b = 0; b < giga::kSubVoxels; ++b) g.mask(cx, cy, cz).set(b);
+    CHECK(giga::settle_sub_page(w, ci));
+    CHECK(g.types()[ci] == giga::kMatRubble);
+    CHECK(rubble_atoms() == giga::kSubVoxels);
+
+    // И пустая: клетка целиком в полёте — однородная материя без геометрии.
+    fill_page();
+    for (int b = 0; b < giga::kSubVoxels; ++b) g.mask(cx, cy, cz).clear(b);
+    CHECK(giga::settle_sub_page(w, ci));
+    CHECK(g.types()[ci] == giga::kMatRubble);
+    CHECK(rubble_atoms() == giga::kSubVoxels);
+}
+
 // ХОД C ([matwej.md] §9.4, решение владельца): ВЫХОД С ЭТАЖА КРАДЁТ ПУЛ.
 //
 // Что мерилось. Кадр поездки печатал `[lift] leave 0: copy 634 ms`: выход
@@ -2365,6 +2421,7 @@ static void possession_refuses_remains_and_stale_slots() {
 static void test_saveload_all() {
     saveload_test::awaken_is_the_one_law();
     saveload_test::page_invariant_holds_over_the_whole_volume();
+    saveload_test::unlaid_rubble_page_survives_collapse();
     saveload_test::leaving_a_floor_steals_the_pool();
     saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();

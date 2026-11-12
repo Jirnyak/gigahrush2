@@ -126,7 +126,9 @@ PageAuditStats audit_sub_pages(const World& w) {
                 uniform = false;
                 break;
             }
-        if (uniform) ++st.uniform_paged;
+        // Однородна по паре (материал, бит) — тот же предикат, что у свёртки:
+        // однородная страница рыхлого с частичной маской законна (S16.10).
+        if (uniform && uniform_mask(w.grid().masks()[ci])) ++st.uniform_paged;
     }
 
     // Слот занят пулом, но ни одна клетка на него не смотрит и в свободном

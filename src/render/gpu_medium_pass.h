@@ -423,6 +423,10 @@ public:
     std::uint32_t apply_seq() const noexcept { return applySeq_; }
     std::uint32_t apply_cmp_only() const noexcept { return applyCmpOnly_; }
     std::uint32_t apply_copied() const noexcept { return applyCopied_; }
+    // Знак изменения масок последним apply_readback (CANON S16.10): битов
+    // встало (рыхлое улеглось) и погасло (рыхлое ушло с места).
+    std::uint32_t apply_bits_laid() const noexcept { return applyBitsLaid_; }
+    std::uint32_t apply_bits_gone() const noexcept { return applyBitsGone_; }
     std::uint32_t apply_lazy() const noexcept { return applyLazy_; }
     std::uint32_t apply_skip_fresh() const noexcept { return applySkipFresh_; }
 
@@ -434,6 +438,8 @@ private:
     std::uint32_t applySeq_ = 0;       // паков применено (гейт выборки)
     std::uint32_t applyCmpOnly_ = 0;   // страница+маска НЕ менялись (чистый memcmp)
     std::uint32_t applyCopied_ = 0;    // страница менялась (memcpy+recount)
+    std::uint32_t applyBitsLaid_ = 0;  // битов маски встало (улеглось)
+    std::uint32_t applyBitsGone_ = 0;  // битов маски погасло (ушло)
     std::uint32_t applyLazy_ = 0;      // ленивые материализации
     std::uint32_t applySkipFresh_ = 0; // скипы гейта свежести/write_pending
     std::uint32_t staleSkips_ = 0;  // регионы с чужой подписью (шов ждал GPU)

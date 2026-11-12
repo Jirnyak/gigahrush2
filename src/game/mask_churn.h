@@ -39,7 +39,27 @@ struct MaskChurn {
     // менялись. Два слова на колонну, kMacroDim² колонн.
     std::vector<std::uint64_t> depth;
     std::vector<std::uint32_t> window;  // записей в окне kChurnWindowTicks
+    // ЗНАК записи (CANON S16.10 «падающее — не геометрия»): маску от автомата
+    // меняют ровно два события — рыхлое УЛЕГЛОСЬ (бит встал) и рыхлое УШЛО с
+    // места (бит погас). Биты по тем же окнам: равные ненулевые потоки
+    // «легло» и «ушло» без конца — материя ложится и снимается по кругу, а
+    // убывающее «ушло» при малом «легло» — куча стекает в вечное падение.
+    std::vector<std::uint32_t> laid;    // битов встало в окне
+    std::vector<std::uint32_t> gone;    // битов погасло в окне
 };
+
+// Учесть знак: сколько битов маски встало и сколько погасло в этом кадре шва.
+inline void mask_churn_bits(MaskChurn& c, std::uint32_t laidBits,
+                            std::uint32_t goneBits, std::uint64_t tick) {
+    if (laidBits == 0 && goneBits == 0) return;
+    const std::size_t w = static_cast<std::size_t>(tick / kChurnWindowTicks);
+    if (c.laid.size() <= w) {
+        c.laid.resize(w + 1, 0);
+        c.gone.resize(w + 1, 0);
+    }
+    c.laid[w] += laidBits;
+    c.gone[w] += goneBits;
+}
 
 // Учесть пачку изменённых клеток. `axis` — ось низа фрейма (0/1/2): глубина
 // клетки есть её координата вдоль этой оси, колонна — две остальные.
@@ -81,6 +101,9 @@ struct MaskChurnSummary {
     std::uint32_t depthsUsed = 0; // слоёв вдоль низа, где менялась хоть клетка
     std::uint32_t flowFirst = 0;  // записей в первой половине окон
     std::uint32_t flowLast = 0;   // во второй
+    // Знак, теми же половинами окон: битов встало (улеглось) и погасло (ушло).
+    std::uint64_t laidFirst = 0, laidLast = 0;
+    std::uint64_t goneFirst = 0, goneLast = 0;
 };
 
 inline constexpr int kChurnThroughDepths = kMacroDim - 8;
@@ -104,6 +127,11 @@ inline MaskChurnSummary mask_churn_summary(const MaskChurn& c) {
     const std::size_t half = c.window.size() / 2;
     for (std::size_t i = 0; i < c.window.size(); ++i)
         (i < half ? s.flowFirst : s.flowLast) += c.window[i];
+    // Половины — те же, что у потока записей: знак обязан ложиться на него.
+    for (std::size_t i = 0; i < c.laid.size(); ++i) {
+        (i < half ? s.laidFirst : s.laidLast) += c.laid[i];
+        (i < half ? s.goneFirst : s.goneLast) += c.gone[i];
+    }
     return s;
 }
 

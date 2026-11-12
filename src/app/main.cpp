@@ -563,10 +563,15 @@ static void mask_churn_report(int floor) {
                  "[sreda] этаж %d, маски от автомата: клетко-записей %llu, "
                  "разных клеток %u, колонн %u (сквозных, от %d слоёв: %u), "
                  "слоёв вдоль низа занято %u из %d | поток: первая половина "
-                 "окон %u, вторая %u\n",
+                 "окон %u, вторая %u | битов улеглось %llu / %llu, ушло %llu "
+                 "/ %llu (те же половины)\n",
                  floor, static_cast<unsigned long long>(cs.records), cs.cells,
                  cs.columns, game::kChurnThroughDepths, cs.through,
-                 cs.depthsUsed, kMacroDim, cs.flowFirst, cs.flowLast);
+                 cs.depthsUsed, kMacroDim, cs.flowFirst, cs.flowLast,
+                 static_cast<unsigned long long>(cs.laidFirst),
+                 static_cast<unsigned long long>(cs.laidLast),
+                 static_cast<unsigned long long>(cs.goneFirst),
+                 static_cast<unsigned long long>(cs.goneLast));
     g_maskChurn = game::MaskChurn{};
 }
 
@@ -5799,9 +5804,12 @@ int main(int argc, char** argv) {
                 regrow_check(stack.layer(activeLayer), voxelMirror, "шов",
                              simTick);
             g_mediumApplyMs = carve_ms_since(ctMedA);
-            // Маски обломков (инкремент 5) едут с материей: изменённые
-            // клетки — нав-долг тем же патчем, что у карва (O(1)/клетка):
-            // по осевшему завалу ходят, дыра от уехавшего рубла проходима.
+            // Маску от автомата меняют два события (S16.10 «падающее — не
+            // геометрия»): рыхлое УШЛО со своего места (бит гаснет) и рыхлое
+            // УЛЕГЛОСЬ (клетка дозрела в тишине — бит встаёт). Полёт масок не
+            // пишет. Изменённые клетки — нав-долг тем же патчем, что у карва
+            // (O(1)/клетка): по осевшему завалу ходят, дыра от уехавшего
+            // рубла проходима.
             if (!mediumMaskChanged.empty()) {
                 // Строка `Medium`: изменение пришло с GPU и двигает только
                 // подвижное — значит ни зеркалу, ни якорям, ни антуражу оно
@@ -5820,6 +5828,10 @@ int main(int argc, char** argv) {
                     game::mask_churn_add(g_maskChurn, mediumMaskChanged.data(),
                                          mediumMaskChanged.size(), mf.axis,
                                          simTick);
+                    game::mask_churn_bits(g_maskChurn,
+                                          mediumPass.apply_bits_laid(),
+                                          mediumPass.apply_bits_gone(),
+                                          simTick);
                 }
                 g_profMediumRigidWakes += geometry_changed(
                     game::GeomWriter::Medium, activeLayer, mediumMaskChanged,
@@ -5838,7 +5850,7 @@ int main(int argc, char** argv) {
             // кадром; конвертированные клетки качаются в зеркало и автомат
             // тем же швом, что entry-sweep (маски НЕ меняются — нав/свет/
             // якоря не должники конверсии; их долги придут mediumMaskChanged
-            // когда автомат реально сдвинет рыхлое).
+            // когда автомат реально сдвинет рыхлое и когда оно уляжется).
             // Порция суда переехала В СИМ-ЦИКЛ (2026-08-31, решение
             // владельца): кадровый темп привязывал скорость обрушения к fps
             // (60 порций/с на 60 fps, 30 на 30) — против закона каденса

@@ -492,10 +492,14 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(medium.live_count() == 0); // мешок уснул
     }
 
-    // РУБЛ (инкремент 5): столб обломков, сброшенный в лужу, падает ВМЕСТЕ С
-    // МАСКАМИ (бит — кэш фазы, едет с материей), тонет в воде по плотности
-    // (1800 > 1000 — из строк, не из ветки), оседает и не левитирует; после
-    // шва масок бит совпадает с фазой материала ВО ВСЁМ пуле.
+    // РУБЛ (инкремент 5): столб обломков, сброшенный в лужу, тонет в воде по
+    // плотности (1800 > 1000 — из строк, не из ветки), оседает и не
+    // левитирует. ЗАКОН МАСКИ (S16.10 «падающее — не геометрия») во всём пуле:
+    // бит стоит только над твёрдой фазой; статика бит несёт всегда; рыхлое —
+    // с момента, когда клетка дозрела в тишине. Безмасочное рыхлое законно
+    // ТОЛЬКО в бодрой клетке: поверхность этой лужи диффундирует вечно, и
+    // утонувший в ней рубл геометрией не становится — нюанс, принятый
+    // владельцем вслух («вечно течёт только там, где тор замкнут»).
     {
         const std::uint32_t rubCell =
             static_cast<std::uint32_t>(macro_index(65, 65, 6));
@@ -518,6 +522,9 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         std::vector<std::uint32_t> idx2(kMacroCells);
         CHECK(readback(dev, mirror.page_index_buffer(),
                        kMacroCells * sizeof(std::uint32_t), idx2.data()));
+        std::vector<std::uint32_t> awake(kMacroCells / 32u);
+        CHECK(readback(dev, medium.active_bits_buffer(), kMacroCells / 8u,
+                       awake.data()));
         const std::uint32_t pages2 = mirror.pages_in_pool();
         std::vector<std::uint16_t> pool2(
             static_cast<std::size_t>(pages2) * kSubVoxels);
@@ -539,6 +546,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         };
 
         int rubbleQ = 0, floating = 0, onWater = 0, maskMismatch = 0;
+        int unlaid = 0;
         for (std::uint32_t c2 = 0; c2 < kMacroCells; ++c2) {
             if (idx2[c2] == gpu::VoxelMirror::kNoPage || idx2[c2] >= pages2)
                 continue;
@@ -552,7 +560,15 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
                 const CellType mt = static_cast<CellType>(page[bit]);
                 const bool solid =
                     mt != kCellAir && material_phase(mt) == MatPhase::Solid;
-                if (mm.test(bit) != solid) ++maskMismatch;
+                const bool cellAwake =
+                    ((awake[c2 >> 5u] >> (c2 & 31u)) & 1u) != 0u;
+                if (mm.test(bit) && !solid) ++maskMismatch; // бит-призрак
+                if (solid && !mm.test(bit)) {
+                    // Статика без бита и рыхлое без бита в СПЯЩЕЙ клетке —
+                    // нарушения; рыхлое в бодрой клетке ещё не улеглось.
+                    if (!material_is_medium(mt) || !cellAwake) ++maskMismatch;
+                    else ++unlaid;
+                }
                 if (mt != kMatRubble) continue;
                 ++rubbleQ;
                 const int gx = cx2 * 8 + (bit & 7);
@@ -564,8 +580,8 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
             }
         }
         std::printf("[medium_test] rubble: %d quanta, floating %d, on-water "
-                    "%d, mask mismatches %d\n",
-                    rubbleQ, floating, onWater, maskMismatch);
+                    "%d, mask mismatches %d, не улеглось (бодрая клетка) %d\n",
+                    rubbleQ, floating, onWater, maskMismatch, unlaid);
         // 8 сброшенных + 128 масочного завала генераторной кодировки (та
         // клетка выше по сцене; она спит и никуда не делась — тоже
         // инвариант). Допуск истаиваний −4 → −5 пересдан инкрементом 2
@@ -576,7 +592,7 @@ void test_automaton_water(gpu::VulkanDevice& dev) {
         CHECK(rubbleQ >= 8 + 128 - 5);
         CHECK(floating == 0);      // осел, не левитирует
         CHECK(onWater == 0);       // утонул: вода не под рублом
-        CHECK(maskMismatch == 0);  // маска-кэш == фаза материала (весь пул)
+        CHECK(maskMismatch == 0);  // закон маски S16.10 (весь пул)
     }
 
     // ДЕТАЧ = ЗАМЫСЕЛ ВЛАДЕЛЬЦА (2026-08-24): потерявший связность кусок НЕ
@@ -881,7 +897,7 @@ void test_carve_agnostic() {
 
     // 7) ОДИН ЗАКОН СВЯЗНОСТИ НА ПИСАТЕЛЯХ: «шар» бетона в воздухе
     //    конвертируется detach_scan'ом целиком — дальше его роняет автомат;
-    //    маски стоят (бит-кэш поедет с материей).
+    //    маски стоят (бит погаснет с первым ходом атома, S16.10).
     const int fx = cx + 8;
     CellType* fp = materialize_sub_page(w, macro_index(fx, cy, cz));
     for (int sx2 = 2; sx2 < 5; ++sx2)
@@ -2443,9 +2459,12 @@ void test_page_request_channel(gpu::VulkanDevice& dev) {
 // СЦЕНА ВЫБРАНА ПОД ОДНО ОКНО ВРЕМЕНИ, которого у шва раньше не было видно:
 // башня рыхлого оседает за ~26 подтиков, а тишину дозревает ещё 16 (порог
 // сна). В этом промежутке клетки ЕЩЁ ЖИВЫ — список непустой, гало «+7»
-// исправно тянет соседей, — но НИ ОДИН БАЙТ в них не менялся. До хода A шов
-// возил в такие кадры полное окно килобайтов; после — ровно ноль. Это и есть
-// самый крупный оракул теста, и он не про проценты, а про НОЛЬ.
+// исправно тянет соседей, — и байты в них меняются РОВНО ОДИН РАЗ: на зрелой
+// тишине (8-й тихий подтик) улёгшееся получает биты маски (S16.10). До хода A
+// шов возил в такие кадры полное окно килобайтов; после — ноль во всех кадрах,
+// кроме кадра зрелости. Это и есть самый крупный оракул теста, и он не про
+// проценты, а про НОЛЬ. Батч — 4 подтика: зрелость режет окно тишины на две
+// половины по 8, и кадр в 8 подтиков мог бы не поместиться ни в одну.
 //
 // ПОЛЯРНОСТИ (по одной мутации на утверждение):
 //   * снять гашение бита в run_pack (`atomicAnd(uCellAct[ci], ~kActDirty)`)
@@ -2486,9 +2505,9 @@ void test_pack_carries_changed_only(gpu::VulkanDevice& dev) {
     std::uint64_t substep = 0;
     std::uint32_t sumScan = 0, sumCarried = 0, maxCarried = 0, quietFrames = 0;
     std::uint32_t peakScan = 0;
-    for (int b = 0; b < 12; ++b) {
-        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
-        substep += 8;
+    for (int b = 0; b < 24; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+        substep += 4;
         medium.apply_readback(w, mirror);
         const std::uint32_t scan = medium.apply_window();
         const std::uint32_t carried = medium.apply_carried();
@@ -2535,6 +2554,171 @@ void test_pack_carries_changed_only(gpu::VulkanDevice& dev) {
     CHECK(mirrorAgrees);          // канон бит-в-бит как при полном паке
     CHECK(settled + medium.fade_total() == poured);
     CHECK(medium.live_count() == 0); // и лавина доспала (зомби-ноль)
+    medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
+    mirror.destroy();
+}
+
+// ==== ПАДАЮЩЕЕ — НЕ ГЕОМЕТРИЯ (CANON S16.10, закон владельца 2026-11-12) ====
+// Ход атома бит маски только ГАСИТ; ставит его зрелая тишина клетки (полный
+// цикл фаз без единого хода). Оракул — тот самый вектор изменённых масок,
+// который игра отдаёт в geometry_changed(GeomWriter::Medium): по нему платят
+// нав, свет, клиренс и тела.
+//
+// СЦЕНА «ЛЕЧЬ»: башня рыхлого С БИТАМИ (так её оставляет суд опор — статика
+// стала рыхлым двойником, «маска стоит») падает сквозь пустую клетку на плиту.
+//   * клетка-транзит не получает НИ ОДНОЙ записи маски;
+//   * исток теряет биты вместе с ушедшими атомами;
+//   * приёмник становится геометрией, и CPU-канон это знает: в спящей округе
+//     бит ⟺ твёрдая фаза, зеркало согласно с каноном.
+// СЦЕНА «ВЕЧНОЕ ПАДЕНИЕ»: та же башня над колонной, пустой сквозь весь тор.
+// Материя летит, пока идёт прогон, — и после истока масок не пишет никто.
+//
+// ПОЛЯРНОСТИ (по одной мутации на утверждение, [shaders/medium_sim.comp]):
+//   * вернуть в store_atom постановку бита твёрдой фазе — краснеют «транзит
+//     без записей» и «вечное падение без записей»;
+//   * снять в run_settle `kActDirty` у улёгшегося — бит стоит только на GPU:
+//     краснеют закон маски в каноне и согласие зеркала;
+//   * снять в run_settle сам блок `if (lay)` — улёгшееся не геометрия нигде:
+//     краснеет закон маски;
+//   * поставить там `kActChanged` вместо `kActDirty` — тишина обнуляется, и
+//     клетка не засыпает: краснеет «округа спит».
+void test_falling_is_not_geometry(gpu::VulkanDevice& dev) {
+    static World w;
+    for (int x = 68; x < 77; ++x)
+        for (int y = 68; y < 77; ++y)
+            w.grid().fill_cell(x, y, 20, kMatConcrete);
+    const auto originA = static_cast<std::uint32_t>(macro_index(72, 72, 23));
+    const auto transitA = static_cast<std::uint32_t>(macro_index(72, 72, 22));
+    const auto landA = static_cast<std::uint32_t>(macro_index(72, 72, 21));
+    const auto originB = static_cast<std::uint32_t>(macro_index(100, 100, 40));
+    constexpr std::uint32_t kTower = 2 * 2 * 8;
+    auto seed_tower = [&](int cx, int cy, int cz) {
+        CellType* pg = materialize_sub_page(
+            w, static_cast<std::size_t>(macro_index(cx, cy, cz)));
+        for (int sx = 3; sx < 5; ++sx)
+            for (int sy = 3; sy < 5; ++sy)
+                for (int sz = 0; sz < 8; ++sz) {
+                    pg[sub_bit(sx, sy, sz)] = kMatRubble;
+                    w.grid().mask(cx, cy, cz).set(sub_bit(sx, sy, sz));
+                }
+    };
+    seed_tower(72, 72, 23);
+    seed_tower(100, 100, 40);
+    const SubField<CellType>& f =
+        *w.subfields().find<CellType>(kSubMaterialName);
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+    std::uint64_t substep = 0;
+    std::vector<std::uint32_t> changed;
+    std::uint32_t recTotal = 0, recOrigin = 0, recTransit = 0, recLand = 0;
+    std::uint32_t originNow = 0;
+    std::uint32_t bitsLaid = 0, bitsGone = 0; // знак записей (прибор [sreda])
+    // Кадр глазами игры: батч, шов, и ТОТ ЖЕ вектор, что уходит в
+    // geometry_changed. Сон клетки зовём на 4 подтиках: зрелость (8) и сон
+    // (16) тогда оба попадают внутрь прогона, а не на его шов.
+    auto frame = [&](std::uint32_t n) {
+        CHECK(run_batch(dev, mirror, medium, w, n, substep));
+        substep += n;
+        changed.clear();
+        medium.apply_readback(w, mirror, &changed);
+        bitsLaid += medium.apply_bits_laid();
+        bitsGone += medium.apply_bits_gone();
+        for (std::uint32_t c : changed) {
+            ++recTotal;
+            if (c == originNow) ++recOrigin;
+            if (c == transitA) ++recTransit;
+            if (c == landA) ++recLand;
+        }
+    };
+    auto drain = [&] {
+        for (std::uint32_t t = 0; t < gpu::GpuMediumPass::kRbRegions + 1; ++t)
+            frame(0);
+    };
+
+    // --- ЛЕЧЬ ---------------------------------------------------------------
+    originNow = originA;
+    medium.wake_cells(&originA, 1, w, mirror);
+    for (int b = 0; b < 30; ++b) frame(4);
+    drain();
+    int laid = 0, lawBreak = 0;
+    for (int cz = 20; cz <= 24; ++cz)
+        for (int cx = 68; cx < 77; ++cx)
+            for (int cy = 68; cy < 77; ++cy) {
+                const std::size_t ci =
+                    static_cast<std::size_t>(macro_index(cx, cy, cz));
+                const CellType* p = f.page(ci);
+                if (!p) continue;
+                const SubMask& m = w.grid().masks()[ci];
+                for (int bit = 0; bit < kSubVoxels; ++bit) {
+                    const bool solid = p[bit] != kCellAir &&
+                        material_phase(p[bit]) == MatPhase::Solid;
+                    if (m.test(bit) != solid) ++lawBreak;
+                    if (p[bit] == kMatRubble) ++laid;
+                }
+            }
+    const std::uint32_t fadeA = medium.fade_total();
+    const bool mirrorAgrees = mirror.verify(w);
+    std::printf("[medium_test] падающее-не-геометрия, лечь: записей масок "
+                "исток %u, транзит %u, приёмник %u, прочие %u; легло %d + "
+                "fade %u из %u, нарушений закона маски %d, live %u, зеркало "
+                "%s\n",
+                recOrigin, recTransit, recLand,
+                recTotal - recOrigin - recTransit - recLand, laid, fadeA,
+                kTower, lawBreak, medium.live_count(),
+                mirrorAgrees ? "СОГЛАСНО" : "РАСХОДИТСЯ");
+    CHECK(recTransit == 0);  // ЗАКОН: летящее масок не пишет
+    CHECK(recOrigin >= 1);   // ход гасит бит истока...
+    CHECK(w.grid().masks()[originA].empty()); // ...и гасит его до конца
+    CHECK(recLand >= 1);     // улёгшееся стало геометрией
+    CHECK(lawBreak == 0);    // в спящей округе бит ⟺ твёрдая фаза
+    CHECK(laid + static_cast<int>(fadeA) == static_cast<int>(kTower));
+    CHECK(medium.live_count() == 0); // округа спит: зрелость не будит
+    CHECK(mirrorAgrees);     // маска зрелости доехала до канона
+    // Знак: ушло ровно столько битов, сколько стояло в истоке, и легло ровно
+    // столько, сколько атомов в куче — ни одного бита мимо этих двух событий.
+    CHECK(bitsGone == kTower);
+    CHECK(static_cast<int>(bitsLaid) == laid);
+
+    // --- ВЕЧНОЕ ПАДЕНИЕ -----------------------------------------------------
+    recTotal = recOrigin = 0;
+    bitsLaid = bitsGone = 0;
+    originNow = originB;
+    medium.wake_cells(&originB, 1, w, mirror);
+    for (int b = 0; b < 40; ++b) frame(4);
+    drain();
+    int flying = 0, nearOrigin = 0, maskedCells = 0;
+    for (int cz = 0; cz < kMacroDim; ++cz)
+        for (int cx = 92; cx < 109; ++cx)
+            for (int cy = 92; cy < 109; ++cy) {
+                const std::size_t ci =
+                    static_cast<std::size_t>(macro_index(cx, cy, cz));
+                if (!w.grid().masks()[ci].empty()) ++maskedCells;
+                const CellType* p = f.page(ci);
+                if (!p) continue;
+                for (int bit = 0; bit < kSubVoxels; ++bit) {
+                    if (p[bit] != kMatRubble) continue;
+                    ++flying;
+                    if (cz >= 38 && cz <= 40) ++nearOrigin;
+                }
+            }
+    const std::uint32_t fadeB = medium.fade_total() - fadeA;
+    std::printf("[medium_test] падающее-не-геометрия, вечное падение: записей "
+                "масок исток %u, прочие %u; летит %d + fade %u из %u, у "
+                "истока %d, клеток с битами в колонне %d, live %u\n",
+                recOrigin, recTotal - recOrigin, flying, fadeB, kTower,
+                nearOrigin, maskedCells, medium.live_count());
+    CHECK(recOrigin >= 1);            // исток отдал биты
+    CHECK(recTotal == recOrigin);     // ЗАКОН: больше масок не писал никто
+    CHECK(nearOrigin == 0);           // материя действительно ушла
+    CHECK(flying + static_cast<int>(fadeB) == static_cast<int>(kTower));
+    CHECK(maskedCells == 0);          // и геометрии по пути не оставила
+    CHECK(bitsGone == kTower && bitsLaid == 0); // ушло всё, не легло ничего
+    CHECK(medium.live_count() > 0);   // падает до сих пор
     medium.destroy(); // статики: Vulkan-объекты умирают ДО устройства
     mirror.destroy();
 }
@@ -2946,6 +3130,7 @@ int main() {
         test_full_rubble_wakes(dev);
         test_page_request_channel(dev);
         test_pack_carries_changed_only(dev);
+        test_falling_is_not_geometry(dev);
         test_bitmask_gate_stand(dev);
     }
     test_carve_agnostic();

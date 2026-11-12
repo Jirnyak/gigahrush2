@@ -26,9 +26,11 @@
 //
 // ЧТО ДВИЖЕТСЯ: любая материя, чья строка даёт flow или diffusion > 0 —
 // вода, газ, RUBBLE-обломки (инкремент 5). Бит SubMask — кэш предиката
-// «твёрдое» по фазе (S16.1/S16.2): при свопе он ПЕРЕВЫЧИСЛЯЕТСЯ из фазы
-// нового материала слота — обломок падает вместе со своим битом, коллизия
-// и тени видят его живьём. Неподвижная материя (flow=0, diffusion=0 —
+// «твёрдое И УЛЕГЛОСЬ» (S16.1/S16.2/S16.10): ПАДАЮЩЕЕ — НЕ ГЕОМЕТРИЯ. Ход
+// атома бит слота только ГАСИТ (store_atom), а ставит его settle — когда
+// клетка прожила в тишине полный цикл фаз (kMatureSubsteps). Летящий
+// обломок виден рендеру как материя страницы, но ни коллизия, ни тени, ни
+// печёные поля его не читают. Неподвижная материя (flow=0, diffusion=0 —
 // бетон) не движется параметрически, потолки целы по построению.
 //
 // ДВА РЕЖИМА одним пайплайном (pc.mode):
@@ -48,7 +50,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(std430, binding = 0) buffer MaskBuf           { uint uMasks[];   }; // 16 uint/клетку — автомат ПИШЕТ (кэш фазы)
+layout(std430, binding = 0) buffer MaskBuf           { uint uMasks[];   }; // 16 uint/клетку — автомат ПИШЕТ (кэш «твёрдое и улеглось»)
 layout(std430, binding = 1) readonly buffer TypeBuf  { uint uTypes[];   }; // 2 клетки/uint
 layout(std430, binding = 2) readonly buffer PageIdx  { uint uPageIdx[]; }; // 1 uint/клетку
 layout(std430, binding = 3) buffer PoolBuf           { uint uPagePool[];}; // 256 uint/страницу
@@ -174,6 +176,14 @@ const uint kActQuietMask = kActQuietMax << kActQuietShift;
 // Порог сна — -D мостом из gpu_medium_pass.h (инкр. 3: прежде жил ДВУМЯ
 // независимыми литералами 16 в хедере и здесь — разъехались бы молча).
 const uint kSleepSubsteps = GIGA_MEDIUM_SLEEP;
+// ЗРЕЛАЯ ТИШИНА — полный цикл фаз Марголуса: 2³ комбинаций чётностей трёх
+// осей. Клетка, не изменившаяся за столько ИСПОЛНЕННЫХ подтиков, перебрала
+// все разбиения на блоки, и ни одно не нашло хода: её материя лежит. На
+// этом пороге стоят два закона: защита фаз у часов замороженной клетки и
+// «улеглось ⟹ геометрия» (S16.10). Сон (kSleepSubsteps) наступает позже —
+// между порогами клетка остаётся в списке гейта, и пак успевает увезти
+// маску, поставленную на зрелости.
+const uint kMatureSubsteps = 8u;
 
 // Пробуждение = БИТ (Автомат-2 инкр. 2): идемпотентный atomicOr — писатель
 // не думает «кого будить» и не борется за слоты; очередь, кап и откат
@@ -271,10 +281,9 @@ float roll01(uint substep, ivec3 blockG, uint salt) {
 }
 
 // --- Субвоксель по глобальной (неврапнутой) суб-координате -------------------
-// Бита маски в структуре НЕТ: маска — кэш предиката «твёрдое» по фазе
-// материала (S16.1/S16.2), store_atom перевычисляет её при каждой записи.
-// Закон чтения держит соответствие бит <-> материал во всех страницах
-// (генераторы честны, сейвы нормализуются) — читать её незачем.
+// Бита маски в структуре НЕТ: движение маску не читает вовсе — стену оно
+// видит по материалу страницы и по подвижности строки (mobile). Маска —
+// кэш «твёрдое и улеглось» (S16.10) для всего, что живёт ВНЕ автомата.
 struct Sub {
     uint ci;       // враппед-индекс клетки
     uint bit;      // 0..511 внутри клетки
@@ -306,18 +315,25 @@ void store_atom(Sub s, uint mat) {
     uint shift = (s.bit & 1u) != 0u ? 16u : 0u;
     atomicAnd(uPagePool[word], ~(0xFFFFu << shift));
     atomicOr(uPagePool[word], (mat & 0xFFFFu) << shift);
-    // Бит маски — производная фазы нового материала (инкремент 5: обломок
-    // падает вместе со своим битом — коллизия и тени видят его живьём).
-    uint mw = s.ci * 16u + (s.bit >> 5);
-    uint mbit = 1u << (s.bit & 31u);
-    if (mat != 0u && kMatPhase[mat] == 0u) atomicOr(uMasks[mw], mbit);
-    else atomicAnd(uMasks[mw], ~mbit);
+    // ПАДАЮЩЕЕ — НЕ ГЕОМЕТРИЯ (S16.10, закон владельца 2026-11-12): запись
+    // бит слота только ГАСИТ. Сюда попадает лишь подвижное (can_swap и
+    // истаивание — статика свой слот не покидает никогда), а сдвинувшийся
+    // атом по определению не лежит. Бит вернёт settle на зрелой тишине.
+    // Прежнее «обломок падает вместе со своим битом» (инкремент 5) меняло
+    // маски каждым подтиком вечного падения по кольцу тора.
+    atomicAnd(uMasks[s.ci * 16u + (s.bit >> 5)], ~(1u << (s.bit & 31u)));
+}
+
+// Материал атома страничной клетки (двойник чтения в load_sub).
+uint page_atom(uint pg, uint bit) {
+    uint w = uPagePool[pg * 256u + (bit >> 1)];
+    return (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
 }
 
 // Подвижность: воздух — вытесняемая пустота; материя движется, если её
 // строка даёт flow или diffusion > 0. Бетон (0,0) неподвижен ПО ПОСТРОЕНИЮ —
-// потолки не рушатся от пробуждения; обломки (rubble, flow 0.1) подвижны
-// СТРОКОЙ, никакой ветки «твёрдый?» — их бит маски просто едет с ними.
+// потолки не рушатся от пробуждения; обломки (рыхлые двойники, flow 1.0)
+// подвижны СТРОКОЙ, никакой ветки «твёрдый?».
 bool mobile(uint mat) {
     return mat == 0u || kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0;
 }
@@ -539,8 +555,9 @@ void run_move(uint slot, uint threadId) {
     //
     // ХОД A: тем же словом ставится kActDirty. Это и есть ТОЧНЫЙ предикат
     // «байты клетки изменились»: писать в страницу умеет только store_atom,
-    // он зовётся ровно под этим условием, и он же перевычисляет бит маски —
-    // значит ДРУГИХ источников изменения страницы/маски на GPU нет, а
+    // он зовётся ровно под этим условием, и он же гасит бит маски. Второй
+    // писатель маски — settle на зрелой тишине (S16.10), и он ставит
+    // kActDirty сам. ДРУГИХ источников изменения страницы/маски на GPU нет, а
     // клетка-получатель чужого атома помечается ТЕМ ЖЕ потоком, что в неё
     // написал. Гейтовое гало «+7» в этот предикат не попадает по построению:
     // исполнимая, но ничего не принявшая клетка остаётся чистой — её
@@ -568,8 +585,10 @@ void run_move(uint slot, uint threadId) {
 // судится тоже: её тишина копится, а въехавшая материя (kActChanged от
 // move) честно ставит ей бит через stay.
 shared uint sQuanta;   // ВСЯ подвижная материя (вода + рубл) — сон, лог
-shared uint sFree;     // БЕЗмасочная среда (вода) — класс 3 (мост рендера)
+shared uint sFree;     // БЕЗмасочная подвижная материя (вода, газ,
+                       // неулёгшееся рыхлое) — класс 3 (мост рендера)
 shared uint sMaskBits;
+shared uint sLaid;     // биты, выставленные улёгшемуся в этом подтике (S16.10)
 
 void run_settle(uint slot, uint threadId) {
     uint ci = uListA[slot];
@@ -599,7 +618,7 @@ void run_settle(uint slot, uint threadId) {
         // фазы, и замороженные тики досуживали его до сна, пока он не
         // успел сходить (~7% фронта карва замерзало при p=0.3). До 8 —
         // часы только у исполненных.
-        if (fq < 8u) return;
+        if (fq < kMatureSubsteps) return;
         fq = min(fq + 1u, kActQuietMax);
         atomicAnd(uCellAct[ci], ~kActQuietMask);
         atomicOr(uCellAct[ci], fq << kActQuietShift);
@@ -607,30 +626,54 @@ void run_settle(uint slot, uint threadId) {
         return;
     }
     if (threadId == 0u) {
-        sQuanta = 0u; sFree = 0u; sMaskBits = 0u;
+        sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sLaid = 0u;
     }
     barrier();
 
     uint pg = uPageIdx[ci];
-    // Фаза 1: счёт маски — закону чтения безстраничной клетки (двойник
-    // sub_material_at [world/destruct.cpp]) нужна ПУСТОТА маски всей клетки.
-    uint maskBits = 0u;
-    for (uint k = 0u; k < 8u; ++k)
-        if (mask_bit(ci, threadId * 8u + k)) maskBits += 1u;
-    atomicAdd(sMaskBits, maskBits);
+    // УЛЕГЛОСЬ ⟹ ГЕОМЕТРИЯ (S16.10). Этим подтиком тишина клетки дозревает до
+    // полного цикла фаз — значит всё твёрдое в ней лежит, и бит получает
+    // каждый атом твёрдой фазы. Условие одинаково для всех 64 нитей: слово
+    // активности своей клетки в settle пишет только её нить 0 и только после
+    // последнего барьера. Переход РОВНО на порог (а не «>=»): гало-клетка с
+    // насыщенной тишиной не пересчитывается каждым подтиком. Замороженная
+    // бюджетом ветка выше сюда не доходит и не должна: ниже порога её часы
+    // стоят, так что дозреть клетка может только исполненной.
+    uint act0 = uCellAct[ci];
+    bool lay = pg != kNoPage && (act0 & kActChanged) == 0u &&
+               ((act0 & kActQuietMask) >> kActQuietShift) + 1u ==
+                   kMatureSubsteps;
+    // Фаза 1: полоса нити — её 8 бит лежат одним байтом слова маски
+    // (bit = threadId*8 + k), полосы нитей не пересекаются. Счёт маски нужен
+    // закону чтения безстраничной клетки (двойник sub_material_at
+    // [world/destruct.cpp]): ПУСТОТА маски всей клетки.
+    uint mw = ci * 16u + (threadId >> 2);
+    uint msh = (threadId & 3u) * 8u;
+    uint mbyte = (uMasks[mw] >> msh) & 0xFFu;
+    if (lay) {
+        uint add = 0u;
+        for (uint k = 0u; k < 8u; ++k) {
+            uint mat = page_atom(pg, threadId * 8u + k);
+            if (mat != 0u && kMatPhase[mat] == 0u) add |= 1u << k;
+        }
+        add &= ~mbyte;
+        if (add != 0u) {
+            atomicOr(uMasks[mw], add << msh);
+            atomicAdd(sLaid, uint(bitCount(add)));
+            mbyte |= add;
+        }
+    }
+    atomicAdd(sMaskBits, uint(bitCount(mbyte)));
     barrier();
     bool maskEmpty = sMaskBits == 0u;
 
     uint quanta = 0u, freeQ = 0u;
     for (uint k = 0u; k < 8u; ++k) {
         uint bit = threadId * 8u + k;
-        bool m = mask_bit(ci, bit);
+        bool m = ((mbyte >> k) & 1u) != 0u;
         uint mat;
         if (pg == kNoPage) mat = maskEmpty ? cell_type(ci) : 0u;
-        else {
-            uint w = uPagePool[pg * 256u + (bit >> 1)];
-            mat = (bit & 1u) != 0u ? (w >> 16) & 0xFFFFu : w & 0xFFFFu;
-        }
+        else mat = page_atom(pg, bit);
         if (mat != 0u &&
             (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
             quanta += 1u;
@@ -664,7 +707,11 @@ void run_settle(uint slot, uint threadId) {
                      : min(((act & kActQuietMask) >> kActQuietShift) + 1u,
                            kActQuietMax);
     atomicAnd(uCellAct[ci], ~(kActChanged | kActQuietMask));
-    atomicOr(uCellAct[ci], quiet << kActQuietShift);
+    // Маска, поставленная улёгшемуся, — изменение байтов клетки: пак обязан
+    // её увезти. Только kActDirty: kActChanged обнулил бы тишину, клетка не
+    // уснула бы никогда и ставила бы биты по кругу.
+    atomicOr(uCellAct[ci],
+             (quiet << kActQuietShift) | (sLaid != 0u ? kActDirty : 0u));
     // Судьба битом — ТРИ исхода, и середина не вербует (урок первого
     // прогона инкремента 2: «stay = wake_next» ставил бит ГАЛО-клеткам,
     // исполнимым лишь через соседа, — те вербовали собственное гало, и

@@ -790,11 +790,17 @@ CellType* materialize_sub_page(World& w, std::size_t ci) {
 bool settle_sub_page(World& w, std::size_t ci) {
     SubField<CellType>* f = w.subfields().find<CellType>(kSubMaterialName);
     if (!f) return false;
+    // Однородна клетка только по ПАРЕ (материал, бит). С законом «падающее —
+    // не геометрия» (S16.10) страница целиком из рыхлого бывает с частичной
+    // маской: часть атомов улеглась и несёт бит, часть въехала и ещё нет.
+    // Свёртка такой клетки в тип стёрла бы безмасочные атомы в воздух (закон
+    // чтения бесстраничной: немаскированное — воздух). Она неоднородна и
+    // страницу сохраняет.
+    if (!uniform_mask(w.grid().masks()[ci])) return false;
     CellType uniform{};
     if (!f->collapse_if_uniform(ci, &uniform)) return false;
     // Тип несёт всю клетку целиком — закон чтения беcстраничной (см. выше,
-    // двойник sub_material_at). Маска не трогается: у однородной страницы она
-    // уже пуста либо полна по инварианту фазы (S16.9).
+    // двойник sub_material_at). Маска не трогается: она пуста либо полна.
     w.grid().types_mut()[ci] = uniform;
     return true;
 }

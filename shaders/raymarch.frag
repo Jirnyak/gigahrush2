@@ -248,9 +248,9 @@ struct Hit {
 // March one cell's 8^3 bits between ray times t0..t1. `axisIn` is the axis the
 // macro DDA stepped to enter this cell (-1 on the camera's own cell).
 // `matter` — клетка класса 3 (материя сред, CANON S16): субвоксель занят и
-// тогда, когда бита маски нет, но материал страницы не воздух — так лужа
-// видна ДО рендера сред (инкремент 6: прозрачность/поверхность). Обычные
-// клетки (класс 2) не платят этот фетч вовсе.
+// тогда, когда бита маски нет, но материал страницы не воздух — так видны
+// лужа, газ и летящая осыпь (S16.10). Обычные клетки (класс 2) не платят
+// этот фетч вовсе.
 bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
                 float t0, float t1, int axisIn, bool matter, out Hit h) {
     vec3 e = ro + rd * (t0 + 1e-5);
@@ -261,12 +261,20 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
     float t = t0;
     int axis = axisIn;
     for (int i = 0; i < 32; ++i) {
-        if (matter && !sub_solid(ci, s)) {
-            // Класс-3 клетка: немасочный не-воздух — ВСЕГДА среда (закон
-            // чтения: немасочного твёрдого атома не существует). Прозрачный
-            // проход: копим сегмент атома и маршируем дальше.
+        bool solid = sub_solid(ci, s);
+        if (matter && !solid) {
+            // Класс-3 клетка: немасочный не-воздух — материя в ведении
+            // автомата. Твёрдая фаза без бита — ЛЕТЯЩЕЕ или ещё не улёгшееся
+            // рыхлое (CANON S16.10 «падающее — не геометрия»: бит ставит
+            // зрелая тишина клетки, а не ход атома). Геометрией оно не
+            // считается нигде, кроме глаза: кусок рисуется тем же попаданием,
+            // что и улёгшийся, — иначе осыпь шла бы дымкой цвета материала.
+            // Жидкость и газ — прозрачный проход: копим сегмент атома и
+            // маршируем дальше.
             uint mm = sub_mat(ci, s);
-            if (mm != 0u) {
+            if (mm != 0u && kMatPhase[mm] == 0u) {
+                solid = true;
+            } else if (mm != 0u) {
                 float tNext =
                     min(min(min(sMax.x, sMax.y), sMax.z), t1);
                 float k =
@@ -280,7 +288,7 @@ bool march_cell(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp, vec3 cellLo,
                 gMediaTint += ub.albedo[min(mm, 63u)].rgb * wgt;
             }
         }
-        if (sub_solid(ci, s)) {
+        if (solid) {
             uint sm = sub_mat(ci, s);
             uint smi = min(sm, kMatSurfaceCount - 1u);
             if (kMatLightPass[smi] == 1u && kMatEmissive[smi] == 0.0) {
