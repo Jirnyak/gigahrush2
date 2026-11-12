@@ -26,9 +26,74 @@
 #include <cstdint>
 
 #include "game/geom_writer.h"
+#include "game/mask_churn.h"
+#include "world/types.h"
+
+// ПЕРЕПИСЬ «ГДЕ МЕНЯЮТСЯ МАСКИ» ([game/mask_churn.h]) — прибор, по которому
+// будут менять закон материи, обязан быть судим: три версии причины
+// («кольцо тора», «переходный процесс», «возня на месте») он различает
+// числами, и каждое из этих чисел проверено на сцене, где ответ известен.
+static void test_mask_churn() {
+    using namespace giga;
+    using namespace giga::game;
+    const auto cell = [](int x, int y, int z) {
+        return static_cast<std::uint32_t>(macro_index(x, y, z));
+    };
+    { // КОЛЬЦО: одна колонна, все 128 слоёв оси Z, поток ровный
+        MaskChurn c;
+        for (int z = 0; z < kMacroDim; ++z) {
+            const std::uint32_t ci = cell(10, 20, z);
+            mask_churn_add(c, &ci, 1, /*axis=*/2,
+                           static_cast<std::uint64_t>(z) * 8u);
+        }
+        // ...и возня на месте в другой колонне: три клетки, много записей.
+        const std::uint32_t spot[3] = {cell(50, 50, 7), cell(50, 50, 8),
+                                       cell(50, 50, 9)};
+        for (int k = 0; k < 40; ++k)
+            mask_churn_add(c, spot, 3, 2, static_cast<std::uint64_t>(k) * 25u);
+        const MaskChurnSummary s = mask_churn_summary(c);
+        CHECK(s.records == 128u + 120u);
+        CHECK(s.cells == 131u);      // разных клеток — без повторов
+        CHECK(s.columns == 2u);
+        CHECK(s.through == 1u);      // сквозная только первая
+        CHECK(s.depthsUsed == 128u);
+        CHECK(s.flowFirst + s.flowLast == 248u);
+    }
+    { // ОСЬ НИЗА — ИЗ ФРЕЙМА: тот же столб клеток вдоль X под осью Z даёт 128
+      // колонн по одному слою, а под осью X — одну сквозную колонну
+        std::vector<std::uint32_t> line;
+        for (int x = 0; x < kMacroDim; ++x) line.push_back(cell(x, 5, 6));
+        MaskChurn asZ, asX;
+        mask_churn_add(asZ, line.data(), line.size(), 2, 0);
+        mask_churn_add(asX, line.data(), line.size(), 0, 0);
+        CHECK(mask_churn_summary(asZ).columns == 128u);
+        CHECK(mask_churn_summary(asZ).through == 0u);
+        CHECK(mask_churn_summary(asZ).depthsUsed == 1u);
+        CHECK(mask_churn_summary(asX).columns == 1u);
+        CHECK(mask_churn_summary(asX).through == 1u);
+        CHECK(mask_churn_summary(asX).depthsUsed == 128u);
+    }
+    { // ПЕРЕХОДНЫЙ ПРОЦЕСС: поток убывает — вторая половина меньше первой
+        MaskChurn c;
+        const std::uint32_t ci = cell(1, 2, 3);
+        for (int w = 0; w < 8; ++w)
+            for (int k = 0; k < 8 - w; ++k)
+                mask_churn_add(c, &ci, 1, 2,
+                               static_cast<std::uint64_t>(w) * kChurnWindowTicks);
+        const MaskChurnSummary s = mask_churn_summary(c);
+        CHECK(s.flowFirst == 8u + 7u + 6u + 5u);
+        CHECK(s.flowLast == 4u + 3u + 2u + 1u);
+        CHECK(s.cells == 1u);
+        CHECK(s.through == 0u);
+    }
+    // Пустая перепись — нули, а не мусор.
+    CHECK(mask_churn_summary(MaskChurn{}).records == 0u);
+    CHECK(mask_churn_summary(MaskChurn{}).columns == 0u);
+}
 
 static void test_geomwriter_all() {
     using namespace giga::game;
+    test_mask_churn();
 
     // ---- 1. МАТРИЦА ДОЛГА ---------------------------------------------------
     struct Want {

@@ -102,7 +102,8 @@
 #include "game/light_bake.h"
 #include "game/prop_system.h"
 #include "game/investigate.h"
-#include "game/geom_writer.h"  // ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ — таблица и вывод (S20.4)
+#include "game/geom_writer.h"
+#include "game/mask_churn.h"   // перепись «где автомат меняет маски»  // ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ — таблица и вывод (S20.4)
 #include "game/look.h"      // Look, look_step — ВЗГЛЯД любого тела (S25.7)
 #include "game/perceive.h"  // perceive_step — ОДИН проход восприятия (S25.8)
 #include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
@@ -547,6 +548,27 @@ static CarveTiming g_carveT;
 // Кто и сколько пишет в мир — счёт единственной двери писателя геометрии
 // (`geometry_changed`, ниже). Печатается на выходе строкой `[geom]`.
 static game::GeomWriteStats g_geomStats;
+// ГДЕ автомат среды меняет маски — печать `[sreda]` на выходе
+// ([game/mask_churn.h]): различает вечное падение по кольцу тора, переходный
+// процесс и возню на месте.
+static game::MaskChurn g_maskChurn;
+static int g_maskChurnFloor = 0; // этаж, чей счёт сейчас копится
+
+// Напечатать перепись этажа и начать новую. Этажи НЕ складываются: сумма по
+// двум геометриям отвечала бы на вопрос, которого никто не задавал.
+static void mask_churn_report(int floor) {
+    if (g_maskChurn.records == 0) return;
+    const game::MaskChurnSummary cs = game::mask_churn_summary(g_maskChurn);
+    std::fprintf(stderr,
+                 "[sreda] этаж %d, маски от автомата: клетко-записей %llu, "
+                 "разных клеток %u, колонн %u (сквозных, от %d слоёв: %u), "
+                 "слоёв вдоль низа занято %u из %d | поток: первая половина "
+                 "окон %u, вторая %u\n",
+                 floor, static_cast<unsigned long long>(cs.records), cs.cells,
+                 cs.columns, game::kChurnThroughDepths, cs.through,
+                 cs.depthsUsed, kMacroDim, cs.flowFirst, cs.flowLast);
+    g_maskChurn = game::MaskChurn{};
+}
 
 // От чего гибнут тела — счёт единственной двери смерти (`finalize_deaths`),
 // печать `[smert]`. Копится за весь прогон, этажи не разделяет: строка несёт
@@ -5767,6 +5789,17 @@ int main(int argc, char** argv) {
                 // кучи проходима, труп на уехавшей куче обязан проснуться.
                 // Замер §59.11-пересмотра: сколько тел будит ИМЕННО автомат
                 // (печать — rigid-stats).
+                {
+                    if (currentFloor != g_maskChurnFloor) {
+                        mask_churn_report(g_maskChurnFloor);
+                        g_maskChurnFloor = currentFloor;
+                    }
+                    const GravityFrame mf =
+                        steer_frame_of(&stack.layer(activeLayer).gravity());
+                    game::mask_churn_add(g_maskChurn, mediumMaskChanged.data(),
+                                         mediumMaskChanged.size(), mf.axis,
+                                         simTick);
+                }
                 g_profMediumRigidWakes += geometry_changed(
                     game::GeomWriter::Medium, activeLayer, mediumMaskChanged,
                     0x3ED1A000u);
@@ -12088,6 +12121,7 @@ int main(int argc, char** argv) {
                          static_cast<unsigned long long>(g_geomStats.cells[i]),
                          static_cast<unsigned long long>(
                              g_geomStats.foreign[i]));
+    mask_churn_report(g_maskChurnFloor);
     gpu::write_device_report(device, "на выходе");
 
     // --- teardown (reverse order) -----------------------------------------
