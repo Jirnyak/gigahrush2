@@ -99,6 +99,46 @@ std::size_t settle_uniform_pages(World& w) {
     return settled;
 }
 
+MaskAuditStats audit_mask_law(const World& w) {
+    MaskAuditStats st;
+    const SubField<CellType>* mats =
+        w.subfields().find<CellType>(kSubMaterialName);
+    const std::vector<CellType>& types = w.grid().types();
+    const std::vector<SubMask>& masks = w.grid().masks();
+    auto solid = [](CellType m) {
+        return m != kCellAir && material_phase(m) == MatPhase::Solid;
+    };
+    // Серийно: путь прибора и гейта, не кадра.
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const SubMask& mk = masks[ci];
+        const CellType* pg = mats ? mats->page(ci) : nullptr;
+        std::size_t ghost = 0;
+        if (!pg) {
+            // Бесстраничная: маскированный атом есть тип клетки.
+            if (mk.empty() || solid(types[ci])) continue;
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (mk.test(b)) ++ghost;
+        } else {
+            for (int b = 0; b < kSubVoxels; ++b) {
+                const CellType m = pg[b];
+                const bool bit = mk.test(b);
+                const bool s = solid(m);
+                if (bit && !s) ++ghost;
+                if (!s) continue;
+                if (material_is_medium(m)) {
+                    ++st.loose;
+                    if (!bit) ++st.loose_unlaid;
+                } else if (!bit) {
+                    ++st.static_unmasked;
+                }
+            }
+        }
+        st.ghost_bits += ghost;
+        if (ghost != 0) ++st.ghost_cells;
+    }
+    return st;
+}
+
 bool cell_full_static(const World& w, std::uint32_t ci) {
     return w.grid().masks()[ci].full() &&
            !material_is_medium(w.grid().types()[ci]);

@@ -2272,6 +2272,46 @@ static void unlaid_rubble_page_survives_collapse() {
     CHECK(rubble_atoms() == giga::kSubVoxels);
 }
 
+// АУДИТ ЗАКОНА МАСКИ ([world/floor_awaken.h] audit_mask_law) — прибор, по
+// которому судится «в каноне нет стен, которых нет». Каждый класс посеян
+// поштучно, счёт обязан сойтись: слепой аудит (всегда нули) краснеет первой же
+// строкой, перепутанные классы — соседними.
+static void mask_law_audit_counts_each_class() {
+    giga::World w;
+    giga::MacroGrid& g = w.grid();
+    const int cx = 10, cy = 11, cz = 12;
+    giga::CellType* pg =
+        giga::materialize_sub_page(w, giga::macro_index(cx, cy, cz));
+    auto put = [&](int b, giga::CellType m, bool bit) {
+        pg[b] = m;
+        if (bit) g.mask(cx, cy, cz).set(b);
+    };
+    put(0, giga::kMatRubble, true);    // улёгшееся
+    put(1, giga::kMatRubble, true);
+    put(2, giga::kMatRubble, false);   // летит
+    put(3, giga::kMatConcrete, true);  // обычная статика
+    put(4, giga::kMatConcrete, false); // статика без бита
+    put(5, giga::kMatWater, false);    // вода — как положено
+    put(6, giga::kMatWater, true);     // бит над жидкостью — призрак
+    put(7, giga::kCellAir, true);      // бит над воздухом — призрак
+    put(8, giga::kCellAir, true);
+    // Бесстраничная клетка воздуха с битами — три призрака во второй клетке.
+    for (int b = 0; b < 3; ++b) g.mask(40, 41, 42).set(b);
+    // Бесстраничная полная стена — чиста.
+    g.fill_cell(60, 61, 62, giga::kMatConcrete);
+
+    const giga::MaskAuditStats a = giga::audit_mask_law(w);
+    CHECK(a.loose == 3);
+    CHECK(a.loose_unlaid == 1);
+    CHECK(a.static_unmasked == 1);
+    CHECK(a.ghost_bits == 3 + 3);
+    CHECK(a.ghost_cells == 2);
+    // Пустой мир — нули, а не мусор.
+    giga::World empty;
+    const giga::MaskAuditStats z = giga::audit_mask_law(empty);
+    CHECK(z.loose == 0 && z.ghost_bits == 0 && z.static_unmasked == 0);
+}
+
 // ФРОНТИР РОЖДЕНИЯ ЭТАЖА (лифт-лимб, шаг 2; [world/floor_awaken.h]).
 // Страницы вокруг подвижной материи раскрывал писатель на главном потоке в
 // кадре входа (78 893 страницы за 118.5 мс); теперь их раскрывает рождение
@@ -2502,6 +2542,7 @@ static void test_saveload_all() {
     saveload_test::page_invariant_holds_over_the_whole_volume();
     saveload_test::unlaid_rubble_page_survives_collapse();
     saveload_test::frontier_is_born_with_the_floor();
+    saveload_test::mask_law_audit_counts_each_class();
     saveload_test::leaving_a_floor_steals_the_pool();
     saveload_test::possession_refuses_remains_and_stale_slots();
     saveload_test::wire_layout();

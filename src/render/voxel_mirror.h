@@ -202,6 +202,20 @@ public:
     bool upload_entry_step(const World& world);
     bool entry_upload_pending() const { return entryPending_; }
 
+    // ЗЕРКАЛО ДЕРЖИТ ЭТОТ МИР ЦЕЛИКОМ: последняя оптовая заливка была с него,
+    // и хвост пула уже лёг. Только при этом автомату сред можно читать зеркало,
+    // а писателям — класть в него клетки. Вопрос появился с поездкой на лифте:
+    // активный слой публикуется раньше, чем зеркало перезаливается (между ними
+    // несколько кадров свопа), и всё это время зеркало несёт ПОКИНУТЫЙ этаж.
+    // Автомат, шагавший по нему с будильником нового этажа, двигал чужую
+    // материю, а обратный шов клал её байты в новый мир: биты маски над
+    // воздухом — стены, которых нет (замер 2026-11-12: после двух поездок 9–15
+    // тыс. таких битов, а с фронтиром рождения, который дал новому этажу
+    // страницы воздуха вокруг подвижной материи, — 46–72 тыс.).
+    bool holds(const World& world) const {
+        return held_ == &world && !entryPending_;
+    }
+
     // Queue macro cells (flat macro_index values) for the next flush(). Dedup'd
     // against a bitset, so feeding the same cell twice a frame costs nothing.
     void mark_dirty(const std::uint32_t* cells, std::size_t n);
@@ -333,6 +347,7 @@ private:
 
     // Машинный вход: пул в полёте (см. upload_entry_begin).
     bool entryPending_ = false;
+    const World* held_ = nullptr; // чей мир лежит в зеркале (holds)
     std::size_t entryPoolOff_ = 0;  // байт пула уже уехало
     std::uint32_t entryFrames_ = 0; // кадров-шагов — для строки прибора
     double entryStepMs_ = 0.0;      // суммарная цена шагов, мс

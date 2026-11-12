@@ -4171,7 +4171,18 @@ int main(int argc, char** argv) {
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
         // a floor looks the same every visit).
-        return reg.get<Transform>(player).layer;
+        //
+        // ПУБЛИКАЦИЯ СЛОЯ — ЗДЕСЬ, в голове прибытия (лифт-лимб, шаг 3), и это
+        // одно место на синхронную поездку и на машину лифта. Тело уже на
+        // новом слое, диффузия уже перестроена под него (контрактный вызов
+        // выше) — с этой строки кадр обязан жить новым этажом. Прежде слой
+        // публиковали arrive_upload и начало СЛЕДУЮЩЕГО кадра: остаток кадра
+        // прибытия симулировал покинутый этаж, у которого уже забрали пул
+        // страниц, диффузия перестраивалась ещё дважды (раз — по сетке мёртвого
+        // мира, раз — обратно; по ~40 мс), а обратный шов автомата клал
+        // страницы в мёртвый мир (15 мс).
+        activeLayer = reg.get<Transform>(player).layer;
+        return activeLayer;
     };
     auto arrive_refresh = [&](LayerId nl) {
         const auto tR0 = std::chrono::steady_clock::now();
@@ -4258,8 +4269,8 @@ int main(int argc, char** argv) {
         // place_body_at_cell; keyboard/--shot did not. [save.h]
         game::place_body_safely(reg, stack.layer(nl), player);
         const auto tU3 = std::chrono::steady_clock::now();
-        // Publish the new slot to the enclosing frame. ONE place.
-        activeLayer = nl;
+        // Слой опубликован раньше — в arrive_head, который предшествует этой
+        // функции у обоих её вызывающих.
         schedule_ride_autosave();
         const auto tU4 = std::chrono::steady_clock::now();
         const auto ms = [](std::chrono::steady_clock::time_point a,
@@ -11482,14 +11493,22 @@ int main(int argc, char** argv) {
             // порции обязаны уехать на GPU этим же кадром, а инжект-буфер
             // порции съест record_substeps ниже. Остаток очереди честно
             // переносится (см. drain_wakes — прежний кап молча терял).
-            // Пока пул машинного входа в полёте — ни инжекта, ни флеша:
-            // автомат сред не смеет читать недолитые страницы, а flush не
-            // смеет класть настоящий индекс раньше пула. Обе очереди несут.
-            if (!voxelMirror.entry_upload_pending())
+            // ОДИН ВОПРОС НА ВСЕХ, КТО ТРОГАЕТ ЗЕРКАЛО: держит ли оно активный
+            // этаж целиком ([render/voxel_mirror.h] holds). Нет — значит идёт
+            // своп поездки: либо зеркало ещё несёт покинутый этаж (слой уже
+            // опубликован, оптовая заливка впереди), либо пул машинного входа
+            // в полёте. В обоих случаях — ни инжекта, ни флеша, ни подтиков:
+            // автомат не смеет шагать по чужой или недолитой материи, flush —
+            // класть клетки нового мира в зеркало старого, а пак — увозить
+            // оттуда байты в новый канон. Обе очереди несут, материя стоит;
+            // створки и так ждут пустую очередь пробуждений.
+            const bool mirrorCurrent =
+                voxelMirror.holds(stack.layer(activeLayer));
+            if (mirrorCurrent)
                 mediumPass.drain_wakes(stack.layer(activeLayer), voxelMirror);
             renderer.timer.pass_begin(cmd, gpu::GpuPass::VoxelFlush);
             const auto ctVf = std::chrono::steady_clock::now();
-            if (!voxelMirror.entry_upload_pending())
+            if (mirrorCurrent)
                 voxelMirror.flush(cmd, renderer.currentFrame,
                                   stack.layer(activeLayer));
             g_carveT.flushMs = carve_ms_since(ctVf);
@@ -11498,7 +11517,11 @@ int main(int argc, char** argv) {
             // МИР-АВТОМАТ: подтики, назревшие по сим-часам (каждый 4-й
             // сим-тик), СРАЗУ после flush — писатели CPU легли, барьеры
             // внутри record_substeps упорядочат автомат до читателей кадра.
-            if (mediumPass.ready()) {
+            if (mediumPass.ready() && !mirrorCurrent) {
+                // Материя за закрытыми створками стоит: подтики свопа не
+                // копятся в долг и не догоняются рывком после него.
+                mediumSubstepsDone = simTick / 4;
+            } else if (mediumPass.ready()) {
                 const std::uint64_t mediumTarget = simTick / 4;
                 std::uint64_t owed = mediumTarget > mediumSubstepsDone
                                          ? mediumTarget - mediumSubstepsDone
@@ -11802,8 +11825,21 @@ int main(int argc, char** argv) {
             // --mirror-verify heartbeat: prove the incremental dirty path (not
             // just the wholesale uploads) against the CPU truth, ~every 5 s.
             if (mirrorVerify && (++mirrorFrame % 300u) == 0u &&
-                !voxelMirror.entry_upload_pending())
+                !voxelMirror.entry_upload_pending()) {
                 voxelMirror.verify(stack.layer(activeLayer));
+                // Тем же ходом — перепись закона маски в самом каноне
+                // ([world/floor_awaken.h]): зеркало может быть согласно с
+                // каноном, а канон — нести стены, которых нет.
+                const MaskAuditStats ma =
+                    audit_mask_law(stack.layer(activeLayer));
+                std::fprintf(stderr,
+                             "[canon] этаж %d: рыхлых атомов %zu, из них без "
+                             "бита %zu | БИТОВ НАД НЕ-ТВЁРДЫМ %zu в %zu "
+                             "клетках | неподвижной материи без бита %zu\n",
+                             currentFloor, ma.loose, ma.loose_unlaid,
+                             ma.ghost_bits, ma.ghost_cells,
+                             ma.static_unmasked);
+            }
 
             // --shot: count presented frames, then capture and quit. Counted here
             // rather than in the event loop so a skipped frame (swapchain out of

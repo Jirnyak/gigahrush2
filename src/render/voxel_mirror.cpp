@@ -301,6 +301,9 @@ bool VoxelMirror::upload_wholesale_(const World& world, bool darkIdx) {
     // Everything becomes fresh; the queue and its dedup bits reset with it.
     dirty_.clear();
     std::fill(dirtyBits_.begin(), dirtyBits_.end(), 0u);
+    // Чей это мир — помнит само зеркало: оптовая заливка есть единственная
+    // дверь, через которую оно меняет хозяина ([voxel_mirror.h] holds).
+    held_ = &world;
 
     const MacroGrid& g = world.grid();
     const SubField<CellType>* sub =
