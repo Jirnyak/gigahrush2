@@ -159,6 +159,7 @@ int g_checks = 0;
 #include "suite_serve.inl"  // замкнутый цикл нужд: деяние над местом (S24)
 #include "suite_rebake.inl"
 #include "suite_geomwriter.inl"  // долг писателя геометрии — таблица (S20.4)
+#include "suite_deathcause.inl"  // от чего гибнет толпа — счёт двери смерти
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
 #include "suite_shotsub.inl"
@@ -5394,6 +5395,7 @@ int main() {
     test_serve_all();
     test_rebake_all();
     test_geomwriter_all();
+    test_deathcause_all();
     test_prebuild_all();
     test_lightvis_all();
     test_floor_bucket_index();

@@ -328,11 +328,40 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
     return out;
 }
 
+DeathCause death_cause(const Registry& reg, Entity victim, const Dead& d) {
+    if (d.killer == entt::null)
+        // Истощение — канал «на единицу дальше последнего настоящего»
+        // (`kAttritionChannel@game/needs.h`); прочие смерти без убийцы
+        // причины не имеют.
+        return d.channel == static_cast<std::uint8_t>(kDamageChannels)
+                   ? DeathCause::Attrition
+                   : DeathCause::Unknown;
+    if (d.killer == victim) return DeathCause::Impact;
+    if (!reg.valid(d.killer)) return DeathCause::Unknown;
+    if (reg.all_of<MobRef>(d.killer)) return DeathCause::Monster;
+    if (reg.all_of<CameraTag>(d.killer)) return DeathCause::Human;
+    if (reg.all_of<NpcRef>(d.killer)) return DeathCause::Resident;
+    return DeathCause::Unknown;
+}
+
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
-                              std::uint64_t tick, NoiseField* noise) {
+                              std::uint64_t tick, NoiseField* noise,
+                              DeathCauses* causes) {
     // Collect before destroying: mutating while iterating a view invalidates it.
     std::vector<Entity> doomed;
     for (auto e : reg.view<const Dead>()) doomed.push_back(e);
+
+    // ПРИЧИНЫ — ПРЕД-ПРОХОДОМ (довод в заголовке): цикл ниже меняет убийц
+    // того же пакета.
+    if (causes != nullptr)
+        for (Entity e : doomed) {
+            const std::size_t c = static_cast<std::size_t>(
+                death_cause(reg, e, reg.get<const Dead>(e)));
+            if (reg.all_of<MobRef>(e))
+                ++causes->mob[c];
+            else if (reg.all_of<NpcRef>(e))
+                ++causes->resident[c];
+        }
 
     for (Entity e : doomed) {
         const Dead& d = reg.get<const Dead>(e);

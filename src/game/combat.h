@@ -34,6 +34,7 @@
 #include <cstdio> // fprintf — переполнение капа щитков печатается вслух (S11)
 
 #include "ecs/components.h"
+#include "core/table_guard.h"  // порядок строк таблицы причин смерти
 #include "ecs/registry.h"
 #include "game/action.h"   // Acting — занятость носителя окном (CANON S22)
 #include "game/event_bus.h"
@@ -700,8 +701,62 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 // separate channel from the NpcDied event on purpose: the event is bookkeeping ("the
 // records should know"), the noise is a place in the world something might walk
 // toward. Optional and trailing so the existing call sites compile unchanged.
+//
+// `causes` — необязательный счёт ПРИЧИН СМЕРТИ (ниже). Хвостовой и
+// необязательный по той же причине, что `noise`: места вызова не меняются.
 std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
-                              std::uint64_t tick, NoiseField* noise = nullptr);
+                              std::uint64_t tick, NoiseField* noise = nullptr,
+                              struct DeathCauses* causes = nullptr);
+
+// ===========================================================================
+// ПРИЧИНЫ СМЕРТИ — «от чего гибнет толпа», числом
+// ===========================================================================
+// ЗАЧЕМ. Лог приёмки владельца 2026-11-12: на геометрии хрущей живых жителей
+// 353 -> 60 за двенадцать секунд после входа, трупов 97 -> 302. Тот же спад
+// нашёлся во всех автоматических прогонах дня и в утреннем бинаре от 9 ноября
+// — и НИКТО его не видел, потому что в дереве не было ни одного числа «от
+// чего»: `crowd_dead_total` считает только смерти от нужд, худовый `deaths` —
+// все подряд, а `feud hits` — удары, а не смерти.
+//
+// Дверь смерти одна (`finalize_deaths`), и у каждого мёртвого уже записано всё
+// нужное: `Dead::killer` и `Dead::channel`. Причина ВЫВОДИТСЯ из них, а не
+// докладывается убийцей:
+//   убийцы нет и канал — истощение  -> нужды ([game/needs.h] kAttritionChannel);
+//   убийца — сама жертва            -> удар о мир: падение, обломок, брошенный
+//                                      проп ([sim/impact] пишет source = жертва);
+//   у убийцы строка монстра         -> монстр;
+//   убийца несёт камеру             -> человек;
+//   у убийцы тождество жителя       -> житель (вражда: кулак или её пуля);
+//   иначе                           -> неизвестно (убийца уже уничтожен).
+//
+// Классификация идёт ПРЕД-ПРОХОДОМ, до цикла уничтожения: цикл снимает с
+// убитых в том же пакете `MobRef` и уничтожает носителя камеры, и убийца,
+// умерший в том же тике, внутри цикла потерял бы свой класс.
+enum class DeathCause : std::uint8_t {
+    Attrition = 0, Impact, Monster, Human, Resident, Unknown, Count
+};
+inline constexpr std::size_t kDeathCauseCount =
+    static_cast<std::size_t>(DeathCause::Count);
+
+struct DeathCauseRow {
+    DeathCause cause;
+    const char* name;
+};
+inline constexpr DeathCauseRow kDeathCauseRows[] = {
+    {DeathCause::Attrition, "нужды"},   {DeathCause::Impact, "удар о мир"},
+    {DeathCause::Monster, "монстр"},    {DeathCause::Human, "человек"},
+    {DeathCause::Resident, "житель"},   {DeathCause::Unknown, "неизвестно"},
+};
+GIGA_TABLE_BY_ENUM(kDeathCauseRows, &DeathCauseRow::cause, kDeathCauseCount);
+
+// Счёт по классу ЖЕРТВЫ: житель и монстр гибнут от разного, и сумма по обоим
+// скрыла бы ровно тот вопрос, ради которого счёт заведён.
+struct DeathCauses {
+    std::uint32_t resident[kDeathCauseCount] = {};
+    std::uint32_t mob[kDeathCauseCount] = {};
+};
+
+DeathCause death_cause(const Registry& reg, Entity victim, const Dead& d);
 
 // Attack pass: every mob on `layer` whose cooldown has expired attacks its target
 // — melee if it is in reach, or a telegraphed shot if the kind is ranged and the

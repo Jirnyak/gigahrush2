@@ -545,6 +545,12 @@ static CarveTiming g_carveT;
 // (`geometry_changed`, ниже). Печатается на выходе строкой `[geom]`.
 static game::GeomWriteStats g_geomStats;
 
+// От чего гибнут тела — счёт единственной двери смерти (`finalize_deaths`),
+// печать `[smert]`. Копится за весь прогон, этажи не разделяет: строка несёт
+// номер этажа, а разность соседних строк и есть счёт за окно.
+static game::DeathCauses g_deathCauses;
+static std::uint32_t g_deathCausesPrinted = 0;
+
 // СТОРОЖ ЗАРАСТАНИЯ (GIGA_REGROW_WATCH, баг «дыра заросла»): кольцо
 // выбитых атомов + скан «стал ли атом снова твёрдым» в CPU-каноне.
 // WATCH=1 — скан раз в 25 тиков в сим-секции; WATCH=2 — скан в ЧЕТЫРЁХ
@@ -8820,7 +8826,33 @@ int main(int argc, char** argv) {
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
                 deaths += game::finalize_deaths(reg, pool, bus, simTick,
-                                                &noiseField);
+                                                &noiseField, &g_deathCauses);
+                // ОТ ЧЕГО ГИБНЕТ ТОЛПА — накопительно, раз в 250 тиков и только
+                // когда счёт сдвинулся: тиковая строка утонула бы в логе, а
+                // молчание при живой толпе не означает ничего.
+                if (simTick % 250u == 0u) {
+                    std::uint32_t total = 0;
+                    for (std::size_t i = 0; i < game::kDeathCauseCount; ++i)
+                        total += g_deathCauses.resident[i] +
+                                 g_deathCauses.mob[i];
+                    if (total != g_deathCausesPrinted) {
+                        g_deathCausesPrinted = total;
+                        std::fprintf(stderr, "[smert] tick=%llu этаж=%d |",
+                                     static_cast<unsigned long long>(simTick),
+                                     currentFloor);
+                        std::fprintf(stderr, " ЖИТЕЛИ:");
+                        for (std::size_t i = 0; i < game::kDeathCauseCount; ++i)
+                            std::fprintf(stderr, " %s=%u",
+                                         game::kDeathCauseRows[i].name,
+                                         g_deathCauses.resident[i]);
+                        std::fprintf(stderr, " | МОНСТРЫ:");
+                        for (std::size_t i = 0; i < game::kDeathCauseCount; ++i)
+                            std::fprintf(stderr, " %s=%u",
+                                         game::kDeathCauseRows[i].name,
+                                         g_deathCauses.mob[i]);
+                        std::fprintf(stderr, "\n");
+                    }
+                }
                 // Ящики больше НЕ пылесосятся близостью: E открывает экран
                 // обыска, забор — заявками Take ([inventory_ui.h]), и там же
                 // ведутся loot/containerTake. loot_containers_step остался
