@@ -11,17 +11,18 @@ namespace giga::game {
 namespace {
 
 
-// Placement lattice. In the floor-MODULE model each layer is its own 128^3
-// world (floor_gen.h), so a record's floor number is a LABEL, not a Z band —
-// and NO storey is privileged: the torus wraps all three axes, so the height
-// coordinate is drawn over the whole axis like the other two. Cold records are
-// seeded BLIND (their World may not even exist yet); embodiment resolves each
-// body onto the nearest standable cell (floor_stream.cpp, place_body_safely).
+// МЕСТА У ХОЛОДНОЙ ЗАПИСИ НЕТ, и это закон, а не пробел (CANON S26). Запись —
+// житель «на числе»: её этаж может ещё не существовать, а когда существует —
+// может быть разрушен до неузнаваемости. Место тело получает на каждом входе
+// игрока на этаж у ДОСЕЛЕНИЯ ([game/settle.h]): по зонам модуля и по
+// фактической геометрии, ключом — собственным номером записи.
 //
-// ВТОРАЯ РЕШЁТКА КОМНАТ УМЕРЛА (rooms-object F): холодные записи сеются
-// слепыми хеш-координатами по всему тору — их World может ещё не существовать,
-// и воплощение всё равно решает place_body_safely. Раздача якорей дома/работы
-// по НАСТОЯЩИМ комнатам (declared-вектор + вместимость) — agent-goals.
+// Здесь до 2026-11-12 сеялись слепые хеш-координаты cx/cy/cz по всему тору
+// («ни один ярус не привилегирован»), а шов воплощения принимал любую клетку,
+// в которую тело помещается. На открытой геометрии 97 % тора — небо: замер
+// `[voploshenie]` дал 366 тел из 378, рождённых в воздухе, и 339 разбившихся.
+// Колонки `cx/cy/cz` строки пула остались: их пишут `fold_back` и поездка
+// лифта, читает прибытие носителя камеры.
 
 // Sample a faction 0..3 from relative weights. Zero total falls back to a flat
 // spread so a blank spec still produces a mixed crowd rather than all faction 0.
@@ -170,16 +171,6 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
 
         std::uint32_t r = hash_u32(seed ^ (i * 0x9e3779b9u));
 
-        // Слепые хеш-координаты по всему тору (решётка умерла, rooms-object
-        // F): запись холодная, мира может не быть; воплощение решает
-        // place_body_safely, а честные дома раздаст agent-goals.
-        pool.cx(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x27220A95u) %
-                                                static_cast<std::uint32_t>(kMacroDim));
-        pool.cy(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x165667B1u) %
-                                                static_cast<std::uint32_t>(kMacroDim));
-        pool.cz(id) = static_cast<std::uint8_t>(hash_u32(r ^ 0x51ED270Bu) %
-                                                static_cast<std::uint32_t>(kMacroDim));
-
         // The label is signed end to end: `floor` is an int (FloorRegistry's range is
         // kMinFloor -127 .. kMaxFloor +127) and the column is std::int16_t, so a
         // descending floor round-trips. It used to arrive here as std::uint16_t, i.e.
@@ -214,9 +205,9 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
 
     if (placed == 0) return kInvalidNpc;
 
-    // Choose the middle-ish record as the player candidate, so it lands in an
-    // interior room rather than a corner. It becomes "the player" only when
-    // embody_as_player() sets the NpcPlayer bit; here we just pick the id.
+    // The middle record of the seeded range is the player candidate. It becomes
+    // "the player" only when embody_as_player() sets the NpcPlayer bit; here we
+    // just pick the id. ГДЕ он встанет, решает доселение, как у любого жителя.
     NpcId playerId = first + placed / 2;
     if (playerId > last) playerId = last;
     return playerId;

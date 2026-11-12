@@ -1,5 +1,6 @@
 #include "game/floor_stream.h"
 
+#include <algorithm> // std::sort — порядок расселения не зависит от случая
 #include <chrono>   // the floor-entry timings printed below
 #include <cstdio>
 
@@ -9,7 +10,7 @@
 #include "world/clearance.h"  // ClearanceField — оракул нав-бейков (occupancy)
 #include "world/floor_awaken.h" // floor_awaken — единственный обход рождения
 #include "game/population.h"  // seed_floor_from_spec
-#include "game/save.h"        // place_body_safely — blind-seeded cells resolve here
+#include "game/settle.h"      // доселение — место телу на фактической геометрии
 #include "sim/physics.h"      // support_gap_sub — прибор шва воплощения
 
 namespace giga::game {
@@ -115,8 +116,16 @@ void FloorStreamer::free_slot(LayerId slot) {
     if (slot != kInvalidLayer) freeSlots_.push_back(slot);
 }
 
+std::unique_ptr<FloorRooms> FloorStreamer::declare_zones(
+    int number, FloorKind kind, std::uint32_t seed) const {
+    auto zones = std::make_unique<FloorRooms>();
+    rooms_build(*zones, number, floor_spec(kind), seed);
+    return zones;
+}
+
 void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& world,
-                                 FloorModule& fm, LayerId layer, NpcId& playerId,
+                                 const FloorRooms& zones, FloorModule& fm,
+                                 LayerId layer, NpcId& playerId,
                                  Entity& outPlayer) {
     // Snapshot whoever is CURRENTLY labelled with this floor's number — the live
     // per-floor bucket (npc_pool.h), not a frozen seed range, so a macro migration
@@ -165,11 +174,11 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
     //     roster. Nearest-id is a pure function of the SET, and the lower-id tie-break is
     //     what keeps it single-valued — without it the two records either side of the
     //     hole are equidistant and bucket order decides again.
-    //   * Nearest, not lowest, because ids are dealt to rooms round-robin
-    //     (population.cpp: `room = i % kRoomCount`), so an id next to the designate's is
-    //     a room next to the designate's room. That preserves the reason the designate
-    //     was `first + placed/2` in the first place — "lands in an interior room rather
-    //     than a corner" — where the lowest live id is room 0, a corner.
+    //   * Nearest, not lowest — ПРОСТРАНСТВЕННОГО довода у этого выбора больше НЕТ:
+    //     он ссылался на раздачу id по комнатам по кругу (`room = i % kRoomCount`),
+    //     которой в population.cpp давно не существует, а место телу теперь даёт
+    //     доселение хешем ключа ([game/settle.h]) — соседи по id не соседи по этажу.
+    //     Остался первый довод, и его достаточно: ответ есть функция МНОЖЕСТВА.
     //
     // The stale id's own SLOT is excluded from the scan. That is the assertion the
     // generation check exists to make: the slot whose occupant changed is precisely the
@@ -206,15 +215,43 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
         }
     }
 
-    // ПЕРЕПИСЬ ШВА ВОПЛОЩЕНИЯ (`[voploshenie]`, печать ниже): сколько тел толпы
-    // родилось БЕЗ ОПОРЫ и с какой высоты им падать. Корзины — в метрах до
-    // первой тверди вдоль низа фрейма ([sim/physics.h] support_gap_sub).
-    std::uint32_t censusBodies = 0, censusStanding = 0, censusRefused = 0;
-    std::uint32_t censusMoved = 0, censusVoid = 0;
+    // ---- ДОСЕЛЕНИЕ (CANON S26, [game/settle.h]) ---------------------------
+    // Место каждому телу выдаёт ОДНА система, по зонам модуля и по ФАКТИЧЕСКОЙ
+    // геометрии этого прихода. Здесь стояли слепые хеш-координаты из строки
+    // пула плюс `place_body_safely`, принимавший клетку без опоры: на открытой
+    // геометрии 366 тел из 378 рождались в небе.
+    //
+    // ПОРЯДОК — ПО ВОЗРАСТАНИЮ id, а не порядком бакета: бакет перетасовывают
+    // смерти и миграции (swap-remove), а спор двух тел за одну клетку решает
+    // тот, кто пришёл раньше. Первым идёт назначенный игрок — у него спора
+    // нет вовсе.
+    //
+    // Назначенный получает камеру, только если он ЖИТЕЛЬ ЭТОГО ЭТАЖА и ещё не
+    // воплощён: назначенный, уехавший на другой этаж, — «никто», как и было
+    // ([tests/suite_saveload.inl] candidate_slot_recycled, случай 4).
+    std::vector<NpcId> order;
+    order.reserve(crowd.size());
+    const bool needPlayer =
+        playerId == kInvalidNpc && designate != kInvalidNpc &&
+        !pool.embodied(designate) &&
+        std::find(crowd.begin(), crowd.end(), designate) != crowd.end();
+    if (needPlayer) order.push_back(designate);
+    for (NpcId id : crowd)
+        if (!(needPlayer && id == designate)) order.push_back(id);
+    std::sort(order.begin() + (needPlayer ? 1 : 0), order.end());
+
+    Settlement settle;
+    settle_begin(settle, world, zones);
+
+    // ПЕРЕПИСЬ ШВА ВОПЛОЩЕНИЯ (`[voploshenie]`, печать ниже): сколько тел
+    // родилось БЕЗ ОПОРЫ и с какой высоты им падать ([sim/physics.h]
+    // support_gap_sub). После доселения обязан быть ноль — и это судит гейт.
+    std::uint32_t censusBodies = 0, censusStanding = 0, censusVoid = 0;
     std::uint32_t censusDrop[4] = {0, 0, 0, 0}; // ≤1 м, ≤3 м, ≤10 м, выше
     float censusMaxM = 0.0f;
+    bool cameraGiven = false;
 
-    for (NpcId id : crowd) {
+    for (NpcId id : order) {
         // Bucket residents are alive by construction (kill/leave drop them). Skip
         // anyone already embodied — e.g. the player, labelled with this floor but
         // currently standing on another.
@@ -236,28 +273,29 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
         // at main.cpp's unguarded `reg.get<Transform>(player)` (§28.1) — a crash
         // in place of a clone. The skip belongs where the caller's intent is known.
         if (id == playerId) continue;
-        Entity e;
-        if (playerId == kInvalidNpc && id == designate) {
-            e = embody_as_player(ecs, pool, id, layer);
+
+        // МЕСТО — ДО ТЕЛА ([settle.h] embody_settled). Места нет — тела нет,
+        // запись остаётся холодной («на числе» в макросиме), счёт идёт вслух.
+        //
+        // КАМЕРА — ПЕРВОМУ ВОПЛОЩЁННОМУ, а первым в порядке стоит назначенный:
+        // обычно это он и есть. Если ему негде встать, камеру получает
+        // следующее тело — особого пути размещения «для игрока» нет (игрок не
+        // особенный), а вход без носителя камеры приложению не пережить.
+        const bool asPlayer = needPlayer && !cameraGiven;
+        const Entity e =
+            embody_settled(ecs, pool, id, layer, settle, fm.seed, asPlayer);
+        if (e == entt::null) continue;
+        if (asPlayer) {
             playerId = id;
             outPlayer = e;
-        } else {
-            e = embody(ecs, pool, id, layer);
+            cameraGiven = true;
+            if (id != designate) fm.candidate = pool.handle(id);
         }
-        // Cold records are seeded BLIND across the whole height axis (no storey
-        // is privileged on the torus — [population.cpp]); the stored cell may be
-        // inside a slab or a wall, and THIS is the one seam every embodiment
-        // passes through, so the resolve lives here rather than in embody().
-        const PlacedCell placed = place_body_safely(ecs, world, e);
         fm.bodies.push_back(e);
 
         ++censusBodies;
-        if (!placed.ok) ++censusRefused;
-        if (placed.moved) ++censusMoved;
-        const AABB* box = ecs.try_get<AABB>(e);
-        const int gap = support_gap_sub(
-            world, ecs.get<Transform>(e).pos,
-            box ? box->half : vec3{0.4f, 0.4f, 0.4f});
+        const int gap = support_gap_sub(world, ecs.get<Transform>(e).pos,
+                                        ecs.get<AABB>(e).half);
         if (gap == 0) {
             ++censusStanding;
         } else if (gap == kNoSupportSub) {
@@ -270,16 +308,17 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
     }
     // Счёт всегда вслух (S11), каждым входом на этаж: «родилось в воздухе» —
     // число, по которому следующий заход видит регрессию, а не чувствует её.
-    if (censusBodies != 0)
+    if (censusBodies != 0 || settle.homeless != 0)
         std::fprintf(stderr,
                      "[voploshenie] этаж %d: тел %u, стоят %u, в воздухе %u "
                      "(до 1 м %u, до 3 м %u, до 10 м %u, выше %u; макс %.2f м), "
-                     "без тверди под ногами %u, сдвинуто %u, отказ %u\n",
+                     "без тверди под ногами %u | без места %u (остались на "
+                     "числе), зон %zu, клеток перебрано %u\n",
                      fm.number, censusBodies, censusStanding,
                      censusDrop[0] + censusDrop[1] + censusDrop[2] + censusDrop[3],
                      censusDrop[0], censusDrop[1], censusDrop[2], censusDrop[3],
-                     static_cast<double>(censusMaxM), censusVoid, censusMoved,
-                     censusRefused);
+                     static_cast<double>(censusMaxM), censusVoid,
+                     settle.homeless, zones.list.size(), settle.probes);
 }
 
 std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
@@ -414,7 +453,10 @@ LoadResult FloorStreamer::ensure_loaded(LevelStack& stack, FloorRegistry& reg,
     // [problems.md] §26 закрыт не выключателем, а сносом.
 
     fm.bodies.clear();
-    embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
+    const std::unique_ptr<FloorRooms> zones =
+        declare_zones(fm.number, fm.kind, fm.seed);
+    embody_crowd(ecs, pool, stack.layer(slot), *zones, fm, slot, playerId,
+                 out.player);
     out.layer = slot;
     return out;
 }
@@ -431,6 +473,7 @@ bool FloorStreamer::prebuild_begin(LevelStack& stack, const FloorRegistry& reg,
     prebuildModule_ = m;
     prebuildSlot_ = slot;
     prebuildBake_.reset();
+    prebuildZones_.reset();
     prebuildWorldMs_ = 0.0f;
 
     // Задание — build_world_half над World слота. Значения, не ссылки в
@@ -444,10 +487,12 @@ bool FloorStreamer::prebuild_begin(LevelStack& stack, const FloorRegistry& reg,
     outJob = [this, &w, num, kind, seed]() {
         const auto t0 = std::chrono::steady_clock::now();
         auto bake = build_world_half(w, num, kind, seed);
+        auto zones = declare_zones(num, kind, seed);
         prebuildWorldMs_ = std::chrono::duration<float, std::milli>(
                                std::chrono::steady_clock::now() - t0)
                                .count();
         prebuildBake_ = std::move(bake);
+        prebuildZones_ = std::move(zones);
     };
     return true;
 }
@@ -470,7 +515,14 @@ LoadResult FloorStreamer::prebuild_finish(LevelStack& stack, FloorRegistry& reg,
     antourage_[m] = std::move(prebuildBake_);
     reg.set_resident(m, slot);
     fm.bodies.clear();
-    embody_crowd(ecs, pool, stack.layer(slot), fm, slot, playerId, out.player);
+    // Зоны построил воркер вместе с миром; голый стек без воркера строит их
+    // здесь же — тем же вызовом, не вторым законом.
+    const std::unique_ptr<FloorRooms> zones =
+        prebuildZones_ ? std::move(prebuildZones_)
+                       : declare_zones(fm.number, fm.kind, fm.seed);
+    prebuildZones_.reset();
+    embody_crowd(ecs, pool, stack.layer(slot), *zones, fm, slot, playerId,
+                 out.player);
     out.layer = slot;
 
     const float ecsMs = std::chrono::duration<float, std::milli>(
@@ -492,6 +544,7 @@ void FloorStreamer::prebuild_cancel() {
     // (clear-to-air первым делом), персистентности у слотов нет по закону.
     free_slot(prebuildSlot_);
     prebuildBake_.reset();
+    prebuildZones_.reset();
     prebuildModule_ = kInvalidModule;
     prebuildSlot_ = kInvalidLayer;
 }

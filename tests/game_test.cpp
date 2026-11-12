@@ -18,6 +18,7 @@
 #include "game/container.h"
 #include "game/combat.h"
 #include "game/embody.h"
+#include "game/settle.h"
 #include "game/elevator.h"
 #include "game/fast_travel.h" // §24 hub unlock + boarding gate
 
@@ -160,6 +161,7 @@ int g_checks = 0;
 #include "suite_rebake.inl"
 #include "suite_geomwriter.inl"  // долг писателя геометрии — таблица (S20.4)
 #include "suite_deathcause.inl"  // от чего гибнет толпа — счёт двери смерти
+#include "suite_settle.inl"      // доселение — тело рождается стоящим (CANON S26)
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
 #include "suite_shotsub.inl"
@@ -1868,13 +1870,6 @@ static void test_wander_moves_the_crowd() {
     Registry reg;
     NpcId first = seed_floor_population(pool, /*floor=*/0, /*n=*/120, /*seed=*/9u);
     CHECK(first != kInvalidNpc);
-    for (NpcId id = 0; id < pool.count(); ++id)
-        if (pool.alive(id)) {
-            // The streamer's own resolve seam: blind-seeded heights land inside
-            // slabs, and a body inside solid never moves ([floor_stream.cpp]).
-            Entity e = embody(reg, pool, id, layer);
-            place_body_safely(reg, stack.layer(layer), e);
-        }
 
     // НАСТОЯЩИЙ БЕЙК ЗОН, а не синтетика (§88/F.2) — и это единственный тест
     // прогулки, который его заслуживает. Синтетическая фикстура
@@ -1892,6 +1887,20 @@ static void test_wander_moves_the_crowd() {
     // чужой этаж — и тест мерил бы шум (дословно правило `suite_zonenav.inl`).
     FloorRooms zoneRooms;
     rooms_declare(zoneRooms, 0, spec, 21u);
+    // ШОВ ВОПЛОЩЕНИЯ — ТОТ ЖЕ, ЧТО У СТРИМЕРА ([game/settle.h]): место телу
+    // даёт доселение по этим же зонам. Здесь стояла своя копия («embody +
+    // разрешитель места»), и когда слепой посев клеток умер, она молча
+    // поставила всю толпу в одну клетку.
+    {
+        Settlement settle;
+        settle_begin(settle, stack.layer(layer), zoneRooms);
+        std::uint32_t placed = 0;
+        for (NpcId id = 0; id < pool.count(); ++id)
+            if (pool.alive(id) &&
+                embody_settled(reg, pool, id, layer, settle, 21u) != entt::null)
+                ++placed;
+        CHECK(placed == 120u); // на живом этаже места хватает всем
+    }
     ClearanceField oracle;
     oracle.build(stack.layer(layer).grid());
     ZoneNav zn;
@@ -5396,6 +5405,7 @@ int main() {
     test_rebake_all();
     test_geomwriter_all();
     test_deathcause_all();
+    test_settle_all();
     test_prebuild_all();
     test_lightvis_all();
     test_floor_bucket_index();

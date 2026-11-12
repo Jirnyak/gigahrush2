@@ -329,6 +329,12 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     stamp_lift_pillars(world, number, spec, seed);
 }
 
+void rooms_build(FloorRooms& rooms, int number, const FloorSpec& spec,
+                 unsigned seed) {
+    rooms_reset(rooms);
+    (void)kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms);
+}
+
 void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
                    unsigned seed) {
     rooms_reset(rooms);

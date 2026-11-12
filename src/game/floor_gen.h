@@ -84,6 +84,13 @@ std::uint32_t module_gen_version(FloorKind kind);
 struct FloorRooms;
 void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
                    unsigned seed);
+// То же объявление БЕЗ ПЕЧАТИ — для второго читателя тех же зон в том же
+// прибытии: доселение ([game/settle.h]) расселяет толпу по зонам на шве
+// воплощения, раньше, чем приложение объявит их себе в `reg.ctx()`. Счёт
+// вслух остаётся один, у `rooms_declare`; чистота функции (kind, number,
+// seed) и делает второй вызов законным, а не второй истиной.
+void rooms_build(FloorRooms& rooms, int number, const FloorSpec& spec,
+                 unsigned seed);
 
 // --- Лифтовые столбы (elevators-2x2.md, решения владельца 2026-08-27) -------
 // Узел лифта = ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор (z

@@ -37,6 +37,7 @@
 #include "game/floor_registry.h" // giga::game::FloorRegistry, ModuleId
 #include "game/floor_spec.h"     // giga::game::FloorKind
 #include "game/npc_pool.h"       // giga::game::NpcPool, NpcId
+#include "game/room.h"           // FloorRooms — зоны, по которым доселяется толпа
 #include "world/level_stack.h"   // giga::LevelStack, LayerId
 #include "game/antourage/antourage.h" // AntourageBake — per-floor baked dressing
 
@@ -326,10 +327,20 @@ private:
                                                     FloorKind kind,
                                                     std::uint32_t seed) const;
 
+    // ЗОНЫ ДЛЯ ДОСЕЛЕНИЯ — объявление модуля (чистая функция kind/number/
+    // seed, [floor_gen.h] rooms_build), нужное шву воплощения РАНЬШЕ, чем
+    // приложение объявит зоны себе. `const` и по значениям — по тому же
+    // контракту, что build_world_half: это вторая вещь, которую воркер
+    // пребилда строит целиком сам.
+    std::unique_ptr<FloorRooms> declare_zones(int number, FloorKind kind,
+                                              std::uint32_t seed) const;
+
     // Embody a module's cold crowd onto `layer`. See ensure_loaded for the
-    // player-designation and skip-already-embodied rules.
+    // player-designation and skip-already-embodied rules. МЕСТО каждому телу
+    // даёт доселение ([game/settle.h]) по `zones` на фактической геометрии
+    // `world`; кому места не нашлось — не воплощается.
     void embody_crowd(Registry& ecs, NpcPool& pool, const World& world,
-                      FloorModule& fm, LayerId layer,
+                      const FloorRooms& zones, FloorModule& fm, LayerId layer,
                       NpcId& playerId, Entity& outPlayer);
 
     FloorModule modules_[kMaxModules];
@@ -345,6 +356,7 @@ private:
     ModuleId prebuildModule_ = kInvalidModule;
     LayerId prebuildSlot_ = kInvalidLayer;
     std::unique_ptr<AntourageBake> prebuildBake_;
+    std::unique_ptr<FloorRooms> prebuildZones_; // тем же порядком, что bake
     float prebuildWorldMs_ = 0.0f;
     int keepRadius_ = 0;
     std::function<bool(World&, int)> restore_;  // see set_floor_restore

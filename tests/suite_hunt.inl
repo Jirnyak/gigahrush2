@@ -18,7 +18,7 @@
 
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/hunt.h"
-#include "game/save.h"   // place_body_safely — the streamer's resolve seam
+#include "game/settle.h" // embody_settled — шов воплощения, общий со стримером
 
 static void test_hunt_all() {
     const float dt = kSimDt;
@@ -332,19 +332,23 @@ static void test_hunt_all() {
         bus.init();
 
         CHECK(seed_floor_from_spec(pool, 15, spec, 77u) != kInvalidNpc);
+        // Комнаты геометрии (15, Residential, 4242u) в reg.ctx — и толпа, и
+        // паки селятся по одним и тем же объявленным зонам.
+        FloorRooms& huntRooms = reg.ctx().emplace<FloorRooms>();
+        rooms_declare(huntRooms, 15, spec, 4242u);
         std::uint32_t residents = 0, exempt = 0;
-        for (NpcId id = 0; id < pool.count(); ++id) {
-            if (!pool.alive(id)) continue;
-            Entity body = embody(reg, pool, id, layer);
-            // The streamer's resolve seam: blind-seeded heights land inside
-            // slabs, and a body inside solid is unreachable prey.
-            place_body_safely(reg, stack.layer(layer), body);
-            ++residents;
-            if (!mob_hostile_to(pool, id)) ++exempt;
+        {
+            // Шов воплощения — общий со стримером ([game/settle.h]).
+            Settlement settle;
+            settle_begin(settle, stack.layer(layer), huntRooms);
+            for (NpcId id = 0; id < pool.count(); ++id) {
+                if (!pool.alive(id)) continue;
+                CHECK(embody_settled(reg, pool, id, layer, settle, 4242u) !=
+                      entt::null);
+                ++residents;
+                if (!mob_hostile_to(pool, id)) ++exempt;
+            }
         }
-        // Комнаты геометрии (15, Residential, 4242u) в reg.ctx — спавн селит
-        // паки по объявленным зонам (rooms-object E).
-        rooms_declare(reg.ctx().emplace<FloorRooms>(), 15, spec, 4242u);
         const std::uint32_t mobs = spawn_floor_mobs(
             reg, stack.layer(layer), 15, danger_for_hostility(spec.hostility),
             theme_for_kind(FloorKind::Residential), layer, 31u, /*tick=*/0, 0,
