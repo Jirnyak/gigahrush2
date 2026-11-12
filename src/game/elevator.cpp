@@ -1,10 +1,8 @@
 #include "game/elevator.h"
 
 #include "ecs/components.h"
-#include "game/combat.h"    // PlayerRanged, PlayerMelee — live on the body, not the pool
 #include "game/embody.h"
 #include "game/fast_travel.h" // fast_hub_cell — optional lattice landing
-#include "game/rpg.h"      // RpgStats — XP/attrs/psi live on the body, not the pool
 
 namespace giga::game {
 
@@ -28,43 +26,20 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     if (auto* ref = reg.try_get<NpcRef>(player)) npcRef = *ref;
     const NpcId id = npcRef.id;
     if (id == kInvalidNpc) return r;
+    // Протухшая ссылка (слот записи переиздан) — не поездка: тело вселилось бы
+    // в чужую запись. И без положения ехать нечему.
+    if (!npc_ref_current(pool, npcRef) || !reg.all_of<Transform>(player))
+        return r;
 
-    // Capture the view + movement mode: re-embodiment builds a fresh camera and
-    // controller, so without this the ride would reset the head and drop fly.
-    float yaw = 0.0f, pitch = 0.0f, fovY = 1.2f;
-    if (auto* cam = reg.try_get<CameraTag>(player)) {
-        yaw = cam->yaw;
-        pitch = cam->pitch;
-        fovY = cam->fovY;
-    }
-    bool fly = false;
-    if (auto* ctl = reg.try_get<Controller>(player)) fly = ctl->fly;
-
-    // Firearm + melee state live on the BODY, not the pool row. fold_back destroys
-    // the entity, so without this capture every elevator ride zeroes magCount —
-    // reload had already debited inventory into the magazine, so one full mag is
-    // deleted per floor change. Same hole as camera/fly, different component.
-    // Melee kills tally has the same lifetime; main.cpp already re-stamps it on
-    // death-possession, but a ride is not a death and never hit that path.
-    const bool hadRanged = reg.all_of<PlayerRanged>(player);
-    PlayerRanged ranged{};
-    if (hadRanged) ranged = reg.get<PlayerRanged>(player);
-    const bool hadMelee = reg.all_of<PlayerMelee>(player);
-    PlayerMelee melee{};
-    if (hadMelee) melee = reg.get<PlayerMelee>(player);
-
-    // RpgStats is the same class of defect as PlayerRanged (RPG1). embody_as_player
-    // always re-rolls via random_rpg(level, id) — deterministic base sheet for the
-    // record, but mid-run XP, spent attr points, and current psi are wiped. Death
-    // possession already captures/restores the sheet in main.cpp (carriedRpg);
-    // a ride is not a death and never hit that path. Capture before fold_back.
-    const bool hadRpg = reg.all_of<RpgStats>(player);
-    RpgStats rpg{};
-    if (hadRpg) rpg = reg.get<RpgStats>(player);
-
-    // Fold back on the departed floor (writes the record's macro cell from the
-    // live transform, then destroys the entity), relocate to the arrival storey
-    // and re-embody as player on the destination layer.
+    // ТЕЛО ЕДЕТ, А НЕ ПЕРЕСОЗДАЁТСЯ (замысел владельца: «игра не прерывается,
+    // кабина — инвариант»). Та же сущность меняет слой и клетку; ни один
+    // компонент не строится заново, поэтому потерять состояние нельзя по
+    // построению. Прежде здесь стояли fold_back + embody_as_player и
+    // рукописный список «что вернуть на новое тело» (голова, полёт, огнестрел,
+    // ближний бой, лист характеристик). Список латали четыре раза, и каждый
+    // раз терялось то, чего в нём не было: в последний — руки и броня
+    // (`Equipped`), то есть фонарик, оружие в руке и доспех (жалоба владельца
+    // 2026-11-12: «фонарик снялся»). Автосейв поездки закреплял потерю.
     //
     // ОСЬ ПРИБЫТИЯ — ЛИФТОВАЯ, А НЕ ГРАВИТАЦИОННАЯ, и это выбор, а не недосмотр.
     // Прежде здесь стоял `regime_down(floor_gravity_regime())` и прибытие
@@ -87,7 +62,11 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     // ею распоряжаются падение, проходимость и сеялки пропов ([prop_system.cpp]
     // переведены на гравитационный фрейм в той же волне). Лифт едет по дому, а
     // не по вектору тяжести.
-    fold_back(reg, pool, npcRef, player);
+    Transform& tr = reg.get<Transform>(player);
+    // Клетка записи — из живого положения (тем же правилом, что fold_back),
+    // координата вдоль шахты — этаж прибытия.
+    pool.cx(id) = cell_of_body(tr.pos.x);
+    pool.cy(id) = cell_of_body(tr.pos.y);
     pool.cz(id) = arrivalCoord;
     // Fast-travel landing: same hub index on the destination floor so the ride
     // is positionally stable across the stack ([elevators.md] 4×4 cabins). Решётка
@@ -96,32 +75,14 @@ RideResult ride_elevator(Registry& reg, NpcPool& pool,
     if (landHub >= 0 && landHub < kFastHubsPerFloor)
         fast_hub_cell(landHub, pool.cx(id), pool.cy(id));
 
+    tr.pos = embody_cell_centre(pool, id);
+    tr.layer = dstLayer;
+    // Привязанное к геометрии покинутого этажа с телом не едет: скорость и
+    // отчёт об ударе — про тот мир.
+    if (auto* v = reg.try_get<Velocity>(player)) *v = Velocity{};
+    reg.remove<Impact>(player);
 
-    Entity ne = embody_as_player(reg, pool, id, dstLayer);
-
-    if (ne == entt::null) { // unreachable for a valid embodied record
-        r.player = entt::null;
-        r.layer = kInvalidLayer;
-        return r;
-    }
-
-    if (auto* cam = reg.try_get<CameraTag>(ne)) {
-        cam->yaw = yaw;
-        cam->pitch = pitch;
-        cam->fovY = fovY;
-    }
-    if (auto* ctl = reg.try_get<Controller>(ne)) ctl->fly = fly;
-
-    // Restore combat state only if it was present — do not invent a fresh
-    // PlayerRanged on a body that never fired (lazy attach stays lazy).
-    if (hadRanged) reg.emplace_or_replace<PlayerRanged>(ne, ranged);
-    if (hadMelee) reg.emplace_or_replace<PlayerMelee>(ne, melee);
-    // Character sheet: overwrite the random_rpg roll from embody_as_player with
-    // the pre-ride progression. embody always attaches RpgStats, so this is
-    // emplace_or_replace rather than a lazy-absent guard (unlike combat).
-    if (hadRpg) reg.emplace_or_replace<RpgStats>(ne, rpg);
-
-    r.player = ne;
+    r.player = player;
     r.layer = dstLayer;
     r.floor = dstFloor;
     r.moved = true;

@@ -886,14 +886,43 @@ static void test_elevator() {
         rs.attr[static_cast<std::size_t>(Attr::Int)] = 7;
     }
 
-    // Ride up: floor 0 -> 1. Same record, now embodied on layer 1.
+    // ЗАКОН «ПОЕЗДКА НЕ МЕНЯЕТ ТЕЛО» — агностично к составу тела. Свидетель —
+    // компонент, о котором ride_elevator не знает и знать не может; плюс
+    // снимок ВСЕХ хранилищ, где тело числится, и руки с бронёй — то, что
+    // снималось у владельца («фонарик снялся», 2026-11-12). Прежняя поездка
+    // уничтожала тело и возвращала на новое рукописный список полей; терялось
+    // всё, чего в списке не было. ПОЛЯРНОСТЬ: вернуть в ride_elevator
+    // fold_back + embody_as_player — краснеют «та же сущность», свидетель,
+    // состав хранилищ и руки.
+    struct RideWitness { std::uint32_t v; };
+    reg.emplace<RideWitness>(p, RideWitness{0xC0FFEEu});
+    {
+        Equipped& eq = reg.get_or_emplace<Equipped>(p);
+        eq.handL = 3;
+        eq.handR = 5;
+        eq.armor = 7;
+    }
+    auto membership = [&](Entity e) {
+        std::vector<entt::id_type> ids;
+        for (auto&& [tid, st] : reg.storage())
+            if (st.contains(e)) ids.push_back(tid);
+        std::sort(ids.begin(), ids.end());
+        return ids;
+    };
+    const std::vector<entt::id_type> bodyBefore = membership(p);
+
+    // Ride up: floor 0 -> 1. Same record, same body, now on layer 1.
     RideResult up = ride_elevator(reg, pool, registry, p, /*from=*/0, /*dir=*/+1,
                                   kArrivalCoord);
     CHECK(up.moved);
     CHECK(up.floor == 1);
     CHECK(up.layer == l1);
-    CHECK(up.player != entt::null);
-    CHECK(!reg.valid(p)); // the old body was folded away and destroyed
+    CHECK(up.player == p);  // та же сущность: тело едет, а не пересоздаётся
+    CHECK(reg.valid(p));
+    CHECK(membership(p) == bodyBefore); // ни один компонент не пропал и не вырос
+    CHECK(reg.all_of<RideWitness>(p) && reg.get<RideWitness>(p).v == 0xC0FFEEu);
+    CHECK(reg.get<Equipped>(p).handL == 3 && reg.get<Equipped>(p).handR == 5 &&
+          reg.get<Equipped>(p).armor == 7); // руки и броня на месте
     p = up.player;
     CHECK(reg.get<NpcRef>(p).id == id);       // it is the very same record
     CHECK(reg.get<Transform>(p).layer == l1); // now on the destination layer
@@ -1425,10 +1454,21 @@ static void test_floor_travel() {
     CHECK(!stream.loaded(reg, 1));  // floor 1 stays cold until entered
 
     // Ride up 0 -> 1: destination loads on demand, floor 0 unloads.
+    // Свидетель на теле: поездка через стример обязана довезти ТУ ЖЕ сущность
+    // живой. Убийца здесь не сама поездка, а уборка покинутого этажа — она
+    // сворачивает тела по списку модуля отбытия, где уехавший ещё записан.
+    // ПОЛЯРНОСТЬ: снять в FloorStreamer::unload проверку «тело стоит на этом
+    // слое» — краснеют обе строки ниже (и стоят они ДО первого ecs.get: в
+    // Release get на мёртвой сущности — не красный тест, а порча памяти).
+    struct TravelWitness { std::uint32_t v; };
+    ecs.emplace<TravelWitness>(player, TravelWitness{0xBEEFu});
     RideResult up = stream.travel(stack, reg, ecs, pool, player, /*from=*/0,
                                   /*dir=*/+1, kArrivalCoord, playerId);
     CHECK(up.moved);
     CHECK(up.floor == 1);
+    CHECK(up.player == player && ecs.valid(player));
+    CHECK(ecs.valid(player) && ecs.all_of<TravelWitness>(player) &&
+          ecs.get<TravelWitness>(player).v == 0xBEEFu);
     player = up.player;
     CHECK(ecs.get<NpcRef>(player).id == playerId); // same record survived the swap
     CHECK(pool.is_player(playerId));

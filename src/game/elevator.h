@@ -25,10 +25,10 @@
 
 namespace giga::game {
 
-// Outcome of a ride. On success `player` is the NEW entity (the old one has been
-// destroyed) and `moved` is true. On a no-op (no such loaded floor) `player` is
-// the unchanged input entity, `moved` is false, and `floor`/`layer` report where
-// the player still is.
+// Outcome of a ride. On success `player` is the SAME entity — the body rides, it
+// is not rebuilt, so nothing that lives on it can be lost — and `moved` is true.
+// On a no-op (no such loaded floor, stale record) `moved` is false and
+// `floor`/`layer` report where the body still is.
 struct RideResult {
     Entity player = entt::null;
     LayerId layer = kInvalidLayer;
@@ -38,10 +38,10 @@ struct RideResult {
 
 // Ride from `fromFloor` by `dir` (+1 = up toward the roof, -1 = down). Resolves
 // `fromFloor + dir` through `registry`; if that floor is not loaded, returns a
-// no-op result and leaves `player` untouched. Otherwise folds the player's record
-// back on its current layer, moves it to the arrival cell (keeps x/y, sets cell
-// z = `arrivalCoord`), re-embodies it as player on the destination layer preserving
-// camera yaw/pitch/fov + fly mode, and returns the new player entity.
+// no-op result and leaves `player` untouched. Otherwise the SAME body moves: its
+// record cell keeps x/y and takes z = `arrivalCoord`, its Transform takes the
+// destination layer and that cell's centre, velocity and impact report (both
+// about the departed floor's geometry) are dropped. No component is rebuilt.
 //
 // `player` must be an embodied record (carry an NpcRef); otherwise this is a
 // no-op. `fromFloor` is supplied by the caller because the registry maps

@@ -1678,7 +1678,8 @@ void travel_drives_the_existing_elevator() {
     CHECK(deep.hops == 2);              // via -8, the nearest label on the way
     CHECK(deep.floor == -26);
     CHECK(deep.player != entt::null);
-    CHECK(deep.player != player);       // every ride rebuilds the body
+    CHECK(deep.player == player);       // тело едет, а не пересоздаётся
+    CHECK(ecs.valid(player));           // и уборка двух покинутых этажей его не снесла
     player = deep.player;
     // Same record throughout — the run is the record, not the entity.
     CHECK(ecs.get<NpcRef>(player).id == playerId);
@@ -2288,7 +2289,9 @@ static void mask_law_audit_counts_each_class() {
     };
     put(0, giga::kMatRubble, true);    // улёгшееся
     put(1, giga::kMatRubble, true);
-    put(2, giga::kMatRubble, false);   // летит
+    put(2, giga::kMatRubble, false);   // летит: под ним (слой ниже) пусто
+    // Лежит без бита: атом слоем выше улёгшегося (бит 0) — опёрт.
+    put(giga::sub_bit(0, 0, 1), giga::kMatRubble, false);
     put(3, giga::kMatConcrete, true);  // обычная статика
     put(4, giga::kMatConcrete, false); // статика без бита
     put(5, giga::kMatWater, false);    // вода — как положено
@@ -2301,8 +2304,9 @@ static void mask_law_audit_counts_each_class() {
     g.fill_cell(60, 61, 62, giga::kMatConcrete);
 
     const giga::MaskAuditStats a = giga::audit_mask_law(w);
-    CHECK(a.loose == 3);
-    CHECK(a.loose_unlaid == 1);
+    CHECK(a.loose == 4);
+    CHECK(a.loose_unlaid == 2);
+    CHECK(a.loose_unlaid_supported == 1); // только тот, что лежит на бите
     CHECK(a.static_unmasked == 1);
     CHECK(a.ghost_bits == 3 + 3);
     CHECK(a.ghost_cells == 2);

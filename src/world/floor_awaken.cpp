@@ -6,6 +6,7 @@
 
 #include "core/jobs.h"        // parallel_for — рождение этажа, время бейка
 #include "world/destruct.h"   // kSubMaterialName, settle_sub_page
+#include "world/gravity.h"    // regime_down — ось низа для аудита маски
 #include "world/medium.h"     // medium_digest_* — тот же разбор, что у шва
 #include "world/subfield.h"
 #include "world/types.h"
@@ -108,8 +109,12 @@ MaskAuditStats audit_mask_law(const World& w) {
     auto solid = [](CellType m) {
         return m != kCellAir && material_phase(m) == MatPhase::Solid;
     };
+    const CellStep down = regime_down(w.gravity().regime);
     // Серийно: путь прибора и гейта, не кадра.
     for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const int cx = static_cast<int>(ci % kMacroDim);
+        const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+        const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
         const SubMask& mk = masks[ci];
         const CellType* pg = mats ? mats->page(ci) : nullptr;
         std::size_t ghost = 0;
@@ -127,7 +132,25 @@ MaskAuditStats audit_mask_law(const World& w) {
                 if (!s) continue;
                 if (material_is_medium(m)) {
                     ++st.loose;
-                    if (!bit) ++st.loose_unlaid;
+                    if (!bit) {
+                        ++st.loose_unlaid;
+                        // Сосед по оси низа: глобальная суб-координата с
+                        // заворотом тора.
+                        const int gx = (cx * kSubDim + (b % kSubDim) + down.x) &
+                                       (kMacroDim * kSubDim - 1);
+                        const int gy = (cy * kSubDim +
+                                        ((b / kSubDim) % kSubDim) + down.y) &
+                                       (kMacroDim * kSubDim - 1);
+                        const int gz = (cz * kSubDim +
+                                        (b / (kSubDim * kSubDim)) + down.z) &
+                                       (kMacroDim * kSubDim - 1);
+                        const std::size_t nci = macro_index(
+                            gx / kSubDim, gy / kSubDim, gz / kSubDim);
+                        const int nb = (gx % kSubDim) +
+                                       (gy % kSubDim) * kSubDim +
+                                       (gz % kSubDim) * kSubDim * kSubDim;
+                        if (masks[nci].test(nb)) ++st.loose_unlaid_supported;
+                    }
                 } else if (!bit) {
                     ++st.static_unmasked;
                 }

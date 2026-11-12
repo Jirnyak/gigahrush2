@@ -11834,10 +11834,12 @@ int main(int argc, char** argv) {
                     audit_mask_law(stack.layer(activeLayer));
                 std::fprintf(stderr,
                              "[canon] этаж %d: рыхлых атомов %zu, из них без "
-                             "бита %zu | БИТОВ НАД НЕ-ТВЁРДЫМ %zu в %zu "
-                             "клетках | неподвижной материи без бита %zu\n",
+                             "бита %zu (ОПЁРТЫХ %zu) | БИТОВ НАД НЕ-ТВЁРДЫМ "
+                             "%zu в %zu клетках | неподвижной материи без "
+                             "бита %zu\n",
                              currentFloor, ma.loose, ma.loose_unlaid,
-                             ma.ghost_bits, ma.ghost_cells,
+                             ma.loose_unlaid_supported, ma.ghost_bits,
+                             ma.ghost_cells,
                              ma.static_unmasked);
             }
 

@@ -65,9 +65,7 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     reg.emplace<NpcRef>(e, NpcRef{id, pool.generation(id)});
 
     Transform tr;
-    tr.pos = vec3{(static_cast<float>(pool.cx(id)) + 0.5f) * kEmbodyCellSize,
-                  (static_cast<float>(pool.cy(id)) + 0.5f) * kEmbodyCellSize,
-                  (static_cast<float>(pool.cz(id)) + 0.5f) * kEmbodyCellSize};
+    tr.pos = embody_cell_centre(pool, id);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e);
@@ -170,15 +168,9 @@ void fold_back(Registry& reg, NpcPool& pool, const NpcRef& ref, Entity e) {
         // Freeze the live state back into the cold record: position -> macro
         // cell (clamped into the 0..255 cell range), then de-embody.
         if (auto* tr = reg.try_get<Transform>(e)) {
-            auto to_cell = [](float w) -> std::uint8_t {
-                float c = w / kEmbodyCellSize;
-                if (c < 0.0f) c = 0.0f;
-                if (c > 255.0f) c = 255.0f;
-                return static_cast<std::uint8_t>(c);
-            };
-            pool.cx(id) = to_cell(tr->pos.x);
-            pool.cy(id) = to_cell(tr->pos.y);
-            pool.cz(id) = to_cell(tr->pos.z);
+            pool.cx(id) = cell_of_body(tr->pos.x);
+            pool.cy(id) = cell_of_body(tr->pos.y);
+            pool.cz(id) = cell_of_body(tr->pos.z);
         }
         pool.set_embodied(id, false);
         pool.set_player(id, false);

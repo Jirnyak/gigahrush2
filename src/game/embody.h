@@ -60,6 +60,20 @@ inline bool npc_ref_current(const NpcPool& pool, const NpcRef& ref) {
 // can place a record's macro cell into world-space without pulling in app code.
 inline constexpr float kEmbodyCellSize = 2.0f;
 
+// Клетка записи <-> положение тела. Один дом на воплощение, свёртку и поездку
+// на лифте (та переносит живое тело и обязана звать те же две формулы).
+inline std::uint8_t cell_of_body(float metres) {
+    float c = metres / kEmbodyCellSize;
+    if (c < 0.0f) c = 0.0f;
+    if (c > 255.0f) c = 255.0f;
+    return static_cast<std::uint8_t>(c);
+}
+inline vec3 embody_cell_centre(NpcPool& pool, NpcId id) {
+    return vec3{(static_cast<float>(pool.cx(id)) + 0.5f) * kEmbodyCellSize,
+                (static_cast<float>(pool.cy(id)) + 0.5f) * kEmbodyCellSize,
+                (static_cast<float>(pool.cz(id)) + 0.5f) * kEmbodyCellSize};
+}
+
 // A record shorter than this (mm) is treated as unset and embodied at a default
 // adult stature, so a zeroed reserve slot still produces a sane body.
 inline constexpr std::uint16_t kDefaultHeightMm = 1800; // 1.8 m

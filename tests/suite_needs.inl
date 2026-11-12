@@ -872,8 +872,8 @@ void survives_the_body_swap() {
 
     const RideResult up = ride_elevator(reg, pool, floors, body, 0, +1, 2);
     CHECK(up.moved);
-    CHECK(!reg.valid(body));     // the old body really is gone
-    CHECK(up.player != body);    // and this is a different entity
+    CHECK(reg.valid(body));      // тело едет, а не пересоздаётся
+    CHECK(up.player == body);    // и это та же сущность
     CHECK(reg.get<NpcRef>(up.player).id == id);
 
     const Needs& after = pool.needs(id);

@@ -573,11 +573,14 @@ void FloorStreamer::unload(LevelStack& stack, FloorRegistry& reg, Registry& ecs,
     // ([game/guide.h]), поэтому класс снят по построению — гасить нечего.
 
     // Fold every live body back into its cold record (position persists in the
-    // row). A handle may already be invalid — e.g. the player's old body, which a
-    // ride destroyed when it moved the player to another floor — and fold_back is
-    // a clean no-op on an invalid handle.
+    // row). ТЕЛО ПРИНАДЛЕЖИТ СЛОЮ, НА КОТОРОМ СТОИТ: поездка на лифте переносит
+    // живое тело на другой слой ([game/elevator.cpp]), а в списке модуля отбытия
+    // оно остаётся записанным — свёртка по списку уничтожила бы уехавшего.
     for (Entity e : fm.bodies) {
         if (!ecs.valid(e)) continue;
+        if (const Transform* t = ecs.try_get<Transform>(e);
+            t && t->layer != layer)
+            continue;
         if (auto* ref = ecs.try_get<NpcRef>(e)) fold_back(ecs, pool, *ref, e);
         else ecs.destroy(e);
     }
@@ -694,9 +697,10 @@ RideResult FloorStreamer::teleport(LevelStack& stack, FloorRegistry& reg,
     if (!ride.moved) return ride;
 
 
-    // The ride built a fresh player body on the destination; adopt it into the
+    // The ride moved the SAME body onto the destination layer; adopt it into the
     // destination module so a later unload folds it, then prune to the kept window
-    // — which folds the whole departed crowd back into the cold pool.
+    // — which folds the whole departed crowd back into the cold pool (the body
+    // that rode away is skipped there: it stands on another layer).
     ModuleId dm = reg.module_at(toFloor);
     if (dm != kInvalidModule) modules_[dm].bodies.push_back(ride.player);
     keep_only(stack, reg, ecs, pool, toFloor);
