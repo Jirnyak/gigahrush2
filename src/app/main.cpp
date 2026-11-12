@@ -1930,6 +1930,27 @@ std::uint32_t refresh_floor_mobs(Registry& reg, const World& world, int floorNum
             game::sync_monster_armour(reg, e, m.kind);
         }
     }
+    // ПЕРЕПИСЬ ПОСЕВА МОБОВ — та же, что `[voploshenie]` у жителей, тем же
+    // предикатом ([sim/physics.h] stand_probe): сколько голов родилось стоя,
+    // сколько в тверди (тело в тверди не двигается больше никогда) и сколько
+    // в воздухе.
+    {
+        std::uint32_t heads = 0, standing = 0, inSolid = 0, inAir = 0;
+        for (auto e : reg.view<const game::MobRef, const Transform, const AABB>()) {
+            const Transform& tr = reg.get<const Transform>(e);
+            if (tr.layer != layer) continue;
+            ++heads;
+            const StandProbe p =
+                stand_probe(world, tr.pos, reg.get<const AABB>(e).half);
+            if (!p.fits) ++inSolid;
+            else if (!p.supported) ++inAir;
+            else ++standing;
+        }
+        std::fprintf(stderr,
+                     "[mobs] этаж %d: голов %u, стоят %u, в тверди %u, в "
+                     "воздухе %u\n",
+                     floorNumber, heads, standing, inSolid, inAir);
+    }
     return count;
 }
 
