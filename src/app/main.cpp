@@ -504,14 +504,12 @@ static void rebuild_static_light_table(Registry& reg, LayerId layer,
     ++g_staticTableGen;
 }
 
-// Поколение мутаций мира активного этажа — асинк-ребейк
-// ([markoaudit/plans/async-rebake.md] §2). Пишут ровно два карв-сайта (консоль
-// и боевой); двери НЕ пишут — нав печётся по премисе all-open ([game/door.h])
-// и от тоггла не стареет. Читатель — RebakeScheduler ([game/rebake.h]):
-// bakedGen != worldGen ⇔ запечённое устарело, планировщик сам доводит фоновым
-// циклом. (dirtyGen-буфер светосетки вырезан чисткой 2026-08-23.) МОНОТОННО
-// через всю сессию, на этаже НЕ сбрасывается.
-static std::uint64_t g_worldGen = 0;
+// `g_worldGen` СНЕСЁН 2026-11-12. Поколение мутаций мира жило здесь и
+// поднималось руками в двух хвостах писателя геометрии из семи (карв и
+// кисть), поэтому дверь, створки лифта и автомат среды фоновое допекание НЕ
+// будили. Счётчик ведёт сам планировщик: его поднимает сток клеток
+// `RebakeScheduler::patch_carved_cells` ([game/rebake.h]) — сдать клетки и не
+// разбудить цикл больше нельзя.
 
 // Кольцо wall-clock кадров для перф-свода --shot (пишется в топе кадра).
 static const float* g_wallRing = nullptr;
@@ -2303,7 +2301,7 @@ void begin_floor_nav(const World& world, int floorNumber,
     // rooms_declare, flow-полей по виду больше нет — на балансе −18 МиБ.
     // Зоны — секцией ЭТОГО планировщика (§88/F): второго пекаря не появилось, и
     // дренаж карва кормит их тем же снапшотом оракула, что и решётку.
-    bake.start_fresh(world.grid(), kind, floorNumber, g_worldGen, rooms,
+    bake.start_fresh(world.grid(), kind, floorNumber, rooms,
                      world.gravity().regime, lightAsync);
     // Nav memory AT THE START of the bake, which is the number no document carried
     // and the only moment it can be wrong. The scheduler frees the live flow field
@@ -4984,7 +4982,7 @@ int main(int argc, char** argv) {
         // дебаунсу/дедлайну. true ровно на кадре Fresh-свапа — момент, когда
         // толпе нового этажа пора ходить; Rebake-свапы пересева не требуют.
         const auto profNavT0 = prof_now();
-        if (nav.step(simTick, g_worldGen)) {
+        if (nav.step(simTick)) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
                                   : LayerId{0};
@@ -7859,7 +7857,6 @@ int main(int argc, char** argv) {
                             mediumPass.wake_cells(painted.data(),
                                                   painted.size(),
                                                   w, voxelMirror);
-                        ++g_worldGen;
                         nav.patch_carved_cells(w.grid(), painted.data(),
                                                painted.size());
                         // Патч поля по нарисованным ячейкам — тот же путь, что
@@ -7943,7 +7940,6 @@ int main(int argc, char** argv) {
                                               carveResult.dirtyCells.size(),
                                               stack.layer(activeLayer),
                                               voxelMirror);
-                    ++g_worldGen; // поколение мутаций — планировщик доведёт
                     ct0 = std::chrono::steady_clock::now();
                     mark_diffusion_dirty(diffusionDriver,
                                          stack.layer(activeLayer).grid(),
@@ -8878,7 +8874,7 @@ int main(int argc, char** argv) {
                     // грузить» — решение владельца (async-rebake.md §9).
                     if (liftRide != LiftRide::Idle) {
                         while (nav.baking()) {
-                            nav.step(simTick, g_worldGen);
+                            nav.step(simTick);
                             SDL_Delay(2);
                         }
                         (void)nav.take_prebuilt(); // мусор по контракту

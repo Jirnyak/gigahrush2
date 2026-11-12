@@ -112,7 +112,7 @@ PathResult run_path(bool viaPrebuild, int number, std::uint32_t seed,
                         std::chrono::steady_clock::now() - t0)
                         .count()) /
                 8u;
-            sched.step(tick, /*worldGen=*/0);
+            sched.step(tick);
             done = sched.take_prebuilt();
             if (!done)
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -236,7 +236,7 @@ void cancel_protocol() {
     const auto t0 = std::chrono::steady_clock::now();
     while (sched.baking() && std::chrono::steady_clock::now() - t0 <
                                  std::chrono::seconds(120)) {
-        sched.step(/*simTick=*/0, /*worldGen=*/0);
+        sched.step(/*simTick=*/0);
         sawPrebuilt = sawPrebuilt || sched.take_prebuilt();
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }

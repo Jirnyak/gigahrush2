@@ -68,14 +68,13 @@ void sla_holds_on_a_real_floor() {
     s.set_rebake_threads(2);
 
     TickClock clock;
-    std::uint64_t gen = 0;
 
     // Ёмкость клетки светосетки — ДО start_fresh (как в main): без неё
     // stride=1 и дельта-патчу некуда дописывать (проверяется ниже).
     s.set_light_table(nullptr, 0, 63, 1);
 
     // --- Fresh: текущая семантика входа на этаж --------------------------
-    s.start_fresh(w.grid(), FloorKind::Residential, 0, gen, &fr,
+    s.start_fresh(w.grid(), FloorKind::Residential, 0, &fr,
                   w.gravity().regime);
     CHECK(s.baking());
     CHECK(!s.ready());    // живой граф освобождён — толпа стояла бы, не блуждала
@@ -84,7 +83,7 @@ void sla_holds_on_a_real_floor() {
     // Страховочный потолок 16384 тиков (~131 с wall) — чтобы сломанный свап
     // давал КРАСНЫЙ CHECK, а не вечный цикл.
     while (!freshSwap && clock.now() < 16384u) {
-        freshSwap = s.step(clock.now(), gen);
+        freshSwap = s.step(clock.now());
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     CHECK(freshSwap); // ровно кадр Fresh-свапа — сигнал finish_floor_nav
@@ -131,19 +130,32 @@ void sla_holds_on_a_real_floor() {
     // Запечённая разбивка зовёт стену стеной — исходная истина.
     CHECK(s.zones().part.cell(tx, ty, tz) == kNoRoom);
 
-    // --- Карв пробивает стену: клетка в воздух + O(1)-патч битсетов +
-    // поколение мутаций — ровно то, что делает дренаж dirtyCells в main.
+    // --- Карв пробивает стену: клетка в воздух + O(1)-патч битсетов —
+    // ровно то, что делает дренаж dirtyCells в main.
+    //
+    // ПОКОЛЕНИЕ ПОДНИМАЕТ САМ СТОК, И ЭТО ГЕЙТ (2026-11-12). До этого дня
+    // тест делал `++gen` рукой — ровно как app, где поколение поднимали два
+    // хвоста писателя из семи, а дверь и автомат среды сдавали клетки и цикла
+    // не будили. Теперь снаружи поднимать НЕЧЕМ: всё, что ниже (свап, «нав
+    // знает пролом»), обязано случиться от одного вызова `patch_carved_cells`.
+    // МУТАЦИЯ: убрать `++worldGen_` из стока — краснеет строка ниже, а за ней
+    // и «пролом попал в разбивку» (цикл не стартует вовсе).
     w.grid().clear_cell(tx, ty, tz);
     const std::uint32_t dirty[] = {static_cast<std::uint32_t>(target)};
+    const std::uint64_t genBefore = s.world_gen();
+    CHECK(s.baked_gen() == genBefore);   // Fresh объявил запечённым текущее
     s.patch_carved_cells(w.grid(), dirty, 1);
-    ++gen;
+    CHECK(s.world_gen() == genBefore + 1);
+    // Пустой список поколения не двигает: запись без клеток ничего не старит.
+    s.patch_carved_cells(w.grid(), dirty, 0);
+    CHECK(s.world_gen() == genBefore + 1);
     const std::uint64_t carveTick = clock.now();
 
     // --- До свапа: stale-чтения живы (план §7в). Поле СТАРОЕ и честно
     // старое: пролом для него солиден, маршруты по прежней геометрии отвечают
     // по контракту, ничего не падает.
-    s.step(clock.now(), gen);
-    CHECK(s.baked_gen() == 0);
+    s.step(clock.now());
+    CHECK(s.baked_gen() == genBefore);   // запечённое отстаёт от мира
     CHECK(s.zones().part.cell(tx, ty, tz) == kNoRoom);
     // Шаг из соседа В стену по старой разбивке: зоны у цели нет, значит и
     // спрашивать «куда шагнуть» не о чем — отказ приходит ДО двери.
@@ -156,8 +168,8 @@ void sla_holds_on_a_real_floor() {
     std::uint64_t swapTick = 0;
     for (;;) {
         const std::uint64_t t = clock.now();
-        s.step(t, gen);
-        if (s.baked_gen() == gen) {
+        s.step(t);
+        if (s.baked_gen() == s.world_gen()) {
             swapTick = t;
             break;
         }
@@ -165,7 +177,8 @@ void sla_holds_on_a_real_floor() {
         if (t - carveTick > 2u * RebakeScheduler::kRebakeCeilTicks) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    CHECK(s.baked_gen() == gen); // свап случился
+    CHECK(s.baked_gen() == s.world_gen()); // свап случился
+    CHECK(s.baked_gen() == genBefore + 1); // ...и он отражает ИМЕННО этот карв
     CHECK(swapTick - carveTick <= RebakeScheduler::kRebakeCeilTicks);
 
     // --- После свапа: нав ЗНАЕТ проём (план §7б). Пролом попал в разбивку, и
@@ -213,7 +226,6 @@ void sla_holds_on_a_real_floor() {
                             target2 / (kMacroDim * kMacroDim));
         const std::uint32_t dirty2[] = {static_cast<std::uint32_t>(target2)};
         s.patch_carved_cells(w.grid(), dirty2, 1);
-        ++gen;
         const std::uint64_t carve2 = clock.now();
 
         // Патч обязан свапнуться ДО того, как полный цикл вообще стартует
@@ -222,7 +234,7 @@ void sla_holds_on_a_real_floor() {
         std::uint64_t patchTick = 0;
         for (;;) {
             const std::uint64_t t = clock.now();
-            s.step(t, gen);
+            s.step(t);
             if (s.take_light_patch(&patched)) {
                 patchTick = t;
                 break;
@@ -233,18 +245,18 @@ void sla_holds_on_a_real_floor() {
         CHECK(patched != nullptr);
         CHECK(patchTick - carve2 <= RebakeScheduler::kRebakeQuietTicks);
         CHECK(!patched->empty());        // лампа увидела вторую дыру
-        CHECK(s.light_gen() == gen);     // свет актуален патчем...
-        CHECK(s.baked_gen() < gen);      // ...а нав ещё ждёт полного цикла
+        CHECK(s.light_gen() == s.world_gen());  // свет актуален патчем...
+        CHECK(s.baked_gen() < s.world_gen());   // ...а нав ещё ждёт полного цикла
 
         // Полный цикл патчем не отменён: bakedGen доводится как раньше.
         for (;;) {
             const std::uint64_t t = clock.now();
-            s.step(t, gen);
-            if (s.baked_gen() == gen) break;
+            s.step(t);
+            if (s.baked_gen() == s.world_gen()) break;
             if (t - carve2 > 2u * RebakeScheduler::kRebakeCeilTicks) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        CHECK(s.baked_gen() == gen);
+        CHECK(s.baked_gen() == s.world_gen());
         // Смена таблицы (тег 2) созрела полным циклом — baked_tag догнал
         // состав ровно на свапе полного бейка, не раньше.
         CHECK(s.light_table_baked_tag() == 2);
@@ -271,17 +283,18 @@ void sla_holds_on_a_real_floor() {
                             target3 / (kMacroDim * kMacroDim));
         const std::uint32_t dirty3[] = {static_cast<std::uint32_t>(target3)};
         s.patch_carved_cells(w.grid(), dirty3, 1);
-        ++gen;
         const std::uint64_t carve3 = clock.now();
         for (;;) {
             const std::uint64_t t = clock.now();
-            s.step(t, gen);
-            if (s.light_gen() == gen && s.baked_gen() == gen) break;
+            s.step(t);
+            if (s.light_gen() == s.world_gen() &&
+                s.baked_gen() == s.world_gen())
+                break;
             if (t - carve3 > 2u * RebakeScheduler::kRebakeCeilTicks) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        CHECK(s.light_gen() == gen);              // свет актуален...
-        CHECK(s.baked_gen() == gen);              // ...нав доведён...
+        CHECK(s.light_gen() == s.world_gen());    // свет актуален...
+        CHECK(s.baked_gen() == s.world_gen());    // ...нав доведён...
         CHECK(s.light_full_bakes() == fullBakes); // ...без полного бейка света
 
         // --- Находка №2 аудита 2026-08-23 (гонка состава): таблица меняется,
@@ -289,24 +302,32 @@ void sla_holds_on_a_real_floor() {
         // (состав, который бейк видел), не текущий: текущий переработал бы
         // слот лампы, на которую только что легшие списки ещё ссылаются, и
         // клетки светили бы чужой лампой до следующего полного бейка.
+        // СМЕНА СОСТАВА САМА ПОДНИМАЕТ ПОКОЛЕНИЕ — таблица ламп есть вход
+        // бейка, как клетки. Карв-долга при этом нет, значит патч невозможен
+        // и цикл обязан быть полным. Прежде тест поднимал поколение рукой.
+        const std::uint64_t genTable = s.world_gen();
         s.set_light_table(&lamp, 1, 63, 3); // смена состава → цикл будет полным
-        ++gen; // мутация мира без карва: патч невозможен (карв-долга нет)
+        CHECK(s.world_gen() == genTable + 1);
         const std::uint64_t race0 = clock.now();
         while (!s.baking() &&
                clock.now() - race0 < 4u * RebakeScheduler::kRebakeCeilTicks) {
-            s.step(clock.now(), gen);
+            s.step(clock.now());
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         CHECK(s.baking()); // полный цикл в полёте, снапшот тега 3 снят
+        // Поколение, которое этот полёт УВИДЕЛ: смена состава ниже поднимет
+        // следующее, и ждать надо свапа ИМЕННО этого цикла — следующий цикл
+        // отразил бы уже тег 4, и гонку состава гейт перестал бы видеть.
+        const std::uint64_t raceGen = s.world_gen();
         s.set_light_table(&lamp, 1, 63, 4); // состав сменился во время полёта
         for (;;) {
             const std::uint64_t t = clock.now();
-            s.step(t, gen);
-            if (s.baked_gen() == gen) break;
+            s.step(t);
+            if (s.baked_gen() == raceGen) break;
             if (t - race0 > 6u * RebakeScheduler::kRebakeCeilTicks) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
-        CHECK(s.baked_gen() == gen);
+        CHECK(s.baked_gen() == raceGen);
         CHECK(s.light_table_baked_tag() == 3); // снапшот, не текущий тег 4
     }
 }
@@ -339,7 +360,7 @@ void fresh_light_bakes_in_worker() {
         RebakeScheduler s;
         s.set_rebake_threads(2);
         s.set_light_table(lamps, 2, 63, 1);
-        s.start_fresh(w.grid(), FloorKind::Residential, 0, 0, &fr,
+        s.start_fresh(w.grid(), FloorKind::Residential, 0, &fr,
                       w.gravity().regime, /*lightAsync=*/false);
         CHECK(s.take_light_swap()); // свет лёг прямо в кадре входа
         fnvSync = light_vis_fnv(s.light_vis());
@@ -352,14 +373,14 @@ void fresh_light_bakes_in_worker() {
         RebakeScheduler s;
         s.set_rebake_threads(2);
         s.set_light_table(lamps, 2, 63, 1);
-        s.start_fresh(w.grid(), FloorKind::Residential, 0, 0, &fr,
+        s.start_fresh(w.grid(), FloorKind::Residential, 0, &fr,
                       w.gravity().regime, /*lightAsync=*/true);
         CHECK(!s.take_light_swap()); // кадр входа свету ничего не должен
         CHECK(!s.ready());
         TickClock clock;
         bool freshSwap = false;
         while (!freshSwap && clock.now() < 16384u) {
-            freshSwap = s.step(clock.now(), 0);
+            freshSwap = s.step(clock.now());
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         CHECK(freshSwap);

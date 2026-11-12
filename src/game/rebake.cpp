@@ -45,6 +45,9 @@ void RebakeScheduler::set_light_table(const LightVisLamp* lamps, std::size_t n,
     // Состав таблицы изменился (рождение/смерть лампы) — следующий
     // Rebake-цикл обязан печь свет ПОЛНОСТЬЮ (форма: слоты).
     ++lightTableGen_;
+    // ...и этот цикл обязан СЛУЧИТЬСЯ: таблица ламп — такой же вход бейка,
+    // как клетки, поэтому её смена поднимает поколение мира сама.
+    ++worldGen_;
 }
 
 void RebakeScheduler::sync_shadow() {
@@ -63,7 +66,7 @@ void RebakeScheduler::sync_shadow() {
     }
 }
 
-void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
+void RebakeScheduler::start_light_patch() {
     // Воркер свободен (running_ проверен вызывающим). Карвы уезжают в
     // carvedSnap_ — новые, пришедшие во время полёта, лягут в свежий список
     // и запустят следующий цикл (стандартный приём генераций, гонок нет по
@@ -83,7 +86,7 @@ void RebakeScheduler::start_light_patch(std::uint64_t worldGen) {
     carvedSnap_.erase(std::unique(carvedSnap_.begin(), carvedSnap_.end()),
                       carvedSnap_.end());
     lampsSnap_ = lampsLive_;
-    snapGen_ = worldGen;
+    snapGen_ = worldGen_;
 
     running_ = true;
     mode_ = Mode::LightPatch;
@@ -124,8 +127,7 @@ void RebakeScheduler::cancel() {
 }
 
 void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
-                                  int floorNumber, std::uint64_t worldGen,
-                                  const FloorRooms* rooms,
+                                  int floorNumber, const FloorRooms* rooms,
                                   GravityRegime gravity, bool lightAsync) {
     // Любой бейк в полёте — отменить и джойнить. Отмена узловая, так что join
     // здесь — десятки мс, не секунды: это и есть «F9/травел отменяет и едет».
@@ -249,7 +251,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
                          lightVis_.maxPerCell, lightVis_.overflowCells,
                          lightVis_.rMaxM, lightVis_.bakeMs, keyMs);
         }
-        lightGen_ = worldGen;
+        lightGen_ = worldGen_;
         lightSwapPending_ = true;
         lightTableBakedGen_ = lightTableGen_; // Fresh = полный бейк состава
         lightTableBakedTag_ = lightTableTag_; // синхронно с живой таблицы
@@ -280,9 +282,9 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
         snapRooms_.list.assign(rooms->list.size(), Room{});
         snapGravity_ = gravity;
     }
-    snapGen_ = worldGen;
-    bakedGen_ = worldGen;
-    lastSeenGen_ = worldGen;
+    snapGen_ = worldGen_;
+    bakedGen_ = worldGen_;
+    lastSeenGen_ = worldGen_;
     haveDirty_ = false;
     lastRebakeDurTicks_ = 0;
     lastStartTick_ = 0;
@@ -380,8 +382,7 @@ void RebakeScheduler::start_prebuild(std::function<void()> job) {
     });
 }
 
-void RebakeScheduler::start_rebake(std::uint64_t simTick,
-                                   std::uint64_t worldGen) {
+void RebakeScheduler::start_rebake(std::uint64_t simTick) {
     join_worker(); // не бежит (running_ проверен вызывающим) — страховка
     discard_pending();
     cancel_.store(false, std::memory_order_relaxed);
@@ -417,7 +418,7 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     lightTableTagSnap_ = lightTableTag_; // состав, который бейк УВИДИТ
     if (!cycleLightFull_ && carvedSnap_.empty())
         lightSwapped_ = true; // свету нечего делать — секция закрыта заранее
-    snapGen_ = worldGen;
+    snapGen_ = worldGen_;
     lastStartTick_ = simTick;
 
     running_ = true;
@@ -483,11 +484,11 @@ void RebakeScheduler::start_rebake(std::uint64_t simTick,
     });
 }
 
-bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
+bool RebakeScheduler::step(std::uint64_t simTick) {
     // 1. Летопись мутаций: дебаунс меряется от ПОСЛЕДНЕЙ, дедлайн — от ПЕРВОЙ
     // незапечённой.
-    if (worldGen != lastSeenGen_) {
-        lastSeenGen_ = worldGen;
+    if (worldGen_ != lastSeenGen_) {
+        lastSeenGen_ = worldGen_;
         lastMutTick_ = simTick;
         if (!haveDirty_) {
             haveDirty_ = true;
@@ -638,7 +639,7 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
     // 3. Планировщик старта фонового цикла.
     if (!ready()) return false; // нет живого графа — Fresh ещё не свапнулся
     if (!navClear_.built()) return false;
-    if (bakedGen_ == worldGen) return false; // запечённое актуально
+    if (bakedGen_ == worldGen_) return false; // запечённое актуально
     const bool quiet = simTick - lastMutTick_ >= kRebakeQuietTicks;
     const bool overdue =
         haveDirty_ && simTick - firstDirtyTick_ >= kRebakeDeadlineTicks;
@@ -650,11 +651,11 @@ bool RebakeScheduler::step(std::uint64_t simTick, std::uint64_t worldGen) {
     // кроет те же карвы целиком), патч лишь заполняет паузу до него.
     if (!fullDue && lightVis_.valid() && !carvedSinceLight_.empty() &&
         simTick - lastMutTick_ >= kLightPatchQuietTicks) {
-        start_light_patch(worldGen);
+        start_light_patch();
         return false;
     }
     if (!fullDue) return false;
-    start_rebake(simTick, worldGen);
+    start_rebake(simTick);
     return false;
 }
 
@@ -699,6 +700,10 @@ void RebakeScheduler::patch_carved_cells(const MacroGrid& grid,
     // включая дверные: свет живёт по реальной геометрии, премиса all-open —
     // навигационная, не световая. Дедуп — на старте цикла, не здесь.
     carvedSinceLight_.insert(carvedSinceLight_.end(), cells, cells + n);
+    // МИР ИЗМЕНИЛСЯ — поколение поднимает сам сток (довод в заголовке).
+    // Пустой список поколения не двигает: запись, не задевшая ни одной
+    // клетки, ничего не состарила.
+    if (n != 0) ++worldGen_;
     (void)types;
 }
 
