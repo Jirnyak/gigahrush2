@@ -297,6 +297,25 @@ void real_floors_embody_standing() {
             first[ecs.get<const NpcRef>(e).id] = ecs.get<const Transform>(e).pos;
         const NpcId camera = playerId;
         stream.unload(stack, reg, ecs, pool, row.number);
+        // ПОРЯДОК БАКЕТА ПЕРЕВЁРНУТ между входами (так его перетасовывают
+        // смерти и миграции — swap-remove): каждая запись уходит на чужую
+        // метку и возвращается, старшие первыми. Спор двух тел за клетку
+        // обязан решаться номером записи, а не тем, кто раньше попался в
+        // бакете, — иначе «свой слот» зависел бы от истории этажа. Эту
+        // проверку привела мутация: без неё снос сортировки проходил.
+        {
+            const std::int16_t home = static_cast<std::int16_t>(row.number);
+            const std::int16_t away = static_cast<std::int16_t>(row.number + 100);
+            for (NpcId id = pool.count(); id-- > 0;)
+                if (pool.alive(id) && pool.floor(id) == home)
+                    pool.set_floor(id, away);
+            for (NpcId id = pool.count(); id-- > 0;)
+                if (pool.alive(id) && pool.floor(id) == away)
+                    pool.set_floor(id, home);
+            const std::vector<NpcId>& bucket = pool.floor_bucket(home);
+            CHECK(bucket.size() == pop);
+            CHECK(bucket.front() > bucket.back()); // порядок действительно другой
+        }
         NpcId again = kInvalidNpc;
         const LoadResult r2 =
             stream.ensure_loaded(stack, reg, ecs, pool, row.number, again);
