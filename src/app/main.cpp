@@ -6034,6 +6034,45 @@ int main(int argc, char** argv) {
                                       static_cast<double>(sightProbe.cellsTotal)
                                 : 0.0,
                             bins);
+                        {
+                            // КАРМАНЫ — размер ошибки формы «id области на
+                            // макроклетку» (шапка `cell_air_pockets`).
+                            std::uint64_t obsAll = 0, splitAll = 0;
+                            for (std::size_t i = 0; i < game::kSightWhoCount; ++i) {
+                                obsAll += sightProbe.observers[i];
+                                splitAll += sightProbe.eyesSplit[i];
+                            }
+                            const auto pct = [](std::uint64_t a, std::uint64_t b) {
+                                return b != 0 ? 100.0 * static_cast<double>(a) /
+                                                    static_cast<double>(b)
+                                              : 0.0;
+                            };
+                            const std::uint64_t* h = sightProbe.pocketHist;
+                            const std::uint64_t cellsAll =
+                                h[0] + h[1] + h[2] + h[3] + h[4];
+                            std::fprintf(
+                                stderr,
+                                "[zrenie] КАРМАНЫ: клеток 128^3 по числу воздушных "
+                                "карманов: 0=%.1f%% 1=%.1f%% 2=%.1f%% 3=%.1f%% "
+                                "4+=%.1f%% (расщеплённых %llu) | ГЛАЗ в "
+                                "расщеплённой клетке=%.3f%% (%llu из %llu; монстр "
+                                "%.3f%% житель %.3f%% человек %.3f%%) | ПАР с таким "
+                                "глазом=%.3f%% всех пар, и %.3f%% пар С ПЕРЕКРЫТЫМ "
+                                "ЛУЧОМ\n",
+                                pct(h[0], cellsAll), pct(h[1], cellsAll),
+                                pct(h[2], cellsAll), pct(h[3], cellsAll),
+                                pct(h[4], cellsAll),
+                                static_cast<unsigned long long>(h[2] + h[3] + h[4]),
+                                pct(splitAll, obsAll),
+                                static_cast<unsigned long long>(splitAll),
+                                static_cast<unsigned long long>(obsAll),
+                                pct(sightProbe.eyesSplit[0], sightProbe.observers[0]),
+                                pct(sightProbe.eyesSplit[1], sightProbe.observers[1]),
+                                pct(sightProbe.eyesSplit[2], sightProbe.observers[2]),
+                                pct(sightProbe.pairsSplit, sightProbe.rays),
+                                pct(sightProbe.pairsSplitBlocked,
+                                    sightProbe.pairsBlocked));
+                        }
                         std::fprintf(
                             stderr,
                             "[zrenie] СЛУХ: спросили=%.1f/проход, услышали=%.1f "

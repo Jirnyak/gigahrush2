@@ -103,6 +103,63 @@ inline float sight_radius_today(SightWho who, const MobRef* mr) {
     return kWitnessSightM;
 }
 
+// ЧИСЛО ВОЗДУШНЫХ КАРМАНОВ КЛЕТКИ — 6-связных компонент ПУСТОТЫ среди её
+// 8³ субвокселей (связность считается ВНУТРИ клетки; сосед не спрашивается).
+//
+// ЗАЧЕМ. Принятая к посадке форма поля обзора — «id области на МАКРОКЛЕТКУ»
+// (CANON S25.8). Один id не может назвать две стороны перегородки, если она
+// стоит ВНУТРИ клетки: тело по одну сторону и тело по другую получают один
+// ответ. Аудит 2026-11-12 вывел арифметикой из генератора, что на падике
+// стены стоят по ЦЕНТРУ клетки (`padic_gen.cpp` `kWallX34/kWallY34`) и таких
+// клеток ~30 % плана; это ВЫВОД, и прибор обязан превратить его в ЗАМЕР
+// прежде, чем форму поля понесут владельцу.
+//
+// Ноль — клетка твёрдая целиком, один — обычная клетка, два и больше —
+// клетка РАСЩЕПЛЕНА материей на карманы, и поклеточное поле их не различит.
+//
+// Заливка бит-параллельная: слово маски есть один слой z (8×8 бит), сдвиги
+// на 1 и на 8 — шаги по x и y, соседние слова — шаг по z. Живёт в ПРИБОРЕ, а
+// не в `world/`: прод-читателя у вопроса пока нет, а примитив без читателя не
+// заводится.
+inline int cell_air_pockets(const SubMask& m) {
+    static_assert(kSubDim == 8 && kSubMaskWords == 8,
+                  "заливка стоит на раскладке «слово = слой z, 8×8 бит»");
+    constexpr std::uint64_t kNotCol0 = 0xFEFEFEFEFEFEFEFEull;  // sx != 0
+    constexpr std::uint64_t kNotCol7 = 0x7F7F7F7F7F7F7F7Full;  // sx != 7
+    std::uint64_t air[kSubMaskWords];
+    for (std::size_t i = 0; i < kSubMaskWords; ++i) air[i] = ~m.words[i];
+    int pockets = 0;
+    for (;;) {
+        int seedZ = -1;
+        for (int z = 0; z < kSubDim; ++z)
+            if (air[z] != 0) {
+                seedZ = z;
+                break;
+            }
+        if (seedZ < 0) break;
+        ++pockets;
+        std::uint64_t comp[kSubMaskWords] = {};
+        comp[seedZ] = air[seedZ] & (~air[seedZ] + 1);  // младший бит пустоты
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (int z = 0; z < kSubDim; ++z) {
+                const std::uint64_t c = comp[z];
+                std::uint64_t n = c | ((c << 1) & kNotCol0) |
+                                  ((c >> 1) & kNotCol7) | (c << 8) | (c >> 8);
+                if (z > 0) n |= comp[z - 1];
+                if (z + 1 < kSubDim) n |= comp[z + 1];
+                n &= air[z];
+                if (n != c) {
+                    comp[z] = n;
+                    grew = true;
+                }
+            }
+        }
+        for (int z = 0; z < kSubDim; ++z) air[z] &= ~comp[z];
+    }
+    return pockets;
+}
+
 struct SightProbe {
     struct Cand {           // пара, прошедшая слой и дистанцию
         vec3 eye{0, 0, 0};  // глаз наблюдателя
@@ -110,6 +167,7 @@ struct SightProbe {
         std::uint8_t who = 0;
         bool inCone = false;
         bool targetHuman = false;
+        bool split = false;  // глаз хоть одного из пары — в расщеплённой клетке
     };
     struct Ear {            // наблюдатель, который кого-то слышит
         vec3 ear{0, 0, 0};
@@ -120,6 +178,7 @@ struct SightProbe {
         vec3 pos{0, 0, 0};
         const MobRef* mr = nullptr;
         bool human = false;
+        bool split = false;  // клетка ГЛАЗА расщеплена на 2+ кармана
     };
     std::vector<Seen> census;
     std::vector<Cand> cand;  // переживают проходы — векторы не переаллоцируются зря
@@ -158,6 +217,18 @@ struct SightProbe {
     std::uint64_t cellsStandable = 0;
     bool cellsCounted = false;
 
+    // --- КАРМАНЫ: чего стоит форма «id области на макроклетку» ----------------
+    // Перепись ВСЕХ 128³ клеток этажа по числу воздушных карманов (0, 1, 2, 3,
+    // 4+) — одна на замер; и то же про ГЛАЗА: сколько наблюдателей стоит в
+    // расщеплённой клетке и сколько пар это задевает. Последнее и есть размер
+    // ошибки поклеточного поля: для такой пары оно не различает стороны стены.
+    static constexpr std::size_t kPocketBins = 5;
+    std::uint64_t pocketHist[kPocketBins] = {};
+    std::uint64_t eyesSplit[kSightWhoCount] = {};  // Σ наблюдателей в расщеплённой клетке
+    std::uint64_t pairsSplit = 0;         // пар, где расщеплена клетка хоть одного глаза
+    std::uint64_t pairsSplitBlocked = 0;  // из них луч ПЕРЕКРЫТ
+    std::uint64_t pairsBlocked = 0;       // всего пар с перекрытым лучом
+
     // --- слух ----------------------------------------------------------------
     std::uint64_t earsTotal = 0;      // Σ мобов, спросивших поле шума
     std::uint64_t heard = 0;          // из них услышали хоть что-то
@@ -181,6 +252,13 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
     // (в ней не стоят), и это прямой множитель размера структуры.
     if (!p.cellsCounted) {
         p.cellsCounted = true;
+        for (const SubMask& m : grid.masks()) {
+            // Пустая и полная клетки — без заливки: их на этаже большинство.
+            const int n = m.empty() ? 1 : (m.full() ? 0 : cell_air_pockets(m));
+            ++p.pocketHist[static_cast<std::size_t>(n) < SightProbe::kPocketBins
+                               ? static_cast<std::size_t>(n)
+                               : SightProbe::kPocketBins - 1];
+        }
         for (int cz = 0; cz < kLightVisDim; ++cz)
             for (int cy = 0; cy < kLightVisDim; ++cy)
                 for (int cx = 0; cx < kLightVisDim; ++cx) {
@@ -222,9 +300,16 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
         auto add = [&](Entity e, const Transform& tr) {
             if (tr.layer != layer) return;
             if (reg.all_of<Dead>(e)) return;
+            // Клетка ГЛАЗА, а не центра тела: поле обзора спрашивают глазом.
+            const SubMask& eyeCell =
+                grid.mask(cell_of_metres(tr.pos.x), cell_of_metres(tr.pos.y),
+                          cell_of_metres(tr.pos.z + kEyeLiftM));
+            const bool split = !eyeCell.empty() && !eyeCell.full() &&
+                               cell_air_pockets(eyeCell) >= 2;
             p.census.push_back(SightProbe::Seen{e, tr.pos,
                                                 reg.try_get<MobRef>(e),
-                                                reg.all_of<CameraTag>(e)});
+                                                reg.all_of<CameraTag>(e),
+                                                split});
         };
         auto mobs = reg.view<const Transform, const MobRef>();
         for (auto e : mobs) add(e, mobs.get<const Transform>(e));
@@ -248,6 +333,7 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
                                              : SightWho::Resident;
         const std::size_t wi = static_cast<std::size_t>(who);
         ++p.observers[wi];
+        if (self.split) ++p.eyesSplit[wi];
 
         // НАПРАВЛЕНИЕ ВЗГЛЯДА. У носителя камеры он есть полем
         // (`CameraTag::yaw/pitch` — единственное поле ориентации в движке), у
@@ -312,7 +398,8 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
             // восприятия: конец строится от глаза по свёрнутому пеленгу.
             p.cand.push_back(SightProbe::Cand{
                 eye, vec3{eye.x + bx, eye.y + by, eye.z + bz},
-                static_cast<std::uint8_t>(wi), cone, tHuman});
+                static_cast<std::uint8_t>(wi), cone, tHuman,
+                self.split || other.split});
         }
     }
     const auto t1 = std::chrono::steady_clock::now();
@@ -324,6 +411,11 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
         SubRayHit hit;
         const bool blocked = sub_march(grid, c.eye, c.at, hit);
         const std::size_t wi = c.who;
+        if (blocked) ++p.pairsBlocked;
+        if (c.split) {
+            ++p.pairsSplit;
+            if (blocked) ++p.pairsSplitBlocked;
+        }
         if (blocked) {
             ++p.thruWall[wi];
             if (c.targetHuman) ++p.humanThruWall;

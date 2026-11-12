@@ -102,6 +102,7 @@
 #include "game/noise.h"             // поле шума — второй канал восприятия
 #include "game/npc_pool.h"
 #include "game/perceive.h"          // ПРЕДМЕТ
+#include "game/sight_probe.h"       // ПРИБОР — судится блоком 16
 #include "game/wander.h"            // kAggroRadius, kWanderPeriod
 #include "game/witness.h"           // kWitnessSightM, kEyeLiftM
 #include "game/zone_nav.h"
@@ -1708,5 +1709,90 @@ static void test_perceive_all() {
         CHECK(w.visits == 1u);
         CHECK(w.sen.visible == 2u);
         CHECK(w.sen.foe == foeA);                // МЕНЬШИЙ id, а не первый в обходе
+    }
+
+    // ---- 16. ПРИБОР СУДИТСЯ ТЕМ ЖЕ ЗАКОНОМ, ЧТО ПРОХОД ----------------------
+    //
+    // ЗАЧЕМ. `--action zrenie` ([game/sight_probe.h]) три дня мерил ЗАДНИЙ
+    // конус и маршировал пары на шве тора через полмира — ровно два дефекта,
+    // которые блоки 1a и 7 поймали В ПРОХОДЕ до посадки. В приборе они выжили,
+    // потому что прибор не судил НИКТО: он несёт закон копией, а не вызовом.
+    // Число из несуженного прибора — не замер, а мнение.
+    //
+    // МУТАЦИИ: (а) перевернуть пеленг в приборе — `inCone` упадёт до нуля;
+    // (б) вернуть цель «как дана» — пара через шов упрётся в стену посреди
+    // мира, `clear` упадёт до нуля; (в) испортить заливку карманов — счёт
+    // карманов и флаг расщеплённой клетки глаза.
+    {
+        // Карманы: пустая клетка — один, твёрдая — ноль, стена по центру —
+        // два, крест из двух стен — четыре.
+        SubMask m;
+        CHECK(cell_air_pockets(m) == 1);
+        m.set_all();
+        CHECK(cell_air_pockets(m) == 0);
+        m.clear_all();
+        for (int a = 0; a < kSubDim; ++a)
+            for (int b = 0; b < kSubDim; ++b)
+                for (int s = 3; s <= 4; ++s) m.set(sub_bit(s, a, b));
+        CHECK(cell_air_pockets(m) == 2);
+        for (int a = 0; a < kSubDim; ++a)
+            for (int b = 0; b < kSubDim; ++b)
+                for (int s = 3; s <= 4; ++s) m.set(sub_bit(a, s, b));
+        CHECK(cell_air_pockets(m) == 4);
+        // Связность — по ГРАНЯМ: два пустых атома, сошедшиеся ребром, суть два
+        // кармана; сошедшиеся гранью — один.
+        m.set_all();
+        m.clear(sub_bit(0, 0, 0));
+        m.clear(sub_bit(1, 1, 0));
+        CHECK(cell_air_pockets(m) == 2);
+        m.clear(sub_bit(1, 0, 0));
+        CHECK(cell_air_pockets(m) == 1);
+        // Шов слова маски: x = 7 и x = 0 СОСЕДНЕЙ строки y лежат в слове
+        // рядом, но в мире не соседи — заливка не имеет права их склеить.
+        m.set_all();
+        m.clear(sub_bit(7, 0, 0));
+        m.clear(sub_bit(0, 1, 0));
+        CHECK(cell_air_pockets(m) == 2);
+    }
+    {
+        const float y = 248.125f;
+        Stand st;
+        // Наблюдатель у самого шва и ИДЁТ к нему (взгляд прибора — из хода);
+        // обе цели — по ту сторону шва, в 2 и 4 м по тору.
+        const vec3 obsAt{1.0f, y, kStandZ};
+        const Entity obs = st.mob(MobKind::Zombie, obsAt);
+        st.reg.get<Velocity>(obs).v = vec3{-kWalkSpeedMps, 0.0f, 0.0f};
+        st.resident(Faction::Citizens, vec3{255.0f, y, kStandZ});
+        st.resident(Faction::Citizens, vec3{253.0f, y + 0.5f, kStandZ});
+        // Стена ПОСРЕДИ МИРА на том же ряду: её видит только марш, пошедший
+        // к сырой координате цели (254 м вместо 2).
+        const int wallCx = kMacroDim / 2;
+        const int rowCy = cell_of_metres(y);
+        stamp_panel(grid, wallCx, rowCy, kEyeCellZ, 0);
+        // Второй монстр — далеко от всех и в клетке, которую стена делит
+        // пополам: его глаз обязан быть сосчитан как глаз в расщеплённой клетке.
+        const int splitCx = 50;
+        const Entity loner =
+            st.mob(MobKind::Zombie,
+                   vec3{static_cast<float>(splitCx) * kCellSize + 0.1f, y,
+                        kStandZ});
+        (void)loner;
+        stamp_panel(grid, splitCx, rowCy, kEyeCellZ, 3);
+        stamp_panel(grid, splitCx, rowCy, kEyeCellZ, 4);
+
+        SightProbe p;
+        sight_probe_pass(st.reg, grid, st.noise, st.layer,
+                         steer_frame_of(nullptr), p);
+        const std::size_t mon = static_cast<std::size_t>(SightWho::Monster);
+        CHECK(p.observers[mon] == 2u);
+        CHECK(p.seen[mon] == 2u);       // обе цели в радиусе — ЧЕРЕЗ ШОВ
+        CHECK(p.inCone[mon] == 2u);     // и обе ВПЕРЕДИ, а не за спиной
+        CHECK(p.clear[mon] == 2u);      // луч идёт к ближайшему образу
+        CHECK(p.thruWall[mon] == 0u);   // стена в 127 м пару не гасит
+        CHECK(p.coneClear[mon] == 2u);
+        CHECK(p.eyesSplit[mon] == 1u);  // одиночка в расщеплённой клетке
+        CHECK(p.pairsSplit == 0u);      // ...и ни в одной паре не участвует
+        wipe_cell(grid, wallCx, rowCy, kEyeCellZ);
+        wipe_cell(grid, splitCx, rowCy, kEyeCellZ);
     }
 }
