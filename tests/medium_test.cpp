@@ -2658,6 +2658,8 @@ void test_pack_carries_changed_only(gpu::VulkanDevice& dev) {
 //     краснеют закон маски в каноне и согласие зеркала;
 //   * снять в run_settle сам блок `if (lay)` — улёгшееся не геометрия нигде:
 //     краснеет закон маски;
+//   * снять там же условие подвижности (бит «каждому атому твёрдой фазы») —
+//     краснеет свидетель: неподвижный атом без бита получает бит;
 //   * поставить там `kActChanged` вместо `kActDirty` — пак маску не везёт, а
 //     тишина обнуляется: краснеют закон маски в каноне, согласие зеркала и
 //     скорость сна в test_rubble_settles_fast (`liveEarly == 0`);
@@ -2690,6 +2692,15 @@ void test_falling_is_not_geometry(gpu::VulkanDevice& dev) {
                 }
     };
     seed_tower(72, 72, 23);
+    // СВИДЕТЕЛЬ: атом НЕПОДВИЖНОЙ материи без бита в клетке-приёмнике, в углу,
+    // куда осыпь не дотягивается. Бит статики автомату не принадлежит — его
+    // ставят и снимают писатели статики, и материя без бита у них законна
+    // (открытая дверь). Первая форма закона ставила бит «каждому атому
+    // твёрдой фазы» и замуровывала такие атомы во всякой дозревшей клетке:
+    // на живом этаже их 186 216, после двух поездок бит получили 160 тысяч.
+    const int kWitnessBit = sub_bit(0, 0, 7);
+    materialize_sub_page(w, macro_index(72, 72, 21))[kWitnessBit] =
+        kMatConcrete;
     seed_tower(100, 100, 40);
     const SubField<CellType>& f =
         *w.subfields().find<CellType>(kSubMaterialName);
@@ -2744,10 +2755,18 @@ void test_falling_is_not_geometry(gpu::VulkanDevice& dev) {
                 for (int bit = 0; bit < kSubVoxels; ++bit) {
                     const bool solid = p[bit] != kCellAir &&
                         material_phase(p[bit]) == MatPhase::Solid;
-                    if (m.test(bit) != solid) ++lawBreak;
+                    // Закон маски автомата — про подвижное и про пустоту;
+                    // статика судится отдельно (свидетель ниже).
+                    const bool automatons =
+                        p[bit] == kCellAir || material_is_medium(p[bit]);
+                    if (automatons && m.test(bit) != solid) ++lawBreak;
                     if (p[bit] == kMatRubble) ++laid;
                 }
             }
+    const bool witnessIntact =
+        f.page(landA) != nullptr &&
+        f.page(landA)[kWitnessBit] == kMatConcrete &&
+        !w.grid().masks()[landA].test(kWitnessBit);
     const std::uint32_t fadeA = medium.fade_total();
     const bool mirrorAgrees = mirror.verify(w);
     std::printf("[medium_test] падающее-не-геометрия, лечь: записей масок "
@@ -2762,7 +2781,8 @@ void test_falling_is_not_geometry(gpu::VulkanDevice& dev) {
     CHECK(recOrigin >= 1);   // ход гасит бит истока...
     CHECK(w.grid().masks()[originA].empty()); // ...и гасит его до конца
     CHECK(recLand >= 1);     // улёгшееся стало геометрией
-    CHECK(lawBreak == 0);    // в спящей округе бит ⟺ твёрдая фаза
+    CHECK(lawBreak == 0);    // в спящей округе бит ⟺ подвижное твёрдое
+    CHECK(witnessIntact);    // статику без бита автомат не трогает
     CHECK(laid + static_cast<int>(fadeA) == static_cast<int>(kTower));
     CHECK(medium.live_count() == 0); // округа спит: зрелость не будит
     CHECK(mirrorAgrees);     // маска зрелости доехала до канона
