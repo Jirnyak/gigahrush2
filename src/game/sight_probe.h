@@ -115,6 +115,13 @@ struct SightProbe {
         vec3 ear{0, 0, 0};
         vec3 src{0, 0, 0};
     };
+    struct Seen {           // тело с тождеством на слое — строка переписи
+        Entity e;
+        vec3 pos{0, 0, 0};
+        const MobRef* mr = nullptr;
+        bool human = false;
+    };
+    std::vector<Seen> census;
     std::vector<Cand> cand;  // переживают проходы — векторы не переаллоцируются зря
     std::vector<Ear> ears;
 
@@ -205,16 +212,37 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
                 }
     }
 
+    // ПЕРЕПИСЬ ТЕЛ — по видам ТОЖДЕСТВА, а не по всем `Transform`. Первая
+    // редакция обходила `view<const Transform>` дважды вложенно и платила
+    // 22-83 мс на проход (216-246 тысяч пар, по три поиска в пулах на пару):
+    // прибор замедлял кадр, который мерил. Тот же дефект и то же лечение, что
+    // у самого прохода восприятия ([game/perceive.cpp] `census_bodies`).
+    p.census.clear();
+    {
+        auto add = [&](Entity e, const Transform& tr) {
+            if (tr.layer != layer) return;
+            if (reg.all_of<Dead>(e)) return;
+            p.census.push_back(SightProbe::Seen{e, tr.pos,
+                                                reg.try_get<MobRef>(e),
+                                                reg.all_of<CameraTag>(e)});
+        };
+        auto mobs = reg.view<const Transform, const MobRef>();
+        for (auto e : mobs) add(e, mobs.get<const Transform>(e));
+        auto npcs = reg.view<const Transform, const NpcRef>();
+        for (auto e : npcs)
+            if (!reg.all_of<MobRef>(e)) add(e, npcs.get<const Transform>(e));
+        auto cams = reg.view<const Transform, const CameraTag>();
+        for (auto e : cams)
+            if (!reg.any_of<MobRef, NpcRef>(e))
+                add(e, cams.get<const Transform>(e));
+    }
+
     const auto t0 = std::chrono::steady_clock::now();
-    auto bodies = reg.view<const Transform>();
-    for (auto e : bodies) {
-        const Transform& tr = bodies.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        if (reg.all_of<Dead>(e)) continue;
-        const MobRef* mr = reg.try_get<MobRef>(e);
-        const bool human = reg.all_of<CameraTag>(e);
-        const NpcRef* nr = reg.try_get<NpcRef>(e);
-        if (mr == nullptr && nr == nullptr && !human) continue;  // проп, обломок, снаряд
+    for (const SightProbe::Seen& self : p.census) {
+        const Entity e = self.e;
+        const vec3& pos = self.pos;
+        const MobRef* mr = self.mr;
+        const bool human = self.human;
         const SightWho who = human      ? SightWho::Human
                              : mr != nullptr ? SightWho::Monster
                                              : SightWho::Resident;
@@ -244,27 +272,26 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
 
         const float radius = sight_radius_today(who, mr);
         const float r2 = radius * radius;
-        const vec3 eye{tr.pos.x, tr.pos.y, tr.pos.z + kEyeLiftM};
+        const vec3 eye{pos.x, pos.y, pos.z + kEyeLiftM};
 
-        for (auto t : bodies) {
-            if (t == e) continue;
-            const Transform& tt = bodies.get<const Transform>(t);
-            if (tt.layer != layer) continue;
-            if (reg.all_of<Dead>(t)) continue;
-            const bool tHuman = reg.all_of<CameraTag>(t);
-            if (!tHuman && !reg.all_of<MobRef>(t) && !reg.all_of<NpcRef>(t))
-                continue;
+        for (const SightProbe::Seen& other : p.census) {
+            if (other.e == e) continue;
+            const bool tHuman = other.human;
             ++p.distTests;
-            const float d2 = wrap_dist2(tr.pos, tt.pos, kWorldExtent);
+            const float d2 = wrap_dist2(pos, other.pos, kWorldExtent);
             if (d2 > r2) continue;
             ++p.seen[wi];
             if (tHuman) ++p.humanSeen;
 
+            // ПЕЛЕНГ «ОТ СЕБЯ К ЦЕЛИ»: `wrap_delta_f(a,b)` есть `b − a`. Первая
+            // редакция прибора держала аргументы НАОБОРОТ и мерила ЗАДНИЙ конус
+            // (найдено аудитом 2026-11-12) — тот же дефект, что был пойман
+            // гейтом в самом проходе восприятия, а в приборе пережил его.
+            const float bx = wrap_delta_f(pos.x, other.pos.x, kWorldExtent);
+            const float by = wrap_delta_f(pos.y, other.pos.y, kWorldExtent);
+            const float bz = wrap_delta_f(pos.z, other.pos.z, kWorldExtent);
             bool cone = false;
             if (haveDir && d2 > 1e-6f) {
-                const float bx = wrap_delta_f(tt.pos.x, tr.pos.x, kWorldExtent);
-                const float by = wrap_delta_f(tt.pos.y, tr.pos.y, kWorldExtent);
-                const float bz = wrap_delta_f(tt.pos.z, tr.pos.z, kWorldExtent);
                 const float bl = std::sqrt(d2);
                 cone = (bx * fwd.x + by * fwd.y + bz * fwd.z) / bl >=
                        kGazeCosHalfAngle;
@@ -279,10 +306,12 @@ inline void sight_probe_pass(Registry& reg, const MacroGrid& grid,
                                  ? bin
                                  : SightProbe::kSightBins - 1];
             }
-            // Цель берётся КАК ДАНА, без поиска ближайшего образа: марш обязан
-            // пройти тот же отрезок, тор появляется на запросе к сетке.
+            // БЛИЖАЙШИЙ ОБРАЗ ЦЕЛИ, а не сырая координата: `sub_march` берёт
+            // конец «как дан», и пара на шве тора маршировалась бы через
+            // ПОЛМИРА — заслонена всегда. Тот же ответ, что у прохода
+            // восприятия: конец строится от глаза по свёрнутому пеленгу.
             p.cand.push_back(SightProbe::Cand{
-                eye, vec3{tt.pos.x, tt.pos.y, tt.pos.z + kEyeLiftM},
+                eye, vec3{eye.x + bx, eye.y + by, eye.z + bz},
                 static_cast<std::uint8_t>(wi), cone, tHuman});
         }
     }

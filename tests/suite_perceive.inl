@@ -48,6 +48,12 @@
 // прибор НЕ может поймать эту ошибку, потому что несёт её дословной копией
 // вместо вызова самого прохода).
 //
+// СОСТОЯНИЕ НА 2026-11-12: проход вылечен до посадки (2026-11-09), и блоки
+// ниже зелёные. Копия в приборе ПЕРЕЖИЛА лечение прохода на три дня — прибор
+// мерил ЗАДНИЙ конус и маршировал пары на шве тора через полмира — и
+// вылечена тем же заходом, что блок 14. Абзац оставлен как запись о том, чем
+// кончается дословная копия закона в приборе.
+//
 // Блок 1a ниже изолирует полярность в четыре утверждения и печатает диагноз
 // ПЕРВОЙ строкой — красно там, значит красно и всё, что ниже, и по одной
 // причине.
@@ -179,6 +185,7 @@ inline NoiseProfile rifle_noise() {
 inline void tick_add(PerceiveTick& a, const PerceiveTick& b) {
     a.bodies += b.bodies;
     a.blind += b.blind;
+    a.scanned += b.scanned;
     a.pairsNear += b.pairsNear;
     a.pairsCone += b.pairsCone;
     a.rays += b.rays;
@@ -1594,5 +1601,112 @@ static void test_perceive_all() {
         CHECK(w.guide.led == 0u);
         CHECK(st.reg.get<const Velocity>(obs).v.x == kSentinel);
         CHECK(st.reg.get<const Velocity>(obs).v.y == -kSentinel);
+    }
+
+    // ---- 14. ПРОХОД ПЛАТИТ ЗА ТЕЛА, А НЕ ЗА СУЩНОСТИ ------------------------
+    //
+    // ЗАМЕРЕННЫЙ ДЕФЕКТ, КОТОРЫЙ ЭТОТ БЛОК ОХРАНЯЕТ (2026-11-12, этаж 0,
+    // Release, `--prof`): первая редакция прохода обходила `view<const
+    // Transform>` дважды вложенно, а `Transform` носит ВСЁ, что стоит в мире,
+    // — ~32 тысячи пропов против ~500 тел. Проход стоил 77.6 мс на кадр из
+    // 98.7 (10 кадров в секунду), при том что маршей в тике было ПЯТЬ. Ни один
+    // блок выше этого не видел: все они судят, ЧТО проход ответил, и ни один —
+    // СКОЛЬКО он перебрал.
+    //
+    // ЧТО СУДИТСЯ: `scanned` — число кандидатов, перебранных внутренним
+    // циклом. Закон: за полный период каждое зрячее тело перебирает РОВНО
+    // (тел на слое − 1) кандидатов, и число сущностей без тождества в это
+    // равенство НЕ ВХОДИТ.
+    //
+    // МУТАЦИИ: (а) собрать перепись из `view<const Transform>` без фильтра
+    // тождества — `scanned` вырастет на число пропов; (б) вернуть во
+    // внутренний цикл обход вида — то же. Обратная полярность: (в) выбросить
+    // из переписи жителей — `scanned` упадёт, и пара перестанет находиться.
+    {
+        const float y = 228.125f;
+        Stand st;
+        constexpr int kInert = 1000;  // пропы: позиция есть, тождества нет
+        for (int i = 0; i < kInert; ++i) {
+            const Entity p = st.reg.create();
+            st.reg.emplace<Transform>(
+                p, Transform{vec3{30.1f + 0.01f * static_cast<float>(i), y,
+                                  kStandZ},
+                             st.layer});
+            // Половине — ещё и скорость: обломок и снаряд её носят, и
+            // тождеством она от этого не становится.
+            if ((i & 1) != 0) st.reg.emplace<Velocity>(p, Velocity{});
+        }
+        const vec3 obsAt{30.1f, y, kStandZ};
+        const Entity obs = st.mob(MobKind::Zombie, obsAt);
+        const Entity foe = st.resident(Faction::Citizens,
+                                       vec3{obsAt.x + 5.0f, y, kStandZ});
+        st.aim(obs, vec3{1.0f, 0.0f, 0.0f});
+        st.aim(foe, vec3{-1.0f, 0.0f, 0.0f});
+
+        const Watched w = st.window(grid, obs, 1);
+        CHECK(w.visits == 1u);
+        CHECK(w.sum.bodies == 2u);               // тел ДВА, а не 1002
+        CHECK(w.sum.blind == 0u);
+        // Каждое из двух зрячих тел перебрало ОДНОГО кандидата — другое тело.
+        CHECK(w.sum.scanned == 2u);
+        CHECK(w.sen.foe == foe);                 // и пара при этом НАЙДЕНА
+        std::printf("[восприятие] цена: %d сущностей без тождества рядом с "
+                    "двумя телами — перебрано кандидатов %u (закон: 2)\n",
+                    kInert, static_cast<unsigned>(w.sum.scanned));
+    }
+
+    // ---- 15. РАВНЫЕ РАССТОЯНИЯ РАЗВОДИТ id, А НЕ ПОРЯДОК ОБХОДА -------------
+    //
+    // «Ближайший воспринятый враг» обязан быть свойством МИРА, а не памяти:
+    // при двух врагах на РАВНОМ расстоянии побеждает меньший id — тот же
+    // закон, что у `CellBins::nearest_in_radius`. Без него исход зависел бы от
+    // порядка переписи (сперва монстры, затем жители, каждый пул — с хвоста).
+    //
+    // ДВЕ СЦЕНЫ, ПОТОМУ ЧТО МУТАЦИЙ ДВЕ, и одна сцена ловит ровно одну:
+    //   (а) «побеждает ПОСЛЕДНИЙ в обходе» (`d2 <= best`) — ловит сцена, где
+    //       меньший id стоит в обходе ПЕРВЫМ: враг-монстр, рождённый раньше
+    //       врага-жителя (монстры в переписи впереди);
+    //   (б) «побеждает ПЕРВЫЙ в обходе» (`d2 < best`) — ловит сцена, где
+    //       меньший id стоит в обходе ПОСЛЕДНИМ: два врага-жителя (пул
+    //       обходится с хвоста, старший id идёт первым).
+    // Расстояния равны ТОЧНО: смещения ±1 м по y и 5 м по x представимы во
+    // float без остатка, поэтому равенство d² — свойство сцены, а не удача.
+    {
+        const float y = 232.125f;
+        Stand st;
+        const vec3 obsAt{30.0f, y, kStandZ};
+        // Сцена (а): наблюдатель-житель; враг-МОНСТР рождён РАНЬШЕ врага-жителя.
+        const Entity foeMob =
+            st.mob(MobKind::Zombie, vec3{obsAt.x + 5.0f, y + 1.0f, kStandZ});
+        const Entity foeRes = st.resident(
+            Faction::Wild, vec3{obsAt.x + 5.0f, y - 1.0f, kStandZ});
+        const Entity obs = st.resident(Faction::Citizens, obsAt);
+        st.aim(obs, vec3{1.0f, 0.0f, 0.0f});
+        CHECK(foeMob < foeRes);                  // предпосылка сцены
+        CHECK(wrap_dist2(obsAt, st.reg.get<const Transform>(foeMob).pos,
+                         kWorldExtent) ==
+              wrap_dist2(obsAt, st.reg.get<const Transform>(foeRes).pos,
+                         kWorldExtent));
+        const Watched w = st.window(grid, obs, 1);
+        CHECK(w.visits == 1u);
+        CHECK(w.sen.visible == 2u);              // оба врага восприняты
+        CHECK(w.sen.foe == foeMob);              // ...и выбран МЕНЬШИЙ id
+    }
+    {
+        const float y = 236.125f;
+        Stand st;
+        const vec3 obsAt{30.0f, y, kStandZ};
+        // Сцена (б): два врага-жителя; меньший id обходится ПОСЛЕДНИМ.
+        const Entity foeA = st.resident(
+            Faction::Citizens, vec3{obsAt.x + 5.0f, y + 1.0f, kStandZ});
+        const Entity foeB = st.resident(
+            Faction::Citizens, vec3{obsAt.x + 5.0f, y - 1.0f, kStandZ});
+        const Entity obs = st.mob(MobKind::Zombie, obsAt);
+        st.aim(obs, vec3{1.0f, 0.0f, 0.0f});
+        CHECK(foeA < foeB);                      // предпосылка сцены
+        const Watched w = st.window(grid, obs, 1);
+        CHECK(w.visits == 1u);
+        CHECK(w.sen.visible == 2u);
+        CHECK(w.sen.foe == foeA);                // МЕНЬШИЙ id, а не первый в обходе
     }
 }

@@ -3392,7 +3392,7 @@ int main(int argc, char** argv) {
     struct PerceiveSum {
         std::uint64_t bodies = 0, blind = 0, pairsNear = 0, pairsCone = 0;
         std::uint64_t rays = 0, occluded = 0, sawFoe = 0, heard = 0;
-        std::uint64_t claimSight = 0, claimNoise = 0;
+        std::uint64_t claimSight = 0, claimNoise = 0, scanned = 0;
     } perceiveSum{};
     std::uint64_t perceiveSumTicks = 0;
     game::LookTick lookTick{};
@@ -6081,6 +6081,7 @@ int main(int argc, char** argv) {
                 if (shotAction == "zrenie" && shotFramesSeen >= 450) {
                     perceiveSum.bodies += perceiveTick.bodies;
                     perceiveSum.blind += perceiveTick.blind;
+                    perceiveSum.scanned += perceiveTick.scanned;
                     perceiveSum.pairsNear += perceiveTick.pairsNear;
                     perceiveSum.pairsCone += perceiveTick.pairsCone;
                     perceiveSum.rays += perceiveTick.rays;
@@ -6093,7 +6094,8 @@ int main(int argc, char** argv) {
                         std::fprintf(
                             stderr,
                             "[vospriyatie] floor=%d окно=%llu тиков: посещено "
-                            "%.1f тел/тик (слепых %.2f) | пар в радиусе=%.1f "
+                            "%.1f тел/тик (слепых %.2f) | ПЕРЕБРАНО=%.0f "
+                            "кандидатов/тик | пар в радиусе=%.1f "
                             "из них в конусе=%.1f (%.1f%%) | маршей=%.1f "
                             "ЗАСЛОНЕНО=%.1f (%.1f%% маршей ОТКЛОНЕНО) | "
                             "увидели врага=%.2f, услышали=%.2f, заявок "
@@ -6103,6 +6105,8 @@ int main(int argc, char** argv) {
                             static_cast<double>(perceiveSum.bodies) /
                                 static_cast<double>(perceiveSumTicks),
                             static_cast<double>(perceiveSum.blind) /
+                                static_cast<double>(perceiveSumTicks),
+                            static_cast<double>(perceiveSum.scanned) /
                                 static_cast<double>(perceiveSumTicks),
                             static_cast<double>(perceiveSum.pairsNear) /
                                 static_cast<double>(perceiveSumTicks),

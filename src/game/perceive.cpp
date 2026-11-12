@@ -1,6 +1,7 @@
 #include "game/perceive.h"
 
 #include <cmath>
+#include <vector>
 
 #include "core/rng.h"
 #include "core/wrap.h"
@@ -79,6 +80,53 @@ bool hostile_pair(const NpcPool& pool, const FactionRelations& rel,
     return bodies_hostile(rel, pool, selfId, otherId);
 }
 
+// ПЕРЕПИСЬ ТЕЛ С ТОЖДЕСТВОМ — по ней идут ОБА цикла прохода, наблюдатели и
+// цели.
+//
+// ЗАЧЕМ ОНА ЕСТЬ: ЛЕЧЕНИЕ ЗАМЕРЕННОГО ДЕФЕКТА (2026-11-12, этаж 0, Release,
+// `--prof`). Первая редакция прохода обходила `view<const Transform>` дважды
+// вложенно, а `Transform` носит ВСЁ, что стоит в мире: на этаже 0 это ~32 тысячи
+// пропов против ~500 тел. Проход стоил **77.6 мс на кадр из 98.7** (~9.7 мс на
+// тик, восемь тиков в кадре, остальные отброшены) — игра шла в 10 кадров в
+// секунду, и дело было не в лучах: маршей в тике пять. Шапка заголовка при этом
+// сообщала «0.166 мс на проход» — она мерила МАРШ и не мерила ПРОХОД (AGENTS.md
+// «Measure the thing»: метрика была зелёной, а кадр — нет).
+//
+// ФОРМА — «обход по записям» ([sim/cell_bins.h] `nearest_in_radius`): дальность
+// зрения 20-30 м накрывает тысячи клеток, поэтому поиск идёт по ТЕЛАМ, а не по
+// клеткам, и стоит O(тел) на наблюдателя независимо от радиуса. Перепись
+// собирается из видов ТОЖДЕСТВА (`MobRef`, `NpcRef`): EnTT ведёт многокомпонентный
+// вид по меньшему пулу, поэтому сборка стоит O(тел), а не O(сущностей).
+//
+// Указатели на строки тождества живут до конца прохода: проход рождает только
+// `Senses` и `Steer`, пулы `MobRef`/`NpcRef` он не трогает.
+struct Body {
+    Entity e;
+    vec3 pos;
+    const MobRef* mr;
+    const NpcRef* nr;
+};
+
+void census_bodies(Registry& reg, LayerId layer, std::vector<Body>& out) {
+    out.clear();
+    auto mobs = reg.view<const Transform, const MobRef>();
+    for (auto e : mobs) {
+        const Transform& tr = mobs.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        if (reg.all_of<Dead>(e)) continue;  // труп не воспринимает и не воспринимается
+        out.push_back(Body{e, tr.pos, &mobs.get<const MobRef>(e),
+                           reg.try_get<NpcRef>(e)});
+    }
+    auto npcs = reg.view<const Transform, const NpcRef>();
+    for (auto e : npcs) {
+        if (reg.all_of<MobRef>(e)) continue;  // уже вписан первым видом
+        const Transform& tr = npcs.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        if (reg.all_of<Dead>(e)) continue;
+        out.push_back(Body{e, tr.pos, nullptr, &npcs.get<const NpcRef>(e)});
+    }
+}
+
 } // namespace
 
 PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
@@ -95,15 +143,16 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
     // до его открытия (тот же довод, что у `steer_pool_warm` в [game/guide.h]).
     (void)reg.storage<Senses>();
     steer_pool_warm(reg);
-    auto bodies = reg.view<const Transform>();
-    for (auto e : bodies) {
-        const Transform& tr = bodies.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        if (reg.all_of<Dead>(e)) continue;
-        const MobRef* mr = reg.try_get<MobRef>(e);
-        const NpcRef* nr = reg.try_get<NpcRef>(e);
+    // Буфер переживает проходы — аллокаций в тике нет (тот же приём, что у
+    // бинов в [game/combat.cpp]).
+    static thread_local std::vector<Body> bodies;
+    census_bodies(reg, layer, bodies);
+    for (const Body& self : bodies) {
+        const Entity e = self.e;
+        const vec3& pos = self.pos;
+        const MobRef* mr = self.mr;
+        const NpcRef* nr = self.nr;
         const bool human = reg.all_of<CameraTag>(e);
-        if (mr == nullptr && nr == nullptr) continue;  // проп, обломок, снаряд
         if (hash_u32(static_cast<std::uint32_t>(entt::to_integral(e))) %
                 kPerceivePeriod !=
             phase)
@@ -129,21 +178,19 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
         sen.heardSev = 0;
         sen.tick = stamp;
 
-        const vec3 eye{tr.pos.x, tr.pos.y, tr.pos.z + kEyeLiftM};
+        const vec3 eye{pos.x, pos.y, pos.z + kEyeLiftM};
         float bestDist2 = sight2;
         vec3 bestBearing{0.0f, 0.0f, 0.0f};
 
         if (!blind) {
-            for (auto t : bodies) {
+            for (const Body& other : bodies) {
+                const Entity t = other.e;
                 if (t == e) continue;
-                const Transform& tt = bodies.get<const Transform>(t);
-                if (tt.layer != layer) continue;
-                if (reg.all_of<Dead>(t)) continue;
-                const MobRef* tmr = reg.try_get<MobRef>(t);
-                const NpcRef* tnr = reg.try_get<NpcRef>(t);
-                if (tmr == nullptr && tnr == nullptr) continue;
+                ++out.scanned;
+                const MobRef* tmr = other.mr;
+                const NpcRef* tnr = other.nr;
                 // ОТСЕЧКА 1 — дистанция, тороидальная.
-                const float d2 = wrap_dist2(tr.pos, tt.pos, kWorldExtent);
+                const float d2 = wrap_dist2(pos, other.pos, kWorldExtent);
                 if (d2 > sight2) continue;
                 if (!hostile_pair(pool, rel, mr != nullptr,
                                   nr != nullptr ? nr->id : kInvalidNpc,
@@ -157,9 +204,9 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
                 // вела ОТ врага; поймано гейтом нового сьюта до прогона.
                 // Конвенция — та же, что у погони (`wander.cpp`) и у
                 // `steer_to_zone`.
-                const float bx = wrap_delta_f(tr.pos.x, tt.pos.x, kWorldExtent);
-                const float by = wrap_delta_f(tr.pos.y, tt.pos.y, kWorldExtent);
-                const float bz = wrap_delta_f(tr.pos.z, tt.pos.z, kWorldExtent);
+                const float bx = wrap_delta_f(pos.x, other.pos.x, kWorldExtent);
+                const float by = wrap_delta_f(pos.y, other.pos.y, kWorldExtent);
+                const float bz = wrap_delta_f(pos.z, other.pos.z, kWorldExtent);
                 // ОТСЕЧКА 2 — КОНУС. Агностичен к тому, что в клетке: это
                 // чистая геометрия над направлением взгляда любого тела.
                 if (!looking_at(look->dir, bx, by, bz, row.fovCos)) continue;
@@ -177,7 +224,12 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
                     continue;
                 }
                 if (sen.visible < 255) ++sen.visible;
-                if (d2 <= bestDist2) {
+                // РАВНЫЕ РАССТОЯНИЯ РАЗВОДИТ id, А НЕ ПОРЯДОК ОБХОДА: «ближайший
+                // враг» обязан быть свойством мира, а не памяти (тот же закон,
+                // что у `CellBins::nearest_in_radius`). Иначе смена порядка
+                // переписи меняла бы исход на симметричной сцене.
+                if (sen.foe == entt::null || d2 < bestDist2 ||
+                    (d2 == bestDist2 && t < sen.foe)) {
                     bestDist2 = d2;
                     bestBearing = vec3{bx, by, bz};
                     sen.foe = t;
@@ -222,7 +274,7 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
         if (hearMult <= 0.0f) continue;
         float dist = 0.0f;
         const Noise* n = loudest_heard(
-            noise, layer, tr.pos, hearMult,
+            noise, layer, pos, hearMult,
             kInvestigateMinSeverity,
             static_cast<std::uint32_t>(entt::to_integral(e)), &dist);
         if (n == nullptr) continue;
@@ -238,9 +290,9 @@ PerceiveTick perceive_step(Registry& reg, const MacroGrid& grid,
                 ++out.claimNoise;
             continue;
         }
-        const float hx = wrap_delta_f(tr.pos.x, n->x, kWorldExtent);
-        const float hy = wrap_delta_f(tr.pos.y, n->y, kWorldExtent);
-        const float hz = wrap_delta_f(tr.pos.z, n->z, kWorldExtent);
+        const float hx = wrap_delta_f(pos.x, n->x, kWorldExtent);
+        const float hy = wrap_delta_f(pos.y, n->y, kWorldExtent);
+        const float hz = wrap_delta_f(pos.z, n->z, kWorldExtent);
         const float sp = mr != nullptr
                              ? static_cast<float>(
                                    mob_def(static_cast<MobKind>(mr->kind)).speedMmps) *

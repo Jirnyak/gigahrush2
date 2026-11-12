@@ -89,13 +89,11 @@ struct LookTick {
 // это марковски честно — величина выводится из состояния, а не из истории.
 inline LookTick look_step(Registry& reg, LayerId layer, const GravityFrame& gf) {
     LookTick out{};
-    for (auto e : reg.view<const Transform>()) {
-        const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        // Тождество — то же, что у прибора ведения: проп, обломок и снаряд
-        // взгляда не имеют, потому что не смотрят.
-        const bool human = reg.all_of<CameraTag>(e);
-        if (!human && !reg.all_of<NpcRef>(e) && !reg.all_of<MobRef>(e)) continue;
+    // Хранилище взгляда существует ДО открытия видов: первое тело рождает
+    // `Look` внутри обхода (тот же довод, что у `steer_pool_warm`).
+    (void)reg.storage<Look>();
+    auto visit = [&](Entity e, const Transform& tr, bool human) {
+        if (tr.layer != layer) return;
         ++out.bodies;
         Look* look = reg.try_get<Look>(e);
         if (look == nullptr) {
@@ -104,7 +102,7 @@ inline LookTick look_step(Registry& reg, LayerId layer, const GravityFrame& gf) 
                                                entt::to_integral(e)))});
             ++out.born;
             look = reg.try_get<Look>(e);
-            if (look == nullptr) continue;
+            if (look == nullptr) return;
         }
         if (human) {
             // Решатель `Human` — не исключение, а ВЕТКА: у этого тела есть
@@ -113,16 +111,37 @@ inline LookTick look_step(Registry& reg, LayerId layer, const GravityFrame& gf) 
             const CameraTag& cam = reg.get<const CameraTag>(e);
             look->dir = camera_forward(cam.yaw, cam.pitch);
             ++out.human;
-            continue;
+            return;
         }
         const Velocity* vel = reg.try_get<Velocity>(e);
-        if (vel == nullptr) { ++out.held; continue; }
+        if (vel == nullptr) { ++out.held; return; }
         const vec3 tan = steer_tangent(gf, vel->v.x, vel->v.y, vel->v.z);
         const float len = std::sqrt(tan.x * tan.x + tan.y * tan.y +
                                     tan.z * tan.z);
-        if (len < kWalkSpeedMps * kLookMovingFrac) { ++out.held; continue; }
+        if (len < kWalkSpeedMps * kLookMovingFrac) { ++out.held; return; }
         look->dir = vec3{tan.x / len, tan.y / len, tan.z / len};
         ++out.moved;
+    };
+    // ОБХОД — ПО ВИДАМ ТОЖДЕСТВА, А НЕ ПО ВСЕМ `Transform`. Тождество то же,
+    // что у прибора ведения: проп, обломок и снаряд взгляда не имеют, потому
+    // что не смотрят, — а `Transform` носят и они (на этаже 0 это ~32 тысячи
+    // пропов против ~500 тел). Та же болезнь и то же лечение, что у прохода
+    // восприятия ([game/perceive.cpp] `census_bodies`, замер 2026-11-12): вид
+    // по пулу тождества стоит O(тел), вид по `Transform` — O(сущностей).
+    // Три вида покрывают объединение «монстр | житель | носитель камеры», и
+    // каждое тело посещается РОВНО РАЗ: следующий вид пропускает уже посещённых.
+    auto mobs = reg.view<const Transform, const MobRef>();
+    for (auto e : mobs)
+        visit(e, mobs.get<const Transform>(e), reg.all_of<CameraTag>(e));
+    auto npcs = reg.view<const Transform, const NpcRef>();
+    for (auto e : npcs) {
+        if (reg.all_of<MobRef>(e)) continue;
+        visit(e, npcs.get<const Transform>(e), reg.all_of<CameraTag>(e));
+    }
+    auto cams = reg.view<const Transform, const CameraTag>();
+    for (auto e : cams) {
+        if (reg.any_of<MobRef, NpcRef>(e)) continue;
+        visit(e, cams.get<const Transform>(e), true);
     }
     return out;
 }
