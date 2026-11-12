@@ -21,23 +21,21 @@ namespace {
 // системы: тело 0.8 м у клетки 2 м — работать дверью можно из соседней.
 constexpr float kDoorReachM = 2.6f;
 
-// Проём-колонна модуля -> группа: клетки с ПОЛНОЙ формой allow (дверь
-// занимает весь проём; решётки и частичные формы модуль объявит теми же
-// битами, когда возьмётся). Центр ВЫВЕДЕН из клеток — представитель для
-// прицела и дистанций.
+// Проём-колонна -> группа: каждая клетка проёма несёт ФОРМУ ПОЛОТНА `leaf` —
+// сечение стены, в которой проём прорезан ([game/floor_gen.h] `Doorway::leaf`).
+// Центр ВЫВЕДЕН из клеток — представитель для прицела и дистанций.
 MaskGroup column_group(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
-                       std::uint8_t h, CellType mat, std::uint8_t mechanism) {
+                       std::uint8_t h, CellType mat, std::uint8_t mechanism,
+                       const SubMask& leaf) {
     MaskGroup g;
     g.props = kMaskDoor;
     g.mat = mat;
     g.mechanism = mechanism;
-    SubMask full;
-    for (std::size_t wd = 0; wd < kSubMaskWords; ++wd) full.words[wd] = ~0ull;
     for (int z = cz; z < cz + h; ++z)
         g.cells.push_back(MaskCell{
             static_cast<std::uint32_t>(
                 macro_index(cx, cy, wrap_macro(z))),
-            full});
+            leaf});
     g.centre = vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
                     (static_cast<float>(cy) + 0.5f) * kCellSize,
                     (static_cast<float>(cz) + static_cast<float>(h) * 0.5f) *
@@ -45,26 +43,62 @@ MaskGroup column_group(std::uint8_t cx, std::uint8_t cy, std::uint8_t cz,
     return g;
 }
 
-bool body_in_portal(const MaskGroup& g, const Registry& reg, LayerId layer) {
-    auto view = reg.view<const Transform>();
-    for (auto e : view) {
-        const Transform& tr = view.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        const std::uint32_t ci = static_cast<std::uint32_t>(macro_index(
-            wrap_macro(static_cast<int>(tr.pos.x / kCellSize)),
-            wrap_macro(static_cast<int>(tr.pos.y / kCellSize)),
-            wrap_macro(static_cast<int>(tr.pos.z / kCellSize))));
-        for (const MaskCell& mc : g.cells)
-            if (mc.ci == ci) return true;
-    }
-    return false;
-}
-
 // Обратная macro_index: координаты клетки из ci (x + y*dim + z*dim²).
 void cell_coords(std::uint32_t ci, int& x, int& y, int& z) {
     x = static_cast<int>(ci % kMacroDim);
     y = static_cast<int>((ci / kMacroDim) % kMacroDim);
     z = static_cast<int>(ci / (kMacroDim * kMacroDim));
+}
+
+// «ПОЛОТНО ЗАМУРУЕТ ТЕЛО?» — пересекает ли коробка хоть одного тела хоть один
+// АТОМ ПОЛОТНА.
+//
+// ЧТО ЗДЕСЬ СТОЯЛО, И ПОЧЕМУ ТЕЛО ЗАСТРЕВАЛО (баг владельца 2026-11-12:
+// «персонаж сам застревает часто в двери при закрытии»; сторож
+// `[soak] EVENT stuck` поймал его в логе приёмки). Вопрос задавался КЛЕТКЕ
+// ЦЕНТРА тела: `macro_index(pos / kCellSize)` среди клеток группы. Тело
+// полуширины 0.4 м, чей центр стоял в соседней клетке, а бок — в проёме,
+// отказа не получало, и полотно штамповалось сквозь него. Вдобавок клетка
+// бралась усечением, а не полом. Это локальный вопрос о материи, а на такой
+// отвечают субвокселем, не клеткой (CANON S2).
+//
+// Коробка берётся по ближайшему образу тора; касание грани пересечением не
+// считается (правая граница исключена).
+bool body_in_portal(const MaskGroup& g, const Registry& reg, LayerId layer) {
+    auto view = reg.view<const Transform, const AABB>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const vec3 half = view.get<const AABB>(e).half;
+        const float p[3] = {tr.pos.x, tr.pos.y, tr.pos.z};
+        const float h[3] = {half.x, half.y, half.z};
+        for (const MaskCell& mc : g.cells) {
+            int c[3] = {0, 0, 0};
+            cell_coords(mc.ci, c[0], c[1], c[2]);
+            int s0[3] = {0, 0, 0}, s1[3] = {0, 0, 0};
+            bool apart = false;
+            for (int a = 0; a < 3 && !apart; ++a) {
+                // Центр тела относительно НИЗА клетки, ближайшим образом.
+                const float mid =
+                    (static_cast<float>(c[a]) + 0.5f) * kCellSize;
+                const float r =
+                    wrap_delta_f(mid, p[a], kWorldExtent) + 0.5f * kCellSize;
+                const int lo = static_cast<int>(
+                    std::floor((r - h[a]) / kVoxelSize));
+                const int hi = static_cast<int>(
+                                   std::ceil((r + h[a]) / kVoxelSize)) - 1;
+                s0[a] = lo < 0 ? 0 : lo;
+                s1[a] = hi > kSubDim - 1 ? kSubDim - 1 : hi;
+                apart = s0[a] > s1[a];
+            }
+            if (apart) continue;
+            for (int sz = s0[2]; sz <= s1[2]; ++sz)
+                for (int sy = s0[1]; sy <= s1[1]; ++sy)
+                    for (int sx = s0[0]; sx <= s1[0]; ++sx)
+                        if (mc.allow.test(sub_bit(sx, sy, sz))) return true;
+        }
+    }
+    return false;
 }
 
 float group_dist2(const MaskGroup& g, const vec3& pos) {
@@ -93,7 +127,15 @@ void door_declare(Doors& doors, const FloorRooms& rooms, int number,
         return r != nullptr && (r->tags & kRoomTagHermetic) != 0;
     };
 
+    std::uint32_t shapeless = 0;
     for (const Doorway& w : ways) {
+        // Проём без формы полотна — дефект модуля, и он кричит: молчаливая
+        // подстановка «полной клетки» вернула бы ровно тот блок 2 × 2 × 4 м,
+        // от которого форма и заведена.
+        if (w.leaf.empty()) {
+            ++shapeless;
+            continue;
+        }
         // Стороны проёма поперёк его оси; z — воздух его же яруса.
         const bool herm =
             w.axis == 0 ? (hermetic_side(w.cx - 1, w.cy, w.cz) ||
@@ -102,8 +144,14 @@ void door_declare(Doors& doors, const FloorRooms& rooms, int number,
                            hermetic_side(w.cx, w.cy + 1, w.cz));
         doors.list.push_back(column_group(
             w.cx, w.cy, w.cz, w.h,
-            herm ? kMatDoorHermetic : kMatDoorSteel, /*mechanism=*/0));
+            herm ? kMatDoorHermetic : kMatDoorSteel, /*mechanism=*/0,
+            w.leaf));
     }
+    if (shapeless != 0)
+        std::fprintf(stderr,
+                     "[door] ДЕФЕКТ МОДУЛЯ: %u проёмов объявлены без формы "
+                     "полотна (Doorway::leaf пуст) — двери в них не стоят\n",
+                     shapeless);
 
     // Диагностика UX (владелец 2026-08-28 «не вижу табличек»): гистограмма
     // высот — координаты для проверки радиуса в логе.
@@ -130,11 +178,17 @@ void door_declare(Doors& doors, const FloorRooms& rooms, int number,
         const int dx = e.side == 0 ? 1 : e.side == 1 ? -1 : 0;
         const int dy = e.side == 2 ? 1 : e.side == 3 ? -1 : 0;
         doors.lift[hub] = static_cast<std::uint32_t>(doors.list.size());
+        // Тот же закон, что у двери модуля: полотно — сечение стены, в
+        // которой проём прорезан. Стенка столба лифта — полная клетка, значит
+        // и створка — полная клетка; это не исключение, а то же правило на
+        // другой толщине стены.
+        SubMask shaftWall;
+        shaftWall.set_all();
         doors.list.push_back(column_group(
             static_cast<std::uint8_t>(wrap_macro(hcx + dx)),
             static_cast<std::uint8_t>(wrap_macro(hcy + dy)),
             static_cast<std::uint8_t>(e.h), /*h=*/1, kMatDoorSteel,
-            /*mechanism=*/1));
+            /*mechanism=*/1, shaftWall));
     }
 }
 
@@ -178,8 +232,17 @@ void stamp_group(World& w, const MaskGroup& g,
             pg[b] = g.mat;
             wrote = true;
         }
-        if (m.full()) w.grid().set_cell(cx, cy, cz, g.mat);
         if (wrote) {
+            // ТИП КЛЕТКИ — БАЗА ЕЁ МАТЕРИИ, тем же законом, что у генератора
+            // (`put_bits`: воздушная клетка, получившая первую материю, берёт
+            // её тип). Пока полотном была полная клетка, тип ставился «когда
+            // маска полна» — и этого хватало; у полотна-сечения клетка полной
+            // не становится никогда, а клетка типа «воздух» с материей внутри
+            // врёт двум читателям сразу: якорь на ней мёртв по первому же
+            // условию (`anchor_alive`), а бейк света прощает её атомы по
+            // прозрачности воздуха.
+            if (w.grid().types()[mc.ci] == kCellAir)
+                w.grid().set_cell(cx, cy, cz, g.mat);
             medium_recount(w, mc.ci, pg);
             dirty.push_back(mc.ci);
         }
@@ -213,7 +276,11 @@ void clear_group(World& w, const MaskGroup& g,
             wrote = true;
         }
         if (wrote) {
-            if (m.empty()) w.grid().set_cell(cx, cy, cz, kCellAir);
+            // Полотно ушло — клетка не имеет права числиться его материалом:
+            // тип возвращается к воздуху, если его ставило полотно (зеркало
+            // правила в `stamp_group`) или если в клетке не осталось тверди.
+            if (m.empty() || w.grid().types()[mc.ci] == g.mat)
+                w.grid().set_cell(cx, cy, cz, kCellAir);
             medium_recount(w, mc.ci, pg);
             dirty.push_back(mc.ci);
         }

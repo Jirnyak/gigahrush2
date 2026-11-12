@@ -139,8 +139,19 @@ void add_wall(Plan& p, int axis, int c, int a0, int a1) {
     p.walls.push_back({static_cast<std::uint8_t>(axis), w8(c), w8(a0),
                        static_cast<std::uint8_t>(a1 - a0 + 1)});
 }
+// Сечение полотна — ТА ЖЕ полоса, которой `stamp_walls` штампует стену
+// (`kWallX34` у линии x == c, `kWallY34` у линии y == c), на все восемь слоёв
+// клетки: проём есть ровно то место, где стена эту полосу пропустила.
+SubMask wall_section(int axis) {
+    SubMask m;
+    const std::uint64_t pat = axis == 0 ? kWallX34 : kWallY34;
+    for (std::size_t wz = 0; wz < kSubMaskWords; ++wz) m.words[wz] = pat;
+    return m;
+}
+
 void add_door(Plan& p, int x, int y, int axis) {
-    p.doors.push_back({w8(x), w8(y), 0, 2, static_cast<std::uint8_t>(axis)});
+    p.doors.push_back({w8(x), w8(y), 0, 2, static_cast<std::uint8_t>(axis),
+                       wall_section(axis)});
     p.opening[p2(x, y)] = 1;
 }
 

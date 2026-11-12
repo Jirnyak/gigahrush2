@@ -290,11 +290,15 @@ std::size_t kind_row(const FloorSpec& spec) { return kind_row(spec.kind); }
 // все строки разом); без поднятия фикс не доехал бы до обжитых сейвов —
 // столбы едут в снимок обычными клетками, restore не перештамповывает.
 constexpr ModuleVersionRow kModuleGenVersions[] = {
-    {FloorKind::Residential, 2}, // padic геометрия
-    {FloorKind::Commercial,  2},
-    {FloorKind::Industrial,  2},
-    {FloorKind::Derelict,    2},
-    {FloorKind::Padic,       2},
+    // 2 -> 3 (2026-11-12): полотно двери стало СЕЧЕНИЕМ СТЕНЫ вместо полной
+    // клетки. Геометрия генератора не менялась, но закрытая дверь едет в
+    // снимок материей, и прежний блок 2 × 2 × 4 м новая форма при открытии
+    // сняла бы не целиком. Этажи без дверей модуля (блейм, хрущи) не подняты.
+    {FloorKind::Residential, 3}, // padic геометрия
+    {FloorKind::Commercial,  3},
+    {FloorKind::Industrial,  3},
+    {FloorKind::Derelict,    3},
+    {FloorKind::Padic,       3},
     {FloorKind::Blame,       2},
     {FloorKind::Khrushi,     2},
 };

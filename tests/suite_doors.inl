@@ -13,6 +13,7 @@
 #include "game/floor_gen.h"
 #include "game/floor_spec.h"
 #include "game/save.h"
+#include "sim/physics.h"      // aabb_overlaps_solid — «тело не замуровано»
 #include "world/world.h"
 
 namespace doors_test {
@@ -66,12 +67,57 @@ void declaration_and_toggle() {
     CHECK(!door_closed(w, p));
     CHECK(!dirty.empty());
 
-    // Тело в проёме — отказ закрытия (не замуровываем).
+    // ПОЛОТНО — СЕЧЕНИЕ СТЕНЫ, А НЕ КЛЕТКА (владелец 2026-11-12: «дверь
+    // просто заполняет дверной проём… толщиной дверного проёма»). У падика
+    // стена — полоса в два атома по центру клетки; ровно её и занимает
+    // полотно, и больше ничего. Мутация: вернуть полную форму `allow`.
+    {
+        int leafAtoms = 0;
+        for (int b = 0; b < kSubVoxels; ++b)
+            if (p.cells.front().allow.test(b)) ++leafAtoms;
+        CHECK(leafAtoms == 2 * kSubDim * kSubDim);   // 2 атома × грань 8×8
+        CHECK(!p.cells.front().allow.full());
+    }
+    // Ось прохода — поперёк полосы: полоса `sx ∈ {3,4}` значит идём вдоль x.
+    const bool alongX = p.cells.front().allow.test(sub_bit(3, 0, 0));
+    const auto beside = [&](float off) {
+        return alongX ? vec3{at.x + off, at.y, at.z}
+                      : vec3{at.x, at.y + off, at.z};
+    };
+
+    // Тело в проёме — отказ закрытия (не замуровываем). Тело — то, у чего есть
+    // коробка: вопрос задаётся АТОМАМ полотна, а не клетке центра.
     Entity body = reg.create();
     reg.emplace<Transform>(body, Transform{at, 0});
+    reg.emplace<AABB>(body, AABB{});
     dirty.clear();
     CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == kNoPortal);
     CHECK(!door_closed(w, p));
+
+    // ГРАНИЦА ЗАКОНА, обе полярности (баг владельца: «персонаж застревает в
+    // двери при закрытии»). Полоса лежит в ±0.25 м от центра клетки, тело —
+    // полуширины 0.4 м.
+    //   * бок тела заходит в полосу на 5 см — ОТКАЗ. Прежний вопрос «в той ли
+    //     клетке центр» отвечал то же самое случайно; мутация, которую ловит
+    //     эта пара, — вернуть вопрос клетке (см. вторую половину);
+    //   * тело стоит В ТОЙ ЖЕ КЛЕТКЕ ПРОЁМА, но мимо полосы (зазор 5 см) —
+    //     дверь ЗАКРЫВАЕТСЯ, и тело при этом не замуровано. Вопрос клетке
+    //     здесь отказал бы; полная клетка-полотно — замуровала бы.
+    const vec3 half = reg.get<const AABB>(body).half;
+    reg.get<Transform>(body).pos = beside(0.25f + half.x - 0.05f);
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == kNoPortal);
+    CHECK(!door_closed(w, p));
+    reg.get<Transform>(body).pos = beside(0.25f + half.x + 0.05f);
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
+    CHECK(door_closed(w, p));
+    CHECK(!aabb_overlaps_solid(w, reg.get<const Transform>(body).pos, half));
+    // Вернуть сцену: открыть и убрать тело от проёма.
+    dirty.clear();
+    CHECK(door_toggle_near(w, d, reg, 0, at, dirty) == id);
+    CHECK(!door_closed(w, p));
+    reg.destroy(body);
 
     // Механизм-API: лифтовая створка закрывается/открывается машиной,
     // акторный запрос её не видит.
