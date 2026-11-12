@@ -1593,9 +1593,17 @@ std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
 
 std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer)
 {
-    // Щитков на этаж — десятки (полоса ~0.35% настенных клеток), ламп —
-    // тысячи: разовый O(лампы × щитки) на прибытии, в кадре — ноль поиска
-    // (кэш в PropLight).
+    // БЛИЖАЙШИЙ ЩИТОК — ЧЕРЕЗ КОРЗИНЫ, А НЕ ПЕРЕБОРОМ. Здесь стоял разовый
+    // O(лампы × щитки) с доводом «щитков на этаж — десятки». Замер приёмки
+    // 2026-11-12: на плотной геометрии щитков ~2.3 тысячи (7 из 11 в полосе
+    // настенных устройств), ламп ~11.3 тысячи — 25 миллионов расстояний и
+    // 98–105 мс на главном потоке В КАЖДОМ входе на этаж, в кадре «двери+нав»
+    // лифтовой поездки.
+    //
+    // ОТВЕТ ТОТ ЖЕ БИТ-В-БИТ, и это гейт, а не намерение
+    // ([tests/suite_shield.inl] сверяет с перебором): то же `wrap_dist2` на
+    // той же паре, а ничью решает МЕНЬШИЙ НОМЕР щитка в порядке вида — ровно
+    // тот, на котором остановился бы перебор со строгим «меньше».
     struct ShieldRef { vec3 pos; ShieldProgram prog; };
     static std::vector<ShieldRef> shields;
     shields.clear();
@@ -1604,6 +1612,32 @@ std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer)
         const Transform& tr = sview.get<const Transform>(e);
         if (tr.layer != layer) continue;
         shields.push_back({tr.pos, sview.get<const ShieldProgram>(e)});
+    }
+
+    // Корзины — куб тора с ребром в 8 клеток (16 м), 16³ штук: та же ступень,
+    // что у бинов зон ([room.h] kRoomBinEdge). Раскладка счётом: внутри
+    // корзины щитки стоят по возрастанию номера.
+    constexpr int kEdge = kRoomBinEdge;
+    constexpr int kDim = kMacroDim / kEdge;
+    constexpr float kEdgeM = static_cast<float>(kEdge) * kCellSize;
+    static_assert(kMacroDim % kEdge == 0, "корзины делят ось тора нацело");
+    const auto bin_axis = [](float m) {
+        return static_cast<int>(wrapf(m, kWorldExtent) / kEdgeM) & (kDim - 1);
+    };
+    const auto bin_of = [&](const vec3& p) {
+        return (bin_axis(p.z) * kDim + bin_axis(p.y)) * kDim + bin_axis(p.x);
+    };
+    static std::vector<std::uint32_t> binStart, binItems;
+    binStart.assign(static_cast<std::size_t>(kDim) * kDim * kDim + 1, 0);
+    for (const ShieldRef& s : shields) ++binStart[bin_of(s.pos) + 1];
+    for (std::size_t b = 1; b < binStart.size(); ++b)
+        binStart[b] += binStart[b - 1];
+    binItems.assign(shields.size(), 0);
+    {
+        static std::vector<std::uint32_t> cursor;
+        cursor.assign(binStart.begin(), binStart.end() - 1);
+        for (std::uint32_t i = 0; i < shields.size(); ++i)
+            binItems[cursor[bin_of(shields[i].pos)]++] = i;
     }
 
     std::uint32_t n = 0;
@@ -1615,16 +1649,52 @@ std::uint32_t assign_lamp_shields(Registry& reg, LayerId layer)
         // Фазы — только у общей сети, ровно как power cut (S15.4).
         if (static_cast<FlickerProfile>(pl.flicker) != FlickerProfile::Mains)
             continue;
-        const ShieldRef* best = nullptr;
+        if (shields.empty()) continue; // этаж без щитков — круглосуточно
+
+        const int bx = bin_axis(tr.pos.x), by = bin_axis(tr.pos.y),
+                  bz = bin_axis(tr.pos.z);
+        std::uint32_t best = 0;
         float bestD2 = 0.0f;
-        for (const ShieldRef& s : shields) {
-            const float d2 = wrap_dist2(s.pos, tr.pos, kWorldExtent);
-            if (best == nullptr || d2 < bestD2) { best = &s; bestD2 = d2; }
+        bool have = false;
+        // Кольца корзин по Чебышёву. Перед кольцом r осмотрено всё ближе r, а
+        // любая точка неосмотренной корзины лежит не ближе (r − 1) рёбер:
+        // лампа может стоять у дальней грани своей. Лучший строго ближе этого
+        // — дальше искать нечего. Равенство НЕ останавливает: там может
+        // стоять щиток с меньшим номером на том же расстоянии.
+        for (int r = 0; r <= kDim / 2; ++r) {
+            if (have && r >= 2) {
+                const float bound = static_cast<float>(r - 1) * kEdgeM;
+                if (bestD2 < bound * bound) break;
+            }
+            for (int dz = -r; dz <= r; ++dz)
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx) {
+                        const int adx = dx < 0 ? -dx : dx;
+                        const int ady = dy < 0 ? -dy : dy;
+                        const int adz = dz < 0 ? -dz : dz;
+                        if (adx != r && ady != r && adz != r) continue;
+                        const int b = (((bz + dz) & (kDim - 1)) * kDim +
+                                       ((by + dy) & (kDim - 1))) *
+                                          kDim +
+                                      ((bx + dx) & (kDim - 1));
+                        for (std::uint32_t k = binStart[b]; k < binStart[b + 1];
+                             ++k) {
+                            const std::uint32_t idx = binItems[k];
+                            const float d2 = wrap_dist2(shields[idx].pos,
+                                                        tr.pos, kWorldExtent);
+                            if (!have || d2 < bestD2 ||
+                                (d2 == bestD2 && idx < best)) {
+                                best = idx;
+                                bestD2 = d2;
+                                have = true;
+                            }
+                        }
+                    }
         }
-        if (best == nullptr) continue; // этаж без щитков — круглосуточно
-        std::copy(std::begin(best->prog.levels), std::end(best->prog.levels),
+        const ShieldRef& s = shields[best];
+        std::copy(std::begin(s.prog.levels), std::end(s.prog.levels),
                   std::begin(pl.phaseLevels));
-        pl.phaseOffset = best->prog.phaseOffset;
+        pl.phaseOffset = s.prog.phaseOffset;
         ++n;
     }
     return n;

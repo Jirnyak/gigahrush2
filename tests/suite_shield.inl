@@ -133,6 +133,97 @@ static void test_lamp_takes_nearest_shield_wrapped() {
     CHECK(reg.get<PropLight>(lampAuto).phaseLevels[3] == 100); // дефолт цел
 }
 
+// КОРЗИНЫ ОБЯЗАНЫ ДАВАТЬ ОТВЕТ ПЕРЕБОРА БИТ-В-БИТ. `assign_lamp_shields` ищет
+// ближайший щиток по корзинам тора (замер приёмки 2026-11-12: перебор стоил
+// 98–105 мс на главном потоке в каждом входе на этаж). Оракул здесь —
+// дословно прежний закон: первый по порядку вида среди ближайших.
+//
+// Каждому щитку — своя метка (номер в двух байтах программы), поэтому «какой
+// щиток взят» читается с лампы без догадок.
+static void test_lamp_shield_bins_equal_bruteforce() {
+    using namespace giga;
+    using namespace giga::game;
+    struct Scene {
+        std::uint32_t shields, lamps;
+        bool lattice; // точки на решётке 4 м: точные ничьи десятками
+        std::uint32_t salt;
+    };
+    const Scene scenes[] = {
+        {2300u, 6000u, false, 0xA1u}, // плотная геометрия: щиток почти в каждой корзине
+        {97u, 500u, false, 0xB2u},    // открытая: до щитка несколько колец корзин
+        {3u, 400u, false, 0xC3u},     // почти пусто: кольца до конца тора
+        {600u, 3000u, true, 0xD4u},   // решётка: ничьи, судит порядок
+        {1u, 50u, false, 0xE5u},
+    };
+    const auto point = [](std::uint32_t h, bool lattice) {
+        const auto axis = [&](std::uint32_t salt) {
+            const std::uint32_t r = hash_u32(h ^ salt);
+            if (lattice) // 64 узла по оси, включая 0 — ровно на шве тора
+                return static_cast<float>(r % 64u) * 4.0f;
+            return static_cast<float>(r % 2560000u) * 0.0001f; // [0, 256) м
+        };
+        return vec3{axis(0x11u), axis(0x22u), axis(0x33u)};
+    };
+    for (const Scene& sc : scenes) {
+        Registry reg;
+        std::vector<vec3> sPos;
+        for (std::uint32_t i = 0; i < sc.shields; ++i) {
+            const vec3 p = point(i * 0x9E3779B9u ^ sc.salt, sc.lattice);
+            const Entity s = shield_test_spawn_shield(reg, p);
+            ShieldProgram prog{};
+            prog.levels[0] = static_cast<std::uint8_t>(i & 0xFFu);
+            prog.levels[1] = static_cast<std::uint8_t>((i >> 8) & 0xFFu);
+            reg.emplace<ShieldProgram>(s, prog);
+        }
+        // Порядок оракула — ПОРЯДОК ВИДА, тот же, которым идёт функция.
+        std::vector<std::uint32_t> sTag;
+        for (auto e : reg.view<const Transform, const ShieldProgram>()) {
+            sPos.push_back(reg.get<const Transform>(e).pos);
+            const ShieldProgram& pr = reg.get<const ShieldProgram>(e);
+            sTag.push_back(pr.levels[0] | (static_cast<std::uint32_t>(pr.levels[1]) << 8));
+        }
+        std::vector<Entity> lamps;
+        for (std::uint32_t i = 0; i < sc.lamps; ++i)
+            lamps.push_back(shield_test_spawn_lamp(
+                reg, point(i * 0x85EBCA6Bu ^ ~sc.salt, sc.lattice),
+                FlickerProfile::Mains));
+
+        CHECK(assign_lamp_shields(reg, 0) == sc.lamps);
+        std::uint32_t same = 0, ties = 0;
+        for (Entity l : lamps) {
+            const vec3 lp = reg.get<Transform>(l).pos;
+            std::size_t best = 0;
+            float bestD2 = 0.0f;
+            bool tie = false;
+            for (std::size_t k = 0; k < sPos.size(); ++k) {
+                const float d2 = wrap_dist2(sPos[k], lp, kWorldExtent);
+                if (k == 0 || d2 < bestD2) {
+                    best = k;
+                    bestD2 = d2;
+                    tie = false;
+                } else if (d2 == bestD2) {
+                    tie = true;
+                }
+            }
+            if (tie) ++ties;
+            const PropLight& pl = reg.get<PropLight>(l);
+            const std::uint32_t got =
+                pl.phaseLevels[0] |
+                (static_cast<std::uint32_t>(pl.phaseLevels[1]) << 8);
+            if (got == sTag[best]) ++same;
+        }
+        CHECK(same == sc.lamps);
+        // Решётка обязана давать ничьи — иначе порядок здесь не судится вовсе.
+        if (sc.lattice) CHECK(ties > sc.lamps / 20u);
+    }
+    // Этаж без щитков: ни одна лампа не привязана, дефолт цел.
+    Registry empty;
+    const Entity lone = shield_test_spawn_lamp(empty, vec3{10.0f, 10.0f, 10.0f},
+                                               FlickerProfile::Mains);
+    CHECK(assign_lamp_shields(empty, 0) == 0u);
+    CHECK(empty.get<PropLight>(lone).phaseLevels[3] == 100);
+}
+
 static void test_shield_plafond_dims_with_phase() {
     using namespace giga;
     using namespace giga::game;
@@ -172,5 +263,6 @@ static void test_shield_all() {
     test_shield_phase_level_ring();
     test_shield_program_from_module_data();
     test_lamp_takes_nearest_shield_wrapped();
+    test_lamp_shield_bins_equal_bruteforce();
     test_shield_plafond_dims_with_phase();
 }
