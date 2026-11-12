@@ -2846,6 +2846,15 @@ if(GIGA_BUILD_TESTS)
     target_link_libraries(rigid_bench PRIVATE giga_game)
     giga_target_flags(rigid_bench OFF)
 
+    # Стенд масштаба восприятия: проход `perceive_step` на тысячах тел на
+    # настоящем этаже, цена марша отдельно от цены перебора. Поставлен под
+    # вопрос владельца 2026-11-12 «луч или не луч при тысячах мобов/NPC и 10к
+    # активных объектов»: живая игра держит ~500 тел и на этот вопрос не
+    # отвечает. Прибор, не ctest, — по той же причине, что два стенда выше.
+    add_executable(perceive_bench tests/perceive_bench.cpp)
+    target_link_libraries(perceive_bench PRIVATE giga_game)
+    giga_target_flags(perceive_bench OFF)
+
     # Macro-society benchmark: advance the FULL 2^20 population one coarse tick at a
     # time and report ms/tick. Like sim_bench an executable, not a ctest -- it is a
     # measurement tool, and a benchmark that fails the build on a slow machine is a
