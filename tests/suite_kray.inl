@@ -279,6 +279,21 @@ void claimant_learns_from_the_same_door() {
                         static_cast<RoomId>(2))
               .fail == SteerFail::None);
 
+    // ПИСАТЕЛЬ И ЗАЯВКА ВИДА «ЗОНА». Заявитель без земли (стенд, чужой
+    // проход) мог заявить такую цель — писатель обязан ОСТАНОВИТЬ тело у
+    // края, а не оставить ему прошлую скорость: «заявка не исполнена» у
+    // обрыва значит «едет в обрыв на том, что было».
+    {
+        w.reg.get<Velocity>(w.e).v = vec3{1.5f, 0.0f, 0.0f};
+        CHECK(steer_claim(w.reg, w.e, 5u, SteerRank::Errand,
+                          target_zone(static_cast<RoomId>(2), kWalkSpeedMps)));
+        const GuideTick g = guide_step(w.reg, zn, w.layer, 5u, &gravity, &grid);
+        CHECK(g.edge == 1u);
+        CHECK(g.led == 0u);
+        CHECK(g.unresolved == 0u);
+        CHECK(w.reg.get<Velocity>(w.e).v.x == 0.0f);
+    }
+
     // ПРОГУЛКА у кромки с готовой ногой в зону 2: нога снята, счёт `edge`.
     w.reg.emplace<WanderTarget>(
         w.e, WanderTarget{static_cast<RoomId>(2), 0u, 0u});
