@@ -2623,7 +2623,10 @@ if(GIGA_BUILD_TESTS)
         # свидетель переживает уборку покинутого этажа (+2); suite_saveload:
         # дальний переход довозит то же тело (+1); аудит маски считает
         # опёртые безбитовые атомы (+1).
-        PASS_REGULAR_EXPRESSION "game_test: 220603 checks, 0 failures")
+        # 220603 -> 220604 (+1) на 2026-11-13: пул страниц после рождения
+        # этажа зарезервирован под потолок и не переезжает при росте
+        # (frontier_is_born_with_the_floor, указатель пула до и после фронтира).
+        PASS_REGULAR_EXPRESSION "game_test: 220604 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

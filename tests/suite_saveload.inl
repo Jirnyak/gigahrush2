@@ -2352,7 +2352,13 @@ static void frontier_is_born_with_the_floor() {
     giga::medium_mobile_field(w).data()[giga::macro_index(43, 40, 40)] = 1u;
 
     const std::size_t before = giga::audit_sub_pages(w).paged_cells;
+    // Пул после рождения зарезервирован под потолок (страниц не больше, чем
+    // клеток) и больше не переезжает: тысячи страниц фронтира ложатся без
+    // единой реаллокации. ПОЛЯРНОСТЬ: снять reserve_pages в floor_awaken —
+    // вектор растёт удвоением, указатель меняется, строка ниже краснеет.
+    const giga::CellType* const poolAt = f.pages_data();
     const giga::FloorFrontierStats born = giga::floor_open_frontier(w);
+    CHECK(f.pages_data() == poolAt);
     CHECK(born.sources == 3); // две лужи и рыхлый монолит; бетон — нет
     CHECK(born.pages > 0);
     CHECK(giga::audit_sub_pages(w).paged_cells == before + born.pages);
