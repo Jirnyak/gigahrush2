@@ -276,7 +276,7 @@ def main():
     w("} // namespace giga::game")
     w("")
 
-    with open(OUT_PATH, "w", encoding="utf-8") as f:
+    with open(OUT_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
     print("gen_action_table: wrote %s (%d actions)" % (OUT_PATH, len(rows)))
 

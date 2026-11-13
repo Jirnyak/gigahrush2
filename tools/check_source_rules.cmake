@@ -1135,6 +1135,30 @@ foreach(_suite IN LISTS GIGA_SUITE_FILES)
     endforeach()
 endforeach()
 
+# ---- Rule: ГЕНЕРАТОР ПИШЕТ ТАБЛИЦУ С LF НА ЛЮБОЙ ОС (2026-11-13) ------------
+#
+# Питон в текстовом режиме переводит "\n" в разделитель строк ХОЗЯИНА: на
+# Windows выход генератора без `newline="\n"` ложится с CRLF, и `tables_fresh`,
+# сверяющий выход ПОБАЙТНО с закоммиченным LF-файлом, краснеет — на маке при
+# этом зелено всё. Так `gen_action_table.py` и `gen_verb_table.py` держали
+# Windows-лег красным с 2026-11-06, а увидеть это мог только CI зеркала, который
+# сам лежал по квоте артефактов. Правило — текстовое, на любой машине: каждое
+# открытие на запись в `tools/gen_*.py` обязано назвать `newline="\n"`.
+# Только `"w"`: в двоичном режиме параметра `newline` нет, и он не нужен.
+# Строки с `;` file(STRINGS) расщепил бы, но открытия на запись их не несут,
+# а REGEX отбирает ровно их — поэтому без номера строки, с самим текстом.
+file(GLOB GIGA_TABLE_GENERATORS RELATIVE "${GIGA_ROOT}" "${GIGA_ROOT}/tools/gen_*.py")
+foreach(_gen IN LISTS GIGA_TABLE_GENERATORS)
+    file(STRINGS "${GIGA_ROOT}/${_gen}" _gen_writes REGEX "open\\(.*[\"']w[\"']")
+    foreach(_w IN LISTS _gen_writes)
+        if(NOT _w MATCHES "newline=[\"]\\\\n[\"]")
+            string(STRIP "${_w}" _w)
+            list(APPEND GIGA_FAILURES
+                "${_gen}: открытие на запись без newline=\"\\n\" — на Windows таблица ляжет с CRLF и tables_fresh покраснеет: `${_w}`")
+        endif()
+    endforeach()
+endforeach()
+
 # --- ДВА ПРОЕКТА НЕ ПЕРЕСЕКАЮТСЯ (решение владельца 2026-10-06) ---------------
 #
 # Браузерная ГИГАХРУЩ на TypeScript живёт в СВОЁМ репозитории

@@ -172,7 +172,7 @@ def main():
     w("} // namespace giga::game")
     w("")
 
-    with open(OUT_PATH, "w", encoding="utf-8") as f:
+    with open(OUT_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
     print("gen_verb_table: wrote %s (%d verbs)" % (OUT_PATH, len(rows)))
 
