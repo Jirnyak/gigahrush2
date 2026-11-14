@@ -836,6 +836,9 @@ void involuntary_relief_is_a_deed() {
                                         0.0, &rig.bus, 779u, &w, &dirty);
     CHECK(puddle.puddles == 1);
     CHECK(!dirty.empty());
+    // ...и это МАТЕРИЯ: атом в точке жителя — моча (клетка (1,1,1), атом
+    // (4,4,1) — центр по касательным, 1.2 клетки по вертикали).
+    CHECK(sub_material_at(w, 1, 1, 1, 4, 4, 1) == kMatUrine);
     dirty.clear();
     const NeedsTick calm = needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr,
                                       0.0, &rig.bus, 780u, &w, &dirty);

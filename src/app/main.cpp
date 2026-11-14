@@ -3611,6 +3611,10 @@ int main(int argc, char** argv) {
     // Macro cells the stain layer dirtied this tick ([world/stain.h]) — the
     // same debt CarveResult::dirtyCells carries, drained into the mirror below.
     std::vector<std::uint32_t> stainDirty;
+    // Клетки, куда тела записали МОЧУ (субвоксель материала, CANON S27.1):
+    // долг писателя `GeomWriter::Excretion` платится одной дверью
+    // `geometry_changed` раз в кадр, рядом с грязью.
+    std::vector<std::uint32_t> excretedCells;
     // Combat → geometry seam ([combat.h]): bullets/melee propose, sim disposes
     // below on the sim clock, through the same path as the console carve row.
     game::CarveProposalQueue combatCarves;
@@ -7360,6 +7364,47 @@ int main(int argc, char** argv) {
                                              static_cast<unsigned long long>(simTick));
                                 utolStage = 5;
                             }
+                            if (utolStage >= 3 && utolStage <= 5) {
+                                // МОЧА — МАТЕРИЯ АВТОМАТА: каждые 125 тиков —
+                                // сколько атомов `urine` в кубе 9³ клеток вокруг
+                                // тела и на какой высоте (клетка z) самый
+                                // нижний. Субвоксель рождён в точке тела;
+                                // автомат обязан его ВЕСТИ — падение вниз видно
+                                // сдвигом нижней клетки, а число атомов не
+                                // меняется (материя сохраняется).
+                                if (simTick % 125u == 0u) {
+                                    World& uw = stack.layer(activeLayer);
+                                    const vec3 up = reg.get<Transform>(player).pos;
+                                    const int ux = static_cast<int>(
+                                        std::floor(up.x / kCellSize));
+                                    const int uy = static_cast<int>(
+                                        std::floor(up.y / kCellSize));
+                                    const int uz = static_cast<int>(
+                                        std::floor(up.z / kCellSize));
+                                    int atoms = 0, lowZ = 1 << 20;
+                                    for (int dz = -4; dz <= 4; ++dz)
+                                        for (int dy = -4; dy <= 4; ++dy)
+                                            for (int dx = -4; dx <= 4; ++dx) {
+                                                const int cx = wrap_macro(ux + dx);
+                                                const int cy = wrap_macro(uy + dy);
+                                                const int cz = wrap_macro(uz + dz);
+                                                for (int b = 0; b < kSubDim * kSubDim * kSubDim; ++b) {
+                                                    const int sx = b % kSubDim;
+                                                    const int sy = (b / kSubDim) % kSubDim;
+                                                    const int sz = b / (kSubDim * kSubDim);
+                                                    if (sub_material_at(uw, cx, cy, cz, sx, sy, sz) != kMatUrine)
+                                                        continue;
+                                                    ++atoms;
+                                                    if (uz + dz < lowZ) lowZ = uz + dz;
+                                                }
+                                            }
+                                    std::fprintf(stderr,
+                                                 "[utolenie] моча вокруг тела: атомов %d, "
+                                                 "нижняя клетка z %d (тело z %d), tick %llu\n",
+                                                 atoms, atoms > 0 ? lowZ : -1, uz,
+                                                 static_cast<unsigned long long>(simTick));
+                                }
+                            }
                         }
                     } else if (shotAction == "letopis" && reg.valid(player)) {
                         // ЛЕТОПИСЬ (S21) НА ЖИВОЙ МАШИНЕ, а не в стенде.
@@ -7512,7 +7557,7 @@ int main(int argc, char** argv) {
                 // сим-петли смотрела бы в мир прежнего слота.
                 game::serve_step(game::ServeCtx{reg, pool, floorRooms, &bus,
                                                 simTick, &stack.layer(activeLayer),
-                                                &stainDirty},
+                                                &excretedCells},
                                  activeLayer, serveTick);
                 // ОБРЫВ ДЕЯНИЯ ЧЕЛОВЕКА — СЛОВОМ НА СТЕКЛЕ: F на ходу откроет
                 // окно и тут же сорвёт его, и без слова это выглядело бы как
@@ -8695,7 +8740,7 @@ int main(int argc, char** argv) {
                                 nrF && pool.valid(nrF->id)) {
                                 const game::ServeCtx sc{
                                     reg, pool, floorRooms, &bus, simTick,
-                                    &stack.layer(activeLayer), &stainDirty};
+                                    &stack.layer(activeLayer), &excretedCells};
                                 const game::VerbId v =
                                     game::serve_place_verb(sc, nrF->id, ppos,
                                                            activeLayer);
@@ -8726,7 +8771,7 @@ int main(int argc, char** argv) {
                         const vec3 up = reg.get<Transform>(player).pos;
                         const game::ServeCtx sc{reg, pool, floorRooms, &bus,
                                                 simTick, &stack.layer(activeLayer),
-                                                &stainDirty};
+                                                &excretedCells};
                         if (relief)
                             deed_say(game::serve_start(sc, player, nrU->id, up,
                                                        game::kVerbToilet,
@@ -9112,13 +9157,15 @@ int main(int argc, char** argv) {
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
                 // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
-                // слил его, где застало): лужу рисует САМ клок любому телу
-                // (`relief_puddle`), социальную цену несёт деяние (S19). Здесь
-                // стоял блок, рисовавший лужу только носителю камеры, на
-                // литерале −Z, — снесён 2026-11-14 (S27.17 п.7).
+                // слил его, где застало): мочу пишет САМ клок любому телу —
+                // субвоксель материала (`relief_urine`), дальше её ведёт
+                // автомат; социальную цену несёт деяние (S19). Здесь стоял
+                // блок, рисовавший пятно только носителю камеры, на литерале
+                // −Z, — снесён 2026-11-14 (S27.17 п.7).
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt,
                                          &aiMem, simNow, &bus, simTick,
-                                         &stack.layer(activeLayer), &stainDirty);
+                                         &stack.layer(activeLayer),
+                                         &excretedCells);
                 prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
                 voidPuddlesTotal += needs.puddles;
@@ -11649,6 +11696,18 @@ int main(int argc, char** argv) {
                 geometry_changed(game::GeomWriter::Stain, activeLayer,
                                  stainDirty, 0u);
                 stainDirty.clear();
+            }
+            if (!excretedCells.empty()) {
+                // МОЧА — материя мира (CANON S27.1): строка `Excretion` — текучее
+                // в воздух, маска и статика на месте; долг — зеркало и
+                // будильник автомата, дальше материю ведёт автомат.
+                std::sort(excretedCells.begin(), excretedCells.end());
+                excretedCells.erase(
+                    std::unique(excretedCells.begin(), excretedCells.end()),
+                    excretedCells.end());
+                geometry_changed(game::GeomWriter::Excretion, activeLayer,
+                                 excretedCells, 0u);
+                excretedCells.clear();
             }
             // МИР-АВТОМАТ: apply_readback и poll_activity ушли в НАЧАЛО
             // кадра (до сим-писателей); здесь остался только диспатч

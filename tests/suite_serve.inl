@@ -993,8 +993,13 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(land.applied == 1);
     CHECK(pool.needs(hid).pee == 0.0f);
     CHECK(pool.needs(hid).poo == 0.0f);
-    CHECK(t.puddles == 1); // лужа — в начале облегчения, вне уместного места
+    CHECK(t.puddles == 1); // моча — в начале облегчения, вне уместного места
     CHECK(!dirty.empty());
+    // МОЧА — МАТЕРИЯ МИРА, а не пятно (решение владельца 2026-11-14): атом в
+    // точке тела стал субвокселем материала `urine`, дальше его ведёт автомат.
+    // Мутация «писать воду вместо мочи» красит строку; «не писать» — две.
+    CHECK(sub_material_at(w, 34, 34, 10, 4, 4, 4) == kMatUrine);
+    CHECK(material_phase(kMatUrine) == MatPhase::Liquid);
     CHECK(bus.total_count(EventType::Deed) == 1);
 
     // В САНУЗЛЕ — то же опорожнение, но лужи НЕТ: место даёт сортир (тот же

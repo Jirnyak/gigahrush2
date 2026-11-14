@@ -63,6 +63,7 @@ enum class GeomWriter : std::uint8_t {
     JudgeEntry,  // суд входа: статик на куче становится осыпью
     JudgeBig,    // большой суд: то же, порциями на тик
     Stain,       // грязь: пятно на странице, материя и маска на месте
+    Excretion,   // выделение тела: субвоксель мочи — текучее в воздух
     Count
 };
 inline constexpr std::size_t kGeomWriterCount =
@@ -97,6 +98,13 @@ inline constexpr GeomWriterRow kGeomWriterRows[] = {
     {GeomWriter::JudgeEntry, "суд входа", false, true, false},
     {GeomWriter::JudgeBig, "большой суд", false, true, false},
     {GeomWriter::Stain, "грязь", false, false, false},
+    // ВЫДЕЛЕНИЕ (2026-11-14, решение владельца: «просто создаётся субвоксель
+    // материала мочи, и дальше она агностично работает через клеточный
+    // автомат — никаких новых систем»). Факты те же, что у грязи: текучее в
+    // воздух маску не меняет (бит твёрдости снят у обоих), статикой не
+    // является — долг ВЫВОДИТСЯ: зеркало + будильник автомата, остальное
+    // автомат сам расскажет, когда материя сдвинется.
+    {GeomWriter::Excretion, "выделение", false, false, false},
 };
 GIGA_TABLE_BY_ENUM(kGeomWriterRows, &GeomWriterRow::who, kGeomWriterCount);
 

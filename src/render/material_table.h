@@ -37,21 +37,22 @@ inline constexpr vec3 kMaterial[kMatCount] = {
     {0.09f, 0.09f, 0.10f},  // 19 asphalt
     {0.34f, 0.36f, 0.38f},  // 20 door_steel
     {0.30f, 0.33f, 0.31f},  // 21 door_hermetic
-    {0.26f, 0.26f, 0.24f},  // 22 rubble_concrete
-    {0.20f, 0.31f, 0.15f},  // 23 rubble_soil
-    {0.31f, 0.26f, 0.19f},  // 24 rubble_slab_tan
-    {0.41f, 0.37f, 0.32f},  // 25 rubble_plaster
-    {0.27f, 0.17f, 0.09f},  // 26 rubble_parquet
-    {0.32f, 0.34f, 0.36f},  // 27 rubble_shop_shutter
-    {0.22f, 0.14f, 0.10f},  // 28 rubble_lino
-    {0.19f, 0.26f, 0.19f},  // 29 rubble_factory_wall
-    {0.32f, 0.20f, 0.13f},  // 30 rubble_tread
-    {0.34f, 0.17f, 0.07f},  // 31 rubble_rust
-    {0.11f, 0.14f, 0.12f},  // 32 rubble_pipe_metal
-    {0.21f, 0.81f, 0.72f},  // 33 rubble_neon_tube
-    {0.53f, 0.59f, 0.61f},  // 34 rubble_glass
-    {0.08f, 0.08f, 0.09f},  // 35 rubble_asphalt
-    {0.29f, 0.31f, 0.32f}   // 36 rubble_door_steel
+    {0.62f, 0.55f, 0.18f},  // 22 urine
+    {0.26f, 0.26f, 0.24f},  // 23 rubble_concrete
+    {0.20f, 0.31f, 0.15f},  // 24 rubble_soil
+    {0.31f, 0.26f, 0.19f},  // 25 rubble_slab_tan
+    {0.41f, 0.37f, 0.32f},  // 26 rubble_plaster
+    {0.27f, 0.17f, 0.09f},  // 27 rubble_parquet
+    {0.32f, 0.34f, 0.36f},  // 28 rubble_shop_shutter
+    {0.22f, 0.14f, 0.10f},  // 29 rubble_lino
+    {0.19f, 0.26f, 0.19f},  // 30 rubble_factory_wall
+    {0.32f, 0.20f, 0.13f},  // 31 rubble_tread
+    {0.34f, 0.17f, 0.07f},  // 32 rubble_rust
+    {0.11f, 0.14f, 0.12f},  // 33 rubble_pipe_metal
+    {0.21f, 0.81f, 0.72f},  // 34 rubble_neon_tube
+    {0.53f, 0.59f, 0.61f},  // 35 rubble_glass
+    {0.08f, 0.08f, 0.09f},  // 36 rubble_asphalt
+    {0.29f, 0.31f, 0.32f}   // 37 rubble_door_steel
 };
 static_assert(sizeof(kMaterial) / sizeof(kMaterial[0]) == kMatCount,
               "one albedo row per material id");

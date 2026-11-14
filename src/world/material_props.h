@@ -42,21 +42,22 @@ inline constexpr std::uint16_t kMatHardness[kMatCount] = {
     224                 ,  // 19 asphalt
     384                 ,  // 20 door_steel
     kHardnessUnbreakable,  // 21 door_hermetic
-    32                  ,  // 22 rubble_concrete
-    8                   ,  // 23 rubble_soil
-    24                  ,  // 24 rubble_slab_tan
-    8                   ,  // 25 rubble_plaster
-    8                   ,  // 26 rubble_parquet
-    16                  ,  // 27 rubble_shop_shutter
-    8                   ,  // 28 rubble_lino
-    32                  ,  // 29 rubble_factory_wall
-    40                  ,  // 30 rubble_tread
-    14                  ,  // 31 rubble_rust
-    22                  ,  // 32 rubble_pipe_metal
-    8                   ,  // 33 rubble_neon_tube
-    12                  ,  // 34 rubble_glass
-    28                  ,  // 35 rubble_asphalt
-    48                     // 36 rubble_door_steel
+    96                  ,  // 22 urine
+    32                  ,  // 23 rubble_concrete
+    8                   ,  // 24 rubble_soil
+    24                  ,  // 25 rubble_slab_tan
+    8                   ,  // 26 rubble_plaster
+    8                   ,  // 27 rubble_parquet
+    16                  ,  // 28 rubble_shop_shutter
+    8                   ,  // 29 rubble_lino
+    32                  ,  // 30 rubble_factory_wall
+    40                  ,  // 31 rubble_tread
+    14                  ,  // 32 rubble_rust
+    22                  ,  // 33 rubble_pipe_metal
+    8                   ,  // 34 rubble_neon_tube
+    12                  ,  // 35 rubble_glass
+    28                  ,  // 36 rubble_asphalt
+    48                     // 37 rubble_door_steel
 };
 
 static_assert(sizeof(kMatHardness) / sizeof(kMatHardness[0]) == kMatCount,
@@ -94,21 +95,22 @@ inline constexpr float kMatDensity[kMatCount] = {
     2300.0f,  // 19 asphalt
     2900.0f,  // 20 door_steel
     7800.0f,  // 21 door_hermetic
-    1800.0f,  // 22 rubble_concrete
-    1200.0f,  // 23 rubble_soil
-    1650.0f,  // 24 rubble_slab_tan
-    600.0f ,  // 25 rubble_plaster
-    525.0f ,  // 26 rubble_parquet
-    5850.0f,  // 27 rubble_shop_shutter
-    900.0f ,  // 28 rubble_lino
-    5850.0f,  // 29 rubble_factory_wall
-    5850.0f,  // 30 rubble_tread
-    3900.0f,  // 31 rubble_rust
-    5850.0f,  // 32 rubble_pipe_metal
-    1050.0f,  // 33 rubble_neon_tube
-    1875.0f,  // 34 rubble_glass
-    1725.0f,  // 35 rubble_asphalt
-    2175.0f   // 36 rubble_door_steel
+    1020.0f,  // 22 urine
+    1800.0f,  // 23 rubble_concrete
+    1200.0f,  // 24 rubble_soil
+    1650.0f,  // 25 rubble_slab_tan
+    600.0f ,  // 26 rubble_plaster
+    525.0f ,  // 27 rubble_parquet
+    5850.0f,  // 28 rubble_shop_shutter
+    900.0f ,  // 29 rubble_lino
+    5850.0f,  // 30 rubble_factory_wall
+    5850.0f,  // 31 rubble_tread
+    3900.0f,  // 32 rubble_rust
+    5850.0f,  // 33 rubble_pipe_metal
+    1050.0f,  // 34 rubble_neon_tube
+    1875.0f,  // 35 rubble_glass
+    1725.0f,  // 36 rubble_asphalt
+    2175.0f   // 37 rubble_door_steel
 };
 
 // (material_subvoxel_mass_kg СНЕСЁН аудитом 2026-08-25 решением владельца:
@@ -156,21 +158,22 @@ inline constexpr std::uint8_t kMatPhase[kMatCount] = {
     0,  // 19 asphalt
     0,  // 20 door_steel
     0,  // 21 door_hermetic
-    0,  // 22 rubble_concrete
-    0,  // 23 rubble_soil
-    0,  // 24 rubble_slab_tan
-    0,  // 25 rubble_plaster
-    0,  // 26 rubble_parquet
-    0,  // 27 rubble_shop_shutter
-    0,  // 28 rubble_lino
-    0,  // 29 rubble_factory_wall
-    0,  // 30 rubble_tread
-    0,  // 31 rubble_rust
-    0,  // 32 rubble_pipe_metal
-    0,  // 33 rubble_neon_tube
-    0,  // 34 rubble_glass
-    0,  // 35 rubble_asphalt
-    0   // 36 rubble_door_steel
+    1,  // 22 urine
+    0,  // 23 rubble_concrete
+    0,  // 24 rubble_soil
+    0,  // 25 rubble_slab_tan
+    0,  // 26 rubble_plaster
+    0,  // 27 rubble_parquet
+    0,  // 28 rubble_shop_shutter
+    0,  // 29 rubble_lino
+    0,  // 30 rubble_factory_wall
+    0,  // 31 rubble_tread
+    0,  // 32 rubble_rust
+    0,  // 33 rubble_pipe_metal
+    0,  // 34 rubble_neon_tube
+    0,  // 35 rubble_glass
+    0,  // 36 rubble_asphalt
+    0   // 37 rubble_door_steel
 };
 
 inline constexpr float kMatFlow[kMatCount] = {
@@ -196,21 +199,22 @@ inline constexpr float kMatFlow[kMatCount] = {
     0.000f,  // 19 asphalt
     0.000f,  // 20 door_steel
     0.000f,  // 21 door_hermetic
-    1.000f,  // 22 rubble_concrete
-    1.000f,  // 23 rubble_soil
-    1.000f,  // 24 rubble_slab_tan
-    1.000f,  // 25 rubble_plaster
-    1.000f,  // 26 rubble_parquet
-    1.000f,  // 27 rubble_shop_shutter
-    1.000f,  // 28 rubble_lino
-    1.000f,  // 29 rubble_factory_wall
-    1.000f,  // 30 rubble_tread
-    1.000f,  // 31 rubble_rust
-    1.000f,  // 32 rubble_pipe_metal
-    1.000f,  // 33 rubble_neon_tube
-    1.000f,  // 34 rubble_glass
-    1.000f,  // 35 rubble_asphalt
-    1.000f   // 36 rubble_door_steel
+    0.950f,  // 22 urine
+    1.000f,  // 23 rubble_concrete
+    1.000f,  // 24 rubble_soil
+    1.000f,  // 25 rubble_slab_tan
+    1.000f,  // 26 rubble_plaster
+    1.000f,  // 27 rubble_parquet
+    1.000f,  // 28 rubble_shop_shutter
+    1.000f,  // 29 rubble_lino
+    1.000f,  // 30 rubble_factory_wall
+    1.000f,  // 31 rubble_tread
+    1.000f,  // 32 rubble_rust
+    1.000f,  // 33 rubble_pipe_metal
+    1.000f,  // 34 rubble_neon_tube
+    1.000f,  // 35 rubble_glass
+    1.000f,  // 36 rubble_asphalt
+    1.000f   // 37 rubble_door_steel
 };
 
 inline constexpr float kMatDiffusion[kMatCount] = {
@@ -236,21 +240,22 @@ inline constexpr float kMatDiffusion[kMatCount] = {
     0.000f,  // 19 asphalt
     0.000f,  // 20 door_steel
     0.000f,  // 21 door_hermetic
-    0.000f,  // 22 rubble_concrete
-    0.000f,  // 23 rubble_soil
-    0.000f,  // 24 rubble_slab_tan
-    0.000f,  // 25 rubble_plaster
-    0.000f,  // 26 rubble_parquet
-    0.000f,  // 27 rubble_shop_shutter
-    0.000f,  // 28 rubble_lino
-    0.000f,  // 29 rubble_factory_wall
-    0.000f,  // 30 rubble_tread
-    0.000f,  // 31 rubble_rust
-    0.000f,  // 32 rubble_pipe_metal
-    0.000f,  // 33 rubble_neon_tube
-    0.000f,  // 34 rubble_glass
-    0.000f,  // 35 rubble_asphalt
-    0.000f   // 36 rubble_door_steel
+    0.480f,  // 22 urine
+    0.000f,  // 23 rubble_concrete
+    0.000f,  // 24 rubble_soil
+    0.000f,  // 25 rubble_slab_tan
+    0.000f,  // 26 rubble_plaster
+    0.000f,  // 27 rubble_parquet
+    0.000f,  // 28 rubble_shop_shutter
+    0.000f,  // 29 rubble_lino
+    0.000f,  // 30 rubble_factory_wall
+    0.000f,  // 31 rubble_tread
+    0.000f,  // 32 rubble_rust
+    0.000f,  // 33 rubble_pipe_metal
+    0.000f,  // 34 rubble_neon_tube
+    0.000f,  // 35 rubble_glass
+    0.000f,  // 36 rubble_asphalt
+    0.000f   // 37 rubble_door_steel
 };
 
 inline MatPhase material_phase(CellType t) {
@@ -282,42 +287,43 @@ inline bool material_bears_load(CellType t) {
 // наследуются) и падает автоматом. Не-рушимое и среды — сами себя.
 inline constexpr CellType kMatRubbleOf[kMatCount] = {
     0 ,  //  0 air
-    22,  //  1 concrete
-    23,  //  2 soil
+    23,  //  1 concrete
+    24,  //  2 soil
     3 ,  //  3 water
-    24,  //  4 slab_tan
+    25,  //  4 slab_tan
     5 ,  //  5 door
     6 ,  //  6 hub_pad
-    25,  //  7 plaster
-    26,  //  8 parquet
-    27,  //  9 shop_shutter
-    28,  // 10 lino
-    29,  // 11 factory_wall
-    30,  // 12 tread
-    31,  // 13 rust
+    26,  //  7 plaster
+    27,  //  8 parquet
+    28,  //  9 shop_shutter
+    29,  // 10 lino
+    30,  // 11 factory_wall
+    31,  // 12 tread
+    32,  // 13 rust
     14,  // 14 rubble
-    32,  // 15 pipe_metal
-    33,  // 16 neon_tube
-    34,  // 17 glass
+    33,  // 15 pipe_metal
+    34,  // 16 neon_tube
+    35,  // 17 glass
     18,  // 18 toxic_gas
-    35,  // 19 asphalt
-    36,  // 20 door_steel
+    36,  // 19 asphalt
+    37,  // 20 door_steel
     21,  // 21 door_hermetic
-    22,  // 22 rubble_concrete
-    23,  // 23 rubble_soil
-    24,  // 24 rubble_slab_tan
-    25,  // 25 rubble_plaster
-    26,  // 26 rubble_parquet
-    27,  // 27 rubble_shop_shutter
-    28,  // 28 rubble_lino
-    29,  // 29 rubble_factory_wall
-    30,  // 30 rubble_tread
-    31,  // 31 rubble_rust
-    32,  // 32 rubble_pipe_metal
-    33,  // 33 rubble_neon_tube
-    34,  // 34 rubble_glass
-    35,  // 35 rubble_asphalt
-    36   // 36 rubble_door_steel
+    22,  // 22 urine
+    23,  // 23 rubble_concrete
+    24,  // 24 rubble_soil
+    25,  // 25 rubble_slab_tan
+    26,  // 26 rubble_plaster
+    27,  // 27 rubble_parquet
+    28,  // 28 rubble_shop_shutter
+    29,  // 29 rubble_lino
+    30,  // 30 rubble_factory_wall
+    31,  // 31 rubble_tread
+    32,  // 32 rubble_rust
+    33,  // 33 rubble_pipe_metal
+    34,  // 34 rubble_neon_tube
+    35,  // 35 rubble_glass
+    36,  // 36 rubble_asphalt
+    37   // 37 rubble_door_steel
 };
 
 inline CellType material_rubble_of(CellType t) {
@@ -352,21 +358,22 @@ inline constexpr std::uint16_t kMatLightRadiusMm[kMatCount] = {
     0   ,  // 19 asphalt
     0   ,  // 20 door_steel
     0   ,  // 21 door_hermetic
-    0   ,  // 22 rubble_concrete
-    0   ,  // 23 rubble_soil
-    0   ,  // 24 rubble_slab_tan
-    0   ,  // 25 rubble_plaster
-    0   ,  // 26 rubble_parquet
-    0   ,  // 27 rubble_shop_shutter
-    0   ,  // 28 rubble_lino
-    0   ,  // 29 rubble_factory_wall
-    0   ,  // 30 rubble_tread
-    0   ,  // 31 rubble_rust
-    0   ,  // 32 rubble_pipe_metal
-    0   ,  // 33 rubble_neon_tube
-    0   ,  // 34 rubble_glass
-    0   ,  // 35 rubble_asphalt
-    0      // 36 rubble_door_steel
+    0   ,  // 22 urine
+    0   ,  // 23 rubble_concrete
+    0   ,  // 24 rubble_soil
+    0   ,  // 25 rubble_slab_tan
+    0   ,  // 26 rubble_plaster
+    0   ,  // 27 rubble_parquet
+    0   ,  // 28 rubble_shop_shutter
+    0   ,  // 29 rubble_lino
+    0   ,  // 30 rubble_factory_wall
+    0   ,  // 31 rubble_tread
+    0   ,  // 32 rubble_rust
+    0   ,  // 33 rubble_pipe_metal
+    0   ,  // 34 rubble_neon_tube
+    0   ,  // 35 rubble_glass
+    0   ,  // 36 rubble_asphalt
+    0      // 37 rubble_door_steel
 };
 
 inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
@@ -392,21 +399,22 @@ inline constexpr std::uint16_t kMatLightIntensityE3[kMatCount] = {
     0   ,  // 19 asphalt
     0   ,  // 20 door_steel
     0   ,  // 21 door_hermetic
-    0   ,  // 22 rubble_concrete
-    0   ,  // 23 rubble_soil
-    0   ,  // 24 rubble_slab_tan
-    0   ,  // 25 rubble_plaster
-    0   ,  // 26 rubble_parquet
-    0   ,  // 27 rubble_shop_shutter
-    0   ,  // 28 rubble_lino
-    0   ,  // 29 rubble_factory_wall
-    0   ,  // 30 rubble_tread
-    0   ,  // 31 rubble_rust
-    0   ,  // 32 rubble_pipe_metal
-    0   ,  // 33 rubble_neon_tube
-    0   ,  // 34 rubble_glass
-    0   ,  // 35 rubble_asphalt
-    0      // 36 rubble_door_steel
+    0   ,  // 22 urine
+    0   ,  // 23 rubble_concrete
+    0   ,  // 24 rubble_soil
+    0   ,  // 25 rubble_slab_tan
+    0   ,  // 26 rubble_plaster
+    0   ,  // 27 rubble_parquet
+    0   ,  // 28 rubble_shop_shutter
+    0   ,  // 29 rubble_lino
+    0   ,  // 30 rubble_factory_wall
+    0   ,  // 31 rubble_tread
+    0   ,  // 32 rubble_rust
+    0   ,  // 33 rubble_pipe_metal
+    0   ,  // 34 rubble_neon_tube
+    0   ,  // 35 rubble_glass
+    0   ,  // 36 rubble_asphalt
+    0      // 37 rubble_door_steel
 };
 
 // Linear albedo per id — the light colour source for emitters (and the same
@@ -434,21 +442,22 @@ inline constexpr float kMatAlbedoR[kMatCount] = {
     0.090f,  // 19 asphalt
     0.340f,  // 20 door_steel
     0.300f,  // 21 door_hermetic
-    0.255f,  // 22 rubble_concrete
-    0.204f,  // 23 rubble_soil
-    0.306f,  // 24 rubble_slab_tan
-    0.408f,  // 25 rubble_plaster
-    0.272f,  // 26 rubble_parquet
-    0.323f,  // 27 rubble_shop_shutter
-    0.221f,  // 28 rubble_lino
-    0.187f,  // 29 rubble_factory_wall
-    0.323f,  // 30 rubble_tread
-    0.340f,  // 31 rubble_rust
-    0.111f,  // 32 rubble_pipe_metal
-    0.212f,  // 33 rubble_neon_tube
-    0.527f,  // 34 rubble_glass
-    0.076f,  // 35 rubble_asphalt
-    0.289f   // 36 rubble_door_steel
+    0.620f,  // 22 urine
+    0.255f,  // 23 rubble_concrete
+    0.204f,  // 24 rubble_soil
+    0.306f,  // 25 rubble_slab_tan
+    0.408f,  // 26 rubble_plaster
+    0.272f,  // 27 rubble_parquet
+    0.323f,  // 28 rubble_shop_shutter
+    0.221f,  // 29 rubble_lino
+    0.187f,  // 30 rubble_factory_wall
+    0.323f,  // 31 rubble_tread
+    0.340f,  // 32 rubble_rust
+    0.111f,  // 33 rubble_pipe_metal
+    0.212f,  // 34 rubble_neon_tube
+    0.527f,  // 35 rubble_glass
+    0.076f,  // 36 rubble_asphalt
+    0.289f   // 37 rubble_door_steel
 };
 inline constexpr float kMatAlbedoG[kMatCount] = {
     0.000f,  //  0 air
@@ -473,21 +482,22 @@ inline constexpr float kMatAlbedoG[kMatCount] = {
     0.090f,  // 19 asphalt
     0.360f,  // 20 door_steel
     0.330f,  // 21 door_hermetic
-    0.255f,  // 22 rubble_concrete
-    0.306f,  // 23 rubble_soil
-    0.255f,  // 24 rubble_slab_tan
-    0.374f,  // 25 rubble_plaster
-    0.170f,  // 26 rubble_parquet
-    0.340f,  // 27 rubble_shop_shutter
-    0.136f,  // 28 rubble_lino
-    0.255f,  // 29 rubble_factory_wall
-    0.204f,  // 30 rubble_tread
-    0.170f,  // 31 rubble_rust
-    0.136f,  // 32 rubble_pipe_metal
-    0.807f,  // 33 rubble_neon_tube
-    0.595f,  // 34 rubble_glass
-    0.076f,  // 35 rubble_asphalt
-    0.306f   // 36 rubble_door_steel
+    0.550f,  // 22 urine
+    0.255f,  // 23 rubble_concrete
+    0.306f,  // 24 rubble_soil
+    0.255f,  // 25 rubble_slab_tan
+    0.374f,  // 26 rubble_plaster
+    0.170f,  // 27 rubble_parquet
+    0.340f,  // 28 rubble_shop_shutter
+    0.136f,  // 29 rubble_lino
+    0.255f,  // 30 rubble_factory_wall
+    0.204f,  // 31 rubble_tread
+    0.170f,  // 32 rubble_rust
+    0.136f,  // 33 rubble_pipe_metal
+    0.807f,  // 34 rubble_neon_tube
+    0.595f,  // 35 rubble_glass
+    0.076f,  // 36 rubble_asphalt
+    0.306f   // 37 rubble_door_steel
 };
 inline constexpr float kMatAlbedoB[kMatCount] = {
     0.000f,  //  0 air
@@ -512,21 +522,22 @@ inline constexpr float kMatAlbedoB[kMatCount] = {
     0.100f,  // 19 asphalt
     0.380f,  // 20 door_steel
     0.310f,  // 21 door_hermetic
-    0.238f,  // 22 rubble_concrete
-    0.153f,  // 23 rubble_soil
-    0.187f,  // 24 rubble_slab_tan
-    0.323f,  // 25 rubble_plaster
-    0.085f,  // 26 rubble_parquet
-    0.357f,  // 27 rubble_shop_shutter
-    0.102f,  // 28 rubble_lino
-    0.187f,  // 29 rubble_factory_wall
-    0.128f,  // 30 rubble_tread
-    0.068f,  // 31 rubble_rust
-    0.119f,  // 32 rubble_pipe_metal
-    0.722f,  // 33 rubble_neon_tube
-    0.612f,  // 34 rubble_glass
-    0.085f,  // 35 rubble_asphalt
-    0.323f   // 36 rubble_door_steel
+    0.180f,  // 22 urine
+    0.238f,  // 23 rubble_concrete
+    0.153f,  // 24 rubble_soil
+    0.187f,  // 25 rubble_slab_tan
+    0.323f,  // 26 rubble_plaster
+    0.085f,  // 27 rubble_parquet
+    0.357f,  // 28 rubble_shop_shutter
+    0.102f,  // 29 rubble_lino
+    0.187f,  // 30 rubble_factory_wall
+    0.128f,  // 31 rubble_tread
+    0.068f,  // 32 rubble_rust
+    0.119f,  // 33 rubble_pipe_metal
+    0.722f,  // 34 rubble_neon_tube
+    0.612f,  // 35 rubble_glass
+    0.085f,  // 36 rubble_asphalt
+    0.323f   // 37 rubble_door_steel
 };
 
 inline bool material_emits_light(CellType t) {
@@ -563,21 +574,22 @@ inline constexpr std::uint8_t kMatLightPass[kMatCount] = {
     0,  // 19 asphalt
     0,  // 20 door_steel
     0,  // 21 door_hermetic
-    0,  // 22 rubble_concrete
-    0,  // 23 rubble_soil
-    0,  // 24 rubble_slab_tan
-    0,  // 25 rubble_plaster
-    0,  // 26 rubble_parquet
-    0,  // 27 rubble_shop_shutter
-    0,  // 28 rubble_lino
-    0,  // 29 rubble_factory_wall
-    0,  // 30 rubble_tread
-    0,  // 31 rubble_rust
-    0,  // 32 rubble_pipe_metal
-    0,  // 33 rubble_neon_tube
-    0,  // 34 rubble_glass
-    0,  // 35 rubble_asphalt
-    0   // 36 rubble_door_steel
+    0,  // 22 urine
+    0,  // 23 rubble_concrete
+    0,  // 24 rubble_soil
+    0,  // 25 rubble_slab_tan
+    0,  // 26 rubble_plaster
+    0,  // 27 rubble_parquet
+    0,  // 28 rubble_shop_shutter
+    0,  // 29 rubble_lino
+    0,  // 30 rubble_factory_wall
+    0,  // 31 rubble_tread
+    0,  // 32 rubble_rust
+    0,  // 33 rubble_pipe_metal
+    0,  // 34 rubble_neon_tube
+    0,  // 35 rubble_glass
+    0,  // 36 rubble_asphalt
+    0   // 37 rubble_door_steel
 };
 
 inline bool material_passes_light(CellType t) {

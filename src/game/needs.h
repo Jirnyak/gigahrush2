@@ -335,9 +335,9 @@ struct NeedsTick {
     //    existing HUD/consumer reads what it always read --
     // (`voidedPee`/`voidedPoo` — невольный слив ТОЛЬКО носителя камеры, по
     // которому приложение рисовало лужу ему одному на литерале −Z, — СНЕСЕНЫ
-    // 2026-11-14: лужу рисует сам клок любому телу, `relief_puddle`, CANON
-    // S27.17 п.7 «везде особенного игрока выжечь».)
-    std::uint32_t puddles = 0;    // луж невольного слива этим шагом — у ЛЮБОГО тела
+    // 2026-11-14: мочу пишет сам клок любому телу материей мира,
+    // `relief_urine`, CANON S27.17 п.7 «везде особенного игрока выжечь».)
+    std::uint32_t puddles = 0;    // субвокселей мочи невольного слива этим шагом — у ЛЮБОГО тела
     std::uint32_t bodies = 0;     // clocks advanced this step, camera holder included
     std::uint32_t recovering = 0; // of those, standing in a room that restores
     std::uint32_t crowdKilled = 0; // non-camera bodies this step's attrition finished
@@ -433,24 +433,29 @@ float needs_speed_scale(const Needs& n);
 // разом. Уместность туалета зануляет цену у ПОТРЕБИТЕЛЯ (witness_step) —
 // ветки «в туалете бесплатно» здесь нет по построению.
 //
-// `world`+`stainDirty` (опц.) — ЛУЖА невольного слива у ЛЮБОГО тела, одной
-// функцией с облегчением двери утоления (`relief_puddle`). Невольный слив — не
+// `world`+`excreted` (опц.) — МОЧА невольного слива у ЛЮБОГО тела, одной
+// функцией с облегчением двери утоления (`relief_urine`). Невольный слив — не
 // выбор места, поэтому лужа у него всегда: «естественно только лужа» (владелец
 // 2026-08-28). До 2026-11-14 её рисовало приложение, и только носителю камеры.
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      class AiMemory* mem = nullptr, double now = 0.0,
                      EventBus* bus = nullptr, std::uint64_t tick = 0,
                      World* world = nullptr,
-                     std::vector<std::uint32_t>* stainDirty = nullptr);
+                     std::vector<std::uint32_t>* excreted = nullptr);
 
-// ЛУЖА — ОДИН ДОМ на оба канала облегчения: невольный слив клока
-// (`needs_step`) и осознанное облегчение двери утоления вне места, которое даёт
-// сортир ([game/serve.h]). Тот же универсальный стейн, что кровь
-// ([world/stain.h]); радиус 1.4 м и 14 лучей — числа прежней лужи клавиши P.
-// УКЛОН — ПО ГРАВИТАЦИИ в точке, а не −Z (гравитация — вектор). Грязные клетки
-// должны зеркалу вокселей — их забирает вызывающий.
-void relief_puddle(World& w, const vec3& pos, std::uint32_t seed,
-                   std::vector<std::uint32_t>& dirty);
+// МОЧА — МАТЕРИЯ МИРА, А НЕ ПЯТНО (решение владельца 2026-11-14: «по замыслу
+// просто создаётся в области писи — или для начала просто в точке тела —
+// субвоксель материала мочи, и дальше она агностично работает через клеточный
+// автомат, то есть никаких новых систем»). Один дом на оба канала облегчения:
+// невольный слив клока (`needs_step`) и осознанное облегчение двери утоления
+// вне места, которое даёт сортир ([game/serve.h]). Пишет ОДИН субвоксель
+// `kMatUrine` в точке тела тем же законом, что универсальная кисть: материал —
+// истина, бит твёрдости у текучего снят. Атом под точкой не воздух (тело
+// стоит в тверди или в луже) — записи нет, `false`: искать место — не дело
+// выделения. Индекс клетки добавляется в `cells`: долг писателя
+// (`GeomWriter::Excretion`, [game/geom_writer.h]) платит вызывающий одной
+// дверью `geometry_changed`. Заменила пятно-«лужу» на стейне (2026-11-14).
+bool relief_urine(World& w, const vec3& pos, std::vector<std::uint32_t>& cells);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are

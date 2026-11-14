@@ -7,7 +7,8 @@
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
 #include "game/witness.h"    // deed_publish — невольный слив = деяние (S19)
-#include "world/stain.h"     // stain_splat / kStainUrine — лужа, один дом
+#include "world/destruct.h"  // set_sub_material / sub_material_at — моча как материя
+#include "world/materials.h" // kMatUrine; воздух — kCellAir (macro_grid.h)
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
 #include "world/world.h"     // World::gravity — уклон лужи по гравитации
 
@@ -163,18 +164,31 @@ float needs_speed_scale(const Needs& n) {
     return scale;
 }
 
-void relief_puddle(World& w, const vec3& pos, std::uint32_t seed,
-                   std::vector<std::uint32_t>& dirty) {
-    const vec3 g = w.gravity().at(pos);
-    const float len = length(g);
-    const vec3 bias = len > 0.0f ? g * (1.0f / len) : vec3{0.0f, 0.0f, 0.0f};
-    stain_splat(w, pos, bias, 1.4f, /*rays=*/14, kStainUrine, seed, dirty);
+bool relief_urine(World& w, const vec3& pos, std::vector<std::uint32_t>& cells) {
+    // Метры → глобальный субвоксель → клетка тора + атом в ней. Те же три
+    // свёртки, что у универсальной кисти (`app/main.cpp`, писатель Brush).
+    const float sv = kCellSize / static_cast<float>(kSubDim);
+    const int gx = static_cast<int>(std::floor(pos.x / sv));
+    const int gy = static_cast<int>(std::floor(pos.y / sv));
+    const int gz = static_cast<int>(std::floor(pos.z / sv));
+    const auto cell = [](int g) {
+        return wrap_macro(static_cast<int>(
+            std::floor(static_cast<float>(g) / static_cast<float>(kSubDim))));
+    };
+    const auto atom = [](int g) { return ((g % kSubDim) + kSubDim) % kSubDim; };
+    const int cx = cell(gx), cy = cell(gy), cz = cell(gz);
+    const int sx = atom(gx), sy = atom(gy), sz = atom(gz);
+    if (w.grid().mask(cx, cy, cz).test(sub_bit(sx, sy, sz))) return false;
+    if (sub_material_at(w, cx, cy, cz, sx, sy, sz) != kCellAir) return false;
+    set_sub_material(w, cx, cy, cz, sx, sy, sz, kMatUrine);
+    cells.push_back(static_cast<std::uint32_t>(macro_index(cx, cy, cz)));
+    return true;
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      AiMemory* mem, double now, EventBus* bus,
                      std::uint64_t tick, World* world,
-                     std::vector<std::uint32_t>* stainDirty) {
+                     std::vector<std::uint32_t>* excreted) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -218,16 +232,13 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         // здесь. Цена/уместность/свидетели — целиком у witness_step.
         if (bus != nullptr && (voided.pee > 0.0f || voided.poo > 0.0f))
             deed_publish(*bus, kVerbToilet, e, kInvalidNpc, tr.pos, tick);
-        // ЛУЖА — физика слива, и у ЛЮБОГО тела (S7, S27.17 п.7). Ветки «если
-        // это носитель камеры» здесь больше нет: прежде клок отдавал флажок
-        // только про камеру, и толпа сливалась бесследно.
-        if (voided.pee > 0.0f && world != nullptr && stainDirty != nullptr) {
-            relief_puddle(*world, tr.pos,
-                          static_cast<std::uint32_t>(tick) ^
-                              static_cast<std::uint32_t>(entt::to_integral(e)),
-                          *stainDirty);
+        // МОЧА — материя мира, и у ЛЮБОГО тела (S7, S27.17 п.7): субвоксель
+        // `kMatUrine` в точке тела, дальше её ведёт автомат. Ветки «если это
+        // носитель камеры» здесь нет: прежде клок отдавал флажок только про
+        // камеру, и толпа сливалась бесследно.
+        if (voided.pee > 0.0f && world != nullptr && excreted != nullptr &&
+            relief_urine(*world, tr.pos, *excreted))
             ++out.puddles;
-        }
         ++out.bodies;
 
         // АМБИЕНТНАЯ РЕГЕНЕРАЦИЯ ПО ВИДУ КОМНАТЫ УМЕРЛА (rooms-object F,

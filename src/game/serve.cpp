@@ -150,8 +150,8 @@ std::int32_t place_points(Registry& reg, const FloorRooms& fr, RoomId room,
     return place_offer(r, verb) - pickup_offer(reg, fr, room, layer, verb);
 }
 
-// ЛУЖА — `relief_puddle@game/needs.h`: один дом на оба канала облегчения
-// (невольный слив клока и осознанное облегчение двери).
+// МОЧА — `relief_urine@game/needs.h`: один дом на оба канала облегчения
+// (невольный слив клока и осознанное облегчение двери), материя мира.
 
 // ОБЪЁМ ДЕЯНИЯ БЕЗ ПРЕДМЕТА за всё окно: у облегчения — тело
 // (`needs_body_total`: опорожняешься целиком где застало), у запасов — место
@@ -364,19 +364,17 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
         if (ctx.bus != nullptr)
             ctx.bus->publish(EventType::ItemTransferred, id, kInvalidNpc, item,
                              ctx.tick);
-    } else if (ctx.world != nullptr && ctx.stainDirty != nullptr) {
-        // ЛУЖА — моча выйдет не у места, которое даёт сортир. Предикат тот же,
-        // что у свидетеля (`room_offers`): лужа и цена судят одно «уместно ли».
+    } else if (ctx.world != nullptr && ctx.excreted != nullptr) {
+        // МОЧА — материя мира: выйдет не у места, которое даёт сортир, —
+        // субвоксель `urine` в точке тела, дальше его ведёт автомат. Предикат
+        // тот же, что у свидетеля (`room_offers`): материя на полу и цена
+        // судят одно «уместно ли».
         Needs probe = row;
         const SatisfyResult will = needs_satisfy(
             probe, verb, flow_total(ctx.reg, ctx.fr, room, r, layer, verb));
-        if (will.relievedPee > 0.0f && !room_offers(r, verb)) {
-            relief_puddle(*ctx.world, pos,
-                          static_cast<std::uint32_t>(ctx.tick) ^
-                              static_cast<std::uint32_t>(entt::to_integral(e)),
-                          *ctx.stainDirty);
+        if (will.relievedPee > 0.0f && !room_offers(r, verb) &&
+            relief_urine(*ctx.world, pos, *ctx.excreted))
             ++out.puddles;
-        }
     }
     // ФАКТ (S19): деяние — в шину, когда начато. Цену судит свидетель по данным
     // глагола (`kVerbRelDelta`/`kVerbRepDelta`): у еды и сна ноль, у

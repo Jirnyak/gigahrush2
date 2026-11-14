@@ -133,6 +133,9 @@ static void test_geomwriter_all() {
         {GeomWriter::JudgeBig, kJudge},
         // Грязь: ни маска, ни статика не менялись.
         {GeomWriter::Stain, kDebtMirror | kDebtMedium},
+        // Выделение (моча — субвоксель текучего в воздух): факты грязи, долг
+        // тот же — зеркало и будильник автомата, дальше материю ведёт автомат.
+        {GeomWriter::Excretion, kDebtMirror | kDebtMedium},
     };
     static_assert(sizeof(want) / sizeof(want[0]) == kGeomWriterCount,
                   "у каждого писателя — своя строка ожидания; новый писатель "

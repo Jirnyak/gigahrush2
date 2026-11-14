@@ -38,26 +38,27 @@ inline constexpr CellType kMatToxicGas = 18;       // удушливый газ 
 inline constexpr CellType kMatAsphalt = 19;        // AUTHORED: дорожное полотно хрущей — тёмный асфальт с широкими латками; т
 inline constexpr CellType kMatDoorSteel = 20;      // НОВАЯ ДВЕРЬ 2026-08-28: стальное полотно квартирной двери — настоящая ма
 inline constexpr CellType kMatDoorHermetic = 21;   // НОВАЯ ДВЕРЬ 2026-08-28: гермополотно — неразрушимый материал (hardness 6
-inline constexpr CellType kMatRubbleConcrete = 22; // ВЫВЕДЕННЫЙ рыхлый двойник строки concrete — детач меняет строку, автомат
-inline constexpr CellType kMatRubbleSoil = 23;     // ВЫВЕДЕННЫЙ рыхлый двойник строки soil — детач меняет строку, автомат рон
-inline constexpr CellType kMatRubbleSlabTan = 24;  // ВЫВЕДЕННЫЙ рыхлый двойник строки slab_tan — детач меняет строку, автомат
-inline constexpr CellType kMatRubblePlaster = 25;  // ВЫВЕДЕННЫЙ рыхлый двойник строки plaster — детач меняет строку, автомат 
-inline constexpr CellType kMatRubbleParquet = 26;  // ВЫВЕДЕННЫЙ рыхлый двойник строки parquet — детач меняет строку, автомат 
-inline constexpr CellType kMatRubbleShopShutter = 27; // ВЫВЕДЕННЫЙ рыхлый двойник строки shop_shutter — детач меняет строку, авт
-inline constexpr CellType kMatRubbleLino = 28;     // ВЫВЕДЕННЫЙ рыхлый двойник строки lino — детач меняет строку, автомат рон
-inline constexpr CellType kMatRubbleFactoryWall = 29; // ВЫВЕДЕННЫЙ рыхлый двойник строки factory_wall — детач меняет строку, авт
-inline constexpr CellType kMatRubbleTread = 30;    // ВЫВЕДЕННЫЙ рыхлый двойник строки tread — детач меняет строку, автомат ро
-inline constexpr CellType kMatRubbleRust = 31;     // ВЫВЕДЕННЫЙ рыхлый двойник строки rust — детач меняет строку, автомат рон
-inline constexpr CellType kMatRubblePipeMetal = 32; // ВЫВЕДЕННЫЙ рыхлый двойник строки pipe_metal — детач меняет строку, автом
-inline constexpr CellType kMatRubbleNeonTube = 33; // ВЫВЕДЕННЫЙ рыхлый двойник строки neon_tube — детач меняет строку, автома
-inline constexpr CellType kMatRubbleGlass = 34;    // ВЫВЕДЕННЫЙ рыхлый двойник строки glass — детач меняет строку, автомат ро
-inline constexpr CellType kMatRubbleAsphalt = 35;  // ВЫВЕДЕННЫЙ рыхлый двойник строки asphalt — детач меняет строку, автомат 
-inline constexpr CellType kMatRubbleDoorSteel = 36; // ВЫВЕДЕННЫЙ рыхлый двойник строки door_steel — детач меняет строку, автом
+inline constexpr CellType kMatUrine = 22;          // моча — жидкость автомата, как вода (решение владельца 2026-11-14: облегч
+inline constexpr CellType kMatRubbleConcrete = 23; // ВЫВЕДЕННЫЙ рыхлый двойник строки concrete — детач меняет строку, автомат
+inline constexpr CellType kMatRubbleSoil = 24;     // ВЫВЕДЕННЫЙ рыхлый двойник строки soil — детач меняет строку, автомат рон
+inline constexpr CellType kMatRubbleSlabTan = 25;  // ВЫВЕДЕННЫЙ рыхлый двойник строки slab_tan — детач меняет строку, автомат
+inline constexpr CellType kMatRubblePlaster = 26;  // ВЫВЕДЕННЫЙ рыхлый двойник строки plaster — детач меняет строку, автомат 
+inline constexpr CellType kMatRubbleParquet = 27;  // ВЫВЕДЕННЫЙ рыхлый двойник строки parquet — детач меняет строку, автомат 
+inline constexpr CellType kMatRubbleShopShutter = 28; // ВЫВЕДЕННЫЙ рыхлый двойник строки shop_shutter — детач меняет строку, авт
+inline constexpr CellType kMatRubbleLino = 29;     // ВЫВЕДЕННЫЙ рыхлый двойник строки lino — детач меняет строку, автомат рон
+inline constexpr CellType kMatRubbleFactoryWall = 30; // ВЫВЕДЕННЫЙ рыхлый двойник строки factory_wall — детач меняет строку, авт
+inline constexpr CellType kMatRubbleTread = 31;    // ВЫВЕДЕННЫЙ рыхлый двойник строки tread — детач меняет строку, автомат ро
+inline constexpr CellType kMatRubbleRust = 32;     // ВЫВЕДЕННЫЙ рыхлый двойник строки rust — детач меняет строку, автомат рон
+inline constexpr CellType kMatRubblePipeMetal = 33; // ВЫВЕДЕННЫЙ рыхлый двойник строки pipe_metal — детач меняет строку, автом
+inline constexpr CellType kMatRubbleNeonTube = 34; // ВЫВЕДЕННЫЙ рыхлый двойник строки neon_tube — детач меняет строку, автома
+inline constexpr CellType kMatRubbleGlass = 35;    // ВЫВЕДЕННЫЙ рыхлый двойник строки glass — детач меняет строку, автомат ро
+inline constexpr CellType kMatRubbleAsphalt = 36;  // ВЫВЕДЕННЫЙ рыхлый двойник строки asphalt — детач меняет строку, автомат 
+inline constexpr CellType kMatRubbleDoorSteel = 37; // ВЫВЕДЕННЫЙ рыхлый двойник строки door_steel — детач меняет строку, автом
 
 // One past the last id in use. Every generated sibling table is sized from the
 // same CSV, so a row added without regenerating fails the source_rules gate
 // rather than rendering as an unremarkable default.
-inline constexpr CellType kMatCount = 37;
+inline constexpr CellType kMatCount = 38;
 
 // CSV-имена строк по id — словарь команд и логов (консоль `sphere <имя>`
 // говорит на языке таблицы, не констант). Указатели на литералы, без аллокаций.
@@ -84,21 +85,22 @@ inline constexpr const char* kMatNames[kMatCount] = {
     "asphalt"            ,  // 19 asphalt
     "door_steel"         ,  // 20 door_steel
     "door_hermetic"      ,  // 21 door_hermetic
-    "rubble_concrete"    ,  // 22 rubble_concrete
-    "rubble_soil"        ,  // 23 rubble_soil
-    "rubble_slab_tan"    ,  // 24 rubble_slab_tan
-    "rubble_plaster"     ,  // 25 rubble_plaster
-    "rubble_parquet"     ,  // 26 rubble_parquet
-    "rubble_shop_shutter",  // 27 rubble_shop_shutter
-    "rubble_lino"        ,  // 28 rubble_lino
-    "rubble_factory_wall",  // 29 rubble_factory_wall
-    "rubble_tread"       ,  // 30 rubble_tread
-    "rubble_rust"        ,  // 31 rubble_rust
-    "rubble_pipe_metal"  ,  // 32 rubble_pipe_metal
-    "rubble_neon_tube"   ,  // 33 rubble_neon_tube
-    "rubble_glass"       ,  // 34 rubble_glass
-    "rubble_asphalt"     ,  // 35 rubble_asphalt
-    "rubble_door_steel"     // 36 rubble_door_steel
+    "urine"              ,  // 22 urine
+    "rubble_concrete"    ,  // 23 rubble_concrete
+    "rubble_soil"        ,  // 24 rubble_soil
+    "rubble_slab_tan"    ,  // 25 rubble_slab_tan
+    "rubble_plaster"     ,  // 26 rubble_plaster
+    "rubble_parquet"     ,  // 27 rubble_parquet
+    "rubble_shop_shutter",  // 28 rubble_shop_shutter
+    "rubble_lino"        ,  // 29 rubble_lino
+    "rubble_factory_wall",  // 30 rubble_factory_wall
+    "rubble_tread"       ,  // 31 rubble_tread
+    "rubble_rust"        ,  // 32 rubble_rust
+    "rubble_pipe_metal"  ,  // 33 rubble_pipe_metal
+    "rubble_neon_tube"   ,  // 34 rubble_neon_tube
+    "rubble_glass"       ,  // 35 rubble_glass
+    "rubble_asphalt"     ,  // 36 rubble_asphalt
+    "rubble_door_steel"     // 37 rubble_door_steel
 };
 
 // id по CSV-имени (линейный скан таблицы — она мала, зов из консоли).
