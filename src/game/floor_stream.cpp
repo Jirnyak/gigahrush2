@@ -1,5 +1,7 @@
 #include "game/floor_stream.h"
 
+#include "game/needs.h" // needs_new_trip — начало поездки, шаг новой игры
+
 #include <algorithm> // std::sort — порядок расселения не зависит от случая
 #include <chrono>   // the floor-entry timings printed below
 #include <cstdio>
@@ -290,6 +292,10 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
             outPlayer = e;
             cameraGiven = true;
             if (id != designate) fm.candidate = pool.handle(id);
+            // НАЧАЛО ПОЕЗДКИ — шаг НОВОЙ ИГРЫ (вход без игрока), а не ветка
+            // клока: тело, ставшее носителем камеры здесь, начинает сытым
+            // (решение владельца 2026-11-14, [game/needs.h] needs_new_trip).
+            needs_new_trip(pool, id);
         }
         fm.bodies.push_back(e);
 

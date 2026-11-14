@@ -14,6 +14,7 @@
 // «Использовать», и правила выбора из сумки больше нет (CANON S27.1). Его
 // гейты — в suite_serve (выбранный предмет, цена один раз, отказы). Довод за
 // первый ключ «цена HP» живёт в [needs.h] и держит правило ящика комнаты.
+#include "core/rng.h"    // hash_u32 — тот же сев, что у клока
 #include "core/tick.h"   // kSimDt / kSimHz — never a bare 1/120 ([core/tick.h])
 #include "game/needs.h"
 #include "game/elevator.h"
@@ -733,6 +734,9 @@ void the_whole_floor_lives_on_one_clock() {
         if (i != playerId) embody(reg, pool, i, 0);
     }
     CHECK(embody_as_player(reg, pool, playerId, 0) != entt::null);
+    // НАЧАЛО ПОЕЗДКИ — шаг НОВОЙ ИГРЫ, а не ветка клока (решение владельца
+    // 2026-11-14): новая игра называет тело началом поездки, и оно сыто.
+    needs_new_trip(pool, playerId);
 
     // ONE STEP is enough to see the seeding rule: everybody's clock is now live.
     const NeedsTick first = needs_step(reg, pool, 0, kRefPeriod);
@@ -740,11 +744,28 @@ void the_whole_floor_lives_on_one_clock() {
     CHECK(first.bodies == 64u);     // ...and 64 clocks moved, not 1
     CHECK(first.recovering == 0u);  // no rooms passed: nothing restores
 
-    // THE CAMERA HOLDER STARTS ITS TRIP AT THE TOP — `needs_roll`'s 70..100 band,
-    // undisturbed, because "the body you wake up in decides how long your first trip
-    // can be" is a player-facing design decision this widening must not quietly move.
+    // THE TRIP STARTS AT THE TOP — `needs_roll`'s 70..100 band, undisturbed: "the
+    // body you wake up in decides how long your first trip can be" is a
+    // player-facing design decision. С 2026-11-14 его держит ШАГ НОВОЙ ИГРЫ
+    // (`needs_new_trip`), а клок к камере слеп: тело С КАМЕРОЙ, но без шага
+    // новой игры, сеется как любое — точкой своих суток (вселение в жителя
+    // наследует его день). Мутация «вернуть ветку камеры в клок» красит
+    // проверку `stranger` ниже.
     CHECK(pool.needs(playerId).seeded == 1);
     CHECK(pool.needs(playerId).water > kStartWaterLo - 1.0f);
+    {
+        NpcPool p2;
+        p2.init();
+        Registry r2;
+        const NpcId stranger = p2.spawn();
+        p2.hp(stranger) = 100;
+        p2.max_hp(stranger) = 100;
+        CHECK(embody_as_player(r2, p2, stranger, 0) != entt::null);
+        needs_step(r2, p2, 0, kRefPeriod);
+        const Needs rolled = needs_roll_resident(giga::hash_u32(stranger + 1u));
+        CHECK(std::fabs(p2.needs(stranger).water -
+                        (rolled.water - kWaterDrainPerSec * kRefPeriod)) < 1e-3f);
+    }
 
     // A RESIDENT IS BORN PARTWAY THROUGH ITS OWN DAY. Two properties, both of which a
     // constant phase or a broken hash would fail: the spread is REAL, and nobody is

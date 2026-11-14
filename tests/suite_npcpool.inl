@@ -108,6 +108,17 @@ static void test_npcpool_all() {
         const LoadResult r = stream.ensure_loaded(stack, reg, ecs, pool, -50, playerId);
         CHECK(r.layer != kInvalidLayer);
         CHECK(pool.count() == floor_spec(FloorKind::Derelict).population);
+        // НАЧАЛО ПОЕЗДКИ — ШАГ НОВОЙ ИГРЫ (решение владельца 2026-11-14): вход
+        // без игрока назначает носителя камеры, и его строка нужд — свежий
+        // бросок полос старта, а не точка чужих суток. Мутация «снять
+        // needs_new_trip из floor_stream» красит строку броска.
+        CHECK(ecs.valid(r.player));
+        if (ecs.valid(r.player)) {
+            const NpcId pid = ecs.get<NpcRef>(r.player).id;
+            const Needs fresh = needs_roll(giga::hash_u32(pid + 1u));
+            CHECK(pool.needs(pid).seeded == 1);
+            CHECK(pool.needs(pid).water == fresh.water);
+        }
 
         bool allNegative = true;
         for (NpcId id = 0; id < pool.count(); ++id)

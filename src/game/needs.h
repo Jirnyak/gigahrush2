@@ -361,6 +361,15 @@ Needs needs_roll(std::uint32_t seed);
 // по изменяемой ссылке только потому, что у `NpcPool::needs` нет const-формы.
 Needs needs_row_for(NpcPool& pool, NpcId id);
 
+// НАЧАЛО ПОЕЗДКИ — сытое тело (решение владельца 2026-11-14, ответ (б): «сытый
+// старт сохранить, но как данные начала новой игры, а не ветку в клоке»).
+// Строка нужд тела, которое новая игра назвала началом поездки, — свежий бросок
+// по полосам старта (`kStart*` — данные выше), а не точка чужих суток. Зовёт
+// его ШАГ НОВОЙ ИГРЫ (`floor_stream`, назначение камеры при входе без игрока),
+// а не клок: клок сеет любую строку одним законом (`needs_roll_resident`).
+// Вселившийся в жителя наследует ЕГО сутки — строка уже засеяна.
+void needs_new_trip(NpcPool& pool, NpcId id);
+
 // The same roll, then advanced to a hashed point of that body's own day — see
 // `kResidentPhaseMaxSec`. Deterministic in `seed` like the roll it wraps, and built
 // by running the REAL `needs_advance` rather than by inventing second bands, so a

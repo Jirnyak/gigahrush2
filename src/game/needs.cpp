@@ -75,6 +75,11 @@ Needs needs_roll(std::uint32_t seed) {
 // значение то же, поэтому ни одно решение ни одного тела не сдвинулось.
 inline constexpr std::uint32_t kSaltNeedsSubstitute = 0x0a1eed5u;
 
+void needs_new_trip(NpcPool& pool, NpcId id) {
+    if (!pool.valid(id)) return;
+    pool.needs(id) = needs_roll(giga::hash_u32(id + 1u));
+}
+
 Needs needs_row_for(NpcPool& pool, NpcId id) {
     const Needs& row = pool.needs(id);
     if (row.seeded != 0) return row;
@@ -219,12 +224,16 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         // Lazy roll, the way `player_melee_step` attaches PlayerMelee lazily: no
         // spawn path, elevator or possession has to remember to seed the clock.
         // Seeded from the record id, so the same body is the same body across a
-        // reload — and a RESIDENT is seeded at its own point of the day, so a floor
-        // is not 419 people who all ate breakfast on the same frame.
-        if (n.seeded == 0) {
-            const std::uint32_t seed = giga::hash_u32(id + 1u);
-            n = camera ? needs_roll(seed) : needs_roll_resident(seed);
-        }
+        // reload — and every body is seeded at its own point of the day, so a
+        // floor is not 419 people who all ate breakfast on the same frame.
+        //
+        // ВЕТКИ «ЕСЛИ НОСИТЕЛЬ КАМЕРЫ — СЫТЫЙ БРОСОК» ЗДЕСЬ БОЛЬШЕ НЕТ
+        // (решение владельца 2026-11-14, ответ (б): «сытый старт сохранить, но
+        // как данные начала новой игры, а не ветку в клоке»; S27.17 п.7 «везде
+        // особенного игрока выжечь»). Клок сеет любую строку одним законом;
+        // сытым начинает тело, которое НОВАЯ ИГРА назвала началом поездки, —
+        // `needs_new_trip`, шагом новой игры, до первого тика.
+        if (n.seeded == 0) n = needs_roll_resident(giga::hash_u32(id + 1u));
 
         ReliefResult voided;
         needs_advance(n, dt, &voided);
