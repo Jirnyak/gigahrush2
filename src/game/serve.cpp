@@ -136,12 +136,29 @@ std::int32_t place_offer(const Room* r, VerbId verb) {
     return static_cast<std::int32_t>(r->declared[verb]) + r->supply[verb];
 }
 
+// СКОЛЬКО МЕСТО ДАСТ НА САМОМ ДЕЛЕ — предложение за вычетом лежащего на полу
+// (пикапы деянием не изымаются, см. `pickup_offer`). ОДНО число на трёх
+// читателей: табличку F (`serve_place_verb`), пробу двери (`serve_start`) и
+// контактный кадр (`land_effect`). До 2026-11-14 первые два читали
+// `place_offer` с пикапами, а эффект их вычитал, — табличка обещала трапезу, окно
+// шло 20 с и садилось в ноль (ревью готового кода). Решение жителя
+// (`serve_pick`) остаётся на `place_offer`: это слагаемое ОДНОЙ суммы S13, и
+// разойтись с `place_interest` ему нельзя.
+std::int32_t place_points(Registry& reg, const FloorRooms& fr, RoomId room,
+                          const Room* r, LayerId layer, VerbId verb) {
+    if (r == nullptr) return 0;
+    return place_offer(r, verb) - pickup_offer(reg, fr, room, layer, verb);
+}
+
 // ЛУЖА — `relief_puddle@game/needs.h`: один дом на оба канала облегчения
 // (невольный слив клока и осознанное облегчение двери).
 
 // КОНТАКТНЫЙ КАДР: эффект падает ОДИН раз за окно. Считает путь — своя сумка,
 // ящик комнаты или возможность места/тела — и публикует факт.
-void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
+//
+// Возвращает, лёг ли эффект: `false` — контакт впустую, и вызывающий помечает
+// окно `kAppliedEmpty`, чтобы исход не выглядел «свершившимся».
+bool land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
                  LayerId layer, VerbId verb, ItemId item, ServeTick& out) {
     Needs& n = ctx.pool.needs(id);
 
@@ -150,9 +167,9 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     if (item != kInvalidItem) {
         Inventory& inv = ctx.pool.inventory(id);
         const int slot = bag_slot_of(inv, item);
-        if (slot < 0) return; // предмет ушёл за время окна — деяние впустую
+        if (slot < 0) return false; // предмет ушёл за время окна — впустую
         const ConsumeResult res = apply_consumable(n, item, ctx.pool.hp(id));
-        if (!res.used) return;
+        if (!res.used) return false;
         if (--inv.slots[slot].count == 0) inv.slots[slot] = ItemSlot{};
         // ЦЕНА СОМНИТЕЛЬНОЙ ЕДЫ — ОДИН РАЗ, одной дверью урона, на канале,
         // которого броня не видит. До 2026-11-14 у носителя камеры она
@@ -171,7 +188,7 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
         ++out.applied;
         out.reliefSum += static_cast<std::int32_t>(res.food + res.water +
                                                    res.sleep);
-        return;
+        return true;
     }
 
     const RoomId room = room_at_pos(ctx.fr, pos);
@@ -204,7 +221,7 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
                 ++out.applied;
                 out.reliefSum += static_cast<std::int32_t>(res.food + res.water +
                                                            res.sleep);
-                return;
+                return true;
             }
             // ВЕЩЬ ВЗЯЛИ, А ОНА НЕ СРАБОТАЛА — деяние впустую, и на
             // возможность места оно НЕ падает: иначе место заплатило бы очками
@@ -218,7 +235,7 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
             // эффект; а глаголы, чей эффект `apply_consumable` не применяет
             // (`heal`), строки деяния не имеют и до сюда не доходят. Поэтому
             // здесь СТОИТ ВЕТКА, А НЕ АРИФМЕТИКА.
-            return;
+            return false;
         }
     }
 
@@ -235,12 +252,10 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     // здесь нет: разницу держит клок нужд, единственный, кто знает, какой бар
     // растёт, а какой падает.
     const std::int32_t points =
-        r != nullptr
-            ? place_offer(r, verb) - pickup_offer(ctx.reg, ctx.fr, room, layer, verb)
-            : 0;
+        place_points(ctx.reg, ctx.fr, room, r, layer, verb);
     const SatisfyResult sat =
         needs_satisfy(n, verb, static_cast<float>(points > 0 ? points : 0));
-    if (!sat.served || sat.gained <= 0.0f) return;
+    if (!sat.served || sat.gained <= 0.0f) return false;
     ++out.applied;
     out.reliefSum += static_cast<std::int32_t>(sat.gained);
 
@@ -260,6 +275,7 @@ void land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     // не правка здесь (закон публикации [game/witness.h]).
     if (ctx.bus != nullptr)
         deed_publish(*ctx.bus, verb, e, kInvalidNpc, pos, ctx.tick);
+    return true;
 }
 
 // ТЕЛО УШЛО ОТ ДЕЛА? (закон 5) Развилка решателя (S13.7a) — здесь, у
@@ -385,10 +401,12 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
         // (не хочется) и «даст ли место» (здесь нечем). У облегчения вторая
         // проба при нуле места отвечает «да» — величину называет тело.
         if (would_gain(row, verb, kNeedMax) <= 0.0f) return ServeRefusal::Full;
-        const Room* r = room_of(ctx.fr, room_at_pos(ctx.fr, pos));
-        const std::int32_t offer = place_offer(r, verb);
-        if (would_gain(row, verb, static_cast<float>(offer > 0 ? offer : 0)) <=
-            0.0f)
+        const RoomId room = room_at_pos(ctx.fr, pos);
+        const Transform* tr = ctx.reg.try_get<const Transform>(e);
+        const std::int32_t pts =
+            place_points(ctx.reg, ctx.fr, room, room_of(ctx.fr, room),
+                         tr != nullptr ? tr->layer : LayerId{0}, verb);
+        if (would_gain(row, verb, static_cast<float>(pts > 0 ? pts : 0)) <= 0.0f)
             return ServeRefusal::NoPlace;
     }
 
@@ -405,18 +423,22 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
     return ServeRefusal::None;
 }
 
-VerbId serve_place_verb(const ServeCtx& ctx, NpcId id, const vec3& pos) {
+VerbId serve_place_verb(const ServeCtx& ctx, NpcId id, const vec3& pos,
+                        LayerId layer) {
     VerbId best = static_cast<VerbId>(kVerbCount);
-    const Room* r = room_of(ctx.fr, room_at_pos(ctx.fr, pos));
+    const RoomId room = room_at_pos(ctx.fr, pos);
+    const Room* r = room_of(ctx.fr, room);
     if (r == nullptr) return best; // коридор: место не даёт ничего
     const Needs row = needs_row_for(ctx.pool, id);
     float top = 0.0f;
     for (std::size_t v = 0; v < kVerbCount; ++v) {
         const VerbId verb = static_cast<VerbId>(v);
         if (kVerbAction[v] >= kActionCount) continue;
-        const std::int32_t offer = place_offer(r, verb);
-        if (offer <= 0) continue; // место этот глагол не ПРЕДЛАГАЕТ
-        if (would_gain(row, verb, static_cast<float>(offer)) <= 0.0f) continue;
+        // Место этот глагол ПРЕДЛАГАЕТ — и предлагает то, что деяние возьмёт
+        // (за вычетом лежащего на полу): табличка не обещает пустого окна.
+        const std::int32_t pts = place_points(ctx.reg, ctx.fr, room, r, layer, verb);
+        if (pts <= 0) continue;
+        if (would_gain(row, verb, static_cast<float>(pts)) <= 0.0f) continue;
         // Наибольшая недостача: тот бар, которому больше всего некуда деться.
         const float lack = would_gain(row, verb, kNeedMax);
         if (lack <= top) continue; // ничья — младшему глаголу
@@ -435,8 +457,11 @@ bool serve_busy(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     if (mine >= kVerbCount) return false; // пустой слот или боевое окно
     // КОНТАКТНЫЙ КАДР — КОНЕЦ окна, поэтому опрос стоит ДО вопроса «занят
     // ли»: на последнем тике окна `act_busy` уже ложь, а эффект ещё не упал.
-    if (acting_take_apply(*act, ActSlot::Body, ctx.tick))
-        land_effect(ctx, e, id, pos, layer, mine, w.item, out);
+    if (acting_take_apply(*act, ActSlot::Body, ctx.tick) &&
+        !land_effect(ctx, e, id, pos, layer, mine, w.item, out)) {
+        w.applied = kAppliedEmpty; // снят, но впустую — исход значением
+        ++out.wasted;
+    }
     if (!act_busy(w, ctx.tick)) return false; // окно закрылось — тело вольно
     ++out.holding;
     return true;
@@ -508,6 +533,10 @@ void serve_step(const ServeCtx& ctx, LayerId layer, ServeTick& out) {
         Acting& act = view.get<Acting>(e);
         ActWindow& w = act_slot(act, ActSlot::Body);
         if (window_verb(w) >= kVerbCount) continue; // не деяние нужды
+        // Окно закрыто и оплачено — делать нечего: ни рвать, ни снимать. Без
+        // этой отсечки каждое тело, хоть раз поевшее, стоило бы каждый тик
+        // развилки решателя и проверки заявок (ревью готового кода).
+        if (!act_open(w, ctx.tick)) continue;
         const NpcId id = view.get<const NpcRef>(e).id;
         if (!ctx.pool.valid(id)) continue;
         // (1) ТЕЛО УШЛО ОТ ДЕЛА — обрыв СТАРШЕ контакта. Обрыв судит

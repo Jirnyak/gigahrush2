@@ -330,7 +330,94 @@ static void test_rooms_seam_metres_to_cell() {
     CHECK(room_at_pos(fr, vec3{256.5f, 256.5f, 256.5f}) == home);
 }
 
+// ЗАПАС ИДЁТ ЗА ПРЕДМЕТОМ НА КАЖДОМ ПЕРЕНОСЕ (ревью готового кода, 2026-11-14).
+// Оракул выше судит сам хук; здесь — что ВСЕ живые пути переноса его зовут:
+// экран обыска (взять слот, положить один — `container_take_slot` /
+// `container_put_one`), бросок на пол (`spawn_pickup`), спилл сумки умершего в
+// труп (`finalize_deaths`) и мобья добыча в трупе (`loot_dead_mobs`). Прежде
+// первые два и последние два шли мимо хука, и одна дверь утоления (CANON S27.1)
+// кормила «призраком» унесённого хлеба либо отвечала «здесь нечем» при полном
+// трупе. После каждого шага инкрементальный запас обязан совпасть с полным
+// пересчётом. Мутация «снять хук» на любом из пяти путей красит свою строку.
+static void test_rooms_supply_follows_every_transfer() {
+    using namespace giga::game;
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+    FloorRooms& fr = reg.ctx().emplace<FloorRooms>();
+    rooms_reset(fr);
+    const RoomBox box{10, 10, 10, 6, 6, 3};
+    const RoomId room = room_declare(fr, &box, 1, 0, 0);
+    const LayerId layer = 0;
+    const vec3 inRoom{25.0f, 25.0f, 21.0f};
+    CHECK(room_at_pos(fr, inRoom) == room);
+    const ItemId bread = item_by_string("bread");
+
+    // Совпадает ли живой запас с полным пересчётом — по всем глаголам.
+    const auto in_step = [&]() {
+        std::int32_t live[kVerbCount];
+        for (std::size_t v = 0; v < kVerbCount; ++v)
+            live[v] = room_of(fr, room)->supply[v];
+        rooms_supply_rebuild(fr, reg, layer);
+        bool same = true;
+        for (std::size_t v = 0; v < kVerbCount; ++v)
+            same = same && live[v] == room_of(fr, room)->supply[v];
+        return same;
+    };
+
+    const Entity crate = reg.create();
+    reg.emplace<Transform>(crate, inRoom, layer);
+    {
+        Container c;
+        c.inv.slots[0] = ItemSlot{bread, 3, 255, 0};
+        reg.emplace<Container>(crate, c);
+    }
+    rooms_supply_rebuild(fr, reg, layer);
+    CHECK(room_of(fr, room)->supply[kVerbEat] > 0); // посылка
+
+    Inventory bag;
+    CHECK(container_take_slot(reg, crate, bag, 0) == 3);
+    CHECK(in_step());                                   // (1) взять слот
+    int slot = -1;
+    for (int i = 0; i < kInvSlots; ++i)
+        if (bag.slots[i].item == bread) slot = i;
+    CHECK(slot >= 0);
+    CHECK(container_put_one(reg, crate, bag.slots[slot]));
+    CHECK(in_step());                                   // (2) положить один
+    CHECK(spawn_pickup(reg, layer, inRoom, bread, 1, 255) != entt::null);
+    CHECK(in_step());                                   // (3) бросить на пол
+
+    // (4) СПИЛЛ СУМКИ УМЕРШЕГО В ТРУП.
+    const NpcId dead = pool.spawn();
+    pool.hp(dead) = 0;
+    pool.max_hp(dead) = 100;
+    pool.inventory(dead).slots[0] = ItemSlot{bread, 2, 255, 0};
+    const Entity body = reg.create();
+    reg.emplace<Transform>(body, Transform{inRoom, layer});
+    reg.emplace<NpcRef>(body, NpcRef{dead});
+    reg.emplace<Dead>(body, Dead{entt::null, static_cast<std::uint8_t>(
+                                                  kAttritionChannel)});
+    CHECK(finalize_deaths(reg, pool, bus, 5u) == 1u);
+    CHECK(reg.all_of<Container>(body));
+    CHECK(in_step());
+
+    // (5) МОБЬЯ ДОБЫЧА В ТРУПЕ.
+    const Entity zomb = reg.create();
+    reg.emplace<Transform>(zomb, Transform{inRoom, layer});
+    const std::int16_t zhp =
+        static_cast<std::int16_t>(mob_def(MobKind::Zombie).hp);
+    reg.emplace<MobRef>(
+        zomb, MobRef{static_cast<std::uint8_t>(MobKind::Zombie), 1, zhp, zhp});
+    reg.emplace<Dead>(zomb, Dead{entt::null, static_cast<std::uint8_t>(
+                                                  kAttritionChannel)});
+    loot_dead_mobs(reg, layer, /*floorNumber=*/1, 77u);
+    CHECK(in_step());
+}
+
 static void test_rooms_object_all() {
+    test_rooms_supply_follows_every_transfer();
     test_rooms_isotropy();
     test_rooms_no_overlap_no_empty();
     test_rooms_wrap_all_axes();

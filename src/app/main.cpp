@@ -7506,8 +7506,11 @@ int main(int argc, char** argv) {
                 // спрашивает только «держит ли тело деяние».
                 const auto profPlaceT0 = prof_now();
                 serveTick = game::ServeTick{};
+                // Мир слоя — в МОМЕНТ вызова, как у клока нужд: ссылка
+                // `activeWorld`, взятая в начале кадра, после F9 посреди
+                // сим-петли смотрела бы в мир прежнего слота.
                 game::serve_step(game::ServeCtx{reg, pool, floorRooms, &bus,
-                                                simTick, &activeWorld,
+                                                simTick, &stack.layer(activeLayer),
                                                 &stainDirty},
                                  activeLayer, serveTick);
                 // ОБРЫВ ДЕЯНИЯ ЧЕЛОВЕКА — СЛОВОМ НА СТЕКЛЕ: F на ходу откроет
@@ -7517,16 +7520,28 @@ int main(int argc, char** argv) {
                 // Тело ушло из реестра посреди окна (смерть, уборка слоя) —
                 // забываем его молча: иначе висящая сущность навсегда
                 // заслонила бы слежку за следующим деянием.
-                if (deedBody != entt::null && !reg.valid(deedBody))
+                //
+                // Вселение посреди деяния: камера ушла в другое тело — исход
+                // прежнего тела стеклу НОВОГО не принадлежит, забываем молча.
+                if (deedBody != entt::null &&
+                    (!reg.valid(deedBody) || deedBody != player))
                     deedBody = entt::null;
                 if (deedBody != entt::null &&
                     !game::serve_holding(reg, deedBody, simTick)) {
-                    if (const auto* da = reg.try_get<game::Acting>(deedBody);
-                        da != nullptr &&
-                        game::act_slot(*da, game::ActSlot::Body).applied == 0) {
-                        std::snprintf(deedNote, sizeof deedNote, "ПРЕРВАНО");
+                    const auto* da = reg.try_get<game::Acting>(deedBody);
+                    const std::uint8_t ap =
+                        da != nullptr
+                            ? game::act_slot(*da, game::ActSlot::Body).applied
+                            : 0u;
+                    // Три исхода окна, все значением: сорвано до контакта
+                    // (`applied` 0), контакт впустую (`kAppliedEmpty` —
+                    // предмет ушёл, место перестало давать), свершилось.
+                    if (ap == 0u || ap == game::kAppliedEmpty) {
+                        std::snprintf(deedNote, sizeof deedNote, "%s",
+                                      ap == 0u ? "ПРЕРВАНО" : "ВПУСТУЮ");
                         deedNoteAt = simTick;
-                        std::fprintf(stderr, "[deed] прервано\n");
+                        std::fprintf(stderr, "[deed] %s\n",
+                                     ap == 0u ? "прервано" : "впустую");
                     } else {
                         std::fprintf(stderr, "[deed] свершилось\n");
                     }
@@ -8681,7 +8696,8 @@ int main(int argc, char** argv) {
                                     reg, pool, floorRooms, &bus, simTick,
                                     &stack.layer(activeLayer), &stainDirty};
                                 const game::VerbId v =
-                                    game::serve_place_verb(sc, nrF->id, ppos);
+                                    game::serve_place_verb(sc, nrF->id, ppos,
+                                                           activeLayer);
                                 if (v < game::kVerbCount)
                                     deed_say(game::serve_start(
                                                  sc, player, nrF->id, ppos, v,
@@ -9740,7 +9756,12 @@ int main(int argc, char** argv) {
                                   bind_key("interact"), what);
                     hctx.interactPrompt = interactBuf;
                 } else if (g_focus.what == game::Focus::What::None &&
-                           !game::serve_holding(reg, player, simTick)) {
+                           !game::serve_holding(reg, player, simTick) &&
+                           !(reg.all_of<game::Acting>(player) &&
+                             game::acting_busy(reg.get<game::Acting>(player),
+                                               game::ActSlot::Body, simTick))) {
+                    // Тело занято ЛЮБЫМ окном (замах тоже): дверь ответила бы
+                    // «ЗАНЯТ» — табличка не обещает того, чего F не сделает.
                     // МЕСТО — ЦЕЛЬ ПОСЛЕДНЕЙ ОЧЕРЕДИ (CANON S27.1): под
                     // прицелом ничего, а место может что-то дать этому телу —
                     // табличка называет деяние, и F сделает ровно его (тот же
@@ -9751,7 +9772,8 @@ int main(int argc, char** argv) {
                         const game::VerbId pv = game::serve_place_verb(
                             game::ServeCtx{reg, pool, floorRooms, nullptr,
                                            simTick},
-                            nrP->id, reg.get<Transform>(player).pos);
+                            nrP->id, reg.get<Transform>(player).pos,
+                            activeLayer);
                         if (pv < game::kVerbCount) {
                             std::snprintf(
                                 interactBuf, sizeof interactBuf, "[%s]  %s",
@@ -10529,19 +10551,20 @@ int main(int argc, char** argv) {
 
                 // Один перенос ящик→сумка, все счётчики в одном месте:
                 // и Take, и TakeAll ходят сюда, третьей копии закона нет.
+                //
+                // ПЕРЕНОС — ПРИМИТИВОМ ИГРОВОГО СЛОЯ С ХУКОМ ЗАПАСА
+                // (`container_take_slot@game/container.h`): до 2026-11-14 здесь
+                // слоты перекладывались своей рукой мимо хука, и унесённый хлеб
+                // оставался в предложении комнаты — одна дверь утоления кормила
+                // им «призраком» (CANON S27.1, ревью готового кода).
                 auto take_box_slot = [&](int i) {
                     if (!boxC) return;
-                    game::ItemSlot& sl = boxC->inv.slots[i];
-                    if (!game::item_valid(sl.item) || sl.count == 0) return;
-                    const std::uint16_t unplaced = game::inventory_give(
-                        pinv, sl.item, sl.count, sl.condition);
+                    const game::ItemId it = boxC->inv.slots[i].item;
+                    if (!game::item_valid(it)) return;
                     const std::uint16_t moved =
-                        static_cast<std::uint16_t>(sl.count - unplaced);
-                    if (moved == 0) return;  // сумка полна — остаток в ящике
+                        game::container_take_slot(reg, lootEntity, pinv, i);
                     // Ценность руками считает carried (живой инвентарь).
-                    containerTake += game::item_def(sl.item).value * moved;
-                    sl.count = unplaced;
-                    if (sl.count == 0) sl = game::ItemSlot{};
+                    containerTake += game::item_def(it).value * moved;
                 };
                 // ДЕЯНИЕ «обыск/кража» (S14.2 + S19): взятие из контейнера в
                 // комнате, владельцем которой стоит ЧУЖАЯ фракция, — rob; из
@@ -10642,19 +10665,11 @@ int main(int argc, char** argv) {
                     case InvUiRequest::Kind::Give: {
                         game::ItemSlot& s = pinv.slots[r.slot];
                         if (!game::item_valid(s.item) || s.count == 0) break;
-                        bool placed = false;
-                        if (boxC) {
-                            // B3: ручная двухфазка умерла — ЕДИНСТВЕННЫЙ
-                            // примитив inventory_give (он же хранит закон
-                            // «не смешивать износ»).
-                            placed = game::inventory_give(boxC->inv, s.item, 1,
-                                                          s.condition) == 0;
-                        }
-                        if (placed) {
-                            if (--s.count == 0) s = game::ItemSlot{};
+                        // Примитив с хуком запаса ([game/container.h]):
+                        // положенное в ящик становится местом (S12.5).
+                        if (boxC && game::container_put_one(reg, lootEntity, s))
                             // Решение могло протухнуть вместе со слотом.
                             game::sync_armour(reg, pool, player);
-                        }
                         break;
                     }
                     case InvUiRequest::Kind::Equip: {
@@ -10689,37 +10704,13 @@ int main(int argc, char** argv) {
                         game::ItemSlot& s = pinv.slots[r.slot];
                         if (s.item != game::kInvalidItem && s.count > 0) {
                             // Один предмет из стека — на пол, с его износом
-                            // ([loot.h] Pickup.condition). Тот же спавн, что
-                            // у разлива трупа: Transform/AABB/Mass, физика
-                            // общая.
+                            // ([loot.h] Pickup.condition), ЕДИНСТВЕННЫМ
+                            // писателем пикапа `spawn_pickup`: здесь стояла его
+                            // ручная копия, и она не звала хук запаса —
+                            // брошенное не становилось местом (S12.5).
                             const vec3 at = reg.get<Transform>(player).pos;
-                            Entity pe = reg.create();
-                            Transform ptr2;
-                            ptr2.pos = vec3{at.x, at.y, at.z};
-                            ptr2.layer = activeLayer;
-                            reg.emplace<Transform>(pe, ptr2);
-                            reg.emplace<Velocity>(pe);
-                            reg.emplace<AABB>(pe, AABB{vec3{0.15f, 0.15f, 0.15f}});
-                            reg.emplace<GravityAffected>(pe, GravityAffected{1.0f, false});
-                            reg.emplace<Renderable>(pe,
-                                Renderable{vec3{0.55f, 0.75f, 0.45f}});
-                            game::Pickup pk;
-                            pk.item = s.item;
-                            pk.count = 1;
-                            pk.condition = s.condition;
-                            reg.emplace<game::Pickup>(pe, pk);
-                            reg.emplace<Mass>(pe,
-                                Mass{static_cast<float>(
-                                         game::item_def(s.item).massG) *
-                                     0.001f});
-                            // Навес интерактора «дать предмет» — та же
-                            // форма, что spawn_pickup ([loot.cpp]):
-                            // досягаемость из роста смотрящего (body_reach),
-                            // E исполняет показанное.
-                            reg.emplace<game::Interactable>(
-                                pe, game::Interactable{
-                                        game::Interactable::Kind::Loot,
-                                        true});
+                            game::spawn_pickup(reg, activeLayer, at, s.item, 1,
+                                               s.condition);
                             if (--s.count == 0) s = game::ItemSlot{};
                             // Решение могло протухнуть вместе со слотом —
                             // строгое чтение это увидит; броню пересинхронизи-

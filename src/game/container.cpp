@@ -455,4 +455,36 @@ bool container_mark_opened(Registry& reg, Entity e, Container& c) {
     return true;
 }
 
+std::uint16_t container_take_slot(Registry& reg, Entity box, Inventory& to,
+                                  int slot) {
+    if (!reg.valid(box) || slot < 0 || slot >= kInvSlots) return 0;
+    Container* c = reg.try_get<Container>(box);
+    const Transform* t = reg.try_get<const Transform>(box);
+    if (c == nullptr || t == nullptr) return 0;
+    ItemSlot& sl = c->inv.slots[slot];
+    if (!item_valid(sl.item) || sl.count == 0) return 0;
+    const std::uint16_t unplaced =
+        inventory_give(to, sl.item, sl.count, sl.condition);
+    const std::uint16_t moved = static_cast<std::uint16_t>(sl.count - unplaced);
+    if (moved == 0) return 0; // сумка полна — остаток в ящике
+    // Взятое покидает МЕСТО — тем же хуком, что `loot_containers_step` выше.
+    supply_item_at(reg, t->pos, sl.item, -static_cast<int>(moved));
+    sl.count = unplaced;
+    if (sl.count == 0) sl = ItemSlot{};
+    return moved;
+}
+
+bool container_put_one(Registry& reg, Entity box, ItemSlot& from) {
+    if (!reg.valid(box) || !item_valid(from.item) || from.count == 0)
+        return false;
+    Container* c = reg.try_get<Container>(box);
+    const Transform* t = reg.try_get<const Transform>(box);
+    if (c == nullptr || t == nullptr) return false;
+    if (inventory_give(c->inv, from.item, 1, from.condition) != 0) return false;
+    // Положенное СТАНОВИТСЯ местом (S12.5).
+    supply_item_at(reg, t->pos, from.item, +1);
+    if (--from.count == 0) from = ItemSlot{};
+    return true;
+}
+
 } // namespace giga::game

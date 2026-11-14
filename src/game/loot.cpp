@@ -355,6 +355,13 @@ std::uint32_t loot_dead_mobs(Registry& reg, LayerId layer, int floorNumber,
             m.kind, tier, floorNumber, seed ^ key, box.inv.slots,
             static_cast<std::uint8_t>(kMaxCorpseSlots)));
         reg.emplace_or_replace<Container>(e, box);
+        // Лут, лёгший в труп, СТАНОВИТСЯ местом (S12.5) — тем же хуком, что
+        // `spawn_pickup` выше; без него запас комнаты не видел мобьей добычи,
+        // а одна дверь утоления, съев её, вычитала из чужого (ревью 2026-11-14).
+        const vec3 at = reg.get<const Transform>(e).pos;
+        for (const ItemSlot& s : box.inv.slots)
+            if (s.item != kInvalidItem && s.count > 0)
+                supply_item_at(reg, at, s.item, static_cast<int>(s.count));
     }
     return staged;
 }

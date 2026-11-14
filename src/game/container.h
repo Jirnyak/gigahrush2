@@ -144,6 +144,20 @@ std::int32_t loot_containers_step(Registry& reg, class NpcPool& pool, LayerId la
 // проглатывается.
 bool container_mark_opened(Registry& reg, Entity e, Container& c);
 
+// ПЕРЕНОС МЕЖДУ ДЕРЖАТЕЛЕМ (ящик, труп) И СУМКОЙ — ОДНА ДВЕРЬ, И С ХУКОМ ЗАПАСА
+// МЕСТА (S12.4: «инкрементально, событием»). До 2026-11-14 экран обыска
+// перекладывал слоты своей рукой и хук не звал: взятый из ящика хлеб оставался в
+// предложении комнаты, и одна дверь утоления (CANON S27.1) кормила им «призраком»
+// — F на месте брал возможность места, раздутую уже унесённым (ревью готового
+// кода). `box` обязан нести `Container` и `Transform`; без них — ноль/false.
+//
+// Взять слот целиком (сколько влезет в сумку). Возвращает, сколько ушло.
+std::uint16_t container_take_slot(Registry& reg, Entity box, Inventory& to,
+                                  int slot);
+// Положить ОДИН предмет из слота сумки в держатель; true — лёг (слот сумки
+// уменьшен на один).
+bool container_put_one(Registry& reg, Entity box, ItemSlot& from);
+
 // Roll the contents of one container. Exposed for tests: the value cap is the whole
 // design and it needs to be checkable without generating a floor.
 Container roll_container(ContainerKind kind, int floorZ, std::uint32_t seed);

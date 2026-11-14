@@ -656,7 +656,7 @@ static void test_serve_one_door_resident_and_human() {
     ServeTick t{};
     const ServeCtx ctx{reg, pool, fr, nullptr, kT0};
     CHECK(serve_begin(ctx, res, rid, inside, t));
-    const VerbId hv = serve_place_verb(ctx, hid, inside);
+    const VerbId hv = serve_place_verb(ctx, hid, inside, kLayer);
     CHECK(hv == kVerbDrink);
     CHECK(serve_start(ctx, hum, hid, inside, hv, kInvalidItem, t) ==
           ServeRefusal::None);
@@ -702,7 +702,7 @@ static void test_serve_one_door_resident_and_human() {
     CHECK(!serve_begin(ServeCtx{reg, pool, fr, nullptr, kT1}, res, rid, inside,
                        t2));
     CHECK(t2.nothing == 1);
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, kT1}, hid, inside) ==
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, kT1}, hid, inside, kLayer) ==
           kVerbDrink);
 }
 
@@ -811,6 +811,11 @@ static void test_serve_bag_item_is_the_chosen_one() {
     serve_step(ServeCtx{reg, pool, fr, &bus, kT3 + w.durTicks}, kLayer, gone);
     CHECK(gone.applied == 0);
     CHECK(pool.needs(hid).food == hungry);
+    // ...и исход — ЗНАЧЕНИЕМ: контакт снят впустую (`kAppliedEmpty`), а не
+    // «свершилось». По этому байту стекло человека пишет «ВПУСТУЮ»; мутация
+    // «не помечать пустой контакт» красит обе строки.
+    CHECK(gone.wasted == 1);
+    CHECK(act_slot(reg.get<Acting>(hum), ActSlot::Body).applied == kAppliedEmpty);
 }
 
 // --- 11. ТЕЛО УШЛО ОТ ДЕЛА — ОКНО РВЁТСЯ (закон 5) ------------------------
@@ -989,9 +994,9 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     // F НА МЕСТЕ НЕ МОЧИТСЯ В КОРИДОРЕ: выбиратель человека берёт только то,
     // что место ПРЕДЛАГАЕТ (жалоба владельца 2026-08-28). В санузле — да.
     pool.needs(hid).pee = 60.0f;
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, corridor) >=
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, corridor, kLayer) >=
           kVerbCount);
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inWc) ==
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inWc, kLayer) ==
           kVerbToilet);
     // ...и в КОМНАТЕ, где сортира нет (кухня с краном), — тоже нет: у
     // облегчения величину называет тело, поэтому проба «что ляжет» ответила бы
@@ -1001,7 +1006,34 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(room_at_pos(fr, inKitchen) == kitchen);
     CHECK(pool.needs(hid).water == kNeedMax); // пить не хочет — пробы нет
     CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid,
-                           inKitchen) >= kVerbCount);
+                           inKitchen, kLayer) >= kVerbCount);
+
+    // ЛЕЖАЩЕЕ НА ПОЛУ НЕ ОБЕЩАЕТСЯ (ревью готового кода, 2026-11-14). Хлеб,
+    // брошенный в пустой комнате, ПОДНИМАЕТ её запас (место бойни становится
+    // местом, S12.5), но деяние пикапов не берёт — значит и табличка F, и
+    // проба двери обязаны видеть ту же величину, что сядет на контакте, а не
+    // запас с пикапами. Прежде табличка обещала трапезу, окно шло 20 с и
+    // садилось в ноль. Мутация «`place_offer` вместо `place_points` в
+    // выбирателе» красит первую строку, «...в пробе двери» — вторую.
+    const RoomId pantry = declare_room(fr, 50, 30, 10, kVerbCount, 0);
+    const vec3 inPantry = cell_mid(51, 31, 10);
+    CHECK(room_at_pos(fr, inPantry) == pantry);
+    const ItemId loaf = item_by_string("bread");
+    {
+        const Entity pk = reg.create();
+        reg.emplace<Transform>(pk, inPantry, kLayer);
+        reg.emplace<Pickup>(pk, Pickup{loaf, 2, 255});
+    }
+    rooms_supply_rebuild(fr, reg, kLayer);
+    CHECK(room_of(fr, pantry)->supply[kVerbEat] > 0); // посылка: запас поднят
+    pool.needs(hid).food = 20.0f;
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inPantry,
+                           kLayer) >= kVerbCount);
+    reg.get<Transform>(hum).pos = inPantry;
+    ServeTick tp{};
+    CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, 900000u}, hum, hid,
+                      inPantry, kVerbEat, kInvalidItem, tp) ==
+          ServeRefusal::NoPlace);
 }
 
 static void test_serve_all() {

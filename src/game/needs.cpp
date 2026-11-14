@@ -184,12 +184,15 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
     // whose numbers land in the report ([jirnyak.md] §9: key on the component, never
     // on an identity).
     //
-    // ITERATING WHILE DAMAGING IS SAFE HERE, and it is checked rather than assumed:
-    // `apply_damage` ([combat.cpp]) writes hp, may write Velocity, and creates NO
-    // component — `Dead` is emplaced by `finalize_deaths`, one pass later, which is
-    // precisely the single-death-point contract [combat.h] describes. So no storage
-    // can grow under this view. An earlier revision of this file buffered the player
-    // through `find_player` for fear of that, and the fear was of the wrong function.
+    // ITERATING WHILE DAMAGING — SAFE BECAUSE THE POOL IS WARMED, not because no
+    // component is born. The old note here said `apply_damage` "creates NO
+    // component" — false: on a lethal blow it emplaces `Dead` ([combat.cpp]
+    // apply_damage tail), and the BIRTH of a pool under a live view is the class
+    // `mob_attack_step` is split in two for. So the `Dead` pool is warmed before
+    // the view opens (the rule `place_errand_step` and `serve_step` follow);
+    // emplacing an element into an existing pool moves nothing this view holds.
+    // (Caught by the review of the satiation door, 2026-11-14.)
+    (void)reg.storage<Dead>();
     auto view = reg.view<const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);

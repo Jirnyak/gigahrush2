@@ -9,6 +9,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/container.h" // Container — inventory overflow on death
+#include "game/room_supply.h" // supply_item_at — лёгшее в труп становится местом (S12.5)
 #include "game/embody.h"   // NpcRef
 #include "game/hunt.h"
 #include "game/inventory.h" // Inventory — spill NPC bag into Corpse / cell containers
@@ -531,10 +532,21 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
 
                 // Спилл сумки — ЕДИНСТВЕННЫМ примитивом (ещё одна ручная
                 // реализация «добавить» умерла с B3/C).
+                //
+                // ЛЁГШЕЕ В ТРУП И В ЯЩИК КЛЕТКИ СТАНОВИТСЯ МЕСТОМ — хуком запаса
+                // (S12.4/S12.5), как у любого другого переноса. До 2026-11-14
+                // хука здесь не было: предложение комнаты не росло, а съеденное
+                // из трупа одной дверью утоления вычиталось — запас уходил ниже
+                // правды, до ложного «ЗДЕСЬ НЕЧЕМ» (ревью готового кода).
                 auto push_corpse = [&](ItemId id, std::uint16_t count,
                                        std::uint8_t cond) -> std::uint16_t {
                     if (id == kInvalidItem || count == 0) return 0;
-                    return inventory_give(lootBox.inv, id, count, cond);
+                    const std::uint16_t left =
+                        inventory_give(lootBox.inv, id, count, cond);
+                    if (bodyTr != nullptr && left < count)
+                        supply_item_at(reg, bodyPos, id,
+                                       static_cast<int>(count - left));
+                    return left;
                 };
                 auto push_cell_containers = [&](ItemId id, std::uint16_t count,
                                                 std::uint8_t cond) -> std::uint16_t {
@@ -553,7 +565,11 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
                         // раскладка (одна из «восьми реализаций добавить
                         // предмет», one-container.md) умерла в пользу
                         // ЕДИНСТВЕННОГО примитива inventory_give.
+                        const std::uint16_t before = left;
                         left = inventory_give(c.inv, id, left, cond);
+                        if (left < before)
+                            supply_item_at(reg, ct.pos, id,
+                                           static_cast<int>(before - left));
                     }
                     return left;
                 };
