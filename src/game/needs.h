@@ -210,11 +210,9 @@ inline constexpr float kSleepingPillsWaterCost = 16.0f;  // items.ts:37
 inline constexpr float kSleepingPillsFoodCost  =  8.0f;
 inline constexpr std::int16_t kSleepingPillsHpCost = 4;
 
-// The reference's toilet (`interactive.ts:144-166`). No toilet object exists in
-// gigahrush2 yet; these are what `relieve_needs` takes when one does. Deliberately
-// partial, so a long trip still has to come home.
-inline constexpr float kToiletPeeRelief = 70.0f;
-inline constexpr float kToiletPooRelief = 65.0f;
+// (`kToiletPeeRelief` 70 / `kToiletPooRelief` 65 — «референсный унитаз» —
+// СНЕСЕНЫ 2026-11-14: их не читал ни один вызывающий, только тест, а облегчение
+// деянием опорожняет тело ЦЕЛИКОМ — `needs_satisfy`, CANON S27.1.)
 
 // One index past the last real `DamageChannel` — see the header comment.
 // `enum class : uint8_t` carries the underlying type's value range, so this cast is
@@ -538,15 +536,22 @@ ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount);
 // оговорка, что у `apply_consumable` («40 очков при 99 еды тратит еду и всё
 // равно выставляет счёт на 40: через тебя оно прошло либо так, либо так»).
 //
-// СОРТИР — ЕДИНСТВЕННЫЙ ГЛАГОЛ, У КОТОРОГО БАР ПАДАЕТ, А НЕ РАСТЁТ, и он
-// уходит в `relieve_needs` (та же дверь, которой пользуется клавиша P), а
-// `gained` у него есть СУММА СНЯТОГО с двух давлений. Пятого случая здесь
-// нет: глагол, которого этот клок не обслуживает, отвечает `served == false`
-// — ЗНАЧЕНИЕМ, а не тишиной, чтобы вызывающий мог не начинать деяние.
+// СОРТИР — ЕДИНСТВЕННЫЙ ГЛАГОЛ, У КОТОРОГО БАР ПАДАЕТ, А НЕ РАСТЁТ, и
+// величину у него называет ТЕЛО, а не место: `amount` не читается, тело
+// опорожняется целиком (закон клавиши P владельца 2026-08-28 на любое тело,
+// CANON S27.1); `gained` — СУММА СНЯТОГО с двух давлений. Предложение сортира у
+// места — вес решения «куда идти», а не объём. Пятого случая здесь нет: глагол,
+// которого этот клок не обслуживает, — и запас при нулевой величине, и пустое
+// тело у сортира — отвечают `served == false` ЗНАЧЕНИЕМ, а не тишиной, чтобы
+// вызывающий мог не начинать деяние.
 struct SatisfyResult {
     float gained = 0.0f;    // очков легло на бар (или снято с давлений)
     float peeQueued = 0.0f; // в очередь пищеварения, не в сам бар
     float pooQueued = 0.0f;
+    // Сколько мочи ВЫШЛО из тела — физика, а не бухгалтерия: по нему дверь
+    // утоления решает лужу (вышло не у места, которое даёт сортир), и ветки
+    // «если это сортир» у неё нет.
+    float relievedPee = 0.0f;
     bool served = false;    // этот глагол клок нужд обслуживает
 };
 SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount);

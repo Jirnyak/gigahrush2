@@ -7388,8 +7388,18 @@ int main(int argc, char** argv) {
                 // ответила «ничего не обгоняет место под ногами», СОВЕРШАЕТ
                 // деяние над предложением этого места — окном `Acting`, с
                 // контактным кадром в конце ([game/serve.h]).
+                //
+                // ОДИН ПОЛЛЕР ОКОН ДЕЯНИЯ — ДО прохода дела (CANON S27.1): он
+                // рвёт окно тела, ушедшего от дела (заявки бегства и наряда уже
+                // поданы выше), и снимает контактный кадр у ЛЮБОГО тела —
+                // жителя и носителя камеры одной дверью. Проход дела дальше
+                // спрашивает только «держит ли тело деяние».
                 const auto profPlaceT0 = prof_now();
                 serveTick = game::ServeTick{};
+                game::serve_step(game::ServeCtx{reg, pool, floorRooms, &bus,
+                                                simTick, &activeWorld,
+                                                &stainDirty},
+                                 activeLayer, serveTick);
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, activeLayer,
                     simNow, simTick, &activeWorld.gravity(), &nav.zones(),

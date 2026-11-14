@@ -79,6 +79,26 @@ static void test_action_is_monotone() {
     CHECK(!acting_busy(a, ActSlot::HandL, 110u));
     // А после окна — законно.
     CHECK(acting_begin(a, ActSlot::HandL, kActShoot, 5, 0, 110u));
+
+    // НЕОПЛАЧЕННЫЙ КОНТАКТ — ТОЖЕ ЗАНЯТОСТЬ (2026-11-14). Окно с контактом В
+    // КОНЦЕ истекло, а контакт никто не снял: оно должно эффект, и ЛЮБОЙ
+    // вызывающий — не только дверь утоления, но и боевой замах на том же слоте
+    // тела — обязан получить отказ, иначе эффект пропал бы молча. Мутация
+    // «`act_open` → `act_busy` в `acting_begin`» красит строку отказа ниже.
+    Acting d{};
+    CHECK(acting_begin(d, ActSlot::Body, kActSwing, 40, 40, 0u));
+    CHECK(act_owes_end(act_slot(d, ActSlot::Body)));
+    CHECK(!acting_busy(d, ActSlot::Body, 60u));                 // по времени — всё
+    CHECK(!acting_begin(d, ActSlot::Body, kActSwing, 10, 0, 60u)); // по смыслу — нет
+    // ...а окно с контактом ВНУТРИ, истёкшее без опроса, не держит никого:
+    // его судьба — дело его системы, и замах не должен стоять вечно.
+    Acting m{};
+    CHECK(acting_begin(m, ActSlot::Body, kActSwing, 40, 0, 0u));
+    CHECK(!act_owes_end(act_slot(m, ActSlot::Body)));
+    CHECK(acting_begin(m, ActSlot::Body, kActSwing, 10, 0, 60u));
+    // Долг отдан опросом — и слот свободен.
+    CHECK(acting_take_apply(d, ActSlot::Body, 60u));
+    CHECK(acting_begin(d, ActSlot::Body, kActSwing, 10, 0, 60u));
 }
 
 // ---- 3. Контактный кадр ---------------------------------------------------

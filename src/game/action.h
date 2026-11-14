@@ -105,7 +105,13 @@ struct ActWindow {
     std::uint16_t applyTicks = 0; // контактный кадр внутри окна (<= durTicks)
     ActionId action = 0;         // строка actions.csv; осмыслен при durTicks > 0
     std::uint8_t applied = 0;    // контактный кадр уже снят (одноразовость)
-    std::uint8_t pad_[2] = {};
+    // ПРЕДМЕТ, НАД КОТОРЫМ ДЕЙСТВИЕ (ItemId; 0 = действие без предмета). Жил в
+    // паддинге: размер окна тот же. Пишет его ОДНА дверь начала (`acting_begin`)
+    // — «чем утоляю» выбирает тот, кто начал (человек кнопкой «Использовать»),
+    // а контактный кадр берёт РОВНО этот предмет, а не «лучший на момент
+    // контакта»: иначе выбор человека подменялся бы правилом (CANON S27.1).
+    // В снимок сейва (`ActWindowSnap`) НЕ едет — см. там.
+    std::uint16_t item = 0;
 };
 
 // ЧЕМ НОСИТЕЛЬ ЗАНЯТ. Компонент на теле — на любом: у игрока, у моба и у
@@ -139,6 +145,22 @@ inline bool acting_busy(const Acting& a, ActSlot s, std::uint64_t tick) {
     return act_busy(act_slot(a, s), tick);
 }
 
+// ДОЛЖНО ЛИ ОКНО ЭФФЕКТ, КОТОРЫЙ ПАДАЕТ В ЕГО КОНЦЕ: контакт стоит на последнем
+// тике, а снят ещё не был. Такое окно по времени уже истекло (`act_busy` ложь),
+// а по смыслу ещё открыто: эффекта не было. Только форма «контакт в конце» —
+// у окна с контактом внутри (боевой замах, виндап) истечение без снятия значит
+// «опрос пропустил тик», и судьба эффекта — дело его системы, а не двери.
+inline bool act_owes_end(const ActWindow& w) {
+    return w.durTicks != 0 && w.applied == 0 && w.applyTicks == w.durTicks;
+}
+
+// ОТКРЫТО ЛИ ОКНО: идёт по времени ИЛИ ещё должно свой конечный эффект. Это
+// вопрос начала и обрыва; вопрос «держать ли тело / занят ли слот для худа» —
+// по-прежнему `act_busy`.
+inline bool act_open(const ActWindow& w, std::uint64_t tick) {
+    return act_busy(w, tick) || act_owes_end(w);
+}
+
 // Чем занят (kActionCount = «ничем», то есть слот свободен).
 inline ActionId acting_what(const Acting& a, ActSlot s, std::uint64_t tick) {
     const ActWindow& w = act_slot(a, s);
@@ -164,12 +186,21 @@ inline std::uint16_t acting_phase_e3(const Acting& a, ActSlot s,
 // `applyTicks` КЛАМПИТСЯ к окну, а не принимается на веру: контактный кадр за
 // пределами окна означал бы эффект, который не падает никогда, и диагностика
 // такого «действия, которое не срабатывает» стоит дороже, чем кламп.
+//
+// НЕОПЛАЧЕННЫЙ КОНТАКТ — ТОЖЕ ЗАНЯТОСТЬ (`act_open`, а не `act_busy`). Окно с
+// контактом В КОНЦЕ (деяние нужды: съел — наелся), которое истекло, но чей
+// контакт ещё никто не снял, должно эффект. Перезапиши его новым окном — и
+// эффект пропадёт молча, хотя ни одна причина обрыва не прозвучала. Сегодня
+// опрос стоит перед началом в одном проходе, но это порядок вызовов, а не
+// закон; закон — здесь (нашло враждебное ревью 2026-11-14 до кода).
+//
+// `item` — предмет действия (см. `ActWindow::item`); 0 = без предмета.
 inline bool acting_begin(Acting& a, ActSlot s, ActionId id,
                          std::uint32_t durTicks, std::uint32_t applyTicks,
-                         std::uint64_t tick) {
+                         std::uint64_t tick, std::uint16_t item = 0) {
     if (id >= kActionCount) return false; // глагола без строки не бывает
     ActWindow& w = act_slot(a, s);
-    if (act_busy(w, tick)) return false;
+    if (act_open(w, tick)) return false;
     const std::uint32_t dur = durTicks > 0xFFFFu ? 0xFFFFu : durTicks;
     const std::uint32_t app = applyTicks > dur ? dur : applyTicks;
     w.startTick = tick;
@@ -177,7 +208,7 @@ inline bool acting_begin(Acting& a, ActSlot s, ActionId id,
     w.applyTicks = static_cast<std::uint16_t>(app);
     w.action = id;
     w.applied = 0;
-    w.pad_[0] = w.pad_[1] = 0;
+    w.item = item;
     return true;
 }
 
@@ -185,9 +216,9 @@ inline bool acting_begin(Acting& a, ActSlot s, ActionId id,
 // дверь, один перевод ([core/tick.h] ms_to_ticks: вверх, и это замер).
 inline bool acting_begin_ms(Acting& a, ActSlot s, ActionId id,
                             std::uint32_t durMs, std::uint32_t applyMs,
-                            std::uint64_t tick) {
+                            std::uint64_t tick, std::uint16_t item = 0) {
     return acting_begin(a, s, id, ms_to_ticks(durMs), ms_to_ticks(applyMs),
-                        tick);
+                        tick, item);
 }
 
 // --- контактный кадр -------------------------------------------------------
@@ -226,11 +257,18 @@ struct BreakResult {
 // ОБОРВАТЬ. Причина — бит из `kBreak*`; не найденная в маске строки причина
 // окно НЕ рвёт (и это не отказ, а закон: перезарядку рвёт смена ствола, а не
 // всё на свете).
+//
+// РВЁТСЯ И ОКНО, ЕЩЁ ДОЛЖНОЕ КОНЕЧНЫЙ ЭФФЕКТ (`act_open`). Причина, пришедшая
+// на последнем тике окна или после него до опроса, обязана сорвать деяние, а не
+// дать ему упасть позже — уже в той комнате, куда тело унесло. До 2026-11-14
+// это закрывала отдельная ветка в `serve.cpp`, которая гасила окно
+// ПРИСВАИВАНИЕМ `durTicks = 0` мимо этой двери — второй ответ на вопрос «как
+// рвётся окно» и прямое нарушение S22.7.
 inline BreakResult break_action(Acting& a, ActSlot s, std::uint8_t reason,
                                 std::uint64_t tick) {
     BreakResult out;
     ActWindow& w = act_slot(a, s);
-    if (!act_busy(w, tick)) return out;
+    if (!act_open(w, tick)) return out;
     if (w.action >= kActionCount) return out;
     if ((kActionBreakMask[w.action] & reason) == 0) return out;
     out.broken = true;
@@ -250,6 +288,12 @@ inline BreakResult break_action(Acting& a, ActSlot s, std::uint8_t reason,
 // Снимок — отдельный POD, а не тот же `ActWindow` с подменённым смыслом поля:
 // «тик начала» и «сколько осталось» — разные величины, и одна структура под
 // обеими читалась бы как ошибка в половине мест.
+//
+// ⚠ РАСХОЖДЕНИЕ (названо 2026-11-14): `ActWindow::item` В СНИМОК НЕ ЕДЕТ, и
+// сегодня это безвредно только потому, что приложение снимок занятости не
+// заполняет вовсе (`acting` в сейве всегда нули — окна не переживают F5/F9).
+// Подключая снимок, обязательно везти и предмет: иначе загрузка прочтёт
+// `item = 0`, то есть «ем свой хлеб» молча станет «ем из ящика комнаты».
 struct ActWindowSnap {
     std::uint16_t durTicks = 0;
     std::uint16_t remainTicks = 0; // 0 = слот был свободен
@@ -336,8 +380,10 @@ static_assert(std::is_trivially_copyable_v<Acting>,
 // ---- ГВОЗДИ РАЗМЕРА -------------------------------------------------------
 // Окно умножается на три слота и на каждое тело этажа, поэтому его раскладка —
 // строка мира. 16 Б сняты ИСПОЛНЕНИЕМ пробника (8 + 2 + 2 + 1 + 1 = 14,
-// выравнивание по u64 до 16 — два байта названы полем `pad_`, чтобы дыра была
-// видна в раскладке, а не угадывалась по sizeof). `Acting` — ровно три окна.
+// выравнивание по u64 до 16). Два байта выравнивания были названы полем
+// `pad_`, чтобы дыра была видна в раскладке; 2026-11-14 их занял предмет
+// действия `item` (дверь утоления, CANON S27.1) — размер прежний, дыр нет.
+// `Acting` — ровно три окна.
 //
 // ЧТО ЭТО СТОИЛО И ЧТО ВЕРНУЛО: 48 Б на тело против снесённых 8 (две руки по
 // cd+reload) + 2 (замах) + 4 (моб) = 14. Плюс 34 Б на тело, и они покупают

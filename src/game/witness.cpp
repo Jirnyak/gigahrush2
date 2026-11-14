@@ -119,8 +119,7 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
         Room* room = (rid != 0 && rid <= rooms.list.size())
                          ? &rooms.list[rid - 1]
                          : nullptr;
-        if (room != nullptr && (room->declared[verb] > 0 ||
-                                room->supply[verb] > 0)) {
+        if (room_offers(room, verb)) {
             ++out.free;
             continue;
         }

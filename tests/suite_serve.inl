@@ -272,14 +272,29 @@ static void test_serve_eat_queues_and_toilet_relieves() {
     // СОРТИР — ЕДИНСТВЕННЫЙ ГЛАГОЛ, У КОТОРОГО БАР ПАДАЕТ, и снимает он ОБА
     // давления: одного полного пузыря достаточно, чтобы тело пошло, значит и
     // деяние обязано закрывать оба (ср. max двух давлений в demand_from_needs).
+    //
+    // ВЕЛИЧИНУ НАЗЫВАЕТ ТЕЛО (CANON S27.1, 2026-11-14): опорожняешься целиком,
+    // сколько бы ни предложило место. До этого здесь стояло «20 снято с
+    // мочевого из 30», и пол коридора под клавишей P давал больше унитаза.
     Needs p;
     p.pee = 30.0f;
     p.poo = 5.0f;
     const SatisfyResult relief = needs_satisfy(p, kVerbToilet, 20.0f);
     CHECK(relief.served);
-    CHECK(p.pee == 10.0f);
+    CHECK(p.pee == 0.0f);
     CHECK(p.poo == 0.0f);
-    CHECK(relief.gained == 25.0f); // 20 снято с мочевого + 5 с кишечника
+    CHECK(relief.gained == 35.0f); // всё: 30 с мочевого + 5 с кишечника
+    // ...и предложение места на объём не влияет вовсе: НОЛЬ у места (коридор)
+    // даёт то же опорожнение, — это и делает клавишу P той же дверью.
+    Needs corridor;
+    corridor.pee = 12.0f;
+    const SatisfyResult floorRelief = needs_satisfy(corridor, kVerbToilet, 0.0f);
+    CHECK(floorRelief.served);
+    CHECK(corridor.pee == 0.0f);
+    CHECK(floorRelief.gained == 12.0f);
+    // ПУСТОЕ ТЕЛО — отказ значением: облегчаться нечем, деяния не будет.
+    Needs empty;
+    CHECK(!needs_satisfy(empty, kVerbToilet, 50.0f).served);
 
     // ГЛАГОЛ НЕ ПРО КЛОК — `served == false` ЗНАЧЕНИЕМ, а не тишиной.
     Needs q;
@@ -578,6 +593,411 @@ static void test_serve_crowd_lives_on_offer_and_dies_without_it() {
     CHECK(servedBare == 0);
 }
 
+// ===========================================================================
+// ОДНА ДВЕРЬ УТОЛЕНИЯ ДЛЯ ЛЮБОГО ТЕЛА (CANON S27.1, 2026-11-14)
+// ===========================================================================
+//
+// «ИГРОК» ЗДЕСЬ — НАСТОЯЩЕЕ ТЕЛО С `CameraTag` (`embody_as_player`), а не
+// голый `embody`: без камеры тело читается жителем (`decider_of`), и мутация
+// «поллер только для жителей» выжила бы (Б3 ревью 2026-11-14).
+static Entity make_human(Registry& reg, NpcPool& pool, const vec3& pos,
+                         NpcId& idOut) {
+    const NpcId id = pool.spawn();
+    pool.hp(id) = 100;
+    pool.max_hp(id) = 100;
+    const Entity e = embody_as_player(reg, pool, id, kLayer);
+    reg.get<Transform>(e).pos = pos;
+    Needs& n = pool.needs(id);
+    n = Needs{};
+    n.food = kNeedMax;
+    n.water = kNeedMax;
+    n.sleep = kNeedMax;
+    n.seeded = 1;
+    idOut = id;
+    return e;
+}
+
+static std::uint8_t bag_count(const NpcPool& pool, NpcId id, ItemId item) {
+    std::uint8_t n = 0;
+    const Inventory& inv = pool.inventory(id);
+    for (int i = 0; i < kInvSlots; ++i)
+        if (inv.slots[i].item == item) n += inv.slots[i].count;
+    return n;
+}
+
+// --- 9. ЖИТЕЛЬ И ЧЕЛОВЕК — ОДНА ДВЕРЬ, ОДИН ИСХОД ---------------------------
+//
+// Двое в одной комнате с краном, с одинаковой жаждой. Выбирают по-разному —
+// житель одной суммой (`serve_begin`), человек сам (`serve_place_verb`, что
+// место даст ему сейчас), — а окно открывает ОДНА дверь, опрашивает ОДИН
+// поллер, и исход у них ОДИН: тот же глагол, та же длина окна, тот же прирост
+// бара, та же очередь пищеварения.
+static void test_serve_one_door_resident_and_human() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    const std::int16_t offer = 14;
+    const RoomId room = declare_room(fr, 70, 70, 70, kVerbDrink, offer);
+    const vec3 inside = cell_mid(71, 71, 70);
+    CHECK(room_at_pos(fr, inside) == room);
+
+    NpcId rid = 0, hid = 0;
+    const Entity res = make_body(reg, pool, inside, rid);
+    const Entity hum = make_human(reg, pool, inside, hid);
+    CHECK(decider_of(reg, res) == Decider::Resident); // посылки стенда
+    CHECK(decider_of(reg, hum) == Decider::Human);
+    const float thirsty = 10.0f;
+    pool.needs(rid).water = thirsty;
+    pool.needs(hid).water = thirsty;
+
+    constexpr std::uint64_t kT0 = 200u;
+    ServeTick t{};
+    const ServeCtx ctx{reg, pool, fr, nullptr, kT0};
+    CHECK(serve_begin(ctx, res, rid, inside, t));
+    const VerbId hv = serve_place_verb(ctx, hid, inside);
+    CHECK(hv == kVerbDrink);
+    CHECK(serve_start(ctx, hum, hid, inside, hv, kInvalidItem, t) ==
+          ServeRefusal::None);
+    CHECK(t.began == 2);
+    const ActWindow& wr = act_slot(reg.get<Acting>(res), ActSlot::Body);
+    const ActWindow& wh = act_slot(reg.get<Acting>(hum), ActSlot::Body);
+    CHECK(wr.action == wh.action);
+    CHECK(wr.durTicks == wh.durTicks);
+    CHECK(wr.item == kInvalidItem && wh.item == kInvalidItem);
+
+    // НЕТ МГНОВЕННОГО ПУТИ: до контактного кадра бар не тронут ни у кого.
+    ServeTick mid{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + wr.durTicks - 1}, kLayer,
+               mid);
+    CHECK(mid.holding == 2);
+    CHECK(mid.applied == 0);
+    CHECK(pool.needs(rid).water == thirsty);
+    CHECK(pool.needs(hid).water == thirsty);
+
+    // КОНТАКТ — ОДИН ПОЛЛЕР ДЛЯ ОБОИХ. Мутация «поллер только для жителей»
+    // (`decider_of != Resident → continue` в `serve_step`) красит строки
+    // человека ниже: его окно истекло бы, а эффект не упал никогда.
+    ServeTick land{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + wr.durTicks}, kLayer,
+               land);
+    CHECK(land.applied == 2);
+    CHECK(pool.needs(rid).water == thirsty + static_cast<float>(offer));
+    CHECK(pool.needs(hid).water == pool.needs(rid).water);
+    CHECK(pool.needs(hid).pendingPee == pool.needs(rid).pendingPee);
+    CHECK(pool.needs(hid).pendingPee > 0.0f);
+
+    // ...А ВЫБИРАЮТ ОНИ ПО-РАЗНОМУ, и это развилка решателя (S13.7a), а не
+    // вторая дверь. Умеренная жажда — ВЫШЕ колена терпения строки: житель её
+    // ещё терпит (сумма отвечает «ничего»), а человек решает сам, и F у крана
+    // обязан напоить его, а не ответить «не хочется» (Б2 ревью 2026-11-14).
+    // Мутация «выбиратель человека по кривой терпения» красит строку человека.
+    const float mild = 60.0f;
+    CHECK(needs_low_pressure(kVerbDrink, mild) == 0.0f); // посылка: житель терпит
+    pool.needs(rid).water = mild;
+    pool.needs(hid).water = mild;
+    const std::uint64_t kT1 = kT0 + wr.durTicks + 1u;
+    ServeTick t2{};
+    CHECK(!serve_begin(ServeCtx{reg, pool, fr, nullptr, kT1}, res, rid, inside,
+                       t2));
+    CHECK(t2.nothing == 1);
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, kT1}, hid, inside) ==
+          kVerbDrink);
+}
+
+// --- 10. СВОЯ СУМКА: ВЫБРАННЫЙ ПРЕДМЕТ, ВРЕМЯ, ЦЕНА ОДИН РАЗ ---------------
+static void test_serve_bag_item_is_the_chosen_one() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    const vec3 corridor = cell_mid(90, 90, 90); // комнаты нет: сумке она не нужна
+    CHECK(room_at_pos(fr, corridor) == kNoRoom);
+
+    const ItemId bread = item_by_string("bread");
+    const ItemId ration = item_by_string("liquidator_ration");
+    const ItemId risky = item_by_string("experimental_concentrate");
+    CHECK(bread != kInvalidItem && ration != kInvalidItem &&
+          risky != kInvalidItem);
+    // РАЗЛИЧИМОСТЬ СТЕНДА (Б3 ревью): оба бесплатны, а паёк крупнее хлеба —
+    // значит любое правило «лучшего» (цена, затем аргмакс) выбрало бы ПАЁК, и
+    // съеденный ХЛЕБ доказывает, что окно помнит выбор, а не судит заново.
+    CHECK(consumable_hp_cost(bread) == 0 && consumable_hp_cost(ration) == 0);
+    CHECK(kItemVerbs[ration - 1][kVerbEat] > kItemVerbs[bread - 1][kVerbEat]);
+    CHECK(consumable_hp_cost(risky) > 0);
+    CHECK(serve_item_verb(bread) == kVerbEat);
+
+    NpcId hid = 0;
+    const Entity hum = make_human(reg, pool, corridor, hid);
+    Inventory& inv = pool.inventory(hid);
+    inv.slots[0] = ItemSlot{ration, 1, 255, 0};
+    inv.slots[1] = ItemSlot{bread, 1, 255, 0};
+    inv.slots[2] = ItemSlot{risky, 1, 255, 0};
+    const float hungry = 20.0f;
+    pool.needs(hid).food = hungry;
+
+    constexpr std::uint64_t kT0 = 50u;
+    ServeTick t{};
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT0}, hum, hid, corridor,
+                      kVerbEat, bread, t) == ServeRefusal::None);
+    const ActWindow& w = act_slot(reg.get<Acting>(hum), ActSlot::Body);
+    CHECK(w.item == bread);
+    CHECK(w.action == kVerbAction[kVerbEat]); // длина — у глагола (трапеза)
+    // До контакта ни бар, ни сумка не тронуты.
+    ServeTick mid{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT0 + w.durTicks - 1}, kLayer, mid);
+    CHECK(pool.needs(hid).food == hungry);
+    CHECK(bag_count(pool, hid, bread) == 1);
+    ServeTick land{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT0 + w.durTicks}, kLayer, land);
+    CHECK(land.applied == 1);
+    CHECK(land.bag == 1);
+    CHECK(bag_count(pool, hid, bread) == 0);  // съеден ХЛЕБ...
+    CHECK(bag_count(pool, hid, ration) == 1); // ...а не паёк
+    CHECK(pool.needs(hid).food ==
+          hungry + static_cast<float>(kItemVerbs[bread - 1][kVerbEat]));
+    CHECK(bus.total_count(EventType::Deed) == 1); // факт съеденного — в шину
+
+    // РИСКОВАННАЯ ЕДА: HP списывается РОВНО ОДИН РАЗ — на контакте, каналом
+    // мимо брони. Второе списание жило в приложении и могло убить.
+    const std::int16_t hpBefore = pool.hp(hid);
+    const std::uint64_t kT1 = kT0 + w.durTicks + 1u;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT1}, hum, hid, corridor,
+                      kVerbEat, risky, t) == ServeRefusal::None);
+    CHECK(pool.hp(hid) == hpBefore); // открыть окно — не значит съесть
+    ServeTick land2{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT1 + w.durTicks}, kLayer, land2);
+    CHECK(land2.bag == 1);
+    CHECK(pool.hp(hid) == hpBefore - consumable_hp_cost(risky));
+
+    // ОТКАЗЫ ЗНАЧЕНИЕМ. Предмета нет в сумке:
+    const std::uint64_t kT2 = kT1 + w.durTicks + 1u;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,
+                      kVerbEat, bread, t) == ServeRefusal::NoItem);
+    // ...сытому есть некуда (паёк остался, а бар полон):
+    pool.needs(hid).food = kNeedMax;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,
+                      kVerbEat, ration, t) == ServeRefusal::Full);
+    // ...глагол не того предмета — тоже отказ, а не «окно трапезы над бинтом»:
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,
+                      kVerbDrink, ration, t) == ServeRefusal::NoRow);
+    // ...аптечкой утолить нельзя: у `heal` нет строки деяния (данные), и
+    // кнопки «Использовать» у неё нет — инвентарь спрашивает ту же функцию.
+    const ItemId bandage = item_by_string("bandage");
+    CHECK(bandage != kInvalidItem);
+    CHECK(serve_item_verb(bandage) >= kVerbCount);
+    // ...а питьё в коридоре — «здесь нечем»: место не даёт, тело — тоже.
+    pool.needs(hid).water = 10.0f;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,
+                      kVerbDrink, kInvalidItem, t) == ServeRefusal::NoPlace);
+
+    // ПРЕДМЕТ УШЁЛ ЗА ВРЕМЯ ОКНА — деяние впустую, без эффекта и без дюпа.
+    pool.needs(hid).food = hungry;
+    const std::uint64_t kT3 = kT2 + 1u;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT3}, hum, hid, corridor,
+                      kVerbEat, ration, t) == ServeRefusal::None);
+    pool.inventory(hid).slots[0] = ItemSlot{}; // выбросил посреди трапезы
+    ServeTick gone{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT3 + w.durTicks}, kLayer, gone);
+    CHECK(gone.applied == 0);
+    CHECK(pool.needs(hid).food == hungry);
+}
+
+// --- 11. ТЕЛО УШЛО ОТ ДЕЛА — ОКНО РВЁТСЯ (закон 5) ------------------------
+//
+// Человека уводит его собственная команда движения, жителя — заявка сильнее
+// дела. Одна причина (`leave`), развилка решателя у одного вызывающего.
+static void test_serve_leaving_breaks_the_window() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    const RoomId room = declare_room(fr, 80, 80, 80, kVerbDrink, 14);
+    const vec3 inside = cell_mid(81, 81, 80);
+    CHECK(room_at_pos(fr, inside) == room);
+    NpcId rid = 0, hid = 0;
+    const Entity res = make_body(reg, pool, inside, rid);
+    const Entity hum = make_human(reg, pool, inside, hid);
+    pool.needs(rid).water = 10.0f;
+    pool.needs(hid).water = 10.0f;
+    constexpr std::uint64_t kT0 = 5u;
+    ServeTick t{};
+    const ServeCtx ctx{reg, pool, fr, nullptr, kT0};
+    CHECK(serve_begin(ctx, res, rid, inside, t));
+    CHECK(serve_start(ctx, hum, hid, inside, kVerbDrink, kInvalidItem, t) ==
+          ServeRefusal::None);
+    const std::uint16_t dur = act_slot(reg.get<Acting>(hum), ActSlot::Body).durTicks;
+
+    // ПОРОГ — ТОТ ЖЕ, ЧТО У САМОГО ХОДА (`kWishMinLen`): шорох ниже порога не
+    // рвёт, команда «вперёд» — рвёт. Мутация «убрать ветку человека в
+    // `body_left`» красит `broke == 1` и бар ниже.
+    reg.get<Controller>(hum).wishDir = vec3{kWishMinLen * 0.5f, 0.0f, 0.0f};
+    ServeTick still{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + 1u}, kLayer, still);
+    CHECK(still.broke == 0);
+    CHECK(still.holding == 2);
+    reg.get<Controller>(hum).wishDir = vec3{1.0f, 0.0f, 0.0f};
+    ServeTick walk{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + 2u}, kLayer, walk);
+    CHECK(walk.broke == 1);   // ушёл человек...
+    CHECK(walk.holding == 1); // ...а житель, которого никто не уводил, стоит
+    reg.get<Controller>(hum).wishDir = vec3{0.0f, 0.0f, 0.0f};
+    ServeTick end{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + dur}, kLayer, end);
+    CHECK(end.applied == 1);
+    CHECK(pool.needs(hid).water == 10.0f); // ушедший не напился
+    CHECK(pool.needs(rid).water > 10.0f);
+}
+
+// --- 12. НЕОПЛАЧЕННЫЙ КОНТАКТ — ТОЖЕ ЗАНЯТОСТЬ (Б1/Б6 ревью) ---------------
+//
+// Окно истекло, а его конечный эффект ещё никто не снял (поллер этого тика
+// тело не посетил). Такое окно ОТКРЫТО: держит тело, не даёт себя
+// перезаписать — и рвётся законной причиной, если тело увели. Мутация
+// «`act_open` → `act_busy` в `acting_begin`» красит отказ `Busy` ниже: новое
+// окно перезаписало бы старое, и эффект пропал бы молча.
+static void test_serve_unpaid_contact_is_still_open() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    declare_room(fr, 60, 20, 60, kVerbDrink, 14);
+    const vec3 inside = cell_mid(61, 21, 60);
+    NpcId id = 0;
+    const Entity e = make_body(reg, pool, inside, id);
+    pool.needs(id).water = 10.0f;
+    constexpr std::uint64_t kT0 = 3u;
+    ServeTick t{};
+    CHECK(serve_begin(ServeCtx{reg, pool, fr, nullptr, kT0}, e, id, inside, t));
+    const std::uint16_t dur = act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
+    const std::uint64_t late = kT0 + dur + 5u; // далеко за концом, опроса не было
+    CHECK(!acting_busy(reg.get<Acting>(e), ActSlot::Body, late));
+    CHECK(serve_holding(reg, e, late));
+    ServeTick again{};
+    CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, late}, e, id, inside,
+                      kVerbDrink, kInvalidItem, again) == ServeRefusal::Busy);
+    CHECK(!serve_begin(ServeCtx{reg, pool, fr, nullptr, late}, e, id, inside,
+                       again));
+    CHECK(again.began == 0 && again.nothing == 0 && again.corridor == 0);
+    // ПРИЧИНА — «ЗАНЯТ», даже если и пить уже не хочется: занятость старше
+    // остальных ответов (человеку, жмущему F посреди трапезы, нужна именно
+    // она). Мутация «снять проверку занятости в `serve_start`» отдаёт здесь
+    // `Full` — пробы отвечают раньше, чем откажет `acting_begin`.
+    {
+        const float keep = pool.needs(id).water;
+        pool.needs(id).water = kNeedMax;
+        CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, late}, e, id, inside,
+                          kVerbDrink, kInvalidItem, again) == ServeRefusal::Busy);
+        pool.needs(id).water = keep;
+    }
+    // ...и долг отдаётся первым же опросом — эффект не потерян.
+    ServeTick pay{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, late}, kLayer, pay);
+    CHECK(pay.applied == 1);
+    CHECK(pool.needs(id).water > 10.0f);
+    CHECK(!serve_holding(reg, e, late));
+
+    // ТА ЖЕ ФОРМА, НО ТЕЛО УВЕЛИ: обрыв судит одна дверь (`break_action`),
+    // присваивания мимо неё больше нет (S22.7).
+    pool.needs(id).water = 10.0f;
+    const std::uint64_t kT1 = late + 1u;
+    CHECK(serve_begin(ServeCtx{reg, pool, fr, nullptr, kT1}, e, id, inside, t));
+    const std::uint64_t late2 = kT1 + dur + 2u;
+    CHECK(break_action(reg.get<Acting>(e), ActSlot::Body, kBreakLeave, late2)
+              .broken);
+    ServeTick after{};
+    serve_step(ServeCtx{reg, pool, fr, nullptr, late2}, kLayer, after);
+    CHECK(after.applied == 0);
+    CHECK(pool.needs(id).water == 10.0f);
+}
+
+// --- 13. ОБЛЕГЧЕНИЕ: ВЕЛИЧИНА — ТЕЛО, ЛУЖА — МЕСТО, ФАКТ — ВСЕГДА ---------
+static void test_serve_relief_anywhere_puddle_by_place() {
+    // МИР С ПОЛОМ: лужа — стейн на твёрдых атомах, без мира её не проверить.
+    World w;
+    for (int y = 28; y < 36; ++y)
+        for (int x = 28; x < 36; ++x) w.grid().fill_cell(x, y, 9, 1);
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    const RoomId wc = declare_room(fr, 30, 30, 10, kVerbToilet, 20);
+    const vec3 inWc = cell_mid(31, 31, 10);
+    const vec3 corridor = cell_mid(34, 34, 10);
+    CHECK(room_at_pos(fr, inWc) == wc);
+    CHECK(room_at_pos(fr, corridor) == kNoRoom);
+
+    NpcId hid = 0;
+    const Entity hum = make_human(reg, pool, corridor, hid);
+    std::vector<std::uint32_t> dirty;
+    // Пустое тело: облегчаться нечем — отказ значением.
+    ServeTick t{};
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, 10u, &w, &dirty}, hum, hid,
+                      corridor, kVerbToilet, kInvalidItem, t) ==
+          ServeRefusal::Full);
+
+    // В КОРИДОРЕ — окно облегчения (клавиша P), опорожнение ЦЕЛИКОМ, лужа и
+    // факт в шину (уместность судит свидетель, не дверь).
+    pool.needs(hid).pee = 60.0f;
+    pool.needs(hid).poo = 30.0f;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, 10u, &w, &dirty}, hum, hid,
+                      corridor, kVerbToilet, kInvalidItem, t) ==
+          ServeRefusal::None);
+    const std::uint16_t dur = act_slot(reg.get<Acting>(hum), ActSlot::Body).durTicks;
+    CHECK(dur == ms_to_ticks(kActionDurMs[kVerbAction[kVerbToilet]]));
+    ServeTick land{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, 10u + dur, &w, &dirty}, kLayer, land);
+    CHECK(land.applied == 1);
+    CHECK(pool.needs(hid).pee == 0.0f);
+    CHECK(pool.needs(hid).poo == 0.0f);
+    CHECK(land.puddles == 1);
+    CHECK(!dirty.empty());
+    CHECK(bus.total_count(EventType::Deed) == 1);
+
+    // В САНУЗЛЕ — то же опорожнение, но лужи НЕТ: место даёт сортир (тот же
+    // предикат `room_offers`, которым свидетель зануляет цену).
+    dirty.clear();
+    reg.get<Transform>(hum).pos = inWc;
+    pool.needs(hid).pee = 60.0f;
+    const std::uint64_t kT1 = 10u + dur + 1u;
+    CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT1, &w, &dirty}, hum, hid,
+                      inWc, kVerbToilet, kInvalidItem, t) == ServeRefusal::None);
+    ServeTick land2{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT1 + dur, &w, &dirty}, kLayer,
+               land2);
+    CHECK(land2.applied == 1);
+    CHECK(pool.needs(hid).pee == 0.0f);
+    CHECK(land2.puddles == 0);
+    CHECK(dirty.empty());
+    CHECK(bus.total_count(EventType::Deed) == 2);
+
+    // F НА МЕСТЕ НЕ МОЧИТСЯ В КОРИДОРЕ: выбиратель человека берёт только то,
+    // что место ПРЕДЛАГАЕТ (жалоба владельца 2026-08-28). В санузле — да.
+    pool.needs(hid).pee = 60.0f;
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, corridor) >=
+          kVerbCount);
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inWc) ==
+          kVerbToilet);
+    // ...и в КОМНАТЕ, где сортира нет (кухня с краном), — тоже нет: у
+    // облегчения величину называет тело, поэтому проба «что ляжет» ответила бы
+    // «да» где угодно, и держит здесь именно фильтр «место ПРЕДЛАГАЕТ».
+    const RoomId kitchen = declare_room(fr, 40, 30, 10, kVerbDrink, 14);
+    const vec3 inKitchen = cell_mid(41, 31, 10);
+    CHECK(room_at_pos(fr, inKitchen) == kitchen);
+    CHECK(pool.needs(hid).water == kNeedMax); // пить не хочет — пробы нет
+    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid,
+                           inKitchen) >= kVerbCount);
+}
+
 static void test_serve_all() {
     test_serve_pick_is_the_same_sum_filtered();
     test_serve_begins_on_demand_times_offer();
@@ -587,6 +1007,11 @@ static void test_serve_all() {
     test_serve_ignores_loose_loot();
     test_serve_prefers_free_food_over_risky();
     test_serve_crowd_lives_on_offer_and_dies_without_it();
+    test_serve_one_door_resident_and_human();
+    test_serve_bag_item_is_the_chosen_one();
+    test_serve_leaving_breaks_the_window();
+    test_serve_unpaid_contact_is_still_open();
+    test_serve_relief_anywhere_puddle_by_place();
 }
 
 } // namespace serve_suite

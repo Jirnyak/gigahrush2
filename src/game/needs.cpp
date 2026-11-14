@@ -507,22 +507,26 @@ ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {
 
 SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount) {
     SatisfyResult out;
-    if (amount <= 0.0f) return out;
     // Запас: бар РАСТЁТ, и сколько реально легло, отвечает `top_up` — тот же
     // файловый хелпер, которым кладёт в бар `apply_consumable`. Своя копия
     // клампа здесь была написана и СНЕСЕНА тем же часом: «что ЛАНДЕД, а не
     // число на жестянке» — правило в три строки, и вторая его реализация
     // рядом с первой есть ровно тот дефект, от которого правило и существует.
+    //
+    // Нулевая величина у запаса — «место ничего не даёт», и это `served ==
+    // false` ЗНАЧЕНИЕМ: вызывающий по нему решает, начинать ли деяние.
     const auto fill = [&](float& bar) {
+        if (amount <= 0.0f) return false;
         out.gained = top_up(bar, amount);
         out.served = true;
+        return true;
     };
     switch (verb) {
         case kVerbSleep:
             fill(n.sleep);
             break;
         case kVerbEat:
-            fill(n.food);
+            if (!fill(n.food)) break;
             // Что входит — то выходит: доли те же, что у предмета, и от
             // ЗАЯВЛЕННОЙ величины (см. шапку в [needs.h]).
             n.pendingPoo += amount * kFeedPooShare;
@@ -531,15 +535,26 @@ SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount) {
             out.peeQueued = amount * kFeedPeeShare;
             break;
         case kVerbDrink:
-            fill(n.water);
+            if (!fill(n.water)) break;
             n.pendingPee += amount * kDrinkPeeShare;
             out.peeQueued = amount * kDrinkPeeShare;
             break;
         case kVerbToilet: {
-            // Давление, а не запас: одна дверь с клавишей P.
-            const ReliefResult r = relieve_needs(n, amount, amount);
+            // ДАВЛЕНИЕ, А НЕ ЗАПАС — И ВЕЛИЧИНУ НАЗЫВАЕТ ТЕЛО, А НЕ МЕСТО
+            // (CANON S27.1, 2026-11-14). Опорожняешься целиком: столько, сколько
+            // в тебе есть, — это закон клавиши P владельца 2026-08-28 («полное
+            // опорожнение обеих ёмкостей»), распространённый на любое тело.
+            // `amount` здесь НЕ ЧИТАЕТСЯ: до 2026-11-14 житель в санузле снимал
+            // предложение места (20 + унитаз 19), а клавиша P в коридоре — всё,
+            // то есть пол давал больше унитаза. Предложение сортира у места
+            // остаётся ВЕСОМ решения (куда идти — S13), уместность судит
+            // свидетель (S19), лужу решает место; объём — тело.
+            const ReliefResult r = relieve_needs(n, kNeedMax, kNeedMax);
             out.gained = r.pee + r.poo;
-            out.served = true;
+            out.relievedPee = r.pee;
+            // «Нечего снимать» — тоже отказ значением: пустое тело не
+            // облегчается, и вызывающий не начнёт деяния, которое ничего не даст.
+            out.served = out.gained > 0.0f;
             break;
         }
         default:

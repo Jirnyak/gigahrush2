@@ -692,6 +692,21 @@ static void test_place_isotropy() {
 // пишет, значит проверка «v.x == ...» сразу после него читала бы значение ДО
 // вызова писателя и осталась бы зелёной при любой мутации проводки.
 
+// ТИК ДЕРЕВА ДЛЯ ДЕЯНИЯ: поллер окон, затем проход дела — ровно порядок
+// main.cpp (CANON S27.1). С 2026-11-14 контактный кадр и обрыв «тело ушло от
+// дела» живут в ОДНОМ поллере `serve_step` для любого тела, а проход дела
+// спрашивает только `serve_holding`; стенд, гоняющий проход дела без поллера,
+// мерил бы не дерево, а половину тика.
+namespace place_suite {
+static PlaceTick serve_then_place(Registry& reg, NpcPool& pool, FloorRooms& fr,
+                                  std::uint64_t tick, const ZoneNav& zones,
+                                  ServeTick& srv) {
+    serve_step(ServeCtx{reg, pool, fr, nullptr, tick}, kLayer, srv);
+    return place_errand_step(reg, pool, fr, kLayer, 0.0, tick, nullptr, &zones,
+                             &srv);
+}
+} // namespace place_suite
+
 static void test_place_errand_walks() {
     using namespace place_suite;
     Registry reg;
@@ -961,8 +976,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     ServeTick arriveServe{};
     const PlaceTick arrive =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, kArriveTick, nullptr, &zones,
-                          &arriveServe);
+        serve_then_place(reg, pool, fr, kArriveTick, zones, arriveServe);
     CHECK(arrive.arrived == 1);
     CHECK(arrive.walking == 0);
     CHECK(arrive.serving == 1);
@@ -1005,8 +1019,7 @@ static void test_place_errand_walks() {
     // окно обязано остаться открытым, а не быть сорванным «угрозой».
     ServeTick sameTickServe{};
     const PlaceTick sameTick =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, kArriveTick, nullptr, &zones,
-                          &sameTickServe);
+        serve_then_place(reg, pool, fr, kArriveTick, zones, sameTickServe);
     CHECK(sameTickServe.broke == 0);
     CHECK(sameTickServe.holding == 1);
     CHECK(sameTickServe.began == 0);
@@ -1019,8 +1032,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     ServeTick secondServe{};
     const PlaceTick second =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, kSecondTick, nullptr, &zones,
-                          &secondServe);
+        serve_then_place(reg, pool, fr, kSecondTick, zones, secondServe);
     CHECK(second.serving == 1);
     CHECK(secondServe.holding == 1);
     CHECK(secondServe.broke == 0);
@@ -1046,8 +1058,7 @@ static void test_place_errand_walks() {
     CHECK(steer_claim(reg, e, kThreatTick, SteerRank::Flee,
                       target_dir(vec3{0.0f, 1.0f, 0.0f}, kFleeSpeed)));
     ServeTick threatServe{};
-    place_errand_step(reg, pool, fr, kLayer, 0.0, kThreatTick, nullptr, &zones,
-                      &threatServe);
+    serve_then_place(reg, pool, fr, kThreatTick, zones, threatServe);
     CHECK(threatServe.broke == 1);
     CHECK(!acting_busy(reg.get<Acting>(e), ActSlot::Body, kThreatTick));
     CHECK(pool.needs(id).sleep == 0.0f); // сорванное деяние НЕ кормит
@@ -1061,16 +1072,17 @@ static void test_place_errand_walks() {
     // УГРОЗА, ПРИШЕДШАЯ НА ПОСЛЕДНЕМ ТИКЕ ОКНА, ТОЖЕ НЕ КОРМИТ — и этот гейт
     // поставлен на НАЙДЕННЫЙ АУДИТОМ дефект, а не на подтверждённое поведение.
     // Контактный кадр деяния нужды стоит РОВНО в конце окна, а `break_action`
-    // по построению отказывает на окне, которое уже кончилось, — поэтому
+    // по построению отказывал на окне, которое уже кончилось, — поэтому
     // угроза в этот тик оставляла бит `applied` нулём, и эффект падал ПОЗЖЕ, в
-    // той комнате, где тело окажется после бегства. Прежняя проверка на этом
+    // той комнате, где тело окажется после бегства. С 2026-11-14 это держит
+    // сама дверь обрыва: окно, ещё должное конечный эффект, открыто
+    // (`act_open`) и рвётся, — а поллер рвёт ДО того, как снять контакт. Прежняя проверка на этом
     // месте (`threatServe.applied == 0` сразу после обрыва) была ТАВТОЛОГИЕЙ:
     // в ветке угрозы эффект не падает ни в одной реализации.
     reg.get<ErrandPlan>(e).room = kNoRoom;
     reg.get<ErrandPlan>(e).nextPickAt = 0.0f;
     ServeTick lateBegin{};
-    place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/10, nullptr, &zones,
-                      &lateBegin);
+    serve_then_place(reg, pool, fr, /*tick=*/10, zones, lateBegin);
     CHECK(lateBegin.began == 1);
     const std::uint16_t dur =
         act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
@@ -1083,14 +1095,13 @@ static void test_place_errand_walks() {
     CHECK(steer_claim(reg, e, kLateThreatTick, SteerRank::Flee,
                       target_dir(vec3{0.0f, 1.0f, 0.0f}, kFleeSpeed)));
     ServeTick lateThreat{};
-    place_errand_step(reg, pool, fr, kLayer, 0.0, kLateThreatTick, nullptr,
-                      &zones, &lateThreat);
+    serve_then_place(reg, pool, fr, kLateThreatTick, zones, lateThreat);
     CHECK(lateThreat.broke == 1);
     // ...и дальше его не кормит НИКОГДА: сколько ни опрашивай, бар не поехал.
     ServeTick afterThreat{};
-    place_errand_step(reg, pool, fr, kLayer, 0.0,
-                      /*tick=*/10u + static_cast<std::uint64_t>(dur) * 2u, nullptr,
-                      &zones, &afterThreat);
+    serve_then_place(reg, pool, fr,
+                     /*tick=*/10u + static_cast<std::uint64_t>(dur) * 2u, zones,
+                     afterThreat);
     CHECK(afterThreat.applied == 0);
     CHECK(pool.needs(id).sleep == 0.0f);
     // ...зато НОВОЕ деяние начинается тем же тиком, и это не побочный эффект, а
@@ -1113,8 +1124,7 @@ static void test_place_errand_walks() {
     const std::uint64_t kCalmTick = 10u + static_cast<std::uint64_t>(dur) * 3u;
     ServeTick calmServe{};
     const PlaceTick calm =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, kCalmTick,
-                          nullptr, &zones, &calmServe);
+        serve_then_place(reg, pool, fr, kCalmTick, zones, calmServe);
     CHECK(calm.considered == 1);
     CHECK(calm.picked == 0);
     CHECK(calm.walking == 0);
@@ -1144,8 +1154,7 @@ static void test_place_errand_walks() {
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     ServeTick earlyServe{};
     const PlaceTick early =
-        place_errand_step(reg, pool, fr, kLayer, 0.0, kEarlyTick,
-                          nullptr, &zones, &earlyServe);
+        serve_then_place(reg, pool, fr, kEarlyTick, zones, earlyServe);
     CHECK(early.picked == 0);
     CHECK(early.judged == 0); // ни одной комнаты не суждено — запрос не звали
     CHECK(early.idle == 1);

@@ -807,15 +807,20 @@ void pressure() {
     CHECK(needs_hp_rate(over) == 0.0f);
 
     // Relief reports what actually came off, so "you did not need to" is
-    // distinguishable from "that helped" — and it is partial by design.
+    // distinguishable from "that helped". Частичная величина здесь — просто
+    // аргумент примитива: констант «референсного унитаза» 70/65 больше нет
+    // (снесены 2026-11-14 — их не читал никто, кроме этого теста; облегчение
+    // деянием опорожняет ВСЁ, CANON S27.1), а примитив обязан честно снимать
+    // любую часть.
+    constexpr float kPartPee = 70.0f, kPartPoo = 65.0f;
     over.pee = kNeedMax - 1.0f; // рукой: осознанный канал до слива
-    const ReliefResult r = relieve_needs(over, kToiletPeeRelief, kToiletPooRelief);
-    CHECK(approx(r.pee, kToiletPeeRelief, 1e-4f));
+    const ReliefResult r = relieve_needs(over, kPartPee, kPartPoo);
+    CHECK(approx(r.pee, kPartPee, 1e-4f));
     CHECK(r.poo == 0.0f);          // there was nothing to relieve
-    CHECK(approx(over.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f));
+    CHECK(approx(over.pee, kNeedMax - 1.0f - kPartPee, 1e-4f));
     CHECK(needs_hp_rate(over) == 0.0f && over.pee > 0.0f);
     const ReliefResult again = relieve_needs(over, 1000.0f, 0.0f);
-    CHECK(approx(again.pee, kNeedMax - 1.0f - kToiletPeeRelief, 1e-4f)); // clamped, honest
+    CHECK(approx(again.pee, kNeedMax - 1.0f - kPartPee, 1e-4f)); // clamped, honest
     CHECK(over.pee == 0.0f);
     CHECK(relieve_needs(over, 0.0f, 0.0f).pee == 0.0f);
 

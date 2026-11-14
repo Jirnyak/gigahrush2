@@ -78,7 +78,7 @@ void controller_step(Registry& reg, float dt, const GravityField* gravity) {
         if (ctl.fly) wish += up * ctl.wishDir.z;
 
         float len = length(wish);
-        if (len > 1e-4f) wish = wish * (1.0f / len);
+        if (len > kWishMinLen) wish = wish * (1.0f / len);
         vec3 desired = wish * ctl.moveSpeed;
 
         if (ctl.fly) {

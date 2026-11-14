@@ -36,7 +36,7 @@ inline constexpr ActionId kActShot = 5;  // мобий выстрел — ОКН
 inline constexpr ActionId kActRest = 6;  // деяние нужды над предложением места (S24) — длина АВТОРСКАЯ здесь: носителя-оружия у неё нет. Порядок четырёх длин — из прозы: сон длиннее трапезы, трапеза длиннее питья
 inline constexpr ActionId kActMeal = 7;
 inline constexpr ActionId kActSip = 8;  // самое короткое деяние нужды — им и мерят живой цикл на прогоне в 700 кадров (окно обязано закрыться внутри 6 с сима)
-inline constexpr ActionId kActRelief = 9;  // осознанное опорожнение У ПРЕДЛОЖЕНИЯ места; невольный слив на капе остаётся у клока (needs_advance) и деянием НЕ является
+inline constexpr ActionId kActRelief = 9;  // осознанное опорожнение ВСЕГО давления где бы тело ни стояло (закон клавиши P владельца 2026-08-28 — на любое тело, CANON S27.1); место решает только лужу, уместность судит свидетель (S19). Невольный слив на капе — клок (needs_advance), окна у него нет
 
 inline constexpr std::size_t kActionCount = 10;
 
@@ -45,8 +45,8 @@ inline constexpr std::size_t kActionCount = 10;
 inline constexpr std::uint8_t kBreakHand = 1u << 0;
 // target: цель ушла из полосы досягаемости — замах срывается ДО контактного кадра
 inline constexpr std::uint8_t kBreakTarget = 1u << 1;
-// threat: тело забрала угроза — бегство старше дела, деяние нужды срывается
-inline constexpr std::uint8_t kBreakThreat = 1u << 2;
+// leave: тело ушло от дела — жителя забрала заявка сильнее дела (бегство, наряд), человека повела его команда движения; деяние нужды срывается
+inline constexpr std::uint8_t kBreakLeave = 1u << 2;
 
 // Маска законных причин обрыва по строке. Причина ВНЕ маски действие НЕ
 // рвёт — это и есть «одна дверь обрыва, и она по данным».
