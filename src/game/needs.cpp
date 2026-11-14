@@ -45,110 +45,10 @@ float top_up(float& bar, float amount) {
     return bar - before;
 }
 
-// Resolve the camera holder on `layer` and its pool record.
-//
-// The view is opened and closed inside this helper, which is deliberate: callers
-// go on to run `apply_damage`, and that can `emplace<Dead>` and reallocate the
-// registry's storage — dangling any view still being iterated (the crash
-// documented in `combat.cpp mob_attack_step`). Returning by value means there is
-// no live view left to dangle.
-struct PlayerRef {
-    Entity entity = entt::null;
-    NpcId id = kInvalidNpc;
-};
-PlayerRef find_player(Registry& reg, NpcPool& pool, LayerId layer) {
-    PlayerRef out;
-    auto view = reg.view<const CameraTag, const Transform, const NpcRef>();
-    for (auto e : view) {
-        if (view.get<const Transform>(e).layer != layer) continue;
-        const NpcId id = view.get<const NpcRef>(e).id;
-        if (!pool.valid(id)) continue;
-        out.entity = e;
-        out.id = id;
-        break;
-    }
-    return out;
-}
-
-// Which bar a consumable is bought for, so one selection routine serves both keys.
-enum class Appetite : std::uint8_t { Food, Water };
-
-// The restore magnitude a consumable advertises for `want`, or 0 if it does not
-// serve that appetite at all. Reads `useA` from the table — no ids are hardcoded
-// anywhere in this file, only `UseEffect` values.
-float advertised(ItemId id, Appetite want) {
-    if (!item_valid(id)) return 0.0f;
-    const bool serves = want == Appetite::Food ? item_feeds(id) : item_hydrates(id);
-    if (!serves) return 0.0f;
-    const float a = static_cast<float>(item_def(id).useA);
-    return a > 0.0f ? a : 0.0f;
-}
-
-// `use_best_heal`'s selection rule generalised over the bar being filled, plus one
-// key it does not have: HP cost outranks fit. Full argument and numbers in
-// [needs.h]; the short version is that ranking on fit alone forces the eat key onto
-// experimental_concentrate at a 31-point deficit — 6 HP for 8 food points, 100 s of
-// clock — and onto zhelemish_raw / infected_mushroom on a pure slot-index tie with
-// rawmeat / soup_cube, where the tighter fit is worth exactly nothing.
-ConsumeResult use_best_for(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, Appetite want, std::uint64_t tick) {
-    ConsumeResult out;
-    const PlayerRef me = find_player(reg, pool, layer);
-    if (me.entity == entt::null) return out;
-
-    Needs& n = pool.needs(me.id);
-    if (n.seeded == 0) n = needs_roll(giga::hash_u32(me.id + 1u));
-
-    const float bar = want == Appetite::Food ? n.food : n.water;
-    const float missing = kNeedMax - bar;
-    if (missing <= 0.0f) return out;   // full; do not burn a ration
-
-    Inventory& inv = pool.inventory(me.id);
-    int best = -1;
-    float bestAmt = 0.0f;
-    bool bestFree = false;
-    for (int i = 0; i < kInvSlots; ++i) {
-        const ItemSlot& s = inv.slots[i];
-        if (s.item == kInvalidItem || s.count == 0) continue;
-        const float amt = advertised(s.item, want);
-        if (amt <= 0.0f) continue;
-        // `noCost`, not `free`: a local named `free` hides ::free and MSVC /W4 reports
-        // that as C4459 in a build that must stay warning-clean.
-        const bool noCost = consumable_hp_cost(s.item) == 0;
-
-        if (best < 0) { best = i; bestAmt = amt; bestFree = noCost; continue; }
-        // PRIMARY KEY: a free candidate wins outright and a costly one cannot
-        // displace it, so fit is only ever compared within one cost class.
-        if (noCost != bestFree) {
-            if (noCost) { best = i; bestAmt = amt; bestFree = true; }
-            continue;
-        }
-        // SECONDARY KEY: smallest that covers, else largest. Strict comparisons, so
-        // a tie in `amt` stays with the lower slot index.
-        const bool bestCovers = bestAmt >= missing;
-        const bool thisCovers = amt >= missing;
-        if (thisCovers && (!bestCovers || amt < bestAmt)) { best = i; bestAmt = amt; }
-        else if (!thisCovers && !bestCovers && amt > bestAmt) { best = i; bestAmt = amt; }
-    }
-    if (best < 0) return out;
-
-    const ItemId used = inv.slots[best].item;
-    out = apply_consumable(n, used, pool.hp(me.id));
-    if (!out.used) return out;
-
-    if (--inv.slots[best].count == 0) inv.slots[best] = ItemSlot{};
-
-    // The HP cost of questionable food goes through THE damage entry point like
-    // everything else, on the channel armour cannot see — a vest does not settle
-    // your stomach. `apply_consumable` already floored the cost at hp-1, so this
-    // can never be lethal.
-    if (out.hpCost > 0)
-        apply_damage(reg, pool, me.entity, out.hpCost, kAttritionChannel,
-                     entt::null);
-
-    bus.publish(EventType::ItemTransferred, me.id, kInvalidNpc, used, tick);
-    return out;
-}
+// (`find_player` / `use_best_for` — мгновенный путь утоления НОСИТЕЛЯ КАМЕРЫ,
+// со своим поиском тела по `CameraTag` и своим правилом выбора из сумки, —
+// СНЕСЕНЫ 2026-11-14: утоление одной дверью для любого тела, окном `Acting`,
+// предмет выбирает человек кнопкой «Использовать» (CANON S27.1, [game/serve.h]).)
 
 } // namespace
 
@@ -410,9 +310,10 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
 
     float pooShare = 0.0f;
     float peeShare = 0.0f;
-    // ONE source for the cost, because `use_best_for` now ranks on it: a switch here
-    // and a second switch there would drift, and the drift would be invisible —
-    // selection would keep calling a row free while eating it charged 6 HP.
+    // ONE source for the cost, because the room's selection rule ranks on it
+    // (`best_lying@serve.cpp`): a switch here and a second switch there would drift,
+    // and the drift would be invisible — selection would keep calling a row free
+    // while eating it charged 6 HP.
     const std::int16_t cost = consumable_hp_cost(item);
 
     switch (eff) {
@@ -452,7 +353,7 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
         case UseEffect::SleepingPills:
             // The one item that restores sleep, and it charges for it in the other
             // three bars. Not a food or a drink: `item_feeds`/`item_hydrates` both
-            // reject it, so `use_best_food`/`use_best_drink` will never reach for it.
+            // reject it; through the one door it is the verb `sleep`.
             out.sleep = top_up(n.sleep, a);
             n.water = clamp_need(n.water - kSleepingPillsWaterCost);
             n.food  = clamp_need(n.food  - kSleepingPillsFoodCost);
@@ -478,16 +379,6 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
     out.item = item;
     out.used = true;
     return out;
-}
-
-ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick) {
-    return use_best_for(reg, pool, bus, layer, Appetite::Food, tick);
-}
-
-ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
-                            LayerId layer, std::uint64_t tick) {
-    return use_best_for(reg, pool, bus, layer, Appetite::Water, tick);
 }
 
 ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {

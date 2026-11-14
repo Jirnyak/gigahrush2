@@ -8,6 +8,7 @@
 #include "game/item_table.h"    // item_def/name/desc — карточка и глиф
 #include "game/equip.h"         // item_durability — полоска износа и кнопка починки
 #include "game/ranged_table.h"  // ranged_for_item — строка урона в карточке
+#include "game/serve.h"         // serve_item_verb — кнопка «Использовать» = вход в дверь утоления
 #include "game/weapon_table.h"  // melee_for_item — строка урона в карточке
 #include "world/types.h"        // kCellSize — reach в метрах для карточки
 
@@ -431,7 +432,10 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
             }
             ImGui::SameLine();
         }
-        if (policy.allowUse && d.useEffect != 0) {
+        // КНОПКА ЕСТЬ ТОЛЬКО У ТОГО, ЧТО ДВЕРЬ УТОЛЕНИЯ ПРИМЕТ (CANON S27.1):
+        // предмет с глаголом деяния. Прежде условием был `useEffect != 0`, и
+        // кнопка обещала бы аптечке то, чего дверь не сделает.
+        if (policy.allowUse && game::serve_item_verb(sel.item) < game::kVerbCount) {
             if (ImGui::Button("Использовать [U]") ||
                 ImGui::IsKeyPressed(ImGuiKey_U, false))
                 req = {InvUiRequest::Kind::Use, slot8, EquipSlot::None};

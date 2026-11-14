@@ -3619,9 +3619,37 @@ int main(int argc, char** argv) {
     game::ParticleBurstQueue particleBursts;
 
     bool healWanted = false;
-    bool eatWanted = false;       // G, consumed by one sim step
-    bool reliefWanted = false;    // P, осознанное облегчение ([needs.h])
-    bool drinkWanted = false;     // T, consumed by one sim step
+    // ДЕЯНИЯ ЧЕЛОВЕКА ОДНОЙ ДВЕРЬЮ УТОЛЕНИЯ (CANON S27.1, [game/serve.h]).
+    // НАМЕРЕНИЯ, а не вызовы: кнопка «Использовать» живёт в UI-фазе кадра, а
+    // окно деяния открывается на сим-клоке — тем же швом, что все разовые
+    // действия выживания. Мгновенных eat/drink (G/T, позже консоль) больше нет.
+    bool reliefWanted = false;    // P — облегчение на месте, окном
+    game::ItemId useItemWanted = game::kInvalidItem; // «Использовать» в инвентаре
+    // СЛОВО НА СТЕКЛЕ ПОСЛЕ ДЕЯНИЯ: отказ двери («НЕ ХОЧЕТСЯ», «ЗДЕСЬ НЕЧЕМ»)
+    // или обрыв («ПРЕРВАНО»). Состояние ИНТЕРФЕЙСА, а не мира: дверь отвечает
+    // значением, слово выбирает тот, кто знает, что жал человек. Живёт две
+    // секунды сим-времени. Тело, чьё окно было открыто, помнится сущностью: при
+    // вселении посреди деяния «прервано» новому телу не достаётся.
+    char deedNote[48] = {};
+    std::uint64_t deedNoteAt = 0;
+    Entity deedBody = entt::null;
+    const auto deed_say = [&](game::ServeRefusal r, game::VerbId v) {
+        const game::ActionId a =
+            v < game::kVerbCount ? game::kVerbAction[v] : game::kActionCount;
+        const char* what = a < game::kActionCount ? game::kActionNames[a] : "?";
+        if (r == game::ServeRefusal::None) {
+            deedNote[0] = '\0';
+            deedBody = player; // окно открыто сейчас — обрыв на следующем тике тоже слово
+
+            std::fprintf(stderr, "[deed] начато: %s (%.1f с)\n", what,
+                         static_cast<double>(game::kActionDurMs[a]) * 0.001);
+            return;
+        }
+        std::snprintf(deedNote, sizeof deedNote, "%s",
+                      game::serve_refusal_text(r));
+        deedNoteAt = simTick;
+        std::fprintf(stderr, "[deed] отказ: %s — %s\n", what, deedNote);
+    };
     bool craftWanted = false;     // C, consumed by one sim step
     bool scrapWanted = false;     // X, consumed by one sim step
     // Run state, not world state, so it lives beside the ledger. CraftingState is a
@@ -3695,9 +3723,6 @@ int main(int argc, char** argv) {
     game::StatusSet playerStatus{};
     std::uint64_t lastStatusLogTick = ~0ull;
     std::int32_t healed = 0;
-    float ateFood = 0.0f;      // food points that LANDED, for the HUD
-    float drankWater = 0.0f;
-    std::int32_t consumeHpCost = 0;   // HP paid for risky food, running total
 
     // ── Debug console (~) ───────────────────────────────────────────────
     // The registry + default commands are game code ([console.h]); the app owns
@@ -5638,9 +5663,7 @@ int main(int argc, char** argv) {
             // window's. (Set even while paused so a menu button lands on the
             // first tick after resume rather than vanishing.)
             if (has(ConsoleRequest::Heal)) healWanted = true;
-            if (has(ConsoleRequest::Eat)) eatWanted = true;
             if (has(ConsoleRequest::Relief)) reliefWanted = true;
-            if (has(ConsoleRequest::Drink)) drinkWanted = true;
             if (has(ConsoleRequest::Possess)) possessWanted = true;
             if (has(ConsoleRequest::Save)) saveWanted = true;
             if (has(ConsoleRequest::Load)) loadWanted = true;
@@ -7250,6 +7273,92 @@ int main(int argc, char** argv) {
                                      "настоящего клока\n",
                                      aged);
                         shotActionConsumed = true;
+                    } else if (shotAction == "utolenie" && reg.valid(player) &&
+                               shotFramesSeen >= 450) {
+                        // ЖИВОЕ ДОКАЗАТЕЛЬСТВО ОДНОЙ ДВЕРИ УТОЛЕНИЯ (CANON S27.1)
+                        // НАСТОЯЩИМИ НАМЕРЕНИЯМИ ЧЕЛОВЕКА: те же поля
+                        // `useItemWanted` и `reliefWanted`, что пишут кнопка
+                        // «Использовать» и клавиша P, тот же блок двери ниже по
+                        // тику, тот же поллер. Прибор только кладёт бутылку в
+                        // сумку, ставит жажду и давление — и ПЕЧАТАЕТ, что
+                        // случилось: до окна, после окна, по шагам.
+                        //   шаг 1: «Использовать» питьё → окно, вода растёт в
+                        //          КОНЦЕ окна, бутылка уходит из сумки;
+                        //   шаг 2: P → окно облегчения, давления — в ноль.
+                        // Порог 450 — как у `nuzhdy`: `--floor K` срабатывает на
+                        // кадре 420. Мгновенного пути в дереве нет — значит, бар
+                        // между «начато» и «свершилось» обязан стоять.
+                        static int utolStage = 0;
+                        const auto* nrH = reg.try_get<game::NpcRef>(player);
+                        if (nrH != nullptr && pool.valid(nrH->id)) {
+                            game::Needs& hn = pool.needs(nrH->id);
+                            game::Inventory& hb = pool.inventory(nrH->id);
+                            const bool open =
+                                game::serve_holding(reg, player, simTick);
+                            if (utolStage == 0) {
+                                game::ItemId drink = game::kInvalidItem;
+                                for (std::size_t i = 0;
+                                     i < game::kItemCount && drink == game::kInvalidItem;
+                                     ++i)
+                                    if (game::serve_item_verb(
+                                            static_cast<game::ItemId>(i + 1)) ==
+                                        game::kVerbDrink)
+                                        drink = static_cast<game::ItemId>(i + 1);
+                                for (int k = 0; k < game::kInvSlots; ++k)
+                                    if (hb.slots[k].item == game::kInvalidItem) {
+                                        hb.slots[k] = game::ItemSlot{drink, 1, 255, 0};
+                                        break;
+                                    }
+                                hn.water = 30.0f;
+                                hn.pee = 60.0f;
+                                hn.poo = 20.0f;
+                                useItemWanted = drink;
+                                std::fprintf(stderr,
+                                             "[utolenie] шаг 1: «Использовать» %s "
+                                             "— вода %.1f, tick %llu\n",
+                                             game::item_name(drink),
+                                             static_cast<double>(hn.water),
+                                             static_cast<unsigned long long>(simTick));
+                                utolStage = 1;
+                            } else if (utolStage == 1 && open) {
+                                std::fprintf(stderr,
+                                             "[utolenie] окно открыто — вода %.1f "
+                                             "(до контакта не растёт), tick %llu\n",
+                                             static_cast<double>(hn.water),
+                                             static_cast<unsigned long long>(simTick));
+                                utolStage = 2;
+                            } else if (utolStage == 2 && !open) {
+                                std::fprintf(stderr,
+                                             "[utolenie] окно закрыто — вода %.1f, "
+                                             "pendingPee %.1f, tick %llu\n",
+                                             static_cast<double>(hn.water),
+                                             static_cast<double>(hn.pendingPee),
+                                             static_cast<unsigned long long>(simTick));
+                                std::fprintf(stderr,
+                                             "[utolenie] шаг 2: P — pee %.1f poo "
+                                             "%.1f\n",
+                                             static_cast<double>(hn.pee),
+                                             static_cast<double>(hn.poo));
+                                reliefWanted = true;
+                                utolStage = 3;
+                            } else if (utolStage == 3 && open) {
+                                std::fprintf(stderr,
+                                             "[utolenie] окно облегчения открыто — "
+                                             "pee %.1f poo %.1f, tick %llu\n",
+                                             static_cast<double>(hn.pee),
+                                             static_cast<double>(hn.poo),
+                                             static_cast<unsigned long long>(simTick));
+                                utolStage = 4;
+                            } else if (utolStage == 4 && !open) {
+                                std::fprintf(stderr,
+                                             "[utolenie] окно облегчения закрыто — "
+                                             "pee %.1f poo %.1f, tick %llu\n",
+                                             static_cast<double>(hn.pee),
+                                             static_cast<double>(hn.poo),
+                                             static_cast<unsigned long long>(simTick));
+                                utolStage = 5;
+                            }
+                        }
                     } else if (shotAction == "letopis" && reg.valid(player)) {
                         // ЛЕТОПИСЬ (S21) НА ЖИВОЙ МАШИНЕ, а не в стенде.
                         // Образец — ветка `status` выше: настоящий путь, не
@@ -7400,6 +7509,31 @@ int main(int argc, char** argv) {
                                                 simTick, &activeWorld,
                                                 &stainDirty},
                                  activeLayer, serveTick);
+                // ОБРЫВ ДЕЯНИЯ ЧЕЛОВЕКА — СЛОВОМ НА СТЕКЛЕ: F на ходу откроет
+                // окно и тут же сорвёт его, и без слова это выглядело бы как
+                // «ничего не произошло». Окно, закрытое без эффекта (`applied`
+                // ноль), — сорвано; севшее — нет.
+                // Тело ушло из реестра посреди окна (смерть, уборка слоя) —
+                // забываем его молча: иначе висящая сущность навсегда
+                // заслонила бы слежку за следующим деянием.
+                if (deedBody != entt::null && !reg.valid(deedBody))
+                    deedBody = entt::null;
+                if (deedBody != entt::null &&
+                    !game::serve_holding(reg, deedBody, simTick)) {
+                    if (const auto* da = reg.try_get<game::Acting>(deedBody);
+                        da != nullptr &&
+                        game::act_slot(*da, game::ActSlot::Body).applied == 0) {
+                        std::snprintf(deedNote, sizeof deedNote, "ПРЕРВАНО");
+                        deedNoteAt = simTick;
+                        std::fprintf(stderr, "[deed] прервано\n");
+                    } else {
+                        std::fprintf(stderr, "[deed] свершилось\n");
+                    }
+                    deedBody = entt::null;
+                }
+                if (deedBody == entt::null && reg.valid(player) &&
+                    game::serve_holding(reg, player, simTick))
+                    deedBody = player;
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, activeLayer,
                     simNow, simTick, &activeWorld.gravity(), &nav.zones(),
@@ -8526,16 +8660,67 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // ОБЛЕГЧЕНИЕ БОЛЬШЕ НЕ НА КЛАВИШЕ (вердикт
-                        // владельца 2026-08-28: «писать надо, но не кнопкой»).
-                        // Эта ветка стояла ПОСЛЕДНИМ fallback-ом клавиши E и
-                        // ловила любое нажатие, которому не досталось цели —
-                        // отсюда «жму E у двери, а персонаж мочится». Нужда
-                        // остаётся ([needs.h] relieve_needs — живой API,
-                        // потребитель придёт своим законом: туалет как
-                        // интерактив или автоматическое облегчение по
-                        // давлению).
+                        // F НА МЕСТЕ — ДЕЯНИЕ ОДНОЙ ДВЕРЬЮ УТОЛЕНИЯ (CANON
+                        // S27.1: «деянием на месте — F в кухне, на койке»).
+                        // ТОЛЬКО когда под прицелом нет НИЧЕГО: место — цель
+                        // последней очереди, и табличка показывает, что именно
+                        // сделает F, ДО нажатия (тот же вызов
+                        // `serve_place_verb` строит её ниже). Это не возврат
+                        // снятого запасного пути (вердикт владельца 2026-08-28
+                        // «жму E у двери, а персонаж мочится»): у двери фокус —
+                        // портал, а облегчение где застало — только клавиша P;
+                        // F берёт лишь то, что место ПРЕДЛАГАЕТ.
+                        if (!handled &&
+                            g_focus.what == game::Focus::What::None &&
+                            activeLayer != kInvalidLayer) {
+                            if (const auto* nrF =
+                                    reg.try_get<game::NpcRef>(player);
+                                nrF && pool.valid(nrF->id)) {
+                                const game::ServeCtx sc{
+                                    reg, pool, floorRooms, &bus, simTick,
+                                    &stack.layer(activeLayer), &stainDirty};
+                                const game::VerbId v =
+                                    game::serve_place_verb(sc, nrF->id, ppos);
+                                if (v < game::kVerbCount)
+                                    deed_say(game::serve_start(
+                                                 sc, player, nrF->id, ppos, v,
+                                                 game::kInvalidItem, serveTick),
+                                             v);
+                            }
+                        }
 
+                    }
+                }
+                // «ИСПОЛЬЗОВАТЬ» И P — ТА ЖЕ ДВЕРЬ (CANON S27.1). Предмет своей
+                // сумки окно запоминает; облегчение величину берёт у тела,
+                // лужу решает место. Стоит ДО клока нужд и итогов `[needs]`:
+                // начало деяния человека — такое же начало, как у жителя.
+                if (reliefWanted || useItemWanted != game::kInvalidItem) {
+                    const bool relief = reliefWanted;
+                    const game::ItemId useItem = useItemWanted;
+                    reliefWanted = false;
+                    useItemWanted = game::kInvalidItem;
+                    const auto* nrU = reg.valid(player)
+                                          ? reg.try_get<game::NpcRef>(player)
+                                          : nullptr;
+                    if (nrU != nullptr && pool.valid(nrU->id) &&
+                        activeLayer != kInvalidLayer) {
+                        const vec3 up = reg.get<Transform>(player).pos;
+                        const game::ServeCtx sc{reg, pool, floorRooms, &bus,
+                                                simTick, &stack.layer(activeLayer),
+                                                &stainDirty};
+                        if (relief)
+                            deed_say(game::serve_start(sc, player, nrU->id, up,
+                                                       game::kVerbToilet,
+                                                       game::kInvalidItem,
+                                                       serveTick),
+                                     game::kVerbToilet);
+                        if (useItem != game::kInvalidItem) {
+                            const game::VerbId v = game::serve_item_verb(useItem);
+                            deed_say(game::serve_start(sc, player, nrU->id, up, v,
+                                                       useItem, serveTick),
+                                     v);
+                        }
                     }
                 }
                 if (possessWanted) {
@@ -9374,74 +9559,22 @@ int main(int argc, char** argv) {
                 // несколькими сотнями строк ниже (`carriedRpg = *rsLive`) уносило
                 // это вперёд — порядок был несущим. Системы снесены 2026-11-08;
                 // правило «живой компонент, а не его копия» остаётся.
-                // Eating and drinking sit beside healing (подбор теперь глагол прицела — pickup_take в лестнице E), so a
-                // ration picked up this tick can be eaten this tick. Both refuse a
-                // full bar, so a mistimed press costs nothing; both also fill
-                // pendingPee / pendingPoo, which is the ONLY producer the pressure
-                // metering has. [needs.h]
+                // ЕДА, ПИТЬЁ, СОН И ОБЛЕГЧЕНИЕ ЧЕЛОВЕКА ЗДЕСЬ БОЛЬШЕ НЕ ЖИВУТ
+                // (2026-11-14, CANON S27.1). Здесь стояли мгновенные
+                // `use_best_food/drink` носителя камеры со ВТОРЫМ списанием HP
+                // за рискованную еду (каналом Kinetic, через броню, после пола
+                // hp−1 — то есть еда могла убить) и клавиша P, собранная прямо
+                // в приложении (`relieve_needs(100,100)` + лужа на литерале −Z +
+                // деяние). Теперь это ОДНА дверь утоления для любого тела
+                // ([game/serve.h]) — входы человека стоят у интеракций, ДО
+                // клока нужд, чтобы их начала попадали в итоги `[needs]`.
                 //
-                // hpCost is routed through apply_damage rather than dropped:
-                // `apply_consumable` deliberately does NOT touch HP and reports the
-                // cost for the caller to bill ([needs.h]), clamped so bad food
-                // floors at 1 HP. Discarding it would make risky food free, and a
-                // gamble with no downside is not a gamble.
-                if (eatWanted || drinkWanted) {
-                    game::ConsumeResult cr{};
-                    if (eatWanted) {
-                        cr = game::use_best_food(reg, pool, bus, activeLayer,
-                                                 simTick);
-                        ateFood += cr.food;
-                        eatWanted = false;
-                    } else {
-                        cr = game::use_best_drink(reg, pool, bus, activeLayer,
-                                                  simTick);
-                        drankWater += cr.water;
-                        drinkWanted = false;
-                    }
-                    if (cr.used && cr.hpCost > 0 && reg.valid(player)) {
-                        game::apply_damage(reg, pool, player, cr.hpCost,
-                                           game::DamageChannel::Kinetic, player);
-                        consumeHpCost += cr.hpCost;
-                    }
-                }
+                // Аптечка остаётся мгновенной: у глагола `heal` нет строки
+                // деяния (данные) — это следующий инкремент двери, а не её часть.
                 if (healWanted) {
                     healed += game::use_best_heal(reg, pool, bus, activeLayer,
                                                   simTick);
                     healWanted = false;
-                }
-                // ОСОЗНАННОЕ ОБЛЕГЧЕНИЕ (P): полное опорожнение обеих
-                // ёмкостей ([needs.h] relieve_needs), лужа — тем же
-                // универсальным стейном, что кровь. Невольный канал
-                // (давление на капе) — закон клока нужд, не клавиши.
-                if (reliefWanted) {
-                    reliefWanted = false;
-                    if (reg.valid(player)) {
-                        if (const auto* nrr = reg.try_get<game::NpcRef>(player);
-                            nrr && pool.valid(nrr->id)) {
-                            const game::ReliefResult rr = game::relieve_needs(
-                                pool.needs(nrr->id), 100.0f, 100.0f);
-                            if (rr.pee > 0.0f) {
-                                const vec3 rp = reg.get<Transform>(player).pos;
-                                stain_splat(stack.layer(activeLayer), rp,
-                                            vec3{0, 0, -1.0f}, 1.4f,
-                                            /*rays=*/14, kStainUrine,
-                                            static_cast<std::uint32_t>(simTick),
-                                            stainDirty);
-                            }
-                            if (rr.pee > 0.0f || rr.poo > 0.0f) {
-                                std::fprintf(stderr,
-                                             "[relief] осознанно: pee %.0f "
-                                             "poo %.0f\n", rr.pee, rr.poo);
-                                // ДЕЯНИЕ «сортир» (S19): облегчение — факт в
-                                // шину; в уместной комнате потребитель сам
-                                // занулит цену (S19.1.3), здесь ветки нет.
-                                game::deed_publish(
-                                    bus, game::kVerbToilet, player,
-                                    game::kInvalidNpc,
-                                    reg.get<Transform>(player).pos, simTick);
-                            }
-                        }
-                    }
                 }
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
@@ -9611,8 +9744,33 @@ int main(int argc, char** argv) {
                     std::snprintf(interactBuf, sizeof interactBuf, "[%s]  %s",
                                   bind_key("interact"), what);
                     hctx.interactPrompt = interactBuf;
+                } else if (g_focus.what == game::Focus::What::None &&
+                           !game::serve_holding(reg, player, simTick)) {
+                    // МЕСТО — ЦЕЛЬ ПОСЛЕДНЕЙ ОЧЕРЕДИ (CANON S27.1): под
+                    // прицелом ничего, а место может что-то дать этому телу —
+                    // табличка называет деяние, и F сделает ровно его (тот же
+                    // `serve_place_verb`, что в лестнице интеракций). Слово —
+                    // имя строки `actions.csv`, не литерал здесь.
+                    if (const auto* nrP = reg.try_get<game::NpcRef>(player);
+                        nrP && pool.valid(nrP->id)) {
+                        const game::VerbId pv = game::serve_place_verb(
+                            game::ServeCtx{reg, pool, floorRooms, nullptr,
+                                           simTick},
+                            nrP->id, reg.get<Transform>(player).pos);
+                        if (pv < game::kVerbCount) {
+                            std::snprintf(
+                                interactBuf, sizeof interactBuf, "[%s]  %s",
+                                bind_key("interact"),
+                                game::kActionNames[game::kVerbAction[pv]]);
+                            hctx.interactPrompt = interactBuf;
+                        }
+                    }
                 }
             }
+            // Слово после деяния (отказ или обрыв) — две секунды сим-времени.
+            if (deedNote[0] != '\0' &&
+                simTick - deedNoteAt < static_cast<std::uint64_t>(2 * kSimHz))
+                hctx.deedNote = deedNote;
             // Среда клетки под телом — из АГРЕГАТА автомата (S16.4): один
             // путь для HUD, дыхания и плавучести, спецсистем нет (S16.6).
             if (reg.valid(player) && activeLayer != kInvalidLayer) {
@@ -10182,9 +10340,8 @@ int main(int argc, char** argv) {
                 // The PENDING queues, not just the bars: pee/poo have no autonomous
                 // growth, so without the queue on screen the pressure numbers look
                 // frozen when they are in fact many minutes of metering from 100.
-                ImGui::Text("ate %.0f food %.0f water | pending pee %.0f poo %.0f | risky -%d hp",
-                            ateFood, drankWater, nd.pendingPee, nd.pendingPoo,
-                            consumeHpCost);
+                ImGui::Text("pending pee %.0f poo %.0f", nd.pendingPee,
+                            nd.pendingPoo);
             }
             // БЛОК РАБОТ СНЕСЁН ЦЕЛИКОМ (2026-11-08): строки «job», «OFFER (E to
             // take)», «QUEST (E to take)», «jobs N active | done | failed | paid»
@@ -10280,7 +10437,12 @@ int main(int argc, char** argv) {
                 game::Equipped& peq =
                     reg.get_or_emplace<game::Equipped>(player);
                 InvUiPolicy policy{};  // self-режим: см. [inventory.md]
-                policy.allowUse = false;  // послотовый Use придёт с примитивом
+                // «ИСПОЛЬЗОВАТЬ» — ВХОД В ОДНУ ДВЕРЬ УТОЛЕНИЯ (CANON S27.1):
+                // кнопка есть ровно у предмета, у которого есть глагол деяния
+                // (`serve_item_verb` спрашивает сам виджет); заявка уходит
+                // НАМЕРЕНИЕМ на сим-клок. Аптечки кнопки нет: у `heal` нет
+                // строки деяния — это данные, следующий инкремент двери.
+                policy.allowUse = true;
 
                 // Вторая сторона: живые слоты цели. Держатель канонический
                 // (B3): ящик отдаёт свои ItemSlot НАПРЯМУЮ, зеркало-копия
@@ -10593,10 +10755,15 @@ int main(int argc, char** argv) {
                         if (rr.ok) game::sync_armour(reg, pool, player);
                         break;
                     }
+                    case InvUiRequest::Kind::Use:
+                        // Только своя сетка: чужие слоты (ящик, сделка) не
+                        // едят — сперва взять. Предмет, а не слот: окно деяния
+                        // помнит ЧТО, а слот за время окна может уехать.
+                        if (r.slot < game::kInvSlots &&
+                            pinv.slots[r.slot].item != game::kInvalidItem)
+                            useItemWanted = pinv.slots[r.slot].item;
+                        break;
                     default:
-                        // Use — послотовое использование придёт со своим
-                        // примитивом; политика self-режима его пока не
-                        // предлагает ([inventory_ui.h]).
                         break;
                 }
             }

@@ -2634,7 +2634,12 @@ if(GIGA_BUILD_TESTS)
         # облегчение с лужей по месту (+101); suite_action: неоплаченный
         # контакт держит слот любого вызывающего (+7). suite_needs: константы
         # 70/65 заменены локальными — число проверок то же.
-        PASS_REGULAR_EXPRESSION "game_test: 220716 checks, 0 failures")
+        # 220716 -> 220562 (-154) тем же днём: шаг 2 — входы человека в дверь,
+        # мгновенный путь носителя камеры снесён вместе со своими гейтами:
+        # suite_needs use_best() (-43) и suite_needs2
+        # cost_first_over_every_deficit (-111) судили правило выбора из СВОЕЙ
+        # сумки, которого больше нет (предмет выбирает человек кнопкой).
+        PASS_REGULAR_EXPRESSION "game_test: 220562 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

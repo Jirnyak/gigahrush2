@@ -7,19 +7,20 @@
 // and the warning leads. This file exists for the half those tests could not reach
 // until consumption was wired:
 //
-//   * `pee` and `poo` have NO autonomous growth. Before `use_best_food` /
-//     `use_best_drink` had a call site, `pendingPee` and `pendingPoo` had no producer
-//     outside a test, so the whole metering path was dead weight and the numbers in it
-//     had never been checked against a clock a player would experience.
+//   * `pee` and `poo` have NO autonomous growth. Before consumption had a call site,
+//     `pendingPee` and `pendingPoo` had no producer outside a test, so the whole
+//     metering path was dead weight and the numbers in it had never been checked
+//     against a clock a player would experience. (Producer today: the one door of
+//     satiation, [game/serve.h] — bag, room box, place.)
 //   * The metering RATE, not intake, is the limiter, and that is worth pinning
 //     separately because it is counter-intuitive: chugging eight bottles does not
 //     bring a bladder emergency forward by one second past 88.0 / 0.10 = 880 s.
 //   * `digest` DESTROYS whatever does not fit under the 100 cap. Any assertion of the
 //     shape `pee == start + queued` is therefore wrong for `start + queued > 100`,
 //     permanently, at any dt and any elapsed time — not merely "not yet".
-//   * The cost-first selection rule ([needs.h]) is counted here across every deficit
-//     the food bar can hold, so "how often would fit-first ranking have spent HP" is a
-//     number read out of data/items.csv rather than an argument.
+//   * (The cost-first selection count over every deficit — 111 checks on the BAG's
+//     rule `use_best_food` — died with that rule 2026-11-14: the bag no longer picks,
+//     the human does, CANON S27.1. The numeric argument for key 1 lives in [needs.h].)
 #include "game/needs.h"
 #include "game/embody.h"
 
@@ -263,119 +264,9 @@ void pressure_clock_is_feelable() {
     CHECK(stuck.pee < 1.0f && stuck.poo < 1.0f);
 }
 
-// ---------------------------------------------------------------------------
-// Cost-first selection, counted over the whole deficit domain
-// ---------------------------------------------------------------------------
-// Fit-first ranking as a pure function of the table, so "how often would the OLD rule
-// have reached for HP" is counted from data/items.csv rather than argued. `preferFree`
-// resolves an exact tie in useA: the old rule resolved ties by slot index, i.e. by
-// pickup order, so both resolutions are reachable in a real bag and both are counted.
-ItemId fit_first_pick(float missing, bool preferFree) {
-    ItemId best = kInvalidItem;
-    std::int16_t bestAmt = 0;
-    for (std::size_t i = 0; i < kItemCount; ++i) {
-        const ItemId id = static_cast<ItemId>(i + 1);
-        if (!item_feeds(id)) continue;
-        const std::int16_t a = item_def(id).useA;
-        if (a <= 0) continue;
-        if (best == kInvalidItem) { best = id; bestAmt = a; continue; }
-        const bool bestCovers = static_cast<float>(bestAmt) >= missing;
-        const bool thisCovers = static_cast<float>(a) >= missing;
-        if (thisCovers && (!bestCovers || a < bestAmt)) { best = id; bestAmt = a; }
-        else if (!thisCovers && !bestCovers && a > bestAmt) { best = id; bestAmt = a; }
-        else if (a == bestAmt) {
-            const bool thisFree = consumable_hp_cost(id) == 0;
-            const bool bestFree = consumable_hp_cost(best) == 0;
-            if (thisFree != bestFree && thisFree == preferFree) best = id;
-        }
-    }
-    return best;
-}
-
-void cost_first_over_every_deficit() {
-    // HOW OFTEN FIT-FIRST RANKING BUYS A TIGHTER FIT WITH HEALTH, as a count over the
-    // 100 integer deficits the food bar can hold, with all 21 feeding rows available:
-    //
-    //   deficit 1..4    -> sand_spoiled_ration (useA 4)          ALWAYS charged
-    //   deficit 31..32  -> experimental_concentrate (useA 32)    ALWAYS charged
-    //   deficit 9..10   -> zhelemish_raw (10) TIES rawmeat (10)      slot order
-    //   deficit 11..12  -> infected_mushroom (12) TIES soup_cube (12) slot order
-    //
-    // 6 of 100 guaranteed, 10 of 100 in the unlucky pickup order, at kRiskyFeedHpCost
-    // = 6 HP a press. The two tie bands are the ones that make the case unarguable: the
-    // tighter fit there is worth exactly ZERO food points, and it still costs 6 HP plus
-    // 3.0 extra points of queued bowel (kRiskyPooShare 1.0 against kFeedPooShare 0.7).
-    int chargedLucky = 0, chargedUnlucky = 0;
-    for (int d = 1; d <= 100; ++d) {
-        const float missing = static_cast<float>(d);
-        if (consumable_hp_cost(fit_first_pick(missing, true)) > 0) ++chargedLucky;
-        if (consumable_hp_cost(fit_first_pick(missing, false)) > 0) ++chargedUnlucky;
-    }
-    CHECK(chargedLucky == 6);
-    CHECK(chargedUnlucky == 10);
-
-    // ...and the rule that shipped never does it once. All 21 feeding rows in the bag,
-    // the charged ones in the LOW slots so a lowest-index bias would show, every
-    // integer deficit from 1 to 100.
-    NpcPool pool;
-    pool.init();
-    Registry reg;
-    EventBus bus;
-    bus.init();
-    const NpcId id = pool.spawn();
-    pool.height_mm(id) = 1750;
-    pool.max_hp(id) = 10000;   // deep enough that 100 charged presses could not kill it
-    pool.hp(id) = 10000;
-    const Entity body = embody_as_player(reg, pool, id, 0);
-    CHECK(body != entt::null);
-
-    Inventory& inv = pool.inventory(id);
-    inv.clear();
-    int slot = 0;
-    for (int pass = 0; pass < 2; ++pass)
-        for (std::size_t i = 0; i < kItemCount; ++i) {
-            const ItemId iid = static_cast<ItemId>(i + 1);
-            if (!item_feeds(iid) || item_def(iid).useA <= 0) continue;
-            // `noCost`, not `free`: a local named `free` hides ::free (MSVC /W4 C4459).
-            const bool noCost = consumable_hp_cost(iid) == 0;
-            if ((pass == 0) == noCost) continue;   // pass 0 = charged rows first
-            inv.slots[slot].item = iid;
-            inv.slots[slot].count = 255;         // 100 presses cannot exhaust a slot
-            ++slot;
-        }
-    CHECK(slot == 21);                           // 16 Feed + 4 FeedRisky + 1 FeedPsi
-    CHECK(consumable_hp_cost(inv.slots[0].item) == kRiskyFeedHpCost);
-    CHECK(consumable_hp_cost(inv.slots[4].item) == 0);
-
-    const std::int16_t hp0 = pool.hp(id);
-    int freePicks = 0, covered = 0;
-    for (int d = 1; d <= 100; ++d) {
-        pool.needs(id) = full_clock();
-        pool.needs(id).food = kNeedMax - static_cast<float>(d);
-        const ConsumeResult r = use_best_food(reg, pool, bus, 0,
-                                              static_cast<std::uint64_t>(d));
-        CHECK(r.used);
-        if (r.hpCost == 0 && consumable_hp_cost(r.item) == 0) ++freePicks;
-        // Key 2 still does its job inside the free class: every deficit a free row can
-        // cover IS covered, so cost-first is not quietly under-feeding either. 40 is
-        // the largest free row, so deficits 1..40 must come out full.
-        if (approx(pool.needs(id).food, kNeedMax, 1e-3f)) ++covered;
-    }
-    // The whole decision as one number: 100 presses across every deficit the bar can
-    // hold, and the eat key spent nothing. Fit-first ranking would have spent 6 * 6 =
-    // 36 HP at best and 10 * 6 = 60 HP at worst, for at most 8 food points of tighter
-    // fit per press (100 s of clock at kFoodDrainPerSec) and 0 points on 4 of them.
-    CHECK(freePicks == 100);
-    CHECK(pool.hp(id) == hp0);
-    CHECK(covered == 40);
-    CHECK(!reg.all_of<Dead>(body));
-    CHECK(bus.size() == 100);
-}
-
 } // namespace needs2_test
 
 static void test_needs2_all() {
     needs2_test::queue_metering_rate();
     needs2_test::pressure_clock_is_feelable();
-    needs2_test::cost_first_over_every_deficit();
 }

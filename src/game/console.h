@@ -56,10 +56,14 @@ enum class ConsoleRequest : std::uint32_t {
     FloorDown, // ride one floor down
     Save,      // save the run
     Load,      // load the run
-    Heal, Eat, Drink,        // survival one-shots
+    Heal,      // survival one-shot (аптечка — мгновенно; деяния у `heal` нет)
+    // (Eat/Drink СНЕСЕНЫ 2026-11-14: «съесть лучшее из сумки» был мгновенный
+    // путь носителя камеры со своим правилом выбора; утоление — одна дверь,
+    // предмет выбирает человек кнопкой «Использовать», CANON S27.1.)
     Relief,    // осознанное облегчение (клавиша P — решение владельца
-               // 2026-08-28: «оба канала + спец-клавиша»); невольный канал —
-               // автоматика давления в needs, не запрос
+               // 2026-08-28: «оба канала + спец-клавиша»); с 2026-11-14 —
+               // деяние той же двери утоления, окном (CANON S27.1); невольный
+               // канал — автоматика давления в needs, не запрос
     Door, Possess, Interact, // world interaction one-shots
     Throw,     // throw the best grenade in the bag ([combat.h] player_throw_step)
     // (Sell/Vendor/Resupply died with the pad shop — торговля стала сделкой

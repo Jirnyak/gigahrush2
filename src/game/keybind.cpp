@@ -139,14 +139,18 @@ bool keybind_register_defaults(KeybindTable& t) {
     ok &= t.add({"interact", "interact", scan::kF, 0});
     // ОБЛЕГЧЕНИЕ на P (решение владельца 2026-08-28: «оба канала + спец
     // клавиша»): осознанное — этой клавишей, невольное — автоматика
-    // давления ([needs.h]). Исключение из закона чистки «разовое действие —
-    // не клавиша» дано владельцем явно; P мнемонична и далеко от WASD —
+    // давления ([needs.h]). С 2026-11-14 P открывает окно деяния той же двери
+    // утоления, что у жителя (25 с, рвётся ходом; CANON S27.1). Исключение из
+    // закона чистки «разовое действие — не клавиша» дано владельцем явно; P
+    // мнемонична и далеко от WASD —
     // случайного нажатия в бою, из-за которого облегчение сняли с E/F,
     // здесь не случится.
     ok &= t.add({"relief", "relief", scan::kP, 0});
-    // Z and not the genre's G, because G is `eat` and has been since before there
-    // was anything to throw. Rebinding a shipped key to make room for a new one is
-    // churn the table exists to avoid — that is what the rebind menu is for.
+    // Z and not the genre's G, because G was `eat` before there was anything to
+    // throw (eat/drink left the keyboard 2026-08-28 and the console 2026-11-14 —
+    // food is the inventory's «Использовать», one door of satiation, CANON S27.1).
+    // Rebinding a shipped key to make room for a new one is churn the table exists
+    // to avoid — that is what the rebind menu is for.
     // Economy + crafting.
     // kBindTyping у оконных тумблеров: открытое окно глушит обычные бинды
     // ([main.cpp] typing-гейт), а СВОЯ клавиша обязана пробиться и закрыть

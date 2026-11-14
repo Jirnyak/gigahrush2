@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include "core/watch.h"       // watch_cycle / watch_*_digit — календарь S15
+#include "game/action.h"      // Acting / act_busy — окно деяния тела (S22, S27.1)
 #include "game/combat.h"      // PlayerRanged — магазин/перезарядка
 #include "game/embody.h"      // NpcRef — тело с флажком, не синглтон
 #include "game/equip.h"       // equipped_melee/ranged — РЕШЕНИЯ, не скан
@@ -199,6 +200,44 @@ void draw_interact(const HudContext& c) {
     ImGui::TextColored(kAmber, "%s", c.interactPrompt);
 }
 
+// ДЕЯНИЕ ТЕЛА (CANON S27.1): чем занят носитель камеры — имя строки
+// `actions.csv`, остаток окна и полоса. Вопрос ТОТ ЖЕ, что задаёт поллер
+// (`act_busy` слота тела над окном деяния нужды), поэтому стекло не может
+// разойтись с симуляцией. Боевые окна тела (замах) здесь не рисуются: у них
+// нет глагола нужды, и полоса замаха была бы шумом. Тихий элемент.
+const game::ActWindow* deed_window(const HudContext& c) {
+    if (!c.reg || c.player == entt::null || !c.reg->valid(c.player))
+        return nullptr;
+    const auto* act = c.reg->try_get<game::Acting>(c.player);
+    if (!act) return nullptr;
+    const game::ActWindow& w = game::act_slot(*act, game::ActSlot::Body);
+    if (!game::act_busy(w, c.tick) || w.action >= game::kActionCount ||
+        game::kActionVerb[w.action] >= game::kVerbCount)
+        return nullptr;
+    return &w;
+}
+
+bool deed_live(const HudContext& c) {
+    return c.deedNote != nullptr || deed_window(c) != nullptr;
+}
+
+void draw_deed(const HudContext& c) {
+    if (const game::ActWindow* w = deed_window(c)) {
+        const std::uint64_t el = game::act_elapsed(*w, c.tick);
+        const float frac = static_cast<float>(el) /
+                           static_cast<float>(w->durTicks);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAmber);
+        ImGui::ProgressBar(frac, ImVec2(160.0f, 12.0f), "");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::TextColored(
+            kAmber, "%s %.0fс", game::kActionNames[w->action],
+            static_cast<double>(w->durTicks - el) *
+                static_cast<double>(giga::kSimStepMs) * 0.001);
+    }
+    if (c.deedNote) ImGui::TextColored(kDim, "%s", c.deedNote);
+}
+
 // Алерты: то, что требует реакции СЕЙЧАС. Пока два источника — самосбор
 // (сирена этажа) и кровотечение нужд; лента одноразовых событий («поднял:
 // бинт») придёт строкой сюда же, когда у неё будет шов-источник.
@@ -256,6 +295,7 @@ HudElement g_elements[] = {
     {"time",      "Время",       HudSlot::TopLeft,     true, draw_time},
     {"status",    "Статусы",     HudSlot::TopLeft,     true, draw_status, status_live},
     {"interact",  "Интеракция",  HudSlot::Center,      true, draw_interact, interact_live},
+    {"deed",      "Деяние",      HudSlot::Center,      true, draw_deed, deed_live},
     {"alerts",    "Алерты",      HudSlot::Center,      true, draw_alerts, alerts_live},
 };
 

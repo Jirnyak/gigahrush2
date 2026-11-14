@@ -463,21 +463,18 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
 // The HP `apply_consumable` will charge for `id`, BEFORE the hp-1 survivability floor
 // is applied. 0 for all 17 clean Feed/FeedPsi rows and all 8 Drink/DrinkStim rows;
 // `kRiskyFeedHpCost` for the 4 FeedRisky rows; `kSleepingPillsHpCost` for the one
-// pill. Public because it is the PRIMARY key of the selection rule below, so a test
+// pill. Public because it is the PRIMARY key of the room's selection rule (below), so a test
 // can assert that rule directly instead of inferring it from an outcome.
 std::int16_t consumable_hp_cost(ItemId id);
 
-// SELECTION IS TWO-KEY: HP COST FIRST, FIT SECOND.
-//
-//   1. Anything `consumable_hp_cost` reports 0 for beats anything it charges for,
-//      whatever the fit.
-//   2. Within one cost class: the smallest portion that still covers the deficit,
-//      else the largest available — `use_best_heal`'s rule ([loot.h]).
-//   3. Ties in magnitude go to the lowest slot index.
-//
-// Key 1 is NOT in `use_best_heal` and the divergence is deliberate, not drift: all 12
-// `Heal` rows in `data/items.csv` leave `use_b` empty, so healing has no cost to rank
-// on, while 4 of the 21 feeding rows charge `kRiskyFeedHpCost` = 6 HP.
+// ВЫБОР ПРЕДМЕТА, КОТОРЫЙ ДЕЛАЕТ МИР, — ЦЕНА HP ПЕРВЫМ КЛЮЧОМ. Им живёт
+// единственное оставшееся правило выбора — ящик комнаты в деянии
+// (`best_lying@serve.cpp`: цена, затем аргмакс величины). Из СВОЕЙ сумки мир
+// больше не выбирает: предмет выбирает человек кнопкой «Использовать», и окно
+// деяния его помнит (CANON S27.1). Снесённый 2026-11-14 `use_best_food/drink`
+// держал второе правило («наименьшая покрывающая порция») ради консольных
+// `eat`/`drink` — умерли вместе с ним. Довод за первый ключ остаётся, и он
+// числовой:
 //
 // WHY FIT CANNOT BE THE PRIMARY KEY. `useA` over the 21 feeding rows, sorted, R =
 // FeedRisky: 4R 6 8 10 10R 12 12R 15 16 18 20 20 22 24 25 26 28 30 32R 35 40. Rank on
@@ -502,20 +499,12 @@ std::int16_t consumable_hp_cost(ItemId id);
 //
 // A LEXICOGRAPHIC key, not a weighted one, because no measured HP-per-food-point
 // exchange rate exists to weight with. And it does not make risky food unreachable,
-// which would be the opposite bug: with only `infected_mushroom` in the bag at 0 food,
+// which would be the opposite bug: with only `infected_mushroom` in the box at 0 food,
 // 12 points for 6 HP beats 0.3 HP/s forever, and key 1 still picks it because it is
-// the only class present. What key 1 actually buys is DEFERRAL — the key is repeatable
-// on every press, so eating the free rows first costs nothing and keeps the 6 HP
+// the only class present. What key 1 actually buys is DEFERRAL — the rule is repeated
+// on every deed, so eating the free rows first costs nothing and keeps the 6 HP
 // unspent until the bag holds nothing else. Deferral is free on the pressure axis too:
 // clean food queues 0.7 poo per food point at any portion size, risky queues 1.0.
-//
-// Consumes one unit, charges any HP cost through `apply_damage` on
-// `kAttritionChannel`, publishes `ItemTransferred`.
-// Call site: beside `use_best_heal`, on an input edge (как pickup_take — глагол, не тик).
-ConsumeResult use_best_food(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick);
-ConsumeResult use_best_drink(Registry& reg, NpcPool& pool, EventBus& bus,
-                            LayerId layer, std::uint64_t tick);
 
 // Осознанное опорожнение (ReliefResult объявлен у needs_advance выше).
 ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount);

@@ -428,8 +428,9 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
     // full medkit is not spent on a scratch, and a scratch's worth of bandage is
     // not withheld when it is all there is.
     //
-    // ONE KEY HERE, TWO IN `use_best_food` ([needs.h]) — do not "unify" them. That
-    // rule ranks HP cost ahead of fit because 4 of the 21 feeding rows charge
+    // ONE KEY HERE, TWO IN THE ROOM'S FOOD RULE (`best_lying@serve.cpp`; the bag's
+    // own food rule `use_best_food` died 2026-11-14 with the one door, CANON S27.1)
+    // — do not "unify" them. That rule ranks HP cost ahead of its second key because 4 of the 21 feeding rows charge
     // `kRiskyFeedHpCost` = 6 HP, so ranking food on fit alone buys a tighter fit with
     // health. Healing has no such key to add: all 12 `Heal` rows in `data/items.csv`
     // leave `use_b` empty, so every candidate this loop can see is free. Copying the

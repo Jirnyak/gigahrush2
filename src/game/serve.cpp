@@ -337,6 +337,18 @@ ServePick serve_pick(const Room& r, const DemandE3 demand[kVerbCount]) {
     return out;
 }
 
+const char* serve_refusal_text(ServeRefusal r) {
+    switch (r) {
+        case ServeRefusal::None: return "";
+        case ServeRefusal::Busy: return "ЗАНЯТ";
+        case ServeRefusal::NoRow: return "ЭТИМ НЕ УТОЛИТЬ";
+        case ServeRefusal::NoItem: return "ПРЕДМЕТА НЕТ";
+        case ServeRefusal::Full: return "НЕ ХОЧЕТСЯ";
+        case ServeRefusal::NoPlace: return "ЗДЕСЬ НЕЧЕМ";
+    }
+    return "";
+}
+
 VerbId serve_item_verb(ItemId item) {
     VerbId best = static_cast<VerbId>(kVerbCount);
     if (!item_valid(item)) return best;

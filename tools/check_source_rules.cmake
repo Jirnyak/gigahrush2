@@ -711,6 +711,28 @@ else()
     endif()
 endif()
 
+# ---- Rule: УТОЛЕНИЕ — ОДНОЙ ДВЕРЬЮ ДЛЯ ЛЮБОГО ТЕЛА (CANON S27.1) ------------
+# До 2026-11-14 дверей было две: житель утолялся окном `Acting` в игровом слое,
+# а носитель камеры — мгновенно, прямо из приложения (`use_best_food/drink` со
+# вторым списанием HP в main.cpp, клавиша P — голый вызов клока нужд оттуда же).
+# Компилятор возврат той двери не поймает: примитивы клока (`relieve_needs`,
+# `apply_consumable`, `needs_satisfy`) живы — ими пользуется сама дверь. Поэтому
+# закон текстом: в оболочке (src/app, src/render) их ВЫЗОВА нет — оболочка
+# зовёт только дверь `serve_*` ([game/serve.h]). Строки-комментарии не судятся
+# (регекс отбрасывает строки, начинающиеся с `//`): история в прозе законна.
+file(GLOB_RECURSE _giga_shell_src RELATIVE "${GIGA_ROOT}"
+     "${GIGA_ROOT}/src/app/*.cpp" "${GIGA_ROOT}/src/app/*.h"
+     "${GIGA_ROOT}/src/render/*.cpp" "${GIGA_ROOT}/src/render/*.h")
+foreach(_giga_shell IN LISTS _giga_shell_src)
+    file(STRINGS "${GIGA_ROOT}/${_giga_shell}" _giga_satiate ENCODING UTF-8
+         REGEX "^[ \t]*([^/ \t]|/[^/]).*(relieve_needs|apply_consumable|needs_satisfy)\\(")
+    foreach(_giga_line IN LISTS _giga_satiate)
+        string(STRIP "${_giga_line}" _giga_line)
+        list(APPEND GIGA_FAILURES
+            "${_giga_shell}: оболочка утоляет нужду мимо двери — `${_giga_line}`. Утоление одно для любого тела: окно `Acting` через `serve_start` ([game/serve.h], CANON S27.1); мгновенный путь носителя камеры снесён 2026-11-14.")
+    endforeach()
+endforeach()
+
 # ---- Rule: ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ ПЛАТИТСЯ В ОДНОМ МЕСТЕ (CANON S20.4) ------
 # Всякая запись в мир — карв, дверь, автомат среды, кисть, оба суда, грязь —
 # платит долг перед производными мира ОДНОЙ дверью: `geometry_changed` в
