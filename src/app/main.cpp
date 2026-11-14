@@ -3687,6 +3687,7 @@ int main(int argc, char** argv) {
     game::ServeTick serveTick{};
     // Накопители деяний на весь прогон — пара к `crowdDead` ниже: «замкнут ли
     // цикл» есть вопрос про ОТНОШЕНИЕ этих чисел, а не про любое из них.
+    std::uint64_t voidPuddlesTotal = 0; // луж невольного слива — у любого тела
     std::uint64_t serveBeganTotal = 0, serveAppliedTotal = 0;
     std::int64_t serveReliefTotal = 0;
     std::uint64_t serveByVerbTotal[game::kVerbCount] = {};
@@ -9093,25 +9094,17 @@ int main(int argc, char** argv) {
                 const auto profNeedsT0 = prof_now();
                 encumbrance = game::encumbrance_step(reg, pool, activeLayer, kSimDt,
                                                      simTick, &noiseField);
+                // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
+                // слил его, где застало): лужу рисует САМ клок любому телу
+                // (`relief_puddle`), социальную цену несёт деяние (S19). Здесь
+                // стоял блок, рисовавший лужу только носителю камеры, на
+                // литерале −Z, — снесён 2026-11-14 (S27.17 п.7).
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt,
-                                         &aiMem, simNow, &bus, simTick);
+                                         &aiMem, simNow, &bus, simTick,
+                                         &stack.layer(activeLayer), &stainDirty);
                 prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
-                // НЕВОЛЬНОЕ ОБЛЕГЧЕНИЕ ([needs.h]: давление лопнуло — клок
-                // слил его, где застало). Лужа — тот же стейн, что канал P.
-                // Социальная цена — деяние из needs_step (S19, 2026-09-05):
-                // один шов закрыл NPC и игрока, свидетели/уместность — у
-                // witness_step. Здесь остаётся только физика (стейн).
-                if (needs.voidedPee && reg.valid(player)) {
-                    const vec3 rp = reg.get<Transform>(player).pos;
-                    stain_splat(stack.layer(activeLayer), rp,
-                                vec3{0, 0, -1.0f}, 1.4f, /*rays=*/14,
-                                kStainUrine,
-                                static_cast<std::uint32_t>(simTick),
-                                stainDirty);
-                    std::fprintf(stderr,
-                                 "[relief] невольно: мочевой лопнул\n");
-                }
+                voidPuddlesTotal += needs.puddles;
                 // The other half of the acceptance trail. `bodies` says the clock is
                 // no longer a one-body clock, `recovering` says rooms are actually
                 // feeding people, and `crowdDead` is the number that would climb if
@@ -9139,11 +9132,13 @@ int main(int argc, char** argv) {
                 if (aiCfg.enabled && lastAimemLogTick == simTick)
                     std::fprintf(stderr,
                                  "[needs] tick=%llu bodies=%u recovering=%u "
-                                 "crowd_dead_total=%u | деяний=%llu эффектов=%llu "
+                                 "crowd_dead_total=%u лужи_слива=%llu | деяний=%llu "
+                                 "эффектов=%llu "
                                  "Σутолено=%lld | сон=%llu еда=%llu питьё=%llu "
                                  "сортир=%llu\n",
                                  static_cast<unsigned long long>(simTick),
                                  needs.bodies, needs.recovering, crowdDead,
+                                 static_cast<unsigned long long>(voidPuddlesTotal),
                                  static_cast<unsigned long long>(serveBeganTotal),
                                  static_cast<unsigned long long>(serveAppliedTotal),
                                  static_cast<long long>(serveReliefTotal),

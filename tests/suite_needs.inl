@@ -813,6 +813,34 @@ void involuntary_relief_is_a_deed() {
     for (std::size_t i = before; i < rig.bus.size(); ++i)
         if (rig.bus.events()[i].type == EventType::Deed) ++deeds;
     CHECK(deeds == 0);
+
+    // ЛУЖА — У ЛЮБОГО ТЕЛА, и рисует её сам клок (2026-11-14, S27.17 п.7
+    // «везде особенного игрока выжечь»). Прежде клок отдавал флажок слива
+    // только про носителя камеры, и лужу рисовало приложение ему одному — толпа
+    // сливалась бесследно. Здесь сливается ЖИТЕЛЬ (тело без камеры), на полу.
+    // Мутация «`camera &&` в условии лужи» красит строки ниже; обратная
+    // полярность — спокойный бар, лужи нет.
+    World w;
+    for (int y = 0; y < 3; ++y)
+        for (int x = 0; x < 3; ++x) w.grid().fill_cell(x, y, 0, 1);
+    const NpcId rid = rig.pool.spawn();
+    const Entity res = embody(rig.reg, rig.pool, rid, 0);
+    CHECK(!rig.reg.all_of<CameraTag>(res)); // посылка: это не носитель камеры
+    rig.reg.get<Transform>(res).pos = vec3{kCellSize * 1.5f, kCellSize * 1.5f,
+                                           kCellSize * 1.2f};
+    rig.reg.get<Transform>(rig.body).pos = vec3{kCellSize * 40.0f, 0.0f, 0.0f};
+    rig.pool.needs(rid) = full_clock();
+    rig.pool.needs(rid).pee = kNeedMax;
+    std::vector<std::uint32_t> dirty;
+    const NeedsTick puddle = needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr,
+                                        0.0, &rig.bus, 779u, &w, &dirty);
+    CHECK(puddle.puddles == 1);
+    CHECK(!dirty.empty());
+    dirty.clear();
+    const NeedsTick calm = needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr,
+                                      0.0, &rig.bus, 780u, &w, &dirty);
+    CHECK(calm.puddles == 0);
+    CHECK(dirty.empty());
 }
 
 } // namespace needs_test

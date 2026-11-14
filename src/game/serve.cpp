@@ -17,8 +17,6 @@
 #include "game/room_supply.h"  // room_at_pos / supply_add_item
 #include "game/witness.h"      // deed_publish — эффект утоления есть факт (S19)
 #include "sim/controller.h"    // kWishMinLen — порог хода, один дом числа
-#include "world/stain.h"       // stain_splat / kStainUrine — лужа
-#include "world/world.h"       // World::gravity — уклон лужи по гравитации
 
 namespace giga::game {
 
@@ -138,19 +136,8 @@ std::int32_t place_offer(const Room* r, VerbId verb) {
     return static_cast<std::int32_t>(r->declared[verb]) + r->supply[verb];
 }
 
-// ЛУЖА: моча вышла из тела не у места, которое даёт сортир. Тот же
-// универсальный стейн, что кровь ([world/stain.h]); радиус и число лучей —
-// числа прежней лужи клавиши P (1.4 м, 14 лучей), переехавшие сюда вместе с
-// ней: дом у них теперь один. УКЛОН — ПО ГРАВИТАЦИИ в точке, а не −Z: прежняя
-// лужа стояла на литерале `{0,0,-1}` и под любым другим режимом брызгала бы
-// вбок (AGENTS: «гравитация — вектор, never assume −Z»).
-void relief_puddle(World& w, const vec3& pos, std::uint32_t seed,
-                   std::vector<std::uint32_t>& dirty) {
-    const vec3 g = w.gravity().at(pos);
-    const float len = length(g);
-    const vec3 bias = len > 0.0f ? g * (1.0f / len) : vec3{0.0f, 0.0f, 0.0f};
-    stain_splat(w, pos, bias, 1.4f, /*rays=*/14, kStainUrine, seed, dirty);
-}
+// ЛУЖА — `relief_puddle@game/needs.h`: один дом на оба канала облегчения
+// (невольный слив клока и осознанное облегчение двери).
 
 // КОНТАКТНЫЙ КАДР: эффект падает ОДИН раз за окно. Считает путь — своя сумка,
 // ящик комнаты или возможность места/тела — и публикует факт.

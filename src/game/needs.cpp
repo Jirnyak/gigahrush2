@@ -7,7 +7,9 @@
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
 #include "game/witness.h"    // deed_publish — невольный слив = деяние (S19)
+#include "world/stain.h"     // stain_splat / kStainUrine — лужа, один дом
 #include "world/types.h"     // kCellSize — pos -> macro cell, the one conversion
+#include "world/world.h"     // World::gravity — уклон лужи по гравитации
 
 namespace giga::game {
 
@@ -161,9 +163,18 @@ float needs_speed_scale(const Needs& n) {
     return scale;
 }
 
+void relief_puddle(World& w, const vec3& pos, std::uint32_t seed,
+                   std::vector<std::uint32_t>& dirty) {
+    const vec3 g = w.gravity().at(pos);
+    const float len = length(g);
+    const vec3 bias = len > 0.0f ? g * (1.0f / len) : vec3{0.0f, 0.0f, 0.0f};
+    stain_splat(w, pos, bias, 1.4f, /*rays=*/14, kStainUrine, seed, dirty);
+}
+
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      AiMemory* mem, double now, EventBus* bus,
-                     std::uint64_t tick) {
+                     std::uint64_t tick, World* world,
+                     std::vector<std::uint32_t>* stainDirty) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -204,9 +215,15 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         // здесь. Цена/уместность/свидетели — целиком у witness_step.
         if (bus != nullptr && (voided.pee > 0.0f || voided.poo > 0.0f))
             deed_publish(*bus, kVerbToilet, e, kInvalidNpc, tr.pos, tick);
-        if (camera) {
-            out.voidedPee = voided.pee > 0.0f ? 1 : 0;
-            out.voidedPoo = voided.poo > 0.0f ? 1 : 0;
+        // ЛУЖА — физика слива, и у ЛЮБОГО тела (S7, S27.17 п.7). Ветки «если
+        // это носитель камеры» здесь больше нет: прежде клок отдавал флажок
+        // только про камеру, и толпа сливалась бесследно.
+        if (voided.pee > 0.0f && world != nullptr && stainDirty != nullptr) {
+            relief_puddle(*world, tr.pos,
+                          static_cast<std::uint32_t>(tick) ^
+                              static_cast<std::uint32_t>(entt::to_integral(e)),
+                          *stainDirty);
+            ++out.puddles;
         }
         ++out.bodies;
 

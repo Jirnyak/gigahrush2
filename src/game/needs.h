@@ -88,6 +88,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "core/math.h"        // clamp01 / smoothstep01 — кривые давления ниже
 #include "ecs/registry.h"
@@ -97,6 +98,10 @@
 #include "game/npc_pool.h"    // Needs is a column there
 #include "game/verb_table.h"  // VerbId, kVerbPatienceE3 — колено кривой из строки
 #include "world/level_stack.h"
+
+namespace giga {
+class World;
+}
 
 namespace giga::game {
 
@@ -328,10 +333,11 @@ struct NeedsTick {
     bool ticked = false;          // false when no camera holder is on this layer
     // -- the widened scope; the fields above stay ABOUT THE CAMERA HOLDER so every
     //    existing HUD/consumer reads what it always read --
-    // Невольный слив клока у НОСИТЕЛЯ КАМЕРЫ этим шагом ([needs_advance]):
-    // потребитель рисует лужу тем же стейном, что осознанный канал P.
-    std::uint8_t voidedPee = 0;
-    std::uint8_t voidedPoo = 0;
+    // (`voidedPee`/`voidedPoo` — невольный слив ТОЛЬКО носителя камеры, по
+    // которому приложение рисовало лужу ему одному на литерале −Z, — СНЕСЕНЫ
+    // 2026-11-14: лужу рисует сам клок любому телу, `relief_puddle`, CANON
+    // S27.17 п.7 «везде особенного игрока выжечь».)
+    std::uint32_t puddles = 0;    // луж невольного слива этим шагом — у ЛЮБОГО тела
     std::uint32_t bodies = 0;     // clocks advanced this step, camera holder included
     std::uint32_t recovering = 0; // of those, standing in a room that restores
     std::uint32_t crowdKilled = 0; // non-camera bodies this step's attrition finished
@@ -426,9 +432,25 @@ float needs_speed_scale(const Needs& n);
 // знающее и тело, и позицию, и факт слива; один шов закрывает NPC и игрока
 // разом. Уместность туалета зануляет цену у ПОТРЕБИТЕЛЯ (witness_step) —
 // ветки «в туалете бесплатно» здесь нет по построению.
+//
+// `world`+`stainDirty` (опц.) — ЛУЖА невольного слива у ЛЮБОГО тела, одной
+// функцией с облегчением двери утоления (`relief_puddle`). Невольный слив — не
+// выбор места, поэтому лужа у него всегда: «естественно только лужа» (владелец
+// 2026-08-28). До 2026-11-14 её рисовало приложение, и только носителю камеры.
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      class AiMemory* mem = nullptr, double now = 0.0,
-                     EventBus* bus = nullptr, std::uint64_t tick = 0);
+                     EventBus* bus = nullptr, std::uint64_t tick = 0,
+                     World* world = nullptr,
+                     std::vector<std::uint32_t>* stainDirty = nullptr);
+
+// ЛУЖА — ОДИН ДОМ на оба канала облегчения: невольный слив клока
+// (`needs_step`) и осознанное облегчение двери утоления вне места, которое даёт
+// сортир ([game/serve.h]). Тот же универсальный стейн, что кровь
+// ([world/stain.h]); радиус 1.4 м и 14 лучей — числа прежней лужи клавиши P.
+// УКЛОН — ПО ГРАВИТАЦИИ в точке, а не −Z (гравитация — вектор). Грязные клетки
+// должны зеркалу вокселей — их забирает вызывающий.
+void relief_puddle(World& w, const vec3& pos, std::uint32_t seed,
+                   std::vector<std::uint32_t>& dirty);
 
 // Keyed off `UseEffect`, never `ItemCategory` — and the distinction is real:
 // `calm_brew` is category DRINK and `easter_egg` is category FOOD, but both are
