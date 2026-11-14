@@ -8722,36 +8722,35 @@ int main(int argc, char** argv) {
                             }
                         }
 
-                        // F НА МЕСТЕ — ДЕЯНИЕ ОДНОЙ ДВЕРЬЮ УТОЛЕНИЯ (CANON
+                        // F НА ВЕЩИ — ДЕЯНИЕ ОДНОЙ ДВЕРЬЮ УТОЛЕНИЯ (CANON
                         // S27.1: «деянием на месте — F в кухне, на койке»).
-                        // ТОЛЬКО когда под прицелом нет НИЧЕГО: место — цель
-                        // последней очереди, и табличка показывает, что именно
-                        // сделает F, ДО нажатия (тот же вызов
-                        // `serve_place_verb` строит её ниже). Это не возврат
-                        // снятого запасного пути (вердикт владельца 2026-08-28
-                        // «жму E у двери, а персонаж мочится»): у двери фокус —
-                        // портал, а облегчение где застало — только клавиша P;
-                        // F берёт лишь то, что место ПРЕДЛАГАЕТ.
-                        if (!handled &&
-                            g_focus.what == game::Focus::What::None &&
+                        // Ровно на вещи под прицелом, как любая интеракция:
+                        // койка — сон, плита — трапеза, раковина — питьё,
+                        // унитаз — облегчение; глагол называет строка пропа
+                        // (`serve_prop_verb`), табличка — тот же вызов.
+                        // Прежняя форма «место — цель последней очереди» (F в
+                        // пустоту комнаты) выжжена по плейтесту владельца
+                        // 2026-11-14: табличка «сон» висела, куда бы ни
+                        // смотрел, — обход закона фокуса.
+                        if (!handled && aimedEnt &&
+                            g_focus.kind == game::InteractKind::Serve &&
                             activeLayer != kInvalidLayer) {
-                            if (const auto* nrF =
-                                    reg.try_get<game::NpcRef>(player);
-                                nrF && pool.valid(nrF->id)) {
+                            handled = true;
+                            const auto* nrF = reg.try_get<game::NpcRef>(player);
+                            const auto* po = reg.try_get<game::PropOf>(aimed);
+                            if (nrF != nullptr && pool.valid(nrF->id) &&
+                                po != nullptr) {
                                 const game::ServeCtx sc{
                                     reg, pool, floorRooms, &bus, simTick,
                                     &stack.layer(activeLayer), &excretedCells};
                                 const game::VerbId v =
-                                    game::serve_place_verb(sc, nrF->id, ppos,
-                                                           activeLayer);
-                                if (v < game::kVerbCount)
-                                    deed_say(game::serve_start(
-                                                 sc, player, nrF->id, ppos, v,
-                                                 game::kInvalidItem, serveTick),
-                                             v);
+                                    game::serve_prop_verb(po->id);
+                                deed_say(game::serve_start(
+                                             sc, player, nrF->id, ppos, v,
+                                             game::kInvalidItem, serveTick),
+                                         v);
                             }
                         }
-
                     }
                 }
                 // «ИСПОЛЬЗОВАТЬ» И P — ТА ЖЕ ДВЕРЬ (CANON S27.1). Предмет своей
@@ -9799,37 +9798,10 @@ int main(int argc, char** argv) {
             if (shell.playing() && reg.valid(player) &&
                 activeLayer != kInvalidLayer) {
                 if (const char* what = game::focus_prompt(
-                        g_focus, stack.layer(activeLayer), doors)) {
+                        g_focus, stack.layer(activeLayer), doors, &reg)) {
                     std::snprintf(interactBuf, sizeof interactBuf, "[%s]  %s",
                                   bind_key("interact"), what);
                     hctx.interactPrompt = interactBuf;
-                } else if (g_focus.what == game::Focus::What::None &&
-                           !game::serve_holding(reg, player, simTick) &&
-                           !(reg.all_of<game::Acting>(player) &&
-                             game::acting_busy(reg.get<game::Acting>(player),
-                                               game::ActSlot::Body, simTick))) {
-                    // Тело занято ЛЮБЫМ окном (замах тоже): дверь ответила бы
-                    // «ЗАНЯТ» — табличка не обещает того, чего F не сделает.
-                    // МЕСТО — ЦЕЛЬ ПОСЛЕДНЕЙ ОЧЕРЕДИ (CANON S27.1): под
-                    // прицелом ничего, а место может что-то дать этому телу —
-                    // табличка называет деяние, и F сделает ровно его (тот же
-                    // `serve_place_verb`, что в лестнице интеракций). Слово —
-                    // имя строки `actions.csv`, не литерал здесь.
-                    if (const auto* nrP = reg.try_get<game::NpcRef>(player);
-                        nrP && pool.valid(nrP->id)) {
-                        const game::VerbId pv = game::serve_place_verb(
-                            game::ServeCtx{reg, pool, floorRooms, nullptr,
-                                           simTick},
-                            nrP->id, reg.get<Transform>(player).pos,
-                            activeLayer);
-                        if (pv < game::kVerbCount) {
-                            std::snprintf(
-                                interactBuf, sizeof interactBuf, "[%s]  %s",
-                                bind_key("interact"),
-                                game::kActionNames[game::kVerbAction[pv]]);
-                            hctx.interactPrompt = interactBuf;
-                        }
-                    }
                 }
             }
             // Слово после деяния (отказ или обрыв) — две секунды сим-времени.

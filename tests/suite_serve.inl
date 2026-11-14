@@ -664,7 +664,8 @@ static void test_serve_one_door_resident_and_human() {
     ServeTick t{};
     const ServeCtx ctx{reg, pool, fr, nullptr, kT0};
     CHECK(serve_begin(ctx, res, rid, inside, t));
-    const VerbId hv = serve_place_verb(ctx, hid, inside, kLayer);
+    // Человек выбирает ПРИЦЕЛОМ: F на раковине — глагол её строки.
+    const VerbId hv = serve_prop_verb(PropId::Sink);
     CHECK(hv == kVerbDrink);
     CHECK(serve_start(ctx, hum, hid, inside, hv, kInvalidItem, t) ==
           ServeRefusal::None);
@@ -715,8 +716,9 @@ static void test_serve_one_door_resident_and_human() {
     CHECK(!serve_begin(ServeCtx{reg, pool, fr, nullptr, kT1}, res, rid, inside,
                        t2));
     CHECK(t2.nothing == 1);
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, kT1}, hid, inside, kLayer) ==
-          kVerbDrink);
+    ServeTick th{};
+    CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, kT1}, hum, hid, inside,
+                      kVerbDrink, kInvalidItem, th) == ServeRefusal::None);
 }
 
 // --- 10. СВОЯ СУМКА: ВЫБРАННЫЙ ПРЕДМЕТ, ВРЕМЯ, ЦЕНА ОДИН РАЗ ---------------
@@ -1020,30 +1022,37 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(dirty.empty());
     CHECK(bus.total_count(EventType::Deed) == 2);
 
-    // F НА МЕСТЕ НЕ МОЧИТСЯ В КОРИДОРЕ: выбиратель человека берёт только то,
-    // что место ПРЕДЛАГАЕТ (жалоба владельца 2026-08-28). В санузле — да.
-    pool.needs(hid).pee = 60.0f;
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, corridor, kLayer) >=
-          kVerbCount);
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inWc, kLayer) ==
-          kVerbToilet);
-    // ...и в КОМНАТЕ, где сортира нет (кухня с краном), — тоже нет: у
-    // облегчения величину называет тело, поэтому проба «что ляжет» ответила бы
-    // «да» где угодно, и держит здесь именно фильтр «место ПРЕДЛАГАЕТ».
-    const RoomId kitchen = declare_room(fr, 40, 30, 10, kVerbDrink, 14);
-    const vec3 inKitchen = cell_mid(41, 31, 10);
-    CHECK(room_at_pos(fr, inKitchen) == kitchen);
-    CHECK(pool.needs(hid).water == kNeedMax); // пить не хочет — пробы нет
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid,
-                           inKitchen, kLayer) >= kVerbCount);
+    // ДЕЯНИЕ У МЕСТА — ТОЛЬКО ПРИЦЕЛОМ НА ВЕЩЬ (плейтест владельца 2026-11-14:
+    // «табличка висит, даже если не смотришь на кровать — так со всеми
+    // интеракциями»). Вещь называет глагол своей строкой; табличка и F — один
+    // вызов. И ДАННЫЕ СВЯЗАНЫ: у вещи есть глагол деяния ⟺ на ней навес
+    // `Serve` — новая койка без навеса (или навес на верстаке) красит обход.
+    CHECK(serve_prop_verb(PropId::BedCot) == kVerbSleep);
+    CHECK(serve_prop_verb(PropId::Sofa) == kVerbSleep);
+    CHECK(serve_prop_verb(PropId::KitchenStove) == kVerbEat);
+    CHECK(serve_prop_verb(PropId::KitchenTable) == kVerbEat);
+    CHECK(serve_prop_verb(PropId::Sink) == kVerbDrink);
+    CHECK(serve_prop_verb(PropId::ToiletPan) == kVerbToilet);
+    CHECK(serve_prop_verb(PropId::Terminal) >= kVerbCount);
+    std::uint32_t serveProps = 0, mismatched = 0;
+    for (std::size_t i = 0; i < kPropCount; ++i) {
+        const PropId pid = static_cast<PropId>(i);
+        const bool deed = serve_prop_verb(pid) < kVerbCount;
+        const bool hook = kPropTable[i].interactKind ==
+                          static_cast<std::uint8_t>(InteractKind::Serve);
+        serveProps += hook ? 1u : 0u;
+        mismatched += deed != hook ? 1u : 0u;
+    }
+    CHECK(serveProps == 6u);
+    CHECK(mismatched == 0u);
 
     // ЛЕЖАЩЕЕ НА ПОЛУ НЕ ОБЕЩАЕТСЯ (ревью готового кода, 2026-11-14). Хлеб,
     // брошенный в пустой комнате, ПОДНИМАЕТ её запас (место бойни становится
     // местом, S12.5), но деяние пикапов не берёт — значит и табличка F, и
     // проба двери обязаны видеть ту же величину, что сядет на контакте, а не
     // запас с пикапами. Прежде табличка обещала трапезу, окно шло 20 с и
-    // садилось в ноль. Мутация «`place_offer` вместо `place_points` в
-    // выбирателе» красит первую строку, «...в пробе двери» — вторую.
+    // садилось в ноль. Мутация «`place_offer` вместо `place_points` в пробе
+    // двери» красит строку ниже.
     const RoomId pantry = declare_room(fr, 50, 30, 10, kVerbCount, 0);
     const vec3 inPantry = cell_mid(51, 31, 10);
     CHECK(room_at_pos(fr, inPantry) == pantry);
@@ -1056,8 +1065,6 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     rooms_supply_rebuild(fr, reg, kLayer);
     CHECK(room_of(fr, pantry)->supply[kVerbEat] > 0); // посылка: запас поднят
     pool.needs(hid).food = 20.0f;
-    CHECK(serve_place_verb(ServeCtx{reg, pool, fr, nullptr, 0u}, hid, inPantry,
-                           kLayer) >= kVerbCount);
     reg.get<Transform>(hum).pos = inPantry;
     ServeTick tp{};
     CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, 900000u}, hum, hid,

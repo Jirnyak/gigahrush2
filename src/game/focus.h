@@ -98,6 +98,11 @@ Focus focus_pick_debug(const Registry& reg, const World& w, LayerId layer,
 
 // Текст таблички БЕЗ имени клавиши (её подставляет вызывающий из биндов —
 // промпт обязан называть бинд, а не литерал). Для двери — по состоянию мира.
-const char* focus_prompt(const Focus& f, const World& w, const Doors& doors);
+//
+// `reg` (опц.) — для табличек, текст которых зависит от ЦЕЛИ, а не от строки
+// вида: навес деяния нужды называет деяние вещи («сон» у койки, «питьё» у
+// раковины). nullptr — текст строки вида.
+const char* focus_prompt(const Focus& f, const World& w, const Doors& doors,
+                         const Registry* reg = nullptr);
 
 } // namespace giga::game

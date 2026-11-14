@@ -386,27 +386,16 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
     return ServeRefusal::None;
 }
 
-VerbId serve_place_verb(const ServeCtx& ctx, NpcId id, const vec3& pos,
-                        LayerId layer) {
+VerbId serve_prop_verb(PropId prop) {
     VerbId best = static_cast<VerbId>(kVerbCount);
-    const RoomId room = room_at_pos(ctx.fr, pos);
-    const Room* r = room_of(ctx.fr, room);
-    if (r == nullptr) return best; // коридор: место не даёт ничего
-    const Needs row = needs_row_for(ctx.pool, id);
-    float top = 0.0f;
+    if (!prop_valid(prop)) return best;
+    const auto& pv = kPropVerbs[static_cast<std::size_t>(prop)];
+    std::int16_t top = 0;
     for (std::size_t v = 0; v < kVerbCount; ++v) {
-        const VerbId verb = static_cast<VerbId>(v);
-        if (kVerbAction[v] >= kActionCount) continue;
-        // Место этот глагол ПРЕДЛАГАЕТ — и предлагает то, что деяние возьмёт
-        // (за вычетом лежащего на полу): табличка не обещает пустого окна.
-        const std::int32_t pts = place_points(ctx.reg, ctx.fr, room, r, layer, verb);
-        if (pts <= 0) continue;
-        if (would_gain(row, verb, static_cast<float>(pts)) <= 0.0f) continue;
-        // Наибольшая недостача: тот бар, которому больше всего некуда деться.
-        const float lack = would_gain(row, verb, kNeedMax);
-        if (lack <= top) continue; // ничья — младшему глаголу
-        top = lack;
-        best = verb;
+        if (kVerbAction[v] >= kActionCount) continue; // утолить деянием нельзя
+        if (pv[v] <= top) continue; // ничья — младшему глаголу
+        top = pv[v];
+        best = static_cast<VerbId>(v);
     }
     return best;
 }

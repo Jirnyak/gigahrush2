@@ -1,7 +1,8 @@
 #include "game/focus.h"
 
 #include "ecs/components.h"    // Transform
-#include "game/prop_system.h"  // Interactable, PropMesh
+#include "game/prop_system.h"  // Interactable, PropMesh, PropOf
+#include "game/serve.h"        // serve_prop_verb — табличка навеса деяния
 #include "world/los.h"         // sub_march — единственный субвоксельный луч
 #include "world/world.h"
 
@@ -184,9 +185,22 @@ Focus focus_pick(const Registry& reg, const World& w, LayerId layer,
                             self);
 }
 
-const char* focus_prompt(const Focus& f, const World& w, const Doors& doors) {
+const char* focus_prompt(const Focus& f, const World& w, const Doors& doors,
+                         const Registry* reg) {
     switch (f.what) {
     case Focus::What::Entity:
+        // НАВЕС ДЕЯНИЯ НУЖДЫ (CANON S27.1): у вещи табличка — имя ЕЁ деяния
+        // («сон», «трапеза», «питьё», «облегчение»), из строки actions.csv по
+        // глаголу строки пропа. Тот же приём, что у двери ниже (текст по
+        // состоянию цели), и тот же вызов, которым исполнит F (`serve_prop_verb`)
+        // — «F исполняет ровно то, что показано».
+        if (f.kind == Interactable::Kind::Serve && reg != nullptr &&
+            reg->valid(f.entity)) {
+            if (const PropOf* po = reg->try_get<PropOf>(f.entity)) {
+                const VerbId v = serve_prop_verb(po->id);
+                if (v < kVerbCount) return kActionNames[kVerbAction[v]];
+            }
+        }
         return interact_def(f.kind).prompt; // текст — из таблицы, не литерал
     case Focus::What::Portal:
         if (f.portal >= doors.list.size()) return nullptr;

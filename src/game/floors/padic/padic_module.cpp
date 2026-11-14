@@ -36,7 +36,7 @@ namespace {
 //
 // Что выходит на объявлениях `padic_rooms` (считано, не предположено):
 //   жилая   (sleep 30)  — койка (sleep 17)
-//   санузел (toilet 20) — унитаз (toilet 19)
+//   санузел (toilet 20, drink 10) — унитаз (toilet 19), раковина (drink 10)
 //   ниша    (eat 12)    — плита (eat 12) И стол (eat 4): у падика лист BSP
 //                         никогда не уже minSpan, а зона яруса — три клетки,
 //                         то есть мест заведомо больше одного (у хрущей та же
@@ -51,6 +51,11 @@ constexpr PropId kPadicFurniture[] = {
     PropId::BedCot,
     PropId::ToiletPan,
     PropId::KitchenStove,
+    // РАКОВИНА (2026-11-14): питьё у места теперь — прицелом на вещь (CANON
+    // S27.1), а вода была объявлена у комнаты без предмета. Встаёт по глаголу
+    // туда, где комната ЖИВЁТ питьём (ниша 14, санузел 10 — `prop_fits_room`),
+    // ПОСЛЕ плиты: в тесной комнате порядок списка — приоритет.
+    PropId::Sink,
     PropId::KitchenTable,
 };
 static_assert(std::size(kPadicFurniture) <= kMaxStandSpots,

@@ -74,6 +74,10 @@ constexpr PropId kKhrushiFurniture[] = {
     PropId::BedCot,       // койка — спальня
     PropId::ToiletPan,    // унитаз — санузел
     PropId::KitchenStove, // плита — кухня
+    // раковина — кухня и санузел (drink 14 / 10): питьё у места — прицелом на
+    // вещь (CANON S27.1, 2026-11-14). После плиты: одноклеточная кухня
+    // хрущей оставит плиту, пить можно у раковины санузла.
+    PropId::Sink,
     PropId::Sofa,         // диван — зал (sleep 10 ровно по объявлению зала)
     PropId::KitchenTable, // стол — кухня и зал
 };

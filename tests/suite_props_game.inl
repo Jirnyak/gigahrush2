@@ -1549,15 +1549,19 @@ static void test_clear_layer_props_spares_containers() {
 
 // markoaudit-systems.md §1.3 — furniture rows carried interact=Terminal, so E
 // on a toilet toggled the door locks of every room on the floor. Pins BOTH
-// halves of the fix: the four furniture rows are interact=None (generator
-// ordinal 255, tools/gen_prop_table.py), and the spawn path strips the
-// Interactable component for a None row. Lamps stay interactable — the
-// negative control that None did not leak into the rest of the table.
+// halves of the fix: furniture carries no FOREIGN interaction, and the spawn
+// path strips the Interactable component for a None row.
+//
+// С 2026-11-14 МЕБЕЛЬ НЕСЁТ СВОЙ НАВЕС — деяние нужды (`Serve`, CANON S27.1:
+// деяние у места — только прицелом на вещь; плейтест владельца). Закон гейта
+// тот же: на унитазе ровно ЕГО интеракция (облегчение), не замки этажа и не
+// ничего. Мутация «вернуть Terminal на плиту» красит строку плиты.
 static void test_furniture_is_not_a_terminal() {
-    CHECK(game::prop_def(game::PropId::KitchenStove).interactKind == 255);
-    CHECK(game::prop_def(game::PropId::KitchenTable).interactKind == 255);
-    CHECK(game::prop_def(game::PropId::ToiletPan).interactKind == 255);
-    CHECK(game::prop_def(game::PropId::BedCot).interactKind == 255);
+    const auto serve = static_cast<std::uint8_t>(game::InteractKind::Serve);
+    CHECK(game::prop_def(game::PropId::KitchenStove).interactKind == serve);
+    CHECK(game::prop_def(game::PropId::KitchenTable).interactKind == serve);
+    CHECK(game::prop_def(game::PropId::ToiletPan).interactKind == serve);
+    CHECK(game::prop_def(game::PropId::BedCot).interactKind == serve);
     // ЛАМПЫ — ТОЖЕ СЦЕНОГРАФИЯ (чистка 2026-11-07): висячий промпт
     // «LIGHT BULB» снят — ветки исполнения E не было никогда.
     CHECK(game::prop_def(game::PropId::BareBulb).interactKind == 255);
@@ -1577,8 +1581,10 @@ static void test_furniture_is_not_a_terminal() {
     const auto e = game::spawn_prop_from_id(reg, world, pos, anchor,
                                             game::PropId::ToiletPan, 3);
     CHECK(reg.valid(e));
-    CHECK(!reg.all_of<game::Interactable>(e)); // scenery, not a verb
-    printf("[props] furniture spawns without Interactable (None row)\n");
+    // Навес деяния — свой, не чужой.
+    CHECK(reg.all_of<game::Interactable>(e) &&
+          reg.get<game::Interactable>(e).kind == game::InteractKind::Serve);
+    printf("[props] furniture spawns with its own deed hook (Serve)\n");
 
     // ОПАСНЫЙ ДЕФОЛТ УБИТ (чистка 2026-11-07): прямой spawn_prop с
     // Kind::Count — санкционированное «интерактива нет» — обязан дать проп
@@ -1878,6 +1884,33 @@ static void test_craft_hang_live_path() {
     CHECK(f.entity == lathe);
     CHECK(f.kind == game::InteractKind::Lathe);
     CHECK(game::focus_prompt(f, world, noDoors) != nullptr);
+
+    // 1б. НАВЕС ДЕЯНИЯ НУЖДЫ (CANON S27.1, плейтест владельца 2026-11-14):
+    // койка под прицелом — фокус отдаёт строку `Serve`, а табличка называет
+    // ДЕЯНИЕ ВЕЩИ («сон» — имя строки actions.csv), тем же вызовом
+    // `serve_prop_verb`, которым исполнит F. Без реестра — запасной литерал
+    // строки вида. Мутация «табличка навеса — литерал строки» красит строку.
+    {
+        world.grid().fill_cell(10, 8, 10, kMatConcrete);
+        game::SubVoxelAnchor bedAnchor{};
+        bedAnchor.cx = 10;
+        bedAnchor.cy = 8;
+        bedAnchor.cz = 10;
+        const Entity bed = game::spawn_prop_from_id(
+            reg, world, vec3{10.5f, 17.25f, 10.5f}, bedAnchor,
+            game::PropId::BedCot, layer);
+        CHECK(reg.valid(bed));
+        game::Focus fb;
+        fb.what = game::Focus::What::Entity;
+        fb.entity = bed;
+        fb.kind = game::InteractKind::Serve;
+        const char* named = game::focus_prompt(fb, world, noDoors, &reg);
+        const char* sleepName =
+            game::kActionNames[game::kVerbAction[game::kVerbSleep]];
+        CHECK(named != nullptr && std::strcmp(named, sleepName) == 0);
+        const char* bare = game::focus_prompt(fb, world, noDoors);
+        CHECK(bare != nullptr && std::strcmp(bare, sleepName) != 0);
+    }
 
     // 2. ВХОД E: та самая одна проба main.cpp — строка пропа под прицелом
     // несёт станцию навеса.

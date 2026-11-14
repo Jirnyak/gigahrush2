@@ -16,13 +16,13 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     // [4] padic_stair_bulb
     PropDef{ 300, 3, 2, 255, 210, 20, 0, 1000, 950, 700, 120, 120, 220, 12000, 1800, 1, 0, 0 },
     // [5] kitchen_stove
-    PropDef{ 80000, 0, 0, 255, 0, 4, 0, 420, 430, 400, 700, 600, 900, 0, 0, 0, 0, 0 },
+    PropDef{ 80000, 0, 0, 12, 0, 4, 0, 420, 430, 400, 700, 600, 900, 0, 0, 0, 0, 0 },
     // [6] kitchen_table
-    PropDef{ 25000, 0, 0, 255, 0, 3, 0, 520, 420, 300, 1100, 700, 780, 0, 0, 0, 0, 0 },
+    PropDef{ 25000, 0, 0, 12, 0, 3, 0, 520, 420, 300, 1100, 700, 780, 0, 0, 0, 0, 0 },
     // [7] toilet_pan
-    PropDef{ 35000, 3, 0, 255, 0, 3, 0, 880, 890, 870, 400, 400, 750, 0, 0, 0, 0, 0 },
+    PropDef{ 35000, 3, 0, 12, 0, 3, 0, 880, 890, 870, 400, 400, 750, 0, 0, 0, 0, 0 },
     // [8] bed_cot
-    PropDef{ 40000, 0, 0, 255, 0, 3, 0, 300, 340, 420, 1900, 850, 500, 0, 0, 0, 0, 0 },
+    PropDef{ 40000, 0, 0, 12, 0, 3, 0, 300, 340, 420, 1900, 850, 500, 0, 0, 0, 0, 0 },
     // [9] supply_crate
     PropDef{ 30000, 0, 0, 6, 0, 4, 0, 420, 460, 380, 1100, 1100, 900, 0, 0, 0, 0, 0 },
     // [10] grenade
@@ -42,7 +42,9 @@ const std::array<PropDef, kPropCount> kPropTable = {{
     // [17] lab_bench
     PropDef{ 90000, 0, 0, 11, 0, 3, 0, 780, 800, 820, 1600, 700, 950, 0, 0, 0, 0, 0 },
     // [18] sofa
-    PropDef{ 60000, 0, 0, 255, 0, 3, 0, 420, 380, 330, 1800, 800, 800, 0, 0, 0, 0, 0 },
+    PropDef{ 60000, 0, 0, 12, 0, 3, 0, 420, 380, 330, 1800, 800, 800, 0, 0, 0, 0, 0 },
+    // [19] sink
+    PropDef{ 20000, 0, 0, 12, 0, 3, 0, 820, 830, 840, 550, 450, 850, 0, 0, 0, 0, 0 },
 }};
 
 // Display names. Cyrillic; suites assert non-empty / lead bytes.
@@ -66,6 +68,7 @@ const std::array<const char*, kPropCount> kPropNames = {{
     "Станок",  // lathe
     "Лабстол",  // lab_bench
     "Диван",  // sofa
+    "Раковина",  // sink
 }};
 
 const std::array<const char*, kPropCount> kPropIds = {{
@@ -88,6 +91,7 @@ const std::array<const char*, kPropCount> kPropIds = {{
     "lathe",
     "lab_bench",
     "sofa",
+    "sink",
 }};
 
 // Глаголы пропа (S12.3, колонка verbs) — что предоставляет.
@@ -111,6 +115,7 @@ const std::array<std::array<std::int16_t, kVerbCount>, kPropCount> kPropVerbs = 
     {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8}},  // lathe
     {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7}},  // lab_bench
     {{10, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // sofa
+    {{0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},  // sink
 }};
 
 // Станция крафта строки (колонка craft_station) — параметр
@@ -135,6 +140,7 @@ const std::array<std::uint8_t, kPropCount> kPropCraftStations = {{
     2,  // lathe
     3,  // lab_bench
     255,  // sofa
+    255,  // sink
 }};
 
 } // namespace giga::game
