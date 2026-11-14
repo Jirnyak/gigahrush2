@@ -12,7 +12,9 @@
 #include "core/wrap.h"        // wrap_delta / wrap_macro — тор по всем трём осям
 #include "ecs/components.h"   // Transform, Velocity
 #include "game/embody.h"      // NpcRef
+#include "game/action_table.h" // kVerbAction — в сумму сумки идут глаголы деяния
 #include "game/guide.h"       // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись, стоп
+#include "game/item_table.h"  // kItemVerbs — что предмет утоляет
 #include "game/needs.h"       // needs_row_for — ОДНА строка нужд на всех решателей
 #include "game/serve.h"       // деяние нужды на месте (S24) — политика там
 #include "world/gravity.h"    // GravityFrame / steer_frame_of — плоскость ходьбы
@@ -136,18 +138,34 @@ std::int32_t place_cost(const FloorRooms& fr, const Room& r, int cx, int cy, int
     return cells * kPlacePathCostPerCell;
 }
 
+void carried_offer(const Inventory& inv, std::int32_t out[kVerbCount]) {
+    for (std::size_t v = 0; v < kVerbCount; ++v) out[v] = 0;
+    for (int i = 0; i < kInvSlots; ++i) {
+        const ItemSlot& sl = inv.slots[i];
+        if (sl.item == kInvalidItem || sl.count == 0 || !item_valid(sl.item))
+            continue;
+        for (std::size_t v = 0; v < kVerbCount; ++v) {
+            if (kVerbAction[v] >= kActionCount) continue; // не деянием — не в сумму
+            const std::int32_t amt = kItemVerbs[sl.item - 1][v];
+            if (amt > out[v]) out[v] = amt;
+        }
+    }
+}
+
 PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
-                     int cx, int cy, int cz) {
+                     int cx, int cy, int cz, const std::int32_t* carried) {
     PlacePick out;
     if (fr.list.empty() || fr.bins.empty() || fr.binCeil.empty()) return out;
 
     // ТОЧКА ПОД НОГАМИ — КАНДИДАТ ВСЕГДА, и её путь нулевой. Коридор даёт ноль:
-    // то, через что идут, не предлагает ничего (S12.1).
-    std::int32_t best = 0;
+    // то, через что идут, не предлагает ничего (S12.1) — кроме того, что тело
+    // несёт с собой: своя сумка едет с телом и прибавляется к месту под ногами
+    // (2026-11-14), а не к далёким комнатам.
+    std::int32_t best = carried != nullptr ? dot_e3(demand, carried) : 0;
     std::int32_t bestCost = 0;
     VerbId bestVerb = static_cast<VerbId>(kVerbCount);
     if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz)))
-        best = place_interest(*here, demand, &bestVerb);
+        best += place_interest(*here, demand, &bestVerb);
 
     // РАДИУС ВЫВОДИТСЯ: глобальная верхняя грань интереса — храповик `maxOffer`
     // (max по комнатам, только растёт), значит ни одна комната тора не даст
@@ -394,7 +412,11 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 demand_from_needs(row, demand);
                 demand_add_health(static_cast<float>(pool.hp(id)),
                                   static_cast<float>(pool.max_hp(id)), demand);
-                const PlacePick pick = place_pick(fr, demand, cx, cy, cz);
+                // Своя сумка — часть места под ногами (решение владельца
+                // 2026-11-14): с хлебом в кармане на кухню не ходят.
+                std::int32_t carried[kVerbCount];
+                carried_offer(pool.inventory(id), carried);
+                const PlacePick pick = place_pick(fr, demand, cx, cy, cz, carried);
                 out.judged += pick.judged;
                 out.bins += pick.bins;
                 plan.nextPickAt = stagger();

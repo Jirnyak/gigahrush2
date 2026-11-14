@@ -69,6 +69,36 @@ struct Lying {
     std::int16_t amount = 0;
     bool free = false; // цена HP == 0
 };
+// ОДНО ПРАВИЛО ВЫБОРА ПРЕДМЕТА — над любым держателем: ящиком комнаты и СВОЕЙ
+// сумкой (2026-11-14: житель ест из сумки — решение владельца). Двух правил
+// (ящик — аргмакс, сумка — «наименьшая покрывающая») больше нет: сумку
+// человека выбирает человек кнопкой, сумку жителя — это же правило.
+void best_in_slots(const ItemSlot* slots, int n, VerbId verb, Entity holder,
+                   Lying& out) {
+    for (int i = 0; i < n; ++i) {
+        const ItemSlot& s = slots[i];
+        if (s.item == kInvalidItem || s.count == 0) continue;
+        if (!item_valid(s.item)) continue;
+        const std::int16_t amt = kItemVerbs[s.item - 1][verb];
+        if (amt <= 0) continue;
+        const bool noCost = consumable_hp_cost(s.item) == 0;
+        if (out.slot >= 0) {
+            // КЛЮЧ 1: класс цены решает безусловно.
+            if (noCost != out.free) {
+                if (!noCost) continue;
+            } else if (amt < out.amount ||
+                       (amt == out.amount && s.item >= out.item)) {
+                continue; // КЛЮЧ 2: величина, ничья — младшему id
+            }
+        }
+        out.box = holder;
+        out.slot = i;
+        out.item = s.item;
+        out.amount = amt;
+        out.free = noCost;
+    }
+}
+
 Lying best_lying(Registry& reg, const FloorRooms& fr, RoomId room, LayerId layer,
                  VerbId verb) {
     Lying out;
@@ -76,28 +106,7 @@ Lying best_lying(Registry& reg, const FloorRooms& fr, RoomId room, LayerId layer
     for (auto [e, c, t] : reg.view<Container, const Transform>().each()) {
         if (t.layer != layer) continue;
         if (room_at_pos(fr, t.pos) != room) continue;
-        for (int i = 0; i < kInvSlots; ++i) {
-            const ItemSlot& s = c.inv.slots[i];
-            if (s.item == kInvalidItem || s.count == 0) continue;
-            if (!item_valid(s.item)) continue;
-            const std::int16_t amt = kItemVerbs[s.item - 1][verb];
-            if (amt <= 0) continue;
-            const bool noCost = consumable_hp_cost(s.item) == 0;
-            if (out.slot >= 0) {
-                // КЛЮЧ 1: класс цены решает безусловно.
-                if (noCost != out.free) {
-                    if (!noCost) continue;
-                } else if (amt < out.amount ||
-                           (amt == out.amount && s.item >= out.item)) {
-                    continue; // КЛЮЧ 2: величина, ничья — младшему id
-                }
-            }
-            out.box = e;
-            out.slot = i;
-            out.item = s.item;
-            out.amount = amt;
-            out.free = noCost;
-        }
+        best_in_slots(c.inv.slots, kInvSlots, verb, e, out);
     }
     return out;
 }
@@ -220,6 +229,14 @@ float would_gain(const Needs& row, VerbId verb, float amount) {
 } // namespace
 
 ServePick serve_pick(const Room& r, const DemandE3 demand[kVerbCount]) {
+    std::int32_t offer[kVerbCount];
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        offer[v] = place_offer(&r, static_cast<VerbId>(v));
+    return serve_pick_offer(offer, demand);
+}
+
+ServePick serve_pick_offer(const std::int32_t offerVec[kVerbCount],
+                           const DemandE3 demand[kVerbCount]) {
     ServePick out;
     for (std::size_t v = 0; v < kVerbCount; ++v) {
         // ЕДИНСТВЕННЫЙ ФИЛЬТР — «у глагола есть строка деяния». Глагола без
@@ -227,7 +244,7 @@ ServePick serve_pick(const Room& r, const DemandE3 demand[kVerbCount]) {
         // того, работает ли он»), и отсекается он ДО арифметики, иначе ярлык
         // называл бы то, чего сделать нельзя.
         if (kVerbAction[v] >= kActionCount) continue;
-        const std::int32_t offer = place_offer(&r, static_cast<VerbId>(v));
+        const std::int32_t offer = offerVec[v];
         const std::int64_t term =
             static_cast<std::int64_t>(demand[v]) * static_cast<std::int64_t>(offer);
         // СТРОГО ПОЛОЖИТЕЛЬНОЕ СЛАГАЕМОЕ И ЕСТЬ ВСЯ ПРОВЕРКА: нулевой спрос,
@@ -434,8 +451,17 @@ bool serve_begin(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
         act != nullptr && act_open(act_slot(*act, ActSlot::Body), ctx.tick))
         return false;
 
-    const Room* r = room_of(ctx.fr, room_at_pos(ctx.fr, pos));
-    if (r == nullptr) {
+    const RoomId room = room_at_pos(ctx.fr, pos);
+    const Room* r = room_of(ctx.fr, room);
+    // СВОЯ СУМКА — ЧАСТЬ МЕСТА ПОД НОГАМИ (решение владельца 2026-11-14: «все
+    // едят универсально, могут есть из инвентаря»): тот же вектор, что видит
+    // одна сумма в `place_pick`. Коридор без сумки — по-прежнему «недоступно
+    // по месту»; с хлебом в кармане — есть где.
+    std::int32_t carried[kVerbCount];
+    carried_offer(ctx.pool.inventory(id), carried);
+    bool anyCarried = false;
+    for (std::size_t v = 0; v < kVerbCount; ++v) anyCarried |= carried[v] > 0;
+    if (r == nullptr && !anyCarried) {
         ++out.corridor;
         return false;
     }
@@ -454,13 +480,31 @@ bool serve_begin(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     demand_add_health(static_cast<float>(ctx.pool.hp(id)),
                       static_cast<float>(ctx.pool.max_hp(id)), demand);
 
-    const ServePick p = serve_pick(*r, demand);
+    std::int32_t offer[kVerbCount];
+    for (std::size_t v = 0; v < kVerbCount; ++v)
+        offer[v] = place_offer(r, static_cast<VerbId>(v)) + carried[v];
+    const ServePick p = serve_pick_offer(offer, demand);
     if (p.verb >= kVerbCount) {
         ++out.nothing;
         return false;
     }
+    // ИСТОЧНИК: что даёт МЕСТО (ящик или возможность) — первым: кран и плиту
+    // не тратят, а лежащее в ящике — запас комнаты, S24.3. Своя сумка — когда
+    // место этот глагол не даёт; предмет — по тому же правилу, что ящик.
+    ItemId item = kInvalidItem;
+    const Transform* tr = ctx.reg.try_get<const Transform>(e);
+    const LayerId layer = tr != nullptr ? tr->layer : LayerId{0};
+    const bool placeGives =
+        r != nullptr &&
+        (place_points(ctx.reg, ctx.fr, room, r, layer, p.verb) > 0 ||
+         best_lying(ctx.reg, ctx.fr, room, layer, p.verb).slot >= 0);
+    if (!placeGives) {
+        Lying own;
+        best_in_slots(ctx.pool.inventory(id).slots, kInvSlots, p.verb, e, own);
+        item = own.item;
+    }
     // ОКНО ОТКРЫВАЕТ ОДНА ДВЕРЬ — та же, что у человека.
-    if (serve_start(ctx, e, id, pos, p.verb, kInvalidItem, out) !=
+    if (serve_start(ctx, e, id, pos, p.verb, item, out) !=
         ServeRefusal::None) {
         ++out.nothing;
         return false;

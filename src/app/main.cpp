@@ -6480,13 +6480,14 @@ int main(int argc, char** argv) {
                     // «деяний ноль» опять было бы неотличимо от «толпа сыта».
                     std::fprintf(stderr,
                                  "[serve] STEP tick=%llu hold=%u began=%u "
-                                 "applied=%u consumed=%u broke=%u corridor=%u "
+                                 "applied=%u consumed=%u bag=%u broke=%u corridor=%u "
                                  "nothing=%u relief=%.1f | сон=%u еда=%u "
                                  "питьё=%u сортир=%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  serveTick.holding, serveTick.began,
                                  serveTick.applied, serveTick.consumed,
-                                 serveTick.broke, serveTick.corridor,
+                                 serveTick.bag, serveTick.broke,
+                                 serveTick.corridor,
                                  serveTick.nothing,
                                  static_cast<double>(serveTick.reliefSum),
                                  serveTick.byVerb[game::kVerbSleep],

@@ -150,6 +150,11 @@ struct ServePick {
     std::int64_t term = 0;    // спрос × предложение — слагаемое ТОЙ ЖЕ суммы
 };
 ServePick serve_pick(const Room& r, const DemandE3 demand[kVerbCount]);
+// Та же сумма над готовым вектором предложения — комната ПЛЮС своя сумка
+// (`carried_offer@game/place.h`, 2026-11-14: житель ест из сумки). `serve_pick`
+// над комнатой — частный случай этой, закон один.
+ServePick serve_pick_offer(const std::int32_t offer[kVerbCount],
+                           const DemandE3 demand[kVerbCount]);
 
 // Контекст шва: те же четыре вещи, что у любого прохода игрового слоя.
 struct ServeCtx {

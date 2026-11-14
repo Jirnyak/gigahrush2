@@ -898,6 +898,54 @@ static void test_serve_leaving_breaks_the_window() {
     CHECK(std::fabs(pool.needs(rid).water - (10.0f + 14.0f)) < 1e-3f);
 }
 
+// --- 11а. ЖИТЕЛЬ ЕСТ ИЗ СВОЕЙ СУМКИ (решение владельца 2026-11-14) ---------
+//
+// «Все едят универсально, могут есть из инвентаря». Одна сумма видит сумку как
+// часть места под ногами; источник — место первым (плиту и кран не тратят),
+// сумка — когда место этот глагол не даёт.
+static void test_serve_resident_eats_from_own_bag() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    const ItemId bread = item_by_string("bread");
+    // В КОРИДОРЕ С ХЛЕБОМ В КАРМАНЕ — ест хлеб (прежде: «недоступно по месту»).
+    const vec3 corridor = cell_mid(100, 20, 20);
+    CHECK(room_at_pos(fr, corridor) == kNoRoom);
+    NpcId id = 0;
+    const Entity e = make_body(reg, pool, corridor, id);
+    pool.needs(id).food = 10.0f;
+    pool.inventory(id).slots[0] = ItemSlot{bread, 1, 255, 0};
+    ServeTick t{};
+    CHECK(serve_begin(ServeCtx{reg, pool, fr, nullptr, 3u}, e, id, corridor, t));
+    CHECK(t.bag == 1);
+    CHECK(t.corridor == 0);
+    CHECK(act_slot(reg.get<Acting>(e), ActSlot::Body).item == bread);
+    CHECK(bag_count(pool, id, bread) == 0);
+    // ...а с пустым карманом — по-прежнему «недоступно по месту».
+    NpcId id2 = 0;
+    const Entity e2 = make_body(reg, pool, corridor, id2);
+    pool.needs(id2).food = 10.0f;
+    ServeTick t2{};
+    CHECK(!serve_begin(ServeCtx{reg, pool, fr, nullptr, 3u}, e2, id2, corridor,
+                       t2));
+    CHECK(t2.corridor == 1);
+    // НА КУХНЕ — ест у плиты, хлеб бережёт: место первым. Мутация «сумка
+    // первой» красит строки ниже.
+    declare_room(fr, 110, 20, 20, kVerbEat, 12);
+    const vec3 kitchen = cell_mid(111, 21, 20);
+    NpcId id3 = 0;
+    const Entity e3 = make_body(reg, pool, kitchen, id3);
+    pool.needs(id3).food = 10.0f;
+    pool.inventory(id3).slots[0] = ItemSlot{bread, 1, 255, 0};
+    ServeTick t3{};
+    CHECK(serve_begin(ServeCtx{reg, pool, fr, nullptr, 3u}, e3, id3, kitchen, t3));
+    CHECK(t3.bag == 0);
+    CHECK(act_slot(reg.get<Acting>(e3), ActSlot::Body).item == kInvalidItem);
+    CHECK(bag_count(pool, id3, bread) == 1);
+}
+
 // --- 11б. УРОН И УДАР РВУТ ДЕЯНИЕ, ИСТОЩЕНИЕ — НЕТ (решение владельца) -----
 //
 // «Деяние рвут ход, урон и действие руками — у любого тела»: урон рвёт ОДНА
@@ -1133,6 +1181,7 @@ static void test_serve_all() {
     test_serve_one_door_resident_and_human();
     test_serve_bag_item_is_the_chosen_one();
     test_serve_leaving_breaks_the_window();
+    test_serve_resident_eats_from_own_bag();
     test_serve_hurt_and_swing_break_the_deed();
     test_serve_unpaid_contact_is_still_open();
     test_serve_relief_anywhere_puddle_by_place();
