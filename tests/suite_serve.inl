@@ -357,6 +357,11 @@ static void test_serve_consumes_what_lies_in_the_room() {
     CHECK(serve_begin(ctx, e, id, inside, t));
     CHECK(t.byVerb[kVerbEat] == 1);
     const std::uint16_t dur = act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
+    // ДЛИНА — У ПРЕДМЕТА (колонка `use_ms`, решение владельца 2026-11-14), а не
+    // у строки трапезы: хлеб из ящика ешь столько, сколько назвал хлеб.
+    CHECK(kItemUseMs[bread - 1] > 0);
+    CHECK(dur == ms_to_ticks(kItemUseMs[bread - 1]));
+    CHECK(dur != ms_to_ticks(kActionDurMs[kVerbAction[kVerbEat]]));
 
     ServeTick land{};
     CHECK(!serve_busy(ServeCtx{reg, pool, fr, &bus, 500u + dur}, e, id, inside,
@@ -391,8 +396,11 @@ static void test_serve_consumes_what_lies_in_the_room() {
     const std::uint64_t after = 500u + dur + 50u;
     ServeTick t2{};
     CHECK(serve_begin(ServeCtx{reg, pool, fr, &bus, after}, e, id, inside, t2));
+    // У места своего предмета нет — длина строки действия (трапеза).
+    const std::uint16_t dur2 = act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
+    CHECK(dur2 == ms_to_ticks(kActionDurMs[kVerbAction[kVerbEat]]));
     ServeTick land2{};
-    CHECK(!serve_busy(ServeCtx{reg, pool, fr, &bus, after + dur}, e, id, inside,
+    CHECK(!serve_busy(ServeCtx{reg, pool, fr, &bus, after + dur2}, e, id, inside,
                       kLayer, land2));
     CHECK(land2.applied == 1);
     CHECK(land2.consumed == 0);

@@ -167,6 +167,7 @@ def main():
     declared_stacks = 0
     verbs = load_verbs()
     verb_vecs = []
+    use_mss = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -246,6 +247,18 @@ def main():
         if ue in USE_VERB:
             vec[verbs[USE_VERB[ue]]] = num(r, "use_a", i, -32768, 32767)
         verb_vecs.append(vec)
+        # ДЛИНА ДЕЯНИЯ ПРЕДМЕТОМ (решение владельца 2026-11-14: «завести каждому
+        # предмету свою длину — колонка в items.csv»). Пусто = 0 = «длина строки
+        # действия» (meal/sip/rest в actions.csv). Осмыслена только у предмета
+        # с глаголом деяния: число у предмета без него было бы колонкой без
+        # читателя — генератор такое отвергает.
+        # НАЧАЛЬНЫЕ ЧИСЛА (2026-11-14) ВЫВЕДЕНЫ, а не назначены: еда — 0.75 с
+        # на очко use_a (5–30 с), питьё — 0.3 с на очко (3–10 с), таблетка — 3 с
+        # (проглотить). Тюнинг — правкой строки, правило здесь — лишь провенанс.
+        use_ms = num(r, "use_ms", i, 0, 65535 * 8) if (r.get("use_ms") or "").strip() else 0
+        if use_ms > 0 and ue not in USE_VERB:
+            die("row %d (%s): use_ms у предмета без глагола деяния" % (i, r["id"]))
+        use_mss.append(use_ms)
 
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
         # Authored flavour text — all 442 rows carry one. The inventory card
@@ -321,6 +334,12 @@ def main():
         fh.write("// Глаголы предмета (S12.3: что УТОЛЯЕТ; ресурс, тратится).\n"
                  "// ВЫВЕДЕНЫ из value_rub (нажива) и use_effect/use_a\n"
                  "// (есть/пить/лечиться/спать) — ручной разметки нет (S11).\n")
+        fh.write("// Длина деяния предметом, мс (колонка use_ms; 0 = длина строки\n"
+                 "// действия actions.csv). Читатель — serve_start ([game/serve.h]).\n")
+        fh.write("const std::array<std::uint32_t, kItemCount> kItemUseMs = {{\n")
+        for iid, ms in zip(ids, use_mss):
+            fh.write("    %d,  // %s\n" % (ms, iid))
+        fh.write("}};\n\n")
         fh.write("const std::array<std::array<std::int16_t, kVerbCount>, "
                  "kItemCount> kItemVerbs = {{\n")
         for iid, vec in zip(ids, verb_vecs):

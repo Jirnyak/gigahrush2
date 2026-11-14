@@ -157,6 +157,11 @@ extern const std::array<const char*, kItemCount> kItemIdStrs;
 extern const std::array<std::array<std::int16_t, kVerbCount>, kItemCount>
     kItemVerbs;
 
+// ДЛИНА ДЕЯНИЯ ПРЕДМЕТОМ, мс — колонка `use_ms` items.csv (решение владельца
+// 2026-11-14: «у каждого предмета своя длина»). 0 = длина строки действия
+// (actions.csv). Читатель — дверь утоления (`serve_start`).
+extern const std::array<std::uint32_t, kItemCount> kItemUseMs;
+
 // Item ids are 1-based; these are the only sanctioned way to index the table.
 inline bool item_valid(ItemId id) {
     return id != kInvalidItem && id <= kItemCount;

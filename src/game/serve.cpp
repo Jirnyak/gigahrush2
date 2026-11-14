@@ -333,10 +333,14 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
 
     const ActionId a = kVerbAction[verb];
     if (act == nullptr) act = &ctx.reg.emplace<Acting>(e);
-    // ДЛИНА — ИЗ СТРОКИ ДЕЙСТВИЯ; окно — ПОТОК: курсор доставки с нуля
-    // (`acting_take_flow`), эффект течёт квантами всё окно.
-    if (!acting_begin_ms(*act, ActSlot::Body, a, kActionDurMs[a], 0, ctx.tick,
-                         item))
+    // ДЛИНА — У ПРЕДМЕТА, ЕСЛИ ОН ЕЁ НАЗВАЛ (колонка `use_ms` items.csv,
+    // решение владельца 2026-11-14), иначе у строки действия: таблетку глотают
+    // секунды, а не 90-секундный сон строки `rest`. Окно — ПОТОК: курсор
+    // доставки с нуля (`acting_take_flow`), эффект течёт квантами всё окно.
+    const std::uint32_t durMs =
+        item != kInvalidItem && kItemUseMs[item - 1] > 0 ? kItemUseMs[item - 1]
+                                                        : kActionDurMs[a];
+    if (!acting_begin_ms(*act, ActSlot::Body, a, durMs, 0, ctx.tick, item))
         return ServeRefusal::Busy;
 
     // ПРЕДМЕТ УХОДИТ СЕЙЧАС — из ящика или своей сумки, — и цена сомнительной

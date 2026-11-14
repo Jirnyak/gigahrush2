@@ -203,6 +203,9 @@ set(GIGA_CSV_COLUMNS
     "items.csv:deceptive_score:DEAD:обмана, подделок и торга по подлинности нет"
     "items.csv:use_effect:LIVE:.useEffect"
     "items.csv:use_a:LIVE:.useA"
+    # 2026-11-14 (решение владельца: «у каждого предмета своя длина»): длина
+    # окна деяния предметом; читатель — дверь утоления (`serve_start`).
+    "items.csv:use_ms:LIVE:kItemUseMs"
     "items.csv:use_b:DEAD:вторая величина эффекта — ни один генератор её не читает, spec 17 числил её живым парой к use_a"
     "items.csv:use_grant_id:DEAD:выдачи предметов при использовании нет"
     "items.csv:use_grant_n:DEAD:выдачи предметов при использовании нет"

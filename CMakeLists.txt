@@ -2661,7 +2661,10 @@ if(GIGA_BUILD_TESTS)
         # Serve» в suite_serve (+9 вместо 6 проверок выбирателя места),
         # табличка навеса — имя деяния (+4), мебель несёт свой навес, а не
         # чужой (те же строки гейта, иной закон).
-        PASS_REGULAR_EXPRESSION "game_test: 220635 checks, 0 failures")
+        # 220635 -> 220639 (+4): у предмета своя длина деяния (колонка use_ms
+        # items.csv, решение владельца) — окно хлеба длиной хлеба, окно места
+        # длиной строки трапезы.
+        PASS_REGULAR_EXPRESSION "game_test: 220639 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
@@ -2923,7 +2926,10 @@ if(GIGA_BUILD_TESTS)
         # в строке действия). Оба ЖИВЫЕ с первого дня: их читает `serve_begin`
         # ([game/serve.h]), и приехали они тем же коммитом, что он, — то самое
         # обещание, которое шапка генератора дала в день рождения таблицы.
-        "GIGA_CSV_COLUMNS=PASS covered=3/16 columns=68 live=42 gen=7 writeonly=7 dead=12")
+        # СТОЛБЦЫ 68 -> 69 и ЖИВЫЕ 42 -> 43 на 2026-11-14: `items.csv` приобрела
+        # `use_ms` (длина деяния предметом, решение владельца «у каждого
+        # предмета своя длина»), живой с первого дня — читает `serve_start`.
+        "GIGA_CSV_COLUMNS=PASS covered=3/16 columns=69 live=43 gen=7 writeonly=7 dead=12")
 
     # ПОЛНОТА КОНТУРА СТРОКИ МИРА. Разделение труда: ЗАКОН формы типа судит
     # компилятор (`GIGA_ROW@src/core/row_law.h` — vector/string/map/unique_ptr/
