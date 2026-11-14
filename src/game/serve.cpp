@@ -2,6 +2,7 @@
 
 #include "game/serve.h"
 
+#include "core/rng.h"           // hash2/rand01 — детерминированный жребий капли
 #include "ecs/components.h"    // Transform, Controller — комната предмета, ввод человека
 #include "game/action.h"       // Acting / acting_begin_ms / acting_take_flow / act_open
 #include "game/action_table.h" // kActionVerb / kVerbAction / kActionDurMs
@@ -178,9 +179,9 @@ float flow_total(Registry& reg, const FloorRooms& fr, RoomId room, const Room* r
 // по кванту»): `ticks` созревших тиков из `dur` — доля `ticks/dur` объёма
 // деяния. Предмет окна (`item`) уже взят при открытии — течёт ЕГО доля; без
 // предмета течёт доля места или тела. Возвращает, сколько очков легло.
-float flow_effect(const ServeCtx& ctx, NpcId id, const vec3& pos, LayerId layer,
-                  VerbId verb, ItemId item, std::uint32_t ticks,
-                  std::uint32_t dur) {
+float flow_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
+                  LayerId layer, VerbId verb, ItemId item, std::uint32_t ticks,
+                  std::uint32_t dur, std::uint64_t lastTick, ServeTick& out) {
     if (ticks == 0 || dur == 0) return 0.0f;
     Needs& n = ctx.pool.needs(id);
     const float share = static_cast<float>(ticks) / static_cast<float>(dur);
@@ -190,9 +191,35 @@ float flow_effect(const ServeCtx& ctx, NpcId id, const vec3& pos, LayerId layer,
         return res.food + res.water + res.sleep;
     }
     const RoomId room = room_at_pos(ctx.fr, pos);
-    const float total =
-        flow_total(ctx.reg, ctx.fr, room, room_of(ctx.fr, room), layer, verb);
+    const Room* r = room_of(ctx.fr, room);
+    const float total = flow_total(ctx.reg, ctx.fr, room, r, layer, verb);
     const SatisfyResult sat = needs_satisfy(n, verb, total * share);
+    // МОЧА — ПОКА ИДЁТ ПРОЦЕСС (решение владельца 2026-11-14: «процесс писанья
+    // делает вероятность, что появится субвоксель мочи, каждый тик, покуда
+    // процесс идёт»). Каждый тик окна облегчения (объём называет тело —
+    // `needs_body_total`) НЕ у места, которое даёт сортир (предикат свидетеля
+    // `room_offers`), роняет субвоксель `urine` с шансом
+    // `kReliefUrineAtoms / длина окна` — полный попис в среднем даёт лужицу из
+    // `kReliefUrineAtoms`, прерванный — сколько успело. Объём бара не считается
+    // («не переживай об объёмах — это игра»): пустое тело дверь не пустит
+    // (`Full`), начатое окно капает до конца. Прежняя форма «атом в начале
+    // окна» давала множить мочу прерываниями — абсурд по построению.
+    // Жребий детерминирован: хеш тела и ТИКА ОКНА (`lastTick` — последний
+    // отданный тик кванта), ни одного состояния. Тик окна, а не тик опроса:
+    // окно, опрошенное каждый тик и разом в конце, роняет те же атомы.
+    if (needs_body_total(verb) > 0.0f && !room_offers(r, verb) &&
+        ctx.world != nullptr && ctx.excreted != nullptr) {
+        const float p = static_cast<float>(kReliefUrineAtoms) /
+                        static_cast<float>(dur);
+        for (std::uint32_t i = 0; i < ticks; ++i) {
+            const std::uint32_t h = giga::hash2(
+                static_cast<std::uint32_t>(entt::to_integral(e)),
+                static_cast<std::uint32_t>(lastTick - i));
+            if (giga::rand01(h) >= p) continue;
+            out.puddles += static_cast<std::uint32_t>(
+                relief_urine(*ctx.world, pos, 1, *ctx.excreted));
+        }
+    }
     return sat.served ? sat.gained : 0.0f;
 }
 
@@ -385,17 +412,6 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
         if (ctx.bus != nullptr)
             ctx.bus->publish(EventType::ItemTransferred, id, kInvalidNpc, item,
                              ctx.tick);
-    } else if (ctx.world != nullptr && ctx.excreted != nullptr) {
-        // МОЧА — материя мира: выйдет не у места, которое даёт сортир, —
-        // субвоксель `urine` в точке тела, дальше его ведёт автомат. Предикат
-        // тот же, что у свидетеля (`room_offers`): материя на полу и цена
-        // судят одно «уместно ли».
-        Needs probe = row;
-        const SatisfyResult will = needs_satisfy(
-            probe, verb, flow_total(ctx.reg, ctx.fr, room, r, layer, verb));
-        if (will.relievedPee > 0.0f && !room_offers(r, verb) &&
-            relief_urine(*ctx.world, pos, *ctx.excreted))
-            ++out.puddles;
     }
     // ФАКТ (S19): деяние — в шину, когда начато. Цену судит свидетель по данным
     // глагола (`kVerbRelDelta`/`kVerbRepDelta`): у еды и сна ноль, у
@@ -434,8 +450,8 @@ bool serve_busy(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     const bool wasDone = w.applied != 0;
     const std::uint32_t ticks = acting_take_flow(*act, ActSlot::Body, ctx.tick);
     if (ticks > 0)
-        out.reliefSum += flow_effect(ctx, id, pos, layer, mine, w.item, ticks,
-                                     w.durTicks);
+        out.reliefSum += flow_effect(ctx, e, id, pos, layer, mine, w.item, ticks,
+                                     w.durTicks, w.startTick + w.applyTicks, out);
     if (!wasDone && w.applied != 0) ++out.applied; // окно отдало всё
     if (!act_busy(w, ctx.tick)) return false; // окно закрылось — тело вольно
     ++out.holding;

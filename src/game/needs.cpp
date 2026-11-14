@@ -169,9 +169,10 @@ float needs_speed_scale(const Needs& n) {
     return scale;
 }
 
-bool relief_urine(World& w, const vec3& pos, std::vector<std::uint32_t>& cells) {
-    // Метры → глобальный субвоксель → клетка тора + атом в ней. Те же три
-    // свёртки, что у универсальной кисти (`app/main.cpp`, писатель Brush).
+int relief_urine(World& w, const vec3& pos, int count,
+                 std::vector<std::uint32_t>& cells) {
+    // Метры → глобальный субвоксель. Те же свёртки, что у универсальной кисти
+    // (`app/main.cpp`, писатель Brush): клетка тора + атом в ней.
     const float sv = kCellSize / static_cast<float>(kSubDim);
     const int gx = static_cast<int>(std::floor(pos.x / sv));
     const int gy = static_cast<int>(std::floor(pos.y / sv));
@@ -181,13 +182,28 @@ bool relief_urine(World& w, const vec3& pos, std::vector<std::uint32_t>& cells) 
             std::floor(static_cast<float>(g) / static_cast<float>(kSubDim))));
     };
     const auto atom = [](int g) { return ((g % kSubDim) + kSubDim) % kSubDim; };
-    const int cx = cell(gx), cy = cell(gy), cz = cell(gz);
-    const int sx = atom(gx), sy = atom(gy), sz = atom(gz);
-    if (w.grid().mask(cx, cy, cz).test(sub_bit(sx, sy, sz))) return false;
-    if (sub_material_at(w, cx, cy, cz, sx, sy, sz) != kCellAir) return false;
-    set_sub_material(w, cx, cy, cz, sx, sy, sz, kMatUrine);
-    cells.push_back(static_cast<std::uint32_t>(macro_index(cx, cy, cz)));
-    return true;
+    // Точка тела, затем 26 соседей ПО РАССТОЯНИЮ (грани, рёбра, углы): кучка
+    // ложится лужицей вокруг, а не стопкой в одной точке; дальше её разведёт
+    // автомат. Порядок фиксирован — запись детерминирована.
+    int written = 0;
+    for (int ring = 0; ring <= 3 && written < count; ++ring)
+        for (int dz = -1; dz <= 1 && written < count; ++dz)
+            for (int dy = -1; dy <= 1 && written < count; ++dy)
+                for (int dx = -1; dx <= 1 && written < count; ++dx) {
+                    if (dx * dx + dy * dy + dz * dz != ring) continue;
+                    const int ax = gx + dx, ay = gy + dy, az = gz + dz;
+                    const int cx = cell(ax), cy = cell(ay), cz = cell(az);
+                    const int sx = atom(ax), sy = atom(ay), sz = atom(az);
+                    if (w.grid().mask(cx, cy, cz).test(sub_bit(sx, sy, sz)))
+                        continue;
+                    if (sub_material_at(w, cx, cy, cz, sx, sy, sz) != kCellAir)
+                        continue;
+                    set_sub_material(w, cx, cy, cz, sx, sy, sz, kMatUrine);
+                    cells.push_back(
+                        static_cast<std::uint32_t>(macro_index(cx, cy, cz)));
+                    ++written;
+                }
+    return written;
 }
 
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
@@ -245,9 +261,10 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
         // `kMatUrine` в точке тела, дальше её ведёт автомат. Ветки «если это
         // носитель камеры» здесь нет: прежде клок отдавал флажок только про
         // камеру, и толпа сливалась бесследно.
-        if (voided.pee > 0.0f && world != nullptr && excreted != nullptr &&
-            relief_urine(*world, tr.pos, *excreted))
-            ++out.puddles;
+        // Слив мгновенный — процесса нет, атомы разом (`kReliefUrineAtoms`).
+        if (voided.pee > 0.0f && world != nullptr && excreted != nullptr)
+            out.puddles += static_cast<std::uint32_t>(
+                relief_urine(*world, tr.pos, kReliefUrineAtoms, *excreted));
         ++out.bodies;
 
         // АМБИЕНТНАЯ РЕГЕНЕРАЦИЯ ПО ВИДУ КОМНАТЫ УМЕРЛА (rooms-object F,

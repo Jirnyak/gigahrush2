@@ -1050,6 +1050,148 @@ static void test_serve_unpaid_contact_is_still_open() {
     CHECK(pool.needs(id).water == 10.0f);
 }
 
+// --- 13а. МОЧА — ЖРЕБИЙ НА ТИК ПРОЦЕССА: СРЕДНЕЕ, ОБРЫВ, КАДЕНС ОПРОСА -----
+// Решение владельца 2026-11-14: «процесс писанья делает вероятность, что
+// появится субвоксель мочи, каждый тик, покуда процесс идёт; полный попис в
+// среднем даёт лужицу — порядка 4». Три свойства, каждое своим гейтом:
+//  1) СРЕДНЕЕ за полный попис ≈ `kReliefUrineAtoms` (по 64 окнам);
+//  2) ОБРЫВ не множит мочу: окно, сорванное на середине, роняет только
+//     созревшую часть — сумма сорванных половин не больше полных окон;
+//  3) КАДЕНС ОПРОСА не меняет исход: окно, опрошенное каждый тик, роняет
+//     столько же, сколько опрошенное разом в конце (жребий — тик окна).
+// Мутации: «шанс без деления на длину окна» — красит 1; «атом в начале
+// окна» — 2; «тик опроса вместо тика окна» — 3.
+static void test_serve_urine_rolls_per_tick() {
+    World w;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) w.grid().fill_cell(x, y, 0, 1);
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    FloorRooms fr;
+    rooms_reset(fr); // ни одной комнаты: везде «не у места», лужа законна
+    std::vector<std::uint32_t> dirty;
+    const std::uint32_t dur =
+        ms_to_ticks(kActionDurMs[kVerbAction[kVerbToilet]]);
+    // Каждое окно — своя клетка пола: соседние лужи не делят окрестность 3³.
+    const auto spot = [](int k) {
+        return cell_mid(k % 8, (k / 8) % 8, 1);
+    };
+    std::uint64_t tick = 100;
+    // 1) Полные окна, опрошенные разом в конце.
+    std::uint32_t full = 0;
+    for (int k = 0; k < 64; ++k) {
+        NpcId id = 0;
+        const Entity e = make_human(reg, pool, spot(k), id);
+        pool.needs(id).pee = kNeedMax;
+        ServeTick t{};
+        CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, tick, &w, &dirty}, e,
+                          id, spot(k), kVerbToilet, kInvalidItem, t) ==
+              ServeRefusal::None);
+        ServeTick land{};
+        serve_step(ServeCtx{reg, pool, fr, nullptr, tick + dur, &w, &dirty},
+                   kLayer, land);
+        CHECK(land.applied == 1);
+        full += land.puddles;
+        reg.destroy(e);
+        tick += dur + 1u;
+    }
+    const float mean = static_cast<float>(full) / 64.0f;
+    std::printf("  [urine] 64 full windows: %u atoms, mean %.2f (want ~%d)\n",
+                full, static_cast<double>(mean), kReliefUrineAtoms);
+    CHECK(mean > 0.75f * static_cast<float>(kReliefUrineAtoms));
+    CHECK(mean < 1.25f * static_cast<float>(kReliefUrineAtoms));
+    CHECK(dirty.size() == full);
+
+    // 2) ОБРЫВ: те же 64 тела, но каждое окно сорвано на середине и тут же
+    // начато заново, до конца. Прежняя форма «атом в начале» давала бы по
+    // атому на каждое начало — здесь сумма равна полному окну в среднем.
+    World w2;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) w2.grid().fill_cell(x, y, 0, 1);
+    std::vector<std::uint32_t> dirty2;
+    std::uint32_t broken = 0, opens = 0;
+    for (int k = 0; k < 64; ++k) {
+        NpcId id = 0;
+        const Entity e = make_human(reg, pool, spot(k), id);
+        pool.needs(id).pee = kNeedMax;
+        for (int rep = 0; rep < 4; ++rep) {
+            ServeTick t{};
+            if (serve_start(ServeCtx{reg, pool, fr, nullptr, tick, &w2, &dirty2},
+                            e, id, spot(k), kVerbToilet, kInvalidItem, t) !=
+                ServeRefusal::None)
+                break;
+            ++opens;
+            broken += t.puddles; // начало окна не роняет ничего
+            const std::uint64_t half = tick + dur / 4u;
+            ServeTick mid{};
+            serve_step(ServeCtx{reg, pool, fr, nullptr, half, &w2, &dirty2},
+                       kLayer, mid);
+            broken += mid.puddles;
+            CHECK(break_action(reg.get<Acting>(e), ActSlot::Body, kBreakLeave,
+                               half)
+                      .broken);
+            tick = half + 1u;
+        }
+        reg.destroy(e);
+        tick += 1u;
+    }
+    std::printf("  [urine] %u windows broken at a quarter: %u atoms\n", opens,
+                broken);
+    CHECK(opens == 64u * 4u);
+    // Четыре четверти — одно окно по жребию; «атом в начале» дал бы ещё +256.
+    CHECK(static_cast<float>(broken) <
+          1.25f * static_cast<float>(kReliefUrineAtoms) * 64.0f);
+
+    // 3) КАДЕНС: 16 окон, каждое прожито дважды в свежем мире (те же тело и
+    // тик начала): опрошенное каждый тик — и разом, далеко после конца (тики
+    // опроса двух проходов не пересекаются вовсе). Исход обязан совпасть у
+    // КАЖДОГО окна: одно окно — пуассон(4), совпадение двух независимых
+    // жребиев у шестнадцати подряд невозможно.
+    int cadenceMismatch = 0;
+    std::uint32_t perTickSum = 0;
+    for (int k = 0; k < 16; ++k) {
+        std::uint32_t got[2] = {0, 0};
+        const std::uint64_t t0 = 5000u + static_cast<std::uint64_t>(k) * 7919u;
+        for (int pass = 0; pass < 2; ++pass) {
+            World wc;
+            wc.grid().fill_cell(0, 0, 0, 1);
+            std::vector<std::uint32_t> dc;
+            Registry rc;
+            NpcPool pc;
+            pc.init();
+            NpcId id = 0;
+            const Entity e = make_human(rc, pc, cell_mid(0, 0, 1), id);
+            pc.needs(id).pee = kNeedMax;
+            ServeTick t{};
+            CHECK(serve_start(ServeCtx{rc, pc, fr, nullptr, t0, &wc, &dc}, e, id,
+                              cell_mid(0, 0, 1), kVerbToilet, kInvalidItem,
+                              t) == ServeRefusal::None);
+            if (pass == 0) {
+                for (std::uint32_t i = 1; i <= dur; ++i) {
+                    ServeTick st{};
+                    serve_step(ServeCtx{rc, pc, fr, nullptr, t0 + i, &wc, &dc},
+                               kLayer, st);
+                    got[0] += st.puddles;
+                }
+            } else {
+                ServeTick st{};
+                serve_step(
+                    ServeCtx{rc, pc, fr, nullptr, t0 + 3u * dur, &wc, &dc},
+                    kLayer, st);
+                got[1] = st.puddles;
+            }
+        }
+        cadenceMismatch += got[0] != got[1];
+        perTickSum += got[0];
+    }
+    std::printf("  [urine] 16 windows, per-tick vs single poll: %d mismatches "
+                "(%u atoms)\n",
+                cadenceMismatch, perTickSum);
+    CHECK(cadenceMismatch == 0);
+    CHECK(perTickSum > 0u);
+}
+
 // --- 13. ОБЛЕГЧЕНИЕ: ВЕЛИЧИНА — ТЕЛО, ЛУЖА — МЕСТО, ФАКТ — ВСЕГДА ---------
 static void test_serve_relief_anywhere_puddle_by_place() {
     // МИР С ПОЛОМ: лужа — стейн на твёрдых атомах, без мира её не проверить.
@@ -1092,12 +1234,22 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(land.applied == 1);
     CHECK(pool.needs(hid).pee == 0.0f);
     CHECK(pool.needs(hid).poo == 0.0f);
-    CHECK(t.puddles == 1); // моча — в начале облегчения, вне уместного места
-    CHECK(!dirty.empty());
-    // МОЧА — МАТЕРИЯ МИРА, а не пятно (решение владельца 2026-11-14): атом в
-    // точке тела стал субвокселем материала `urine`, дальше его ведёт автомат.
-    // Мутация «писать воду вместо мочи» красит строку; «не писать» — две.
-    CHECK(sub_material_at(w, 34, 34, 10, 4, 4, 4) == kMatUrine);
+    // МОЧА — ПОКА ИДЁТ ПРОЦЕСС, не в начале окна (решение владельца
+    // 2026-11-14: прерываниями её множили). Открытие окна не роняет ничего.
+    CHECK(t.puddles == 0);
+    CHECK(land.puddles > 0);
+    CHECK(dirty.size() == land.puddles);
+    // МОЧА — МАТЕРИЯ МИРА, а не пятно: каждая капля — субвоксель материала
+    // `urine` в окрестности 3³ точки тела (атом (4,4,4) клетки (34,34,10)),
+    // дальше её ведёт автомат. Мутация «писать воду вместо мочи» красит
+    // счёт; «не писать» — две строки выше.
+    int urineNear = 0;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+                urineNear += sub_material_at(w, 34, 34, 10, 4 + dx, 4 + dy,
+                                             4 + dz) == kMatUrine;
+    CHECK(urineNear == static_cast<int>(land.puddles));
     CHECK(material_phase(kMatUrine) == MatPhase::Liquid);
     CHECK(bus.total_count(EventType::Deed) == 1);
 
@@ -1116,6 +1268,7 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(land2.applied == 1);
     CHECK(pool.needs(hid).pee == 0.0f);
     CHECK(tw.puddles == 0);
+    CHECK(land2.puddles == 0);
     CHECK(dirty.empty());
     CHECK(bus.total_count(EventType::Deed) == 2);
 
@@ -1185,6 +1338,7 @@ static void test_serve_all() {
     test_serve_hurt_and_swing_break_the_deed();
     test_serve_unpaid_contact_is_still_open();
     test_serve_relief_anywhere_puddle_by_place();
+    test_serve_urine_rolls_per_tick();
 }
 
 } // namespace serve_suite

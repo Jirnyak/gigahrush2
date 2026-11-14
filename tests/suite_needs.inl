@@ -855,11 +855,21 @@ void involuntary_relief_is_a_deed() {
     std::vector<std::uint32_t> dirty;
     const NeedsTick puddle = needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr,
                                         0.0, &rig.bus, 779u, &w, &dirty);
-    CHECK(puddle.puddles == 1);
-    CHECK(!dirty.empty());
+    // Слив мгновенный — процесса нет, лужица разом: `kReliefUrineAtoms`
+    // атомов (решение владельца 2026-11-14, «порядка 4»).
+    CHECK(puddle.puddles == static_cast<std::uint32_t>(kReliefUrineAtoms));
+    CHECK(dirty.size() == puddle.puddles);
     // ...и это МАТЕРИЯ: атом в точке жителя — моча (клетка (1,1,1), атом
-    // (4,4,1) — центр по касательным, 1.2 клетки по вертикали).
+    // (4,4,1) — центр по касательным, 1.2 клетки по вертикали), остальные —
+    // в окрестности 3³ вокруг неё, лужицей.
     CHECK(sub_material_at(w, 1, 1, 1, 4, 4, 1) == kMatUrine);
+    int urineNear = 0;
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+                urineNear += sub_material_at(w, 1, 1, 1, 4 + dx, 4 + dy,
+                                             1 + dz) == kMatUrine;
+    CHECK(urineNear == kReliefUrineAtoms);
     dirty.clear();
     const NeedsTick calm = needs_step(rig.reg, rig.pool, 0, kSimStep, nullptr,
                                       0.0, &rig.bus, 780u, &w, &dirty);
