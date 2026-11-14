@@ -323,6 +323,18 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
         }
     }
 
+    // УРОН РВЁТ ДЕЯНИЕ (решение владельца 2026-11-14: деяние рвут «ход, урон
+    // и действие руками — у любого тела»). Здесь, в ОДНОЙ двери урона, — значит
+    // у любого тела и от любого источника: удар, пуля, падение, газ.
+    // ИСТОЩЕНИЕ — НЕ УРОН ИЗВНЕ: голод и жажда платят HP этим же входом, и
+    // рви их деяние — голодный не доел бы никогда; цена сомнительной еды
+    // платится в начале её же окна. Канал истощения — индекс за последним
+    // реальным ([needs.h] kAttritionChannel). Часов у двери нет — рвёт
+    // `break_flow`: открытость потока от тика не зависит.
+    if (out.applied > 0 && static_cast<std::size_t>(ch) < kDamageChannels)
+        if (Acting* act = reg.try_get<Acting>(target))
+            (void)break_flow(*act, ActSlot::Body, kBreakHurt);
+
     if (out.lethal)
         reg.emplace<Dead>(target,
                           Dead{source, static_cast<std::uint8_t>(ch)});
@@ -2289,7 +2301,14 @@ bool player_melee_step(Registry& reg, NpcPool& pool, EventBus& bus, LayerId laye
     // потому что ровно так эти две величины и жили: махнуть можно было, пока
     // ствол остывает, и наоборот.
     Acting& act = reg.get_or_emplace<Acting>(self);
-    if (!wantsAttack || acting_busy(act, ActSlot::Body, tick)) return false;
+    if (!wantsAttack) return false;
+    // УДАР РВЁТ ДЕЯНИЕ (решение владельца 2026-11-14: «действие руками» рвёт
+    // деяние у любого тела). Замах живёт на слоте ТЕЛА, как и деяние нужды,
+    // поэтому дверь начала его бы просто отвергла — человек жал бы атаку
+    // впустую, пока ест. Сперва обрыв законной причиной, потом замах.
+    if (act_is_flow(act_slot(act, ActSlot::Body)))
+        (void)break_action(act, ActSlot::Body, kBreakLeave, tick);
+    if (acting_busy(act, ActSlot::Body, tick)) return false;
 
     // Whatever is in hand. A found rebar hits eight times as hard as a fist and
     // reaches four times as far — which is the entire point of picking loot up.

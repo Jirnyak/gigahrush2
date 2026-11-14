@@ -123,6 +123,41 @@ static void test_action_is_monotone() {
     CHECK(act_slot(f, ActSlot::Body).applied == 1);
     CHECK(!act_open(act_slot(f, ActSlot::Body), 150u));
     CHECK(acting_take_flow(f, ActSlot::Body, 160u) == 0u);
+    // ДЕЙСТВИЕ РУКАМИ РВЁТ ДЕЯНИЕ ТЕЛА (решение владельца 2026-11-14) — в
+    // ОДНОЙ двери начала: окно руки открылось — поток тела сорван причиной
+    // `leave`. Боевое окно тела (замах) рукой не рвётся: `leave` не в его
+    // маске. Мутация «снять обрыв в acting_begin» красит первую строку.
+    {
+        Acting h{};
+        CHECK(acting_begin(h, ActSlot::Body, sip, 10, 0, 0u));
+        CHECK(acting_begin(h, ActSlot::HandL, kActReload, 30, 0, 2u));
+        CHECK(act_slot(h, ActSlot::Body).durTicks == 0);
+        Acting sw{};
+        CHECK(acting_begin(sw, ActSlot::Body, kActSwing, 10, 0, 0u));
+        CHECK(acting_begin(sw, ActSlot::HandR, kActShoot, 5, 0, 2u));
+        CHECK(acting_busy(sw, ActSlot::Body, 2u)); // замах цел
+    }
+    // УРОН РВЁТ ПОТОК БЕЗ ЧАСОВ (`break_flow`): открытость потока — курсор, а
+    // не тик. Окно, отдавшее всё, урон не трогает.
+    {
+        Acting u{};
+        CHECK(acting_begin(u, ActSlot::Body, sip, 10, 0, 50u));
+        CHECK(break_flow(u, ActSlot::Body, kBreakHurt).broken);
+        Acting done{};
+        CHECK(acting_begin(done, ActSlot::Body, sip, 10, 0, 0u));
+        CHECK(acting_take_flow(done, ActSlot::Body, 10u) == 10u);
+        CHECK(!break_flow(done, ActSlot::Body, kBreakHurt).broken);
+        // Причина «урон» законна ТОЛЬКО у потока (генератор сторожит): ни одна
+        // строка без глагола нужды её не несёт.
+        std::uint32_t hurtRows = 0, hurtNonFlow = 0;
+        for (std::size_t i = 0; i < kActionCount; ++i) {
+            if ((kActionBreakMask[i] & kBreakHurt) == 0) continue;
+            ++hurtRows;
+            if (kActionVerb[i] >= kVerbCount) ++hurtNonFlow;
+        }
+        CHECK(hurtRows == 4u);
+        CHECK(hurtNonFlow == 0u);
+    }
     // Обрыв посреди потока: отданное остаётся отданным, дальше — ничего.
     Acting g{};
     CHECK(acting_begin(g, ActSlot::Body, sip, 10, 0, 0u));

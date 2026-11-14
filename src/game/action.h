@@ -188,6 +188,53 @@ inline std::uint16_t acting_phase_e3(const Acting& a, ActSlot s,
                                       w.durTicks);
 }
 
+// --- одна дверь обрыва -----------------------------------------------------
+
+// Что сделал обрыв. `broken` — сорвано ли окно вообще (причина законна строкой
+// и слот был занят); `effectLanded` — успел ли упасть контактный кадр ДО
+// обрыва. Второе и есть ответ на «возврат или нет», и он нужен вызывающему:
+// сорванный до контакта замах не наносит урона, сорванный после — наносит.
+struct BreakResult {
+    bool broken = false;
+    bool effectLanded = false;
+};
+
+// ОБОРВАТЬ. Причина — бит из `kBreak*`; не найденная в маске строки причина
+// окно НЕ рвёт (и это не отказ, а закон: перезарядку рвёт смена ствола, а не
+// всё на свете).
+//
+// РВЁТСЯ И ОКНО, ЕЩЁ ДОЛЖНОЕ КОНЕЧНЫЙ ЭФФЕКТ (`act_open`). Причина, пришедшая
+// на последнем тике окна или после него до опроса, обязана сорвать деяние, а не
+// дать ему упасть позже — уже в той комнате, куда тело унесло. До 2026-11-14
+// это закрывала отдельная ветка в `serve.cpp`, которая гасила окно
+// ПРИСВАИВАНИЕМ `durTicks = 0` мимо этой двери — второй ответ на вопрос «как
+// рвётся окно» и прямое нарушение S22.7.
+inline BreakResult break_action(Acting& a, ActSlot s, std::uint8_t reason,
+                                std::uint64_t tick) {
+    BreakResult out;
+    ActWindow& w = act_slot(a, s);
+    if (!act_open(w, tick)) return out;
+    if (w.action >= kActionCount) return out;
+    if ((kActionBreakMask[w.action] & reason) == 0) return out;
+    out.broken = true;
+    out.effectLanded = w.applied != 0;
+    w.durTicks = 0; // слот свободен; обнулять startTick незачем
+    w.applyTicks = 0;
+    w.applied = 0;
+    return out;
+}
+
+// ОБОРВАТЬ ПОТОК БЕЗ ЧАСОВ — для вызывающего, у которого их нет (дверь урона
+// `apply_damage`: двенадцать вызывающих, ни один не несёт тик). Законно ровно
+// потому, что открытость ПОТОКА от тика не зависит: он открыт, пока не отдал
+// последний квант (`act_owes`). Это не вторая дверь — обрыв судит та же
+// `break_action`, часами ей служит тик начала окна.
+inline BreakResult break_flow(Acting& a, ActSlot s, std::uint8_t reason) {
+    ActWindow& w = act_slot(a, s);
+    if (!act_is_flow(w) || !act_owes(w)) return BreakResult{};
+    return break_action(a, s, reason, w.startTick);
+}
+
 // --- одна дверь начала -----------------------------------------------------
 
 // НАЧАТЬ ДЕЙСТВИЕ. `durTicks`/`applyTicks` уже разрешены вызывающим из строки
@@ -213,6 +260,12 @@ inline bool acting_begin(Acting& a, ActSlot s, ActionId id,
     if (id >= kActionCount) return false; // глагола без строки не бывает
     ActWindow& w = act_slot(a, s);
     if (act_open(w, tick)) return false;
+    // ДЕЙСТВИЕ РУКАМИ РВЁТ ДЕЯНИЕ ТЕЛА (решение владельца 2026-11-14: деяние
+    // рвут «ход, урон и действие руками — у любого тела»). Здесь, в ОДНОЙ
+    // двери начала, а не у каждого стрелка: выстрел, перезарядка, бросок —
+    // всё, что открывает окно руки, — уводит тело от дела. Причина `leave`
+    // («тело ушло от дела»); окна, в чьей маске её нет (бой), не рвутся.
+    if (s != ActSlot::Body) (void)break_action(a, ActSlot::Body, kBreakLeave, tick);
     const std::uint32_t dur = durTicks > 0xFFFFu ? 0xFFFFu : durTicks;
     const std::uint32_t app = applyTicks > dur ? dur : applyTicks;
     w.startTick = tick;
@@ -270,42 +323,6 @@ inline std::uint32_t acting_take_flow(Acting& a, ActSlot s, std::uint64_t tick) 
 // Упал ли уже эффект этого окна (для решения «обрыв = возврат или нет»).
 inline bool acting_applied(const Acting& a, ActSlot s) {
     return act_slot(a, s).applied != 0;
-}
-
-// --- одна дверь обрыва -----------------------------------------------------
-
-// Что сделал обрыв. `broken` — сорвано ли окно вообще (причина законна строкой
-// и слот был занят); `effectLanded` — успел ли упасть контактный кадр ДО
-// обрыва. Второе и есть ответ на «возврат или нет», и он нужен вызывающему:
-// сорванный до контакта замах не наносит урона, сорванный после — наносит.
-struct BreakResult {
-    bool broken = false;
-    bool effectLanded = false;
-};
-
-// ОБОРВАТЬ. Причина — бит из `kBreak*`; не найденная в маске строки причина
-// окно НЕ рвёт (и это не отказ, а закон: перезарядку рвёт смена ствола, а не
-// всё на свете).
-//
-// РВЁТСЯ И ОКНО, ЕЩЁ ДОЛЖНОЕ КОНЕЧНЫЙ ЭФФЕКТ (`act_open`). Причина, пришедшая
-// на последнем тике окна или после него до опроса, обязана сорвать деяние, а не
-// дать ему упасть позже — уже в той комнате, куда тело унесло. До 2026-11-14
-// это закрывала отдельная ветка в `serve.cpp`, которая гасила окно
-// ПРИСВАИВАНИЕМ `durTicks = 0` мимо этой двери — второй ответ на вопрос «как
-// рвётся окно» и прямое нарушение S22.7.
-inline BreakResult break_action(Acting& a, ActSlot s, std::uint8_t reason,
-                                std::uint64_t tick) {
-    BreakResult out;
-    ActWindow& w = act_slot(a, s);
-    if (!act_open(w, tick)) return out;
-    if (w.action >= kActionCount) return out;
-    if ((kActionBreakMask[w.action] & reason) == 0) return out;
-    out.broken = true;
-    out.effectLanded = w.applied != 0;
-    w.durTicks = 0; // слот свободен; обнулять startTick незачем
-    w.applyTicks = 0;
-    w.applied = 0;
-    return out;
 }
 
 // --- сейв: окно едет ОСТАТКОМ, а не абсолютным тиком ----------------------

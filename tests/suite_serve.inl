@@ -898,6 +898,47 @@ static void test_serve_leaving_breaks_the_window() {
     CHECK(std::fabs(pool.needs(rid).water - (10.0f + 14.0f)) < 1e-3f);
 }
 
+// --- 11б. УРОН И УДАР РВУТ ДЕЯНИЕ, ИСТОЩЕНИЕ — НЕТ (решение владельца) -----
+//
+// «Деяние рвут ход, урон и действие руками — у любого тела»: урон рвёт ОДНА
+// дверь урона (`apply_damage`), удар кулаком — замах человека прежде, чем
+// ударить. Голод и жажда платят HP тем же входом, но каналом истощения, и
+// рвать им деяние значило бы — голодный не доест никогда.
+static void test_serve_hurt_and_swing_break_the_deed() {
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    EventBus bus;
+    bus.init();
+    FloorRooms fr;
+    rooms_reset(fr);
+    declare_room(fr, 20, 60, 20, kVerbDrink, 14);
+    const vec3 inside = cell_mid(21, 61, 20);
+    NpcId rid = 0, hid = 0;
+    const Entity res = make_body(reg, pool, inside, rid);
+    const Entity hum = make_human(reg, pool, inside, hid);
+    pool.needs(rid).water = 10.0f;
+    pool.needs(hid).water = 10.0f;
+    constexpr std::uint64_t kT0 = 7u;
+    ServeTick t{};
+    CHECK(serve_begin(ServeCtx{reg, pool, fr, nullptr, kT0}, res, rid, inside, t));
+    // ИСТОЩЕНИЕ НЕ РВЁТ: житель теряет HP от голода — окно цело.
+    apply_damage(reg, pool, res, 1, kAttritionChannel, entt::null);
+    CHECK(serve_holding(reg, res, kT0 + 1u));
+    // УДАР ИЗВНЕ РВЁТ: кинетика по тому же жителю — окно сорвано.
+    apply_damage(reg, pool, res, 3, DamageChannel::Kinetic, entt::null);
+    CHECK(!serve_holding(reg, res, kT0 + 1u));
+    // АТАКА ЧЕЛОВЕКА РВЁТ ЕГО ДЕЯНИЕ: слот тела освобождён ДО замаха, а не
+    // глотает нажатие. (Окно самого замаха открывается только при цели — его
+    // судят сцены боя.) Мутация «снять обрыв в player_melee_step» красит.
+    CHECK(serve_start(ServeCtx{reg, pool, fr, nullptr, kT0}, hum, hid, inside,
+                      kVerbDrink, kInvalidItem, t) == ServeRefusal::None);
+    CHECK(serve_holding(reg, hum, kT0 + 1u));
+    player_melee_step(reg, pool, bus, kLayer, kSimDt, /*wantsAttack=*/true,
+                      kT0 + 1u);
+    CHECK(!serve_holding(reg, hum, kT0 + 1u));
+}
+
 // --- 12. НЕОПЛАЧЕННЫЙ КОНТАКТ — ТОЖЕ ЗАНЯТОСТЬ (Б1/Б6 ревью) ---------------
 //
 // Окно истекло, а его конечный эффект ещё никто не снял (поллер этого тика
@@ -1092,6 +1133,7 @@ static void test_serve_all() {
     test_serve_one_door_resident_and_human();
     test_serve_bag_item_is_the_chosen_one();
     test_serve_leaving_breaks_the_window();
+    test_serve_hurt_and_swing_break_the_deed();
     test_serve_unpaid_contact_is_still_open();
     test_serve_relief_anywhere_puddle_by_place();
 }
