@@ -480,7 +480,13 @@ struct ConsumeResult {
 // Faithfully ported oddity: queued pressure is computed from the item's LABEL, not
 // from what landed. Eating a 40-point ration at 99 food wastes the food and still
 // bills the full 40 points of digestion — it went through you either way.
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp);
+//
+// `share` (окно-поток, 2026-11-14): ДОЛЯ предмета, которая ложится сейчас —
+// окно деяния отдаёт предмет квантами, по `тиков/длина` за опрос. Все величины
+// (бар, очередь, побочки) — в этой доле; `hpCost` отчитывается ЦЕЛИКОМ, его
+// платят один раз, когда предмет взят.
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp,
+                               float share = 1.0f);
 
 // The HP `apply_consumable` will charge for `id`, BEFORE the hp-1 survivability floor
 // is applied. 0 for all 17 clean Feed/FeedPsi rows and all 8 Drink/DrinkStim rows;
@@ -547,14 +553,13 @@ ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount);
 // оговорка, что у `apply_consumable` («40 очков при 99 еды тратит еду и всё
 // равно выставляет счёт на 40: через тебя оно прошло либо так, либо так»).
 //
-// СОРТИР — ЕДИНСТВЕННЫЙ ГЛАГОЛ, У КОТОРОГО БАР ПАДАЕТ, А НЕ РАСТЁТ, и
-// величину у него называет ТЕЛО, а не место: `amount` не читается, тело
-// опорожняется целиком (закон клавиши P владельца 2026-08-28 на любое тело,
-// CANON S27.1); `gained` — СУММА СНЯТОГО с двух давлений. Предложение сортира у
-// места — вес решения «куда идти», а не объём. Пятого случая здесь нет: глагол,
-// которого этот клок не обслуживает, — и запас при нулевой величине, и пустое
-// тело у сортира — отвечают `served == false` ЗНАЧЕНИЕМ, а не тишиной, чтобы
-// вызывающий мог не начинать деяние.
+// СОРТИР — ЕДИНСТВЕННЫЙ ГЛАГОЛ, У КОТОРОГО БАР ПАДАЕТ, А НЕ РАСТЁТ, и уходит
+// он в `relieve_needs`; `gained` — СУММА СНЯТОГО с двух давлений. Объём деяния
+// облегчения называет тело (`needs_body_total`), а не место: предложение
+// сортира у места — вес решения «куда идти». Пятого случая здесь нет: глагол,
+// которого этот клок не обслуживает, нулевая величина и пустое тело у сортира
+// отвечают `served == false` ЗНАЧЕНИЕМ, а не тишиной, чтобы вызывающий мог не
+// начинать деяние.
 struct SatisfyResult {
     float gained = 0.0f;    // очков легло на бар (или снято с давлений)
     float peeQueued = 0.0f; // в очередь пищеварения, не в сам бар
@@ -566,5 +571,11 @@ struct SatisfyResult {
     bool served = false;    // этот глагол клок нужд обслуживает
 };
 SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount);
+
+// ЧЕЙ ОБЪЁМ У ДЕЯНИЯ: сколько отдаёт САМО ТЕЛО за всё окно (> 0), или 0 —
+// объём даёт место либо предмет. У облегчения — всё давление (`kNeedMax`):
+// опорожняешься целиком где бы ни стоял, место решает только уместность и
+// лужу. Окно-поток делит этот объём на кванты (CANON S27.1).
+float needs_body_total(VerbId verb);
 
 } // namespace giga::game

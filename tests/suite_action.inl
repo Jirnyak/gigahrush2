@@ -87,18 +87,48 @@ static void test_action_is_monotone() {
     // «`act_open` → `act_busy` в `acting_begin`» красит строку отказа ниже.
     Acting d{};
     CHECK(acting_begin(d, ActSlot::Body, kActSwing, 40, 40, 0u));
-    CHECK(act_owes_end(act_slot(d, ActSlot::Body)));
+    CHECK(act_owes(act_slot(d, ActSlot::Body)));
     CHECK(!acting_busy(d, ActSlot::Body, 60u));                 // по времени — всё
     CHECK(!acting_begin(d, ActSlot::Body, kActSwing, 10, 0, 60u)); // по смыслу — нет
     // ...а окно с контактом ВНУТРИ, истёкшее без опроса, не держит никого:
     // его судьба — дело его системы, и замах не должен стоять вечно.
     Acting m{};
     CHECK(acting_begin(m, ActSlot::Body, kActSwing, 40, 0, 0u));
-    CHECK(!act_owes_end(act_slot(m, ActSlot::Body)));
+    CHECK(!act_owes(act_slot(m, ActSlot::Body)));
     CHECK(acting_begin(m, ActSlot::Body, kActSwing, 10, 0, 60u));
     // Долг отдан опросом — и слот свободен.
     CHECK(acting_take_apply(d, ActSlot::Body, 60u));
     CHECK(acting_begin(d, ActSlot::Body, kActSwing, 10, 0, 60u));
+
+    // ОКНО-ПОТОК (2026-11-14): строка с глаголом нужды отдаёт эффект КВАНТАМИ,
+    // `applyTicks` — курсор доставки. Признак выводится из строки (`verb`), а
+    // не хранится. Сколько тиков созрело — столько и отдано; опрос, пропустивший
+    // тики, получает их разом; последний квант ставит `applied`; пока поток не
+    // отдан до конца, окно открыто (`act_owes`), даже истёкшее.
+    const ActionId sip = kVerbAction[kVerbDrink];
+    CHECK(sip < kActionCount);
+    Acting f{};
+    CHECK(acting_begin(f, ActSlot::Body, sip, 10, 0, 100u));
+    CHECK(act_is_flow(act_slot(f, ActSlot::Body)));
+    CHECK(!act_is_flow(act_slot(d, ActSlot::Body)));         // замах — не поток
+    CHECK(!acting_take_apply(f, ActSlot::Body, 200u));        // контакта у потока нет
+    CHECK(acting_take_flow(f, ActSlot::Body, 100u) == 0u);    // тик начала — ноль
+    CHECK(acting_take_flow(f, ActSlot::Body, 103u) == 3u);
+    CHECK(acting_take_flow(f, ActSlot::Body, 103u) == 0u);    // дважды не отдаёт
+    CHECK(act_slot(f, ActSlot::Body).applied == 0);
+    CHECK(act_owes(act_slot(f, ActSlot::Body)));
+    CHECK(act_open(act_slot(f, ActSlot::Body), 150u));        // истекло, но должно
+    CHECK(!acting_begin(f, ActSlot::Body, kActSwing, 5, 0, 150u));
+    CHECK(acting_take_flow(f, ActSlot::Body, 150u) == 7u);    // хвост — разом, не больше длины
+    CHECK(act_slot(f, ActSlot::Body).applied == 1);
+    CHECK(!act_open(act_slot(f, ActSlot::Body), 150u));
+    CHECK(acting_take_flow(f, ActSlot::Body, 160u) == 0u);
+    // Обрыв посреди потока: отданное остаётся отданным, дальше — ничего.
+    Acting g{};
+    CHECK(acting_begin(g, ActSlot::Body, sip, 10, 0, 0u));
+    CHECK(acting_take_flow(g, ActSlot::Body, 4u) == 4u);
+    CHECK(break_action(g, ActSlot::Body, kBreakLeave, 4u).broken);
+    CHECK(acting_take_flow(g, ActSlot::Body, 20u) == 0u);
 }
 
 // ---- 3. Контактный кадр ---------------------------------------------------

@@ -3,7 +3,7 @@
 #include "game/serve.h"
 
 #include "ecs/components.h"    // Transform, Controller — комната предмета, ввод человека
-#include "game/action.h"       // Acting / acting_begin_ms / acting_take_apply / act_open
+#include "game/action.h"       // Acting / acting_begin_ms / acting_take_flow / act_open
 #include "game/action_table.h" // kActionVerb / kVerbAction / kActionDurMs
 #include "game/ai.h"           // decider_of — развилка решателя (S13.7a), закон 5
 #include "game/combat.h"       // apply_damage — цена сомнительной еды
@@ -153,129 +153,38 @@ std::int32_t place_points(Registry& reg, const FloorRooms& fr, RoomId room,
 // ЛУЖА — `relief_puddle@game/needs.h`: один дом на оба канала облегчения
 // (невольный слив клока и осознанное облегчение двери).
 
-// КОНТАКТНЫЙ КАДР: эффект падает ОДИН раз за окно. Считает путь — своя сумка,
-// ящик комнаты или возможность места/тела — и публикует факт.
-//
-// Возвращает, лёг ли эффект: `false` — контакт впустую, и вызывающий помечает
-// окно `kAppliedEmpty`, чтобы исход не выглядел «свершившимся».
-bool land_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
-                 LayerId layer, VerbId verb, ItemId item, ServeTick& out) {
+// ОБЪЁМ ДЕЯНИЯ БЕЗ ПРЕДМЕТА за всё окно: у облегчения — тело
+// (`needs_body_total`: опорожняешься целиком где застало), у запасов — место
+// (`place_points`, ноль вне комнаты). Пересчитывается на КАЖДОМ кванте: «сколько
+// даёт место» — свойство места в момент деяния, лишнего состояния не нужно.
+float flow_total(Registry& reg, const FloorRooms& fr, RoomId room, const Room* r,
+                 LayerId layer, VerbId verb) {
+    const float body = needs_body_total(verb);
+    if (body > 0.0f) return body;
+    const std::int32_t pts = place_points(reg, fr, room, r, layer, verb);
+    return pts > 0 ? static_cast<float>(pts) : 0.0f;
+}
+
+// КВАНТЫ ОКНА-ПОТОКА (2026-11-14, решение владельца «утолять не итогом в конце, а
+// по кванту»): `ticks` созревших тиков из `dur` — доля `ticks/dur` объёма
+// деяния. Предмет окна (`item`) уже взят при открытии — течёт ЕГО доля; без
+// предмета течёт доля места или тела. Возвращает, сколько очков легло.
+float flow_effect(const ServeCtx& ctx, NpcId id, const vec3& pos, LayerId layer,
+                  VerbId verb, ItemId item, std::uint32_t ticks,
+                  std::uint32_t dur) {
+    if (ticks == 0 || dur == 0) return 0.0f;
     Needs& n = ctx.pool.needs(id);
-
-    // (1) ПРЕДМЕТ СВОЕЙ СУМКИ — ровно тот, что выбран при открытии окна.
-    // Комната не нужна: хлеб в кармане ест и тот, кто стоит в коридоре.
+    const float share = static_cast<float>(ticks) / static_cast<float>(dur);
     if (item != kInvalidItem) {
-        Inventory& inv = ctx.pool.inventory(id);
-        const int slot = bag_slot_of(inv, item);
-        if (slot < 0) return false; // предмет ушёл за время окна — впустую
-        const ConsumeResult res = apply_consumable(n, item, ctx.pool.hp(id));
-        if (!res.used) return false;
-        if (--inv.slots[slot].count == 0) inv.slots[slot] = ItemSlot{};
-        // ЦЕНА СОМНИТЕЛЬНОЙ ЕДЫ — ОДИН РАЗ, одной дверью урона, на канале,
-        // которого броня не видит. До 2026-11-14 у носителя камеры она
-        // списывалась ДВАЖДЫ: здесь-же-по-смыслу (`use_best_for`) и второй раз в
-        // приложении каналом Kinetic, через броню и после пола hp−1 — то есть
-        // рискованная еда могла убить.
-        if (res.hpCost > 0)
-            apply_damage(ctx.reg, ctx.pool, e, res.hpCost, kAttritionChannel,
-                         entt::null);
-        if (ctx.bus != nullptr) {
-            ctx.bus->publish(EventType::ItemTransferred, id, kInvalidNpc, item,
-                             ctx.tick);
-            deed_publish(*ctx.bus, verb, e, kInvalidNpc, pos, ctx.tick);
-        }
-        ++out.bag;
-        ++out.applied;
-        out.reliefSum += static_cast<std::int32_t>(res.food + res.water +
-                                                   res.sleep);
-        return true;
+        const ConsumeResult res =
+            apply_consumable(n, item, ctx.pool.hp(id), share);
+        return res.food + res.water + res.sleep;
     }
-
     const RoomId room = room_at_pos(ctx.fr, pos);
-    const Room* r = room_of(ctx.fr, room);
-
-    // (2) РАСХОДУЕМОЕ КОМНАТЫ ПЕРВЫМ (закон 3): если в комнате лежит то, чем
-    // этот глагол утоляют, тело берёт ЭТО, и величину называет строка предмета.
-    if (r != nullptr) {
-        const Lying pick = best_lying(ctx.reg, ctx.fr, room, layer, verb);
-        if (pick.slot >= 0) {
-            const ConsumeResult res =
-                apply_consumable(n, pick.item, ctx.pool.hp(id));
-            if (res.used) {
-                Container& c = ctx.reg.get<Container>(pick.box);
-                if (--c.inv.slots[pick.slot].count == 0)
-                    c.inv.slots[pick.slot] = ItemSlot{};
-                // Запас комнаты падает ТЕМ ЖЕ хуком, которым растёт (S12.4
-                // «инкрементально, событием»): следующий голодный видит меньше.
-                supply_add_item(ctx.fr, room, pick.item, -1);
-                // Цена — та же одна дверь урона, что у предмета своей сумки.
-                if (res.hpCost > 0)
-                    apply_damage(ctx.reg, ctx.pool, e, res.hpCost,
-                                 kAttritionChannel, entt::null);
-                if (ctx.bus != nullptr) {
-                    ctx.bus->publish(EventType::ItemTransferred, id, kInvalidNpc,
-                                     pick.item, ctx.tick);
-                    deed_publish(*ctx.bus, verb, e, kInvalidNpc, pos, ctx.tick);
-                }
-                ++out.consumed;
-                ++out.applied;
-                out.reliefSum += static_cast<std::int32_t>(res.food + res.water +
-                                                           res.sleep);
-                return true;
-            }
-            // ВЕЩЬ ВЗЯЛИ, А ОНА НЕ СРАБОТАЛА — деяние впустую, и на
-            // возможность места оно НЕ падает: иначе место заплатило бы очками
-            // предмета, которого не израсходовало.
-            //
-            // ПУТЬ СЕГОДНЯ НЕДОСТИЖИМ, И ЭТО ПРОВЕРЕНО МУТАЦИЕЙ (она выжила —
-            // значит ветку не трогает ни один гейт, потому что её не достигает
-            // ни один вход). Инвариант, который её держит: `kItemVerbs` ВЫВЕДЕН
-            // из `use_effect` отображением `USE_VERB@tools/gen_item_table.py`,
-            // то есть глагол у предмета есть ровно тогда, когда у него есть
-            // эффект; а глаголы, чей эффект `apply_consumable` не применяет
-            // (`heal`), строки деяния не имеют и до сюда не доходят. Поэтому
-            // здесь СТОИТ ВЕТКА, А НЕ АРИФМЕТИКА.
-            return false;
-        }
-    }
-
-    // (3) ВОЗМОЖНОСТЬ МЕСТА ИЛИ ТЕЛА: объявленное + оснащение по этому глаголу.
-    // Величина пересчитывается НА КОНТАКТНОМ КАДРЕ, а не запоминается в начале
-    // окна: «сколько дало место» есть свойство места в момент деяния.
-    //
-    // ВЫЧИТАЕТСЯ ВКЛАД ЛЕЖАЩЕГО НА ПОЛУ ХАБАРА: его деяние не изымает (см.
-    // `pickup_offer`), а значит и платить им не вправе.
-    //
-    // ВНЕ КОМНАТЫ ВЕЛИЧИНА НОЛЬ, и `needs_satisfy` отвечает на неё сам: запасу
-    // ноль места не даёт ничего (`served == false`), а облегчение величину
-    // берёт у ТЕЛА — опорожняешься целиком где застало. Ветки «если сортир»
-    // здесь нет: разницу держит клок нужд, единственный, кто знает, какой бар
-    // растёт, а какой падает.
-    const std::int32_t points =
-        place_points(ctx.reg, ctx.fr, room, r, layer, verb);
-    const SatisfyResult sat =
-        needs_satisfy(n, verb, static_cast<float>(points > 0 ? points : 0));
-    if (!sat.served || sat.gained <= 0.0f) return false;
-    ++out.applied;
-    out.reliefSum += static_cast<std::int32_t>(sat.gained);
-
-    // ЛУЖА — моча вышла не у места, которое даёт сортир. Предикат тот же, что у
-    // свидетеля (`room_offers`): лужа и цена судят одно и то же «уместно ли».
-    if (sat.relievedPee > 0.0f && !room_offers(r, verb) && ctx.world != nullptr &&
-        ctx.stainDirty != nullptr) {
-        relief_puddle(*ctx.world, pos,
-                      static_cast<std::uint32_t>(ctx.tick) ^
-                          static_cast<std::uint32_t>(entt::to_integral(e)),
-                      *ctx.stainDirty);
-        ++out.puddles;
-    }
-    // ФАКТ (S19): каждый севший эффект — деяние в шину. Цену судит свидетель
-    // по данным глагола (`kVerbRelDelta`/`kVerbRepDelta`): у еды и сна цена
-    // ноль, у облегчения вне уместного места — есть. Новая цена = правка CSV,
-    // не правка здесь (закон публикации [game/witness.h]).
-    if (ctx.bus != nullptr)
-        deed_publish(*ctx.bus, verb, e, kInvalidNpc, pos, ctx.tick);
-    return true;
+    const float total =
+        flow_total(ctx.reg, ctx.fr, room, room_of(ctx.fr, room), layer, verb);
+    const SatisfyResult sat = needs_satisfy(n, verb, total * share);
+    return sat.served ? sat.gained : 0.0f;
 }
 
 // ТЕЛО УШЛО ОТ ДЕЛА? (закон 5) Развилка решателя (S13.7a) — здесь, у
@@ -381,43 +290,99 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
     // СТРОКА НУЖД — ОДНА НА ВСЕХ РЕШАТЕЛЕЙ (`needs_row_for`, [game/needs.h]):
     // проба судит ту же строку, по которой решали «чего я хочу».
     const Needs row = needs_row_for(ctx.pool, id);
+    const Transform* tr = ctx.reg.try_get<const Transform>(e);
+    const LayerId layer = tr != nullptr ? tr->layer : LayerId{0};
+    const RoomId room = room_at_pos(ctx.fr, pos);
+    const Room* r = room_of(ctx.fr, room);
+
+    // ИСТОЧНИК ВЫБИРАЕТСЯ В НАЧАЛЕ ОКНА, и окно его помнит (`ActWindow::item`):
+    // предмет своей сумки — тот, что выбран кнопкой; иначе расходуемое комнаты
+    // первым (S24.3: если в ящике лежит то, чем утоляют, тело берёт ЭТО); иначе
+    // возможность места или тела. До окна-потока ящик выбирался на контактном
+    // кадре; теперь предмет берётся сразу — откусил, значит ешь.
+    Lying lying;
     if (item != kInvalidItem) {
         if (bag_slot_of(ctx.pool.inventory(id), item) < 0)
             return ServeRefusal::NoItem;
         // Глагол обязан быть глаголом ЭТОГО предмета: окно открывается строкой
-        // глагола, а эффект сядет строкой предмета, — разойдись они, длина
+        // глагола, а эффект течёт строкой предмета, — разойдись они, длина
         // была бы от одного, величина от другого.
         if (serve_item_verb(item) != verb) return ServeRefusal::NoRow;
-        // «Сытый хлеб не ест» — тем же законом, которым сядет эффект: проба
-        // `apply_consumable` на копии. Ноль легшего = отказ (снесённый
-        // `use_best_for` отказывал так же: «full; do not burn a ration»).
+    } else if (r != nullptr) {
+        lying = best_lying(ctx.reg, ctx.fr, room, layer, verb);
+        if (lying.slot >= 0) item = lying.item;
+    }
+
+    ConsumeResult price{}; // цена предмета целиком — платится здесь, один раз
+    if (item != kInvalidItem) {
+        // «Сытый хлеб не ест» — тем же законом, которым потечёт эффект: проба
+        // `apply_consumable` на копии. Ноль легшего = отказ.
         Needs probe = row;
-        const ConsumeResult res =
-            apply_consumable(probe, item, ctx.pool.hp(id));
-        if (!res.used || res.food + res.water + res.sleep <= 0.0f)
+        price = apply_consumable(probe, item, ctx.pool.hp(id));
+        if (!price.used || price.food + price.water + price.sleep <= 0.0f)
             return ServeRefusal::Full;
     } else {
         // Пробы ДВЕ, и это два разных вопроса: «есть ли куда расти вообще»
         // (не хочется) и «даст ли место» (здесь нечем). У облегчения вторая
-        // проба при нуле места отвечает «да» — величину называет тело.
+        // проба при нуле места отвечает «да» — объём называет тело.
         if (would_gain(row, verb, kNeedMax) <= 0.0f) return ServeRefusal::Full;
-        const RoomId room = room_at_pos(ctx.fr, pos);
-        const Transform* tr = ctx.reg.try_get<const Transform>(e);
-        const std::int32_t pts =
-            place_points(ctx.reg, ctx.fr, room, room_of(ctx.fr, room),
-                         tr != nullptr ? tr->layer : LayerId{0}, verb);
-        if (would_gain(row, verb, static_cast<float>(pts > 0 ? pts : 0)) <= 0.0f)
+        if (would_gain(row, verb, flow_total(ctx.reg, ctx.fr, room, r, layer,
+                                             verb)) <= 0.0f)
             return ServeRefusal::NoPlace;
     }
 
     const ActionId a = kVerbAction[verb];
     if (act == nullptr) act = &ctx.reg.emplace<Acting>(e);
-    // ДЛИНА — ИЗ СТРОКИ ДЕЙСТВИЯ, КОНТАКТ В КОНЦЕ ОКНА: деяние даёт результат
-    // тогда, когда СОВЕРШЕНО. Оба числа — одно и то же `dur_ms`, поэтому
-    // колонки `apply_ms` в таблице нет (она была бы копией).
-    if (!acting_begin_ms(*act, ActSlot::Body, a, kActionDurMs[a],
-                         kActionDurMs[a], ctx.tick, item))
+    // ДЛИНА — ИЗ СТРОКИ ДЕЙСТВИЯ; окно — ПОТОК: курсор доставки с нуля
+    // (`acting_take_flow`), эффект течёт квантами всё окно.
+    if (!acting_begin_ms(*act, ActSlot::Body, a, kActionDurMs[a], 0, ctx.tick,
+                         item))
         return ServeRefusal::Busy;
+
+    // ПРЕДМЕТ УХОДИТ СЕЙЧАС — из ящика или своей сумки, — и цена сомнительной
+    // еды платится СЕЙЧАС, один раз, одной дверью урона на канале, которого
+    // броня не видит. До 2026-11-14 у носителя камеры она списывалась ДВАЖДЫ
+    // (второй раз — в приложении каналом Kinetic, через броню и после пола
+    // hp−1: рискованная еда могла убить).
+    if (item != kInvalidItem) {
+        if (lying.slot >= 0) {
+            Container& c = ctx.reg.get<Container>(lying.box);
+            if (--c.inv.slots[lying.slot].count == 0)
+                c.inv.slots[lying.slot] = ItemSlot{};
+            // Запас комнаты падает ТЕМ ЖЕ хуком, которым растёт (S12.4).
+            supply_add_item(ctx.fr, room, item, -1);
+            ++out.consumed;
+        } else {
+            Inventory& inv = ctx.pool.inventory(id);
+            const int slot = bag_slot_of(inv, item);
+            if (--inv.slots[slot].count == 0) inv.slots[slot] = ItemSlot{};
+            ++out.bag;
+        }
+        if (price.hpCost > 0)
+            apply_damage(ctx.reg, ctx.pool, e, price.hpCost, kAttritionChannel,
+                         entt::null);
+        if (ctx.bus != nullptr)
+            ctx.bus->publish(EventType::ItemTransferred, id, kInvalidNpc, item,
+                             ctx.tick);
+    } else if (ctx.world != nullptr && ctx.stainDirty != nullptr) {
+        // ЛУЖА — моча выйдет не у места, которое даёт сортир. Предикат тот же,
+        // что у свидетеля (`room_offers`): лужа и цена судят одно «уместно ли».
+        Needs probe = row;
+        const SatisfyResult will = needs_satisfy(
+            probe, verb, flow_total(ctx.reg, ctx.fr, room, r, layer, verb));
+        if (will.relievedPee > 0.0f && !room_offers(r, verb)) {
+            relief_puddle(*ctx.world, pos,
+                          static_cast<std::uint32_t>(ctx.tick) ^
+                              static_cast<std::uint32_t>(entt::to_integral(e)),
+                          *ctx.stainDirty);
+            ++out.puddles;
+        }
+    }
+    // ФАКТ (S19): деяние — в шину, когда начато. Цену судит свидетель по данным
+    // глагола (`kVerbRelDelta`/`kVerbRepDelta`): у еды и сна ноль, у
+    // облегчения вне уместного места — есть. Новая цена = правка CSV.
+    if (ctx.bus != nullptr)
+        deed_publish(*ctx.bus, verb, e, kInvalidNpc, pos, ctx.tick);
     ++out.began;
     ++out.byVerb[verb];
     return ServeRefusal::None;
@@ -455,13 +420,15 @@ bool serve_busy(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     ActWindow& w = act_slot(*act, ActSlot::Body);
     const VerbId mine = window_verb(w);
     if (mine >= kVerbCount) return false; // пустой слот или боевое окно
-    // КОНТАКТНЫЙ КАДР — КОНЕЦ окна, поэтому опрос стоит ДО вопроса «занят
-    // ли»: на последнем тике окна `act_busy` уже ложь, а эффект ещё не упал.
-    if (acting_take_apply(*act, ActSlot::Body, ctx.tick) &&
-        !land_effect(ctx, e, id, pos, layer, mine, w.item, out)) {
-        w.applied = kAppliedEmpty; // снят, но впустую — исход значением
-        ++out.wasted;
-    }
+    // КВАНТЫ — ДО вопроса «занят ли»: на последнем тике окна `act_busy` уже
+    // ложь, а последний квант ещё не отдан. Созревшие тики — разом, ни один
+    // не теряется (`acting_take_flow`).
+    const bool wasDone = w.applied != 0;
+    const std::uint32_t ticks = acting_take_flow(*act, ActSlot::Body, ctx.tick);
+    if (ticks > 0)
+        out.reliefSum += flow_effect(ctx, id, pos, layer, mine, w.item, ticks,
+                                     w.durTicks);
+    if (!wasDone && w.applied != 0) ++out.applied; // окно отдало всё
     if (!act_busy(w, ctx.tick)) return false; // окно закрылось — тело вольно
     ++out.holding;
     return true;

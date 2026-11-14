@@ -1061,7 +1061,11 @@ static void test_place_errand_walks() {
     serve_then_place(reg, pool, fr, kThreatTick, zones, threatServe);
     CHECK(threatServe.broke == 1);
     CHECK(!acting_busy(reg.get<Acting>(e), ActSlot::Body, kThreatTick));
-    CHECK(pool.needs(id).sleep == 0.0f); // сорванное деяние НЕ кормит
+    // СОРВАННОЕ ДЕЯНИЕ КОРМИТ РОВНО ТО, ЧТО УСПЕЛО (окно-поток, 2026-11-14):
+    // тик 8 отдал свой квант сна, на тике угрозы обрыв старше кванта.
+    const float sleptAtThreat = pool.needs(id).sleep;
+    CHECK(sleptAtThreat > 0.0f);
+    CHECK(sleptAtThreat < 1.0f); // один квант из ~11 тысяч, а не окно
     const GuideTick threatGuide =
         guide_step(reg, zones, kLayer, kThreatTick, nullptr, nullptr);
     CHECK(rank_writes(threatGuide, SteerRank::Flee) == 1);
@@ -1103,7 +1107,9 @@ static void test_place_errand_walks() {
                      /*tick=*/10u + static_cast<std::uint64_t>(dur) * 2u, zones,
                      afterThreat);
     CHECK(afterThreat.applied == 0);
-    CHECK(pool.needs(id).sleep == 0.0f);
+    // Окно, не отданное к угрозе, после неё не отдаётся: бар стоит там же, где
+    // его оставила первая угроза (это окно опросов не видело вовсе).
+    CHECK(pool.needs(id).sleep == sleptAtThreat);
     // ...зато НОВОЕ деяние начинается тем же тиком, и это не побочный эффект, а
     // сам цикл: угроза ушла, тело по-прежнему не спало, место по-прежнему
     // предлагает — значит делать.

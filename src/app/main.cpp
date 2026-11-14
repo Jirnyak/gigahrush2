@@ -3689,7 +3689,7 @@ int main(int argc, char** argv) {
     // цикл» есть вопрос про ОТНОШЕНИЕ этих чисел, а не про любое из них.
     std::uint64_t voidPuddlesTotal = 0; // луж невольного слива — у любого тела
     std::uint64_t serveBeganTotal = 0, serveAppliedTotal = 0;
-    std::int64_t serveReliefTotal = 0;
+    double serveReliefTotal = 0.0; // окно-поток: доли очка за тик
     std::uint64_t serveByVerbTotal[game::kVerbCount] = {};
     // ПРИБОР НАРЯДА И ПРОГУЛКИ, заведён 2026-10-12 перед переводом обоих на нав
     // по зонам. Без него «перевод помог» было бы впечатлением: у дела прибор
@@ -6477,13 +6477,14 @@ int main(int argc, char** argv) {
                     std::fprintf(stderr,
                                  "[serve] STEP tick=%llu hold=%u began=%u "
                                  "applied=%u consumed=%u broke=%u corridor=%u "
-                                 "nothing=%u relief=%d | сон=%u еда=%u "
+                                 "nothing=%u relief=%.1f | сон=%u еда=%u "
                                  "питьё=%u сортир=%u\n",
                                  static_cast<unsigned long long>(simTick),
                                  serveTick.holding, serveTick.began,
                                  serveTick.applied, serveTick.consumed,
                                  serveTick.broke, serveTick.corridor,
-                                 serveTick.nothing, serveTick.reliefSum,
+                                 serveTick.nothing,
+                                 static_cast<double>(serveTick.reliefSum),
                                  serveTick.byVerb[game::kVerbSleep],
                                  serveTick.byVerb[game::kVerbEat],
                                  serveTick.byVerb[game::kVerbDrink],
@@ -7283,12 +7284,12 @@ int main(int argc, char** argv) {
                         // тику, тот же поллер. Прибор только кладёт бутылку в
                         // сумку, ставит жажду и давление — и ПЕЧАТАЕТ, что
                         // случилось: до окна, после окна, по шагам.
-                        //   шаг 1: «Использовать» питьё → окно, вода растёт в
-                        //          КОНЦЕ окна, бутылка уходит из сумки;
+                        //   шаг 1: «Использовать» питьё → окно, бутылка уходит
+                        //          из сумки сразу, вода течёт квантами всё окно;
                         //   шаг 2: P → окно облегчения, давления — в ноль.
                         // Порог 450 — как у `nuzhdy`: `--floor K` срабатывает на
                         // кадре 420. Мгновенного пути в дереве нет — значит, бар
-                        // между «начато» и «свершилось» обязан стоять.
+                        // между «начато» и «свершилось» обязан РАСТИ ПОСТЕПЕННО.
                         static int utolStage = 0;
                         const auto* nrH = reg.try_get<game::NpcRef>(player);
                         if (nrH != nullptr && pool.valid(nrH->id)) {
@@ -7323,8 +7324,8 @@ int main(int argc, char** argv) {
                                 utolStage = 1;
                             } else if (utolStage == 1 && open) {
                                 std::fprintf(stderr,
-                                             "[utolenie] окно открыто — вода %.1f "
-                                             "(до контакта не растёт), tick %llu\n",
+                                             "[utolenie] окно открыто — вода %.2f "
+                                             "(течёт квантами), tick %llu\n",
                                              static_cast<double>(hn.water),
                                              static_cast<unsigned long long>(simTick));
                                 utolStage = 2;
@@ -7533,15 +7534,15 @@ int main(int argc, char** argv) {
                         da != nullptr
                             ? game::act_slot(*da, game::ActSlot::Body).applied
                             : 0u;
-                    // Три исхода окна, все значением: сорвано до контакта
-                    // (`applied` 0), контакт впустую (`kAppliedEmpty` —
-                    // предмет ушёл, место перестало давать), свершилось.
-                    if (ap == 0u || ap == game::kAppliedEmpty) {
-                        std::snprintf(deedNote, sizeof deedNote, "%s",
-                                      ap == 0u ? "ПРЕРВАНО" : "ВПУСТУЮ");
+                    // Два исхода окна-потока, значением: сорвано — поток
+                    // кончился раньше конца (`applied` 0; отдано то, что
+                    // успело), или отдало всё. «Впустую» у потока не бывает:
+                    // предмет берётся в начале, место пересчитывается каждый
+                    // квант.
+                    if (ap == 0u) {
+                        std::snprintf(deedNote, sizeof deedNote, "ПРЕРВАНО");
                         deedNoteAt = simTick;
-                        std::fprintf(stderr, "[deed] %s\n",
-                                     ap == 0u ? "прервано" : "впустую");
+                        std::fprintf(stderr, "[deed] прервано\n");
                     } else {
                         std::fprintf(stderr, "[deed] свершилось\n");
                     }
@@ -9150,14 +9151,14 @@ int main(int argc, char** argv) {
                                  "[needs] tick=%llu bodies=%u recovering=%u "
                                  "crowd_dead_total=%u лужи_слива=%llu | деяний=%llu "
                                  "эффектов=%llu "
-                                 "Σутолено=%lld | сон=%llu еда=%llu питьё=%llu "
+                                 "Σутолено=%.0f | сон=%llu еда=%llu питьё=%llu "
                                  "сортир=%llu\n",
                                  static_cast<unsigned long long>(simTick),
                                  needs.bodies, needs.recovering, crowdDead,
                                  static_cast<unsigned long long>(voidPuddlesTotal),
                                  static_cast<unsigned long long>(serveBeganTotal),
                                  static_cast<unsigned long long>(serveAppliedTotal),
-                                 static_cast<long long>(serveReliefTotal),
+                                 serveReliefTotal,
                                  static_cast<unsigned long long>(
                                      serveByVerbTotal[game::kVerbSleep]),
                                  static_cast<unsigned long long>(

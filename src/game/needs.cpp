@@ -320,12 +320,19 @@ std::int16_t consumable_hp_cost(ItemId id) {
     }
 }
 
-ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
+ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp,
+                               float share) {
     ConsumeResult out;
     if (!item_valid(item)) return out;
+    if (share <= 0.0f) return out;
+    if (share > 1.0f) share = 1.0f;
 
     const UseEffect eff = static_cast<UseEffect>(item_def(item).useEffect);
-    const float a = static_cast<float>(item_def(item).useA);
+    // ДОЛЯ ПРЕДМЕТА (окно-поток, S27.1 2026-11-14): каждая величина ниже — от
+    // `a`, и умножение здесь ОДНО, поэтому бар, очередь пищеварения и побочки
+    // таблетки текут в одной пропорции. Цена HP — НЕ доля: её платят один раз,
+    // когда предмет взят (см. `hpCost` ниже и [game/serve.h]).
+    const float a = static_cast<float>(item_def(item).useA) * share;
     if (a <= 0.0f) return out;   // nothing to give; `used` stays false
 
     float pooShare = 0.0f;
@@ -366,7 +373,7 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
 
         case UseEffect::DrinkStim:
             out.water = top_up(n.water, a);
-            out.sleep = top_up(n.sleep, kDrinkStimSleepBonus);
+            out.sleep = top_up(n.sleep, kDrinkStimSleepBonus * share);
             peeShare = kDrinkPeeShare;
             break;
 
@@ -375,8 +382,8 @@ ConsumeResult apply_consumable(Needs& n, ItemId item, std::int16_t hp) {
             // three bars. Not a food or a drink: `item_feeds`/`item_hydrates` both
             // reject it; through the one door it is the verb `sleep`.
             out.sleep = top_up(n.sleep, a);
-            n.water = clamp_need(n.water - kSleepingPillsWaterCost);
-            n.food  = clamp_need(n.food  - kSleepingPillsFoodCost);
+            n.water = clamp_need(n.water - kSleepingPillsWaterCost * share);
+            n.food  = clamp_need(n.food  - kSleepingPillsFoodCost * share);
             break;
 
         default:
@@ -416,6 +423,12 @@ ReliefResult relieve_needs(Needs& n, float peeAmount, float pooAmount) {
     return out;
 }
 
+float needs_body_total(VerbId verb) {
+    // Один switch «глагол → бар» живёт в `needs_satisfy`; этот — его вопрос
+    // «чей объём»: у запасов объём даёт МЕСТО или предмет, у облегчения — ТЕЛО.
+    return verb == kVerbToilet ? kNeedMax : 0.0f;
+}
+
 SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount) {
     SatisfyResult out;
     // Запас: бар РАСТЁТ, и сколько реально легло, отвечает `top_up` — тот же
@@ -451,16 +464,12 @@ SatisfyResult needs_satisfy(Needs& n, VerbId verb, float amount) {
             out.peeQueued = amount * kDrinkPeeShare;
             break;
         case kVerbToilet: {
-            // ДАВЛЕНИЕ, А НЕ ЗАПАС — И ВЕЛИЧИНУ НАЗЫВАЕТ ТЕЛО, А НЕ МЕСТО
-            // (CANON S27.1, 2026-11-14). Опорожняешься целиком: столько, сколько
-            // в тебе есть, — это закон клавиши P владельца 2026-08-28 («полное
-            // опорожнение обеих ёмкостей»), распространённый на любое тело.
-            // `amount` здесь НЕ ЧИТАЕТСЯ: до 2026-11-14 житель в санузле снимал
-            // предложение места (20 + унитаз 19), а клавиша P в коридоре — всё,
-            // то есть пол давал больше унитаза. Предложение сортира у места
-            // остаётся ВЕСОМ решения (куда идти — S13), уместность судит
-            // свидетель (S19), лужу решает место; объём — тело.
-            const ReliefResult r = relieve_needs(n, kNeedMax, kNeedMax);
+            // ДАВЛЕНИЕ, А НЕ ЗАПАС: бар падает. Сколько снять — `amount`, а
+            // ВЕЛИЧИНУ ДЕЯНИЯ облегчения называет тело (`needs_body_total`):
+            // окно-поток делит её на кванты, и за всё окно тело опорожняется
+            // целиком — закон клавиши P владельца 2026-08-28 на любое тело.
+            if (amount <= 0.0f) break;
+            const ReliefResult r = relieve_needs(n, amount, amount);
             out.gained = r.pee + r.poo;
             out.relievedPee = r.pee;
             // «Нечего снимать» — тоже отказ значением: пустое тело не

@@ -156,7 +156,10 @@ static void test_serve_begins_on_demand_times_offer() {
     // ДЛИНА — ИЗ СТРОКИ ДЕЙСТВИЯ, перевод ВВЕРХ одной дверью.
     CHECK(w.action == kVerbAction[kVerbDrink]);
     CHECK(w.durTicks == ms_to_ticks(kActionDurMs[w.action]));
-    CHECK(w.applyTicks == w.durTicks); // контакт — КОНЕЦ окна
+    // ОКНО-ПОТОК (2026-11-14): контакта нет, `applyTicks` — курсор доставки с
+    // нуля; эффект течёт квантами всё окно.
+    CHECK(act_is_flow(w));
+    CHECK(w.applyTicks == 0);
     CHECK(w.startTick == 100u);
 
     // (в) ЗАНЯТОСТЬ МОНОТОННА: второе начало на открытом окне отказывает.
@@ -215,35 +218,39 @@ static void test_serve_effect_lands_at_window_end_once() {
     const std::uint16_t dur = act_slot(reg.get<Acting>(e), ActSlot::Body).durTicks;
     CHECK(dur > 1);
 
-    // ЗА ТИК ДО КОНЦА: тело держат, бар НЕ тронут. Это и есть «деяние есть
-    // время», а не мгновенный эффект с косметической задержкой.
+    // ПОТОК (2026-11-14, решение владельца «квантово»): за тик до конца тело
+    // держат, а бар уже вырос на (dur−1)/dur предложения — деяние есть время,
+    // и время ОТДАЁТ, а не копит итог к концу.
+    const auto near = [](float a, float b) { return std::fabs(a - b) < 1e-3f; };
     ServeTick mid{};
     CHECK(serve_busy(ServeCtx{reg, pool, fr, nullptr, 1000u + dur - 1}, e, id,
                      inside, kLayer, mid));
     CHECK(mid.holding == 1);
     CHECK(mid.applied == 0);
-    CHECK(pool.needs(id).water == start);
+    CHECK(near(pool.needs(id).water,
+               start + static_cast<float>(offer) * static_cast<float>(dur - 1) /
+                           static_cast<float>(dur)));
 
-    // РОВНО В КОНЕЦ: эффект упал, бар вырос НА ПРЕДЛОЖЕНИЕ КОМНАТЫ, и тело
-    // больше не держат — окно закрылось тем же тиком.
+    // РОВНО В КОНЕЦ: отдан последний квант, всё окно дало РОВНО предложение
+    // комнаты, и тело больше не держат — окно закрылось тем же тиком.
     ServeTick land{};
     CHECK(!serve_busy(ServeCtx{reg, pool, fr, nullptr, 1000u + dur}, e, id,
                       inside, kLayer, land));
     CHECK(land.applied == 1);
     CHECK(land.consumed == 0); // расходуемого в комнате нет — взято у места
-    CHECK(land.reliefSum == static_cast<std::int32_t>(offer));
-    CHECK(pool.needs(id).water == start + static_cast<float>(offer));
+    CHECK(near(pool.needs(id).water, start + static_cast<float>(offer)));
     // ВЫПИТОЕ ВСТАЛО В ОЧЕРЕДЬ ПИЩЕВАРЕНИЯ — иначе у одного и того же деяния
     // было бы два исхода: из ящика с ценой сортира, у крана без неё.
-    CHECK(pool.needs(id).pendingPee ==
-          static_cast<float>(offer) * kDrinkPeeShare);
+    CHECK(near(pool.needs(id).pendingPee,
+               static_cast<float>(offer) * kDrinkPeeShare));
 
-    // ОДНОРАЗОВОСТЬ: сколько ни спрашивай после — эффекта больше нет.
+    // ПОТОК КОНЧАЕТСЯ С ОКНОМ: сколько ни спрашивай после — больше ничего.
+    const float done = pool.needs(id).water;
     ServeTick again{};
     CHECK(!serve_busy(ServeCtx{reg, pool, fr, nullptr, 1000u + dur * 3}, e, id,
                       inside, kLayer, again));
     CHECK(again.applied == 0);
-    CHECK(pool.needs(id).water == start + static_cast<float>(offer));
+    CHECK(pool.needs(id).water == done);
 
     // КЛАМП: «что ЛАНДЕД, а не число на жестянке». Полный бар деяния не
     // получает вовсе (спроса нет), поэтому проверяем сам клок одной дверью.
@@ -273,25 +280,24 @@ static void test_serve_eat_queues_and_toilet_relieves() {
     // давления: одного полного пузыря достаточно, чтобы тело пошло, значит и
     // деяние обязано закрывать оба (ср. max двух давлений в demand_from_needs).
     //
-    // ВЕЛИЧИНУ НАЗЫВАЕТ ТЕЛО (CANON S27.1, 2026-11-14): опорожняешься целиком,
-    // сколько бы ни предложило место. До этого здесь стояло «20 снято с
-    // мочевого из 30», и пол коридора под клавишей P давал больше унитаза.
+    // КВАНТ — ТАКОЙ, КАКОЙ ДАЛИ: `amount` снимается с обоих давлений.
     Needs p;
     p.pee = 30.0f;
     p.poo = 5.0f;
     const SatisfyResult relief = needs_satisfy(p, kVerbToilet, 20.0f);
     CHECK(relief.served);
-    CHECK(p.pee == 0.0f);
+    CHECK(p.pee == 10.0f);
     CHECK(p.poo == 0.0f);
-    CHECK(relief.gained == 35.0f); // всё: 30 с мочевого + 5 с кишечника
-    // ...и предложение места на объём не влияет вовсе: НОЛЬ у места (коридор)
-    // даёт то же опорожнение, — это и делает клавишу P той же дверью.
+    CHECK(relief.gained == 25.0f); // 20 снято с мочевого + 5 с кишечника
+    CHECK(relief.relievedPee == 20.0f);
+    // ...а ОБЪЁМ ДЕЯНИЯ облегчения называет ТЕЛО, не место (CANON S27.1):
+    // за всё окно — всё давление, где бы ни стоял. До 2026-11-14 пол коридора
+    // под клавишей P давал 100, а унитаз — предложение места (39).
+    CHECK(needs_body_total(kVerbToilet) == kNeedMax);
+    CHECK(needs_body_total(kVerbDrink) == 0.0f); // у запаса объём — место
     Needs corridor;
     corridor.pee = 12.0f;
-    const SatisfyResult floorRelief = needs_satisfy(corridor, kVerbToilet, 0.0f);
-    CHECK(floorRelief.served);
-    CHECK(corridor.pee == 0.0f);
-    CHECK(floorRelief.gained == 12.0f);
+    CHECK(!needs_satisfy(corridor, kVerbToilet, 0.0f).served); // ноль — не квант
     // ПУСТОЕ ТЕЛО — отказ значением: облегчаться нечем, деяния не будет.
     Needs empty;
     CHECK(!needs_satisfy(empty, kVerbToilet, 50.0f).served);
@@ -356,7 +362,9 @@ static void test_serve_consumes_what_lies_in_the_room() {
     CHECK(!serve_busy(ServeCtx{reg, pool, fr, &bus, 500u + dur}, e, id, inside,
                       kLayer, land));
     CHECK(land.applied == 1);
-    CHECK(land.consumed == 1);
+    // ХЛЕБ ВЗЯТ В НАЧАЛЕ ОКНА (окно-поток): откусил — значит ешь.
+    CHECK(t.consumed == 1);
+    CHECK(land.consumed == 0);
     // Величина — ИЗ СТРОКИ ПРЕДМЕТА: ни объявленное, ни сумма.
     CHECK(pool.needs(id).food == startFood + static_cast<float>(breadEat));
     // Хлеб исчез, и запас комнаты упал РОВНО на один хлеб.
@@ -500,7 +508,7 @@ static void test_serve_prefers_free_food_over_risky() {
     ServeTick land{};
     CHECK(!serve_busy(ServeCtx{reg, pool, fr, nullptr, 7u + dur}, e, id, inside,
                       kLayer, land));
-    CHECK(land.consumed == 1);
+    CHECK(t.consumed == 1); // предмет выбран и взят в начале окна
     // Съедена ЧИСТАЯ: её слот опустел, рискованная цела, HP не тронуто.
     CHECK(reg.get<Container>(box).inv.slots[1].item == kInvalidItem);
     CHECK(reg.get<Container>(box).inv.slots[0].item == risky);
@@ -667,14 +675,18 @@ static void test_serve_one_door_resident_and_human() {
     CHECK(wr.durTicks == wh.durTicks);
     CHECK(wr.item == kInvalidItem && wh.item == kInvalidItem);
 
-    // НЕТ МГНОВЕННОГО ПУТИ: до контактного кадра бар не тронут ни у кого.
+    // НЕТ МГНОВЕННОГО ПУТИ: на тике открытия бар не тронут ни у кого, а
+    // дальше течёт ОДИНАКОВО у обоих — одним поллером, одной долей.
+    CHECK(pool.needs(rid).water == thirsty);
+    CHECK(pool.needs(hid).water == thirsty);
     ServeTick mid{};
     serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + wr.durTicks - 1}, kLayer,
                mid);
     CHECK(mid.holding == 2);
     CHECK(mid.applied == 0);
-    CHECK(pool.needs(rid).water == thirsty);
-    CHECK(pool.needs(hid).water == thirsty);
+    CHECK(pool.needs(rid).water > thirsty);
+    CHECK(pool.needs(rid).water < thirsty + static_cast<float>(offer));
+    CHECK(pool.needs(hid).water == pool.needs(rid).water);
 
     // КОНТАКТ — ОДИН ПОЛЛЕР ДЛЯ ОБОИХ. Мутация «поллер только для жителей»
     // (`decider_of != Resident → continue` в `serve_step`) красит строки
@@ -683,7 +695,8 @@ static void test_serve_one_door_resident_and_human() {
     serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + wr.durTicks}, kLayer,
                land);
     CHECK(land.applied == 2);
-    CHECK(pool.needs(rid).water == thirsty + static_cast<float>(offer));
+    CHECK(std::fabs(pool.needs(rid).water - (thirsty + static_cast<float>(offer))) <
+          1e-3f);
     CHECK(pool.needs(hid).water == pool.needs(rid).water);
     CHECK(pool.needs(hid).pendingPee == pool.needs(rid).pendingPee);
     CHECK(pool.needs(hid).pendingPee > 0.0f);
@@ -747,32 +760,39 @@ static void test_serve_bag_item_is_the_chosen_one() {
     const ActWindow& w = act_slot(reg.get<Acting>(hum), ActSlot::Body);
     CHECK(w.item == bread);
     CHECK(w.action == kVerbAction[kVerbEat]); // длина — у глагола (трапеза)
-    // До контакта ни бар, ни сумка не тронуты.
-    ServeTick mid{};
-    serve_step(ServeCtx{reg, pool, fr, &bus, kT0 + w.durTicks - 1}, kLayer, mid);
+    // ВЗЯТ В НАЧАЛЕ, ЕДЕТСЯ ПОТОКОМ (окно-поток): хлеб ушёл из сумки в тик
+    // открытия, а бар на этом тике ещё не тронут — нет мгновенного пути.
+    CHECK(t.bag == 1);
+    CHECK(bag_count(pool, hid, bread) == 0);  // взят ХЛЕБ...
+    CHECK(bag_count(pool, hid, ration) == 1); // ...а не паёк
     CHECK(pool.needs(hid).food == hungry);
-    CHECK(bag_count(pool, hid, bread) == 1);
+    ServeTick mid{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT0 + w.durTicks / 2}, kLayer, mid);
+    CHECK(pool.needs(hid).food > hungry); // течёт по кванту
+    CHECK(pool.needs(hid).food <
+          hungry + static_cast<float>(kItemVerbs[bread - 1][kVerbEat]));
     ServeTick land{};
     serve_step(ServeCtx{reg, pool, fr, &bus, kT0 + w.durTicks}, kLayer, land);
     CHECK(land.applied == 1);
-    CHECK(land.bag == 1);
-    CHECK(bag_count(pool, hid, bread) == 0);  // съеден ХЛЕБ...
-    CHECK(bag_count(pool, hid, ration) == 1); // ...а не паёк
-    CHECK(pool.needs(hid).food ==
-          hungry + static_cast<float>(kItemVerbs[bread - 1][kVerbEat]));
-    CHECK(bus.total_count(EventType::Deed) == 1); // факт съеденного — в шину
+    CHECK(std::fabs(pool.needs(hid).food -
+                    (hungry + static_cast<float>(kItemVerbs[bread - 1][kVerbEat]))) <
+          1e-3f);
+    CHECK(bus.total_count(EventType::Deed) == 1); // факт деяния — в шину
 
-    // РИСКОВАННАЯ ЕДА: HP списывается РОВНО ОДИН РАЗ — на контакте, каналом
-    // мимо брони. Второе списание жило в приложении и могло убить.
+    // РИСКОВАННАЯ ЕДА: HP списывается РОВНО ОДИН РАЗ — когда предмет взят, в
+    // начале окна, каналом мимо брони; поток цену не дробит и не повторяет.
+    // Второе списание жило в приложении и могло убить.
     const std::int16_t hpBefore = pool.hp(hid);
     const std::uint64_t kT1 = kT0 + w.durTicks + 1u;
+    ServeTick tr{};
     CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT1}, hum, hid, corridor,
-                      kVerbEat, risky, t) == ServeRefusal::None);
-    CHECK(pool.hp(hid) == hpBefore); // открыть окно — не значит съесть
+                      kVerbEat, risky, tr) == ServeRefusal::None);
+    CHECK(tr.bag == 1);
+    CHECK(pool.hp(hid) == hpBefore - consumable_hp_cost(risky));
     ServeTick land2{};
     serve_step(ServeCtx{reg, pool, fr, &bus, kT1 + w.durTicks}, kLayer, land2);
-    CHECK(land2.bag == 1);
-    CHECK(pool.hp(hid) == hpBefore - consumable_hp_cost(risky));
+    CHECK(land2.applied == 1);
+    CHECK(pool.hp(hid) == hpBefore - consumable_hp_cost(risky)); // и только раз
 
     // ОТКАЗЫ ЗНАЧЕНИЕМ. Предмета нет в сумке:
     const std::uint64_t kT2 = kT1 + w.durTicks + 1u;
@@ -801,21 +821,21 @@ static void test_serve_bag_item_is_the_chosen_one() {
     CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,
                       kVerbDrink, kInvalidItem, t) == ServeRefusal::NoPlace);
 
-    // ПРЕДМЕТ УШЁЛ ЗА ВРЕМЯ ОКНА — деяние впустую, без эффекта и без дюпа.
+    // ПРЕДМЕТ БЕРЁТСЯ В НАЧАЛЕ ОКНА (окно-поток, 2026-11-14): откусил —
+    // значит ешь. Паёк уходит из сумки в тик открытия, и «выбросить его посреди
+    // трапезы» нечего — он уже в деле; поток течёт до конца окна. Прежний
+    // случай «предмет ушёл за окно → впустую» с потоком невыразим.
     pool.needs(hid).food = hungry;
     const std::uint64_t kT3 = kT2 + 1u;
     CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT3}, hum, hid, corridor,
                       kVerbEat, ration, t) == ServeRefusal::None);
-    pool.inventory(hid).slots[0] = ItemSlot{}; // выбросил посреди трапезы
-    ServeTick gone{};
-    serve_step(ServeCtx{reg, pool, fr, &bus, kT3 + w.durTicks}, kLayer, gone);
-    CHECK(gone.applied == 0);
-    CHECK(pool.needs(hid).food == hungry);
-    // ...и исход — ЗНАЧЕНИЕМ: контакт снят впустую (`kAppliedEmpty`), а не
-    // «свершилось». По этому байту стекло человека пишет «ВПУСТУЮ»; мутация
-    // «не помечать пустой контакт» красит обе строки.
-    CHECK(gone.wasted == 1);
-    CHECK(act_slot(reg.get<Acting>(hum), ActSlot::Body).applied == kAppliedEmpty);
+    CHECK(bag_count(pool, hid, ration) == 0);
+    ServeTick whole{};
+    serve_step(ServeCtx{reg, pool, fr, &bus, kT3 + w.durTicks}, kLayer, whole);
+    CHECK(whole.applied == 1);
+    CHECK(std::fabs(pool.needs(hid).food -
+                    (hungry + static_cast<float>(kItemVerbs[ration - 1][kVerbEat]))) <
+          1e-3f);
 }
 
 // --- 11. ТЕЛО УШЛО ОТ ДЕЛА — ОКНО РВЁТСЯ (закон 5) ------------------------
@@ -861,8 +881,11 @@ static void test_serve_leaving_breaks_the_window() {
     ServeTick end{};
     serve_step(ServeCtx{reg, pool, fr, nullptr, kT0 + dur}, kLayer, end);
     CHECK(end.applied == 1);
-    CHECK(pool.needs(hid).water == 10.0f); // ушедший не напился
-    CHECK(pool.needs(rid).water > 10.0f);
+    // УШЕДШИЙ ПОЛУЧИЛ РОВНО ТО, ЧТО УСПЕЛ (окно-поток): один квант тика
+    // kT0+1; на тике ухода обрыв СТАРШЕ кванта. Житель допил до конца.
+    const float quantum = 14.0f / static_cast<float>(dur);
+    CHECK(std::fabs(pool.needs(hid).water - (10.0f + quantum)) < 1e-4f);
+    CHECK(std::fabs(pool.needs(rid).water - (10.0f + 14.0f)) < 1e-3f);
 }
 
 // --- 12. НЕОПЛАЧЕННЫЙ КОНТАКТ — ТОЖЕ ЗАНЯТОСТЬ (Б1/Б6 ревью) ---------------
@@ -970,7 +993,7 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     CHECK(land.applied == 1);
     CHECK(pool.needs(hid).pee == 0.0f);
     CHECK(pool.needs(hid).poo == 0.0f);
-    CHECK(land.puddles == 1);
+    CHECK(t.puddles == 1); // лужа — в начале облегчения, вне уместного места
     CHECK(!dirty.empty());
     CHECK(bus.total_count(EventType::Deed) == 1);
 
@@ -980,14 +1003,15 @@ static void test_serve_relief_anywhere_puddle_by_place() {
     reg.get<Transform>(hum).pos = inWc;
     pool.needs(hid).pee = 60.0f;
     const std::uint64_t kT1 = 10u + dur + 1u;
+    ServeTick tw{};
     CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT1, &w, &dirty}, hum, hid,
-                      inWc, kVerbToilet, kInvalidItem, t) == ServeRefusal::None);
+                      inWc, kVerbToilet, kInvalidItem, tw) == ServeRefusal::None);
     ServeTick land2{};
     serve_step(ServeCtx{reg, pool, fr, &bus, kT1 + dur, &w, &dirty}, kLayer,
                land2);
     CHECK(land2.applied == 1);
     CHECK(pool.needs(hid).pee == 0.0f);
-    CHECK(land2.puddles == 0);
+    CHECK(tw.puddles == 0);
     CHECK(dirty.empty());
     CHECK(bus.total_count(EventType::Deed) == 2);
 
