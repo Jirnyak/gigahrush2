@@ -790,6 +790,12 @@ static void test_serve_bag_item_is_the_chosen_one() {
     const ItemId bandage = item_by_string("bandage");
     CHECK(bandage != kInvalidItem);
     CHECK(serve_item_verb(bandage) >= kVerbCount);
+    // ...а кулич и энергетик — ЕСТЬ (2026-11-14): до правки `USE_VERB` у них не
+    // было глагола, и с одной дверью они стали несъедобны вовсе — консольный
+    // `eat`, который брал их по `UseEffect`, умер вместе с мгновенным путём.
+    // Мутация «снять FeedPsi/DrinkStim из USE_VERB» красит обе строки.
+    CHECK(serve_item_verb(item_by_string("kulich")) == kVerbEat);
+    CHECK(serve_item_verb(item_by_string("siren_energy")) == kVerbDrink);
     // ...а питьё в коридоре — «здесь нечем»: место не даёт, тело — тоже.
     pool.needs(hid).water = 10.0f;
     CHECK(serve_start(ServeCtx{reg, pool, fr, &bus, kT2}, hum, hid, corridor,

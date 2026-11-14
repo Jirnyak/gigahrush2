@@ -2639,7 +2639,9 @@ if(GIGA_BUILD_TESTS)
         # suite_needs use_best() (-43) и suite_needs2
         # cost_first_over_every_deficit (-111) судили правило выбора из СВОЕЙ
         # сумки, которого больше нет (предмет выбирает человек кнопкой).
-        PASS_REGULAR_EXPRESSION "game_test: 220562 checks, 0 failures")
+        # 220562 -> 220564 (+2): кулич и энергетик получили глагол (USE_VERB,
+        # долг S24.7) — без него у них не было кнопки «Использовать».
+        PASS_REGULAR_EXPRESSION "game_test: 220564 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
