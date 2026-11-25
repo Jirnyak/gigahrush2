@@ -2388,11 +2388,13 @@ void begin_floor_nav(const World& world, int floorNumber,
 // сколько их. Мёртвый параметр в этом дереве есть дефект, а не запас.
 std::uint32_t finish_floor_nav(Registry& reg, LayerId layer,
                                const game::RebakeScheduler& bake) {
+    // Мобы ноги получают при рождении (`emplace_mob`, 2026-11-25) — счёт этой
+    // строки с того дня есть счёт ЖИТЕЛЕЙ, а не «всех ходячих».
     std::uint32_t n = game::wander_init(reg, layer);
     std::uint32_t aiCount = game::ai_init(reg, layer);
     std::fprintf(stderr,
                  "[nav] bake zones %.0f ms | resident %.1f MiB | "
-                 "%u agents wandering | %u AI brains attached "
+                 "%u residents given legs | %u AI brains attached "
                  "(async, off the main thread)\n",
                  bake.last_zones_ms(),
                  static_cast<double>(bake.resident_bytes()) / (1024.0 * 1024.0),
@@ -4134,6 +4136,11 @@ int main(int argc, char** argv) {
                                    std::move(ents),
                                    module_key_for(currentFloor));
         }
+        // Граф зон покидаемого этажа с этой строки ЧУЖОЙ ([game/rebake.h]
+        // `forget_live_graph`): машина лифта рождает мобов прибытия кадром
+        // раньше, чем стартует Fresh, и с ногами от рождения они выбрали бы
+        // цель по этому графу.
+        nav.forget_live_graph();
         // ЗДЕСЬ СТОЯЛ `ai_release` — снятие токена на покидаемом этаже, и это
         // был ОДИН ИЗ ДВУХ ШВОВ ПОЕЗДКИ, на которых «починили один из двух»
         // ловили дважды. Оба снятия умерли вместе с токеном 2026-11-09:
@@ -6646,13 +6653,12 @@ int main(int argc, char** argv) {
                         if (fog.spawned != 0 || fog.despawned != 0) {
                             std::fprintf(stderr,
                                          "[fog] tick=%llu floor=%d +%u -%u "
-                                         "wander=%u target=%u headroom=%u "
+                                         "target=%u headroom=%u "
                                          "wanted=%u roster=%u\n",
                                          static_cast<unsigned long long>(simTick),
                                          currentFloor,
                                          static_cast<unsigned>(fog.spawned),
                                          static_cast<unsigned>(fog.despawned),
-                                         static_cast<unsigned>(fog.wandering),
                                          static_cast<unsigned>(fog.target),
                                          static_cast<unsigned>(fog.headroom),
                                          static_cast<unsigned>(fog.wanted),

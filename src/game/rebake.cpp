@@ -269,7 +269,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
 
     // Живой nav-граф освободить сразу: до свапа ready() == false и толпа
     // стоит, а не ходит по геометрии чужого этажа (семантика AsyncBake).
-    zones_ = ZoneNav{};
+    forget_live_graph();
 
     // Снапшот по значению — воркер не знает про World вообще.
     snapClear_.vals = navClear_.vals;

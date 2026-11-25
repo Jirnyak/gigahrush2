@@ -240,6 +240,40 @@ static void test_console_spawn_god_noclip() {
             levelled &= ecs.get<const MobRef>(e).level == want;
         CHECK(levelled);
     }
+    // НОГИ ПРИ РОЖДЕНИИ (2026-11-25, сцена С7). Консольный моб был СТАТУЕЙ:
+    // `wander_step` обходит вид с `WanderTarget`, а её выдавал только
+    // `wander_init` входа этажа и туманной волны — `spawn` его не звал. Теперь
+    // долг платит единственная дверь рождения `emplace_mob`, и проверяется он по
+    // ВСЕЙ таблице видов в обе стороны: подвижный получает ноги без цели (ногу
+    // выберет первый проход), неподвижный (турель, растение) — нет.
+    {
+        bool legged = true;
+        for (auto e : ecs.view<const MobRef>())
+            legged &= ecs.all_of<WanderTarget>(e);
+        CHECK(legged);
+
+        Registry kinds;
+        std::uint32_t mobile = 0, immobile = 0;
+        bool lawful = true;
+        for (std::size_t k = 0; k < kMobKindCount; ++k) {
+            const Entity m = spawn_mob_at(kinds, 0, static_cast<MobKind>(k), 1,
+                                          64, 64, 4, static_cast<std::uint32_t>(k),
+                                          /*tick=*/0);
+            const bool still =
+                has_flag(kMobTable[k].aiFlags, AiFlag::Immobile);
+            const WanderTarget* wt = kinds.try_get<WanderTarget>(m);
+            if (still) {
+                ++immobile;
+                lawful &= wt == nullptr;
+            } else {
+                ++mobile;
+                lawful &= wt != nullptr && wt->zone == kNoRoom && wt->pack == 0;
+            }
+        }
+        CHECK(lawful);
+        CHECK(mobile > 0);   // обе полярности на деле представлены таблицей
+        CHECK(immobile > 0);
+    }
     CHECK(!con.exec(ctx, "spawn nosuchmob", out, sizeof out));
     CHECK(!con.exec(ctx, "spawn", out, sizeof out)); // usage, not a crash
 

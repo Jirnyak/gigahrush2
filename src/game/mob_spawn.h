@@ -211,7 +211,6 @@ struct FogTickReport {
     ThreatCensus census{};        // the sweep around the anchor; withLos is still 0
     std::uint32_t spawned = 0;    // heads added
     std::uint32_t despawned = 0;  // tagged heads removed (activeEnded / warningBegan)
-    std::uint32_t wandering = 0;  // agents wander_init gave a destination to
     std::uint8_t target = 0;      // samosbor_threat_target for this floor + variant
     std::uint8_t headroom = 0;    // samosbor_threat_headroom at entry
     std::uint8_t wanted = 0;      // min(target - withinOuter, headroom)
@@ -252,9 +251,9 @@ struct FogTickReport {
 // It drives the monster level exactly as `spawn_floor_mobs` does and decides
 // `highRisk` at `kFogHighRiskDanger`.
 //
-// No allocation on a tick that spawns nothing. On a tick that does spawn, one
-// `std::vector` inside `wander_init` — see the note on that call in the .cpp for why
-// a fog mob without a WanderTarget is a statue.
+// No allocation on a tick that spawns nothing. Ноги (`WanderTarget`) голова
+// получает при рождении в `emplace_mob` — прохода `wander_init` после волны больше
+// нет, и его вектора тоже.
 FogTickReport samosbor_fog_tick(Registry& reg, const World& world,
                                 const SamosborState& st,
                                 const SamosborTransition& tr, LayerId layer,

@@ -12,7 +12,7 @@
 #include "game/floor_gen.h"
 #include "game/room.h"        // FloorRooms — пак селится в объявленной комнате
 #include "game/room_supply.h" // rooms_in_ctx
-#include "game/wander.h"     // wander_init — a fog mob with no WanderTarget is a statue
+#include "game/wander.h"     // WanderTarget — ноги при рождении, моб без них статуя
 #include "world/medium.h"    // medium_level_data — не ставить в утопленное
 #include "world/macro_grid.h"
 #include "world/world.h"
@@ -184,8 +184,20 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
     reg.emplace<AABB>(e, AABB{half});
     // Immobile kinds (turrets, plants, spore carpets) are not moved by gravity —
     // they are part of the architecture, not bodies in it.
-    if (!has_flag(def.aiFlags, AiFlag::Immobile))
+    // НОГИ — ПРИ РОЖДЕНИИ, а не проходом после него (2026-11-25, сцена С7).
+    // `wander_step` обходит вид с `WanderTarget`, и моб без неё — СТАТУЯ, которая
+    // при этом бьёт, то есть читается турелью, а не багом. Раньше компоненту
+    // навешивал только `wander_init` — на входе этажа и после туманного спавна, —
+    // а консольный `spawn` его не звал: каждый путь рождения ПОМНИЛ долг сам, и
+    // один забыл. Здесь долг платится в единственной двери рождения моба, и
+    // «моб без ног» стал невыразим. Цели нет (`kNoRoom`) — ногу выберет первый
+    // посещающий проход ([game/wander.h]); бейк зон для этого не нужен.
+    // Неподвижные виды — архитектура, ног им не дают (тот же закон, что гравитация
+    // строкой выше и отказ в `wander_init`).
+    if (!has_flag(def.aiFlags, AiFlag::Immobile)) {
         reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+        reg.emplace<WanderTarget>(e, WanderTarget{kNoRoom, 0, packId});
+    }
     reg.emplace<Renderable>(e, Renderable{tier_color(tier, headHash)});
 
     // Universal mass ([ecs/components.h]): the table's authored kilograms.
@@ -682,25 +694,9 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         if (d2 <= nearR2 && live.withinNear < 0xFFu) ++live.withinNear;
     }
 
-    // **A fog mob with no WanderTarget is a STATUE.** `wander_step` iterates
-    // `view<Transform, Velocity, WanderTarget>` and `wander_init` runs only at floor
-    // load (main.cpp's finish_floor_nav), so a head created mid-samosbor would stand
-    // exactly where it appeared until something killed it — and it would still
-    // attack, so it would read as a turret rather than as a bug. Reusing wander_init
-    // rather than hand-rolling the roll is deliberate: it already skips the
-    // camera holder, skips anything that has a target, and refuses Immobile kinds a
-    // destination, and a second copy of that roll is how the two would drift.
-    //
-    // СЕМЯ ЗДЕСЬ БОЛЬШЕ НЕ ПОДМЕШИВАЕТСЯ (§88/F.2), и подмешивать его стало
-    // НЕЧЕМ: `wander_init` ноги не выдаёт вовсе — цель есть ЗОНА, а сколько их
-    // на этаже, знает только бейк. Ногу выбирает первый посещающий проход, и
-    // берёт её из `id ^ tick`, то есть разной у тел И у волн спавна — ровно то,
-    // за чем тик подмешивался к `kFogSalt` здесь.
-    //
-    // Cost: one O(entities on layer) pass plus one std::vector that holds only the
-    // heads just added, on the ticks that actually spawned — at most once every
-    // kFogSpawnPeriodTicks (2 s).
-    if (out.spawned != 0) out.wandering = wander_init(reg, layer);
+    // Ноги туманной голове дал сам `emplace_mob` — здесь стоял проход
+    // `wander_init` по всему слою после каждой волны, и он был ровно тем долгом,
+    // который консольный `spawn` забыл (2026-11-25).
     return out;
 }
 

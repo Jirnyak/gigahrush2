@@ -456,8 +456,9 @@ static void test_samosbor2_all() {
                 if (d < kThreatNearRadiusM - 0.01f) inAnnulus = false;
                 if (d > kThreatOuterRadiusM + 0.01f) inAnnulus = false;
                 // A fog mob without a WanderTarget is a statue: wander_step iterates
-                // view<Transform, Velocity, WanderTarget> and wander_init otherwise
-                // only runs at floor load. Immobile kinds are architecture and are
+                // view<Transform, Velocity, WanderTarget>. С 2026-11-25 ноги даёт
+                // сама дверь рождения `emplace_mob` (проход `wander_init` после
+                // волны снесён). Immobile kinds are architecture and are
                 // correctly refused a destination.
                 if (!has_flag(kMobTable[m.kind].aiFlags, AiFlag::Immobile) &&
                     !reg.all_of<WanderTarget>(e))
@@ -466,7 +467,6 @@ static void test_samosbor2_all() {
             CHECK(wholeMob);
             CHECK(inAnnulus);
             CHECK(steered);
-            CHECK(open.wandering >= open.spawned);
 
             // THE TERMINATION INVARIANT. Everything fog put on the floor is inside
             // the bubble the next census sweeps, so the budget cannot be fooled into

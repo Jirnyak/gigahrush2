@@ -205,6 +205,9 @@ RoomId pack_target_zone(std::uint8_t pack, std::uint64_t tick,
 // Give every mob and embodied NPC on `layer` a wander target. Call after a floor
 // is populated (embody + mob spawn); entities that already have a target keep it.
 // The player is skipped — it holds CameraTag and is steered by input.
+// МОБУ ОНА НИЧЕГО НЕ ДАЁТ с 2026-11-25: ноги моб получает при рождении в
+// `emplace_mob` ([game/mob_spawn.cpp]) — консольный `spawn` этот проход не звал,
+// и моб стоял статуей. Здесь остаются жители (их воплощение — свой путь).
 //
 // НОГА ЗАВОДИТСЯ ЛЕНИВО, И ЭТО СЛЕДСТВИЕ, А НЕ УПРОЩЕНИЕ. Зону цели нельзя
 // выкатить до бейка: сколько их на этаже, знает только `ZoneNav`, а бейк в

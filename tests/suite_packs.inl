@@ -370,8 +370,10 @@ static void test_packs_all() {
                       stack.layer(layer).gravity().regime, packZones);
         CHECK(packZones.built());
 
-        const std::uint32_t wandering = wander_init(reg, layer);
-        CHECK(wandering > 0);
+        // Ноги мобам дала дверь рождения `emplace_mob` (2026-11-25): проходу
+        // входа этажа мобам дать НЕЧЕГО. Ноль здесь — не пустой тест, а закон:
+        // долг, который платит рождение, второй раз не платится.
+        CHECK(wander_init(reg, layer) == 0);
 
         // wander_step resolves the camera holder's faction to decide whether monsters
         // consider it prey ([faction_relations.h]); this test has no camera holder at
@@ -379,7 +381,8 @@ static void test_packs_all() {
         NpcPool pool;
         pool.init();
 
-        // The pack id reached WanderTarget, and immobile kinds still get no target.
+        // The pack id reached WanderTarget AT BIRTH, and immobile kinds still get
+        // no target.
         for (auto e : reg.view<const MobRef>()) {
             const MobRef& m = reg.get<const MobRef>(e);
             const bool immobile =

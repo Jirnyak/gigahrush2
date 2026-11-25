@@ -2691,7 +2691,12 @@ if(GIGA_BUILD_TESTS)
         # S28.3, И1а) — шесть гравитаций × (голова над тазом, ноги под ним,
         # поперёк в силуэте, верх и перёд корня = оси кадра)
         # (`test_corpse_lays_out_in_its_frame`).
-        PASS_REGULAR_EXPRESSION "game_test: 221143 checks, 0 failures")
+        # 221143 -> 221146 (+3): ноги моба при рождении (сцена С7, консольный
+        # `spawn` давал статую) — консольные головы ходячие, вся таблица видов
+        # через `spawn_mob_at` в обе полярности (+4); снято поле
+        # `FogTickReport::wandering` вместе с проходом `wander_init` после
+        # туманной волны (−1) (`test_console_spawn_god_noclip`).
+        PASS_REGULAR_EXPRESSION "game_test: 221146 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
