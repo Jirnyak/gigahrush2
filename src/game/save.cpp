@@ -861,7 +861,8 @@ std::size_t spawn_debris_records(Registry& reg, LayerId layer, int floorNumber,
 }
 
 std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
-                                 const CorpseRecord* recs, std::size_t n) {
+                                 const CorpseRecord* recs, std::size_t n,
+                                 const GravityFrame& gf) {
     // Destroy-first is what makes this a REBUILD rather than an append: an F9
     // onto the currently resident floor still has last session's corpse
     // entities standing, and spawning records beside them would double every
@@ -905,7 +906,8 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         reg.emplace<PropFallMode>(e, PropFallMode::RagdollRoll);
         reg.emplace<DynamicBodyTag>(e);
         spawn_form_segments(reg, e, FormId::Humanoid, rec.half, Mass{}.kg,
-                            kFleshRestitution, kFleshFriction);
+                            kFleshRestitution, kFleshFriction, gf,
+                            vec3{0.0f, 0.0f, 0.0f});
         // Записанный силуэт — НЕПОДВИЖНАЯ ТОЧКА пересборки (v20/F, гейт
         // бит-в-бит), и держит её `Corpse::bodyHalf`, а не AABB корня: сборка
         // переписывает AABB корня габаритом таза ровно как при смерти, и

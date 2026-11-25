@@ -1,0 +1,67 @@
+#include "game/body_pose.h"
+
+#include <cmath>
+
+namespace giga::game {
+
+namespace {
+
+vec3 axis_unit(int axis, float sign) {
+    vec3 v{0.0f, 0.0f, 0.0f};
+    if (axis == 0) v.x = sign;
+    else if (axis == 1) v.y = sign;
+    else v.z = sign;
+    return v;
+}
+
+float axis_of(vec3 v, int axis) {
+    return axis == 0 ? v.x : (axis == 1 ? v.y : v.z);
+}
+
+} // namespace
+
+BodyFrame body_frame(const GravityFrame& g, vec3 look) {
+    BodyFrame f;
+    f.up = axis_unit(g.axis, static_cast<float>(g.upSign));
+    // Проекция взгляда на плоскость ходьбы: вертикальная доля взгляда (игрок
+    // смотрит под ноги) не наклоняет тело.
+    const vec3 flat = look - f.up * dot(look, f.up);
+    const float len = length(flat);
+    f.fwd = len > 1e-3f ? flat * (1.0f / len) : axis_unit(g.tanA, 1.0f);
+    f.left = cross(f.up, f.fwd);
+    return f;
+}
+
+quat body_frame_quat(const BodyFrame& f) {
+    return quat_from_basis(f.fwd, f.left, f.up);
+}
+
+BodyScale body_scale(const GravityFrame& g, vec3 bodyHalf) {
+    BodyScale s;
+    s.H = 2.0f * axis_of(bodyHalf, g.axis);
+    s.W = 2.0f * std::fmax(axis_of(bodyHalf, g.tanA),
+                           axis_of(bodyHalf, g.tanB));
+    return s;
+}
+
+std::uint16_t form_rest_pose(FormId form, BodyScale s, const BodyFrame& f,
+                             vec3 rootPos, PartPose* out) {
+    const FormDef& def = form_def(form);
+    const quat q = body_frame_quat(f);
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        PartPose& p = out[i];
+        p.pos = rootPos + f.fwd * (sd.ox * s.W) + f.left * (sd.oy * s.W) +
+                f.up * (sd.oz * s.H);
+        p.q = q;
+        if (sd.prim == FormPrim::Sphere) {
+            const float r = sd.sx * s.H;
+            p.half = vec3{r, r, r};
+        } else {
+            p.half = vec3{sd.sx * s.W, sd.sy * s.W, sd.sz * s.H};
+        }
+    }
+    return def.count;
+}
+
+} // namespace giga::game

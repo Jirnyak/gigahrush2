@@ -2687,7 +2687,11 @@ if(GIGA_BUILD_TESTS)
         # запись трупа несёт силуэт живого (`Corpse::bodyHalf`), а не AABB
         # корня-таза: смерть → сбор → пересборка → сбор, рост и запись
         # бит-в-бит (suite_saveload `corpse_keeps_its_height_across_a_revisit`).
-        PASS_REGULAR_EXPRESSION "game_test: 221113 checks, 0 failures")
+        # 221113 -> 221143 (+30): труп раскладывается в КАДРЕ тела (CANON
+        # S28.3, И1а) — шесть гравитаций × (голова над тазом, ноги под ним,
+        # поперёк в силуэте, верх и перёд корня = оси кадра)
+        # (`test_corpse_lays_out_in_its_frame`).
+        PASS_REGULAR_EXPRESSION "game_test: 221143 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

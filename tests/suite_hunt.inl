@@ -152,7 +152,7 @@ static void test_hunt_all() {
         CHECK(pool.alive() == aliveBefore);
 
         const std::size_t logBefore = bus.log().size();
-        CHECK(finalize_deaths(reg, pool, bus, t) == 1);
+        CHECK(finalize_deaths(reg, stack, pool, bus, t) == 1);
         // ...and only now. NpcPool::kill was reached, the slot was NOT reclaimed, and
         // exactly one NpcDied names the victim and the killer.
         CHECK(reg.all_of<Corpse>(body));
@@ -432,7 +432,7 @@ static void test_hunt_all() {
             physics_step(reg, stack, dt);
             mob_attack_step(reg, stack.layer(layer).grid(), pool, bus, layer, dt, t);
             projectile_step(reg, pool, bus, stack, layer, dt, t);
-            const std::uint32_t d = finalize_deaths(reg, pool, bus, t);
+            const std::uint32_t d = finalize_deaths(reg, stack, pool, bus, t);
             deaths += d;
             perMinute[static_cast<std::size_t>(t / kMinute)] += d;
             // The bus ring holds one drain cycle (4096) and the game drains it every

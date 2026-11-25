@@ -3259,7 +3259,8 @@ int main(int argc, char** argv) {
                 reg, stack.layer(nl), nl, ents.props.data(),
                 ents.props.size(), bus);
             game::spawn_corpse_records(reg, nl, floorNo, ents.corpses.data(),
-                                       ents.corpses.size());
+                                       ents.corpses.size(),
+                                       steer_frame_of(&stack.layer(nl).gravity()));
             game::spawn_pickup_records(reg, nl, ents.pickups.data(),
                                        ents.pickups.size());
             game::spawn_debris_records(reg, nl, floorNo, ents.debris.data(),
@@ -9232,7 +9233,7 @@ int main(int argc, char** argv) {
                                      static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
                 // (combat.h). Nothing else in the tree destroys a damaged entity.
-                deaths += game::finalize_deaths(reg, pool, bus, simTick,
+                deaths += game::finalize_deaths(reg, stack, pool, bus, simTick,
                                                 &noiseField, &g_deathCauses);
                 // ОТ ЧЕГО ГИБНЕТ ТОЛПА — накопительно, раз в 250 тиков и только
                 // когда счёт сдвинулся: тиковая строка утонула бы в логе, а

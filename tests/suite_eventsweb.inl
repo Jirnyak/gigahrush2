@@ -96,6 +96,8 @@ static void test_prop_detached_event() {
 }
 
 static void test_eventsweb_all() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     test_prop_detached_event();
     using namespace eventsweb;
 
@@ -140,7 +142,7 @@ static void test_eventsweb_all() {
         const DamageResult r =
             apply_damage(reg, pool, mob, 99, DamageChannel::Kinetic, entt::null);
         CHECK(r.lethal);
-        CHECK(finalize_deaths(reg, pool, bus, 77u) == 1u);
+        CHECK(finalize_deaths(reg, deathStack, pool, bus, 77u) == 1u);
         CHECK(bus.cycle_count(EventType::NpcDied) == 1);
         CHECK(bus.events()[0].b == static_cast<std::uint32_t>(MobKind::Zombie));
         CHECK(bus.events()[0].tick == 77u);

@@ -17,6 +17,7 @@
 #include "world/surface.h" // SurfaceFace — ответ примитива поверхностей (S10)
 #include "world/world.h"
 #include "world/level_stack.h"
+#include "world/gravity.h" // GravityFrame — кадр тела из частей (S28)
 
 
 namespace giga::game {
@@ -563,9 +564,15 @@ struct BodySegment {
 // (S11: масштабируется телом, а не назначается). Сегменты наследуют скорость
 // и тинт корня. `restitution`/`friction` — контактная пара материала тела
 // (плоть у трупа). Возвращает число созданных сущностей (сегменты + линки).
+//
+// Раскладка — поза покоя формы ([game/body_pose.h], CANON S28.3) в КАДРЕ
+// тела: `gf` — фрейм гравитации этажа (тот же, что у ходьбы,
+// `steer_frame_of`), `look` — взгляд тела (нулевой — перёд по оси `tanA`
+// фрейма). Мировых осей сборка не знает.
 std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
                                   vec3 bodyHalf, float totalKg,
-                                  float restitution, float friction);
+                                  float restitution, float friction,
+                                  const GravityFrame& gf, vec3 look);
 
 // Убрать сегменты и линки, чьи корни в списке (вызвать ДО destroy корней).
 void destroy_body_segments(Registry& reg, const std::vector<Entity>& roots);

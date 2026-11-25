@@ -232,7 +232,7 @@ void full_round_trip() {
     spawn_prop_records(reg2, w2, layer, ents2.props.data(), ents2.props.size(),
                        bus2);
     spawn_corpse_records(reg2, layer, floorNo, ents2.corpses.data(),
-                         ents2.corpses.size());
+                         ents2.corpses.size(), steer_frame_of(&w2.gravity()));
     spawn_pickup_records(reg2, layer, ents2.pickups.data(),
                          ents2.pickups.size());
     spawn_debris_records(reg2, layer, floorNo, ents2.debris.data(),

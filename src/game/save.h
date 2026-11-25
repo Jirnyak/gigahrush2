@@ -43,6 +43,8 @@
 // round-trip test never touches a disk.
 #pragma once
 
+#include "world/gravity.h" // GravityFrame — кадр пересобираемого трупа (S28)
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -839,8 +841,12 @@ bool save_read(const std::uint8_t* bytes, std::size_t n, SaveState& st,
 // AABB, darkened Renderable, the Corpse slots and the Interactable, exactly the
 // shape `finalize_deaths` leaves behind. No Mass and no Velocity: a recorded
 // corpse is at rest by definition. Returns how many were spawned.
+//
+// `gf` — фрейм гравитации этажа: труп собирается в кадре тела (CANON S28.3),
+// той же сборкой, что при смерти. Взгляда у записи нет — перёд по `tanA`.
 std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
-                                 const CorpseRecord* recs, std::size_t n);
+                                 const CorpseRecord* recs, std::size_t n,
+                                 const GravityFrame& gf);
 
 // v18: пересоздать сорванные пропы этажа из записей. Сначала УНИЧТОЖАЕТ живые
 // обломки слоя (F9 на тот же этаж иначе удвоил бы их), потом собирает тела

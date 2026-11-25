@@ -164,7 +164,9 @@ int main(int argc, char** argv) {
         reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
         game::spawn_form_segments(reg, root, game::FormId::Humanoid, half,
                                   70.0f, game::kFleshRestitution,
-                                  game::kFleshFriction);
+                                  game::kFleshFriction,
+                                  steer_frame_of(&w.gravity()),
+                                  vec3{1.0f, 0.0f, 0.0f});
     }
 
     // АГЕНТ ОБЯЗАТЕЛЕН, И ЭТО НЕ ДЕКОРАЦИЯ. Ранний выход «мир спит целиком»

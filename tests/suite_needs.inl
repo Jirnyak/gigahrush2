@@ -298,6 +298,8 @@ void warning_lead() {
 }
 
 void attrition() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     // The damage table, as a pure query. Additive, not exclusive.
     Needs n = full_clock();
     CHECK(needs_hp_rate(n) == 0.0f);
@@ -401,7 +403,7 @@ void attrition() {
     CHECK(rig.pool.hp(rig.id) == 0);
     CHECK(rig.reg.all_of<Dead>(rig.body));   // tagged, NOT destroyed yet
     CHECK(rig.pool.alive(rig.id));           // finalize_deaths owns that
-    CHECK(finalize_deaths(rig.reg, rig.pool, rig.bus, 7u) == 1);
+    CHECK(finalize_deaths(rig.reg, deathStack, rig.pool, rig.bus, 7u) == 1);
     CHECK(!rig.pool.alive(rig.id));
     CHECK(!rig.reg.valid(rig.body));
     CHECK(rig.bus.size() == 1);

@@ -25,6 +25,8 @@
 #include "game/npc_pool.h"
 
 static void test_deathcause_all() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     using namespace giga;
     using namespace giga::game;
 
@@ -109,7 +111,7 @@ static void test_deathcause_all() {
 
     DeathCauses causes{};
     const std::uint32_t finalized =
-        finalize_deaths(reg, pool, bus, 7u, nullptr, &causes);
+        finalize_deaths(reg, deathStack, pool, bus, 7u, nullptr, &causes);
     CHECK(finalized == 5u);
     const auto at = [](DeathCause c) { return static_cast<std::size_t>(c); };
     CHECK(causes.resident[at(DeathCause::Attrition)] == 1u);
@@ -127,5 +129,5 @@ static void test_deathcause_all() {
     CHECK(mobTotal == 1u);
     CHECK(resTotal == 4u);   // сумма счёта равна числу финализированных
     // Без счётчика дверь работает как прежде — параметр необязателен.
-    CHECK(finalize_deaths(reg, pool, bus, 8u) == 0u);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 8u) == 0u);
 }

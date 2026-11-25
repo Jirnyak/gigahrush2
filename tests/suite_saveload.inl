@@ -1019,7 +1019,8 @@ void floor_records_survive_a_restart() {
         reg, w2, layer, loaded.props.data(), loaded.props.size(), bus);
     CHECK(remade == static_cast<std::size_t>(made));
     const std::size_t bodies = spawn_corpse_records(
-        reg, layer, floorZ, loaded.corpses.data(), loaded.corpses.size());
+        reg, layer, floorZ, loaded.corpses.data(), loaded.corpses.size(),
+        steer_frame_of(&w2.gravity()));
     CHECK(bodies == 1u);
 
     // The contract, stated exactly: каждый восстановленный ящик несёт ровно
@@ -1091,7 +1092,8 @@ void floor_records_survive_a_restart() {
     CHECK(spawn_prop_records(reg, w2, layer, loaded.props.data(),
                              loaded.props.size(), bus) == remade);
     CHECK(spawn_corpse_records(reg, layer, floorZ, loaded.corpses.data(),
-                               loaded.corpses.size()) == 1u);
+                               loaded.corpses.size(),
+                               steer_frame_of(&w2.gravity())) == 1u);
     {
         std::size_t corpses = 0, crates = 0;
         for (auto e : reg.view<const Corpse>()) { (void)e; ++corpses; }
@@ -2558,6 +2560,8 @@ static void possession_refuses_remains_and_stale_slots() {
 // Мутация (прогнана): вернуть в сбор `rec.half = AABB корня` — красная
 // по росту и по силуэту записи.
 static void corpse_keeps_its_height_across_a_revisit() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     giga::Registry reg;
     giga::game::NpcPool pool;
     pool.init();
@@ -2570,7 +2574,7 @@ static void corpse_keeps_its_height_across_a_revisit() {
     const giga::vec3 living = reg.get<giga::AABB>(body).half;
     giga::game::apply_damage(reg, pool, body, 50,
                              giga::game::DamageChannel::Kinetic, entt::null);
-    CHECK(giga::game::finalize_deaths(reg, pool, bus, 7u) == 1u);
+    CHECK(giga::game::finalize_deaths(reg, deathStack, pool, bus, 7u) == 1u);
 
     // Рост трупа — размах его частей по вертикали сразу после сборки (до
     // физики): от низа самой низкой части до верха самой высокой.
@@ -2608,8 +2612,9 @@ static void corpse_keeps_its_height_across_a_revisit() {
 
     // ...и пересборка даёт труп того же роста, бит-в-бит (та же сборка из
     // той же записи силуэта, позиция корня та же).
-    CHECK(giga::game::spawn_corpse_records(reg, 0, 0, ents.corpses.data(),
-                                           ents.corpses.size()) == 1u);
+    CHECK(giga::game::spawn_corpse_records(
+              reg, 0, 0, ents.corpses.data(), ents.corpses.size(),
+              giga::steer_frame_of(&deathStack.layer(0).gravity())) == 1u);
     const float spanRevisit = corpse_span(reg);
     CHECK(spanRevisit == spanDeath);
 

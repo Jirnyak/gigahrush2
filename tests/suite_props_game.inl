@@ -648,6 +648,75 @@ static void test_anchor_validate_skips_solid_support() {
     }
 }
 
+// КАДР ТЕЛА (CANON S28.3, И1а эпика тел): труп раскладывается в кадре тела —
+// верх ПРОТИВ гравитации слоя, перёд по взгляду, — а не по мировым осям. До
+// этого сборка клала голову вдоль мировой +Z при любой гравитации. Мерим то,
+// что увидит глаз: самая «верхняя» часть лежит над корнем на долю роста
+// головы, самая «нижняя» — под ним на долю ног, ВДОЛЬ ОСИ ПРОТИВ ГРАВИТАЦИИ;
+// поперёк кадра ничто не вылезает за силуэт; оси корня — оси кадра.
+// Мутация «кадр = мировые оси» — красная на пяти гравитациях из шести.
+static void test_corpse_lays_out_in_its_frame() {
+    const GravityRegime regimes[6] = {
+        GravityRegime::NegX, GravityRegime::PosX, GravityRegime::NegY,
+        GravityRegime::PosY, GravityRegime::NegZ, GravityRegime::PosZ};
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    float ozMax = -1.0f, ozMin = 1.0f;
+    for (std::uint16_t i = 0; i < fd.count; ++i) {
+        ozMax = std::max(ozMax, game::kFormSegs[fd.first + i].oz);
+        ozMin = std::min(ozMin, game::kFormSegs[fd.first + i].oz);
+    }
+    for (const GravityRegime r : regimes) {
+        LevelStack stack;
+        const LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        w.gravity().regime = r;
+        const GravityFrame gf = steer_frame_of(&w.gravity());
+        const vec3 up = regime_up(r);
+        // Силуэт высок вдоль оси гравитации — так его положит воплощение в
+        // этом кадре; взгляд — вдоль второй касательной (не та ось, что по
+        // умолчанию).
+        vec3 half{0.4f, 0.4f, 0.4f};
+        if (gf.axis == 0) half.x = 0.9f;
+        else if (gf.axis == 1) half.y = 0.9f;
+        else half.z = 0.9f;
+        vec3 look{0.0f, 0.0f, 0.0f};
+        if (gf.tanB == 0) look.x = 1.0f;
+        else if (gf.tanB == 1) look.y = 1.0f;
+        else look.z = 1.0f;
+        const float H = 1.8f, W = 0.8f;
+
+        Registry reg;
+        const vec3 c{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+        Entity root = reg.create();
+        reg.emplace<Transform>(root, Transform{c, g});
+        reg.emplace<Velocity>(root);
+        reg.emplace<AABB>(root, AABB{half});
+        game::spawn_form_segments(reg, root, game::FormId::Humanoid, half,
+                                  70.0f, game::kFleshRestitution,
+                                  game::kFleshFriction, gf, look);
+        float upMax = -9.0f, upMin = 9.0f, sideMax = 0.0f;
+        auto take = [&](Entity e) {
+            const vec3 off = reg.get<Transform>(e).pos - c;
+            const float a = dot(off, up);
+            upMax = std::max(upMax, a);
+            upMin = std::min(upMin, a);
+            sideMax = std::max(sideMax, length(off - up * a));
+        };
+        take(root);
+        for (auto e : reg.view<game::BodySegment, Transform, RigidBody>())
+            take(e);
+        CHECK(std::fabs(upMax - ozMax * H) < 1e-3f); // голова над тазом
+        CHECK(std::fabs(upMin - ozMin * H) < 1e-3f); // ноги под ним
+        CHECK(sideMax <= 0.5f * W);                  // поперёк — в силуэте
+        const vec3 rootUp =
+            quat_rotate(reg.get<RigidBody>(root).q, vec3{0.0f, 0.0f, 1.0f});
+        const vec3 rootFwd =
+            quat_rotate(reg.get<RigidBody>(root).q, vec3{1.0f, 0.0f, 0.0f});
+        CHECK(length(rootUp - up) < 1e-4f);   // ось роста корня — верх кадра
+        CHECK(length(rootFwd - look) < 1e-4f); // перёд корня — взгляд
+    }
+}
+
 // Инкремент 8 рагдолл-эпика: труп — ГУМАНОИД из тел ядра. Корень = таз
 // (лут/сейв на нём), голова-грудь-ноги — сегменты со штангами-линками; тело
 // падает, складывается на пол СВЯЗНЫМ и засыпает; уборка забирает всё.
@@ -675,7 +744,9 @@ static void test_humanoid_segments_fall_and_cleanup() {
         game::spawn_form_segments(reg, root, game::FormId::Humanoid,
                                   vec3{0.4f, 0.4f, 0.9f}, 70.0f,
                                   game::kFleshRestitution,
-                                  game::kFleshFriction);
+                                  game::kFleshFriction,
+                                  steer_frame_of(&w.gravity()),
+                                  vec3{1.0f, 0.0f, 0.0f});
     // Форма — ДАННЫЕ: сколько тел и связей, решает data/prop_forms.csv, а не
     // это число. Строка формы без корня даёт сегмент И линк.
     const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
@@ -835,7 +906,9 @@ static void test_humanoid_reaches_sleep() {
     reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
     game::spawn_form_segments(reg, root, game::FormId::Humanoid,
                               vec3{0.4f, 0.4f, 0.9f}, 70.0f,
-                              game::kFleshRestitution, game::kFleshFriction);
+                              game::kFleshRestitution, game::kFleshFriction,
+                              steer_frame_of(&w.gravity()),
+                              vec3{1.0f, 0.0f, 0.0f});
 
     // До 20 секунд с ранним выходом: падение + оседание + порог сна (0.26 с).
     // С закрытым корнем §64 труп засыпает за 2.0 с — запас на порядок, и
@@ -939,7 +1012,9 @@ static void test_corpse_pile_reaches_sleep() {
         reg.emplace<Renderable>(root, Renderable{vec3{0.3f, 0.25f, 0.25f}});
         game::spawn_form_segments(reg, root, game::FormId::Humanoid, half,
                                   70.0f, game::kFleshRestitution,
-                                  game::kFleshFriction);
+                                  game::kFleshFriction,
+                                  steer_frame_of(&w.gravity()),
+                                  vec3{1.0f, 0.0f, 0.0f});
     }
 
     // АГЕНТ ОБЯЗАТЕЛЕН, И ЭТО НЕ ДЕКОРАЦИЯ. Ранний выход «мир спит целиком»
@@ -2152,6 +2227,7 @@ void test_props_game_all() {
     test_anchor_validate_skips_solid_support();
     test_detached_prop_is_rigid_body();
     test_humanoid_segments_fall_and_cleanup();
+    test_corpse_lays_out_in_its_frame();
     test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
     test_corpse_pile_reaches_sleep();

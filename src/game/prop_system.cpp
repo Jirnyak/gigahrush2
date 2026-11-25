@@ -1,5 +1,6 @@
 #include "game/prop_system.h"
 #include "ecs/components.h"
+#include "game/body_pose.h"       // поза покоя формы — раскладка трупа (S28)
 #include "game/combat.h"          // Charge/ChargeArmed — проп-заряд от урона
 #include "game/flicker.h"         // FlickerProfile — фазы щитка только у mains
 #include "game/room.h"            // room_at/declared — программа щитка из данных модуля
@@ -1746,7 +1747,8 @@ std::uint32_t collect_static_prop_mesh_instances(const Registry& reg, LayerId la
 
 std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
                                   vec3 bodyHalf, float totalKg,
-                                  float restitution, float friction) {
+                                  float restitution, float friction,
+                                  const GravityFrame& gf, vec3 look) {
     if (!reg.valid(root) || !reg.all_of<Transform>(root)) return 0;
     const FormDef& def = form_def(form);
     if (def.count == 0) return 0;
@@ -1761,45 +1763,40 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
                           ? reg.get<Renderable>(root).color
                           : vec3{0.5f, 0.5f, 0.5f};
 
-    // Доли строк — от габарита ЭТОГО тела (S11): ширина W задаёт поперечник,
-    // рост H — вертикаль. Одна строка обслуживает ребёнка и громилу.
-    const float W = bodyHalf.x * 2.0f;
-    const float H = bodyHalf.z * 2.0f;
-    auto seg_pos = [&](const FormSegDef& sd) {
-        return basePos + vec3{sd.ox * W, sd.oy * W, sd.oz * H};
+    // РАСКЛАДКА — ОДНА ФУНКЦИЯ ПОЗЫ ([game/body_pose.h], CANON S28.3): доли
+    // строк — от габарита ЭТОГО тела (S11) в КАДРЕ тела — верх против
+    // гравитации этажа, перёд по взгляду, — а не по мировым осям. Та же поза
+    // покоя, которую нарисует живое тело, — второй раскладки нет.
+    PartPose pose[kMaxFormSegs];
+    form_rest_pose(form, body_scale(gf, bodyHalf), body_frame(gf, look),
+                   basePos, pose);
+    auto attach = [&](Entity e, const FormSegDef& sd, const PartPose& pp,
+                      float kg) {
+        reg.emplace_or_replace<AABB>(e, AABB{pp.half});
+        if (sd.prim == FormPrim::Sphere)
+            rigid_attach_sphere(reg, e, pp.half.x, kg, restitution, friction);
+        else
+            rigid_attach_box(reg, e, pp.half, kg, restitution, friction);
+        reg.get<RigidBody>(e).q = pp.q;
     };
 
     // Сегмент 0 — САМ корень: на нём лут, интеракция и сейв-идентичность.
+    // Корень остаётся на месте живого тела (поза кладёт его в rootPos).
     Entity made[kMaxFormSegs];
-    const FormSegDef& rootSd = kFormSegs[def.first];
-    {
-        const vec3 half{rootSd.sx * W, rootSd.sy * W, rootSd.sz * H};
-        reg.emplace_or_replace<AABB>(root, AABB{half});
-        rigid_attach_box(reg, root, half, totalKg * rootSd.massFrac,
-                         restitution, friction);
-        made[0] = root;
-    }
+    attach(root, kFormSegs[def.first], pose[0],
+           totalKg * kFormSegs[def.first].massFrac);
+    made[0] = root;
 
     std::uint32_t n = 0;
     for (std::uint16_t i = 1; i < def.count; ++i) {
         const FormSegDef& sd = kFormSegs[def.first + i];
-        const vec3 pos = seg_pos(sd);
         Entity seg = reg.create();
-        reg.emplace<Transform>(seg, Transform{pos, layer});
+        reg.emplace<Transform>(seg, Transform{pose[i].pos, layer});
         reg.emplace<Velocity>(seg, Velocity{vel0});
         reg.emplace<Renderable>(seg, Renderable{tint});
         reg.emplace<DynamicBodyTag>(seg);
         reg.emplace<BodySegment>(seg, BodySegment{root});
-        const float kg = totalKg * sd.massFrac;
-        if (sd.prim == FormPrim::Sphere) {
-            const float r = sd.sx * H;
-            reg.emplace<AABB>(seg, AABB{vec3{r, r, r}});
-            rigid_attach_sphere(reg, seg, r, kg, restitution, friction);
-        } else {
-            const vec3 half{sd.sx * W, sd.sy * W, sd.sz * H};
-            reg.emplace<AABB>(seg, AABB{half});
-            rigid_attach_box(reg, seg, half, kg, restitution, friction);
-        }
+        attach(seg, sd, pose[i], totalKg * sd.massFrac);
         made[i] = seg;
         ++n;
 
@@ -1812,7 +1809,7 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
         jl.a = seg;
         jl.b = parent;
         jl.restLen = length(wrap_delta3(
-            pos, reg.get<Transform>(parent).pos, kWorldExtent));
+            pose[i].pos, reg.get<Transform>(parent).pos, kWorldExtent));
         jl.rope = sd.rope != 0;
         reg.emplace<JointLink>(link, jl);
         reg.emplace<BodySegment>(link, BodySegment{root});

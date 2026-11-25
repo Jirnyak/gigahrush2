@@ -397,6 +397,8 @@ static void test_rpg_random_build() {
 // passed its whole suite while nothing in src/ read it. The check is therefore not
 // "does award_xp work" but "does killing a monster reach award_xp at all".
 static void test_rpg_kill_awards_xp() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     Registry reg;
     NpcPool pool;
     pool.init();
@@ -420,7 +422,7 @@ static void test_rpg_kill_awards_xp() {
     reg.emplace<Dead>(mob, Dead{killer, 0});
 
     CHECK(reg.get<RpgStats>(killer).xp == 0);
-    const std::uint32_t finalized = finalize_deaths(reg, pool, bus, 1);
+    const std::uint32_t finalized = finalize_deaths(reg, deathStack, pool, bus, 1);
     CHECK(finalized == 1);
 
     // THE assertion: the kill reached award_xp.
@@ -437,7 +439,7 @@ static void test_rpg_kill_awards_xp() {
     reg.emplace<MobRef>(mob2, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 1,
                                      10, 10});
     reg.emplace<Dead>(mob2, Dead{killer, 0});
-    finalize_deaths(reg, pool, bus, 2);
+    finalize_deaths(reg, deathStack, pool, bus, 2);
 
     const RpgStats& after2 = reg.get<RpgStats>(killer);
     CHECK(after2.level == 2);
@@ -453,7 +455,7 @@ static void test_rpg_kill_awards_xp() {
     reg.emplace<MobRef>(mob3, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 1,
                                      10, 10});
     reg.emplace<Dead>(mob3, Dead{plainKiller, 0});
-    CHECK(finalize_deaths(reg, pool, bus, 3) == 1);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 3) == 1);
     CHECK(!reg.any_of<RpgStats>(plainKiller));
 
     // An unknown/invalid killer (entt::null — the shooter died mid-flight, which
@@ -463,7 +465,7 @@ static void test_rpg_kill_awards_xp() {
     reg.emplace<MobRef>(mob4, MobRef{static_cast<std::uint8_t>(MobKind::Sborka), 1,
                                      10, 10});
     reg.emplace<Dead>(mob4, Dead{entt::null, 0});
-    CHECK(finalize_deaths(reg, pool, bus, 4) == 1);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 4) == 1);
 
     // Level SCALES the award through the wiring: a level-5 Tvar is worth 94, not 50.
     const Entity killer2 = reg.create();
@@ -474,7 +476,7 @@ static void test_rpg_kill_awards_xp() {
     reg.emplace<MobRef>(mob5, MobRef{static_cast<std::uint8_t>(MobKind::Tvar), 5,
                                      10, 10});
     reg.emplace<Dead>(mob5, Dead{killer2, 0});
-    finalize_deaths(reg, pool, bus, 5);
+    finalize_deaths(reg, deathStack, pool, bus, 5);
     CHECK(reg.get<RpgStats>(killer2).xp == 94);
     CHECK(reg.get<RpgStats>(killer2).xp == xp_for_monster_kill(MobKind::Tvar, 5));
 }
@@ -803,6 +805,8 @@ static void test_rpg_possess_transfer() {
 // Body Y is lowered by 0.45f when the Corpse is built, so the overflow box must
 // share the post-flatten cell, not merely the pre-death one.
 static void test_death_spills_inventory_to_corpse_and_cell() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     Registry reg;
     NpcPool pool;
     pool.init();
@@ -842,7 +846,7 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
     reg.emplace<Container>(box, c);
 
     // No CorpseLootPending — pure inventory path.
-    const std::uint32_t n = finalize_deaths(reg, pool, bus, /*tick*/2);
+    const std::uint32_t n = finalize_deaths(reg, deathStack, pool, bus, /*tick*/2);
     CHECK(n == 1);
     CHECK(reg.all_of<Corpse>(mob));
     // C: труп несёт канонический 64-слотовый контейнер — ВСЯ сумка легла на

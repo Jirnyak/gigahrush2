@@ -340,6 +340,8 @@ static void test_rooms_seam_metres_to_cell() {
 // трупе. После каждого шага инкрементальный запас обязан совпасть с полным
 // пересчётом. Мутация «снять хук» на любом из пяти путей красит свою строку.
 static void test_rooms_supply_follows_every_transfer() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     using namespace giga::game;
     Registry reg;
     NpcPool pool;
@@ -399,7 +401,7 @@ static void test_rooms_supply_follows_every_transfer() {
     reg.emplace<NpcRef>(body, NpcRef{dead});
     reg.emplace<Dead>(body, Dead{entt::null, static_cast<std::uint8_t>(
                                                   kAttritionChannel)});
-    CHECK(finalize_deaths(reg, pool, bus, 5u) == 1u);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 5u) == 1u);
     CHECK(reg.all_of<Container>(body));
     CHECK(in_step());
 

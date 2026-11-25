@@ -357,7 +357,8 @@ DeathCause death_cause(const Registry& reg, Entity victim, const Dead& d) {
     return DeathCause::Unknown;
 }
 
-std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
+std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
+                              NpcPool& pool, EventBus& bus,
                               std::uint64_t tick, NoiseField* noise,
                               DeathCauses* causes) {
     // Collect before destroying: mutating while iterating a view invalidates it.
@@ -514,8 +515,19 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             {
                 const float kg =
                     reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg : Mass{}.kg;
+                // КАДР ТЕЛА (CANON S28.3): верх — фрейм гравитации слоя, тот
+                // же, что у ходьбы; перёд — последний взгляд тела. Слоя нет в
+                // стеке — фрейм «без гравитации» ([world/gravity.h] сам
+                // называет его ответом на «оси нет»).
+                const Transform* btr = reg.try_get<const Transform>(e);
+                const GravityFrame gf =
+                    (btr && stack.valid(btr->layer))
+                        ? steer_frame_of(&stack.layer(btr->layer).gravity())
+                        : regime_frame(GravityRegime::Zero);
+                const Look* lk = reg.try_get<const Look>(e);
                 spawn_form_segments(reg, e, FormId::Humanoid, bodyHalf, kg,
-                                    kFleshRestitution, kFleshFriction);
+                                    kFleshRestitution, kFleshFriction, gf,
+                                    lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f});
             }
             if (auto* rend = reg.try_get<Renderable>(e)) {
                 // Darken & desaturate tint to read as a cold fallen body

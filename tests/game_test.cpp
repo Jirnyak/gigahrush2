@@ -2158,6 +2158,8 @@ static void test_damage_reports_applied_not_raw() {
 // Defect 2 — apply_damage never destroys; finalize_deaths is the only place a
 // life ends, and the event is published while the victim can still be read.
 static void test_death_goes_through_one_finalizer() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     NpcPool pool;
     pool.init();
     Registry reg;
@@ -2184,7 +2186,7 @@ static void test_death_goes_through_one_finalizer() {
                                       entt::null);
     CHECK(!again.hit && again.applied == 0);
 
-    CHECK(finalize_deaths(reg, pool, bus, /*tick=*/7u) == 1);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, /*tick=*/7u) == 1);
     CHECK(reg.all_of<Corpse>(e));         // now it rests as a persistent corpse
     CHECK(!pool.alive(id));       // and the record is dead
     CHECK(pool.valid(id));        // but its id stays valid forever ([npcs.md])
@@ -2198,7 +2200,7 @@ static void test_death_goes_through_one_finalizer() {
         CHECK(ev.tick == 7u);
     }
     CHECK(died == 1);
-    CHECK(finalize_deaths(reg, pool, bus, 8u) == 0);   // idempotent
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 8u) == 0);   // idempotent
 }
 
 // Defect 3 — one cooldown decrement, for every mob, whether or not it can attack.
@@ -2398,6 +2400,8 @@ static void test_economy_bands_gate_by_depth() {
 // the player loots via loot_corpse_interact. The Dead tag still exists so the
 // entity cannot be culled before the loot hook runs.
 static void test_loot_drops_before_the_corpse_is_gone() {
+    LevelStack deathStack; // труп раскладывается в кадре слоя (CANON S28)
+    deathStack.push_layer();
     World w;
     generate_floor(w, 0, floor_spec(FloorKind::Residential), 5u);
     NpcPool pool;
@@ -2447,7 +2451,7 @@ static void test_loot_drops_before_the_corpse_is_gone() {
 
     // C: лут уже в каноническом Container; finalize даёт трупу идентичность
     // и физику RagdollRoll — перекладки pending→corpse больше нет.
-    CHECK(finalize_deaths(reg, pool, bus, 1u) == 1);
+    CHECK(finalize_deaths(reg, deathStack, pool, bus, 1u) == 1);
     CHECK(reg.valid(boss));
     CHECK(reg.all_of<Corpse>(boss));
     CHECK(reg.all_of<PropFallMode>(boss));
@@ -4225,7 +4229,7 @@ static void test_grenade() {
 
         // The event the contract ledger reads carries the same killer.
         bus.init();
-        finalize_deaths(reg, pool, bus, 999u);
+        finalize_deaths(reg, stack, pool, bus, 999u);
         int died = 0;
         for (std::size_t i = 0; i < bus.size(); ++i) {
             const Event& ev = bus.events()[i];
@@ -4274,7 +4278,7 @@ static void test_grenade() {
         CHECK(reg.get<Dead>(victim).killer == gunner);
         CHECK(reg.get<Dead>(victim).killer != me);   // §40: NOT the player's kill
         bus.init();
-        finalize_deaths(reg, pool, bus, 1000u);
+        finalize_deaths(reg, stack, pool, bus, 1000u);
         int monsterKills = 0;
         for (std::size_t i = 0; i < bus.size(); ++i) {
             const Event& ev = bus.events()[i];

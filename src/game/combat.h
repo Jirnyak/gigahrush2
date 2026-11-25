@@ -710,7 +710,11 @@ DamageResult apply_damage(Registry& reg, NpcPool& pool, Entity target,
 //
 // `causes` — необязательный счёт ПРИЧИН СМЕРТИ (ниже). Хвостовой и
 // необязательный по той же причине, что `noise`: места вызова не меняются.
-std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
+//
+// `stack` — мир слоёв: труп раскладывается в КАДРЕ тела (верх против
+// гравитации слоя, CANON S28.3), и спросить гравитацию можно только у мира.
+std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
+                              NpcPool& pool, EventBus& bus,
                               std::uint64_t tick, NoiseField* noise = nullptr,
                               struct DeathCauses* causes = nullptr);
 
