@@ -154,6 +154,7 @@ void full_round_trip() {
         Corpse corpse;
         corpse.mobKind = 4;
         corpse.searched = true;
+        corpse.bodyHalf = vec3{0.4f, 0.4f, 0.9f}; // силуэт живого (запись)
         reg.emplace<Corpse>(c, corpse);
         Container box{};
         box.inv.slots[2] = ItemSlot{static_cast<ItemId>(9), 3, 77};

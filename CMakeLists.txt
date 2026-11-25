@@ -2679,7 +2679,11 @@ if(GIGA_BUILD_TESTS)
         # ничего в начале, капли в окрестности, у сортира ноль (+2), жребий на
         # тик — 64 полных окна (+131), 256 сорванных на четверти (+258),
         # 16 окон двумя каденсами опроса (+34).
-        PASS_REGULAR_EXPRESSION "game_test: 221103 checks, 0 failures")
+        # 221103 -> 221113 (+10): труп-карлик (ревью плана тел 2026-11-25) —
+        # запись трупа несёт силуэт живого (`Corpse::bodyHalf`), а не AABB
+        # корня-таза: смерть → сбор → пересборка → сбор, рост и запись
+        # бит-в-бит (suite_saveload `corpse_keeps_its_height_across_a_revisit`).
+        PASS_REGULAR_EXPRESSION "game_test: 221113 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

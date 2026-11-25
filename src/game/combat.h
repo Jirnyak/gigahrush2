@@ -263,6 +263,12 @@ struct Corpse {
     std::uint32_t deathTick = 0;
     std::uint8_t mobKind = 0xFF;  // 0xFF for NPC record, or MobKind
     bool searched = false;
+    // СИЛУЭТ ЖИВОГО ТЕЛА (полугабарит), из которого собран труп. Не AABB
+    // корня: сборка формы ([prop_system.h] spawn_form_segments) переписывает
+    // AABB корня габаритом ТАЗА, и сейв, бравший AABB, при каждом перезаходе
+    // пересобирал труп из таза — рост 1.8 м становился 0.36 м. Пишет смерть
+    // (`finalize_deaths`) и восстановление; читает запись трупа в сейве.
+    vec3 bodyHalf{0.0f, 0.0f, 0.0f};
 };
 static_assert(std::is_trivially_copyable_v<Corpse>, "Corpse component must stay a pure POD struct");
 

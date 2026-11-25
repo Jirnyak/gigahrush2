@@ -26,6 +26,7 @@
 // byte-for-byte comparison there is exact and means what it says. `Needs` and
 // `Inventory` have no implicit padding — 8x4+1+3 and 64x4 — so those two ARE compared
 // with memcmp.
+#include <algorithm> // std::min/max — размах частей трупа
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -972,6 +973,7 @@ void floor_records_survive_a_restart() {
         reg.emplace<Renderable>(ce, Renderable{vec3{0.2f, 0.1f, 0.1f}});
         Corpse c;
         c.mobKind = 7;
+        c.bodyHalf = vec3{0.4f, 0.4f, 0.9f}; // силуэт живого — его несёт запись
         reg.emplace<Corpse>(ce, c);
         Container cb{};
         cb.inv.slots[0] = ItemSlot{40, 2, 200};
@@ -2545,6 +2547,82 @@ static void possession_refuses_remains_and_stale_slots() {
     CHECK(!giga::game::possessable(reg, pool, body));
 }
 
+// ТРУП-КАРЛИК (враждебное ревью плана тел, 2026-11-25). Мерим то, на что
+// жалуется глаз, — РОСТ пересобранного трупа, а не байты записи: прежний
+// гейт бит-в-бит был зелёным, потому что неподвижная точка у пересборки
+// была, только точкой карлика. Сборка формы переписывает AABB корня
+// габаритом таза, сейв брал AABB — и после первого же перезахода на этаж
+// труп 1.8 м пересобирался ростом 0.36 м. Путь — настоящий: смерть идёт
+// через `finalize_deaths`, а не через заготовку «как будто труп».
+//
+// Мутация (прогнана): вернуть в сбор `rec.half = AABB корня` — красная
+// по росту и по силуэту записи.
+static void corpse_keeps_its_height_across_a_revisit() {
+    giga::Registry reg;
+    giga::game::NpcPool pool;
+    pool.init();
+    giga::game::EventBus bus;
+    bus.init();
+    const giga::game::NpcId id = pool.spawn();
+    pool.hp(id) = 10;
+    pool.max_hp(id) = 10;
+    const giga::Entity body = giga::game::embody(reg, pool, id, 0);
+    const giga::vec3 living = reg.get<giga::AABB>(body).half;
+    giga::game::apply_damage(reg, pool, body, 50,
+                             giga::game::DamageChannel::Kinetic, entt::null);
+    CHECK(giga::game::finalize_deaths(reg, pool, bus, 7u) == 1u);
+
+    // Рост трупа — размах его частей по вертикали сразу после сборки (до
+    // физики): от низа самой низкой части до верха самой высокой.
+    auto corpse_span = [](giga::Registry& r) {
+        giga::Entity root = entt::null;
+        for (auto e : r.view<const giga::game::Corpse>()) root = e;
+        float lo = 1e9f, hi = -1e9f;
+        auto take = [&](giga::Entity e) {
+            const float z = r.get<const giga::Transform>(e).pos.z;
+            const float h = r.get<const giga::AABB>(e).half.z;
+            lo = std::min(lo, z - h);
+            hi = std::max(hi, z + h);
+        };
+        take(root);
+        for (auto e : r.view<const giga::game::BodySegment,
+                             const giga::Transform, const giga::AABB>())
+            if (r.get<const giga::game::BodySegment>(e).root == root) take(e);
+        return hi - lo;
+    };
+    const float spanDeath = corpse_span(reg);
+    CHECK(spanDeath > 1.5f * living.z); // тело, а не таз
+    CHECK(reg.view<const giga::game::Corpse>().size() == 1u);
+    for (auto e : reg.view<const giga::game::Corpse>()) {
+        const giga::vec3 bh = reg.get<const giga::game::Corpse>(e).bodyHalf;
+        CHECK(bh.x == living.x && bh.y == living.y && bh.z == living.z);
+    }
+
+    // Уход с этажа и возвращение: запись несёт силуэт ЖИВОГО...
+    giga::game::FloorEntityState ents;
+    giga::game::gather_floor_entities(reg, 0, 0, ents);
+    CHECK(ents.corpses.size() == 1u);
+    if (ents.corpses.empty()) return;
+    const giga::vec3 rh = ents.corpses[0].half;
+    CHECK(rh.x == living.x && rh.y == living.y && rh.z == living.z);
+
+    // ...и пересборка даёт труп того же роста, бит-в-бит (та же сборка из
+    // той же записи силуэта, позиция корня та же).
+    CHECK(giga::game::spawn_corpse_records(reg, 0, 0, ents.corpses.data(),
+                                           ents.corpses.size()) == 1u);
+    const float spanRevisit = corpse_span(reg);
+    CHECK(spanRevisit == spanDeath);
+
+    // Второй круг — неподвижная точка: запись после пересборки та же.
+    giga::game::FloorEntityState again;
+    giga::game::gather_floor_entities(reg, 0, 0, again);
+    CHECK(again.corpses.size() == 1u);
+    if (!again.corpses.empty()) {
+        const giga::vec3 ah = again.corpses[0].half;
+        CHECK(ah.x == rh.x && ah.y == rh.y && ah.z == rh.z);
+    }
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
@@ -2562,6 +2640,7 @@ static void test_saveload_all() {
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
     saveload_test::floor_records_survive_a_restart();
+    saveload_test::corpse_keeps_its_height_across_a_revisit();
     saveload_test::ledger_is_pinned();
     saveload_test::cell_conventions();
     saveload_test::arrival_cell_is_often_a_wall();

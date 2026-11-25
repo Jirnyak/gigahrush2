@@ -506,13 +506,15 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             // сейв-идентичность). Габариты и массы выведены из тела; масса
             // честная (Mass, 70 кг дефолт — тот же фолбэк, что у драга).
             // SelfIntegrating выводит мёртвого из свепт-AABB пути агентов.
-            {
-                const vec3 half = reg.all_of<AABB>(e)
+            // Силуэт живого берётся ДО сборки: она переписывает AABB корня
+            // габаритом таза, а запись трупа обязана нести рост тела.
+            const vec3 bodyHalf = reg.all_of<AABB>(e)
                                       ? reg.get<AABB>(e).half
                                       : vec3{0.4f, 0.4f, 0.9f};
+            {
                 const float kg =
                     reg.all_of<Mass>(e) ? reg.get<Mass>(e).kg : Mass{}.kg;
-                spawn_form_segments(reg, e, FormId::Humanoid, half, kg,
+                spawn_form_segments(reg, e, FormId::Humanoid, bodyHalf, kg,
                                     kFleshRestitution, kFleshFriction);
             }
             if (auto* rend = reg.try_get<Renderable>(e)) {
@@ -525,6 +527,7 @@ std::uint32_t finalize_deaths(Registry& reg, NpcPool& pool, EventBus& bus,
             Corpse corpse;
             corpse.mobKind = static_cast<std::uint8_t>(kind);
             corpse.deathTick = static_cast<std::uint32_t>(tick);
+            corpse.bodyHalf = bodyHalf;
             if (!reg.all_of<Container>(e)) reg.emplace<Container>(e);
             Container& lootBox = reg.get<Container>(e);
 

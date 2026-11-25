@@ -892,6 +892,7 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         Corpse c;
         c.mobKind = rec.mobKind;
         c.searched = rec.searched != 0;
+        c.bodyHalf = rec.half;
         reg.emplace<Corpse>(e, c);
         Container box{};
         box.inv = rec.inv;
@@ -906,11 +907,11 @@ std::size_t spawn_corpse_records(Registry& reg, LayerId layer, int floorNumber,
         spawn_form_segments(reg, e, FormId::Humanoid, rec.half, Mass{}.kg,
                             kFleshRestitution, kFleshFriction);
         // Записанный силуэт — НЕПОДВИЖНАЯ ТОЧКА пересборки (v20/F, гейт
-        // бит-в-бит): spawn_form_segments перезаписывает корневой AABB долей
-        // rootSd от габарита, и цикл «gather → rebuild» усушал труп ×0.9 на
-        // каждом ревизите (живой дрейф v15). Запись — закон, корень получает
-        // её обратно; сегменты честно выведены из неё же.
-        reg.emplace_or_replace<AABB>(e, AABB{rec.half});
+        // бит-в-бит), и держит её `Corpse::bodyHalf`, а не AABB корня: сборка
+        // переписывает AABB корня габаритом таза ровно как при смерти, и
+        // корень после загрузки обязан быть тем же, что после смерти. Прежняя
+        // форма возвращала корню весь силуэт и писала в запись габарит таза —
+        // неподвижная точка была, но точкой КАРЛИКА (рост 1.8 → 0.36 м).
         // The same reach constant finalize_deaths uses; a respawned body must be
         // findable by the same interaction that found it live. [jirnyak.md] §18
         // `active` ВЫВОДИТСЯ, как гасил живой путь ([loot.cpp]): обысканный
@@ -983,7 +984,9 @@ std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
         rec.pos = t.pos;
         if (const Renderable* rr = reg.try_get<Renderable>(e))
             rec.colour = rr->color;
-        if (const AABB* bb = reg.try_get<AABB>(e)) rec.half = bb->half;
+        // Силуэт ЖИВОГО тела, а не AABB корня: тот — габарит таза после
+        // сборки формы, и пересборка из него давала труп-карлик (Corpse).
+        rec.half = c.bodyHalf;
         rec.mobKind = c.mobKind;
         rec.searched = c.searched ? 1 : 0;
         if (const Container* box = reg.try_get<const Container>(e))
