@@ -343,6 +343,43 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         }
         // Кратчайший вектор ТОРА от a к b — линк через шов не рвётся.
         const vec3 d = wrap_delta3(pa, pb, kWorldExtent);
+
+        // ШАРНИР «ТОЧКА В ТОЧКУ» (CANON S28): нулевая длина покоя значит,
+        // что точки якорей обязаны СОВПАСТЬ — сустав тела из частей (плечо,
+        // бедро, шея). Связь расстояния тут вырождена: направление d/|d| при
+        // совпадении не определено, и прежний путь выходил при dist < 0.1 мм,
+        // а поперечную скорость внутри подшага не держал ничем — сустав был
+        // резиновым. Точка — ТРИ связи, по одной на ось мира, тем же
+        // импульсом и той же подтяжкой Баумгарта; оси равноправны (S1).
+        // Верёвка здесь смысла не имеет: тянуть к совпадению и толкать от
+        // него — одно и то же.
+        if (jl.restLen <= 0.0f) {
+            const vec3 axes[3] = {vec3{1.0f, 0.0f, 0.0f},
+                                  vec3{0.0f, 1.0f, 0.0f},
+                                  vec3{0.0f, 0.0f, 1.0f}};
+            for (const vec3& n : axes) {
+                const vec3 vpA = va.v + cross(ra.w, rcA);
+                const vec3 vpB = rbB ? vb->v + cross(rbB->w, rcB)
+                                     : vec3{0.0f, 0.0f, 0.0f};
+                const float vRel = dot(vpB - vpA, n);
+                const vec3 rxA = cross(rcA, n);
+                float k = imA + iiA * dot(rxA, rxA);
+                if (rbB) {
+                    const vec3 rxB = cross(rcB, n);
+                    k += imB + iiB * dot(rxB, rxB);
+                }
+                if (k < 1e-9f) continue; // обе стороны кинематичны
+                const float j = -(vRel + kJointBias * dot(d, n) / h) / k;
+                va.v += n * (-j * imA);
+                ra.w += cross(rcA, n * (-j)) * iiA;
+                if (rbB) {
+                    vb->v += n * (j * imB);
+                    rbB->w += cross(rcB, n * j) * iiB;
+                }
+            }
+            return;
+        }
+
         const float dist = length(d);
         if (dist < 1e-4f) return;
         const vec3 dir = d * (1.0f / dist);

@@ -280,7 +280,8 @@ struct JointLink {
     Entity b = entt::null;            // entt::null = мировой якорь
     vec3 anchorA{0.0f, 0.0f, 0.0f};   // фрейм тела a
     vec3 anchorB{0.0f, 0.0f, 0.0f};   // фрейм тела b, либо мировая точка
-    float restLen = 0.0f;             // покойная длина, м
+    float restLen = 0.0f;             // покойная длина, м; 0 = ШАРНИР —
+                                      // точки якорей совпадают (CANON S28)
     bool rope = false;                // true: только тянет
 };
 

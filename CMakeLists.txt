@@ -998,7 +998,11 @@ if(GIGA_BUILD_TESTS)
         # пин-монетка на квантовании хуже отсутствия пина), три долга
         # коммутации (карв/агент/Velocity), гистерезис. 115 исполнений =
         # 12+55+18+14+16; дельта по ИСПОЛНЕНИЯМ, сошлась с прогоном точно.
-        PASS_REGULAR_EXPRESSION "15915/15915 checks passed"
+        # 15915 + 160 = 16075 на 2026-11-25 (CANON S28, тело из частей):
+        # `quat_from_basis` — 4 ветви Шеппарда + 6 гравитаций × 8 взглядов,
+        # по 3 оси (12 + 144 = 156); шарнир «точка в точку» с рычагом —
+        # маятник (3) и рывок поперёк сустава (1). Дельта по исполнениям.
+        PASS_REGULAR_EXPRESSION "16075/16075 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically

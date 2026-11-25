@@ -489,6 +489,98 @@ static void test_rigid_chain_hangs_and_cuts() {
     CHECK(stillConnected);
 }
 
+// ШАРНИР «ТОЧКА В ТОЧКУ» С РЫЧАГОМ (CANON S28, ревью плана тел 2026-11-25).
+// Сустав тела из частей — связь нулевой длины между точками якорей, и якорь
+// НЕ в центре тела: момент идёт через плечо. До этого теста ветку рычага
+// (`quat_rotate(q, anchorA)` + угловой импульс) не проходил никто — все
+// живые связи цеплялись центрами. Маятник: рука-бокс висит концом на мировой
+// точке и стартует горизонтально. Мерим то, что видно глазу: конец руки не
+// отходит от точки подвеса, длина рычага держится, и рука проходит низ.
+static void test_rigid_point_joint_holds_a_lever() {
+    LevelStack stack;
+    LayerId g = stack.push_layer();
+    Registry reg;
+    const vec3 pivot{10.5f * kCellSize, 10.5f * kCellSize, 20.0f};
+    const vec3 half{0.32f, 0.06f, 0.06f}; // рука 0.64 м, как у 7-частного тела
+    Entity arm = reg.create();
+    reg.emplace<Transform>(arm, Transform{pivot + vec3{half.x, 0.0f, 0.0f}, g});
+    reg.emplace<Velocity>(arm);
+    rigid_attach_box(reg, arm, half, 4.2f, 0.05f, 0.8f);
+    Entity link = reg.create();
+    JointLink jl;
+    jl.a = arm;
+    jl.b = entt::null;
+    jl.anchorA = vec3{-half.x, 0.0f, 0.0f}; // конец руки — «плечо»
+    jl.anchorB = pivot;
+    jl.restLen = 0.0f;
+    reg.emplace<JointLink>(link, jl);
+
+    float maxGap = 0.0f, maxLeverErr = 0.0f;
+    float minZ = pivot.z;
+    for (int i = 0; i < 3 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        const Transform& t = reg.get<Transform>(arm);
+        const RigidBody& rb = reg.get<RigidBody>(arm);
+        const vec3 end = t.pos + quat_rotate(rb.q, jl.anchorA);
+        maxGap = std::fmax(maxGap, length(wrap_delta3(end, pivot,
+                                                      kWorldExtent)));
+        const float lever =
+            length(wrap_delta3(t.pos, pivot, kWorldExtent));
+        maxLeverErr = std::fmax(maxLeverErr, std::fabs(lever - half.x));
+        minZ = std::fmin(minZ, t.pos.z);
+    }
+    std::printf("[sustav] маятник 3 с: зазор сустава макс %.4f м, ошибка "
+                "рычага макс %.4f м, низ центра %.3f м под подвесом\n",
+                maxGap, maxLeverErr, pivot.z - minZ);
+    CHECK(maxGap < 0.01f);        // сустав держит: ≤ 1 см на размахе
+    CHECK(maxLeverErr < 0.01f);   // рука висит концом, а не центром
+    CHECK(pivot.z - minZ > 0.9f * half.x); // прошла низ — момент через плечо
+
+    // УДАР ПОПЕРЁК СУСТАВА: торс и рука сцеплены концами, руке дан рывок
+    // поперёк линии сустава. Мерим зазор сустава всю секунду полёта.
+    Registry r2;
+    const vec3 c0{30.5f * kCellSize, 10.5f * kCellSize, 40.0f};
+    const vec3 tHalf{0.11f, 0.19f, 0.25f};
+    Entity torso = r2.create();
+    r2.emplace<Transform>(torso, Transform{c0, g});
+    r2.emplace<Velocity>(torso);
+    rigid_attach_box(r2, torso, tHalf, 22.0f, 0.05f, 0.8f);
+    const vec3 shoulder = c0 + vec3{0.0f, tHalf.y + 0.07f, tHalf.z - 0.04f};
+    const vec3 aHalf{0.06f, 0.06f, 0.32f};
+    Entity arm2 = r2.create();
+    r2.emplace<Transform>(arm2, Transform{shoulder - vec3{0.0f, 0.0f, aHalf.z}, g});
+    r2.emplace<Velocity>(arm2, Velocity{vec3{6.0f, 0.0f, 0.0f}});
+    rigid_attach_box(r2, arm2, aHalf, 4.2f, 0.05f, 0.8f);
+    Entity l2 = r2.create();
+    JointLink j2;
+    j2.a = arm2;
+    j2.b = torso;
+    j2.anchorA = vec3{0.0f, 0.0f, aHalf.z};
+    j2.anchorB = shoulder - c0;
+    j2.restLen = 0.0f;
+    r2.emplace<JointLink>(l2, j2);
+    float maxGap2 = 0.0f;
+    for (int i = 0; i < kSimHz; ++i) {
+        rigid_body_step(r2, stack, kSimDt);
+        const vec3 pa = r2.get<Transform>(arm2).pos +
+                        quat_rotate(r2.get<RigidBody>(arm2).q, j2.anchorA);
+        const vec3 pb = r2.get<Transform>(torso).pos +
+                        quat_rotate(r2.get<RigidBody>(torso).q, j2.anchorB);
+        const float gap = length(wrap_delta3(pa, pb, kWorldExtent));
+        if (i >= 10) maxGap2 = std::fmax(maxGap2, gap);
+    }
+    std::printf("[sustav] рывок 6 м/с поперёк: зазор сустава после 10 тиков "
+                "макс %.4f м\n",
+                maxGap2);
+    // Первый тик одинаков у любой формы (интегрирование раньше связей:
+    // v·h = 19 мм), разница — в установившемся. Замер 2026-11-25: точка
+    // тремя осями 3.9 мм, связь расстояния нулевой длины (прежний путь)
+    // 8.2 мм — она держит одно направление d/|d| за подшаг, а у совпавших
+    // точек направления нет вовсе. Порог между ними; мутация «ветки точки
+    // нет» — красная, маятник выше её не различает (оба 1.4 мм).
+    CHECK(maxGap2 < 0.006f);
+}
+
 // СТИКЦИЯ (§64): линк-цепь, УПАВШАЯ на пол, обязана ДОСТИЧЬ сна. До
 // демпфера трения покоя это было невозможно по построению: суставы
 // впрыскивают микро-энергию 16 раз за тик, стока в контакте не было —
@@ -1261,6 +1353,45 @@ static void test_nav_subvoxel_wall() {
 // gravity-derived up, "looking along gravity" is the COMMON case, not an exotic
 // one, so this is asserted as the property that actually broke: the three
 // rotation rows must be unit-length and mutually perpendicular.
+// CANON S28: многочастное тело раскладывается в СВОЁМ кадре (низ — из
+// гравитации, перёд — из взгляда), а не по мировым осям. Поворот из трёх
+// осей обязан вернуть эти оси — на всех четырёх ветвях Шеппарда (след > 0 и
+// по ветви на каждую доминирующую диагональ), иначе часть тела ляжет не туда
+// только при одной из шести гравитаций.
+static void test_quat_from_basis() {
+    auto check_frame = [](vec3 x, vec3 y, vec3 z) {
+        const quat q = quat_from_basis(x, y, z);
+        const vec3 rx = quat_rotate(q, vec3{1, 0, 0});
+        const vec3 ry = quat_rotate(q, vec3{0, 1, 0});
+        const vec3 rz = quat_rotate(q, vec3{0, 0, 1});
+        CHECK_NEAR(length(rx - x), 0.0f, 1e-4f);
+        CHECK_NEAR(length(ry - y), 0.0f, 1e-4f);
+        CHECK_NEAR(length(rz - z), 0.0f, 1e-4f);
+    };
+    // Тождество — ветвь «след > 0».
+    check_frame({1, 0, 0}, {0, 1, 0}, {0, 0, 1});
+    // Пол-оборота вокруг каждой оси: след −1, доминирует одна диагональ —
+    // по ветви на каждую.
+    check_frame({1, 0, 0}, {0, -1, 0}, {0, 0, -1});
+    check_frame({-1, 0, 0}, {0, 1, 0}, {0, 0, -1});
+    check_frame({-1, 0, 0}, {0, -1, 0}, {0, 0, 1});
+    // Шесть гравитаций: «верх» по каждой полуоси, перёд — по касательной.
+    const vec3 ups[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                         {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (const vec3& up : ups) {
+        const vec3 ref = std::fabs(up.z) > 0.5f ? vec3{1, 0, 0}
+                                                : vec3{0, 0, 1};
+        // Взгляд под произвольным углом в касательной плоскости.
+        for (int k = 0; k < 8; ++k) {
+            const float a = 0.785398f * static_cast<float>(k) + 0.1f;
+            const vec3 t1 = ref;
+            const vec3 t2 = cross(up, ref);
+            const vec3 fwd = t1 * std::cos(a) + t2 * std::sin(a);
+            check_frame(fwd, cross(up, fwd), up);
+        }
+    }
+}
+
 static void test_mat4_lookAt() {
     // The rotation rows of the column-major view matrix: right (s), up (u) and
     // -forward. Read as rows because the matrix is stored column-major for GLSL.
@@ -1439,6 +1570,7 @@ int main() {
     test_los();
     test_nearest_image();
     test_mat4_lookAt();
+    test_quat_from_basis();
     test_submask();
     test_grid_toroidal();
     test_fields();
@@ -1450,6 +1582,7 @@ int main() {
     test_rigid_box_lies_flat();
     test_rigid_chain_hangs_and_cuts();
     test_rigid_chain_sleeps_on_floor();
+    test_rigid_point_joint_holds_a_lever();
     test_rigid_ball_ball_wakes_and_stacks();
     test_rigid_prop_hits_agent_and_agent_kicks();
     test_rigid_material_pair_bounce();

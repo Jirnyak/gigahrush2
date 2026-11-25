@@ -72,6 +72,31 @@ inline vec3 quat_rotate(quat q, vec3 v) {
     return v + t * q.w + cross(u, t);
 }
 
+// Orientation whose body axes x/y/z land on the given world axes — the
+// columns of a rotation matrix. The caller owns orthonormality (a frame built
+// from gravity "up" and a facing projected onto its tangent plane); the
+// branch on the largest diagonal term is Shepperd's, so no axis set divides
+// by a near-zero trace. CANON S28: a multi-part body is laid out in ITS
+// frame, never in world axes.
+inline quat quat_from_basis(vec3 x, vec3 y, vec3 z) {
+    const float tr = x.x + y.y + z.z;
+    quat q;
+    if (tr > 0.0f) {
+        const float s = std::sqrt(tr + 1.0f) * 2.0f;
+        q = {(y.z - z.y) / s, (z.x - x.z) / s, (x.y - y.x) / s, 0.25f * s};
+    } else if (x.x > y.y && x.x > z.z) {
+        const float s = std::sqrt(1.0f + x.x - y.y - z.z) * 2.0f;
+        q = {0.25f * s, (y.x + x.y) / s, (z.x + x.z) / s, (y.z - z.y) / s};
+    } else if (y.y > z.z) {
+        const float s = std::sqrt(1.0f + y.y - x.x - z.z) * 2.0f;
+        q = {(y.x + x.y) / s, 0.25f * s, (z.y + y.z) / s, (z.x - x.z) / s};
+    } else {
+        const float s = std::sqrt(1.0f + z.z - x.x - y.y) * 2.0f;
+        q = {(z.x + x.z) / s, (z.y + y.z) / s, 0.25f * s, (x.y - y.x) / s};
+    }
+    return quat_normalize(q);
+}
+
 // Advance orientation by a world-frame angular velocity w (rad/s) over dt:
 // dq/dt = 0.5 * quat(w, 0) * q, one explicit step, then renormalize (the
 // renormalize is what keeps the explicit step stable at sim rates).
