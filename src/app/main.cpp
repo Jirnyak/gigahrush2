@@ -7905,6 +7905,10 @@ int main(int argc, char** argv) {
                 game::slow_step(reg, activeLayer, kSimDt);
                 physics_step(reg, stack, kSimDt);
                 prof_add(kProfPhysics, profPhysT0);
+                // ОДОМЕТР НОГ (CANON S28.3, И3) — сразу после физики: опора
+                // (`grounded`) и скорость этого тика уже окончательны. Фазу шага
+                // из него читает поза тела раз на кадр.
+                game::gait_step(reg, stack, activeLayer, kSimDt);
                 // Рагдолл-ядро: импульсный твердотел (RigidBody +
                 // SelfIntegrating — physics_step такие тела пропускает).
                 // До impact_damage_step, чтобы его Impact-репорты попали в тот

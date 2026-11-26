@@ -182,11 +182,11 @@ set(GIGA_CSV_COLUMNS
     # Разобран тем же коммитом, что получил роли и суставы (план тел: «под
     # гейт csv_columns»). Читатели — `form_rest_pose`/`form_part_joint`
     # ([game/body_pose.cpp]) и `spawn_form_segments` ([game/prop_system.cpp]),
-    # оба на живом пути смерти тела. Роль пока без читателя — её прочтёт
-    # водитель позы живого тела (И2), и тогда строка переедет в LIVE.
+    # оба на живом пути смерти тела. Роль ожила с походкой (И3а, 2026-11-26):
+    # её читают `gait_swing_max` и `form_gait_pose` — кто машет, решает роль.
     "prop_forms.csv:form:GEN:ключ формы — по нему кодоген группирует строки и делает FormId"
     "prop_forms.csv:seg:GEN:ключ сегмента — по нему генератор разрешает ссылку parent, в таблицу едет диагностическим слагом"
-    "prop_forms.csv:role:WRITEONLY:.partRole"
+    "prop_forms.csv:role:LIVE:.partRole"
     "prop_forms.csv:parent:LIVE:.parent"
     "prop_forms.csv:prim:LIVE:.prim"
     "prop_forms.csv:ox:LIVE:.ox"

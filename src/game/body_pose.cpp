@@ -3,8 +3,10 @@
 #include <cmath>
 
 #include "ecs/components.h"
-#include "game/combat.h"  // Corpse — мёртвым позу не пишут
-#include "game/look.h"    // Look — перёд тела
+#include "game/combat.h"       // Corpse — мёртвым позу не пишут
+#include "game/encumbrance.h"  // kStepStrideOfHeight — длина шага от роста
+#include "game/guide.h"        // kWalkSpeedMps, steer_tangent — плоскость ходьбы
+#include "game/look.h"         // Look — перёд тела
 
 namespace giga::game {
 
@@ -91,6 +93,81 @@ PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg) {
     return out;
 }
 
+float gait_swing_max(FormId form) {
+    const FormDef& def = form_def(form);
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        if (sd.partRole != FormRole::Leg) continue;
+        // Длина ноги — от сустава до подошвы: полный габарит части вдоль
+        // роста (сустав стоит на её верхней грани — закон силуэта таблицы).
+        const float leg = 2.0f * sd.sz;
+        const float half = 0.5f * kStepStrideOfHeight;
+        if (leg <= half) return 0.0f;
+        return std::asin(half / leg);
+    }
+    return 0.0f;
+}
+
+std::uint16_t form_gait_pose(FormId form, BodyScale s, const BodyFrame& f,
+                             vec3 rootPos, const GaitState& g, PartPose* out) {
+    const FormDef& def = form_def(form);
+    const quat qBody = body_frame_quat(f);
+    const float swing = g.amp * gait_swing_max(form) *
+                        std::sin(6.2831853f * g.phase);
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        PartPose& p = out[i];
+        if (sd.prim == FormPrim::Sphere) {
+            const float r = sd.sx * s.H;
+            p.half = vec3{r, r, r};
+        } else {
+            p.half = vec3{sd.sx * s.W, sd.sy * s.W, sd.sz * s.H};
+        }
+        if (sd.parent == kFormNoParent) {
+            p.q = qBody;
+            p.pos = rootPos + f.fwd * (sd.ox * s.W) + f.left * (sd.oy * s.W) +
+                    f.up * (sd.oz * s.H);
+            continue;
+        }
+        // Сторона — знак сустава поперёк: левая сторона кадра машет «+».
+        const float side = sd.jy > 0.0f ? 1.0f : (sd.jy < 0.0f ? -1.0f : 0.0f);
+        float a = 0.0f;
+        if (sd.partRole == FormRole::Leg) a = side * swing;
+        else if (sd.partRole == FormRole::Arm) a = -side * swing;
+        // Поворот вокруг оси «лево» (y части): ось части в покое совпадает с
+        // осью кадра, поэтому кватернион строится в осях родителя.
+        const quat local{0.0f, std::sin(0.5f * a), 0.0f, std::cos(0.5f * a)};
+        const PartPose& par = out[sd.parent];
+        const PartJoint pj = form_part_joint(form, s, i);
+        p.q = quat_normalize(quat_mul(par.q, local));
+        const vec3 joint = par.pos + quat_rotate(par.q, pj.inParent);
+        p.pos = joint - quat_rotate(p.q, pj.inPart);
+    }
+    return def.count;
+}
+
+std::uint32_t gait_step(Registry& reg, const LevelStack& stack, LayerId layer,
+                        float dt) {
+    std::uint32_t walked = 0;
+    if (!stack.valid(layer) || dt <= 0.0f) return walked;
+    const GravityFrame gf = steer_frame_of(&stack.layer(layer).gravity());
+    (void)reg.storage<Gait>();
+    auto view = reg.view<const BodyPlan, const Transform, const Velocity,
+                         const GravityAffected>();
+    for (auto e : view) {
+        if (view.get<const Transform>(e).layer != layer) continue;
+        if (!view.get<const GravityAffected>(e).grounded) continue;
+        if (reg.all_of<Corpse>(e)) continue;
+        const vec3& v = view.get<const Velocity>(e).v;
+        const vec3 t = steer_tangent(gf, v.x, v.y, v.z);
+        const float speed = length(t);
+        if (speed <= 0.0f) continue;
+        reg.get_or_emplace<Gait>(e).metres += speed * dt;
+        ++walked;
+    }
+    return walked;
+}
+
 BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
                              LayerId layer) {
     BodyPoseTick out;
@@ -109,10 +186,27 @@ BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
         const Look* lk = reg.try_get<const Look>(e);
         PartPose pose[kMaxFormSegs];
         const FormId form = view.get<const BodyPlan>(e).form;
-        const std::uint16_t n = form_rest_pose(
-            form, body_scale(gf, view.get<const AABB>(e).half),
-            body_frame(gf, lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f}), tr.pos,
-            pose);
+        const BodyScale scale = body_scale(gf, view.get<const AABB>(e).half);
+        // ФАЗА — из одометра, РАЗМАХ — из скорости тела на опоре (доля пешей,
+        // насыщение на единице): стоящее и летящее тело — ровно поза покоя.
+        GaitState gs;
+        if (const Gait* gt = reg.try_get<const Gait>(e)) {
+            const float stride = kStepStrideOfHeight * scale.H;
+            if (stride > 0.0f) {
+                const float cycles = gt->metres / (2.0f * stride);
+                gs.phase = cycles - std::floor(cycles);
+            }
+        }
+        const GravityAffected* ga = reg.try_get<const GravityAffected>(e);
+        const Velocity* vel = reg.try_get<const Velocity>(e);
+        if (ga && ga->grounded && vel) {
+            const float sp =
+                length(steer_tangent(gf, vel->v.x, vel->v.y, vel->v.z));
+            gs.amp = sp >= kWalkSpeedMps ? 1.0f : sp / kWalkSpeedMps;
+        }
+        const std::uint16_t n = form_gait_pose(
+            form, scale, body_frame(gf, lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f}),
+            tr.pos, gs, pose);
         BodyParts& bp = reg.get_or_emplace<BodyParts>(e);
         const FormDef& def = form_def(form);
         bp.count = static_cast<std::uint8_t>(n);

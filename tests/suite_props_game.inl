@@ -821,6 +821,128 @@ static void test_living_body_poses_in_parts() {
     }
 }
 
+// ПОХОДКА (CANON S28.3, И3а): поза живого — чистая функция состояния.
+// Меряем то, что увидит глаз, и то, что обещает вывод угла:
+//   * стоящее и летящее тело — РОВНО поза покоя (та же, что у трупа);
+//   * на четверти цикла ноги разведены в противофазе на θmax =
+//     asin(½·kStepStrideOfHeight / длина ноги) — угол выведен, не назначен;
+//     рука машет против ноги своей стороны;
+//   * точки сустава у родителя и у части совпадают — прямая кинематика
+//     по дереву формы не рвёт тело;
+//   * одометр идёт только на опоре и не у трупа.
+// Две гравитации (−Z и боковая +X): ось «лево» и «вверх» — из кадра тела.
+static void test_gait_swings_limbs() {
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    float legLen = 0.0f;
+    for (std::uint16_t i = 0; i < fd.count; ++i)
+        if (game::kFormSegs[fd.first + i].partRole == game::FormRole::Leg)
+            legLen = 2.0f * game::kFormSegs[fd.first + i].sz;
+    const float thetaMax =
+        std::asin(0.5f * game::kStepStrideOfHeight / legLen);
+    CHECK(std::fabs(game::gait_swing_max(game::FormId::Humanoid) - thetaMax) <
+          1e-6f);
+    CHECK(thetaMax > 0.2f && thetaMax < 0.4f); // ~17°: шаг, а не мах ногой
+
+    const GravityRegime regimes[2] = {GravityRegime::NegZ, GravityRegime::PosX};
+    for (const GravityRegime r : regimes) {
+        LevelStack stack;
+        const LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        w.gravity().regime = r;
+        const GravityFrame gf = steer_frame_of(&w.gravity());
+        const vec3 up = regime_up(r);
+        vec3 half{0.4f, 0.4f, 0.4f};
+        if (gf.axis == 0) half.x = 0.9f;
+        else if (gf.axis == 1) half.y = 0.9f;
+        else half.z = 0.9f;
+        vec3 look{0.0f, 0.0f, 0.0f};
+        if (gf.tanA == 0) look.x = 1.0f;
+        else if (gf.tanA == 1) look.y = 1.0f;
+        else look.z = 1.0f;
+        const game::BodyFrame frame = game::body_frame(gf, look);
+        const game::BodyScale scale = game::body_scale(gf, half);
+
+        Registry reg;
+        const vec3 c{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+        Entity body = reg.create();
+        reg.emplace<Transform>(body, Transform{c, g});
+        reg.emplace<Velocity>(body);
+        reg.emplace<AABB>(body, AABB{half});
+        reg.emplace<game::Look>(body, game::Look{look});
+        reg.emplace<game::BodyPlan>(body);
+        reg.emplace<GravityAffected>(body, GravityAffected{1.0f, true});
+        const float stride = game::kStepStrideOfHeight * scale.H;
+        reg.emplace<game::Gait>(body, game::Gait{0.25f * 2.0f * stride});
+
+        game::PartPose rest[game::kMaxFormSegs];
+        game::form_rest_pose(game::FormId::Humanoid, scale, frame, c, rest);
+        auto off_rest = [&](const BodyParts& bp) {
+            float d = 0.0f;
+            for (std::uint8_t i = 0; i < bp.count; ++i)
+                d = std::max(d, length(bp.part[i].pos - rest[i].pos));
+            return d;
+        };
+
+        // Стоит: поза покоя ровно.
+        game::body_parts_step(reg, stack, g);
+        CHECK(off_rest(reg.get<BodyParts>(body)) < 1e-5f);
+
+        // Идёт пешей скоростью, фаза — четверть цикла (sin = 1).
+        reg.get<Velocity>(body).v = look * game::kWalkSpeedMps;
+        game::body_parts_step(reg, stack, g);
+        const BodyParts& bp = reg.get<BodyParts>(body);
+        int lLeg = -1, rLeg = -1, lArm = -1;
+        for (std::uint16_t i = 0; i < fd.count; ++i) {
+            const game::FormSegDef& sd = game::kFormSegs[fd.first + i];
+            if (sd.partRole == game::FormRole::Leg) (sd.jy > 0 ? lLeg : rLeg) = i;
+            if (sd.partRole == game::FormRole::Arm && sd.jy > 0) lArm = i;
+        }
+        CHECK(lLeg >= 0 && rLeg >= 0 && lArm >= 0);
+        if (lLeg < 0 || rLeg < 0 || lArm < 0) continue;
+        auto tilt = [&](int i) { // угол оси части от вертикали кадра
+            const vec3 ax = quat_rotate(bp.part[i].q, vec3{0.0f, 0.0f, 1.0f});
+            return std::acos(std::min(1.0f, std::fabs(dot(ax, up))));
+        };
+        auto fore = [&](int i) { // вынос центра части вперёд от покоя
+            return dot(bp.part[i].pos - rest[i].pos, frame.fwd);
+        };
+        CHECK(std::fabs(tilt(lLeg) - thetaMax) < 1e-3f);
+        CHECK(std::fabs(tilt(rLeg) - thetaMax) < 1e-3f);
+        CHECK(fore(lLeg) * fore(rLeg) < 0.0f);  // ноги в противофазе
+        CHECK(fore(lArm) * fore(lLeg) < 0.0f);  // рука против своей ноги
+        // Суставы не рвутся: точка сустава у родителя и у части совпадает.
+        float gap = 0.0f;
+        for (std::uint16_t i = 1; i < fd.count; ++i) {
+            const game::PartJoint pj =
+                game::form_part_joint(game::FormId::Humanoid, scale, i);
+            const std::uint8_t par = game::kFormSegs[fd.first + i].parent;
+            const vec3 a = bp.part[i].pos + quat_rotate(bp.part[i].q, pj.inPart);
+            const vec3 b =
+                bp.part[par].pos + quat_rotate(bp.part[par].q, pj.inParent);
+            gap = std::max(gap, length(a - b));
+        }
+        CHECK(gap < 1e-4f);
+
+        // В воздухе ноги не идут: та же скорость без опоры — поза покоя.
+        reg.get<GravityAffected>(body).grounded = false;
+        game::body_parts_step(reg, stack, g);
+        CHECK(off_rest(reg.get<BodyParts>(body)) < 1e-5f);
+
+        // Одометр: только на опоре, только у живого.
+        const float m0 = reg.get<game::Gait>(body).metres;
+        game::gait_step(reg, stack, g, kSimDt);
+        CHECK(reg.get<game::Gait>(body).metres == m0);
+        reg.get<GravityAffected>(body).grounded = true;
+        game::gait_step(reg, stack, g, kSimDt);
+        CHECK(std::fabs(reg.get<game::Gait>(body).metres - m0 -
+                        game::kWalkSpeedMps * kSimDt) < 1e-5f);
+        reg.emplace<game::Corpse>(body);
+        const float m1 = reg.get<game::Gait>(body).metres;
+        game::gait_step(reg, stack, g, kSimDt);
+        CHECK(reg.get<game::Gait>(body).metres == m1);
+    }
+}
+
 // ЗАЗОР СУСТАВА — расстояние между ТОЧКАМИ якорей двух частей в мире
 // (CANON S28, И1б). С 2026-11-25 связь трупа — шарнир `restLen 0` в точке
 // сустава, и «связность» значит совпадение этих точек, а не длину между
@@ -2382,6 +2504,7 @@ void test_props_game_all() {
     test_humanoid_segments_fall_and_cleanup();
     test_corpse_lays_out_in_its_frame();
     test_living_body_poses_in_parts();
+    test_gait_swings_limbs();
     test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
     test_corpse_pile_reaches_sleep();
