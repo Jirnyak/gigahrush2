@@ -15,11 +15,16 @@
 #include "world/types.h"
 #include "world/macro_grid.h"
 #include "world/gravity.h"
+#include "world/level_stack.h"
+#include "ecs/components.h"
+#include "game/combat.h"
+#include "game/encumbrance.h"
 #include "sim/physics.h"
 #include "game/body_pose.h"
 #include <algorithm>
 
 using namespace giga;
+using namespace giga::game;
 
 namespace {
 
@@ -547,6 +552,404 @@ static void test_mutation_fuzzing_and_agent_diagnostics(DynamicDice& dice) {
         " 500/500 наведенных дефектов пойманы со 100%% точностью (0 ложных пропусков).\n");
 }
 
+// -----------------------------------------------------------------------------
+// Тест 8: Инвариант 1 & 2 — Неразрывность суставов и тождественность покою
+// -----------------------------------------------------------------------------
+static void test_kinematic_joint_continuity_and_rest_identity(DynamicDice& dice) {
+    const FormId form = FormId::Humanoid;
+    const FormDef& def = form_def(form);
+    const float kPi = 3.14159265358979323846f;
+
+    // 10 000 случайных фаз шага, случайных амплитуд, случайных положений корня на торе
+    for (int i = 0; i < 10000; ++i) {
+        const float phase = dice.next_f32_01(); // [0, 1)
+        const float amp = dice.range(0.0f, 1.5f);
+        const vec3 rootPos{
+            dice.range(0.0f, kWorldExtent),
+            dice.range(0.0f, kWorldExtent),
+            dice.range(0.0f, kWorldExtent)
+        };
+
+        // Случайный рост и ширина
+        BodyScale scale;
+        scale.H = dice.range(1.2f, 2.2f);
+        scale.W = dice.range(0.3f, 0.8f);
+
+        // Случайный кадр тела (ортонормальный)
+        // Вектор взгляда на сфере
+        const float theta = dice.range(0.0f, 2.0f * kPi);
+        const float phi = dice.range(-0.5f * kPi, 0.5f * kPi);
+        vec3 look{
+            std::cos(phi) * std::cos(theta),
+            std::cos(phi) * std::sin(theta),
+            std::sin(phi)
+        };
+
+        GravityFrame gf;
+        gf.axis = dice.range_i(0, 2);
+        gf.upSign = dice.next_f32_01() > 0.5f ? 1 : -1;
+        gf.tanA = (gf.axis + 1) % 3;
+        gf.tanB = (gf.axis + 2) % 3;
+
+        BodyFrame bf = body_frame(gf, look);
+        GaitState gs{phase, amp};
+
+        PartPose gait_poses[kMaxFormSegs];
+        std::uint16_t n_gait = form_gait_pose(form, scale, bf, rootPos, gs, gait_poses);
+        BARRIER_CHECK(n_gait == def.count,
+            "CANON S28.3 (Число частей в form_gait_pose)",
+            "form_gait_pose вернул некорректное число частей формы.",
+            "form_gait_pose обязана возвращать def.count частей.");
+
+        // ИНВАРИАНТ 1: Неразрывность суставов при походке
+        // Для каждого дочернего сегмента: || joint_in_parent - joint_in_child || < 1e-4f
+        for (std::uint16_t seg = 0; seg < def.count; ++seg) {
+            const FormSegDef& sd = kFormSegs[def.first + seg];
+            if (sd.parent == kFormNoParent) continue;
+
+            const PartPose& child_pose = gait_poses[seg];
+            const PartPose& parent_pose = gait_poses[sd.parent];
+            const PartJoint pj = form_part_joint(form, scale, seg);
+
+            const vec3 j_in_parent_world = parent_pose.pos + quat_rotate(parent_pose.q, pj.inParent);
+            const vec3 j_in_child_world = child_pose.pos + quat_rotate(child_pose.q, pj.inPart);
+
+            const float joint_gap = length(j_in_parent_world - j_in_child_world);
+            BARRIER_CHECK(joint_gap < 1e-4f,
+                "CANON S28.3 (Инвариант 1: Неразрывность суставов при походке)",
+                "Обнаружен разрыв сустава или растяжение конечности при походке (joint_gap >= 1e-4m).",
+                "Убедись, что прямая кинематика form_gait_pose строго позиционирует дочернюю часть: pos = j_parent - quat_rotate(q, j_part).");
+        }
+
+        // ИНВАРИАНТ 2: Тождественность покою при amp == 0.0f
+        // Поза походки обязана с точностью 1e-5f совпадать с позой покоя form_rest_pose
+        GaitState gs_zero{phase, 0.0f};
+        PartPose gait_zero_poses[kMaxFormSegs];
+        form_gait_pose(form, scale, bf, rootPos, gs_zero, gait_zero_poses);
+
+        PartPose rest_poses[kMaxFormSegs];
+        std::uint16_t n_rest = form_rest_pose(form, scale, bf, rootPos, rest_poses);
+        BARRIER_CHECK(n_rest == def.count,
+            "CANON S28.3 (Число частей в form_rest_pose)",
+            "form_rest_pose вернул некорректное число частей.",
+            "form_rest_pose обязана возвращать def.count частей.");
+
+        for (std::uint16_t seg = 0; seg < def.count; ++seg) {
+            const PartPose& gp = gait_zero_poses[seg];
+            const PartPose& rp = rest_poses[seg];
+
+            const float pos_diff = length(gp.pos - rp.pos);
+            BARRIER_CHECK(pos_diff < 1e-4f,
+                "CANON S28.3 (Инвариант 2: Тождественность покою — позиция)",
+                "Позиция части при amp == 0 расходится с позой покоя form_rest_pose.",
+                "При amp == 0.0f угол размаха равен 0, поэтому позы обязаны совпадать с точностью 0.1 мм.");
+
+            const float half_diff = length(gp.half - rp.half);
+            BARRIER_CHECK(half_diff < 1e-5f,
+                "CANON S28.3 (Инвариант 2: Тождественность покою — габариты)",
+                "Полугабарит части при amp == 0 расходится с позой покоя.",
+                "Габариты частей формы не зависят от походки.");
+
+            const float q_dot = gp.q.x * rp.q.x + gp.q.y * rp.q.y + gp.q.z * rp.q.z + gp.q.w * rp.q.w;
+            BARRIER_CHECK(std::fabs(std::fabs(q_dot) - 1.0f) < 1e-5f,
+                "CANON S28.3 (Инвариант 2: Тождественность покою — ориентация)",
+                "Кватернион части при amp == 0 расходится с кватернионом покоя.",
+                "При amp == 0 ориентация всех сегментов обязана совпадать с body_frame_quat(bf).");
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Тест 9: Инвариант 3 & 4 — Предел угла размаха и противофаза конечностей
+// -----------------------------------------------------------------------------
+static void test_kinematic_swing_max_and_antiphase(DynamicDice& dice) {
+    const FormId form = FormId::Humanoid;
+    const FormDef& def = form_def(form);
+    const float kRadToDeg = 180.0f / 3.14159265358979323846f;
+
+    // ИНВАРИАНТ 3: Аналитический предел угла размаха gait_swing_max(form)
+    // Для Humanoid: sd.sz ноги = 0.225; длина ноги = 2.0 * 0.225 = 0.45;
+    // half_stride = 0.5 * kStepStrideOfHeight = 0.5 * 0.26 = 0.13.
+    // theta_max = asin(0.13 / 0.45) = asin(0.2888889) rad ≈ 16.789° ...
+    // В спецификации проверяем, что gait_swing_max(form) равен в точности
+    // asin(0.5f * kStepStrideOfHeight / (2.0f * leg_sz)) и находится в допустимом диапазоне.
+    const float swing_max = gait_swing_max(form);
+    const float swing_deg = swing_max * kRadToDeg;
+
+    // Находим реальный leg_sz из формы
+    float leg_sz = 0.0f;
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        if (sd.partRole == FormRole::Leg) {
+            leg_sz = sd.sz;
+            break;
+        }
+    }
+    const float expected_swing = std::asin(0.5f * kStepStrideOfHeight / (2.0f * leg_sz));
+    BARRIER_CHECK(std::fabs(swing_max - expected_swing) < 1e-6f,
+        "CANON S28.3 (Инвариант 3: Аналитический вывод gait_swing_max)",
+        "gait_swing_max(form) расходится с аналитической формулой asin(0.5 * kStepStrideOfHeight / leg_length).",
+        "Проверь реализацию gait_swing_max в src/game/body_pose.cpp.");
+
+    BARRIER_CHECK(swing_deg >= 16.0f && swing_deg <= 18.0f,
+        "CANON S28.3 (Инвариант 3: Физиологический диапазон размаха шага)",
+        "Угол размаха шага гуманоида вышел за пределы анатомического диапазона [16°, 18°].",
+        "Проверь длину ноги leg_sz и константу kStepStrideOfHeight.");
+
+    // ИНВАРИАНТ 4: Противофаза конечностей
+    // Проверь, что при любой фазе угол поворота левой ноги и правой ноги ровно противоположен по знаку,
+    // а рука машет в противофазе со своей ногой.
+    BodyScale s{0.5f, 1.8f};
+    GravityFrame gf{2, -1, 0, 1}; // Z-вниз
+    BodyFrame bf = body_frame(gf, vec3{1.0f, 0.0f, 0.0f});
+    const vec3 rootPos{10.0f, 10.0f, 10.0f};
+
+    // Находим индексы leg_l, leg_r, arm_l, arm_r
+    std::uint16_t idx_leg_l = 0xFFFF, idx_leg_r = 0xFFFF;
+    std::uint16_t idx_arm_l = 0xFFFF, idx_arm_r = 0xFFFF;
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        if (sd.partRole == FormRole::Leg) {
+            if (sd.jy > 0.0f) idx_leg_l = i;
+            else if (sd.jy < 0.0f) idx_leg_r = i;
+        } else if (sd.partRole == FormRole::Arm) {
+            if (sd.jy > 0.0f) idx_arm_l = i;
+            else if (sd.jy < 0.0f) idx_arm_r = i;
+        }
+    }
+    BARRIER_CHECK(idx_leg_l != 0xFFFF && idx_leg_r != 0xFFFF &&
+                  idx_arm_l != 0xFFFF && idx_arm_r != 0xFFFF,
+        "CANON S28.2 (Топология конечностей Humanoid)",
+        "Не удалось найти все 4 конечности (leg_l, leg_r, arm_l, arm_r) в prop_forms.",
+        "Убедись, что в форме гуманоида заданы роли Arm и Leg с ненулевым jy.");
+
+    for (int step = 0; step < 1000; ++step) {
+        const float phase = dice.next_f32_01();
+        const float amp = dice.range(0.2f, 1.0f);
+        GaitState gs{phase, amp};
+
+        PartPose poses[kMaxFormSegs];
+        form_gait_pose(form, s, bf, rootPos, gs, poses);
+
+        // Извлекаем угол поворота вокруг локальной оси лево (ось y) относительно родителя
+        // local = conj(par.q) * child.q = (0, sin(a/2), 0, cos(a/2))
+        auto get_swing_angle = [&](std::uint16_t seg) -> float {
+            const FormSegDef& sd = kFormSegs[def.first + seg];
+            const quat& q_child = poses[seg].q;
+            const quat& q_parent = poses[sd.parent].q;
+            quat q_par_inv{-q_parent.x, -q_parent.y, -q_parent.z, q_parent.w};
+            quat q_rel = quat_mul(q_par_inv, q_child);
+            return 2.0f * std::atan2(q_rel.y, q_rel.w);
+        };
+
+        const float a_leg_l = get_swing_angle(idx_leg_l);
+        const float a_leg_r = get_swing_angle(idx_leg_r);
+        const float a_arm_l = get_swing_angle(idx_arm_l);
+        const float a_arm_r = get_swing_angle(idx_arm_r);
+
+        // Ноги в строгой противофазе: a_leg_l == -a_leg_r
+        BARRIER_CHECK(std::fabs(a_leg_l + a_leg_r) < 1e-4f,
+            "CANON S28.3 (Инвариант 4: Противофаза ног)",
+            "Левая и правая ноги не в строгой противофазе (a_leg_l != -a_leg_r).",
+            "Убедись, что знак поворота ноги определяется знаком jy сустава.");
+
+        // Руки в строгой противофазе: a_arm_l == -a_arm_r
+        BARRIER_CHECK(std::fabs(a_arm_l + a_arm_r) < 1e-4f,
+            "CANON S28.3 (Инвариант 4: Противофаза рук)",
+            "Левая и правая руки не в строгой противофазе (a_arm_l != -a_arm_r).",
+            "Убедись, что знак поворота руки противоположен знаку jy сустава.");
+
+        // Рука в противофазе со своей ногой: a_arm_l == -a_leg_l
+        BARRIER_CHECK(std::fabs(a_arm_l + a_leg_l) < 1e-4f,
+            "CANON S28.3 (Инвариант 4: Противофаза руки и одноименной ноги)",
+            "Рука и нога одной стороны движутся не в противофазе (a_arm_l != -a_leg_l).",
+            "Рука машет вперед когда одноименная нога уходит назад.");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Тест 10: Инвариант 5 — Одометр Gait и физика шага
+// -----------------------------------------------------------------------------
+static void test_gait_odometer_fixture(DynamicDice& dice) {
+    Registry reg;
+    LevelStack stack;
+    const LayerId layer = stack.push_layer();
+
+    // Создаем несколько тестовых сущностей в реестре
+    // Сущность 1: Стоит на опоре и идет вперед со скоростью v > 0
+    auto e_walk = reg.create();
+    reg.emplace<BodyPlan>(e_walk, FormId::Humanoid);
+    reg.emplace<Transform>(e_walk, vec3{10.0f, 10.0f, 10.0f}, layer);
+    reg.emplace<AABB>(e_walk, vec3{0.25f, 0.25f, 0.9f});
+    reg.emplace<Velocity>(e_walk, vec3{2.0f, 0.0f, 0.0f});
+    reg.emplace<GravityAffected>(e_walk, 1.0f, true); // scale = 1.0f, grounded = true
+
+    // Сущность 2: В воздухе (grounded = false), скорость v > 0
+    auto e_fly = reg.create();
+    reg.emplace<BodyPlan>(e_fly, FormId::Humanoid);
+    reg.emplace<Transform>(e_fly, vec3{20.0f, 20.0f, 20.0f}, layer);
+    reg.emplace<AABB>(e_fly, vec3{0.25f, 0.25f, 0.9f});
+    reg.emplace<Velocity>(e_fly, vec3{5.0f, 1.0f, -2.0f});
+    reg.emplace<GravityAffected>(e_fly, 1.0f, false); // grounded = false
+
+    // Сущность 3: Стоит на опоре, но покоится (v == 0)
+    auto e_rest = reg.create();
+    reg.emplace<BodyPlan>(e_rest, FormId::Humanoid);
+    reg.emplace<Transform>(e_rest, vec3{30.0f, 30.0f, 30.0f}, layer);
+    reg.emplace<AABB>(e_rest, vec3{0.25f, 0.25f, 0.9f});
+    reg.emplace<Velocity>(e_rest, vec3{0.0f, 0.0f, 0.0f});
+    reg.emplace<GravityAffected>(e_rest, 1.0f, true); // grounded = true
+
+    // Сущность 4: Труп (Corpse), grounded = true, скорость v > 0
+    auto e_corpse = reg.create();
+    reg.emplace<BodyPlan>(e_corpse, FormId::Humanoid);
+    reg.emplace<Transform>(e_corpse, vec3{40.0f, 40.0f, 40.0f}, layer);
+    reg.emplace<AABB>(e_corpse, vec3{0.25f, 0.25f, 0.9f});
+    reg.emplace<Velocity>(e_corpse, vec3{3.0f, 0.0f, 0.0f});
+    reg.emplace<GravityAffected>(e_corpse, 1.0f, true);
+    reg.emplace<Corpse>(e_corpse); // Труп
+
+    const float dt = 0.008f; // 125 Гц
+
+    for (int tick = 0; tick < 100; ++tick) {
+        float speed = dice.range(1.0f, 4.0f);
+        reg.get<Velocity>(e_walk).v = vec3{speed, 0.0f, 0.0f};
+
+        float pre_walk_metres = 0.0f;
+        if (const Gait* g = reg.try_get<Gait>(e_walk)) pre_walk_metres = g->metres;
+
+        std::uint32_t walked = gait_step(reg, stack, layer, dt);
+
+        // Ровно 1 идущее тело
+        BARRIER_CHECK(walked == 1,
+            "CANON S28.3 (Инвариант 5: Число идущих тел)",
+            "gait_step вернул walked != 1 при ровно одном живом теле на опоре со скоростью.",
+            "Проверь фильтры gait_step: grounded, !Corpse, speed > 0.");
+
+        // Проверка e_walk: одометр вырос ровно на speed * dt
+        const Gait* g_walk = reg.try_get<Gait>(e_walk);
+        BARRIER_CHECK(g_walk != nullptr,
+            "CANON S28.3 (Инвариант 5: Создание компонента Gait)",
+            "gait_step не создал или не обновил компонент Gait у идущего тела.",
+            "gait_step обязан делать reg.get_or_emplace<Gait>(e).metres += speed * dt.");
+        if (g_walk) {
+            const float delta_metres = g_walk->metres - pre_walk_metres;
+            BARRIER_CHECK(std::fabs(delta_metres - speed * dt) < 1e-5f,
+                "CANON S28.3 (Инвариант 5: Точность интегрирования одометра)",
+                "Приращение одометра delta_metres расходится с ||v_tangent|| * dt.",
+                "Проверь расчет скорости в плоскости ходьбы steer_tangent.");
+        }
+
+        // Проверка e_fly: одометр НЕ должен существовать или metres == 0
+        const Gait* g_fly = reg.try_get<Gait>(e_fly);
+        BARRIER_CHECK(g_fly == nullptr || g_fly->metres == 0.0f,
+            "CANON S28.3 (Инвариант 5: Одометр тела в воздухе)",
+            "Тело без grounded накрутило одометр Gait в полете/падении!",
+            "gait_step обязан проверять view.get<GravityAffected>(e).grounded == true.");
+
+        // Проверка e_rest: одометр НЕ должен расти
+        const Gait* g_rest = reg.try_get<Gait>(e_rest);
+        BARRIER_CHECK(g_rest == nullptr || g_rest->metres == 0.0f,
+            "CANON S28.3 (Инвариант 5: Одометр стоящего тела)",
+            "Стоящее на месте тело (v == 0) накрутило одометр Gait!",
+            "gait_step обязан пропускать тела с speed <= 0.");
+
+        // Проверка e_corpse: труп не шагает
+        const Gait* g_corpse = reg.try_get<Gait>(e_corpse);
+        BARRIER_CHECK(g_corpse == nullptr || g_corpse->metres == 0.0f,
+            "CANON S28.3 (Инвариант 5: Труп не шагает)",
+            "Труп Corpse накрутил одометр Gait!",
+            "gait_step обязан отсекать сущности с reg.all_of<Corpse>(e).");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Тест 11: Инвариант 6 — Двухполярный тест мутаций кинематики
+// -----------------------------------------------------------------------------
+static void test_kinematic_mutation_bipolar_fuzzing(DynamicDice& dice) {
+    const FormId form = FormId::Humanoid;
+    const FormDef& def = form_def(form);
+    BodyScale scale{0.5f, 1.8f};
+    GravityFrame gf{2, -1, 0, 1};
+    BodyFrame bf = body_frame(gf, vec3{1.0f, 0.0f, 0.0f});
+    const vec3 rootPos{50.0f, 50.0f, 50.0f};
+
+    // Оракул проверки неразрывности суставов позы
+    auto verify_pose_continuity = [&](const PartPose* poses, std::uint16_t count) -> bool {
+        if (count != def.count) return false;
+        for (std::uint16_t seg = 0; seg < def.count; ++seg) {
+            const FormSegDef& sd = kFormSegs[def.first + seg];
+            if (sd.parent == kFormNoParent) continue;
+            const PartJoint pj = form_part_joint(form, scale, seg);
+            const vec3 j_parent = poses[sd.parent].pos + quat_rotate(poses[sd.parent].q, pj.inParent);
+            const vec3 j_child = poses[seg].pos + quat_rotate(poses[seg].q, pj.inPart);
+            if (length(j_parent - j_child) >= 1e-4f) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // Полярность 1: 500 чистых прогонов позы — 0 сбоев
+    int clean_failures = 0;
+    for (int run = 0; run < 500; ++run) {
+        GaitState gs{dice.next_f32_01(), dice.range(0.0f, 1.2f)};
+        PartPose poses[kMaxFormSegs];
+        std::uint16_t n = form_gait_pose(form, scale, bf, rootPos, gs, poses);
+        if (!verify_pose_continuity(poses, n)) {
+            ++clean_failures;
+        }
+    }
+    BARRIER_CHECK(clean_failures == 0,
+        "CANON S28.3 (Инвариант 6: Полярность 1 — Чистые позы без сбоев)",
+        "Оракул кинематики ложно забраковал валидную чистую позу form_gait_pose.",
+        "Проверь погрешность кватернионов и тригонометрии в form_gait_pose.");
+
+    // Полярность 2: 500 умышленных мутаций — 100% перехват детектором
+    int mutations_caught = 0;
+    const int total_mutations = 500;
+
+    for (int run = 0; run < total_mutations; ++run) {
+        GaitState gs{dice.next_f32_01(), dice.range(0.2f, 1.2f)};
+        PartPose poses[kMaxFormSegs];
+        std::uint16_t n = form_gait_pose(form, scale, bf, rootPos, gs, poses);
+
+        // Выбираем случайную дочернюю часть (seg > 0)
+        std::uint16_t seg = static_cast<std::uint16_t>(dice.range_i(1, def.count - 1));
+
+        // Вид мутации:
+        // 0: сдвиг позиции на > 1 мм
+        // 1: искажение ориентации (поворот кватерниона без обновления позиции)
+        // 2: подмена кватерниона на случайный
+        int mut_type = dice.range_i(0, 2);
+        if (mut_type == 0) {
+            vec3 offset{dice.range(0.01f, 0.1f), dice.range(0.01f, 0.1f), dice.range(0.01f, 0.1f)};
+            poses[seg].pos = poses[seg].pos + offset;
+        } else if (mut_type == 1) {
+            float rot_angle = dice.range(0.1f, 0.5f);
+            quat d_rot{0.0f, std::sin(rot_angle), 0.0f, std::cos(rot_angle)};
+            poses[seg].q = quat_normalize(quat_mul(poses[seg].q, d_rot));
+        } else {
+            poses[seg].q = quat{dice.range(-1.0f, 1.0f), dice.range(-1.0f, 1.0f),
+                                dice.range(-1.0f, 1.0f), dice.range(-1.0f, 1.0f)};
+            poses[seg].q = quat_normalize(poses[seg].q);
+        }
+
+        if (!verify_pose_continuity(poses, n)) {
+            ++mutations_caught;
+        }
+    }
+
+    BARRIER_CHECK(mutations_caught == total_mutations,
+        "CANON S28.3 (Инвариант 6: Полярность 2 — 100% перехват мутаций кинематики)",
+        "Детектор кинематики пропустил искаженную/разорванную позу!",
+        "Оракул проверки суставов обязан отлавливать любые десинхронизации позиции и вращения.");
+
+    std::printf(
+        ANSI_GREEN "✔ [KINEMATIC MUTATION BIPOLAR FUZZING]:" ANSI_RESET
+        " 500/500 наведенных кинематических дефектов перехвачены со 100%% точностью!\n");
+}
+
 int main(int argc, char* argv[]) {
     uint64_t seed = 0xdeadbeefcafeULL;
     if (argc > 1) {
@@ -564,6 +967,10 @@ int main(int argc, char* argv[]) {
     test_submask_coherence_and_boundary_dice(dice);
     test_swept_aabb_torus_no_tunneling(dice);
     test_mutation_fuzzing_and_agent_diagnostics(dice);
+    test_kinematic_joint_continuity_and_rest_identity(dice);
+    test_kinematic_swing_max_and_antiphase(dice);
+    test_gait_odometer_fixture(dice);
+    test_kinematic_mutation_bipolar_fuzzing(dice);
 
     std::printf("[barrier_test] %d checks, %d failures (Seed: 0x%llx)\n",
                 g_checks, g_fails, static_cast<unsigned long long>(seed));

@@ -627,6 +627,14 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(barrier_test PROPERTIES
         PASS_REGULAR_EXPRESSION "\\[barrier_test\\] [0-9]+ checks, 0 failures")
 
+    # Бинарные контракты структур, выравнивание по кэш-линиям и детерминизм типов
+    add_executable(code_contract_test tests/code_contract_test.cpp src/game/body_pose.cpp)
+    target_link_libraries(code_contract_test PRIVATE giga_core)
+    giga_target_flags(code_contract_test OFF)
+    add_test(NAME code_contract_test COMMAND code_contract_test)
+    set_tests_properties(code_contract_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "\\[CODE CONTRACTS\\]: Все структуры.*PASS")
+
     # Мир-автомат (S16): headless GPU-прогон. CANON S16.3 — headless значит
     # «без окна», НЕ «без GPU»: автомат обязан гоняться Vulkan compute без
     # свапчейна прямо в ctest, машина без GPU-устройства — НЕ зелёное дерево
@@ -3069,6 +3077,12 @@ if(GIGA_BUILD_TESTS)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_agent_barrier.py)
     set_tests_properties(agent_barrier PROPERTIES
         PASS_REGULAR_EXPRESSION "agent_barrier.*PASS")
+
+    # Архитектурная гигиена: слои ядра, детерминизм, целостность CSV и запрет sleep
+    add_test(NAME code_invariants
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_code_invariants.py ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(code_invariants PROPERTIES
+        PASS_REGULAR_EXPRESSION "ARCHITECTURAL CODE HYGIENE.*PASS")
 
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
