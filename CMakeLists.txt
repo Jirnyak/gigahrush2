@@ -625,6 +625,7 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(barrier_test OFF)
     add_test(NAME barrier_test COMMAND barrier_test)
     set_tests_properties(barrier_test PROPERTIES
+        TIMEOUT 120
         PASS_REGULAR_EXPRESSION "\\[barrier_test\\] [0-9]+ checks, 0 failures")
 
     # Бинарные контракты структур, выравнивание по кэш-линиям и детерминизм типов

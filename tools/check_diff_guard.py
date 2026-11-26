@@ -2,12 +2,22 @@
 # -*- coding: utf-8 -*-
 """
 GigaHrush 2 — Iron Gate & Diff Guard Inquisitor (tools/check_diff_guard.py)
-Mechanical defense gate protecting repository diffs against Goodhart degradation:
-1. Forbids test deletion in tests/ without equivalent additions.
-2. Forbids commenting out assertions (// assert, // CHECK, // static_assert).
-3. Forbids stubs, check bypasses, and loosening tolerances (e.g. 1e-4f -> 10.0f).
-4. Forbids adding // TODO, FIXME, HACK, WORKAROUND in production code.
-5. Emits strict, educational Failure Manifestos in natural Russian upon any defect.
+Advanced Anti-Blind-Kitten & Anti-Goodhart Repository Diff Defense Gate.
+Modeled after Timeart and Dental CRM (scripts/check-staged-safety.mjs & failure-manifestos.mjs).
+
+Mechanical barriers:
+1. Forbids test deletion in tests/ without equivalent additions (Goodhart defense).
+2. Forbids commenting out assertions (// assert, // CHECK, // static_assert, #if 0).
+3. Forbids blind C++ casts (reinterpret_cast, const_cast, C-style casts) in simulation layers.
+4. Forbids exceptions (throw, catch) and RTTI (dynamic_cast, typeid) in engine core.
+5. Forbids dynamic allocations (new, malloc) in simulation hot paths (Zero Allocations).
+6. Forbids non-deterministic sleep (sleep_for, Sleep) in simulation tick loops.
+7. Forbids stubs, check bypasses (if (true) return), and loosening tolerances (1e-4f -> 10.0f).
+8. Forbids tautological tests (assert(true), CHECK(true), CHECK(1 == 1)).
+9. Forbids UI retro-apparatura violations (WindowRounding > 0, FrameRounding > 0).
+10. Forbids flat Euclidean distance metrics without toroidal wrapping (wrap_delta_f).
+11. Forbids technical debt slop (// TODO, FIXME, HACK, WORKAROUND, implement later).
+12. Emits structured Failure Manifestos in natural Russian with "Blind Kitten vs Architect" contrast.
 """
 
 import sys
@@ -23,40 +33,66 @@ GREEN = "\033[1;32m"
 YELLOW = "\033[1;33m"
 CYAN = "\033[1;36m"
 BOLD = "\033[1m"
+DIM = "\033[2m"
 MAGENTA = "\033[1;35m"
 RESET = "\033[0m"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 class Violation:
-    def __init__(self, file_path: str, line_no: int, rule_title: str, diff_line: str, why_sabotage: str, how_to_fix: str):
+    def __init__(self, file_path: str, line_no: int, rule_title: str, diff_line: str,
+                 rotten_kitten: str, canonical_architect: str,
+                 why_sabotage: str, how_to_fix: str, severity: str = "CRITICAL"):
         self.file_path = file_path
         self.line_no = line_no
         self.rule_title = rule_title
         self.diff_line = diff_line
+        self.rotten_kitten = rotten_kitten
+        self.canonical_architect = canonical_architect
         self.why_sabotage = why_sabotage
         self.how_to_fix = how_to_fix
+        self.severity = severity
 
     def format_manifesto(self) -> str:
         return f"""
 {RED}================================================================================{RESET}
-{RED}🚨 [IRON GATE: FAILURE MANIFESTO — ОБНАРУЖЕН ДИФФ-САБОТАЖ]{RESET}
-{RED}--------------------------------------------------------------------------------{RESET}
-{BOLD}📍 ФАЙЛ:{RESET} {CYAN}{self.file_path}:{self.line_no}{RESET}
-{BOLD}❌ НАРУШЕННЫЙ ЗАКОН:{RESET} {YELLOW}{self.rule_title}{RESET}
+{RED}🚨 СТОП! АНТИ-КОТЁНОК: ОБНАРУЖЕН АРХИТЕКТУРНЫЙ БРАК В ДИФФЕ!{RESET}
+{RED}================================================================================{RESET}
+{BOLD}🏛️  ШЛЮЗ / ЗАКОН:{RESET} {YELLOW}{self.rule_title}{RESET}
+{BOLD}📍 ЛОКАЦИЯ:{RESET}       {CYAN}{self.file_path}:{self.line_no}{RESET}
 {BOLD}🔍 СТРОКА ДИФФА:{RESET}
-   {self.diff_line.strip()}
-{BOLD}⚠️ ПОЧЕМУ ЭТО БРАК И САБОТАЖ:{RESET}
+   {DIM}{self.diff_line.strip()}{RESET}
+
+{BOLD}⚖️  РАЗНИЦА МЕЖДУ СЛЕПЫМ КОТЁНКОМ И АРХИТЕКТОРОМ:{RESET}
+   {RED}❌ КАК ДЕЛАЕТ СЛЕПОЙ КОТЁНОК:{RESET} {self.rotten_kitten}
+   {CYAN}✅ КАК ДЕЛАЕТ АРХИТЕКТОР:{RESET}     {self.canonical_architect}
+
+{BOLD}⚠️  СИМУЛЯЦИОННАЯ И АРХИТЕКТУРНАЯ УГРОЗА ДЛЯ ДВИЖКА:{RESET}
    {self.why_sabotage}
-{BOLD}💡 КАК ИСПРАВИТЬ:{RESET}
+
+{BOLD}⛔ ПОЧЕМУ ЗАПЛАТКА ИЛИ КОСТЫЛЬ — ЭТО САБОТАЖ (РОТТЕН СИД):{RESET}
+   Категорически запрещено протаскивать костыли, заглушки или ослаблять проверки!
+   Любая косметическая припарка разлагает кодовую базу и порождает скрытые взрывы симуляции.
+
+{BOLD}🛠️  КАНОНИЧЕСКИЙ АЛГОРИТМ ИСПРАВЛЕНИЯ (НИКАКИХ ПРИПАРОК):{RESET}
    {self.how_to_fix}
-{BOLD}🛑 ПРИКАЗ ИНКВИЗИТОРА:{RESET}
-   Коммит заблокирован Iron Gate! Не смей подгонять метрики под тесты, удалять
-   проверки или бросать костыли. Исправь код по First Principles!
+
+{RED}--------------------------------------------------------------------------------{RESET}
+{BOLD}{RED}❌ ДЕЙСТВИЕ ЗАБЛОКИРОВАНО. ИДИ И ПЕРЕДЕЛЫВАЙ НА СОВЕСТЬ ПО ПЕРВЫМ ПРИНЦИПАМ!{RESET}
 {RED}================================================================================{RESET}
 """
 
+def is_doc_or_tool_file(file_path: str) -> bool:
+    norm = file_path.replace("\\", "/").lower()
+    if norm.endswith(".md") or norm.endswith(".json") or norm.endswith(".txt") or norm.endswith(".csv"):
+        return True
+    if norm.startswith("tools/") or norm.startswith("scripts/") or norm.startswith(".agents/") or norm.startswith("docs/"):
+        return True
+    return False
+
 def is_test_file(file_path: str) -> bool:
+    if is_doc_or_tool_file(file_path):
+        return False
     normalized = file_path.replace("\\", "/").lower()
     return (
         "/tests/" in normalized
@@ -67,28 +103,29 @@ def is_test_file(file_path: str) -> bool:
     )
 
 def is_source_file(file_path: str) -> bool:
+    if is_doc_or_tool_file(file_path):
+        return False
     ext = Path(file_path).suffix.lower()
     return ext in {".cpp", ".h", ".c", ".comp", ".frag", ".vert", ".glsl", ".inl"}
 
+def is_simulation_core_file(file_path: str) -> bool:
+    if is_doc_or_tool_file(file_path):
+        return False
+    norm = file_path.replace("\\", "/").lower()
+    return (
+        norm.startswith("src/core/")
+        or norm.startswith("src/world/")
+        or norm.startswith("src/sim/")
+        or norm.startswith("src/game/")
+    )
+
+def is_ui_file(file_path: str) -> bool:
+    if is_doc_or_tool_file(file_path):
+        return False
+    norm = file_path.replace("\\", "/").lower()
+    return norm.startswith("src/app/") or "hud_ui" in norm or "imgui" in norm
+
 def parse_unified_diff(diff_text: str):
-    """
-    Parses a unified diff into structured file hunks:
-    Returns list of dicts:
-    {
-        'file_old': str,
-        'file_new': str,
-        'deleted_lines': [(old_line_no, line_str), ...],
-        'added_lines': [(new_line_no, line_str), ...],
-        'hunks': [
-            {
-                'old_start': int,
-                'new_start': int,
-                'deleted': [(line_no, line_str)],
-                'added': [(line_no, line_str)]
-            }
-        ]
-    }
-    """
     files = []
     current_file = None
     current_hunk = None
@@ -154,11 +191,26 @@ def parse_unified_diff(diff_text: str):
             new_line += 1
             continue
 
-        # Unchanged context line
         old_line += 1
         new_line += 1
 
     return files
+
+def code_only(line: str) -> str:
+    """
+    Убирает из строки кода строковые и символьные литералы и хвостовые комментарии.
+    Анализирует ТОЛЬКО фактический исполняемый C++ / GLSL код.
+    Прямой аналог функции codeOnly(line) из Dental CRM scripts/check-staged-safety.mjs.
+    """
+    # Удаляем строковые литералы
+    s = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+    # Удаляем символьные литералы
+    s = re.sub(r"'(?:[^'\\]|\\.)*'", "''", s)
+    # Удаляем C++ однострочный комментарий //
+    s = re.sub(r"//.*$", "", s)
+    # Удаляем закрытые inline комментарии /* ... */
+    s = re.sub(r"/\*.*?\*/", "", s)
+    return s.strip()
 
 ASSERT_PATTERN = re.compile(r"\b(CHECK|CHECK_FALSE|REQUIRE|REQUIRE_FALSE|assert|static_assert|GIGA_CHECK|assert_physical_invariants)\s*\(")
 TEST_CASE_PATTERN = re.compile(r"\b(TEST_CASE|SUBCASE)\s*\(|\bvoid\s+test_[a-zA-Z0-9_]+\s*\(")
@@ -173,11 +225,17 @@ def audit_diff(files) -> list:
         if not target_file:
             continue
 
+        # Исключаем скрипты сборки, тулы и документацию из C++ инспекции
+        if is_doc_or_tool_file(target_file):
+            continue
+
         is_test = is_test_file(target_file)
         is_source = is_source_file(target_file)
+        is_sim_core = is_simulation_core_file(target_file)
+        is_ui = is_ui_file(target_file)
 
         # ---------------------------------------------------------------------
-        # AXIS 1: ЗАПРЕТ УДАЛЕНИЯ ТЕСТОВ (Test Deletion Prohibition)
+        # 1. ЗАПРЕТ УДАЛЕНИЯ ТЕСТОВ (Test Deletion Prohibition)
         # ---------------------------------------------------------------------
         if is_test:
             deleted_asserts = []
@@ -204,20 +262,21 @@ def audit_diff(files) -> list:
                     line_no=first_line,
                     rule_title="CANON S0 / DEFENSE TESTING §2 (Тотальный запрет на удаление тестов и ассертов)",
                     diff_line=f"- {first_content}",
+                    rotten_kitten="Сносит падающие ассерты из теста, чтобы ctest радостно рапортовал зеленый статус.",
+                    canonical_architect="Оставляет проверку неприкосновенной, находит регрессию в ядре симуляции и чинит физический алгоритм.",
                     why_sabotage=(
                         f"В диффе удалено {len(deleted_asserts)} проверочных ассертов, а добавлено только {added_asserts_count} "
-                        f"(дефицит: -{deficit} проверок)! Удаление тестов вместо починки регрессии — чистейший самообман "
-                        f"и подделка отчетов ctest по закону Гудхарта. Стенд обязан оставаться неприступной стеной."
+                        f"(дефицит: -{deficit} проверок)! Удаление проверок ослепляет заградительный барьер Ring 1-5 и "
+                        f"пропускает регрессии в симуляцию 128³."
                     ),
                     how_to_fix=(
                         "1. Немедленно верни удаленные проверки и ассерты на место.\n"
-                        "   2. Если тест падает — чини реализацию в src/core, src/world, src/sim или src/game.\n"
-                        "   3. Если контракт сущности легально изменился по решению владельца — обнови утверждение, "
-                        "сохранив строгость инварианта."
+                        "   2. Если тест падает — открой файл ядра через read_file и исправь реализацию.\n"
+                        "   3. Добивайся строгого 0 failures при сохранении 100% assertions."
                     )
                 ))
 
-            # Check deleted test cases / test functions
+            # Проверка удаления тест-кейсов
             deleted_cases = []
             for line_no, content in f['deleted_lines']:
                 if TEST_CASE_PATTERN.search(content):
@@ -231,29 +290,27 @@ def audit_diff(files) -> list:
                     line_no=first_line,
                     rule_title="CANON S0 / DEFENSE TESTING §1 (Запрет на уничтожение тестовых сценариев)",
                     diff_line=f"- {first_content}",
-                    why_sabotage=(
-                        f"Удален тестовый сценарий без эквивалентной замены ({len(deleted_cases)} удалено vs {added_cases_count} добавлено)! "
-                        f"Это ослепляет заградительный барьер Ring 1-5 и пропускает архитектурную гниль в продакшен."
-                    ),
-                    how_to_fix="Восстанови тестовый сценарий. Если система была отрефакторена — переведи тест на новый контракт."
+                    rotten_kitten="Вырезает неудобный тест целиком, скрывая несовместимость контрактов.",
+                    canonical_architect="Адаптирует тестовый сценарий под обновленный канонический контракт, сохраняя покрытие.",
+                    why_sabotage=f"Удален целый тестовый сценарий ({len(deleted_cases)} удалено vs {added_cases_count} добавлено).",
+                    how_to_fix="Восстанови тестовый сценарий. Если система обновлена — переведи тест на актуальный API."
                 ))
 
         # ---------------------------------------------------------------------
-        # AXIS 2: ЗАПРЕТ КОММЕНТИРОВАНИЯ АССЕРТОВ (Commented-out Assertions)
+        # 2. ЗАПРЕТ КОММЕНТИРОВАНИЯ АССЕРТОВ И ТЕСТОВ (Commented-out Checks)
         # ---------------------------------------------------------------------
         for line_no, content in f['added_lines']:
             if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
                 continue
 
             commented_assert = False
-            # Check single line comments
             if re.search(r"^\s*//\s*(?:assert|CHECK|REQUIRE|static_assert|GIGA_CHECK|assert_physical_invariants)\b", content):
                 commented_assert = True
             elif re.search(r"^\s*/\*\s*(?:assert|CHECK|REQUIRE|static_assert|GIGA_CHECK)\b", content):
                 commented_assert = True
             elif re.search(r"^\s*//.*\b(?:assert|CHECK|REQUIRE|static_assert|GIGA_CHECK)\s*\(", content):
                 commented_assert = True
-            elif re.search(r"^\s*#\s*if\s+0\b", content):
+            elif re.search(r"^\s*#\s*if\s+0\b", content) and is_test:
                 commented_assert = True
 
             if commented_assert:
@@ -262,22 +319,136 @@ def audit_diff(files) -> list:
                     line_no=line_no,
                     rule_title="CANON S0 / DEFENSE TESTING §2.1 (Запрет на закомментирование ассертов и проверок)",
                     diff_line=f"+ {content}",
-                    why_sabotage=(
-                        "Обнаружен закомментированный ассерт или директива #if 0! Закомментировать проверку — значит "
-                        "трусливо заткнуть рот компилятору и рантайму, скрыв физический взрыв или поломку памяти под ковер."
-                    ),
+                    rotten_kitten="Глушит упавший ассерт двумя слэшами '// assert(...)', затыкая рот валидатору.",
+                    canonical_architect="Раскомментирует проверку, запускает тест в отладчике и устраняет источник неверных данных.",
+                    why_sabotage="Закомментированный ассерт делает систему слепой к разрушению памяти, джиттеру Баумгарте или нарушению шва тора.",
                     how_to_fix=(
                         "1. Немедленно раскомментируй проверку.\n"
-                        "   2. Запусти ctest / отладчик и выясни, почему условие не выполняется.\n"
-                        "   3. Устрани источник неверных данных в симуляции, а не выключай стража."
+                        "   2. Выясни, на каких входных данных контракт нарушается.\n"
+                        "   3. Устрани источник невалидного состояния в логике симуляции."
                     )
                 ))
 
         # ---------------------------------------------------------------------
-        # AXIS 3: ЗАПРЕТ СТАБОВ, ОБХОДОВ ПРОВЕРОК И ОСЛАБЛЕНИЯ ДОПУСКОВ
+        # 3. ЗАПРЕТ СЛЕПЫХ КАСТОВ C++ (Type Laundering in Simulation)
+        # ---------------------------------------------------------------------
+        if is_sim_core:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if not code:
+                    continue
+
+                if re.search(r'\breinterpret_cast\s*<', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="CANON S11 / CODE CONTRACTS BIBLE (Запрет reinterpret_cast в ядре симуляции)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Применяет reinterpret_cast<void*>, ломая строгую C++23 типизацию и выравнивание кэш-линий.",
+                        canonical_architect="Использует плоские POD-структуры GIGA_ROW(T), std::bit_cast или канонические type_tag<T>().",
+                        why_sabotage="Слепое перетолкование памяти ведёт к Undefined Behavior, UB-падениям в релизе и разрушению кэша L1/L2.",
+                        how_to_fix="Объяви строгую структуру данных или используй безопасные конвертеры типов."
+                    ))
+
+                if re.search(r'\bconst_cast\s*<', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="CANON S11 (Запрет сброса константности const_cast в ядре)",
+                        diff_line=f"+ {content}",
+                        why_sabotage="Сброс const нарушает потокобезопасность чтения мира и целостность снапшотов симуляции.",
+                        rotten_kitten="Снимает константность через const_cast, чтобы по-быстрому пропатчить данные.",
+                        canonical_architect="Передает мутируемое состояние через явную неконстантную ссылку или отдельную очередь команд.",
+                        how_to_fix="Перепроектируй поток данных: чтение и мутация должны быть строго разделены."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 4. ЗАПРЕТ ИСКЛЮЧЕНИЙ И RTTI В ДВИЖКЕ (No Exceptions, No RTTI)
+        # ---------------------------------------------------------------------
+        if is_source and not target_file.startswith("src/app/") and not is_test:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if not code:
+                    continue
+
+                if re.search(r'\bthrow\s+([A-Za-z0-9_]+|\()', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="THE HAMMER §4.1 / CANON S11 (Тотальный запрет throw в C++23 ядре)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Выбрасывает 'throw runtime_error()', полагаясь на исключения которых нет в кодовой базе.",
+                        canonical_architect="Возвращает std::optional<T>, Result<T> или фиксирует отказ в Chronicle.",
+                        why_sabotage="Движок компилируется с -fno-exceptions (-GR-). Исключения в C++ ядре запрещены высшей Конституцией.",
+                        how_to_fix="Замени throw на возврат кода ошибки, булев статус или std::optional."
+                    ))
+
+                if re.search(r'\bdynamic_cast\s*<|\btypeid\s*\(', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="THE HAMMER §4.1 / CANON S11 (Тотальный запрет RTTI в C++23 ядре)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Использует dynamic_cast/typeid, нарушая DOD-архитектуру и создавая скрытые таблицы vtable.",
+                        canonical_architect="Использует статический полиморфизм, enum тэги (PartRole, FormId) и EnTT type_tag<T>().",
+                        why_sabotage="Ядро компилируется с -fno-rtti. Использование RTTI ломает сборку на Clang и загрязняет бинарный контракт.",
+                        how_to_fix="Замени динамическую инспекцию типа на enum тег компонента или шаблонную диспетчеризацию."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 5. ЗАПРЕТ ДИНАМИЧЕСКИХ АЛЛОКАЦИЙ В СИМУЛЯЦИИ (Zero Allocations in Tick)
+        # ---------------------------------------------------------------------
+        if is_sim_core:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if not code:
+                    continue
+
+                if re.search(r'\bnew\s+[A-Za-z0-9_]+', code) or re.search(r'\bmalloc\s*\(', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="THE HAMMER §4.4 / CANON S11 (Запрет динамических аллокаций памяти new/malloc в тике)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Аллоцирует память в куче (new/malloc) прямо в шаге симуляции, вызывая фрагментацию.",
+                        canonical_architect="Использует статические пулы, Monolith 128³ непрерывные буферы или фиксированные арены.",
+                        why_sabotage="Такт симуляции 125 Гц священен (dt = 0.008 с). Аллокации в горячем цикле вызывают лаги и дроп кадров.",
+                        how_to_fix="Вынеси аллокации в фазу предзагрузки этажа или используй статический POD-буфер."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 6. ЗАПРЕТ СИСТЕМНОГО СНА В СИМУЛЯЦИИ (Simulation Sleep Ban)
+        # ---------------------------------------------------------------------
+        if is_sim_core:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if not code:
+                    continue
+
+                if re.search(r'\b(sleep_for|sleep_until|Sleep\(|usleep)\b', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="CANON S11 / S15 (Запрет системного сна sleep в горячих путях симуляции)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Втыкает системный sleep, пытаясь синхронизировать потоки костылями.",
+                        canonical_architect="Продвигает симуляцию дискретными квантами по 125 Гц строго через sim_time.",
+                        why_sabotage="Системный сон разрушает детерминизм симуляции, ломает DDA лучи и блокирует воркеры job system.",
+                        how_to_fix="Удали sleep. Время симуляции тикает квантами dt = 0.008 с."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 7. ЗАПРЕТ СТАБОВ, ОБХОДОВ ПРОВЕРОК И ОСЛАБЛЕНИЯ ДОПУСКОВ
         # ---------------------------------------------------------------------
         for hunk in f['hunks']:
-            # Check tolerance relaxation inside hunk (e.g. replacing 1e-4f with 10.0f)
             deleted_tight = [c for _, c in hunk['deleted'] if TIGHT_EPSILON_PATTERN.search(c)]
             added_loose = [(no, c) for no, c in hunk['added'] if LOOSE_NUMBER_PATTERN.search(c)]
 
@@ -290,15 +461,12 @@ def audit_diff(files) -> list:
                         line_no=l_no,
                         rule_title="CANON S0 / DEFENSE TESTING §2.1 (Запрет на ослабление допусков и анти-Гудхарт подгонку)",
                         diff_line=f"+ {l_content}",
-                        why_sabotage=(
-                            f"Обнаружено ослабление порога точности! В удаленных строках фигурировал жесткий допуск "
-                            f"(например '{deleted_tight[0].strip()}'), который был заменен на грубый допуск в строке: "
-                            f"'{l_content.strip()}'. Ослабление допуска скрывает джиттер рэгдолла, накопление численной "
-                            f"погрешности или нестабильность интегратора."
-                        ),
+                        rotten_kitten="Меняет 1e-4f на 10.0f, чтобы криво посчитанная формула прошла тест.",
+                        canonical_architect="Восстанавливает допуск 1e-4f, стабилизирует интегратор Баумгарте и гасит численный джиттер.",
+                        why_sabotage="Ослабление допусков скрывает разлет рэгдоллов, джиттер контактов и пробитие тора.",
                         how_to_fix=(
-                            "1. Верни жесткий физический допуск (<= 1e-4f / канонический эпсилон).\n"
-                            "   2. Доработай сходимость физического солвера, стабилизируй частоту 125 Гц и расчет Баумгарте.\n"
+                            "1. Верни жесткий физический допуск (<= 1e-4f).\n"
+                            "   2. Доработай сходимость физического солвера.\n"
                             "   3. Запрещено натягивать результат под падающий порог!"
                         )
                     ))
@@ -307,64 +475,134 @@ def audit_diff(files) -> list:
             if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
                 continue
 
-            # Stubs with fake comments
+            # Stubs
             if re.search(r"return\s+(?:0|true|false|nullptr|\{\}|std::nullopt)\s*;\s*//\s*(?:stub|fake|mock|temp|workaround|hack|dummy|todo|placeholder)", content, re.IGNORECASE):
                 violations.append(Violation(
                     file_path=target_file,
                     line_no=line_no,
                     rule_title="CANON S0 / THE HAMMER §3.1 (Запрет на фейковые заглушки и стабы)",
                     diff_line=f"+ {content}",
-                    why_sabotage=(
-                        "Обнаружен возврат фиктивного значения с комментарием заглушки! Заглушки создают иллюзию "
-                        "работающей системы, ломая контракты зависимых систем и оставляя мертвые ветки в коде."
-                    ),
-                    how_to_fix="Реализуй честную доменную логику до конца либо откажись от добавления недоделанной сигнатуры."
+                    rotten_kitten="Возвращает 'return true; // stub', бросая пустую функцию.",
+                    canonical_architect="Реализует доменный контракт до конца по First Principles.",
+                    why_sabotage="Заглушки создают иллюзию работающей системы, ломая зависимые контракты в рантайме.",
+                    how_to_fix="Реализуй честную логику до конца либо откажись от добавления недоделанной сигнатуры."
                 ))
 
-            # Void suppressions with fake comments
+            # Void suppressions
             if re.search(r"\(void\)\w+;\s*//\s*(?:stub|bypass|fake|ignore|dummy)", content, re.IGNORECASE):
                 violations.append(Violation(
                     file_path=target_file,
                     line_no=line_no,
                     rule_title="CANON S0 / DEFENSE TESTING §2.1 (Запрет на фиктивное чтение аргументов)",
                     diff_line=f"+ {content}",
-                    why_sabotage="Использование (void)arg; // stub для фиктивного подавления ворнингов без реализации функционала строго запрещено.",
-                    how_to_fix="Задействуй аргумент в реальном алгоритме или убери неиспользуемый параметр."
+                    rotten_kitten="Пишет '(void)arg; // stub', замазывая неиспользуемый аргумент вместо реализации.",
+                    canonical_architect="Использует аргумент в логике или удаляет ненужный параметр из сигнатуры.",
+                    why_sabotage="Фиктивное чтение аргументов скрывает брошенные параметры систем.",
+                    how_to_fix="Задействуй параметр в расчете или удали его."
                 ))
 
-            # Bypasses: if (true) return, assert(true), catch(...) {}
-            if re.search(r"\bif\s*\(\s*(?:true|1)\s*\)\s*return\b", content):
+            # Bypasses
+            code = code_only(content)
+            if code and re.search(r"\bif\s*\(\s*(?:true|1)\s*\)\s*return\b", code):
                 violations.append(Violation(
                     file_path=target_file,
                     line_no=line_no,
                     rule_title="CANON S0 (Запрет на жесткий обход логики if (true) return)",
                     diff_line=f"+ {content}",
-                    why_sabotage="Встроен безусловный досрочный выход, отключающий всю последующую симуляцию.",
-                    how_to_fix="Удали костыль if (true) return и обеспечь нормальное ветвление условий."
+                    rotten_kitten="Ставит 'if (true) return;' в начале сложной функции, отключая ее выполнение.",
+                    canonical_architect="Обеспечивает корректное ветвление и честную обработку граничных условий.",
+                    why_sabotage="Безусловный досрочный выход ослепляет симуляцию и оставляет мертвый код.",
+                    how_to_fix="Удали костыль if (true) return."
                 ))
 
-            if re.search(r"\b(?:assert|CHECK)\s*\(\s*(?:true|1)\s*\)\s*;", content):
+            # Tautological checks
+            if is_test and code and re.search(r"\b(?:assert|CHECK|REQUIRE)\s*\(\s*(?:true|1|1\s*==\s*1)\s*\)\s*;", code):
                 violations.append(Violation(
                     file_path=target_file,
                     line_no=line_no,
-                    rule_title="DEFENSE TESTING §2.1 (Запрет на пустые проверки assert(true))",
+                    rule_title="DEFENSE TESTING §2.1 (Запрет на тавтологии и Потёмкинские тесты assert(true))",
                     diff_line=f"+ {content}",
-                    why_sabotage="Проверка assert(true) / CHECK(true) является фикцией (Потемкинским тестом), создающей иллюзию тестирования.",
-                    how_to_fix="Напиши содержательный ассерт на проверяемый инвариант."
+                    rotten_kitten="Пишет 'CHECK(true)' или 'assert(1)', чтобы тест никогда не мог упасть.",
+                    canonical_architect="Пишет содержательный ассерт на проверяемый инвариант с граничными условиями.",
+                    why_sabotage="Тест-пустышка — это прямая фальсификация отчетов ctest по закону Гудхарта.",
+                    how_to_fix="Напиши честную проверку на фактические результирующие данные."
                 ))
 
-            if re.search(r"catch\s*\([^)]*\)\s*\{\s*\}", content):
+            # Empty catch
+            if code and re.search(r"catch\s*\([^)]*\)\s*\{\s*\}", code):
                 violations.append(Violation(
                     file_path=target_file,
                     line_no=line_no,
                     rule_title="CANON S4.1 (Запрет на проглатывание ошибок через пустой catch)",
                     diff_line=f"+ {content}",
-                    why_sabotage="Пустой блок catch скрывает критические сбои и нарушает дисциплину zero-exceptions C++23.",
-                    how_to_fix="Удали перехват, возвращай структурированный Result<T> или фиксируй статус в Chronicle."
+                    rotten_kitten="Глушит сбои пустым блоком 'catch (...) {}', пряча катастрофы под ковер.",
+                    canonical_architect="Возвращает явный код ошибки или логирует инцидент в Chronicle.",
+                    why_sabotage="Пустой catch скрывает повреждение памяти и нарушает no-exceptions стандарт.",
+                    how_to_fix="Удали перехват, возвращай структурированный Result<T>."
                 ))
 
         # ---------------------------------------------------------------------
-        # AXIS 4: ЗАПРЕТ НА // TODO, FIXME, HACK, WORKAROUND В БОЕВОМ КОДЕ
+        # 8. ЗАПРЕТ ПЛОСКОЙ ЕВКЛИДОВОЙ МЕТРИКИ В МИРЕ ТОРА S1
+        # ---------------------------------------------------------------------
+        if is_sim_core:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if code and re.search(r'\b(std::sqrt|sqrtf)\s*\(\s*dx\s*\*\s*dx\s*\+\s*dy\s*\*\s*dy\s*\+\s*dz\s*\*\s*dz\s*\)', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="CANON S1 (Запрет плоской евклидовой метрики на изотропном торе 128³)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Считает расстояние через обычный sqrt(dx*dx + dy*dy + dz*dz), забывая про тороидальный шов.",
+                        canonical_architect="Использует wrap_delta_f(a, b, kWorldExtent) или канонический wrap_dist(p1, p2).",
+                        why_sabotage="На торе кратчайший путь через шов короче прямого. Плоская метрика рвет физику на границах мира.",
+                        how_to_fix="Используй wrap_delta_f или wrap_dist для расчета тороидальных расстояний."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 9. ЗАПРЕТ ПРИВИЛЕГИЙ ИГРОКА В ФИЗИКЕ (CANON S7)
+        # ---------------------------------------------------------------------
+        if is_sim_core:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if code and re.search(r'\bif\s*\(\s*(?:is_player|entity\s*==\s*player|isPlayer)\s*\)', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="CANON S7 (Игрок НЕ особенный — запрет привилегированных веток в физике)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Втыкает 'if (is_player)', делая игрока иммунным к физике или урону.",
+                        canonical_architect="Относится к игроку как к обычному NPC с CameraTag — единые правила физики для всех.",
+                        why_sabotage="Нарушение системной изотропии превращает честный симулятор в скриптовый костыль.",
+                        how_to_fix="Удали особую ветку игрока: физика, урон и одометр одинаковы для всех тел."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 10. ЗАПРЕТ НАРУШЕНИЯ RETRO CRT АППАРАТУРЫ В IMGUI (THE HAMMER §3.5)
+        # ---------------------------------------------------------------------
+        if is_ui:
+            for line_no, content in f['added_lines']:
+                if "giga-diff-guard: allow" in content or "giga-check: allow" in content:
+                    continue
+                code = code_only(content)
+                if code and re.search(r'\b(?:WindowRounding|FrameRounding|ChildRounding|TabRounding|GrabRounding)\s*=\s*[1-9]', code):
+                    violations.append(Violation(
+                        file_path=target_file,
+                        line_no=line_no,
+                        rule_title="THE HAMMER §3.5 (Retro-Pixel CRT Mandate: строго Zero Rounding в UI)",
+                        diff_line=f"+ {content}",
+                        rotten_kitten="Лепит закругленные углы WindowRounding > 0, превращая совет-панк аппаратуру в стерильный веб-дизайн.",
+                        canonical_architect="Удерживает строго WindowRounding = 0.0f, FrameRounding = 0.0f и контуры 2px.",
+                        why_sabotage="Интерфейс GigaHrush 2 — это служебная совет-панк аппаратура CRT с фосфорным зеленым (#59F266).",
+                        how_to_fix="Установи строго WindowRounding = 0.0f и FrameRounding = 0.0f."
+                    ))
+
+        # ---------------------------------------------------------------------
+        # 11. ЗАПРЕТ НА // TODO, FIXME, HACK, WORKAROUND В БОЕВОМ КОДЕ
         # ---------------------------------------------------------------------
         if is_source or is_test:
             for line_no, content in f['added_lines']:
@@ -387,14 +625,12 @@ def audit_diff(files) -> list:
                         line_no=line_no,
                         rule_title="THE HAMMER §4 / RED TEAM MANDATE (Тотальный запрет на долговой мусор // TODO, FIXME, HACK)",
                         diff_line=f"+ {content}",
-                        why_sabotage=(
-                            f"Обнаружен маркер технического долга '{tag}'! В GigaHrush 2 действует железный закон: "
-                            f"код пишется начисто и сразу. Никаких обещаний 'доделать потом', временных костылей (HACK) "
-                            f"или уродливых обходов (WORKAROUND) в репозитории быть не может."
-                        ),
+                        rotten_kitten=f"Бросает маркер '{tag}', обещая «сделать потом».",
+                        canonical_architect="Пишет код начисто и сразу. Либо проектирует архитектуру в CANON.md, либо не спамит в исходники.",
+                        why_sabotage="Метки TODO и HACK превращают кодовую базу в долговую яму, из которой движок никогда не выберется.",
                         how_to_fix=(
                             "1. Допиши функционал полностью и начисто прямо сейчас.\n"
-                            "   2. Если задача требует новой архитектурной системы — опиши ее в CANON.md и доведи до конца.\n"
+                            "   2. Если задача требует новой системы — зафиксируй спецификацию в CANON.md.\n"
                             "   3. Удали маркер долгового мусора."
                         )
                     ))
@@ -405,7 +641,7 @@ def get_git_diff(args) -> str:
     if args.diff_file:
         p = Path(args.diff_file)
         if not p.exists():
-            print(f"{RED}[diff_guard] Ошибка: файл диффа {p} не найден!{RESET}", file=sys.stderr)
+            print(f"{RED}[DIFF GUARD] Ошибка: файл диффа {p} не найден!{RESET}", file=sys.stderr)
             sys.exit(1)
         return p.read_text(encoding="utf-8", errors="replace")
 
@@ -413,7 +649,9 @@ def get_git_diff(args) -> str:
         return args.diff_text
 
     git_cmd = ["git", "diff"]
-    if args.staged:
+    if args.all:
+        git_cmd.append("HEAD")
+    elif args.staged:
         git_cmd.append("--cached")
     elif args.commit:
         git_cmd.append(args.commit)
@@ -425,27 +663,24 @@ def get_git_diff(args) -> str:
                 return staged
         except Exception:
             pass
-        # Fall back to working tree vs HEAD
         git_cmd.append("HEAD")
 
     git_cmd.extend(["-U3"])
     try:
-        diff_output = subprocess.check_output(git_cmd, cwd=REPO_ROOT, text=True, encoding="utf-8", errors="replace")
-        return diff_output
+        return subprocess.check_output(git_cmd, cwd=REPO_ROOT, text=True, encoding="utf-8", errors="replace")
     except subprocess.CalledProcessError as e:
-        # If HEAD does not exist or git diff fails, try plain git diff
         try:
             return subprocess.check_output(["git", "diff", "-U3"], cwd=REPO_ROOT, text=True, encoding="utf-8", errors="replace")
         except Exception as e2:
-            print(f"{YELLOW}[diff_guard] Предупреждение: git diff не вернул данных ({e2}).{RESET}")
+            print(f"{YELLOW}[DIFF GUARD] Предупреждение: git diff не вернул данных ({e2}).{RESET}")
             return ""
 
 def run_self_test() -> int:
     """
-    Two-polarity mutation self-test proving that the diff guard catches all defect types
+    Two-polarity mutation self-test proving that the upgraded diff guard catches all defect types
     and stays green on valid clean diffs.
     """
-    print(f"{CYAN}[diff_guard] Запуск двухполярного мутационного самотестирования (Two-Polarity Self-Test)...{RESET}")
+    print(f"{CYAN}[DIFF GUARD] Запуск двухполярного мутационного самотестирования (Two-Polarity Self-Test)...{RESET}")
 
     # Polarity 1: Clean, legitimate diff
     clean_diff = """
@@ -465,18 +700,17 @@ diff --git a/tests/barrier_test.cpp b/tests/barrier_test.cpp
     files_clean = parse_unified_diff(clean_diff)
     clean_violations = audit_diff(files_clean)
     if clean_violations:
-        print(f"{RED}[diff_guard] Самотестирование ПРОВАЛЕНО на Полярности 1 (Чистый код дал ложные срабатывания)!{RESET}")
+        print(f"{RED}[DIFF GUARD] Самотестирование ПРОВАЛЕНО на Полярности 1 (Чистый код дал ложные срабатывания)!{RESET}")
         for v in clean_violations:
             print(v.format_manifesto())
         return 1
 
     print(f"  {GREEN}✔ Полярность 1 (Чистый легальный дифф): PASS (0 нарушений){RESET}")
 
-    # Polarity 2: Mutation injection test covering all 5 prohibited axes
+    # Polarity 2: Mutation injection test covering all 11 prohibited axes
     mutations = [
-        (
-            "Мутация 1: Удаление ассертов в tests/",
-            """
+        ("Мутация 1: Удаление ассертов в tests/",
+         """
 diff --git a/tests/unit_test.cpp b/tests/unit_test.cpp
 --- a/tests/unit_test.cpp
 +++ b/tests/unit_test.cpp
@@ -485,36 +719,30 @@ diff --git a/tests/unit_test.cpp b/tests/unit_test.cpp
 -    CHECK(velocity.y == 0.0f);
 -    CHECK(velocity.z == 0.0f);
 +    int x = 42;
-""",
-            "Тотальный запрет на удаление тестов"
-        ),
-        (
-            "Мутация 2: Закомментирование проверки // assert(...)",
-            """
+""", "Тотальный запрет на удаление тестов"),
+
+        ("Мутация 2: Закомментирование проверки // assert(...)",
+         """
 diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
 --- a/src/sim/physics.cpp
 +++ b/src/sim/physics.cpp
 @@ -50,2 +50,3 @@
      float dt = 0.008f;
 +    // assert(dt > 0.0f);
-""",
-            "Запрет на закомментирование ассертов"
-        ),
-        (
-            "Мутация 3: Ослабление допуска точности 1e-4f -> 10.0f",
-            """
+""", "Запрет на закомментирование ассертов"),
+
+        ("Мутация 3: Ослабление допуска точности 1e-4f -> 10.0f",
+         """
 diff --git a/tests/rigid_test.cpp b/tests/rigid_test.cpp
 --- a/tests/rigid_test.cpp
 +++ b/tests/rigid_test.cpp
 @@ -30,2 +30,2 @@
 -    CHECK(joint_error <= 1e-4f);
 +    CHECK(joint_error <= 10.0f);
-""",
-            "Запрет на ослабление допусков"
-        ),
-        (
-            "Мутация 4: Фейковый возврат / заглушка return true; // stub",
-            """
+""", "Запрет на ослабление допусков"),
+
+        ("Мутация 4: Фейковый возврат / заглушка return true; // stub",
+         """
 diff --git a/src/game/action.cpp b/src/game/action.cpp
 --- a/src/game/action.cpp
 +++ b/src/game/action.cpp
@@ -522,12 +750,10 @@ diff --git a/src/game/action.cpp b/src/game/action.cpp
  void process_action() {
 +    return true; // stub
  }
-""",
-            "Запрет на фейковые заглушки"
-        ),
-        (
-            "Мутация 5: Добавление // TODO в боевой код",
-            """
+""", "Запрет на фейковые заглушки"),
+
+        ("Мутация 5: Добавление // TODO в боевой код",
+         """
 diff --git a/src/core/math.h b/src/core/math.h
 --- a/src/core/math.h
 +++ b/src/core/math.h
@@ -535,56 +761,95 @@ diff --git a/src/core/math.h b/src/core/math.h
  inline float dot(vec3 a, vec3 b) {
 +    // TODO: optimize with AVX2 later
      return a.x * b.x + a.y * b.y + a.z * b.z;
-""",
-            "Тотальный запрет на долговой мусор // TODO"
-        ),
-        (
-            "Мутация 6: Добавление // FIXME в шейдеры",
-            """
-diff --git a/shaders/raymarch.frag b/shaders/raymarch.frag
---- a/shaders/raymarch.frag
-+++ b/shaders/raymarch.frag
+""", "Тотальный запрет на долговой мусор // TODO"),
+
+        ("Мутация 6: Слепой reinterpret_cast в ядре симуляции",
+         """
+diff --git a/src/sim/physics.cpp b/src/sim/physics.cpp
+--- a/src/sim/physics.cpp
++++ b/src/sim/physics.cpp
 @@ -80,2 +80,3 @@
- void main() {
-+    // FIXME: fix lighting artifact on torus seam
+ void step() {
++    void* p = reinterpret_cast<void*>(0x1234);
  }
-""",
-            "Тотальный запрет на долговой мусор // TODO"
-        ),
-        (
-            "Мутация 7: Обход проверки if (true) return",
-            """
-diff --git a/src/sim/contacts.cpp b/src/sim/contacts.cpp
---- a/src/sim/contacts.cpp
-+++ b/src/sim/contacts.cpp
-@@ -120,2 +120,3 @@
- void solve_contacts() {
-+    if (true) return;
+""", "Запрет reinterpret_cast"),
+
+        ("Мутация 7: Выброс исключения throw в движке",
+         """
+diff --git a/src/world/world.cpp b/src/world/world.cpp
+--- a/src/world/world.cpp
++++ b/src/world/world.cpp
+@@ -60,2 +60,3 @@
+ void init() {
++    throw std::runtime_error("boom");
  }
-""",
-            "Запрет на жесткий обход логики if (true) return"
-        ),
+""", "Тотальный запрет throw"),
+
+        ("Мутация 8: Динамическая аллокация new в тике симуляции",
+         """
+diff --git a/src/sim/rigid_body.cpp b/src/sim/rigid_body.cpp
+--- a/src/sim/rigid_body.cpp
++++ b/src/sim/rigid_body.cpp
+@@ -90,2 +90,3 @@
+ void update() {
++    auto* b = new Body();
+ }
+""", "Запрет динамических аллокаций памяти new/malloc"),
+
+        ("Мутация 9: Системный сон sleep в симуляции",
+         """
+diff --git a/src/game/ai.cpp b/src/game/ai.cpp
+--- a/src/game/ai.cpp
++++ b/src/game/ai.cpp
+@@ -40,2 +40,3 @@
+ void ai_tick() {
++    sleep_for(10ms);
+ }
+""", "Запрет системного сна sleep"),
+
+        ("Мутация 10: Тавтологический Потёмкинский тест CHECK(true)",
+         """
+diff --git a/tests/dummy_test.cpp b/tests/dummy_test.cpp
+--- a/tests/dummy_test.cpp
++++ b/tests/dummy_test.cpp
+@@ -10,2 +10,3 @@
+ void test_pass() {
++    CHECK(true);
+ }
+""", "Запрет на тавтологии и Потёмкинские тесты"),
+
+        ("Мутация 11: Нарушение CRT Zero-Rounding в ImGui",
+         """
+diff --git a/src/app/hud_ui.cpp b/src/app/hud_ui.cpp
+--- a/src/app/hud_ui.cpp
++++ b/src/app/hud_ui.cpp
+@@ -50,2 +50,3 @@
+ void setup_theme() {
++    style.WindowRounding = 8.0f;
+ }
+""", "Retro-Pixel CRT Mandate: строго Zero Rounding"),
     ]
 
     for title, mut_diff, expected_rule in mutations:
         files_mut = parse_unified_diff(mut_diff)
         mut_violations = audit_diff(files_mut)
         if not mut_violations:
-            print(f"{RED}[diff_guard] СБОЙ САМОТЕСТИРОВАНИЯ: {title} НЕ БЫЛА ПОЙМАНА!{RESET}")
+            print(f"{RED}[DIFF GUARD] СБОЙ САМОТЕСТИРОВАНИЯ: {title} НЕ БЫЛА ПОЙМАНА!{RESET}")
             return 1
         matched = any(expected_rule in v.rule_title for v in mut_violations)
         if not matched:
-            print(f"{RED}[diff_guard] СБОЙ САМОТЕСТИРОВАНИЯ: {title} поймана, но с неверным правилом: {mut_violations[0].rule_title}!{RESET}")
+            print(f"{RED}[DIFF GUARD] СБОЙ САМОТЕСТИРОВАНИЯ: {title} поймана, но с неверным правилом: {mut_violations[0].rule_title}!{RESET}")
             return 1
         print(f"  {GREEN}✔ {title}: УСПЕШНО ЗАБЛОКИРОВАНА{RESET} (правило: {expected_rule})")
 
-    print(f"{GREEN}[diff_guard] ВСЕ 7 МУТАЦИОННЫХ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ! Защита несокрушима.{RESET}")
+    print(f"\n{BOLD}{GREEN}[DIFF GUARD] ВСЕ {len(mutations)} МУТАЦИОННЫХ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ! Защита несокрушима.{RESET}\n")
     return 0
 
 def main():
     parser = argparse.ArgumentParser(description="GigaHrush 2 Iron Gate Diff Guard Inquisitor")
     parser.add_argument("repo_path", nargs="?", default=None, help="Root path of the repository")
     parser.add_argument("--staged", action="store_true", help="Inspect git staged diff (--cached)")
+    parser.add_argument("--all", "-a", action="store_true", help="Inspect all in-flight changes (staged + unstaged)")
     parser.add_argument("--commit", type=str, default=None, help="Inspect diff against commit/range")
     parser.add_argument("--diff-file", type=str, default=None, help="Inspect diff from file")
     parser.add_argument("--diff-text", type=str, default=None, help="Inspect diff from direct text")

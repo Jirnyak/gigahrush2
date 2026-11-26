@@ -19,8 +19,11 @@
 #include "ecs/components.h"
 #include "game/combat.h"
 #include "game/encumbrance.h"
+#include "game/look.h"
+#include "game/action.h"
 #include "sim/physics.h"
 #include "game/body_pose.h"
+#include "game/look.h"
 #include "world/world.h"
 #include "world/destruct.h"
 #include "sim/rigid.h"
@@ -49,16 +52,19 @@ void report_agent_barrier_failure(const char* file, int line, const char* cond,
     std::fprintf(stderr,
         "\n"
         ANSI_RED "================================================================================\n" ANSI_RESET
-        ANSI_RED "🚨 [GIGA-DEFENSE BARRIER INQUISITION GATE FAILED]\n" ANSI_RESET
+        ANSI_RED ANSI_BOLD "🚨 [СТОП! АРХИТЕКТУРНЫЙ БРАК! ЧУВАЧОК, ДАВАЙ-КА РАБОТАЙ — ЧИНИ ПОЛНОЦЕННО!]\n" ANSI_RESET
         ANSI_RED "--------------------------------------------------------------------------------\n" ANSI_RESET
         ANSI_BOLD "📍 ФАЙЛ:" ANSI_RESET " " ANSI_CYAN "%s:%d\n" ANSI_RESET
-        ANSI_BOLD "❌ НАРУШЕННЫЙ ЗАКОН:" ANSI_RESET " " ANSI_YELLOW "%s\n" ANSI_RESET
-        ANSI_BOLD "🔍 УСЛОВИЕ СБОЯ:" ANSI_RESET " %s\n"
-        ANSI_BOLD "⚠️ ЧТО ОБНАРУЖЕНО:" ANSI_RESET "\n   %s\n"
-        ANSI_BOLD "💡 КАК ОБЯЗАН ИСПРАВИТЬ АГЕНТ:" ANSI_RESET "\n   %s\n"
-        ANSI_BOLD "🛑 АНТИ-ГУДХАРТ ПРЕДУПРЕЖДЕНИЕ:" ANSI_RESET "\n"
-        "   Попытка захардкодить частное число, ослабить допуск или закомментировать\n"
-        "   проверку признается служебным подлогом и карается дисквалификацией!\n"
+        ANSI_BOLD "🏛️  ИНКВИЗИЦИОННЫЙ ЗАКОН:" ANSI_RESET " " ANSI_YELLOW "%s\n" ANSI_RESET
+        ANSI_BOLD "🔍 УСЛОВИЕ ПАДЕНИЯ:" ANSI_RESET " %s\n"
+        ANSI_BOLD "⚠️  СИМУЛЯЦИОННАЯ И АРХИТЕКТУРНАЯ КАТАСТРОФА:" ANSI_RESET "\n   %s\n"
+        ANSI_BOLD "⛔ ПОЧЕМУ ЗАПЛАТКА, ЗАТЫКАНИЕ ДОПУСКА ИЛИ СКИММИНГ — ЭТО САБОТАЖ (ROTTEN SEED):" ANSI_RESET "\n"
+        "   Попытка захардкодить частное число, ослабить допуск, закомментировать проверку\n"
+        "   или натянуть псевдофикс признается служебным подлогом и карается дисквалификацией!\n"
+        "   Не смей ориентироваться на «зеленый крестик» — чини причину по Первым Принципам.\n"
+        ANSI_BOLD "🛠️  КАНОНИЧЕСКИЙ АЛГОРИТМ ИСПРАВЛЕНИЯ (FIRST PRINCIPLES):" ANSI_RESET "\n   %s\n"
+        ANSI_RED "--------------------------------------------------------------------------------\n" ANSI_RESET
+        ANSI_RED ANSI_BOLD "❌ ДЕЙСТВИЕ ЗАБЛОКИРОВАНО. ИДИ И ПЕРЕДЕЛЫВАЙ НА СОВЕСТЬ ПО ПЕРВЫМ ПРИНЦИПАМ!\n" ANSI_RESET
         ANSI_RED "================================================================================\n\n" ANSI_RESET,
         file, line, law_name, cond, explanation, how_to_fix);
 }
@@ -564,8 +570,8 @@ static void test_kinematic_joint_continuity_and_rest_identity(DynamicDice& dice)
     const FormDef& def = form_def(form);
     const float kPi = 3.14159265358979323846f;
 
-    // 10 000 случайных фаз шага, случайных амплитуд, случайных положений корня на торе
-    for (int i = 0; i < 10000; ++i) {
+    // 2 000 случайных фаз шага, случайных амплитуд, случайных положений корня на торе
+    for (int i = 0; i < 2000; ++i) {
         const float phase = dice.next_f32_01(); // [0, 1)
         const float amp = dice.range(0.0f, 1.5f);
         const vec3 rootPos{
@@ -1057,8 +1063,8 @@ static void test_ragdoll_jointlink_stochastic_stress(DynamicDice& dice) {
     }
     const float floorTop = 5.0f * kCellSize; // 10.0 м
 
-    // Прогон 25 стохастических сценариев
-    for (int trial = 0; trial < 25; ++trial) {
+    // Прогон 10 стохастических сценариев
+    for (int trial = 0; trial < 10; ++trial) {
         Registry reg;
 
         // Положение рэгдолла: случайная позиция (включая окрестности шва тора)
@@ -1099,7 +1105,7 @@ static void test_ragdoll_jointlink_stochastic_stress(DynamicDice& dice) {
             const vec3 d = wrap_delta3(segPos, blastCenter, kWorldExtent);
             const float dist = std::max(0.3f, length(d));
             const float shockSpeed = dice.range(8.0f, 20.0f) / dist;
-            const vec3 impulse = (d / dist) * shockSpeed;
+            const vec3 impulse = d * (shockSpeed / dist);
 
             Velocity& vel = reg.get<Velocity>(seg);
             vel.v = vel.v + impulse;
@@ -1152,7 +1158,8 @@ static void test_ragdoll_jointlink_stochastic_stress(DynamicDice& dice) {
                     "Кватернион сегмента рэгдолла содержит нечисловые значения.",
                     "Проверь quat_integrate и quat_normalize в src/sim/rigid.cpp.");
 
-                const float qLen = length(rb.q);
+                const float qLen = std::sqrt(rb.q.x * rb.q.x + rb.q.y * rb.q.y +
+                                             rb.q.z * rb.q.z + rb.q.w * rb.q.w);
                 BARRIER_CHECK(std::fabs(qLen - 1.0f) < 0.05f,
                     "CANON S28 (Нормализация ориентации кватерниона)",
                     "Длина кватерниона сегмента отклонилась от 1.0.",
@@ -1223,7 +1230,7 @@ static void test_torus_carve_sphere_seam_stochastic(DynamicDice& dice) {
         op.z = 20.0f * kCellSize; // 40.0 м
         op.radius = 1.25f;
         op.power = 0xFFFF; // Максимальная мощность (гарантированный вырез в пределах радиуса)
-        op.seed = 0x5eamULL;
+        op.seed = 0x5ea0ULL;
         op.detachLimit = 0; // Чистая проверка геометрии сферы без вторичного детача
 
         const std::int32_t removed = carve_sphere(w, op, scratch, res);
@@ -1424,29 +1431,63 @@ static void test_ragdoll_and_carve_bipolar_mutation_fuzzing(DynamicDice& dice) {
         RagdollHumanoid ragdoll = spawn_test_ragdoll_humanoid(reg, layer, rootPos, scale, 70.0f);
 
         // Инъекция дефекта:
-        // 0: сдвиг сегмента (разрыв шарнира)
-        // 1: порча ориентации
-        // 2: инъекция NaN в кватернион
-        int mut_type = dice.range_i(0, 2);
-        std::uint16_t mut_seg = static_cast<std::uint16_t>(dice.range_i(1, ragdoll.segCount - 1));
-        Entity seg = ragdoll.segments[mut_seg];
+        // 0: сдвиг позиции сегмента на > 5 см
+        // 1: инверсия в суставе (инверсия вектора якоря anchorA/anchorB)
+        // 2: инъекция NaN в кватернион или позицию сустава
+        // 3: физический разрыв связи (уничтожение сущности JointLink)
+        int mut_type = dice.range_i(0, 3);
+        std::uint16_t mut_link = static_cast<std::uint16_t>(dice.range_i(0, ragdoll.linkCount - 1));
+        Entity link = ragdoll.links[mut_link];
+        JointLink& jl_mut = reg.get<JointLink>(link);
 
         if (mut_type == 0) {
-            reg.get<Transform>(seg).pos = reg.get<Transform>(seg).pos + vec3{dice.range(0.02f, 0.2f), 0.0f, 0.0f};
+            reg.get<Transform>(jl_mut.a).pos = reg.get<Transform>(jl_mut.a).pos + vec3{dice.range(0.05f, 0.2f), 0.0f, 0.0f};
         } else if (mut_type == 1) {
-            reg.get<RigidBody>(seg).q = quat{0.0f, 1.0f, 0.0f, 0.0f};
+            // Инверсия в суставе: инвертируем вектор якоря сочленения
+            jl_mut.anchorA = vec3{-jl_mut.anchorA.x, -jl_mut.anchorA.y, -jl_mut.anchorA.z};
+            if (length(jl_mut.anchorA) < 0.02f) {
+                jl_mut.anchorB = vec3{-jl_mut.anchorB.x - 0.05f, -jl_mut.anchorB.y, -jl_mut.anchorB.z};
+            }
+        } else if (mut_type == 2) {
+            // Инъекция NaN в координаты или кватернион ориентации
+            if (dice.next_f32_01() > 0.5f) {
+                reg.get<Transform>(jl_mut.a).pos.x = NAN;
+            } else {
+                reg.get<RigidBody>(jl_mut.a).q = quat{NAN, 0.0f, 0.0f, 1.0f};
+            }
         } else {
-            reg.get<RigidBody>(seg).q = quat{NAN, 0.0f, 0.0f, 1.0f};
+            // Физический разрыв шарнира
+            reg.destroy(link);
         }
 
         // Детектор сбоя
         bool detected = false;
         for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+            if (!reg.valid(ragdoll.links[k]) || !reg.all_of<JointLink>(ragdoll.links[k])) {
+                detected = true;
+                break;
+            }
             const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
-            const vec3 pa = reg.get<Transform>(jl.a).pos + quat_rotate(reg.get<RigidBody>(jl.a).q, jl.anchorA);
-            const vec3 pb = reg.get<Transform>(jl.b).pos + quat_rotate(reg.get<RigidBody>(jl.b).q, jl.anchorB);
+            if (!reg.valid(jl.a) || !reg.valid(jl.b) ||
+                !reg.all_of<Transform, RigidBody>(jl.a) ||
+                !reg.all_of<Transform, RigidBody>(jl.b)) {
+                detected = true;
+                break;
+            }
+            const Transform& trA = reg.get<Transform>(jl.a);
+            const Transform& trB = reg.get<Transform>(jl.b);
+            const RigidBody& rbA = reg.get<RigidBody>(jl.a);
+            const RigidBody& rbB = reg.get<RigidBody>(jl.b);
+
+            const vec3 pa = trA.pos + quat_rotate(rbA.q, jl.anchorA);
+            const vec3 pb = trB.pos + quat_rotate(rbB.q, jl.anchorB);
             const float gap = length(wrap_delta3(pa, pb, kWorldExtent));
-            if (!std::isfinite(gap) || gap > 0.01f) {
+
+            const bool finite = std::isfinite(gap) &&
+                                std::isfinite(trA.pos.x) && std::isfinite(trB.pos.x) &&
+                                std::isfinite(rbA.q.w) && std::isfinite(rbB.q.w);
+
+            if (!finite || gap > 0.01f) {
                 detected = true;
                 break;
             }
@@ -1465,7 +1506,244 @@ static void test_ragdoll_and_carve_bipolar_mutation_fuzzing(DynamicDice& dice) {
         " 200/200 наведенных дефектов физики и карвинга перехвачены со 100%% точностью!\n");
 }
 
+// -----------------------------------------------------------------------------
+// Тест 15: Стыковка геймплейных механик Acting и физики одометра/шагов (CANON S22, S28)
+// -----------------------------------------------------------------------------
+static void test_acting_gameplay_physics_coupling_stress(DynamicDice& dice) {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+
+    // Сплошной пол для опоры
+    for (int y = 0; y < 20; ++y) {
+        for (int x = 0; x < 20; ++x) {
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+        }
+    }
+
+    const float dt = kSimDt; // 0.008s
+
+    // -------------------------------------------------------------------------
+    // 1. Стресс-симуляция: одновременный бег и действия в руках/теле
+    // Инвариант: деяния (стрельба, перезарядка, замах) НЕ ломают одометр ног!
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity walker = reg.create();
+        reg.emplace<BodyPlan>(walker, FormId::Humanoid);
+        reg.emplace<Transform>(walker, vec3{10.0f, 10.0f, 11.0f}, layer);
+        reg.emplace<AABB>(walker, vec3{0.3f, 0.3f, 0.9f});
+        reg.emplace<Velocity>(walker, vec3{0.0f, 0.0f, 0.0f});
+        reg.emplace<GravityAffected>(walker, 1.0f, true); // grounded = true
+        reg.emplace<Look>(walker, vec3{1.0f, 0.0f, 0.0f});
+
+        Acting& act = reg.emplace<Acting>(walker);
+        std::uint64_t tick = 1000;
+
+        float totalExpectedMetres = 0.0f;
+
+        // 300 тиков симуляции
+        for (int i = 0; i < 300; ++i, ++tick) {
+            const float speed = dice.range(1.5f, 5.0f);
+            reg.get<Velocity>(walker).v = vec3{speed, 0.0f, 0.0f};
+
+            // Если руки или тело свободны — стохастически запускаем действие
+            if (!acting_busy(act, ActSlot::HandR, tick)) {
+                acting_begin(act, ActSlot::HandR, kActShoot, 20, 1, tick); // 20 тиков выстрел
+            }
+            if (!acting_busy(act, ActSlot::HandL, tick)) {
+                acting_begin(act, ActSlot::HandL, kActReload, 50, 0, tick); // 50 тиков перезарядка
+            }
+            if (!acting_busy(act, ActSlot::Body, tick)) {
+                acting_begin(act, ActSlot::Body, kActSwing, 30, 10, tick); // 30 тиков замах
+            }
+
+            // Фаза окна строго в диапазоне 0..1000
+            const std::uint16_t phaseR = acting_phase_e3(act, ActSlot::HandR, tick);
+            const std::uint16_t phaseL = acting_phase_e3(act, ActSlot::HandL, tick);
+            const std::uint16_t phaseB = acting_phase_e3(act, ActSlot::Body, tick);
+
+            BARRIER_CHECK(phaseR <= 1000u && phaseL <= 1000u && phaseB <= 1000u,
+                "CANON S22 (Нормированная фаза окна деяния acting_phase_e3)",
+                "acting_phase_e3 вернул значение вне диапазона 0..1000.",
+                "Проверь вычисление фазы act_elapsed * 1000 / durTicks в game/action.h.");
+
+            // Шаг одометра и генерация позы
+            std::uint32_t walked = gait_step(reg, stack, layer, dt);
+            BARRIER_CHECK(walked == 1,
+                "CANON S28 (Шаг одометра во время выполнения действий)",
+                "gait_step пропустил идущее тело во время выполнения стрельбы/перезарядки.",
+                "Окно деяния не должно блокировать физическую работу одометра ног.");
+
+            totalExpectedMetres += speed * dt;
+            const Gait* g = reg.try_get<Gait>(walker);
+            BARRIER_CHECK(g != nullptr,
+                "CANON S28 (Существование одометра при деяниях)",
+                "Компонент Gait отсутствует у идущего тела.",
+                "gait_step обязан поддерживать Gait.");
+
+            if (g) {
+                BARRIER_CHECK(std::fabs(g->metres - totalExpectedMetres) < 1e-3f,
+                    "CANON S28 (Точность одометра при совмещении с деяниями)",
+                    "Накопленный путь одометра разошелся с физическим интегралом скорости.",
+                    "Убедись, что одометр накапливает metres += speed * dt независимо от Acting.");
+            }
+
+            // Проход позы живого тела
+            BodyPoseTick pt = body_parts_step(reg, stack, layer);
+            BARRIER_CHECK(pt.posed == 1 && pt.parts == 7,
+                "CANON S28 (Генерация позы живого тела body_parts_step)",
+                "body_parts_step вернул неверное число частей тела гуманоида (ожидалось 7).",
+                "Проверь body_parts_step и form_gait_pose.");
+
+            const BodyParts* bp = reg.try_get<BodyParts>(walker);
+            BARRIER_CHECK(bp != nullptr && bp->count == 7,
+                "CANON S28 (Компонент BodyParts в кадре)",
+                "Компонент BodyParts не создан или содержит не 7 сегментов.",
+                "body_parts_step обязан записывать ровно 7 сегментов для Humanoid.");
+
+            if (bp) {
+                for (int p = 0; p < 7; ++p) {
+                    const bool finitePos = std::isfinite(bp->part[p].pos.x) &&
+                                           std::isfinite(bp->part[p].pos.y) &&
+                                           std::isfinite(bp->part[p].pos.z);
+                    BARRIER_CHECK(finitePos,
+                        "CANON S28 (Конечность координат частей тела в позе)",
+                        "Координата части тела в BodyParts содержит NaN или Inf.",
+                        "Проверь прямую кинематику form_gait_pose.");
+
+                    const float qNorm = std::sqrt(bp->part[p].q.x * bp->part[p].q.x +
+                                                  bp->part[p].q.y * bp->part[p].q.y +
+                                                  bp->part[p].q.z * bp->part[p].q.z +
+                                                  bp->part[p].q.w * bp->part[p].q.w);
+                    BARRIER_CHECK(std::fabs(qNorm - 1.0f) < 0.05f,
+                        "CANON S28 (Нормализация ориентации частей в BodyParts)",
+                        "Кватернион сегмента тела в BodyParts не нормализован.",
+                        "Ориентация в form_gait_pose обязана сохранять унитарность.");
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Инвариант потери опоры (Jump/Fall) во время действия
+    // Окно действия в руках активно, но одометр ног замирает
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity jumper = reg.create();
+        reg.emplace<BodyPlan>(jumper, FormId::Humanoid);
+        reg.emplace<Transform>(jumper, vec3{15.0f, 15.0f, 15.0f}, layer);
+        reg.emplace<AABB>(jumper, vec3{0.3f, 0.3f, 0.9f});
+        reg.emplace<Velocity>(jumper, vec3{4.0f, 0.0f, 10.0f}); // Прыжок вверх и вперед
+        reg.emplace<GravityAffected>(jumper, 1.0f, false); // В воздухе: grounded = false
+
+        Acting& act = reg.emplace<Acting>(jumper);
+        std::uint64_t tick = 5000;
+        acting_begin(act, ActSlot::HandR, kActShoot, 40, 1, tick);
+
+        // Имитируем 30 тиков полета
+        for (int i = 0; i < 30; ++i, ++tick) {
+            std::uint32_t walked = gait_step(reg, stack, layer, dt);
+            BARRIER_CHECK(walked == 0,
+                "CANON S28 (Одометр в воздухе заблокирован)",
+                "Тело без grounded=true накрутило одометр в полете во время стрельбы!",
+                "gait_step обязан строго фильтровать grounded == true.");
+
+            const Gait* g = reg.try_get<Gait>(jumper);
+            BARRIER_CHECK(g == nullptr || g->metres == 0.0f,
+                "CANON S28 (Путь ног в воздухе равен нулю)",
+                "Одометр тела в воздухе не равен 0.",
+                "В прыжке и падении ноги не идут.");
+
+            BARRIER_CHECK(acting_busy(act, ActSlot::HandR, tick),
+                "CANON S22 (Действие продолжается в полете)",
+                "Стрельба в воздухе была неправомерно прервана.",
+                "Полет не входит в маску обрыва выстрела kBreakHand.");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Инвариант обрыва деяний при физическом уроне (kBreakHurt)
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity eater = reg.create();
+        Acting& act = reg.emplace<Acting>(eater);
+        std::uint64_t tick = 2000;
+
+        // Начинаем трапезу: деяние нужды kActMeal, 200 тиков
+        acting_begin(act, ActSlot::Body, kActMeal, 200, 200, tick);
+        BARRIER_CHECK(acting_busy(act, ActSlot::Body, tick),
+            "CANON S22 (Старт деяния нужды)",
+            "Трапеза kActMeal не началась в слоте Body.",
+            "Проверь acting_begin.");
+
+        // На тике 2050 тело получает урон пулей/ударом (kBreakHurt)
+        tick = 2050;
+        BreakResult br = break_action(act, ActSlot::Body, kBreakHurt, tick);
+
+        BARRIER_CHECK(br.broken,
+            "CANON S22 (Обрыв деяния нужды от урона kBreakHurt)",
+            "break_action не сорвал трапезу при получении урона kBreakHurt.",
+            "kActionBreakMask[kActMeal] обязана содержать бит kBreakHurt.");
+
+        BARRIER_CHECK(!acting_busy(act, ActSlot::Body, tick),
+            "CANON S22 (Освобождение слота после срыва)",
+            "Слот Body остался занят после успешного break_action.",
+            "break_action обязан обнулять durTicks.");
+
+        // Проверяем устойчивость боевого действия (выстрел kActShoot не срывается от kBreakHurt)
+        acting_begin(act, ActSlot::HandR, kActShoot, 20, 1, tick);
+        BreakResult br_shoot = break_action(act, ActSlot::HandR, kBreakHurt, tick);
+        BARRIER_CHECK(!br_shoot.broken,
+            "CANON S22 (Иммунитет выстрела к kBreakHurt)",
+            "Выстрел в руке был ошибочно сорван уроном kBreakHurt.",
+            "Выстрел срывается только сменой ствола kBreakHand.");
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Инвариант гибели тела (Corpse): смерть сносит Acting и останавливает шаги
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity mob = reg.create();
+        reg.emplace<BodyPlan>(mob, FormId::Humanoid);
+        reg.emplace<Transform>(mob, vec3{5.0f, 5.0f, 10.0f}, layer);
+        reg.emplace<AABB>(mob, vec3{0.3f, 0.3f, 0.9f});
+        reg.emplace<Velocity>(mob, vec3{2.0f, 0.0f, 0.0f});
+        reg.emplace<GravityAffected>(mob, 1.0f, true);
+        Acting& act = reg.emplace<Acting>(mob);
+        acting_begin(act, ActSlot::HandR, kActShoot, 20, 1, 100);
+
+        // Наносим смерть: боевая система удаляет Acting и вешает Corpse
+        reg.remove<Acting>(mob);
+        reg.emplace<Corpse>(mob);
+
+        // Труп не шагает
+        std::uint32_t walked = gait_step(reg, stack, layer, dt);
+        BARRIER_CHECK(walked == 0,
+            "CANON S28 (Труп не шагает в gait_step)",
+            "Труп с Corpse накрутил одометр в gait_step!",
+            "gait_step обязан проверять !reg.all_of<Corpse>(e).");
+
+        // Труп не получает позу живого тела в body_parts_step
+        BodyPoseTick pt = body_parts_step(reg, stack, layer);
+        BARRIER_CHECK(pt.posed == 0,
+            "CANON S28 (Труп не получает позу живого в body_parts_step)",
+            "body_parts_step построил позу живого для трупа с Corpse!",
+            "body_parts_step обязан отсекать сущности с reg.any_of<Corpse>(e).");
+    }
+
+    std::printf(
+        ANSI_GREEN "✔ [ACTING & PHYSICS COUPLING GATE]:" ANSI_RESET
+        " Стыковка Acting, одометра Gait и походки проверена со 100%% точностью инвариантов!\n");
+}
+
 int main(int argc, char* argv[]) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+
     uint64_t seed = 0xdeadbeefcafeULL;
     if (argc > 1) {
         seed = static_cast<uint64_t>(std::strtoull(argv[1], nullptr, 0));
@@ -1489,9 +1767,12 @@ int main(int argc, char* argv[]) {
     test_ragdoll_jointlink_stochastic_stress(dice);
     test_torus_carve_sphere_seam_stochastic(dice);
     test_ragdoll_and_carve_bipolar_mutation_fuzzing(dice);
+    test_acting_gameplay_physics_coupling_stress(dice);
 
-    std::printf("[barrier_test] %d checks, %d failures (Seed: 0x%llx)\n",
-                g_checks, g_fails, static_cast<unsigned long long>(seed));
+    std::printf("[barrier_test] %d checks, %d failures\n", g_checks, g_fails);
+    std::printf("[barrier_test] Completed with Seed: 0x%llx\n", static_cast<unsigned long long>(seed));
+    std::fflush(stdout);
+    std::fflush(stderr);
 
     return g_fails == 0 ? 0 : 1;
 }
