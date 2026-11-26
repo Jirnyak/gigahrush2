@@ -621,7 +621,7 @@ if(GIGA_BUILD_TESTS)
 
     # Заградительный Anti-Goodhart тест динамических дайсов и инвариантов
     add_executable(barrier_test tests/barrier_test.cpp src/game/body_pose.cpp)
-    target_link_libraries(barrier_test PRIVATE giga_core)
+    target_link_libraries(barrier_test PRIVATE giga_core giga_audio)
     giga_target_flags(barrier_test OFF)
     add_test(NAME barrier_test COMMAND barrier_test)
     set_tests_properties(barrier_test PROPERTIES

@@ -87,3 +87,4 @@ run_stderr.txt
 /medium_log.txt
 medium.log
 *.log
+run_ninja.bat

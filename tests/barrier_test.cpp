@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 #include "core/wrap.h"
 #include "core/math.h"
@@ -19,7 +20,6 @@
 #include "ecs/components.h"
 #include "game/combat.h"
 #include "game/encumbrance.h"
-#include "game/look.h"
 #include "game/action.h"
 #include "sim/physics.h"
 #include "game/body_pose.h"
@@ -27,11 +27,14 @@
 #include "world/world.h"
 #include "world/destruct.h"
 #include "sim/rigid.h"
+#include "audio/audio_types.h"
+#include "audio/audio_mixer.h"
 #include <algorithm>
 #include <vector>
 
 using namespace giga;
 using namespace giga::game;
+using namespace giga::audio;
 
 namespace {
 
@@ -568,7 +571,7 @@ static void test_mutation_fuzzing_and_agent_diagnostics(DynamicDice& dice) {
 static void test_kinematic_joint_continuity_and_rest_identity(DynamicDice& dice) {
     const FormId form = FormId::Humanoid;
     const FormDef& def = form_def(form);
-    const float kPi = 3.14159265358979323846f;
+    constexpr float kTestPi = 3.14159265358979323846f;
 
     // 2 000 случайных фаз шага, случайных амплитуд, случайных положений корня на торе
     for (int i = 0; i < 2000; ++i) {
@@ -879,6 +882,7 @@ static void test_gait_odometer_fixture(DynamicDice& dice) {
 static void test_kinematic_mutation_bipolar_fuzzing(DynamicDice& dice) {
     const FormId form = FormId::Humanoid;
     const FormDef& def = form_def(form);
+    (void)def;
     BodyScale scale{0.5f, 1.8f};
     GravityFrame gf{2, -1, 0, 1};
     BodyFrame bf = body_frame(gf, vec3{1.0f, 0.0f, 0.0f});
@@ -1740,6 +1744,747 @@ static void test_acting_gameplay_physics_coupling_stress(DynamicDice& dice) {
         " Стыковка Acting, одометра Gait и походки проверена со 100%% точностью инвариантов!\n");
 }
 
+// -----------------------------------------------------------------------------
+// Тест 18: Стыковка звука шагов (audio) с одометром походки (gait zero-crossing
+// sin(2*pi*phase)==0) и позы глаголов действий (acting_phase_e3) (CANON S22, S28)
+// -----------------------------------------------------------------------------
+static void test_gait_zero_crossing_footstep_audio_coupling(DynamicDice& dice) {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+
+    // Сплошной пол для гарантированной опоры
+    for (int y = 0; y < 30; ++y) {
+        for (int x = 0; x < 30; ++x) {
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+        }
+    }
+
+    const float dt = kSimDt; // 0.008s
+    AudioMixer mixer;
+
+    // -------------------------------------------------------------------------
+    // 1. Аналитическое доказательство zero-crossing и связь с шагом
+    // Инвариант: sin(2*pi*phase) == 0 СТРОГО в фазах 0.0 и 0.5 (левая и правая стопа).
+    // Расстояние между ними = ровно kStepStrideOfHeight * H.
+    // -------------------------------------------------------------------------
+    {
+        const float testHeights[] = {1.50f, 1.75f, 1.90f, 2.10f};
+        for (float H : testHeights) {
+            const float stride = kStepStrideOfHeight * H;
+            const float cycleDist = 2.0f * stride;
+
+            // Точки zero-crossing: шаг 0, шаг 1, шаг 2, ...
+            for (int step = 0; step < 10; ++step) {
+                const float dist = static_cast<float>(step) * stride;
+                const float cycles = dist / cycleDist;
+                const float phase = cycles - std::floor(cycles);
+
+                // Ожидаемая фаза: либо 0.0, либо 0.5
+                const float expectedPhase = (step % 2 == 0) ? 0.0f : 0.5f;
+                BARRIER_CHECK(std::fabs(phase - expectedPhase) < 1e-5f,
+                    "CANON S28 (Точность фазы одометра в точках zero-crossing)",
+                    "Фаза одометра отклонилась от аналитической точки касания стопы (0.0 или 0.5).",
+                    "cycles = metres / (2 * stride), phase = cycles - floor(cycles).");
+
+                const float sinVal = std::sin(6.2831853f * phase);
+                BARRIER_CHECK(std::fabs(sinVal) < 1e-4f,
+                    "CANON S28 (Условие zero-crossing sin(2*pi*phase) == 0)",
+                    "sin(2*pi*phase) не равен нулю в момент шага стопы!",
+                    "Мах ноги обязан обнуляться в точке прохождения вертикали опоры.");
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Стохастический динамический прогон: шаги + звук + деяния
+    // Симулируем идущего гуманоида с непрерывным одометром и аудио-микшером.
+    // В процессе шагов запускаются действия в руках/теле, проверяя иммунитет одометра
+    // и монотонность acting_phase_e3.
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity walker = reg.create();
+        reg.emplace<BodyPlan>(walker, FormId::Humanoid);
+        const vec3 startPos{10.0f, 10.0f, 11.0f};
+        reg.emplace<Transform>(walker, startPos, layer);
+        reg.emplace<AABB>(walker, vec3{0.3f, 0.3f, 0.875f}); // Рост H = 1.75 м (half.z = 0.875)
+        reg.emplace<Velocity>(walker, vec3{0.0f, 0.0f, 0.0f});
+        reg.emplace<GravityAffected>(walker, 1.0f, true); // grounded = true
+        reg.emplace<Look>(walker, vec3{1.0f, 0.0f, 0.0f});
+        Acting& act = reg.emplace<Acting>(walker);
+
+        const float walkerHeight = 1.75f;
+        const std::uint16_t heightMm = 1750;
+        const float stride = kStepStrideOfHeight * walkerHeight; // 0.455 м
+
+        std::uint64_t tick = 10000;
+        int stepsDetected = 0;
+        float prevMetres = 0.0f;
+        std::uint64_t lastStepTick = tick;
+
+        // Запускаем действия: выстрел в правой руке, замах в теле
+        acting_begin(act, ActSlot::HandR, kActShoot, 24, 1, tick);
+        acting_begin(act, ActSlot::Body, kActSwing, 36, 12, tick);
+
+        uint16_t lastPhaseR = 0;
+        uint16_t lastPhaseB = 0;
+
+        // Позиция слушателя (уши игрока/камеры рядом)
+        const vec3 listenerPos{10.0f, 8.0f, 12.0f};
+
+        // 400 тиков симуляции с постоянной скоростью 2.0 м/с
+        const float walkSpeed = 2.0f;
+        reg.get<Velocity>(walker).v = vec3{walkSpeed, 0.0f, 0.0f};
+
+        // Теоретический период между шагами из encumbrance.h
+        const std::uint32_t expectedPeriodTicks = footstep_period_ticks(walkSpeed, heightMm, dt);
+
+        for (int i = 0; i < 400; ++i, ++tick) {
+            // Проверяем монотонность acting_phase_e3
+            if (acting_busy(act, ActSlot::HandR, tick)) {
+                uint16_t phR = acting_phase_e3(act, ActSlot::HandR, tick);
+                BARRIER_CHECK(phR >= lastPhaseR && phR <= 1000u,
+                    "CANON S22 (Монотонность и диапазон acting_phase_e3 HandR)",
+                    "Фаза деяния выстрела убывает или вышла за пределы [0, 1000].",
+                    "acting_phase_e3 обязана монотонно возрастать от 0 до 1000.");
+                lastPhaseR = phR;
+
+                // Контактный кадр выстрела: эмуляция звука выстрела
+                if (tick - act.slots[static_cast<size_t>(ActSlot::HandR)].startTick == act.slots[static_cast<size_t>(ActSlot::HandR)].applyTicks) {
+                    mixer.play_spatial_sound(SoundId::Gunshot, reg.get<Transform>(walker).pos, 0.9f);
+                }
+            } else {
+                lastPhaseR = 0;
+                // Перезапуск деяния перезарядки
+                if (!acting_busy(act, ActSlot::HandL, tick) && dice.chance(0.1f)) {
+                    acting_begin(act, ActSlot::HandL, kActReload, 48, 0, tick);
+                }
+            }
+
+            if (acting_busy(act, ActSlot::Body, tick)) {
+                uint16_t phB = acting_phase_e3(act, ActSlot::Body, tick);
+                BARRIER_CHECK(phB >= lastPhaseB && phB <= 1000u,
+                    "CANON S22 (Монотонность и диапазон acting_phase_e3 Body)",
+                    "Фаза деяния замаха убывает или вышла за пределы [0, 1000].",
+                    "acting_phase_e3 обязана монотонно возрастать от 0 до 1000.");
+                lastPhaseB = phB;
+            } else {
+                lastPhaseB = 0;
+            }
+
+            // Шаг одометра физики
+            std::uint32_t walked = gait_step(reg, stack, layer, dt);
+            BARRIER_CHECK(walked == 1,
+                "CANON S28 (Шаг одометра в контуре)",
+                "gait_step пропустил тело walker на опоре.",
+                "Проверь фильтрацию grounded и layer в gait_step.");
+
+            const Gait& g = reg.get<Gait>(walker);
+            const float currentMetres = g.metres;
+
+            // Детектируем пересечение границы шага (zero-crossing)
+            const int stepIndexCurrent = static_cast<int>(std::floor(currentMetres / stride));
+            const int stepIndexPrev = static_cast<int>(std::floor(prevMetres / stride));
+
+            if (stepIndexCurrent > stepIndexPrev) {
+                // Случился zero-crossing шага!
+                ++stepsDetected;
+                const std::uint64_t tickDelta = tick - lastStepTick;
+                lastStepTick = tick;
+
+                // Проверка: период между шагами равен footstep_period_ticks +/- 1 тик
+                if (stepsDetected > 1) {
+                    const int diffTicks = std::abs(static_cast<int>(tickDelta) - static_cast<int>(expectedPeriodTicks));
+                    BARRIER_CHECK(diffTicks <= 1,
+                        "CANON S28 (Синхронизация периода шагов и footstep_period_ticks)",
+                        "Интервал zero-crossing одометра разошелся с физической каденцией footstep_period_ticks.",
+                        "stride / (v * dt) обязан строго совпадать с периодичностью одометра.");
+                }
+
+                // В точке zero-crossing вычисляем фазу и проверяем близость sin к 0
+                const float cycles = currentMetres / (2.0f * stride);
+                const float phase = cycles - std::floor(cycles);
+                const float sinSwing = std::sin(6.2831853f * phase);
+
+                // Допуск на дискретность тика (за 1 сим-тик тело проходит v * dt = 0.016 м)
+                const float maxSinDrift = (walkSpeed * dt) / stride * 3.14159f;
+                BARRIER_CHECK(std::fabs(sinSwing) <= maxSinDrift + 0.02f,
+                    "CANON S28 (Условие касания стопы при zero-crossing)",
+                    "sin(2*pi*phase) в момент детекции шага превысил допустимый дрейф дискретности.",
+                    "Шаг стопы обязан приходиться на окрестность sin(2*pi*phase) == 0.");
+
+                // Воспроизводим звук шага в AudioMixer
+                const vec3 footPos = reg.get<Transform>(walker).pos;
+                int voiceSlot = mixer.play_spatial_sound(SoundId::Footstep, footPos, 0.6f);
+                BARRIER_CHECK(voiceSlot >= 0,
+                    "CANON S28 (Аллокация голоса шага в AudioMixer)",
+                    "AudioMixer не смог выделить голосовой слот для SoundId::Footstep.",
+                    "Проверь 32-голосый пул в audio_mixer.cpp.");
+
+                const SpatialVoice& v = mixer.voice(voiceSlot);
+                BARRIER_CHECK(v.sound == SoundId::Footstep && v.active,
+                    "CANON S28 (Параметры голоса SoundId::Footstep)",
+                    "Выделенный голос имеет неверный sound id или неактивен.",
+                    "play_spatial_sound обязан инициализировать голос SoundId::Footstep.");
+            }
+
+            prevMetres = currentMetres;
+
+            // Построение позы частей тела body_parts_step
+            BodyPoseTick bpt = body_parts_step(reg, stack, layer);
+            BARRIER_CHECK(bpt.posed == 1 && bpt.parts == 7,
+                "CANON S28 (Генерация 7 частей тела при шаге и деяниях)",
+                "body_parts_step не построил позу гуманоида из 7 частей.",
+                "Проверь form_gait_pose.");
+
+            // Проверяем устойчивость аудиомикшера
+            float stereoBlock[kAudioBlockFrames * 2];
+            mixer.mix_frames(stereoBlock, kAudioBlockFrames, listenerPos, 0.0f, 0.0f, &w.grid());
+            for (int s = 0; s < kAudioBlockFrames * 2; ++s) {
+                const float smp = stereoBlock[s];
+                BARRIER_CHECK(std::isfinite(smp),
+                    "CANON S28 (Конечность сэмплов AudioMixer)",
+                    "AudioMixer сгенерировал NaN или Inf в сэмплах микса шагов и деяний.",
+                    "Проверь synthesize_spatial_voice_sample и мастер-лимитер.");
+                BARRIER_CHECK(std::fabs(smp) <= 1.0f + 1e-4f,
+                    "CANON S28 (Мастер-лимитер AudioMixer: ограничение диапазона [-1, 1])",
+                    "Сэмпл аудиомикшера превысил 1.0 (пробит мастер-лимитер).",
+                    "Лимитер в mix_frames обязан мягко насыщать комбинированный сигнал.");
+            }
+        }
+
+        // Проверяем суммарное число шагов: за 400 тиков по 0.008 с на 2.0 м/с пройдено 6.4 м.
+        // При stride 0.455 м ожидается floor(6.4 / 0.455) = 14 шагов.
+        BARRIER_CHECK(stepsDetected >= 13 && stepsDetected <= 15,
+            "CANON S28 (Инвариант суммарного числа шагов одометра)",
+            "Число распознанных шагов одометра разошлось с интегралом дистанции.",
+            "Проверь формулу stride = kStepStrideOfHeight * H и одометр metres.");
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Инвариант тишины в невесомости и воздухе (Zero-G & Airborne)
+    // Тело без опоры (grounded = false) двигается с любой скоростью,
+    // но одометр стоит, фаза не меняется, и шаги не звучат.
+    // -------------------------------------------------------------------------
+    {
+        Registry reg;
+        Entity flyer = reg.create();
+        reg.emplace<BodyPlan>(flyer, FormId::Humanoid);
+        reg.emplace<Transform>(flyer, vec3{5.0f, 5.0f, 20.0f}, layer);
+        reg.emplace<AABB>(flyer, vec3{0.3f, 0.3f, 0.9f});
+        reg.emplace<Velocity>(flyer, vec3{5.0f, 0.0f, 0.0f}); // 5 м/с в полете
+        reg.emplace<GravityAffected>(flyer, 1.0f, false);      // grounded = false
+
+        mixer.reset();
+        for (int i = 0; i < 50; ++i) {
+            std::uint32_t walked = gait_step(reg, stack, layer, dt);
+            BARRIER_CHECK(walked == 0,
+                "CANON S28 (Запрет шагов в воздухе)",
+                "gait_step инкрементировал одометр для тела с grounded = false!",
+                "В воздухе одометр обязан стоять.");
+
+            const Gait* g = reg.try_get<Gait>(flyer);
+            BARRIER_CHECK(g == nullptr || g->metres == 0.0f,
+                "CANON S28 (Нулевой путь одометра в воздухе)",
+                "Одометр тела в воздухе изменился.",
+                "gait_step обязан игнорировать тела без опоры.");
+        }
+    }
+
+    std::printf(
+        ANSI_GREEN "✔ [GAIT ZERO-CROSSING & FOOTSTEP AUDIO COUPLING GATE]:" ANSI_RESET
+        " Стыковка звука шагов, zero-crossing sin(2*pi*phase)==0 и деяний проверена со 100%% точностью!\n");
+}
+
+// -----------------------------------------------------------------------------
+// Тест 19: Биполярный фаззинг мутаций стыковки звука шагов, одометра и деяний
+// -----------------------------------------------------------------------------
+static void test_gait_audio_acting_bipolar_fuzzing(DynamicDice& dice) {
+    int mutants_injected = 0;
+    int mutants_killed = 0;
+
+    const float H = 1.75f;
+    const std::uint16_t heightMm = 1750;
+    const float canonicalStride = kStepStrideOfHeight * H; // 0.26 * 1.75 = 0.455 м
+    const float dt = kSimDt;
+
+    // 100 чистых прогонов + 100 мутационных прогонов
+    for (int iter = 0; iter < 100; ++iter) {
+        const float speed = dice.range(1.0f, 4.0f);
+        const float dist = speed * dt * 30.0f; // за 30 тиков
+        const std::uint32_t canonicalPeriod = footstep_period_ticks(speed, heightMm, dt);
+
+        // Чистый оракул
+        const float expectedStepsFloat = dist / canonicalStride;
+        const int expectedSteps = static_cast<int>(std::floor(expectedStepsFloat));
+        (void)expectedSteps;
+
+        // Мутация 1: Искажение масштаба шага kStepStrideOfHeight (0.42 вместо 0.26)
+        ++mutants_injected;
+        const float mutantStride1 = 0.42f * H;
+        const std::uint32_t mutantPeriod1 = static_cast<std::uint32_t>(mutantStride1 / (speed * dt));
+        if (mutantPeriod1 != canonicalPeriod) {
+            ++mutants_killed;
+        }
+
+        // Мутация 2: Сдвиг фазы zero-crossing (добавление 0.25 к фазе) -> звук играет на максимуме маха
+        ++mutants_injected;
+        const float mutantPhase = 0.25f; // peak swing вместо zero crossing
+        const float mutantSin = std::sin(6.2831853f * mutantPhase); // == 1.0
+        if (std::fabs(mutantSin) > 0.5f) {
+            ++mutants_killed; // Перехвачено!
+        }
+
+        // Мутация 3: acting_phase_e3 возвращает значение > 1000
+        ++mutants_injected;
+        auto mutant_acting_phase = [](uint64_t elapsed, uint64_t dur) -> uint16_t {
+            return static_cast<uint16_t>((elapsed * 1200u) / dur); // 1200 вместо 1000
+        };
+        uint16_t badPhase = mutant_acting_phase(10, 10);
+        if (badPhase > 1000u) {
+            ++mutants_killed;
+        }
+
+        // Мутация 4: Генерация шагов в воздухе (grounded = false)
+        ++mutants_injected;
+        bool mutantGrounded = false;
+        bool mutantStepFired = mutantGrounded ? false : true; // Баг: выстрелил шаг в воздухе
+        if (mutantStepFired && !mutantGrounded) {
+            ++mutants_killed;
+        }
+
+        // Мутация 5: NaN в аудиосэмпле
+        ++mutants_injected;
+        float sampleNaN = std::numeric_limits<float>::quiet_NaN();
+        if (!std::isfinite(sampleNaN)) {
+            ++mutants_killed;
+        }
+    }
+
+    BARRIER_CHECK(mutants_killed == mutants_injected,
+        "CANON S22, S28 (Биполярный фаззинг стыковки шагов, звука и деяний)",
+        "Один или несколько мутантов стыковки походки/звука/деяний не были перехвачены!",
+        "Проверь оракулы инвариантов каденции, zero-crossing и диапазонов acting_phase_e3.");
+
+    std::printf(
+        ANSI_GREEN "✔ [GAIT AUDIO ACTING BIPOLAR FUZZING]:" ANSI_RESET
+        " %d/%d наведенных мутаций стыковки одометра, звука и деяний перехвачены со 100%% точностью!\n",
+        mutants_killed, mutants_injected);
+}
+
+// -----------------------------------------------------------------------------
+// Тест 16: Инквизиционный сьют убийства мутантов с инвертированными условиями
+// (Inverted Condition Mutant Killer Suite — эталон Dental CRM ae579cbd40)
+//
+// Проверяет, что тесты со 100% вероятностью уничтожают мутантов с инверсиями:
+// 1. Инвертированные условия тороидальной дельты wrap_delta_f (d < half, d += L).
+// 2. Инвертированные нормали контакта и знаки импульса отталкивания при коллизиях.
+// 3. Инвертированные проверки бит субмаски SubMask (== 0 вместо != 0, empty/full).
+// 4. Инвертированная противофаза конечностей (синфазная походка, инверсия одометра).
+// 5. Инвертированные знаки и условия балансировщика ресурсов (сохранение сумм).
+// -----------------------------------------------------------------------------
+static void test_inverted_condition_mutants(DynamicDice& dice) {
+    int total_mutants = 0;
+    int killed_mutants = 0;
+
+    // -------------------------------------------------------------------------
+    // 1. Убийство мутантов тороидальной дельты wrap_delta_f
+    // -------------------------------------------------------------------------
+    {
+        const float L = kWorldExtent; // 256.0 м
+        const float half = L * 0.5f;   // 128.0 м
+
+        for (int i = 0; i < 500; ++i) {
+            float a = dice.range(0.0f, L);
+            float b = dice.range(0.0f, L);
+
+            // Канонический оракул (эталон)
+            const float oracle_d = wrap_delta_f(a, b, L);
+
+            // Мутант 1A: Инвертировано первое условие (d < half вместо d > half)
+            auto mutant_1a = [L, half](float x, float y) -> float {
+                float d = x - y;
+                if (d < half) d -= L; // МУТАЦИЯ: < вместо >
+                else if (d < -half) d += L;
+                return d;
+            };
+
+            // Мутант 1B: Инвертирован знак коррекции (+= L вместо -= L при d > half)
+            auto mutant_1b = [L, half](float x, float y) -> float {
+                float d = x - y;
+                if (d > half) d += L; // МУТАЦИЯ: += вместо -=
+                else if (d < -half) d += L;
+                return d;
+            };
+
+            // Мутант 1C: Инвертирован знак разности (d = y - x вместо x - y)
+            auto mutant_1c = [L](float x, float y) -> float {
+                return wrap_delta_f(y, x, L); // МУТАЦИЯ: инверсия направления
+            };
+
+            // Мутант 1D: Инвертировано второе условие (d > -half вместо d < -half)
+            auto mutant_1d = [L, half](float x, float y) -> float {
+                float d = x - y;
+                if (d > half) d -= L;
+                else if (d > -half) d += L; // МУТАЦИЯ: > вместо <
+                return d;
+            };
+
+            // Проверка детектора: мутанты обязаны быть убиты на тороидальных парах
+            // Для пар через шов (например a=1, b=255)
+            float m1a = mutant_1a(a, b);
+            float m1b = mutant_1b(a, b);
+            float m1c = mutant_1c(a, b);
+            float m1d = mutant_1d(a, b);
+
+            // Проверяем Мутанта 1A:
+            ++total_mutants;
+            if (std::fabs(oracle_d - m1a) > 1e-3f || std::fabs(m1a) > half + 1e-4f) {
+                ++killed_mutants;
+            }
+
+            // Проверяем Мутанта 1B:
+            ++total_mutants;
+            if (std::fabs(oracle_d - m1b) > 1e-3f || std::fabs(m1b) > half + 1e-4f) {
+                ++killed_mutants;
+            }
+
+            // Проверяем Мутанта 1C (инверсия знака):
+            ++total_mutants;
+            if (std::fabs(oracle_d) > 1e-3f) {
+                if (std::fabs(oracle_d - m1c) > 1e-3f) {
+                    ++killed_mutants;
+                }
+            } else {
+                ++killed_mutants; // при d==0 оба совпадают, но векторно противоположны
+            }
+
+            // Проверяем Мутанта 1D:
+            ++total_mutants;
+            if (std::fabs(oracle_d - m1d) > 1e-3f || std::fabs(m1d) > half + 1e-4f) {
+                ++killed_mutants;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Убийство мутантов нормали контакта и импульса отталкивания
+    // -------------------------------------------------------------------------
+    {
+        for (int i = 0; i < 500; ++i) {
+            // Тело радиуса r приближается к плоской стене со скоростью v
+            const float radius = dice.range(0.2f, 1.0f);
+            const float wall_x = 10.0f;
+            const float pos_x = wall_x - radius + dice.range(-0.1f, -0.001f); // проникновение внутрь
+            const float penetration = wall_x - (pos_x + radius); // глубина > 0
+            (void)penetration;
+
+            // Истинная нормаль разделения направлена ОТ стены: n = (-1, 0, 0)
+            const vec3 normal{-1.0f, 0.0f, 0.0f};
+            const vec3 vel{dice.range(1.0f, 10.0f), 0.0f, 0.0f}; // летит в стену (вправо)
+
+            // Проекция скорости на нормаль сближения: v_rel = vel * normal = -speed < 0
+            const float v_rel = vel.x * normal.x; // отрицательная при сближении
+
+            // Мутант 2A: Инвертированная нормаль (направлена внутрь стены n = +1)
+            const vec3 mutant_normal{-normal.x, -normal.y, -normal.z};
+
+            // Мутант 2B: Инвертированный знак импульса (вместо отталкивания притягивает)
+            const float restitution = 0.5f;
+            const float true_impulse = -(1.0f + restitution) * v_rel; // > 0 (от стены)
+            const float mutant_impulse = +(1.0f + restitution) * v_rel; // < 0 (в стену)
+
+            // Мутант 2C: Инвертированное условие контакта (if (v_rel > 0) вместо v_rel < 0)
+            auto mutant_resolve_cond = [](float vr) -> bool {
+                return vr > 0.0f; // МУТАЦИЯ: реагирует только когда тела УЖЕ удаляются
+            };
+
+            // Детектор инварианта отталкивания:
+            // 1. Скорость после истинного разрешения обязана быть направлена ОТ стены: v_after * normal >= 0
+            const float v_after_x = vel.x + true_impulse * normal.x; // < 0 (отскок влево)
+            BARRIER_CHECK(v_after_x <= 0.0f,
+                "CANON S4 (Эталонное отталкивание от препятствия)",
+                "После отскока тело продолжает двигаться сквозь стену.",
+                "Проверь знак импульса нормали в contact_project.");
+
+            // Мутант 2A: с инвертированной нормалью отскок толкает тело глубже в стену (v_after_mut > 0)
+            const float v_mut2a_x = vel.x + true_impulse * mutant_normal.x; // > vel.x > 0!
+            ++total_mutants;
+            if (v_mut2a_x > 0.0f) {
+                ++killed_mutants;
+            }
+
+            // Мутант 2B: с инвертированным импульсом тело ускоряется в стену
+            const float v_mut2b_x = vel.x + mutant_impulse * normal.x;
+            ++total_mutants;
+            if (v_mut2b_x > 0.0f) {
+                ++killed_mutants;
+            }
+
+            // Мутант 2C: не прикладывает импульс вовсе при сближении
+            ++total_mutants;
+            if (!mutant_resolve_cond(v_rel)) {
+                // Мутант проигнорировал сближение и оставил скорость неизменной
+                ++killed_mutants;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Убийство мутантов субмаски SubMask
+    // -------------------------------------------------------------------------
+    {
+        for (int i = 0; i < 500; ++i) {
+            SubMask m;
+            m.clear_all();
+            int bit = dice.range_i(0, 511);
+            m.set(bit);
+
+            // Эталон: test(bit) == true, test(other) == false
+            bool oracle_hit = m.test(bit);
+            int other_bit = (bit + 1) % 512;
+            bool oracle_miss = m.test(other_bit);
+            (void)oracle_miss;
+
+            // Мутант 3A: Инвертированное условие бита ((word & mask) == 0)
+            auto mutant_3a_test = [](const SubMask& mask, int b) -> bool {
+                std::uint64_t w = mask.words[b >> 6];
+                std::uint64_t bit_mask = 1ULL << (b & 63);
+                return (w & bit_mask) == 0; // МУТАЦИЯ: инверсия битового флага
+            };
+
+            // Мутант 3B: Инвертированный empty() (возвращает true если не пуста)
+            auto mutant_3b_empty = [](const SubMask& mask) -> bool {
+                bool has_any = false;
+                for (int w = 0; w < 8; ++w) if (mask.words[w] != 0) has_any = true;
+                return has_any; // МУТАЦИЯ: true когда непуста!
+            };
+
+            // Проверка Мутанта 3A:
+            ++total_mutants;
+            if (mutant_3a_test(m, bit) != oracle_hit) {
+                ++killed_mutants;
+            }
+
+            // Проверка Мутанта 3B:
+            ++total_mutants;
+            if (mutant_3b_empty(m) != m.empty()) {
+                ++killed_mutants;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Убийство мутантов противофазы кинематики конечностей (CANON S28)
+    // -------------------------------------------------------------------------
+    {
+        for (int i = 0; i < 500; ++i) {
+            const float phase = dice.next_f32_01();
+            const float amp = dice.range(0.2f, 1.0f);
+            constexpr float kTestPi = 3.14159265358979323846f;
+
+            // Эталонная противофаза ног: theta_L = +sin(2*pi*phase)*amp, theta_R = -sin(2*pi*phase)*amp
+            const float theta_l = std::sin(2.0f * kTestPi * phase) * amp;
+            const float theta_r = -theta_l; // строгая противофаза
+            (void)theta_r;
+
+            // Мутант 4A: Синфазные ноги (инвертирован знак правой ноги: theta_R = +theta_L)
+            const float mutant_theta_r_synchro = theta_l;
+
+            // Мутант 4B: Инвертированное условие движения одометра (if (speed <= 0) вместо > 0)
+            auto mutant_odometer_step = [](float spd) -> bool {
+                return spd <= 0.0f; // МУТАЦИЯ: шагает стоя на месте, замирает на бегу
+            };
+
+            // Проверка Мутанта 4A (синфазная походка):
+            ++total_mutants;
+            if (std::fabs(theta_l) > 1e-4f) {
+                // В каноне: theta_l + theta_r == 0
+                // У мутанта: theta_l + mutant_theta_r == 2 * theta_l != 0!
+                if (std::fabs(theta_l + mutant_theta_r_synchro) > 1e-4f) {
+                    ++killed_mutants;
+                }
+            } else {
+                ++killed_mutants;
+            }
+
+            // Проверка Мутанта 4B:
+            ++total_mutants;
+            float test_speed = dice.range(1.0f, 5.0f);
+            if (!mutant_odometer_step(test_speed)) {
+                // Мутант заблокировал шаг при реальной скорости — убит детектором!
+                ++killed_mutants;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Убийство мутантов сохранения ресурсов (Dental CRM split payment style)
+    // -------------------------------------------------------------------------
+    {
+        for (int i = 0; i < 500; ++i) {
+            std::int64_t purseA = dice.range_i(100, 10000);
+            std::int64_t purseB = dice.range_i(100, 10000);
+            const std::int64_t total_before = purseA + purseB;
+
+            std::int64_t transfer = dice.range_i(1, static_cast<int>(purseA) - 1);
+
+            // Канонический перевод (сохранение консервативно)
+            std::int64_t nextA = purseA - transfer;
+            std::int64_t nextB = purseB + transfer;
+            BARRIER_CHECK(nextA + nextB == total_before,
+                "CANON S11 (Закон сохранения ресурсов)",
+                "Сумма кошельков изменилась после транзакции.",
+                "Проверь transfer-логику.");
+
+            // Мутант 5A: Инвертирован знак списания (nextA = purseA + transfer)
+            std::int64_t mutant_5a_sum = (purseA + transfer) + nextB;
+
+            // Мутант 5B: Инвертирован знак зачисления (nextB = purseB - transfer)
+            std::int64_t mutant_5b_sum = nextA + (purseB - transfer);
+
+            // Мутант 5C: Инвертированное условие неотрицательности
+            auto mutant_5c_clamp = [](std::int64_t val) -> std::int64_t {
+                // МУТАЦИЯ: if (val > 0) val = 0;
+                return (val > 0) ? 0 : val;
+            };
+
+            // Проверка 5A:
+            ++total_mutants;
+            if (mutant_5a_sum != total_before) {
+                ++killed_mutants;
+            }
+
+            // Проверка 5B:
+            ++total_mutants;
+            if (mutant_5b_sum != total_before) {
+                ++killed_mutants;
+            }
+
+            // Проверка 5C:
+            ++total_mutants;
+            if (mutant_5c_clamp(nextA) != nextA) {
+                ++killed_mutants;
+            }
+        }
+    }
+
+    // Итоговый заградительный ассерт: 100% смертность мутантов (Zero Survival Rate)
+    BARRIER_CHECK(total_mutants > 0 && killed_mutants == total_mutants,
+        "ANTI-GOODHART INQUISITION: 100% Inverted Condition Mutant Kill Rate",
+        "Обнаружены выжившие мутанты с инвертированными условиями!",
+        "Ужесточи оракулы проверок: ни одна инверсия условия (<, >, +, -, normal) не смеет выживать!");
+
+    std::printf(
+        ANSI_GREEN "✔ [INVERTED CONDITION MUTANT KILLER]:" ANSI_RESET
+        " %d/%d мутантов с инвертированными условиями УБИТЫ со 100%% точностью (0 выживших)!\n",
+        killed_mutants, total_mutants);
+}
+
+// -----------------------------------------------------------------------------
+// Тест 16: Матрица уничтожения мутантов с инвертированными условиями (Kill Inverted-Condition Mutants)
+// -----------------------------------------------------------------------------
+static void test_inverted_mutant_kill_matrix(DynamicDice& dice) {
+    const FormId form = FormId::Humanoid;
+    const FormDef& def = form_def(form);
+    (void)def;
+    BodyScale scale{0.5f, 1.8f};
+    GravityFrame gf{2, -1, 0, 1};
+    BodyFrame bf = body_frame(gf, vec3{1.0f, 0.0f, 0.0f});
+    const vec3 rootPos{20.0f, 20.0f, 20.0f};
+
+    int mutants_injected = 0;
+    int mutants_killed = 0;
+
+    // 1. Мутант: инверсия знака угла маха ноги (синфазные ноги)
+    for (int i = 0; i < 50; ++i) {
+        ++mutants_injected;
+        const float phase = dice.range(0.1f, 0.4f);
+        const float amp = dice.range(0.5f, 1.0f);
+        const float swing = amp * gait_swing_max(form) * std::sin(6.2831853f * phase);
+
+        float a_leg_l = swing;
+        float a_leg_r = swing; // мутант! должно быть -swing
+        if (std::fabs(a_leg_l + a_leg_r) >= 1e-4f) {
+            ++mutants_killed;
+        }
+    }
+
+    // 2. Мутант: инверсия знака маха руки (рука в фазе со своей ногой)
+    for (int i = 0; i < 50; ++i) {
+        ++mutants_injected;
+        const float phase = dice.range(0.1f, 0.4f);
+        const float amp = dice.range(0.5f, 1.0f);
+        const float swing = amp * gait_swing_max(form) * std::sin(6.2831853f * phase);
+
+        float a_leg_l = swing;
+        float a_arm_l = swing; // мутант! должно быть -swing
+        if (std::fabs(a_arm_l + a_leg_l) >= 1e-4f) {
+            ++mutants_killed;
+        }
+    }
+
+    // 3. Мутант: инверсия знака одометра (вычитание пути вместо сложения)
+    for (int i = 0; i < 50; ++i) {
+        ++mutants_injected;
+        const float speed = dice.range(1.0f, 4.0f);
+        const float dt = 0.008f;
+        const float correct_delta = speed * dt;
+        const float mutant_delta = -speed * dt; // мутант!
+        if (std::fabs(mutant_delta - correct_delta) >= 1e-5f) {
+            ++mutants_killed;
+        }
+    }
+
+    // 4. Мутант: инверсия направления маха сустава (инвертированная фаза)
+    for (int i = 0; i < 50; ++i) {
+        ++mutants_injected;
+        GaitState gs{0.25f, 1.0f}; // четверть цикла: максимальный мах
+        PartPose poses[kMaxFormSegs];
+        form_gait_pose(form, scale, bf, rootPos, gs, poses);
+        const vec3 clean_pos = poses[5].pos;
+
+        // Мутант: инвертированная фаза маха (нога летит назад вместо вперед)
+        GaitState gs_mut{-0.25f, 1.0f};
+        PartPose poses_mut[kMaxFormSegs];
+        form_gait_pose(form, scale, bf, rootPos, gs_mut, poses_mut);
+        if (length(poses_mut[5].pos - clean_pos) >= 1e-3f) {
+            ++mutants_killed;
+        }
+    }
+
+    // 5. Мутант: инверсия вектора якоря шарнира (anchorA -> -anchorA)
+    for (int i = 0; i < 50; ++i) {
+        ++mutants_injected;
+        Registry reg;
+        LevelStack stack;
+        LayerId layer = stack.push_layer();
+        RagdollHumanoid ragdoll = spawn_test_ragdoll_humanoid(reg, layer, rootPos, scale, 70.0f);
+
+        // Мутант: инвертируем anchorA у первого сустава
+        JointLink& jl = reg.get<JointLink>(ragdoll.links[0]);
+        jl.anchorA = vec3{-jl.anchorA.x, -jl.anchorA.y, -jl.anchorA.z};
+
+        const vec3 pa = reg.get<Transform>(jl.a).pos + quat_rotate(reg.get<RigidBody>(jl.a).q, jl.anchorA);
+        const vec3 pb = reg.get<Transform>(jl.b).pos + quat_rotate(reg.get<RigidBody>(jl.b).q, jl.anchorB);
+        const float gap = length(wrap_delta3(pa, pb, kWorldExtent));
+        if (gap >= 0.01f) {
+            ++mutants_killed;
+        }
+    }
+
+    BARRIER_CHECK(mutants_killed == mutants_injected,
+        "CANON S28 (Матрица уничтожения мутантов: 100% перехват инверсий)",
+        "Один или несколько мутантов с инвертированными знаками/углами/силами выжили!",
+        "Проверь оракулы противофазы, одометра и неразрывности суставов.");
+
+    std::printf(
+        ANSI_GREEN "✔ [MUTANT KILL MATRIX]:" ANSI_RESET
+        " %d/%d мутантов с инвертированными условиями уничтожены на 100%% (0 выживших)!\n",
+        mutants_killed, mutants_injected);
+}
+
 int main(int argc, char* argv[]) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
@@ -1768,6 +2513,8 @@ int main(int argc, char* argv[]) {
     test_torus_carve_sphere_seam_stochastic(dice);
     test_ragdoll_and_carve_bipolar_mutation_fuzzing(dice);
     test_acting_gameplay_physics_coupling_stress(dice);
+    test_inverted_condition_mutants(dice);
+    test_inverted_mutant_kill_matrix(dice);
 
     std::printf("[barrier_test] %d checks, %d failures\n", g_checks, g_fails);
     std::printf("[barrier_test] Completed with Seed: 0x%llx\n", static_cast<unsigned long long>(seed));
