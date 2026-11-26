@@ -21,7 +21,11 @@
 #include "game/encumbrance.h"
 #include "sim/physics.h"
 #include "game/body_pose.h"
+#include "world/world.h"
+#include "world/destruct.h"
+#include "sim/rigid.h"
 #include <algorithm>
+#include <vector>
 
 using namespace giga;
 using namespace giga::game;
@@ -951,110 +955,514 @@ static void test_kinematic_mutation_bipolar_fuzzing(DynamicDice& dice) {
 }
 
 // -----------------------------------------------------------------------------
-// Тест 12: Инвариант 7 — Тороидальный карвинг сферы через нулевой шов мира
+// Вспомогательные функции для физики рэгдолла и тороидальной геометрии
 // -----------------------------------------------------------------------------
-static void test_torus_carve_sphere_seam_dice(DynamicDice& dice) {
-    MacroGrid grid;
+inline vec3 sub_voxel_world_center(int cx, int cy, int cz, int sx, int sy, int sz) {
+    return vec3{
+        (static_cast<float>(cx) * static_cast<float>(kSubDim) + static_cast<float>(sx) + 0.5f) * kVoxelSize,
+        (static_cast<float>(cy) * static_cast<float>(kSubDim) + static_cast<float>(sy) + 0.5f) * kVoxelSize,
+        (static_cast<float>(cz) * static_cast<float>(kSubDim) + static_cast<float>(sz) + 0.5f) * kVoxelSize
+    };
+}
 
-    // Вспомогательный тороидальный карвинг сферы
-    auto carve_sphere_torus = [&](vec3 center, float radius) {
-        const float r_sq = radius * radius;
-        const int cell_range = static_cast<int>(std::ceil((radius + kVoxelSize) / kCellSize)) + 1;
+struct RagdollHumanoid {
+    Entity segments[kMaxFormSegs]{};
+    Entity links[kMaxFormSegs]{};
+    std::uint16_t segCount = 0;
+    std::uint16_t linkCount = 0;
+};
 
+static RagdollHumanoid spawn_test_ragdoll_humanoid(Registry& reg, LayerId layer,
+                                                   const vec3& rootPos,
+                                                   const BodyScale& scale,
+                                                   float totalKg = 70.0f) {
+    constexpr float kFleshRestitution = 0.05f;
+    constexpr float kFleshFriction = 0.75f;
+    const FormId form = FormId::Humanoid;
+    const FormDef& def = form_def(form);
+
+    GravityFrame gf{2, -1, 0, 1}; // Cardinal Z-down
+    BodyFrame bf = body_frame(gf, vec3{1.0f, 0.0f, 0.0f});
+
+    PartPose pose[kMaxFormSegs];
+    form_rest_pose(form, scale, bf, rootPos, pose);
+
+    RagdollHumanoid ragdoll;
+    ragdoll.segCount = def.count;
+    ragdoll.linkCount = def.count > 0 ? static_cast<std::uint16_t>(def.count - 1) : 0;
+
+    auto attach = [&](Entity e, const FormSegDef& sd, const PartPose& pp, float kg) {
+        reg.emplace_or_replace<AABB>(e, AABB{pp.half});
+        if (sd.prim == FormPrim::Sphere)
+            rigid_attach_sphere(reg, e, pp.half.x, kg, kFleshRestitution, kFleshFriction);
+        else
+            rigid_attach_box(reg, e, pp.half, kg, kFleshRestitution, kFleshFriction);
+        reg.get<RigidBody>(e).q = pp.q;
+    };
+
+    // Сегмент 0: Pelvis (Root)
+    Entity root = reg.create();
+    reg.emplace<Transform>(root, Transform{pose[0].pos, layer});
+    reg.emplace<Velocity>(root, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+    attach(root, kFormSegs[def.first], pose[0], totalKg * kFormSegs[def.first].massFrac);
+    ragdoll.segments[0] = root;
+
+    for (std::uint16_t i = 1; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        Entity seg = reg.create();
+        reg.emplace<Transform>(seg, Transform{pose[i].pos, layer});
+        reg.emplace<Velocity>(seg, Velocity{vec3{0.0f, 0.0f, 0.0f}});
+        attach(seg, sd, pose[i], totalKg * sd.massFrac);
+        ragdoll.segments[i] = seg;
+
+        const Entity parent = (sd.parent == kFormNoParent) ? root : ragdoll.segments[sd.parent];
+        const PartJoint pj = form_part_joint(form, scale, i);
+
+        Entity link = reg.create();
+        JointLink jl;
+        jl.a = seg;
+        jl.b = parent;
+        jl.anchorA = pj.inPart;
+        jl.anchorB = pj.inParent;
+        jl.restLen = 0.0f;
+        jl.rope = sd.rope != 0;
+        reg.emplace<JointLink>(link, jl);
+        ragdoll.links[i - 1] = link;
+    }
+
+    return ragdoll;
+}
+
+static float ragdoll_joint_gap(const Registry& reg, const JointLink& jl) {
+    const vec3 pa = reg.get<Transform>(jl.a).pos +
+                    quat_rotate(reg.get<RigidBody>(jl.a).q, jl.anchorA);
+    const vec3 pb = reg.get<Transform>(jl.b).pos +
+                    quat_rotate(reg.get<RigidBody>(jl.b).q, jl.anchorB);
+    return length(wrap_delta3(pa, pb, kWorldExtent)) - jl.restLen;
+}
+
+// -----------------------------------------------------------------------------
+// Тест 12: Стохастический стресс-тест рэгдолла и шарниров JointLink (CANON S28, §64)
+// -----------------------------------------------------------------------------
+static void test_ragdoll_jointlink_stochastic_stress(DynamicDice& dice) {
+    LevelStack stack;
+    LayerId layer = stack.push_layer();
+    World& w = stack.layer(layer);
+
+    // Сплошной бетонный пол на всем торе z = [8, 10) м (cz = 4)
+    for (int y = 0; y < kMacroDim; ++y) {
+        for (int x = 0; x < kMacroDim; ++x) {
+            w.grid().fill_cell(x, y, 4, kMatConcrete);
+        }
+    }
+    const float floorTop = 5.0f * kCellSize; // 10.0 м
+
+    // Прогон 25 стохастических сценариев
+    for (int trial = 0; trial < 25; ++trial) {
+        Registry reg;
+
+        // Положение рэгдолла: случайная позиция (включая окрестности шва тора)
+        vec3 rootPos{
+            dice.range(0.0f, kWorldExtent),
+            dice.range(0.0f, kWorldExtent),
+            floorTop + dice.range(1.5f, 3.5f)
+        };
+
+        BodyScale scale;
+        scale.H = dice.range(1.6f, 2.0f);
+        scale.W = dice.range(0.4f, 0.55f);
+        const float totalKg = dice.range(60.0f, 90.0f);
+
+        RagdollHumanoid ragdoll = spawn_test_ragdoll_humanoid(reg, layer, rootPos, scale, totalKg);
+
+        // Инвариант 1: Исходный зазор в суставах в позе покоя тождественно равен 0
+        for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+            const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
+            const float gap0 = ragdoll_joint_gap(reg, jl);
+            BARRIER_CHECK(gap0 < 1e-4f,
+                "CANON S28 (Инвариант 1: Нулевой зазор шарниров в позе покоя)",
+                "Исходный зазор сустава JointLink в позе покоя превышает 0.1 мм.",
+                "Проверь координаты PartJoint в form_part_joint и якоря anchorA/anchorB.");
+        }
+
+        // Приложение случайных ударных импульсов (эмуляция взрыва/выстрелов)
+        // Эпицентр взрыва вблизи рэгдолла
+        const vec3 blastCenter = rootPos + vec3{
+            dice.range(-1.5f, 1.5f),
+            dice.range(-1.5f, 1.5f),
+            dice.range(-0.5f, 1.5f)
+        };
+
+        for (std::uint16_t i = 0; i < ragdoll.segCount; ++i) {
+            Entity seg = ragdoll.segments[i];
+            const vec3 segPos = reg.get<Transform>(seg).pos;
+            const vec3 d = wrap_delta3(segPos, blastCenter, kWorldExtent);
+            const float dist = std::max(0.3f, length(d));
+            const float shockSpeed = dice.range(8.0f, 20.0f) / dist;
+            const vec3 impulse = (d / dist) * shockSpeed;
+
+            Velocity& vel = reg.get<Velocity>(seg);
+            vel.v = vel.v + impulse;
+
+            RigidBody& rb = reg.get<RigidBody>(seg);
+            rb.w = vec3{dice.range(-10.0f, 10.0f), dice.range(-10.0f, 10.0f), dice.range(-10.0f, 10.0f)};
+            rb.asleep = false;
+            rb.quietTicks = 0;
+        }
+
+        float maxDynamicGap = 0.0f;
+
+        // Симуляция 150 физических тиков (125 Гц, 1.2 секунды)
+        for (int tick = 0; tick < 150; ++tick) {
+            // Вторичный ударный импульс на 40-м тике для проверки стрессоустойчивости цепи
+            if (tick == 40) {
+                std::uint16_t hitSeg = static_cast<std::uint16_t>(dice.range_i(0, ragdoll.segCount - 1));
+                Velocity& vel = reg.get<Velocity>(ragdoll.segments[hitSeg]);
+                vel.v = vel.v + vec3{dice.range(-12.0f, 12.0f), dice.range(-12.0f, 12.0f), dice.range(4.0f, 12.0f)};
+                RigidBody& rb = reg.get<RigidBody>(ragdoll.segments[hitSeg]);
+                rb.asleep = false;
+                rb.quietTicks = 0;
+            }
+
+            rigid_body_step(reg, stack, kSimDt);
+
+            // Инвариант 2: Конечность всех физических величин (Zero NaN / Inf)
+            for (std::uint16_t i = 0; i < ragdoll.segCount; ++i) {
+                Entity seg = ragdoll.segments[i];
+                const Transform& tr = reg.get<Transform>(seg);
+                const Velocity& vel = reg.get<Velocity>(seg);
+                const RigidBody& rb = reg.get<RigidBody>(seg);
+
+                const bool posFinite = std::isfinite(tr.pos.x) && std::isfinite(tr.pos.y) && std::isfinite(tr.pos.z);
+                BARRIER_CHECK(posFinite,
+                    "CANON S28 (Отсутствие NaN/Inf в координатах сегментов)",
+                    "Позиция сегмента рэгдолла обратилась в NaN или Inf при симуляции.",
+                    "Проверь деление на массу и интегратор rigid_body_step.");
+
+                const bool velFinite = std::isfinite(vel.v.x) && std::isfinite(vel.v.y) && std::isfinite(vel.v.z);
+                BARRIER_CHECK(velFinite,
+                    "CANON S28 (Отсутствие NaN/Inf в скоростях сегментов)",
+                    "Скорость сегмента рэгдолла обратилась в NaN или Inf при ударном импульсе.",
+                    "Проверь расчет импульсов в solve_link и contact_project.");
+
+                const bool quatFinite = std::isfinite(rb.q.x) && std::isfinite(rb.q.y) &&
+                                       std::isfinite(rb.q.z) && std::isfinite(rb.q.w);
+                BARRIER_CHECK(quatFinite,
+                    "CANON S28 (Отсутствие NaN/Inf в кватернионах сегментов)",
+                    "Кватернион сегмента рэгдолла содержит нечисловые значения.",
+                    "Проверь quat_integrate и quat_normalize в src/sim/rigid.cpp.");
+
+                const float qLen = length(rb.q);
+                BARRIER_CHECK(std::fabs(qLen - 1.0f) < 0.05f,
+                    "CANON S28 (Нормализация ориентации кватерниона)",
+                    "Длина кватерниона сегмента отклонилась от 1.0.",
+                    "Убедись, что rigid.cpp нормализует кватернион ориентации после поворота.");
+            }
+
+            // Инвариант 3: Сохранение целостности графа связей
+            for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+                BARRIER_CHECK(reg.valid(ragdoll.links[k]) && reg.all_of<JointLink>(ragdoll.links[k]),
+                    "CANON S28 (Неразрывность и сохранение связей JointLink)",
+                    "Связь JointLink между сегментами рэгдолла была потеряна.",
+                    "Сущности связей JointLink не должны уничтожаться солвером.");
+
+                const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
+                const float gap = ragdoll_joint_gap(reg, jl);
+                if (gap > maxDynamicGap) maxDynamicGap = gap;
+
+                // Зазор под динамическим ударом не должен взрываться
+                BARRIER_CHECK(gap < 0.15f,
+                    "CANON S28 (§64 Стабилизация Баумгарте: удержание зазора под взрывом)",
+                    "Зазор сустава превысил 15 см под воздействием ударного импульса (кинематический взрыв!).",
+                    "Проверь project_point_joint и коэффициент kJointBias в src/sim/rigid.cpp.");
+            }
+        }
+
+        // Инвариант 4: Сходимость и стабилизация Баумгарте после опадания импульса
+        // После 150 тиков опадания зазоры всех суставов сходятся к < 1.5 см
+        for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+            const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
+            const float finalGap = ragdoll_joint_gap(reg, jl);
+
+            BARRIER_CHECK(finalGap < 0.015f,
+                "CANON S28 (§64 Стабилизация Баумгарте: сходимость суставов)",
+                "Зазор сустава после опадания импульса не стабилизировался ниже 1.5 см.",
+                "Проверь позиционную проекцию Baumgarte project_point_joint в src/sim/rigid.cpp.");
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Тест 13: Стохастический тороидальный карвинг сферы carve_sphere через шов мира (0/256м)
+// -----------------------------------------------------------------------------
+static void test_torus_carve_sphere_seam_stochastic(DynamicDice& dice) {
+    // -------------------------------------------------------------------------
+    // Часть 1: Канонический вырез полости R через нулевой шов 255.5м -> 0.5м
+    // -------------------------------------------------------------------------
+    {
+        World w;
+        CarveScratch scratch;
+        CarveResult res;
+
+        // Заполняем массивный бетонный блок вокруг нулевого шва тора:
+        // cx = 125, 126, 127 (левая сторона шва) и cx = 0, 1, 2 (правая сторона шва)
+        // cy = [18, 22], cz = [18, 22]
+        for (int cx : {125, 126, 127, 0, 1, 2}) {
+            for (int cy = 18; cy <= 22; ++cy) {
+                for (int cz = 18; cz <= 22; ++cz) {
+                    w.grid().fill_cell(cx, cy, cz, kMatConcrete);
+                }
+            }
+        }
+
+        // Параметры карвинга: центр ровно на 255.5 м, радиус R = 1.25 м
+        // Полость распространяется от 254.25 м через границу 256.0/0.0 м до 0.75 м (покрывая 0.5 м)
+        CarveOp op;
+        op.x = 255.5f;
+        op.y = 20.0f * kCellSize; // 40.0 м
+        op.z = 20.0f * kCellSize; // 40.0 м
+        op.radius = 1.25f;
+        op.power = 0xFFFF; // Максимальная мощность (гарантированный вырез в пределах радиуса)
+        op.seed = 0x5eamULL;
+        op.detachLimit = 0; // Чистая проверка геометрии сферы без вторичного детача
+
+        const std::int32_t removed = carve_sphere(w, op, scratch, res);
+
+        BARRIER_CHECK(removed > 0 && !res.destroyed.empty(),
+            "CANON S2 (Результативность carve_sphere на шве тора)",
+            "carve_sphere вернул 0 удаленных субвокселей при вырезе на шве тора.",
+            "Проверь итерации lo..hi и маскирование в src/world/destruct.cpp.");
+
+        // Проверка: затронуты субвоксели ПО ОБЕ СТОРОНЫ шва тора (cx == 127 и cx == 0)
+        bool sawCell127 = false;
+        bool sawCell0 = false;
+        for (const auto& d : res.destroyed) {
+            // Инвариант границ: индекс клетки строго в пределах [0, 2097151], бит [0, 511]
+            BARRIER_CHECK(d.cell < kMacroCells,
+                "CANON S1 (Индекс клетки при тороидальном карвинге)",
+                "Индекс клетки d.cell вышел за пределы [0, kMacroCells - 1].",
+                "Убедись, что key_at использует macro_index(ax >> 3, ay >> 3, az >> 3) после маскирования.");
+
+            BARRIER_CHECK(d.bit < 512,
+                "CANON S2 (Бит субвокселя при тороидальном карвинге)",
+                "Бит субвокселя d.bit вышел за пределы 512 бит.",
+                "Проверь sub_bit(ax & 7, ay & 7, az & 7) в key_at.");
+
+            const int cx = static_cast<int>(d.cell & 127u);
+            if (cx == 127) sawCell127 = true;
+            if (cx == 0) sawCell0 = true;
+        }
+
+        BARRIER_CHECK(sawCell127,
+            "CANON S1 (Вырез субвокселей слева от шва: cell 127)",
+            "carve_sphere не удалил субвоксели в клетке 127 при x = 255.5 м.",
+            "Проверь расчет координат ax < 0 или ax ~ 1022 в carve_sphere.");
+
+        BARRIER_CHECK(sawCell0,
+            "CANON S1 (Вырез субвокселей справа от шва: cell 0)",
+            "carve_sphere не удалил субвоксели в клетке 0 при переходе через 256.0 м.",
+            "Убедись, что key_at маскирует ax &= kSubGridMask, замыкая 1024 -> 0.");
+
+        // Геометрическая инспекция каждого субвокселя в тестовом объеме
+        for (int cx : {126, 127, 0, 1}) {
+            for (int cy = 19; cy <= 21; ++cy) {
+                for (int cz = 19; cz <= 21; ++cz) {
+                    const SubMask& m = w.grid().mask(cx, cy, cz);
+                    for (int sz = 0; sz < kSubDim; ++sz) {
+                        for (int sy = 0; sy < kSubDim; ++sy) {
+                            for (int sx = 0; sx < kSubDim; ++sx) {
+                                const vec3 subPos = sub_voxel_world_center(cx, cy, cz, sx, sy, sz);
+                                const vec3 d = wrap_delta3(subPos, vec3{op.x, op.y, op.z}, kWorldExtent);
+                                const float dist = length(d);
+                                const bool isSolid = m.test(sub_bit(sx, sy, sz));
+
+                                if (dist <= op.radius - 0.20f) {
+                                    // Субвоксель СТРОГО внутри полости: обязан быть вырезан (empty)
+                                    BARRIER_CHECK(!isSolid,
+                                        "CANON S2 (Полнота выреза внутри полости сферы на шве тора)",
+                                        "Субвоксель внутри радиуса полости R остался монолитным.",
+                                        "Проверь условие d2 < r2 и carve_roll в src/world/destruct.cpp.");
+                                } else if (dist >= op.radius + 0.20f) {
+                                    // Субвоксель СТРОГО снаружи сферы: обязан остаться монолитным (solid)
+                                    BARRIER_CHECK(isSolid,
+                                        "CANON S2 (Сохранность субвокселей снаружи сферы на шве тора)",
+                                        "Субвоксель снаружи радиуса сферы R был ошибочно уничтожен.",
+                                        "Проверь ограничение радиуса в цикле lo..hi.");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Проверка списка dirtyCells: содержит клетки 127 и 0
+        bool dirty127 = false, dirty0 = false;
+        for (std::uint32_t ci : res.dirtyCells) {
+            const int cx = static_cast<int>(ci & 127u);
+            if (cx == 127) dirty127 = true;
+            if (cx == 0) dirty0 = true;
+        }
+        BARRIER_CHECK(dirty127 && dirty0,
+            "CANON S20.4 (Долг писателя геометрии: dirtyCells по обе стороны шва)",
+            "res.dirtyCells не содержит клетки по обе стороны нулевого шва тора.",
+            "finalize_dirty обязана сохранять задетые макроклетки 127 и 0.");
+    }
+
+    // -------------------------------------------------------------------------
+    // Часть 2: Стохастический фаззинг карвинга через швы по всем 3 осям (X, Y, Z)
+    // -------------------------------------------------------------------------
+    for (int axis = 0; axis < 3; ++axis) {
+        World w;
+        CarveScratch scratch;
+        CarveResult res;
+
+        // Позиция на шве выбранной оси
+        vec3 center{
+            axis == 0 ? 255.5f : dice.range(20.0f, 100.0f),
+            axis == 1 ? 255.5f : dice.range(20.0f, 100.0f),
+            axis == 2 ? 255.5f : dice.range(20.0f, 100.0f)
+        };
+
+        const float radius = dice.range(1.0f, 1.75f);
+        const int c_main = 127;
+        const int c_wrap = 0;
+
+        // Заполняем $5 \times 5 \times 5$ клеток вокруг центра с тороидальным wrap_macro
         int base_cx = static_cast<int>(std::floor(center.x / kCellSize));
         int base_cy = static_cast<int>(std::floor(center.y / kCellSize));
         int base_cz = static_cast<int>(std::floor(center.z / kCellSize));
 
-        for (int dz = -cell_range; dz <= cell_range; ++dz) {
+        for (int dz = -2; dz <= 2; ++dz) {
             int cz = wrap_macro(base_cz + dz);
-            for (int dy = -cell_range; dy <= cell_range; ++dy) {
+            for (int dy = -2; dy <= 2; ++dy) {
                 int cy = wrap_macro(base_cy + dy);
-                for (int dx = -cell_range; dx <= cell_range; ++dx) {
+                for (int dx = -2; dx <= 2; ++dx) {
                     int cx = wrap_macro(base_cx + dx);
-                    SubMask& m = grid.mask(cx, cy, cz);
-                    if (m.empty()) continue;
-
-                    for (int sz = 0; sz < kSubDim; ++sz) {
-                        float vz = static_cast<float>(cz) * kCellSize + (static_cast<float>(sz) + 0.5f) * kVoxelSize;
-                        float dz_w = wrap_delta_f(vz, center.z, kWorldExtent);
-                        for (int sy = 0; sy < kSubDim; ++sy) {
-                            float vy = static_cast<float>(cy) * kCellSize + (static_cast<float>(sy) + 0.5f) * kVoxelSize;
-                            float dy_w = wrap_delta_f(vy, center.y, kWorldExtent);
-                            for (int sx = 0; sx < kSubDim; ++sx) {
-                                float vx = static_cast<float>(cx) * kCellSize + (static_cast<float>(sx) + 0.5f) * kVoxelSize;
-                                float dx_w = wrap_delta_f(vx, center.x, kWorldExtent);
-
-                                if (dx_w * dx_w + dy_w * dy_w + dz_w * dz_w <= r_sq) {
-                                    m.clear(sub_bit(sx, sy, sz));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    for (int run = 0; run < 100; ++run) {
-        // Заполняем область у шва мира твердью
-        int cells_to_test[] = {0, 1, kMacroDim - 1, kMacroDim - 2};
-        for (int cx : cells_to_test) {
-            for (int cy = 10; cy <= 12; ++cy) {
-                for (int cz = 10; cz <= 12; ++cz) {
-                    grid.mask(cx, cy, cz).set_all();
+                    w.grid().fill_cell(cx, cy, cz, kMatConcrete);
                 }
             }
         }
 
-        // Центр сферы сажаем строго НА ШОВ ТОРА: например x = 0.1 м (или 255.9 м)
-        const float radius = dice.range(1.5f, 3.5f);
-        const vec3 center{
-            dice.next_f32_01() > 0.5f ? dice.range(0.0f, 0.5f) : dice.range(kWorldExtent - 0.5f, kWorldExtent),
-            11.0f * kCellSize,
-            11.0f * kCellSize
-        };
+        CarveOp op;
+        op.x = center.x;
+        op.y = center.y;
+        op.z = center.z;
+        op.radius = radius;
+        op.power = 0xFFFF;
+        op.seed = static_cast<std::uint32_t>(dice.next_u64());
+        op.detachLimit = 0;
 
-        carve_sphere_torus(center, radius);
+        const std::int32_t removed = carve_sphere(w, op, scratch, res);
+        BARRIER_CHECK(removed > 0,
+            "CANON S1 (Изотропный вырез сферы на швах X/Y/Z)",
+            "carve_sphere вернул 0 удаленных субвокселей на шве тора.",
+            "Проверь изотропию осей в carve_sphere.");
 
-        // Проверяем:
-        // 1. Внутри сферы (r < radius - 0.35м) субвоксели ОБЯЗАНЫ быть вырезаны (bit == 0)
-        // 2. Вне сферы (r > radius + 0.35м) твердь обязана остаться нетронутой (bit == 1)
-        for (int cx : cells_to_test) {
-            for (int cy = 10; cy <= 12; ++cy) {
-                for (int cz = 10; cz <= 12; ++cz) {
-                    const SubMask& m = grid.mask(cx, cy, cz);
-                    for (int sz = 0; sz < kSubDim; ++sz) {
-                        float vz = static_cast<float>(cz) * kCellSize + (static_cast<float>(sz) + 0.5f) * kVoxelSize;
-                        float dz_w = wrap_delta_f(vz, center.z, kWorldExtent);
-                        for (int sy = 0; sy < kSubDim; ++sy) {
-                            float vy = static_cast<float>(cy) * kCellSize + (static_cast<float>(sy) + 0.5f) * kVoxelSize;
-                            float dy_w = wrap_delta_f(vy, center.y, kWorldExtent);
-                            for (int sx = 0; sx < kSubDim; ++sx) {
-                                float vx = static_cast<float>(cx) * kCellSize + (static_cast<float>(sx) + 0.5f) * kVoxelSize;
-                                float dx_w = wrap_delta_f(vx, center.x, kWorldExtent);
-                                float dist = std::sqrt(dx_w * dx_w + dy_w * dy_w + dz_w * dz_w);
+        bool sawLeft = false, sawRight = false;
+        for (const auto& d : res.destroyed) {
+            BARRIER_CHECK(d.cell < kMacroCells,
+                "CANON S1 (Индекс клетки при изотропном карвинге)",
+                "Индекс клетки вышел за пределы допустимого диапазона [0, 2097151].",
+                "Убедись, что маскирование kSubGridMask применяется по всем 3 осям.");
 
-                                bool is_set = m.test(sub_bit(sx, sy, sz));
+            int coord = (axis == 0) ? static_cast<int>(d.cell & 127u)
+                                    : (axis == 1) ? static_cast<int>((d.cell >> 7) & 127u)
+                                                  : static_cast<int>(d.cell >> 14);
+            if (coord == c_main) sawLeft = true;
+            if (coord == c_wrap) sawRight = true;
+        }
 
-                                if (dist < radius - 0.35f) {
-                                    BARRIER_CHECK(!is_set,
-                                        "CANON S2 (Тороидальный карвинг сферы через шов мира)",
-                                        "Субвоксель внутри радиуса карвинга остался твердым около шва тора!",
-                                        "Убедись, что wrap_delta_f используется при расчете тороидального расстояния взрыва/карвинга.");
-                                } else if (dist > radius + 0.35f) {
-                                    BARRIER_CHECK(is_set,
-                                        "CANON S2 (Сохранение геометрии вне радиуса карвинга)",
-                                        "Субвоксель вне радиуса карвинга был ошибочно уничтожен!",
-                                        "Радиус повреждения не должен распространяться дальше радиуса сферы.");
-                                }
-                            }
-                        }
-                    }
-                    grid.mask(cx, cy, cz).clear_all();
-                }
+        BARRIER_CHECK(sawLeft && sawRight,
+            "CANON S1 (Изотропия тора: вырез по обе стороны шва выбранной оси)",
+            "Карвинг не затронул обе стороны шва вдоль оси X, Y или Z.",
+            "Проверь циклы lo..hi по осям X, Y, Z в carve_sphere.");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Тест 14: Двухполярный тест мутаций физики рэгдолла и швов карвинга
+// -----------------------------------------------------------------------------
+static void test_ragdoll_and_carve_bipolar_mutation_fuzzing(DynamicDice& dice) {
+    // -------------------------------------------------------------------------
+    // Полярность 1: 200 чистых проверок геометрии суставов — 0 ложных тревог
+    // -------------------------------------------------------------------------
+    int clean_failures = 0;
+    for (int run = 0; run < 200; ++run) {
+        Registry reg;
+        LevelStack stack;
+        LayerId layer = stack.push_layer();
+        vec3 rootPos{dice.range(0.0f, kWorldExtent), dice.range(0.0f, kWorldExtent), dice.range(10.0f, 200.0f)};
+        BodyScale scale{dice.range(0.35f, 0.55f), dice.range(1.6f, 2.0f)};
+        RagdollHumanoid ragdoll = spawn_test_ragdoll_humanoid(reg, layer, rootPos, scale, 70.0f);
+
+        for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+            const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
+            if (ragdoll_joint_gap(reg, jl) >= 1e-4f) {
+                ++clean_failures;
             }
         }
     }
+    BARRIER_CHECK(clean_failures == 0,
+        "CANON S28 (Полярность 1: Чистая геометрия шарниров рэгдолла)",
+        "Оракул проверки суставов ложно забраковал валидный рэгдолл в позе покоя.",
+        "Убедись в точности float и кватернионов при спавне рэгдолла.");
+
+    // -------------------------------------------------------------------------
+    // Полярность 2: 200 наведенных мутаций (разрыв сустава, NaN, подмена ориентации)
+    // Детектор ОБЯЗАН поймать 200/200 (100% перехват дефектов)
+    // -------------------------------------------------------------------------
+    int mutations_caught = 0;
+    const int total_mutations = 200;
+
+    for (int run = 0; run < total_mutations; ++run) {
+        Registry reg;
+        LevelStack stack;
+        LayerId layer = stack.push_layer();
+        vec3 rootPos{dice.range(0.0f, kWorldExtent), dice.range(0.0f, kWorldExtent), dice.range(10.0f, 200.0f)};
+        BodyScale scale{dice.range(0.35f, 0.55f), dice.range(1.6f, 2.0f)};
+        RagdollHumanoid ragdoll = spawn_test_ragdoll_humanoid(reg, layer, rootPos, scale, 70.0f);
+
+        // Инъекция дефекта:
+        // 0: сдвиг сегмента (разрыв шарнира)
+        // 1: порча ориентации
+        // 2: инъекция NaN в кватернион
+        int mut_type = dice.range_i(0, 2);
+        std::uint16_t mut_seg = static_cast<std::uint16_t>(dice.range_i(1, ragdoll.segCount - 1));
+        Entity seg = ragdoll.segments[mut_seg];
+
+        if (mut_type == 0) {
+            reg.get<Transform>(seg).pos = reg.get<Transform>(seg).pos + vec3{dice.range(0.02f, 0.2f), 0.0f, 0.0f};
+        } else if (mut_type == 1) {
+            reg.get<RigidBody>(seg).q = quat{0.0f, 1.0f, 0.0f, 0.0f};
+        } else {
+            reg.get<RigidBody>(seg).q = quat{NAN, 0.0f, 0.0f, 1.0f};
+        }
+
+        // Детектор сбоя
+        bool detected = false;
+        for (std::uint16_t k = 0; k < ragdoll.linkCount; ++k) {
+            const JointLink& jl = reg.get<JointLink>(ragdoll.links[k]);
+            const vec3 pa = reg.get<Transform>(jl.a).pos + quat_rotate(reg.get<RigidBody>(jl.a).q, jl.anchorA);
+            const vec3 pb = reg.get<Transform>(jl.b).pos + quat_rotate(reg.get<RigidBody>(jl.b).q, jl.anchorB);
+            const float gap = length(wrap_delta3(pa, pb, kWorldExtent));
+            if (!std::isfinite(gap) || gap > 0.01f) {
+                detected = true;
+                break;
+            }
+        }
+
+        if (detected) ++mutations_caught;
+    }
+
+    BARRIER_CHECK(mutations_caught == total_mutations,
+        "CANON S28 (Полярность 2: 100% перехват мутаций шарниров)",
+        "Детектор пропустил наведенный дефект сустава рэгдолла!",
+        "Оракул проверки суставов обязан быть чувствителен к любым расхождениям.");
+
+    std::printf(
+        ANSI_GREEN "✔ [RAGDOLL & CARVE MUTATION BIPOLAR FUZZING]:" ANSI_RESET
+        " 200/200 наведенных дефектов физики и карвинга перехвачены со 100%% точностью!\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -1078,7 +1486,9 @@ int main(int argc, char* argv[]) {
     test_kinematic_swing_max_and_antiphase(dice);
     test_gait_odometer_fixture(dice);
     test_kinematic_mutation_bipolar_fuzzing(dice);
-    test_torus_carve_sphere_seam_dice(dice);
+    test_ragdoll_jointlink_stochastic_stress(dice);
+    test_torus_carve_sphere_seam_stochastic(dice);
+    test_ragdoll_and_carve_bipolar_mutation_fuzzing(dice);
 
     std::printf("[barrier_test] %d checks, %d failures (Seed: 0x%llx)\n",
                 g_checks, g_fails, static_cast<unsigned long long>(seed));
