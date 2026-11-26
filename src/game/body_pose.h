@@ -61,4 +61,15 @@ struct PartPose {
 std::uint16_t form_rest_pose(FormId form, BodyScale s, const BodyFrame& f,
                              vec3 rootPos, PartPose* out);
 
+// СУСТАВ ЧАСТИ С РОДИТЕЛЕМ — в осях ОБЕИХ частей (CANON S28.3). Части
+// жёсткие, поэтому точка сустава в осях каждой из них от позы НЕ зависит: она
+// функция формы и габарита, а не позы. Та же пара держит труп (якоря связи
+// `JointLink::anchorA/anchorB`, шарнир `restLen 0`) и расставит части живого
+// тела (И2) — второй точки сустава нет. У корня родителя нет — нули.
+struct PartJoint {
+    vec3 inPart{0.0f, 0.0f, 0.0f};    // в осях самой части (якорь a связи)
+    vec3 inParent{0.0f, 0.0f, 0.0f};  // в осях родителя (якорь b связи)
+};
+PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg);
+
 } // namespace giga::game

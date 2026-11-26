@@ -128,6 +128,7 @@ set(GIGA_CSV_COVERED
     # назначает строка носителя, а множитель движения был бы тождеством), и
     # приедут вместе со своими читателями.
     "actions.csv"
+    "prop_forms.csv"
 )
 set(GIGA_CSV_UNCOVERED
     "craft_recipes.csv"
@@ -140,7 +141,6 @@ set(GIGA_CSV_UNCOVERED
     "materials.csv"
     "mobs.csv"
     "particles.csv"
-    "prop_forms.csv"
     "props.csv"
     # `sounds.csv` СНЕСЁН 2026-10-12 вместе с сэмплным путём звука: композитора
     # нет, пака не будет, демо выходит без звука (решение владельца). Файл был
@@ -178,6 +178,29 @@ set(GIGA_CSV_COLUMNS
     "actions.csv:dur_ms:LIVE:kActionDurMs"
     "actions.csv:break_mask:LIVE:kActionBreakMask"
     "actions.csv:note:GEN:провенанс строки — комментарий у константы в заголовке"
+    # --- data/prop_forms.csv: 17 столбцов (CANON S28, И1б 2026-11-25) -----
+    # Разобран тем же коммитом, что получил роли и суставы (план тел: «под
+    # гейт csv_columns»). Читатели — `form_rest_pose`/`form_part_joint`
+    # ([game/body_pose.cpp]) и `spawn_form_segments` ([game/prop_system.cpp]),
+    # оба на живом пути смерти тела. Роль пока без читателя — её прочтёт
+    # водитель позы живого тела (И2), и тогда строка переедет в LIVE.
+    "prop_forms.csv:form:GEN:ключ формы — по нему кодоген группирует строки и делает FormId"
+    "prop_forms.csv:seg:GEN:ключ сегмента — по нему генератор разрешает ссылку parent, в таблицу едет диагностическим слагом"
+    "prop_forms.csv:role:WRITEONLY:.partRole"
+    "prop_forms.csv:parent:LIVE:.parent"
+    "prop_forms.csv:prim:LIVE:.prim"
+    "prop_forms.csv:ox:LIVE:.ox"
+    "prop_forms.csv:oy:LIVE:.oy"
+    "prop_forms.csv:oz:LIVE:.oz"
+    "prop_forms.csv:jx:LIVE:.jx"
+    "prop_forms.csv:jy:LIVE:.jy"
+    "prop_forms.csv:jz:LIVE:.jz"
+    "prop_forms.csv:sx:LIVE:.sx"
+    "prop_forms.csv:sy:LIVE:.sy"
+    "prop_forms.csv:sz:LIVE:.sz"
+    "prop_forms.csv:mass_frac:LIVE:.massFrac"
+    "prop_forms.csv:rope:LIVE:.rope"
+    "prop_forms.csv:note:GEN:провенанс строки — комментарий у сегмента в заголовке"
     # --- data/items.csv: 44 столбца ---------------------------------------
     "items.csv:id:GEN:ключ каталога — по нему резолвят 14 генераторов, и item_by_string из консоли"
     "items.csv:name_ru:LIVE:item_name"

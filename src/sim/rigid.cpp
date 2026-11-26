@@ -252,6 +252,16 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // самих точках сброса сна, а не считаются задним числом по сумме.
     RigidStats stats; // замер §59.11 — пишется в reg.ctx() на каждом выходе
 
+    // БУДИТ ДВИЖУЩАЯСЯ СТОРОНА — один предикат на связь И на пару (§64,
+    // пара сведена 2026-11-25): тело, чья точка движется не медленнее
+    // `kWakeV2` (линейно или вращением на радиусе), может разбудить спящего
+    // соседа; почти неподвижное — нет, иначе два тихих тела со сдвинутыми
+    // счётчиками будят друг друга по очереди вечно.
+    auto moving = [](const RigidBody& rb, const vec3& v) {
+        return dot(v, v) >= kWakeV2 ||
+               dot(rb.w, rb.w) * rb.radius * rb.radius >= kWakeV2;
+    };
+
     // Решение одного линка импульсом (sequential impulses, тот же словарь,
     // что у контакта). wakePass — на первой итерации подшага спящая сторона
     // будится движущейся: цепь просыпается через связи, а не по волшебству.
@@ -293,9 +303,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 // же kWakeV2, что у всех пробуждений.
                 const RigidBody& mover = aAsleep ? *rbB : ra;
                 const vec3& mv = aAsleep ? vb->v : va.v;
-                const float mwr2 = dot(mover.w, mover.w) * mover.radius *
-                                   mover.radius;
-                if (dot(mv, mv) >= kWakeV2 || mwr2 >= kWakeV2) {
+                if (moving(mover, mv)) {
                     // `nullptr` у b — МИРОВОЙ ЯКОРЬ, а не тело: будить нечего,
                     // и разыменовать его нельзя. Ровно эта развилка стояла и
                     // до пузыря (`else if (rbB)`), просто теперь поднимать
@@ -323,8 +331,22 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         // Несомое тело КИНЕМАТИЧНО в линке: обратные масса и инерция ноль —
         // импульс его не двигает, но тянет вторую сторону. Так труп волочится
         // за тащимым корнем, а не растаскивает носителя.
-        const bool aKinematic = reg.all_of<CarriedBy>(jl.a);
-        const bool bKinematic = rbB && reg.all_of<CarriedBy>(jl.b);
+        //
+        // СПЯЩАЯ (И ЗАСТЫВШАЯ) СТОРОНА, КОТОРУЮ ПРОХОД ПРОБУЖДЕНИЯ ВЫШЕ НЕ
+        // РАЗБУДИЛ, — ТОЖЕ НЕПОДВИЖНА (2026-11-25, И1б). До этого импульс
+        // сустава делился с ней по её массе, а спящее тело не интегрируется
+        // и не свипуется — скорость на нём КОПИЛАСЬ тик за тиком и потом
+        // будила его как «запись извне», которой никто не делал. Замер на
+        // куче из 16 семичастных трупов: таз стоял неподвижно (z до 0.1 мм),
+        // но раз в ~0.3 с засыпал и просыпался, неся во сне w до 0.49 рад/с
+        // от бодрого соседа; куча не досыпала 12–14 тел из 112 никогда.
+        // Будить спящего — работа прохода пробуждения (движущийся сосед,
+        // `kWakeV2`), а не тихий импульс в обход сна.
+        const bool aKinematic = reg.all_of<CarriedBy>(jl.a) || ra.asleep ||
+                                ra.suspended;
+        const bool bKinematic =
+            rbB && (reg.all_of<CarriedBy>(jl.b) || rbB->asleep ||
+                    rbB->suspended);
         if (aKinematic && (bKinematic || !rbB)) return; // двигать нечего
         const float imA = aKinematic ? 0.0f : ra.invMass;
         const float iiA = aKinematic ? 0.0f : ra.invInertia;
@@ -350,7 +372,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         // совпадении не определено, и прежний путь выходил при dist < 0.1 мм,
         // а поперечную скорость внутри подшага не держал ничем — сустав был
         // резиновым. Точка — ТРИ связи, по одной на ось мира, тем же
-        // импульсом и той же подтяжкой Баумгарта; оси равноправны (S1).
+        // импульсом; оси равноправны (S1). Ошибку позиции здесь не тянут
+        // скоростью — её проецирует `project_point_joint` (вывод там).
         // Верёвка здесь смысла не имеет: тянуть к совпадению и толкать от
         // него — одно и то же.
         if (jl.restLen <= 0.0f) {
@@ -369,7 +392,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     k += imB + iiB * dot(rxB, rxB);
                 }
                 if (k < 1e-9f) continue; // обе стороны кинематичны
-                const float j = -(vRel + kJointBias * dot(d, n) / h) / k;
+                // ПОДТЯЖКИ ЗДЕСЬ НЕТ — разделённый импульс (2026-11-25, И1б):
+                // ошибку ПОЗИЦИИ шарнира убирает `project_point_joint`
+                // позицией, а не скоростью. Вывод — у неё.
+                const float j = -vRel / k;
                 va.v += n * (-j * imA);
                 ra.w += cross(rcA, n * (-j)) * iiA;
                 if (rbB) {
@@ -416,6 +442,157 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // солвера один — сфера), разрешение — тот же импульс, что о мир, но
     // двухтеловой. Касание будит спящего (бодрый врезается в кучу — куча
     // оживает) и считается опорой (touchedTick: стопка тел засыпает).
+    // ПОЗИЦИОННОЕ ВЫТАЛКИВАНИЕ — ЧЕРЕЗ ТОЧКИ КОНТАКТА, ОДИН ЗАКОН ДЛЯ МИРА И
+    // ДЛЯ ПАРЫ (2026-11-25, И1б эпика тел). До этого тело выталкивалось
+    // ЦЕЛИКОМ, переносом на глубину: угол, вошедший в пол, поднимал всё тело
+    // вместе с противоположным углом — каждый подшаг качания впрыскивал
+    // m·g·depth потенциальной энергии, и тонкая часть трупа (рука на двух
+    // углах кисти и шарнире плеча) раскачивалась вокруг своей оси вечно.
+    // Замер на одиноком 7-частном трупе: с переносом сна нет и через 12 с,
+    // через точку контакта — спят все 7 к 6 с. Форма: точку контакта сдвинуть
+    // на глубину вдоль нормали, деля сдвиг на перенос и поворот теми же
+    // обратными массой и инерцией, что у импульса контакта (k = 1/m +
+    // |r×n|²/I, сумма по сторонам), — минимальная поправка, а не выбор.
+    // У сферы плечо коллинеарно нормали, поворотная доля ноль, и закон
+    // вырождается в прежний перенос по долям обратных масс ТОЧНО.
+    // `n` смотрит от A к B; A (если есть) уступает назад, B — вперёд.
+    // Сторона без тела (`ra == nullptr`) — мир: неподвижна.
+    auto contact_project = [](Transform* ta, RigidBody* ra, const vec3& rcA,
+                              Transform* tb, RigidBody* rb, const vec3& rcB,
+                              const vec3& n, float depth) {
+        const vec3 rxA = cross(rcA, n);
+        const vec3 rxB = cross(rcB, n);
+        const float kA =
+            ra ? ra->invMass + ra->invInertia * dot(rxA, rxA) : 0.0f;
+        const float kB =
+            rb ? rb->invMass + rb->invInertia * dot(rxB, rxB) : 0.0f;
+        const float k = kA + kB;
+        if (k < 1e-9f) return;
+        const float lam = depth / k;
+        if (ra) {
+            ta->pos += n * (-lam * ra->invMass);
+            ra->q = quat_integrate(ra->q, rxA * (-lam * ra->invInertia), 1.0f);
+        }
+        if (rb) {
+            tb->pos += n * (lam * rb->invMass);
+            rb->q = quat_integrate(rb->q, rxB * (lam * rb->invInertia), 1.0f);
+        }
+    };
+
+    // ШАРНИР ГАСИТ ОТНОСИТЕЛЬНОЕ ВРАЩЕНИЕ ЧАСТЕЙ (2026-11-25, И1б).
+    // Точечный сустав по построению не держит вращения вокруг оси через себя
+    // («кручение»), и стока энергии у этой степени свободы не было никакого:
+    // голова, висящая на шее над полом, крутилась ~4 рад/с вечно (куча из 16
+    // семичастных трупов, 5 тел не засыпали никогда; с законом — все 112 к
+    // 9.9 с). Сустав — поверхность контакта двух частей, и гасится он ТЕМ ЖЕ
+    // законом и ТОЙ ЖЕ постоянной, что сверление в контакте (`kSpinDamp`):
+    // второй постоянной вращательного трения в этом движке нет. Момент
+    // внутренний — гасится только ОТНОСИТЕЛЬНОЕ вращение, сумма моментов
+    // импульса сторон сохраняется. Раз на подшаг, до итераций. Спящая,
+    // застывшая и несомая стороны неподвижны (тот же довод, что у импульса).
+    // Связь-расстояние (`restLen > 0`, верёвка) не гасится: у неё замера нет.
+    auto damp_point_joint = [&](const JointLink& jl) {
+        if (jl.restLen > 0.0f || jl.a == entt::null || jl.b == entt::null)
+            return;
+        if (!reg.valid(jl.a) || !reg.valid(jl.b) ||
+            !reg.all_of<RigidBody>(jl.a) || !reg.all_of<RigidBody>(jl.b))
+            return;
+        auto& ra = reg.get<RigidBody>(jl.a);
+        auto& rb = reg.get<RigidBody>(jl.b);
+        const float iiA =
+            (ra.asleep || ra.suspended || reg.all_of<CarriedBy>(jl.a))
+                ? 0.0f
+                : ra.invInertia;
+        const float iiB =
+            (rb.asleep || rb.suspended || reg.all_of<CarriedBy>(jl.b))
+                ? 0.0f
+                : rb.invInertia;
+        if (iiA + iiB < 1e-9f) return;
+        const vec3 L = (ra.w - rb.w) *
+                       ((1.0f - std::exp(-kSpinDamp * h)) / (iiA + iiB));
+        ra.w += L * (-iiA);
+        rb.w += L * iiB;
+    };
+
+    // ИМПУЛЬС КОНТАКТА — ОДИН ЗАКОН ДЛЯ МИРА И ДЛЯ ПАРЫ, И ДЛЯ ПЕРВОГО
+    // РЕШЕНИЯ, И ДЛЯ ПОВТОРНОГО внутри итераций суставов (ниже,
+    // `chainContacts`). Обобщённый нормальный импульс (sequential impulses):
+    // k = Σ(1/m + |r_c×n|²/I) по сторонам — угловая податливость контакта;
+    // затем Кулоново трение ЧЕРЕЗ ТОЧКУ КОНТАКТА (скорость точки — после
+    // нормального импульса): тормозя скольжение точки, импульс раскручивает
+    // тело — качение возникает из физики. `n` смотрит от A к B; сторона A без
+    // тела (`ra == nullptr`) — мир. `e` — отскок, уже решённый вызывающим по
+    // скорости удара. До 2026-11-25 закон стоял ДВУМЯ копиями (тело–мир и
+    // тело–тело), различавшимися только тем, есть ли у A тело.
+    auto contact_impulse = [](vec3* vA, RigidBody* ra, const vec3& rcA,
+                              vec3& vB, RigidBody& rb, const vec3& rcB,
+                              const vec3& n, float mu, float e) {
+        auto rel = [&] {
+            const vec3 pB = vB + cross(rb.w, rcB);
+            return ra ? pB - (*vA + cross(ra->w, rcA)) : pB;
+        };
+        auto push = [&](const vec3& dir, float j) {
+            if (ra) {
+                *vA += dir * (-j * ra->invMass);
+                ra->w += cross(rcA, dir * (-j)) * ra->invInertia;
+            }
+            vB += dir * (j * rb.invMass);
+            rb.w += cross(rcB, dir * j) * rb.invInertia;
+        };
+        auto k_of = [&](const vec3& dir) {
+            const vec3 xB = cross(rcB, dir);
+            float k = rb.invMass + rb.invInertia * dot(xB, xB);
+            if (ra) {
+                const vec3 xA = cross(rcA, dir);
+                k += ra->invMass + ra->invInertia * dot(xA, xA);
+            }
+            return k;
+        };
+        const float vn = dot(rel(), n);
+        if (vn >= 0.0f) return;
+        const float kn = k_of(n);
+        if (kn < 1e-9f) return;
+        const float jn = -(1.0f + e) * vn / kn;
+        push(n, jn);
+        const vec3 vp2 = rel();
+        const vec3 vt = vp2 - n * dot(vp2, n);
+        const float vtLen = length(vt);
+        if (vtLen > 1e-5f) {
+            const vec3 t = vt * (1.0f / vtLen);
+            const float kt = k_of(t);
+            float jt = -vtLen / kt;
+            const float jtMax = mu * jn;
+            jt = std::clamp(jt, -jtMax, jtMax);
+            push(t, jt);
+        }
+    };
+
+    // КОНТАКТЫ ЧАСТЕЙ ЦЕПИ — РЕШАЮТСЯ ВМЕСТЕ С СУСТАВАМИ (CANON S28, И1б,
+    // 2026-11-25). Пока сустав держал ЦЕНТРЫ, плеча у него не было, и порядок
+    // «контакт, затем восемь итераций суставов» был безвреден. Шарнир в точке
+    // сустава даёт рычаг — и порядок стал войной двух законов об одном
+    // положении (класс §64): итерации суставов оставляли скорость,
+    // удовлетворяющую суставу и смотрящую В ПОЛ (или в соседний труп),
+    // следующий подшаг входил туда, контакт выталкивал позицией, сустав
+    // снова растягивался. Замер на одиноком трупе: зазор 2.5–4 мм на всех
+    // суставах вечно, сна нет. Лечение — не третий закон, а один
+    // Гаусс–Зейдель: контакт, найденный телом цепи на подшаге (с миром или
+    // с телом ДРУГОЙ цепи), записывается строкой и решается тем же
+    // `contact_impulse` в каждой итерации суставов ПОСЛЕ них — последнее
+    // слово за непроникновением. Строка мира — пара без тела A. Тела вне
+    // цепей (мяч, ящик) строк не пишут: их контакт и так окончательный.
+    struct ChainContact {
+        Entity a;      // entt::null — мир
+        Entity b;
+        vec3 offA;     // центр контактной сферы A в осях A (у мира не нужен)
+        float rA;
+        vec3 offB;     // центр контактной сферы B в осях B
+        float rB;
+        vec3 n;        // от A к B
+        float mu;
+    };
+    static thread_local std::vector<ChainContact> chainContacts;
+
     auto resolve_pair = [&](Entity ea, Entity eb) {
         auto& rbA = view.get<RigidBody>(ea);
         auto& rbB = view.get<RigidBody>(eb);
@@ -486,27 +663,57 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     rbB.suspended = false; rbB.quietTicks = 0;
                     ++stats.unsuspPair;
                 }
-                if (rbA.asleep) {
+                // СПЯЩЕГО БУДИТ ДВИЖУЩИЙСЯ СОСЕД — закон связи (`moving`),
+                // сведённый сюда 2026-11-25. До этого пара будила спящего
+                // ЛЮБЫМ касанием, и тихое тело, лёгшее на спящее, будило его,
+                // засыпало само — и тут же бывало разбужено им же: пинг-понг
+                // сбросов, ровно тот, что §64 вылечил у суставов. Замер на
+                // куче из 16 семичастных трупов: 5 тихих опёртых тел, стаж
+                // сна 2–21 тик из 32 навсегда. Неразбуженный спящий в паре —
+                // НЕПОДВИЖНАЯ ОПОРА (сторона без тела в законах ниже): так
+                // засыпает стопка, и так поза спящего остаётся бит-в-бит.
+                if (rbA.asleep && moving(rbB, vB.v)) {
                     rbA.asleep = false; rbA.sleepTicks = 0; ++stats.wokePair;
                 }
-                if (rbB.asleep) {
+                if (rbB.asleep && moving(rbA, vA.v)) {
                     rbB.asleep = false; rbB.sleepTicks = 0; ++stats.wokePair;
                 }
+                if (rbA.asleep && rbB.asleep) continue;
                 rbA.touchedTick = true;
                 rbB.touchedTick = true;
 
-                // Позиционное разведение по долям обратных масс: тяжёлый
-                // стоит, лёгкий уступает — без ветки «кто главнее».
-                const float invSum = rbA.invMass + rbB.invMass;
-                trA.pos += n * (-depth * (rbA.invMass / invSum));
-                trB.pos += n * (depth * (rbB.invMass / invSum));
-
-                // Плечи до СВОЕЙ точки поверхности.
+                // Позиционное разведение по долям ОБОБЩЁННЫХ обратных масс:
+                // тяжёлый стоит, лёгкий уступает — без ветки «кто главнее»;
+                // и через точки контакта, а не всем телом (`contact_project`).
+                // Плечи до СВОЕЙ точки поверхности. Спящая сторона — мир:
+                // законы ждут неподвижную сторону первой, поэтому при спящем
+                // B стороны меняются местами, а нормаль — знаком.
                 const vec3 rcA = offA + n * rA;
                 const vec3 rcB = offB + n * (-rB);
+                if (rbA.asleep)
+                    contact_project(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    &trB, &rbB, rcB, n, depth);
+                else if (rbB.asleep)
+                    contact_project(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    &trA, &rbA, rcA, n * -1.0f, depth);
+                else
+                    contact_project(&trA, &rbA, rcA, &trB, &rbB, rcB, n, depth);
                 const vec3 vpA = vA.v + cross(rbA.w, rcA);
                 const vec3 vpB = vB.v + cross(rbB.w, rcB);
                 const float vn = dot(vpB - vpA, n);
+                const float mu = pair_friction(rbA.friction, rbB.friction);
+                // Хоть одна сторона — часть цепи: строка едет в итерации
+                // суставов (вывод у `chainContacts`), и ДО проверки
+                // сближения — расходящуюся сейчас точку сустав развернёт.
+                if (rbA.chain != 0u || rbB.chain != 0u)
+                    chainContacts.push_back(ChainContact{
+                        ea, eb,
+                        (fA && fA->count) ? fA->off[i]
+                                          : vec3{0.0f, 0.0f, 0.0f},
+                        rA,
+                        (fB && fB->count) ? fB->off[j]
+                                          : vec3{0.0f, 0.0f, 0.0f},
+                        rB, n, mu});
                 if (vn >= 0.0f) continue;
                 if (-vn > 4.0f) {
                     Impact& imA = reg.get_or_emplace<Impact>(ea);
@@ -519,36 +726,15 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     (-vn > kBounceMinV)
                         ? pair_restitution(rbA.restitution, rbB.restitution)
                         : 0.0f;
-                const vec3 rxA = cross(rcA, n);
-                const vec3 rxB = cross(rcB, n);
-                const float kA = rbA.invMass + rbA.invInertia * dot(rxA, rxA);
-                const float kB = rbB.invMass + rbB.invInertia * dot(rxB, rxB);
-                const float jn = -(1.0f + e_) * vn / (kA + kB);
-                vA.v += n * (-jn * rbA.invMass);
-                rbA.w += cross(rcA, n * (-jn)) * rbA.invInertia;
-                vB.v += n * (jn * rbB.invMass);
-                rbB.w += cross(rcB, n * jn) * rbB.invInertia;
-
-                const vec3 vp2 = (vB.v + cross(rbB.w, rcB)) -
-                                 (vA.v + cross(rbA.w, rcA));
-                const vec3 vt = vp2 - n * dot(vp2, n);
-                const float vtLen = length(vt);
-                if (vtLen > 1e-5f) {
-                    const vec3 t = vt * (1.0f / vtLen);
-                    const vec3 rtA = cross(rcA, t);
-                    const vec3 rtB = cross(rcB, t);
-                    const float kt =
-                        rbA.invMass + rbA.invInertia * dot(rtA, rtA) +
-                        rbB.invMass + rbB.invInertia * dot(rtB, rtB);
-                    float jt = -vtLen / kt;
-                    const float mu = pair_friction(rbA.friction, rbB.friction);
-                    const float jtMax = mu * jn;
-                    jt = std::clamp(jt, -jtMax, jtMax);
-                    vA.v += t * (-jt * rbA.invMass);
-                    rbA.w += cross(rcA, t * (-jt)) * rbA.invInertia;
-                    vB.v += t * (jt * rbB.invMass);
-                    rbB.w += cross(rcB, t * jt) * rbB.invInertia;
-                }
+                if (rbA.asleep)
+                    contact_impulse(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    vB.v, rbB, rcB, n, mu, e_);
+                else if (rbB.asleep)
+                    contact_impulse(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    vA.v, rbA, rcA, n * -1.0f, mu, e_);
+                else
+                    contact_impulse(&vA.v, &rbA, rcA, vB.v, rbB, rcB, n, mu,
+                                    e_);
             }
         }
     };
@@ -815,7 +1001,8 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // недостижима и до пузыря. Платят её только headless-прогоны без агентов.
     // Новая цена пола названа числом: union-find O(линков) + бины корней
     // O(цепей) + один торический замер на цепь; на худшем потолке §17.2
-    // (7000 трупов = 28 000 тел, 21 000 линков, 7000 цепей) это сортировка
+    // (7000 трупов = 49 000 тел, 42 000 линков при семи частях, 7000 цепей —
+    // число ЦЕПЕЙ от частей не зависит) это сортировка
     // 7000 ключей и 7000 расстояний против 28.8 мс `solve` на ОДНОЙ ТЫСЯЧЕ
     // трупов сегодня. Мерится отдельным слотом `presenceMs` — не на веру.
 
@@ -867,14 +1054,15 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // ======== РЕШАТЕЛЬ ЧЛЕНСТВА В ПУЗЫРЕ (F1, matwej.md §17.2/§23.7) =======
     //
     // ЕДИНИЦА ЧЛЕНСТВА — ЦЕПЬ, А НЕ ТЕЛО И НЕ «ТРУП». Слова «труп» ядро не
-    // знает (S7), и знать не должно: труп — это цепь из четырёх сегментов,
+    // знает (S7), и знать не должно: труп — это цепь из частей формы,
     // люстра на тросе — цепь, сцепка ящиков — цепь, и закон у них один. Это
     // же даёт требуемое §17.2 «посегментно на весь труп разом» бесплатно: все
     // сегменты несут ОДНУ метку корня, поэтому ответ пузыря у них один.
     //
     // ОДИНОЧНЫЕ ТЕЛА (chain == 0) В F1 НЕ ЗАСТЫВАЮТ, и это граница заходa, а
     // не забывчивость: кривая цены, из которой выведен N (§17.2), снята на
-    // ЧЕТЫРЁХСЕГМЕНТНЫХ цепях, а мешать в один бюджет штуки с разной ценой —
+    // ЦЕПЯХ ТРУПОВ (четырёх-, с 2026-11-26 — семичастных, перемер у
+    // регистрации ниже), а мешать в один бюджет штуки с разной ценой —
     // ровно тот дефект, против которого бюджетная форма и заведена. Осевший
     // дебрис и одиночные пропы — F2, со своей регистрацией и своим замером
     // (§23.7); им, в отличие от трупов, штатный сон работает (на 16 трупах
@@ -946,6 +1134,18 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             // полную цену ~1.69 мс — запас к бюджету честный. Следующее
             // опровержение — только живой этаж (реальная плотность кучи вместо
             // решётки 0.7 м).
+            //
+            // ПЕРЕМЕР НА СЕМИЧАСТНОЙ ЦЕПИ 2026-11-26 (И1б, тот же стенд,
+            // хвост t=57..59.5): 64 → 0.015 мс, 128 → 0.27, 256 → 0.06 мс —
+            // кучи теперь ЗАСЫПАЮТ (448/448, 895/896, 1792/1792), и цена
+            // тихой цепи 0.27/128 = 2.1 мкс. Эталон четырёхчастной на том же
+            // стенде: 128 → 2.7 мс, спит 185/512. Регистрация НЕ тронута:
+            // 17.9 мкс стали консервативны в ~8 раз, а поднимать N — решение
+            // о том, сколько трупов живёт полной физикой, а не арифметика.
+            // ПИК на падении вырос: 128 трупов разом — 14.3 мс на тик в первые
+            // 2 с (четырёхчастная 3.3 мс). Пузырём он не платится — падающая
+            // цепь шумна и не застывает при любом N, — это цена массовой
+            // гибели, названная числом.
             17.9f,
             "matwej.md §17.2: кривая стенда (решётка 0.7 м, худшая плотность) "
             "64 трупа = 0.54 мс, 256 = 5.8 мс => маргинальная 27.4 мкс/труп, "
@@ -1291,9 +1491,87 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                        .count();
     const auto statsSolveT0 = std::chrono::steady_clock::now();
 
+    // ШАРНИР «ТОЧКА В ТОЧКУ» — ОШИБКА ПОЗИЦИИ ПРОЕЦИРУЕТСЯ ПОЗИЦИЕЙ
+    // (разделённый импульс, 2026-11-25, И1б эпика тел). Скоростная подтяжка
+    // Баумгарта (β·C/h в импульсе) у шарнира с РЫЧАГОМ оказалась насосом
+    // энергии: каждый подшаг ошибка от интегрирования и выталкивания
+    // контакта превращалась в скорость, а та — во вращение части вокруг
+    // опоры. Замер на одиноком трупе: рука перекатывалась с грани на ребро
+    // ±20° с периодом 0.85 с и ПОСТОЯННОЙ амплитудой, сна не было; с
+    // нулевой подтяжкой тот же труп засыпал за 4 с, рука ложилась плашмя —
+    // но суставы расползались на 5 см. Отсюда форма: скорость сустава
+    // решается без подтяжки (импульс выше), а позиционная ошибка снимается
+    // сдвигом позиции и поворота — долей `kJointBias` за проход и с ТЕМ ЖЕ
+    // знаменателем k, что у импульса (податливость одна, закон один), — и
+    // скорости не трогает вовсе: качать нечем. Связь-расстояние
+    // (`restLen > 0`: верёвка, штанга люстры) живёт по-прежнему — у неё
+    // замера войны нет, и переводить её без замера значило бы чинить
+    // работающее (назван нюанс, не залечен).
+    // Спящая, застывшая и несомая стороны неподвижны: позиция спящего
+    // обязана остаться бит-в-бит (§17.2, §23.6), а несомую ведёт носитель.
+    auto project_point_joint = [&](const JointLink& jl) {
+        if (jl.restLen > 0.0f) return;
+        if (jl.a == entt::null || !reg.valid(jl.a) ||
+            !reg.all_of<RigidBody, Transform>(jl.a))
+            return;
+        auto& ra = reg.get<RigidBody>(jl.a);
+        auto& ta = reg.get<Transform>(jl.a);
+        RigidBody* rbB = nullptr;
+        Transform* tb = nullptr;
+        if (jl.b != entt::null) {
+            if (!reg.valid(jl.b) || !reg.all_of<RigidBody, Transform>(jl.b))
+                return;
+            rbB = &reg.get<RigidBody>(jl.b);
+            tb = &reg.get<Transform>(jl.b);
+        }
+        const bool aFixed =
+            ra.asleep || ra.suspended || reg.all_of<CarriedBy>(jl.a);
+        const bool bFixed = !rbB || rbB->asleep || rbB->suspended ||
+                            reg.all_of<CarriedBy>(jl.b);
+        if (aFixed && bFixed) return;
+        const float imA = aFixed ? 0.0f : ra.invMass;
+        const float iiA = aFixed ? 0.0f : ra.invInertia;
+        const float imB = bFixed ? 0.0f : rbB->invMass;
+        const float iiB = bFixed ? 0.0f : rbB->invInertia;
+        const vec3 axes[3] = {vec3{1.0f, 0.0f, 0.0f}, vec3{0.0f, 1.0f, 0.0f},
+                              vec3{0.0f, 0.0f, 1.0f}};
+        for (const vec3& n : axes) {
+            // Плечи и ошибка — заново на каждой оси: проекция двигает тела,
+            // и вторая ось обязана видеть сдвиг первой (Гаусс–Зейдель).
+            const vec3 rcA = quat_rotate(ra.q, jl.anchorA);
+            const vec3 rcB =
+                rbB ? quat_rotate(rbB->q, jl.anchorB) : vec3{0.0f, 0.0f, 0.0f};
+            const vec3 pa = ta.pos + rcA;
+            const vec3 pb = rbB ? tb->pos + rcB : jl.anchorB;
+            const float C = dot(wrap_delta3(pa, pb, kWorldExtent), n);
+            const vec3 rxA = cross(rcA, n);
+            const vec3 rxB = cross(rcB, n);
+            const float k = imA + iiA * dot(rxA, rxA) + imB +
+                            iiB * dot(rxB, rxB);
+            if (k < 1e-9f) continue;
+            const float lam = kJointBias * C / k;
+            if (imA > 0.0f || iiA > 0.0f) {
+                ta.pos += n * (lam * imA);
+                ra.q = quat_integrate(ra.q, rxA * (lam * iiA), 1.0f);
+            }
+            if (rbB && (imB > 0.0f || iiB > 0.0f)) {
+                tb->pos += n * (-lam * imB);
+                rbB->q = quat_integrate(rbB->q, rxB * (-lam * iiB), 1.0f);
+            }
+        }
+        ta.pos = vec3{wrapf(ta.pos.x, kWorldExtent), wrapf(ta.pos.y, kWorldExtent),
+                      wrapf(ta.pos.z, kWorldExtent)};
+        if (tb)
+            tb->pos = vec3{wrapf(tb->pos.x, kWorldExtent),
+                           wrapf(tb->pos.y, kWorldExtent),
+                           wrapf(tb->pos.z, kWorldExtent)};
+    };
+
+
     // Substep-major: тела интегрируются, ПОТОМ линки стягивают пары — иначе
     // констрейнт видел бы позиции разных подшагов у разных тел.
     for (int s = 0; s < steps; ++s) {
+        chainContacts.clear();
         for (auto e : view) {
             auto& rb = view.get<RigidBody>(e);
             // ВЫНУТ ИЗ СОЛВЕРА — буквально здесь: ни гравитации, ни драга, ни
@@ -1337,8 +1615,10 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 rb.touchedTick = true;
                 contactThisStep = true;
                 contactN = c.n;
-                // Позиционное выталкивание всего тела — не тонет.
-                tr.pos += c.n * c.depth;
+                // Позиционное выталкивание — не тонет. Через ТОЧКУ контакта,
+                // а не всем телом (вывод у `contact_project`).
+                contact_project(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f}, &tr,
+                                &rb, off + c.n * (-sr), c.n, c.depth);
 
                 // Плечо контакта от центра тела: r_c = off − n·r. У мяча
                 // (off=0) r_c коллинеарно нормали, угловые вклады по n
@@ -1346,6 +1626,23 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 const vec3 rc = off + c.n * (-sr);
                 const vec3 vp = vel.v + cross(rb.w, rc);
                 const float vn = dot(vp, c.n);
+
+                // МАТЕРИАЛЬНАЯ ПАРА (инкремент 7): вторая сторона — материал
+                // клетки контакта. Сталь-по-бетону звенит, сталь-по-щебню
+                // глохнет — без единой ветки по виду поверхности.
+                const float surfH =
+                    static_cast<float>(material_hardness(c.mat));
+                const float muPair = pair_friction(
+                    rb.friction, friction_from_hardness(surfH));
+                // Часть цепи — контакт едет в итерации суставов, И ДО
+                // проверки сближения: точку, расходящуюся сейчас, импульс
+                // сустава может развернуть в пол.
+                if (rb.chain != 0u)
+                    chainContacts.push_back(ChainContact{
+                        entt::null, e, vec3{0.0f, 0.0f, 0.0f}, 0.0f,
+                        (form && form->count) ? form->off[i]
+                                              : vec3{0.0f, 0.0f, 0.0f},
+                        sr, c.n, muPair});
                 if (vn >= 0.0f) continue;
                 // Импакт-шов — тот же закон, что у свепт-AABB (E = m·v²/2
                 // считает потребитель): сближение выше 4 м/с (пол свободной
@@ -1355,43 +1652,11 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                     if (-vn > im.speed) im.speed = -vn;
                 }
 
-                // МАТЕРИАЛЬНАЯ ПАРА (инкремент 7): вторая сторона — материал
-                // клетки контакта. Сталь-по-бетону звенит, сталь-по-щебню
-                // глохнет — без единой ветки по виду поверхности.
-                const float surfH =
-                    static_cast<float>(material_hardness(c.mat));
                 const float ePair = pair_restitution(
                     rb.restitution, restitution_from_hardness(surfH));
-                const float muPair = pair_friction(
-                    rb.friction, friction_from_hardness(surfH));
-
-                // Обобщённый нормальный импульс (sequential impulses):
-                // k_n = 1/m + |r_c×n|²/I — угловая податливость контакта.
-                const vec3 rxn = cross(rc, c.n);
-                const float kn =
-                    rb.invMass + rb.invInertia * dot(rxn, rxn);
                 const float e_ = (-vn > kBounceMinV) ? ePair : 0.0f;
-                const float jn = -(1.0f + e_) * vn / kn;
-                vel.v += c.n * (jn * rb.invMass);
-                rb.w += cross(rc, c.n * jn) * rb.invInertia;
-
-                // Кулоново трение ЧЕРЕЗ ТОЧКУ КОНТАКТА (скорость точки —
-                // после нормального импульса). Тормозя скольжение точки,
-                // импульс раскручивает тело — качение возникает из физики.
-                const vec3 vp2 = vel.v + cross(rb.w, rc);
-                const vec3 vt = vp2 - c.n * dot(vp2, c.n);
-                const float vtLen = length(vt);
-                if (vtLen > 1e-5f) {
-                    const vec3 t = vt * (1.0f / vtLen);
-                    const vec3 rxt = cross(rc, t);
-                    const float kt =
-                        rb.invMass + rb.invInertia * dot(rxt, rxt);
-                    float jt = -vtLen / kt;
-                    const float jtMax = muPair * jn;
-                    jt = std::clamp(jt, -jtMax, jtMax);
-                    vel.v += t * (jt * rb.invMass);
-                    rb.w += cross(rc, t * jt) * rb.invInertia;
-                }
+                contact_impulse(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                vel.v, rb, rc, c.n, muPair, e_);
             }
 
             // Качение и сверление — РАЗ на подшаг, не на сферу: у бокса на
@@ -1484,21 +1749,94 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             // проснуться телу даст разруб опоры (rigid_wake_dirty_cells).
             if (aAwake || bAwake) liveLinks.push_back(le);
         }
-        for (int it = 0; it < kJointIters; ++it)
+        for (Entity le : liveLinks)
+            damp_point_joint(links.get<JointLink>(le));
+        for (int it = 0; it < kJointIters; ++it) {
             for (Entity le : liveLinks) {
                 solve_link(links.get<JointLink>(le), it == 0);
                 ++stats.linksSolved;
             }
+            // Контакты частей цепи — ТЕМ ЖЕ законом, последними в итерации
+            // (вывод у `chainContacts`). Плечо — от текущего поворота: `q`
+            // уже проинтегрирован в проходе тела, суставы двигают скорости.
+            // Отскока здесь нет: удар решён первым проходом.
+            // Спящая/застывшая сторона — неподвижная опора, как в первом
+            // решении пары (стороны меняются местами, нормаль — знаком).
+            for (const ChainContact& cc : chainContacts) {
+                RigidBody& rb = view.get<RigidBody>(cc.b);
+                const bool bDyn = !rb.asleep && !rb.suspended;
+                const vec3 rcB = quat_rotate(rb.q, cc.offB) + cc.n * (-cc.rB);
+                RigidBody* ra = cc.a == entt::null
+                                    ? nullptr
+                                    : &view.get<RigidBody>(cc.a);
+                const bool aDyn = ra && !ra->asleep && !ra->suspended;
+                const vec3 rcA = ra ? quat_rotate(ra->q, cc.offA) + cc.n * cc.rA
+                                    : vec3{0.0f, 0.0f, 0.0f};
+                if (aDyn && bDyn)
+                    contact_impulse(&view.get<Velocity>(cc.a).v, ra, rcA,
+                                    view.get<Velocity>(cc.b).v, rb, rcB, cc.n,
+                                    cc.mu, 0.0f);
+                else if (bDyn)
+                    contact_impulse(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    view.get<Velocity>(cc.b).v, rb, rcB, cc.n,
+                                    cc.mu, 0.0f);
+                else if (aDyn)
+                    contact_impulse(nullptr, nullptr, vec3{0.0f, 0.0f, 0.0f},
+                                    view.get<Velocity>(cc.a).v, *ra, rcA,
+                                    cc.n * -1.0f, cc.mu, 0.0f);
+            }
+        }
+        // Позиционная проекция шарниров — после того как скорости решены, тем
+        // же числом проходов Гаусса–Зейделя, что у импульса (`kJointIters`):
+        // цепь из ~8 звеньев сходится за столько же проходов и позицией.
+        // Замер одного прохода против восьми (маятник шарнира, `world_test`):
+        // зазор 2.6 против 0.3 мм, рывок поперёк 5.8 против 0.7 мм; суставы
+        // кучи из 16 трупов 29 против 1.2 мм; цена на куче — в шуме замера.
+        for (int it = 0; it < kJointIters; ++it)
+            for (Entity le : liveLinks)
+                project_point_joint(links.get<JointLink>(le));
     }
 
     stats.solveMs = std::chrono::duration<float, std::milli>(
                         std::chrono::steady_clock::now() - statsSolveT0)
                         .count();
 
+    // ОПОРА ПЕРЕДАЁТСЯ ПО СУСТАВУ (2026-11-25, И1б). Контакт ПАРЫ давно
+    // считается опорой (`touchedTick` от пары — стопка тел засыпает), а
+    // сустав между двумя ТЕЛАМИ есть тот же контакт, только постоянный: рука,
+    // лежащая на шарнире плеча, опёрта торсом ровно так же, как ящик на
+    // ящике. Без этого часть, касающаяся только своего сустава (голова на
+    // шее, конечность, свесившаяся с соседнего трупа), была «висящей» и не
+    // засыпала НИКОГДА — замер: куча из 16 семичастных трупов, 6 тихих тел
+    // без опоры навсегда, одинокий труп — голова. Опора передаётся от тела,
+    // которое касается мира или спит (спящее касалось, когда засыпало), —
+    // и до неподвижной точки: цепь не глубже `kJointIters` звеньев, вывод у
+    // самой константы. МИРОВОЙ ПОДВЕС опорой не считается — люстра на тросе
+    // по-прежнему висит бодрой (довод ниже, у закона сна).
+    for (int pass = 0; pass < kJointIters; ++pass) {
+        bool spread = false;
+        for (Entity le : liveLinks) {
+            const JointLink& jl = links.get<JointLink>(le);
+            if (jl.a == entt::null || jl.b == entt::null) continue;
+            if (!reg.valid(jl.a) || !reg.valid(jl.b) ||
+                !reg.all_of<RigidBody>(jl.a) || !reg.all_of<RigidBody>(jl.b))
+                continue;
+            RigidBody& a = reg.get<RigidBody>(jl.a);
+            RigidBody& b = reg.get<RigidBody>(jl.b);
+            const bool sa = a.touchedTick || a.asleep;
+            const bool sb = b.touchedTick || b.asleep;
+            if (sa == sb) continue;
+            (sa ? b : a).touchedTick = true;
+            spread = true;
+        }
+        if (!spread) break;
+    }
+
     // Сон: тихая линейка И тихое вращение (|w|·r в тех же единицах м/с), и
-    // обязательно контакт с миром в этом тике — свободно падающее и ВИСЯЩЕЕ
-    // (цепь на подвесе) тело не засыпает: спящему линк не даёт провиснуть,
-    // а разруб не смог бы его разбудить падением.
+    // обязательно ОПОРА в этом тике — контакт с миром, с телом или через
+    // сустав (выше) — свободно падающее и ВИСЯЩЕЕ на мировом подвесе тело
+    // не засыпает: спящему линк не даёт провиснуть, а разруб не смог бы его
+    // разбудить падением.
     for (auto e : view) {
         auto& rb = view.get<RigidBody>(e);
         // Застывшее тело не свипуется: его скорости не менялись, вывод свипа

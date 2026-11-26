@@ -503,7 +503,8 @@ std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
             reg.emplace_or_replace<PropFallMode>(e, PropFallMode::RagdollRoll);
             reg.emplace_or_replace<DynamicBodyTag>(e);
             // Инкременты 6+8 рагдолл-эпика: труп — ГУМАНОИД из тел ЯДРА
-            // (голова—грудь—ТАЗ—ноги цепью штанг; корень = таз, на нём лут и
+            // (части формы `prop_forms.csv` шарнирами в точках суставов,
+            // CANON S28; корень = таз, на нём лут и
             // сейв-идентичность). Габариты и массы выведены из тела; масса
             // честная (Mass, 70 кг дефолт — тот же фолбэк, что у драга).
             // SelfIntegrating выводит мёртвого из свепт-AABB пути агентов.

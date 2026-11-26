@@ -9,6 +9,7 @@
 #include "game/floor_spec.h"
 #include "game/focus.h"      // focus_pick — прицел живого пути E
 #include "game/prop_system.h"
+#include "game/body_pose.h"  // form_part_joint — сустав из таблицы формы
 #include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
 #include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
 #include "game/embody.h"  // embody_as_player — тело игрока для лут-пути
@@ -18,6 +19,7 @@
 #include "ecs/components.h"
 #include "game/event_bus.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -717,8 +719,21 @@ static void test_corpse_lays_out_in_its_frame() {
     }
 }
 
+// ЗАЗОР СУСТАВА — расстояние между ТОЧКАМИ якорей двух частей в мире
+// (CANON S28, И1б). С 2026-11-25 связь трупа — шарнир `restLen 0` в точке
+// сустава, и «связность» значит совпадение этих точек, а не длину между
+// центрами: центр руки законно отстоит от центра торса на полруки.
+static float corpse_joint_gap(const Registry& reg, const JointLink& jl) {
+    const vec3 pa = reg.get<Transform>(jl.a).pos +
+                    quat_rotate(reg.get<RigidBody>(jl.a).q, jl.anchorA);
+    const vec3 pb = reg.get<Transform>(jl.b).pos +
+                    quat_rotate(reg.get<RigidBody>(jl.b).q, jl.anchorB);
+    return length(wrap_delta3(pa, pb, kWorldExtent)) - jl.restLen;
+}
+
 // Инкремент 8 рагдолл-эпика: труп — ГУМАНОИД из тел ядра. Корень = таз
-// (лут/сейв на нём), голова-грудь-ноги — сегменты со штангами-линками; тело
+// (лут/сейв на нём), остальные части формы — сегменты на шарнирах в точках
+// суставов (CANON S28, И1б: торс, голова, две руки, две ноги); тело
 // падает, складывается на пол СВЯЗНЫМ и засыпает; уборка забирает всё.
 static void test_humanoid_segments_fall_and_cleanup() {
     LevelStack stack;
@@ -759,11 +774,49 @@ static void test_humanoid_segments_fall_and_cleanup() {
     CHECK(std::fabs(fracSum - 1.0f) < 0.01f);
     CHECK(reg.all_of<RigidBody>(root)); // корень пересобран в таз
 
-    for (int i = 0; i < 6 * kSimHz; ++i) rigid_body_step(reg, stack, kSimDt);
+    // СВЯЗНОСТЬ — ЗАЗОРОМ В ТОЧКАХ СУСТАВОВ НА ВСЁМ ПАДЕНИИ, а не в конце:
+    // удар об пол и складывание — то, что рвёт цепь, а уснувший труп
+    // показал бы ноль и при резиновом суставе. Граница 1 см — та же, что
+    // держит маятник шарнира (`world_test`, «сустав держит: ≤ 1 см на
+    // размахе»): здесь тот же сустав, нагруженный цепью.
+    //
+    // ТОЧКИ СУСТАВА — ИЗ ТАБЛИЦЫ ФОРМЫ (`form_part_joint`), а не из якорей,
+    // записанных в саму связь: связь центр-к-центру держала бы свои якоря
+    // идеально и прошла бы гейт, а рука висела бы центром, а не плечом.
+    // Мерим то, что увидит глаз: конец руки у плеча торса. Части рождаются
+    // по строкам формы по порядку, поэтому порядок сущностей и есть номер
+    // строки (свежий реестр выдаёт возрастающие id).
+    std::vector<Entity> parts{root};
+    for (auto e : reg.view<game::BodySegment, RigidBody>()) parts.push_back(e);
+    std::sort(parts.begin() + 1, parts.end(),
+              [](Entity x, Entity y) {
+                  return entt::to_integral(x) < entt::to_integral(y);
+              });
+    const game::BodyScale scale = game::body_scale(
+        steer_frame_of(&w.gravity()), vec3{0.4f, 0.4f, 0.9f});
+    float maxGap = 0.0f;
+    const std::uint32_t joints = static_cast<std::uint32_t>(parts.size() - 1u);
+    for (int i = 0; i < 6 * kSimHz; ++i) {
+        rigid_body_step(reg, stack, kSimDt);
+        for (std::uint16_t k = 1; k < parts.size() && k < fd.count; ++k) {
+            const game::PartJoint pj =
+                game::form_part_joint(game::FormId::Humanoid, scale, k);
+            const Entity par = parts[game::kFormSegs[fd.first + k].parent];
+            const vec3 pa = reg.get<Transform>(parts[k]).pos +
+                            quat_rotate(reg.get<RigidBody>(parts[k]).q,
+                                        pj.inPart);
+            const vec3 pb = reg.get<Transform>(par).pos +
+                            quat_rotate(reg.get<RigidBody>(par).q,
+                                        pj.inParent);
+            maxGap = std::max(maxGap,
+                              length(wrap_delta3(pa, pb, kWorldExtent)));
+        }
+    }
+    std::printf("[corpse] %u суставов, макс. зазор на падении %.4f м\n",
+                joints, static_cast<double>(maxGap));
 
-    // Все части тела легли к полу (макс. габарит сегмента < 0.6 м) и цепь
-    // цела: каждый сегмент в пределах троекратной длины своей штанги.
-    bool allDown = true, connected = true;
+    // Все части тела легли к полу (макс. габарит сегмента < 0.6 м).
+    bool allDown = true;
     auto segView = reg.view<game::BodySegment, Transform>();
     std::uint32_t segCount = 0;
     for (auto e : segView) {
@@ -772,17 +825,10 @@ static void test_humanoid_segments_fall_and_cleanup() {
         const float z = segView.get<Transform>(e).pos.z;
         if (z > floorTop + 0.6f) allDown = false;
     }
-    auto linkView = reg.view<JointLink>();
-    for (auto le : linkView) {
-        const auto& jl = linkView.get<JointLink>(le);
-        if (jl.b == entt::null) continue;
-        const vec3 d = wrap_delta3(reg.get<Transform>(jl.a).pos,
-                                   reg.get<Transform>(jl.b).pos, kWorldExtent);
-        if (length(d) > jl.restLen * 3.0f) connected = false;
-    }
-    CHECK(segCount == 3u);
+    CHECK(segCount == static_cast<std::uint32_t>(fd.count - 1u));
+    CHECK(joints == static_cast<std::uint32_t>(fd.count - 1u));
     CHECK(allDown);
-    CHECK(connected);
+    CHECK(maxGap < 0.01f);
 
     // Уборка: сегменты и линки умирают с корнем (ребилд этажа при загрузке).
     std::vector<Entity> roots{root};
@@ -915,13 +961,17 @@ static void test_humanoid_reaches_sleep() {
     // именно поэтому красная проверка §69 под MSVC, скорее всего, тоже
     // закрыта: до правки тест проходил НА ГРАНИ (спит 1 из 4 на 5.5 с и
     // 0 из 4 на 12 с — замер стенда), и разница компиляторов решала исход.
+    // Число тел — из таблицы формы: ранний выход по литералу рвал цикл, едва
+    // уснёт столько тел, сколько их было у четырёхчастной формы.
+    const std::uint32_t parts =
+        game::form_def(game::FormId::Humanoid).count;
     for (int i = 0; i < 20 * kSimHz; ++i) {
         rigid_body_step(reg, stack, kSimDt);
         std::uint32_t asleepNow = 0;
         for (auto e : reg.view<RigidBody>()) {
             if (reg.get<RigidBody>(e).asleep) ++asleepNow;
         }
-        if (asleepNow == 4u) break;
+        if (asleepNow == parts) break;
     }
 
     std::uint32_t segs = 0, asleep = 0;
@@ -955,7 +1005,7 @@ static void test_humanoid_reaches_sleep() {
                         rb.touchedTick ? 1 : 0);
         }
     }
-    CHECK(segs == 4u);   // таз + 3 сегмента формы
+    CHECK(segs == parts);  // таз + сегменты формы — числом таблицы
     CHECK(asleep == segs); // труп ДОСТИГ тишины — §64 закрыт по классу
 }
 
@@ -968,14 +1018,17 @@ static void test_humanoid_reaches_sleep() {
 // другими трупами, и ТОГДА не засыпает ни один.
 //
 // N и T ВЫВЕДЕНЫ прогоном, а не назначены (S11):
-//   N = 16 трупов = 64 тела + 48 суставов. Меньше не годится: дефект живёт на
-//       взаимодействии цепей, а 64 тела уже дают его в полную силу.
+//   N = 16 трупов = 112 тел + 96 суставов (семь частей с И1б 2026-11-25;
+//       до того 64 + 48). Меньше не годится: дефект живёт на взаимодействии
+//       цепей, а этой кучи уже хватает, чтобы он жил в полную силу.
 //   Шаг решётки 1.5 м при габарите лежащего трупа ~1.8 м — трупы ЛЕЖАТ ДРУГ
 //       НА ДРУГЕ, как в игре, а не стоят рядком.
-//   T = 20 с с ранним выходом. Замер: с законом «цепь не сталкивается сама с
-//       собой» все 64 тела спят к 10.9 с; без него за 20 с спят 15 из 64 и
-//       дальше не сходятся (за 60 с — 29 из 64, ошибка сустава растёт
-//       0.024 → 0.029 м).
+//   T = 20 с с ранним выходом. Замер четырёхчастной формы (2026-09-30): с
+//       законом «цепь не сталкивается сама с собой» все 64 тела спят к
+//       10.9 с; без него за 20 с спят 15 из 64 и дальше не сходятся (за 60 с
+//       — 29 из 64, ошибка сустава растёт 0.024 → 0.029 м). Семичастная
+//       (2026-11-25, стенд той же раскладки `rigid_bench 16 30 1.5`): все 112
+//       к 9.9 с.
 //
 // Оракул АБСОЛЮТНЫЙ — «спят ВСЕ», а не доля: доля была бы назначенным
 // порогом. Мутации в обе полярности прогнаны до этой записи (см. §64).
@@ -1033,7 +1086,8 @@ static void test_corpse_pile_reaches_sleep() {
     reg.emplace<AABB>(agent, AABB{vec3{0.4f, 0.4f, 0.9f}});
     reg.emplace<GravityAffected>(agent);
 
-    const std::uint32_t expectBodies = 4u * kCorpses;
+    const std::uint32_t parts = game::form_def(game::FormId::Humanoid).count;
+    const std::uint32_t expectBodies = parts * kCorpses;
     for (int i = 0; i < 20 * kSimHz; ++i) {
         rigid_body_step(reg, stack, kSimDt);
         std::uint32_t asleepNow = 0;
@@ -1061,19 +1115,15 @@ static void test_corpse_pile_reaches_sleep() {
         const JointLink& jl = reg.get<JointLink>(le);
         ++linkCount;
         if (jl.a == entt::null || jl.b == entt::null) continue;
-        const vec3 pa = reg.get<Transform>(jl.a).pos;
-        const vec3 pb = reg.get<Transform>(jl.b).pos;
-        const float C =
-            length(wrap_delta3(pa, pb, kWorldExtent)) - jl.restLen;
-        maxAbsC = std::max(maxAbsC, std::fabs(C));
+        maxAbsC = std::max(maxAbsC, std::fabs(corpse_joint_gap(reg, jl)));
     }
     if (asleep != bodies)
         std::printf("[§64] куча НЕ уснула: спит %u из %u, суставов %u, "
                     "максимальная ошибка сустава %.5f м\n",
                     asleep, bodies, linkCount,
                     static_cast<double>(maxAbsC));
-    CHECK(bodies == expectBodies);       // 16 трупов × (таз + 3 сегмента)
-    CHECK(linkCount == 3u * kCorpses);   // 3 сустава на труп
+    CHECK(bodies == expectBodies);       // 16 трупов × части формы
+    CHECK(linkCount == (parts - 1u) * kCorpses); // сустав на каждую не-корневую часть
     CHECK(asleep == bodies);             // спят ВСЕ — §64, корень закрыт
 
     // СПЯЩАЯ ГОРА ТРУПОВ НЕ ПЛАТИТ ЗА ФАЗУ СВЯЗЕЙ — производный оракул, и он
@@ -1081,8 +1131,9 @@ static void test_corpse_pile_reaches_sleep() {
     // быть РОВНО НОЛЬ. Число, а не миллисекунды: время в проверке ненадёжно.
     // Замер, из которого это выросло (1000 трупов = 4000 тел, 3000 связей,
     // один движущийся агент, ВСЁ спит): solve **1.467 → 0.088 мс**, в 17
-    // раз. Мутация «решать по всем связям, как было» → 48 связей × 8
-    // итераций × 2 подшага = 768 решений, красный.
+    // раз. Мутация «решать по всем связям, как было» → (четыре части) 48
+    // связей × 8 итераций × 2 подшага = 768 решений, красный; у семи частей
+    // то же правило даёт 96 × 8 × 2 = 1536.
     rigid_body_step(reg, stack, kSimDt);
     const RigidStats& rs = reg.ctx().get<RigidStats>();
     if (rs.linksSolved != 0u)

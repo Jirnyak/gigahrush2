@@ -10,7 +10,8 @@
 //
 // Доли, а не метры: одна строка обслуживает и ребёнка, и громилу — тело
 // масштабируется собственным габаритом (S11). ox/oy и sx/sy — доли ШИРИНЫ
-// тела, oz/sz — доли РОСТА; у сферы sx — доля роста для радиуса.
+// тела, oz/sz — доли РОСТА; у сферы sx — доля роста для радиуса. Оси — КАДР
+// ТЕЛА (CANON S28): x — перёд, y — лево, z — верх против гравитации.
 #pragma once
 
 #include <cstdint>
@@ -19,6 +20,12 @@ namespace giga::game {
 
 enum class FormPrim : std::uint8_t { Sphere = 0, Box = 1 };
 
+// Роль части — закрытый словарь (CANON S28.2): по ней водитель позы решает,
+// что делать с частью. Вида тела движок не знает.
+enum class FormRole : std::uint8_t {
+    Root = 0, Torso = 1, Head = 2, Arm = 3, Leg = 4, Chain = 5, Count
+};
+
 // Индекс родителя внутри формы; 0xFF — корень (носитель сам).
 inline constexpr std::uint8_t kFormNoParent = 0xFFu;
 
@@ -26,7 +33,9 @@ struct FormSegDef {
     const char* seg;        // CSV slug, для диагностики
     std::uint8_t parent;    // индекс сегмента-родителя, kFormNoParent у корня
     FormPrim prim;
-    float ox, oy, oz;       // офсет от КОРНЯ в долях (W, W, H)
+    FormRole partRole;      // роль части — её читает водитель позы (И2)
+    float ox, oy, oz;       // офсет от КОРНЯ в долях (W, W, H), кадр тела
+    float jx, jy, jz;       // точка сустава с родителем, те же доли; корень — 0
     float sx, sy, sz;       // полугабарит в долях (W, W, H); сфера — sx от H
     float massFrac;         // доля полной массы тела
     std::uint8_t rope;      // 1 — связь только тянет (верёвка), 0 — штанга
@@ -39,9 +48,9 @@ struct FormDef {
 };
 
 inline constexpr std::uint16_t kFormCount = 1u;
-inline constexpr std::uint16_t kFormSegCount = 4u;
+inline constexpr std::uint16_t kFormSegCount = 7u;
 // Длина самой большой формы — предел буфера сборщика (выведен из таблицы).
-inline constexpr std::uint16_t kMaxFormSegs = 4u;
+inline constexpr std::uint16_t kMaxFormSegs = 7u;
 
 // Ordinals — GENERATED, CSV order.
 enum class FormId : std::uint16_t {
@@ -50,14 +59,17 @@ enum class FormId : std::uint16_t {
 };
 
 inline constexpr FormSegDef kFormSegs[kFormSegCount] = {
-    {"pelvis", kFormNoParent, FormPrim::Box, 0.000000f, 0.000000f, 0.000000f, 0.450000f, 0.300000f, 0.100000f, 0.260000f, 0},
-    {"chest", 0, FormPrim::Box, 0.010000f, 0.000000f, 0.250000f, 0.500000f, 0.300000f, 0.150000f, 0.330000f, 0},
-    {"head", 1, FormPrim::Sphere, 0.020000f, 0.000000f, 0.470000f, 0.066700f, 0.066700f, 0.066700f, 0.080000f, 0},
-    {"legs", 0, FormPrim::Box, -0.010000f, 0.000000f, -0.340000f, 0.400000f, 0.300000f, 0.220000f, 0.330000f, 0},
+    {"pelvis", kFormNoParent, FormPrim::Box, FormRole::Root, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.000000f, 0.125000f, 0.212500f, 0.050000f, 0.140000f, 0},  // корень: на нём лут/интеракция/сейв; оси долей — перёд/лево/верх кадра тела; x/y — доли ширины W; z — доли роста H
+    {"torso", 0, FormPrim::Box, FormRole::Torso, 0.000000f, 0.000000f, 0.188900f, 0.000000f, 0.000000f, 0.050000f, 0.137500f, 0.237500f, 0.138900f, 0.320000f, 0},  // торс 0.50 м над тазом; сустав — пояс
+    {"head", 1, FormPrim::Sphere, FormRole::Head, 0.000000f, 0.000000f, 0.400000f, 0.000000f, 0.000000f, 0.327800f, 0.061100f, 0.061100f, 0.061100f, 0.080000f, 0},  // голова: радиус H/16.4 (0.11 м при 1.8); сустав — шея на верху торса
+    {"arm_l", 1, FormPrim::Box, FormRole::Arm, 0.000000f, 0.325000f, 0.127800f, 0.000000f, 0.325000f, 0.305600f, 0.075000f, 0.075000f, 0.177800f, 0.060000f, 0},  // рука целиком висит от плеча; кисть на 0.81 м от подошвы
+    {"arm_r", 1, FormPrim::Box, FormRole::Arm, 0.000000f, -0.325000f, 0.127800f, 0.000000f, -0.325000f, 0.305600f, 0.075000f, 0.075000f, 0.177800f, 0.060000f, 0},  // зеркало левой
+    {"leg_l", 0, FormPrim::Box, FormRole::Leg, 0.000000f, 0.112500f, -0.275000f, 0.000000f, 0.112500f, -0.050000f, 0.100000f, 0.100000f, 0.225000f, 0.170000f, 0},  // нога целиком от бедра до подошвы (низ AABB)
+    {"leg_r", 0, FormPrim::Box, FormRole::Leg, 0.000000f, -0.112500f, -0.275000f, 0.000000f, -0.112500f, -0.050000f, 0.100000f, 0.100000f, 0.225000f, 0.170000f, 0},  // зеркало левой
 };
 
 inline constexpr FormDef kFormTable[kFormCount] = {
-    {"humanoid", 0, 4},
+    {"humanoid", 0, 7},
 };
 
 inline const FormDef& form_def(FormId f) {

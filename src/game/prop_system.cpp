@@ -1768,8 +1768,8 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
     // гравитации этажа, перёд по взгляду, — а не по мировым осям. Та же поза
     // покоя, которую нарисует живое тело, — второй раскладки нет.
     PartPose pose[kMaxFormSegs];
-    form_rest_pose(form, body_scale(gf, bodyHalf), body_frame(gf, look),
-                   basePos, pose);
+    const BodyScale scale = body_scale(gf, bodyHalf);
+    form_rest_pose(form, scale, body_frame(gf, look), basePos, pose);
     auto attach = [&](Entity e, const FormSegDef& sd, const PartPose& pp,
                       float kg) {
         reg.emplace_or_replace<AABB>(e, AABB{pp.half});
@@ -1800,16 +1800,24 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
         made[i] = seg;
         ++n;
 
-        // Связь с родителем: восстановленная длина — фактическое расстояние
-        // между центрами, так форма и есть покойная поза.
+        // СВЯЗЬ — ШАРНИР В ТОЧКЕ СУСТАВА (CANON S28, И1б): якоря — точка
+        // сустава в осях части и в осях родителя ([game/body_pose.h]
+        // `form_part_joint`), длина ноль — точки совпадают, и рука висит на
+        // плече, а не на штанге от центра торса. До 2026-11-25 связь шла
+        // центр-к-центру длиной в расстояние между ними: рычаг нулевой,
+        // момента связь не давала, и часть вертелась вокруг своего центра.
+        // Верёвка (`rope`) остаётся строкой данных: длина ноль у неё значит
+        // «не дальше сустава».
         const Entity parent =
             (sd.parent == kFormNoParent) ? root : made[sd.parent];
+        const PartJoint pj = form_part_joint(form, scale, i);
         Entity link = reg.create();
         JointLink jl;
         jl.a = seg;
         jl.b = parent;
-        jl.restLen = length(wrap_delta3(
-            pose[i].pos, reg.get<Transform>(parent).pos, kWorldExtent));
+        jl.anchorA = pj.inPart;
+        jl.anchorB = pj.inParent;
+        jl.restLen = 0.0f;
         jl.rope = sd.rope != 0;
         reg.emplace<JointLink>(link, jl);
         reg.emplace<BodySegment>(link, BodySegment{root});

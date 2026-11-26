@@ -64,4 +64,21 @@ std::uint16_t form_rest_pose(FormId form, BodyScale s, const BodyFrame& f,
     return def.count;
 }
 
+PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg) {
+    const FormDef& def = form_def(form);
+    PartJoint out;
+    if (seg >= def.count) return out;
+    const FormSegDef& sd = kFormSegs[def.first + seg];
+    if (sd.parent == kFormNoParent) return out;
+    const FormSegDef& pd = kFormSegs[def.first + sd.parent];
+    // Доли — от центра корня в осях кадра; ось части в покое и есть ось
+    // кадра, поэтому разность долей, переведённая в метры, уже лежит в осях
+    // части (и родителя) — без поворота туда и обратно через мир.
+    out.inPart = vec3{(sd.jx - sd.ox) * s.W, (sd.jy - sd.oy) * s.W,
+                      (sd.jz - sd.oz) * s.H};
+    out.inParent = vec3{(sd.jx - pd.ox) * s.W, (sd.jy - pd.oy) * s.W,
+                        (sd.jz - pd.oz) * s.H};
+    return out;
+}
+
 } // namespace giga::game
