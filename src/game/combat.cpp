@@ -8,6 +8,7 @@
 #include "core/rng.h"  // hash3 — deterministic wear-roll seeds
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/body_pose.h" // BodyPlan — труп собирается формой плана тела
 #include "game/container.h" // Container — inventory overflow on death
 #include "game/room_supply.h" // supply_item_at — лёгшее в труп становится местом (S12.5)
 #include "game/embody.h"   // NpcRef
@@ -526,7 +527,12 @@ std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
                         ? steer_frame_of(&stack.layer(btr->layer).gravity())
                         : regime_frame(GravityRegime::Zero);
                 const Look* lk = reg.try_get<const Look>(e);
-                spawn_form_segments(reg, e, FormId::Humanoid, bodyHalf, kg,
+                // ФОРМА — ИЗ ПЛАНА ТЕЛА (CANON S28.2): чем жил, тем и умер.
+                // Тело без плана (рождённое в обход дверей) — гуманоид, как до
+                // плана.
+                const BodyPlan* plan = reg.try_get<const BodyPlan>(e);
+                const FormId form = plan ? plan->form : FormId::Humanoid;
+                spawn_form_segments(reg, e, form, bodyHalf, kg,
                                     kFleshRestitution, kFleshFriction, gf,
                                     lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f});
             }

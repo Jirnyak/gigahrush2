@@ -19,13 +19,14 @@ namespace {
 
 // КОРНЕВОЙ кап системы тел (решение владельца 2026-09-05, caps-to-canon
 // шаг 3). С 2026-11-25 (И1б эпика тел, CANON S28) он не назначен, а ВЫВЕДЕН
-// снизу вверх из статей ниже: 2^16. Память: 2^16 × 52 Б (BodyInstance c vec4
-// rot) × 2 кадра в полёте = 6.5 МиБ host-visible (было 3.25 при 2^15; GPU в
+// снизу вверх из статей ниже; с И2 (2026-11-26) живое тело тоже рисуется
+// частями, и кап — 2^17. Память: 2^17 × 52 Б (BodyInstance c vec4 rot) × 2
+// кадра в полёте = 13 МиБ host-visible (2^15 — 3.25 до тел из частей; GPU в
 // этом дереве — не дефицит, AGENTS «CPU is the only scarce resource»).
 // Переполнение кричит вслух ниже (S11).
 //
 // ---- ВЫВОД ПЕРЕПИСАН 2026-11-06 (F1, пузырь рагдоллов, matwej.md §17.2),
-//      ПЕРЕВЁРНУТ 2026-11-25 (тело из семи частей) ----
+//      ПЕРЕВЁРНУТ 2026-11-25 (тело из семи частей), АКТОРЫ ЧАСТЯМИ 2026-11-26 ----
 //
 // ПРЕЖНИЙ ВЫВОД БЫЛ `kAwakeMeasured(4096) × kSleepMultiplier(8)`, где 4096 —
 // ЗАМЕР одновременно бодрых тел (0.96 мс/тик, ragdoll.md, sim_bench
@@ -33,33 +34,29 @@ namespace {
 // пузырём присутствия ([sim/presence.h], потребитель `ragdolls:chains`)
 // физика перестала быть ограничителем, и кап стал вопросом РЕНДЕРА и памяти:
 // ВЫВОД — ОТ ТОГО, ЧТО РИСУЕТСЯ, А НЕ ОТ ТОГО, ЧТО РЕШАЕТСЯ.
-//   * 4096 акторов — КОНТРАКТ владельца (§16 решение 5), по одному боксу тела
-//     каждый: ходячий актор НЕ является жёстким телом, это замерено (этаж 6:
-//     1360 тел при 341 трупе четырёхчастной формы — все жёсткие тела суть
-//     трупы);
-//   * 7168 застывших трупов — потолок F1 (§17.2 «до ~7000»), СОХРАНЁН при
-//     переходе на семь частей решением плана тел: потолок есть обещание
-//     игре, а части — подробность формы;
-//   * части на труп — самая длинная форма data/prop_forms.csv
+//   * 4096 акторов — КОНТРАКТ владельца (§16 решение 5). С И2 актор
+//     рисуется не одним боксом, а частями своего плана (`BodyParts`,
+//     [ecs/components.h]);
+//   * 7168 застывших трупов — потолок F1 (§17.2 «до ~7000»), СОХРАНЁН
+//     решением плана тел: потолок есть обещание игре, а части — подробность
+//     формы;
+//   * части на тело — самая длинная форма data/prop_forms.csv
 //     (`kMaxFormSegs`; рендер `src/game` не видит, число держит гейт
-//     `source_rules`);
+//     `source_rules`), одна и та же у живого и у мёртвого: план тела один;
 //   * кап — ближайшая степень двойки над суммой, а её остаток — ЗАПАС НА
 //     ПРОПЫ И ПРОЧИЕ ТЕЛА, названная статья. До 2026-11-25 остатка не было
-//     вовсе: при четырёх частях сумма ровно закрывала 2^15, и пропы с трупами
-//     конкурировали. Перейти на семь частей при 2^15 значило бы срезать
-//     потолок трупов до 4096 — ровно та тихая потеря, от которой вывод и
-//     держится.
+//     вовсе: при четырёх частях и акторах-боксах сумма ровно закрывала 2^15.
 constexpr std::uint32_t kActorContract = 4096;        // §16 решение 5 — контракт
 constexpr std::uint32_t kFrozenCorpseCeiling = 7168;  // F1, §17.2 — сохранён
-constexpr std::uint32_t kCorpseSegments = 7;          // гуманоид, prop_forms.csv
+constexpr std::uint32_t kPartsPerBody = 7;            // гуманоид, prop_forms.csv
 constexpr std::uint32_t kMaxBodies = std::bit_ceil(
-    kActorContract + kFrozenCorpseCeiling * kCorpseSegments); // = 65536
+    (kActorContract + kFrozenCorpseCeiling) * kPartsPerBody); // = 131072
 GIGA_PO2(kMaxBodies);
 constexpr std::uint32_t kPropReserve =
-    kMaxBodies - kActorContract - kFrozenCorpseCeiling * kCorpseSegments;
-static_assert(kMaxBodies == (1u << 16) && kPropReserve == 11264,
+    kMaxBodies - (kActorContract + kFrozenCorpseCeiling) * kPartsPerBody;
+static_assert(kMaxBodies == (1u << 17) && kPropReserve == 52224,
               "кап инстансов = степень двойки над (контракт акторов + потолок "
-              "трупов × части на труп), остаток — запас на пропы. Разошлось — "
+              "трупов) × части на тело, остаток — запас на пропы. Разошлось — "
               "правили одно число из трёх, и проза вывода выше стала ложью "
               "(CANON S11)");
 
@@ -380,6 +377,32 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                nearest_image(tr.pos.z, camPos.z, period)};
         float dx = c.x - camPos.x, dy = c.y - camPos.y, dz = c.z - camPos.z;
         if (dx * dx + dy * dy + dz * dz > fogEndSq) continue; // fogged to black
+
+        // ТЕЛО ИЗ ЧАСТЕЙ (CANON S28.3, И2): живое тело с позой рисуется
+        // частями своего плана, а не боксом коллайдера. Поза написана игровым
+        // проходом (`body_parts_step`), здесь она только читается. Торический
+        // образ — ОДИН на тело (сдвиг центра), иначе части тела у шва
+        // разъехались бы по разным образам.
+        if (const auto* bp = reg.try_get<BodyParts>(e);
+            bp != nullptr && bp->count != 0) {
+            const vec3 shift = c - tr.pos;
+            const vec3 tint = view.get<const Renderable>(e).color;
+            bool full = false;
+            for (std::uint8_t i = 0; i < bp->count; ++i) {
+                if (cubes.size() + spheres.size() >= instanceCapacity_) {
+                    full = true;
+                    break;
+                }
+                const BodyPart& p = bp->part[i];
+                BodyInstance pi;
+                pi.center = p.pos + shift;
+                pi.half = p.half;
+                pi.color = tint;
+                pi.rot = vec4{p.q.x, p.q.y, p.q.z, p.q.w};
+                (p.sphere ? spheres : cubes).push_back(pi);
+            }
+            if (!full) continue;
+        }
 
         BodyInstance inst;
         inst.center = c;

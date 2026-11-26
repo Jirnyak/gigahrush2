@@ -1,5 +1,6 @@
 #include "game/embody.h"
 
+#include "game/body_pose.h" // BodyPlan — план тела при рождении (S28.2)
 #include "game/equip.h"    // Equipped — the empty decision cells on embodiment
 #include "world/clearance.h"  // face_clearance_at — закон пробы стены
 #include "world/macro_grid.h"
@@ -91,6 +92,9 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // (the body pass reads it; the sim never does), so the whole embodied crowd
     // is visible out of the box.
     reg.emplace<Renderable>(e, Renderable{faction_color(pool.faction(id), id)});
+    // План тела (CANON S28.2): по нему живой рисуется частями и по нему же
+    // умирает. Гуманоид — у всех жителей; вид тела движок не знает.
+    reg.emplace<BodyPlan>(e, BodyPlan{FormId::Humanoid});
 
     // Every living body is an interaction target ([conversation.md]): E opens
     // the option menu — talk, quest, barter, the games to come. The player's

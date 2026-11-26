@@ -104,6 +104,7 @@
 #include "game/investigate.h"
 #include "game/geom_writer.h"
 #include "game/mask_churn.h"   // перепись «где автомат меняет маски»  // ДОЛГ ПИСАТЕЛЯ ГЕОМЕТРИИ — таблица и вывод (S20.4)
+#include "game/body_pose.h" // body_parts_step — тело рисуется частями (S28.3, И2)
 #include "game/look.h"      // Look, look_step — ВЗГЛЯД любого тела (S25.7)
 #include "game/perceive.h"  // perceive_step — ОДИН проход восприятия (S25.8)
 #include "game/item_table.h" // kItemVerbs — предложение сущности из лута (goals B)
@@ -9723,6 +9724,12 @@ int main(int argc, char** argv) {
                 simNow += kSimDt;
                 simAccum -= kSimDt;
             }
+            // ПОЗА ЖИВЫХ ТЕЛ — РАЗ НА КАДР, ПОСЛЕ ВСЕХ ТИКОВ, ДО РЕНДЕРА (CANON
+            // S28.3, И2). Поза — производная сим-состояния (Transform и Look
+            // последнего тика), её только читает `BodyPass`; в решения тика она
+            // не входит, поэтому считать её чаще кадра незачем, а в секции
+            // рендера — нельзя (рендер ничего не пишет, AGENTS).
+            game::body_parts_step(reg, stack, activeLayer);
             // ГОРБ ДОЛГА СБРАСЫВАЕМ, А НЕ ОТРАБАТЫВАЕМ УСКОРЕНИЕМ.
             //
             // Понятие написано двадцатью строками выше — для паузы: «drop

@@ -1752,6 +1752,10 @@ std::uint32_t spawn_form_segments(Registry& reg, Entity root, FormId form,
     if (!reg.valid(root) || !reg.all_of<Transform>(root)) return 0;
     const FormDef& def = form_def(form);
     if (def.count == 0) return 0;
+    // СМЕНА ВОДИТЕЛЯ (CANON S28.3): с этой строки частями тела владеет
+    // солвер, и кинематическая поза живого (`BodyParts`) мертва — иначе
+    // корень трупа рисовал бы поверх своих сегментов застывшую позу живого.
+    reg.remove<BodyParts>(root);
 
     const Transform& rootTr = reg.get<Transform>(root);
     const vec3 basePos = rootTr.pos;

@@ -217,8 +217,8 @@ struct RigidBody {
 // кладётся в 52 и сдвигает `chain` на 56, то есть структура выросла 56 → 60.
 // `suspendVote` лёг в 53, то есть в ПАДДИНГ 53..55, который этот сдвиг и
 // открыл, — он не стоил ни байта тоже, и свободных байт там осталось два.
-// ЦЕНА НАЗВАНА ЧИСЛОМ: 4 Б × 65536 (kMaxBodies, [render/body_pass.cpp], 2^16
-// с И1б 2026-11-25) = 256 КиБ худшего случая против 6.5 МиБ стейджинга
+// ЦЕНА НАЗВАНА ЧИСЛОМ: 4 Б × 131072 (kMaxBodies, [render/body_pass.cpp], 2^17
+// с И2 2026-11-26) = 512 КиБ худшего случая против 13 МиБ стейджинга
 // инстансов там же, то есть те же 3.8%. Альтернатива — отдельный компонент-тег — стоила бы пробы разрежённого
 // набора НА ТЕЛО В ЧЕТЫРЁХ горячих циклах тика, а `RigidBody` в них уже
 // загружен.
@@ -285,6 +285,30 @@ struct JointLink {
     bool rope = false;                // true: только тянет
 };
 
+// ЧАСТИ ЖИВОГО ТЕЛА В ПОЗЕ — то, что рисуется вместо одного бокса (CANON S28.3,
+// И2 эпика тел). Пишет ЕДИНСТВЕННЫЙ игровой проход позы
+// (`body_parts_step@game/body_pose.h`), рендер только читает: поза —
+// производная сим-состояния (взгляд, кадр гравитации, габарит, план тела) и в
+// решения симуляции не входит. Живёт в ЯДРЕ по той же причине, что `Renderable`
+// и теги пропов: `src/render` не видит `src/game`.
+//
+// `kMaxBodyParts` — ёмкость, а не число частей: самая длинная форма таблицы
+// (`kMaxFormSegs`, генерированная) обязана в неё влезать, и это держит
+// `static_assert` в `game/body_pose.cpp` (ядро таблицу форм не видит).
+// Позиции — в МИРЕ, рядом с `Transform` тела; торический образ возле камеры
+// рендер берёт ОДИН на тело, чтобы части одного тела не разъехались по шву.
+inline constexpr std::uint8_t kMaxBodyParts = 8;
+struct BodyPart {
+    vec3 pos{0.0f, 0.0f, 0.0f};
+    quat q{};
+    vec3 half{0.0f, 0.0f, 0.0f}; // в осях части; у сферы (r, r, r)
+    bool sphere = false;
+};
+struct BodyParts {
+    std::uint8_t count = 0;
+    BodyPart part[kMaxBodyParts]{};
+};
+
 // Prop render-path filter tags ([jirnyak.md] section 18).
 //
 // Live in the CORE — not the game layer — for the same reason as CameraTag /
@@ -328,6 +352,8 @@ GIGA_ROW(giga::RigidBody);
 GIGA_ROW(giga::ContactForm);
 GIGA_ROW(giga::CarriedBy);
 GIGA_ROW(giga::JointLink);
+GIGA_ROW(giga::BodyPart);
+GIGA_ROW(giga::BodyParts);
 GIGA_ROW(giga::StaticPropTag);
 GIGA_ROW(giga::DynamicBodyTag);
 GIGA_ROW(giga::PropMeshTag);

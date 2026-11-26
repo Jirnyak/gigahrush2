@@ -9,6 +9,7 @@
 #include "core/math.h"
 #include "core/wrap.h"        // wrap_delta_f — the census and the placement must agree
 #include "ecs/components.h"
+#include "game/body_pose.h"   // BodyPlan — план тела при рождении (S28.2)
 #include "game/floor_gen.h"
 #include "game/room.h"        // FloorRooms — пак селится в объявленной комнате
 #include "game/room_supply.h" // rooms_in_ctx
@@ -199,6 +200,10 @@ Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def
         reg.emplace<WanderTarget>(e, WanderTarget{kNoRoom, 0, packId});
     }
     reg.emplace<Renderable>(e, Renderable{tier_color(tier, headHash)});
+    // План тела (CANON S28.2): тот же гуманоид, которым моб и умирал до плана
+    // (`finalize_deaths`). Столбец плана в `mobs.csv` — И9: турели и растения
+    // до него стоят манекенами (нюанс назван, ветки под вид нет).
+    reg.emplace<BodyPlan>(e, BodyPlan{FormId::Humanoid});
 
     // Universal mass ([ecs/components.h]): the table's authored kilograms.
     reg.emplace<Mass>(e, Mass{static_cast<float>(def.massG) * 0.001f});

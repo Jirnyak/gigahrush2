@@ -20,8 +20,10 @@
 #include <cstdint>
 
 #include "core/math.h"
+#include "ecs/registry.h"
 #include "game/prop_form_table.h"
 #include "world/gravity.h"
+#include "world/level_stack.h"
 
 namespace giga::game {
 
@@ -71,5 +73,31 @@ struct PartJoint {
     vec3 inParent{0.0f, 0.0f, 0.0f};  // в осях родителя (якорь b связи)
 };
 PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg);
+
+// ПЛАН ТЕЛА — форма из таблицы, по которой тело и живёт, и умирает (CANON
+// S28.2: «форма трупа и план живого — ОДНА таблица»). Ставится при рождении
+// тела (`embody`, `emplace_mob`); смерть собирает труп ЭТОЙ формой, проход
+// позы рисует живого ЕЮ ЖЕ. Сегодня у всех гуманоид — столбец плана моба в
+// `mobs.csv` есть И9, и он ляжет сюда строкой данных, а не веткой.
+struct BodyPlan {
+    FormId form = FormId::Humanoid;
+};
+
+// Телеметрия прохода — та же форма, что у `LookTick`.
+struct BodyPoseTick {
+    std::uint32_t posed = 0;  // живых тел с планом, получивших позу
+    std::uint32_t parts = 0;  // частей написано
+};
+
+// ПРОХОД ПОЗЫ ЖИВЫХ ТЕЛ (CANON S28.3, И2). Единственный писатель `BodyParts`
+// ([ecs/components.h]): каждому живому телу с планом на слое — поза покоя его
+// формы (`form_rest_pose`, ТА ЖЕ функция, что раскладывает труп) в кадре тела:
+// верх против гравитации слоя, перёд — `Look`. Корень — в центре силуэта
+// (`Transform`), масштаб — силуэт `AABB`. Поза — производная, не состояние:
+// раз на КАДР, перед рендером, в решения симуляции не входит. Мёртвое тело
+// (`Corpse`) позу не получает — им владеет солвер, его части рисуются сами;
+// носитель камеры — тоже (вид от первого лица — И6).
+BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
+                             LayerId layer);
 
 } // namespace giga::game

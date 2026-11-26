@@ -2,6 +2,10 @@
 
 #include <cmath>
 
+#include "ecs/components.h"
+#include "game/combat.h"  // Corpse — мёртвым позу не пишут
+#include "game/look.h"    // Look — перёд тела
+
 namespace giga::game {
 
 namespace {
@@ -64,6 +68,12 @@ std::uint16_t form_rest_pose(FormId form, BodyScale s, const BodyFrame& f,
     return def.count;
 }
 
+// Ёмкость компонента ядра обязана покрывать самую длинную форму таблицы: ядро
+// таблицу не видит, поэтому договор держится здесь, где видны оба числа.
+static_assert(kMaxFormSegs <= kMaxBodyParts,
+              "форма длиннее ёмкости BodyParts — подними kMaxBodyParts в "
+              "ecs/components.h (и вывод капа BodyPass)");
+
 PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg) {
     const FormDef& def = form_def(form);
     PartJoint out;
@@ -78,6 +88,44 @@ PartJoint form_part_joint(FormId form, BodyScale s, std::uint16_t seg) {
                       (sd.jz - sd.oz) * s.H};
     out.inParent = vec3{(sd.jx - pd.ox) * s.W, (sd.jy - pd.oy) * s.W,
                         (sd.jz - pd.oz) * s.H};
+    return out;
+}
+
+BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
+                             LayerId layer) {
+    BodyPoseTick out;
+    if (!stack.valid(layer)) return out;
+    // Кадр гравитации — свойство слоя, один на проход (тот же, что у ходьбы
+    // и у сборки трупа).
+    const GravityFrame gf = steer_frame_of(&stack.layer(layer).gravity());
+    // Хранилище позы существует ДО открытия вида: первое тело рождает
+    // `BodyParts` внутри обхода (тот же довод, что у `look_step`).
+    (void)reg.storage<BodyParts>();
+    auto view = reg.view<const BodyPlan, const Transform, const AABB>();
+    for (auto e : view) {
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        if (reg.any_of<Corpse, CameraTag>(e)) continue;
+        const Look* lk = reg.try_get<const Look>(e);
+        PartPose pose[kMaxFormSegs];
+        const FormId form = view.get<const BodyPlan>(e).form;
+        const std::uint16_t n = form_rest_pose(
+            form, body_scale(gf, view.get<const AABB>(e).half),
+            body_frame(gf, lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f}), tr.pos,
+            pose);
+        BodyParts& bp = reg.get_or_emplace<BodyParts>(e);
+        const FormDef& def = form_def(form);
+        bp.count = static_cast<std::uint8_t>(n);
+        for (std::uint16_t i = 0; i < n; ++i) {
+            BodyPart& p = bp.part[i];
+            p.pos = pose[i].pos;
+            p.q = pose[i].q;
+            p.half = pose[i].half;
+            p.sphere = kFormSegs[def.first + i].prim == FormPrim::Sphere;
+        }
+        ++out.posed;
+        out.parts += n;
+    }
     return out;
 }
 

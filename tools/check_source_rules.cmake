@@ -447,10 +447,10 @@ _giga_csv_vs_header("data/interactables.csv" "src/game/interact_table.h"
 # топологию тела молча. Гейт считает строки CSV против kFormSegCount.
 _giga_csv_vs_header("data/prop_forms.csv" "src/game/prop_form_table.h"
     "kFormSegCount[ \t]*=[ \t]*([0-9]+)" "prop form segment")
-# ЧАСТЕЙ НА ТРУП У РЕНДЕРА = САМАЯ ДЛИННАЯ ФОРМА ТАБЛИЦЫ (CANON S28, И1б
+# ЧАСТЕЙ НА ТЕЛО У РЕНДЕРА = САМАЯ ДЛИННАЯ ФОРМА ТАБЛИЦЫ (CANON S28, И1б
 # эпика тел, 2026-11-25). Кап инстансов `BodyPass` выводится из числа частей
-# застывшего трупа, а рендер `src/game` не видит (слоение), поэтому число
-# стоит у него своей константой `kCorpseSegments` — и связать её с
+# тела (живого и мёртвого — план один), а рендер `src/game` не видит
+# (слоение), поэтому число стоит у него своей константой `kPartsPerBody` — и связать её с
 # генерированным `kMaxFormSegs` может только этот текстовый гейт. Без него
 # форма из восьми частей молча обрезала бы потолок трупов на треть.
 set(_giga_bp "${GIGA_ROOT}/src/render/body_pass.cpp")
@@ -458,12 +458,12 @@ set(_giga_pf "${GIGA_ROOT}/src/game/prop_form_table.h")
 if(EXISTS "${_giga_bp}" AND EXISTS "${_giga_pf}")
     file(READ "${_giga_bp}" _giga_bp_text)
     file(READ "${_giga_pf}" _giga_pf_text)
-    if(_giga_bp_text MATCHES "kCorpseSegments[ \t]*=[ \t]*([0-9]+)")
+    if(_giga_bp_text MATCHES "kPartsPerBody[ \t]*=[ \t]*([0-9]+)")
         set(_giga_bp_n "${CMAKE_MATCH_1}")
         if(_giga_pf_text MATCHES "kMaxFormSegs[ \t]*=[ \t]*([0-9]+)")
             if(NOT _giga_bp_n EQUAL CMAKE_MATCH_1)
                 list(APPEND GIGA_FAILURES
-                    "src/render/body_pass.cpp:1: kCorpseSegments = ${_giga_bp_n}, а самая длинная форма таблицы kMaxFormSegs = ${CMAKE_MATCH_1} (data/prop_forms.csv). Кап инстансов и потолок застывших трупов выведены из этого числа — поправь его и вывод капа вместе.")
+                    "src/render/body_pass.cpp:1: kPartsPerBody = ${_giga_bp_n}, а самая длинная форма таблицы kMaxFormSegs = ${CMAKE_MATCH_1} (data/prop_forms.csv). Кап инстансов и потолок застывших трупов выведены из этого числа — поправь его и вывод капа вместе.")
             endif()
         else()
             list(APPEND GIGA_FAILURES
@@ -471,7 +471,7 @@ if(EXISTS "${_giga_bp}" AND EXISTS "${_giga_pf}")
         endif()
     else()
         list(APPEND GIGA_FAILURES
-            "src/render/body_pass.cpp:1: kCorpseSegments не найден — вывод капа BodyPass сменил вид, и гейт частей трупа ослеп. Почини регулярку, а не удаляй правило.")
+            "src/render/body_pass.cpp:1: kPartsPerBody не найден — вывод капа BodyPass сменил вид, и гейт частей трупа ослеп. Почини регулярку, а не удаляй правило.")
     endif()
 endif()
 # Particles table — the unified GPU pool's type vocabulary. Same ordinal-ABI

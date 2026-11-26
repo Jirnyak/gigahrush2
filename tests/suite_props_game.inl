@@ -9,7 +9,8 @@
 #include "game/floor_spec.h"
 #include "game/focus.h"      // focus_pick — прицел живого пути E
 #include "game/prop_system.h"
-#include "game/body_pose.h"  // form_part_joint — сустав из таблицы формы
+#include "game/body_pose.h"  // form_part_joint, body_parts_step — поза тела
+#include "game/look.h"       // Look — перёд живого тела
 #include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
 #include "game/combat.h"  // kProjHitRadius — выстрел-в-проп тем же радиусом
 #include "game/embody.h"  // embody_as_player — тело игрока для лут-пути
@@ -716,6 +717,107 @@ static void test_corpse_lays_out_in_its_frame() {
             quat_rotate(reg.get<RigidBody>(root).q, vec3{1.0f, 0.0f, 0.0f});
         CHECK(length(rootUp - up) < 1e-4f);   // ось роста корня — верх кадра
         CHECK(length(rootFwd - look) < 1e-4f); // перёд корня — взгляд
+    }
+}
+
+// ЖИВОЕ ТЕЛО РИСУЕТСЯ ЧАСТЯМИ (CANON S28.3, И2 эпика тел). Проход позы
+// `body_parts_step` пишет живому телу с планом позу покоя его формы в кадре
+// тела — верх против гравитации слоя, перёд по `Look`, — а рендер её только
+// читает. Мерим то, что увидит глаз, и то, что обещает канон:
+//   * шесть гравитаций: голова над тазом, ноги под ним на доли роста ВДОЛЬ
+//     оси против гравитации, поперёк — в силуэте, оси корня — оси кадра;
+//   * ОДНА ПОЗА: труп, собранный из этого тела, рождается РОВНО там, где
+//     только что рисовался живой (И4 начнёт отсюда — со скоростями);
+//   * смена водителя снимает живую позу, и проход её мёртвому не вернёт;
+//   * носитель камеры позы не получает (вид от первого лица — И6).
+static void test_living_body_poses_in_parts() {
+    const GravityRegime regimes[6] = {
+        GravityRegime::NegX, GravityRegime::PosX, GravityRegime::NegY,
+        GravityRegime::PosY, GravityRegime::NegZ, GravityRegime::PosZ};
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    float ozMax = -1.0f, ozMin = 1.0f;
+    for (std::uint16_t i = 0; i < fd.count; ++i) {
+        ozMax = std::max(ozMax, game::kFormSegs[fd.first + i].oz);
+        ozMin = std::min(ozMin, game::kFormSegs[fd.first + i].oz);
+    }
+    for (const GravityRegime r : regimes) {
+        LevelStack stack;
+        const LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        w.gravity().regime = r;
+        const GravityFrame gf = steer_frame_of(&w.gravity());
+        const vec3 up = regime_up(r);
+        vec3 half{0.4f, 0.4f, 0.4f};
+        if (gf.axis == 0) half.x = 0.9f;
+        else if (gf.axis == 1) half.y = 0.9f;
+        else half.z = 0.9f;
+        vec3 look{0.0f, 0.0f, 0.0f};
+        if (gf.tanB == 0) look.x = 1.0f;
+        else if (gf.tanB == 1) look.y = 1.0f;
+        else look.z = 1.0f;
+        const float H = 1.8f, W = 0.8f;
+
+        Registry reg;
+        const vec3 c{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+        Entity body = reg.create();
+        reg.emplace<Transform>(body, Transform{c, g});
+        reg.emplace<Velocity>(body);
+        reg.emplace<AABB>(body, AABB{half});
+        reg.emplace<game::Look>(body, game::Look{look});
+        reg.emplace<game::BodyPlan>(body);
+        // Носитель камеры с тем же планом — позы не получает.
+        Entity viewer = reg.create();
+        reg.emplace<Transform>(viewer, Transform{c, g});
+        reg.emplace<AABB>(viewer, AABB{half});
+        reg.emplace<game::BodyPlan>(viewer);
+        reg.emplace<CameraTag>(viewer);
+
+        const game::BodyPoseTick t = game::body_parts_step(reg, stack, g);
+        CHECK(t.posed == 1u);
+        CHECK(!reg.all_of<BodyParts>(viewer));
+        const BodyParts* bp = reg.try_get<BodyParts>(body);
+        CHECK(bp != nullptr && bp->count == fd.count);
+        if (bp == nullptr || bp->count != fd.count) continue;
+
+        float upMax = -9.0f, upMin = 9.0f, sideMax = 0.0f;
+        for (std::uint8_t i = 0; i < bp->count; ++i) {
+            const vec3 off = bp->part[i].pos - c;
+            const float a = dot(off, up);
+            upMax = std::max(upMax, a);
+            upMin = std::min(upMin, a);
+            sideMax = std::max(sideMax, length(off - up * a));
+        }
+        CHECK(std::fabs(upMax - ozMax * H) < 1e-3f); // голова над тазом
+        CHECK(std::fabs(upMin - ozMin * H) < 1e-3f); // ноги под ним
+        CHECK(sideMax <= 0.5f * W);                  // поперёк — в силуэте
+        const quat q0 = bp->part[0].q;
+        CHECK(length(quat_rotate(q0, vec3{0.0f, 0.0f, 1.0f}) - up) < 1e-4f);
+        CHECK(length(quat_rotate(q0, vec3{1.0f, 0.0f, 0.0f}) - look) < 1e-4f);
+
+        // ОДНА ПОЗА: смерть собирает труп из того же тела — части рождаются
+        // там, где живой рисовался. Порядок сущностей сегментов есть порядок
+        // строк формы (свежий реестр выдаёт возрастающие id).
+        const BodyParts living = *bp;
+        game::spawn_form_segments(reg, body, game::FormId::Humanoid, half,
+                                  70.0f, game::kFleshRestitution,
+                                  game::kFleshFriction, gf, look);
+        std::vector<Entity> segs;
+        for (auto e : reg.view<game::BodySegment, RigidBody>())
+            segs.push_back(e);
+        std::sort(segs.begin(), segs.end(), [](Entity x, Entity y) {
+            return entt::to_integral(x) < entt::to_integral(y);
+        });
+        float drift = length(reg.get<Transform>(body).pos - living.part[0].pos);
+        for (std::size_t k = 0; k < segs.size() && k + 1 < living.count; ++k)
+            drift = std::max(drift, length(reg.get<Transform>(segs[k]).pos -
+                                           living.part[k + 1].pos));
+        CHECK(segs.size() + 1u == living.count);
+        CHECK(drift < 1e-4f);
+        // Смена водителя сняла живую позу, и мёртвому проход её не вернёт.
+        CHECK(!reg.all_of<BodyParts>(body));
+        reg.emplace<game::Corpse>(body);
+        game::body_parts_step(reg, stack, g);
+        CHECK(!reg.all_of<BodyParts>(body));
     }
 }
 
@@ -2279,6 +2381,7 @@ void test_props_game_all() {
     test_detached_prop_is_rigid_body();
     test_humanoid_segments_fall_and_cleanup();
     test_corpse_lays_out_in_its_frame();
+    test_living_body_poses_in_parts();
     test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
     test_corpse_pile_reaches_sleep();
