@@ -950,6 +950,113 @@ static void test_kinematic_mutation_bipolar_fuzzing(DynamicDice& dice) {
         " 500/500 наведенных кинематических дефектов перехвачены со 100%% точностью!\n");
 }
 
+// -----------------------------------------------------------------------------
+// Тест 12: Инвариант 7 — Тороидальный карвинг сферы через нулевой шов мира
+// -----------------------------------------------------------------------------
+static void test_torus_carve_sphere_seam_dice(DynamicDice& dice) {
+    MacroGrid grid;
+
+    // Вспомогательный тороидальный карвинг сферы
+    auto carve_sphere_torus = [&](vec3 center, float radius) {
+        const float r_sq = radius * radius;
+        const int cell_range = static_cast<int>(std::ceil((radius + kVoxelSize) / kCellSize)) + 1;
+
+        int base_cx = static_cast<int>(std::floor(center.x / kCellSize));
+        int base_cy = static_cast<int>(std::floor(center.y / kCellSize));
+        int base_cz = static_cast<int>(std::floor(center.z / kCellSize));
+
+        for (int dz = -cell_range; dz <= cell_range; ++dz) {
+            int cz = wrap_macro(base_cz + dz);
+            for (int dy = -cell_range; dy <= cell_range; ++dy) {
+                int cy = wrap_macro(base_cy + dy);
+                for (int dx = -cell_range; dx <= cell_range; ++dx) {
+                    int cx = wrap_macro(base_cx + dx);
+                    SubMask& m = grid.mask(cx, cy, cz);
+                    if (m.empty()) continue;
+
+                    for (int sz = 0; sz < kSubDim; ++sz) {
+                        float vz = static_cast<float>(cz) * kCellSize + (static_cast<float>(sz) + 0.5f) * kVoxelSize;
+                        float dz_w = wrap_delta_f(vz, center.z, kWorldExtent);
+                        for (int sy = 0; sy < kSubDim; ++sy) {
+                            float vy = static_cast<float>(cy) * kCellSize + (static_cast<float>(sy) + 0.5f) * kVoxelSize;
+                            float dy_w = wrap_delta_f(vy, center.y, kWorldExtent);
+                            for (int sx = 0; sx < kSubDim; ++sx) {
+                                float vx = static_cast<float>(cx) * kCellSize + (static_cast<float>(sx) + 0.5f) * kVoxelSize;
+                                float dx_w = wrap_delta_f(vx, center.x, kWorldExtent);
+
+                                if (dx_w * dx_w + dy_w * dy_w + dz_w * dz_w <= r_sq) {
+                                    m.clear(sub_bit(sx, sy, sz));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    for (int run = 0; run < 100; ++run) {
+        // Заполняем область у шва мира твердью
+        int cells_to_test[] = {0, 1, kMacroDim - 1, kMacroDim - 2};
+        for (int cx : cells_to_test) {
+            for (int cy = 10; cy <= 12; ++cy) {
+                for (int cz = 10; cz <= 12; ++cz) {
+                    grid.mask(cx, cy, cz).set_all();
+                }
+            }
+        }
+
+        // Центр сферы сажаем строго НА ШОВ ТОРА: например x = 0.1 м (или 255.9 м)
+        const float radius = dice.range(1.5f, 3.5f);
+        const vec3 center{
+            dice.next_f32_01() > 0.5f ? dice.range(0.0f, 0.5f) : dice.range(kWorldExtent - 0.5f, kWorldExtent),
+            11.0f * kCellSize,
+            11.0f * kCellSize
+        };
+
+        carve_sphere_torus(center, radius);
+
+        // Проверяем:
+        // 1. Внутри сферы (r < radius - 0.35м) субвоксели ОБЯЗАНЫ быть вырезаны (bit == 0)
+        // 2. Вне сферы (r > radius + 0.35м) твердь обязана остаться нетронутой (bit == 1)
+        for (int cx : cells_to_test) {
+            for (int cy = 10; cy <= 12; ++cy) {
+                for (int cz = 10; cz <= 12; ++cz) {
+                    const SubMask& m = grid.mask(cx, cy, cz);
+                    for (int sz = 0; sz < kSubDim; ++sz) {
+                        float vz = static_cast<float>(cz) * kCellSize + (static_cast<float>(sz) + 0.5f) * kVoxelSize;
+                        float dz_w = wrap_delta_f(vz, center.z, kWorldExtent);
+                        for (int sy = 0; sy < kSubDim; ++sy) {
+                            float vy = static_cast<float>(cy) * kCellSize + (static_cast<float>(sy) + 0.5f) * kVoxelSize;
+                            float dy_w = wrap_delta_f(vy, center.y, kWorldExtent);
+                            for (int sx = 0; sx < kSubDim; ++sx) {
+                                float vx = static_cast<float>(cx) * kCellSize + (static_cast<float>(sx) + 0.5f) * kVoxelSize;
+                                float dx_w = wrap_delta_f(vx, center.x, kWorldExtent);
+                                float dist = std::sqrt(dx_w * dx_w + dy_w * dy_w + dz_w * dz_w);
+
+                                bool is_set = m.test(sub_bit(sx, sy, sz));
+
+                                if (dist < radius - 0.35f) {
+                                    BARRIER_CHECK(!is_set,
+                                        "CANON S2 (Тороидальный карвинг сферы через шов мира)",
+                                        "Субвоксель внутри радиуса карвинга остался твердым около шва тора!",
+                                        "Убедись, что wrap_delta_f используется при расчете тороидального расстояния взрыва/карвинга.");
+                                } else if (dist > radius + 0.35f) {
+                                    BARRIER_CHECK(is_set,
+                                        "CANON S2 (Сохранение геометрии вне радиуса карвинга)",
+                                        "Субвоксель вне радиуса карвинга был ошибочно уничтожен!",
+                                        "Радиус повреждения не должен распространяться дальше радиуса сферы.");
+                                }
+                            }
+                        }
+                    }
+                    grid.mask(cx, cy, cz).clear_all();
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     uint64_t seed = 0xdeadbeefcafeULL;
     if (argc > 1) {
@@ -971,6 +1078,7 @@ int main(int argc, char* argv[]) {
     test_kinematic_swing_max_and_antiphase(dice);
     test_gait_odometer_fixture(dice);
     test_kinematic_mutation_bipolar_fuzzing(dice);
+    test_torus_carve_sphere_seam_dice(dice);
 
     std::printf("[barrier_test] %d checks, %d failures (Seed: 0x%llx)\n",
                 g_checks, g_fails, static_cast<unsigned long long>(seed));

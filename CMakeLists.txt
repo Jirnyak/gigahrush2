@@ -3084,6 +3084,18 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(code_invariants PROPERTIES
         PASS_REGULAR_EXPRESSION "ARCHITECTURAL CODE HYGIENE.*PASS")
 
+    # Железный замок диффов (Anti-Slop): запрет удаления тестов, ослабления ассертов и костылей
+    add_test(NAME diff_guard
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diff_guard.py)
+    set_tests_properties(diff_guard PROPERTIES
+        PASS_REGULAR_EXPRESSION "DIFF GUARD.*PASS")
+
+    # Стохастический аудит реальности Монте-Карло (Кубик Тимаэрта — 100 случайных срезов)
+    add_test(NAME dice_audit
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/dice_reality_audit.py --samples=100)
+    set_tests_properties(dice_audit PROPERTIES
+        PASS_REGULAR_EXPRESSION "DICE AUDIT.*PASS")
+
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
     # `git status --short`, который стоит первым шагом каждой сессии.
