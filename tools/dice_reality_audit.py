@@ -6,8 +6,14 @@ tools/dice_reality_audit.py — Monte Carlo Reality Audit Engine («Кубик-�
 Разработан для воксельного симуляционного движка GigaHrush 2 на основе:
 - Требований Создателя и философии Тимаэрта («кинь кубик по строкам и структурам —
   если всё под контролем, то ожидается 0 говносралов»);
-- Опыта DENTE Dental CRM (scripts/dice-audit.mjs и docs/quality/DICE_AUDIT_SOP.md);
+- Опыта DENTE Dental CRM (scripts/dice-audit.mjs, scripts/lib/code-health-ast.mjs);
 - Конституции The Hammer (THE_HAMMER_MASTER_PROMPT.md, DEFENSE_TESTING_AND_ANTI_GOODHART_BIBLE.md, CANON.md S1..S28).
+
+ПРОВЕРКА 175 СЛУЧАЙНЫХ СРЕЗОВ КОДА И ДАННЫХ (4 СПИСКА):
+ 1. Срез 1: 100 случайных строк боевого C++23 и шейдеров (ядро, физика, ECS, рендер).
+ 2. Срез 2 (Список 1): 25 точек входа симуляции (*_step) на аллокации, сон и O(n²).
+ 3. Срез 3 (Список 2): 25 записей памяти и CSV SSOT таблиц на физическую валидность.
+ 4. Срез 4 (Список 3): 25 тестовых наборов tests/ (Anti-Goodhart инквизиция на тавтологии и заглушки).
 
 3 ИНКВИЗИТОРСКИХ ВОПРОСА ТИМАЭРТА ДЛЯ ДВИЖКА C++ И ДАННЫХ CSV:
  1. Граничные случаи и безопасность математики/памяти:
@@ -15,9 +21,11 @@ tools/dice_reality_audit.py — Monte Carlo Reality Audit Engine («Кубик-�
     - Нет ли неэкранированных индексов массивов мимо wrap_macro / macro_index?
     - Нет ли сырых указателей без проверки, запрещенных исключений/RTTI (throw, catch, dynamic_cast),
       пустых catch, поддельных assert(true) или заглушек // TODO?
+    - Нет ли подавления предупреждений компилятора (#pragma warning(disable) / diagnostic ignored)?
+    - Нет ли тест-сниффинга (getenv("TEST") / GIGA_TEST) в боевом коде?
  2. Магические константы и хардкоды:
     - Нет ли безымянных чисел мимо src/world/types.h (сырые 128, 0.25f, 2.0f, 125.0f, 0.008f)?
-    - Нет ли хардкодных цветов ImGui мимо палитры CRT совет-панк аппаратуры (#59F266, #F2C740, #050A05)?
+    - Нет ли хардкодных цветов и скруглений ImGui мимо CRT совет-панк аппаратуры?
     - Нет ли захардкоженных идентификаторов мобов/материалов в ветвлениях?
  3. Соответствие контракту данных и законам физики (S1..S28):
     - S1: Изотропный тор 128³ (расстояния строго через wrap_delta_f / wrap_dist, запрет плоской евклидовой метрики).
@@ -117,8 +125,8 @@ class DynamicPrng:
 # ==============================================================================
 
 EXCLUDED_DIRS = {
-    ".git", "build", "out", "external", "_deps", "bin",
-    "CMakeFiles", "Testing", ".system_generated", "scratch"
+    ".git", "build", "build-win", "out", "external", "_deps", "bin",
+    "CMakeFiles", "Testing", ".system_generated", "scratch", ".data"
 }
 
 SOURCE_EXTENSIONS = {".h", ".cpp", ".inl", ".comp", ".frag", ".vert", ".glsl"}
@@ -126,6 +134,7 @@ SOURCE_EXTENSIONS = {".h", ".cpp", ".inl", ".comp", ".frag", ".vert", ".glsl"}
 def collect_combat_sources(root: Path):
     """
     Собирает все боевые файлы исходников движка (src/, shaders/) и данных (data/).
+    Исключает тестовые файлы (тесты инспектируются отдельным списком audit_tests).
     """
     combat_cpp = []
     combat_csv = []
@@ -147,6 +156,21 @@ def collect_combat_sources(root: Path):
                     combat_cpp.append(full_path)
 
     return combat_cpp, combat_shaders, combat_csv
+
+def collect_test_sources(root: Path):
+    """
+    Собирает все файлы тестов проекта (tests/*.cpp, tests/*.inl, tests/*.h).
+    """
+    test_files = []
+    tests_dir = root / "tests"
+    if tests_dir.exists():
+        for r_dir, dirs, files in os.walk(tests_dir):
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+            for f in files:
+                full_path = Path(r_dir) / f
+                if full_path.suffix in {".cpp", ".inl", ".h"}:
+                    test_files.append(full_path)
+    return sorted(test_files)
 
 # ==============================================================================
 # Секция 3. Классификация системы и официальной двери (Вопросы 1 и 2 Тимаэрта)
@@ -181,6 +205,8 @@ def classify_system(rel_path_str: str):
         return {"layer": "GPU Контур (Vulkan SPIR-V Shaders)", "domain": "Вычислительный автомат Марголюса, DDA рейтрейсинг"}
     elif p.startswith("data/"):
         return {"layer": "Контент SSOT (Data-Driven CSV)", "domain": "Игровые таблицы характеристик и параметров"}
+    elif p.startswith("tests/"):
+        return {"layer": "Защитный Контур (Verification & Iron Gate)", "domain": "Наборы регрессионных и инвариантных тестов"}
     else:
         return {"layer": "Инфраструктура", "domain": "Вспомогательные модули"}
 
@@ -209,6 +235,8 @@ def detect_official_door(rel_path_str: str, line_content: str, context_block: st
         return "Data-Driven CSV SSOT контракт (CANON S11, data/*.csv)"
     if "vkCmd" in line_content or "vkQueue" in line_content:
         return "Vulkan Command Buffer GPU Dispatch (CANON S4)"
+    if p.startswith("tests/"):
+        return "Тестовый инвариантный замок (Verification Assertion Gate)"
 
     return "Внутренняя реализация модуля (Internal Module Function)"
 
@@ -219,7 +247,8 @@ def detect_official_door(rel_path_str: str, line_content: str, context_block: st
 SAFE_DENOMINATORS = {
     "kCellSize", "kSubDim", "kMacroDim", "kWorldExtent", "kSimHz", "kSimDt",
     "sizeof", "static_cast", "float", "int", "double", "std::size_t",
-    "kRadToDeg", "kDegToRad", "legHeight", "strideLength", "stride", "kPi"
+    "kRadToDeg", "kDegToRad", "legHeight", "strideLength", "stride", "kPi",
+    "kInvCellSize", "kVoxelSize"
 }
 
 RE_THROW = re.compile(r'\bthrow\s+([A-Za-z0-9_]+|\()')
@@ -227,14 +256,18 @@ RE_TRY_CATCH = re.compile(r'\b(try\s*\{|catch\s*\()')
 RE_DYNAMIC_CAST = re.compile(r'\bdynamic_cast\s*<')
 RE_TYPEID = re.compile(r'\btypeid\s*\(')
 RE_TODO_STUB = re.compile(r'(//\s*TODO\b|//\s*implement\s+later\b|NotImplementedException|/\*\s*rest\s+unchanged\s*\*/)')
-RE_FAKE_ASSERT = re.compile(r'\bassert\s*\(\s*(true|1)\s*\)\s*;')
+RE_FAKE_ASSERT = re.compile(r'\b(?:assert|CHECK|BARRIER_CHECK)\s*\(\s*(true|1|!false)\s*[\),]')
 RE_EMPTY_CATCH = re.compile(r'catch\s*\([^)]*\)\s*\{\s*\}')
 RE_SLEEP = re.compile(r'\b(sleep_for|sleep_until|Sleep\(|usleep)\b')
 RE_EUCLIDEAN_METRIC = re.compile(r'\b(std::sqrt\s*\(\s*dx\s*\*\s*dx\s*\+\s*dy\s*\*\s*dy\s*\+\s*dz\s*\*\s*dz\s*\)|sqrtf\s*\(\s*dx\s*\*\s*dx\s*\+\s*dy\s*\*\s*dy\s*\+\s*dz\s*\*\s*dz\s*\))')
 RE_RAW_DIVISION = re.compile(r'(?<!/)/(?!/|=|\*)\s*([a-zA-Z_]\w*)')
 
+# Передовые механизмы из Dental CRM (тест-сниффинг и подавление предупреждений)
+RE_TEST_ENV_SNIFF = re.compile(r'\b(?:std::)?getenv\s*\(\s*"(?:TEST|CTEST|GIGA_TEST|RUNNING_TESTS?|UNIT_TEST)"\s*\)')
+RE_COMPILER_SUPPRESSION = re.compile(r'#pragma\s+(?:warning\s*\(\s*disable\s*:\s*(?!4324\b)|GCC\s+diagnostic\s+ignored|clang\s+diagnostic\s+ignored)')
+
 def strip_code_line(line: str) -> str:
-    """Очищает строку от строк, символов и комментариев для надежного AST/Regex анализа."""
+    """Очищает строку от строковых литералов и комментариев для надежного AST/Regex анализа."""
     s = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '""', line)
     s = re.sub(r"'[^'\\]*(?:\\.[^'\\]*)*'", "''", s)
     if "//" in s:
@@ -272,6 +305,31 @@ def inspect_code_line(sample: dict):
             "status": "CLEAN",
             "defects": []
         }
+
+    # --------------------------------------------------------------------------
+    # Проверка 0: Подавление предупреждений компилятора (Мандат 8be / Anti-Suppression)
+    # --------------------------------------------------------------------------
+    if RE_COMPILER_SUPPRESSION.search(current) and not rel_path.startswith("tests/"):
+        defects.append({
+            "rule": "COMPILER_WARNING_SUPPRESSION",
+            "law": "CANON S11 & DEFENSE BIBLE (Запрет подавления предупреждений компилятора)",
+            "question": "1. Граничные случаи и безопасность",
+            "message": "Обнаружена директива подавления предупреждений компилятора (#pragma warning(disable) / diagnostic ignored).",
+            "fix": "Устрани причину предупреждения компилятора в коде вместо сокрытия проблемы под ковер."
+        })
+
+    # --------------------------------------------------------------------------
+    # Проверка 0.5: Тест-сниффинг в боевом коде (Anti-Goodhart Test Sniffing)
+    # --------------------------------------------------------------------------
+    if not rel_path.startswith("tests/") and not rel_path.startswith("src/app/"):
+        if RE_TEST_ENV_SNIFF.search(current):
+            defects.append({
+                "rule": "ANTI_GOODHART_TEST_ENV_SNIFF",
+                "law": "DEFENSE BIBLE §1 (Запрет тест-сниффинга в боевом коде)",
+                "question": "3. Соответствие контракту данных и законам физики",
+                "message": "Боевой код в src/ детектирует тестовую среду через getenv() и меняет поведение под тесты.",
+                "fix": "Удали детектирование тестов. Боевая симуляция обязана исполняться идентично в продакшене и в тестах."
+            })
 
     # --------------------------------------------------------------------------
     # Проверка 1.1: Запрещенные исключения и RTTI (CANON S11 / No Exceptions, No RTTI)
@@ -318,7 +376,7 @@ def inspect_code_line(sample: dict):
             "rule": "ANTI_GOODHART_FAKE_ASSERT",
             "law": "DEFENSE BIBLE §3 (Запрет Потёмкинских тестов)",
             "question": "1. Граничные случаи и безопасность",
-            "message": "Обнаружен фиктивный assert(true) / assert(1).",
+            "message": "Обнаружен фиктивный assert(true) / CHECK(true).",
             "fix": "Напиши реальную проверку инварианта над фактическими расчетными данными."
         })
     if RE_EMPTY_CATCH.search(joined_context):
@@ -426,7 +484,7 @@ def inspect_code_line(sample: dict):
     }
 
 # ==============================================================================
-# Секция 5. Сэмплирование случайных строк C++ (Dice Lines)
+# Секция 5. Сэмплирование случайных строк C++ (Dice Lines — 100 точек)
 # ==============================================================================
 
 def sample_source_lines(files, count: int, prng: DynamicPrng, root: Path):
@@ -521,10 +579,10 @@ def sample_source_lines(files, count: int, prng: DynamicPrng, root: Path):
     return samples
 
 # ==============================================================================
-# Секция 6. Структурный Список 1: Двери и Системы (Simulation Doors & Steps)
+# Секция 6. Структурный Список 1: Двери симуляции (*_step — 25 точек)
 # ==============================================================================
 
-def audit_simulation_doors(root: Path, prng: DynamicPrng, count: int = 15):
+def audit_simulation_doors(root: Path, prng: DynamicPrng, count: int = 25):
     """
     Сэмплирует точки входа симуляционных систем (*_step) и проверяет контракт:
     детерминизм аргументов, O(n) сложность, отсутствие динамических аллокаций.
@@ -547,7 +605,6 @@ def audit_simulation_doors(root: Path, prng: DynamicPrng, count: int = 15):
                 # Ищем сигнатуры шагов
                 if re.search(r'\b[a-zA-Z0-9_]+_step\s*\(', clean) or \
                    re.search(r'\b(guide_step|physics_step|needs_step|perceive_step|act_step)\b', clean):
-                    # Проверяем, что в блоке есть тело функции (фигурная скобка {)
                     block = lines[idx-1:min(len(lines), idx + 35)]
                     has_body = any("{" in strip_code_line(l) for l in block)
                     candidate_doors.append({
@@ -570,7 +627,6 @@ def audit_simulation_doors(root: Path, prng: DynamicPrng, count: int = 15):
         item = pool.pop(idx)
 
         issues = []
-        # Очищаем строки блока от комментариев перед анализом
         clean_block_lines = [strip_code_line(l) for l in item["block"]]
         clean_block_text = "\n".join(clean_block_lines)
 
@@ -599,10 +655,10 @@ def audit_simulation_doors(root: Path, prng: DynamicPrng, count: int = 15):
     return {"total": len(candidate_doors), "sampled": sampled}
 
 # ==============================================================================
-# Секция 7. Структурный Список 2: Поля памяти и Контракты данных (POD & CSV)
+# Секция 7. Структурный Список 2: Поля памяти и Контракты данных (CSV — 25 точек)
 # ==============================================================================
 
-def audit_memory_and_csv_fields(root: Path, prng: DynamicPrng, count: int = 20):
+def audit_memory_and_csv_fields(root: Path, prng: DynamicPrng, count: int = 25):
     """
     Сэмплирует строки из таблиц data/*.csv и проверяет физические контракты величин:
     масса > 0, здоровье > 0, урон >= 0, валидность колонок и уникальность ключей.
@@ -699,7 +755,126 @@ def audit_memory_and_csv_fields(root: Path, prng: DynamicPrng, count: int = 20):
     return {"total": len(csv_records), "sampled": sampled}
 
 # ==============================================================================
-# Секция 8. Генератор Failure Manifesto
+# Секция 8. Структурный Список 3: Инквизиция тестов (Anti-Goodhart — 25 точек)
+# ==============================================================================
+
+RE_ASSERT_MACRO = re.compile(r'\b(CHECK|BARRIER_CHECK|assert|static_assert)\s*\(')
+RE_TAUTOLOGY = re.compile(r'\b(?:CHECK|BARRIER_CHECK|assert|static_assert)\s*\(\s*(true|1|!false)\s*[\),]')
+RE_COMMENTED_ASSERT = re.compile(r'^\s*//\s*(?:CHECK|BARRIER_CHECK|assert|static_assert)\s*\(')
+
+def audit_tests(root: Path, prng: DynamicPrng, count: int = 25):
+    """
+    Список 3: Инквизиция честности тестов (Anti-Goodhart Test Inquisition).
+    Перенесено из опыта Dental CRM (auditTests / code-health-ast.mjs).
+    Сэмплирует тест-кейсы из tests/*.cpp, tests/suite_*.inl, tests/*.h и проверяет:
+    - Тавтологии: CHECK(true), CHECK(1), assert(true)
+    - Закомментированные ассерты: // CHECK(
+    - Функции тестов без единого ассерта (фантомные тесты)
+    - Заглушенные блоки #if 0 вокруг тестов
+    """
+    test_files = collect_test_sources(root)
+    if not test_files:
+        return {"total": 0, "sampled": []}
+
+    test_cases = []
+
+    for tf in test_files:
+        rel_path = str(tf.relative_to(root)).replace("\\", "/")
+        try:
+            lines = tf.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+
+        in_if_zero = False
+        current_fn_name = None
+        current_fn_start = 0
+        current_fn_assertions = 0
+        current_fn_lines = []
+
+        for idx, line in enumerate(lines, 1):
+            clean = strip_code_line(line)
+
+            # Проверка #if 0 блоков
+            if re.match(r'^\s*#\s*if\s+0\b', line):
+                in_if_zero = True
+            elif re.match(r'^\s*#\s*endif\b', line):
+                in_if_zero = False
+
+            # Поиск функций тестов (static void test_*, void test_*, static void suite_*)
+            fn_match = re.match(r'^\s*(?:static\s+)?void\s+([a-zA-Z0-9_]+)\s*\(\s*\)', line)
+            if fn_match:
+                fn_name = fn_match.group(1)
+                if any(kw in fn_name for kw in ["test", "suite", "check", "barrier", "dice", "bench"]):
+                    if current_fn_name and current_fn_assertions == 0 and len(current_fn_lines) > 2:
+                        test_cases.append({
+                            "file": rel_path,
+                            "line": current_fn_start,
+                            "signature": f"void {current_fn_name}()",
+                            "issues": ["Фантомный тест: функция теста не содержит ни одного assert/CHECK."],
+                            "status": "DEFECT"
+                        })
+                    current_fn_name = fn_name
+                    current_fn_start = idx
+                    current_fn_assertions = 0
+                    current_fn_lines = [line]
+
+            if current_fn_name:
+                current_fn_lines.append(line)
+                if RE_ASSERT_MACRO.search(clean):
+                    current_fn_assertions += 1
+
+            # Проверка тавтологий в реальном времени
+            if RE_TAUTOLOGY.search(clean):
+                test_cases.append({
+                    "file": rel_path,
+                    "line": idx,
+                    "signature": line.strip(),
+                    "issues": ["Тавтология в тесте (CHECK(true) / assert(1)) — тест не может упасть (Anti-Goodhart)."],
+                    "status": "DEFECT"
+                })
+            # Проверка закомментированных ассертов
+            elif RE_COMMENTED_ASSERT.search(line):
+                test_cases.append({
+                    "file": rel_path,
+                    "line": idx,
+                    "signature": line.strip(),
+                    "issues": ["Закомментированный ассерт // CHECK(...) — подавление проверки."],
+                    "status": "DEFECT"
+                })
+            # Проверка #if 0 вокруг ассертов
+            elif in_if_zero and RE_ASSERT_MACRO.search(line):
+                test_cases.append({
+                    "file": rel_path,
+                    "line": idx,
+                    "signature": line.strip(),
+                    "issues": ["Ассерт отключен через #if 0 (Anti-Goodhart: скрытое выключение тестов)."],
+                    "status": "DEFECT"
+                })
+            elif RE_ASSERT_MACRO.search(clean):
+                # Чистый ассерт
+                test_cases.append({
+                    "file": rel_path,
+                    "line": idx,
+                    "signature": line.strip(),
+                    "issues": [],
+                    "status": "CLEAN"
+                })
+
+    if not test_cases:
+        return {"total": 0, "sampled": []}
+
+    sampled = []
+    pool = list(test_cases)
+    take = min(count, len(pool))
+
+    for _ in range(take):
+        idx = prng.range_i(0, len(pool) - 1)
+        sampled.append(pool.pop(idx))
+
+    return {"total": len(test_cases), "sampled": sampled}
+
+# ==============================================================================
+# Секция 9. Генератор Failure Manifesto
 # ==============================================================================
 
 def print_failure_manifesto(defect_info: dict):
@@ -711,9 +886,9 @@ def print_failure_manifesto(defect_info: dict):
     rule = defect_info.get("rule", "CANON_VIOLATION")
     law = defect_info.get("law", "CANONICAL INVARIANT")
     question = defect_info.get("question", "3 Вопроса Тимаэрта")
-    msg = defect_info.get("message", defect_info.get("issues", ["Обнаружен архитектурный брак."])[0] if isinstance(defect_info.get("issues"), list) else "Обнаружен брак.")
+    msg = defect_info.get("message", defect_info.get("issues", ["Обнаружен архитектурный брак."])[0] if isinstance(defect_info.get("issues"), list) and defect_info.get("issues") else "Обнаружен брак.")
     fix = defect_info.get("fix", "Исправь код согласно стандартам движка.")
-    code = defect_info.get("code", defect_info.get("data", defect_info.get("doorSignature", "")))
+    code = defect_info.get("code", defect_info.get("data", defect_info.get("doorSignature", defect_info.get("signature", ""))))
 
     print(f"""
 {RED}================================================================================{RESET}
@@ -728,7 +903,8 @@ def print_failure_manifesto(defect_info: dict):
    {msg}
 {BOLD}💣 ПОЧЕМУ ЭТО БРАК / ГОВНОСРАЛ:{RESET}
    Кубик Монте-Карло вскрыл архитектурную эрозию или костыль, нарушающий
-   изотропию симуляции, стабильность физики 128³ или контракт данных CSV.
+   изотропию симуляции, стабильность физики 128³, контракт данных CSV
+   или честность тестовой базы.
 {BOLD}💡 КАК ОБЯЗАН ИСПРАВИТЬ СУБАГЕНТ:{RESET}
    {GREEN}{fix}{RESET}
 {BOLD}🛑 АНТИ-ГУДХАРТ ПРЕДУПРЕЖДЕНИЕ:{RESET}
@@ -738,12 +914,13 @@ def print_failure_manifesto(defect_info: dict):
 """)
 
 # ==============================================================================
-# Секция 9. Главный координатор аудита Монте-Карло
+# Секция 10. Главный координатор аудита Монте-Карло (175 точек)
 # ==============================================================================
 
 def run_dice_audit(options, root: Path):
     """
     Запускает стохастический аудит реальности Монте-Карло над кодом и данными.
+    По умолчанию проверяет ровно 175 случайных точек (100 строк + 25 дверей + 25 данных + 25 тестов).
     """
     prng = DynamicPrng(options.seed)
     seed_str = str(prng.initial_seed)
@@ -753,7 +930,7 @@ def run_dice_audit(options, root: Path):
 
     report = {
         "meta": {
-            "engine": "GigaHrush 2 Monte Carlo Reality Audit Engine («Кубик-Тест Тимаэрта»)",
+            "engine": "GigaHrush 2 Monte Carlo Reality Audit Engine («Кубик-Тест Тимаэрта» v2)",
             "seed": seed_str,
             "totalSourceFiles": len(all_combat_files),
             "totalCsvFiles": len(combat_csv),
@@ -769,23 +946,30 @@ def run_dice_audit(options, root: Path):
         },
         "lines": [],
         "doors": None,
-        "fields": None
+        "fields": None,
+        "tests": None
     }
 
-    # 1. Сэмплирование строк кода (Кубик по строкам C++ и шейдеров)
-    if options.list in {"all", "lines"}:
-        n_samples = options.samples if options.samples > 0 else 100
-        report["lines"] = sample_source_lines(all_combat_files, n_samples, prng, root)
+    base_samples = options.samples if options.samples > 0 else 100
 
-    # 2. Структурный Список 1: Двери симуляции
+    # 1. Срез 1: 100 случайных строк C++ и шейдеров
+    if options.list in {"all", "lines"}:
+        report["lines"] = sample_source_lines(all_combat_files, base_samples, prng, root)
+
+    # 2. Срез 2 (Список 1): 25 дверей симуляции (*_step)
     if options.list in {"all", "doors"}:
-        n_doors = max(15, (options.samples or 100) // 6)
+        n_doors = max(25, base_samples // 4) if options.list == "all" else base_samples
         report["doors"] = audit_simulation_doors(root, prng, n_doors)
 
-    # 3. Структурный Список 2: Поля памяти и контракты CSV данных
+    # 3. Срез 3 (Список 2): 25 полей памяти и CSV данных
     if options.list in {"all", "fields", "csv"}:
-        n_fields = max(20, (options.samples or 100) // 5)
+        n_fields = max(25, base_samples // 4) if options.list == "all" else base_samples
         report["fields"] = audit_memory_and_csv_fields(root, prng, n_fields)
+
+    # 4. Срез 4 (Список 3): 25 тестов (Anti-Goodhart инквизиция)
+    if options.list in {"all", "tests"}:
+        n_tests = max(25, base_samples // 4) if options.list == "all" else base_samples
+        report["tests"] = audit_tests(root, prng, n_tests)
 
     # Агрегация статистики
     total_evaluated = len(report["lines"])
@@ -803,6 +987,12 @@ def run_dice_audit(options, root: Path):
             if f["status"] == "DEFECT":
                 total_defects += 1
 
+    if report["tests"] and report["tests"]["sampled"]:
+        for t in report["tests"]["sampled"]:
+            total_evaluated += 1
+            if t["status"] == "DEFECT":
+                total_defects += 1
+
     clean_count = max(0, total_evaluated - total_defects)
     score = round((clean_count / total_evaluated) * 100) if total_evaluated > 0 else 100
 
@@ -816,19 +1006,19 @@ def run_dice_audit(options, root: Path):
     return report
 
 # ==============================================================================
-# Секция 10. Форматирование отчета в терминал
+# Секция 11. Форматирование отчета в терминал
 # ==============================================================================
 
 def print_terminal_report(report: dict):
     print(f"\n{BOLD}{CYAN}🎲 MONTE CARLO REALITY AUDIT ENGINE («КУБИК-ТЕСТ ТИМАЭРТА») — GIGAHRUSH 2{RESET}")
-    print(f"{DIM}   Философия Тимаэрта & Конституция The Hammer (S1..S28 / 3 Вопроса){RESET}")
+    print(f"{DIM}   Философия Тимаэрта & Конституция The Hammer (S1..S28 / 175 точек / 3 Вопроса){RESET}")
     print(f"{DIM}   Сид броска: {report['meta']['seed']} | Файлов C++: {report['meta']['totalSourceFiles']} | CSV: {report['meta']['totalCsvFiles']} | Время: {report['meta']['timestamp']}{RESET}")
     print("=" * 80)
 
     # 1. Результаты случайных бросков по строкам
     if report["lines"]:
         print(f"\n{BOLD}🎲 РЕЗУЛЬТАТЫ СЛУЧАЙНЫХ БРОСКОВ ПО СТРОКАМ КОДА ({len(report['lines'])} точек):{RESET}")
-        for idx, sample in enumerate(report["lines"][:25], 1):
+        for idx, sample in enumerate(report["lines"][:20], 1):
             status_label = f"{GREEN}✓ ЧИСТО{RESET}" if sample["status"] == "CLEAN" else f"{RED}✗ ДЕФЕКТ{RESET}"
             print(f"[{idx:03d}/{len(report['lines'])}] {status_label} {CYAN}[{sample['relPath']}:{sample['lineNum']}]{RESET}")
             print(f"   {DIM}1. Система:{RESET} {sample['system']['domain']} ({sample['system']['layer']})")
@@ -839,8 +1029,8 @@ def print_terminal_report(report: dict):
                 for d in sample["defects"]:
                     print(f"      {RED}⚠{RESET} {YELLOW}{d['rule']}{RESET}: {d['message']}")
 
-        if len(report["lines"]) > 25:
-            remaining = len(report["lines"]) - 25
+        if len(report["lines"]) > 20:
+            remaining = len(report["lines"]) - 20
             print(f"{DIM}   ... и ещё {remaining} случайных точек проинспектировано в этом броске.{RESET}")
 
     # 2. Список 1: Двери симуляции
@@ -848,28 +1038,46 @@ def print_terminal_report(report: dict):
         doors = report["doors"]
         print(f"\n{BOLD}🚪 СТРУКТУРНЫЙ СПИСОК 1 (ДВЕРИ И СИСТЕМЫ СИМУЛЯЦИИ):{RESET}")
         print(f"{DIM}   Всего точек входа *_step найдено: {doors['total']} | Сэмплировано: {len(doors['sampled'])}{RESET}")
-        for d in doors["sampled"]:
+        for d in doors["sampled"][:10]:
             st = f"{GREEN}✓{RESET}" if d["status"] == "CLEAN" else f"{RED}✗{RESET}"
             print(f"   {st} {CYAN}[{d['relPath']}:{d['lineNum']}]{RESET} {BOLD}{d['doorSignature']}{RESET}")
             if d["issues"]:
                 for iss in d["issues"]:
                     print(f"      {RED}⚠{RESET} {iss}")
+        if len(doors["sampled"]) > 10:
+            print(f"{DIM}   ... и ещё {len(doors['sampled']) - 10} дверей симуляции проверено.{RESET}")
 
     # 3. Список 2: Поля памяти и CSV
     if report.get("fields") and report["fields"]["sampled"]:
         fields = report["fields"]
         print(f"\n{BOLD}💾 СТРУКТУРНЫЙ СПИСОК 2 (ПОЛЯ ПАМЯТИ И CSV SSOT КОНТРАКТЫ):{RESET}")
         print(f"{DIM}   Всего записей данных проверено: {fields['total']} | Сэмплировано: {len(fields['sampled'])}{RESET}")
-        for f in fields["sampled"]:
+        for f in fields["sampled"][:10]:
             st = f"{GREEN}✓{RESET}" if f["status"] == "CLEAN" else f"{RED}✗{RESET}"
             print(f"   {st} {CYAN}[{f['file']}:{f['line']}]{RESET} {f['data'][:70]}")
             if f["issues"]:
                 for iss in f["issues"]:
                     print(f"      {YELLOW}⚠{RESET} {iss}")
+        if len(fields["sampled"]) > 10:
+            print(f"{DIM}   ... и ещё {len(fields['sampled']) - 10} полей данных проверено.{RESET}")
+
+    # 4. Список 3: Инквизиция тестов (Anti-Goodhart)
+    if report.get("tests") and report["tests"]["sampled"]:
+        tests_data = report["tests"]
+        print(f"\n{BOLD}🧪 СТРУКТУРНЫЙ СПИСОК 3 (ИНКВИЗИЦИЯ ТЕСТОВ / ANTI-GOODHART):{RESET}")
+        print(f"{DIM}   Всего тестовых ассертов найдено: {tests_data['total']} | Сэмплировано: {len(tests_data['sampled'])}{RESET}")
+        for t in tests_data["sampled"][:10]:
+            st = f"{GREEN}✓{RESET}" if t["status"] == "CLEAN" else f"{RED}✗{RESET}"
+            print(f"   {st} {CYAN}[{t['file']}:{t['line']}]{RESET} {t['signature'][:70]}")
+            if t["issues"]:
+                for iss in t["issues"]:
+                    print(f"      {RED}⚠{RESET} {iss}")
+        if len(tests_data["sampled"]) > 10:
+            print(f"{DIM}   ... и ещё {len(tests_data['sampled']) - 10} проверок тестов инспектировано.{RESET}")
 
     print("\n" + "=" * 80)
     print(f"{BOLD}📊 СВОДНЫЙ РЕЙТИНГ РЕАЛЬНОСТИ ДВИЖКА (DICE REALITY INTEGRITY SCORE):{RESET}")
-    print(f"   Всего проверено сэмплов: {report['summary']['totalSamples']}")
+    print(f"   Всего проверено сэмплов: {report['summary']['totalSamples']} (норма: 175)")
     print(f"   Чистых сэмплов (Clean):  {GREEN}{report['summary']['cleanSamples']}{RESET}")
     print(f"   Дефектов (Defects):      {RED if report['summary']['defectSamples'] > 0 else GREEN}{report['summary']['defectSamples']}{RESET}")
 
@@ -920,14 +1128,28 @@ def print_terminal_report(report: dict):
                         "fix": "Приведи строки таблицы CSV в соответствие со спецификацией."
                     })
                     printed += 1
+        if report.get("tests") and report["tests"]["sampled"]:
+            for t in report["tests"]["sampled"]:
+                if t["status"] == "DEFECT" and printed < 3:
+                    print_failure_manifesto({
+                        "file": t["file"],
+                        "line": t["line"],
+                        "rule": "TEST_ANTI_GOODHART_VIOLATION",
+                        "law": "DEFENSE BIBLE §3 (Запрет фиктивных тестов и тавтологий)",
+                        "question": "1. Граничные случаи и безопасность",
+                        "issues": t["issues"],
+                        "signature": t["signature"],
+                        "fix": "Удали тавтологию и напиши полноценный ассерт над расчетным значением."
+                    })
+                    printed += 1
     else:
         print(f"\n{BOLD}{GREEN}🎉 [DICE AUDIT: PASS — 0 ГОВНОСРАЛОВ]{RESET}")
-        print(f"{GREEN}   Архитектурный контроль подтверждён: 100+ случайных точек кода и данных соответствуют законам S1..S28!{RESET}")
+        print(f"{GREEN}   Архитектурный контроль подтверждён: 175 случайных точек кода и данных соответствуют законам S1..S28!{RESET}")
 
     print("=" * 80 + "\n")
 
 # ==============================================================================
-# Секция 11. Self-Test режим для заградительной верификации
+# Секция 12. Self-Test режим для заградительной верификации
 # ==============================================================================
 
 def run_self_test():
@@ -990,6 +1212,30 @@ def run_self_test():
     res_player = inspect_code_line(buggy_player)
     assert res_player["status"] == "DEFECT", "Failed to catch privileged player branch!"
 
+    # 3.4: Тест-сниффинг в боевом коде
+    buggy_sniff = {
+        "relPath": "src/sim/movement.cpp",
+        "lineNum": 80,
+        "current": "if (std::getenv(\"TEST\")) return 0;",
+        "before": [],
+        "after": []
+    }
+    res_sniff = inspect_code_line(buggy_sniff)
+    assert res_sniff["status"] == "DEFECT", "Failed to catch test env sniffing!"
+    assert any("TEST_ENV_SNIFF" in d["rule"] for d in res_sniff["defects"])
+
+    # 3.5: Подавление предупреждений компилятора
+    buggy_pragma = {
+        "relPath": "src/sim/contacts.cpp",
+        "lineNum": 15,
+        "current": "#pragma warning(disable: 4996)",
+        "before": [],
+        "after": []
+    }
+    res_pragma = inspect_code_line(buggy_pragma)
+    assert res_pragma["status"] == "DEFECT", "Failed to catch compiler warning suppression!"
+    assert any("COMPILER_WARNING_SUPPRESSION" in d["rule"] for d in res_pragma["defects"])
+
     print(f"{GREEN}✔ [dice_reality_audit] Self-test PASS: 100% точность классификатора в обеих полярностях.{RESET}")
     return 0
 
@@ -1012,24 +1258,28 @@ def run_demo_defect():
     print_failure_manifesto(mutant)
 
 # ==============================================================================
-# Секция 12. CLI Entry Point
+# Секция 13. CLI Entry Point
 # ==============================================================================
 
-def main():
+def parse_cli_args(args=None):
     parser = argparse.ArgumentParser(
         description="GigaHrush 2 Monte Carlo Reality Audit Engine («Кубик-Тест Тимаэрта»)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("repo_path", nargs="?", default=None, help="Root path of the repository")
-    parser.add_argument("--samples", "-n", type=int, default=100, help="Number of random line samples (default: 100)")
+    parser.add_argument("--root", type=str, default=None, help="Explicit repository root directory")
+    parser.add_argument("--samples", "-n", type=int, default=100, help="Number of random line samples (default: 100 — суммарно 175 точек)")
     parser.add_argument("--seed", "-s", type=str, default=None, help="Random seed for reproducible Monte Carlo roll")
-    parser.add_argument("--list", "-l", choices=["all", "lines", "doors", "fields", "csv"], default="all", help="Target audit list")
+    parser.add_argument("--list", "-l", choices=["all", "lines", "doors", "fields", "csv", "tests"], default="all", help="Target audit list")
     parser.add_argument("--strict", action="store_true", help="Exit with code 1 if any defects found")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON report")
     parser.add_argument("--self-test", action="store_true", help="Run self-test suite on test mutants")
     parser.add_argument("--demo-defect", action="store_true", help="Demonstrate defect interception with Failure Manifesto")
 
-    args = parser.parse_args()
+    return parser.parse_args(args)
+
+def main():
+    args = parse_cli_args()
 
     if args.self_test:
         sys.exit(run_self_test())
@@ -1038,7 +1288,8 @@ def main():
         run_demo_defect()
         sys.exit(0)
 
-    root = Path(args.repo_path).resolve() if args.repo_path else REPO_ROOT
+    target_root = args.root or args.repo_path
+    root = Path(target_root).resolve() if target_root else REPO_ROOT
 
     report = run_dice_audit(args, root)
 

@@ -3090,11 +3090,23 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(diff_guard PROPERTIES
         PASS_REGULAR_EXPRESSION "DIFF GUARD.*PASS")
 
-    # Стохастический аудит реальности Монте-Карло (Кубик Тимаэрта — 100 случайных срезов)
+    # Стохастический аудит реальности Монте-Карло (Кубик Тимаэрта — 175 случайных срезов)
     add_test(NAME dice_audit
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/dice_reality_audit.py --samples=100)
     set_tests_properties(dice_audit PROPERTIES
         PASS_REGULAR_EXPRESSION "DICE AUDIT.*PASS")
+
+    # Модульные тесты Кубика Тимаэрта (Двуполярная верификация всех 4 списков)
+    add_test(NAME dice_audit_unit_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_dice_reality_audit.py)
+    set_tests_properties(dice_audit_unit_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "DICE AUDIT UNIT TESTS.*PASS")
+
+    # Монотонный храповик качества (Quality Ratchet): пол тестов и потолок долга
+    add_test(NAME quality_ratchet
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/quality_ratchet.py)
+    set_tests_properties(quality_ratchet PROPERTIES
+        PASS_REGULAR_EXPRESSION "QUALITY RATCHET.*PASS")
 
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
