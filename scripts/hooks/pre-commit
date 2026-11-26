@@ -1,0 +1,96 @@
+#!/bin/sh
+# =============================================================================
+# GIGAHRUSH 2 — THE IRON GATE & DIFF GUARD PRE-COMMIT HOOK
+#
+# Tracked copy: scripts/hooks/pre-commit
+# Installed at: .git/hooks/pre-commit
+#
+# Mechanical barriers:
+# 1. diff_guard: forbids test deletion, assertion commenting, stubs & loose tolerances
+# 2. agent_barrier: forbids // TODO, fake sandboxes, empty catch, assert(true)
+# 3. code_invariants: forbids architectural layer breaches, sleep in sim, CSV errors
+# =============================================================================
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT=""
+if [ -n "$ROOT" ]; then
+    cd "$ROOT" || exit 1
+fi
+
+echo "================================================================================"
+echo "          GIGAHRUSH 2 — THE IRON GATE (Pre-Commit Inquisitor)                  "
+echo "================================================================================"
+
+# Find Python interpreter
+PYTHON="python"
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+elif command -v py >/dev/null 2>&1; then
+    PYTHON="py -3"
+fi
+
+FAILED=""
+PASSED=""
+
+# -----------------------------------------------------------------------------
+# [1/3] Iron Gate Diff Guard (renovation of staged changes)
+# -----------------------------------------------------------------------------
+echo "[1/3] Рентген диффа: tools/check_diff_guard.py --staged ..."
+$PYTHON tools/check_diff_guard.py --staged
+DIFF_RC=$?
+if [ "$DIFF_RC" -ne 0 ]; then
+    FAILED="$FAILED diff_guard"
+    echo "      FAILED: diff_guard обнаружил саботаж диффа (код $DIFF_RC)!"
+else
+    PASSED="$PASSED diff_guard"
+    echo "      diff_guard: OK"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# [2/3] Agent Barrier & Anti-Goodhart Gate
+# -----------------------------------------------------------------------------
+echo "[2/3] Барьер агентов: tools/check_agent_barrier.py ..."
+$PYTHON tools/check_agent_barrier.py
+BARRIER_RC=$?
+if [ "$BARRIER_RC" -ne 0 ]; then
+    FAILED="$FAILED agent_barrier"
+    echo "      FAILED: agent_barrier обнаружил дефекты (код $BARRIER_RC)!"
+else
+    PASSED="$PASSED agent_barrier"
+    echo "      agent_barrier: OK"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# [3/3] Architectural Code Invariants & Layering Gate
+# -----------------------------------------------------------------------------
+echo "[3/3] Архитектурная гигиена: tools/check_code_invariants.py ..."
+$PYTHON tools/check_code_invariants.py .
+INVARIANTS_RC=$?
+if [ "$INVARIANTS_RC" -ne 0 ]; then
+    FAILED="$FAILED code_invariants"
+    echo "      FAILED: code_invariants обнаружил нарушения слоев/CSV (код $INVARIANTS_RC)!"
+else
+    PASSED="$PASSED code_invariants"
+    echo "      code_invariants: OK"
+fi
+echo ""
+
+# -----------------------------------------------------------------------------
+# Итог проверки
+# -----------------------------------------------------------------------------
+echo "================================================================================"
+if [ -n "$FAILED" ]; then
+    echo "🛑 BLOCKED: Iron Gate остановил коммит из-за критических дефектов!"
+    echo "   Упали проверки: $FAILED"
+    echo "   Прошли:         $PASSED"
+    echo "Координаты нарушений и Failure Manifestos напечатаны выше. Чините код, а не гейт!"
+    echo "================================================================================"
+    exit 1
+fi
+
+echo "✔ ALL IRON GATE PRE-COMMIT CHECKS PASSED:$PASSED"
+echo "================================================================================"
+exit 0
