@@ -111,15 +111,22 @@ void build_unit_sphere(std::vector<CubeVertex>& out) {
             const vec3 d = point(lon, lat + 1), e = point(lon + 1, lat + 1);
             // Плоская нормаль грани — гранёный шейдинг, как у куба.
             const vec3 n = normalize(a + b + d + e);
+            // ОБХОД — ТОТ ЖЕ, ЧТО У КУБА: геометрическая нормаль треугольника
+            // смотрит НАРУЖУ (против часовой, если смотреть снаружи), иначе
+            // `VK_CULL_MODE_BACK_BIT` отсекает видимую сторону и рисует
+            // внутренность дальней полусферы с нормалями от камеры. До
+            // 2026-11-26 обход был обратным у всех 168 треугольников (проверено
+            // перебором), и головы тел из частей — первые сферы, которые
+            // смотрят в кадр крупно, — выходили чёрными шарами.
             if (lat > 0) {
                 out.push_back({c + a, n});
-                out.push_back({c + b, n});
                 out.push_back({c + e, n});
+                out.push_back({c + b, n});
             }
             if (lat < kLat - 1) {
                 out.push_back({c + a, n});
-                out.push_back({c + e, n});
                 out.push_back({c + d, n});
+                out.push_back({c + e, n});
             }
         }
 }
