@@ -11,7 +11,7 @@
 > **Universal 3D Voxel Core Engine & Emerging Society Simulation Engine**
 > Authored by **Graf Irnyak (Klaus Schwab)** & **Adolf Petushkov** (2026).
 
-[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [🦴 Карта кода (SKELETON)](SKELETON.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
+[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [🗺️ Master Docs Index](.agents/INDEX.md) &nbsp;·&nbsp; [⚠️ THE HAMMER](.agents/THE_HAMMER_MASTER_PROMPT.md) &nbsp;·&nbsp; [🦴 Карта кода (SKELETON)](SKELETON.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
 
 </div>
 

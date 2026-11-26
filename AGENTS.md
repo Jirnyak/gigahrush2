@@ -2,21 +2,10 @@
 
 > **MANDATORY SESSION INTAKE & ROUTING:**
 > Every agent (and spawned subagent) working on GigaHrush 2 MUST read the following canonical documents before initiating non-trivial architectural, gameplay, or code modifications:
-> 1. [AGENTS.md](AGENTS.md) (Operational mandates, DOD/ECS rules, no-exceptions invariant)
-> 2. [README.md](README.md) (Graf Irnyak / Klaus Schwab Architectural Manifesto & World Invariants)
-> 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
-> 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
-> 5. [SKELETON.md](SKELETON.md) (КАРТА КОДА КАК ОНА ЕСТЬ — что ИСПОЛНЯЕТСЯ, с
->    адресом у каждой строки и пометкой ПРАВДА/РАСХОЖДЕНИЕ. Правило файла:
->    утверждение без адреса — не строка этого файла; судит ctest `doc_refs`.
->    Увидел в коде то, чего нет в карте — сперва впиши РАСХОЖДЕНИЕМ, потом
->    трогай. Правил карту — позови `cmake --build build --target docs_sync`
->    перед коммитом: номер строки руками не правится, он производное.
->    `ARCHITECTURE.md` архивирован в `history/` 2026-10-01 — его роль здесь)
-> 6. [CANON.md](CANON.md) (Канон систем S1–S15 — эталон, относительно которого судятся
->    расхождения; записан со слов владельца 2026-08-17/19; S12 комнаты, S13 решение
->    агента, S14 контейнер, S15 время — 2026-08-20. Любой код сверяется с ним;
->    решения по эпикам — в markoaudit/plans/)
+> 0. [.agents/INDEX.md](.agents/INDEX.md) (Master Documentation Index & AI Agent Navigation Highway)
+> 1. [.agents/THE_HAMMER_MASTER_PROMPT.md](.agents/THE_HAMMER_MASTER_PROMPT.md) (Supreme Engineering Constitution, Rule 0 Full-File Grounding, T.A.R.S.)
+> 2. [AGENTS.md](AGENTS.md) (Operational mandates, DOD/ECS rules, no-exceptions invariant)
+> 3. [CANON.md](CANON.md) (Канон систем S1–S28 — эталон, относительно которого судятся расхождения)
 > 7. [CONTINUE.md](CONTINUE.md) (Промт-эстафета большой чистки: метод, состояние,
 >    очередь, посадочные приёмы — вход для продолжающих сессий)
 

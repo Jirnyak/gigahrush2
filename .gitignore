@@ -14,7 +14,8 @@ shaders/*.spv
 /Testing/
 
 # Agent scratch (briefings/progress/handoffs) — session-local, not project state.
-.agents/
+.agents/*
+!.agents/*.md
 
 # Editor / OS cruft
 .DS_Store

@@ -619,6 +619,14 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
 
+    # Заградительный Anti-Goodhart тест динамических дайсов и инвариантов
+    add_executable(barrier_test tests/barrier_test.cpp src/game/body_pose.cpp)
+    target_link_libraries(barrier_test PRIVATE giga_core)
+    giga_target_flags(barrier_test OFF)
+    add_test(NAME barrier_test COMMAND barrier_test)
+    set_tests_properties(barrier_test PROPERTIES
+        PASS_REGULAR_EXPRESSION "\\[barrier_test\\] [0-9]+ checks, 0 failures")
+
     # Мир-автомат (S16): headless GPU-прогон. CANON S16.3 — headless значит
     # «без окна», НЕ «без GPU»: автомат обязан гоняться Vulkan compute без
     # свапчейна прямо в ctest, машина без GPU-устройства — НЕ зелёное дерево
@@ -3053,6 +3061,14 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(doc_refs PROPERTIES
         PASS_REGULAR_EXPRESSION
         "GIGA_DOC_REFS=PASS form1=[0-9][0-9]+ form2=[0-9][0-9]+ plain=[0-9][0-9]+")
+
+    # Заградительный анти-гудхарт инквизитор против заглушек, поддельных ассертов
+    # и фейковых песочниц. При падении выдает агенту подробный обучающий блок с
+    # адресом, нарушенным законом и планом исправления.
+    add_test(NAME agent_barrier
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_agent_barrier.py)
+    set_tests_properties(agent_barrier PROPERTIES
+        PASS_REGULAR_EXPRESSION "agent_barrier.*PASS")
 
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
