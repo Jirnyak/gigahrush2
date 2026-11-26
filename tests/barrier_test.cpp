@@ -107,6 +107,10 @@ struct DynamicDice {
         if (min_val >= max_val) return min_val;
         return min_val + static_cast<int>(next_u64() % (max_val - min_val + 1));
     }
+
+    bool chance(float p) {
+        return next_f32_01() < p;
+    }
 };
 
 } // namespace
@@ -571,7 +575,6 @@ static void test_mutation_fuzzing_and_agent_diagnostics(DynamicDice& dice) {
 static void test_kinematic_joint_continuity_and_rest_identity(DynamicDice& dice) {
     const FormId form = FormId::Humanoid;
     const FormDef& def = form_def(form);
-    constexpr float kTestPi = 3.14159265358979323846f;
 
     // 2 000 случайных фаз шага, случайных амплитуд, случайных положений корня на торе
     for (int i = 0; i < 2000; ++i) {
@@ -1851,7 +1854,7 @@ static void test_gait_zero_crossing_footstep_audio_coupling(DynamicDice& dice) {
                 lastPhaseR = phR;
 
                 // Контактный кадр выстрела: эмуляция звука выстрела
-                if (tick - act.slots[static_cast<size_t>(ActSlot::HandR)].startTick == act.slots[static_cast<size_t>(ActSlot::HandR)].applyTicks) {
+                if (tick - act.slot[static_cast<size_t>(ActSlot::HandR)].startTick == act.slot[static_cast<size_t>(ActSlot::HandR)].applyTicks) {
                     mixer.play_spatial_sound(SoundId::Gunshot, reg.get<Transform>(walker).pos, 0.9f);
                 }
             } else {
@@ -2513,6 +2516,8 @@ int main(int argc, char* argv[]) {
     test_torus_carve_sphere_seam_stochastic(dice);
     test_ragdoll_and_carve_bipolar_mutation_fuzzing(dice);
     test_acting_gameplay_physics_coupling_stress(dice);
+    test_gait_zero_crossing_footstep_audio_coupling(dice);
+    test_gait_audio_acting_bipolar_fuzzing(dice);
     test_inverted_condition_mutants(dice);
     test_inverted_mutant_kill_matrix(dice);
 
