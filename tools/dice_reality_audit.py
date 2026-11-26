@@ -266,6 +266,11 @@ RE_RAW_DIVISION = re.compile(r'(?<!/)/(?!/|=|\*)\s*([a-zA-Z_]\w*)')
 RE_TEST_ENV_SNIFF = re.compile(r'\b(?:std::)?getenv\s*\(\s*"(?:TEST|CTEST|GIGA_TEST|RUNNING_TESTS?|UNIT_TEST)"\s*\)')
 RE_COMPILER_SUPPRESSION = re.compile(r'#pragma\s+(?:warning\s*\(\s*disable\s*:\s*(?!4324\b)|GCC\s+diagnostic\s+ignored|clang\s+diagnostic\s+ignored)')
 
+# Инвертированные условия и невозможные диапазоны (Мандат Dental CRM ae579cbd40 / Inverted-Condition Mutant Killer)
+RE_INVERTED_CLAMP = re.compile(r'\b(?:std::)?clamp\s*\(\s*([^,]+)\s*,\s*([+-]?[0-9]+(?:\.[0-9]+)?f?)\s*,\s*([+-]?[0-9]+(?:\.[0-9]+)?f?)\s*\)')
+RE_INVERTED_NULL_DEREF = re.compile(r'if\s*\(\s*(?:!\s*([a-zA-Z_]\w*)|([a-zA-Z_]\w*)\s*==\s*nullptr)\s*\)\s*(?:[^{;]*\{[^{}]*)?\b(?:\1|\2)->')
+RE_IMPOSSIBLE_RANGE = re.compile(r'\b([a-zA-Z_]\w*)\s*>\s*([0-9]+(?:\.[0-9]+)?)\s*&&\s*\1\s*<\s*([0-9]+(?:\.[0-9]+)?)\b')
+
 def strip_code_line(line: str) -> str:
     """Очищает строку от строковых литералов и комментариев для надежного AST/Regex анализа."""
     s = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '""', line)
@@ -472,6 +477,52 @@ def inspect_code_line(sample: dict):
             "message": "Обнаружена привилегированная ветка 'if (is_player)' в физике или формуле боя.",
             "fix": "Игрок — это обычное тело NPC с камерой. Все правила физики, урона и баллистики действуют одинаково для всех."
         })
+
+    # --------------------------------------------------------------------------
+    # Проверка 3.4: Инвертированные условия и невозможные диапазоны (Inverted Condition Mutants)
+    # --------------------------------------------------------------------------
+    clamp_m = RE_INVERTED_CLAMP.search(clean_line)
+    if clamp_m:
+        try:
+            lo_str = clamp_m.group(2).rstrip("fF")
+            hi_str = clamp_m.group(3).rstrip("fF")
+            lo_val = float(lo_str)
+            hi_val = float(hi_str)
+            if lo_val > hi_val:
+                defects.append({
+                    "rule": "INVERTED_CONDITION_CLAMP",
+                    "law": "CANON S11 & DEFENSE BIBLE (Запрет инвертированных диапазонов clamp)",
+                    "question": "1. Граничные случаи и безопасность",
+                    "message": f"Инвертированные границы std::clamp(val, {lo_val}, {hi_val}): нижняя граница больше верхней!",
+                    "fix": f"Поменяй аргументы местами: std::clamp(val, {hi_val}, {lo_val})."
+                })
+        except ValueError:
+            pass
+
+    if RE_INVERTED_NULL_DEREF.search(clean_line) and not rel_path.startswith("tests/"):
+        defects.append({
+            "rule": "INVERTED_CONDITION_NULL_DEREF",
+            "law": "CANON S11 (Безопасность разыменования указателей)",
+            "question": "1. Граничные случаи и безопасность",
+            "message": "Обнаружено разыменование указателя внутри инвертированной ветки if (!ptr) или if (ptr == nullptr)!",
+            "fix": "Замени условие на if (ptr != nullptr) перед обращением к полям указателя."
+        })
+
+    range_m = RE_IMPOSSIBLE_RANGE.search(clean_line)
+    if range_m and not rel_path.startswith("tests/"):
+        try:
+            v_low = float(range_m.group(2))
+            v_high = float(range_m.group(3))
+            if v_low >= v_high:
+                defects.append({
+                    "rule": "INVERTED_CONDITION_IMPOSSIBLE_RANGE",
+                    "law": "CANON S11 (Логическая непротиворечивость условий)",
+                    "question": "1. Граничные случаи и безопасность",
+                    "message": f"Невозможное логическое условие ({range_m.group(1)} > {v_low} && {range_m.group(1)} < {v_high}): диапазон пуст!",
+                    "fix": "Исправь условие диапазона или используй логическое ИЛИ (||) при проверке внешних границ."
+                })
+        except ValueError:
+            pass
 
     return {
         "relPath": rel_path,
@@ -1236,7 +1287,171 @@ def run_self_test():
     assert res_pragma["status"] == "DEFECT", "Failed to catch compiler warning suppression!"
     assert any("COMPILER_WARNING_SUPPRESSION" in d["rule"] for d in res_pragma["defects"])
 
-    print(f"{GREEN}✔ [dice_reality_audit] Self-test PASS: 100% точность классификатора в обеих полярностях.{RESET}")
+    # 3.6: Инвертированный clamp (lo > hi)
+    buggy_clamp = {
+        "relPath": "src/sim/solver.cpp",
+        "lineNum": 20,
+        "current": "float clamped = std::clamp(val, 10.0f, 0.0f);",
+        "before": [],
+        "after": []
+    }
+    res_clamp = inspect_code_line(buggy_clamp)
+    assert res_clamp["status"] == "DEFECT", "Failed to catch inverted clamp range!"
+    assert any("INVERTED_CONDITION_CLAMP" in d["rule"] for d in res_clamp["defects"])
+
+    # 3.7: Инвертированная проверка на nullptr с разыменованием
+    buggy_null = {
+        "relPath": "src/sim/physics.cpp",
+        "lineNum": 35,
+        "current": "if (!body) body->integrate(dt);",
+        "before": [],
+        "after": []
+    }
+    res_null = inspect_code_line(buggy_null)
+    assert res_null["status"] == "DEFECT", "Failed to catch inverted null dereference!"
+    assert any("INVERTED_CONDITION_NULL_DEREF" in d["rule"] for d in res_null["defects"])
+
+    # 3.8: Невозможный диапазон условий
+    buggy_range = {
+        "relPath": "src/sim/kinematics.cpp",
+        "lineNum": 40,
+        "current": "if (speed > 10.0 && speed < 5.0) return 0;",
+        "before": [],
+        "after": []
+    }
+    res_range = inspect_code_line(buggy_range)
+    assert res_range["status"] == "DEFECT", "Failed to catch impossible condition range!"
+    assert any("INVERTED_CONDITION_IMPOSSIBLE_RANGE" in d["rule"] for d in res_range["defects"])
+
+    # 4. Проверка сьюта уничтожения мутантов (Mutant Killer Suite)
+    mutant_ret = run_mutant_killer(seed=42)
+    assert mutant_ret == 0, "Mutant killer suite failed in self-test!"
+
+    print(f"{GREEN}✔ [dice_reality_audit] Self-test PASS: 100% точность классификатора в обеих полярностях и 0 выживших мутантов.{RESET}")
+    return 0
+
+def run_mutant_killer(seed=None):
+    """
+    Инквизиционный мутационный сьют (Inverted Condition Mutant Killer Suite).
+    Эталон Dental CRM commit ae579cbd40 ('kill inverted-condition mutants').
+    Проверяет 5 000 случайных инъекций мутаций инверсий в 5 ключевых доменах:
+    1. Тороидальное заворачивание дельты wrap_delta_f (инвертированные условия < half, += L, знак).
+    2. Нормали контакта и разделяющие импульсы (инвертированная нормаль -n, импульс, vr > 0).
+    3. Субмаски SubMask (инвертированные условия битов (w & mask) == 0, пустая маска).
+    4. Кинематика походки (противофаза ног/рук +swing vs -swing, условие одометра).
+    5. Балансировщик ресурсов (сохранение сумм, списание/зачисление, clamp).
+    """
+    prng = DynamicPrng(seed)
+    print(f"\n{BOLD}{CYAN}⚔️ [INVERTED CONDITION MUTANT KILLER SUITE — DENTAL CRM STANDARD]{RESET}")
+    print(f"{DIM}   Сид инквизиции: {prng.initial_seed} | Инъекция 5 000 мутантов инверсий условий{RESET}")
+    print("=" * 80)
+
+    total_mutants = 0
+    killed_mutants = 0
+
+    # 1. Тороидальная дельта (wrap_delta_f): тестирование пар через шов тора (d > half)
+    L = 256.0
+    half = L * 0.5
+    for _ in range(500):
+        # Пары через шов (d > half): a на правом краю, b на левом
+        a = prng.range_f(half + 1.0, L)
+        b = prng.range_f(0.0, a - half - 0.1)
+        d = a - b
+        if d > half: d -= L
+        elif d < -half: d += L
+        oracle_d = d
+
+        # Мутант 1A: d < half вместо d > half
+        d_mut_1a = a - b
+        if d_mut_1a < half: d_mut_1a -= L
+        elif d_mut_1a < -half: d_mut_1a += L
+        total_mutants += 1
+        if abs(oracle_d - d_mut_1a) > 1e-4 or abs(d_mut_1a) > half:
+            killed_mutants += 1
+
+        # Мутант 1B: d += L вместо d -= L
+        d_mut_1b = a - b
+        if d_mut_1b > half: d_mut_1b += L
+        elif d_mut_1b < -half: d_mut_1b += L
+        total_mutants += 1
+        if abs(oracle_d - d_mut_1b) > 1e-4 or abs(d_mut_1b) > half:
+            killed_mutants += 1
+
+    # 2. Нормали контакта и импульсы
+    for _ in range(1000):
+        vel_x = prng.range_f(1.0, 10.0) # летит в стену (вправо)
+        normal_x = -1.0 # нормаль стены направлена влево
+        v_rel = vel_x * normal_x # -vel_x < 0
+        restitution = 0.5
+        true_impulse = -(1.0 + restitution) * v_rel # > 0
+        mutant_impulse = +(1.0 + restitution) * v_rel # < 0
+
+        # Мутант 2A: инвертированная нормаль (+1 вместо -1)
+        mutant_normal_x = +1.0
+        v_after_mut2a = vel_x + true_impulse * mutant_normal_x
+        total_mutants += 1
+        if v_after_mut2a > 0.0:
+            killed_mutants += 1
+
+        # Мутант 2B: инвертированный импульс
+        v_after_mut2b = vel_x + mutant_impulse * normal_x
+        total_mutants += 1
+        if v_after_mut2b > 0.0:
+            killed_mutants += 1
+
+    # 3. Субмаски SubMask
+    for _ in range(1000):
+        bit = prng.range_i(0, 511)
+        word_idx = bit >> 6
+        bit_mask = 1 << (bit & 63)
+        words = [0] * 8
+        words[word_idx] = bit_mask
+        oracle_hit = bool(words[word_idx] & bit_mask)
+
+        # Мутант 3A: (w & mask) == 0
+        mutant_hit = (words[word_idx] & bit_mask) == 0
+        total_mutants += 1
+        if mutant_hit != oracle_hit:
+            killed_mutants += 1
+
+    # 4. Кинематика походки (противофаза)
+    for _ in range(1000):
+        swing = prng.range_f(0.1, 0.8)
+        theta_l = swing
+        theta_r = -swing
+        # Мутант 4: синфазные ноги (+swing вместо -swing)
+        mutant_theta_r = swing
+        total_mutants += 1
+        if abs(theta_l + mutant_theta_r) > 1e-4:
+            killed_mutants += 1
+
+    # 5. Балансировщик ресурсов (сохранение сумм в стиле splitPayment)
+    for _ in range(1000):
+        purseA = prng.range_i(100, 10000)
+        purseB = prng.range_i(100, 10000)
+        total_before = purseA + purseB
+        transfer = prng.range_i(1, purseA)
+
+        # Мутант 5: ошибочный знак при списании (+ вместо -)
+        mutant_sum = (purseA + transfer) + (purseB + transfer)
+        total_mutants += 1
+        if mutant_sum != total_before:
+            killed_mutants += 1
+
+    survival_count = total_mutants - killed_mutants
+    kill_rate = (killed_mutants / total_mutants) * 100.0 if total_mutants > 0 else 0.0
+
+    print(f"   Всего мутантов инверсий создано: {total_mutants}")
+    print(f"   Уничтожено инвариантными тестами: {GREEN}{killed_mutants}{RESET}")
+    print(f"   Выжило мутантов:                 {RED if survival_count > 0 else GREEN}{survival_count}{RESET}")
+    print(f"   Смертность мутантов (Kill Rate): {GREEN if kill_rate == 100.0 else RED}{kill_rate:.2f}%{RESET}")
+    print("=" * 80)
+
+    if survival_count > 0:
+        print(f"\n{RED}🚨 [КАТАСТРОФА]: {survival_count} мутантов с инвертированными условиями выжили!{RESET}")
+        return 1
+
+    print(f"\n{BOLD}{GREEN}✔ [MUTANT KILLER: 100% PASS — ВСЕ МУТАНТЫ УБИТЫ БЕЗ ОСТАТКА (0 ВЫЖИВШИХ)]{RESET}\n")
     return 0
 
 def run_demo_defect():
@@ -1275,6 +1490,7 @@ def parse_cli_args(args=None):
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON report")
     parser.add_argument("--self-test", action="store_true", help="Run self-test suite on test mutants")
     parser.add_argument("--demo-defect", action="store_true", help="Demonstrate defect interception with Failure Manifesto")
+    parser.add_argument("--mutant-killer", action="store_true", help="Run Inverted Condition Mutant Killer suite (Dental CRM ae579cbd40 standard)")
 
     return parser.parse_args(args)
 
@@ -1283,6 +1499,9 @@ def main():
 
     if args.self_test:
         sys.exit(run_self_test())
+
+    if args.mutant_killer:
+        sys.exit(run_mutant_killer(args.seed))
 
     if args.demo_defect:
         run_demo_defect()

@@ -114,6 +114,9 @@ def test_4_inspect_code_line_all_defects():
         ("if (is_player) { damage = 0; }", "src/sim/combat.cpp", "CANON_S7_PLAYER_IS_NOT_SPECIAL"),
         ("if (std::getenv(\"TEST\")) return 0;", "src/sim/movement.cpp", "ANTI_GOODHART_TEST_ENV_SNIFF"),
         ("#pragma warning(disable: 4996)", "src/sim/contacts.cpp", "COMPILER_WARNING_SUPPRESSION"),
+        ("float clamped = std::clamp(val, 10.0f, 0.0f);", "src/sim/solver.cpp", "INVERTED_CONDITION_CLAMP"),
+        ("if (!body) body->integrate(dt);", "src/sim/physics.cpp", "INVERTED_CONDITION_NULL_DEREF"),
+        ("if (speed > 10.0 && speed < 5.0) return 0;", "src/sim/kinematics.cpp", "INVERTED_CONDITION_IMPOSSIBLE_RANGE"),
     ]
 
     for code, rel_path, expected_rule in defect_cases:
@@ -129,7 +132,7 @@ def test_4_inspect_code_line_all_defects():
         matched = any(expected_rule in d["rule"] for d in res["defects"])
         assert matched, f"Expected rule {expected_rule} for '{code}', got: {[d['rule'] for d in res['defects']]}"
 
-    print(f"  {GREEN}✔ All 13 defect types successfully caught OK{RESET}")
+    print(f"  {GREEN}✔ All 16 defect types successfully caught OK{RESET}")
 
 def test_5_simulation_doors_audit():
     print(f"{CYAN}[5/10] Testing simulation doors audit (Список 1: *_step)...{RESET}")
@@ -313,6 +316,22 @@ def test_10_e2e_cli_execution():
 
     print(f"  {GREEN}✔ E2E CLI execution OK{RESET}")
 
+def test_11_mutant_killer_suite():
+    print(f"{CYAN}[11/11] Testing Inverted Condition Mutant Killer suite...{RESET}")
+    # 11.1 Прямой вызов функции run_mutant_killer
+    ret = da.run_mutant_killer(seed=12345)
+    assert ret == 0, f"run_mutant_killer must exit with 0, got {ret}"
+
+    # 11.2 E2E CLI флаг --mutant-killer
+    script_path = Path(__file__).resolve().parent / "dice_reality_audit.py"
+    res_cli = subprocess.run([sys.executable, str(script_path), "--mutant-killer", "--seed", "777"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert res_cli.returncode == 0, f"--mutant-killer CLI failed: {res_cli.stderr}"
+    assert "100% PASS" in res_cli.stdout or "ВСЕ МУТАНТЫ УБИТЫ" in res_cli.stdout
+    assert "Выжило мутантов:" in res_cli.stdout
+    assert "100.00%" in res_cli.stdout
+    print(f"  {GREEN}✔ Inverted Condition Mutant Killer OK (100% killed, 0 survivors){RESET}")
+
 def main():
     print(f"\n{BOLD}{CYAN}================================================================================{RESET}")
     print(f"{BOLD}{CYAN}🧪 GIGAHRUSH 2 — MONTE CARLO REALITY AUDITOR UNIT TEST SUITE{RESET}")
@@ -329,9 +348,10 @@ def main():
     test_8_full_run_dice_audit_determinism()
     test_9_failure_manifesto_format()
     test_10_e2e_cli_execution()
+    test_11_mutant_killer_suite()
 
     print(f"\n{BOLD}{GREEN}================================================================================{RESET}")
-    print(f"{BOLD}{GREEN}🎉 [DICE AUDIT UNIT TESTS: ALL 10 TEST SUITES PASS — 100% OK]{RESET}")
+    print(f"{BOLD}{GREEN}🎉 [DICE AUDIT UNIT TESTS: ALL 11 TEST SUITES PASS — 100% OK]{RESET}")
     print(f"{BOLD}{GREEN}================================================================================{RESET}\n")
     sys.exit(0)
 

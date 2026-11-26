@@ -3103,6 +3103,12 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(dice_audit_unit_test PROPERTIES
         PASS_REGULAR_EXPRESSION "DICE AUDIT UNIT TESTS.*PASS")
 
+    # Инквизиционный сьют убийства мутантов с инвертированными условиями (Dental CRM ae579cbd40 standard)
+    add_test(NAME mutant_killer
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/dice_reality_audit.py --mutant-killer)
+    set_tests_properties(mutant_killer PROPERTIES
+        PASS_REGULAR_EXPRESSION "MUTANT KILLER: 100% PASS")
+
     # Монотонный храповик качества (Quality Ratchet): пол тестов и потолок долга
     add_test(NAME quality_ratchet
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/quality_ratchet.py)
