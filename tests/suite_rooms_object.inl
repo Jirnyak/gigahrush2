@@ -15,6 +15,7 @@
 
 #include "game/floor_gen.h"  // rooms_declare — диспетч в объявитель модуля
 #include "game/floor_spec.h" // floor_spec(kind)
+#include "game/floors/khrushi/khrushi.h" // khrushi_rooms — тест обратной совместимости
 #include "game/room.h"
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС: оракул rebuild == инкремент
 
@@ -418,6 +419,110 @@ static void test_rooms_supply_follows_every_transfer() {
     CHECK(in_step());
 }
 
+// Назначение собственников комнат из политики FloorSpec::factionMix (S14.3):
+// жилые и хрущёвские комнаты получают детерминированных владельцев строго
+// из ненулевых фракций spec.factionMix (1..kFactionCount), нулевая смесь или
+// spec == nullptr даёт 0, а гермозоны blame / kRoomTagHermetic остаются 0.
+static void test_room_owners_from_spec() {
+    using namespace giga::game;
+
+    const FloorSpec& resSpec = floor_spec(FloorKind::Residential);
+    FloorRooms res;
+    rooms_build(res, /*number=*/0, resSpec, /*seed=*/1337u);
+    bool resValidRange = true;
+    bool resOnlyMix = true;
+    std::uint32_t resOwnedCount = 0;
+    unsigned resMask = 0;
+    for (const Room& r : res.list) {
+        if (r.owner > kFactionCount) {
+            resValidRange = false;
+        } else if (r.owner != 0) {
+            ++resOwnedCount;
+            const std::size_t fi = static_cast<std::size_t>(r.owner - 1u);
+            if (resSpec.factionMix[fi] == 0) resOnlyMix = false;
+            resMask |= 1u << static_cast<unsigned>(fi);
+        }
+    }
+    CHECK(!res.list.empty());
+    CHECK(resValidRange);
+    CHECK(resOnlyMix);
+    CHECK(resOwnedCount > 0u);
+    CHECK(resMask != 0u &&
+          (resMask & (1u << static_cast<unsigned>(Faction::Scientists))) == 0u);
+
+    FloorRooms resAgain;
+    rooms_build(resAgain, /*number=*/0, resSpec, /*seed=*/1337u);
+    bool resSameOwners = res.list.size() == resAgain.list.size();
+    for (std::size_t i = 0; i < res.list.size() && resSameOwners; ++i)
+        resSameOwners = res.list[i].owner == resAgain.list[i].owner;
+    CHECK(resSameOwners);
+
+    FloorSpec zeroMix = resSpec;
+    for (std::size_t f = 0; f < kFactionCount; ++f) zeroMix.factionMix[f] = 0;
+    FloorRooms zeroRooms;
+    rooms_build(zeroRooms, /*number=*/0, zeroMix, /*seed=*/1337u);
+    bool allZeroOwner = true;
+    for (const Room& r : zeroRooms.list)
+        if (r.owner != 0) allZeroOwner = false;
+    CHECK(!zeroRooms.list.empty() && allZeroOwner);
+
+    const FloorSpec& khSpec = floor_spec(FloorKind::Khrushi);
+    FloorRooms kh;
+    rooms_build(kh, /*number=*/6, khSpec, /*seed=*/42u);
+    bool khValidRange = true;
+    bool khOnlyMix = true;
+    std::uint32_t khOwnedCount = 0;
+    unsigned khMask = 0;
+    for (const Room& r : kh.list) {
+        if (r.owner > kFactionCount) {
+            khValidRange = false;
+        } else if (r.owner != 0) {
+            ++khOwnedCount;
+            const std::size_t fi = static_cast<std::size_t>(r.owner - 1u);
+            if (khSpec.factionMix[fi] == 0) khOnlyMix = false;
+            khMask |= 1u << static_cast<unsigned>(fi);
+        }
+    }
+    CHECK(!kh.list.empty());
+    CHECK(khValidRange);
+    CHECK(khOnlyMix);
+    CHECK(khOwnedCount > 0u);
+    CHECK((khMask & (1u << static_cast<unsigned>(Faction::Citizens))) != 0u &&
+          (khMask & (1u << static_cast<unsigned>(Faction::Scientists))) == 0u);
+
+    FloorRooms khCompat;
+    rooms_reset(khCompat);
+    khrushi_rooms(/*number=*/6, /*seed=*/42u, khCompat);
+    bool khCompatAllZero = true;
+    for (const Room& r : khCompat.list)
+        if (r.owner != 0) khCompatAllZero = false;
+    CHECK(khCompat.list.size() == kh.list.size() && khCompatAllZero);
+
+    FloorRooms bl;
+    rooms_build(bl, /*number=*/-26, floor_spec(FloorKind::Blame), /*seed=*/42u);
+    bool blAllHermeticZeroOwner = true;
+    for (const Room& r : bl.list)
+        if (r.tags != kRoomTagHermetic || r.owner != 0)
+            blAllHermeticZeroOwner = false;
+    CHECK(bl.list.size() == 256u);
+    CHECK(blAllHermeticZeroOwner);
+
+    const FloorSpec& pdSpec = floor_spec(FloorKind::Padic);
+    FloorRooms pd;
+    rooms_build(pd, /*number=*/4, pdSpec, /*seed=*/99u);
+    std::uint32_t pdOwnedCount = 0;
+    bool pdOnlyMix = true;
+    for (const Room& r : pd.list) {
+        if (r.owner != 0) {
+            ++pdOwnedCount;
+            if (r.owner > kFactionCount || pdSpec.factionMix[r.owner - 1u] == 0)
+                pdOnlyMix = false;
+        }
+    }
+    CHECK(!pd.list.empty() && pdOwnedCount > 0u && pdOnlyMix);
+    CHECK(floor_room_owner(&pdSpec, 99u, 4, 0u, kRoomTagHermetic) == 0u);
+}
+
 static void test_rooms_object_all() {
     test_rooms_supply_follows_every_transfer();
     test_rooms_isotropy();
@@ -427,4 +532,5 @@ static void test_rooms_object_all() {
     test_rooms_modules_declare();
     test_rooms_supply_oracle();
     test_rooms_seam_metres_to_cell();
+    test_room_owners_from_spec();
 }

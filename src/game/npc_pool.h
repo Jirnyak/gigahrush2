@@ -509,7 +509,9 @@ public:
     // publisher reads faction traits and must not be handed write access).
     std::uint16_t  faction(NpcId id) const { return faction_[id]; }
     std::int16_t&  hp(NpcId id)      { return hp_[id]; }
+    std::int16_t   hp(NpcId id) const { return hp_[id]; }
     std::int16_t&  max_hp(NpcId id)  { return maxHp_[id]; }
+    std::int16_t   max_hp(NpcId id) const { return maxHp_[id]; }
 
     // SIGNED, and that is load-bearing: the building descends, so the demo stack's
     // labels are {0,1,2,-8,-14,-26,-36,-50,14,30} and FloorRegistry's legal range is
@@ -571,6 +573,7 @@ public:
     // The survival clock. Canonical here, not on the entity, so it survives the
     // body swap an elevator ride performs ([needs.h]).
     Needs&         needs(NpcId id)     { return needs_[id]; }
+    const Needs&   needs(NpcId id) const { return needs_[id]; }
     // DEMAND column: the first call materializes 128 B x count() and enrols rel_ in
     // spawn()'s growth set. Out of line because that is not header-shaped, and
     // because a call is no longer free — nothing in src/ makes one today.

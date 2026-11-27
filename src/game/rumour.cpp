@@ -87,8 +87,10 @@ NpcId nearest_speaker(const Registry& reg, LayerId layer) {
         const float dz = wrap_delta_f(earPos.z, t.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 >= bestD2) continue;
+        const NpcId id = reg.get<const NpcRef>(e).id;
+        if (id == kInvalidNpc) continue;
         bestD2 = d2;
-        best = reg.get<const NpcRef>(e).id;
+        best = id;
     }
     return best;
 }
@@ -96,7 +98,7 @@ NpcId nearest_speaker(const Registry& reg, LayerId layer) {
 Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
                   LayerId layer, int floorZ, const SamosborState& sb) {
     Rumour r;
-    if (!const_cast<NpcPool&>(pool).valid(speaker)) return r;
+    if (!pool.valid(speaker) || !pool.alive(speaker)) return r;
 
     // Deterministic in (speaker, floor): the same person always says the same thing
     // about the same floor. That is what makes a rumour read as something a body
@@ -259,16 +261,53 @@ Rumour rumour_for(const Registry& reg, const NpcPool& pool, NpcId speaker,
     }
 }
 
+namespace {
+
+// Never leave a truncated multi-byte UTF-8 sequence when snprintf hits `cap`.
+bool utf8_safe_terminate(char* out, std::size_t cap, int written) {
+    if (written < 0) {
+        out[0] = '\0';
+        return false;
+    }
+    const std::size_t w = static_cast<std::size_t>(written);
+    if (w < cap) return true;
+
+    std::size_t end = cap - 1u;
+    auto byte_at = [&](std::size_t idx) {
+        return static_cast<unsigned char>(out[idx]);
+    };
+    std::size_t start = end;
+    while (start > 0 && (byte_at(start - 1u) & 0xC0u) == 0x80u) --start;
+    if (start > 0) --start;
+
+    std::size_t expected = 1u;
+    const unsigned char lead = byte_at(start);
+    if (lead < 0x80u) expected = 1u;
+    else if ((lead & 0xE0u) == 0xC0u) expected = 2u;
+    else if ((lead & 0xF0u) == 0xE0u) expected = 3u;
+    else if ((lead & 0xF8u) == 0xF0u) expected = 4u;
+    else expected = cap;
+
+    if (end - start < expected) end = start;
+    out[end] = '\0';
+    return true;
+}
+
+} // namespace
+
 bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
     if (!r.valid || !out || cap < 160) return false;
+    int written = -1;
     switch (r.kind) {
         case RumourKind::Threat:
-            std::snprintf(out, cap,
-                          "\xd0\xa2\xd1\x83\xd1\x82 \xd0\xb2\xd0\xbe\xd0\xb4\xd0\xb8"
-                          "\xd1\x82\xd1\x81\xd1\x8f %s. \xd0\x98\xd1\x85 %d.",
-                          mob_name(static_cast<MobKind>(r.subject)),
-                          static_cast<int>(r.value));
-            return true;
+            if (r.subject >= kMobKindCount) return false;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xa2\xd1\x83\xd1\x82 \xd0\xb2\xd0\xbe\xd0\xb4\xd0\xb8"
+                "\xd1\x82\xd1\x81\xd1\x8f %s. \xd0\x98\xd1\x85 %d.",
+                mob_name(static_cast<MobKind>(r.subject)),
+                static_cast<int>(r.value));
+            break;
         case RumourKind::Fog: {
             // Three bands, because the useful information is "often / sometimes /
             // almost always" rather than a percentage nobody can act on.
@@ -279,29 +318,33 @@ bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
                            ? "\xd1\x87\xd0\xb0\xd1\x81\xd1\x82\xd0\xbe"   // often
                            : "\xd0\xbf\xd0\xbe\xd1\x87\xd1\x82\xd0\xb8 "
                              "\xd0\xb2\xd1\x81\xd0\xb5\xd0\xb3\xd0\xb4\xd0\xb0");
-            std::snprintf(out, cap,
-                          "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
-                          "\xd1\x80 \xd0\xb7\xd0\xb4\xd0\xb5\xd1\x81\xd1\x8c %s "
-                          "(%d.%d%%).",
-                          how, static_cast<int>(r.value) / 10,
-                          static_cast<int>(r.value) % 10);
-            return true;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
+                "\xd1\x80 \xd0\xb7\xd0\xb4\xd0\xb5\xd1\x81\xd1\x8c %s "
+                "(%d.%d%%).",
+                how, static_cast<int>(r.value) / 10,
+                static_cast<int>(r.value) % 10);
+            break;
         }
         case RumourKind::Wealth:
-            std::snprintf(out, cap,
-                          "\xd0\xa5\xd0\xbe\xd1\x80\xd0\xbe\xd1\x88\xd0\xb5\xd0\xb5 "
-                          "\xd0\xb7\xd0\xb4\xd0\xb5\xd1\x81\xd1\x8c \xd0\xb8\xd0\xb4"
-                          "\xd1\x91\xd1\x82 \xd0\xb4\xd0\xbe %d \xd1\x80\xd1\x83\xd0"
-                          "\xb1.",
-                          static_cast<int>(r.value));
-            return true;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xa5\xd0\xbe\xd1\x80\xd0\xbe\xd1\x88\xd0\xb5\xd0\xb5 "
+                "\xd0\xb7\xd0\xb4\xd0\xb5\xd1\x81\xd1\x8c \xd0\xb8\xd0\xb4"
+                "\xd1\x91\xd1\x82 \xd0\xb4\xd0\xbe %d \xd1\x80\xd1\x83\xd0"
+                "\xb1.",
+                static_cast<int>(r.value));
+            break;
         case RumourKind::Territory:
-            std::snprintf(out, cap,
-                          "\xd0\xad\xd1\x82\xd0\xbe\xd1\x82 \xd1\x8d\xd1\x82\xd0\xb0"
-                          "\xd0\xb6 \xd0\xb4\xd0\xb5\xd1\x80\xd0\xb6\xd0\xb0\xd1\x82"
-                          " %s.",
-                          faction_name(static_cast<Faction>(r.subject)));
-            return true;
+            if (r.subject >= kFactionCount) return false;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xad\xd1\x82\xd0\xbe\xd1\x82 \xd1\x8d\xd1\x82\xd0\xb0"
+                "\xd0\xb6 \xd0\xb4\xd0\xb5\xd1\x80\xd0\xb6\xd0\xb0\xd1\x82"
+                " %s.",
+                faction_name(static_cast<Faction>(r.subject)));
+            break;
         case RumourKind::Imminent:
             // "Через %d с самосбор: %s. Беги к герме."
             //
@@ -310,26 +353,28 @@ bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
             // "через 30 секунд" would need three forms and a selector for a HUD line.
             // The abbreviation is invariant, and the same trick is why every other new
             // line here ends its clause on a number instead of on a noun.
-            std::snprintf(out, cap,
-                          "\xd0\xa7\xd0\xb5\xd1\x80\xd0\xb5\xd0\xb7 %d \xd1\x81 "
-                          "\xd1\x81\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
-                          "\xd1\x80: %s. \xd0\x91\xd0\xb5\xd0\xb3\xd0\xb8 \xd0\xba "
-                          "\xd0\xb3\xd0\xb5\xd1\x80\xd0\xbc\xd0\xb5.",
-                          static_cast<int>(r.value),
-                          samosbor_variant_name_ru(
-                              static_cast<SamosborVariant>(r.subject)));
-            return true;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xa7\xd0\xb5\xd1\x80\xd0\xb5\xd0\xb7 %d \xd1\x81 "
+                "\xd1\x81\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
+                "\xd1\x80: %s. \xd0\x91\xd0\xb5\xd0\xb3\xd0\xb8 \xd0\xba "
+                "\xd0\xb3\xd0\xb5\xd1\x80\xd0\xbc\xd0\xb5.",
+                static_cast<int>(r.value),
+                samosbor_variant_name_ru(
+                    static_cast<SamosborVariant>(r.subject)));
+            break;
         case RumourKind::Variant:
             // "Идёт %s: %s." — the display name plus the one clause on what it does.
             // Both come out of [samosbor.h], so the crowd and the HUD alarm name the
             // same variant with the same word; two spellings of "maronary" reaching the
             // player is the drift a shared table exists to stop.
-            std::snprintf(out, cap, "\xd0\x98\xd0\xb4\xd1\x91\xd1\x82 %s: %s.",
-                          samosbor_variant_name_ru(
-                              static_cast<SamosborVariant>(r.subject)),
-                          samosbor_variant_effect_ru(
-                              static_cast<SamosborVariant>(r.subject)));
-            return true;
+            written = std::snprintf(
+                out, cap, "\xd0\x98\xd0\xb4\xd1\x91\xd1\x82 %s: %s.",
+                samosbor_variant_name_ru(
+                    static_cast<SamosborVariant>(r.subject)),
+                samosbor_variant_effect_ru(
+                    static_cast<SamosborVariant>(r.subject)));
+            break;
         case RumourKind::Veteran:
             // "Самосборов %d. Тварей из тумана уже %d."
             //
@@ -338,14 +383,15 @@ bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
             // Measured at ZMinus50 the pair walks 0/3 -> 3/9 -> 4/14 -> 7/16, so a
             // player who hears it twice twenty minutes apart has been told, in words,
             // that surviving samosbors is what makes the fog worse.
-            std::snprintf(out, cap,
-                          "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
-                          "\xd1\x80\xd0\xbe\xd0\xb2 %d. \xd0\xa2\xd0\xb2\xd0\xb0"
-                          "\xd1\x80\xd0\xb5\xd0\xb9 \xd0\xb8\xd0\xb7 \xd1\x82\xd1"
-                          "\x83\xd0\xbc\xd0\xb0\xd0\xbd\xd0\xb0 \xd1\x83\xd0\xb6"
-                          "\xd0\xb5 %d.",
-                          static_cast<int>(r.value), static_cast<int>(r.subject));
-            return true;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1\xd0\xbe"
+                "\xd1\x80\xd0\xbe\xd0\xb2 %d. \xd0\xa2\xd0\xb2\xd0\xb0"
+                "\xd1\x80\xd0\xb5\xd0\xb9 \xd0\xb8\xd0\xb7 \xd1\x82\xd1"
+                "\x83\xd0\xbc\xd0\xb0\xd0\xbd\xd0\xb0 \xd1\x83\xd0\xb6"
+                "\xd0\xb5 %d.",
+                static_cast<int>(r.value), static_cast<int>(r.subject));
+            break;
         case RumourKind::Lull:
             // Two forms, one case, and the split is at 90 s rather than 60 because a
             // countdown that flips to "1 мин" the instant it passes a minute throws away
@@ -358,33 +404,37 @@ bool rumour_text(const Rumour& r, char* out, std::size_t cap) {
             // "5 мин" and never "4".
             if (r.value < 90)
                 // "Самосбор через %d с. Иди к герме." — 54 B of literal.
-                std::snprintf(out, cap,
-                              "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1"
-                              "\xd0\xbe\xd1\x80 \xd1\x87\xd0\xb5\xd1\x80\xd0"
-                              "\xb5\xd0\xb7 %d \xd1\x81. \xd0\x98\xd0\xb4\xd0"
-                              "\xb8 \xd0\xba \xd0\xb3\xd0\xb5\xd1\x80\xd0\xbc"
-                              "\xd0\xb5.",
-                              static_cast<int>(r.value));
+                written = std::snprintf(
+                    out, cap,
+                    "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1"
+                    "\xd0\xbe\xd1\x80 \xd1\x87\xd0\xb5\xd1\x80\xd0"
+                    "\xb5\xd0\xb7 %d \xd1\x81. \xd0\x98\xd0\xb4\xd0"
+                    "\xb8 \xd0\xba \xd0\xb3\xd0\xb5\xd1\x80\xd0\xbc"
+                    "\xd0\xb5.",
+                    static_cast<int>(r.value));
             else
                 // "Самосбор через %d мин. Время ещё есть." — 64 B, the ceiling.
-                std::snprintf(out, cap,
-                              "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1"
-                              "\xd0\xbe\xd1\x80 \xd1\x87\xd0\xb5\xd1\x80\xd0"
-                              "\xb5\xd0\xb7 %d \xd0\xbc\xd0\xb8\xd0\xbd. \xd0"
-                              "\x92\xd1\x80\xd0\xb5\xd0\xbc\xd1\x8f \xd0\xb5"
-                              "\xd1\x89\xd1\x91 \xd0\xb5\xd1\x81\xd1\x82\xd1"
-                              "\x8c.",
-                              static_cast<int>((r.value + 59) / 60));
-            return true;
+                written = std::snprintf(
+                    out, cap,
+                    "\xd0\xa1\xd0\xb0\xd0\xbc\xd0\xbe\xd1\x81\xd0\xb1"
+                    "\xd0\xbe\xd1\x80 \xd1\x87\xd0\xb5\xd1\x80\xd0"
+                    "\xb5\xd0\xb7 %d \xd0\xbc\xd0\xb8\xd0\xbd. \xd0"
+                    "\x92\xd1\x80\xd0\xb5\xd0\xbc\xd1\x8f \xd0\xb5"
+                    "\xd1\x89\xd1\x91 \xd0\xb5\xd1\x81\xd1\x82\xd1"
+                    "\x8c.",
+                    static_cast<int>((r.value + 59) / 60));
+            break;
         case RumourKind::Depth:
         default:
-            std::snprintf(out, cap,
-                          "\xd0\x93\xd0\xbb\xd1\x83\xd0\xb1\xd0\xb6\xd0\xb5 %d "
-                          "\xd0\xbd\xd0\xb5 \xd0\xb2\xd0\xbe\xd0\xb7\xd0\xb2\xd1\x80"
-                          "\xd0\xb0\xd1\x89\xd0\xb0\xd1\x8e\xd1\x82\xd1\x81\xd1\x8f.",
-                          static_cast<int>(r.value));
-            return true;
+            written = std::snprintf(
+                out, cap,
+                "\xd0\x93\xd0\xbb\xd1\x83\xd0\xb1\xd0\xb6\xd0\xb5 %d "
+                "\xd0\xbd\xd0\xb5 \xd0\xb2\xd0\xbe\xd0\xb7\xd0\xb2\xd1\x80"
+                "\xd0\xb0\xd1\x89\xd0\xb0\xd1\x8e\xd1\x82\xd1\x81\xd1\x8f.",
+                static_cast<int>(r.value));
+            break;
     }
+    return utf8_safe_terminate(out, cap, written);
 }
 
 } // namespace giga::game

@@ -68,7 +68,7 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
     if (tick % static_cast<std::uint64_t>(kSimHz) == 0) {
         for (Room& r : rooms.list) {
             if (r.rep == 0) continue;
-            int step = r.rep >> kRepDecayShift;
+            int step = r.rep / (1 << kRepDecayShift);
             if (step == 0) step = r.rep > 0 ? 1 : -1;
             r.rep = static_cast<std::int16_t>(r.rep - step);
         }
@@ -102,6 +102,9 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
         const Entity actor = static_cast<Entity>(ev.a);
         if (actor == entt::null || !reg.valid(actor)) continue;
         if (!reg.all_of<NpcRef>(actor)) continue;
+        if (const auto* actorTr = reg.try_get<const Transform>(actor);
+            actorTr != nullptr && actorTr->layer != layer)
+            continue;
         const NpcId actorId = reg.get<const NpcRef>(actor).id;
         if (!pool.valid(actorId)) continue;
         const std::uint8_t rowA = rel_row(pool, actorId);
@@ -161,8 +164,11 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
                                                               : kNoiseRadiusCap);
             if (!perceived && dist <= kWitnessSightM) {
                 const vec3 eye{tr.pos.x, tr.pos.y, tr.pos.z + kEyeLiftM};
+                const vec3 delta = wrap_delta3(eye, deedPos, kWorldExtent);
+                const vec3 target{eye.x + delta.x, eye.y + delta.y,
+                                  eye.z + delta.z};
                 SubRayHit hit;
-                perceived = !sub_march(world.grid(), eye, deedPos, hit);
+                perceived = !sub_march(world.grid(), eye, target, hit);
             }
             if (!perceived) continue;
             anyWitness = true;

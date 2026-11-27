@@ -242,4 +242,16 @@ XpAward award_xp(RpgStats& r, std::uint32_t amount,
 bool spend_attr_point(RpgStats& r, Attr a,
                       std::int16_t* hp = nullptr, std::int16_t* maxHp = nullptr);
 
+// ---------------------------------------------------------------------------
+// Progression seam (matwej.md §16 #8, §20)
+// ---------------------------------------------------------------------------
+// Single extension point for future skills and perks scaling per-verb capability.
+// Returns the baseline x1000 multiplier (1000 == 1.0f) while skills/perks are
+// deferred; safely accepts nullptr `stats` and out-of-range `verbId` without UB
+// or division by zero.
+[[nodiscard]] std::uint16_t capability_e3(const RpgStats* stats,
+                                          std::uint8_t verbId) noexcept;
+[[nodiscard]] float capability(const RpgStats* stats,
+                               std::uint8_t verbId) noexcept;
+
 } // namespace giga::game

@@ -2801,7 +2801,13 @@ if(GIGA_BUILD_TESTS)
         #   - `tests/suite_zonenav.inl` (`table_is_a_metric` 4b): полный BFS по
         #     `ZoneGraph` для поиска крупнейшей компоненты и сверки достижимости
         #     и изоляции против `ZoneDist::at` (+4 проверки).
-        PASS_REGULAR_EXPRESSION "game_test: 245101 checks, 0 failures")
+        # 245101 -> 245294 (+193, 2026-11-27, Волна 5 / matwej.md):
+        #   - `suite_conversation.inl` (+24): живое состояние в «ЗАДАНИЕ»;
+        #   - `suite_lightvis.inl` + `suite_rebake.inl` (+89): Ход H `.lvc` кэш
+        #     света (round-trip, ключ, порча, MISS/HIT);
+        #   - `suite_rooms_object.inl` (+17): `Room::owner` из `FloorSpec::factionMix`;
+        #   - `suite_rpg.inl` + `suite_utilai.inl` (+63): `capability` + `Perception`.
+        PASS_REGULAR_EXPRESSION "game_test: 245294 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

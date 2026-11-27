@@ -24,7 +24,10 @@
 // ровно потому, что он меряет НАСТОЯЩИЙ фоновый бейк на настоящем этаже;
 // мок здесь мерил бы только самого себя.
 #include <chrono>
+#include <cstring>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "game/floor_gen.h"   // generate_floor — настоящий этаж, не игрушка
 #include "game/floor_spec.h"  // FloorKind, floor_spec
@@ -415,9 +418,178 @@ void fresh_light_bakes_in_worker() {
     }
 }
 
+void light_cache_miss_hit_and_invalidation() {
+    World w;
+    generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+
+    giga::game::LightVisLamp lamps[2] = {
+        {vec3{33.0f, 33.0f, 3.0f}, 12.0f, vec3{1.0f, 1.0f, 1.0f}},
+        {vec3{97.0f, 97.0f, 3.0f}, 12.0f, vec3{1.0f, 1.0f, 1.0f}},
+    };
+    constexpr std::uint32_t kSlots = 63u;
+
+    struct MemLightCache {
+        std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> blobs;
+        int loadCalls = 0;
+        int loadHits = 0;
+        int storeCalls = 0;
+        std::uint64_t lastLoadKey = 0;
+        std::uint64_t lastStoreKey = 0;
+    } cache;
+
+    auto loadFn = [&cache](std::uint64_t key,
+                           giga::game::LightVisBake& out) -> bool {
+        ++cache.loadCalls;
+        cache.lastLoadKey = key;
+        const auto it = cache.blobs.find(key);
+        if (it == cache.blobs.end()) return false;
+        const bool ok = giga::game::light_vis_cache_decode(
+            it->second.data(), it->second.size(), key, out);
+        if (ok) ++cache.loadHits;
+        return ok;
+    };
+    auto storeFn = [&cache](std::uint64_t key,
+                            const giga::game::LightVisBake& bake) {
+        ++cache.storeCalls;
+        cache.lastStoreKey = key;
+        std::vector<std::uint8_t> encoded;
+        giga::game::light_vis_cache_encode(bake, key, encoded);
+        cache.blobs[key] = std::move(encoded);
+    };
+
+    auto waitFresh = [](RebakeScheduler& sched) -> bool {
+        TickClock clock;
+        bool swapped = false;
+        while (!swapped && clock.now() < 16384u) {
+            swapped = sched.step(clock.now());
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return swapped;
+    };
+
+    // 1. First start_fresh: cache MISS -> bakes light and invokes store once.
+    std::uint64_t key1 = 0;
+    std::vector<std::uint32_t> cells1;
+    std::uint64_t fnv1 = 0;
+    std::uint32_t lit1 = 0;
+    std::uint32_t max1 = 0;
+    float rMax1 = 0.0f;
+    {
+        RebakeScheduler s1;
+        s1.set_rebake_threads(2);
+        s1.set_light_table(lamps, 2, kSlots, 1);
+        s1.set_light_cache(loadFn, storeFn);
+        s1.start_fresh(w.grid(), FloorKind::Residential, 0, nullptr,
+                       w.gravity().regime, /*lightAsync=*/false);
+        CHECK(waitFresh(s1));
+        CHECK(s1.take_light_swap());
+        CHECK(s1.light_full_bakes() == 1u);
+        CHECK(cache.loadCalls == 1);
+        CHECK(cache.loadHits == 0);
+        CHECK(cache.storeCalls == 1);
+        CHECK(cache.blobs.size() == 1u);
+        CHECK(cache.lastLoadKey == cache.lastStoreKey);
+        const auto it1 = cache.blobs.find(cache.lastStoreKey);
+        CHECK(it1 != cache.blobs.end() && !it1->second.empty());
+        CHECK(s1.light_vis().valid());
+        CHECK(s1.light_vis().litCells > 0u);
+
+        key1 = cache.lastStoreKey;
+        cells1 = s1.light_vis().cells;
+        fnv1 = giga::game::light_vis_fnv(s1.light_vis());
+        lit1 = s1.light_vis().litCells;
+        max1 = s1.light_vis().maxPerCell;
+        rMax1 = s1.light_vis().rMaxM;
+    }
+
+    // 2. Second start_fresh on a fresh scheduler with identical world & lamps:
+    //    cache HIT -> store not called, bake skipped, lightVis_ bitwise equal.
+    RebakeScheduler s2;
+    s2.set_rebake_threads(2);
+    s2.set_light_table(lamps, 2, kSlots, 1);
+    s2.set_light_cache(loadFn, storeFn);
+    s2.start_fresh(w.grid(), FloorKind::Residential, 0, nullptr,
+                   w.gravity().regime, /*lightAsync=*/false);
+    CHECK(waitFresh(s2));
+    CHECK(s2.take_light_swap());
+    CHECK(s2.light_full_bakes() == 0u);
+    CHECK(cache.loadCalls == 2);
+    CHECK(cache.loadHits == 1);
+    CHECK(cache.storeCalls == 1);
+    CHECK(cache.lastLoadKey == key1);
+    CHECK(s2.light_vis().cells.size() == cells1.size());
+    CHECK(std::memcmp(s2.light_vis().cells.data(), cells1.data(),
+                      cells1.size() * sizeof(std::uint32_t)) == 0);
+    CHECK(giga::game::light_vis_fnv(s2.light_vis()) == fnv1);
+    CHECK(s2.light_vis().litCells == lit1);
+    CHECK(s2.light_vis().maxPerCell == max1);
+    CHECK(s2.light_vis().rMaxM == rMax1);
+
+    // 3. Async worker cache branch (lightAsync=true) with identical data:
+    //    cache HIT inside worker -> store not called, swap delivers bitwise
+    //    identical lightVis_.
+    {
+        RebakeScheduler sAsync;
+        sAsync.set_rebake_threads(2);
+        sAsync.set_light_table(lamps, 2, kSlots, 1);
+        sAsync.set_light_cache(loadFn, storeFn);
+        sAsync.start_fresh(w.grid(), FloorKind::Residential, 0, nullptr,
+                           w.gravity().regime, /*lightAsync=*/true);
+        CHECK(!sAsync.take_light_swap());
+        CHECK(waitFresh(sAsync));
+        CHECK(sAsync.take_light_swap());
+        CHECK(sAsync.light_full_bakes() == 0u);
+        CHECK(cache.loadCalls == 3);
+        CHECK(cache.loadHits == 2);
+        CHECK(cache.storeCalls == 1);
+        CHECK(cache.lastLoadKey == key1);
+        CHECK(sAsync.light_vis().cells.size() == cells1.size());
+        CHECK(std::memcmp(sAsync.light_vis().cells.data(), cells1.data(),
+                          cells1.size() * sizeof(std::uint32_t)) == 0);
+        CHECK(giga::game::light_vis_fnv(sAsync.light_vis()) == fnv1);
+    }
+
+    // 4. Third start_fresh with mutated geometry -> different key, MISS + store.
+    const CellType wasType = w.grid().cell(17, 16, 1);
+    if (wasType == kCellAir) w.grid().fill_cell(17, 16, 1, CellType{3});
+    else w.grid().clear_cell(17, 16, 1);
+
+    s2.start_fresh(w.grid(), FloorKind::Residential, 0, nullptr,
+                   w.gravity().regime, /*lightAsync=*/false);
+    CHECK(waitFresh(s2));
+    CHECK(s2.take_light_swap());
+    CHECK(s2.light_full_bakes() == 1u);
+    CHECK(cache.loadCalls == 4);
+    CHECK(cache.loadHits == 2);
+    CHECK(cache.storeCalls == 2);
+    CHECK(cache.lastLoadKey != key1);
+    CHECK(cache.lastStoreKey == cache.lastLoadKey);
+    CHECK(cache.blobs.size() == 2u);
+    const std::uint64_t keyGeom = cache.lastStoreKey;
+    const auto it2 = cache.blobs.find(keyGeom);
+    CHECK(it2 != cache.blobs.end() && !it2->second.empty());
+
+    // 5. Mutated emitter -> another distinct key, MISS + store.
+    lamps[0].radiusM = 16.0f;
+    s2.set_light_table(lamps, 2, kSlots, 2);
+    s2.start_fresh(w.grid(), FloorKind::Residential, 0, nullptr,
+                   w.gravity().regime, /*lightAsync=*/false);
+    CHECK(waitFresh(s2));
+    CHECK(s2.take_light_swap());
+    CHECK(s2.light_full_bakes() == 2u);
+    CHECK(cache.loadCalls == 5);
+    CHECK(cache.loadHits == 2);
+    CHECK(cache.storeCalls == 3);
+    CHECK(cache.lastLoadKey != key1);
+    CHECK(cache.lastLoadKey != keyGeom);
+    CHECK(cache.lastStoreKey == cache.lastLoadKey);
+    CHECK(cache.blobs.size() == 3u);
+}
+
 } // namespace rebake_test
 
 void test_rebake_all() {
     rebake_test::sla_holds_on_a_real_floor();
     rebake_test::fresh_light_bakes_in_worker();
+    rebake_test::light_cache_miss_hit_and_invalidation();
 }

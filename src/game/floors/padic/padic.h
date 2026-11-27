@@ -122,7 +122,8 @@ std::uint32_t padic_doorways(int number, unsigned seed, std::vector<Doorway>& ou
 // (number, seed), как padic_doorways; вызывающий делает rooms_reset.
 // Возвращает число объявленных комнат.
 struct FloorRooms;
-std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out);
+std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out,
+                          const FloorSpec* spec = nullptr);
 
 // РАССТАНОВКА СОДЕРЖИМОГО МОДУЛЯ — строка `kContentPlacers` в floor_gen.cpp,
 // хук после объявления комнат ([floor_gen.h] FloorPlaceCtx). Две части, и

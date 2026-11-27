@@ -604,6 +604,141 @@ void delta_lamp_patch() {
     }
 }
 
+void cache_roundtrip_key_and_corruption() {
+    World w;
+    std::vector<LightVisLamp> lamps;
+    make_floor_and_lamps(w, lamps);
+
+    LightVisBake baked;
+    giga::game::bake_light_visibility(w.grid(), lamps.data(), lamps.size(),
+                                      kSlots, baked, /*threads=*/2);
+    CHECK(baked.valid());
+    CHECK(baked.litCells > 0u);
+    CHECK(baked.lampCount == static_cast<std::uint32_t>(lamps.size()));
+
+    const std::uint64_t key = giga::game::light_vis_cache_key(
+        w.grid(), lamps.data(), lamps.size(), kSlots);
+    std::vector<std::uint8_t> blob;
+    giga::game::light_vis_cache_encode(baked, key, blob);
+    CHECK(blob.size() > 64u);
+
+    // Round-trip into a pre-dirtied destination to prove every field is
+    // restored from the encoded .lvc payload.
+    LightVisBake decoded;
+    decoded.slots = 999u;
+    decoded.lampCount = 999u;
+    decoded.rMaxM = -1.0f;
+    decoded.litCells = 999u;
+    decoded.overflowCells = 999u;
+    decoded.maxPerCell = 999u;
+    decoded.meanPerCell = -1.0f;
+    decoded.packedMeanPerCell = -1.0f;
+    decoded.bakeMs = 42.0f;
+    decoded.cells.assign(16u, 0xDEADBEEFu);
+
+    CHECK(giga::game::light_vis_cache_decode(blob.data(), blob.size(), key,
+                                             decoded));
+    CHECK(decoded.cells.size() == baked.cells.size());
+    CHECK(std::memcmp(decoded.cells.data(), baked.cells.data(),
+                      baked.cells.size() * sizeof(std::uint32_t)) == 0);
+    CHECK(giga::game::light_vis_fnv(decoded) ==
+          giga::game::light_vis_fnv(baked));
+    CHECK(decoded.slots == baked.slots);
+    CHECK(decoded.lampCount == baked.lampCount);
+    CHECK(decoded.rMaxM == baked.rMaxM);
+    CHECK(decoded.litCells == baked.litCells);
+    CHECK(decoded.overflowCells == baked.overflowCells);
+    CHECK(decoded.maxPerCell == baked.maxPerCell);
+    CHECK(decoded.meanPerCell == baked.meanPerCell);
+    CHECK(decoded.packedMeanPerCell == baked.packedMeanPerCell);
+    CHECK(decoded.bakeMs == 0.0f);
+
+    // Content-addressed key invariants: identical inputs match; mutating a
+    // submask bit, cell type, emitter position, emitter radius, slot capacity,
+    // or emitter count changes the key.
+    CHECK(giga::game::light_vis_cache_key(w.grid(), lamps.data(),
+                                          lamps.size(), kSlots) == key);
+    {
+        MacroGrid& mg = w.grid();
+        const std::uint64_t prevWord = mg.mask(1, 1, 1).words[0];
+        mg.mask(1, 1, 1).words[0] = prevWord ^ 1ull;
+        const std::uint64_t kSub = giga::game::light_vis_cache_key(
+            mg, lamps.data(), lamps.size(), kSlots);
+        mg.mask(1, 1, 1).words[0] = prevWord;
+        CHECK(kSub != key);
+    }
+    {
+        MacroGrid& mg = w.grid();
+        const CellType prevType = mg.cell(1, 1, 1);
+        const CellType altType =
+            prevType == kCellAir ? CellType{1} : kCellAir;
+        mg.set_cell(1, 1, 1, altType);
+        const std::uint64_t kType = giga::game::light_vis_cache_key(
+            mg, lamps.data(), lamps.size(), kSlots);
+        mg.set_cell(1, 1, 1, prevType);
+        CHECK(kType != key);
+    }
+    {
+        auto lampsPos = lamps;
+        lampsPos[0].pos.x += 0.25f;
+        CHECK(giga::game::light_vis_cache_key(w.grid(), lampsPos.data(),
+                                              lampsPos.size(), kSlots) != key);
+    }
+    {
+        auto lampsRad = lamps;
+        lampsRad[0].radiusM += 0.5f;
+        CHECK(giga::game::light_vis_cache_key(w.grid(), lampsRad.data(),
+                                              lampsRad.size(), kSlots) != key);
+    }
+    CHECK(giga::game::light_vis_cache_key(w.grid(), lamps.data(),
+                                          lamps.size(), kSlots - 1u) != key);
+    CHECK(giga::game::light_vis_cache_key(w.grid(), lamps.data(),
+                                          lamps.size() - 1u, kSlots) != key);
+
+    // Negative decode mutations: truncation, bad magic, wrong/corrupted key,
+    // payload checksum mismatch (header and tail), and trailing garbage must
+    // return false without mutating the output.
+    LightVisBake reject;
+    reject.slots = 77u;
+    CHECK(!giga::game::light_vis_cache_decode(blob.data(), 0u, key, reject));
+    CHECK(!giga::game::light_vis_cache_decode(blob.data(), 16u, key, reject));
+    CHECK(!giga::game::light_vis_cache_decode(blob.data(), blob.size() - 1u,
+                                              key, reject));
+    {
+        auto badMagic = blob;
+        badMagic[0] ^= 0x01u;
+        CHECK(!giga::game::light_vis_cache_decode(
+            badMagic.data(), badMagic.size(), key, reject));
+    }
+    CHECK(!giga::game::light_vis_cache_decode(blob.data(), blob.size(),
+                                              key ^ 1ull, reject));
+    {
+        auto badKey = blob;
+        badKey[4] ^= 0x01u;
+        CHECK(!giga::game::light_vis_cache_decode(
+            badKey.data(), badKey.size(), key, reject));
+    }
+    {
+        auto badHdrPayload = blob;
+        badHdrPayload[20] ^= 0x01u;
+        CHECK(!giga::game::light_vis_cache_decode(
+            badHdrPayload.data(), badHdrPayload.size(), key, reject));
+    }
+    {
+        auto badTailPayload = blob;
+        badTailPayload.back() ^= 0x01u;
+        CHECK(!giga::game::light_vis_cache_decode(
+            badTailPayload.data(), badTailPayload.size(), key, reject));
+    }
+    {
+        auto extraByte = blob;
+        extraByte.push_back(0x5Au);
+        CHECK(!giga::game::light_vis_cache_decode(
+            extraByte.data(), extraByte.size(), key, reject));
+    }
+    CHECK(reject.slots == 77u);
+}
+
 } // namespace lightvis_test
 
 void test_lightvis_all() {
@@ -612,4 +747,5 @@ void test_lightvis_all() {
     lightvis_test::oracle_reverse_polarity_constructed();
     lightvis_test::carve_expands_same_call();
     lightvis_test::delta_lamp_patch();
+    lightvis_test::cache_roundtrip_key_and_corruption();
 }

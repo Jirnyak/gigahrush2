@@ -981,18 +981,22 @@ inline float stickiness_amount(float stateTimer) {
 
 // World environment snapshot injected into ai_step for replans.
 // Defaults keep legacy callers (no clock, calm world) bit-identical.
+struct FloorRooms; // game/room.h — заголовку хватает указателя
 struct AiEnv {
     float minuteOfDay = -1.0f;
     bool samosborActive = false;
     bool samosborWarning = false;
+    const FloorRooms* rooms = nullptr;
 };
 
 [[nodiscard]] inline AiEnv ai_env(std::uint64_t tick,
-                                  SamosborPhase phase = SamosborPhase::Idle) noexcept {
+                                  SamosborPhase phase = SamosborPhase::Idle,
+                                  const FloorRooms* rooms = nullptr) noexcept {
     return AiEnv{
         watch_minute_of_day(tick),
         phase == SamosborPhase::Active,
         phase == SamosborPhase::Warning,
+        rooms,
     };
 }
 

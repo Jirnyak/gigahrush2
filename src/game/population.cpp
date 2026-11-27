@@ -75,6 +75,7 @@ PocketCatalog build_pocket_catalog(int floor) {
     // safe. Same 30% slice container.h authors for the kind.
     const std::int32_t cap = kLootValueCap[economy_band(floor)] * 30 / 100;
     for (ItemId id = 1; id <= kItemCount; ++id) {
+        if (id == kItemRuble) continue;
         const ItemDef& d = item_def(id);
         if (d.value > cap) continue;
         if (static_cast<EquipSlot>(d.equipSlot) != EquipSlot::None) continue;
@@ -93,31 +94,47 @@ PocketCatalog build_pocket_catalog(int floor) {
 // <= 22 байт UTF-8 (<= 11 кириллических букв), чтобы гарантированно помещаться
 // в фиксированный слот kNameLen == 24 без обрыва многобайтного символа.
 constexpr const char* kFirstNamesMale[] = {
-    "Иван",    "Пётр",    "Сергей",  "Алексей",
-    "Дмитрий", "Николай", "Андрей",  "Виктор",
-    "Михаил",  "Борис",   "Геннадий","Леонид",
-    "Фёдор",   "Юрий",    "Вадим",   "Артём",
+    "Иван",     "Пётр",     "Сергей",   "Алексей",
+    "Дмитрий",  "Николай",  "Андрей",   "Виктор",
+    "Михаил",   "Борис",    "Геннадий", "Леонид",
+    "Фёдор",    "Юрий",     "Вадим",    "Артём",
+    "Василий",  "Григорий", "Евгений",  "Анатолий",
+    "Владимир", "Валерий",  "Игорь",    "Олег",
+    "Павел",    "Роман",    "Степан",   "Семён",
+    "Аркадий",  "Виталий",  "Георгий",  "Илья",
 };
 constexpr const char* kFirstNamesFemale[] = {
-    "Анна",    "Мария",   "Елена",   "Ольга",
-    "Наталья", "Татьяна", "Ирина",   "Светлана",
-    "Галина",  "Любовь",  "Зинаида", "Нина",
-    "Вера",    "Людмила", "Тамара",  "Клара",
+    "Анна",      "Мария",     "Елена",    "Ольга",
+    "Наталья",   "Татьяна",   "Ирина",    "Светлана",
+    "Галина",    "Любовь",    "Зинаида",  "Нина",
+    "Вера",      "Людмила",   "Тамара",   "Клара",
+    "Надежда",   "Валентина", "Екатерина","Лариса",
+    "Раиса",     "Лидия",     "Зоя",      "Таисия",
+    "Антонина",  "Клавдия",   "Нинель",   "Римма",
+    "Майя",      "Алла",      "Евгения",  "Маргарита",
 };
 constexpr const char* kSurnamesMale[] = {
-    "Петров",  "Иванов",  "Сидоров", "Смирнов",
-    "Кузнецов","Волков",  "Морозов", "Козлов",
-    "Соколов", "Зайцев",  "Павлов",  "Семёнов",
-    "Голубев", "Беляев",  "Громов",  "Круглов",
+    "Петров",   "Иванов",   "Сидоров",  "Смирнов",
+    "Кузнецов", "Волков",   "Морозов",  "Козлов",
+    "Соколов",  "Зайцев",   "Павлов",   "Семёнов",
+    "Голубев",  "Беляев",   "Громов",   "Круглов",
+    "Фёдоров",  "Васильев", "Михайлов", "Новиков",
+    "Попов",    "Лебедев",  "Егоров",   "Орлов",
+    "Макаров",  "Никитин",  "Захаров",  "Тихонов",
+    "Борисов",  "Степанов", "Яковлев",  "Сорокин",
 };
 constexpr const char* kSurnamesFemale[] = {
-    "Петрова", "Иванова", "Сидорова","Смирнова",
-    "Кузнецова","Волкова","Морозова","Козлова",
-    "Соколова","Зайцева", "Павлова", "Семёнова",
-    "Голубева","Беляева", "Громова", "Круглова",
+    "Петрова",   "Иванова",   "Сидорова",  "Смирнова",
+    "Кузнецова", "Волкова",   "Морозова",  "Козлова",
+    "Соколова",  "Зайцева",   "Павлова",   "Семёнова",
+    "Голубева",  "Беляева",   "Громова",   "Круглова",
+    "Фёдорова",  "Васильева", "Михайлова", "Новикова",
+    "Попова",    "Лебедева",  "Егорова",   "Орлова",
+    "Макарова",  "Никитина",  "Захарова",  "Тихонова",
+    "Борисова",  "Степанова", "Яковлева",  "Сорокина",
 };
-constexpr std::uint32_t kFirstNameCount = 16u;
-constexpr std::uint32_t kSurnameCount = 16u;
+constexpr std::uint32_t kFirstNameCount = 32u;
+constexpr std::uint32_t kSurnameCount = 32u;
 static_assert(sizeof(kFirstNamesMale) / sizeof(kFirstNamesMale[0]) == kFirstNameCount);
 static_assert(sizeof(kFirstNamesFemale) / sizeof(kFirstNamesFemale[0]) == kFirstNameCount);
 static_assert(sizeof(kSurnamesMale) / sizeof(kSurnamesMale[0]) == kSurnameCount);
@@ -218,12 +235,13 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         pool.sex(id) = sex;
         {
             const std::uint32_t nr = hash_u32(r ^ 0x4e414d45u);
+            const std::uint32_t sr = hash_u32(nr ^ 0x5355524eu);
             const char* firstName =
                 (sex == SexFemale ? kFirstNamesFemale : kFirstNamesMale)
                     [nr % kFirstNameCount];
             const char* lastName =
                 (sex == SexFemale ? kSurnamesFemale : kSurnamesMale)
-                    [(nr >> 8) % kSurnameCount];
+                    [sr % kSurnameCount];
             pool.set_name(id, firstName, lastName);
         }
         pool.height_mm(id) = height_for_age(age, hash_u32(r));

@@ -874,6 +874,23 @@ static void test_death_spills_inventory_to_corpse_and_cell() {
 }
 
 
+static void test_capability_seam() {
+    CHECK(capability_e3(nullptr, kVerbStrike) == 1000u);
+    CHECK(capability(nullptr, kVerbStrike) == 1.0f);
+    CHECK(capability_e3(nullptr, static_cast<std::uint8_t>(kVerbCount)) == 1000u);
+    CHECK(capability(nullptr, 255u) == 1.0f);
+
+    const RpgStats low = fresh_rpg(1);
+    const RpgStats high = random_rpg(50, 42u);
+    CHECK(capability_e3(&high, 255u) == 1000u);
+    CHECK(capability(&high, 255u) == 1.0f);
+    for (std::uint8_t v = 0; v < kVerbCount; ++v) {
+        CHECK(capability_e3(&low, v) == 1000u);
+        CHECK(capability(&high, v) == 1.0f);
+    }
+}
+
+
 static void test_rpg_all() {
     test_rpg_curve();
     test_rpg_derived();
@@ -885,5 +902,6 @@ static void test_rpg_all() {
     test_rpg_combat_wire();
     test_rpg_possess_transfer();
     test_death_spills_inventory_to_corpse_and_cell();
+    test_capability_seam();
 }
 

@@ -674,6 +674,7 @@ enum ProfSlot : unsigned {
     // судьба разные (две из трёх прямо сейчас переезжают на нав по зонам, и
     // мерить переезд общим слотом нельзя).
     kProfPatrol,      // ai_patrol_step — наряд
+    kProfServe,       // serve_step — деяния нужд и контроль окон тела
     kProfPlace,       // place_errand_step — дело (S12–S13)
     kProfWander,      // wander_step — прогулка
     kProfGuide,       // guide_step — ОДИН проход ведения (единственный писатель)
@@ -724,7 +725,8 @@ static constexpr ProfRow kProfRows[] = {
     {kProfTick, "tick"},           {kProfNoise, "noise"},
     {kProfDiffusion, "diffusion"}, {kProfAi, "ai"},
     {kProfController, "controller"},
-    {kProfPatrol, "patrol"},       {kProfPlace, "place"},
+    {kProfPatrol, "patrol"},       {kProfServe, "serve"},
+    {kProfPlace, "place"},
     {kProfWander, "wander"},       {kProfGuide, "guide"},
     {kProfDoors, "doors"},
     {kProfAcoustics, "acoustics"}, {kProfCombat, "combat"},
@@ -1498,6 +1500,9 @@ constexpr DemoFloor kDemoFloors[] = {
     {0, game::FloorKind::Residential},   // start / hub — E0, samosbor ~2% duty
     {1, game::FloorKind::Commercial},
     {2, game::FloorKind::Industrial},
+    {-1, game::FloorKind::Commercial},   // пошаговый спуск без прыжка 0 -> -8
+    {-2, game::FloorKind::Residential},
+    {-4, game::FloorKind::Industrial},
     {-8, game::FloorKind::Derelict},     // E1
     {-14, game::FloorKind::Industrial},  // E2
     {-26, game::FloorKind::Derelict},    // anchor ZMinus26 — E3
@@ -4830,6 +4835,7 @@ int main(int argc, char** argv) {
                 pid = i;
                 break;
             }
+        draw_loading_frame("ЗАГРУЗКА СОХРАНЕНИЯ: ГЕНЕРАЦИЯ ЭТАЖА...", 0.25f);
         const game::LoadResult lr = streamer.ensure_loaded(
             stack, registry, reg, pool, savedFloor, pid);
         currentFloor = savedFloor;
@@ -4891,7 +4897,9 @@ int main(int argc, char** argv) {
                            *spec_for_floor(currentFloor),
                            streamer.floor_seed_of(registry, currentFloor));
         if (!arrivedRestored) dress_lift_portals(nl);
+        draw_loading_frame("ЗАГРУЗКА СОХРАНЕНИЯ: НАВИГАЦИЯ И СВЕТ...", 0.60f);
         begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
+        draw_loading_frame("ЗАГРУЗКА СОХРАНЕНИЯ: ЗЕРКАЛО ВОКСЕЛЕЙ...", 0.85f);
         if (propPass.ready()) {
             merge_ecs_prop_meshes(reg, nl, propPass,
                                   streamer.antourage_at_layer(registry, nl),
@@ -6983,7 +6991,9 @@ int main(int argc, char** argv) {
                 aiTick = game::ai_step(
                     reg, pool, danger, activeGrid, activeLayer, simNow, kSimDt, aiCfg,
                     &aiMem, nullptr, &activeWorld, &bus, simTick,
-                    game::ai_env(simTick, static_cast<game::SamosborPhase>(samosbor.phase)),
+                    game::ai_env(simTick,
+                                 static_cast<game::SamosborPhase>(samosbor.phase),
+                                 &floorRooms),
                     &factionRel);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Flee, steerProbe);
@@ -8107,7 +8117,7 @@ int main(int argc, char** argv) {
                 // поданы выше), и снимает контактный кадр у ЛЮБОГО тела —
                 // жителя и носителя камеры одной дверью. Проход дела дальше
                 // спрашивает только «держит ли тело деяние».
-                const auto profPlaceT0 = prof_now();
+                const auto profServeT0 = prof_now();
                 serveTick = game::ServeTick{};
                 // Мир слоя — в МОМЕНТ вызова, как у клока нужд: ссылка
                 // `activeWorld`, взятая в начале кадра, после F9 посреди
@@ -8153,6 +8163,8 @@ int main(int argc, char** argv) {
                 if (deedBody == entt::null && reg.valid(player) &&
                     game::serve_holding(reg, player, simTick))
                     deedBody = player;
+                prof_add(kProfServe, profServeT0);
+                const auto profPlaceT0 = prof_now();
                 placeTick = game::place_errand_step(
                     reg, pool, floorRooms, activeLayer,
                     simNow, simTick, &activeWorld.gravity(), &nav.zones(),

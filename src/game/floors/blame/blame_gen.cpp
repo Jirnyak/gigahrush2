@@ -724,7 +724,8 @@ void generate_blame_floor(World& world, int number, const FloorSpec& spec,
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }
 
-std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out) {
+std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out,
+                          const FloorSpec* spec) {
     // Комнаты мегаструктуры (rooms-object C): у пустоты жильё одно — лобби
     // решётки, «герметичная комната под городом» ([blame.md]). sculpt_lattice
     // гарантирует воздух зоны 5x5 на КАЖДОМ узле (у пилона lr=2, у массива 3;
@@ -734,6 +735,7 @@ std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out) {
     // едина, и будущая грамматика комнат города ею воспользуется.
     (void)number;
     (void)seed;
+    (void)spec;
     std::int16_t declared[kVerbCount] = {};
     declared[kVerbShelter] = 10; // гермолобби: за стеной лучше, чем снаружи (S13.3)
     std::uint32_t n = 0;

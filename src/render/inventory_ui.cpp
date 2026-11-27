@@ -1,5 +1,6 @@
 #include "render/inventory_ui.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -24,16 +25,21 @@ using game::kInvalidItem;
 using game::kInvCols;
 using game::kInvSlots;
 
-// CRT-фосфор [imgui_layer.cpp:60] и его затемнения. Локальные копии констант,
-// не общий хедер: стиль объявлен ОДИН раз в imgui_layer, а это его читатели.
-constexpr ImU32 kPhosphor = IM_COL32(89, 242, 102, 255);
-constexpr ImU32 kPhosphorDim = IM_COL32(60, 140, 66, 255);
+// Палитра CRT-аппаратуры ([AGENTS.md], [conversation_ui.cpp], [hud_ui.cpp]):
+// фосфор, янтарь, красный опасности, приглушённый фосфор.
+constexpr ImVec4 kPhosphor{0.349f, 0.949f, 0.400f, 1.0f}; // #59F266
+constexpr ImVec4 kAmber{0.949f, 0.780f, 0.251f, 1.0f};    // #F2C740
+constexpr ImVec4 kDanger{0.902f, 0.310f, 0.361f, 1.0f};
+constexpr ImVec4 kDim{0.349f, 0.949f, 0.400f, 0.55f};
+
+// ImU32-производные для ImDrawList: те же тона кинескопа без скруглений.
+constexpr ImU32 kPhosphorU32 = IM_COL32(89, 242, 102, 255);
+constexpr ImU32 kPhosphorDimU32 = IM_COL32(60, 140, 66, 255);
 constexpr ImU32 kCellBg = IM_COL32(8, 20, 10, 200);
 constexpr ImU32 kCellEdge = IM_COL32(26, 72, 30, 255);
 constexpr ImU32 kScanline = IM_COL32(0, 0, 0, 38);
-constexpr ImU32 kRuinRed = IM_COL32(242, 110, 89, 255);
-// Амбер активных состояний ([AGENTS.md] #F2C740) — рамка метки оффера.
-constexpr ImU32 kAmber = IM_COL32(242, 199, 64, 255);
+constexpr ImU32 kDangerU32 = IM_COL32(230, 79, 92, 255);
+constexpr ImU32 kAmberU32 = IM_COL32(242, 199, 64, 255);
 
 // --- Процедурный глиф предмета ----------------------------------------------
 // Референс — item_sprites GigaHrush 1: иконка ВЫВОДИТСЯ из данных, не лежит в
@@ -149,13 +155,13 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
         // VHS-сканлайны клетки, как в референсе.
         for (float y = a.y + 3.0f; y < b.y; y += 4.0f)
             dl->AddRectFilled(ImVec2(a.x, y), ImVec2(b.x, y + 1.0f), kScanline);
-        dl->AddRect(a, b, selected ? kPhosphor : kCellEdge, 0.0f, 0,
+        dl->AddRect(a, b, selected ? kPhosphorU32 : kCellEdge, 0.0f, 0,
                     selected ? 2.0f : 1.0f);
         // Метка оффера (deal-режим): амбер-рамка — «это уходит в сделку».
         // Поверх рамки выбора, чтобы читались обе: снаружи метка, внутри курсор.
         if (i < 64 && ((marks >> i) & 1u))
             dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1),
-                        kAmber, 0.0f, 0, 2.0f);
+                        kAmberU32, 0.0f, 0, 2.0f);
 
         // Мышь: клик выбирает клетку И перетягивает фокус на её сторону.
         ImGui::SetCursorScreenPos(a);
@@ -176,18 +182,21 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
         if (!filled) continue;
         const game::ItemDef& d = game::item_def(s.item);
         draw_item_glyph(dl, ImVec2(a.x + 4, a.y + 4), ImVec2(b.x - 4, b.y - 8),
-                        s.item, d.category, selected ? kPhosphor : kPhosphorDim);
+                        s.item, d.category, selected ? kPhosphorU32 : kPhosphorDimU32);
         if (s.count > 1) {
-            char cnt[8];
+            char cnt[12];
             std::snprintf(cnt, sizeof cnt, "x%u", s.count);
-            dl->AddText(ImVec2(b.x - 22.0f, b.y - 14.0f), kPhosphor, cnt);
+            const ImVec2 sz = ImGui::CalcTextSize(cnt);
+            const float tx = std::max(a.x + 2.0f, b.x - sz.x - 2.0f);
+            const float ty = b.y - sz.y - 3.0f;
+            dl->AddText(ImVec2(tx, ty), kPhosphorU32, cnt);
         }
         // Полоска износа — только когда предмету есть что терять: у вечных
         // строк (durability 0) её нет вовсе, минт не рисуем тоже — полоска
         // это ТРЕВОГА, а не украшение.
         if (game::item_durability(s.item) > 0 && s.condition < 255) {
             const float fx = static_cast<float>(s.condition) / 255.0f;
-            const ImU32 wc = s.condition < 64 ? kRuinRed : kPhosphorDim;
+            const ImU32 wc = s.condition < 64 ? kDangerU32 : kPhosphorDimU32;
             dl->AddRectFilled(ImVec2(a.x + 2, b.y - 4.0f),
                               ImVec2(a.x + 2 + (cell - 8.0f) * fx, b.y - 2.0f), wc);
         }
@@ -195,10 +204,10 @@ void draw_cells(ImDrawList* dl, ImVec2 g0, float cell, const ItemSlot* slots,
         const bool decided =
             eq && (eq->handL == i || eq->armor == i || eq->handR == i);
         if (decided) {
-            dl->AddLine(ImVec2(a.x + 1, a.y + 7), ImVec2(a.x + 1, a.y + 1), kPhosphor, 2.0f);
-            dl->AddLine(ImVec2(a.x + 1, a.y + 1), ImVec2(a.x + 7, a.y + 1), kPhosphor, 2.0f);
-            dl->AddLine(ImVec2(b.x - 7, b.y - 1), ImVec2(b.x - 1, b.y - 1), kPhosphor, 2.0f);
-            dl->AddLine(ImVec2(b.x - 1, b.y - 1), ImVec2(b.x - 1, b.y - 7), kPhosphor, 2.0f);
+            dl->AddLine(ImVec2(a.x + 1, a.y + 7), ImVec2(a.x + 1, a.y + 1), kPhosphorU32, 2.0f);
+            dl->AddLine(ImVec2(a.x + 1, a.y + 1), ImVec2(a.x + 7, a.y + 1), kPhosphorU32, 2.0f);
+            dl->AddLine(ImVec2(b.x - 7, b.y - 1), ImVec2(b.x - 1, b.y - 1), kPhosphorU32, 2.0f);
+            dl->AddLine(ImVec2(b.x - 1, b.y - 1), ImVec2(b.x - 1, b.y - 7), kPhosphorU32, 2.0f);
         }
     }
 }
@@ -245,6 +254,10 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     const float otherW = twoSided ? gridW + pad : 0.0f;
     const float winW = otherW + gridW + cardW + pad * 3;
     const float winH = cell * kInvCols + 116.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 0.0f);
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
                                    vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.5f),
                             ImGuiCond_Always);
@@ -254,7 +267,7 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
                      ImGuiWindowFlags_NoTitleBar);
 
-    ImGui::Text("%s", policy.title);
+    ImGui::TextColored(kPhosphor, "%s", policy.title);
     // Вес-бар с бюджетом тела (идея из окна форка, наши пороги тревоги):
     // перегруз — красный, подступ к нему — янтарь, иначе тихий фосфор.
     if (capacityG > 0) {
@@ -267,15 +280,15 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
                       static_cast<double>(capacityG) / 1000.0);
         ImGui::PushStyleColor(
             ImGuiCol_PlotHistogram,
-            frac > 1.0f   ? ImVec4(0.90f, 0.31f, 0.36f, 1.0f)
-            : frac > 0.8f ? ImVec4(0.95f, 0.78f, 0.25f, 1.0f)
-                          : ImVec4(0.35f, 0.55f, 0.38f, 1.0f));
+            frac > 1.0f   ? kDanger
+            : frac > 0.8f ? kAmber
+                          : kDim);
         ImGui::ProgressBar(frac > 1.0f ? 1.0f : frac, ImVec2(200.0f, 14.0f),
                            wbuf);
         ImGui::PopStyleColor();
     } else {
         ImGui::SameLine(winW - 180.0f);
-        ImGui::TextDisabled("%.1f кг", static_cast<double>(carriedG) / 1000.0);
+        ImGui::TextColored(kDim, "%.1f кг", static_cast<double>(carriedG) / 1000.0);
     }
     ImGui::Separator();
 
@@ -284,7 +297,7 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     const ImVec2 top = ImGui::GetCursorScreenPos();
     bool clickOther = false, clickOwn = false;
     if (twoSided) {
-        dl->AddText(ImVec2(top.x, top.y), st.focusOther ? kPhosphor : kPhosphorDim,
+        dl->AddText(ImVec2(top.x, top.y), st.focusOther ? kPhosphorU32 : kPhosphorDimU32,
                     other->title);
         draw_cells(dl, ImVec2(top.x, top.y + 18.0f), cell, other->slots,
                    other->count, &st.selOther, st.focusOther, &clickOther,
@@ -292,7 +305,7 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     }
     const ImVec2 g0(top.x + otherW, top.y + (twoSided ? 18.0f : 0.0f));
     if (twoSided)
-        dl->AddText(ImVec2(g0.x, top.y), st.focusOther ? kPhosphorDim : kPhosphor,
+        dl->AddText(ImVec2(g0.x, top.y), st.focusOther ? kPhosphorDimU32 : kPhosphorU32,
                     "СВОЁ");
     // ПКМ-клик по своей клетке = решение ПКМ-руки (зеркало рук, ниже).
     int rmbCell = -1;
@@ -344,141 +357,178 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     // --- Карточка выбранного АКТИВНОЙ стороны: всё из таблиц ----------------
     // Прижата к ВЕРХУ, рядом с сеткой — курсор ImGui после сетки стоит внизу,
     // и без явной постановки карточка липла к полу окна.
+    const float cardInnerW = cardW - pad;
     ImGui::SetCursorScreenPos(ImVec2(g0.x + gridW + pad, top.y));
     ImGui::BeginGroup();
     const ItemSlot& sel = st.focusOther ? other->slots[st.selOther]
                                         : inv.slots[st.sel];
     if (sel.item != kInvalidItem && sel.count > 0 && game::item_valid(sel.item)) {
         const game::ItemDef& d = game::item_def(sel.item);
-        ImGui::TextUnformatted(game::item_name(sel.item));
-        ImGui::TextDisabled("%u г | %d руб.%s", d.massG, d.value,
-                            d.stackMax > 1 ? " | стек" : "");
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cardInnerW);
+        ImGui::TextColored(kPhosphor, "%s", game::item_name(sel.item));
+        ImGui::TextColored(kDim, "%u г | %d руб.%s", d.massG, d.value,
+                           d.stackMax > 1 ? " | стек" : "");
         char combat[96];
         card_combat_line(sel.item, combat, sizeof combat);
         if (combat[0]) ImGui::TextUnformatted(combat);
         if (game::item_durability(sel.item) > 0)
-            ImGui::Text("состояние %u/255", sel.condition);
+            ImGui::TextColored(sel.condition < 64 ? kDanger : kDim,
+                               "состояние %u/255", sel.condition);
+        ImGui::PopTextWrapPos();
         ImGui::Spacing();
         const char* desc = game::item_desc(sel.item);
-        const bool isDoc =
-            d.category == static_cast<std::uint8_t>(game::ItemCategory::Note) ||
-            (desc && std::strchr(desc, '\n') != nullptr);
-        if (isDoc)
-            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f),
-                               "[ ДОКУМЕНТ / АРХИВНАЯ ЗАПИСЬ ]");
-        if (isDoc) ImGui::PushStyleColor(ImGuiCol_Border, kAmber);
-        ImGui::BeginChild("##itemdoc", ImVec2(cardW - pad, 178.0f), true);
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-        ImGui::TextUnformatted(desc ? desc : "");
+        const bool isNote =
+            d.category == static_cast<std::uint8_t>(game::ItemCategory::Note);
+        const bool isDoc = isNote || (desc && std::strchr(desc, '\n') != nullptr);
+        if (isDoc) {
+            ImGui::TextColored(kAmber, "%s",
+                               isNote ? "[АРХИВ // ЗАПИСКА]"
+                                      : "[АРХИВ // ПРОТОКОЛ]");
+        }
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, isDoc ? 2.0f : 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+        if (isDoc) {
+            ImGui::PushStyleColor(ImGuiCol_Border, kAmber);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg,
+                                  ImVec4(0.02f, 0.05f, 0.02f, 0.94f));
+        }
+        ImGui::BeginChild("##itemdoc",
+                          ImVec2(cardInnerW, isDoc ? 168.0f : 178.0f), true);
+        // 0.0f оборачивает ровно по внутреннему краю окна-ребёнка (с учётом
+        // отступов и полосы прокрутки, не сдвигаясь на WindowPadding.x).
+        ImGui::PushTextWrapPos(0.0f);
+        if (desc && desc[0]) {
+            const char* nl = isDoc ? std::strchr(desc, '\n') : nullptr;
+            if (nl) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kPhosphor);
+                ImGui::TextUnformatted(desc, nl);
+                ImGui::PopStyleColor();
+                ImGui::Separator();
+                const char* body = nl + 1;
+                while (*body == '\n' || *body == '\r') ++body;
+                if (*body) ImGui::TextUnformatted(body);
+            } else {
+                if (isDoc) ImGui::PushStyleColor(ImGuiCol_Text, kPhosphor);
+                ImGui::TextUnformatted(desc);
+                if (isDoc) ImGui::PopStyleColor();
+            }
+        }
         ImGui::PopTextWrapPos();
         ImGui::EndChild();
-        if (isDoc) ImGui::PopStyleColor();
+        if (isDoc) ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
         ImGui::Spacing();
 
         // Действия — ЗАЯВКИ ([inventory.md]): кнопка и её горячая клавиша
         // пишут одинаковый req, применяет app на сим-клоке. У чужой стороны
         // действие одно — взять; свои действия живут только на своей сетке.
+        const float rowLeftX = ImGui::GetCursorScreenPos().x;
+        const float rowRightX = rowLeftX + cardInnerW;
+        bool rowHasBtn = false;
+        auto place_btn = [&](const char* label) -> bool {
+            const float btnW = ImGui::CalcTextSize(label, nullptr, true).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
+            if (rowHasBtn) {
+                const float nextX =
+                    ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x;
+                if (nextX + btnW <= rowRightX) ImGui::SameLine();
+            }
+            rowHasBtn = true;
+            return ImGui::Button(label);
+        };
+
         if (policy.deal) {
             // Одна кнопка на обе стороны: слот либо в оффере, либо нет.
             const bool marked = st.focusOther
                                     ? ((policy.otherMarks >> st.selOther) & 1u)
                                     : ((policy.ownMarks >> st.sel) & 1u);
-            if (ImGui::Button(marked ? "Снять метку [Enter]"
-                                     : "В сделку [Enter]"))
+            if (place_btn(marked ? "Снять метку [Enter]" : "В сделку [Enter]"))
                 req = {st.focusOther ? InvUiRequest::Kind::MarkOther
                                      : InvUiRequest::Kind::MarkOwn,
                        static_cast<std::uint8_t>(st.focusOther ? st.selOther
                                                                : st.sel),
                        EquipSlot::None};
-            ImGui::NewLine();
         } else if (st.focusOther) {
-            if (ImGui::Button("Взять [Enter]"))
+            if (place_btn("Взять [Enter]"))
                 req = {InvUiRequest::Kind::Take,
                        static_cast<std::uint8_t>(st.selOther), EquipSlot::None};
-            ImGui::NewLine();
         } else {
-        const std::uint8_t slot8 = static_cast<std::uint8_t>(st.sel);
-        const EquipSlot es = static_cast<EquipSlot>(d.equipSlot);
-        const bool wearable = es != EquipSlot::None;
-        if (policy.allowEquip && wearable) {
-            if (game::hand_accepts(es)) {
-                // ДВЕ РУКИ (two-hands.md): E — решение ЛКМ-руки; Q ИЛИ
-                // ПКМ-клик по клетке — решение ПКМ-руки (симметрия E/Q —
-                // владелец 2026-08-31).
-                const bool inL = eq && eq->handL == st.sel;
-                const bool inR = eq && eq->handR == st.sel;
-                if (inL) {
-                    if (ImGui::Button("Снять ЛКМ [E]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_E, false))
-                        req = {InvUiRequest::Kind::Unequip, slot8,
-                               EquipSlot::Weapon};
+            const std::uint8_t slot8 = static_cast<std::uint8_t>(st.sel);
+            const EquipSlot es = static_cast<EquipSlot>(d.equipSlot);
+            const bool wearable = es != EquipSlot::None;
+            if (policy.allowEquip && wearable) {
+                if (game::hand_accepts(es)) {
+                    // ДВЕ РУКИ (two-hands.md): E — решение ЛКМ-руки; Q ИЛИ
+                    // ПКМ-клик по клетке — решение ПКМ-руки (симметрия E/Q —
+                    // владелец 2026-08-31).
+                    const bool inL = eq && eq->handL == st.sel;
+                    const bool inR = eq && eq->handR == st.sel;
+                    if (inL) {
+                        if (place_btn("Снять ЛКМ [E]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_E, false))
+                            req = {InvUiRequest::Kind::Unequip, slot8,
+                                   EquipSlot::Weapon};
+                    } else {
+                        if (place_btn("В ЛКМ-руку [E]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_E, false))
+                            req = {InvUiRequest::Kind::Equip, slot8,
+                                   EquipSlot::Weapon};
+                    }
+                    if (inR) {
+                        if (place_btn("Снять ПКМ [Q]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                            req = {InvUiRequest::Kind::Unequip, slot8,
+                                   EquipSlot::Tool};
+                    } else {
+                        if (place_btn("В ПКМ-руку [Q]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                            req = {InvUiRequest::Kind::Equip, slot8,
+                                   EquipSlot::Tool};
+                    }
                 } else {
-                    if (ImGui::Button("В ЛКМ-руку [E]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_E, false))
-                        req = {InvUiRequest::Kind::Equip, slot8,
-                               EquipSlot::Weapon};
-                }
-                ImGui::SameLine();
-                if (inR) {
-                    if (ImGui::Button("Снять ПКМ [Q]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_Q, false))
-                        req = {InvUiRequest::Kind::Unequip, slot8,
-                               EquipSlot::Tool};
-                } else {
-                    if (ImGui::Button("В ПКМ-руку [Q]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_Q, false))
-                        req = {InvUiRequest::Kind::Equip, slot8,
-                               EquipSlot::Tool};
-                }
-            } else {
-                const bool decidedHere = eq && eq->armor == st.sel;
-                if (decidedHere) {
-                    if (ImGui::Button("Снять [E]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_E, false))
-                        req = {InvUiRequest::Kind::Unequip, slot8, es};
-                } else {
-                    if (ImGui::Button("Экипировать [E]") ||
-                        ImGui::IsKeyPressed(ImGuiKey_E, false))
-                        req = {InvUiRequest::Kind::Equip, slot8, es};
+                    const bool decidedHere = eq && eq->armor == st.sel;
+                    if (decidedHere) {
+                        if (place_btn("Снять [E]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_E, false))
+                            req = {InvUiRequest::Kind::Unequip, slot8, es};
+                    } else {
+                        if (place_btn("Экипировать [E]") ||
+                            ImGui::IsKeyPressed(ImGuiKey_E, false))
+                            req = {InvUiRequest::Kind::Equip, slot8, es};
+                    }
                 }
             }
-            ImGui::SameLine();
-        }
-        // Кнопка доступна для предметов с глаголом утоления ИЛИ медицины Heal.
-        const bool canUseItem =
-            game::serve_item_verb(sel.item) < game::kVerbCount ||
-            game::item_def(sel.item).useEffect ==
-                static_cast<std::uint8_t>(game::UseEffect::Heal);
-        if (policy.allowUse && canUseItem) {
-            if (ImGui::Button("Использовать [U]") ||
-                ImGui::IsKeyPressed(ImGuiKey_U, false))
-                req = {InvUiRequest::Kind::Use, slot8, EquipSlot::None};
-            ImGui::SameLine();
-        }
-        if (policy.allowDrop) {
-            if (ImGui::Button("Бросить [G]") ||
-                ImGui::IsKeyPressed(ImGuiKey_G, false))
-                req = {InvUiRequest::Kind::Drop, slot8, EquipSlot::None};
-        }
-        if (policy.allowRepair && game::item_durability(sel.item) > 0 &&
-            sel.condition < 255) {
-            ImGui::SameLine();
-            // Цену и станцию судит примитив ([craft.h] craft_repair_item) —
-            // кнопка лишь заявка, отказ придёт словами craft_fail_text.
-            if (ImGui::Button("Починить [R]") ||
-                ImGui::IsKeyPressed(ImGuiKey_R, false))
-                req = {InvUiRequest::Kind::Repair, slot8, EquipSlot::None};
-        }
-        // Двухсторонний экран: своё можно ПОЛОЖИТЬ на ту сторону.
-        if (twoSided) {
-            ImGui::SameLine();
-            if (ImGui::Button("Положить [Enter]"))
-                req = {InvUiRequest::Kind::Give, slot8, EquipSlot::None};
-        }
-        ImGui::NewLine();
+            // Кнопка доступна для предметов с глаголом утоления ИЛИ медицины Heal.
+            const bool canUseItem =
+                game::serve_item_verb(sel.item) < game::kVerbCount ||
+                game::item_def(sel.item).useEffect ==
+                    static_cast<std::uint8_t>(game::UseEffect::Heal);
+            if (policy.allowUse && canUseItem) {
+                if (place_btn("Использовать [U]") ||
+                    ImGui::IsKeyPressed(ImGuiKey_U, false))
+                    req = {InvUiRequest::Kind::Use, slot8, EquipSlot::None};
+            }
+            if (policy.allowDrop) {
+                if (place_btn("Бросить [G]") ||
+                    ImGui::IsKeyPressed(ImGuiKey_G, false))
+                    req = {InvUiRequest::Kind::Drop, slot8, EquipSlot::None};
+            }
+            if (policy.allowRepair && game::item_durability(sel.item) > 0 &&
+                sel.condition < 255) {
+                // Цену и станцию судит примитив ([craft.h] craft_repair_item) —
+                // кнопка лишь заявка, отказ придёт словами craft_fail_text.
+                if (place_btn("Починить [R]") ||
+                    ImGui::IsKeyPressed(ImGuiKey_R, false))
+                    req = {InvUiRequest::Kind::Repair, slot8, EquipSlot::None};
+            }
+            // Двухсторонний экран: своё можно ПОЛОЖИТЬ на ту сторону.
+            if (twoSided) {
+                if (place_btn("Положить [Enter]"))
+                    req = {InvUiRequest::Kind::Give, slot8, EquipSlot::None};
+            }
         }
     } else {
-        ImGui::TextDisabled("пустая ячейка");
+        ImGui::TextColored(kDim, "пустая ячейка");
     }
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(g0.x, g0.y + cell * kInvCols + 6.0f));
@@ -486,21 +536,19 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         // Баланс сделки — строку даёт app (цены считает game-слой, [barter.h]);
         // амбер = подписуемо, тускло = чего-то не хватает (строка говорит чего).
         if (policy.dealLine) {
-            if (policy.dealOk)
-                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f), "%s",
-                                   policy.dealLine);
-            else
-                ImGui::TextDisabled("%s", policy.dealLine);
+            ImGui::TextColored(policy.dealOk ? kAmber : kDim, "%s",
+                               policy.dealLine);
         }
-        ImGui::TextDisabled(
-            "Enter метка | Tab сторона | T СДЕЛКА | Esc закрыть");
+        ImGui::TextColored(
+            kDim, "Enter метка | Tab сторона | T СДЕЛКА | Esc закрыть");
     } else if (twoSided)
-        ImGui::TextDisabled(
-            "Enter взять/положить | Tab сторона | T всё | I/Esc закрыть");
+        ImGui::TextColored(
+            kDim, "Enter взять/положить | Tab сторона | T всё | I/Esc закрыть");
     else
-        ImGui::TextDisabled("I/Esc закрыть");
+        ImGui::TextColored(kDim, "I/Esc закрыть");
 
     ImGui::End();
+    ImGui::PopStyleVar(4);
     return req;
 }
 

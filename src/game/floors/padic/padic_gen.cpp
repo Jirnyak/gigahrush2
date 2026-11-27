@@ -707,7 +707,8 @@ std::uint32_t padic_doorways(int number, unsigned seed,
     return n;
 }
 
-std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
+std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out,
+                          const FloorSpec* spec) {
     // Тот же приём, что padic_doorways: план — чистая функция (seed, number),
     // объявление перештамповывается на каждом входе (generate И restore, закон
     // масок S18), порядок обхода детерминирован — он и есть источник
@@ -757,7 +758,10 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out) {
                               static_cast<std::uint8_t>(sx),
                               static_cast<std::uint8_t>(sy),
                               static_cast<std::uint8_t>(kStorey)};
-            if (room_declare(out, &box, 1, tags[pr.leaf], /*owner=*/0,
+            const std::uint16_t tag = tags[pr.leaf];
+            const std::uint16_t owner =
+                floor_room_owner(spec, seed, number, n, tag);
+            if (room_declare(out, &box, 1, tag, owner,
                              declared[pr.leaf]) != kNoRoom)
                 ++n;
         }

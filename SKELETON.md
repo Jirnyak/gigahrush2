@@ -729,7 +729,7 @@ grep -rn 'supply_prop_at' src/ | grep -v room_supply  → 3   (prop_system.cpp �
 | единственный писатель | `guide_step@src/game/guide.h`, в кадре после `wander_step@src/game/wander.h` и перед `slow_step` — слот `kProfGuide@src/app/main.cpp` | **ПРАВДА** |
 | вид цели — три, и только три | `TargetKind@src/game/guide.h`: `Hold`/`Zone`/`Dir` (+ `None` = заявки нет) | **ПРАВДА** (довод о четырёх видах S13.3 — в CANON S25.3) |
 | заявка — компонента на ОДИН тик | `Steer@src/game/guide.h`, 28 Б, пин `GIGA_ROW_BYTES`; тик полем, сбросного прохода нет | **ПРАВДА** |
-| дом скорости ходьбы | `kWalkSpeedMps@src/game/guide.h` = 1.35 м/с, паника — МНОЖИТЕЛЬ `kPanicPace@src/game/guide.h`; заявители читают их (`src/game/wander.cpp:551 «        float speed = kWalkSpeedMps;»`) | **ЧАСТИЧНО, и это надо назвать точно.** Дом объявлен, но литерал 1.35 в дереве остался ещё ЧЕТЫРЕ раза: `kFleeSpeed@src/game/ai.h`, `kErrandSpeed@src/game/ai.h`, `kFeudWalkSpeed@src/game/faction_relations.cpp`, `kWanderLegMetres@src/game/wander.h` (и производное `kPatrolLegMetres@src/game/patrol.h`). Первые два прибиты к дому гейтом (`tests/suite_utilai.inl:548 «        CHECK(kFleeSpeed == kWalkSpeedMps * kPanicPace);»`), остальные НЕ прибиты ничем. Шапка `guide_step@src/game/guide.h` называет дом «единственным объявлением в дереве» — это преждевременно |
+| дом скорости ходьбы | `kWalkSpeedMps@src/game/guide.h` = 1.35 м/с, паника — МНОЖИТЕЛЬ `kPanicPace@src/game/guide.h`; заявители читают их (`src/game/wander.cpp:551 «        float speed = kWalkSpeedMps;»`) | **ЧАСТИЧНО, и это надо назвать точно.** Дом объявлен, но литерал 1.35 в дереве остался ещё ЧЕТЫРЕ раза: `kFleeSpeed@src/game/ai.h`, `kErrandSpeed@src/game/ai.h`, `kFeudWalkSpeed@src/game/faction_relations.cpp`, `kWanderLegMetres@src/game/wander.h` (и производное `kPatrolLegMetres@src/game/patrol.h`). Первые два прибиты к дому гейтом (`tests/suite_utilai.inl:549 «        CHECK(kFleeSpeed == kWalkSpeedMps * kPanicPace);»`), остальные НЕ прибиты ничем. Шапка `guide_step@src/game/guide.h` называет дом «единственным объявлением в дереве» — это преждевременно |
 
 ### ЗАЯВИТЕЛИ И ИХ РАНГИ — ПО АДРЕСУ ЗАЯВКИ, А НЕ ПО ПОРЯДКУ ВЫЗОВОВ
 
@@ -738,8 +738,8 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 
 | ранг | кто заявляет | вид цели | адрес заявки |
 |---|---|---|---|
-| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:904 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
-| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1113 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
+| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:967 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
+| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1176 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
 | `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:821 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:523 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
 | `Chase` | погоня моба за жертвой | `Dir` / `Hold` в досягаемости | `src/game/wander.cpp:419 «                                target_dir(steer_tangent(gf, tx, ty, 0.0f), sp));»` |
 | `Walk` | прогулка + заморозка взглядом | `Zone` / `Hold` | `src/game/wander.cpp:565 «                    target_zone(wt.zone, speed));»` и `src/game/wander.cpp:438 «            steer_claim(reg, e, tick, SteerRank::Walk, target_hold());»` |
@@ -824,7 +824,7 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 
 | что | мера | следствие |
 |---|---|---|
-| `rhythm` (суточный ритм, S24) | `src/game/ai.cpp:214 «        return rhythm_bias(intent, p.minuteOfDay);»`; часы `watch_minute_of_day@src/game/ai.h` | суточный ритм жив при передаче `AiEnv` из `src/app/main.cpp` (по умолчанию без часов `minuteOfDay = -1` даёт 0 для изоляции тестов) |
+| `rhythm` (суточный ритм, S24) | `src/game/ai.cpp:256 «        return rhythm_bias(intent, p.minuteOfDay);»`; часы `watch_minute_of_day@src/game/ai.h` | суточный ритм жив при передаче `AiEnv` из `src/app/main.cpp` (по умолчанию без часов `minuteOfDay = -1` даёт 0 для изоляции тестов) |
 | `p.armed` | `grep -rn '\.armed' src/` → 3: два чтения в формулах + объявление `bool armed = false`. **Писателя нет** | `IntentCombat` стартует с **−16** для всей толпы, хотя `ai_equip_step@src/game/ai.h` выдаёт телам оружие. Поле не связано с `Equipped` ни одной строкой |
 | `p.factionAssaultTarget` | писателя нет | `IntentFactionAssault` не может выиграть argmax **никогда** |
 
@@ -893,7 +893,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 | что | адрес | статус |
 |---|---|---|
 | три резерва + два давления + две очереди + два банка | `Needs@src/game/npc_pool.h` | **ПРАВДА** |
-| хранятся КОЛОНКОЙ пула, не компонентой ECS | `src/game/npc_pool.h:573 «    Needs&         needs(NpcId id)     { return needs_[id]; }»` | **ПРАВДА** |
+| хранятся КОЛОНКОЙ пула, не компонентой ECS | `src/game/npc_pool.h:575 «    Needs&         needs(NpcId id)     { return needs_[id]; }»` | **ПРАВДА** |
 | размер прибит | `static_assert(sizeof(Needs) == 40` в `src/game/npc_pool.h` | **ПРАВДА** |
 | тикает один проход, без аллокаций, без ветки «игрок» | `needs_step@src/game/needs.h`; род определяется компонентой `CameraTag`, а не флагом | **ПРАВДА** (CANON S7) |
 | провод сейва выведен, паддинг не едет | `kNeedsWire@src/game/save.h` | **ПРАВДА** |
@@ -923,7 +923,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 |---|---|---|
 | дверь O(1)-запроса навигации | `zone_walk_dir@src/game/zone_nav.h` — два чтения: таблица даёт соседку, плоскость соседки даёт направление | **ПРАВДА** |
 | вызовов `zone_walk_dir` в проде | **1 с 2026-11-09**: `src/game/guide.cpp:53 «        zone_walk_dir(zones, from, target, cx, cy, cz, gf.pull ? gf.axis : -1);»` — внутри `steer_to_zone@src/game/guide.h`. ~~**3, и все три — проходы ходьбы**: дело, наряд, прогулка~~ Три ПОБАЙТОВО одинаковых копии «куда шагнуть к зоне» по 30 строк слиты в эту одну дверь (CANON S25) | — |
-| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:755 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1064 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
+| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:755 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1127 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
 | второй и третьей двери НЕТ | `route_step` снесён вместе с `CoarseGraph`/`FineNav` и ручной композицией двух ярусов в `src/game/ai.cpp`/`src/game/wander.cpp`; реализация решёточного бейка (nav-cpp в src/world) УДАЛЕНА целиком, в `src/world/nav.h` остался только словарь шести направлений `kNavDir@src/world/nav.h` | — |
 
 **ЧЕМ ЭТО КОНЧИЛОСЬ, ЧИСЛОМ.** Прежняя дверь отвечала «шаг к ближайшему ЯКОРЮ

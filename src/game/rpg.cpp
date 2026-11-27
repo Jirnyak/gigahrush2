@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "core/rng.h"
+#include "game/verb_table.h"
 
 namespace giga::game {
 namespace {
@@ -235,8 +236,10 @@ std::int16_t melee_damage(const RpgStats& r, ItemId weaponId,
         // entirely — the reference's `Math.max(1, Math.floor(rpg.level))`.
         base = r.level < 1 ? 1 : static_cast<int>(r.level);
     }
+    const std::uint16_t capE3 = capability_e3(&r, kVerbStrike);
     const float scaled = static_cast<float>(base) *
-                         (static_cast<float>(str_melee_dmg_mult_e3(r)) / 1000.0f);
+                         (static_cast<float>(str_melee_dmg_mult_e3(r)) / 1000.0f) *
+                         (static_cast<float>(capE3) / 1000.0f);
     const int out = static_cast<int>(scaled + 0.5f);
     return static_cast<std::int16_t>(out > 32767 ? 32767 : (out < 0 ? 0 : out));
 }
@@ -322,6 +325,16 @@ bool spend_attr_point(RpgStats& r, Attr a, std::int16_t* hp, std::int16_t* maxHp
         r.psi = static_cast<std::uint16_t>(raised > newMax ? newMax : raised);
     }
     return true;
+}
+
+std::uint16_t capability_e3(const RpgStats* stats, std::uint8_t verbId) noexcept {
+    (void)stats;
+    if (verbId >= kVerbCount) return 1000u;
+    return 1000u;
+}
+
+float capability(const RpgStats* stats, std::uint8_t verbId) noexcept {
+    return static_cast<float>(capability_e3(stats, verbId)) / 1000.0f;
 }
 
 } // namespace giga::game

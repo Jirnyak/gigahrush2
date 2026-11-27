@@ -67,11 +67,8 @@ static void conversation_menu_is_the_sorted_table() {
     CHECK(conv_options(c, two, 2) == 2);
 }
 
-// Строка `quest` — ЗАГЛУШКА, и это пин того, что она ею осталась. Раньше здесь
-// стоял тест маркера «ЗАДАНИЕ !» по живым заказчикам `ContractBook` (сравнение
-// ПО ХЭНДЛУ, чтобы переиспользованный слот пула не наследовал работу покойника);
-// система контрактов снесена 2026-11-08, и у опции больше нет источника правды.
-// Остаётся ровно одно наблюдаемое поведение: ярлык без восклицания и отказ.
+// Базовый нейтральный случай: неинициализированный жилец без дефицита
+// не выставляет маркер «!» и честно отвечает, что лишней работы нет.
 static void conversation_quest_option_is_a_stub() {
     using namespace conversation_detail;
     ConvFixture f;
@@ -84,6 +81,129 @@ static void conversation_quest_option_is_a_stub() {
     const ConvAction a = conv_activate(c, "quest");
     CHECK(a.kind == ConvActionKind::Line);
     CHECK(a.line != nullptr && std::strstr(a.line, "нет") != nullptr);
+}
+
+// Живое состояние собеседника: ранение без медицины, жажда без воды, ствол
+// без патронов, различие фракций и безопасная реакция на мёртвого партнёра.
+static void conversation_quest_reflects_live_state() {
+    using namespace conversation_detail;
+
+    // 1. Ранение ниже 50% без лечения поднимает «ЗАДАНИЕ !», а выдача медицины снимает.
+    {
+        ConvFixture f;
+        f.pool.max_hp(f.npc) = 100;
+        f.pool.hp(f.npc) = 30;
+        ConvContext c = f.ctx();
+
+        ConvOption opts[kConvMaxOptions];
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ !") == 0);
+        const ConvAction a = conv_activate(c, "quest");
+        CHECK(a.kind == ConvActionKind::Line);
+        CHECK(a.line != nullptr && std::strstr(a.line, "торг") != nullptr);
+
+        ItemId healItem = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i) {
+            if (item_def(i).useEffect == static_cast<std::uint8_t>(UseEffect::Heal)) {
+                healItem = i;
+                break;
+            }
+        }
+        CHECK(healItem != kInvalidItem);
+        CHECK(inventory_give(f.pool.inventory(f.npc), healItem, 1) == 0);
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ") == 0);
+    }
+
+    // 2. Засеянная жажда без питья поднимает «ЗАДАНИЕ !», выдача воды закрывает запрос.
+    {
+        ConvFixture f;
+        f.pool.max_hp(f.npc) = 100;
+        f.pool.hp(f.npc) = 100;
+        Needs& nd = f.pool.needs(f.npc);
+        nd.seeded = 1;
+        nd.food = 80.0f;
+        nd.water = 2.0f;
+        nd.sleep = 80.0f;
+        ConvContext c = f.ctx();
+
+        ConvOption opts[kConvMaxOptions];
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ !") == 0);
+        const ConvAction a = conv_activate(c, "quest");
+        CHECK(a.kind == ConvActionKind::Line && a.line != nullptr);
+        CHECK(std::strstr(a.line, "вод") != nullptr ||
+              std::strstr(a.line, "Вод") != nullptr ||
+              std::strstr(a.line, "фляг") != nullptr ||
+              std::strstr(a.line, "Фляг") != nullptr);
+
+        ItemId drinkItem = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i) {
+            if (item_hydrates(i)) { drinkItem = i; break; }
+        }
+        CHECK(drinkItem != kInvalidItem);
+        CHECK(inventory_give(f.pool.inventory(f.npc), drinkItem, 1) == 0);
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ") == 0);
+    }
+
+    // 3. Огнестрел без подходящего боеприпаса поднимает «ЗАДАНИЕ !», выдача патронов снимает.
+    {
+        ConvFixture f;
+        f.pool.max_hp(f.npc) = 100;
+        f.pool.hp(f.npc) = 100;
+        ItemId gunItem = kInvalidItem;
+        ItemId ammoItem = kInvalidItem;
+        for (ItemId i = 1; i <= kItemCount; ++i) {
+            const RangedDef* rd = ranged_for_item(i);
+            if (rd && !ranged_is_thrown(i) && rd->ammo != kInvalidItem) {
+                gunItem = i;
+                ammoItem = rd->ammo;
+                break;
+            }
+        }
+        CHECK(gunItem != kInvalidItem);
+        CHECK(inventory_give(f.pool.inventory(f.npc), gunItem, 1) == 0);
+        ConvContext c = f.ctx();
+
+        ConvOption opts[kConvMaxOptions];
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ !") == 0);
+        const ConvAction a = conv_activate(c, "quest");
+        CHECK(a.kind == ConvActionKind::Line && a.line != nullptr);
+        CHECK(std::strstr(a.line, "патрон") != nullptr ||
+              std::strstr(a.line, "боеприпас") != nullptr);
+
+        CHECK(inventory_give(f.pool.inventory(f.npc), ammoItem, 1) == 0);
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ") == 0);
+    }
+
+    // 4. Разные фракции дают осмысленно разные ответы; мёртвый собеседник не падает.
+    {
+        ConvFixture f;
+        f.pool.max_hp(f.npc) = 100;
+        f.pool.hp(f.npc) = 100;
+        ConvContext c = f.ctx();
+
+        f.pool.faction(f.npc) = static_cast<std::uint16_t>(Faction::Liquidators);
+        const ConvAction liq = conv_activate(c, "quest");
+        f.pool.faction(f.npc) = static_cast<std::uint16_t>(Faction::Wild);
+        const ConvAction wild = conv_activate(c, "quest");
+        CHECK(liq.kind == ConvActionKind::Line && liq.line != nullptr &&
+              liq.line[0] != '\0');
+        CHECK(wild.kind == ConvActionKind::Line && wild.line != nullptr &&
+              wild.line[0] != '\0');
+        CHECK(std::strcmp(liq.line, wild.line) != 0);
+
+        f.pool.kill(f.npc);
+        ConvOption opts[kConvMaxOptions];
+        conv_options(c, opts, kConvMaxOptions);
+        CHECK(std::strcmp(opts[1].label, "ЗАДАНИЕ") == 0);
+        const ConvAction dead = conv_activate(c, "quest");
+        CHECK(dead.kind == ConvActionKind::Line && dead.line != nullptr &&
+              dead.line[0] != '\0');
+    }
 }
 
 static void conversation_activation_routes() {
@@ -157,9 +277,10 @@ static void test_conversation_all() {
     conversation_teller_is_at_every_partner();
     conversation_menu_is_the_sorted_table();
     conversation_quest_option_is_a_stub();
+    conversation_quest_reflects_live_state();
     conversation_activation_routes();
     conversation_party_holds_gates_the_games();
     std::fprintf(stderr,
-                 "[conversation] menu projects the table, quest row is a stub, "
-                 "routes route, the games' item gate sees both bags\n");
+                 "[conversation] menu projects the table, quest reflects live "
+                 "partner state, routes route, the games' item gate sees both bags\n");
 }

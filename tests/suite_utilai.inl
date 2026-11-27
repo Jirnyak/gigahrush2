@@ -103,6 +103,7 @@
 #include "game/faction_relations.h" // FactionRelations, faction_feud_step (U1.8)
 #include "game/guide.h"   // Steer/SteerRank/guide_step — ЗАЯВКА и ЕДИНСТВЕННЫЙ писатель
 #include "game/needs.h"   // needs_roll — NOT reachable from game_test.cpp's prelude
+#include "game/room.h"    // FloorRooms, room_declare, kRoomTagHermetic
 #include "game/wander.h"  // wander_init / wander_step / kWanderPeriod
 #include "sim/diffusion.h"
 #include "world/field.h"
@@ -2372,6 +2373,136 @@ static void test_utilai_all() {
                 combatHits += faction_feud_step(reg, pool, base, kLayer, t);
             CHECK(combatHits > 0u);
             CHECK(pool.hp(wldId) < 100);
+        }
+    }
+
+    // ======================================================================
+    // 17. Perception threat power (strongerHostile) + AiEnv::rooms (inShelter).
+    // ======================================================================
+    {
+        ItemId anyGun = kInvalidItem;
+        ItemId anyMelee = kInvalidItem;
+        for (ItemId it = 1; it <= kItemCount; ++it) {
+            if (anyGun == kInvalidItem && ranged_for_item(it) != nullptr &&
+                !ranged_is_thrown(it))
+                anyGun = it;
+            if (anyMelee == kInvalidItem && melee_for_item(it) != nullptr)
+                anyMelee = it;
+        }
+        CHECK(anyGun != kInvalidItem);
+        CHECK(anyMelee != kInvalidItem);
+
+        MacroGrid grid;
+        Field<float> danger(0.0f);
+        const FactionRelations base = kBaseFactionMatrix;
+
+        // 17a: Unarmed Liquidator vs unarmed Wild at 4 m -> IntentPatrol (equal odds).
+        // Arming Wild flips hostilePower > allyPower * 1.25f -> strongerHostile -> IntentFlee.
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId liqId = 0, wldId = 0;
+            Entity liq = make_body(reg, pool, 30, 30, 1, Faction::Liquidators, liqId);
+            Entity wld = make_body(reg, pool, 32, 30, 1, Faction::Wild, wldId); // 4 m away
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.hysteresis = false;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentPatrol);
+
+            // Armed foe against unarmed self -> strongerHostile -> IntentFlee.
+            pool.inventory(wldId).slots[0] = ItemSlot{anyGun, 1};
+            ai_step(reg, pool, &danger, grid, kLayer, 1.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 2, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentFlee);
+
+            // Senses path + wounded melee self vs healthy gun foe -> strongerHostile -> IntentFlee.
+            pool.hp(liqId) = 60;
+            pool.inventory(liqId).slots[0] = ItemSlot{anyMelee, 1};
+            reg.emplace<Senses>(liq, Senses{wld, 4.0f, 1u, 0u, 2u});
+            ai_step(reg, pool, &danger, grid, kLayer, 2.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 3, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentFlee);
+
+            // Dead Senses::foe is ignored safely without treating corpse as stronger hostile.
+            reg.emplace<Dead>(wld, Dead{liq, 0});
+            pool.hp(liqId) = 100;
+            reg.get<Senses>(liq).visible = 0u;
+            reg.get<Senses>(liq).foeDist = -1.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 3.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 4, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentPatrol);
+        }
+
+        // 17b: AiEnv::rooms -> Perception::inShelter inside kRoomTagHermetic.
+        {
+            CHECK(AiEnv{}.rooms == nullptr);
+            FloorRooms fr;
+            rooms_reset(fr);
+            const RoomBox hermBox{10, 10, 1, 4, 4, 2};
+            const RoomBox plainBox{20, 10, 1, 4, 4, 2};
+            const RoomId hermId =
+                room_declare(fr, &hermBox, 1, kRoomTagHermetic, 0, nullptr);
+            const RoomId plainId =
+                room_declare(fr, &plainBox, 1, 0u, 0, nullptr);
+            CHECK(hermId != kNoRoom);
+            CHECK(plainId != kNoRoom);
+
+            AiEnv env;
+            env.rooms = &fr;
+            CHECK(env.rooms == &fr);
+
+            Needs calm{};
+            calm.food = kNeedMax;
+            calm.water = kNeedMax;
+            calm.sleep = kNeedMax;
+            calm.seeded = 1;
+
+            // Direct scorer proof: inShelter lowers threat pressure -> IntentSafety & IntentFlee drop.
+            Perception pOut = calm_citizen(77u);
+            pOut.samosborWarning = true;
+            pOut.fog = 0.35f;
+            Perception pIn = pOut;
+            pIn.inShelter = true;
+            float sOut[kIntentCount]{}, sIn[kIntentCount]{};
+            score_intents(pOut, calm, sOut);
+            score_intents(pIn, calm, sIn);
+            CHECK(sIn[IntentSafety] < sOut[IntentSafety]);
+            CHECK(sIn[IntentFlee] < sOut[IntentFlee]);
+
+            // End-to-end through ai_step at danger=0.20f:
+            // outside/plain room -> threat 0.20 -> IntentFlee;
+            // inside kRoomTagHermetic -> inShelter reduces threat to 0.02 -> IntentWork.
+            danger.fill(0.20f);
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId idHerm = 0, idPlain = 0, idCorr = 0;
+            Entity eHerm = make_body(reg, pool, 11, 11, 1, Faction::Citizens, idHerm);
+            Entity ePlain = make_body(reg, pool, 21, 11, 1, Faction::Citizens, idPlain);
+            Entity eCorr = make_body(reg, pool, 31, 11, 1, Faction::Citizens, idCorr);
+            pool.needs(idHerm) = calm;
+            pool.needs(idPlain) = calm;
+            pool.needs(idCorr) = calm;
+            CHECK(ai_init(reg, kLayer) == 3u);
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.hysteresis = false;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, env);
+            CHECK(reg.get<AiBrain>(eHerm).currentIntent == IntentWork);
+            CHECK(reg.get<AiBrain>(ePlain).currentIntent == IntentFlee);
+            CHECK(reg.get<AiBrain>(eCorr).currentIntent == IntentFlee);
         }
     }
 }

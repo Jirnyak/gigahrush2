@@ -857,7 +857,8 @@ void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
     (void)spec.population; // geometry ignores population; the seeder consumes it
 }
 
-std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out) {
+std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out,
+                            const FloorSpec* spec) {
     // Комнаты модуля (rooms-object C): фиксированная раскладка квартиры
     // stamp_section_flats, город из build_city_plan — обе чистые функции
     // (seed, number), объявление перештамповывается на каждом входе.
@@ -951,7 +952,9 @@ std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out) {
                             static_cast<std::uint8_t>(x1 - x0 + 1),
                             static_cast<std::uint8_t>(y1 - y0 + 1),
                             static_cast<std::uint8_t>(r1 - r0 + 1)};
-                        if (room_declare(out, &box, 1, /*tags=*/0, /*owner=*/0,
+                        const std::uint16_t owner =
+                            floor_room_owner(spec, seed, number, n, /*tags=*/0);
+                        if (room_declare(out, &box, 1, /*tags=*/0, owner,
                                          declared[fr.role]) != kNoRoom)
                             ++n;
                     }

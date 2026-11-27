@@ -100,7 +100,8 @@ static_assert(kKhrushiGroundCoord == kFloorArrivalCoord,
 // to the one registered geometry module. A new floor look = a new module folder
 // under src/game/floors/<name>/ + its row here, never a branch.
 using FloorGeneratorFunc = void (*)(World&, int, const FloorSpec&, unsigned);
-using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&);
+using FloorRoomsFunc = std::uint32_t (*)(int, unsigned, FloorRooms&,
+                                         const FloorSpec*);
 using FloorDoorwaysFunc = std::uint32_t (*)(int, unsigned, std::vector<Doorway>&);
 using AntourageExtraFunc = void (*)(const World&, int, unsigned, AntourageBake&);
 using FloorPlaceFunc = std::uint32_t (*)(const FloorPlaceCtx&);
@@ -360,16 +361,39 @@ void generate_floor(World& world, int number, const FloorSpec& spec,
     stamp_lift_pillars(world, number, spec, seed);
 }
 
+std::uint16_t floor_room_owner(const FloorSpec* spec, unsigned seed, int number,
+                               std::uint32_t roomIdx, std::uint16_t tags) {
+    if (spec == nullptr || (tags & kRoomTagHermetic) != 0) return 0;
+    std::uint32_t totalWeight = 0;
+    for (std::size_t f = 0; f < kFactionCount; ++f)
+        totalWeight += spec->factionMix[f];
+    if (totalWeight == 0) return 0;
+    const std::uint32_t h = hash_u32(
+        static_cast<std::uint32_t>(seed) ^
+        (roomIdx * 0x9E3779B9u) ^
+        (static_cast<std::uint32_t>(number) * 0x85EBCA6Bu) ^
+        0x4F574E52u);
+    std::uint32_t pick = h % totalWeight;
+    for (std::size_t f = 0; f < kFactionCount; ++f) {
+        const std::uint32_t w = spec->factionMix[f];
+        if (w == 0) continue;
+        if (pick < w) return static_cast<std::uint16_t>(f + 1u);
+        pick -= w;
+    }
+    return 0;
+}
+
 void rooms_build(FloorRooms& rooms, int number, const FloorSpec& spec,
                  unsigned seed) {
     rooms_reset(rooms);
-    (void)kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms);
+    (void)kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms, &spec);
 }
 
 void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
                    unsigned seed) {
     rooms_reset(rooms);
-    const std::uint32_t n = kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms);
+    const std::uint32_t n =
+        kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms, &spec);
     std::size_t cells = 0;
     for (const Room& r : rooms.list) cells += r.cells;
     // Счёт всегда вслух (S11: молчаливого обрезания и молчаливого нуля нет);

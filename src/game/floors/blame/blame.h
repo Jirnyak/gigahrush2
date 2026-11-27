@@ -101,7 +101,8 @@ std::uint32_t blame_doorways(int number, unsigned seed,
 // ([blame.md]: «лобби — герметичная комната под городом»). Чистая функция;
 // вызывающий делает rooms_reset. Возвращает число объявленных комнат.
 struct FloorRooms;
-std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out);
+std::uint32_t blame_rooms(int number, unsigned seed, FloorRooms& out,
+                          const FloorSpec* spec = nullptr);
 
 // РАССТАНОВКА СОДЕРЖИМОГО МОДУЛЯ — строка `kContentPlacers` в floor_gen.cpp.
 // У блейма она сегодня НОЛЬ, и это ответ модуля со своей причиной (та же

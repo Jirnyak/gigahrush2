@@ -1,5 +1,6 @@
 #include "app/hud_ui.h"
 
+#include <algorithm>
 #include <imgui.h>
 
 #include "core/watch.h"       // watch_cycle / watch_*_digit — календарь S15
@@ -45,7 +46,9 @@ void draw_crosshair(const HudContext&) {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 c{ImGui::GetIO().DisplaySize.x * 0.5f,
                    ImGui::GetIO().DisplaySize.y * 0.5f};
-    const ImU32 col = ImGui::GetColorU32(ImVec4(0.349f, 0.949f, 0.400f, 0.85f));
+    ImVec4 colV = kPhosphor;
+    colV.w = 0.85f;
+    const ImU32 col = ImGui::GetColorU32(colV);
     constexpr float kGap = 3.0f, kLen = 7.0f;
     dl->AddLine({c.x - kGap - kLen, c.y}, {c.x - kGap, c.y}, col, 1.0f);
     dl->AddLine({c.x + kGap, c.y}, {c.x + kGap + kLen, c.y}, col, 1.0f);
@@ -61,11 +64,11 @@ void draw_health(const HudContext& c) {
     const float frac = mx > 0 ? static_cast<float>(hp > 0 ? hp : 0) /
                                     static_cast<float>(mx)
                               : 0.0f;
-    // Те же пороги, что у дебаг-панели: мёртвый тёмно-красный, четверть —
+    // Те же пороги, что у дебаг-панели: мёртвый красный опасности, четверть —
     // янтарь, иначе фосфор. Один язык тревоги на всё стекло.
-    ImVec4 barCol = hp <= 0 ? ImVec4{0.30f, 0.05f, 0.05f, 1.0f}
-                  : frac <= 0.25f ? kAmber
-                                  : kPhosphor;
+    const ImVec4 barCol = hp <= 0        ? kDanger
+                        : frac <= 0.25f ? kAmber
+                                        : kPhosphor;
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barCol);
     ImGui::ProgressBar(frac, ImVec2(160.0f, 12.0f), "");
     ImGui::PopStyleColor();
@@ -73,20 +76,34 @@ void draw_health(const HudContext& c) {
     if (hp <= 0)
         ImGui::TextColored(kDanger, "МЁРТВ");
     else
-        ImGui::Text("HP %d/%d", hp, mx);
+        ImGui::TextColored(frac <= 0.25f ? kAmber : kPhosphor, "HP %d/%d",
+                           hp, mx);
 }
 
 void draw_needs(const HudContext& c) {
     const game::NpcRef* nr = live_ref(c);
     if (!nr) return;
     const game::Needs& nd = c.pool->needs(nr->id);
-    const bool failed = c.needsTick && c.needsTick->failed != 0;
-    const bool warned = c.needsTick && c.needsTick->warned != 0;
-    const ImVec4 col = failed ? kDanger : warned ? kAmber : kDim;
-    ImGui::TextColored(col, "ЕДА %.0f  ВОДА %.0f  СОН %.0f",
-                       static_cast<double>(nd.food),
-                       static_cast<double>(nd.water),
+    auto reserveCol = [&](float v, float warnAt) -> ImVec4 {
+        if (nd.seeded == 0) return kDim;
+        if (v <= 0.0f) return kDanger;
+        if (v <= warnAt) return kAmber;
+        return kDim;
+    };
+    ImGui::TextColored(reserveCol(nd.food, game::kFoodWarnAt), "ЕДА %.0f",
+                       static_cast<double>(nd.food));
+    ImGui::SameLine();
+    ImGui::TextColored(reserveCol(nd.water, game::kWaterWarnAt), " ВОДА %.0f",
+                       static_cast<double>(nd.water));
+    ImGui::SameLine();
+    ImGui::TextColored(reserveCol(nd.sleep, game::kSleepWarnAt), " СОН %.0f",
                        static_cast<double>(nd.sleep));
+    if (nd.seeded != 0 &&
+        (nd.pee >= game::kPeeWarnAt || nd.poo >= game::kPooWarnAt)) {
+        const bool full = nd.pee >= game::kNeedMax || nd.poo >= game::kNeedMax;
+        ImGui::SameLine();
+        ImGui::TextColored(full ? kDanger : kAmber, " ТУАЛЕТ");
+    }
 }
 
 // Часы дома: цикл.вахта.такт, каждая цифра 0..7 ([core/watch.h], [CANON.md] S15).
@@ -150,11 +167,14 @@ void draw_hands(const HudContext& c) {
                         game::act_slot(*act, hs).durTicks -
                         game::act_elapsed(game::act_slot(*act, hs), c.tick)) *
                         static_cast<double>(giga::kSimStepMs) * 0.001);
-            else
-                ImGui::Text("%s: %s  %u/%u", tag, game::item_name(hi),
-                            gh ? gh->magCount : 0, rd->magazine);
+            else {
+                const std::uint32_t mag = gh ? gh->magCount : 0u;
+                ImGui::TextColored(mag == 0u ? kAmber : kPhosphor,
+                                   "%s: %s  %u/%u", tag, game::item_name(hi),
+                                   mag, rd->magazine);
+            }
         } else if (rd) { // метательное — сам себе боеприпас
-            ImGui::Text("%s: %s", tag, game::item_name(hi));
+            ImGui::TextColored(kPhosphor, "%s: %s", tag, game::item_name(hi));
         } else {
             ImGui::TextColored(kDim, "%s: %s", tag,
                                hi == game::kInvalidItem ? "кулаки"
@@ -178,9 +198,9 @@ void draw_status(const HudContext& c) {
     if (c.status) {
         for (std::size_t i = 0; i < game::kStatusCount; ++i) {
             if (c.status->remainMs[i] == 0) continue;
-            ImGui::TextColored(kAmber, "%s %us",
-                               game::kStatusNames[i],
-                               c.status->remainMs[i] / 1000u);
+            const std::uint32_t sec = (c.status->remainMs[i] + 999u) / 1000u;
+            ImGui::TextColored(kAmber, "%s %uс",
+                               game::kStatusNames[i], sec);
         }
     }
     if (c.gas.valid) {
@@ -197,7 +217,10 @@ void draw_status(const HudContext& c) {
 bool interact_live(const HudContext& c) { return c.interactPrompt != nullptr; }
 
 void draw_interact(const HudContext& c) {
+    const float maxW = std::max(200.0f, ImGui::GetIO().DisplaySize.x * 0.55f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::min(520.0f, maxW));
     ImGui::TextColored(kAmber, "%s", c.interactPrompt);
+    ImGui::PopTextWrapPos();
 }
 
 // ДЕЯНИЕ ТЕЛА (CANON S27.1): чем занят носитель камеры — имя строки
@@ -224,8 +247,10 @@ bool deed_live(const HudContext& c) {
 void draw_deed(const HudContext& c) {
     if (const game::ActWindow* w = deed_window(c)) {
         const std::uint64_t el = game::act_elapsed(*w, c.tick);
-        const float frac = static_cast<float>(el) /
-                           static_cast<float>(w->durTicks);
+        const float frac = w->durTicks > 0
+                               ? static_cast<float>(el) /
+                                     static_cast<float>(w->durTicks)
+                               : 0.0f;
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAmber);
         ImGui::ProgressBar(frac, ImVec2(160.0f, 12.0f), "");
         ImGui::PopStyleColor();
@@ -265,6 +290,8 @@ void draw_alerts(const HudContext& c) {
     //     молчало; `samosbor_alarm` берёт её из `samosbor_unsheltered_pressure`,
     //     то есть из той же константы, которой биллится `apply_damage`.
     // Плюс `Clear` («туман уходит») не существовал как бит вообще.
+    const float maxAlertW =
+        std::min(520.0f, std::max(200.0f, ImGui::GetIO().DisplaySize.x * 0.6f));
     if (c.samosbor) {
         if (const game::SamosborAlarm a = game::samosbor_alarm(*c.samosbor); a.on) {
             // Пульс — в АЛЬФУ, а не в сам цвет: красный обязан остаться красным
@@ -274,7 +301,9 @@ void draw_alerts(const HudContext& c) {
             // мигала бы в НЕЧИТАЕМОСТЬ ровно тогда, когда её читают.
             ImVec4 col = kDanger;
             col.w = 0.55f + 0.45f * a.pulse;
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + maxAlertW);
             ImGui::TextColored(col, "%s", a.text);
+            ImGui::PopTextWrapPos();
         }
     }
     if (c.needsTick && c.needsTick->failed != 0)
@@ -286,7 +315,9 @@ bool rumour_live(const HudContext& c) {
 }
 
 void draw_rumour(const HudContext& c) {
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+    const float wrapW =
+        std::min(420.0f, std::max(180.0f, ImGui::GetIO().DisplaySize.x * 0.42f));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
     ImGui::TextColored(kAmber, "\"%s\"", c.rumourLine);
     ImGui::PopTextWrapPos();
 }
@@ -296,7 +327,9 @@ bool speech_live(const HudContext& c) {
 }
 
 void draw_speech(const HudContext& c) {
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+    const float wrapW =
+        std::min(420.0f, std::max(180.0f, ImGui::GetIO().DisplaySize.x * 0.42f));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapW);
     if (c.speechSit && c.speechSit[0])
         ImGui::TextColored(kDim, "[%s] %s", c.speechSit, c.speechLine);
     else
@@ -344,6 +377,8 @@ void begin_slot_window(HudSlot slot) {
         pos = {ds.x * 0.5f, ds.y * 0.5f + 48.0f}; pivot = {0.5f, 0}; id = "##hud_c";
         break;
     }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin(id, nullptr,
@@ -381,7 +416,10 @@ void hud_ui_draw(const HudContext& ctx) {
             if (!opened) { begin_slot_window(slot); opened = true; }
             el.draw(ctx);
         }
-        if (opened) ImGui::End();
+        if (opened) {
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+        }
     }
 }
 

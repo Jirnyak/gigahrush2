@@ -11,6 +11,7 @@
 #include "game/embody.h"      // NpcRef
 #include "game/guide.h"       // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись
 #include "game/mob_spawn.h"   // MobRef — the scope exclusion
+#include "game/mob_table.h"   // mob_def — оценка боевой силы монстра
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
@@ -19,6 +20,10 @@
 #include "game/patrol.h"            // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
 #include "game/perceive.h"          // Senses — воспринятые враги без сквозного видения
 #include "game/ranged_table.h"      // equipped_ranged — armed check in Perception
+#include "game/room.h"              // FloorRooms, Room, room_of, kRoomTagHermetic
+#include "game/room_supply.h"       // room_at_pos — проверка гермоукрытия
+#include "game/rpg.h"               // RpgStats, capability — шов прогрессии
+#include "game/verb_table.h"        // kVerbStrike
 #include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
@@ -110,6 +115,43 @@ inline constexpr SiteIntent kSiteIntents[] = {
     {MemToilet, IntentToilet},
     {MemAlly, IntentSocial},
 };
+
+// Оценка боевой силы жителя по доле HP, вооружённости и шву capability.
+float npc_combat_power(const Registry& reg, Entity ent, float hp, float maxHp,
+                       bool hasRanged, bool hasMelee) noexcept {
+    const float hp01 = maxHp > 0.0f ? giga::clamp01(hp / maxHp) : 0.0f;
+    const float weaponFactor = hasRanged ? 1.6f : (hasMelee ? 1.2f : 0.6f);
+    const float cap = capability(reg.try_get<const RpgStats>(ent), kVerbStrike);
+    return hp01 * weaponFactor * cap;
+}
+
+// Оценка боевой силы воспринимаемого врага (NPC или моб).
+float foe_combat_power(const Registry& reg, NpcPool& pool, Entity foeEnt) noexcept {
+    if (const NpcRef* nr = reg.try_get<const NpcRef>(foeEnt)) {
+        if (!pool.valid(nr->id) || !pool.alive(nr->id)) return 0.0f;
+        const Equipped* feq = reg.try_get<const Equipped>(foeEnt);
+        const Inventory& finv = pool.inventory(nr->id);
+        return npc_combat_power(reg, foeEnt,
+                                static_cast<float>(pool.hp(nr->id)),
+                                static_cast<float>(pool.max_hp(nr->id)),
+                                equipped_ranged(finv, feq) != kInvalidItem,
+                                equipped_melee(finv, feq) != kInvalidItem);
+    }
+    if (const MobRef* mr = reg.try_get<const MobRef>(foeEnt)) {
+        const float hp01 = mr->maxHp > 0
+                               ? giga::clamp01(static_cast<float>(mr->hp) /
+                                               static_cast<float>(mr->maxHp))
+                               : 0.0f;
+        if (static_cast<std::size_t>(mr->kind) >= kMobKindCount)
+            return hp01 * 1.2f;
+        const MobDef& def = mob_def(static_cast<MobKind>(mr->kind));
+        const bool isRanged =
+            has_flag(def.aiFlags, AiFlag::Ranged) || def.shotRangeMm > 0;
+        const float weaponFactor = isRanged ? 1.6f : (def.dmg > 0 ? 1.2f : 0.6f);
+        return hp01 * weaponFactor;
+    }
+    return 0.0f;
+}
 
 } // namespace
 
@@ -734,16 +776,27 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.samosborActive = env.samosborActive;
             p.samosborWarning = env.samosborWarning;
             p.fog = env.samosborActive ? 1.0f : (env.samosborWarning ? 0.35f : 0.0f);
+            if (env.rooms != nullptr) {
+                const Room* r =
+                    room_of(*env.rooms, room_at_pos(*env.rooms, tr.pos));
+                p.inShelter =
+                    (r != nullptr && (r->tags & kRoomTagHermetic) != 0);
+            }
             const Equipped* eq = reg.try_get<Equipped>(e);
             const Inventory& inv = pool.inventory(id);
-            p.armed = (equipped_ranged(inv, eq) != kInvalidItem) ||
-                      (equipped_melee(inv, eq) != kInvalidItem);
+            const bool selfRanged = (equipped_ranged(inv, eq) != kInvalidItem);
+            const bool selfMelee = (equipped_melee(inv, eq) != kInvalidItem);
+            p.armed = selfRanged || selfMelee;
+            Entity foeEnt = entt::null;
             if (const Senses* sen = reg.try_get<Senses>(e)) {
                 p.visibleHostiles = static_cast<float>(sen->visible);
                 p.threatDistance = sen->foeDist;
                 if (sen->foe != entt::null && reg.valid(sen->foe) &&
-                    reg.all_of<MobRef>(sen->foe))
-                    p.monster = 1.0f;
+                    !reg.any_of<Dead, Corpse>(sen->foe)) {
+                    foeEnt = sen->foe;
+                    if (reg.all_of<MobRef>(foeEnt))
+                        p.monster = 1.0f;
+                }
             } else if (rel != nullptr) {
                 // Без Senses (прямые юнит-тесты без perceive_step): фолбэк на
                 // общие 8 м бины, чтобы старт этажа не взрывался в O(N^2).
@@ -755,8 +808,18 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     reg, pool, *rel, layer, e, id, tr.pos, kFeudRadius,
                     &aiBins8m);
                 if (foe.e != entt::null) {
+                    foeEnt = foe.e;
                     p.visibleHostiles = 1.0f;
                     p.threatDistance = wrap_dist(tr.pos, foe.pos, kWorldExtent);
+                }
+            }
+            if (foeEnt != entt::null) {
+                const float foePow = foe_combat_power(reg, pool, foeEnt);
+                if (foePow > 0.0f) {
+                    p.hostilePower = foePow;
+                    p.allyPower = npc_combat_power(reg, e, p.hp, p.maxHp,
+                                                   selfRanged, selfMelee);
+                    p.strongerHostile = (p.hostilePower > p.allyPower * 1.25f);
                 }
             }
             p.currentIntent = brain.currentIntent;

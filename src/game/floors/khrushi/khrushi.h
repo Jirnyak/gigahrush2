@@ -113,7 +113,8 @@ std::uint32_t khrushi_doorways(int number, unsigned seed,
 // «комнаты строго по клеткам, модуль сам разбирается»). Чистая функция;
 // вызывающий делает rooms_reset. Возвращает число объявленных комнат.
 struct FloorRooms;
-std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out);
+std::uint32_t khrushi_rooms(int number, unsigned seed, FloorRooms& out,
+                            const FloorSpec* spec = nullptr);
 
 // A street-lamp pole: a voxel pipe column on the kerb with a hook arm over
 // the road; (dx,dy) is the unit step towards the road. The lamp prop hangs

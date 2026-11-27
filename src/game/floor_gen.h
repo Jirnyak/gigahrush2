@@ -92,6 +92,13 @@ void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
 void rooms_build(FloorRooms& rooms, int number, const FloorSpec& spec,
                  unsigned seed);
 
+// Детерминированный выбор собственника комнаты (1..kFactionCount = faction + 1,
+// 0 = нейтральная земля) по политике `FloorSpec::factionMix`. Гермозоны
+// (`kRoomTagHermetic`) и вызов с `spec == nullptr` или нулевой суммой весов
+// всегда возвращают 0.
+std::uint16_t floor_room_owner(const FloorSpec* spec, unsigned seed, int number,
+                               std::uint32_t roomIdx, std::uint16_t tags);
+
 // --- Лифтовые столбы (elevators-2x2.md, решения владельца 2026-08-27) -------
 // Узел лифта = ЗАМКНУТЫЙ столб: кольцо стен 3×3 через весь тор (z
 // заворачивается — у столба нет ни начала, ни конца), шахта 1 клетка в
