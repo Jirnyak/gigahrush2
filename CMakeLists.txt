@@ -2789,7 +2789,15 @@ if(GIGA_BUILD_TESTS)
         #     `suite_chronicle.inl`): кириллические имена при посеве и летописи,
         #     бюджет <= 256 Б/строка на 2^20;
         #   - `hunt.{h,cpp}` / `faction_relations.cpp`: 8 м `CellBins` для O(N).
-        PASS_REGULAR_EXPRESSION "game_test: 245034 checks, 0 failures")
+        # 245034 -> 245097 (+63, 2026-11-27, Волна 3A):
+        #   - `test_wave3a_regressions()` (`game_test.cpp`): очистка `StainRGB`,
+        #     пропуск повторного залива воды в `FloorStreamer::ensure_loaded` на restore,
+        #     исключение `Dead`/`Corpse` и `std::floor` wrap в witness/place/door/rumour,
+        #     защита от мёртвого `Senses::foe` в `ai_step`, `rigid_wake_body`,
+        #     превращение умирающего `CameraTag` в лутаемый `Corpse`, цвет `kOpenColour`
+        #     контейнера через `floor_file_write`/`floor_file_read`;
+        #   - `suite_needs.inl`: проверка `Corpse && !CameraTag` при смерти игрока (+1).
+        PASS_REGULAR_EXPRESSION "game_test: 245097 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
