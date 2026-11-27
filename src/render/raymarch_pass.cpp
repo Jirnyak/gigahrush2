@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "render/material_textures.h" // CubePush, material_albedo_table, texture getters
+#include "render/render_io.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
@@ -123,7 +124,7 @@ std::string join(const char* dir, const char* file) {
 }
 
 bool read_spv(const std::string& path, std::vector<char>& out) {
-    std::FILE* f = std::fopen(path.c_str(), "rb");
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) {
         std::fprintf(stderr, "[raymarch] cannot open %s\n", path.c_str());
         return false;
@@ -131,6 +132,10 @@ bool read_spv(const std::string& path, std::vector<char>& out) {
     std::fseek(f, 0, SEEK_END);
     long n = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
+    if (n <= 0) {
+        std::fclose(f);
+        return false;
+    }
     out.resize(static_cast<std::size_t>(n));
     const bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
     std::fclose(f);

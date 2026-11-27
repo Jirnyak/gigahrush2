@@ -2,6 +2,7 @@
 
 #include "render/vk_buffer.h"  // mem_tally — учёт видеопамяти образов
 
+#include "render/render_io.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "render/vk_swapchain.h"
@@ -24,11 +25,15 @@ struct PostPush {
 };
 
 bool read_spv(const std::string& path, std::vector<char>& out) {
-    FILE* f = std::fopen(path.c_str(), "rb");
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) return false;
     std::fseek(f, 0, SEEK_END);
     long n = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
+    if (n <= 0) {
+        std::fclose(f);
+        return false;
+    }
     out.resize(static_cast<std::size_t>(n));
     const bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
     std::fclose(f);

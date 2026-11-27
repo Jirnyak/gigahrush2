@@ -1,5 +1,6 @@
 #include "render/body_pass.h"
 
+#include "render/render_io.h"
 #include "render/vk_device.h"
 
 #include <bit>
@@ -139,7 +140,7 @@ std::string join(const char* dir, const char* file) {
 }
 
 bool read_file(const std::string& path, std::vector<char>& out) {
-    std::FILE* f = std::fopen(path.c_str(), "rb");
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) { std::fprintf(stderr, "[vk] cannot open %s\n", path.c_str()); return false; }
     std::fseek(f, 0, SEEK_END);
     long n = std::ftell(f);

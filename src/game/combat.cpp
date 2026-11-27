@@ -129,6 +129,11 @@ std::int16_t mitigate(std::int16_t raw, std::int8_t resistPct) {
     return static_cast<std::int16_t>(out);
 }
 
+inline GravityRegime resolve_regime(const GravityField& gf) {
+    return gf.regime == GravityRegime::Custom ? regime_from_vector(gf.global)
+                                              : gf.regime;
+}
+
 } // namespace
 
 bool entity_health(const Registry& reg, const NpcPool& pool, Entity e,
@@ -735,7 +740,11 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         // `target` в строке `shot`), а наступивший контактный кадр выпускает
         // снаряд — то есть именно то, чем прежде были `windupMs` и его флаг.
         const ActionId doing = acting_what(act, ActSlot::Body, tick);
-        const bool aiming = doing == kActShot;
+        // Окно `kActShot` включает и виндап, и пост-выстрельный откат: после
+        // контактного кадра (`w.applied != 0`) замах уже позади — уход цели или
+        // вход в ближний бой не должен рвать кулдаун через `break_action`.
+        const bool aiming =
+            doing == kActShot && !acting_applied(act, ActSlot::Body);
         if (!aiming && acting_busy(act, ActSlot::Body, tick)) continue;
 
         // A CONTROL shooter is a monster whose whole attack is its projectile's
@@ -1525,9 +1534,11 @@ bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
     if (particles) {
         const std::uint32_t pseed =
             static_cast<std::uint32_t>(tick) ^ seedSalt;
-        particles->push(at, vec3{0.0f, 0.0f, 1.0f}, ParticleKind::Spark, 24, 0,
-                        pseed);
-        particles->push(at, vec3{0.0f, 0.0f, 0.5f}, ParticleKind::Debris, 18,
+        const GravityRegime gr = resolve_regime(stack.layer(layer).gravity());
+        const vec3 up = gr == GravityRegime::Zero ? vec3{0.0f, 0.0f, 0.0f}
+                                                  : regime_up(gr);
+        particles->push(at, up, ParticleKind::Spark, 24, 0, pseed);
+        particles->push(at, up * 0.5f, ParticleKind::Debris, 18,
                         0, pseed ^ 0x5bf03635u);
     }
     return landed;
@@ -1679,9 +1690,10 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // (Гранатной развилки интегратора больше нет: снаряд — только
         // быстрое, летящее и решаемое маршем; медленное катает rigid.)
         const vec3 prevPos = tr.pos;
-        tr.pos.x = wrapf(tr.pos.x + v.v.x * dt, kWorldExtent);
-        tr.pos.y = wrapf(tr.pos.y + v.v.y * dt, kWorldExtent);
-        tr.pos.z = wrapf(tr.pos.z + v.v.z * dt, kWorldExtent);
+        const vec3 to = prevPos + v.v * dt; // непрерывные координаты, обернёт финал
+        tr.pos.x = wrapf(to.x, kWorldExtent);
+        tr.pos.y = wrapf(to.y, kWorldExtent);
+        tr.pos.z = wrapf(to.z, kWorldExtent);
 
         if (p.ttlMs == 0) {
             // TTL is a backstop: reaching it means the shot is spent — dmg 0,
@@ -1691,69 +1703,72 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             continue;
         }
 
+        // ГЕОМЕТРИЯ ДО ТЕЛ: сперва субвоксельный марш `[prevPos, to]`, чтобы
+        // дальность проверки тел не заходила за 1–2 субвокселя стены (`t <= tWall`)
+        // и луч до центра тела не проходил сквозь перегородку.
+        SubRayHit sub;
+        const bool hitWall = sub_march(grid, prevPos, to, sub);
+        const float tWall = hitWall ? sub.t : 1.0f;
+        const vec3 seg = to - prevPos;
+        const float segLen2 = dot(seg, seg);
+        const bool inSolidStart = hitWall && sub.axis < 0;
+
+        auto body_hit_test = [&](const vec3& cp, vec3& hitPosOut,
+                                 float& d2Out) -> bool {
+            const vec3 rel{wrap_delta_f(prevPos.x, cp.x, kWorldExtent),
+                           wrap_delta_f(prevPos.y, cp.y, kWorldExtent),
+                           wrap_delta_f(prevPos.z, cp.z, kWorldExtent)};
+            float tHit = 0.0f;
+            if (segLen2 > 1e-12f) {
+                tHit = dot(rel, seg) / segLen2;
+                if (tHit < 0.0f) tHit = 0.0f;
+                if (tHit > tWall) tHit = tWall;
+            }
+            const vec3 closest = seg * tHit;
+            const vec3 diff = rel - closest;
+            const float d2 = dot(diff, diff);
+            if (d2 > kProjHitRadius * kProjHitRadius) return false;
+            // Отжим на воздушную сторону грани стены при tHit == tWall.
+            const float tProbe =
+                (hitWall && tHit >= tWall) ? tWall * 0.999f : tHit;
+            const vec3 rayProbe = prevPos + seg * tProbe;
+            const vec3 bodyPos = prevPos + rel;
+            SubRayHit wallBlock;
+            if (sub_march(grid, rayProbe, bodyPos, wallBlock)) return false;
+            hitPosOut = vec3{wrapf(prevPos.x + closest.x, kWorldExtent),
+                             wrapf(prevPos.y + closest.y, kWorldExtent),
+                             wrapf(prevPos.z + closest.z, kWorldExtent)};
+            d2Out = d2;
+            return true;
+        };
+
         // The camera holder, tested like anything else — INCLUDING against his own
         // bullet, since 2026-08-13.
-        //
-        // This branch used to read `if (victim != entt::null && p.source != victim)`,
-        // and that was the last owner test in the tree: §33 deleted `Projectile::team`
-        // and left one exclusion standing, wearing a geometry argument. The argument
-        // was that a shot fired straight down passes through the shooter on its way to
-        // the floor — and it does not, but only by 4 mm at the tallest legal stature,
-        // and only because of a clamp in population.cpp that nothing here referenced.
-        // `muzzle_point` above turns that coincidence into a solved ray/sphere exit,
-        // so the rule has nothing left to pay for and is gone.
-        //
-        // What that buys is not tidiness. A shot is now hittable by its own shooter
-        // whenever it is genuinely in his space — a ricochet off a wall he is standing
-        // against, a pellet from a barrel pressed into a corner. Under the old test
-        // those cases were silently impossible for the camera holder and possible for
-        // everyone else, which is an asymmetry in the player's favour and exactly what
-        // "the player is not special" ([AGENTS.md]) forbids.
-        if (victim != entt::null) {
-            const float hx = wrap_delta_f(tr.pos.x, victimPos.x, kWorldExtent);
-            const float hy = wrap_delta_f(tr.pos.y, victimPos.y, kWorldExtent);
-            const float hz = wrap_delta_f(tr.pos.z, victimPos.z, kWorldExtent);
-            if (hx * hx + hy * hy + hz * hz <= kProjHitRadius * kProjHitRadius) {
-                resolved.push_back(
-                    Hit{e, p.dmg, p.source, true, entt::null, p.proj, p.channel});
+        if (!inSolidStart && victim != entt::null) {
+            vec3 hitPos{};
+            float dummyD2 = 0.0f;
+            if (body_hit_test(victimPos, hitPos, dummyD2)) {
+                Hit h{e, p.dmg, p.source, true, entt::null, p.proj, p.channel};
+                h.impactPos = hitPos;
+                resolved.push_back(h);
                 continue;
             }
         }
 
         // EVERYTHING ELSE IN THE AIR, with no memory of who fired it.
-        //
-        // This used to be two branches gated on `Projectile::team`: monsters were hit
-        // only by player shots, the crowd only by monster shots, and the crowd branch
-        // additionally spared anyone `mob_hostile_to` said was not prey. Three
-        // exclusions, all of them the thing ARCHITECTURE.md §Манифест п.5 forbids by
-        // name — "никаких friendly-fire-исключений; граната скачет по вокселям,
-        // осколки бьют и владельца".
-        //
-        // Owner's ruling, 2026-08-12: **ownership itself is the hardcode.** A shot,
-        // once fired, is a physical object that remembers nothing. It does not know
-        // who pulled the trigger, what team they were on, or which faction is
-        // standing in front of it. It hits what it reaches.
-        //
-        // So this is ONE sweep over everything a projectile can touch, and it takes
-        // the NEAREST — not the first the view happens to yield. With separate
-        // branches "first found" was already arbitrary; merged, arbitrary would mean
-        // a monster shielding a civilian only when EnTT ordered it that way.
-        //
-        // `p.source` survives as ATTRIBUTION and nothing else: `finalize_deaths`
-        // needs to know whose kill it was to award XP. Attribution is not exclusion —
-        // a body can be credited with a death it caused to itself, and now is.
-        {
+        if (!inSolidStart) {
             Entity best = entt::null;
             float bestD2 = kProjHitRadius * kProjHitRadius;
+            vec3 bestImpactPos{};
             auto consider = [&](Entity cand) {
                 const vec3& cp = reg.get<const Transform>(cand).pos;
-                const float hx = wrap_delta_f(tr.pos.x, cp.x, kWorldExtent);
-                const float hy = wrap_delta_f(tr.pos.y, cp.y, kWorldExtent);
-                const float hz = wrap_delta_f(tr.pos.z, cp.z, kWorldExtent);
-                const float d2 = hx * hx + hy * hy + hz * hz;
+                vec3 hitPos{};
+                float d2 = 0.0f;
+                if (!body_hit_test(cp, hitPos, d2)) return;
                 if (d2 <= bestD2) {
                     bestD2 = d2;
                     best = cand;
+                    bestImpactPos = hitPos;
                 }
             };
             // §59.3: 27 соседних бакетов вместо двух полных view — покрытие
@@ -1761,8 +1776,12 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
             // ниже, у вызова пропов; узкая фаза (NEAREST по точной
             // wrap-дистанции) не менялась.
             if (!bodyBinsBuilt) build_body_bins();
-            bodyBins.for_each_near(layer, cell_coord(tr.pos.x),
-                                   cell_coord(tr.pos.y), cell_coord(tr.pos.z),
+            const vec3 midPos{
+                wrapf(prevPos.x + seg.x * (0.5f * tWall), kWorldExtent),
+                wrapf(prevPos.y + seg.y * (0.5f * tWall), kWorldExtent),
+                wrapf(prevPos.z + seg.z * (0.5f * tWall), kWorldExtent)};
+            bodyBins.for_each_near(layer, cell_coord(midPos.x),
+                                   cell_coord(midPos.y), cell_coord(midPos.z),
                                    consider);
             if (best != entt::null) {
                 // Заряд от урона: пуля ВЗВОДИТ (atTick=0 — «уже пора»),
@@ -1775,27 +1794,17 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
                         Hit{e, static_cast<std::int16_t>(0), p.source, false});
                     continue;
                 }
-                resolved.push_back(Hit{e, p.dmg, p.source, false, best, p.proj,
-                                       p.channel});
+                Hit h{e, p.dmg, p.source, false, best, p.proj, p.channel};
+                h.impactPos = bestImpactPos;
+                resolved.push_back(h);
                 continue;
             }
         }
 
         // ГЕОМЕТРИЯ — субвоксельный вопрос ([CANON.md] S2: этаж состоит из
         // субвокселей): попадание есть первый ТВЁРДЫЙ СУБВОКСЕЛЬ на отрезке
-        // шага (sub_march — единственный субвоксельный марш, [world/los.h]),
-        // не макро-клетка. Макро-тест объявлял «стеной» всю клетку с материей
-        // в паре верхних подслоёв (падик-сэндвич: плиты в sz=6..7) — пуля
-        // снизу гибла у нижней грани, в 1.5 м от плиты, и скол-карв катал
-        // пустоту: стрельба вверх и в стены не разрушала ничего, лампа на
-        // потолке не разбивалась (плейтест 2026-08-19, tests/suite_shotsub.inl).
-        // Заодно умерла обратная ловушка (аудит §1.1): пуля больше не вязнет
-        // в макро-твёрдой, но прокарвленной насквозь клетке — нет материи на
-        // отрезке, нет попадания. Направление здесь не упоминается нигде:
-        // марш изотропен по построению.
-        const vec3 to = prevPos + v.v * dt; // непрерывные координаты, обернёт финал
-        SubRayHit sub;
-        if (sub_march(grid, prevPos, to, sub)) {
+        // шага (sub_march — единственный субвоксельный марш, [world/los.h]).
+        if (hitWall) {
             // Материал — честный, у ПОПАВШЕГО субвокселя (sub_material_at
             // читает страницу смешанной клетки), не у клетки целиком.
             const CellType mat =
@@ -2018,9 +2027,13 @@ std::uint32_t projectile_step(Registry& reg, NpcPool& pool, EventBus& bus,
         // colour from the substance table, dirty cells owed to the mirror by
         // the caller. Wall hits bleed nothing; the carve chip is their mark.
         if (landed && stainDirty && !h.onWall && !web && h.dmg > 0) {
-            stain_splat(stack.layer(layer), h.impactPos,
-                        vec3{0.0f, 0.0f, -0.35f}, 1.6f, /*rays=*/10,
-                        kStainBlood,
+            const CellStep down =
+                regime_down(resolve_regime(stack.layer(layer).gravity()));
+            const vec3 stainBias{static_cast<float>(down.x) * 0.35f,
+                                 static_cast<float>(down.y) * 0.35f,
+                                 static_cast<float>(down.z) * 0.35f};
+            stain_splat(stack.layer(layer), h.impactPos, stainBias, 1.6f,
+                        /*rays=*/10, kStainBlood,
                         static_cast<std::uint32_t>(tick) ^
                             entt::to_integral(h.proj),
                         *stainDirty);
@@ -2270,21 +2283,29 @@ std::uint32_t player_throw_step(Registry& reg, NpcPool& pool, LayerId layer,
     Inventory& inv = pool.inventory(nr->id);
     const Equipped* eqp = reg.try_get<Equipped>(thrower);
 
+    auto equipped_thrown = [&](bool right) -> ItemId {
+        if (!eqp) return kInvalidItem;
+        const ItemId hi = equipped_hand(inv, *eqp, right);
+        return (ranged_for_item(hi) && ranged_is_thrown(hi)) ? hi : kInvalidItem;
+    };
+    const ItemId eqThrownL = equipped_thrown(false);
+    const ItemId eqThrownR = equipped_thrown(true);
+
     std::uint32_t thrown = 0;
     for (int hIdx = 0; hIdx < 2; ++hIdx) {
         // Рука несёт и делает то, чем экипирована (закон владельца):
-        // спуск руки бросает предмет ЕЁ ячейки; wantBag — путь без
-        // решателя (консоль/фикстуры), скан сумки, руки ЛКМ.
-        const bool want = hIdx == 1 ? wantR : (wantL || wantBag);
+        // спуск руки бросает предмет ЕЁ ячейки; wantBag бросает предмет
+        // левой руки, либо правой, если в левой нет метательного, и лишь
+        // при отсутствии метательного в обеих руках — скан сумки через ЛКМ.
+        const bool isR = hIdx == 1;
+        const bool want =
+            isR ? (wantR || (wantBag && thrown == 0 && eqThrownR != kInvalidItem))
+                : (wantL || wantBag);
         if (!want) continue;
-        const ActSlot hs = hIdx == 1 ? ActSlot::HandR : ActSlot::HandL;
+        const ActSlot hs = isR ? ActSlot::HandR : ActSlot::HandL;
         if (acting_busy(act, hs, tick)) continue; // рука занята действием
-        ItemId item = kInvalidItem;
-        if (eqp) {
-            const ItemId hi = equipped_hand(inv, *eqp, hIdx == 1);
-            if (ranged_for_item(hi) && ranged_is_thrown(hi)) item = hi;
-        }
-        if (item == kInvalidItem && hIdx == 0 && wantBag)
+        ItemId item = isR ? eqThrownR : eqThrownL;
+        if (item == kInvalidItem && !isR && wantBag && eqThrownR == kInvalidItem)
             item = equipped_throwable(inv);
         const RangedDef* def = ranged_for_item(item);
         if (!def || !ranged_is_explosive(*def)) continue;

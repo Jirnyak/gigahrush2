@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "render/render_io.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
@@ -22,7 +23,7 @@ std::string path_join(const char* dir, const char* file) {
 }
 
 bool read_spv(const char* path, std::vector<char>& out) {
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) {
         std::fprintf(stderr, "[cull] cannot open %s\n", path);
         return false;

@@ -2797,7 +2797,11 @@ if(GIGA_BUILD_TESTS)
         #     превращение умирающего `CameraTag` в лутаемый `Corpse`, цвет `kOpenColour`
         #     контейнера через `floor_file_write`/`floor_file_read`;
         #   - `suite_needs.inl`: проверка `Corpse && !CameraTag` при смерти игрока (+1).
-        PASS_REGULAR_EXPRESSION "game_test: 245097 checks, 0 failures")
+        # 245097 -> 245101 (+4, 2026-11-27, Волна 4 / matwej.md):
+        #   - `tests/suite_zonenav.inl` (`table_is_a_metric` 4b): полный BFS по
+        #     `ZoneGraph` для поиска крупнейшей компоненты и сверки достижимости
+        #     и изоляции против `ZoneDist::at` (+4 проверки).
+        PASS_REGULAR_EXPRESSION "game_test: 245101 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

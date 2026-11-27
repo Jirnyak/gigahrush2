@@ -43,19 +43,19 @@ struct InteractDef {
 };
 
 inline constexpr InteractDef kInteractTable[kInteractCount] = {
-    {"terminal", "NET TERMINAL"},
-    {"electrical_shield", "SABOTAGE ELECTRICAL SHIELD"},
-    {"light_bulb", "LIGHT BULB"},
-    {"corpse", "LOOT CORPSE"},
-    {"loot", "PICK UP"},
-    {"npc", "BARTER / TRADE"},
-    {"crate", "SEARCH CRATE"},
-    {"lift_call", "CALL LIFT"},
-    {"lift_panel", "LIFT PANEL"},
-    {"workbench", "WORKBENCH"},
-    {"lathe", "LATHE"},
-    {"lab_bench", "LAB BENCH"},
-    {"serve", "USE"},
+    {"terminal", "СЕТЕВОЙ ТЕРМИНАЛ"},
+    {"electrical_shield", "САБОТАЖ ЭЛЕКТРОЩИТА"},
+    {"light_bulb", "ЛАМПОЧКА"},
+    {"corpse", "ОБЫСКАТЬ ТРУП"},
+    {"loot", "ПОДОБРАТЬ"},
+    {"npc", "ПОГОВОРИТЬ"},
+    {"crate", "ОБЫСКАТЬ ЯЩИК"},
+    {"lift_call", "ВЫЗВАТЬ ЛИФТ"},
+    {"lift_panel", "ПУЛЬТ ЛИФТА"},
+    {"workbench", "ВЕРСТАК"},
+    {"lathe", "СТАНОК"},
+    {"lab_bench", "ЛАБСТОЛ"},
+    {"serve", "ИСПОЛЬЗОВАТЬ"},
 };
 
 inline const InteractDef& interact_def(InteractKind k) {

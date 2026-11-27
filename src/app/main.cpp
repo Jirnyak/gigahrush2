@@ -2610,7 +2610,7 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
 // проверку на каталог и увёл бы поиск от рабочего пути сборки.
 static bool shader_dir_has_spv(const std::string& dir) {
     const std::string probe = dir + "/cube.frag.spv";
-    std::FILE* f = std::fopen(probe.c_str(), "rb");
+    std::FILE* f = giga::app::fopen_utf8(probe, "rb");
     if (!f) return false;
     std::fclose(f);
     return true;
@@ -11383,8 +11383,8 @@ int main(int argc, char** argv) {
                                           "Принято на счёт: %d руб.", in);
                     }
                     if (br.withdraw) {
-                        const std::int32_t out =
-                            game::teller_withdraw_cash(binv, ledger, 1000);
+                        const std::int32_t out = game::teller_withdraw_cash(
+                            binv, ledger, br.withdrawAmount);
                         if (out > 0)
                             std::snprintf(convLine, sizeof convLine,
                                           "Выдано наличкой: %d руб.", out);

@@ -7,15 +7,19 @@
 #include <vector>
 
 #include "core/math.h"
-#include "core/wrap.h"        // wrap_delta_f — the census and the placement must agree
+#include "core/wrap.h"        // wrap_dist2, wrap_pos — тороидальная арифметика
 #include "ecs/components.h"
 #include "game/body_pose.h"   // BodyPlan — план тела при рождении (S28.2)
 #include "game/floor_gen.h"
 #include "game/room.h"        // FloorRooms — пак селится в объявленной комнате
 #include "game/room_supply.h" // rooms_in_ctx
 #include "game/wander.h"     // WanderTarget — ноги при рождении, моб без них статуя
+#include "sim/physics.h"     // stand_centre — зазор контакта по оси гравитации
+#include "world/anchor.h"    // anchor_face_pack
+#include "world/gravity.h"   // regime_down, regime_frame
 #include "world/medium.h"    // medium_level_data — не ставить в утопленное
 #include "world/macro_grid.h"
+#include "world/surface.h"   // surface_face_at — реальная грань опоры
 #include "world/world.h"
 
 namespace giga::game {
@@ -141,16 +145,59 @@ vec3 mob_half_extents(MobTier tier) {
     }
 }
 
-// World position of a mob of this tier standing on cell (cx, cy) of the ground
-// storey. Split out because the FOG spawner has to know the exact position before
-// it commits to it: its candidate cell is only legal if `samosbor_census` would
-// count the resulting body inside the outer radius, and the body sits `half.z`
-// above the cell floor — up to 1.70 m for a Boss, which is enough to push a
-// 40 m-away candidate out of a 40 m census bubble.
+// World position of a mob of this tier standing on cell (cx, cy, cz).
+// Свободная форма без World (для spawn_mob_at без ссылки на мир): центрируется
+// по X/Y и ставится на нижнюю грань клетки cz, тороидально оборачивается.
 vec3 mob_stand_pos(int cx, int cy, int cz, const vec3& half) {
-    return vec3{(static_cast<float>(cx) + 0.5f) * kCellSize,
-                (static_cast<float>(cy) + 0.5f) * kCellSize,
-                static_cast<float>(cz) * kCellSize + half.z};
+    return wrap_pos(
+        vec3{(static_cast<float>(wrap_macro(cx)) + 0.5f) * kCellSize,
+             (static_cast<float>(wrap_macro(cy)) + 0.5f) * kCellSize,
+             static_cast<float>(wrap_macro(cz)) * kCellSize + half.z},
+        kWorldExtent);
+}
+
+// Изотропная форма с World: ищет экспонированную грань опоры в направлении
+// `regime_down(world.gravity().regime)` через `surface_face_at` и ставит тело
+// на реальную поверхность опоры с зазором контакта (`stand_centre`), включая
+// утопленные плиты (нечётные ярусы khrushi) и все 6 осевых режимов гравитации;
+// в невесомости (Zero/Custom) ставит в центр клетки.
+vec3 mob_stand_pos(const World& world, int cx, int cy, int cz, const vec3& half) {
+    const int wx = wrap_macro(cx);
+    const int wy = wrap_macro(cy);
+    const int wz = wrap_macro(cz);
+    vec3 pos{(static_cast<float>(wx) + 0.5f) * kCellSize,
+             (static_cast<float>(wy) + 0.5f) * kCellSize,
+             (static_cast<float>(wz) + 0.5f) * kCellSize};
+
+    const CellStep d = regime_down(world.gravity().regime);
+    if (d.x == 0 && d.y == 0 && d.z == 0) return pos;
+
+    const int upAxis = d.z != 0 ? 2 : (d.y != 0 ? 1 : 0);
+    const int upSign = -(d.x + d.y + d.z);
+    const int sx = wrap_macro(wx + d.x);
+    const int sy = wrap_macro(wy + d.y);
+    const int sz = wrap_macro(wz + d.z);
+    const SurfaceFace sf = surface_face_at(
+        world.grid(), sx, sy, sz, anchor_face_pack(upAxis, upSign));
+
+    float standM = 0.0f;
+    if (sf.columns > 0) {
+        const int supCoord = upAxis == 0 ? sx : (upAxis == 1 ? sy : sz);
+        const int edgeSub =
+            upSign > 0 ? static_cast<int>(sf.layer) + 1
+                       : static_cast<int>(sf.layer);
+        standM = static_cast<float>(supCoord) * kCellSize +
+                 static_cast<float>(edgeSub) * kVoxelSize;
+    } else {
+        const int cellCoord = upAxis == 0 ? wx : (upAxis == 1 ? wy : wz);
+        standM = static_cast<float>(cellCoord + (upSign > 0 ? 0 : 1)) * kCellSize;
+    }
+
+    if (upAxis == 0) pos.x = standM;
+    else if (upAxis == 1) pos.y = standM;
+    else pos.z = standM;
+
+    return wrap_pos(stand_centre(world, pos, half), kWorldExtent);
 }
 
 // Create ONE live monster. **The single place a mob entity's component set is
@@ -167,18 +214,19 @@ vec3 mob_stand_pos(int cx, int cy, int cz, const vec3& half) {
 // `headHash` is the per-HEAD scramble: it drives the colour jitter and the initial
 // attack cooldown, so two heads created from one pack hash must not share it or a
 // room full of monsters swings in lockstep.
-Entity emplace_mob(Registry& reg, LayerId layer, MobKind kind, const MobDef& def,
-                   std::uint8_t level, int cx, int cy, int cz,
-                   std::uint32_t headHash, std::uint8_t packId,
-                   std::uint64_t tick) {
+Entity emplace_mob(Registry& reg, const World* world, LayerId layer,
+                   MobKind kind, const MobDef& def, std::uint8_t level,
+                   int cx, int cy, int cz, std::uint32_t headHash,
+                   std::uint8_t packId, std::uint64_t tick) {
     const MobTier tier = static_cast<MobTier>(def.tier);
     const vec3 half = mob_half_extents(tier);
     const std::uint16_t hp = mob_hp_at_level(def.hp, level);
 
     Entity e = reg.create();
     Transform tr;
-    // Centre the body on the cell and sit it on the floor of that cell.
-    tr.pos = mob_stand_pos(cx, cy, cz, half);
+    // Centre the body on the cell and sit it on the real support surface.
+    tr.pos = world ? mob_stand_pos(*world, cx, cy, cz, half)
+                   : mob_stand_pos(cx, cy, cz, half);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
     reg.emplace<Velocity>(e);
@@ -238,8 +286,8 @@ Entity spawn_mob_at(Registry& reg, LayerId layer, MobKind kind,
     // spawns in a row do not share colour jitter or swing in lockstep.
     const std::uint32_t headHash =
         (salt ^ 0x9e3779b9u) * 0x85ebca6bu + static_cast<std::uint32_t>(kind);
-    return emplace_mob(reg, layer, kind, def, lv, cx, cy, cz, headHash,
-                       /*packId=*/0, tick);
+    return emplace_mob(reg, /*world=*/nullptr, layer, kind, def, lv, cx, cy, cz,
+                       headHash, /*packId=*/0, tick);
 }
 
 FloorTheme theme_for_kind(FloorKind kind) {
@@ -301,6 +349,8 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     // Один байт на комнату, от настоящего счёта комнат (тысячи на падике).
     std::vector<std::uint8_t> packsInRoom(fr->list.size() + 1, 0u);
 
+    const GravityFrame gf = regime_frame(world.gravity().regime);
+
     std::uint32_t spawned = 0;
     std::uint32_t packSeq = 0;
 
@@ -353,27 +403,33 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
 
         // 4. The pack's anchor: a standable cell inside the ROOM'S OWN box —
         //    зона комнаты несёт и ярус (S12.1: разные ярусы — разные
-        //    комнаты), так что пак больше не рисует storey по всей оси и не
-        //    зависает в толще сэндвича.
+        //    комнаты), и горизонтальная плоскость берётся из фрейма гравитации
+        //    (gf.tanA/tanB), не хардкодом Z.
         const RoomBox& bx =
             fr->boxes[rm.boxFirst +
                       hash_u32(r ^ 0x51ed270bu) % rm.boxCount];
-        int aox = 0, aoy = 0; // якорь в координатах бокса (для клампа спреда)
-        int ax = 0, ay = 0, packH = 0;
+        const int boxOrig[3] = {bx.x, bx.y, bx.z};
+        const int boxSpan[3] = {bx.sx, bx.sy, bx.sz};
+        int aoA = 0, aoB = 0; // якорь в касательных осях бокса (для клампа спреда)
+        int anchor[3] = {0, 0, 0};
         bool haveAnchor = false;
         for (int t = 0; t < kPlaceTries; ++t) {
             const std::uint32_t h =
                 hash_u32(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
-            aox = static_cast<int>((h >> 7) %
-                                   static_cast<std::uint32_t>(bx.sx));
-            aoy = static_cast<int>((h >> 19) %
-                                   static_cast<std::uint32_t>(bx.sy));
-            ax = wrap_macro(bx.x + aox);
-            ay = wrap_macro(bx.y + aoy);
-            packH = wrap_macro(
-                bx.z + static_cast<int>(hash_u32(h ^ 0xA5A5A5A5u) %
-                                        static_cast<std::uint32_t>(bx.sz)));
-            if (placeable(wet, world, ax, ay, packH)) { haveAnchor = true; break; }
+            aoA = static_cast<int>((h >> 7) %
+                                   static_cast<std::uint32_t>(boxSpan[gf.tanA]));
+            aoB = static_cast<int>((h >> 19) %
+                                   static_cast<std::uint32_t>(boxSpan[gf.tanB]));
+            const int aoH = static_cast<int>(
+                hash_u32(h ^ 0xA5A5A5A5u) %
+                static_cast<std::uint32_t>(boxSpan[gf.axis]));
+            anchor[gf.tanA] = wrap_macro(boxOrig[gf.tanA] + aoA);
+            anchor[gf.tanB] = wrap_macro(boxOrig[gf.tanB] + aoB);
+            anchor[gf.axis] = wrap_macro(boxOrig[gf.axis] + aoH);
+            if (placeable(wet, world, anchor[0], anchor[1], anchor[2])) {
+                haveAnchor = true;
+                break;
+            }
         }
         if (!haveAnchor) continue;  // a room filled solid with rubble
 
@@ -389,7 +445,7 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
         if (heads > 1 && spread < 1) spread = 1;  // a group needs somewhere to stand
 
         for (std::uint32_t k = 0; k < heads; ++k) {
-            int cx = ax, cy = ay;
+            int cell[3] = {anchor[0], anchor[1], anchor[2]};
             if (k != 0) {
                 bool placed = false;
                 const std::uint32_t sp = static_cast<std::uint32_t>(2 * spread + 1);
@@ -397,18 +453,20 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
                     const std::uint32_t h =
                         hash_u32(r ^ ((k * 0x9e3779b9u + static_cast<std::uint32_t>(t)) *
                                  0x7feb352du));
-                    const int dx = static_cast<int>((h >> 6) % sp) - spread;
-                    const int dy = static_cast<int>((h >> 17) % sp) - spread;
+                    const int da = static_cast<int>((h >> 6) % sp) - spread;
+                    const int db = static_cast<int>((h >> 17) % sp) - spread;
                     // The ROOM wins over packSpread. A Roamer's authored 10-cell
                     // spread inside a 7-cell apartment reads as "anywhere in this
                     // room", which is the honest resolution: letting the spread win
                     // would push half the pack through the walls into two other
                     // rooms and undo the grouping this whole function exists for.
-                    cx = wrap_macro(bx.x +
-                                    std::clamp(aox + dx, 0, bx.sx - 1));
-                    cy = wrap_macro(bx.y +
-                                    std::clamp(aoy + dy, 0, bx.sy - 1));
-                    if (placeable(wet, world, cx, cy, packH)) {
+                    cell[gf.tanA] = wrap_macro(
+                        boxOrig[gf.tanA] +
+                        std::clamp(aoA + da, 0, boxSpan[gf.tanA] - 1));
+                    cell[gf.tanB] = wrap_macro(
+                        boxOrig[gf.tanB] +
+                        std::clamp(aoB + db, 0, boxSpan[gf.tanB] - 1));
+                    if (placeable(wet, world, cell[0], cell[1], cell[2])) {
                         placed = true;
                         break;
                     }
@@ -422,8 +480,8 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             // is the very thing the stagger below exists to prevent, and packs make
             // it far more likely than independent placement ever did.
             const std::uint32_t rh = hash_u32(r ^ (k * 0x9e3779b9u) ^ 0x51ed270bu);
-            emplace_mob(reg, layer, mobKind, def, level, cx, cy, packH, rh,
-                        packId, tick);
+            emplace_mob(reg, &world, layer, mobKind, def, level,
+                        cell[0], cell[1], cell[2], rh, packId, tick);
             ++spawned;
         }
     }
@@ -606,9 +664,12 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
     const std::uint8_t level = mob_level_for_floor(floorNumber, danger);
     const float nearR2 = kThreatNearRadiusM * kThreatNearRadiusM;
     const float outerR2 = kThreatOuterRadiusM * kThreatOuterRadiusM;
-    const int acx = wrap_macro(static_cast<int>(around.x / kCellSize));
-    const int acy = wrap_macro(static_cast<int>(around.y / kCellSize));
-    const int acz = wrap_macro(static_cast<int>(around.z / kCellSize));
+    const GravityFrame gf = regime_frame(world.gravity().regime);
+    const int anchorCell[3] = {
+        cell_of_metres(around.x),
+        cell_of_metres(around.y),
+        cell_of_metres(around.z),
+    };
     const std::uint32_t span =
         static_cast<std::uint32_t>(2 * kThreatOuterRadiusCells + 1);
     const std::uint32_t wanted = out.wanted;
@@ -640,39 +701,30 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         const vec3 half = mob_half_extents(static_cast<MobTier>(def.tier));
 
         // A cell in the ANNULUS between the two census radii: 24 m..40 m from the
-        // anchor. Never inside the near radius, because a monster appearing 5 m away
-        // out of nothing is not pressure, it is a bug the player cannot distinguish
-        // from one. They still count against `withinOuter`, so the budget sees them.
-        int cx = 0, cy = 0;
+        // anchor, в касательной плоскости фрейма гравитации (`gf.tanA/tanB`).
+        int cx = 0, cy = 0, cz = 0;
         float d2 = 0.0f;
         bool placed = false;
         for (int t = 0; t < kFogPlaceTries; ++t) {
             const std::uint32_t h =
                 hash_u32(r ^ (static_cast<std::uint32_t>(t + 1) * 0xc2b2ae35u));
-            const int tx = wrap_macro(acx + static_cast<int>((h >> 7) % span) -
-                                      kThreatOuterRadiusCells);
-            const int ty = wrap_macro(acy + static_cast<int>((h >> 19) % span) -
-                                      kThreatOuterRadiusCells);
-            if (!placeable(wet, world, tx, ty, acz)) continue;
+            int c[3] = {anchorCell[0], anchorCell[1], anchorCell[2]};
+            c[gf.tanA] = wrap_macro(anchorCell[gf.tanA] +
+                                    static_cast<int>((h >> 7) % span) -
+                                    kThreatOuterRadiusCells);
+            c[gf.tanB] = wrap_macro(anchorCell[gf.tanB] +
+                                    static_cast<int>((h >> 19) % span) -
+                                    kThreatOuterRadiusCells);
+            if (!placeable(wet, world, c[0], c[1], c[2])) continue;
 
             // The census's own arithmetic, on the exact position about to be
-            // written. **This is the invariant that makes the budget terminate**:
-            // anything spawned here is guaranteed to be counted by the next
-            // samosbor_census, so the loop cannot add heads the gate never sees.
-            // Getting it wrong is not a rounding error — a flying player at z = 180 m
-            // is 88 cells above the ground storey, every arrival would fall outside
-            // the 40 m bubble, the census would keep reporting an empty floor and the
-            // spawner would run until the 4096-actor pool was gone. As written, that
-            // player simply gets no fog spawns, which is the honest answer while
-            // there is no air-spawn rule.
-            const vec3 at = mob_stand_pos(tx, ty, acz, half);
-            const float dx = wrap_delta_f(around.x, at.x, kWorldExtent);
-            const float dy = wrap_delta_f(around.y, at.y, kWorldExtent);
-            const float dz = wrap_delta_f(around.z, at.z, kWorldExtent);
-            d2 = dx * dx + dy * dy + dz * dz;
+            // written.
+            const vec3 at = mob_stand_pos(world, c[0], c[1], c[2], half);
+            d2 = wrap_dist2(around, at, kWorldExtent);
             if (d2 < nearR2 || d2 > outerR2) continue;
-            cx = tx;
-            cy = ty;
+            cx = c[0];
+            cy = c[1];
+            cz = c[2];
             placed = true;
             break;
         }
@@ -685,7 +737,7 @@ FogTickReport samosbor_fog_tick_at(Registry& reg, const World& world,
         // back-off would starve the rest of the samosbor. Grouping is a floor-load
         // property ([mob_spawn.h] header); fog arrivals trickle. pack = 0 is the
         // matching truth for wander: "walks alone".
-        Entity e = emplace_mob(reg, layer, kind, def, level, cx, cy, acz,
+        Entity e = emplace_mob(reg, &world, layer, kind, def, level, cx, cy, cz,
                                hash_u32(r ^ 0x51ed270bu), /*packId=*/0u,
                                simTick);
         reg.emplace<FogSpawn>(e);

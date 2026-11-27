@@ -394,6 +394,74 @@ void table_is_a_metric(const World& w, const ZonePartition& part,
     CHECK(triBad == 0);
     CHECK(reach > 0); // таблица не вся недостижима — иначе всё выше тождественно
 
+    // 4b. СВЯЗНОСТЬ ОСНОВНОЙ ХОДОВОЙ КОМПОНЕНТЫ: полный обход компонент ZoneGraph,
+    //     чтобы найти крупнейшую компоненту (отдельные замкнутые помещения в начале
+    //     индексации не искажают замер) и сверить достижимость с `dist.at`.
+    std::uint32_t bestSeed = Z;
+    std::size_t bestSize = 0u;
+    std::vector<std::uint8_t> compVis(Z, 0u);
+    std::vector<std::uint32_t> bfsQ;
+    bfsQ.reserve(Z);
+    for (std::uint32_t start = 0; start < Z; ++start) {
+        if (compVis[start] || g.degree(start) == 0u) continue;
+        bfsQ.clear();
+        compVis[start] = 1u;
+        bfsQ.push_back(start);
+        for (std::size_t h = 0; h < bfsQ.size(); ++h) {
+            const std::uint32_t u = bfsQ[h];
+            for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                if (!compVis[v]) {
+                    compVis[v] = 1u;
+                    bfsQ.push_back(v);
+                }
+            }
+        }
+        if (bfsQ.size() > bestSize) {
+            bestSize = bfsQ.size();
+            bestSeed = start;
+        }
+    }
+    CHECK(bestSeed < Z);
+    std::vector<std::uint8_t> bfsVis(Z, 0u);
+    bfsQ.clear();
+    if (bestSeed < Z) {
+        bfsVis[bestSeed] = 1u;
+        bfsQ.push_back(bestSeed);
+        for (std::size_t h = 0; h < bfsQ.size(); ++h) {
+            const std::uint32_t u = bfsQ[h];
+            for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                if (!bfsVis[v]) {
+                    bfsVis[v] = 1u;
+                    bfsQ.push_back(v);
+                }
+            }
+        }
+    }
+    std::uint32_t compReachMismatch = 0u;
+    std::uint32_t compLeakMismatch = 0u;
+    if (bestSeed < Z) {
+        for (std::uint32_t z = 0; z < Z; ++z) {
+            const std::uint16_t d = dist.at(bestSeed, z);
+            if (bfsVis[z]) {
+                if (d == kZoneUnreachable) ++compReachMismatch;
+            } else {
+                if (d != kZoneUnreachable) ++compLeakMismatch;
+            }
+        }
+    }
+    std::fprintf(stderr,
+                 "[zone-nav] главная компонента от %u: %zu/%u зон "
+                 "(недост %u, утечек %u)\n",
+                 bestSeed, bfsQ.size(), Z,
+                 compReachMismatch, compLeakMismatch);
+    // Главная компонента обязана накрывать многократно больше одного сектора
+    // (в многоярусном Residential 128³ ~18 изолированных палуб по ~800 зон).
+    CHECK(bfsQ.size() > static_cast<std::size_t>(idealCap) * 4u);
+    CHECK(compReachMismatch == 0u);
+    CHECK(compLeakMismatch == 0u);
+
     // 5. zone_next ВЕДЁТ, А НЕ КРУЖИТ: строгий спуск лексикографического
     //    потенциала (sectorDist, intraDist до портала или цели) на 256+
     //    разнородных достижимых парах, без единого цикла.

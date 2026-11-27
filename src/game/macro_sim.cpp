@@ -278,7 +278,10 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
 
     // ---- Single columnar sweep: age, then old-age mortality, sampling parents. ----
     for (NpcId id = 0; id < n; ++id) {
-        if (!pool.alive(id)) continue;
+        if (!pool.alive(id)) {
+            traveling_[id] = 0;
+            continue;
+        }
 
         // Embodied records (the player included — it is just a record with the
         // NpcPlayer bit) are owned by the live micro/ECS sim, which ages and can kill
@@ -310,12 +313,14 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
         // which is exactly why births are a one-way draw on the reserve (see the
         // horizon note in macro_sim.h).
         if (age >= maxAge) {
+            traveling_[id] = 0;
             pool.kill(id);
             ++deaths;
             continue;
         }
         const float yp = year_death_prob(age, params);
         if (yp > 0.0f && rand01(hash3(id, t32, sDeath)) < yp * yearFrac) {
+            traveling_[id] = 0;
             pool.kill(id);
             ++deaths;
             continue;
@@ -401,6 +406,7 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             // Mortality was already visible (embody_crowd skips the dead). Both directions
             // of the demography now reach the player.
             ageDays_[baby] = 0;
+            traveling_[baby] = 0;
             pool.age(baby) = 0;
             pool.sex(baby) = (hash3(t32, k, sBaby) & 1u) ? SexFemale : SexMale;
             pool.height_mm(baby) =
@@ -447,24 +453,30 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
     // the rest of the session and leaving `inTransit` reporting a number that can never
     // fall. Journeys already started are owed a landing regardless of the gate.
     if (!journeys_.empty()) {
+        static thread_local std::vector<NpcId> staleRecycledIds;
+        staleRecycledIds.clear();
         std::size_t w = 0;
         for (std::size_t r = 0; r < journeys_.size(); ++r) {
             const Journey j = journeys_[r];
+            // Слот умер или переработан: поездка уже не может состояться.
+            // При переработке (generation != j.gen) нельзя безусловно сносить
+            // traveling_[j.id] здесь: новый жилец слота уже мог начать свою
+            // поездку, поэтому добиваем флаг после сжатия, только если живых
+            // поездок на этот id в journeys_ не осталось.
+            if (!pool.alive(j.id)) {
+                traveling_[j.id] = 0;
+                continue;
+            }
+            if (pool.generation(j.id) != j.gen) {
+                staleRecycledIds.push_back(j.id);
+                continue;
+            }
             if (j.etaTenths > afterTenths) {
                 journeys_[w++] = j;  // still travelling
                 continue;
             }
             traveling_[j.id] = 0;
-            // `alive` alone stops being sufficient the moment the pool recycles: a
-            // traveller who died in transit can have had its slot handed to a newborn,
-            // and that newborn IS alive — so the journey would teleport a stranger to a
-            // dead traveller's destination. Comparing the generation is the ABA test.
-            //
-            // A no-op while recycling is off (a generation only advances when a slot is
-            // reused, and a dead record already fails pool.alive), which is why this
-            // lands BEFORE the arming line rather than with it.
-            if (pool.alive(j.id) && pool.generation(j.id) == j.gen &&
-                !pool.embodied(j.id)) {
+            if (!pool.embodied(j.id)) {
                 // A journey landing IS the O(1) relabel set_floor() exists for: it
                 // splices the record out of its old floor bucket and into the new one.
                 pool.set_floor(j.id, static_cast<std::int16_t>(j.toFloor));
@@ -472,6 +484,17 @@ MacroStats MacroSim::step(NpcPool& pool, const MacroParams& params,
             }
         }
         journeys_.resize(w);
+        for (const NpcId sid : staleRecycledIds) {
+            if (!traveling_[sid]) continue;
+            bool hasLive = false;
+            for (const Journey& liveJ : journeys_) {
+                if (liveJ.id == sid) {
+                    hasLive = true;
+                    break;
+                }
+            }
+            if (!hasLive) traveling_[sid] = 0;
+        }
     }
 
     if (floors_.size() >= 2u && params.migrateRatePerYear > 0.0f) {

@@ -1,5 +1,6 @@
 #include "render/material_textures.h"
 
+#include "render/render_io.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
@@ -8,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <system_error>
 
 #include "render/material_table.h" // GENERATED: kMaterial + kMaterialMaps
 #include "world/materials.h"
@@ -31,25 +33,32 @@ namespace {
 // compile-time default stands and load_material_textures() reports the miss
 // loudly instead of dying.
 static std::string resolve_texture_dir() {
+    std::error_code ec;
     if (const char* env = std::getenv("GIGA_TEXTURE_DIR")) {
-        if (*env != '\0' && std::filesystem::is_directory(env)) return env;
+        if (*env != '\0' &&
+            std::filesystem::is_directory(fs_path_from_utf8(env), ec))
+            return env;
     }
     if (const char* base = SDL_GetBasePath(); base && *base != '\0') {
-        const std::filesystem::path basePath(base);
+        const std::filesystem::path basePath = fs_path_from_utf8(base);
         for (const char* rel : {"data/textures", "../data/textures"}) {
             const std::filesystem::path p = basePath / rel;
-            if (std::filesystem::is_directory(p)) return p.string();
+            if (std::filesystem::is_directory(p, ec)) {
+                const std::u8string u8 = p.u8string();
+                return std::string(reinterpret_cast<const char*>(u8.data()),
+                                   u8.size());
+            }
         }
     }
-    const std::filesystem::path candidates[] = {
+    const char* candidates[] = {
         "data/textures",
         "../data/textures",
         "../../data/textures",
         "../../../data/textures"
     };
-    for (const auto& p : candidates) {
-        if (std::filesystem::is_directory(p)) {
-            return p.string();
+    for (const char* rel : candidates) {
+        if (std::filesystem::is_directory(fs_path_from_utf8(rel), ec)) {
+            return rel;
         }
     }
     return GIGA_TEXTURE_DIR;

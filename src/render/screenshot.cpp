@@ -4,6 +4,7 @@
 #include <cstring>
 #include <vector>
 
+#include "render/render_io.h"
 #include "render/vk_device.h"
 #include "render/vk_renderer.h"
 #include "render/vk_swapchain.h"
@@ -98,7 +99,7 @@ bool write_png(const char* path, std::uint32_t w, std::uint32_t h,
     chunk(png, "IDAT", zlib_stored(raw));
     chunk(png, "IEND", {});
 
-    std::FILE* fh = std::fopen(path, "wb");
+    std::FILE* fh = fopen_utf8(path, "wb");
     if (!fh) return false;
     const std::size_t wrote = std::fwrite(png.data(), 1, png.size(), fh);
     std::fclose(fh);

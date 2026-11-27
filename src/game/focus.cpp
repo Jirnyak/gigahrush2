@@ -204,8 +204,8 @@ const char* focus_prompt(const Focus& f, const World& w, const Doors& doors,
         return interact_def(f.kind).prompt; // текст — из таблицы, не литерал
     case Focus::What::Portal:
         if (f.portal >= doors.list.size()) return nullptr;
-        return door_closed(w, doors.list[f.portal]) ? "OPEN DOOR"
-                                                    : "CLOSE DOOR";
+        return door_closed(w, doors.list[f.portal]) ? "ОТКРЫТЬ ДВЕРЬ"
+                                                    : "ЗАКРЫТЬ ДВЕРЬ";
     default:
         return nullptr;
     }

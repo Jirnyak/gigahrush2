@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "render/render_io.h"
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
@@ -31,7 +32,7 @@ std::string path_join(const char* dir, const char* file) {
 }
 
 bool read_spv(const char* path, std::vector<char>& out) {
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) return false;
     std::fseek(f, 0, SEEK_END);
     long n = std::ftell(f);

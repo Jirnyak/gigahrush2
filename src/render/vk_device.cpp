@@ -1,5 +1,6 @@
 #include "render/vk_device.h"
 
+#include "render/render_io.h"
 #include "render/vk_buffer.h"  // mem_tally_snapshot — наша сумма для отчёта
 #include "render/vk_common.h"
 
@@ -29,7 +30,7 @@ void ensure_moltenvk_icd() {
 
     auto try_icd = [](const char* path) -> bool {
         if (!path || *path == '\0') return false;
-        std::FILE* fp = std::fopen(path, "rb");
+        std::FILE* fp = fopen_utf8(path, "rb");
         if (!fp) return false;
         std::fclose(fp);
         SDL_setenv_unsafe("VK_ICD_FILENAMES", path, 1);

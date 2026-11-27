@@ -16,6 +16,7 @@
 #include "game/room.h"               // FloorRooms — комнаты объявляет модуль (S12.1)
 #include "world/destruct.h"          // kSubMaterialName — страницы под штампом
 #include "world/macro_grid.h"        // MacroGrid — the frame helpers query cells
+#include "world/surface.h"           // surface_face_at — проверка реальной опоры
 #include "world/world.h"             // World — live gravity regime + grid
 
 namespace giga::game {
@@ -24,10 +25,40 @@ namespace giga::game {
 
 bool floor_standable(const World& w, int x, int y, int z) {
     const MacroGrid& g = w.grid();
-    if (g.cell(x, y, z) != kCellAir) return false;
+    const int wx = wrap_macro(x);
+    const int wy = wrap_macro(y);
+    const int wz = wrap_macro(z);
+    if (g.cell(wx, wy, wz) != kCellAir) return false;
     const CellStep d = regime_down(w.gravity().regime);
     if (d.x == 0 && d.y == 0 && d.z == 0) return true; // Zero-g: any air cell
-    return g.cell(x + d.x, y + d.y, z + d.z) != kCellAir;
+    const int sx = wrap_macro(wx + d.x);
+    const int sy = wrap_macro(wy + d.y);
+    const int sz = wrap_macro(wz + d.z);
+    if (g.cell(sx, sy, sz) == kCellAir) return false;
+    const int upAxis = d.z != 0 ? 2 : (d.y != 0 ? 1 : 0);
+    const int upSign = -(d.x + d.y + d.z);
+    const SurfaceFace sf =
+        surface_face_at(g, sx, sy, sz, anchor_face_pack(upAxis, upSign));
+    // Опора обязана выходить на примыкающую грань достаточной площадью (не 1
+    // висячий атом и не утопленная внутрь клетки плита без верхнего слоя).
+    // Порог 16 колонок (25% грани): решётка падика/блейма даёт 32, вход 40,
+    // сплошной пол 64.
+    constexpr int kMinSupportColumns = 16;
+    if (sf.columns < kMinSupportColumns) return false;
+    const SubMask& m = g.mask(sx, sy, sz);
+    const int topLayer = upSign > 0 ? kSubDim - 1 : 0;
+    int topCols = 0;
+    if (upAxis == 2) {
+        topCols = std::popcount(m.words[topLayer]);
+    } else {
+        for (int v = 0; v < kSubDim; ++v)
+            for (int u = 0; u < kSubDim; ++u) {
+                const int bit = upAxis == 0 ? sub_bit(topLayer, u, v)
+                                            : sub_bit(u, topLayer, v);
+                if (m.test(bit)) ++topCols;
+            }
+    }
+    return topCols >= kMinSupportColumns;
 }
 
 int floor_ground_z() { return kFloorArrivalCoord; }

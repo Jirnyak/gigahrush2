@@ -194,7 +194,7 @@ macOS/Clang и на MSVC, что важно отдельно, пока винд�
 | пропы (корневой) | 2^17 = 131072 | `src/render/prop_pass.h:46 «static constexpr uint32_t kRootPropInstances = 1u << 17; // 131072»` | **ПРАВДА** |
 | антураж (корневой) | 2^20 точек | `src/render/verlet_pass.h:71 «inline constexpr std::uint32_t kRootAntouragePoints = 1u << 20;»` | **ПРАВДА** |
 | частицы (корневой) | 32768 | `src/render/verlet_pass.h:78 «inline constexpr std::uint32_t kRootParticles = 32768;»` | **ПРАВДА** |
-| тела (корневой, от ЗАМЕРА) | 2^17 = 131072 | `src/render/body_pass.cpp:52 «constexpr std::uint32_t kMaxBodies = std::bit_ceil(»`; ~~вывод «4096 бодрых × 8 множитель сна»~~ **ПЕРЕПИСАН 2026-11-06 (F1, matwej.md §17.2):** кап выводится из того, что РИСУЕТСЯ. **ПЕРЕВЁРНУТ 2026-11-25 (И1б, тело из 7 частей), АКТОРЫ ЧАСТЯМИ 2026-11-26 (И2):** снизу вверх — степень двойки над (4096 акторов-контракт + 7168 застывших трупов, потолок F1 сохранён) × 7 частей = 78848, остаток 52224 — названная статья «запас на пропы» (`kPropReserve`); части на тело (`kPartsPerBody`) связаны с `kMaxFormSegs` гейтом `source_rules` | **ПРАВДА**, но см. расхождение ниже |
+| тела (корневой, от ЗАМЕРА) | 2^17 = 131072 | `src/render/body_pass.cpp:53 «constexpr std::uint32_t kMaxBodies = std::bit_ceil(»`; ~~вывод «4096 бодрых × 8 множитель сна»~~ **ПЕРЕПИСАН 2026-11-06 (F1, matwej.md §17.2):** кап выводится из того, что РИСУЕТСЯ. **ПЕРЕВЁРНУТ 2026-11-25 (И1б, тело из 7 частей), АКТОРЫ ЧАСТЯМИ 2026-11-26 (И2):** снизу вверх — степень двойки над (4096 акторов-контракт + 7168 застывших трупов, потолок F1 сохранён) × 7 частей = 78848, остаток 52224 — названная статья «запас на пропы» (`kPropReserve`); части на тело (`kPartsPerBody`) связаны с `kMaxFormSegs` гейтом `source_rules` | **ПРАВДА**, но см. расхождение ниже |
 | решётка лифтов / coarse-граф нава | 4³ = 64, шаг 32 | `src/world/lattice.h:26 «inline constexpr int kLatticeDim = 4;»`; плюс `kLatticeSpacing * kLatticeDim == kMacroDim` | **ПРАВДА** |
 | сторона световой сетки, байты клетки, дин-бакет | 64 / 256 / 16 | `GIGA_PO2` в блоке `src/render/gpu_light_grid.h`; кубичность сетки проверяет САМ CMakeLists при конфигурации (FATAL_ERROR), и это правильное место — он же раздаёт число шейдерам через `-DGIGA_LIGHT_GRID_DIM` | **ПРАВДА** |
 
@@ -202,7 +202,7 @@ macOS/Clang и на MSVC, что важно отдельно, пока винд�
 
 CANON S11 объявляет тела пятой корневой системой и единственной, чей кап выведен
 из ЗАМЕРА, а не из другого капа. Живёт это число в
-`src/render/body_pass.cpp:52 «constexpr std::uint32_t kMaxBodies = std::bit_ceil(»` —
+`src/render/body_pass.cpp:53 «constexpr std::uint32_t kMaxBodies = std::bit_ceil(»` —
 в анонимном пространстве имён **рендер-пасса**, то есть кап СИМУЛЯЦИИ объявлен
 в слое, который по AGENTS.md «pure shell; sim never depends on it». Симуляция
 своего капа тел не знает. Наряда нет.
@@ -653,9 +653,9 @@ grep -c 'room_at\|FloorRooms\|declared\[\|supply\[' src/game/place.h   → 6
 | следствие | мера СЕГОДНЯ | статус |
 |---|---|---|
 | запрос «место, где можно Х» не задавался НИГДЕ | `place_pick@src/game/place.h`, и у него есть прод-вызывающий — `place_errand_step@src/game/place.h` | **ЗАКРЫТО** |
-| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:262 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
-| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:294 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
-| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:292 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
+| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:384 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
+| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:416 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
+| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:414 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
 | девять глаголов из 19 не названы в `src/` нигде | **семь**: не названы `kVerbWork`, `kVerbTrade`, `kVerbPatrol`, `kVerbNest`, `kVerbHunt`, `kVerbHaul`, `kVerbProfit`; `kVerbDrink` и `kVerbWander` назвал спрос | **ЧАСТИЧНО** (12 из 19 названы) |
 | 11 из 13 интентов дают ОДНО движение | по-прежнему так, НО движение по делам больше не зависит от интента: его определяет сумма. См. VIII.2 | **ПЕРЕФОРМУЛИРОВАНО, открыто** |
 | ось срочности S13.5 мертва | `kVerbPatienceE3@src/game/verb_table.h` — **0** читателей вне своей таблицы | **ОТКРЫТО**: решение владельца 2026-10-01 — издержка пока только путь |
@@ -740,7 +740,7 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 |---|---|---|---|
 | `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:904 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
 | `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1113 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
-| `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:649 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:389 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
+| `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:821 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:523 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
 | `Chase` | погоня моба за жертвой | `Dir` / `Hold` в досягаемости | `src/game/wander.cpp:419 «                                target_dir(steer_tangent(gf, tx, ty, 0.0f), sp));»` |
 | `Walk` | прогулка + заморозка взглядом | `Zone` / `Hold` | `src/game/wander.cpp:565 «                    target_zone(wt.zone, speed));»` и `src/game/wander.cpp:438 «            steer_claim(reg, e, tick, SteerRank::Walk, target_hold());»` |
 | `Feud` | вражда — ранг ОБЪЯВЛЕН и ЧИТАЕТСЯ, но заявки не подаёт: проход пишет скорость сам | — | `src/game/faction_relations.cpp:260 «        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;»` |
@@ -923,7 +923,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 |---|---|---|
 | дверь O(1)-запроса навигации | `zone_walk_dir@src/game/zone_nav.h` — два чтения: таблица даёт соседку, плоскость соседки даёт направление | **ПРАВДА** |
 | вызовов `zone_walk_dir` в проде | **1 с 2026-11-09**: `src/game/guide.cpp:53 «        zone_walk_dir(zones, from, target, cx, cy, cz, gf.pull ? gf.axis : -1);»` — внутри `steer_to_zone@src/game/guide.h`. ~~**3, и все три — проходы ходьбы**: дело, наряд, прогулка~~ Три ПОБАЙТОВО одинаковых копии «куда шагнуть к зоне» по 30 строк слиты в эту одну дверь (CANON S25) | — |
-| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:581 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1064 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
+| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:755 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1064 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
 | второй и третьей двери НЕТ | `route_step` снесён вместе с `CoarseGraph`/`FineNav` и ручной композицией двух ярусов в `src/game/ai.cpp`/`src/game/wander.cpp`; реализация решёточного бейка (nav-cpp в src/world) УДАЛЕНА целиком, в `src/world/nav.h` остался только словарь шести направлений `kNavDir@src/world/nav.h` | — |
 
 **ЧЕМ ЭТО КОНЧИЛОСЬ, ЧИСЛОМ.** Прежняя дверь отвечала «шаг к ближайшему ЯКОРЮ

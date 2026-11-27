@@ -4,10 +4,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <vector>
 
+#include "render/render_io.h"
 #include "render/vk_device.h"
 #include "world/types.h" // kWorldExtent — the sim's wrap period
 
@@ -16,12 +16,20 @@ namespace giga::gpu {
 namespace {
 
 bool read_file(const std::string& path, std::vector<char>& out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::FILE* f = fopen_utf8(path, "rb");
     if (!f) return false;
-    const std::streamsize n = f.tellg();
-    f.seekg(0);
+    std::fseek(f, 0, SEEK_END);
+    long n = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (n <= 0) {
+        std::fclose(f);
+        return false;
+    }
     out.resize(static_cast<std::size_t>(n));
-    return static_cast<bool>(f.read(out.data(), n));
+    const std::size_t rd =
+        std::fread(out.data(), 1, static_cast<std::size_t>(n), f);
+    std::fclose(f);
+    return rd == static_cast<std::size_t>(n);
 }
 
 bool make_module(VkDevice dev, const std::vector<char>& spv, VkShaderModule* m) {
@@ -631,7 +639,7 @@ void VerletPass::maybe_pin_dump(BankPin& s, const char* tag,
         char path[512];
         std::snprintf(path, sizeof path, "%s_%s_e%u.bin", pfx, tag,
                       s.uploadEpoch);
-        if (std::FILE* fp = std::fopen(path, "wb")) {
+        if (std::FILE* fp = fopen_utf8(path, "wb")) {
             for (std::uint32_t i = 0; i < count; ++i)
                 for (std::uint32_t k = 0; k < pointsPer; ++k)
                     std::fwrite(&pts[pointBase + i * pointsPer + k].cur,

@@ -1,5 +1,6 @@
 #include "render/conversation_ui.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "imgui.h"
@@ -7,8 +8,21 @@
 namespace giga {
 
 namespace {
-constexpr ImU32 kPhosphor = IM_COL32(89, 242, 102, 255);
-constexpr ImU32 kAmber = IM_COL32(242, 199, 64, 255);
+// Единая палитра CRT-аппаратуры ([AGENTS.md], [hud_ui.cpp]): фосфор, янтарь,
+// красный опасности, приглушённый фосфор для подсказок.
+constexpr ImVec4 kPhosphor{0.349f, 0.949f, 0.400f, 1.0f}; // #59F266
+constexpr ImVec4 kAmber{0.949f, 0.780f, 0.251f, 1.0f};    // #F2C740
+constexpr ImVec4 kDanger{0.902f, 0.310f, 0.361f, 1.0f};
+constexpr ImVec4 kDim{0.349f, 0.949f, 0.400f, 0.55f};
+
+bool crt_button(const char* label, const ImVec4& accent,
+                const ImVec2& size = ImVec2(0.0f, 0.0f)) {
+    ImGui::PushStyleColor(ImGuiCol_Border, accent);
+    ImGui::PushStyleColor(ImGuiCol_Text, accent);
+    const bool pressed = ImGui::Button(label, size);
+    ImGui::PopStyleColor(2);
+    return pressed;
+}
 } // namespace
 
 ConvUiRequest conversation_ui_draw(ConvUiState& st, const char* header,
@@ -34,17 +48,16 @@ ConvUiRequest conversation_ui_draw(ConvUiState& st, const char* header,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoTitleBar);
 
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kPhosphor), "%s",
-                       header ? header : "");
+    ImGui::TextColored(kPhosphor, "%s", header ? header : "");
     ImGui::Separator();
 
     // Последняя реплика — то, что собеседник только что сказал.
     if (line && line[0]) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + winW - 24.0f);
-        ImGui::TextUnformatted(line);
+        ImGui::TextColored(kPhosphor, "%s", line);
         ImGui::PopTextWrapPos();
     } else {
-        ImGui::TextDisabled("(молчит)");
+        ImGui::TextColored(kDim, "(молчит)");
     }
     ImGui::Separator();
 
@@ -57,20 +70,18 @@ ConvUiRequest conversation_ui_draw(ConvUiState& st, const char* header,
     for (std::size_t i = 0; i < n; ++i) {
         const bool selected = static_cast<int>(i) == st.sel;
         const bool marked = std::strchr(options[i].label, '!') != nullptr;
-        if (marked)
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  ImGui::ColorConvertU32ToFloat4(kAmber));
+        ImGui::PushStyleColor(ImGuiCol_Text, marked ? kAmber : kPhosphor);
         if (ImGui::Selectable(options[i].label, selected)) {
             st.sel = static_cast<int>(i);
             req.optionId = options[i].id;
         }
-        if (marked) ImGui::PopStyleColor();
+        ImGui::PopStyleColor();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false))
         req.optionId = options[st.sel].id;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.wantClose = true;
 
-    ImGui::TextDisabled("стрелки | Enter | Esc");
+    ImGui::TextColored(kDim, "стрелки | Enter | Esc");
     ImGui::End();
     return req;
 }
@@ -89,50 +100,49 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header) {
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
                      ImGuiWindowFlags_NoTitleBar);
 
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
-                       "КОСТИ | СТАВКА %d РУБ | ЦЕЛЬ ДО %d",
+    ImGui::TextColored(kAmber, "КОСТИ | СТАВКА %d РУБ | ЦЕЛЬ ДО %d",
                        g.stake, game::kDiceTarget);
     ImGui::Separator();
 
-    // Два борта: счёт красится как в референсе — перебор тревожный, 21 золото.
+    // Два борта: счёт красится по единой CRT-палитре — перебор тревожный, 21 амбер.
     auto scoreCol = [](std::int32_t sc) {
-        if (sc > game::kDiceTarget) return ImVec4(0.95f, 0.45f, 0.30f, 1.0f);
-        if (sc == game::kDiceTarget) return ImVec4(0.95f, 0.78f, 0.25f, 1.0f);
-        return ImVec4(0.35f, 0.95f, 0.40f, 1.0f);
+        if (sc > game::kDiceTarget) return kDanger;
+        if (sc == game::kDiceTarget) return kAmber;
+        return kPhosphor;
     };
     ImGui::TextColored(scoreCol(g.playerScore), "ТЫ: %d", g.playerScore);
     if (g.playerRolls > 0)
-        ImGui::TextDisabled("  %u бр. | последний: %u+%u=%u", g.playerRolls,
-                            g.lastA, g.lastB,
-                            static_cast<unsigned>(g.lastA + g.lastB));
+        ImGui::TextColored(kDim, "  %u бр. | последний: %u+%u=%u", g.playerRolls,
+                           g.lastA, g.lastB,
+                           static_cast<unsigned>(g.lastA + g.lastB));
     ImGui::TextColored(scoreCol(g.npcScore), "%s: %d",
                        header ? header : "ОН", g.npcScore);
     if (g.npcRolls > 0)
-        ImGui::TextDisabled("  %u бр. | последний: %u+%u=%u", g.npcRolls,
-                            g.npcLastA, g.npcLastB,
-                            static_cast<unsigned>(g.npcLastA + g.npcLastB));
+        ImGui::TextColored(kDim, "  %u бр. | последний: %u+%u=%u", g.npcRolls,
+                           g.npcLastA, g.npcLastB,
+                           static_cast<unsigned>(g.npcLastA + g.npcLastB));
     ImGui::Separator();
 
     if (g.phase == game::DicePhase::Finished) {
         switch (g.winner) {
             case game::DiceWinner::Player:
-                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
-                                   "ТВОЯ ВЗЯЛА: +%d руб", g.paid);
+                ImGui::TextColored(kAmber, "ТВОЯ ВЗЯЛА: +%d руб", g.paid);
                 break;
             case game::DiceWinner::Npc:
-                ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.30f, 1.0f),
-                                   "ПРОДУЛ: -%d руб", g.paid);
+                ImGui::TextColored(kDanger, "ПРОДУЛ: -%d руб", g.paid);
                 break;
             default:
-                ImGui::TextUnformatted("НИЧЬЯ. Деньги остаются в карманах.");
+                ImGui::TextColored(kPhosphor,
+                                   "НИЧЬЯ. Деньги остаются в карманах.");
                 break;
         }
-        ImGui::TextDisabled("Enter/Esc — от стола");
+        ImGui::TextColored(kDim, "Enter/Esc — от стола");
         if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             req.close = true;
     } else {
-        ImGui::TextDisabled("Enter БРОСИТЬ | T СТОП | Esc СДАТЬСЯ (ставка уйдёт)");
+        ImGui::TextColored(kDim,
+                           "Enter БРОСИТЬ | T СТОП | Esc СДАТЬСЯ (ставка уйдёт)");
         if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) req.roll = true;
         if (ImGui::IsKeyPressed(ImGuiKey_T, false)) req.hold = true;
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.surrender = true;
@@ -145,26 +155,64 @@ TellerUiRequest teller_ui_draw(std::int64_t banked, std::int64_t cash,
                                const char* header) {
     TellerUiRequest req;
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float winW = 460.0f;
-    const float winH = 150.0f;
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
-                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.6f),
-                            ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
+    const float winW = 480.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                                   vp->WorkPos.y + vp->WorkSize.y * 0.6f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(winW, 0.0f), ImGuiCond_Always);
     ImGui::Begin("##teller", nullptr,
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoTitleBar);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kAmber),
-                       "КАССА | %s", header ? header : "");
+    ImGui::TextColored(kAmber, "КАССА | %s", header ? header : "");
     ImGui::Separator();
-    ImGui::Text("СЧЁТ:    %lld руб", static_cast<long long>(banked));
-    ImGui::Text("НАЛИЧКА: %lld руб", static_cast<long long>(cash));
+    ImGui::TextColored(kPhosphor, "СЧЁТ:    %lld руб",
+                       static_cast<long long>(banked));
+    ImGui::TextColored(kPhosphor, "НАЛИЧКА: %lld руб",
+                       static_cast<long long>(cash));
     ImGui::Separator();
-    ImGui::TextDisabled("Enter внести наличку | T снять 1000 наличкой");
-    ImGui::TextDisabled("Esc уйти");
+
+    ImGui::BeginDisabled(cash <= 0);
+    if (crt_button("Внести всё [Enter]", kPhosphor)) req.depositAll = true;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (crt_button("Уйти [Esc]", kDim)) req.close = true;
+
+    ImGui::Spacing();
+    ImGui::TextColored(kDim, "Снять наличкой:");
+    ImGui::BeginDisabled(banked <= 0);
+    struct Preset {
+        const char* label;
+        std::int32_t amount;
+    };
+    const std::int32_t allAmount =
+        banked <= 0 ? 0
+        : (banked > 2147483647LL ? 2147483647
+                                 : static_cast<std::int32_t>(banked));
+    const Preset kPresets[] = {
+        {"100", 100},
+        {"500", 500},
+        {"1000 [T]", 1000},
+        {"Всё", allAmount},
+    };
+    for (std::size_t i = 0; i < sizeof(kPresets) / sizeof(kPresets[0]); ++i) {
+        if (i > 0) ImGui::SameLine();
+        char btnId[32];
+        std::snprintf(btnId, sizeof btnId, "%s##wd_%zu", kPresets[i].label, i);
+        if (crt_button(btnId, kAmber)) {
+            req.withdraw = true;
+            req.withdrawAmount = kPresets[i].amount;
+        }
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Separator();
+    ImGui::TextColored(kDim, "Enter внести всё | T снять 1000 | Esc уйти");
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) req.depositAll = true;
-    if (ImGui::IsKeyPressed(ImGuiKey_T, false)) req.withdraw = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+        req.withdraw = true;
+        req.withdrawAmount = 1000;
+    }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) req.close = true;
     ImGui::End();
     return req;

@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 #include "game/conversation.h"  // ConvOption — the projected menu rows
 #include "game/dice.h"          // DiceGame — the dice panel reads it
@@ -55,9 +56,10 @@ DiceUiRequest dice_ui_draw(const game::DiceGame& g, const char* header);
 // (решение владельца 2026-11-08, см. шапку [economy.h]): банк был
 // надстройкой без мандата, а наличка/счёт — ядро, деньги как цена в обмене.
 struct TellerUiRequest {
-    bool depositAll = false;   // Enter — вся наличка на счёт
-    bool withdraw = false;     // T — снять до 1000 монетами
-    bool close = false;        // Esc — от стойки
+    bool depositAll = false;            // Enter / кнопка — вся наличка на счёт
+    bool withdraw = false;              // T / кнопка — снять withdrawAmount монетами
+    std::int32_t withdrawAmount = 1000; // сумма снятия для teller_withdraw_cash
+    bool close = false;                 // Esc / кнопка — от стойки
 };
 
 TellerUiRequest teller_ui_draw(std::int64_t banked, std::int64_t cash,

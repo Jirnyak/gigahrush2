@@ -17,6 +17,41 @@ namespace {
 constexpr ImVec4 kAmber{0.949f, 0.780f, 0.251f, 1.0f};
 constexpr ImVec4 kDanger{0.902f, 0.310f, 0.361f, 1.0f};
 
+// Отображаемые названия экшенов биндов — только для меню; в конфиге и
+// KeybindTable сохраняется стабильный ASCII-ключ `b.action`.
+struct BindLabelRow {
+    const char* action;
+    const char* label;
+};
+
+constexpr BindLabelRow kBindLabels[] = {
+    {"menu",            "Меню / Пауза"},
+    {"console",         "Консоль"},
+    {"hud",             "Отладочная панель"},
+    {"inventory",       "Инвентарь"},
+    {"mouselook",       "Захват мыши"},
+    {"fly",             "Полёт (noclip)"},
+    {"interact",        "Взаимодействие"},
+    {"relief",          "Облегчение"},
+    {"save",            "Быстрое сохранение"},
+    {"load",            "Быстрая загрузка"},
+    {"move_fwd",        "Движение: вперёд"},
+    {"move_back",       "Движение: назад"},
+    {"move_left",       "Движение: влево"},
+    {"move_right",      "Движение: вправо"},
+    {"fly_ascend",      "Полёт: вверх"},
+    {"fly_descend",     "Полёт: вниз"},
+    {"fly_descend_alt", "Полёт: вниз (доп.)"},
+    {"jump",            "Прыжок"},
+};
+
+const char* bind_action_label(const char* action) {
+    if (!action) return "";
+    for (const BindLabelRow& row : kBindLabels)
+        if (std::strcmp(row.action, action) == 0) return row.label;
+    return action;
+}
+
 // --- Управление -------------------------------------------------------------
 // Бинд-эдитор, переехавший из страницы паузы один-в-один: таблица строк,
 // Rebind ставит захват (клавишу ловит event-loop app'а), конфликт — красная
@@ -38,7 +73,7 @@ void tab_controls(SettingsCtx& c, SettingsRequest& req) {
             const game::KeyBind& b = c.binds->at(i);
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted(b.action);
+            ImGui::TextUnformatted(bind_action_label(b.action));
             ImGui::TableSetColumnIndex(1);
             if (*c.rebindCapture == static_cast<int>(i)) {
                 ImGui::TextColored(kAmber, "нажми клавишу...");
@@ -75,6 +110,11 @@ void tab_interface(SettingsCtx&, SettingsRequest& req) {
     ImGui::Separator();
     for (std::size_t i = 0; i < n; ++i)
         if (ImGui::Checkbox(els[i].label, &els[i].on)) req.uiChanged = true;
+    ImGui::Spacing();
+    if (ImGui::Button("Сбросить интерфейс", ImVec2(220.0f, 0.0f))) {
+        for (std::size_t i = 0; i < n; ++i) els[i].on = true;
+        req.uiChanged = true;
+    }
 }
 
 // --- Графика ----------------------------------------------------------------
@@ -102,6 +142,14 @@ void tab_video(SettingsCtx& c, SettingsRequest& req) {
             ImGui::PopItemWidth();
         }
     }
+    ImGui::Spacing();
+    if (ImGui::Button("Сбросить графику", ImVec2(220.0f, 0.0f))) {
+        if (c.crtEnabled) *c.crtEnabled = true;
+        if (c.fullscreen) *c.fullscreen = false;
+        if (c.vrMode) *c.vrMode = false;
+        if (c.vrIpd) *c.vrIpd = kDefaultIpd;
+        req.uiChanged = true;
+    }
 }
 
 // --- Звук -------------------------------------------------------------------
@@ -121,6 +169,14 @@ void tab_audio(SettingsCtx& c, SettingsRequest& req) {
                            "%.2f"))
         req.uiChanged = true;
     ImGui::PopItemWidth();
+    ImGui::Spacing();
+    if (ImGui::Button("Сбросить звук", ImVec2(220.0f, 0.0f))) {
+        const audio::AudioConfig def{};
+        c.audio->masterGain = def.masterGain;
+        c.audio->sfxGain = def.sfxGain;
+        c.audio->ambientGain = def.ambientGain;
+        req.uiChanged = true;
+    }
 }
 
 // --- таблица вкладок --------------------------------------------------------

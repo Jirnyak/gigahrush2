@@ -48,10 +48,16 @@ BANNED_PATTERNS = [
         "Обработай ошибку, залогируй в Chronicle или верни структурированный статус отказа.",
     ),
     (
-        r"assert\s*\(\s*(?:true|1)\s*\)\s*;",
+        r"\bassert\s*\(\s*(?:true|1)\s*\)\s*;",
         "ЗАПРЕТ НА ПОТЁМКИНСКИЕ ТЕСТЫ (FAKE ASSERT)",
         "Обнаружена бессмысленная проверка 'assert(true)'. Тест обязан проверять реальный инвариант.",
         "Напиши честный assert на результирующие данные с проверкой граничных условий.",
+    ),
+    (
+        r"\b(?:BARRIER_CHECK|CHECK)\s*\(\s*(?:true|1)\s*\)",
+        "ЗАПРЕТ НА ПОТЁМКИНСКИЕ ТЕСТЫ (FAKE CHECK)",
+        "Обнаружена бессмысленная тавтология 'CHECK(true)' / 'CHECK(1)'. Тест обязан проверять реальный инвариант.",
+        "Замени тавтологию на честный CHECK/BARRIER_CHECK реального результата и граничных условий.",
     ),
     (
         r"/\*\s*rest\s+unchanged\s*\*/",
@@ -140,7 +146,7 @@ def main():
     all_violations.extend(check_sandboxes(root))
 
     # Scan relevant source extensions
-    extensions = {".cpp", ".h", ".comp", ".frag", ".vert", ".glsl"}
+    extensions = {".cpp", ".h", ".inl", ".comp", ".frag", ".vert", ".glsl"}
     scan_dirs = ["src", "tests", "shaders"]
 
     for d in scan_dirs:
