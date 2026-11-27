@@ -412,21 +412,46 @@ PickupTakeResult pickup_take(Registry& reg, NpcPool& pool, EventBus& bus,
     return r;
 }
 
-std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
-                           LayerId layer, std::uint64_t tick) {
-    Entity self = entt::null;
-    NpcId selfId = kInvalidNpc;
+namespace {
+
+bool resolve_camera_holder(Registry& reg, const NpcPool& pool, LayerId layer,
+                           NpcId& outId) {
     for (auto e : reg.view<const CameraTag, const Transform, const NpcRef>()) {
         if (reg.get<const Transform>(e).layer != layer) continue;
-        self = e;
-        selfId = reg.get<const NpcRef>(e).id;
-        break;
+        const NpcId id = reg.get<const NpcRef>(e).id;
+        if (!pool.valid(id)) return false;
+        outId = id;
+        return true;
     }
-    if (self == entt::null || !pool.valid(selfId)) return 0;
+    return false;
+}
 
+std::int16_t apply_heal_slot(NpcPool& pool, EventBus& bus, NpcId selfId,
+                             int slot, std::int16_t amt, std::uint64_t tick) {
     const std::int16_t hp = pool.hp(selfId);
     const std::int16_t maxHp = pool.max_hp(selfId);
     const std::int16_t missing = static_cast<std::int16_t>(maxHp - hp);
+    if (missing <= 0 || amt <= 0) return 0;
+
+    Inventory& inv = pool.inventory(selfId);
+    const std::int16_t healed = amt < missing ? amt : missing;
+    pool.hp(selfId) = static_cast<std::int16_t>(hp + healed);
+
+    const ItemId used = inv.slots[slot].item;
+    if (--inv.slots[slot].count == 0) inv.slots[slot] = ItemSlot{};
+    bus.publish(EventType::ItemTransferred, selfId, kInvalidNpc, used, tick);
+    return healed;
+}
+
+} // namespace
+
+std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
+                           LayerId layer, std::uint64_t tick) {
+    NpcId selfId = kInvalidNpc;
+    if (!resolve_camera_holder(reg, pool, layer, selfId)) return 0;
+
+    const std::int16_t missing =
+        static_cast<std::int16_t>(pool.max_hp(selfId) - pool.hp(selfId));
     if (missing <= 0) return 0;   // nothing to heal; do not burn a bandage
 
     Inventory& inv = pool.inventory(selfId);
@@ -434,15 +459,6 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
     // Smallest heal that still covers the wound, else the largest we have. So a
     // full medkit is not spent on a scratch, and a scratch's worth of bandage is
     // not withheld when it is all there is.
-    //
-    // ONE KEY HERE, TWO IN THE ROOM'S FOOD RULE (`best_lying@serve.cpp`; the bag's
-    // own food rule `use_best_food` died 2026-11-14 with the one door, CANON S27.1)
-    // — do not "unify" them. That rule ranks HP cost ahead of its second key because 4 of the 21 feeding rows charge
-    // `kRiskyFeedHpCost` = 6 HP, so ranking food on fit alone buys a tighter fit with
-    // health. Healing has no such key to add: all 12 `Heal` rows in `data/items.csv`
-    // leave `use_b` empty, so every candidate this loop can see is free. Copying the
-    // cost key over would be dead code; copying THIS loop into a consumable selector
-    // is how the defect got in.
     int best = -1;
     std::int16_t bestAmt = 0;
     for (int i = 0; i < kInvSlots; ++i) {
@@ -460,15 +476,26 @@ std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
         else if (!thisCovers && !bestCovers && amt > bestAmt) { best = i; bestAmt = amt; }
     }
     if (best < 0) return 0;
+    return apply_heal_slot(pool, bus, selfId, best, bestAmt, tick);
+}
 
-    const std::int16_t healed =
-        bestAmt < missing ? bestAmt : missing;   // report what landed, not the label
-    pool.hp(selfId) = static_cast<std::int16_t>(hp + healed);
+std::int16_t use_heal_item(Registry& reg, NpcPool& pool, EventBus& bus,
+                           LayerId layer, ItemId item, std::uint64_t tick) {
+    if (!item_valid(item)) return 0;
+    const ItemDef& d = item_def(item);
+    if (d.useEffect != static_cast<std::uint8_t>(UseEffect::Heal)) return 0;
+    const std::int16_t amt = static_cast<std::int16_t>(d.useA);
+    if (amt <= 0) return 0;
 
-    const ItemId used = inv.slots[best].item;
-    if (--inv.slots[best].count == 0) inv.slots[best] = ItemSlot{};
-    bus.publish(EventType::ItemTransferred, selfId, kInvalidNpc, used, tick);
-    return healed;
+    NpcId selfId = kInvalidNpc;
+    if (!resolve_camera_holder(reg, pool, layer, selfId)) return 0;
+
+    const Inventory& inv = pool.inventory(selfId);
+    for (int i = 0; i < kInvSlots; ++i) {
+        if (inv.slots[i].item == item && inv.slots[i].count > 0)
+            return apply_heal_slot(pool, bus, selfId, i, amt, tick);
+    }
+    return 0;
 }
 
 CorpseLootResult loot_corpse_interact(Registry& reg, NpcPool& pool, EventBus& bus,

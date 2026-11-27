@@ -335,18 +335,22 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
             anchor_face_pack(upAxis, -(dn.x + dn.y + dn.z));
         const SurfaceFace sf = surface_face_at(g, sx2, sy2, sz2, face);
         if (sf.columns == 0) continue; // опора без экспонированной грани
-        SubVoxelAnchor anchor;
-        anchor.cx = static_cast<std::uint8_t>(sf.cx);
-        anchor.cy = static_cast<std::uint8_t>(sf.cy);
-        anchor.cz = static_cast<std::uint8_t>(sf.cz);
-        anchor.subX = upAxis == 0 ? sf.layer : sf.su;
-        anchor.subY = upAxis == 1 ? sf.layer : (upAxis == 0 ? sf.su : sf.sv);
-        anchor.subZ = upAxis == 2 ? sf.layer : sf.sv;
-        anchor.face = face;
-        const vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
-                       (static_cast<float>(cy) + 0.5f) * kCellSize,
-                       static_cast<float>(cz) * kCellSize + kContainerHalf.z};
-        Entity e = spawn_prop_from_id(reg, world, pos, anchor,
+        const int upSign = anchor_face_dir(face);
+        const int supCoord = upAxis == 0 ? sx2 : (upAxis == 1 ? sy2 : sz2);
+        const int edgeSub = upSign > 0 ? sf.layer + 1 : sf.layer;
+        const float standM = static_cast<float>(supCoord) * kCellSize +
+                             static_cast<float>(edgeSub) * kVoxelSize;
+        vec3 pos{(static_cast<float>(cx) + 0.5f) * kCellSize,
+                 (static_cast<float>(cy) + 0.5f) * kCellSize,
+                 (static_cast<float>(cz) + 0.5f) * kCellSize};
+        const float halfUp =
+            upAxis == 0 ? kContainerHalf.x
+                        : (upAxis == 1 ? kContainerHalf.y : kContainerHalf.z);
+        const float seatCoord = standM + static_cast<float>(upSign) * halfUp;
+        if (upAxis == 0) pos.x = seatCoord;
+        else if (upAxis == 1) pos.y = seatCoord;
+        else pos.z = seatCoord;
+        Entity e = spawn_prop_from_id(reg, world, pos, anchor_from_surface(sf),
                                       PropId::SupplyCrate, layer);
         if (e == entt::null) continue;
         // «Вид комнаты» мёртв (S12.2, rooms-object F): содержимое катится по

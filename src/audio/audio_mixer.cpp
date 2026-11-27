@@ -10,7 +10,7 @@ AudioMixer::AudioMixer() {
     reset();
 }
 
-void AudioMixer::reset() {
+void AudioMixer::clear_spatial_voices() {
     for (int i = 0; i < kMaxSpatialVoices; ++i) {
         voices_[i].active = false;
         voices_[i].sound = SoundId::None;
@@ -19,6 +19,10 @@ void AudioMixer::reset() {
         voices_[i].lpStateL = 0.0f;
         voices_[i].lpStateR = 0.0f;
     }
+}
+
+void AudioMixer::reset() {
+    clear_spatial_voices();
     geiger_.reset();
     siren_.reset();
     ambient_.reset();

@@ -444,10 +444,12 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
             }
             ImGui::SameLine();
         }
-        // КНОПКА ЕСТЬ ТОЛЬКО У ТОГО, ЧТО ДВЕРЬ УТОЛЕНИЯ ПРИМЕТ (CANON S27.1):
-        // предмет с глаголом деяния. Прежде условием был `useEffect != 0`, и
-        // кнопка обещала бы аптечке то, чего дверь не сделает.
-        if (policy.allowUse && game::serve_item_verb(sel.item) < game::kVerbCount) {
+        // Кнопка доступна для предметов с глаголом утоления ИЛИ медицины Heal.
+        const bool canUseItem =
+            game::serve_item_verb(sel.item) < game::kVerbCount ||
+            game::item_def(sel.item).useEffect ==
+                static_cast<std::uint8_t>(game::UseEffect::Heal);
+        if (policy.allowUse && canUseItem) {
             if (ImGui::Button("Использовать [U]") ||
                 ImGui::IsKeyPressed(ImGuiKey_U, false))
                 req = {InvUiRequest::Kind::Use, slot8, EquipSlot::None};

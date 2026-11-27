@@ -50,6 +50,9 @@ public:
     // Shutdown and release stream
     void shutdown();
 
+    // Stop active world spatial voices and reset noise cursor (pause / floor change / load).
+    void stop_spatial();
+
     AudioMixer& mixer() { return mixer_; }
     const AudioMixer& mixer() const { return mixer_; }
     bool is_device_open() const { return deviceOpen_; }

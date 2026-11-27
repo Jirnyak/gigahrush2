@@ -11,6 +11,7 @@
 #include "core/rng.h"   // hash_u32 — выбор строки моба и клетки на крыше
 #include "core/wrap.h"
 #include "game/floor_catalog.h"
+#include "game/floor_gen.h"  // floor_standable — не сеять в парапет
 #include "game/mob_spawn.h"  // spawn_mob_at — ЕДИНАЯ дверь рождения моба
 #include "game/prop_system.h"
 #include "game/room.h"     // FloorRooms/Room — объявленные глаголы комнат
@@ -239,9 +240,17 @@ std::uint32_t khrushi_place(const FloorPlaceCtx& ctx) {
             ctx.seed ^ (static_cast<std::uint32_t>(i) * 0x9E3779B9u));
         const MobKind kind =
             kKhrushiRoofMobs[h % std::size(kKhrushiRoofMobs)];
-        const int cx = wrap_macro(rf.x0 + static_cast<int>((h >> 8) % rf.lenX));
-        const int cy = wrap_macro(rf.y0 + static_cast<int>((h >> 16) % rf.lenY));
-        if (spawn_mob_at(ctx.reg, ctx.layer, kind, lvl, cx, cy, rf.z,
+        int cx = wrap_macro(rf.x0 + static_cast<int>((h >> 8) % rf.lenX));
+        int cy = wrap_macro(rf.y0 + static_cast<int>((h >> 16) % rf.lenY));
+        bool okSpot = floor_standable(world, cx, cy, rf.z);
+        for (std::uint32_t p = 1; !okSpot && p < 16u; ++p) {
+            const std::uint32_t ph = hash_u32(h ^ (p * 0x85EBCA6Bu));
+            cx = wrap_macro(rf.x0 + static_cast<int>((ph >> 8) % rf.lenX));
+            cy = wrap_macro(rf.y0 + static_cast<int>((ph >> 16) % rf.lenY));
+            okSpot = floor_standable(world, cx, cy, rf.z);
+        }
+        if (okSpot &&
+            spawn_mob_at(ctx.reg, ctx.layer, kind, lvl, cx, cy, rf.z,
                          /*salt=*/h, ctx.tick) != entt::null)
             ++onRoof;
     }

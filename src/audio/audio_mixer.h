@@ -19,6 +19,7 @@ public:
     AudioMixer();
 
     void reset();
+    void clear_spatial_voices();
 
     // Voice allocation
     int play_spatial_sound(SoundId sound, const vec3& pos, float gain = 1.0f,

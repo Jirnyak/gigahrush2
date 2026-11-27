@@ -86,15 +86,10 @@ void AudioSystem::process_noise_events(const game::NoiseField& noiseField, Layer
             maxIdThisFrame = n.id;
         }
 
-        // Check layer matching or vertical attenuation
-        float layerGainMult = 1.0f;
-        if (n.layer != (activeLayer & 0xFFu)) {
-            int dLayer = std::abs(static_cast<int>(n.layer) - static_cast<int>(activeLayer & 0xFFu));
-            if (dLayer > 1) {
-                continue; // Too distant vertically across floors to hear
-            }
-            layerGainMult = 0.35f; // Muffled adjacent floor noise
-        }
+        // NoiseField lives on the active layer only; LayerId is a slot index,
+        // never a logical floor number, so drop anything not matching it.
+        if (n.layer != activeLayer) continue;
+        constexpr float layerGainMult = 1.0f;
 
         SoundId mappedSound = SoundId::None;
         switch (static_cast<game::NoiseSource>(n.source)) {
@@ -108,6 +103,7 @@ void AudioSystem::process_noise_events(const game::NoiseField& noiseField, Layer
             mappedSound = SoundId::MeleeHit;
             break;
         case game::NoiseSource::Container:
+        case game::NoiseSource::Decoy:
             mappedSound = SoundId::ContainerOpen;
             break;
         case game::NoiseSource::Body:
@@ -130,6 +126,11 @@ void AudioSystem::process_noise_events(const game::NoiseField& noiseField, Layer
     }
 
     lastProcessedNoiseId_ = maxIdThisFrame;
+}
+
+void AudioSystem::stop_spatial() {
+    mixer_.clear_spatial_voices();
+    lastProcessedNoiseId_ = 0;
 }
 
 void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, float listenerPitch,

@@ -156,6 +156,11 @@ PickupTakeResult pickup_take(Registry& reg, NpcPool& pool, EventBus& bus,
 std::int16_t use_best_heal(Registry& reg, NpcPool& pool, EventBus& bus,
                            LayerId layer, std::uint64_t tick);
 
+// Consume one unit of `item` (must be UseEffect::Heal with useA > 0) from the
+// camera holder's bag when injured. Returns HP restored, 0 if full or absent.
+std::int16_t use_heal_item(Registry& reg, NpcPool& pool, EventBus& bus,
+                           LayerId layer, ItemId item, std::uint64_t tick);
+
 // How much ammo drops alongside a firearm, from the reference's own bundling rule.
 //
 // **Without this the firearm increment is unplayable, and the reason is a data fact

@@ -287,8 +287,7 @@ bool rumour_live(const HudContext& c) {
 
 void draw_rumour(const HudContext& c) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
-    ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
-                       c.rumourLine);
+    ImGui::TextColored(kAmber, "\"%s\"", c.rumourLine);
     ImGui::PopTextWrapPos();
 }
 
@@ -299,11 +298,9 @@ bool speech_live(const HudContext& c) {
 void draw_speech(const HudContext& c) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
     if (c.speechSit && c.speechSit[0])
-        ImGui::TextColored(ImVec4(0.82f, 0.84f, 0.68f, 1.0f), "[%s] %s",
-                           c.speechSit, c.speechLine);
+        ImGui::TextColored(kDim, "[%s] %s", c.speechSit, c.speechLine);
     else
-        ImGui::TextColored(ImVec4(0.82f, 0.84f, 0.68f, 1.0f), "%s",
-                           c.speechLine);
+        ImGui::TextColored(kDim, "%s", c.speechLine);
     ImGui::PopTextWrapPos();
 }
 

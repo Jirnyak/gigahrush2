@@ -1157,7 +1157,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     const char* stationNames[] = { "Голыми руками", "Верстак", "Токарный станок", "Лабстол", "НЕТ-терминал" };
     const char* matNames[] = { "Мех", "Элект", "Расх", "Био", "Хим", "Металл", "Пси", "Мета" };
 
-    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Станция: %s | Допуск: T%u",
+    ImGui::TextColored(ImVec4(0.949f, 0.780f, 0.251f, 1.0f), "Станция: %s | Допуск: T%u",
                        stationNames[static_cast<std::size_t>(currentStation)], crafting.tier);
     ImGui::Separator();
 
@@ -1211,7 +1211,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                 const bool known = game::craft_known(crafting, id);
                 const game::CraftFail checkResult = game::craft_check(crafting, inv, id, currentStation);
 
-                ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "%s", itemName);
+                ImGui::TextColored(ImVec4(0.949f, 0.780f, 0.251f, 1.0f), "%s", itemName);
                 ImGui::Text("Допуск: T%u | Станция: %s", rec.tier, stationNames[rec.station]);
                 ImGui::Text("Схема: %s", known ? "Изучена" : "Не изучена");
                 ImGui::Separator();
@@ -1235,9 +1235,9 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                         ImGui::TableSetColumnIndex(2); ImGui::Text("%u", crafting.mat[i]);
                         ImGui::TableSetColumnIndex(3);
                         if (missing[i] > 0) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "-%u", missing[i]);
+                            ImGui::TextColored(ImVec4(0.902f, 0.310f, 0.361f, 1.0f), "-%u", missing[i]);
                         } else {
-                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "OK");
+                            ImGui::TextColored(ImVec4(0.349f, 0.949f, 0.400f, 1.0f), "OK");
                         }
                     }
                     ImGui::EndTable();
@@ -1264,7 +1264,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                 if (!canCraft) {
                     ImGui::EndDisabled();
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "[%s]", game::craft_fail_text(checkResult));
+                    ImGui::TextColored(ImVec4(0.902f, 0.310f, 0.361f, 1.0f), "[%s]", game::craft_fail_text(checkResult));
                 }
             }
             ImGui::EndChild();
@@ -4330,6 +4330,7 @@ int main(int argc, char** argv) {
         // surviving record would not merely be stale — it would match the new
         // floor's layer id and be heard there. [noise.h]
         game::noise_clear(noiseField);
+        audioSys.stop_spatial();
         currentSpec = spec_for_floor(currentFloor);
         // Mobs belong to the floor, not to the player: the departed layer's are
         // destroyed and the arrival's are spawned fresh (deterministically, so
@@ -4609,6 +4610,7 @@ int main(int argc, char** argv) {
         bus.init();
         chron.init();
         game::noise_clear(noiseField);
+        audioSys.stop_spatial();
         stack = LevelStack{};
         registry = game::FloorRegistry{};
         streamer = game::FloorStreamer{};
@@ -4875,6 +4877,7 @@ int main(int argc, char** argv) {
         rumourLine[0] = 0;
         rumourAt = 0;
         game::noise_clear(noiseField);
+        audioSys.stop_spatial();
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
@@ -9342,9 +9345,27 @@ int main(int argc, char** argv) {
                                      game::kVerbToilet);
                         if (useItem != game::kInvalidItem) {
                             const game::VerbId v = game::serve_item_verb(useItem);
-                            deed_say(game::serve_start(sc, player, nrU->id, up, v,
-                                                       useItem, serveTick),
-                                     v);
+                            if (v < game::kVerbCount) {
+                                deed_say(game::serve_start(sc, player, nrU->id,
+                                                           up, v, useItem,
+                                                           serveTick),
+                                         v);
+                            } else if (game::item_def(useItem).useEffect ==
+                                       static_cast<std::uint8_t>(
+                                           game::UseEffect::Heal)) {
+                                const std::int16_t dh = game::use_heal_item(
+                                    reg, pool, bus, activeLayer, useItem,
+                                    simTick);
+                                if (dh > 0) {
+                                    healed += dh;
+                                    std::snprintf(deedNote, sizeof deedNote,
+                                                  "Лечение: +%d HP", dh);
+                                } else {
+                                    std::snprintf(deedNote, sizeof deedNote,
+                                                  "Лечение не требуется");
+                                }
+                                deedNoteAt = simTick;
+                            }
                         }
                     }
                 }
@@ -10773,8 +10794,7 @@ int main(int argc, char** argv) {
             // `fly` — консольная команда без клавиши (решение владельца);
             // строка обязана говорить правду о том, где полёт живёт СЕЙЧАС.
             ImGui::TextUnformatted(
-                "WASD ход | мышь обзор | Tab курсор | Space прыжок | "
-                "E дверь/взять | F дело | I сумка | Z бросок | [ / ] этаж | ~ консоль (fly) | F5/F9 | Esc");
+                "WASD ход | мышь обзор | Tab курсор | Space прыжок | F дело/взять/дверь | P нужда | I сумка | L лифт | ЛКМ/ПКМ руки | ~ консоль (fly/heal/grenade/ride) | F5/F9 | Esc");
             ImGui::End();
         }
 
@@ -11093,14 +11113,23 @@ int main(int argc, char** argv) {
                         const game::RepairResult rr = game::craft_repair_item(
                             crafting, pinv, r.slot, craft_station_under_aim());
                         char line[128];
-                        if (rr.ok)
+                        if (rr.ok) {
                             std::snprintf(line, sizeof line,
                                           "repair: %s %u -> 255 (cost %u)",
                                           game::item_name(pinv.slots[r.slot].item),
                                           rr.conditionBefore, rr.costTotal);
-                        else
+                            std::snprintf(deedNote, sizeof deedNote,
+                                          "Починено: %s (%u -> 255)",
+                                          game::item_name(pinv.slots[r.slot].item),
+                                          rr.conditionBefore);
+                        } else {
                             std::snprintf(line, sizeof line, "repair: %s",
                                           game::craft_fail_text(rr.fail));
+                            std::snprintf(deedNote, sizeof deedNote,
+                                          "Ремонт отклонён: %s",
+                                          game::craft_fail_text(rr.fail));
+                        }
+                        deedNoteAt = simTick;
                         consoleLog.push_back(line);
                         // Починенная решённая броня держит больше — резисты
                         // масштабируются состоянием ([combat.cpp] sync_armour).
@@ -12536,6 +12565,7 @@ int main(int argc, char** argv) {
                 const bool worldAudioLive =
                     !shell.sim_frozen() && activeLayer != kInvalidLayer &&
                     reg.valid(player);
+                if (!worldAudioLive) audioSys.stop_spatial();
                 static const game::SamosborState kSilentSamosbor{};
                 static const game::NoiseField kSilentNoise{};
                 const Field<float>* adanger =
@@ -12742,6 +12772,7 @@ int main(int argc, char** argv) {
                         // stale — it would match the new floor's layer id and be heard
                         // there. [noise.h]
                         game::noise_clear(noiseField);
+        audioSys.stop_spatial();
                         // Same place_body_safely as the keyboard ride path. Two travel
                         // sites; a fix that touches only one leaves --shot soft-locked
                         // in a wall. [save.h]
