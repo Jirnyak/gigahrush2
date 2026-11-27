@@ -277,7 +277,8 @@ int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int c
         const RoomBox& box = fr.boxes[bi];
         const int ox = wrap_macro(box.x + box.sx / 2);
         const int oy = wrap_macro(box.y + box.sy / 2);
-        const int oz = wrap_macro(box.z + box.sz / 2);
+        // Floor level of the room box: oz = box.z (where feet stand), avoiding mid-air
+        const int oz = wrap_macro(box.z);
         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
         if (best < 0 || d < best) {
             best = d;
