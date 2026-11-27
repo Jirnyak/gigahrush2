@@ -112,7 +112,12 @@ def spawn_weight(row, i):
 
 
 def cpp_string(s):
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # Preserve explicit \n escape sequences authored in single-line CSV cells
+    # (check_code_invariants.py reads CSV line-by-line) as real C++ newlines.
+    marker = "\x00"
+    s = s.replace("\r\n", "\n").replace("\n", marker).replace("\\n", marker)
+    s = s.replace("\\", "\\\\").replace('"', '\\"').replace(marker, "\\n")
+    return '"' + s + '"'
 
 
 def pick(table, row, col, i, what):

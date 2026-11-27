@@ -24,15 +24,14 @@ ConvUiRequest conversation_ui_draw(ConvUiState& st, const char* header,
     if (st.sel < 0) st.sel = 0;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float winW = 420.0f;
-    const float winH = 120.0f + 24.0f * static_cast<float>(n);
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
-                                   vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.6f),
-                            ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(winW, winH), ImGuiCond_Always);
+    const float winW = 460.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                                   vp->WorkPos.y + vp->WorkSize.y * 0.6f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(winW, 0.0f), ImGuiCond_Always);
     ImGui::Begin("##conversation", nullptr,
                  ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoTitleBar);
 
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kPhosphor), "%s",

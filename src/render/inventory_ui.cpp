@@ -1,6 +1,7 @@
 #include "render/inventory_ui.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include "imgui.h"
 
@@ -239,11 +240,11 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float cell = 44.0f;
     const float gridW = cell * kInvCols;
-    const float cardW = 340.0f;
+    const float cardW = 396.0f;
     const float pad = 14.0f;
     const float otherW = twoSided ? gridW + pad : 0.0f;
     const float winW = otherW + gridW + cardW + pad * 3;
-    const float winH = cell * kInvCols / 1.0f + 96.0f;
+    const float winH = cell * kInvCols + 116.0f;
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + (vp->WorkSize.x - winW) * 0.5f,
                                    vp->WorkPos.y + (vp->WorkSize.y - winH) * 0.5f),
                             ImGuiCond_Always);
@@ -358,9 +359,20 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         if (game::item_durability(sel.item) > 0)
             ImGui::Text("состояние %u/255", sel.condition);
         ImGui::Spacing();
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cardW - pad);
-        ImGui::TextUnformatted(game::item_desc(sel.item));
+        const char* desc = game::item_desc(sel.item);
+        const bool isDoc =
+            d.category == static_cast<std::uint8_t>(game::ItemCategory::Note) ||
+            (desc && std::strchr(desc, '\n') != nullptr);
+        if (isDoc)
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.25f, 1.0f),
+                               "[ ДОКУМЕНТ / АРХИВНАЯ ЗАПИСЬ ]");
+        if (isDoc) ImGui::PushStyleColor(ImGuiCol_Border, kAmber);
+        ImGui::BeginChild("##itemdoc", ImVec2(cardW - pad, 178.0f), true);
+        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(desc ? desc : "");
         ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+        if (isDoc) ImGui::PopStyleColor();
         ImGui::Spacing();
 
         // Действия — ЗАЯВКИ ([inventory.md]): кнопка и её горячая клавиша

@@ -62,6 +62,11 @@ struct HudContext {
     // («НЕ ХОЧЕТСЯ», «ПРЕРВАНО»), или nullptr. Собирает приложение (оно знает,
     // что жал человек); живёт кадр — указатель на буфер вызывающего.
     const char* deedNote = nullptr;
+    // Подслушанная реплика и проверяемый слух ближайшего NPC — живой канал
+    // мира на стекле (не только под дебаг-панелью F1). nullptr = тишина.
+    const char* speechLine = nullptr;
+    const char* speechSit = nullptr;
+    const char* rumourLine = nullptr;
 };
 
 // Углы стекла. Center — прицел и алерты; остальное прижато к краям.

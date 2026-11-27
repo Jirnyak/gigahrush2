@@ -1144,7 +1144,7 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     if (!p_open || !*p_open) return;
 
     ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Workbench & Crafting Studio", p_open)) {
+    if (!ImGui::Begin("ВЕРСТАК И СБОРКА", p_open)) {
         ImGui::End();
         return;
     }
@@ -1154,14 +1154,14 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     static char recipeFilter[64] = "";
     static bool showOnlyKnown = false;
 
-    const char* stationNames[] = { "Bare Hands (Any)", "Workbench", "Lathe", "Lab", "Net Terminal" };
-    const char* matNames[] = { "Mech", "Elec", "Cons", "Bio", "Chem", "Metal", "Psi", "Meta" };
+    const char* stationNames[] = { "Голыми руками", "Верстак", "Токарный станок", "Лабстол", "НЕТ-терминал" };
+    const char* matNames[] = { "Мех", "Элект", "Расх", "Био", "Хим", "Металл", "Пси", "Мета" };
 
-    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Station: %s | Cert Tier: T%u",
+    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Станция: %s | Допуск: T%u",
                        stationNames[static_cast<std::size_t>(currentStation)], crafting.tier);
     ImGui::Separator();
 
-    ImGui::Text("Material Bank:");
+    ImGui::Text("Запас узлов:");
     ImGui::SameLine();
     for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
         ImGui::Text("%s: %u", matNames[i], crafting.mat[i]);
@@ -1170,10 +1170,10 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
     ImGui::Separator();
 
     if (ImGui::BeginTabBar("CraftingTabs")) {
-        if (ImGui::BeginTabItem("Craft Items")) {
+        if (ImGui::BeginTabItem("Сборка")) {
             ImGui::BeginChild("RecipeListPane", ImVec2(340, 320), true);
-            ImGui::InputText("Filter", recipeFilter, sizeof(recipeFilter));
-            ImGui::Checkbox("Known Only", &showOnlyKnown);
+            ImGui::InputText("Фильтр", recipeFilter, sizeof(recipeFilter));
+            ImGui::Checkbox("Только изученные", &showOnlyKnown);
 
             ImGui::Separator();
             if (ImGui::BeginListBox("##Recipes", ImVec2(-FLT_MIN, -FLT_MIN))) {
@@ -1187,8 +1187,8 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                     const game::CraftFail fail = game::craft_check(crafting, inv, id, currentStation);
 
                     char label[128];
-                    snprintf(label, sizeof(label), "%s [%s]%s", 
-                             name, isKnown ? "Learned" : "Locked", 
+                    snprintf(label, sizeof(label), "%s [%s]%s",
+                             name, isKnown ? "Изучен" : "Скрыт",
                              fail == game::CraftFail::None ? " *" : "");
 
                     bool isSelected = (selectedRecipeId == static_cast<int>(id));
@@ -1212,19 +1212,19 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                 const game::CraftFail checkResult = game::craft_check(crafting, inv, id, currentStation);
 
                 ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.4f, 1.0f), "%s", itemName);
-                ImGui::Text("Required Tier: T%u | Required Bench: %s", rec.tier, stationNames[rec.station]);
-                ImGui::Text("Knowledge Status: %s", known ? "Learned" : "Not Learned");
+                ImGui::Text("Допуск: T%u | Станция: %s", rec.tier, stationNames[rec.station]);
+                ImGui::Text("Схема: %s", known ? "Изучена" : "Не изучена");
                 ImGui::Separator();
 
                 std::uint32_t missing[game::kCraftMaterials] = {};
                 game::craft_missing(crafting, id, missing);
 
-                ImGui::Text("Required Components:");
+                ImGui::Text("Требуемые материалы:");
                 if (ImGui::BeginTable("CompTable", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg)) {
-                    ImGui::TableSetupColumn("Material");
-                    ImGui::TableSetupColumn("Required");
-                    ImGui::TableSetupColumn("In Bank");
-                    ImGui::TableSetupColumn("Shortfall");
+                    ImGui::TableSetupColumn("Узел");
+                    ImGui::TableSetupColumn("Надо");
+                    ImGui::TableSetupColumn("Есть");
+                    ImGui::TableSetupColumn("Нехватка");
                     ImGui::TableHeadersRow();
 
                     for (std::size_t i = 0; i < game::kCraftMaterials; ++i) {
@@ -1244,12 +1244,12 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                 }
 
                 ImGui::Separator();
-                ImGui::SliderInt("Quantity", &craftQty, 1, 10);
+                ImGui::SliderInt("Кол-во", &craftQty, 1, 10);
 
                 const bool canCraft = (checkResult == game::CraftFail::None);
                 if (!canCraft) ImGui::BeginDisabled();
 
-                if (ImGui::Button("Craft Item(s)", ImVec2(160, 32))) {
+                if (ImGui::Button("Собрать", ImVec2(160, 32))) {
                     for (int q = 0; q < craftQty; ++q) {
                         game::CraftResult res = game::craft_item(crafting, inv, id, currentStation);
                         if (res.fail == game::CraftFail::None) {
@@ -1272,19 +1272,19 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Disassemble Inventory")) {
-            ImGui::Text("Disassemble items into base materials (Requires Workbench).");
+        if (ImGui::BeginTabItem("Разбор")) {
+            ImGui::Text("Разбор предметов из сумки на базовые узлы (нужен верстак).");
             if (currentStation != game::CraftStation::Workbench) {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WARNING: Requires a Workbench!");
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ОТКАЗ: подойдите к верстаку");
             }
             ImGui::Separator();
 
             if (ImGui::BeginTable("DisassemblyTable", 5, ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg, ImVec2(0, 350))) {
-                ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableSetupColumn("Item Name");
-                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                ImGui::TableSetupColumn("Est. Value");
-                ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableSetupColumn("Слот", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Предмет");
+                ImGui::TableSetupColumn("Шт", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Цена");
+                ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableHeadersRow();
 
                 for (int slot = 0; slot < game::kInvSlots; ++slot) {
@@ -1295,11 +1295,11 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                     ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
                     ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
                     ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
-                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d rub", game::item_def(s.item).value);
+                    ImGui::TableSetColumnIndex(3); ImGui::Text("%d руб", game::item_def(s.item).value);
                     ImGui::TableSetColumnIndex(4);
 
                     char btnId[32];
-                    snprintf(btnId, sizeof(btnId), "Scrap##%d", slot);
+                    snprintf(btnId, sizeof(btnId), "Разобрать##%d", slot);
 
                     const bool canDis = (currentStation == game::CraftStation::Workbench);
                     if (!canDis) ImGui::BeginDisabled();
@@ -10079,6 +10079,11 @@ int main(int argc, char** argv) {
             if (deedNote[0] != '\0' &&
                 simTick - deedNoteAt < static_cast<std::uint64_t>(2 * kSimHz))
                 hctx.deedNote = deedNote;
+            if (rumourLine[0] != '\0') hctx.rumourLine = rumourLine;
+            if (speechLine != nullptr && speechLine[0] != '\0') {
+                hctx.speechLine = speechLine;
+                hctx.speechSit = game::speech_situation_name(speechSit);
+            }
             // Среда клетки под телом — из АГРЕГАТА автомата (S16.4): один
             // путь для HUD, дыхания и плавучести, спецсистем нет (S16.6).
             if (reg.valid(player) && activeLayer != kInvalidLayer) {
@@ -10706,8 +10711,8 @@ int main(int argc, char** argv) {
             // `fly` — консольная команда без клавиши (решение владельца);
             // строка обязана говорить правду о том, где полёт живёт СЕЙЧАС.
             ImGui::TextUnformatted(
-                "WASD move | mouse look | Tab toggle look | Space jump | "
-                "~ console (fly) | Q door | G eat | T drink | F5/F9 save/load | [ / ] floor | Esc menu");
+                "WASD ход | мышь обзор | Tab курсор | Space прыжок | "
+                "E дверь/взять | F дело | I сумка | Z бросок | [ / ] этаж | ~ консоль (fly) | F5/F9 | Esc");
             ImGui::End();
         }
 

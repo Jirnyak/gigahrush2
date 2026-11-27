@@ -281,10 +281,38 @@ void draw_alerts(const HudContext& c) {
         ImGui::TextColored(kDanger, "ИСТОЩЕНИЕ: ТЕЛО ТЕРЯЕТ HP");
 }
 
+bool rumour_live(const HudContext& c) {
+    return c.rumourLine != nullptr && c.rumourLine[0] != '\0';
+}
+
+void draw_rumour(const HudContext& c) {
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+    ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.91f, 1.0f), "\"%s\"",
+                       c.rumourLine);
+    ImGui::PopTextWrapPos();
+}
+
+bool speech_live(const HudContext& c) {
+    return c.speechLine != nullptr && c.speechLine[0] != '\0';
+}
+
+void draw_speech(const HudContext& c) {
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 420.0f);
+    if (c.speechSit && c.speechSit[0])
+        ImGui::TextColored(ImVec4(0.82f, 0.84f, 0.68f, 1.0f), "[%s] %s",
+                           c.speechSit, c.speechLine);
+    else
+        ImGui::TextColored(ImVec4(0.82f, 0.84f, 0.68f, 1.0f), "%s",
+                           c.speechLine);
+    ImGui::PopTextWrapPos();
+}
+
 // --- таблица ----------------------------------------------------------------
 
 HudElement g_elements[] = {
     {"crosshair", "Прицел",      HudSlot::Center,      true, draw_crosshair},
+    {"rumour",    "Слухи",       HudSlot::BottomLeft,  true, draw_rumour, rumour_live},
+    {"speech",    "Речь рядом",  HudSlot::BottomLeft,  true, draw_speech, speech_live},
     {"health",    "Здоровье",    HudSlot::BottomLeft,  true, draw_health},
     {"needs",     "Потребности", HudSlot::BottomLeft,  true, draw_needs},
     {"psi",       "PSI",         HudSlot::BottomLeft,  true, draw_psi},
