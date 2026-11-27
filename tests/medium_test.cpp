@@ -3728,25 +3728,14 @@ void test_move_d_brick_occupancy(gpu::VulkanDevice& dev) {
     CHECK(occ_bit(occ, sib2));
     CHECK(summary_bit(occ, 10, 10, 10));
 
-    // Очистка последней клетки брика (10,10,10) обязана обнулить его summary-бит.
+    // Очистка последней клетки брика (10,10,10) обязана обнулить его summary-бит
+    // (carve_at рядом мог положить страницу rubble в sib2 -> чистим и страницу).
     w.grid().clear_cell(81, 80, 80);
+    f.drop_page(sib2);
     mirror.mark_dirty(&sib2, 1);
     CHECK(run_batch(dev, mirror, medium, w, 0, substep));
     CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
                    occ.data()));
-    if (occ_bit(occ, sib2) || summary_bit(occ, 10, 10, 10)) {
-        const std::uint32_t bi = 10u + 10u * 16u + 10u * 256u;
-        std::fprintf(stderr,
-                     "[occ-dbg] w0=0x%08x sum=0x%08x lastPatches=%zu flush=%u "
-                     "type=%u maskEmpty=%d dirtyBacklog=%u\n",
-                     occ[bi * 16u],
-                     occ[gpu::VoxelMirror::kOccSummaryWordOffset + (bi >> 5u)],
-                     mirror.last_occ_patches().size(),
-                     mirror.flush_gen(),
-                     static_cast<unsigned>(w.grid().types()[sib2]),
-                     w.grid().masks()[sib2].empty() ? 1 : 0,
-                     mirror.dirty_backlog());
-    }
     CHECK(!occ_bit(occ, sib2));
     CHECK(!summary_bit(occ, 10, 10, 10));
     CHECK(mirror.verify(w));

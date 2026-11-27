@@ -823,8 +823,10 @@ if(GIGA_BUILD_TESTS)
     #   вне hold-решётки сворачивает однородные CellType и нулевые StainRGB,
     #   mirror.mark_dirty синкает kNoPage на GPU; обновлён `test_lone_fade` по
     #   закону чтения бесстраничной (S16.1).
+    #   2920 + 103 = 3023: тест занятости бриков и проверка порядка меток зеркала в
+    #   `test_move_d_brick_occupancy` и `test_move_i_kmode_fill`.
     set_tests_properties(medium_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "2920/2920 checks passed")
+        PASS_REGULAR_EXPRESSION "3023/3023 checks passed")
 
     # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
     # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
@@ -1047,7 +1049,11 @@ if(GIGA_BUILD_TESTS)
         # `quat_from_basis` — 4 ветви Шеппарда + 6 гравитаций × 8 взглядов,
         # по 3 оси (12 + 144 = 156); шарнир «точка в точку» с рычагом —
         # маятник (3) и рывок поперёк сустава (1). Дельта по исполнениям.
-        PASS_REGULAR_EXPRESSION "16075/16075 checks passed"
+        # 16075 + 66 = 16141 на 2026-11-27 (F2 осевший дебрис в пузыре):
+        # `test_debris_settled_bubble` — одиночные тела (`chain == 0`), не
+        # замёрзшие в полёте, заморозка осевших вне 64 м, класс-1 бит-в-бит
+        # коммутация ∞ vs R=64 м, защита `CarriedBy` от накопления тишины.
+        PASS_REGULAR_EXPRESSION "16141/16141 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -2775,7 +2781,15 @@ if(GIGA_BUILD_TESTS)
         #   - U1.6 (И3в, `body_pose.{h,cpp}`): процедурные позы глаголов и действий;
         #   - U1.7/U1.9 (`place.{h,cpp}`, `room.{h,cpp}`, `verbs.csv`): спрос
         #     циклом по CSV и вместимость/толпа в `FloorRooms::occupants`.
-        PASS_REGULAR_EXPRESSION "game_test: 244987 checks, 0 failures")
+        # 244987 -> 245034 (+47, 2026-11-27, Волна 2):
+        #   - U1.8 (`ai.cpp`, `faction_relations.cpp`, `suite_utilai.inl`,
+        #     `suite_faction2.inl`): `p.armed`, `Senses` / `FactionRelations`,
+        #     исключение `Corpse` и `!pool.alive`, гейт `IntentCombat` на драке;
+        #   - U2.5 (`population.cpp`, `chronicle.cpp`, `suite_npcpool.inl`,
+        #     `suite_chronicle.inl`): кириллические имена при посеве и летописи,
+        #     бюджет <= 256 Б/строка на 2^20;
+        #   - `hunt.{h,cpp}` / `faction_relations.cpp`: 8 м `CellBins` для O(N).
+        PASS_REGULAR_EXPRESSION "game_test: 245034 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).
