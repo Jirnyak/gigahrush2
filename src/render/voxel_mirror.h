@@ -145,9 +145,13 @@ public:
     static constexpr std::size_t kTypesBytes = kMacroCells * sizeof(std::uint16_t);
     static constexpr std::size_t kPageIdxBytes = kMacroCells * sizeof(std::uint32_t);
     static constexpr std::size_t kPoolBytes = kPageCap * kPageBytes;
-    // Per-cell classification byte (0 empty / 1 full / 2 partial) — the
-    // raymarcher's macro-skip: air costs one byte, full walls hit with no mask
-    // read, only boundary cells pay the sub-DDA.
+    // Per-cell classification byte:
+    //   bits 0..1: 0 empty / 1 full / 2 partial / 3 partial + medium matter
+    //   bit 2 (kClassLightPass): >= 1 solid (masked) sub-voxel passes light
+    //   (kMatLightPass != 0 — glass / neon / air). Shadows skip uPageIdx +
+    //   uPagePool when (cls & kClassLightPass) == 0.
+    static constexpr std::uint8_t kClassBaseMask = 0x03u;
+    static constexpr std::uint8_t kClassLightPass = 1u << 2;
     static constexpr std::size_t kClassBytes = kMacroCells;
     // kFluidBytes/fluid_ УМЕРЛИ (чистка 2026-08-24): fluid-поле вычищено,
     // воду двигает и рисует мир-автомат её собственными атомами.

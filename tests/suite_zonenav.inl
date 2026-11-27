@@ -19,11 +19,15 @@
 //   3. ГЛУХАЯ КЛАДКА НЕ РЕБРО. Прямая мутация закона: если убрать проверку
 //      клиренса, рёбер становится БОЛЬШЕ. Гейт держит это неравенством, а не
 //      точным числом, — точное число было бы пином геометрии этажа, а не закона.
-//   4. ТАБЛИЦА: ноль на диагонали, симметрия, неравенство треугольника.
-//      Треугольник — то утверждение, которое ловит порчу обхода: при любой
-//      ошибке в порядке посещения он ломается первым.
-//   5. zone_next ВЕДЁТ, А НЕ КРУЖИТ: шаг из A к B обязан уменьшать расстояние
-//      РОВНО на 1, и спуск от A до B обязан прийти за dist(A,B) шагов.
+//   4. ДВУХУРОВНЕВАЯ ТАБЛИЦА: S = floor((Z²/2)^(1/3)), связность и баланс
+//      секторов (гейт на S² + ΣZ_s² против идеала и потолок <= 2 МиБ на
+//      этаже 0), точность intraDist, метрика sectorDist, порталы, и симметричная
+//      нижняя оценка `dist.at` при sA != sB.
+//   5. zone_next ВЕДЁТ, А НЕ КРУЖИТ: строгий лексикографический спуск по
+//      (sectorDist, intraDist) между сотнями случайных достижимых пар без
+//      единого цикла за конечное число шагов.
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "game/floor_gen.h"   // generate_floor
@@ -147,6 +151,31 @@ void near_pick_walks_the_graph(const ZonePartition& part,
     CHECK(kLeg >= 1);                      // ноль прыжков = цель «сам в себе»
     std::fprintf(stderr, "[zonenav] поперёк зоны %.1f м -> предел ноги %u прыжков\n",
                  static_cast<double>(zone_span_m(part)), kLeg);
+    // Независимый ограниченный BFS на графе глубиной <= kLeg для проверки
+    // предела при внутрисекторном шорткате через другой сектор.
+    auto graph_within_hops = [&](std::uint32_t src, std::uint32_t dst,
+                                 std::uint16_t maxHops) -> bool {
+        if (src == dst) return true;
+        std::vector<std::pair<std::uint32_t, std::uint16_t>> q;
+        std::vector<std::uint32_t> vis;
+        q.push_back({src, 0u});
+        vis.push_back(src);
+        for (std::size_t h = 0; h < q.size(); ++h) {
+            const std::uint32_t u = q[h].first;
+            const std::uint16_t d = q[h].second;
+            if (d >= maxHops) continue;
+            for (const RoomId* it = zn.graph.begin(u); it != zn.graph.end(u); ++it) {
+                const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                if (v == dst) return true;
+                if (std::find(vis.begin(), vis.end(), v) == vis.end()) {
+                    vis.push_back(v);
+                    q.push_back({v, static_cast<std::uint16_t>(d + 1u)});
+                }
+            }
+        }
+        return false;
+    };
+
     std::uint32_t sampled = 0, walkFound = 0, rejectFound = 0, overLimit = 0;
     std::uint32_t isolated = 0, nondet = 0, selfPick = 0;
     for (std::uint32_t z = 0; z < zn.graph.zones; z += 37) {
@@ -159,10 +188,15 @@ void near_pick_walks_the_graph(const ZonePartition& part,
         if (got != kNoRoom) {
             ++walkFound;
             if (got == from) ++selfPick;
-            // ПРЕДЕЛ СОБЛЮДЁН ПО ПОСТРОЕНИЮ, и таблица это подтверждает
-            // независимо от обхода: шаг двигает не больше чем на ребро.
-            const std::uint16_t d = zn.dist.at(z, static_cast<std::uint32_t>(got) - 1u);
-            if (d == kZoneUnreachable || d > kLeg) ++overLimit;
+            const std::uint32_t gi = static_cast<std::uint32_t>(got) - 1u;
+            const std::uint16_t d = zn.dist.at(z, gi);
+            // Предел соблюдён по графу, а межсекторная нижняя оценка не
+            // завышает истинного расстояния и не отдаёт kZoneUnreachable.
+            if (d == kZoneUnreachable ||
+                (zn.dist.sectorOf[z] != zn.dist.sectorOf[gi] && d > kLeg) ||
+                !graph_within_hops(z, gi, kLeg)) {
+                ++overLimit;
+            }
         }
         // Детерминизм: та же соль — тот же ответ. Иначе тело меняло бы цель на
         // каждом визите и стаггер пере-выбора терял бы смысл.
@@ -198,35 +232,160 @@ void near_pick_walks_the_graph(const ZonePartition& part,
 
 void table_is_a_metric(const World& w, const ZonePartition& part,
                        const ClearanceField& oracle) {
+    (void)w;
     ZoneGraph g;
     bake_zone_graph(part, oracle, kBodyClearanceSub, g);
     ZoneDist dist;
     bake_zone_dist(g, dist, /*threads=*/2);
     CHECK(dist.built());
     CHECK(dist.zones == g.zones);
+    CHECK(dist.sectors >= 1u && dist.sectors <= g.zones);
 
-    // Выборка источников: Z² полной проверкой это 217 млн пар на каждое
-    // утверждение. Шаг 97 взаимно прост с любым Z, не кратным 97, поэтому
-    // выборка обходит остатки, а не полосу.
+    // 1. ГЕЙТ ФОРМУЛЫ И БАЛАНСА СЕКТОРОВ (S = floor((Z²/2)^(1/3)), нет жирного хаба).
+    // Считаем S² + ΣZ_s² независимо прямо по dist.sectorOf и сверяем с идеалом.
+    const std::uint32_t Z = g.zones;
+    const std::uint32_t sTarget = std::clamp(
+        static_cast<std::uint32_t>(
+            std::floor(std::cbrt(static_cast<double>(Z) * Z * 0.5))),
+        1u, Z);
+    const std::uint32_t idealCap =
+        std::max<std::uint32_t>(1u, (Z + sTarget - 1u) / sTarget);
+
+    std::vector<std::uint32_t> secCnt(dist.sectors, 0u);
+    for (std::uint32_t z = 0; z < Z; ++z) {
+        CHECK(dist.sectorOf[z] < dist.sectors);
+        ++secCnt[dist.sectorOf[z]];
+    }
+    std::size_t sumSq = 0;
+    std::uint32_t maxSec = 0, badSecCount = 0;
+    for (std::uint32_t s = 0; s < dist.sectors; ++s) {
+        if (secCnt[s] == 0u || secCnt[s] != dist.sectorSize[s]) ++badSecCount;
+        sumSq += static_cast<std::size_t>(secCnt[s]) * secCnt[s];
+        if (secCnt[s] > maxSec) maxSec = secCnt[s];
+    }
+    const std::size_t actualCost =
+        static_cast<std::size_t>(dist.distSectors) * dist.distSectors + sumSq;
+    const std::size_t idealCost =
+        static_cast<std::size_t>(sTarget) * sTarget +
+        (static_cast<std::size_t>(Z) * Z) / sTarget;
+    std::fprintf(stderr,
+                 "[zone-nav] зон %u | секторов %u (связн %u, цель %u) | "
+                 "D²+ΣZ_s² %zu vs идеал %zu (%.2fx) | макс_сектор %u (идеал %u) | "
+                 "рёбер %zu | таблица %.2f МиБ\n",
+                 Z, dist.sectors, dist.distSectors, sTarget, actualCost, idealCost,
+                 idealCost ? static_cast<double>(actualCost) /
+                                 static_cast<double>(idealCost)
+                           : 0.0,
+                 maxSec, idealCap, g.nbr.size() / 2u,
+                 static_cast<double>(dist.bytes()) / (1024.0 * 1024.0));
+
+    CHECK(badSecCount == 0u);
+    CHECK(dist.bytes() <= 2u * 1024u * 1024u); // <= 2 МиБ на худшем этаже 0
+    CHECK(actualCost * 10u <= idealCost * 16u); // кривое деление с хабом краснеет
+    CHECK(maxSec <= std::max<std::uint32_t>(4u, idealCap * 2u));
+
+    // 2. КАЖДЫЙ СЕКТОР СВЯЗЕН ВНУТРИ СЕБЯ, а intraDist — точная метрика подграфа.
+    std::vector<std::vector<std::uint32_t>> secVerts(dist.sectors);
+    for (std::uint32_t z = 0; z < Z; ++z)
+        secVerts[dist.sectorOf[z]].push_back(z);
+    int intraUnreach = 0, intraAsym = 0, intraDiag = 0, intraTri = 0;
+    for (std::uint32_t s = 0; s < dist.sectors; ++s) {
+        const std::uint32_t sz = dist.sectorSize[s];
+        const std::uint32_t off = dist.intraOffset[s];
+        for (std::uint32_t i = 0; i < sz; ++i) {
+            if (dist.intraDist[off + static_cast<std::size_t>(i) * sz + i] != 0u)
+                ++intraDiag;
+            for (std::uint32_t j = 0; j < sz; ++j) {
+                const std::uint16_t d =
+                    dist.intraDist[off + static_cast<std::size_t>(i) * sz + j];
+                if (d == kZoneUnreachable) ++intraUnreach;
+                if (dist.intraDist[off + static_cast<std::size_t>(j) * sz + i] != d)
+                    ++intraAsym;
+                if (i != j && d != kZoneUnreachable) {
+                    const std::uint32_t u = secVerts[s][i];
+                    std::uint16_t best = kZoneUnreachable;
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                        if (dist.sectorOf[v] != s) continue;
+                        const std::uint16_t dn =
+                            dist.intraDist[off +
+                                           static_cast<std::size_t>(dist.localIdx[v]) * sz +
+                                           j];
+                        if (dn < best) best = dn;
+                    }
+                    if (best == kZoneUnreachable || best + 1u != d) ++intraTri;
+                }
+            }
+        }
+    }
+    CHECK(intraDiag == 0);
+    CHECK(intraUnreach == 0); // ни одного несвязного сектора
+    CHECK(intraAsym == 0);
+    CHECK(intraTri == 0);
+
+    // 3. ПОРТАЛЫ И ГРАФ СЕКТОРОВ: каждый портал лежит в sA и имеет соседа в sNext,
+    //    а sectorDist удовлетворяет метрике на графе секторов.
+    int badPortal = 0, secDiag = 0, secAsym = 0, secTri = 0;
+    for (std::uint32_t sA = 0; sA < dist.sectors; ++sA) {
+        if (dist.sector_dist(static_cast<std::uint16_t>(sA),
+                             static_cast<std::uint16_t>(sA)) != 0u)
+            ++secDiag;
+        for (std::uint32_t e = dist.sectorOffset[sA]; e < dist.sectorOffset[sA + 1u]; ++e) {
+            const std::uint16_t sN = dist.sectorNbr[e];
+            const RoomId p = dist.sectorPortal[e];
+            if (p == kNoRoom || p > Z || dist.sectorOf[p - 1u] != sA) {
+                ++badPortal;
+                continue;
+            }
+            bool touchesSN = false;
+            for (const RoomId* it = g.begin(p - 1u); it != g.end(p - 1u); ++it) {
+                if (dist.sectorOf[static_cast<std::uint32_t>(*it) - 1u] == sN) {
+                    touchesSN = true;
+                    break;
+                }
+            }
+            if (!touchesSN) ++badPortal;
+        }
+        for (std::uint32_t sB = 0; sB < dist.sectors; sB += 7) {
+            const std::uint16_t sd = dist.sector_dist(
+                static_cast<std::uint16_t>(sA), static_cast<std::uint16_t>(sB));
+            if (dist.sector_dist(static_cast<std::uint16_t>(sB),
+                                 static_cast<std::uint16_t>(sA)) != sd)
+                ++secAsym;
+            if (sA != sB && sd != kZoneUnreachable) {
+                std::uint16_t best = kZoneUnreachable;
+                for (std::uint32_t e = dist.sectorOffset[sA];
+                     e < dist.sectorOffset[sA + 1u]; ++e) {
+                    const std::uint16_t sN = dist.sectorNbr[e];
+                    const std::uint16_t d =
+                        dist.sector_dist(sN, static_cast<std::uint16_t>(sB));
+                    if (d < best) best = d;
+                }
+                if (best == kZoneUnreachable || best + 1u != sd) ++secTri;
+            }
+        }
+    }
+    CHECK(badPortal == 0);
+    CHECK(secDiag == 0);
+    CHECK(secAsym == 0);
+    CHECK(secTri == 0);
+
+    // 4. ПУБЛИЧНАЯ ТАБЛИЦА `dist.at`: ноль на диагонали, симметрия, неравенство
+    //    треугольника между секторами (sA != sB).
     int checkedDiag = 0, asym = 0, triBad = 0, reach = 0;
-    for (std::uint32_t a = 0; a < g.zones; a += 97) {
+    for (std::uint32_t a = 0; a < Z; a += 97) {
         CHECK(dist.at(a, a) == 0); // 4. ноль на диагонали
         ++checkedDiag;
-        for (std::uint32_t b = 0; b < g.zones; b += 89) {
+        for (std::uint32_t b = 0; b < Z; b += 89) {
             const std::uint16_t ab = dist.at(a, b);
-            if (dist.at(b, a) != ab) ++asym; // симметрия
+            if (dist.at(b, a) != ab) ++asym;
             if (ab != kZoneUnreachable) ++reach;
-            // Неравенство треугольника через соседок a: dist(a,b) <=
-            // 1 + dist(nbr, b), и равенство обязано достигаться хотя бы на одной
-            // соседке (иначе обход пропустил кратчайший путь).
-            if (ab != kZoneUnreachable && ab > 0) {
-                std::uint16_t best = kZoneUnreachable;
+            if (ab != kZoneUnreachable && dist.sectorOf[a] != dist.sectorOf[b]) {
                 for (const RoomId* it = g.begin(a); it != g.end(a); ++it) {
                     const std::uint16_t dn =
                         dist.at(static_cast<std::uint32_t>(*it) - 1u, b);
-                    if (dn < best) best = dn;
+                    if (dn == kZoneUnreachable || ab > dn + 1u) ++triBad;
                 }
-                if (best == kZoneUnreachable || best + 1 != ab) ++triBad;
             }
         }
     }
@@ -235,38 +394,68 @@ void table_is_a_metric(const World& w, const ZonePartition& part,
     CHECK(triBad == 0);
     CHECK(reach > 0); // таблица не вся недостижима — иначе всё выше тождественно
 
-    // 5. zone_next ВЕДЁТ. Спуск от источника к цели обязан прийти ровно за
-    // dist шагов, каждый раз уменьшая расстояние на 1.
-    int walked = 0;
-    for (std::uint32_t a = 0; a < g.zones && walked < 32; a += 311) {
-        for (std::uint32_t b = 1; b < g.zones && walked < 32; b += 433) {
-            const std::uint16_t want = dist.at(a, b);
-            if (want == kZoneUnreachable || want == 0) continue;
-            RoomId cur = static_cast<RoomId>(a + 1);
-            const RoomId dst = static_cast<RoomId>(b + 1);
-            int steps = 0;
-            while (cur != dst && steps <= want + 1) {
-                const RoomId nxt = zone_next(g, dist, cur, dst);
-                if (nxt == kNoRoom) break;
-                const std::uint16_t before =
-                    dist.at(static_cast<std::uint32_t>(cur) - 1u, b);
-                const std::uint16_t after =
-                    dist.at(static_cast<std::uint32_t>(nxt) - 1u, b);
-                CHECK(after + 1 == before); // ровно на один ближе
-                cur = nxt;
-                ++steps;
-            }
-            CHECK(cur == dst);     // дошёл
-            CHECK(steps == want);  // и ровно за столько, сколько обещала таблица
-            ++walked;
+    // 5. zone_next ВЕДЁТ, А НЕ КРУЖИТ: строгий спуск лексикографического
+    //    потенциала (sectorDist, intraDist до портала или цели) на 256+
+    //    разнородных достижимых парах, без единого цикла.
+    auto lyapunov_pair = [&](std::uint32_t u, std::uint32_t t)
+        -> std::pair<std::uint16_t, std::uint16_t> {
+        const std::uint16_t sU = dist.sectorOf[u];
+        const std::uint16_t sT = dist.sectorOf[t];
+        const std::uint32_t sz = dist.sectorSize[sU];
+        const std::uint32_t off = dist.intraOffset[sU];
+        if (sU == sT) {
+            return {0u, dist.intraDist[off +
+                                       static_cast<std::size_t>(dist.localIdx[u]) * sz +
+                                       dist.localIdx[t]]};
         }
-    }
-    CHECK(walked > 0); // спуск в самом деле прогнан, а не пропущен весь
+        const std::uint16_t sd = dist.sector_dist(sU, sT);
+        RoomId portal = kNoRoom;
+        for (std::uint32_t e = dist.sectorOffset[sU]; e < dist.sectorOffset[sU + 1u]; ++e) {
+            const std::uint16_t sN = dist.sectorNbr[e];
+            const std::uint16_t nsd = dist.sector_dist(sN, sT);
+            if (nsd != kZoneUnreachable && nsd + 1u == sd) {
+                portal = dist.sectorPortal[e];
+                break;
+            }
+        }
+        const std::uint32_t p = static_cast<std::uint32_t>(portal) - 1u;
+        return {sd, dist.intraDist[off +
+                                   static_cast<std::size_t>(dist.localIdx[u]) * sz +
+                                   dist.localIdx[p]]};
+    };
 
-    // ОЗУ вслух: это та цена, которую владелец принял числом.
-    std::fprintf(stderr, "[zone-nav] зон %u | рёбер %zu | таблица %.1f МиБ\n",
-                 g.zones, g.nbr.size() / 2u,
-                 static_cast<double>(dist.bytes()) / (1024.0 * 1024.0));
+    int walked = 0, badStep = 0, nonMono = 0, notReached = 0;
+    const int stepCap = static_cast<int>(Z) + 1;
+    for (std::uint32_t i = 0; i < 16384u && walked < 280; ++i) {
+        const std::uint32_t a = (i * 2654435761u) % Z;
+        const std::uint32_t b = ((i + 17u) * 2246822519u + 13u) % Z;
+        if (a == b || dist.at(a, b) == kZoneUnreachable) continue;
+        RoomId cur = static_cast<RoomId>(a + 1u);
+        const RoomId dst = static_cast<RoomId>(b + 1u);
+        int steps = 0;
+        while (cur != dst && steps < stepCap) {
+            const RoomId nxt = zone_next(g, dist, cur, dst);
+            if (nxt == kNoRoom) {
+                ++badStep;
+                break;
+            }
+            if (zone_nbr_slot(g, cur, nxt) < 0) {
+                ++badStep;
+                break;
+            }
+            const auto before = lyapunov_pair(static_cast<std::uint32_t>(cur) - 1u, b);
+            const auto after = lyapunov_pair(static_cast<std::uint32_t>(nxt) - 1u, b);
+            if (!(after < before)) ++nonMono; // потенциал обязан строго убывать
+            cur = nxt;
+            ++steps;
+        }
+        if (cur != dst) ++notReached;
+        ++walked;
+    }
+    CHECK(walked >= 256);
+    CHECK(badStep == 0);
+    CHECK(nonMono == 0);
+    CHECK(notReached == 0);
 }
 
 // ПОЛЯ ВНУТРИ ЗОНЫ (инкремент C). Четыре утверждения, и каждое о своём законе.
@@ -524,6 +713,69 @@ void degenerate_inputs_answer(const World& w, const ClearanceField& oracle) {
     CHECK(zone_next(g, dist, 1, 2) == kNoRoom); // и дверь не падает
 }
 
+// Синтетический граф с циклами, хордами и двумя компонентами связности:
+// проверяет отсутствие склейки компонент, баланс секторов и гарантированный
+// ациклический спуск `zone_next` даже через разрезанные границами циклы.
+void synthetic_cycles_and_components() {
+    constexpr std::uint32_t kRing = 64u;
+    constexpr std::uint32_t kZ = kRing + 2u; // + изолированная пара [64, 65]
+    std::vector<std::vector<RoomId>> adj(kZ);
+    auto add_edge = [&](std::uint32_t u, std::uint32_t v) {
+        adj[u].push_back(static_cast<RoomId>(v + 1u));
+        adj[v].push_back(static_cast<RoomId>(u + 1u));
+    };
+    for (std::uint32_t i = 0; i < kRing; ++i) {
+        add_edge(i, (i + 1u) % kRing);
+        add_edge(i, (i + 7u) % kRing);
+    }
+    add_edge(kRing, kRing + 1u);
+
+    ZoneGraph g;
+    g.zones = kZ;
+    g.offset.assign(kZ + 1u, 0u);
+    for (std::uint32_t z = 0; z < kZ; ++z) {
+        std::sort(adj[z].begin(), adj[z].end());
+        adj[z].erase(std::unique(adj[z].begin(), adj[z].end()), adj[z].end());
+        g.offset[z + 1u] = g.offset[z] + static_cast<std::uint32_t>(adj[z].size());
+    }
+    g.nbr.reserve(g.offset[kZ]);
+    for (std::uint32_t z = 0; z < kZ; ++z)
+        g.nbr.insert(g.nbr.end(), adj[z].begin(), adj[z].end());
+
+    ZoneDist dist;
+    bake_zone_dist(g, dist, /*threads=*/2);
+    CHECK(dist.built());
+    // Изолированная пара — один собственный сектор, не склеенный с кольцом.
+    CHECK(dist.sectorOf[kRing] == dist.sectorOf[kRing + 1u]);
+    CHECK(dist.sectorOf[kRing] != dist.sectorOf[0]);
+    CHECK(dist.at(0u, kRing) == kZoneUnreachable);
+    CHECK(zone_next(g, dist, static_cast<RoomId>(1u),
+                    static_cast<RoomId>(kRing + 1u)) == kNoRoom);
+
+    // Все пары на кольце с хордами обязаны дойти без циклов (проверяем в т.ч.
+    // пары, где кратчайший путь разрезан границами секторов).
+    int failed = 0;
+    for (std::uint32_t a = 0; a < kRing; a += 3u) {
+        for (std::uint32_t b = 0; b < kRing; b += 5u) {
+            if (a == b) continue;
+            RoomId cur = static_cast<RoomId>(a + 1u);
+            const RoomId dst = static_cast<RoomId>(b + 1u);
+            int steps = 0;
+            while (cur != dst && steps <= static_cast<int>(kRing)) {
+                const RoomId nxt = zone_next(g, dist, cur, dst);
+                if (nxt == kNoRoom || zone_nbr_slot(g, cur, nxt) < 0) {
+                    ++failed;
+                    break;
+                }
+                cur = nxt;
+                ++steps;
+            }
+            if (cur != dst) ++failed;
+        }
+    }
+    CHECK(failed == 0);
+}
+
 } // namespace zonenav_test
 
 void test_zonenav_all() {
@@ -634,4 +886,5 @@ void test_zonenav_all() {
     zonenav_test::flow_is_clipped_and_leads_out(w, part, gAfter, oracle);
     zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter, oracle);
     zonenav_test::degenerate_inputs_answer(w, oracle);
+    zonenav_test::synthetic_cycles_and_components();
 }

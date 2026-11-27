@@ -8,6 +8,7 @@ namespace giga::game {
 
 void rooms_reset(FloorRooms& fr) {
     fr.list.clear();
+    fr.occupants.clear();
     fr.boxes.clear();
     fr.aliases.clear();
     fr.overlapCells = 0;
@@ -123,6 +124,7 @@ RoomId room_declare(FloorRooms& fr, const RoomBox* boxes, int boxCount,
 
     fr.boxes.insert(fr.boxes.end(), boxes, boxes + boxCount);
     fr.list.push_back(r);
+    fr.occupants.push_back(0);
     rooms_bin_ceil_raise(fr, fr.list.back()); // потолки — после посадки боксов
     return id;
 }
@@ -140,6 +142,29 @@ const Room* room_of(const FloorRooms& fr, RoomId id) {
 Room* room_of(FloorRooms& fr, RoomId id) {
     if (id == kNoRoom || id > fr.list.size()) return nullptr;
     return &fr.list[id - 1];
+}
+
+std::uint16_t room_occupants(const FloorRooms& fr, RoomId id) {
+    if (id == kNoRoom || id > fr.occupants.size()) return 0;
+    return fr.occupants[id - 1];
+}
+
+void room_occupant_add(FloorRooms& fr, RoomId id, int delta) {
+    if (id == kNoRoom || id > fr.list.size() || delta == 0) return;
+    if (fr.occupants.size() != fr.list.size())
+        fr.occupants.resize(fr.list.size(), 0);
+    const std::int32_t next =
+        static_cast<std::int32_t>(fr.occupants[id - 1]) + delta;
+    if (next <= 0)
+        fr.occupants[id - 1] = 0;
+    else if (next >= 0xFFFF)
+        fr.occupants[id - 1] = 0xFFFFu;
+    else
+        fr.occupants[id - 1] = static_cast<std::uint16_t>(next);
+}
+
+void rooms_occupants_clear(FloorRooms& fr) {
+    fr.occupants.assign(fr.list.size(), 0);
 }
 
 void room_alias(FloorRooms& fr, std::uint32_t aliasHash, RoomId id) {

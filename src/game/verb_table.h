@@ -67,6 +67,83 @@ inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {
     900,  // craft
 };
 
+// СПРОС ОТ НУЖД (У1.9): какая нужда, вес и пол питают глагол в data/verbs.csv.
+// Битовая маска NeedBit (lockstep с src/game/needs.h).
+inline constexpr std::uint8_t kVerbNeedFood = 0x01u;
+inline constexpr std::uint8_t kVerbNeedWater = 0x02u;
+inline constexpr std::uint8_t kVerbNeedSleep = 0x04u;
+inline constexpr std::uint8_t kVerbNeedPee = 0x08u;
+inline constexpr std::uint8_t kVerbNeedPoo = 0x10u;
+
+inline constexpr std::uint8_t kVerbNeedMask[kVerbCount] = {
+    0x04u,  // sleep (sleep)
+    0x01u,  // eat (food)
+    0x02u,  // drink (water)
+    0x18u,  // toilet (pee|poo)
+    0x00u,  // work (none)
+    0x00u,  // heal (none)
+    0x00u,  // trade (none)
+    0x00u,  // store (none)
+    0x00u,  // social (none)
+    0x00u,  // shelter (none)
+    0x00u,  // patrol (none)
+    0x00u,  // wander (none)
+    0x00u,  // nest (none)
+    0x00u,  // hunt (none)
+    0x00u,  // haul (none)
+    0x00u,  // profit (none)
+    0x00u,  // strike (none)
+    0x00u,  // kill (none)
+    0x00u,  // rob (none)
+    0x00u,  // craft (none)
+};
+
+inline constexpr std::uint16_t kVerbDemandWeightE3[kVerbCount] = {
+    1000,  // sleep
+    1000,  // eat
+    1000,  // drink
+    1000,  // toilet
+    0,  // work
+    1000,  // heal
+    0,  // trade
+    0,  // store
+    0,  // social
+    0,  // shelter
+    0,  // patrol
+    0,  // wander
+    0,  // nest
+    0,  // hunt
+    0,  // haul
+    0,  // profit
+    0,  // strike
+    0,  // kill
+    0,  // rob
+    0,  // craft
+};
+
+inline constexpr std::int16_t kVerbDemandFloorE3[kVerbCount] = {
+    0,  // sleep
+    0,  // eat
+    0,  // drink
+    0,  // toilet
+    0,  // work
+    0,  // heal
+    0,  // trade
+    0,  // store
+    0,  // social
+    0,  // shelter
+    0,  // patrol
+    60,  // wander
+    0,  // nest
+    0,  // hunt
+    0,  // haul
+    0,  // profit
+    0,  // strike
+    0,  // kill
+    0,  // rob
+    0,  // craft
+};
+
 // ЦЕНЫ ДЕЯНИЙ (CANON S19.2) — колонки CSV, кодоген как materials.csv:
 // базовая дельта матрицы фракций, дельта репутации комнаты, множитель
 // своей территории (свидетель из фракции собственника), множитель

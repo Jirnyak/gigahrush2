@@ -43,6 +43,8 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
+#include "app/app_paths.h"
+#include "app/crash_log.h"
 #include "app/hud_ui.h"
 #include "app/settings_ui.h"
 #include "core/math.h"
@@ -228,7 +230,8 @@ static void light_log(const char* fmt, ...) {
         return e && std::atol(e) != 0;
     }();
     if (!on) return;
-    std::FILE* f = std::fopen("light_debug.log", "a");
+    std::FILE* f = giga::app::fopen_utf8(
+        giga::app::app_paths().light_debug_log_file(), "a");
     if (!f) return;
     va_list ap;
     va_start(ap, fmt);
@@ -254,7 +257,8 @@ static void soak_log(const char* fmt, ...) {
         return e == nullptr || std::atol(e) != 0;
     }();
     if (!on) return;
-    std::FILE* f = std::fopen("soak_log.txt", "a");
+    std::FILE* f =
+        giga::app::fopen_utf8(giga::app::app_paths().soak_log_file(), "a");
     if (!f) return;
     va_list ap;
     va_start(ap, fmt);
@@ -1576,19 +1580,20 @@ constexpr int kMaxSaveSlots = 8;
 int g_saveSlot = 1;
 
 void slot_dir_path(char* out, std::size_t cap, int slot) {
-    std::snprintf(out, cap, "gigahrush2_save/slot%d", slot);
+    const std::string p = giga::app::app_paths().slot_dir(slot);
+    std::snprintf(out, cap, "%s", p.c_str());
 }
 void run_save_path(char* out, std::size_t cap) {
-    std::snprintf(out, cap, "gigahrush2_save/slot%d/run.sav", g_saveSlot);
+    const std::string p = giga::app::app_paths().run_save(g_saveSlot);
+    std::snprintf(out, cap, "%s", p.c_str());
 }
 void floor_save_path(int floor, char* out, std::size_t cap) {
-    std::snprintf(out, cap, "gigahrush2_save/slot%d/floor_%d.sav", g_saveSlot,
-                  floor);
+    const std::string p = giga::app::app_paths().floor_save(g_saveSlot, floor);
+    std::snprintf(out, cap, "%s", p.c_str());
 }
 bool slot_occupied(int slot) {
-    char p[128];
-    std::snprintf(p, sizeof p, "gigahrush2_save/slot%d/run.sav", slot);
-    if (std::FILE* f = std::fopen(p, "rb")) {
+    const std::string p = giga::app::app_paths().run_save(slot);
+    if (std::FILE* f = giga::app::fopen_utf8(p, "rb")) {
         std::fclose(f);
         return true;
     }
@@ -1625,14 +1630,13 @@ bool slot_occupied(int slot) {
 // done here; when it is, it belongs in this function and nowhere else.
 bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) {
     std::error_code ec; // error_code overloads: the app builds -fno-exceptions
-    const std::filesystem::path finalPath(path);
+    const std::filesystem::path finalPath = giga::app::fs_path_from_utf8(path);
     std::filesystem::create_directories(finalPath.parent_path(), ec);
 
-    std::filesystem::path tmpPath(finalPath);
-    tmpPath += ".tmp";
-    const std::string tmpStr = tmpPath.string();
+    const std::string tmpStr = std::string(path) + ".tmp";
+    const std::filesystem::path tmpPath = giga::app::fs_path_from_utf8(tmpStr);
 
-    std::FILE* f = std::fopen(tmpStr.c_str(), "wb");
+    std::FILE* f = giga::app::fopen_utf8(tmpStr, "wb");
     if (!f) return false;
     const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), f);
     // fclose can fail where fwrite succeeded: buffered bytes only reach the OS here,
@@ -1653,7 +1657,7 @@ bool write_bytes_file(const std::vector<std::uint8_t>& bytes, const char* path) 
 }
 
 bool read_bytes_file(std::vector<std::uint8_t>& bytes, const char* path) {
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = giga::app::fopen_utf8(path, "rb");
     if (!f) return false;
     bytes.clear();
     std::uint8_t chunk[4096];
@@ -1694,7 +1698,7 @@ bool write_floor_file(const World& w, int floor,
     std::vector<std::uint8_t> bytes;
     game::floor_file_write(w, floor, bytes, &ents, &key);
     const auto t2 = std::chrono::steady_clock::now();
-    char path[128];
+    char path[1024];
     floor_save_path(floor, path, sizeof path);
     const bool ok = write_bytes_file(bytes, path);
     const auto t3 = std::chrono::steady_clock::now();
@@ -1756,7 +1760,7 @@ void write_floor_file_async(World& w, int floor,
     if (SubField<CellType>* f = w.subfields().find<CellType>(kSubMaterialName))
         mats = std::make_shared<SubField<CellType>>(std::move(*f));
     auto ep = std::make_shared<game::FloorEntityState>(std::move(ents));
-    char path[128];
+    char path[1024];
     floor_save_path(floor, path, sizeof path);
     std::string p(path);
     std::fprintf(stderr, "[lift] leave %d: copy %.0f ms, encode+disk in background\n",
@@ -1797,8 +1801,8 @@ void write_floor_file_async(World& w, int floor,
 // файлы — единицы МиБ, так что и хвост, и вытеснение — миллисекунды.
 std::future<void> g_lightVisStorePending;
 void light_vis_cache_path(std::uint64_t key, char* out, std::size_t cap) {
-    std::snprintf(out, cap, "gigahrush2_save/lightvis/%016llx.lvc",
-                  static_cast<unsigned long long>(key));
+    const std::string p = giga::app::app_paths().light_vis_file(key);
+    std::snprintf(out, cap, "%s", p.c_str());
 }
 void flush_light_vis_store() {
     if (g_lightVisStorePending.valid()) g_lightVisStorePending.get();
@@ -1807,7 +1811,9 @@ void prune_light_vis_cache(std::size_t keep) {
     namespace fs = std::filesystem;
     std::error_code ec;
     std::vector<std::pair<fs::file_time_type, fs::path>> files;
-    fs::directory_iterator it("gigahrush2_save/lightvis", ec), end;
+    const fs::path cacheDir =
+        giga::app::fs_path_from_utf8(giga::app::app_paths().light_vis_dir());
+    fs::directory_iterator it(cacheDir, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
         if (it->path().extension() != ".lvc") continue;
         std::error_code tec;
@@ -1853,7 +1859,7 @@ bool apply_floor_file(World& w, int floor, const game::FloorModuleKey& key) {
         std::lock_guard<std::mutex> lk(g_restoreMx);
         g_pendingRestore.erase(floor);
     }
-    char path[128];
+    char path[1024];
     floor_save_path(floor, path, sizeof path);
     std::vector<std::uint8_t> bytes;
     if (!read_bytes_file(bytes, path)) return false;
@@ -1878,7 +1884,7 @@ bool apply_floor_file(World& w, int floor, const game::FloorModuleKey& key) {
 // from "your save is from an older build" — the two need different words.
 bool read_run(game::SaveState& st, const char* path, game::SaveError& err) {
     err = game::SaveError::None;
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = giga::app::fopen_utf8(path, "rb");
     if (!f) return false;
     std::vector<std::uint8_t> bytes;
     std::uint8_t chunk[1024];
@@ -2701,6 +2707,7 @@ int main(int argc, char** argv) {
     // stderr уходит в никуда.
     bool profWanted = false;
     const char* profPath = nullptr;
+    const char* saveDirCli = nullptr;
     // --window-front: вернуть окну прибора обычные манеры — фокус, захват
     // курсора, место посреди экрана. По умолчанию `--shot` ставит окно В
     // СТОРОНУ (ниже, у SDL_CreateWindow): прибор гоняется десятками прогонов на
@@ -2765,7 +2772,21 @@ int main(int argc, char** argv) {
         else if (a == "--pitch" && i + 1 < argc) { customPitch = static_cast<float>(std::atof(argv[++i])); hasCustomAng = true; }
         else if (a == "--orbit") { shotOrbit = true; }
         else if (a == "--action" && i + 1 < argc) { shotAction = argv[++i]; }
+        else if ((a == "--save-dir" || a == "--pref-dir") && i + 1 < argc) {
+            saveDirCli = argv[++i];
+        }
     }
+
+    char* sdlPref = SDL_GetPrefPath("TenevikGames", "gigahrush2");
+    const giga::app::AppPaths paths =
+        giga::app::init_app_paths(saveDirCli, sdlPref);
+    if (sdlPref) SDL_free(sdlPref);
+
+    giga::app::CrashBuildInfo crashBuild{};
+    crashBuild.buildKind = kBuildKind;
+    giga::app::crash_log_install(paths.crash_log_file().c_str(), crashBuild);
+    giga::app::crash_log_set_context(0, 0, g_saveSlot,
+                                     shotPath ? "shot_init" : "startup");
 
     // --prof: ВЕСЬ stderr уезжает в файл, и это сделано перенаправлением, а не
     // вторым каналом вывода. Причина простая: диагностика этого движка — тысяча
@@ -2790,10 +2811,18 @@ int main(int argc, char** argv) {
     // каждая строка уходит в файл сразу. Цена — писать чаще, и она заплачена
     // осознанно: инструмент, который теряет данные, не инструмент.
     if (profWanted) {
-        const char* path = profPath ? profPath : "gigahrush2_prof.txt";
+        const std::string defaultProf = paths.prof_log_file();
+        const char* path = profPath ? profPath : defaultProf.c_str();
         std::printf("[prof] профиль пишется в %s\n", path);
         std::fflush(stdout);
-        if (std::freopen(path, "w", stderr) == nullptr) {
+        std::FILE* redirected = nullptr;
+#ifdef _WIN32
+        redirected =
+            _wfreopen(giga::app::fs_path_from_utf8(path).c_str(), L"w", stderr);
+#else
+        redirected = std::freopen(path, "w", stderr);
+#endif
+        if (redirected == nullptr) {
             std::printf("[prof] НЕ УДАЛОСЬ открыть %s — профиль остаётся в stderr\n",
                         path);
         } else {
@@ -2815,6 +2844,13 @@ int main(int argc, char** argv) {
     // Cheap line, one whole debugging session saved. Rebuild with
     // `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`.
     std::fprintf(stderr, "[build] %s\n", kBuildKind);
+    std::fprintf(stderr, "[paths] pref=%s (%s) save=%s writable=%s\n",
+                 paths.prefDir.c_str(),
+                 giga::app::path_origin_name(paths.origin),
+                 paths.saveDir.c_str(),
+                 paths.prefDirWritable ? "yes" : "NO");
+    std::fprintf(stderr, "[crash] handler installed -> %s\n",
+                 giga::app::crash_log_path());
 
     // SDL_INIT_GAMEPAD — без него подсистема не поднимается и ни одно
     // устройство не видно: до 2026-09-12 в репозитории не было ни одного
@@ -3157,7 +3193,7 @@ int main(int argc, char** argv) {
     // вытеснение — фоном, один полёт за раз.
     nav.set_light_cache(
         [](std::uint64_t key, game::LightVisBake& out) -> bool {
-            char path[160];
+            char path[1024];
             light_vis_cache_path(key, path, sizeof path);
             std::vector<std::uint8_t> bytes;
             if (!read_bytes_file(bytes, path)) return false;
@@ -3167,7 +3203,7 @@ int main(int argc, char** argv) {
         [](std::uint64_t key, const game::LightVisBake& b) {
             auto bytes = std::make_shared<std::vector<std::uint8_t>>();
             game::light_vis_cache_encode(b, key, *bytes);
-            char path[160];
+            char path[1024];
             light_vis_cache_path(key, path, sizeof path);
             std::string p(path);
             flush_light_vis_store(); // прежний полёт — этажи назад, хвост мал
@@ -3586,6 +3622,8 @@ int main(int argc, char** argv) {
         shell.menuPage = 0;
         input.set_mouselook(true);
         SDL_SetWindowRelativeMouseMode(window, true);
+        giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
+                                         "playing");
     };
     // What the last save or load actually said. A save that fails silently is a save the
     // player only finds out about by losing a run.
@@ -3794,9 +3832,9 @@ int main(int argc, char** argv) {
     game::KeybindTable binds;
     if (!game::keybind_register_defaults(binds))
         std::fprintf(stderr, "[keybind] duplicate default bind REFUSED\n");
-    constexpr const char* kBindsPath = "gigahrush2.keys";
+    const std::string bindsPath = giga::app::app_paths().keybinds_file();
     {
-        std::FILE* f = std::fopen(kBindsPath, "rb");
+        std::FILE* f = giga::app::fopen_utf8(bindsPath, "rb");
         if (f) {
             char text[4096];
             const std::size_t n = std::fread(text, 1, sizeof text - 1, f);
@@ -3806,10 +3844,10 @@ int main(int argc, char** argv) {
         }
     }
     input.set_move_binds(game::keybind_move_binds(binds));
-    auto save_binds = [&]() {
+    auto save_binds = [&, bindsPath]() {
         char text[4096];
         const std::size_t n = binds.serialize(text, sizeof text);
-        std::FILE* f = std::fopen(kBindsPath, "wb");
+        std::FILE* f = giga::app::fopen_utf8(bindsPath, "wb");
         if (!f) return;
         std::fwrite(text, 1, n, f);
         std::fclose(f);
@@ -3823,10 +3861,10 @@ int main(int argc, char** argv) {
     // Один текстовый файл рядом с биндами, тот же паттерн save_binds: ключ
     // значение на строку. Настройки человека, не персонажа — сейв рана их
     // не трогает ([menu.md]).
-    constexpr const char* kUiCfgPath = "gigahrush2.ui";
+    const std::string uiCfgPath = giga::app::app_paths().ui_config_file();
     bool fullscreenState = false;
-    auto save_ui_cfg = [&]() {
-        std::FILE* f = std::fopen(kUiCfgPath, "wb");
+    auto save_ui_cfg = [&, uiCfgPath]() {
+        std::FILE* f = giga::app::fopen_utf8(uiCfgPath, "wb");
         if (!f) return;
         std::size_t hn = 0;
         HudElement* els = hud_elements(hn);
@@ -3844,7 +3882,7 @@ int main(int argc, char** argv) {
         std::fclose(f);
     };
     {
-        std::FILE* f = std::fopen(kUiCfgPath, "rb");
+        std::FILE* f = giga::app::fopen_utf8(uiCfgPath, "rb");
         if (f) {
             char line[128];
             auto clamp01 = [](float v) {
@@ -4070,7 +4108,7 @@ int main(int argc, char** argv) {
             write_floor_file(stack.layer(pl), currentFloor, ents,
                              module_key_for(currentFloor));
         }
-        char runPath[128];
+        char runPath[1024];
         run_save_path(runPath, sizeof runPath);
         return write_run(runState, runPath);
     };
@@ -4117,7 +4155,7 @@ int main(int argc, char** argv) {
         if (rideAutosaveArmed) {
             rideAutosaveArmed = false;
             flush_floor_write();
-            char runPath[128];
+            char runPath[1024];
             run_save_path(runPath, sizeof runPath);
             if (!write_run(rideAutosaveSnap, runPath))
                 std::fprintf(stderr,
@@ -4458,10 +4496,17 @@ int main(int argc, char** argv) {
         liftDst = dst;
         liftHub = hub;
         liftT0 = simTick;
+        giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
+                                         "lift");
         return true;
     };
 
     while (running) {
+        giga::app::crash_log_set_context(
+            currentFloor, simTick, g_saveSlot,
+            shotPath ? "shot"
+                     : (shell.screen == AppScreen::Playing ? "playing"
+                                                           : "menu"));
         activeLayer = reg.get<Transform>(player).layer;
         project_god_onto_body(); // Б4: тело могло смениться с прошлого кадра
         bool propPassNeedsRebuild = false;
@@ -5393,7 +5438,7 @@ int main(int argc, char** argv) {
                  std::future_status::ready)) {
             rideAutosaveArmed = false;
             flush_floor_write(); // мгновенно: хвост сел; отказ печатается
-            char runPath[128];
+            char runPath[1024];
             run_save_path(runPath, sizeof runPath);
             const bool ok = write_run(rideAutosaveSnap, runPath);
             std::fprintf(stderr,
@@ -6434,9 +6479,10 @@ int main(int argc, char** argv) {
                                 static_cast<double>(perceiveSumTicks));
                 }
                 const auto profAiT0 = prof_now();
-                aiTick = game::ai_step(reg, pool, danger, activeGrid, activeLayer, simNow,
-                                       kSimDt, aiCfg, &aiMem, nullptr, &activeWorld,
-                                       &bus, simTick);
+                aiTick = game::ai_step(
+                    reg, pool, danger, activeGrid, activeLayer, simNow, kSimDt, aiCfg,
+                    &aiMem, nullptr, &activeWorld, &bus, simTick,
+                    game::ai_env(simTick, static_cast<game::SamosborPhase>(samosbor.phase)));
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Flee, steerProbe);
                 // (AGENT-GOALS ИНКРЕМЕНТ A СНЕСЁН 2026-09-30 вместе с
@@ -9296,7 +9342,7 @@ int main(int argc, char** argv) {
                                       currentFloor,
                                       static_cast<unsigned>(ledger.banked));
                     else {
-                        char runPath[128];
+                        char runPath[1024];
                         run_save_path(runPath, sizeof runPath);
                         std::snprintf(saveLine, sizeof(saveLine),
                                       "SAVE FAILED: could not write %s", runPath);
@@ -9342,7 +9388,7 @@ int main(int argc, char** argv) {
                     flush_floor_write();
                     {
                         loadWanted = false;
-                        char runPath[128];
+                        char runPath[1024];
                         run_save_path(runPath, sizeof runPath);
                         game::SaveState in;
                         game::SaveError err = game::SaveError::None;
@@ -9733,7 +9779,7 @@ int main(int argc, char** argv) {
             // последнего тика), её только читает `BodyPass`; в решения тика она
             // не входит, поэтому считать её чаще кадра незачем, а в секции
             // рендера — нельзя (рендер ничего не пишет, AGENTS).
-            game::body_parts_step(reg, stack, activeLayer);
+            game::body_parts_step(reg, stack, activeLayer, simTick);
             // ГОРБ ДОЛГА СБРАСЫВАЕМ, А НЕ ОТРАБАТЫВАЕМ УСКОРЕНИЕМ.
             //
             // Понятие написано двадцатью строками выше — для паузы: «drop
@@ -11228,10 +11274,11 @@ int main(int argc, char** argv) {
                         // A new game clears its slot's directory: stale floor
                         // files from the previous run in this slot must not
                         // leak into a fresh one. Player-directed, labelled.
-                        char dir[128];
+                        char dir[1024];
                         slot_dir_path(dir, sizeof dir, s);
                         std::error_code ec;
-                        std::filesystem::remove_all(dir, ec);
+                        std::filesystem::remove_all(
+                            giga::app::fs_path_from_utf8(dir), ec);
                         // ...и ПЕРЕСТРОИТЬ уже построенный этаж (аудит F,
                         // жук №2): бут восстановил этаж 0 из слота по
                         // умолчанию до всякого меню — без пересборки свежий

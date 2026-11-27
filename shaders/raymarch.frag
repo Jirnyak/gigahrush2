@@ -188,7 +188,10 @@ uint cell_index(ivec3 c) {
     return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
 }
 
-uint cell_class(uint ci) { // 0 empty, 1 full, 2 partial, 3 partial+материя сред
+const uint kClassBaseMask = 3u;
+const uint kClassLightPass = 4u;
+
+uint cell_class(uint ci) { // bits 0..1: 0 empty, 1 full, 2 partial, 3 partial+материя сред; bit 2: kClassLightPass
     return (uClass[ci >> 2] >> ((ci & 3u) * 8u)) & 0xFFu;
 }
 
@@ -227,7 +230,7 @@ vec3 sub_stain(uint ci, ivec3 s) {
 bool sub_solid_global(ivec3 g) {
     ivec3 c = ivec3(floor(vec3(g) / 8.0));
     uint ci = cell_index(c);
-    uint cls = cell_class(ci);
+    uint cls = cell_class(ci) & kClassBaseMask;
     if (cls == 0u) return false;
     if (cls == 1u) return true;
     return sub_solid(ci, g - c * 8);
@@ -380,7 +383,7 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
     // 64-cell fog radius; sqrt(3) diagonal and slack bound the loop.
     for (int i = 0; i < 224; ++i) {
         uint ci = cell_index(c);
-        uint cls = cell_class(ci);
+        uint cls = cell_class(ci) & kClassBaseMask;
         if (cls != 0u) {
             // ЗАМЕР kMarchOpaque: клетка непрозрачна целиком, внутренний марш
             // не исполняется.
@@ -423,6 +426,12 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
             if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
                            min(tExit, tCap), axis, cls == 3u, h))
                 return h;
+            // Ход J (matwej.md §9.4): остановка марша по непрозрачности сред.
+            // exp(-5.6) = 0.003698 < 1/255 (= 0.003922) — поверхность за толщей
+            // среды ниже порога 8-битного квантования (при kAbsorbLiquid=0.55
+            // это ~10.2 м воды вместо марша до 128 м; в сухом воздухе gMediaDepth
+            // равен 0 и пустые клетки сюда не входят).
+            if (gMediaDepth > 5.6) break;
         }
         axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                : (tMax.y < tMax.z ? 1 : 2);
@@ -479,7 +488,7 @@ float voxel_ao(vec3 hitP, vec3 n) {
 // субвокселе. Прокарвил дыру — свет хлынул в тот же кадр: луч читает тот же
 // обновлённый воксельный mirror. Смещения старта/финиша — у вызывающего.
 bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
-                          vec3 cellLo, float t0, float t1) {
+                          vec3 cellLo, float t0, float t1, bool hasLightPass) {
     vec3 e = ro + rd * (t0 + 1e-5);
     ivec3 s = clamp(ivec3(floor((e - cellLo) / kVoxel)), ivec3(0), ivec3(7));
     vec3 bound = cellLo + (vec3(s) + max(vec3(stp), vec3(0.0))) * kVoxel;
@@ -495,8 +504,12 @@ bool shadow_cell_occluded(uint ci, vec3 ro, vec3 rd, vec3 rinv, ivec3 stp,
         // material_passes_light в [game/light_vis_bake.cpp]; менять только
         // ВМЕСТЕ, обе стороны читают одну колонку. Материал берётся тем же
         // sub_mat, что и рендер.
+        // Ход F (matwej.md §9.4): если (cls & kClassLightPass) == 0u, в клетке
+        // нет ни одного твёрдого субвокселя с kMatLightPass != 0 — встаём на
+        // первом же sub_solid без чтения uPageIdx + uPagePool.
         if (sub_solid(ci, s) &&
-            kMatLightPass[min(sub_mat(ci, s), kMatSurfaceCount - 1u)] == 0u)
+            (!hasLightPass ||
+             kMatLightPass[min(sub_mat(ci, s), kMatSurfaceCount - 1u)] == 0u))
             return true;
         int axis = sMax.x < sMax.y ? (sMax.x < sMax.z ? 0 : 2)
                                    : (sMax.y < sMax.z ? 1 : 2);
@@ -524,11 +537,14 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
     for (int i = 0; i < 224; ++i) {
         uint ci = cell_index(c);
         uint cls = cell_class(ci);
-        if (cls == 1u) return 0.0; // полная клетка — перекрыто без бит-тестов
+        // Полная клетка без light-pass материалов (cls == 1u) перекрыта без
+        // бит-тестов; полная со стеклом/неоном (cls == 5u) идёт в sub-DDA.
+        if (cls == 1u) return 0.0;
         if (cls != 0u) {
             float tExit = min(min(tMax.x, tMax.y), tMax.z);
             if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
-                                     min(tExit, dist)))
+                                     min(tExit, dist),
+                                     (cls & kClassLightPass) != 0u))
                 return 0.0;
         }
         int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)

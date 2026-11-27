@@ -44,10 +44,191 @@ jobs:
       - name: Package
         run: |
           dist="dist/gigahrush2-macos"
+          rm -rf dist
           mkdir -p "$dist"
-          cp build/gigahrush2 "$dist/"
-          cp -r build/shaders "$dist/shaders"
-          cp -r data "$dist/data"
+          cmake --install build --prefix "$dist"
+
+          export VULKAN_SDK="$(brew --prefix molten-vk)"
+          python3 - "$dist" <<'PY'
+          import json
+          import os
+          import shutil
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          dist = Path(sys.argv[1]).resolve()
+          exe = dist / "gigahrush2"
+          if not exe.is_file():
+              raise SystemExit(f"missing installed binary: {exe}")
+
+          brew_prefixes = [
+              Path(os.environ.get("VULKAN_SDK", "")),
+              Path("/opt/homebrew"),
+              Path("/usr/local"),
+          ]
+          search_dirs = [Path("build").resolve()]
+          for p in brew_prefixes:
+              if p and p.exists():
+                  if (p / "lib").is_dir():
+                      search_dirs.append(p / "lib")
+                  opt_dir = p / "opt"
+                  if opt_dir.is_dir():
+                      search_dirs.extend(d for d in opt_dir.glob("*/lib") if d.is_dir())
+
+          def run_cmd(cmd):
+              return subprocess.check_output(cmd, text=True)
+
+          def otool_deps(path: Path):
+              out = run_cmd(["otool", "-L", str(path)])
+              deps = []
+              for line in out.splitlines()[1:]:
+                  stripped = line.strip()
+                  if not stripped:
+                      continue
+                  dep = stripped.split(" (compatibility version", 1)[0].strip()
+                  deps.append(dep)
+              return deps
+
+          def otool_rpaths(path: Path):
+              out = run_cmd(["otool", "-l", str(path)])
+              rpaths = []
+              lines = out.splitlines()
+              for i, line in enumerate(lines):
+                  if line.strip() == "cmd LC_RPATH":
+                      for j in range(i + 1, min(i + 6, len(lines))):
+                          s = lines[j].strip()
+                          if s.startswith("path "):
+                              rpaths.append(s[5:].split(" (offset", 1)[0].strip())
+                              break
+              return rpaths
+
+          def is_system_dep(dep: str) -> bool:
+              return dep.startswith("/System/Library/") or dep.startswith("/usr/lib/")
+
+          def find_library(dep: str, loader_origin: Path | None) -> Path:
+              name = Path(dep).name
+              if dep.startswith("@loader_path/") and loader_origin is not None:
+                  cand = loader_origin / dep[len("@loader_path/"):]
+                  if cand.exists():
+                      return Path(os.path.realpath(cand))
+              elif dep.startswith("@executable_path/"):
+                  cand = dist / dep[len("@executable_path/"):]
+                  if cand.exists():
+                      return Path(os.path.realpath(cand))
+              elif not dep.startswith("@"):
+                  cand = Path(dep)
+                  if cand.exists():
+                      return Path(os.path.realpath(cand))
+
+              for d in search_dirs:
+                  cand = d / name
+                  if cand.exists():
+                      return Path(os.path.realpath(cand))
+                  if d == Path("build").resolve():
+                      for hit in d.rglob(name):
+                          if hit.is_file() or hit.is_symlink():
+                              return Path(os.path.realpath(hit))
+              raise SystemExit(f"cannot locate dependency '{dep}' (for {loader_origin})")
+
+          # 1. Stage MoltenVK dylib and rewrite MoltenVK_icd.json with relative library_path.
+          molten_dylib = None
+          for d in search_dirs:
+              cand = d / "libMoltenVK.dylib"
+              if cand.exists():
+                  molten_dylib = Path(os.path.realpath(cand))
+                  break
+          if molten_dylib is None:
+              raise SystemExit("cannot locate libMoltenVK.dylib in Homebrew/VULKAN_SDK")
+
+          molten_dst = dist / "libMoltenVK.dylib"
+          shutil.copy2(molten_dylib, molten_dst)
+          os.chmod(molten_dst, 0o755)
+          subprocess.check_call(["install_name_tool", "-id", "@rpath/libMoltenVK.dylib", str(molten_dst)])
+
+          icd_src = None
+          for p in brew_prefixes:
+              for rel in ("share/vulkan/icd.d/MoltenVK_icd.json", "etc/vulkan/icd.d/MoltenVK_icd.json"):
+                  cand = p / rel
+                  if cand.is_file():
+                      icd_src = cand
+                      break
+              if icd_src is not None:
+                  break
+          if icd_src is None:
+              raise SystemExit("cannot locate MoltenVK_icd.json")
+
+          icd_dst = dist / "vulkan/icd.d/MoltenVK_icd.json"
+          icd_dst.parent.mkdir(parents=True, exist_ok=True)
+          icd_data = json.loads(icd_src.read_text(encoding="utf-8"))
+          icd_data.setdefault("ICD", {})["library_path"] = "../../libMoltenVK.dylib"
+          icd_dst.write_text(json.dumps(icd_data, indent=4) + "\n", encoding="utf-8")
+
+          # 2. Recursively copy non-system dylibs (SDL3, vulkan-loader, ktx if shared, etc.)
+          #    and rewrite install names to @rpath/<basename>.
+          queue = [(exe, None), (molten_dst, molten_dylib.parent)]
+          visited = set()
+          staged_macho = [exe, molten_dst]
+
+          while queue:
+              target, origin = queue.pop(0)
+              if target in visited:
+                  continue
+              visited.add(target)
+
+              for dep in otool_deps(target):
+                  if is_system_dep(dep):
+                      continue
+                  name = Path(dep).name
+                  dst_lib = dist / name
+                  if not dst_lib.exists():
+                      src_lib = find_library(dep, origin)
+                      shutil.copy2(src_lib, dst_lib)
+                      os.chmod(dst_lib, 0o755)
+                      subprocess.check_call(["install_name_tool", "-id", f"@rpath/{name}", str(dst_lib)])
+                      if "@loader_path" not in otool_rpaths(dst_lib):
+                          subprocess.check_call(["install_name_tool", "-add_rpath", "@loader_path", str(dst_lib)])
+                      staged_macho.append(dst_lib)
+                      queue.append((dst_lib, src_lib.parent))
+                  if dep != f"@rpath/{name}":
+                      subprocess.check_call(["install_name_tool", "-change", dep, f"@rpath/{name}", str(target)])
+
+          # 3. Strip any non-portable LC_RPATH entries from the executable.
+          exe_rpaths = otool_rpaths(exe)
+          for rp in exe_rpaths:
+              if rp not in ("@executable_path", "@executable_path/../Frameworks"):
+                  subprocess.check_call(["install_name_tool", "-delete_rpath", rp, str(exe)])
+          if "@executable_path" not in otool_rpaths(exe):
+              subprocess.check_call(["install_name_tool", "-add_rpath", "@executable_path", str(exe)])
+
+          # 4. Re-sign modified Mach-O binaries ad-hoc (required on Apple Silicon arm64).
+          for m in staged_macho:
+              subprocess.check_call(["codesign", "--force", "--sign", "-", str(m)])
+
+          # 5. Strict verification: otool -L, LC_RPATH, and required bundle assets.
+          forbidden_prefixes = ("/opt/homebrew", "/usr/local", "/Users/")
+          for m in staged_macho:
+              print(f"=== otool -L {m.name} ===")
+              print(run_cmd(["otool", "-L", str(m)]).rstrip())
+              for rp in otool_rpaths(m):
+                  if any(rp.startswith(p) for p in forbidden_prefixes):
+                      raise SystemExit(f"forbidden LC_RPATH in {m.name}: {rp}")
+              for dep in otool_deps(m):
+                  if is_system_dep(dep):
+                      continue
+                  if not dep.startswith("@rpath/"):
+                      raise SystemExit(f"non-portable dependency in {m.name}: {dep}")
+                  dep_file = dist / dep[len("@rpath/"):]
+                  if not dep_file.is_file():
+                      raise SystemExit(f"missing staged dylib for {m.name}: {dep}")
+
+          for req in ("shaders/cube.frag.spv", "data/textures/factory_wall.ktx2",
+                      "libMoltenVK.dylib", "vulkan/icd.d/MoltenVK_icd.json"):
+              if not (dist / req).is_file():
+                  raise SystemExit(f"missing required package asset: {dist / req}")
+          print("macOS self-contained bundle verification: PASS")
+          PY
+
           tar -czvf dist/gigahrush2-macos.tar.gz -C dist gigahrush2-macos
 
       - uses: actions/upload-artifact@v4

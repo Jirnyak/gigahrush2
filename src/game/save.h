@@ -681,17 +681,28 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // теми материалами. Тихая порча вместо честного отказа — худший исход из
 // возможных, поэтому бамп обязателен даже при неизменном байтовом формате.
 // То же правило инвалидации (S20.6 закон 4): этаж перегенерируется.
-inline constexpr std::uint32_t kFloorFileVersion = 6u;
+// v6 -> v7 (2026-11-26, инкремент E — matwej.md §17.4, §21 E): ДЕЛЬТА ГЕОМЕТРИИ
+// вместо 158 МиБ RLE-слепка. При валидном FloorModuleKey (или явно переданном
+// baseline) геометрия хранится как расхождение относительно детерминированного
+// `generate_floor(floor, spec(kind), seed)` (types, masks, sub_material только
+// для изменённых клеток, плюс опциональная секция пятен `stain`). Нетронутый
+// этаж весит десятки байт / единицы КиБ вместо 158 МиБ. Без ключа/базы (или
+// в тестах с кастомным миром без базы) используется полный RLE-снимок mode=0.
+// Старые v6-файлы отклоняются целиком (BadVersion) — этаж перегенерируется.
+inline constexpr std::uint32_t kFloorFileVersion = 7u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World + сущности этажа into a complete floor file
 // (header + CRC + blob). `ents` может быть null — пустые секции; `key` —
 // ключ модуля от вызывающего (он один знает сид модуля), null = нулевой
-// ключ (headless-тест, читается только с expect=null).
+// ключ (полный снимок без дельты, читается без генерации базы).
+// `baseline` (опционально) — готовый базовый мир для дельта-сравнения; если
+// nullptr при валидном `key`, базовый мир воспроизводится из (kind, floor, seed).
 void floor_file_write(const World& w, int floorNumber,
                       std::vector<std::uint8_t>& out,
                       const FloorEntityState* ents = nullptr,
-                      const FloorModuleKey* key = nullptr);
+                      const FloorModuleKey* key = nullptr,
+                      const World* baseline = nullptr);
 
 // Validate a floor file and stamp it onto `w`. False on any rejection (magic,
 // version, size, CRC, malformed blob) — the caller keeps the generated floor and,
@@ -800,22 +811,24 @@ struct SaveState {
 // ---------------------------------------------------------------------------
 // The active-floor snapshot — state, not history
 // ---------------------------------------------------------------------------
-// Encode the World's entire grid into `out` (cleared first): floor number, cell
-// types (RLE), mask occupancy as an empty/full/mixed RLE with raw 64-byte masks for
-// the mixed cells only, and every "sub_material" page. A generated floor is
-// overwhelmingly uniform, so a real floor encodes in single-digit MB where the raw
-// arrays are 138 MB; a pathological floor degrades linearly and is bounded by
-// kMaxSnapBytes. Returns the encoded size.
+// Encode the World's grid into `out` (cleared first): floor number, mode
+// (0 = full RLE snapshot, 1 = delta against `*baseline`), cell data (types,
+// masks, sub_material pages) and non-empty stain pages. When `baseline` is
+// nullptr, emits a self-contained full snapshot; when `baseline != nullptr`,
+// emits only cells that differ from `*baseline` (ignoring S16.9 uniform-page
+// representation differences). Returns the encoded size.
 std::size_t snapshot_floor(const World& w, int floorNumber,
-                           std::vector<std::uint8_t>& out);
+                           std::vector<std::uint8_t>& out,
+                           const World* baseline = nullptr);
 
-// Stamp a snapshot back onto `w`, replacing types, masks and the sub-material field
-// wholesale. Returns false — leaving `w` in its pre-call state for the types/masks
-// it has not yet touched is NOT guaranteed on a malformed blob, so the caller should
-// treat false as "regenerate and fall back to the carve log". `floorOut` (optional)
-// receives the floor number the snapshot claims. (Двери — МОГИЛА 2026-08-28.)
+// Stamp a snapshot (full or delta) back onto `w`, replacing types, masks,
+// sub_material and stain pages. Validates the entire blob before touching `w`:
+// on false, `w` is untouched. For delta blobs (mode == 1), `baseline` must be
+// non-null (may alias `&w`, in which case deltas patch `w` in-place).
+// `floorOut` (optional) receives the floor number the snapshot claims.
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
-                          std::int32_t* floorOut = nullptr);
+                          std::int32_t* floorOut = nullptr,
+                          const World* baseline = nullptr);
 
 // Serialize. `out` is cleared first and ends up exactly `save_bytes_for(opened.size())`
 // long. Cannot fail: there is no allocation to check and nothing to validate.

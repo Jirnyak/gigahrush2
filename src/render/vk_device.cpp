@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace giga::gpu {
@@ -18,12 +19,40 @@ namespace {
 constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
 
 #ifdef __APPLE__
-// The Homebrew Vulkan loader does not always auto-discover the MoltenVK ICD.
-// Point it at a known dev location so a native binary runs without the caller
-// exporting VK_ICD_FILENAMES by hand.
+// The Homebrew Vulkan loader does not always auto-discover the MoltenVK ICD,
+// and a packaged distribution ships MoltenVK beside the binary without Homebrew.
+// Probe relative to SDL_GetBasePath() first so a shipped bundle uses its own
+// ICD before falling back to dev system locations.
 void ensure_moltenvk_icd() {
     if (std::getenv("VK_ICD_FILENAMES") || std::getenv("VK_DRIVER_FILES"))
         return;
+
+    auto try_icd = [](const char* path) -> bool {
+        if (!path || *path == '\0') return false;
+        std::FILE* fp = std::fopen(path, "rb");
+        if (!fp) return false;
+        std::fclose(fp);
+        SDL_setenv_unsafe("VK_ICD_FILENAMES", path, 1);
+        std::fprintf(stderr, "[vk] MoltenVK ICD: %s\n", path);
+        return true;
+    };
+
+    // SDL3: SDL_GetBasePath() returns an SDL-owned const char* (do NOT SDL_free).
+    if (const char* base = SDL_GetBasePath(); base && *base != '\0') {
+        std::string root(base);
+        if (root.back() != '/') root.push_back('/');
+        const char* rels[] = {
+            "MoltenVK_icd.json",
+            "vulkan/icd.d/MoltenVK_icd.json",
+            "share/vulkan/icd.d/MoltenVK_icd.json",
+            "../Resources/vulkan/icd.d/MoltenVK_icd.json",
+        };
+        for (const char* rel : rels) {
+            const std::string cand = root + rel;
+            if (try_icd(cand.c_str())) return;
+        }
+    }
+
     const char* cands[] = {
         "/opt/homebrew/share/vulkan/icd.d/MoltenVK_icd.json",
         "/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json",
@@ -31,13 +60,7 @@ void ensure_moltenvk_icd() {
         "/usr/local/etc/vulkan/icd.d/MoltenVK_icd.json",
     };
     for (const char* c : cands) {
-        std::FILE* fp = std::fopen(c, "rb");
-        if (fp) {
-            std::fclose(fp);
-            SDL_setenv_unsafe("VK_ICD_FILENAMES", c, 1);
-            std::fprintf(stderr, "[vk] MoltenVK ICD: %s\n", c);
-            return;
-        }
+        if (try_icd(c)) return;
     }
 }
 #endif

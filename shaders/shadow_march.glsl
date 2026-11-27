@@ -79,7 +79,7 @@ float giga_shadow(vec3 ro, vec3 rd, float dist) {
     // Радиус света <= 48 м = 24 клетки; sqrt(3)-диагональ и запас держат цикл.
     for (int i = 0; i < 96; ++i) {
         uint ci = sm_cell_index(c);
-        uint cls = sm_class(ci);
+        uint cls = sm_class(ci) & 3u;
         if (cls == 1u) return 0.0; // цельная клетка — свет не пройдёт
         float tExit = min(min(tMax.x, tMax.y), tMax.z);
         // 2 = частичная, 3 = частичная С МАТЕРИЕЙ СРЕД (S16): тень считается

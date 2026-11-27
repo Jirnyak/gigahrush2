@@ -584,6 +584,28 @@ if(WIN32)
         COMMENT "Staging runtime DLLs next to gigahrush2")
 endif()
 
+# ---- Install / self-contained distribution layout -------------------------
+if(APPLE)
+    # Strip build-tree paths (e.g. /opt/homebrew/lib and developer home dir) on
+    # `cmake --install` while keeping local build-tree runs working as before.
+    set_target_properties(gigahrush2 PROPERTIES
+        INSTALL_RPATH "@executable_path;@executable_path/../Frameworks"
+        BUILD_WITH_INSTALL_RPATH FALSE)
+endif()
+
+install(TARGETS gigahrush2
+    RUNTIME DESTINATION .
+    BUNDLE DESTINATION .)
+install(FILES ${_giga_spv_files}
+    DESTINATION shaders)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/data/textures/
+    DESTINATION data/textures
+    FILES_MATCHING PATTERN "*.ktx2")
+if(WIN32)
+    install(FILES $<TARGET_RUNTIME_DLLS:gigahrush2>
+        DESTINATION .)
+endif()
+
 # ---- Tests ----------------------------------------------------------------
 # enable_testing() СТОИТ СНАРУЖИ `if(GIGA_BUILD_TESTS)` — и это не стиль, а
 # гейт. Когда он стоял внутри, выключение тестов приводило к тому, что CMake
@@ -795,8 +817,14 @@ if(GIGA_BUILD_TESTS)
     #   Свидетель в test_falling_is_not_geometry — атом неподвижной материи без
     #   бита в клетке-приёмнике остаётся без бита (+1). Первая форма закона
     #   ставила бит любому атому твёрдой фазы и замуровывала немасочную статику.
+    #   2565 + 355 = 2920 (2026-11-27, Ход B курсор схлопывания однородных
+    #   страниц): `test_collapse_cursor` — is_page_uniform u64-словами (в т.ч.
+    #   StainRGB), holdGrid 16^3 защищает живой бассейн от схлопывания, курсор
+    #   вне hold-решётки сворачивает однородные CellType и нулевые StainRGB,
+    #   mirror.mark_dirty синкает kNoPage на GPU; обновлён `test_lone_fade` по
+    #   закону чтения бесстраничной (S16.1).
     set_tests_properties(medium_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "2565/2565 checks passed")
+        PASS_REGULAR_EXPRESSION "2920/2920 checks passed")
 
     # GPU-верле антуража — headless-прогон НАСТОЯЩЕГО verlet_sim.comp.spv
     # (verlet-merge.md инкремент 1, 2026-08-31). До него план честно писал
@@ -2736,7 +2764,18 @@ if(GIGA_BUILD_TESTS)
         # опоре и не у трупа (`test_gait_swings_limbs`). Мутации прогнаны все
         # шесть красными: руки в фазе с ногами, ноги в одной фазе, размах без
         # опоры, одометр в воздухе, угол литералом, кинематика без поворота.
-        PASS_REGULAR_EXPRESSION "game_test: 221243 checks, 0 failures")
+        # 221243 -> 244987 (+23744):
+        #   - Инкремент A (двухуровневые зоны `zone_nav.{h,cpp}`): `D^2+sum(Z_s^2)`
+        #     с отсечением изолированных секторов (<= 1.20 MiB на этаже 0), метрика
+        #     секторов, порталы, спуск Ляпунова `zone_next`, циклические компоненты;
+        #   - Инкремент E (`save.cpp` v7 дельта-сейвы этажей): детерминизм, `62 B`
+        #     на нетронутом посещённом этаже и round-trip после карва/пятен;
+        #   - U1.4/U1.5 (`ai.{h,cpp}`): суточный ритм через `AiEnv` и градиент
+        #     Самосбора для `IntentSafety`/`IntentFlee`;
+        #   - U1.6 (И3в, `body_pose.{h,cpp}`): процедурные позы глаголов и действий;
+        #   - U1.7/U1.9 (`place.{h,cpp}`, `room.{h,cpp}`, `verbs.csv`): спрос
+        #     циклом по CSV и вместимость/толпа в `FloorRooms::occupants`.
+        PASS_REGULAR_EXPRESSION "game_test: 244987 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

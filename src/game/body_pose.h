@@ -21,6 +21,7 @@
 
 #include "core/math.h"
 #include "ecs/registry.h"
+#include "game/action.h"
 #include "game/prop_form_table.h"
 #include "world/gravity.h"
 #include "world/level_stack.h"
@@ -100,6 +101,57 @@ float gait_swing_max(FormId form);
 std::uint16_t form_gait_pose(FormId form, BodyScale s, const BodyFrame& f,
                              vec3 rootPos, const GaitState& g, PartPose* out);
 
+// ПОЗЫ ГЛАГОЛОВ И ДЕЙСТВИЙ (CANON S28.3, И3в). Кинематика позы для любого
+// активного окна `Acting`: наклон/упор при сне и отдыхе, поднос рук к лицу при
+// еде и питье, наклон при облегчении и лечении, рабочий замах при крафте,
+// работе и бое. Все углы — данные таблицы (без if-else цепочек в коде),
+// фаза приходит из `acting_phase_e3` (`0..1000`).
+enum class PoseMotion : std::uint8_t {
+    Hold = 0, // плавный вход на ключевую позу и возврат к покою/походке
+    Cycle,    // огибающая + периодическое движение (еда, питьё, работа, сон)
+    Strike,   // замах назад -> удар/бросок вперёд -> плавный возврат
+};
+
+struct ActionPoseDef {
+    float torsoPitch = 0.0f; // рад, + наклон вперёд вокруг оси left
+    float headPitch = 0.0f;  // рад, + кивок вниз вокруг оси left
+    float armPitch = 0.0f;   // рад, - подъём руки вперёд/вверх вокруг left
+    float armInward = 0.0f;  // рад, сведение кистей к центру тела вокруг up
+    float legPitch = 0.0f;   // рад, - подгиб вперёд / + отвод ноги назад
+    float cycleAmp = 0.0f;   // амплитуда колебания руки (рад) для Cycle
+    float cycleFreq = 0.0f;  // число колебаний за окно
+    PoseMotion motion = PoseMotion::Hold;
+    std::uint8_t bothArms = 1; // 1 = обе руки, 0 = ведущая рука + противовес
+};
+
+struct SlotPoseInput {
+    bool active = false;
+    ActionId action = 0;
+    std::uint16_t phaseE3 = 1000u;
+};
+
+struct ActingPoseState {
+    SlotPoseInput handL;
+    SlotPoseInput handR;
+    SlotPoseInput body;
+};
+
+// Табличное описание позы действия и глагола (O(1) чтение).
+const ActionPoseDef& action_pose_def(ActionId id);
+const ActionPoseDef& verb_pose_def(VerbId v);
+
+// Поза с наложением активных окон `Acting` поверх походки/покоя; сохраняет
+// точное замыкание всех шарниров формы (`form_part_joint`).
+std::uint16_t form_action_pose(FormId form, BodyScale s, const BodyFrame& f,
+                               vec3 rootPos, const GaitState& g,
+                               const ActingPoseState& act, PartPose* out);
+
+// Поза для произвольного глагола словаря (`work`, `craft`, `heal` и т.д.)
+// при фазе окна `phaseE3` (`0..1000`).
+std::uint16_t form_verb_pose(FormId form, BodyScale s, const BodyFrame& f,
+                             vec3 rootPos, const GaitState& g, VerbId verb,
+                             std::uint16_t phaseE3, PartPose* out);
+
 // ОДОМЕТР ТЕЛА — путь ног в плоскости ходьбы, м. Состояние, а не производная:
 // фаза шага обязана быть непрерывной, а «время × скорость» прыгает при каждой
 // смене скорости. Один писатель — `gait_step`.
@@ -130,14 +182,16 @@ struct BodyPoseTick {
 
 // ПРОХОД ПОЗЫ ЖИВЫХ ТЕЛ (CANON S28.3, И2/И3). Единственный писатель `BodyParts`
 // ([ecs/components.h]): каждому живому телу с планом на слое — поза походки
-// его формы (`form_gait_pose`; стоящее тело — ровно поза покоя, та же, что
-// раскладывает труп) в кадре тела: верх против гравитации слоя, перёд —
-// `Look`; фаза — из одометра `Gait`, размах — из скорости тела на опоре. Корень — в центре силуэта
-// (`Transform`), масштаб — силуэт `AABB`. Поза — производная, не состояние:
-// раз на КАДР, перед рендером, в решения симуляции не входит. Мёртвое тело
-// (`Corpse`) позу не получает — им владеет солвер, его части рисуются сами;
-// носитель камеры — тоже (вид от первого лица — И6).
+// и активных окон `Acting` его формы (`form_action_pose`; стоящее и свободное
+// тело — ровно поза покоя, та же, что раскладывает труп) в кадре тела: верх
+// против гравитации слоя, перёд — `Look`; фаза шага — из одометра `Gait`,
+// размах — из скорости тела на опоре, фаза деяний — из `acting_phase_e3` на
+// текущем `tick`. Корень — в центре силуэта (`Transform`), масштаб — силуэт
+// `AABB`. Поза — производная, не состояние: раз на КАДР, перед рендером, в
+// решения симуляции не входит. Мёртвое тело (`Corpse`) позу не получает — им
+// владеет солвер, его части рисуются сами; носитель камеры — тоже (вид от
+// первого лица — И6).
 BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
-                             LayerId layer);
+                             LayerId layer, std::uint64_t tick = 0);
 
 } // namespace giga::game

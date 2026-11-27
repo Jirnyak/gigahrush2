@@ -116,10 +116,24 @@ inline std::size_t room_bin_index(int bx, int by, int bz) {
            static_cast<std::size_t>(bx & m);
 }
 
+// Плотность вместимости комнаты (У1.7): выведена из геометрии макроклетки
+// (`kSubDim = 8` субвокселей = 2.0 м) и ширины футпринта тела с клиренсом
+// (`kBodyClearanceSub = 4` субвокселя = 1.0 м, [game/embody.h]):
+// (kSubDim / kBodyClearanceSub)^2 = (8 / 4)^2 = 4 тела на клетку (проверяется
+// при компиляции в place.cpp, где видны оба заголовка).
+inline constexpr std::uint32_t kRoomBodiesPerCell = 4;
+
+inline std::uint32_t room_capacity(const Room& r) {
+    return static_cast<std::uint32_t>(r.cells) * kRoomBodiesPerCell;
+}
+
 // Комнаты одного этажа: плотный список + пул боксов + плоский индекс.
 // Пересоздаётся на каждом входе (закон 2) — в снимок этажа не едет.
 struct FloorRooms {
     std::vector<Room> list;      // плотный, без дыр; RoomId = индекс + 1
+    // Занятость комнат (У1.7): параллельный `list` плотный вектор числа тел
+    // (стоящих внутри + уже направленных туда), без ломки sizeof(Room) == 136.
+    std::vector<std::uint16_t> occupants;
     std::vector<RoomBox> boxes;  // композиции всех комнат, подряд
     std::vector<RoomId> roomAt;  // kMacroDim^3, u16; пуст до rooms_reset
     // Бины: какие комнаты пересекают объём бина (комната может лежать в
@@ -171,6 +185,14 @@ RoomId room_at(const FloorRooms& fr, int x, int y, int z);
 
 const Room* room_of(const FloorRooms& fr, RoomId id);
 Room* room_of(FloorRooms& fr, RoomId id);
+
+// Текущая занятость комнаты `id` (тел внутри + нацеленных туда). 0 для kNoRoom
+// или вне диапазона.
+std::uint16_t room_occupants(const FloorRooms& fr, RoomId id);
+// Инкрементальное обновление занятости (с насыщением 0..0xFFFFu).
+void room_occupant_add(FloorRooms& fr, RoomId id, int delta);
+// Сброс всех счётчиков занятости в 0 (перед пересчётом за тик).
+void rooms_occupants_clear(FloorRooms& fr);
 
 // УМЕСТНО ЛИ ЗДЕСЬ ЭТО ДЕЯНИЕ (S19.1.3): комната САМА предлагает глагол —
 // объявлено или в запасе. Один предикат на двух читателей: свидетель зануляет

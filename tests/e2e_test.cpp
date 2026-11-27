@@ -96,8 +96,7 @@ struct NavFixture {
             zn.graph.offset = {0u, 1u, 2u};
             zn.graph.nbr = {static_cast<game::RoomId>(2),
                             static_cast<game::RoomId>(1)};
-            zn.dist.zones = 2;
-            zn.dist.d = {0, 1, 1, 0};
+            game::bake_zone_dist(zn.graph, zn.dist);
             zn.flow.planes = 1;
             zn.flow.dir.assign(kMacroCells, 1); // слот 0, направление +x
             initialized = true;
@@ -937,7 +936,12 @@ static void test_t2_f3_05_patrol_plan_in_single_node_accessible_pocket() {
     // пойти наугад.
     g_nav.init();
     game::ZoneNav split = g_nav.zn;
-    split.dist.d = {0, game::kZoneUnreachable, game::kZoneUnreachable, 0};
+    {
+        game::ZoneGraph disconnected;
+        disconnected.zones = 2;
+        disconnected.offset = {0u, 0u, 0u};
+        game::bake_zone_dist(disconnected, split.dist);
+    }
     Registry reg;
     Entity e = reg.create();
     reg.emplace<Transform>(e, Transform{vec3{(32.0f + 0.5f) * kCellSize,

@@ -109,6 +109,62 @@ inline constexpr SiteIntent kSiteIntents[] = {
 
 } // namespace
 
+// Smooth cos^2 window of width 2*halfWidth around center on the 1440-minute torus.
+static float torus_day_window(float m, float center, float halfWidth) noexcept {
+    float d = std::fabs(m - center);
+    if (d > 720.0f) d = 1440.0f - d;
+    if (d >= halfWidth) return 0.0f;
+    const float c = std::cos(d * (1.57079632679f / halfWidth));
+    return c * c;
+}
+
+// Daily-rhythm utility bias aligned with core/watch.h lighting phases:
+//   Phase 0 (06:00-12:00): morning wake, toilet pulse, breakfast (07:30)
+//   Phase 1 (12:00-18:00): daytime work peak (15:00), lunch (13:00)
+//   Phase 2 (18:00-24:00): dinner (19:00), evening social peak (20:00)
+//   Phase 3 (00:00-06:00): dark/sleep peak (03:00), suppressed work/social
+// Returns 0 when minuteOfDay < 0 (or NaN) so clockless tests stay unchanged.
+float rhythm_bias(std::uint8_t intent, float minuteOfDay) {
+    if (!(minuteOfDay >= 0.0f)) return 0.0f;
+    float m = std::fmod(minuteOfDay, 1440.0f);
+    if (m < 0.0f) m += 1440.0f;
+
+    constexpr float kTwoPiPerDay = 6.28318530718f / 1440.0f;
+    // Peaks +1 at 03:00 (middle of Phase 3 dark), -1 at 15:00 (middle of Phase 1 work).
+    const float nightFactor = std::cos((m - 180.0f) * kTwoPiPerDay);
+    const float dayFactor = -nightFactor;
+    const float eveFactor = std::max(0.0f, std::cos((m - 1200.0f) * kTwoPiPerDay));
+
+    // Three non-overlapping 3h meal windows centered at 07:30, 13:00, 19:00.
+    const float mealPulse =
+        torus_day_window(m, 450.0f, 90.0f) +
+        torus_day_window(m, 780.0f, 90.0f) +
+        torus_day_window(m, 1140.0f, 90.0f);
+    const float toiletPulse = torus_day_window(m, 405.0f, 75.0f);
+
+    switch (intent) {
+        case IntentSleep:
+            return 18.0f * nightFactor;
+        case IntentWork:
+            return 14.0f * dayFactor;
+        case IntentEat:
+            return 14.0f * mealPulse - 4.0f * std::max(0.0f, nightFactor);
+        case IntentDrink:
+            return 10.0f * mealPulse + 3.0f * std::max(0.0f, dayFactor) -
+                   3.0f * std::max(0.0f, nightFactor);
+        case IntentToilet:
+            return 8.0f * toiletPulse - 3.0f * std::max(0.0f, nightFactor);
+        case IntentSocial:
+            return 8.0f * eveFactor - 8.0f * std::max(0.0f, nightFactor);
+        case IntentPatrol:
+            return 4.0f * nightFactor;
+        case IntentWander:
+            return 4.0f * dayFactor;
+        default:
+            return 0.0f;
+    }
+}
+
 // --------------------------------------------------------------------------
 // The pure utility scorer. Every coefficient is verbatim from the reference
 // `npc_utility.ts` per-intent bodies; the stubbed inputs sit at 0 in Perception,
@@ -150,10 +206,9 @@ void score_intents(const Perception& p, const Needs& needs,
     const auto tpen = [&](std::uint8_t intent) -> float {
         return p.targetPenalty[intent];
     };
-    // rhythmBias is 0 for every intent while no minute-of-day clock is exposed
-    // (Perception::minuteOfDay < 0); wiring a clock turns the daily routine on
-    // with no scorer edit.
-    const float rhythm = 0.0f;
+    const auto rhythm = [&](std::uint8_t intent) -> float {
+        return rhythm_bias(intent, p.minuteOfDay);
+    };
     const auto stick = [&](std::uint8_t intent) -> float {
         return p.currentIntent == intent ? p.stickinessAmount : 0.0f;
     };
@@ -178,24 +233,24 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentFlee) + stick(IntentFlee) - tpen(IntentFlee));
 
     out[IntentToilet] =
-        clamp_score(toiletP * 92.0f + rhythm + local(IntentToilet) +
+        clamp_score(toiletP * 92.0f + rhythm(IntentToilet) + local(IntentToilet) +
                     stick(IntentToilet) - threat * 18.0f - tpen(IntentToilet));
 
     out[IntentDrink] =
-        clamp_score(drinkP * 88.0f + rhythm + local(IntentDrink) +
+        clamp_score(drinkP * 88.0f + rhythm(IntentDrink) + local(IntentDrink) +
                     stick(IntentDrink) - threat * 16.0f - tpen(IntentDrink));
 
-    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm + local(IntentEat) +
+    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm(IntentEat) + local(IntentEat) +
                                  stick(IntentEat) - threat * 16.0f -
                                  tpen(IntentEat));
 
     out[IntentSleep] = clamp_score(
-        sleepP * 76.0f + rhythm /* + occupation sleep bonus (0: no occupations) */ +
+        sleepP * 76.0f + rhythm(IntentSleep) /* + occupation sleep bonus (0: no occupations) */ +
         local(IntentSleep) + stick(IntentSleep) - threat * 30.0f -
         (p.samosborActive ? 18.0f : 0.0f) - tpen(IntentSleep));
 
     out[IntentWork] = clamp_score(
-        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm + local(IntentWork) +
+        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm(IntentWork) + local(IntentWork) +
         stick(IntentWork) - urgent * 30.0f - threat * 42.0f -
         (p.samosborActive ? 45.0f : 0.0f) - tpen(IntentWork));
 
@@ -204,7 +259,7 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentHeal) + stick(IntentHeal) - threat * 10.0f - tpen(IntentHeal));
 
     out[IntentSocial] = clamp_score(
-        tr.sociability * 29.0f + rhythm + local(IntentSocial) +
+        tr.sociability * 29.0f + rhythm(IntentSocial) + local(IntentSocial) +
         stick(IntentSocial) - urgent * 15.0f - threat * 34.0f -
         (p.samosborActive ? 25.0f : 0.0f) - tpen(IntentSocial));
 
@@ -215,7 +270,7 @@ void score_intents(const Perception& p, const Needs& needs,
         p.faction != static_cast<std::uint16_t>(Faction::Liquidators) &&
         p.faction != static_cast<std::uint16_t>(Faction::Cultists);
     out[IntentPatrol] = clamp_score(
-        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm + threat * 10.0f +
+        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm(IntentPatrol) + threat * 10.0f +
         local(IntentPatrol) + stick(IntentPatrol) - urgent * 18.0f -
         (patrolSamosborPenalty ? 24.0f : 0.0f) - tpen(IntentPatrol));
 
@@ -228,7 +283,7 @@ void score_intents(const Perception& p, const Needs& needs,
     const float wanderJitter =
         jitter_signed(channel_seed(p.idSeed, "wander_score"), 3.0f);
     out[IntentWander] = clamp_score(
-        9.0f + rhythm + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
+        9.0f + rhythm(IntentWander) + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
         local(IntentWander) + stick(IntentWander) - urgent * 12.0f -
         threat * 22.0f - tpen(IntentWander));
 
@@ -537,7 +592,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const void* doorsDead, const World* world, EventBus* bus,
-               std::uint64_t tick) {
+               std::uint64_t tick, AiEnv env) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and выключить ИИ на живом этаже теперь безопасно само:
@@ -651,7 +706,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // constant instead of a per-tick row scan over the whole crowd.
         const bool wantReplan = now >= static_cast<double>(brain.nextDecisionAt);
         bool haveRecall = false;
-        if (useMem && (wantReplan || brain.currentIntent == IntentFlee)) {
+        if (useMem && (wantReplan || brain.currentIntent == IntentFlee ||
+                       brain.currentIntent == IntentSafety)) {
             recall = ai_recall(*mem, id, cx, cy, cz, now);
             haveRecall = true;
             ++out.recalled;
@@ -668,6 +724,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
+            p.minuteOfDay = env.minuteOfDay;
+            p.samosborActive = env.samosborActive;
+            p.samosborWarning = env.samosborWarning;
             p.currentIntent = brain.currentIntent;
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.
@@ -733,7 +792,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         vec3 dir{0.0f, 0.0f, 0.0f};
         bool owned = false;
         bool viaMemory = false;
-        if (brain.currentIntent == IntentFlee) {
+        if (brain.currentIntent == IntentFlee ||
+            brain.currentIntent == IntentSafety) {
             // §23 hermetic shelter first: a sealed apartment is a real destination
             // during Samosbor purple fog, not just "away from the gradient". Both
             // world and doors must be live (main wires them; tests pass null and

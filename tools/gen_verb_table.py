@@ -34,13 +34,41 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERBS_CSV = os.path.join(REPO, "data", "verbs.csv")
 OUT_PATH = os.path.join(REPO, "src", "game", "verb_table.h")
 
-EXPECTED_COLS = ["id", "name", "patience_e3", "rel_delta", "rep_delta",
-                 "turf_mult_e3", "victim_mult_e3", "hear_m", "note"]
+EXPECTED_COLS = ["id", "name", "patience_e3", "need", "demand_weight_e3",
+                 "demand_floor_e3", "rel_delta", "rep_delta", "turf_mult_e3",
+                 "victim_mult_e3", "hear_m", "note"]
+
+# Битовая маска нужд (lockstep с NeedBit в src/game/needs.h — place.cpp
+# проверяет совпадение static_assert'ами).
+NEED_BITS = {
+    "food":  1 << 0,
+    "water": 1 << 1,
+    "sleep": 1 << 2,
+    "pee":   1 << 3,
+    "poo":   1 << 4,
+}
 
 
 def die(msg):
     sys.stderr.write("gen_verb_table: %s\n" % msg)
     sys.exit(1)
+
+
+def parse_need_mask(vid, text):
+    tok = (text or "").strip()
+    if not tok or tok == "none":
+        return 0
+    mask = 0
+    for part in tok.split("|"):
+        p = part.strip()
+        if p not in NEED_BITS:
+            die("%r: unknown need %r in need column (want none or %s)"
+                % (vid, p, "|".join(sorted(NEED_BITS))))
+        bit = NEED_BITS[p]
+        if mask & bit:
+            die("%r: duplicate need %r in need column" % (vid, p))
+        mask |= bit
+    return mask
 
 
 def camel(ident):
@@ -73,10 +101,15 @@ def main():
             die("%r: patience_e3 %r is not an integer" % (vid, row["patience_e3"]))
         if not (0 <= p <= 1000):
             die("%r: patience_e3 %d out of [0, 1000]" % (vid, p))
+        # СПРОС ОТ НУЖД (У1.9): маска NeedBit, вес (x1000) и пол спроса.
+        # Новая строка глагола с нуждой получает спрос без правки C++.
+        row["_need_mask"] = parse_need_mask(vid, row["need"])
         # ЦЕНЫ ДЕЯНИЙ (S19.2): новая механика с ценой = правка данных,
         # ноль веток. Диапазоны — узкие рамки от здравого смысла матрицы
         # (int8 в faction_relations) и репутации комнаты (int16).
-        for col, lo, hi in (("rel_delta", -100, 100),
+        for col, lo, hi in (("demand_weight_e3", 0, 4000),
+                            ("demand_floor_e3", 0, 1000),
+                            ("rel_delta", -100, 100),
                             ("rep_delta", -1000, 1000),
                             ("turf_mult_e3", 0, 4000),
                             ("victim_mult_e3", 0, 4000),
@@ -124,6 +157,27 @@ def main():
     w("inline constexpr std::uint16_t kVerbPatienceE3[kVerbCount] = {")
     for row in rows:
         w("    %s,  // %s" % (row["patience_e3"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("// СПРОС ОТ НУЖД (У1.9): какая нужда, вес и пол питают глагол в data/verbs.csv.")
+    w("// Битовая маска NeedBit (lockstep с src/game/needs.h).")
+    for name, bit in (("Food", 1 << 0), ("Water", 1 << 1), ("Sleep", 1 << 2),
+                      ("Pee", 1 << 3), ("Poo", 1 << 4)):
+        w("inline constexpr std::uint8_t kVerbNeed%s = 0x%02Xu;" % (name, bit))
+    w("")
+    w("inline constexpr std::uint8_t kVerbNeedMask[kVerbCount] = {")
+    for row in rows:
+        w("    0x%02Xu,  // %s (%s)" % (row["_need_mask"], row["id"].strip(), (row["need"] or "none").strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::uint16_t kVerbDemandWeightE3[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["demand_weight_e3"].strip(), row["id"].strip()))
+    w("};")
+    w("")
+    w("inline constexpr std::int16_t kVerbDemandFloorE3[kVerbCount] = {")
+    for row in rows:
+        w("    %s,  // %s" % (row["demand_floor_e3"].strip(), row["id"].strip()))
     w("};")
     w("")
     w("// ЦЕНЫ ДЕЯНИЙ (CANON S19.2) — колонки CSV, кодоген как materials.csv:")

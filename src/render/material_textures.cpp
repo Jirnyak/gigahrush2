@@ -3,6 +3,7 @@
 #include "render/vk_common.h"
 #include "render/vk_device.h"
 
+#include <SDL3/SDL_filesystem.h>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -32,6 +33,13 @@ namespace {
 static std::string resolve_texture_dir() {
     if (const char* env = std::getenv("GIGA_TEXTURE_DIR")) {
         if (*env != '\0' && std::filesystem::is_directory(env)) return env;
+    }
+    if (const char* base = SDL_GetBasePath(); base && *base != '\0') {
+        const std::filesystem::path basePath(base);
+        for (const char* rel : {"data/textures", "../data/textures"}) {
+            const std::filesystem::path p = basePath / rel;
+            if (std::filesystem::is_directory(p)) return p.string();
+        }
     }
     const std::filesystem::path candidates[] = {
         "data/textures",

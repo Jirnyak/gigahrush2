@@ -703,7 +703,7 @@ void run_settle(uint slot, uint threadId) {
     else if (sFree > 0u) cls = 3u;
     else cls = sMaskBits > 0u ? 2u : 0u;
     uint shift = (ci & 3u) * 8u;
-    atomicAnd(uClass[ci >> 2], ~(0xFFu << shift));
+    atomicAnd(uClass[ci >> 2], ~(0x03u << shift));
     atomicOr(uClass[ci >> 2], cls << shift);
 
     atomicAdd(uCnt[8], min(sQuanta, 512u));

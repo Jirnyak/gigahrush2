@@ -166,9 +166,24 @@ from the reasoning half on purpose.
 
 ### Prerequisites
 - C++23 compliant compiler (Clang 16+, GCC 13+, MSVC 2022+)
-- CMake 3.25+
-- Vulkan drivers (MoltenVK on macOS); `glslc` from shaderc
-- SDL3, EnTT
+- CMake 3.21+
+- Vulkan drivers + loader (MoltenVK on macOS; LunarG Vulkan SDK on Windows); `glslc` from `shaderc`
+- SDL3, EnTT, KTX-Software, Dear ImGui (EnTT, ImGui, KTX-Software, and SDL3 fallback are fetched automatically by CMake via `FetchContent`)
+
+#### Install Dependencies — macOS (Homebrew)
+```bash
+brew install cmake molten-vk vulkan-headers vulkan-loader shaderc sdl3 entt
+```
+
+#### Install Dependencies — Windows (WinGet)
+```bat
+winget install Microsoft.VisualStudio.2022.BuildTools
+winget install Microsoft.WindowsSDK.10.0.26100
+winget install KhronosGroup.VulkanSDK
+winget install Kitware.CMake
+winget install Ninja-build.Ninja
+```
+Make sure Visual Studio Build Tools includes the **Desktop development with C++** (`Microsoft.VisualStudio.Workload.VCTools`) workload — see [tools/win/README.md](tools/win/README.md) and use `tools\win\build.bat` as the Windows build entry point.
 
 ### Building Locally
 ```bash
@@ -181,11 +196,14 @@ cmake --build build -j
 
 # Run headless verification suite
 ctest --test-dir build --output-on-failure
+
+# Stage a self-contained install directory (binary + shaders/*.spv + data/textures/*.ktx2)
+cmake --install build --prefix dist/gigahrush2
 ```
 
-> Run the game **from the repo root**: `data/textures` is resolved relative to the
-> working directory, and from anywhere else all six texture sets silently fail to
-> load and the world renders procedural-only ([problems.md](problems.md) §31).
+> Run from the repo root (or from the staged install directory with `shaders/` and
+> `data/textures/` beside the binary): `data/textures` is resolved relative to the
+> working directory or `GIGA_TEXTURE_DIR` ([problems.md](problems.md) §31).
 
 ---
 

@@ -8,6 +8,7 @@
 #include "world/destruct.h"   // kSubMaterialName, settle_sub_page
 #include "world/gravity.h"    // regime_down — ось низа для аудита маски
 #include "world/medium.h"     // medium_digest_* — тот же разбор, что у шва
+#include "world/stain.h"      // kStainFieldName, StainRGB — схлопывание нулевых пятен
 #include "world/subfield.h"
 #include "world/types.h"
 
@@ -48,14 +49,9 @@ FloorAwakenStats floor_awaken(World& w) {
             lvl[ci] = d.liq | (d.gas << 16);
             mob[ci] = d.mobile ? 1u : 0u;
             // Однородность — тем же единственным проходом по странице, что и
-            // агрегаты: второго цикла по 512 атомам здесь быть не должно.
-            bool uniform = true;
-            for (int b = 1; b < kSubVoxels; ++b)
-                if (pg[b] != pg[0]) {
-                    uniform = false;
-                    break;
-                }
-            if (uniform) ub[ci >> 6] |= 1ull << (ci & 63u);
+            // агрегаты: по 128 словам u64 без повторного цикла по 512 атомам.
+            if (SubField<CellType>::is_page_uniform(pg))
+                ub[ci >> 6] |= 1ull << (ci & 63u);
         }
     });
 
@@ -103,12 +99,20 @@ FloorAwakenStats floor_awaken(World& w) {
 
 std::size_t settle_uniform_pages(World& w) {
     SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
-    if (!mats) return 0;
+    SubField<StainRGB>* stains = w.subfields().find<StainRGB>(kStainFieldName);
+    if (!mats && !stains) return 0;
     std::size_t settled = 0;
     // Серийно: путь фонового кодека, не кадра; settle_sub_page правит общий
     // свободный список — тот же довод, что у серийного схлопывания рождения.
-    for (std::size_t ci = 0; ci < kMacroCells; ++ci)
-        if (mats->paged(ci) && settle_sub_page(w, ci)) ++settled;
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        if (mats && mats->paged(ci) && settle_sub_page(w, ci)) ++settled;
+        if (stains && stains->paged(ci)) {
+            const StainRGB* sp = stains->page(ci);
+            if (sp && *sp == StainRGB{} &&
+                stains->collapse_if_uniform(ci, nullptr))
+                ++settled;
+        }
+    }
     return settled;
 }
 
@@ -244,15 +248,11 @@ PageAuditStats audit_sub_pages(const World& w) {
         const CellType* pg = mats->page(ci);
         if (!pg) continue;
         ++st.paged_cells;
-        bool uniform = true;
-        for (int b = 1; b < kSubVoxels; ++b)
-            if (!(pg[b] == pg[0])) {
-                uniform = false;
-                break;
-            }
         // Однородна по паре (материал, бит) — тот же предикат, что у свёртки:
         // однородная страница рыхлого с частичной маской законна (S16.10).
-        if (uniform && uniform_mask(w.grid().masks()[ci])) ++st.uniform_paged;
+        if (SubField<CellType>::is_page_uniform(pg) &&
+            uniform_mask(w.grid().masks()[ci]))
+            ++st.uniform_paged;
     }
 
     // Слот занят пулом, но ни одна клетка на него не смотрит и в свободном
@@ -269,6 +269,93 @@ PageAuditStats audit_sub_pages(const World& w) {
         // тест обязан покраснеть, а не увидеть ноль.
         st.orphan_slots = st.paged_cells - st.pages_in_use;
 
+    return st;
+}
+
+void stamp_hold_block_27(std::uint8_t holdGrid[kHoldGridCells],
+                         std::uint64_t stampedCenterBits[kHoldGridCells / 64],
+                         std::uint32_t ci, std::uint8_t ttl) {
+    if (!holdGrid || ci >= kMacroCells || ttl == 0u) return;
+    const int cx = static_cast<int>(ci % static_cast<std::uint32_t>(kMacroDim));
+    const int cy = static_cast<int>((ci / static_cast<std::uint32_t>(kMacroDim)) %
+                                    static_cast<std::uint32_t>(kMacroDim));
+    const int cz = static_cast<int>(
+        ci / (static_cast<std::uint32_t>(kMacroDim) *
+              static_cast<std::uint32_t>(kMacroDim)));
+    const int bx = cx / kSubDim;
+    const int by = cy / kSubDim;
+    const int bz = cz / kSubDim;
+    const int bi = bx + by * kHoldGridDim + bz * kHoldGridDim * kHoldGridDim;
+    const std::uint64_t bit = std::uint64_t{1} << (bi & 63);
+    if (stampedCenterBits) {
+        if (stampedCenterBits[bi >> 6] & bit) return;
+        stampedCenterBits[bi >> 6] |= bit;
+    }
+    constexpr int kMask = kHoldGridDim - 1;
+    for (int dz = -1; dz <= 1; ++dz) {
+        const int nbz = (bz + dz) & kMask;
+        for (int dy = -1; dy <= 1; ++dy) {
+            const int nby = (by + dy) & kMask;
+            for (int dx = -1; dx <= 1; ++dx) {
+                const int nbx = (bx + dx) & kMask;
+                const int nbi =
+                    nbx + nby * kHoldGridDim + nbz * kHoldGridDim * kHoldGridDim;
+                if (holdGrid[nbi] < ttl) holdGrid[nbi] = ttl;
+            }
+        }
+    }
+}
+
+PageCollapseStats collapse_uniform_cursor_step(
+    World& w, std::size_t& cursor, std::size_t cellsToScan,
+    const std::uint8_t* holdGrid, std::vector<std::uint64_t>* frontierDoneBits,
+    std::vector<std::uint32_t>& collapsedOut) {
+    PageCollapseStats st;
+    if (cellsToScan == 0u) return st;
+    if (cellsToScan > kMacroCells) cellsToScan = kMacroCells;
+    if (cursor >= kMacroCells) cursor %= kMacroCells;
+
+    SubField<CellType>* mats = w.subfields().find<CellType>(kSubMaterialName);
+    SubField<StainRGB>* stains = w.subfields().find<StainRGB>(kStainFieldName);
+    const bool hasFrontier =
+        frontierDoneBits && frontierDoneBits->size() >= kMacroCells / 64u;
+    std::uint64_t* fd = hasFrontier ? frontierDoneBits->data() : nullptr;
+
+    // Если в мире нет ни одной страницы в обоих полях — просто сдвигаем
+    // курсор без обхода 2048 записей (но сбрасывать frontierDone не нужно,
+    // т.к. страниц для отрыва и так нет).
+    if (!mats && !stains) {
+        st.scanned = cellsToScan;
+        cursor = (cursor + cellsToScan) % kMacroCells;
+        return st;
+    }
+
+    std::size_t ci = cursor;
+    for (std::size_t k = 0; k < cellsToScan; ++k) {
+        ++st.scanned;
+        bool dirty = false;
+        const bool held = holdGrid && holdGrid[hold_block_of_cell(ci)] != 0u;
+        if (held) {
+            ++st.heldSkipped;
+        } else {
+            if (fd) fd[ci >> 6] &= ~(std::uint64_t{1} << (ci & 63u));
+            if (mats && mats->paged(ci) && settle_sub_page(w, ci)) {
+                ++st.matCollapsed;
+                dirty = true;
+            }
+        }
+        if (stains && stains->paged(ci)) {
+            const StainRGB* sp = stains->page(ci);
+            if (sp && *sp == StainRGB{} &&
+                stains->collapse_if_uniform(ci, nullptr)) {
+                ++st.stainCollapsed;
+                dirty = true;
+            }
+        }
+        if (dirty) collapsedOut.push_back(static_cast<std::uint32_t>(ci));
+        if (++ci == kMacroCells) ci = 0u;
+    }
+    cursor = ci;
     return st;
 }
 

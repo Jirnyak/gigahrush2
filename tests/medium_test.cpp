@@ -30,10 +30,12 @@
 #include "render/vk_device.h"
 #include "render/voxel_mirror.h"
 #include "world/destruct.h" // kSubMaterialName
+#include "world/floor_awaken.h" // audit_sub_pages, kHoldGridCells (ход B)
 #include "world/gravity.h"
 #include "world/macro_grid.h"
 #include "world/materials.h" // kMatWater, kMatConcrete, kMatToxicGas
 #include "world/medium.h"    // агрегаты S16.4 — чек уровней на шве
+#include "world/stain.h"     // kStainFieldName, stain_paint (ход B)
 #include "world/subfield.h"
 #include "world/world.h"
 
@@ -1414,7 +1416,17 @@ void test_lone_fade(gpu::VulkanDevice& dev) {
     int gas = 0, water = 0;
     for (std::uint32_t ci = 0; ci < kMacroCells; ++ci) {
         const CellType* pg = f.page(ci);
-        if (!pg) continue;
+        if (!pg) {
+            // Закон чтения бесстраничной (S16.1): полная однородная материя
+            // среды (вода после collapse_uniform_cursor_step) хранится в
+            // базовом типе при пустой маске.
+            if (w.grid().masks()[ci].empty()) {
+                const CellType t = w.grid().types()[ci];
+                if (t == kMatToxicGas) gas += kSubVoxels;
+                if (t == kMatWater) water += kSubVoxels;
+            }
+            continue;
+        }
         for (int b2 = 0; b2 < kSubVoxels; ++b2) {
             if (pg[b2] == kMatToxicGas) ++gas;
             if (pg[b2] == kMatWater) ++water;
@@ -3212,6 +3224,244 @@ void test_bitmask_gate_stand(gpu::VulkanDevice& dev) {
     listBuf.destroy(dev);
 }
 
+// ==== ХОД B (matwej.md §9.3–§9.4): КУРСОР СХЛОПЫВАНИЯ ОДНОРОДНЫХ СТРАНИЦ ====
+// Проверяет три инварианта хода B:
+//   1. Быстрое u64-сравнение однородности (128 слов для CellType, 192 для
+//      StainRGB) тождественно побитово на всех смещениях внутри u64-слова.
+//   2. Кольцевой курсор схлопывает однородные страницы воздуха (после сна
+//      фронтира) и все-нулевые страницы пятен, синхронизируя VoxelMirror::
+//      mark_dirty (`mirror.verify(w)` бит-в-бит); НЕ трогает живые блоки
+//      под держ-решёткой 16³ и НЕ трогает ненулевые однородные пятна.
+//   3. Продвижение курсора привязано к числу подтиков (не кадров), поэтому
+//      каденс-эквивалентность (батчи 8 vs игровой 0..4) остаётся бит-в-бит
+//      даже когда курсор активно схлопывает страницы в ходе прогона.
+void test_collapse_cursor(gpu::VulkanDevice& dev) {
+    // --- 1. Быстрая проверка u64 на границах слов --------------------------
+    {
+        CellType page[kSubVoxels];
+        std::fill_n(page, kSubVoxels, kCellAir);
+        CHECK(SubField<CellType>::is_page_uniform(page));
+        std::fill_n(page, kSubVoxels, kMatWater);
+        CHECK(SubField<CellType>::is_page_uniform(page));
+        for (int pos : {0, 1, 2, 3, 508, 509, 510, 511}) {
+            std::fill_n(page, kSubVoxels, kMatConcrete);
+            page[pos] = kMatPlaster;
+            CHECK(!SubField<CellType>::is_page_uniform(page));
+        }
+
+        StainRGB spage[kSubVoxels];
+        std::fill_n(spage, kSubVoxels, StainRGB{});
+        CHECK(SubField<StainRGB>::is_page_uniform(spage));
+        for (int pos : {0, 7, 8, 511}) {
+            std::fill_n(spage, kSubVoxels, StainRGB{});
+            spage[pos] = kStainBlood;
+            CHECK(!SubField<StainRGB>::is_page_uniform(spage));
+        }
+    }
+
+    // --- 2. Живой фронтир + уснувший очаг + пятна + зеркало -----------------
+    {
+        static World w;
+        // Зона А: вечно живой бассейн (открытая поверхность диффундирует).
+        // Бассейн в блоке (3,3,0), клетка heldAir (23,29,7) в соседнем блоке
+        // (2,3,0) раскрывается фронтиром R=6 и обязана держаться решёткой 16³.
+        std::uint32_t pourCell = 0;
+        cadence_build_scene(w, pourCell);
+        const auto heldAir =
+            static_cast<std::uint32_t>(macro_index(23, 29, 7));
+
+        // Зона Б: башня рыхлого на далёкой плите (блок 10,10,10) — осядет и
+        // уснёт, после чего курсор обязан схлопнуть её воздух (rubbleAir).
+        for (int x = 80; x < 86; ++x)
+            for (int y = 80; y < 86; ++y)
+                w.grid().fill_cell(x, y, 80, kMatConcrete);
+        const auto rubbleCell =
+            static_cast<std::uint32_t>(macro_index(82, 82, 82));
+        const auto rubbleAir =
+            static_cast<std::uint32_t>(macro_index(82, 82, 88));
+        SubField<CellType>& f =
+            w.subfields().get_or_create<CellType>(kSubMaterialName);
+        CellType* rpg = f.ensure_page(rubbleCell, w.grid().types()[rubbleCell]);
+        for (int sx = 3; sx < 5; ++sx)
+            for (int sy = 3; sy < 5; ++sy)
+                for (int sz = 0; sz < 8; ++sz)
+                    rpg[sub_bit(sx, sy, sz)] = kMatRubble;
+
+        // Зона В: три клетки пятен на плите (50..52, 50, 50):
+        //   sZero    — покрашена и очищена в нули -> курсор схлопывает;
+        //   sPartial — 1 красный атом -> остаётся;
+        //   sFull    — все 512 атомов красные (однородна, но НЕ ноль!) -> цела.
+        for (int x = 50; x <= 52; ++x)
+            w.grid().fill_cell(x, 50, 50, kMatConcrete);
+        const auto sZero = static_cast<std::uint32_t>(macro_index(50, 50, 50));
+        const auto sPartial =
+            static_cast<std::uint32_t>(macro_index(51, 50, 50));
+        const auto sFull = static_cast<std::uint32_t>(macro_index(52, 50, 50));
+        stain_paint(w, 50 * 8 + 1, 50 * 8 + 1, 50 * 8 + 1, kStainBlood);
+        SubField<StainRGB>* stains =
+            w.subfields().find<StainRGB>(kStainFieldName);
+        if (stains && stains->paged(sZero))
+            stains->page(sZero)[sub_bit(1, 1, 1)] = StainRGB{};
+        stain_paint(w, 51 * 8 + 1, 50 * 8 + 1, 50 * 8 + 1, kStainBlood);
+        for (int sz = 0; sz < 8; ++sz)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sx = 0; sx < 8; ++sx)
+                    stain_paint(w, 52 * 8 + sx, 50 * 8 + sy, 50 * 8 + sz,
+                                kStainBlood);
+
+        static gpu::VoxelMirror mirror;
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        static gpu::GpuMediumPass medium;
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+        const std::uint32_t seeds[2] = {pourCell, rubbleCell};
+        medium.wake_cells(seeds, 2, w, mirror);
+
+        std::uint64_t substep = 0;
+        // Фаза 1: 96 подтиков — башня Б оседает и засыпает, лужа А жива.
+        for (int b = 0; b < 12; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w, mirror);
+        }
+        const PageAuditStats auditBefore = audit_sub_pages(w);
+        CHECK(f.paged(heldAir));
+        CHECK(auditBefore.uniform_paged > 0u);
+
+        // Фаза 2: 1024 подтика = полный оборот курсора по всему тору 128³.
+        for (int b = 0; b < 128; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+            substep += 8;
+            medium.apply_readback(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+
+        const PageAuditStats auditAfter = audit_sub_pages(w);
+        std::size_t uniformOutsidePool = 0;
+        for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+            const CellType* pg = f.page(ci);
+            if (!pg || !SubField<CellType>::is_page_uniform(pg) ||
+                !uniform_mask(w.grid().masks()[ci]))
+                continue;
+            const int cx = static_cast<int>(ci % kMacroDim);
+            const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+            const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+            const int bx = cx / kSubDim, by = cy / kSubDim, bz = cz / kSubDim;
+            const bool inPoolA = (bx >= 2 && bx <= 4) && (by >= 2 && by <= 4) &&
+                                 (bz == 15 || bz == 0 || bz == 1);
+            if (!inPoolA) ++uniformOutsidePool;
+        }
+        std::printf("[medium_test] collapse-cursor: uniform_paged %zu -> %zu "
+                    "(вне живого бассейна %zu), matCollapsed %llu, "
+                    "stainCollapsed %llu\n",
+                    auditBefore.uniform_paged, auditAfter.uniform_paged,
+                    uniformOutsidePool,
+                    static_cast<unsigned long long>(medium.collapse_mat_total()),
+                    static_cast<unsigned long long>(
+                        medium.collapse_stain_total()));
+        CHECK(f.paged(heldAir));
+        CHECK(!f.paged(rubbleAir));
+        CHECK(medium.collapse_mat_total() > 0u);
+        CHECK(medium.collapse_stain_total() == 1u);
+        CHECK(stains != nullptr && !stains->paged(sZero));
+        CHECK(stains != nullptr && stains->paged(sPartial));
+        CHECK(stains != nullptr && stains->paged(sFull));
+        CHECK(auditAfter.orphan_slots == 0u);
+        CHECK(uniformOutsidePool == 0u);
+        CHECK(mirror.verify(w));
+
+        medium.destroy();
+        mirror.destroy();
+    }
+
+    // --- 3. Каденс-эквивалентность при активном схлопывании ----------------
+    {
+        constexpr std::uint64_t kTotalSubsteps = 200;
+        const std::uint32_t ghosts[16] = {
+            1000u, 1001u, 1002u, 1003u, 1004u, 1005u, 1006u, 1007u,
+            300000u, 300001u, 300002u, 300003u, 300004u, 300005u, 300006u,
+            300007u};
+        std::uint64_t dig[2] = {0, 0};
+        std::size_t water[2] = {0, 0};
+        std::size_t outside[2] = {0, 0};
+        std::size_t ghostAlive = 0;
+
+        auto seed_ghosts = [&](World& w) {
+            for (std::uint32_t gci : ghosts) materialize_sub_page(w, gci);
+        };
+
+        { // Каденс А: батчи по 8
+            static World w;
+            std::uint32_t pourCell = 0;
+            cadence_build_scene(w, pourCell);
+            seed_ghosts(w);
+            static gpu::VoxelMirror mirror;
+            CHECK(mirror.init(dev));
+            CHECK(mirror.upload_all(w));
+            static gpu::GpuMediumPass medium;
+            CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+            medium.wake_cells(&pourCell, 1, w, mirror);
+            std::uint64_t substep = 0;
+            while (substep < kTotalSubsteps) {
+                CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+                substep += 8;
+                medium.apply_readback(w, mirror);
+            }
+            drain_seam(dev, mirror, medium, w, substep);
+            CHECK(medium.collapse_mat_total() >= 16u);
+            CHECK(mirror.verify(w));
+            dig[0] = cadence_digest(w, &water[0], &outside[0]);
+            const SubField<CellType>* f =
+                w.subfields().find<CellType>(kSubMaterialName);
+            for (std::uint32_t gci : ghosts)
+                if (f && f->paged(gci)) ++ghostAlive;
+            medium.destroy();
+            mirror.destroy();
+        }
+
+        { // Каденс Б: игровой 0..4 подтика/кадр
+            static World w;
+            std::uint32_t pourCell = 0;
+            cadence_build_scene(w, pourCell);
+            seed_ghosts(w);
+            static gpu::VoxelMirror mirror;
+            CHECK(mirror.init(dev));
+            CHECK(mirror.upload_all(w));
+            static gpu::GpuMediumPass medium;
+            CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+            medium.wake_cells(&pourCell, 1, w, mirror);
+            static const std::uint32_t kPat[8] = {1, 0, 2, 1, 0, 4, 3, 1};
+            std::uint64_t substep = 0;
+            std::uint32_t frame = 0;
+            while (substep < kTotalSubsteps) {
+                std::uint32_t n = kPat[frame & 7u];
+                const std::uint64_t left = kTotalSubsteps - substep;
+                if (n > left) n = static_cast<std::uint32_t>(left);
+                CHECK(run_batch(dev, mirror, medium, w, n, substep, frame & 1u));
+                substep += n;
+                medium.apply_readback(w, mirror);
+                ++frame;
+            }
+            drain_seam(dev, mirror, medium, w, substep);
+            CHECK(medium.collapse_mat_total() >= 16u);
+            CHECK(mirror.verify(w));
+            dig[1] = cadence_digest(w, &water[1], &outside[1]);
+            const SubField<CellType>* f =
+                w.subfields().find<CellType>(kSubMaterialName);
+            for (std::uint32_t gci : ghosts)
+                if (f && f->paged(gci)) ++ghostAlive;
+            medium.destroy();
+            mirror.destroy();
+        }
+
+        CHECK(water[0] > 0u);
+        CHECK(water[0] == water[1]);
+        CHECK(dig[0] == dig[1]);
+        CHECK(ghostAlive == 0u);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -3239,6 +3489,7 @@ int main() {
         test_pack_carries_changed_only(dev);
         test_falling_is_not_geometry(dev);
         test_bitmask_gate_stand(dev);
+        test_collapse_cursor(dev);
     }
     test_carve_agnostic();
     dev.destroy();

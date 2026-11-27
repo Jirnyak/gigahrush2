@@ -1988,8 +1988,7 @@ static void test_utilai_all() {
         zn.graph.zones = 2;
         zn.graph.offset = {0u, 1u, 2u};
         zn.graph.nbr = {static_cast<RoomId>(2), static_cast<RoomId>(1)};
-        zn.dist.zones = 2;
-        zn.dist.d = {0, 1, 1, 0};
+        bake_zone_dist(zn.graph, zn.dist);
         zn.flow.planes = 1;
         zn.flow.dir.assign(kMacroCells, 1); // слот 0 = соседка, направление +x
         // `cells` несёт поперечник зоны, из него считается бюджет ноги в
@@ -2134,7 +2133,12 @@ static void test_utilai_all() {
         //    когда верное число отвечает на НЕ ТОТ вопрос. Сам стаггер
         //    проверяется отдельно, шагом ниже.
         ZoneNav split = zn;
-        split.dist.d = {0, kZoneUnreachable, kZoneUnreachable, 0};
+        {
+            ZoneGraph disconnected;
+            disconnected.zones = 2;
+            disconnected.offset = {0u, 0u, 0u};
+            bake_zone_dist(disconnected, split.dist);
+        }
         reg.get<PatrolPlan>(e).zoneTo = kNoRoom;
         reg.get<PatrolPlan>(e).cooldown = 0;
         PatrolTick t5 = ai_patrol_step(reg, split, kLayer, nullptr, 6);

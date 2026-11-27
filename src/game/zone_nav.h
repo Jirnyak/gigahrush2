@@ -142,27 +142,102 @@ struct ZoneGraph {
     }
 };
 
-// ТАБЛИЦА «ЗОНА → ЗОНА»: сколько рёбер графа пройти от A до B.
+// ДВУХУРОВНЕВАЯ ТАБЛИЦА «ЗОНА → ЗОНА» (matwej.md §17.1, Инкремент A).
 //
-// Полная, Z² на u16 — решение владельца 2026-10-06 («берём, как в статье»), и
-// довод тот же: именно ПОЛНОТА таблицы покупает константу на шаг. Считать
-// лениво или держать в кеше значит получить промах, а промах означает, что
-// кто-то посреди кадра встал считать волну — ровно та непредсказуемость, ради
-// избавления от которой всё и строится.
+// Прежняя таблица всех пар Z² × u16 стоила 414.5 МиБ на этаже 0 (Z = 14 742).
+// Группировка Z зон в S связных сбалансированных секторов даёт память порядка
+// S² + Z²/S; минимум по S: d/dS (S² + Z²/S) = 2S − Z²/S² = 0 =>
+//   S = floor((Z_conn² / 2)^(1/3))
+// (изолированные компоненты без внешних рёбер не занимают строк в `sectorDist`).
+//
+// Уровень 1 (межсекторный): матрица `sectorDist` D×D только для связных
+//   секторов с внешними рёбрами (`sectorDistId[s]`), граф секторов в CSR
+//   (`sectorOffset`, `sectorNbr`), канонический портал `sectorPortal`.
+// Уровень 2 (внутрисекторный): плоские таблицы `intraDist` (CSR по секторам,
+//   сумма Z_s²) точных расстояний строго внутри каждого связного сектора.
+//
+// Для пары (from, to):
+//   - один сектор s: точное `intraDist[s](localFrom, localTo)`;
+//   - разные секторы sA != sB: `kZoneUnreachable` если хотя бы один изолирован или
+//     недостижим в `sectorDist`, иначе симметричная нижняя оценка
+//     `borderDist[from] + sector_dist(sA, sB) + borderDist[to]`,
+//     не превышающая истинное графовое расстояние и удовлетворяющая
+//     неравенству треугольника через границы секторов.
 struct ZoneDist {
-    std::uint32_t zones = 0;
-    std::vector<std::uint16_t> d; // zones², построчно по источнику
+    std::uint32_t zones = 0;       // Z
+    std::uint32_t sectors = 0;     // S (число связных секторов)
+    std::uint32_t distSectors = 0; // D <= S (секторов с внешними рёбрами)
+
+    std::vector<std::uint16_t> sectorOf;     // Z: индекс сектора [0..S-1]
+    std::vector<std::uint16_t> localIdx;     // Z: локальный индекс [0..Z_s-1]
+    std::vector<std::uint16_t> borderDist;   // Z: хопов внутри сектора до ближайшей границы сектора
+
+    std::vector<std::uint16_t> sectorSize;   // S: Z_s (число зон в секторе s)
+    std::vector<std::uint16_t> sectorDistId; // S: индекс в [0..D-1] или kZoneUnreachable (изолир.)
+    std::vector<std::uint32_t> intraOffset;  // S + 1: смещения квадратов Z_s² в intraDist
+    std::vector<std::uint16_t> intraDist;    // сумма Z_s²: точные расстояния внутри сектора
+
+    std::vector<std::uint16_t> sectorDist;   // D²: расстояния на графе связных секторов
+    std::vector<std::uint32_t> sectorOffset; // S + 1: CSR смещений соседей сектора
+    std::vector<std::uint16_t> sectorNbr;    // отсортированные соседние секторы
+    std::vector<RoomId> sectorPortal;        // каноническая зона сектора sA, смежная с sectorNbr
 
     bool built() const {
-        return zones != 0 &&
-               d.size() == static_cast<std::size_t>(zones) * zones;
+        return zones != 0 && sectors != 0 &&
+               sectorOf.size() == zones &&
+               localIdx.size() == zones &&
+               borderDist.size() == zones &&
+               sectorSize.size() == sectors &&
+               sectorDistId.size() == sectors &&
+               intraOffset.size() == static_cast<std::size_t>(sectors) + 1u &&
+               intraDist.size() == intraOffset[sectors] &&
+               sectorDist.size() == static_cast<std::size_t>(distSectors) * distSectors &&
+               sectorOffset.size() == static_cast<std::size_t>(sectors) + 1u &&
+               sectorNbr.size() == sectorOffset[sectors] &&
+               sectorPortal.size() == sectorOffset[sectors];
+    }
+    std::uint16_t sector_dist(std::uint16_t sA, std::uint16_t sB) const {
+        if (sA == sB) return 0u;
+        const std::uint16_t dA = sectorDistId[sA];
+        const std::uint16_t dB = sectorDistId[sB];
+        if (dA == kZoneUnreachable || dB == kZoneUnreachable)
+            return kZoneUnreachable;
+        return sectorDist[static_cast<std::size_t>(dA) * distSectors + dB];
     }
     std::uint16_t at(std::uint32_t from, std::uint32_t to) const {
-        return d[static_cast<std::size_t>(from) * zones + to];
+        if (from == to) return 0u;
+        const std::uint16_t sA = sectorOf[from];
+        const std::uint16_t sB = sectorOf[to];
+        if (sA == sB) {
+            const std::uint32_t sz = sectorSize[sA];
+            const std::uint32_t off = intraOffset[sA];
+            return intraDist[off + static_cast<std::size_t>(localIdx[from]) * sz +
+                             localIdx[to]];
+        }
+        const std::uint16_t sd = sector_dist(sA, sB);
+        if (sd == kZoneUnreachable) return kZoneUnreachable;
+        const std::uint32_t est = static_cast<std::uint32_t>(borderDist[from]) +
+                                  static_cast<std::uint32_t>(sd) +
+                                  static_cast<std::uint32_t>(borderDist[to]);
+        return est >= kZoneUnreachable
+                   ? static_cast<std::uint16_t>(kZoneUnreachable - 1u)
+                   : static_cast<std::uint16_t>(est);
     }
     // ОЗУ по капу — печатать вслух на бейке: «бейк без замера прячет свою
     // регрессию».
-    std::size_t bytes() const { return d.size() * sizeof(std::uint16_t); }
+    std::size_t bytes() const {
+        return sectorOf.size() * sizeof(std::uint16_t) +
+               localIdx.size() * sizeof(std::uint16_t) +
+               borderDist.size() * sizeof(std::uint16_t) +
+               sectorSize.size() * sizeof(std::uint16_t) +
+               sectorDistId.size() * sizeof(std::uint16_t) +
+               intraOffset.size() * sizeof(std::uint32_t) +
+               intraDist.size() * sizeof(std::uint16_t) +
+               sectorDist.size() * sizeof(std::uint16_t) +
+               sectorOffset.size() * sizeof(std::uint32_t) +
+               sectorNbr.size() * sizeof(std::uint16_t) +
+               sectorPortal.size() * sizeof(RoomId);
+    }
 };
 
 // ОРАКУЛОМ, А НЕ ГРИДОМ, и это не вкус (§88/F). Воркеру фонового перепекания

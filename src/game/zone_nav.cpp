@@ -1,8 +1,9 @@
 #include "game/zone_nav.h"
 
 #include <algorithm>
-#include <cmath>   // cbrt — поперечник зоны из её объёма
+#include <cmath>   // cbrt, floor — оптимум числа секторов S = floor((Z²/2)^(1/3))
 #include <cstdio>  // размер зоны вслух: из него выводятся ОБА предела ноги
+#include <vector>
 
 #include "core/jobs.h"        // parallel_for — бейк жмёт ядра
 #include "core/rng.h"         // hash3 — выбор соседки в блуждании `zone_pick_near`
@@ -18,6 +19,404 @@ inline std::uint32_t pack_pair(RoomId a, RoomId b) {
     return a < b ? (static_cast<std::uint32_t>(a) << 16) | b
                  : (static_cast<std::uint32_t>(b) << 16) | a;
 }
+
+// Целевое число секторов, минимизирующее память S² + Z²/S:
+// d/dS (S² + Z²/S) = 2S − Z²/S² = 0 => S = floor((Z²/2)^(1/3)), зажато в [1, Z].
+inline std::uint32_t target_sector_count(std::uint32_t z) {
+    if (z <= 1u) return z;
+    const double sRaw =
+        std::cbrt(static_cast<double>(z) * static_cast<double>(z) * 0.5);
+    std::uint32_t s = static_cast<std::uint32_t>(std::floor(sRaw));
+    if (s < 1u) s = 1u;
+    if (s > z) s = z;
+    return s;
+}
+
+// Проверка связности сектора `t` после удаления из него вершины `dropV`.
+// Работает на O(|t|) без аллокаций: `verts` содержит вершины сектора `t`.
+bool sector_connected_without(const ZoneGraph& g,
+                              const std::vector<std::uint32_t>& secId,
+                              std::uint32_t t,
+                              const std::vector<std::uint32_t>& verts,
+                              std::uint32_t dropV,
+                              std::vector<std::uint32_t>& stamp,
+                              std::uint32_t& curStamp,
+                              std::vector<std::uint32_t>& bfsQ) {
+    if (verts.size() <= 2u) return verts.size() == 2u; // 1 оставшаяся вершина всегда связна
+    std::uint32_t start = UINT32_MAX;
+    for (std::uint32_t u : verts) {
+        if (u != dropV) {
+            start = u;
+            break;
+        }
+    }
+    if (start == UINT32_MAX) return false;
+    ++curStamp;
+    if (curStamp == 0u) {
+        std::fill(stamp.begin(), stamp.end(), 0u);
+        curStamp = 1u;
+    }
+    bfsQ.clear();
+    stamp[start] = curStamp;
+    bfsQ.push_back(start);
+    for (std::size_t h = 0; h < bfsQ.size(); ++h) {
+        const std::uint32_t u = bfsQ[h];
+        for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+            const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+            if (v == dropV || secId[v] != t || stamp[v] == curStamp) continue;
+            stamp[v] = curStamp;
+            bfsQ.push_back(v);
+        }
+    }
+    return bfsQ.size() == verts.size() - 1u;
+}
+
+// Детерминированная разбивка `ZoneGraph` на связные сбалансированные секторы.
+// Возвращает число секторов S и плотный `sectorOf[0..Z-1]` в [0..S-1].
+std::uint32_t partition_zone_graph(const ZoneGraph& g,
+                                   std::vector<std::uint16_t>& outSectorOf) {
+    const std::uint32_t Z = g.zones;
+    outSectorOf.assign(Z, 0u);
+    if (Z == 0u) return 0u;
+
+    const std::uint32_t sTarget = target_sector_count(Z);
+    const std::uint32_t idealCap =
+        std::max<std::uint32_t>(1u, (Z + sTarget - 1u) / sTarget);
+
+    std::vector<std::uint32_t> secId(Z, UINT32_MAX);
+    std::vector<std::vector<std::uint32_t>> secVerts;
+    std::vector<std::uint8_t> secIsIsolated;
+    secVerts.reserve(sTarget + 64u);
+    secIsIsolated.reserve(sTarget + 64u);
+    std::uint32_t bigZ = 0u;
+
+    // Временные буферы переиспользуются по всем компонентам.
+    std::vector<std::uint8_t> compVisited(Z, 0u);
+    std::vector<std::uint8_t> inFrontier(Z, 0u);
+    std::vector<std::uint32_t> comp;
+    std::vector<std::uint32_t> frontier;
+    std::vector<std::uint32_t> sq;
+    std::vector<std::uint32_t> stamp(Z, 0u);
+    std::vector<std::uint32_t> bfsQ;
+    std::uint32_t curStamp = 1u;
+
+    for (std::uint32_t root = 0; root < Z; ++root) {
+        if (compVisited[root]) continue;
+        // 1. Выделяем связную компоненту в BFS-порядке.
+        comp.clear();
+        compVisited[root] = 1u;
+        comp.push_back(root);
+        for (std::size_t h = 0; h < comp.size(); ++h) {
+            const std::uint32_t u = comp[h];
+            for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                if (!compVisited[v]) {
+                    compVisited[v] = 1u;
+                    comp.push_back(v);
+                }
+            }
+        }
+
+        const std::uint32_t K = static_cast<std::uint32_t>(comp.size());
+        // Маленькую компоненту целиком кладём в один изолированный сектор:
+        // она не имеет внешних рёбер и не попадает в матрицу `sectorDist`.
+        if (sTarget == 1u || K <= idealCap + idealCap / 2u) {
+            const std::uint32_t sid = static_cast<std::uint32_t>(secVerts.size());
+            secVerts.emplace_back(comp.begin(), comp.end());
+            secIsIsolated.push_back(1u);
+            for (std::uint32_t v : comp) secId[v] = sid;
+            continue;
+        }
+        bigZ += K;
+
+        // 2. Крупная компонента: целимся в kK сбалансированных кусков по ~capK зон.
+        const std::uint32_t kK =
+            std::max<std::uint32_t>(2u, (K + idealCap / 2u) / idealCap);
+        const std::uint32_t capK =
+            std::max<std::uint32_t>(2u, (K + kK - 1u) / kK);
+        const std::uint32_t minK = std::max<std::uint32_t>(2u, capK / 2u);
+        const std::uint32_t maxK =
+            std::max<std::uint32_t>(capK + 2u, (capK * 3u) / 2u);
+
+        const std::uint32_t firstSec = static_cast<std::uint32_t>(secVerts.size());
+        frontier.clear();
+        std::size_t frontierHead = 0;
+        std::size_t compCursor = 0;
+        std::uint32_t assigned = 0;
+
+        // Фаза А: связное BFS-выращивание по фронту с капом capK.
+        while (assigned < K) {
+            std::uint32_t seed = UINT32_MAX;
+            std::uint32_t bestDeg = UINT32_MAX;
+            std::size_t checked = 0;
+            while (frontierHead < frontier.size() &&
+                   secId[frontier[frontierHead]] != UINT32_MAX) {
+                ++frontierHead;
+            }
+            for (std::size_t i = frontierHead;
+                 i < frontier.size() && checked < 512u; ++i) {
+                const std::uint32_t cand = frontier[i];
+                if (secId[cand] != UINT32_MAX) continue;
+                ++checked;
+                std::uint32_t freeDeg = 0;
+                for (const RoomId* it = g.begin(cand); it != g.end(cand); ++it) {
+                    if (secId[static_cast<std::uint32_t>(*it) - 1u] == UINT32_MAX)
+                        ++freeDeg;
+                }
+                if (freeDeg < bestDeg) {
+                    bestDeg = freeDeg;
+                    seed = cand;
+                    if (bestDeg <= 1u) break;
+                }
+            }
+            if (seed == UINT32_MAX) {
+                while (compCursor < comp.size() &&
+                       secId[comp[compCursor]] != UINT32_MAX) {
+                    ++compCursor;
+                }
+                seed = comp[compCursor++];
+            }
+
+            const std::uint32_t sid = static_cast<std::uint32_t>(secVerts.size());
+            sq.clear();
+            secId[seed] = sid;
+            sq.push_back(seed);
+            for (std::size_t h = 0; h < sq.size() && sq.size() < capK; ++h) {
+                const std::uint32_t u = sq[h];
+                for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                    const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                    if (secId[v] != UINT32_MAX) continue;
+                    secId[v] = sid;
+                    sq.push_back(v);
+                    if (sq.size() >= capK) break;
+                }
+            }
+            for (std::uint32_t u : sq) {
+                for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                    const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                    if (secId[v] == UINT32_MAX && !inFrontier[v]) {
+                        inFrontier[v] = 1u;
+                        frontier.push_back(v);
+                    }
+                }
+            }
+            assigned += static_cast<std::uint32_t>(sq.size());
+            secVerts.emplace_back(sq.begin(), sq.end());
+            secIsIsolated.push_back(0u);
+        }
+
+        const std::uint32_t endSec = static_cast<std::uint32_t>(secVerts.size());
+
+        // Фаза Б: слияние мелких хвостов (< minK) с наименьшим смежным сектором в пределах maxK.
+        bool mergedAny = true;
+        while (mergedAny) {
+            mergedAny = false;
+            for (std::uint32_t s = firstSec; s < endSec; ++s) {
+                const std::size_t sz = secVerts[s].size();
+                if (sz == 0u || sz >= minK) continue;
+                std::uint32_t bestT = UINT32_MAX;
+                std::size_t bestSize = SIZE_MAX;
+                for (std::uint32_t u : secVerts[s]) {
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t t =
+                            secId[static_cast<std::uint32_t>(*it) - 1u];
+                        if (t == s || t < firstSec || t >= endSec) continue;
+                        const std::size_t tz = secVerts[t].size();
+                        if (tz == 0u || sz + tz > maxK) continue;
+                        if (tz < bestSize || (tz == bestSize && t < bestT)) {
+                            bestSize = tz;
+                            bestT = t;
+                        }
+                    }
+                }
+                if (bestT != UINT32_MAX) {
+                    for (std::uint32_t u : secVerts[s]) {
+                        secId[u] = bestT;
+                        secVerts[bestT].push_back(u);
+                    }
+                    secVerts[s].clear();
+                    mergedAny = true;
+                }
+            }
+        }
+
+        // Фаза В: перетягивание неартикуляционных граничных вершин от крупных соседей
+        // в оставшиеся мелкие секторы (< minK), не допуская разрыва связности донора.
+        for (std::uint32_t s = firstSec; s < endSec; ++s) {
+            while (!secVerts[s].empty() && secVerts[s].size() < minK) {
+                std::uint32_t bestV = UINT32_MAX;
+                std::uint32_t bestT = UINT32_MAX;
+                std::size_t bestTSize = secVerts[s].size() + 1u;
+                for (std::uint32_t u : secVerts[s]) {
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                        const std::uint32_t t = secId[v];
+                        if (t == s || t < firstSec || t >= endSec) continue;
+                        const std::size_t tz = secVerts[t].size();
+                        if (tz <= bestTSize) continue;
+                        if (!sector_connected_without(g, secId, t, secVerts[t],
+                                                      v, stamp, curStamp, bfsQ))
+                            continue;
+                        bestTSize = tz;
+                        bestT = t;
+                        bestV = v;
+                    }
+                }
+                if (bestV == UINT32_MAX) break;
+                secId[bestV] = s;
+                secVerts[s].push_back(bestV);
+                auto& tv = secVerts[bestT];
+                for (std::size_t i = 0; i < tv.size(); ++i) {
+                    if (tv[i] == bestV) {
+                        tv[i] = tv.back();
+                        tv.pop_back();
+                        break;
+                    }
+                }
+            }
+        }
+
+    }
+
+    // Глобальные раунды жадного агломерационного слияния смежных секторов:
+    // сначала в мягком потолке 1.5*idealCap (не создавая гигантов раньше
+    // времени), затем в полном потолке 2*idealCap, с перетягиванием границ.
+    const std::uint32_t sDistTarget = bigZ ? target_sector_count(bigZ) : 0u;
+    const std::uint32_t softMax =
+        std::max<std::uint32_t>(4u, (idealCap * 3u) / 2u);
+    const std::uint32_t hardMax = std::max<std::uint32_t>(4u, idealCap * 2u);
+    const std::uint32_t totalS = static_cast<std::uint32_t>(secVerts.size());
+    std::vector<std::uint8_t> secBusy;
+    struct MergeCand {
+        std::uint32_t prod;
+        std::uint32_t sum;
+        std::uint32_t a;
+        std::uint32_t b;
+    };
+    std::vector<MergeCand> cands;
+    auto merge_rounds = [&](std::uint32_t capSum, int maxRounds) {
+        for (int round = 0; round < maxRounds; ++round) {
+            std::uint32_t liveSec = 0u;
+            for (std::uint32_t s = 0u; s < totalS; ++s)
+                if (!secVerts[s].empty() && !secIsIsolated[s]) ++liveSec;
+            if (liveSec <= sDistTarget) break;
+            cands.clear();
+            for (std::uint32_t s = 0u; s < totalS; ++s) {
+                if (secIsIsolated[s]) continue;
+                const std::uint32_t sz =
+                    static_cast<std::uint32_t>(secVerts[s].size());
+                if (sz == 0u) continue;
+                for (std::uint32_t u : secVerts[s]) {
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t t =
+                            secId[static_cast<std::uint32_t>(*it) - 1u];
+                        if (t <= s || secIsIsolated[t]) continue;
+                        const std::uint32_t tz =
+                            static_cast<std::uint32_t>(secVerts[t].size());
+                        if (tz == 0u || sz + tz > capSum) continue;
+                        if (2u * sz * tz >= 2u * liveSec - 1u) continue;
+                        cands.push_back(MergeCand{sz * tz, sz + tz, s, t});
+                    }
+                }
+            }
+            if (cands.empty()) break;
+            std::sort(cands.begin(), cands.end(),
+                      [](const MergeCand& x, const MergeCand& y) {
+                          if (x.prod != y.prod) return x.prod < y.prod;
+                          if (x.sum != y.sum) return x.sum < y.sum;
+                          if (x.a != y.a) return x.a < y.a;
+                          return x.b < y.b;
+                      });
+            secBusy.assign(totalS, 0u);
+            bool anyMerged = false;
+            for (const MergeCand& c : cands) {
+                if (secBusy[c.a] || secBusy[c.b]) continue;
+                if (secVerts[c.a].empty() || secVerts[c.b].empty()) continue;
+                const std::uint32_t sz =
+                    static_cast<std::uint32_t>(secVerts[c.a].size());
+                const std::uint32_t tz =
+                    static_cast<std::uint32_t>(secVerts[c.b].size());
+                if (sz + tz > capSum) continue;
+                if (2u * sz * tz >= 2u * liveSec - 1u) continue;
+                std::uint32_t keep = c.a;
+                std::uint32_t drop = c.b;
+                if (tz > sz) std::swap(keep, drop);
+                for (std::uint32_t u : secVerts[drop]) {
+                    secId[u] = keep;
+                    secVerts[keep].push_back(u);
+                }
+                secVerts[drop].clear();
+                secBusy[keep] = 1u;
+                secBusy[drop] = 1u;
+                --liveSec;
+                anyMerged = true;
+                if (liveSec <= sDistTarget) break;
+            }
+            if (!anyMerged) break;
+        }
+    };
+    merge_rounds(softMax, 12);
+    merge_rounds(hardMax, 16);
+    // Перетягиваем граничные неартикуляционные вершины от более крупных соседей
+    // к более мелким (уменьшая ΣZ_s²) и добиваем возможные слияния.
+    for (int pass = 0; pass < 2; ++pass) {
+        bool movedAny = false;
+        for (std::uint32_t s = 0u; s < totalS; ++s) {
+            if (secIsIsolated[s]) continue;
+            while (!secVerts[s].empty() && secVerts[s].size() < idealCap) {
+                std::uint32_t bestV = UINT32_MAX;
+                std::uint32_t bestT = UINT32_MAX;
+                std::size_t bestTSize = secVerts[s].size() + 2u;
+                for (std::uint32_t u : secVerts[s]) {
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t v =
+                            static_cast<std::uint32_t>(*it) - 1u;
+                        const std::uint32_t t = secId[v];
+                        if (t == s) continue;
+                        const std::size_t tz = secVerts[t].size();
+                        if (tz < bestTSize) continue;
+                        if (!sector_connected_without(g, secId, t, secVerts[t],
+                                                      v, stamp, curStamp, bfsQ))
+                            continue;
+                        bestTSize = tz;
+                        bestT = t;
+                        bestV = v;
+                    }
+                }
+                if (bestV == UINT32_MAX) break;
+                secId[bestV] = s;
+                secVerts[s].push_back(bestV);
+                auto& tv = secVerts[bestT];
+                for (std::size_t i = 0; i < tv.size(); ++i) {
+                    if (tv[i] == bestV) {
+                        tv[i] = tv.back();
+                        tv.pop_back();
+                        break;
+                    }
+                }
+                movedAny = true;
+            }
+        }
+        if (!movedAny) break;
+    }
+    merge_rounds(hardMax, 8);
+
+    // Компактизация непустых секторов в плотный диапазон [0..S-1] в порядке зон 0..Z-1.
+    std::vector<std::uint32_t> remap(secVerts.size(), UINT32_MAX);
+    std::uint32_t S = 0u;
+    for (std::uint32_t z = 0; z < Z; ++z) {
+        const std::uint32_t raw = secId[z];
+        if (remap[raw] == UINT32_MAX) remap[raw] = S++;
+        outSectorOf[z] = static_cast<std::uint16_t>(remap[raw]);
+    }
+    return S;
+}
+
+struct SectorEdge {
+    std::uint16_t fromSec;
+    std::uint16_t toSec;
+    RoomId portal;
+};
 
 } // namespace
 
@@ -160,37 +559,198 @@ void bake_zone_graph(const ZonePartition& part, const ClearanceField& oracle, in
 void bake_zone_dist(const ZoneGraph& g, ZoneDist& out, int threads,
                     const std::atomic<bool>* cancel) {
     out = ZoneDist{};
-    if (!g.built()) return;
+    if (!g.built() || g.zones >= kZoneUnreachable) return;
+    if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) return;
+
     const std::uint32_t Z = g.zones;
     out.zones = Z;
-    out.d.assign(static_cast<std::size_t>(Z) * Z, kZoneUnreachable);
-    std::uint16_t* base = out.d.data();
+    out.sectors = partition_zone_graph(g, out.sectorOf);
+    const std::uint32_t S = out.sectors;
+    if (S == 0u || S >= kZoneUnreachable) {
+        out = ZoneDist{};
+        return;
+    }
 
-    // Обход в ширину из каждой зоны. Рёбра единичные, значит FIFO посещает
-    // узлы в порядке неубывания расстояния, и первое присвоение окончательно —
-    // перепроверять, как делал бы Дейкстра, не нужно.
-    parallel_for(static_cast<int>(Z), [&g, base, Z, cancel](int src) {
-        if (cancel != nullptr && cancel->load(std::memory_order_relaxed)) return;
-        std::uint16_t* row = base + static_cast<std::size_t>(src) * Z;
-        std::vector<std::uint32_t> q;
-        q.reserve(Z);
-        row[src] = 0;
-        q.push_back(static_cast<std::uint32_t>(src));
-        for (std::size_t head = 0; head < q.size(); ++head) {
-            const std::uint32_t u = q[head];
-            const std::uint16_t du = row[u];
-            // Потолок — чтобы недостижимость осталась ЕДИНСТВЕННЫМ значением
-            // 0xFFFF: путь длиной 65534 рёбер на 15 тысячах узлов невозможен,
-            // но закон «сентинел не достигается арифметикой» держим явно.
-            if (du + 1 >= kZoneUnreachable) continue;
-            for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
-                const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
-                if (row[v] != kZoneUnreachable) continue;
-                row[v] = static_cast<std::uint16_t>(du + 1);
-                q.push_back(v);
-            }
+    // 1. Локальные индексы зон внутри своих секторов и CSR сектор -> зоны.
+    out.sectorSize.assign(S, 0u);
+    out.localIdx.assign(Z, 0u);
+    for (std::uint32_t z = 0; z < Z; ++z) {
+        const std::uint16_t s = out.sectorOf[z];
+        out.localIdx[z] = out.sectorSize[s]++;
+    }
+
+    std::vector<std::uint32_t> secVertOff(S + 1u, 0u);
+    out.intraOffset.assign(S + 1u, 0u);
+    for (std::uint32_t s = 0; s < S; ++s) {
+        const std::uint32_t sz = out.sectorSize[s];
+        secVertOff[s + 1u] = secVertOff[s] + sz;
+        out.intraOffset[s + 1u] = out.intraOffset[s] + sz * sz;
+    }
+    std::vector<std::uint32_t> secVerts(Z, 0u);
+    for (std::uint32_t z = 0; z < Z; ++z) {
+        const std::uint16_t s = out.sectorOf[z];
+        secVerts[secVertOff[s] + out.localIdx[z]] = z;
+    }
+
+    // 2. Собираем межсекторные рёбра и канонические порталы + флаг границы.
+    std::vector<std::uint8_t> isBorder(Z, 0u);
+    std::vector<SectorEdge> edges;
+    edges.reserve(g.nbr.size() / 4u + 16u);
+    for (std::uint32_t u = 0; u < Z; ++u) {
+        const std::uint16_t sU = out.sectorOf[u];
+        for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+            const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+            const std::uint16_t sV = out.sectorOf[v];
+            if (sU == sV) continue;
+            isBorder[u] = 1u;
+            edges.push_back(SectorEdge{sU, sV, static_cast<RoomId>(u + 1u)});
         }
-    }, threads);
+    }
+    std::sort(edges.begin(), edges.end(),
+              [](const SectorEdge& a, const SectorEdge& b) {
+                  if (a.fromSec != b.fromSec) return a.fromSec < b.fromSec;
+                  if (a.toSec != b.toSec) return a.toSec < b.toSec;
+                  return a.portal < b.portal;
+              });
+    edges.erase(std::unique(edges.begin(), edges.end(),
+                            [](const SectorEdge& a, const SectorEdge& b) {
+                                return a.fromSec == b.fromSec &&
+                                       a.toSec == b.toSec;
+                            }),
+                edges.end());
+
+    out.sectorOffset.assign(S + 1u, 0u);
+    for (const SectorEdge& e : edges) ++out.sectorOffset[e.fromSec + 1u];
+    for (std::uint32_t s = 1u; s <= S; ++s)
+        out.sectorOffset[s] += out.sectorOffset[s - 1u];
+    out.sectorNbr.resize(edges.size());
+    out.sectorPortal.resize(edges.size());
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        out.sectorNbr[i] = edges[i].toSec;
+        out.sectorPortal[i] = edges[i].portal;
+    }
+
+    // 3. Внутрисекторные таблицы кратчайших расстояний (строго в подграфе сектора)
+    //    и расстояние от каждой зоны до ближайшей границы своего сектора.
+    out.intraDist.assign(out.intraOffset[S], kZoneUnreachable);
+    out.borderDist.assign(Z, 0u);
+    parallel_for(
+        static_cast<int>(S),
+        [&g, &out, &secVertOff, &secVerts, &isBorder, cancel](int si) {
+            if (cancel != nullptr && cancel->load(std::memory_order_relaxed))
+                return;
+            const std::uint32_t s = static_cast<std::uint32_t>(si);
+            const std::uint32_t sz = out.sectorSize[s];
+            const std::uint32_t vBeg = secVertOff[s];
+            std::uint16_t* mat = out.intraDist.data() + out.intraOffset[s];
+
+            std::vector<std::uint32_t> q;
+            q.reserve(sz);
+
+            // Матрица внутри сектора s.
+            for (std::uint32_t srcLoc = 0; srcLoc < sz; ++srcLoc) {
+                std::uint16_t* row = mat + static_cast<std::size_t>(srcLoc) * sz;
+                row[srcLoc] = 0u;
+                q.clear();
+                q.push_back(secVerts[vBeg + srcLoc]);
+                for (std::size_t h = 0; h < q.size(); ++h) {
+                    const std::uint32_t u = q[h];
+                    const std::uint16_t du = row[out.localIdx[u]];
+                    for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                        const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                        if (out.sectorOf[v] != s) continue;
+                        const std::uint16_t lv = out.localIdx[v];
+                        if (row[lv] != kZoneUnreachable) continue;
+                        row[lv] = static_cast<std::uint16_t>(du + 1u);
+                        q.push_back(v);
+                    }
+                }
+            }
+
+            // Многоисточниковый BFS от всех граничных зон сектора s.
+            q.clear();
+            bool hasBorder = false;
+            for (std::uint32_t loc = 0; loc < sz; ++loc) {
+                const std::uint32_t z = secVerts[vBeg + loc];
+                if (isBorder[z]) {
+                    hasBorder = true;
+                    out.borderDist[z] = 0u;
+                    q.push_back(z);
+                } else {
+                    out.borderDist[z] = kZoneUnreachable;
+                }
+            }
+            if (!hasBorder) {
+                // Изолированный сектор без выходов: оставляем 0 (для иных секторов unreachable).
+                for (std::uint32_t loc = 0; loc < sz; ++loc)
+                    out.borderDist[secVerts[vBeg + loc]] = 0u;
+                return;
+            }
+            for (std::size_t h = 0; h < q.size(); ++h) {
+                const std::uint32_t u = q[h];
+                const std::uint16_t du = out.borderDist[u];
+                for (const RoomId* it = g.begin(u); it != g.end(u); ++it) {
+                    const std::uint32_t v = static_cast<std::uint32_t>(*it) - 1u;
+                    if (out.sectorOf[v] != s) continue;
+                    if (out.borderDist[v] != kZoneUnreachable) continue;
+                    out.borderDist[v] = static_cast<std::uint16_t>(du + 1u);
+                    q.push_back(v);
+                }
+            }
+        },
+        threads);
+
+    // 4. Межсекторная матрица расстояний D × D только для связных секторов
+    //    с внешними рёбрами: изолированные компоненты не имеют переходов и
+    //    отсекаются за O(1) до чтения матрицы.
+    out.sectorDistId.assign(S, kZoneUnreachable);
+    std::vector<std::uint16_t> connSectors;
+    connSectors.reserve(S);
+    for (std::uint32_t s = 0u; s < S; ++s) {
+        if (out.sectorOffset[s + 1u] > out.sectorOffset[s]) {
+            out.sectorDistId[s] =
+                static_cast<std::uint16_t>(connSectors.size());
+            connSectors.push_back(static_cast<std::uint16_t>(s));
+        }
+    }
+    const std::uint32_t D = static_cast<std::uint32_t>(connSectors.size());
+    out.distSectors = D;
+    out.sectorDist.assign(static_cast<std::size_t>(D) * D, kZoneUnreachable);
+    if (D > 0u) {
+        parallel_for(
+            static_cast<int>(D),
+            [&out, &connSectors, D, cancel](int srcIdx) {
+                if (cancel != nullptr &&
+                    cancel->load(std::memory_order_relaxed))
+                    return;
+                std::uint16_t* row =
+                    out.sectorDist.data() +
+                    static_cast<std::size_t>(srcIdx) * D;
+                std::vector<std::uint16_t> q;
+                q.reserve(D);
+                const std::uint16_t d0 = static_cast<std::uint16_t>(srcIdx);
+                row[d0] = 0u;
+                q.push_back(connSectors[srcIdx]);
+                for (std::size_t h = 0; h < q.size(); ++h) {
+                    const std::uint16_t u = q[h];
+                    const std::uint16_t dU = out.sectorDistId[u];
+                    const std::uint16_t du = row[dU];
+                    if (du + 1u >= kZoneUnreachable) continue;
+                    const std::uint32_t eBeg = out.sectorOffset[u];
+                    const std::uint32_t eEnd = out.sectorOffset[u + 1u];
+                    for (std::uint32_t e = eBeg; e < eEnd; ++e) {
+                        const std::uint16_t v = out.sectorNbr[e];
+                        const std::uint16_t dV = out.sectorDistId[v];
+                        if (dV == kZoneUnreachable ||
+                            row[dV] != kZoneUnreachable)
+                            continue;
+                        row[dV] = static_cast<std::uint16_t>(du + 1u);
+                        q.push_back(v);
+                    }
+                }
+            },
+            threads);
+    }
 }
 
 RoomId zone_next(const ZoneGraph& g, const ZoneDist& dist, RoomId from,
@@ -199,13 +759,90 @@ RoomId zone_next(const ZoneGraph& g, const ZoneDist& dist, RoomId from,
     if (from == kNoRoom || to == kNoRoom || from == to) return kNoRoom;
     const std::uint32_t f = static_cast<std::uint32_t>(from) - 1u;
     const std::uint32_t t = static_cast<std::uint32_t>(to) - 1u;
-    if (f >= g.zones || t >= g.zones) return kNoRoom;
-    const std::uint16_t here = dist.at(f, t);
-    if (here == kZoneUnreachable) return kNoRoom; // другая компонента
+    if (f >= g.zones || t >= g.zones || f >= dist.zones || t >= dist.zones)
+        return kNoRoom;
+
+    const std::uint16_t sA = dist.sectorOf[f];
+    const std::uint16_t sB = dist.sectorOf[t];
+
+    // Случай 1: обе зоны в одном связном секторе -> строгий спуск по intraDist[sA].
+    if (sA == sB) {
+        const std::uint32_t sz = dist.sectorSize[sA];
+        const std::uint32_t off = dist.intraOffset[sA];
+        const std::uint16_t locT = dist.localIdx[t];
+        const std::uint16_t curD =
+            dist.intraDist[off + static_cast<std::size_t>(dist.localIdx[f]) * sz +
+                           locT];
+        if (curD == kZoneUnreachable || curD == 0u) return kNoRoom;
+        RoomId best = kNoRoom;
+        std::uint16_t bestD = curD;
+        for (const RoomId* it = g.begin(f); it != g.end(f); ++it) {
+            const std::uint32_t n = static_cast<std::uint32_t>(*it) - 1u;
+            if (dist.sectorOf[n] != sA) continue;
+            const std::uint16_t d =
+                dist.intraDist[off + static_cast<std::size_t>(dist.localIdx[n]) * sz +
+                               locT];
+            if (d < bestD) {
+                bestD = d;
+                best = *it;
+            }
+        }
+        return best;
+    }
+
+    // Случай 2: разные секторы -> сначала проверяем достижимость на графе секторов.
+    const std::uint16_t sd = dist.sector_dist(sA, sB);
+    if (sd == kZoneUnreachable) return kNoRoom; // другая компонента связности
+
+    // 2a. Если у `from` уже есть сосед в секторе с меньшим sectorDist до sB,
+    //     шагаем прямо туда — секторное расстояние строго убывает (>= 1).
+    {
+        RoomId bestCross = kNoRoom;
+        std::uint16_t bestSd = sd;
+        for (const RoomId* it = g.begin(f); it != g.end(f); ++it) {
+            const std::uint32_t n = static_cast<std::uint32_t>(*it) - 1u;
+            const std::uint16_t sN = dist.sectorOf[n];
+            if (sN == sA) continue;
+            const std::uint16_t nsd = dist.sector_dist(sN, sB);
+            if (nsd < bestSd) {
+                bestSd = nsd;
+                bestCross = *it;
+            }
+        }
+        if (bestCross != kNoRoom) return bestCross;
+    }
+
+    // 2б. Иначе идём внутри sA к каноническому порталу portal(sA, sNext),
+    //     где sNext — первый (по возрастанию) соседний сектор с sectorDist == sd - 1.
+    RoomId portal = kNoRoom;
+    const std::uint32_t eBeg = dist.sectorOffset[sA];
+    const std::uint32_t eEnd = dist.sectorOffset[sA + 1u];
+    for (std::uint32_t e = eBeg; e < eEnd; ++e) {
+        const std::uint16_t sN = dist.sectorNbr[e];
+        const std::uint16_t nsd = dist.sector_dist(sN, sB);
+        if (nsd != kZoneUnreachable && nsd + 1u == sd) {
+            portal = dist.sectorPortal[e];
+            break;
+        }
+    }
+    if (portal == kNoRoom) return kNoRoom;
+
+    const std::uint32_t p = static_cast<std::uint32_t>(portal) - 1u;
+    const std::uint32_t sz = dist.sectorSize[sA];
+    const std::uint32_t off = dist.intraOffset[sA];
+    const std::uint16_t locP = dist.localIdx[p];
+    const std::uint16_t curD =
+        dist.intraDist[off + static_cast<std::size_t>(dist.localIdx[f]) * sz +
+                       locP];
+    if (curD == kZoneUnreachable || curD == 0u) return kNoRoom;
     RoomId best = kNoRoom;
-    std::uint16_t bestD = here;
+    std::uint16_t bestD = curD;
     for (const RoomId* it = g.begin(f); it != g.end(f); ++it) {
-        const std::uint16_t d = dist.at(static_cast<std::uint32_t>(*it) - 1u, t);
+        const std::uint32_t n = static_cast<std::uint32_t>(*it) - 1u;
+        if (dist.sectorOf[n] != sA) continue;
+        const std::uint16_t d =
+            dist.intraDist[off + static_cast<std::size_t>(dist.localIdx[n]) * sz +
+                           locP];
         if (d < bestD) {
             bestD = d;
             best = *it;
@@ -363,12 +1000,36 @@ void bake_zone_nav(const FloorRooms& fr, const ClearanceField& oracle, int size,
                            : 0.0;
         const double edges =
             out.graph.built() ? static_cast<double>(out.graph.nbr.size()) / 2.0 : 0.0;
+        const std::uint32_t sTarget = target_sector_count(out.part.zones);
+        std::size_t sumSq = 0;
+        std::uint16_t maxSec = 0;
+        std::uint32_t isoSec = 0;
+        for (std::uint32_t s = 0; s < out.dist.sectors; ++s) {
+            const std::uint16_t zs = out.dist.sectorSize[s];
+            sumSq += static_cast<std::size_t>(zs) * zs;
+            if (zs > maxSec) maxSec = zs;
+            if (out.dist.sectorOffset[s + 1u] == out.dist.sectorOffset[s])
+                ++isoSec;
+        }
+        const std::size_t actualCost =
+            static_cast<std::size_t>(out.dist.distSectors) *
+                out.dist.distSectors +
+            sumSq;
+        const std::size_t idealCost =
+            static_cast<std::size_t>(sTarget) * sTarget +
+            (sTarget ? (static_cast<std::size_t>(out.part.zones) * out.part.zones) /
+                           sTarget
+                     : 0u);
         std::fprintf(stderr,
-                     "[zones] зон %u | клеток в разбивке %zu | на зону %.1f "
-                     "(поперёк ~%.1f м) | рёбер %.0f, степень %.1f | "
-                     "плоскостей %u | ОЗУ %.1f МиБ\n",
-                     out.part.zones, owned, perZone,
-                     static_cast<double>(zone_span_m(out.part)),
+                     "[zones] зон %u | секторов %u (связн %u, изол %u, цель %u, макс %u) | "
+                     "D²+ΣZ_s² %zu vs идеал %zu | dist %.2f МиБ | "
+                     "клеток %zu (%.1f/зону ~%.1f м) | рёбер %.0f (ст %.1f) | "
+                     "плоск %u | ОЗУ %.1f МиБ\n",
+                     out.part.zones, out.dist.sectors, out.dist.distSectors,
+                     isoSec, sTarget, maxSec,
+                     actualCost, idealCost,
+                     static_cast<double>(out.dist.bytes()) / (1024.0 * 1024.0),
+                     owned, perZone, static_cast<double>(zone_span_m(out.part)),
                      edges,
                      out.part.zones ? 2.0 * edges / static_cast<double>(out.part.zones)
                                     : 0.0,

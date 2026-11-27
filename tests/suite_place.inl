@@ -171,11 +171,8 @@ inline void arm_zones_errand(giga::game::ZoneNav& zn, int boundaryX,
         zn.graph.nbr.push_back(static_cast<RoomId>(z == 0 ? 2 : 1));
     }
     zn.graph.offset[zones] = zones;
-    // Таблица: расстояние 1 между любыми двумя, 0 до себя.
-    zn.dist.zones = zones;
-    zn.dist.d.assign(static_cast<std::size_t>(zones) * zones, 1);
-    for (std::uint32_t z = 0; z < zones; ++z)
-        zn.dist.d[static_cast<std::size_t>(z) * zones + z] = 0;
+    // Двухуровневая таблица печётся штатным бейком (для 2 связных зон = {0, 1, 1, 0}).
+    bake_zone_dist(zn.graph, zn.dist);
     zn.flow.planes = 1;
     zn.flow.dir.assign(kMacroCells, flowByte);
 }
@@ -199,8 +196,11 @@ inline PlacePick brute_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCou
     PlacePick out;
     std::int32_t best = 0;
     std::int32_t bestCost = 0;
-    if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz)))
-        best = place_interest(*here, demand);
+    if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz))) {
+        const std::int32_t hereNet =
+            place_interest(*here, demand) - place_crowd_cost(fr, *here, cx, cy, cz);
+        if (hereNet > 0) best = hereNet;
+    }
     for (std::size_t i = fr.list.size(); i-- > 0;) { // С КОНЦА, не с начала
         const RoomId id = static_cast<RoomId>(i + 1);
         const Room& r = fr.list[i];
@@ -321,6 +321,49 @@ static void test_place_demand_from_needs() {
     demand_from_needs(full, z);
     demand_add_health(0.0f, 0.0f, z);
     CHECK(z[kVerbHeal] == 0);
+
+    // ТАБЛИЧНЫЙ СПРОС (У1.9): связь «нужда / порог / вес / пол» живёт в CSV
+    // без жёстких веток по именам глаголов. Добавление новой строки (здесь —
+    // синтетический слот kVerbCount) работает тем же циклом без правки C++.
+    CHECK(kVerbNeedMask[kVerbSleep] == NeedSleep);
+    CHECK(kVerbNeedMask[kVerbEat] == NeedFood);
+    CHECK(kVerbNeedMask[kVerbDrink] == NeedWater);
+    CHECK(kVerbNeedMask[kVerbToilet] == (NeedPee | NeedPoo));
+    CHECK(kVerbDemandFloorE3[kVerbWander] == kDemandWanderFloor);
+
+    std::uint8_t extMask[kVerbCount + 1] = {};
+    std::uint16_t extWeight[kVerbCount + 1] = {};
+    std::int16_t extFloor[kVerbCount + 1] = {};
+    VerbId extPatience[kVerbCount + 1] = {};
+    for (std::size_t v = 0; v < kVerbCount; ++v) {
+        extMask[v] = kVerbNeedMask[v];
+        extWeight[v] = kVerbDemandWeightE3[v];
+        extFloor[v] = kVerbDemandFloorE3[v];
+        extPatience[v] = static_cast<VerbId>(v);
+    }
+    // Новая строка: питается голодом (NeedFood), порог берётся от sleep (600),
+    // вес 500 (половина шкалы), базовый пол 25.
+    extMask[kVerbCount] = NeedFood;
+    extWeight[kVerbCount] = 500;
+    extFloor[kVerbCount] = 25;
+    extPatience[kVerbCount] = kVerbSleep;
+
+    DemandE3 extOut[kVerbCount + 1] = {};
+    demand_from_needs_table(full, kVerbCount + 1, extMask, extWeight, extFloor,
+                            extPatience, extOut);
+    CHECK(extOut[kVerbCount] == 25); // сытый -> базовый пол
+
+    demand_from_needs_table(empty, kVerbCount + 1, extMask, extWeight, extFloor,
+                            extPatience, extOut);
+    CHECK(extOut[kVerbCount] == 500); // голодный -> полный вес (0.5 * 1000)
+
+    // Середина рампы голода при пороге 600: x = (0.6 + 1.0)/2 = 0.8 =>
+    // food = 72 * (1 - 0.8) = 14.4 => давление 0.5 => с весом 500 даёт 250.
+    Needs midFood = full;
+    midFood.food = 72.0f * (1.0f - (static_cast<float>(kVerbPatienceE3[kVerbSleep]) * 0.001f + 1.0f) * 0.5f);
+    demand_from_needs_table(midFood, kVerbCount + 1, extMask, extWeight, extFloor,
+                            extPatience, extOut);
+    CHECK(extOut[kVerbCount] == 250);
 }
 
 // --- 2. ИНТЕРЕС: скалярное произведение, одно деление ------------------------
@@ -1351,6 +1394,126 @@ static void test_place_one_velocity_write_per_tick() {
     CHECK(quietTicks == kWanderPeriod - 1);
 }
 
+// --- 9. ВМЕСТИМОСТЬ И ЗАНЯТОСТЬ КОМНАТ (У1.7) -------------------------------
+//
+// `Room::cells` задаёт геометрическую вместимость (`cells * kRoomBodiesPerCell`),
+// а `FloorRooms::occupants` отслеживает число тел в комнате и идущих в неё.
+// Когда первая из двух одинаковых комнат переполнена, агент обязан выбрать
+// вторую свободную комнату, а не сходиться толпой в одну точку.
+static void test_place_room_capacity_and_crowd() {
+    using namespace place_suite;
+    static_assert(sizeof(Room) == 136, "Room layout must stay 136 bytes");
+    CHECK(kRoomBodiesPerCell ==
+          (kSubDim / kBodyClearanceSub) * (kSubDim / kBodyClearanceSub));
+
+    // 1) Проверка place_pick + оракула brute_pick при переполнении.
+    FloorRooms fr;
+    rooms_reset(fr);
+    // Комната A (ближе: 2 клетки от тела) и комната B (дальше: 6 клеток),
+    // обе 1x1x1 (cells == 1, capacity == kRoomBodiesPerCell == 4) со сном 30.
+    const int bx = 40, by = 40, bz = 40;
+    const RoomId roomA = declare_cube(fr, bx + 2, by, bz, 1, kVerbSleep, 30);
+    const RoomId roomB = declare_cube(fr, bx + 6, by, bz, 1, kVerbSleep, 30);
+    CHECK(roomA == 1 && roomB == 2);
+    const std::uint32_t capA = room_capacity(*room_of(fr, roomA));
+    CHECK(capA == kRoomBodiesPerCell);
+
+    DemandE3 d[kVerbCount] = {};
+    d[kVerbSleep] = kDemandFull;
+
+    // Пока в A меньше вместимости — выигрывает ближняя A (оракул сходится).
+    room_occupant_add(fr, roomA, static_cast<int>(capA - 1));
+    const PlacePick underCap = place_pick(fr, d, bx, by, bz);
+    const PlacePick underBrute = brute_pick(fr, d, bx, by, bz);
+    CHECK(underCap.room == roomA);
+    CHECK(underBrute.room == roomA);
+    CHECK(underCap.score == underBrute.score);
+    CHECK(underCap.cost == underBrute.cost);
+
+    // Доводим A до полной вместимости (capA): следующий кандидат из коридора
+    // переполнит A, получает штраф kRoomCrowdCostPerExtra и уходит в свободную B.
+    room_occupant_add(fr, roomA, 1);
+    CHECK(room_occupants(fr, roomA) == capA);
+    const PlacePick overCap = place_pick(fr, d, bx, by, bz);
+    const PlacePick overBrute = brute_pick(fr, d, bx, by, bz);
+    CHECK(overCap.room == roomB);
+    CHECK(overBrute.room == roomB);
+    CHECK(overCap.score == overBrute.score);
+    CHECK(overCap.cost == overBrute.cost);
+
+    // 2) Сквозная проверка через `place_errand_step` с реальной толпой тел:
+    // три зоны нава (1 = A, 2 = B, 3 = коридор, из которого доступны обе).
+    ZoneNav zones;
+    constexpr std::uint32_t kZones = 3;
+    zones.part.zones = kZones;
+    zones.part.at.assign(kMacroCells, static_cast<RoomId>(3));
+    zones.part.cells = static_cast<std::uint32_t>(kMacroCells);
+    zones.part.at[macro_index(bx + 2, by, bz)] = roomA;
+    zones.part.at[macro_index(bx + 6, by, bz)] = roomB;
+    zones.graph.zones = kZones;
+    // Граф: зона 1 <-> 3, зона 2 <-> 3, зона 3 -> {1, 2}.
+    zones.graph.offset = {0u, 1u, 2u, 4u};
+    zones.graph.nbr = {static_cast<RoomId>(3), static_cast<RoomId>(3),
+                       roomA, roomB};
+    bake_zone_dist(zones.graph, zones.dist);
+    zones.flow.planes = 2;
+    zones.flow.dir.assign(kMacroCells * 2u, static_cast<std::uint8_t>(1)); // +x
+
+    // Сцена А: capA тел уже стоят в комнате A, одно новое тело в коридоре.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        rooms_occupants_clear(fr);
+        for (std::uint32_t i = 0; i < capA; ++i) {
+            NpcId nid = 0;
+            const Entity e = make_body(reg, pool, bx + 2, by, bz, nid);
+            set_needs_sleepy(pool, nid);
+            (void)e;
+        }
+        NpcId walkerId = 0;
+        const Entity walker = make_body(reg, pool, bx, by, bz, walkerId);
+        set_needs_sleepy(pool, walkerId);
+        CHECK(ai_init(reg, kLayer) == static_cast<int>(capA + 1));
+
+        const PlaceTick pt =
+            place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/1, nullptr, &zones);
+        CHECK(pt.picked == 1);
+        CHECK(reg.get<ErrandPlan>(walker).room == roomB);
+    }
+
+    // Сцена Б: 2 * capA сонных тел стоят в коридоре при пустых A и B.
+    // За один тик ровно capA тел выбирают A и capA тел выбирают B.
+    {
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        rooms_occupants_clear(fr);
+        std::vector<Entity> walkers;
+        for (std::uint32_t i = 0; i < capA * 2u; ++i) {
+            NpcId nid = 0;
+            const Entity e = make_body(reg, pool, bx, by, bz, nid);
+            set_needs_sleepy(pool, nid);
+            walkers.push_back(e);
+        }
+        CHECK(ai_init(reg, kLayer) == static_cast<int>(capA * 2u));
+
+        const PlaceTick pt =
+            place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/1, nullptr, &zones);
+        CHECK(pt.picked == capA * 2u);
+        std::uint32_t pickedA = 0, pickedB = 0;
+        for (Entity e : walkers) {
+            const RoomId r = reg.get<ErrandPlan>(e).room;
+            if (r == roomA) ++pickedA;
+            else if (r == roomB) ++pickedB;
+        }
+        CHECK(pickedA == capA);
+        CHECK(pickedB == capA);
+        CHECK(room_occupants(fr, roomA) == capA);
+        CHECK(room_occupants(fr, roomB) == capA);
+    }
+}
+
 static void test_place_all() {
     test_place_demand_from_needs();
     test_place_interest_is_a_dot_product();
@@ -1362,4 +1525,5 @@ static void test_place_all() {
     test_place_isotropy();
     test_place_errand_walks();
     test_place_one_velocity_write_per_tick();
+    test_place_room_capacity_and_crowd();
 }

@@ -104,17 +104,19 @@ using DemandE3 = std::int16_t;
 inline constexpr DemandE3 kDemandFull = 1000; // «хочу на всё»
 
 // У глагола «шататься» спрос МАЛЫЙ, НО НИКОГДА НЕ НОЛЬ (S13.2: «замирающий NPC
-// — дефект»). 60/1000 выведено, а не выбрано: это та доля, при которой
-// объявленная площадь со `шататься` 30 даёт 1.8 очка и проигрывает ЛЮБОЙ
-// настоящей нужде, но обгоняет ноль — то есть прогулка остаётся худшим концом
-// шкалы, а не веткой «ничего не нашлось».
-//
-// ЧЕСТНАЯ ОГОВОРКА, замер 2026-10-01: ни один из трёх модулей не объявляет
-// `шататься` (`grep -rn 'kVerbWander' src/game/floors/` → 0), поэтому сегодня
-// это слагаемое умножается на нулевое предложение во всех комнатах. Данные, а
-// не мёртвый код: строка модуля «проспект предлагает шататься 30» включает его
-// без правки кода.
-inline constexpr DemandE3 kDemandWanderFloor = 60;
+// — дефект»). Значение берётся из таблицы data/verbs.csv (`demand_floor_e3`):
+// 60/1000 — та доля, при которой объявленная площадь со `шататься` 30 даёт
+// 1.8 очка и проигрывает ЛЮБОЙ настоящей нужде, но обгоняет ноль.
+inline constexpr DemandE3 kDemandWanderFloor = kVerbDemandFloorE3[kVerbWander];
+
+// Спрос ИЗ НУЖД по таблице глаголов `data/verbs.csv` (У1.9): единый цикл по
+// kVerbCount без жёстких веток. `patienceSource` (опц.) позволяет задать
+// донора порога для синтетических строк в тестах; nullptr = своя строка v.
+void demand_from_needs_table(const Needs& n, std::size_t verbCount,
+                             const std::uint8_t* needMask,
+                             const std::uint16_t* weightE3,
+                             const std::int16_t* floorE3,
+                             const VerbId* patienceSource, DemandE3* out);
 
 // Спрос ИЗ НУЖД: пишет весь вектор целиком (включая нули), чтобы у вызывающего
 // не было способа передать недоинициализированный массив.
@@ -155,6 +157,22 @@ int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int c
 
 // ИЗДЕРЖКА — ЕДИНСТВЕННОЕ МЕСТО РАСШИРЕНИЯ (решение владельца 2 выше).
 std::int32_t place_cost(const FloorRooms& fr, const Room& r, int cx, int cy, int cz);
+
+// Штраф за каждое тело сверх вместимости `room_capacity(r)` (У1.7): равен шагу
+// одного бина (`kRoomBinEdge` = 8 клеток = 16 м) — переполнение уводит к
+// соседней свободной комнате в пределах секции и перекрывает типовое
+// предложение (30) уже при 4 лишних телах.
+inline constexpr std::int32_t kRoomCrowdCostPerExtra = kRoomBinEdge;
+
+// Издержка переполнения комнаты `r` с точки `(cx, cy, cz)`. Если тело уже стоит
+// внутри этой комнаты, само себя в числе лишних тел оно не считает (`occ - 1`).
+std::int32_t place_crowd_cost(const FloorRooms& fr, const Room& r,
+                              int cx, int cy, int cz);
+
+// Пересчитать занятость комнат `fr.occupants` по живым воплощённым телам слоя
+// (стоящие в комнате + уже направленные к ней по `ErrandPlan`).
+void rooms_occupants_rebuild(FloorRooms& fr, const Registry& reg,
+                             LayerId layer);
 
 // Что выбрала сумма. `judged`/`bins` — не телеметрия ради телеметрии: цена
 // запроса обязана быть ЧИСЛОМ, а не обещанием (гейт плана «< 0.1 мс» был

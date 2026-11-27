@@ -158,9 +158,17 @@ void GpuMediumPass::drain_page_requests(World& world, VoxelMirror& mirror) {
     // проверку бита. Цена худшего кадра: 4096 шаров × 2197 проб = 9 млн,
     // то есть половина замеренного полного окна (18 млн = 4-8 мс, замер
     // 2026-08-30) — и платится она только в режиме застывания.
-    if (!pageReqCells_.empty())
+    if (!pageReqCells_.empty()) {
+        const std::uint32_t chunks = std::max<std::uint32_t>(
+            1u, (listTotal_ + kRbSlotCap - 1u) / kRbSlotCap);
+        const auto ttl = static_cast<std::uint8_t>(std::min<std::uint32_t>(
+            255u, std::max<std::uint32_t>(kRbRegions + 2u, chunks + 2u)));
+        std::uint64_t stamped[kHoldGridCells / 64]{};
+        for (std::uint32_t ci : pageReqCells_)
+            stamp_hold_block_27(holdGrid_.data(), stamped, ci, ttl);
         open_frontier(world, mirror, pageReqCells_.data(),
                       pageReqCells_.size());
+    }
     pageReqPages_ += frontierPages_ - pagesBefore;
     // ПРИБОР: печатаем ПЕРВОЕ событие этажа и дальше раз в 64 непустых
     // кадра (рейт-лимит как у wake carry). Молчащий канал не печатает ничего
@@ -433,6 +441,9 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
                                World& world, VoxelMirror& mirror) {
     if (!ready()) return;
     (void)mirror;
+    std::uint64_t stamped[kHoldGridCells / 64]{};
+    const auto wakeHoldTtl =
+        static_cast<std::uint8_t>(std::min<std::uint32_t>(255u, kRbRegions + 2u));
     // Только постановка в дедуп-очередь: раскрытие граней (×7), фронтир и
     // инжект — в drain_wakes, порцией под бюджет кадра. Клетка стоит в
     // очереди один раз (битсет), повторная запись того же кадра бесплатна —
@@ -442,6 +453,7 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
         if (ci >= kMacroCells) continue;
         // Не будим только полную СТАТИКУ (полный рыхлый подвижен — В2).
         if (cell_full_static(world, ci)) continue;
+        stamp_hold_block_27(holdGrid_.data(), stamped, ci, wakeHoldTtl);
         std::uint64_t& w = wakeBits_[ci >> 6];
         const std::uint64_t bit = 1ull << (ci & 63u);
         // Запись раскрывает округу ЗАНОВО (писатель мог схлопнуть страницу
@@ -455,66 +467,94 @@ void GpuMediumPass::wake_cells(const std::uint32_t* cells, std::size_t n,
 }
 
 void GpuMediumPass::drain_wakes(World& world, VoxelMirror& mirror) {
-    if (!ready() || wakeQueue_.empty()) return;
-    // Бюджет кадра — инжект-буфер: источник стоит до 7 touch-ей (сам + 6
-    // граней), порция режется так, чтобы влезли все. Остаток ПЕРЕНОСИТСЯ.
-    auto touch = [&](std::uint32_t ci) {
-        if (ci >= kMacroCells) return;
-        if (cell_full_static(world, ci)) return; // полный рыхлый — будим (В2)
-        if (appendPending_.size() < kAppendCap) appendPending_.push_back(ci);
-    };
-    std::size_t take = 0;
-    while (take < wakeQueue_.size() &&
-           appendPending_.size() + 7u <= kAppendCap) {
-        const std::uint32_t ci = wakeQueue_[take++];
-        wakeBits_[ci >> 6] &= ~(1ull << (ci & 63u));
-        touch(ci);
-        // Закон писателя: запись меняет и свободу материи соседей.
-        const int cx = static_cast<int>(ci % kMacroDim);
-        const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
-        const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
-        touch(static_cast<std::uint32_t>(
-            macro_index(wrap_macro(cx - 1), cy, cz)));
-        touch(static_cast<std::uint32_t>(
-            macro_index(wrap_macro(cx + 1), cy, cz)));
-        touch(static_cast<std::uint32_t>(
-            macro_index(cx, wrap_macro(cy - 1), cz)));
-        touch(static_cast<std::uint32_t>(
-            macro_index(cx, wrap_macro(cy + 1), cz)));
-        touch(static_cast<std::uint32_t>(
-            macro_index(cx, cy, wrap_macro(cz - 1))));
-        touch(static_cast<std::uint32_t>(
-            macro_index(cx, cy, wrap_macro(cz + 1))));
+    if (!ready()) return;
+    if (!wakeQueue_.empty()) {
+        // Бюджет кадра — инжект-буфер: источник стоит до 7 touch-ей (сам + 6
+        // граней), порция режется так, чтобы влезли все. Остаток ПЕРЕНОСИТСЯ.
+        auto touch = [&](std::uint32_t ci) {
+            if (ci >= kMacroCells) return;
+            if (cell_full_static(world, ci)) return; // полный рыхлый — будим (В2)
+            if (appendPending_.size() < kAppendCap) appendPending_.push_back(ci);
+        };
+        std::size_t take = 0;
+        while (take < wakeQueue_.size() &&
+               appendPending_.size() + 7u <= kAppendCap) {
+            const std::uint32_t ci = wakeQueue_[take++];
+            wakeBits_[ci >> 6] &= ~(1ull << (ci & 63u));
+            touch(ci);
+            // Закон писателя: запись меняет и свободу материи соседей.
+            const int cx = static_cast<int>(ci % kMacroDim);
+            const int cy = static_cast<int>((ci / kMacroDim) % kMacroDim);
+            const int cz = static_cast<int>(ci / (kMacroDim * kMacroDim));
+            touch(static_cast<std::uint32_t>(
+                macro_index(wrap_macro(cx - 1), cy, cz)));
+            touch(static_cast<std::uint32_t>(
+                macro_index(wrap_macro(cx + 1), cy, cz)));
+            touch(static_cast<std::uint32_t>(
+                macro_index(cx, wrap_macro(cy - 1), cz)));
+            touch(static_cast<std::uint32_t>(
+                macro_index(cx, wrap_macro(cy + 1), cz)));
+            touch(static_cast<std::uint32_t>(
+                macro_index(cx, cy, wrap_macro(cz - 1))));
+            touch(static_cast<std::uint32_t>(
+                macro_index(cx, cy, wrap_macro(cz + 1))));
+        }
+        // Закон писателя, продолжение (2026-08-27): запись РАСКРЫВАЕТ округу —
+        // фронтир только ПОРЦИИ кадра, не всей пачке (прежний вызов на всю
+        // пачку будильника = разовый ~18-миллионный проход, хитч).
+        open_frontier(world, mirror, wakeQueue_.data(), take);
+        if (take == wakeQueue_.size()) {
+            wakeQueue_.clear();
+            // ПРИБОР: очередь допита — печатаем, во что обошёлся транзиент входа
+            // целиком. Молчим, если фронтир ничего не пробовал (ровный кадр).
+            // Условие — ПРОБЫ, не страницы: с фронтиром рождения этажа
+            // ([world/floor_awaken.h]) честный ответ входа — «0 страниц», и
+            // молчание вместо него прятало бы саму приёмку шага.
+            if (frontierProbes_ != 0)
+                std::fprintf(stderr,
+                             "[medium] фронтир за этаж: %.1f ms, %llu страниц "
+                             "раскрыто, %llu проб\n",
+                             frontierMs_,
+                             static_cast<unsigned long long>(frontierPages_),
+                             static_cast<unsigned long long>(frontierProbes_));
+            overflow_ = false;
+        } else {
+            wakeQueue_.erase(wakeQueue_.begin(),
+                             wakeQueue_.begin() +
+                                 static_cast<std::ptrdiff_t>(take));
+            overflow_ = true;
+            // Освежаем держ-решётку недренированного хвоста, чтобы его блоки
+            // не остыли, пока очередь пробуждений ждёт своего кадра.
+            std::uint64_t stamped[kHoldGridCells / 64]{};
+            const auto wakeHoldTtl = static_cast<std::uint8_t>(
+                std::min<std::uint32_t>(255u, kRbRegions + 2u));
+            for (std::uint32_t ci : wakeQueue_)
+                stamp_hold_block_27(holdGrid_.data(), stamped, ci, wakeHoldTtl);
+            if ((wakeCarryEvents_++ % 64u) == 0u)
+                std::fprintf(stderr,
+                             "[medium] wake carry: %zu cells queued to next "
+                             "frames (drained %zu)\n",
+                             wakeQueue_.size(), take);
+        }
     }
-    // Закон писателя, продолжение (2026-08-27): запись РАСКРЫВАЕТ округу —
-    // фронтир только ПОРЦИИ кадра, не всей пачке (прежний вызов на всю
-    // пачку будильника = разовый ~18-миллионный проход, хитч).
-    open_frontier(world, mirror, wakeQueue_.data(), take);
-    if (take == wakeQueue_.size()) {
-        wakeQueue_.clear();
-        // ПРИБОР: очередь допита — печатаем, во что обошёлся транзиент входа
-        // целиком. Молчим, если фронтир ничего не пробовал (ровный кадр).
-        // Условие — ПРОБЫ, не страницы: с фронтиром рождения этажа
-        // ([world/floor_awaken.h]) честный ответ входа — «0 страниц», и
-        // молчание вместо него прятало бы саму приёмку шага.
-        if (frontierProbes_ != 0)
-            std::fprintf(stderr,
-                         "[medium] фронтир за этаж: %.1f ms, %llu страниц "
-                         "раскрыто, %llu проб\n",
-                         frontierMs_,
-                         static_cast<unsigned long long>(frontierPages_),
-                         static_cast<unsigned long long>(frontierProbes_));
-        overflow_ = false;
-    } else {
-        wakeQueue_.erase(wakeQueue_.begin(),
-                         wakeQueue_.begin() +
-                             static_cast<std::ptrdiff_t>(take));
-        overflow_ = true;
-        if ((wakeCarryEvents_++ % 64u) == 0u)
-            std::fprintf(stderr,
-                         "[medium] wake carry: %zu cells queued to next "
-                         "frames (drained %zu)\n",
-                         wakeQueue_.size(), take);
+
+    // ХОД B (matwej.md §9.3–§9.4): инкрементальное схлопывание однородных
+    // страниц курсором по подтикам (substepsPending_), строго вне держ-решётки
+    // 16³ и ДО voxelMirror.flush(), чтобы GPU получил kNoPage тем же кадром.
+    if (substepsPending_ > 0u) {
+        const std::size_t toScan = static_cast<std::size_t>(
+            std::min<std::uint64_t>(
+                substepsPending_ * kCollapseCellsPerSubstep, kMacroCells));
+        substepsPending_ = 0u;
+        collapseDirty_.clear();
+        const PageCollapseStats cs = collapse_uniform_cursor_step(
+            world, collapseCursor_, toScan, holdGrid_.data(), &frontierDone_,
+            collapseDirty_);
+        collapseScannedTotal_ += cs.scanned;
+        collapseMatTotal_ += cs.matCollapsed;
+        collapseStainTotal_ += cs.stainCollapsed;
+        if (!collapseDirty_.empty())
+            mirror.mark_dirty(collapseDirty_.data(), collapseDirty_.size());
     }
 }
 
@@ -738,6 +778,20 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
     applyFrontierMs_ = std::chrono::duration<float, std::milli>(
                            std::chrono::steady_clock::now() - applyFrontT0)
                            .count();
+    // ДЕРЖ-РЕШЁТКА 16³ (ход B, matwej.md §9.3): стареем счётчик на 1 после
+    // применённого пака и перестемпливаем блоки живых клеток (+ 26 соседей).
+    // TTL = chunks + 1 удерживает все блоки при вращении окна (live > 8192).
+    for (std::uint8_t& h : holdGrid_)
+        if (h > 0u) --h;
+    if (!liveCis.empty()) {
+        const std::uint32_t chunks = std::max<std::uint32_t>(
+            1u, (listTotal_ + kRbSlotCap - 1u) / kRbSlotCap);
+        const auto ttl = static_cast<std::uint8_t>(
+            std::min<std::uint32_t>(255u, chunks + 1u));
+        std::uint64_t stamped[kHoldGridCells / 64]{};
+        for (std::uint32_t ci : liveCis)
+            stamp_hold_block_27(holdGrid_.data(), stamped, ci, ttl);
+    }
     // ГИСТОГРАММА СОСТАВА live-набора (§63 problems.md, инструмент вопроса 1:
     // «кто эти 8k клеток и почему 108 мокрых не осели в 108 спящих»).
     // Оконная выборка (rb-окно вращается по всему списку — за несколько
@@ -964,6 +1018,7 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
     // downStep.w = бюджет диспатча (big-judge.md D): читают только
     // move/settle (cell_budgeted), остальным модам поле безразлично.
     lastDown_ = downStep; // фрейм для диагностики — закон изотропии, см. .h
+    substepsPending_ += n; // курсор схлопывания шагает по подтикам (ход B)
     push.downStep = ivec4{downStep.x, downStep.y, downStep.z,
                           static_cast<std::int32_t>(budget_)};
     auto dispatch_mode = [&](std::uint32_t mode, std::uint32_t sel,

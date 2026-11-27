@@ -27,8 +27,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 
+#include "world/floor_awaken.h" // kHoldGridCells — размер держ-решётки 16³
 #include "world/types.h" // kMacroCells — битсет очереди пробуждений
 #include <unordered_set>
 #include <vector>
@@ -190,6 +192,14 @@ public:
         // Поколение шва — В НОЛЬ СИНХРОННО (гейт свежести живёт на клоке
         // ЗЕРКАЛА и смену слоя переживает сам — flushGen монотонен).
         rbGen_ = 0;
+        // Курсор схлопывания и держ-решётка 16³ (ход B): сбрасываем вместе
+        // со слоем, чтобы старые блоки не держали новый этаж.
+        holdGrid_.fill(0u);
+        collapseCursor_ = 0;
+        substepsPending_ = 0;
+        collapseScannedTotal_ = 0;
+        collapseMatTotal_ = 0;
+        collapseStainTotal_ = 0;
     }
 
     // Записать n подтиков GPU-петли (inject -> [prepare, move, settle] x n)
@@ -210,6 +220,18 @@ public:
     std::uint64_t page_req_taken() const noexcept { return pageReqTaken_; }
     std::uint64_t page_req_pages() const noexcept { return pageReqPages_; }
     std::uint32_t page_req_frames() const noexcept { return pageReqFrames_; }
+
+    // КУРСОР СХЛОПЫВАНИЯ ОДНОРОДНЫХ СТРАНИЦ — прибор (ход B, matwej.md §9.3).
+    std::uint64_t collapse_scanned_total() const noexcept {
+        return collapseScannedTotal_;
+    }
+    std::uint64_t collapse_mat_total() const noexcept {
+        return collapseMatTotal_;
+    }
+    std::uint64_t collapse_stain_total() const noexcept {
+        return collapseStainTotal_;
+    }
+    std::size_t collapse_cursor() const noexcept { return collapseCursor_; }
 
     // Очередь пробуждений ещё несёт остаток — «этаж не допробужен».
     // Читает лифт: двери кабины ждут пустой очереди (решение владельца
@@ -339,6 +361,15 @@ private:
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
     std::vector<std::uint32_t> pageReqCells_; // канал: клетки этого кадра
+    // ХОД B (matwej.md §9.3–§9.4): держ-решётка 16³ (4096 байт) + кольцевой
+    // курсор схлопывания однородных страниц по подтикам.
+    std::array<std::uint8_t, kHoldGridCells> holdGrid_{};
+    std::size_t collapseCursor_ = 0;
+    std::uint64_t substepsPending_ = 0;
+    std::vector<std::uint32_t> collapseDirty_;
+    std::uint64_t collapseScannedTotal_ = 0;
+    std::uint64_t collapseMatTotal_ = 0;
+    std::uint64_t collapseStainTotal_ = 0;
     std::uint32_t budget_ = kBudgetDefault; // бюджет диспатча (см. set_budget)
 
     // Обратный шов (фенсовое кольцо kRbRegions): страницы/маски/СПИСОК

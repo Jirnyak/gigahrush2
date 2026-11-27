@@ -9,6 +9,7 @@
 #include "ecs/components.h"   // Transform, Velocity, AABB, Renderable
 #include "game/container.h"   // Container, kContainerSlots
 #include "game/embody.h"      // NpcRef, kEmbodyCellSize
+#include "game/floor_gen.h"   // generate_floor, floor_declare_rules, floor_spec
 #include "game/floor_stream.h"  // FloorStreamer, FloorRegistry, RideResult
 #include "game/item_table.h"  // kItemNames, kItemCount
 #include "world/medium.h"     // kSubMaterialName-соседи: агрегаты сред в снимке НЕ живут
@@ -22,7 +23,9 @@
 #include "game/prop_system.h" // Interactable — a respawned corpse must be findable
 #include "sim/physics.h"      // aabb_overlaps_solid — the solver's own predicate
 #include "sim/rigid.h"        // rigid_attach_* — сборка тел ядра (v18 обломки)
+#include "world/floor_awaken.h" // settle_uniform_pages — бейслайн дельты (E)
 #include "world/material_props.h" // material_is_medium — нормализация страниц
+#include "world/stain.h"      // StainRGB, kStainFieldName — секция пятен этажа (v7)
 #include "world/types.h"      // kCellSize, kVoxelSize, wrap_macro
 #include "world/world.h"      // World::grid, for the placement probes
 
@@ -1386,135 +1389,590 @@ PlacedCell place_body_safely(Registry& reg, const World& world, Entity body,
 }
 
 // ---------------------------------------------------------------------------
-// The active-floor snapshot codec
+// The active-floor snapshot / delta codec (v7, инкремент E)
 // ---------------------------------------------------------------------------
-// Layout (all little-endian, via the same Writer/Reader as the rest of the file):
-//   i32  floor
-//   u32  typeRuns;   typeRuns  x (u16 value, u32 len)   — cell types, RLE
-//   u32  stateRuns;  stateRuns x (u8 state, u32 len)    — 0 empty / 1 full / 2 mixed
-//   u32  mixedCount; mixedCount x 8 x u64               — raw masks, cell order
-//   u32  pageCount;  pageCount x (u32 cell, 512 x u16)  — sub-material pages
-// A generated floor is overwhelmingly uniform (air, full wall, full slab), so the
-// two RLE streams collapse to a few thousand runs and the mixed masks are only the
-// carved/stair cells — single-digit MB against the raw 138 MB.
+// Формат геометрии (little-endian):
+//   i32 floorNumber
+//   u8  mode (0 = Full RLE snapshot, 1 = Delta against baseline)
+//
+// mode == 0 (Full):
+//   u32 typeRuns;   typeRuns  x (u16 value, u32 len)
+//   u32 stateRuns;  stateRuns x (u8 state, u32 len)
+//   u32 mixedCount; mixedCount x 8 x u64
+//   u32 pageCount;  pageCount x (u32 cell, u16 runs, runs x (u16 val, u16 len))
+//   u32 stainCount; stainCount x (u32 cell, u16 runs, runs x (u8 r, u8 g, u8 b, u16 len))
+//
+// mode == 1 (Delta):
+//   u32 deltaCount; deltaCount x (u32 cell, u8 flags, [u16 type], [8*u64 mask], [page RLE])
+//   u32 stainCount; stainCount x (u32 cell, u16 runs, runs x (u8 r, u8 g, u8 b, u16 len))
+
+namespace {
+
+constexpr std::uint8_t kSnapModeFull = 0u;
+constexpr std::uint8_t kSnapModeDelta = 1u;
+
+constexpr std::uint8_t kDeltaTypeBit = 1u << 0;
+constexpr std::uint8_t kDeltaMaskShift = 1u;
+constexpr std::uint8_t kDeltaPageShift = 3u;
+constexpr std::uint8_t kDeltaMaskField = 3u << kDeltaMaskShift;
+constexpr std::uint8_t kDeltaPageField = 3u << kDeltaPageShift;
+constexpr std::uint8_t kDeltaValidBits =
+    kDeltaTypeBit | kDeltaMaskField | kDeltaPageField;
+
+constexpr std::uint8_t kDeltaMaskSame = 0u;
+constexpr std::uint8_t kDeltaMaskEmpty = 1u;
+constexpr std::uint8_t kDeltaMaskFull = 2u;
+constexpr std::uint8_t kDeltaMaskMixed = 3u;
+
+constexpr std::uint8_t kDeltaPageSame = 0u;
+constexpr std::uint8_t kDeltaPageDrop = 1u;
+constexpr std::uint8_t kDeltaPageSet = 2u;
+
+bool mask_eq(const SubMask& a, const SubMask& b) {
+    for (std::size_t k = 0; k < kSubMaskWords; ++k)
+        if (a.words[k] != b.words[k]) return false;
+    return true;
+}
+
+std::uint8_t mask_state_of(const SubMask& m) {
+    if (m.empty()) return 0u;
+    return m.full() ? 1u : 2u;
+}
+
+void patch_u32_le(std::vector<std::uint8_t>& buf, std::size_t off,
+                  std::uint32_t v) {
+    buf[off + 0] = static_cast<std::uint8_t>(v & 0xFFu);
+    buf[off + 1] = static_cast<std::uint8_t>((v >> 8) & 0xFFu);
+    buf[off + 2] = static_cast<std::uint8_t>((v >> 16) & 0xFFu);
+    buf[off + 3] = static_cast<std::uint8_t>((v >> 24) & 0xFFu);
+}
+
+void write_sub_page_rle(Writer& wr, const CellType* pg) {
+    std::uint32_t runs = 0;
+    for (int b = 0; b < kSubVoxels;) {
+        int e = b + 1;
+        while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+        ++runs;
+        b = e;
+    }
+    wr.u16(static_cast<std::uint16_t>(runs));
+    for (int b = 0; b < kSubVoxels;) {
+        int e = b + 1;
+        while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+        wr.u16(pg[b]);
+        wr.u16(static_cast<std::uint16_t>(e - b));
+        b = e;
+    }
+}
+
+bool validate_sub_page_rle(Reader& r) {
+    std::uint16_t runs = 0;
+    r.u16(runs);
+    if (!r.ok()) return false;
+    int at = 0;
+    for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
+        std::uint16_t v = 0, len = 0;
+        r.u16(v);
+        r.u16(len);
+        (void)v;
+        if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+            return false;
+        at += static_cast<int>(len);
+    }
+    return r.ok() && at == kSubVoxels;
+}
+
+bool read_sub_page_rle(Reader& r, CellType* pg, const SubMask& pm) {
+    std::uint16_t runs = 0;
+    r.u16(runs);
+    int at = 0;
+    for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
+        std::uint16_t v = 0, len = 0;
+        r.u16(v);
+        r.u16(len);
+        if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+            return false;
+        for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
+    }
+    if (!r.ok() || at != kSubVoxels) return false;
+    // Нормализация фантомных неподвижных атомов без бита маски (S16.1).
+    if (!pm.full()) {
+        for (int b = 0; b < kSubVoxels; ++b) {
+            if (!pm.test(b) && pg[b] != kCellAir && !material_is_medium(pg[b]))
+                pg[b] = kCellAir;
+        }
+    }
+    return true;
+}
+
+void write_stain_pages(std::vector<std::uint8_t>& out, Writer& wr,
+                       const World& w) {
+    const std::size_t countOff = out.size();
+    wr.u32(0u);
+    const SubField<StainRGB>* stains =
+        w.subfields().find<StainRGB>(kStainFieldName);
+    if (!stains || stains->pages_in_use() == 0u) return;
+
+    std::uint32_t stainCount = 0u;
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const StainRGB* pg = stains->page(ci);
+        if (!pg) continue;
+        if (SubField<StainRGB>::is_page_uniform(pg) && pg[0] == StainRGB{})
+            continue;
+        wr.u32(static_cast<std::uint32_t>(ci));
+        std::uint32_t runs = 0;
+        for (int b = 0; b < kSubVoxels;) {
+            int e = b + 1;
+            while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+            ++runs;
+            b = e;
+        }
+        wr.u16(static_cast<std::uint16_t>(runs));
+        for (int b = 0; b < kSubVoxels;) {
+            int e = b + 1;
+            while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+            wr.u8(pg[b].r);
+            wr.u8(pg[b].g);
+            wr.u8(pg[b].b);
+            wr.u16(static_cast<std::uint16_t>(e - b));
+            b = e;
+        }
+        ++stainCount;
+    }
+    patch_u32_le(out, countOff, stainCount);
+}
+
+bool validate_stain_pages(Reader& r) {
+    std::uint32_t stainCount = 0;
+    r.u32(stainCount);
+    if (!r.ok() || stainCount > kMacroCells) return false;
+    std::uint32_t prevCi = 0;
+    for (std::uint32_t p = 0; p < stainCount && r.ok(); ++p) {
+        std::uint32_t cell = 0;
+        r.u32(cell);
+        if (cell >= kMacroCells || (p > 0u && cell <= prevCi)) return false;
+        prevCi = cell;
+        std::uint16_t runs = 0;
+        r.u16(runs);
+        int at = 0;
+        for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
+            std::uint8_t cr = 0, cg = 0, cb = 0;
+            std::uint16_t len = 0;
+            r.u8(cr);
+            r.u8(cg);
+            r.u8(cb);
+            r.u16(len);
+            (void)cr;
+            (void)cg;
+            (void)cb;
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+                return false;
+            at += static_cast<int>(len);
+        }
+        if (at != kSubVoxels) return false;
+    }
+    return r.ok();
+}
+
+bool apply_stain_pages(Reader& r, World& w) {
+    if (SubField<StainRGB>* existing =
+            w.subfields().find<StainRGB>(kStainFieldName)) {
+        existing->clear();
+    }
+    std::uint32_t stainCount = 0;
+    r.u32(stainCount);
+    if (!r.ok() || stainCount > kMacroCells) return false;
+    if (stainCount == 0u) return r.ok();
+
+    SubField<StainRGB>& stains =
+        w.subfields().get_or_create<StainRGB>(kStainFieldName);
+    stains.reserve_pages(stainCount);
+    for (std::uint32_t p = 0; p < stainCount && r.ok(); ++p) {
+        std::uint32_t cell = 0;
+        r.u32(cell);
+        if (cell >= kMacroCells) return false;
+        StainRGB* pg = stains.ensure_page(cell, StainRGB{});
+        std::uint16_t runs = 0;
+        r.u16(runs);
+        int at = 0;
+        for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
+            StainRGB c{};
+            std::uint16_t len = 0;
+            r.u8(c.r);
+            r.u8(c.g);
+            r.u8(c.b);
+            r.u16(len);
+            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
+                return false;
+            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = c;
+        }
+        if (at != kSubVoxels) return false;
+    }
+    return r.ok();
+}
+
+bool validate_snapshot_blob(const std::uint8_t* bytes, std::size_t n,
+                            std::int32_t* floorOut, std::uint8_t* modeOut) {
+    if (!bytes || n < 5u) return false;
+    Reader r(bytes, n);
+    std::int32_t floor = 0;
+    std::uint8_t mode = 0;
+    r.i32(floor);
+    r.u8(mode);
+    if (!r.ok()) return false;
+    if (floorOut) *floorOut = floor;
+    if (modeOut) *modeOut = mode;
+
+    if (mode == kSnapModeFull) {
+        std::uint32_t typeRuns = 0;
+        r.u32(typeRuns);
+        std::size_t at = 0;
+        for (std::uint32_t k = 0; k < typeRuns && r.ok(); ++k) {
+            std::uint16_t v = 0;
+            std::uint32_t len = 0;
+            r.u16(v);
+            r.u32(len);
+            (void)v;
+            if (len > kMacroCells - at) return false;
+            at += len;
+        }
+        if (!r.ok() || at != kMacroCells) return false;
+
+        std::uint32_t stateRuns = 0;
+        r.u32(stateRuns);
+        std::size_t mixedCountExpected = 0;
+        at = 0;
+        for (std::uint32_t k = 0; k < stateRuns && r.ok(); ++k) {
+            std::uint8_t s = 0;
+            std::uint32_t len = 0;
+            r.u8(s);
+            r.u32(len);
+            if (s > 2u || len > kMacroCells - at) return false;
+            if (s == 2u) mixedCountExpected += len;
+            at += len;
+        }
+        if (!r.ok() || at != kMacroCells) return false;
+
+        std::uint32_t mixedCount = 0;
+        r.u32(mixedCount);
+        if (!r.ok() || mixedCount != mixedCountExpected) return false;
+        for (std::uint32_t m = 0; m < mixedCount && r.ok(); ++m) {
+            SubMask mk{};
+            for (std::size_t w = 0; w < kSubMaskWords; ++w) r.u64(mk.words[w]);
+            if (mk.empty() || mk.full()) return false;
+        }
+        if (!r.ok()) return false;
+
+        std::uint32_t pageCount = 0;
+        r.u32(pageCount);
+        if (!r.ok() || pageCount > kMacroCells) return false;
+        for (std::uint32_t p = 0; p < pageCount && r.ok(); ++p) {
+            std::uint32_t cell = 0;
+            r.u32(cell);
+            if (cell >= kMacroCells) return false;
+            if (!validate_sub_page_rle(r)) return false;
+        }
+        if (!r.ok()) return false;
+        if (!validate_stain_pages(r)) return false;
+        return r.ok() && r.at() == n;
+    }
+
+    if (mode == kSnapModeDelta) {
+        std::uint32_t deltaCount = 0;
+        r.u32(deltaCount);
+        if (!r.ok() || deltaCount > kMacroCells) return false;
+        std::uint32_t prevCi = 0;
+        for (std::uint32_t d = 0; d < deltaCount && r.ok(); ++d) {
+            std::uint32_t cell = 0;
+            std::uint8_t flags = 0;
+            r.u32(cell);
+            r.u8(flags);
+            if (!r.ok() || cell >= kMacroCells || (d > 0u && cell <= prevCi))
+                return false;
+            prevCi = cell;
+            if ((flags & ~kDeltaValidBits) != 0u || flags == 0u) return false;
+            const std::uint8_t maskMode =
+                static_cast<std::uint8_t>((flags & kDeltaMaskField) >>
+                                          kDeltaMaskShift);
+            const std::uint8_t pageMode =
+                static_cast<std::uint8_t>((flags & kDeltaPageField) >>
+                                          kDeltaPageShift);
+            if (pageMode > kDeltaPageSet) return false;
+
+            if (flags & kDeltaTypeBit) {
+                std::uint16_t t = 0;
+                r.u16(t);
+                (void)t;
+            }
+            if (maskMode == kDeltaMaskMixed) {
+                SubMask mk{};
+                for (std::size_t w = 0; w < kSubMaskWords; ++w)
+                    r.u64(mk.words[w]);
+                if (mk.empty() || mk.full()) return false;
+            }
+            if (pageMode == kDeltaPageSet) {
+                if (!validate_sub_page_rle(r)) return false;
+            }
+        }
+        if (!r.ok()) return false;
+        if (!validate_stain_pages(r)) return false;
+        return r.ok() && r.at() == n;
+    }
+
+    return false;
+}
+
+bool valid_module_key_for_delta(const FloorModuleKey* key) {
+    if (!key) return false;
+    if (key->kind >= static_cast<std::uint8_t>(FloorKind::Count)) return false;
+    if (key->genVersion == 0u) return false;
+    return key->genVersion ==
+           module_gen_version(static_cast<FloorKind>(key->kind));
+}
+
+} // namespace
 
 std::size_t snapshot_floor(const World& w, int floorNumber,
-                           std::vector<std::uint8_t>& out) {
+                           std::vector<std::uint8_t>& out,
+                           const World* baseline) {
     out.clear();
     Writer wr(out);
     wr.i32(static_cast<std::int32_t>(floorNumber));
 
     const std::vector<CellType>& types = w.grid().types();
     const std::vector<SubMask>& masks = w.grid().masks();
-
-    // Pass 1 over types: count runs, then emit. Two passes beat buffering runs.
-    auto emit_type_runs = [&](bool countOnly, std::uint32_t& runs) {
-        runs = 0;
-        std::size_t i = 0;
-        while (i < kMacroCells) {
-            const CellType v = types[i];
-            std::size_t j = i + 1;
-            while (j < kMacroCells && types[j] == v) ++j;
-            if (!countOnly) {
-                wr.u16(v);
-                wr.u32(static_cast<std::uint32_t>(j - i));
-            }
-            ++runs;
-            i = j;
-        }
-    };
-    std::uint32_t typeRuns = 0;
-    emit_type_runs(true, typeRuns);
-    wr.u32(typeRuns);
-    emit_type_runs(false, typeRuns);
-
-    auto state_of = [&](std::size_t i) -> std::uint8_t {
-        if (masks[i].empty()) return 0;
-        return masks[i].full() ? 1 : 2;
-    };
-    auto emit_state_runs = [&](bool countOnly, std::uint32_t& runs,
-                               std::uint32_t& mixed) {
-        runs = 0;
-        mixed = 0;
-        std::size_t i = 0;
-        while (i < kMacroCells) {
-            const std::uint8_t s = state_of(i);
-            std::size_t j = i + 1;
-            while (j < kMacroCells && state_of(j) == s) ++j;
-            if (s == 2) mixed += static_cast<std::uint32_t>(j - i);
-            if (!countOnly) {
-                wr.u8(s);
-                wr.u32(static_cast<std::uint32_t>(j - i));
-            }
-            ++runs;
-            i = j;
-        }
-    };
-    std::uint32_t stateRuns = 0, mixedCount = 0;
-    emit_state_runs(true, stateRuns, mixedCount);
-    wr.u32(stateRuns);
-    emit_state_runs(false, stateRuns, mixedCount);
-
-    wr.u32(mixedCount);
-    for (std::size_t i = 0; i < kMacroCells; ++i) {
-        if (state_of(i) != 2) continue;
-        for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
-            wr.u64(masks[i].words[k2]);
-    }
-
     const SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
-    std::uint32_t pageCount = 0;
-    if (mats)
-        for (std::size_t i = 0; i < kMacroCells; ++i)
-            if (mats->paged(i)) ++pageCount;
-    wr.u32(pageCount);
-    if (mats) {
-        for (std::size_t i = 0; i < kMacroCells; ++i) {
-            const CellType* pg = mats->page(i);
-            if (!pg) continue;
-            wr.u32(static_cast<std::uint32_t>(i));
-            // RUN-LENGTH, not raw. A page is 512 sub-voxel materials and it is
-            // almost never 512 DIFFERENT ones: the padic sandwich gives a cell a
-            // run of base, a run of ceiling plaster and a run of floor concrete —
-            // three runs, ~14 bytes, against 1024 raw. Written the same way the
-            // type and mask-state arrays above already are.
-            //
-            // This does NOT constrain what a page may contain. Flaked plaster, a
-            // blast crater, any arbitrary mix of atoms still encodes — it just
-            // costs more runs. That is the point: the cell stays a LEGO of atoms
-            // and only the ENCODING gets cheaper. (The alternative once floated
-            // here — promoting common combinations to CellTypes — would have
-            // hardcoded a finite set of mixes into the material vocabulary and
-            // broken the moment a surface chipped. Rejected, correctly.)
-            std::uint32_t runs = 0;
-            for (int b = 0; b < kSubVoxels;) {
-                int e = b + 1;
-                while (e < kSubVoxels && pg[e] == pg[b]) ++e;
+
+    if (baseline == nullptr) {
+        wr.u8(kSnapModeFull);
+
+        auto emit_type_runs = [&](bool countOnly, std::uint32_t& runs) {
+            runs = 0;
+            std::size_t i = 0;
+            while (i < kMacroCells) {
+                const CellType v = types[i];
+                std::size_t j = i + 1;
+                while (j < kMacroCells && types[j] == v) ++j;
+                if (!countOnly) {
+                    wr.u16(v);
+                    wr.u32(static_cast<std::uint32_t>(j - i));
+                }
                 ++runs;
-                b = e;
+                i = j;
             }
-            wr.u16(static_cast<std::uint16_t>(runs));
-            for (int b = 0; b < kSubVoxels;) {
-                int e = b + 1;
-                while (e < kSubVoxels && pg[e] == pg[b]) ++e;
-                wr.u16(pg[b]);
-                wr.u16(static_cast<std::uint16_t>(e - b));
-                b = e;
+        };
+        std::uint32_t typeRuns = 0;
+        emit_type_runs(true, typeRuns);
+        wr.u32(typeRuns);
+        emit_type_runs(false, typeRuns);
+
+        auto emit_state_runs = [&](bool countOnly, std::uint32_t& runs,
+                                   std::uint32_t& mixed) {
+            runs = 0;
+            mixed = 0;
+            std::size_t i = 0;
+            while (i < kMacroCells) {
+                const std::uint8_t s = mask_state_of(masks[i]);
+                std::size_t j = i + 1;
+                while (j < kMacroCells && mask_state_of(masks[j]) == s) ++j;
+                if (s == 2u) mixed += static_cast<std::uint32_t>(j - i);
+                if (!countOnly) {
+                    wr.u8(s);
+                    wr.u32(static_cast<std::uint32_t>(j - i));
+                }
+                ++runs;
+                i = j;
+            }
+        };
+        std::uint32_t stateRuns = 0, mixedCount = 0;
+        emit_state_runs(true, stateRuns, mixedCount);
+        wr.u32(stateRuns);
+        emit_state_runs(false, stateRuns, mixedCount);
+
+        wr.u32(mixedCount);
+        for (std::size_t i = 0; i < kMacroCells; ++i) {
+            if (mask_state_of(masks[i]) != 2u) continue;
+            for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
+                wr.u64(masks[i].words[k2]);
+        }
+
+        std::uint32_t pageCount = 0;
+        if (mats)
+            for (std::size_t i = 0; i < kMacroCells; ++i)
+                if (mats->paged(i)) ++pageCount;
+        wr.u32(pageCount);
+        if (mats) {
+            for (std::size_t i = 0; i < kMacroCells; ++i) {
+                const CellType* pg = mats->page(i);
+                if (!pg) continue;
+                wr.u32(static_cast<std::uint32_t>(i));
+                write_sub_page_rle(wr, pg);
             }
         }
+        write_stain_pages(out, wr, w);
+        return out.size();
     }
+
+    // Дельта-режим (mode == 1): храним только расхождения с `*baseline`.
+    wr.u8(kSnapModeDelta);
+    const std::size_t deltaCountOff = out.size();
+    wr.u32(0u);
+
+    const std::vector<CellType>& bTypes = baseline->grid().types();
+    const std::vector<SubMask>& bMasks = baseline->grid().masks();
+    const SubField<CellType>* bMats =
+        baseline->subfields().find<CellType>(kSubMaterialName);
+
+    std::uint32_t deltaCount = 0u;
+    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+        const CellType wType = types[ci];
+        const CellType bType = bTypes[ci];
+        const SubMask& wMask = masks[ci];
+        const SubMask& bMask = bMasks[ci];
+        const CellType* pgW = mats ? mats->page(ci) : nullptr;
+        const CellType* pgB = bMats ? bMats->page(ci) : nullptr;
+
+        // Быстрый путь: абсолютно идентичная клетка без страниц (большинство мира).
+        if (!pgW && !pgB && wType == bType && mask_eq(wMask, bMask))
+            continue;
+
+        const bool typeChanged = (wType != bType);
+        std::uint8_t maskMode = kDeltaMaskSame;
+        if (!mask_eq(wMask, bMask)) {
+            if (wMask.empty()) maskMode = kDeltaMaskEmpty;
+            else if (wMask.full()) maskMode = kDeltaMaskFull;
+            else maskMode = kDeltaMaskMixed;
+        }
+
+        // Инвариант S16.1 / S16.9 / S16.10: страница, побайтово равная
+        // бесстраничному чтению `(wType, wMask)`, избыточна. Это убирает как
+        // 649k схлопнутых страниц на Khrushi, так и страницы смешанных масок,
+        // материализованные фронтиром (`floor_open_frontier`).
+        auto page_equals_implicit = [](const CellType* pg, CellType t,
+                                       const SubMask& m) -> bool {
+            if (!pg) return true;
+            if (m.full())
+                return SubField<CellType>::is_page_uniform(pg) && pg[0] == t;
+            if (m.empty()) {
+                const CellType expect = material_is_medium(t) ? t : kCellAir;
+                return SubField<CellType>::is_page_uniform(pg) &&
+                       pg[0] == expect;
+            }
+            for (int b = 0; b < kSubVoxels; ++b) {
+                const CellType expect = m.test(b) ? t : kCellAir;
+                if (pg[b] != expect) return false;
+            }
+            return true;
+        };
+
+        const bool wImplicit = page_equals_implicit(pgW, wType, wMask);
+
+        std::uint8_t pageMode = kDeltaPageSame;
+        if (wImplicit) {
+            const bool bMatchesW = page_equals_implicit(pgB, wType, wMask);
+            if (!bMatchesW) pageMode = kDeltaPageDrop;
+        } else {
+            if (pgB && std::memcmp(pgW, pgB, sizeof(CellType) * kSubVoxels) == 0)
+                pageMode = kDeltaPageSame;
+            else
+                pageMode = kDeltaPageSet;
+        }
+
+        if (!typeChanged && maskMode == kDeltaMaskSame &&
+            pageMode == kDeltaPageSame)
+            continue;
+
+        const std::uint8_t flags = static_cast<std::uint8_t>(
+            (typeChanged ? kDeltaTypeBit : 0u) |
+            (maskMode << kDeltaMaskShift) |
+            (pageMode << kDeltaPageShift));
+        wr.u32(static_cast<std::uint32_t>(ci));
+        wr.u8(flags);
+        if (typeChanged) wr.u16(wType);
+        if (maskMode == kDeltaMaskMixed) {
+            for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
+                wr.u64(wMask.words[k2]);
+        }
+        if (pageMode == kDeltaPageSet) write_sub_page_rle(wr, pgW);
+        ++deltaCount;
+    }
+    patch_u32_le(out, deltaCountOff, deltaCount);
+    write_stain_pages(out, wr, w);
     return out.size();
 }
 
 bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
-                          std::int32_t* floorOut) {
-    if (!bytes || n == 0) return false;
+                          std::int32_t* floorOut, const World* baseline) {
+    std::uint8_t mode = 0;
+    if (!validate_snapshot_blob(bytes, n, floorOut, &mode)) return false;
+    if (mode == kSnapModeDelta && baseline == nullptr) return false;
+
     Reader r(bytes, n);
     std::int32_t floor = 0;
+    std::uint8_t parsedMode = 0;
     r.i32(floor);
-    if (floorOut) *floorOut = floor;
+    r.u8(parsedMode);
+    (void)floor;
+    (void)parsedMode;
 
+    if (mode == kSnapModeDelta) {
+        if (baseline != &w) {
+            w.grid().types_mut() = baseline->grid().types();
+            w.grid().masks_mut() = baseline->grid().masks();
+            SubField<CellType>& dstMats =
+                w.subfields().get_or_create<CellType>(kSubMaterialName);
+            if (const SubField<CellType>* srcMats =
+                    baseline->subfields().find<CellType>(kSubMaterialName)) {
+                dstMats = *srcMats;
+            } else {
+                dstMats.clear();
+            }
+        }
+        std::vector<CellType>& types = w.grid().types_mut();
+        std::vector<SubMask>& masks = w.grid().masks_mut();
+        SubField<CellType>& mats =
+            w.subfields().get_or_create<CellType>(kSubMaterialName);
+
+        std::uint32_t deltaCount = 0;
+        r.u32(deltaCount);
+        for (std::uint32_t d = 0; d < deltaCount && r.ok(); ++d) {
+            std::uint32_t cell = 0;
+            std::uint8_t flags = 0;
+            r.u32(cell);
+            r.u8(flags);
+            const std::uint8_t maskMode =
+                static_cast<std::uint8_t>((flags & kDeltaMaskField) >>
+                                          kDeltaMaskShift);
+            const std::uint8_t pageMode =
+                static_cast<std::uint8_t>((flags & kDeltaPageField) >>
+                                          kDeltaPageShift);
+
+            if (flags & kDeltaTypeBit) {
+                std::uint16_t v = 0;
+                r.u16(v);
+                types[cell] = v;
+            }
+            if (maskMode == kDeltaMaskEmpty) {
+                masks[cell].clear_all();
+            } else if (maskMode == kDeltaMaskFull) {
+                masks[cell].set_all();
+            } else if (maskMode == kDeltaMaskMixed) {
+                for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
+                    r.u64(masks[cell].words[k2]);
+            }
+            if (pageMode == kDeltaPageDrop) {
+                mats.drop_page(cell);
+            } else if (pageMode == kDeltaPageSet) {
+                CellType* pg = mats.ensure_page(cell, types[cell]);
+                if (!read_sub_page_rle(r, pg, masks[cell])) return false;
+            }
+        }
+        if (!apply_stain_pages(r, w)) return false;
+        return r.ok() && r.at() == n;
+    }
+
+    // mode == kSnapModeFull
     std::vector<CellType>& types = w.grid().types_mut();
     std::vector<SubMask>& masks = w.grid().masks_mut();
 
@@ -1526,8 +1984,6 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         std::uint32_t len = 0;
         r.u16(v);
         r.u32(len);
-        // Subtract, never add: `at + len` is uint32 arithmetic and a hostile or
-        // corrupt run length wraps it past the guard straight into the write below.
         if (len > kMacroCells - at) return false;
         for (std::uint32_t j = 0; j < len; ++j) types[at + j] = v;
         at += len;
@@ -1536,8 +1992,6 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
 
     std::uint32_t stateRuns = 0;
     r.u32(stateRuns);
-    // Mixed cells are flagged and filled from the raw stream afterwards, in the
-    // same cell order the writer walked.
     std::vector<std::uint32_t> mixedCells;
     at = 0;
     for (std::uint32_t k2 = 0; k2 < stateRuns && r.ok(); ++k2) {
@@ -1545,10 +1999,10 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
         std::uint32_t len = 0;
         r.u8(s);
         r.u32(len);
-        if (s > 2 || len > kMacroCells - at) return false; // same wrap guard
+        if (s > 2u || len > kMacroCells - at) return false;
         for (std::uint32_t j = 0; j < len; ++j) {
-            if (s == 0) masks[at + j].clear_all();
-            else if (s == 1) masks[at + j].set_all();
+            if (s == 0u) masks[at + j].clear_all();
+            else if (s == 1u) masks[at + j].set_all();
             else mixedCells.push_back(static_cast<std::uint32_t>(at + j));
         }
         at += len;
@@ -1561,8 +2015,6 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     for (std::uint32_t mc : mixedCells) {
         for (std::size_t k2 = 0; k2 < kSubMaskWords; ++k2)
             r.u64(masks[mc].words[k2]);
-        // An all-zero or all-one "mixed" mask would desync state_of on the next
-        // snapshot; refuse rather than normalise silently.
         if (masks[mc].empty() || masks[mc].full()) return false;
     }
     if (!r.ok()) return false;
@@ -1572,55 +2024,26 @@ bool apply_floor_snapshot(World& w, const std::uint8_t* bytes, std::size_t n,
     SubField<CellType>& mats =
         w.subfields().get_or_create<CellType>(kSubMaterialName);
     mats.clear();
-    // clear() теперь честно отдаёт вместимость (shrink_to_fit, [world/subfield.h]),
-    // значит рост с нуля шёл бы удвоениями — лишний memcpy порядка размера пула
-    // на каждом входе. pageCount уже прочитан строкой выше: одна аллокация
-    // точного размера вместо лестницы реаллоков.
     mats.reserve_pages(pageCount);
     for (std::uint32_t p = 0; p < pageCount && r.ok(); ++p) {
         std::uint32_t cell = 0;
         r.u32(cell);
         if (cell >= kMacroCells) return false;
         CellType* pg = mats.ensure_page(cell, types[cell]);
-        std::uint16_t runs = 0;
-        r.u16(runs);
-        int at = 0;
-        for (std::uint16_t k = 0; k < runs && r.ok(); ++k) {
-            std::uint16_t v = 0, len = 0;
-            r.u16(v);
-            r.u16(len);
-            // Subtract-never-add, the same guard the mask and type runs use: a
-            // forged length cannot walk past the page.
-            if (len == 0 || len > static_cast<std::uint16_t>(kSubVoxels - at))
-                return false;
-            for (std::uint16_t q = 0; q < len; ++q) pg[at++] = v;
-        }
-        if (at != kSubVoxels) return false;
-        // Закон чтения (S16.1, sub_material_at [world/destruct.h]):
-        // немаскированного атома НЕПОДВИЖНОГО материала не существует.
-        // Страницы старых сейвов (заливка базой до 2026-08-24) несут
-        // фантомную материю в дырах — кубы-призраки при классе 3;
-        // нормализуем на входе. Подвижная материя без маски легальна: вода,
-        // газ и рыхлое, застигнутое сейвом в полёте (S16.10 «падающее — не
-        // геометрия») — оно доедет и ляжет после загрузки.
-        const SubMask& pm = masks[cell];
-        if (!pm.full())
-            for (int b = 0; b < kSubVoxels; ++b)
-                if (!pm.test(b) && pg[b] != kCellAir &&
-                    !material_is_medium(pg[b]))
-                    pg[b] = kCellAir;
+        if (!read_sub_page_rle(r, pg, masks[cell])) return false;
     }
-    // Every byte consumed, none left over — same discipline as save_read.
+    if (!apply_stain_pages(r, w)) return false;
     return r.ok() && r.at() == n;
 }
 
 void floor_file_write(const World& w, int floorNumber,
                       std::vector<std::uint8_t>& out,
                       const FloorEntityState* ents,
-                      const FloorModuleKey* key) {
-    // v3 ([save.h] раскладка): floor уже внутри снимка геометрии (его пишет
-    // snapshot_floor), поэтому мета v3 — только ключ модуля и сущности,
-    // геометрия хвостом.
+                      const FloorModuleKey* key,
+                      const World* baseline) {
+    // v3..v7 ([save.h] раскладка): floor внутри блоба геометрии, мета —
+    // ключ модуля и сущности, геометрия хвостом (в v7 — дельта при валидном
+    // ключе или переданном baseline).
     std::vector<std::uint8_t> blob;
     {
         Writer bw(blob);
@@ -1630,17 +2053,6 @@ void floor_file_write(const World& w, int floorNumber,
         bw.u32(k.genVersion);
         static const FloorEntityState kEmpty{};
         const FloorEntityState& e = ents ? *ents : kEmpty;
-        // ПОТОЛОК ЗАПИСЕЙ — ГЕЙТ В ОБЕ СТОРОНЫ. `kMaxFloorRecords` стоял
-        // ТОЛЬКО на чтении («файл не из нашей вселенной — отказ до CRC»), а
-        // писатель лил сколько есть: перебор родил бы файл, который сам же
-        // прочитать и откажется (`SizeMismatch`), то есть этаж молча потерял
-        // бы ВСЁ накопленное при следующем визите. Кричим ЗДЕСЬ, где счёт
-        // ещё известен (S11: молчаливого обрезания нет).
-        //
-        // Почему это стало важно 2026-11-08: расстановка модулей (CANON S23)
-        // подняла число пропов жилого этажа с ~15 200 до ~31 900 — с 23 % до
-        // 49 % потолка. Ручка одна, двигать по замеру; удвоение плотности
-        // мебели в строках модуля упрётся в неё.
         if (e.props.size() > kMaxFloorRecords ||
             e.corpses.size() > kMaxFloorRecords ||
             e.pickups.size() > kMaxFloorRecords ||
@@ -1653,7 +2065,7 @@ void floor_file_write(const World& w, int floorNumber,
                          e.corpses.size(), e.pickups.size(), e.debris.size());
         bw.u32(static_cast<std::uint32_t>(e.props.size()));
         for (const PropRecord& rec : e.props) {
-            PropRecord tmp = rec; // визитёр read/write; write-сторона копирует
+            PropRecord tmp = rec;
             visit_prop_rec(bw, tmp);
         }
         bw.u32(static_cast<std::uint32_t>(e.corpses.size()));
@@ -1673,26 +2085,29 @@ void floor_file_write(const World& w, int floorNumber,
         }
         bw.u32(static_cast<std::uint32_t>(e.powerKeys.size()));
         for (std::uint64_t kkey : e.powerKeys) bw.u64(kkey);
-        // v5: репутация комнат по индексу объявления (S13.6).
         bw.u32(static_cast<std::uint32_t>(e.roomReps.size()));
         for (std::int16_t rep : e.roomReps)
             bw.u16(static_cast<std::uint16_t>(rep));
     }
     {
-        // snapshot_floor чистит out первым делом (контракт) — геометрия
-        // кодируется в свой буфер и подшивается хвостом. Одна лишняя копия
-        // RLE-вывода на переезде этажа — транзиентная RAM щедрая (закон
-        // владельца, 5a).
         std::vector<std::uint8_t> geo;
-        snapshot_floor(w, floorNumber, geo);
+        if (baseline != nullptr) {
+            snapshot_floor(w, floorNumber, geo, baseline);
+        } else if (valid_module_key_for_delta(key)) {
+            World base;
+            const FloorKind fk = static_cast<FloorKind>(key->kind);
+            const FloorSpec& spec = floor_spec(fk);
+            floor_declare_rules(base, floorNumber, spec, key->seed);
+            generate_floor(base, floorNumber, spec, key->seed);
+            floor_apply_rules(base, floorNumber, spec, key->seed);
+            settle_uniform_pages(base);
+            snapshot_floor(w, floorNumber, geo, &base);
+        } else {
+            snapshot_floor(w, floorNumber, geo, nullptr);
+        }
         blob.insert(blob.end(), geo.begin(), geo.end());
     }
 
-    // SAY IT when the writer outgrows the reader — И ДЛЯ СЧЁТЧИКОВ СЕКЦИЙ
-    // (аудит F, №6 — тот же §37-класс, что размер blob ниже): читатель
-    // отвергает cnt > kMaxFloorRecords целиком, и этаж, накопивший больше
-    // (трупы копятся неограниченно — мобы пересеиваются каждый визит),
-    // молча писал бы файл, который сам же всегда откажет.
     if (ents) {
         const std::size_t counts[5] = {ents->props.size(), ents->corpses.size(),
                                        ents->pickups.size(), ents->debris.size(),
@@ -1705,14 +2120,6 @@ void floor_file_write(const World& w, int floorNumber,
                              "REFUSED on load\n",
                              floorNumber, c, kMaxFloorRecords);
     }
-    // There is no guard here on
-    // purpose — refusing to write would lose the floor silently, which is worse —
-    // but the reader rejects anything over kMaxSnapBytes, and for a year the two
-    // disagreed with no diagnostic at either end: floor files were written and
-    // refused, and the only clue was one `refused: ... (floor regenerates
-    // pristine)` line on load, long after the cause. Now the WRITE side names it
-    // too, so the next size regression is a number at the moment it happens.
-    // [save.h] kMaxSnapBytes, [problems.md] §37.
     if (blob.size() > static_cast<std::size_t>(kMaxSnapBytes)) {
         std::fprintf(stderr,
                      "[save] floor %d snapshot is %zu B, past the %u B read cap "
@@ -1754,21 +2161,11 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (crc32(bytes + kFloorHeaderWire, blobBytes) != crc)
         return fail(SaveError::BadChecksum);
 
-    // v3-мета: ключ модуля + секции сущностей, геометрия хвостом. Ворота
-    // КЛЮЧА и СУЩНОСТЕЙ — до первого касания мира (закон 4 — «полуслияние
-    // запрещено»): сущности парсятся в локалы, мир штампуется последним.
-    // ЧЕСТНАЯ ГРАНИЦА гарантии (аудит F, №7): CRC-валидный, но враждебно
-    // сформированный ГЕОМЕТРИЧЕСКИЙ хвост может упасть посреди
-    // apply_floor_snapshot, который штампует по ходу парса (его же
-    // контракт) — вызывающий обязан считать false «перегенерируй», что
-    // боевой путь и делает (build_world_half → generate_floor, clear-to-air).
     const std::uint8_t* p = bytes + kFloorHeaderWire;
     std::size_t left = blobBytes;
     Reader br(p, left);
     std::uint8_t kind = 0;
     std::uint32_t seed = 0, genVersion = 0;
-    // Reader без границы? — br создан на весь blob; счётчики ниже вычитаются
-    // из left вручную, любой недобор = SizeMismatch до касания мира.
     if (left < 9) return fail(SaveError::SizeMismatch);
     br.u8(kind);
     br.u32(seed);
@@ -1790,11 +2187,7 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
     ents.props.resize(cnt);
     for (PropRecord& rec : ents.props) {
-        // Ширина строки зависит от флага — сперва байты фикс-части.
         if (!take(kPropRecWire)) return fail(SaveError::SizeMismatch);
-        // Флаг лежит третьим байтом строки; читать придётся визитёром, но
-        // контейнерный хвост надо учесть в left ДО visit (Reader сам границ
-        // не держит). Подглядываем флаг напрямую: propId(2) + flags(1).
         const std::uint8_t fl = br.peek(2);
         if ((fl & kPropRecHasContainer) &&
             !take(kPropRecContainerWire))
@@ -1828,7 +2221,6 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (!take(static_cast<std::size_t>(cnt) * 8)) return fail(SaveError::SizeMismatch);
     ents.powerKeys.resize(cnt);
     for (std::uint64_t& kkey : ents.powerKeys) br.u64(kkey);
-    // v5: репутация комнат.
     if (!take(4)) return fail(SaveError::SizeMismatch);
     br.u32(cnt);
     if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
@@ -1840,15 +2232,31 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
         rep = static_cast<std::int16_t>(u);
     }
 
-    // Геометрия — остаток blob, последним касанием.
+    // Геометрия — остаток blob. Валидируем ВЕСЬ поток ДО касания `w`
+    // (атомарность отказа).
     const std::size_t geoOff = blobBytes - left;
-    if (!apply_floor_snapshot(w, p + geoOff, left, floorOut))
+    std::int32_t snapFloor = 0;
+    std::uint8_t mode = 0;
+    if (!validate_snapshot_blob(p + geoOff, left, &snapFloor, &mode))
         return fail(SaveError::SizeMismatch);
-    // Агрегатов сред здесь больше НЕТ: этап «оживление» был restore-веткой
-    // одного из четырёх полных обходов объёма и переехал в единственный обход
-    // рождения этажа ([world/floor_awaken.h]), общий обеим веткам. Асимметрия
-    // «restore считает агрегат, generate считает его сам» была швом, на
-    // котором терялся закон.
+
+    if (mode == kSnapModeDelta) {
+        const FloorModuleKey fileKey{kind, seed, genVersion};
+        if (!valid_module_key_for_delta(&fileKey))
+            return fail(SaveError::ModuleChanged);
+        const FloorKind fk = static_cast<FloorKind>(kind);
+        const FloorSpec& spec = floor_spec(fk);
+        floor_declare_rules(w, snapFloor, spec, seed);
+        generate_floor(w, snapFloor, spec, seed);
+        floor_apply_rules(w, snapFloor, spec, seed);
+        settle_uniform_pages(w);
+        if (!apply_floor_snapshot(w, p + geoOff, left, floorOut, &w))
+            return fail(SaveError::SizeMismatch);
+    } else {
+        if (!apply_floor_snapshot(w, p + geoOff, left, floorOut, nullptr))
+            return fail(SaveError::SizeMismatch);
+    }
+
     if (entsOut) *entsOut = std::move(ents);
     return true;
 }

@@ -34,8 +34,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility> // std::move — перемещение пула страниц (§9.4 ход C)
 #include <vector>
@@ -163,6 +165,45 @@ public:
         pageOf_[ci] = kNoPage;
     }
 
+    // Быстрая проверка однородности страницы (matwej.md §9.4): 128 слов u64
+    // для 2-байтовых типов (CellType) или 192 слова u64 (64 × 3) для
+    // 3-байтовых (StainRGB) через memcpy без reinterpret_cast и алиасинга.
+    static bool is_page_uniform(const T* v) {
+        const T first = v[0];
+        if constexpr (sizeof(T) == 2 &&
+                      std::has_unique_object_representations_v<T> &&
+                      (kSubVoxels % 4) == 0) {
+            std::uint16_t u16 = 0;
+            std::memcpy(&u16, &first, sizeof(u16));
+            const std::uint64_t pat =
+                static_cast<std::uint64_t>(u16) * 0x0001000100010001ull;
+            for (int i = 0; i < kSubVoxels; i += 4) {
+                std::uint64_t w = 0;
+                std::memcpy(&w, v + i, sizeof(w));
+                if (w != pat) return false;
+            }
+            return true;
+        } else if constexpr (sizeof(T) == 3 &&
+                             std::has_unique_object_representations_v<T> &&
+                             (kSubVoxels % 8) == 0) {
+            std::uint8_t buf[24];
+            for (int k = 0; k < 8; ++k) std::memcpy(buf + k * 3, &first, 3);
+            std::uint64_t pat[3];
+            std::memcpy(pat, buf, 24);
+            for (int i = 0; i < kSubVoxels; i += 8) {
+                std::uint64_t w[3];
+                std::memcpy(w, v + i, 24);
+                if (w[0] != pat[0] || w[1] != pat[1] || w[2] != pat[2])
+                    return false;
+            }
+            return true;
+        } else {
+            for (int i = 1; i < kSubVoxels; ++i)
+                if (!(v[i] == first)) return false;
+            return true;
+        }
+    }
+
     // If every sub-voxel in the page holds the same value, drop the page and
     // report that value (so the caller can fold it into its per-cell base).
     // Returns false — and leaves the page alone — for uniform-already or
@@ -171,10 +212,8 @@ public:
         const std::uint32_t p = pageOf_[ci];
         if (p == kNoPage) return false;
         const T* v = pages_[p].v;
-        const T first = v[0];
-        for (int i = 1; i < kSubVoxels; ++i)
-            if (!(v[i] == first)) return false;
-        if (uniform) *uniform = first;
+        if (!is_page_uniform(v)) return false;
+        if (uniform) *uniform = v[0];
         drop_page(ci);
         return true;
     }

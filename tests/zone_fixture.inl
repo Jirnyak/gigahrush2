@@ -44,8 +44,7 @@ inline void arm_zones_one(giga::game::ZoneNav& zn) {
     zn.graph.zones = 1;
     zn.graph.offset = {0u, 0u};  // степень ноль: соседок нет
     zn.graph.nbr.clear();
-    zn.dist.zones = 1;
-    zn.dist.d = {0};
+    game::bake_zone_dist(zn.graph, zn.dist);
     zn.flow.planes = 1;
     zn.flow.dir.assign(kMacroCells, game::kZoneFlowNone);
 }
@@ -74,8 +73,7 @@ inline void arm_zones_plus_x(giga::game::ZoneNav& zn) {
     zn.graph.zones = 2;
     zn.graph.offset = {0u, 1u, 2u};
     zn.graph.nbr = {static_cast<RoomId>(2), static_cast<RoomId>(1)};
-    zn.dist.zones = 2;
-    zn.dist.d = {0, 1, 1, 0};
+    game::bake_zone_dist(zn.graph, zn.dist);
     zn.flow.planes = 1;
     zn.flow.dir.assign(kMacroCells, 1);  // слот 0 = соседка, kNavDir[1] = +x
 }

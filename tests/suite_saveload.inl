@@ -53,6 +53,7 @@
 #include "world/materials.h"    // kMatRubble, kMatConcrete, kMatWater
 #include "world/level_stack.h"
 #include "world/medium.h"       // medium_mobile_data — подвижность по СТРОКЕ
+#include "world/stain.h"        // stain_paint, stain_splat, kStainFieldName
 #include "world/world.h"
 
 namespace saveload_test {
@@ -2628,6 +2629,350 @@ static void corpse_keeps_its_height_across_a_revisit() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Инкремент E (matwej.md §17.4, §21 E): дельта этажа вместо 158 МиБ слепка
+// ---------------------------------------------------------------------------
+// Гейт 1: генератор обязан быть бит-в-бит детерминированным по (kind, number,
+// seed), иначе дельта относительно повторной генерации лжёт.
+// Гейт 2: файл нетронутого этажа <= 100 КиБ (против прежних ~158 МиБ).
+// Гейт 3: полный round-trip после карва, среды, покраски и пятен (stain) —
+// побитовая идентичность MacroGrid, SubField<CellType> и SubField<StainRGB>,
+// плюс атомарный отказ при битой дельте или чужой genVersion.
+static void floor_delta_persistence_gates() {
+    auto fnv64_mix = [](std::uint64_t h, const void* data, std::size_t bytes) {
+        const auto* p = static_cast<const std::uint8_t*>(data);
+        for (std::size_t i = 0; i < bytes; ++i) {
+            h ^= static_cast<std::uint64_t>(p[i]);
+            h *= 0x100000001B3ull;
+        }
+        return h;
+    };
+    struct WorldHashes {
+        std::uint64_t types = 0;
+        std::uint64_t masks = 0;
+        std::uint64_t mats = 0;
+    };
+    auto hash_world = [&](const giga::World& w) -> WorldHashes {
+        WorldHashes out;
+        out.types = 0xCBF29CE484222325ull;
+        out.masks = 0xCBF29CE484222325ull;
+        out.mats = 0xCBF29CE484222325ull;
+        const auto& types = w.grid().types();
+        const auto& masks = w.grid().masks();
+        out.types = fnv64_mix(out.types, types.data(),
+                              types.size() * sizeof(giga::CellType));
+        out.masks = fnv64_mix(out.masks, masks.data(),
+                              masks.size() * sizeof(giga::SubMask));
+        const auto* mats =
+            w.subfields().find<giga::CellType>(giga::kSubMaterialName);
+        for (std::size_t ci = 0; ci < giga::kMacroCells; ++ci) {
+            const giga::CellType* pg = mats ? mats->page(ci) : nullptr;
+            if (!pg) {
+                const std::uint8_t tag = 0u;
+                out.mats = fnv64_mix(out.mats, &tag, 1);
+                out.mats = fnv64_mix(out.mats, &types[ci], sizeof(giga::CellType));
+            } else {
+                const std::uint8_t tag = 1u;
+                out.mats = fnv64_mix(out.mats, &tag, 1);
+                out.mats = fnv64_mix(out.mats, pg,
+                                     giga::kSubVoxels * sizeof(giga::CellType));
+            }
+        }
+        return out;
+    };
+
+    // --- 1. Пин детерминизма генератора (все три геометрии) ---------------
+    struct Case {
+        FloorKind kind;
+        int number;
+        unsigned seed;
+    };
+    const Case cases[] = {
+        {FloorKind::Residential, -2, 0x12345678u},
+        {FloorKind::Blame, 5, 0x87654321u},
+        {FloorKind::Khrushi, 6, 0xCAFEBABEu},
+    };
+    for (const Case& c : cases) {
+        giga::World a;
+        floor_declare_rules(a, c.number, floor_spec(c.kind), c.seed);
+        generate_floor(a, c.number, floor_spec(c.kind), c.seed);
+
+        // Предварительно загрязняем `b` другим модулем, чтобы доказать чистый
+        // перезапуск поверх переработанного слота LevelStack.
+        giga::World b;
+        generate_floor(b, 13, floor_spec(FloorKind::Blame), 0xDEADBEEFu);
+        floor_declare_rules(b, c.number, floor_spec(c.kind), c.seed);
+        generate_floor(b, c.number, floor_spec(c.kind), c.seed);
+
+        const WorldHashes ha = hash_world(a);
+        const WorldHashes hb = hash_world(b);
+        CHECK(ha.types == hb.types);
+        CHECK(ha.masks == hb.masks);
+        CHECK(ha.mats == hb.mats);
+        CHECK(a.grid().types() == b.grid().types());
+        CHECK(std::memcmp(a.grid().masks().data(), b.grid().masks().data(),
+                          a.grid().masks().size() * sizeof(giga::SubMask)) == 0);
+
+        // Дискриминация: соседний сид обязан давать другой мир.
+        giga::World diff;
+        generate_floor(diff, c.number, floor_spec(c.kind), c.seed ^ 1u);
+        const WorldHashes hd = hash_world(diff);
+        CHECK(ha.types != hd.types || ha.masks != hd.masks);
+    }
+
+    // --- 2. Гейт размера нетронутого этажа (<= 100 КиБ) -------------------
+    for (const Case& c : cases) {
+        const FloorModuleKey key{static_cast<std::uint8_t>(c.kind), c.seed,
+                                 module_gen_version(c.kind)};
+        {
+            giga::World pristine;
+            floor_declare_rules(pristine, c.number, floor_spec(c.kind), c.seed);
+            generate_floor(pristine, c.number, floor_spec(c.kind), c.seed);
+            std::vector<std::uint8_t> file;
+            floor_file_write(pristine, c.number, file, nullptr, &key);
+            std::fprintf(stderr,
+                         "[delta] pristine %s floor %d: %zu B\n",
+                         floor_spec(c.kind).name, c.number, file.size());
+            CHECK(file.size() > kFloorHeaderWire);
+            CHECK(file.size() <= 100u * 1024u);
+        }
+        {
+            // Боевой жизненный цикл входа/выхода: rules + awaken + frontier +
+            // settle_uniform_pages — файл обязан оставаться <= 100 КиБ.
+            giga::World visited;
+            floor_declare_rules(visited, c.number, floor_spec(c.kind), c.seed);
+            generate_floor(visited, c.number, floor_spec(c.kind), c.seed);
+            floor_apply_rules(visited, c.number, floor_spec(c.kind), c.seed);
+            giga::floor_awaken(visited);
+            giga::floor_open_frontier(visited);
+            giga::settle_uniform_pages(visited);
+            std::vector<std::uint8_t> file;
+            floor_file_write(visited, c.number, file, nullptr, &key);
+            std::fprintf(stderr,
+                         "[delta] visited-untouched %s floor %d: %zu B\n",
+                         floor_spec(c.kind).name, c.number, file.size());
+            CHECK(file.size() <= 100u * 1024u);
+        }
+    }
+
+    // --- 3. Round-trip после карва, среды, покраски и пятен (stain) -------
+    const FloorKind rtKind = FloorKind::Residential;
+    const int rtFloor = -4;
+    const unsigned rtSeed = 0x1337BEEFu;
+    const FloorModuleKey rtKey{static_cast<std::uint8_t>(rtKind), rtSeed,
+                               module_gen_version(rtKind)};
+    giga::World live;
+    floor_declare_rules(live, rtFloor, floor_spec(rtKind), rtSeed);
+    generate_floor(live, rtFloor, floor_spec(rtKind), rtSeed);
+    floor_apply_rules(live, rtFloor, floor_spec(rtKind), rtSeed);
+    giga::floor_awaken(live);
+    giga::floor_open_frontier(live);
+    stamp_lift_protection(live);
+
+    // Находим реальную непустую твёрдую клетку (не под щитом лифта) и карвим её:
+    // на Residential стены и перекрытия тонкие (частичная маска), сплошные — под щитом.
+    int carveCx = -1, carveCy = -1, carveCz = -1;
+    for (int z = 2; z < kMacroDim - 2 && carveCx < 0; ++z) {
+        for (int y = 0; y < kMacroDim && carveCx < 0; ++y) {
+            for (int x = 0; x < kMacroDim && carveCx < 0; ++x) {
+                const std::size_t ci = giga::macro_index(x, y, z);
+                if (!live.grid().masks()[ci].empty() &&
+                    !giga::material_is_medium(live.grid().types()[ci]) &&
+                    !live.masks().shielded_cell(ci)) {
+                    carveCx = x;
+                    carveCy = y;
+                    carveCz = z;
+                }
+            }
+        }
+    }
+    CHECK(carveCx >= 0);
+    giga::CarveScratch scratch;
+    giga::CarveResult res;
+    const giga::CarveOp carveOp{
+        (static_cast<float>(carveCx) + 0.5f) * giga::kCellSize,
+        (static_cast<float>(carveCy) + 0.5f) * giga::kCellSize,
+        (static_cast<float>(carveCz) + 0.5f) * giga::kCellSize,
+        1.5f, 0xFFFF, 0xABCDEu, 512};
+    CHECK(giga::carve_sphere(live, carveOp, scratch, res) > 0);
+    CHECK(!res.destroyed.empty());
+
+    // Покраска (на реальной бетонной опоре), лужа воды и однородная вода + unlaid рыхлое (S16.10).
+    live.grid().fill_cell(22, 22, 10, giga::kMatConcrete);
+    for (int sx = 0; sx < 4; ++sx)
+        giga::set_sub_material(live, 22, 22, 10, sx, 1, 2, giga::kMatPlaster);
+    live.grid().clear_cell(23, 22, 10);
+    for (int sx = 0; sx < 6; ++sx)
+        giga::set_sub_material(live, 23, 22, 10, sx, 0, 0, giga::kMatWater);
+    live.grid().clear_cell(61, 61, 61);
+    live.grid().set_cell(61, 61, 61, giga::kMatWater);
+
+    live.grid().clear_cell(62, 61, 61);
+    const std::size_t rubbleCi = giga::macro_index(62, 61, 61);
+    {
+        giga::CellType* pg = giga::materialize_sub_page(live, rubbleCi);
+        CHECK(pg != nullptr);
+        for (int b = 0; b < giga::kSubVoxels; ++b) pg[b] = giga::kMatRubble;
+        for (int b = 0; b < giga::kSubVoxels / 2; ++b)
+            live.grid().mask(62, 61, 61).set(b);
+    }
+
+    // Пятно крови на твёрдом атоме выкарвленной/соседней плиты.
+    const std::uint32_t stainCi = giga::stain_paint(
+        live, carveCx * giga::kSubDim, carveCy * giga::kSubDim,
+        carveCz * giga::kSubDim, giga::kStainBlood);
+    if (stainCi == UINT32_MAX) {
+        // Если угол клетки был вырезан, красим соседний гарантированный бетон.
+        live.grid().fill_cell(21, 22, 10, giga::kMatConcrete);
+        CHECK(giga::stain_paint(live, 21 * giga::kSubDim, 22 * giga::kSubDim,
+                                10 * giga::kSubDim, giga::kStainBlood) !=
+              UINT32_MAX);
+    }
+    const auto* liveStains =
+        live.subfields().find<giga::StainRGB>(giga::kStainFieldName);
+    CHECK(liveStains != nullptr && liveStains->pages_in_use() >= 1u);
+
+    giga::settle_uniform_pages(live);
+
+    std::vector<std::uint8_t> deltaFile;
+    floor_file_write(live, rtFloor, deltaFile, nullptr, &rtKey);
+    std::fprintf(stderr, "[delta] mutated Residential floor %d: %zu B\n",
+                 rtFloor, deltaFile.size());
+    CHECK(deltaFile.size() <= 100u * 1024u);
+
+    const std::vector<giga::CellType> typesExpected = live.grid().types();
+    const std::vector<giga::SubMask> masksExpected = live.grid().masks();
+
+    // Восстанавливаем в предварительно загрязнённый World (включая чужие пятна!).
+    giga::World twin;
+    generate_floor(twin, 6, floor_spec(FloorKind::Khrushi), 99u);
+    twin.grid().fill_cell(5, 5, 5, giga::kMatConcrete);
+    CHECK(giga::stain_paint(twin, 5 * giga::kSubDim, 5 * giga::kSubDim,
+                            5 * giga::kSubDim, giga::kStainUrine) !=
+          UINT32_MAX);
+
+    std::int32_t floorOut = 0;
+    SaveError err = SaveError::Count;
+    CHECK(floor_file_read(deltaFile.data(), deltaFile.size(), twin, &floorOut,
+                          &err, &rtKey, nullptr));
+    CHECK(err == SaveError::None);
+    CHECK(floorOut == rtFloor);
+
+    // Побитовое совпадение всего MacroGrid.
+    CHECK(std::memcmp(typesExpected.data(), twin.grid().types().data(),
+                      typesExpected.size() * sizeof(giga::CellType)) == 0);
+    CHECK(std::memcmp(masksExpected.data(), twin.grid().masks().data(),
+                      masksExpected.size() * sizeof(giga::SubMask)) == 0);
+
+    // Побитовое совпадение всех эффективных материалов SubField<CellType>.
+    const auto* matsA =
+        live.subfields().find<giga::CellType>(giga::kSubMaterialName);
+    const auto* matsB =
+        twin.subfields().find<giga::CellType>(giga::kSubMaterialName);
+    std::size_t matMismatches = 0;
+    for (std::size_t ci = 0; ci < giga::kMacroCells; ++ci) {
+        const giga::CellType* pgA = matsA ? matsA->page(ci) : nullptr;
+        const giga::CellType* pgB = matsB ? matsB->page(ci) : nullptr;
+        if (!pgA && !pgB) continue;
+        if (pgA && pgB) {
+            if (std::memcmp(pgA, pgB,
+                            giga::kSubVoxels * sizeof(giga::CellType)) != 0)
+                ++matMismatches;
+            continue;
+        }
+        const giga::CellType baseT = typesExpected[ci];
+        const giga::SubMask& baseM = masksExpected[ci];
+        const bool uniformMed =
+            baseM.empty() && giga::material_is_medium(baseT);
+        for (int b = 0; b < giga::kSubVoxels; ++b) {
+            const giga::CellType fallback =
+                (uniformMed || baseM.test(b)) ? baseT : giga::kCellAir;
+            const giga::CellType va = pgA ? pgA[b] : fallback;
+            const giga::CellType vb = pgB ? pgB[b] : fallback;
+            if (va != vb) {
+                ++matMismatches;
+                break;
+            }
+        }
+    }
+    CHECK(matMismatches == 0u);
+
+    // Точечные проверки карва, покраски, среды и unlaid-рыхлого.
+    {
+        const giga::CarvedVoxel& hole = res.destroyed.front();
+        const int hx = static_cast<int>(hole.cell & 127u);
+        const int hy = static_cast<int>((hole.cell >> 7) & 127u);
+        const int hz = static_cast<int>((hole.cell >> 14) & 127u);
+        const int hsx = hole.bit & 7, hsy = (hole.bit >> 3) & 7,
+                  hsz = (hole.bit >> 6) & 7;
+        CHECK(giga::sub_material_at(twin, hx, hy, hz, hsx, hsy, hsz) ==
+              giga::sub_material_at(live, hx, hy, hz, hsx, hsy, hsz));
+    }
+    CHECK(giga::sub_material_at(twin, 22, 22, 10, 2, 1, 2) ==
+          giga::kMatPlaster);
+    CHECK(giga::sub_material_at(twin, 23, 22, 10, 3, 0, 0) == giga::kMatWater);
+    CHECK(giga::sub_material_at(twin, 61, 61, 61, 4, 4, 4) == giga::kMatWater);
+    CHECK(giga::sub_material_at(twin, 62, 61, 61, 7, 7, 7) == giga::kMatRubble);
+
+    // Пятна (stain) пережили дельта-раундтрип, а мусорное пятно `twin` стёрлось.
+    const auto* twinStains =
+        twin.subfields().find<giga::StainRGB>(giga::kStainFieldName);
+    CHECK(twinStains != nullptr);
+    std::size_t stainMismatches = 0;
+    for (std::size_t ci = 0; ci < giga::kMacroCells; ++ci) {
+        const giga::StainRGB* sa = liveStains ? liveStains->page(ci) : nullptr;
+        const giga::StainRGB* sb = twinStains ? twinStains->page(ci) : nullptr;
+        const bool emptyA =
+            !sa || (giga::SubField<giga::StainRGB>::is_page_uniform(sa) &&
+                    sa[0] == giga::StainRGB{});
+        const bool emptyB =
+            !sb || (giga::SubField<giga::StainRGB>::is_page_uniform(sb) &&
+                    sb[0] == giga::StainRGB{});
+        if (emptyA && emptyB) continue;
+        if (emptyA != emptyB ||
+            std::memcmp(sa, sb, giga::kSubVoxels * sizeof(giga::StainRGB)) != 0)
+            ++stainMismatches;
+    }
+    CHECK(stainMismatches == 0u);
+
+    giga::floor_awaken(twin);
+    CHECK(giga::audit_sub_pages(twin).violations() == 0u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(23, 22, 10)) == 6u);
+    CHECK(giga::medium_level_at(twin, giga::macro_index(61, 61, 61)) == 512u);
+
+    // Негативные проверки:
+    // 1) apply_floor_snapshot на дельте без baseline отказывает и не трогает мир.
+    std::vector<std::uint8_t> rawBaseSnap;
+    {
+        giga::World baseW;
+        floor_declare_rules(baseW, rtFloor, floor_spec(rtKind), rtSeed);
+        generate_floor(baseW, rtFloor, floor_spec(rtKind), rtSeed);
+        snapshot_floor(live, rtFloor, rawBaseSnap, &baseW);
+        giga::World guard;
+        guard.grid().fill_cell(1, 2, 3, giga::kMatConcrete);
+        CHECK(!apply_floor_snapshot(guard, rawBaseSnap.data(),
+                                    rawBaseSnap.size(), nullptr, nullptr));
+        CHECK(guard.grid().cell(1, 2, 3) == giga::kMatConcrete);
+    }
+    // 2) Чужая genVersion внутри файла при expect == nullptr даёт ModuleChanged
+    //    и не трогает мир.
+    {
+        std::vector<std::uint8_t> badGen = deltaFile;
+        // В blob: kind(1) + seed(4) + genVersion(4) по смещению kFloorHeaderWire + 5
+        poke_u32(badGen, kFloorHeaderWire + 5u, rtKey.genVersion + 1u);
+        poke_u32(badGen, 12u,
+                 crc32_over(badGen.data() + kFloorHeaderWire,
+                            badGen.size() - kFloorHeaderWire));
+        giga::World guard;
+        guard.grid().fill_cell(1, 2, 3, giga::kMatConcrete);
+        SaveError berr = SaveError::None;
+        CHECK(!floor_file_read(badGen.data(), badGen.size(), guard, nullptr,
+                               &berr, nullptr, nullptr));
+        CHECK(berr == SaveError::ModuleChanged);
+        CHECK(guard.grid().cell(1, 2, 3) == giga::kMatConcrete);
+    }
+}
+
 } // namespace saveload_test
 
 static void test_saveload_all() {
@@ -2642,6 +2987,7 @@ static void test_saveload_all() {
     saveload_test::round_trip();
     saveload_test::macro_world_round_trips();
     saveload_test::floor_file_round_trips();
+    saveload_test::floor_delta_persistence_gates();
     saveload_test::weak_check_vs_strong_check();
     saveload_test::rejects_the_rest();
     saveload_test::floor_records_survive_a_restart();

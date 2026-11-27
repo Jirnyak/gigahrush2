@@ -22,6 +22,14 @@
 
 namespace giga::game {
 
+static_assert(kVerbNeedFood == NeedFood && kVerbNeedWater == NeedWater &&
+                  kVerbNeedSleep == NeedSleep && kVerbNeedPee == NeedPee &&
+                  kVerbNeedPoo == NeedPoo,
+              "kVerbNeed* bit masks must match NeedBit in needs.h");
+static_assert(kRoomBodiesPerCell ==
+                  (kSubDim / kBodyClearanceSub) * (kSubDim / kBodyClearanceSub),
+              "kRoomBodiesPerCell must match ceil(body_width / subvoxel) grid");
+
 namespace {
 
 // Σ спрос·вектор, делённая на тысячу ОДИН раз — на сумме. i64 в накопителе:
@@ -49,30 +57,65 @@ int cell_dist_l1(int ax, int ay, int az, int bx, int by, int bz) {
 // СПРОС
 // ---------------------------------------------------------------------------
 
-void demand_from_needs(const Needs& n, DemandE3 out[kVerbCount]) {
-    for (std::size_t v = 0; v < kVerbCount; ++v) out[v] = 0;
+void demand_from_needs_table(const Needs& n, std::size_t verbCount,
+                             const std::uint8_t* needMask,
+                             const std::uint16_t* weightE3,
+                             const std::int16_t* floorE3,
+                             const VerbId* patienceSource, DemandE3* out) {
+    if (out == nullptr || verbCount == 0) return;
     // Кривые — `needs_low_pressure`/`needs_high_pressure` из [game/needs.h], то
     // есть РОВНО те, которыми интент-арбитр судит те же самые бары. Одна
     // величина — одна кривая (см. довод о §64 в шапке needs.h), и КОЛЕНО у
-    // каждой приходит из терпения СВОЕЙ строки (S13.5): спрос по глаголу
-    // спрашивает именно тот глагол.
-    const auto e3 = [](float p) {
-        return static_cast<DemandE3>(giga::clamp01(p) * static_cast<float>(kDemandFull));
-    };
-    out[kVerbSleep] = e3(needs_low_pressure(kVerbSleep, n.sleep));
-    out[kVerbEat] = e3(needs_low_pressure(kVerbEat, n.food));
-    out[kVerbDrink] = e3(needs_low_pressure(kVerbDrink, n.water));
-    // Сортир — МАКСИМУМ двух давлений, а не сумма: одного полного мочевого
-    // достаточно, и складывать их значило бы требовать обоих сразу.
-    out[kVerbToilet] = e3(std::max(needs_high_pressure(kVerbToilet, n.pee),
-                                   needs_high_pressure(kVerbToilet, n.poo)));
-    out[kVerbWander] = kDemandWanderFloor; // S13.2: малый, но никогда не ноль
+    // каждой приходит из терпения СВОЕЙ строки (S13.5).
+    for (std::size_t v = 0; v < verbCount; ++v) {
+        const std::uint8_t mask = needMask != nullptr ? needMask[v] : 0u;
+        float p = 0.0f;
+        if (mask != 0u) {
+            const VerbId pvid = patienceSource != nullptr
+                                    ? patienceSource[v]
+                                    : static_cast<VerbId>(v);
+            if (mask & NeedFood) {
+                const float f = needs_low_pressure(pvid, n.food);
+                if (f > p) p = f;
+            }
+            if (mask & NeedWater) {
+                const float w = needs_low_pressure(pvid, n.water);
+                if (w > p) p = w;
+            }
+            if (mask & NeedSleep) {
+                const float s = needs_low_pressure(pvid, n.sleep);
+                if (s > p) p = s;
+            }
+            if (mask & NeedPee) {
+                const float u = needs_high_pressure(pvid, n.pee);
+                if (u > p) p = u;
+            }
+            if (mask & NeedPoo) {
+                const float o = needs_high_pressure(pvid, n.poo);
+                if (o > p) p = o;
+            }
+        }
+        const float wScale = weightE3 != nullptr
+                                 ? static_cast<float>(weightE3[v]) * 0.001f
+                                 : 0.0f;
+        const DemandE3 byNeed = static_cast<DemandE3>(std::lround(
+            giga::clamp01(p * wScale) * static_cast<float>(kDemandFull)));
+        const DemandE3 base = floorE3 != nullptr ? floorE3[v] : DemandE3{0};
+        out[v] = byNeed > base ? byNeed : base;
+    }
+}
+
+void demand_from_needs(const Needs& n, DemandE3 out[kVerbCount]) {
+    demand_from_needs_table(n, kVerbCount, kVerbNeedMask, kVerbDemandWeightE3,
+                            kVerbDemandFloorE3, nullptr, out);
 }
 
 void demand_add_health(float hp, float maxHp, DemandE3 out[kVerbCount]) {
-    const float p = needs_health_pressure(hp, maxHp);
-    const std::int32_t add =
-        static_cast<std::int32_t>(giga::clamp01(p) * static_cast<float>(kDemandFull));
+    const float wScale =
+        static_cast<float>(kVerbDemandWeightE3[kVerbHeal]) * 0.001f;
+    const float p = needs_health_pressure(hp, maxHp) * wScale;
+    const std::int32_t add = static_cast<std::int32_t>(
+        std::lround(giga::clamp01(p) * static_cast<float>(kDemandFull)));
     const std::int32_t sum = static_cast<std::int32_t>(out[kVerbHeal]) + add;
     out[kVerbHeal] = static_cast<DemandE3>(sum > kDemandFull ? kDemandFull : sum);
 }
@@ -128,14 +171,51 @@ int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int c
     return best;
 }
 
+std::int32_t place_crowd_cost(const FloorRooms& fr, const Room& r,
+                              int cx, int cy, int cz) {
+    if (fr.list.empty() || fr.occupants.empty()) return 0;
+    const Room* base = fr.list.data();
+    if (&r < base || &r >= base + fr.list.size()) return 0;
+    const RoomId id = static_cast<RoomId>((&r - base) + 1);
+    const std::uint16_t occ = room_occupants(fr, id);
+    if (occ == 0) return 0;
+    const bool isHere = room_at(fr, cx, cy, cz) == id;
+    const std::uint32_t others =
+        isHere ? static_cast<std::uint32_t>(occ - 1u)
+               : static_cast<std::uint32_t>(occ);
+    const std::uint32_t cap = room_capacity(r);
+    if (cap == 0 || others < cap) return 0;
+    const std::uint32_t excess = (others - cap) + 1u;
+    return static_cast<std::int32_t>(excess) * kRoomCrowdCostPerExtra;
+}
+
+void rooms_occupants_rebuild(FloorRooms& fr, const Registry& reg,
+                             LayerId layer) {
+    rooms_occupants_clear(fr);
+    if (fr.list.empty()) return;
+    auto view = reg.view<const NpcRef, const Transform>();
+    for (auto e : view) {
+        if (reg.all_of<Dead>(e)) continue;
+        const Transform& tr = view.get<const Transform>(e);
+        if (tr.layer != layer) continue;
+        const RoomId at = room_at(fr, cell_of_metres(tr.pos.x),
+                                  cell_of_metres(tr.pos.y),
+                                  cell_of_metres(tr.pos.z));
+        if (at != kNoRoom) room_occupant_add(fr, at, +1);
+        const ErrandPlan* plan = reg.try_get<ErrandPlan>(e);
+        if (plan != nullptr && plan->room != kNoRoom && plan->room != at)
+            room_occupant_add(fr, plan->room, +1);
+    }
+}
+
 std::int32_t place_cost(const FloorRooms& fr, const Room& r, int cx, int cy, int cz) {
     int tx = 0, ty = 0, tz = 0;
     const int cells = place_target_cell(fr, r, cx, cy, cz, tx, ty, tz);
     if (cells < 0) return 0;
     // ЕДИНСТВЕННОЕ МЕСТО, КУДА ПРИХОДЯТ БУДУЩИЕ ИЗДЕРЖКИ (решение владельца
-    // 2026-10-01): толпа, чужая территория, опасность — каждая одним
-    // слагаемым здесь, когда у неё появится писатель. Скорер не трогается.
-    return cells * kPlacePathCostPerCell;
+    // 2026-10-01): путь, толпа при переполнении (У1.7), в будущем территория
+    // и опасность. Скорер не трогается.
+    return cells * kPlacePathCostPerCell + place_crowd_cost(fr, r, cx, cy, cz);
 }
 
 void carried_offer(const Inventory& inv, std::int32_t out[kVerbCount]) {
@@ -164,8 +244,16 @@ PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
     std::int32_t best = carried != nullptr ? dot_e3(demand, carried) : 0;
     std::int32_t bestCost = 0;
     VerbId bestVerb = static_cast<VerbId>(kVerbCount);
-    if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz)))
-        best += place_interest(*here, demand, &bestVerb);
+    if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz))) {
+        VerbId hereVerb = static_cast<VerbId>(kVerbCount);
+        const std::int32_t hereNet =
+            place_interest(*here, demand, &hereVerb) -
+            place_crowd_cost(fr, *here, cx, cy, cz);
+        if (hereNet > 0) {
+            best += hereNet;
+            bestVerb = hereVerb;
+        }
+    }
 
     // РАДИУС ВЫВОДИТСЯ: глобальная верхняя грань интереса — храповик `maxOffer`
     // (max по комнатам, только растёт), значит ни одна комната тора не даст
@@ -274,6 +362,9 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     (void)reg.storage<Acting>();
     (void)reg.storage<Dead>();
     steer_pool_warm(reg);  // четвёртый пул — заявка ведения ([game/guide.h])
+    // Учёт занятости комнат (У1.7): перед выбором пересчитываем стоящих в
+    // комнатах и уже направленных к ним тел, а по ходу цикла добираем бронь.
+    rooms_occupants_rebuild(fr, reg, layer);
 
     // Фрейм гравитации — свойство мира, не тела, и спрашивается ОДНОЙ ДВЕРЬЮ
     // ([world/gravity.h] `steer_frame_of`): здесь стояла дословная копия того
@@ -375,6 +466,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 zone_of_body(*zones, cx, cy, cz) == plan.room ||
                 (cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
+                if (plan.room != room_at(fr, cx, cy, cz))
+                    room_occupant_add(fr, plan.room, -1);
                 plan.room = kNoRoom;
                 plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
@@ -426,6 +519,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                     ++plan.picks;
                     ++out.picked;
                     goal = room_of(fr, plan.room);
+                    if (pick.room != room_at(fr, cx, cy, cz))
+                        room_occupant_add(fr, pick.room, +1);
                 }
                 // Иначе «ничто не обгоняет место под ногами» — законный
                 // ответ, а не неудача, и дальше его обслуживает деяние.
@@ -502,6 +597,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
             if (st.fail == SteerFail::Edge) ++out.edge;
             ++out.unreachable;
+            if (plan.room != room_at(fr, cx, cy, cz))
+                room_occupant_add(fr, plan.room, -1);
             plan.room = kNoRoom;
             plan.nextPickAt = stagger();
             ++out.idle;

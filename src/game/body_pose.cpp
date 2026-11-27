@@ -12,6 +12,9 @@ namespace giga::game {
 
 namespace {
 
+inline constexpr float kPosePi = 3.14159265f;
+inline constexpr float kPoseTwoPi = 6.28318530f;
+
 vec3 axis_unit(int axis, float sign) {
     vec3 v{0.0f, 0.0f, 0.0f};
     if (axis == 0) v.x = sign;
@@ -22,6 +25,236 @@ vec3 axis_unit(int axis, float sign) {
 
 float axis_of(vec3 v, int axis) {
     return axis == 0 ? v.x : (axis == 1 ? v.y : v.z);
+}
+
+// Таблица поз по словарю глаголов (kVerbCount == 20, порядок из data/verbs.csv).
+// Единый источник для деяний нужды (`actions.csv` -> `kActionVerb`) и прямых
+// глагольных поз (`work`, `craft`, `heal`, `strike`).
+inline constexpr ActionPoseDef kVerbPoses[kVerbCount] = {
+    /* sleep  */ {0.42f, 0.28f, -0.55f, 0.15f, 0.12f, 0.04f, 2.0f, PoseMotion::Cycle, 1},
+    /* eat    */ {0.16f, 0.18f, -1.60f, 0.32f, 0.00f, 0.22f, 2.0f, PoseMotion::Cycle, 1},
+    /* drink  */ {0.08f, -0.18f, -1.75f, 0.35f, 0.00f, 0.18f, 2.0f, PoseMotion::Cycle, 1},
+    /* toilet */ {0.52f, 0.25f, -0.45f, 0.20f, -0.35f, 0.05f, 2.0f, PoseMotion::Cycle, 1},
+    /* work   */ {0.22f, 0.20f, -1.15f, 0.22f, 0.00f, 0.24f, 2.5f, PoseMotion::Cycle, 1},
+    /* heal   */ {0.38f, 0.30f, -1.35f, 0.38f, 0.00f, 0.20f, 2.5f, PoseMotion::Cycle, 1},
+    /* trade  */ {0.08f, 0.05f, -0.85f, 0.25f, 0.00f, 0.12f, 2.0f, PoseMotion::Cycle, 1},
+    /* store  */ {0.22f, 0.15f, -0.95f, 0.25f, 0.00f, 0.15f, 2.0f, PoseMotion::Cycle, 1},
+    /* social */ {0.04f, -0.05f, -0.65f, 0.18f, 0.00f, 0.18f, 2.0f, PoseMotion::Cycle, 1},
+    /* shelter*/ {0.45f, 0.25f, -0.90f, 0.30f, -0.25f, 0.00f, 0.0f, PoseMotion::Hold, 1},
+    /* patrol */ {0.00f, 0.00f, -0.25f, 0.00f, 0.00f, 0.00f, 0.0f, PoseMotion::Hold, 1},
+    /* wander */ {0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.00f, 0.0f, PoseMotion::Hold, 1},
+    /* nest   */ {0.30f, 0.20f, -0.45f, 0.15f, -0.20f, 0.00f, 0.0f, PoseMotion::Hold, 1},
+    /* hunt   */ {0.28f, -0.10f, -0.85f, 0.10f, 0.00f, 0.15f, 2.5f, PoseMotion::Cycle, 1},
+    /* haul   */ {0.20f, 0.10f, -1.05f, 0.28f, 0.00f, 0.06f, 2.0f, PoseMotion::Cycle, 1},
+    /* profit */ {0.15f, 0.15f, -0.95f, 0.25f, 0.00f, 0.15f, 2.0f, PoseMotion::Cycle, 1},
+    /* strike */ {0.22f, 0.08f, -1.45f, 0.12f, 0.00f, 0.00f, 0.0f, PoseMotion::Strike, 0},
+    /* kill   */ {0.25f, 0.10f, -1.50f, 0.15f, 0.00f, 0.00f, 0.0f, PoseMotion::Strike, 0},
+    /* rob    */ {0.30f, 0.20f, -1.10f, 0.30f, 0.00f, 0.20f, 2.5f, PoseMotion::Cycle, 1},
+    /* craft  */ {0.25f, 0.24f, -1.25f, 0.32f, 0.00f, 0.22f, 2.5f, PoseMotion::Cycle, 1},
+};
+
+// Боевые действия без глагола нужды (`kActionVerb[id] >= kVerbCount`).
+inline constexpr ActionPoseDef kCombatActionPoses[kActionCount] = {
+    /* shoot  */ {0.08f, 0.05f, -1.55f, 0.12f, 0.00f, 0.00f, 0.0f, PoseMotion::Hold, 0},
+    /* reload */ {0.15f, 0.22f, -1.20f, 0.35f, 0.00f, 0.22f, 2.0f, PoseMotion::Cycle, 0},
+    /* hurl   */ {0.18f, 0.05f, -1.45f, 0.10f, 0.00f, 0.00f, 0.0f, PoseMotion::Strike, 0},
+    /* swing  */ {0.22f, 0.08f, -1.45f, 0.12f, 0.00f, 0.00f, 0.0f, PoseMotion::Strike, 0},
+    /* maul   */ {0.24f, 0.08f, -1.45f, 0.16f, 0.00f, 0.00f, 0.0f, PoseMotion::Strike, 1},
+    /* shot   */ {0.10f, 0.05f, -1.50f, 0.20f, 0.00f, 0.00f, 0.0f, PoseMotion::Hold, 1},
+    /* rest   */ {},
+    /* meal   */ {},
+    /* sip    */ {},
+    /* relief */ {},
+};
+
+inline constexpr ActionPoseDef kEmptyPose{};
+
+struct PoseAngles {
+    float torsoPitch = 0.0f;
+    float headPitch = 0.0f;
+    float armPitchL = 0.0f;
+    float armYawL = 0.0f;
+    float armPitchR = 0.0f;
+    float armYawR = 0.0f;
+    float legPitch = 0.0f;
+};
+
+struct DefSample {
+    float torso = 0.0f;
+    float head = 0.0f;
+    float arm = 0.0f;
+    float inward = 0.0f;
+    float leg = 0.0f;
+};
+
+DefSample eval_def_at(const ActionPoseDef& def, std::uint16_t phaseE3) {
+    DefSample s;
+    const std::uint16_t clamped = phaseE3 > 1000u ? 1000u : phaseE3;
+    const float u = static_cast<float>(clamped) * 0.001f;
+    // Плавный вход/выход на краях окна [0..0.15] и [0.85..1.0]: поза в
+    // начале и в конце окна сходится к покою/походке без скачка.
+    const float edge = std::fmin(u, 1.0f - u);
+    const float ramp = smoothstep01(0.0f, 0.15f, edge);
+
+    switch (def.motion) {
+        case PoseMotion::Hold: {
+            s.torso = def.torsoPitch * ramp;
+            s.head = def.headPitch * ramp;
+            s.arm = def.armPitch * ramp;
+            s.inward = def.armInward * ramp;
+            s.leg = def.legPitch * ramp;
+            break;
+        }
+        case PoseMotion::Cycle: {
+            const float osc =
+                std::sin(kPoseTwoPi * def.cycleFreq * u) * ramp;
+            s.torso = def.torsoPitch * ramp + 0.20f * def.cycleAmp * osc;
+            s.head = def.headPitch * ramp;
+            s.arm = def.armPitch * ramp + def.cycleAmp * osc;
+            s.inward = def.armInward * ramp;
+            s.leg = def.legPitch * ramp;
+            break;
+        }
+        case PoseMotion::Strike: {
+            // Замах назад на первой четверти окна, бросок/удар вперёд в середине
+            // и возврат к покою в конце.
+            const float wave = (0.65f * std::sin(kPosePi * u) -
+                                0.30f * std::sin(kPoseTwoPi * u)) *
+                               ramp;
+            s.torso = def.torsoPitch * wave;
+            s.head = def.headPitch * wave;
+            s.arm = def.armPitch * wave;
+            s.inward = def.armInward * ramp;
+            s.leg = def.legPitch * wave;
+            break;
+        }
+    }
+    return s;
+}
+
+PoseAngles eval_acting_angles(const ActingPoseState& act) {
+    PoseAngles out;
+    if (act.body.active) {
+        const ActionPoseDef& def = action_pose_def(act.body.action);
+        const DefSample s = eval_def_at(def, act.body.phaseE3);
+        out.torsoPitch = s.torso;
+        out.headPitch = s.head;
+        out.legPitch = s.leg;
+        if (def.bothArms != 0) {
+            out.armPitchL = s.arm;
+            out.armYawL = -s.inward;
+            out.armPitchR = s.arm;
+            out.armYawR = s.inward;
+        } else {
+            out.armPitchR = s.arm;
+            out.armYawR = s.inward;
+            out.armPitchL = -0.25f * s.arm;
+        }
+    }
+    if (act.handL.active) {
+        const ActionPoseDef& def = action_pose_def(act.handL.action);
+        const DefSample s = eval_def_at(def, act.handL.phaseE3);
+        out.armPitchL = s.arm;
+        out.armYawL = -s.inward;
+        if (!act.body.active) {
+            out.torsoPitch += 0.5f * s.torso;
+            out.headPitch += 0.5f * s.head;
+        }
+    }
+    if (act.handR.active) {
+        const ActionPoseDef& def = action_pose_def(act.handR.action);
+        const DefSample s = eval_def_at(def, act.handR.phaseE3);
+        out.armPitchR = s.arm;
+        out.armYawR = s.inward;
+        if (!act.body.active) {
+            out.torsoPitch += 0.5f * s.torso;
+            out.headPitch += 0.5f * s.head;
+        }
+    }
+    return out;
+}
+
+std::uint16_t build_form_pose(FormId form, BodyScale s, const BodyFrame& f,
+                              vec3 rootPos, const GaitState& g,
+                              const PoseAngles& pa, bool hasArmL, bool hasArmR,
+                              PartPose* out) {
+    const FormDef& def = form_def(form);
+    const quat qBody = body_frame_quat(f);
+    const float amp = std::isfinite(g.amp) ? g.amp : 0.0f;
+    const float phase = std::isfinite(g.phase) ? g.phase : 0.0f;
+    const float swing =
+        amp * gait_swing_max(form) * std::sin(kPoseTwoPi * phase);
+    const float standBlend = std::fmax(0.0f, 1.0f - clamp01(amp));
+
+    for (std::uint16_t i = 0; i < def.count; ++i) {
+        const FormSegDef& sd = kFormSegs[def.first + i];
+        PartPose& p = out[i];
+        if (sd.prim == FormPrim::Sphere) {
+            const float r = sd.sx * s.H;
+            p.half = vec3{r, r, r};
+        } else {
+            p.half = vec3{sd.sx * s.W, sd.sy * s.W, sd.sz * s.H};
+        }
+        if (sd.parent == kFormNoParent) {
+            p.q = qBody;
+            p.pos = rootPos + f.fwd * (sd.ox * s.W) + f.left * (sd.oy * s.W) +
+                    f.up * (sd.oz * s.H);
+            continue;
+        }
+        // Сторона — знак сустава поперёк: левая сторона кадра имеет jy > 0.
+        const float side = sd.jy > 0.0f ? 1.0f : (sd.jy < 0.0f ? -1.0f : 0.0f);
+        float pitch = 0.0f;
+        float yaw = 0.0f;
+        switch (sd.partRole) {
+            case FormRole::Torso:
+                pitch = pa.torsoPitch;
+                break;
+            case FormRole::Head:
+                pitch = pa.headPitch;
+                break;
+            case FormRole::Leg:
+                pitch = side * swing + pa.legPitch * standBlend;
+                break;
+            case FormRole::Arm:
+                if (side > 0.0f) {
+                    if (hasArmL) {
+                        pitch = pa.armPitchL;
+                        yaw = pa.armYawL;
+                    } else {
+                        pitch = -side * swing;
+                    }
+                } else if (side < 0.0f) {
+                    if (hasArmR) {
+                        pitch = pa.armPitchR;
+                        yaw = pa.armYawR;
+                    } else {
+                        pitch = -side * swing;
+                    }
+                } else {
+                    pitch = pa.armPitchR;
+                    yaw = pa.armYawR;
+                }
+                break;
+            case FormRole::Root:
+            case FormRole::Chain:
+            case FormRole::Count:
+                break;
+        }
+        // Поворот вокруг оси «лево» (y части) и при необходимости сведение рук
+        // вокруг оси «верх» (z части). При yaw == 0 совпадает с походкой.
+        quat local{0.0f, std::sin(0.5f * pitch), 0.0f, std::cos(0.5f * pitch)};
+        if (yaw != 0.0f) {
+            const quat qYaw{0.0f, 0.0f, std::sin(0.5f * yaw),
+                            std::cos(0.5f * yaw)};
+            local = quat_mul(qYaw, local);
+        }
+        const PartPose& par = out[sd.parent];
+        const PartJoint pj = form_part_joint(form, s, i);
+        p.q = quat_normalize(quat_mul(par.q, local));
+        const vec3 joint = par.pos + quat_rotate(par.q, pj.inParent);
+        p.pos = joint - quat_rotate(p.q, pj.inPart);
+    }
+    return def.count;
 }
 
 } // namespace
@@ -108,42 +341,52 @@ float gait_swing_max(FormId form) {
     return 0.0f;
 }
 
+const ActionPoseDef& verb_pose_def(VerbId v) {
+    return v < kVerbCount ? kVerbPoses[v] : kEmptyPose;
+}
+
+const ActionPoseDef& action_pose_def(ActionId id) {
+    if (id >= kActionCount) return kEmptyPose;
+    const VerbId v = kActionVerb[id];
+    if (v < kVerbCount) return kVerbPoses[v];
+    return kCombatActionPoses[id];
+}
+
+std::uint16_t form_action_pose(FormId form, BodyScale s, const BodyFrame& f,
+                               vec3 rootPos, const GaitState& g,
+                               const ActingPoseState& act, PartPose* out) {
+    const PoseAngles pa = eval_acting_angles(act);
+    const bool hasArmL = act.handL.active || act.body.active;
+    const bool hasArmR = act.handR.active || act.body.active;
+    return build_form_pose(form, s, f, rootPos, g, pa, hasArmL, hasArmR, out);
+}
+
+std::uint16_t form_verb_pose(FormId form, BodyScale s, const BodyFrame& f,
+                             vec3 rootPos, const GaitState& g, VerbId verb,
+                             std::uint16_t phaseE3, PartPose* out) {
+    const ActionPoseDef& def = verb_pose_def(verb);
+    const DefSample ds = eval_def_at(def, phaseE3);
+    PoseAngles pa;
+    pa.torsoPitch = ds.torso;
+    pa.headPitch = ds.head;
+    pa.legPitch = ds.leg;
+    if (def.bothArms != 0) {
+        pa.armPitchL = ds.arm;
+        pa.armYawL = -ds.inward;
+        pa.armPitchR = ds.arm;
+        pa.armYawR = ds.inward;
+    } else {
+        pa.armPitchR = ds.arm;
+        pa.armYawR = ds.inward;
+        pa.armPitchL = -0.25f * ds.arm;
+    }
+    const bool active = verb < kVerbCount;
+    return build_form_pose(form, s, f, rootPos, g, pa, active, active, out);
+}
+
 std::uint16_t form_gait_pose(FormId form, BodyScale s, const BodyFrame& f,
                              vec3 rootPos, const GaitState& g, PartPose* out) {
-    const FormDef& def = form_def(form);
-    const quat qBody = body_frame_quat(f);
-    const float swing = g.amp * gait_swing_max(form) *
-                        std::sin(6.2831853f * g.phase);
-    for (std::uint16_t i = 0; i < def.count; ++i) {
-        const FormSegDef& sd = kFormSegs[def.first + i];
-        PartPose& p = out[i];
-        if (sd.prim == FormPrim::Sphere) {
-            const float r = sd.sx * s.H;
-            p.half = vec3{r, r, r};
-        } else {
-            p.half = vec3{sd.sx * s.W, sd.sy * s.W, sd.sz * s.H};
-        }
-        if (sd.parent == kFormNoParent) {
-            p.q = qBody;
-            p.pos = rootPos + f.fwd * (sd.ox * s.W) + f.left * (sd.oy * s.W) +
-                    f.up * (sd.oz * s.H);
-            continue;
-        }
-        // Сторона — знак сустава поперёк: левая сторона кадра машет «+».
-        const float side = sd.jy > 0.0f ? 1.0f : (sd.jy < 0.0f ? -1.0f : 0.0f);
-        float a = 0.0f;
-        if (sd.partRole == FormRole::Leg) a = side * swing;
-        else if (sd.partRole == FormRole::Arm) a = -side * swing;
-        // Поворот вокруг оси «лево» (y части): ось части в покое совпадает с
-        // осью кадра, поэтому кватернион строится в осях родителя.
-        const quat local{0.0f, std::sin(0.5f * a), 0.0f, std::cos(0.5f * a)};
-        const PartPose& par = out[sd.parent];
-        const PartJoint pj = form_part_joint(form, s, i);
-        p.q = quat_normalize(quat_mul(par.q, local));
-        const vec3 joint = par.pos + quat_rotate(par.q, pj.inParent);
-        p.pos = joint - quat_rotate(p.q, pj.inPart);
-    }
-    return def.count;
+    return form_action_pose(form, s, f, rootPos, g, ActingPoseState{}, out);
 }
 
 std::uint32_t gait_step(Registry& reg, const LevelStack& stack, LayerId layer,
@@ -169,7 +412,7 @@ std::uint32_t gait_step(Registry& reg, const LevelStack& stack, LayerId layer,
 }
 
 BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
-                             LayerId layer) {
+                             LayerId layer, std::uint64_t tick) {
     BodyPoseTick out;
     if (!stack.valid(layer)) return out;
     // Кадр гравитации — свойство слоя, один на проход (тот же, что у ходьбы
@@ -204,9 +447,26 @@ BodyPoseTick body_parts_step(Registry& reg, const LevelStack& stack,
                 length(steer_tangent(gf, vel->v.x, vel->v.y, vel->v.z));
             gs.amp = sp >= kWalkSpeedMps ? 1.0f : sp / kWalkSpeedMps;
         }
-        const std::uint16_t n = form_gait_pose(
+        ActingPoseState aps;
+        if (const Acting* act = reg.try_get<const Acting>(e)) {
+            auto read_slot = [&](ActSlot s) -> SlotPoseInput {
+                SlotPoseInput in;
+                const ActWindow& w = act_slot(*act, s);
+                if (tick >= w.startTick && act_busy(w, tick) &&
+                    w.action < kActionCount) {
+                    in.active = true;
+                    in.action = w.action;
+                    in.phaseE3 = acting_phase_e3(*act, s, tick);
+                }
+                return in;
+            };
+            aps.handL = read_slot(ActSlot::HandL);
+            aps.handR = read_slot(ActSlot::HandR);
+            aps.body = read_slot(ActSlot::Body);
+        }
+        const std::uint16_t n = form_action_pose(
             form, scale, body_frame(gf, lk ? lk->dir : vec3{0.0f, 0.0f, 0.0f}),
-            tr.pos, gs, pose);
+            tr.pos, gs, aps, pose);
         BodyParts& bp = reg.get_or_emplace<BodyParts>(e);
         const FormDef& def = form_def(form);
         bp.count = static_cast<std::uint8_t>(n);

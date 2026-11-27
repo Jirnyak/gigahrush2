@@ -201,7 +201,70 @@ struct FloorFrontierStats {
 // НАЗВАННАЯ оговорка S16.9 (фронтир — представление, зависящее от того, где
 // лежит материя); аудит `uniform_paged == 0` верен между floor_awaken и этим
 // вызовом. Умирают они там же, где и раньше: на выходе с этажа
-// (settle_uniform_pages) и на следующем рождении.
+// (settle_uniform_pages) и на следующем рождении — а в живом кадре их
+// инкрементально подбирает курсор схлопывания ниже (ход B, matwej.md §9.3).
 FloorFrontierStats floor_open_frontier(World& w);
+
+// --- КУРСОР СХЛОПЫВАНИЯ ОДНОРОДНЫХ СТРАНИЦ (ХОД B, matwej.md §9.3–§9.4) ---
+// Держ-решётка 16³ (4096 байт): блоки 8³ вокруг живых клеток среды.
+// Вывод размера: шар фронтира kFrontierRadius = 6 < kSubDim = 8, значит любая
+// клетка внутри куба R=6 живой клетки гарантированно лежит в её блоке 8³
+// либо в одном из 26 его соседей по тору. Курсор НИКОГДА не схлопывает
+// страницы `sub_material` в держимых блоках (иначе снятая страница блокирует
+// вход материи, и физика становится функцией fps).
+inline constexpr int kHoldGridDim = kMacroDim / kSubDim;
+inline constexpr std::size_t kHoldGridCells =
+    static_cast<std::size_t>(kHoldGridDim) * kHoldGridDim * kHoldGridDim;
+static_assert(kHoldGridDim * kSubDim == kMacroDim,
+              "kMacroDim обязан делиться на kSubDim без остатка");
+static_assert((kHoldGridDim & (kHoldGridDim - 1)) == 0,
+              "kHoldGridDim обязан быть степенью двойки для масок тора");
+static_assert(kFrontierRadius < kSubDim,
+              "радиус фронтира R=6 обязан помещаться в соседний блок 8^3");
+static_assert(kHoldGridCells == 4096u, "держ-решётка 16^3 = 4096 байт");
+
+// Скорость кольцевого курсора на один подтик автомата (matwej.md §9.3):
+// целевой бюджет 0.1 мс/кадр × 9766 стр./мс × 60 fps ≈ 58 600 стр./с;
+// при 31.25 подтиков/с (kSimHz / 4 = 125 / 4) это ≈ 1875 стр./подтик ->
+// ближайшая степень двойки 2048 клеток/подтик (64 000 стр./с, в среднем
+// ~1065 стр./кадр при 60 fps ≈ N=1024; полный оборот 2^21 за 1024 подтика =
+// 32.8 с; запас 11.2× к замеренной течи 5696 стр./с).
+inline constexpr std::size_t kCollapseCellsPerSubstep = 2048u;
+
+struct PageCollapseStats {
+    std::size_t scanned = 0;        // клеток пройдено курсором
+    std::size_t heldSkipped = 0;    // пропущено по держ-решётке 16³
+    std::size_t matCollapsed = 0;   // схлопнуто однородных страниц sub_material
+    std::size_t stainCollapsed = 0; // схлопнуто все-нулевых страниц stain
+};
+
+// Индекс блока 8³ в держ-решётке 16³ для клетки `ci`.
+inline std::size_t hold_block_of_cell(std::size_t ci) {
+    const std::size_t d = static_cast<std::size_t>(kMacroDim);
+    const std::size_t sd = static_cast<std::size_t>(kSubDim);
+    const std::size_t hd = static_cast<std::size_t>(kHoldGridDim);
+    const std::size_t cx = ci % d;
+    const std::size_t cy = (ci / d) % d;
+    const std::size_t cz = ci / (d * d);
+    return (cx / sd) + (cy / sd) * hd + (cz / sd) * hd * hd;
+}
+
+// Застемпить блок клетки `ci` и 26 его соседей по тору в `holdGrid` значением
+// не ниже `ttl`; `stampedCenterBits` (kHoldGridCells/64 слов) дедуплицирует
+// повторные стемпы того же центрального блока за один кадр.
+void stamp_hold_block_27(std::uint8_t holdGrid[kHoldGridCells],
+                         std::uint64_t stampedCenterBits[kHoldGridCells / 64],
+                         std::uint32_t ci, std::uint8_t ttl);
+
+// Пройти окно из `cellsToScan` клеток от `cursor` (кольцом по kMacroCells),
+// схлопнуть однородные страницы `sub_material` (строго вне держ-решётки
+// `holdGrid`) и все-нулевые страницы `stain`. Схлопнутые клетки пишутся в
+// `collapsedOut` для VoxelMirror::mark_dirty. Для клеток вне держ-решётки
+// снимается бит `frontierDoneBits` (если не nullptr), чтобы повторное
+// пробуждение на GPU снова раскрыло их фронтир.
+PageCollapseStats collapse_uniform_cursor_step(
+    World& w, std::size_t& cursor, std::size_t cellsToScan,
+    const std::uint8_t* holdGrid, std::vector<std::uint64_t>* frontierDoneBits,
+    std::vector<std::uint32_t>& collapsedOut);
 
 } // namespace giga

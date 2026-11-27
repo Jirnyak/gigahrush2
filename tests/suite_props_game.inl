@@ -9,6 +9,7 @@
 #include "game/floor_spec.h"
 #include "game/focus.h"      // focus_pick — прицел живого пути E
 #include "game/prop_system.h"
+#include "game/action.h"     // Acting / acting_phase_e3 — поза глаголов И3в
 #include "game/body_pose.h"  // form_part_joint, body_parts_step — поза тела
 #include "game/look.h"       // Look — перёд живого тела
 #include "sim/rigid.h"    // rigid_body_step — гуманоид складывается ядром
@@ -940,6 +941,205 @@ static void test_gait_swings_limbs() {
         const float m1 = reg.get<game::Gait>(body).metres;
         game::gait_step(reg, stack, g, kSimDt);
         CHECK(reg.get<game::Gait>(body).metres == m1);
+    }
+}
+
+// ПОЗЫ ГЛАГОЛОВ И ДЕЙСТВИЙ (CANON S28.4, И3в): `acting_phase_e3` (0..1000)
+// ведёт процедурную позу по глаголу/действию без отрыва шарниров, без NaN,
+// с гладкой огибающей на краях окна и возвратом в позу покоя после конца.
+static void test_acting_verb_poses() {
+    const game::FormDef& fd = game::form_def(game::FormId::Humanoid);
+    int torsoIdx = -1, headIdx = -1, armL = -1, armR = -1;
+    for (std::uint16_t i = 0; i < fd.count; ++i) {
+        const game::FormSegDef& sd = game::kFormSegs[fd.first + i];
+        if (sd.partRole == game::FormRole::Torso) torsoIdx = i;
+        if (sd.partRole == game::FormRole::Head) headIdx = i;
+        if (sd.partRole == game::FormRole::Arm) (sd.jy > 0 ? armL : armR) = i;
+    }
+    CHECK(torsoIdx >= 0 && headIdx >= 0 && armL >= 0 && armR >= 0);
+    if (torsoIdx < 0 || headIdx < 0 || armL < 0 || armR < 0) return;
+
+    const GravityRegime regimes[2] = {GravityRegime::NegZ, GravityRegime::PosX};
+    for (const GravityRegime r : regimes) {
+        LevelStack stack;
+        const LayerId g = stack.push_layer();
+        World& w = stack.layer(g);
+        w.gravity().regime = r;
+        const GravityFrame gf = steer_frame_of(&w.gravity());
+        const vec3 up = regime_up(r);
+        vec3 half{0.4f, 0.4f, 0.4f};
+        if (gf.axis == 0) half.x = 0.9f;
+        else if (gf.axis == 1) half.y = 0.9f;
+        else half.z = 0.9f;
+        vec3 look{0.0f, 0.0f, 0.0f};
+        if (gf.tanA == 0) look.x = 1.0f;
+        else if (gf.tanA == 1) look.y = 1.0f;
+        else look.z = 1.0f;
+        const game::BodyFrame frame = game::body_frame(gf, look);
+        const game::BodyScale scale = game::body_scale(gf, half);
+        const vec3 c{10.5f * kCellSize, 10.5f * kCellSize, 10.5f * kCellSize};
+
+        game::PartPose rest[game::kMaxFormSegs];
+        const std::uint16_t count =
+            game::form_rest_pose(game::FormId::Humanoid, scale, frame, c, rest);
+        CHECK(count == fd.count);
+
+        auto check_invariants = [&](const game::PartPose* p) {
+            float gap = 0.0f;
+            for (std::uint16_t i = 0; i < count; ++i) {
+                CHECK(std::isfinite(p[i].pos.x) && std::isfinite(p[i].pos.y) &&
+                      std::isfinite(p[i].pos.z));
+                CHECK(std::isfinite(p[i].q.x) && std::isfinite(p[i].q.y) &&
+                      std::isfinite(p[i].q.z) && std::isfinite(p[i].q.w));
+                const float qn = p[i].q.x * p[i].q.x + p[i].q.y * p[i].q.y +
+                                 p[i].q.z * p[i].q.z + p[i].q.w * p[i].q.w;
+                CHECK(std::fabs(qn - 1.0f) < 1e-4f);
+                if (i > 0) {
+                    const game::PartJoint pj =
+                        game::form_part_joint(game::FormId::Humanoid, scale, i);
+                    const std::uint8_t par = game::kFormSegs[fd.first + i].parent;
+                    const vec3 a = p[i].pos + quat_rotate(p[i].q, pj.inPart);
+                    const vec3 b =
+                        p[par].pos + quat_rotate(p[par].q, pj.inParent);
+                    gap = std::max(gap, length(a - b));
+                }
+            }
+            CHECK(gap < 1e-4f);
+        };
+
+        auto max_delta = [&](const game::PartPose* a, const game::PartPose* b) {
+            float d = 0.0f;
+            for (std::uint16_t i = 0; i < count; ++i)
+                d = std::max(d, length(a[i].pos - b[i].pos));
+            return d;
+        };
+
+        // 1. Характерные позы глаголов: наклон корпуса (sleep/toilet),
+        //    руки к лицу (eat/drink), рабочие позы (work/craft/heal).
+        game::PartPose pose[game::kMaxFormSegs];
+
+        game::form_verb_pose(game::FormId::Humanoid, scale, frame, c,
+                             game::GaitState{}, game::kVerbSleep, 500u, pose);
+        check_invariants(pose);
+        const vec3 sleepTorsoFwd =
+            quat_rotate(pose[torsoIdx].q, vec3{0.0f, 0.0f, 1.0f});
+        CHECK(dot(sleepTorsoFwd, frame.fwd) > 0.25f);
+
+        game::form_verb_pose(game::FormId::Humanoid, scale, frame, c,
+                             game::GaitState{}, game::kVerbToilet, 500u, pose);
+        check_invariants(pose);
+        const vec3 toiletTorsoFwd =
+            quat_rotate(pose[torsoIdx].q, vec3{0.0f, 0.0f, 1.0f});
+        CHECK(dot(toiletTorsoFwd, frame.fwd) > 0.35f);
+
+        const float restArmSep =
+            length(rest[armL].pos - rest[armR].pos);
+        game::form_verb_pose(game::FormId::Humanoid, scale, frame, c,
+                             game::GaitState{}, game::kVerbEat, 500u, pose);
+        check_invariants(pose);
+        CHECK(dot(pose[armL].pos - rest[armL].pos, up) > 0.05f);
+        CHECK(dot(pose[armR].pos - rest[armR].pos, up) > 0.05f);
+        CHECK(length(pose[armL].pos - pose[armR].pos) < restArmSep);
+
+        game::form_verb_pose(game::FormId::Humanoid, scale, frame, c,
+                             game::GaitState{}, game::kVerbDrink, 500u, pose);
+        check_invariants(pose);
+        CHECK(dot(pose[armL].pos - rest[armL].pos, up) > 0.05f);
+        CHECK(dot(pose[headIdx].pos - pose[armL].pos, up) <
+              dot(rest[headIdx].pos - rest[armL].pos, up));
+
+        for (const game::VerbId v :
+             {game::kVerbWork, game::kVerbCraft, game::kVerbHeal}) {
+            game::form_verb_pose(game::FormId::Humanoid, scale, frame, c,
+                                 game::GaitState{}, v, 350u, pose);
+            check_invariants(pose);
+            CHECK(max_delta(pose, rest) > 0.03f);
+        }
+
+        // 2. Независимость слотов HandL / HandR: выстрел одной рукой поднимает
+        //    только её, вторая остаётся в покое.
+        {
+            game::ActingPoseState oneHand;
+            oneHand.handL = {true, game::kActShoot, 500u};
+            game::form_action_pose(game::FormId::Humanoid, scale, frame, c,
+                                   game::GaitState{}, oneHand, pose);
+            check_invariants(pose);
+            CHECK(length(pose[armL].pos - rest[armL].pos) > 0.05f);
+            CHECK(length(pose[armR].pos - rest[armR].pos) < 0.05f);
+        }
+
+        // 3. Непрерывность по acting_phase_e3 (0..1000) для Hold / Cycle / Strike:
+        //    края сходятся к покою, шаг между соседними фазами ограничен.
+        for (const game::ActionId act :
+             {game::kActShoot, game::kActMeal, game::kActSwing,
+              game::kActReload, game::kActHurl}) {
+            game::PartPose prev[game::kMaxFormSegs];
+            float peakDelta = 0.0f;
+            float maxStep = 0.0f;
+            for (std::uint16_t e3 = 0; e3 <= 1000u; e3 += 25u) {
+                game::ActingPoseState aps;
+                aps.body = {true, act, e3};
+                game::form_action_pose(game::FormId::Humanoid, scale, frame, c,
+                                       game::GaitState{}, aps, pose);
+                check_invariants(pose);
+                peakDelta = std::max(peakDelta, max_delta(pose, rest));
+                if (e3 == 0u || e3 == 1000u)
+                    CHECK(max_delta(pose, rest) < 1e-5f);
+                else
+                    maxStep = std::max(maxStep, max_delta(pose, prev));
+                for (std::uint16_t i = 0; i < count; ++i) prev[i] = pose[i];
+            }
+            CHECK(peakDelta > 0.03f);
+            CHECK(maxStep < 0.15f);
+        }
+
+        // 4. Интеграция через body_parts_step: изотропность по двум телам с
+        //    BodyPlan + Acting и возврат к покою после завершения окна.
+        {
+            Registry reg;
+            auto spawn_actor = [&](vec3 pos) {
+                const Entity e = reg.create();
+                reg.emplace<Transform>(e, Transform{pos, g});
+                reg.emplace<AABB>(e, AABB{half});
+                reg.emplace<game::Look>(e, game::Look{look});
+                reg.emplace<game::BodyPlan>(e);
+                reg.emplace<game::Acting>(e);
+                return e;
+            };
+            const Entity eA = spawn_actor(c);
+            const Entity eB = spawn_actor(c + frame.left * 3.0f);
+            reg.emplace<game::NpcRef>(eB, game::NpcRef{42u, 0u});
+
+            CHECK(game::acting_begin(reg.get<game::Acting>(eA),
+                                     game::ActSlot::Body, game::kActRest,
+                                     100u, 0u, 10u));
+            CHECK(game::acting_begin(reg.get<game::Acting>(eB),
+                                     game::ActSlot::Body, game::kActRest,
+                                     100u, 0u, 10u));
+
+            // Середина окна (tick=60 -> phaseE3=500): оба тела приняли ту же позу.
+            game::body_parts_step(reg, stack, g, 60u);
+            const BodyParts& bpA = reg.get<BodyParts>(eA);
+            const BodyParts& bpB = reg.get<BodyParts>(eB);
+            CHECK(bpA.count == count && bpB.count == count);
+            float activeDelta = 0.0f;
+            float diffAB = 0.0f;
+            for (std::uint16_t i = 0; i < count; ++i) {
+                activeDelta = std::max(activeDelta, length(bpA.part[i].pos - rest[i].pos));
+                diffAB = std::max(diffAB,
+                                  length((bpA.part[i].pos - c) -
+                                         (bpB.part[i].pos - (c + frame.left * 3.0f))));
+            }
+            CHECK(activeDelta > 0.05f);
+            CHECK(diffAB < 1e-5f);
+
+            // Конец окна (tick=110 -> !act_busy): возврат в позу покоя.
+            game::body_parts_step(reg, stack, g, 110u);
+            float restErr = 0.0f;
+            for (std::uint16_t i = 0; i < count; ++i)
+                restErr = std::max(restErr, length(bpA.part[i].pos - rest[i].pos));
+            CHECK(restErr < 1e-5f);
+        }
     }
 }
 
@@ -2505,6 +2705,7 @@ void test_props_game_all() {
     test_corpse_lays_out_in_its_frame();
     test_living_body_poses_in_parts();
     test_gait_swings_limbs();
+    test_acting_verb_poses();
     test_debris_crowd_free_fall();
     test_humanoid_reaches_sleep();
     test_corpse_pile_reaches_sleep();

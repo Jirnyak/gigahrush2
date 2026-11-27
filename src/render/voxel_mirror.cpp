@@ -42,29 +42,64 @@ void barrier_transfer_to_shader(VkCommandBuffer cmd) {
                          0, 1, &mb, 0, nullptr, 0, nullptr);
 }
 
-// 0 empty / 1 full / 2 partial / 3 partial С МАТЕРИЕЙ СРЕД — the raymarcher's
-// macro skip byte. Класс 3 (CANON S16, мост рендера): в клетке есть материя
-// без бита маски, чья строка движется — material_is_medium(), одна выписка
-// закона в [world/material_props.h]. Только такие клетки платят фетч
+// Bits 0..1: 0 empty / 1 full / 2 partial / 3 partial С МАТЕРИЕЙ СРЕД — the
+// raymarcher's macro skip byte. Класс 3 (CANON S16, мост рендера): в клетке есть
+// материя без бита маски, чья строка движется — material_is_medium(), одна
+// выписка закона в [world/material_props.h]. Только такие клетки платят фетч
 // страницы на пустых битах маски в DDA; обычный мир (0/1/2) стоит ровно как
-// раньше. GPU-двойник закона — settle в [shaders/medium_sim.comp];
-// разъедутся — verify() покраснеет.
+// раньше. GPU-двойник закона — settle в [shaders/medium_sim.comp]; разъедутся —
+// verify() покраснеет.
+// Bit 2 (kClassLightPass, ход F matwej.md §9.4): в клетке есть хотя бы один
+// ТВЁРДЫЙ (с битом маски) субвоксель со светопроводящим материалом
+// (material_passes_light: стекло, неон, воздух). Когда бит 2 снят, теневой луч
+// встаёт на первом sub_solid без чтения uPageIdx + uPagePool.
 std::uint8_t classify(const SubMask& m, CellType type, const CellType* page) {
-    if (m.full()) return 1;
+    if (m.full()) {
+        bool lightPass = false;
+        if (page) {
+            for (int i = 0; i < kSubVoxels; ++i) {
+                if (material_passes_light(page[i])) {
+                    lightPass = true;
+                    break;
+                }
+            }
+        } else {
+            lightPass = material_passes_light(type);
+        }
+        return static_cast<std::uint8_t>(
+            1u | (lightPass ? VoxelMirror::kClassLightPass : 0u));
+    }
+    if (m.empty()) {
+        if (page) {
+            for (int i = 0; i < kSubVoxels; ++i) {
+                const CellType mt = page[i];
+                if (mt != 0 && material_is_medium(mt)) return 3;
+            }
+            return 0;
+        }
+        // Закон чтения безстраничной клетки (sub_material_at,
+        // [world/destruct.cpp]): ТОЛЬКО пустая маска означает «вся клетка
+        // своего типа» (вода после collapse).
+        return material_is_medium(type) ? 3 : 0;
+    }
+    std::uint8_t base = 2;
+    bool lightPass = false;
     if (page) {
         for (int i = 0; i < kSubVoxels; ++i) {
             const CellType mt = page[i];
-            if (mt != 0 && !m.test(i) && material_is_medium(mt)) return 3;
+            const bool solid = m.test(i);
+            if (mt != 0 && !solid && material_is_medium(mt)) base = 3;
+            if (solid && material_passes_light(mt)) lightPass = true;
+            if (base == 3 && lightPass) break;
         }
-    } else if (m.empty() && material_is_medium(type)) {
-        // Закон чтения безстраничной клетки (sub_material_at,
-        // [world/destruct.cpp]): ТОЛЬКО пустая маска означает «вся клетка
-        // своего типа» (вода после collapse). Частичная маска + тип-среда
-        // (rubble-завал генератора) — НЕ материя в дырах: класс 3 без этого
-        // гейта рождал полный куб «грязи» из ниоткуда.
-        return 3;
+    } else {
+        // Частичная маска + тип-среда (rubble-завал генератора) — НЕ материя в
+        // дырах: класс остаётся 2. Все твёрдые субвоксели без страницы имеют
+        // единый тип `type`.
+        lightPass = material_passes_light(type);
     }
-    return m.empty() ? 0 : 2;
+    return static_cast<std::uint8_t>(
+        base | (lightPass ? VoxelMirror::kClassLightPass : 0u));
 }
 
 // CPU stain atoms are 3 B; the GPU page holds one u32 per atom.
