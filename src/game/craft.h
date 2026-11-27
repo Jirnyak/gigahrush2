@@ -426,10 +426,12 @@ ItemId craft_best_available(const CraftingState& st, const Inventory& inv,
                             CraftStation at);
 
 // The cheapest slot worth breaking down: lowest item value, never the equipped
-// weapon, gun or armour, never the last unit of a survival consumable. Returns
-// -1 when the bag holds nothing safe to strip. Refusing to strip what keeps you
-// alive is the same rule `vendor_sell_all` follows and for the same reason.
-int craft_scrap_slot(const Inventory& inv);
+// weapon, gun or armour (and exact Equipped* slots when supplied), never rubles,
+// never the last unit of a survival consumable. Returns -1 when the bag holds
+// nothing safe to strip. Refusing to strip what keeps you alive is the same rule
+// `vendor_sell_all` follows and for the same reason.
+struct Equipped;
+int craft_scrap_slot(const Inventory& inv, const Equipped* eq = nullptr);
 
 // ---------------------------------------------------------------------------
 // Save

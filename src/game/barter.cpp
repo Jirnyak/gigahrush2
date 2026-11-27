@@ -46,17 +46,27 @@ bool any_marked_equipped(const Equipped* eq, std::uint64_t marks) {
     return false;
 }
 
-// Move every marked slot of `from` into `to`, wear riding along. True only if
-// EVERYTHING landed — a remainder is the caller's cue to abort the whole deal.
-bool move_marked(Inventory& from, Inventory& to, std::uint64_t marks) {
+// Vacate every marked slot from `from` into a local staging list BEFORE any
+// `inventory_give`, so symmetric 1-for-1 / N-for-N swaps succeed even when both
+// bags are 64/64 full before the deal closes.
+int take_marked(Inventory& from, std::uint64_t marks,
+                ItemSlot (&out)[kInvSlots]) {
+    int n = 0;
     for (int i = 0; i < kInvSlots; ++i) {
         if (!((marks >> i) & 1u)) continue;
         ItemSlot& s = from.slots[i];
         if (!item_valid(s.item) || s.count == 0) continue;   // stale mark: skip
-        const std::uint16_t unplaced =
-            inventory_give(to, s.item, s.count, s.condition);
-        if (unplaced != 0) return false;
+        out[n++] = s;
         s = ItemSlot{};
+    }
+    return n;
+}
+
+bool place_taken(Inventory& to, const ItemSlot* items, int n) {
+    for (int i = 0; i < n; ++i) {
+        const std::uint16_t unplaced =
+            inventory_give(to, items[i].item, items[i].count, items[i].condition);
+        if (unplaced != 0) return false;
     }
     return true;
 }
@@ -140,10 +150,14 @@ BarterPreview barter_commit(Inventory& own, const Equipped* ownEq,
     Inventory ownStage = own;
     Inventory theirStage = their;
 
-    // Goods first, both directions — freed slots are what makes room for the
-    // counter-offer and for the change.
-    bool good = move_marked(ownStage, theirStage, ownMarks) &&
-                move_marked(theirStage, ownStage, theirMarks);
+    // Goods first: extract both sides before inserting, so swapped slots vacate
+    // room for the counter-offer and for change even on 64/64 full bags.
+    ItemSlot ownOffer[kInvSlots]{};
+    ItemSlot theirOffer[kInvSlots]{};
+    const int nOwn = take_marked(ownStage, ownMarks, ownOffer);
+    const int nTheir = take_marked(theirStage, theirMarks, theirOffer);
+    bool good = place_taken(theirStage, ownOffer, nOwn) &&
+                place_taken(ownStage, theirOffer, nTheir);
     // Then the change, from the debtor's unmarked rubles. After the goods
     // moves the marks no longer describe live slots on the stage, but the
     // ruble stacks they shielded are exactly the ones that LEFT if marked —

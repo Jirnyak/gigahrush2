@@ -154,6 +154,7 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
                                std::uint32_t meshKind, EventBus& bus,
                                ParticleBurstQueue* bursts, std::uint32_t seed)
 {
+    constexpr float kSimpleFallPush = 0.5f;
     // Resolve skin payload from the live entity when the caller left zeros
     // (anchor_validate / projectile hit historically passed meshKind=0).
     vec3 col = color;
@@ -269,12 +270,13 @@ static void detach_single_prop(Registry& reg, Entity prop, PropFallMode mode,
             rigid_attach_box(reg, prop, half, mass, e_, mu);
         }
     } else {
-        // SimpleFall: a small shove along the pull. Derived by negating the
-        // caller's up-facing impulse instead of hardcoding -Z, for the same
-        // reason as the burst above — this function never sees a World.
+        // SimpleFall: push outward along caller's impulse (wall normal from
+        // anchor_validate_step or shot impulse from prop_hit) instead of
+        // negating it back into the remaining wall.
         const float iLen = length(impulse);
         const vec3 down =
-            iLen > 1e-6f ? impulse * (-0.5f / iLen) : vec3{0.0f, 0.0f, -0.5f};
+            iLen > 1e-6f ? impulse * (kSimpleFallPush / iLen)
+                         : vec3{0.0f, 0.0f, -kSimpleFallPush};
         reg.emplace_or_replace<Velocity>(prop, Velocity{down});
         const float mass = density * 8.0f * half.x * half.y * half.z;
         rigid_attach_box(reg, prop, half, mass, e_, mu);
@@ -347,6 +349,7 @@ AnchorBins& anchor_bins(Registry& reg) {
     if (AnchorBins* b = reg.ctx().find<AnchorBins>()) return *b;
     AnchorBins& b = reg.ctx().emplace<AnchorBins>();
     reg.on_construct<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
+    reg.on_update<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
     reg.on_destroy<SubVoxelAnchor>().connect<&mark_anchor_bins_dirty>();
     return b;
 }
@@ -526,7 +529,7 @@ void prop_make_dynamic(Registry& reg, Entity prop, EventBus& bus) {
                            ? reg.get<Renderable>(prop).color
                            : vec3{0.8f, 0.8f, 0.8f};
     detach_single_prop(reg, prop, reg.get<PropFallMode>(prop),
-                       vec3{0.0f, 0.0f, 0.1f}, pos, color, 0, bus, nullptr, 1u);
+                       vec3{0.0f, 0.0f, -0.1f}, pos, color, 0, bus, nullptr, 1u);
 }
 
 std::uint32_t anchor_validate_step(Registry& reg, const World& world,

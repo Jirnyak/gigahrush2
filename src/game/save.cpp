@@ -1095,8 +1095,11 @@ std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
             prop_detach(reg, e, bus);
         // Снятая при выгрузке ориентация тела возвращается ПОВЕРХ детача
         // (тот сеет q из yaw как дефолт): лежавший на боку встаёт на бок.
-        // Ненулевой w-компонент отличает честную запись v4 от пустой.
-        if ((rec.flags & kPropRecDetached) && rec.q.w != 0.0f)
+        // Нулевой кватернион означает пустую запись, ненулевой (включая 180°,
+        // где w == 0) восстанавливается целиком.
+        const float qLen2 = rec.q.x * rec.q.x + rec.q.y * rec.q.y +
+                            rec.q.z * rec.q.z + rec.q.w * rec.q.w;
+        if ((rec.flags & kPropRecDetached) && qLen2 > 0.5f)
             if (RigidBody* rb = reg.try_get<RigidBody>(e)) rb->q = rec.q;
     }
     return made;

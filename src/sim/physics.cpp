@@ -246,6 +246,8 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // sweep — the body passes through geometry by design (debug console
             // toggles the tag; [components.h NoClip]).
             if (reg.all_of<NoClip>(e)) {
+                if (auto* g = reg.try_get<GravityAffected>(e))
+                    g->grounded = false;
                 tr.pos += vel.v * h;
                 tr.pos.x = wrapf(tr.pos.x, kWorldExtent);
                 tr.pos.y = wrapf(tr.pos.y, kWorldExtent);
@@ -258,9 +260,11 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
 
             // Gravity + jump (only if the entity opts in).
             vec3 up{0, 0, 1};
+            bool hasGravity = false;
             if (auto* g = reg.try_get<GravityAffected>(e)) {
                 vec3 accel = w.gravity().at(tr.pos) * g->scale;
-                up = normalize(accel * -1.0f);
+                hasGravity = dot(accel, accel) > 1e-8f;
+                if (hasGravity) up = normalize(accel * -1.0f);
                 vel.v += accel * h;
 
                 // ПЛАВУЧЕСТЬ + ВЯЗКОСТЬ ВОДЫ (CANON S16.4, инкремент 4):
@@ -351,10 +355,10 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             if (hitZ) vel.v.z = 0.0f;
 
             // Ground check: a collision on the axis most aligned with "up",
-            // while descending, means we are standing on something.
+            // while descending under active gravity, means we stand on solid.
             if (g) {
                 bool upAxisHit = upComp == 2 ? hitZ : upComp == 1 ? hitY : hitX;
-                g->grounded = upAxisHit && movingDown;
+                g->grounded = hasGravity && upAxisHit && movingDown;
             }
 
             // Toroidal world: wrap the entity's position back into [0, extent)

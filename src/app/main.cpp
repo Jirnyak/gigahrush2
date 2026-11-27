@@ -1287,13 +1287,23 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                 ImGui::TableSetupColumn("Действие", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableHeadersRow();
 
+                const game::Equipped* peq =
+                    reg.valid(player) ? reg.try_get<game::Equipped>(player) : nullptr;
                 for (int slot = 0; slot < game::kInvSlots; ++slot) {
                     const game::ItemSlot& s = inv.slots[slot];
                     if (!game::item_valid(s.item) || s.count == 0) continue;
 
+                    const bool isEquipped =
+                        peq && (slot == peq->handL || slot == peq->armor ||
+                                slot == peq->handR);
+
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0); ImGui::Text("#%d", slot);
-                    ImGui::TableSetColumnIndex(1); ImGui::Text("%s", game::item_name(s.item));
+                    ImGui::TableSetColumnIndex(1);
+                    if (isEquipped)
+                        ImGui::Text("%s [НАДЕТО]", game::item_name(s.item));
+                    else
+                        ImGui::Text("%s", game::item_name(s.item));
                     ImGui::TableSetColumnIndex(2); ImGui::Text("%u", s.count);
                     ImGui::TableSetColumnIndex(3); ImGui::Text("%d руб", game::item_def(s.item).value);
                     ImGui::TableSetColumnIndex(4);
@@ -1301,7 +1311,9 @@ static void DrawCraftingWindowUI(bool* p_open, game::CraftingState& crafting,
                     char btnId[32];
                     snprintf(btnId, sizeof(btnId), "Разобрать##%d", slot);
 
-                    const bool canDis = (currentStation == game::CraftStation::Workbench);
+                    const bool canDis =
+                        (currentStation == game::CraftStation::Workbench) &&
+                        !isEquipped;
                     if (!canDis) ImGui::BeginDisabled();
 
                     if (ImGui::Button(btnId)) {
@@ -1403,7 +1415,7 @@ static void DrawConsoleUI(bool* p_open, bool* p_focus, char* inputBuf,
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y * 0.45f));
-    if (!ImGui::Begin("Console", p_open,
+    if (!ImGui::Begin("КОНСОЛЬ", p_open,
                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                           ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
@@ -4270,6 +4282,7 @@ int main(int argc, char** argv) {
     // кадром, остальное больше не складывается с ним в один 10-секундный.
     auto arrive_head = [&](game::RideResult ride, int landHub) -> LayerId {
         if (!ride.moved) return kInvalidLayer;
+        doorDirty.clear();
         player = ride.player;
         currentFloor = ride.floor;
         // (vendorKind died with the window; barter prices by the partner's
@@ -4462,6 +4475,13 @@ int main(int argc, char** argv) {
     // generate-веткой и сеет всё свежим. Тот же F9-хребет: unload → build →
     // сущностная половина → двери/нав/зеркала → тело.
     auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
+        const int resolvedTarget =
+            absolute ? target
+                     : game::next_labelled_floor(registry, currentFloor, target);
+        if (resolvedTarget == currentFloor ||
+            registry.module_at(resolvedTarget) == game::kInvalidModule) {
+            return false;
+        }
         char loadMsg[96];
         if (absolute)
             std::snprintf(loadMsg, sizeof loadMsg, "ПЕРЕХОД НА ЭТАЖ %d...",
@@ -4554,11 +4574,11 @@ int main(int argc, char** argv) {
     auto reset_to_new_run = [&](bool wipeSlot, bool enterPlaying) {
         draw_loading_frame("СБРОС СЕКТОРА И ЗАГРУЗКА НОВОГО ЗАБЕГА...", 0.30f);
         nav.cancel();
+        while (nav.baking()) {
+            nav.step(simTick);
+            SDL_Delay(2);
+        }
         if (liftRide != LiftRide::Idle) {
-            while (nav.baking()) {
-                nav.step(simTick);
-                SDL_Delay(2);
-            }
             (void)nav.take_prebuilt();
             streamer.prebuild_cancel();
             liftRide = LiftRide::Idle;
@@ -4566,6 +4586,7 @@ int main(int argc, char** argv) {
         }
         rideAutosaveArmed = false;
         flush_floor_write();
+        flush_light_vis_store();
         {
             std::lock_guard<std::mutex> lk(g_restoreMx);
             g_pendingRestore.clear();
@@ -4692,20 +4713,8 @@ int main(int argc, char** argv) {
     // чтения файла не срывает текущий экран, а успех чистит транзиентное
     // состояние UI/мира и восстанавливает занятость окон (Acting v29).
     auto perform_load_run = [&]() {
-        nav.cancel();
-        if (liftRide != LiftRide::Idle) {
-            while (nav.baking()) {
-                nav.step(simTick);
-                SDL_Delay(2);
-            }
-            (void)nav.take_prebuilt();
-            streamer.prebuild_cancel();
-            liftRide = LiftRide::Idle;
-            liftSwapLayer = kInvalidLayer;
-            std::lock_guard<std::mutex> lk(g_restoreMx);
-            g_pendingRestore.clear();
-        }
         flush_floor_write();
+        flush_light_vis_store();
         loadWanted = false;
 
         char runPath[1024];
@@ -4714,10 +4723,10 @@ int main(int argc, char** argv) {
         game::SaveError err = game::SaveError::None;
         if (!read_run(in, runPath, err)) {
             if (err == game::SaveError::None)
-                std::snprintf(saveLine, sizeof(saveLine), "no save file (%s)",
+                std::snprintf(saveLine, sizeof(saveLine), "нет файла сохранения (%s)",
                               runPath);
             else
-                std::snprintf(saveLine, sizeof(saveLine), "load refused: %s",
+                std::snprintf(saveLine, sizeof(saveLine), "загрузка отклонена: %s",
                               game::save_error_text(err));
             saveLineAt = simTick;
             std::fprintf(stderr, "[load] %s\n", saveLine);
@@ -4725,11 +4734,26 @@ int main(int argc, char** argv) {
         }
         if (!spec_for_floor(in.player.floorNumber)) {
             std::snprintf(saveLine, sizeof(saveLine),
-                          "load refused: floor %d is not registered",
+                          "загрузка отклонена: этаж %d не зарегистрирован",
                           in.player.floorNumber);
             saveLineAt = simTick;
             std::fprintf(stderr, "[load] %s\n", saveLine);
             return;
+        }
+
+        // Останавливаем фоновый бейк/лифт — только после валидации файла.
+        nav.cancel();
+        while (nav.baking()) {
+            nav.step(simTick);
+            SDL_Delay(2);
+        }
+        if (liftRide != LiftRide::Idle) {
+            (void)nav.take_prebuilt();
+            streamer.prebuild_cancel();
+            liftRide = LiftRide::Idle;
+            liftSwapLayer = kInvalidLayer;
+            std::lock_guard<std::mutex> lk(g_restoreMx);
+            g_pendingRestore.clear();
         }
 
         // Чистка транзиентного UI/мира — только после валидации файла.
@@ -4755,6 +4779,15 @@ int main(int argc, char** argv) {
         throwWanted = false;
         saveWanted = false;
         rideAutosaveArmed = false;
+        pendingTeleport = game::ConsoleContext::kNoRequest;
+        pendingLandHub = -1;
+        speechLine = nullptr;
+        speechAt = 0;
+        deedNote[0] = '\0';
+        deedNoteAt = 0;
+        deedBody = entt::null;
+        elevDiagLine[0] = '\0';
+        elevDiagAt = 0;
         doorDirty.clear();
         doorDirtyBuilt.clear();
         doorDirtyBuiltLayer = kInvalidLayer;
@@ -4877,12 +4910,12 @@ int main(int argc, char** argv) {
         }
         if (!placed.ok) {
             std::snprintf(saveLine, sizeof(saveLine),
-                          "loaded %u rub floor %d; place refused%s",
+                          "загружено %u руб., этаж %d; размещение не удалось%s",
                           static_cast<unsigned>(ledger.banked), currentFloor,
-                          arrivedRestored ? " (floor restored)" : "");
+                          arrivedRestored ? " (этаж восстановлен)" : "");
         } else {
             std::snprintf(saveLine, sizeof(saveLine),
-                          "loaded: floor %d @%u,%u,%u, %u rub, %u alive",
+                          "загружено: этаж %d @%u,%u,%u, %u руб., %u живых",
                           currentFloor, static_cast<unsigned>(scx),
                           static_cast<unsigned>(scy),
                           static_cast<unsigned>(scz),
@@ -5586,23 +5619,24 @@ int main(int argc, char** argv) {
                                            static_cast<float>(rh));
             }
         }
-        const bool liftSwapping = (liftRide == LiftRide::SwapRefresh ||
-                                   liftRide == LiftRide::SwapDoorsNav ||
-                                   liftRide == LiftRide::SwapUpload);
-        if (saveWanted && !liftSwapping) {
+        if (saveWanted && liftRide == LiftRide::Idle) {
             saveWanted = false;
             if (save_run_now())
                 std::snprintf(saveLine, sizeof(saveLine),
-                              "saved: floor %d, %u rub", currentFloor,
+                              "сохранено: этаж %d, %u руб.", currentFloor,
                               static_cast<unsigned>(ledger.banked));
             else {
                 char runPath[1024];
                 run_save_path(runPath, sizeof runPath);
                 std::snprintf(saveLine, sizeof(saveLine),
-                              "SAVE FAILED: could not write %s", runPath);
+                              "ОШИБКА СОХРАНЕНИЯ: не удалось записать %s", runPath);
             }
             saveLineAt = simTick;
             std::fprintf(stderr, "[save] %s\n", saveLine);
+        } else if (saveWanted && liftRide != LiftRide::Idle) {
+            saveWanted = false;
+            std::snprintf(deedNote, sizeof(deedNote), "Подождите окончания поездки на лифте");
+            deedNoteAt = simTick;
         }
         if (loadWanted) {
             perform_load_run();
@@ -5962,6 +5996,12 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             hud.process_event(e);
             if (e.type == SDL_EVENT_QUIT) running = false;
+            if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+                e.type == SDL_EVENT_WINDOW_MINIMIZED ||
+                e.type == SDL_EVENT_WINDOW_HIDDEN) {
+                attackHeld = false;
+                rmbHeld = false;
+            }
             if (shell.screen == AppScreen::Intro &&
                 (e.type == SDL_EVENT_KEY_DOWN ||
                  e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)) {
@@ -6011,11 +6051,12 @@ int main(int argc, char** argv) {
                     // can always close what it opened. This gate also stops a
                     // vendor-filter keystroke from eating rations, which the old
                     // chain happily did.
-                    // Playing — все бинды по typing-правилу; Pause — только
-                    // kBindAlways (menu/console/hud). Intro/Menu — ничего.
+                    // Playing — все бинды по typing-правилу; Pause и RunOver —
+                    // только kBindAlways (menu/console/hud/load). Intro/Menu — ничего.
                     if (kb &&
                         (shell.playing() ||
-                         (shell.screen == AppScreen::Pause &&
+                         ((shell.screen == AppScreen::Pause ||
+                           shell.screen == AppScreen::RunOver) &&
                           (kb->flags & game::kBindAlways))) &&
                         (!typing ||
                          ((kb->flags & game::kBindTyping) &&
@@ -6092,6 +6133,13 @@ int main(int argc, char** argv) {
                     showConsole = false;
                     sync_mouse_capture(shell.window == UiWindow::None);
                 } else if (shell.playing() && shell.window != UiWindow::None) {
+                    if (shell.window == UiWindow::Conversation) {
+                        if (diceGame.active) {
+                            game::dice_surrender(diceGame, pool);
+                            diceGame = game::DiceGame{};
+                        }
+                        bankCounterOpen = false;
+                    }
                     shell.close_window();
                     sync_mouse_capture(!showConsole);
                 } else {
@@ -6176,7 +6224,6 @@ int main(int argc, char** argv) {
                                    !showConsole);
             }
             if (has(ConsoleRequest::Craft)) {
-                craftWanted = true;
                 shell.toggle(UiWindow::Craft);
                 sync_mouse_capture(shell.playing() &&
                                    shell.window == UiWindow::None &&
@@ -9108,14 +9155,14 @@ int main(int argc, char** argv) {
                                     reg.get<game::NpcRef>(aimed).id;
                                 if (pool.valid(cid) && pool.alive(cid)) {
                                     handled = true;
+                                    diceGame = game::DiceGame{};
+                                    bankCounterOpen = false;
                                     convEntity = aimed;
                                     convNpc = cid;
                                     convLine[0] = 0;
                                     convUi.sel = 0;
                                     shell.window = UiWindow::Conversation;
-                                    input.set_mouselook(false);
-                                    SDL_SetWindowRelativeMouseMode(window,
-                                                                   false);
+                                    sync_mouse_capture(false);
                                 }
                             }
                         }
@@ -9222,6 +9269,11 @@ int main(int argc, char** argv) {
                                 if (!powerGrid.is_shield_destroyed(scx, scy, scz)) {
                                     handled = true;
                                     powerGrid.destroy_shield(scx, scy, scz);
+                                    if (auto* ia = reg.try_get<game::Interactable>(aimed))
+                                        ia->active = false;
+                                    std::snprintf(deedNote, sizeof deedNote,
+                                                  "Щиток обесточен");
+                                    deedNoteAt = simTick;
                                     std::fprintf(stderr,
                                                  "[powergrid] shield sabotaged "
                                                  "at (%.1f, %.1f, %.1f)\n",
@@ -9375,8 +9427,17 @@ int main(int argc, char** argv) {
                 // что ЛКМ), правый — ПРАВАЯ (ПКМ): одна кнопка на обе руки
                 // была бы откатом эпика двух рук ([two-hands.md]). Гейт по
                 // открытому окну держит сам InputState — тот же, что у осей.
-                const bool handL = attackHeld || input.hand_left_held();
-                const bool handR = rmbHeld || input.hand_right_held();
+                const bool handsLive = shell.playing() &&
+                                       shell.window == UiWindow::None &&
+                                       !showConsole;
+                if (!handsLive) {
+                    attackHeld = false;
+                    rmbHeld = false;
+                }
+                const bool handL =
+                    handsLive && (attackHeld || input.hand_left_held());
+                const bool handR =
+                    handsLive && (rmbHeld || input.hand_right_held());
                 // Рука несёт и делает то, чем экипирована: спуск руки с
                 // метательным — бросок ЕЁ предмета (закон владельца,
                 // приоритетов нет по построению). throwWanted остаётся
@@ -9820,7 +9881,8 @@ int main(int argc, char** argv) {
                                 }
                             }
                             if (scrapWanted) {
-                                const int slot = game::craft_scrap_slot(ci);
+                                const int slot = game::craft_scrap_slot(
+                                    ci, reg.try_get<game::Equipped>(player));
                                 // rollKey is uint32_t and simTick is uint64_t, so the
                                 // narrowing is explicit. Truncation is harmless and in
                                 // fact wanted: this only salts the 50% schematic roll, so
@@ -10941,6 +11003,10 @@ int main(int argc, char** argv) {
                             // «после любого изменения сумки»).
                             game::sync_armour(reg, pool, player);
                             game::sync_armour(reg, pool, lootEntity);
+                        } else {
+                            std::snprintf(deedNote, sizeof deedNote,
+                                          "Сделка не прошла: нет места в сумке");
+                            deedNoteAt = simTick;
                         }
                         break;
                     }
@@ -11123,10 +11189,10 @@ int main(int argc, char** argv) {
             const int shaft = game::fast_hub_near(ecx, ecy);
             ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
             bool elevOpen = true;  // мост к bool* закрывашки окна
-            if (ImGui::Begin("ЛИФТ / ELEVATOR", &elevOpen)) {
+            if (ImGui::Begin("ЛИФТ", &elevOpen)) {
                 if (shaft < 0) {
                     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
-                                       "[NOT IN A LIFT]");
+                                       "[ВНЕ КАБИНЫ ЛИФТА]");
                     ImGui::TextWrapped(
                         "Встаньте в кабину лифта — 4 лифта на узлах 2x2 "
                         "(каждый второй узел решётки), одинаково на каждом "
@@ -11149,7 +11215,7 @@ int main(int argc, char** argv) {
                     // решение 2). Из кабины — честная лифтовая поездка
                     // (Prebuild + двери по закону); вне кабины — прежний
                     // дев-телепорт консолью.
-                    if (ImGui::Button("ВНИЗ  /  DESCEND", ImVec2(-FLT_MIN, 0))) {
+                    if (ImGui::Button("ВНИЗ", ImVec2(-FLT_MIN, 0))) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, -1);
                         if (cabin >= 0 && dst != currentFloor) {
@@ -11162,7 +11228,7 @@ int main(int argc, char** argv) {
                             exec_command("ride down");
                         }
                     }
-                    if (ImGui::Button("ВВЕРХ /  ASCEND", ImVec2(-FLT_MIN, 0))) {
+                    if (ImGui::Button("ВВЕРХ", ImVec2(-FLT_MIN, 0))) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, +1);
                         if (cabin >= 0 && dst != currentFloor) {
@@ -11179,7 +11245,7 @@ int main(int argc, char** argv) {
                     // 3 — fast travel, and the list IS the unlock set. A floor the
                     // player has never boarded from is simply not here, so the gate
                     // and the UI cannot disagree about what is reachable.
-                    ImGui::TextUnformatted("БЫСТРЫЙ ПЕРЕХОД / FAST TRAVEL");
+                    ImGui::TextUnformatted("БЫСТРЫЙ ПЕРЕХОД");
                     int offered = 0;
                     for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
                         if (f == currentFloor) continue;
@@ -11266,8 +11332,7 @@ int main(int argc, char** argv) {
                 diceGame = game::DiceGame{};   // собеседник пропал — стол пуст
                 bankCounterOpen = false;
                 shell.close_window();
-                input.set_mouselook(true);
-                SDL_SetWindowRelativeMouseMode(window, true);
+                sync_mouse_capture(shell.playing() && !showConsole);
             } else if (bankCounterOpen) {
                 // Стойка кассы вместо меню ([economy.h] teller): два числа,
                 // три клавиши; глаголы клампят сами (сумка/счёт), UI слеп.
@@ -11391,8 +11456,7 @@ int main(int argc, char** argv) {
                             break;
                         case game::ConvActionKind::Close:
                             shell.close_window();
-                            input.set_mouselook(true);
-                            SDL_SetWindowRelativeMouseMode(window, true);
+                            sync_mouse_capture(shell.playing() && !showConsole);
                             break;
                         default:
                             break;
@@ -11400,8 +11464,7 @@ int main(int argc, char** argv) {
                 }
                 if (cr.wantClose) {
                     shell.close_window();
-                    input.set_mouselook(true);
-                    SDL_SetWindowRelativeMouseMode(window, true);
+                    sync_mouse_capture(shell.playing() && !showConsole);
                 }
             }
         }
@@ -12864,6 +12927,23 @@ int main(int argc, char** argv) {
                              g_geomStats.foreign[i]));
     mask_churn_report(g_maskChurnFloor);
     gpu::write_device_report(device, "на выходе");
+
+    // Завершаем фоновые потоки записи и бейка ДО разрушения статиков и Vulkan.
+    nav.cancel();
+    while (nav.baking()) {
+        nav.step(simTick);
+        SDL_Delay(2);
+    }
+    (void)nav.take_prebuilt();
+    streamer.prebuild_cancel();
+    flush_floor_write();
+    if (rideAutosaveArmed) {
+        rideAutosaveArmed = false;
+        char runPath[1024];
+        run_save_path(runPath, sizeof runPath);
+        (void)write_run(rideAutosaveSnap, runPath);
+    }
+    flush_light_vis_store();
 
     // --- teardown (reverse order) -----------------------------------------
     hud.destroy();

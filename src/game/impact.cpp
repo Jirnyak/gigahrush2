@@ -1,5 +1,6 @@
 #include "game/impact.h"
 
+#include <cmath>
 #include <vector>
 
 #include "ecs/components.h"
@@ -23,17 +24,20 @@ std::uint32_t impact_damage_step(Registry& reg, NpcPool& pool,
         // and stack with next tick's.
         reg.remove<Impact>(e);
 
+        if (!std::isfinite(speed)) continue;
         const float eff = speed - kImpactFreeSpeed;
-        if (eff <= 0.0f) continue;
+        if (!(eff > 0.0f)) continue;
         const Mass* m = reg.try_get<Mass>(e);
         if (m == nullptr) continue; // massless: no energy, no law
         // Only things that hold HP take damage; a crate hitting the floor is a
         // future break/debris hook, not a combat event.
         if (!reg.any_of<NpcRef, MobRef>(e)) continue;
 
-        const float joules = 0.5f * m->kg * eff * eff;
-        const std::int16_t dmg = static_cast<std::int16_t>(
-            joules * kImpactHpPerJoule + 0.5f);
+        const float rawDmg = 0.5f * m->kg * eff * eff * kImpactHpPerJoule + 0.5f;
+        if (!std::isfinite(rawDmg) || !(rawDmg > 0.0f)) continue;
+        const std::int16_t dmg = rawDmg >= 32767.0f
+                                     ? std::int16_t{32767}
+                                     : static_cast<std::int16_t>(rawDmg);
         if (dmg <= 0) continue;
         // Source = the entity itself: gravity has no body to blame, and the
         // death event still names a killer id the log can print.

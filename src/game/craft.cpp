@@ -304,7 +304,7 @@ ItemId craft_best_available(const CraftingState& st, const Inventory& inv,
     return best;
 }
 
-int craft_scrap_slot(const Inventory& inv) {
+int craft_scrap_slot(const Inventory& inv, const Equipped* eq) {
     const ItemId keepMelee = equipped_melee(inv);
     const ItemId keepArmour = equipped_armour(inv);
     const ItemId keepGun = equipped_ranged(inv);
@@ -325,6 +325,8 @@ int craft_scrap_slot(const Inventory& inv) {
     for (int i = 0; i < kInvSlots; ++i) {
         const ItemSlot& s = inv.slots[i];
         if (!item_valid(s.item) || s.count == 0) continue;
+        if (s.item == kItemRuble) continue;
+        if (eq && (i == eq->handL || i == eq->armor || i == eq->handR)) continue;
         if (s.item == keepMelee || s.item == keepArmour || s.item == keepGun) continue;
         const auto cat = static_cast<ItemCategory>(item_def(s.item).category);
         if (survival_category(cat) &&

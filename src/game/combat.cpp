@@ -1434,14 +1434,15 @@ bool detonate(Registry& reg, NpcPool& pool, LevelStack& stack, LayerId layer,
         // экранирует») сохраняется сдвигом старта на одну субъячейку вдоль
         // луча: граната, лежащая НА полу, не глушится собственной опорой.
         {
-            const vec3 seg{cp.x - at.x, cp.y - at.y, cp.z - at.z};
+            const vec3 seg{dx, dy, dz};
             const float len = std::sqrt(dot(seg, seg));
             if (len > kVoxelSize * 1.05f) {
                 const float skip = kVoxelSize * 1.05f / len;
                 const vec3 from{at.x + seg.x * skip, at.y + seg.y * skip,
                                 at.z + seg.z * skip};
+                const vec3 wrappedTarget{at.x + dx, at.y + dy, at.z + dz};
                 SubRayHit frag;
-                if (sub_march(grid, from, cp, frag)) return;
+                if (sub_march(grid, from, wrappedTarget, frag)) return;
             }
         }
         caught.push_back(Caught{cand, std::sqrt(d2)});
