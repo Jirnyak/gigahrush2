@@ -67,13 +67,13 @@ bool blocked(const World& w, const vec3& eye, const vec3& dir,
     // стоит в клетке, где почти всегда есть материя — марш возвращал
     // касание t=0 и заслонял ВСЁ. Это и была вторая половина дефекта «двери
     // не реагируют, таблички нет».
-    const vec3 from{eye.x + dir.x * 0.25f, eye.y + dir.y * 0.25f,
-                    eye.z + dir.z * 0.25f};
+    const vec3 from{eye.x + dir.x * kVoxelSize, eye.y + dir.y * kVoxelSize,
+                    eye.z + dir.z * kVoxelSize};
     SubRayHit hit;
     if (!sub_march(w.grid(), from, target, hit)) return false;
     // Заслон засчитан, только если он ближе цели на полклетки — иначе марш
     // ловит саму цель (полотно двери, корпус пропа).
-    const float seg = along - 0.25f;
+    const float seg = along - kVoxelSize;
     return hit.t * seg < seg - kCellSize * 0.5f;
 }
 
