@@ -1100,12 +1100,16 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
 
     const vec3 fwd = (flat >= 1e-3f) ? across * (1.0f / flat)
                                      : (dUp >= 0.0f ? up : up * -1.0f);
-    const float travel = (flat >= 1e-3f) ? (flat - kMuzzleForward)
-                                         : (std::abs(dUp) - kMuzzleForward);
+    // For steep shots (|dUp| > flat), derive flight time from 3D range and
+    // scale horizontal velocity down so vertical speed cannot spike to >2 km/s.
+    const bool steep = std::abs(dUp) > flat;
+    const float dist3 = std::sqrt(flat * flat + dUp * dUp);
+    const float travel = (steep ? dist3 : flat) - kMuzzleForward;
     // Point-blank: the target is already inside the barrel length. Floor the distance
     // rather than refusing the shot — a monster with its face against you must still
     // be able to fire, and the arc over 0.1 m is nil anyway.
     const float tof = (travel > 0.1f ? travel : 0.1f) / speed;
+    const float vHoriz = steep ? (flat / tof) : speed;
     // The compensation, now on the axis that actually has the acceleration.
     const float vUp = dUp / tof + 0.5f * gMag * tof;
 
@@ -1122,9 +1126,8 @@ void spawn_projectile(Registry& reg, LayerId layer, const vec3& from,
     tr.pos = muzzle_point(from + up * 0.6f, fwd, from);
     tr.layer = layer;
     reg.emplace<Transform>(e, tr);
-    // v0 = fwd*speed + up*vUp — the same two terms as before (`(ux,uy,0)*speed` and
-    // `vz` on Z), now expressed in the frame the layer actually has.
-    reg.emplace<Velocity>(e, Velocity{fwd * speed + up * vUp});
+    // v0 = fwd*vHoriz + up*vUp — expressed in the layer's gravity frame.
+    reg.emplace<Velocity>(e, Velocity{fwd * vHoriz + up * vUp});
     reg.emplace<AABB>(e, AABB{vec3{0.10f, 0.10f, 0.10f}});
     // projectile_step owns this entity's motion; keep physics_step off it.
     reg.emplace<SelfIntegrating>(e);
@@ -2113,10 +2116,15 @@ std::uint32_t player_ranged_step(Registry& reg, NpcPool& pool, LayerId layer,
             // без решателя пуста (скан — не решение о двух руках).
             gun = equipped_ranged(inv, nullptr);
         }
-        // Swapping guns empties the magazine: a magazine of shells is not a
-        // magazine of 9mm. Пустая/неогнестрельная рука тоже чистит состояние
-        // (граната в руке не хранит чужой магазин).
+        // Swapping guns unloads remaining chamber/magazine rounds back into the
+        // bag instead of deleting them, and clears state for the new weapon.
         if (gh.weapon != gun) {
+            if (gh.weapon != kInvalidItem && gh.magCount > 0) {
+                if (const RangedDef* prev = ranged_for_item(gh.weapon);
+                    prev && item_valid(prev->ammo)) {
+                    (void)inventory_give(inv, prev->ammo, gh.magCount, 255);
+                }
+            }
             gh.weapon = gun;
             gh.magCount = 0;
             // Перезарядка СНЯТОГО ствола незаконна — и это единственная причина

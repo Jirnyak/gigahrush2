@@ -97,12 +97,27 @@ AppPaths resolve_paths(const char* cliOverride, const char* sdlPrefPath) {
         out.saveDir = join_path(out.prefDir, "save");
         out.origin = PathOrigin::CliOverride;
         out.prefDirWritable = probe_dir_writable(out.prefDir);
+        if (!out.prefDirWritable) {
+            std::fprintf(stderr,
+                         "[paths] CLI pref dir not writable (%s), falling back\n",
+                         out.prefDir.c_str());
+            out.prefDir.clear();
+            out.saveDir.clear();
+        }
     } else if (non_empty(envPref)) {
         out.prefDir = normalize_dir(envPref);
         out.saveDir = join_path(out.prefDir, "save");
         out.origin = PathOrigin::EnvPrefDir;
         out.prefDirWritable = probe_dir_writable(out.prefDir);
-    } else if (non_empty(sdlPrefPath)) {
+        if (!out.prefDirWritable) {
+            std::fprintf(stderr,
+                         "[paths] GIGA_PREF_DIR not writable (%s), falling back\n",
+                         out.prefDir.c_str());
+            out.prefDir.clear();
+            out.saveDir.clear();
+        }
+    }
+    if (out.prefDir.empty() && non_empty(sdlPrefPath)) {
         const std::string candidate = normalize_dir(sdlPrefPath);
         if (probe_dir_writable(candidate)) {
             out.prefDir = candidate;
