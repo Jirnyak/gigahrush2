@@ -829,6 +829,24 @@ void VoxelMirror::flush(VkCommandBuffer cmd, std::uint32_t frameIndex,
         std::abort();
     }
 
+    // Кадр N-1 в полёте (kMaxFramesInFlight=2) может ещё читать буферы зеркала
+    // в фрагментном/компьютном пассах или писать uOcc — барьер ДО TRANSFER_WRITE
+    // закрывает WAR/WAW-гонку без ожидания всего кадра.
+    {
+        VkMemoryBarrier preBar{};
+        preBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        preBar.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                               VK_ACCESS_SHADER_WRITE_BIT |
+                               VK_ACCESS_TRANSFER_WRITE_BIT;
+        preBar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &preBar, 0,
+                             nullptr, 0, nullptr);
+    }
+
     if (!maskCopies_.empty())
         vkCmdCopyBuffer(cmd, st.buffer, masks_.buffer,
                         static_cast<std::uint32_t>(maskCopies_.size()),
@@ -916,6 +934,13 @@ bool VoxelMirror::readback_compare(VulkanBuffer& src, const void* expected,
                              nullptr, 0, nullptr);
         VkBufferCopy region{0, 0, bytes};
         vkCmdCopyBuffer(oneShotCmd_, src.buffer, st.buffer, 1, &region);
+        VkMemoryBarrier hb{};
+        hb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        hb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        hb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(oneShotCmd_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0,
+                             nullptr, 0, nullptr);
         ok = one_shot_submit();
     }
     if (ok && std::memcmp(st.mapped, expected, bytes) != 0) {

@@ -986,7 +986,7 @@ void run_fill(uint slot, uint threadId) {
     if (threadId == 0u) sMaskNonZero = 0u;
     barrier();
     if (threadId < 16u && uMasks[ci * 16u + threadId] != 0u)
-        sMaskNonZero = 1u;
+        atomicOr(sMaskNonZero, 1u);
     barrier();
     uint base = cell_type(ci);
     bool uniformMedium = (sMaskNonZero == 0u) && (base != 0u) &&

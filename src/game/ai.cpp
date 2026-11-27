@@ -15,8 +15,10 @@
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/faction_relations.h" // FactionRelations, nearest_faction_foe, kFeudRadius
-#include "game/patrol.h"      // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
-#include "game/ranged_table.h" // equipped_ranged — armed check in Perception
+#include "game/hunt.h"              // fill_npc_bins_8m
+#include "game/patrol.h"            // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
+#include "game/perceive.h"          // Senses — воспринятые враги без сквозного видения
+#include "game/ranged_table.h"      // equipped_ranged — armed check in Perception
 #include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
@@ -647,6 +649,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // Пул заявок прогрет ДО открытия вида (снятие УБ, [game/guide.h]).
     steer_pool_warm(reg);
     // СКОРОСТИ В ВИДЕ НЕТ: бегство заявляет ПЕЛЕНГ, пишет `guide_step`.
+    static thread_local CellBins aiBins8m;
+    bool aiBinsBuilt = false;
     auto view = reg.view<AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
@@ -729,13 +733,26 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.minuteOfDay = env.minuteOfDay;
             p.samosborActive = env.samosborActive;
             p.samosborWarning = env.samosborWarning;
+            p.fog = env.samosborActive ? 1.0f : (env.samosborWarning ? 0.35f : 0.0f);
             const Equipped* eq = reg.try_get<Equipped>(e);
             const Inventory& inv = pool.inventory(id);
             p.armed = (equipped_ranged(inv, eq) != kInvalidItem) ||
                       (equipped_melee(inv, eq) != kInvalidItem);
-            if (rel != nullptr) {
+            if (const Senses* sen = reg.try_get<Senses>(e)) {
+                p.visibleHostiles = static_cast<float>(sen->visible);
+                p.threatDistance = sen->foeDist;
+                if (sen->foe != entt::null && reg.all_of<MobRef>(sen->foe))
+                    p.monster = 1.0f;
+            } else if (rel != nullptr) {
+                // Без Senses (прямые юнит-тесты без perceive_step): фолбэк на
+                // общие 8 м бины, чтобы старт этажа не взрывался в O(N^2).
+                if (!aiBinsBuilt) {
+                    fill_npc_bins_8m(reg, layer, aiBins8m);
+                    aiBinsBuilt = true;
+                }
                 const FactionFoe foe = nearest_faction_foe(
-                    reg, pool, *rel, layer, e, id, tr.pos, kFeudRadius);
+                    reg, pool, *rel, layer, e, id, tr.pos, kFeudRadius,
+                    &aiBins8m);
                 if (foe.e != entt::null) {
                     p.visibleHostiles = 1.0f;
                     p.threatDistance = wrap_dist(tr.pos, foe.pos, kWorldExtent);

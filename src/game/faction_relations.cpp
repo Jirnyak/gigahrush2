@@ -8,8 +8,9 @@
 #include "game/ai.h"            // decider_of — чьё это тело (S13.7a)
 #include "game/equip.h"         // Equipped — strict weapon read
 #include "game/guide.h"         // заявка ведения: ранг вместо токена
-#include "game/combat.h"        // Dead, apply_damage, entity_health, kMeleeReachSlack
+#include "game/combat.h"        // Dead, Corpse, apply_damage, entity_health, kMeleeReachSlack
 #include "game/embody.h"        // NpcRef
+#include "game/hunt.h"          // fill_npc_bins_8m — O(N) поиск ближайшего врага
 #include "game/weapon_table.h"  // MeleeDef, melee_for_item, unarmed_melee
 #include "game/ranged_table.h"  // RangedDef, ranged_for_item, equipped_ranged
 #include "game/noise.h"         // NoiseProfile, NoiseSource, noise_publish
@@ -157,36 +158,39 @@ bool npc_seeks_fight(std::uint32_t bodyId, std::uint64_t tick) {
 FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
                                const FactionRelations& rel, LayerId layer,
                                Entity self, NpcId selfId, const vec3& from,
-                               float radius) {
+                               float radius, const CellBins* bins8m) {
     FactionFoe best;
     float bestD2 = radius * radius;
 
-    // Monsters carry no NpcRef ([npcs.md]: they have no macro existence at all), so
-    // this view cannot reach one — a feud is between PEOPLE by construction, with no
-    // exclusion to write. Same structural argument nearest_prey makes.
-    for (auto e : reg.view<const NpcRef, const Transform>()) {
-        if (e == self) continue;
+    auto consider = [&](Entity e) {
+        if (e == self) return;
         const Transform& tr = reg.get<const Transform>(e);
-        if (tr.layer != layer) continue;
-        // A body already scheduled to die is not worth crossing a room for:
-        // apply_damage refuses a Dead target, so taking it would leave a brawler
-        // standing over a corpse for the rest of its window.
-        if (reg.all_of<Dead>(e)) continue;
+        if (tr.layer != layer) return;
+        // Dead и Corpse мертвы (у трупа pool.alive==false, а NpcRef остаётся):
+        // иначе живые убегают от трупов или бьют мёртвое тело.
+        if (reg.any_of<Dead, Corpse>(e)) return;
 
         const NpcId id = reg.get<const NpcRef>(e).id;
-        // One predicate for the whole decision, so the steer, the swing and any
-        // future consumer can never disagree about who is an enemy.
-        if (!bodies_hostile(rel, pool, selfId, id)) continue;
+        if (!pool.valid(id) || !pool.alive(id)) return;
+        if (!bodies_hostile(rel, pool, selfId, id)) return;
 
         const float dx = wrap_delta_f(from.x, tr.pos.x, kWorldExtent);
         const float dy = wrap_delta_f(from.y, tr.pos.y, kWorldExtent);
         const float dz = wrap_delta_f(from.z, tr.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 >= bestD2) continue;
+        if (d2 > bestD2 || (d2 == bestD2 && (best.e == entt::null || e >= best.e)))
+            return;
         bestD2 = d2;
         best.e = e;
         best.id = id;
         best.pos = tr.pos;
+    };
+
+    if (bins8m != nullptr) {
+        bins8m->for_each_near_8m(static_cast<std::uint32_t>(layer), from,
+                                 consider);
+    } else {
+        for (auto e : reg.view<const NpcRef, const Transform>()) consider(e);
     }
     return best;
 }
@@ -226,6 +230,8 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
     // Residential floor, see the budget note below); an empty std::vector does not
     // touch the heap. Same shape mob_attack_step uses.
     std::vector<Swing> queued;
+    static thread_local CellBins foeBins8m;
+    bool foeBinsBuilt = false;
 
     auto view = reg.view<Transform, Velocity, const NpcRef>();
     for (auto e : view) {
@@ -279,9 +285,13 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         // storage. Budget on floor 0: 0.8 licensed bodies per tick x 420 records =
         // ~336 distance tests, against the ~1000 mob_attack_step's prey scan already
         // spends there.
+        if (!foeBinsBuilt) {
+            fill_npc_bins_8m(reg, layer, foeBins8m);
+            foeBinsBuilt = true;
+        }
         const FactionFoe foe =
             nearest_faction_foe(reg, pool, rel, layer, e, selfId, tr.pos,
-                                kFeudRadius);
+                                kFeudRadius, &foeBins8m);
         if (foe.e == entt::null) continue;   // nobody to fight; wander keeps steering
 
         const Equipped* eq = reg.try_get<Equipped>(e);

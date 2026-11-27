@@ -954,6 +954,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             rb.w = vec3{0.0f, 0.0f, 0.0f}; // в руках не крутится
             rb.asleep = false; // кинематика жива для линков
             rb.sleepTicks = 0;
+            rb.quietTicks = 0; // несомое тело никогда не копит тишину для F2
             // ПОДНЯЛИ В РУКИ — застывание снято, и снято ЗДЕСЬ, а не решателем
             // пузыря: монстр, волокущий труп в сорока метрах от игрока, тащит
             // его по-настоящему (S7: путь переноски один на всех). Тело в
@@ -961,7 +962,6 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             // а не солвер, и «вынуть из солвера» для него бессмысленно.
             if (rb.suspended) {
                 rb.suspended = false;
-                rb.quietTicks = 0;
                 ++stats.unsuspCarry;
             }
         }
@@ -1293,14 +1293,11 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 "debris:settled",
                 PresenceLevel::kFull,   // R = 64 м, старт дымки (§23.7)
                 PresenceClass::kFreeze, // класс 1: осевший дебрис не двигается
-                // Бюджет 0.5 мс; замеренная цена штуки из rigid.cpp:195-196
-                // (4096 одиночных тел: 4.5 мс бодрых / 4096 = 1.10 мкс в бинах
-                // + ~1.4 мкс шаг/сон одиночного тела = 2.5 мкс/штука → N = 200).
+                // Бюджет 0.5 мс; верхняя оценка 2.5 мкс/тело (бины rigid +
+                // шаг/сон одиночного тела -> N=200 в радиусе 64 м).
                 0.5f,
                 2.5f,
-                "rigid.cpp:195-196 & :1140-1141 — 4096 одиночных тел: "
-                "4.5 мс бодрых (1.10 мкс/тело бины) + ~1.4 мкс контакт/сон "
-                "= 2.5 мкс/штука, N=200",
+                "rigid.cpp — 0.5 ms budget at 2.5 us/item -> N=200 cap",
             });
         }
         const PresenceId kDebrisPresence = debrisId;
@@ -1310,9 +1307,15 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         for (auto e : view) {
             const RigidBody& rb = view.get<RigidBody>(e);
             if (rb.chain != 0u) continue;
-            if (rb.quietTicks < static_cast<std::uint8_t>(kSuspendQuietTicks))
-                continue;
             if (reg.all_of<CarriedBy>(e)) continue;
+            const Velocity& vel = view.get<Velocity>(e);
+            const bool stoppedZero =
+                dot(vel.v, vel.v) == 0.0f && dot(rb.w, rb.w) == 0.0f;
+            const bool ready =
+                rb.asleep ||
+                (rb.quietTicks >= static_cast<std::uint8_t>(kSuspendQuietTicks) &&
+                 stoppedZero);
+            if (!ready) continue;
             const Transform& tr = view.get<Transform>(e);
             debrisBins.add(cell_bin_key(tr.layer, cell_coord(tr.pos.x),
                                         cell_coord(tr.pos.y),
@@ -1342,9 +1345,14 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         for (auto e : view) {
             RigidBody& rb = view.get<RigidBody>(e);
             if (rb.chain != 0u) continue;
+            const Velocity& vel = view.get<Velocity>(e);
+            const bool stoppedZero =
+                dot(vel.v, vel.v) == 0.0f && dot(rb.w, rb.w) == 0.0f;
             const bool ready =
-                rb.quietTicks >= static_cast<std::uint8_t>(kSuspendQuietTicks) &&
-                !reg.all_of<CarriedBy>(e);
+                !reg.all_of<CarriedBy>(e) &&
+                (rb.asleep ||
+                 (rb.quietTicks >= static_cast<std::uint8_t>(kSuspendQuietTicks) &&
+                  stoppedZero));
             const bool inBubble =
                 ready && std::binary_search(bubbleDebris.begin(),
                                             bubbleDebris.end(), e);
@@ -1650,8 +1658,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             // контактов, ни интегрирования кватерниона. Трансформ и `q`
             // остаются ровно теми, какими были, — отсюда и бит-в-бит равенство
             // позы до входа в пузырь и после выхода (§17.2, §23.6).
-            if (rb.asleep || rb.suspended) continue;
-            if (reg.all_of<CarriedBy>(e)) continue; // кинематика носителя
+            if (rb.asleep || rb.suspended || reg.all_of<CarriedBy>(e)) continue;
             auto& tr = view.get<Transform>(e);
             auto& vel = view.get<Velocity>(e);
             if (!stack.valid(tr.layer)) continue;
@@ -1920,7 +1927,7 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         // бы ровно там, где застывание и нужно. Полный разбор — у начисления.
         // Бодрым телам стаж считается ниже, и до них свип доходит всегда,
         // когда они есть: бодрое тело не даёт раннему выходу сработать.
-        if (rb.asleep || rb.suspended) continue;
+        if (rb.asleep || rb.suspended || reg.all_of<CarriedBy>(e)) continue;
         auto& vel = view.get<Velocity>(e);
         const float wr2 = dot(rb.w, rb.w) * rb.radius * rb.radius;
         const float v2 = dot(vel.v, vel.v);

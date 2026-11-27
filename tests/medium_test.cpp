@@ -87,8 +87,22 @@ bool readback(const gpu::VulkanDevice& dev, VkBuffer src, VkDeviceSize bytes,
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             vkBeginCommandBuffer(cmd, &bi);
+            VkMemoryBarrier preBar{};
+            preBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            preBar.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            preBar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &preBar,
+                                 0, nullptr, 0, nullptr);
             VkBufferCopy region{0, 0, bytes};
             vkCmdCopyBuffer(cmd, src, host.buffer, 1, &region);
+            VkMemoryBarrier postBar{};
+            postBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            postBar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            postBar.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &postBar, 0,
+                                 nullptr, 0, nullptr);
             vkEndCommandBuffer(cmd);
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -3528,6 +3542,14 @@ void test_move_i_kmode_fill(gpu::VulkanDevice& dev) {
         CHECK(mirror.last_fill_cells().empty());
         CHECK(mirror.verify(w));
 
+        // Обратный порядок: mark_dirty до mark_page_idx_dirty сохраняет полный путь.
+        op[sub_bit(4, 4, 4)] = kMatWater;
+        mirror.mark_dirty(&cOverride, 1);
+        mirror.mark_page_idx_dirty(&cOverride, 1);
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        CHECK(mirror.last_fill_cells().empty());
+        CHECK(mirror.verify(w));
+
         medium.destroy();
         mirror.destroy();
     }
@@ -3712,6 +3734,19 @@ void test_move_d_brick_occupancy(gpu::VulkanDevice& dev) {
     CHECK(run_batch(dev, mirror, medium, w, 0, substep));
     CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
                    occ.data()));
+    if (occ_bit(occ, sib2) || summary_bit(occ, 10, 10, 10)) {
+        const std::uint32_t bi = 10u + 10u * 16u + 10u * 256u;
+        std::fprintf(stderr,
+                     "[occ-dbg] w0=0x%08x sum=0x%08x lastPatches=%zu flush=%u "
+                     "type=%u maskEmpty=%d dirtyBacklog=%u\n",
+                     occ[bi * 16u],
+                     occ[gpu::VoxelMirror::kOccSummaryWordOffset + (bi >> 5u)],
+                     mirror.last_occ_patches().size(),
+                     mirror.flush_gen(),
+                     static_cast<unsigned>(w.grid().types()[sib2]),
+                     w.grid().masks()[sib2].empty() ? 1 : 0,
+                     mirror.dirty_backlog());
+    }
     CHECK(!occ_bit(occ, sib2));
     CHECK(!summary_bit(occ, 10, 10, 10));
     CHECK(mirror.verify(w));

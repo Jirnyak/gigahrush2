@@ -695,6 +695,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         std::uint8_t proj;   // ProjType, copied off the row so the launch can read it
     };
     std::vector<Swing> queued;
+    static thread_local CellBins preyBins8m;
+    bool preyBinsBuilt = false;
 
     for (auto e : reg.view<const MobRef, const Transform, Acting>()) {
         Acting& act = reg.get<Acting>(e);
@@ -770,7 +772,12 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
                     px * px + py * py + pz * pz <= kHuntRadius * kHuntRadius;
             }
             if (!playerClose) {
-                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, kHuntRadius);
+                if (!preyBinsBuilt) {
+                    fill_npc_bins_8m(reg, layer, preyBins8m);
+                    preyBinsBuilt = true;
+                }
+                const Prey pr = nearest_prey(reg, pool, layer, tr.pos,
+                                             kHuntRadius, &preyBins8m);
                 if (pr.e != entt::null) {
                     victim = pr.e;
                     victimPos = pr.pos;

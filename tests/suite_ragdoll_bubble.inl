@@ -700,6 +700,34 @@ static void test_debris_settled_bubble() {
         CHECK(maxDelta == 0.0f);
     }
 
+    // (г) Несомое неподвижное тело (CarriedBy) вне пузыря 40 тиков НЕ копит
+    //     quietTicks и после отпускания продолжает падение (!suspended).
+    {
+        presence_reset();
+        LevelStack stack;
+        Registry reg;
+        LayerId layer = 0;
+        std::vector<Entity> bodies;
+        make_loose_scene(stack, reg, layer, bx, by, 4.0f, bodies);
+        presence_set_centers(&farCentre, 1);
+
+        const Entity carrier = reg.create();
+        reg.emplace<Transform>(
+            carrier, Transform{vec3{bx, by, 5.0f * kCellSize + 4.0f}, layer});
+        const Entity held = bodies[0];
+        reg.emplace<CarriedBy>(held, CarriedBy{carrier, vec3{0.0f, 0.0f, 0.0f}});
+
+        for (int t = 0; t < 48; ++t) rigid_body_step(reg, stack, kSimDt);
+        CHECK(!reg.get<RigidBody>(held).suspended);
+        CHECK(reg.get<RigidBody>(held).quietTicks == 0);
+
+        reg.remove<CarriedBy>(held);
+        const float zBeforeDrop = reg.get<Transform>(held).pos.z;
+        for (int t = 0; t < 24; ++t) rigid_body_step(reg, stack, kSimDt);
+        CHECK(!reg.get<RigidBody>(held).suspended);
+        CHECK(reg.get<Transform>(held).pos.z < zBeforeDrop - 0.05f);
+    }
+
     presence_reset();
 }
 

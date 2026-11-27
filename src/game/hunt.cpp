@@ -30,36 +30,59 @@ bool mob_hunts_npcs(std::uint32_t mobId, std::uint64_t tick) {
     return h % kHuntShare == 0u;
 }
 
-Prey nearest_prey(const Registry& reg, const NpcPool& pool, LayerId layer,
-                  const vec3& from, float radius) {
-    Prey best;
-    float bestD2 = radius * radius;
-
-    // Monsters carry no NpcRef ([npcs.md]: they have no macro existence at all), so
-    // this view cannot reach one and there is no monster-on-monster exclusion to
-    // write — the same structural argument rumour.cpp's nearest_speaker makes.
+void fill_npc_bins_8m(const Registry& reg, LayerId layer, CellBins& bins) {
+    bins.clear();
     for (auto e : reg.view<const NpcRef, const Transform>()) {
         const Transform& tr = reg.get<const Transform>(e);
         if (tr.layer != layer) continue;
+        if (reg.all_of<Dead>(e)) continue;
+        bins.add(cell_bin_8m_key(static_cast<std::uint32_t>(layer),
+                                 cell_bin_8m_coord(tr.pos.x),
+                                 cell_bin_8m_coord(tr.pos.y),
+                                 cell_bin_8m_coord(tr.pos.z)),
+                 e);
+    }
+    bins.build();
+}
+
+Prey nearest_prey(const Registry& reg, const NpcPool& pool, LayerId layer,
+                  const vec3& from, float radius, const CellBins* bins8m) {
+    Prey best;
+    float bestD2 = radius * radius;
+
+    auto consider = [&](Entity e) {
+        const Transform& tr = reg.get<const Transform>(e);
+        if (tr.layer != layer) return;
         // The camera holder belongs to the caller's own, longer-ranged target rule.
-        if (reg.all_of<CameraTag>(e)) continue;
+        if (reg.all_of<CameraTag>(e)) return;
         // A body already scheduled to die is not worth a hunting window: apply_damage
         // refuses a Dead target anyway, so taking it would mean a monster standing
         // over a corpse doing nothing until its licence expired.
-        if (reg.all_of<Dead>(e)) continue;
+        if (reg.all_of<Dead>(e)) return;
 
         const NpcId id = reg.get<const NpcRef>(e).id;
-        if (!pool.valid(id)) continue;
-        if (!mob_hostile_to(pool, id)) continue;   // Cultists, by body and not by row
+        if (!pool.valid(id)) return;
+        if (!mob_hostile_to(pool, id)) return;   // Cultists, by body and not by row
 
         const float dx = wrap_delta_f(from.x, tr.pos.x, kWorldExtent);
         const float dy = wrap_delta_f(from.y, tr.pos.y, kWorldExtent);
         const float dz = wrap_delta_f(from.z, tr.pos.z, kWorldExtent);
         const float d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 >= bestD2) continue;
+        if (d2 > bestD2 || (d2 == bestD2 && (best.e == entt::null || e >= best.e)))
+            return;
         bestD2 = d2;
         best.e = e;
         best.pos = tr.pos;
+    };
+
+    if (bins8m != nullptr) {
+        bins8m->for_each_near_8m(static_cast<std::uint32_t>(layer), from,
+                                 consider);
+    } else {
+        // Monsters carry no NpcRef ([npcs.md]: they have no macro existence at all), so
+        // this view cannot reach one and there is no monster-on-monster exclusion to
+        // write — the same structural argument rumour.cpp's nearest_speaker makes.
+        for (auto e : reg.view<const NpcRef, const Transform>()) consider(e);
     }
     return best;
 }

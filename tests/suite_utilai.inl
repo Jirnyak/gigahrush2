@@ -2308,6 +2308,7 @@ static void test_utilai_all() {
 
             AiConfig cfg;
             cfg.enabled = true;
+            cfg.hysteresis = false;
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,

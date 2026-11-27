@@ -45,6 +45,23 @@ inline int cell_coord(float v) {
     return static_cast<int>(std::floor(v / kCellSize));
 }
 
+// Крупный бин 8x8x8 м (4 макроклетки = 8 м): сетка 32^3, покрывающая радиусы
+// <= 8 м за те же 27 (3x3x3) соседних бакетов с честным wrap mod 32.
+inline int cell_bin_8m_coord(float v) { return cell_coord(v) >> 2; }
+
+inline int wrap_bin_8m(int b) {
+    constexpr int kBins = kMacroDim >> 2;
+    const int r = b % kBins;
+    return r < 0 ? r + kBins : r;
+}
+
+inline std::uint64_t cell_bin_8m_key(std::uint32_t layer, int bx, int by,
+                                     int bz) {
+    return (static_cast<std::uint64_t>(layer) << 32) |
+           static_cast<std::uint32_t>(
+               macro_index(wrap_bin_8m(bx), wrap_bin_8m(by), wrap_bin_8m(bz)));
+}
+
 struct CellBins {
     struct Entry {
         std::uint64_t key;
@@ -85,6 +102,18 @@ struct CellBins {
                 for (int dx = -1; dx <= 1; ++dx)
                     for_each_in(cell_bin_key(layer, cx + dx, cy + dy, cz + dz),
                                 f);
+    }
+
+    template <class F>
+    void for_each_near_8m(std::uint32_t layer, const vec3& pos, F&& f) const {
+        const int bx = cell_bin_8m_coord(pos.x);
+        const int by = cell_bin_8m_coord(pos.y);
+        const int bz = cell_bin_8m_coord(pos.z);
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                    for_each_in(
+                        cell_bin_8m_key(layer, bx + dx, by + dy, bz + dz), f);
     }
 
     // Запись отбора: квадрат торического расстояния до БЛИЖАЙШЕГО из центров.

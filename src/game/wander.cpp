@@ -205,6 +205,8 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
     // ПЕРВОГО элемента нового рода растит контейнер пулов реестра и дангл'ит
     // указатели живого вида ([game/guide.h] `steer_pool_warm`).
     steer_pool_warm(reg);
+    static thread_local CellBins preyBins8m;
+    bool preyBinsBuilt = false;
     // СКОРОСТИ В ВИДЕ БОЛЬШЕ НЕТ: прогулка заявляет цель, а пишет
     // `guide_step`. Вид сузился до того, что проход читает и правит сам.
     auto view = reg.view<Transform, WanderTarget>();
@@ -314,7 +316,12 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
                 // Derived from the radius rather than re-stated, so the next short
                 // behaviour cannot reintroduce it.
                 const float preyRadius = radius < kHuntRadius ? radius : kHuntRadius;
-                const Prey pr = nearest_prey(reg, pool, layer, tr.pos, preyRadius);
+                if (!preyBinsBuilt) {
+                    fill_npc_bins_8m(reg, layer, preyBins8m);
+                    preyBinsBuilt = true;
+                }
+                const Prey pr = nearest_prey(reg, pool, layer, tr.pos,
+                                             preyRadius, &preyBins8m);
                 if (pr.e != entt::null) {
                     ax = wrap_delta_f(tr.pos.x, pr.pos.x, kWorldExtent);
                     ay = wrap_delta_f(tr.pos.y, pr.pos.y, kWorldExtent);

@@ -944,5 +944,13 @@ static void test_faction2_all() {
             combatHits += faction_feud_step(reg, pool, base, kLayer, t);
         CHECK(combatHits > 0u);
         CHECK(pool.hp(wldId) < 1000);
+
+        // Corpse / pool.alive==false is ignored by nearest_faction_foe even with NpcRef intact.
+        pool.kill(wldId);
+        reg.emplace<Corpse>(wld);
+        const FactionFoe deadFoe = nearest_faction_foe(
+            reg, pool, base, kLayer, liq, liqId, reg.get<Transform>(liq).pos,
+            kFeudRadius);
+        CHECK(deadFoe.e == entt::null);
     }
 }

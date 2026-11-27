@@ -52,6 +52,7 @@
 #include "core/tick.h"
 #include "ecs/registry.h"
 #include "game/npc_pool.h"
+#include "sim/cell_bins.h"
 #include "world/level_stack.h"   // LayerId
 
 namespace giga::game {
@@ -65,6 +66,8 @@ namespace giga::game {
 // approximate one: any body close enough to be prey is close enough that the
 // camera holder in the same spot would have been chased instead.
 inline constexpr float kHuntRadius = 6.0f;
+static_assert(kHuntRadius <= kCellSize * 4.0f,
+              "8m CellBins cover kHuntRadius cleanly in 3x3x3 neighbourhood");
 
 // Sim ticks a hunting cohort holds its licence. 2400 is 20 s at the 120 Hz step.
 //
@@ -158,7 +161,12 @@ struct Prey {
 // Read-only: it takes a const Registry and touches no component that could be
 // created, so it is safe to call from inside another view's iteration — which is
 // exactly how both consumers use it.
+// Заполняет `bins` живыми не-Dead воплощёнными NPC слоя `layer` по 8 м бакетам
+// ([sim/cell_bins.h] cell_bin_8m_coord) — разделяется hunt/feud/ai за 1 проход O(N).
+void fill_npc_bins_8m(const Registry& reg, LayerId layer, CellBins& bins);
+
 Prey nearest_prey(const Registry& reg, const NpcPool& pool, LayerId layer,
-                  const vec3& from, float radius);
+                  const vec3& from, float radius,
+                  const CellBins* bins8m = nullptr);
 
 } // namespace giga::game

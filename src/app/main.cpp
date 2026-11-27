@@ -3643,6 +3643,13 @@ int main(int argc, char** argv) {
     // sim's clock, not the window's.
     bool saveWanted = false;
     bool loadWanted = false;
+    bool newRunWanted = false;
+    bool newRunWipeSlot = false;
+    bool newRunEnterPlaying = false;
+    bool newRunRetargetIntro = false;
+    bool wireClockReset = false;
+    bool clothClockReset = false;
+    std::uint32_t playerDeaths = 0;
     // THE MAIN MENU — a separate app SCREEN, not a pause overlay. The world
     // behind it is built but frozen; the run starts (or a slot loads) only when
     // a menu row says so, which is also what makes a full v6 world restore
@@ -4207,9 +4214,11 @@ int main(int argc, char** argv) {
         // Всё накопленное этажом — мир И сущности — уезжает в ЕГО файл ДО
         // переработки слота (v20/F, S20.6: «этаж помнит ВСЁ»). Сбор — на
         // главном потоке (ECS воркеру не принадлежит), кодек и диск — фоном.
-        const LayerId leaveLayer = reg.valid(player)
-                                       ? reg.get<Transform>(player).layer
-                                       : static_cast<LayerId>(0);
+        const LayerId leaveLayer =
+            reg.valid(player)
+                ? reg.get<Transform>(player).layer
+                : (activeLayer != kInvalidLayer ? activeLayer
+                                                : static_cast<LayerId>(0));
         {
             game::FloorEntityState ents;
             game::gather_floor_entities(reg, leaveLayer, currentFloor, ents,
@@ -4483,10 +4492,16 @@ int main(int argc, char** argv) {
     // start_fresh обнуляет живой граф зон, свап кладёт его обратно — в
     // WaitFresh ready()==true РАВНОСИЛЬНО «Fresh назначения лёг».
     LayerId liftSwapLayer = kInvalidLayer; // слой шагов посадки (5d)
-    auto start_lift_ride = [&](int dst, int hub) -> bool {
+    auto start_lift_ride = [&](int dst, int hub,
+                               bool deferFallback = false) -> bool {
         if (liftRide != LiftRide::Idle) return false;
         std::function<void()> job;
         if (!streamer.prebuild_begin(stack, registry, dst, job)) {
+            if (deferFallback) {
+                pendingTeleport = dst;
+                pendingLandHub = hub;
+                return true;
+            }
             // Уже резидентен или нет слота — редкий дев-случай: честная
             // синхронная поездка тем же законом прибытия.
             return do_ride(/*absolute=*/true, dst, hub);
@@ -4574,6 +4589,16 @@ int main(int argc, char** argv) {
         carriedRpg = game::fresh_rpg(1);
         kills = 0;
         deaths = 0;
+        playerDeaths = 0;
+        activeLayer = kInvalidLayer;
+        doorDirty.clear();
+        doorDirtyBuilt.clear();
+        doorDirtyBuiltLayer = kInvalidLayer;
+        elevDiagLine[0] = '\0';
+        pendingTeleport = game::ConsoleContext::kNoRequest;
+        pendingLandHub = -1;
+        wireClockReset = true;
+        clothClockReset = true;
         containerTake = 0;
         meleeHits = 0;
         crowdDead = 0;
@@ -5314,6 +5339,26 @@ int main(int argc, char** argv) {
             }
             g_frameMark = FrameMark{};
             g_frameT0 = std::chrono::steady_clock::now();
+        }
+
+        // Сброс рана (U2.1 / Menu / RunOver) исполняется ТОЛЬКО здесь, до начала
+        // ImGui-кадра, чтобы draw_loading_frame не вложил NewFrame() в открытый кадр.
+        if (newRunWanted) {
+            const bool wipe = newRunWipeSlot;
+            const bool enter = newRunEnterPlaying;
+            const bool retarget = newRunRetargetIntro;
+            newRunWanted = false;
+            newRunWipeSlot = false;
+            newRunEnterPlaying = false;
+            newRunRetargetIntro = false;
+            reset_to_new_run(wipe, enter);
+            if (retarget) {
+                int rw = 0, rh = 0;
+                SDL_GetWindowSizeInPixels(window, &rw, &rh);
+                if (rw > 0 && rh > 0)
+                    introFx.retarget_title(static_cast<float>(rw),
+                                           static_cast<float>(rh));
+            }
         }
 
         // A console teleport is executed HERE, at the top of a frame, never in
@@ -9426,9 +9471,13 @@ int main(int argc, char** argv) {
                 // fresh body would otherwise arrive at level 1. `finalize_deaths`
                 // may also LEVEL this up on the killing blow, so the snapshot is
                 // taken before it runs and re-taken below when the body survives.
-                if (reg.valid(player))
+                if (reg.valid(player)) {
                     if (const auto* rs0 = reg.try_get<game::RpgStats>(player))
                         carriedRpg = *rs0;
+                    if (const auto* pm0 =
+                            reg.try_get<game::PlayerMelee>(player))
+                        kills = pm0->kills;
+                }
                 game::loot_dead_mobs(reg, activeLayer, currentFloor,
                                      static_cast<std::uint32_t>(simTick));
                 // ONE death point per tick, after everything that can deal damage
@@ -9839,6 +9888,7 @@ int main(int argc, char** argv) {
                 // The player is not exempt: if it died it no longer exists, and
                 // everything below reads through it. Take another body now.
                 if (!reg.valid(player)) {
+                    ++playerDeaths;
                     // Цену смерти несёт сам мир: мёртвая строка пула хранит
                     // инвентарь вечно, и ни одно живое тело до него не
                     // дотянется. Счётчик поверх этого факта (record_death)
@@ -9864,6 +9914,19 @@ int main(int argc, char** argv) {
                         if (shotPath) {
                             running = false;
                         } else {
+                            nav.cancel();
+                            if (liftRide != LiftRide::Idle) {
+                                while (nav.baking()) {
+                                    nav.step(simTick);
+                                    SDL_Delay(2);
+                                }
+                                (void)nav.take_prebuilt();
+                                streamer.prebuild_cancel();
+                                liftRide = LiftRide::Idle;
+                                liftSwapLayer = kInvalidLayer;
+                                std::lock_guard<std::mutex> lk(g_restoreMx);
+                                g_pendingRestore.clear();
+                            }
                             shell.screen = AppScreen::RunOver;
                             shell.close_window();
                             showConsole = false;
@@ -11092,7 +11155,7 @@ int main(int argc, char** argv) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, -1);
                         if (cabin >= 0 && dst != currentFloor) {
-                            if (start_lift_ride(dst, cabin))
+                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true))
                                 shell.close_window();
                         } else if (cabin < 0) {
                             exec_command("ride down");
@@ -11102,7 +11165,7 @@ int main(int argc, char** argv) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, +1);
                         if (cabin >= 0 && dst != currentFloor) {
-                            if (start_lift_ride(dst, cabin))
+                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true))
                                 shell.close_window();
                         } else if (cabin < 0) {
                             exec_command("ride up");
@@ -11133,7 +11196,7 @@ int main(int argc, char** argv) {
                                 // Посадка = открытие ЭТОГО этажа (§24) — тот
                                 // же акт, что у консольной команды.
                                 fastTravel.unlock(currentFloor);
-                                if (start_lift_ride(f, hub))
+                                if (start_lift_ride(f, hub, /*deferFallback=*/true))
                                     shell.close_window();
                             }
                         }
@@ -11446,7 +11509,10 @@ int main(int argc, char** argv) {
                                   slot_occupied(s) ? "  (перезапись)" : "");
                     if (ImGui::Button(label, btn)) {
                         g_saveSlot = s;
-                        reset_to_new_run(/*wipeSlot=*/true, /*enterPlaying=*/true);
+                        newRunWanted = true;
+                        newRunWipeSlot = true;
+                        newRunEnterPlaying = true;
+                        newRunRetargetIntro = false;
                     }
                 }
                 ImGui::Spacing();
@@ -11467,7 +11533,7 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             // U2.2: компактная CRT-памятка первых действий под главным меню.
-            if (shell.menuPage == 0) {
+            if (shell.menuPage == 0 && io.DisplaySize.y >= 580.0f) {
                 ImGui::SetNextWindowPos(
                     ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 20.0f),
                     ImGuiCond_Always, ImVec2(0.5f, 1.0f));
@@ -11628,7 +11694,7 @@ int main(int argc, char** argv) {
                 row_str("Макс. глубина", valBuf);
                 std::snprintf(valBuf, sizeof valBuf, "%u", kills);
                 row_str("Убито", valBuf);
-                std::snprintf(valBuf, sizeof valBuf, "%u", deaths);
+                std::snprintf(valBuf, sizeof valBuf, "%u", playerDeaths);
                 row_str("Смертей носителей", valBuf);
                 std::snprintf(valBuf, sizeof valBuf, "%d руб", containerTake);
                 row_str("Взято из ящиков", valBuf);
@@ -11645,11 +11711,16 @@ int main(int argc, char** argv) {
             ImGui::Separator();
             const ImVec2 btn(240.0f, 0.0f);
             if (ImGui::Button("Новый забег", btn)) {
-                reset_to_new_run(/*wipeSlot=*/true, /*enterPlaying=*/true);
+                newRunWanted = true;
+                newRunWipeSlot = true;
+                newRunEnterPlaying = true;
+                newRunRetargetIntro = false;
             }
             if (ImGui::Button("В главное меню", btn)) {
-                reset_to_new_run(/*wipeSlot=*/false, /*enterPlaying=*/false);
-                introFx.retarget_title(io.DisplaySize.x, io.DisplaySize.y);
+                newRunWanted = true;
+                newRunWipeSlot = false;
+                newRunEnterPlaying = false;
+                newRunRetargetIntro = true;
             }
             if (ImGui::Button("Выход", btn)) running = false;
             ImGui::End();
@@ -11729,12 +11800,13 @@ int main(int argc, char** argv) {
                     static game::FallClock wireFall;
                     static int wireFallFloor = INT_MIN;
                     static LayerId wireFallLayer = static_cast<LayerId>(~0u);
-                    if (wireFallFloor != currentFloor ||
+                    if (wireClockReset || wireFallFloor != currentFloor ||
                         wireFallLayer != activeLayer ||
                         wireFall.left.size() != ab->wires.size()) {
                         wireFall.clear();
                         wireFallFloor = currentFloor;
                         wireFallLayer = activeLayer;
+                        wireClockReset = false;
                     }
                     for (std::size_t wi = 0; wi < ab->wires.size(); ++wi) {
                         const std::uint8_t m =
@@ -11749,12 +11821,13 @@ int main(int argc, char** argv) {
                     static game::FallClock clothFall;
                     static int clothFallFloor = INT_MIN;
                     static LayerId clothFallLayer = static_cast<LayerId>(~0u);
-                    if (clothFallFloor != currentFloor ||
+                    if (clothClockReset || clothFallFloor != currentFloor ||
                         clothFallLayer != activeLayer ||
                         clothFall.left.size() != ab->cloths.size()) {
                         clothFall.clear();
                         clothFallFloor = currentFloor;
                         clothFallLayer = activeLayer;
+                        clothClockReset = false;
                     }
                     for (std::size_t si = 0; si < ab->cloths.size(); ++si) {
                         const std::uint32_t m =
@@ -12411,12 +12484,6 @@ int main(int argc, char** argv) {
             // and photograph a world with no crowd in it.
             if (shotPath) {
                 ++shotFramesSeen;
-                // --floor: one absolute hop through the console-teleport seam,
-                // at the same cadence rides use (the nav bake needs its ~5 s).
-                if (shotFloorWanted && shotFramesSeen % 420 == 0) {
-                    shotFloorWanted = false;
-                    pendingTeleport = shotFloor;
-                }
                 // --lift: та же каденция, но через МАШИНУ (start_lift_ride) —
                 // кнопка кабины руками харнесса. Триггер только из Idle и при
                 // готовом бейке (start_prebuild отменяет текущий бейк — дёрнуть

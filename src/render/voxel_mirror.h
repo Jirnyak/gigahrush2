@@ -388,7 +388,7 @@ private:
     std::vector<std::uint8_t> stainRepack_;
 
     std::uint32_t lastFlushCells_ = 0;
-    std::uint32_t flushGen_ = 0;              // клок флешей (1/кадр)
+    std::uint32_t flushGen_ = 1u;             // клок флешей (1/кадр; >=1 чтобы первый флеш отличался от 0)
     std::vector<std::uint32_t> markGen_;      // flushGen_ на момент записи
     std::vector<std::uint32_t> uploadGen_;    // flushGen_ доставившего флеша
     std::uint32_t lastFlushBytes_ = 0;

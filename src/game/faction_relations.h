@@ -41,6 +41,7 @@
 #include "game/event_bus.h"      // EventBus, EventType::RelationChanged
 #include "game/faction.h"
 #include "game/npc_pool.h"
+#include "sim/cell_bins.h"
 #include "world/gravity.h"       // GravityField — names the feud's walking plane
 #include "world/level_stack.h"   // LayerId
 
@@ -170,6 +171,8 @@ bool bodies_hostile(const FactionRelations& rel, const NpcPool& pool, NpcId a,
 // standing beside a Citizen never notices them and the feature is invisible on the
 // floor it is most likely to be seen on.
 inline constexpr float kFeudRadius = 8.0f;
+static_assert(kFeudRadius <= 2.0f * 4.0f,
+              "8m CellBins cover kFeudRadius cleanly in 3x3x3 neighbourhood");
 
 // Visits per stagger cycle, i.e. an agent is looked at once every N ticks.
 //
@@ -256,7 +259,8 @@ struct FactionFoe {
 FactionFoe nearest_faction_foe(const Registry& reg, const NpcPool& pool,
                                const FactionRelations& rel, LayerId layer,
                                Entity self, NpcId selfId, const vec3& from,
-                               float radius);
+                               float radius,
+                               const CellBins* bins8m = nullptr);
 
 // One staggered NPC-vs-NPC pass: bodies holding a fight licence steer at their
 // nearest enemy and swing at it when it is in reach.
